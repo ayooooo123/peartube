@@ -642,15 +642,12 @@ export type PlaybackErrorCode =
   | 'PREPARATION_DEADLINE'
   | 'PREPARATION_CANCELLED'
   | 'ATTEMPT_LIMIT'
-  | 'DRM_UNSUPPORTED'
-  | 'LICENSE_DENIED'
-  | 'LICENSE_EXPIRED'
 
 /**
  * `automatic` - preparation may try another equivalent source itself.
  * `manual` - only a new user action can change the outcome.
- * `evidence` - nothing changes until new availability evidence, device
- * capability, or entitlement arrives.
+ * `evidence` - nothing changes until new availability evidence or a new device
+ * capability arrives.
  */
 export type PlaybackRetryPolicy = 'automatic' | 'manual' | 'evidence'
 

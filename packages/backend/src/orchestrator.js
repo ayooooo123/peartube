@@ -1085,6 +1085,11 @@ export async function createBackendContext(config) {
     permissionlessArchiveNetwork,
     policyApi,
     networkPolicyRuntime,
+    // A relay is a headless server, not a viewer's device: it has no battery,
+    // thermal envelope, metered link, app lifecycle or playback window, and
+    // the participation decision has to say so or its archive custody gate
+    // never opens.
+    hostKind: platform === 'relay' ? 'server' : 'device',
   });
 
 

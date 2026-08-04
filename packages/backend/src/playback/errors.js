@@ -9,9 +9,9 @@
  *   `automatic` - preparation may try another equivalent source inside the
  *                 current deadline and attempt cap.
  *   `manual`    - only a new user action can change the outcome.
- *   `evidence`  - nothing changes until fresh availability evidence, a new
- *                 device capability, or a new entitlement arrives. Retrying
- *                 the same request in a loop cannot help.
+ *   `evidence`  - nothing changes until fresh availability evidence or a new
+ *                 device capability arrives. Retrying the same request in a
+ *                 loop cannot help.
  */
 export const PLAYBACK_ERRORS = Object.freeze({
   AVAILABILITY_BOUNDARY: Object.freeze({
@@ -50,26 +50,14 @@ export const PLAYBACK_ERRORS = Object.freeze({
     message: 'Every currently reachable source failed to start.',
     retry: 'manual',
   }),
-  DRM_UNSUPPORTED: Object.freeze({
-    message: 'This device cannot play the protected version of this title.',
-    retry: 'evidence',
-  }),
-  LICENSE_DENIED: Object.freeze({
-    message: 'The provider did not grant a playback license.',
-    retry: 'evidence',
-  }),
-  LICENSE_EXPIRED: Object.freeze({
-    message: 'The playback license expired.',
-    retry: 'manual',
-  }),
 })
 
 export const PLAYBACK_ERROR_CODES = Object.freeze(Object.keys(PLAYBACK_ERRORS))
 
 /**
  * Codes a different equivalent source might not share, so bounded failover may
- * try the next one. Everything else describes the title, the device, or the
- * entitlement, and retrying another source cannot change it.
+ * try the next one. Everything else describes the title or the device, and
+ * retrying another source cannot change it.
  */
 export const RETRYABLE_PLAYBACK_ERROR_CODES = Object.freeze(
   PLAYBACK_ERROR_CODES.filter(code => PLAYBACK_ERRORS[code].retry === 'automatic')

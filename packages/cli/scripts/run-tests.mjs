@@ -48,6 +48,8 @@ const TEST_FILES = [
   'universal-backend-cutover.test.mjs',
   'service-universal.test.mjs',
   'trusted-clients.test.mjs',
+  'relay-reseeding.test.mjs',
+  'network-cli.test.mjs',
   // Interactive `peartube add` CLI suites.
   'add-relay-client.test.mjs',
   'add-interactive.test.mjs',

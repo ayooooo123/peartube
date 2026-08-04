@@ -225,16 +225,13 @@ export type PlaybackErrorCode =
   | 'SESSION_LIMIT'
   | 'PREPARATION_DEADLINE'
   | 'PREPARATION_CANCELLED'
-  | 'ATTEMPT_LIMIT'
-  | 'DRM_UNSUPPORTED'
-  | 'LICENSE_DENIED'
-  | 'LICENSE_EXPIRED';
+  | 'ATTEMPT_LIMIT';
 
 /**
  * `automatic` - preparation may try another equivalent source itself.
  * `manual` - only a new user action can change the outcome.
- * `evidence` - nothing changes until new availability evidence, device
- * capability, or entitlement arrives; retrying in a loop cannot help.
+ * `evidence` - nothing changes until new availability evidence or a new device
+ * capability arrives; retrying in a loop cannot help.
  */
 export type PlaybackRetryPolicy = 'automatic' | 'manual' | 'evidence';
 

@@ -62,6 +62,12 @@ export function buildRelayStatus({ config, catalog, runtimeStats = {}, creators 
       seedRetention: runtimeStats.seedRetention || {},
       archive: runtimeStats.archive || {},
       storage: runtimeStats.storage || {},
+      // Re-seeding, both directions. archiveRequests is what this relay asked
+      // the network to mirror, each carrying the archivists' own possession
+      // evidence; archiveParticipation is what it mirrors for other relays.
+      archiveRequests: Array.isArray(runtimeStats.archiveRequests) ? runtimeStats.archiveRequests : [],
+      archiveParticipation: runtimeStats.archiveParticipation || {},
+      archiveHostDisk: runtimeStats.archiveHostDisk || {},
       authorizedClients: Number(trustedClientsCount) || 0
     },
     evictionCandidates: sortEvictionCandidates(channels).map((channel) => ({
@@ -96,6 +102,15 @@ export function formatRelayStatus(status) {
   const seedRetention = status.runtime.seedRetention || {}
   const archive = status.runtime.archive || {}
   const storage = status.runtime.storage || {}
+  // Re-seeding, both directions. Every number here is measured: a request this
+  // relay published, and an archivist whose possession challenge for those
+  // exact ranges passed. Nothing counts a peer that merely serves the bytes,
+  // and no line claims the content is kept anywhere but here.
+  const archiveRequests = Array.isArray(status.runtime.archiveRequests) ? status.runtime.archiveRequests : []
+  const mirroring = status.runtime.archiveParticipation || {}
+  const hostDisk = status.runtime.archiveHostDisk || {}
+  const publishedRequests = archiveRequests.reduce((count, entry) => count + (entry?.status === 'published' ? 1 : 0), 0)
+  const withEvidence = archiveRequests.reduce((count, entry) => count + ((entry?.archivists || 0) > 0 ? 1 : 0), 0)
   const lines = [
     `mode: ${status.mode}`,
     `policy: ${status.policy}`,
@@ -112,7 +127,12 @@ export function formatRelayStatus(status) {
     `seedRetention: activeSeeds=${seedRetention.activeSeeds || 0} pinnedChannels=${seedRetention.pinnedChannels || 0} storageUsedBytes=${seedRetention.storageUsedBytes || 0}`,
     `storageDiagnostics: categorizedBytes=${storage.totalCategorizedBytes || 0} protectedBytes=${storage.protectedBytes || 0} success=${Boolean(storage.success)}`,
     `authorizedClients: ${status.runtime.authorizedClients || 0}`,
-    `creators: total=${status.creators?.totalCreators || 0} archived=${status.creators?.videosArchived || 0} unseeded=${status.creators?.videosUnseeded || 0} movies=${status.creators?.classifiedMovies || 0} tv=${status.creators?.classifiedTv || 0}`
+    `creators: total=${status.creators?.totalCreators || 0} archived=${status.creators?.videosArchived || 0} unseeded=${status.creators?.videosUnseeded || 0} movies=${status.creators?.classifiedMovies || 0} tv=${status.creators?.classifiedTv || 0}`,
+    `archiveRequests: total=${archiveRequests.length} published=${publishedRequests} failed=${archiveRequests.length - publishedRequests} withArchivistEvidence=${withEvidence}`,
+    `archiveMirroring: enabled=${Boolean(mirroring.enabled)} reservedBytes=${mirroring.reservedBytes || 0} availableBytes=${mirroring.availableBytes || 0} capacityBytes=${mirroring.capacityBytes || 0} receivedPledges=${mirroring.receivedPledges || 0} acceptedRequests=${mirroring.acceptedRequests || 0} rejected=capacity:${mirroring.capacityRejections || 0}/random:${mirroring.randomRejections || 0}/authorization:${mirroring.authorizationRejections || 0}`,
+    // A relay that cannot read its own disk is not cleared to promise anyone
+    // durable storage, and this is where an operator sees why.
+    `archiveHostDisk: measured=${Boolean(hostDisk.measured)} freeBytes=${hostDisk.freeBytes ?? 'unknown'} totalBytes=${hostDisk.totalBytes ?? 'unknown'} reason=${hostDisk.reason || 'none'}`,
   ]
 
   const unseededTargets = Array.isArray(status.creators?.unseededTargets) ? status.creators.unseededTargets : []
@@ -120,6 +140,17 @@ export function formatRelayStatus(status) {
     lines.push('unseededTargets:')
     for (const target of unseededTargets.slice(0, 10)) {
       lines.push(`- ${target.name} (${target.videosUnseeded}/${target.videosArchived} unseeded)`)
+    }
+  }
+
+  if (archiveRequests.length > 0) {
+    lines.push('archiveRequests:')
+    for (const entry of archiveRequests) {
+      lines.push(
+        `- ${entry.publicationId}/${entry.renditionId} status=${entry.status || 'unknown'}` +
+        ` archivists=${entry.archivists || 0} fresh=${entry.freshArchivists || 0}` +
+        (entry.errorCode ? ` error=${entry.errorCode}` : '')
+      )
     }
   }
 

@@ -60,6 +60,9 @@ test('help prints stable usage without loading command modules', async (t) => {
     '',
     'Commands:',
     '  add [query-or-url]  Add content',
+    '  search <query>      Find titles on the network',
+    '  get <entity-or-publication>',
+    '                      Retrieve a title to a local file',
     '  config              Configure content settings',
     '  help                Show this help',
     '',
@@ -71,6 +74,10 @@ test('help prints stable usage without loading command modules', async (t) => {
     '  --no-input          Never prompt for input',
     '  --yes               Accept review confirmation',
     '  --force             Retry a failed local source job',
+    '  --output <path>     Destination file for get',
+    '  --rendition <id>    Rendition to retrieve',
+    '  --limit <n>         Maximum search results',
+    '  --timeout <s>       Seconds to wait for the next block',
     '  -h, --help          Show this help'
   ].join('\n'))
 })

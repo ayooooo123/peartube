@@ -952,12 +952,6 @@ export default function ProfileScreen() {
             cannot hide it, so this is not anonymous browsing.
           </Text>
 
-          <Text style={[styles.cardTitle, { marginTop: 14 }]}>Providers see their own requests</Text>
-          <Text style={styles.cardMeta}>
-            When a title needs provider authentication or a license, that provider&apos;s
-            authentication and license services see those requests and when you made them.
-          </Text>
-
           <Text style={[styles.cardTitle, { marginTop: 14 }]}>Unlinking works forward only</Text>
           <Text style={styles.cardMeta}>
             Unlinking a device rotates your key so that device receives nothing further. It

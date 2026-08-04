@@ -321,17 +321,15 @@ function manifestSource(manifest, row, preferred, trust = {}, availability = nul
     publisherId,
     manifestId: manifest?.body?.manifestId || null,
     renditionId: rendition?.renditionId || null,
-    // Failover identity. `entityId` anchors the work being played, the edition
-    // and collection position distinguish cuts and episodes, and `protected`
-    // separates DRM titles from public lookalikes. Missing anchors fail closed
-    // in `sourceEquivalenceKey`, which is why they are read, not defaulted.
+    // Failover identity. `entityId` anchors the work being played, and the
+    // edition and collection position distinguish cuts and episodes. Missing
+    // anchors fail closed in `sourceEquivalenceKey`, which is why they are
+    // read, not defaulted.
     entityId: entityId || row.body?.subjectRefs?.[0]?.entityId || null,
     editionId: row.body.payload?.editionRef?.entityId || row.body.payload?.editionId || null,
     collectionMemberId: row.body.payload?.memberRef?.entityId || null,
-    protected: rendition?.encryption != null,
     container: rendition?.format || null,
     codecs: rendition?.codecs || null,
-    drmSystem: rendition?.encryption?.drmSystem || null,
     manifestStale: manifest?.body?.superseded === true,
     // Measured against a contributing peer, never claimed by the publisher.
     expectedStartupLatencyMs: availability?.measuredLatencyMs || 0,
@@ -438,8 +436,8 @@ export function createMediaGraphApi(options = {}) {
   // the runtime that owns that is needed across this whole surface, not just in
   // the artwork path that first reached for it.
   const scopedNetwork = options.scopedNetwork || options.ctx?.scopedNetwork || null
-  // What this device can actually decrypt and decode. An absent list leaves
-  // that dimension unconstrained rather than silently rejecting every source.
+  // What this device can actually decode. An absent list leaves that dimension
+  // unconstrained rather than silently rejecting every source.
   const deviceCapabilities = options.capabilities || options.ctx?.deviceCapabilities || {}
   const clock = typeof options.now === 'function' ? options.now : () => Date.now()
 

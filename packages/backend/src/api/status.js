@@ -62,7 +62,7 @@ export function createStatusApi({ ctx, recentPlaybackTimings = [] }) {
             mediaLoopbackHost: ctx.blobServerHost || '127.0.0.1',
             mediaLoopbackPort: ctx.blobServer?.port || ctx.blobServerPort || 0,
             httpMediaFallback: false,
-            controlPlanePurposes: ['manifest', 'artwork', 'authentication', 'license', 'diagnostics'],
+            controlPlanePurposes: ['manifest', 'artwork', 'diagnostics'],
           },
         },
         recommendedBoundary: null,

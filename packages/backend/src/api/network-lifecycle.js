@@ -165,6 +165,10 @@ export function createNetworkLifecycleApi({
   readOutboundBytesTotal = defaultOutboundBytesTotal,
   suspendTransport = suspendNetworking,
   repository = null,
+  // 'device' (a viewer's phone/tablet/desktop) or 'server' (a headless relay
+  // or seeder). See evaluateParticipation: a server is not a device that
+  // failed to read its battery, it is a machine that has none.
+  hostKind = 'device',
 } = {}) {
   let playbackActive = false
   let playbackEndedAt = null
@@ -308,6 +312,7 @@ export function createNetworkLifecycleApi({
     settleBackgroundAccrual(at)
     const policy = await readPolicy()
     const decision = evaluateParticipation({
+      hostKind,
       mode: policy.participationMode,
       // 'manual' still means the viewer has not refused to participate; only
       // 'disabled' does.
@@ -362,6 +367,13 @@ export function createNetworkLifecycleApi({
       console.error(`[API] participation refresh after ${reason} failed:`, err.message)
     })
   }
+
+  // A viewer's app publishes its first decision the moment it reports device
+  // conditions or reads its status. A headless server does neither — nothing
+  // is watching it — so it would never publish one, and the archive ledger
+  // fails closed until a decision exists. Evaluate once at boot so a relay's
+  // custody gate opens on the same authority every other host uses.
+  if (hostKind === 'server') refreshParticipation('server startup')
 
   function participationResponse(decision) {
     return {

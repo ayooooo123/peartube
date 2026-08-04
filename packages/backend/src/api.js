@@ -775,6 +775,9 @@ export function createApi({
   sourceOffload = {},
   loadChannel = storageLoadChannel,
   loadPublicBee = storageLoadPublicBee,
+  // 'device' or 'server'. A headless relay/seeder is a server: it has no
+  // battery, thermal envelope, metered link, app lifecycle or playback window.
+  hostKind = 'device',
 }) {
   const blobPlayback = createBlobPlaybackService(ctx)
   const publisherApi = createPublisherApi({ ctx, catalogRegistry, now: () => Date.now() })
@@ -3793,6 +3796,7 @@ export function createApi({
       // The archive ledger is created before this API exists and reads the
       // latest decision lazily, so publishing it on ctx is the whole wire.
       onParticipationDecision: decision => { ctx.participationDecision = decision },
+      hostKind,
     }),
     // Local policy controls
     ...localPolicyApi,

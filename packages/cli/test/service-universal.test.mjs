@@ -124,7 +124,9 @@ test('completed archive publishes an authenticated catalog and retains bounded a
     }
   })
 
-  t.alike(result, { published: true, previewVideos: 1, retained: 2 })
+  // This fixture's publication carries no publicationId, so there is nothing
+  // the relay can name in an archive request and none is published.
+  t.alike(result, { published: true, previewVideos: 1, retained: 2, mirrorRequested: false })
   t.alike(calls.map(([name]) => name), ['publish', 'retain-rendition', 'retain-archive'])
   t.is(service.catalog.getChannel('channel-1').publisherId, 'a'.repeat(64))
   await service.close()

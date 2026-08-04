@@ -23,9 +23,6 @@ const BACKEND_CODES = [
   'PREPARATION_DEADLINE',
   'PREPARATION_CANCELLED',
   'ATTEMPT_LIMIT',
-  'DRM_UNSUPPORTED',
-  'LICENSE_DENIED',
-  'LICENSE_EXPIRED',
 ]
 
 test('the player knows every code the backend can send, and no others', () => {

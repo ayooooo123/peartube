@@ -156,7 +156,14 @@ function orderReasonCodes(codes) {
     .slice(0, MAX_PARTICIPATION_REASON_CODES)
 }
 
-function freeDiskFloor(totalDiskBytes) {
+// How much of a volume must stay free before this host takes on anything more.
+// The absolute minimum protects the machine itself. The percentage on top of it
+// is a courtesy to the person using the device — a phone that reports 90% full
+// feels full — and a dedicated archive host is not a phone: filling its volume
+// is its job, and reserving a tenth of a 4 TB array would cost 400 GB of the
+// storage the operator bought to donate.
+function freeDiskFloor(totalDiskBytes, server) {
+  if (server) return PARTICIPATION_HARD_LIMITS.minFreeDiskBytes
   return Math.max(
     PARTICIPATION_HARD_LIMITS.minFreeDiskBytes,
     Math.ceil(totalDiskBytes * PARTICIPATION_HARD_LIMITS.minFreeDiskFraction),
@@ -169,6 +176,18 @@ function freeDiskFloor(totalDiskBytes) {
  * measured outbound traffic arrives as recentOutboundBytes, and every
  * categorical signal is taken verbatim from the OS — an absent or unrecognised
  * signal is constrained, never permissive.
+ *
+ * `hostKind` names what kind of machine this is, because the constraint set is
+ * genuinely different. A `'device'` (the default) is a viewer's phone, tablet
+ * or laptop: it has a battery, a thermal envelope, a link that may be metered,
+ * an app lifecycle that backgrounds it, and a playback window that says when
+ * the viewer asked for any of this. A `'server'` is a headless relay or seeder
+ * whose whole job is to serve: it has none of those. That is not a machine
+ * failing to read its signals — it is a machine those signals do not describe,
+ * and the difference matters, because an unread signal must keep failing
+ * closed. A server still answers to user permission, to measured free disk,
+ * and to the operator's own ceilings; an explicitly reported bad signal still
+ * stops it.
  */
 export function evaluateParticipation(state = {}) {
   const source = state == null ? {} : state
@@ -183,6 +202,11 @@ export function evaluateParticipation(state = {}) {
   const reasons = []
   if (resolved.unrecognized) reasons.push('MODE_UNRECOGNIZED')
 
+  // A headless server has no battery, no thermal throttle, no metered link, no
+  // app lifecycle and no playback window. Absent values for those are
+  // not-applicable here, never "unread".
+  const server = source.hostKind === 'server'
+
   const permissionOk = source.userAllowsP2P !== false
   if (!permissionOk) reasons.push('USER_DECLINED_P2P')
 
@@ -196,7 +220,7 @@ export function evaluateParticipation(state = {}) {
   // to serve a peer while the viewer is watching.
   let networkBlocked = false
   let networkKnown = false
-  if (source.metered === false) networkKnown = true
+  if (source.metered === false || (server && source.metered == null)) networkKnown = true
   else if (source.metered === true) { networkBlocked = true; reasons.push('NETWORK_METERED') }
   else reasons.push('NETWORK_SIGNAL_UNKNOWN')
 
@@ -205,13 +229,17 @@ export function evaluateParticipation(state = {}) {
   const thermalState = typeof source.thermalState === 'string' ? source.thermalState : null
   if (thermalState !== null && PERMISSIVE_THERMAL_STATES.has(thermalState)) thermalKnown = true
   else if (thermalState !== null && BLOCKING_THERMAL_STATES.has(thermalState)) { thermalBlocked = true; reasons.push('THERMAL_PRESSURE') }
+  else if (server && thermalState === null) thermalKnown = true
   else reasons.push('THERMAL_SIGNAL_UNKNOWN')
 
   const batteryPercent = finitePercent(source.batteryPercent)
   let powerBlocked = false
   let powerKnown = false
   if (source.charging === true) powerKnown = true
-  else if (batteryPercent === null) reasons.push('POWER_SIGNAL_UNKNOWN')
+  else if (batteryPercent === null) {
+    if (server && source.charging == null) powerKnown = true
+    else reasons.push('POWER_SIGNAL_UNKNOWN')
+  }
   else if (batteryPercent < PARTICIPATION_HARD_LIMITS.minBatteryPercent) { powerBlocked = true; reasons.push('BATTERY_BELOW_FLOOR') }
   else powerKnown = true
 
@@ -220,7 +248,7 @@ export function evaluateParticipation(state = {}) {
   let diskBlocked = false
   let diskKnown = false
   if (freeDiskBytes === null || totalDiskBytes === null) reasons.push('DISK_SIGNAL_UNKNOWN')
-  else if (freeDiskBytes < freeDiskFloor(totalDiskBytes)) { diskBlocked = true; reasons.push('DISK_BELOW_FLOOR') }
+  else if (freeDiskBytes < freeDiskFloor(totalDiskBytes, server)) { diskBlocked = true; reasons.push('DISK_BELOW_FLOOR') }
   else diskKnown = true
 
   const playbackActive = source.playbackActive === true
@@ -228,7 +256,9 @@ export function evaluateParticipation(state = {}) {
   const withinGrace = limits.postPlaybackGraceMs > 0 &&
     msSincePlaybackEnded !== null &&
     msSincePlaybackEnded <= limits.postPlaybackGraceMs
-  const windowOk = playbackActive || withinGrace
+  // A server is not waiting for anyone to press play; serving continuously is
+  // the whole point of it.
+  const windowOk = server || playbackActive || withinGrace
   if (!windowOk) reasons.push('OUTSIDE_PLAYBACK_WINDOW')
 
   const uploadedBytesLast24h = nonNegativeCount(source.uploadedBytesLast24h) ?? 0
@@ -261,29 +291,39 @@ export function evaluateParticipation(state = {}) {
   // boolean counts, and anything we cannot read is treated as backgrounded so
   // an unknown lifecycle never buys unsupervised work.
   const foreground = source.foreground === true
-  // Background constraints only block while the app is actually backgrounded.
-  if (!foreground) reasons.push(...backgroundBlockers)
+  // Background constraints only block while the app is actually backgrounded,
+  // and a server is never "backgrounded" — nothing is in front of it.
+  if (!server && !foreground) reasons.push(...backgroundBlockers)
 
   // A signal the device reported as bad stops what it is about. Fetching for
   // the viewer's own playback answers to the network and thermal signals;
-  // contributing to other peers additionally answers to power and disk.
+  // taking on more storage additionally answers to power and disk.
   const fetchBlocked = networkBlocked || thermalBlocked
   const contributionBlocked = fetchBlocked || powerBlocked || diskBlocked
+  // Serving a block is a read. A full disk is a reason to stop writing, never a
+  // reason to stop reading, and on a server the two come apart: its uploads are
+  // pure reads of bytes it already holds, so silencing a nearly-full relay
+  // would delete availability from the network and free not one byte. On a
+  // viewer's device the same bytes arrive by caching what it watches, so there
+  // the disk still governs both.
+  const uploadBlocked = server ? (fetchBlocked || powerBlocked) : contributionBlocked
   // Unsupervised work additionally requires every one of those signals to have
   // actually been read.
   const allSignalsKnown = networkKnown && thermalKnown && powerKnown && diskKnown
 
-  const runnable = foreground || (backgroundWorkOk && allSignalsKnown)
+  const runnable = server || foreground || (backgroundWorkOk && allSignalsKnown)
   // Discovery and cache fill serve the viewer's own playback, so they answer to
   // the device signals but not to the contribution budgets.
   const peerDiscovery = permissionOk && !fetchBlocked && runnable
   const cacheFill = peerDiscovery && !diskBlocked
-  const contributionOk = permissionOk && !contributionBlocked && windowOk && quotaOk
+  const contributionOk = permissionOk && !uploadBlocked && windowOk && quotaOk
   const uploadEligible = contributionOk && runnable
   const uploading = uploadEligible && recentOutboundBytes > 0
   const backgroundEligible = permissionOk && !contributionBlocked && allSignalsKnown &&
-    backgroundWorkOk && windowOk && quotaOk
-  const archiving = uploadEligible && source.archiveOptIn === true
+    (server || backgroundWorkOk) && windowOk && quotaOk
+  // Archiving is custody: it writes, so it answers to the disk even where
+  // serving does not.
+  const archiving = uploadEligible && !contributionBlocked && source.archiveOptIn === true
   // An archive pledge is an unattended storage commitment, not a viewing side
   // effect: a dedicated archivist that never plays anything still qualifies,
   // and — because nobody is watching it — every device signal must have been

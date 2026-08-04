@@ -285,11 +285,11 @@ test('a device without a secure vault stays device-local instead of degrading', 
   assert.match(profile, /no secure keychain/, 'the screen says plainly why linking is unavailable')
 })
 
-test('the privacy copy states the P2P, provider, and revocation limits without claiming anonymity', () => {
+test('the privacy copy states the P2P and revocation limits without claiming anonymity', () => {
   assert.match(profile, /stay on this device/, 'local-by-default is stated')
   assert.match(profile, /IP address/, 'P2P address exposure is stated')
   assert.match(profile, /topics and byte ranges/, 'requested topics and ranges are stated')
-  assert.match(profile, /authentication and license services/, 'provider visibility is stated')
+  assert.doesNotMatch(profile, /license/i, 'no provider license service exists to disclose')
   assert.match(profile, /not anonymous browsing/, 'anonymity is explicitly disclaimed')
   assert.doesNotMatch(profile, /completely anonymous|fully anonymous|no one can see/, 'no anonymity claim')
 })

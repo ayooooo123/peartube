@@ -10,7 +10,7 @@ const DEADLINE = Symbol('preparation-deadline')
 
 // One retry rule, defined once: `playback/errors.js` decides which failures
 // another equivalent source might not share. Everything else stops the walk,
-// because no alternate source can change a device, title, or entitlement fact.
+// because no alternate source can change a device or title fact.
 const RETRYABLE_ERROR_CODES = new Set(RETRYABLE_PLAYBACK_ERROR_CODES)
 
 function positiveInteger(value, fallback) {

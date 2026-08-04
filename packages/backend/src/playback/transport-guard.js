@@ -9,9 +9,9 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
  * it has no path that fetches media from the network.
  *
  * `control-plane` is everything that is deliberately allowed to leave the
- * device and is not media: signed manifests, artwork, provider authentication,
- * and DRM license requests. These are separately classified precisely so
- * "no HTTP media" cannot be quietly satisfied by relabelling media as metadata.
+ * device and is not media: signed manifests, artwork, and user-triggered
+ * diagnostics. These are separately classified precisely so "no HTTP media"
+ * cannot be quietly satisfied by relabelling media as metadata.
  *
  * `forbidden-origin` is any other HTTP(S) endpoint. Strict P2P means media
  * bytes never come from one, so reaching this class is a contract violation.
@@ -22,7 +22,7 @@ export const PLAYBACK_TRAFFIC_CLASSES = Object.freeze({
   forbiddenOrigin: 'forbidden-origin',
 })
 
-const CONTROL_PLANE_PURPOSES = new Set(['manifest', 'artwork', 'authentication', 'license', 'diagnostics'])
+const CONTROL_PLANE_PURPOSES = new Set(['manifest', 'artwork', 'diagnostics'])
 
 function parseUrl(value) {
   try {
@@ -45,7 +45,7 @@ export function classifyPlaybackTraffic(url, purpose = 'media') {
   const parsed = parseUrl(url)
   if (!parsed) return PLAYBACK_TRAFFIC_CLASSES.forbiddenOrigin
   // Scheme first: a non-HTTP endpoint is never allowed, whatever it claims to
-  // be for. Otherwise `file://` or `ftp://` could ride in as a "license".
+  // be for. Otherwise `file://` or `ftp://` could ride in as a "manifest".
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return PLAYBACK_TRAFFIC_CLASSES.forbiddenOrigin
   if (purpose !== 'media' && CONTROL_PLANE_PURPOSES.has(purpose)) return PLAYBACK_TRAFFIC_CLASSES.controlPlane
   return isLoopbackHost(parsed.hostname)

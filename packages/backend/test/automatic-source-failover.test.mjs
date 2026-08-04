@@ -52,7 +52,6 @@ test('every hard gate rejects before any scoring happens', (t) => {
     ['moderated', { moderationDecision: 'blocked' }, 'BLOCKED_BY_MODERATION'],
     ['policy', { localPolicyDecision: 'deny' }, 'BLOCKED_BY_LOCAL_POLICY'],
     ['unsigned', { publicationAuthorized: false }, 'UNAUTHORIZED_PUBLICATION'],
-    ['drm', { drmSystem: 'widevine' }, 'UNSUPPORTED_DRM'],
     ['codec', { codecs: ['av01'] }, 'UNSUPPORTED_CODEC'],
     ['container', { container: 'video/webm' }, 'UNSUPPORTED_CONTAINER'],
     ['superseded', { manifestStale: true }, 'STALE_MANIFEST'],
@@ -60,7 +59,7 @@ test('every hard gate rejects before any scoring happens', (t) => {
     ['orphan-episode', { collectionMemberBound: false }, 'INCOMPLETE_COLLECTION_BINDING'],
     ['gone', { availability: availability('unavailable') }, 'NO_AVAILABLE_COPY'],
   ]
-  const capabilities = { drmSystems: [], codecs: ['avc1'], containers: ['video/mp4'] }
+  const capabilities = { codecs: ['avc1'], containers: ['video/mp4'] }
 
   for (const [id, overrides, expected] of cases) {
     const selection = select([source(id, overrides)], { capabilities })
@@ -80,7 +79,7 @@ test('expired availability evidence is a hard gate, not a low score', (t) => {
 })
 
 test('a device with no declared capability constraint accepts any codec', (t) => {
-  const selection = select([source('a', { codecs: ['av01'], container: 'video/webm', drmSystem: 'widevine' })])
+  const selection = select([source('a', { codecs: ['av01'], container: 'video/webm' })])
   t.is(selection.selectedPublicationId, 'a')
 })
 
@@ -133,7 +132,7 @@ test('publisher popularity and paid placement have nowhere to enter the score', 
   t.is(selection.selectedPublicationId, 'a-plain', 'the tie breaks on publication id, not on money')
 })
 
-test('equivalence fails closed and never crosses edition, episode, or protection', (t) => {
+test('equivalence fails closed and never crosses edition or episode', (t) => {
   t.is(sourceEquivalenceKey({}), null, 'a source with no entity has no identity')
   t.absent(areSourcesEquivalent({}, {}), 'two anonymous sources are not interchangeable')
 
@@ -142,7 +141,6 @@ test('equivalence fails closed and never crosses edition, episode, or protection
   t.absent(areSourcesEquivalent(base, source('c', { entityId: 'work:movie-2' })), 'different work')
   t.absent(areSourcesEquivalent(base, source('d', { editionId: 'directors-cut' })), 'different cut')
   t.absent(areSourcesEquivalent(base, source('e', { collectionMemberId: 'episode-2' })), 'different episode')
-  t.absent(areSourcesEquivalent(base, source('f', { protected: true })), 'protected is not public')
 })
 
 test('the failover order contains only sources equivalent to the winner', (t) => {
@@ -150,7 +148,7 @@ test('the failover order contains only sources equivalent to the winner', (t) =>
     source('winner', { expectedStartupLatencyMs: 0 }),
     source('sibling', { expectedStartupLatencyMs: 500 }),
     source('other-episode', { collectionMemberId: 'episode-9', expectedStartupLatencyMs: 900 }),
-    source('protected-twin', { protected: true, expectedStartupLatencyMs: 900 }),
+    source('other-cut', { editionId: 'directors-cut', expectedStartupLatencyMs: 900 }),
   ])
   t.is(selection.selectedPublicationId, 'winner')
   t.alike(selection.failoverOrder.map(item => item.publicationId), ['sibling'])
@@ -187,15 +185,15 @@ test('preparation falls over to the next equivalent source and closes the abando
 })
 
 test('a terminal failure stops immediately instead of walking every source', async (t) => {
-  const script = opener({ winner: 'LICENSE_DENIED', sibling: 'ok' })
+  const script = opener({ winner: 'NO_COMPATIBLE_SOURCE', sibling: 'ok' })
   const result = await preparePlaybackSource({
     sources: [source('winner', { expectedStartupLatencyMs: 0 }), source('sibling', { expectedStartupLatencyMs: 500 })],
     openSession: script.openSession,
     now: () => NOW,
   })
   t.is(result.success, false)
-  t.is(result.errorCode, 'LICENSE_DENIED')
-  t.alike(script.opened, ['winner'], 'a denied license is not a peer problem')
+  t.is(result.errorCode, 'NO_COMPATIBLE_SOURCE')
+  t.alike(script.opened, ['winner'], 'a device-level incompatibility is not a peer problem')
 })
 
 test('preparation never loops and never exceeds its attempt cap', async (t) => {

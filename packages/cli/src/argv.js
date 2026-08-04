@@ -74,6 +74,14 @@ export function parseArgv(argv = []) {
       continue
     }
 
+    // Stops this relay taking on NEW archive pledges for peer relays and stops
+    // it asking the network to mirror what it publishes. A bare flag, so it
+    // cannot be set by a stray value; pledges already held are untouched.
+    if (arg === '--no-reseed') {
+      flags.noReseed = true
+      continue
+    }
+
     const next = args[i + 1]
     const consumeValue = () => {
       if (next === undefined) {

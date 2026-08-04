@@ -305,6 +305,36 @@ async function buildRelayService({
     }
   }
 
+  // One ceiling governs the local store and the archive pledges this relay
+  // takes on for other relays, so the storage guard's live headroom is pushed
+  // into the archive network every time it is re-evaluated. A relay with no
+  // room left declines new pledges; it never drops the ones it already made.
+  async function refreshArchiveCapacity() {
+    if (typeof runtime.applyArchiveCapacity !== 'function') return null
+    try {
+      const result = await runtime.applyArchiveCapacity({ headroomBytes: storageGuard.headroomBytes() })
+      if (result?.applied === false && result.reason !== 'reseed-disabled') {
+        logger.status?.debug?.('Archive capacity was not applied', { reason: result.reason })
+      }
+      return result
+    } catch (err) {
+      logger.status?.warn?.('Archive capacity update failed', { error: err?.message || String(err) })
+      return null
+    }
+  }
+
+  // The byte ranges of the rendition this relay just retained, named the way a
+  // possession challenge names them. The archive network derives the same
+  // ranges from the signed manifest; these travel with the request so status
+  // can read the archivists' evidence back for this exact rendition.
+  function renditionLocators(publication) {
+    const rendition = (publication?.manifest?.body?.renditions || [])
+      .find((candidate) => candidate.renditionId === publication.renditionId)
+    const core = rendition?.core
+    if (!core?.key || !Number.isSafeInteger(core.length) || core.length < 1) return []
+    return [{ coreKey: core.key, start: 0, end: core.length, renditionId: publication.renditionId }]
+  }
+
   async function publishArchiveJob(job) {
     if (closed) return { published: false, reason: 'closed' }
     if (job?.status !== 'completed') return { published: false, reason: 'not-completed' }
@@ -325,11 +355,40 @@ async function buildRelayService({
     }
 
     const retained = []
+    let mirrorRequested = false
     if (publication?.manifest && publication?.renditionId) {
       retained.push(await runtime.retainRendition({
         manifest: publication.manifest,
         renditionId: publication.renditionId
       }))
+      // Now that this relay holds the bytes, ask peer relays to mirror them.
+      // An archive request that fails or is unavailable is recorded and left
+      // there: a publication that reached the network is published whether or
+      // not anyone else agreed to keep a copy, and saying otherwise would make
+      // the relay refuse to publish the moment the archive network hiccuped.
+      if (publication.publicationId && typeof runtime.requestArchiveMirror === 'function') {
+        try {
+          const mirror = await runtime.requestArchiveMirror({
+            publicationId: publication.publicationId,
+            renditionId: publication.renditionId,
+            locators: renditionLocators(publication)
+          })
+          mirrorRequested = mirror?.requested === true
+          if (!mirrorRequested) {
+            logger.archive?.warn?.('Archive mirror request was not published', {
+              publicationId: publication.publicationId,
+              renditionId: publication.renditionId,
+              reason: mirror?.errorCode || mirror?.reason || mirror?.status || 'unknown'
+            })
+          }
+        } catch (err) {
+          logger.archive?.warn?.('Archive mirror request failed', {
+            publicationId: publication.publicationId,
+            renditionId: publication.renditionId,
+            error: err?.message || String(err)
+          })
+        }
+      }
     }
     if (classifiedPreview?.archivePledge && classifiedPreview?.blobsCoreKey) {
       const [start, length] = String(classifiedPreview.blobId || '').split(':').map(Number)
@@ -364,7 +423,7 @@ async function buildRelayService({
     })
     await syncCreators()
     await persistStatus()
-    return { published: true, previewVideos: previewVideos.length, retained: retained.length }
+    return { published: true, previewVideos: previewVideos.length, retained: retained.length, mirrorRequested }
   }
 
   function scheduleCandidate(candidate) {
@@ -646,6 +705,11 @@ async function buildRelayService({
         }))
       }
 
+      // Hand the archive network this relay's real headroom before it can be
+      // offered any pledge. Restored pledges are already in place by now, so
+      // the ceiling is computed above them, never under them.
+      await refreshArchiveCapacity()
+
 
       const status = await persistStatus()
       logger.relay.info('Relay started', {
@@ -702,6 +766,11 @@ async function buildRelayService({
       heartbeatTimer = setIntervalFn(async () => {
         try {
           await syncCreators()
+          // Headroom moves as the relay archives, evicts and grows. Re-derive
+          // it before status is written so what the archive network will accept
+          // and what status reports are the same number.
+          storageGuard.invalidate()
+          await refreshArchiveCapacity()
           const heartbeatStatus = await persistStatus()
           const network = heartbeatStatus.runtime.network || {}
           if ((network.peers || 0) > 0 && (network.connections || 0) === 0) {

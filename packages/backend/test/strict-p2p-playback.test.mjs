@@ -50,9 +50,6 @@ test('every playback failure has exactly one code, message, and retry policy', (
   for (const code of ['AVAILABILITY_BOUNDARY', 'NO_COMPATIBLE_SOURCE', 'PEER_TIMEOUT', 'PEER_DISCONNECT', 'RANGE_MISMATCH', 'SESSION_LIMIT']) {
     t.ok(PLAYBACK_ERROR_CODES.includes(code), `${code} is part of the transported vocabulary`)
   }
-  for (const code of ['DRM_UNSUPPORTED', 'LICENSE_DENIED', 'LICENSE_EXPIRED']) {
-    t.ok(PLAYBACK_ERROR_CODES.includes(code), `${code} is part of the provider-player vocabulary`)
-  }
 })
 
 test('only failures another source might not share are retried automatically', (t) => {
@@ -65,7 +62,7 @@ test('only failures another source might not share are retried automatically', (
   for (const code of ['PEER_TIMEOUT', 'PEER_DISCONNECT', 'RANGE_MISMATCH', 'SESSION_LIMIT']) {
     t.ok(RETRYABLE_PLAYBACK_ERROR_CODES.includes(code), `${code} may try another source`)
   }
-  for (const code of ['AVAILABILITY_BOUNDARY', 'NO_COMPATIBLE_SOURCE', 'DRM_UNSUPPORTED', 'LICENSE_DENIED']) {
+  for (const code of ['AVAILABILITY_BOUNDARY', 'NO_COMPATIBLE_SOURCE']) {
     t.ok(TERMINAL_PLAYBACK_ERROR_CODES.includes(code), `${code} cannot loop`)
     t.absent(RETRYABLE_PLAYBACK_ERROR_CODES.includes(code), `${code} is never retried automatically`)
   }
@@ -99,14 +96,21 @@ test('only the loopback blob server may carry media bytes', (t) => {
   }
 })
 
-test('manifests, artwork, authentication, and licenses are control plane, not media', (t) => {
-  for (const purpose of ['manifest', 'artwork', 'authentication', 'license']) {
+test('manifests, artwork, and diagnostics are control plane, not media', (t) => {
+  for (const purpose of ['manifest', 'artwork', 'diagnostics']) {
     t.is(
       classifyPlaybackTraffic('https://provider.example.com/endpoint', purpose),
       PLAYBACK_TRAFFIC_CLASSES.controlPlane,
       `${purpose} may leave the device`
     )
   }
+  // The control-plane set is closed. An unlisted purpose is not a narrower kind
+  // of control plane; it is an origin the player must never reach.
+  t.is(
+    classifyPlaybackTraffic('https://provider.example.com/endpoint', 'anything-else'),
+    PLAYBACK_TRAFFIC_CLASSES.forbiddenOrigin,
+    'an unlisted purpose cannot excuse a remote host'
+  )
   t.is(
     classifyPlaybackTraffic('https://provider.example.com/segment.m4s', 'media'),
     PLAYBACK_TRAFFIC_CLASSES.forbiddenOrigin,

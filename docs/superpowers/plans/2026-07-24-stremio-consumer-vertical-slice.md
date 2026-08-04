@@ -4,11 +4,13 @@
 
 **Goal:** Turn the completed permissionless media-network foundation into a simple Stremio-like consumer application: one moderated global catalog, one Play action with automatic source selection, strict-P2P playback with honest availability, local-first library and recommendations, and all publisher/operator controls hidden behind Developer Settings or exposed through the CLI/relay.
 
-**Architecture:** The consumer shell reads one local projection assembled from bounded permissionless publisher and index feeds. Client-selected community moderation filters that projection before work is scheduled. A deterministic local ranker builds Home rows from network catalog signals plus device-local watch state. Playback selects a currently reachable immutable rendition, downloads media only from peers, and fails over between equivalent sources without exposing operational complexity. Public media plays directly. Protected media uses public opaque ciphertext plus provider-owned authentication/license services; license services are control-plane only and may never become media origins. Viewer history, recommendations, and resource accounting stay on device; PearTube emits no CDN telemetry.
+**Architecture:** The consumer shell reads one local projection assembled from bounded permissionless publisher and index feeds. Client-selected community moderation filters that projection before work is scheduled. A deterministic local ranker builds Home rows from network catalog signals plus device-local watch state. Playback selects a currently reachable immutable rendition, downloads media only from peers, and fails over between equivalent sources without exposing operational complexity. Content enters the network by mirroring: a MediaStorm instance's library flows into any relay that follows it, the relay publishes it as signed immutable renditions, and the swarm carries it from there. Viewer history, recommendations, and resource accounting stay on device.
 
-**Prerequisite:** `docs/superpowers/plans/2026-07-23-permissionless-media-cdn.md` and the release-blocker hardening recorded in `docs/superpowers/progress/2026-07-24-permissionless-media-cdn-progress.md` are complete. This plan changes product projection and adds protected playback; it does not restore the deleted global-feed data plane.
+**Prerequisite:** `docs/superpowers/plans/2026-07-23-permissionless-media-cdn.md` and the release-blocker hardening recorded in `docs/superpowers/progress/2026-07-24-permissionless-media-cdn-progress.md` are complete. This plan changes product projection and adds mirroring plus a network CLI; it does not restore the deleted global-feed data plane.
 
-**Tech stack:** Expo Router, React Native, Electrobun, Node/Bare JavaScript, Hypercore/Corestore/Hyperbee/Hyperblobs, Hyperswarm/Protomux, HRPC/Hyperschema, platform-native media DRM bridges, `brittle`, and `node:test`.
+**Out of scope:** protected/DRM media. PearTube distributes public content only. There is no entitlement, license, provider-authentication, or content-key concept anywhere in the product, the protocol, or the relay.
+
+**Tech stack:** Expo Router, React Native, Electrobun, Node/Bare JavaScript, Hypercore/Corestore/Hyperbee/Hyperblobs, Hyperswarm/Protomux, HRPC/Hyperschema, `brittle`, and `node:test`.
 
 ---
 
@@ -21,11 +23,11 @@
 5. **Source choice:** Play automatically selects the best currently playable source and may fail over. An optional Other Sources panel explains alternatives.
 6. **Participation:** Balanced is the default. A viewer uploads during playback, briefly after playback, and in bounded background windows only when local policy permits. Metered, battery, thermal, disk, and upload ceilings are hard constraints.
 7. **Identity:** no account is required. Watch state, library, and recommendations are local. Optional encrypted device pairing synchronizes user state only after explicit opt-in.
-8. **Protected media:** public and protected titles coexist. Peers and relays distribute opaque ciphertext. Only entitled viewers obtain short-lived provider-issued playback licenses.
-9. **Analytics:** PearTube collects no viewing, engagement, recommendation, or CDN-savings analytics and sends no playback telemetry to publishers. Provider authentication/license services necessarily observe their own requests; the UI and privacy copy must say so.
+8. **Content supply:** relays mirror from MediaStorm instances they follow. Mirroring is permissionless and one-directional — a relay pulls a catalog it chose to follow, republishes it as signed immutable renditions, and seeds it. A MediaStorm instance gains no authority over the relay or the network.
+9. **Analytics:** PearTube collects no viewing, engagement, recommendation, or CDN-savings analytics and sends no playback telemetry to publishers.
 10. **Availability:** no HTTP media-origin fallback and no mandatory provider-operated seed. Playback can fail when peers disappear. The product must never claim conventional CDN availability.
 11. **Publication visibility:** new records appear immediately with one of Awaiting replication, Limited availability, Healthy, or Unavailable. Healthy requires fresh evidence from independent transport identities; metadata existence alone is insufficient.
-12. **Relay role:** permissionless discovery/archive nodes. Relays may gossip records, cache opaque media, satisfy archive pledges, and seed ranges. They receive no publication, moderation, entitlement, or global-ranking authority.
+12. **Relay role:** permissionless discovery/archive/mirror nodes. Relays may follow MediaStorm instances, gossip records, cache media, satisfy archive pledges, and seed ranges. They receive no publication, moderation, or global-ranking authority over anyone else.
 13. **Publishing access:** Studio lives inside Developer Settings and remains available through the CLI. Relay deployments may archive/seed published content but are not authoritative publisher infrastructure.
 
 ---
@@ -34,8 +36,7 @@
 
 - **Strict P2P means no availability SLA.** New, rare, and unpopular titles can be unplayable. Product copy, search results, and Play controls must reflect this before a viewer commits to playback.
 - **A peer count is not durability.** Healthy requires fresh, complete-range evidence from independent transport identities and must decay when evidence expires.
-- **Do not invent DRM.** A JavaScript-delivered content key cannot be made meaningfully short-lived after disclosure. Commercial protected playback must use encrypted CMAF/CENC renditions and platform DRM/CDM APIs (Widevine on Android, FairPlay on Apple platforms, and an available CDM path on desktop). ClearKey is test/development only and cannot satisfy production acceptance.
-- **A license service is not a media fallback.** It may authenticate, authorize, and return a license. It must not return media segments, redirect to an origin, or receive peer/range telemetry from PearTube.
+- **Mirroring is not authority.** A relay that mirrors a MediaStorm library republishes it under its own publisher identity and seeds it. It does not speak for the origin instance, and following an instance never lets that instance change the relay's catalog, moderation, or policy.
 - **Permissionless does not mean unfiltered.** Signed spam is still spam. Moderation and bounded ingestion must execute before artwork fetch, asset discovery, download, archive, or playback work.
 - **No analytics means no hidden compromise.** Do not add telemetry SDKs, playback beacons, remote recommendation calls, stable cross-provider viewer IDs, or “anonymous” event batches.
 
@@ -48,7 +49,7 @@ Every catalog path uses one order:
 1. enforce frame, signature, publisher authorization, replay, and ingest-budget checks;
 2. apply the active local moderation policy before consumer projection or any external artwork/asset work;
 3. resolve and deduplicate only accepted claims into media entities;
-4. apply device codec/DRM capability and current availability gates when selecting a playback source.
+4. apply device codec/container capability and current availability gates when selecting a playback source.
 
 Blocked publications are absent from normal Home, Search/Discover, Library recommendations, and detail navigation. Developer Mode alone changes no moderation decision. A user must explicitly change local moderation policy to reveal a blocked publication. Developer diagnostics may show bounded record IDs and rejection reasons, but must not fetch blocked artwork, join asset topics, download, seed, or archive. Invalid or unsigned introductions are rejected at discovery admission; a valid signed publisher record remains discoverable through another valid introduction. A failed/404 artwork request uses a placeholder, while an artwork locator rejected by policy is quarantined without necessarily hiding an otherwise accepted media entity.
 
@@ -65,17 +66,10 @@ Blocked publications are absent from normal Home, Search/Discover, Library recom
 - A validation mismatch, timeout past the assessment deadline, or disconnect removes that peer from current evidence and feeds the existing local peer scorer. Expiry without replacement downgrades a previously observed source to Unavailable; a never-assessed new publication remains Awaiting replication.
 - A local complete copy is exposed separately as offline-playable and never inflates network peer counts. Availability is a local, point-in-time assessment—not consensus, durability, or Sybil-proof truth. Multiple Noise keys controlled by one adversary remain a known limitation, so product copy must not translate Healthy into a durability or SLA claim.
 
-### Protected-media key boundary
-
-The backend, HRPC, Hypercore/Hyperbee state, relay, archive protocols, and JavaScript persistence handle only signed public DRM descriptors, opaque ciphertext, and non-secret status. Provider credentials may exist transiently in the app-owned authentication coordinator and at rest only in SecureStore/keychain or the privileged desktop vault. The platform DRM/CDM creates the license challenge, receives the license response, and owns decrypted keys. JavaScript may pass origin-pinned license request headers into the platform player but must not receive a license response or raw content key.
-
-Key-isolation verification uses both structural and canary checks: generated schemas contain no key/license payload fields; a distinctive development key/license marker is absent from captured HRPC frames, logs, crash reports, databases, app-state serialization, archive evidence, and relay storage after the complete protected playback flow. This proves the implemented boundary, not freedom from side channels. Peers still observe requested topics/ranges, and provider authentication/license services observe their own requests.
-
 ### Platform acceptance matrix
 
-- The public strict-P2P slice must pass on Electrobun desktop plus physical Android and iOS devices.
-- Protected production support requires observed Widevine on Android and FairPlay on iOS.
-- Electrobun protected playback requires a confirmed usable CDM/EME path. If the runtime has none, protected sources are explicitly unsupported on desktop; public playback must still pass. PearTube must not advertise protected desktop support until that path exists.
+- The strict-P2P slice must pass on Electrobun desktop plus physical Android and iOS devices.
+- The relay/CLI slice must pass headless on Node and on the Bare relay runtime.
 
 
 ---
@@ -88,9 +82,9 @@ Key-isolation verification uses both structural and canary checks: generated sch
 4. **Playback gate:** Play never requests HTTP media bytes; it selects and fails over only among compatible, currently reachable P2P sources; missing ranges fail promptly with structured reasons.
 5. **Participation gate:** Balanced mode contributes useful bytes without violating metered, battery, thermal, disk, background, or user upload constraints.
 6. **Privacy gate:** watch history, library, ranking inputs, and recommendations remain local; network inspection shows no PearTube analytics traffic.
-7. **Protected-media gate:** relays seed ciphertext without licenses; only the platform DRM path receives a provider license; decrypted keys never enter backend, HRPC, logs, JavaScript persistence, archive metadata, or relay state.
-8. **Public vertical-slice gate:** on Electrobun desktop and physical Android/iOS, a fresh anonymous install can discover, search, inspect, play, resume after process restart, and save one multi-source movie or episode. The two serving peers use distinct authenticated Noise keys over real transport sessions. Disconnecting both produces `AVAILABILITY_BOUNDARY` and the visible message “Unavailable — no peer currently serves the required ranges,” with no HTTP fallback.
-9. **Commercial protected-media gate:** real Widevine on Android and FairPlay on iOS play peer-delivered ciphertext while the key-isolation canaries remain absent from backend/HRPC/storage/relay boundaries. Protected Electrobun support is claimed only if its real CDM/EME probe passes; otherwise the desktop UI reports DRM unsupported. ClearKey-only coverage is explicitly insufficient.
+7. **Mirroring gate:** a relay that follows a MediaStorm instance mirrors its library into signed immutable publications, seeds them, resumes a partial mirror after restart, and gains no authority the instance did not already have.
+8. **CLI gate:** a headless CLI can search the network, report what is available and from how many peers, and retrieve a rendition to a local file over P2P only.
+9. **Public vertical-slice gate:** on Electrobun desktop and physical Android/iOS, a fresh anonymous install can discover, search, inspect, play, resume after process restart, and save one multi-source movie or episode. The two serving peers use distinct authenticated Noise keys over real transport sessions. Disconnecting both produces `AVAILABILITY_BOUNDARY` and the visible message “Unavailable — no peer currently serves the required ranges,” with no HTTP fallback.
 
 ---
 
@@ -249,13 +243,13 @@ git commit -m "feat(playback): expose honest expiring availability"
 - Create: `packages/backend/test/automatic-source-failover.test.mjs`
 - Create: `packages/app/tests/automatic-play-regression.test.mjs`
 
-**Selection order:** reject moderation failures, incompatible encryption/DRM, unsupported codec/container, stale manifests, incomplete collection member bindings, and unavailable required ranges before scoring. Score eligible sources by local completeness, startup-range reachability, format support, fresh peer evidence, expected startup latency, and user override. Publisher popularity and paid placement are not score inputs.
+**Selection order:** reject moderation failures, unsupported codec/container, stale manifests, incomplete collection member bindings, and unavailable required ranges before scoring. Score eligible sources by local completeness, startup-range reachability, format support, fresh peer evidence, expected startup latency, and user override. Publisher popularity and paid placement are not score inputs.
 
-**Acceptance:** One Play action selects a source without opening a picker. If the selected source fails before irreversible player state, preparation may try the next compatible source within one overall deadline and a strict attempt cap. Failover never crosses to a different edition/cut/episode, never downgrades protected to public lookalikes, never bypasses moderation, and never loops. Other Sources remains optional and explains why each source won, lost, or was rejected.
+**Acceptance:** One Play action selects a source without opening a picker. If the selected source fails before irreversible player state, preparation may try the next compatible source within one overall deadline and a strict attempt cap. Failover never crosses to a different edition/cut/episode, never bypasses moderation, and never loops. Other Sources remains optional and explains why each source won, lost, or was rejected.
 
 **Steps:**
 
-1. Add deterministic selection vectors and failures for source equivalence, codec mismatch, stale health, moderation, DRM capability, timeout, disconnect, and exhausted alternatives.
+1. Add deterministic selection vectors and failures for source equivalence, codec mismatch, stale health, moderation, timeout, disconnect, and exhausted alternatives.
 2. Implement one pure selector shared by API and explanation UI. Remove presentation-only fallback rankings.
 3. Put one deadline and one cancellation tree around all attempts; close every abandoned asset session.
 4. Drive playback with a selected source disappearing during startup and verify the second equivalent source starts.
@@ -291,11 +285,11 @@ git commit -m "feat(playback): select and fail over P2P sources"
 - Modify: `packages/core/src/types/index.ts`
 - Create: `packages/app/tests/strict-p2p-player-regression.test.mjs`
 
-**Acceptance:** Remote media bytes enter only through authorized scoped asset sessions. The loopback blob server may expose already-local Hypercore bytes to the player, but it is not an origin and cannot fetch HTTP media. Manifests, artwork, provider authentication, and DRM license requests are separately classified control-plane traffic. Define and transport bounded errors `AVAILABILITY_BOUNDARY`, `NO_COMPATIBLE_SOURCE`, `PEER_TIMEOUT`, `PEER_DISCONNECT`, `RANGE_MISMATCH`, and `SESSION_LIMIT`; provider-player errors additionally include `DRM_UNSUPPORTED`, `LICENSE_DENIED`, and `LICENSE_EXPIRED`. Each code has one user message and retry policy. A missing startup range returns `AVAILABILITY_BOUNDARY`, leaves no half-open session, and never points to a publisher origin/CDN.
+**Acceptance:** Remote media bytes enter only through authorized scoped asset sessions. The loopback blob server may expose already-local Hypercore bytes to the player, but it is not an origin and cannot fetch HTTP media. Manifests and artwork are separately classified control-plane traffic; there is no other permitted outbound class. Define and transport bounded errors `AVAILABILITY_BOUNDARY`, `NO_COMPATIBLE_SOURCE`, `PEER_TIMEOUT`, `PEER_DISCONNECT`, `RANGE_MISMATCH`, and `SESSION_LIMIT`. Each code has one user message and retry policy. A missing startup range returns `AVAILABILITY_BOUNDARY`, leaves no half-open session, and never points to a publisher origin.
 
 **Steps:**
 
-1. Add transport-spy tests that reject HTTP(S) segment fetches, redirects, manifest URLs that smuggle media, and fallback after peer loss. Add error mapping tests: timeout, disconnect, and session pressure may retry within the overall attempt cap; availability boundary, range mismatch, unsupported DRM, denied license, and expired license require new evidence, capability, or user action and cannot loop.
+1. Add transport-spy tests that reject HTTP(S) segment fetches, redirects, manifest URLs that smuggle media, and fallback after peer loss. Add error mapping tests: timeout, disconnect, and session pressure may retry within the overall attempt cap; availability boundary and range mismatch require new evidence, capability, or user action and cannot loop.
 2. Prove local complete playback works with networking disabled and remote playback works with peer transport only.
 3. Add timeout/cancellation tests for startup, seek, peer loss, app backgrounding, and shutdown.
 4. Exercise with an HTTP trap server and two peers; the trap must receive zero media requests.
@@ -389,8 +383,8 @@ git commit -m "feat(app): deliver the consumer media library"
 2. Extend the existing personal record shape with entity/edition/member identity, position, duration, completion, saved flag, playback generation, Lamport clock, writer key, and tombstone. Resolve concurrent records by `(playbackGeneration, lamport, writerKey)`; completion is monotonic within one generation, while an explicit replay starts a higher generation. Migrate legacy channel/video keys without deleting the source until the encrypted record is durable.
 3. Keep key custody on the existing boundary: the platform generates the first 32-byte secret with a CSPRNG, persists it in SecureStore/keychain/privileged desktop vault, and sends it once in the local provisioning request; remove backend secret generation and the secret field from the provisioning response. During explicit pairing only, return the received secret once to the joining platform, persist it before opening the store, zero the response buffer where supported, and never log or serialize it. Backend memory derives the existing DEK/wrapping keys; peers receive only encrypted Autobase replication. Serialize invite redemption and consume the persisted invite before granting one writer. Implement revocation as a new encrypted store epoch containing only current bounded state; stop joining/replicating the old epoch before accepting new writes and require retained devices to re-pair. Never promise deletion of data already read by a revoked device.
 4. Add dedicated personal-store create-invite, redeem, list-device, and revoke HRPC methods. Rewire Profile → Your devices to them; never pass an identity `driveKey` into publisher `createDeviceInvite`/`pairDevice`. Keep publisher pairing available only inside Studio.
-5. Add an outbound-request harness that exercises browse, search, playback, pause, seek, complete, save, and recommend. Allow P2P, artwork, explicit provider auth/license, and user-triggered diagnostics export only; assert zero analytics/beacon traffic.
-6. Update privacy copy with unavoidable P2P IP/topic leakage, provider license-service visibility, and the forward-only limit of paired-device revocation. Do not claim anonymity or retroactive erasure.
+5. Add an outbound-request harness that exercises browse, search, playback, pause, seek, complete, save, and recommend. Allow P2P, artwork, and user-triggered diagnostics export only; assert zero analytics/beacon traffic.
+6. Update privacy copy with unavoidable P2P IP/topic leakage and the forward-only limit of paired-device revocation. Do not claim anonymity or retroactive erasure.
 7. Run:
 
 ```bash
@@ -449,137 +443,84 @@ git commit -m "feat(network): make balanced contribution the default"
 
 ---
 
-## Milestone 2: Provider-Protected Ciphertext Playback
+## Milestone 2: Network Seeding and the CLI
 
-### Task 9: Add protected-rendition and entitlement contracts without exposing content keys
+Content has to get into the network, and then it has to stay there without depending on the machine that published it. Two facts frame this milestone:
 
-**Files:**
+- **Ingest already exists and is already a user choice.** A MediaStorm operator points their instance at a relay (`PEARTUBE_RELAY_URL` or the admin settings page) and turns on auto-seed, and every title a viewer starts watching is published to that relay — `PearTubeHandler.OnPlaybackStarted` → `planAutoSeed` → `Archive`/`ArchiveURL`, deduplicated by a durable idempotency key and a six-hour per-title guard. That path needs verification, not reinvention.
+- **Re-seeding does not exist.** A relay publishes a rendition, gossips its catalog, and is then the only node holding the bytes. Peer relays learn the entity exists and can stream it from the origin, but nothing makes them replicate it. The permissionless archive network already implements exactly this — signed archive requests, capacity-bounded pledges, `core.download()` of the pledged ranges, and possession challenges — and nothing wires a relay into either end of it.
 
-- Create: `packages/backend/src/access/protected-rendition.js`
-- Create: `packages/backend/src/access/entitlement-descriptor.js`
-- Modify: `packages/backend/src/assets/manifest.js`
-- Modify: `packages/backend/src/assets/media-validation.js`
-- Modify: `packages/backend/src/media-graph/source-selector.js`
-- Modify: `packages/backend/src/content-publication.js`
-- Modify: `packages/spec/schema.cjs`
-- Modify: `packages/core/src/types/index.ts`
-- Modify: host/platform types and regenerate all generated artifacts
-- Create: `packages/backend/test/protected-rendition-contract.test.mjs`
-- Create: `packages/backend/test/protected-publication-validation.test.mjs`
-- Create: `packages/backend/test/protected-media-key-isolation.test.mjs`
-
-**Acceptance:** The same ciphertext is cacheable by viewers and relays without entitlement. Tampered key IDs, init data, scheme, endpoint, or issuer invalidate publication/rendition selection. Unsupported DRM makes a source unavailable with `DRM_UNSUPPORTED` before asset download. Public renditions remain unchanged. ClearKey requires an injected `allowClearKeyForTests` capability available only to deterministic test/dev fixtures; production constructors and generated app contracts do not expose that capability and reject ClearKey manifests. Generated backend/HRPC schemas contain no bearer-token, license-payload, or content-key field. The distinctive key/license canary defined by the test is absent from captured frames, logs, crash reports, databases, archive evidence, and relay state.
-
-**Steps:**
-
-1. Add canonical Node/Bare vectors, malformed-manifest cases, schema-absence assertions, and a distinctive development key/license canary.
-2. Extend the existing immutable manifest rather than adding a second protected catalog.
-3. Keep content keys and provider tokens out of HRPC and backend storage by construction; capture and inspect every persisted/wire/log boundary exercised by the fixture.
-4. Run:
-
-```bash
-npm run schema:full
-npm exec --prefix packages/backend -- brittle packages/backend/test/protected-rendition-contract.test.mjs packages/backend/test/protected-publication-validation.test.mjs packages/backend/test/protected-media-key-isolation.test.mjs packages/backend/test/asset-manifest.test.mjs packages/backend/test/media-source-selector.test.mjs
-npm test --prefix packages/spec
-npm test --prefix packages/host
-npm test --prefix packages/platform
-npm run typecheck
-```
-
-5. Commit:
-
-```bash
-git add packages/backend/src/access packages/backend/src/assets packages/backend/src/media-graph/source-selector.js packages/backend/src/content-publication.js packages/backend/test/protected-rendition-contract.test.mjs packages/backend/test/protected-publication-validation.test.mjs packages/backend/test/protected-media-key-isolation.test.mjs packages/spec packages/core/src/types/index.ts packages/host packages/platform packages/app/backend
-git commit -m "feat(access): define protected ciphertext renditions"
-```
-
-### Task 10: Put provider authentication and license acquisition in the privileged player boundary
+### Task 9: Make relays re-seed each other's published content
 
 **Files:**
 
-- Create: `packages/app/lib/provider-auth/provider-session.ts`
-- Create: `packages/app/lib/provider-auth/credential-vault.native.ts`
-- Create: `packages/app/lib/provider-auth/credential-vault.web.ts`
-- Create: `packages/app/lib/drm/drm-session.ts`
-- Modify protected mobile `VideoSource` construction through the installed `expo-video` DRM contract
-- Modify `packages/app/android/app/src/main/java/com/peartube/app/PlayerActivity.kt` and `packages/app/plugins/templates/PlayerActivity.kt.template` only if the custom Android playback handoff bypasses `expo-video`
-- Modify: `packages/app/package.json` only if the supported `expo-video` DRM contract requires an upgrade
-- Modify: `packages/app/lib/video-player/playerPort.ts`
-- Modify: `packages/app/lib/VideoPlayerContext.tsx`
-- Modify: `packages/app/components/VideoPlayerOverlayImpl.tsx`
-- Modify: `packages/app/components/VideoPlayerOverlay.web.tsx`
-- Create: `packages/app/tests/provider-auth-session.test.mjs`
-- Create: `packages/app/tests/drm-boundary-regression.test.mjs`
-- Create: `packages/app/tests/drm-platform-capability.test.mjs`
-
-**Acceptance:** Anonymous catalog browsing remains possible. Pressing Play on protected media starts provider authentication only when no valid local provider session exists. The provider token is stored in SecureStore/keychain or the privileged desktop vault, scoped to the signed provider origin, and never sent to backend/HRPC/peers. The platform DRM/CDM creates the license challenge, receives the license response, and owns content keys. JavaScript may coordinate session state and supply origin-pinned license request headers but never receives or persists a license response or decrypted key. The dynamic canary flow rechecks every boundary listed in **Protected-media key boundary**. Capability negotiation runs before protected asset work and maps unsupported production DRM/ClearKey to `DRM_UNSUPPORTED`. Sign-out clears provider credentials and active licenses without deleting public ciphertext caches. License failure does not attempt an HTTP media fallback.
-
-**Steps:**
-
-1. Write boundary tests that fail if provider tokens, license responses, or key canaries cross HRPC, appear in logs/crash reports, enter app-state serialization, or reach backend/relay/archive code.
-2. Implement provider auth with PKCE/device flow according to the signed descriptor; reject arbitrary redirect or license origins.
-3. Use the installed `expo-video` `VideoSource.drm` contract for Android Widevine and iOS FairPlay; its documented license server, request headers, FairPlay certificate/content ID, and Android multi-key fields are the starting boundary. Set `useCaching: false` for protected sources because PearTube's Hypercore ciphertext cache is external to `expo-video` and Expo does not support its own cache for DRM media. If the custom Android `PlayerActivity` path bypasses `expo-video`, thread equivalent ExoPlayer DRM configuration through that path and its generated template without exposing keys to JavaScript.
-4. Probe actual device DRM capability before asset download. Probe Electrobun's real CDM/EME support with an encrypted fixture before implementing desktop protected playback. If no usable CDM exists, return `DRM_UNSUPPORTED` rather than substituting ClearKey or JavaScript decryption.
-5. Use ClearKey only for deterministic tests. Complete the gate with real provider-issued test licenses on supported devices.
-6. Exercise expiry, renewal, cancellation, backgrounding, sign-out, provider denial, network loss after license acquisition, and peer loss before/after startup.
-7. Run focused contract checks:
-
-```bash
-node --test packages/app/tests/provider-auth-session.test.mjs packages/app/tests/drm-boundary-regression.test.mjs packages/app/tests/drm-platform-capability.test.mjs
-npm run typecheck
-```
-
-8. Build and exercise physical Android and iOS binaries with Widevine and FairPlay using `JAVA_HOME=/Library/Java/JavaVirtualMachines/zulu-17.jdk/Contents/Home npm run android --prefix packages/app` and `npm run build:ios:device --prefix packages/app`. Run the Electrobun encrypted-fixture probe and record supported/unsupported capability evidence.
-9. Commit only after platform evidence is recorded:
-
-```bash
-git add packages/app/lib/provider-auth packages/app/lib/drm packages/app/lib/video-player packages/app/lib/VideoPlayerContext.tsx packages/app/components/VideoPlayerOverlayImpl.tsx packages/app/components/VideoPlayerOverlay.web.tsx packages/app/android/app/src/main/java/com/peartube/app/PlayerActivity.kt packages/app/plugins/templates/PlayerActivity.kt.template packages/app/package.json packages/app/tests/provider-auth-session.test.mjs packages/app/tests/drm-boundary-regression.test.mjs packages/app/tests/drm-platform-capability.test.mjs
-git commit -m "feat(playback): acquire protected licenses in platform DRM"
-```
-Reference: Expo's official `expo-video` DRM contract documents `VideoSource.drm`, Android Widevine/PlayReady/ClearKey, iOS FairPlay, and the platform restriction that its own cache cannot store DRM-protected media: <https://docs.expo.dev/versions/latest/sdk/video/#drmoptions>.
-
-### Task 11: Prove relays distribute protected bytes without gaining playback authority
-
-**Files:**
-
-- Modify: `packages/backend/src/archive/permissionless-network.js`
-- Modify: `packages/backend/src/archive/manager.js`
-- Modify: `packages/backend/src/assets/asset-session.js`
-- Modify: `packages/cli/src/archive-manager.js`
 - Modify: `packages/cli/src/service.js`
+- Modify: `packages/cli/src/runtime.js`
 - Modify: `packages/cli/src/status.js`
-- Modify: `packages/cli/scripts/run-tests.mjs`
-- Create: `packages/backend/test/protected-ciphertext-archive.test.mjs`
-- Create: `packages/cli/test/protected-ciphertext-relay.test.mjs`
+- Modify: `packages/cli/src/config.js`
+- Modify: `packages/cli/bin.js`
+- Modify: `packages/cli/src/argv.js`
+- Create: `packages/cli/test/relay-reseeding.test.mjs`
 
-**Acceptance:** A clean relay with no provider account or license can discover, retain, prove possession of, and seed complete ciphertext ranges. It cannot request a viewer license through PearTube, cannot decrypt the media, and cannot claim entitlement. Archive proofs bind ciphertext block hashes and immutable rendition identities. CLI status reports bytes, ranges, pledge health, and availability only—never viewer, subscriber, or license data.
+**Acceptance:** A relay that publishes a rendition also publishes a signed archive request for it, so peer relays can mirror it. A relay is an archivist by default: it accepts other relays' archive requests within its capacity, downloads the pledged ranges, retains them, and answers possession challenges. Capacity comes from the storage guard, not a second number — a relay near its ceiling declines new pledges without dropping the ones it already made, and a restart restores existing pledges before accepting new work. An operator can turn re-seeding off (`--no-reseed`), and doing so stops new pledges without silently abandoning live ones. Status reports both directions: renditions this relay has asked the network to mirror and how many independent archivists hold fresh evidence for each, plus what this relay is mirroring for others and how many bytes that costs. A relay gains no authority over content it mirrors: it does not republish it under its own publisher identity, does not alter its catalog, and mirroring stops when the pledge expires.
 
 **Steps:**
 
-1. Add a three-process fixture: publisher, unentitled relay, and entitled viewer.
-2. Verify the relay satisfies range requests and archive challenges using ciphertext only.
-3. Search serialized relay state and logs for tokens, license blobs, content keys, auth callbacks, and provider identifiers beyond public signed descriptors.
-4. Kill the publisher and prove playback continues through the relay while the viewer license remains valid; then expire the license and prove ciphertext remains seedable but unplayable.
+1. Add failing tests first: publication emits an archive request; a second relay accepts it, downloads the ranges, and reports the pledge; a relay at its storage ceiling declines without releasing existing pledges; `--no-reseed` stops new pledges and leaves live ones intact; pledges and reservations survive a restart; an expired pledge releases its bytes; and a mirrored rendition never appears in the mirroring relay's own publisher catalog.
+2. Wire publication → `requestArchivePublication` in the relay's publish path, keyed by the rendition already retained there; do not add a second ingestion path.
+3. Derive archivist capacity from the storage guard's live headroom on every participation update, so one ceiling governs both archive pledges and the local store.
+4. Report both directions through the existing status surface, using the archive network's own evidence rather than a peer count.
 5. Run:
 
 ```bash
-npm exec --prefix packages/backend -- brittle packages/backend/test/protected-ciphertext-archive.test.mjs packages/backend/test/archive-integration.test.mjs
-npm exec --prefix packages/cli -- brittle test/protected-ciphertext-relay.test.mjs
+node packages/cli/test/relay-reseeding.test.mjs
 npm test --prefix packages/cli
+npm exec --prefix packages/backend -- brittle test/archive-store.test.mjs test/asset-availability.test.mjs
 ```
 
 6. Commit:
 
 ```bash
-git add packages/backend/src/archive packages/backend/src/assets/asset-session.js packages/backend/test/protected-ciphertext-archive.test.mjs packages/cli/src packages/cli/test/protected-ciphertext-relay.test.mjs packages/cli/scripts/run-tests.mjs
-git commit -m "feat(relay): archive protected ciphertext without entitlement"
+git add packages/cli/src packages/cli/bin.js packages/cli/test/relay-reseeding.test.mjs
+git commit -m "feat(relay): re-seed published content between relays"
+```
+
+### Task 10: Query and retrieve network content from the CLI
+
+**Files:**
+
+- Create: `packages/cli/src/network/query.js`
+- Create: `packages/cli/src/network/fetch.js`
+- Modify: `packages/cli/bin.js`
+- Modify: `packages/cli/src/runtime.js`
+- Create: `packages/cli/test/network-cli.test.mjs`
+
+**Acceptance:** `peartube search <query>` joins the network, resolves the same one consumer catalog projection the app uses, and prints matching titles with their availability state and how many independent peers currently serve them. `peartube get <entity-or-publication>` retrieves a rendition to a local file over P2P only, reports progress, verifies the bytes against the signed rendition hash before the file is considered complete, and exits non-zero with a structured reason when no peer serves the required ranges. Neither command invents an HTTP media origin, and neither requires an account. A CLI run leaves no viewer analytics anywhere, and a partial download resumes rather than restarting.
+
+**Steps:**
+
+1. Add failing tests over a two-process fixture (one seeding relay, one CLI) covering: a search hit and a miss, availability and peer count reported honestly, a successful retrieval whose bytes verify, an interrupted retrieval that resumes, a hash mismatch that fails loudly and leaves no partial file in place, and an unavailable title that exits with `AVAILABILITY_BOUNDARY`.
+2. Reuse the existing media-graph API and asset session; do not add a second retrieval path.
+3. Keep output machine-readable behind a flag (`--json`) and human-readable by default.
+4. Run:
+
+```bash
+node packages/cli/test/network-cli.test.mjs
+npm test --prefix packages/cli
+```
+
+5. Commit:
+
+```bash
+git add packages/cli/src/network packages/cli/bin.js packages/cli/src/runtime.js packages/cli/test/network-cli.test.mjs
+git commit -m "feat(cli): search and retrieve from the network"
 ```
 
 ---
 
 ## Milestone 3: End-to-End Acceptance and Cutover
 
-### Task 12: Run the complete public and protected multi-device product matrix
+### Task 11: Run the complete multi-device product matrix
 
 **Files:**
 
@@ -596,7 +537,7 @@ git commit -m "feat(relay): archive protected ciphertext without entitlement"
 - two viewer/serving device processes with distinct authenticated Noise keys and real transport sessions;
 - one clean volunteer relay;
 - no HTTP media origin;
-- one public title and one provider-protected title;
+- one MediaStorm instance the relay follows, holding a title the network does not already have;
 - a trap endpoint that records forbidden media fallback and analytics traffic.
 
 **Acceptance scenarios:**
@@ -609,9 +550,9 @@ git commit -m "feat(relay): archive protected ciphertext without entitlement"
 6. Removing every source returns `AVAILABILITY_BOUNDARY`, renders “Unavailable — no peer currently serves the required ranges,” disables immediate replay until retry/new evidence, and sends no HTTP media request.
 7. Continue Watching survives restart and remains absent from network, publisher, relay, and analytics traces.
 8. Balanced mode uploads useful bytes within hard policy limits and suspends on metered/background/thermal constraints.
-9. The relay archives and seeds public and protected ciphertext without publisher, moderation, or entitlement authority.
-10. Protected playback requires provider auth/license, succeeds through peer-delivered ciphertext, and stops after license expiry while the relay continues seeding.
-11. Public playback remains functional after provider sign-out.
+9. The relay archives and seeds content without publisher, moderation, or global-ranking authority.
+10. A title added to the followed MediaStorm instance appears in the relay's published catalog on the next poll, seeds to a viewer device, and survives a relay restart mid-mirror without duplicating.
+11. The CLI finds that title on the network, reports its availability and peer count, and retrieves it to a verified local file.
 12. Developer Settings contains Studio and technical controls; normal mobile and desktop navigation do not.
 13. No PearTube analytics endpoint, playback beacon, CDN-savings report, or remote recommendation request is observed.
 14. Restart every process against the same storage; catalog, local watch state, policies, archive reservations, and availability expiry recover without stale Healthy claims.
@@ -630,7 +571,7 @@ JAVA_HOME=/Library/Java/JavaVirtualMachines/zulu-17.jdk/Contents/Home npm run an
 npm run build:ios:device --prefix packages/app
 ```
 
-Run the public slice in Electrobun and on physical Android and iOS. Run protected Widevine on physical Android and FairPlay on physical iOS. Probe Electrobun with a real encrypted fixture; run protected desktop acceptance only if a usable CDM/EME path exists, otherwise verify the explicit `DRM_UNSUPPORTED` UI. Capture transport traces proving zero HTTP media fallback and zero analytics traffic. A green component suite without these observed scenarios does not pass the applicable gate.
+Run the slice in Electrobun and on physical Android and iOS, and the relay/CLI slice headless on Node and the Bare relay runtime. Capture transport traces proving zero HTTP media fallback and zero analytics traffic. A green component suite without these observed scenarios does not pass the applicable gate.
 
 Commit:
 
@@ -654,6 +595,6 @@ The revised direction is complete only when all statements below are observed:
 - Watch state and recommendations remain local unless the user explicitly pairs devices.
 - PearTube emits no viewer analytics and makes no CDN-savings claim it cannot measure.
 - Volunteer relays improve discovery and durability without gaining authority.
-- Protected content uses opaque encrypted media plus platform DRM; no custom JavaScript key handling is shipped as production DRM.
-- Provider authentication/license services never become media origins and receive no PearTube playback telemetry.
-- Public and protected playback, failover, restart, privacy, and no-origin assertions pass on the supported physical platforms.
+- Content reaches the network by mirroring: a relay follows a MediaStorm instance, republishes what it pulls under its own identity, and seeds it, resumably and without duplication.
+- A headless CLI can search the network, report honest availability, and retrieve content to a verified local file.
+- Playback, failover, restart, privacy, and no-origin assertions pass on the supported physical platforms.

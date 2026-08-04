@@ -59,21 +59,6 @@ const PLAYBACK_ERROR_PRESENTATION = Object.freeze({
     retry: 'manual',
     action: 'Try again',
   }),
-  DRM_UNSUPPORTED: Object.freeze({
-    message: 'This device cannot play the protected version of this title.',
-    retry: 'evidence',
-    action: null,
-  }),
-  LICENSE_DENIED: Object.freeze({
-    message: 'The provider did not grant a playback license.',
-    retry: 'evidence',
-    action: null,
-  }),
-  LICENSE_EXPIRED: Object.freeze({
-    message: 'The playback license expired.',
-    retry: 'manual',
-    action: 'Try again',
-  }),
 })
 
 export const PLAYBACK_ERROR_CODES = Object.freeze(Object.keys(PLAYBACK_ERROR_PRESENTATION))

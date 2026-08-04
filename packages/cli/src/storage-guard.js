@@ -15,6 +15,38 @@
 
 const DEFAULT_TTL_MS = 30_000
 
+// The host volume's real numbers, straight off one statfs: bytes a
+// non-privileged writer may still add, and the volume's full size.
+//
+// This is a different question from the operator's byte budget, and the two
+// must never be substituted for each other: the budget says how much of this
+// machine the operator lent to PearTube, while these say how much machine
+// there is. The participation decision measures its free-disk floor against
+// the volume, so handing it storage.maxBytes would have it guard a number that
+// is not a disk.
+//
+// A runtime without statfs (Bare's `#fs` does not export statfsSync) returns
+// null, and a statfs that reports usable free blocks but no total reports
+// `totalBytes: null` rather than dragging the free reading down with it — the
+// free-disk floor needs only the first number. Nothing is estimated or
+// substituted: what cannot be measured is reported as null, and every gate
+// that needs the reading keeps failing closed.
+export function measureVolumeBytes({ storagePath, statfsSync = null, log = null } = {}) {
+  if (typeof storagePath !== 'string' || storagePath.length === 0) return null
+  if (typeof statfsSync !== 'function') return null
+  try {
+    const st = statfsSync(storagePath)
+    const bsize = Number(st?.bsize) || 0
+    const bavail = Number(st?.bavail) || 0
+    const blocks = Number(st?.blocks) || 0
+    if (bsize <= 0 || bavail < 0) return null
+    return { freeBytes: bavail * bsize, totalBytes: blocks > 0 ? blocks * bsize : null }
+  } catch (err) {
+    log?.(`[storage-guard] statfs failed: ${err?.message || String(err)}`)
+    return null
+  }
+}
+
 export function createStorageGuard({
   storagePath,
   maxBytes = 0,
@@ -88,16 +120,7 @@ export function createStorageGuard({
   }
 
   function measureFreeBytes() {
-    try {
-      const st = statfsSync(storagePath)
-      const bsize = Number(st?.bsize) || 0
-      const bavail = Number(st?.bavail) || 0
-      if (bsize <= 0 || bavail < 0) return null
-      return bavail * bsize
-    } catch (err) {
-      log?.('[storage-guard] statfs failed', err?.message || String(err))
-      return null
-    }
+    return measureVolumeBytes({ storagePath, statfsSync, log })?.freeBytes ?? null
   }
 
   function compute() {

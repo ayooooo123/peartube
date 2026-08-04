@@ -1,4 +1,4 @@
-const COMMANDS = new Set(['add', 'config', 'help'])
+const COMMANDS = new Set(['add', 'config', 'get', 'help', 'search'])
 
 const VALUE_FLAGS = new Map([
   ['--storage', 'storage'],
@@ -12,7 +12,11 @@ const VALUE_FLAGS = new Map([
   ['--title', 'title'],
   ['--channel-name', 'channelName'],
   ['--relay-ui', 'relayUi'],
-  ['--invidious', 'invidious']
+  ['--invidious', 'invidious'],
+  ['--output', 'output'],
+  ['--rendition', 'rendition'],
+  ['--limit', 'limit'],
+  ['--timeout', 'timeout']
 ])
 
 const BOOLEAN_FLAGS = new Map([
@@ -38,6 +42,17 @@ const ADD_ONLY_FLAGS = [
   ['season', '--season'],
   ['episode', '--episode'],
   ['movieId', '--movie-id']
+]
+
+// Network commands read the swarm; add/config never take these, and the two
+// network commands do not share each other's.
+const SEARCH_ONLY_FLAGS = [
+  ['limit', '--limit']
+]
+const GET_ONLY_FLAGS = [
+  ['output', '--output'],
+  ['rendition', '--rendition'],
+  ['timeout', '--timeout']
 ]
 
 export class PeartubeUsageError extends Error {
@@ -259,6 +274,43 @@ function parseAdd(flags, positionals, options) {
   return result('add', query, fetchUrl, flags, 'interactive')
 }
 
+function rejectForeignFlags(flags, forbidden, command) {
+  const found = forbidden.find(([key]) => Object.hasOwn(flags, key))
+  if (found) {
+    throw new PeartubeUsageError(`${found[1]} is only valid with ${command}`)
+  }
+}
+
+function positiveInteger(value, name) {
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new PeartubeUsageError(`${name} must be a positive integer`)
+  }
+  return parsed
+}
+
+function parseSearch(flags, positionals) {
+  rejectForeignFlags(flags, GET_ONLY_FLAGS, 'get')
+  const query = positionals.join(' ').trim()
+  if (!query) {
+    throw new PeartubeUsageError('Search requires a query')
+  }
+  if (Object.hasOwn(flags, 'limit')) flags.limit = positiveInteger(flags.limit, '--limit')
+  return result('search', query, null, flags, 'scripted')
+}
+
+function parseGet(flags, positionals) {
+  rejectForeignFlags(flags, SEARCH_ONLY_FLAGS, 'search')
+  if (positionals.length === 0) {
+    throw new PeartubeUsageError('Get requires one entity or publication id')
+  }
+  if (positionals.length > 1) {
+    throw new PeartubeUsageError('Get accepts exactly one entity or publication id')
+  }
+  if (Object.hasOwn(flags, 'timeout')) flags.timeout = positiveInteger(flags.timeout, '--timeout')
+  return result('get', positionals[0], null, flags, 'scripted')
+}
+
 export function parsePeartubeArgv(argv = [], options = {}) {
   if (!Array.isArray(argv)) {
     throw new PeartubeUsageError('Arguments must be an array')
@@ -293,6 +345,16 @@ export function parsePeartubeArgv(argv = [], options = {}) {
   if (addOnlyFlag) {
     throw new PeartubeUsageError(`${addOnlyFlag[1]} is only valid with add`)
   }
+
+  if (command === 'search') {
+    return parseSearch(flags, positionals)
+  }
+  if (command === 'get') {
+    return parseGet(flags, positionals)
+  }
+
+  rejectForeignFlags(flags, SEARCH_ONLY_FLAGS, 'search')
+  rejectForeignFlags(flags, GET_ONLY_FLAGS, 'get')
 
   if (positionals.length > 0) {
     throw new PeartubeUsageError(`Unexpected argument ${positionals[0]}`)

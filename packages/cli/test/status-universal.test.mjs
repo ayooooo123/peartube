@@ -41,6 +41,11 @@ test('relay status exposes bounded universal publisher, bootstrap, asset, seed, 
     seedRetention: runtimeStats.seedRetention,
     archive: runtimeStats.archive,
     storage: runtimeStats.storage,
+    // Re-seeding reports both directions; a relay with no diagnostics for
+    // either says so with empty values rather than omitting the fields.
+    archiveRequests: [],
+    archiveParticipation: {},
+    archiveHostDisk: {},
     authorizedClients: 2
   })
   assert.equal(Object.hasOwn(status.runtime, 'feedEntries'), false)

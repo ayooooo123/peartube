@@ -74,6 +74,7 @@ function printHelp() {
     '  --host <host>',
     '  --port <port>',
     '  --api-open  (open /api/v1 catalog and stream when bound off loopback)',
+    '  --no-reseed  (stop taking new archive pledges and stop asking peers to mirror)',
     '  --run-now',
     '  --debug, -d',
     '  --json',

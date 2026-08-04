@@ -14,7 +14,6 @@ export const PLAYBACK_REJECTION_CODES = Object.freeze([
   'BLOCKED_BY_MODERATION',
   'BLOCKED_BY_LOCAL_POLICY',
   'UNAUTHORIZED_PUBLICATION',
-  'UNSUPPORTED_DRM',
   'UNSUPPORTED_CODEC',
   'UNSUPPORTED_CONTAINER',
   'STALE_MANIFEST',
@@ -75,8 +74,8 @@ function supportsAll(supported, required) {
 
 /**
  * Device capability and local policy gate. `capabilities` describes what this
- * device can actually decrypt and decode; an absent capability list means the
- * caller has not constrained that dimension and the source passes.
+ * device can actually decode; an absent capability list means the caller has
+ * not constrained that dimension and the source passes.
  */
 function rejectionCodesFor(source, capabilities, now) {
   const codes = []
@@ -84,10 +83,6 @@ function rejectionCodesFor(source, capabilities, now) {
   if (decisionBlocks(source.localPolicyDecision) || source.blocked === true) codes.push('BLOCKED_BY_LOCAL_POLICY')
   if (source.publicationAuthorized !== true || !nonEmptyString(source.renditionId)) codes.push('UNAUTHORIZED_PUBLICATION')
 
-  const drm = source.drmSystem || source.encryptionScheme || null
-  if (nonEmptyString(drm) && Array.isArray(capabilities.drmSystems) && !capabilities.drmSystems.includes(drm)) {
-    codes.push('UNSUPPORTED_DRM')
-  }
   if (!supportsAll(capabilities.codecs, source.codecs)) codes.push('UNSUPPORTED_CODEC')
   if (nonEmptyString(source.container) && Array.isArray(capabilities.containers) && !capabilities.containers.includes(source.container)) {
     codes.push('UNSUPPORTED_CONTAINER')
@@ -137,9 +132,9 @@ export function scorePlaybackSource(source = {}) {
 
 /**
  * Two sources are interchangeable only when they carry the same work, the same
- * edition/cut, the same collection position, and the same protection class.
- * Failover walks this equivalence set and nothing else, so it can never quietly
- * substitute a different episode or a public lookalike of a protected title.
+ * edition/cut, and the same collection position. Failover walks this
+ * equivalence set and nothing else, so it can never quietly substitute a
+ * different episode.
  *
  * This fails closed: a source with no resolved entity has no identity to
  * compare, so it is equivalent to nothing — not even to another anonymous
@@ -152,7 +147,6 @@ export function sourceEquivalenceKey(source = {}) {
     entityId,
     String(source.editionId || ''),
     String(source.collectionMemberId || ''),
-    source.protected === true ? 'protected' : 'public',
   ].join('\n')
 }
 

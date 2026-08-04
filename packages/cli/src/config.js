@@ -284,6 +284,10 @@ function configFromEnv(env = {}) {
   if (env.PEARTUBE_LOG_LEVEL) {
     config.logging = { level: env.PEARTUBE_LOG_LEVEL }
   }
+  if (env.PEARTUBE_RESEED_ENABLED) {
+    const parsed = parseBoolean(env.PEARTUBE_RESEED_ENABLED)
+    if (parsed !== undefined) config.reseed = { enabled: parsed }
+  }
   if (
     env.PEARTUBE_TMDB_API_KEY ||
     env.PEARTUBE_TMDB_ENABLED ||
@@ -399,6 +403,12 @@ function configFromCli(cli = {}) {
     config.logging = { level: 'debug' }
   } else if (cli.logLevel) {
     config.logging = { level: cli.logLevel }
+  }
+
+  // Bare flag, and only ever turns re-seeding OFF: its absence must not
+  // overwrite an operator's config file the way a tri-state value would.
+  if (cli.noReseed) {
+    config.reseed = { enabled: false }
   }
 
   if (cli.host || cli.port || cli.apiOpen) {
@@ -708,6 +718,10 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
   config.network = deepMerge(DEFAULT_RELAY_CONFIG.network, config.network || {})
   config.logging = deepMerge(DEFAULT_RELAY_CONFIG.logging, config.logging || {})
 
+  // Whether this relay accepts other relays' archive requests and asks the
+  // network to mirror what it publishes. On unless the operator says otherwise.
+  config.reseed = { enabled: (config.reseed || {}).enabled !== false }
+
   config.archive = resolveArchiveConfig(config.archive, { storagePath: config.storage.path })
   config.classification = resolveClassificationConfig(config.classification)
 
@@ -796,6 +810,11 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
     `  seedDiscovered: ${config.discovery.seedDiscovered !== false}`,
     `  maxChannels: ${config.discovery.maxChannels}`,
     `  maxChannelsPerOwner: ${config.discovery.maxChannelsPerOwner}`
+  )
+
+  lines.push(
+    'reseed:',
+    `  enabled: ${config.reseed?.enabled !== false}`
   )
 
   const archive = config.archive || DEFAULT_ARCHIVE_CONFIG

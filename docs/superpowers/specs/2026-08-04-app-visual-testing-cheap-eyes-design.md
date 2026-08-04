@@ -1,12 +1,12 @@
 # Local Visual UI Testing with OMP-Gemini Cheap-Eyes (all apps)
 
 - **Date:** 2026-08-04
-- **Status:** Design approved (pending spec review)
+- **Status:** Design approved; spec-review issues addressed (paths, relay mirror seeding, desktop/Playwright scope)
 - **Owner:** PearTube clients
 
 ## 1. Problem
 
-The existing mobile-test rig (`packages/app/maestro/`, `.github/workflows/e2e-mobile.yml`) drives flows with Maestro and asserts on `testID`s. Gaps:
+The existing mobile-test rig (repo-root `.maestro/` flows `smoke.yaml`/`player.yaml`, plus `packages/app/maestro/` PiP flows, driven in `.github/workflows/e2e-mobile.yml`) drives flows with Maestro and asserts on `testID`s. Gaps:
 
 1. **No eyesight.** Maestro cannot see rendered UI — layout breakage, visual glitches, wrong copy, clipped/overlapping elements pass a green testID assertion.
 2. **Empty feed.** A fresh emulator has no P2P peers, so the feed is empty and `player.yaml` no-ops. Content-dependent flows are not meaningful.
@@ -74,14 +74,15 @@ The **eyes loop** (capture frames → OMP Gemini subagent → text) is the reusa
 - Flags: `--platform android|ios|desktop|all`, `--attach <serial|udid>`, `--seed`, `--no-build`, `--record-only`, `--require-content`, `--eyes omp|look`, `--flow <name>`.
 - Steps:
   1. **Resolve target(s).** Attach to an already-booted device/window if present (persistence opt-in); else boot the configured fast image / launch the desktop app.
-  2. **Ensure content** (`--seed`). Bring up the local relay (`docker compose -f docker-compose.local-relay.yml up -d`) with a fixture mp4 in the mirror dir; wait until `getSwarmStatus` reports feed entries. Without `--seed`, content-dependent flows are skipped unless `--require-content` (fatal).
+  2. **Ensure content** (`--seed`). Bring up the local relay (`docker compose -f docker-compose.local-relay.yml up -d`). The relay mirrors a **host directory** into the swarm (compose volume, default `~/peartube-local-videos` → `/mirror:ro`); `--seed` copies the committed fixture (§4.6) into that mirror dir (path overridable via `PEARTUBE_MIRROR_DIR`/a compose override), then waits until `getSwarmStatus` reports feed entries. Without `--seed`, content-dependent flows are skipped unless `--require-content` (fatal).
   3. **Build + launch** the app (reuse `npm run android` / iOS-sim recipe / `npm run desktop`) unless `--no-build`.
   4. **Drive + capture.**
      - Mobile: Maestro flow wrapped in `startRecording`/`stopRecording` → `<flow>.mp4` + `<flow>.junit.xml`.
-     - Desktop: drive the web export in a browser (Playwright / browser tool) → screenshots; or `--record-only` window capture.
+     - Desktop (v1): `--record-only` — launch Electrobun (`npm run desktop`) and capture the window (macOS `screencapture`) → frames. No deterministic driver in v1, so **no gate** for desktop; eyes-only.
+     - Desktop (deferred): deterministic driving of the web export. Two options, neither assumed present today — (a) the agent-driven `app-review` skill uses the harness `browser` tool against the served web export (no repo dependency), or (b) add Playwright as a devDependency for a scripted flow. Chosen at implementation time; v1 ships record-only.
      - Any platform: `--record-only` captures the current screen without driving.
   5. **Eyes.** Sample frames → OMP Gemini subagent → `<target>.eyes.txt`.
-  6. **Summary + exit.** Print Maestro pass/fail (mobile gate) + eyes descriptions (advisory). Exit nonzero only on a deterministic driver failure (Maestro/Playwright); eyes failures are advisory.
+  6. **Summary + exit.** Print the driver result (mobile: Maestro pass/fail — the gate) + eyes descriptions (advisory). Exit nonzero only on a deterministic driver failure (Maestro; desktop has no gate in v1); eyes failures never fail the run.
 - Artifacts: `packages/app/.artifacts/app-test/<timestamp>/<platform>/`.
 
 ### 4.4 `ensure-avd.mjs` (device/perf)
@@ -89,7 +90,7 @@ The **eyes loop** (capture frames → OMP Gemini subagent → text) is the reusa
 - Path: `packages/app/scripts/ensure-avd.mjs`
 - **Android local (Apple Silicon):** `arm64-v8a` system image (native via Hypervisor.framework — fixes the x86_64 translation slowness). APK already does ABI splits, so arm64 libs exist. Boot flags: `-gpu host -no-boot-anim -no-audio`, cold-boot snapshot reuse.
 - **iOS:** create-if-missing a named simulator via `simctl`; native on Apple Silicon.
-- **Desktop:** launch Electrobun (`npm run desktop`) or serve the web export for browser driving; no emulator.
+- **Desktop:** launch Electrobun (`npm run desktop`); no emulator. v1 captures the window (no driver). Web-export driving is deferred (§4.3 step 4).
 
 ### 4.5 Capture adapters
 
@@ -97,13 +98,13 @@ The **eyes loop** (capture frames → OMP Gemini subagent → text) is the reusa
 |---|---|---|
 | Android emulator | Maestro | `startRecording`/`stopRecording` (or `adb exec-out screenrecord`) → mp4 |
 | iOS simulator | Maestro | `startRecording` (or `xcrun simctl io booted recordVideo`) → mp4 |
-| Electrobun desktop | browser/Playwright on web export; `--record-only` for native window | Playwright screenshots; or macOS `screencapture` of the window |
+| Electrobun desktop | v1: none (record-only). Deferred: harness `browser` tool or Playwright on the web export | v1: macOS `screencapture` of the window. Deferred: browser screenshots |
 
 All capture outputs are reduced to frames by ffmpeg before the eyes call, so the eyes layer is platform-agnostic.
 
 ### 4.6 Content fixture
 
-- Small committed test video (or ffmpeg-generated) under `packages/app/tests/fixtures/`, dropped into the relay mirror dir so the feed is deterministic. Makes `player.yaml` (and desktop playback screens) meaningful locally.
+- Small committed test video (or ffmpeg-generated) under `packages/app/tests/fixtures/`. `--seed` copies it into the relay's **host mirror dir** (compose volume, default `~/peartube-local-videos`; override via `PEARTUBE_MIRROR_DIR`/compose override) — it is *not* mounted from the repo directly. Makes `player.yaml` (and desktop playback screens) meaningful locally.
 
 ### 4.7 `app-review` skill
 
@@ -120,9 +121,9 @@ app-test.mjs --platform all --seed
   ├─ ensure targets  (arm64 AVD | iOS sim | Electrobun; or --attach)
   ├─ ensure content  (relay up + fixture, joined via DHT)
   ├─ build + launch
-  ├─ drive + capture (maestro mp4 | Playwright shots | window capture)
+  ├─ drive + capture (maestro mp4 | desktop window screencapture)
   └─ eyes: ffmpeg frames → OMP Gemini subagent → <target>.eyes.txt
-Gate (mobile) = Maestro junit; (desktop) = Playwright flow status
+Gate (mobile) = Maestro junit. Desktop v1 = no gate (eyes-only).
 Eyes = <target>.eyes.txt (advisory; surfaced in chat / artifacts)
 ```
 

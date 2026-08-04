@@ -188,7 +188,7 @@ test('no eligible source yields no selection and a structured reason instead of 
   const selection = selectMediaSource({
     localEntityId: 'work:movie:nothing',
     sources: [
-      backendSource({ publicationId: 'pub-drm', renditionId: 'rend-drm', eligible: false, rejectionReasonCodes: ['UNSUPPORTED_DRM'] }),
+      backendSource({ publicationId: 'pub-drm', renditionId: 'rend-drm', eligible: false, rejectionReasonCodes: ['DRM_UNSUPPORTED'] }),
       backendSource({ publicationId: 'pub-gone', renditionId: 'rend-gone', eligible: false, rejectionReasonCodes: ['NO_AVAILABLE_COPY'] }),
     ],
   })
@@ -247,7 +247,7 @@ test('device capability gates and peer reachability gates read differently', asy
   const { normalizeSourceExplanation } = await loadSourceExplanation()
   const reason = (code) => normalizeSourceExplanation({ rejectionReasonCodes: [code] }, 0, false).reason
 
-  for (const code of ['UNSUPPORTED_DRM', 'UNSUPPORTED_CODEC', 'UNSUPPORTED_CONTAINER']) {
+  for (const code of ['DRM_UNSUPPORTED', 'UNSUPPORTED_CODEC', 'UNSUPPORTED_CONTAINER']) {
     assert.match(reason(code), /this device/i, `${code} is about this device`)
   }
   for (const code of ['NO_AVAILABLE_COPY', 'STALE_AVAILABILITY', 'UNCONFIRMED_AVAILABILITY']) {

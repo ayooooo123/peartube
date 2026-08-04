@@ -51,7 +51,7 @@ const ALTERNATE_REASONS: Readonly<Record<string, string>> = Object.freeze({
   BLOCKED_BY_MODERATION: 'Cannot play here: the moderation rules you use on this device block this source.',
   BLOCKED_BY_LOCAL_POLICY: 'Cannot play here: your local policy for playback sources blocks this source.',
   UNAUTHORIZED_PUBLICATION: 'Cannot play here: this source is not backed by an authorized signed manifest.',
-  UNSUPPORTED_DRM: 'Cannot play here: this device cannot unlock the protection applied to this source.',
+  DRM_UNSUPPORTED: 'Cannot play here: this device cannot unlock the protection applied to this source.',
   UNSUPPORTED_CODEC: 'Cannot play here: this device cannot decode the video or audio format of this source.',
   UNSUPPORTED_CONTAINER: 'Cannot play here: this device cannot read the file container this source uses.',
   STALE_MANIFEST: 'Cannot play here: the stored manifest for this source is stale and has to be refreshed first.',

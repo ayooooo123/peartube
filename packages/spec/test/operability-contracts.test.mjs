@@ -87,12 +87,18 @@ test('publication sources, storage stats, previews, and archive status are struc
     'scoreLocalCompleteness', 'scoreStartupReachability', 'scorePeerEvidence',
     'scoreFormatSupport', 'scoreStartupLatency', 'scoreUserOverride',
     'eligible', 'archiveState', 'cacheState',
-    'availabilityState', 'stale', 'incomplete', 'mediaCoordinates'
+    'availabilityState', 'stale', 'incomplete', 'mediaCoordinates', 'protected', 'drmSystem'
   ]) t.ok(messageFields(schema, 'media-publication-source').has(field), `publication source has ${field}`)
 
 
   const publicationSource = schema.schema.find((entry) => entry.name === 'media-publication-source')
-  t.is(publicationSource.fields.at(-1)?.name, 'mediaCoordinates', 'coordinates append without shifting existing source flags')
+  // Every later field is appended, never inserted: the flag bitmap positions of
+  // everything before them stay exactly where they were.
+  t.alike(
+    publicationSource.fields.slice(-3).map((field) => field.name),
+    ['mediaCoordinates', 'protected', 'drmSystem'],
+    'later source fields append without shifting existing source flags'
+  )
   t.ok(
     publicationSource.fields.filter((field) => field.required === false).length < 32,
     'publication source optional flags remain representable by JavaScript bitwise operations'

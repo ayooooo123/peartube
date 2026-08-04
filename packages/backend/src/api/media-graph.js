@@ -7,7 +7,8 @@ import { projectSourceSelectionDiagnostics } from '../media-graph/selection-diag
 import { preparePlaybackSource } from '../playback/source-preparation.js'
 import { isPlaybackErrorCode, playbackErrorMessage, playbackErrorRetry } from '../playback/errors.js'
 import { parseBlobRef } from '../blob-utils.js'
-import { isArtworkRendition } from '../assets/rendition.js'
+import { isArtworkRendition, isProtectedRendition } from '../assets/rendition.js'
+import { drmRejectionCode } from '../playback/drm-capability.js'
 import b4a from 'b4a'
 
 const DEFAULT_PAGE_LIMIT = 50
@@ -305,16 +306,20 @@ const LEGACY_AVAILABILITY_STATE = Object.freeze({
   [AVAILABILITY_STATES.awaitingReplication]: 'unknown',
 })
 
-function manifestSource(manifest, row, preferred, trust = {}, availability = null, entityId = null) {
-  const publisherId = manifest?.body?.publisherId || row.issuer
-  // Cover art now rides the manifest as a rendition so it seeds with the
-  // publication. It is not something to play: without this filter a source
-  // resolves to the poster and a viewer presses Play on a JPEG.
-  const rendition = manifest?.body?.renditions?.find(candidate => (
+// Cover art now rides the manifest as a rendition so it seeds with the
+// publication. It is not something to play: without this filter a source
+// resolves to the poster and a viewer presses Play on a JPEG.
+function playableRendition(manifest) {
+  return manifest?.body?.renditions?.find(candidate => (
     candidate && candidate.blocked !== true && candidate.superseded !== true &&
     !isArtworkRendition(candidate) &&
     typeof candidate.renditionId === 'string' && candidate.renditionId.length > 0
   )) || null
+}
+
+function manifestSource(manifest, row, preferred, trust = {}, availability = null, entityId = null) {
+  const publisherId = manifest?.body?.publisherId || row.issuer
+  const rendition = playableRendition(manifest)
   const publicationId = manifest?.publicationId || row.body.payload?.publicationId
   return {
     publicationId,
@@ -328,7 +333,11 @@ function manifestSource(manifest, row, preferred, trust = {}, availability = nul
     entityId: entityId || row.body?.subjectRefs?.[0]?.entityId || null,
     editionId: row.body.payload?.editionRef?.entityId || row.body.payload?.editionId || null,
     collectionMemberId: row.body.payload?.memberRef?.entityId || null,
-    protected: rendition?.encryption != null,
+    // Protection is read off the signed rendition descriptor, so `protected`
+    // and `drmSystem` on the wire are what the publisher signed, never a
+    // client hint. Both are public: a system name is not a licence, and this
+    // is the whole of what a device needs to know it cannot play a title.
+    protected: isProtectedRendition(rendition),
     container: rendition?.format || null,
     codecs: rendition?.codecs || null,
     drmSystem: rendition?.encryption?.drmSystem || null,
@@ -412,11 +421,36 @@ function sourceResponse(source) {
     moderationPenalty: schemaUint(source.moderationPenalty),
     preferred: source.preferred === true,
     availability: availabilityResponse(source.availability),
+    // The two public protection facts. A client needs them to explain "this
+    // device cannot play this" and to route playback to the platform player;
+    // neither is a secret, and there is no third field to leak.
+    protected: source.protected === true,
+    drmSystem: source.drmSystem || null,
+  }
+}
+
+// The signed descriptor's nine public fields, because a player needs the key
+// IDENTIFIER, the init data and the licence endpoint to ask its platform CDM
+// for a licence. Copied one field at a time on purpose: this is a whitelist, so
+// anything a future descriptor grows has to be named here deliberately before a
+// client can see it. Spreading the object instead is how a tenth field ships.
+function drmDescriptorResponse(encryption) {
+  if (encryption == null) return undefined
+  return {
+    version: schemaUint(encryption.version),
+    scheme: encryption.scheme,
+    drmSystem: encryption.drmSystem,
+    keyId: encryption.keyId,
+    initData: encryption.initData || null,
+    licenseEndpoint: encryption.licenseEndpoint,
+    certificateUrl: encryption.certificateUrl || null,
+    issuer: encryption.issuer,
+    entitlementId: encryption.entitlementId || null,
   }
 }
 
 function renditionResponse(rendition) {
-  return {
+  const response = {
     renditionId: rendition.renditionId,
     purpose: rendition.purpose,
     format: rendition.format,
@@ -425,6 +459,9 @@ function renditionResponse(rendition) {
     treeHash: rendition.core.treeHash,
     byteLength: schemaUint(rendition.core.byteLength),
   }
+  const encryption = drmDescriptorResponse(rendition.encryption)
+  if (encryption) response.encryption = encryption
+  return response
 }
 
 export function createMediaGraphApi(options = {}) {
@@ -438,8 +475,10 @@ export function createMediaGraphApi(options = {}) {
   // the runtime that owns that is needed across this whole surface, not just in
   // the artwork path that first reached for it.
   const scopedNetwork = options.scopedNetwork || options.ctx?.scopedNetwork || null
-  // What this device can actually decrypt and decode. An absent list leaves
-  // that dimension unconstrained rather than silently rejecting every source.
+  // What this device can actually decrypt and decode. An absent codec or
+  // container list leaves that dimension unconstrained; an absent DRM list
+  // means no protected system is supported, because guessing that a device has
+  // a CDM it never claimed spends a download to reach the same error.
   const deviceCapabilities = options.capabilities || options.ctx?.deviceCapabilities || {}
   const clock = typeof options.now === 'function' ? options.now : () => Date.now()
 
@@ -458,7 +497,7 @@ export function createMediaGraphApi(options = {}) {
         return { success: false, errorCode: 'NO_COMPATIBLE_SOURCE' }
       }
       const requirement = assetManifestStore?.getRenditionRequirement?.(source.publicationId, source.renditionId)
-      const session = createAssetSession({ manifest, openCore })
+      const session = createAssetSession({ manifest, openCore, capabilities: deviceCapabilities })
       let authorized = false
       try {
         authorized = await session.authorizeCore({
@@ -467,9 +506,10 @@ export function createMediaGraphApi(options = {}) {
         })
       } catch (thrown) {
         session.close()
-        // A scoped session reports its own bounded code (SESSION_LIMIT, and
-        // later DRM codes). Only an unrecognised failure degrades to a peer
-        // timeout, so a real reason is never flattened into the wrong policy.
+        // A scoped session reports its own bounded code: SESSION_LIMIT, or
+        // DRM_UNSUPPORTED for a protected rendition this device cannot decrypt.
+        // Only an unrecognised failure degrades to a peer timeout, so a real
+        // reason is never flattened into the wrong policy.
         const errorCode = isPlaybackErrorCode(thrown?.errorCode) ? thrown.errorCode : 'PEER_TIMEOUT'
         return { success: false, errorCode }
       }
@@ -498,6 +538,12 @@ export function createMediaGraphApi(options = {}) {
    * catalog names the cores; holding one is all it takes to read and then serve
    * it. Best effort: a title that cannot be retained yet surfaces as a playback
    * error, never as a hang.
+   *
+   * Retention is the download, so the DRM gate has to be here and not one step
+   * later in selection. A protected rendition this device has no CDM for is
+   * skipped before its asset scope is joined: the viewer gets `DRM_UNSUPPORTED`
+   * having spent no bandwidth, and this device never becomes a holder of
+   * ciphertext it cannot play. Public renditions are untouched by this.
    */
   async function retainEntitySources(entityId, publicationId = null) {
     if (typeof scopedNetwork?.retainAuthorizedRendition !== 'function') return
@@ -514,6 +560,11 @@ export function createMediaGraphApi(options = {}) {
       const manifest = assetManifestStore?.getManifest?.(candidate) || null
       const requirement = assetManifestStore?.getRenditionRequirement?.(candidate) || null
       if (!manifest || !requirement?.renditionId) continue
+      const rendition = playableRendition(manifest)
+      if (drmRejectionCode({
+        protected: isProtectedRendition(rendition),
+        drmSystem: rendition?.encryption?.drmSystem || null,
+      }, deviceCapabilities)) continue
       try {
         await scopedNetwork.retainAuthorizedRendition({
           manifest,

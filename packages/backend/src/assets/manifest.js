@@ -7,6 +7,7 @@ import {
   encodeApplicationEnvelope,
   verifyApplicationEnvelope,
 } from '../records/application-envelope.js'
+import { validateProtectedPublication } from './media-validation.js'
 import { createRenditionDescriptor } from './rendition.js'
 
 export const MANIFEST_VERSION = 1
@@ -28,28 +29,34 @@ function normalizePublisherId(value) {
   return toHex(value, 32, 'publisherId')
 }
 
-function unsignedManifestBody(input = {}) {
+function unsignedManifestBody(input = {}, options = {}) {
   const publisherId = normalizePublisherId(input.publisherId)
   const previousManifestId = input.previousManifestId == null ? null : toHex(input.previousManifestId, 32, 'previousManifestId')
   const renditions = input.renditions || []
   if (!Array.isArray(renditions) || renditions.length === 0 || renditions.length > 128) throw new Error('renditions must be non-empty bounded array')
-  return sortPlain({
+  const descriptor = rendition => createRenditionDescriptor(rendition, options)
+  const body = sortPlain({
     version: MANIFEST_VERSION,
     publisherId,
     sequence: normalizeNonNegativeInteger(input.sequence, 'sequence', 0),
     title: boundedString(input.title, 'title', 512, true),
     description: boundedString(input.description, 'description', 4096),
     previousManifestId,
-    renditions: renditions.map(createRenditionDescriptor).sort((a, b) => a.renditionId.localeCompare(b.renditionId)),
-    artwork: Array.isArray(input.artwork) ? input.artwork.map(createRenditionDescriptor).sort((a, b) => a.renditionId.localeCompare(b.renditionId)) : [],
-    subtitles: Array.isArray(input.subtitles) ? input.subtitles.map(createRenditionDescriptor).sort((a, b) => a.renditionId.localeCompare(b.renditionId)) : [],
+    renditions: renditions.map(descriptor).sort((a, b) => a.renditionId.localeCompare(b.renditionId)),
+    artwork: Array.isArray(input.artwork) ? input.artwork.map(descriptor).sort((a, b) => a.renditionId.localeCompare(b.renditionId)) : [],
+    subtitles: Array.isArray(input.subtitles) ? input.subtitles.map(descriptor).sort((a, b) => a.renditionId.localeCompare(b.renditionId)) : [],
     claims: Array.isArray(input.claims) ? input.claims.map(normalizeClaimRef).sort((a, b) => a.claimId.localeCompare(b.claimId)) : [],
     provenance: Array.isArray(input.provenance) ? input.provenance.map(sortPlain) : [],
   })
+  // Every manifest in the system is minted or re-derived here, including one
+  // decoded from a peer's bytes, so this is the one place a protected
+  // publication cannot be smuggled past its own rules.
+  validateProtectedPublication(body, options)
+  return body
 }
 
-export function deriveManifestId(input = {}) {
-  const unsignedBody = input.unsignedBody ? input.unsignedBody : unsignedManifestBody(input)
+export function deriveManifestId(input = {}, options = {}) {
+  const unsignedBody = input.unsignedBody ? input.unsignedBody : unsignedManifestBody(input, options)
   return b4a.toString(hashCanonical(MANIFEST_ID_DOMAIN, unsignedBody), 'hex')
 }
 
@@ -60,8 +67,11 @@ export function derivePublicationId({ publisherId, manifestId } = {}) {
   }), 'hex')
 }
 
-export function createPublicationManifest(input = {}) {
-  const unsignedBody = unsignedManifestBody(input)
+// `allowClearKeyForTests` is an argument, never a field of the manifest input,
+// so no publisher-supplied body can turn it on. Production callers pass no
+// options at all and therefore cannot publish a ClearKey title.
+export function createPublicationManifest(input = {}, options = {}) {
+  const unsignedBody = unsignedManifestBody(input, options)
   const manifestId = deriveManifestId({ unsignedBody })
   const publicationId = derivePublicationId({ publisherId: unsignedBody.publisherId, manifestId })
   const body = sortPlain({
@@ -87,7 +97,7 @@ export function encodePublicationManifest(manifest) {
   return encodeApplicationEnvelope(manifest.envelope)
 }
 
-export function decodePublicationManifest(input) {
+export function decodePublicationManifest(input, options = {}) {
   const envelope = decodeApplicationEnvelope(input)
   let parsed
   try {
@@ -95,7 +105,7 @@ export function decodePublicationManifest(input) {
   } catch {
     throw new Error('publication manifest body is not canonical JSON')
   }
-  const unsignedBody = unsignedManifestBody(parsed?.unsignedBody)
+  const unsignedBody = unsignedManifestBody(parsed?.unsignedBody, options)
   const manifestId = deriveManifestId({ unsignedBody })
   const body = sortPlain({ manifestId, unsignedBody, ...unsignedBody })
   if (!b4a.equals(envelope.body, encodeCanonical(body))) {

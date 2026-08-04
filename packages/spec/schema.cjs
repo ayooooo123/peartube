@@ -511,6 +511,33 @@ ns.register({
   ]
 })
 
+// Protected media is public opaque ciphertext plus a PUBLIC descriptor of how
+// an entitled player may obtain a license for it. Every field here is already
+// world-readable: a DRM key id is an identifier, CENC init data is carried in
+// the container itself, and the endpoints are the provider's own published
+// services. There is deliberately no field for a content key, a license
+// payload, or a bearer token — those live only in the platform CDM and the
+// app's own vault, never in this protocol, backend storage, or relay state.
+// MAX_DRM_INIT_DATA_BYTES = 4096
+ns.register({
+  name: 'media-drm-descriptor',
+  fields: [
+    { name: 'version', type: 'uint', required: true },
+    // Common-encryption scheme: cenc | cbcs.
+    { name: 'scheme', type: 'string', required: true },
+    // widevine | fairplay | playready | clearkey (test/dev only).
+    { name: 'drmSystem', type: 'string', required: true },
+    // The DRM key IDENTIFIER, not the key.
+    { name: 'keyId', type: 'string', required: true },
+    // Base64 CENC init data (PSSH), bounded; public by construction.
+    { name: 'initData', type: 'string', required: false },
+    { name: 'licenseEndpoint', type: 'string', required: true },
+    { name: 'certificateUrl', type: 'string', required: false },
+    { name: 'issuer', type: 'string', required: true },
+    { name: 'entitlementId', type: 'string', required: false }
+  ]
+})
+
 ns.register({
   name: 'media-rendition-descriptor',
   fields: [
@@ -521,7 +548,9 @@ ns.register({
     { name: 'coreLength', type: 'uint', required: true },
     { name: 'treeHash', type: 'string', required: true },
     { name: 'byteLength', type: 'uint', required: true },
-    { name: 'segmentIndexId', type: 'string', required: false }
+    { name: 'segmentIndexId', type: 'string', required: false },
+    // Present only for protected renditions; absent means public media.
+    { name: 'encryption', type: '@peartube/media-drm-descriptor', required: false }
   ]
 })
 
@@ -598,6 +627,12 @@ ns.register({
     { name: 'incomplete', type: 'bool', required: false },
     { name: 'availability', type: '@peartube/media-availability', required: false },
     { name: 'mediaCoordinates', type: '@peartube/media-source-coordinates', required: false },
+    // A protected source is opaque ciphertext anyone may cache; only an
+    // entitled player can decode it, and only the platform CDM ever holds the
+    // key. `drmSystem` lets a device reject a source it cannot play before it
+    // downloads a byte of it.
+    { name: 'protected', type: 'bool', required: false },
+    { name: 'drmSystem', type: 'string', required: false },
   ]
 })
 

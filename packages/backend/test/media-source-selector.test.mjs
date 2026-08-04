@@ -1,13 +1,10 @@
 import test from 'brittle'
 
 import {
-  PLAYBACK_REJECTION_CODES,
   PLAYBACK_SOURCE_SCORE_WEIGHTS,
   scorePlaybackSource,
   selectPlaybackSource,
 } from '../src/media-graph/source-selector.js'
-import { preparePlaybackSource } from '../src/playback/source-preparation.js'
-import { PLAYBACK_ERROR_CODES } from '../src/playback/errors.js'
 
 const NOW = 1_700_000_000_000
 
@@ -112,126 +109,4 @@ test('an empty source list selects nothing rather than inventing a candidate', (
   t.is(selection.selectedPublicationId, null)
   t.alike(selection.candidates, [])
   t.alike(selection.failoverOrder, [])
-})
-
-function protectedSource(publicationId, drmSystem = 'widevine', overrides = {}) {
-  return source(publicationId, { protected: true, drmSystem, ...overrides })
-}
-
-function codesFor(selection, publicationId) {
-  return selection.candidates.find(candidate => candidate.publicationId === publicationId)?.rejectionReasonCodes || []
-}
-
-test('the DRM rejection reason has exactly one spelling, shared with the error vocabulary', (t) => {
-  t.ok(PLAYBACK_REJECTION_CODES.includes('DRM_UNSUPPORTED'), 'the selector rejects with DRM_UNSUPPORTED')
-  t.ok(PLAYBACK_ERROR_CODES.includes('DRM_UNSUPPORTED'), 'Play reports the same code it was rejected for')
-  t.absent(
-    PLAYBACK_REJECTION_CODES.some(code => code.includes('DRM') && code !== 'DRM_UNSUPPORTED'),
-    'one fact about this device has one name'
-  )
-})
-
-test('a protected source this device cannot decrypt is rejected with DRM_UNSUPPORTED', (t) => {
-  const capabilities = { drmSystems: ['fairplay'] }
-  const selection = selectPlaybackSource([protectedSource('wv')], { now: NOW, capabilities })
-
-  t.is(selection.selected, null, 'an unplayable protected source never becomes the Play target')
-  t.alike(codesFor(selection, 'wv'), ['DRM_UNSUPPORTED'])
-  t.is(selection.candidates[0].eligible, false)
-  t.alike(selection.failoverOrder, [], 'and it is never a failover target either')
-})
-
-test('a protected source this device can decrypt is selectable like any other', (t) => {
-  const capabilities = { drmSystems: ['widevine', 'playready'] }
-  const selection = selectPlaybackSource([protectedSource('wv')], { now: NOW, capabilities })
-
-  t.is(selection.selectedPublicationId, 'wv')
-  t.alike(codesFor(selection, 'wv'), [])
-  t.is(selection.candidates[0].score, scorePlaybackSource(protectedSource('wv')), 'protection is a gate, never a score input')
-})
-
-test('an unknown or absent DRM capability list supports no protected system at all', (t) => {
-  const cases = [
-    ['no capability object', undefined],
-    ['no drm list', { codecs: ['avc1'] }],
-    ['an empty list', { drmSystems: [] }],
-    ['an unrecognised system name', { drmSystems: ['acme-drm', 'widevine-2'] }],
-    ['a list of the wrong type', { drmSystems: 'widevine' }],
-    ['non-string entries', { drmSystems: [{ name: 'widevine' }, 1] }],
-    // cenc/cbcs name how the ciphertext is framed, not which CDM can license
-    // it. A device that reports a scheme has still not claimed a DRM system.
-    ['a protection scheme instead of a system', { drmSystems: ['cenc'] }],
-    // ClearKey has no real CDM behind it, so claiming it is not enough on its
-    // own: production wiring can never inject the test capability.
-    ['clearkey without the test capability', { drmSystems: ['clearkey'] }],
-  ]
-
-  for (const [label, capabilities] of cases) {
-    const selection = selectPlaybackSource([protectedSource('wv')], { now: NOW, capabilities })
-    t.alike(codesFor(selection, 'wv'), ['DRM_UNSUPPORTED'], `${label} fails closed`)
-  }
-
-  t.is(
-    selectPlaybackSource([protectedSource('ck', 'clearkey')], {
-      now: NOW,
-      capabilities: { drmSystems: ['clearkey'], allowClearKeyForTests: true },
-    }).selectedPublicationId,
-    'ck',
-    'a deterministic test fixture opts in explicitly'
-  )
-})
-
-test('a source that claims protection without naming a system cannot play', (t) => {
-  const selection = selectPlaybackSource([source('mystery', { protected: true })], {
-    now: NOW,
-    capabilities: { drmSystems: ['widevine', 'fairplay', 'playready'] },
-  })
-  t.alike(codesFor(selection, 'mystery'), ['DRM_UNSUPPORTED'], 'there is no system to ask a CDM for')
-})
-
-test('device DRM capability cannot affect a public source in either direction', (t) => {
-  const capabilities = [
-    undefined,
-    { drmSystems: [] },
-    { drmSystems: ['widevine'] },
-    { drmSystems: ['acme-drm'] },
-  ]
-  for (const capability of capabilities) {
-    const selection = selectPlaybackSource([source('public')], { now: NOW, capabilities: capability })
-    t.is(selection.selectedPublicationId, 'public', 'a public source is unaffected by DRM capability')
-    t.alike(codesFor(selection, 'public'), [])
-  }
-})
-
-test('an unplayable protected source is refused before any session is opened', async (t) => {
-  const opened = []
-  const openSession = async ({ source: candidate }) => {
-    opened.push(candidate.publicationId)
-    return { success: true }
-  }
-
-  const refused = await preparePlaybackSource({
-    sources: [protectedSource('wv')],
-    capabilities: { drmSystems: ['fairplay'] },
-    openSession,
-    now: () => NOW,
-  })
-  t.is(refused.success, false)
-  t.is(refused.errorCode, 'NO_COMPATIBLE_SOURCE')
-  t.alike(refused.attempts, [], 'no attempt was made')
-  t.alike(opened, [], 'no asset session was ever authorized for it')
-  t.alike(
-    refused.candidates.find(candidate => candidate.publicationId === 'wv').rejectionReasonCodes,
-    ['DRM_UNSUPPORTED'],
-    'and the reason is reported without touching the asset'
-  )
-
-  const played = await preparePlaybackSource({
-    sources: [protectedSource('wv')],
-    capabilities: { drmSystems: ['widevine'] },
-    openSession,
-    now: () => NOW,
-  })
-  t.is(played.success, true)
-  t.alike(opened, ['wv'], 'the same source opens once the device can decrypt it')
 })

@@ -52,7 +52,7 @@ test('every hard gate rejects before any scoring happens', (t) => {
     ['moderated', { moderationDecision: 'blocked' }, 'BLOCKED_BY_MODERATION'],
     ['policy', { localPolicyDecision: 'deny' }, 'BLOCKED_BY_LOCAL_POLICY'],
     ['unsigned', { publicationAuthorized: false }, 'UNAUTHORIZED_PUBLICATION'],
-    ['drm', { drmSystem: 'widevine' }, 'DRM_UNSUPPORTED'],
+    ['drm', { drmSystem: 'widevine' }, 'UNSUPPORTED_DRM'],
     ['codec', { codecs: ['av01'] }, 'UNSUPPORTED_CODEC'],
     ['container', { container: 'video/webm' }, 'UNSUPPORTED_CONTAINER'],
     ['superseded', { manifestStale: true }, 'STALE_MANIFEST'],
@@ -79,15 +79,9 @@ test('expired availability evidence is a hard gate, not a low score', (t) => {
   t.ok(codesFor(selection, 'expired').includes('STALE_AVAILABILITY'))
 })
 
-test('an unconstrained device accepts any codec but still no protected system', (t) => {
-  const open = select([source('a', { codecs: ['av01'], container: 'video/webm' })])
-  t.is(open.selectedPublicationId, 'a', 'no declared codec or container list constrains nothing')
-
-  // Protection is the one dimension that fails closed. Assuming a CDM nobody
-  // declared spends a download to arrive at the same DRM_UNSUPPORTED.
-  const drm = select([source('a', { codecs: ['av01'], container: 'video/webm', drmSystem: 'widevine' })])
-  t.is(drm.selected, null)
-  t.alike(codesFor(drm, 'a'), ['DRM_UNSUPPORTED'])
+test('a device with no declared capability constraint accepts any codec', (t) => {
+  const selection = select([source('a', { codecs: ['av01'], container: 'video/webm', drmSystem: 'widevine' })])
+  t.is(selection.selectedPublicationId, 'a')
 })
 
 test('Play picks one source deterministically without opening a picker', (t) => {

@@ -1,6 +1,3 @@
-import { TEST_ONLY_DRM_SYSTEMS, verifyProtectedRendition } from '../access/protected-rendition.js'
-import { isArtworkRendition, isProtectedRendition } from './rendition.js'
-
 export function createMediaValidationPolicy(overrides = {}) {
   return {
     maxWidth: 7680,
@@ -69,62 +66,4 @@ export function validateHostileMediaProbe(probe = {}, policyInput = {}) {
   } finally {
     policy.onRelease?.('probe')
   }
-}
-
-// Protected media is public ciphertext plus a public descriptor of how an
-// entitled player gets a licence. Whether that descriptor is well formed is
-// settled where it is built (assets/rendition.js calling into
-// access/protected-rendition.js); what belongs here is what a whole
-// PUBLICATION is allowed to say, which is a different question and has no
-// other home. Every path that mints a manifest - upload.js,
-// migrations/publication-v1.js, rendition-writer.js, and decoding a peer's
-// bytes - runs through manifest normalization, so putting the rule there and
-// the policy here means no publisher can route around it.
-const PROTECTED_CATALOG_SURFACE_REASON =
-  'artwork and subtitle renditions must not be protected: they are the publicly reachable surface that keeps a protected title browsable without an entitlement'
-
-export function validateProtectedPublication(body = {}, { allowClearKeyForTests = false } = {}) {
-  // Cover art and subtitles are catalog surface: they are rendered by the app
-  // itself, no licence flow exists for them, and a poster nobody can decode is
-  // a blank card forever. Refusing them is what keeps a protected title
-  // browsable without an entitlement.
-  for (const rendition of [...(body.artwork || []), ...(body.subtitles || [])]) {
-    if (isProtectedRendition(rendition)) throw new Error(PROTECTED_CATALOG_SURFACE_REASON)
-  }
-  let drmSystem = null
-  let publicCount = 0
-  let protectedCount = 0
-  for (const rendition of body.renditions || []) {
-    // Artwork rides the media array too, so the purpose test decides which
-    // rule applies rather than which array something arrived in.
-    if (isArtworkRendition(rendition)) {
-      if (isProtectedRendition(rendition)) throw new Error(PROTECTED_CATALOG_SURFACE_REASON)
-      continue
-    }
-    if (!isProtectedRendition(rendition)) {
-      publicCount++
-      continue
-    }
-    const encryption = rendition.encryption
-    // Named separately from the descriptor's own rules so the rejection says
-    // WHY: ClearKey is a deterministic test fixture, not a protection scheme.
-    if (TEST_ONLY_DRM_SYSTEMS.includes(encryption.drmSystem) && !allowClearKeyForTests) {
-      throw new Error(`${encryption.drmSystem} is a test-only drm system and is not publishable without an injected test capability`)
-    }
-    if (!verifyProtectedRendition(encryption, { allowClearKeyForTests })) {
-      throw new Error('protected rendition descriptor is invalid: it is not the canonical public descriptor for its own fields')
-    }
-    if (drmSystem == null) drmSystem = encryption.drmSystem
-    else if (drmSystem !== encryption.drmSystem) {
-      throw new Error(`protected renditions must declare one drm system per publication: a source advertises a single drmSystem, not both ${drmSystem} and ${encryption.drmSystem}`)
-    }
-    protectedCount++
-  }
-  // A source advertises ONE protected flag and ONE drm system, so a half
-  // encrypted title has no representation a consumer could act on: it would
-  // offer a licence for bytes that need none, or none for bytes that do.
-  if (protectedCount > 0 && publicCount > 0) {
-    throw new Error('publications must not mix protected and public media renditions: a source advertises one protected flag for all of them')
-  }
-  return { protected: protectedCount > 0, drmSystem }
 }

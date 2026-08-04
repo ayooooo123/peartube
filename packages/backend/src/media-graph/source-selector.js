@@ -1,4 +1,3 @@
-import { drmRejectionCode } from '../playback/drm-capability.js'
 import { AVAILABILITY_STATES, availabilityScoreForState } from '../assets/availability.js'
 
 export function sourceAvailabilityScore(source = {}) {
@@ -15,10 +14,7 @@ export const PLAYBACK_REJECTION_CODES = Object.freeze([
   'BLOCKED_BY_MODERATION',
   'BLOCKED_BY_LOCAL_POLICY',
   'UNAUTHORIZED_PUBLICATION',
-  // Spelled exactly like the playback error code in `playback/errors.js`: one
-  // fact about this device, one name. A source rejected here never reaches an
-  // asset download, and Play reports the same code the diagnostics show.
-  'DRM_UNSUPPORTED',
+  'UNSUPPORTED_DRM',
   'UNSUPPORTED_CODEC',
   'UNSUPPORTED_CONTAINER',
   'STALE_MANIFEST',
@@ -79,10 +75,8 @@ function supportsAll(supported, required) {
 
 /**
  * Device capability and local policy gate. `capabilities` describes what this
- * device can actually decrypt and decode. An absent codec or container list
- * leaves that dimension unconstrained, but protection is not optional: a
- * protected source needs a named DRM system this device claims, so an absent
- * capability list rejects it. See `playback/drm-capability.js`.
+ * device can actually decrypt and decode; an absent capability list means the
+ * caller has not constrained that dimension and the source passes.
  */
 function rejectionCodesFor(source, capabilities, now) {
   const codes = []
@@ -90,11 +84,10 @@ function rejectionCodesFor(source, capabilities, now) {
   if (decisionBlocks(source.localPolicyDecision) || source.blocked === true) codes.push('BLOCKED_BY_LOCAL_POLICY')
   if (source.publicationAuthorized !== true || !nonEmptyString(source.renditionId)) codes.push('UNAUTHORIZED_PUBLICATION')
 
-  // Protection only. `encryption.scheme` (cenc/cbcs) says how the ciphertext is
-  // framed, not which CDM can license it, so it is never compared against a DRM
-  // capability list: doing that rejects every protected source on every device.
-  const drmRejection = drmRejectionCode(source, capabilities)
-  if (drmRejection) codes.push(drmRejection)
+  const drm = source.drmSystem || source.encryptionScheme || null
+  if (nonEmptyString(drm) && Array.isArray(capabilities.drmSystems) && !capabilities.drmSystems.includes(drm)) {
+    codes.push('UNSUPPORTED_DRM')
+  }
   if (!supportsAll(capabilities.codecs, source.codecs)) codes.push('UNSUPPORTED_CODEC')
   if (nonEmptyString(source.container) && Array.isArray(capabilities.containers) && !capabilities.containers.includes(source.container)) {
     codes.push('UNSUPPORTED_CONTAINER')

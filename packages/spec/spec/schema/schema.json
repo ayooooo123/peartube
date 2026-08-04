@@ -1562,68 +1562,6 @@
       ]
     },
     {
-      "name": "media-drm-descriptor",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 4,
-      "fields": [
-        {
-          "name": "version",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "scheme",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "drmSystem",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "keyId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "initData",
-          "required": false,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "licenseEndpoint",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "certificateUrl",
-          "required": false,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "issuer",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "entitlementId",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
       "name": "media-rendition-descriptor",
       "namespace": "peartube",
       "compact": false,
@@ -1675,12 +1613,6 @@
           "name": "segmentIndexId",
           "required": false,
           "type": "string",
-          "version": 1
-        },
-        {
-          "name": "encryption",
-          "required": false,
-          "type": "@peartube/media-drm-descriptor",
           "version": 1
         }
       ]
@@ -2001,18 +1933,6 @@
           "name": "mediaCoordinates",
           "required": false,
           "type": "@peartube/media-source-coordinates",
-          "version": 1
-        },
-        {
-          "name": "protected",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "drmSystem",
-          "required": false,
-          "type": "string",
           "version": 1
         }
       ]

@@ -1,4 +1,3 @@
-import { renditionDrmRejectionCode } from '../playback/drm-capability.js'
 import { createPlaybackError } from '../playback/errors.js'
 
 const DEFAULT_MAX_ACTIVE_CORES = 4
@@ -32,20 +31,11 @@ function normalizeRange(range = {}) {
  * declared block range, and caps how many cores one session may hold open. It
  * has no notion of a URL, an origin, or a fallback: there is no code path here
  * that can fetch bytes over HTTP.
- *
- * `capabilities` is what this device can decrypt, and a protected rendition is
- * authorized only when it names a DRM system that list claims. The selector
- * already refuses such a source, so reaching this check means something skipped
- * selection: the session refuses rather than opening the core, because opening
- * it is what starts pulling ciphertext nothing on this device can play. There
- * is no capability, key, or license held here — only the public system name off
- * the signed descriptor.
  */
 export function createAssetSession(options = {}) {
   const renditions = new Map()
   const active = new Map()
   const openCore = typeof options.openCore === 'function' ? options.openCore : async key => key
-  const capabilities = options.capabilities || {}
   const maxActiveCores = Number.isSafeInteger(options.maxActiveCores) && options.maxActiveCores > 0
     ? options.maxActiveCores
     : DEFAULT_MAX_ACTIVE_CORES
@@ -70,10 +60,6 @@ export function createAssetSession(options = {}) {
       const expected = normalizeKey(coreKeyOf(rendition))
       const requested = normalizeKey(coreKey)
       if (!expected || !requested || expected !== requested) return false
-      // Before the core opens, not after: a bounded code lets preparation stop
-      // instead of reporting a range mismatch for a device-capability fact.
-      const drmRejection = renditionDrmRejectionCode(rendition, capabilities)
-      if (drmRejection) throw createPlaybackError(drmRejection)
       if (active.has(renditionId)) return true
       // A session that would exceed its core budget fails with a bounded code
       // instead of quietly holding more of the device's resources.

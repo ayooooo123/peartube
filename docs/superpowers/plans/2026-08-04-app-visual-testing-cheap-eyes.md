@@ -752,7 +752,7 @@ In `packages/app/package.json` scripts, add: `"app:test": "node scripts/app-test
 
 - [ ] **Step 3: Run the full unit suite**
 
-Run: `node --test packages/app/scripts/lib/__tests__/`
+Run: `npm run app:test:unit --prefix packages/app`  (globs the test files; `node --test <dir>/` misfires on Node 22)
 Expected: PASS (all helper tests).
 
 - [ ] **Step 4: Commit**
@@ -852,7 +852,7 @@ Expected: usable text back (describes the testsrc pattern). Confirms OMP vision 
 
 ### Task 17: Full-suite guard + final commit
 
-- [ ] **Step 1:** Run `node --test packages/app/scripts/lib/__tests__/` — all green.
+- [ ] **Step 1:** Run `npm run app:test:unit --prefix packages/app` — all green.
 - [ ] **Step 2:** Confirm no CI files changed: `git diff --stat origin/main -- .github/` is empty.
 - [ ] **Step 3:** Final commit of any doc/measurement updates.
 

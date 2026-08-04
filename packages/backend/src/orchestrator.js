@@ -726,6 +726,10 @@ export async function createBackendContext(config) {
     capacityBytes: archive.capacityBytes,
     diagnostics: archiveDiagnostics,
     now: typeof archive.now === 'function' ? archive.now : () => Date.now(),
+    // Published by the network lifecycle API on every evaluation. Until one has
+    // been published this device has not been cleared to promise anyone durable
+    // storage, so the ledger refuses new pledges and keeps the ones it holds.
+    participation: () => ctx.participationDecision ?? null,
     repository: {
       async load() {
         return (await ctx.metaDb.get(archiveReservationStateKey))?.value || null

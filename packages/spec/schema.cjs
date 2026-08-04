@@ -2229,7 +2229,10 @@ ns.register({
     { name: 'followedPublishersJson', type: 'string', required: false },
     { name: 'followedIndexesJson', type: 'string', required: false },
     { name: 'trustedModerationFeedsJson', type: 'string', required: false },
-    { name: 'aiAnalysis', type: 'string', required: false }
+    { name: 'aiAnalysis', type: 'string', required: false },
+    // Data Saver | Balanced | Help More. One choice that decides every
+    // contribution ceiling; the exact byte values stay visible above it.
+    { name: 'participationMode', type: 'string', required: false }
   ]
 })
 
@@ -2247,7 +2250,8 @@ ns.register({
     { name: 'followedPublishersJson', type: 'string', required: false },
     { name: 'followedIndexesJson', type: 'string', required: false },
     { name: 'trustedModerationFeedsJson', type: 'string', required: false },
-    { name: 'aiAnalysis', type: 'string', required: false }
+    { name: 'aiAnalysis', type: 'string', required: false },
+    { name: 'participationMode', type: 'string', required: false }
   ]
 })
 
@@ -3536,6 +3540,66 @@ ns.register({
   ]
 })
 
+// ============================================
+// Participation (appended for compat)
+// ============================================
+
+ns.register({
+  name: 'get-participation-status-request',
+  fields: []
+})
+
+ns.register({
+  name: 'get-participation-status-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'mode', type: 'string', required: true },
+    { name: 'state', type: 'string', required: true },
+    { name: 'uploadEligible', type: 'bool', required: true },
+    { name: 'uploading', type: 'bool', required: true },
+    { name: 'backgroundEligible', type: 'bool', required: true },
+    { name: 'cacheCeilingBytes', type: 'uint', required: true },
+    { name: 'uploadCeilingBytesPer24h', type: 'uint', required: true },
+    { name: 'uploadedBytesLast24h', type: 'uint', required: true },
+    { name: 'outboundBytesPerSecond', type: 'uint', required: true },
+    { name: 'postPlaybackGraceMs', type: 'uint', required: true },
+    { name: 'backgroundRemainingSessionMs', type: 'uint', required: true },
+    { name: 'backgroundRemainingDailyMs', type: 'uint', required: true },
+    // At most MAX_PARTICIPATION_REASON_CODES entries, canonical order.
+    { name: 'reasonCodes', type: 'string', array: true, required: true },
+    { name: 'errorCode', type: 'string', required: false }
+  ]
+})
+
+// Categorical OS signals only. Every field is optional and every presence flag
+// defaults false, so an omitted signal stays unknown — and unknown constrains.
+ns.register({
+  name: 'set-device-conditions-request',
+  fields: [
+    { name: 'metered', type: 'bool', required: false },
+    { name: 'meteredProvided', type: 'bool', required: false },
+    { name: 'thermalState', type: 'string', required: false },
+    { name: 'batteryPercent', type: 'uint', required: false },
+    { name: 'batteryPercentProvided', type: 'bool', required: false },
+    { name: 'charging', type: 'bool', required: false },
+    { name: 'chargingProvided', type: 'bool', required: false },
+    { name: 'backgroundPermitted', type: 'bool', required: false },
+    { name: 'backgroundPermittedProvided', type: 'bool', required: false },
+    { name: 'freeDiskBytes', type: 'uint', required: false },
+    { name: 'freeDiskBytesProvided', type: 'bool', required: false },
+    { name: 'totalDiskBytes', type: 'uint', required: false },
+    { name: 'totalDiskBytesProvided', type: 'bool', required: false }
+  ]
+})
+
+ns.register({
+  name: 'set-device-conditions-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'errorCode', type: 'string', required: false }
+  ]
+})
+
 // Save schema to disk
 Hyperschema.toDisk(schema)
 
@@ -4364,6 +4428,27 @@ rpcNs.register({
 rpcNs.register({
   name: 'event-transcode-progress',
   request: { name: '@peartube/event-transcode-progress', stream: false, send: true }
+})
+
+// ============================================
+// Participation (appended for compat)
+// ============================================
+
+// Live contribution state, so the UI can distinguish "eligible", "actively
+// uploading", and "suspended" instead of implying a promise the device is not
+// currently keeping. Every constraint is reported as a bounded reason code.
+rpcNs.register({
+  name: 'get-participation-status',
+  request: { name: '@peartube/get-participation-status-request', stream: false },
+  response: { name: '@peartube/get-participation-status-response', stream: false }
+})
+
+// The OS categorical signals the participation decision runs on. Every field is
+// optional: an omitted signal stays unknown, and unknown is a constraint.
+rpcNs.register({
+  name: 'set-device-conditions',
+  request: { name: '@peartube/set-device-conditions-request', stream: false },
+  response: { name: '@peartube/set-device-conditions-response', stream: false }
 })
 
 // Save HRPC interface to disk

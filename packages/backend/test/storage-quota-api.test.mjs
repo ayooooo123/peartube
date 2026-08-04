@@ -209,8 +209,11 @@ test('setStorageLimit preserves partial download intents when the limit is uncha
   const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
   const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces }, seedingManager })
 
-  const result = await api.setStorageLimit(5)
-  const raised = await api.setStorageLimit(10)
+  // Start from whatever quota the participation policy ships, so this asserts
+  // "unchanged, then raised" rather than a particular default.
+  const baseline = seedingManager.config.maxStorageGB
+  const result = await api.setStorageLimit(baseline)
+  const raised = await api.setStorageLimit(baseline + 5)
 
   t.is(result.success, true)
   t.is(raised.success, true)

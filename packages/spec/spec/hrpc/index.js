@@ -302,7 +302,11 @@ const methods = new Map([
   ['@peartube/transcode-status', 146],
   [146, '@peartube/transcode-status'],
   ['@peartube/event-transcode-progress', 147],
-  [147, '@peartube/event-transcode-progress']
+  [147, '@peartube/event-transcode-progress'],
+  ['@peartube/get-participation-status', 148],
+  [148, '@peartube/get-participation-status'],
+  ['@peartube/set-device-conditions', 149],
+  [149, '@peartube/set-device-conditions']
 ])
 
 class HRPC {
@@ -457,7 +461,9 @@ class HRPC {
       ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-request')],
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-request')],
       ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-request')],
-      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')]
+      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')],
+      ['@peartube/get-participation-status', getEncoding('@peartube/get-participation-status-request')],
+      ['@peartube/set-device-conditions', getEncoding('@peartube/set-device-conditions-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -595,7 +601,9 @@ class HRPC {
       ['@peartube/update-channel-avatar', getEncoding('@peartube/update-channel-avatar-response')],
       ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-response')],
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-response')],
-      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')]
+      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')],
+      ['@peartube/get-participation-status', getEncoding('@peartube/get-participation-status-response')],
+      ['@peartube/set-device-conditions', getEncoding('@peartube/set-device-conditions-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -1286,6 +1294,14 @@ class HRPC {
     return this._callSync('@peartube/event-transcode-progress', args)
   }
 
+  async getParticipationStatus(args) {
+    return this._call('@peartube/get-participation-status', args)
+  }
+
+  async setDeviceConditions(args) {
+    return this._call('@peartube/set-device-conditions', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -1876,6 +1892,14 @@ class HRPC {
 
   onEventTranscodeProgress(responseFn) {
     this._handlers['@peartube/event-transcode-progress'] = responseFn
+  }
+
+  onGetParticipationStatus(responseFn) {
+    this._handlers['@peartube/get-participation-status'] = responseFn
+  }
+
+  onSetDeviceConditions(responseFn) {
+    this._handlers['@peartube/set-device-conditions'] = responseFn
   }
 
   _requestIsStream(command) {

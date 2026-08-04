@@ -78,6 +78,13 @@ const DEFAULT_CATALOG_BUDGET_WINDOW_MS = 60_000
 const CATALOG_PAGE_TIMEOUT_MS = 10_000
 const ASSET_CHUNK_BYTES = 48 * 1024
 const ASSET_TRANSFER_TIMEOUT_MS = 10_000
+// A rate-limited send waits for tokens rather than answering "unavailable":
+// refusing marks the peer as failed for that block until the next policy
+// change, which would turn a momentary throttle into permanent unavailability.
+// The wait must stay well inside the requester's ASSET_TRANSFER_TIMEOUT_MS, so
+// anything that cannot be served within this budget is refused instead.
+const MAX_OUTBOUND_RATE_DEFER_MS = 4_000
+const MAX_OUTBOUND_RATE_DEFERRALS = 4
 const ARCHIVE_CHALLENGE_PROOF_CHUNK_BYTES = 48 * 1024
 const MAX_ARCHIVE_CHALLENGE_TRANSFERS = 16
 const ARCHIVE_CHALLENGE_TRANSFER_TIMEOUT_MS = 10_000
@@ -480,6 +487,9 @@ export function createScopedNetworkRuntime (options = {}) {
   const cancelPublisherRotationDrain = typeof options.clearPublisherRotationDrainTimer === 'function'
     ? options.clearPublisherRotationDrainTimer
     : clearTimeout
+  const scheduleOutboundRefill = typeof options.setOutboundRateTimer === 'function'
+    ? options.setOutboundRateTimer
+    : setTimeout
   const publisherRotationDrainMs = Number(options.publisherRotationDrainMs ?? 500)
   if (!Number.isSafeInteger(bootstrapLocatorTtlMs) || bootstrapLocatorTtlMs < 1 ||
       !Number.isSafeInteger(bootstrapLocatorRefreshMs) || bootstrapLocatorRefreshMs < 1 ||
@@ -566,6 +576,16 @@ export function createScopedNetworkRuntime (options = {}) {
       ))
     : true
   let uploadedBytes = 0
+  // The cumulative ceiling says how many bytes this device may ever send; the
+  // rate says how fast. Only the token bucket below makes the second number
+  // real - without it "5 Mbit/s" is a label on a settings dialog. `null` means
+  // no rate has been declared and the bucket is bypassed entirely; 0 means no
+  // outbound content bytes at all.
+  let outboundBytesPerSecond = hasInitialNetworkPolicy
+    ? normalizeOutboundRate(initialNetworkPolicy.outboundBytesPerSecond, null)
+    : null
+  let outboundTokens = outboundBytesPerSecond === null ? 0 : outboundCapacity()
+  let outboundTokensAt = Number(now())
   let networkPolicyEpoch = 0
   // A device that will not upload answers every block request with
   // "unavailable", so its peers read a fully synced catalog as awaiting
@@ -652,11 +672,75 @@ export function createScopedNetworkRuntime (options = {}) {
     })
   }
 
-  function reservePolicyUpload (bytes) {
+  function normalizeOutboundRate (value, current) {
+    if (value === undefined || value === null) return current
+    const rate = Number(value)
+    if (!Number.isSafeInteger(rate) || rate < 0) fail('invalid outbound rate')
+    return rate
+  }
+
+  // One second of the rate, but never smaller than a single maximal block: a
+  // bucket that cannot hold one block would refuse every block forever, which
+  // is what a 250 kB/s data-saver device would do against a 256 KiB block.
+  // Capacity only sets the burst; the long-run average is still the rate.
+  function outboundCapacity () {
+    return Math.max(outboundBytesPerSecond, MAX_ASSET_BLOCK_BYTES)
+  }
+
+  function refillOutboundTokens () {
+    if (outboundBytesPerSecond === null) return
+    const current = Number(now())
+    const elapsed = current - outboundTokensAt
+    // A clock that jumped backwards must not mint tokens.
+    if (!(elapsed > 0)) {
+      if (elapsed < 0) outboundTokensAt = current
+      return
+    }
+    outboundTokensAt = current
+    outboundTokens = Math.min(outboundCapacity(), outboundTokens + (elapsed * outboundBytesPerSecond) / 1000)
+  }
+
+  // 0 when the bytes may leave now, a positive millisecond wait when they may
+  // leave later, and null when the rate refuses them outright.
+  function outboundRateDelayMs (amount) {
+    if (outboundBytesPerSecond === null) return 0
+    if (outboundBytesPerSecond === 0 || amount > outboundCapacity()) return null
+    refillOutboundTokens()
+    if (outboundTokens >= amount) return 0
+    const waitMs = Math.ceil(((amount - outboundTokens) * 1000) / outboundBytesPerSecond)
+    return waitMs > MAX_OUTBOUND_RATE_DEFER_MS ? null : waitMs
+  }
+
+  async function acquireOutboundRate (amount) {
+    if (amount === 0) return true
+    // Bounded retries: a peer that keeps losing the race for tokens gives up
+    // rather than holding its session open indefinitely.
+    for (let attempt = 0; attempt <= MAX_OUTBOUND_RATE_DEFERRALS; attempt++) {
+      const waitMs = outboundRateDelayMs(amount)
+      if (waitMs === null) return false
+      if (waitMs === 0) {
+        if (outboundBytesPerSecond !== null) outboundTokens -= amount
+        return true
+      }
+      await new Promise(resolve => {
+        scheduleOutboundRefill(resolve, waitMs)?.unref?.()
+      })
+      if (status === 'closed' || !networkEnabled || !uploadAllowed) return false
+    }
+    return false
+  }
+
+  async function reservePolicyUpload (bytes) {
     const amount = Number(bytes)
     if (!uploadAllowed || !networkEnabled || !Number.isSafeInteger(amount) || amount < 0 ||
         uploadedBytes + amount > uploadCeilingBytes) return null
+    // Charge the cumulative total before waiting on the rate, so a deferred
+    // send cannot be overtaken into breaching the ceiling while it waits.
     uploadedBytes += amount
+    if (!await acquireOutboundRate(amount)) {
+      uploadedBytes -= amount
+      return null
+    }
     let committed = false
     let released = false
     return {
@@ -667,6 +751,10 @@ export function createScopedNetworkRuntime (options = {}) {
         if (released || committed) return
         released = true
         uploadedBytes -= amount
+        // Nothing left the device, so the rate was never actually spent.
+        if (outboundBytesPerSecond !== null) {
+          outboundTokens = Math.min(outboundCapacity(), outboundTokens + amount)
+        }
       },
     }
   }
@@ -1498,9 +1586,12 @@ export function createScopedNetworkRuntime (options = {}) {
       })
       const value = b4a.from(proof?.block?.value || [])
       const reservation = policyEpoch === networkPolicyEpoch
-        ? reservePolicyUpload(value.byteLength)
+        ? await reservePolicyUpload(value.byteLength)
         : null
-      if (!reservation || proof?.block?.index !== index || value.byteLength > MAX_ASSET_BLOCK_BYTES) {
+      // The reservation may have waited on the outbound rate, so the policy is
+      // rechecked after it resolves rather than only before.
+      if (!reservation || policyEpoch !== networkPolicyEpoch ||
+          proof?.block?.index !== index || value.byteLength > MAX_ASSET_BLOCK_BYTES) {
         reservation?.release()
         sendScopedFrame(tracked, 'asset', 'asset-block-unavailable', encodeAssetIndex(index))
         return
@@ -1726,9 +1817,12 @@ export function createScopedNetworkRuntime (options = {}) {
       const value = b4a.from(proof?.block?.value || [])
       const ceiling = scope.archiveUploadCeilingBytes
       const reservation = policyEpoch === networkPolicyEpoch
-        ? reservePolicyUpload(value.byteLength)
+        ? await reservePolicyUpload(value.byteLength)
         : null
-      if (!reservation || proof?.block?.index !== request.index || value.byteLength > MAX_ASSET_BLOCK_BYTES ||
+      // The reservation may have waited on the outbound rate, so the policy is
+      // rechecked after it resolves rather than only before.
+      if (!reservation || policyEpoch !== networkPolicyEpoch ||
+          proof?.block?.index !== request.index || value.byteLength > MAX_ASSET_BLOCK_BYTES ||
           tracked.archiveServedBytes + value.byteLength > ceiling) {
         reservation?.release()
         sendScopedFrame(tracked, 'archive', 'archive-block-unavailable', encodeArchiveBlockRef(request.coreKey, request.index))
@@ -2297,6 +2391,9 @@ export function createScopedNetworkRuntime (options = {}) {
     if (!['disabled', 'manual', 'enabled'].includes(nextUploadPermission)) fail('invalid upload permission')
     if (!Number.isSafeInteger(nextUploadCeilingBytes) || nextUploadCeilingBytes < 0) fail('invalid upload ceiling')
     if (!Number.isSafeInteger(nextDiskCeilingBytes) || nextDiskCeilingBytes < 0) fail('invalid disk ceiling')
+    // An absent rate leaves the limit exactly where it was: a caller that only
+    // moves the disk ceiling must not silently uncap the outbound path.
+    const nextOutboundBytesPerSecond = normalizeOutboundRate(policy.outboundBytesPerSecond, outboundBytesPerSecond)
 
     const wasNetworkEnabled = networkEnabled
     const wasUploadAllowed = uploadAllowed
@@ -2304,6 +2401,20 @@ export function createScopedNetworkRuntime (options = {}) {
     uploadPermission = nextUploadPermission
     uploadCeilingBytes = nextUploadCeilingBytes
     diskCeilingBytes = nextDiskCeilingBytes
+    if (nextOutboundBytesPerSecond !== outboundBytesPerSecond) {
+      // Refill against the old rate first so bytes already earned are not lost,
+      // then reseat the bucket under the new one. A tightened rate must not
+      // leave a stale burst behind, so the balance is clamped down too. Coming
+      // from an uncapped path there is no prior consumption to carry, so the
+      // first rate starts the device with a full burst rather than a stall.
+      const wasUncapped = outboundBytesPerSecond === null
+      if (!wasUncapped) refillOutboundTokens()
+      outboundBytesPerSecond = nextOutboundBytesPerSecond
+      outboundTokensAt = Number(now())
+      if (outboundBytesPerSecond === null) outboundTokens = 0
+      else if (wasUncapped) outboundTokens = outboundCapacity()
+      else outboundTokens = Math.min(outboundTokens, outboundCapacity())
+    }
     uploadAllowed = policy.uploadAllowed ?? (
       networkEnabled && uploadPermission === 'enabled' && uploadCeilingBytes > 0
     )
@@ -2319,6 +2430,8 @@ export function createScopedNetworkRuntime (options = {}) {
       uploadCeilingBytes,
       uploadedBytes,
       diskCeilingBytes,
+      outboundBytesPerSecond,
+      outboundRateEnforced: outboundBytesPerSecond !== null,
       policyEpoch: networkPolicyEpoch,
     }
   }
@@ -3295,6 +3408,8 @@ export function createScopedNetworkRuntime (options = {}) {
         uploadCeilingBytes,
         uploadedBytes,
         diskCeilingBytes,
+        outboundBytesPerSecond,
+        outboundRateEnforced: outboundBytesPerSecond !== null,
         policyEpoch: networkPolicyEpoch,
       },
       counters: { ...counters },

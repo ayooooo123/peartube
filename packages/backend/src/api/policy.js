@@ -1,3 +1,11 @@
+import {
+  DEFAULT_PARTICIPATION_MODE,
+  PARTICIPATION_LIMITS,
+  PARTICIPATION_MODES,
+} from '../playback/resource-policy.js'
+
+const DEFAULT_PARTICIPATION_LIMITS = PARTICIPATION_LIMITS[DEFAULT_PARTICIPATION_MODE]
+
 export const DEFAULT_NETWORK_POLICY = Object.freeze({
   // A peer that holds content serves it: that is the whole arrangement, and a
   // network where every viewer takes without giving has one source for
@@ -7,9 +15,26 @@ export const DEFAULT_NETWORK_POLICY = Object.freeze({
   // can narrow any of this at runtime.
   uploadPermission: 'enabled',
   meteredNetwork: 'pause-network',
-  backgroundMode: 'local-only',
-  diskCeilingBytes: 5 * 1024 * 1024 * 1024,
-  uploadCeilingBytes: Number.MAX_SAFE_INTEGER,
+  // Background work answers to the participation decision: OS permission, a
+  // nominal or fair thermal state, power, disk, and the mode's session and daily
+  // budgets all gate it, and a device that may not run work suspends. A shipped
+  // 'local-only' took the whole swarm down the instant the app was backgrounded,
+  // which made Balanced's opportunistic background contribution unreachable on
+  // every fresh install. The enum stays as an operator narrowing.
+  backgroundMode: 'allow',
+  // Recorded when an operator narrows it, so a later change of this default can
+  // never overwrite the choice. See applyOperatorOverrides.
+  backgroundModeExplicit: false,
+  // A fresh install runs the Balanced preset, so the shipped ceilings are the
+  // Balanced ceilings. One module decides what Balanced means; the policy only
+  // records the choice.
+  participationMode: DEFAULT_PARTICIPATION_MODE,
+  diskCeilingBytes: DEFAULT_PARTICIPATION_LIMITS.cacheCeilingBytes,
+  uploadCeilingBytes: DEFAULT_PARTICIPATION_LIMITS.uploadCeilingBytesPer24h,
+  // A ceiling is explicit when the viewer typed it, and that fact is recorded
+  // here rather than inferred from the value later. See applyParticipationCeilings.
+  diskCeilingExplicit: false,
+  uploadCeilingExplicit: false,
   retentionMode: 'none',
   followedPublishers: [],
   followedIndexes: [],
@@ -23,6 +48,20 @@ const ENUMS = {
   backgroundMode: new Set(['pause-network', 'local-only', 'allow']),
   retentionMode: new Set(['none', 'local-pin', 'archive-pledges']),
   aiAnalysis: new Set(['disabled', 'local-only', 'enabled']),
+  participationMode: new Set(PARTICIPATION_MODES),
+}
+
+// A participation mode is a preset; a ceiling the viewer typed is a decision.
+// Explicitness cannot be recovered from the value: a deliberate 4 GiB cache is
+// byte-for-byte the Data Saver preset, so a mode round trip would launder the
+// choice back into a preset. The flag stored beside each ceiling is the record.
+const CEILING_FIELDS = Object.freeze([
+  Object.freeze({ field: 'diskCeilingBytes', flag: 'diskCeilingExplicit', limit: 'cacheCeilingBytes' }),
+  Object.freeze({ field: 'uploadCeilingBytes', flag: 'uploadCeilingExplicit', limit: 'uploadCeilingBytesPer24h' }),
+])
+
+function participationLimitsFor(mode) {
+  return PARTICIPATION_LIMITS[mode] || DEFAULT_PARTICIPATION_LIMITS
 }
 
 const NETWORK_POLICY_KEY = 'network-policy:v1'
@@ -98,6 +137,7 @@ function networkPolicyWireFields(policy) {
     followedIndexesJson: JSON.stringify(policy.followedIndexes),
     trustedModerationFeedsJson: JSON.stringify(policy.trustedModerationFeeds),
     aiAnalysis: policy.aiAnalysis,
+    participationMode: policy.participationMode,
   }
 }
 
@@ -111,6 +151,12 @@ export function normalizeNetworkPolicy(input = {}, base = DEFAULT_NETWORK_POLICY
   }
   if (input.diskCeilingBytes !== undefined) policy.diskCeilingBytes = boundedBytes(input.diskCeilingBytes, 'diskCeilingBytes')
   if (input.uploadCeilingBytes !== undefined) policy.uploadCeilingBytes = boundedBytes(input.uploadCeilingBytes, 'uploadCeilingBytes')
+  for (const { flag } of CEILING_FIELDS) {
+    if (input[flag] !== undefined) policy[flag] = input[flag] === true
+  }
+  if (input.backgroundModeExplicit !== undefined) {
+    policy.backgroundModeExplicit = input.backgroundModeExplicit === true
+  }
   for (const key of ['followedPublishers', 'followedIndexes', 'trustedModerationFeeds']) {
     if (input[key] !== undefined) policy[key] = boundedTransportIdList(input[key], key)
   }
@@ -140,21 +186,96 @@ async function writePolicyStore(store, policy) {
 // or a 'disabled' permission, and either one is left alone.
 const RETIRED_UPLOAD_DEFAULT = Object.freeze({ uploadPermission: 'manual', uploadCeilingBytes: 0 })
 
-function migrateRetiredUploadDefault(stored, base) {
-  if (stored.uploadPermission !== RETIRED_UPLOAD_DEFAULT.uploadPermission) return stored
-  if (Number(stored.uploadCeilingBytes ?? 0) !== RETIRED_UPLOAD_DEFAULT.uploadCeilingBytes) return stored
-  return {
-    ...stored,
-    uploadPermission: base.uploadPermission,
-    uploadCeilingBytes: base.uploadCeilingBytes,
+// Participation modes arrived after the ceilings did, and the releases before
+// them shipped a 5 GiB cache with an unbounded upload ceiling. A stored policy
+// with no participation mode is from one of those releases, so a ceiling that
+// still matches the retired default adopts the preset and anything else is a
+// number someone set and is left exactly where it is.
+const RETIRED_CEILING_DEFAULTS = Object.freeze({
+  diskCeilingBytes: 5 * 1024 * 1024 * 1024,
+  uploadCeilingBytes: Number.MAX_SAFE_INTEGER,
+})
+
+// Every release before this one shipped 'local-only', and that value alone
+// cannot say whether an operator chose it or merely inherited it. A policy
+// stored before backgroundModeExplicit existed adopts the new default; from here
+// on the choice is recorded when it is made, so this migration runs exactly once
+// per device and never second-guesses an operator again.
+const RETIRED_BACKGROUND_MODE_DEFAULT = 'local-only'
+
+function migrateStoredNetworkPolicy(stored, base) {
+  const next = { ...stored }
+  if (stored.uploadPermission === RETIRED_UPLOAD_DEFAULT.uploadPermission &&
+    Number(stored.uploadCeilingBytes ?? 0) === RETIRED_UPLOAD_DEFAULT.uploadCeilingBytes) {
+    next.uploadPermission = base.uploadPermission
+    next.uploadCeilingBytes = base.uploadCeilingBytes
   }
+  if (stored.participationMode === undefined) {
+    next.participationMode = base.participationMode
+    if (Number(stored.diskCeilingBytes) === RETIRED_CEILING_DEFAULTS.diskCeilingBytes) {
+      next.diskCeilingBytes = base.diskCeilingBytes
+    }
+    if (Number(next.uploadCeilingBytes) === RETIRED_CEILING_DEFAULTS.uploadCeilingBytes) {
+      next.uploadCeilingBytes = base.uploadCeilingBytes
+    }
+  }
+  // The explicit-ceiling flags arrived after the ceilings did. In a policy
+  // stored before them, a ceiling that does not match its mode's preset is the
+  // only surviving evidence that someone chose it, so it seeds the flag once
+  // and every later mode change reads the flag instead of guessing again.
+  const limits = participationLimitsFor(next.participationMode)
+  for (const { field, flag, limit } of CEILING_FIELDS) {
+    if (next[flag] === undefined) {
+      next[flag] = Number(next[field] ?? base[field]) !== limits[limit]
+    }
+  }
+  if (next.backgroundModeExplicit === undefined) {
+    next.backgroundModeExplicit = stored.backgroundMode !== undefined &&
+      stored.backgroundMode !== RETIRED_BACKGROUND_MODE_DEFAULT
+    if (!next.backgroundModeExplicit) next.backgroundMode = base.backgroundMode
+  }
+  return next
+}
+
+// Switching modes moves every ceiling that is still following its preset and
+// leaves alone every ceiling the viewer set, because Help More must not widen a
+// deliberate cap and Data Saver must not shrink one. A ceiling becomes explicit
+// when a request carries a new value without also switching the mode: the app
+// resubmits the whole policy on every save, so the ceilings inside a mode
+// switch are the presets it was already showing, not edits. Typing the new
+// mode's own preset back into the field hands the ceiling back to the mode.
+function applyParticipationCeilings(policy, base, patch = {}) {
+  const modeChanged = policy.participationMode !== base.participationMode
+  const limits = participationLimitsFor(policy.participationMode)
+  const next = { ...policy }
+  for (const { field, flag, limit } of CEILING_FIELDS) {
+    const preset = limits[limit]
+    const carried = patch[field] !== undefined
+    let explicit = base[flag] === true
+    if (carried && !modeChanged && policy[field] !== base[field]) explicit = true
+    if (carried && policy[field] === preset) explicit = false
+    if (modeChanged && !explicit) next[field] = preset
+    next[flag] = explicit
+  }
+  return next
+}
+
+// The operator overrides are choices, not presets, so a choice is recorded the
+// same way a ceiling is. Setting the field back to the shipped default gives it
+// up again; anything else survives every future change of that default.
+function applyOperatorOverrides(policy, base, patch = {}) {
+  if (patch.backgroundMode === undefined) return policy
+  const backgroundModeExplicit = policy.backgroundMode === DEFAULT_NETWORK_POLICY.backgroundMode
+    ? false
+    : (policy.backgroundMode !== base.backgroundMode ? true : base.backgroundModeExplicit === true)
+  return { ...policy, backgroundModeExplicit }
 }
 
 export async function loadNetworkPolicy({ store = new Map(), defaults = DEFAULT_NETWORK_POLICY } = {}) {
   const base = normalizeNetworkPolicy(defaults, DEFAULT_NETWORK_POLICY)
   const stored = await readPolicyStore(store)
   if (stored == null) return base
-  return normalizeNetworkPolicy(migrateRetiredUploadDefault(stored, base), base)
+  return normalizeNetworkPolicy(migrateStoredNetworkPolicy(stored, base), base)
 }
 
 function unsupportedPolicyError(field, detail) {
@@ -174,7 +295,19 @@ export function assertNetworkPolicyRuntimeSupported(policy) {
   }
 }
 
-export function resolveNetworkPolicyForEnvironment(policy, environment = {}) {
+function participationRate(value) {
+  const next = Number(value)
+  return Number.isSafeInteger(next) && next >= 0 ? next : null
+}
+
+/**
+ * The effective policy every manager runs on. The participation decision is the
+ * authority over the byte path; `meteredNetwork` and `backgroundMode` are
+ * operator overrides that may only narrow what the decision already permits,
+ * never widen it. A runtime that has never been handed a decision has no
+ * participation authority to consult and runs on the operator policy alone.
+ */
+export function resolveNetworkPolicyForEnvironment(policy, environment = {}, participation = null) {
   const constrainedModes = []
   if (environment.metered) constrainedModes.push(policy.meteredNetwork)
   if (environment.background) constrainedModes.push(policy.backgroundMode)
@@ -182,15 +315,55 @@ export function resolveNetworkPolicyForEnvironment(policy, environment = {}) {
     ? 'pause-network'
     : (constrainedModes.includes('local-only') ? 'local-only' : 'allow')
   const networkEnabled = networkMode === 'allow'
-  const uploadAllowed = networkEnabled &&
+  const operatorAllowsUpload = networkEnabled &&
     policy.uploadPermission === 'enabled' &&
     policy.uploadCeilingBytes > 0
+  // The rule at this branch: a published decision governs the byte path and the
+  // operator enums may only narrow it; `participation === null` means no decision
+  // has ever been published, and then the operator policy is the only authority
+  // there is. That case is deliberately not read as "suspended" - a headless
+  // relay or seeder never evaluates participation, and refusing every block
+  // request on a process whose whole job is serving would be a far worse lie
+  // than serving under the operator's own policy. Every path that reports a
+  // participation status publishes the decision behind it (see
+  // createNetworkLifecycleApi), so a reported status and the transport cannot
+  // disagree; the archive gate is stricter still and fails closed until a
+  // decision exists, because custody is a promise to someone else.
+  const uploadAllowed = operatorAllowsUpload &&
+    (participation === null || participation.upload === true)
+  // The outbound rate belongs to the participation preset, not to whichever
+  // manager happens to need it: every consumer reads it from here, and the
+  // decision's rate wins wherever it is the tighter of the two.
+  const limits = participationLimitsFor(policy.participationMode)
+  const decidedRate = participation === null ? null : participation.outboundBytesPerSecond
   return {
     ...policy,
     networkMode,
     networkEnabled,
     uploadAllowed,
+    outboundBytesPerSecond: decidedRate === null
+      ? limits.outboundBytesPerSecond
+      : Math.min(limits.outboundBytesPerSecond, decidedRate),
   }
+}
+
+// Only two things about a participation decision reach the transport: whether
+// this device may serve bytes at all, and how fast. Reducing a decision to that
+// pair is what lets a status poll which changed neither skip a full manager
+// reconfiguration.
+function transportTermsOf(decision) {
+  if (decision == null) return null
+  return Object.freeze({
+    upload: decision.upload === true,
+    outboundBytesPerSecond: participationRate(decision.outboundBytesPerSecond),
+  })
+}
+
+function sameTransportTerms(left, right) {
+  if (left === right) return true
+  if (left === null || right === null) return false
+  return left.upload === right.upload &&
+    left.outboundBytesPerSecond === right.outboundBytesPerSecond
 }
 
 export function createNetworkPolicyRuntime({
@@ -202,6 +375,7 @@ export function createNetworkPolicyRuntime({
   background = false,
   suspendTransport = null,
   resumeTransport = null,
+  participationDecision = null,
 } = {}) {
   let policy = normalizeNetworkPolicy(initialPolicy, DEFAULT_NETWORK_POLICY)
   const environment = { metered: metered === true, background: background === true }
@@ -210,6 +384,9 @@ export function createNetworkPolicyRuntime({
   let transition = Promise.resolve()
   let appliedIndexes = new Set()
   let appliedModerationFeeds = new Set()
+  // The last participation decision published by the decision authority. Null
+  // means nothing has published one yet, not that this device was cleared.
+  let participation = transportTermsOf(participationDecision)
 
   const runTransition = operation => {
     const next = transition.then(operation, operation)
@@ -274,19 +451,40 @@ export function createNetworkPolicyRuntime({
     appliedModerationFeeds = moderation
   }
 
+  // The reserved bytes an archive has already promised to keep. Custody is a
+  // promise this device made; a ceiling that shrinks under it takes away free
+  // headroom, never a pledge, so the capacity handed to the archive is floored
+  // here instead of failing the whole save.
+  const reservedArchiveBytes = () => {
+    let status = null
+    try {
+      status = archiveNetwork?.getStatus?.()
+    } catch {
+      return 0
+    }
+    const reserved = Number(status?.reservedBytes)
+    return Number.isSafeInteger(reserved) && reserved > 0 ? reserved : 0
+  }
+
   const applyNow = async nextInput => {
     const nextPolicy = normalizeSupported(nextInput)
-    const effective = resolveNetworkPolicyForEnvironment(nextPolicy, environment)
+    const effective = resolveNetworkPolicyForEnvironment(nextPolicy, environment, participation)
 
-    await scopedNetwork?.applyNetworkPolicy?.(effective)
+    const applied = await scopedNetwork?.applyNetworkPolicy?.(effective)
     await reconcileFeedSubscriptions(nextPolicy)
     await seedingManager?.applyNetworkPolicy?.({
       diskCeilingBytes: nextPolicy.diskCeilingBytes,
       retentionMode: nextPolicy.retentionMode,
+      uploadAllowed: effective.uploadAllowed,
+      // The transport reports the rate it actually enforces; the policy value is
+      // only the request. Seeding reports what is enforced, never a hopeful
+      // number nothing is holding it to.
+      outboundBytesPerSecond: applied?.outboundBytesPerSecond ?? effective.outboundBytesPerSecond,
+      outboundRateEnforced: applied?.outboundRateEnforced === true,
     })
     const archiveResult = await archiveNetwork?.setParticipation?.({
       enabled: nextPolicy.retentionMode === 'archive-pledges',
-      capacityBytes: nextPolicy.diskCeilingBytes,
+      capacityBytes: Math.max(nextPolicy.diskCeilingBytes, reservedArchiveBytes()),
     })
     if (archiveResult?.errorCode) {
       const error = new Error(archiveResult.errorCode)
@@ -320,7 +518,7 @@ export function createNetworkPolicyRuntime({
       return normalizeSupported(candidate)
     },
     start(candidate = policy) {
-      if (started) return transition.then(() => resolveNetworkPolicyForEnvironment(policy, environment))
+      if (started) return transition.then(() => resolveNetworkPolicyForEnvironment(policy, environment, participation))
       started = true
       return runTransition(() => applyTransactional(candidate))
     },
@@ -342,11 +540,44 @@ export function createNetworkPolicyRuntime({
         return effective
       })
     },
+    /**
+     * Publish the current participation decision. This is the authority over
+     * the byte path: the operator enums may narrow what it permits, and nothing
+     * may widen it. A decision that changes neither of the two terms the
+     * transport cares about costs nothing, so a device may poll its status as
+     * often as it likes without reconfiguring every manager.
+     */
+    setParticipationDecision(decision) {
+      const next = transportTermsOf(decision)
+      if (sameTransportTerms(next, participation)) {
+        return transition.then(() => resolveNetworkPolicyForEnvironment(policy, environment, participation))
+      }
+      if (!started) {
+        // Nothing is configured before startup, so there is nothing to reapply:
+        // start() will resolve the policy against this decision.
+        participation = next
+        return transition.then(() => resolveNetworkPolicyForEnvironment(policy, environment, participation))
+      }
+      return runTransition(async () => {
+        const previous = participation
+        participation = next
+        try {
+          return await applyNow(policy)
+        } catch (error) {
+          participation = previous
+          await applyNow(policy).catch(() => {})
+          throw error
+        }
+      })
+    },
+    getParticipationDecision() {
+      return participation
+    },
     getPolicy() {
       return policy
     },
     getEnvironment() {
-      return { ...environment, transportSuspended }
+      return { ...environment, transportSuspended, participation }
     },
   }
 }
@@ -443,7 +674,14 @@ export function createPolicyApi({
               throw profileLinkedFieldError()
             }
           }
-          const policy = withProfileModerationFeeds(normalizeNetworkPolicy(patch, base))
+          const withCeilings = applyParticipationCeilings(
+            normalizeNetworkPolicy(patch, base),
+            base,
+            patch,
+          )
+          const policy = withProfileModerationFeeds(
+            applyOperatorOverrides(withCeilings, base, patch),
+          )
           return await applyPolicy(policy)
         } catch (err) {
           return rejection(err)

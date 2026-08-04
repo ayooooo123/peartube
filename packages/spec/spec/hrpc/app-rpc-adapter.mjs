@@ -1671,6 +1671,54 @@ export const APP_RPC_METADATA = Object.freeze({
       "send": true,
       "requestStream": false,
       "responseStream": false
+    },
+    {
+      "id": 148,
+      "command": "get-participation-status",
+      "method": "getParticipationStatus",
+      "handler": "GetParticipationStatus",
+      "request": "@peartube/get-participation-status-request",
+      "response": "@peartube/get-participation-status-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 149,
+      "command": "set-device-conditions",
+      "method": "setDeviceConditions",
+      "handler": "SetDeviceConditions",
+      "request": "@peartube/set-device-conditions-request",
+      "response": "@peartube/set-device-conditions-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false,
+      "presenceFields": [
+        {
+          "field": "metered",
+          "flag": "meteredProvided"
+        },
+        {
+          "field": "batteryPercent",
+          "flag": "batteryPercentProvided"
+        },
+        {
+          "field": "charging",
+          "flag": "chargingProvided"
+        },
+        {
+          "field": "backgroundPermitted",
+          "flag": "backgroundPermittedProvided"
+        },
+        {
+          "field": "freeDiskBytes",
+          "flag": "freeDiskBytesProvided"
+        },
+        {
+          "field": "totalDiskBytes",
+          "flag": "totalDiskBytesProvided"
+        }
+      ]
     }
   ],
   "namespaces": {
@@ -1737,6 +1785,54 @@ export const APP_RPC_METADATA = Object.freeze({
           {
             "field": "uploadCeilingBytes",
             "flag": "uploadCeilingBytesPresent"
+          }
+        ]
+      },
+      {
+        "id": 148,
+        "command": "get-participation-status",
+        "method": "getParticipationStatus",
+        "handler": "GetParticipationStatus",
+        "request": "@peartube/get-participation-status-request",
+        "response": "@peartube/get-participation-status-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
+        "id": 149,
+        "command": "set-device-conditions",
+        "method": "setDeviceConditions",
+        "handler": "SetDeviceConditions",
+        "request": "@peartube/set-device-conditions-request",
+        "response": "@peartube/set-device-conditions-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false,
+        "presenceFields": [
+          {
+            "field": "metered",
+            "flag": "meteredProvided"
+          },
+          {
+            "field": "batteryPercent",
+            "flag": "batteryPercentProvided"
+          },
+          {
+            "field": "charging",
+            "flag": "chargingProvided"
+          },
+          {
+            "field": "backgroundPermitted",
+            "flag": "backgroundPermittedProvided"
+          },
+          {
+            "field": "freeDiskBytes",
+            "flag": "freeDiskBytesProvided"
+          },
+          {
+            "field": "totalDiskBytes",
+            "flag": "totalDiskBytesProvided"
           }
         ]
       },
@@ -3243,6 +3339,7 @@ export const APP_RPC_METADATA = Object.freeze({
     "get-media-entity",
     "get-migration-status",
     "get-network-policy",
+    "get-participation-status",
     "get-personal-settings",
     "get-pinned-channels",
     "get-playlist-items",
@@ -3298,6 +3395,7 @@ export const APP_RPC_METADATA = Object.freeze({
     "search-videos",
     "set-active-identity",
     "set-archive-participation",
+    "set-device-conditions",
     "set-network-policy",
     "set-personal-setting",
     "set-seeding-config",

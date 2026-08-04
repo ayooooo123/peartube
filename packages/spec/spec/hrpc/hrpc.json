@@ -1888,6 +1888,32 @@
         "send": true
       },
       "version": 1
+    },
+    {
+      "id": 148,
+      "name": "@peartube/get-participation-status",
+      "request": {
+        "name": "@peartube/get-participation-status-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-participation-status-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 149,
+      "name": "@peartube/set-device-conditions",
+      "request": {
+        "name": "@peartube/set-device-conditions-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/set-device-conditions-response",
+        "stream": false
+      },
+      "version": 1
     }
   ]
 }

@@ -7,8 +7,17 @@
 
 import { normalizeBlobsCoreKey, normalizeBlobRefInput, stringifyBlobId } from './blob-ref.js';
 import { collectCorestoreGarbage } from './corestore-gc.js';
+import {
+  DEFAULT_PARTICIPATION_MODE,
+  PARTICIPATION_LIMITS,
+} from './playback/resource-policy.js';
 
 const DEFAULT_STORAGE_MAINTENANCE_DELAY_MS = 30000
+const BYTES_PER_GB = 1024 * 1024 * 1024
+// The cache ceiling is decided by the participation policy; this manager reads
+// it rather than keeping a second opinion. It is only a pre-policy starting
+// value: applyNetworkPolicy replaces it on the first policy application.
+const DEFAULT_PARTICIPATION_LIMITS = PARTICIPATION_LIMITS[DEFAULT_PARTICIPATION_MODE]
 
 export const STORAGE_CATEGORY_FIELDS = Object.freeze([
   'ownedOriginalBytes',
@@ -181,10 +190,26 @@ export class SeedingManager {
     this._storageMaintenancePendingLabel = null;
     /** @type {SeedingConfig} */
     this.config = {
-      maxStorageGB: 5,            // Default 5GB quota for seeded peer content
+      // The seeded-content quota is the participation cache ceiling, not a
+      // number chosen here: a fresh install runs Balanced, so it is 20 GiB.
+      maxStorageGB: DEFAULT_PARTICIPATION_LIMITS.cacheCeilingBytes / BYTES_PER_GB,
       autoSeedWatched: true,      // Automatically seed videos you watch
       autoSeedSubscribed: false,  // Automatically seed subscribed channels (opt-in)
       maxVideosPerChannel: 10     // Max videos to seed per channel if auto-seeding subscriptions
+    };
+    /**
+     * What this device is actually permitted to send, as confirmed by the
+     * component that enforces it. This manager enforces nothing on the
+     * outbound path - the scoped network transport does - so it reports a rate
+     * only when the transport has said it is applying that exact rate. A
+     * number nobody enforces is worse than no number: it reads like a cap in
+     * getStatus() and in the UI while the uplink runs flat out.
+     * @type {{uploadAllowed: boolean, outboundBytesPerSecond: number | null, outboundRateEnforced: boolean}}
+     */
+    this.contribution = {
+      uploadAllowed: false,
+      outboundBytesPerSecond: null,
+      outboundRateEnforced: false,
     };
     console.log('[SeedingManager] Initialized');
   }
@@ -460,15 +485,30 @@ export class SeedingManager {
     console.log('[SeedingManager] Updated config:', this.config);
   }
 
-  async applyNetworkPolicy({ diskCeilingBytes } = {}) {
+  async applyNetworkPolicy({
+    diskCeilingBytes,
+    uploadAllowed,
+    outboundBytesPerSecond,
+    outboundRateEnforced,
+  } = {}) {
     const ceiling = Number(diskCeilingBytes)
     if (!Number.isSafeInteger(ceiling) || ceiling < 0) {
       throw new TypeError('diskCeilingBytes must be a non-negative safe integer')
     }
-    const previousBytes = this.config.maxStorageGB * 1024 * 1024 * 1024
+    // Only the transport that applied the rate may claim it. Without that
+    // confirmation there is no cap to report, whatever number was requested.
+    const outbound = Number(outboundBytesPerSecond)
+    const enforced = outboundRateEnforced === true &&
+      Number.isSafeInteger(outbound) && outbound >= 0
+    this.contribution = {
+      uploadAllowed: uploadAllowed === true,
+      outboundBytesPerSecond: enforced ? outbound : null,
+      outboundRateEnforced: enforced,
+    }
+    const previousBytes = this.config.maxStorageGB * BYTES_PER_GB
     this.config = {
       ...this.config,
-      maxStorageGB: ceiling / (1024 * 1024 * 1024)
+      maxStorageGB: ceiling / BYTES_PER_GB
     }
     await this.metaDb.put('seeding-config', this.config)
     if (ceiling < previousBytes) {
@@ -476,7 +516,7 @@ export class SeedingManager {
       if (partials.clearedBlob) await this.flushClearedBlobRanges('policy partial download clear')
     }
     await this.enforceQuota()
-    return { diskCeilingBytes: ceiling }
+    return { diskCeilingBytes: ceiling, ...this.contribution }
   }
 
   /**
@@ -491,6 +531,7 @@ export class SeedingManager {
       storageUsedBytes: storageUsed,
       storageUsedGB: (storageUsed / (1024 * 1024 * 1024)).toFixed(2),
       maxStorageGB: this.config.maxStorageGB,
+      contribution: { ...this.contribution },
       config: this.config,
       seeds: Array.from(this.activeSeeds.values()).map(s => ({
         videoPath: s.videoPath,

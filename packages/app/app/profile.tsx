@@ -1,5 +1,6 @@
 /**
- * Profile — identity, devices, storage & network support, advanced settings.
+ * Profile — identity, devices, how this device helps the network, storage,
+ * advanced settings.
  * Replaces the old Settings tab (which now redirects here).
  */
 import { useCallback, useEffect, useState } from 'react'
@@ -42,6 +43,14 @@ import {
   type StorageCategoryStats,
   type StorageLimitPreview,
 } from '@/lib/storage-operability.js'
+import { useDeviceConditionsReporter, useNetworkPolicy, useParticipationStatus } from '@/hooks/useNetworkPolicy'
+import {
+  PARTICIPATION_MODE_OPTIONS,
+  PARTICIPATION_STATE_COPY,
+  PARTICIPATION_UNAVAILABLE_COPY,
+  participationReasonCopy,
+  type ParticipationMode,
+} from '@/lib/network-policy'
 
 interface StorageStats extends StorageCategoryStats {
   usedBytes: number
@@ -78,13 +87,13 @@ interface PersonalDevice {
   self?: boolean
 }
 
-/** Network-support presets are cache budgets — the knob that actually feeds peers. */
-const SUPPORT_PRESETS: Array<{ label: string; gb: number; blurb: string }> = [
-  { label: 'Light', gb: 5, blurb: 'Host a little for the network' },
-  { label: 'Balanced', gb: 20, blurb: 'A solid contribution' },
-  { label: 'Generous', gb: 50, blurb: 'Keep lots of videos alive' },
-]
-
+/**
+ * There is exactly one contribution choice on this screen: the participation
+ * mode. The old Light/Balanced/Generous cache presets wrote the same seeding
+ * budget the mode now decides, so two controls disagreed about how much this
+ * device helps. The exact byte ceiling stays available to operators in
+ * Developer Settings and in the developer-gated field on the storage card.
+ */
 const GIB = 1024 ** 3
 
 /** Personal-store invites are single-use; the backend clamps anything longer. */
@@ -179,6 +188,18 @@ export default function ProfileScreen() {
   const [archiveOperatorStatus, setArchiveOperatorStatus] = useState<ArchiveOperatorStatus | null>(null)
   const diagnosticsDestination = developerModeDestination(developerMode.enabled, '/profile?developer=diagnostics')
   const showIdentityTools = canShowIdentityTools(developerMode.enabled)
+
+  // The contribution choice and its live state both come from the backend. The
+  // screen only picks a mode and renders what the resource policy reports; it
+  // never decides locally whether this device is eligible or uploading.
+  const networkPolicy = useNetworkPolicy(rpc)
+  const participation = useParticipationStatus(rpc)
+  // The status below is only as truthful as the signals the backend holds, and
+  // the desktop shell has its own root layout, so the card reports this
+  // device's OS signals for as long as it is on screen. The reporter is shared
+  // per backend connection, so mounting it here as well costs nothing.
+  useDeviceConditionsReporter(rpc)
+  const [participationSaving, setParticipationSaving] = useState(false)
 
 
   const loadStorageStats = useCallback(async () => {
@@ -450,6 +471,25 @@ export default function ProfileScreen() {
     await handleStorageLimitChange(parsed)
   }
 
+  /**
+   * Record the viewer's choice and re-read the backend. The new ceilings and
+   * the new contribution state are both the backend's answer, so nothing here
+   * predicts them: the card keeps showing the previous reported state until the
+   * policy has actually been re-read. `update` reports a rejected save through
+   * `networkPolicy.error`, so there is no success signal to fire here.
+   */
+  const handleParticipationModeChange = async (participationMode: ParticipationMode) => {
+    if (!rpc || participationSaving) return
+    setParticipationSaving(true)
+    try {
+      await networkPolicy.update({ participationMode })
+      await participation.reload()
+      await loadStorageStats()
+    } finally {
+      setParticipationSaving(false)
+    }
+  }
+
   const handleClearCache = () => {
     if (!rpc) return
     confirmDestructive(
@@ -666,7 +706,9 @@ export default function ProfileScreen() {
 
           {renderPrivacyCard()}
 
-          <SectionHeader title="Network cache" subtitle="Works even without a channel" />
+          {renderParticipationCard()}
+
+          <SectionHeader title="Storage used for sharing" subtitle="Works even without a channel" />
           {renderStorageCard()}
 
           {developerModeCard}
@@ -927,9 +969,105 @@ export default function ProfileScreen() {
     )
   }
 
+  /**
+   * The one contribution control a normal viewer sees. It writes a mode and
+   * renders `getParticipationStatus`; it never evaluates a gate itself, so it
+   * cannot claim this device is helping when the backend says it is suspended.
+   */
+  function renderParticipationCard() {
+    const selectedMode = networkPolicy.policy?.participationMode ?? null
+    const status = participation.status
+    const stateCopy = status ? PARTICIPATION_STATE_COPY[status.state] : null
+    const stateColor = !status
+      ? colors.textMuted
+      : status.state === 'uploading' ? colors.success
+      : status.state === 'eligible' ? colors.swarm
+      : colors.warning
+    const busy = participationSaving || networkPolicy.saving
+    const locked = busy || !networkPolicy.policy
+    return (
+      <>
+        <SectionHeader title="How you help" subtitle="Sharing what you have watched keeps it reachable for other viewers" />
+        <GlassCard style={styles.sectionCard}>
+          <View style={styles.participationStateRow}>
+            <View style={[styles.participationDot, { backgroundColor: stateColor }]} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.cardTitle}>
+                {stateCopy ? stateCopy.label : participation.loading ? 'Checking…' : 'Contribution status unavailable'}
+              </Text>
+              <Text style={styles.cardMeta}>
+                {stateCopy
+                  ? stateCopy.detail
+                  : participation.loading
+                    ? 'Reading this device\u2019s contribution state.'
+                    : 'This device could not read its contribution state, so it is not reporting one.'}
+              </Text>
+            </View>
+          </View>
+
+          {status && (status.errorCode || status.reasonCodes.length > 0) ? (
+            <View style={styles.participationReasons}>
+              {status.errorCode ? (
+                <Text style={styles.participationReason}>{`\u2022  ${PARTICIPATION_UNAVAILABLE_COPY}`}</Text>
+              ) : null}
+              {status.reasonCodes.map((code) => (
+                <Text key={code} style={styles.participationReason}>{`\u2022  ${participationReasonCopy(code)}`}</Text>
+              ))}
+            </View>
+          ) : null}
+
+          {!status && participation.error ? (
+            <View style={styles.participationReasons}>
+              <Text style={styles.participationReason}>{participation.error}</Text>
+            </View>
+          ) : null}
+
+          <View style={styles.participationModes} accessibilityRole="radiogroup">
+            {PARTICIPATION_MODE_OPTIONS.map((option) => {
+              const selected = selectedMode === option.value
+              return (
+                <Pressable
+                  key={option.value}
+                  onPress={() => { void handleParticipationModeChange(option.value) }}
+                  disabled={locked}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected, disabled: locked }}
+                  style={[
+                    styles.participationMode,
+                    selected && styles.participationModeSelected,
+                    locked && { opacity: 0.7 },
+                  ]}
+                >
+                  <View style={styles.participationModeHeader}>
+                    <Text style={[styles.participationModeLabel, selected && { color: colors.onPrimary }]}>{option.label}</Text>
+                    {selected ? <Feather name="check" size={15} color={colors.onPrimary} /> : null}
+                  </View>
+                  <Text style={[styles.participationModeDetail, selected && { color: colors.onPrimary, opacity: 0.85 }]}>
+                    {option.detail}
+                  </Text>
+                </Pressable>
+              )
+            })}
+          </View>
+
+          {networkPolicy.error ? (
+            <Text accessibilityRole="alert" style={styles.developerModeError}>{networkPolicy.error}</Text>
+          ) : null}
+
+          <Text style={styles.participationFootnote}>
+            When your system reports that this device is warm, low on battery, low on storage, on a
+            metered connection, or not allowed to work in the background, it stops on its own. Where
+            it cannot read one of those signals it keeps background sharing off rather than guess.
+            Helping is best effort: nothing here promises a video stays online, and none of these
+            choices creates an archive pledge.
+          </Text>
+        </GlassCard>
+      </>
+    )
+  }
+
   // ---------- Authenticated profile ----------
   function renderStorageCard() {
-    const currentGB = storageStats?.maxGB ?? null
     return (
       <GlassCard style={styles.sectionCard}>
         <View style={styles.storageHeader}>
@@ -974,41 +1112,40 @@ export default function ProfileScreen() {
 
         <StorageOperabilityDetails stats={storageStats} preview={storageLimitPreview} />
 
-        <View style={styles.presetRow}>
-          {SUPPORT_PRESETS.map((preset) => {
-            const selected = currentGB === preset.gb
-            return (
-              <Pressable
-                key={preset.label}
-                onPress={() => handleStorageLimitChange(preset.gb)}
-                disabled={storageLimitSaving}
-                style={[styles.preset, selected && styles.presetSelected, storageLimitSaving && { opacity: 0.7 }]}
-              >
-                <Text style={[styles.presetLabel, selected && { color: colors.onPrimary }]}>{preset.label}</Text>
-                <Text style={[styles.presetGb, selected && { color: colors.onPrimary, opacity: 0.8 }]}>{preset.gb} GB</Text>
-              </Pressable>
-            )
-          })}
-        </View>
+        <Text style={styles.cardMeta}>
+          Your sharing choice above sets this budget, unless a different one has been set in
+          Developer Settings. Cached video is evicted to stay inside it.
+        </Text>
 
-        <View style={styles.customRow}>
-          <TextInput
-            value={customStorageLimit}
-            onChangeText={setCustomStorageLimit}
-            onSubmitEditing={handleCustomStorageLimitApply}
-            keyboardType="numeric"
-            placeholder="Custom GB"
-            placeholderTextColor={colors.textMuted}
-            style={[styles.input, { flex: 1, marginBottom: 0 }]}
-          />
-          <Pressable
-            onPress={handleCustomStorageLimitApply}
-            disabled={storageLimitSaving}
-            style={[styles.secondaryButton, { marginTop: 0, paddingHorizontal: 16 }, storageLimitSaving && { opacity: 0.7 }]}
-          >
-            <Text style={styles.secondaryLabel}>{storageLimitSaving ? 'Saving…' : 'Set'}</Text>
-          </Pressable>
-        </View>
+        {developerMode.enabled ? (
+          <View style={styles.developerLimitBlock}>
+            <Text style={styles.advancedFieldLabel}>Cache budget override (GB)</Text>
+            <Text style={styles.cardMeta}>
+              The same disk ceiling Developer Settings › Network policy edits. Set it to anything other
+              than the sharing choice's own value and it stops following that choice in either
+              direction; set it back and it follows again. Lowering it previews and confirms eviction
+              before anything is removed.
+            </Text>
+            <View style={[styles.customRow, { marginTop: 10 }]}>
+              <TextInput
+                value={customStorageLimit}
+                onChangeText={setCustomStorageLimit}
+                onSubmitEditing={handleCustomStorageLimitApply}
+                keyboardType="numeric"
+                placeholder="Custom GB"
+                placeholderTextColor={colors.textMuted}
+                style={[styles.input, { flex: 1, marginBottom: 0 }]}
+              />
+              <Pressable
+                onPress={handleCustomStorageLimitApply}
+                disabled={storageLimitSaving}
+                style={[styles.secondaryButton, { marginTop: 0, paddingHorizontal: 16 }, storageLimitSaving && { opacity: 0.7 }]}
+              >
+                <Text style={styles.secondaryLabel}>{storageLimitSaving ? 'Saving…' : 'Set'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
 
         {storageStats && storageStats.pinnedCount > 0 ? (
           <Text style={styles.pinnedNote}>
@@ -1080,8 +1217,10 @@ export default function ProfileScreen() {
 
         {renderPrivacyCard()}
 
-        {/* Storage / network support */}
-        <SectionHeader title="Network support" subtitle="Cache space you donate to keep videos alive" />
+        {renderParticipationCard()}
+
+        {/* What the sharing choice above is actually using on disk. */}
+        <SectionHeader title="Storage used for sharing" subtitle="Cache space this device is holding for other viewers" />
         {renderStorageCard()}
 
         {developerModeCard}
@@ -1433,33 +1572,76 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  presetRow: {
+  participationStateRow: {
     flexDirection: 'row',
-    gap: 8,
-    marginBottom: 10,
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 12,
   },
-  preset: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderRadius: 12,
+  participationDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    marginTop: 5,
+  },
+  participationReasons: {
     backgroundColor: colors.glass,
     borderWidth: 1,
     borderColor: colors.glassBorder,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    gap: 6,
+    marginBottom: 14,
   },
-  presetSelected: {
+  participationReason: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  participationModes: {
+    gap: 8,
+  },
+  participationMode: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.glassBorder,
+    backgroundColor: colors.glass,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  participationModeSelected: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
-  presetLabel: {
+  participationModeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  participationModeLabel: {
     color: colors.text,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
   },
-  presetGb: {
+  participationModeDetail: {
     color: colors.textMuted,
-    fontSize: 11,
-    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 4,
+  },
+  participationFootnote: {
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 14,
+  },
+  developerLimitBlock: {
+    borderTopWidth: 1,
+    borderTopColor: colors.glassBorder,
+    marginTop: 14,
+    paddingTop: 14,
   },
   customRow: {
     flexDirection: 'row',

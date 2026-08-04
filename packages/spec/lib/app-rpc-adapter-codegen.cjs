@@ -11,6 +11,8 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'get-blob-server-port',
     'get-network-policy',
     'set-network-policy',
+    'get-participation-status',
+    'set-device-conditions',
     'get-migration-status',
     'retry-migration',
     'export-migration-report'

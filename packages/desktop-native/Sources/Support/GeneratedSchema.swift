@@ -13114,8 +13114,9 @@ public struct GetNetworkPolicyResponse {
   public var followedIndexesJson: String?
   public var trustedModerationFeedsJson: String?
   public var aiAnalysis: String?
+  public var participationMode: String?
 
-  public init(uploadPermission: String? = nil, meteredNetwork: String? = nil, backgroundMode: String? = nil, diskCeilingBytes: UInt? = nil, uploadCeilingBytes: UInt? = nil, retentionMode: String? = nil, followedPublishersJson: String? = nil, followedIndexesJson: String? = nil, trustedModerationFeedsJson: String? = nil, aiAnalysis: String? = nil) {
+  public init(uploadPermission: String? = nil, meteredNetwork: String? = nil, backgroundMode: String? = nil, diskCeilingBytes: UInt? = nil, uploadCeilingBytes: UInt? = nil, retentionMode: String? = nil, followedPublishersJson: String? = nil, followedIndexesJson: String? = nil, trustedModerationFeedsJson: String? = nil, aiAnalysis: String? = nil, participationMode: String? = nil) {
     self.uploadPermission = uploadPermission
     self.meteredNetwork = meteredNetwork
     self.backgroundMode = backgroundMode
@@ -13126,6 +13127,7 @@ public struct GetNetworkPolicyResponse {
     self.followedIndexesJson = followedIndexesJson
     self.trustedModerationFeedsJson = trustedModerationFeedsJson
     self.aiAnalysis = aiAnalysis
+    self.participationMode = participationMode
   }
 }
 
@@ -13138,6 +13140,7 @@ public struct GetNetworkPolicyResponseCodec: Codec {
   let _followedIndexesJsonCodec = Primitive.UTF8()
   let _followedPublishersJsonCodec = Primitive.UTF8()
   let _meteredNetworkCodec = Primitive.UTF8()
+  let _participationModeCodec = Primitive.UTF8()
   let _retentionModeCodec = Primitive.UTF8()
   let _trustedModerationFeedsJsonCodec = Primitive.UTF8()
   let _uploadCeilingBytesCodec = Primitive.UInt()
@@ -13158,6 +13161,7 @@ public struct GetNetworkPolicyResponseCodec: Codec {
     if value.followedIndexesJson != nil { flags |= 128 }
     if value.trustedModerationFeedsJson != nil { flags |= 256 }
     if value.aiAnalysis != nil { flags |= 512 }
+    if value.participationMode != nil { flags |= 1024 }
 
     Primitive.UInt().preencode(&state, flags)
     if let v = value.uploadPermission { _uploadPermissionCodec.preencode(&state, v) }
@@ -13170,6 +13174,7 @@ public struct GetNetworkPolicyResponseCodec: Codec {
     if let v = value.followedIndexesJson { _followedIndexesJsonCodec.preencode(&state, v) }
     if let v = value.trustedModerationFeedsJson { _trustedModerationFeedsJsonCodec.preencode(&state, v) }
     if let v = value.aiAnalysis { _aiAnalysisCodec.preencode(&state, v) }
+    if let v = value.participationMode { _participationModeCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: GetNetworkPolicyResponse) throws {
@@ -13184,6 +13189,7 @@ public struct GetNetworkPolicyResponseCodec: Codec {
     if value.followedIndexesJson != nil { flags |= 128 }
     if value.trustedModerationFeedsJson != nil { flags |= 256 }
     if value.aiAnalysis != nil { flags |= 512 }
+    if value.participationMode != nil { flags |= 1024 }
 
     try Primitive.UInt().encode(&state, flags)
     if let v = value.uploadPermission { try _uploadPermissionCodec.encode(&state, v) }
@@ -13196,6 +13202,7 @@ public struct GetNetworkPolicyResponseCodec: Codec {
     if let v = value.followedIndexesJson { try _followedIndexesJsonCodec.encode(&state, v) }
     if let v = value.trustedModerationFeedsJson { try _trustedModerationFeedsJsonCodec.encode(&state, v) }
     if let v = value.aiAnalysis { try _aiAnalysisCodec.encode(&state, v) }
+    if let v = value.participationMode { try _participationModeCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> GetNetworkPolicyResponse {
@@ -13210,6 +13217,7 @@ public struct GetNetworkPolicyResponseCodec: Codec {
     let _r7: String? = (flags & 128) != 0 ? try _followedIndexesJsonCodec.decode(&state) : nil
     let _r8: String? = (flags & 256) != 0 ? try _trustedModerationFeedsJsonCodec.decode(&state) : nil
     let _r9: String? = (flags & 512) != 0 ? try _aiAnalysisCodec.decode(&state) : nil
+    let _r10: String? = (flags & 1024) != 0 ? try _participationModeCodec.decode(&state) : nil
     return GetNetworkPolicyResponse(
       uploadPermission: _r0,
       meteredNetwork: _r1,
@@ -13220,7 +13228,8 @@ public struct GetNetworkPolicyResponseCodec: Codec {
       followedPublishersJson: _r6,
       followedIndexesJson: _r7,
       trustedModerationFeedsJson: _r8,
-      aiAnalysis: _r9
+      aiAnalysis: _r9,
+      participationMode: _r10
     )
   }
 }
@@ -13241,8 +13250,9 @@ public struct SetNetworkPolicyRequest {
   public var followedIndexesJson: String?
   public var trustedModerationFeedsJson: String?
   public var aiAnalysis: String?
+  public var participationMode: String?
 
-  public init(uploadPermission: String? = nil, meteredNetwork: String? = nil, backgroundMode: String? = nil, diskCeilingBytes: UInt? = nil, uploadCeilingBytes: UInt? = nil, diskCeilingBytesPresent: Bool = false, uploadCeilingBytesPresent: Bool = false, retentionMode: String? = nil, followedPublishersJson: String? = nil, followedIndexesJson: String? = nil, trustedModerationFeedsJson: String? = nil, aiAnalysis: String? = nil) {
+  public init(uploadPermission: String? = nil, meteredNetwork: String? = nil, backgroundMode: String? = nil, diskCeilingBytes: UInt? = nil, uploadCeilingBytes: UInt? = nil, diskCeilingBytesPresent: Bool = false, uploadCeilingBytesPresent: Bool = false, retentionMode: String? = nil, followedPublishersJson: String? = nil, followedIndexesJson: String? = nil, trustedModerationFeedsJson: String? = nil, aiAnalysis: String? = nil, participationMode: String? = nil) {
     self.uploadPermission = uploadPermission
     self.meteredNetwork = meteredNetwork
     self.backgroundMode = backgroundMode
@@ -13255,6 +13265,7 @@ public struct SetNetworkPolicyRequest {
     self.followedIndexesJson = followedIndexesJson
     self.trustedModerationFeedsJson = trustedModerationFeedsJson
     self.aiAnalysis = aiAnalysis
+    self.participationMode = participationMode
   }
 }
 
@@ -13267,6 +13278,7 @@ public struct SetNetworkPolicyRequestCodec: Codec {
   let _followedIndexesJsonCodec = Primitive.UTF8()
   let _followedPublishersJsonCodec = Primitive.UTF8()
   let _meteredNetworkCodec = Primitive.UTF8()
+  let _participationModeCodec = Primitive.UTF8()
   let _retentionModeCodec = Primitive.UTF8()
   let _trustedModerationFeedsJsonCodec = Primitive.UTF8()
   let _uploadCeilingBytesCodec = Primitive.UInt()
@@ -13289,6 +13301,7 @@ public struct SetNetworkPolicyRequestCodec: Codec {
     if value.followedIndexesJson != nil { flags |= 512 }
     if value.trustedModerationFeedsJson != nil { flags |= 1024 }
     if value.aiAnalysis != nil { flags |= 2048 }
+    if value.participationMode != nil { flags |= 4096 }
 
     Primitive.UInt().preencode(&state, flags)
     if let v = value.uploadPermission { _uploadPermissionCodec.preencode(&state, v) }
@@ -13301,6 +13314,7 @@ public struct SetNetworkPolicyRequestCodec: Codec {
     if let v = value.followedIndexesJson { _followedIndexesJsonCodec.preencode(&state, v) }
     if let v = value.trustedModerationFeedsJson { _trustedModerationFeedsJsonCodec.preencode(&state, v) }
     if let v = value.aiAnalysis { _aiAnalysisCodec.preencode(&state, v) }
+    if let v = value.participationMode { _participationModeCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: SetNetworkPolicyRequest) throws {
@@ -13317,6 +13331,7 @@ public struct SetNetworkPolicyRequestCodec: Codec {
     if value.followedIndexesJson != nil { flags |= 512 }
     if value.trustedModerationFeedsJson != nil { flags |= 1024 }
     if value.aiAnalysis != nil { flags |= 2048 }
+    if value.participationMode != nil { flags |= 4096 }
 
     try Primitive.UInt().encode(&state, flags)
     if let v = value.uploadPermission { try _uploadPermissionCodec.encode(&state, v) }
@@ -13329,6 +13344,7 @@ public struct SetNetworkPolicyRequestCodec: Codec {
     if let v = value.followedIndexesJson { try _followedIndexesJsonCodec.encode(&state, v) }
     if let v = value.trustedModerationFeedsJson { try _trustedModerationFeedsJsonCodec.encode(&state, v) }
     if let v = value.aiAnalysis { try _aiAnalysisCodec.encode(&state, v) }
+    if let v = value.participationMode { try _participationModeCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> SetNetworkPolicyRequest {
@@ -13343,6 +13359,7 @@ public struct SetNetworkPolicyRequestCodec: Codec {
     let _r7: String? = (flags & 512) != 0 ? try _followedIndexesJsonCodec.decode(&state) : nil
     let _r8: String? = (flags & 1024) != 0 ? try _trustedModerationFeedsJsonCodec.decode(&state) : nil
     let _r9: String? = (flags & 2048) != 0 ? try _aiAnalysisCodec.decode(&state) : nil
+    let _r10: String? = (flags & 4096) != 0 ? try _participationModeCodec.decode(&state) : nil
     return SetNetworkPolicyRequest(
       uploadPermission: _r0,
       meteredNetwork: _r1,
@@ -13355,7 +13372,8 @@ public struct SetNetworkPolicyRequestCodec: Codec {
       followedPublishersJson: _r6,
       followedIndexesJson: _r7,
       trustedModerationFeedsJson: _r8,
-      aiAnalysis: _r9
+      aiAnalysis: _r9,
+      participationMode: _r10
     )
   }
 }
@@ -20445,3 +20463,313 @@ public struct IndexVideoVectorsResponseCodec: Codec {
 }
 
 public let indexVideoVectorsResponse = IndexVideoVectorsResponseCodec()
+
+// @peartube/get-participation-status-request
+public struct GetParticipationStatusRequest {
+
+  public init() {}
+}
+
+public struct GetParticipationStatusRequestCodec: Codec {
+  public typealias Value = GetParticipationStatusRequest
+
+  public init() {}
+
+  public func preencode(_ state: inout State, _ value: GetParticipationStatusRequest) {
+  }
+
+  public func encode(_ state: inout State, _ value: GetParticipationStatusRequest) throws {
+  }
+
+  public func decode(_ state: inout State) throws -> GetParticipationStatusRequest {
+    return GetParticipationStatusRequest()
+  }
+}
+
+public let getParticipationStatusRequest = GetParticipationStatusRequestCodec()
+
+// @peartube/get-participation-status-response
+public struct GetParticipationStatusResponse {
+  public var success: Bool
+  public var mode: String
+  public var state: String
+  public var uploadEligible: Bool
+  public var uploading: Bool
+  public var backgroundEligible: Bool
+  public var cacheCeilingBytes: UInt
+  public var uploadCeilingBytesPer24h: UInt
+  public var uploadedBytesLast24h: UInt
+  public var outboundBytesPerSecond: UInt
+  public var postPlaybackGraceMs: UInt
+  public var backgroundRemainingSessionMs: UInt
+  public var backgroundRemainingDailyMs: UInt
+  public var reasonCodes: [String]
+  public var errorCode: String?
+
+  public init(success: Bool = false, mode: String, state: String, uploadEligible: Bool = false, uploading: Bool = false, backgroundEligible: Bool = false, cacheCeilingBytes: UInt, uploadCeilingBytesPer24h: UInt, uploadedBytesLast24h: UInt, outboundBytesPerSecond: UInt, postPlaybackGraceMs: UInt, backgroundRemainingSessionMs: UInt, backgroundRemainingDailyMs: UInt, reasonCodes: [String], errorCode: String? = nil) {
+    self.success = success
+    self.mode = mode
+    self.state = state
+    self.uploadEligible = uploadEligible
+    self.uploading = uploading
+    self.backgroundEligible = backgroundEligible
+    self.cacheCeilingBytes = cacheCeilingBytes
+    self.uploadCeilingBytesPer24h = uploadCeilingBytesPer24h
+    self.uploadedBytesLast24h = uploadedBytesLast24h
+    self.outboundBytesPerSecond = outboundBytesPerSecond
+    self.postPlaybackGraceMs = postPlaybackGraceMs
+    self.backgroundRemainingSessionMs = backgroundRemainingSessionMs
+    self.backgroundRemainingDailyMs = backgroundRemainingDailyMs
+    self.reasonCodes = reasonCodes
+    self.errorCode = errorCode
+  }
+}
+
+public struct GetParticipationStatusResponseCodec: Codec {
+  public typealias Value = GetParticipationStatusResponse
+
+  let _backgroundRemainingDailyMsCodec = Primitive.UInt()
+  let _backgroundRemainingSessionMsCodec = Primitive.UInt()
+  let _cacheCeilingBytesCodec = Primitive.UInt()
+  let _errorCodeCodec = Primitive.UTF8()
+  let _modeCodec = Primitive.UTF8()
+  let _outboundBytesPerSecondCodec = Primitive.UInt()
+  let _postPlaybackGraceMsCodec = Primitive.UInt()
+  let _reasonCodesArrayCodec = Primitive.Array(Primitive.UTF8())
+  let _stateCodec = Primitive.UTF8()
+  let _uploadCeilingBytesPer24hCodec = Primitive.UInt()
+  let _uploadedBytesLast24hCodec = Primitive.UInt()
+
+  public init() {}
+
+  public func preencode(_ state: inout State, _ value: GetParticipationStatusResponse) {
+    state.end += 1 // flags
+    _modeCodec.preencode(&state, value.mode)
+    _stateCodec.preencode(&state, value.state)
+    _cacheCeilingBytesCodec.preencode(&state, value.cacheCeilingBytes)
+    _uploadCeilingBytesPer24hCodec.preencode(&state, value.uploadCeilingBytesPer24h)
+    _uploadedBytesLast24hCodec.preencode(&state, value.uploadedBytesLast24h)
+    _outboundBytesPerSecondCodec.preencode(&state, value.outboundBytesPerSecond)
+    _postPlaybackGraceMsCodec.preencode(&state, value.postPlaybackGraceMs)
+    _backgroundRemainingSessionMsCodec.preencode(&state, value.backgroundRemainingSessionMs)
+    _backgroundRemainingDailyMsCodec.preencode(&state, value.backgroundRemainingDailyMs)
+    _reasonCodesArrayCodec.preencode(&state, value.reasonCodes)
+    if let v = value.errorCode { _errorCodeCodec.preencode(&state, v) }
+  }
+
+  public func encode(_ state: inout State, _ value: GetParticipationStatusResponse) throws {
+    var flags: UInt = 0
+    if value.success { flags |= 1 }
+    if value.uploadEligible { flags |= 2 }
+    if value.uploading { flags |= 4 }
+    if value.backgroundEligible { flags |= 8 }
+    if value.errorCode != nil { flags |= 16 }
+
+    try Primitive.UInt().encode(&state, flags)
+    try _modeCodec.encode(&state, value.mode)
+    try _stateCodec.encode(&state, value.state)
+    try _cacheCeilingBytesCodec.encode(&state, value.cacheCeilingBytes)
+    try _uploadCeilingBytesPer24hCodec.encode(&state, value.uploadCeilingBytesPer24h)
+    try _uploadedBytesLast24hCodec.encode(&state, value.uploadedBytesLast24h)
+    try _outboundBytesPerSecondCodec.encode(&state, value.outboundBytesPerSecond)
+    try _postPlaybackGraceMsCodec.encode(&state, value.postPlaybackGraceMs)
+    try _backgroundRemainingSessionMsCodec.encode(&state, value.backgroundRemainingSessionMs)
+    try _backgroundRemainingDailyMsCodec.encode(&state, value.backgroundRemainingDailyMs)
+    try _reasonCodesArrayCodec.encode(&state, value.reasonCodes)
+    if let v = value.errorCode { try _errorCodeCodec.encode(&state, v) }
+  }
+
+  public func decode(_ state: inout State) throws -> GetParticipationStatusResponse {
+    let flags = try Primitive.UInt().decode(&state)
+    let _r0 = try _modeCodec.decode(&state)
+    let _r1 = try _stateCodec.decode(&state)
+    let _r2 = try _cacheCeilingBytesCodec.decode(&state)
+    let _r3 = try _uploadCeilingBytesPer24hCodec.decode(&state)
+    let _r4 = try _uploadedBytesLast24hCodec.decode(&state)
+    let _r5 = try _outboundBytesPerSecondCodec.decode(&state)
+    let _r6 = try _postPlaybackGraceMsCodec.decode(&state)
+    let _r7 = try _backgroundRemainingSessionMsCodec.decode(&state)
+    let _r8 = try _backgroundRemainingDailyMsCodec.decode(&state)
+    let _r9 = try _reasonCodesArrayCodec.decode(&state)
+    let _r10: String? = (flags & 16) != 0 ? try _errorCodeCodec.decode(&state) : nil
+    return GetParticipationStatusResponse(
+      success: (flags & 1) != 0,
+      mode: _r0,
+      state: _r1,
+      uploadEligible: (flags & 2) != 0,
+      uploading: (flags & 4) != 0,
+      backgroundEligible: (flags & 8) != 0,
+      cacheCeilingBytes: _r2,
+      uploadCeilingBytesPer24h: _r3,
+      uploadedBytesLast24h: _r4,
+      outboundBytesPerSecond: _r5,
+      postPlaybackGraceMs: _r6,
+      backgroundRemainingSessionMs: _r7,
+      backgroundRemainingDailyMs: _r8,
+      reasonCodes: _r9,
+      errorCode: _r10
+    )
+  }
+}
+
+public let getParticipationStatusResponse = GetParticipationStatusResponseCodec()
+
+// @peartube/set-device-conditions-request
+public struct SetDeviceConditionsRequest {
+  public var metered: Bool
+  public var meteredProvided: Bool
+  public var thermalState: String?
+  public var batteryPercent: UInt?
+  public var batteryPercentProvided: Bool
+  public var charging: Bool
+  public var chargingProvided: Bool
+  public var backgroundPermitted: Bool
+  public var backgroundPermittedProvided: Bool
+  public var freeDiskBytes: UInt?
+  public var freeDiskBytesProvided: Bool
+  public var totalDiskBytes: UInt?
+  public var totalDiskBytesProvided: Bool
+
+  public init(metered: Bool = false, meteredProvided: Bool = false, thermalState: String? = nil, batteryPercent: UInt? = nil, batteryPercentProvided: Bool = false, charging: Bool = false, chargingProvided: Bool = false, backgroundPermitted: Bool = false, backgroundPermittedProvided: Bool = false, freeDiskBytes: UInt? = nil, freeDiskBytesProvided: Bool = false, totalDiskBytes: UInt? = nil, totalDiskBytesProvided: Bool = false) {
+    self.metered = metered
+    self.meteredProvided = meteredProvided
+    self.thermalState = thermalState
+    self.batteryPercent = batteryPercent
+    self.batteryPercentProvided = batteryPercentProvided
+    self.charging = charging
+    self.chargingProvided = chargingProvided
+    self.backgroundPermitted = backgroundPermitted
+    self.backgroundPermittedProvided = backgroundPermittedProvided
+    self.freeDiskBytes = freeDiskBytes
+    self.freeDiskBytesProvided = freeDiskBytesProvided
+    self.totalDiskBytes = totalDiskBytes
+    self.totalDiskBytesProvided = totalDiskBytesProvided
+  }
+}
+
+public struct SetDeviceConditionsRequestCodec: Codec {
+  public typealias Value = SetDeviceConditionsRequest
+
+  let _batteryPercentCodec = Primitive.UInt()
+  let _freeDiskBytesCodec = Primitive.UInt()
+  let _thermalStateCodec = Primitive.UTF8()
+  let _totalDiskBytesCodec = Primitive.UInt()
+
+  public init() {}
+
+  public func preencode(_ state: inout State, _ value: SetDeviceConditionsRequest) {
+    // Compute flags for varint sizing
+    var flags: UInt = 0
+    if value.metered { flags |= 1 }
+    if value.meteredProvided { flags |= 2 }
+    if value.thermalState != nil { flags |= 4 }
+    if value.batteryPercent != nil { flags |= 8 }
+    if value.batteryPercentProvided { flags |= 16 }
+    if value.charging { flags |= 32 }
+    if value.chargingProvided { flags |= 64 }
+    if value.backgroundPermitted { flags |= 128 }
+    if value.backgroundPermittedProvided { flags |= 256 }
+    if value.freeDiskBytes != nil { flags |= 512 }
+    if value.freeDiskBytesProvided { flags |= 1024 }
+    if value.totalDiskBytes != nil { flags |= 2048 }
+    if value.totalDiskBytesProvided { flags |= 4096 }
+
+    Primitive.UInt().preencode(&state, flags)
+    if let v = value.thermalState { _thermalStateCodec.preencode(&state, v) }
+    if let v = value.batteryPercent { _batteryPercentCodec.preencode(&state, v) }
+    if let v = value.freeDiskBytes { _freeDiskBytesCodec.preencode(&state, v) }
+    if let v = value.totalDiskBytes { _totalDiskBytesCodec.preencode(&state, v) }
+  }
+
+  public func encode(_ state: inout State, _ value: SetDeviceConditionsRequest) throws {
+    var flags: UInt = 0
+    if value.metered { flags |= 1 }
+    if value.meteredProvided { flags |= 2 }
+    if value.thermalState != nil { flags |= 4 }
+    if value.batteryPercent != nil { flags |= 8 }
+    if value.batteryPercentProvided { flags |= 16 }
+    if value.charging { flags |= 32 }
+    if value.chargingProvided { flags |= 64 }
+    if value.backgroundPermitted { flags |= 128 }
+    if value.backgroundPermittedProvided { flags |= 256 }
+    if value.freeDiskBytes != nil { flags |= 512 }
+    if value.freeDiskBytesProvided { flags |= 1024 }
+    if value.totalDiskBytes != nil { flags |= 2048 }
+    if value.totalDiskBytesProvided { flags |= 4096 }
+
+    try Primitive.UInt().encode(&state, flags)
+    if let v = value.thermalState { try _thermalStateCodec.encode(&state, v) }
+    if let v = value.batteryPercent { try _batteryPercentCodec.encode(&state, v) }
+    if let v = value.freeDiskBytes { try _freeDiskBytesCodec.encode(&state, v) }
+    if let v = value.totalDiskBytes { try _totalDiskBytesCodec.encode(&state, v) }
+  }
+
+  public func decode(_ state: inout State) throws -> SetDeviceConditionsRequest {
+    let flags = try Primitive.UInt().decode(&state)
+    let _r0: String? = (flags & 4) != 0 ? try _thermalStateCodec.decode(&state) : nil
+    let _r1: UInt? = (flags & 8) != 0 ? try _batteryPercentCodec.decode(&state) : nil
+    let _r2: UInt? = (flags & 512) != 0 ? try _freeDiskBytesCodec.decode(&state) : nil
+    let _r3: UInt? = (flags & 2048) != 0 ? try _totalDiskBytesCodec.decode(&state) : nil
+    return SetDeviceConditionsRequest(
+      metered: (flags & 1) != 0,
+      meteredProvided: (flags & 2) != 0,
+      thermalState: _r0,
+      batteryPercent: _r1,
+      batteryPercentProvided: (flags & 16) != 0,
+      charging: (flags & 32) != 0,
+      chargingProvided: (flags & 64) != 0,
+      backgroundPermitted: (flags & 128) != 0,
+      backgroundPermittedProvided: (flags & 256) != 0,
+      freeDiskBytes: _r2,
+      freeDiskBytesProvided: (flags & 1024) != 0,
+      totalDiskBytes: _r3,
+      totalDiskBytesProvided: (flags & 4096) != 0
+    )
+  }
+}
+
+public let setDeviceConditionsRequest = SetDeviceConditionsRequestCodec()
+
+// @peartube/set-device-conditions-response
+public struct SetDeviceConditionsResponse {
+  public var success: Bool
+  public var errorCode: String?
+
+  public init(success: Bool = false, errorCode: String? = nil) {
+    self.success = success
+    self.errorCode = errorCode
+  }
+}
+
+public struct SetDeviceConditionsResponseCodec: Codec {
+  public typealias Value = SetDeviceConditionsResponse
+
+  let _errorCodeCodec = Primitive.UTF8()
+
+  public init() {}
+
+  public func preencode(_ state: inout State, _ value: SetDeviceConditionsResponse) {
+    state.end += 1 // flags
+    if let v = value.errorCode { _errorCodeCodec.preencode(&state, v) }
+  }
+
+  public func encode(_ state: inout State, _ value: SetDeviceConditionsResponse) throws {
+    var flags: UInt = 0
+    if value.success { flags |= 1 }
+    if value.errorCode != nil { flags |= 2 }
+
+    try Primitive.UInt().encode(&state, flags)
+    if let v = value.errorCode { try _errorCodeCodec.encode(&state, v) }
+  }
+
+  public func decode(_ state: inout State) throws -> SetDeviceConditionsResponse {
+    let flags = try Primitive.UInt().decode(&state)
+    let _r0: String? = (flags & 2) != 0 ? try _errorCodeCodec.decode(&state) : nil
+    return SetDeviceConditionsResponse(
+      success: (flags & 1) != 0,
+      errorCode: _r0
+    )
+  }
+}
+
+public let setDeviceConditionsResponse = SetDeviceConditionsResponseCodec()

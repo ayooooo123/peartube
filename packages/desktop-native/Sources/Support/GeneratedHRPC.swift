@@ -126,6 +126,10 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let getMediaEntityResponse = GetMediaEntityResponseCodec()
   private let getMigrationStatusRequest = GetMigrationStatusRequestCodec()
   private let getMigrationStatusResponse = GetMigrationStatusResponseCodec()
+  private let getParticipationStatusRequest = GetParticipationStatusRequestCodec()
+  private let getParticipationStatusResponse = GetParticipationStatusResponseCodec()
+  private let setDeviceConditionsRequest = SetDeviceConditionsRequestCodec()
+  private let setDeviceConditionsResponse = SetDeviceConditionsResponseCodec()
   private let getNetworkPolicyRequest = GetNetworkPolicyRequestCodec()
   private let getNetworkPolicyResponse = GetNetworkPolicyResponseCodec()
   private let getPersonalSettingsRequest = GetPersonalSettingsRequestCodec()
@@ -1361,6 +1365,32 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
 
   public func onSetNetworkPolicy(_ handler: @escaping (SetNetworkPolicyRequest) async throws -> SetNetworkPolicyResponse) {
     _handlers["@peartube/set-network-policy"] = handler
+  }
+
+  // Request/response — client
+  public func setDeviceConditions(_ args: SetDeviceConditionsRequest) async throws -> SetDeviceConditionsResponse {
+    let encoded = try _encode(setDeviceConditionsRequest, args)
+    guard let raw = try await _rpc.request(149, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(setDeviceConditionsResponse, raw)
+  }
+
+  public func onSetDeviceConditions(_ handler: @escaping (SetDeviceConditionsRequest) async throws -> SetDeviceConditionsResponse) {
+    _handlers["@peartube/set-device-conditions"] = handler
+  }
+
+  // Request/response — client
+  public func getParticipationStatus(_ args: GetParticipationStatusRequest) async throws -> GetParticipationStatusResponse {
+    let encoded = try _encode(getParticipationStatusRequest, args)
+    guard let raw = try await _rpc.request(148, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getParticipationStatusResponse, raw)
+  }
+
+  public func onGetParticipationStatus(_ handler: @escaping (GetParticipationStatusRequest) async throws -> GetParticipationStatusResponse) {
+    _handlers["@peartube/get-participation-status"] = handler
   }
 
   // Request/response — client
@@ -3976,6 +4006,32 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
         let args = try _decode(revokePersonalDeviceRequest, rawData)
         let response = try await handler(args)
         req.reply(try _encode(revokePersonalDeviceResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 148:   // @peartube/get-participation-status
+      guard let handler = _handlers["@peartube/get-participation-status"] as? (GetParticipationStatusRequest) async throws -> GetParticipationStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getParticipationStatusRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getParticipationStatusResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 149:   // @peartube/set-device-conditions
+      guard let handler = _handlers["@peartube/set-device-conditions"] as? (SetDeviceConditionsRequest) async throws -> SetDeviceConditionsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(setDeviceConditionsRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(setDeviceConditionsResponse, response))
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }

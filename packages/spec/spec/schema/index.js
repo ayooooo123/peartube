@@ -6558,7 +6558,8 @@ const encoding212 = {
       (m.followedPublishersJson ? 64 : 0) |
       (m.followedIndexesJson ? 128 : 0) |
       (m.trustedModerationFeedsJson ? 256 : 0) |
-      (m.aiAnalysis ? 512 : 0)
+      (m.aiAnalysis ? 512 : 0) |
+      (m.participationMode ? 1024 : 0)
 
     c.uint.preencode(state, flags)
 
@@ -6572,6 +6573,7 @@ const encoding212 = {
     if (m.followedIndexesJson) c.string.preencode(state, m.followedIndexesJson)
     if (m.trustedModerationFeedsJson) c.string.preencode(state, m.trustedModerationFeedsJson)
     if (m.aiAnalysis) c.string.preencode(state, m.aiAnalysis)
+    if (m.participationMode) c.string.preencode(state, m.participationMode)
   },
   encode(state, m) {
     const flags =
@@ -6584,7 +6586,8 @@ const encoding212 = {
       (m.followedPublishersJson ? 64 : 0) |
       (m.followedIndexesJson ? 128 : 0) |
       (m.trustedModerationFeedsJson ? 256 : 0) |
-      (m.aiAnalysis ? 512 : 0)
+      (m.aiAnalysis ? 512 : 0) |
+      (m.participationMode ? 1024 : 0)
 
     c.uint.encode(state, flags)
 
@@ -6598,6 +6601,7 @@ const encoding212 = {
     if (m.followedIndexesJson) c.string.encode(state, m.followedIndexesJson)
     if (m.trustedModerationFeedsJson) c.string.encode(state, m.trustedModerationFeedsJson)
     if (m.aiAnalysis) c.string.encode(state, m.aiAnalysis)
+    if (m.participationMode) c.string.encode(state, m.participationMode)
   },
   decode(state) {
     const flags = c.uint.decode(state)
@@ -6612,7 +6616,8 @@ const encoding212 = {
       followedPublishersJson: (flags & 64) !== 0 ? c.string.decode(state) : null,
       followedIndexesJson: (flags & 128) !== 0 ? c.string.decode(state) : null,
       trustedModerationFeedsJson: (flags & 256) !== 0 ? c.string.decode(state) : null,
-      aiAnalysis: (flags & 512) !== 0 ? c.string.decode(state) : null
+      aiAnalysis: (flags & 512) !== 0 ? c.string.decode(state) : null,
+      participationMode: (flags & 1024) !== 0 ? c.string.decode(state) : null
     }
   }
 }
@@ -6632,7 +6637,8 @@ const encoding213 = {
       (m.followedPublishersJson ? 256 : 0) |
       (m.followedIndexesJson ? 512 : 0) |
       (m.trustedModerationFeedsJson ? 1024 : 0) |
-      (m.aiAnalysis ? 2048 : 0)
+      (m.aiAnalysis ? 2048 : 0) |
+      (m.participationMode ? 4096 : 0)
 
     c.uint.preencode(state, flags)
 
@@ -6646,6 +6652,7 @@ const encoding213 = {
     if (m.followedIndexesJson) c.string.preencode(state, m.followedIndexesJson)
     if (m.trustedModerationFeedsJson) c.string.preencode(state, m.trustedModerationFeedsJson)
     if (m.aiAnalysis) c.string.preencode(state, m.aiAnalysis)
+    if (m.participationMode) c.string.preencode(state, m.participationMode)
   },
   encode(state, m) {
     const flags =
@@ -6660,7 +6667,8 @@ const encoding213 = {
       (m.followedPublishersJson ? 256 : 0) |
       (m.followedIndexesJson ? 512 : 0) |
       (m.trustedModerationFeedsJson ? 1024 : 0) |
-      (m.aiAnalysis ? 2048 : 0)
+      (m.aiAnalysis ? 2048 : 0) |
+      (m.participationMode ? 4096 : 0)
 
     c.uint.encode(state, flags)
 
@@ -6674,6 +6682,7 @@ const encoding213 = {
     if (m.followedIndexesJson) c.string.encode(state, m.followedIndexesJson)
     if (m.trustedModerationFeedsJson) c.string.encode(state, m.trustedModerationFeedsJson)
     if (m.aiAnalysis) c.string.encode(state, m.aiAnalysis)
+    if (m.participationMode) c.string.encode(state, m.participationMode)
   },
   decode(state) {
     const flags = c.uint.decode(state)
@@ -6690,7 +6699,8 @@ const encoding213 = {
       followedPublishersJson: (flags & 256) !== 0 ? c.string.decode(state) : null,
       followedIndexesJson: (flags & 512) !== 0 ? c.string.decode(state) : null,
       trustedModerationFeedsJson: (flags & 1024) !== 0 ? c.string.decode(state) : null,
-      aiAnalysis: (flags & 2048) !== 0 ? c.string.decode(state) : null
+      aiAnalysis: (flags & 2048) !== 0 ? c.string.decode(state) : null,
+      participationMode: (flags & 4096) !== 0 ? c.string.decode(state) : null
     }
   }
 }
@@ -9784,6 +9794,167 @@ const encoding350 = encoding166
 // @peartube/index-video-vectors-response
 const encoding351 = encoding92
 
+// @peartube/get-participation-status-request
+const encoding352 = encoding0
+
+// @peartube/get-participation-status-response.reasonCodes
+const encoding353_13 = encoding44_11
+
+// @peartube/get-participation-status-response
+const encoding353 = {
+  preencode(state, m) {
+    state.end++ // max flag is 16 so always one byte
+    c.string.preencode(state, m.mode)
+    c.string.preencode(state, m.state)
+    c.uint.preencode(state, m.cacheCeilingBytes)
+    c.uint.preencode(state, m.uploadCeilingBytesPer24h)
+    c.uint.preencode(state, m.uploadedBytesLast24h)
+    c.uint.preencode(state, m.outboundBytesPerSecond)
+    c.uint.preencode(state, m.postPlaybackGraceMs)
+    c.uint.preencode(state, m.backgroundRemainingSessionMs)
+    c.uint.preencode(state, m.backgroundRemainingDailyMs)
+    encoding353_13.preencode(state, m.reasonCodes)
+
+    if (m.errorCode) c.string.preencode(state, m.errorCode)
+  },
+  encode(state, m) {
+    const flags =
+      (m.success ? 1 : 0) |
+      (m.uploadEligible ? 2 : 0) |
+      (m.uploading ? 4 : 0) |
+      (m.backgroundEligible ? 8 : 0) |
+      (m.errorCode ? 16 : 0)
+
+    c.uint.encode(state, flags)
+    c.string.encode(state, m.mode)
+    c.string.encode(state, m.state)
+    c.uint.encode(state, m.cacheCeilingBytes)
+    c.uint.encode(state, m.uploadCeilingBytesPer24h)
+    c.uint.encode(state, m.uploadedBytesLast24h)
+    c.uint.encode(state, m.outboundBytesPerSecond)
+    c.uint.encode(state, m.postPlaybackGraceMs)
+    c.uint.encode(state, m.backgroundRemainingSessionMs)
+    c.uint.encode(state, m.backgroundRemainingDailyMs)
+    encoding353_13.encode(state, m.reasonCodes)
+
+    if (m.errorCode) c.string.encode(state, m.errorCode)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      success: (flags & 1) !== 0,
+      mode: c.string.decode(state),
+      state: c.string.decode(state),
+      uploadEligible: (flags & 2) !== 0,
+      uploading: (flags & 4) !== 0,
+      backgroundEligible: (flags & 8) !== 0,
+      cacheCeilingBytes: c.uint.decode(state),
+      uploadCeilingBytesPer24h: c.uint.decode(state),
+      uploadedBytesLast24h: c.uint.decode(state),
+      outboundBytesPerSecond: c.uint.decode(state),
+      postPlaybackGraceMs: c.uint.decode(state),
+      backgroundRemainingSessionMs: c.uint.decode(state),
+      backgroundRemainingDailyMs: c.uint.decode(state),
+      reasonCodes: encoding353_13.decode(state),
+      errorCode: (flags & 16) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/set-device-conditions-request
+const encoding354 = {
+  preencode(state, m) {
+    const flags =
+      (m.metered ? 1 : 0) |
+      (m.meteredProvided ? 2 : 0) |
+      (m.thermalState ? 4 : 0) |
+      (m.batteryPercent ? 8 : 0) |
+      (m.batteryPercentProvided ? 16 : 0) |
+      (m.charging ? 32 : 0) |
+      (m.chargingProvided ? 64 : 0) |
+      (m.backgroundPermitted ? 128 : 0) |
+      (m.backgroundPermittedProvided ? 256 : 0) |
+      (m.freeDiskBytes ? 512 : 0) |
+      (m.freeDiskBytesProvided ? 1024 : 0) |
+      (m.totalDiskBytes ? 2048 : 0) |
+      (m.totalDiskBytesProvided ? 4096 : 0)
+
+    c.uint.preencode(state, flags)
+
+    if (m.thermalState) c.string.preencode(state, m.thermalState)
+    if (m.batteryPercent) c.uint.preencode(state, m.batteryPercent)
+    if (m.freeDiskBytes) c.uint.preencode(state, m.freeDiskBytes)
+    if (m.totalDiskBytes) c.uint.preencode(state, m.totalDiskBytes)
+  },
+  encode(state, m) {
+    const flags =
+      (m.metered ? 1 : 0) |
+      (m.meteredProvided ? 2 : 0) |
+      (m.thermalState ? 4 : 0) |
+      (m.batteryPercent ? 8 : 0) |
+      (m.batteryPercentProvided ? 16 : 0) |
+      (m.charging ? 32 : 0) |
+      (m.chargingProvided ? 64 : 0) |
+      (m.backgroundPermitted ? 128 : 0) |
+      (m.backgroundPermittedProvided ? 256 : 0) |
+      (m.freeDiskBytes ? 512 : 0) |
+      (m.freeDiskBytesProvided ? 1024 : 0) |
+      (m.totalDiskBytes ? 2048 : 0) |
+      (m.totalDiskBytesProvided ? 4096 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.thermalState) c.string.encode(state, m.thermalState)
+    if (m.batteryPercent) c.uint.encode(state, m.batteryPercent)
+    if (m.freeDiskBytes) c.uint.encode(state, m.freeDiskBytes)
+    if (m.totalDiskBytes) c.uint.encode(state, m.totalDiskBytes)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      metered: (flags & 1) !== 0,
+      meteredProvided: (flags & 2) !== 0,
+      thermalState: (flags & 4) !== 0 ? c.string.decode(state) : null,
+      batteryPercent: (flags & 8) !== 0 ? c.uint.decode(state) : 0,
+      batteryPercentProvided: (flags & 16) !== 0,
+      charging: (flags & 32) !== 0,
+      chargingProvided: (flags & 64) !== 0,
+      backgroundPermitted: (flags & 128) !== 0,
+      backgroundPermittedProvided: (flags & 256) !== 0,
+      freeDiskBytes: (flags & 512) !== 0 ? c.uint.decode(state) : 0,
+      freeDiskBytesProvided: (flags & 1024) !== 0,
+      totalDiskBytes: (flags & 2048) !== 0 ? c.uint.decode(state) : 0,
+      totalDiskBytesProvided: (flags & 4096) !== 0
+    }
+  }
+}
+
+// @peartube/set-device-conditions-response
+const encoding355 = {
+  preencode(state, m) {
+    state.end++ // max flag is 2 so always one byte
+
+    if (m.errorCode) c.string.preencode(state, m.errorCode)
+  },
+  encode(state, m) {
+    const flags = (m.success ? 1 : 0) | (m.errorCode ? 2 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.errorCode) c.string.encode(state, m.errorCode)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      success: (flags & 1) !== 0,
+      errorCode: (flags & 2) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
 // @peartube/prepare-playback-response.stats, deferred due to recusive use
 const encoding83_1 = c.frame(encoding165)
 // @peartube/web-prepare-playback-response.stats, deferred due to recusive use
@@ -10530,6 +10701,14 @@ function getEncoding(name) {
       return encoding350
     case '@peartube/index-video-vectors-response':
       return encoding351
+    case '@peartube/get-participation-status-request':
+      return encoding352
+    case '@peartube/get-participation-status-response':
+      return encoding353
+    case '@peartube/set-device-conditions-request':
+      return encoding354
+    case '@peartube/set-device-conditions-response':
+      return encoding355
     default:
       throw new Error('Encoder not found ' + name)
   }

@@ -124,6 +124,8 @@ export const SHARED_HANDLER_NAMES = [
   'SetActiveIdentity',
   'SetSeedingConfig',
   'SetNetworkPolicy',
+  'GetParticipationStatus',
+  'SetDeviceConditions',
   'SetStorageLimit',
   'SetTranscodeSettings',
   'SetVideoThumbnail',

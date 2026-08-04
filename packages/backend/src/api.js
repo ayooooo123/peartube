@@ -77,6 +77,24 @@ function ownApiResource(ctx, label, resource, methods, timeoutMs) {
   }
 }
 
+// The rolling participation ledgers live beside the other durable backend state
+// so the 24-hour upload and background ceilings survive a restart. A context
+// without a metadata store (unit fixtures) simply has no ledger to keep.
+const PARTICIPATION_LEDGER_KEY = 'participation:ledgers:v1'
+
+function createParticipationLedgerRepository(ctx) {
+  const metaDb = ctx?.metaDb
+  if (typeof metaDb?.get !== 'function' || typeof metaDb?.put !== 'function') return null
+  return {
+    async load() {
+      return (await metaDb.get(PARTICIPATION_LEDGER_KEY))?.value || null
+    },
+    async save(state) {
+      await metaDb.put(PARTICIPATION_LEDGER_KEY, state)
+    },
+  }
+}
+
 const CATALOG_PROFILE_FIELDS = Object.freeze([
   'name',
   'description',
@@ -3767,6 +3785,14 @@ export function createApi({
       onPlaybackActive: cancelScheduledQuotaSweep,
       onPlaybackInactive: scheduleQuotaSweepAfterPlayback,
       networkPolicyRuntime,
+      policyApi: localPolicyApi,
+      // The rolling upload and background ledgers are what the 24-hour ceilings
+      // are measured against, so they outlive the process: a restart that
+      // forgot them would hand the device a fresh gigabyte every launch.
+      repository: createParticipationLedgerRepository(ctx),
+      // The archive ledger is created before this API exists and reads the
+      // latest decision lazily, so publishing it on ctx is the whole wire.
+      onParticipationDecision: decision => { ctx.participationDecision = decision },
     }),
     // Local policy controls
     ...localPolicyApi,

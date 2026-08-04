@@ -75,6 +75,25 @@ export function createArchivePolicy(options = {}) {
   const repository = options.repository || null
   const now = typeof options.now === 'function' ? options.now : Date.now
   let reservations = new Map()
+  // An archive pledge is durable custody the viewer opted into, so the
+  // participation decision governs whether a NEW one may be taken - never
+  // whether an existing one is kept. A mode alone can never open this gate:
+  // archiveEligible is false unless archiveOptIn is true, and archiveOptIn
+  // comes from the retention mode the viewer chose. It carries no playback and
+  // no upload-quota term, so a dedicated archivist that never plays anything
+  // still qualifies.
+  const participation = options.participation ?? null
+
+  function archivingPermitted() {
+    if (participation == null) return true
+    const decision = typeof participation === 'function' ? participation() : participation
+    // A ledger wired to the decision authority fails closed: until a decision
+    // has actually been published, this device has not been cleared to promise
+    // anyone durable storage. Pledges already held are untouched.
+    if (decision == null) return false
+    return decision.archiveEligible === true
+  }
+
   let tail = Promise.resolve()
   const ready = Promise.resolve(repository?.load?.()).then(value => {
     const restored = decodeState(value, capacityBytes, options.capacityBytes !== undefined)
@@ -161,6 +180,7 @@ export function createArchivePolicy(options = {}) {
           }
           return reject('reservation-conflict', bytes)
         }
+        if (!archivingPermitted()) return reject('archiving-not-permitted', bytes)
         if (reservations.size >= MAX_RESERVATIONS) return reject('capacity-exceeded', bytes)
         if (heldBytes(reservations) + bytes > capacityBytes) return reject('capacity-exceeded', bytes)
         const next = cloneReservations(reservations)

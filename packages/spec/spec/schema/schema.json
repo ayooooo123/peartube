@@ -7103,6 +7103,12 @@
           "required": false,
           "type": "string",
           "version": 1
+        },
+        {
+          "name": "participationMode",
+          "required": false,
+          "type": "string",
+          "version": 1
         }
       ]
     },
@@ -7180,6 +7186,12 @@
         },
         {
           "name": "aiAnalysis",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "participationMode",
           "required": false,
           "type": "string",
           "version": 1
@@ -10774,6 +10786,218 @@
         },
         {
           "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-participation-status-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "get-participation-status-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "mode",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "state",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "uploadEligible",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "uploading",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "backgroundEligible",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "cacheCeilingBytes",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "uploadCeilingBytesPer24h",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "uploadedBytesLast24h",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "outboundBytesPerSecond",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "postPlaybackGraceMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "backgroundRemainingSessionMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "backgroundRemainingDailyMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "reasonCodes",
+          "required": true,
+          "array": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "set-device-conditions-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "metered",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "meteredProvided",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "thermalState",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "batteryPercent",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "batteryPercentProvided",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "charging",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "chargingProvided",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "backgroundPermitted",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "backgroundPermittedProvided",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "freeDiskBytes",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "freeDiskBytesProvided",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "totalDiskBytes",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "totalDiskBytesProvided",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "set-device-conditions-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
           "required": false,
           "type": "string",
           "version": 1

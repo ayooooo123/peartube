@@ -1072,6 +1072,54 @@ export function createOperabilityRpc(ensureRPC: () => any) {
       return ensureRPC().setNetworkPolicy(request)
     },
 
+    /** Live contribution state: eligible, actively uploading, or suspended. */
+    async getParticipationStatus(): Promise<Record<string, unknown>> {
+      return ensureRPC().getParticipationStatus({})
+    },
+
+    /**
+     * Report the OS categorical signals the participation decision runs on.
+     * Omit a signal the platform cannot read: absent stays unknown, and
+     * unknown constrains rather than permits.
+     */
+    async setDeviceConditions(conditions: {
+      metered?: boolean
+      thermalState?: string
+      batteryPercent?: number
+      charging?: boolean
+      backgroundPermitted?: boolean
+      freeDiskBytes?: number
+      totalDiskBytes?: number
+    }): Promise<Record<string, unknown>> {
+      const request: Record<string, unknown> = {}
+      if (typeof conditions.metered === 'boolean') {
+        request.metered = conditions.metered
+        request.meteredProvided = true
+      }
+      if (typeof conditions.thermalState === 'string') request.thermalState = conditions.thermalState
+      if (Number.isFinite(conditions.batteryPercent)) {
+        request.batteryPercent = conditions.batteryPercent
+        request.batteryPercentProvided = true
+      }
+      if (typeof conditions.charging === 'boolean') {
+        request.charging = conditions.charging
+        request.chargingProvided = true
+      }
+      if (typeof conditions.backgroundPermitted === 'boolean') {
+        request.backgroundPermitted = conditions.backgroundPermitted
+        request.backgroundPermittedProvided = true
+      }
+      if (Number.isFinite(conditions.freeDiskBytes)) {
+        request.freeDiskBytes = conditions.freeDiskBytes
+        request.freeDiskBytesProvided = true
+      }
+      if (Number.isFinite(conditions.totalDiskBytes)) {
+        request.totalDiskBytes = conditions.totalDiskBytes
+        request.totalDiskBytesProvided = true
+      }
+      return ensureRPC().setDeviceConditions(request)
+    },
+
     async previewStorageLimit(
       request: { maxBytes: number },
     ): Promise<PreviewStorageLimitResponse> {

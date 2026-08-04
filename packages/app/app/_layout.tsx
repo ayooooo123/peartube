@@ -25,6 +25,7 @@ import { colors } from '@/lib/colors'
 import { AppContext, type AppContextType } from '@/lib/AppContext'
 import { buildBundleVersionKey } from '@peartube/platform/native-bundle-cache'
 import { getNativePublisherKeyVault, getNativePublisherSigner } from '@/lib/publisher-shell-signer'
+import { useDeviceConditionsReporter } from '@/hooks/useNetworkPolicy'
 export { useApp } from '@/lib/AppContext'
 
 // Configure Reanimated logger to disable strict mode warnings
@@ -1137,6 +1138,13 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
     setBackendError(null)
     initNativeBackend()
   }, [initNativeBackend])
+
+  // Nothing else in the app supplies the OS signals the backend participation
+  // decision runs on, and an unreported signal stays unknown — which the
+  // decision treats as a constraint. Reporting starts as soon as the backend is
+  // up and re-reports on lifecycle, network, and power changes.
+  const activeRpc = platformRPC?.isInitialized?.() ? platformRPC.rpc : null
+  useDeviceConditionsReporter(activeRpc)
 
   const contextValue: AppContextType = {
     ready,

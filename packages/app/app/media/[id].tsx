@@ -3,6 +3,7 @@ import React from 'react'
 import { Alert } from 'react-native'
 import { useApp } from '@/lib/AppContext'
 import { useOptionalVideoPlayerActions } from '@/lib/VideoPlayerContext'
+import type { VideoData } from '@peartube/core'
 import MediaEntityPage, { normalizeMediaEntityView } from '../../components/routes/MediaEntityPage'
 import type { MediaEntityView } from '../../components/routes/MediaEntityPage'
 
@@ -21,6 +22,7 @@ export default function MediaRoute(props: ComponentProps<typeof MediaEntityPage>
     renditionId: string | null
     url: string | null
     title: string
+    byteLength: number | null
   }) => {
     if (!prepared.url || !playerActions) return
     playerActions.loadAndPlayVideo({
@@ -28,7 +30,12 @@ export default function MediaRoute(props: ComponentProps<typeof MediaEntityPage>
       title: prepared.title,
       publicationId: prepared.publicationId,
       renditionId: prepared.renditionId,
-    } as any, prepared.url)
+      // The player states the size while it plays. Without the manifest's byte
+      // length it printed "0 B" over a title it was decoding.
+      ...(prepared.byteLength === null ? {} : { size: prepared.byteLength }),
+      // A publication-backed title is deliberately not a whole VideoData: it has
+      // no channel drive, path or upload time to state.
+    } as unknown as VideoData, prepared.url)
   }, [playerActions])
 
   // Play failing is an answer the viewer is owed. Without this the button

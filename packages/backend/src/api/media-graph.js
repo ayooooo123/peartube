@@ -658,6 +658,23 @@ export function createMediaGraphApi(options = {}) {
       scope.assess('', null)
   }
 
+  /**
+   * The media renditions behind an entity's sources, deduplicated and ordered.
+   * Artwork seeds with the publication but is not one of the renditions a
+   * client chooses between.
+   */
+  function mediaRenditionDescriptors(built) {
+    const renditions = new Map()
+    for (const source of built.sources) {
+      const manifest = assetManifestStore?.getManifest?.(source.publicationId)
+      for (const rendition of manifest?.body?.renditions || []) {
+        if (isArtworkRendition(rendition)) continue
+        if (!rendition.blocked && !rendition.superseded) renditions.set(rendition.renditionId, renditionResponse(rendition))
+      }
+    }
+    return [...renditions.values()].sort((left, right) => left.renditionId.localeCompare(right.renditionId))
+  }
+
   function resolveOrMissing(entityId, consumerVisible = false) {
     const store = consumerVisible && consumerCatalogProjection ? consumerStoreView() : mediaGraphStore
     const claims = store.getClaimsBySubject(entityId)
@@ -690,7 +707,11 @@ export function createMediaGraphApi(options = {}) {
       conflictCount: resolved.conflicts.length,
       availability: availabilityResponse(entityAvailability(built, scope)),
       sources: decorateSources(built),
-      renditions: [],
+      // A viewer reads the size before pressing play, and the player states it
+      // while playing. The signed manifest is the only place that byte length
+      // exists on a consumer, so an entity that answers with no renditions is
+      // why the detail screen had nothing but zero to show.
+      renditions: mediaRenditionDescriptors(built),
       ...summaryMediaFields(resolved.metadata),
     }
     return {
@@ -943,16 +964,7 @@ export function createMediaGraphApi(options = {}) {
         const resolved = resolveOrMissing(entityId)
         if (!resolved) continue
         const built = await buildSources(entityId, scope)
-        const renditions = new Map()
-        for (const source of built.sources) {
-          const manifest = assetManifestStore?.getManifest?.(source.publicationId)
-          for (const rendition of manifest?.body?.renditions || []) {
-            // Artwork seeds with the publication but is not one of the media
-            // renditions a client chooses between.
-            if (isArtworkRendition(rendition)) continue
-            if (!rendition.blocked && !rendition.superseded) renditions.set(rendition.renditionId, renditionResponse(rendition))
-          }
-        }
+        const renditions = mediaRenditionDescriptors(built)
         summaries.push({
           entityId,
           entityKind: entityKindFromRow(resolved.claims[0]) || entityKindFromId(entityId),
@@ -963,7 +975,7 @@ export function createMediaGraphApi(options = {}) {
           conflictCount: resolved.conflicts.length,
           availability: availabilityResponse(entityAvailability(built, scope)),
           sources: built.sources.map(sourceResponse),
-          renditions: [...renditions.values()].sort((left, right) => left.renditionId.localeCompare(right.renditionId)),
+          renditions,
           ...summaryMediaFields(resolved.metadata),
         })
       }

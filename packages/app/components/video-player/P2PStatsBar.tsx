@@ -17,9 +17,27 @@ import { formatSizeCompact } from './formatters'
 
 interface P2PStatsBarProps {
   stats: VideoStats | null
+  /**
+   * Whether the player is decoding frames right now. P2P stats only exist for
+   * channel-drive playback, so a publication plays with `stats` null forever;
+   * without the player's own state this bar claimed it was still starting over
+   * a title that was several seconds in.
+   */
+  playing?: boolean
+  /**
+   * A playback failure the player will not retry out of. It arrives with no
+   * stats at all for publication playback, so without it the bar would fall
+   * through to "Starting player…" over a title that has stopped for good.
+   */
+  failed?: boolean
+  /**
+   * The player has advanced past the start of the title, so whatever it is
+   * doing now it is not starting up.
+   */
+  started?: boolean
 }
 
-export const P2PStatsBar = memo(function P2PStatsBar({ stats }: P2PStatsBarProps) {
+export const P2PStatsBar = memo(function P2PStatsBar({ stats, playing = false, failed = false, started = false }: P2PStatsBarProps) {
   const [expanded, setExpanded] = useState(false)
 
   const peerCount = stats?.peerCount ?? 0
@@ -44,10 +62,9 @@ export const P2PStatsBar = memo(function P2PStatsBar({ stats }: P2PStatsBarProps
   const hasProgressDetails = hasBytes || hasBlocks || isCached
 
   const getStatusLine = (): string => {
-    if (!stats) return 'Starting player…'
     if (isCached) return 'Saved on this device'
-    if (stats.status === 'error') return 'Playback hit a snag'
-    if (peerCount > 0 && (downloadSpeed > 0 || stats.status === 'downloading')) {
+    if (failed || stats?.status === 'error') return 'Playback hit a snag'
+    if (peerCount > 0 && (downloadSpeed > 0 || stats?.status === 'downloading')) {
       return `Streaming from ${peerCount} ${peerCount === 1 ? 'peer' : 'peers'}`
     }
     if (hasPlayableProgress) {
@@ -55,12 +72,20 @@ export const P2PStatsBar = memo(function P2PStatsBar({ stats }: P2PStatsBarProps
         ? `Streaming from ${peerCount} ${peerCount === 1 ? 'peer' : 'peers'}`
         : 'Streaming'
     }
+    // Frames are on screen. Whatever the swarm reports, the player is past
+    // starting and past reaching out.
+    if (playing) return 'Playing'
+    // A player that has advanced past zero has started, whatever the swarm
+    // reports. Claiming it is still starting - which it did for the whole of
+    // a paused or finished title - is the one thing that is definitely false.
+    if (started) return 'Paused'
+    if (!stats) return 'Starting player…'
     if (stats.status === 'connecting' || peerCount === 0) return 'Reaching out to peers…'
     return 'Preparing video…'
   }
 
   const statusLine = getStatusLine()
-  const isError = stats?.status === 'error' && !isCached
+  const isError = (failed || stats?.status === 'error') && !isCached
 
   return (
     <Pressable

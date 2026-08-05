@@ -19,6 +19,19 @@ export function formatBytes(bytes: number | string | null | undefined): string {
 }
 
 /**
+ * Byte count for a metadata line, or null when the size is genuinely unknown.
+ *
+ * A title whose signed manifest never reached this device has no size, which is
+ * not the same as a zero-byte file: "0 B" beside a video that is playing is a
+ * plain lie, so callers omit the segment instead.
+ */
+export function formatSizeLabel(bytes: number | string | null | undefined): string | null {
+  const n = typeof bytes === 'string' ? Number(bytes) : bytes
+  if (n == null || !Number.isFinite(n) || n <= 0) return null
+  return formatBytes(n)
+}
+
+/**
  * Format a timestamp (ms since epoch, or ISO date string) to a relative
  * time-ago string like "5m ago", "2h ago", "3d ago".
  */

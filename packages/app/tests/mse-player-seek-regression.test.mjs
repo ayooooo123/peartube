@@ -151,10 +151,11 @@ test('MSE backend retries desired autoplay when the first play call is dropped',
 
 test('format errors skip stall recovery so the desktop MSE fallback still triggers promptly', async () => {
   const src = await source(inlineViewPath)
-  assert.match(src, /isUnrecoverableSourceError/, 'unrecoverable source errors must be detected')
+  assert.match(src, /classifyPlayerError/, 'terminal source errors must be classified, not guessed at')
   assert.match(
     src,
-    /!isUnrecoverableSourceError\(error\) && tryRecoverFromPlaybackError\(\)/,
-    'recovery must be skipped for format errors (code 4) so the watch page can fall back to the MSE backend immediately'
+    /!classified\.terminal && tryRecoverFromPlaybackError\(\)/,
+    'recovery must be skipped for format errors (MediaError code 4) so the watch page can fall back to the MSE backend immediately'
   )
+  assert.match(src, /code,\n\s+errorCode: classified\.code/, 'the nested MediaError code must still reach the watch page')
 })

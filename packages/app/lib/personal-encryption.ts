@@ -39,6 +39,25 @@ export function personalSecretKeychainKey(publicKey?: string | null): string {
 
 const provisioned = new Set<string>()
 
+/**
+ * Set once provisioning ran and left this device with no store to open. An
+ * owner that does provision later lands in `provisioned` and outranks it.
+ */
+let provisioningFailed = false
+
+/**
+ * Whether this device has a personal store that can hold viewer state.
+ *
+ * False only once provisioning has been tried and left it without one: a vault
+ * that refuses the secret leaves the backend with no store, so every write is
+ * refused. Best-effort viewer state (watch progress) skips instead of asking
+ * once per playback tick; an explicit action still asks, and still fails
+ * loudly.
+ */
+export function hasPersonalStore(): boolean {
+  return provisioned.size > 0 || !provisioningFailed
+}
+
 const SECRET_HEX = /^[0-9a-f]{64}$/i
 
 /**
@@ -177,8 +196,9 @@ export async function ensurePersonalEncryption(
     } else {
       throw new Error(res?.error || 'personal-encryption-provision-failed')
     }
-  } catch (err: any) {
-    console.warn('[PersonalEncryption] provisioning skipped:', err?.message || err)
+  } catch (err) {
+    provisioningFailed = true
+    console.warn('[PersonalEncryption] provisioning skipped:', err instanceof Error ? err.message : err)
     if (options.required) throw err
   }
 }

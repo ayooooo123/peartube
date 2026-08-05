@@ -132,8 +132,16 @@ export function createPersonalApi({ ctx }) {
       });
     },
 
+    /**
+     * Watch progress is best-effort device state, not an action the viewer
+     * took. A device with no writable personal store — no identity, no
+     * keychain secret — has nowhere to put it, and raising that as a backend
+     * fault puts an error the viewer cannot act on in front of them once per
+     * playback tick. Refuse structurally instead. Every explicit personal
+     * action above still throws, so creating a playlist still fails loudly.
+     */
     async logWatchHistory(req = {}) {
-      if (!ctx.personal?.writable) throw new Error('No writable personal store');
+      if (!ctx.personal?.writable) return { success: false, error: 'personal-store-unwritable' };
       return personalWrite(async () => {
         const eventId = await ctx.personal.logHistory(watchEventFromRequest(req));
         return { success: true, eventId };

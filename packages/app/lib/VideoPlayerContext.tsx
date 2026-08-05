@@ -16,6 +16,7 @@ import { usePlayerStateMachine } from './playerStateMachine'
 import type { ModeBeforePip, PlayerState } from './playerStateMachine'
 import * as watchHistory from './watch-history'
 import type { WatchIdentity } from './watch-history'
+import { hasPersonalStore } from './personal-encryption'
 
 const WATCH_HISTORY_WRITE_INTERVAL_MS = 10000
 const STARTUP_AUTOPLAY_GUARD_MS = 3000
@@ -49,23 +50,27 @@ function watchCoordinatesOf(video: VideoData | null): { videoId: string; channel
  * playback. A write to coordinates the viewer has just deleted is refused by
  * the store adapter, so a player left mounted over a delete keeps playing
  * without putting the record back.
+ *
+ * A device that has no personal store is not asked at all: the write cannot
+ * land, and a tick that asks anyway costs a round trip and an error the viewer
+ * cannot act on. The rejection is swallowed here rather than left to a
+ * synchronous catch, which never sees it.
  */
 function recordWatchProgressSafe(video: VideoData | null, positionSec: number, durationSec: number): void {
   if (!video || !(durationSec > 0) || !(positionSec > 0)) return
+  if (!hasPersonalStore()) return
   const coordinates = watchCoordinatesOf(video)
   if (!coordinates) return
   const loose = video as VideoData & { thumbnail?: string | null }
-  try {
-    void watchHistory.recordProgress({
-      ...coordinates,
-      publicBeeKey: video.publicBeeKey || null,
-      title: video.title || 'Untitled',
-      channelName: video.channel?.name,
-      thumbnailUrl: video.thumbnailUrl || loose.thumbnail || null,
-      positionSec,
-      durationSec,
-    })
-  } catch {}
+  void watchHistory.recordProgress({
+    ...coordinates,
+    publicBeeKey: video.publicBeeKey || null,
+    title: video.title || 'Untitled',
+    channelName: video.channel?.name,
+    thumbnailUrl: video.thumbnailUrl || loose.thumbnail || null,
+    positionSec,
+    durationSec,
+  }).catch(() => {})
 }
 
 let ACTIVE_VIDEO_PLAYER_CONTROLLER_ID: number | null = null
@@ -88,6 +93,18 @@ import {
   videoLoadEventEmitter as _videoLoadEventEmitter,
   playbackActiveEmitter as _playbackActiveEmitter,
 } from './video-player'
+import { classifyPlayerError } from './video-player/playback-errors'
+
+/**
+ * A playback failure the viewer needs to be told about, in the one playback
+ * error vocabulary. `terminal` means no automatic path can change the outcome,
+ * so the session stops instead of re-asserting playback forever.
+ */
+export type PlaybackFailure = {
+  code: string
+  message: string
+  terminal: boolean
+}
 
 interface VideoPlayerContextType {
   // Current video
@@ -97,6 +114,7 @@ interface VideoPlayerContextType {
   // Player state
   isPlaying: boolean
   isLoading: boolean
+  playbackError: PlaybackFailure | null
   playerMode: PlayerMode
   videoStats: VideoStats | null
   playbackSession: number
@@ -146,7 +164,7 @@ interface VideoPlayerContextType {
   onPaused: () => void
   onBuffering: (data: { isBuffering: boolean }) => void
   onEnded: () => void
-  onError: (error: any) => void
+  onError: (error: unknown) => void
   onVideoStateChange: (data: { type?: string; mVideoWidth?: number; mVideoHeight?: number }) => void
 }
 
@@ -155,6 +173,7 @@ type VideoPlayerSessionContextType = Pick<VideoPlayerContextType,
   | 'videoUrl'
   | 'isPlaying'
   | 'isLoading'
+  | 'playbackError'
   | 'playerMode'
   | 'videoStats'
   | 'playbackSession'
@@ -260,6 +279,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const videoUrl = state.url
   const [isPlaying, setIsPlaying] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [playbackError, setPlaybackError] = useState<PlaybackFailure | null>(null)
   const playerMode: PlayerMode =
     state.mode === 'mini'
       ? 'mini'
@@ -480,6 +500,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       resumeSeconds: lastClosedTimeRef.current ?? undefined,
     })
     setIsLoading(true)
+    setPlaybackError(null)
     if (lastClosedTimeRef.current !== null) {
       pendingSeekSecondsRef.current = lastClosedTimeRef.current
     }
@@ -501,6 +522,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       resumeSeconds: currentTimeRef.current,
     })
     setIsLoading(true)
+    setPlaybackError(null)
     pendingSeekSecondsRef.current = currentTimeRef.current
     setDesiredPlaying(true)
     return true
@@ -941,6 +963,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       setVideoStats(cachedStats)
     }
     setIsLoading(true)
+    setPlaybackError(null)
     setCurrentTime(0)
     setDuration(0)
     setVideoAspectRatio(null)
@@ -1408,12 +1431,28 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     if (video && durationS > 0) recordWatchProgressSafe(video, durationS, durationS)
   }, [setDesiredPlaying])
 
-  const onError = useCallback((error: any) => {
+  const onError = useCallback((error: unknown) => {
+    const classified = classifyPlayerError(error)
     if (__DEV__) {
-      console.error('[VideoPlayerContext] Player error:', error)
+      console.error('[VideoPlayerContext] Player error:', classified.code, error)
     }
     setIsLoading(false)
-  }, [])
+    if (!classified.terminal) return
+    // The source itself cannot be decoded. Leaving desired playback on keeps
+    // the startup re-assertions, and every later remount, re-arming a fetch of
+    // bytes that were already rejected — so end the session and say why.
+    // Same failure reported twice keeps the same object, so a repeat cannot
+    // cascade re-renders through every session consumer.
+    setPlaybackError((previous) => (
+      previous?.code === classified.code
+        ? previous
+        : { code: classified.code, message: classified.message, terminal: true }
+    ))
+    // The startup re-assertions would otherwise keep re-declaring playback for
+    // the next 750ms over a title that has stopped for good.
+    clearStartupAutoplayGuard()
+    setDesiredPlaying(false)
+  }, [clearStartupAutoplayGuard, setDesiredPlaying])
 
   const onVideoStateChange = useCallback((data: { type?: string; mVideoWidth?: number; mVideoHeight?: number }) => {
     if (
@@ -1445,6 +1484,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     videoUrl,
     isPlaying,
     isLoading,
+    playbackError,
     playerMode,
     videoStats,
     playbackSession,
@@ -1460,6 +1500,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     videoUrl,
     isPlaying,
     isLoading,
+    playbackError,
     playerMode,
     videoStats,
     playbackSession,

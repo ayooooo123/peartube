@@ -10,7 +10,7 @@ const source = readFileSync(resolve(__dirname, '../components/video-player/P2PSt
 test('P2P stats bar reports active peer transfers as streaming', () => {
   assert.match(
     source,
-    /if \(peerCount > 0 && \(downloadSpeed > 0 \|\| stats\.status === 'downloading'\)\) \{[\s\S]*`Streaming from \$\{peerCount\}/,
+    /if \(peerCount > 0 && \(downloadSpeed > 0 \|\| stats\?\.status === 'downloading'\)\) \{[\s\S]*`Streaming from \$\{peerCount\}/,
   )
 })
 
@@ -31,4 +31,18 @@ test('P2P stats bar treats fully loaded videos as saved before streaming', () =>
   assert.match(source, /totalBlocks > 0 && downloadedBlocks >= totalBlocks/, 'all blocks downloaded should count as cached')
   assert.match(source, /totalBytes > 0 && downloadedBytes >= totalBytes/, 'all bytes downloaded should count as cached')
   assert.match(source, /stats && !isCached && hasProgressDetails/, 'progress bar should not render as an active transfer once cached')
+})
+
+// A publication plays with no P2P stats at all: the channel-drive stats poller
+// needs a channel key and skips these titles, so `stats` stays null for the
+// whole session. The bar read that as "Starting player…" over frames that were
+// already on screen.
+test('P2P stats bar stops claiming the player is starting once it plays', () => {
+  const playingIndex = source.indexOf("if (playing) return 'Playing'")
+  const startingIndex = source.indexOf("if (!stats) return 'Starting player…'")
+
+  assert.notEqual(playingIndex, -1, 'the bar reads the player state, not only the swarm')
+  assert.notEqual(startingIndex, -1, 'a player that has not started still says so')
+  assert.ok(playingIndex < startingIndex, 'real playback wins over the absence of stats')
+  assert.match(source, /if \(failed \|\| stats\?\.status === 'error'\)/, 'a terminal failure is not a starting player either')
 })

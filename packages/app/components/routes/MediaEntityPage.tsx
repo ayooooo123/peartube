@@ -13,6 +13,8 @@ type MediaEntityInput = {
   entityId?: string | null
   title?: string | null
   sources?: PublicationSource[] | null
+  /** Media renditions as the signed manifest declares them, size included. */
+  renditions?: Array<{ renditionId?: string, byteLength?: number }> | null
   selectedPublicationId?: string | null
   provenance?: unknown[] | null
   conflicts?: unknown[] | null
@@ -91,8 +93,23 @@ type Props = {
     // bytes itself, which is why Play used to stop here.
     url: string | null,
     title: string,
+    // Byte length the signed manifest declares for the rendition that started.
+    // Null when this device has not received a manifest that states one.
+    byteLength: number | null,
   }) => void
   onPlaybackFailed?: (failure: { entityId: string, errorCode: string, message: string }) => void
+}
+
+/**
+ * Byte length of the rendition Play actually started, as the signed manifest
+ * declares it. A rendition the entity response never named has no size here,
+ * which is not zero.
+ */
+function renditionByteLength(entity: MediaEntityInput | null, renditionId: string | null): number | null {
+  const renditions = Array.isArray(entity?.renditions) ? entity.renditions : []
+  const match = renditions.find(rendition => rendition?.renditionId === renditionId)
+  const byteLength = Number(match?.byteLength)
+  return Number.isSafeInteger(byteLength) && byteLength > 0 ? byteLength : null
 }
 
 export default function MediaEntityPage({
@@ -177,6 +194,7 @@ export default function MediaEntityPage({
         renditionId: prepared.renditionId,
         url: prepared.url,
         title: resolved.title,
+        byteLength: renditionByteLength(sourceEntity, prepared.renditionId),
       })
     } catch (error: unknown) {
       const failure = error instanceof Error ? error : null
@@ -189,7 +207,7 @@ export default function MediaEntityPage({
         message: failure?.message || 'Playback could not start',
       })
     }
-  }, [mediaGraph, entityId, resolved.title, onPlaybackPrepared, onPlaybackFailed])
+  }, [mediaGraph, entityId, resolved.title, sourceEntity, onPlaybackPrepared, onPlaybackFailed])
 
   return (
     <MediaEntityDetailScreen

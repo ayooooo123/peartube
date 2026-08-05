@@ -1523,6 +1523,19 @@ export function createScopedNetworkRuntime (options = {}) {
     await Promise.all([...scope.sessions.values()].map(tracked => pumpAssetSession(scope, tracked)))
   }
 
+  // A peer that opened a core from its key alone has no manifest, so it cannot
+  // check the signature over the tree and rejects every proof as unsigned. The
+  // manifest is self-authenticating - the core key is its hash - so it rides
+  // along with the proof, exactly as hypercore's own replicator sends it.
+  async function authorizedBlockProof (core, index) {
+    const proof = await core.proof({
+      block: { index, nodes: 0 },
+      upgrade: { start: 0, length: core.length },
+    })
+    if (proof && !proof.manifest && core.manifest) proof.manifest = core.manifest
+    return proof
+  }
+
   function encodeAssetProof (index, proof, value) {
     const metadata = {
       index,
@@ -1579,10 +1592,7 @@ export function createScopedNetworkRuntime (options = {}) {
         sendScopedFrame(tracked, 'asset', 'asset-block-unavailable', encodeAssetIndex(index))
         return
       }
-      const proof = await scope.core.proof({
-        block: { index, nodes: 0 },
-        upgrade: { start: 0, length: scope.core.length },
-      })
+      const proof = await authorizedBlockProof(scope.core, index)
       const value = b4a.from(proof?.block?.value || [])
       const reservation = policyEpoch === networkPolicyEpoch
         ? await reservePolicyUpload(value.byteLength)
@@ -1809,10 +1819,7 @@ export function createScopedNetworkRuntime (options = {}) {
         sendScopedFrame(tracked, 'archive', 'archive-block-unavailable', encodeArchiveBlockRef(request.coreKey, request.index))
         return
       }
-      const proof = await resource.core.proof({
-        block: { index: request.index, nodes: 0 },
-        upgrade: { start: 0, length: resource.core.length },
-      })
+      const proof = await authorizedBlockProof(resource.core, request.index)
       const value = b4a.from(proof?.block?.value || [])
       const ceiling = scope.archiveUploadCeilingBytes
       const reservation = policyEpoch === networkPolicyEpoch
@@ -3290,10 +3297,7 @@ export function createScopedNetworkRuntime (options = {}) {
   async function createAuthorizedArchiveChallengeProof({ archiveId, coreKey, index } = {}) {
     const resource = retainedArchiveResource(archiveId, coreKey, index)
     if (!await resource.core.has?.(index)) fail('challenged archive block is not locally retained')
-    const proof = await resource.core.proof({
-      block: { index, nodes: 0 },
-      upgrade: { start: 0, length: resource.core.length },
-    })
+    const proof = await authorizedBlockProof(resource.core, index)
     if (proof?.block?.index !== index || !b4a.isBuffer(proof.block.value) ||
         proof.block.value.byteLength === 0 || proof.block.value.byteLength > MAX_ASSET_BLOCK_BYTES) {
       fail('generated archive challenge proof is invalid')

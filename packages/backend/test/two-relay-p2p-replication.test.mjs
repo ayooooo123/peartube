@@ -1,3 +1,11 @@
+// The relay-to-relay archive discovery wire, end to end across two runtimes:
+// request -> pledge -> challenge -> proof -> offload evidence.
+//
+// The cores here are mocks and the swarms are fakes, so this proves the
+// protocol is wired correctly and NOTHING about whether a byte moved. Real
+// byte custody and real Merkle proofs are covered separately, against real
+// Corestores, in `archive-real-byte-custody.test.mjs` — keep the two honest
+// about which question each one answers.
 import test from 'brittle'
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
@@ -62,7 +70,7 @@ function mockCore () {
   }
 }
 
-test('two relays discover, request, pledge, challenge, and verify P2P content replication end-to-end', async (t) => {
+test('two relays carry a pledge from request to verified offload evidence over the discovery wire', async (t) => {
   const keyPairA = crypto.keyPair(bytes(32, 10))
   const keyPairB = crypto.keyPair(bytes(32, 20))
   const publicationId = 'a'.repeat(64)

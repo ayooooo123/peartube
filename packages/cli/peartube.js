@@ -4,6 +4,7 @@ import { realpathSync } from 'node:fs'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { parsePeartubeArgv, PeartubeUsageError } from './src/add/argv.js'
+import { CONTENT_TYPES, providerHelp } from './src/add/media-coordinates.js'
 
 export const PEARTUBE_USAGE = [
   'Usage: peartube <command> [options]',
@@ -27,8 +28,21 @@ export const PEARTUBE_USAGE = [
   '  --output <path>     Destination file for get',
   '  --rendition <id>    Rendition to retrieve',
   '  --limit <n>         Maximum search results',
+  '  --kind <kind>       Narrow search to a kind (movie, series, episode, track, release)',
+  '  --genre <name>      Narrow search to a genre; repeat to require several',
   '  --timeout <s>       Seconds to wait for the next block',
-  '  -h, --help          Show this help'
+  '  -h, --help          Show this help',
+  '',
+  'Add coordinates:',
+  `  --type <kind>       ${CONTENT_TYPES.join(', ')}`,
+  `  --provider <name>   ${providerHelp()}`,
+  '  --show-id <id>      Series id, with --season and --episode',
+  '  --movie-id <id>     Movie id',
+  '  --recording-id <id> MusicBrainz recording MBID',
+  '  --release-id <id>   MusicBrainz release MBID',
+  '  --title <text>      Title to publish under; required when no metadata',
+  '                      client can look the coordinates up',
+  '  --channel-name <t>  Channel to publish into'
 ].join('\n')
 
 const defaultLoadModule = specifier => import(specifier)

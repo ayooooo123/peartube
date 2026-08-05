@@ -176,7 +176,7 @@ test('episode mode rejects every missing or contradictory coordinate', (t) => {
         ...coordinates,
         '--yes'
       ], nonTty),
-      /Episode mode requires --provider tmdb, --show-id, --season, and --episode/
+      /Episode mode requires --provider tmdb\|tvdb, --show-id, --season, and --episode/
     )
   }
 
@@ -207,24 +207,25 @@ test('movie mode rejects every missing or contradictory coordinate', (t) => {
         ...coordinates,
         '--yes'
       ], nonTty),
-      /Movie mode requires --provider tmdb and --movie-id/
+      /Movie mode requires --provider tmdb\|tvdb and --movie-id/
     )
   }
 
-  for (const coordinate of [
+  for (const [flag, value] of [
     ['--show-id', '1399'],
     ['--season', '2'],
-    ['--episode', '8']
+    ['--episode', '8'],
+    ['--recording-id', 'b1a9c0e8-2f9d-4b3e-9a24-6f3c1d9a7b55']
   ]) {
     t.exception(
       () => parsePeartubeArgv([
         'add', 'https://media.example/movie',
         '--type', 'movie',
         ...required.flat(),
-        ...coordinate,
+        flag, value,
         '--yes'
       ], nonTty),
-      /Movie mode does not accept --show-id, --season, or --episode/
+      new RegExp(`Movie mode does not accept ${flag}; movie coordinates are --provider tmdb\\|tvdb and --movie-id`)
     )
   }
 })
@@ -258,17 +259,77 @@ test('complete coordinates require --yes for scripted mode', (t) => {
   }
 })
 
-test('non-TMDB providers fail with an explicit unavailable error', (t) => {
+test('the coordinate table decides which authority may categorize which kind', (t) => {
+  const tvdbEpisode = parsePeartubeArgv([
+    'add', 'https://media.example/episode',
+    '--type', 'episode',
+    '--provider', 'tvdb',
+    '--show-id', '81189',
+    '--season', '1',
+    '--episode', '1',
+    '--title', 'Pilot',
+    '--yes'
+  ], nonTty)
+  t.is(tvdbEpisode.mode, 'scripted')
+  t.is(tvdbEpisode.flags.provider, 'tvdb')
+
+  const recording = parsePeartubeArgv([
+    'add', 'https://media.example/track',
+    '--type', 'track',
+    '--provider', 'musicbrainz',
+    '--recording-id', 'b1a9c0e8-2f9d-4b3e-9a24-6f3c1d9a7b55',
+    '--title', 'Paranoid Android',
+    '--yes'
+  ], nonTty)
+  t.is(recording.mode, 'scripted')
+  t.is(recording.flags.recordingId, 'b1a9c0e8-2f9d-4b3e-9a24-6f3c1d9a7b55')
+
+  const release = parsePeartubeArgv([
+    'add', 'https://media.example/album',
+    '--type', 'release',
+    '--provider', 'musicbrainz',
+    '--release-id', '550e8400-e29b-41d4-a716-446655440000',
+    '--title', 'OK Computer',
+    '--yes'
+  ], nonTty)
+  t.is(release.mode, 'scripted')
+  t.is(release.flags.releaseId, '550e8400-e29b-41d4-a716-446655440000')
+
   t.exception(
     () => parsePeartubeArgv([
-      'add', 'https://media.example/episode',
-      '--type', 'episode',
+      'add', 'https://media.example/track',
+      '--type', 'track',
       '--provider', 'tvdb',
-      '--show-id', '81189',
-      '--season', '1',
-      '--episode', '1'
+      '--recording-id', 'b1a9c0e8-2f9d-4b3e-9a24-6f3c1d9a7b55',
+      '--yes'
     ], nonTty),
-    /Provider "tvdb" is unavailable; only "tmdb" is supported/
+    /Provider "tvdb" is not available for track; track coordinates require --provider musicbrainz and --recording-id/
+  )
+  t.exception(
+    () => parsePeartubeArgv([
+      'add', 'https://media.example/movie',
+      '--type', 'movie',
+      '--provider', 'vimeo',
+      '--movie-id', '550',
+      '--yes'
+    ], nonTty),
+    /Provider "vimeo" is not available for movie; movie coordinates require --provider tmdb\|tvdb and --movie-id/
+  )
+  t.exception(
+    () => parsePeartubeArgv([
+      'add', 'https://media.example/clip',
+      '--provider', 'vimeo',
+      '--yes'
+    ], nonTty),
+    /Provider "vimeo" is not available; supported providers are tmdb, tvdb, musicbrainz/
+  )
+  t.exception(
+    () => parsePeartubeArgv([
+      'add', 'https://media.example/clip',
+      '--type', 'season',
+      '--yes'
+    ], nonTty),
+    /Unsupported content type "season"; expected "episode", "movie", "track", "release", "video"/
   )
 })
 
@@ -293,7 +354,7 @@ test('missing coordinates become interactive only with both TTYs and input enabl
         '--type', 'episode',
         '--provider', 'tmdb'
       ], streams),
-      /Episode mode requires --provider tmdb, --show-id, --season, and --episode/
+      /Episode mode requires --provider tmdb\|tvdb, --show-id, --season, and --episode/
     )
   }
 
@@ -315,7 +376,7 @@ test('--yes and --force do not bypass coordinate validation', (t) => {
         '--provider', 'tmdb',
         flag
       ], nonTty),
-      /Movie mode requires --provider tmdb and --movie-id/
+      /Movie mode requires --provider tmdb\|tvdb and --movie-id/
     )
   }
 })
@@ -331,7 +392,7 @@ test('unknown commands, flags, duplicate flags, and contradictory coordinates ar
       '--show-id', '1399',
       '--movie-id', '550'
     ], tty),
-    /Cannot combine movie and episode coordinates/
+    /Cannot combine episode and movie coordinates/
   )
 })
 

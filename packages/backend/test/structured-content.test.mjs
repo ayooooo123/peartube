@@ -29,7 +29,7 @@ async function rejects (t, callback, pattern, message) {
 
 test('exports the structured content value sets', (t) => {
   t.alike([...PROFILE_KINDS], ['standard', 'tvShow', 'movie', 'creator'])
-  t.alike([...CONTENT_KINDS], ['episode', 'movie', 'video', 'stream', 'trailer', 'extra'])
+  t.alike([...CONTENT_KINDS], ['episode', 'movie', 'video', 'stream', 'trailer', 'extra', 'track', 'release'])
   t.alike([...PUBLICATION_STATES], ['replicationPending', 'durabilityVerified', 'published'])
   t.alike([...ARTWORK_ROLES], ['avatar', 'poster', 'banner', 'backdrop'])
 })
@@ -101,7 +101,9 @@ test('rejects insufficient, heuristic, partial, and ambiguous import identities'
     { contentKind: 'episode', sourceVideoId: '62085' },
     { contentKind: 'episode', mediaProvider: 'tmdb', mediaId: '1396', seasonNumber: 1 },
     { contentKind: 'episode', mediaProvider: 'tmdb', mediaId: '1396', episodeNumber: 1 },
-    { contentKind: 'episode', mediaProvider: 'tvdb', mediaId: '81189', seasonNumber: 1, episodeNumber: 1 },
+    { contentKind: 'track', mediaProvider: 'tmdb', mediaId: '81189' },
+    { contentKind: 'track', mediaProvider: 'musicbrainz', mediaId: '81189', seasonNumber: 1 },
+    { contentKind: 'release', mediaProvider: 'tvdb', mediaId: '81189' },
     { contentKind: 'movie', mediaProvider: 'tmdb' },
     { contentKind: 'movie', mediaProvider: 'tmdb', mediaId: '550', seasonNumber: 1 },
     { contentKind: 'video', mediaProvider: 'tmdb', mediaId: '550' },

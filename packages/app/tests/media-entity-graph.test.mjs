@@ -238,3 +238,69 @@ test('bounded partial collections preserve placeholders and do not collapse rema
   assert.equal(projected.collection.items.find(item => item.entityId === 'work:e2').available, false)
   assert.equal(projected.collection.items.filter(item => item.position === 1).length, 2)
 })
+
+test('categories the publisher claimed reach the app, and ones nobody claimed stay absent', () => {
+  const graph = projectMediaEntityGraph({
+    resolvedEntities: [
+      {
+        localEntityId: 'work:movie:described',
+        entityKind: 'work',
+        contentKind: 'movie',
+        preferredMetadata: { title: 'Described' },
+        releaseYear: 1999,
+        runtimeMinutes: 136,
+        overview: 'A synopsis a consumer cannot look up anywhere else.',
+        genres: ['Action', 'Sci-Fi'],
+        publications: [{ publicationId: 'pub-described', renditionId: 'rend-1', publisherId: 'publisher-a', availabilityStatus: 'available' }],
+      },
+      {
+        localEntityId: 'work:movie:undescribed',
+        entityKind: 'work',
+        contentKind: 'movie',
+        preferredMetadata: { title: 'Undescribed' },
+        publications: [{ publicationId: 'pub-undescribed', renditionId: 'rend-2', publisherId: 'publisher-b', availabilityStatus: 'available' }],
+      },
+    ],
+  })
+
+  const described = graph.mediaItems.find(item => item.localEntityId === 'work:movie:described')
+  assert.equal(described.releaseYear, 1999)
+  assert.equal(described.runtimeMinutes, 136)
+  assert.equal(described.overview, 'A synopsis a consumer cannot look up anywhere else.')
+  assert.deepEqual(described.genres, ['Action', 'Sci-Fi'])
+
+  const undescribed = graph.mediaItems.find(item => item.localEntityId === 'work:movie:undescribed')
+  for (const field of ['releaseYear', 'runtimeMinutes', 'overview', 'genres']) {
+    assert.equal(field in undescribed, false, `${field} is absent, not an empty string or a zero`)
+  }
+  assert.equal(undescribed.durationSec, null, 'a runtime in minutes is never mistaken for a playback duration in seconds')
+})
+
+test('one publisher describing a title fills in for another that did not', () => {
+  const graph = projectMediaEntityGraph({
+    resolvedEntities: [
+      {
+        localEntityId: 'work:movie:shared',
+        entityKind: 'work',
+        contentKind: 'movie',
+        preferredMetadata: { title: 'Shared' },
+        publications: [{ publicationId: 'pub-quiet', renditionId: 'rend-1', publisherId: 'publisher-a', availabilityStatus: 'available' }],
+      },
+      {
+        localEntityId: 'work:movie:shared',
+        entityKind: 'work',
+        contentKind: 'movie',
+        preferredMetadata: { title: 'Shared' },
+        releaseYear: 2005,
+        genres: ['Comedy'],
+        publications: [{ publicationId: 'pub-described', renditionId: 'rend-2', publisherId: 'publisher-b', availabilityStatus: 'available' }],
+      },
+    ],
+  })
+
+  assert.equal(graph.mediaItems.length, 1)
+  const [shared] = graph.mediaItems
+  assert.equal(shared.releaseYear, 2005)
+  assert.deepEqual(shared.genres, ['Comedy'])
+  assert.equal('runtimeMinutes' in shared, false, 'neither publisher claimed a runtime, so none is invented')
+})

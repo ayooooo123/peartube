@@ -38,6 +38,10 @@ function run (args, env = {}) {
 
 const MOVIE = ['add', 'https://youtube.com/watch?v=v1', '--type', 'movie', '--provider', 'tmdb', '--movie-id', '603', '--yes', '--json']
 const EPISODE = ['add', 'https://youtube.com/watch?v=v1', '--type', 'episode', '--provider', 'tmdb', '--show-id', '1396', '--season', '1', '--episode', '1', '--yes', '--json']
+const TVDB_EPISODE = ['add', 'https://youtube.com/watch?v=v1', '--type', 'episode', '--provider', 'tvdb', '--show-id', '81189', '--season', '1', '--episode', '2', '--title', 'Cat\'s in the Bag...', '--yes', '--json']
+const TVDB_MOVIE = ['add', 'https://youtube.com/watch?v=v1', '--type', 'movie', '--provider', 'tvdb', '--movie-id', '603', '--title', 'The Matrix', '--yes', '--json']
+const TRACK = ['add', 'https://youtube.com/watch?v=v1', '--type', 'track', '--provider', 'musicbrainz', '--recording-id', 'b1a9c0e8-2f9d-4b3e-9a24-6f3c1d9a7b55', '--title', 'Paranoid Android', '--yes', '--json']
+const RELEASE = ['add', 'https://youtube.com/watch?v=v1', '--type', 'release', '--provider', 'musicbrainz', '--release-id', '550e8400-e29b-41d4-a716-446655440000', '--title', 'OK Computer', '--yes', '--json']
 
 const scenarios = [
   {
@@ -85,6 +89,43 @@ const scenarios = [
   {
     name: 'unsupported provider is rejected before any transfer',
     async check () { const r = await run(['add', 'https://x/y', '--type', 'movie', '--provider', 'vimeo', '--movie-id', '1', '--yes'], {}); return r.code === 2 && /unavailable|not available/.test(r.stderr) }
+  },
+  {
+    name: 'TVDB episode and movie publish without any TMDB key',
+    async check () {
+      const episode = await run(TVDB_EPISODE, { TMDB_API_KEY: '' })
+      const movie = await run(TVDB_MOVIE, { TMDB_API_KEY: '' })
+      return json(episode).status === 'published' && json(movie).status === 'published'
+    }
+  },
+  {
+    name: 'MusicBrainz recording and release publish without any TMDB key',
+    async check () {
+      const track = await run(TRACK, { TMDB_API_KEY: '' })
+      const release = await run(RELEASE, { TMDB_API_KEY: '' })
+      return json(track).status === 'published' && json(release).status === 'published'
+    }
+  },
+  {
+    name: 'an authority a kind cannot carry is refused before any transfer',
+    async check () {
+      const r = await run(['add', 'https://x/y', '--type', 'track', '--provider', 'tmdb', '--recording-id', 'b1a9c0e8-2f9d-4b3e-9a24-6f3c1d9a7b55', '--yes'])
+      return r.code === 2 && /track coordinates require --provider musicbrainz and --recording-id/.test(r.stderr)
+    }
+  },
+  {
+    name: 'an ordinal a kind does not have is refused before any transfer',
+    async check () {
+      const r = await run([...TRACK, '--season', '1'])
+      return r.code === 2 && /Track mode does not accept --season/.test(r.stderr)
+    }
+  },
+  {
+    name: 'coordinates with no metadata client demand an explicit title',
+    async check () {
+      const r = await run(['add', 'https://x/y', '--type', 'release', '--provider', 'musicbrainz', '--release-id', '550e8400-e29b-41d4-a716-446655440000', '--yes'])
+      return r.code === 2 && /--title is required for musicbrainz coordinates/.test(r.stderr)
+    }
   }
 ]
 

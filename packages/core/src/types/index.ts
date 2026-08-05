@@ -316,6 +316,16 @@ export interface MediaEntitySummary {
   availability?: MediaAvailability | null;
   sources: MediaPublicationSource[];
   renditions: MediaRenditionDescriptor[];
+  /**
+   * What a viewer reads before pressing play. A consumer holds no
+   * metadata-provider credentials, so these arrive on the publisher's signed
+   * metadata claim or not at all; a category nobody claimed is absent, never
+   * an empty string and never a zero.
+   */
+  releaseYear?: number;
+  runtimeMinutes?: number;
+  overview?: string;
+  genres?: string[];
 }
 
 export interface MediaPageRequest {

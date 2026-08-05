@@ -1,5 +1,6 @@
 import { resolveAddPreferences } from './preferences.js'
-import { buildCreatorItemDraft, buildDirectChannelDraft, buildEpisodeItemDraft, buildMovieChannelDraft, buildMovieItemDraft, buildShowChannelDraft, normalizeIdentityUrl } from './content-model.js'
+import { buildCreatorItemDraft, buildDirectChannelDraft, buildEpisodeItemDraft, buildMovieChannelDraft, buildMovieItemDraft, buildReleaseItemDraft, buildShowChannelDraft, buildTrackItemDraft, normalizeIdentityUrl } from './content-model.js'
+import { CONTENT_TYPES, coordinateRefusal, coordinateRequirement, coordinatesComplete, isQueryable, modeLabel, providerRefusal, readMediaCoordinates } from './media-coordinates.js'
 import { renderPickerLines } from './render.js'
 import { createDiagnosticScope } from './diagnostic-scope.js'
 import { createBackendExecutorDeps } from './backend-deps.js'
@@ -185,12 +186,55 @@ function relayResult ({ job, status, timedOut, relay, url }) {
   return { status: status || 'queued', relay, url, jobId: job?.id || null }
 }
 
+function refuse (message) {
+  if (message) throw new AddUsageError(message)
+}
+
+// Drafts for an authority with no metadata client: the coordinates and the
+// title the publisher typed, and nothing else.
+function buildSuppliedDrafts ({ kind, coordinates, flags, source }) {
+  const title = flags.title
+  if (!title) {
+    throw new AddUsageError(`--title is required for ${coordinates.mediaProvider} coordinates; PearTube has no ${coordinates.mediaProvider} metadata client to look one up`)
+  }
+  const channelName = flags.channelName || title
+  const work = { title, seasonNumber: coordinates.seasonNumber, episodeNumber: coordinates.episodeNumber }
+  const channelCoordinates = { mediaProvider: coordinates.mediaProvider, mediaId: coordinates.mediaId }
+  if (kind === 'episode') {
+    return {
+      channelDraft: buildShowChannelDraft({ name: channelName, ...channelCoordinates }),
+      itemDraft: buildEpisodeItemDraft(work, source, coordinates)
+    }
+  }
+  if (kind === 'movie') {
+    return {
+      channelDraft: buildMovieChannelDraft({ title: channelName, ...channelCoordinates }),
+      itemDraft: buildMovieItemDraft(work, source, coordinates)
+    }
+  }
+  // A channel is an artist or a label, never a single recording, and the
+  // profile vocabulary has no album kind: music publishes into a creator
+  // channel and carries its MusicBrainz identity on the work itself.
+  const channelDraft = buildDirectChannelDraft({ name: channelName })
+  const itemDraft = kind === 'track'
+    ? buildTrackItemDraft(work, source, coordinates)
+    : buildReleaseItemDraft(work, source, coordinates)
+  return { channelDraft, itemDraft }
+}
+
 async function runScripted ({ context, preferences, deps, emitProgress, logger }) {
   const { flags } = context
-  if (flags.provider && flags.provider !== 'tmdb') {
-    throw new AddUsageError(`Provider ${flags.provider} is not available in this version`)
+  refuse(providerRefusal(flags.type, flags.provider))
+  refuse(coordinateRefusal(flags.type, flags))
+
+  const coordinates = readMediaCoordinates(flags.type, flags)
+  // A half-named work — an id with no authority, or an authority with no id —
+  // is refused here too, because a caller can reach this without the parser.
+  if (coordinates && !coordinatesComplete(flags.type, flags)) {
+    throw new AddUsageError(`${modeLabel(flags.type)} mode requires ${coordinateRequirement(flags.type)}`)
   }
-  if (!preferences.tmdbApiKey && (flags.type === 'episode' || flags.type === 'movie')) {
+  const enriched = coordinates !== null && isQueryable(coordinates.mediaProvider)
+  if (enriched && !preferences.tmdbApiKey) {
     throw new AddUsageError('A TMDB API key is required for scripted metadata. Set TMDB_API_KEY or run peartube config.')
   }
   const fetchUrl = context.fetchUrl || context.query
@@ -204,21 +248,23 @@ async function runScripted ({ context, preferences, deps, emitProgress, logger }
       const title = flags.title || titleFromUrl(fetchUrl)
       channelDraft = buildDirectChannelDraft({ name: flags.channelName || title })
       itemDraft = buildCreatorItemDraft({ title, contentKind: 'video' }, sourceFrom(fetchUrl))
-    } else if (flags.type === 'episode') {
+    } else if (enriched && flags.type === 'episode') {
       const tmdb = deps.createTmdbProvider({ apiKey: preferences.tmdbApiKey, searchLimit: preferences.searchLimit })
-      const show = await tmdb.getShow(flags.showId)
-      const episodes = await tmdb.getSeason(flags.showId, flags.season)
-      const episode = episodes.find((entry) => entry.episodeNumber === Number(flags.episode))
-      if (!episode) throw new AddUsageError(`Episode S${flags.season}E${flags.episode} was not found`)
+      const show = await tmdb.getShow(coordinates.mediaId)
+      const episodes = await tmdb.getSeason(coordinates.mediaId, coordinates.seasonNumber)
+      const episode = episodes.find((entry) => entry.episodeNumber === coordinates.episodeNumber)
+      if (!episode) throw new AddUsageError(`Episode S${coordinates.seasonNumber}E${coordinates.episodeNumber} was not found`)
       channelDraft = buildShowChannelDraft(show)
-      itemDraft = buildEpisodeItemDraft(episode, sourceFrom(fetchUrl), { mediaProvider: 'tmdb', mediaId: show.mediaId })
-    } else if (flags.type === 'movie') {
+      itemDraft = buildEpisodeItemDraft(episode, sourceFrom(fetchUrl), coordinates)
+    } else if (enriched && flags.type === 'movie') {
       const tmdb = deps.createTmdbProvider({ apiKey: preferences.tmdbApiKey, searchLimit: preferences.searchLimit })
-      const movie = await tmdb.getMovie(flags.movieId)
+      const movie = await tmdb.getMovie(coordinates.mediaId)
       channelDraft = buildMovieChannelDraft(movie)
-      itemDraft = buildMovieItemDraft(movie, sourceFrom(fetchUrl))
+      itemDraft = buildMovieItemDraft(movie, sourceFrom(fetchUrl), coordinates)
+    } else if (coordinates) {
+      ;({ channelDraft, itemDraft } = buildSuppliedDrafts({ kind: flags.type, coordinates, flags, source: sourceFrom(fetchUrl) }))
     } else {
-      throw new AddUsageError('Scripted add requires --type video, episode, or movie')
+      throw new AddUsageError(`Scripted add requires --type ${CONTENT_TYPES.join(', ')}`)
     }
 
     return await executeSingle({ context, runtime, deps, preferences, channelDraft, itemDraft, fetchUrl, emitProgress })

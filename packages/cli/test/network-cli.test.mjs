@@ -177,6 +177,67 @@ const BARE = {
   renditions: []
 }
 
+// Three titles that share a query token, so a filter is the only thing that can
+// separate them. Their kinds and categories are exactly what the consumer
+// catalog projection reports: an entity kind per row, and a content kind per
+// publication source.
+const NIGHT_MOVIE = {
+  entityId: 'work:movie:night-runner',
+  entityKind: 'movie',
+  title: 'Night Runner',
+  subtitle: null,
+  claimCount: 1,
+  conflictCount: 0,
+  availability: availability(),
+  releaseYear: 2021,
+  runtimeMinutes: 118,
+  genres: ['Action', 'Thriller'],
+  sources: [{
+    publicationId: 'pub-night-runner',
+    publisherId: 'pk-3',
+    availability: availability(),
+    mediaCoordinates: { contentKind: 'movie', mediaProvider: 'tmdb', mediaId: '603' }
+  }],
+  renditions: []
+}
+
+const NIGHT_SERIES = {
+  entityId: 'collection:series:night-shift',
+  entityKind: 'series',
+  title: 'Night Shift',
+  subtitle: null,
+  claimCount: 1,
+  conflictCount: 0,
+  availability: availability(),
+  genres: ['Comedy'],
+  sources: [{
+    publicationId: 'pub-night-shift',
+    publisherId: 'pk-4',
+    availability: availability(),
+    mediaCoordinates: { contentKind: 'episode', mediaProvider: 'tvdb', mediaId: '73244', seasonNumber: 1, episodeNumber: 1 }
+  }],
+  renditions: []
+}
+
+const NIGHT_TRACK = {
+  entityId: 'work:track:night-drive',
+  entityKind: 'track',
+  title: 'Night Drive',
+  subtitle: null,
+  claimCount: 1,
+  conflictCount: 0,
+  availability: availability(),
+  sources: [{
+    publicationId: 'pub-night-drive',
+    publisherId: 'pk-5',
+    availability: availability(),
+    mediaCoordinates: { contentKind: 'track', mediaProvider: 'musicbrainz', mediaId: 'b1a9c0a2-0000-4000-8000-000000000001' }
+  }],
+  renditions: []
+}
+
+const NIGHTS = [NIGHT_MOVIE, NIGHT_SERIES, NIGHT_TRACK]
+
 /* ------------------------------------------------------------------ argv -- */
 
 test('search and get parse into their own command shapes', (t) => {
@@ -203,6 +264,10 @@ test('search and get parse into their own command shapes', (t) => {
   })
 
   t.is(parsePeartubeArgv(['search', 'matrix', '--limit', '5'], nonTty).flags.limit, 5)
+
+  t.alike(parsePeartubeArgv([
+    'search', 'night', '--kind', 'series', '--genre', 'Comedy', '--genre', 'Drama'
+  ], nonTty).flags, { kind: 'series', genres: ['Comedy', 'Drama'] }, 'category filters parse, and --genre repeats')
 })
 
 test('search and get reject each other and add-only flags', (t) => {
@@ -215,6 +280,10 @@ test('search and get reject each other and add-only flags', (t) => {
   t.exception(() => parsePeartubeArgv(['config', '--output', '/tmp/x'], nonTty), PeartubeUsageError)
   t.exception(() => parsePeartubeArgv(['search', 'matrix', '--limit', 'lots'], nonTty), PeartubeUsageError)
   t.exception(() => parsePeartubeArgv(['get', 'ent', '--timeout', '0'], nonTty), PeartubeUsageError)
+  t.exception(() => parsePeartubeArgv(['get', 'ent', '--kind', 'movie'], nonTty), PeartubeUsageError)
+  t.exception(() => parsePeartubeArgv(['get', 'ent', '--genre', 'Comedy'], nonTty), PeartubeUsageError)
+  t.exception(() => parsePeartubeArgv(['search', 'night', '--kind', '  '], nonTty), PeartubeUsageError)
+  t.exception(() => parsePeartubeArgv(['search', 'night', '--genre', ''], nonTty), PeartubeUsageError)
 })
 
 /* ----------------------------------------------------------------- entry -- */
@@ -309,6 +378,101 @@ test('search closes the runtime when the catalog fails', async (t) => {
   t.is(await runSearchCommand(context), 1)
   t.is(JSON.parse(stdout.text().trim()).errorCode, 'CONSUMER_CATALOG_UPDATE_FAILED')
   t.is(closes.length, 1)
+})
+
+// A catalog whose only query is a title substring is a flat list. These filter
+// the projection the app already reads — no second index, no extra request.
+test('search --kind narrows by entity kind and by the content kind of a publication', async (t) => {
+  const api = fakeApi({ items: NIGHTS })
+  const unfiltered = networkContext({ command: 'search', query: 'night', flags: { json: true }, api })
+  t.is(await runSearchCommand(unfiltered.context), 0)
+  t.is(JSON.parse(unfiltered.stdout.text().trim()).count, 3, 'all three share the query token')
+
+  const series = networkContext({ command: 'search', query: 'night', flags: { json: true, kind: 'series' }, api })
+  t.is(await runSearchCommand(series.context), 0)
+  const seriesResult = JSON.parse(series.stdout.text().trim())
+  t.is(seriesResult.count, 1)
+  t.is(seriesResult.results[0].entityId, 'collection:series:night-shift', 'the entity kind matched')
+  t.alike(seriesResult.filters, { kind: 'series' }, 'the result says what it filtered on')
+
+  const episode = networkContext({ command: 'search', query: 'night', flags: { json: true, kind: 'episode' }, api })
+  t.is(await runSearchCommand(episode.context), 0)
+  const episodeResult = JSON.parse(episode.stdout.text().trim())
+  t.is(episodeResult.count, 1)
+  t.is(episodeResult.results[0].entityId, 'collection:series:night-shift', "the series' episode coordinates matched")
+
+  const track = networkContext({ command: 'search', query: 'night', flags: { json: true, kind: 'TRACK' }, api })
+  t.is(await runSearchCommand(track.context), 0)
+  const trackResult = JSON.parse(track.stdout.text().trim())
+  t.is(trackResult.count, 1)
+  t.is(trackResult.results[0].entityId, 'work:track:night-drive', 'a MusicBrainz track is reachable by kind, and matching is case-insensitive')
+  t.is(trackResult.filters.kind, 'TRACK', 'the filter is echoed as the caller wrote it, not as a cleaned-up restatement')
+
+  t.is(api.calls.filter(([name]) => name === 'getMediaCatalog').length, 4, 'every filter reads the same catalog, never a second index')
+})
+
+test('search --genre narrows case-insensitively and repeats narrow further', async (t) => {
+  const api = fakeApi({ items: NIGHTS })
+  const comedy = networkContext({ command: 'search', query: 'night', flags: { json: true, genres: ['comedy'] }, api })
+  t.is(await runSearchCommand(comedy.context), 0)
+  const comedyResult = JSON.parse(comedy.stdout.text().trim())
+  t.is(comedyResult.count, 1)
+  t.is(comedyResult.results[0].entityId, 'collection:series:night-shift')
+  t.alike(comedyResult.filters, { genres: ['comedy'] })
+
+  const both = networkContext({ command: 'search', query: 'night', flags: { json: true, genres: ['Action', 'Thriller'] }, api })
+  t.is(await runSearchCommand(both.context), 0)
+  const bothResult = JSON.parse(both.stdout.text().trim())
+  t.is(bothResult.count, 1)
+  t.is(bothResult.results[0].entityId, 'work:movie:night-runner', 'a repeated --genre requires every genre named')
+  t.alike(bothResult.results[0].genres, ['Action', 'Thriller'], 'the hit reports the categories it matched on')
+  t.is(bothResult.results[0].releaseYear, 2021)
+  t.is(bothResult.results[0].runtimeMinutes, 118)
+
+  const undescribed = networkContext({ command: 'search', query: 'night drive', flags: { json: true }, api })
+  t.is(await runSearchCommand(undescribed.context), 0)
+  const hit = JSON.parse(undescribed.stdout.text().trim()).results[0]
+  for (const field of ['genres', 'releaseYear', 'runtimeMinutes']) {
+    t.absent(field in hit, `${field} stays absent when the catalog never reported it`)
+  }
+})
+
+test('a category filter that matches nothing is an honest empty result naming the filter', async (t) => {
+  const api = fakeApi({ items: NIGHTS })
+  const { context, stdout } = networkContext({
+    command: 'search',
+    query: 'night',
+    flags: { kind: 'movie', genres: ['Comedy'] },
+    api
+  })
+
+  t.is(await runSearchCommand(context), 0, 'an empty result is not a failure')
+  const out = stdout.text()
+  t.ok(out.includes('No titles match "night" (kind=movie, genre=Comedy).'), 'the miss names the filters that produced it')
+  t.absent(out.includes('Night Runner'), 'nothing that failed a filter is printed')
+
+  const json = networkContext({ command: 'search', query: 'night', flags: { json: true, kind: 'movie', genres: ['Comedy'] }, api })
+  t.is(await runSearchCommand(json.context), 0)
+  const result = JSON.parse(json.stdout.text().trim())
+  t.is(result.count, 0)
+  t.alike(result.results, [], 'no result is invented to fill the filter')
+  t.alike(result.filters, { kind: 'movie', genres: ['Comedy'] }, 'the filter is reported even when it matched nothing')
+})
+
+test('an unfiltered search reports no filters and still prints categories it was told', async (t) => {
+  const api = fakeApi({ items: NIGHTS })
+  const { context, stdout } = networkContext({ command: 'search', query: 'night runner', api })
+
+  t.is(await runSearchCommand(context), 0)
+  const out = stdout.text()
+  t.ok(out.includes('year=2021'), 'the release year the catalog reported is printed')
+  t.ok(out.includes('runtime=118m'), 'the runtime the catalog reported is printed')
+  t.ok(out.includes('genres=Action,Thriller'), 'the genres the catalog reported are printed')
+  t.absent(out.includes('kind='), 'an unfiltered search claims no filter')
+
+  const json = networkContext({ command: 'search', query: 'night runner', flags: { json: true }, api })
+  t.is(await runSearchCommand(json.context), 0)
+  t.absent('filters' in JSON.parse(json.stdout.text().trim()), 'no filters key when nothing was filtered')
 })
 
 /* ------------------------------------------------------------------- get -- */

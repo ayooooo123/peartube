@@ -897,3 +897,106 @@ test('what a viewer reads before pressing play travels with the entry', async (t
   t.is(item.overview, 'Two friends crash weddings.')
   t.alike(item.genres, ['Comedy', 'Romance'])
 })
+
+// A claim is a stranger's signed assertion, not trusted input. The publisher's
+// own ingest bounds every description before signing it; a claim that arrives
+// over the wire has never been through that, so the projection has to hold the
+// same line. It has to hold it by clamping, too: the bounded local index
+// refuses a record carrying more than eight genres outright, so passing an
+// over-described claim through unchanged does not merely over-report a title,
+// it deletes the title from the consumer catalog entirely.
+test('a claim that oversteps the ingest bounds is clamped to them, not passed through and not dropped', async (t) => {
+  const publisher = crypto.keyPair(b4a.alloc(32, 95))
+  const work = createEntityReference({ entityKind: 'work', namespace: 'issuer-native', issuerRootKey: publisher.publicKey, issuerLocalId: 'overdescribed' })
+  const mediaGraphStore = createMediaGraphStore({ trustedSigners: [publisher.publicKey] })
+  const assetManifestStore = createAssetManifestStore({ trustedSigners: [publisher.publicKey] })
+  const manifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    sequence: 1,
+    title: 'Overdescribed',
+    renditions: [testRendition(43)],
+    keyPair: publisher,
+  })
+  await assetManifestStore.ingestManifest(manifest)
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [work],
+    payload: {
+      title: 'Overdescribed',
+      publicationId: manifest.publicationId,
+      releaseYear: 99999,
+      runtimeMinutes: 1_000_000,
+      genres: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'x'.repeat(65)],
+    },
+    confidence: 100,
+    keyPair: publisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [work],
+    payload: { publicationId: manifest.publicationId, availabilityStatus: 'available' },
+    confidence: 100,
+    keyPair: publisher,
+  })
+
+  const projection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex(),
+    bootstrapManager: { listLocators: () => [] },
+    indexFeedManager: { getRecords: () => [] },
+    publisherRecords: () => projectAuthenticatedPublisherMediaRecords({ mediaGraphStore, assetManifestStore }),
+  })
+  t.is(projection.rebuild().accepted, 1, 'an over-described title is still admitted, not deleted from the catalog')
+
+  const api = createMediaGraphApi({ consumerCatalogProjection: projection })
+  const [item] = (await api.getMediaCatalog({})).items
+  t.alike(item.genres, ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'], 'genres are capped at the ingest bound and the oversized name is dropped')
+  t.absent('releaseYear' in item, 'a year outside the ingest window is refused, not passed on')
+  t.absent('runtimeMinutes' in item, 'a runtime outside the ingest bound is refused, not passed on')
+})
+
+// A category the publisher did not supply is absent. Not an empty string, not a
+// zero, not an empty list: a consumer that renders "0 min" or a blank genre row
+// is stating a fact nobody ever claimed.
+test('a publication with no described categories exposes none rather than empty ones', async (t) => {
+  const publisher = crypto.keyPair(b4a.alloc(32, 97))
+  const work = createEntityReference({ entityKind: 'work', namespace: 'issuer-native', issuerRootKey: publisher.publicKey, issuerLocalId: 'undescribed' })
+  const mediaGraphStore = createMediaGraphStore({ trustedSigners: [publisher.publicKey] })
+  const assetManifestStore = createAssetManifestStore({ trustedSigners: [publisher.publicKey] })
+  const manifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    sequence: 1,
+    title: 'Undescribed',
+    renditions: [testRendition(45)],
+    keyPair: publisher,
+  })
+  await assetManifestStore.ingestManifest(manifest)
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [work],
+    payload: { title: 'Undescribed', publicationId: manifest.publicationId },
+    confidence: 100,
+    keyPair: publisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [work],
+    payload: { publicationId: manifest.publicationId, availabilityStatus: 'available' },
+    confidence: 100,
+    keyPair: publisher,
+  })
+
+  const projection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex(),
+    bootstrapManager: { listLocators: () => [] },
+    indexFeedManager: { getRecords: () => [] },
+    publisherRecords: () => projectAuthenticatedPublisherMediaRecords({ mediaGraphStore, assetManifestStore }),
+  })
+  projection.rebuild()
+
+  const api = createMediaGraphApi({ consumerCatalogProjection: projection })
+  const [item] = (await api.getMediaCatalog({})).items
+  t.is(item.title, 'Undescribed', 'the entry is there; only its categories are not')
+  for (const field of ['releaseYear', 'runtimeMinutes', 'overview', 'genres']) {
+    t.absent(field in item, `${field} is absent, never guessed`)
+  }
+})

@@ -143,7 +143,57 @@ function catalogAvailability (item) {
   return null
 }
 
-export function matchCatalogItems (items, query, limit = DEFAULT_SEARCH_LIMIT) {
+// What the publisher categorized this entry as, from the catalog entry itself:
+// the entity kind the projection assigned it, plus the content kind of every
+// publication behind it. Both are needed — a series is an entity kind and the
+// episodes under it are a content kind, and a viewer looking for one of those
+// should not have to know which of the two the catalog happened to record.
+function itemKinds (item) {
+  const kinds = new Set()
+  if (typeof item?.entityKind === 'string' && item.entityKind) kinds.add(item.entityKind.toLowerCase())
+  for (const source of item?.sources || []) {
+    const kind = source?.mediaCoordinates?.contentKind
+    if (typeof kind === 'string' && kind) kinds.add(kind.toLowerCase())
+  }
+  return kinds
+}
+
+function itemGenres (item) {
+  return new Set(
+    (Array.isArray(item?.genres) ? item.genres : [])
+      .filter(genre => typeof genre === 'string' && genre)
+      .map(genre => genre.toLowerCase())
+  )
+}
+
+/**
+ * The filters the caller asked for, or null when it asked for none. Each one is
+ * kept verbatim so the result can report exactly what was applied rather than a
+ * cleaned-up restatement of it.
+ */
+export function searchFilters (flags = {}) {
+  const kind = typeof flags.kind === 'string' && flags.kind.trim() ? flags.kind.trim() : null
+  const genres = (Array.isArray(flags.genres) ? flags.genres : [])
+    .filter(genre => typeof genre === 'string' && genre.trim())
+    .map(genre => genre.trim())
+  if (!kind && genres.length === 0) return null
+  return { ...(kind ? { kind } : {}), ...(genres.length > 0 ? { genres } : {}) }
+}
+
+// A repeated --genre narrows: every genre named has to be one the catalog
+// reported for that entry. A filter naming a kind or a genre nothing carries
+// matches nothing, which is an empty result, not an error.
+function passesFilters (item, filters) {
+  if (!filters) return true
+  if (filters.kind && !itemKinds(item).has(filters.kind.toLowerCase())) return false
+  if (filters.genres) {
+    const genres = itemGenres(item)
+    if (!filters.genres.every(genre => genres.has(genre.toLowerCase()))) return false
+  }
+  return true
+}
+
+export function matchCatalogItems (items, query, limit = DEFAULT_SEARCH_LIMIT, filters = null) {
   const tokens = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
   if (tokens.length === 0) return []
   const hits = []
@@ -152,20 +202,31 @@ export function matchCatalogItems (items, query, limit = DEFAULT_SEARCH_LIMIT) {
     if (title.length === 0) continue
     const haystack = title.toLowerCase()
     if (!tokens.every(token => haystack.includes(token))) continue
+    // Filtering before the limit is what makes `--limit 20 --genre Drama`
+    // twenty dramas rather than however many of the first twenty titles
+    // happened to be one.
+    if (!passesFilters(item, filters)) continue
     hits.push(item)
     if (hits.length >= limit) break
   }
   return hits
 }
 
+// A category the catalog did not report is left out, exactly like a peer count
+// it did not measure. A blank genre row or a `0 min` runtime would be the CLI
+// asserting something about someone else's publication that nobody claimed.
 function describeHit (item) {
   const availability = catalogAvailability(item)
+  const genres = (Array.isArray(item.genres) ? item.genres : []).filter(genre => typeof genre === 'string' && genre)
   return {
     title: item.title,
     entityId: item.entityId,
     entityKind: item.entityKind || null,
     publicationCount: Array.isArray(item.sources) ? item.sources.length : 0,
-    ...(availability ? { availability } : {})
+    ...(availability ? { availability } : {}),
+    ...(genres.length > 0 ? { genres } : {}),
+    ...(Number.isSafeInteger(item.releaseYear) && item.releaseYear > 0 ? { releaseYear: item.releaseYear } : {}),
+    ...(Number.isSafeInteger(item.runtimeMinutes) && item.runtimeMinutes > 0 ? { runtimeMinutes: item.runtimeMinutes } : {})
   }
 }
 
@@ -181,7 +242,21 @@ function hitLine (hit) {
   if (Number.isFinite(hit.availability?.completePeerCount)) {
     parts.push(`complete-peers=${hit.availability.completePeerCount}`)
   }
+  if (hit.releaseYear) parts.push(`year=${hit.releaseYear}`)
+  if (hit.runtimeMinutes) parts.push(`runtime=${hit.runtimeMinutes}m`)
+  if (hit.genres) parts.push(`genres=${hit.genres.join(',')}`)
   return parts.join(' ')
+}
+
+// A filtered search that says only "no titles match" is indistinguishable from
+// an empty catalog, so both the hit and the miss name what was narrowed. `+`
+// between genres because a repeated --genre requires all of them.
+function filterClause (filters) {
+  if (!filters) return ''
+  const parts = []
+  if (filters.kind) parts.push(`kind=${filters.kind}`)
+  if (filters.genres) parts.push(`genre=${filters.genres.join('+')}`)
+  return ` (${parts.join(', ')})`
 }
 
 export function finishNetworkCommand (context, result, lines) {
@@ -219,11 +294,20 @@ export async function runSearchCommand (context = {}) {
     session = await openNetworkSession(context)
     progress(context, 'Reading the consumer catalog...')
     const items = await collectCatalogItems(session.api)
-    const results = matchCatalogItems(items, query, searchLimit(flags)).map(describeHit)
-    const result = { command: 'search', status: 'ok', query, count: results.length, results }
+    const filters = searchFilters(flags)
+    const results = matchCatalogItems(items, query, searchLimit(flags), filters).map(describeHit)
+    const clause = filterClause(filters)
+    const result = {
+      command: 'search',
+      status: 'ok',
+      query,
+      ...(filters ? { filters } : {}),
+      count: results.length,
+      results
+    }
     const lines = results.length === 0
-      ? [`No titles match "${query}".`]
-      : [...results.map(hitLine), `${results.length} match${results.length === 1 ? '' : 'es'} for "${query}".`]
+      ? [`No titles match "${query}"${clause}.`]
+      : [...results.map(hitLine), `${results.length} match${results.length === 1 ? '' : 'es'} for "${query}"${clause}.`]
     return finishNetworkCommand(context, result, lines)
   } catch (error) {
     const result = networkFailure('search', error)

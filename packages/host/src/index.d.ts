@@ -516,6 +516,15 @@ export type MediaEntitySummary = {
   availability?: MediaAvailability | null
   sources: MediaPublicationSource[]
   renditions: MediaRenditionDescriptor[]
+  /**
+   * What a viewer reads before pressing play, carried on the publisher's signed
+   * metadata claim because a consumer cannot look any of it up. A category the
+   * publisher did not supply is absent, never an empty string or a zero.
+   */
+  releaseYear?: number
+  runtimeMinutes?: number
+  overview?: string
+  genres?: string[]
 }
 
 export type MediaAgentSummary = {

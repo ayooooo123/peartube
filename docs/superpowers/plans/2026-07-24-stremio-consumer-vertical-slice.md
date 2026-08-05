@@ -516,11 +516,58 @@ git add packages/cli/src/network packages/cli/bin.js packages/cli/src/runtime.js
 git commit -m "feat(cli): search and retrieve from the network"
 ```
 
+### Task 11: Categorize content by TMDB, TVDB and MusicBrainz
+
+A permissionless CDN whose catalog is one flat list of titles is not a catalog. Three authorities are supposed to categorize this network and only one of them reaches it:
+
+- **TMDB** works end to end, for movies and episodes only.
+- **TVDB** is declared nowhere and explicitly refused at ingest: `packages/cli/src/add/argv.js:161` answers `Provider "tvdb" is unavailable`, and `structured-content.js:251,255` requires `mediaProvider === 'tmdb'` verbatim.
+- **MusicBrainz** has reference namespaces (`musicbrainz-recording`, `musicbrainz-release` in `media-graph/entity-ref.js:132`) and no way to reach them: `CONTENT_KINDS` (`structured-content.js:26`) is `{episode, movie, video, stream, trailer, extra}`, so no music content can be published at all.
+
+Categories have the same shape of gap. `upload.js:117 describeMedia` already carries `genres`, `releaseYear`, `runtimeMinutes` and `overview` into per-channel video metadata, and the relay archive API already accepts `tmdbGenres`/`tmdbYear`. None of it crosses into the permissionless media graph: the metadata claim carries title and description, and `packages/app/lib/media-entity-graph.js` exposes no genre, year, artist or track. Nothing anywhere can filter by category — every search is a title substring.
+
+**Files:**
+
+- Modify: `packages/backend/src/channel/structured-content.js`
+- Modify: `packages/backend/src/upload.js`
+- Modify: `packages/backend/src/media-graph/entity-ref.js`
+- Modify: `packages/backend/src/media-graph/catalog-projection.js`
+- Modify: `packages/backend/src/api/media-graph.js`
+- Modify: `packages/spec/schema.cjs`, then regenerate
+- Modify: `packages/cli/src/add/argv.js`, `packages/cli/src/add/content-model.js`, `packages/cli/src/add/index.js`
+- Modify: `packages/cli/src/network/query.js`
+- Modify: `packages/app/lib/media-entity-graph.js`
+- Create: `packages/backend/test/media-categorization.test.mjs`
+
+**Acceptance:** A publisher can put a movie or episode in under TMDB *or* TVDB coordinates, and a music recording or release in under MusicBrainz coordinates, through the same one ingest path — no provider is special-cased and no second path exists. Import identity stays collision-free across providers and kinds, so the same title under two authorities is two coordinates and never two accidental duplicates of one. Genre, release year and duration survive from ingest into the consumer catalog projection and are visible to the app and the CLI. `peartube search` can filter by kind and by genre, and reports what it filtered on. A category the publisher did not supply is absent, never guessed and never rendered as an empty string. Music does not acquire a season or an episode number, and a movie does not acquire a track number — coordinates that do not apply to a kind are refused at ingest rather than stored as null.
+
+**Steps:**
+
+1. Add failing tests first: TVDB episode and movie coordinates accepted; MusicBrainz recording and release accepted; a provider/kind mismatch refused with a named error; identity keys distinct across `tmdb:movie:603`, `tvdb:movie:603` and `musicbrainz:release:603`; genres/year/duration reaching `getMediaCatalog` and `getMediaEntity`; a publication with no genres exposing none; and a kind or genre filter narrowing search results.
+2. Replace the two `mediaProvider === 'tmdb'` checks with one provider/kind table — the allowed coordinate shape per kind, in one place — and widen `CONTENT_KINDS` with the music kinds that table names.
+3. Carry the categories already collected by `describeMedia` into the media-graph metadata claim and out through the consumer projection. Add the schema fields, regenerate with `npm run schema:full`, and re-sync the Swift mirrors.
+4. Add `--kind` and `--genre` to `peartube search`, filtering the same projection the app reads; no second index.
+5. Run:
+
+```bash
+npm exec --prefix packages/backend -- brittle test/media-categorization.test.mjs test/structured-content.test.mjs test/media-entity-reference.test.mjs test/media-graph-api.test.mjs test/consumer-catalog-projection.test.mjs
+node packages/cli/test/network-cli.test.mjs
+npm test --prefix packages/spec
+npm run typecheck
+```
+
+6. Commit:
+
+```bash
+git add packages/backend packages/spec packages/cli packages/app packages/core packages/host
+git commit -m "feat(catalog): categorize content across metadata authorities"
+```
+
 ---
 
 ## Milestone 3: End-to-End Acceptance and Cutover
 
-### Task 11: Run the complete multi-device product matrix
+### Task 12: Run the complete multi-device product matrix
 
 **Files:**
 

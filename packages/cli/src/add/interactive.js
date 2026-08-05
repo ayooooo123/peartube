@@ -283,7 +283,10 @@ export function createInteractiveDriver ({
       return {
         fetchUrl,
         channelDraft: buildMovieChannelDraft(movie),
-        itemDraft: buildMovieItemDraft(movie, sourceFrom(fetchUrl))
+        itemDraft: buildMovieItemDraft(movie, sourceFrom(fetchUrl), {
+          mediaProvider: movie.mediaProvider || movie.provider || null,
+          mediaId: movie.mediaId ?? null
+        })
       }
     }
     if (choices.episodes) {
@@ -294,7 +297,7 @@ export function createInteractiveDriver ({
         fetchUrl,
         channelDraft: buildShowChannelDraft(channelSource),
         itemDraft: buildEpisodeItemDraft(episode, sourceFrom(fetchUrl), {
-          mediaProvider: 'tmdb',
+          mediaProvider: (channelSource && (channelSource.mediaProvider || channelSource.provider)) || null,
           mediaId: (channelSource && channelSource.mediaId) || null
         })
       }

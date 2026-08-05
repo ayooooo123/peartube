@@ -9,7 +9,9 @@ import {
 } from '../assets/index.js'
 import { decodeApplicationEnvelope, encodeApplicationEnvelope } from '../records/application-envelope.js'
 import { PUBLISHER_LIMITS, PUBLISHER_RECORD_TYPES, toHex } from '../publisher/canonical.js'
+import { MEDIA_COORDINATE_SHAPES } from '../channel/structured-content.js'
 import { decodeClaimBody } from './claims.js'
+import { describeMedia } from './described-media.js'
 import { resolveConsumerMediaEntity } from './resolver.js'
 import { createMediaGraphStore } from './store.js'
 
@@ -618,38 +620,30 @@ function artworkMimeType(artwork) {
   return artworkEntry(artwork)?.mimeType ?? null
 }
 
-// What a viewer reads before pressing play travels on the same claim as the
-// title, because a consumer holds no metadata-provider credentials and cannot
-// look any of it up.
-function describedMedia(metadata) {
-  const out = {}
-  const year = Number(metadata?.releaseYear)
-  if (Number.isSafeInteger(year) && year > 0) out.releaseYear = year
-  const runtime = Number(metadata?.runtimeMinutes)
-  if (Number.isSafeInteger(runtime) && runtime > 0) out.runtimeMinutes = runtime
-  if (typeof metadata?.overview === 'string' && metadata.overview) out.overview = metadata.overview
-  if (Array.isArray(metadata?.genres)) {
-    const genres = metadata.genres.filter(genre => typeof genre === 'string' && genre)
-    if (genres.length > 0) out.genres = genres
-  }
-  return out
-}
-
 function mediaCoordinatesFromReference(ref) {
-  if (ref?.namespace !== 'tmdb' || typeof ref.normalizedIdentifier !== 'string') return {}
-  const episode = /^show:([1-9][0-9]{0,19}):s([1-9][0-9]{0,5}):e([1-9][0-9]{0,5})$/.exec(ref.normalizedIdentifier)
-  if (episode) {
-    return {
-      contentKind: 'episode',
-      mediaProvider: 'tmdb',
-      mediaId: episode[1],
-      seasonNumber: Number(episode[2]),
-      episodeNumber: Number(episode[3]),
+  const namespace = ref?.namespace
+  const identifier = ref?.normalizedIdentifier
+  if (typeof namespace !== 'string' || typeof identifier !== 'string') return {}
+  for (const [contentKind, shape] of Object.entries(MEDIA_COORDINATE_SHAPES)) {
+    if (!shape.providers.includes(namespace)) continue
+    // An episode is named by its show plus its place in it, so its identifier
+    // is the show's with the ordinals appended; every other kind is named
+    // directly. Reading the shape here rather than a provider name is what
+    // keeps a TVDB movie and a MusicBrainz release reaching the catalog
+    // through the same parse a TMDB movie already did.
+    const pattern = shape.ordinals.length > 0
+      ? /^show:([1-9][0-9]{0,19}):s([1-9][0-9]{0,5}):e([1-9][0-9]{0,5})$/
+      : new RegExp(`^${contentKind}:([^:]{1,128})$`)
+    const match = pattern.exec(identifier)
+    if (!match) continue
+    const out = { contentKind, mediaProvider: namespace, mediaId: match[1] }
+    if (shape.ordinals.length > 0) {
+      out.seasonNumber = Number(match[2])
+      out.episodeNumber = Number(match[3])
     }
+    return out
   }
-  const movie = /^movie:([1-9][0-9]{0,19})$/.exec(ref.normalizedIdentifier)
-  if (!movie) return {}
-  return { contentKind: 'movie', mediaProvider: 'tmdb', mediaId: movie[1] }
+  return {}
 }
 
 export function projectAuthenticatedPublisherMediaRecords({
@@ -680,10 +674,17 @@ export function projectAuthenticatedPublisherMediaRecords({
     for (const subject of availability.body.subjectRefs || []) {
       const memberOf = memberships.filter(row => claimMemberId(row) === subject.entityId)
       const work = resolveConsumerMediaEntity(resolverStore, subject.entityId, { entityKind: 'work' })
+      const coordinates = mediaCoordinatesFromReference(subject)
       if (memberOf.length === 0) {
         records.push({
           directPublisher: true,
-          kind: 'movie',
+          // A standalone entry is a movie unless its coordinates say otherwise.
+          // A MusicBrainz recording filed as a movie would answer `--kind
+          // movie` and never answer `--kind track`, which is worse than not
+          // being categorized at all.
+          kind: coordinates.contentKind === 'track' || coordinates.contentKind === 'release'
+            ? coordinates.contentKind
+            : 'movie',
           entityRef: subject.entityId,
           publicationId: manifest.publicationId,
           publisherId: manifest.body.publisherId,
@@ -691,8 +692,8 @@ export function projectAuthenticatedPublisherMediaRecords({
           artwork: artworkLocator(work.metadata.artwork),
           artworkMimeType: artworkMimeType(work.metadata.artwork),
           ranking: Number.isFinite(work.metadata.ranking) ? work.metadata.ranking : null,
-          ...describedMedia(work.metadata),
-          ...mediaCoordinatesFromReference(subject),
+          ...describeMedia(work.metadata),
+          ...coordinates,
           playable: true,
         })
         continue
@@ -808,8 +809,8 @@ export function createConsumerCatalogProjection(options = {}) {
       ranking: Number.isFinite(resolved.metadata.ranking) ? resolved.metadata.ranking : record.ranking,
       // Resolution can merge claims from several publishers; whichever one
       // described the title wins over a record that carries nothing.
-      ...describedMedia(record),
-      ...describedMedia(resolved.metadata),
+      ...describeMedia(record),
+      ...describeMedia(resolved.metadata),
       entityKind: resolved.entityKind,
     }
   }

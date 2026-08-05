@@ -23,9 +23,28 @@ const CLAIM_DOMAIN = b4a.from('peartube-import-claim/v1\0')
 const ZERO_BYTE = b4a.from('\0')
 
 export const PROFILE_KINDS = new Set(['standard', 'tvShow', 'movie', 'creator'])
-export const CONTENT_KINDS = new Set(['episode', 'movie', 'video', 'stream', 'trailer', 'extra'])
+export const CONTENT_KINDS = new Set(['episode', 'movie', 'video', 'stream', 'trailer', 'extra', 'track', 'release'])
 export const PUBLICATION_STATES = new Set(['replicationPending', 'durabilityVerified', 'published'])
 export const ARTWORK_ROLES = new Set(['avatar', 'poster', 'banner', 'backdrop'])
+
+// Which metadata authority may categorize which kind of work, and the exact
+// coordinate shape that pairing takes. One table, because the alternative is a
+// provider name spelled separately into a validator, an identity key and a CLI
+// flag — and those three drifting is how `tvdb` came to be a declared
+// namespace that the one place which mattered refused by name, and how
+// MusicBrainz came to have reference namespaces no publication could reach.
+//
+// `ordinals` are the coordinate fields a kind requires and, by omission, the
+// ones it may not carry: a track has no season, an album has no episode. A
+// kind absent from this table takes no media coordinates at all.
+export const MEDIA_COORDINATE_SHAPES = Object.freeze({
+  episode: Object.freeze({ providers: Object.freeze(['tmdb', 'tvdb']), ordinals: Object.freeze(['seasonNumber', 'episodeNumber']) }),
+  movie: Object.freeze({ providers: Object.freeze(['tmdb', 'tvdb']), ordinals: Object.freeze([]) }),
+  track: Object.freeze({ providers: Object.freeze(['musicbrainz']), ordinals: Object.freeze([]) }),
+  release: Object.freeze({ providers: Object.freeze(['musicbrainz']), ordinals: Object.freeze([]) }),
+})
+
+export const MEDIA_COORDINATE_KINDS = Object.freeze(Object.keys(MEDIA_COORDINATE_SHAPES))
 
 // A channel and a work do not illustrate themselves the same way, and asset
 // bindings require every role ARTWORK_ROLES names. Content roles therefore live
@@ -245,18 +264,26 @@ export function importIdentityKey (identity) {
     throw new Error('import identity requires both sourceProvider and sourceVideoId')
   }
 
-  const hasMediaGroup = mediaProvider !== undefined || mediaId !== undefined || seasonNumber !== undefined || episodeNumber !== undefined
+  const ordinals = { seasonNumber, episodeNumber }
+  const hasMediaGroup = mediaProvider !== undefined || mediaId !== undefined ||
+    seasonNumber !== undefined || episodeNumber !== undefined
   if (hasMediaGroup) {
-    if (contentKind === 'episode') {
-      if (mediaProvider !== 'tmdb' || mediaId === undefined || seasonNumber === undefined || episodeNumber === undefined) {
-        throw new Error('import identity episode coordinates require tmdb mediaId, seasonNumber, and episodeNumber')
+    const shape = MEDIA_COORDINATE_SHAPES[contentKind]
+    if (!shape) throw new Error(`import identity ${contentKind} cannot use media coordinates`)
+    if (!shape.providers.includes(mediaProvider)) {
+      throw new Error(`import identity ${contentKind} coordinates require one of ${shape.providers.join(', ')}`)
+    }
+    if (mediaId === undefined) throw new Error(`import identity ${contentKind} coordinates require mediaId`)
+    for (const [name, value] of Object.entries(ordinals)) {
+      const required = shape.ordinals.includes(name)
+      if (required && value === undefined) {
+        throw new Error(`import identity ${contentKind} coordinates require ${name}`)
       }
-    } else if (contentKind === 'movie') {
-      if (mediaProvider !== 'tmdb' || mediaId === undefined || seasonNumber !== undefined || episodeNumber !== undefined) {
-        throw new Error('import identity movie coordinates require only tmdb mediaId')
+      // A coordinate a kind does not have is refused, not stored empty: a track
+      // with a season number is a mistake someone should hear about.
+      if (!required && value !== undefined) {
+        throw new Error(`import identity ${contentKind} coordinates cannot carry ${name}`)
       }
-    } else {
-      throw new Error(`import identity ${contentKind} cannot use media coordinates`)
     }
   }
 
@@ -265,10 +292,14 @@ export function importIdentityKey (identity) {
   }
 
   if (hasSourceGroup) return `${sourceProvider}:${contentKind}:${sourceVideoId}`
+  // The tmdb spellings below are byte-identical to the ones this function has
+  // always produced. They are durable idempotency identities recorded in
+  // published claims, so a tidier scheme would orphan every import already in
+  // the network and re-fetch all of it.
   if (hasMediaGroup && contentKind === 'episode') {
-    return `tmdb:episode:show:${mediaId}:s${seasonNumber}:e${episodeNumber}`
+    return `${mediaProvider}:episode:show:${mediaId}:s${seasonNumber}:e${episodeNumber}`
   }
-  if (hasMediaGroup && contentKind === 'movie') return `tmdb:movie:${mediaId}`
+  if (hasMediaGroup) return `${mediaProvider}:${contentKind}:${mediaId}`
   if (contentFingerprint !== undefined) return `fingerprint:${contentFingerprint}`
   throw new Error('import identity is insufficient or ambiguous')
 }

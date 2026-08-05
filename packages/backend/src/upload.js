@@ -16,7 +16,7 @@ import { parseBlobId } from './blob-utils.js';
 
 import { probeMp4File, probeMp4Buffer, isMp4MimeType } from './mp4-playback-probe.js';
 import { saveBlobPlaybackProfile } from './blob-playback-profile.js';
-import { normalizeContentDetails } from './channel/structured-content.js';
+import { MEDIA_COORDINATE_SHAPES, normalizeContentDetails } from './channel/structured-content.js';
 import {
   createPublicationManifest,
   createRenditionDescriptor,
@@ -25,6 +25,7 @@ import {
 import {
   createEntityReference,
   createMediaClaim,
+  describeMedia,
   encodeMediaClaimEnvelope,
 } from './media-graph/index.js';
 import { PUBLISHER_RECORD_TYPES } from './publisher/canonical.js';
@@ -103,41 +104,11 @@ function detectMimeType(buffer) {
 }
 
 /**
- * Get file extension for a MIME type
- * @param {string} mimeType - MIME type
- * @returns {string} File extension without dot
+ * Bounding descriptive metadata is shared with the read paths that replay these
+ * claims, so it lives beside the media graph rather than here. Re-exported
+ * because `@peartube/backend/upload` is where callers already reach for it.
  */
-const MAX_OVERVIEW_BYTES = 2048
-const MAX_GENRES = 8
-const MAX_GENRE_BYTES = 64
-
-// Descriptive metadata is bounded here rather than trusted: it is signed into a
-// claim that every consumer replays, and the claim itself is size-capped, so an
-// unbounded plot summary would cost every peer on the network.
-export function describeMedia(input) {
-  if (!input || typeof input !== 'object') return {}
-  const out = {}
-  const year = Number(input.releaseYear)
-  if (Number.isSafeInteger(year) && year >= 1870 && year <= 2200) out.releaseYear = year
-  const runtime = Number(input.runtimeMinutes)
-  if (Number.isSafeInteger(runtime) && runtime > 0 && runtime <= 100000) out.runtimeMinutes = runtime
-  if (typeof input.overview === 'string') {
-    const overview = input.overview.trim()
-    if (overview.length > 0) out.overview = overview.slice(0, MAX_OVERVIEW_BYTES)
-  }
-  if (Array.isArray(input.genres)) {
-    const genres = []
-    for (const genre of input.genres) {
-      if (typeof genre !== 'string') continue
-      const name = genre.trim()
-      if (!name || name.length > MAX_GENRE_BYTES) continue
-      if (!genres.includes(name)) genres.push(name)
-      if (genres.length >= MAX_GENRES) break
-    }
-    if (genres.length > 0) out.genres = genres
-  }
-  return out
-}
+export { describeMedia }
 
 export function getPlaybackSupportForMimeType(mimeType) {
   const normalized = String(mimeType || '').toLowerCase();
@@ -147,6 +118,11 @@ export function getPlaybackSupportForMimeType(mimeType) {
   return { availability: 'playable', playbackSupport: 'unverified-container' };
 }
 
+/**
+ * Get file extension for a MIME type
+ * @param {string} mimeType - MIME type
+ * @returns {string} File extension without dot
+ */
 function getExtensionForMime(mimeType) {
   const mimeToExt = {
     'video/mp4': 'mp4',
@@ -482,14 +458,26 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
   // cards, none of them a source for the others. A provider identity is the
   // one name both uploads already agree on, so it decides the entity and
   // 'issuer-native' stays the fallback for titles no catalogue knows.
-  const providerId = metadata.mediaProvider === 'tmdb' && metadata.mediaId
-    ? String(metadata.mediaId)
-    : null;
-  // TMDB numbers movies and shows in separate spaces, and an episode upload
-  // carries its show's id, so the shape has to say which is meant.
+  //
+  // Which authority may name which kind of work, and the coordinate shape that
+  // pairing takes, is one shared table. Reading it here is what lets a title
+  // arrive under TMDB, TVDB or MusicBrainz through this one path instead of
+  // through a provider name spelled separately into every gate. A kind the
+  // table does not name, or one missing an ordinal the table requires, takes
+  // no coordinates at all rather than a guessed one.
+  const coordinateShape = MEDIA_COORDINATE_SHAPES[metadata.contentKind] || null;
+  const coordinated = Boolean(
+    coordinateShape &&
+    metadata.mediaId &&
+    coordinateShape.providers.includes(metadata.mediaProvider) &&
+    coordinateShape.ordinals.every(ordinal => Number.isSafeInteger(metadata[ordinal]))
+  );
+  const providerId = coordinated ? String(metadata.mediaId) : null;
+  // Every authority numbers its kinds in separate spaces, and an episode
+  // upload carries its show's id, so the shape has to say which is meant.
   const workIdentifier = episodic
     ? `show:${providerId}:s${metadata.seasonNumber}:e${metadata.episodeNumber}`
-    : `movie:${providerId}`;
+    : `${metadata.contentKind}:${providerId}`;
   const subjectRef = providerId
     ? createEntityReference({
         entityKind: 'work',
@@ -524,7 +512,9 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
         title: metadata.title || metadata.id,
         description: metadata.description || null,
         publicationId: manifest.publicationId,
-        presentationKind: episodic ? 'episode' : 'movie',
+        // A recording is not a film. Where the coordinate table names the kind,
+        // say it; 'movie' stays the fallback for uploads no table describes.
+        presentationKind: coordinateShape ? metadata.contentKind : 'movie',
         // Artwork travels with the metadata claim: a consumer has no metadata
         // provider credentials of its own, so a publisher that knows the cover
         // has to say so or every catalog renders as blank placeholders.

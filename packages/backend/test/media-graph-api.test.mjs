@@ -650,3 +650,57 @@ test('the same entity carries the same cover and synopsis whether it is fetched 
 
   t.absent(row.posterUrl, 'a swarm blob is never downgraded to an origin URL')
 })
+
+// A category the publisher never claimed has to stay missing on the way out.
+// Rendering an unclaimed runtime as 0, or an unclaimed synopsis as '', is the
+// consumer inventing a fact about someone else's publication.
+test('a title the publisher never described carries no categories on either fetch path', async (t) => {
+  const { api, mediaGraphStore } = await fixture()
+  const subject = workRef('undescribed')
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [subject],
+    payload: { title: 'Undescribed' },
+    confidence: 900,
+    keyPair: publisherA,
+  })
+
+  const detail = await api.getMediaEntity({ entityId: subject.entityId })
+  t.is(detail.success, true)
+  const row = (await api.getMediaCatalog({})).items.find(item => item.entityId === subject.entityId)
+  t.ok(row, 'the entity still appears; only its categories do not')
+
+  for (const summary of [detail.entity, row]) {
+    for (const field of ['releaseYear', 'runtimeMinutes', 'overview', 'genres']) {
+      t.absent(field in summary, `${field} is absent, never a zero or an empty string`)
+    }
+  }
+})
+
+// The ingest path bounds a description before the publisher signs it. Claims
+// arriving from other publishers never went through that, so the read paths
+// have to apply the same bounds rather than trust whatever was signed.
+test('categories that overstep the ingest bounds are clamped on the way out', async (t) => {
+  const { api, mediaGraphStore } = await fixture()
+  const subject = workRef('overdescribed')
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [subject],
+    payload: {
+      title: 'Overdescribed',
+      releaseYear: 1200,
+      runtimeMinutes: 1_000_000,
+      genres: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'x'.repeat(65), ''],
+    },
+    confidence: 900,
+    keyPair: publisherA,
+  })
+
+  const detail = await api.getMediaEntity({ entityId: subject.entityId })
+  const row = (await api.getMediaCatalog({})).items.find(item => item.entityId === subject.entityId)
+  for (const summary of [detail.entity, row]) {
+    t.alike(summary.genres, ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'], 'no more genres than ingest would have signed, and no oversized name')
+    t.absent('releaseYear' in summary, 'a year before the ingest window is refused rather than relayed')
+    t.absent('runtimeMinutes' in summary, 'a runtime past the ingest bound is refused rather than relayed')
+  }
+})

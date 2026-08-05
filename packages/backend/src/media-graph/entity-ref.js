@@ -19,6 +19,13 @@ const MEDIA_TYPE_RE = /^[a-z0-9][a-z0-9._:-]*$/i
 const LOCATOR_PROTOCOLS = new Set(['hypercore', 'https', 'ipfs', 'file'])
 const NAMESPACE_RE = /^[a-z0-9][a-z0-9._:-]*$/i
 
+// A publication names the metadata authority that categorized the work as its
+// namespace and carries the coordinate in the identifier (`movie:603`,
+// `show:81189:s1:e2`, `track:<mbid>`). Every one of those identifiers is
+// case-insensitive — TMDB and TVDB number their works, a MusicBrainz MBID is
+// hex — so they are canonicalized together rather than one authority at a time.
+const MEDIA_AUTHORITY_NAMESPACES = new Set(['tmdb', 'tvdb', 'musicbrainz'])
+
 function normalizeName(value, name) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 128 || !MEDIA_TYPE_RE.test(value)) {
     throw new Error(`${name} must be a bounded domain string`)
@@ -130,6 +137,8 @@ function normalizeIdentifier(namespace, identifier) {
     if (url.port === '443') url.port = ''
     next = url.toString()
   } else if (namespace === 'musicbrainz-recording' || namespace === 'musicbrainz-release') {
+    next = next.toLowerCase()
+  } else if (MEDIA_AUTHORITY_NAMESPACES.has(namespace)) {
     next = next.toLowerCase()
   } else if (namespace === 'av-fingerprint' || namespace === 'exact-hash') {
     next = next.toLowerCase()

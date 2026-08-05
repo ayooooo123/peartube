@@ -2,6 +2,8 @@ import { AVAILABILITY_STATES, assessAvailability, isPlayableAvailability } from 
 import { createAssetSession } from '../assets/asset-session.js'
 import { resolveMediaEntity } from '../media-graph/resolver.js'
 import { artworkEntry } from '../media-graph/catalog-projection.js'
+import { describeMedia } from '../media-graph/described-media.js'
+import { MEDIA_COORDINATE_SHAPES } from '../channel/structured-content.js'
 import { selectPlaybackSource, sourceAvailabilityScore } from '../media-graph/source-selector.js'
 import { projectSourceSelectionDiagnostics } from '../media-graph/selection-diagnostics.js'
 import { preparePlaybackSource } from '../playback/source-preparation.js'
@@ -20,26 +22,20 @@ const MAX_CATALOG_PAGE_LIMIT = 50
 // publisher instead of fetching an origin; anything else is passed through as a
 // URL for claims that predate swarm-native covers.
 // Descriptive metadata reaches the consumer the same way the cover does: with
-// the entry, because there is nowhere else for a consumer to get it.
-function describedMediaResponse(item) {
-  const out = {}
-  if (Number.isSafeInteger(item?.releaseYear) && item.releaseYear > 0) out.releaseYear = item.releaseYear
-  if (Number.isSafeInteger(item?.runtimeMinutes) && item.runtimeMinutes > 0) out.runtimeMinutes = item.runtimeMinutes
-  if (typeof item?.overview === 'string' && item.overview) out.overview = item.overview
-  const genres = Array.isArray(item?.genres) ? item.genres.filter(genre => typeof genre === 'string' && genre) : []
-  if (genres.length > 0) out.genres = genres
-  return out
-}
-
+// the entry, because there is nowhere else for a consumer to get it. It is
+// bounded on the way out by the same normalizer the publisher's own ingest
+// used, because a claim signed by somebody else never went through that one.
 function mediaCoordinatesResponse(item) {
-  const contentKind = item?.contentKind === 'movie' || item?.contentKind === 'episode' ? item.contentKind : null
+  const contentKind = typeof item?.contentKind === 'string' ? item.contentKind : null
+  const shape = contentKind ? MEDIA_COORDINATE_SHAPES[contentKind] : null
   const mediaProvider = typeof item?.mediaProvider === 'string' && item.mediaProvider ? item.mediaProvider : null
   const mediaId = typeof item?.mediaId === 'string' && item.mediaId ? item.mediaId : null
-  if (!contentKind || !mediaProvider || !mediaId) return {}
+  if (!shape || !mediaProvider || !shape.providers.includes(mediaProvider) || !mediaId) return {}
   const out = { contentKind, mediaProvider, mediaId }
-  if (contentKind === 'episode') {
-    if (Number.isSafeInteger(item.seasonNumber) && item.seasonNumber > 0) out.seasonNumber = item.seasonNumber
-    if (Number.isSafeInteger(item.episodeNumber) && item.episodeNumber > 0) out.episodeNumber = item.episodeNumber
+  // An ordinal a kind does not have is not reported as absent, it is not
+  // reported at all: a recording has no season and a film has no episode.
+  for (const ordinal of shape.ordinals) {
+    if (Number.isSafeInteger(item[ordinal]) && item[ordinal] > 0) out[ordinal] = item[ordinal]
   }
   return out
 }
@@ -67,12 +63,7 @@ function summaryMediaFields(metadata) {
   const entry = artworkEntry(metadata?.artwork)
   return {
     ...posterResponse({ artwork: entry?.locator || null, artworkMimeType: entry?.mimeType || null }),
-    ...describedMediaResponse({
-      releaseYear: Number(metadata?.releaseYear),
-      runtimeMinutes: Number(metadata?.runtimeMinutes),
-      overview: metadata?.overview,
-      genres: metadata?.genres,
-    }),
+    ...describeMedia(metadata),
   }
 }
 
@@ -926,7 +917,7 @@ export function createMediaGraphApi(options = {}) {
                 // Cover art is published on the metadata claim; passing it on
                 // is what stops a fully synced catalog rendering blank.
                 ...posterResponse(item),
-                ...describedMediaResponse(item),
+                ...describeMedia(item),
               }
             }),
             nextCursor: page.nextCursor,

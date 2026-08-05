@@ -4,7 +4,7 @@ import { realpathSync } from 'node:fs'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { parsePeartubeArgv, PeartubeUsageError } from './src/add/argv.js'
-import { CONTENT_TYPES, providerHelp } from './src/add/media-coordinates.js'
+import { CONTENT_TYPES, credentialHelp, providerHelp } from './src/add/media-coordinates.js'
 
 export const PEARTUBE_USAGE = [
   'Usage: peartube <command> [options]',
@@ -40,9 +40,12 @@ export const PEARTUBE_USAGE = [
   '  --movie-id <id>     Movie id',
   '  --recording-id <id> MusicBrainz recording MBID',
   '  --release-id <id>   MusicBrainz release MBID',
-  '  --title <text>      Title to publish under; required when no metadata',
-  '                      client can look the coordinates up',
-  '  --channel-name <t>  Channel to publish into'
+  '  --title <text>      Title to publish under; optional when the authority',
+  '                      can be read, required when it cannot',
+  '  --channel-name <t>  Channel to publish into',
+  '',
+  'Metadata credentials (an authority is read only once its key is set):',
+  ...credentialHelp().map((line) => `  ${line}`)
 ].join('\n')
 
 const defaultLoadModule = specifier => import(specifier)

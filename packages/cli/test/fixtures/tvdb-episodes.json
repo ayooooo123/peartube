@@ -1,0 +1,50 @@
+{
+  "status": "success",
+  "data": {
+    "series": { "id": 81189, "name": "Breaking Bad", "slug": "breaking-bad" },
+    "episodes": [
+      {
+        "id": 349233,
+        "seriesId": 81189,
+        "name": "Cat's in the Bag...",
+        "aired": "2008-01-27",
+        "runtime": 48,
+        "overview": "Walt and Jesse are left with a mess to clean up.",
+        "image": "http://artworks.thetvdb.com/banners/episodes/81189/349233.jpg",
+        "imageType": 12,
+        "seasonNumber": 1,
+        "number": 2,
+        "absoluteNumber": 2,
+        "isMovie": 0
+      },
+      {
+        "id": 349232,
+        "seriesId": 81189,
+        "name": "Pilot",
+        "aired": "2008-01-20",
+        "runtime": 58,
+        "overview": "Diagnosed with terminal cancer, a chemistry teacher starts cooking.",
+        "image": "https://artworks.thetvdb.com/banners/episodes/81189/349232.jpg",
+        "imageType": 12,
+        "seasonNumber": 1,
+        "number": 1,
+        "absoluteNumber": 1,
+        "isMovie": 0
+      },
+      {
+        "id": 349255,
+        "seriesId": 81189,
+        "name": "Good Cop Bad Cop",
+        "aired": "",
+        "runtime": null,
+        "overview": null,
+        "image": null,
+        "seasonNumber": 2,
+        "number": 1,
+        "absoluteNumber": 8,
+        "isMovie": 0
+      }
+    ]
+  },
+  "links": { "prev": null, "self": "https://api4.thetvdb.com/v4/series/81189/episodes/default?season=1", "next": null, "total_items": 3, "page_size": 500 }
+}

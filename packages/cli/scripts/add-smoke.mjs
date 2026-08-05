@@ -4,14 +4,15 @@
  *
  * It launches the actual executable (argv parser, command dispatch, diagnostic
  * scope, job store, executor, and result writer) as a separate process for each
- * scenario. Network durability, TMDB, and yt-dlp are supplied through the
- * injected deterministic deps module so the run needs no live key, internet, or
- * relay. Live P2P full-range durability and interactive PTY keystrokes are
- * covered by the backend seed-pin integration suites and the terminal unit
- * suites respectively; this harness proves the real command wiring end to end.
+ * scenario. Network durability, the metadata authorities, and yt-dlp are
+ * supplied through the injected deterministic deps module so the run needs no
+ * live key, internet, or relay. Live P2P full-range durability and interactive
+ * PTY keystrokes are covered by the backend seed-pin integration suites and the
+ * terminal unit suites respectively; this harness proves the real command
+ * wiring end to end.
  */
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -38,10 +39,13 @@ function run (args, env = {}) {
 
 const MOVIE = ['add', 'https://youtube.com/watch?v=v1', '--type', 'movie', '--provider', 'tmdb', '--movie-id', '603', '--yes', '--json']
 const EPISODE = ['add', 'https://youtube.com/watch?v=v1', '--type', 'episode', '--provider', 'tmdb', '--show-id', '1396', '--season', '1', '--episode', '1', '--yes', '--json']
-const TVDB_EPISODE = ['add', 'https://youtube.com/watch?v=v1', '--type', 'episode', '--provider', 'tvdb', '--show-id', '81189', '--season', '1', '--episode', '2', '--title', 'Cat\'s in the Bag...', '--yes', '--json']
-const TVDB_MOVIE = ['add', 'https://youtube.com/watch?v=v1', '--type', 'movie', '--provider', 'tvdb', '--movie-id', '603', '--title', 'The Matrix', '--yes', '--json']
-const TRACK = ['add', 'https://youtube.com/watch?v=v1', '--type', 'track', '--provider', 'musicbrainz', '--recording-id', 'b1a9c0e8-2f9d-4b3e-9a24-6f3c1d9a7b55', '--title', 'Paranoid Android', '--yes', '--json']
-const RELEASE = ['add', 'https://youtube.com/watch?v=v1', '--type', 'release', '--provider', 'musicbrainz', '--release-id', '550e8400-e29b-41d4-a716-446655440000', '--title', 'OK Computer', '--yes', '--json']
+// The authorities other than TMDB are read the same way, so their coordinates
+// carry no --title: the catalogue supplies the name.
+const TVDB_EPISODE = ['add', 'https://youtube.com/watch?v=v1', '--type', 'episode', '--provider', 'tvdb', '--show-id', '81189', '--season', '1', '--episode', '2', '--yes', '--json']
+const TVDB_MOVIE = ['add', 'https://youtube.com/watch?v=v1', '--type', 'movie', '--provider', 'tvdb', '--movie-id', '603', '--yes', '--json']
+const TRACK = ['add', 'https://youtube.com/watch?v=v1', '--type', 'track', '--provider', 'musicbrainz', '--recording-id', 'b1a9c0e8-2f9d-4b3e-9a24-6f3c1d9a7b55', '--yes', '--json']
+const RELEASE = ['add', 'https://youtube.com/watch?v=v1', '--type', 'release', '--provider', 'musicbrainz', '--release-id', '550e8400-e29b-41d4-a716-446655440000', '--yes', '--json']
+const TVDB_ENV = { TMDB_API_KEY: '', PEARTUBE_TVDB_API_KEY: 'smoke-tvdb-token' }
 
 const scenarios = [
   {
@@ -83,23 +87,40 @@ const scenarios = [
     async check () { const r = await run(['add', '--help']); return r.code === 0 && r.stdout.includes('Usage: peartube') }
   },
   {
-    name: 'missing TMDB key yields an actionable setup error',
-    async check () { const r = await run(MOVIE, { TMDB_API_KEY: '' }); return r.code === 2 && r.stderr.includes('TMDB API key') && !r.stderr.includes('smoke-token') }
+    name: 'an unreadable TMDB coordinate names the variable and the --title escape',
+    async check () {
+      const r = await run(MOVIE, { TMDB_API_KEY: '' })
+      return r.code === 2 && /TMDB_API_KEY/.test(r.stderr) && /--title/.test(r.stderr) && !r.stderr.includes('smoke-token')
+    }
   },
   {
     name: 'unsupported provider is rejected before any transfer',
     async check () { const r = await run(['add', 'https://x/y', '--type', 'movie', '--provider', 'vimeo', '--movie-id', '1', '--yes'], {}); return r.code === 2 && /unavailable|not available/.test(r.stderr) }
   },
   {
-    name: 'TVDB episode and movie publish without any TMDB key',
+    name: 'TVDB episode and movie publish from the catalogue with no --title',
     async check () {
-      const episode = await run(TVDB_EPISODE, { TMDB_API_KEY: '' })
-      const movie = await run(TVDB_MOVIE, { TMDB_API_KEY: '' })
+      const episode = await run(TVDB_EPISODE, TVDB_ENV)
+      const movie = await run(TVDB_MOVIE, TVDB_ENV)
       return json(episode).status === 'published' && json(movie).status === 'published'
     }
   },
   {
-    name: 'MusicBrainz recording and release publish without any TMDB key',
+    name: 'a TVDB coordinate with no key names PEARTUBE_TVDB_API_KEY and --title',
+    async check () {
+      const r = await run(TVDB_MOVIE, { TMDB_API_KEY: '', PEARTUBE_TVDB_API_KEY: '' })
+      return r.code === 2 && /PEARTUBE_TVDB_API_KEY/.test(r.stderr) && /--title/.test(r.stderr)
+    }
+  },
+  {
+    name: 'a TVDB coordinate with no key still publishes when --title supplies the name',
+    async check () {
+      const r = await run([...TVDB_MOVIE, '--title', 'The Matrix'], { TMDB_API_KEY: '', PEARTUBE_TVDB_API_KEY: '' })
+      return json(r).status === 'published'
+    }
+  },
+  {
+    name: 'MusicBrainz publishes with neither a credential nor a --title',
     async check () {
       const track = await run(TRACK, { TMDB_API_KEY: '' })
       const release = await run(RELEASE, { TMDB_API_KEY: '' })
@@ -121,10 +142,13 @@ const scenarios = [
     }
   },
   {
-    name: 'coordinates with no metadata client demand an explicit title',
+    name: '--title wins over the catalogue when both name the work',
     async check () {
-      const r = await run(['add', 'https://x/y', '--type', 'release', '--provider', 'musicbrainz', '--release-id', '550e8400-e29b-41d4-a716-446655440000', '--yes'])
-      return r.code === 2 && /--title is required for musicbrainz coordinates/.test(r.stderr)
+      const bee = join(workDir, 'retitled.json')
+      const r = await run([...TVDB_MOVIE, '--title', 'The Matrix (remaster)'], { ...TVDB_ENV, PEARTUBE_FAKE_BEE_FILE: bee })
+      if (json(r).status !== 'published') return false
+      const stored = readFileSync(bee, 'utf8')
+      return stored.includes('The Matrix (remaster)') && !/"title":\s*"The Matrix"/.test(stored)
     }
   }
 ]

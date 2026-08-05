@@ -1,8 +1,40 @@
 import { homedir } from 'node:os'
 
+// Every credential an authority is read with, and the environment variable it
+// is read from. This one table drives the preference key each credential lands
+// under (`<authority><Option>` — the spelling `authoritySecretKey` expects from
+// the metadata registry), the environment reads below, the redacted summary,
+// and the usage text. MusicBrainz asks for a User-Agent, not a key, so it
+// declares no credential at all.
+export const AUTHORITY_CREDENTIALS = Object.freeze({
+  tmdb: Object.freeze({ apiKey: 'TMDB_API_KEY' }),
+  // TVDB's v4 login takes an optional subscriber PIN beside the key: keys
+  // issued to a person need it, keys issued to a company do not.
+  tvdb: Object.freeze({ apiKey: 'PEARTUBE_TVDB_API_KEY', pin: 'PEARTUBE_TVDB_PIN' }),
+  musicbrainz: Object.freeze({})
+})
+
+export const CREDENTIAL_FIELDS = Object.freeze(
+  Object.entries(AUTHORITY_CREDENTIALS).flatMap(([authority, options]) =>
+    Object.entries(options).map(([option, envVar]) => Object.freeze({
+      authority,
+      // The name the provider factory takes this credential under.
+      option,
+      key: `${authority}${option[0].toUpperCase()}${option.slice(1)}`,
+      envVar
+    }))
+  )
+)
+
+// The environment variables one authority is credentialed by, primary first.
+// Empty for an authority that needs none.
+export function credentialEnvVars (authority) {
+  return CREDENTIAL_FIELDS.filter((field) => field.authority === authority).map((field) => field.envVar)
+}
+
 export const ADD_PREFERENCE_DEFAULTS = Object.freeze({
   storagePath: '~/.peartube/content',
-  tmdbApiKey: '',
+  ...Object.fromEntries(CREDENTIAL_FIELDS.map((field) => [field.key, ''])),
   ytDlpPath: 'yt-dlp',
   ytDlpCookiesPath: '',
   searchLimit: 12,
@@ -24,11 +56,18 @@ const HEX_64 = /^[0-9a-f]{64}$/
 export function resolveAddPreferences ({ flags = {}, env = {}, config = {} } = {}) {
   const content = (config && typeof config.content === 'object' && config.content) || {}
 
-  const tmdb = pickSecret([
-    ['flag', flags.tmdbApiKey],
-    ['env', env.TMDB_API_KEY],
-    ['config', content.tmdbApiKey]
-  ])
+  // Every authority credential resolves the same way — flag, then environment,
+  // then config — and reports where it came from without carrying the value.
+  const credentials = {}
+  for (const { key, envVar } of CREDENTIAL_FIELDS) {
+    const picked = pickSecret([
+      ['flag', flags[key]],
+      ['env', env[envVar]],
+      ['config', content[key]]
+    ])
+    credentials[key] = picked.value
+    credentials[`${key}Source`] = picked.source
+  }
 
   const cookies = pickSecret([
     ['flag', flags.ytDlpCookiesPath],
@@ -46,8 +85,7 @@ export function resolveAddPreferences ({ flags = {}, env = {}, config = {} } = {
   ]
   return {
     storagePath: expandHome(firstString([flags.storage, content.storagePath], ADD_PREFERENCE_DEFAULTS.storagePath)),
-    tmdbApiKey: tmdb.value,
-    tmdbApiKeySource: tmdb.source,
+    ...credentials,
     ytDlpPath: expandHome(firstString([flags.ytDlpPath, env.PEARTUBE_YTDLP_PATH, content.ytDlpPath], ADD_PREFERENCE_DEFAULTS.ytDlpPath)),
     ytDlpCookiesPath: expandHome(cookies.value),
     ytDlpCookiesPathSource: cookies.source,
@@ -65,8 +103,10 @@ export function describeSecret (value) {
 export function redactPreferences (prefs) {
   return {
     storagePath: prefs.storagePath,
-    tmdbApiKey: describeSecret(prefs.tmdbApiKey),
-    tmdbApiKeySource: prefs.tmdbApiKeySource,
+    ...Object.fromEntries(CREDENTIAL_FIELDS.flatMap(({ key }) => [
+      [key, describeSecret(prefs[key])],
+      [`${key}Source`, prefs[`${key}Source`] ?? null]
+    ])),
     ytDlpPath: prefs.ytDlpPath,
     ytDlpCookiesPath: describeSecret(prefs.ytDlpCookiesPath),
     searchLimit: prefs.searchLimit,
@@ -106,7 +146,8 @@ export function updateContentConfig (text, patch = {}) {
   return { text: joined, containsSecret: SECRET_KEYS.some((key) => nonEmpty(merged[key])) }
 }
 
-const SECRET_KEYS = ['tmdbApiKey', 'ytDlpCookiesPath']
+// Written into the content config with 0600 and never echoed back.
+const SECRET_KEYS = [...CREDENTIAL_FIELDS.map((field) => field.key), 'ytDlpCookiesPath']
 
 function locateContentBlock (lines) {
   const start = lines.findIndex((line) => /^content:\s*$/.test(line))

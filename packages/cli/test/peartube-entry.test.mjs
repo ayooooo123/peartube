@@ -89,9 +89,14 @@ test('help prints stable usage without loading command modules', async (t) => {
     '  --movie-id <id>     Movie id',
     '  --recording-id <id> MusicBrainz recording MBID',
     '  --release-id <id>   MusicBrainz release MBID',
-    '  --title <text>      Title to publish under; required when no metadata',
-    '                      client can look the coordinates up',
-    '  --channel-name <t>  Channel to publish into'
+    '  --title <text>      Title to publish under; optional when the authority',
+    '                      can be read, required when it cannot',
+    '  --channel-name <t>  Channel to publish into',
+    '',
+    'Metadata credentials (an authority is read only once its key is set):',
+    '  tmdb         TMDB_API_KEY',
+    '  tvdb         PEARTUBE_TVDB_API_KEY (+ PEARTUBE_TVDB_PIN)',
+    '  musicbrainz  no credential required'
   ].join('\n'))
 })
 

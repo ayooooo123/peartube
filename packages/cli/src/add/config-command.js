@@ -14,6 +14,7 @@ export async function buildConfigReport ({ preferences, fs = nodeFs, identityMan
   const report = {
     storagePath: preferences.storagePath,
     tmdb: { status: describeSecret(preferences.tmdbApiKey), source: preferences.tmdbApiKeySource },
+    tvdb: { status: describeSecret(preferences.tvdbApiKey), source: preferences.tvdbApiKeySource, pin: describeSecret(preferences.tvdbPin) },
     ytDlp: { path: preferences.ytDlpPath, version: null, error: null },
     cookies: { status: describeSecret(preferences.ytDlpCookiesPath), valid: null },
     identities: [],
@@ -128,6 +129,8 @@ export async function applyConfigUpdate ({ field, value, configPath, fs = nodeFs
 const CONTENT_FIELDS = new Set([
   'storagePath',
   'tmdbApiKey',
+  'tvdbApiKey',
+  'tvdbPin',
   'ytDlpPath',
   'ytDlpCookiesPath',
   'searchLimit',

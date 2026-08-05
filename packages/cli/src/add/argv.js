@@ -1,11 +1,11 @@
 import {
   ALL_COORDINATE_FLAGS,
+  canBrowse,
   CONTENT_TYPES,
   coordinateCollision,
   coordinateRefusal,
   coordinateRequirement,
   coordinatesComplete,
-  isQueryable,
   mediaShape,
   modeLabel,
   providerRefusal
@@ -240,9 +240,11 @@ function parseAdd(flags, positionals, options) {
     if (complete && !interactive) {
       throw new PeartubeUsageError('Complete scripted coordinates require --yes')
     }
-    // The picker browses TMDB alone. An authority it cannot ask must arrive
-    // complete rather than be quietly resolved against the wrong catalogue.
-    if (!interactive || (flags.provider && !isQueryable(flags.provider))) {
+    // Incomplete coordinates are finished in the picker, which browses one
+    // authority at a time and only where it has screens. Anything it cannot
+    // browse must arrive complete rather than be resolved against the wrong
+    // catalogue.
+    if (!interactive || !canBrowse(flags.type, flags.provider)) {
       throw new PeartubeUsageError(`${modeLabel(flags.type)} mode requires ${coordinateRequirement(flags.type)}`)
     }
     return result('add', query, fetchUrl, flags, 'interactive')
@@ -257,6 +259,9 @@ function parseAdd(flags, positionals, options) {
 
   if (!interactive) {
     throw new PeartubeUsageError('Non-interactive add requires --type and complete provider coordinates')
+  }
+  if (flags.provider && !canBrowse(null, flags.provider)) {
+    throw new PeartubeUsageError(`The interactive picker cannot browse ${flags.provider}; add --type with complete coordinates`)
   }
 
   return result('add', query, fetchUrl, flags, 'interactive')

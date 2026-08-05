@@ -1,0 +1,37 @@
+{
+  "status": "success",
+  "data": {
+    "id": 604,
+    "name": "The Matrix",
+    "slug": "the-matrix",
+    "image": "https://artworks.thetvdb.com/banners/movies/604/posters/604.jpg",
+    "runtime": 136,
+    "year": "1999",
+    "originalLanguage": "eng",
+    "originalCountry": "usa",
+    "overview": "A computer hacker learns from mysterious rebels about the true nature of his reality.",
+    "first_release": { "country": "usa", "date": "1999-03-31", "detail": null },
+    "releases": [
+      { "country": "usa", "date": "1999-03-31", "detail": null },
+      { "country": "deu", "date": "1999-04-08", "detail": null }
+    ],
+    "artworks": [
+      {
+        "id": 2001,
+        "type": 14,
+        "score": 100,
+        "language": "eng",
+        "image": "https://artworks.thetvdb.com/banners/movies/604/posters/604.jpg",
+        "thumbnail": "https://artworks.thetvdb.com/banners/movies/604/posters/604_t.jpg"
+      },
+      {
+        "id": 2002,
+        "type": 15,
+        "score": 90,
+        "language": null,
+        "image": "https://artworks.thetvdb.com/banners/movies/604/backgrounds/604.jpg",
+        "thumbnail": "https://artworks.thetvdb.com/banners/movies/604/backgrounds/604_t.jpg"
+      }
+    ]
+  }
+}

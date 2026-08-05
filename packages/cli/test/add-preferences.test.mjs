@@ -60,6 +60,41 @@ test('absent keys fall back to defaults and keep creator/local flows available',
   t.is(describeSecret('anything'), 'configured')
 })
 
+test('the TVDB credential resolves like TMDB and never appears in the redacted view', (t) => {
+  const prefs = resolveAddPreferences({
+    flags: {},
+    env: { PEARTUBE_TVDB_API_KEY: 'tvdb-secret', PEARTUBE_TVDB_PIN: '4321' },
+    config: { content: { tvdbApiKey: 'config-key' } }
+  })
+  t.is(prefs.tvdbApiKey, 'tvdb-secret')
+  t.is(prefs.tvdbApiKeySource, 'env')
+  t.is(prefs.tvdbPin, '4321')
+  t.is(prefs.tvdbPinSource, 'env')
+
+  const redacted = redactPreferences(prefs)
+  t.is(redacted.tvdbApiKey, 'configured')
+  t.is(redacted.tvdbApiKeySource, 'env')
+  t.is(redacted.tvdbPin, 'configured')
+  t.absent(JSON.stringify(redacted).includes('tvdb-secret'), 'redacted view omits the TVDB key')
+  t.absent(JSON.stringify(redacted).includes('4321'), 'redacted view omits the TVDB pin')
+  t.absent(JSON.stringify(redacted).includes('config-key'))
+})
+
+test('an unset TVDB credential is empty, sourceless, and described as not set', (t) => {
+  const prefs = resolveAddPreferences({ flags: {}, env: {}, config: {} })
+  t.is(prefs.tvdbApiKey, ADD_PREFERENCE_DEFAULTS.tvdbApiKey)
+  t.is(prefs.tvdbApiKey, '')
+  t.is(prefs.tvdbApiKeySource, null)
+  t.is(prefs.tvdbPin, '')
+  t.is(redactPreferences(prefs).tvdbApiKey, 'not set')
+})
+
+test('a TVDB key written into the content config counts as a secret', (t) => {
+  const { text, containsSecret } = updateContentConfig('', { tvdbApiKey: 'tvdb-token' })
+  t.ok(text.includes('  tvdbApiKey: tvdb-token'))
+  t.is(containsSecret, true)
+})
+
 test('network trust is normalized and forwarded without duplication', (t) => {
   const hexA = 'a'.repeat(64)
   const hexB = 'B'.repeat(64)

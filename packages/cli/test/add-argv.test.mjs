@@ -333,6 +333,52 @@ test('the coordinate table decides which authority may categorize which kind', (
   )
 })
 
+test('a readable authority may be browsed or looked up; music must arrive complete', (t) => {
+  // No --title: the authority can be read, so the parser must not demand one.
+  const tvdbMovie = parsePeartubeArgv([
+    'add', 'https://media.example/movie',
+    '--type', 'movie',
+    '--provider', 'tvdb',
+    '--movie-id', '290434',
+    '--yes'
+  ], nonTty)
+  t.is(tvdbMovie.mode, 'scripted')
+  t.absent(tvdbMovie.flags.title)
+
+  // TVDB describes shows and movies, so the picker can browse it.
+  const tvdbPicker = parsePeartubeArgv([
+    'add', 'breaking bad',
+    '--type', 'episode',
+    '--provider', 'tvdb'
+  ], tty)
+  t.is(tvdbPicker.mode, 'interactive')
+
+  // The picker has no music screens; incomplete music coordinates are refused
+  // rather than resolved against a catalogue the publisher never named.
+  t.exception(
+    () => parsePeartubeArgv([
+      'add', 'paranoid android',
+      '--type', 'track',
+      '--provider', 'musicbrainz'
+    ], tty),
+    /Track mode requires --provider musicbrainz and --recording-id/
+  )
+  t.exception(
+    () => parsePeartubeArgv([
+      'add', 'ok computer',
+      '--type', 'release'
+    ], tty),
+    /Release mode requires --provider musicbrainz and --release-id/
+  )
+  t.exception(
+    () => parsePeartubeArgv([
+      'add', 'radiohead',
+      '--provider', 'musicbrainz'
+    ], tty),
+    /The interactive picker cannot browse musicbrainz/
+  )
+})
+
 test('missing coordinates become interactive only with both TTYs and input enabled', (t) => {
   const interactive = parsePeartubeArgv([
     'add', 'https://media.example/episode',

@@ -1,11 +1,12 @@
 // Interactive picker orchestrator.
 //
 // Connects the pure picker state machine (`picker-state.js`), the terminal
-// engine (`terminal.js`), and the live providers (TMDB / yt-dlp) into a single
-// running `peartube add` session. The terminal engine is synchronous; this
-// driver supplies the async effects it cannot: per-screen discovery fetches,
-// path autocomplete for local sources, and the publish/execution step that
-// runs while the picker sits on the `progress` screen.
+// engine (`terminal.js`), and the live providers (one metadata authority plus
+// yt-dlp) into a single running `peartube add` session. The terminal engine is
+// synchronous; this driver supplies the async effects it cannot: per-screen
+// discovery fetches, path autocomplete for local sources, and the
+// publish/execution step that runs while the picker sits on the `progress`
+// screen.
 //
 // Wiring contract with `terminal.js`:
 //   onReady(dispatch)        -> capture the dispatch bridge
@@ -46,7 +47,8 @@ function messageOf (error) {
 }
 
 export function createInteractiveDriver ({
-  tmdb = null,
+  metadata = null,
+  authority = 'tmdb',
   ytDlp = null,
   searchLimit = 20,
   cwd = process.cwd(),
@@ -127,8 +129,8 @@ export function createInteractiveDriver ({
       return [{ kind: 'creator', id: `creator:${q}`, label: q, completion: q, canonicalUrl: q }]
     }
     if (isUrl(q)) return [] // non-channel URLs belong to scripted `--type video`
-    if (!tmdb) return []
-    const results = await tmdb.search(q, { signal })
+    if (!metadata) return []
+    const results = await metadata.search(q, { signal })
     return results.map((r) => ({
       kind: r.kind,
       id: r.id,
@@ -137,8 +139,8 @@ export function createInteractiveDriver ({
       title: r.title,
       year: r.year,
       mediaId: r.mediaId,
-      provider: 'tmdb',
-      mediaProvider: 'tmdb',
+      provider: authority,
+      mediaProvider: authority,
       description: r.description,
       artwork: r.artwork
     }))
@@ -191,7 +193,7 @@ export function createInteractiveDriver ({
         break
       case 'tvSeason':
         load(async ({ signal }) => {
-          show = await tmdb.getShow(choices.search.mediaId, { signal })
+          show = await metadata.getShow(choices.search.mediaId, { signal })
           return (show.seasons || []).map((season) => ({
             label: season.name || `Season ${season.seasonNumber}`,
             completion: season.name || `Season ${season.seasonNumber}`,
@@ -203,7 +205,7 @@ export function createInteractiveDriver ({
       case 'episodeSelection':
         load(async ({ signal }) => {
           const season = choices.tvSeason
-          const episodes = await tmdb.getSeason(choices.search.mediaId, season.seasonNumber, { signal })
+          const episodes = await metadata.getSeason(choices.search.mediaId, season.seasonNumber, { signal })
           return episodes.map((episode) => ({
             label: `S${pad2(episode.seasonNumber)}E${pad2(episode.episodeNumber)} · ${episode.title}`,
             completion: episode.title,

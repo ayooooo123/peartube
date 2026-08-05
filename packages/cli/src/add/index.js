@@ -1,6 +1,7 @@
-import { resolveAddPreferences } from './preferences.js'
+import { CREDENTIAL_FIELDS, resolveAddPreferences } from './preferences.js'
 import { buildCreatorItemDraft, buildDirectChannelDraft, buildEpisodeItemDraft, buildMovieChannelDraft, buildMovieItemDraft, buildReleaseItemDraft, buildShowChannelDraft, buildTrackItemDraft, normalizeIdentityUrl } from './content-model.js'
-import { CONTENT_TYPES, coordinateRefusal, coordinateRequirement, coordinatesComplete, isQueryable, modeLabel, providerRefusal, readMediaCoordinates } from './media-coordinates.js'
+import { CONTENT_TYPES, canBrowse, coordinateRefusal, coordinateRequirement, coordinatesComplete, lookupRefusal, modeLabel, providerRefusal, readMediaCoordinates } from './media-coordinates.js'
+import { canReadAuthority, createMetadataProvider } from './providers/index.js'
 import { renderPickerLines } from './render.js'
 import { createDiagnosticScope } from './diagnostic-scope.js'
 import { createBackendExecutorDeps } from './backend-deps.js'
@@ -50,15 +51,16 @@ async function loadDeps (context) {
     const mod = await import(modulePath)
     return (mod.createDeps ? await mod.createDeps(context) : mod.default) || {}
   }
-  const [{ openAddRuntime }, { createTmdbProvider }, { createYtDlpProvider }, { createJobStore }, { createExecutor }, { runTerminal }] = await Promise.all([
+  // The registry itself is cheap — it only lazily imports the one authority
+  // module a run actually asks for — so it is injected rather than imported.
+  const [{ openAddRuntime }, { createYtDlpProvider }, { createJobStore }, { createExecutor }, { runTerminal }] = await Promise.all([
     import('./runtime.js'),
-    import('./providers/tmdb.js'),
     import('./providers/yt-dlp.js'),
     import('./job-store.js'),
     import('./executor.js'),
     import('./terminal.js')
   ])
-  return { openAddRuntime, createTmdbProvider, createYtDlpProvider, createJobStore, createExecutor, runTerminal }
+  return { openAddRuntime, createMetadataProvider, createYtDlpProvider, createJobStore, createExecutor, runTerminal }
 }
 
 export async function runAddCommand (context = {}) {
@@ -129,11 +131,10 @@ async function runRelayScripted ({ context, preferences, deps, emitProgress }) {
 
 async function runRelayInteractive ({ context, preferences, deps }) {
   const client = (deps.createRelayClient || createRelayClient)(preferences.relayUi)
-  const tmdb = preferences.tmdbApiKey
-    ? deps.createTmdbProvider({ apiKey: preferences.tmdbApiKey, searchLimit: preferences.searchLimit })
-    : null
+  const { authority, metadata } = await openPickerMetadata({ context, preferences, deps })
   const driver = createInteractiveDriver({
-    tmdb,
+    metadata,
+    authority,
     ytDlp: null,
     searchLimit: preferences.searchLimit,
     cwd: context.cwd || process.cwd(),
@@ -190,13 +191,72 @@ function refuse (message) {
   if (message) throw new AddUsageError(message)
 }
 
-// Drafts for an authority with no metadata client: the coordinates and the
-// title the publisher typed, and nothing else.
+// Build the client for one authority. The registry supplies its credential
+// from preferences; anything beyond that — TVDB's subscriber PIN today — comes
+// from the same credential table, so no authority is named twice.
+function metadataProvider (authority, { preferences, deps }) {
+  const create = deps.createMetadataProvider || createMetadataProvider
+  const options = { searchLimit: preferences.searchLimit }
+  for (const field of CREDENTIAL_FIELDS) {
+    if (field.authority !== authority || field.option === 'apiKey') continue
+    if (preferences[field.key]) options[field.option] = preferences[field.key]
+  }
+  return create(authority, { preferences, ...options })
+}
+
+// The picker browses one authority per session, chosen explicitly: the
+// requested --provider when it has shows and movies to offer, TMDB otherwise.
+// An authority nobody credentialed browses nothing rather than failing late.
+async function openPickerMetadata ({ context, preferences, deps }) {
+  const requested = context.flags?.provider
+  const authority = requested && canBrowse(null, requested) ? requested : 'tmdb'
+  const metadata = canReadAuthority(authority, preferences)
+    ? await metadataProvider(authority, { preferences, deps })
+    : null
+  return { authority, metadata }
+}
+
+// Drafts from the catalogue: the authority supplies the name, description, and
+// artwork, and an explicit --title or --channel-name still wins over both.
+async function buildLookedUpDrafts ({ kind, coordinates, flags, preferences, deps, source }) {
+  const provider = await metadataProvider(coordinates.mediaProvider, { preferences, deps })
+  const retitled = (record) => (flags.title ? { ...record, title: flags.title } : record)
+
+  if (kind === 'episode') {
+    const show = await provider.getShow(coordinates.mediaId)
+    const episodes = await provider.getSeason(coordinates.mediaId, coordinates.seasonNumber)
+    const episode = episodes.find((entry) => entry.episodeNumber === coordinates.episodeNumber)
+    if (!episode) throw new AddUsageError(`Episode S${coordinates.seasonNumber}E${coordinates.episodeNumber} was not found`)
+    return {
+      channelDraft: buildShowChannelDraft(flags.channelName ? { ...show, name: flags.channelName } : show),
+      itemDraft: buildEpisodeItemDraft(retitled(episode), source, coordinates)
+    }
+  }
+  if (kind === 'movie') {
+    // A movie channel is the movie, so it carries the same renaming.
+    const movie = retitled(await provider.getMovie(coordinates.mediaId))
+    return {
+      channelDraft: buildMovieChannelDraft(flags.channelName ? { ...movie, title: flags.channelName } : movie),
+      itemDraft: buildMovieItemDraft(movie, source, coordinates)
+    }
+  }
+  const work = retitled(kind === 'track'
+    ? await provider.getRecording(coordinates.mediaId)
+    : await provider.getRelease(coordinates.mediaId))
+  // Music publishes into the artist's channel — see buildSuppliedDrafts — and
+  // MusicBrainz names that artist, so the publisher need not.
+  return {
+    channelDraft: buildDirectChannelDraft({ name: flags.channelName || work.artist || work.title }),
+    itemDraft: kind === 'track'
+      ? buildTrackItemDraft(work, source, coordinates)
+      : buildReleaseItemDraft(work, source, coordinates)
+  }
+}
+
+// Drafts for an authority PearTube cannot read: the coordinates and the title
+// the publisher typed, and nothing else.
 function buildSuppliedDrafts ({ kind, coordinates, flags, source }) {
   const title = flags.title
-  if (!title) {
-    throw new AddUsageError(`--title is required for ${coordinates.mediaProvider} coordinates; PearTube has no ${coordinates.mediaProvider} metadata client to look one up`)
-  }
   const channelName = flags.channelName || title
   const work = { title, seasonNumber: coordinates.seasonNumber, episodeNumber: coordinates.episodeNumber }
   const channelCoordinates = { mediaProvider: coordinates.mediaProvider, mediaId: coordinates.mediaId }
@@ -233,10 +293,12 @@ async function runScripted ({ context, preferences, deps, emitProgress, logger }
   if (coordinates && !coordinatesComplete(flags.type, flags)) {
     throw new AddUsageError(`${modeLabel(flags.type)} mode requires ${coordinateRequirement(flags.type)}`)
   }
-  const enriched = coordinates !== null && isQueryable(coordinates.mediaProvider)
-  if (enriched && !preferences.tmdbApiKey) {
-    throw new AddUsageError('A TMDB API key is required for scripted metadata. Set TMDB_API_KEY or run peartube config.')
-  }
+  // A title the publisher typed is always enough. Without one the authority has
+  // to be readable, and the refusal names which half is missing: no client at
+  // all, or a client whose credential nobody configured.
+  const refusal = coordinates ? lookupRefusal(coordinates.mediaProvider, preferences) : null
+  if (refusal && !flags.title) throw new AddUsageError(refusal)
+  const enriched = coordinates !== null && refusal === null
   const fetchUrl = context.fetchUrl || context.query
   if (!fetchUrl) throw new AddUsageError('Scripted add requires a source URL or file path')
 
@@ -248,19 +310,15 @@ async function runScripted ({ context, preferences, deps, emitProgress, logger }
       const title = flags.title || titleFromUrl(fetchUrl)
       channelDraft = buildDirectChannelDraft({ name: flags.channelName || title })
       itemDraft = buildCreatorItemDraft({ title, contentKind: 'video' }, sourceFrom(fetchUrl))
-    } else if (enriched && flags.type === 'episode') {
-      const tmdb = deps.createTmdbProvider({ apiKey: preferences.tmdbApiKey, searchLimit: preferences.searchLimit })
-      const show = await tmdb.getShow(coordinates.mediaId)
-      const episodes = await tmdb.getSeason(coordinates.mediaId, coordinates.seasonNumber)
-      const episode = episodes.find((entry) => entry.episodeNumber === coordinates.episodeNumber)
-      if (!episode) throw new AddUsageError(`Episode S${coordinates.seasonNumber}E${coordinates.episodeNumber} was not found`)
-      channelDraft = buildShowChannelDraft(show)
-      itemDraft = buildEpisodeItemDraft(episode, sourceFrom(fetchUrl), coordinates)
-    } else if (enriched && flags.type === 'movie') {
-      const tmdb = deps.createTmdbProvider({ apiKey: preferences.tmdbApiKey, searchLimit: preferences.searchLimit })
-      const movie = await tmdb.getMovie(coordinates.mediaId)
-      channelDraft = buildMovieChannelDraft(movie)
-      itemDraft = buildMovieItemDraft(movie, sourceFrom(fetchUrl), coordinates)
+    } else if (enriched) {
+      ;({ channelDraft, itemDraft } = await buildLookedUpDrafts({
+        kind: flags.type,
+        coordinates,
+        flags,
+        preferences,
+        deps,
+        source: sourceFrom(fetchUrl)
+      }))
     } else if (coordinates) {
       ;({ channelDraft, itemDraft } = buildSuppliedDrafts({ kind: flags.type, coordinates, flags, source: sourceFrom(fetchUrl) }))
     } else {
@@ -276,14 +334,13 @@ async function runScripted ({ context, preferences, deps, emitProgress, logger }
 async function runInteractive ({ context, preferences, deps, logger }) {
   const runtime = await deps.openAddRuntime({ storagePath: preferences.storagePath, network: preferences.network, logger })
   try {
-    const tmdb = preferences.tmdbApiKey
-      ? deps.createTmdbProvider({ apiKey: preferences.tmdbApiKey, searchLimit: preferences.searchLimit })
-      : null
+    const { authority, metadata } = await openPickerMetadata({ context, preferences, deps })
     const ytDlp = typeof deps.createYtDlpProvider === 'function'
       ? deps.createYtDlpProvider({ bin: preferences.ytDlpPath || 'yt-dlp', cookiesPath: preferences.ytDlpCookiesPath || null })
       : null
     const driver = createInteractiveDriver({
-      tmdb,
+      metadata,
+      authority,
       ytDlp,
       searchLimit: preferences.searchLimit,
       cwd: context.cwd || process.cwd(),

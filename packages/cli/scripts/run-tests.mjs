@@ -61,6 +61,8 @@ const TEST_FILES = [
   'add-preferences.test.mjs',
   'content-config-command.test.mjs',
   'tmdb-provider.test.mjs',
+  'add-tvdb-provider.test.mjs',
+  'add-musicbrainz-provider.test.mjs',
   'add-yt-dlp-provider.test.mjs',
   'add-discovery.test.mjs',
   'add-bulk-matcher.test.mjs',

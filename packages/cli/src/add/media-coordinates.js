@@ -1,4 +1,6 @@
 import { MEDIA_COORDINATE_KINDS, MEDIA_COORDINATE_SHAPES } from '@peartube/backend/structured-content'
+import { authorityKinds, canReadAuthority, isReadableAuthority, METADATA_AUTHORITIES } from './providers/index.js'
+import { credentialEnvVars } from './preferences.js'
 
 // MEDIA_COORDINATE_SHAPES owns which metadata authority may categorize which
 // kind of work and which ordinals that kind carries. This module owns nothing
@@ -31,14 +33,32 @@ const MEDIA_PROVIDERS = Object.freeze([...new Set(
 // direct video that no metadata authority categorizes at all.
 export const CONTENT_TYPES = Object.freeze([...MEDIA_COORDINATE_KINDS, 'video'])
 
-// The authorities PearTube can actually ask. TMDB is the only one with a
-// metadata client, so it is also the only one the interactive picker can
-// browse: every other authority publishes exactly the coordinates and title the
-// publisher supplied, and is never resolved against a catalogue it did not name.
-const QUERYABLE_PROVIDERS = Object.freeze(['tmdb'])
+// The picker has screens for shows and movies only: music has no browse flow,
+// so its coordinates arrive complete or not at all, and a track is never
+// resolved against a catalogue the publisher did not name.
+const BROWSABLE_KINDS = Object.freeze(['episode', 'movie'])
 
-export function isQueryable (provider) {
-  return QUERYABLE_PROVIDERS.includes(provider)
+// Whether the interactive picker can browse this kind at this authority. A null
+// kind asks only whether the authority itself is browsable; a null provider,
+// only whether the kind is.
+export function canBrowse (kind, provider) {
+  if (kind != null && !BROWSABLE_KINDS.includes(kind)) return false
+  if (provider == null) return true
+  if (!isReadableAuthority(provider)) return false
+  return authorityKinds(provider).some((candidate) => BROWSABLE_KINDS.includes(candidate))
+}
+
+// Why these coordinates cannot be looked up right now, or null when they can.
+// Two states a publisher must be able to tell apart: an authority with no
+// metadata client at all, and one whose credential nobody configured. Either
+// way --title escapes, publishing exactly the coordinates and name supplied.
+export function lookupRefusal (provider, preferences = {}) {
+  if (!isReadableAuthority(provider)) {
+    return `PearTube has no ${provider} metadata client to look those coordinates up; pass --title to publish them as supplied`
+  }
+  if (canReadAuthority(provider, preferences)) return null
+  const [envVar] = credentialEnvVars(provider)
+  return `${provider} needs ${envVar} configured before it can be read; set it, run peartube config, or pass --title`
 }
 
 // "tmdb|tvdb (episode, movie); musicbrainz (track, release)" — help text that
@@ -51,6 +71,19 @@ export function providerHelp () {
     groups.get(providers).push(kind)
   }
   return [...groups].map(([providers, kinds]) => `${providers} (${kinds.join(', ')})`).join('; ')
+}
+
+// One line per authority naming the credential it is read with, extras in
+// parentheses. Derived from the registry and the credential table, so an
+// authority cannot gain a key the help text forgets to mention.
+export function credentialHelp () {
+  const width = Math.max(...METADATA_AUTHORITIES.map((authority) => authority.length))
+  return METADATA_AUTHORITIES.map((authority) => {
+    const [primary, ...extra] = credentialEnvVars(authority)
+    const label = authority.padEnd(width)
+    if (!primary) return `${label}  no credential required`
+    return `${label}  ${primary}${extra.length > 0 ? ` (+ ${extra.join(', ')})` : ''}`
+  })
 }
 
 export function mediaShape (kind) {

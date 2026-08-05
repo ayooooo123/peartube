@@ -27,13 +27,15 @@ sdkmanager "system-images;android-34;google_apis;arm64-v8a"
 avdmanager create avd -n peartube-arm64 -k "system-images;android-34;google_apis;arm64-v8a" -d pixel_6
 ```
 
-Override the AVD/sim names with `PEARTUBE_AVD` / `PEARTUBE_SIM`.
+Override the AVD/sim names with `PEARTUBE_AVD` / `PEARTUBE_SIM`. If the named iOS sim doesn't exist,
+the runner falls back to any available iPhone.
 
 ### Desktop capture permission
 
-macOS prompts for **Screen Recording** permission the first time `screencapture` runs. Grant it
-(System Settings → Privacy & Security → Screen Recording). Desktop capture is **whole-screen** in v1
-(macOS has no scriptable single-window video capture); window targeting is deferred.
+The invoking process needs **Screen Recording** permission (System Settings → Privacy & Security →
+Screen Recording) — grant it to your terminal/runner. Without it `screencapture` fails with
+`could not create image from display` (e.g. from a headless/unattended shell). Desktop capture is
+**whole-screen** in v1 (macOS has no scriptable single-window video capture); window targeting is deferred.
 
 ## Usage
 

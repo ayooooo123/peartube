@@ -50,16 +50,17 @@ export async function ensureAndroid(attach) {
   throw new Error(`emulator ${AVD} did not reach boot completion in time`)
 }
 
-/** Ensure the iOS simulator is booted; return its udid. */
+/** Ensure an iOS simulator is booted; return its udid. Falls back to any available iPhone. */
 export function ensureIos(attach) {
   if (attach) return attach
   const list = JSON.parse(sh('xcrun', ['simctl', 'list', 'devices', '--json']))
-  let udid = null, booted = false
-  for (const runtime of Object.values(list.devices)) {
-    for (const d of runtime) if (d.name === SIM) { udid = d.udid; booted = d.state === 'Booted' }
-  }
-  if (!udid) throw new Error(`iOS simulator "${SIM}" not found — create it in Xcode or set PEARTUBE_SIM`)
-  if (!booted) execFileSync('xcrun', ['simctl', 'boot', udid], { stdio: 'inherit' })
+  const all = []
+  for (const devs of Object.values(list.devices)) for (const d of devs) if (d.isAvailable !== false) all.push(d)
+  const iphones = all.filter(d => /iPhone/i.test(d.name))
+  const dev = all.find(d => d.name === SIM) || iphones.find(d => d.state === 'Booted') || iphones[0]
+  if (!dev) throw new Error('no available iOS simulator found — create one in Xcode or set PEARTUBE_SIM')
+  if (dev.name !== SIM) console.error(`[ensure-avd] simulator "${SIM}" not found; using "${dev.name}"`)
+  if (dev.state !== 'Booted') execFileSync('xcrun', ['simctl', 'boot', dev.udid], { stdio: 'inherit' })
   execFileSync('open', ['-a', 'Simulator'], { stdio: 'ignore' })
-  return udid
+  return dev.udid
 }

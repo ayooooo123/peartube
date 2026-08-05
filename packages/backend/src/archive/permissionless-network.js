@@ -16,6 +16,10 @@ const DEFAULT_REQUEST_TTL_MS = 5 * 60 * 1000
 const DEFAULT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 const DEFAULT_MAX_REQUEST_BYTES = 64 * 1024 * 1024 * 1024
 const MAX_SEEN_REQUESTS = 2048
+// Long enough that a re-announcing requester cannot force repeated
+// authorization work, short enough that a catalog which just synced is used on
+// the next announcement rather than the one after it.
+const DEFERRED_REQUEST_RETRY_MS = 5 * 1000
 const DEFAULT_CHALLENGE_INTERVAL_MS = 5 * 60 * 1000
 const DEFAULT_CHALLENGE_TIMEOUT_MS = 15 * 1000
 const DEFAULT_REANNOUNCE_INTERVAL_MS = 15 * 1000
@@ -179,6 +183,7 @@ export function createPermissionlessArchiveNetwork(options = {}) {
   let acceptanceProbability = probability(options.acceptanceProbability, 0.25)
   const localRequests = new Map()
   const seenRequests = new Map()
+  const deferredRequests = new Map()
   const localArchivistPledges = new Map()
   const receivedPledges = new Map()
   const pendingChallenges = new Map()
@@ -619,7 +624,6 @@ export function createPermissionlessArchiveNetwork(options = {}) {
     async reannounceLocalRequests() {
       await ready
       if (!enabled || !discoveryRetained) return { status: 'skipped', reannounced: 0 }
-      console.log('[ArchiveNetwork] reannounceLocalRequests starting, count:', localRequests.size)
       const currentTime = now()
       let reannounced = 0
       for (const request of localRequests.values()) {
@@ -629,13 +633,14 @@ export function createPermissionlessArchiveNetwork(options = {}) {
           record.pledge.body.retentionUntil > currentTime
         )
         if (activePledges.length === 0) {
-          try {
-            const result = await publishRequest(request.envelope)
-            console.log('[ArchiveNetwork] reannounced request:', request.requestId.slice(0, 16), 'delivered:', result?.delivered)
-            if (result?.delivered > 0) reannounced++
-          } catch (err) {
-            console.log('[ArchiveNetwork] reannounce publishRequest THREW:', err?.message || String(err))
-          }
+          // The re-announcement is the same request, so it must carry the same
+          // publication identity as the first announcement. Publishing the bare
+          // envelope left the transport with nothing to check local visibility
+          // against, and it refused every re-announcement as invisible media -
+          // so a request that found no archivist on its first pass could never
+          // find one later.
+          const result = await publishRequest(request.envelope, request.body)
+          if (result?.delivered > 0) reannounced++
         }
       }
       return { status: 'ok', reannounced }
@@ -713,11 +718,19 @@ export function createPermissionlessArchiveNetwork(options = {}) {
 
     async ingestRequest(envelope) {
       await ready
-      console.log('[ArchiveNetwork] ingestRequest received envelope recordId:', b4a.toString(envelope?.recordId || [], 'hex').slice(0, 16))
       const request = await verifyArchiveRequest(envelope, { now: now() })
       if (!request) return { status: 'rejected', reason: 'request-invalid' }
       if (!enabled) return { status: 'rejected', reason: 'participation-disabled' }
       if (seenRequests.has(request.requestId)) return { status: 'rejected', reason: 'request-replayed' }
+      // A request can arrive before this device has synced the publisher
+      // catalog that authorizes it. Recording it as seen at that moment
+      // permanently blackholes it: every later re-announcement is refused as a
+      // replay, so the archivist never pledges for content it would gladly
+      // hold. Defer instead, and re-evaluate once the catalog can answer.
+      const deferredAt = deferredRequests.get(request.requestId)
+      if (deferredAt !== undefined && now() - deferredAt < DEFERRED_REQUEST_RETRY_MS) {
+        return { status: 'rejected', reason: 'request-deferred' }
+      }
       if (request.body.requesterId === archivistId) return { status: 'rejected', reason: 'self-request' }
       if (request.body.requestedBytes > maxRequestBytes ||
           reservedBytes() + pendingReservationBytes + request.body.requestedBytes > capacityBytes) {
@@ -732,11 +745,11 @@ export function createPermissionlessArchiveNetwork(options = {}) {
       } catch {
         authorization = false
       }
-      rememberBounded(seenRequests, request.requestId, now())
       if (!authorization || authorization.accepted === false ||
           authorization.requestedBytes !== request.body.requestedBytes ||
           !sameRanges(authorization.ranges, request.body.ranges)) {
         authorizationRejections++
+        rememberBounded(deferredRequests, request.requestId, now())
         return { status: 'rejected', reason: 'manifest-not-authorized' }
       }
       let visible = false
@@ -747,8 +760,13 @@ export function createPermissionlessArchiveNetwork(options = {}) {
       }
       if (!visible) {
         authorizationRejections++
+        rememberBounded(deferredRequests, request.requestId, now())
         return { status: 'rejected', reason: 'consumer-not-visible' }
       }
+      // Past every check that local state can still change the answer to, so
+      // this request is now decided once and never re-rolled.
+      deferredRequests.delete(request.requestId)
+      rememberBounded(seenRequests, request.requestId, now())
 
       const sample = Number(random())
       if (!Number.isFinite(sample) || sample < 0 || sample >= 1) throw new Error('random source must return a number in [0, 1)')
@@ -901,7 +919,6 @@ export function createPermissionlessArchiveNetwork(options = {}) {
         now: now(),
         replayCache: challengeRequestReplayCache,
       })
-      if (!challenge) return { status: 'rejected', reason: 'challenge-invalid' }
       trimReplayCache(challengeRequestReplayCache)
       const record = [...localArchivistPledges.values()].find(candidate =>
         candidate.pledge.pledgeId === challenge.pledgeId
@@ -1043,6 +1060,7 @@ export function createPermissionlessArchiveNetwork(options = {}) {
       await releaseDiscovery()
       clearLocalRequests()
       seenRequests.clear()
+      deferredRequests.clear()
       activeChallengeProofsByPeer.clear()
     },
   }

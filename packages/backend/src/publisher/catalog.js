@@ -141,6 +141,7 @@ export class PublisherCatalog extends ReadyResource {
     this.ownsScopedStore = this.store !== store
     this.base = null
     this.verifiedPageView = null
+    this.baseUpdating = null
     this.publisherPinned = false
     this.ready().catch(() => {})
   }
@@ -223,6 +224,23 @@ export class PublisherCatalog extends ReadyResource {
 
   async update () {
     await this.ready()
+    if (!this.base) return
+    // A follower reads through the view it rebuilt from verified accepted
+    // pages. Its Autobase is opened from the publisher's bootstrap key and may
+    // never become ready, so `base.update()` can block indefinitely. Awaiting it
+    // here made every local read - including the head check that completes a
+    // sync, and every projection scan afterwards - wait on a remote core that
+    // owes this catalog nothing. Advance the base in the background instead and
+    // answer from the view that is already local and already verified.
+    if (this.verifiedPageView) {
+      if (!this.baseUpdating) {
+        this.baseUpdating = Promise.resolve()
+          .then(() => this.base?.update())
+          .catch(() => {})
+          .finally(() => { this.baseUpdating = null })
+      }
+      return
+    }
     await this.base.update()
   }
 

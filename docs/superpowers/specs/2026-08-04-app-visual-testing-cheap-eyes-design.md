@@ -158,3 +158,8 @@ Eyes = <target>.eyes.txt (advisory; surfaced in chat / artifacts)
 - Android emulator is NAT'd: relay-over-DHT feeds content to both mobile platforms; literal same-wifi mDNS reaches only the iOS sim. Content-via-relay is the "all apps" path.
 - Maestro `startRecording` format parity across Android and iOS to confirm during implementation.
 - Electrobun native-window driving is weaker than web-export/browser driving; deterministic desktop flows use the web export, native window is `--record-only`.
+
+
+## 10. Implementation note (2026-08-05): capture is screenshot-based
+
+During execution the Android emulator's `screenrecord` proved unreliable (stopped at ~1.2 s, produced a malformed mp4 with no `moov` atom), while `screencap` returned clean 1080×2424 PNGs instantly. Since the eyes are frame-based regardless, capture was changed from video (screenrecord/`simctl recordVideo`/`screencapture -v`) to **periodic screenshots (~1/sec)** on every platform: `adb exec-out screencap` (Android), `xcrun simctl io screenshot` (iOS), `screencapture` (desktop). This removed the mp4/ffmpeg-sampling path (`frames.mjs` deleted) and the moov/mjpeg failure chain. The orchestrator drives Maestro via `await` so the capture timer fires concurrently. ffmpeg is now needed only for the fixture generator and the `look.py` fallback, not capture. The OMP-vision probe (§8) passed — `inspect_image` accepts the PNG frames and returns usable UI descriptions.

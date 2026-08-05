@@ -1,8 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { sampleFrames } from './frames.mjs'
 
 const LOOK = fileURLToPath(new URL('../look.py', import.meta.url))
 
@@ -16,27 +14,31 @@ export function resolveBackend(eyes) {
   return eyes === 'look' ? 'look' : 'omp'
 }
 
-/** look backend: fully autonomous, writes <outBase>.eyes.txt. Returns the text. */
-export function describeWithLook(video, outBase) {
-  const text = execFileSync('python3', [LOOK, video, EYES_PROMPT], { encoding: 'utf8' })
+/** look backend: fully autonomous. Describes each frame via look.py, joins, writes <outBase>.eyes.txt. */
+export function describeWithLook(frames, outBase) {
+  const parts = []
+  for (const f of frames) {
+    const t = execFileSync('python3', [LOOK, f, EYES_PROMPT], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
+    parts.push(`## ${f}\n${t.trim()}`)
+  }
+  const text = parts.join('\n\n')
   writeFileSync(`${outBase}.eyes.txt`, text)
   return text
 }
 
 /**
- * omp backend: prepare frames + a manifest for the agent to describe.
- * A Node CLI cannot call an OMP subagent, so it stops here; the app-review skill
- * (agent side) reads the manifest, runs inspect_image / a vision subagent, and
- * writes <outBase>.eyes.txt.
+ * omp backend: write a manifest of the captured frames for the agent to describe.
+ * A Node CLI cannot call an OMP subagent, so it stops here; the app-review skill (agent side)
+ * reads the manifest, runs inspect_image / a vision subagent, and writes <outBase>.eyes.txt.
  */
-export async function prepareForOmp(video, outBase) {
-  const { dir, frames } = await sampleFrames(video)
+export function prepareForOmp(frames, outBase) {
   const manifest = {
-    video, outBase, prompt: EYES_PROMPT,
-    frames: frames.map(f => ({ t: Number(f.t.toFixed(2)), path: f.path })),
+    outBase,
+    prompt: EYES_PROMPT,
+    frames: frames.map((path, index) => ({ index, path })),
     describeTo: `${outBase}.eyes.txt`,
   }
-  const manifestPath = join(dir, 'eyes-manifest.json')
+  const manifestPath = `${outBase}.eyes-manifest.json`
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2))
   return { manifestPath, manifest }
 }

@@ -1,4 +1,5 @@
 /* eslint-disable no-empty */
+import test from 'brittle'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -155,17 +156,17 @@ async function main() {
       report(false, `keet-identity-key keychain import is visible to the mobile bundler: ${err.message}`)
     }
 
-    if (failures > 0) {
-      console.error(`[FAIL] identity-recovery.test failed (${failures} assertion${failures === 1 ? '' : 's'})`)
-      process.exit(1)
-    }
-
-    console.log('[PASS] identity-recovery.test passed')
-    process.exit(0)
+    return failures
   } catch (err) {
     console.error('[FAIL] identity-recovery.test unexpected error:', err)
-    process.exit(1)
+    throw err
   }
 }
 
-main()
+// Every file in this directory shares one brittle process. Reporting through
+// brittle rather than an exit code is what keeps this file from deciding the
+// run is over: a bare process.exit(0) here used to end the suite at the
+// letter i, silently skipping every test file that sorts after it.
+test('identity recovery, mnemonic validation, and keychain bundling', async t => {
+  t.is(await main(), 0, 'every identity recovery assertion holds')
+})

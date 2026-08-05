@@ -457,6 +457,9 @@ export function createScopedNetworkRuntime (options = {}) {
   const swarm = options.swarm
   const store = options.store
   const catalogRegistry = options.catalogRegistry || null
+  // Where first-hand delivery is recorded. Absent, retention still replicates;
+  // the title just reports "awaiting replication" until something else proves a
+  // peer, which is what every consumer did before this was wired.
   const authorizePublication = typeof options.authorizePublication === 'function'
     ? options.authorizePublication
     : async () => false
@@ -814,6 +817,15 @@ export function createScopedNetworkRuntime (options = {}) {
     let scope = scopes.get(id)
     if (scope) {
       scope.modes.add(mode)
+      // Re-joining is also how a scope recovers a peer it lost. A channel can
+      // close while the connection carrying it stays up, and nothing else ever
+      // re-attaches one: new sessions are only opened from a connection event
+      // or from creating a scope, and this scope is neither new nor newly
+      // connected. attachScope is a no-op for a connection already sessioned
+      // here, so this costs nothing in the common case.
+      if (networkEnabled && !scope.closed) {
+        for (const [connection, info] of activeConnections) attachScope(scope, connection, info)
+      }
       return { scope, created: false }
     }
     scope = {
@@ -1147,8 +1159,16 @@ export function createScopedNetworkRuntime (options = {}) {
     if (!provider) fail('catalog page provider is unavailable')
     const request = normalizeCatalogRequest(frame.payload)
     if (request.catalogEpoch !== provider.catalogEpoch) fail('catalog page epoch mismatch')
-    if (tracked.catalogServePages > 0 && request.previousPageDigest !== tracked.catalogServeDigest) fail('catalog page linkage mismatch')
-    if (tracked.catalogServePages === 0 && request.previousPageDigest !== null) fail('first catalog page in a session must reset linkage')
+    // One session can carry more than one walk: a locator refresh, a retried
+    // walk after a truncated one, or a head that moved all start a new page
+    // sequence over the connection that is already open. A null previous
+    // digest is exactly that restart. Refusing it killed the session, and the
+    // consumer reported the result as a disconnected catalog peer it could
+    // never recover from. Pages within a sequence must still chain, and the
+    // per-session budgets below keep accumulating across sequences, so a
+    // restart buys a peer nothing it could not already have.
+    if (request.previousPageDigest === null) tracked.catalogServeDigest = null
+    else if (request.previousPageDigest !== tracked.catalogServeDigest) fail('catalog page linkage mismatch')
     const head = await provider.catalog.getViewHead()
     const headDigest = hex32(head?.digest, 'headDigest')
     if (request.expectedHeadDigest !== null && request.expectedHeadDigest !== headDigest) fail('catalog head changed before cursor resume')
@@ -2493,13 +2513,28 @@ export function createScopedNetworkRuntime (options = {}) {
         // reads like a broken publisher rather than a connection still forming.
         const live = [...existing.scope.sessions.values()]
           .some(session => !session.closed && session.state === 'active')
+        existing.scope.idleLocatorTicks = live ? 0 : (existing.scope.idleLocatorTicks || 0) + 1
         if (existing.scope.catalogComplete !== true && live) {
           void syncPublisherCatalog(existing.scope).catch(error => {
             recordProtocolError(existing.scope, 'locator-retry', error)
           })
           return skip('locator unchanged; retrying an unfinished catalog walk')
         }
-        return skip(live ? 'locator identical to current scope' : 'locator identical; no live session yet')
+        // A channel can close while the connection carrying it stays up, and
+        // then this scope is not waiting for anything: the locator has not
+        // moved so the checks above skip it, the topic is already joined so no
+        // connection event re-attaches it, and the catalog can never advance
+        // again. Rebuilding from the same locator rejoins the topic, which
+        // re-attaches the peers already connected. Two consecutive idle ticks
+        // rather than one, because a transport still forming is not stalled,
+        // and only while a peer is actually connected - with nobody there,
+        // rebuilding would burn the attempt cap against an absent publisher.
+        // That cap counts locators that never worked, and this one did.
+        const stalled = !live && existing.scope.idleLocatorTicks >= 2 && activeConnections.size > 0
+        if (!stalled) {
+          return skip(live ? 'locator identical to current scope' : 'locator identical; no live session yet')
+        }
+        bootstrapFollowAttempts.delete(publisherId)
       }
     }
     const fingerprint = [

@@ -2169,6 +2169,11 @@ export function createScopedNetworkRuntime (options = {}) {
           // only produced proofs the receiver refused, and each refusal tore
           // down the session replication was using.
           if (scope.purpose === 'archive' && !scope.archiveDiscovery) startArchivePumpWhenOpen(scope, tracked)
+          if (scope.archivePeerListeners) {
+            for (const listener of scope.archivePeerListeners) {
+              try { listener(tracked) } catch {}
+            }
+          }
           if (scope.purpose === 'archive-discovery' && scope.archivePeerListeners) { for (const listener of scope.archivePeerListeners) { try { listener({ peerId: remoteKey }) } catch {} } }
         }
       },
@@ -3111,7 +3116,7 @@ export function createScopedNetworkRuntime (options = {}) {
 
   async function retainArchiveDiscovery ({ onRequest, onPledge, onChallenge, onChallengeProof, onPeer } = {}) {
     if (status !== 'active') fail('runtime is not active')
-    for (const [name, listener] of Object.entries({ onRequest, onPledge, onChallenge, onChallengeProof })) {
+    for (const [name, listener] of Object.entries({ onRequest, onPledge, onChallenge, onChallengeProof, onPeer })) {
       if (listener !== undefined && typeof listener !== 'function') fail(`${name} must be a function`)
     }
     const topic = deriveArchiveDiscoveryTopic({ protocolMajor, networkId })
@@ -3125,6 +3130,7 @@ export function createScopedNetworkRuntime (options = {}) {
       archivePledgeListeners: new Set(),
       archiveChallengeListeners: new Set(),
       archiveChallengeProofListeners: new Set(),
+      archivePeerListeners: new Set(),
       archiveChallengeProofTransfers: new Map(),
     })
     if (!scope.archiveDiscovery) fail('archive discovery topic collided with a custody scope')
@@ -3132,11 +3138,12 @@ export function createScopedNetworkRuntime (options = {}) {
     if (onPledge) scope.archivePledgeListeners.add(onPledge)
     if (onChallenge) scope.archiveChallengeListeners.add(onChallenge)
     if (onChallengeProof) scope.archiveChallengeProofListeners.add(onChallengeProof)
+    if (onPeer) scope.archivePeerListeners.add(onPeer)
     if (typeof onPeer === 'function') (scope.archivePeerListeners = scope.archivePeerListeners || new Set()).add(onPeer)
     return { status: 'retained', topic: stableScopeDiagnostic(scope) }
   }
 
-  async function releaseArchiveDiscovery ({ onRequest, onPledge, onChallenge, onChallengeProof } = {}) {
+  async function releaseArchiveDiscovery ({ onRequest, onPledge, onChallenge, onChallengeProof, onPeer } = {}) {
     const topic = deriveArchiveDiscoveryTopic({ protocolMajor, networkId })
     const scope = findScope('archive-discovery', topic)
     if (!scope?.archiveDiscovery) return { status: 'released', released: false }
@@ -3144,8 +3151,10 @@ export function createScopedNetworkRuntime (options = {}) {
     if (onPledge) scope.archivePledgeListeners.delete(onPledge)
     if (onChallenge) scope.archiveChallengeListeners.delete(onChallenge)
     if (onChallengeProof) scope.archiveChallengeProofListeners.delete(onChallengeProof)
+    if (onPeer) scope.archivePeerListeners.delete(onPeer)
     if (scope.archiveRequestListeners.size > 0 || scope.archivePledgeListeners.size > 0 ||
-        scope.archiveChallengeListeners.size > 0 || scope.archiveChallengeProofListeners.size > 0) {
+        scope.archiveChallengeListeners.size > 0 || scope.archiveChallengeProofListeners.size > 0 ||
+        scope.archivePeerListeners.size > 0) {
       return { status: 'released', released: false }
     }
     return { status: 'released', released: await leaveScope(scope, 'discovery') }
@@ -3164,10 +3173,17 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function publishArchiveRequest ({ request, envelope, entityRef = null, publicationId = null } = {}) {
+    let pubId = publicationId || request?.body?.publicationId || null
+    if (!pubId && envelope?.body) {
+      try {
+        const decoded = JSON.parse(b4a.toString(envelope.body))
+        pubId = decoded?.publicationId || null
+      } catch {}
+    }
     const consumerVisible = await authorizeConsumerWork({
       operation: 'archive-request',
       entityRef,
-      publicationId: publicationId || request?.body?.publicationId || null,
+      publicationId: pubId,
     })
     if (!consumerVisible) fail('consumer media is not visible under local policy', 'CONSUMER_MEDIA_NOT_VISIBLE')
     return publishArchiveEnvelope('archive-request', envelope || request?.envelope || request)

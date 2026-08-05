@@ -78,16 +78,14 @@ export async function authorizeArchiveRequestFromManifestStore(request, options 
   const authorizeRendition = options.authorizeRendition
   if (!body || typeof manifestStore?.getManifest !== 'function' || typeof authorizeRendition !== 'function') return false
   let manifest = manifestStore.getManifest(body.publicationId)
-  if (!manifest && typeof options.resolveManifest === 'function') {
-    try {
-      manifest = await options.resolveManifest(body.publicationId)
-    } catch {
-      manifest = null
-    }
+  if (!manifest && typeof options.refresh === 'function') {
+    try { await options.refresh() } catch {}
+    manifest = manifestStore.getManifest(body.publicationId)
   }
-  const rendition = manifest?.body?.renditions?.find(candidate => candidate.renditionId === body.renditionId)
+  if (!manifest) return false
+  const rendition = manifest.body?.renditions?.find(candidate => candidate.renditionId === body.renditionId)
   const core = rendition?.core
-  if (!manifest || !core || !Number.isSafeInteger(core.length) || core.length < 1 ||
+  if (!core || !Number.isSafeInteger(core.length) || core.length < 1 ||
       !Number.isSafeInteger(core.byteLength) || core.byteLength < 1 ||
       !Array.isArray(body.ranges) || body.ranges.length !== 1) return false
   const range = body.ranges[0]
@@ -106,7 +104,6 @@ export async function authorizeArchiveRequestFromManifestStore(request, options 
     ranges: body.ranges,
   }
 }
-
 function rememberBounded(map, key, value) {
   map.set(key, value)
   while (map.size > MAX_SEEN_REQUESTS) map.delete(map.keys().next().value)
@@ -265,6 +262,7 @@ export function createPermissionlessArchiveNetwork(options = {}) {
       onPledge: onArchivePledge,
       onChallenge: onArchiveChallenge,
       onChallengeProof: onArchiveChallengeProof,
+      onPeer: () => void service.reannounceLocalRequests(),
     })
     discoveryRetained = true
     scheduleReannounceCycle()
@@ -713,11 +711,13 @@ export function createPermissionlessArchiveNetwork(options = {}) {
 
     async ingestRequest(envelope) {
       await ready
-      console.log('[ArchiveNetwork] ingestRequest received envelope recordId:', b4a.toString(envelope?.recordId || [], 'hex').slice(0, 16))
+
       const request = await verifyArchiveRequest(envelope, { now: now() })
       if (!request) return { status: 'rejected', reason: 'request-invalid' }
       if (!enabled) return { status: 'rejected', reason: 'participation-disabled' }
-      if (seenRequests.has(request.requestId)) return { status: 'rejected', reason: 'request-replayed' }
+      if (seenRequests.has(request.requestId)) {
+        return { status: 'rejected', reason: 'request-replayed' }
+      }
       if (request.body.requesterId === archivistId) return { status: 'rejected', reason: 'self-request' }
       if (request.body.requestedBytes > maxRequestBytes ||
           reservedBytes() + pendingReservationBytes + request.body.requestedBytes > capacityBytes) {
@@ -732,7 +732,6 @@ export function createPermissionlessArchiveNetwork(options = {}) {
       } catch {
         authorization = false
       }
-      rememberBounded(seenRequests, request.requestId, now())
       if (!authorization || authorization.accepted === false ||
           authorization.requestedBytes !== request.body.requestedBytes ||
           !sameRanges(authorization.ranges, request.body.ranges)) {
@@ -750,6 +749,7 @@ export function createPermissionlessArchiveNetwork(options = {}) {
         return { status: 'rejected', reason: 'consumer-not-visible' }
       }
 
+      rememberBounded(seenRequests, request.requestId, now())
       const sample = Number(random())
       if (!Number.isFinite(sample) || sample < 0 || sample >= 1) throw new Error('random source must return a number in [0, 1)')
       if (sample >= acceptanceProbability) {

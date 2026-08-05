@@ -834,7 +834,6 @@ export function createScopedNetworkRuntime (options = {}) {
     ensureScopeDiscovery(scope)
     if (networkEnabled) {
       for (const [connection, info] of activeConnections) {
-        if (info?.client === false) continue
         attachScope(scope, connection, info)
       }
     }
@@ -2170,6 +2169,7 @@ export function createScopedNetworkRuntime (options = {}) {
           // only produced proofs the receiver refused, and each refusal tore
           // down the session replication was using.
           if (scope.purpose === 'archive' && !scope.archiveDiscovery) startArchivePumpWhenOpen(scope, tracked)
+          if (scope.purpose === 'archive-discovery' && scope.archivePeerListeners) { for (const listener of scope.archivePeerListeners) { try { listener({ peerId: remoteKey }) } catch {} } }
         }
       },
       onFrame: frame => {
@@ -2224,8 +2224,11 @@ export function createScopedNetworkRuntime (options = {}) {
       id: scope.topic,
       handshake: c.buffer,
       messages: [message],
-      onopen: encoded => protocolSession.acceptHello(encoded).catch(error => {
+      onopen: encoded => protocolSession.acceptHello(encoded).then(() => {
+        if (scope.purpose === 'archive-discovery') console.log('[ScopedNetwork] archive-discovery session ACTIVE for peer:', remoteKey.slice(0, 16))
+      }).catch(error => {
         counters.rejectedFrames++
+        if (scope.purpose === 'archive-discovery') console.log('[ScopedNetwork] archive-discovery acceptHello REJECTED:', error?.message || String(error))
         protocolSession.close(error.code || error.message)
         recordProtocolError(scope, remoteKey, error)
         try { channel?.close?.() } catch {}
@@ -2375,7 +2378,6 @@ export function createScopedNetworkRuntime (options = {}) {
     }
     if (!networkEnabled || status !== 'active') return
     for (const [connection, info] of activeConnections) {
-      if (info?.client === false) continue
       for (const scope of scopes.values()) attachScope(scope, connection, info)
     }
     await Promise.all([...scopes.values()].flatMap(scope => [
@@ -3107,7 +3109,7 @@ export function createScopedNetworkRuntime (options = {}) {
     return { released }
   }
 
-  async function retainArchiveDiscovery ({ onRequest, onPledge, onChallenge, onChallengeProof } = {}) {
+  async function retainArchiveDiscovery ({ onRequest, onPledge, onChallenge, onChallengeProof, onPeer } = {}) {
     if (status !== 'active') fail('runtime is not active')
     for (const [name, listener] of Object.entries({ onRequest, onPledge, onChallenge, onChallengeProof })) {
       if (listener !== undefined && typeof listener !== 'function') fail(`${name} must be a function`)
@@ -3130,6 +3132,7 @@ export function createScopedNetworkRuntime (options = {}) {
     if (onPledge) scope.archivePledgeListeners.add(onPledge)
     if (onChallenge) scope.archiveChallengeListeners.add(onChallenge)
     if (onChallengeProof) scope.archiveChallengeProofListeners.add(onChallengeProof)
+    if (typeof onPeer === 'function') (scope.archivePeerListeners = scope.archivePeerListeners || new Set()).add(onPeer)
     return { status: 'retained', topic: stableScopeDiagnostic(scope) }
   }
 

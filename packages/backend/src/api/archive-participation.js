@@ -126,5 +126,14 @@ export function createArchiveParticipationApi(options = {}) {
         return requestFailure('ARCHIVE_REQUEST_FAILED')
       }
     },
+    async reannounceArchiveRequests() {
+      if (!archiveNetwork?.reannounceLocalRequests) return { success: false, reannounced: 0 }
+      try {
+        const result = await archiveNetwork.reannounceLocalRequests()
+        return { success: result?.status === 'ok', reannounced: Number(result?.reannounced) || 0 }
+      } catch {
+        return { success: false, reannounced: 0 }
+      }
+    },
   })
 }

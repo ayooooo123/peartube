@@ -18,6 +18,7 @@ const DEFAULT_MAX_REQUEST_BYTES = 64 * 1024 * 1024 * 1024
 const MAX_SEEN_REQUESTS = 2048
 const DEFAULT_CHALLENGE_INTERVAL_MS = 5 * 60 * 1000
 const DEFAULT_CHALLENGE_TIMEOUT_MS = 15 * 1000
+const DEFAULT_REANNOUNCE_INTERVAL_MS = 15 * 1000
 const MAX_CHALLENGE_REPLAYS = 2048
 const MAX_TIMER_DELAY_MS = 0x7fffffff
 const PARTICIPATION_STATE_VERSION = 1
@@ -76,7 +77,14 @@ export async function authorizeArchiveRequestFromManifestStore(request, options 
   const manifestStore = options.manifestStore
   const authorizeRendition = options.authorizeRendition
   if (!body || typeof manifestStore?.getManifest !== 'function' || typeof authorizeRendition !== 'function') return false
-  const manifest = manifestStore.getManifest(body.publicationId)
+  let manifest = manifestStore.getManifest(body.publicationId)
+  if (!manifest && typeof options.resolveManifest === 'function') {
+    try {
+      manifest = await options.resolveManifest(body.publicationId)
+    } catch {
+      manifest = null
+    }
+  }
   const rendition = manifest?.body?.renditions?.find(candidate => candidate.renditionId === body.renditionId)
   const core = rendition?.core
   if (!manifest || !core || !Number.isSafeInteger(core.length) || core.length < 1 ||
@@ -198,6 +206,21 @@ export function createPermissionlessArchiveNetwork(options = {}) {
     options.transportPeerId || scopedNetwork.getLocalTransportPeerId?.() || keyPair.publicKey
   )
   let challengeTimer = null
+  let reannounceTimer = null
+
+  function cancelReannounceSchedule() {
+    if (reannounceTimer !== null) clearTimer(reannounceTimer)
+    reannounceTimer = null
+  }
+
+  function scheduleReannounceCycle() {
+    if (reannounceTimer !== null || !discoveryRetained || localRequests.size === 0) return
+    reannounceTimer = setTimer(() => {
+      reannounceTimer = null
+      void service.reannounceLocalRequests().finally(scheduleReannounceCycle)
+    }, DEFAULT_REANNOUNCE_INTERVAL_MS)
+    reannounceTimer?.unref?.()
+  }
   let randomRejections = 0
   let pendingReservationBytes = 0
   let capacityRejections = 0
@@ -237,17 +260,20 @@ export function createPermissionlessArchiveNetwork(options = {}) {
   async function ensureDiscovery() {
     if (discoveryRetained || typeof scopedNetwork.retainArchiveDiscovery !== 'function') return
     await scopedNetwork.retainArchiveDiscovery({
+      onPeer: () => void service.reannounceLocalRequests(),
       onRequest: onArchiveRequest,
       onPledge: onArchivePledge,
       onChallenge: onArchiveChallenge,
       onChallengeProof: onArchiveChallengeProof,
     })
     discoveryRetained = true
+    scheduleReannounceCycle()
   }
 
   async function releaseDiscovery() {
     if (!discoveryRetained) return
     discoveryRetained = false
+    cancelReannounceSchedule()
     await scopedNetwork.releaseArchiveDiscovery?.({
       onRequest: onArchiveRequest,
       onPledge: onArchivePledge,
@@ -333,6 +359,7 @@ export function createPermissionlessArchiveNetwork(options = {}) {
   function rememberLocalRequest(request) {
     localRequests.set(request.requestId, request)
     scheduleLocalRequestExpiry(request)
+    scheduleReannounceCycle()
     while (localRequests.size > MAX_SEEN_REQUESTS) {
       const oldest = localRequests.keys().next().value
       localRequests.delete(oldest)
@@ -589,6 +616,31 @@ export function createPermissionlessArchiveNetwork(options = {}) {
       return this.getStatus()
     },
 
+    async reannounceLocalRequests() {
+      await ready
+      if (!enabled || !discoveryRetained) return { status: 'skipped', reannounced: 0 }
+      console.log('[ArchiveNetwork] reannounceLocalRequests starting, count:', localRequests.size)
+      const currentTime = now()
+      let reannounced = 0
+      for (const request of localRequests.values()) {
+        if (request.body.expiresAt <= currentTime) continue
+        const activePledges = [...receivedPledges.values()].filter(record =>
+          record.pledge.body.nonce === request.requestId &&
+          record.pledge.body.retentionUntil > currentTime
+        )
+        if (activePledges.length === 0) {
+          try {
+            const result = await publishRequest(request.envelope)
+            console.log('[ArchiveNetwork] reannounced request:', request.requestId.slice(0, 16), 'delivered:', result?.delivered)
+            if (result?.delivered > 0) reannounced++
+          } catch (err) {
+            console.log('[ArchiveNetwork] reannounce publishRequest THREW:', err?.message || String(err))
+          }
+        }
+      }
+      return { status: 'ok', reannounced }
+    },
+
     async requestArchive(input = {}) {
       await ready
       await ensureDiscovery()
@@ -661,6 +713,7 @@ export function createPermissionlessArchiveNetwork(options = {}) {
 
     async ingestRequest(envelope) {
       await ready
+      console.log('[ArchiveNetwork] ingestRequest received envelope recordId:', b4a.toString(envelope?.recordId || [], 'hex').slice(0, 16))
       const request = await verifyArchiveRequest(envelope, { now: now() })
       if (!request) return { status: 'rejected', reason: 'request-invalid' }
       if (!enabled) return { status: 'rejected', reason: 'participation-disabled' }

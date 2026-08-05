@@ -771,6 +771,10 @@ export async function createBackendContext(config) {
         authorizeRequest: request => authorizeArchiveRequestFromManifestStore(request, {
           manifestStore: mediaCatalogProjection.assetManifestStore,
           authorizeRendition: input => mediaCatalogProjection.authorizeRendition(input),
+          resolveManifest: async publicationId => {
+            await mediaCatalogProjection.update()
+            return mediaCatalogProjection.assetManifestStore.getManifest(publicationId)
+          },
         }),
         authorizeConsumerVisibility: async request => {
           await mediaCatalogProjection.rebuild()

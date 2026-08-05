@@ -383,6 +383,9 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
     },
 
     async requestCatalogSync () {
+      if (typeof backend.api.reannounceArchiveRequests === 'function') {
+        await backend.api.reannounceArchiveRequests().catch(() => {})
+      }
       const locators = await backend.api.listBootstrapLocators()
       return Array.isArray(locators) ? locators.length : 0
     },

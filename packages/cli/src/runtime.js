@@ -109,7 +109,23 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
     // under the bytes already pledged fails the whole startup
     // (archive/policy.js decodeState). The live number comes from the storage
     // guard through applyArchiveCapacity instead, which floors at the pledges.
-    ...(reseedEnabled ? { archive: { enabled: true } } : {}),
+    // The cadence is the operator's, when they set one: the backend already
+    // accepts both knobs and only ever saw its own defaults, so custody could
+    // not be confirmed sooner than every five minutes - or verified at all
+    // inside a test - without reaching into the runtime by hand.
+    ...(reseedEnabled
+      ? {
+          archive: {
+            enabled: true,
+            ...(config.archive?.challengeIntervalMs === undefined
+              ? {}
+              : { challengeIntervalMs: config.archive.challengeIntervalMs }),
+            ...(config.archive?.challengeTimeoutMs === undefined
+              ? {}
+              : { challengeTimeoutMs: config.archive.challengeTimeoutMs }),
+          },
+        }
+      : {}),
     seedPin: config.seedPin || {},
     operability: {
       // Relay mode (public/private) and archive operator mode

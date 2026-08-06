@@ -471,6 +471,20 @@ function normalizeSource(rawSource, defaults) {
   }
 }
 
+// A challenge cadence has to be a whole number of milliseconds inside a sane
+// band: below a second it is a hot loop against a peer, and past a day it is
+// indistinguishable from never asking. Anything else is treated as unset so
+// the backend default applies.
+const MIN_CHALLENGE_MS = 1_000
+const MAX_CHALLENGE_MS = 24 * 60 * 60 * 1000
+
+function boundedChallengeMs(value) {
+  if (value === undefined || value === null || value === '') return undefined
+  const ms = Number(value)
+  if (!Number.isSafeInteger(ms) || ms < MIN_CHALLENGE_MS || ms > MAX_CHALLENGE_MS) return undefined
+  return ms
+}
+
 function resolveArchiveConfig(rawArchive, { storagePath }) {
   const merged = deepMerge(DEFAULT_ARCHIVE_CONFIG, isPlainObject(rawArchive) ? rawArchive : {})
 
@@ -593,6 +607,16 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
   if (merged.localMirror.enabled && !merged.localMirror.path) {
     throw new Error('archive.localMirror.enabled is true but archive.localMirror.path is empty')
   }
+  // How often this relay challenges the archivists holding its content, and
+  // how long it waits for a proof. Left unset the backend picks its own
+  // defaults; an operator who wants custody confirmed sooner than every five
+  // minutes - or anyone trying to prove mirroring works at all - had no way to
+  // ask for it, because these never reached the backend that already accepts
+  // them. Out-of-range values are dropped rather than clamped, so a typo does
+  // not quietly become a hot loop against every peer.
+  merged.challengeIntervalMs = boundedChallengeMs(merged.challengeIntervalMs)
+  merged.challengeTimeoutMs = boundedChallengeMs(merged.challengeTimeoutMs)
+
 
   return merged
 }

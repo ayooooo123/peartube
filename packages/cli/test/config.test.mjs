@@ -235,3 +235,50 @@ test('resolveRelayConfig reads local mirror env vars', async (t) => {
     maxFiles: 12
   })
 })
+
+test('the archive challenge cadence is an operator setting, and a nonsense one is ignored', async (t) => {
+  // The backend has always accepted these two; the relay never passed them, so
+  // custody could not be confirmed sooner than the backend's own five minutes,
+  // and no test could observe an archivist proving possession at all.
+  const configured = resolveRelayConfig({
+    archive: { challengeIntervalMs: 5_000, challengeTimeoutMs: 4_000 },
+  }, { env: {} })
+  t.is(configured.archive.challengeIntervalMs, 5_000)
+  t.is(configured.archive.challengeTimeoutMs, 4_000)
+
+  const unset = resolveRelayConfig({}, { env: {} })
+  t.is(unset.archive.challengeIntervalMs, undefined, 'an unset cadence leaves the backend default alone')
+  t.is(unset.archive.challengeTimeoutMs, undefined)
+
+  for (const value of [5, 0, -1, 25 * 60 * 60 * 1000, 'soon', 1.5]) {
+    const rejected = resolveRelayConfig({ archive: { challengeIntervalMs: value } }, { env: {} })
+    t.is(rejected.archive.challengeIntervalMs, undefined, `${JSON.stringify(value)} is not a cadence`)
+  }
+})
+
+test('a config file can set the archive UI host and port, and flags still win', async (t) => {
+  // uiCommand used to pass its own fallback in as a CLI value, which outranked
+  // the file it was meant to fall back to: every relay started from a config
+  // bound 0.0.0.0:8174, so a second one on the same machine died with
+  // EADDRINUSE while its own file named a free port.
+  const dir = makeTempDir('peartube-relay-ui-config-')
+  t.teardown(() => rmSync(dir, { recursive: true, force: true }))
+  const configPath = join(dir, 'relay.json')
+  writeFileSync(configPath, JSON.stringify({
+    storage: { path: join(dir, 'store') },
+    archive: { uiHost: '127.0.0.1', uiPort: 8175 },
+  }))
+
+  // Guard the fix itself: with the old code this call also carried
+  // uiHost/uiPort fallbacks, which is exactly what silenced the file.
+  const fromFile = await loadRelayConfig({ config: configPath, archive: { uiEnabled: true } }, { env: {} })
+  t.is(fromFile.archive.uiHost, '127.0.0.1')
+  t.is(fromFile.archive.uiPort, 8175)
+
+  const overridden = await loadRelayConfig({
+    config: configPath,
+    archive: { uiEnabled: true, uiHost: '0.0.0.0', uiPort: 9999 },
+  }, { env: {} })
+  t.is(overridden.archive.uiHost, '0.0.0.0', 'an explicit flag still overrides the file')
+  t.is(overridden.archive.uiPort, 9999)
+})

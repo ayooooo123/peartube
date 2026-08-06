@@ -123,10 +123,22 @@ async function runCommand(flags) {
 }
 
 async function uiCommand(flags) {
-  const config = await loadRelayConfig({ ...flags, archive: { uiEnabled: true, uiHost: flags.host || '0.0.0.0', uiPort: Number(flags.port || 8174) } })
+  // Only what the operator actually typed may override the file. Passing the
+  // fallback in as a CLI value outranked the config file it was meant to fall
+  // back to, so `--config` could not set the UI host or port at all: every
+  // relay started from a file bound 0.0.0.0:8174, and a second one on the same
+  // machine died with EADDRINUSE while its own file named a free port.
+  const archiveOverrides = { uiEnabled: true }
+  if (flags.host) archiveOverrides.uiHost = flags.host
+  // 0 is a real port here - it means "any free one" - so presence decides.
+  if (flags.port !== undefined && flags.port !== null && flags.port !== '') {
+    archiveOverrides.uiPort = Number(flags.port)
+  }
+  const config = await loadRelayConfig({ ...flags, archive: archiveOverrides })
   config.archive.uiEnabled = true
-  config.archive.uiHost = flags.host || config.archive.uiHost || '0.0.0.0'
-  config.archive.uiPort = Number(flags.port || config.archive.uiPort || 8174)
+  config.archive.uiHost = config.archive.uiHost || '0.0.0.0'
+  const resolvedPort = Number(config.archive.uiPort)
+  config.archive.uiPort = Number.isSafeInteger(resolvedPort) && resolvedPort >= 0 ? resolvedPort : 8174
   // Intent, not fact: the bind happens inside startRelay. Printing it as though
   // the port were already open is what made a relay that never bound look like
   // one that had.

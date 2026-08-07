@@ -74,23 +74,28 @@ function creatorCard(creator) {
   const pct = seededPercent(archived, unseeded)
   const hue = avatarHue(creator.creatorId || creator.name)
   const fullySeeded = unseeded === 0
+  // A 64-character key is how a machine tells two channels apart. It told a
+  // reader nothing while filling the widest line on the page.
+  const named = humanName(creator.name || creator.creatorId)
+  const held = archived - unseeded
   return `
     <li class="creator">
-      <div class="avatar" style="background: hsl(${hue} 55% 42%)">${escapeHtml(initials(creator.name || creator.creatorId))}</div>
+      <div class="avatar" style="background: hsl(${hue} 55% 42%)">${escapeHtml(initials(named.label))}</div>
       <div class="creator-body">
         <div class="creator-head">
-          <strong>${escapeHtml(creator.name || creator.creatorId)}</strong>
+          <strong>${escapeHtml(named.label)}</strong>
+          ${named.shortId ? `<small class="short-id" title="Channel key starts ${escapeHtml(named.shortId)}">${escapeHtml(named.shortId)}</small>` : ''}
           ${creator.handle ? `<small>${escapeHtml(creator.handle)}</small>` : ''}
           ${classChips(creator.classification)}
         </div>
-        <div class="bar" title="${escapeHtml(archived - unseeded)} of ${escapeHtml(archived)} seeded">
+        <div class="bar" title="${escapeHtml(held)} of ${escapeHtml(archived)} backed up">
           <span class="bar-fill ${fullySeeded ? 'ok' : ''}" style="width:${pct}%"></span>
         </div>
         <div class="creator-meta">
-          <span>${escapeHtml(archived - unseeded)}/${escapeHtml(archived)} seeded</span>
+          <span>${escapeHtml(held)} of ${escapeHtml(archived)} kept here</span>
           ${unseeded > 0
-            ? `<span class="tag warn">${escapeHtml(unseeded)} unseeded</span>`
-            : '<span class="tag ok">fully seeded</span>'}
+            ? `<span class="tag warn">${escapeHtml(unseeded)} still to copy</span>`
+            : '<span class="tag ok">all copied</span>'}
         </div>
       </div>
     </li>`
@@ -110,14 +115,23 @@ function targetRow(target) {
     </li>`
 }
 
+// One line per attempt: what was being added, where it came from, and - when it
+// did not work - what to do about it. The job id is a handle for a support
+// conversation, not the subject of the row, so it sits on hover.
 function jobRow(job) {
+  const title = String(job.title || 'Untitled archive')
+  const named = humanName(job.channelName, 'Anonymous archive')
+  const reason = friendlyJobError(job.error)
+  // A relay that publishes one channel per title repeats itself on every row.
+  // The channel is worth a line only when it says something the title did not.
+  const channelLine = named.label && named.label !== title ? named.label : ''
   return `
     <li class="job">
       <span class="pill ${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
       <div class="job-body">
-        <strong>${escapeHtml(job.title || 'Untitled archive')}</strong>
-        <small>${escapeHtml(job.channelName || 'Anonymous Archive')} · ${escapeHtml(job.id)}</small>
-        ${job.error ? `<code>${escapeHtml(job.error)}</code>` : ''}
+        <strong title="${escapeHtml(job.id || '')}">${escapeHtml(title)}</strong>
+        ${channelLine ? `<small>${escapeHtml(channelLine)}</small>` : ''}
+        ${reason ? `<p class="job-reason" title="${escapeHtml(job.error || '')}">${reason}</p>` : ''}
       </div>
     </li>`
 }
@@ -278,9 +292,69 @@ function formatSize(bytes) {
   return `${Math.max(1, Math.round(value / 1024))} KB`
 }
 
+// How full the relay is, in the units a person deciding whether to add
+// something thinks in. The limit is the one the relay actually enforces, so
+// this is the number that decides whether the next title is accepted.
+function describeStorage(storage = {}) {
+  const used = Number(storage.totalStorageBytes)
+  const max = Number(storage.maxBytes)
+  if (!Number.isFinite(used) || used < 0) {
+    return { label: '--', title: 'This relay could not measure its own storage', near: false, pct: 0 }
+  }
+  const usedLabel = formatSize(used) || '0 KB'
+  if (!Number.isFinite(max) || max <= 0) {
+    return { label: usedLabel, title: `${usedLabel} stored, no limit set`, near: false, pct: 0 }
+  }
+  const pct = Math.min(100, Math.round((used / max) * 100))
+  // Both numbers, because the used figure only means something against the
+  // limit that refuses the next title.
+  return {
+    label: `${usedLabel} / ${formatSize(max)}`,
+    title: `${pct}% of this relay's ${formatSize(max)} limit. At the limit it stops accepting new titles.`,
+    near: pct >= 85,
+    pct
+  }
+}
+
+// Channels created for an anonymous archive are named by their key, which is
+// how a machine tells them apart and no help at all to a reader. A name that
+// is only an identifier is replaced by what it is, with a short prefix kept so
+// two of them can still be told apart.
+const MACHINE_NAME = /^(?:channel:)?[0-9a-f]{16,}$/i
+
+function humanName(name, fallback = 'Anonymous archive') {
+  const value = String(name || '').trim()
+  if (!value) return { label: fallback, shortId: '' }
+  if (!MACHINE_NAME.test(value)) return { label: value, shortId: '' }
+  const hex = value.replace(/^channel:/i, '')
+  return { label: fallback, shortId: hex.slice(0, 6) }
+}
+
+// Why a job failed, said the way an operator can act on. The underlying errors
+// name byte counts and internal stages; those stay available on hover rather
+// than leading the row.
+function friendlyJobError(error) {
+  const raw = String(error || '').trim()
+  if (!raw) return ''
+  if (/storage headroom|storage threshold/i.test(raw)) {
+    return 'No room left under this relay&rsquo;s storage limit. Free space or raise the limit, then try again.'
+  }
+  if (/free disk|ENOSPC/i.test(raw)) return 'The disk is full.'
+  if (/timed out|ETIMEDOUT|timeout/i.test(raw)) return 'The source stopped responding.'
+  if (/404|not found/i.test(raw)) return 'The source is no longer there.'
+  if (/403|401|forbidden|unauthorized/i.test(raw)) return 'The source refused this relay.'
+  if (/unsupported|no video/i.test(raw)) return 'Nothing playable was found at that address.'
+  return raw
+}
+
 export function renderArchiveWebHome(model = {}) {
   const status = model.status || {}
-  const seeding = status.seeding || {}
+  // The runtime diagnostics object, as the relay actually shapes it. `peers`
+  // and `seeding` were read off the top level, where neither has ever lived,
+  // so the header read a confident 0 peers and 0 seeded next to a shelf of
+  // titles it was plainly seeding.
+  const network = status.network || {}
+  const storage = status.storage || {}
   const jobs = Array.isArray(model.jobs) ? model.jobs : []
   const library = Array.isArray(model.library) ? model.library : []
   const creators = Array.isArray(model.creators) ? model.creators : []
@@ -295,6 +369,7 @@ export function renderArchiveWebHome(model = {}) {
 
   const totalUnseeded = creators.reduce((sum, c) => sum + (Number(c.videosUnseeded) || 0), 0)
   const totalArchived = creators.reduce((sum, c) => sum + (Number(c.videosArchived) || 0), 0)
+  const storageUse = describeStorage(storage)
 
   const libraryCards = library.length
     ? library.map(libraryCard).join('')
@@ -306,10 +381,29 @@ export function renderArchiveWebHome(model = {}) {
 
   const targetRows = unseededTargets.length
     ? unseededTargets.map(targetRow).join('')
-    : '<li class="empty">All tracked creator videos are seeded. 🎉</li>'
+    : '<li class="empty">Every tracked video has a copy here.</li>'
 
+  // The queue is a log, and a log's job is to answer "did that work?" first.
+  // Twenty rows of the same retried title buried the four that failed, so the
+  // counts lead and the list is capped at what a person will actually read.
+  const JOB_ROW_LIMIT = 12
+  const jobCounts = jobs.reduce((counts, job) => {
+    const key = job?.status === 'completed' || job?.status === 'failed' ? job.status : 'working'
+    counts[key] = (counts[key] || 0) + 1
+    return counts
+  }, {})
+  const jobSummary = jobs.length
+    ? [
+      jobCounts.completed ? `${jobCounts.completed} added` : '',
+      jobCounts.working ? `${jobCounts.working} in progress` : '',
+      jobCounts.failed ? `${jobCounts.failed} failed` : ''
+    ].filter(Boolean).join(' &middot; ')
+    : ''
   const jobRows = jobs.length
-    ? jobs.map(jobRow).join('')
+    ? jobs.slice(0, JOB_ROW_LIMIT).map(jobRow).join('') +
+      (jobs.length > JOB_ROW_LIMIT
+        ? `<li class="empty">${escapeHtml(jobs.length - JOB_ROW_LIMIT)} older attempts not shown.</li>`
+        : '')
     : '<li class="empty">No archive jobs yet.</li>'
 
   const deviceRows = trustedClients.length
@@ -425,6 +519,8 @@ export function renderArchiveWebHome(model = {}) {
     .job:first-child { border-top: 0; }
     .job-body { display: grid; gap: 3px; }
     .job-body small { color: var(--muted); font-size: 12px; }
+    .job-reason { margin: 3px 0 0; font-size: 12.5px; color: #ffc9c9; line-height: 1.45; }
+    .short-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--muted); opacity: 0.75; }
     .pill { flex: 0 0 auto; border-radius: 999px; padding: 3px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 800; background: rgba(255,255,255,0.1); color: #dce5f8; }
     .pill.completed { background: rgba(93,255,176,0.17); color: var(--ok); }
     .pill.failed { background: rgba(255,122,122,0.18); color: #ffb0b0; }
@@ -474,8 +570,8 @@ export function renderArchiveWebHome(model = {}) {
       <span class="spacer"></span>
       <div class="stat-pills">
         <div class="spill"><b>${escapeHtml(library.length)}</b><span>Titles</span></div>
-        <div class="spill"><b>${escapeHtml(status.peers || 0)}</b><span>Peers</span></div>
-        <div class="spill"><b>${escapeHtml(seeding.videos || 0)}</b><span>Seeded</span></div>
+        <div class="spill"><b>${escapeHtml(network.peers || 0)}</b><span>Peers</span></div>
+        <div class="spill ${storageUse.near ? 'alert' : ''}" title="${escapeHtml(storageUse.title)}"><b>${escapeHtml(storageUse.label)}</b><span>Stored</span></div>
         <div class="spill"><b>${escapeHtml(creators.length)}</b><span>Creators</span></div>
         <div class="spill ${totalUnseeded > 0 ? 'alert' : ''}"><b>${escapeHtml(totalUnseeded)}</b><span>Unseeded</span></div>
       </div>
@@ -515,8 +611,8 @@ export function renderArchiveWebHome(model = {}) {
         </section>
 
         <section class="card">
-          <h2>Archive queue</h2>
-          <p class="sub">Source URLs stay in the local job store; only imported metadata is exposed publicly.</p>
+          <h2>Recent additions</h2>
+          <p class="sub">${jobSummary ? `${jobSummary}. ` : ''}Every attempt to add something to this relay. Source addresses stay on this machine; only the title and its metadata are published.</p>
           <ul>${jobRows}</ul>
         </section>
       </div>

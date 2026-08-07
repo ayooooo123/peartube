@@ -252,3 +252,45 @@ test('the machine API carries discovered cover art, and refuses anything that is
   t.is(withoutArtwork.error, undefined, 'artwork stays optional')
   t.is(withoutArtwork.form.tmdbPosterPath, '', 'a submission with no cover carries none')
 })
+
+test('the machine API carries the rest of the discovered metadata, bounded', (t) => {
+  // A consumer cannot look any of this up either, so a title seeded without it
+  // shows a name and nothing else on every peer that ever sees it.
+  const submission = {
+    url: 'https://example.com/movie.mp4',
+    contentKind: 'movie',
+    tmdbId: '680',
+    tmdbTitle: 'Pulp Fiction',
+  }
+  const described = normalizeArchiveSubmission({
+    ...submission,
+    tmdbYear: '1994',
+    tmdbRuntime: '154',
+    tmdbGenres: 'Thriller,Crime',
+    tmdbOverview: 'A burger-loving hit man and a washed-up boxer converge.',
+  })
+  t.is(described.error, undefined)
+  t.is(described.form.tmdbYear, '1994')
+  t.is(described.form.tmdbRuntime, '154')
+  t.is(described.form.tmdbGenres, 'Thriller,Crime')
+  t.ok(described.form.tmdbOverview.startsWith('A burger-loving'))
+
+  // Refused rather than clamped: a year of 12 is a parse gone wrong, and
+  // storing 1870 in its place would publish a confident wrong answer.
+  const rejects = [
+    ['tmdbYear', '12', 'INVALID_TMDB_YEAR'],
+    ['tmdbYear', '9999', 'INVALID_TMDB_YEAR'],
+    ['tmdbRuntime', '0', 'INVALID_TMDB_RUNTIME'],
+    ['tmdbRuntime', '99999', 'INVALID_TMDB_RUNTIME'],
+    ['tmdbOverview', 'x'.repeat(5000), 'INVALID_TMDB_OVERVIEW'],
+    ['tmdbGenres', 'g'.repeat(600), 'INVALID_TMDB_GENRES'],
+  ]
+  for (const [field, value, code] of rejects) {
+    t.is(normalizeArchiveSubmission({ ...submission, [field]: value }).error?.code, code, `${field} is bounded`)
+  }
+
+  const bare = normalizeArchiveSubmission(submission)
+  t.is(bare.error, undefined, 'every descriptive field stays optional')
+  t.is(bare.form.tmdbYear, '')
+  t.is(bare.form.tmdbOverview, '')
+})

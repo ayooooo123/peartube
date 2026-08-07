@@ -1,10 +1,14 @@
 import { createServer } from '#http'
 import { existsSync, rmSync, statSync } from '#fs'
 import { dirname, relative, resolve, sep } from '#path'
+import { isArtworkRendition } from '@peartube/backend/assets'
 import { createArchiveJobStore, createArchiveManager } from './archive-manager.js'
 import { renderArchiveTui, renderArchiveWebHome } from './archive-ui.js'
 import { resolveTmdbOptions } from './settings.js'
 import { parseBoundary, receiveMultipartUpload } from './multipart.js'
+// The relay's own HTTP client rather than fetch(): Bare ships no global fetch,
+// so a fetch() here would be a ReferenceError the moment the relay runs.
+import { openResponse, readBody } from './media/http-get.js'
 import {
   ARCHIVE_API_PREFIX,
   MAX_JSON_BODY_BYTES,
@@ -429,6 +433,163 @@ function reserveAdjustedHeadroom(snapshot, reservedBytes) {
   }
 }
 
+// The shelf a viewer reads, as opposed to the operator sections below it.
+//
+// A relay that has been running for a while holds more titles than anybody
+// scrolls through, and this list is rendered inline into the home page, so the
+// shelf is capped: past the first screens the cost is real and the value is
+// zero.
+const LIBRARY_LIMIT = 60
+
+// The consumer catalog refuses a page larger than 50 outright (it throws, and
+// the media graph reports that as CONSUMER_CATALOG_UPDATE_FAILED — an empty
+// shelf, not an error the console could explain), so the shelf's own cap is
+// filled by paging rather than by asking for all of it at once.
+const CATALOG_PAGE_LIMIT = 50
+
+// An entityId is a media-graph digest. The poster route takes one straight off
+// a URL path, so it is character-checked and bounded before it is used for
+// anything — it only ever selects which artwork the media graph resolves, and
+// this pattern is what keeps it from ever being anything else.
+const ENTITY_ID_PATTERN = /^[0-9a-f]{16,128}$/
+const POSTER_ROUTE_PREFIX = '/poster/'
+
+// A cover is a small image. Something larger is not one, and buffering it would
+// stall the console for no viewer benefit.
+const MAX_POSTER_BYTES = 8 * 1024 * 1024
+const POSTER_READ_TIMEOUT_MS = 5000
+
+function posterEntityId(url) {
+  let pathname
+  try {
+    pathname = new URL(url, 'http://relay.local').pathname
+  } catch {
+    return null
+  }
+  if (!pathname.startsWith(POSTER_ROUTE_PREFIX)) return null
+  // Deliberately not decoded first: a hex digest carries no escapes, so an
+  // encoded traversal or separator fails the pattern instead of being unwrapped
+  // into something that passes it.
+  const raw = pathname.slice(POSTER_ROUTE_PREFIX.length)
+  return ENTITY_ID_PATTERN.test(raw) ? raw : null
+}
+
+// A publication's video bytes as this relay actually holds them. The catalogue
+// reports which publications exist but not how large they are, and the signed
+// manifest is the only local answer; the cover rendition is skipped because a
+// 40 KB poster is not the size a viewer is asking about.
+function publicationBytes(manifest) {
+  const rendition = (manifest?.body?.renditions || []).find((candidate) => (
+    candidate?.renditionId &&
+    candidate.blocked !== true &&
+    candidate.superseded !== true &&
+    !isArtworkRendition(candidate)
+  ))
+  const bytes = Number(rendition?.core?.byteLength)
+  return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : 0
+}
+
+function jobRecency(job) {
+  const stamp = Number(job?.completedAt || job?.updatedAt || job?.createdAt || 0)
+  return Number.isFinite(stamp) && stamp > 0 ? stamp : 0
+}
+
+// An archive job is keyed by the work it was asked for — `movie:27205`,
+// `show:71728:s2:e4` — not by the media-graph entity its publication later
+// lands on. The provider id inside that hint is what a catalogue source carries
+// as `mediaId`, which is what ties the two together; the title is the fallback
+// for jobs seeded from a bare URL, which never had a hint.
+function entityHintMediaId(hint) {
+  if (typeof hint !== 'string') return null
+  const mediaId = hint.split(':')[1]
+  return mediaId || null
+}
+
+function libraryTitleKey(title) {
+  return typeof title === 'string' ? title.trim().toLowerCase() : ''
+}
+
+// Which of several matching jobs describes the title. An in-flight job outranks
+// a failure, a failure outranks a finished one, and among equals the newest
+// wins: the shelf should say "adding" while a retry is running rather than
+// report the attempt it replaced.
+const JOB_INTEREST = { running: 3, queued: 3, failed: 2 }
+
+function preferJob(current, candidate) {
+  if (!current) return candidate
+  const currentRank = JOB_INTEREST[current.status] || 1
+  const candidateRank = JOB_INTEREST[candidate.status] || 1
+  if (candidateRank !== currentRank) return candidateRank > currentRank ? candidate : current
+  return jobRecency(candidate) >= jobRecency(current) ? candidate : current
+}
+
+function indexJobsForLibrary(jobs = []) {
+  const byMediaId = new Map()
+  const byTitle = new Map()
+  for (const job of jobs) {
+    const mediaId = entityHintMediaId(job?.entityHint)
+    if (mediaId) byMediaId.set(mediaId, preferJob(byMediaId.get(mediaId), job))
+    const title = libraryTitleKey(job?.title)
+    if (title) byTitle.set(title, preferJob(byTitle.get(title), job))
+  }
+  return { byMediaId, byTitle }
+}
+
+function libraryJobFor(item, { byMediaId, byTitle }) {
+  for (const source of item?.sources || []) {
+    const mediaId = source?.mediaCoordinates?.mediaId
+    const job = mediaId == null ? null : byMediaId.get(String(mediaId))
+    if (job) return job
+  }
+  return byTitle.get(libraryTitleKey(item?.title)) || null
+}
+
+function mirroredLabel(devices) {
+  return devices === 1 ? 'Backed up on 1 other device' : `Backed up on ${devices} other devices`
+}
+
+// How safe a title is, said to somebody who has never heard of a swarm, a peer
+// or a pledge. archive-ui.js renders `label` verbatim, so this vocabulary lives
+// here and nowhere else.
+function libraryStatus({ job, freshArchivists, sizeBytes }) {
+  if (job?.status === 'queued' || job?.status === 'running') {
+    return {
+      state: 'publishing',
+      label: 'Adding to your library…',
+      detail: 'The file is still being copied in. It will be playable once that finishes.'
+    }
+  }
+  // A failed job only reads as a failure while the title has no bytes here. A
+  // retry that worked leaves the failed attempt behind it, and reporting that
+  // as broken would contradict the copy the viewer can already play.
+  if (job?.status === 'failed' && sizeBytes <= 0) {
+    return {
+      state: 'failed',
+      label: 'Could not be added',
+      detail: 'The last attempt to add this title did not finish. Try adding it again.'
+    }
+  }
+  if (freshArchivists > 0) {
+    return {
+      state: 'mirrored',
+      label: mirroredLabel(freshArchivists),
+      detail: 'Another device is holding a copy, so this title survives even if this one does not.'
+    }
+  }
+  if (sizeBytes > 0) {
+    return {
+      state: 'stored',
+      label: 'Saved on this relay',
+      detail: 'The whole file is on this machine and ready to play.'
+    }
+  }
+  return {
+    state: 'waiting',
+    label: 'Waiting for a backup',
+    detail: 'This title is listed, but no copy of the file has arrived yet.'
+  }
+}
+
 export async function createArchiveConsole({
   service,
   downloader,
@@ -653,11 +814,125 @@ export async function createArchiveConsole({
     }
   }
 
+  // The viewer-facing shelf, assembled from four sources that each may not
+  // exist yet: the media catalogue, the signed asset manifests, the mirror
+  // requests this relay has raised, and its own archive jobs.
+  //
+  // Every read is optional-chained and the whole thing degrades to an empty
+  // shelf, for the same reason the machine API's catalog resolver is resolved
+  // per request: the console answers from the moment the socket is bound, and a
+  // home page that 500s because the media graph is still opening is strictly
+  // worse than one that shows no titles yet.
+  async function libraryView(jobs = []) {
+    try {
+      const items = []
+      let cursor = null
+      while (items.length < LIBRARY_LIMIT) {
+        const request = { limit: Math.min(CATALOG_PAGE_LIMIT, LIBRARY_LIMIT - items.length), limitProvided: true }
+        if (cursor) request.cursor = cursor
+        const page = await service.runtime?.api?.getMediaCatalog?.(request)
+        if (page?.success !== true || !Array.isArray(page.items) || page.items.length === 0) break
+        items.push(...page.items)
+        cursor = page.nextCursor || null
+        if (!cursor) break
+      }
+      if (items.length === 0) return []
+
+      const mirrors = new Map()
+      for (const request of service.runtime?.getArchiveMirrorRequests?.() || []) {
+        if (!request?.publicationId) continue
+        mirrors.set(String(request.publicationId), request)
+      }
+      const jobIndex = indexJobsForLibrary(jobs)
+      const getManifest = (publicationId) => service.runtime?.ctx?.assetManifestStore?.getManifest?.(publicationId)
+
+      // The catalogue is a projection keyed by content, so it carries no
+      // timestamps at all — it is ordered by kind and then by digest. The only
+      // local evidence of "when" is the work this relay did around a title: the
+      // job that brought it in, or the mirror request it raised for one of its
+      // publications. Titles with neither keep the catalogue's own order,
+      // behind everything that has one.
+      const ranked = items.map((item, order) => {
+        const job = libraryJobFor(item, jobIndex)
+        let sizeBytes = 0
+        let freshArchivists = 0
+        let recency = jobRecency(job)
+        for (const source of item?.sources || []) {
+          if (!source?.publicationId) continue
+          sizeBytes += publicationBytes(getManifest(source.publicationId))
+          const mirror = mirrors.get(String(source.publicationId))
+          if (!mirror) continue
+          // Max, not sum: one archivist holding three episodes of a series is
+          // one other device, not three.
+          freshArchivists = Math.max(freshArchivists, Number(mirror.freshArchivists) || 0)
+          recency = Math.max(recency, Number(mirror.requestedAt) || 0)
+        }
+        return {
+          order,
+          recency,
+          entry: {
+            entityId: String(item?.entityId || ''),
+            kind: item?.entityKind || 'unknown',
+            title: item?.title || 'Untitled',
+            channelName: item?.subtitle || null,
+            year: Number.isSafeInteger(item?.releaseYear) ? item.releaseYear : null,
+            runtimeMinutes: Number.isSafeInteger(item?.runtimeMinutes) ? item.runtimeMinutes : null,
+            genres: Array.isArray(item?.genres) ? item.genres : [],
+            overview: typeof item?.overview === 'string' && item.overview ? item.overview : null,
+            // What the publisher signed a cover for. Whether its bytes have
+            // replicated here is what /poster/<entityId> answers, and that
+            // resolve can block on a transfer, so it is not run once per title
+            // while a page render waits on it.
+            hasPoster: Boolean(item?.posterBlobId || item?.posterUrl),
+            sizeBytes: sizeBytes > 0 ? sizeBytes : null,
+            status: libraryStatus({ job, freshArchivists, sizeBytes })
+          }
+        }
+      })
+      ranked.sort((left, right) => (right.recency - left.recency) || (left.order - right.order))
+      return ranked.map((row) => row.entry)
+    } catch (err) {
+      logger?.archive?.warn?.('Building the relay library view failed', { error: err?.message || String(err) })
+      return []
+    }
+  }
+
+  // Cover bytes for one shelf entry, read back off the relay's own loopback
+  // blob server. The URL is the runtime's own — the caller's entityId only ever
+  // chooses which artwork the media graph resolves, and reaches no path, no
+  // command and no origin this relay did not pick.
+  async function readEntityPoster(entityId) {
+    try {
+      const artwork = await service.runtime?.api?.getEntityArtwork?.({ entityId })
+      if (artwork?.success !== true || artwork.exists !== true || typeof artwork.url !== 'string') return null
+      const { res } = await openResponse(artwork.url, {
+        timeoutMs: POSTER_READ_TIMEOUT_MS,
+        timeoutMessage: 'poster read timed out'
+      })
+      if ((res.statusCode || 0) !== 200) {
+        res.destroy?.()
+        return null
+      }
+      const upstream = res.headers?.['content-type']
+      return {
+        contentType: typeof upstream === 'string' && upstream.startsWith('image/') ? upstream : 'image/jpeg',
+        body: await readBody(res, { maxBytes: MAX_POSTER_BYTES })
+      }
+    } catch (err) {
+      logger?.archive?.warn?.('Reading a library poster failed', { error: err?.message || String(err) })
+      return null
+    }
+  }
+
   async function model(discoverParams = {}) {
     const status = service.getStatus?.() || {}
+    // One job read, shared: the operator table below the shelf and the shelf's
+    // own "adding"/"could not be added" states are the same records.
+    const jobs = await store.listJobs()
     return {
       status: status.runtime || {},
-      jobs: await store.listJobs(),
+      jobs,
+      library: await libraryView(jobs),
       creators: creatorsView(),
       unseededTargets: service.getCreatorTargets?.({ limit: 25 }) || status.creators?.unseededTargets || [],
       tmdb: tmdbView(),
@@ -695,6 +970,34 @@ export async function createArchiveConsole({
           res.end(renderArchiveWebHome(home))
           return
         }
+      }
+
+      // A cover for one shelf entry. This belongs to the browser console, not
+      // to the machine API — archiveApi.owns() only ever claims /api/v1 — so a
+      // consumer's view of the relay is unchanged by it.
+      //
+      // Every way of not having a cover answers 404: an id that is not one, no
+      // artwork on the claim, bytes that have not replicated yet, a blob server
+      // that is not up. A 500 would paint the whole library as broken because
+      // one thumbnail is missing.
+      if (req.method === 'GET' && req.url.startsWith(POSTER_ROUTE_PREFIX)) {
+        const entityId = posterEntityId(req.url)
+        const poster = entityId ? await readEntityPoster(entityId) : null
+        if (!poster) {
+          res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+          res.end('no cover')
+          return
+        }
+        res.writeHead(200, {
+          'content-type': poster.contentType,
+          'content-length': String(poster.body.byteLength),
+          // Private: the cover is only meaningful behind this relay's console,
+          // and five minutes is long enough that a page reload does not re-read
+          // every blob while still letting a newly arrived cover appear.
+          'cache-control': 'private, max-age=300'
+        })
+        res.end(poster.body)
+        return
       }
 
       if (req.method === 'GET' && req.url === '/tui') {

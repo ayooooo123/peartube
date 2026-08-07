@@ -107,6 +107,13 @@ const MAX_EPISODE_PART = 100000
 // an outbound request - a full URL or a traversal is refused rather than
 // normalized into something that happens to work.
 const TMDB_POSTER_PATH = /^\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+// Descriptive metadata bounds. A synopsis is a paragraph, not a payload, and a
+// release year outside these is a parsing accident rather than a film.
+const MIN_RELEASE_YEAR = 1870
+const MAX_RELEASE_YEAR = 2200
+const MAX_RUNTIME_MINUTES = 6000
+const MAX_OVERVIEW_BYTES = 4096
+const MAX_GENRES_BYTES = 512
 const MAX_JOB_ID_LENGTH = 128
 const MAX_IDEMPOTENCY_KEY_BYTES = 128
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/
@@ -160,6 +167,15 @@ function episodePart(value) {
   if (!/^[0-9]{1,6}$/.test(value)) return null
   const part = Number(value)
   return part >= 1 && part <= MAX_EPISODE_PART ? part : null
+}
+
+// A whole number inside a range, or null. Out of range is refused by the caller
+// rather than clamped: a year of 12 is a parse gone wrong, and silently storing
+// 1870 instead would publish a confident wrong answer.
+function boundedInt(value, min, max) {
+  if (!/^[0-9]{1,7}$/.test(value)) return null
+  const parsed = Number(value)
+  return parsed >= min && parsed <= max ? parsed : null
 }
 
 function uint(value) {
@@ -308,6 +324,28 @@ export function normalizeArchiveSubmission(fields = {}, file = null) {
     return invalid('INVALID_POSTER_PATH', 'tmdbPosterPath must be a TMDB artwork path such as /abc123.jpg', 'tmdbPosterPath')
   }
 
+  // The rest of what a publisher already knows. Same reason as the cover: a
+  // consumer cannot look any of it up, so a title seeded without it shows a
+  // name and nothing else on every peer forever. Each is bounded here and
+  // normalized again by the publisher's own ingest, which is the check that a
+  // claim signed by somebody else never passed through.
+  const tmdbYear = boundedInt(text(fields, 'tmdbYear'), MIN_RELEASE_YEAR, MAX_RELEASE_YEAR)
+  if (text(fields, 'tmdbYear') && tmdbYear === null) {
+    return invalid('INVALID_TMDB_YEAR', `tmdbYear must be a year between ${MIN_RELEASE_YEAR} and ${MAX_RELEASE_YEAR}`, 'tmdbYear')
+  }
+  const tmdbRuntime = boundedInt(text(fields, 'tmdbRuntime'), 1, MAX_RUNTIME_MINUTES)
+  if (text(fields, 'tmdbRuntime') && tmdbRuntime === null) {
+    return invalid('INVALID_TMDB_RUNTIME', `tmdbRuntime must be a whole number of minutes between 1 and ${MAX_RUNTIME_MINUTES}`, 'tmdbRuntime')
+  }
+  const tmdbOverview = text(fields, 'tmdbOverview')
+  if (Buffer.byteLength(tmdbOverview) > MAX_OVERVIEW_BYTES) {
+    return invalid('INVALID_TMDB_OVERVIEW', `tmdbOverview must be at most ${MAX_OVERVIEW_BYTES} bytes`, 'tmdbOverview')
+  }
+  const tmdbGenres = text(fields, 'tmdbGenres')
+  if (Buffer.byteLength(tmdbGenres) > MAX_GENRES_BYTES) {
+    return invalid('INVALID_TMDB_GENRES', `tmdbGenres must be at most ${MAX_GENRES_BYTES} bytes`, 'tmdbGenres')
+  }
+
   return {
     entityHint: deriveEntityHint({ contentKind, tmdbId, tmdbSeason, tmdbEpisode }),
     // The url still needs its host resolved before anything is enqueued; the
@@ -323,6 +361,10 @@ export function normalizeArchiveSubmission(fields = {}, file = null) {
       tmdbTitle,
       tmdbSeason: tmdbSeason ? String(tmdbSeason) : '',
       tmdbEpisode: tmdbEpisode ? String(tmdbEpisode) : '',
+      tmdbYear: tmdbYear === null ? '' : String(tmdbYear),
+      tmdbRuntime: tmdbRuntime === null ? '' : String(tmdbRuntime),
+      tmdbOverview,
+      tmdbGenres,
       tmdbPosterPath,
       channelName: text(fields, 'channelName') || tmdbTitle,
       title: text(fields, 'title') || tmdbTitle,

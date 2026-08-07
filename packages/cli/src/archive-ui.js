@@ -200,10 +200,61 @@ function deviceRow(client) {
     </li>`
 }
 
+// A viewer's shelf, not an operator's inventory: a cover, the name of the film
+// or show, the channel that published it, and one sentence about whether it is
+// safe. Nothing here renders an id, a key, or a hash - those name machines, and
+// a person reading this page is choosing something to watch.
+function libraryCard(item = {}) {
+  const title = String(item.title || 'Untitled')
+  const facts = []
+  if (Number(item.year) > 0) facts.push(escapeHtml(item.year))
+  if (Number(item.runtimeMinutes) > 0) facts.push(`${escapeHtml(item.runtimeMinutes)} min`)
+  if (Number(item.sizeBytes) > 0) facts.push(escapeHtml(formatSize(item.sizeBytes)))
+  const genres = Array.isArray(item.genres) ? item.genres.slice(0, 3) : []
+  const status = item.status || {}
+  const state = typeof status.state === 'string' ? status.state : 'waiting'
+  // The initial is always painted, and a cover is layered over it when one
+  // exists. `hasPoster` means the publisher signed cover art, not that its
+  // bytes are on this relay yet - resolving that for real costs a replication
+  // attempt per title, which no page render should wait on - so the request can
+  // still 404. A failed <img alt=""> paints nothing, which leaves the letter
+  // showing instead of a broken-image icon, and needs no script to do it.
+  const poster = item.hasPoster && item.entityId
+    ? `<img class="lib-poster" src="/poster/${encodeURIComponent(item.entityId)}" alt="" loading="lazy">`
+    : ''
+
+  return `<article class="title-card">
+      <div class="poster-wrap">
+        <div class="lib-poster-blank" aria-hidden="true">${escapeHtml(title.trim().charAt(0).toUpperCase() || '?')}</div>
+        ${poster}
+        <span class="seed-chip seed-${escapeHtml(state)}">${escapeHtml(status.label || 'Waiting for a backup')}</span>
+      </div>
+      <div class="title-body">
+        <h3>${escapeHtml(title)}</h3>
+        ${item.channelName ? `<p class="by">${escapeHtml(item.channelName)}</p>` : ''}
+        ${facts.length ? `<p class="facts">${facts.join(' &middot; ')}</p>` : ''}
+        ${genres.length ? `<p class="genres">${genres.map(genre => `<span class="chip">${escapeHtml(genre)}</span>`).join('')}</p>` : ''}
+        ${item.overview ? `<p class="overview">${escapeHtml(item.overview)}</p>` : ''}
+        ${status.detail ? `<p class="seed-detail">${escapeHtml(status.detail)}</p>` : ''}
+      </div>
+    </article>`
+}
+
+// Sizes are for a person deciding whether something is worth keeping, so one
+// decimal past a gigabyte and none below it.
+function formatSize(bytes) {
+  const value = Number(bytes)
+  if (!Number.isFinite(value) || value <= 0) return ''
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`
+  if (value >= 1024 ** 2) return `${Math.round(value / 1024 ** 2)} MB`
+  return `${Math.max(1, Math.round(value / 1024))} KB`
+}
+
 export function renderArchiveWebHome(model = {}) {
   const status = model.status || {}
   const seeding = status.seeding || {}
   const jobs = Array.isArray(model.jobs) ? model.jobs : []
+  const library = Array.isArray(model.library) ? model.library : []
   const creators = Array.isArray(model.creators) ? model.creators : []
   const unseededTargets = Array.isArray(model.unseededTargets) ? model.unseededTargets : []
   const tmdb = model.tmdb || {}
@@ -216,6 +267,10 @@ export function renderArchiveWebHome(model = {}) {
 
   const totalUnseeded = creators.reduce((sum, c) => sum + (Number(c.videosUnseeded) || 0), 0)
   const totalArchived = creators.reduce((sum, c) => sum + (Number(c.videosArchived) || 0), 0)
+
+  const libraryCards = library.length
+    ? library.map(libraryCard).join('')
+    : '<div class="empty">Nothing here yet. Anything added from a connected app or the form below shows up here with its cover.</div>'
 
   const creatorRows = creators.length
     ? creators.map(creatorCard).join('')
@@ -292,6 +347,31 @@ export function renderArchiveWebHome(model = {}) {
     button { justify-self: start; border: 0; border-radius: 999px; padding: 11px 18px; color: #04130c; background: var(--mint); font-weight: 800; cursor: pointer; }
     button:hover { filter: brightness(1.07); }
     button.ghost { background: transparent; color: var(--warn); border: 1px solid var(--line); padding: 6px 13px; font-weight: 700; }
+    /* library: the shelf a viewer reads, so the poster leads and the status is a
+       sentence rather than a counter */
+    .library-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+    .title-card { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+    .poster-wrap { position: relative; border-radius: 14px; overflow: hidden; border: 1px solid var(--line);
+      background: #0b0f19; aspect-ratio: 2 / 3; box-shadow: 0 18px 44px rgba(0,0,0,0.36); }
+    .lib-poster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+    .lib-poster-blank { position: absolute; inset: 0; display: grid; place-items: center; font-size: 44px; font-weight: 800; color: rgba(255,255,255,0.16); }
+    .seed-chip { position: absolute; left: 8px; bottom: 8px; right: 8px; padding: 5px 9px; border-radius: 9px;
+      font-size: 11px; font-weight: 750; letter-spacing: 0.01em; backdrop-filter: blur(8px);
+      background: rgba(7,8,12,0.72); border: 1px solid var(--line); color: var(--ink);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .seed-mirrored { color: #04130c; background: var(--ok); border-color: transparent; }
+    .seed-stored { color: var(--mint); }
+    .seed-publishing { color: #ffd88a; }
+    .seed-failed { color: var(--warn); }
+    .title-body { min-width: 0; }
+    .title-body h3 { margin: 0; font-size: 15px; line-height: 1.3; letter-spacing: -0.01em; }
+    .title-body .by { margin: 3px 0 0; font-size: 12px; color: var(--mint); font-weight: 650;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .title-body .facts { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+    .title-body .genres { margin: 7px 0 0; display: flex; gap: 5px; flex-wrap: wrap; }
+    .title-body .overview { margin: 7px 0 0; font-size: 12px; line-height: 1.5; color: #b9c3d6;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .title-body .seed-detail { margin: 7px 0 0; font-size: 11px; color: var(--muted); }
     /* creators */
     .creator { display: flex; gap: 13px; padding: 14px 0; border-top: 1px solid var(--line); }
     .creator:first-child { border-top: 0; padding-top: 2px; }
@@ -356,6 +436,7 @@ export function renderArchiveWebHome(model = {}) {
     <div class="bar-inner">
       <div class="brand"><span class="dot"></span> PearTube Relay</div>
       <nav>
+        <a href="#library">Library</a>
         <a href="#discover">Discover</a>
         <a href="#creators">Creators</a>
         <a href="#targets">Targets</a>
@@ -364,6 +445,7 @@ export function renderArchiveWebHome(model = {}) {
       </nav>
       <span class="spacer"></span>
       <div class="stat-pills">
+        <div class="spill"><b>${escapeHtml(library.length)}</b><span>Titles</span></div>
         <div class="spill"><b>${escapeHtml(status.peers || 0)}</b><span>Peers</span></div>
         <div class="spill"><b>${escapeHtml(seeding.videos || 0)}</b><span>Seeded</span></div>
         <div class="spill"><b>${escapeHtml(creators.length)}</b><span>Creators</span></div>
@@ -375,6 +457,11 @@ export function renderArchiveWebHome(model = {}) {
     ${model.notice ? `<p class="notice" role="status">${escapeHtml(model.notice)}</p>` : ''}
     <div class="layout">
       <div class="col">
+        <section class="card" id="library">
+          <h2>Library</h2>
+          <p class="sub">Everything this relay is keeping, with a cover and how safe each title is. A backup means another device holds a full copy and has proved it.</p>
+          <div class="library-grid">${libraryCards}</div>
+        </section>
         <section class="card" id="discover">
           <h2>Discover missing movies &amp; shows</h2>
           <p class="sub">TMDB-powered catalog view for your relay. Cards show whether a title is already seeding, merely known to the network, or missing. TMDB supplies metadata only; paste a source URL to archive the bytes.</p>

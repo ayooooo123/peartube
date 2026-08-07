@@ -857,9 +857,27 @@ export async function createArchiveConsole({
         let sizeBytes = 0
         let freshArchivists = 0
         let recency = jobRecency(job)
+        // A series entity collapses every episode this relay holds, so the
+        // seasons and episodes are counted from the coordinates the publisher
+        // signed rather than from how many publications happen to be here. Two
+        // uploads of the same episode are one episode; an episode with no
+        // ordinals is still held, so it is counted without a season.
+        const seasons = new Map()
+        let looseEpisodes = 0
         for (const source of item?.sources || []) {
           if (!source?.publicationId) continue
           sizeBytes += publicationBytes(getManifest(source.publicationId))
+          const coordinates = source.mediaCoordinates || {}
+          if (coordinates.contentKind === 'episode') {
+            const season = Number(coordinates.seasonNumber)
+            const episode = Number(coordinates.episodeNumber)
+            if (Number.isSafeInteger(season) && season > 0 && Number.isSafeInteger(episode) && episode > 0) {
+              if (!seasons.has(season)) seasons.set(season, new Set())
+              seasons.get(season).add(episode)
+            } else {
+              looseEpisodes++
+            }
+          }
           const mirror = mirrors.get(String(source.publicationId))
           if (!mirror) continue
           // Max, not sum: one archivist holding three episodes of a series is
@@ -867,6 +885,7 @@ export async function createArchiveConsole({
           freshArchivists = Math.max(freshArchivists, Number(mirror.freshArchivists) || 0)
           recency = Math.max(recency, Number(mirror.requestedAt) || 0)
         }
+        const episodeCount = [...seasons.values()].reduce((sum, set) => sum + set.size, 0) + looseEpisodes
         return {
           order,
           recency,
@@ -885,6 +904,12 @@ export async function createArchiveConsole({
             // while a page render waits on it.
             hasPoster: Boolean(item?.posterBlobId || item?.posterUrl),
             sizeBytes: sizeBytes > 0 ? sizeBytes : null,
+            // What this relay actually holds of a show, counted from signed
+            // coordinates: which seasons, and how many distinct episodes. It
+            // is deliberately not "how many episodes the show has" - nothing
+            // here knows that, and implying it would be a guess.
+            seasonNumbers: [...seasons.keys()].sort((left, right) => left - right),
+            episodeCount,
             status: libraryStatus({ job, freshArchivists, sizeBytes })
           }
         }

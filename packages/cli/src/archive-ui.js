@@ -200,15 +200,43 @@ function deviceRow(client) {
     </li>`
 }
 
+// What a relay can honestly say about a show: which seasons of it are here and
+// how many episodes, counted from the coordinates each publisher signed. How
+// many episodes the season actually has is a fact about the show, not about
+// this relay, and nothing here knows it - so it is not implied.
+function heldEpisodesLabel(item = {}) {
+  const seasons = Array.isArray(item.seasonNumbers) ? item.seasonNumbers.filter((season) => Number(season) > 0) : []
+  const episodes = Number(item.episodeCount) || 0
+  if (episodes < 1) return 'Series'
+  const counted = `${escapeHtml(episodes)} episode${episodes === 1 ? '' : 's'}`
+  if (seasons.length === 1) return `Season ${escapeHtml(seasons[0])} &middot; ${counted}`
+  if (seasons.length > 1) {
+    const span = seasons.length === seasons[seasons.length - 1] - seasons[0] + 1
+      ? `Seasons ${escapeHtml(seasons[0])}&ndash;${escapeHtml(seasons[seasons.length - 1])}`
+      : `${escapeHtml(seasons.length)} seasons`
+    return `${span} &middot; ${counted}`
+  }
+  return counted
+}
+
 // A viewer's shelf, not an operator's inventory: a cover, the name of the film
-// or show, the channel that published it, and one sentence about whether it is
-// safe. Nothing here renders an id, a key, or a hash - those name machines, and
-// a person reading this page is choosing something to watch.
+// or show, what kind of thing it is, and one sentence about whether it is safe.
+// Nothing here renders an id, a key, or a hash - those name machines, and a
+// person reading this page is choosing something to watch.
 function libraryCard(item = {}) {
   const title = String(item.title || 'Untitled')
+  const kind = typeof item.kind === 'string' ? item.kind : ''
+  const isSeries = kind === 'series' || kind === 'show' || kind === 'episode'
   const facts = []
-  if (Number(item.year) > 0) facts.push(escapeHtml(item.year))
-  if (Number(item.runtimeMinutes) > 0) facts.push(`${escapeHtml(item.runtimeMinutes)} min`)
+  // A show is named by what of it is actually here. A film is named by its
+  // year and length. Neither has a "channel" - that belongs to creator
+  // uploads, and it is shown only where one actually exists.
+  if (isSeries) {
+    facts.push(heldEpisodesLabel(item))
+  } else if (Number(item.year) > 0) {
+    facts.push(escapeHtml(item.year))
+  }
+  if (Number(item.runtimeMinutes) > 0 && !isSeries) facts.push(`${escapeHtml(item.runtimeMinutes)} min`)
   if (Number(item.sizeBytes) > 0) facts.push(escapeHtml(formatSize(item.sizeBytes)))
   const genres = Array.isArray(item.genres) ? item.genres.slice(0, 3) : []
   const status = item.status || {}

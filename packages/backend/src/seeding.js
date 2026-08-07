@@ -14,6 +14,10 @@ import {
 
 const DEFAULT_STORAGE_MAINTENANCE_DELAY_MS = 30000
 const BYTES_PER_GB = 1024 * 1024 * 1024
+// How long an on-disk measurement is reused for admission decisions. Long
+// enough that a burst of checks walks the tree once; short enough that a
+// download admitted now is measured against something taken seconds ago.
+const QUOTA_MEASUREMENT_TTL_MS = 5000
 // The cache ceiling is decided by the participation policy; this manager reads
 // it rather than keeping a second opinion. It is only a pre-policy starting
 // value: applyNetworkPolicy replaces it on the first policy application.
@@ -186,6 +190,10 @@ export class SeedingManager {
     this._seedPersistTimer = null;
     /** @type {ReturnType<typeof setTimeout> | null} pending storage compaction timer */
     this._storageMaintenanceTimer = null;
+    /** @type {number | null} last successful on-disk measurement, in bytes */
+    this._measuredStorageBytes = null;
+    /** @type {number} when that measurement was taken */
+    this._measuredStorageAt = 0;
     this._storageMaintenanceCompacting = false;
     this._storageMaintenancePendingLabel = null;
     /** @type {SeedingConfig} */
@@ -923,20 +931,53 @@ export class SeedingManager {
   }
 
   /**
-   * Storage budget snapshot for admission control: how much room is left under
-   * the configured cache quota.
+   * The most recent on-disk measurement, taken at most once per
+   * QUOTA_MEASUREMENT_TTL_MS. Walking the storage tree costs a stat per file,
+   * which is fine occasionally and not fine on every admission check.
    *
-   * The quota bounds content cached from the network (tracked seeds). The
-   * user's own uploaded/published videos share the same corestore but are never
-   * registered as seeds, so they are excluded by construction — uploads never
-   * count against the cache limit. (Raw on-disk usage commingles uploads with
-   * cache, so it is deliberately NOT used here.)
-   * @returns {{ maxBytes: number, usageBytes: number, headroomBytes: number }}
+   * A failed measurement keeps the previous reading rather than reverting to
+   * "nothing is stored": an unmeasurable disk must never read as empty, or the
+   * limit silently stops existing.
+   * @returns {Promise<number | null>}
    */
-  getQuotaBudget() {
+  async getMeasuredStorageBytes({ maxAgeMs = QUOTA_MEASUREMENT_TTL_MS } = {}) {
+    const now = Date.now()
+    if (this._measuredStorageAt > 0 && now - this._measuredStorageAt < maxAgeMs) {
+      return this._measuredStorageBytes
+    }
+    const measured = await this.getTotalStorageBytes()
+    if (measured === null) return this._measuredStorageBytes
+    this._measuredStorageBytes = measured
+    this._measuredStorageAt = now
+    return measured
+  }
+
+  /**
+   * Storage budget snapshot for admission control: how much room is left under
+   * the configured storage limit.
+   *
+   * Usage is whichever is larger, the tracked cache or what is actually on
+   * disk. Tracked seeds alone described only content cached from the network,
+   * so a relay whose content is published media - every relay now - reported
+   * zero usage and admitted downloads until the disk filled. The limit binds
+   * the storage directory, whatever is in it and however it got there.
+   *
+   * Tracked usage remains the floor, so an unmeasurable runtime is no less
+   * strict than before.
+   * @returns {Promise<{ maxBytes: number, usageBytes: number, headroomBytes: number, trackedBytes: number, measuredBytes: number | null }>}
+   */
+  async getQuotaBudget() {
     const maxBytes = this.config.maxStorageGB * 1024 * 1024 * 1024;
-    const usageBytes = Math.round(this.calculateStorage());
-    return { maxBytes, usageBytes, headroomBytes: Math.max(0, maxBytes - usageBytes) };
+    const trackedBytes = Math.round(this.calculateStorage());
+    const measuredBytes = await this.getMeasuredStorageBytes();
+    const usageBytes = Math.max(trackedBytes, measuredBytes ?? 0);
+    return {
+      maxBytes,
+      usageBytes,
+      headroomBytes: Math.max(0, maxBytes - usageBytes),
+      trackedBytes,
+      measuredBytes: measuredBytes ?? null
+    };
   }
 
   buildTrackedStorageCategoryUsage() {
@@ -1011,8 +1052,11 @@ export class SeedingManager {
    * @returns {Promise<Object>}
    */
   async getStorageStats() {
+    // Shares the admission cache deliberately: the periodic status write keeps
+    // the number the storage limit is enforced against warm, and a burst of
+    // stats calls does not walk the tree once each.
     const [totalStorageBytes, additionalCategoryUsage] = await Promise.all([
-      this.getTotalStorageBytes(),
+      this.getMeasuredStorageBytes(),
       this.loadAdditionalStorageCategoryUsage()
     ])
     return this.buildStorageStats(totalStorageBytes, additionalCategoryUsage);

@@ -187,7 +187,7 @@ test('network policy applies an exact byte disk ceiling including zero', async (
 
   await manager.applyNetworkPolicy({ diskCeilingBytes: 0 })
 
-  t.is(manager.getQuotaBudget().maxBytes, 0)
+  t.is((await manager.getQuotaBudget()).maxBytes, 0)
   t.is(manager.getActiveSeeds().length, 0)
   t.alike(store.get(Buffer.from(coreA, 'hex')).clearCalls, [{ start: 3, end: 8 }])
 })

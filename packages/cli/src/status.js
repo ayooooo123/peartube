@@ -111,10 +111,18 @@ export function formatRelayStatus(status) {
   const hostDisk = status.runtime.archiveHostDisk || {}
   const publishedRequests = archiveRequests.reduce((count, entry) => count + (entry?.status === 'published' ? 1 : 0), 0)
   const withEvidence = archiveRequests.reduce((count, entry) => count + ((entry?.archivists || 0) > 0 ? 1 : 0), 0)
+  // What is actually on disk when the runtime could measure it. The catalog
+  // sum only counts legacy channel videos, so it reads 0 on a relay whose
+  // content is media-graph publications - which is every relay now, and it
+  // read 0 with 8 GiB sitting under the storage path.
+  const measuredBytes = Number(storage.totalStorageBytes)
+  const usedBytes = Number.isFinite(measuredBytes) && measuredBytes > 0
+    ? measuredBytes
+    : status.summary.usedBytes
   const lines = [
     `mode: ${status.mode}`,
     `policy: ${status.policy}`,
-    `storage: ${status.summary.usedBytes}/${status.storage.maxBytes} bytes`,
+    `storage: ${usedBytes}/${status.storage.maxBytes} bytes`,
     `channels: ${status.summary.totalChannels}`,
     `protected: ${status.summary.protectedChannels}`,
     `evictable: ${status.summary.evictableChannels}`,

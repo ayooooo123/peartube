@@ -93,8 +93,8 @@ import {
   loadBarePathModule,
   resolveBareFsModuleSync,
   resolveBarePathModuleSync,
-  resolveBareOrNodeFsModuleSync,
-  resolveBareOrNodePathModuleSync,
+  loadBareOrNodeFsModule,
+  loadBareOrNodePathModule,
 } from './runtime-modules.js'
 import {
   isCorestoreLockError,
@@ -142,8 +142,16 @@ function resolveAsyncFsOp(fs, name) {
 
 function createStorageUsageMeasurer(storagePath) {
   return async function getDiskUsageBytes() {
-    const fs = resolveBareOrNodeFsModuleSync()
-    const path = resolveBareOrNodePathModuleSync()
+    // Load fs/path through the async resolvers, not the *Sync ones. The sync
+    // resolvers reach the runtime through `require`, which does not exist in
+    // an ES module under Node - so they returned null in the relay and the
+    // desktop host, the measurer bailed, and storage read a flat 0 while
+    // gigabytes sat on disk. Bare keeps `require` as a global, which is why
+    // this only ever worked on mobile.
+    const [fs, path] = await Promise.all([
+      loadBareOrNodeFsModule().catch(() => null),
+      loadBareOrNodePathModule().catch(() => null)
+    ])
     if (!fs || !path || !storagePath) return null
     const stat = resolveAsyncFsOp(fs, 'stat')
     const readdir = resolveAsyncFsOp(fs, 'readdir')

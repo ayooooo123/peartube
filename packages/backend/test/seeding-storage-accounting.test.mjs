@@ -212,3 +212,25 @@ test('quota enforcement leaves cache intact when only the user\'s uploads exceed
   t.is(manager.getActiveSeeds().length, 1)
   t.alike(store.get(Buffer.from(coreA, 'hex')).clearCalls, [], 'no blob ranges cleared')
 })
+
+test('the runtime fs resolvers an ES module can actually use', async (t) => {
+  // The storage measurer loads fs and path at call time. It used to use the
+  // *Sync resolvers, which reach the runtime through `require` - a function
+  // that does not exist in an ES module under Node. They returned null, the
+  // measurer bailed, and the relay reported 0 bytes with gigabytes on disk.
+  // Bare keeps `require` as a global, so this only ever worked on mobile.
+  const { resolveBareOrNodeFsModuleSync, loadBareOrNodeFsModule, loadBareOrNodePathModule } =
+    await import('../src/runtime-modules.js')
+
+  t.is(typeof require, 'undefined', 'this test runs as an ES module, like the relay does')
+  t.is(resolveBareOrNodeFsModuleSync(), null, 'the sync resolver cannot see a module system here')
+
+  const [fs, path] = await Promise.all([loadBareOrNodeFsModule(), loadBareOrNodePathModule()])
+  t.ok(fs, 'the async loader resolves fs')
+  t.ok(path, 'the async loader resolves path')
+  t.ok(
+    typeof fs.promises?.stat === 'function' || typeof fs.statSync === 'function',
+    'and it exposes a stat the measurer can walk a directory with'
+  )
+  t.ok(typeof path.join === 'function', 'and a join to descend with')
+})

@@ -485,7 +485,10 @@ export function createOperabilityApi (options = {}) {
         return { success: false, errorCode: 'STORAGE_SERVICE_UNAVAILABLE' }
       }
       try {
-        return await seedingManager.getStorageStats()
+        // Say so explicitly. The stats object carries no success field of its
+        // own, so every caller that checked one - the CLI status line among
+        // them - reported a healthy measurement as a failure.
+        return { success: true, ...(await seedingManager.getStorageStats()) }
       } catch {
         return { success: false, errorCode: 'STORAGE_STATS_FAILED' }
       }

@@ -1,5 +1,6 @@
 import test from 'brittle'
 import { createArchiveManager, createArchivePublisher, deriveMediaCoordinates, enqueueArchiveJob, fetchPosterBytes, publishPosterArtwork } from '../src/archive-manager.js'
+import { normalizeArchiveSubmission } from '../src/archive-api.js'
 
 function memStore () {
   const jobs = []
@@ -213,4 +214,41 @@ test('an upload picked from the catalogue is named after the film, not the file'
   })
 
   t.is(explicit.title, 'A name someone typed', 'an explicit title still outranks the catalogue')
+})
+
+test('the machine API carries discovered cover art, and refuses anything that is not a TMDB path', (t) => {
+  // Cover art has to be published with the record: a consumer holds no
+  // metadata-provider credentials, and a provider URL in the claim would make
+  // browsing the catalog reach an origin outside the swarm. The console form
+  // always carried this; the machine API dropped it, so every publication a
+  // machine client seeded rendered as a blank card on every peer.
+  const submission = {
+    url: 'https://example.com/movie.mp4',
+    contentKind: 'movie',
+    tmdbId: '603',
+    tmdbTitle: 'The Matrix',
+    tmdbPosterPath: '/wr7nrhLIiFqEcOTZ4LBOJd9Kwsw.jpg',
+  }
+  const accepted = normalizeArchiveSubmission(submission)
+  t.is(accepted.error, undefined, 'a TMDB artwork path is accepted')
+  t.is(accepted.form.tmdbPosterPath, '/wr7nrhLIiFqEcOTZ4LBOJd9Kwsw.jpg',
+    'the path reaches the job the publisher fetches from')
+
+  // This value chooses an outbound request, so it is validated rather than
+  // normalized into something that happens to work.
+  for (const posterPath of [
+    'https://evil.example/poster.jpg',
+    '//evil.example/poster.jpg',
+    '/../../etc/passwd',
+    '/nested/path.jpg',
+    'no-leading-slash.jpg',
+    `/${'x'.repeat(200)}.jpg`,
+  ]) {
+    const rejected = normalizeArchiveSubmission({ ...submission, tmdbPosterPath: posterPath })
+    t.is(rejected.error?.code, 'INVALID_POSTER_PATH', `${posterPath} is refused`)
+  }
+
+  const withoutArtwork = normalizeArchiveSubmission({ ...submission, tmdbPosterPath: undefined })
+  t.is(withoutArtwork.error, undefined, 'artwork stays optional')
+  t.is(withoutArtwork.form.tmdbPosterPath, '', 'a submission with no cover carries none')
 })

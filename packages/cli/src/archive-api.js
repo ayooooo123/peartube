@@ -101,6 +101,12 @@ const CONTENT_KINDS = new Set(['movie', 'episode'])
 const TMDB_ID = /^[1-9][0-9]{0,19}$/
 const MAX_TITLE_BYTES = 512
 const MAX_EPISODE_PART = 100000
+// A TMDB artwork file path, exactly as the provider hands it out: a leading
+// slash, one file name, no directories. The publisher turns this into an
+// image.tmdb.org URL and fetches it once, so this is caller input that decides
+// an outbound request - a full URL or a traversal is refused rather than
+// normalized into something that happens to work.
+const TMDB_POSTER_PATH = /^\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const MAX_JOB_ID_LENGTH = 128
 const MAX_IDEMPOTENCY_KEY_BYTES = 128
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/
@@ -292,6 +298,16 @@ export function normalizeArchiveSubmission(fields = {}, file = null) {
     }
   }
 
+  // Cover art has to be published with the record: a consumer holds no
+  // metadata-provider credentials, and a provider URL in the claim would make
+  // browsing the catalog reach an origin outside the swarm. The console form
+  // has always carried this; the machine API dropped it, so everything a
+  // MediaStorm-style client seeded rendered as a blank placeholder forever.
+  const tmdbPosterPath = text(fields, 'tmdbPosterPath')
+  if (tmdbPosterPath && !TMDB_POSTER_PATH.test(tmdbPosterPath)) {
+    return invalid('INVALID_POSTER_PATH', 'tmdbPosterPath must be a TMDB artwork path such as /abc123.jpg', 'tmdbPosterPath')
+  }
+
   return {
     entityHint: deriveEntityHint({ contentKind, tmdbId, tmdbSeason, tmdbEpisode }),
     // The url still needs its host resolved before anything is enqueued; the
@@ -307,6 +323,7 @@ export function normalizeArchiveSubmission(fields = {}, file = null) {
       tmdbTitle,
       tmdbSeason: tmdbSeason ? String(tmdbSeason) : '',
       tmdbEpisode: tmdbEpisode ? String(tmdbEpisode) : '',
+      tmdbPosterPath,
       channelName: text(fields, 'channelName') || tmdbTitle,
       title: text(fields, 'title') || tmdbTitle,
       sourceType: 'tmdb',

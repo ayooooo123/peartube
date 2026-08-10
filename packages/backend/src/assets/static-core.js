@@ -2,14 +2,12 @@ import b4a from 'b4a'
 import Hypercore from 'hypercore'
 
 import {
-  hashCanonical,
   normalizeBytes,
   normalizeNonNegativeInteger,
 } from '../publisher/canonical.js'
 
 export const ASSET_BLOCK_SIZE = 256 * 1024
 
-const STATIC_ASSET_ID_DOMAIN = 'peartube.asset.static.v1'
 const STATIC_ASSET_KIND = 'static-prologue-v1'
 
 function normalizeIdentityInput(input = {}) {
@@ -34,14 +32,20 @@ function normalizeIdentityInput(input = {}) {
   return { treeHash, blockLength, byteLength, blockSize }
 }
 
+function createHypercoreManifest(treeHash, blockLength) {
+  return {
+    version: 1,
+    hash: 'blake2b',
+    allowPatch: false,
+    quorum: 0,
+    signers: [],
+    prologue: { hash: treeHash, length: blockLength },
+  }
+}
+
 export function deriveStaticAssetId(input = {}) {
-  const { treeHash, blockLength, byteLength, blockSize } = normalizeIdentityInput(input)
-  return b4a.toString(hashCanonical(STATIC_ASSET_ID_DOMAIN, {
-    treeHash,
-    blockLength,
-    byteLength,
-    blockSize,
-  }), 'hex')
+  const { treeHash, blockLength } = normalizeIdentityInput(input)
+  return b4a.toString(Hypercore.key(createHypercoreManifest(treeHash, blockLength)), 'hex')
 }
 
 export function deriveStaticAssetTopic(assetId) {
@@ -50,14 +54,7 @@ export function deriveStaticAssetTopic(assetId) {
 
 export function createStaticAssetManifest(input = {}) {
   const { treeHash, blockLength, byteLength, blockSize } = normalizeIdentityInput(input)
-  const hypercoreManifest = {
-    version: 1,
-    hash: 'blake2b',
-    allowPatch: false,
-    quorum: 0,
-    signers: [],
-    prologue: { hash: treeHash, length: blockLength },
-  }
+  const hypercoreManifest = createHypercoreManifest(treeHash, blockLength)
   const key = Hypercore.key(hypercoreManifest)
   const descriptor = {
     kind: STATIC_ASSET_KIND,
@@ -71,7 +68,7 @@ export function createStaticAssetManifest(input = {}) {
 
   return {
     ...descriptor,
-    assetId: deriveStaticAssetId(descriptor),
+    assetId: b4a.toString(key, 'hex'),
   }
 }
 

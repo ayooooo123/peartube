@@ -69,6 +69,7 @@ test('static asset manifests converge from the completed Hypercore tree', async 
     prologue: { hash: state.treeHash, length: 3 },
   })
   t.is(a.key.toString('hex'), b.key.toString('hex'))
+  t.is(a.assetId, a.key.toString('hex'))
   t.is(deriveStaticAssetId(a), deriveStaticAssetId(b))
   t.is(a.assetId, deriveStaticAssetId(a))
   t.alike(deriveStaticAssetTopic(a.assetId), deriveStaticAssetTopic(b.assetId))

@@ -1,5 +1,6 @@
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
+import { PROTOCOL_MAJOR } from './version.js'
 
 const TOPIC_DOMAIN_PREFIX = 'peartube.scoped-topic.v1'
 
@@ -11,7 +12,7 @@ function cleanString(value, name) {
 }
 
 function cleanMajor(value) {
-  const major = Number(value || 1)
+  const major = Number(value ?? PROTOCOL_MAJOR)
   if (!Number.isSafeInteger(major) || major < 1 || major > 255) throw new Error('protocolMajor must be between 1 and 255')
   return major
 }

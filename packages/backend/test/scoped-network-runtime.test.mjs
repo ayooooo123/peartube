@@ -63,6 +63,14 @@ function connectionPair () {
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
 
+function assertCurrentRuntimeTopics(t, runtime) {
+  const topics = runtime.getDiagnostics().topics
+  t.ok(topics.length > 0)
+  for (const topic of topics) {
+    t.is(topic.protocolMajor, PROTOCOL_MAJOR, `${topic.purpose} diagnostic uses the current major`)
+  }
+}
+
 function fakeSwarm () {
   const swarm = new EventEmitter()
   swarm.connections = new Set()
@@ -673,6 +681,8 @@ test('real Protomux sessions open on both sides without server topic metadata an
   await settle()
   t.ok(runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'bootstrap' && session.state === 'active'))
   t.ok(runtimeB.getDiagnostics().sessions.some(session => session.purpose === 'bootstrap' && session.state === 'active'))
+  assertCurrentRuntimeTopics(t, runtimeA)
+  assertCurrentRuntimeTopics(t, runtimeB)
 
   const publisherId = b4a.toString(descriptor.publisherId, 'hex')
   await runtimeB.followPublisher({ publisherId, namespaceDescriptor: descriptor })
@@ -682,6 +692,14 @@ test('real Protomux sessions open on both sides without server topic metadata an
   await settle()
   t.ok(runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'publisher' && session.state === 'active'))
   t.ok(runtimeB.getDiagnostics().sessions.some(session => session.purpose === 'publisher' && session.state === 'active'))
+  assertCurrentRuntimeTopics(t, runtimeA)
+  assertCurrentRuntimeTopics(t, runtimeB)
+  const publisherTopic = runtimeA.getDiagnostics().topics.find(topic => topic.purpose === 'publisher')
+  t.is(publisherTopic.topicHex, b4a.toString(derivePublisherTopic({
+    publisherId,
+    catalogEpoch: descriptor.catalogEpoch,
+    protocolMajor: PROTOCOL_MAJOR,
+  }), 'hex'))
   registryA.binding.catalog.base.emit('update')
   await settle()
   t.is(catalogUpdates, 1, 'replicated catalog updates trigger projection refresh exactly once per session')
@@ -739,7 +757,8 @@ test('archive pledges retain multiple exact ranges without exposing a Hypercore 
   t.is(downloads, 1, 'verification-only requester scopes do not start a full-range download')
   t.is(first.archiveId, second.archiveId)
   t.is(runtime.getDiagnostics().topics.filter(topic => topic.purpose === 'archive').length, 1)
-  const archiveTopic = deriveArchiveTopic({ archiveId: first.archiveId })
+  assertCurrentRuntimeTopics(t, runtime)
+  const archiveTopic = deriveArchiveTopic({ archiveId: first.archiveId, protocolMajor: PROTOCOL_MAJOR })
   t.is(runtime.authorizeConnection({ purpose: 'archive', topic: archiveTopic, requestedCoreKey: b4a.toString(coreKey, 'hex'), connection: {} }).action, 'archive-range')
   t.is(replicated, 0, 'archive connection never receives an unrestricted Hypercore responder')
   const released = await runtime.releaseAuthorizedArchive({ archiveId: first.archiveId })
@@ -977,6 +996,8 @@ test('permissionless archive discovery carries bounded signed requests and pledg
   t.ok(b4a.equals(receivedProofs[0].packet.proofBytes, proofBytes))
   t.is(receivedProofs[0].context.peerId, b4a.toString(bytes(32, 201), 'hex'))
   t.is(runtimeA.getDiagnostics().topics.filter(topic => topic.purpose === 'archive-discovery').length, 1)
+  assertCurrentRuntimeTopics(t, runtimeA)
+  assertCurrentRuntimeTopics(t, runtimeB)
 
   await runtimeA.close()
   await runtimeB.close()

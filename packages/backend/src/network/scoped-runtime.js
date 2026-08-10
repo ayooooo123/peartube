@@ -319,6 +319,7 @@ function assetAuthorizationId (renditionId, ownerId) {
 function stableScopeDiagnostic (scope) {
   return {
     purpose: scope.purpose,
+    protocolMajor: scope.protocolMajor,
     topicHex: scope.topicHex,
     scopeId: scope.scopeId,
     modes: [...scope.modes].sort(),
@@ -476,6 +477,7 @@ export function createScopedNetworkRuntime (options = {}) {
       discoverySuspended: false,
       closed: false,
       ...metadata,
+      protocolMajor,
     }
     scopes.set(id, scope)
     counters.joinedTopics++
@@ -1623,7 +1625,7 @@ export function createScopedNetworkRuntime (options = {}) {
     const binding = await catalogRegistry.bindNamespace(descriptor)
     if (hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey') !== b4a.toString(descriptor.catalogBootstrapKey, 'hex')) fail('catalog binding mismatch')
     await publisherManager.followPublisher(id)
-    const topic = derivePublisherTopic({ publisherId: id, catalogEpoch: descriptor.catalogEpoch })
+    const topic = derivePublisherTopic({ protocolMajor, publisherId: id, catalogEpoch: descriptor.catalogEpoch })
     const { scope } = joinScope({ purpose: 'publisher', topic, scopeId: id, mode: 'followed', publisherId: id, descriptor, binding })
     const result = { status: 'following', publisherId: id, catalogBootstrapKey: hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey'), topic: stableScopeDiagnostic(scope) }
     followedPublishers.set(id, { scope, result })
@@ -1660,7 +1662,7 @@ export function createScopedNetworkRuntime (options = {}) {
     const descriptor = normalizeNamespace(binding.namespaceDescriptor || descriptorEntry?.value, protocolMajor)
     if (b4a.toString(descriptor.publisherId, 'hex') !== id) fail('local catalog namespace mismatch')
     if (hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey') !== b4a.toString(descriptor.catalogBootstrapKey, 'hex')) fail('local catalog binding mismatch')
-    const topic = derivePublisherTopic({ publisherId: id, catalogEpoch: descriptor.catalogEpoch })
+    const topic = derivePublisherTopic({ protocolMajor, publisherId: id, catalogEpoch: descriptor.catalogEpoch })
     const { scope } = joinScope({ purpose: 'publisher', topic, scopeId: id, mode: 'local', publisherId: id, descriptor, binding })
     const result = { status: 'published', publisherId: id, catalogBootstrapKey: hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey'), topic: stableScopeDiagnostic(scope) }
     localPublishers.set(id, { scope, result })

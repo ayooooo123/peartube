@@ -1,0 +1,3 @@
+# SDD ledger — plan: docs/superpowers/plans/2026-08-09-04-index-schema.md
+Plan preflight: no plan conflict. Task 1 must preserve HyperDB upsert semantics internally for Task 2 transactions while exposing strict validated create semantics for its conformance interface; every collection primary key begins with publisherId and every derived row carries sourceRecordRef. Normalized token-prefix lookup uses bounded relationship-edge rows rather than an array or duplicate database convention.
+Task 1: complete (commit 7fd1d9c2f80733cd8dfcbcb894ac363f9afd19b5 before parent ledger amend; fix rounds 5/5; final review clean; parent proof 15/15 Node subtests)

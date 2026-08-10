@@ -44,6 +44,13 @@ function normalizeEntry(entry = {}, previous = null, mediaByteLength = 0) {
   return out
 }
 
+export function assertSegmentIndexMatchesAsset(segmentIndex, assetCore) {
+  if (segmentIndex.mediaByteLength !== assetCore.byteLength) {
+    throw new Error('segment index media byte length must equal asset byte length')
+  }
+  return segmentIndex
+}
+
 function unsignedSegmentIndexDescriptor(input = {}) {
   const mediaByteLength = normalizeNonNegativeInteger(input.mediaByteLength, 'mediaByteLength', 0)
   const entries = input.entries || []

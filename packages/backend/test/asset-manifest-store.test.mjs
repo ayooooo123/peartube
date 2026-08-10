@@ -6,6 +6,7 @@ import {
   createAssetManifestStore,
   createPublicationManifest,
   createRenditionDescriptor,
+  createStaticAssetManifest,
 } from '../src/assets/index.js'
 
 function hex(byte) {
@@ -15,11 +16,19 @@ function hex(byte) {
 const publisher = crypto.keyPair(Buffer.alloc(32, 1))
 const otherPublisher = crypto.keyPair(Buffer.alloc(32, 2))
 
-function rendition(byte = 3) {
+function assetRef(byte = 3, byteLength = 300000) {
+  return createStaticAssetManifest({
+    treeHash: b4a.alloc(32, byte),
+    blockLength: Math.ceil(byteLength / (256 * 1024)),
+    byteLength,
+  })
+}
+
+function rendition(byte = 3, purpose = 'original') {
   return createRenditionDescriptor({
-    purpose: 'original',
+    purpose,
     format: 'video/mp4',
-    core: { key: hex(byte), length: 12, treeHash: hex(byte + 1), byteLength: 2048 },
+    core: assetRef(byte),
   })
 }
 
@@ -37,6 +46,38 @@ test('manifest store indexes by publication, publisher sequence, rendition, and 
   t.alike(store.getManifestsByRendition(rendition(3).renditionId).map(row => row.publicationId), [first.publicationId, second.publicationId])
   t.alike(store.getCurrentPublisherHead(Buffer.from(publisher.publicKey).toString('hex')).publicationId, second.publicationId)
   t.alike(store.getSupersedingManifests(first.body.manifestId).map(row => row.publicationId), [second.publicationId])
+})
+
+test('manifest store deduplicates asset references per publication without conflating publishers', async (t) => {
+  const store = createAssetManifestStore({ trustedSigners: [publisher.publicKey, otherPublisher.publicKey] })
+  const shared = assetRef(8)
+  const first = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    sequence: 1,
+    title: 'First',
+    renditions: [
+      createRenditionDescriptor({ purpose: 'original', format: 'video/mp4', core: shared }),
+      createRenditionDescriptor({ purpose: 'preview', format: 'video/mp4', core: shared }),
+    ],
+    keyPair: publisher,
+  })
+  const second = createPublicationManifest({
+    publisherId: otherPublisher.publicKey,
+    sequence: 1,
+    title: 'Second',
+    renditions: [createRenditionDescriptor({ purpose: 'original', format: 'video/mp4', core: shared })],
+    keyPair: otherPublisher,
+  })
+
+  await store.ingestManifest(first)
+  await store.ingestManifest(second)
+
+  const rows = store.getManifestsByAssetId(shared.assetId)
+  t.alike(rows.map(row => row.publicationId), [first.publicationId, second.publicationId])
+  t.alike(rows.map(row => row.body.publisherId), [
+    b4a.toString(publisher.publicKey, 'hex'),
+    b4a.toString(otherPublisher.publicKey, 'hex'),
+  ])
 })
 
 test('manifest store rejects conflicting bytes and untrusted publishers while preserving reusable renditions', async (t) => {

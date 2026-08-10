@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "name": "sourceRecord",
@@ -364,6 +364,80 @@
           "required": true,
           "type": "string",
           "version": 1
+        }
+      ]
+    },
+    {
+      "name": "usageCounter",
+      "namespace": "peartubeIndex",
+      "compact": true,
+      "flagsPosition": 5,
+      "fields": [
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "scope",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "bucketId",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "retainedBytes",
+          "required": true,
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "rows",
+          "required": true,
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "shardId",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "trustClass",
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "admissionTombstone",
+      "namespace": "peartubeIndex",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "reason",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "evictedAt",
+          "required": true,
+          "type": "uint64",
+          "version": 2
         }
       ]
     }

@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "offset": 0,
   "schema": [
     {
@@ -461,6 +461,55 @@
         "publisherId",
         "sourceRecordRef",
         "toId"
+      ]
+    },
+    {
+      "name": "usageCounters",
+      "namespace": "peartubeIndex",
+      "id": 26,
+      "type": 1,
+      "version": 2,
+      "versionField": null,
+      "indexes": [
+        "@peartubeIndex/usage-by-scope"
+      ],
+      "schema": "@peartubeIndex/usageCounter",
+      "derived": false,
+      "key": [
+        "publisherId",
+        "scope",
+        "bucketId"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "admissionTombstones",
+      "namespace": "peartubeIndex",
+      "id": 27,
+      "type": 1,
+      "version": 2,
+      "versionField": null,
+      "indexes": [],
+      "schema": "@peartubeIndex/admissionTombstone",
+      "derived": false,
+      "key": [
+        "publisherId"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "usage-by-scope",
+      "namespace": "peartubeIndex",
+      "id": 28,
+      "type": 2,
+      "version": 2,
+      "collection": "@peartubeIndex/usageCounters",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "scope",
+        "bucketId",
+        "publisherId"
       ]
     }
   ]

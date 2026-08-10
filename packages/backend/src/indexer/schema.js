@@ -4,6 +4,7 @@ import { RECORD_LIMITS } from '../records/index.js'
 import indexDbDefinition from './index-hyperdb-spec/hyperdb/index.js'
 
 const PREFIX = '@peartubeIndex/'
+export const CONTROL_PUBLISHER_ID = '0'.repeat(64)
 
 export const COLLECTIONS = Object.freeze({
   sourceRecords: `${PREFIX}sourceRecords`,
@@ -13,7 +14,19 @@ export const COLLECTIONS = Object.freeze({
   renditionProjections: `${PREFIX}renditionProjections`,
   availabilityProjections: `${PREFIX}availabilityProjections`,
   relationshipEdges: `${PREFIX}relationshipEdges`,
+  usageCounters: `${PREFIX}usageCounters`,
+  admissionTombstones: `${PREFIX}admissionTombstones`,
 })
+
+export const DATA_COLLECTIONS = Object.freeze([
+  COLLECTIONS.sourceRecords,
+  COLLECTIONS.sourceCursors,
+  COLLECTIONS.externalReferenceProjections,
+  COLLECTIONS.publicationProjections,
+  COLLECTIONS.renditionProjections,
+  COLLECTIONS.availabilityProjections,
+  COLLECTIONS.relationshipEdges,
+])
 
 export const INDEXES = Object.freeze({
   externalReferenceExact: `${PREFIX}external-reference-exact`,
@@ -28,6 +41,7 @@ export const INDEXES = Object.freeze({
   relationshipByFrom: `${PREFIX}relationship-by-from`,
   relationshipByTo: `${PREFIX}relationship-by-to`,
   tokenPrefix: `${PREFIX}token-prefix`,
+  usageByScope: `${PREFIX}usage-by-scope`,
   publisherPrefix: Object.freeze({
     sourceRecords: `${PREFIX}source-records-by-publisher`,
     sourceCursors: `${PREFIX}source-cursors-by-publisher`,
@@ -48,6 +62,8 @@ export const INDEX_KEY_FIELDS = Object.freeze({
   [COLLECTIONS.renditionProjections]: frozenKey('publisherId', 'sourceRecordRef', 'renditionId'),
   [COLLECTIONS.availabilityProjections]: frozenKey('publisherId', 'sourceRecordRef', 'assetId', 'observerId', 'observedAt'),
   [COLLECTIONS.relationshipEdges]: frozenKey('publisherId', 'sourceRecordRef', 'relationType', 'fromId', 'toId'),
+  [COLLECTIONS.usageCounters]: frozenKey('publisherId', 'scope', 'bucketId'),
+  [COLLECTIONS.admissionTombstones]: frozenKey('publisherId'),
   [INDEXES.externalReferenceExact]: frozenKey('namespace', 'normalizedIdentifier', 'publisherId', 'sourceRecordRef', 'entityKind', 'entityId'),
   [INDEXES.entityExact]: frozenKey('entityKind', 'entityId', 'publisherId', 'sourceRecordRef', 'namespace', 'normalizedIdentifier'),
   [INDEXES.publicationExact]: frozenKey('publicationId', 'publisherId', 'sourceRecordRef'),
@@ -60,6 +76,7 @@ export const INDEX_KEY_FIELDS = Object.freeze({
   [INDEXES.relationshipByFrom]: frozenKey('relationType', 'fromId', 'publisherId', 'sourceRecordRef', 'toId'),
   [INDEXES.relationshipByTo]: frozenKey('relationType', 'toId', 'publisherId', 'sourceRecordRef', 'fromId'),
   [INDEXES.tokenPrefix]: frozenKey('relationType', 'fromId', 'publisherId', 'sourceRecordRef', 'toId'),
+  [INDEXES.usageByScope]: frozenKey('scope', 'bucketId', 'publisherId'),
   [INDEXES.publisherPrefix.sourceRecords]: frozenKey('publisherId', 'catalogEpoch', 'recordId'),
   [INDEXES.publisherPrefix.sourceCursors]: frozenKey('publisherId', 'catalogEpoch'),
   [INDEXES.publisherPrefix.externalReferenceProjections]: frozenKey('publisherId', 'sourceRecordRef', 'namespace', 'normalizedIdentifier', 'entityKind', 'entityId'),
@@ -88,12 +105,15 @@ export const INDEX_SCHEMA_LIMITS = Object.freeze({
   maxRelationshipTypeBytes: 64,
   maxRelationEndpointBytes: 512,
   maxDescriptorRefBytes: 512,
+  maxControlIdBytes: 256,
+  maxAdmissionReasonBytes: 512,
 })
 
 const UINT_MAX = Number.MAX_SAFE_INTEGER
 const HEX_32 = /^[0-9a-f]{64}$/
 const PROJECTION_STATES = new Set(['active', 'retracted', 'superseded'])
 const AVAILABILITY_STATES = new Set(['available', 'unavailable', 'unknown'])
+const CONTROL_SCOPES = new Set(['global', 'shard', 'publisher', 'trustClass', 'tombstones'])
 const RELATION_TYPES = new Set([
   'work-edition', 'work-rendition', 'publication-work', 'publication-edition',
   'publication-rendition', 'rendition-asset', 'source-projection', 'title-token',
@@ -172,6 +192,26 @@ const DEFINITIONS = Object.freeze({
       toId: field(INDEX_SCHEMA_LIMITS.maxRelationEndpointBytes),
     },
   },
+  [COLLECTIONS.usageCounters]: {
+    key: ['publisherId', 'scope', 'bucketId'],
+    fields: {
+      publisherId: identity(),
+      scope: { kind: 'enum', values: CONTROL_SCOPES, required: true },
+      bucketId: field(INDEX_SCHEMA_LIMITS.maxControlIdBytes),
+      retainedBytes: uint(),
+      rows: uint(),
+      shardId: field(INDEX_SCHEMA_LIMITS.maxControlIdBytes, { required: false }),
+      trustClass: field(INDEX_SCHEMA_LIMITS.maxControlIdBytes, { required: false }),
+    },
+  },
+  [COLLECTIONS.admissionTombstones]: {
+    key: ['publisherId'],
+    fields: {
+      publisherId: identity(),
+      reason: field(INDEX_SCHEMA_LIMITS.maxAdmissionReasonBytes),
+      evictedAt: uint(),
+    },
+  },
 })
 
 function invalid(name, reason) {
@@ -218,6 +258,25 @@ export function validateIndexerRecord(collection, record) {
   }
   for (const [name, spec] of Object.entries(definition.fields)) validateField(name, record[name], spec)
   return record
+}
+
+const DATA_COLLECTION_SET = new Set(DATA_COLLECTIONS)
+
+export function measureEncodedIndexerRow(collection, record) {
+  if (!DATA_COLLECTION_SET.has(collection)) throw new TypeError('encoded charge requires a data collection')
+  validateIndexerRecord(collection, record)
+  const generated = indexDbDefinition.resolveCollection(collection)
+  const collectionVersion = Math.min(indexDbDefinition.versions.db, generated.version)
+  let bytes = generated.encodeKey(record).byteLength
+    + generated.encodeValue(indexDbDefinition.versions.schema, collectionVersion, record).byteLength
+  for (const index of generated.indexes) {
+    const pointer = index.encodeValue(record)
+    for (const key of index.encodeIndexKeys(record, null)) {
+      bytes += key.byteLength + pointer.byteLength
+      if (!Number.isSafeInteger(bytes)) throw new RangeError('encoded row charge exceeds the safe integer range')
+    }
+  }
+  return bytes
 }
 
 const RANGE_KEYS = new Set(['gt', 'gte', 'lt', 'lte'])

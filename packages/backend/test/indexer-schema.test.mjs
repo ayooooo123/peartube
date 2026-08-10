@@ -6,11 +6,15 @@ import { join } from 'node:path'
 
 import Corestore from 'corestore'
 import HypercoreID from 'hypercore-id-encoding'
+import indexDbDefinition from '../src/indexer/index-hyperdb-spec/hyperdb/index.js'
 import {
   COLLECTIONS,
+  CONTROL_PUBLISHER_ID,
+  DATA_COLLECTIONS,
   INDEXES,
   INDEX_KEY_FIELDS,
   INDEX_SCHEMA_LIMITS,
+  measureEncodedIndexerRow,
   openIndexerDatabase,
 } from '../src/indexer/schema.js'
 
@@ -86,7 +90,7 @@ function records(publisherId = PUBLISHER_A) {
 test('all seven normalized collections round trip publisher and source attribution', async () => {
   await withDatabase(async (db) => {
     const expected = records()
-    assert.deepEqual(Object.keys(COLLECTIONS).sort(), Object.keys(expected).sort())
+    assert.deepEqual([...DATA_COLLECTIONS].sort(), Object.keys(expected).map(name => COLLECTIONS[name]).sort())
     for (const [shortName, record] of Object.entries(expected)) {
       await db.insert(COLLECTIONS[shortName], record)
       assert.deepEqual(await db.get(COLLECTIONS[shortName], record), record)
@@ -328,6 +332,20 @@ test('every direct index selector requires a non-empty contiguous prefix of its 
       await db.insert(COLLECTIONS[name], a[name])
       await db.insert(COLLECTIONS[name], b[name])
     }
+    await db.insert(COLLECTIONS.usageCounters, {
+      publisherId: PUBLISHER_A,
+      scope: 'publisher',
+      bucketId: 'usage',
+      retainedBytes: 123,
+      rows: 4,
+      shardId: 'default',
+      trustClass: 'untrusted',
+    })
+    await db.insert(COLLECTIONS.admissionTombstones, {
+      publisherId: PUBLISHER_A,
+      reason: 'local capacity pressure',
+      evictedAt: 100,
+    })
 
     const firstFieldSelectors = {
       [COLLECTIONS.sourceRecords]: { publisherId: PUBLISHER_A },
@@ -337,6 +355,8 @@ test('every direct index selector requires a non-empty contiguous prefix of its 
       [COLLECTIONS.renditionProjections]: { publisherId: PUBLISHER_A },
       [COLLECTIONS.availabilityProjections]: { publisherId: PUBLISHER_A },
       [COLLECTIONS.relationshipEdges]: { publisherId: PUBLISHER_A },
+      [COLLECTIONS.usageCounters]: { publisherId: PUBLISHER_A },
+      [COLLECTIONS.admissionTombstones]: { publisherId: PUBLISHER_A },
       [INDEXES.externalReferenceExact]: { namespace: 'imdb' },
       [INDEXES.entityExact]: { entityKind: 'work' },
       [INDEXES.publicationExact]: { publicationId: PUBLICATION_ID },
@@ -349,6 +369,7 @@ test('every direct index selector requires a non-empty contiguous prefix of its 
       [INDEXES.relationshipByFrom]: { relationType: 'work-rendition' },
       [INDEXES.relationshipByTo]: { relationType: 'work-rendition' },
       [INDEXES.tokenPrefix]: { relationType: 'work-rendition' },
+      [INDEXES.usageByScope]: { scope: 'publisher' },
       [INDEXES.publisherPrefix.sourceRecords]: { publisherId: PUBLISHER_A },
       [INDEXES.publisherPrefix.sourceCursors]: { publisherId: PUBLISHER_A },
       [INDEXES.publisherPrefix.externalReferenceProjections]: { publisherId: PUBLISHER_A },
@@ -397,6 +418,73 @@ test('internal transaction seam validates then atomically upserts an admitted so
     })
     assert.equal((await db.get(COLLECTIONS.publicationProjections, initial)).manifestId, REPLACEMENT_MANIFEST_ID)
     assert.ok(await db.get(COLLECTIONS.relationshipEdges, records().relationshipEdges))
+  })
+})
+
+test('generated local-control records are bounded and data row charges include all encoded index entries', async () => {
+  await withDatabase(async (db) => {
+    const usage = {
+      publisherId: PUBLISHER_A,
+      scope: 'publisher',
+      bucketId: 'usage',
+      retainedBytes: 123,
+      rows: 4,
+      shardId: 'default',
+      trustClass: 'untrusted',
+    }
+    const tombstone = {
+      publisherId: PUBLISHER_B,
+      reason: 'local capacity pressure',
+      evictedAt: 100,
+    }
+    assert.equal(INDEX_KEY_FIELDS[COLLECTIONS.usageCounters][0], 'publisherId')
+    assert.equal(INDEX_KEY_FIELDS[COLLECTIONS.admissionTombstones][0], 'publisherId')
+    await db.insert(COLLECTIONS.usageCounters, usage)
+    await db.insert(COLLECTIONS.admissionTombstones, tombstone)
+    assert.deepEqual(await db.get(COLLECTIONS.usageCounters, usage), usage)
+    assert.deepEqual(await db.get(COLLECTIONS.admissionTombstones, tombstone), tombstone)
+    await assert.rejects(db.insert(COLLECTIONS.admissionTombstones, {
+      ...tombstone,
+      publisherId: PUBLISHER_C,
+      reason: 'x'.repeat(INDEX_SCHEMA_LIMITS.maxAdmissionReasonBytes + 1),
+    }), /UTF-8 byte limit/)
+
+    const record = records().externalReferenceProjections
+    const generated = indexDbDefinition.resolveCollection(COLLECTIONS.externalReferenceProjections)
+    const collectionVersion = Math.min(indexDbDefinition.versions.db, generated.version)
+    let expected = generated.encodeKey(record).byteLength
+      + generated.encodeValue(indexDbDefinition.versions.schema, collectionVersion, record).byteLength
+    for (const index of generated.indexes) {
+      const pointer = index.encodeValue(record)
+      for (const key of index.encodeIndexKeys(record, null)) expected += key.byteLength + pointer.byteLength
+    }
+    assert.equal(measureEncodedIndexerRow(COLLECTIONS.externalReferenceProjections, record), expected)
+    assert.throws(() => measureEncodedIndexerRow(COLLECTIONS.usageCounters, usage), /data collection/)
+    assert.equal(CONTROL_PUBLISHER_ID, '0'.repeat(64))
+  })
+})
+
+test('a failed exclusive callback rolls data cursor and local-control records back together', async () => {
+  await withDatabase(async (db) => {
+    const source = records()
+    const usage = {
+      publisherId: PUBLISHER_A,
+      scope: 'publisher',
+      bucketId: 'usage',
+      retainedBytes: 10,
+      rows: 1,
+      shardId: 'default',
+      trustClass: 'untrusted',
+    }
+    await assert.rejects(db.validatedTransaction(async (tx) => {
+      await tx.upsert(COLLECTIONS.sourceRecords, source.sourceRecords)
+      await tx.upsert(COLLECTIONS.sourceCursors, source.sourceCursors)
+      await tx.upsert(COLLECTIONS.usageCounters, usage)
+      throw new Error('forced transaction callback failure')
+    }), /forced transaction callback failure/)
+    assert.equal(await db.get(COLLECTIONS.sourceRecords, source.sourceRecords), null)
+    assert.equal(await db.get(COLLECTIONS.sourceCursors, source.sourceCursors), null)
+    assert.equal(await db.get(COLLECTIONS.usageCounters, usage), null)
   })
 })
 

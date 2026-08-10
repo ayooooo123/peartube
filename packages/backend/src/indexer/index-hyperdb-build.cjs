@@ -49,6 +49,14 @@ const models = {
     required('publisherId'), required('sourceRecordRef'), required('relationType'),
     required('fromId'), required('toId'),
   ],
+  usageCounter: [
+    required('publisherId'), required('scope'), required('bucketId'),
+    required('retainedBytes', 'uint64'), required('rows', 'uint64'),
+    optional('shardId'), optional('trustClass'),
+  ],
+  admissionTombstone: [
+    required('publisherId'), required('reason'), required('evictedAt', 'uint64'),
+  ],
 }
 
 for (const [name, fields] of Object.entries(models)) {
@@ -66,6 +74,8 @@ const collections = [
   ['renditionProjections', 'renditionProjection', ['publisherId', 'sourceRecordRef', 'renditionId']],
   ['availabilityProjections', 'availabilityProjection', ['publisherId', 'sourceRecordRef', 'assetId', 'observerId', 'observedAt']],
   ['relationshipEdges', 'relationshipEdge', ['publisherId', 'sourceRecordRef', 'relationType', 'fromId', 'toId']],
+  ['usageCounters', 'usageCounter', ['publisherId', 'scope', 'bucketId']],
+  ['admissionTombstones', 'admissionTombstone', ['publisherId']],
 ]
 for (const [name, model, key] of collections) {
   indexDb.collections.register({ name, schema: `@${NAMESPACE}/${model}`, key })
@@ -91,6 +101,7 @@ const indexes = [
   ['relationship-by-from', 'relationshipEdges', ['relationType', 'fromId', 'publisherId', 'sourceRecordRef', 'toId']],
   ['relationship-by-to', 'relationshipEdges', ['relationType', 'toId', 'publisherId', 'sourceRecordRef', 'fromId']],
   ['token-prefix', 'relationshipEdges', ['relationType', 'fromId', 'publisherId', 'sourceRecordRef', 'toId']],
+  ['usage-by-scope', 'usageCounters', ['scope', 'bucketId', 'publisherId']],
 ]
 for (const [name, collection, key] of indexes) {
   indexDb.indexes.register({ name, collection: `@${NAMESPACE}/${collection}`, unique: false, key })

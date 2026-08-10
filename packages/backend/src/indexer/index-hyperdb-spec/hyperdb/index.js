@@ -4,7 +4,7 @@
 import { IndexEncoder, c, b4a } from 'hyperdb/runtime'
 import { version, getEncoding, setVersion } from './messages.js'
 
-const versions = { schema: version, db: 1 }
+const versions = { schema: version, db: 2 }
 
 // '@peartubeIndex/sourceRecords' collection key
 const collection0_key = new IndexEncoder([
@@ -2139,6 +2139,225 @@ const index25 = {
 }
 collection6.indexes.push(index25)
 
+// '@peartubeIndex/usageCounters' collection key
+const collection26_key = new IndexEncoder([
+  IndexEncoder.STRING,
+  IndexEncoder.STRING,
+  IndexEncoder.STRING
+], { prefix: 26 })
+
+function collection26_indexify (record) {
+  const arr = []
+
+  const a0 = record.publisherId
+  if (a0 === undefined) return arr
+  arr.push(a0)
+
+  const a1 = record.scope
+  if (a1 === undefined) return arr
+  arr.push(a1)
+
+  const a2 = record.bucketId
+  if (a2 === undefined) return arr
+  arr.push(a2)
+
+  return arr
+}
+
+// '@peartubeIndex/usageCounters' value encoding
+const collection26_enc = getEncoding('@peartubeIndex/usageCounter/hyperdb#26')
+
+// '@peartubeIndex/usageCounters' reconstruction function
+function collection26_reconstruct (schemaVersion, keyBuf, valueBuf) {
+  const key = collection26_key.decode(keyBuf)
+  setVersion(schemaVersion)
+  const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf }
+  const type = c.uint.decode(state)
+  if (type !== 0) throw new Error('Unknown collection type: ' + type)
+  collection26.decodedVersion = c.uint.decode(state)
+  const record = collection26_enc.decode(state)
+  record.publisherId = key[0]
+  record.scope = key[1]
+  record.bucketId = key[2]
+  return record
+}
+// '@peartubeIndex/usageCounters' key reconstruction function
+function collection26_reconstruct_key (keyBuf) {
+  const key = collection26_key.decode(keyBuf)
+  return {
+    publisherId: key[0],
+    scope: key[1],
+    bucketId: key[2]
+  }
+}
+
+// '@peartubeIndex/usageCounters'
+const collection26 = {
+  name: '@peartubeIndex/usageCounters',
+  id: 26,
+  version: 2,
+  encodeKey (record) {
+    const key = [record.publisherId, record.scope, record.bucketId]
+    return collection26_key.encode(key)
+  },
+  encodeKeyRange ({ gt, lt, gte, lte } = {}) {
+    return collection26_key.encodeRange({
+      gt: gt ? collection26_indexify(gt) : null,
+      lt: lt ? collection26_indexify(lt) : null,
+      gte: gte ? collection26_indexify(gte) : null,
+      lte: lte ? collection26_indexify(lte) : null
+    })
+  },
+  encodeValue (schemaVersion, collectionVersion, record) {
+    setVersion(schemaVersion)
+    const state = { start: 0, end: 2, buffer: null }
+    collection26_enc.preencode(state, record)
+    state.buffer = b4a.allocUnsafe(state.end)
+    state.buffer[state.start++] = 0
+    state.buffer[state.start++] = collectionVersion
+    collection26_enc.encode(state, record)
+    return state.buffer
+  },
+  trigger: null,
+  reconstruct: collection26_reconstruct,
+  reconstructKey: collection26_reconstruct_key,
+  indexes: [],
+  decodedVersion: 0
+}
+
+// '@peartubeIndex/admissionTombstones' collection key
+const collection27_key = new IndexEncoder([
+  IndexEncoder.STRING
+], { prefix: 27 })
+
+function collection27_indexify (record) {
+  const a = record.publisherId
+  return a === undefined ? [] : [a]
+}
+
+// '@peartubeIndex/admissionTombstones' value encoding
+const collection27_enc = getEncoding('@peartubeIndex/admissionTombstone/hyperdb#27')
+
+// '@peartubeIndex/admissionTombstones' reconstruction function
+function collection27_reconstruct (schemaVersion, keyBuf, valueBuf) {
+  const key = collection27_key.decode(keyBuf)
+  setVersion(schemaVersion)
+  const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf }
+  const type = c.uint.decode(state)
+  if (type !== 0) throw new Error('Unknown collection type: ' + type)
+  collection27.decodedVersion = c.uint.decode(state)
+  const record = collection27_enc.decode(state)
+  record.publisherId = key[0]
+  return record
+}
+// '@peartubeIndex/admissionTombstones' key reconstruction function
+function collection27_reconstruct_key (keyBuf) {
+  const key = collection27_key.decode(keyBuf)
+  return {
+    publisherId: key[0]
+  }
+}
+
+// '@peartubeIndex/admissionTombstones'
+const collection27 = {
+  name: '@peartubeIndex/admissionTombstones',
+  id: 27,
+  version: 2,
+  encodeKey (record) {
+    const key = [record.publisherId]
+    return collection27_key.encode(key)
+  },
+  encodeKeyRange ({ gt, lt, gte, lte } = {}) {
+    return collection27_key.encodeRange({
+      gt: gt ? collection27_indexify(gt) : null,
+      lt: lt ? collection27_indexify(lt) : null,
+      gte: gte ? collection27_indexify(gte) : null,
+      lte: lte ? collection27_indexify(lte) : null
+    })
+  },
+  encodeValue (schemaVersion, collectionVersion, record) {
+    setVersion(schemaVersion)
+    const state = { start: 0, end: 2, buffer: null }
+    collection27_enc.preencode(state, record)
+    state.buffer = b4a.allocUnsafe(state.end)
+    state.buffer[state.start++] = 0
+    state.buffer[state.start++] = collectionVersion
+    collection27_enc.encode(state, record)
+    return state.buffer
+  },
+  trigger: null,
+  reconstruct: collection27_reconstruct,
+  reconstructKey: collection27_reconstruct_key,
+  indexes: [],
+  decodedVersion: 0
+}
+
+// '@peartubeIndex/usage-by-scope' collection key
+const index28_key = new IndexEncoder([
+  IndexEncoder.STRING,
+  IndexEncoder.STRING,
+  IndexEncoder.STRING,
+  IndexEncoder.STRING,
+  IndexEncoder.STRING,
+  IndexEncoder.STRING
+], { prefix: 28 })
+
+function index28_indexify (record) {
+  const arr = []
+
+  const a0 = record.scope
+  if (a0 === undefined) return arr
+  arr.push(a0)
+
+  const a1 = record.bucketId
+  if (a1 === undefined) return arr
+  arr.push(a1)
+
+  const a2 = record.publisherId
+  if (a2 === undefined) return arr
+  arr.push(a2)
+
+  const a3 = record.publisherId
+  if (a3 === undefined) return arr
+  arr.push(a3)
+
+  const a4 = record.scope
+  if (a4 === undefined) return arr
+  arr.push(a4)
+
+  const a5 = record.bucketId
+  if (a5 === undefined) return arr
+  arr.push(a5)
+
+  return arr
+}
+
+// '@peartubeIndex/usage-by-scope'
+const index28 = {
+  name: '@peartubeIndex/usage-by-scope',
+  version: 2,
+  id: 28,
+  encodeKey (record) {
+    return index28_key.encode(index28_indexify(record))
+  },
+  encodeKeyRange ({ gt, lt, gte, lte } = {}) {
+    return index28_key.encodeRange({
+      gt: gt ? index28_indexify(gt) : null,
+      lt: lt ? index28_indexify(lt) : null,
+      gte: gte ? index28_indexify(gte) : null,
+      lte: lte ? index28_indexify(lte) : null
+    })
+  },
+  encodeValue: (record) => index28.collection.encodeKey(record),
+  encodeIndexKeys (record, context) {
+    return [index28_key.encode([record.scope, record.bucketId, record.publisherId, record.publisherId, record.scope, record.bucketId])]
+  },
+  reconstruct: (keyBuf, valueBuf) => valueBuf,
+  offset: collection26.indexes.length,
+  collection: collection26
+}
+collection26.indexes.push(index28)
+
 const collections = [
   collection0,
   collection1,
@@ -2146,7 +2365,9 @@ const collections = [
   collection3,
   collection4,
   collection5,
-  collection6
+  collection6,
+  collection26,
+  collection27
 ]
 
 const indexes = [
@@ -2168,7 +2389,8 @@ const indexes = [
   index22,
   index23,
   index24,
-  index25
+  index25,
+  index28
 ]
 
 export default { versions, collections, indexes, resolveCollection, resolveIndex }
@@ -2182,6 +2404,8 @@ function resolveCollection (name) {
     case '@peartubeIndex/renditionProjections': return collection4
     case '@peartubeIndex/availabilityProjections': return collection5
     case '@peartubeIndex/relationshipEdges': return collection6
+    case '@peartubeIndex/usageCounters': return collection26
+    case '@peartubeIndex/admissionTombstones': return collection27
     default: return null
   }
 }
@@ -2207,6 +2431,7 @@ function resolveIndex (name) {
     case '@peartubeIndex/relationship-by-from': return index23
     case '@peartubeIndex/relationship-by-to': return index24
     case '@peartubeIndex/token-prefix': return index25
+    case '@peartubeIndex/usage-by-scope': return index28
     default: return null
   }
 }

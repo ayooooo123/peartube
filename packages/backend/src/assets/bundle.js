@@ -17,6 +17,7 @@ const MAX_SOURCE_NAME_BYTES = 512
 const MAX_SOURCE_PATH_BYTES = 4096
 const SOURCE_KINDS = new Set(['public-torrent', 'release', 'folder', 'archive'])
 const PRIVATE_FIELD = /(?:passkey|cookie|credential|password|secret|token|signedurl|sourceurl|trackerurl|trackerid|debrid|sourceheader|authorization|locator|localfilepath|sourcefilepath|^headers?$|^urls?$|^uris?$)/i
+const SCP_LOCATOR = /^(?:[^/\\\s:@]+@(?:\[[^\]\s]+\]|[^/\\\s:]+)|\[[^\]\s]+\]|(?:\d{1,3}\.){3}\d{1,3}):[^\s]/
 
 function assertNoPrivateSourceMaterial(value, state = { depth: 0, nodes: 0, seen: new Set() }) {
   if (value == null || typeof value !== 'object' || b4a.isBuffer(value) || value instanceof Uint8Array) return
@@ -54,6 +55,7 @@ function normalizeSourceName(value) {
   if (sourceName == null) return null
   if (sourceName.includes('/') ||
       sourceName.includes('\\') ||
+      SCP_LOCATOR.test(sourceName) ||
       /^[a-z][a-z0-9+.-]*:[^\s]/i.test(sourceName)) {
     throw new Error('sourceName must not contain a source locator')
   }
@@ -64,6 +66,7 @@ function normalizeSourcePath(value) {
   const raw = boundedText(value, 'sourcePath', MAX_SOURCE_PATH_BYTES, true)
   if (raw.startsWith('/') ||
       raw.startsWith('\\') ||
+      SCP_LOCATOR.test(raw) ||
       /^[a-z]:/i.test(raw) ||
       /^[a-z][a-z0-9+.-]*:[^\s]/i.test(raw)) {
     throw new Error('sourcePath must be a relative path without locator material')

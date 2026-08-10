@@ -235,6 +235,11 @@ test('bundle manifests reject private locators, credentials, and unbounded sourc
     '//server/share/episode.mkv',
     'https://cdn.invalid/episode.mkv',
     'urn:private:episode',
+    'alice@10.0.0.4:season/episode.mkv',
+    'alice@host:private/episode.mkv',
+    '10.0.0.4:private/episode.mkv',
+    '[2001:db8::1]:private/episode.mkv',
+    'alice@[2001:db8::1]:private/episode.mkv',
   ]
   for (const sourcePath of privatePaths) {
     t.exception(() => assets.createAssetBundleManifest({
@@ -251,10 +256,22 @@ test('bundle manifests reject private locators, credentials, and unbounded sourc
     'https://tracker.invalid/season',
     'urn:private:season',
     'private/season',
+    'alice@10.0.0.4:season',
+    'alice@host:season',
+    '10.0.0.4:season',
+    '[2001:db8::1]:season',
+    'alice@[2001:db8::1]:season',
   ]
   for (const sourceName of privateNames) {
     t.exception(() => assets.createAssetBundleManifest({ ...base, sourceName }), /sourceName|locator/i)
   }
+  const ordinary = assets.createAssetBundleManifest({
+    sourceKind: 'folder',
+    sourceName: 'Show Season: 01',
+    entries: [{ ...entry, sourcePath: 'Season 01/Show: Episode.mkv' }],
+  })
+  t.is(ordinary.sourceName, 'Show Season: 01')
+  t.is(ordinary.entries[0].sourcePath, 'Season 01/Show: Episode.mkv')
 })
 
 test('bundle source coordinates reject nonadjacent duplicate paths and all duplicate indexes', (t) => {

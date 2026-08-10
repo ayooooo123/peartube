@@ -368,7 +368,7 @@ test('MultiWriterChannel round-trips the private immutable publication reconcili
   })
 })
 
-test('MultiWriterChannel publishes an uncertain candidate before committing its private state', async () => {
+test('MultiWriterChannel keeps an uncertain candidate private when loser suppression fails', async () => {
   await withChannel(async (channel) => {
     await channel.addVideo({
       id: 'uncertain-finalization',
@@ -376,15 +376,12 @@ test('MultiWriterChannel publishes an uncertain candidate before committing its 
       publicationState: 'commitUncertain',
     })
 
-    let publicSyncAttempts = 0
-    channel._syncPublicBeeFromFeedChannel = async (options = {}) => {
-      publicSyncAttempts++
-      assert.equal(options.throwOnError, true)
-      assert.equal(
-        options.projectionVideos.find(video => video.id === 'uncertain-finalization')?.publicationState,
-        'published',
-      )
-      if (publicSyncAttempts === 1) throw new Error('injected public sync failure')
+    let suppressionAttempts = 0
+    const suppressResolvedLosers = channel.publicBee._suppressResolvedLosers.bind(channel.publicBee)
+    channel.publicBee._suppressResolvedLosers = async (...args) => {
+      suppressionAttempts++
+      await suppressResolvedLosers(...args)
+      if (suppressionAttempts === 1) throw new Error('injected loser suppression failure')
     }
 
     await assert.rejects(
@@ -393,12 +390,17 @@ test('MultiWriterChannel publishes an uncertain candidate before committing its 
         { publicationState: 'published' },
         { syncPublic: true, commitAfterPublicSync: true },
       ),
-      /injected public sync failure/,
+      /injected loser suppression failure/,
     )
     assert.equal(
       (await channel.getVideo('uncertain-finalization')).publicationState,
       'commitUncertain',
       'failed public sync leaves the durable retry anchor private',
+    )
+    assert.equal(
+      await channel.publicBee.getVideo('uncertain-finalization'),
+      null,
+      'a failure after loser suppression cannot leave the uncertain candidate publicly visible',
     )
 
     await channel.updateVideo(
@@ -407,7 +409,11 @@ test('MultiWriterChannel publishes an uncertain candidate before committing its 
       { syncPublic: true, commitAfterPublicSync: true },
     )
     assert.equal((await channel.getVideo('uncertain-finalization')).publicationState, 'published')
-    assert.equal(publicSyncAttempts, 2)
+    assert.equal(
+      (await channel.publicBee.getVideo('uncertain-finalization')).publicationState,
+      'published',
+    )
+    assert.equal(suppressionAttempts, 2)
   })
 })
 

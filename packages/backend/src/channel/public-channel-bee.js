@@ -1508,12 +1508,12 @@ export class PublicChannelBee extends ReadyResource {
         claimWinners
       )
 
+      await this._suppressResolvedLosers(videos, publicCandidates, groupedClaims, claimWinners)
       await this.syncVideos(videos || [], {
         destructive: false,
         claimWinners,
         materializeContentDetails
       })
-      await this._suppressResolvedLosers(videos, publicCandidates, groupedClaims, claimWinners)
       console.log('[PublicBee] Synced from channel:', channel.keyHex?.slice(0, 16))
       return { claims, blockAllClaimPromotions }
     } catch (err) {

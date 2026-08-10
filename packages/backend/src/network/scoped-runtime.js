@@ -777,11 +777,17 @@ export function createScopedNetworkRuntime (options = {}) {
     if (!b4a.equals(c.encode(c.any, metadata), part.buffer)) {
       fail('asset proof encoding is noncanonical')
     }
-    transfer.expectedBlockBytes = scope.assetSession.validateProofMetadata({
+    const validation = scope.assetSession.validateProofMetadata({
       index: transfer.index,
       proof: metadata.proof,
       byteLength: metadata.byteLength,
     })
+    if (validation && typeof validation.then === 'function') {
+      part.buffer = null
+      transfer.preflight = validation
+      return validation
+    }
+    transfer.expectedBlockBytes = validation
     transfer.proofMetadata = metadata
     part.buffer = null
   }
@@ -854,6 +860,7 @@ export function createScopedNetworkRuntime (options = {}) {
         peerId: tracked.peerId,
         proof: null,
         proofMetadata: null,
+        preflight: null,
         expectedBlockBytes: null,
         block: null,
         applying: false,
@@ -862,8 +869,13 @@ export function createScopedNetworkRuntime (options = {}) {
     }
     if (transfer.transferId !== response.transferId) fail('asset block response transferId changed')
     if (transfer.peerId !== tracked.peerId) fail('asset block response changed contributing peer')
-    if (response.kind === 'proof') receiveAssetProofPart(scope, transfer, response)
-    else receiveAssetBlockPart(transfer, response)
+    if (transfer.preflight) await transfer.preflight
+    if (response.kind === 'proof') {
+      const preflight = receiveAssetProofPart(scope, transfer, response)
+      if (preflight) await preflight
+    } else {
+      receiveAssetBlockPart(transfer, response)
+    }
     await finishAssetResponse(scope, request, transfer)
     return { status: request.closed ? 'complete' : 'accepted' }
   }

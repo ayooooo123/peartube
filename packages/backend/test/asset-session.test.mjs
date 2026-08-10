@@ -301,6 +301,38 @@ test('proof metadata classification requires fresh upgrades but permits exact ca
   await cached.close()
 })
 
+test('conflicting proof metadata makes the handle unusable and awaits quarantine completion', async (t) => {
+  const descriptor = createStaticAssetManifest({
+    treeHash: b4a.alloc(32, 64),
+    blockLength: 2,
+    byteLength: ASSET_BLOCK_SIZE + 7,
+  })
+  const events = []
+  const session = createAssetSession({
+    coreRef: descriptor,
+    core: {
+      key: descriptor.key,
+      length: 1,
+      byteLength: ASSET_BLOCK_SIZE,
+      async ready() {},
+      async close() { events.push('close') },
+    },
+    async onQuarantine() { events.push('callback') },
+  })
+  await session.ready()
+  const rejected = t.exception(session.validateProofMetadata({
+    index: 0,
+    byteLength: ASSET_BLOCK_SIZE,
+    proof: {
+      block: { index: 0, value: null },
+      upgrade: { start: 0, length: descriptor.length },
+    },
+  }), /asset core state conflicts with the verified descriptor/)
+  t.absent(session.core, 'the conflicting handle is synchronously unavailable')
+  await rejected
+  t.alike(events, ['close', 'callback'])
+})
+
 test('closed asset sessions reject late proof application and release their owned core', async (t) => {
   const descriptor = createStaticAssetManifest({
     treeHash: b4a.alloc(32, 61),
@@ -386,11 +418,11 @@ async function until(predicate) {
   throw new Error('condition was not reached')
 }
 
-async function scopedAssetHarness(t, coreOverrides = {}) {
+async function scopedAssetHarness(t, coreOverrides = {}, descriptorOverrides = {}) {
   const descriptor = createStaticAssetManifest({
     treeHash: b4a.alloc(32, 71),
-    blockLength: 1,
-    byteLength: ASSET_BLOCK_SIZE,
+    blockLength: descriptorOverrides.blockLength ?? 1,
+    byteLength: descriptorOverrides.byteLength ?? ASSET_BLOCK_SIZE,
   })
   const publisher = crypto.keyPair(b4a.alloc(32, 72))
   const rendition = createRenditionDescriptor({
@@ -437,7 +469,7 @@ async function scopedAssetHarness(t, coreOverrides = {}) {
   const assetChannel = await until(() => mux.channels.find(entry => entry.spec.protocol.endsWith('/asset')))
   await until(() => runtime.getDiagnostics().sessions.some(session => session.purpose === 'asset' && session.state === 'active'))
   t.teardown(() => runtime.close())
-  return { assetChannel, descriptor, runtime }
+  return { assetChannel, core, descriptor, runtime }
 }
 
 function sentAssetRequests(assetChannel) {
@@ -565,6 +597,94 @@ test('fresh scoped receivers reject canonical no-upgrade proof metadata before b
   await until(() => assetChannel.channel.closed)
   await rejected
   t.is(applied, 0)
+})
+
+test('conflicting proof state quarantines before request rejection and blocks concurrent bytes', async (t) => {
+  let applied = 0
+  let closeStarted = false
+  let closeCompleted = false
+  let releaseClose
+  const closeGate = new Promise(resolve => { releaseClose = resolve })
+  const { assetChannel, core, descriptor, runtime } = await scopedAssetHarness(t, {
+    async has() { return false },
+    async applyProof() { applied++; return true },
+    async close() {
+      closeStarted = true
+      await closeGate
+      closeCompleted = true
+    },
+  }, {
+    blockLength: 2,
+    byteLength: ASSET_BLOCK_SIZE + 7,
+  })
+  const pending = runtime.requestAssetBlocks({
+    assetId: descriptor.assetId,
+    startBlock: 0,
+    endBlock: 1,
+  })
+  let settled = false
+  const observed = pending.then(
+    value => { settled = true; return { value, error: null } },
+    error => { settled = true; return { value: null, error } },
+  )
+  await until(() => sentAssetRequests(assetChannel).length === 1)
+  const [{ transferId }] = sentAssetRequests(assetChannel)
+  core.length = 1
+  core.byteLength = ASSET_BLOCK_SIZE
+  const proof = c.encode(c.any, {
+    index: 0,
+    byteLength: ASSET_BLOCK_SIZE,
+    proof: {
+      fork: 0,
+      block: { index: 0, nodes: [], value: null },
+      hash: null,
+      seek: null,
+      upgrade: { start: 0, length: descriptor.length, nodes: [], additionalNodes: [] },
+      manifest: null,
+    },
+  })
+  assetChannel.spec.messages[0].onmessage(encodePeerFrame({
+    purpose: 'asset',
+    type: 'asset-block-response',
+    requestId: 1,
+    payload: encodeAssetBlockResponse({
+      assetId: descriptor.assetId,
+      transferId,
+      startBlock: 0,
+      endBlock: 1,
+      blockIndex: 0,
+      kind: 'proof',
+      offset: 0,
+      totalBytes: proof.byteLength,
+      chunk: proof,
+    }),
+  }))
+  await until(() => closeStarted)
+  assetChannel.spec.messages[0].onmessage(encodePeerFrame({
+    purpose: 'asset',
+    type: 'asset-block-response',
+    requestId: 2,
+    payload: encodeAssetBlockResponse({
+      assetId: descriptor.assetId,
+      transferId,
+      startBlock: 0,
+      endBlock: 1,
+      blockIndex: 0,
+      kind: 'block',
+      offset: 0,
+      totalBytes: ASSET_BLOCK_SIZE,
+      chunk: b4a.from([1]),
+    }),
+  }))
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(settled, false, 'the request remains pending until quarantine close and callback complete')
+  t.is(applied, 0)
+  releaseClose()
+  const outcome = await observed
+  t.ok(outcome.error)
+  t.ok(closeCompleted)
+  await until(() => assetChannel.channel.closed)
+  t.is(applied, 0, 'concurrent block bytes never reach proof application')
 })
 
 test('delayed transfer frames and errors cannot mutate a reused range request', async (t) => {

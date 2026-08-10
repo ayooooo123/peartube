@@ -81,7 +81,11 @@ export function createAssetSession(options = {}) {
         throw new Error('fresh asset core requires an exact descriptor-length upgrade proof')
       }
     } else if (!exactCoreState(handle, coreRef)) {
-      throw new Error('asset core state conflicts with the verified descriptor')
+      const cause = new Error('asset core state conflicts with the verified descriptor')
+      return quarantineCore(handle, cause).then(
+        () => { throw cause },
+        error => { throw error },
+      )
     } else if (proof.upgrade && (proof.upgrade.length !== coreRef.length || proof.upgrade.start !== 0)) {
       throw new Error('asset block proof length does not match the verified descriptor')
     }
@@ -100,21 +104,21 @@ export function createAssetSession(options = {}) {
       if (injected) permanentlyPoisoned = true
     }
     const operation = (async () => {
-      let callbackError = null
-      try {
-        await options.onQuarantine?.({ cause, core: handle, permanent: injected })
-      } catch (error) {
-        callbackError = error
-      }
       let closeError = null
       try {
         await handle.close?.()
       } catch (error) {
         closeError = error
       }
+      let callbackError = null
+      try {
+        await options.onQuarantine?.({ cause, core: handle, permanent: injected })
+      } catch (error) {
+        callbackError = error
+      }
       if (callbackError || closeError) {
         throw new AggregateError(
-          [callbackError, closeError].filter(Boolean),
+          [closeError, callbackError].filter(Boolean),
           'asset core quarantine failed'
         )
       }
@@ -213,7 +217,8 @@ export function createAssetSession(options = {}) {
       await quarantineCore(handle, error)
       throw error
     }
-    validateProofMetadata({ index, proof, byteLength: b4a.isBuffer(value) ? value.byteLength : null })
+    const metadataValidation = validateProofMetadata({ index, proof, byteLength: b4a.isBuffer(value) ? value.byteLength : null })
+    if (metadataValidation && typeof metadataValidation.then === 'function') await metadataValidation
     if (!stateIsExact && !proof.upgrade) {
       throw new Error('fresh asset core requires an exact descriptor-length upgrade proof')
     }

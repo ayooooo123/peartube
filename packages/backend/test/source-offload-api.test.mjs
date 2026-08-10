@@ -44,13 +44,18 @@ function createHarness(options = {}) {
   const sourceCore = {
     key: Buffer.from(coreKey, 'hex'),
     async ready() {},
-    async clear(start, end) { clearCalls.push({ start, end }) },
+    async clear(start, end) {
+      clearCalls.push({ start, end })
+      options.onClear?.({ start, end })
+      if (options.clearError) throw options.clearError
+    },
     async close() {},
   }
   const api = createApi({
     ctx: {
       store: {
-        get() {
+        get(openOptions) {
+          options.onCoreOpen?.(openOptions)
           if (options.sourceCore) return options.sourceCore
           if (options.useDefaultDeletion === true) return sourceCore
           throw new Error('source core must not open when hooks are injected')
@@ -71,6 +76,7 @@ function createHarness(options = {}) {
       },
     },
     catalogRegistry: { async resolve(id) { return id === publisherId ? { catalog: { writable: true } } : null } },
+    scopedNetwork: options.scopedNetwork,
     sourceOffload: {
       async authorizePublication(input) {
         authorizationChecks++
@@ -278,6 +284,58 @@ test('source offload recollects remote-copy evidence only after acquiring the so
   })
   t.is((await harness.api.confirmSourceOffload(confirmation(assessment))).success, true)
   t.alike(harness.clearCalls(), [{ start: 0, end: rendition.core.length }])
+})
+
+test('default source offload releases its publication lease before clearing and reacquires it on deletion failure', async (t) => {
+  const successEvents = []
+  const successful = createHarness({
+    useDefaultDeletion: true,
+    onClear() { successEvents.push('clear') },
+    onCoreOpen(openOptions) {
+      t.ok(openOptions.manifest, 'static source opens with its reconstructed Hypercore manifest')
+      t.is(openOptions.writable, false)
+    },
+    scopedNetwork: {
+      async releaseAuthorizedRendition({ renditionId: releasedId, ownerId }) {
+        successEvents.push('release')
+        t.is(releasedId, renditionId)
+        t.is(ownerId, publicationId)
+        return { status: 'released', released: true }
+      },
+      async retainAuthorizedRendition() {
+        successEvents.push('retain')
+        return { status: 'retained' }
+      },
+    },
+  })
+  const successfulAssessment = await successful.api.assessSourceOffload({ publicationId })
+  t.is((await successful.api.confirmSourceOffload(confirmation(successfulAssessment))).success, true)
+  t.alike(successEvents, ['release', 'clear'])
+
+  const failureEvents = []
+  const failed = createHarness({
+    useDefaultDeletion: true,
+    clearError: new Error('injected source deletion failure'),
+    onClear() { failureEvents.push('clear') },
+    scopedNetwork: {
+      async releaseAuthorizedRendition({ renditionId: releasedId, ownerId }) {
+        failureEvents.push('release')
+        t.is(releasedId, renditionId)
+        t.is(ownerId, publicationId)
+        return { status: 'released', released: true }
+      },
+      async retainAuthorizedRendition({ manifest: retainedManifest, renditionId: retainedId, ownerId }) {
+        failureEvents.push('retain')
+        t.is(retainedManifest.publicationId, publicationId)
+        t.is(retainedId, renditionId)
+        t.is(ownerId, publicationId)
+        return { status: 'retained' }
+      },
+    },
+  })
+  const failedAssessment = await failed.api.assessSourceOffload({ publicationId })
+  t.is((await failed.api.confirmSourceOffload(confirmation(failedAssessment))).reason, 'delete-failed')
+  t.alike(failureEvents, ['release', 'clear', 'retain'])
 })
 
 test('playback starting before the source lock causes a durable retryable refusal', async (t) => {

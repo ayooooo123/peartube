@@ -503,7 +503,6 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
     signedOperations.push(signed);
   }
   assertUploadNotCancelled(runtime.signal);
-  await appendImmutablePublication(catalog, signedOperations);
   metadata.immutablePublication = {
     publicationId: manifest.publicationId,
     manifestId: manifest.body.manifestId,
@@ -515,6 +514,27 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
     claimIds: claims.map(claim => claim.claimId),
     manifest
   };
+  metadata.publicationState = 'replicationPending';
+  let metadataStaged = false;
+  try {
+    if (typeof runtime.stageMetadata === 'function') {
+      await runtime.stageMetadata(metadata);
+      metadataStaged = true;
+    }
+    assertUploadNotCancelled(runtime.signal);
+    await appendImmutablePublication(catalog, signedOperations);
+  } catch (error) {
+    if (metadataStaged || typeof runtime.stageMetadata === 'function') {
+      try { await runtime.rollbackMetadata?.(metadata); } catch {}
+    }
+    throw error;
+  }
+  metadata.publicationState = 'published';
+  try {
+    await runtime.finalizeMetadata?.(metadata);
+  } catch (error) {
+    throw markUploadCommitState(error, 'uploadCommitSucceeded');
+  }
   let acquiredRetention = false;
   try {
     await mediaCatalogProjection?.rebuild?.();
@@ -522,6 +542,7 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
       const retention = await scopedNetwork.retainAuthorizedRendition({
         manifest,
         renditionId: rendition.renditionId,
+        ownerId: manifest.publicationId,
         start: 0,
         end: rendition.core.length
       });
@@ -531,7 +552,10 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
   } catch (error) {
     if (acquiredRetention) {
       try {
-        await scopedNetwork.releaseAuthorizedRendition?.({ renditionId: rendition.renditionId });
+        await scopedNetwork.releaseAuthorizedRendition?.({
+          renditionId: rendition.renditionId,
+          ownerId: manifest.publicationId
+        });
       } catch {}
     }
     throw markUploadCommitState(error, 'uploadCommitSucceeded');
@@ -759,17 +783,21 @@ export function createUploadManager({
         buildVideoMetadata(metadata, blobResult, channel, fileSize, mimeType);
         await maybeAttachImmutablePublication(metadata, prepared, {
           ...publicationRuntime,
-          ...uploadControl
+          ...uploadControl,
+          stageMetadata: value => channel.addVideo(value, { syncPublic: false }),
+          rollbackMetadata: value => channel.deleteVideo?.(value.id),
+          finalizeMetadata: value => channel.updateVideo?.(value.id, value, { syncPublic: true })
         });
         immutableCommitConfirmed = Boolean(metadata.immutablePublication);
         if (!prepared) {
           await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4File(fs, filePath, { fileSize }));
         }
 
-        // Store metadata in channel HyperDB
-        await channel.addVideo(metadata, {
-          syncPublic: metadata.publicationState !== 'replicationPending'
-        });
+        if (!prepared) {
+          await channel.addVideo(metadata, {
+            syncPublic: metadata.publicationState !== 'replicationPending'
+          });
+        }
 
         console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', channel.blobsKeyHex?.slice(0, 16), 'keyLen:', channel.blobsKeyHex?.length);
 
@@ -848,17 +876,21 @@ export function createUploadManager({
         buildVideoMetadata(metadata, blobResult, channel, fileSize, mimeType);
         await maybeAttachImmutablePublication(metadata, prepared, {
           ...publicationRuntime,
-          ...uploadControl
+          ...uploadControl,
+          stageMetadata: value => channel.addVideo(value, { syncPublic: false }),
+          rollbackMetadata: value => channel.deleteVideo?.(value.id),
+          finalizeMetadata: value => channel.updateVideo?.(value.id, value, { syncPublic: true })
         });
         immutableCommitConfirmed = Boolean(metadata.immutablePublication);
         if (!prepared) {
           await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4Buffer(buffer));
         }
 
-        // Store metadata in channel HyperDB
-        await channel.addVideo(metadata, {
-          syncPublic: metadata.publicationState !== 'replicationPending'
-        });
+        if (!prepared) {
+          await channel.addVideo(metadata, {
+            syncPublic: metadata.publicationState !== 'replicationPending'
+          });
+        }
 
         console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', channel.blobsKeyHex?.slice(0, 16), 'keyLen:', channel.blobsKeyHex?.length);
 

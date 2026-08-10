@@ -50,6 +50,7 @@ import { createScopedNetworkApi } from './network/scoped-runtime.js'
 import { createArchiveManager } from './archive/manager.js'
 import { buildCatalogGroupPage, buildChannelCatalog } from './catalog/channel-catalog.js'
 import { normalizeAssetCoreRefV2 } from './assets/rendition.js'
+import { createStaticAssetManifest } from './assets/static-core.js'
 
 function assertApiContextRunning(ctx) {
   if (ctx?.lifecycle?.signal?.aborted) throw new Error('Backend is shutting down')
@@ -1936,6 +1937,8 @@ export function createApi({
         end: core.length,
         blobId: null,
         byteLength: core.byteLength,
+        treeHash: core.treeHash,
+        blockSize: core.blockSize,
       }
     })
     if (locators.length !== 1) throw new Error('publication must have exactly one local original source')
@@ -1951,7 +1954,9 @@ export function createApi({
         locator.start === other.start &&
         locator.end === other.end &&
         locator.blobId === other.blobId &&
-        locator.byteLength === other.byteLength
+        locator.byteLength === other.byteLength &&
+        locator.treeHash === other.treeHash &&
+        locator.blockSize === other.blockSize
     })
   }
 
@@ -2003,8 +2008,22 @@ export function createApi({
     return false
   }
 
+
+  function openStaticSourceCore(locator) {
+    const descriptor = createStaticAssetManifest({
+      treeHash: locator.treeHash,
+      blockLength: locator.end,
+      byteLength: locator.byteLength,
+      blockSize: locator.blockSize,
+    })
+    return ctx.store.get({
+      key: b4a.from(locator.coreKey, 'hex'),
+      manifest: descriptor.hypercoreManifest,
+      writable: false,
+    })
+  }
   async function inspectSourcePeers(locator) {
-    const core = ctx.store.get({ key: b4a.from(locator.coreKey, 'hex') })
+    const core = openStaticSourceCore(locator)
     const ownership = ownManagedApiResource(core, 'close')
     try {
       await core.ready()
@@ -2101,19 +2120,44 @@ export function createApi({
     }
 
     const locator = locators[0]
-    const core = ctx.store.get({ key: b4a.from(locator.coreKey, 'hex') })
-    const ownership = ownManagedApiResource(core, 'close')
+    let releasedOwnership = false
+    let core = null
+    let ownership = null
     try {
+      core = openStaticSourceCore(locator)
+      ownership = ownManagedApiResource(core, 'close')
       await core.ready()
       if (sourceIsManuallyPinned(locators)) return authorize({ refusalReason: 'source-pinned' })
       const authorization = await authorize({ collectEvidence: collectLockedEvidence })
       if (!authorization.success) return authorization
       if (typeof core.clear !== 'function') return { success: false, reason: 'delete-unavailable' }
+      if (typeof scopedNetwork?.releaseAuthorizedRendition === 'function') {
+        const released = await scopedNetwork.releaseAuthorizedRendition({
+          renditionId: locator.renditionId,
+          ownerId: publicationId,
+        })
+        releasedOwnership = released?.released === true
+      }
       await core.clear(locator.start, locator.end)
-      await collectCorestoreGarbage(ctx.store, { label: 'confirmed source offload', log: console.warn })
+      const garbage = await collectCorestoreGarbage(ctx.store, {
+        label: 'confirmed source offload',
+        log: console.warn,
+      })
+      if (garbage.error) throw new Error(`source garbage collection failed: ${garbage.error}`)
       return { success: true, freedBytes: locator.byteLength }
+    } catch (error) {
+      if (releasedOwnership && typeof scopedNetwork?.retainAuthorizedRendition === 'function') {
+        await scopedNetwork.retainAuthorizedRendition({
+          manifest,
+          renditionId: locator.renditionId,
+          ownerId: publicationId,
+          start: locator.start,
+          end: locator.end,
+        })
+      }
+      throw error
     } finally {
-      await ownership.cleanup()
+      await ownership?.cleanup?.()
     }
   }
 

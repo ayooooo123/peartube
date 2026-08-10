@@ -46,6 +46,10 @@ function makeChannel() {
     async addVideo(metadata) {
       videos.push(metadata)
     },
+    async deleteVideo(id) {
+      const index = videos.findIndex(video => video.id === id)
+      if (index >= 0) videos.splice(index, 1)
+    },
   }
 }
 
@@ -276,6 +280,40 @@ test('publisher announcement failure does not release a pre-retained rendition',
   assert.equal(releases, 0)
 })
 
+test('local metadata failure emits no catalog operation and acquires no retention', async (t) => {
+  const store = makeStore(t, 'metadata-failure-upload')
+  const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 11))
+  const appended = []
+  const counters = {}
+  const catalog = makeCatalog(deviceKeyPair, appended, counters)
+  let retentions = 0
+  const channel = makeChannel()
+  channel.addVideo = async () => {
+    throw new Error('injected local metadata failure')
+  }
+  const result = await makePublishingManager({
+    store,
+    deviceKeyPair,
+    catalog,
+    scopedNetwork: {
+      async retainAuthorizedRendition() {
+        retentions++
+        return { status: 'retained' }
+      },
+    },
+  }).uploadFromBuffer(
+    channel,
+    Buffer.from('metadata must precede publication'),
+    { title: 'Metadata failure', mimeType: 'video/webm' },
+  )
+
+  assert.equal(result.success, false)
+  assert.match(result.error, /local metadata failure/)
+  assert.equal(counters.appended || 0, 0)
+  assert.deepEqual(appended, [])
+  assert.equal(retentions, 0)
+})
+
 test('deterministic reused uploads return the original publication contract', async () => {
   const manifest = { publicationId: 'aa'.repeat(32), body: { manifestId: 'bb'.repeat(32) } }
   const metadata = {
@@ -369,6 +407,10 @@ test('catalog commit failure clears the newly written blob and leaves no upload 
     },
     async addVideo(metadata) {
       videos.push(metadata)
+    },
+    async deleteVideo(id) {
+      const index = videos.findIndex(video => video.id === id)
+      if (index >= 0) videos.splice(index, 1)
     },
   }
   const catalog = {

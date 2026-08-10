@@ -1,7 +1,11 @@
 import test from 'brittle'
 import { EventEmitter } from 'node:events'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { Duplex, PassThrough } from 'node:stream'
 import b4a from 'b4a'
+import Corestore from 'corestore'
 import crypto from 'hypercore-crypto'
 
 import {
@@ -9,7 +13,12 @@ import {
   createBootstrapLocator,
 } from '../src/discovery/bootstrap-protocol.js'
 import {
+  ASSET_BLOCK_SIZE,
   createPublicationManifest,
+  createRenditionDescriptor,
+  createStaticAssetManifest,
+  deriveStaticAssetTopic,
+  writeStaticAsset,
 } from '../src/assets/index.js'
 import {
   createArchiveChallenge,
@@ -30,7 +39,6 @@ import {
 } from '../src/network/scoped-runtime.js'
 import {
   deriveArchiveTopic,
-  deriveAssetTopic,
   deriveBootstrapTopic,
   derivePublisherTopic,
 } from '../src/network/topics.js'
@@ -285,14 +293,19 @@ test('local publisher scope is not announced before an accepted publication or c
   await runtime.close()
 })
 
-test('authorized rendition range sync never opens another known core or crosses asset topics', async (t) => {
+test('authorized rendition range opens the canonical static core and never crosses asset topics', async (t) => {
   const publisher = crypto.keyPair(bytes(32, 21))
-  const allowedCore = bytes(32, 22)
+  const staticCore = createStaticAssetManifest({
+    treeHash: bytes(32, 24),
+    blockLength: 8,
+    byteLength: 8 * ASSET_BLOCK_SIZE,
+  })
+  const allowedCore = staticCore.key
   const otherCore = bytes(32, 23)
   const manifest = createPublicationManifest({
     publisherId: publisher.publicKey,
     title: 'Scoped asset',
-    renditions: [{ purpose: 'video', format: 'video/mp4', core: { key: allowedCore, length: 8, treeHash: bytes(32, 24), byteLength: 8192 } }],
+    renditions: [createRenditionDescriptor({ purpose: 'video', format: 'video/mp4', core: staticCore })],
     keyPair: publisher,
     signedAt: 10,
     expiresAt: 1000,
@@ -307,9 +320,11 @@ test('authorized rendition range sync never opens another known core or crosses 
     authorizePublication: async request => request.manifest === manifest,
     muxFactory: () => ({}),
     store: {
-      get ({ key }) {
+      get ({ key, manifest: hypercoreManifest, writable }) {
         const keyHex = b4a.toString(key, 'hex')
         opened.push(keyHex)
+        t.ok(hypercoreManifest, 'canonical Hypercore manifest accompanies the static key')
+        t.is(writable, false)
         return {
           key,
           ready: async () => {},
@@ -324,11 +339,13 @@ test('authorized rendition range sync never opens another known core or crosses 
   await runtime.start()
   const retained = await runtime.retainAuthorizedRendition({ manifest, renditionId, start: 2, end: 5 })
   t.is(retained.status, 'retained')
+  t.is(retained.assetId, b4a.toString(allowedCore, 'hex'))
   t.alike(opened, [b4a.toString(allowedCore, 'hex')])
   t.alike(downloads, [{ start: 2, end: 5 }])
+  const assetTopic = deriveStaticAssetTopic(allowedCore)
   const authorized = runtime.authorizeConnection({
     purpose: 'asset',
-    topic: deriveAssetTopic({ renditionId }),
+    topic: assetTopic,
     peerId: 'asset-authorized',
     connection: {},
     requestedCoreKey: b4a.toString(allowedCore, 'hex'),
@@ -336,22 +353,175 @@ test('authorized rendition range sync never opens another known core or crosses 
   t.is(authorized.status, 'authorized')
   t.is(unrestrictedReplications, 0, 'authorized exact ranges never expose unrestricted Hypercore replication')
 
-  const ownTopic = deriveAssetTopic({ renditionId })
-  t.is(runtime.authorizeConnection({ purpose: 'asset', topic: ownTopic, peerId: 'asset-a', requestedCoreKey: b4a.toString(otherCore, 'hex') }).status, 'rejected')
-  t.is(runtime.authorizeConnection({ purpose: 'asset', topic: deriveAssetTopic({ renditionId: 'other-rendition' }), peerId: 'asset-b' }).status, 'rejected')
+  t.is(runtime.authorizeConnection({ purpose: 'asset', topic: assetTopic, peerId: 'asset-a', requestedCoreKey: b4a.toString(otherCore, 'hex') }).status, 'rejected')
+  t.is(runtime.authorizeConnection({ purpose: 'asset', topic: deriveStaticAssetTopic(otherCore), peerId: 'asset-b' }).status, 'rejected')
   t.alike(opened, [b4a.toString(allowedCore, 'hex')], 'unauthorized known core is never opened')
 
   await runtime.releaseAuthorizedRendition({ renditionId })
   await runtime.close()
 })
 
+test('fresh Corestore retains and replicates a canonical static asset using its reconstructed manifest', async (t) => {
+  const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-static-source-'))
+  const readerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-static-reader-'))
+  const sourceStore = new Corestore(sourceDir)
+  const readerStore = new Corestore(readerDir)
+  await sourceStore.ready()
+  await readerStore.ready()
+  const asset = await writeStaticAsset({
+    store: sourceStore,
+    source: [b4a.from('fresh static replication')],
+  })
+  const sourceReplication = sourceStore.replicate(true)
+  const readerReplication = readerStore.replicate(false)
+  sourceReplication.pipe(readerReplication).pipe(sourceReplication)
+  const publisher = crypto.keyPair(bytes(32, 25))
+  const rendition = createRenditionDescriptor({
+    purpose: 'video',
+    format: 'video/webm',
+    core: asset.descriptor,
+  })
+  const manifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    title: 'Fresh static reader',
+    renditions: [rendition],
+    keyPair: publisher,
+    signedAt: 10,
+    expiresAt: 1000,
+  })
+  const runtime = createScopedNetworkRuntime({
+    swarm: fakeSwarm(),
+    store: readerStore,
+    authorizePublication: async request => request.manifest === manifest,
+  })
+  t.teardown(async () => {
+    await runtime.close().catch(() => {})
+    sourceReplication.destroy()
+    readerReplication.destroy()
+    await asset.core.close().catch(() => {})
+    await sourceStore.close()
+    await readerStore.close()
+    fs.rmSync(sourceDir, { recursive: true, force: true })
+    fs.rmSync(readerDir, { recursive: true, force: true })
+  })
+
+  await runtime.start()
+  const retained = await runtime.retainAuthorizedRendition({
+    manifest,
+    renditionId: rendition.renditionId,
+    start: 0,
+    end: rendition.core.length,
+  })
+  t.is(retained.status, 'retained')
+  t.is(retained.assetId, rendition.core.assetId)
+  const replicated = readerStore.get({
+    key: asset.descriptor.key,
+    manifest: asset.descriptor.hypercoreManifest,
+    writable: false,
+  })
+  await replicated.ready()
+  t.is(b4a.toString(await replicated.get(0)), 'fresh static replication')
+  await replicated.close()
+})
+
+test('identical assets share discovery while rendition owners retain independent leases', async (t) => {
+  const publisher = crypto.keyPair(bytes(32, 26))
+  const core = createStaticAssetManifest({
+    treeHash: bytes(32, 27),
+    blockLength: 1,
+    byteLength: 1024,
+  })
+  const firstRendition = createRenditionDescriptor({ purpose: 'original', format: 'video/mp4', core })
+  const secondRendition = createRenditionDescriptor({ purpose: 'preview', format: 'video/webm', core })
+  const manifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    title: 'Shared static asset',
+    renditions: [firstRendition, secondRendition],
+    keyPair: publisher,
+    signedAt: 10,
+    expiresAt: 1000,
+  })
+  const alternateManifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    sequence: 2,
+    title: 'Alternate publication owner',
+    renditions: [firstRendition],
+    keyPair: publisher,
+    signedAt: 11,
+    expiresAt: 1000,
+  })
+  const authorizedManifests = new Set([manifest, alternateManifest])
+  const swarm = fakeSwarm()
+  const runtime = createScopedNetworkRuntime({
+    swarm,
+    authorizePublication: async request => authorizedManifests.has(request.manifest),
+    store: {
+      get({ key }) {
+        return {
+          key,
+          async ready() {},
+          download() { return { destroy() {} } },
+          async close() {},
+        }
+      },
+    },
+  })
+  await runtime.start()
+  const first = await runtime.retainAuthorizedRendition({
+    manifest,
+    renditionId: firstRendition.renditionId,
+    ownerId: manifest.publicationId,
+    end: core.length,
+  })
+  const second = await runtime.retainAuthorizedRendition({
+    manifest,
+    renditionId: secondRendition.renditionId,
+    ownerId: manifest.publicationId,
+    end: core.length,
+  })
+  const alternate = await runtime.retainAuthorizedRendition({
+    manifest: alternateManifest,
+    renditionId: firstRendition.renditionId,
+    ownerId: alternateManifest.publicationId,
+    end: core.length,
+  })
+  t.is(first.assetId, core.assetId)
+  t.is(second.assetId, core.assetId)
+  t.is(alternate.status, 'retained')
+  t.is(first.topic.topicHex, second.topic.topicHex)
+  t.is(swarm.joins.filter(join => b4a.equals(join.topic, deriveStaticAssetTopic(core.assetId))).length, 1)
+
+  authorizedManifests.delete(manifest)
+  t.alike(await runtime.revalidateRetainedRenditions(), { released: 2 })
+  t.is(runtime.authorizeConnection({
+    purpose: 'asset',
+    topic: deriveStaticAssetTopic(core.assetId),
+    requestedCoreKey: core.key,
+  }).status, 'authorized')
+  await runtime.releaseAuthorizedRendition({
+    renditionId: firstRendition.renditionId,
+    ownerId: alternateManifest.publicationId,
+  })
+  t.is(runtime.authorizeConnection({
+    purpose: 'asset',
+    topic: deriveStaticAssetTopic(core.assetId),
+    requestedCoreKey: core.key,
+  }).status, 'rejected')
+  await runtime.close()
+})
+
 test('asset sessions transfer only manifest-authorized blocks over their scoped channel', async (t) => {
   const publisher = crypto.keyPair(bytes(32, 61))
-  const coreKey = bytes(32, 62)
+  const staticCore = createStaticAssetManifest({
+    treeHash: bytes(32, 63),
+    blockLength: 6,
+    byteLength: (5 * ASSET_BLOCK_SIZE) + 24,
+  })
+  const coreKey = staticCore.key
   const manifest = createPublicationManifest({
     publisherId: publisher.publicKey,
     title: 'Scoped transfer',
-    renditions: [{ purpose: 'video', format: 'video/mp4', core: { key: coreKey, length: 6, treeHash: bytes(32, 63), byteLength: 24 } }],
+    renditions: [createRenditionDescriptor({ purpose: 'video', format: 'video/mp4', core: staticCore })],
     keyPair: publisher,
     signedAt: 10,
     expiresAt: 1000,
@@ -807,11 +977,16 @@ test('rotated namespace descriptors fail closed until a committed transition ver
 
 test('release waits for asynchronous discovery and core cleanup', async (t) => {
   const publisher = crypto.keyPair(bytes(32, 71))
-  const coreKey = bytes(32, 72)
+  const staticCore = createStaticAssetManifest({
+    treeHash: bytes(32, 73),
+    blockLength: 1,
+    byteLength: 1024,
+  })
+  const coreKey = staticCore.key
   const manifest = createPublicationManifest({
     publisherId: publisher.publicKey,
     title: 'Await cleanup',
-    renditions: [{ purpose: 'video', format: 'video/mp4', core: { key: coreKey, length: 1, treeHash: bytes(32, 73), byteLength: 1024 } }],
+    renditions: [createRenditionDescriptor({ purpose: 'video', format: 'video/mp4', core: staticCore })],
     keyPair: publisher,
     signedAt: 10,
     expiresAt: 1000,

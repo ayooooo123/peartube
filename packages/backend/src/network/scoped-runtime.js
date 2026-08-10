@@ -13,7 +13,6 @@ import {
 import {
   deriveArchiveDiscoveryTopic,
   deriveArchiveTopic,
-  deriveAssetTopic,
   deriveBootstrapTopic,
   derivePublisherTopic,
   topicHex,
@@ -33,6 +32,8 @@ import {
   verifyPublisherNamespaceDescriptor,
 } from '../publisher/namespace.js'
 import { verifyArchivePledge } from '../archive/pledge.js'
+import { normalizeAssetCoreRefV2 } from '../assets/rendition.js'
+import { createStaticAssetManifest, deriveStaticAssetTopic } from '../assets/static-core.js'
 
 
 const FRAME_TYPES = PEER_FRAME_TYPE_NAMES
@@ -295,8 +296,9 @@ function normalizeNamespace (value, protocolMajor) {
   return descriptor
 }
 
-function renditionCoreKey (rendition) {
-  return rendition?.core?.key || rendition?.coreKey || null
+
+function assetAuthorizationId (renditionId, ownerId) {
+  return `${renditionId}\0${ownerId}`
 }
 
 function stableScopeDiagnostic (scope) {
@@ -1169,13 +1171,16 @@ export function createScopedNetworkRuntime (options = {}) {
       onActivate: async () => {
         let tracked = scope.sessions.get(remoteKey)
         if (scope.purpose === 'asset') {
-          const range = scope.range || { start: 0, end: null }
-          const current = await authorizePublication({
-            manifest: scope.manifest,
-            renditionId: scope.renditionId,
-            start: range.start,
-            end: range.end,
-          })
+          let current = false
+          for (const authorization of scope.assetAuthorizations?.values?.() || []) {
+            current = await authorizePublication({
+              manifest: authorization.manifest,
+              renditionId: authorization.renditionId,
+              start: authorization.range.start,
+              end: authorization.range.end,
+            })
+            if (current) break
+          }
           if (!current) fail('publication manifest authorization failed')
           tracked = scope.sessions.get(remoteKey)
         }
@@ -1497,75 +1502,171 @@ export function createScopedNetworkRuntime (options = {}) {
     }
   }
 
-  async function retainAuthorizedRendition ({ manifest, renditionId, start = 0, end = null } = {}) {
+  async function retainAuthorizedRendition ({
+    manifest,
+    renditionId,
+    ownerId: requestedOwnerId,
+    start = 0,
+    end = null,
+  } = {}) {
     if (status !== 'active') fail('runtime is not active')
     const id = String(renditionId || '')
+    const ownerId = String(requestedOwnerId || manifest?.publicationId || id)
+    if (!ownerId) fail('retention owner is required')
     const rendition = (manifest?.body?.renditions || []).find(candidate => candidate.renditionId === id)
     if (!rendition || rendition.blocked || rendition.superseded) fail('rendition is not manifest-authorized')
-    const declaredLength = Number(rendition.core?.length)
-    if (!Number.isSafeInteger(declaredLength) || declaredLength < 1) fail('rendition core length is invalid')
-    const range = safeRange(start, end === null ? declaredLength : end)
-    if (range.end > declaredLength) fail('rendition range exceeds the manifest core length')
+    const coreRef = normalizeAssetCoreRefV2(rendition.core)
+    if (coreRef.length < 1) fail('rendition core length is invalid')
+    const range = safeRange(start, end === null ? coreRef.length : end)
+    if (range.end > coreRef.length) fail('rendition range exceeds the manifest core length')
     const verified = await authorizePublication({ manifest, renditionId: id, start: range.start, end: range.end })
     if (!verified) fail('publication manifest authorization failed')
-    const coreKey = hex32(renditionCoreKey(rendition), 'rendition core key')
+    const coreKey = coreRef.key
     const existing = renditions.get(id)
     if (existing) {
-      if (existing.scope.coreKey !== coreKey || existing.scope.range.start !== range.start || existing.scope.range.end !== range.end) fail('rendition is already retained with a different authorization')
-      return { ...existing.result, status: 'already-retained' }
-    }
-    if (!store?.get) fail('corestore is unavailable')
-    const core = store.get({ key: b4a.from(coreKey, 'hex') })
-    try {
-      await core.ready?.()
-      const download = core.download?.({ start: range.start, end: range.end }) || null
-      const topic = deriveAssetTopic({ protocolMajor, renditionId: id })
-      const { scope } = joinScope({
+      if (existing.scope.coreKey !== coreKey ||
+          existing.range.start !== range.start ||
+          existing.range.end !== range.end) {
+        fail('rendition is already retained with a different authorization')
+      }
+      if (existing.owners.has(ownerId)) {
+        return { ...existing.result, ownerId, status: 'already-retained' }
+      }
+      const mode = `retained:${id}:${ownerId}`
+      joinScope({
         purpose: 'asset',
-        topic,
-        scopeId: id,
-        mode: 'retained',
-        renditionId: id,
-        coreKey,
-        core,
-        download,
-        range,
-        manifest,
-        manifestId: manifest.body.manifestId,
-        assetNextIndex: range.start,
-        assetPending: new Set(),
-        assetRetries: new Set(),
-        assetFailures: new Map(),
+        topic: existing.scope.topic,
+        scopeId: coreRef.assetId,
+        mode,
       })
-      const result = { status: 'retained', renditionId: id, coreKey, range: { ...range }, topic: stableScopeDiagnostic(scope) }
-      renditions.set(id, { scope, result, manifest })
-      return result
-    } catch (error) {
-      try { await core.close?.() } catch {}
-      throw error
+      existing.scope.assetAuthorizations.set(
+        assetAuthorizationId(id, ownerId),
+        { manifest, renditionId: id, range: { ...range } },
+      )
+      existing.owners.set(ownerId, { mode, manifest })
+      return { ...existing.result, ownerId, status: 'retained' }
     }
+
+    const topic = deriveStaticAssetTopic(coreRef.assetId)
+    const sharedScope = findScope('asset', topic)
+    if (sharedScope && (
+      sharedScope.coreKey !== coreKey ||
+      sharedScope.range.start !== range.start ||
+      sharedScope.range.end !== range.end
+    )) {
+      fail('static asset is already retained with a different authorization range')
+    }
+    const mode = `retained:${id}:${ownerId}`
+    let scope = sharedScope
+    if (scope) {
+      joinScope({ purpose: 'asset', topic, scopeId: coreRef.assetId, mode })
+      scope.assetAuthorizations.set(
+        assetAuthorizationId(id, ownerId),
+        { manifest, renditionId: id, range: { ...range } },
+      )
+    } else {
+      if (!store?.get) fail('corestore is unavailable')
+      const descriptor = createStaticAssetManifest({
+        treeHash: coreRef.treeHash,
+        blockLength: coreRef.length,
+        byteLength: coreRef.byteLength,
+        blockSize: coreRef.blockSize,
+      })
+      const core = store.get({
+        key: b4a.from(coreKey, 'hex'),
+        manifest: descriptor.hypercoreManifest,
+        writable: false,
+      })
+      try {
+        await core.ready?.()
+        const download = core.download?.({ start: range.start, end: range.end }) || null
+        ;({ scope } = joinScope({
+          purpose: 'asset',
+          topic,
+          scopeId: coreRef.assetId,
+          mode,
+          assetId: coreRef.assetId,
+          coreKey,
+          core,
+          download,
+          range,
+          assetAuthorizations: new Map([[
+            assetAuthorizationId(id, ownerId),
+            { manifest, renditionId: id, range: { ...range } },
+          ]]),
+          assetNextIndex: range.start,
+          assetPending: new Set(),
+          assetRetries: new Set(),
+          assetFailures: new Map(),
+        }))
+      } catch (error) {
+        try { await core.close?.() } catch {}
+        throw error
+      }
+    }
+    const result = {
+      status: 'retained',
+      ownerId,
+      renditionId: id,
+      assetId: coreRef.assetId,
+      coreKey,
+      range: { ...range },
+      topic: stableScopeDiagnostic(scope),
+    }
+    renditions.set(id, {
+      scope,
+      result,
+      range: { ...range },
+      owners: new Map([[ownerId, { mode, manifest }]]),
+    })
+    return result
   }
 
-  async function releaseAuthorizedRendition ({ renditionId } = {}) {
+  async function releaseAuthorizedRendition ({ renditionId, ownerId: requestedOwnerId } = {}) {
     const id = String(renditionId || '')
     const retained = renditions.get(id)
-    renditions.delete(id)
-    const released = retained ? await leaveScope(retained.scope, 'retained') : false
-    return { status: 'released', renditionId: id, released }
+    if (!retained) {
+      return {
+        status: 'released',
+        renditionId: id,
+        ownerId: requestedOwnerId || null,
+        released: false,
+      }
+    }
+    const ownerIds = requestedOwnerId === undefined
+      ? [...retained.owners.keys()]
+      : [String(requestedOwnerId)]
+    let released = false
+    for (const ownerId of ownerIds) {
+      const owner = retained.owners.get(ownerId)
+      if (!owner) continue
+      retained.owners.delete(ownerId)
+      retained.scope.assetAuthorizations?.delete(assetAuthorizationId(id, ownerId))
+      released = true
+      await leaveScope(retained.scope, owner.mode)
+    }
+    if (retained.owners.size === 0) renditions.delete(id)
+    return {
+      status: 'released',
+      renditionId: id,
+      ownerId: requestedOwnerId === undefined ? null : String(requestedOwnerId),
+      released,
+    }
   }
   async function revalidateRetainedRenditions () {
     let released = 0
     for (const [renditionId, retained] of [...renditions]) {
-      const range = retained.scope.range || { start: 0, end: null }
-      const authorized = await authorizePublication({
-        manifest: retained.manifest,
-        renditionId,
-        start: range.start,
-        end: range.end
-      }).catch(() => false)
-      if (authorized) continue
-      await releaseAuthorizedRendition({ renditionId })
-      released++
+      for (const [ownerId, owner] of [...retained.owners]) {
+        const authorized = await authorizePublication({
+          manifest: owner.manifest,
+          renditionId,
+          start: retained.range.start,
+          end: retained.range.end,
+        }).catch(() => false)
+        if (authorized) continue
+        await releaseAuthorizedRendition({ renditionId, ownerId })
+        released++
+      }
     }
     return { released }
   }

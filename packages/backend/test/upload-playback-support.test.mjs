@@ -368,6 +368,57 @@ test('catalog rejection with staged metadata rollback failure reconciles determi
   assert.equal(channel.blobWrites.length, 2, 'retry writes one replacement playback blob')
 })
 
+test('buffer upload reconciles rollback-pending metadata with the same deterministic id', async (t) => {
+  const store = makeStore(t, 'buffer-staged-rollback-retry')
+  const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 13))
+  const appended = []
+  const catalog = makeCatalog(deviceKeyPair, appended)
+  const acceptBatch = catalog.appendBatchAndConfirm.bind(catalog)
+  let appendAttempts = 0
+  catalog.appendBatchAndConfirm = async operations => {
+    appendAttempts++
+    if (appendAttempts === 1) return operations.map(() => ({ accepted: false }))
+    return acceptBatch(operations)
+  }
+  const channel = makeChannel()
+  const cleared = []
+  channel.blobs.clear = async value => {
+    cleared.push(value)
+  }
+  channel.getVideo = async id => channel.videos.find(video => video.id === id) || null
+  const deleteVideo = channel.deleteVideo.bind(channel)
+  let deleteAttempts = 0
+  channel.deleteVideo = async id => {
+    deleteAttempts++
+    if (deleteAttempts === 1) throw new Error('injected mobile staged metadata delete failure')
+    return deleteVideo(id)
+  }
+  const manager = makePublishingManager({ store, deviceKeyPair, catalog })
+  const buffer = Buffer.from('deterministic mobile rollback retry')
+  const options = {
+    videoId: 'cd'.repeat(16),
+    title: 'Mobile rollback retry',
+    mimeType: 'video/webm',
+  }
+
+  const rejected = await manager.uploadFromBuffer(channel, buffer, options)
+  assert.equal(rejected.success, false)
+  assert.equal(rejected.rollbackPending, true)
+  assert.equal(channel.videos.length, 1)
+  assert.equal(channel.videos[0].id, options.videoId)
+  assert.equal(cleared.length, 0)
+
+  const retried = await manager.uploadFromBuffer(channel, buffer, options)
+  assert.equal(retried.success, true)
+  assert.equal(retried.videoId, options.videoId)
+  assert.equal(retried.reused, undefined)
+  assert.equal(appendAttempts, 2)
+  assert.equal(channel.videos.length, 1)
+  assert.equal(channel.videos[0].publicationState, 'published')
+  assert.equal(cleared.length, 1)
+  assert.equal(channel.blobWrites.length, 2)
+})
+
 test('deterministic reused uploads return the original publication contract', async () => {
   const manifest = { publicationId: 'aa'.repeat(32), body: { manifestId: 'bb'.repeat(32) } }
   const metadata = {

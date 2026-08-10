@@ -904,7 +904,18 @@ export function createUploadManager({
           throw new Error('Channel blobs not initialized');
         }
 
-        const videoId = b4a.toString(crypto.randomBytes(16), 'hex');
+        const providedVideoId = typeof options.videoId === 'string' && /^[0-9a-f]{1,64}$/i.test(options.videoId)
+          ? options.videoId
+          : null;
+        if (providedVideoId && typeof channel.getVideo === 'function') {
+          const existing = await channel.getVideo(providedVideoId).catch(() => null);
+          if (existing?.publicationState === 'replicationPending') {
+            await reconcilePendingUpload(channel, existing);
+          } else if (existing) {
+            return { ...completedUploadResult(providedVideoId, existing), reused: true };
+          }
+        }
+        const videoId = providedVideoId || b4a.toString(crypto.randomBytes(16), 'hex');
         const metadata = normalizeVideoMetadata(options, videoId);
         const uploadControl = {
           publisherId: options.publisherId,

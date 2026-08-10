@@ -17,8 +17,8 @@ import { probeMp4File, probeMp4Buffer, isMp4MimeType } from './mp4-playback-prob
 import { saveBlobPlaybackProfile } from './blob-playback-profile.js';
 import { normalizeContentDetails } from './channel/structured-content.js';
 import {
+  createImmutableRenditionWriter,
   createPublicationManifest,
-  createRenditionDescriptor,
   encodePublicationManifest,
 } from './assets/index.js';
 import {
@@ -220,20 +220,6 @@ function buildVideoMetadata(metadata, blobResult, channel, fileSize, mimeType) {
   return metadata;
 }
 
-function hashUploadFallback(metadata, blobResult, channel, fileSize) {
-  return b4a.toString(crypto.hash(b4a.from(JSON.stringify({
-    blobsCoreKey: channel.blobsKeyHex,
-    blobId: blobResult.id,
-    fileSize,
-    fingerprint: metadata.contentFingerprint || null
-  }))), 'hex');
-}
-
-function uploadTreeHash(metadata, blobResult, channel, fileSize) {
-  const fingerprint = typeof metadata.contentFingerprint === 'string' ? metadata.contentFingerprint : '';
-  if (/^sha256:[0-9a-f]{64}$/i.test(fingerprint)) return fingerprint.slice(7).toLowerCase();
-  return hashUploadFallback(metadata, blobResult, channel, fileSize);
-}
 
 const catalogWriteQueues = new WeakMap();
 
@@ -303,11 +289,29 @@ async function rollbackUploadedBlob(channel, blobResult) {
   await channel.blobs.clear(blobResult);
 }
 
+function assertUploadNotCancelled(signal) {
+  if (signal?.aborted) throw new Error('static asset write cancelled');
+}
 
-async function maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, runtime = {}) {
+function completedUploadResult(videoId, metadata) {
+  const publication = metadata.immutablePublication;
+  if (!publication) return { success: true, videoId, metadata };
+  return {
+    success: true,
+    videoId,
+    metadata,
+    publicationId: publication.publicationId,
+    manifestId: publication.manifestId,
+    renditionId: publication.renditionId,
+    assetId: publication.assetId,
+    coreKey: publication.coreKey,
+    manifest: publication.manifest
+  };
+}
+
+async function maybeAttachImmutablePublication(metadata, mimeType, runtime = {}) {
   const { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair } = runtime;
   if (!catalogRegistry || !deviceKeyPair?.publicKey || !deviceKeyPair?.secretKey) return metadata;
-  const currentTime = runtime.now();
   const requestedPublisherId = runtime.publisherId;
   const bindings = requestedPublisherId
     ? [await catalogRegistry.resolve(requestedPublisherId)]
@@ -324,7 +328,28 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
       typeof catalog.appendBatchAndConfirm !== 'function') {
     throw new Error('Upload publisher catalog is unavailable');
   }
+
+  assertUploadNotCancelled(runtime.signal);
+  const renditionWriter = createImmutableRenditionWriter({
+    store: runtime.store,
+    source: runtime.createSource?.(),
+    signal: runtime.signal
+  });
+  await renditionWriter.initialize();
+  const durationSeconds = Number(metadata.duration);
+  const renditionWrite = await renditionWriter.writeRendition({
+    purpose: 'original',
+    format: String(mimeType || metadata.mimeType || 'video/mp4'),
+    durationMs: Number.isFinite(durationSeconds) && durationSeconds > 0
+      ? Math.round(durationSeconds * 1000)
+      : 1
+  });
+  const rendition = renditionWrite.descriptor;
+  await renditionWrite.core.close();
+  assertUploadNotCancelled(runtime.signal);
+
   return serializeCatalogWrite(catalog, async () => {
+  const currentTime = runtime.now();
   const authorization = await catalog.getAuthorizationState();
   const signerKey = b4a.toString(deviceKeyPair.publicKey, 'hex');
   const writer = authorization?.writers?.find(candidate => candidate.signerKey === signerKey);
@@ -337,21 +362,7 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
   if (!Number.isSafeInteger(firstSequence) || firstSequence < writer.firstAcceptedSequence) {
     throw new Error('Publisher writer sequence is unavailable');
   }
-  const blockOffset = Number(blobResult.blockOffset || 0);
-  const blockLength = Number(blobResult.blockLength || 1);
-  if (!Number.isSafeInteger(blockOffset) || blockOffset < 0 || !Number.isSafeInteger(blockLength) || blockLength < 1) {
-    throw new Error('Uploaded blob range is invalid');
-  }
-  const rendition = createRenditionDescriptor({
-    purpose: 'original',
-    format: String(mimeType || metadata.mimeType || 'video/mp4'),
-    core: {
-      key: channel.blobsKeyHex,
-      length: blockOffset + blockLength,
-      treeHash: uploadTreeHash(metadata, blobResult, channel, fileSize),
-      byteLength: fileSize
-    }
-  });
+  assertUploadNotCancelled(runtime.signal);
   const manifest = createPublicationManifest({
     publisherId,
     sequence: firstSequence,
@@ -361,11 +372,9 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
     provenance: [{
       type: 'upload',
       videoId: metadata.id,
-      blobId: blobResult.id,
-      coreKey: channel.blobsKeyHex,
-      renditionId: rendition.renditionId,
-      start: blockOffset,
-      end: blockOffset + blockLength
+      assetId: rendition.core.assetId,
+      coreKey: rendition.core.key,
+      renditionId: rendition.renditionId
     }],
     keyPair: deviceKeyPair,
     signedAt: currentTime
@@ -423,19 +432,21 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
       payload: encodeMediaClaimEnvelope(claim.envelope)
     }
   }))];
-  const signedOperations = []
+  const signedOperations = [];
   for (const candidate of operations) {
     signedOperations.push(await catalog.createLocalOperation({
       ...candidate,
       policyEpoch: writer.admissionPolicyEpoch,
       signedAt: currentTime
-    }))
+    }));
   }
-  await appendImmutablePublication(catalog, signedOperations)
+  await appendImmutablePublication(catalog, signedOperations);
   metadata.immutablePublication = {
     publicationId: manifest.publicationId,
     manifestId: manifest.body.manifestId,
     renditionId: rendition.renditionId,
+    assetId: rendition.core.assetId,
+    coreKey: rendition.core.key,
     publisherId: manifest.body.publisherId,
     sequence: firstSequence,
     claimIds: claims.map(claim => claim.claimId),
@@ -482,6 +493,8 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
  * @property {string} [contentFingerprint] - Stable content fingerprint
  * @property {string} [importIdentityKey] - Normalized import identity
  * @property {string} [importClaimantId] - Import claim contender ID
+ * @property {string} [publisherId] - Publisher catalog identity
+ * @property {AbortSignal} [signal] - Upload cancellation signal
  */
 
 /**
@@ -489,6 +502,12 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
  * @property {boolean} success - Whether upload succeeded
  * @property {string} [videoId] - Generated video ID
  * @property {VideoMetadata} [metadata] - Video metadata
+ * @property {string} [publicationId] - Published catalog record ID
+ * @property {string} [manifestId] - Published v2 manifest ID
+ * @property {string} [renditionId] - Published original rendition ID
+ * @property {string} [assetId] - Canonical immutable asset ID
+ * @property {string} [coreKey] - Canonical readonly Hypercore key
+ * @property {Object} [manifest] - Signed v2 publication manifest
  * @property {string} [error] - Error message if failed
  */
 
@@ -517,7 +536,7 @@ export function createUploadManager({
   deviceKeyPair = null,
   now = () => Date.now()
 }) {
-  const publicationRuntime = { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair, now };
+  const publicationRuntime = { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair, store: ctx?.store, now };
   /**
    * Probe the uploaded MP4 for its playback profile (moov position +
    * keyframe index) and persist it for range prioritization at playback
@@ -581,6 +600,11 @@ export function createUploadManager({
         }
         const videoId = providedVideoId || b4a.toString(crypto.randomBytes(16), 'hex');
         const metadata = normalizeVideoMetadata(options, videoId);
+        const uploadControl = {
+          publisherId: options.publisherId,
+          signal: options.signal
+        };
+        assertUploadNotCancelled(uploadControl.signal);
 
         // Get file size
         const stat = fs.statSync(filePath);
@@ -670,9 +694,10 @@ export function createUploadManager({
           fileSize,
           mimeType
         );
-        await maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, {
+        await maybeAttachImmutablePublication(metadata, mimeType, {
           ...publicationRuntime,
-          publisherId: options.publisherId
+          ...uploadControl,
+          createSource: () => fs.createReadStream(filePath)
         });
         immutableCommitConfirmed = Boolean(metadata.immutablePublication);
         await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4File(fs, filePath, { fileSize }));
@@ -684,11 +709,7 @@ export function createUploadManager({
 
         console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', channel.blobsKeyHex?.slice(0, 16), 'keyLen:', channel.blobsKeyHex?.length);
 
-        return {
-          success: true,
-          videoId,
-          metadata
-        };
+        return completedUploadResult(videoId, metadata);
       } catch (err) {
         if (blobResult && !immutableCommitConfirmed &&
             err?.uploadCommitSucceeded !== true && err?.uploadCommitUncertain !== true) {
@@ -726,6 +747,11 @@ export function createUploadManager({
 
         const videoId = b4a.toString(crypto.randomBytes(16), 'hex');
         const metadata = normalizeVideoMetadata(options, videoId);
+        const uploadControl = {
+          publisherId: options.publisherId,
+          signal: options.signal
+        };
+        assertUploadNotCancelled(uploadControl.signal);
         const fileSize = buffer.length;
 
         // Detect MIME type from buffer magic bytes
@@ -751,9 +777,10 @@ export function createUploadManager({
           fileSize,
           mimeType
         );
-        await maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, {
+        await maybeAttachImmutablePublication(metadata, mimeType, {
           ...publicationRuntime,
-          publisherId: options.publisherId
+          ...uploadControl,
+          createSource: () => [buffer]
         });
         immutableCommitConfirmed = Boolean(metadata.immutablePublication);
         await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4Buffer(buffer));
@@ -765,11 +792,7 @@ export function createUploadManager({
 
         console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', channel.blobsKeyHex?.slice(0, 16), 'keyLen:', channel.blobsKeyHex?.length);
 
-        return {
-          success: true,
-          videoId,
-          metadata
-        };
+        return completedUploadResult(videoId, metadata);
       } catch (err) {
         if (blobResult && !immutableCommitConfirmed &&
             err?.uploadCommitSucceeded !== true && err?.uploadCommitUncertain !== true) {

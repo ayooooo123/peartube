@@ -1,33 +1,14 @@
 import test from 'brittle'
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
-import Corestore from 'corestore'
 
-import {
-  attachSignedEnvelopeSignature,
-  prepareSignedEnvelope,
-  signedRecordSignaturePreimage,
-} from '@peartube/backend/records'
-import { MultiWriterChannel } from '../src/channel/multi-writer-channel.js'
-import { createPublisherCatalogProjection } from '../src/media-graph/catalog-projection.js'
+import { classifyLegacyAssetReference } from '../src/migrations/asset-core-v2.js'
 import {
   createPublicationV1CheckpointRepository,
-  createPublicationV1LegacyRepository,
   createPublicationV1StartupLifecycle,
   migratePublicationV1,
   runPublicationV1StartupMigration,
 } from '../src/migrations/publication-v1.js'
-import {
-  PUBLISHER_RECORD_TYPES,
-  PublisherCatalog,
-  createPublisherNamespaceDescriptor,
-  derivePublisherId,
-  encodePublisherNamespaceDescriptor,
-  encodePublisherOperationBody,
-} from '../src/publisher/index.js'
 
 test('publication v1 migration preserves provenance and stable ids without inventing abstract equivalence', (t) => {
   const legacy = {
@@ -72,186 +53,30 @@ function memoryMetaDb() {
   }
 }
 
-function signedCatalogOperation({ descriptor, signer, recordType, sequence, body }) {
-  const canonicalBody = recordType === PUBLISHER_RECORD_TYPES.NAMESPACE
-    ? encodePublisherNamespaceDescriptor(body)
-    : encodePublisherOperationBody(recordType, body)
-  const prepared = prepareSignedEnvelope({
-    recordType,
-    schemaMajor: 1,
-    schemaMinor: 0,
-    issuerIdentityKey: descriptor.publisherId,
-    signerKey: signer.publicKey,
-    policyEpoch: 0,
-    issuerSequence: sequence,
-    signedAt: 1_700_000_000_000,
-    canonicalBody,
-  }, { hash: crypto.hash })
-  return attachSignedEnvelopeSignature(
-    prepared,
-    crypto.sign(signedRecordSignaturePreimage(prepared), signer.secretKey),
-  )
-}
-
-async function catalogHarness(store, root, device) {
-  const publisherId = derivePublisherId(root.publicKey)
-  const catalog = new PublisherCatalog(store, {
-    publisherId,
-    deviceSigner: {
-      signerKey: b4a.from(device.publicKey),
-      sign: preimage => crypto.sign(preimage, device.secretKey),
-    },
-  })
-  await catalog.ready()
-  const descriptor = createPublisherNamespaceDescriptor({
-    genesisRootKey: root.publicKey,
-    catalogBootstrapKey: catalog.key,
-    profileRef: b4a.from('profile:legacy-migration'),
-    recoveryKeys: [],
-    recoveryThreshold: 0,
-  })
-  await catalog.append(signedCatalogOperation({
-    descriptor,
-    signer: root,
-    recordType: PUBLISHER_RECORD_TYPES.NAMESPACE,
-    sequence: 0,
-    body: descriptor,
-  }))
-  await catalog.append(signedCatalogOperation({
-    descriptor,
-    signer: root,
-    recordType: PUBLISHER_RECORD_TYPES.WRITER_ADMISSION,
-    sequence: 1,
-    body: {
-      writerKey: catalog.localWriterKey,
-      signerKey: device.publicKey,
-      capabilities: ['claim', 'publish'],
-      firstAcceptedSequence: 1,
-      expiresAt: Number.MAX_SAFE_INTEGER,
-      admissionNonce: b4a.alloc(16, 9),
-    },
-  }))
-  await catalog.update()
-  return { publisherId, catalog }
-}
-
-test('startup migration reads real legacy channel storage, resumes after catalog commit, and projects once with exact provenance', async t => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-publication-v1-'))
-  const store = new Corestore(directory)
-  const metaDb = memoryMetaDb()
-  let channel
-  let catalog
-  try {
-    await store.ready()
-    channel = new MultiWriterChannel(store, { name: 'legacy-migration-owner', encrypt: false })
-    await channel.ready()
-    const sourceVideo = {
-      id: 'legacy-video-1',
-      title: 'Legacy Movie',
-      description: 'kept exactly',
-      uploadedAt: 1_700_000_000_000,
-      blobId: '2:3:0:4096',
-      blobsCoreKey: 'c'.repeat(64),
-      mimeType: 'video/mp4',
-      contentFingerprint: `sha256:${'d'.repeat(64)}`,
-      sourceProvider: 'youtube',
-      sourceVideoId: 'source-42',
-    }
-    await channel.addVideo(sourceVideo, { syncPublic: false })
-
-    const root = crypto.keyPair(b4a.alloc(32, 7))
-    const device = crypto.keyPair(b4a.alloc(32, 8))
-    const harness = await catalogHarness(store, root, device)
-    const publisherId = harness.publisherId
-    catalog = harness.catalog
-    const binding = { publisherId, catalog }
-    const registry = {
-      async listBindings() { return [binding] },
-    }
-    const projection = createPublisherCatalogProjection({
-      catalogRegistry: registry,
-      now: () => 1_700_000_000_100,
-    })
-    const identityManager = {
-      getIdentities() {
-        return [{ publicKey: b4a.toString(root.publicKey, 'hex'), driveKey: channel.keyHex }]
-      },
-    }
-    const sourceRepository = createPublicationV1LegacyRepository({
-      identityManager,
-      loadChannel: async (_driveKey) => channel,
-    })
-    const checkpointRepository = createPublicationV1CheckpointRepository(metaDb)
-    let interrupted = false
-    try {
-      await runPublicationV1StartupMigration({
-        sourceRepository,
-        checkpointRepository,
-        resolveCatalog: async () => binding,
-        deviceKeyPair: device,
-        mediaCatalogProjection: projection,
-        now: () => 1_700_000_000_100,
-        afterCatalogCommit() {
-          if (!interrupted) {
-            interrupted = true
-            throw new Error('simulated process interruption')
-          }
-        },
-      })
-      t.fail('first migration run must be interrupted')
-    } catch (error) {
-      t.is(error.message, 'simulated process interruption')
-    }
-
-    t.is((await catalog.listProjections('publication')).items.length, 1, 'catalog commit happened before interruption')
-    t.is((await catalog.listProjections('claim')).items.length, 1, 'publication provenance claim committed in the same batch')
-    t.ok(await channel.getVideo(sourceVideo.id), 'legacy source remains present after interruption')
-
-    const resumed = await runPublicationV1StartupMigration({
-      sourceRepository,
-      checkpointRepository,
-      resolveCatalog: async () => binding,
-      deviceKeyPair: device,
-      mediaCatalogProjection: projection,
-      now: () => 1_700_000_000_200,
-    })
-    t.is(resumed.status, 'complete')
-    const publicationRows = await catalog.listProjections('publication')
-    const claimRows = await catalog.listProjections('claim')
-    t.is(publicationRows.items.length, 1, 'resume does not duplicate the catalog publication')
-    t.is(claimRows.items.length, 1, 'resume does not duplicate the catalog claim')
-
-    const publicationId = b4a.toString(publicationRows.items[0].body.publicationId, 'hex')
-    const manifest = projection.assetManifestStore.getManifest(publicationId)
-    const manifests = projection.assetManifestStore.getManifestsByRendition(
-      manifest.body.renditions[0].renditionId,
-    )
-    t.is(manifests.length, 1, 'replacement manifest projection is visible exactly once')
-    const claims = projection.mediaGraphStore.getClaims()
-    t.is(claims.length, 1, 'replacement graph visibility is exactly once')
-    t.is(claims[0].body.claimType, 'EntityMetadataClaim')
-    t.is(claims[0].body.subjectRefs[0].entityKind, 'publication', 'migration invents no work entity')
-    t.absent(claims[0].body.subjectRefs.some(ref => ref.entityKind === 'agent'), 'migration invents no agent claim')
-    t.alike(claims[0].body.payload.provenance, {
-      source: 'legacy-owner-channel',
-      sourceKey: channel.keyHex,
-      ownerPublisherId: b4a.toString(root.publicKey, 'hex'),
-      legacySourceId: sourceVideo.id,
-      blobsCoreKey: sourceVideo.blobsCoreKey,
-      blobId: sourceVideo.blobId,
-      contentFingerprint: sourceVideo.contentFingerprint,
-      mimeType: sourceVideo.mimeType,
-      uploadedAt: sourceVideo.uploadedAt,
-      sourceProvider: sourceVideo.sourceProvider,
-      sourceVideoId: sourceVideo.sourceVideoId,
-    })
-    t.ok(await channel.getVideo(sourceVideo.id), 'durable completion preserves legacy source data')
-  } finally {
-    await catalog?.close?.().catch(() => {})
-    await channel?.close?.().catch(() => {})
-    await store.close().catch(() => {})
-    fs.rmSync(directory, { recursive: true, force: true })
+test('legacy owner-channel fixture without source bytes requires re-ingest and is not active v2 playback', (t) => {
+  const sourceVideo = {
+    id: 'legacy-video-1',
+    title: 'Legacy Movie',
+    description: 'kept exactly',
+    uploadedAt: 1_700_000_000_000,
+    blobId: '2:3:0:4096',
+    blobsCoreKey: 'c'.repeat(64),
+    mimeType: 'video/mp4',
+    contentFingerprint: `sha256:${'d'.repeat(64)}`,
+    sourceProvider: 'youtube',
+    sourceVideoId: 'source-42',
   }
+  const [start, length] = sourceVideo.blobId.split(':').map(Number)
+  const disposition = classifyLegacyAssetReference({
+    key: sourceVideo.blobsCoreKey,
+    start,
+    end: start + length,
+  })
+
+  t.is(disposition, 'reingest-required')
+  t.absent(sourceVideo.assetId, 'legacy fixture does not invent an immutable asset id')
+  t.absent(sourceVideo.coreKey, 'legacy fixture does not enter active v2 playback')
+  t.is(sourceVideo.description, 'kept exactly', 'structured metadata remains available for re-ingest')
 })
 
 test('startup migration quarantines malformed legacy storage and fails closed without deleting source', async t => {

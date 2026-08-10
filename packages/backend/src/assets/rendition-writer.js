@@ -1,13 +1,12 @@
 import { createRenditionDescriptor } from './rendition.js'
 import { createSegmentIndexDescriptor } from './segment-index.js'
-import { writeStaticAsset } from './static-core.js'
+import { createStaticAssetManifest, writeStaticAsset } from './static-core.js'
 
-const PREFLIGHT_CORE = {
-  key: '00'.repeat(32),
-  length: 0,
+const PREFLIGHT_CORE = createStaticAssetManifest({
   treeHash: '00'.repeat(32),
+  blockLength: 0,
   byteLength: 0,
-}
+})
 
 function validateRenditionMetadata(input) {
   let segmentIndex = null
@@ -28,7 +27,7 @@ function validateRenditionMetadata(input) {
   })
 }
 
-export function createImmutableRenditionWriter() {
+export function createImmutableRenditionWriter(defaults = {}) {
   let initialized = false
   let openWrites = 0
 
@@ -48,9 +47,9 @@ export function createImmutableRenditionWriter() {
       try {
         validateRenditionMetadata(input)
         staticAsset = await writeStaticAsset({
-          store: input.store,
-          source: input.source,
-          signal: input.signal,
+          store: input.store || defaults.store,
+          source: input.source || defaults.source,
+          signal: input.signal || defaults.signal,
         })
         const segmentIndex = createSegmentIndexDescriptor({
           codec: input.segmentCodec || 'peartube-inline-segments-v1',

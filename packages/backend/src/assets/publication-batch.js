@@ -1,6 +1,7 @@
 import b4a from 'b4a'
 
 import { hashCanonical, sortPlain, toHex } from '../publisher/canonical.js'
+import { createRenditionDescriptor } from './rendition.js'
 
 export const PUBLICATION_BATCH_VERSION = 1
 export const PUBLICATION_BATCH_DIGEST_DOMAIN = 'peartube.asset.publication-batch.v1'
@@ -18,11 +19,16 @@ function boundedPositive(value, name, max = 1024) {
 function normalizePublication(input = {}) {
   const renditions = input.renditions || []
   if (!Array.isArray(renditions) || renditions.length === 0) throw new Error('publication renditions are required')
+  const normalizedRenditions = renditions.map((rendition) => {
+    const normalized = createRenditionDescriptor(rendition)
+    if (rendition.renditionId !== normalized.renditionId) throw new Error('publication renditionId does not match descriptor')
+    return normalized
+  })
   return sortPlain({
     kind: 'publication',
     publicationId: toHex(input.publicationId, 32, 'publicationId'),
     manifestId: toHex(input.manifestId, 32, 'manifestId'),
-    renditions: renditions.map((rendition) => sortPlain(rendition)).sort((a, b) => a.renditionId.localeCompare(b.renditionId)),
+    renditions: normalizedRenditions.sort((a, b) => a.renditionId.localeCompare(b.renditionId)),
   })
 }
 

@@ -49,6 +49,7 @@ import { createOperabilityApi } from './api/operability.js'
 import { createScopedNetworkApi } from './network/scoped-runtime.js'
 import { createArchiveManager } from './archive/manager.js'
 import { buildCatalogGroupPage, buildChannelCatalog } from './catalog/channel-catalog.js'
+import { normalizeAssetCoreRefV2 } from './assets/rendition.js'
 
 function assertApiContextRunning(ctx) {
   if (ctx?.lifecycle?.signal?.aborted) throw new Error('Backend is shutting down')
@@ -1925,31 +1926,18 @@ export function createApi({
 
   function exactSourceLocators(manifest) {
     const renditions = (manifest?.body?.renditions || []).filter(rendition => rendition?.purpose === 'original')
-    const provenance = (manifest?.body?.provenance || []).filter(entry => entry?.type === 'upload')
-    const locators = []
-    for (const rendition of renditions) {
-      const matches = provenance.filter(entry =>
-        entry?.renditionId === rendition.renditionId &&
-        entry?.coreKey === rendition?.core?.key
-      )
-      if (matches.length !== 1) throw new Error('publication source locator is ambiguous')
-      const entry = matches[0]
-      const start = Number(entry.start)
-      const end = Number(entry.end)
-      if (!Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(end) ||
-          end <= start || end > Number(rendition.core.length)) {
-        throw new Error('publication source locator is invalid')
-      }
-      locators.push({
+    const locators = renditions.map(rendition => {
+      const core = normalizeAssetCoreRefV2(rendition?.core)
+      return {
         renditionId: rendition.renditionId,
-        coreKey: rendition.core.key,
-        start,
-        end,
-        blobId: typeof entry.blobId === 'string' ? entry.blobId : null,
-        byteLength: Number(rendition.core.byteLength) || 0,
-      })
-    }
-    // Multiple independently-cleared originals cannot be deleted atomically.
+        assetId: core.assetId,
+        coreKey: core.key,
+        start: 0,
+        end: core.length,
+        blobId: null,
+        byteLength: core.byteLength,
+      }
+    })
     if (locators.length !== 1) throw new Error('publication must have exactly one local original source')
     return locators
   }
@@ -1958,6 +1946,7 @@ export function createApi({
     return left.length === right.length && left.every((locator, index) => {
       const other = right[index]
       return locator.renditionId === other.renditionId &&
+        locator.assetId === other.assetId &&
         locator.coreKey === other.coreKey &&
         locator.start === other.start &&
         locator.end === other.end &&

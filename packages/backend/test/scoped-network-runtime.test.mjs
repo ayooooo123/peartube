@@ -528,13 +528,20 @@ test('identical assets share discovery while rendition owners retain independent
 })
 
 test('asset sessions transfer only manifest-authorized blocks over their scoped channel', async (t) => {
+  const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-range-source-'))
+  const readerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-range-reader-'))
+  const sourceStore = new Corestore(sourceDir)
+  const readerStore = new Corestore(readerDir)
+  await sourceStore.ready()
+  await readerStore.ready()
+  const sourceBytes = b4a.alloc((5 * ASSET_BLOCK_SIZE) + 24)
+  for (let index = 0; index < 5; index++) {
+    sourceBytes.fill(index + 1, index * ASSET_BLOCK_SIZE, (index + 1) * ASSET_BLOCK_SIZE)
+  }
+  sourceBytes.fill(6, 5 * ASSET_BLOCK_SIZE)
+  const asset = await writeStaticAsset({ store: sourceStore, source: [sourceBytes] })
+  const staticCore = asset.descriptor
   const publisher = crypto.keyPair(bytes(32, 61))
-  const staticCore = createStaticAssetManifest({
-    treeHash: bytes(32, 63),
-    blockLength: 6,
-    byteLength: (5 * ASSET_BLOCK_SIZE) + 24,
-  })
-  const coreKey = staticCore.key
   const manifest = createPublicationManifest({
     publisherId: publisher.publicKey,
     title: 'Scoped transfer',
@@ -544,60 +551,40 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
     expiresAt: 1000,
   })
   const renditionId = manifest.body.renditions[0].renditionId
-  const sourceBlocks = new Map([
-    [2, b4a.alloc(ASSET_BLOCK_SIZE, 2)],
-    [3, b4a.alloc(ASSET_BLOCK_SIZE, 3)],
-    [4, b4a.alloc(ASSET_BLOCK_SIZE, 4)],
-  ])
-  const received = new Map()
-  const sourceCore = {
-    key: coreKey,
-    length: 6,
-    byteLength: staticCore.byteLength,
-    async ready () {},
-    async has (index) { return sourceBlocks.has(index) },
-    async proof ({ block }) {
-      return {
-        fork: 0,
-        block: { index: block.index, value: sourceBlocks.get(block.index), nodes: [] },
-        hash: null,
-        seek: null,
-        upgrade: null,
-        manifest: null,
-      }
-    },
-    download () { return { destroy () {} } },
-    async close () {},
-  }
-  const targetCore = {
-    key: coreKey,
-    length: 6,
-    byteLength: staticCore.byteLength,
-    async ready () {},
-    async has (index) { return received.has(index) },
-    async applyProof (proof) {
-      received.set(proof.block.index, b4a.from(proof.block.value))
-      return true
-    },
-    download () { return { destroy () {} } },
-    async close () {},
-  }
+  const readerCore = readerStore.get({
+    key: staticCore.key,
+    manifest: staticCore.hypercoreManifest,
+    writable: false,
+  })
+  await readerCore.ready()
   const swarmA = fakeSwarm()
   const swarmB = fakeSwarm()
   const runtimeA = createScopedNetworkRuntime({
     swarm: swarmA,
-    store: { get: () => sourceCore },
+    store: sourceStore,
     authorizePublication: async request => request.manifest === manifest,
   })
   const runtimeB = createScopedNetworkRuntime({
     swarm: swarmB,
-    store: { get: () => targetCore },
+    store: readerStore,
     authorizePublication: async request => request.manifest === manifest,
   })
+  const pair = connectionPair()
+  t.teardown(async () => {
+    await runtimeA.close().catch(() => {})
+    await runtimeB.close().catch(() => {})
+    pair.a.destroy()
+    pair.b.destroy()
+    await readerCore.close().catch(() => {})
+    await asset.core.close().catch(() => {})
+    await sourceStore.close()
+    await readerStore.close()
+    fs.rmSync(sourceDir, { recursive: true, force: true })
+    fs.rmSync(readerDir, { recursive: true, force: true })
+  })
+
   await runtimeA.start()
   await runtimeB.start()
-
-  const pair = connectionPair()
   swarmA.connections.add(pair.a)
   swarmB.connections.add(pair.b)
   swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey })
@@ -618,21 +605,24 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
   t.ok(runtimeB.getDiagnostics().sessions.some(session =>
     session.purpose === 'asset' && session.state === 'active'))
 
-  const transfer = await runtimeB.requestAssetBlocks({
+  const observed = runtimeB.requestAssetBlocks({
     assetId: staticCore.assetId,
     startBlock: 2,
     endBlock: 5,
-  })
-  t.alike(transfer.verifiedBlockIndexes, [2, 3, 4])
-  t.alike(transfer.peerIds, [b4a.toString(pair.b.remotePublicKey, 'hex')])
-  t.alike([...received.keys()].sort((a, b) => a - b), [2, 3, 4])
-  t.is(received.has(1), false, 'the peer never receives a block below its authorized range')
-  t.is(received.has(5), false, 'the peer never receives a block at or above its authorized range end')
-
-  await runtimeA.close()
-  await runtimeB.close()
-  pair.a.destroy()
-  pair.b.destroy()
+  }).then(value => ({ value, error: null }), error => ({ value: null, error }))
+  const outcome = await observed
+  if (outcome.error) throw outcome.error
+  t.alike(outcome.value.verifiedBlockIndexes, [2, 3, 4])
+  t.alike(outcome.value.peerIds, [b4a.toString(pair.b.remotePublicKey, 'hex')])
+  t.is(await readerCore.has(1), false, 'the peer never receives a block below its authorized range')
+  for (let index = 2; index < 5; index++) {
+    t.is(await readerCore.has(index), true)
+    t.alike(await readerCore.get(index), sourceBytes.subarray(
+      index * ASSET_BLOCK_SIZE,
+      (index + 1) * ASSET_BLOCK_SIZE,
+    ))
+  }
+  t.is(await readerCore.has(5), false, 'the peer never receives a block at or above its authorized range end')
 })
 
 test('separate publishers and assets never cross-open and cleanup is exactly once', async (t) => {

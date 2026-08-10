@@ -524,12 +524,14 @@ test('delayed transfer frames and errors cannot mutate a reused range request', 
 
 test('abort during cached possession scan cannot return success or send a request', async (t) => {
   let releaseHas
+  let applied = 0
   let hasStarted = false
   const { assetChannel, descriptor, runtime } = await scopedAssetHarness(t, {
     async has() {
       hasStarted = true
       return new Promise(resolve => { releaseHas = resolve })
     },
+    async applyProof() { applied++; return true },
   })
   const controller = new AbortController()
   const pending = runtime.requestAssetBlocks({
@@ -538,13 +540,14 @@ test('abort during cached possession scan cannot return success or send a reques
     endBlock: 1,
     signal: controller.signal,
   })
+  const rejected = t.exception(pending, /aborted/)
   await until(() => hasStarted)
   controller.abort()
   releaseHas(true)
-  await t.exception(pending, /aborted/)
-  t.is(sentAssetRequests(assetChannel).length, 0)
-  const assetSession = runtime.getDiagnostics().sessions.find(session => session.purpose === 'asset')
-  t.is(assetSession.assetRequests, 0)
+  await rejected
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(sentAssetRequests(assetChannel).length, 0, 'no request is sent after the blocked probe is released')
+  t.is(applied, 0)
 })
 
 test('asset inventory allows one live scan per peer and teardown suppresses its page', async (t) => {

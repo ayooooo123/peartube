@@ -68,6 +68,45 @@ test('local inventory does bounded work across empty sparse regions', async (t) 
   t.is(core.probes, MAX_ASSET_RANGE_BITS_PER_RANGE)
 })
 
+test('local inventory checks liveness around every awaited possession probe', async (t) => {
+  let live = true
+  let probes = 0
+  let releaseProbe
+  const core = {
+    length: 2,
+    byteLength: 2 * 256 * 1024,
+    async has() {
+      probes++
+      return new Promise(resolve => { releaseProbe = resolve })
+    },
+  }
+  const pending = listAssetRanges({
+    assetId,
+    core,
+    coreLength: core.length,
+    byteLength: core.byteLength,
+    cursor: null,
+    limit: 1,
+    isActive: () => live,
+  })
+  while (!releaseProbe) await Promise.resolve()
+  live = false
+  releaseProbe(true)
+  await t.exception(pending, /cancelled/)
+  t.is(probes, 1, 'a cancelled scan never probes the next block')
+
+  await t.exception(listAssetRanges({
+    assetId,
+    core,
+    coreLength: core.length,
+    byteLength: core.byteLength,
+    cursor: null,
+    limit: 1,
+    isActive: () => false,
+  }), /cancelled/)
+  t.is(probes, 1, 'pre-cancelled scans do not enter core.has')
+})
+
 test('inventory rejects wrong identities, invalid core state, and noncanonical pages', async (t) => {
   const core = sparseCore(10, new Set([1]))
   await t.exception(listAssetRanges({

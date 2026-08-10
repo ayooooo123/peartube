@@ -15,12 +15,14 @@ export const MAX_ASSET_RANGE_PAGE_BYTES = 16 * 1024
 export const MAX_ASSET_BLOCKS_PER_REQUEST = 16
 export const MAX_ASSET_BLOCK_BYTES = 256 * 1024
 export const MAX_ASSET_PROOF_BYTES = 32 * 1024
+export const MAX_ASSET_TRANSFER_ID = 0xffffffffffffffffn
 
 const PEER_FRAME_HEADER_BYTES = 4 + 28
 const ASSET_ID_BYTES = 32
 const ASSET_RANGE_REQUEST_BYTES = ASSET_ID_BYTES + 8 + 1
 const ASSET_RANGE_PAGE_HEADER_BYTES = ASSET_ID_BYTES + 1 + 8
-const ASSET_BLOCK_RANGE_BYTES = ASSET_ID_BYTES + 8 + 8
+const ASSET_TRANSFER_PREFIX_BYTES = ASSET_ID_BYTES + 8
+const ASSET_BLOCK_RANGE_BYTES = ASSET_TRANSFER_PREFIX_BYTES + 8 + 8
 const ASSET_BLOCK_RESPONSE_HEADER_BYTES = ASSET_BLOCK_RANGE_BYTES + 8 + 1 + 4 + 4
 const MAX_ASSET_BLOCK_RESPONSE_CHUNK_BYTES = MAX_PEER_FRAME_BYTES - PEER_FRAME_HEADER_BYTES - ASSET_BLOCK_RESPONSE_HEADER_BYTES
 const NULL_CURSOR = 0xffffffffffffffffn
@@ -153,6 +155,21 @@ function validateCoreLength(value) {
 
 function assertWithinCore(value, coreLength, name) {
   if (coreLength !== null && value > coreLength) throw new Error(`${name} exceeds the verified core length`)
+}
+
+function normalizeAssetTransferId(value) {
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value)) throw new Error('transferId must be a positive uint64')
+    value = BigInt(value)
+  }
+  if (typeof value !== 'bigint' || value < 1n || value > MAX_ASSET_TRANSFER_ID) {
+    throw new Error('transferId must be a positive uint64')
+  }
+  return value
+}
+
+function decodeAssetTransferId(payload) {
+  return normalizeAssetTransferId(payload.readBigUInt64BE(ASSET_ID_BYTES))
 }
 
 function normalizeAssetBlockRange(input, coreLength = null) {
@@ -301,11 +318,13 @@ export function decodeAssetRangeSummaryPage(payload, options = {}) {
 
 export function encodeAssetBlockRequest(input = {}) {
   const assetId = normalizeAssetId(input.assetId)
+  const transferId = normalizeAssetTransferId(input.transferId)
   const range = normalizeAssetBlockRange(input)
   const output = b4a.allocUnsafe(ASSET_BLOCK_RANGE_BYTES)
   b4a.copy(assetId, output, 0)
-  encodeSafeUInt64(output, ASSET_ID_BYTES, range.startBlock)
-  encodeSafeUInt64(output, ASSET_ID_BYTES + 8, range.endBlock)
+  output.writeBigUInt64BE(transferId, ASSET_ID_BYTES)
+  encodeSafeUInt64(output, ASSET_TRANSFER_PREFIX_BYTES, range.startBlock)
+  encodeSafeUInt64(output, ASSET_TRANSFER_PREFIX_BYTES + 8, range.endBlock)
   return output
 }
 
@@ -314,12 +333,13 @@ export function decodeAssetBlockRequest(payload, options = {}) {
     throw new Error('asset block request has a noncanonical length')
   }
   const assetId = payload.subarray(0, ASSET_ID_BYTES)
+  const transferId = decodeAssetTransferId(payload)
   const coreLength = validateCoreLength(options.coreLength)
   const range = normalizeAssetBlockRange({
-    startBlock: decodeSafeUInt64(payload, ASSET_ID_BYTES, 'startBlock'),
-    endBlock: decodeSafeUInt64(payload, ASSET_ID_BYTES + 8, 'endBlock'),
+    startBlock: decodeSafeUInt64(payload, ASSET_TRANSFER_PREFIX_BYTES, 'startBlock'),
+    endBlock: decodeSafeUInt64(payload, ASSET_TRANSFER_PREFIX_BYTES + 8, 'endBlock'),
   }, coreLength)
-  return { assetId, ...range }
+  return { assetId, transferId, ...range }
 }
 
 function normalizeAssetBlockResponse(input, coreLength = null) {
@@ -338,7 +358,7 @@ function normalizeAssetBlockResponse(input, coreLength = null) {
   if (!b4a.isBuffer(chunk) || chunk.byteLength < 1 || chunk.byteLength > MAX_ASSET_BLOCK_RESPONSE_CHUNK_BYTES || offset + chunk.byteLength > totalBytes) {
     throw new Error('asset block response chunk bounds are invalid')
   }
-  return { ...range, blockIndex, kind: input.kind, kindCode, offset, totalBytes, chunk }
+  return { transferId: normalizeAssetTransferId(input.transferId), ...range, blockIndex, kind: input.kind, kindCode, offset, totalBytes, chunk }
 }
 
 export function encodeAssetBlockResponse(input = {}) {
@@ -346,8 +366,9 @@ export function encodeAssetBlockResponse(input = {}) {
   const response = normalizeAssetBlockResponse(input)
   const output = b4a.allocUnsafe(ASSET_BLOCK_RESPONSE_HEADER_BYTES + response.chunk.byteLength)
   b4a.copy(assetId, output, 0)
-  encodeSafeUInt64(output, ASSET_ID_BYTES, response.startBlock)
-  encodeSafeUInt64(output, ASSET_ID_BYTES + 8, response.endBlock)
+  output.writeBigUInt64BE(response.transferId, ASSET_ID_BYTES)
+  encodeSafeUInt64(output, ASSET_TRANSFER_PREFIX_BYTES, response.startBlock)
+  encodeSafeUInt64(output, ASSET_TRANSFER_PREFIX_BYTES + 8, response.endBlock)
   encodeSafeUInt64(output, ASSET_BLOCK_RANGE_BYTES, response.blockIndex)
   output.writeUInt8(response.kindCode, ASSET_BLOCK_RANGE_BYTES + 8)
   output.writeUInt32BE(response.offset, ASSET_BLOCK_RANGE_BYTES + 9)
@@ -363,8 +384,9 @@ export function decodeAssetBlockResponse(payload, options = {}) {
   const assetId = payload.subarray(0, ASSET_ID_BYTES)
   const kind = ASSET_BLOCK_RESPONSE_KIND_NAMES.get(payload.readUInt8(ASSET_BLOCK_RANGE_BYTES + 8))
   const response = normalizeAssetBlockResponse({
-    startBlock: decodeSafeUInt64(payload, ASSET_ID_BYTES, 'startBlock'),
-    endBlock: decodeSafeUInt64(payload, ASSET_ID_BYTES + 8, 'endBlock'),
+    transferId: decodeAssetTransferId(payload),
+    startBlock: decodeSafeUInt64(payload, ASSET_TRANSFER_PREFIX_BYTES, 'startBlock'),
+    endBlock: decodeSafeUInt64(payload, ASSET_TRANSFER_PREFIX_BYTES + 8, 'endBlock'),
     blockIndex: decodeSafeUInt64(payload, ASSET_BLOCK_RANGE_BYTES, 'block index'),
     kind,
     offset: payload.readUInt32BE(ASSET_BLOCK_RANGE_BYTES + 9),
@@ -377,13 +399,15 @@ export function decodeAssetBlockResponse(payload, options = {}) {
 
 export function encodeAssetBlockError(input = {}) {
   const assetId = normalizeAssetId(input.assetId)
+  const transferId = normalizeAssetTransferId(input.transferId)
   const range = normalizeAssetBlockRange(input)
   const code = ASSET_BLOCK_ERROR_CODE_NUMBERS.get(input.code)
   if (!code) throw new Error('asset block error code is invalid')
   const output = b4a.allocUnsafe(ASSET_BLOCK_RANGE_BYTES + 1)
   b4a.copy(assetId, output, 0)
-  encodeSafeUInt64(output, ASSET_ID_BYTES, range.startBlock)
-  encodeSafeUInt64(output, ASSET_ID_BYTES + 8, range.endBlock)
+  output.writeBigUInt64BE(transferId, ASSET_ID_BYTES)
+  encodeSafeUInt64(output, ASSET_TRANSFER_PREFIX_BYTES, range.startBlock)
+  encodeSafeUInt64(output, ASSET_TRANSFER_PREFIX_BYTES + 8, range.endBlock)
   output.writeUInt8(code, ASSET_BLOCK_RANGE_BYTES)
   return output
 }
@@ -393,13 +417,14 @@ export function decodeAssetBlockError(payload, options = {}) {
     throw new Error('asset block error has a noncanonical length')
   }
   const assetId = payload.subarray(0, ASSET_ID_BYTES)
+  const transferId = decodeAssetTransferId(payload)
   const range = normalizeAssetBlockRange({
-    startBlock: decodeSafeUInt64(payload, ASSET_ID_BYTES, 'startBlock'),
-    endBlock: decodeSafeUInt64(payload, ASSET_ID_BYTES + 8, 'endBlock'),
+    startBlock: decodeSafeUInt64(payload, ASSET_TRANSFER_PREFIX_BYTES, 'startBlock'),
+    endBlock: decodeSafeUInt64(payload, ASSET_TRANSFER_PREFIX_BYTES + 8, 'endBlock'),
   }, validateCoreLength(options.coreLength))
   const code = ASSET_BLOCK_ERROR_CODE_NAMES.get(payload.readUInt8(ASSET_BLOCK_RANGE_BYTES))
   if (!code) throw new Error('asset block error code is invalid')
-  return { assetId, ...range, code }
+  return { assetId, transferId, ...range, code }
 }
 
 function typeToCode(type = '') {

@@ -29,6 +29,10 @@ function assertCoreState(core, coreLength, byteLength) {
   if (core.byteLength !== byteLength) throw new Error('asset core byte length does not match the verified descriptor')
 }
 
+function assertScanActive(isActive) {
+  if (typeof isActive !== 'function' || !isActive()) throw new Error('asset inventory scan was cancelled')
+}
+
 function trimPresentBitfield(bitfield, windowStart, firstPresent, lastPresent) {
   const bitCount = lastPresent - firstPresent + 1
   const output = b4a.alloc(Math.ceil(bitCount / 8))
@@ -69,6 +73,7 @@ export async function listAssetRanges({
   limit = MAX_ASSET_RANGE_PAGE_RANGES,
   startBlock = 0,
   endBlock = coreLength,
+  isActive = () => true,
 } = {}) {
   normalizeAssetId(assetId)
   const length = nonNegativeInteger(coreLength, 'coreLength')
@@ -78,19 +83,26 @@ export async function listAssetRanges({
   if (start > end || end > length) throw new Error('asset inventory range exceeds the verified core length')
   boundedLimit(limit)
   assertCoreState(core, length, bytes)
+  assertScanActive(isActive)
 
   const requestedCursor = normalizeAssetCursor(cursor)
   const cursorBlock = requestedCursor === null ? start : requestedCursor
   if (cursorBlock > length || cursorBlock > end) throw new Error('cursor exceeds the verified core length')
   const windowStart = Math.max(start, cursorBlock)
-  if (windowStart === end) return { ranges: [], nextCursor: null }
+  if (windowStart === end) {
+    assertScanActive(isActive)
+    return { ranges: [], nextCursor: null }
+  }
   const windowEnd = Math.min(end, windowStart + MAX_ASSET_RANGE_BITS_PER_RANGE)
   const bitfield = b4a.alloc(Math.ceil((windowEnd - windowStart) / 8))
   let firstPresent = -1
   let lastPresent = -1
 
   for (let index = windowStart; index < windowEnd; index++) {
-    if (!await core.has(index)) continue
+    assertScanActive(isActive)
+    const present = await core.has(index)
+    assertScanActive(isActive)
+    if (!present) continue
     const bit = index - windowStart
     bitfield[bit >> 3] |= 1 << (bit & 7)
     if (firstPresent === -1) firstPresent = index
@@ -103,6 +115,7 @@ export async function listAssetRanges({
     ranges.push({ startBlock: firstPresent, ...trimmed })
   }
   const nextCursor = windowEnd < end ? String(windowEnd) : null
+  assertScanActive(isActive)
   const page = assertAssetRangeSummaryPage({ assetId, ranges, nextCursor }, {
     assetId,
     coreLength: length,

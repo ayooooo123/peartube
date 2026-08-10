@@ -6,6 +6,7 @@ import {
   ASSET_BLOCK_ERROR_CODES,
   FRAME_FLAG_OPTIONAL_TAG,
   MAX_ASSET_BLOCKS_PER_REQUEST,
+  MAX_ASSET_TRANSFER_ID,
   MAX_ASSET_RANGE_BITS_PER_RANGE,
   MAX_ASSET_RANGE_PAGE_BYTES,
   MAX_ASSET_RANGE_PAGE_RANGES,
@@ -139,20 +140,25 @@ test('asset range codecs reject noncanonical cursors, pages, bitfields, and allo
 })
 
 test('asset block codecs bind an exact asset and a bounded half-open request range', (t) => {
-  const request = decodeAssetBlockRequest(encodeAssetBlockRequest({ assetId, startBlock: 4, endBlock: 8 }), { coreLength: 10 })
+  const request = decodeAssetBlockRequest(encodeAssetBlockRequest({ assetId, transferId: 1n, startBlock: 4, endBlock: 8 }), { coreLength: 10 })
   t.alike(request.assetId, assetId)
+  t.is(request.transferId, 1n)
   t.is(request.startBlock, 4)
   t.is(request.endBlock, 8)
 
-  t.exception(() => encodeAssetBlockRequest({ assetId, startBlock: 4, endBlock: 4 }), /range/)
-  t.exception(() => encodeAssetBlockRequest({ assetId, startBlock: 0, endBlock: MAX_ASSET_BLOCKS_PER_REQUEST + 1 }), /range/)
-  t.exception(() => decodeAssetBlockRequest(encodeAssetBlockRequest({ assetId, startBlock: 9, endBlock: 10 }), { coreLength: 9 }), /core length/)
-  t.exception(() => encodeAssetBlockRequest({ assetId: b4a.alloc(31), startBlock: 0, endBlock: 1 }), /assetId/)
+  t.exception(() => encodeAssetBlockRequest({ assetId, transferId: 1n, startBlock: 4, endBlock: 4 }), /range/)
+  t.exception(() => encodeAssetBlockRequest({ assetId, transferId: 1n, startBlock: 0, endBlock: MAX_ASSET_BLOCKS_PER_REQUEST + 1 }), /range/)
+  t.exception(() => decodeAssetBlockRequest(encodeAssetBlockRequest({ assetId, transferId: 1n, startBlock: 9, endBlock: 10 }), { coreLength: 9 }), /core length/)
+  t.exception(() => encodeAssetBlockRequest({ assetId: b4a.alloc(31), transferId: 1n, startBlock: 0, endBlock: 1 }), /assetId/)
+  for (const transferId of [0n, MAX_ASSET_TRANSFER_ID + 1n, Number.MAX_SAFE_INTEGER + 1]) {
+    t.exception(() => encodeAssetBlockRequest({ assetId, transferId, startBlock: 0, endBlock: 1 }), /transferId/)
+  }
 })
 
 test('asset block response and error codecs keep chunks tied to one request range', (t) => {
   const encoded = encodeAssetBlockResponse({
     assetId,
+    transferId: 2n,
     startBlock: 4,
     endBlock: 8,
     blockIndex: 6,
@@ -163,6 +169,7 @@ test('asset block response and error codecs keep chunks tied to one request rang
   })
   const response = decodeAssetBlockResponse(encoded, { coreLength: 10 })
   t.alike(response.assetId, assetId)
+  t.is(response.transferId, 2n)
   t.is(response.startBlock, 4)
   t.is(response.endBlock, 8)
   t.is(response.blockIndex, 6)
@@ -173,6 +180,7 @@ test('asset block response and error codecs keep chunks tied to one request rang
 
   t.exception(() => encodeAssetBlockResponse({
     assetId,
+    transferId: 2n,
     startBlock: 4,
     endBlock: 8,
     blockIndex: 8,
@@ -183,6 +191,7 @@ test('asset block response and error codecs keep chunks tied to one request rang
   }), /block index/)
   t.exception(() => encodeAssetBlockResponse({
     assetId,
+    transferId: 2n,
     startBlock: 4,
     endBlock: 8,
     blockIndex: 4,
@@ -194,11 +203,13 @@ test('asset block response and error codecs keep chunks tied to one request rang
 
   const error = decodeAssetBlockError(encodeAssetBlockError({
     assetId,
+    transferId: 2n,
     startBlock: 4,
     endBlock: 8,
     code: ASSET_BLOCK_ERROR_CODES.UNAVAILABLE,
   }), { coreLength: 10 })
   t.alike(error.assetId, assetId)
+  t.is(error.transferId, 2n)
   t.is(error.code, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
 })
 

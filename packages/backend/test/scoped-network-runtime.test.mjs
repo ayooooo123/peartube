@@ -43,6 +43,7 @@ import {
   derivePublisherTopic,
 } from '../src/network/topics.js'
 import { encodePeerFrame } from '../src/network/frame.js'
+import { PROTOCOL_MAJOR } from '../src/network/version.js'
 
 function bytes (size, fill) {
   return b4a.alloc(size, fill)
@@ -190,12 +191,12 @@ test('persisted runtime policy gates discovery startup and resumes without dupli
 })
 
 
-function makeProtocolSession ({ purpose = 'bootstrap', topic = deriveBootstrapTopic(), capability = BOOTSTRAP_LOCATOR_CAPABILITY, work } = {}) {
+function makeProtocolSession ({ purpose = 'bootstrap', topic = deriveBootstrapTopic({ protocolMajor: PROTOCOL_MAJOR }), capability = BOOTSTRAP_LOCATOR_CAPABILITY, work } = {}) {
   return createScopedProtocolSession({
     peerId: 'remote-a',
     purpose,
     topic,
-    protocolMajor: 1,
+    protocolMajor: PROTOCOL_MAJOR,
     requiredCapability: capability,
     onActivate: work,
     onFrame: work,
@@ -203,26 +204,26 @@ function makeProtocolSession ({ purpose = 'bootstrap', topic = deriveBootstrapTo
 }
 
 test('protocol rejects wrong capability, topic, major, replay and oversize before work', async (t) => {
-  const topic = deriveBootstrapTopic()
+  const topic = deriveBootstrapTopic({ protocolMajor: PROTOCOL_MAJOR })
   let work = 0
   const wrongCapability = makeProtocolSession({ topic, work: () => { work++ } })
   await t.exception(wrongCapability.acceptHello(encodeScopedHello({
-    purpose: 'bootstrap', topic, protocolMajor: 1, capabilities: ['not-supported:v1'], maxFrameBytes: 1024,
+    purpose: 'bootstrap', topic, protocolMajor: PROTOCOL_MAJOR, capabilities: ['not-supported:v1'], maxFrameBytes: 1024,
   })), /capability/i)
 
   const wrongTopic = makeProtocolSession({ topic, work: () => { work++ } })
   await t.exception(wrongTopic.acceptHello(encodeScopedHello({
-    purpose: 'bootstrap', topic: bytes(32, 9), protocolMajor: 1, capabilities: [BOOTSTRAP_LOCATOR_CAPABILITY], maxFrameBytes: 1024,
+    purpose: 'bootstrap', topic: bytes(32, 9), protocolMajor: PROTOCOL_MAJOR, capabilities: [BOOTSTRAP_LOCATOR_CAPABILITY], maxFrameBytes: 1024,
   })), /topic/i)
 
   const wrongMajor = makeProtocolSession({ topic, work: () => { work++ } })
   await t.exception(wrongMajor.acceptHello(encodeScopedHello({
-    purpose: 'bootstrap', topic, protocolMajor: 2, capabilities: [BOOTSTRAP_LOCATOR_CAPABILITY], maxFrameBytes: 1024,
+    purpose: 'bootstrap', topic, protocolMajor: 1, capabilities: [BOOTSTRAP_LOCATOR_CAPABILITY], maxFrameBytes: 1024,
   })), /major/i)
 
   const active = makeProtocolSession({ topic, work: () => { work++ } })
   await active.acceptHello(encodeScopedHello({
-    purpose: 'bootstrap', topic, protocolMajor: 1, capabilities: [BOOTSTRAP_LOCATOR_CAPABILITY], maxFrameBytes: 1024,
+    purpose: 'bootstrap', topic, protocolMajor: PROTOCOL_MAJOR, capabilities: [BOOTSTRAP_LOCATOR_CAPABILITY], maxFrameBytes: 1024,
   }))
   const frame = encodePeerFrame({ purpose: 'bootstrap', type: 'locator', requestId: 1, payload: bytes(4, 1) })
   await active.receive(frame)

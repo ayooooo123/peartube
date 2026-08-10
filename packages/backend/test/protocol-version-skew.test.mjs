@@ -11,6 +11,8 @@ import {
   encodePeerFrame,
 } from '../src/network/index.js'
 import { createLiveEventDescriptor, createLiveEpochDescriptor, verifyLiveEpochChain } from '../src/live/live-descriptor.js'
+import { createStatusApi } from '../src/api/status.js'
+import { deriveBootstrapTopic } from '../src/network/topics.js'
 
 const publisher = crypto.keyPair(Buffer.alloc(32, 1))
 const device = crypto.keyPair(Buffer.alloc(32, 2))
@@ -27,6 +29,17 @@ test('protocol major and asset capability make the scoped asset surface a clean 
     mandatoryCapabilities: [ASSET_RENDITION_CAPABILITY],
     supportedCapabilities: [ASSET_RENDITION_CAPABILITY],
   }), advertisement)
+})
+
+test('status fallback advertises the exported current protocol-major topic', (t) => {
+  const networkId = 'status-major-parity'
+  const status = createStatusApi({ ctx: { networkId } }).getSwarmStatus()
+  t.is(status.scopedTopics.length, 1)
+  t.is(status.scopedTopics[0].protocolMajor, PROTOCOL_MAJOR)
+  t.is(
+    status.scopedTopics[0].topicHex,
+    Buffer.from(deriveBootstrapTopic({ networkId, protocolMajor: PROTOCOL_MAJOR })).toString('hex'),
+  )
 })
 
 test('protocol advertisements tolerate compatible minor changes and canonicalize bounded capabilities', (t) => {

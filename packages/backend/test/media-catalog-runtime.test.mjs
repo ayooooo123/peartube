@@ -1,9 +1,15 @@
 import test from 'brittle'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { Writable } from 'node:stream'
+
 import b4a from 'b4a'
+import Corestore from 'corestore'
 import crypto from 'hypercore-crypto'
 
 import { createMediaGraphApi } from '../src/api/media-graph.js'
-import { createPublicationManifest, createRenditionDescriptor, encodePublicationManifest } from '../src/assets/index.js'
+import { createPublicationManifest, createRenditionDescriptor, createStaticAssetManifest, encodePublicationManifest } from '../src/assets/index.js'
 import { createPublisherCatalogProjection } from '../src/media-graph/catalog-projection.js'
 import { createEntityReference, createMediaClaim, encodeMediaClaimEnvelope } from '../src/media-graph/index.js'
 import { PUBLISHER_RECORD_TYPES, derivePublisherId } from '../src/publisher/index.js'
@@ -13,15 +19,15 @@ const keyPair = seed => crypto.keyPair(b4a.alloc(32, seed))
 const hex = value => b4a.toString(value, 'hex')
 
 function rendition(seed = 1) {
+  const core = createStaticAssetManifest({
+    treeHash: b4a.alloc(32, seed + 1),
+    blockLength: 1,
+    byteLength: 1024,
+  })
   return createRenditionDescriptor({
     purpose: 'original',
     format: 'video/mp4',
-    core: {
-      key: hex(b4a.alloc(32, seed)),
-      length: 8,
-      treeHash: hex(b4a.alloc(32, seed + 1)),
-      byteLength: 1024,
-    },
+    core,
   })
 }
 
@@ -34,6 +40,47 @@ function operation(recordType, publisherId, signer, body, sequence) {
     issuerSequence: sequence,
     signedAt: 100,
     body,
+  }
+}
+
+function makeStore(t, label) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `peartube-${label}-`))
+  const store = new Corestore(directory)
+  t.teardown(async () => {
+    await store.close()
+    fs.rmSync(directory, { recursive: true, force: true })
+  })
+  return store
+}
+
+function makeUploadChannel() {
+  let blockOffset = 0
+  return {
+    blobsKeyHex: hex(b4a.alloc(32, 22)),
+    localWriterKeyHex: hex(b4a.alloc(32, 23)),
+    blobs: {
+      createWriteStream() {
+        let byteLength = 0
+        const writer = new Writable({
+          write(chunk, _encoding, done) {
+            byteLength += chunk.byteLength
+            done()
+          },
+          final(done) {
+            writer.id.byteLength = byteLength
+            done()
+          },
+        })
+        writer.id = { blockOffset: blockOffset++, blockLength: 1, byteOffset: 0, byteLength: 0 }
+        return writer
+      },
+      async clear() {},
+    },
+    async putBlob(buffer) {
+      const offset = blockOffset++
+      return { id: `${offset}:1:0:${buffer.byteLength}`, blockOffset: offset, blockLength: 1, byteOffset: 0, byteLength: buffer.byteLength }
+    },
+    async addVideo(metadata) { this.metadata = metadata },
   }
 }
 
@@ -76,7 +123,7 @@ test('accepted catalog payloads project canonical manifests and claims with boun
     sequence: 1,
     title: 'Catalog title',
     renditions: [source],
-    provenance: [{ type: 'upload', renditionId: source.renditionId, coreKey: source.core.key, start: 2, end: 4 }],
+    provenance: [{ type: 'upload', renditionId: source.renditionId, assetId: source.core.assetId, coreKey: source.core.key }],
     keyPair: device,
     signedAt: 100,
   })
@@ -127,10 +174,10 @@ test('accepted catalog payloads project canonical manifests and claims with boun
   t.is(typeof events[0].revision, 'string')
   t.is(events[0].changedCount, 2)
 
-  t.ok(await projection.authorizeRendition({ manifest, renditionId: source.renditionId, start: 2, end: 4 }))
-  t.absent(await projection.authorizeRendition({ manifest, renditionId: source.renditionId, start: 0, end: 4 }))
-  t.absent(await projection.authorizeRendition({ manifest: { ...manifest, publicationId: hex(b4a.alloc(32, 99)) }, renditionId: source.renditionId, start: 2, end: 4 }))
-  t.absent(await projection.authorizeRendition({ manifest, renditionId: source.renditionId, start: 2, end: 9 }))
+  t.ok(await projection.authorizeRendition({ manifest, renditionId: source.renditionId, start: 0, end: 1 }))
+  t.absent(await projection.authorizeRendition({ manifest, renditionId: source.renditionId, start: -1, end: 1 }))
+  t.absent(await projection.authorizeRendition({ manifest: { ...manifest, publicationId: hex(b4a.alloc(32, 99)) }, renditionId: source.renditionId, start: 0, end: 1 }))
+  t.absent(await projection.authorizeRendition({ manifest, renditionId: source.renditionId, start: 0, end: 2 }))
   const restartedProjection = createPublisherCatalogProjection({
     catalogRegistry: { async listBindings() { return [{ publisherId, catalog }] } },
     now: () => 200,
@@ -273,28 +320,39 @@ test('upload confirms publication and canonical claims before joining its publis
     },
   }
   const binding = { publisherId, catalog }
+  const store = makeStore(t, 'media-catalog-upload')
   const joined = []
+  const retained = []
+  const lifecycle = []
   let rebuilt = 0
   const manager = createUploadManager({
-    ctx: {},
+    ctx: { store },
     catalogRegistry: {
       async getWritableBindings() { return [binding] },
       async resolve() { return binding },
     },
-    mediaCatalogProjection: { async rebuild() { rebuilt++ } },
-    scopedNetwork: { async publishLocalPublisherCatalog(value) { joined.push(value); return { status: 'published' } } },
+    mediaCatalogProjection: {
+      async rebuild() {
+        rebuilt++
+        lifecycle.push('rebuild')
+      },
+    },
+    scopedNetwork: {
+      async retainAuthorizedRendition(value) {
+        lifecycle.push('retain')
+        retained.push(value)
+        return { status: 'retained' }
+      },
+      async publishLocalPublisherCatalog(value) {
+        lifecycle.push('publish')
+        joined.push(value)
+        return { status: 'published' }
+      },
+    },
     deviceKeyPair: device,
     now: () => 200,
   })
-  const channel = {
-    blobs: true,
-    blobsKeyHex: hex(b4a.alloc(32, 22)),
-    localWriterKeyHex: hex(b4a.alloc(32, 23)),
-    async putBlob(buffer) {
-      return { id: `0:1:0:${buffer.byteLength}`, blockOffset: 0, blockLength: 1, byteOffset: 0, byteLength: buffer.byteLength }
-    },
-    async addVideo(metadata) { this.metadata = metadata },
-  }
+  const channel = makeUploadChannel()
 
   const result = await manager.uploadFromBuffer(channel, b4a.from('not-an-mp4'), { title: 'Uploaded', mimeType: 'video/webm' })
   t.is(result.success, true)
@@ -307,6 +365,10 @@ test('upload confirms publication and canonical claims before joining its publis
   t.is(rebuilt, 1)
   t.is(joined.length, 1)
   t.ok(b4a.equals(joined[0].publisherId, publisherId))
+  t.alike(lifecycle, ['rebuild', 'retain', 'publish'])
+  t.is(retained.length, 1)
+  t.is(retained[0].manifest, result.manifest)
+  t.is(retained[0].renditionId, result.renditionId)
 })
 
 test('concurrent uploads reserve disjoint catalog sequence batches without partial publication', async t => {
@@ -346,28 +408,22 @@ test('concurrent uploads reserve disjoint catalog sequence batches without parti
     },
   }
   const binding = { publisherId, catalog }
+  const store = makeStore(t, 'media-catalog-concurrent-upload')
   const manager = createUploadManager({
-    ctx: {},
+    ctx: { store },
     catalogRegistry: {
       async getWritableBindings() { return [binding] },
       async resolve() { return binding },
     },
     mediaCatalogProjection: { async rebuild() {} },
-    scopedNetwork: { async publishLocalPublisherCatalog() { return { status: 'published' } } },
+    scopedNetwork: {
+      async retainAuthorizedRendition() { return { status: 'retained' } },
+      async publishLocalPublisherCatalog() { return { status: 'published' } },
+    },
     deviceKeyPair: device,
     now: () => 300,
   })
-  let blobOffset = 0
-  const channel = {
-    blobs: true,
-    blobsKeyHex: hex(b4a.alloc(32, 32)),
-    localWriterKeyHex: hex(b4a.alloc(32, 33)),
-    async putBlob(buffer) {
-      const blockOffset = blobOffset++
-      return { id: `${blockOffset}:1:0:${buffer.byteLength}`, blockOffset, blockLength: 1, byteOffset: 0, byteLength: buffer.byteLength }
-    },
-    async addVideo() {},
-  }
+  const channel = makeUploadChannel()
 
   const [first, second] = await Promise.all([
     manager.uploadFromBuffer(channel, b4a.from('first'), { title: 'First', mimeType: 'video/webm' }),

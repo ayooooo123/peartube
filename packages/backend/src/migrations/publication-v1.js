@@ -5,6 +5,7 @@ import {
   createRenditionDescriptor,
   encodePublicationManifest,
 } from '../assets/index.js'
+import { classifyLegacyAssetReference } from './asset-core-v2.js'
 import { parseBlobRef } from '../blob-ref.js'
 import {
   createEntityReference,
@@ -253,6 +254,13 @@ function normalizeSource(source) {
     parsedBlob,
     fingerprint,
     provenance: sourceProvenance(source, parsedBlob),
+    disposition: classifyLegacyAssetReference({
+      key: parsedBlob.blobsCoreKey,
+      start: parsedBlob.blob.blockOffset,
+      end: parsedBlob.blob.blockOffset + parsedBlob.blob.blockLength,
+      sourcePath: video.sourcePath,
+      localFilePath: video.localFilePath,
+    }),
   }
 }
 
@@ -434,6 +442,27 @@ export async function runPublicationV1StartupMigration(options = {}) {
       quarantined.push(quarantine)
       checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'failed', quarantined })
       throw error
+    }
+    if (normalized.disposition) {
+      const quarantine = {
+        sourceKey,
+        code: normalized.disposition === 'reingest-required'
+          ? 'PUBLICATION_V1_REINGEST_REQUIRED'
+          : 'PUBLICATION_V1_QUARANTINED',
+        disposition: normalized.disposition,
+        message: normalized.disposition === 'reingest-required'
+          ? 'legacy publication source bytes must be re-ingested'
+          : 'legacy publication cannot be verified as a static asset',
+      }
+      const quarantined = checkpoint.quarantined.filter(entry => entry.sourceKey !== sourceKey)
+      quarantined.push(quarantine)
+      checkpoint = await checkpointRepository.save({
+        ...checkpoint,
+        status: 'running',
+        pending: null,
+        quarantined,
+      })
+      continue
     }
 
     const binding = await resolveCatalog(normalized.source)

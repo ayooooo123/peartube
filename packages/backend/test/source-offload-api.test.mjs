@@ -2,20 +2,28 @@ import test from 'brittle'
 import c from 'compact-encoding'
 import * as schema from '../../spec/spec/schema/index.js'
 
+import { createRenditionDescriptor, createStaticAssetManifest } from '../src/assets/index.js'
 import { createApi } from '../src/api.js'
 
 const publicationId = 'a'.repeat(64)
 const publisherId = 'b'.repeat(64)
-const coreKey = 'c'.repeat(64)
-const renditionId = 'd'.repeat(64)
+const staticCore = createStaticAssetManifest({
+  treeHash: 'c'.repeat(64),
+  blockLength: 1,
+  byteLength: 4096,
+})
+const rendition = createRenditionDescriptor({ purpose: 'original', format: 'video/mp4', core: staticCore })
+const coreKey = rendition.core.key
+const assetId = rendition.core.assetId
+const renditionId = rendition.renditionId
 
 function manifest(overrides = {}) {
   return {
     publicationId,
     body: {
       publisherId,
-      renditions: [{ renditionId, purpose: 'original', core: { key: coreKey, length: 9, byteLength: 4096 } }],
-      provenance: [{ type: 'upload', renditionId, coreKey, blobId: '2:7:0:4096', start: 2, end: 9 }],
+      renditions: [rendition],
+      provenance: [{ type: 'upload', renditionId, assetId, coreKey }],
       ...overrides,
     },
   }
@@ -78,7 +86,14 @@ function createHarness(options = {}) {
         evidenceCalls++
         if (typeof options.collectEvidence === 'function') return options.collectEvidence(input)
         const { locators } = input
-        if (locators.length !== 1 || locators[0].start !== 2 || locators[0].end !== 9) throw new Error('locator mismatch')
+        if (locators.length !== 1 ||
+            locators[0].assetId !== assetId ||
+            locators[0].coreKey !== coreKey ||
+            locators[0].blobId !== null ||
+            locators[0].start !== 0 ||
+            locators[0].end !== rendition.core.length) {
+          throw new Error('locator mismatch')
+        }
         return currentEvidence
       },
       ...(options.useDefaultDeletion === true ? {} : {
@@ -180,8 +195,14 @@ test('backend source offload rechecks playback and evidence immediately before d
   t.is(harness.deleteCalls(), 0)
 })
 
-test('backend source offload fails closed for ambiguous source locators', async (t) => {
-  const malformed = manifest({ provenance: [] })
+test('backend source offload fails closed for a legacy random-core rendition', async (t) => {
+  const malformed = manifest({
+    renditions: [{
+      renditionId: 'f'.repeat(64),
+      purpose: 'original',
+      core: { key: 'e'.repeat(64), length: 9, byteLength: 4096 },
+    }],
+  })
   const harness = createHarness({ manifest: malformed })
   const assessment = await harness.api.assessSourceOffload({ publicationId })
   t.is(assessment.success, false)
@@ -189,20 +210,30 @@ test('backend source offload fails closed for ambiguous source locators', async 
   t.is(harness.deleteCalls(), 0)
 })
 
-test('backend source offload rejects multiple original ranges before assessment', async (t) => {
+test('backend source offload rejects multiple original static renditions before assessment', async (t) => {
 
-  const secondCoreKey = 'e'.repeat(64)
-  const secondRenditionId = 'f'.repeat(64)
+  const secondCore = createStaticAssetManifest({
+    treeHash: 'e'.repeat(64),
+    blockLength: 1,
+    byteLength: 2048,
+  })
+  const secondRendition = createRenditionDescriptor({
+    purpose: 'original',
+    format: 'video/mp4',
+    core: secondCore,
+  })
   let evidenceCalls = 0
   const harness = createHarness({
     manifest: manifest({
-      renditions: [
-        { renditionId, purpose: 'original', core: { key: coreKey, length: 9, byteLength: 4096 } },
-        { renditionId: secondRenditionId, purpose: 'original', core: { key: secondCoreKey, length: 6, byteLength: 2048 } },
-      ],
+      renditions: [rendition, secondRendition],
       provenance: [
-        { type: 'upload', renditionId, coreKey, blobId: '2:7:0:4096', start: 2, end: 9 },
-        { type: 'upload', renditionId: secondRenditionId, coreKey: secondCoreKey, blobId: '1:5:0:2048', start: 1, end: 6 },
+        { type: 'upload', renditionId, assetId, coreKey },
+        {
+          type: 'upload',
+          renditionId: secondRendition.renditionId,
+          assetId: secondRendition.core.assetId,
+          coreKey: secondRendition.core.key,
+        },
       ],
     }),
     collectEvidence: async () => {
@@ -246,7 +277,7 @@ test('source offload recollects remote-copy evidence only after acquiring the so
     publisherDeviceCopies: [{ deviceId: 'phone', physicalDeviceId: 'phone', connected: true, fullCopy: true, publisherControlled: true }],
   })
   t.is((await harness.api.confirmSourceOffload(confirmation(assessment))).success, true)
-  t.alike(harness.clearCalls(), [{ start: 2, end: 9 }])
+  t.alike(harness.clearCalls(), [{ start: 0, end: rendition.core.length }])
 })
 
 test('playback starting before the source lock causes a durable retryable refusal', async (t) => {
@@ -274,7 +305,7 @@ test('playback starting before the source lock causes a durable retryable refusa
   )
   harness.setPlaybackActive(false)
   t.is((await harness.api.confirmSourceOffload(confirmation(assessment))).success, true)
-  t.alike(harness.clearCalls(), [{ start: 2, end: 9 }])
+  t.alike(harness.clearCalls(), [{ start: 0, end: rendition.core.length }])
 })
 
 test('locked evidence collector errors refuse without consuming or clearing', async (t) => {
@@ -302,7 +333,7 @@ test('locked evidence collector errors refuse without consuming or clearing', as
 
   evidenceUnavailable = false
   t.is((await harness.api.confirmSourceOffload(confirmation(assessment))).success, true)
-  t.alike(harness.clearCalls(), [{ start: 2, end: 9 }])
+  t.alike(harness.clearCalls(), [{ start: 0, end: rendition.core.length }])
 })
 
 test('prefetch startup causes a retryable refusal before source deletion', async (t) => {

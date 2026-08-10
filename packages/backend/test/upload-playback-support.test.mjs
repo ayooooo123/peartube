@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { Writable } from 'node:stream'
 
 import Corestore from 'corestore'
 import crypto from 'hypercore-crypto'
@@ -12,22 +13,35 @@ import { createUploadManager } from '../src/upload.js'
 
 function makeChannel() {
   const videos = []
+  const blobWrites = []
   return {
     localWriterKeyHex: '11'.repeat(32),
     blobsKeyHex: '22'.repeat(32),
     videos,
+    blobWrites,
     blobs: {
       createWriteStream() {
-        return {
-          id: { blockOffset: 0, blockLength: 1, byteOffset: 0, byteLength: 32 },
-          on() { return this },
-          close() {},
-        }
+        const chunks = []
+        const writer = new Writable({
+          write(chunk, _encoding, done) {
+            chunks.push(Buffer.from(chunk))
+            done()
+          },
+          final(done) {
+            const bytes = Buffer.concat(chunks)
+            blobWrites.push(bytes)
+            writer.id.byteLength = bytes.byteLength
+            done()
+          },
+        })
+        writer.id = { blockOffset: 0, blockLength: 1, byteOffset: 0, byteLength: 0 }
+        return writer
       },
       async clear() {},
     },
-    async putBlob() {
-      return { id: '0:1:0:32' }
+    async putBlob(buffer) {
+      blobWrites.push(Buffer.from(buffer))
+      return { id: `0:1:0:${buffer.byteLength}` }
     },
     async addVideo(metadata) {
       videos.push(metadata)
@@ -74,7 +88,7 @@ function makeCatalog(deviceKeyPair, appended, counters = {}) {
   }
 }
 
-function makePublishingManager({ store, deviceKeyPair, catalog }) {
+function makePublishingManager({ store, deviceKeyPair, catalog, scopedNetwork = null, mediaCatalogProjection = null }) {
   return createUploadManager({
     ctx: { store },
     deviceKeyPair,
@@ -82,6 +96,11 @@ function makePublishingManager({ store, deviceKeyPair, catalog }) {
       async getWritableBindings() {
         return [{ publisherId: deviceKeyPair.publicKey, catalog }]
       },
+    },
+    mediaCatalogProjection,
+    scopedNetwork: scopedNetwork || {
+      async retainAuthorizedRendition() { return { status: 'retained' } },
+      async publishLocalPublisherCatalog() { return { status: 'published' } },
     },
     now: () => 1_700_000_000_000,
   })
@@ -155,6 +174,104 @@ test('published uploads use one verified static descriptor and converge across p
   assert.notEqual(results[0].manifest.body.publisherId, results[1].manifest.body.publisherId)
 })
 
+test('path publication materializes the file once and derives playback bytes from the verified core', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-static-path-'))
+  const filePath = path.join(directory, 'fixture.webm')
+  const bytes = Buffer.concat([
+    Buffer.from([0x1A, 0x45, 0xDF, 0xA3]),
+    Buffer.from('single immutable path source'),
+  ])
+  fs.writeFileSync(filePath, bytes)
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const store = makeStore(t, 'static-path-store')
+  const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 6))
+  const appended = []
+  const channel = makeChannel()
+  let sourceReads = 0
+  const fileSystem = {
+    statSync: fs.statSync,
+    createReadStream(pathname, options) {
+      sourceReads++
+      return fs.createReadStream(pathname, options)
+    },
+  }
+  const result = await makePublishingManager({
+    store,
+    deviceKeyPair,
+    catalog: makeCatalog(deviceKeyPair, appended),
+  }).uploadFromPath(channel, filePath, { title: 'One source' }, fileSystem)
+
+  assert.equal(result.success, true)
+  assert.equal(sourceReads, 1)
+  assert.deepEqual(channel.blobWrites, [bytes])
+  assert.equal(result.manifest.body.renditions[0].core.byteLength, bytes.byteLength)
+})
+
+test('mid-signing cancellation appends no catalog batch', async (t) => {
+  const store = makeStore(t, 'cancelled-signing-upload')
+  const controller = new AbortController()
+  const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 8))
+  let created = 0
+  let appended = 0
+  const catalog = makeCatalog(deviceKeyPair, [], {})
+  const createLocalOperation = catalog.createLocalOperation
+  catalog.createLocalOperation = async (value) => {
+    const operation = await createLocalOperation(value)
+    created++
+    if (created === 1) controller.abort()
+    return operation
+  }
+  catalog.appendBatchAndConfirm = async () => {
+    appended++
+    return []
+  }
+  const channel = makeChannel()
+  const result = await makePublishingManager({
+    store,
+    deviceKeyPair,
+    catalog,
+  }).uploadFromBuffer(
+    channel,
+    Buffer.from('cancel while signing'),
+    { title: 'Cancelled signing', mimeType: 'video/webm', signal: controller.signal },
+  )
+
+  assert.equal(result.success, false)
+  assert.match(result.error, /cancelled/)
+  assert.equal(created, 1)
+  assert.equal(appended, 0)
+  assert.equal(channel.videos.length, 0)
+})
+
+test('deterministic reused uploads return the original publication contract', async () => {
+  const manifest = { publicationId: 'aa'.repeat(32), body: { manifestId: 'bb'.repeat(32) } }
+  const metadata = {
+    id: 'feed',
+    immutablePublication: {
+      publicationId: manifest.publicationId,
+      manifestId: manifest.body.manifestId,
+      renditionId: 'cc'.repeat(32),
+      assetId: 'dd'.repeat(32),
+      coreKey: 'dd'.repeat(32),
+      manifest,
+    },
+  }
+  const manager = createUploadManager({ ctx: {} })
+  const result = await manager.uploadFromPath({
+    blobs: true,
+    async getVideo() { return metadata },
+  }, '/must-not-read', { videoId: metadata.id }, {})
+
+  assert.equal(result.success, true)
+  assert.equal(result.reused, true)
+  assert.equal(result.publicationId, metadata.immutablePublication.publicationId)
+  assert.equal(result.manifestId, metadata.immutablePublication.manifestId)
+  assert.equal(result.renditionId, metadata.immutablePublication.renditionId)
+  assert.equal(result.assetId, metadata.immutablePublication.assetId)
+  assert.equal(result.coreKey, metadata.immutablePublication.coreKey)
+  assert.equal(result.manifest, manifest)
+})
+
 test('static upload cancellation closes staging and emits no catalog operation', async (t) => {
   const underlyingStore = makeStore(t, 'cancelled-static-upload')
   const controller = new AbortController()
@@ -205,6 +322,11 @@ test('catalog commit failure clears the newly written blob and leaves no upload 
     localWriterKeyHex: '11'.repeat(32),
     blobsKeyHex: '22'.repeat(32),
     blobs: {
+      createWriteStream() {
+        const writer = new Writable({ write(_chunk, _encoding, done) { done() } })
+        writer.id = { ...blob }
+        return writer
+      },
       async clear(value) {
         cleared.push({ ...value })
       },

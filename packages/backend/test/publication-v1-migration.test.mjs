@@ -2,7 +2,6 @@ import test from 'brittle'
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 
-import { classifyLegacyAssetReference } from '../src/migrations/asset-core-v2.js'
 import {
   createPublicationV1CheckpointRepository,
   createPublicationV1StartupLifecycle,
@@ -53,30 +52,42 @@ function memoryMetaDb() {
   }
 }
 
-test('legacy owner-channel fixture without source bytes requires re-ingest and is not active v2 playback', (t) => {
-  const sourceVideo = {
-    id: 'legacy-video-1',
-    title: 'Legacy Movie',
-    description: 'kept exactly',
-    uploadedAt: 1_700_000_000_000,
-    blobId: '2:3:0:4096',
-    blobsCoreKey: 'c'.repeat(64),
-    mimeType: 'video/mp4',
-    contentFingerprint: `sha256:${'d'.repeat(64)}`,
-    sourceProvider: 'youtube',
-    sourceVideoId: 'source-42',
+test('startup migration checkpoints byte-less legacy ranges for re-ingest without catalog emission', async (t) => {
+  const source = {
+    source: 'legacy-owner-channel',
+    sourceKey: 'e'.repeat(64),
+    ownerPublisherId: 'a'.repeat(64),
+    video: {
+      id: 'legacy-video-1',
+      title: 'Legacy Movie',
+      description: 'kept exactly',
+      uploadedAt: 1_700_000_000_000,
+      blobId: '2:3:0:4096',
+      blobsCoreKey: 'c'.repeat(64),
+      mimeType: 'video/mp4',
+      contentFingerprint: `sha256:${'d'.repeat(64)}`,
+      sourceProvider: 'youtube',
+      sourceVideoId: 'source-42',
+    },
   }
-  const [start, length] = sourceVideo.blobId.split(':').map(Number)
-  const disposition = classifyLegacyAssetReference({
-    key: sourceVideo.blobsCoreKey,
-    start,
-    end: start + length,
+  const metaDb = memoryMetaDb()
+  let catalogResolutions = 0
+  const result = await runPublicationV1StartupMigration({
+    sourceRepository: { async list() { return [source] } },
+    checkpointRepository: createPublicationV1CheckpointRepository(metaDb),
+    resolveCatalog: async () => { catalogResolutions++; return null },
+    deviceKeyPair: crypto.keyPair(b4a.alloc(32, 8)),
+    mediaCatalogProjection: { async rebuild() {} },
+    now: () => 100,
   })
 
-  t.is(disposition, 'reingest-required')
-  t.absent(sourceVideo.assetId, 'legacy fixture does not invent an immutable asset id')
-  t.absent(sourceVideo.coreKey, 'legacy fixture does not enter active v2 playback')
-  t.is(sourceVideo.description, 'kept exactly', 'structured metadata remains available for re-ingest')
+  t.is(result.status, 'complete')
+  t.is(catalogResolutions, 0, 're-ingest disposition reaches no catalog writer')
+  const checkpoint = await createPublicationV1CheckpointRepository(metaDb).load()
+  t.is(checkpoint.quarantined.length, 1)
+  t.is(checkpoint.quarantined[0].sourceKey, `${source.sourceKey}:${source.video.id}`)
+  t.is(checkpoint.quarantined[0].disposition, 'reingest-required')
+  t.is(source.video.description, 'kept exactly', 'structured metadata remains available for re-ingest')
 })
 
 test('startup migration quarantines malformed legacy storage and fails closed without deleting source', async t => {

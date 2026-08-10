@@ -19,6 +19,7 @@ import { normalizeContentDetails } from './channel/structured-content.js';
 import {
   createImmutableRenditionWriter,
   createPublicationManifest,
+  createRenditionDescriptor,
   encodePublicationManifest,
 } from './assets/index.js';
 import {
@@ -309,12 +310,11 @@ function completedUploadResult(videoId, metadata) {
   };
 }
 
-async function maybeAttachImmutablePublication(metadata, mimeType, runtime = {}) {
-  const { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair } = runtime;
-  if (!catalogRegistry || !deviceKeyPair?.publicKey || !deviceKeyPair?.secretKey) return metadata;
-  const requestedPublisherId = runtime.publisherId;
-  const bindings = requestedPublisherId
-    ? [await catalogRegistry.resolve(requestedPublisherId)]
+async function prepareImmutablePublication(metadata, runtime = {}) {
+  const { catalogRegistry, deviceKeyPair } = runtime;
+  if (!catalogRegistry || !deviceKeyPair?.publicKey || !deviceKeyPair?.secretKey) return null;
+  const bindings = runtime.publisherId
+    ? [await catalogRegistry.resolve(runtime.publisherId)]
     : await catalogRegistry.getWritableBindings();
   if (!Array.isArray(bindings) || bindings.length !== 1) {
     throw new Error(bindings?.length ? 'Upload publisher catalog is ambiguous' : 'No admitted publisher catalog is available');
@@ -339,14 +339,74 @@ async function maybeAttachImmutablePublication(metadata, mimeType, runtime = {})
   const durationSeconds = Number(metadata.duration);
   const renditionWrite = await renditionWriter.writeRendition({
     purpose: 'original',
-    format: String(mimeType || metadata.mimeType || 'video/mp4'),
+    format: String(metadata.mimeType || 'application/octet-stream'),
     durationMs: Number.isFinite(durationSeconds) && durationSeconds > 0
       ? Math.round(durationSeconds * 1000)
       : 1
   });
-  const rendition = renditionWrite.descriptor;
-  await renditionWrite.core.close();
-  assertUploadNotCancelled(runtime.signal);
+  return { catalog, publisherId, renditionWrite };
+}
+
+function finalizePreparedRendition(prepared, mimeType) {
+  if (!prepared) return;
+  const write = prepared.renditionWrite;
+  write.descriptor = createRenditionDescriptor({
+    purpose: write.descriptor.purpose,
+    format: String(mimeType || write.descriptor.format || 'application/octet-stream'),
+    core: write.staticAsset,
+    segmentIndex: write.segmentIndex
+  });
+}
+
+async function writeStaticPlaybackBlob(channel, prepared, signal, onProgress) {
+  if (!channel?.blobs || typeof channel.blobs.createWriteStream !== 'function') {
+    throw new Error('Channel blob stream is unavailable');
+  }
+  const { core, descriptor } = prepared.renditionWrite;
+  const writeStream = channel.blobs.createWriteStream();
+  const completed = new Promise((resolve, reject) => {
+    writeStream.once('error', reject);
+    writeStream.once('close', () => {
+      const id = writeStream.id;
+      resolve({ id: `${id.blockOffset}:${id.blockLength}:${id.byteOffset}:${id.byteLength}`, ...id });
+    });
+  });
+  try {
+    let bytesWritten = 0;
+    for (let index = 0; index < descriptor.core.length; index++) {
+      assertUploadNotCancelled(signal);
+      const block = await core.get(index);
+      assertUploadNotCancelled(signal);
+      if (!writeStream.write(block)) {
+        await new Promise((resolve, reject) => {
+          writeStream.once('drain', resolve);
+          writeStream.once('error', reject);
+        });
+      }
+      bytesWritten += block.byteLength;
+      onProgress?.(
+        Math.round((bytesWritten / descriptor.core.byteLength) * 100),
+        bytesWritten,
+        descriptor.core.byteLength,
+        { speed: 0, eta: 0 }
+      );
+    }
+    assertUploadNotCancelled(signal);
+    writeStream.end();
+    return await completed;
+  } catch (error) {
+    if (typeof writeStream.destroy === 'function') writeStream.destroy(error);
+    else writeStream.end();
+    await completed.catch(() => {});
+    throw error;
+  }
+}
+
+async function maybeAttachImmutablePublication(metadata, prepared, runtime = {}) {
+  if (!prepared) return metadata;
+  const { mediaCatalogProjection, scopedNetwork, deviceKeyPair } = runtime;
+  const { catalog, publisherId } = prepared;
+  const rendition = prepared.renditionWrite.descriptor;
 
   return serializeCatalogWrite(catalog, async () => {
   const currentTime = runtime.now();
@@ -434,12 +494,15 @@ async function maybeAttachImmutablePublication(metadata, mimeType, runtime = {})
   }))];
   const signedOperations = [];
   for (const candidate of operations) {
-    signedOperations.push(await catalog.createLocalOperation({
+    const signed = await catalog.createLocalOperation({
       ...candidate,
       policyEpoch: writer.admissionPolicyEpoch,
       signedAt: currentTime
-    }));
+    });
+    assertUploadNotCancelled(runtime.signal);
+    signedOperations.push(signed);
   }
+  assertUploadNotCancelled(runtime.signal);
   await appendImmutablePublication(catalog, signedOperations);
   metadata.immutablePublication = {
     publicationId: manifest.publicationId,
@@ -452,10 +515,25 @@ async function maybeAttachImmutablePublication(metadata, mimeType, runtime = {})
     claimIds: claims.map(claim => claim.claimId),
     manifest
   };
+  let retained = false;
   try {
     await mediaCatalogProjection?.rebuild?.();
+    if (typeof scopedNetwork?.retainAuthorizedRendition === 'function') {
+      await scopedNetwork.retainAuthorizedRendition({
+        manifest,
+        renditionId: rendition.renditionId,
+        start: 0,
+        end: rendition.core.length
+      });
+      retained = true;
+    }
     await scopedNetwork?.publishLocalPublisherCatalog?.({ publisherId });
   } catch (error) {
+    if (retained) {
+      try {
+        await scopedNetwork.releaseAuthorizedRendition?.({ renditionId: rendition.renditionId });
+      } catch {}
+    }
     throw markUploadCommitState(error, 'uploadCommitSucceeded');
   }
   return metadata;
@@ -581,7 +659,7 @@ export function createUploadManager({
     async uploadFromPath(channel, filePath, options, fs, onProgress) {
       let blobResult = null;
       let immutableCommitConfirmed = false;
-
+      let prepared = null;
       try {
         if (!channel.blobs) {
           throw new Error('Channel blobs not initialized');
@@ -595,7 +673,7 @@ export function createUploadManager({
         if (providedVideoId && typeof channel.getVideo === 'function') {
           const existing = await channel.getVideo(providedVideoId).catch(() => null)
           if (existing) {
-            return { success: true, videoId: providedVideoId, metadata: existing, reused: true }
+            return { ...completedUploadResult(providedVideoId, existing), reused: true };
           }
         }
         const videoId = providedVideoId || b4a.toString(crypto.randomBytes(16), 'hex');
@@ -606,101 +684,87 @@ export function createUploadManager({
         };
         assertUploadNotCancelled(uploadControl.signal);
 
-        // Get file size
         const stat = fs.statSync(filePath);
-        const fileSize = stat.size;
-
-        // Detect MIME type from file magic bytes (first 4KB is enough)
-        // Use chunked read to avoid issues with large files in bare runtime
-        const headerSize = Math.min(4100, fileSize);
-        let headerBuffer;
-
-        if (fs.createReadStream) {
-          // Use streaming for header detection
-          headerBuffer = await new Promise((resolve, reject) => {
-            const chunks = [];
-            let bytesRead = 0;
-            const stream = fs.createReadStream(filePath, { start: 0, end: headerSize - 1 });
-            stream.on('data', chunk => {
-              chunks.push(chunk);
-              bytesRead += chunk.length;
-            });
-            stream.on('end', () => resolve(b4a.concat(chunks)));
-            stream.on('error', reject);
-          });
-        } else {
-          // Fallback for environments without createReadStream
-          const fd = fs.openSync(filePath, 'r');
-          headerBuffer = b4a.alloc(headerSize);
-          fs.readSync(fd, headerBuffer, 0, headerSize, 0);
-          fs.closeSync(fd);
-        }
-
-        const detectedMimeType = detectMimeType(headerBuffer);
-        const mimeType = detectedMimeType || metadata.mimeType || 'video/mp4';
-
-        console.log(`[Upload] Starting: ${filePath} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
-
+        let fileSize = stat.size;
+        let mimeType;
         const startTime = Date.now();
-        let bytesWritten = 0;
-        let lastProgressUpdate = Date.now();
 
-        // Use streaming upload for large files
-        blobResult = await new Promise((resolve, reject) => {
-          const writeStream = channel.blobs.createWriteStream();
-          const readStream = fs.createReadStream(filePath);
-
-          readStream.on('data', (chunk) => {
-            bytesWritten += chunk.length;
-            const now = Date.now();
-            // Update progress every 500ms to avoid flooding
-            if (onProgress && (now - lastProgressUpdate > 500 || bytesWritten === fileSize)) {
-              const progress = Math.round((bytesWritten / fileSize) * 100);
-              const elapsed = (now - startTime) / 1000;
-              const speed = elapsed > 0 ? bytesWritten / elapsed : 0;
-              const remaining = fileSize - bytesWritten;
-              const eta = speed > 0 ? remaining / speed : 0;
-              onProgress(progress, bytesWritten, fileSize, { speed, eta });
-              lastProgressUpdate = now;
-            }
-          });
-
-          readStream.on('error', reject);
-          writeStream.on('error', reject);
-          writeStream.on('close', () => {
-            // Format blob ID as string like putBlob does
-            const id = writeStream.id;
-            const idStr = `${id.blockOffset}:${id.blockLength}:${id.byteOffset}:${id.byteLength}`;
-            resolve({ id: idStr, ...id });
-          });
-
-          readStream.pipe(writeStream);
-        });
-
-        if (onProgress) {
-          onProgress(100, fileSize, fileSize, { speed: 0, eta: 0 });
-        }
-
-        const totalTime = (Date.now() - startTime) / 1000;
-        const avgSpeed = fileSize / totalTime;
-        console.log(`[Upload] Transfer complete in ${totalTime.toFixed(1)}s (avg ${(avgSpeed / 1024 / 1024).toFixed(2)} MB/s)`);
-
-
-        // Complete the validated metadata with generated upload values
-        buildVideoMetadata(
-          metadata,
-          blobResult,
-          channel,
-          fileSize,
-          mimeType
-        );
-        await maybeAttachImmutablePublication(metadata, mimeType, {
+        prepared = await prepareImmutablePublication(metadata, {
           ...publicationRuntime,
           ...uploadControl,
           createSource: () => fs.createReadStream(filePath)
         });
+        if (prepared) {
+          fileSize = prepared.renditionWrite.descriptor.core.byteLength;
+          const firstBlock = fileSize > 0 ? await prepared.renditionWrite.core.get(0) : b4a.alloc(0);
+          mimeType = detectMimeType(firstBlock.subarray(0, Math.min(4100, firstBlock.byteLength))) ||
+            metadata.mimeType ||
+            'video/mp4';
+          finalizePreparedRendition(prepared, mimeType);
+          blobResult = await writeStaticPlaybackBlob(channel, prepared, uploadControl.signal, onProgress);
+          await prepared.renditionWrite.core.close();
+        } else {
+          const headerSize = Math.min(4100, fileSize);
+          let headerBuffer;
+          if (fs.createReadStream) {
+            headerBuffer = await new Promise((resolve, reject) => {
+              const chunks = [];
+              const stream = fs.createReadStream(filePath, { start: 0, end: headerSize - 1 });
+              stream.on('data', chunk => chunks.push(chunk));
+              stream.on('end', () => resolve(b4a.concat(chunks)));
+              stream.on('error', reject);
+            });
+          } else {
+            const fd = fs.openSync(filePath, 'r');
+            headerBuffer = b4a.alloc(headerSize);
+            fs.readSync(fd, headerBuffer, 0, headerSize, 0);
+            fs.closeSync(fd);
+          }
+          mimeType = detectMimeType(headerBuffer) || metadata.mimeType || 'video/mp4';
+          let bytesWritten = 0;
+          let lastProgressUpdate = Date.now();
+          blobResult = await new Promise((resolve, reject) => {
+            const writeStream = channel.blobs.createWriteStream();
+            const readStream = fs.createReadStream(filePath);
+            readStream.on('data', (chunk) => {
+              bytesWritten += chunk.length;
+              const currentTime = Date.now();
+              if (onProgress && (currentTime - lastProgressUpdate > 500 || bytesWritten === fileSize)) {
+                const progress = Math.round((bytesWritten / fileSize) * 100);
+                const elapsed = (currentTime - startTime) / 1000;
+                const speed = elapsed > 0 ? bytesWritten / elapsed : 0;
+                const remaining = fileSize - bytesWritten;
+                onProgress(progress, bytesWritten, fileSize, {
+                  speed,
+                  eta: speed > 0 ? remaining / speed : 0
+                });
+                lastProgressUpdate = currentTime;
+              }
+            });
+            readStream.on('error', reject);
+            writeStream.on('error', reject);
+            writeStream.on('close', () => {
+              const id = writeStream.id;
+              resolve({ id: `${id.blockOffset}:${id.blockLength}:${id.byteOffset}:${id.byteLength}`, ...id });
+            });
+            readStream.pipe(writeStream);
+          });
+        }
+
+        onProgress?.(100, fileSize, fileSize, { speed: 0, eta: 0 });
+        const totalTime = (Date.now() - startTime) / 1000;
+        const avgSpeed = totalTime > 0 ? fileSize / totalTime : 0;
+        console.log(`[Upload] Transfer complete in ${totalTime.toFixed(1)}s (avg ${(avgSpeed / 1024 / 1024).toFixed(2)} MB/s)`);
+
+        buildVideoMetadata(metadata, blobResult, channel, fileSize, mimeType);
+        await maybeAttachImmutablePublication(metadata, prepared, {
+          ...publicationRuntime,
+          ...uploadControl
+        });
         immutableCommitConfirmed = Boolean(metadata.immutablePublication);
-        await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4File(fs, filePath, { fileSize }));
+        if (!prepared) {
+          await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4File(fs, filePath, { fileSize }));
+        }
 
         // Store metadata in channel HyperDB
         await channel.addVideo(metadata, {
@@ -711,6 +775,11 @@ export function createUploadManager({
 
         return completedUploadResult(videoId, metadata);
       } catch (err) {
+        if (prepared?.renditionWrite?.core && !prepared.renditionWrite.core.closed) {
+          try {
+            await prepared.renditionWrite.core.close();
+          } catch {}
+        }
         if (blobResult && !immutableCommitConfirmed &&
             err?.uploadCommitSucceeded !== true && err?.uploadCommitUncertain !== true) {
           try {
@@ -739,7 +808,7 @@ export function createUploadManager({
     async uploadFromBuffer(channel, buffer, options, onProgress) {
       let blobResult = null;
       let immutableCommitConfirmed = false;
-
+      let prepared = null;
       try {
         if (!channel.blobs) {
           throw new Error('Channel blobs not initialized');
@@ -752,38 +821,39 @@ export function createUploadManager({
           signal: options.signal
         };
         assertUploadNotCancelled(uploadControl.signal);
-        const fileSize = buffer.length;
-
-        // Detect MIME type from buffer magic bytes
-        const headerBuffer = buffer.subarray(0, Math.min(4100, fileSize));
-        const detectedMimeType = detectMimeType(headerBuffer);
-        const mimeType = detectedMimeType || metadata.mimeType || 'video/mp4';
-
-        console.log(`[Upload] Starting buffer upload (${(fileSize / 1024 / 1024).toFixed(2)} MB), MIME: ${mimeType}`);
-
-        // Store video bytes in Hyperblobs
-        blobResult = await channel.putBlob(buffer);
-
-        if (onProgress) {
-          onProgress(100, fileSize, fileSize);
-        }
-
-
-        // Complete the validated metadata with generated upload values
-        buildVideoMetadata(
-          metadata,
-          blobResult,
-          channel,
-          fileSize,
-          mimeType
-        );
-        await maybeAttachImmutablePublication(metadata, mimeType, {
+        prepared = await prepareImmutablePublication(metadata, {
           ...publicationRuntime,
           ...uploadControl,
           createSource: () => [buffer]
         });
+        let fileSize;
+        let mimeType;
+        if (prepared) {
+          fileSize = prepared.renditionWrite.descriptor.core.byteLength;
+          const firstBlock = fileSize > 0 ? await prepared.renditionWrite.core.get(0) : b4a.alloc(0);
+          mimeType = detectMimeType(firstBlock.subarray(0, Math.min(4100, firstBlock.byteLength))) ||
+            metadata.mimeType ||
+            'video/mp4';
+          finalizePreparedRendition(prepared, mimeType);
+          blobResult = await writeStaticPlaybackBlob(channel, prepared, uploadControl.signal, onProgress);
+          await prepared.renditionWrite.core.close();
+        } else {
+          fileSize = buffer.length;
+          const headerBuffer = buffer.subarray(0, Math.min(4100, fileSize));
+          mimeType = detectMimeType(headerBuffer) || metadata.mimeType || 'video/mp4';
+          blobResult = await channel.putBlob(buffer);
+          onProgress?.(100, fileSize, fileSize);
+        }
+
+        buildVideoMetadata(metadata, blobResult, channel, fileSize, mimeType);
+        await maybeAttachImmutablePublication(metadata, prepared, {
+          ...publicationRuntime,
+          ...uploadControl
+        });
         immutableCommitConfirmed = Boolean(metadata.immutablePublication);
-        await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4Buffer(buffer));
+        if (!prepared) {
+          await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4Buffer(buffer));
+        }
 
         // Store metadata in channel HyperDB
         await channel.addVideo(metadata, {
@@ -794,6 +864,11 @@ export function createUploadManager({
 
         return completedUploadResult(videoId, metadata);
       } catch (err) {
+        if (prepared?.renditionWrite?.core && !prepared.renditionWrite.core.closed) {
+          try {
+            await prepared.renditionWrite.core.close();
+          } catch {}
+        }
         if (blobResult && !immutableCommitConfirmed &&
             err?.uploadCommitSucceeded !== true && err?.uploadCommitUncertain !== true) {
           try {

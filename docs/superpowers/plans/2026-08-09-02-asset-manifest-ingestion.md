@@ -12,6 +12,7 @@
 
 - Depends on Plan 01 exports from `packages/backend/src/assets/static-core.js`.
 - Preserve `Work -> Edition -> Rendition -> Asset`; publisher provenance remains separate from asset identity.
+- `AssetCoreRefV2.assetId` must equal its canonical static Hypercore `key`; reject any mismatch.
 - Every segment index range must remain within `byteLength` and map to canonical static-core blocks.
 - Remove obsolete random-core fixtures after explicit re-ingestion or assert their quarantine.
 - Do not add a compatibility shim that silently upgrades unverifiable bytes.
@@ -64,12 +65,14 @@ const length = normalizeNonNegativeInteger(input.length, 'length')
 if (blockSize !== 256 * 1024 || length !== Math.ceil(byteLength / blockSize)) {
   throw new Error('asset core length does not match canonical blocks')
 }
+const keyHex = toHex(input.key, 32, 'key')
+const assetId = toHex(input.assetId, 32, 'assetId')
+if (assetId !== keyHex) throw new Error('assetId must equal static core key')
 const normalized = Object.freeze({
   kind: input.kind,
-  key: toHex(input.key, 32, 'key'),
+  key: keyHex,
   treeHash: toHex(input.treeHash, 32, 'treeHash'),
-  length, byteLength, blockSize,
-  assetId: toHex(input.assetId, 32, 'assetId')
+  length, byteLength, blockSize, assetId
 })
 const legacyDisposition = input.sourcePath || input.localFilePath ? 'reingest-required' : 'quarantine'
 ```

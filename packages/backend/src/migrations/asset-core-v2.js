@@ -1,12 +1,18 @@
+import { normalizeBytes } from '../publisher/canonical.js'
+
 function isNonEmptyPath(value) {
   return typeof value === 'string' && value.length > 0
 }
 
 function isLegacyRange(input) {
-  const start = Number(input?.start)
-  const end = Number(input?.end)
-  return input?.key != null &&
-    Number.isSafeInteger(start) &&
+  try {
+    normalizeBytes(input?.key, 32, 'legacy core key')
+  } catch {
+    return false
+  }
+  const start = input?.start
+  const end = input?.end
+  return Number.isSafeInteger(start) &&
     Number.isSafeInteger(end) &&
     start >= 0 &&
     end > start

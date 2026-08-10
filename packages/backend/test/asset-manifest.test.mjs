@@ -127,6 +127,9 @@ test('legacy asset references require re-ingestion when identifiable and quarant
   t.is(classifyLegacyAssetReference({ key: hex(1), start: 4, end: 9 }), 'reingest-required')
   t.is(classifyLegacyAssetReference({ key: hex(1), localFilePath: '/tmp/video.mp4' }), 'reingest-required')
   t.is(classifyLegacyAssetReference({ key: hex(1) }), 'quarantine')
+  t.is(classifyLegacyAssetReference({ key: 'invalid', start: true, end: 2 }), 'quarantine')
+  t.is(classifyLegacyAssetReference({ key: hex(1), start: '4', end: 9 }), 'quarantine')
+  t.is(classifyLegacyAssetReference({ key: hex(1), start: 4, end: Infinity }), 'quarantine')
 })
 
 test('publication manifests derive non-circular manifest and publication ids then sign the outer envelope', async (t) => {

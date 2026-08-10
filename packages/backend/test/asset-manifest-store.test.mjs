@@ -7,7 +7,10 @@ import {
   createPublicationManifest,
   createRenditionDescriptor,
   createStaticAssetManifest,
+  encodePublicationManifest,
 } from '../src/assets/index.js'
+import { createPublisherCatalogProjection } from '../src/media-graph/catalog-projection.js'
+import { PUBLISHER_RECORD_TYPES } from '../src/publisher/canonical.js'
 
 function hex(byte) {
   return b4a.toString(b4a.alloc(32, byte), 'hex')
@@ -78,6 +81,69 @@ test('manifest store deduplicates asset references per publication without confl
     b4a.toString(publisher.publicKey, 'hex'),
     b4a.toString(otherPublisher.publicKey, 'hex'),
   ])
+})
+
+test('catalog projection forwards asset lookup and rebuild removes a retracted publication', async (t) => {
+  const shared = assetRef(10)
+  const manifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    sequence: 1,
+    title: 'Projected',
+    renditions: [createRenditionDescriptor({ purpose: 'original', format: 'video/mp4', core: shared })],
+    keyPair: publisher,
+    signedAt: 100,
+  })
+  let publications = [{
+    recordType: PUBLISHER_RECORD_TYPES.PUBLICATION,
+    issuerIdentityKey: publisher.publicKey,
+    signerKey: publisher.publicKey,
+    policyEpoch: 0,
+    issuerSequence: 1,
+    signedAt: 100,
+    body: {
+      publicationId: b4a.from(manifest.publicationId, 'hex'),
+      manifestId: b4a.from(manifest.body.manifestId, 'hex'),
+      payload: encodePublicationManifest(manifest),
+    },
+  }]
+  const catalog = {
+    async update() {},
+    async getAuthorizationState() {
+      return {
+        writers: [{
+          signerKey: b4a.toString(publisher.publicKey, 'hex'),
+          capabilities: ['publish'],
+          firstAcceptedSequence: 1,
+          lastAcceptedSequence: 1,
+          expiresAt: 10_000,
+          admissionPolicyEpoch: 0,
+          revocation: null,
+        }],
+      }
+    },
+    async listProjections(kind) {
+      return { items: kind === 'publication' ? publications : [], nextCursor: null }
+    },
+  }
+  const projection = createPublisherCatalogProjection({
+    catalogRegistry: {
+      async listBindings() {
+        return [{ publisherId: publisher.publicKey, catalog }]
+      },
+    },
+    now: () => 200,
+  })
+
+  await projection.rebuild()
+  t.alike(
+    projection.assetManifestStore.getManifestsByAssetId(shared.assetId).map(row => row.publicationId),
+    [manifest.publicationId]
+  )
+
+  publications = []
+  await projection.rebuild()
+  t.alike(projection.assetManifestStore.getManifestsByAssetId(shared.assetId), [])
+  await projection.close()
 })
 
 test('manifest store rejects conflicting bytes and untrusted publishers while preserving reusable renditions', async (t) => {

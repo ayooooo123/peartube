@@ -123,31 +123,60 @@ test('asset session applies only valid block proofs and reports possession after
   t.is(await session.core.has(0), true)
 })
 
-test('asset session rejects descriptor state and block value mismatches before reporting availability', async (t) => {
+test('asset session quarantines descriptor state conflicts before reporting availability', async (t) => {
   const descriptor = createStaticAssetManifest({
     treeHash: b4a.alloc(32, 51),
     blockLength: 2,
     byteLength: ASSET_BLOCK_SIZE + 3,
   })
+  let closed = 0
   const core = {
     key: descriptor.key,
     length: 1,
     byteLength: descriptor.byteLength,
     async ready() {},
-    async has() { return false },
-    async applyProof() { t.fail('invalid state must not apply a proof') },
-    async close() { this.closed = true },
+    async has() { t.fail('conflicting state must not be probed') },
+    async applyProof() { t.fail('conflicting state must not apply a proof') },
+    async close() { closed++ },
   }
   const session = createAssetSession({ coreRef: descriptor, core })
   await session.ready()
-  await t.exception(session.listAssetRanges({ cursor: null, limit: 1 }), /core length/)
+  await t.exception(
+    session.listAssetRanges({ cursor: null, limit: 1 }),
+    /asset core state conflicts with the verified descriptor/,
+  )
+  t.is(closed, 1, 'incompatible preexisting state is quarantined')
+  t.absent(session.core)
+  await session.close()
+})
+
+test('asset session rejects wrong block value length before proof application', async (t) => {
+  const descriptor = createStaticAssetManifest({
+    treeHash: b4a.alloc(32, 51),
+    blockLength: 2,
+    byteLength: ASSET_BLOCK_SIZE + 3,
+  })
+  let applied = 0
+  let closed = 0
+  const core = {
+    key: descriptor.key,
+    length: descriptor.length,
+    byteLength: descriptor.byteLength,
+    async ready() {},
+    async has() { return false },
+    async applyProof() { applied++; return true },
+    async close() { closed++ },
+  }
+  const session = createAssetSession({ coreRef: descriptor, core, ownsCore: true })
+  await session.ready()
   await t.exception(session.verifyBlock({
     index: 1,
-    proof: { block: { index: 1, value: null } },
+    proof: { block: { index: 1, value: null }, upgrade: null },
     value: b4a.alloc(4),
-  }), /core state|core length|value length/)
-  t.ok(core.closed, 'incompatible preexisting state is quarantined')
+  }), /asset block value length does not match the verified descriptor/)
+  t.is(applied, 0)
   await session.close()
+  t.is(closed, 1)
 })
 
 test('an injected core is permanently poisoned after any rejected proof application', async (t) => {
@@ -405,6 +434,7 @@ test('asset block receivers reject bytes before a complete canonical proof', asy
     startBlock: 0,
     endBlock: 1,
   })
+  const rejected = t.exception(pending, /unavailable|proof|peer/)
   await until(() => sentAssetRequests(assetChannel).length === 1)
   const [{ transferId }] = sentAssetRequests(assetChannel)
   assetChannel.spec.messages[0].onmessage(encodePeerFrame({
@@ -424,7 +454,7 @@ test('asset block receivers reject bytes before a complete canonical proof', asy
     }),
   }))
   await until(() => assetChannel.channel.closed)
-  await t.exception(pending, /unavailable|closed|proof/)
+  await rejected
   t.is(applied, 0)
 })
 

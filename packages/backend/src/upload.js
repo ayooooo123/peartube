@@ -340,6 +340,98 @@ async function reconcilePendingUpload(channel, metadata) {
   }
 }
 
+function immutablePublicationOperations(publication) {
+  const operationIds = publication?.operationIds;
+  if (!Array.isArray(operationIds) || operationIds.length !== 3 ||
+      operationIds.some(id => typeof id !== 'string' || !/^[0-9a-f]{64}$/.test(id))) {
+    throw new Error('uncertain upload operation identities are unavailable');
+  }
+  return operationIds;
+}
+
+function uncertainCommitError(publication, message = 'Upload catalog commit requires reconciliation') {
+  const error = markUploadCommitState(new Error(message), 'uploadCommitUncertain');
+  error.reconciliationRequired = true;
+  error.reconciliation = {
+    publicationId: publication.publicationId,
+    manifestId: publication.manifestId,
+    renditionId: publication.renditionId,
+    assetId: publication.assetId,
+    coreKey: publication.coreKey,
+    operationIds: immutablePublicationOperations(publication),
+  };
+  return error;
+}
+
+async function resolvePersistedPublisherCatalog(catalogRegistry, publisherId) {
+  if (!catalogRegistry) throw new Error('publisher catalog registry is unavailable');
+  if (typeof catalogRegistry.resolve === 'function') {
+    const binding = await catalogRegistry.resolve(publisherId);
+    const resolvedId = b4a.from(binding?.publisherId || []);
+    if (binding?.catalog && resolvedId.byteLength === 32 && b4a.toString(resolvedId, 'hex') === publisherId) {
+      return binding.catalog;
+    }
+  }
+  const bindings = await catalogRegistry.getWritableBindings?.();
+  const binding = bindings?.find(candidate => {
+    const id = b4a.from(candidate?.publisherId || []);
+    return id.byteLength === 32 && b4a.toString(id, 'hex') === publisherId;
+  });
+  if (!binding?.catalog) throw new Error('persisted publisher catalog is unavailable');
+  return binding.catalog;
+}
+
+async function reconcileUncertainUpload(channel, metadata, runtime = {}) {
+  const publication = metadata?.immutablePublication;
+  const operationIds = immutablePublicationOperations(publication);
+  let catalog;
+  let receipts;
+  try {
+    catalog = await resolvePersistedPublisherCatalog(runtime.catalogRegistry, publication.publisherId);
+    if (typeof catalog.getOperationReceipt !== 'function') throw new Error('catalog receipt lookup is unavailable');
+    receipts = await Promise.all(operationIds.map(id => catalog.getOperationReceipt(b4a.from(id, 'hex'))));
+  } catch (error) {
+    throw uncertainCommitError(publication, error?.message);
+  }
+  if (receipts.every(receipt => receipt?.accepted === true)) {
+    try {
+      await runtime.mediaCatalogProjection?.rebuild?.();
+      const rendition = publication.manifest.body.renditions.find(candidate => candidate.renditionId === publication.renditionId);
+      if (!rendition) throw new Error('Persisted upload rendition is unavailable');
+      if (typeof runtime.scopedNetwork?.retainAuthorizedRendition === 'function') {
+        const retention = await runtime.scopedNetwork.retainAuthorizedRendition({
+          manifest: publication.manifest,
+          renditionId: publication.renditionId,
+          ownerId: publication.publicationId,
+          start: 0,
+          end: rendition.core.length,
+        });
+        if (retention?.status !== 'retained' && retention?.status !== 'already-retained') {
+          throw new Error('reconciled upload retention was not acquired');
+        }
+      }
+      const announcement = await runtime.scopedNetwork?.publishLocalPublisherCatalog?.({ publisherId: publication.publisherId });
+      if (announcement?.status && announcement.status !== 'published') {
+        throw new Error('reconciled publisher catalog was not announced');
+      }
+      if (typeof channel.updateVideo !== 'function') throw new Error('published metadata update is unavailable');
+      const published = { ...metadata, publicationState: 'published' };
+      await channel.updateVideo(metadata.id, published, { syncPublic: true });
+      Object.assign(metadata, published);
+    } catch (error) {
+      throw uncertainCommitError(publication, error?.message);
+    }
+    return 'accepted';
+  }
+  if (receipts.every(receipt => receipt?.accepted === false)) {
+    metadata.publicationState = 'replicationPending';
+    await channel.updateVideo?.(metadata.id, metadata, { syncPublic: false });
+    await reconcilePendingUpload(channel, metadata);
+    return 'rejected';
+  }
+  throw uncertainCommitError(publication);
+}
+
 function assertUploadNotCancelled(signal) {
   if (signal?.aborted) throw new Error('static asset write cancelled');
 }
@@ -525,13 +617,14 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
       signedAt: currentTime
     })
   ];
+  const manifestPayload = encodePublicationManifest(manifest);
   const operations = [{
     recordType: PUBLISHER_RECORD_TYPES.PUBLICATION,
     sequence: firstSequence,
     body: {
       publicationId: b4a.from(manifest.publicationId, 'hex'),
       manifestId: b4a.from(manifest.body.manifestId, 'hex'),
-      payload: encodePublicationManifest(manifest)
+      payload: manifestPayload
     }
   }, ...claims.map((claim, index) => ({
     recordType: PUBLISHER_RECORD_TYPES.CLAIM,
@@ -553,6 +646,11 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
     signedOperations.push(signed);
   }
   assertUploadNotCancelled(runtime.signal);
+  const operationIds = signedOperations.map(operation => {
+    const id = b4a.from(operation?.recordId || operation?.transitionId || []);
+    if (id.byteLength !== 32) throw new Error('catalog operation id unavailable');
+    return b4a.toString(id, 'hex');
+  });
   metadata.immutablePublication = {
     publicationId: manifest.publicationId,
     manifestId: manifest.body.manifestId,
@@ -562,9 +660,25 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
     publisherId: manifest.body.publisherId,
     sequence: firstSequence,
     claimIds: claims.map(claim => claim.claimId),
+    operationIds,
     manifest
   };
-  metadata.publicationState = 'replicationPending';
+  Object.assign(metadata, {
+    publicationId: manifest.publicationId,
+    manifestId: manifest.body.manifestId,
+    renditionId: rendition.renditionId,
+    assetId: rendition.core.assetId,
+    coreKey: rendition.core.key,
+    publisherId: manifest.body.publisherId,
+    publicationSequence: firstSequence,
+    metadataClaimId: claims[0].claimId,
+    availabilityClaimId: claims[1].claimId,
+    publicationOperationId: operationIds[0],
+    metadataClaimOperationId: operationIds[1],
+    availabilityClaimOperationId: operationIds[2],
+    publicationManifestHex: b4a.toString(manifestPayload, 'hex'),
+  });
+  metadata.publicationState = 'commitUncertain';
   let metadataStaged = false;
   try {
     if (typeof runtime.stageMetadata === 'function') {
@@ -574,8 +688,13 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
     assertUploadNotCancelled(runtime.signal);
     await appendImmutablePublication(catalog, signedOperations);
   } catch (error) {
+    if (error?.uploadCommitUncertain === true) {
+      throw uncertainCommitError(metadata.immutablePublication, error.message);
+    }
     if (metadataStaged || typeof runtime.stageMetadata === 'function') {
+      metadata.publicationState = 'replicationPending';
       try {
+        await runtime.markRollbackPending?.(metadata);
         await runtime.rollbackMetadata?.(metadata);
       } catch (rollbackError) {
         throw stagedRollbackPendingError(error, rollbackError);
@@ -752,7 +871,16 @@ export function createUploadManager({
           : null
         if (providedVideoId && typeof channel.getVideo === 'function') {
           const existing = await channel.getVideo(providedVideoId).catch(() => null)
-          if (existing?.publicationState === 'replicationPending') {
+          if (existing?.publicationState === 'commitUncertain') {
+            const outcome = await reconcileUncertainUpload(channel, existing, {
+              ...publicationRuntime,
+              publisherId: options.publisherId,
+              signal: options.signal,
+            });
+            if (outcome === 'accepted') {
+              return { ...completedUploadResult(providedVideoId, existing), reused: true };
+            }
+          } else if (existing?.publicationState === 'replicationPending') {
             await reconcilePendingUpload(channel, existing);
           } else if (existing) {
             return { ...completedUploadResult(providedVideoId, existing), reused: true };
@@ -843,6 +971,7 @@ export function createUploadManager({
           ...publicationRuntime,
           ...uploadControl,
           stageMetadata: value => channel.addVideo(value, { syncPublic: false }),
+          markRollbackPending: value => channel.updateVideo?.(value.id, value, { syncPublic: false }),
           rollbackMetadata: async value => {
             await rollbackUploadedBlob(channel, blobResult);
             if (typeof channel.deleteVideo !== 'function') throw new Error('staged metadata deletion is unavailable');
@@ -885,6 +1014,9 @@ export function createUploadManager({
         return {
           success: false,
           error: err.message,
+          ...(err?.uploadCommitUncertain === true
+            ? { commitUncertain: true, reconciliationRequired: true, reconciliation: err.reconciliation }
+            : {}),
           ...(err?.uploadRollbackPending === true ? { rollbackPending: true } : {})
         };
       }
@@ -913,7 +1045,16 @@ export function createUploadManager({
           : null;
         if (providedVideoId && typeof channel.getVideo === 'function') {
           const existing = await channel.getVideo(providedVideoId).catch(() => null);
-          if (existing?.publicationState === 'replicationPending') {
+          if (existing?.publicationState === 'commitUncertain') {
+            const outcome = await reconcileUncertainUpload(channel, existing, {
+              ...publicationRuntime,
+              publisherId: options.publisherId,
+              signal: options.signal,
+            });
+            if (outcome === 'accepted') {
+              return { ...completedUploadResult(providedVideoId, existing), reused: true };
+            }
+          } else if (existing?.publicationState === 'replicationPending') {
             await reconcilePendingUpload(channel, existing);
           } else if (existing) {
             return { ...completedUploadResult(providedVideoId, existing), reused: true };
@@ -955,6 +1096,7 @@ export function createUploadManager({
           ...publicationRuntime,
           ...uploadControl,
           stageMetadata: value => channel.addVideo(value, { syncPublic: false }),
+          markRollbackPending: value => channel.updateVideo?.(value.id, value, { syncPublic: false }),
           rollbackMetadata: async value => {
             await rollbackUploadedBlob(channel, blobResult);
             if (typeof channel.deleteVideo !== 'function') throw new Error('staged metadata deletion is unavailable');
@@ -997,6 +1139,9 @@ export function createUploadManager({
         return {
           success: false,
           error: err.message,
+          ...(err?.uploadCommitUncertain === true
+            ? { commitUncertain: true, reconciliationRequired: true, reconciliation: err.reconciliation }
+            : {}),
           ...(err?.uploadRollbackPending === true ? { rollbackPending: true } : {})
         };
       }

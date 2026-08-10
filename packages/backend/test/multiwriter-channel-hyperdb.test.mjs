@@ -3,9 +3,19 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
+import b4a from 'b4a'
+import crypto from 'hypercore-crypto'
 
 import Corestore from 'corestore'
 import { MultiWriterChannel } from '../src/channel/multi-writer-channel.js'
+import {
+  createPublicationManifest,
+  createRenditionDescriptor,
+  createStaticAssetManifest,
+  encodePublicationManifest,
+} from '../src/assets/index.js'
 
 async function withChannel(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'peartube-channel-hyperdb-'))
@@ -298,6 +308,66 @@ test('MultiWriterChannel splits structured videos physically and joins logical r
   })
 })
 
+test('MultiWriterChannel round-trips the private immutable publication reconciliation contract', async () => {
+  await withChannel(async (channel) => {
+    const keyPair = crypto.keyPair(Buffer.alloc(32, 21))
+    const core = createStaticAssetManifest({
+      treeHash: Buffer.alloc(32, 22),
+      blockLength: 1,
+      byteLength: 123,
+      blockSize: 256 * 1024,
+    })
+    const rendition = createRenditionDescriptor({ purpose: 'original', format: 'video/mp4', core })
+    const manifest = createPublicationManifest({
+      publisherId: keyPair.publicKey,
+      sequence: 7,
+      title: 'Persisted publication',
+      renditions: [rendition],
+      keyPair,
+      signedAt: 1_700_000_000_000,
+    })
+    const persisted = {
+      publicationState: 'commitUncertain',
+      publicationId: manifest.publicationId,
+      manifestId: manifest.body.manifestId,
+      renditionId: rendition.renditionId,
+      assetId: core.assetId,
+      coreKey: b4a.toString(core.key, 'hex'),
+      publisherId: b4a.toString(keyPair.publicKey, 'hex'),
+      publicationSequence: 7,
+      metadataClaimId: '23'.repeat(32),
+      availabilityClaimId: '24'.repeat(32),
+      publicationOperationId: '25'.repeat(32),
+      metadataClaimOperationId: '26'.repeat(32),
+      availabilityClaimOperationId: '27'.repeat(32),
+      publicationManifestHex: b4a.toString(encodePublicationManifest(manifest), 'hex'),
+    }
+
+    await channel.addVideo({ id: 'publication-private', title: 'Private', ...persisted })
+    const physical = await channel.db.get('@peartubeChannel/contentDetails', { id: 'publication-private' })
+    for (const [field, value] of Object.entries(persisted)) assert.equal(physical[field], value)
+
+    const logical = await channel.getVideo('publication-private')
+    assert.deepEqual(logical.immutablePublication, {
+      publicationId: persisted.publicationId,
+      manifestId: persisted.manifestId,
+      renditionId: persisted.renditionId,
+      assetId: persisted.assetId,
+      coreKey: persisted.coreKey,
+      publisherId: persisted.publisherId,
+      sequence: persisted.publicationSequence,
+      claimIds: [persisted.metadataClaimId, persisted.availabilityClaimId],
+      operationIds: [
+        persisted.publicationOperationId,
+        persisted.metadataClaimOperationId,
+        persisted.availabilityClaimOperationId,
+      ],
+      manifest,
+    })
+    assert.equal(await channel.publicBee.getVideo('publication-private'), null)
+  })
+})
+
 test('MultiWriterChannel preserves legacy public sync defaults and honors explicit sync control', async () => {
   await withChannel(async (channel) => {
     let publicSyncs = 0
@@ -337,21 +407,21 @@ test('MultiWriterChannel reuses pairing discovery while waiting for a peer', asy
     },
     async close() {},
   }
-  const swarm = {
-    connections: new Set([{}]),
-    join() {
-      joinCalls += 1
-      return discovery
-    },
+  const swarm = new EventEmitter()
+  swarm.connections = new Set([new PassThrough()])
+  swarm.join = () => {
+    joinCalls += 1
+    return discovery
   }
   const channel = Object.create(MultiWriterChannel.prototype)
   Object.assign(channel, {
     _pairingSetupDone: false,
     _channelDiscovery: null,
+    _replicatedConnections: new WeakSet(),
     _publicDiscovery: null,
     _publicActivation: null,
     swarm: null,
-    core: { discoveryKey: Buffer.alloc(32, 1), writable: false },
+    core: { discoveryKey: Buffer.alloc(32, 1), writable: false, replicate() {} },
     db: null,
     wakeupSession: null,
     publicBee: null,

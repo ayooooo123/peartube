@@ -12,11 +12,14 @@ const MAX_PROVENANCE_LENGTH = 256
 const MAX_IDENTITY_KEY_LENGTH = 1024
 const MAX_FINGERPRINT_LENGTH = 128
 const MAX_JOB_ID_LENGTH = 256
+const MAX_MANIFEST_HEX_LENGTH = 2 * 1024 * 1024
 
 const PROVIDER_PATTERN = /^[a-z0-9][a-z0-9._-]*$/
 const WRITER_KEY_PATTERN = /^[0-9a-f]{64}$/i
 const CLAIMANT_ID_PATTERN = /^[0-9a-f]{64}$/
 const SHA256_FINGERPRINT_PATTERN = /^sha256:[0-9a-f]{64}$/
+const HEX_32_PATTERN = /^[0-9a-f]{64}$/
+const MANIFEST_HEX_PATTERN = /^(?:[0-9a-f]{2})+$/
 const JOB_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/+~-]*$/
 const CLAIM_STATES = new Set(['reserved', 'published', 'released'])
 const CLAIM_DOMAIN = b4a.from('peartube-import-claim/v1\0')
@@ -24,7 +27,7 @@ const ZERO_BYTE = b4a.from('\0')
 
 export const PROFILE_KINDS = new Set(['standard', 'tvShow', 'movie', 'creator'])
 export const CONTENT_KINDS = new Set(['episode', 'movie', 'video', 'stream', 'trailer', 'extra'])
-export const PUBLICATION_STATES = new Set(['replicationPending', 'durabilityVerified', 'published'])
+export const PUBLICATION_STATES = new Set(['replicationPending', 'commitUncertain', 'durabilityVerified', 'published'])
 export const ARTWORK_ROLES = new Set(['avatar', 'poster', 'banner', 'backdrop'])
 
 function sha256Hex (payload) {
@@ -155,7 +158,20 @@ const CONTENT_FIELDS = new Set([
   'publicationState',
   'contentFingerprint',
   'importIdentityKey',
-  'importClaimantId'
+  'importClaimantId',
+  'publicationId',
+  'manifestId',
+  'renditionId',
+  'assetId',
+  'coreKey',
+  'publisherId',
+  'publicationSequence',
+  'metadataClaimId',
+  'availabilityClaimId',
+  'publicationOperationId',
+  'metadataClaimOperationId',
+  'availabilityClaimOperationId',
+  'publicationManifestHex'
 ])
 
 export function normalizeContentDetails (details) {
@@ -180,6 +196,23 @@ export function normalizeContentDetails (details) {
     out.publicationState = normalizePublicationState(input.publicationState)
   }
   assignString(out, input, 'contentFingerprint', MAX_FINGERPRINT_LENGTH, SHA256_FINGERPRINT_PATTERN)
+  for (const field of [
+    'publicationId',
+    'manifestId',
+    'renditionId',
+    'assetId',
+    'coreKey',
+    'publisherId',
+    'metadataClaimId',
+    'availabilityClaimId',
+    'publicationOperationId',
+    'metadataClaimOperationId',
+    'availabilityClaimOperationId',
+  ]) {
+    assignString(out, input, field, 64, HEX_32_PATTERN)
+  }
+  assignPersistedInteger(out, input, 'publicationSequence')
+  assignString(out, input, 'publicationManifestHex', MAX_MANIFEST_HEX_LENGTH, MANIFEST_HEX_PATTERN)
   const normalizedImportIdentityKey = optionalString(input.importIdentityKey, 'importIdentityKey', MAX_IDENTITY_KEY_LENGTH)
   const normalizedImportClaimantId = optionalString(input.importClaimantId, 'importClaimantId', 64, CLAIMANT_ID_PATTERN)
   if ((normalizedImportIdentityKey === undefined) !== (normalizedImportClaimantId === undefined)) {

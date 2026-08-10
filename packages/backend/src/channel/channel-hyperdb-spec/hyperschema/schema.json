@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "schema": [
     {
       "name": "metadata",
@@ -611,6 +611,71 @@
           "name": "importClaimantId",
           "type": "string",
           "version": 2
+        },
+        {
+          "name": "publicationId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "manifestId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "renditionId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "assetId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "coreKey",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "publisherId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "publicationSequence",
+          "type": "uint64",
+          "version": 3
+        },
+        {
+          "name": "metadataClaimId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "availabilityClaimId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "publicationOperationId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "metadataClaimOperationId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "availabilityClaimOperationId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "publicationManifestHex",
+          "type": "string",
+          "version": 3
         }
       ]
     },

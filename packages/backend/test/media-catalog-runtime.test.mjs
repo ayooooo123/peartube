@@ -39,6 +39,7 @@ function operation(recordType, publisherId, signer, body, sequence) {
     policyEpoch: 0,
     issuerSequence: sequence,
     signedAt: 100,
+    recordId: b4a.alloc(32, sequence),
     body,
   }
 }

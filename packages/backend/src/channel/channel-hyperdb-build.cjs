@@ -113,7 +113,20 @@ ns.register({
     { name: 'publicationState', type: 'string' },
     { name: 'contentFingerprint', type: 'string' },
     { name: 'importIdentityKey', type: 'string' },
-    { name: 'importClaimantId', type: 'string' }
+    { name: 'importClaimantId', type: 'string' },
+    { name: 'publicationId', type: 'string' },
+    { name: 'manifestId', type: 'string' },
+    { name: 'renditionId', type: 'string' },
+    { name: 'assetId', type: 'string' },
+    { name: 'coreKey', type: 'string' },
+    { name: 'publisherId', type: 'string' },
+    { name: 'publicationSequence', type: 'uint64' },
+    { name: 'metadataClaimId', type: 'string' },
+    { name: 'availabilityClaimId', type: 'string' },
+    { name: 'publicationOperationId', type: 'string' },
+    { name: 'metadataClaimOperationId', type: 'string' },
+    { name: 'availabilityClaimOperationId', type: 'string' },
+    { name: 'publicationManifestHex', type: 'string' }
   ]
 })
 

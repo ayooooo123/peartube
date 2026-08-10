@@ -444,19 +444,23 @@ test('deterministic reused uploads return the original publication contract', as
     },
   }
   const manager = createUploadManager({ ctx: {} })
-  const result = await manager.uploadFromPath({
+  const channel = {
     blobs: true,
     async getVideo() { return metadata },
-  }, '/must-not-read', { videoId: metadata.id }, {})
+  }
+  const pathResult = await manager.uploadFromPath(channel, '/must-not-read', { videoId: metadata.id }, {})
+  const bufferResult = await manager.uploadFromBuffer(channel, Buffer.from('must-not-write'), { videoId: metadata.id })
 
-  assert.equal(result.success, true)
-  assert.equal(result.reused, true)
-  assert.equal(result.publicationId, metadata.immutablePublication.publicationId)
-  assert.equal(result.manifestId, metadata.immutablePublication.manifestId)
-  assert.equal(result.renditionId, metadata.immutablePublication.renditionId)
-  assert.equal(result.assetId, metadata.immutablePublication.assetId)
-  assert.equal(result.coreKey, metadata.immutablePublication.coreKey)
-  assert.equal(result.manifest, manifest)
+  for (const result of [pathResult, bufferResult]) {
+    assert.equal(result.success, true)
+    assert.equal(result.reused, true)
+    assert.equal(result.publicationId, metadata.immutablePublication.publicationId)
+    assert.equal(result.manifestId, metadata.immutablePublication.manifestId)
+    assert.equal(result.renditionId, metadata.immutablePublication.renditionId)
+    assert.equal(result.assetId, metadata.immutablePublication.assetId)
+    assert.equal(result.coreKey, metadata.immutablePublication.coreKey)
+    assert.equal(result.manifest, manifest)
+  }
 })
 
 test('static upload cancellation closes staging and emits no catalog operation', async (t) => {
@@ -579,4 +583,122 @@ test('catalog commit failure clears the newly written blob and leaves no upload 
   assert.match(result.error, /catalog commit failure/)
   assert.deepEqual(cleared, [blob])
   assert.deepEqual(videos, [])
+})
+
+test('uncertain catalog commit retains staged metadata and reconciles accepted operations before reuse', async (t) => {
+  const store = makeStore(t, 'uncertain-accepted')
+  const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 17))
+  const appended = []
+  const receipts = new Map()
+  const catalog = makeCatalog(deviceKeyPair, appended)
+  let appendAttempts = 0
+  catalog.getOperationReceipt = async operationId => receipts.get(Buffer.from(operationId).toString('hex')) || null
+  catalog.appendBatchAndConfirm = async operations => {
+    appendAttempts++
+    appended.push(operations)
+    if (appendAttempts === 1) {
+      receipts.set(Buffer.from(operations[0].recordId).toString('hex'), { accepted: true })
+      throw new Error('injected uncertain catalog response')
+    }
+    return operations.map(() => ({ accepted: true }))
+  }
+  const channel = makeChannel()
+  channel.getVideo = async id => channel.videos.find(video => video.id === id) || null
+  channel.updateVideo = async (id, value) => {
+    const index = channel.videos.findIndex(video => video.id === id)
+    channel.videos[index] = value
+  }
+  const cleared = []
+  channel.blobs.clear = async value => cleared.push(value)
+  let retainAttempts = 0
+  const manager = makePublishingManager({
+    store,
+    deviceKeyPair,
+    catalog,
+    scopedNetwork: {
+      async retainAuthorizedRendition() {
+        retainAttempts++
+        if (retainAttempts === 1) throw new Error('injected accepted-retention failure')
+        return { status: 'retained' }
+      },
+      async publishLocalPublisherCatalog() { return { status: 'published' } },
+    },
+  })
+  const options = { videoId: '17'.repeat(16), title: 'Uncertain accepted' }
+
+  const uncertain = await manager.uploadFromBuffer(channel, Buffer.from('uncertain accepted bytes'), options)
+  assert.equal(uncertain.success, false)
+  assert.equal(uncertain.commitUncertain, true)
+  assert.equal(uncertain.reconciliationRequired, true)
+  assert.equal(channel.videos.length, 1)
+  assert.equal(channel.videos[0].publicationState, 'commitUncertain')
+  assert.equal(cleared.length, 0)
+  assert.equal(channel.blobWrites.length, 1)
+
+  for (const operation of appended[0]) {
+    receipts.set(Buffer.from(operation.recordId).toString('hex'), { accepted: true })
+  }
+  const failedFinalization = await manager.uploadFromBuffer(channel, Buffer.from('must not republish'), options)
+  assert.equal(failedFinalization.success, false)
+  assert.equal(failedFinalization.commitUncertain, true)
+  assert.equal(channel.videos[0].publicationState, 'commitUncertain')
+  assert.equal(cleared.length, 0)
+  assert.equal(channel.blobWrites.length, 1)
+  assert.equal(appendAttempts, 1)
+
+  const retried = await manager.uploadFromBuffer(channel, Buffer.from('must not republish'), options)
+  assert.equal(retried.success, true)
+  assert.equal(retried.reused, true)
+  assert.equal(retried.publicationId, channel.videos[0].immutablePublication.publicationId)
+  assert.equal(channel.videos[0].publicationState, 'published')
+  assert.equal(cleared.length, 0)
+  assert.equal(channel.blobWrites.length, 1)
+  assert.equal(appendAttempts, 1)
+})
+
+test('uncertain catalog commit rolls back only after exact operations are confirmed rejected', async (t) => {
+  const store = makeStore(t, 'uncertain-rejected')
+  const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 18))
+  const appended = []
+  let rejected = false
+  const catalog = makeCatalog(deviceKeyPair, appended)
+  const acceptBatch = catalog.appendBatchAndConfirm.bind(catalog)
+  let appendAttempts = 0
+  catalog.getOperationReceipt = async operationId => {
+    if (rejected) return { accepted: false }
+    return Buffer.from(operationId).equals(Buffer.alloc(32, 1)) ? { accepted: true } : null
+  }
+  catalog.appendBatchAndConfirm = async operations => {
+    appendAttempts++
+    if (appendAttempts === 1) {
+      appended.push(operations)
+      throw new Error('injected unresolved catalog response')
+    }
+    return acceptBatch(operations)
+  }
+  const channel = makeChannel()
+  channel.getVideo = async id => channel.videos.find(video => video.id === id) || null
+  channel.updateVideo = async (id, value) => {
+    const index = channel.videos.findIndex(video => video.id === id)
+    channel.videos[index] = value
+  }
+  const cleared = []
+  channel.blobs.clear = async value => cleared.push(value)
+  const manager = makePublishingManager({ store, deviceKeyPair, catalog })
+  const options = { videoId: '18'.repeat(16), title: 'Uncertain rejected' }
+
+  const uncertain = await manager.uploadFromBuffer(channel, Buffer.from('uncertain rejected bytes'), options)
+  assert.equal(uncertain.commitUncertain, true)
+  assert.equal(channel.videos.length, 1)
+  assert.equal(cleared.length, 0)
+
+  rejected = true
+  const retried = await manager.uploadFromBuffer(channel, Buffer.from('replacement bytes'), options)
+  assert.equal(retried.success, true)
+  assert.equal(retried.reused, undefined)
+  assert.equal(channel.videos.length, 1)
+  assert.equal(channel.videos[0].publicationState, 'published')
+  assert.equal(cleared.length, 1)
+  assert.equal(channel.blobWrites.length, 2)
+  assert.equal(appendAttempts, 2)
 })

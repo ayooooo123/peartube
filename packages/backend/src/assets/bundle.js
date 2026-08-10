@@ -17,7 +17,7 @@ const MAX_SOURCE_NAME_BYTES = 512
 const MAX_SOURCE_PATH_BYTES = 4096
 const SOURCE_KINDS = new Set(['public-torrent', 'release', 'folder', 'archive'])
 const PRIVATE_FIELD = /(?:passkey|cookie|credential|password|secret|token|signedurl|sourceurl|trackerurl|trackerid|debrid|sourceheader|authorization|locator|localfilepath|sourcefilepath|^headers?$|^urls?$|^uris?$)/i
-const SCP_LOCATOR = /^(?:[^/\\\s:@]+@(?:\[[^\]\s]+\]|[^/\\\s:]+)|\[[^\]\s]+\]|(?:\d{1,3}\.){3}\d{1,3}):[^\s]/
+const SCP_LOCATOR = /^[^/\\\s:]+:[^\s]/
 
 function assertNoPrivateSourceMaterial(value, state = { depth: 0, nodes: 0, seen: new Set() }) {
   if (value == null || typeof value !== 'object' || b4a.isBuffer(value) || value instanceof Uint8Array) return

@@ -1631,6 +1631,8 @@ export function createScopedNetworkRuntime (options = {}) {
         renditionId: id,
         ownerId: requestedOwnerId || null,
         released: false,
+        remainingOwners: 0,
+        scopeQuiescent: true,
       }
     }
     const ownerIds = requestedOwnerId === undefined
@@ -1646,11 +1648,14 @@ export function createScopedNetworkRuntime (options = {}) {
       await leaveScope(retained.scope, owner.mode)
     }
     if (retained.owners.size === 0) renditions.delete(id)
+    const remainingOwners = retained.scope.assetAuthorizations?.size || 0
     return {
       status: 'released',
       renditionId: id,
       ownerId: requestedOwnerId === undefined ? null : String(requestedOwnerId),
       released,
+      remainingOwners,
+      scopeQuiescent: remainingOwners === 0,
     }
   }
   async function revalidateRetainedRenditions () {

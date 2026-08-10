@@ -2137,6 +2137,9 @@ export function createApi({
           ownerId: publicationId,
         })
         releasedOwnership = released?.released === true
+        if (released?.scopeQuiescent === false) {
+          return { success: true, freedBytes: 0, sharedRetention: true }
+        }
       }
       await core.clear(locator.start, locator.end)
       const garbage = await collectCorestoreGarbage(ctx.store, {

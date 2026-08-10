@@ -248,6 +248,14 @@ function markUploadCommitState(error, state) {
   return target;
 }
 
+function stagedRollbackPendingError(error, rollbackError) {
+  const pending = new Error(
+    `Upload rollback is pending: ${rollbackError?.message || rollbackError || 'staged metadata could not be deleted'}`,
+    { cause: error },
+  );
+  return markUploadCommitState(pending, 'uploadRollbackPending');
+}
+
 async function catalogOperationsAreAbsent(catalog, operations) {
   if (typeof catalog?.getOperationReceipt !== 'function') return false;
   try {
@@ -288,6 +296,51 @@ async function rollbackUploadedBlob(channel, blobResult) {
     throw new Error('Upload rollback is unavailable');
   }
   await channel.blobs.clear(blobResult);
+}
+
+function storedBlobResult(metadata) {
+  const parts = String(metadata?.blobId || '').split(':').map(Number);
+  if (parts.length !== 4 ||
+      parts.some(value => !Number.isSafeInteger(value) || value < 0) ||
+      parts[1] < 1 ||
+      parts[3] < 1) {
+    throw new Error('pending upload blob reference is invalid');
+  }
+  return {
+    id: String(metadata.blobId),
+    blockOffset: parts[0],
+    blockLength: parts[1],
+    byteOffset: parts[2],
+    byteLength: parts[3]
+  };
+}
+
+async function reconcilePendingUpload(channel, metadata) {
+  if (typeof channel?.deleteVideo !== 'function') {
+    throw stagedRollbackPendingError(null, new Error('staged metadata deletion is unavailable'));
+  }
+  if (metadata?.blobsCoreKey && metadata.blobsCoreKey !== channel.blobsKeyHex) {
+    throw stagedRollbackPendingError(null, new Error('pending upload belongs to another blob core'));
+  }
+  let blobResult;
+  try {
+    blobResult = storedBlobResult(metadata);
+    await channel.deleteVideo(metadata.id);
+  } catch (error) {
+    throw error?.uploadRollbackPending === true
+      ? error
+      : stagedRollbackPendingError(null, error);
+  }
+  try {
+    await rollbackUploadedBlob(channel, blobResult);
+  } catch (error) {
+    try {
+      await channel.addVideo(metadata, { syncPublic: false });
+    } catch (restoreError) {
+      throw stagedRollbackPendingError(error, restoreError);
+    }
+    throw stagedRollbackPendingError(null, error);
+  }
 }
 
 function assertUploadNotCancelled(signal) {
@@ -525,7 +578,11 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
     await appendImmutablePublication(catalog, signedOperations);
   } catch (error) {
     if (metadataStaged || typeof runtime.stageMetadata === 'function') {
-      try { await runtime.rollbackMetadata?.(metadata); } catch {}
+      try {
+        await runtime.rollbackMetadata?.(metadata);
+      } catch (rollbackError) {
+        throw stagedRollbackPendingError(error, rollbackError);
+      }
     }
     throw error;
   }
@@ -696,7 +753,9 @@ export function createUploadManager({
           : null
         if (providedVideoId && typeof channel.getVideo === 'function') {
           const existing = await channel.getVideo(providedVideoId).catch(() => null)
-          if (existing) {
+          if (existing?.publicationState === 'replicationPending') {
+            await reconcilePendingUpload(channel, existing);
+          } else if (existing) {
             return { ...completedUploadResult(providedVideoId, existing), reused: true };
           }
         }
@@ -809,7 +868,9 @@ export function createUploadManager({
           } catch {}
         }
         if (blobResult && !immutableCommitConfirmed &&
-            err?.uploadCommitSucceeded !== true && err?.uploadCommitUncertain !== true) {
+            err?.uploadCommitSucceeded !== true &&
+            err?.uploadCommitUncertain !== true &&
+            err?.uploadRollbackPending !== true) {
           try {
             await rollbackUploadedBlob(channel, blobResult);
           } catch {
@@ -819,7 +880,8 @@ export function createUploadManager({
         console.error('[Upload] Failed:', err.message);
         return {
           success: false,
-          error: err.message
+          error: err.message,
+          ...(err?.uploadRollbackPending === true ? { rollbackPending: true } : {})
         };
       }
     },
@@ -902,7 +964,9 @@ export function createUploadManager({
           } catch {}
         }
         if (blobResult && !immutableCommitConfirmed &&
-            err?.uploadCommitSucceeded !== true && err?.uploadCommitUncertain !== true) {
+            err?.uploadCommitSucceeded !== true &&
+            err?.uploadCommitUncertain !== true &&
+            err?.uploadRollbackPending !== true) {
           try {
             await rollbackUploadedBlob(channel, blobResult);
           } catch {
@@ -912,7 +976,8 @@ export function createUploadManager({
         console.error('[Upload] Failed:', err.message);
         return {
           success: false,
-          error: err.message
+          error: err.message,
+          ...(err?.uploadRollbackPending === true ? { rollbackPending: true } : {})
         };
       }
     },

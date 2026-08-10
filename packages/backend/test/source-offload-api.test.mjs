@@ -338,6 +338,48 @@ test('default source offload releases its publication lease before clearing and 
   t.alike(failureEvents, ['release', 'clear', 'retain'])
 })
 
+test('shared static asset offload releases one publication owner without clearing another owner bytes', async (t) => {
+  const shared = createHarness({
+    useDefaultDeletion: true,
+    scopedNetwork: {
+      async releaseAuthorizedRendition() {
+        return {
+          status: 'released',
+          released: true,
+          remainingOwners: 1,
+          scopeQuiescent: false,
+        }
+      },
+    },
+  })
+  const sharedAssessment = await shared.api.assessSourceOffload({ publicationId })
+  const sharedResult = await shared.api.confirmSourceOffload(confirmation(sharedAssessment))
+  t.is(sharedResult.success, true)
+  t.is(sharedResult.freedBytes, 0)
+  t.is(sharedResult.sharedRetention, true)
+  t.alike(shared.clearCalls(), [])
+
+  const lastOwner = createHarness({
+    useDefaultDeletion: true,
+    scopedNetwork: {
+      async releaseAuthorizedRendition() {
+        return {
+          status: 'released',
+          released: true,
+          remainingOwners: 0,
+          scopeQuiescent: true,
+        }
+      },
+    },
+  })
+  const lastAssessment = await lastOwner.api.assessSourceOffload({ publicationId })
+  const lastResult = await lastOwner.api.confirmSourceOffload(confirmation(lastAssessment))
+  t.is(lastResult.success, true)
+  t.is(lastResult.freedBytes, rendition.core.byteLength)
+  t.absent(lastResult.sharedRetention)
+  t.alike(lastOwner.clearCalls(), [{ start: 0, end: rendition.core.length }])
+})
+
 test('playback starting before the source lock causes a durable retryable refusal', async (t) => {
   let reachDeletePrecheck
   const deletePrecheckReached = new Promise(resolve => { reachDeletePrecheck = resolve })

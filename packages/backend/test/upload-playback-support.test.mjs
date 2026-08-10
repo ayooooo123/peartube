@@ -314,6 +314,60 @@ test('local metadata failure emits no catalog operation and acquires no retentio
   assert.equal(retentions, 0)
 })
 
+test('catalog rejection with staged metadata rollback failure reconciles deterministically on retry', async (t) => {
+  const store = makeStore(t, 'staged-rollback-retry')
+  const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 12))
+  const appended = []
+  const catalog = makeCatalog(deviceKeyPair, appended)
+  const acceptBatch = catalog.appendBatchAndConfirm.bind(catalog)
+  let appendAttempts = 0
+  catalog.appendBatchAndConfirm = async operations => {
+    appendAttempts++
+    if (appendAttempts === 1) return operations.map(() => ({ accepted: false }))
+    return acceptBatch(operations)
+  }
+  const channel = makeChannel()
+  const cleared = []
+  channel.blobs.clear = async value => {
+    cleared.push(value)
+  }
+  channel.getVideo = async id => channel.videos.find(video => video.id === id) || null
+  const deleteVideo = channel.deleteVideo.bind(channel)
+  let deleteAttempts = 0
+  channel.deleteVideo = async id => {
+    deleteAttempts++
+    if (deleteAttempts === 1) throw new Error('injected staged metadata delete failure')
+    return deleteVideo(id)
+  }
+  const manager = makePublishingManager({ store, deviceKeyPair, catalog })
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-upload-retry-'))
+  const filePath = path.join(directory, 'video.webm')
+  fs.writeFileSync(filePath, Buffer.from('deterministic rollback retry'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const options = {
+    videoId: 'ab'.repeat(16),
+    title: 'Rollback retry',
+    mimeType: 'video/webm',
+  }
+
+  const rejected = await manager.uploadFromPath(channel, filePath, options, fs)
+  assert.equal(rejected.success, false)
+  assert.equal(rejected.rollbackPending, true)
+  assert.match(rejected.error, /rollback.*pending/i)
+  assert.equal(channel.videos.length, 1)
+  assert.equal(channel.videos[0].publicationState, 'replicationPending')
+  assert.equal(cleared.length, 0, 'pending metadata keeps its playback bytes')
+
+  const retried = await manager.uploadFromPath(channel, filePath, options, fs)
+  assert.equal(retried.success, true)
+  assert.equal(retried.reused, undefined)
+  assert.equal(appendAttempts, 2)
+  assert.equal(channel.videos.length, 1)
+  assert.equal(channel.videos[0].publicationState, 'published')
+  assert.equal(cleared.length, 1, 'retry clears the rejected staged playback blob once')
+  assert.equal(channel.blobWrites.length, 2, 'retry writes one replacement playback blob')
+})
+
 test('deterministic reused uploads return the original publication contract', async () => {
   const manifest = { publicationId: 'aa'.repeat(32), body: { manifestId: 'bb'.repeat(32) } }
   const metadata = {

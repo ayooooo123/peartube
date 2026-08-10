@@ -537,14 +537,15 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
   })
   const renditionId = manifest.body.renditions[0].renditionId
   const sourceBlocks = new Map([
-    [2, b4a.from('block-2')],
-    [3, b4a.from('block-3')],
-    [4, b4a.from('block-4')],
+    [2, b4a.alloc(ASSET_BLOCK_SIZE, 2)],
+    [3, b4a.alloc(ASSET_BLOCK_SIZE, 3)],
+    [4, b4a.alloc(ASSET_BLOCK_SIZE, 4)],
   ])
   const received = new Map()
   const sourceCore = {
     key: coreKey,
     length: 6,
+    byteLength: staticCore.byteLength,
     async ready () {},
     async has (index) { return sourceBlocks.has(index) },
     async proof ({ block }) {
@@ -563,6 +564,7 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
   const targetCore = {
     key: coreKey,
     length: 6,
+    byteLength: staticCore.byteLength,
     async ready () {},
     async has (index) { return received.has(index) },
     async applyProof (proof) {
@@ -595,8 +597,26 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
   await settle()
   await runtimeA.retainAuthorizedRendition({ manifest, renditionId, start: 2, end: 5 })
   await runtimeB.retainAuthorizedRendition({ manifest, renditionId, start: 2, end: 5 })
-  for (let attempt = 0; attempt < 20 && received.size < 3; attempt++) await settle()
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const activeA = runtimeA.getDiagnostics().sessions.some(session =>
+      session.purpose === 'asset' && session.state === 'active')
+    const activeB = runtimeB.getDiagnostics().sessions.some(session =>
+      session.purpose === 'asset' && session.state === 'active')
+    if (activeA && activeB) break
+    await settle()
+  }
+  t.ok(runtimeA.getDiagnostics().sessions.some(session =>
+    session.purpose === 'asset' && session.state === 'active'))
+  t.ok(runtimeB.getDiagnostics().sessions.some(session =>
+    session.purpose === 'asset' && session.state === 'active'))
 
+  const transfer = await runtimeB.requestAssetBlocks({
+    assetId: staticCore.assetId,
+    startBlock: 2,
+    endBlock: 5,
+  })
+  t.alike(transfer.verifiedBlockIndexes, [2, 3, 4])
+  t.alike(transfer.peerIds, [b4a.toString(pair.b.remotePublicKey, 'hex')])
   t.alike([...received.keys()].sort((a, b) => a - b), [2, 3, 4])
   t.is(received.has(1), false, 'the peer never receives a block below its authorized range')
   t.is(received.has(5), false, 'the peer never receives a block at or above its authorized range end')

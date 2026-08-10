@@ -51,6 +51,8 @@ import { createArchiveManager } from './archive/manager.js'
 import { buildCatalogGroupPage, buildChannelCatalog } from './catalog/channel-catalog.js'
 import { normalizeAssetCoreRefV2 } from './assets/rendition.js'
 import { createStaticAssetManifest } from './assets/static-core.js'
+import { verifyPublicationManifest } from './assets/manifest.js'
+import { createStaticAssetPlayback } from './playback/index.js'
 
 function assertApiContextRunning(ctx) {
   if (ctx?.lifecycle?.signal?.aborted) throw new Error('Backend is shutting down')
@@ -761,6 +763,7 @@ export function createApi({
   loadPublicBee = storageLoadPublicBee,
 }) {
   const blobPlayback = createBlobPlaybackService(ctx)
+  const pendingStaticPlaybackAuthorizations = new Map()
   const publisherApi = createPublisherApi({ ctx, catalogRegistry, now: () => Date.now() })
   const mediaGraphApi = createMediaGraphApi({ ctx })
   const scopedNetworkApi = scopedNetwork ? createScopedNetworkApi(scopedNetwork) : {}
@@ -1838,6 +1841,103 @@ export function createApi({
     return blobId && blobsCoreKey
       ? { blobId, blobsCoreKey, mimeType: mimeType || 'video/mp4' }
       : { blobId, blobsCoreKey, mimeType }
+  }
+
+  function immutablePublicationError(reason) {
+    return new Error(`immutable publication ${reason}`)
+  }
+
+  async function resolveImmutableStaticPlayback(meta, requestedMimeType) {
+    const publication = meta?.immutablePublication
+    if (publication == null) return null
+    if (!publication || typeof publication !== 'object') throw immutablePublicationError('metadata is malformed')
+    const manifest = publication.manifest
+    if (!manifest || !await verifyPublicationManifest(manifest, {
+      allowedSigners: [manifest?.body?.publisherId],
+    })) {
+      throw immutablePublicationError('manifest verification failed')
+    }
+    if (publication.publicationId !== manifest.publicationId ||
+        publication.manifestId !== manifest.body.manifestId ||
+        publication.publisherId !== manifest.body.publisherId) {
+      throw immutablePublicationError('manifest identity mismatch')
+    }
+    const rendition = manifest.body.renditions.find(candidate =>
+      candidate.renditionId === publication.renditionId)
+    if (!rendition) throw immutablePublicationError('rendition identity mismatch')
+    let coreRef
+    try {
+      coreRef = normalizeAssetCoreRefV2(rendition.core)
+    } catch {
+      throw immutablePublicationError('rendition core is malformed')
+    }
+    if (publication.assetId !== coreRef.assetId || publication.coreKey !== coreRef.key) {
+      throw immutablePublicationError('rendition core identity mismatch')
+    }
+    const mimeType = rendition.format || meta?.mimeType || requestedMimeType || 'video/mp4'
+    const authorizationKey = `${publication.publicationId}:${rendition.renditionId}`
+    if (blobPlayback.hasStaticAssetAuthorization(coreRef.assetId, authorizationKey)) {
+      return blobPlayback.resolveStaticAssetUrl({ coreRef, mimeType, authorizationKey })
+    }
+    if (typeof scopedNetwork?.retainAuthorizedRendition !== 'function' ||
+        typeof scopedNetwork?.releaseAuthorizedRendition !== 'function' ||
+        typeof scopedNetwork?.getActiveAssetSession !== 'function') {
+      throw immutablePublicationError('scoped playback transport is unavailable')
+    }
+    const pendingKey = `${coreRef.assetId}:${authorizationKey}`
+    const pending = pendingStaticPlaybackAuthorizations.get(pendingKey)
+    if (pending) return pending
+    const ownerId = `playback:${publication.publicationId}:${rendition.renditionId}`
+    const releaseRequest = {
+      renditionId: rendition.renditionId,
+      ownerId,
+      assetId: coreRef.assetId,
+    }
+    const resolution = (async () => {
+      await scopedNetwork.retainAuthorizedRendition({
+        manifest,
+        renditionId: rendition.renditionId,
+        ownerId,
+        start: 0,
+        end: coreRef.length,
+      })
+      let registered = false
+      try {
+        const release = () => scopedNetwork.releaseAuthorizedRendition(releaseRequest)
+        let playback
+        if (ctx?.staticAssetPlaybackEntries?.has(coreRef.assetId)) {
+          playback = blobPlayback.resolveStaticAssetUrl({
+            coreRef,
+            mimeType,
+            authorizationKey,
+            release,
+          })
+        } else {
+          const session = scopedNetwork.getActiveAssetSession({ assetId: coreRef.assetId })
+          playback = createStaticAssetPlayback({
+            coreRef,
+            session,
+            transport: scopedNetwork,
+            playbackService: blobPlayback,
+            mimeType,
+            authorizationKey,
+            release,
+          })
+        }
+        registered = true
+        return playback
+      } finally {
+        if (!registered) await scopedNetwork.releaseAuthorizedRendition(releaseRequest)
+      }
+    })()
+    pendingStaticPlaybackAuthorizations.set(pendingKey, resolution)
+    try {
+      return await resolution
+    } finally {
+      if (pendingStaticPlaybackAuthorizations.get(pendingKey) === resolution) {
+        pendingStaticPlaybackAuthorizations.delete(pendingKey)
+      }
+    }
   }
 
   function localSwarmPeerId() {
@@ -3081,26 +3181,31 @@ export function createApi({
      * @param {string} driveKey
      * @param {string} videoPath
      * @param {string} [publicBeeKey] - PublicBee key for fast viewer access
-     * @param {string} [blobId] - Direct blobId (skip metadata fetch if provided)
-     * @param {string} [blobsCoreKey] - Direct blobsCoreKey (skip metadata fetch if provided)
+     * @param {string} [blobId] - Legacy direct blobId
+     * @param {string} [blobsCoreKey] - Legacy direct blobsCoreKey
      * @param {string} [mimeType] - MIME type
      * @returns {Promise<{url: string}>}
      */
     async getVideoUrl(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType) {
       console.log('[API] getVideoUrl:', driveKey?.slice(0, 16), videoPath);
 
+      const meta = await this.getVideoData(driveKey, videoPath, publicBeeKey)
+      console.log('[API] getVideoUrl meta:', meta?.id, 'blobId:', meta?.blobId, 'blobsCoreKey:', meta?.blobsCoreKey?.slice(0, 16))
+      const immutablePlayback = await resolveImmutableStaticPlayback(meta, mimeType)
+      if (immutablePlayback) return immutablePlayback
+      if (!meta || typeof meta !== 'object') {
+        throw new Error('authoritative playback metadata is unavailable')
+      }
+
       const playbackBlobRef = resolvePlaybackBlobRef(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType)
       if (playbackBlobRef?.blobId && playbackBlobRef?.blobsCoreKey) {
-        console.log('[API] getVideoUrl: INSTANT - using direct blobId/blobsCoreKey');
+        console.log('[API] getVideoUrl: immutable publication absent; using legacy direct blobId/blobsCoreKey')
         return blobPlayback.resolveDirectBlobUrl({
           blobsCoreKey: playbackBlobRef.blobsCoreKey,
           blobId: playbackBlobRef.blobId,
           mimeType: playbackBlobRef.mimeType || 'video/mp4',
         })
       }
-
-      const meta = await this.getVideoData(driveKey, videoPath, publicBeeKey)
-      console.log('[API] getVideoUrl meta:', meta?.id, 'blobId:', meta?.blobId, 'blobsCoreKey:', meta?.blobsCoreKey?.slice(0, 16))
 
       let channel = null
       if (meta?.blobId && !meta?.blobsCoreKey) {
@@ -3169,6 +3274,18 @@ export function createApi({
         resolveUrl: (...args) => this.getVideoUrl(...args),
       })
       markPlaybackTiming(timingKey, 'url-resolved')
+      if (String(prepared.url || '').includes('pt_static_asset=')) {
+        trackPlaybackTiming({
+          at: startedAt,
+          driveKey: driveKey ? String(driveKey).slice(0, 16) : null,
+          videoId: videoPath || null,
+          stages: { totalMs: Date.now() - startedAt },
+          readyForPlayback: null,
+          peerCount: null,
+          hasHeadBlock: null,
+        })
+        return prepared
+      }
       let playbackStats = null
       const onDemandStatsPromise = startOnDemandPlaybackStats(driveKey, videoPath, playbackBlobRef)
         .catch((err) => {

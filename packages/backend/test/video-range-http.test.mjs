@@ -291,3 +291,207 @@ test('serveVideoRangeHttpRequest ignores non-video range requests', async (t) =>
   t.is(handled, false)
   t.alike(calls, [])
 })
+
+function staticRangeHarness({ range = 'bytes=2-5', method = 'GET', result = null } = {}) {
+  const { key, blob, req } = makeRangeRequest({ range })
+  const assetId = key.toString('hex')
+  req.method = method
+  req.url += `&pt_static_asset=${assetId}`
+  const calls = []
+  const scheduler = {
+    seek(request) { calls.push(['seek', request]) },
+    async requestRange(request) {
+      calls.push(['requestRange', request])
+      return result || {
+        status: 'ok',
+        bytes: Buffer.from('cdef'),
+        verified: true,
+        peerIds: ['peer-a'],
+        originAttempted: false,
+      }
+    },
+  }
+  const blobServer = {
+    token: 'test-token',
+    _getCore() { calls.push(['fallback']); return null },
+  }
+  const staticAssetEntries = new Map([[
+    assetId,
+    {
+      scheduler,
+      mimeType: 'video/mp4',
+      coreRef: {
+        assetId,
+        key: assetId,
+        blockSize: 4,
+        length: 2,
+        byteLength: blob.byteLength,
+      },
+    },
+  ]])
+  return { calls, req, scheduler, blobServer, staticAssetEntries }
+}
+
+test('marked static range returns exact verified 206 bytes and never opens generic blob replication', async (t) => {
+  const harness = staticRangeHarness()
+  const res = new MockResponse(harness.calls)
+
+  const handled = await serveVideoRangeHttpRequest({
+    blobServer: harness.blobServer,
+    staticAssetEntries: harness.staticAssetEntries,
+  }, harness.req, res)
+
+  t.is(handled, true)
+  t.is(res.statusCode, 206)
+  t.is(res.headers['accept-ranges'], 'bytes')
+  t.is(res.headers['content-range'], 'bytes 2-5/8')
+  t.is(res.headers['content-length'], '4')
+  t.alike(harness.calls.filter(call => call[0] === 'write'), [['write', 'cdef']])
+  const request = harness.calls.find(call => call[0] === 'requestRange')[1]
+  t.is(request.byteStart, 2)
+  t.is(request.byteEnd, 6, 'inclusive HTTP end is mapped to an exclusive scheduler end')
+  t.absent(harness.calls.find(call => call[0] === 'fallback'))
+})
+
+test('marked static HEAD writes range headers without scheduling data', async (t) => {
+  const harness = staticRangeHarness({ method: 'HEAD' })
+  const res = new MockResponse(harness.calls)
+
+  const handled = await serveVideoRangeHttpRequest({
+    blobServer: harness.blobServer,
+    staticAssetEntries: harness.staticAssetEntries,
+  }, harness.req, res)
+
+  t.is(handled, true)
+  t.is(res.statusCode, 206)
+  t.is(res.headers['content-range'], 'bytes 2-5/8')
+  t.absent(harness.calls.find(call => call[0] === 'requestRange'))
+  t.absent(harness.calls.find(call => call[0] === 'fallback'))
+})
+
+test('marked static invalid, multiple, and out-of-bounds ranges are terminal 416 responses', async (t) => {
+  for (const range of [undefined, 'bytes=0-1,4-5', 'bytes=8-9', 'bytes=0-8']) {
+    const harness = staticRangeHarness({ range: range ?? '' })
+    if (range === undefined) delete harness.req.headers.range
+    const res = new MockResponse(harness.calls)
+    const handled = await serveVideoRangeHttpRequest({
+      blobServer: harness.blobServer,
+      staticAssetEntries: harness.staticAssetEntries,
+    }, harness.req, res)
+    t.is(handled, true, String(range))
+    t.is(res.statusCode, 416, String(range))
+    t.is(res.headers['content-range'], 'bytes */8', String(range))
+    t.absent(harness.calls.find(call => call[0] === 'requestRange'), String(range))
+    t.absent(harness.calls.find(call => call[0] === 'fallback'), String(range))
+  }
+})
+
+test('marked static source exhaustion is bounded 503 and client close aborts without late bytes', async (t) => {
+  const exhausted = staticRangeHarness({
+    result: { status: 'unavailable', errorCode: 'NO_VERIFIED_SOURCE', originAttempted: false },
+  })
+  const exhaustedRes = new MockResponse(exhausted.calls)
+  t.is(await serveVideoRangeHttpRequest({
+    blobServer: exhausted.blobServer,
+    staticAssetEntries: exhausted.staticAssetEntries,
+  }, exhausted.req, exhaustedRes), true)
+  t.is(exhaustedRes.statusCode, 503)
+  t.ok(exhaustedRes.headers['content-length'] < 128)
+  t.absent(exhausted.calls.find(call => call[0] === 'fallback'))
+
+  const disconnected = staticRangeHarness()
+  let aborted = 0
+  disconnected.scheduler.requestRange = ({ signal }) => new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => {
+      aborted++
+      const error = new Error('client closed')
+      error.name = 'AbortError'
+      reject(error)
+    }, { once: true })
+  })
+  const disconnectedRes = new MockResponse(disconnected.calls)
+  const pending = serveVideoRangeHttpRequest({
+    blobServer: disconnected.blobServer,
+    staticAssetEntries: disconnected.staticAssetEntries,
+  }, disconnected.req, disconnectedRes)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  disconnectedRes.emit('close')
+  t.is(await pending, true)
+  t.is(aborted, 1)
+  t.absent(disconnected.calls.find(call => call[0] === 'write'))
+  t.absent(disconnected.calls.find(call => call[0] === 'fallback'))
+})
+
+test('marked static backpressure waits for drain and client close wakes without late end', async (t) => {
+  const harness = staticRangeHarness()
+  let schedulerSignal = null
+  harness.scheduler.requestRange = async ({ signal }) => {
+    schedulerSignal = signal
+    return {
+      status: 'ok',
+      bytes: Buffer.alloc(64 * 1024 * 1024, 1),
+      verified: true,
+      peerIds: ['peer-a'],
+      originAttempted: false,
+    }
+  }
+  harness.req.headers.range = `bytes=0-${64 * 1024 * 1024 - 1}`
+  const assetId = [...harness.staticAssetEntries.keys()][0]
+  harness.staticAssetEntries.get(assetId).coreRef.byteLength = 64 * 1024 * 1024
+  harness.staticAssetEntries.get(assetId).coreRef.blockSize = 32 * 1024 * 1024
+  const requestUrl = new URL(harness.req.url, 'http://127.0.0.1')
+  requestUrl.searchParams.set('blob', z32.encode(c.encode(blobIdEncoding, {
+    blockOffset: 0,
+    blockLength: 2,
+    byteOffset: 0,
+    byteLength: 64 * 1024 * 1024,
+  })))
+  harness.req.url = `${requestUrl.pathname}${requestUrl.search}`
+  const res = new MockResponse(harness.calls)
+  res.write = chunk => {
+    harness.calls.push(['write', chunk.byteLength])
+    return false
+  }
+
+  let settled = false
+  const pending = serveVideoRangeHttpRequest({
+    blobServer: harness.blobServer,
+    staticAssetEntries: harness.staticAssetEntries,
+  }, harness.req, res).then(value => {
+    settled = true
+    return value
+  })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(settled, false, 'false res.write must hold the materialized response until drain or close')
+  res.emit('close')
+  const outcome = await Promise.race([
+    pending,
+    new Promise(resolve => setTimeout(() => resolve('timed-out'), 50)),
+  ])
+
+  t.is(outcome, true)
+  t.is(schedulerSignal.aborted, true)
+  t.alike(harness.calls.filter(call => call[0] === 'write'), [['write', 64 * 1024 * 1024]])
+  t.absent(harness.calls.find(call => call[0] === 'end'))
+  t.absent(harness.calls.find(call => call[0] === 'fallback'))
+})
+
+test('marked static backpressure resumes exactly once on drain', async (t) => {
+  const harness = staticRangeHarness()
+  const res = new MockResponse(harness.calls)
+  res.write = chunk => {
+    harness.calls.push(['write', Buffer.from(chunk).toString('utf8')])
+    return false
+  }
+  const pending = serveVideoRangeHttpRequest({
+    blobServer: harness.blobServer,
+    staticAssetEntries: harness.staticAssetEntries,
+  }, harness.req, res)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.absent(harness.calls.find(call => call[0] === 'end'))
+  res.emit('drain')
+
+  t.is(await pending, true)
+  t.is(harness.calls.filter(call => call[0] === 'end').length, 1)
+  t.absent(harness.calls.find(call => call[0] === 'fallback'))
+})

@@ -49,15 +49,15 @@ function bytes (size, fill) {
   return b4a.alloc(size, fill)
 }
 
-function connectionPair () {
+function connectionPair (remoteAFill = 201, remoteBFill = 202) {
   const aToB = new PassThrough()
   const bToA = new PassThrough()
   const a = Duplex.from({ readable: bToA, writable: aToB })
   const b = Duplex.from({ readable: aToB, writable: bToA })
   a.userData = null
   b.userData = null
-  a.remotePublicKey = bytes(32, 201)
-  b.remotePublicKey = bytes(32, 202)
+  a.remotePublicKey = bytes(32, remoteAFill)
+  b.remotePublicKey = bytes(32, remoteBFill)
   return { a, b }
 }
 
@@ -623,6 +623,223 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
     ))
   }
   t.is(await readerCore.has(5), false, 'the peer never receives a block at or above its authorized range end')
+})
+
+test('three real scoped runtimes keep disjoint peer inventory, transfers, loss, and corruption attributable', async (t) => {
+  const directories = Array.from({ length: 4 }, (_, index) =>
+    fs.mkdtempSync(path.join(os.tmpdir(), `peartube-multi-peer-${index}-`)))
+  const [writerStore, firstStore, secondStore, readerStore] = directories.map(directory => new Corestore(directory))
+  await Promise.all([writerStore.ready(), firstStore.ready(), secondStore.ready(), readerStore.ready()])
+  const sourceBytes = b4a.alloc((5 * ASSET_BLOCK_SIZE) + 24)
+  for (let index = 0; index < 5; index++) {
+    sourceBytes.fill(index + 1, index * ASSET_BLOCK_SIZE, (index + 1) * ASSET_BLOCK_SIZE)
+  }
+  sourceBytes.fill(6, 5 * ASSET_BLOCK_SIZE)
+  const asset = await writeStaticAsset({ store: writerStore, source: [sourceBytes] })
+  const descriptor = asset.descriptor
+  const firstCore = firstStore.get({ key: descriptor.key, manifest: descriptor.hypercoreManifest, writable: false })
+  const secondCore = secondStore.get({ key: descriptor.key, manifest: descriptor.hypercoreManifest, writable: false })
+  const readerCore = readerStore.get({ key: descriptor.key, manifest: descriptor.hypercoreManifest, writable: false })
+  await Promise.all([firstCore.ready(), secondCore.ready(), readerCore.ready()])
+  for (const index of [0, 1, 2]) {
+    const proof = await asset.core.proof({
+      block: { index, nodes: 0 },
+      upgrade: { start: 0, length: descriptor.length },
+    })
+    t.is(await firstCore.applyProof(proof), true)
+  }
+  for (const index of [3, 4, 5]) {
+    const proof = await asset.core.proof({
+      block: { index, nodes: 0 },
+      upgrade: { start: 0, length: descriptor.length },
+    })
+    t.is(await secondCore.applyProof(proof), true)
+  }
+
+  const publisher = crypto.keyPair(bytes(32, 81))
+  const manifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    title: 'Three scoped peers',
+    renditions: [createRenditionDescriptor({ purpose: 'video', format: 'video/mp4', core: descriptor })],
+    keyPair: publisher,
+    signedAt: 10,
+    expiresAt: 1000,
+  })
+  const renditionId = manifest.body.renditions[0].renditionId
+  let holdLastProof = true
+  let lastProofStarted = false
+  let releaseLastProof
+  let corruptLastProof = false
+  const lastProofGate = new Promise(resolve => { releaseLastProof = resolve })
+  const patchedCores = new WeakSet()
+  const secondRuntimeStore = {
+    get(options) {
+      const core = secondStore.get(options)
+      if (patchedCores.has(core)) return core
+      patchedCores.add(core)
+      const proof = core.proof.bind(core)
+      core.proof = async request => {
+        const result = await proof(request)
+        if (request?.block?.index === 5 && holdLastProof) {
+          lastProofStarted = true
+          await lastProofGate
+        }
+        if (request?.block?.index === 5 && corruptLastProof) {
+          result.block.value = b4a.from(result.block.value)
+          result.block.value[0] ^= 0xff
+        }
+        return result
+      }
+      return core
+    },
+  }
+  const swarmA = fakeSwarm()
+  const swarmB = fakeSwarm()
+  const swarmC = fakeSwarm()
+  const runtimeA = createScopedNetworkRuntime({
+    swarm: swarmA,
+    store: firstStore,
+    authorizePublication: async request => request.manifest === manifest,
+  })
+  const runtimeB = createScopedNetworkRuntime({
+    swarm: swarmB,
+    store: readerStore,
+    authorizePublication: async request => request.manifest === manifest,
+  })
+  const runtimeC = createScopedNetworkRuntime({
+    swarm: swarmC,
+    store: secondRuntimeStore,
+    authorizePublication: async request => request.manifest === manifest,
+  })
+  const pairA = connectionPair(201, 202)
+  let pairC = connectionPair(203, 204)
+  t.teardown(async () => {
+    await Promise.allSettled([runtimeA.close(), runtimeB.close(), runtimeC.close()])
+    pairA.a.destroy()
+    pairA.b.destroy()
+    pairC.a.destroy()
+    pairC.b.destroy()
+    await Promise.allSettled([readerCore.close(), firstCore.close(), secondCore.close(), asset.core.close()])
+    await Promise.all([writerStore.close(), firstStore.close(), secondStore.close(), readerStore.close()])
+    for (const directory of directories) fs.rmSync(directory, { recursive: true, force: true })
+  })
+
+  await Promise.all([runtimeA.start(), runtimeB.start(), runtimeC.start()])
+  swarmA.connections.add(pairA.a)
+  swarmB.connections.add(pairA.b)
+  swarmC.connections.add(pairC.a)
+  swarmB.connections.add(pairC.b)
+  swarmA.emit('connection', pairA.a, { publicKey: pairA.a.remotePublicKey })
+  swarmB.emit('connection', pairA.b, { publicKey: pairA.b.remotePublicKey })
+  swarmC.emit('connection', pairC.a, { publicKey: pairC.a.remotePublicKey })
+  swarmB.emit('connection', pairC.b, { publicKey: pairC.b.remotePublicKey })
+  await settle()
+  await runtimeA.retainAuthorizedRendition({ manifest, renditionId, start: 0, end: descriptor.length })
+  await runtimeC.retainAuthorizedRendition({ manifest, renditionId, start: 0, end: descriptor.length })
+  await runtimeB.retainAuthorizedRendition({ manifest, renditionId, start: 0, end: descriptor.length })
+
+  let activeReaderSessions = []
+  for (let attempt = 0; attempt < 20; attempt++) {
+    activeReaderSessions = runtimeB.getDiagnostics().sessions.filter(session =>
+      session.purpose === 'asset' && session.state === 'active')
+    const sourceAActive = runtimeA.getDiagnostics().sessions.some(session =>
+      session.purpose === 'asset' && session.state === 'active')
+    const sourceCActive = runtimeC.getDiagnostics().sessions.some(session =>
+      session.purpose === 'asset' && session.state === 'active')
+    if (activeReaderSessions.length === 2 && sourceAActive && sourceCActive) break
+    await settle()
+  }
+  t.is(activeReaderSessions.length, 2)
+  t.ok(runtimeA.getDiagnostics().sessions.some(session =>
+    session.purpose === 'asset' && session.state === 'active'))
+  t.ok(runtimeC.getDiagnostics().sessions.some(session =>
+    session.purpose === 'asset' && session.state === 'active'))
+  const peerIds = runtimeB.getActiveAssetPeerIds({ assetId: descriptor.assetId })
+  const firstPeerId = b4a.toString(pairA.b.remotePublicKey, 'hex')
+  const secondPeerId = b4a.toString(pairC.b.remotePublicKey, 'hex')
+  t.alike(peerIds, [firstPeerId, secondPeerId].sort())
+
+  const [firstInventory, secondInventory] = await Promise.all([
+    runtimeB.listPeerAssetRanges({
+      assetId: descriptor.assetId,
+      peerId: firstPeerId,
+      cursor: null,
+      limit: 1,
+    }),
+    runtimeB.listPeerAssetRanges({
+      assetId: descriptor.assetId,
+      peerId: secondPeerId,
+      cursor: null,
+      limit: 1,
+    }),
+  ])
+  const inventoryHas = (page, blockIndex) => page.ranges.some(range => {
+    if (blockIndex < range.startBlock || blockIndex >= range.startBlock + range.bitCount) return false
+    const offset = blockIndex - range.startBlock
+    return (range.presentBitfield[offset >> 3] & (1 << (offset & 7))) !== 0
+  })
+  t.ok(inventoryHas(firstInventory, 0))
+  t.is(inventoryHas(firstInventory, 3), false)
+  t.is(inventoryHas(secondInventory, 0), false)
+  t.ok(inventoryHas(secondInventory, 3))
+
+  const firstRun = await runtimeB.requestAssetBlocks({
+    assetId: descriptor.assetId,
+    startBlock: 0,
+    endBlock: 3,
+    peerIds: [firstPeerId],
+  })
+  t.alike(firstRun.verifiedBlockIndexes, [0, 1, 2])
+  t.alike(firstRun.peerIds, [firstPeerId])
+
+  const interrupted = runtimeB.requestAssetBlocks({
+    assetId: descriptor.assetId,
+    startBlock: 3,
+    endBlock: 6,
+    peerIds: [secondPeerId],
+  })
+  const observedDisconnect = interrupted.then(() => null, error => error)
+  for (let attempt = 0; attempt < 100 && !lastProofStarted; attempt++) await settle()
+  t.ok(lastProofStarted)
+  pairC.a.destroy()
+  pairC.b.destroy()
+  releaseLastProof()
+  const disconnected = await observedDisconnect
+  t.ok(disconnected)
+  t.is(disconnected.code, 'DISCONNECTED')
+  t.is(disconnected.peerId, secondPeerId)
+
+  holdLastProof = false
+  pairC = connectionPair(203, 204)
+  swarmC.connections.add(pairC.a)
+  swarmB.connections.add(pairC.b)
+  swarmC.emit('connection', pairC.a, { publicKey: pairC.a.remotePublicKey })
+  swarmB.emit('connection', pairC.b, { publicKey: pairC.b.remotePublicKey })
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if (runtimeB.getActiveAssetPeerIds({ assetId: descriptor.assetId }).includes(secondPeerId)) break
+    await settle()
+  }
+  const secondRun = await runtimeB.requestAssetBlocks({
+    assetId: descriptor.assetId,
+    startBlock: 3,
+    endBlock: 6,
+    peerIds: [secondPeerId],
+  })
+  t.alike(secondRun.verifiedBlockIndexes, [3, 4, 5])
+  t.alike(secondRun.peerIds, [secondPeerId])
+
+  await readerCore.clear(5)
+  corruptLastProof = true
+  const invalid = await runtimeB.requestAssetBlocks({
+    assetId: descriptor.assetId,
+    startBlock: 5,
+    endBlock: 6,
+    peerIds: [secondPeerId],
+  }).then(() => null, error => error)
+  t.ok(invalid)
+  t.is(invalid.code, 'INVALID_PROOF')
+  t.is(invalid.peerId, secondPeerId)
+  t.ok(invalid.message.length <= 256)
 })
 
 test('separate publishers and assets never cross-open and cleanup is exactly once', async (t) => {

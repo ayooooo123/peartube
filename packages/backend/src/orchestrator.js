@@ -608,7 +608,10 @@ export async function createBackendContext(config) {
   // downloading *ahead* of the playhead so a fast peer builds a real buffer
   // instead of the on-demand stream settling at playback bitrate. The window
   // cache trims behind, so the two together bound the on-disk footprint.
-  const playbackForwardFill = createPlaybackForwardFill({ store: ctx.store });
+  const playbackForwardFill = createPlaybackForwardFill({
+    store: ctx.store,
+    staticAssetEntries: ctx.staticAssetPlaybackEntries,
+  });
   lifecycle.ownResource('playback forward fill', playbackForwardFill, 'stop', 2000)
   playbackForwardFill.start();
   ctx.playbackForwardFill = playbackForwardFill;

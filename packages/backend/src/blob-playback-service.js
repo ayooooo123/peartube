@@ -1,5 +1,6 @@
 import b4a from 'b4a'
 
+import { normalizeAssetCoreRefV2 } from './assets/rendition.js'
 import { normalizeBlobRefInput, parseBlobRef } from './blob-ref.js'
 import { attachBlobPlaybackProfile } from './blob-playback-profile.js'
 import { retainSwarmDiscovery } from './storage.js'
@@ -32,10 +33,35 @@ function getPeerKey(peer) {
 }
 
 export class BlobPlaybackService {
-  constructor({ ctx, findingPeerLeaseMs = 10_000 }) {
+  constructor({ ctx, findingPeerLeaseMs = 10_000, maxStaticAssetEntries = 128 }) {
     this.ctx = ctx
     this.findingPeerLeaseMs = Math.max(0, Number(findingPeerLeaseMs) || 0)
     this.findingPeerLeases = new WeakMap()
+    this.maxStaticAssetEntries = Number.isSafeInteger(maxStaticAssetEntries) && maxStaticAssetEntries > 0
+      ? maxStaticAssetEntries
+      : 128
+  }
+
+  releaseStaticAssetEntry(entry) {
+    if (!entry || entry.released) return
+    entry.released = true
+    const releases = entry.authorizations instanceof Map
+      ? [...entry.authorizations.values()]
+      : (typeof entry.release === 'function' ? [entry.release] : [])
+    entry.authorizations?.clear?.()
+    for (const release of releases) {
+      try {
+        Promise.resolve(release()).catch(() => {})
+      } catch {}
+    }
+  }
+
+  hasStaticAssetAuthorization(assetId, authorizationKey) {
+    if (typeof assetId !== 'string' || typeof authorizationKey !== 'string') return false
+    return Boolean(this.ctx?.staticAssetPlaybackEntries
+      ?.get(assetId)
+      ?.authorizations
+      ?.has(authorizationKey))
   }
 
   resolveDirectBlobUrl({ blobsCoreKey, blobId, mimeType = 'video/mp4' }) {
@@ -77,6 +103,87 @@ export class BlobPlaybackService {
     }).catch(() => {})
 
     return { url }
+  }
+
+  resolveStaticAssetUrl({ coreRef, scheduler, mimeType = 'video/mp4', authorizationKey, release } = {}) {
+    const ctx = this.ctx
+    if (!ctx?.blobServer?.getLink) throw new Error('BlobServer not initialized')
+    const normalized = normalizeAssetCoreRefV2(coreRef, 'coreRef')
+    const existingEntries = ctx.staticAssetPlaybackEntries
+    const entries = existingEntries || new Map()
+    let entry = entries.get(normalized.assetId)
+    const reused = Boolean(entry)
+    if (entry) {
+      if (entry.coreRef.kind !== normalized.kind ||
+          entry.coreRef.key !== normalized.key ||
+          entry.coreRef.treeHash !== normalized.treeHash ||
+          entry.coreRef.length !== normalized.length ||
+          entry.coreRef.byteLength !== normalized.byteLength ||
+          entry.coreRef.blockSize !== normalized.blockSize) {
+        throw new Error('static playback asset identity collision')
+      }
+    } else if (typeof scheduler?.requestRange !== 'function' || typeof scheduler?.seek !== 'function') {
+      throw new Error('verified static playback scheduler is required')
+    }
+
+    const authorizations = entry?.authorizations instanceof Map
+      ? entry.authorizations
+      : new Map()
+    let addAuthorization = false
+    if (authorizationKey != null) {
+      if (typeof authorizationKey !== 'string' || authorizationKey.length === 0) {
+        throw new Error('static playback authorization key is invalid')
+      }
+      addAuthorization = !authorizations.has(authorizationKey)
+      if (addAuthorization && typeof release !== 'function') {
+        throw new Error('static playback authorization release is required')
+      }
+    }
+    const effectiveMimeType = entry?.mimeType || mimeType
+    const capabilityUrl = ctx.blobServer.getLink(b4a.from(normalized.key, 'hex'), {
+      blob: {
+        blockOffset: 0,
+        blockLength: normalized.length,
+        byteOffset: 0,
+        byteLength: normalized.byteLength,
+      },
+      type: effectiveMimeType,
+      host: ctx.blobServerHost || '127.0.0.1',
+      port: ctx.blobServer?.port || ctx.blobServerPort,
+    })
+    if (typeof capabilityUrl !== 'string') throw new Error('BlobServer returned an invalid capability URL')
+    const separator = capabilityUrl.includes('?') ? '&' : '?'
+
+    if (!entry) {
+      entry = {
+        coreRef: normalized,
+        scheduler,
+        mimeType: effectiveMimeType,
+        authorizations,
+        released: false,
+      }
+    } else if (entry.authorizations !== authorizations) {
+      entry.authorizations = authorizations
+    }
+    if (addAuthorization) authorizations.set(authorizationKey, release)
+    if (!existingEntries) ctx.staticAssetPlaybackEntries = entries
+    if (reused) {
+      entries.delete(normalized.assetId)
+      entries.set(normalized.assetId, entry)
+    } else {
+      entries.set(normalized.assetId, entry)
+      while (entries.size > this.maxStaticAssetEntries) {
+        const oldestAssetId = entries.keys().next().value
+        const oldest = entries.get(oldestAssetId)
+        entries.delete(oldestAssetId)
+        this.releaseStaticAssetEntry(oldest)
+      }
+    }
+    return {
+      url: `${capabilityUrl}${separator}pt_static_asset=${normalized.assetId}`,
+      scheduler: entry.scheduler,
+      reused,
+    }
   }
 
   scheduleFindingPeerRelease(core, lease) {
@@ -213,5 +320,8 @@ export class BlobPlaybackService {
 }
 
 export function createBlobPlaybackService(ctx) {
-  return new BlobPlaybackService({ ctx })
+  return new BlobPlaybackService({
+    ctx,
+    maxStaticAssetEntries: ctx?.maxStaticAssetPlaybackEntries,
+  })
 }

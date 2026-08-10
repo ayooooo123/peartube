@@ -16,15 +16,17 @@ import {
 } from '../src/assets/static-core.js'
 import { createPublicationManifest } from '../src/assets/manifest.js'
 import { createRenditionDescriptor } from '../src/assets/rendition.js'
-import { createScopedNetworkRuntime } from '../src/network/scoped-runtime.js'
+import { createScopedNetworkApi, createScopedNetworkRuntime } from '../src/network/scoped-runtime.js'
 import {
   ASSET_BLOCK_ERROR_CODES,
   PEER_FRAME_TYPE_NAMES,
   decodeAssetBlockRequest,
+  decodeAssetRangeSummaryRequest,
   decodePeerFrame,
   encodeAssetBlockError,
   encodeAssetBlockRequest,
   encodeAssetBlockResponse,
+  encodeAssetRangeSummaryPage,
   encodeAssetRangeSummaryRequest,
   encodePeerFrame,
 } from '../src/network/frame.js'
@@ -418,7 +420,7 @@ async function until(predicate) {
   throw new Error('condition was not reached')
 }
 
-async function scopedAssetHarness(t, coreOverrides = {}, descriptorOverrides = {}) {
+async function scopedAssetHarness(t, coreOverrides = {}, descriptorOverrides = {}, runtimeOverrides = {}) {
   const descriptor = createStaticAssetManifest({
     treeHash: b4a.alloc(32, 71),
     blockLength: descriptorOverrides.blockLength ?? 1,
@@ -455,6 +457,7 @@ async function scopedAssetHarness(t, coreOverrides = {}, descriptorOverrides = {
     muxFactory: () => mux,
     authorizePublication: async request => request.manifest === manifest,
     store: { get() { return core } },
+    ...runtimeOverrides,
   })
   await runtime.start()
   await runtime.retainAuthorizedRendition({
@@ -469,7 +472,17 @@ async function scopedAssetHarness(t, coreOverrides = {}, descriptorOverrides = {
   const assetChannel = await until(() => mux.channels.find(entry => entry.spec.protocol.endsWith('/asset')))
   await until(() => runtime.getDiagnostics().sessions.some(session => session.purpose === 'asset' && session.state === 'active'))
   t.teardown(() => runtime.close())
-  return { assetChannel, core, descriptor, runtime }
+  return {
+    assetChannel,
+    core,
+    descriptor,
+    manifest,
+    mux,
+    peerId: b4a.toString(connection.remotePublicKey, 'hex'),
+    rendition,
+    runtime,
+    swarm,
+  }
 }
 
 function sentAssetRequests(assetChannel) {
@@ -477,6 +490,13 @@ function sentAssetRequests(assetChannel) {
     .map(frame => decodePeerFrame(frame, { typeCodes: PEER_FRAME_TYPE_NAMES }))
     .filter(frame => frame.type === 'asset-block-request')
     .map(frame => decodeAssetBlockRequest(frame.payload))
+}
+
+function sentAssetRangeRequests(assetChannel) {
+  return assetChannel.outbound
+    .map(frame => decodePeerFrame(frame, { typeCodes: PEER_FRAME_TYPE_NAMES }))
+    .filter(frame => frame.type === 'asset-range-summary-request')
+    .map(frame => decodeAssetRangeSummaryRequest(frame.payload))
 }
 
 test('aborted scoped block requests discard late responses before proof application', async (t) => {
@@ -517,6 +537,111 @@ test('aborted scoped block requests discard late responses before proof applicat
   t.is(applied, 0)
 })
 
+test('aborting during valid proof application leaves the peer healthy for a later request', async (t) => {
+  let applied = 0
+  let releaseApply
+  let firstApplyFinished = false
+  let firstCommittedRead = false
+  const applyGate = new Promise(resolve => { releaseApply = resolve })
+  const { assetChannel, descriptor, peerId, runtime } = await scopedAssetHarness(t, {
+    async has() {
+      if (applied === 0) return false
+      if (applied === 1 && !firstCommittedRead) {
+        firstCommittedRead = true
+        return true
+      }
+      return applied > 1
+    },
+    async applyProof() {
+      applied++
+      if (applied === 1) {
+        await applyGate
+        firstApplyFinished = true
+      }
+      return true
+    },
+  }, {
+    byteLength: 7,
+  })
+  const sendResponse = (firstRequestId, transferId) => {
+    const proof = c.encode(c.any, {
+      index: 0,
+      byteLength: 7,
+      proof: {
+        fork: 0,
+        block: { index: 0, nodes: [], value: null },
+        hash: null,
+        seek: null,
+        upgrade: null,
+        manifest: null,
+      },
+    })
+    let requestId = firstRequestId
+    for (const [kind, chunk] of [
+      ['proof', proof],
+      ['block', b4a.alloc(7, firstRequestId)],
+    ]) {
+      assetChannel.spec.messages[0].onmessage(encodePeerFrame({
+        purpose: 'asset',
+        type: 'asset-block-response',
+        requestId: requestId++,
+        payload: encodeAssetBlockResponse({
+          assetId: descriptor.assetId,
+          transferId,
+          startBlock: 0,
+          endBlock: 1,
+          blockIndex: 0,
+          kind,
+          offset: 0,
+          totalBytes: chunk.byteLength,
+          chunk,
+        }),
+      }))
+    }
+  }
+
+  const controller = new AbortController()
+  const first = runtime.requestAssetBlocks({
+    assetId: descriptor.assetId,
+    startBlock: 0,
+    endBlock: 1,
+    peerIds: [peerId],
+    signal: controller.signal,
+  })
+  const firstRejected = t.exception(first, /aborted/)
+  await until(() => sentAssetRequests(assetChannel).length === 1)
+  sendResponse(1, sentAssetRequests(assetChannel)[0].transferId)
+  await until(() => applied === 1)
+  controller.abort()
+  await firstRejected
+  releaseApply()
+  await until(() => firstApplyFinished)
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  const afterAbort = runtime.getDiagnostics()
+  t.ok(afterAbort.sessions.some(session =>
+    session.purpose === 'asset' &&
+    session.peerId === peerId &&
+    session.state === 'active'))
+  t.not(assetChannel.channel.closed)
+  t.not(afterAbort.recentErrors.some(error =>
+    error.peerId === peerId &&
+    (error.code === 'INVALID_PROOF' || /invalid proof/i.test(error.message))))
+
+  const second = runtime.requestAssetBlocks({
+    assetId: descriptor.assetId,
+    startBlock: 0,
+    endBlock: 1,
+    peerIds: [peerId],
+  })
+  await until(() => sentAssetRequests(assetChannel).length === 2)
+  sendResponse(3, sentAssetRequests(assetChannel)[1].transferId)
+  const result = await second
+  t.alike(result.verifiedBlockIndexes, [0])
+  t.alike(result.peerIds, [peerId])
+  t.not(assetChannel.channel.closed)
+})
+
 test('asset block receivers reject bytes before a complete canonical proof', async (t) => {
   let applied = 0
   const { assetChannel, descriptor, runtime } = await scopedAssetHarness(t, {
@@ -553,7 +678,7 @@ test('asset block receivers reject bytes before a complete canonical proof', asy
 
 test('fresh scoped receivers reject canonical no-upgrade proof metadata before block bytes', async (t) => {
   let applied = 0
-  const { assetChannel, descriptor, runtime } = await scopedAssetHarness(t, {
+  const { assetChannel, descriptor, peerId, runtime } = await scopedAssetHarness(t, {
     length: 0,
     byteLength: 0,
     async applyProof() { applied++; return true },
@@ -563,7 +688,7 @@ test('fresh scoped receivers reject canonical no-upgrade proof metadata before b
     startBlock: 0,
     endBlock: 1,
   })
-  const rejected = t.exception(pending, /unavailable|peer|upgrade/)
+  const rejected = pending.then(() => null, error => error)
   await until(() => sentAssetRequests(assetChannel).length === 1)
   const [{ transferId }] = sentAssetRequests(assetChannel)
   const proof = c.encode(c.any, {
@@ -595,7 +720,10 @@ test('fresh scoped receivers reject canonical no-upgrade proof metadata before b
     }),
   }))
   await until(() => assetChannel.channel.closed)
-  await rejected
+  const error = await rejected
+  t.ok(error)
+  t.is(error.code, 'INVALID_PROOF')
+  t.is(error.peerId, peerId)
   t.is(applied, 0)
 })
 
@@ -605,7 +733,7 @@ test('conflicting proof state quarantines before request rejection and blocks co
   let closeCompleted = false
   let releaseClose
   const closeGate = new Promise(resolve => { releaseClose = resolve })
-  const { assetChannel, core, descriptor, runtime } = await scopedAssetHarness(t, {
+  const { assetChannel, core, descriptor, peerId, runtime } = await scopedAssetHarness(t, {
     async has() { return false },
     async applyProof() { applied++; return true },
     async close() {
@@ -621,13 +749,24 @@ test('conflicting proof state quarantines before request rejection and blocks co
     assetId: descriptor.assetId,
     startBlock: 0,
     endBlock: 1,
+    peerIds: [peerId],
   })
+  const concurrent = runtime.requestAssetBlocks({
+    assetId: descriptor.assetId,
+    startBlock: 0,
+    endBlock: 1,
+    peerIds: [peerId],
+  })
+  const concurrentObserved = concurrent.then(
+    value => ({ value, error: null }),
+    error => ({ value: null, error }),
+  )
   let settled = false
   const observed = pending.then(
     value => { settled = true; return { value, error: null } },
     error => { settled = true; return { value: null, error } },
   )
-  await until(() => sentAssetRequests(assetChannel).length === 1)
+  await until(() => sentAssetRequests(assetChannel).length === 2)
   const [{ transferId }] = sentAssetRequests(assetChannel)
   core.length = 1
   core.byteLength = ASSET_BLOCK_SIZE
@@ -681,7 +820,13 @@ test('conflicting proof state quarantines before request rejection and blocks co
   t.is(applied, 0)
   releaseClose()
   const outcome = await observed
-  t.ok(outcome.error)
+  t.is(outcome.error.code, 'INVALID_PROOF')
+  t.is(outcome.error.peerId, peerId)
+  const concurrentOutcome = await concurrentObserved
+  t.is(concurrentOutcome.error.code, 'QUARANTINED')
+  t.is(concurrentOutcome.error.peerId, peerId)
+  t.ok(outcome.error.message.length <= 256)
+  t.ok(concurrentOutcome.error.message.length <= 256)
   t.ok(closeCompleted)
   await until(() => assetChannel.channel.closed)
   t.is(applied, 0, 'concurrent block bytes never reach proof application')
@@ -847,4 +992,302 @@ test('asset responder teardown suppresses proof and block frames after its chann
   const responseTypes = assetChannel.outbound.map(frame =>
     decodePeerFrame(frame, { typeCodes: PEER_FRAME_TYPE_NAMES }).type)
   t.absent(responseTypes.find(type => type === 'asset-block-response' || type === 'asset-block-error'))
+})
+
+
+test('peer inventory is exact, bounded, single-flight, and correlated to its active session', async (t) => {
+  const { assetChannel, descriptor, peerId, runtime } = await scopedAssetHarness(t)
+  t.alike(runtime.getActiveAssetPeerIds({ assetId: descriptor.assetId }), [peerId])
+
+  const pending = runtime.listPeerAssetRanges({
+    assetId: descriptor.assetId,
+    peerId,
+    cursor: null,
+    limit: 1,
+  })
+  await until(() => sentAssetRangeRequests(assetChannel).length === 1)
+  const duplicate = await runtime.listPeerAssetRanges({
+    assetId: descriptor.assetId,
+    peerId,
+    cursor: null,
+    limit: 1,
+  }).then(() => null, error => error)
+  t.ok(duplicate)
+  t.is(duplicate.code, 'UNAVAILABLE')
+  t.is(duplicate.peerId, peerId)
+
+  assetChannel.spec.messages[0].onmessage(encodePeerFrame({
+    purpose: 'asset',
+    type: 'asset-range-summary-page',
+    requestId: 1,
+    payload: encodeAssetRangeSummaryPage({
+      assetId: descriptor.assetId,
+      ranges: [{ startBlock: 0, bitCount: 1, presentBitfield: b4a.from([1]) }],
+      nextCursor: null,
+      coreLength: descriptor.length,
+      cursor: null,
+      limit: 1,
+    }),
+  }))
+  t.alike(await pending, {
+    ranges: [{ startBlock: 0, bitCount: 1, presentBitfield: b4a.from([1]) }],
+    nextCursor: null,
+  })
+})
+
+test('peer inventory timeout rejects with peer identity and closes the late-frame session', async (t) => {
+  const { assetChannel, descriptor, peerId, runtime } = await scopedAssetHarness(
+    t,
+    {},
+    {},
+    { assetTransferTimeoutMs: 5 },
+  )
+  const error = await runtime.listPeerAssetRanges({
+    assetId: descriptor.assetId,
+    peerId,
+    cursor: null,
+    limit: 1,
+  }).then(() => null, reason => reason)
+  t.ok(error)
+  t.is(error.code, 'TIMEOUT')
+  t.is(error.peerId, peerId)
+  t.ok(assetChannel.channel.closed)
+  assetChannel.spec.messages[0].onmessage(encodePeerFrame({
+    purpose: 'asset',
+    type: 'asset-range-summary-page',
+    requestId: 1,
+    payload: encodeAssetRangeSummaryPage({
+      assetId: descriptor.assetId,
+      ranges: [],
+      nextCursor: null,
+      coreLength: descriptor.length,
+      cursor: null,
+      limit: 1,
+    }),
+  }))
+})
+
+test('selected peers receive distinct concurrent transfers for the same range', async (t) => {
+  const { assetChannel, descriptor, mux, peerId, runtime, swarm } = await scopedAssetHarness(t)
+  const secondConnection = new EventEmitter()
+  secondConnection.remotePublicKey = b4a.alloc(32, 74)
+  swarm.emit('connection', secondConnection, { client: true })
+  const secondChannel = await until(() =>
+    mux.channels.find(entry =>
+      entry !== assetChannel && entry.spec.protocol.endsWith('/asset')))
+  const secondPeerId = b4a.toString(secondConnection.remotePublicKey, 'hex')
+  await until(() => runtime.getActiveAssetPeerIds({ assetId: descriptor.assetId }).length === 2)
+
+  const firstController = new AbortController()
+  const secondController = new AbortController()
+  const first = runtime.requestAssetBlocks({
+    assetId: descriptor.assetId,
+    startBlock: 0,
+    endBlock: 1,
+    peerIds: [peerId],
+    signal: firstController.signal,
+  })
+  const second = runtime.requestAssetBlocks({
+    assetId: descriptor.assetId,
+    startBlock: 0,
+    endBlock: 1,
+    peerIds: [peerId],
+    signal: secondController.signal,
+  })
+  await until(() => sentAssetRequests(assetChannel).length === 2)
+  t.is(sentAssetRequests(secondChannel).length, 0)
+  const [firstRequest, secondRequest] = sentAssetRequests(assetChannel)
+  t.ok(secondRequest.transferId > firstRequest.transferId)
+  firstController.abort()
+  secondController.abort()
+  await t.exception(first, /aborted/)
+  await t.exception(second, /aborted/)
+  await t.exception(runtime.requestAssetBlocks({
+    assetId: descriptor.assetId,
+    startBlock: 0,
+    endBlock: 1,
+    peerIds: [],
+  }), /peerIds are out of bounds/)
+  await t.exception(runtime.requestAssetBlocks({
+    assetId: descriptor.assetId,
+    startBlock: 0,
+    endBlock: 1,
+    peerIds: Array.from({ length: 17 }, (_, index) => `peer-${index}`),
+  }), /peerIds are out of bounds/)
+
+  const unavailable = await runtime.requestAssetBlocks({
+    assetId: descriptor.assetId,
+    startBlock: 0,
+    endBlock: 1,
+    peerIds: ['missing-peer'],
+  }).then(() => null, error => error)
+  t.ok(unavailable)
+  t.is(unavailable.code, 'UNAVAILABLE')
+  t.is(unavailable.peerId, 'missing-peer')
+  t.alike(runtime.getActiveAssetPeerIds({ assetId: descriptor.assetId }), [peerId, secondPeerId].sort())
+})
+
+test('block transport exposes stable unavailable, disconnected, and timeout peer errors', async (t) => {
+  {
+    const { assetChannel, descriptor, peerId, runtime } = await scopedAssetHarness(t)
+    const pending = runtime.requestAssetBlocks({
+      assetId: descriptor.assetId,
+      startBlock: 0,
+      endBlock: 1,
+      peerIds: [peerId],
+    })
+    const observed = pending.then(() => null, error => error)
+    await until(() => sentAssetRequests(assetChannel).length === 1)
+    const [request] = sentAssetRequests(assetChannel)
+    assetChannel.spec.messages[0].onmessage(encodePeerFrame({
+      purpose: 'asset',
+      type: 'asset-block-error',
+      requestId: 1,
+      payload: encodeAssetBlockError({
+        assetId: descriptor.assetId,
+        transferId: request.transferId,
+        startBlock: 0,
+        endBlock: 1,
+        code: ASSET_BLOCK_ERROR_CODES.UNAVAILABLE,
+      }),
+    }))
+    const error = await observed
+    t.ok(error)
+    t.is(error.code, 'UNAVAILABLE')
+    t.is(error.peerId, peerId)
+    await runtime.close()
+  }
+  {
+    const { assetChannel, descriptor, peerId, runtime } = await scopedAssetHarness(t)
+    const pending = runtime.requestAssetBlocks({
+      assetId: descriptor.assetId,
+      startBlock: 0,
+      endBlock: 1,
+      peerIds: [peerId],
+    })
+    const observed = pending.then(() => null, error => error)
+    await until(() => sentAssetRequests(assetChannel).length === 1)
+    assetChannel.channel.close()
+    const error = await observed
+    t.ok(error)
+    t.is(error.code, 'DISCONNECTED')
+    t.is(error.peerId, peerId)
+    await runtime.close()
+  }
+  {
+    const { descriptor, peerId, runtime } = await scopedAssetHarness(
+      t,
+      {},
+      {},
+      { assetTransferTimeoutMs: 5 },
+    )
+    const error = await runtime.requestAssetBlocks({
+      assetId: descriptor.assetId,
+      startBlock: 0,
+      endBlock: 1,
+      peerIds: [peerId],
+    }).then(() => null, reason => reason)
+    t.ok(error)
+    t.is(error.code, 'TIMEOUT')
+    t.is(error.peerId, peerId)
+    await runtime.close()
+  }
+})
+
+test('verified local possession and reads stay bound to the exact asset session', async (t) => {
+  const value = b4a.alloc(ASSET_BLOCK_SIZE, 75)
+  let reads = 0
+  const { descriptor, runtime } = await scopedAssetHarness(t, {
+    async has(index) { return index === 0 },
+    async get(index, options) {
+      t.is(index, 0)
+      t.is(options.wait, false)
+      reads++
+      return value
+    },
+  })
+  t.is(await runtime.hasVerifiedAssetBlock({
+    assetId: descriptor.assetId,
+    blockIndex: 0,
+  }), true)
+  const block = await runtime.readVerifiedAssetBlock({
+    assetId: descriptor.assetId,
+    blockIndex: 0,
+  })
+  t.is(block, value, 'verified reads do not copy block payloads')
+  t.is(reads, 1)
+
+  const controller = new AbortController()
+  controller.abort()
+  const aborted = await runtime.hasVerifiedAssetBlock({
+    assetId: descriptor.assetId,
+    blockIndex: 0,
+    signal: controller.signal,
+  }).then(() => null, error => error)
+  t.ok(aborted)
+  t.is(aborted.name, 'AbortError')
+})
+
+test('peer inventory abort and runtime teardown clear pending session state', async (t) => {
+  {
+    const { assetChannel, descriptor, peerId, runtime } = await scopedAssetHarness(t)
+    const controller = new AbortController()
+    const pending = runtime.listPeerAssetRanges({
+      assetId: descriptor.assetId,
+      peerId,
+      cursor: null,
+      limit: 1,
+      signal: controller.signal,
+    })
+    const observed = pending.then(() => null, error => error)
+    await until(() => sentAssetRangeRequests(assetChannel).length === 1)
+    controller.abort()
+    const error = await observed
+    t.ok(error)
+    t.is(error.name, 'AbortError')
+    t.is(error.peerId, peerId)
+    t.ok(assetChannel.channel.closed)
+    await runtime.close()
+  }
+  {
+    const { assetChannel, descriptor, peerId, runtime } = await scopedAssetHarness(t)
+    const pending = runtime.listPeerAssetRanges({
+      assetId: descriptor.assetId,
+      peerId,
+      cursor: null,
+      limit: 1,
+    })
+    const observed = pending.then(() => null, error => error)
+    await until(() => sentAssetRangeRequests(assetChannel).length === 1)
+    await runtime.close()
+    const error = await observed
+    t.ok(error)
+    t.is(error.code, 'DISCONNECTED')
+    t.is(error.peerId, peerId)
+  }
+})
+
+test('runtime exposes only the exact active asset session identity internally', async (t) => {
+  const { descriptor, manifest, rendition, runtime } = await scopedAssetHarness(t)
+  const session = runtime.getActiveAssetSession({ assetId: descriptor.assetId })
+  t.is(session.assetId, descriptor.assetId)
+  t.is(session.coreRef.assetId, descriptor.assetId)
+  t.absent(createScopedNetworkApi(runtime).getActiveAssetSession)
+
+  t.exception(() => runtime.getActiveAssetSession({
+    assetId: b4a.alloc(32, 99),
+  }), /asset scope is not active/)
+
+  await runtime.releaseAuthorizedRendition({
+    renditionId: rendition.renditionId,
+    ownerId: manifest.publicationId,
+  })
+  t.exception(() => runtime.getActiveAssetSession({
+    assetId: descriptor.assetId,
+  }), /asset scope is not active/)
+
+  await runtime.close()
+  t.exception(() => runtime.getActiveAssetSession({
+    assetId: descriptor.assetId,
+  }), /runtime is not active/)
 })

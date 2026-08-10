@@ -1,7 +1,83 @@
 import test from 'brittle'
 import { EventEmitter } from 'node:events'
+import crypto from 'hypercore-crypto'
 
 import { createApi } from '../src/api.js'
+import { BlobPlaybackService } from '../src/blob-playback-service.js'
+import { createStaticAssetManifest } from '../src/assets/static-core.js'
+import { createPublicationManifest } from '../src/assets/manifest.js'
+import { createRenditionDescriptor } from '../src/assets/rendition.js'
+import { normalizeAssetCoreRefV2 } from '../src/assets/rendition.js'
+import { createStaticAssetPlayback } from '../src/playback/index.js'
+
+function immutablePlaybackFixture(fill = 21) {
+  const keyPair = crypto.keyPair(Buffer.alloc(32, fill))
+  const coreRef = createStaticAssetManifest({
+    treeHash: Buffer.alloc(32, fill + 1),
+    blockLength: 2,
+    byteLength: 512 * 1024,
+  })
+  const manifest = createPublicationManifest({
+    publisherId: keyPair.publicKey,
+    title: 'Immutable playback',
+    renditions: [createRenditionDescriptor({
+      purpose: 'video',
+      format: 'video/mp4',
+      core: coreRef,
+    })],
+    keyPair,
+    signedAt: Date.now() - 1_000,
+    expiresAt: Date.now() + 60_000,
+  })
+  const rendition = manifest.body.renditions[0]
+  const normalized = normalizeAssetCoreRefV2(coreRef)
+  return {
+    coreRef: normalized,
+    manifest,
+    rendition,
+    immutablePublication: {
+      publicationId: manifest.publicationId,
+      manifestId: manifest.body.manifestId,
+      renditionId: rendition.renditionId,
+      assetId: normalized.assetId,
+      coreKey: normalized.key,
+      publisherId: manifest.body.publisherId,
+      manifest,
+    },
+  }
+}
+
+function immutablePlaybackFixtureForCore(coreRef, fill, title) {
+  const keyPair = crypto.keyPair(Buffer.alloc(32, fill))
+  const manifest = createPublicationManifest({
+    publisherId: keyPair.publicKey,
+    title,
+    renditions: [createRenditionDescriptor({
+      purpose: 'video',
+      format: 'video/mp4',
+      core: coreRef,
+    })],
+    keyPair,
+    signedAt: Date.now() - 1_000,
+    expiresAt: Date.now() + 60_000,
+  })
+  const rendition = manifest.body.renditions[0]
+  const normalized = normalizeAssetCoreRefV2(coreRef)
+  return {
+    coreRef: normalized,
+    manifest,
+    rendition,
+    immutablePublication: {
+      publicationId: manifest.publicationId,
+      manifestId: manifest.body.manifestId,
+      renditionId: rendition.renditionId,
+      assetId: normalized.assetId,
+      coreKey: normalized.key,
+      publisherId: manifest.body.publisherId,
+      manifest,
+    },
+  }
+}
 
 test('preparePlayback returns a streamable URL without waiting for startup prefetch', async (t) => {
   const api = createApi({ ctx: {} })
@@ -106,6 +182,13 @@ test('preparePlayback falls back to direct on-demand stats when playback prefetc
       channels: new Map(),
     },
     videoStats: new (await import('../src/video-stats.js')).VideoStatsTracker(),
+  })
+  api.getVideoData = async () => ({
+    id: 'demo',
+    blobId,
+    blobsCoreKey,
+    mimeType: 'video/mp4',
+    immutablePublication: null,
   })
 
   api.prefetchVideo = async (...args) => {
@@ -269,4 +352,516 @@ test('getVideoStats does not fall back to global swarm connections as video peer
 
   t.is(stats.peerCount, 0)
   t.is(stats.swarmConnections, 3)
+})
+
+test('static playback URL reuses blob capability links and registers an exact marked scheduler entry', (t) => {
+  const coreRef = createStaticAssetManifest({
+    treeHash: Buffer.alloc(32, 7),
+    blockLength: 2,
+    byteLength: 512 * 1024,
+  })
+  const assetId = coreRef.assetId
+  const scheduler = { requestRange() {}, seek() {} }
+  const calls = []
+  const releases = new Map()
+  const release = asset => () => releases.set(asset, (releases.get(asset) || 0) + 1)
+  const ctx = {
+    staticAssetPlaybackEntries: new Map(),
+    blobServerHost: '127.0.0.1',
+    blobServer: {
+      port: 60023,
+      getLink(key, options) {
+        calls.push({ key: Buffer.from(key), options })
+        return 'http://127.0.0.1:60023/?key=capability&token=secret'
+      },
+    },
+    store: { get() { t.fail('static URL registration must not open generic blob replication') } },
+  }
+  const service = new BlobPlaybackService({ ctx, maxStaticAssetEntries: 2 })
+
+  const first = service.resolveStaticAssetUrl({
+    coreRef,
+    scheduler,
+    mimeType: 'video/mp4',
+    authorizationKey: 'publication-a:rendition-a',
+    release: release(assetId),
+  })
+
+  t.ok(first.url.includes(`pt_static_asset=${assetId}`))
+  t.alike(calls[0].key, Buffer.from(assetId, 'hex'))
+  t.alike(calls[0].options.blob, { blockOffset: 0, blockLength: 2, byteOffset: 0, byteLength: 512 * 1024 })
+  t.is(ctx.staticAssetPlaybackEntries.get(assetId).scheduler, scheduler)
+  t.alike(ctx.staticAssetPlaybackEntries.get(assetId).coreRef, normalizeAssetCoreRefV2(coreRef))
+
+  const middleCoreRef = createStaticAssetManifest({
+    treeHash: Buffer.alloc(32, 8),
+    blockLength: 2,
+    byteLength: 512 * 1024,
+  })
+  service.resolveStaticAssetUrl({
+    coreRef: middleCoreRef,
+    scheduler: { requestRange() {}, seek() {} },
+    authorizationKey: 'publication-middle:rendition-middle',
+    release: release(middleCoreRef.assetId),
+  })
+  const repeated = service.resolveStaticAssetUrl({
+    coreRef,
+    scheduler: { requestRange() { t.fail('repeat must reuse the original scheduler') }, seek() {} },
+    authorizationKey: 'publication-a:rendition-a',
+    release: () => t.fail('repeat must reuse the existing playback retention'),
+  })
+  t.is(repeated.scheduler, scheduler)
+  t.is(repeated.reused, true)
+  t.is(ctx.staticAssetPlaybackEntries.get(assetId).scheduler, scheduler)
+
+  const newestCoreRef = createStaticAssetManifest({
+    treeHash: Buffer.alloc(32, 9),
+    blockLength: 2,
+    byteLength: 512 * 1024,
+  })
+  service.resolveStaticAssetUrl({
+    coreRef: newestCoreRef,
+    scheduler: { requestRange() {}, seek() {} },
+    authorizationKey: 'publication-newest:rendition-newest',
+    release: release(newestCoreRef.assetId),
+  })
+  t.is(ctx.staticAssetPlaybackEntries.size, 2)
+  t.ok(ctx.staticAssetPlaybackEntries.has(assetId), 'repeat touches the exact asset entry')
+  t.absent(ctx.staticAssetPlaybackEntries.get(middleCoreRef.assetId), 'least-recent exact asset is evicted')
+  t.is(releases.get(middleCoreRef.assetId), 1)
+  t.is(releases.get(assetId) || 0, 0)
+})
+
+test('static playback composition binds one exact scheduler to the shared playback service', (t) => {
+  const coreRef = createStaticAssetManifest({
+    treeHash: Buffer.alloc(32, 11),
+    blockLength: 1,
+    byteLength: 256 * 1024,
+  })
+  const session = { assetId: coreRef.assetId, coreRef }
+  const transport = {
+    getActiveAssetPeerIds() { return [] },
+    listPeerAssetRanges() { return { ranges: [], nextCursor: null } },
+    hasVerifiedAssetBlock() { return false },
+    readVerifiedAssetBlock() { throw new Error('not materialized') },
+    requestAssetBlocks() { throw new Error('no peer') },
+  }
+  let registered = null
+  const playbackService = {
+    resolveStaticAssetUrl(input) {
+      registered = input
+      return { url: 'http://127.0.0.1/static-capability' }
+    },
+  }
+
+  const playback = createStaticAssetPlayback({
+    coreRef,
+    session,
+    transport,
+    playbackService,
+    mimeType: 'video/mp4',
+  })
+
+  t.is(playback.url, 'http://127.0.0.1/static-capability')
+  t.is(playback.scheduler, registered.scheduler)
+  t.is(registered.coreRef, coreRef)
+  t.is(registered.mimeType, 'video/mp4')
+})
+
+test('getVideoUrl prefers verified immutable static playback over supplied legacy blob refs', async (t) => {
+  const fixture = immutablePlaybackFixture()
+  const calls = []
+  const session = { assetId: fixture.coreRef.assetId, coreRef: fixture.coreRef }
+  const ctx = {
+    staticAssetPlaybackEntries: new Map(),
+    blobServerHost: '127.0.0.1',
+    blobServer: {
+      port: 60023,
+      getLink(key, options) {
+        calls.push(['getLink', Buffer.from(key), options])
+        return 'http://127.0.0.1:60023/static-capability?token=secret'
+      },
+    },
+    store: { get() { t.fail('immutable playback must not warm the legacy blob core') } },
+  }
+  const scopedNetwork = {
+    async retainAuthorizedRendition(request) {
+      calls.push(['retain', request])
+      return { status: 'retained' }
+    },
+    getActiveAssetSession(request) {
+      calls.push(['session', request])
+      return session
+    },
+    async releaseAuthorizedRendition(request) {
+      calls.push(['release', request])
+      return { released: true }
+    },
+    getActiveAssetPeerIds() { return [] },
+    async listPeerAssetRanges() { return { ranges: [], nextCursor: null } },
+    async hasVerifiedAssetBlock() { return false },
+    async readVerifiedAssetBlock() { throw new Error('not materialized') },
+    async requestAssetBlocks() { throw new Error('no peer') },
+  }
+  const api = createApi({ ctx, scopedNetwork })
+  let metadataReads = 0
+  api.getVideoData = async () => {
+    metadataReads++
+    return {
+      id: 'immutable-video',
+      blobId: '0:2:0:1024',
+      blobsCoreKey: '44'.repeat(32),
+      mimeType: 'video/mp4',
+      immutablePublication: fixture.immutablePublication,
+    }
+  }
+
+  const result = await api.getVideoUrl(
+    'channel-key',
+    'videos/immutable-video.mp4',
+    null,
+    '0:2:0:1024',
+    '44'.repeat(32),
+    'video/mp4',
+  )
+  const repeated = await api.getVideoUrl(
+    'channel-key',
+    'videos/immutable-video.mp4',
+    null,
+    '0:2:0:1024',
+    '44'.repeat(32),
+    'video/mp4',
+  )
+
+  t.is(metadataReads, 2)
+  t.ok(result.url.includes(`pt_static_asset=${fixture.coreRef.assetId}`))
+  t.is(repeated.scheduler, result.scheduler)
+  t.is(calls.filter(call => call[0] === 'getLink').length, 2)
+  t.is(calls.filter(call => call[0] === 'retain').length, 1)
+  t.is(calls.filter(call => call[0] === 'session').length, 1)
+  t.alike(calls.find(call => call[0] === 'getLink')[1], Buffer.from(fixture.coreRef.key, 'hex'))
+  t.alike(calls.find(call => call[0] === 'retain')[1], {
+    manifest: fixture.manifest,
+    renditionId: fixture.rendition.renditionId,
+    ownerId: `playback:${fixture.manifest.publicationId}:${fixture.rendition.renditionId}`,
+    start: 0,
+    end: fixture.coreRef.length,
+  })
+  t.alike(calls.find(call => call[0] === 'session')[1], { assetId: fixture.coreRef.assetId })
+  t.is(ctx.staticAssetPlaybackEntries.get(fixture.coreRef.assetId).scheduler, result.scheduler)
+  t.is(calls.some(call => call[0] === 'release'), false)
+})
+
+test('shared static assets retain and evict each exact publication authorization once', async (t) => {
+  const first = immutablePlaybackFixture(61)
+  const second = immutablePlaybackFixtureForCore(first.coreRef, 62, 'Independent shared asset')
+  const evicting = immutablePlaybackFixture(63)
+  const coreRefs = new Map([
+    [first.coreRef.assetId, first.coreRef],
+    [evicting.coreRef.assetId, evicting.coreRef],
+  ])
+  const retains = []
+  const releases = []
+  const ctx = {
+    maxStaticAssetPlaybackEntries: 1,
+    staticAssetPlaybackEntries: new Map(),
+    blobServerHost: '127.0.0.1',
+    blobServer: {
+      port: 60023,
+      getLink() {
+        return 'http://127.0.0.1:60023/static-capability?token=secret'
+      },
+    },
+    store: { get() { t.fail('shared immutable playback must not warm a legacy blob core') } },
+  }
+  const scopedNetwork = {
+    async retainAuthorizedRendition(request) {
+      retains.push(request)
+      return { status: 'retained' }
+    },
+    getActiveAssetSession({ assetId }) {
+      const coreRef = coreRefs.get(assetId)
+      return { assetId, coreRef }
+    },
+    async releaseAuthorizedRendition(request) {
+      releases.push(request)
+      return { released: true }
+    },
+    getActiveAssetPeerIds() { return [] },
+    async listPeerAssetRanges() { return { ranges: [], nextCursor: null } },
+    async hasVerifiedAssetBlock() { return false },
+    async readVerifiedAssetBlock() { throw new Error('not materialized') },
+    async requestAssetBlocks() { throw new Error('no peer') },
+  }
+  const api = createApi({ ctx, scopedNetwork })
+  let metadata = { immutablePublication: first.immutablePublication, mimeType: 'video/mp4' }
+  api.getVideoData = async () => metadata
+
+  const firstPlayback = await api.getVideoUrl('channel', 'first.mp4')
+  const firstRepeat = await api.getVideoUrl('channel', 'first.mp4')
+  t.is(retains.length, 1, 'same exact publication authorization is retained once')
+  t.is(firstRepeat.scheduler, firstPlayback.scheduler)
+
+  metadata = { immutablePublication: second.immutablePublication, mimeType: 'video/mp4' }
+  const secondPlayback = await api.getVideoUrl('channel', 'second.mp4')
+  const secondRepeat = await api.getVideoUrl('channel', 'second.mp4')
+  t.is(retains.length, 2, 'independent publication cannot reuse the first authorization')
+  t.is(secondPlayback.scheduler, firstPlayback.scheduler, 'shared asset reuses one scheduler')
+  t.is(secondRepeat.scheduler, firstPlayback.scheduler)
+  t.is(ctx.staticAssetPlaybackEntries.get(first.coreRef.assetId).authorizations.size, 2)
+
+  metadata = { immutablePublication: evicting.immutablePublication, mimeType: 'video/mp4' }
+  await api.getVideoUrl('channel', 'evicting.mp4')
+  await Promise.resolve()
+
+  const sharedReleases = retains.slice(0, 2).map(request => ({
+    renditionId: request.renditionId,
+    ownerId: request.ownerId,
+    assetId: first.coreRef.assetId,
+  }))
+  t.is(retains.length, 3)
+  t.alike(releases, sharedReleases)
+  t.is(new Set(sharedReleases.map(request => request.ownerId)).size, 2)
+})
+
+test('failed static capability links leave authorization registry and LRU state atomic', async (t) => {
+  const first = immutablePlaybackFixture(71)
+  const secondOwner = immutablePlaybackFixtureForCore(first.coreRef, 72, 'Second owner')
+  const other = immutablePlaybackFixture(73)
+  const newest = immutablePlaybackFixture(74)
+  const coreRefs = new Map([
+    [first.coreRef.assetId, first.coreRef],
+    [other.coreRef.assetId, other.coreRef],
+    [newest.coreRef.assetId, newest.coreRef],
+  ])
+  const retains = []
+  const releases = []
+  let failNextLink = false
+  const ctx = {
+    maxStaticAssetPlaybackEntries: 2,
+    staticAssetPlaybackEntries: new Map(),
+    blobServerHost: '127.0.0.1',
+    blobServer: {
+      port: 60023,
+      getLink() {
+        if (failNextLink) {
+          failNextLink = false
+          throw new Error('capability link failed')
+        }
+        return 'http://127.0.0.1:60023/static-capability?token=secret'
+      },
+    },
+    store: { get() { t.fail('failed static links must not fall through to legacy storage') } },
+  }
+  const scopedNetwork = {
+    async retainAuthorizedRendition(request) {
+      retains.push(request)
+      return { status: 'retained' }
+    },
+    getActiveAssetSession({ assetId }) {
+      const coreRef = coreRefs.get(assetId)
+      return { assetId, coreRef }
+    },
+    async releaseAuthorizedRendition(request) {
+      releases.push(request)
+      return { released: true }
+    },
+    getActiveAssetPeerIds() { return [] },
+    async listPeerAssetRanges() { return { ranges: [], nextCursor: null } },
+    async hasVerifiedAssetBlock() { return false },
+    async readVerifiedAssetBlock() { throw new Error('not materialized') },
+    async requestAssetBlocks() { throw new Error('no peer') },
+  }
+  const api = createApi({ ctx, scopedNetwork })
+  let metadata = { immutablePublication: first.immutablePublication, mimeType: 'video/mp4' }
+  api.getVideoData = async () => metadata
+  const resolve = publication => {
+    metadata = { immutablePublication: publication, mimeType: 'video/mp4' }
+    return api.getVideoUrl('channel', 'video.mp4')
+  }
+  const failResolve = async publication => {
+    failNextLink = true
+    return resolve(publication).then(() => null, error => error)
+  }
+  const authorizationKey = fixture =>
+    `${fixture.manifest.publicationId}:${fixture.rendition.renditionId}`
+
+  await resolve(first.immutablePublication)
+  await resolve(other.immutablePublication)
+  t.alike([...ctx.staticAssetPlaybackEntries.keys()], [first.coreRef.assetId, other.coreRef.assetId])
+
+  const failedSecondOwner = await failResolve(secondOwner.immutablePublication)
+  t.ok(failedSecondOwner)
+  t.is(releases.length, 1)
+  t.is(releases[0].ownerId, retains[2].ownerId)
+  t.alike([...ctx.staticAssetPlaybackEntries.keys()], [first.coreRef.assetId, other.coreRef.assetId])
+  t.alike(
+    [...ctx.staticAssetPlaybackEntries.get(first.coreRef.assetId).authorizations.keys()],
+    [authorizationKey(first)],
+  )
+
+  await resolve(secondOwner.immutablePublication)
+  t.is(retains.filter(request => request.ownerId === retains[2].ownerId).length, 2)
+  t.is(ctx.staticAssetPlaybackEntries.get(first.coreRef.assetId).authorizations.size, 2)
+  await resolve(other.immutablePublication)
+  t.alike([...ctx.staticAssetPlaybackEntries.keys()], [first.coreRef.assetId, other.coreRef.assetId])
+
+  const releasesBeforeExistingFailure = releases.length
+  const failedExisting = await failResolve(first.immutablePublication)
+  t.ok(failedExisting)
+  t.is(releases.length, releasesBeforeExistingFailure)
+  t.alike([...ctx.staticAssetPlaybackEntries.keys()], [first.coreRef.assetId, other.coreRef.assetId])
+  t.is(ctx.staticAssetPlaybackEntries.get(first.coreRef.assetId).authorizations.size, 2)
+
+  const failedNew = await failResolve(newest.immutablePublication)
+  t.ok(failedNew)
+  t.is(releases.filter(request => request.ownerId === retains[retains.length - 1].ownerId).length, 1)
+  t.alike([...ctx.staticAssetPlaybackEntries.keys()], [first.coreRef.assetId, other.coreRef.assetId])
+  t.absent(ctx.staticAssetPlaybackEntries.get(newest.coreRef.assetId))
+
+  const failedNewOwnerId = retains[retains.length - 1].ownerId
+  const releasesBeforeSuccessfulEviction = releases.length
+  await resolve(newest.immutablePublication)
+  t.is(retains.filter(request => request.ownerId === failedNewOwnerId).length, 2)
+  t.ok(ctx.staticAssetPlaybackEntries.has(newest.coreRef.assetId))
+  t.absent(ctx.staticAssetPlaybackEntries.get(first.coreRef.assetId))
+  t.alike(releases.slice(releasesBeforeSuccessfulEviction), [
+    {
+      renditionId: retains[0].renditionId,
+      ownerId: retains[0].ownerId,
+      assetId: first.coreRef.assetId,
+    },
+    {
+      renditionId: retains[3].renditionId,
+      ownerId: retains[3].ownerId,
+      assetId: first.coreRef.assetId,
+    },
+  ])
+})
+
+test('getVideoUrl fails closed for malformed or mismatched immutable publication metadata', async (t) => {
+  const fixture = immutablePlaybackFixture(31)
+  let linkCalls = 0
+  let retentionCalls = 0
+  const ctx = {
+    blobServer: {
+      port: 60023,
+      getLink() {
+        linkCalls++
+        return 'http://127.0.0.1:60023/legacy'
+      },
+    },
+    store: { get() { t.fail('rejected immutable metadata must not warm legacy playback') } },
+  }
+  const scopedNetwork = {
+    async retainAuthorizedRendition() { retentionCalls++ },
+    getActiveAssetSession() { t.fail('rejected immutable metadata must not open a session') },
+  }
+  const api = createApi({ ctx, scopedNetwork })
+  const cases = [
+    { manifest: null },
+    { ...fixture.immutablePublication, renditionId: 'ff'.repeat(32) },
+    { ...fixture.immutablePublication, assetId: 'ee'.repeat(32) },
+    { ...fixture.immutablePublication, coreKey: 'dd'.repeat(32) },
+  ]
+  for (const immutablePublication of cases) {
+    api.getVideoData = async () => ({
+      blobId: '0:2:0:1024',
+      blobsCoreKey: '44'.repeat(32),
+      immutablePublication,
+    })
+    const rejected = await api.getVideoUrl(
+      'channel-key',
+      'videos/immutable-video.mp4',
+      null,
+      '0:2:0:1024',
+      '44'.repeat(32),
+      'video/mp4',
+    ).then(() => null, error => error)
+    t.ok(rejected)
+    t.ok(/immutable publication/.test(rejected.message))
+  }
+  t.is(linkCalls, 0)
+  t.is(retentionCalls, 0)
+})
+
+test('getVideoUrl keeps legacy direct playback only when immutable publication metadata is absent', async (t) => {
+  let metadataReads = 0
+  let legacyCoreGets = 0
+  let metadata = null
+  const ctx = {
+    blobServer: {
+      port: 60023,
+      getLink(key, options) {
+        t.alike(Buffer.from(key), Buffer.from('44'.repeat(32), 'hex'))
+        t.alike(options.blob, { blockOffset: 0, blockLength: 2, byteOffset: 0, byteLength: 1024 })
+        return 'http://127.0.0.1:60023/legacy-capability'
+      },
+    },
+    store: {
+      get() {
+        legacyCoreGets++
+        return null
+      },
+    },
+  }
+  const api = createApi({ ctx })
+  api.getVideoData = async () => {
+    metadataReads++
+    return metadata
+  }
+  const unresolved = await api.getVideoUrl(
+    'channel-key',
+    'videos/legacy-video.mp4',
+    null,
+    '0:2:0:1024',
+    '44'.repeat(32),
+    'video/mp4',
+  ).then(() => null, error => error)
+  t.ok(unresolved)
+  t.is(legacyCoreGets, 0, 'uncertain metadata is not genuine immutable-publication absence')
+  metadata = { id: 'legacy-video', immutablePublication: null }
+
+  const result = await api.getVideoUrl(
+    'channel-key',
+    'videos/legacy-video.mp4',
+    null,
+    '0:2:0:1024',
+    '44'.repeat(32),
+    'video/mp4',
+  )
+
+  t.is(metadataReads, 2)
+  t.is(result.url, 'http://127.0.0.1:60023/legacy-capability')
+  t.is(result.url.includes('pt_static_asset'), false)
+  t.ok(legacyCoreGets > 0, 'legacy fallback opens the legacy blob core')
+})
+
+test('preparePlayback marked static handoff skips legacy prefetch and on-demand core stats', async (t) => {
+  const api = createApi({
+    ctx: {
+      store: { get() { t.fail('marked static preparation must not open the legacy blob core') } },
+    },
+  })
+  let prefetchCalls = 0
+  api.getVideoUrl = async () => ({
+    url: `http://127.0.0.1/static?pt_static_asset=${'aa'.repeat(32)}`,
+  })
+  api.prefetchVideo = async () => {
+    prefetchCalls++
+    return { success: true }
+  }
+  api.getVideoStats = () => t.fail('marked static preparation must not collect legacy blob stats')
+
+  const prepared = await api.preparePlayback(
+    'channel-key',
+    'videos/immutable-video.mp4',
+    null,
+    '0:2:0:1024',
+    '44'.repeat(32),
+    'video/mp4',
+  )
+
+  t.ok(prepared.url.includes('pt_static_asset='))
+  t.is(prefetchCalls, 0)
 })

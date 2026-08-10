@@ -1629,6 +1629,7 @@ export async function initializeStorage(config) {
     resolveBlobServerReady = resolve
   })
   let storageContext = null
+  const staticAssetPlaybackEntries = new Map()
   let blobServerHost = blobServerHostOverride || '127.0.0.1';
   let blobServerBindHost = blobServerBindHostOverride || blobServerHost;
 
@@ -1768,10 +1769,25 @@ export async function initializeStorage(config) {
       }
 
       try {
-        const handled = await serveVideoRangeHttpRequest({ blobServer }, req, res)
+        const handled = await serveVideoRangeHttpRequest({
+          blobServer,
+          staticAssetEntries: staticAssetPlaybackEntries,
+          onStaticPlayhead: event => storageContext?.playbackForwardFill?.onPlayhead?.(event),
+        }, req, res)
         if (handled) return
       } catch (err) {
         console.log('[Storage] Video range serve failed:', err?.message || err)
+        if (String(req.url || '').includes('pt_static_asset=')) {
+          if (!res.headersSent && !res.writableEnded) {
+            const body = b4a.from('verified static source unavailable')
+            res.statusCode = 503
+            res.setHeader('Content-Type', 'text/plain')
+            res.setHeader('Content-Length', String(body.byteLength))
+            res.writeHead(503)
+            res.end(req.method === 'HEAD' ? undefined : body)
+          }
+          return
+        }
       }
 
       try {
@@ -2007,6 +2023,7 @@ export async function initializeStorage(config) {
     blobServerReady,
     blobServerError,
     blobServerHost,
+    staticAssetPlaybackEntries,
     blobServerBindHost,
     channels,
     wakeup,

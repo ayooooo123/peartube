@@ -18,6 +18,7 @@ import {
   encodeAssetBlockRequest,
   encodeAssetBlockResponse,
   encodeAssetRangeSummaryPage,
+  encodeAssetRangeSummaryRequest,
   encodePeerFrame,
   MAX_PEER_FRAME_BYTES,
   PEER_FRAME_TYPE_NAMES,
@@ -66,6 +67,15 @@ const MAX_ASSET_PROOF_BYTES = 32 * 1024
 const MAX_ARCHIVE_CHALLENGE_PROOF_BYTES = 320 * 1024
 const ASSET_CHUNK_BYTES = 48 * 1024
 const ASSET_TRANSFER_TIMEOUT_MS = 10_000
+const ASSET_TRANSPORT_ERROR_CODES = new Set([
+  'INVALID_PROOF',
+  'QUARANTINED',
+  'DISCONNECTED',
+  'TIMEOUT',
+  'UNAVAILABLE',
+])
+const MAX_ASSET_PEERS_PER_REQUEST = 16
+const MAX_ASSET_PEER_ID_BYTES = 128
 const ARCHIVE_CHALLENGE_PROOF_CHUNK_BYTES = 48 * 1024
 const MAX_ARCHIVE_CHALLENGE_TRANSFERS = 16
 const ARCHIVE_CHALLENGE_TRANSFER_TIMEOUT_MS = 10_000
@@ -343,6 +353,12 @@ export function createScopedNetworkRuntime (options = {}) {
     : null
   const protocolMajor = Number(options.protocolMajor ?? PROTOCOL_MAJOR)
   if (protocolMajor !== PROTOCOL_MAJOR) fail('unsupported protocol major')
+  const assetTransferTimeoutMs = Number(options.assetTransferTimeoutMs ?? ASSET_TRANSFER_TIMEOUT_MS)
+  if (!Number.isSafeInteger(assetTransferTimeoutMs) ||
+      assetTransferTimeoutMs < 1 ||
+      assetTransferTimeoutMs > ASSET_TRANSFER_TIMEOUT_MS) {
+    fail('asset transfer timeout is out of bounds')
+  }
   const networkId = String(options.networkId || 'peartube-main')
   const bootstrapEnabled = options.bootstrapEnabled !== false
   const admission = options.admission?.reserve ? options.admission : createNetworkAdmission(options.admission)
@@ -502,6 +518,51 @@ export function createScopedNetworkRuntime (options = {}) {
     return id
   }
 
+  function boundedAssetPeerId (value) {
+    const peerId = String(value || '')
+    if (!peerId || b4a.byteLength(peerId) > MAX_ASSET_PEER_ID_BYTES) fail('asset peerId is invalid')
+    return peerId
+  }
+
+  function assetTransportError (code, peerId, message, cause = null) {
+    if (!ASSET_TRANSPORT_ERROR_CODES.has(code)) fail('asset transport error code is invalid')
+    const boundedCause = cause
+      ? {
+          code: String(cause.code || cause.name || 'ERROR').slice(0, 64),
+          message: String(cause.message || cause).slice(0, 256),
+        }
+      : null
+    const error = new Error(
+      String(message || code).slice(0, 256),
+      boundedCause ? { cause: boundedCause } : undefined,
+    )
+    error.name = 'AssetTransportError'
+    error.code = code
+    error.peerId = peerId === null || peerId === undefined ? null : boundedAssetPeerId(peerId)
+    return error
+  }
+
+  function sealAssetInventoryRequest (session, request) {
+    if (!request || request.closed || session?.assetInventoryRequest !== request) return false
+    request.closed = true
+    clearTimeout(request.timer)
+    request.timer = null
+    request.signal?.removeEventListener?.('abort', request.onAbort)
+    session.assetInventoryRequest = null
+    return true
+  }
+
+  function settleAssetInventoryRequest (request, error = null, page = null) {
+    if (error) request.reject(error)
+    else request.resolve(page)
+  }
+
+  function closeAssetInventoryRequest (session, request, error = null, page = null) {
+    if (!sealAssetInventoryRequest(session, request)) return false
+    settleAssetInventoryRequest(request, error, page)
+    return true
+  }
+
   function cancelAssetSummaryScan(session) {
     if (!session?.assetSummaryScan) return false
     session.assetSummaryScan.cancelled = true
@@ -513,9 +574,14 @@ export function createScopedNetworkRuntime (options = {}) {
     const session = scope.sessions.get(peerId)
     if (!session || session.closed) return false
     cancelAssetSummaryScan(session)
+    closeAssetInventoryRequest(
+      session,
+      session.assetInventoryRequest,
+      assetTransportError('DISCONNECTED', peerId, 'asset peer disconnected'),
+    )
     for (const response of session.assetResponses?.values() || []) response.cancelled = true
     session.assetResponses?.clear()
-    if (scope.purpose === 'asset') failAssetRequestPeer(scope, peerId)
+    if (scope.purpose === 'asset') failAssetRequestPeer(scope, peerId, 'DISCONNECTED')
     session.closed = true
     for (const cleanup of session.cleanupFns.splice(0)) {
       try { cleanup() } catch {}
@@ -556,13 +622,15 @@ export function createScopedNetworkRuntime (options = {}) {
     return nextAssetTransferId++
   }
 
-  function assetAbortError () {
-    const error = new Error('asset block request aborted')
+  function assetAbortError (peerId = null, message = 'asset request aborted') {
+    const error = new Error(message)
     error.name = 'AbortError'
+    error.code = 'ABORT_ERR'
+    error.peerId = peerId
     return error
   }
 
-  function closeAssetRequest (scope, request, error = null) {
+  function sealAssetRequest (scope, request) {
     if (!request || request.closed) return false
     request.closed = true
     clearTimeout(request.timer)
@@ -570,39 +638,92 @@ export function createScopedNetworkRuntime (options = {}) {
     request.signal?.removeEventListener?.('abort', request.onAbort)
     request.transfers.clear()
     scope.assetRequests.delete(request.key)
+    return true
+  }
+
+  function settleAssetRequest (request, error = null) {
     if (error) request.reject(error)
     else request.resolve({
       verifiedBlockIndexes: [...request.verified].sort((left, right) => left - right),
       peerIds: [...request.peerIds].sort(),
     })
+  }
+
+  function closeAssetRequest (scope, request, error = null) {
+    if (!sealAssetRequest(scope, request)) return false
+    settleAssetRequest(request, error)
     return true
   }
 
-  async function quarantineAssetScope (scope, cause) {
+  async function quarantineAssetScope (scope, cause, context = null) {
     if (!scope) return
-    const error = new Error('asset core was quarantined', { cause })
+    const invalidPeerId = context?.peerId || null
+    const invalidTransferId = context?.transferId ?? null
+    const requestSettlements = []
     for (const request of [...(scope.assetRequests?.values() || [])]) {
-      closeAssetRequest(scope, request, error)
+      const code = invalidPeerId &&
+          invalidTransferId !== null &&
+          request.transferId === invalidTransferId
+        ? 'INVALID_PROOF'
+        : 'QUARANTINED'
+      if (sealAssetRequest(scope, request)) {
+        requestSettlements.push([request, assetTransportError(
+          code,
+          invalidPeerId,
+          code === 'INVALID_PROOF' ? 'asset proof verification failed' : 'asset core was quarantined',
+          cause,
+        )])
+      }
     }
+    const inventorySettlements = []
     for (const session of scope.sessions.values()) {
       cancelAssetSummaryScan(session)
+      const inventory = session.assetInventoryRequest
+      if (sealAssetInventoryRequest(session, inventory)) {
+        inventorySettlements.push([inventory, assetTransportError(
+          'QUARANTINED',
+          invalidPeerId,
+          'asset core was quarantined',
+          cause,
+        )])
+      }
       for (const response of session.assetResponses?.values() || []) response.cancelled = true
       session.assetResponses?.clear()
     }
     const download = scope.download
     scope.download = null
     await cleanupResource(download, ['destroy', 'close'])
+    for (const [request, error] of requestSettlements) settleAssetRequest(request, error)
+    for (const [request, error] of inventorySettlements) settleAssetInventoryRequest(request, error)
   }
 
-  function failAssetRequestPeer (scope, peerId) {
+  function requestPeerFailure (request) {
+    const priority = ['INVALID_PROOF', 'QUARANTINED', 'TIMEOUT', 'UNAVAILABLE', 'DISCONNECTED']
+    const failures = [...request.peerFailures.values()]
+    for (const code of priority) {
+      const failure = failures.find(error => error.code === code)
+      if (failure) return failure
+    }
+    return assetTransportError('UNAVAILABLE', null, 'asset blocks are unavailable')
+  }
+
+  function failAssetRequestPeer (scope, peerId, code = 'DISCONNECTED', cause = null) {
     for (const request of scope.assetRequests?.values() || []) {
       if (!request.requestedPeers.has(peerId) || request.closed) continue
       request.failedPeers.add(peerId)
+      if (!request.peerFailures.has(peerId)) {
+        request.peerFailures.set(peerId, assetTransportError(
+          code,
+          peerId,
+          code === 'INVALID_PROOF' ? 'asset proof verification failed' : 'asset blocks are unavailable from peer',
+          cause,
+        ))
+      }
       for (const [index, transfer] of request.transfers) {
         if (transfer.peerId === peerId) request.transfers.delete(index)
       }
       if ([...request.requestedPeers].every(id => request.failedPeers.has(id))) {
-        closeAssetRequest(scope, request, new Error('asset blocks are unavailable from all requested peers'))
+        closeAssetRequest(scope, request, requestPeerFailure(request))
       }
     }
   }
@@ -781,6 +902,8 @@ export function createScopedNetworkRuntime (options = {}) {
       index: transfer.index,
       proof: metadata.proof,
       byteLength: metadata.byteLength,
+      peerId: transfer.peerId,
+      transferId: transfer.transferId,
     })
     if (validation && typeof validation.then === 'function') {
       part.buffer = null
@@ -824,6 +947,8 @@ export function createScopedNetworkRuntime (options = {}) {
         index: transfer.index,
         proof: transfer.proofMetadata.proof,
         value: transfer.block.buffer,
+        peerId: transfer.peerId,
+        transferId: transfer.transferId,
         isActive: () => !request.closed &&
           scope.assetRequests.get(request.key) === request &&
           request.transfers.get(transfer.index) === transfer,
@@ -835,7 +960,15 @@ export function createScopedNetworkRuntime (options = {}) {
       request.peerIds.add(transfer.peerId)
       if (request.remaining.size === 0) closeAssetRequest(scope, request)
     } catch (error) {
-      request.transfers.delete(transfer.index)
+      const closedDuringVerification =
+        error?.message === 'asset block request is closed' &&
+        (request.closed ||
+          scope.assetRequests.get(request.key) !== request ||
+          request.transfers.get(transfer.index) !== transfer)
+      if (request.transfers.get(transfer.index) === transfer) {
+        request.transfers.delete(transfer.index)
+      }
+      if (closedDuringVerification) return 'ignored'
       throw error
     }
   }
@@ -876,7 +1009,8 @@ export function createScopedNetworkRuntime (options = {}) {
     } else {
       receiveAssetBlockPart(transfer, response)
     }
-    await finishAssetResponse(scope, request, transfer)
+    const completion = await finishAssetResponse(scope, request, transfer)
+    if (completion === 'ignored') return { status: 'ignored' }
     return { status: request.closed ? 'complete' : 'accepted' }
   }
 
@@ -916,10 +1050,21 @@ export function createScopedNetworkRuntime (options = {}) {
           if (tracked.assetSummaryScan === scan) tracked.assetSummaryScan = null
         }
       }
-      case 'asset-range-summary-page':
+      case 'asset-range-summary-page': {
         assertAssetFrameScope(scope, frame.payload)
-        decodeAssetRangeSummaryPage(frame.payload, { coreLength: scope.assetSession.coreRef.length })
-        return { status: 'ignored' }
+        const request = tracked.assetInventoryRequest
+        const page = decodeAssetRangeSummaryPage(frame.payload, {
+          coreLength: scope.assetSession.coreRef.length,
+          cursor: request?.cursor ?? null,
+          limit: request?.limit,
+        })
+        if (!request || request.closed) return { status: 'ignored' }
+        closeAssetInventoryRequest(tracked, request, null, {
+          ranges: page.ranges,
+          nextCursor: page.nextCursor,
+        })
+        return { status: 'accepted' }
+      }
       case 'asset-block-request': {
         assertAssetFrameScope(scope, frame.payload)
         const range = decodeAssetBlockRequest(frame.payload, { coreLength: scope.assetSession.coreRef.length })
@@ -929,7 +1074,12 @@ export function createScopedNetworkRuntime (options = {}) {
         return { status: 'sent' }
       }
       case 'asset-block-response':
-        return acceptAssetBlockResponse(scope, tracked, frame.payload)
+        try {
+          return await acceptAssetBlockResponse(scope, tracked, frame.payload)
+        } catch (error) {
+          failAssetRequestPeer(scope, tracked.peerId, 'INVALID_PROOF', error)
+          throw error
+        }
       case 'asset-block-error': {
         assertAssetFrameScope(scope, frame.payload)
         const response = decodeAssetBlockError(frame.payload, { coreLength: scope.assetSession.coreRef.length })
@@ -938,10 +1088,7 @@ export function createScopedNetworkRuntime (options = {}) {
         if (response.startBlock !== request.startBlock || response.endBlock !== request.endBlock) {
           fail('asset block error range does not match its transfer')
         }
-        request.failedPeers.add(tracked.peerId)
-        if ([...request.requestedPeers].every(peerId => request.failedPeers.has(peerId))) {
-          closeAssetRequest(scope, request, new Error('asset blocks are unavailable from all requested peers'))
-        }
+        failAssetRequestPeer(scope, tracked.peerId, 'UNAVAILABLE')
         return { status: 'unavailable' }
       }
       default:
@@ -1406,6 +1553,11 @@ export function createScopedNetworkRuntime (options = {}) {
       },
       onClose: () => {
         const tracked = scope.sessions.get(remoteKey)
+        closeAssetInventoryRequest(
+          tracked,
+          tracked?.assetInventoryRequest,
+          assetTransportError('DISCONNECTED', remoteKey, 'asset peer disconnected'),
+        )
         for (const response of tracked?.assetResponses?.values() || []) response.cancelled = true
         tracked?.assetResponses?.clear()
         if (scope.purpose === 'asset') failAssetRequestPeer(scope, remoteKey)
@@ -1463,6 +1615,7 @@ export function createScopedNetworkRuntime (options = {}) {
       replicatedCoreKeys: new Set(),
       assetResponses: new Map(),
       assetSummaryScan: null,
+      assetInventoryRequest: null,
       lastAssetTransferId: 0n,
       archiveRequest: null,
       archiveTransfer: null,
@@ -1691,7 +1844,6 @@ export function createScopedNetworkRuntime (options = {}) {
       const descriptor = binding.namespaceDescriptor || (descriptorEntry?.value ? normalizeNamespace(descriptorEntry.value, protocolMajor) : null)
       return {
         status: 'available',
-        publisherId: id,
         catalogBootstrapKey: hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey'),
         catalogEpoch: descriptor?.catalogEpoch ?? null,
         writable: Boolean(binding.catalog?.writable),
@@ -1772,7 +1924,7 @@ export function createScopedNetworkRuntime (options = {}) {
           store,
           startBlock: range.start,
           endBlock: range.end,
-          onQuarantine: ({ cause }) => quarantineAssetScope(scope, cause),
+          onQuarantine: ({ cause, context }) => quarantineAssetScope(scope, cause, context),
         })
         const core = await assetSession.ready()
         const download = core.download?.({ start: range.start, end: range.end }) || null
@@ -1874,13 +2026,158 @@ export function createScopedNetworkRuntime (options = {}) {
     return scope
   }
 
+  function activeAssetPeers (scope) {
+    return [...scope.sessions.values()].filter(session =>
+      !session.closed && session.state === 'active' && !session.channel?.closed)
+  }
+
+  function normalizeAssetPeerIds (peerIds) {
+    if (peerIds === undefined) return null
+    if (!Array.isArray(peerIds) || peerIds.length < 1 || peerIds.length > MAX_ASSET_PEERS_PER_REQUEST) {
+      fail('asset peerIds are out of bounds')
+    }
+    const normalized = peerIds.map(boundedAssetPeerId)
+    if (new Set(normalized).size !== normalized.length) fail('asset peerIds must be unique')
+    return normalized.sort()
+  }
+
+  function mapAssetSessionError (scope, error) {
+    if (error?.name === 'AbortError') return error
+    if (scope && (!scope.assetSession.core || scope.assetSession.poisoned)) {
+      return assetTransportError('QUARANTINED', null, 'asset core was quarantined', error)
+    }
+    if (String(error?.message || '').includes('unavailable')) {
+      return assetTransportError('UNAVAILABLE', null, 'verified asset block is unavailable', error)
+    }
+    return error
+  }
+
+  function getActiveAssetSession ({ assetId } = {}) {
+    if (status !== 'active') fail('runtime is not active')
+    const scope = activeAssetScope(assetId)
+    const session = scope.assetSession
+    if (session.assetId !== scope.assetId ||
+        session.coreRef?.assetId !== scope.assetId) {
+      fail('active asset session identity mismatch')
+    }
+    return session
+  }
+
+  function getActiveAssetPeerIds ({ assetId } = {}) {
+    if (status !== 'active' || !networkEnabled) fail('runtime is not active')
+    return activeAssetPeers(activeAssetScope(assetId)).map(peer => peer.peerId).sort()
+  }
+
   async function listAssetRanges ({ assetId, cursor = null, limit } = {}) {
     if (status !== 'active') fail('runtime is not active')
     const scope = activeAssetScope(assetId)
     return scope.assetSession.listAssetRanges({ cursor, limit })
   }
 
-  async function requestAssetBlocks ({ assetId, startBlock, endBlock, signal } = {}) {
+  async function listPeerAssetRanges ({ assetId, peerId, cursor = null, limit, signal } = {}) {
+    if (status !== 'active' || !networkEnabled) fail('runtime is not active')
+    const scope = activeAssetScope(assetId)
+    const id = boundedAssetPeerId(peerId)
+    const session = scope.sessions.get(id)
+    if (!session || session.closed || session.state !== 'active' || session.channel?.closed) {
+      throw assetTransportError('UNAVAILABLE', id, 'asset peer is not active')
+    }
+    if (session.assetInventoryRequest) {
+      throw assetTransportError('UNAVAILABLE', id, 'asset inventory request is already pending')
+    }
+    if (signal?.aborted) throw assetAbortError(id, 'asset inventory request aborted')
+    const payload = encodeAssetRangeSummaryRequest({
+      assetId: scope.assetId,
+      cursor,
+      limit,
+    })
+    const normalized = decodeAssetRangeSummaryRequest(payload, {
+      coreLength: scope.assetSession.coreRef.length,
+    })
+    let resolve
+    let reject
+    const promise = new Promise((onResolve, onReject) => {
+      resolve = onResolve
+      reject = onReject
+    })
+    const request = {
+      cursor: normalized.cursor,
+      limit: normalized.limit,
+      signal,
+      timer: null,
+      closed: false,
+      onAbort: null,
+      resolve,
+      reject,
+    }
+    request.onAbort = () => {
+      if (!closeAssetInventoryRequest(
+        session,
+        request,
+        assetAbortError(id, 'asset inventory request aborted'),
+      )) return
+      closeSession(scope, id, 'asset-inventory-aborted')
+    }
+    session.assetInventoryRequest = request
+    signal?.addEventListener?.('abort', request.onAbort, { once: true })
+    request.timer = setTimeout(() => {
+      if (!closeAssetInventoryRequest(
+        session,
+        request,
+        assetTransportError('TIMEOUT', id, 'asset inventory request timed out'),
+      )) return
+      closeSession(scope, id, 'asset-inventory-timeout')
+    }, assetTransferTimeoutMs)
+    request.timer?.unref?.()
+    if (signal?.aborted) {
+      request.onAbort()
+      return promise
+    }
+    try {
+      if (!sendScopedFrame(session, 'asset', 'asset-range-summary-request', payload)) {
+        closeAssetInventoryRequest(
+          session,
+          request,
+          assetTransportError('UNAVAILABLE', id, 'asset inventory request could not be sent'),
+        )
+      }
+    } catch (cause) {
+      closeAssetInventoryRequest(
+        session,
+        request,
+        assetTransportError('UNAVAILABLE', id, 'asset inventory request could not be sent', cause),
+      )
+    }
+    return promise
+  }
+
+  async function hasVerifiedAssetBlock ({ assetId, blockIndex, signal } = {}) {
+    if (status !== 'active') fail('runtime is not active')
+    if (signal?.aborted) throw assetAbortError(null, 'asset block possession check aborted')
+    const scope = activeAssetScope(assetId)
+    const isActive = () => status === 'active' && !scope.closed && !signal?.aborted
+    try {
+      return await scope.assetSession.hasVerifiedBlock(blockIndex, { isActive })
+    } catch (error) {
+      if (signal?.aborted) throw assetAbortError(null, 'asset block possession check aborted')
+      throw mapAssetSessionError(scope, error)
+    }
+  }
+
+  async function readVerifiedAssetBlock ({ assetId, blockIndex, signal } = {}) {
+    if (status !== 'active') fail('runtime is not active')
+    if (signal?.aborted) throw assetAbortError(null, 'asset block read aborted')
+    const scope = activeAssetScope(assetId)
+    const isActive = () => status === 'active' && !scope.closed && !signal?.aborted
+    try {
+      return await scope.assetSession.readVerifiedBlock(blockIndex, { isActive })
+    } catch (error) {
+      if (signal?.aborted) throw assetAbortError(null, 'asset block read aborted')
+      throw mapAssetSessionError(scope, error)
+    }
+  }
+
+  async function requestAssetBlocks ({ assetId, startBlock, endBlock, peerIds, signal } = {}) {
     if (status !== 'active' || !networkEnabled) fail('runtime is not active')
     const cancellation = { aborted: signal?.aborted === true, request: null, scope: null }
     if (cancellation.aborted) throw assetAbortError()
@@ -1893,11 +2190,13 @@ export function createScopedNetworkRuntime (options = {}) {
 
     let scope
     let range
+    let selectedPeerIds
     const verified = new Set()
     const remaining = new Set()
     try {
       scope = activeAssetScope(assetId)
       cancellation.scope = scope
+      selectedPeerIds = normalizeAssetPeerIds(peerIds)
       const transferId = allocateAssetTransferId()
       range = decodeAssetBlockRequest(encodeAssetBlockRequest({
         assetId: scope.assetId,
@@ -1911,12 +2210,6 @@ export function createScopedNetworkRuntime (options = {}) {
       if (scope.assetRequests.size >= MAX_ASSET_BLOCKS_PER_REQUEST) {
         fail('active asset request limit exceeded')
       }
-      for (const active of scope.assetRequests.values()) {
-        if (active.startBlock === range.startBlock && active.endBlock === range.endBlock) {
-          fail('asset block range is already requested')
-        }
-      }
-
       const scanActive = () => !cancellation.aborted &&
         status === 'active' &&
         networkEnabled &&
@@ -1939,14 +2232,18 @@ export function createScopedNetworkRuntime (options = {}) {
     } catch (error) {
       detachAbort()
       if (cancellation.aborted && error?.name !== 'AbortError') throw assetAbortError()
-      throw error
+      throw mapAssetSessionError(scope, error)
     }
 
-    const peers = [...scope.sessions.values()].filter(session =>
-      !session.closed && session.state === 'active' && !session.channel?.closed)
+    const activePeers = activeAssetPeers(scope)
+    const selectedSet = selectedPeerIds ? new Set(selectedPeerIds) : null
+    const peers = selectedSet
+      ? activePeers.filter(peer => selectedSet.has(peer.peerId))
+      : activePeers
     if (peers.length === 0) {
       detachAbort()
-      fail('asset scope has no active peers')
+      const unavailablePeerId = selectedPeerIds?.length === 1 ? selectedPeerIds[0] : null
+      throw assetTransportError('UNAVAILABLE', unavailablePeerId, 'asset scope has no selected active peers')
     }
     if (cancellation.aborted) {
       detachAbort()
@@ -1969,6 +2266,7 @@ export function createScopedNetworkRuntime (options = {}) {
       peerIds: new Set(),
       requestedPeers: new Set(),
       failedPeers: new Set(),
+      peerFailures: new Map(),
       transfers: new Map(),
       signal,
       onAbort,
@@ -1978,8 +2276,15 @@ export function createScopedNetworkRuntime (options = {}) {
       reject,
     }
     request.timer = setTimeout(() => {
-      closeAssetRequest(scope, request, new Error('asset block request timed out'))
-    }, ASSET_TRANSFER_TIMEOUT_MS)
+      const timedOutPeerId = request.requestedPeers.size === 1
+        ? request.requestedPeers.values().next().value
+        : null
+      closeAssetRequest(scope, request, assetTransportError(
+        'TIMEOUT',
+        timedOutPeerId,
+        'asset block request timed out',
+      ))
+    }, assetTransferTimeoutMs)
     request.timer?.unref?.()
     scope.assetRequests.set(request.key, request)
     cancellation.request = request
@@ -2001,12 +2306,23 @@ export function createScopedNetworkRuntime (options = {}) {
           request.requestedPeers.add(peer.peerId)
         }
       }
-    } catch (error) {
-      closeAssetRequest(scope, request, error)
+    } catch (cause) {
+      const peerId = peers.length === 1 ? peers[0].peerId : null
+      closeAssetRequest(scope, request, assetTransportError(
+        'UNAVAILABLE',
+        peerId,
+        'asset block request could not be sent',
+        cause,
+      ))
       return promise
     }
     if (request.requestedPeers.size === 0) {
-      closeAssetRequest(scope, request, new Error('asset block request could not be sent'))
+      const peerId = peers.length === 1 ? peers[0].peerId : null
+      closeAssetRequest(scope, request, assetTransportError(
+        'UNAVAILABLE',
+        peerId,
+        'asset block request could not be sent',
+      ))
     }
     return promise
   }
@@ -2374,6 +2690,11 @@ export function createScopedNetworkRuntime (options = {}) {
     retainAuthorizedRendition,
     releaseAuthorizedRendition,
     listAssetRanges,
+    getActiveAssetSession,
+    getActiveAssetPeerIds,
+    listPeerAssetRanges,
+    hasVerifiedAssetBlock,
+    readVerifiedAssetBlock,
     requestAssetBlocks,
     revalidateRetainedRenditions,
     retainArchiveDiscovery,
@@ -2407,6 +2728,10 @@ export function createScopedNetworkApi (runtime) {
     retainAuthorizedRendition: request => runtime.retainAuthorizedRendition(request),
     releaseAuthorizedRendition: request => runtime.releaseAuthorizedRendition(request),
     listAssetRanges: request => runtime.listAssetRanges(request),
+    getActiveAssetPeerIds: request => runtime.getActiveAssetPeerIds(request),
+    listPeerAssetRanges: request => runtime.listPeerAssetRanges(request),
+    hasVerifiedAssetBlock: request => runtime.hasVerifiedAssetBlock(request),
+    readVerifiedAssetBlock: request => runtime.readVerifiedAssetBlock(request),
     requestAssetBlocks: request => runtime.requestAssetBlocks(request),
     retainArchiveDiscovery: request => runtime.retainArchiveDiscovery(request),
     releaseArchiveDiscovery: request => runtime.releaseArchiveDiscovery(request),

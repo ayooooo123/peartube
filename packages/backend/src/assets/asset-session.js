@@ -63,7 +63,7 @@ export function createAssetSession(options = {}) {
   }
 
   if (!core) core = openExactCore()
-  function validateProofMetadata({ index, proof, byteLength } = {}) {
+  function validateProofMetadata({ index, proof, byteLength, peerId = null, transferId = null } = {}) {
     if (!Number.isSafeInteger(index) || index < 0 || index >= coreRef.length) {
       throw new Error('asset block index exceeds the verified descriptor length')
     }
@@ -82,7 +82,7 @@ export function createAssetSession(options = {}) {
       }
     } else if (!exactCoreState(handle, coreRef)) {
       const cause = new Error('asset core state conflicts with the verified descriptor')
-      return quarantineCore(handle, cause).then(
+      return quarantineCore(handle, cause, { peerId, transferId }).then(
         () => { throw cause },
         error => { throw error },
       )
@@ -93,7 +93,7 @@ export function createAssetSession(options = {}) {
   }
 
 
-  async function quarantineCore(handle, cause) {
+  async function quarantineCore(handle, cause, context = null) {
     if (!handle || typeof handle !== 'object') return
     const existing = quarantines.get(handle)
     if (existing) return existing
@@ -112,7 +112,7 @@ export function createAssetSession(options = {}) {
       }
       let callbackError = null
       try {
-        await options.onQuarantine?.({ cause, core: handle, permanent: injected })
+        await options.onQuarantine?.({ cause, context, core: handle, permanent: injected })
       } catch (error) {
         callbackError = error
       }
@@ -205,7 +205,46 @@ export function createAssetSession(options = {}) {
     return present === true
   }
 
-  async function verifyBlockOnce({ index, proof, value, isActive } = {}) {
+  async function readVerifiedBlock(index, { isActive } = {}) {
+    if (!Number.isSafeInteger(index) || index < 0 || index >= coreRef.length) {
+      throw new Error('asset block index exceeds the verified descriptor length')
+    }
+    assertActive(isActive, 'asset block read is closed')
+    const handle = await ready()
+    assertActive(isActive, 'asset block read is closed')
+    if (!exactCoreState(handle, coreRef)) {
+      if (emptyCoreState(handle)) throw new Error('verified asset block is unavailable')
+      const error = new Error('asset core state conflicts with the verified descriptor')
+      await quarantineCore(handle, error)
+      throw error
+    }
+    let present
+    let value
+    try {
+      present = await handle.has(index)
+      assertActive(isActive, 'asset block read is closed')
+      if (!present) throw new Error('verified asset block is unavailable')
+      value = await handle.get(index, { wait: false })
+    } catch (cause) {
+      if (cause?.message === 'verified asset block is unavailable') throw cause
+      await quarantineCore(handle, cause)
+      throw cause
+    }
+    assertActive(isActive, 'asset block read is closed')
+    if (!b4a.isBuffer(value) || value.byteLength !== expectedBlockBytes(coreRef, index)) {
+      const error = new Error('verified asset block does not match the descriptor')
+      await quarantineCore(handle, error)
+      throw error
+    }
+    if (!exactCoreState(handle, coreRef)) {
+      const error = new Error('asset core state conflicts with the verified descriptor')
+      await quarantineCore(handle, error)
+      throw error
+    }
+    return value
+  }
+
+  async function verifyBlockOnce({ index, proof, value, peerId = null, transferId = null, isActive } = {}) {
     assertActive(isActive, 'asset block request is closed')
     const handle = await ready()
     if (closed) throw new Error('asset session is closed')
@@ -214,10 +253,16 @@ export function createAssetSession(options = {}) {
     const stateIsExact = exactCoreState(handle, coreRef)
     if (!stateIsExact && !emptyCoreState(handle)) {
       const error = new Error('asset core state conflicts with the verified descriptor')
-      await quarantineCore(handle, error)
+      await quarantineCore(handle, error, { peerId, transferId })
       throw error
     }
-    const metadataValidation = validateProofMetadata({ index, proof, byteLength: b4a.isBuffer(value) ? value.byteLength : null })
+    const metadataValidation = validateProofMetadata({
+      index,
+      proof,
+      byteLength: b4a.isBuffer(value) ? value.byteLength : null,
+      peerId,
+      transferId,
+    })
     if (metadataValidation && typeof metadataValidation.then === 'function') await metadataValidation
     if (!stateIsExact && !proof.upgrade) {
       throw new Error('fresh asset core requires an exact descriptor-length upgrade proof')
@@ -232,12 +277,12 @@ export function createAssetSession(options = {}) {
     try {
       applied = await handle.applyProof(candidate)
     } catch (cause) {
-      await quarantineCore(handle, cause)
+      await quarantineCore(handle, cause, { peerId, transferId })
       throw new Error('asset block proof verification failed', { cause })
     }
     if (applied !== true) {
       const cause = new Error('core.applyProof rejected the asset block')
-      await quarantineCore(handle, cause)
+      await quarantineCore(handle, cause, { peerId, transferId })
       throw new Error('asset block proof verification failed', { cause })
     }
 
@@ -245,7 +290,7 @@ export function createAssetSession(options = {}) {
       assertExactCoreState(handle, coreRef)
       if (!await handle.has(index)) throw new Error('verified asset block was not committed')
     } catch (cause) {
-      await quarantineCore(handle, cause)
+      await quarantineCore(handle, cause, { peerId, transferId })
       throw new Error('asset block proof verification failed', { cause })
     }
     if (closed) throw new Error('asset session is closed')
@@ -283,6 +328,7 @@ export function createAssetSession(options = {}) {
     ready,
     validateProofMetadata,
     hasVerifiedBlock,
+    readVerifiedBlock,
     listAssetRanges,
     verifyBlock,
     close,

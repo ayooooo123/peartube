@@ -1,5 +1,6 @@
 import b4a from 'b4a'
 import Hypercore from 'hypercore'
+import crypto from 'hypercore-crypto'
 
 import {
   normalizeBytes,
@@ -43,6 +44,79 @@ function createHypercoreManifest(treeHash, blockLength) {
   }
 }
 
+function assertWriteInput(store, source) {
+  if (!store || typeof store.get !== 'function') throw new Error('store is required')
+  if (!source || (
+    typeof source[Symbol.asyncIterator] !== 'function' &&
+    typeof source[Symbol.iterator] !== 'function'
+  )) {
+    throw new Error('source is required')
+  }
+}
+
+function assertNotCancelled(signal) {
+  if (signal?.aborted) throw new Error('static asset write cancelled')
+}
+
+async function appendCanonicalSource(core, source, { blockSize, signal }) {
+  let partial = null
+  let partialLength = 0
+
+  for await (const value of source) {
+    assertNotCancelled(signal)
+    const chunk = b4a.from(value)
+    let offset = 0
+
+    if (partial !== null) {
+      const length = Math.min(blockSize - partialLength, chunk.byteLength)
+      b4a.copy(chunk.subarray(0, length), partial, partialLength)
+      partialLength += length
+      offset += length
+
+      if (partialLength === blockSize) {
+        await core.append(partial)
+        assertNotCancelled(signal)
+        partial = null
+        partialLength = 0
+      }
+    }
+
+    while (chunk.byteLength - offset >= blockSize) {
+      await core.append(chunk.subarray(offset, offset + blockSize))
+      assertNotCancelled(signal)
+      offset += blockSize
+    }
+
+    if (offset < chunk.byteLength) {
+      partial = b4a.allocUnsafe(blockSize)
+      partialLength = chunk.byteLength - offset
+      b4a.copy(chunk.subarray(offset), partial)
+    }
+  }
+
+  assertNotCancelled(signal)
+  if (partialLength > 0) await core.append(partial.subarray(0, partialLength))
+  assertNotCancelled(signal)
+}
+
+async function copyStaticPrologue({ sourceState, target }) {
+  await target.ready()
+  // Hypercore 11.35.1 exposes this internal operation as Core.copyPrologue(sourceState).
+  await target.core.copyPrologue(sourceState)
+}
+
+async function removeStagingCore(staging) {
+  const core = staging.core
+  const storage = core.state.storage
+  const storageRoot = storage.store
+  const storagePointer = storage.core
+
+  // Hypercore 11.35.1's public purge method references removed internals.
+  await staging.close()
+  await core.close()
+  await storageRoot.deleteCore(storagePointer)
+}
+
 export function deriveStaticAssetId(input = {}) {
   const { treeHash, blockLength } = normalizeIdentityInput(input)
   return b4a.toString(Hypercore.key(createHypercoreManifest(treeHash, blockLength)), 'hex')
@@ -69,6 +143,46 @@ export function createStaticAssetManifest(input = {}) {
   return {
     ...descriptor,
     assetId: b4a.toString(key, 'hex'),
+  }
+}
+
+export async function writeStaticAsset({ store, source, signal } = {}) {
+  assertWriteInput(store, source)
+  assertNotCancelled(signal)
+
+  const randomId = b4a.toString(crypto.randomBytes(16), 'hex')
+  const stagingName = `asset-staging-${randomId}`
+  const stagingKeyPair = await store.createKeyPair(stagingName)
+  const staging = store.get({ keyPair: stagingKeyPair })
+
+  try {
+    await staging.ready()
+    await appendCanonicalSource(staging, source, {
+      blockSize: ASSET_BLOCK_SIZE,
+      signal,
+    })
+
+    const descriptor = createStaticAssetManifest({
+      treeHash: await staging.treeHash(),
+      blockLength: staging.length,
+      byteLength: staging.byteLength,
+    })
+    const finalCore = store.get({
+      key: descriptor.key,
+      manifest: descriptor.hypercoreManifest,
+    })
+
+    await copyStaticPrologue({
+      sourceState: staging.core.state,
+      target: finalCore,
+    })
+    if (!await verifyStaticAssetDescriptor(finalCore, descriptor)) {
+      throw new Error('static asset verification failed')
+    }
+
+    return { core: finalCore, descriptor }
+  } finally {
+    await removeStagingCore(staging)
   }
 }
 

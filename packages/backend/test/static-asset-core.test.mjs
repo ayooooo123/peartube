@@ -5,14 +5,18 @@ import { join } from 'node:path'
 import b4a from 'b4a'
 import test from 'brittle'
 import Hypercore from 'hypercore'
+import Corestore from 'corestore'
 
-import {
+import * as assets from '../src/assets/index.js'
+
+const {
   ASSET_BLOCK_SIZE,
   createStaticAssetManifest,
   deriveStaticAssetId,
   deriveStaticAssetTopic,
   verifyStaticAssetDescriptor,
-} from '../src/assets/index.js'
+  writeStaticAsset,
+} = assets
 
 async function completedCoreState(bytes) {
   const directory = mkdtempSync(join(tmpdir(), 'peartube-static-identity-'))
@@ -46,6 +50,113 @@ function openedCoreFor(descriptor, overrides = {}) {
     ...overrides,
   }
 }
+
+async function storedCoreKeys(store) {
+  const keys = []
+  for await (const discoveryKey of store.list()) keys.push(b4a.toString(discoveryKey, 'hex'))
+  return keys
+}
+
+async function storedAliases(store) {
+  const aliases = []
+  for await (const entry of store.storage.createAliasStream(store.ns)) aliases.push(entry.alias)
+  return aliases
+}
+
+function oneShotSource(chunks) {
+  let iterations = 0
+  return {
+    get iterations() {
+      return iterations
+    },
+    async *[Symbol.asyncIterator]() {
+      iterations++
+      if (iterations > 1) throw new Error('source iterated more than once')
+      yield* chunks
+    },
+  }
+}
+
+test('static asset materialization converges across stores and preserves canonical blocks', async (t) => {
+  const leftDirectory = mkdtempSync(join(tmpdir(), 'peartube-static-left-'))
+  const rightDirectory = mkdtempSync(join(tmpdir(), 'peartube-static-right-'))
+  const storeA = new Corestore(leftDirectory)
+  const storeB = new Corestore(rightDirectory)
+  const bytes = b4a.alloc(ASSET_BLOCK_SIZE * 2 + 17, 23)
+  const changed = b4a.from(bytes)
+  changed[ASSET_BLOCK_SIZE + 1] ^= 1
+  const source = oneShotSource([
+    bytes.subarray(0, 13),
+    bytes.subarray(13, ASSET_BLOCK_SIZE + 29),
+    bytes.subarray(ASSET_BLOCK_SIZE + 29),
+  ])
+
+  t.teardown(async () => {
+    await Promise.all([storeA.close(), storeB.close()])
+    rmSync(leftDirectory, { recursive: true, force: true })
+    rmSync(rightDirectory, { recursive: true, force: true })
+  })
+
+  const left = await writeStaticAsset({ store: storeA, source })
+  const right = await writeStaticAsset({ store: storeB, source: [bytes] })
+  const mutation = await writeStaticAsset({ store: storeB, source: [changed] })
+
+  t.is(source.iterations, 1)
+  t.is(left.descriptor.kind, 'static-prologue-v1')
+  t.is(left.descriptor.key.toString('hex'), right.descriptor.key.toString('hex'))
+  t.is(left.descriptor.assetId, right.descriptor.assetId)
+  t.not(left.descriptor.assetId, mutation.descriptor.assetId)
+  t.is(left.descriptor.assetId, left.core.key.toString('hex'))
+  t.is(left.core.length, 3)
+  t.is(left.core.byteLength, bytes.byteLength)
+  t.is((await left.core.get(0)).byteLength, ASSET_BLOCK_SIZE)
+  t.is((await left.core.get(1)).byteLength, ASSET_BLOCK_SIZE)
+  t.is((await left.core.get(2)).byteLength, 17)
+  t.alike(b4a.concat([
+    await left.core.get(0),
+    await left.core.get(1),
+    await left.core.get(2),
+  ]), bytes)
+  t.ok(await verifyStaticAssetDescriptor(left.core, left.descriptor))
+  t.absent(left.core.secretKey)
+  await t.exception(left.core.append(b4a.from('forbidden')))
+  t.is((await storedCoreKeys(storeA)).length, 1)
+  t.is((await storedCoreKeys(storeB)).length, 2)
+  t.is((await storedAliases(storeA)).length, 0)
+  t.is((await storedAliases(storeB)).length, 0)
+})
+
+test('static asset materialization purges staging cores after cancellation and source failure', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'peartube-static-cleanup-'))
+  const store = new Corestore(directory)
+  const controller = new AbortController()
+
+  t.teardown(async () => {
+    await store.close()
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  async function *cancelledSource() {
+    yield b4a.alloc(ASSET_BLOCK_SIZE, 31)
+    controller.abort()
+    yield b4a.from('not-written')
+  }
+
+  async function *failedSource() {
+    yield b4a.from('partial')
+    throw new Error('source failed')
+  }
+
+  await t.exception(
+    writeStaticAsset({ store, source: cancelledSource(), signal: controller.signal }),
+    /cancel/
+  )
+  t.is((await storedCoreKeys(store)).length, 0)
+  t.is((await storedAliases(store)).length, 0)
+  await t.exception(writeStaticAsset({ store, source: failedSource() }), /source failed/)
+  t.is((await storedCoreKeys(store)).length, 0)
+  t.is((await storedAliases(store)).length, 0)
+})
 
 test('static asset manifests converge from the completed Hypercore tree', async (t) => {
   const state = await completedCoreState(b4a.alloc(600000, 7))

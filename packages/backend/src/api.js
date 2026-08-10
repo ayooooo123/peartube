@@ -2135,6 +2135,7 @@ export function createApi({
         const released = await scopedNetwork.releaseAuthorizedRendition({
           renditionId: locator.renditionId,
           ownerId: publicationId,
+          assetId: locator.assetId,
         })
         releasedOwnership = released?.released === true
         if (released?.scopeQuiescent === false) {

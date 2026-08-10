@@ -296,10 +296,11 @@ test('default source offload releases its publication lease before clearing and 
       t.is(openOptions.writable, false)
     },
     scopedNetwork: {
-      async releaseAuthorizedRendition({ renditionId: releasedId, ownerId }) {
+      async releaseAuthorizedRendition({ renditionId: releasedId, ownerId, assetId: releasedAssetId }) {
         successEvents.push('release')
         t.is(releasedId, renditionId)
         t.is(ownerId, publicationId)
+        t.is(releasedAssetId, assetId)
         return { status: 'released', released: true }
       },
       async retainAuthorizedRendition() {
@@ -318,10 +319,11 @@ test('default source offload releases its publication lease before clearing and 
     clearError: new Error('injected source deletion failure'),
     onClear() { failureEvents.push('clear') },
     scopedNetwork: {
-      async releaseAuthorizedRendition({ renditionId: releasedId, ownerId }) {
+      async releaseAuthorizedRendition({ renditionId: releasedId, ownerId, assetId: releasedAssetId }) {
         failureEvents.push('release')
         t.is(releasedId, renditionId)
         t.is(ownerId, publicationId)
+        t.is(releasedAssetId, assetId)
         return { status: 'released', released: true }
       },
       async retainAuthorizedRendition({ manifest: retainedManifest, renditionId: retainedId, ownerId }) {
@@ -342,7 +344,8 @@ test('shared static asset offload releases one publication owner without clearin
   const shared = createHarness({
     useDefaultDeletion: true,
     scopedNetwork: {
-      async releaseAuthorizedRendition() {
+      async releaseAuthorizedRendition({ assetId: releasedAssetId }) {
+        t.is(releasedAssetId, assetId)
         return {
           status: 'released',
           released: true,
@@ -362,7 +365,8 @@ test('shared static asset offload releases one publication owner without clearin
   const lastOwner = createHarness({
     useDefaultDeletion: true,
     scopedNetwork: {
-      async releaseAuthorizedRendition() {
+      async releaseAuthorizedRendition({ assetId: releasedAssetId }) {
+        t.is(releasedAssetId, assetId)
         return {
           status: 'released',
           released: true,

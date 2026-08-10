@@ -493,6 +493,14 @@ test('identical assets share discovery while rendition owners retain independent
 
   authorizedManifests.delete(manifest)
   t.alike(await runtime.revalidateRetainedRenditions(), { released: 2 })
+  const removedOwnerRelease = await runtime.releaseAuthorizedRendition({
+    renditionId: secondRendition.renditionId,
+    ownerId: manifest.publicationId,
+    assetId: core.assetId,
+  })
+  t.is(removedOwnerRelease.released, false)
+  t.is(removedOwnerRelease.remainingOwners, 1)
+  t.is(removedOwnerRelease.scopeQuiescent, false)
   t.is(runtime.authorizeConnection({
     purpose: 'asset',
     topic: deriveStaticAssetTopic(core.assetId),

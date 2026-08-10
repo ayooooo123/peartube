@@ -1622,18 +1622,31 @@ export function createScopedNetworkRuntime (options = {}) {
     return result
   }
 
-  async function releaseAuthorizedRendition ({ renditionId, ownerId: requestedOwnerId } = {}) {
+  async function releaseAuthorizedRendition ({
+    renditionId,
+    ownerId: requestedOwnerId,
+    assetId: requestedAssetId,
+  } = {}) {
     const id = String(renditionId || '')
+    const assetId = requestedAssetId === undefined
+      ? null
+      : hex32(requestedAssetId, 'assetId')
     const retained = renditions.get(id)
     if (!retained) {
+      const scope = assetId ? findScope('asset', deriveStaticAssetTopic(assetId)) : null
+      const remainingOwners = scope?.assetAuthorizations?.size || 0
       return {
         status: 'released',
         renditionId: id,
         ownerId: requestedOwnerId || null,
+        assetId,
         released: false,
-        remainingOwners: 0,
-        scopeQuiescent: true,
+        remainingOwners,
+        scopeQuiescent: remainingOwners === 0,
       }
+    }
+    if (assetId && retained.scope.assetId !== assetId) {
+      fail('retained rendition asset identity mismatch')
     }
     const ownerIds = requestedOwnerId === undefined
       ? [...retained.owners.keys()]
@@ -1653,6 +1666,7 @@ export function createScopedNetworkRuntime (options = {}) {
       status: 'released',
       renditionId: id,
       ownerId: requestedOwnerId === undefined ? null : String(requestedOwnerId),
+      assetId: retained.scope.assetId,
       released,
       remainingOwners,
       scopeQuiescent: remainingOwners === 0,

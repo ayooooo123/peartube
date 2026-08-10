@@ -356,7 +356,7 @@ test('catalog rejection with staged metadata rollback failure reconciles determi
   assert.match(rejected.error, /rollback.*pending/i)
   assert.equal(channel.videos.length, 1)
   assert.equal(channel.videos[0].publicationState, 'replicationPending')
-  assert.equal(cleared.length, 0, 'pending metadata keeps its playback bytes')
+  assert.equal(cleared.length, 1, 'blob clear completes before pending metadata deletion is attempted')
 
   const retried = await manager.uploadFromPath(channel, filePath, options, fs)
   assert.equal(retried.success, true)
@@ -364,7 +364,7 @@ test('catalog rejection with staged metadata rollback failure reconciles determi
   assert.equal(appendAttempts, 2)
   assert.equal(channel.videos.length, 1)
   assert.equal(channel.videos[0].publicationState, 'published')
-  assert.equal(cleared.length, 1, 'retry clears the rejected staged playback blob once')
+  assert.equal(cleared.length, 2, 'retry may idempotently clear before deleting the durable anchor')
   assert.equal(channel.blobWrites.length, 2, 'retry writes one replacement playback blob')
 })
 
@@ -382,8 +382,11 @@ test('buffer upload reconciles rollback-pending metadata with the same determini
   }
   const channel = makeChannel()
   const cleared = []
+  let clearAttempts = 0
   channel.blobs.clear = async value => {
     cleared.push(value)
+    clearAttempts++
+    if (clearAttempts === 1) throw new Error('injected mobile staged blob clear failure')
   }
   channel.getVideo = async id => channel.videos.find(video => video.id === id) || null
   const deleteVideo = channel.deleteVideo.bind(channel)
@@ -406,7 +409,15 @@ test('buffer upload reconciles rollback-pending metadata with the same determini
   assert.equal(rejected.rollbackPending, true)
   assert.equal(channel.videos.length, 1)
   assert.equal(channel.videos[0].id, options.videoId)
-  assert.equal(cleared.length, 0)
+  assert.equal(cleared.length, 1)
+
+  const deleteRejected = await manager.uploadFromBuffer(channel, buffer, options)
+  assert.equal(deleteRejected.success, false)
+  assert.equal(deleteRejected.rollbackPending, true)
+  assert.equal(appendAttempts, 1, 'pending reconciliation never reaches catalog append')
+  assert.equal(channel.videos.length, 1)
+  assert.equal(channel.videos[0].publicationState, 'replicationPending')
+  assert.equal(cleared.length, 2)
 
   const retried = await manager.uploadFromBuffer(channel, buffer, options)
   assert.equal(retried.success, true)
@@ -415,7 +426,7 @@ test('buffer upload reconciles rollback-pending metadata with the same determini
   assert.equal(appendAttempts, 2)
   assert.equal(channel.videos.length, 1)
   assert.equal(channel.videos[0].publicationState, 'published')
-  assert.equal(cleared.length, 1)
+  assert.equal(cleared.length, 3)
   assert.equal(channel.blobWrites.length, 2)
 })
 

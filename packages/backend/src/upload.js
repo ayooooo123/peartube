@@ -325,20 +325,17 @@ async function reconcilePendingUpload(channel, metadata) {
   let blobResult;
   try {
     blobResult = storedBlobResult(metadata);
-    await channel.deleteVideo(metadata.id);
   } catch (error) {
-    throw error?.uploadRollbackPending === true
-      ? error
-      : stagedRollbackPendingError(null, error);
+    throw stagedRollbackPendingError(null, error);
   }
   try {
     await rollbackUploadedBlob(channel, blobResult);
   } catch (error) {
-    try {
-      await channel.addVideo(metadata, { syncPublic: false });
-    } catch (restoreError) {
-      throw stagedRollbackPendingError(error, restoreError);
-    }
+    throw stagedRollbackPendingError(null, error);
+  }
+  try {
+    await channel.deleteVideo(metadata.id);
+  } catch (error) {
     throw stagedRollbackPendingError(null, error);
   }
 }
@@ -583,6 +580,7 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
       } catch (rollbackError) {
         throw stagedRollbackPendingError(error, rollbackError);
       }
+      throw markUploadCommitState(error, 'uploadRollbackCompleted');
     }
     throw error;
   }
@@ -611,7 +609,8 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
       try {
         await scopedNetwork.releaseAuthorizedRendition?.({
           renditionId: rendition.renditionId,
-          ownerId: manifest.publicationId
+          ownerId: manifest.publicationId,
+          assetId: rendition.core.assetId
         });
       } catch {}
     }
@@ -844,7 +843,11 @@ export function createUploadManager({
           ...publicationRuntime,
           ...uploadControl,
           stageMetadata: value => channel.addVideo(value, { syncPublic: false }),
-          rollbackMetadata: value => channel.deleteVideo?.(value.id),
+          rollbackMetadata: async value => {
+            await rollbackUploadedBlob(channel, blobResult);
+            if (typeof channel.deleteVideo !== 'function') throw new Error('staged metadata deletion is unavailable');
+            await channel.deleteVideo(value.id);
+          },
           finalizeMetadata: value => channel.updateVideo?.(value.id, value, { syncPublic: true })
         });
         immutableCommitConfirmed = Boolean(metadata.immutablePublication);
@@ -870,6 +873,7 @@ export function createUploadManager({
         if (blobResult && !immutableCommitConfirmed &&
             err?.uploadCommitSucceeded !== true &&
             err?.uploadCommitUncertain !== true &&
+            err?.uploadRollbackCompleted !== true &&
             err?.uploadRollbackPending !== true) {
           try {
             await rollbackUploadedBlob(channel, blobResult);
@@ -951,7 +955,11 @@ export function createUploadManager({
           ...publicationRuntime,
           ...uploadControl,
           stageMetadata: value => channel.addVideo(value, { syncPublic: false }),
-          rollbackMetadata: value => channel.deleteVideo?.(value.id),
+          rollbackMetadata: async value => {
+            await rollbackUploadedBlob(channel, blobResult);
+            if (typeof channel.deleteVideo !== 'function') throw new Error('staged metadata deletion is unavailable');
+            await channel.deleteVideo(value.id);
+          },
           finalizeMetadata: value => channel.updateVideo?.(value.id, value, { syncPublic: true })
         });
         immutableCommitConfirmed = Boolean(metadata.immutablePublication);
@@ -977,6 +985,7 @@ export function createUploadManager({
         if (blobResult && !immutableCommitConfirmed &&
             err?.uploadCommitSucceeded !== true &&
             err?.uploadCommitUncertain !== true &&
+            err?.uploadRollbackCompleted !== true &&
             err?.uploadRollbackPending !== true) {
           try {
             await rollbackUploadedBlob(channel, blobResult);

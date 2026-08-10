@@ -18,6 +18,10 @@ async function storedCoreCount(store) {
   return count
 }
 
+function liveSessionCount(store) {
+  return store.sessions.list().filter((session) => !session.closed).length
+}
+
 test('rendition writer requires a store and source and embeds the real static descriptor', async (t) => {
   const leftDirectory = mkdtempSync(join(tmpdir(), 'peartube-rendition-left-'))
   const rightDirectory = mkdtempSync(join(tmpdir(), 'peartube-rendition-right-'))
@@ -109,4 +113,65 @@ test('rendition writer releases write state and staging storage after cancellati
   }), /cancel/)
   t.is(writer.getOpenWriteCount(), 0)
   t.is(await storedCoreCount(store), 0)
+})
+
+test('rendition writer validates metadata before materialization and closes cores on range failure', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'peartube-rendition-validation-'))
+  const store = new Corestore(directory)
+  const writer = createImmutableRenditionWriter()
+  let sourceIterations = 0
+  const source = {
+    async *[Symbol.asyncIterator]() {
+      sourceIterations++
+      yield bytes(9, 16)
+    },
+  }
+
+  await writer.initialize()
+  t.teardown(async () => {
+    await store.close()
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  await t.exception(writer.writeRendition({
+    store,
+    source,
+    purpose: '',
+    format: 'video/mp4',
+  }), /purpose/)
+  await t.exception(writer.writeRendition({
+    store,
+    source,
+    purpose: 'original',
+    format: '',
+  }), /format/)
+  await t.exception(writer.writeRendition({
+    store,
+    source,
+    purpose: 'original',
+    format: 'video/mp4',
+    segments: [
+      { timeStartMs: 0, durationMs: 10, byteStart: 0, byteEnd: 10, independent: true },
+      { timeStartMs: 10, durationMs: 10, byteStart: 9, byteEnd: 12, independent: true },
+    ],
+  }), /ranges/)
+
+  t.is(sourceIterations, 0)
+  t.is(await storedCoreCount(store), 0)
+  t.is(liveSessionCount(store), 0)
+
+  await t.exception(writer.writeRendition({
+    store,
+    source,
+    purpose: 'original',
+    format: 'video/mp4',
+    segments: [
+      { timeStartMs: 0, durationMs: 10, byteStart: 0, byteEnd: 17, independent: true },
+    ],
+  }), /exceed/)
+
+  t.is(sourceIterations, 1)
+  t.is(await storedCoreCount(store), 1)
+  t.is(liveSessionCount(store), 0)
+  t.is(writer.getOpenWriteCount(), 0)
 })

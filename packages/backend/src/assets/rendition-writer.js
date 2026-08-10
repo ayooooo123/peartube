@@ -2,6 +2,32 @@ import { createRenditionDescriptor } from './rendition.js'
 import { createSegmentIndexDescriptor } from './segment-index.js'
 import { writeStaticAsset } from './static-core.js'
 
+const PREFLIGHT_CORE = {
+  key: '00'.repeat(32),
+  length: 0,
+  treeHash: '00'.repeat(32),
+  byteLength: 0,
+}
+
+function validateRenditionMetadata(input) {
+  let segmentIndex = null
+  if (input.segments) {
+    segmentIndex = createSegmentIndexDescriptor({
+      codec: input.segmentCodec || 'peartube-inline-segments-v1',
+      mediaByteLength: Number.MAX_SAFE_INTEGER,
+      entries: input.segments,
+      indexCore: input.indexCore,
+    })
+  }
+
+  createRenditionDescriptor({
+    purpose: input.purpose,
+    format: input.format,
+    core: PREFLIGHT_CORE,
+    segmentIndex,
+  })
+}
+
 export function createImmutableRenditionWriter() {
   let initialized = false
   let openWrites = 0
@@ -18,8 +44,10 @@ export function createImmutableRenditionWriter() {
     async writeRendition(input = {}) {
       if (!initialized) throw new Error('rendition writer must initialize before writes')
       openWrites++
+      let staticAsset = null
       try {
-        const staticAsset = await writeStaticAsset({
+        validateRenditionMetadata(input)
+        staticAsset = await writeStaticAsset({
           store: input.store,
           source: input.source,
           signal: input.signal,
@@ -50,6 +78,18 @@ export function createImmutableRenditionWriter() {
           sealed: true,
           readOnly: true,
         }
+      } catch (error) {
+        if (staticAsset && !staticAsset.core.closed) {
+          try {
+            await staticAsset.core.close()
+          } catch (closeError) {
+            throw new AggregateError(
+              [error, closeError],
+              'rendition failure and static core close failed'
+            )
+          }
+        }
+        throw error
       } finally {
         openWrites--
       }

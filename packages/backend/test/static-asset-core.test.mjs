@@ -63,6 +63,33 @@ async function storedAliases(store) {
   return aliases
 }
 
+function liveSessionCount(store) {
+  return store.sessions.list().filter((session) => !session.closed).length
+}
+
+function interceptFinalCore(store, patch) {
+  const get = store.get.bind(store)
+  let finalCore = null
+
+  store.get = (options) => {
+    const core = get(options)
+    if (options?.manifest) {
+      finalCore = core
+      const ready = core.ready.bind(core)
+      let patched = false
+      core.ready = async () => {
+        await ready()
+        if (patched) return
+        patched = true
+        patch(core)
+      }
+    }
+    return core
+  }
+
+  return () => finalCore
+}
+
 function oneShotSource(chunks) {
   let iterations = 0
   return {
@@ -120,6 +147,7 @@ test('static asset materialization converges across stores and preserves canonic
   t.ok(await verifyStaticAssetDescriptor(left.core, left.descriptor))
   t.absent(left.core.secretKey)
   await t.exception(left.core.append(b4a.from('forbidden')))
+  await t.exception(left.core.append(b4a.from('still-forbidden'), { writable: true }))
   t.is((await storedCoreKeys(storeA)).length, 1)
   t.is((await storedCoreKeys(storeB)).length, 2)
   t.is((await storedAliases(storeA)).length, 0)
@@ -156,6 +184,79 @@ test('static asset materialization purges staging cores after cancellation and s
   await t.exception(writeStaticAsset({ store, source: failedSource() }), /source failed/)
   t.is((await storedCoreKeys(store)).length, 0)
   t.is((await storedAliases(store)).length, 0)
+})
+
+test('static asset materialization closes the final session when aborting during copy or verification', async (t) => {
+  for (const phase of ['copy', 'verification']) {
+    const directory = mkdtempSync(join(tmpdir(), `peartube-static-abort-${phase}-`))
+    const store = new Corestore(directory)
+    const controller = new AbortController()
+    const getFinalCore = interceptFinalCore(store, (core) => {
+      if (phase === 'copy') {
+        const copyPrologue = core.core.copyPrologue.bind(core.core)
+        core.core.copyPrologue = async (sourceState) => {
+          await copyPrologue(sourceState)
+          controller.abort()
+        }
+      } else {
+        const treeHash = core.treeHash.bind(core)
+        core.treeHash = async (...args) => {
+          const hash = await treeHash(...args)
+          controller.abort()
+          return hash
+        }
+      }
+    })
+
+    t.teardown(async () => {
+      await store.close()
+      rmSync(directory, { recursive: true, force: true })
+    })
+
+    await t.exception(
+      writeStaticAsset({
+        store,
+        source: [b4a.alloc(ASSET_BLOCK_SIZE + 11, 41)],
+        signal: controller.signal,
+      }),
+      /cancel/
+    )
+
+    t.ok(getFinalCore().closed)
+    t.is(liveSessionCount(store), 0)
+    t.is((await storedCoreKeys(store)).length, 1)
+    t.is((await storedAliases(store)).length, 0)
+  }
+})
+
+test('static asset materialization uses zero-copy source views and rejects non-byte chunks', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'peartube-static-zero-copy-'))
+  const store = new Corestore(directory)
+  const chunk = new Uint8Array(ASSET_BLOCK_SIZE)
+  chunk.fill(43)
+  const from = b4a.from
+
+  t.teardown(async () => {
+    await store.close()
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  b4a.from = (value, ...args) => {
+    if (value === chunk) throw new Error('full source chunk copied')
+    return from(value, ...args)
+  }
+
+  try {
+    const written = await writeStaticAsset({ store, source: [chunk] })
+    t.ok(b4a.equals(await written.core.get(0), chunk))
+  } finally {
+    b4a.from = from
+  }
+
+  await t.exception(
+    writeStaticAsset({ store, source: ['not a byte chunk'] }),
+    /Buffer or Uint8Array/
+  )
 })
 
 test('static asset manifests converge from the completed Hypercore tree', async (t) => {

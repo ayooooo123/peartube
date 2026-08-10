@@ -58,13 +58,20 @@ function assertNotCancelled(signal) {
   if (signal?.aborted) throw new Error('static asset write cancelled')
 }
 
+function sourceChunkView(value) {
+  if (!b4a.isBuffer(value)) {
+    throw new Error('source chunks must be a Buffer or Uint8Array')
+  }
+  return value.subarray(0)
+}
+
 async function appendCanonicalSource(core, source, { blockSize, signal }) {
   let partial = null
   let partialLength = 0
 
   for await (const value of source) {
     assertNotCancelled(signal)
-    const chunk = b4a.from(value)
+    const chunk = sourceChunkView(value)
     let offset = 0
 
     if (partial !== null) {
@@ -103,6 +110,15 @@ async function copyStaticPrologue({ sourceState, target }) {
   await target.ready()
   // Hypercore 11.35.1 exposes this internal operation as Core.copyPrologue(sourceState).
   await target.core.copyPrologue(sourceState)
+}
+
+async function closeUnreturnedCore(core, error) {
+  if (!core || core.closed) return
+  try {
+    await core.close()
+  } catch (closeError) {
+    throw new AggregateError([error, closeError], 'static asset failure and final core close failed')
+  }
 }
 
 async function removeStagingCore(staging) {
@@ -155,6 +171,7 @@ export async function writeStaticAsset({ store, source, signal } = {}) {
   const stagingKeyPair = await store.createKeyPair(stagingName)
   const staging = store.get({ keyPair: stagingKeyPair })
 
+  let finalCore = null
   try {
     await staging.ready()
     await appendCanonicalSource(staging, source, {
@@ -162,25 +179,35 @@ export async function writeStaticAsset({ store, source, signal } = {}) {
       signal,
     })
 
+    assertNotCancelled(signal)
+    const treeHash = await staging.treeHash()
+    assertNotCancelled(signal)
     const descriptor = createStaticAssetManifest({
-      treeHash: await staging.treeHash(),
+      treeHash,
       blockLength: staging.length,
       byteLength: staging.byteLength,
     })
-    const finalCore = store.get({
+    finalCore = store.get({
       key: descriptor.key,
       manifest: descriptor.hypercoreManifest,
+      writable: false,
     })
 
+    assertNotCancelled(signal)
     await copyStaticPrologue({
       sourceState: staging.core.state,
       target: finalCore,
     })
-    if (!await verifyStaticAssetDescriptor(finalCore, descriptor)) {
-      throw new Error('static asset verification failed')
-    }
+    assertNotCancelled(signal)
+    const verified = await verifyStaticAssetDescriptor(finalCore, descriptor)
+    assertNotCancelled(signal)
+    if (!verified) throw new Error('static asset verification failed')
+    assertNotCancelled(signal)
 
     return { core: finalCore, descriptor }
+  } catch (error) {
+    await closeUnreturnedCore(finalCore, error)
+    throw error
   } finally {
     await removeStagingCore(staging)
   }

@@ -4,7 +4,19 @@ import Protomux from 'protomux'
 
 import { createNetworkAdmission } from './admission.js'
 import {
+  ASSET_BLOCK_ERROR_CODES,
+  MAX_ASSET_BLOCKS_PER_REQUEST,
+  decodeAssetBlockError,
+  decodeAssetBlockRequest,
+  decodeAssetBlockResponse,
+  decodeAssetIdPrefix,
+  decodeAssetRangeSummaryPage,
+  decodeAssetRangeSummaryRequest,
   decodePeerFrame,
+  encodeAssetBlockError,
+  encodeAssetBlockRequest,
+  encodeAssetBlockResponse,
+  encodeAssetRangeSummaryPage,
   encodePeerFrame,
   MAX_PEER_FRAME_BYTES,
   PEER_FRAME_TYPE_NAMES,
@@ -34,10 +46,11 @@ import {
 import { verifyArchivePledge } from '../archive/pledge.js'
 import { normalizeAssetCoreRefV2 } from '../assets/rendition.js'
 import { createStaticAssetManifest, deriveStaticAssetTopic } from '../assets/static-core.js'
+import { createAssetSession } from '../assets/asset-session.js'
 
 
 const FRAME_TYPES = PEER_FRAME_TYPE_NAMES
-export const ASSET_RENDITION_CAPABILITY = 'asset-rendition:v1'
+export const ASSET_RENDITION_CAPABILITY = 'asset-rendition:v2'
 export const ARCHIVE_RANGE_CAPABILITY = 'archive-range:v1'
 export const ARCHIVE_DISCOVERY_CAPABILITY = 'archive-discovery:v1'
 export const SCOPED_NETWORK_PROTOCOL = 'peartube/scoped-network'
@@ -56,10 +69,11 @@ const ARCHIVE_CHALLENGE_PROOF_CHUNK_BYTES = 48 * 1024
 const MAX_ARCHIVE_CHALLENGE_TRANSFERS = 16
 const ARCHIVE_CHALLENGE_TRANSFER_TIMEOUT_MS = 10_000
 const ASSET_TRANSFER_TYPES = new Set([
+  'asset-range-summary-request',
+  'asset-range-summary-page',
   'asset-block-request',
-  'asset-block-proof',
-  'asset-block-chunk',
-  'asset-block-unavailable',
+  'asset-block-response',
+  'asset-block-error',
 ])
 const ARCHIVE_TRANSFER_TYPES = new Set([
   'archive-block-request',
@@ -487,6 +501,9 @@ export function createScopedNetworkRuntime (options = {}) {
   function closeSession (scope, peerId, reason) {
     const session = scope.sessions.get(peerId)
     if (!session || session.closed) return false
+    for (const response of session.assetResponses?.values() || []) response.cancelled = true
+    session.assetResponses?.clear()
+    if (scope.purpose === 'asset') failAssetRequestPeer(scope, peerId)
     session.closed = true
     for (const cleanup of session.cleanupFns.splice(0)) {
       try { cleanup() } catch {}
@@ -498,11 +515,6 @@ export function createScopedNetworkRuntime (options = {}) {
     return true
   }
 
-  function assetRangeContains (scope, index) {
-    return Number.isSafeInteger(index) &&
-      index >= scope.range.start &&
-      index < scope.range.end
-  }
 
   function encodeAssetIndex (index) {
     if (!Number.isSafeInteger(index) || index < 0 || index > 0xffffffff) fail('asset block index is out of bounds')
@@ -527,66 +539,48 @@ export function createScopedNetworkRuntime (options = {}) {
     return true
   }
 
-  function clearAssetTimer (tracked) {
-    if (!tracked?.assetTimer) return
-    clearTimeout(tracked.assetTimer)
-    tracked.assetTimer = null
+  function assetRequestKey (startBlock, endBlock) {
+    return `${startBlock}:${endBlock}`
   }
 
-  function queueAssetRetry (scope, tracked, index) {
-    if (!assetRangeContains(scope, index)) return
-    scope.assetPending.delete(index)
-    const failures = scope.assetFailures.get(index) || new Set()
-    failures.add(tracked.peerId)
-    scope.assetFailures.set(index, failures)
-    scope.assetRetries.add(index)
-    tracked.assetRequestIndex = null
-    tracked.assetTransfer = null
-    clearAssetTimer(tracked)
+  function assetAbortError () {
+    const error = new Error('asset block request aborted')
+    error.name = 'AbortError'
+    return error
   }
 
-  async function nextAssetIndex (scope, tracked) {
-    for (const index of scope.assetRetries) {
-      if (scope.assetPending.has(index)) continue
-      if (scope.assetFailures.get(index)?.has(tracked.peerId)) continue
-      scope.assetRetries.delete(index)
-      return index
+  function closeAssetRequest (scope, request, error = null) {
+    if (!request || request.closed) return false
+    request.closed = true
+    clearTimeout(request.timer)
+    request.timer = null
+    request.signal?.removeEventListener?.('abort', request.onAbort)
+    request.transfers.clear()
+    scope.assetRequests.delete(request.key)
+    if (error) request.reject(error)
+    else request.resolve({
+      verifiedBlockIndexes: [...request.verified].sort((left, right) => left - right),
+      peerIds: [...request.peerIds].sort(),
+    })
+    return true
+  }
+
+  function failAssetRequestPeer (scope, peerId) {
+    for (const request of scope.assetRequests?.values() || []) {
+      if (!request.requestedPeers.has(peerId) || request.closed) continue
+      request.failedPeers.add(peerId)
+      for (const [index, transfer] of request.transfers) {
+        if (transfer.peerId === peerId) request.transfers.delete(index)
+      }
+      if ([...request.requestedPeers].every(id => request.failedPeers.has(id))) {
+        closeAssetRequest(scope, request, new Error('asset blocks are unavailable from all requested peers'))
+      }
     }
-    while (scope.assetNextIndex < scope.range.end) {
-      const index = scope.assetNextIndex++
-      if (scope.assetPending.has(index)) continue
-      if (await scope.core.has?.(index)) continue
-      return index
-    }
-    return null
   }
 
-  async function pumpAssetSession (scope, tracked) {
-    if (!networkEnabled || scope.closed || tracked.closed || tracked.state !== 'active' || tracked.assetRequestIndex !== null) return
-    const index = await nextAssetIndex(scope, tracked)
-    if (index === null || scope.closed || tracked.closed) return
-    tracked.assetRequestIndex = index
-    scope.assetPending.add(index)
-    if (!sendScopedFrame(tracked, 'asset', 'asset-block-request', encodeAssetIndex(index))) {
-      queueAssetRetry(scope, tracked, index)
-      return
-    }
-    tracked.assetTimer = setTimeout(() => {
-      queueAssetRetry(scope, tracked, index)
-      void pumpAssetSessions(scope)
-    }, ASSET_TRANSFER_TIMEOUT_MS)
-  }
-
-  function startAssetPumpWhenOpen (scope, tracked) {
-    const opened = tracked.channel?.fullyOpened?.()
-    void Promise.resolve(opened === undefined ? true : opened).then(ready => {
-      if (ready !== false) return pumpAssetSession(scope, tracked)
-    }).catch(() => closeSession(scope, tracked.peerId, 'asset-channel-open-failed'))
-  }
-
-  async function pumpAssetSessions (scope) {
-    if (!scope || scope.closed || scope.purpose !== 'asset') return
-    await Promise.all([...scope.sessions.values()].map(tracked => pumpAssetSession(scope, tracked)))
+  function assertAssetFrameScope (scope, payload) {
+    const assetId = decodeAssetIdPrefix(payload)
+    if (!b4a.equals(assetId, b4a.from(scope.assetId, 'hex'))) fail('asset frame assetId mismatch')
   }
 
   function encodeAssetProof (index, proof, value) {
@@ -634,91 +628,171 @@ export function createScopedNetworkRuntime (options = {}) {
     }
   }
 
-  async function sendAssetBlock (scope, tracked, index) {
-    if (tracked.assetServing || index <= tracked.assetLastServed || !assetRangeContains(scope, index)) {
-      fail('asset block request is outside the authorized monotonic range')
+  function expectedAssetValueBytes (scope, index) {
+    const coreRef = scope.assetSession.coreRef
+    if (index < coreRef.length - 1) return coreRef.blockSize
+    return coreRef.byteLength - ((coreRef.length - 1) * coreRef.blockSize)
+  }
+
+  function sendAssetError (scope, tracked, range, code) {
+    return sendScopedFrame(tracked, 'asset', 'asset-block-error', encodeAssetBlockError({
+      assetId: scope.assetId,
+      startBlock: range.startBlock,
+      endBlock: range.endBlock,
+      code,
+    }))
+  }
+
+  function sendAssetResponseBytes (scope, tracked, responseState, range, blockIndex, kind, bytes) {
+    for (let offset = 0; offset < bytes.byteLength; offset += ASSET_CHUNK_BYTES) {
+      if (responseState.cancelled || scope.closed || tracked.closed ||
+          !networkEnabled || responseState.policyEpoch !== networkPolicyEpoch) return false
+      const chunk = bytes.subarray(offset, Math.min(bytes.byteLength, offset + ASSET_CHUNK_BYTES))
+      if (!sendScopedFrame(tracked, 'asset', 'asset-block-response', encodeAssetBlockResponse({
+        assetId: scope.assetId,
+        startBlock: range.startBlock,
+        endBlock: range.endBlock,
+        blockIndex,
+        kind,
+        offset,
+        totalBytes: bytes.byteLength,
+        chunk,
+      }))) return false
     }
-    tracked.assetServing = true
-    const policyEpoch = networkPolicyEpoch
+    return true
+  }
+
+  async function sendAssetBlocks (scope, tracked, frame, range) {
+    if (range.startBlock < scope.range.start || range.endBlock > scope.range.end) {
+      fail('asset block request is outside the authorized range')
+    }
+    if (tracked.assetResponses.size >= MAX_ASSET_BLOCKS_PER_REQUEST ||
+        tracked.assetResponses.has(frame.requestId)) {
+      fail('asset responder request limit exceeded')
+    }
+    const responseState = { cancelled: false, policyEpoch: networkPolicyEpoch }
+    tracked.assetResponses.set(frame.requestId, responseState)
+    let served = 0
     try {
-      if (!uploadAllowed || !networkEnabled || !await scope.core.has?.(index)) {
-        sendScopedFrame(tracked, 'asset', 'asset-block-unavailable', encodeAssetIndex(index))
+      if (!uploadAllowed || !networkEnabled) {
+        sendAssetError(scope, tracked, range, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
         return
       }
-      const proof = await scope.core.proof({
-        block: { index, nodes: 0 },
-        upgrade: { start: 0, length: scope.core.length },
-      })
-      const value = b4a.from(proof?.block?.value || [])
-      const reservation = policyEpoch === networkPolicyEpoch
-        ? reservePolicyUpload(value.byteLength)
-        : null
-      if (!reservation || proof?.block?.index !== index || value.byteLength > MAX_ASSET_BLOCK_BYTES) {
-        reservation?.release()
-        sendScopedFrame(tracked, 'asset', 'asset-block-unavailable', encodeAssetIndex(index))
-        return
-      }
-      const canBatch = typeof tracked.channel?.cork === 'function' && typeof tracked.channel?.uncork === 'function'
-      if (canBatch) tracked.channel.cork()
-      let sent = false
-      try {
-        sent = sendScopedFrame(tracked, 'asset', 'asset-block-proof', encodeAssetProof(index, proof, value))
-        for (let offset = 0; sent && offset < value.byteLength; offset += ASSET_CHUNK_BYTES) {
-          const chunk = value.subarray(offset, Math.min(value.byteLength, offset + ASSET_CHUNK_BYTES))
-          sent = sendScopedFrame(tracked, 'asset', 'asset-block-chunk', encodeAssetChunk(index, offset, chunk))
+      for (let index = range.startBlock; index < range.endBlock; index++) {
+        if (responseState.cancelled || scope.closed || tracked.closed ||
+            responseState.policyEpoch !== networkPolicyEpoch) return
+        const present = await scope.core.has(index)
+        if (responseState.cancelled || scope.closed || tracked.closed ||
+            responseState.policyEpoch !== networkPolicyEpoch) return
+        if (!present) continue
+        const proof = await scope.core.proof({
+          block: { index, nodes: 0 },
+          upgrade: { start: 0, length: scope.assetSession.coreRef.length },
+        })
+        if (responseState.cancelled || scope.closed || tracked.closed ||
+            responseState.policyEpoch !== networkPolicyEpoch) return
+        const value = proof?.block?.value
+        if (!b4a.isBuffer(value) || proof.block.index !== index ||
+            value.byteLength !== expectedAssetValueBytes(scope, index)) {
+          fail('local asset block does not match the verified descriptor')
         }
-        if (sent) {
-          tracked.assetLastServed = index
+        const proofBytes = encodeAssetProof(index, proof, value)
+        const reservation = responseState.policyEpoch === networkPolicyEpoch
+          ? reservePolicyUpload(value.byteLength)
+          : null
+        if (!reservation) return
+        const canBatch = typeof tracked.channel?.cork === 'function' && typeof tracked.channel?.uncork === 'function'
+        if (canBatch) tracked.channel.cork()
+        try {
+          const proofSent = sendAssetResponseBytes(scope, tracked, responseState, range, index, 'proof', proofBytes)
+          const blockSent = proofSent && sendAssetResponseBytes(scope, tracked, responseState, range, index, 'block', value)
+          if (!blockSent) return
           reservation.commit()
+          served++
+        } finally {
+          reservation.release()
+          if (canBatch) tracked.channel.uncork()
         }
-      } finally {
-        reservation.release()
-        if (canBatch) tracked.channel.uncork()
+      }
+      if (served === 0 && !responseState.cancelled && !tracked.closed) {
+        sendAssetError(scope, tracked, range, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
       }
     } finally {
-      tracked.assetServing = false
+      tracked.assetResponses.delete(frame.requestId)
     }
   }
 
-  async function acceptAssetProof (scope, tracked, frame) {
-    const expectedIndex = tracked.assetRequestIndex
-    if (!assetRangeContains(scope, expectedIndex) || tracked.assetTransfer) fail('unexpected asset proof')
-    const metadata = decodeAssetProof(frame.payload, expectedIndex)
-    tracked.assetTransfer = {
-      proof: metadata.proof,
-      value: b4a.allocUnsafe(metadata.byteLength),
-      nextOffset: 0,
+  function receiveAssetResponsePart (transfer, response) {
+    let part = transfer[response.kind]
+    if (!part) {
+      if (response.offset !== 0) fail('asset block response is not contiguous')
+      part = {
+        buffer: b4a.allocUnsafe(response.totalBytes),
+        receivedBytes: 0,
+        totalBytes: response.totalBytes,
+      }
+      transfer[response.kind] = part
     }
-    if (metadata.byteLength === 0) await finishAssetTransfer(scope, tracked)
+    if (part.totalBytes !== response.totalBytes || part.receivedBytes !== response.offset) {
+      fail('asset block response is not contiguous')
+    }
+    b4a.copy(response.chunk, part.buffer, response.offset)
+    part.receivedBytes += response.chunk.byteLength
   }
 
-  async function acceptAssetChunk (scope, tracked, frame) {
-    const transfer = tracked.assetTransfer
-    const expectedIndex = tracked.assetRequestIndex
-    if (!transfer || !assetRangeContains(scope, expectedIndex)) fail('unexpected asset block chunk')
-    const chunk = decodeAssetChunk(frame.payload)
-    if (chunk.index !== expectedIndex || chunk.offset !== transfer.nextOffset ||
-        chunk.value.byteLength === 0 || chunk.offset + chunk.value.byteLength > transfer.value.byteLength) {
-      fail('asset block chunk is out of sequence')
+  async function finishAssetResponse (scope, request, transfer) {
+    if (transfer.applying || !transfer.proof || !transfer.block ||
+        transfer.proof.receivedBytes !== transfer.proof.totalBytes ||
+        transfer.block.receivedBytes !== transfer.block.totalBytes) return
+    transfer.applying = true
+    try {
+      const metadata = decodeAssetProof(transfer.proof.buffer, transfer.index)
+      if (!b4a.equals(c.encode(c.any, metadata), transfer.proof.buffer)) {
+        fail('asset proof encoding is noncanonical')
+      }
+      if (metadata.byteLength !== transfer.block.totalBytes) {
+        fail('asset proof value length does not match its response')
+      }
+      if (request.closed || scope.assetRequests.get(request.key) !== request) return
+      await scope.assetSession.verifyBlock({
+        index: transfer.index,
+        proof: metadata.proof,
+        value: transfer.block.buffer,
+      })
+      if (request.closed || scope.assetRequests.get(request.key) !== request) return
+      request.transfers.delete(transfer.index)
+      request.remaining.delete(transfer.index)
+      request.verified.add(transfer.index)
+      request.peerIds.add(transfer.peerId)
+      if (request.remaining.size === 0) closeAssetRequest(scope, request)
+    } catch (error) {
+      request.transfers.delete(transfer.index)
+      throw error
     }
-    b4a.copy(chunk.value, transfer.value, chunk.offset)
-    transfer.nextOffset += chunk.value.byteLength
-    if (transfer.nextOffset === transfer.value.byteLength) await finishAssetTransfer(scope, tracked)
   }
 
-  async function finishAssetTransfer (scope, tracked) {
-    const index = tracked.assetRequestIndex
-    const transfer = tracked.assetTransfer
-    if (!transfer || transfer.nextOffset !== transfer.value.byteLength) fail('asset block transfer is incomplete')
-    transfer.proof.block.value = transfer.value
-    await scope.core.applyProof(transfer.proof)
-    scope.assetPending.delete(index)
-    scope.assetRetries.delete(index)
-    scope.assetFailures.delete(index)
-    tracked.assetRequestIndex = null
-    tracked.assetTransfer = null
-    clearAssetTimer(tracked)
-    await pumpAssetSession(scope, tracked)
+  async function acceptAssetBlockResponse (scope, tracked, payload) {
+    assertAssetFrameScope(scope, payload)
+    const response = decodeAssetBlockResponse(payload, { coreLength: scope.assetSession.coreRef.length })
+    const request = scope.assetRequests.get(assetRequestKey(response.startBlock, response.endBlock))
+    if (!request || request.closed || !request.requestedPeers.has(tracked.peerId)) return { status: 'ignored' }
+    if (!request.remaining.has(response.blockIndex)) return { status: 'ignored' }
+    let transfer = request.transfers.get(response.blockIndex)
+    if (!transfer) {
+      if (response.offset !== 0) fail('asset block response is not contiguous')
+      transfer = {
+        index: response.blockIndex,
+        peerId: tracked.peerId,
+        proof: null,
+        block: null,
+        applying: false,
+      }
+      request.transfers.set(response.blockIndex, transfer)
+    }
+    if (transfer.peerId !== tracked.peerId) fail('asset block response changed contributing peer')
+    receiveAssetResponsePart(transfer, response)
+    await finishAssetResponse(scope, request, transfer)
+    return { status: request.closed ? 'complete' : 'accepted' }
   }
 
   async function handleAssetFrame (scope, tracked, frame) {
@@ -727,20 +801,43 @@ export function createScopedNetworkRuntime (options = {}) {
     switch (frame.type) {
       case 'probe':
         return { status: 'ok' }
-      case 'asset-block-request':
-        await sendAssetBlock(scope, tracked, decodeAssetIndex(frame.payload))
+      case 'asset-range-summary-request': {
+        assertAssetFrameScope(scope, frame.payload)
+        const request = decodeAssetRangeSummaryRequest(frame.payload, { coreLength: scope.assetSession.coreRef.length })
+        const page = uploadAllowed && networkEnabled
+          ? await scope.assetSession.listAssetRanges({ cursor: request.cursor, limit: request.limit })
+          : { ranges: [], nextCursor: null }
+        sendScopedFrame(tracked, 'asset', 'asset-range-summary-page', encodeAssetRangeSummaryPage({
+          assetId: scope.assetId,
+          ranges: page.ranges,
+          nextCursor: page.nextCursor,
+          coreLength: scope.assetSession.coreRef.length,
+          cursor: request.cursor,
+          limit: request.limit,
+        }))
         return { status: 'sent' }
-      case 'asset-block-proof':
-        await acceptAssetProof(scope, tracked, frame)
-        return { status: 'accepted' }
-      case 'asset-block-chunk':
-        await acceptAssetChunk(scope, tracked, frame)
-        return { status: 'accepted' }
-      case 'asset-block-unavailable': {
-        const index = decodeAssetIndex(frame.payload)
-        if (index !== tracked.assetRequestIndex) fail('unexpected unavailable asset block')
-        queueAssetRetry(scope, tracked, index)
-        await pumpAssetSessions(scope)
+      }
+      case 'asset-range-summary-page':
+        assertAssetFrameScope(scope, frame.payload)
+        decodeAssetRangeSummaryPage(frame.payload, { coreLength: scope.assetSession.coreRef.length })
+        return { status: 'ignored' }
+      case 'asset-block-request': {
+        assertAssetFrameScope(scope, frame.payload)
+        const range = decodeAssetBlockRequest(frame.payload, { coreLength: scope.assetSession.coreRef.length })
+        await sendAssetBlocks(scope, tracked, frame, range)
+        return { status: 'sent' }
+      }
+      case 'asset-block-response':
+        return acceptAssetBlockResponse(scope, tracked, frame.payload)
+      case 'asset-block-error': {
+        assertAssetFrameScope(scope, frame.payload)
+        const response = decodeAssetBlockError(frame.payload, { coreLength: scope.assetSession.coreRef.length })
+        const request = scope.assetRequests.get(assetRequestKey(response.startBlock, response.endBlock))
+        if (!request || request.closed || !request.requestedPeers.has(tracked.peerId)) return { status: 'ignored' }
+        request.failedPeers.add(tracked.peerId)
+        if ([...request.requestedPeers].every(peerId => request.failedPeers.has(peerId))) {
+          closeAssetRequest(scope, request, new Error('asset blocks are unavailable from all requested peers'))
+        }
         return { status: 'unavailable' }
       }
       default:
@@ -1054,6 +1151,10 @@ export function createScopedNetworkRuntime (options = {}) {
     if (mode) scope.modes.delete(mode)
     if (scope.modes.size > 0) return false
     scope.closed = true
+    for (const request of [...(scope.assetRequests?.values() || [])]) {
+      closeAssetRequest(scope, request, new Error('asset scope was released'))
+    }
+    await scope.assetSession?.close?.()
     for (const transfer of scope.archiveChallengeProofTransfers?.values() || []) clearTimeout(transfer.timer)
     scope.archiveChallengeProofTransfers?.clear()
     for (const peerId of [...scope.sessions.keys()]) closeSession(scope, peerId, 'scope-released')
@@ -1188,7 +1289,6 @@ export function createScopedNetworkRuntime (options = {}) {
         if (result.status !== 'authorized') fail(result.reason)
         if (tracked) {
           tracked.state = 'active'
-          if (scope.purpose === 'asset') startAssetPumpWhenOpen(scope, tracked)
           if (scope.purpose === 'archive' && !scope.archiveDiscovery) startArchivePumpWhenOpen(scope, tracked)
         }
       },
@@ -1201,9 +1301,9 @@ export function createScopedNetworkRuntime (options = {}) {
       },
       onClose: () => {
         const tracked = scope.sessions.get(remoteKey)
-        if (tracked?.assetRequestIndex !== null && tracked?.assetRequestIndex !== undefined) {
-          queueAssetRetry(scope, tracked, tracked.assetRequestIndex)
-        }
+        for (const response of tracked?.assetResponses?.values() || []) response.cancelled = true
+        tracked?.assetResponses?.clear()
+        if (scope.purpose === 'asset') failAssetRequestPeer(scope, remoteKey)
         if (tracked?.archiveRequest) {
           queueArchiveRetry(scope, tracked, tracked.archiveRequest)
         } else {
@@ -1255,11 +1355,7 @@ export function createScopedNetworkRuntime (options = {}) {
       closed: false,
       cleanupFns: [],
       replicatedCoreKeys: new Set(),
-      assetRequestIndex: null,
-      assetTransfer: null,
-      assetTimer: null,
-      assetServing: false,
-      assetLastServed: -1,
+      assetResponses: new Map(),
       archiveRequest: null,
       archiveTransfer: null,
       archiveTimer: null,
@@ -1268,7 +1364,6 @@ export function createScopedNetworkRuntime (options = {}) {
       archiveServedBytes: 0,
     }
     scope.sessions.set(remoteKey, tracked)
-    if (tracked.state === 'active' && scope.purpose === 'asset') startAssetPumpWhenOpen(scope, tracked)
     if (tracked.state === 'active' && scope.purpose === 'archive' && !scope.archiveDiscovery) startArchivePumpWhenOpen(scope, tracked)
     channel.open(encodeScopedHello({
       purpose: scope.purpose,
@@ -1366,7 +1461,6 @@ export function createScopedNetworkRuntime (options = {}) {
 
   async function restartTransferSessions (closeSessions = false) {
     for (const scope of scopes.values()) {
-      scope.assetFailures?.clear()
       scope.archiveFailures?.clear()
       if (!closeSessions) continue
       for (const peerId of [...scope.sessions.keys()]) {
@@ -1380,10 +1474,7 @@ export function createScopedNetworkRuntime (options = {}) {
       if (info?.client === false) continue
       for (const scope of scopes.values()) attachScope(scope, connection, info)
     }
-    await Promise.all([...scopes.values()].flatMap(scope => [
-      pumpAssetSessions(scope),
-      pumpArchiveSessions(scope),
-    ]))
+    await Promise.all([...scopes.values()].map(scope => pumpArchiveSessions(scope)))
   }
 
   async function applyNetworkPolicy (policy = {}) {
@@ -1578,7 +1669,14 @@ export function createScopedNetworkRuntime (options = {}) {
         writable: false,
       })
       try {
-        await core.ready?.()
+        const assetSession = createAssetSession({
+          coreRef,
+          core,
+          ownsCore: false,
+          startBlock: range.start,
+          endBlock: range.end,
+        })
+        await assetSession.ready()
         const download = core.download?.({ start: range.start, end: range.end }) || null
         ;({ scope } = joinScope({
           purpose: 'asset',
@@ -1590,14 +1688,12 @@ export function createScopedNetworkRuntime (options = {}) {
           core,
           download,
           range,
+          assetSession,
+          assetRequests: new Map(),
           assetAuthorizations: new Map([[
             assetAuthorizationId(id, ownerId),
             { manifest, renditionId: id, range: { ...range } },
           ]]),
-          assetNextIndex: range.start,
-          assetPending: new Set(),
-          assetRetries: new Set(),
-          assetFailures: new Map(),
         }))
       } catch (error) {
         try { await core.close?.() } catch {}
@@ -1671,6 +1767,106 @@ export function createScopedNetworkRuntime (options = {}) {
       remainingOwners,
       scopeQuiescent: remainingOwners === 0,
     }
+  }
+  function activeAssetScope (assetId) {
+    const id = hex32(assetId, 'assetId')
+    const scope = findScope('asset', deriveStaticAssetTopic(id))
+    if (!scope || scope.closed || scope.assetId !== id || !scope.assetSession) {
+      fail('asset scope is not active')
+    }
+    return scope
+  }
+
+  async function listAssetRanges ({ assetId, cursor = null, limit } = {}) {
+    if (status !== 'active') fail('runtime is not active')
+    const scope = activeAssetScope(assetId)
+    return scope.assetSession.listAssetRanges({ cursor, limit })
+  }
+
+  async function requestAssetBlocks ({ assetId, startBlock, endBlock, signal } = {}) {
+    if (status !== 'active' || !networkEnabled) fail('runtime is not active')
+    if (signal?.aborted) throw assetAbortError()
+    const scope = activeAssetScope(assetId)
+    const range = decodeAssetBlockRequest(encodeAssetBlockRequest({
+      assetId: scope.assetId,
+      startBlock,
+      endBlock,
+    }), { coreLength: scope.assetSession.coreRef.length })
+    if (range.startBlock < scope.range.start || range.endBlock > scope.range.end) {
+      fail('asset block request is outside the authorized range')
+    }
+    if (scope.assetRequests.size >= MAX_ASSET_BLOCKS_PER_REQUEST) {
+      fail('active asset request limit exceeded')
+    }
+    const key = assetRequestKey(range.startBlock, range.endBlock)
+    if (scope.assetRequests.has(key)) fail('asset block range is already requested')
+
+    const verified = new Set()
+    const remaining = new Set()
+    for (let index = range.startBlock; index < range.endBlock; index++) {
+      if (await scope.core.has(index)) verified.add(index)
+      else remaining.add(index)
+    }
+    if (remaining.size === 0) {
+      return {
+        verifiedBlockIndexes: [...verified],
+        peerIds: [],
+      }
+    }
+
+    const peers = [...scope.sessions.values()].filter(session =>
+      !session.closed && session.state === 'active' && !session.channel?.closed)
+    if (peers.length === 0) fail('asset scope has no active peers')
+
+    let resolve
+    let reject
+    const promise = new Promise((onResolve, onReject) => {
+      resolve = onResolve
+      reject = onReject
+    })
+    const request = {
+      key,
+      startBlock: range.startBlock,
+      endBlock: range.endBlock,
+      remaining,
+      verified,
+      peerIds: new Set(),
+      requestedPeers: new Set(),
+      failedPeers: new Set(),
+      transfers: new Map(),
+      signal,
+      onAbort: null,
+      timer: null,
+      closed: false,
+      resolve,
+      reject,
+    }
+    request.onAbort = () => closeAssetRequest(scope, request, assetAbortError())
+    signal?.addEventListener?.('abort', request.onAbort, { once: true })
+    request.timer = setTimeout(() => {
+      closeAssetRequest(scope, request, new Error('asset block request timed out'))
+    }, ASSET_TRANSFER_TIMEOUT_MS)
+    request.timer?.unref?.()
+    scope.assetRequests.set(key, request)
+    if (signal?.aborted) {
+      closeAssetRequest(scope, request, assetAbortError())
+      return promise
+    }
+
+    const payload = encodeAssetBlockRequest({
+      assetId: scope.assetId,
+      startBlock: range.startBlock,
+      endBlock: range.endBlock,
+    })
+    for (const peer of peers) {
+      if (sendScopedFrame(peer, 'asset', 'asset-block-request', payload)) {
+        request.requestedPeers.add(peer.peerId)
+      }
+    }
+    if (request.requestedPeers.size === 0) {
+      closeAssetRequest(scope, request, new Error('asset block request could not be sent'))
+    }
+    return promise
   }
   async function revalidateRetainedRenditions () {
     let released = 0
@@ -1967,8 +2163,7 @@ export function createScopedNetworkRuntime (options = {}) {
         purpose: scope.purpose,
         topicHex: scope.topicHex,
         state: session.state,
-        assetRequestIndex: session.assetRequestIndex,
-        assetTransferBytes: session.assetTransfer?.nextOffset || 0,
+        assetResponseCount: session.assetResponses?.size || 0,
       })
     }
     sessions.sort((left, right) => left.peerId.localeCompare(right.peerId) || left.topicHex.localeCompare(right.topicHex))
@@ -2036,6 +2231,8 @@ export function createScopedNetworkRuntime (options = {}) {
     resolveLocalPublisherCatalog,
     retainAuthorizedRendition,
     releaseAuthorizedRendition,
+    listAssetRanges,
+    requestAssetBlocks,
     revalidateRetainedRenditions,
     retainArchiveDiscovery,
     releaseArchiveDiscovery,
@@ -2067,6 +2264,8 @@ export function createScopedNetworkApi (runtime) {
     resolveLocalPublisherCatalog: request => runtime.resolveLocalPublisherCatalog(request),
     retainAuthorizedRendition: request => runtime.retainAuthorizedRendition(request),
     releaseAuthorizedRendition: request => runtime.releaseAuthorizedRendition(request),
+    listAssetRanges: request => runtime.listAssetRanges(request),
+    requestAssetBlocks: request => runtime.requestAssetBlocks(request),
     retainArchiveDiscovery: request => runtime.retainArchiveDiscovery(request),
     releaseArchiveDiscovery: request => runtime.releaseArchiveDiscovery(request),
     publishArchiveRequest: request => runtime.publishArchiveRequest(request),

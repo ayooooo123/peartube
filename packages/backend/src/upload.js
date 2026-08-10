@@ -256,7 +256,17 @@ function stagedRollbackPendingError(error, rollbackError) {
   return markUploadCommitState(pending, 'uploadRollbackPending');
 }
 
-async function catalogOperationsAreAbsent(catalog, operations) {
+function isAcceptedCatalogReceipt(receipt) {
+  return receipt?.accepted === true;
+}
+
+function isExplicitlyRejectedCatalogReceipt(receipt) {
+  return receipt?.accepted === false &&
+    typeof receipt.rejectionCode === 'string' &&
+    receipt.rejectionCode.length > 0;
+}
+
+async function catalogOperationsAreRejected(catalog, operations) {
   if (typeof catalog?.getOperationReceipt !== 'function') return false;
   try {
     const receipts = await Promise.all(operations.map(operation => {
@@ -264,7 +274,7 @@ async function catalogOperationsAreAbsent(catalog, operations) {
       if (!operationId) throw new Error('operation id unavailable');
       return catalog.getOperationReceipt(operationId);
     }));
-    return receipts.every(receipt => receipt?.accepted !== true);
+    return receipts.every(isExplicitlyRejectedCatalogReceipt);
   } catch {
     return false;
   }
@@ -275,20 +285,19 @@ async function appendImmutablePublication(catalog, signedOperations) {
   try {
     receipts = await catalog.appendBatchAndConfirm(signedOperations);
   } catch (error) {
-    if (!await catalogOperationsAreAbsent(catalog, signedOperations)) {
+    if (!await catalogOperationsAreRejected(catalog, signedOperations)) {
       throw markUploadCommitState(error, 'uploadCommitUncertain');
     }
     throw error;
   }
-  if (!Array.isArray(receipts) || receipts.length !== signedOperations.length ||
-      receipts.some(receipt => receipt?.accepted !== true)) {
-    const error = new Error('Publisher catalog rejected upload projection');
-    if (receipts?.some?.(receipt => receipt?.accepted === true)) {
-      throw markUploadCommitState(error, 'uploadCommitUncertain');
-    }
-    throw error;
+  const complete = Array.isArray(receipts) && receipts.length === signedOperations.length;
+  if (complete && receipts.every(isAcceptedCatalogReceipt)) return receipts;
+
+  const error = new Error('Publisher catalog rejected upload projection');
+  if (!complete || !receipts.every(isExplicitlyRejectedCatalogReceipt)) {
+    throw markUploadCommitState(error, 'uploadCommitUncertain');
   }
-  return receipts;
+  throw error;
 }
 
 async function rollbackUploadedBlob(channel, blobResult) {
@@ -365,17 +374,21 @@ function uncertainCommitError(publication, message = 'Upload catalog commit requ
 
 async function resolvePersistedPublisherCatalog(catalogRegistry, publisherId) {
   if (!catalogRegistry) throw new Error('publisher catalog registry is unavailable');
+  if (typeof publisherId !== 'string' || !/^[0-9a-f]{64}$/.test(publisherId)) {
+    throw new Error('persisted publisher identity is unavailable');
+  }
+  const publisherIdBytes = b4a.from(publisherId, 'hex');
   if (typeof catalogRegistry.resolve === 'function') {
-    const binding = await catalogRegistry.resolve(publisherId);
+    const binding = await catalogRegistry.resolve(publisherIdBytes);
     const resolvedId = b4a.from(binding?.publisherId || []);
-    if (binding?.catalog && resolvedId.byteLength === 32 && b4a.toString(resolvedId, 'hex') === publisherId) {
+    if (binding?.catalog && resolvedId.byteLength === 32 && b4a.equals(resolvedId, publisherIdBytes)) {
       return binding.catalog;
     }
   }
   const bindings = await catalogRegistry.getWritableBindings?.();
   const binding = bindings?.find(candidate => {
     const id = b4a.from(candidate?.publisherId || []);
-    return id.byteLength === 32 && b4a.toString(id, 'hex') === publisherId;
+    return id.byteLength === 32 && b4a.equals(id, publisherIdBytes);
   });
   if (!binding?.catalog) throw new Error('persisted publisher catalog is unavailable');
   return binding.catalog;
@@ -393,7 +406,7 @@ async function reconcileUncertainUpload(channel, metadata, runtime = {}) {
   } catch (error) {
     throw uncertainCommitError(publication, error?.message);
   }
-  if (receipts.every(receipt => receipt?.accepted === true)) {
+  if (receipts.every(isAcceptedCatalogReceipt)) {
     try {
       await runtime.mediaCatalogProjection?.rebuild?.();
       const rendition = publication.manifest.body.renditions.find(candidate => candidate.renditionId === publication.renditionId);
@@ -416,14 +429,17 @@ async function reconcileUncertainUpload(channel, metadata, runtime = {}) {
       }
       if (typeof channel.updateVideo !== 'function') throw new Error('published metadata update is unavailable');
       const published = { ...metadata, publicationState: 'published' };
-      await channel.updateVideo(metadata.id, published, { syncPublic: true });
+      await channel.updateVideo(metadata.id, published, {
+        syncPublic: true,
+        commitAfterPublicSync: true,
+      });
       Object.assign(metadata, published);
     } catch (error) {
       throw uncertainCommitError(publication, error?.message);
     }
     return 'accepted';
   }
-  if (receipts.every(receipt => receipt?.accepted === false)) {
+  if (receipts.every(isExplicitlyRejectedCatalogReceipt)) {
     metadata.publicationState = 'replicationPending';
     await channel.updateVideo?.(metadata.id, metadata, { syncPublic: false });
     await reconcilePendingUpload(channel, metadata);

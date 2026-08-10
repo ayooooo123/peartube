@@ -100,6 +100,12 @@ function makePublishingManager({ store, deviceKeyPair, catalog, scopedNetwork = 
       async getWritableBindings() {
         return [{ publisherId: deviceKeyPair.publicKey, catalog }]
       },
+      async resolve(publisherId) {
+        assert.equal(Buffer.isBuffer(publisherId), true, 'persisted publisher ID is decoded before registry resolution')
+        assert.equal(publisherId.byteLength, 32)
+        assert.deepEqual(publisherId, deviceKeyPair.publicKey)
+        return { publisherId: deviceKeyPair.publicKey, catalog }
+      },
     },
     mediaCatalogProjection,
     scopedNetwork: scopedNetwork || {
@@ -323,7 +329,9 @@ test('catalog rejection with staged metadata rollback failure reconciles determi
   let appendAttempts = 0
   catalog.appendBatchAndConfirm = async operations => {
     appendAttempts++
-    if (appendAttempts === 1) return operations.map(() => ({ accepted: false }))
+    if (appendAttempts === 1) {
+      return operations.map(() => ({ accepted: false, rejectionCode: 'POLICY_REJECTED' }))
+    }
     return acceptBatch(operations)
   }
   const channel = makeChannel()
@@ -377,7 +385,9 @@ test('buffer upload reconciles rollback-pending metadata with the same determini
   let appendAttempts = 0
   catalog.appendBatchAndConfirm = async operations => {
     appendAttempts++
-    if (appendAttempts === 1) return operations.map(() => ({ accepted: false }))
+    if (appendAttempts === 1) {
+      return operations.map(() => ({ accepted: false, rejectionCode: 'POLICY_REJECTED' }))
+    }
     return acceptBatch(operations)
   }
   const channel = makeChannel()
@@ -550,7 +560,7 @@ test('catalog commit failure clears the newly written blob and leaves no upload 
       }
     },
     async getOperationReceipt() {
-      return { accepted: false }
+      return { accepted: false, rejectionCode: 'POLICY_REJECTED' }
     },
     async createLocalOperation(value) {
       return { ...value, recordId: Buffer.alloc(32, value.sequence) }
@@ -585,7 +595,7 @@ test('catalog commit failure clears the newly written blob and leaves no upload 
   assert.deepEqual(videos, [])
 })
 
-test('uncertain catalog commit retains staged metadata and reconciles accepted operations before reuse', async (t) => {
+test('uncertain accepted commit remains retryable across a post-commit public sync failure', async (t) => {
   const store = makeStore(t, 'uncertain-accepted')
   const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 17))
   const appended = []
@@ -604,7 +614,13 @@ test('uncertain catalog commit retains staged metadata and reconciles accepted o
   }
   const channel = makeChannel()
   channel.getVideo = async id => channel.videos.find(video => video.id === id) || null
-  channel.updateVideo = async (id, value) => {
+  let publicSyncAttempts = 0
+  channel.updateVideo = async (id, value, updateOptions = {}) => {
+    if (value.publicationState === 'published') {
+      assert.equal(updateOptions.commitAfterPublicSync, true)
+      publicSyncAttempts++
+      if (publicSyncAttempts === 1) throw new Error('injected accepted-public-sync failure')
+    }
     const index = channel.videos.findIndex(video => video.id === id)
     channel.videos[index] = value
   }
@@ -618,8 +634,7 @@ test('uncertain catalog commit retains staged metadata and reconciles accepted o
     scopedNetwork: {
       async retainAuthorizedRendition() {
         retainAttempts++
-        if (retainAttempts === 1) throw new Error('injected accepted-retention failure')
-        return { status: 'retained' }
+        return { status: retainAttempts === 1 ? 'retained' : 'already-retained' }
       },
       async publishLocalPublisherCatalog() { return { status: 'published' } },
     },
@@ -645,6 +660,7 @@ test('uncertain catalog commit retains staged metadata and reconciles accepted o
   assert.equal(cleared.length, 0)
   assert.equal(channel.blobWrites.length, 1)
   assert.equal(appendAttempts, 1)
+  assert.equal(publicSyncAttempts, 1)
 
   const retried = await manager.uploadFromBuffer(channel, Buffer.from('must not republish'), options)
   assert.equal(retried.success, true)
@@ -654,18 +670,20 @@ test('uncertain catalog commit retains staged metadata and reconciles accepted o
   assert.equal(cleared.length, 0)
   assert.equal(channel.blobWrites.length, 1)
   assert.equal(appendAttempts, 1)
+  assert.equal(publicSyncAttempts, 2)
 })
 
 test('uncertain catalog commit rolls back only after exact operations are confirmed rejected', async (t) => {
   const store = makeStore(t, 'uncertain-rejected')
   const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 18))
   const appended = []
-  let rejected = false
+  let receiptsState = 'mixed'
   const catalog = makeCatalog(deviceKeyPair, appended)
   const acceptBatch = catalog.appendBatchAndConfirm.bind(catalog)
   let appendAttempts = 0
   catalog.getOperationReceipt = async operationId => {
-    if (rejected) return { accepted: false }
+    if (receiptsState === 'bare-false') return { accepted: false }
+    if (receiptsState === 'rejected') return { accepted: false, rejectionCode: 'POLICY_REJECTED' }
     return Buffer.from(operationId).equals(Buffer.alloc(32, 1)) ? { accepted: true } : null
   }
   catalog.appendBatchAndConfirm = async operations => {
@@ -692,7 +710,16 @@ test('uncertain catalog commit rolls back only after exact operations are confir
   assert.equal(channel.videos.length, 1)
   assert.equal(cleared.length, 0)
 
-  rejected = true
+  receiptsState = 'bare-false'
+  const stillUncertain = await manager.uploadFromBuffer(channel, Buffer.from('must not replace'), options)
+  assert.equal(stillUncertain.success, false)
+  assert.equal(stillUncertain.commitUncertain, true)
+  assert.equal(channel.videos[0].publicationState, 'commitUncertain')
+  assert.equal(cleared.length, 0)
+  assert.equal(channel.blobWrites.length, 1)
+  assert.equal(appendAttempts, 1)
+
+  receiptsState = 'rejected'
   const retried = await manager.uploadFromBuffer(channel, Buffer.from('replacement bytes'), options)
   assert.equal(retried.success, true)
   assert.equal(retried.reused, undefined)

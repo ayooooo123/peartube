@@ -368,6 +368,49 @@ test('MultiWriterChannel round-trips the private immutable publication reconcili
   })
 })
 
+test('MultiWriterChannel publishes an uncertain candidate before committing its private state', async () => {
+  await withChannel(async (channel) => {
+    await channel.addVideo({
+      id: 'uncertain-finalization',
+      title: 'Accepted publication',
+      publicationState: 'commitUncertain',
+    })
+
+    let publicSyncAttempts = 0
+    channel._syncPublicBeeFromFeedChannel = async (options = {}) => {
+      publicSyncAttempts++
+      assert.equal(options.throwOnError, true)
+      assert.equal(
+        options.projectionVideos.find(video => video.id === 'uncertain-finalization')?.publicationState,
+        'published',
+      )
+      if (publicSyncAttempts === 1) throw new Error('injected public sync failure')
+    }
+
+    await assert.rejects(
+      channel.updateVideo(
+        'uncertain-finalization',
+        { publicationState: 'published' },
+        { syncPublic: true, commitAfterPublicSync: true },
+      ),
+      /injected public sync failure/,
+    )
+    assert.equal(
+      (await channel.getVideo('uncertain-finalization')).publicationState,
+      'commitUncertain',
+      'failed public sync leaves the durable retry anchor private',
+    )
+
+    await channel.updateVideo(
+      'uncertain-finalization',
+      { publicationState: 'published' },
+      { syncPublic: true, commitAfterPublicSync: true },
+    )
+    assert.equal((await channel.getVideo('uncertain-finalization')).publicationState, 'published')
+    assert.equal(publicSyncAttempts, 2)
+  })
+})
+
 test('MultiWriterChannel preserves legacy public sync defaults and honors explicit sync control', async () => {
   await withChannel(async (channel) => {
     let publicSyncs = 0

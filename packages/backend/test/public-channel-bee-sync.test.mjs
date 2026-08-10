@@ -434,9 +434,10 @@ test('syncFromChannel merges partial channel views without deleting missing publ
   })
 })
 
-test('syncFromChannel excludes replication-pending private drafts', async (t) => {
+test('syncFromChannel excludes and suppresses both private publication states', async (t) => {
   await withPublicBee(async (publicBee) => {
     await publicBee.putVideo('pending', { title: 'Previously public', uploadedAt: 0 })
+    await publicBee.putVideo('uncertain', { title: 'Previously public uncertain row', uploadedAt: 0 })
     await publicBee.syncFromChannel({
       keyHex: 'cc'.repeat(32),
       async getMetadata() {
@@ -445,6 +446,7 @@ test('syncFromChannel excludes replication-pending private drafts', async (t) =>
       async listVideos() {
         return [
           { id: 'pending', title: 'Pending', publicationState: 'replicationPending', uploadedAt: 1 },
+          { id: 'uncertain', title: 'Uncertain', publicationState: 'commitUncertain', uploadedAt: 1 },
           { id: 'legacy', title: 'Legacy public default', uploadedAt: 2 },
           { id: 'published', title: 'Published', publicationState: 'published', uploadedAt: 3 },
         ]
@@ -454,6 +456,7 @@ test('syncFromChannel excludes replication-pending private drafts', async (t) =>
     const videos = await publicBee.listVideos()
     t.alike(videos.map((video) => video.id), ['published', 'legacy'])
     t.absent(await publicBee.getVideo('pending'))
+    t.absent(await publicBee.getVideo('uncertain'))
   })
 })
 

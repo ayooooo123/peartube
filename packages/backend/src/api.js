@@ -980,7 +980,10 @@ export function createApi({
     if (!Array.isArray(records)) return records ?? []
     const visible = []
     for (const record of records) {
-      if (record?.publicationState === 'replicationPending') continue
+      if (
+        record?.publicationState === 'replicationPending' ||
+        record?.publicationState === 'commitUncertain'
+      ) continue
       if (record?.canonicalVisibility === 'suppressed') continue
       visible.push(record)
     }

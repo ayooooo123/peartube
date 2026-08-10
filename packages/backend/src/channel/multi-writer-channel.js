@@ -500,9 +500,9 @@ export class MultiWriterChannel extends ReadyResource {
     await this._syncPublicBeeFromFeedChannel()
   }
 
-  async _syncPublicBeeFromFeedChannel() {
+  async _syncPublicBeeFromFeedChannel(options = {}) {
     if (!this._publicProjectionActive || !this.publicBee?.writable) return
-    await this.publicBee.syncFromChannel(this)
+    await this.publicBee.syncFromChannel(this, options)
   }
  
   async _flushPublicDiscovery(discovery) {
@@ -1271,7 +1271,14 @@ export class MultiWriterChannel extends ReadyResource {
     }
   }
 
-  async updateVideo(id, updates, { syncPublic = !isPrivatePublicationState(updates?.publicationState) } = {}) {
+  async updateVideo(
+    id,
+    updates,
+    {
+      syncPublic = !isPrivatePublicationState(updates?.publicationState),
+      commitAfterPublicSync = false
+    } = {}
+  ) {
     if (!id) throw new Error('Video id required')
     await this._update()
     const [existing, existingDetails] = await Promise.all([
@@ -1289,17 +1296,37 @@ export class MultiWriterChannel extends ReadyResource {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       logicalClock: nextClock
     })
+    const decodedDetails = decodeStoredContentDetails(existingDetails) || {}
     const detailsPatch = pickDefinedFields(updates, CONTENT_DETAIL_FIELDS)
     const details = Object.keys(detailsPatch).length > 0
-      ? normalizeContentDetails({ ...(decodeStoredContentDetails(existingDetails) || {}), ...detailsPatch, id })
+      ? normalizeContentDetails({ ...decodedDetails, ...detailsPatch, id })
       : null
+
+    if (commitAfterPublicSync) {
+      if (
+        !syncPublic ||
+        decodedDetails.publicationState !== 'commitUncertain' ||
+        details?.publicationState !== 'published'
+      ) {
+        throw new Error('Commit-uncertain finalization requires a published public sync')
+      }
+      const projectionVideos = await this.listVideos()
+      const candidate = { ...videoMeta, ...details }
+      const index = projectionVideos.findIndex(video => video.id === id)
+      if (index < 0) throw new Error('Video not found: ' + id)
+      projectionVideos[index] = candidate
+      await this._syncPublicBeeFromFeedChannel({
+        projectionVideos,
+        throwOnError: true
+      })
+    }
 
     await this.db.insert('@peartubeChannel/videos', videoMeta)
     if (details) await this.db.insert('@peartubeChannel/contentDetails', encodeContentDetails(details))
     await this._flush()
     if (isPrivatePublicationState(details?.publicationState)) {
       await this._suppressPublicVideo(id)
-    } else if (syncPublic) {
+    } else if (syncPublic && !commitAfterPublicSync) {
       await this._syncPublicBeeFromFeedChannel()
     }
   }

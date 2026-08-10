@@ -395,12 +395,13 @@ test('concurrent ingestion cannot regress a publisher cursor or normalized slice
   let releaseResolve
   const release = new Promise(resolve => { releaseResolve = resolve })
   const staleIndex = {
-    async getSourceCursor(input) {
-      const cursor = await f.index.getSourceCursor(input)
+    async getPublisherSourceCursor(input) {
+      const cursor = await f.index.getPublisherSourceCursor(input)
       observedResolve()
       await release
       return cursor
     },
+    getSourceCursor: input => f.index.getSourceCursor(input),
     getPublisherAdmissionLimits: input => f.index.getPublisherAdmissionLimits(input),
     replacePublisherSlice: input => f.index.replacePublisherSlice(input),
     applyPublisherChanges: input => f.index.applyPublisherChanges(input),
@@ -430,6 +431,7 @@ test('re-ingesting the same pinned head is an idempotent no-op with no store mut
   const calls = { replace: 0, apply: 0 }
   const observedIndex = {
     getSourceCursor: input => f.index.getSourceCursor(input),
+    getPublisherSourceCursor: input => f.index.getPublisherSourceCursor(input),
     getPublisherAdmissionLimits: input => f.index.getPublisherAdmissionLimits(input),
     replacePublisherSlice(input) { calls.replace++; return f.index.replacePublisherSlice(input) },
     applyPublisherChanges(input) { calls.apply++; return f.index.applyPublisherChanges(input) },
@@ -478,6 +480,7 @@ test('aggregate normalized rows and bytes are bounded before index mutation', as
     const boundedIndex = {
       getPublisherAdmissionLimits() { return limits },
       getSourceCursor: input => f.index.getSourceCursor(input),
+      getPublisherSourceCursor: input => f.index.getPublisherSourceCursor(input),
       replacePublisherSlice(input) { calls.replace++; return f.index.replacePublisherSlice(input) },
       applyPublisherChanges(input) { calls.apply++; return f.index.applyPublisherChanges(input) },
     }
@@ -562,11 +565,12 @@ test('real index transaction failure rolls back source derived rows and cursor t
   const manifest = publicationManifest(f)
   await putProjection(f, 'publication', manifest.publicationId, publicationOperation(f, manifest, 1))
   const faultingIndex = {
-    async getSourceCursor(input) {
-      const cursor = await f.index.getSourceCursor(input)
+    async getPublisherSourceCursor(input) {
+      const cursor = await f.index.getPublisherSourceCursor(input)
       f.armIndexFailure()
       return cursor
     },
+    getSourceCursor: input => f.index.getSourceCursor(input),
     getPublisherAdmissionLimits: input => f.index.getPublisherAdmissionLimits(input),
     replacePublisherSlice: input => f.index.replacePublisherSlice(input),
     applyPublisherChanges: input => f.index.applyPublisherChanges(input),
@@ -617,7 +621,7 @@ test('zero-expiry authorization is permanent and pinned ingestion never reads mu
   t.alike(f.checkouts, { opened: 1, closed: 1 })
 })
 
-test('same-fork cursor regression fails closed instead of replacing newer indexed state', async (t) => {
+test('same-fork cursor regression repairs the publisher to the pinned current source', async (t) => {
   const f = await fixture(t)
   const manifest = publicationManifest(f)
   await putProjection(f, 'publication', manifest.publicationId, publicationOperation(f, manifest, 1))
@@ -630,18 +634,23 @@ test('same-fork cursor regression fails closed instead of replacing newer indexe
     sourceHead: cursor.sourceHead + 10,
   }
   await f.index.applyPublisherChanges({ publisherId: f.publisherId, operations: [], cursor: futureCursor })
-  const beforeRows = await publisherRows(f.indexStore, f.publisherId)
 
-  await t.exception(
-    catalogIngestor.ingest({ publisherId: f.publisherId, descriptor: f.descriptor, catalog: f.catalog }),
-    /ahead of the pinned catalog head/,
-  )
+  const repaired = await catalogIngestor.ingest({
+    publisherId: f.publisherId,
+    descriptor: f.descriptor,
+    catalog: f.catalog,
+  })
 
-  t.alike(await publisherRows(f.indexStore, f.publisherId), beforeRows)
-  t.alike(await f.index.getSourceCursor({ publisherId: f.publisherId, catalogEpoch: 0 }), futureCursor)
+  t.is(repaired.status, 'repaired')
+  t.is(repaired.mode, 'repair')
+  t.is(repaired.reason, 'source-history-unavailable')
+  const rows = await publisherRows(f.indexStore, f.publisherId)
+  t.is(rows.publicationProjections.length, 1)
+  t.alike(rows.sourceCursors[0], repaired.cursor)
+  t.unlike(rows.sourceCursors[0], futureCursor)
 })
 
-test('lower-version cursor with another catalog and descriptor identity fails before diffing', async (t) => {
+test('lower-version cursor with another catalog and descriptor identity repairs from the pinned source', async (t) => {
   const f = await fixture(t)
   const manifest = publicationManifest(f)
   await putProjection(f, 'publication', manifest.publicationId, publicationOperation(f, manifest, 1))
@@ -654,16 +663,32 @@ test('lower-version cursor with another catalog and descriptor identity fails be
     catalogBootstrapKey: 'fd'.repeat(32),
     lastVerifiedDescriptor: 'fc'.repeat(32),
   }
-  await f.index.applyPublisherChanges({ publisherId: f.publisherId, operations: [], cursor: mismatchedCursor })
-  const beforeRows = await publisherRows(f.indexStore, f.publisherId)
+  const storedRows = await publisherRows(f.indexStore, f.publisherId)
+  const replacementRows = Object.entries(storedRows).flatMap(([shortName, records]) => (
+    shortName === 'sourceCursors'
+      ? []
+      : records.map(record => ({ collection: COLLECTIONS[shortName], record }))
+  ))
+  await f.index.replacePublisherSlice({
+    publisherId: f.publisherId,
+    rows: replacementRows,
+    cursor: mismatchedCursor,
+    expectedCursor: cursor,
+  })
 
-  await t.exception(
-    catalogIngestor.ingest({ publisherId: f.publisherId, descriptor: f.descriptor, catalog: f.catalog }),
-    /cursor.*identity|identity.*cursor/,
-  )
+  const repaired = await catalogIngestor.ingest({
+    publisherId: f.publisherId,
+    descriptor: f.descriptor,
+    catalog: f.catalog,
+  })
 
-  t.alike(await publisherRows(f.indexStore, f.publisherId), beforeRows)
-  t.alike(await f.index.getSourceCursor({ publisherId: f.publisherId, catalogEpoch: 0 }), mismatchedCursor)
+  t.is(repaired.status, 'repaired')
+  t.is(repaired.mode, 'repair')
+  t.is(repaired.reason, 'source-identity-changed')
+  const rows = await publisherRows(f.indexStore, f.publisherId)
+  t.is(rows.publicationProjections.length, 1)
+  t.alike(rows.sourceCursors[0], repaired.cursor)
+  t.unlike(rows.sourceCursors[0], mismatchedCursor)
 })
 
 test('unsupported non-ASCII projection keys fail closed before cursor advancement', async (t) => {

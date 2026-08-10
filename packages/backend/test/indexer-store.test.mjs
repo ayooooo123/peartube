@@ -695,3 +695,61 @@ test('cursor compare-and-swap prevents stale replacement and incremental commits
     advancedCursor,
   )
 })
+
+
+test('publisher cursor lookup and replacement CAS span catalog epoch changes', async (t) => {
+  const { index, store } = await fixture(t)
+  const initial = fullSlice(PUBLISHER_A)
+  await index.replacePublisherSlice({ ...initial, expectedCursor: null })
+
+  assert.deepEqual(
+    await index.getPublisherSourceCursor({ publisherId: PUBLISHER_A }),
+    initial.cursor,
+  )
+  assert.equal(await index.getPublisherSourceCursor({ publisherId: PUBLISHER_B }), null)
+  await assert.rejects(
+    index.getPublisherSourceCursor({ publisherId: PUBLISHER_A, catalogEpoch: 1 }),
+    /unsupported field/,
+  )
+
+  const epochTwo = cursor(PUBLISHER_A, {
+    catalogEpoch: 2,
+    viewVersion: 1,
+    sourceHead: 1,
+  })
+  const beforeRejectedApply = await publisherRows(store, PUBLISHER_A)
+  for (const expectedCursor of [initial.cursor, undefined]) {
+    let rejection = null
+    try {
+      const input = {
+        publisherId: PUBLISHER_A,
+        operations: [],
+        cursor: epochTwo,
+      }
+      if (expectedCursor !== undefined) input.expectedCursor = expectedCursor
+      await index.applyPublisherChanges(input)
+    } catch (error) {
+      rejection = error
+    }
+    assert.ok(rejection)
+    assert.match(rejection.message, /identity change requires publisher replacement/)
+  }
+  assert.deepEqual(await publisherRows(store, PUBLISHER_A), beforeRejectedApply)
+  assert.deepEqual(await index.getPublisherSourceCursor({ publisherId: PUBLISHER_A }), initial.cursor)
+  await index.replacePublisherSlice({
+    ...initial,
+    cursor: epochTwo,
+    expectedCursor: initial.cursor,
+  })
+  const after = await publisherRows(store, PUBLISHER_A)
+  await assert.rejects(
+    index.replacePublisherSlice({
+      ...initial,
+      cursor: cursor(PUBLISHER_A, { catalogEpoch: 3 }),
+      expectedCursor: initial.cursor,
+    }),
+    /source cursor changed/,
+  )
+  assert.deepEqual(await publisherRows(store, PUBLISHER_A), after)
+  assert.deepEqual(await index.getPublisherSourceCursor({ publisherId: PUBLISHER_A }), epochTwo)
+})

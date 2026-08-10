@@ -43,6 +43,7 @@ const OPERATION_FIELDS = new Set(['type', 'collection', 'record'])
 const EVICTION_FIELDS = new Set(['publisherId', 'reason'])
 const PUBLISHER_FIELDS = new Set(['publisherId'])
 const SOURCE_CURSOR_FIELDS = new Set(['publisherId', 'catalogEpoch'])
+const PUBLISHER_CURSOR_FIELDS = new Set(['publisherId'])
 const CURSOR_RECORD_FIELDS = Object.freeze([
   'publisherId',
   'catalogEpoch',
@@ -155,6 +156,14 @@ function prepareSourceCursorSelector(input) {
     })
   }
   return { publisherId, catalogEpoch: input.catalogEpoch }
+}
+
+function preparePublisherCursorSelector(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw invalidOperation('publisher cursor selector must be an object')
+  }
+  assertOnlyFields(input, PUBLISHER_CURSOR_FIELDS, 'publisher cursor selector')
+  return { publisherId: validatePublisherId(input.publisherId) }
 }
 
 function rowKeyToken(collection, record) {
@@ -411,11 +420,36 @@ async function assertNotTombstoned(tx, publisherId) {
 }
 
 
+async function getPublisherCursor(tx, publisherId) {
+  const records = await tx.find(INDEXES.publisherPrefix.sourceCursors, { publisherId }, { limit: 2 }).toArray()
+  if (records.length > 1) {
+    throw invalidOperation(`publisher ${publisherId} has multiple source cursors`, {
+      scope: 'cursor',
+      scopeId: publisherId,
+    })
+  }
+  return records[0] || null
+}
+
 async function assertExpectedCursor(tx, prepared) {
   if (prepared.expectedCursor === undefined) return
-  const stored = await tx.get(COLLECTIONS.sourceCursors, prepared.cursor.record)
+  const stored = await getPublisherCursor(tx, prepared.publisherId)
   if (!sameCursorRecord(stored, prepared.expectedCursor)) {
     throw invalidOperation('source cursor changed since ingestion preparation', {
+      scope: 'cursor',
+      scopeId: prepared.publisherId,
+    })
+  }
+}
+
+async function assertIncrementalCursorIdentity(tx, prepared) {
+  const previous = await getPublisherCursor(tx, prepared.publisherId)
+  if (!previous) return
+  const next = prepared.cursor.record
+  if (previous.catalogEpoch !== next.catalogEpoch ||
+      previous.catalogBootstrapKey !== next.catalogBootstrapKey ||
+      previous.lastVerifiedDescriptor !== next.lastVerifiedDescriptor) {
+    throw invalidOperation('incremental source identity change requires publisher replacement', {
       scope: 'cursor',
       scopeId: prepared.publisherId,
     })
@@ -436,6 +470,7 @@ async function replaceSlice(tx, prepared, limits) {
 async function applyChanges(tx, prepared, limits) {
   await assertNotTombstoned(tx, prepared.publisherId)
   await assertExpectedCursor(tx, prepared)
+  await assertIncrementalCursorIdentity(tx, prepared)
   const currentPublisher = await getPublisherCounter(tx, prepared.publisherId)
   if (!currentPublisher) await collectPublisherRows(tx, prepared.publisherId, 0)
   const current = usageOf(currentPublisher)
@@ -721,6 +756,12 @@ export async function createIndexerStore(options) {
     getSourceCursor(input) {
       return accept(() => prepareSourceCursorSelector(input), async (tx, selector) => {
         const record = await tx.get(COLLECTIONS.sourceCursors, selector)
+        return record ? snapshotRecord(COLLECTIONS.sourceCursors, record) : null
+      })
+    },
+    getPublisherSourceCursor(input) {
+      return accept(() => preparePublisherCursorSelector(input), async (tx, selector) => {
+        const record = await getPublisherCursor(tx, selector.publisherId)
         return record ? snapshotRecord(COLLECTIONS.sourceCursors, record) : null
       })
     },

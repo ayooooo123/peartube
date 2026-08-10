@@ -3,6 +3,8 @@ import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 
 import * as assets from '../src/assets/index.js'
+import { encodeCanonical, hashCanonical, sortPlain } from '../src/publisher/canonical.js'
+import { createApplicationEnvelope } from '../src/records/application-envelope.js'
 
 const publisher = crypto.keyPair(Buffer.alloc(32, 41))
 const publicInfohash = b4a.toString(b4a.alloc(20, 42), 'hex')
@@ -80,6 +82,7 @@ test('partial season-pack mappings preserve canonical per-file provenance and in
   t.is(bundle.sourceName, 'Show Season 01')
   t.is(bundle.sourceRoot, sourceRoot)
   t.is(bundle.publicInfohash, publicInfohash)
+  t.is(bundle.publicTrackerIndependent, true)
   t.unlike(bundle.entries[0].assetId, bundle.entries[1].assetId)
   t.unlike(first.core.key, second.core.key)
   t.unlike(first.rendition.renditionId, second.rendition.renditionId)
@@ -133,6 +136,32 @@ test('signed bundle mappings survive canonical encode, decode, and replay', asyn
     },
   }
   t.exception(() => assets.encodeAssetBundleManifest(tampered), /bundleId|body mismatch/)
+})
+
+test('public infohash attestation cannot be bypassed during derivation, signing, or verification', async (t) => {
+  const first = publication(10, 10, 'Episode 10', 100_000)
+  const second = publication(11, 11, 'Episode 11', 110_000)
+  const entries = seasonEntries(first, second)
+  const valid = seasonBundle(first, second)
+  const { bundleId: ignoredBundleId, publicTrackerIndependent: ignoredAttestation, ...unattestedUnsigned } = valid
+  const canonicalUnsigned = sortPlain(unattestedUnsigned)
+  const bundleId = b4a.toString(hashCanonical(assets.ASSET_BUNDLE_ID_DOMAIN, canonicalUnsigned), 'hex')
+  const body = sortPlain({ bundleId, ...canonicalUnsigned })
+  const envelope = createApplicationEnvelope({
+    recordType: assets.ASSET_BUNDLE_RECORD_TYPE,
+    body: encodeCanonical(body),
+    keyPair: publisher,
+    issuedAt: 100,
+  })
+  const unattested = { bundleId, body, envelope }
+
+  t.exception(() => assets.deriveAssetBundleId({
+    sourceKind: 'public-torrent',
+    publicInfohash,
+    entries,
+  }), /attestation/i)
+  t.exception(() => assets.signAssetBundleManifest({ manifest: body, keyPair: publisher }), /attestation/i)
+  t.absent(await assets.verifyAssetBundleManifest(unattested, { allowedSigners: [publisher.publicKey], now: 101 }))
 })
 
 test('publication batches validate mapped publications while sibling mappings remain metadata only', (t) => {
@@ -198,4 +227,55 @@ test('bundle manifests reject private locators, credentials, and unbounded sourc
   t.exception(() => assets.createAssetBundleManifest({ ...base, entries: [{ ...entry, sourcePath: '../secret.mkv' }] }), /sourcePath/i)
   t.exception(() => assets.createAssetBundleManifest({ ...base, entries: [] }), /entries/i)
   t.exception(() => assets.createAssetBundleManifest({ ...base, sourceName: 'x'.repeat(513) }), /sourceName/i)
+  const privatePaths = [
+    'C:private\\episode.mkv',
+    'C:\\private\\episode.mkv',
+    '\\private\\episode.mkv',
+    '/private/episode.mkv',
+    '//server/share/episode.mkv',
+    'https://cdn.invalid/episode.mkv',
+    'urn:private:episode',
+  ]
+  for (const sourcePath of privatePaths) {
+    t.exception(() => assets.createAssetBundleManifest({
+      ...base,
+      entries: [{ ...entry, sourcePath }],
+    }), /sourcePath|locator/i)
+  }
+  const privateNames = [
+    'C:private\\season',
+    'C:\\private\\season',
+    '\\private\\season',
+    '/private/season',
+    '//server/share',
+    'https://tracker.invalid/season',
+    'urn:private:season',
+    'private/season',
+  ]
+  for (const sourceName of privateNames) {
+    t.exception(() => assets.createAssetBundleManifest({ ...base, sourceName }), /sourceName|locator/i)
+  }
+})
+
+test('bundle source coordinates reject nonadjacent duplicate paths and all duplicate indexes', (t) => {
+  const first = publication(12, 12, 'Episode 12', 120_000)
+  const entry = seasonEntries(first, first)[0]
+  const mapped = (sourcePath, sourceIndex) => ({ ...entry, sourcePath, sourceIndex })
+
+  t.exception(() => assets.createAssetBundleManifest({
+    sourceKind: 'folder',
+    entries: [
+      mapped('same.mkv', 0),
+      mapped('middle.mkv', 1),
+      mapped('./same.mkv', 2),
+    ],
+  }), /distinct source paths/i)
+  t.exception(() => assets.createAssetBundleManifest({
+    sourceKind: 'folder',
+    entries: [
+      mapped('first.mkv', 7),
+      mapped('second.mkv', 7),
+    ],
+  }), /distinct source .*indexes/i)
+
 })

@@ -49,9 +49,27 @@ function boundedText(value, name, maxBytes, required = false) {
   return normalized
 }
 
+function normalizeSourceName(value) {
+  const sourceName = boundedText(value, 'sourceName', MAX_SOURCE_NAME_BYTES)
+  if (sourceName == null) return null
+  if (sourceName.includes('/') ||
+      sourceName.includes('\\') ||
+      /^[a-z][a-z0-9+.-]*:[^\s]/i.test(sourceName)) {
+    throw new Error('sourceName must not contain a source locator')
+  }
+  return sourceName
+}
+
 function normalizeSourcePath(value) {
-  const source = boundedText(value, 'sourcePath', MAX_SOURCE_PATH_BYTES, true).replaceAll('\\', '/')
-  if (source.startsWith('/') || /^[a-z]:\//i.test(source) || source.includes('?') || source.includes('#')) {
+  const raw = boundedText(value, 'sourcePath', MAX_SOURCE_PATH_BYTES, true)
+  if (raw.startsWith('/') ||
+      raw.startsWith('\\') ||
+      /^[a-z]:/i.test(raw) ||
+      /^[a-z][a-z0-9+.-]*:[^\s]/i.test(raw)) {
+    throw new Error('sourcePath must be a relative path without locator material')
+  }
+  const source = raw.replaceAll('\\', '/')
+  if (source.startsWith('/') || source.includes('?') || source.includes('#')) {
     throw new Error('sourcePath must be a relative path without locator material')
   }
   const parts = source.split('/').filter(part => part !== '' && part !== '.')
@@ -105,32 +123,33 @@ function compareEntries(a, b) {
     compareStrings(a.assetId, b.assetId)
 }
 
-function normalizeUnsignedBundle(input = {}, requirePublicAttestation = false) {
+function normalizeUnsignedBundle(input = {}) {
   if (!SOURCE_KINDS.has(input.sourceKind)) throw new Error('sourceKind must identify a bounded public source kind')
   const entries = input.entries || []
   if (!Array.isArray(entries) || entries.length === 0 || entries.length > MAX_BUNDLE_ENTRIES) {
     throw new Error('entries must be a non-empty bounded array')
   }
   const normalizedEntries = entries.map(normalizeEntry).sort(compareEntries)
-  for (let index = 1; index < normalizedEntries.length; index++) {
-    const previous = normalizedEntries[index - 1]
-    const current = normalizedEntries[index]
-    if (previous.sourcePath === current.sourcePath ||
-        (previous.sourceIndex != null && previous.sourceIndex === current.sourceIndex)) {
-      throw new Error('bundle entries must have distinct source paths and indexes')
-    }
+  const sourcePaths = new Set()
+  const sourceIndexes = new Set()
+  for (const entry of normalizedEntries) {
+    if (sourcePaths.has(entry.sourcePath)) throw new Error('bundle entries must have distinct source paths')
+    sourcePaths.add(entry.sourcePath)
+    if (entry.sourceIndex == null) continue
+    if (sourceIndexes.has(entry.sourceIndex)) throw new Error('bundle entries must have distinct source indexes')
+    sourceIndexes.add(entry.sourceIndex)
   }
 
   let publicInfohash = null
   if (input.publicInfohash != null) {
     if (input.sourceKind !== 'public-torrent') throw new Error('publicInfohash requires public-torrent sourceKind')
-    if (requirePublicAttestation && input.publicTrackerIndependent !== true) {
+    if (input.publicTrackerIndependent !== true) {
       throw new Error('publicInfohash requires an explicit tracker-independent public attestation')
     }
     publicInfohash = normalizeInfohash(input.publicInfohash)
   }
 
-  const sourceName = boundedText(input.sourceName, 'sourceName', MAX_SOURCE_NAME_BYTES)
+  const sourceName = normalizeSourceName(input.sourceName)
   const sourceRoot = input.sourceRoot == null ? null : toHex(input.sourceRoot, 32, 'sourceRoot')
   return sortPlain({
     version: ASSET_BUNDLE_VERSION,
@@ -138,6 +157,7 @@ function normalizeUnsignedBundle(input = {}, requirePublicAttestation = false) {
     ...(sourceName == null ? {} : { sourceName }),
     ...(sourceRoot == null ? {} : { sourceRoot }),
     ...(publicInfohash == null ? {} : { publicInfohash }),
+    ...(publicInfohash == null ? {} : { publicTrackerIndependent: true }),
     entries: normalizedEntries,
   })
 }
@@ -176,7 +196,7 @@ export function deriveAssetBundleId(input = {}) {
 
 export function createAssetBundleManifest(input = {}) {
   assertNoPrivateSourceMaterial(input)
-  const unsignedBody = normalizeUnsignedBundle(input, true)
+  const unsignedBody = normalizeUnsignedBundle(input)
   return sortPlain({ bundleId: bundleIdFor(unsignedBody), ...unsignedBody })
 }
 

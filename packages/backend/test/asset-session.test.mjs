@@ -1,5 +1,6 @@
 import test from 'brittle'
 import b4a from 'b4a'
+import c from 'compact-encoding'
 import Corestore from 'corestore'
 import crypto from 'hypercore-crypto'
 import { EventEmitter } from 'node:events'
@@ -240,6 +241,66 @@ test('cached possession quarantines conflicting descriptor state before core.has
   t.absent(session.core)
 })
 
+test('proof metadata classification requires fresh upgrades but permits exact cached no-upgrade proofs', async (t) => {
+  const descriptor = createStaticAssetManifest({
+    treeHash: b4a.alloc(32, 63),
+    blockLength: 1,
+    byteLength: ASSET_BLOCK_SIZE,
+  })
+  const proof = {
+    fork: 0,
+    block: { index: 0, nodes: [], value: null },
+    hash: null,
+    seek: null,
+    upgrade: null,
+    manifest: null,
+  }
+  const fresh = createAssetSession({
+    coreRef: descriptor,
+    core: {
+      key: descriptor.key,
+      length: 0,
+      byteLength: 0,
+      async ready() {},
+      async close() {},
+    },
+  })
+  await fresh.ready()
+  t.exception(() => fresh.validateProofMetadata({
+    index: 0,
+    proof,
+    byteLength: ASSET_BLOCK_SIZE,
+  }), /fresh asset core requires an exact descriptor-length upgrade proof/)
+
+  let cachedApplications = 0
+  const cached = createAssetSession({
+    coreRef: descriptor,
+    core: {
+      key: descriptor.key,
+      length: descriptor.length,
+      byteLength: descriptor.byteLength,
+      async ready() {},
+      async has() { return true },
+      async applyProof() { cachedApplications++; return true },
+      async close() {},
+    },
+  })
+  await cached.ready()
+  t.is(cached.validateProofMetadata({
+    index: 0,
+    proof,
+    byteLength: ASSET_BLOCK_SIZE,
+  }), ASSET_BLOCK_SIZE)
+  t.alike(await cached.verifyBlock({
+    index: 0,
+    proof,
+    value: b4a.alloc(ASSET_BLOCK_SIZE),
+  }), { index: 0 })
+  t.is(cachedApplications, 1)
+  await fresh.close()
+  await cached.close()
+})
+
 test('closed asset sessions reject late proof application and release their owned core', async (t) => {
   const descriptor = createStaticAssetManifest({
     treeHash: b4a.alloc(32, 61),
@@ -451,6 +512,54 @@ test('asset block receivers reject bytes before a complete canonical proof', asy
       offset: 0,
       totalBytes: 1,
       chunk: b4a.from([1]),
+    }),
+  }))
+  await until(() => assetChannel.channel.closed)
+  await rejected
+  t.is(applied, 0)
+})
+
+test('fresh scoped receivers reject canonical no-upgrade proof metadata before block bytes', async (t) => {
+  let applied = 0
+  const { assetChannel, descriptor, runtime } = await scopedAssetHarness(t, {
+    length: 0,
+    byteLength: 0,
+    async applyProof() { applied++; return true },
+  })
+  const pending = runtime.requestAssetBlocks({
+    assetId: descriptor.assetId,
+    startBlock: 0,
+    endBlock: 1,
+  })
+  const rejected = t.exception(pending, /unavailable|peer|upgrade/)
+  await until(() => sentAssetRequests(assetChannel).length === 1)
+  const [{ transferId }] = sentAssetRequests(assetChannel)
+  const proof = c.encode(c.any, {
+    index: 0,
+    byteLength: ASSET_BLOCK_SIZE,
+    proof: {
+      fork: 0,
+      block: { index: 0, nodes: [], value: null },
+      hash: null,
+      seek: null,
+      upgrade: null,
+      manifest: null,
+    },
+  })
+  assetChannel.spec.messages[0].onmessage(encodePeerFrame({
+    purpose: 'asset',
+    type: 'asset-block-response',
+    requestId: 1,
+    payload: encodeAssetBlockResponse({
+      assetId: descriptor.assetId,
+      transferId,
+      startBlock: 0,
+      endBlock: 1,
+      blockIndex: 0,
+      kind: 'proof',
+      offset: 0,
+      totalBytes: proof.byteLength,
+      chunk: proof,
     }),
   }))
   await until(() => assetChannel.channel.closed)

@@ -43,6 +43,7 @@ export function createAssetSession(options = {}) {
   let core = options.core || null
   let ownsCore = options.ownsCore === true
   let readyPromise = null
+  let readyHandle = null
   let quarantinePromise = null
   let permanentlyPoisoned = false
   let closed = false
@@ -73,7 +74,15 @@ export function createAssetSession(options = {}) {
     if (!proof || typeof proof !== 'object' || !proof.block || proof.block.index !== index || proof.block.value !== null) {
       throw new Error('asset block proof metadata is invalid')
     }
-    if (proof.upgrade && (proof.upgrade.length !== coreRef.length || proof.upgrade.start !== 0)) {
+    const handle = core
+    if (!handle || readyHandle !== handle) throw new Error('asset session core is not ready')
+    if (emptyCoreState(handle)) {
+      if (!proof.upgrade || proof.upgrade.start !== 0 || proof.upgrade.length !== coreRef.length) {
+        throw new Error('fresh asset core requires an exact descriptor-length upgrade proof')
+      }
+    } else if (!exactCoreState(handle, coreRef)) {
+      throw new Error('asset core state conflicts with the verified descriptor')
+    } else if (proof.upgrade && (proof.upgrade.length !== coreRef.length || proof.upgrade.start !== 0)) {
       throw new Error('asset block proof length does not match the verified descriptor')
     }
     return expectedBytes
@@ -87,6 +96,7 @@ export function createAssetSession(options = {}) {
     if (core === handle) {
       core = null
       readyPromise = null
+      readyHandle = null
       if (injected) permanentlyPoisoned = true
     }
     const operation = (async () => {
@@ -132,6 +142,7 @@ export function createAssetSession(options = {}) {
         if (!key || !b4a.equals(b4a.from(key), descriptor.key)) {
           throw new Error('opened asset core key does not match the reconstructed static manifest')
         }
+        readyHandle = handle
         return handle
       })
     }
@@ -252,6 +263,7 @@ export function createAssetSession(options = {}) {
       const handle = core
       core = null
       readyPromise = null
+      readyHandle = null
       if (handle && ownsCore) await handle.close?.()
     })()
     return closePromise

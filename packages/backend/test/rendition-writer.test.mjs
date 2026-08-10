@@ -85,6 +85,35 @@ test('rendition writer requires a store and source and embeds the real static de
   t.absent(first.core.secretKey)
   await t.exception(first.core.append(b4a.from('forbidden')))
 })
+test('rendition writer accepts explicit multi-segment bounds against realized bytes', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'peartube-rendition-segments-'))
+  const store = new Corestore(directory)
+  const writer = createImmutableRenditionWriter()
+  await writer.initialize()
+
+  t.teardown(async () => {
+    await store.close()
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  const result = await writer.writeRendition({
+    store,
+    source: [bytes(3, 6), bytes(4, 6)],
+    purpose: 'original',
+    format: 'video/mp4',
+    segments: [
+      { timeStartMs: 0, durationMs: 500, byteStart: 0, byteEnd: 6, independent: true },
+      { timeStartMs: 500, durationMs: 500, byteStart: 6, byteEnd: 12, independent: true },
+    ],
+  })
+
+  t.is(result.staticAsset.byteLength, 12)
+  t.is(result.segmentIndex.mediaByteLength, 12)
+  t.is(result.segmentIndex.entryCount, 2)
+  t.alike(result.segmentIndex.entries.map(entry => [entry.byteStart, entry.byteEnd]), [[0, 6], [6, 12]])
+  await result.core.close()
+})
+
 
 test('rendition writer releases write state and staging storage after cancellation', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'peartube-rendition-cancel-'))

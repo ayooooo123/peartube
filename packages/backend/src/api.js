@@ -2116,24 +2116,33 @@ export function createApi({
     if (sourceIsManuallyPinned(locators)) return authorize({ refusalReason: 'source-pinned' })
 
     const collectLockedEvidence = () => collectSourceOffloadEvidence(publicationId, { manifest, locators })
-    if (typeof sourceOffload.deleteSource === 'function') {
-      const authorization = await authorize({ collectEvidence: collectLockedEvidence })
-      if (!authorization.success) return authorization
-      return sourceOffload.deleteSource({ publicationId, manifest, locators })
-    }
-
     const locator = locators[0]
+    const customDeletion = typeof sourceOffload.deleteSource === 'function'
     let releasedOwnership = false
     let core = null
     let ownership = null
+    const reacquireReleasedOwnership = async () => {
+      if (!releasedOwnership || typeof scopedNetwork?.retainAuthorizedRendition !== 'function') return
+      await scopedNetwork.retainAuthorizedRendition({
+        manifest,
+        renditionId: locator.renditionId,
+        ownerId: publicationId,
+        start: locator.start,
+        end: locator.end,
+      })
+      releasedOwnership = false
+    }
     try {
-      core = openStaticSourceCore(locator)
-      ownership = ownManagedApiResource(core, 'close')
-      await core.ready()
-      if (sourceIsManuallyPinned(locators)) return authorize({ refusalReason: 'source-pinned' })
+      if (!customDeletion) {
+        core = openStaticSourceCore(locator)
+        ownership = ownManagedApiResource(core, 'close')
+        await core.ready()
+        if (sourceIsManuallyPinned(locators)) return authorize({ refusalReason: 'source-pinned' })
+        if (typeof core.clear !== 'function') return { success: false, reason: 'delete-unavailable' }
+      }
+
       const authorization = await authorize({ collectEvidence: collectLockedEvidence })
       if (!authorization.success) return authorization
-      if (typeof core.clear !== 'function') return { success: false, reason: 'delete-unavailable' }
       if (typeof scopedNetwork?.releaseAuthorizedRendition === 'function') {
         const released = await scopedNetwork.releaseAuthorizedRendition({
           renditionId: locator.renditionId,
@@ -2145,6 +2154,13 @@ export function createApi({
           return { success: true, freedBytes: 0, sharedRetention: true }
         }
       }
+
+      if (customDeletion) {
+        const result = await sourceOffload.deleteSource({ publicationId, manifest, locators })
+        if (result?.success !== true) await reacquireReleasedOwnership()
+        return result
+      }
+
       await core.clear(locator.start, locator.end)
       const garbage = await collectCorestoreGarbage(ctx.store, {
         label: 'confirmed source offload',
@@ -2153,15 +2169,7 @@ export function createApi({
       if (garbage.error) throw new Error(`source garbage collection failed: ${garbage.error}`)
       return { success: true, freedBytes: locator.byteLength }
     } catch (error) {
-      if (releasedOwnership && typeof scopedNetwork?.retainAuthorizedRendition === 'function') {
-        await scopedNetwork.retainAuthorizedRendition({
-          manifest,
-          renditionId: locator.renditionId,
-          ownerId: publicationId,
-          start: locator.start,
-          end: locator.end,
-        })
-      }
+      await reacquireReleasedOwnership()
       throw error
     } finally {
       await ownership?.cleanup?.()

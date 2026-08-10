@@ -75,7 +75,7 @@ ns.register({
     { name: 'updatedAt', type: 'uint64' },
     { name: 'updatedBy', type: 'string' },
     { name: 'schemaVersion', type: 'uint64' },
-    { name: 'logicalClock', type: 'uint64' }
+    { name: 'logicalClock', type: 'uint64' },
   ]
 })
 
@@ -126,9 +126,18 @@ ns.register({
     { name: 'publicationOperationId', type: 'string' },
     { name: 'metadataClaimOperationId', type: 'string' },
     { name: 'availabilityClaimOperationId', type: 'string' },
-    { name: 'publicationManifestHex', type: 'string' }
+    { name: 'publicationManifestHex', type: 'string' },
   ]
 })
+ns.register({
+  name: 'publicationOperationFrames',
+  compact: true,
+  fields: [
+    { name: 'id', type: 'string', required: true },
+    { name: 'publicationOperationFramesHex', type: 'string', required: true }
+  ]
+})
+
 
 ns.register({
   name: 'channelSource',
@@ -257,6 +266,11 @@ ch.collections.register({ name: 'invites', schema: '@peartubeChannel/invite', ke
 ch.collections.register({ name: 'watchEvents', schema: '@peartubeChannel/watchEvent', key: ['videoId', 'eventId'] })
 ch.collections.register({ name: 'vectorIndexes', schema: '@peartubeChannel/vectorIndex', key: ['videoId'] })
 ch.collections.register({ name: 'channelProfiles', schema: '@peartubeChannel/channelProfile', key: ['id'] })
+ch.collections.register({
+  name: 'publicationOperationFrames',
+  schema: '@peartubeChannel/publicationOperationFrames',
+  key: ['id']
+})
 ch.collections.register({ name: 'contentDetails', schema: '@peartubeChannel/contentDetails', key: ['id'] })
 ch.collections.register({ name: 'channelSources', schema: '@peartubeChannel/channelSource', key: ['provider', 'identityKey'] })
 ch.collections.register({ name: 'channelArtwork', schema: '@peartubeChannel/channelArtwork', key: ['role'] })

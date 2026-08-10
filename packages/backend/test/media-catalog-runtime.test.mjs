@@ -12,7 +12,16 @@ import { createMediaGraphApi } from '../src/api/media-graph.js'
 import { createPublicationManifest, createRenditionDescriptor, createStaticAssetManifest, encodePublicationManifest } from '../src/assets/index.js'
 import { createPublisherCatalogProjection } from '../src/media-graph/catalog-projection.js'
 import { createEntityReference, createMediaClaim, encodeMediaClaimEnvelope } from '../src/media-graph/index.js'
-import { PUBLISHER_RECORD_TYPES, derivePublisherId } from '../src/publisher/index.js'
+import {
+  PUBLISHER_RECORD_TYPES,
+  derivePublisherId,
+  encodePublisherOperationBody,
+} from '../src/publisher/index.js'
+import {
+  attachSignedEnvelopeSignature,
+  prepareSignedEnvelope,
+  signedRecordSignaturePreimage,
+} from '../src/records/index.js'
 import { createUploadManager } from '../src/upload.js'
 
 const keyPair = seed => crypto.keyPair(b4a.alloc(32, seed))
@@ -32,14 +41,22 @@ function rendition(seed = 1) {
 }
 
 function operation(recordType, publisherId, signer, body, sequence) {
-  return {
+  const prepared = prepareSignedEnvelope({
     recordType,
+    schemaMajor: 1,
+    schemaMinor: 0,
     issuerIdentityKey: b4a.from(publisherId),
     signerKey: b4a.from(signer.publicKey),
     policyEpoch: 0,
     issuerSequence: sequence,
     signedAt: 100,
-    recordId: b4a.alloc(32, sequence),
+    canonicalBody: encodePublisherOperationBody(recordType, body),
+  }, { hash: crypto.hash })
+  return {
+    ...attachSignedEnvelopeSignature(
+      prepared,
+      crypto.sign(signedRecordSignaturePreimage(prepared), signer.secretKey),
+    ),
     body,
   }
 }
@@ -82,6 +99,7 @@ function makeUploadChannel() {
       return { id: `${offset}:1:0:${buffer.byteLength}`, blockOffset: offset, blockLength: 1, byteOffset: 0, byteLength: buffer.byteLength }
     },
     async addVideo(metadata) { this.metadata = metadata },
+    async updateVideo(_id, metadata) { this.metadata = metadata },
   }
 }
 
@@ -365,7 +383,7 @@ test('upload confirms publication and canonical claims before joining its publis
   t.ok(result.metadata.immutablePublication?.manifest)
   t.is(rebuilt, 1)
   t.is(joined.length, 1)
-  t.ok(b4a.equals(joined[0].publisherId, publisherId))
+  t.is(joined[0].publisherId, hex(publisherId))
   t.alike(lifecycle, ['rebuild', 'retain', 'publish'])
   t.is(retained.length, 1)
   t.is(retained[0].manifest, result.manifest)

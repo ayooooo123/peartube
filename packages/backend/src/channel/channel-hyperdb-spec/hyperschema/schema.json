@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 5,
   "schema": [
     {
       "name": "metadata",
@@ -820,6 +820,26 @@
           "name": "releasedAt",
           "type": "uint64",
           "version": 2
+        }
+      ]
+    },
+    {
+      "name": "publicationOperationFrames",
+      "namespace": "peartubeChannel",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "id",
+          "required": true,
+          "type": "string",
+          "version": 5
+        },
+        {
+          "name": "publicationOperationFramesHex",
+          "required": true,
+          "type": "string",
+          "version": 5
         }
       ]
     }

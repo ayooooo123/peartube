@@ -341,11 +341,20 @@ test('MultiWriterChannel round-trips the private immutable publication reconcili
       metadataClaimOperationId: '26'.repeat(32),
       availabilityClaimOperationId: '27'.repeat(32),
       publicationManifestHex: b4a.toString(encodePublicationManifest(manifest), 'hex'),
+      publicationOperationFramesHex: '00112233',
     }
 
     await channel.addVideo({ id: 'publication-private', title: 'Private', ...persisted })
-    const physical = await channel.db.get('@peartubeChannel/contentDetails', { id: 'publication-private' })
-    for (const [field, value] of Object.entries(persisted)) assert.equal(physical[field], value)
+    const physicalDetails = await channel.db.get('@peartubeChannel/contentDetails', { id: 'publication-private' })
+    const physicalFrames = await channel.db.get('@peartubeChannel/publicationOperationFrames', {
+      id: 'publication-private'
+    })
+    for (const [field, value] of Object.entries(persisted)) {
+      if (field === 'publicationOperationFramesHex') continue
+      assert.equal(physicalDetails[field], value)
+    }
+    assert.equal(physicalFrames.publicationOperationFramesHex, persisted.publicationOperationFramesHex)
+    assert.equal('publicationOperationFramesHex' in physicalDetails, false)
 
     const logical = await channel.getVideo('publication-private')
     assert.deepEqual(logical.immutablePublication, {
@@ -362,6 +371,7 @@ test('MultiWriterChannel round-trips the private immutable publication reconcili
         persisted.metadataClaimOperationId,
         persisted.availabilityClaimOperationId,
       ],
+      operationFramesHex: persisted.publicationOperationFramesHex,
       manifest,
     })
     assert.equal(await channel.publicBee.getVideo('publication-private'), null)

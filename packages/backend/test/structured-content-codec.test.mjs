@@ -337,6 +337,23 @@ test('existing private and public video codecs retain the legacy compact record'
   assertRetains(t, roundTripPrivate('@peartubeChannel/video', legacyVideo), legacyVideo)
   assertRetains(t, roundTripPublic('@peartubePublic/video', legacyVideo), legacyVideo)
 })
+test('signed upload frames round-trip only through the private sidecar codec', async (t) => {
+  const record = {
+    id: 'publication-private',
+    publicationOperationFramesHex: '00112233'
+  }
+  assertRetains(
+    t,
+    roundTripPrivate('@peartubeChannel/publicationOperationFrames', record),
+    record
+  )
+  await t.exception(
+    () => encodePublic('@peartubePublic/publicationOperationFrames', record),
+    /Encoder not found/,
+    'replay frames have no public codec'
+  )
+})
+
 
 test('private and public channel profile sidecars retain structured fields', (t) => {
   assertRetains(t, roundTripPrivate('@peartubeChannel/channelProfile', profile), profile)

@@ -13,6 +13,7 @@ const MAX_IDENTITY_KEY_LENGTH = 1024
 const MAX_FINGERPRINT_LENGTH = 128
 const MAX_JOB_ID_LENGTH = 256
 const MAX_MANIFEST_HEX_LENGTH = 2 * 1024 * 1024
+const MAX_OPERATION_FRAMES_HEX_LENGTH = 2 * (2 + 3 * (4 + 1024 * 1024))
 
 const PROVIDER_PATTERN = /^[a-z0-9][a-z0-9._-]*$/
 const WRITER_KEY_PATTERN = /^[0-9a-f]{64}$/i
@@ -116,6 +117,15 @@ export function normalizeArtworkRole (value) {
   return normalizeSetValue(value, ARTWORK_ROLES, 'artwork role')
 }
 
+export function normalizePublicationOperationFramesHex (value) {
+  return requiredString(
+    value,
+    'publicationOperationFramesHex',
+    MAX_OPERATION_FRAMES_HEX_LENGTH,
+    MANIFEST_HEX_PATTERN
+  )
+}
+
 const PROFILE_FIELDS = new Set([
   'id',
   'profileKind',
@@ -171,7 +181,7 @@ const CONTENT_FIELDS = new Set([
   'publicationOperationId',
   'metadataClaimOperationId',
   'availabilityClaimOperationId',
-  'publicationManifestHex'
+  'publicationManifestHex',
 ])
 
 export function normalizeContentDetails (details) {

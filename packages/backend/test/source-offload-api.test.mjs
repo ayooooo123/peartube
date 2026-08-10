@@ -383,6 +383,69 @@ test('shared static asset offload releases one publication owner without clearin
   t.absent(lastResult.sharedRetention)
   t.alike(lastOwner.clearCalls(), [{ start: 0, end: rendition.core.length }])
 })
+test('custom source deletion releases only its owner and reacquires it after hook failure', async (t) => {
+  const sharedEvents = []
+  const shared = createHarness({
+    deleteSource() {
+      sharedEvents.push('delete')
+      return { success: true, freedBytes: rendition.core.byteLength }
+    },
+    scopedNetwork: {
+      async releaseAuthorizedRendition({ renditionId: releasedId, ownerId, assetId: releasedAssetId }) {
+        sharedEvents.push('release')
+        t.is(releasedId, renditionId)
+        t.is(ownerId, publicationId)
+        t.is(releasedAssetId, assetId)
+        return {
+          status: 'released',
+          released: true,
+          remainingOwners: 1,
+          scopeQuiescent: false,
+        }
+      },
+    },
+  })
+  const sharedAssessment = await shared.api.assessSourceOffload({ publicationId })
+  const sharedResult = await shared.api.confirmSourceOffload(confirmation(sharedAssessment))
+  t.is(sharedResult.success, true)
+  t.is(sharedResult.freedBytes, 0)
+  t.is(sharedResult.sharedRetention, true)
+  t.alike(sharedEvents, ['release'])
+  t.is(shared.deleteCalls(), 0)
+
+  const failureEvents = []
+  const failed = createHarness({
+    deleteSource() {
+      failureEvents.push('delete')
+      throw new Error('injected custom deletion failure')
+    },
+    scopedNetwork: {
+      async releaseAuthorizedRendition() {
+        failureEvents.push('release')
+        return {
+          status: 'released',
+          released: true,
+          remainingOwners: 0,
+          scopeQuiescent: true,
+        }
+      },
+      async retainAuthorizedRendition({ manifest: retainedManifest, renditionId: retainedId, ownerId, start, end }) {
+        failureEvents.push('retain')
+        t.is(retainedManifest.publicationId, publicationId)
+        t.is(retainedId, renditionId)
+        t.is(ownerId, publicationId)
+        t.is(start, 0)
+        t.is(end, rendition.core.length)
+        return { status: 'retained' }
+      },
+    },
+  })
+  const failedAssessment = await failed.api.assessSourceOffload({ publicationId })
+  t.is((await failed.api.confirmSourceOffload(confirmation(failedAssessment))).reason, 'delete-failed')
+  t.alike(failureEvents, ['release', 'delete', 'retain'])
+  t.is(failed.deleteCalls(), 1)
+})
+
 
 test('playback starting before the source lock causes a durable retryable refusal', async (t) => {
   let reachDeletePrecheck

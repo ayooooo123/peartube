@@ -22,6 +22,7 @@ import {
   normalizeChannelProfile,
   normalizeChannelSource,
   normalizeContentDetails,
+  normalizePublicationOperationFramesHex,
   normalizeImportClaim,
   resolveClaimWinner
 } from './structured-content.js'
@@ -127,7 +128,7 @@ const CONTENT_DETAIL_FIELDS = [
   'publicationOperationId',
   'metadataClaimOperationId',
   'availabilityClaimOperationId',
-  'publicationManifestHex'
+  'publicationManifestHex',
 ]
 const CONTENT_STORAGE_DEFAULTS = {
   contentKind: '',
@@ -218,6 +219,29 @@ function decodeContentDetails(details) {
     },
   }
 }
+function mergeVideoContentDetails(video, details, publicationOperationFrames) {
+  if (!details) return video
+  const decoded = decodeContentDetails(details)
+  if (decoded?.immutablePublication && publicationOperationFrames?.publicationOperationFramesHex) {
+    decoded.immutablePublication = {
+      ...decoded.immutablePublication,
+      operationFramesHex: publicationOperationFrames.publicationOperationFramesHex
+    }
+  }
+  return {
+    ...video,
+    ...decoded,
+    ...(publicationOperationFrames || {})
+  }
+}
+
+function normalizePublicationOperationFramesRecord(id, value) {
+  return {
+    id,
+    publicationOperationFramesHex: normalizePublicationOperationFramesHex(value)
+  }
+}
+
 
 function isPrivatePublicationState(value) {
   return value === 'replicationPending' || value === 'commitUncertain'
@@ -1212,27 +1236,31 @@ export class MultiWriterChannel extends ReadyResource {
 
   async listVideos() {
     await this._update()
-    const [videos, details] = await Promise.all([
+    const [videos, details, operationFrames] = await Promise.all([
       this.db.find('@peartubeChannel/videos-by-uploaded-at', {}, { reverse: true }).toArray(),
-      this.db.find('@peartubeChannel/contentDetails', {}).toArray()
+      this.db.find('@peartubeChannel/contentDetails', {}).toArray(),
+      this.db.find('@peartubeChannel/publicationOperationFrames', {}).toArray()
     ])
     if (details.length === 0) return videos
-    const detailsById = new Map(details.map((record) => [record.id, decodeContentDetails(record)]))
-    return videos.map((video) => {
-      const sidecar = detailsById.get(video.id)
-      return sidecar ? { ...video, ...sidecar } : video
-    })
+    const detailsById = new Map(details.map((record) => [record.id, record]))
+    const operationFramesById = new Map(operationFrames.map((record) => [record.id, record]))
+    return videos.map((video) => mergeVideoContentDetails(
+      video,
+      detailsById.get(video.id),
+      operationFramesById.get(video.id)
+    ))
   }
 
   async getVideo(id) {
     if (!id) return null
     await this._update()
-    const [video, details] = await Promise.all([
+    const [video, details, operationFrames] = await Promise.all([
       this.db.get('@peartubeChannel/videos', { id }),
-      this.db.get('@peartubeChannel/contentDetails', { id })
+      this.db.get('@peartubeChannel/contentDetails', { id }),
+      this.db.get('@peartubeChannel/publicationOperationFrames', { id })
     ])
     if (!video) return null
-    return details ? { ...video, ...decodeContentDetails(details) } : video
+    return mergeVideoContentDetails(video, details, operationFrames)
   }
 
   async addVideo(meta, { syncPublic = !isPrivatePublicationState(meta?.publicationState) } = {}) {
@@ -1260,9 +1288,15 @@ export class MultiWriterChannel extends ReadyResource {
         id
       })
     }
+    const operationFrames = meta.publicationOperationFramesHex !== undefined
+      ? normalizePublicationOperationFramesRecord(id, meta.publicationOperationFramesHex)
+      : null
 
     await this.db.insert('@peartubeChannel/videos', videoMeta)
     if (details) await this.db.insert('@peartubeChannel/contentDetails', encodeContentDetails(details))
+    if (operationFrames) {
+      await this.db.insert('@peartubeChannel/publicationOperationFrames', operationFrames)
+    }
     await this._flush()
     if (isPrivatePublicationState(details?.publicationState)) {
       await this._suppressPublicVideo(id)
@@ -1301,6 +1335,9 @@ export class MultiWriterChannel extends ReadyResource {
     const details = Object.keys(detailsPatch).length > 0
       ? normalizeContentDetails({ ...decodedDetails, ...detailsPatch, id })
       : null
+    const operationFrames = updates?.publicationOperationFramesHex !== undefined
+      ? normalizePublicationOperationFramesRecord(id, updates.publicationOperationFramesHex)
+      : null
 
     if (commitAfterPublicSync) {
       if (
@@ -1323,6 +1360,9 @@ export class MultiWriterChannel extends ReadyResource {
 
     await this.db.insert('@peartubeChannel/videos', videoMeta)
     if (details) await this.db.insert('@peartubeChannel/contentDetails', encodeContentDetails(details))
+    if (operationFrames) {
+      await this.db.insert('@peartubeChannel/publicationOperationFrames', operationFrames)
+    }
     await this._flush()
     if (isPrivatePublicationState(details?.publicationState)) {
       await this._suppressPublicVideo(id)
@@ -1335,6 +1375,7 @@ export class MultiWriterChannel extends ReadyResource {
     if (!this.writable) throw new Error('Channel is not writable')
     await this.db.delete('@peartubeChannel/videos', { id })
     await this.db.delete('@peartubeChannel/contentDetails', { id })
+    await this.db.delete('@peartubeChannel/publicationOperationFrames', { id })
     await this._flush()
     await this._suppressPublicVideo(id)
   }

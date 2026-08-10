@@ -9,9 +9,8 @@ const PREFLIGHT_CORE = createStaticAssetManifest({
 })
 
 function validateRenditionMetadata(input) {
-  let segmentIndex = null
   if (input.segments) {
-    segmentIndex = createSegmentIndexDescriptor({
+    createSegmentIndexDescriptor({
       codec: input.segmentCodec || 'peartube-inline-segments-v1',
       mediaByteLength: Number.MAX_SAFE_INTEGER,
       entries: input.segments,
@@ -23,7 +22,6 @@ function validateRenditionMetadata(input) {
     purpose: input.purpose,
     format: input.format,
     core: PREFLIGHT_CORE,
-    segmentIndex,
   })
 }
 

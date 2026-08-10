@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "offset": 0,
   "schema": [
     {
@@ -360,6 +360,21 @@
         "sourcePublishedAt",
         "id"
       ]
+    },
+    {
+      "name": "publicationOperationFrames",
+      "namespace": "peartubeChannel",
+      "id": 23,
+      "type": 1,
+      "version": 3,
+      "versionField": null,
+      "indexes": [],
+      "schema": "@peartubeChannel/publicationOperationFrames",
+      "derived": false,
+      "key": [
+        "id"
+      ],
+      "trigger": null
     }
   ]
 }

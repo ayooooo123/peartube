@@ -10,6 +10,15 @@ import crypto from 'hypercore-crypto'
 
 import { decodePublicationManifest } from '../src/assets/index.js'
 import { createUploadManager } from '../src/upload.js'
+import {
+  encodePublisherCatalogFrame,
+  encodePublisherOperationBody,
+} from '../src/publisher/index.js'
+import {
+  attachSignedEnvelopeSignature,
+  prepareSignedEnvelope,
+  signedRecordSignaturePreimage,
+} from '../src/records/index.js'
 
 function makeChannel() {
   const videos = []
@@ -43,6 +52,10 @@ function makeChannel() {
       blobWrites.push(Buffer.from(buffer))
       return { id: `0:1:0:${buffer.byteLength}` }
     },
+    async updateVideo(id, value) {
+      const index = videos.findIndex(video => video.id === id)
+      if (index >= 0) videos[index] = value
+    },
     async addVideo(metadata) {
       videos.push(metadata)
     },
@@ -62,6 +75,27 @@ function makeStore(t, label) {
   })
   return store
 }
+function signedPublisherOperation(value, deviceKeyPair) {
+  const prepared = prepareSignedEnvelope({
+    recordType: value.recordType,
+    schemaMajor: 1,
+    schemaMinor: 0,
+    issuerIdentityKey: deviceKeyPair.publicKey,
+    signerKey: deviceKeyPair.publicKey,
+    policyEpoch: value.policyEpoch,
+    issuerSequence: value.sequence,
+    signedAt: value.signedAt,
+    canonicalBody: encodePublisherOperationBody(value.recordType, value.body),
+  }, { hash: crypto.hash })
+  return {
+    ...attachSignedEnvelopeSignature(
+      prepared,
+      crypto.sign(signedRecordSignaturePreimage(prepared), deviceKeyPair.secretKey),
+    ),
+    body: value.body,
+  }
+}
+
 
 function makeCatalog(deviceKeyPair, appended, counters = {}) {
   return {
@@ -82,7 +116,7 @@ function makeCatalog(deviceKeyPair, appended, counters = {}) {
     },
     async createLocalOperation(value) {
       counters.created = (counters.created || 0) + 1
-      return { ...value, recordId: Buffer.alloc(32, value.sequence) }
+      return signedPublisherOperation(value, deviceKeyPair)
     },
     async appendBatchAndConfirm(operations) {
       counters.appended = (counters.appended || 0) + 1
@@ -285,6 +319,77 @@ test('publisher announcement failure does not release a pre-retained rendition',
   assert.match(result.error, /announcement failure/)
   assert.equal(releases, 0)
 })
+test('accepted normal append stays private until every post-commit side effect succeeds', async (t) => {
+  const store = makeStore(t, 'accepted-post-commit-retry')
+  const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 21))
+  const appended = []
+  const counters = {}
+  const catalog = makeCatalog(deviceKeyPair, appended, counters)
+  catalog.getOperationReceipt = async () => ({ accepted: true })
+  let appendAttempts = 0
+  const appendBatch = catalog.appendBatchAndConfirm.bind(catalog)
+  catalog.appendBatchAndConfirm = async operations => {
+    appendAttempts++
+    return appendBatch(operations)
+  }
+  const lifecycle = []
+  let announcements = 0
+  const channel = makeChannel()
+  channel.getVideo = async id => channel.videos.find(video => video.id === id) || null
+  channel.updateVideo = async (id, value, updateOptions = {}) => {
+    lifecycle.push('public-sync')
+    assert.equal(updateOptions.commitAfterPublicSync, true)
+    const index = channel.videos.findIndex(video => video.id === id)
+    channel.videos[index] = value
+  }
+  const manager = makePublishingManager({
+    store,
+    deviceKeyPair,
+    catalog,
+    mediaCatalogProjection: {
+      async rebuild() {
+        lifecycle.push('projection')
+      },
+    },
+    scopedNetwork: {
+      async retainAuthorizedRendition() {
+        lifecycle.push('retention')
+        return { status: 'retained' }
+      },
+      async publishLocalPublisherCatalog() {
+        lifecycle.push('announcement')
+        announcements++
+        if (announcements === 1) throw new Error('injected normal announcement failure')
+        return { status: 'published' }
+      },
+    },
+  })
+  const options = { videoId: '21'.repeat(16), title: 'Accepted post-commit retry' }
+
+  const failed = await manager.uploadFromBuffer(channel, Buffer.from('accepted bytes'), options)
+  assert.equal(failed.success, false)
+  assert.equal(failed.commitUncertain, true)
+  assert.equal(channel.videos[0].publicationState, 'commitUncertain')
+  assert.deepEqual(lifecycle, ['projection', 'retention', 'announcement'])
+
+  const retried = await manager.uploadFromBuffer(channel, Buffer.from('must not append twice'), options)
+  assert.equal(retried.success, true)
+  assert.equal(retried.reused, true)
+  assert.equal(channel.videos[0].publicationState, 'published')
+  assert.equal(appendAttempts, 1)
+  assert.equal(counters.created, 3)
+  assert.equal(channel.blobWrites.length, 1)
+  assert.deepEqual(lifecycle, [
+    'projection',
+    'retention',
+    'announcement',
+    'projection',
+    'retention',
+    'announcement',
+    'public-sync',
+  ])
+})
+
 
 test('local metadata failure emits no catalog operation and acquires no retention', async (t) => {
   const store = makeStore(t, 'metadata-failure-upload')
@@ -319,6 +424,77 @@ test('local metadata failure emits no catalog operation and acquires no retentio
   assert.deepEqual(appended, [])
   assert.equal(retentions, 0)
 })
+test('staged upload replays the exact persisted signed frames after a pre-append crash', async (t) => {
+  const store = makeStore(t, 'pre-append-replay')
+  const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 20))
+  const appended = []
+  const counters = {}
+  const catalog = makeCatalog(deviceKeyPair, appended, counters)
+  const channel = makeChannel()
+  channel.getVideo = async id => channel.videos.find(video => video.id === id) || null
+  channel.updateVideo = async (id, value) => {
+    const index = channel.videos.findIndex(video => video.id === id)
+    channel.videos[index] = value
+  }
+  catalog.getOperationReceipt = async () => ({ accepted: false })
+  let appendAttempts = 0
+  let stagedFrames = null
+  catalog.appendBatchAndConfirm = async operations => {
+    appendAttempts++
+    if (appendAttempts === 1) {
+      stagedFrames = operations.map(encodePublisherCatalogFrame)
+      throw new Error('injected crash before catalog append')
+    }
+    assert.equal(operations.length, 3)
+    operations.forEach((frame, index) => {
+      assert.equal(Buffer.isBuffer(frame), true)
+      assert.deepEqual(frame, stagedFrames[index])
+    })
+    return operations.map(() => ({ accepted: true }))
+  }
+  const manager = makePublishingManager({ store, deviceKeyPair, catalog })
+  const options = { videoId: '20'.repeat(16), title: 'Pre-append replay' }
+
+  const interrupted = await manager.uploadFromBuffer(channel, Buffer.from('persist exact signed frames'), options)
+  assert.equal(interrupted.success, false)
+  assert.equal(interrupted.commitUncertain, true)
+  assert.equal(channel.videos.length, 1)
+  assert.equal(channel.videos[0].publicationState, 'commitUncertain')
+  assert.equal(typeof channel.videos[0].publicationOperationFramesHex, 'string')
+  assert.equal(channel.videos[0].immutablePublication.operationFramesHex, channel.videos[0].publicationOperationFramesHex)
+  assert.equal(counters.created, 3)
+
+  const exactFramesHex = channel.videos[0].immutablePublication.operationFramesHex
+  channel.videos[0].immutablePublication.operationFramesHex =
+    `${exactFramesHex.slice(0, 2)}02${exactFramesHex.slice(4)}`
+  const wrongCount = await manager.uploadFromBuffer(channel, Buffer.from('must not append wrong frame count'), options)
+  assert.equal(wrongCount.commitUncertain, true)
+  assert.equal(appendAttempts, 1, 'persisted frame count mismatch fails closed')
+
+  channel.videos[0].immutablePublication.operationFramesHex =
+    `${exactFramesHex.slice(0, 4)}00000000${exactFramesHex.slice(12)}`
+  const wrongSize = await manager.uploadFromBuffer(channel, Buffer.from('must not append wrong frame size'), options)
+  assert.equal(wrongSize.commitUncertain, true)
+  assert.equal(appendAttempts, 1, 'persisted frame size mismatch fails closed')
+
+  channel.videos[0].immutablePublication.operationFramesHex = exactFramesHex
+  const exactOperationId = channel.videos[0].immutablePublication.operationIds[0]
+  channel.videos[0].immutablePublication.operationIds[0] = '00'.repeat(32)
+  const malformed = await manager.uploadFromBuffer(channel, Buffer.from('must not append malformed WAL'), options)
+  assert.equal(malformed.success, false)
+  assert.equal(malformed.commitUncertain, true)
+  assert.equal(appendAttempts, 1, 'persisted frame/ID mismatch fails closed')
+
+  channel.videos[0].immutablePublication.operationIds[0] = exactOperationId
+  const retried = await manager.uploadFromBuffer(channel, Buffer.from('must not rewrite source'), options)
+  assert.equal(retried.success, true)
+  assert.equal(retried.reused, true)
+  assert.equal(appendAttempts, 2)
+  assert.equal(counters.created, 3)
+  assert.equal(channel.blobWrites.length, 1)
+  assert.equal(channel.videos[0].publicationState, 'published')
+})
+
 
 test('catalog rejection with staged metadata rollback failure reconciles deterministically on retry', async (t) => {
   const store = makeStore(t, 'staged-rollback-retry')
@@ -563,7 +739,7 @@ test('catalog commit failure clears the newly written blob and leaves no upload 
       return { accepted: false, rejectionCode: 'POLICY_REJECTED' }
     },
     async createLocalOperation(value) {
-      return { ...value, recordId: Buffer.alloc(32, value.sequence) }
+      return signedPublisherOperation(value, deviceKeyPair)
     },
     async appendBatchAndConfirm() {
       throw new Error('injected immutable catalog commit failure')
@@ -682,9 +858,10 @@ test('uncertain catalog commit rolls back only after exact operations are confir
   const acceptBatch = catalog.appendBatchAndConfirm.bind(catalog)
   let appendAttempts = 0
   catalog.getOperationReceipt = async operationId => {
-    if (receiptsState === 'bare-false') return { accepted: false }
     if (receiptsState === 'rejected') return { accepted: false, rejectionCode: 'POLICY_REJECTED' }
-    return Buffer.from(operationId).equals(Buffer.alloc(32, 1)) ? { accepted: true } : null
+    return appended[0] && Buffer.from(operationId).equals(appended[0][0].recordId)
+      ? { accepted: true }
+      : null
   }
   catalog.appendBatchAndConfirm = async operations => {
     appendAttempts++
@@ -710,7 +887,7 @@ test('uncertain catalog commit rolls back only after exact operations are confir
   assert.equal(channel.videos.length, 1)
   assert.equal(cleared.length, 0)
 
-  receiptsState = 'bare-false'
+  receiptsState = 'mixed'
   const stillUncertain = await manager.uploadFromBuffer(channel, Buffer.from('must not replace'), options)
   assert.equal(stillUncertain.success, false)
   assert.equal(stillUncertain.commitUncertain, true)

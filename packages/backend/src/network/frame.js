@@ -166,9 +166,9 @@ function normalizeAssetBlockRange(input, coreLength = null) {
 }
 
 function normalizePresentBitfield(value, bitCount) {
-  if (!b4a.isBuffer(value)) throw new Error('presentBitfield must be a buffer')
+  if (!b4a.isBuffer(value)) throw new Error('present bitfield must be a buffer')
   const byteLength = Math.ceil(bitCount / 8)
-  if (value.byteLength !== byteLength) throw new Error('presentBitfield byte length does not match bitCount')
+  if (value.byteLength !== byteLength) throw new Error('present bitfield byte length does not match bitCount')
   const used = bitCount % 8
   if (used !== 0 && (value[value.byteLength - 1] & ~((1 << used) - 1)) !== 0) {
     throw new Error('unused high bitfield bits must be zero')

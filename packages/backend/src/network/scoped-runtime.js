@@ -45,7 +45,7 @@ import {
 } from '../publisher/namespace.js'
 import { verifyArchivePledge } from '../archive/pledge.js'
 import { normalizeAssetCoreRefV2 } from '../assets/rendition.js'
-import { createStaticAssetManifest, deriveStaticAssetTopic } from '../assets/static-core.js'
+import { deriveStaticAssetTopic } from '../assets/static-core.js'
 import { createAssetSession } from '../assets/asset-session.js'
 
 
@@ -565,6 +565,21 @@ export function createScopedNetworkRuntime (options = {}) {
     return true
   }
 
+  async function quarantineAssetScope (scope, cause) {
+    if (!scope) return
+    const error = new Error('asset core was quarantined', { cause })
+    for (const request of [...(scope.assetRequests?.values() || [])]) {
+      closeAssetRequest(scope, request, error)
+    }
+    for (const session of scope.sessions.values()) {
+      for (const response of session.assetResponses?.values() || []) response.cancelled = true
+      session.assetResponses?.clear()
+    }
+    const download = scope.download
+    scope.download = null
+    await cleanupResource(download, ['destroy', 'close'])
+  }
+
   function failAssetRequestPeer (scope, peerId) {
     for (const request of scope.assetRequests?.values() || []) {
       if (!request.requestedPeers.has(peerId) || request.closed) continue
@@ -678,14 +693,15 @@ export function createScopedNetworkRuntime (options = {}) {
         sendAssetError(scope, tracked, range, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
         return
       }
+      const core = await scope.assetSession.ready()
       for (let index = range.startBlock; index < range.endBlock; index++) {
         if (responseState.cancelled || scope.closed || tracked.closed ||
             responseState.policyEpoch !== networkPolicyEpoch) return
-        const present = await scope.core.has(index)
+        const present = await core.has(index)
         if (responseState.cancelled || scope.closed || tracked.closed ||
             responseState.policyEpoch !== networkPolicyEpoch) return
         if (!present) continue
-        const proof = await scope.core.proof({
+        const proof = await core.proof({
           block: { index, nodes: 0 },
           upgrade: { start: 0, length: scope.assetSession.coreRef.length },
         })
@@ -758,6 +774,9 @@ export function createScopedNetworkRuntime (options = {}) {
         index: transfer.index,
         proof: metadata.proof,
         value: transfer.block.buffer,
+        isActive: () => !request.closed &&
+          scope.assetRequests.get(request.key) === request &&
+          request.transfers.get(transfer.index) === transfer,
       })
       if (request.closed || scope.assetRequests.get(request.key) !== request) return
       request.transfers.delete(transfer.index)
@@ -1169,7 +1188,7 @@ export function createScopedNetworkRuntime (options = {}) {
         ])
       : [
           [scope.download, ['destroy', 'close']],
-          [scope.core, ['close']],
+          [scope.assetSession ? null : scope.core, ['close']],
         ]
     resources.push([scope.discovery, ['destroy', 'close']])
     await Promise.allSettled(resources.map(([resource, methods]) => cleanupResource(resource, methods)))
@@ -1225,7 +1244,7 @@ export function createScopedNetworkRuntime (options = {}) {
       return { status: 'authorized', action: 'catalog', publisherId: scope.publisherId }
     }
     if (scope.purpose === 'asset') {
-      if (!scope.core || !scope.coreKey) return { status: 'rejected', reason: 'core-not-authorized' }
+      if (!scope.assetSession || !scope.coreKey) return { status: 'rejected', reason: 'core-not-authorized' }
       if (requestedCoreKey && hex32(requestedCoreKey, 'requestedCoreKey') !== scope.coreKey) return { status: 'rejected', reason: 'core-not-authorized' }
       return { status: 'authorized', action: 'retained-range', coreKey: scope.coreKey, range: { ...scope.range } }
     }
@@ -1657,26 +1676,16 @@ export function createScopedNetworkRuntime (options = {}) {
       )
     } else {
       if (!store?.get) fail('corestore is unavailable')
-      const descriptor = createStaticAssetManifest({
-        treeHash: coreRef.treeHash,
-        blockLength: coreRef.length,
-        byteLength: coreRef.byteLength,
-        blockSize: coreRef.blockSize,
-      })
-      const core = store.get({
-        key: b4a.from(coreKey, 'hex'),
-        manifest: descriptor.hypercoreManifest,
-        writable: false,
-      })
+      let assetSession = null
       try {
-        const assetSession = createAssetSession({
+        assetSession = createAssetSession({
           coreRef,
-          core,
-          ownsCore: false,
+          store,
           startBlock: range.start,
           endBlock: range.end,
+          onQuarantine: ({ cause }) => quarantineAssetScope(scope, cause),
         })
-        await assetSession.ready()
+        const core = await assetSession.ready()
         const download = core.download?.({ start: range.start, end: range.end }) || null
         ;({ scope } = joinScope({
           purpose: 'asset',
@@ -1685,7 +1694,6 @@ export function createScopedNetworkRuntime (options = {}) {
           mode,
           assetId: coreRef.assetId,
           coreKey,
-          core,
           download,
           range,
           assetSession,
@@ -1696,7 +1704,7 @@ export function createScopedNetworkRuntime (options = {}) {
           ]]),
         }))
       } catch (error) {
-        try { await core.close?.() } catch {}
+        try { await assetSession?.close?.() } catch {}
         throw error
       }
     }
@@ -1803,8 +1811,9 @@ export function createScopedNetworkRuntime (options = {}) {
 
     const verified = new Set()
     const remaining = new Set()
+    const core = await scope.assetSession.ready()
     for (let index = range.startBlock; index < range.endBlock; index++) {
-      if (await scope.core.has(index)) verified.add(index)
+      if (await core.has(index)) verified.add(index)
       else remaining.add(index)
     }
     if (remaining.size === 0) {

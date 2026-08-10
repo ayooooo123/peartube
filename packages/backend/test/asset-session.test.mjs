@@ -39,8 +39,9 @@ async function assetFixture(t) {
   const opened = []
   const store = {
     get(options) {
-      opened.push(options)
-      return reader.store.get(options)
+      const core = reader.store.get(options)
+      opened.push({ options, core })
+      return core
     },
   }
   const session = createAssetSession({ coreRef: asset.descriptor, store })
@@ -59,11 +60,11 @@ async function assetFixture(t) {
 test('asset session reconstructs and opens the exact readonly zero-signer static manifest', async (t) => {
   const { asset, opened, session } = await assetFixture(t)
   t.is(opened.length, 1)
-  t.alike(opened[0].key, asset.descriptor.key)
-  t.is(opened[0].writable, false)
-  t.is(opened[0].manifest.quorum, 0)
-  t.alike(opened[0].manifest.signers, [])
-  t.alike(opened[0].manifest.prologue, {
+  t.alike(opened[0].options.key, asset.descriptor.key)
+  t.is(opened[0].options.writable, false)
+  t.is(opened[0].options.manifest.quorum, 0)
+  t.alike(opened[0].options.manifest.signers, [])
+  t.alike(opened[0].options.manifest.prologue, {
     hash: asset.descriptor.treeHash,
     length: asset.descriptor.length,
   })
@@ -87,7 +88,7 @@ test('asset session rejects refs whose key or assetId differs from the reconstru
 })
 
 test('asset session applies only valid block proofs and reports possession after verification', async (t) => {
-  const { asset, session, value } = await assetFixture(t)
+  const { asset, opened, session, value } = await assetFixture(t)
   const proof = await asset.core.proof({
     block: { index: 0, nodes: 0 },
     upgrade: { start: 0, length: asset.descriptor.length },
@@ -96,12 +97,24 @@ test('asset session applies only valid block proofs and reports possession after
     ...proof,
     block: { ...proof.block, value: null },
   }
+  const poisonedCore = session.core
   const tampered = b4a.from(value)
   tampered[0] ^= 0xff
   await t.exception(session.verifyBlock({ index: 0, proof: proofWithoutValue, value: tampered }), /proof|verification/)
-  t.is(await session.core.has(0), false)
+  t.ok(poisonedCore.closed, 'the exact handle touched by a rejected proof is closed')
+  t.absent(session.core, 'the poisoned handle is discarded before rejection')
 
-  const verified = await session.verifyBlock({ index: 0, proof: proofWithoutValue, value })
+  const retryProof = await asset.core.proof({
+    block: { index: 0, nodes: 0 },
+    upgrade: { start: 0, length: asset.descriptor.length },
+  })
+  const verified = await session.verifyBlock({
+    index: 0,
+    proof: { ...retryProof, block: { ...retryProof.block, value: null } },
+    value,
+  })
+  t.is(opened.length, 2, 'clean retry reopens the exact readonly manifest')
+  t.not(session.core, poisonedCore)
   t.alike(verified, { index: 0 })
   t.is(await session.core.has(0), true)
 })
@@ -119,6 +132,7 @@ test('asset session rejects descriptor state and block value mismatches before r
     async ready() {},
     async has() { return false },
     async applyProof() { t.fail('invalid state must not apply a proof') },
+    async close() { this.closed = true },
   }
   const session = createAssetSession({ coreRef: descriptor, core })
   await session.ready()
@@ -127,8 +141,47 @@ test('asset session rejects descriptor state and block value mismatches before r
     index: 1,
     proof: { block: { index: 1, value: null } },
     value: b4a.alloc(4),
-  }), /core length|value length/)
+  }), /core state|core length|value length/)
+  t.ok(core.closed, 'incompatible preexisting state is quarantined')
   await session.close()
+})
+
+test('an injected core is permanently poisoned after any rejected proof application', async (t) => {
+  const descriptor = createStaticAssetManifest({
+    treeHash: b4a.alloc(32, 52),
+    blockLength: 1,
+    byteLength: ASSET_BLOCK_SIZE,
+  })
+  let applied = 0
+  let closed = 0
+  const core = {
+    key: descriptor.key,
+    length: descriptor.length,
+    byteLength: descriptor.byteLength,
+    async ready() {},
+    async has() { return false },
+    async applyProof() { applied++; return false },
+    async close() { closed++ },
+  }
+  const session = createAssetSession({ coreRef: descriptor, core })
+  const candidate = {
+    fork: 0,
+    block: { index: 0, value: null },
+    upgrade: null,
+  }
+  await t.exception(session.verifyBlock({
+    index: 0,
+    proof: candidate,
+    value: b4a.alloc(ASSET_BLOCK_SIZE),
+  }), /verification/)
+  t.is(closed, 1)
+  t.absent(session.core)
+  await t.exception(session.verifyBlock({
+    index: 0,
+    proof: candidate,
+    value: b4a.alloc(ASSET_BLOCK_SIZE),
+  }), /poisoned/)
+  t.is(applied, 1, 'late retries never touch the discarded injected handle')
 })
 
 test('closed asset sessions reject late proof application and release their owned core', async (t) => {

@@ -9,6 +9,14 @@ function expectedBlockBytes(coreRef, index) {
   return coreRef.byteLength - ((coreRef.length - 1) * coreRef.blockSize)
 }
 
+function exactCoreState(core, coreRef) {
+  return core.length === coreRef.length && core.byteLength === coreRef.byteLength
+}
+
+function emptyCoreState(core) {
+  return core.length === 0 && core.byteLength === 0
+}
+
 function assertExactCoreState(core, coreRef) {
   if (core.length !== coreRef.length) throw new Error('asset core length does not match the verified descriptor')
   if (core.byteLength !== coreRef.byteLength) throw new Error('asset core byte length does not match the verified descriptor')
@@ -26,43 +34,101 @@ export function createAssetSession(options = {}) {
     throw new Error('asset key and assetId must match the reconstructed static manifest')
   }
 
+  const store = options.store?.get ? options.store : null
+  const injected = options.core != null
   let core = options.core || null
   let ownsCore = options.ownsCore === true
-  if (!core) {
-    if (!options.store || typeof options.store.get !== 'function') throw new Error('corestore is required')
-    core = options.store.get({
+  let readyPromise = null
+  let quarantinePromise = null
+  let permanentlyPoisoned = false
+  let closed = false
+  let closePromise = null
+  let verificationQueue = Promise.resolve()
+  const quarantines = new WeakMap()
+
+  function openExactCore() {
+    if (!store) throw new Error('asset session core is poisoned')
+    const opened = store.get({
       key: descriptor.key,
       manifest: descriptor.hypercoreManifest,
       writable: false,
     })
-    ownsCore = options.ownsCore !== false
+    ownsCore = true
+    return opened
   }
 
-  let readyPromise = null
-  let closed = false
-  let closePromise = null
+  if (!core) core = openExactCore()
+
+  async function quarantineCore(handle, cause) {
+    if (!handle || typeof handle !== 'object') return
+    const existing = quarantines.get(handle)
+    if (existing) return existing
+    if (core === handle) {
+      core = null
+      readyPromise = null
+      if (injected) permanentlyPoisoned = true
+    }
+    const operation = (async () => {
+      let callbackError = null
+      try {
+        await options.onQuarantine?.({ cause, core: handle, permanent: injected })
+      } catch (error) {
+        callbackError = error
+      }
+      let closeError = null
+      try {
+        await handle.close?.()
+      } catch (error) {
+        closeError = error
+      }
+      if (callbackError || closeError) {
+        throw new AggregateError(
+          [callbackError, closeError].filter(Boolean),
+          'asset core quarantine failed'
+        )
+      }
+    })()
+    quarantines.set(handle, operation)
+    quarantinePromise = operation
+    try {
+      await operation
+    } finally {
+      if (quarantinePromise === operation) quarantinePromise = null
+    }
+  }
 
   async function ready() {
     if (closed) throw new Error('asset session is closed')
+    if (permanentlyPoisoned) throw new Error('asset session core is poisoned')
+    if (quarantinePromise) await quarantinePromise
+    if (closed) throw new Error('asset session is closed')
+    if (permanentlyPoisoned) throw new Error('asset session core is poisoned')
+    if (!core) core = openExactCore()
+    const handle = core
     if (!readyPromise) {
-      readyPromise = Promise.resolve(core.ready?.()).then(() => {
-        const key = core.key
+      readyPromise = Promise.resolve(handle.ready?.()).then(() => {
+        const key = handle.key
         if (!key || !b4a.equals(b4a.from(key), descriptor.key)) {
           throw new Error('opened asset core key does not match the reconstructed static manifest')
         }
-        return core
+        return handle
       })
     }
-    return readyPromise
+    try {
+      return await readyPromise
+    } catch (error) {
+      await quarantineCore(handle, error)
+      throw error
+    }
   }
 
   async function listAssetRanges({ cursor = null, limit } = {}) {
-    await ready()
+    const handle = await ready()
     if (closed) throw new Error('asset session is closed')
-    assertExactCoreState(core, coreRef)
+    assertExactCoreState(handle, coreRef)
     return listLocalAssetRanges({
       assetId: descriptor.key,
-      core,
+      core: handle,
       coreLength: coreRef.length,
       byteLength: coreRef.byteLength,
       cursor,
@@ -72,10 +138,18 @@ export function createAssetSession(options = {}) {
     })
   }
 
-  async function verifyBlock({ index, proof, value } = {}) {
-    await ready()
+  async function verifyBlockOnce({ index, proof, value, isActive } = {}) {
+    if (typeof isActive === 'function' && !isActive()) throw new Error('asset block request is closed')
+    const handle = await ready()
     if (closed) throw new Error('asset session is closed')
-    assertExactCoreState(core, coreRef)
+    if (typeof isActive === 'function' && !isActive()) throw new Error('asset block request is closed')
+
+    const stateIsExact = exactCoreState(handle, coreRef)
+    if (!stateIsExact && !emptyCoreState(handle)) {
+      const error = new Error('asset core state conflicts with the verified descriptor')
+      await quarantineCore(handle, error)
+      throw error
+    }
     if (!Number.isSafeInteger(index) || index < 0 || index >= coreRef.length) {
       throw new Error('asset block index exceeds the verified descriptor length')
     }
@@ -85,9 +159,15 @@ export function createAssetSession(options = {}) {
     if (!proof || typeof proof !== 'object' || !proof.block || proof.block.index !== index || proof.block.value !== null) {
       throw new Error('asset block proof metadata is invalid')
     }
-    if (proof.upgrade && proof.upgrade.length !== coreRef.length) {
+    if (!stateIsExact) {
+      if (!proof.upgrade || proof.upgrade.length !== coreRef.length ||
+          (proof.upgrade.start !== undefined && proof.upgrade.start !== 0)) {
+        throw new Error('fresh asset core requires an exact descriptor-length upgrade proof')
+      }
+    } else if (proof.upgrade && proof.upgrade.length !== coreRef.length) {
       throw new Error('asset block proof length does not match the verified descriptor')
     }
+    if (typeof isActive === 'function' && !isActive()) throw new Error('asset block request is closed')
 
     const candidate = {
       ...proof,
@@ -95,23 +175,46 @@ export function createAssetSession(options = {}) {
     }
     let applied
     try {
-      applied = await core.applyProof(candidate)
+      applied = await handle.applyProof(candidate)
     } catch (cause) {
+      await quarantineCore(handle, cause)
       throw new Error('asset block proof verification failed', { cause })
     }
-    if (applied !== true) throw new Error('asset block proof verification failed')
+    if (applied !== true) {
+      const cause = new Error('core.applyProof rejected the asset block')
+      await quarantineCore(handle, cause)
+      throw new Error('asset block proof verification failed', { cause })
+    }
+
+    try {
+      assertExactCoreState(handle, coreRef)
+      if (!await handle.has(index)) throw new Error('verified asset block was not committed')
+    } catch (cause) {
+      await quarantineCore(handle, cause)
+      throw new Error('asset block proof verification failed', { cause })
+    }
     if (closed) throw new Error('asset session is closed')
-    assertExactCoreState(core, coreRef)
-    if (!await core.has(index)) throw new Error('verified asset block was not committed')
+    if (typeof isActive === 'function' && !isActive()) throw new Error('asset block request is closed')
     return { index }
+  }
+
+  function verifyBlock(input = {}) {
+    const operation = verificationQueue.then(() => verifyBlockOnce(input))
+    verificationQueue = operation.catch(() => {})
+    return operation
   }
 
   async function close() {
     if (closePromise) return closePromise
     closed = true
-    closePromise = ownsCore && typeof core.close === 'function'
-      ? Promise.resolve(core.close())
-      : Promise.resolve()
+    closePromise = (async () => {
+      await verificationQueue
+      if (quarantinePromise) await quarantinePromise
+      const handle = core
+      core = null
+      readyPromise = null
+      if (handle && ownsCore) await handle.close?.()
+    })()
     return closePromise
   }
 
@@ -119,7 +222,8 @@ export function createAssetSession(options = {}) {
     assetId: coreRef.assetId,
     coreRef,
     descriptor,
-    core,
+    get core() { return core },
+    get poisoned() { return permanentlyPoisoned },
     ready,
     listAssetRanges,
     verifyBlock,

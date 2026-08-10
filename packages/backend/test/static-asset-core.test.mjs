@@ -90,6 +90,29 @@ function interceptFinalCore(store, patch) {
   return () => finalCore
 }
 
+function abortDuringStagingCleanup(store, controller) {
+  const get = store.get.bind(store)
+
+  store.get = (options) => {
+    const core = get(options)
+    if (options?.keyPair) {
+      const ready = core.ready.bind(core)
+      let patched = false
+      core.ready = async () => {
+        await ready()
+        if (patched) return
+        patched = true
+        const close = core.core.close.bind(core.core)
+        core.core.close = async () => {
+          await close()
+          controller.abort()
+        }
+      }
+    }
+    return core
+  }
+}
+
 function oneShotSource(chunks) {
   let iterations = 0
   return {
@@ -227,6 +250,33 @@ test('static asset materialization closes the final session when aborting during
     t.is((await storedCoreKeys(store)).length, 1)
     t.is((await storedAliases(store)).length, 0)
   }
+})
+
+test('static asset materialization closes the final session when cleanup triggers cancellation', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'peartube-static-abort-cleanup-'))
+  const store = new Corestore(directory)
+  const controller = new AbortController()
+  const getFinalCore = interceptFinalCore(store, () => {})
+  abortDuringStagingCleanup(store, controller)
+
+  t.teardown(async () => {
+    await store.close()
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  await t.exception(
+    writeStaticAsset({
+      store,
+      source: [b4a.alloc(ASSET_BLOCK_SIZE + 13, 42)],
+      signal: controller.signal,
+    }),
+    /cancel/
+  )
+
+  t.ok(getFinalCore().closed)
+  t.is(liveSessionCount(store), 0)
+  t.is((await storedCoreKeys(store)).length, 1)
+  t.is((await storedAliases(store)).length, 0)
 })
 
 test('static asset materialization uses zero-copy source views and rejects non-byte chunks', async (t) => {

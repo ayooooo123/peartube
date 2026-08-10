@@ -172,44 +172,47 @@ export async function writeStaticAsset({ store, source, signal } = {}) {
   const staging = store.get({ keyPair: stagingKeyPair })
 
   let finalCore = null
+  let descriptor = null
   try {
-    await staging.ready()
-    await appendCanonicalSource(staging, source, {
-      blockSize: ASSET_BLOCK_SIZE,
-      signal,
-    })
+    try {
+      await staging.ready()
+      await appendCanonicalSource(staging, source, {
+        blockSize: ASSET_BLOCK_SIZE,
+        signal,
+      })
+
+      assertNotCancelled(signal)
+      const treeHash = await staging.treeHash()
+      assertNotCancelled(signal)
+      descriptor = createStaticAssetManifest({
+        treeHash,
+        blockLength: staging.length,
+        byteLength: staging.byteLength,
+      })
+      finalCore = store.get({
+        key: descriptor.key,
+        manifest: descriptor.hypercoreManifest,
+        writable: false,
+      })
+
+      assertNotCancelled(signal)
+      await copyStaticPrologue({
+        sourceState: staging.core.state,
+        target: finalCore,
+      })
+      assertNotCancelled(signal)
+      const verified = await verifyStaticAssetDescriptor(finalCore, descriptor)
+      assertNotCancelled(signal)
+      if (!verified) throw new Error('static asset verification failed')
+    } finally {
+      await removeStagingCore(staging)
+    }
 
     assertNotCancelled(signal)
-    const treeHash = await staging.treeHash()
-    assertNotCancelled(signal)
-    const descriptor = createStaticAssetManifest({
-      treeHash,
-      blockLength: staging.length,
-      byteLength: staging.byteLength,
-    })
-    finalCore = store.get({
-      key: descriptor.key,
-      manifest: descriptor.hypercoreManifest,
-      writable: false,
-    })
-
-    assertNotCancelled(signal)
-    await copyStaticPrologue({
-      sourceState: staging.core.state,
-      target: finalCore,
-    })
-    assertNotCancelled(signal)
-    const verified = await verifyStaticAssetDescriptor(finalCore, descriptor)
-    assertNotCancelled(signal)
-    if (!verified) throw new Error('static asset verification failed')
-    assertNotCancelled(signal)
-
     return { core: finalCore, descriptor }
   } catch (error) {
     await closeUnreturnedCore(finalCore, error)
     throw error
-  } finally {
-    await removeStagingCore(staging)
   }
 }
 

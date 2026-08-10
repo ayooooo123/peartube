@@ -36,12 +36,22 @@ const MAX_USAGE = Object.freeze({
 })
 const MUTABLE_DATA_COLLECTIONS = new Set(DATA_COLLECTIONS.filter(collection => collection !== COLLECTIONS.sourceCursors))
 const OPTION_FIELDS = new Set(['store', 'limits', 'policy'])
-const REPLACEMENT_FIELDS = new Set(['publisherId', 'rows', 'cursor'])
-const CHANGE_FIELDS = new Set(['publisherId', 'operations', 'cursor'])
+const REPLACEMENT_FIELDS = new Set(['publisherId', 'rows', 'cursor', 'expectedCursor'])
+const CHANGE_FIELDS = new Set(['publisherId', 'operations', 'cursor', 'expectedCursor'])
 const ROW_FIELDS = new Set(['collection', 'record'])
 const OPERATION_FIELDS = new Set(['type', 'collection', 'record'])
 const EVICTION_FIELDS = new Set(['publisherId', 'reason'])
 const PUBLISHER_FIELDS = new Set(['publisherId'])
+const SOURCE_CURSOR_FIELDS = new Set(['publisherId', 'catalogEpoch'])
+const CURSOR_RECORD_FIELDS = Object.freeze([
+  'publisherId',
+  'catalogEpoch',
+  'catalogBootstrapKey',
+  'viewFork',
+  'viewVersion',
+  'sourceHead',
+  'lastVerifiedDescriptor',
+])
 const PUBLISHER_COLLECTIONS = Object.freeze([
   [COLLECTIONS.sourceRecords, INDEXES.publisherPrefix.sourceRecords],
   [COLLECTIONS.sourceCursors, INDEXES.publisherPrefix.sourceCursors],
@@ -121,6 +131,32 @@ function validateCursor(cursor, publisherId) {
   return { record, charge: measureEncodedIndexerRow(COLLECTIONS.sourceCursors, record) }
 }
 
+function prepareExpectedCursor(input, publisherId) {
+  if (!Object.hasOwn(input, 'expectedCursor')) return undefined
+  if (input.expectedCursor === null) return null
+  return validateCursor(input.expectedCursor, publisherId).record
+}
+
+function sameCursorRecord(left, right) {
+  if (!left || !right) return left === right
+  return CURSOR_RECORD_FIELDS.every(name => left[name] === right[name])
+}
+
+function prepareSourceCursorSelector(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw invalidOperation('source cursor selector must be an object')
+  }
+  assertOnlyFields(input, SOURCE_CURSOR_FIELDS, 'source cursor selector')
+  const publisherId = validatePublisherId(input.publisherId)
+  if (!Number.isSafeInteger(input.catalogEpoch) || input.catalogEpoch < 0) {
+    throw invalidOperation('catalogEpoch must be a non-negative safe integer', {
+      scope: 'operation',
+      requested: input.catalogEpoch,
+    })
+  }
+  return { publisherId, catalogEpoch: input.catalogEpoch }
+}
+
 function rowKeyToken(collection, record) {
   return JSON.stringify([collection, ...INDEX_KEY_FIELDS[collection].map(name => record[name])])
 }
@@ -166,7 +202,14 @@ function prepareReplacement(input, limits, policy) {
   const rows = input.rows.map(entry => validateEntry(entry, publisherId, 'put', false))
   assertNoDuplicateKeys(rows)
   const cursor = validateCursor(input.cursor, publisherId)
-  return { publisherId, rows, cursor, membership, incoming: sumPrepared(rows, cursor) }
+  return {
+    publisherId,
+    rows,
+    cursor,
+    expectedCursor: prepareExpectedCursor(input, publisherId),
+    membership,
+    incoming: sumPrepared(rows, cursor),
+  }
 }
 
 function prepareChanges(input, limits, policy) {
@@ -191,7 +234,13 @@ function prepareChanges(input, limits, policy) {
   })
   assertNoDuplicateKeys(operations)
   const cursor = validateCursor(input.cursor, publisherId)
-  return { publisherId, operations, cursor, membership }
+  return {
+    publisherId,
+    operations,
+    cursor,
+    expectedCursor: prepareExpectedCursor(input, publisherId),
+    membership,
+  }
 }
 
 function counterKey(publisherId, scope, bucketId) {
@@ -361,8 +410,20 @@ async function assertNotTombstoned(tx, publisherId) {
   if (tombstone) throw tombstonedPublisher(tombstone)
 }
 
+
+async function assertExpectedCursor(tx, prepared) {
+  if (prepared.expectedCursor === undefined) return
+  const stored = await tx.get(COLLECTIONS.sourceCursors, prepared.cursor.record)
+  if (!sameCursorRecord(stored, prepared.expectedCursor)) {
+    throw invalidOperation('source cursor changed since ingestion preparation', {
+      scope: 'cursor',
+      scopeId: prepared.publisherId,
+    })
+  }
+}
 async function replaceSlice(tx, prepared, limits) {
   await assertNotTombstoned(tx, prepared.publisherId)
+  await assertExpectedCursor(tx, prepared)
   const currentPublisher = await getPublisherCounter(tx, prepared.publisherId)
   const oldRows = await collectPublisherRows(tx, prepared.publisherId, usageOf(currentPublisher).rows)
   assertCounterCoherence(prepared.publisherId, currentPublisher, measureStoredRows(oldRows))
@@ -374,6 +435,7 @@ async function replaceSlice(tx, prepared, limits) {
 
 async function applyChanges(tx, prepared, limits) {
   await assertNotTombstoned(tx, prepared.publisherId)
+  await assertExpectedCursor(tx, prepared)
   const currentPublisher = await getPublisherCounter(tx, prepared.publisherId)
   if (!currentPublisher) await collectPublisherRows(tx, prepared.publisherId, 0)
   const current = usageOf(currentPublisher)
@@ -625,12 +687,45 @@ export async function createIndexerStore(options) {
     }
   }
 
+
+  const admissionLimitsFor = (input) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throw invalidOperation('publisher limit selector must be an object')
+    }
+    assertOnlyFields(input, PUBLISHER_FIELDS, 'publisher limit selector')
+    const publisherId = validatePublisherId(input.publisherId)
+    const membership = resolvePublisherMembership(policy, publisherId, limits.trustClasses)
+    const trust = limits.trustClasses[membership.trustClass]
+    return Object.freeze({
+      maxRetainedBytes: Math.min(
+        limits.global.maxRetainedBytes,
+        limits.shard.maxRetainedBytes,
+        limits.publisher.maxRetainedBytes,
+        trust.maxRetainedBytes,
+      ),
+      maxRows: Math.min(
+        limits.global.maxRows,
+        limits.shard.maxRows,
+        limits.publisher.maxRows,
+        trust.maxRows,
+      ),
+    })
+  }
   return Object.freeze({
     replacePublisherSlice(input) {
       return accept(() => prepareReplacement(input, limits, policy), (tx, prepared) => replaceSlice(tx, prepared, limits))
     },
     applyPublisherChanges(input) {
       return accept(() => prepareChanges(input, limits, policy), (tx, prepared) => applyChanges(tx, prepared, limits))
+    },
+    getSourceCursor(input) {
+      return accept(() => prepareSourceCursorSelector(input), async (tx, selector) => {
+        const record = await tx.get(COLLECTIONS.sourceCursors, selector)
+        return record ? snapshotRecord(COLLECTIONS.sourceCursors, record) : null
+      })
+    },
+    async getPublisherAdmissionLimits(input) {
+      return admissionLimitsFor(input)
     },
     queryExactExternalRef(selector) {
       return accept(() => validateQuery(selector, limits), async (tx, query) => {

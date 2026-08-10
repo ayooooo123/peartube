@@ -17,3 +17,4 @@ export {
   INDEXER_CORE_NAME,
   createIndexerStore,
 } from './store.js'
+export { createCatalogIngestor } from './catalog-ingestor.js'

@@ -641,3 +641,57 @@ test('close is drain-safe idempotent rejects late work and preserves caller Core
   await store.close()
   rmSync(directory, { recursive: true, force: true })
 })
+
+test('source cursor lookup is exact validated and isolated by publisher plus catalog epoch', async (t) => {
+  const { index } = await fixture(t)
+  await index.replacePublisherSlice(fullSlice(PUBLISHER_A))
+
+  assert.deepEqual(
+    await index.getSourceCursor({ publisherId: PUBLISHER_A, catalogEpoch: 1 }),
+    cursor(PUBLISHER_A),
+  )
+  assert.equal(await index.getSourceCursor({ publisherId: PUBLISHER_A, catalogEpoch: 2 }), null)
+  assert.equal(await index.getSourceCursor({ publisherId: PUBLISHER_B, catalogEpoch: 1 }), null)
+  await assert.rejects(index.getSourceCursor({ publisherId: 'AA'.repeat(32), catalogEpoch: 1 }), /publisherId/)
+  await assert.rejects(index.getSourceCursor({ publisherId: PUBLISHER_A, catalogEpoch: -1 }), /catalogEpoch/)
+  await assert.rejects(index.getSourceCursor({ publisherId: PUBLISHER_A, catalogEpoch: 1, extra: true }), /unsupported field/)
+})
+
+test('cursor compare-and-swap prevents stale replacement and incremental commits', async (t) => {
+  const { index, store } = await fixture(t)
+  const initial = fullSlice(PUBLISHER_A)
+  await index.replacePublisherSlice({ ...initial, expectedCursor: null })
+  const before = await publisherRows(store, PUBLISHER_A)
+
+  await assert.rejects(
+    index.replacePublisherSlice({
+      ...initial,
+      rows: [],
+      cursor: cursor(PUBLISHER_A, { viewVersion: 2, sourceHead: 2 }),
+      expectedCursor: null,
+    }),
+    /source cursor changed/,
+  )
+  assert.deepEqual(await publisherRows(store, PUBLISHER_A), before)
+
+  const advancedCursor = cursor(PUBLISHER_A, { viewVersion: 2, sourceHead: 2 })
+  await index.applyPublisherChanges({
+    publisherId: PUBLISHER_A,
+    operations: [],
+    cursor: advancedCursor,
+    expectedCursor: initial.cursor,
+  })
+  await assert.rejects(
+    index.applyPublisherChanges({
+      publisherId: PUBLISHER_A,
+      operations: [],
+      cursor: cursor(PUBLISHER_A, { viewVersion: 3, sourceHead: 3 }),
+      expectedCursor: initial.cursor,
+    }),
+    /source cursor changed/,
+  )
+  assert.deepEqual(
+    await index.getSourceCursor({ publisherId: PUBLISHER_A, catalogEpoch: 1 }),
+    advancedCursor,
+  )
+})

@@ -6,13 +6,13 @@
 
 **Architecture:** Write canonical 256 KiB blocks into a temporary writable core, read its completed tree hash, construct a zero-signer static-prologue manifest, and copy the committed prologue into the final key-addressed core. The final core has no signing key and accepts no append path.
 
-**Tech Stack:** Hypercore 11.28.x, Corestore 7, hypercore-crypto, b4a, JavaScript ESM, Brittle.
+**Tech Stack:** Hypercore `^11.28.1` (currently locked to 11.35.1), Corestore 7, hypercore-crypto, b4a, JavaScript ESM, Brittle.
 
 ## Global Constraints
 
 - Follow `docs/superpowers/specs/2026-08-09-distributed-archive-search-scale-design.md` §4.3 exactly.
 - `ASSET_BLOCK_SIZE` is `256 * 1024`; only the final block may be shorter.
-- Derive `assetId` from the completed tree hash, block length, byte length, and block size.
+- `assetId` is the completed static Hypercore key; canonical block construction makes that key the exact-byte identity, while the descriptor retains `byteLength` and `blockSize`.
 - Use Hypercore's static prologue manifest; do not substitute a file hash for `treeHash`.
 - The final core must expose no secret key or append operation.
 - Pin the current Hypercore range and isolate internal `core.copyPrologue(sourceState)` use in one module with a conformance test.
@@ -61,9 +61,7 @@ const hypercoreManifest = {
   prologue: { hash: treeHash, length: blockLength }
 }
 const key = Hypercore.key(hypercoreManifest)
-const assetId = hashCanonical('peartube.asset.static.v1', {
-  treeHash, blockLength, byteLength, blockSize: ASSET_BLOCK_SIZE
-})
+const assetId = b4a.toString(key, 'hex')
 ```
 
 The implementation must validate the expected block count, create `{ version: 1, hash: 'blake2b', allowPatch: false, quorum: 0, signers: [], prologue: { hash: treeHash, length: blockLength } }`, derive the Hypercore key from that manifest, and compare the opened core's key, tree hash, length, and byte length to the descriptor.

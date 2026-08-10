@@ -243,6 +243,39 @@ test('mid-signing cancellation appends no catalog batch', async (t) => {
   assert.equal(channel.videos.length, 0)
 })
 
+test('publisher announcement failure does not release a pre-retained rendition', async (t) => {
+  const store = makeStore(t, 'pre-retained-upload')
+  const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 10))
+  const catalog = makeCatalog(deviceKeyPair, [])
+  let releases = 0
+  const scopedNetwork = {
+    async retainAuthorizedRendition() {
+      return { status: 'already-retained' }
+    },
+    async publishLocalPublisherCatalog() {
+      throw new Error('injected publisher announcement failure')
+    },
+    async releaseAuthorizedRendition() {
+      releases++
+      return { status: 'released' }
+    },
+  }
+  const result = await makePublishingManager({
+    store,
+    deviceKeyPair,
+    catalog,
+    scopedNetwork,
+  }).uploadFromBuffer(
+    makeChannel(),
+    Buffer.from('pre-retained immutable asset'),
+    { title: 'Pre-retained', mimeType: 'video/webm' },
+  )
+
+  assert.equal(result.success, false)
+  assert.match(result.error, /announcement failure/)
+  assert.equal(releases, 0)
+})
+
 test('deterministic reused uploads return the original publication contract', async () => {
   const manifest = { publicationId: 'aa'.repeat(32), body: { manifestId: 'bb'.repeat(32) } }
   const metadata = {

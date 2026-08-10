@@ -515,21 +515,21 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
     claimIds: claims.map(claim => claim.claimId),
     manifest
   };
-  let retained = false;
+  let acquiredRetention = false;
   try {
     await mediaCatalogProjection?.rebuild?.();
     if (typeof scopedNetwork?.retainAuthorizedRendition === 'function') {
-      await scopedNetwork.retainAuthorizedRendition({
+      const retention = await scopedNetwork.retainAuthorizedRendition({
         manifest,
         renditionId: rendition.renditionId,
         start: 0,
         end: rendition.core.length
       });
-      retained = true;
+      acquiredRetention = retention?.status === 'retained';
     }
     await scopedNetwork?.publishLocalPublisherCatalog?.({ publisherId });
   } catch (error) {
-    if (retained) {
+    if (acquiredRetention) {
       try {
         await scopedNetwork.releaseAuthorizedRendition?.({ renditionId: rendition.renditionId });
       } catch {}

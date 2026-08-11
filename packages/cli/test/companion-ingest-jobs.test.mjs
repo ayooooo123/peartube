@@ -20,7 +20,7 @@ import { createCompanionServer } from '../src/companion/server.js'
 import { createCompanionRouter } from '../src/companion/routes.js'
 import { createArchivePublisher } from '../src/archive-manager.js'
 
-function fakeBee ({ failFlush = false, beforeGet = null } = {}) {
+function fakeBee ({ failFlush = false, beforeGet = null, afterFlush = null } = {}) {
   const map = new Map()
   const clone = value => JSON.parse(JSON.stringify(value))
   return {
@@ -40,6 +40,7 @@ function fakeBee ({ failFlush = false, beforeGet = null } = {}) {
             if (operation === 'put') map.set(key, value)
             else map.delete(key)
           }
+          await afterFlush?.()
         }
       }
     },
@@ -973,15 +974,15 @@ test('authenticated multipart ingest streams a chunked body larger than the JSON
   t.alike(stagingEntries(harness.files.spoolRoot), [])
 })
 
-test('client disconnect during submit persistence aborts before durable mutation and removes unaccepted staging', async (t) => {
+test('disconnect at the final spool-handoff checkpoint leaves ownership unaccepted and replayable', async (t) => {
   let blockSubmission = false
   let enterPersistence
   let releasePersistence
   const persistenceEntered = new Promise(resolve => { enterPersistence = resolve })
   const persistenceGate = new Promise(resolve => { releasePersistence = resolve })
   const bee = fakeBee({
-    beforeGet: async key => {
-      if (!blockSubmission || !key.startsWith('companion-ingest/v1/idempotency/')) return
+    afterFlush: async () => {
+      if (!blockSubmission) return
       blockSubmission = false
       enterPersistence()
       await persistenceGate
@@ -1018,8 +1019,23 @@ test('client disconnect during submit persistence aborts before durable mutation
   }
   t.is(harness.submissions(), 1)
   t.alike(stagingEntries(harness.files.spoolRoot), [])
-  t.is([...bee.map.keys()].some(key => key.startsWith('companion-ingest/v1/job/')), false)
-  t.is([...bee.map.keys()].some(key => key.startsWith('companion-ingest/v1/idempotency/')), false)
+  const jobKey = [...bee.map.keys()].find(key => key.startsWith('companion-ingest/v1/job/'))
+  t.ok(jobKey, 'the acknowledged persistence boundary may retain a replayable queued job')
+  const jobId = jobKey.slice('companion-ingest/v1/job/'.length)
+  t.is((await harness.manager.getJob(jobId)).state, 'queued')
+  t.is(harness.publisher.calls.import, 0)
+
+  const replay = await sendMultipart({
+    state: harness.state,
+    body,
+    boundary,
+    nonce: 'multipart-disconnect-replay'
+  })
+  t.is(replay.statusCode, 202, replay.body)
+  t.is(JSON.parse(replay.body).job.jobId, jobId)
+  await waitForState(harness.manager, jobId, 'completed')
+  t.is(harness.publisher.calls.import, 1)
+  t.alike(stagingEntries(harness.files.spoolRoot), [])
 })
 
 test('multipart replay while the original attachment publishes never transfers the second staging lease', async (t) => {

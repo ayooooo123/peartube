@@ -801,6 +801,7 @@ export function createIngestManager ({
           if (spool != null) {
             incomingSpool = normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
             if (!TERMINAL.has(existing.state) && !attached?.spool) {
+              // Lease acceptance, attachment, and scheduling are one synchronous ownership handoff.
               assertSubmissionActive(signal)
               acceptSpoolLease(ingestSpoolLease, incomingSpool)
               ephemeral.set(existing.jobId, { ...attached, descriptor: spool, spool: incomingSpool, sourceCapability: attached?.sourceCapability || null })
@@ -830,6 +831,7 @@ export function createIngestManager ({
         assertSubmissionActive(signal)
         if (!TERMINAL.has(outcome.job.state) && (normalizedSpool || capability)) {
           const attached = ephemeral.get(outcome.job.jobId) || {}
+          // Once accepted, this manager must attach and schedule without another abort checkpoint.
           assertSubmissionActive(signal)
           if (normalizedSpool && !attached.spool) acceptSpoolLease(ingestSpoolLease, normalizedSpool)
           else if (normalizedSpool && normalizedSpool.filePath === attached.spool?.filePath) acceptSpoolLease(ingestSpoolLease, normalizedSpool)
@@ -841,7 +843,6 @@ export function createIngestManager ({
           if (normalizedSpool && attached.spool && normalizedSpool.filePath !== attached.spool.filePath) {
             discardUnacceptedSpool(ingestSpoolLease, normalizedSpool, outcome.job.jobId)
           }
-          assertSubmissionActive(signal)
           schedule(outcome.job.jobId)
         } else if (normalizedSpool) {
           discardUnacceptedSpool(ingestSpoolLease, normalizedSpool, outcome.job.jobId)

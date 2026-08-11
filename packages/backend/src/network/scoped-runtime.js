@@ -1597,13 +1597,20 @@ export function createScopedNetworkRuntime (options = {}) {
           if (scope.sessions.get(remoteKey) === tracked) scope.sessions.delete(remoteKey)
           counters.closedSessions++
           if (scope.purpose === 'archive') {
-            void Promise.resolve().then(() => {
+            // Reopen on the next event-loop turn so the remote close frame can
+            // retire its old same-key session before a replacement arrives.
+            const reopenTimer = setTimeout(() => {
               const info = activeConnections.get(connection)
               if (status !== 'active' || !info || scope.closed || !scopeMayAttach(scope) ||
                   scope.sessions.has(remoteKey) || connection?.destroyed === true) return
-              attachScope(scope, connection, info)
-            }).catch(error => recordProtocolError(scope, remoteKey, error))
-            void pumpArchiveSessions(scope)
+              try {
+                attachScope(scope, connection, info)
+              } catch (error) {
+                recordProtocolError(scope, remoteKey, error)
+              }
+              void pumpArchiveSessions(scope).catch(error => recordProtocolError(scope, remoteKey, error))
+            }, 0)
+            reopenTimer?.unref?.()
           }
         }
       },

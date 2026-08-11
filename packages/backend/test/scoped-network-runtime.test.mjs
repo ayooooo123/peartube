@@ -1073,13 +1073,29 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
     if (runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'asset')) break
     await settle()
   }
+  const closedBeforeRoleBudget = runtimeA.getDiagnostics().counters.closedSessions
+  const uploadedBeforeRoleBudget = runtimeA.getDiagnostics().policy.uploadedBytes
   await runtimeA.applyNetworkPolicy(contributionPolicy({ contributionBudgetBytes: 0 }))
-  await settle()
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if (runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'asset')) break
+    await settle()
+  }
   const roleBudgetDiagnostics = runtimeA.getDiagnostics()
-  t.absent(roleBudgetDiagnostics.sessions.find(session => session.purpose === 'asset'),
-    'zero contribution role budget closes the affected asset session')
+  t.ok(roleBudgetDiagnostics.counters.closedSessions > closedBeforeRoleBudget,
+    'zero contribution budget closes the old serving asset session')
+  const clientOnlyAssetSession = roleBudgetDiagnostics.sessions.find(session => session.purpose === 'asset')
+  t.ok(clientOnlyAssetSession, 'the retained asset rejoins over the same transport as a client-only session')
+  t.is(clientOnlyAssetSession?.assetResponseCount, 0)
   t.absent(roleBudgetDiagnostics.topics.find(topic => topic.purpose === 'asset')?.publicAnnounced,
     'zero contribution role budget suppresses asset announcement')
+  const roleDenied = await runtimeB.requestAssetBlocks({
+    assetId: staticCore.assetId,
+    startBlock: 4,
+    endBlock: 5,
+    requirePeerEvidence: true,
+  }).then(() => null, error => error)
+  t.is(roleDenied?.code, 'UNAVAILABLE', 'client-only session cannot serve an asset block')
+  t.is(runtimeA.getDiagnostics().policy.uploadedBytes, uploadedBeforeRoleBudget)
   t.ok(runtimeB.getDiagnostics().topics.some(topic => topic.purpose === 'asset'),
     'the watch-only client asset scope remains retained')
   t.is(runtimeA.getDiagnostics().status, 'active')

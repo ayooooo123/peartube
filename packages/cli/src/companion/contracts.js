@@ -26,6 +26,17 @@ const CANONICAL_NAMESPACE = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/
 const SEARCH_FIELDS = new Set(['namespace', 'identifier', 'kind', 'season', 'episode', 'title', 'year', 'limit', 'cursor'])
 const OPEN_FIELDS = new Set(['candidateRef'])
 const INGEST_FIELDS = new Set(['idempotencyKey', 'request', 'spool', 'sourceCapability'])
+const POLICY_FIELDS = new Set([
+  'policyVersion',
+  'consentVersion',
+  'migrationRequired',
+  'contributeWatchedMedia',
+  'archiveEnabled',
+  'contributionBudgetBytes',
+  'archiveBudgetBytes',
+  'uploadPermission',
+  'uploadCeilingBytes'
+])
 const FORBIDDEN_INGEST_FIELD = /(?:url|uri|link|href|magnet|torrent|cookie|authorization|credential|secret|password|passkey|tracker|header)/i
 
 function byteLength (value) {
@@ -329,6 +340,36 @@ export function decodeIngestJobBody (body) {
     result.sourceCapability = boundedString(value.sourceCapability, 'sourceCapability', 256, { pattern: /^[A-Za-z0-9._~-]+$/ })
   }
   return result
+}
+
+export function decodePolicyControlBody (body) {
+  const value = onlyFields(decodeJsonBody(body), POLICY_FIELDS, 'network-policy body')
+  for (const field of POLICY_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+      throw new CompanionContractError(400, 'MISSING_FIELD', `Missing ${field}`, field)
+    }
+  }
+  if (value.policyVersion !== 2) throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid policyVersion', 'policyVersion')
+  if (value.consentVersion !== 1) throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid consentVersion', 'consentVersion')
+  if (value.migrationRequired !== false) throw new CompanionContractError(400, 'INVALID_FIELD', 'Current consent is required', 'migrationRequired')
+  if (typeof value.contributeWatchedMedia !== 'boolean') throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid contributeWatchedMedia', 'contributeWatchedMedia')
+  if (typeof value.archiveEnabled !== 'boolean') throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid archiveEnabled', 'archiveEnabled')
+  for (const field of ['contributionBudgetBytes', 'archiveBudgetBytes', 'uploadCeilingBytes']) {
+    if (!Number.isSafeInteger(value[field]) || value[field] < 0) {
+      throw new CompanionContractError(400, 'INVALID_FIELD', `Invalid ${field}`, field)
+    }
+  }
+  const expectedCeiling =
+    (value.contributeWatchedMedia ? value.contributionBudgetBytes : 0) +
+    (value.archiveEnabled ? value.archiveBudgetBytes : 0)
+  if (!Number.isSafeInteger(expectedCeiling) || value.uploadCeilingBytes !== expectedCeiling) {
+    throw new CompanionContractError(400, 'INVALID_FIELD', 'uploadCeilingBytes does not match enabled retention budgets', 'uploadCeilingBytes')
+  }
+  const expectedPermission = value.contributeWatchedMedia || value.archiveEnabled ? 'enabled' : 'disabled'
+  if (value.uploadPermission !== expectedPermission) {
+    throw new CompanionContractError(400, 'INVALID_FIELD', 'uploadPermission does not match explicit consent', 'uploadPermission')
+  }
+  return Object.freeze({ ...value })
 }
 
 export function decodeId (value, field) {

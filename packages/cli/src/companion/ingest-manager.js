@@ -1155,6 +1155,17 @@ export function createIngestManager ({
       return publicJob(current || decision.job)
     },
 
+    async cancelPolicyDeniedJobs () {
+      const jobs = await store.listActive()
+      let cancelled = 0
+      for (const job of jobs) {
+        if (canIngest(job.request)) continue
+        const result = await this.cancelJob(job.jobId)
+        if (result?.state === 'cancelled') cancelled++
+      }
+      return { cancelled }
+    },
+
     async start () {
       if (closed || closing) fail('INGEST_MANAGER_CLOSED', 'ingest manager is closed', 503)
       if (started) return this

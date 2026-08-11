@@ -96,7 +96,25 @@ export async function createRelayService({
   let companionServer = null
   let ingestManager = null
   let ingestReady = false
+  let ingestManagerStarted = false
+  let policyControlApplied = false
+  let ingestPolicyEligible = false
   const localMirrorState = createLocalDriveMirrorState()
+
+  function completePolicyControl(policy) {
+    return policy?.policyVersion === 2 &&
+      policy?.consentVersion === 1 &&
+      policy?.migrationRequired === false &&
+      typeof policy?.contributeWatchedMedia === 'boolean' &&
+      typeof policy?.archiveEnabled === 'boolean' &&
+      Number.isSafeInteger(policy?.contributionBudgetBytes) &&
+      policy.contributionBudgetBytes >= 0 &&
+      Number.isSafeInteger(policy?.archiveBudgetBytes) &&
+      policy.archiveBudgetBytes >= 0 &&
+      ['disabled', 'manual', 'enabled'].includes(policy?.uploadPermission) &&
+      Number.isSafeInteger(policy?.uploadCeilingBytes) &&
+      policy.uploadCeilingBytes >= 0
+  }
 
   function retentionPermission(retentionClass, requestedBytes = 0) {
     const policy = runtime.ctx?.networkPolicyRuntime?.getPolicy?.()
@@ -381,6 +399,72 @@ export async function createRelayService({
       }
       return { removed: Boolean(removed) }
     },
+    async applyNetworkPolicy(policy) {
+      ingestReady = false
+      policyControlApplied = false
+      ingestPolicyEligible = false
+      const controlledPolicy = completePolicyControl(policy)
+        ? policy
+        : {
+            policyVersion: 2,
+            consentVersion: 0,
+            migrationRequired: true,
+            contributeWatchedMedia: false,
+            archiveEnabled: false,
+            contributionBudgetBytes: 0,
+            archiveBudgetBytes: 0,
+            uploadPermission: 'disabled',
+            uploadCeilingBytes: 0
+          }
+      if (!runtime.api || typeof runtime.api.setNetworkPolicy !== 'function') {
+        throw new Error('network policy control is unavailable')
+      }
+      const result = await runtime.api.setNetworkPolicy({
+        policyVersion: controlledPolicy.policyVersion,
+        consentVersion: controlledPolicy.consentVersion,
+        migrationRequired: controlledPolicy.migrationRequired,
+        contributeWatchedMedia: controlledPolicy.contributeWatchedMedia,
+        archiveEnabled: controlledPolicy.archiveEnabled,
+        contributionBudgetBytes: controlledPolicy.contributionBudgetBytes,
+        contributionBudgetBytesPresent: true,
+        archiveBudgetBytes: controlledPolicy.archiveBudgetBytes,
+        archiveBudgetBytesPresent: true,
+        uploadPermission: controlledPolicy.uploadPermission,
+        uploadCeilingBytes: controlledPolicy.uploadCeilingBytes,
+        uploadCeilingBytesPresent: true,
+        retentionMode: controlledPolicy.archiveEnabled ? 'archive-pledges' : 'none'
+      })
+      if (!result?.success) {
+        const error = new Error(result?.errorCode || 'POLICY_APPLY_FAILED')
+        error.code = result?.errorCode || 'POLICY_APPLY_FAILED'
+        throw error
+      }
+      const effective = result.policy
+      if (!effective || typeof effective !== 'object') {
+        throw new Error('network policy result is unavailable')
+      }
+      policyControlApplied = effective?.policyVersion === 2 &&
+        effective?.consentVersion === 1 &&
+        effective?.migrationRequired === false
+      ingestPolicyEligible = policyControlApplied && (
+        (effective.contributeWatchedMedia === true && effective.contributionBudgetBytes > 0) ||
+        (effective.archiveEnabled === true && effective.archiveBudgetBytes > 0)
+      )
+      await ingestManager?.cancelPolicyDeniedJobs?.()
+      ingestReady = ingestManagerStarted && ingestPolicyEligible
+      return {
+        policyVersion: effective.policyVersion,
+        consentVersion: effective.consentVersion,
+        migrationRequired: effective.migrationRequired,
+        effectiveRole: effective.effectiveRole,
+        permissions: { ...effective.permissions },
+        contributionBudgetBytes: effective.contributionBudgetBytes,
+        archiveBudgetBytes: effective.archiveBudgetBytes,
+        uploadPermission: effective.uploadPermission,
+        uploadCeilingBytes: effective.uploadCeilingBytes,
+        ingestReady
+      }
+    },
     getLinkDescriptor() {
       return {
         schema: 'peartube.relayLink',
@@ -552,7 +636,8 @@ export async function createRelayService({
       await runtime.start?.()
       logger.relay.info('Relay runtime network ready', { runtimeStartMs: Date.now() - runtimeStartedAt })
       await ingestManager?.start()
-      ingestReady = Boolean(ingestManager)
+      ingestManagerStarted = Boolean(ingestManager)
+      ingestReady = ingestManagerStarted && policyControlApplied && ingestPolicyEligible
 
       // Managers exist now — bind the real archive publisher behind the lazy proxy.
       if (config.archive?.uiEnabled) {
@@ -740,6 +825,11 @@ export async function createRelayService({
       return runtime.ctx?.assetManifestStore?.getManifest?.(publicationId) || null
     },
     async submitIngestJob(input, { ingestSpoolLease = null, signal = null } = {}) {
+      if (!ingestReady) {
+        const error = new Error('Explicit retention policy is not ready')
+        error.code = 'RETENTION_ADMISSION_DENIED'
+        throw error
+      }
       if (!ingestManager) {
         const error = new Error('Companion ingest jobs are unavailable')
         error.code = 'INGEST_UNAVAILABLE'
@@ -831,6 +921,9 @@ export async function createRelayService({
     async close() {
       closed = true
       ingestReady = false
+      ingestManagerStarted = false
+      policyControlApplied = false
+      ingestPolicyEligible = false
       if (startPromise && !started) await startPromise.catch(() => {})
       ingestReady = false
       if (heartbeatTimer) {

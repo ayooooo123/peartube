@@ -182,9 +182,117 @@ test('startup republishes only persisted writable catalogs with accepted project
   t.absent(runtime.getDiagnostics().topics.some(topic => topic.purpose === 'publisher'))
   await t.exception(
     runtime.publishLocalPublisherCatalog({ publisherId: descriptor.publisherId }),
-    /explicit contribution or archive consent/
+    /explicit contribution upload permission/
   )
   await runtime.close()
+})
+
+test('role budgets cannot bypass disabled upload permission', async (t) => {
+  const root = crypto.keyPair(bytes(32, 25))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 26),
+  })
+  const registry = fakeRegistry(descriptor)
+  registry.binding.catalog.listProjections = async () => ({ items: [{ accepted: true }], nextCursor: null })
+  const swarm = fakeSwarm()
+  const runtime = createScopedNetworkRuntime({
+    swarm,
+    store: {},
+    catalogRegistry: registry,
+    initialNetworkPolicy: contributionPolicy({
+      uploadPermission: 'disabled',
+      uploadCeilingBytes: 1024 * 1024,
+    }),
+  })
+  await runtime.start()
+  await t.exception(
+    runtime.publishLocalPublisherCatalog({ publisherId: descriptor.publisherId }),
+    /explicit contribution upload permission/
+  )
+  t.is(runtime.getDiagnostics().publicWork.activeAnnouncements, 0)
+  t.is(swarm.joins.every(join => join.options.server === false), true, 'nonzero role budget cannot announce while uploads are disabled')
+  await runtime.close()
+})
+
+test('archive consent with zero archive budget cannot allocate retention', async (t) => {
+  const runtime = createScopedNetworkRuntime({
+    swarm: fakeSwarm(),
+    store: {},
+    initialNetworkPolicy: archivePolicy({ archiveBudgetBytes: 0 }),
+  })
+  await runtime.start()
+  await t.exception(
+    runtime.retainAuthorizedArchive({
+      pledge: {},
+      coreKey: bytes(32, 27),
+      start: 0,
+      end: 1,
+    }),
+    /archive budget exhausted/
+  )
+  await runtime.close()
+})
+
+test('watch-only downgrade closes local publisher catalog sessions and removes its announcement', async (t) => {
+  const root = crypto.keyPair(bytes(32, 21))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 22),
+  })
+  const registryA = fakeRegistry(descriptor)
+  registryA.binding.catalog.listProjections = async kind => ({
+    items: kind === 'publication' ? [{ accepted: true }] : [],
+    nextCursor: null,
+  })
+  const swarmA = fakeSwarm()
+  const swarmB = fakeSwarm()
+  const runtimeA = createScopedNetworkRuntime({
+    swarm: swarmA,
+    store: {},
+    catalogRegistry: registryA,
+    initialNetworkPolicy: contributionPolicy(),
+  })
+  const runtimeB = createScopedNetworkRuntime({
+    swarm: swarmB,
+    store: {},
+    catalogRegistry: fakeRegistry(descriptor),
+  })
+  await runtimeA.start()
+  await runtimeB.start()
+  const publisherId = b4a.toString(descriptor.publisherId, 'hex')
+  const published = await runtimeA.publishLocalPublisherCatalog({ publisherId })
+  await runtimeB.followPublisher({ publisherId, namespaceDescriptor: descriptor })
+  const pair = connectionPair(23, 24)
+  swarmA.connections.add(pair.a)
+  swarmB.connections.add(pair.b)
+  swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, client: true })
+  swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey, client: false })
+  await settle()
+  t.ok(runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'publisher'))
+  t.ok(runtimeA.getDiagnostics().topics.find(topic => topic.purpose === 'publisher')?.publicAnnounced)
+
+  await runtimeA.applyNetworkPolicy({
+    networkEnabled: true,
+    uploadPermission: 'disabled',
+    uploadCeilingBytes: 0,
+    diskCeilingBytes: 1024,
+    permissions: { contribute: false, archive: false },
+    publicServingAllowed: false,
+    contributionBudgetBytes: 0,
+    archiveBudgetBytes: 0,
+  })
+  const diagnostics = runtimeA.getDiagnostics()
+  t.absent(diagnostics.sessions.find(session => session.purpose === 'publisher'), 'local catalog session closes on downgrade')
+  t.absent(diagnostics.topics.find(topic => topic.purpose === 'publisher')?.publicAnnounced, 'publisher discovery becomes client-only')
+  t.is(runtimeA.authorizeConnection({ purpose: 'publisher', topic: published.topic.topicHex
+    ? b4a.from(published.topic.topicHex, 'hex')
+    : derivePublisherTopic({ publisherId, catalogEpoch: descriptor.catalogEpoch }) }).status, 'rejected')
+
+  await runtimeA.close()
+  await runtimeB.close()
+  pair.a.destroy()
+  pair.b.destroy()
 })
 
 test('persisted runtime policy gates discovery startup and resumes without duplicate scopes', async (t) => {
@@ -1265,6 +1373,11 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
     [5, bytes(200 * 1024, 5)],
   ])
   const received = new Map()
+  let markProofStarted
+  let releaseProof
+  const proofStarted = new Promise(resolve => { markProofStarted = resolve })
+  const proofRelease = new Promise(resolve => { releaseProof = resolve })
+  let holdFirstProof = true
   const pledge = createArchivePledge({
     archivistId: archivist.publicKey,
     publicationId: bytes(32, 57),
@@ -1281,6 +1394,11 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
     async ready () {},
     async has (index) { return sourceBlocks.has(index) },
     async proof ({ block }) {
+      if (holdFirstProof) {
+        holdFirstProof = false
+        markProofStarted()
+        await proofRelease
+      }
       return {
         fork: 0,
         block: { index: block.index, value: sourceBlocks.get(block.index), nodes: [] },
@@ -1331,6 +1449,17 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   await settle()
   await runtimeA.retainAuthorizedArchive({ pledge, coreKey, start: 2, end: 6 })
   await runtimeB.retainAuthorizedArchive({ pledge, coreKey, start: 2, end: 6 })
+  await proofStarted
+  t.is(runtimeA.getDiagnostics().publicWork.activeUploads, 1, 'archive proof generation counts as an active upload')
+  t.ok(runtimeA.getDiagnostics().sessions.some(session => session.archiveServing), 'archiveServing is exposed as a bounded boolean')
+  await runtimeA.applyNetworkPolicy(contributionPolicy())
+  let diagnostics = runtimeA.getDiagnostics()
+  t.absent(diagnostics.sessions.find(session => session.purpose === 'archive'), 'archive sessions close when archive consent is withdrawn')
+  t.absent(diagnostics.topics.find(topic => topic.purpose === 'archive')?.publicAnnounced, 'archive scope stops announcing')
+  const archiveTopic = deriveArchiveTopic({ archiveId: pledge.pledgeId, protocolMajor: PROTOCOL_MAJOR })
+  t.is(runtimeA.authorizeConnection({ purpose: 'archive', topic: archiveTopic, requestedCoreKey: b4a.toString(coreKey, 'hex') }).reason, 'archive-policy-disabled')
+  releaseProof()
+  await runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 1024 }))
   for (let attempt = 0; attempt < 20 && received.size < 1; attempt++) await settle()
   t.alike([...received.keys()], [2], 'the runtime upload ceiling stops the next oversized transfer')
   await runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 256 * 1024 }))

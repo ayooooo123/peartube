@@ -69,3 +69,50 @@ test('getQuotaBudget reports full headroom when nothing is cached', async (t) =>
   t.is(budget.usageBytes, 0, 'no seeds means zero cache usage even with uploads on disk')
   t.is(budget.headroomBytes, 5 * GB)
 })
+
+
+test('strong archive seed class survives watched merge and archive budget alone evicts it', async (t) => {
+  const cleared = []
+  const store = {
+    get(key) {
+      return {
+        async ready() {},
+        async clear(start, end) {
+          cleared.push({ key: Buffer.from(key).toString('hex'), start, end })
+        },
+        async close() {}
+      }
+    }
+  }
+  const manager = new SeedingManager(store, createMetaDb(), { storageMaintenanceDelayMs: 0 })
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: true,
+    archiveEnabled: true,
+    contributionBudgetBytes: 100,
+    archiveBudgetBytes: 100,
+    migrationRequired: false
+  })
+  const blob = {
+    byteLength: 40,
+    blobId: '0:1:0:40',
+    blobsCoreKey: 'ab'.repeat(32)
+  }
+  await manager.addSeed('drive-a', 'video-a', 'pledged', blob, { authorized: true })
+  await manager.addSeed('drive-a', 'video-a', 'watched', blob, { authorized: true })
+
+  let status = manager.getRetentionBudgetStatus()
+  t.is(status.archiveUsedBytes, 40, 'stronger pledged reason keeps archive accounting')
+  t.is(status.contributionUsedBytes, 0, 'watched merge cannot downgrade into contribution cache')
+
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: true,
+    archiveEnabled: true,
+    contributionBudgetBytes: 100,
+    archiveBudgetBytes: 0,
+    migrationRequired: false
+  })
+  status = await manager.getStatus()
+  t.is(status.activeArchivePins, 0, 'archive budget reduction evicts archive pins')
+  t.is(status.activeContributionSeeds, 0, 'archive pin is not reclassified into contribution cache')
+  t.is(cleared.length, 1, 'evicted archive bytes are released once')
+})

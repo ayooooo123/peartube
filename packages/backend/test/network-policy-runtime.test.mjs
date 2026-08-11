@@ -61,7 +61,7 @@ test('persisted policy loads before manager startup and survives restart', async
     diskCeilingBytes: 2048,
     uploadCeilingBytes: 512,
     retentionMode: 'archive-pledges',
-    consentVersion: 2,
+    consentVersion: 1,
     migrationRequired: false,
     contributeWatchedMedia: true,
     archiveEnabled: true,
@@ -74,12 +74,12 @@ test('persisted policy loads before manager startup and survives restart', async
   const restarted = runtimeHarness(persisted)
   await restarted.runtime.start()
 
-  t.alike(restarted.events.map(([name]) => name), ['scoped', 'seeding', 'archive'])
+  t.alike(restarted.events.map(([name]) => name), ['scoped', 'archive', 'seeding'])
   t.is(restarted.events[0][1].uploadAllowed, true)
   t.is(restarted.events[0][1].networkEnabled, true)
-  t.is(restarted.events[1][1].contributionBudgetBytes, 1536)
-  t.is(restarted.events[2][1].enabled, true)
-  t.is(restarted.events[2][1].capacityBytes, 2048)
+  t.is(restarted.events[2][1].contributionBudgetBytes, 1536)
+  t.is(restarted.events[1][1].enabled, true)
+  t.is(restarted.events[1][1].capacityBytes, 2048)
 })
 
 test('runtime policy transitions stop forbidden work, release reservations, and restart allowed work', async (t) => {
@@ -93,7 +93,7 @@ test('runtime policy transitions stop forbidden work, release reservations, and 
     uploadCeilingBytes: 1024,
     retentionMode: 'archive-pledges',
     diskCeilingBytes: 4096,
-    consentVersion: 2,
+    consentVersion: 1,
     migrationRequired: false,
     contributeWatchedMedia: true,
     archiveEnabled: true,
@@ -132,12 +132,12 @@ test('deferred runtime startup applies the latest policy exactly once', async (t
     ...initialPolicy,
     uploadPermission: 'enabled',
     uploadCeilingBytes: 77,
-    consentVersion: 2,
+    consentVersion: 1,
     migrationRequired: false,
     contributeWatchedMedia: true,
     contributionBudgetBytes: 77,
   })
-  t.alike(harness.events.map(([name]) => name), ['scoped', 'seeding', 'archive'])
+  t.alike(harness.events.map(([name]) => name), ['scoped', 'archive', 'seeding'])
   t.is(harness.events[0][1].uploadCeilingBytes, 77)
 })
 
@@ -145,17 +145,24 @@ test('failed manager reconfiguration rolls runtime and persisted policy back', a
   const store = asyncPolicyStore()
   const initialPolicy = await loadNetworkPolicy({ store })
   const applied = []
+  const managerEvents = []
   let rejectArchive = true
   const runtime = createNetworkPolicyRuntime({
     initialPolicy,
     scopedNetwork: {
       async applyNetworkPolicy(policy) {
         applied.push(structuredClone(policy))
+        managerEvents.push(['scoped', policy.permissions?.archive === true])
       },
     },
-    seedingManager: { async applyNetworkPolicy() {} },
+    seedingManager: {
+      async applyNetworkPolicy(policy) {
+        managerEvents.push(['seeding', policy.permissions?.archive === true])
+      },
+    },
     archiveNetwork: {
       async setParticipation({ enabled }) {
+        managerEvents.push(['archive', enabled])
         if (enabled && rejectArchive) {
           rejectArchive = false
           return { errorCode: 'ARCHIVE_CAPACITY_EXHAUSTED' }
@@ -165,6 +172,7 @@ test('failed manager reconfiguration rolls runtime and persisted policy back', a
     },
   })
   await runtime.start()
+  managerEvents.length = 0
   const api = createPolicyApi({
     store,
     initialPolicy,
@@ -176,7 +184,7 @@ test('failed manager reconfiguration rolls runtime and persisted policy back', a
     retentionMode: 'archive-pledges',
     uploadPermission: 'enabled',
     uploadCeilingBytes: 1024,
-    consentVersion: 2,
+    consentVersion: 1,
     migrationRequired: false,
     archiveEnabled: true,
     archiveBudgetBytes: 1024,
@@ -186,6 +194,13 @@ test('failed manager reconfiguration rolls runtime and persisted policy back', a
   t.alike((await api.getNetworkPolicy()).policy, initialPolicy)
   t.is(applied.at(-1).uploadAllowed, false)
   t.is(applied.at(-1).uploadCeilingBytes, 0)
+  t.alike(managerEvents, [
+    ['scoped', true],
+    ['archive', true],
+    ['scoped', false],
+    ['archive', false],
+    ['seeding', false],
+  ], 'failed archive admission never reaches seeding and rollback restores every earlier manager')
 })
 
 test('archive consent is unsupported when the archive runtime is unavailable', async (t) => {
@@ -193,6 +208,7 @@ test('archive consent is unsupported when the archive runtime is unavailable', a
   t.exception(() => createNetworkPolicyRuntime({
     initialPolicy: {
       ...initialPolicy,
+      consentVersion: 1,
       migrationRequired: false,
       archiveEnabled: true,
       archiveBudgetBytes: 1024,
@@ -241,6 +257,72 @@ test('legacy persisted policy is migration-required watch-only despite permissiv
   t.is(policy.permissions.archive, false)
   t.is(policy.contributionBudgetBytes, 0)
   t.is(policy.archiveBudgetBytes, 0)
+})
+
+test('incomplete or invalid current policy loads as migration-required watch-only', async (t) => {
+  for (const stored of [
+    {
+      policyVersion: 2,
+      consentVersion: 0,
+      migrationRequired: false,
+      contributeWatchedMedia: true,
+      archiveEnabled: true,
+      contributionBudgetBytes: 4096,
+      archiveBudgetBytes: 4096
+    },
+    {
+      policyVersion: 2,
+      consentVersion: 1,
+      migrationRequired: false,
+      contributeWatchedMedia: true,
+      uploadPermission: 'always'
+    },
+    {
+      policyVersion: 2,
+      consentVersion: 1,
+      contributeWatchedMedia: true,
+      archiveEnabled: false,
+      contributionBudgetBytes: 4096,
+      archiveBudgetBytes: 0,
+      uploadPermission: 'enabled',
+      uploadCeilingBytes: 4096
+    },
+    {
+      consentVersion: 1,
+      migrationRequired: false,
+      contributeWatchedMedia: true,
+      archiveEnabled: false,
+      contributionBudgetBytes: 4096,
+      archiveBudgetBytes: 0,
+      uploadPermission: 'enabled',
+      uploadCeilingBytes: 4096
+    }
+  ]) {
+    const policy = await loadNetworkPolicy({ store: asyncPolicyStore(stored) })
+    t.is(policy.migrationRequired, true)
+    t.is(policy.effectiveRole, 'watch-only')
+    t.is(policy.permissions.contribute, false)
+    t.is(policy.permissions.archive, false)
+  }
+})
+
+test('direct runtime input cannot synthesize explicit consent identity from defaults', async (t) => {
+  const harness = runtimeHarness({
+    policyVersion: 2,
+    consentVersion: 1,
+    contributeWatchedMedia: true,
+    archiveEnabled: true,
+    contributionBudgetBytes: 4096,
+    archiveBudgetBytes: 4096,
+    uploadPermission: 'enabled',
+    uploadCeilingBytes: 8192
+  })
+  const effective = await harness.runtime.start()
+  t.is(effective.migrationRequired, true)
+  t.is(effective.effectiveRole, 'watch-only')
+  t.is(effective.permissions.contribute, false)
+  t.is(effective.permissions.archive, false)
+  t.is(effective.uploadAllowed, false)
 })
 
 test('foreground policy refresh resumes transport even when no policy suspension ran', async (t) => {

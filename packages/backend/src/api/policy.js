@@ -2,8 +2,8 @@ export const NETWORK_POLICY_VERSION = 2
 
 export const DEFAULT_NETWORK_POLICY = Object.freeze({
   policyVersion: NETWORK_POLICY_VERSION,
-  consentVersion: 1,
-  migrationRequired: false,
+  consentVersion: 0,
+  migrationRequired: true,
   effectiveRole: 'watch-only',
   permissions: Object.freeze({ contribute: false, archive: false }),
   contributeWatchedMedia: false,
@@ -38,6 +38,7 @@ function effectiveRole(contribute, archive) {
 
 export function evaluateNetworkRole(policy = {}) {
   const current = policy.policyVersion === NETWORK_POLICY_VERSION &&
+    policy.consentVersion === 1 &&
     policy.migrationRequired !== true
   const contribute = current && policy.contributeWatchedMedia === true
   const archive = current && policy.archiveEnabled === true
@@ -76,6 +77,33 @@ function boundedBytes(value, name) {
 }
 function hasOwn(value, key) {
   return Object.prototype.hasOwnProperty.call(value, key)
+}
+
+function isCompleteExplicitPolicySnapshot(value) {
+  return value != null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    value.policyVersion === NETWORK_POLICY_VERSION &&
+    value.consentVersion === 1 &&
+    value.migrationRequired === false &&
+    typeof value.contributeWatchedMedia === 'boolean' &&
+    typeof value.archiveEnabled === 'boolean' &&
+    hasOwn(value, 'contributionBudgetBytes') &&
+    hasOwn(value, 'archiveBudgetBytes') &&
+    hasOwn(value, 'uploadPermission') &&
+    hasOwn(value, 'uploadCeilingBytes')
+}
+
+function normalizePolicySnapshot(input = {}, base = DEFAULT_NETWORK_POLICY) {
+  const normalized = normalizeNetworkPolicy(input, base)
+  if (isCompleteExplicitPolicySnapshot(input)) return normalized
+  return normalizeNetworkPolicy({
+    ...normalized,
+    consentVersion: 0,
+    migrationRequired: true,
+    contributeWatchedMedia: false,
+    archiveEnabled: false,
+  }, DEFAULT_NETWORK_POLICY)
 }
 
 function decodeBoundedList(value, name) {
@@ -171,6 +199,7 @@ export function normalizeNetworkPolicy(input = {}, base = DEFAULT_NETWORK_POLICY
     ? input.archiveEnabled === true
     : policy.archiveEnabled === true
   const role = evaluateNetworkRole(policy)
+  policy.migrationRequired = role.migrationRequired
   policy.effectiveRole = role.effectiveRole
   policy.permissions = role.permissions
   return policy
@@ -192,22 +221,30 @@ async function writePolicyStore(store, policy) {
 }
 
 export async function loadNetworkPolicy({ store = new Map(), defaults = DEFAULT_NETWORK_POLICY } = {}) {
-  const base = normalizeNetworkPolicy(defaults, DEFAULT_NETWORK_POLICY)
+  let base
+  try {
+    base = normalizeNetworkPolicy(defaults, DEFAULT_NETWORK_POLICY)
+  } catch {
+    base = normalizeNetworkPolicy(DEFAULT_NETWORK_POLICY, DEFAULT_NETWORK_POLICY)
+  }
   const stored = await readPolicyStore(store)
   if (stored == null) return base
   if (stored.policyVersion !== NETWORK_POLICY_VERSION) {
     return normalizeNetworkPolicy({
-      ...stored,
-      policyVersion: NETWORK_POLICY_VERSION,
+      ...DEFAULT_NETWORK_POLICY,
       consentVersion: 0,
       migrationRequired: true,
-      contributeWatchedMedia: false,
-      archiveEnabled: false,
-      contributionBudgetBytes: 0,
-      archiveBudgetBytes: 0,
-    }, base)
+    }, DEFAULT_NETWORK_POLICY)
   }
-  return normalizeNetworkPolicy(stored, base)
+  try {
+    return normalizePolicySnapshot(stored, base)
+  } catch {
+    return normalizeNetworkPolicy({
+      ...DEFAULT_NETWORK_POLICY,
+      consentVersion: 0,
+      migrationRequired: true,
+    }, DEFAULT_NETWORK_POLICY)
+  }
 }
 
 function unsupportedPolicyError(field, detail) {
@@ -230,7 +267,7 @@ export function assertNetworkPolicyRuntimeSupported(policy) {
 }
 
 export function resolveNetworkPolicyForEnvironment(policy, environment = {}) {
-  const normalized = normalizeNetworkPolicy(policy, DEFAULT_NETWORK_POLICY)
+  const normalized = normalizePolicySnapshot(policy, DEFAULT_NETWORK_POLICY)
   const role = evaluateNetworkRole(normalized)
   const constrainedModes = []
   if (environment.metered) constrainedModes.push(normalized.meteredNetwork)
@@ -240,6 +277,7 @@ export function resolveNetworkPolicyForEnvironment(policy, environment = {}) {
     : (constrainedModes.includes('local-only') ? 'local-only' : 'allow')
   const networkEnabled = networkMode === 'allow'
   const publicServingAllowed = networkEnabled &&
+    normalized.uploadPermission === 'enabled' &&
     (role.permissions.contribute || role.permissions.archive)
   return {
     ...normalized,
@@ -261,7 +299,7 @@ export function createNetworkPolicyRuntime({
   suspendTransport = null,
   resumeTransport = null,
 } = {}) {
-  let policy = normalizeNetworkPolicy(initialPolicy, DEFAULT_NETWORK_POLICY)
+  let policy = normalizePolicySnapshot(initialPolicy, DEFAULT_NETWORK_POLICY)
   const environment = { metered: metered === true, background: background === true }
   let transportSuspended = false
   let started = false
@@ -288,13 +326,6 @@ export function createNetworkPolicyRuntime({
     const effective = resolveNetworkPolicyForEnvironment(nextPolicy, environment)
 
     await scopedNetwork?.applyNetworkPolicy?.(effective)
-    await seedingManager?.applyNetworkPolicy?.({
-      contributeWatchedMedia: effective.permissions.contribute,
-      archiveEnabled: effective.permissions.archive,
-      contributionBudgetBytes: effective.contributionBudgetBytes,
-      archiveBudgetBytes: effective.archiveBudgetBytes,
-      migrationRequired: effective.migrationRequired,
-    })
     const archiveResult = await archiveNetwork?.setParticipation?.({
       enabled: effective.permissions.archive,
       capacityBytes: effective.archiveBudgetBytes,
@@ -304,6 +335,13 @@ export function createNetworkPolicyRuntime({
       error.code = archiveResult.errorCode
       throw error
     }
+    await seedingManager?.applyNetworkPolicy?.({
+      contributeWatchedMedia: effective.permissions.contribute,
+      archiveEnabled: effective.permissions.archive,
+      contributionBudgetBytes: effective.contributionBudgetBytes,
+      archiveBudgetBytes: effective.archiveBudgetBytes,
+      migrationRequired: effective.migrationRequired,
+    })
 
     if (effective.networkMode === 'pause-network' && !transportSuspended) {
       await suspendTransport?.()

@@ -215,6 +215,7 @@ function stableScopeDiagnostic (scope) {
     publisherId: scope.publisherId || null,
     indexerId: scope.indexerId || null,
     transportPublicKey: scope.transportPublicKey || null,
+    publicAnnounced: scope.serverAnnounced === true,
   }
 }
 
@@ -286,6 +287,12 @@ export function createScopedNetworkRuntime (options = {}) {
   let uploadPermission = hasInitialNetworkPolicy
     ? String(initialNetworkPolicy.uploadPermission || 'disabled')
     : 'disabled'
+  let contributionUploadCeilingBytes = hasInitialNetworkPolicy
+    ? Number(initialNetworkPolicy.contributionBudgetBytes || 0)
+    : 0
+  let archiveUploadCeilingBytes = hasInitialNetworkPolicy
+    ? Number(initialNetworkPolicy.archiveBudgetBytes || 0)
+    : 0
   let uploadCeilingBytes = hasInitialNetworkPolicy
     ? Number(initialNetworkPolicy.uploadCeilingBytes || 0)
     : 0
@@ -297,14 +304,23 @@ export function createScopedNetworkRuntime (options = {}) {
   let publicServingAllowed = hasInitialNetworkPolicy &&
     initialNetworkPolicy.publicServingAllowed === true &&
     (contributionAllowed || archiveAllowed)
-  let uploadAllowed = publicServingAllowed
+  let uploadAllowed = publicServingAllowed && uploadPermission === 'enabled'
+  let contributionUploadedBytes = 0
+  let archiveUploadedBytes = 0
   let uploadedBytes = 0
   let networkPolicyEpoch = 0
 
-  function reservePolicyUpload (bytes) {
+  function reservePolicyUpload (retentionClass, bytes) {
     const amount = Number(bytes)
-    if (!uploadAllowed || !networkEnabled || !Number.isSafeInteger(amount) || amount < 0 ||
-        uploadedBytes + amount > uploadCeilingBytes) return null
+    const contribution = retentionClass === 'contribution-cache'
+    const archive = retentionClass === 'archive-pin'
+    const allowed = contribution ? contributionAllowed : archive ? archiveAllowed : false
+    const used = contribution ? contributionUploadedBytes : archiveUploadedBytes
+    const ceiling = contribution ? contributionUploadCeilingBytes : archiveUploadCeilingBytes
+    if (!allowed || !uploadAllowed || !networkEnabled || !Number.isSafeInteger(amount) || amount < 0 ||
+        uploadedBytes + amount > uploadCeilingBytes || used + amount > ceiling) return null
+    if (contribution) contributionUploadedBytes += amount
+    else archiveUploadedBytes += amount
     uploadedBytes += amount
     let committed = false
     let released = false
@@ -315,6 +331,8 @@ export function createScopedNetworkRuntime (options = {}) {
       release () {
         if (released || committed) return
         released = true
+        if (contribution) contributionUploadedBytes -= amount
+        else archiveUploadedBytes -= amount
         uploadedBytes -= amount
       },
     }
@@ -346,7 +364,15 @@ export function createScopedNetworkRuntime (options = {}) {
       }
       return scope.discovery
     }
-    const discovery = swarm.join(scope.topic, { server: publicServingAllowed, client: true })
+    const server = uploadAllowed && (
+      scope.purpose === 'asset' || scope.purpose === 'publisher'
+        ? contributionAllowed
+        : scope.purpose === 'archive' || scope.purpose === 'archive-discovery'
+          ? archiveAllowed
+          : false
+    )
+    const discovery = swarm.join(scope.topic, { server, client: true })
+    scope.serverAnnounced = server
     scope.discovery = discovery
     scope.discoverySuspended = false
     Promise.resolve(discovery?.flushed?.()).catch(() => {})
@@ -358,11 +384,13 @@ export function createScopedNetworkRuntime (options = {}) {
     if (typeof scope.discovery.suspend === 'function') {
       await scope.discovery.suspend()
       scope.discoverySuspended = true
+      scope.serverAnnounced = false
       return
     }
     await cleanupResource(scope.discovery, ['destroy', 'close'])
     scope.discovery = null
     scope.discoverySuspended = false
+    scope.serverAnnounced = false
   }
 
   async function rejoinScopeDiscovery (scope) {
@@ -370,6 +398,7 @@ export function createScopedNetworkRuntime (options = {}) {
     await cleanupResource(scope.discovery, ['destroy', 'close'])
     scope.discovery = null
     scope.discoverySuspended = false
+    scope.serverAnnounced = false
     ensureScopeDiscovery(scope)
   }
 
@@ -388,6 +417,7 @@ export function createScopedNetworkRuntime (options = {}) {
       topicHex: topicHex(topicBuffer),
       scopeId: String(scopeId),
       modes: new Set([mode]),
+      serverAnnounced: false,
       sessions: new Map(),
       discovery: null,
       discoverySuspended: false,
@@ -732,23 +762,23 @@ export function createScopedNetworkRuntime (options = {}) {
     tracked.assetResponses.set(range.transferId, responseState)
     let served = 0
     try {
-      if (!uploadAllowed || !networkEnabled) {
+      if (!contributionAllowed || !uploadAllowed || !networkEnabled) {
         sendAssetError(scope, tracked, range, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
         return
       }
       const core = await scope.assetSession.ready()
       for (let index = range.startBlock; index < range.endBlock; index++) {
-        if (responseState.cancelled || scope.closed || tracked.closed ||
+        if (!contributionAllowed || responseState.cancelled || scope.closed || tracked.closed ||
             responseState.policyEpoch !== networkPolicyEpoch) return
         const present = await core.has(index)
-        if (responseState.cancelled || scope.closed || tracked.closed ||
+        if (!contributionAllowed || responseState.cancelled || scope.closed || tracked.closed ||
             responseState.policyEpoch !== networkPolicyEpoch) return
         if (!present) continue
         const proof = await core.proof({
           block: { index, nodes: 0 },
           upgrade: { start: 0, length: scope.assetSession.coreRef.length },
         })
-        if (responseState.cancelled || scope.closed || tracked.closed ||
+        if (!contributionAllowed || responseState.cancelled || scope.closed || tracked.closed ||
             responseState.policyEpoch !== networkPolicyEpoch) return
         const value = proof?.block?.value
         if (!b4a.isBuffer(value) || proof.block.index !== index ||
@@ -757,7 +787,7 @@ export function createScopedNetworkRuntime (options = {}) {
         }
         const proofBytes = encodeAssetProof(index, proof, value)
         const reservation = responseState.policyEpoch === networkPolicyEpoch
-          ? reservePolicyUpload(value.byteLength)
+          ? reservePolicyUpload('contribution-cache', value.byteLength)
           : null
         if (!reservation) {
           const current = !responseState.cancelled && !scope.closed && !tracked.closed &&
@@ -1113,13 +1143,13 @@ export function createScopedNetworkRuntime (options = {}) {
       if (ready !== false) return pumpArchiveSession(scope, tracked)
     }).catch(() => closeSession(scope, tracked.peerId, 'archive-channel-open-failed', tracked))
   }
-
   async function pumpArchiveSessions (scope) {
     if (!scope || scope.closed || scope.purpose !== 'archive') return
     await Promise.all([...scope.sessions.values()].map(tracked => pumpArchiveSession(scope, tracked)))
   }
 
   async function sendArchiveBlock (scope, tracked, request) {
+    if (!archiveAllowed) fail('explicit archive consent is required')
     const resource = archiveResourceFor(scope, request.coreKey, request.index)
     const lastServed = tracked.archiveLastServed.get(resource?.resourceId) ?? -1
     if (tracked.archiveServing || !resource || request.index <= lastServed) {
@@ -1128,7 +1158,7 @@ export function createScopedNetworkRuntime (options = {}) {
     tracked.archiveServing = true
     const policyEpoch = networkPolicyEpoch
     try {
-      if (!uploadAllowed || !networkEnabled || !await resource.core.has?.(request.index)) {
+      if (!archiveAllowed || !uploadAllowed || !networkEnabled || !await resource.core.has?.(request.index)) {
         sendScopedFrame(tracked, 'archive', 'archive-block-unavailable', encodeArchiveBlockRef(request.coreKey, request.index))
         return
       }
@@ -1139,7 +1169,7 @@ export function createScopedNetworkRuntime (options = {}) {
       const value = b4a.from(proof?.block?.value || [])
       const ceiling = scope.archiveUploadCeilingBytes
       const reservation = policyEpoch === networkPolicyEpoch
-        ? reservePolicyUpload(value.byteLength)
+        ? reservePolicyUpload('archive-pin', value.byteLength)
         : null
       if (!reservation || proof?.block?.index !== request.index || value.byteLength > MAX_ASSET_BLOCK_BYTES ||
           tracked.archiveServedBytes + value.byteLength > ceiling) {
@@ -1153,6 +1183,10 @@ export function createScopedNetworkRuntime (options = {}) {
       try {
         sent = sendScopedFrame(tracked, 'archive', 'archive-block-proof', encodeArchiveProof(request.coreKey, request.index, proof, value))
         for (let offset = 0; sent && offset < value.byteLength; offset += ASSET_CHUNK_BYTES) {
+          if (!archiveAllowed || policyEpoch !== networkPolicyEpoch || scope.closed || tracked.closed) {
+            sent = false
+            break
+          }
           const chunk = value.subarray(offset, Math.min(value.byteLength, offset + ASSET_CHUNK_BYTES))
           sent = sendScopedFrame(tracked, 'archive', 'archive-block-chunk', encodeAssetChunk(request.index, offset, chunk))
         }
@@ -1388,6 +1422,7 @@ export function createScopedNetworkRuntime (options = {}) {
     if (scope.purpose === 'bootstrap') return { status: 'authorized', action: 'metadata-only' }
     if (scope.purpose === 'publisher') {
       if (!scope.binding?.catalog || (!scope.modes.has('followed') && !scope.modes.has('local'))) return { status: 'rejected', reason: 'publisher-not-followed' }
+      if (scope.modes.has('local') && !contributionAllowed) return { status: 'rejected', reason: 'contribution-policy-disabled' }
       if (connection) {
         attachCatalogReplication(scope, connection, tracked)
         counters.openedCatalogs++
@@ -1395,12 +1430,18 @@ export function createScopedNetworkRuntime (options = {}) {
       return { status: 'authorized', action: 'catalog', publisherId: scope.publisherId }
     }
     if (scope.purpose === 'asset') {
+      if (!contributionAllowed) return { status: 'rejected', reason: 'contribution-policy-disabled' }
       if (!scope.assetSession || !scope.coreKey) return { status: 'rejected', reason: 'core-not-authorized' }
       if (requestedCoreKey && hex32(requestedCoreKey, 'requestedCoreKey') !== scope.coreKey) return { status: 'rejected', reason: 'core-not-authorized' }
       return { status: 'authorized', action: 'retained-range', coreKey: scope.coreKey, range: { ...scope.range } }
     }
-    if (scope.purpose === 'archive-discovery') return { status: 'authorized', action: 'archive-discovery' }
+    if (scope.purpose === 'archive-discovery') {
+      return archiveAllowed
+        ? { status: 'authorized', action: 'archive-discovery' }
+        : { status: 'rejected', reason: 'archive-policy-disabled' }
+    }
     if (scope.purpose === 'archive') {
+      if (!archiveAllowed) return { status: 'rejected', reason: 'archive-policy-disabled' }
       if (scope.archiveDiscovery) fail('archive custody scope cannot be discovery')
       const requested = requestedCoreKey ? hex32(requestedCoreKey, 'requestedCoreKey') : null
       const resource = requested
@@ -1682,7 +1723,7 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function restoreLocalPublisherScopes () {
-    if (!publicServingAllowed) return
+    if (!contributionAllowed) return
     if (typeof catalogRegistry?.getWritableBindings !== 'function') return
     const bindings = await catalogRegistry.getWritableBindings()
     if (!Array.isArray(bindings) || bindings.length > 64) fail('writable catalog restore exceeds its bound')
@@ -1777,27 +1818,52 @@ export function createScopedNetworkRuntime (options = {}) {
     const nextArchiveAllowed = policy.permissions?.archive === true
     const nextPublicServingAllowed = policy.publicServingAllowed === true &&
       (nextContributionAllowed || nextArchiveAllowed)
-    const nextUploadCeilingBytes = Number(
-      policy.contributionBudgetBytes ?? 0
-    ) + Number(policy.archiveBudgetBytes ?? 0)
+    const nextContributionUploadCeilingBytes = Number(policy.contributionBudgetBytes ?? 0)
+    const nextArchiveUploadCeilingBytes = Number(policy.archiveBudgetBytes ?? 0)
+    const nextUploadCeilingBytes = Number(policy.uploadCeilingBytes ?? 0)
     if (!['disabled', 'manual', 'enabled'].includes(nextUploadPermission)) fail('invalid upload permission')
+    if (!Number.isSafeInteger(nextContributionUploadCeilingBytes) || nextContributionUploadCeilingBytes < 0) fail('invalid contribution upload ceiling')
+    if (!Number.isSafeInteger(nextArchiveUploadCeilingBytes) || nextArchiveUploadCeilingBytes < 0) fail('invalid archive upload ceiling')
     if (!Number.isSafeInteger(nextUploadCeilingBytes) || nextUploadCeilingBytes < 0) fail('invalid upload ceiling')
     if (!Number.isSafeInteger(nextDiskCeilingBytes) || nextDiskCeilingBytes < 0) fail('invalid disk ceiling')
 
     const wasNetworkEnabled = networkEnabled
     const wasPublicServingAllowed = publicServingAllowed
+    const wasUploadAllowed = uploadAllowed
+    const wasContributionAllowed = contributionAllowed
+    const wasArchiveAllowed = archiveAllowed
     networkEnabled = policy.networkEnabled !== false
     uploadPermission = nextUploadPermission
     uploadCeilingBytes = nextUploadCeilingBytes
+    contributionUploadCeilingBytes = nextContributionUploadCeilingBytes
+    archiveUploadCeilingBytes = nextArchiveUploadCeilingBytes
     diskCeilingBytes = nextDiskCeilingBytes
     contributionAllowed = nextContributionAllowed
     archiveAllowed = nextArchiveAllowed
     publicServingAllowed = nextPublicServingAllowed && networkEnabled
-    uploadAllowed = publicServingAllowed
+    uploadAllowed = publicServingAllowed && uploadPermission === 'enabled'
     networkPolicyEpoch++
 
-    if (wasPublicServingAllowed !== publicServingAllowed) {
-      await Promise.allSettled([...scopes.values()].map(rejoinScopeDiscovery))
+    if (wasPublicServingAllowed !== publicServingAllowed ||
+        wasUploadAllowed !== uploadAllowed ||
+        wasContributionAllowed !== contributionAllowed ||
+        wasArchiveAllowed !== archiveAllowed) {
+      await Promise.allSettled([...scopes.values()].map(async scope => {
+        const contributionScope = scope.purpose === 'asset' || scope.purpose === 'publisher'
+        const archiveScope = scope.purpose === 'archive' || scope.purpose === 'archive-discovery'
+        if ((contributionScope && (
+          wasContributionAllowed !== contributionAllowed ||
+          wasUploadAllowed !== uploadAllowed
+        )) || (archiveScope && (
+          wasArchiveAllowed !== archiveAllowed ||
+          wasUploadAllowed !== uploadAllowed
+        ))) {
+          for (const peerId of [...scope.sessions.keys()]) {
+            closeSession(scope, peerId, 'network-policy-role-changed')
+          }
+        }
+        await rejoinScopeDiscovery(scope)
+      }))
     }
     if (wasNetworkEnabled && !networkEnabled) await deactivateNetwork()
     else if (!wasNetworkEnabled && networkEnabled) await activateNetwork()
@@ -1811,6 +1877,10 @@ export function createScopedNetworkRuntime (options = {}) {
       uploadPermission,
       uploadCeilingBytes,
       uploadedBytes,
+      contributionUploadCeilingBytes,
+      contributionUploadedBytes,
+      archiveUploadCeilingBytes,
+      archiveUploadedBytes,
       diskCeilingBytes,
       policyEpoch: networkPolicyEpoch,
     }
@@ -2056,7 +2126,7 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function publishLocalPublisherCatalog ({ publisherId } = {}) {
-    if (!publicServingAllowed) fail('explicit contribution or archive consent is required')
+    if (!contributionAllowed || !uploadAllowed) fail('explicit contribution upload permission is required')
     if (status !== 'active') fail('runtime is not active')
     const id = hex32(publisherId, 'publisherId')
     const existing = localPublishers.get(id)
@@ -2714,6 +2784,7 @@ export function createScopedNetworkRuntime (options = {}) {
 
   async function retainAuthorizedArchive ({ pledge, coreKey: requestedCoreKey, start, end, download: shouldDownload = true } = {}) {
     if (!archiveAllowed) fail('explicit archive consent is required')
+    if (archiveUploadCeilingBytes <= archiveUploadedBytes) fail('archive budget exhausted')
     if (status !== 'active') fail('runtime is not active')
     const envelope = pledge?.envelope || pledge
     const verified = await verifyArchivePledge(envelope, { now: options.now?.() })
@@ -2839,7 +2910,7 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function publishBootstrapLocator ({ locator, envelope } = {}) {
-    if (!publicServingAllowed) fail('explicit contribution or archive consent is required')
+    if (!contributionAllowed || !uploadAllowed) fail('explicit contribution upload permission is required')
     const bootstrapScope = findScope('bootstrap', deriveBootstrapTopic({ protocolMajor, networkId }))
     if (!bootstrapScope) fail('bootstrap discovery is disabled')
     const value = envelope || locator?.envelope || locator
@@ -2897,11 +2968,27 @@ export function createScopedNetworkRuntime (options = {}) {
         topicHex: scope.topicHex,
         state: session.state,
         assetResponseCount: session.assetResponses?.size || 0,
+        archiveServing: session.archiveServing === true,
       })
     }
     sessions.sort((left, right) => left.peerId.localeCompare(right.peerId) || left.topicHex.localeCompare(right.topicHex))
     return {
       status,
+      publicWork: {
+        activeAnnouncements: [...scopes.values()]
+          .filter(scope => scope.serverAnnounced === true).length,
+        activeUploads: sessions.reduce((total, session) =>
+          total + session.assetResponseCount + (session.archiveServing ? 1 : 0), 0),
+        uploadedBytes,
+      },
+      selectedIndexerCount: Math.min(indexServices.size, 64),
+      selectedIndexers: [...indexServices.values()]
+        .sort((left, right) => String(left.indexerId).localeCompare(String(right.indexerId)))
+        .slice(0, 8)
+        .map((service, index) => ({
+          id: `selected-${index + 1}`,
+          status: service.client ? 'active' : 'pending',
+        })),
       protocolMajor,
       networkId,
       topics: topicList,
@@ -2912,6 +2999,10 @@ export function createScopedNetworkRuntime (options = {}) {
         uploadPermission,
         uploadCeilingBytes,
         uploadedBytes,
+        contributionUploadCeilingBytes,
+        contributionUploadedBytes,
+        archiveUploadCeilingBytes,
+        archiveUploadedBytes,
         diskCeilingBytes,
         policyEpoch: networkPolicyEpoch,
       },

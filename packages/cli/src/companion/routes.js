@@ -6,6 +6,7 @@ import {
   decodeId,
   decodeIngestJobBody,
   decodeOpenStreamBody,
+  decodePolicyControlBody,
   decodeSearchQuery,
   errorBody
 } from './contracts.js'
@@ -270,6 +271,19 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
     return routeResponse(200, { job: boundedPublicValue(job, { stripUrls: true, stripSecrets: true }) })
   }
 
+  async function applyNetworkPolicy (input) {
+    const policy = decodePolicyControlBody(input.body)
+    if (typeof service.applyNetworkPolicy !== 'function') unavailable('Network policy control')
+    const applied = await callBackend(
+      service.applyNetworkPolicy.bind(service),
+      [policy, { signal: input.signal }],
+      input.signal
+    )
+    return routeResponse(200, {
+      policy: boundedPublicValue(applied, { stripUrls: true, stripSecrets: true })
+    })
+  }
+
   async function status (input) {
     const raw = typeof service.getStatus === 'function'
       ? await callBackend(service.getStatus.bind(service), [{ signal: input.signal }], input.signal)
@@ -308,6 +322,11 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
         if (method !== 'GET') allow(['GET'])
         rejectQuery(url.searchParams)
         return await status({ ...input, method })
+      }
+      if (path === '/api/v2/policy') {
+        if (method !== 'PUT') allow(['PUT'])
+        rejectQuery(url.searchParams)
+        return await applyNetworkPolicy({ ...input, method })
       }
       if (path === '/api/v2/ingest/jobs') {
         if (method !== 'POST') allow(['POST'])

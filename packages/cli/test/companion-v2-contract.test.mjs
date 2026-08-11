@@ -6,6 +6,7 @@ import {
   decodeIngestJobBody,
   decodeJsonBody,
   decodeOpenStreamBody,
+  decodePolicyControlBody,
   decodeSearchQuery,
   errorBody
 } from '../src/companion/contracts.js'
@@ -275,6 +276,47 @@ test('publication, job, status, method, and path routes dispatch deterministical
   t.is(wrongMethod.headers.allow, 'GET')
   t.is((await router.dispatch(request('GET', '/api/v2/missing'))).statusCode, 404)
   t.is((await router.dispatch(request('GET', '/api/v2/publications/bad%2Fid'))).statusCode, 400)
+})
+
+test('policy control requires a complete current snapshot and dispatches it once', async (t) => {
+  const policy = {
+    policyVersion: 2,
+    consentVersion: 1,
+    migrationRequired: false,
+    contributeWatchedMedia: true,
+    archiveEnabled: false,
+    contributionBudgetBytes: 4096,
+    archiveBudgetBytes: 8192,
+    uploadPermission: 'enabled',
+    uploadCeilingBytes: 4096
+  }
+  t.alike(decodePolicyControlBody(b4a.from(JSON.stringify(policy))), policy)
+
+  const calls = []
+  const router = createCompanionRouter({
+    service: {
+      async applyNetworkPolicy (value) {
+        calls.push(value)
+        return { ...value, effectiveRole: 'contributor', permissions: { contribute: true, archive: false }, ingestReady: true }
+      }
+    },
+    clock: () => NOW
+  })
+  const applied = await router.dispatch(request('PUT', '/api/v2/policy', JSON.stringify(policy)))
+  t.is(applied.statusCode, 200)
+  t.is(applied.body.policy.ingestReady, true)
+  t.is(calls.length, 1)
+
+  const missing = { ...policy }
+  delete missing.consentVersion
+  const rejected = await router.dispatch(request('PUT', '/api/v2/policy', JSON.stringify(missing)))
+  t.is(rejected.statusCode, 400)
+  t.is(rejected.body.error.code, 'MISSING_FIELD')
+  t.is(calls.length, 1)
+
+  const mismatched = { ...policy, uploadCeilingBytes: 8192 }
+  t.is((await router.dispatch(request('PUT', '/api/v2/policy', JSON.stringify(mismatched)))).statusCode, 400)
+  t.is(calls.length, 1)
 })
 
 test('router rejects malformed search candidates and mismatched verification results', async (t) => {

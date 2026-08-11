@@ -67,6 +67,9 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
       maxConcurrentFetches: maxConcurrent
     },
     seedPin: config.seedPin || {},
+    archive: {
+      enabled: config.archive?.enabled !== false
+    },
     operability: {
       operatorMode: config.mode || 'community'
     },
@@ -192,7 +195,13 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
           },
           contributionBudgetBytes: Number(policy.contributionBudgetBytes) || 0,
           archiveBudgetBytes: Number(policy.archiveBudgetBytes) || 0,
-          selectedIndexers: []
+          selectedIndexerCount: Number(scoped?.selectedIndexerCount) || 0,
+          selectedIndexers: Array.isArray(scoped?.selectedIndexers)
+            ? scoped.selectedIndexers.slice(0, 8).map((indexer, index) => ({
+                id: String(indexer?.id || `selected-${index + 1}`).slice(0, 32),
+                status: String(indexer?.status || 'unknown').slice(0, 32)
+              }))
+            : []
         },
         network: {
           status: scoped?.status || 'unknown',
@@ -212,6 +221,11 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
             ? scoped.recentErrors.slice(-8).map(error => String(error?.code || 'SCOPED_NETWORK_ERROR').slice(0, 64))
             : []
         },
+        publicWork: {
+          activeAnnouncements: Number(scoped?.publicWork?.activeAnnouncements) || 0,
+          activeUploads: Number(scoped?.publicWork?.activeUploads) || 0,
+          uploadedBytes: Number(scoped?.publicWork?.uploadedBytes) || 0
+        },
         publisher: {
           catalogs: counter(counters, 'publisherCatalogs', 'catalogs') || publisherTopics,
           followed: counter(counters, 'publishersFollowed', 'followedPublishers'),
@@ -227,10 +241,8 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
           retainedRenditions: counter(counters, 'retainedRenditions'),
           activeSessions: roleCount(scoped?.sessions, 'asset'),
           topics: assetTopics,
-          activeUploads: Array.isArray(scoped?.sessions)
-            ? scoped.sessions.reduce((total, session) => total + Number(session.assetResponseCount || 0), 0)
-            : 0,
-          uploadedBytes: Number(scoped?.policy?.uploadedBytes) || 0,
+          activeUploads: Number(scoped?.publicWork?.activeUploads) || 0,
+          uploadedBytes: Number(scoped?.publicWork?.uploadedBytes) || 0,
           maxSessions: counter(counters, 'maxAssetSessions', 'assetSessionLimit')
         },
         seedRetention: seedRetention || {},

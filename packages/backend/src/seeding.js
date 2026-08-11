@@ -389,7 +389,9 @@ export class SeedingManager {
   async addSeed(driveKey, videoPath, reason, blobInfo, options = {}) {
     this.assertAuthorizedForSeed(driveKey, reason, options)
     const key = `${driveKey}:${videoPath}`;
-    const retentionClass = this.assertRetentionAdmission(reason, blobInfo, key)
+    const existingSeed = this.activeSeeds.get(key)
+    const mergedReason = existingSeed ? mergeSeedReason(existingSeed.reason, reason) : reason
+    const retentionClass = this.assertRetentionAdmission(mergedReason, blobInfo, key)
 
     if (!this.config.autoSeedWatched && reason === 'watched') {
       console.log('[SeedingManager] Auto-seed watched disabled, skipping');
@@ -399,12 +401,12 @@ export class SeedingManager {
     // Admission is rechecked at the mutation boundary above.
 
     // Check if already seeding
-    if (this.activeSeeds.has(key)) {
+    if (existingSeed) {
       console.log('[SeedingManager] Already seeding:', key.slice(0, 32));
-      const existing = this.activeSeeds.get(key)
+      const existing = existingSeed
       const updatedSeedInfo = {
         ...existing,
-        reason: mergeSeedReason(existing.reason, reason),
+        reason: mergedReason,
         retentionClass,
         blocks: blobInfo?.blockLength || existing.blocks || 0,
         bytes: normalizeByteLength(blobInfo, existing.bytes || 0),
@@ -539,6 +541,7 @@ export class SeedingManager {
     }
     await this.metaDb.put('seeding-config', this.config)
     await this.enforceContributionRetention()
+    await this.enforceArchiveRetention()
     return this.getRetentionBudgetStatus()
   }
 
@@ -561,6 +564,27 @@ export class SeedingManager {
     }
     await this.persistSeeds()
     if (clearedBlob) await this.flushClearedBlobRanges('contribution retention policy')
+  }
+
+  async enforceArchiveRetention() {
+    const policy = this.retentionPolicy
+    const candidates = Array.from(this.activeSeeds.entries())
+      .filter(([, seed]) => seed.retentionClass === 'archive-pin')
+      .sort((left, right) => {
+        const age = normalizeStorageBytes(left[1].addedAt) - normalizeStorageBytes(right[1].addedAt)
+        return age || left[0].localeCompare(right[0])
+      })
+    let used = candidates.reduce((total, [, seed]) => total + seedStorageBytes(seed), 0)
+    const allowed = !policy.migrationRequired && policy.archiveEnabled
+    let clearedBlob = false
+    for (const [key, seed] of candidates) {
+      if (allowed && used <= policy.archiveBudgetBytes) break
+      this.activeSeeds.delete(key)
+      used -= seedStorageBytes(seed)
+      clearedBlob = (await this.clearSeedBlob(seed)) || clearedBlob
+    }
+    await this.persistSeeds()
+    if (clearedBlob) await this.flushClearedBlobRanges('archive retention policy')
   }
 
   getRetentionBudgetStatus() {

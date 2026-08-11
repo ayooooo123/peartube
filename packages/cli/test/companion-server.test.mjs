@@ -772,6 +772,54 @@ test('authenticated routes return a deterministic bounded capability error when 
   await server.close()
 })
 
+test('authenticated policy control reaches the live service before ingest can become eligible', async (t) => {
+  const storagePath = tempDir(t)
+  const applied = []
+  const service = {
+    canStageIngest: () => false,
+    async applyNetworkPolicy(policy) {
+      applied.push(structuredClone(policy))
+      return { ...policy, effectiveRole: 'contributor' }
+    }
+  }
+  const server = createCompanionServer({
+    service,
+    config: udsConfig(storagePath),
+    clock: () => NOW,
+    logger
+  })
+  const state = await server.start()
+  t.is(service.canStageIngest(), false, 'server startup alone never enables ingest')
+  const path = '/api/v2/policy'
+  const policy = {
+    policyVersion: 2,
+    consentVersion: 1,
+    migrationRequired: false,
+    contributeWatchedMedia: true,
+    archiveEnabled: false,
+    contributionBudgetBytes: 4096,
+    archiveBudgetBytes: 0,
+    uploadPermission: 'enabled',
+    uploadCeilingBytes: 4096
+  }
+  const body = JSON.stringify(policy)
+  const response = await request({
+    socketPath: state.socketPath,
+    method: 'PUT',
+    path,
+    body,
+    headers: {
+      'content-type': 'application/json',
+      'content-length': Buffer.byteLength(body),
+      ...signedHeaders({ method: 'PUT', path, body, nonce: 'policy-control-0001' })
+    }
+  })
+  t.is(response.statusCode, 200)
+  t.alike(applied, [policy])
+  t.is(JSON.parse(response.body).policy.effectiveRole, 'contributor')
+  await server.close()
+})
+
 test('relay service closes its companion socket during lifecycle teardown', async (t) => {
   const storagePath = tempDir(t, 'peartube-companion-service-')
   const config = resolveRelayConfig({

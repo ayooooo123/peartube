@@ -37,6 +37,18 @@ function boundedErrorCodes(values) {
   return result
 }
 
+function boundedSelectedIndexers(policy) {
+  const selected = Array.isArray(policy.selectedIndexers) ? policy.selectedIndexers : []
+  const countHint = Math.min(8, count(policy.selectedIndexerCount ?? selected.length))
+  return Array.from({ length: countHint }, (_, index) => {
+    const status = String(selected[index]?.status || 'unknown')
+    return {
+      id: `selected-${index + 1}`,
+      status: ['active', 'pending', 'offline', 'error'].includes(status) ? status : 'unknown'
+    }
+  })
+}
+
 export function buildRelayStatus({
   config,
   catalog,
@@ -58,7 +70,7 @@ export function buildRelayStatus({
     contribute: policy.permissions?.contribute === true,
     archive: policy.permissions?.archive === true
   }
-  const publicAllowed = permissions.contribute || permissions.archive
+  const publicWork = runtimeStats.publicWork || {}
   const jobsByState = {}
   for (const state of ['queued', 'acquiring', 'verifying', 'publishing', 'completed', 'failed', 'cancelled']) {
     jobsByState[state] = count(ingestStatus.jobsByState?.[state])
@@ -92,17 +104,14 @@ export function buildRelayStatus({
       }
     },
     publicWork: {
-      activeAnnouncements: publicAllowed
-        ? count(publisher.catalogs) + count(archive.activePledgeCount)
-        : 0,
-      activeUploads: publicAllowed ? count(assets.activeUploads) : 0,
-      uploadedBytes: publicAllowed ? count(assets.uploadedBytes) : 0,
+      activeAnnouncements: count(publicWork.activeAnnouncements ??
+        (count(publisher.catalogs) + count(archive.activePledgeCount))),
+      activeUploads: count(publicWork.activeUploads ?? assets.activeUploads),
+      uploadedBytes: count(publicWork.uploadedBytes ?? assets.uploadedBytes),
       activeAcquisitions: count(ingestStatus.activeAcquisitions),
       jobsByState
     },
-    selectedIndexers: Array.isArray(policy.selectedIndexers)
-      ? policy.selectedIndexers.slice(0, 8).map((_, index) => `selected-${index + 1}`)
-      : [],
+    selectedIndexers: boundedSelectedIndexers(policy),
     lastErrors: errors,
     network: {
       status: String(network.status || 'unknown').slice(0, 32),
@@ -149,7 +158,7 @@ export function formatRelayStatus(status) {
     `jobs: ${Object.entries(work.jobsByState || {}).map(([state, value]) => `${state}=${value}`).join(' ')}`,
     `network: status=${status.network?.status || 'unknown'} peers=${status.network?.peers || 0} connections=${status.network?.connections || 0} offline=${status.network?.offline === true}`,
     `channels: total=${status.summary?.totalChannels || 0} protected=${status.summary?.protectedChannels || 0} evictable=${status.summary?.evictableChannels || 0}`,
-    `selectedIndexers: ${(status.selectedIndexers || []).join(',') || 'none'}`,
+    `selectedIndexers: ${(status.selectedIndexers || []).map(indexer => `${indexer.id}:${indexer.status}`).join(',') || 'none'}`,
     `lastErrors: ${(status.lastErrors || []).join(',') || 'none'}`,
     `authorizedClients: ${status.authorizedClients || 0}`,
     `creators: total=${status.creators?.totalCreators || 0} archived=${status.creators?.videosArchived || 0} unseeded=${status.creators?.videosUnseeded || 0}`

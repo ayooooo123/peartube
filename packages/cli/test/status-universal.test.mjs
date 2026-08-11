@@ -42,6 +42,11 @@ test('relay status exposes the bounded policy-v2 contract without protected runt
       activePledgeCount: 2,
       archiveKey: protectedValues.key
     },
+    publicWork: {
+      activeAnnouncements: 5,
+      activeUploads: 1,
+      uploadedBytes: 512
+    },
     seedRetention: {
       retention: {
         contributionUsedBytes: 123,
@@ -57,16 +62,10 @@ test('relay status exposes the bounded policy-v2 contract without protected runt
       permissions: { contribute: true, archive: true },
       contributionBudgetBytes: 4096,
       archiveBudgetBytes: 8192,
+      selectedIndexerCount: 9,
       selectedIndexers: [
-        protectedValues.indexerId,
-        'indexer-secret-beta',
-        'indexer-secret-gamma',
-        'indexer-secret-delta',
-        'indexer-secret-epsilon',
-        'indexer-secret-zeta',
-        'indexer-secret-eta',
-        'indexer-secret-theta',
-        'indexer-secret-overflow'
+        { id: protectedValues.indexerId, status: 'active' },
+        { id: 'another-secret-indexer', status: 'pending' },
       ],
       callbackOrigin: protectedValues.callbackOrigin
     }
@@ -131,14 +130,14 @@ test('relay status exposes the bounded policy-v2 contract without protected runt
     }
   })
   assert.deepEqual(status.selectedIndexers, [
-    'selected-1',
-    'selected-2',
-    'selected-3',
-    'selected-4',
-    'selected-5',
-    'selected-6',
-    'selected-7',
-    'selected-8'
+    { id: 'selected-1', status: 'active' },
+    { id: 'selected-2', status: 'pending' },
+    { id: 'selected-3', status: 'unknown' },
+    { id: 'selected-4', status: 'unknown' },
+    { id: 'selected-5', status: 'unknown' },
+    { id: 'selected-6', status: 'unknown' },
+    { id: 'selected-7', status: 'unknown' },
+    { id: 'selected-8', status: 'unknown' }
   ])
   assert.deepEqual(status.lastErrors, ['SOURCE_FAILED', 'NETWORK_TIMEOUT', 'PUBLISH_FAILED'])
   assert.deepEqual(status.network, {
@@ -178,9 +177,41 @@ test('relay status exposes the bounded policy-v2 contract without protected runt
     'jobs: queued=2 acquiring=1 verifying=0 publishing=1 completed=9 failed=1 cancelled=1',
     'network: status=active peers=2 connections=1 offline=false',
     'channels: total=3 protected=1 evictable=2',
-    'selectedIndexers: selected-1,selected-2,selected-3,selected-4,selected-5,selected-6,selected-7,selected-8',
+    'selectedIndexers: selected-1:active,selected-2:pending,selected-3:unknown,selected-4:unknown,selected-5:unknown,selected-6:unknown,selected-7:unknown,selected-8:unknown',
     'lastErrors: SOURCE_FAILED,NETWORK_TIMEOUT,PUBLISH_FAILED',
     'authorizedClients: 2',
     'creators: total=1 archived=4 unseeded=2'
   ].join('\n'))
+})
+
+test('watch-only status reports stale public work without restoring protected identifiers', () => {
+  const status = buildRelayStatus({
+    config: { mode: 'public' },
+    catalog,
+    runtimeStats: {
+      policy: {
+        policyVersion: 2,
+        consentVersion: 0,
+        migrationRequired: true,
+        effectiveRole: 'watch-only',
+        permissions: { contribute: false, archive: false },
+        selectedIndexerCount: 2
+      },
+      publicWork: {
+        activeAnnouncements: 3,
+        activeUploads: 2,
+        uploadedBytes: 4096,
+        publisherId: 'must-not-leak'
+      }
+    }
+  })
+
+  assert.equal(status.publicWork.activeAnnouncements, 3)
+  assert.equal(status.publicWork.activeUploads, 2)
+  assert.equal(status.publicWork.uploadedBytes, 4096)
+  assert.deepEqual(status.selectedIndexers, [
+    { id: 'selected-1', status: 'unknown' },
+    { id: 'selected-2', status: 'unknown' }
+  ])
+  assert.equal(JSON.stringify(status).includes('must-not-leak'), false)
 })

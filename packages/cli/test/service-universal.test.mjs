@@ -30,7 +30,21 @@ function diagnostics () {
 function fakeRuntime (calls) {
   return {
     ctx: { metaDb: null },
-    api: {},
+    api: {
+      async setNetworkPolicy(policy) {
+        return {
+          success: true,
+          policy: {
+            ...policy,
+            effectiveRole: policy.archiveEnabled ? 'archive-enabled' : (policy.contributeWatchedMedia ? 'contributor' : 'watch-only'),
+            permissions: {
+              contribute: policy.contributeWatchedMedia === true,
+              archive: policy.archiveEnabled === true,
+            },
+          },
+        }
+      },
+    },
     identityManager: {},
     uploadManager: {},
     setCandidateHandler (handler) { calls.push(['candidate-handler', typeof handler]) },
@@ -86,6 +100,58 @@ test('relay service starts one universal runtime and reports structured diagnost
   t.is(timers[0].cleared, true)
 })
 
+test('companion startup cannot accept ingest before runtime policy readiness', async (t) => {
+  const storagePath = mkdtempSync(join(tmpdir(), 'peartube-cli-policy-startup-'))
+  t.teardown(() => rmSync(storagePath, { recursive: true, force: true }))
+  const calls = []
+  const runtime = fakeRuntime(calls)
+  let releaseRuntime
+  let markRuntimeStarted
+  const runtimeStarted = new Promise(resolve => { markRuntimeStarted = resolve })
+  const runtimeRelease = new Promise(resolve => { releaseRuntime = resolve })
+  runtime.start = async () => {
+    calls.push(['start'])
+    markRuntimeStarted()
+    await runtimeRelease
+  }
+  let companionService
+  const companionStarted = new Promise(resolve => {
+    runtime.markCompanionStarted = resolve
+  })
+  const config = configFor(storagePath)
+  config.companion = { ...(config.companion || {}), enabled: true }
+  const service = await createRelayService({
+    config,
+    logger,
+    runtimeFactory: async () => runtime,
+    companionServerFactory: async ({ service: liveService }) => {
+      companionService = liveService
+      return {
+        async start() {
+          runtime.markCompanionStarted()
+          t.is(liveService.canStageIngest(), false)
+        },
+        async close() {}
+      }
+    },
+    writeStatusFile: async () => {},
+    setIntervalFn: () => ({ unref: noop }),
+    clearIntervalFn: noop
+  })
+  const starting = service.start()
+  await companionStarted
+  t.is(companionService.canStageIngest(), false)
+  const denied = await companionService.submitIngestJob({}).then(
+    () => null,
+    error => error
+  )
+  t.is(denied?.code, 'RETENTION_ADMISSION_DENIED')
+  await runtimeStarted
+  releaseRuntime()
+  await starting
+  await service.close()
+})
+
 test('completed archive publishes an authenticated catalog and retains bounded assets', async (t) => {
   const storagePath = mkdtempSync(join(tmpdir(), 'peartube-cli-archive-'))
   t.teardown(() => rmSync(storagePath, { recursive: true, force: true }))
@@ -99,6 +165,24 @@ test('completed archive publishes an authenticated catalog and retains bounded a
     setIntervalFn: () => ({ unref: noop }),
     clearIntervalFn: noop,
     nowFn: () => 1234
+  })
+  const blocked = await service.publishArchiveJob({
+    status: 'completed',
+    publish: true,
+    channelKey: 'channel-1',
+  })
+  t.alike(blocked, { published: false, reason: 'archive-consent-required' })
+  t.alike(calls, [])
+  await service.applyNetworkPolicy({
+    policyVersion: 2,
+    consentVersion: 1,
+    migrationRequired: false,
+    contributeWatchedMedia: false,
+    archiveEnabled: true,
+    contributionBudgetBytes: 0,
+    archiveBudgetBytes: 4096,
+    uploadPermission: 'enabled',
+    uploadCeilingBytes: 4096,
   })
 
   const result = await service.publishArchiveJob({

@@ -468,14 +468,15 @@ test('suspended public discovery restores its announcement count when the networ
     initialNetworkPolicy: contributionPolicy(),
   })
   await runtime.start()
-  await runtime.publishLocalPublisherCatalog({ publisherId: descriptor.publisherId })
+  const published = await runtime.publishLocalPublisherCatalog({ publisherId: descriptor.publisherId })
   const publisherJoin = swarm.joins.find(join =>
-    b4a.equals(join.topic, derivePublisherTopic({
-      publisherId: descriptor.publisherId,
-      catalogEpoch: descriptor.catalogEpoch,
-      protocolMajor: PROTOCOL_MAJOR,
-    })))
-  t.ok(publisherJoin?.options.server)
+    b4a.toString(join.topic, 'hex') === published.topic.topicHex)
+  t.ok(publisherJoin, 'local publisher creates its public discovery handle')
+  if (!publisherJoin) {
+    await runtime.close()
+    return
+  }
+  t.ok(publisherJoin.options.server)
   t.is(runtime.getDiagnostics().publicWork.activeAnnouncements, 1)
 
   await runtime.applyNetworkPolicy(contributionPolicy({ networkEnabled: false }))

@@ -1952,9 +1952,10 @@ export function createScopedNetworkRuntime (options = {}) {
         const archiveScope = scope.purpose === 'archive' || scope.purpose === 'archive-discovery'
         const contributionChanged = contributionScope && contributionServingPolicyChanged
         const archiveChanged = (archiveScope || retainedArchiveScope) && archiveServingPolicyChanged
-        if (!contributionChanged && !archiveChanged) return
-        for (const peerId of [...scope.sessions.keys()]) {
-          closeSession(scope, peerId, 'network-policy-role-changed')
+        if (contributionChanged || archiveChanged) {
+          for (const peerId of [...scope.sessions.keys()]) {
+            closeSession(scope, peerId, 'network-policy-role-changed')
+          }
         }
         await rejoinScopeDiscovery(scope)
       }))

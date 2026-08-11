@@ -797,6 +797,7 @@ export function createIngestManager ({
         if (existing) {
           if (existing.requestFingerprint !== fingerprint) fail('IDEMPOTENCY_CONFLICT', 'idempotency key is already bound to another request', 409)
           const attached = ephemeral.get(existing.jobId)
+          const incomingCapability = normalizeSourceCapability(sourceCapability)
           let incomingSpool = null
           if (spool != null) {
             incomingSpool = normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
@@ -814,14 +815,11 @@ export function createIngestManager ({
             }
           }
           if (incomingSpool) discardUnacceptedSpool(ingestSpoolLease, incomingSpool, existing.jobId)
-          if (!TERMINAL.has(existing.state) && !ephemeral.get(existing.jobId)?.sourceCapability && sourceCapability != null) {
-            assertSubmissionActive(signal)
+          if (!TERMINAL.has(existing.state) && !ephemeral.get(existing.jobId)?.sourceCapability && incomingCapability != null) {
             const current = ephemeral.get(existing.jobId) || {}
-            ephemeral.set(existing.jobId, { ...current, sourceCapability: normalizeSourceCapability(sourceCapability) })
+            ephemeral.set(existing.jobId, { ...current, sourceCapability: incomingCapability })
           }
-          const current = await store.getJob(existing.jobId)
-          assertSubmissionActive(signal)
-          return publicJob(current)
+          return publicJob(existing)
         }
 
         const normalizedSpool = spool == null ? null : normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })

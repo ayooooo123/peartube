@@ -388,12 +388,14 @@ test('job store rejects duplicate idempotency aliases and corrupt index bindings
   const duplicateDigest = 'f'.repeat(64)
   bee.map.set(`companion-ingest/v1/idempotency/${duplicateDigest}`, { ...pointer, idempotencyDigest: duplicateDigest })
 
-  await t.exception(store.findByIdempotency(duplicateDigest), /INGEST_PERSISTENCE_CORRUPT/)
+  const duplicateError = await store.findByIdempotency(duplicateDigest).then(() => null, error => error)
+  t.is(duplicateError?.code, 'INGEST_PERSISTENCE_CORRUPT')
 
   const jobKey = `companion-ingest/v1/job/${created.jobId}`
   const record = bee.map.get(jobKey)
   bee.map.set(jobKey, { ...record, requestFingerprint: '0'.repeat(64) })
-  await t.exception(store.findByIdempotency(originalDigest), /INGEST_PERSISTENCE_CORRUPT/)
+  const corruptError = await store.findByIdempotency(originalDigest).then(() => null, error => error)
+  t.is(corruptError?.code, 'INGEST_PERSISTENCE_CORRUPT')
 })
 
 test('restart bounds acquiring and verifying jobs as recoverable source reattachment failures', async (t) => {
@@ -794,7 +796,8 @@ async function createMultipartHarness (t, {
   clock = () => MULTIPART_NOW,
   canArchive = () => true,
   publisher = fakePublisher(),
-  bee = fakeBee()
+  bee = fakeBee(),
+  onSubmitSignal = null
 } = {}) {
   const files = fixture(t)
   const store = createIngestJobStore({ bee })
@@ -805,6 +808,7 @@ async function createMultipartHarness (t, {
     canArchive,
     async submitIngestJob (input, { ingestSpoolLease = null, signal = null } = {}) {
       submissions++
+      onSubmitSignal?.(signal)
       return manager.submitJob({ ...input, ingestSpoolLease, signal })
     },
     getIngestJob: jobId => manager.getJob(jobId),
@@ -988,7 +992,15 @@ test('disconnect at the final spool-handoff checkpoint leaves ownership unaccept
       await persistenceGate
     }
   })
-  const harness = await createMultipartHarness(t, { bee })
+  let observeAbort
+  const submissionAborted = new Promise(resolve => { observeAbort = resolve })
+  const harness = await createMultipartHarness(t, {
+    bee,
+    onSubmitSignal (signal) {
+      if (signal?.aborted) observeAbort()
+      else signal?.addEventListener?.('abort', observeAbort, { once: true })
+    }
+  })
   const bytes = Buffer.from('disconnect after staging payload '.repeat(10))
   const request = movieRequest(bytes)
   const boundary = 'peartubeMultipartDisconnect'
@@ -1010,8 +1022,10 @@ test('disconnect at the final spool-handoff checkpoint leaves ownership unaccept
   })
   await persistenceEntered
   clientRequest.destroy(new Error('client disconnected'))
-  releasePersistence()
   await t.exception(response)
+  await submissionAborted
+  await new Promise(resolve => setTimeout(resolve, 0))
+  releasePersistence()
 
   const deadline = Date.now() + 2000
   while (stagingEntries(harness.files.spoolRoot).length > 0 && Date.now() < deadline) {

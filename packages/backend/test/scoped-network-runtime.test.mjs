@@ -1070,20 +1070,26 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
 
   await runtimeA.applyNetworkPolicy(contributionPolicy())
   for (let attempt = 0; attempt < 20; attempt++) {
-    if (runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'asset')) break
+    if (runtimeA.getDiagnostics().sessions.some(session =>
+      session.purpose === 'asset' && session.state === 'active')) break
     await settle()
   }
   const closedBeforeRoleBudget = runtimeA.getDiagnostics().counters.closedSessions
   const uploadedBeforeRoleBudget = runtimeA.getDiagnostics().policy.uploadedBytes
   await runtimeA.applyNetworkPolicy(contributionPolicy({ contributionBudgetBytes: 0 }))
-  for (let attempt = 0; attempt < 20; attempt++) {
-    if (runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'asset')) break
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const current = runtimeA.getDiagnostics()
+    const closedServingSession = current.counters.closedSessions > closedBeforeRoleBudget
+    const activeClientSession = current.sessions.some(session =>
+      session.purpose === 'asset' && session.state === 'active')
+    if (closedServingSession && activeClientSession) break
     await settle()
   }
   const roleBudgetDiagnostics = runtimeA.getDiagnostics()
   t.ok(roleBudgetDiagnostics.counters.closedSessions > closedBeforeRoleBudget,
     'zero contribution budget closes the old serving asset session')
-  const clientOnlyAssetSession = roleBudgetDiagnostics.sessions.find(session => session.purpose === 'asset')
+  const clientOnlyAssetSession = roleBudgetDiagnostics.sessions.find(session =>
+    session.purpose === 'asset' && session.state === 'active')
   t.ok(clientOnlyAssetSession, 'the retained asset rejoins over the same transport as a client-only session')
   t.is(clientOnlyAssetSession?.assetResponseCount, 0)
   t.absent(roleBudgetDiagnostics.topics.find(topic => topic.purpose === 'asset')?.publicAnnounced,
@@ -1094,7 +1100,7 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
     endBlock: 5,
     requirePeerEvidence: true,
   }).then(() => null, error => error)
-  t.is(roleDenied?.code, 'DISCONNECTED', 'client-only replacement cannot serve the closed upload session')
+  t.is(roleDenied?.code, 'UNAVAILABLE', 'active client-only replacement cannot serve an asset block')
   t.is(runtimeA.getDiagnostics().policy.uploadedBytes, uploadedBeforeRoleBudget)
   t.ok(runtimeB.getDiagnostics().topics.some(topic => topic.purpose === 'asset'),
     'the watch-only client asset scope remains retained')

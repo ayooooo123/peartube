@@ -672,6 +672,7 @@ function sendMultipart ({
   chunkBytes = body.byteLength,
   delayMs = 0,
   contentLength = false,
+  headersOnly = false,
   onChunk = null,
   abortAfterChunks = null
 }) {
@@ -721,6 +722,10 @@ function sendMultipart ({
       if (abortAfterChunks != null) settle(resolve, { aborted: true, error })
       else settle(reject, error)
     })
+    if (headersOnly) {
+      req.end()
+      return
+    }
     void (async () => {
       let chunkIndex = 0
       for (let offset = 0; offset < body.byteLength; offset += chunkBytes) {
@@ -863,7 +868,7 @@ test('multipart invalid MAC and replay delete staging before any second job muta
   t.alike(stagingEntries(harness.files.spoolRoot), [])
 })
 
-test('multipart parser rejects extra files, unknown fields, malformed endings, and bounded content length with cleanup', async (t) => {
+test('multipart parser rejects semantic errors, declared body overflow, and chunked file overflow with cleanup', async (t) => {
   const bytes = Buffer.from('multipart strict parser payload')
   const request = movieRequest(bytes)
   const harness = await createMultipartHarness(t, { maxIngestBytes: 128 })
@@ -918,7 +923,22 @@ test('multipart parser rejects extra files, unknown fields, malformed endings, a
       }),
       nonce: 'multipart-oversize-nonce',
       expected: 413,
-      contentLength: true
+      contentLength: true,
+      headersOnly: true
+    },
+    {
+      boundary: 'peartubeChunkedOversize',
+      body: multipartBody({
+        boundary: 'peartubeChunkedOversize',
+        request,
+        idempotencyKey: 'multipart-chunked-oversize',
+        bytes: Buffer.alloc(256, 1),
+        etag: request.expected.etag
+      }),
+      nonce: 'multipart-chunked-oversize-nonce',
+      expected: 413,
+      chunkBytes: 64,
+      delayMs: 1
     }
   ]
   for (const item of cases) {
@@ -927,7 +947,10 @@ test('multipart parser rejects extra files, unknown fields, malformed endings, a
       body: item.body,
       boundary: item.boundary,
       nonce: item.nonce,
-      contentLength: item.contentLength
+      contentLength: item.contentLength,
+      headersOnly: item.headersOnly,
+      chunkBytes: item.chunkBytes,
+      delayMs: item.delayMs
     })
     t.is(response.statusCode, item.expected, response.body)
     t.alike(stagingEntries(harness.files.spoolRoot), [])

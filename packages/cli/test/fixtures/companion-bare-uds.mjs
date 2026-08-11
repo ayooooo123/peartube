@@ -3,13 +3,30 @@ import net from 'bare-net'
 import process from 'bare-process'
 
 import { decodeSearchQuery } from '../../src/companion/contracts.js'
-import { signControlRequest } from '../../src/companion/auth.js'
+import { canonicalizePathAndQuery, signControlRequest } from '../../src/companion/auth.js'
 import { resolveCompanionConfig } from '../../src/companion/config.js'
 import { createCompanionServer } from '../../src/companion/server.js'
 
 const NOW = 1_786_406_400_000
 const SECRET = 'ef'.repeat(32)
 const storagePath = `/tmp/peartube-bare-companion-${process.pid}`
+const searchRequestTarget = '/api/v2/search?title=M*A*S*H%20~&kind=movie'
+const canonicalSearchTarget = '/api/v2/search?kind=movie&title=M*A*S*H+%7E'
+const canonicalSearchMac = 'af59194bdbdaf97c20fa751e81f34e6533bc57cdcad8ab6a4cabb75c5feaf3a1'
+if (canonicalizePathAndQuery(searchRequestTarget) !== canonicalSearchTarget) {
+  throw new Error('Bare companion search target canonicalization failed')
+}
+const canonicalHeaders = signControlRequest({
+  method: 'GET',
+  path: searchRequestTarget,
+  timestamp: NOW,
+  nonce: 'canonical-nonce-01',
+  client: 'mediastorm-test',
+  secret: 'ab'.repeat(32)
+})
+if (canonicalHeaders['X-PearTube-MAC'] !== canonicalSearchMac) {
+  throw new Error('Bare companion search target MAC failed')
+}
 let server = null
 let socket = null
 const decodedSearch = decodeSearchQuery(new URLSearchParams('namespace=tmdb&identifier=348&kind=movie&limit=64'))

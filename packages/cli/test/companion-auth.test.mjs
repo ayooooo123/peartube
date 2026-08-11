@@ -3,14 +3,20 @@ import b4a from 'b4a'
 import sodium from 'sodium-universal'
 
 import {
+  canonicalizePathAndQuery,
   createNonceStore,
   hashControlBody,
+  signControlRequest,
   verifyControlRequest
 } from '../src/companion/auth.js'
 
 const NOW = 1_786_406_400_000
 const SECRET = 'ab'.repeat(32)
 const CLIENT = 'mediastorm-test'
+
+const SEARCH_REQUEST_TARGET = '/api/v2/search?title=M*A*S*H%20~&kind=movie'
+const CANONICAL_SEARCH_TARGET = '/api/v2/search?kind=movie&title=M*A*S*H+%7E'
+const CANONICAL_SEARCH_MAC = 'af59194bdbdaf97c20fa751e81f34e6533bc57cdcad8ab6a4cabb75c5feaf3a1'
 
 function macKey (secret) {
   return b4a.from(secret, 'hex')
@@ -60,6 +66,19 @@ function verifier (overrides = {}) {
     ...overrides
   }
 }
+
+test('search targets use canonical form encoding for authentication', (t) => {
+  t.is(canonicalizePathAndQuery(SEARCH_REQUEST_TARGET), CANONICAL_SEARCH_TARGET)
+  const headers = signControlRequest({
+    method: 'GET',
+    path: SEARCH_REQUEST_TARGET,
+    timestamp: NOW,
+    nonce: 'canonical-nonce-01',
+    client: CLIENT,
+    secret: SECRET
+  })
+  t.is(headers['X-PearTube-MAC'], CANONICAL_SEARCH_MAC)
+})
 
 test('control MAC binds method, canonical path/query, timestamp, nonce, and body digest', (t) => {
   const body = b4a.from('{"probe":true}')

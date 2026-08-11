@@ -12,6 +12,30 @@ const BODY_HASH_BYTES = 32
 const MAX_CLIENT_BYTES = 128
 const MAX_NONCE_BYTES = 128
 const MAX_PATH_BYTES = 8192
+const UPPER_HEX = '0123456789ABCDEF'
+
+function encodeFormComponent (value) {
+  const bytes = b4a.from(value, 'utf8')
+  let encoded = ''
+  for (const byte of bytes) {
+    if (
+      (byte >= 0x30 && byte <= 0x39) ||
+      (byte >= 0x41 && byte <= 0x5a) ||
+      (byte >= 0x61 && byte <= 0x7a) ||
+      byte === 0x2a ||
+      byte === 0x2d ||
+      byte === 0x2e ||
+      byte === 0x5f
+    ) {
+      encoded += String.fromCharCode(byte)
+    } else if (byte === 0x20) {
+      encoded += '+'
+    } else {
+      encoded += `%${UPPER_HEX[byte >>> 4]}${UPPER_HEX[byte & 0x0f]}`
+    }
+  }
+  return encoded
+}
 
 export class CompanionAuthError extends Error {
   constructor (code, message, statusCode = 401) {
@@ -83,9 +107,12 @@ export function canonicalizePathAndQuery (rawPath) {
   })
   if (!entries.length) return url.pathname
 
-  const query = new URLSearchParams()
-  for (const [key, value] of entries) query.append(key, value)
-  return `${url.pathname}?${query.toString()}`
+  let query = ''
+  for (const [key, value] of entries) {
+    if (query) query += '&'
+    query += `${encodeFormComponent(key)}=${encodeFormComponent(value)}`
+  }
+  return `${url.pathname}?${query}`
 }
 
 export function createBodyHasher () {

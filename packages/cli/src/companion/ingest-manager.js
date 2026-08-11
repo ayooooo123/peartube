@@ -703,6 +703,7 @@ export function createIngestManager ({
       capability: attachment.sourceCapability,
       jobId: job.jobId,
       etag: expectedETag,
+      length: job.expectedBytes,
       signal
     })
     if (metadata.length !== job.expectedBytes) fail('SOURCE_LENGTH_MISMATCH', 'source length does not match')

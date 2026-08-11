@@ -310,6 +310,19 @@ test('source capability acquisition resumes the same recoverable job and publish
   }
 })
 
+test('source callback HEAD requires a bounded durable expected length', async (t) => {
+  const client = sourceClient('http://127.0.0.1:1')
+  for (const length of [undefined, 0, Number.MAX_SAFE_INTEGER]) {
+    const error = await client.head({
+      capability: 'source-capability-invalid-length-000000000001',
+      jobId: 'ing_invalid_length',
+      etag: ETAG,
+      length
+    }).then(() => null, value => value)
+    t.is(error?.code, 'SOURCE_LENGTH_MISMATCH')
+  }
+})
+
 test('source callback metadata, redirects, authentication, and exact range framing fail closed', async (t) => {
   const bytes = Buffer.from('abcdefghijkl')
   const cases = [
@@ -329,7 +342,7 @@ test('source callback metadata, redirects, authentication, and exact range frami
     const client = sourceClient(origin)
     const capability = `failure-capability-${String(index).padStart(32, '0')}`
     const error = await (entry.operation === 'head'
-      ? client.head({ capability, jobId, etag: ETAG })
+      ? client.head({ capability, jobId, etag: ETAG, length: bytes.byteLength })
       : client.getRange({ capability, jobId, etag: ETAG, length: bytes.byteLength, start: 0, end: 3, onChunk () {} })
     ).then(() => null, value => value)
     t.is(error?.code, entry.code, entry.name)

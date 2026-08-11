@@ -209,7 +209,10 @@ export function createSourceCallbackClient ({
     })
   }
 
-  async function head ({ capability, jobId, etag, signal = null }) {
+  async function head ({ capability, jobId, etag, length, signal = null }) {
+    if (!Number.isSafeInteger(length) || length < 1 || length > MAX_SOURCE_BYTES) {
+      fail('SOURCE_LENGTH_MISMATCH', false)
+    }
     if (!ETAG.test(etag || '')) fail('SOURCE_ETAG_MISMATCH', false)
     const path = requestPath(capability)
     return open({
@@ -219,18 +222,18 @@ export function createSourceCallbackClient ({
       headers: headersFor({ method: 'HEAD', path, jobId, etag }),
       async onResponse (response) {
         if (response.statusCode !== 200) mapStatus(response.statusCode || 0)
-        const length = exactIntegerHeader(response, 'content-length')
+        const responseLength = exactIntegerHeader(response, 'content-length')
         const responseETag = singleHeader(response, 'etag')
         const contentType = singleHeader(response, 'content-type')
         const encoding = singleHeader(response, 'content-encoding')
-        if (length == null || length < 1 || length > MAX_SOURCE_BYTES) fail('SOURCE_LENGTH_MISMATCH', false)
+        if (responseLength !== length) fail('SOURCE_LENGTH_MISMATCH', false)
         if (responseETag !== etag) fail('SOURCE_ETAG_MISMATCH', false)
         if (contentType == null || !MIME_TYPE.test(contentType.toLowerCase())) fail('SOURCE_METADATA_INVALID', false)
         if (!absentHeader(response, 'transfer-encoding') || (encoding != null && encoding !== 'identity')) {
           fail('SOURCE_METADATA_INVALID', false)
         }
         await finishResponse(response)
-        return { length, etag: responseETag, mimeType: contentType.toLowerCase() }
+        return { length: responseLength, etag: responseETag, mimeType: contentType.toLowerCase() }
       }
     })
   }

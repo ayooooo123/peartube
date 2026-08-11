@@ -545,7 +545,9 @@ export function createCompanionServer ({
     } finally {
       clearTimeout(deadline)
       if (staged && !ingestSpoolLease?.accepted) {
-        try { fs.rmSync(staged.dir, { recursive: true, force: true }) } catch {}
+        try { fs.rmSync(staged.dir, { recursive: true, force: true }) } catch {
+          // Best-effort rejection cleanup; the lease was never transferred.
+        }
       }
       request.socket?.removeListener?.('close', onSocketClose)
       activeRequestControllers.delete(controller)

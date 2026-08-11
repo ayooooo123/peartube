@@ -127,12 +127,16 @@ export function receiveMultipartUpload (req, {
     }
     const cleanup = () => {
       if (part?.fd != null) {
-        try { fs.closeSync(part.fd) } catch {}
+        try { fs.closeSync(part.fd) } catch {
+          // Best-effort cleanup after a failed or aborted upload.
+        }
         part.fd = null
       }
       const dir = part?.dir || file?.dir
       if (dir) {
-        try { fs.rmSync(dir, { recursive: true, force: true }) } catch {}
+        try { fs.rmSync(dir, { recursive: true, force: true }) } catch {
+          // Best-effort cleanup after a failed or aborted upload.
+        }
       }
     }
     const fail = (error) => {
@@ -187,7 +191,7 @@ export function receiveMultipartUpload (req, {
       }
       if (partCount > maxFields + 1) throw multipartError('MULTIPART_PARTS_TOO_MANY', 'multipart request has too many parts', 413)
       if (part.isFile && !file) {
-        const safeName = (part.filename || 'upload').replace(/[^\w.\-]+/g, '_').replace(/^\.+/, '').slice(-180) || 'upload'
+        const safeName = (part.filename || 'upload').replace(/[^\w.-]+/g, '_').replace(/^\.+/, '').slice(-180) || 'upload'
         const uploadsDir = path.join(uploadDir, 'uploads')
         fs.mkdirSync(uploadsDir, { recursive: true })
         let uploadId = null
@@ -232,7 +236,9 @@ export function receiveMultipartUpload (req, {
 
     function finishPart () {
       if (part.fd != null) {
-        try { fs.closeSync(part.fd) } catch {}
+        try { fs.closeSync(part.fd) } catch {
+          // The completed descriptor is still validated by the ingest manager.
+        }
         part.fd = null
         file = {
           field: part.name,

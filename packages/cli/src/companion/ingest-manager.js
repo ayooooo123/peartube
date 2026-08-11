@@ -90,12 +90,20 @@ function byteLength (value) {
   return b4a.byteLength(value)
 }
 
+function containsControlCharacter (value) {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index)
+    if (code <= 31 || (code >= 127 && code <= 159)) return true
+  }
+  return false
+}
+
 function text (value, name, maximum, { required = true, lower = false, pattern = null } = {}) {
   if (value == null && !required) return null
   if (typeof value !== 'string') fail('INGEST_REQUEST_INVALID', `${name} must be a string`)
   let normalized = value.normalize('NFC').trim()
   if (lower) normalized = normalized.toLowerCase()
-  if (!normalized || byteLength(normalized) > maximum || /[\u0000-\u001f\u007f-\u009f]/.test(normalized) || LOCATOR.test(normalized)) {
+  if (!normalized || byteLength(normalized) > maximum || containsControlCharacter(normalized) || LOCATOR.test(normalized)) {
     fail('INGEST_REQUEST_INVALID', `${name} must be a bounded non-locator string`)
   }
   if (pattern && !pattern.test(normalized)) fail('INGEST_REQUEST_INVALID', `${name} has an invalid format`)
@@ -708,7 +716,9 @@ export function createIngestManager ({
             await exposePublication(current, resolved.channelInfo, resolved.metadata)
             return await store.completePublication(jobId, { expectedVersion: current.version, result: resolved.result })
           }
-        } catch {}
+        } catch {
+          // Fall through to the bounded terminal publication error below.
+        }
       }
       if (cancelled) return await markTerminal(jobId, 'cancelled', 'CANCELLED', false)
       const code = publicationErrorCode(error, current?.state || job?.state)

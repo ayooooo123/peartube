@@ -34,7 +34,7 @@ DONE
 - `createCatalogIngestor(...)` retains `ingest({ publisherId, descriptor, catalog })` and now also exposes `repairPublisher({ publisherId, descriptor, catalog, reason })`.
 - Supported reasons are exactly `source-fork-changed`, `source-history-unavailable`, and `source-identity-changed`; caller-provided arbitrary text is rejected.
 - Current supplied descriptor verification, exact accepted pinned descriptor comparison, authorization-state loading, signature verification, projection normalization, and bounded accumulation all happen against one exact pinned checkout before any repair transaction.
-- Fork changes, stored source identity discontinuities (including catalog epoch/bootstrap/descriptor digest), stored-ahead history, and the proven stale-history error shape select publisher-local repair.
+- Fork changes and stored source identity discontinuities (including catalog epoch/bootstrap/descriptor digest) select publisher-local repair. A same-identity, same-fork source behind its durable cursor is treated as lagging and rejected without replacement; only a proven stale-history diff error selects automatic `source-history-unavailable` repair.
 - The ingestor requires the publisher-wide cursor surface; exact-epoch fallback was removed so epoch discontinuities cannot masquerade as bootstrap.
 - Repair enumerates the complete current publisher projection set off-transaction under the existing 4,096-row/8-MiB effective ceilings, then invokes `replacePublisherSlice` once with the exact prior publisher cursor.
 - Replacement rows and the new cursor commit atomically under publisher-wide expected-cursor CAS. The store now detects a prior cursor even when its catalog epoch differs from the current descriptor.
@@ -54,3 +54,40 @@ DONE
 ## Concerns
 
 - Parent validation passed before the latest review fixes (24/24 Brittle tests with 118/118 assertions plus 17/17 Node subtests). Focused parent revalidation after these fixes is pending.
+
+## Final-review fix round
+
+### Status
+
+IMPLEMENTATION COMPLETE — VALIDATION PENDING
+
+### Exact files changed in this round
+
+- Modified `packages/backend/src/indexer/catalog-ingestor.js`.
+- Modified `packages/backend/test/indexer-catalog-ingestion.test.mjs`.
+- Updated `.superpowers/sdd/2026-08-09-05-catalog-ingestion/task-2-report.md`.
+
+### RED tests added first
+
+These tests were added before the source changes but were not executed, as this fix round explicitly prohibited commands and validation. Against the prior implementation:
+
+1. Same-identity, same-fork source lagging the durable cursor expects rejection, zero replacement/apply calls, and byte-equivalent rows/cursor. It fails because the prior branch labeled stored-ahead state `source-history-unavailable` and replaced the publisher slice.
+2. Zero-expiry writer admission expects an expired-authorization rejection with no rows/cursor. It fails because the prior `writerExpiry > 0` guard treated zero as permanent.
+3. A valid `RecordingOfClaim` with a `recording` subject and work target expects one exact raw source record and no relationship edge. It fails because the prior projection required a `rendition` subject and rejected the valid recording endpoint.
+4. Invalid recording endpoint shapes expect fail-closed behavior before cursor mutation. The non-work target retains the existing guard; the new non-recording-subject case fails against the prior source because a `rendition` subject was accepted and projected as `work-rendition`.
+5. Invalid `signal` input and a native already-aborted signal expect rejection before checkout or index mutation. They fail because the prior API ignored `signal`.
+6. Incremental cancellation raised after bounded diff collection expects no `applyPublisherChanges` call and unchanged durable rows/cursor. It fails because the prior incremental path committed despite cancellation.
+7. Explicit-repair cancellation raised after bounded current-row collection expects no `replacePublisherSlice` call and unchanged durable rows/cursor. It fails because the prior replacement path committed despite cancellation.
+
+### Final behavior
+
+- Automatic ingestion now rejects a same-catalog, same-descriptor, same-fork source whose pinned `viewVersion` is behind the durable publisher cursor. It does not enumerate for replacement, call a store mutation, or regress rows/cursor. Automatic `source-history-unavailable` replacement remains limited to `SNAPSHOT_NOT_AVAILABLE` from the exact prior-version diff checkout.
+- Current writer authorization treats `expiresAt` as an absolute timestamp. Zero is expired whenever the captured ingestion time is positive.
+- `RecordingOfClaim` validates a work target and recording subjects, retains the exact raw source record, and emits no relationship edge because the installed Plan 04 schema has no `work-recording` relation. Non-work and non-recording endpoints fail closed.
+- `ingest` and `repairPublisher` destructure and validate optional `signal`, preserve native `AbortSignal.throwIfAborted()` reasons, check before source preparation and asynchronous pinned-source phases, check within bounded row/diff processing, and check immediately before every replacement or incremental store mutation.
+- Exact cursor CAS, row/byte bounds, raw/projection diffing, caller-owned Corestore lifetime, and checkout closure in `finally` are unchanged.
+
+### Blockers / concerns
+
+- No implementation blocker identified.
+- Focused Plan 05 validation is intentionally pending for the parent because this round prohibited test, build, schema, generation, lint, formatter, and typecheck commands.

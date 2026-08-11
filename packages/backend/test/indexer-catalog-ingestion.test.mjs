@@ -179,6 +179,26 @@ function availabilityWithoutAssetOperation(fixture, sequence = 2) {
   }, sequence)
 }
 
+function recordingOfOperation(fixture, {
+  sequence = 2,
+  subjectKind = 'recording',
+  workKind = 'work',
+} = {}) {
+  const subject = createEntityReference({
+    entityKind: subjectKind,
+    namespace: 'issuer-native',
+    issuerRootKey: fixture.descriptor.publisherRootKey,
+    issuerLocalId: `${subjectKind}-pilot-episode`,
+  })
+  const workRef = createEntityReference({
+    entityKind: workKind,
+    namespace: 'issuer-native',
+    issuerRootKey: fixture.descriptor.publisherRootKey,
+    issuerLocalId: `${workKind}-pilot-episode`,
+  })
+  return claimOperation(fixture, 'RecordingOfClaim', [subject], { workRef }, sequence)
+}
+
 
 function claimProjectionId(operation) {
   return hex(decodePublisherOperationBody(operation.recordType, operation.canonicalBody).claimId)
@@ -607,26 +627,69 @@ test('valid metadata claims remain explicit raw-only records when the installed 
   t.is(rows.sourceCursors.length, 1)
 })
 
-test('zero-expiry authorization is permanent and pinned ingestion never reads mutable catalog helpers', async (t) => {
+test('valid RecordingOfClaim with a recording subject stays raw-only when no work-recording edge exists', async (t) => {
+  const f = await fixture(t)
+  const claim = recordingOfOperation(f)
+  await putProjection(f, 'claim', claimProjectionId(claim), claim)
+
+  const result = await ingestor(f).ingest({
+    publisherId: f.publisherId,
+    descriptor: f.descriptor,
+    catalog: f.catalog,
+  })
+  const rows = await publisherRows(f.indexStore, f.publisherId)
+
+  t.is(result.mode, 'bootstrap')
+  t.is(rows.sourceRecords.length, 1)
+  t.is(rows.relationshipEdges.length, 0)
+  t.is(rows.sourceCursors.length, 1)
+})
+
+test('RecordingOfClaim rejects non-work targets and non-recording subjects before index mutation', async (t) => {
+  for (const options of [{ workKind: 'edition' }, { subjectKind: 'rendition' }]) {
+    const f = await fixture(t)
+    const claim = recordingOfOperation(f, options)
+    await putProjection(f, 'claim', claimProjectionId(claim), claim)
+
+    await t.exception(
+      ingestor(f).ingest({
+        publisherId: f.publisherId,
+        descriptor: f.descriptor,
+        catalog: f.catalog,
+      }),
+      /RecordingOfClaim/,
+    )
+    t.absent(await f.index.getSourceCursor({ publisherId: f.publisherId, catalogEpoch: 0 }))
+  }
+})
+
+
+test('zero-expiry writer authorization is expired at a positive ingestion time', async (t) => {
   const f = await fixture(t, { writerExpiresAt: 0 })
   const manifest = publicationManifest(f)
   await putProjection(f, 'publication', manifest.publicationId, publicationOperation(f, manifest, 1))
-  f.catalog.getViewHead = async () => { throw new Error('mutable catalog head must not be read') }
-  f.catalog.getAuthorizationState = async () => { throw new Error('mutable catalog authorization must not be read') }
 
-  const result = await ingestor(f).ingest({ publisherId: f.publisherId, descriptor: f.descriptor, catalog: f.catalog })
+  await t.exception(
+    ingestor(f).ingest({
+      publisherId: f.publisherId,
+      descriptor: f.descriptor,
+      catalog: f.catalog,
+    }),
+    /authorization is expired/,
+  )
 
-  t.is(result.mode, 'bootstrap')
-  t.is((await publisherRows(f.indexStore, f.publisherId)).publicationProjections.length, 1)
+  const rows = await publisherRows(f.indexStore, f.publisherId)
+  t.is(rows.sourceRecords.length, 0)
+  t.is(rows.publicationProjections.length, 0)
+  t.is(rows.sourceCursors.length, 0)
   t.alike(f.checkouts, { opened: 1, closed: 1 })
 })
 
-test('same-fork cursor regression repairs the publisher to the pinned current source', async (t) => {
+test('same-fork source behind the durable cursor rejects without publisher replacement or cursor mutation', async (t) => {
   const f = await fixture(t)
   const manifest = publicationManifest(f)
   await putProjection(f, 'publication', manifest.publicationId, publicationOperation(f, manifest, 1))
-  const catalogIngestor = ingestor(f)
-  await catalogIngestor.ingest({ publisherId: f.publisherId, descriptor: f.descriptor, catalog: f.catalog })
+  await ingestor(f).ingest({ publisherId: f.publisherId, descriptor: f.descriptor, catalog: f.catalog })
   const cursor = await f.index.getSourceCursor({ publisherId: f.publisherId, catalogEpoch: 0 })
   const futureCursor = {
     ...cursor,
@@ -634,20 +697,37 @@ test('same-fork cursor regression repairs the publisher to the pinned current so
     sourceHead: cursor.sourceHead + 10,
   }
   await f.index.applyPublisherChanges({ publisherId: f.publisherId, operations: [], cursor: futureCursor })
+  const beforeRows = await publisherRows(f.indexStore, f.publisherId)
+  const calls = { replace: 0, apply: 0 }
+  const observedIndex = {
+    getSourceCursor: input => f.index.getSourceCursor(input),
+    getPublisherSourceCursor: input => f.index.getPublisherSourceCursor(input),
+    getPublisherAdmissionLimits: input => f.index.getPublisherAdmissionLimits(input),
+    replacePublisherSlice(input) {
+      calls.replace++
+      return f.index.replacePublisherSlice(input)
+    },
+    applyPublisherChanges(input) {
+      calls.apply++
+      return f.index.applyPublisherChanges(input)
+    },
+  }
 
-  const repaired = await catalogIngestor.ingest({
-    publisherId: f.publisherId,
-    descriptor: f.descriptor,
-    catalog: f.catalog,
-  })
+  await t.exception(
+    ingestor(f, observedIndex).ingest({
+      publisherId: f.publisherId,
+      descriptor: f.descriptor,
+      catalog: f.catalog,
+    }),
+    /behind.*cursor/,
+  )
 
-  t.is(repaired.status, 'repaired')
-  t.is(repaired.mode, 'repair')
-  t.is(repaired.reason, 'source-history-unavailable')
-  const rows = await publisherRows(f.indexStore, f.publisherId)
-  t.is(rows.publicationProjections.length, 1)
-  t.alike(rows.sourceCursors[0], repaired.cursor)
-  t.unlike(rows.sourceCursors[0], futureCursor)
+  t.alike(calls, { replace: 0, apply: 0 })
+  t.alike(await publisherRows(f.indexStore, f.publisherId), beforeRows)
+  t.alike(
+    await f.index.getSourceCursor({ publisherId: f.publisherId, catalogEpoch: 0 }),
+    futureCursor,
+  )
 })
 
 test('lower-version cursor with another catalog and descriptor identity repairs from the pinned source', async (t) => {
@@ -748,6 +828,146 @@ test('missing pinned authorization state fails before index rows or cursor mutat
 
   t.is((await publisherRows(f.indexStore, f.publisherId)).sourceCursors.length, 0)
   t.alike(f.checkouts, { opened: 1, closed: 1 })
+})
+
+test('ingest validates AbortSignal input and rejects native pre-abort before opening a checkout', async (t) => {
+  const f = await fixture(t)
+  const manifest = publicationManifest(f)
+  await putProjection(f, 'publication', manifest.publicationId, publicationOperation(f, manifest, 1))
+
+  let invalidSignalError = null
+  try {
+    await ingestor(f).ingest({
+      publisherId: f.publisherId,
+      descriptor: f.descriptor,
+      catalog: f.catalog,
+      signal: { aborted: false },
+    })
+  } catch (error) {
+    invalidSignalError = error
+  }
+  t.ok(invalidSignalError)
+  t.ok(/signal.*AbortSignal/.test(invalidSignalError.message))
+
+  const controller = new AbortController()
+  controller.abort(new Error('catalog ingestion cancelled'))
+  await t.exception(
+    ingestor(f).ingest({
+      publisherId: f.publisherId,
+      descriptor: f.descriptor,
+      catalog: f.catalog,
+      signal: controller.signal,
+    }),
+    /catalog ingestion cancelled/,
+  )
+
+  t.alike(f.checkouts, { opened: 0, closed: 0 })
+  t.is((await publisherRows(f.indexStore, f.publisherId)).sourceCursors.length, 0)
+})
+
+test('incremental ingestion aborts after diff collection without applying rows or cursor', async (t) => {
+  const f = await fixture(t)
+  const manifest = publicationManifest(f)
+  await putProjection(f, 'publication', manifest.publicationId, publicationOperation(f, manifest, 1))
+  await ingestor(f).ingest({ publisherId: f.publisherId, descriptor: f.descriptor, catalog: f.catalog })
+  const beforeRows = await publisherRows(f.indexStore, f.publisherId)
+  await putProjection(f, 'publication', manifest.publicationId, publicationOperation(f, manifest, 3))
+
+  const controller = new AbortController()
+  const reason = new Error('incremental ingestion cancelled')
+  const checkout = f.view.checkout.bind(f.view)
+  f.view.checkout = (...args) => {
+    const pinned = checkout(...args)
+    const createDiffStream = pinned.createDiffStream.bind(pinned)
+    pinned.createDiffStream = (...streamArgs) => {
+      const stream = createDiffStream(...streamArgs)
+      return {
+        async *[Symbol.asyncIterator]() {
+          for await (const difference of stream) yield difference
+          controller.abort(reason)
+        },
+      }
+    }
+    return pinned
+  }
+  let applyCalls = 0
+  const observedIndex = {
+    getSourceCursor: input => f.index.getSourceCursor(input),
+    getPublisherSourceCursor: input => f.index.getPublisherSourceCursor(input),
+    getPublisherAdmissionLimits: input => f.index.getPublisherAdmissionLimits(input),
+    replacePublisherSlice: input => f.index.replacePublisherSlice(input),
+    applyPublisherChanges(input) {
+      applyCalls++
+      return f.index.applyPublisherChanges(input)
+    },
+  }
+
+  await t.exception(
+    ingestor(f, observedIndex).ingest({
+      publisherId: f.publisherId,
+      descriptor: f.descriptor,
+      catalog: f.catalog,
+      signal: controller.signal,
+    }),
+    /incremental ingestion cancelled/,
+  )
+
+  t.is(applyCalls, 0)
+  t.alike(await publisherRows(f.indexStore, f.publisherId), beforeRows)
+  t.alike(f.checkouts, { opened: 2, closed: 2 })
+})
+
+test('explicit repair aborts after replacement collection without calling publisher mutation', async (t) => {
+  const f = await fixture(t)
+  const manifest = publicationManifest(f)
+  await putProjection(f, 'publication', manifest.publicationId, publicationOperation(f, manifest, 1))
+  await ingestor(f).ingest({ publisherId: f.publisherId, descriptor: f.descriptor, catalog: f.catalog })
+  const beforeRows = await publisherRows(f.indexStore, f.publisherId)
+
+  const controller = new AbortController()
+  const reason = new Error('publisher repair cancelled')
+  const checkout = f.view.checkout.bind(f.view)
+  f.view.checkout = (...args) => {
+    const pinned = checkout(...args)
+    const createReadStream = pinned.createReadStream.bind(pinned)
+    pinned.createReadStream = (...streamArgs) => {
+      const stream = createReadStream(...streamArgs)
+      return {
+        async *[Symbol.asyncIterator]() {
+          for await (const entry of stream) yield entry
+          controller.abort(reason)
+        },
+      }
+    }
+    return pinned
+  }
+  let replacementCalls = 0
+  const observedIndex = {
+    getSourceCursor: input => f.index.getSourceCursor(input),
+    getPublisherSourceCursor: input => f.index.getPublisherSourceCursor(input),
+    getPublisherAdmissionLimits: input => f.index.getPublisherAdmissionLimits(input),
+    replacePublisherSlice(input) {
+      replacementCalls++
+      return f.index.replacePublisherSlice(input)
+    },
+    applyPublisherChanges: input => f.index.applyPublisherChanges(input),
+  }
+  const catalogIngestor = createCatalogIngestor({ index: observedIndex, now: () => 1_000 })
+
+  await t.exception(
+    catalogIngestor.repairPublisher({
+      publisherId: f.publisherId,
+      descriptor: f.descriptor,
+      catalog: f.catalog,
+      reason: 'source-fork-changed',
+      signal: controller.signal,
+    }),
+    /publisher repair cancelled/,
+  )
+
+  t.is(replacementCalls, 0)
+  t.alike(await publisherRows(f.indexStore, f.publisherId), beforeRows)
+  t.alike(f.checkouts, { opened: 2, closed: 2 })
 })
 
 test('every exact pinned checkout closes after both successful and rejected ingestion', async (t) => {

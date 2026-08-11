@@ -62,6 +62,27 @@ function invalid(message) {
   throw new Error(`Invalid catalog ingestion: ${message}`)
 }
 
+function validateSignal(signal) {
+  if (signal === undefined) return
+  if (!signal || typeof signal !== 'object' ||
+      typeof signal.aborted !== 'boolean' ||
+      typeof signal.addEventListener !== 'function' ||
+      typeof signal.removeEventListener !== 'function') {
+    throw new TypeError('signal must be an AbortSignal')
+  }
+}
+
+function throwIfAborted(signal) {
+  if (!signal) return
+  if (typeof signal.throwIfAborted === 'function') {
+    signal.throwIfAborted()
+  } else if (signal.aborted) {
+    const error = new Error('catalog ingestion aborted')
+    error.name = 'AbortError'
+    throw signal.reason ?? error
+  }
+}
+
 function exactHex(value, name) {
   if (typeof value === 'string') {
     if (!HEX_32.test(value)) invalid(`${name} must be canonical lowercase 64-hex`)
@@ -109,7 +130,7 @@ function currentWriter(authorization, operation, capability, now) {
   }
   if (writer.revocation) invalid('operation signer is revoked')
   const writerExpiry = boundedUint(writer.expiresAt, 'writer expiry')
-  if (writerExpiry > 0 && writerExpiry < now) invalid('operation signer authorization is expired')
+  if (writerExpiry < now) invalid('operation signer authorization is expired')
   if (boundedUint(writer.admissionPolicyEpoch, 'writer policy epoch') !== operation.policyEpoch) {
     invalid('operation policy epoch does not match writer admission')
   }
@@ -293,35 +314,29 @@ function externalReferenceRow(context, sourceRecordRef, subject, namespace, iden
 }
 
 function relationRows(context, sourceRecordRef, claim) {
-  const rows = []
-  let relationType
-  let targetInput
-  if (claim.claimType === 'EditionOfClaim') {
-    relationType = 'work-edition'
-    targetInput = claim.payload.workRef
-  } else if (claim.claimType === 'RecordingOfClaim') {
-    relationType = 'work-rendition'
-    targetInput = claim.payload.workRef
-  } else {
-    return rows
-  }
-  if (!targetInput) invalid(`${claim.claimType} requires a workRef`)
-  const work = createEntityReference(targetInput)
+  if (claim.claimType !== 'EditionOfClaim' && claim.claimType !== 'RecordingOfClaim') return []
+  if (!claim.payload.workRef) invalid(`${claim.claimType} requires a workRef`)
+
+  const work = createEntityReference(claim.payload.workRef)
   if (work.entityKind !== 'work') invalid(`${claim.claimType} workRef must identify a work`)
-  for (const subject of claim.subjectRefs) {
-    const expectedKind = claim.claimType === 'EditionOfClaim' ? 'edition' : 'rendition'
-    if (subject.entityKind !== expectedKind) {
+
+  const expectedKind = claim.claimType === 'EditionOfClaim' ? 'edition' : 'recording'
+  const subjects = claim.subjectRefs.map(subject => {
+    const normalized = createEntityReference(subject)
+    if (normalized.entityKind !== expectedKind) {
       invalid(`${claim.claimType} subject must identify an ${expectedKind}`)
     }
-    rows.push(row(COLLECTIONS.relationshipEdges, {
-      publisherId: context.publisherId,
-      sourceRecordRef,
-      relationType,
-      fromId: work.entityId,
-      toId: subject.entityId,
-    }))
-  }
-  return rows
+    return normalized
+  })
+  if (claim.claimType === 'RecordingOfClaim') return []
+
+  return subjects.map(subject => row(COLLECTIONS.relationshipEdges, {
+    publisherId: context.publisherId,
+    sourceRecordRef,
+    relationType: 'work-edition',
+    fromId: work.entityId,
+    toId: subject.entityId,
+  }))
 }
 
 function availabilityRows(context, sourceRecordRef, claim, envelope) {
@@ -482,35 +497,45 @@ function appendBounded(target, entries, budget) {
 async function collectCurrentRows(context, pinnedView, budget) {
   const rows = []
   let count = 0
+  throwIfAborted(context.signal)
   for await (const entry of pinnedView.createReadStream({
     ...PROJECTION_RANGE,
     limit: MAX_PROJECTIONS + 1,
   })) {
+    throwIfAborted(context.signal)
     count++
     if (count > MAX_PROJECTIONS) invalid('publisher projection count exceeds its bound')
-    appendBounded(rows, await normalizeProjection(context, entry, true), budget)
+    const normalized = await normalizeProjection(context, entry, true)
+    throwIfAborted(context.signal)
+    appendBounded(rows, normalized, budget)
   }
+  throwIfAborted(context.signal)
   return rows
 }
 
 async function collectChanges(context, pinnedView, previousVersion, budget) {
   const operations = []
   let count = 0
+  throwIfAborted(context.signal)
   for await (const difference of pinnedView.createDiffStream(previousVersion, {
     ...PROJECTION_RANGE,
     limit: MAX_PROJECTIONS + 1,
   })) {
+    throwIfAborted(context.signal)
     count++
     if (count > MAX_PROJECTIONS) invalid('publisher projection diff exceeds its bound')
     if (difference.right) {
       const previousRows = await normalizeProjection(context, difference.right, false)
+      throwIfAborted(context.signal)
       appendBounded(operations, previousRows.map(entry => ({ type: 'delete', ...entry })), budget)
     }
     if (difference.left) {
       const currentRows = await normalizeProjection(context, difference.left, true)
+      throwIfAborted(context.signal)
       appendBounded(operations, currentRows.map(entry => ({ type: 'put', ...entry })), budget)
     }
   }
+  throwIfAborted(context.signal)
   return operations
 }
 
@@ -533,7 +558,7 @@ function validateIndexSurface(index) {
   }
 }
 
-async function preparePinnedContext({ publisherId, descriptor, catalog, now }) {
+async function preparePinnedContext({ publisherId, descriptor, catalog, now, signal }) {
   const canonicalPublisherId = exactHex(publisherId, 'publisherId')
   verifyPublisherNamespaceDescriptor(descriptor)
   const descriptorBytes = encodePublisherNamespaceDescriptor(descriptor)
@@ -541,7 +566,9 @@ async function preparePinnedContext({ publisherId, descriptor, catalog, now }) {
     invalid('descriptor publisherId mismatch')
   }
 
+  throwIfAborted(signal)
   await catalog.update()
+  throwIfAborted(signal)
   const view = catalog.view
   if (catalog.key == null || !view || typeof view.checkout !== 'function') {
     invalid('updated catalog must expose its bootstrap key and view')
@@ -568,6 +595,7 @@ async function preparePinnedContext({ publisherId, descriptor, catalog, now }) {
     view,
     viewFork,
     viewVersion,
+    signal,
   }
 }
 
@@ -575,19 +603,25 @@ export function createCatalogIngestor({ index, now = Date.now } = {}) {
   validateIndexSurface(index)
   if (typeof now !== 'function') throw new TypeError('now must be a function')
 
-  async function run({ publisherId, descriptor, catalog } = {}, requestedRepairReason = AUTOMATIC_REPAIR) {
+  async function run({ publisherId, descriptor, catalog, signal } = {}, requestedRepairReason = AUTOMATIC_REPAIR) {
+    validateSignal(signal)
+    throwIfAborted(signal)
     validateCatalogSurface(catalog)
     if (requestedRepairReason !== AUTOMATIC_REPAIR && !REPAIR_REASONS.has(requestedRepairReason)) {
       throw new TypeError('repair reason must be a supported bounded value')
     }
-    const context = await preparePinnedContext({ publisherId, descriptor, catalog, now })
+    const context = await preparePinnedContext({ publisherId, descriptor, catalog, now, signal })
     const pinnedView = context.view.checkout(context.viewVersion)
     try {
+      throwIfAborted(signal)
       await pinnedView.ready()
+      throwIfAborted(signal)
       if (pinnedView.version !== context.viewVersion || pinnedView.core.fork !== context.viewFork) {
         invalid('catalog checkout does not match the captured fork and version')
       }
+      throwIfAborted(signal)
       const acceptedDescriptor = await pinnedView.get('state/descriptor')
+      throwIfAborted(signal)
       if (!acceptedDescriptor) invalid('pinned catalog has no accepted namespace descriptor')
       const decodedDescriptor = decodePublisherNamespaceDescriptor(acceptedDescriptor.value, {
         legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY,
@@ -596,16 +630,29 @@ export function createCatalogIngestor({ index, now = Date.now } = {}) {
       if (!sameBytes(encodePublisherNamespaceDescriptor(decodedDescriptor), context.descriptorBytes)) {
         invalid('pinned catalog descriptor does not match the verified descriptor')
       }
+      throwIfAborted(signal)
       const authorization = await getPublisherAuthorizationState(pinnedView)
+      throwIfAborted(signal)
       if (!authorization) invalid('pinned catalog has no accepted authorization state')
       const pinnedContext = { ...context, authorization }
       const previous = await index.getPublisherSourceCursor({
         publisherId: pinnedContext.publisherId,
       })
+      throwIfAborted(signal)
       const cursor = cursorFor(pinnedContext)
       const admissionLimits = await index.getPublisherAdmissionLimits({
         publisherId: pinnedContext.publisherId,
       })
+      throwIfAborted(signal)
+
+      if (previous &&
+          previous.catalogEpoch === cursor.catalogEpoch &&
+          previous.catalogBootstrapKey === cursor.catalogBootstrapKey &&
+          previous.lastVerifiedDescriptor === cursor.lastVerifiedDescriptor &&
+          previous.viewFork === pinnedContext.viewFork &&
+          previous.viewVersion > pinnedContext.viewVersion) {
+        invalid('catalog source is behind the durable cursor')
+      }
 
       let repairReason = requestedRepairReason === AUTOMATIC_REPAIR ? null : requestedRepairReason
       if (repairReason === null && previous) {
@@ -615,8 +662,6 @@ export function createCatalogIngestor({ index, now = Date.now } = {}) {
           repairReason = 'source-identity-changed'
         } else if (previous.viewFork !== pinnedContext.viewFork) {
           repairReason = 'source-fork-changed'
-        } else if (previous.viewVersion > pinnedContext.viewVersion) {
-          repairReason = 'source-history-unavailable'
         }
       }
       if (repairReason !== null) {
@@ -625,6 +670,7 @@ export function createCatalogIngestor({ index, now = Date.now } = {}) {
           pinnedView,
           createIngestionBudget(admissionLimits, cursor),
         )
+        throwIfAborted(signal)
         await index.replacePublisherSlice({
           publisherId: pinnedContext.publisherId,
           rows,
@@ -658,6 +704,7 @@ export function createCatalogIngestor({ index, now = Date.now } = {}) {
           pinnedView,
           createIngestionBudget(admissionLimits, cursor),
         )
+        throwIfAborted(signal)
         await index.replacePublisherSlice({
           publisherId: pinnedContext.publisherId,
           rows,
@@ -682,6 +729,7 @@ export function createCatalogIngestor({ index, now = Date.now } = {}) {
         )
       } catch (error) {
         if (error?.code !== 'SNAPSHOT_NOT_AVAILABLE') throw error
+        throwIfAborted(signal)
         await index.replacePublisherSlice({
           publisherId: pinnedContext.publisherId,
           rows: currentRows,
@@ -696,6 +744,7 @@ export function createCatalogIngestor({ index, now = Date.now } = {}) {
           cursor,
         })
       }
+      throwIfAborted(signal)
       await index.applyPublisherChanges({
         publisherId: pinnedContext.publisherId,
         operations,

@@ -384,7 +384,8 @@ test('watch-only downgrade closes local publisher catalog sessions and removes i
     archiveBudgetBytes: 0,
   })
   const diagnostics = runtimeA.getDiagnostics()
-  t.absent(diagnostics.sessions.find(session => session.purpose === 'publisher'), 'local catalog session closes on downgrade')
+  t.absent(diagnostics.sessions.find(session => session.purpose === 'publisher'),
+    'local catalog has no stale handshaking session immediately after downgrade')
   t.absent(diagnostics.topics.find(topic => topic.purpose === 'publisher')?.publicAnnounced, 'publisher discovery becomes client-only')
   t.is(runtimeA.authorizeConnection({ purpose: 'publisher', topic: published.topic.topicHex
     ? b4a.from(published.topic.topicHex, 'hex')
@@ -1056,6 +1057,8 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
   const observedInFlight = inFlight.then(() => null, error => error)
   await globalReductionProofStarted
   await runtimeA.applyNetworkPolicy(contributionPolicy({ uploadCeilingBytes: 1 }))
+  t.absent(runtimeA.getDiagnostics().sessions.find(session => session.purpose === 'asset'),
+    'cutover returns after removing the serving session without awaiting held channel work')
   releaseGlobalReductionProof()
   const exhausted = await observedInFlight
   t.ok(exhausted, 'global ceiling reduction settles the already accepted peer request')

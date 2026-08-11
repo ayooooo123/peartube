@@ -528,7 +528,6 @@ export function createScopedNetworkRuntime (options = {}) {
         if (status !== 'active' || !networkEnabled || scope.closed || connection?.destroyed === true ||
             !activeConnections.has(connection) || !scopeMayAttach(scope) || scope.sessions.has(peerId)) return null
         const currentInfo = activeConnections.get(connection)
-        if (currentInfo?.client === false) return null
         try {
           return attachScope(scope, connection, currentInfo)
         } catch (error) {
@@ -2010,7 +2009,12 @@ export function createScopedNetworkRuntime (options = {}) {
         const archiveChanged = (archiveScope || retainedArchiveScope) && archiveServingPolicyChanged
         if (contributionChanged || archiveChanged) {
           for (const peerId of [...scope.sessions.keys()]) {
-            closeSession(scope, peerId, 'network-policy-role-changed')
+            const session = scope.sessions.get(peerId)
+            if (!session) continue
+            const channel = session.channel
+            const connection = session.connection
+            if (!closeSession(scope, peerId, 'network-policy-role-changed', session)) continue
+            scheduleScopeReattach(scope, peerId, connection, channel)
           }
         }
         await rejoinScopeDiscovery(scope)

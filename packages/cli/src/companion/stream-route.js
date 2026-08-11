@@ -9,6 +9,8 @@ const STREAM_PATH = /^\/api\/v2\/stream\/([^/]+)\/([^/]+)$/
 const DEFAULT_STREAM_CHUNK_BYTES = 256 * 1024
 const MAX_STREAM_CHUNK_BYTES = 8 * 1024 * 1024
 const DEFAULT_RANGE_DEADLINE_MS = 15_000
+const DEFAULT_STREAM_WRITE_IDLE_MS = 30_000
+const MAX_RESPONSE_WRITE_BYTES = 16 * 1024
 const STRONG_ETAG = /^"[\x21\x23-\x7e]{1,256}"$/
 const SAFE_MEDIA_TYPE = /^(?:audio|video)\/[A-Za-z0-9][A-Za-z0-9.+-]{0,126}$/
 
@@ -132,56 +134,90 @@ function abortError () {
   return error
 }
 
-function waitForDrain (response, signal) {
+function streamWriteTimeoutError () {
+  const error = new Error('stream response write stalled')
+  error.code = 'STREAM_WRITE_TIMEOUT'
+  return error
+}
+
+function waitForDrain (response, signal, idleMs, onStall) {
   if (signal.aborted) return Promise.reject(abortError())
   return new Promise((resolve, reject) => {
+    let settled = false
+    let timer = null
     const cleanup = () => {
+      clearTimeout(timer)
       response.removeListener?.('drain', onDrain)
       response.removeListener?.('close', onClose)
       signal.removeEventListener?.('abort', onAbort)
     }
-    const onDrain = () => { cleanup(); resolve() }
-    const onClose = () => { cleanup(); reject(abortError()) }
-    const onAbort = () => { cleanup(); reject(abortError()) }
-    response.once?.('drain', onDrain)
-    response.once?.('close', onClose)
-    signal.addEventListener?.('abort', onAbort, { once: true })
-    if (signal.aborted) onAbort()
-  })
-}
-
-async function writeChunk (response, bytes, signal) {
-  if (signal.aborted || response.destroyed || response.writableEnded) throw abortError()
-  if (response.write.length < 2) {
-    if (response.write(bytes) === false) await waitForDrain(response, signal)
-    return
-  }
-  await new Promise((resolve, reject) => {
-    let settled = false
-    const cleanup = () => {
-      response.removeListener?.('error', onError)
-      response.removeListener?.('close', onClose)
-      signal.removeEventListener?.('abort', onAbort)
-    }
     const finish = (callback, value) => {
-      if (settled) return
+      if (settled) return false
       settled = true
       cleanup()
       callback(value)
+      return true
     }
-    const onError = error => finish(reject, error)
+    const onDrain = () => finish(resolve)
     const onClose = () => finish(reject, abortError())
     const onAbort = () => finish(reject, abortError())
-    response.once?.('error', onError)
+    const onTimeout = () => {
+      const error = streamWriteTimeoutError()
+      if (finish(reject, error)) onStall(error)
+    }
+    response.once?.('drain', onDrain)
     response.once?.('close', onClose)
     signal.addEventListener?.('abort', onAbort, { once: true })
-    try {
-      response.write(bytes, error => error ? onError(error) : finish(resolve))
-    } catch (error) {
-      onError(error)
-    }
+    timer = setTimeout(onTimeout, idleMs)
+    timer.unref?.()
     if (signal.aborted || response.destroyed || response.writableEnded) onAbort()
   })
+}
+
+async function writeChunk (response, bytes, signal, idleMs, onStall) {
+  for (let offset = 0; offset < bytes.byteLength; offset += MAX_RESPONSE_WRITE_BYTES) {
+    const fragment = bytes.subarray(offset, Math.min(bytes.byteLength, offset + MAX_RESPONSE_WRITE_BYTES))
+    if (signal.aborted || response.destroyed || response.writableEnded) throw abortError()
+    if (response.write.length < 2) {
+      if (response.write(fragment) === false) await waitForDrain(response, signal, idleMs, onStall)
+      continue
+    }
+    await new Promise((resolve, reject) => {
+      let settled = false
+      let timer = null
+      const cleanup = () => {
+        clearTimeout(timer)
+        response.removeListener?.('error', onError)
+        response.removeListener?.('close', onClose)
+        signal.removeEventListener?.('abort', onAbort)
+      }
+      const finish = (callback, value) => {
+        if (settled) return false
+        settled = true
+        cleanup()
+        callback(value)
+        return true
+      }
+      const onError = error => finish(reject, error)
+      const onClose = () => finish(reject, abortError())
+      const onAbort = () => finish(reject, abortError())
+      const onTimeout = () => {
+        const error = streamWriteTimeoutError()
+        if (finish(reject, error)) onStall()
+      }
+      response.once?.('error', onError)
+      response.once?.('close', onClose)
+      signal.addEventListener?.('abort', onAbort, { once: true })
+      timer = setTimeout(onTimeout, idleMs)
+      timer.unref?.()
+      try {
+        response.write(fragment, error => error ? onError(error) : finish(resolve))
+      } catch (error) {
+        onError(error)
+      }
+      if (signal.aborted || response.destroyed || response.writableEnded) onAbort()
+    })
+  }
 }
 
 function verifiedChunk (result, expectedLength) {
@@ -204,13 +240,17 @@ export function createCompanionStreamRoute ({
   capabilities,
   service = null,
   streamChunkBytes = DEFAULT_STREAM_CHUNK_BYTES,
-  rangeDeadlineMs = DEFAULT_RANGE_DEADLINE_MS
+  rangeDeadlineMs = DEFAULT_RANGE_DEADLINE_MS,
+  streamWriteIdleMs = DEFAULT_STREAM_WRITE_IDLE_MS
 } = {}) {
-  if (!capabilities || typeof capabilities.consume !== 'function') throw new TypeError('stream capabilities are required')
+  if (!capabilities || typeof capabilities.consume !== 'function' || typeof capabilities.close !== 'function') {
+    throw new TypeError('stream capabilities are required')
+  }
   if (!Number.isSafeInteger(streamChunkBytes) || streamChunkBytes < 1 || streamChunkBytes > MAX_STREAM_CHUNK_BYTES) {
     throw new TypeError('stream chunk bytes are out of bounds')
   }
   if (!Number.isSafeInteger(rangeDeadlineMs) || rangeDeadlineMs < 1) throw new TypeError('stream range deadline is invalid')
+  if (!Number.isSafeInteger(streamWriteIdleMs) || streamWriteIdleMs < 1) throw new TypeError('stream write idle deadline is invalid')
 
   async function handle (request, response, { signal = null } = {}) {
     const method = typeof request?.method === 'string' ? request.method.toUpperCase() : ''
@@ -222,9 +262,21 @@ export function createCompanionStreamRoute ({
     let acquisition = null
     let asset = null
     let completed = false
+    let token = null
+    let writeStalled = false
     const controller = new AbortController()
     const abort = () => {
       if (!completed && !controller.signal.aborted) controller.abort()
+    }
+    const stallWrite = () => {
+      if (writeStalled) return
+      writeStalled = true
+      if (!controller.signal.aborted) controller.abort()
+      try {
+        response.destroy?.()
+      } catch {
+        // The stalled response transport may already be closed.
+      }
     }
     signal?.addEventListener?.('abort', abort, { once: true })
     request?.once?.('aborted', abort)
@@ -236,7 +288,7 @@ export function createCompanionStreamRoute ({
       if (!match) throw contractError(404, 'NOT_FOUND', 'Companion stream route not found')
       const publicationId = decodedSegment(match[1], 'publicationId')
       const renditionId = decodedSegment(match[2], 'renditionId')
-      const token = capabilityToken(url.searchParams)
+      token = capabilityToken(url.searchParams)
       acquisition = capabilities.consume(token, { publicationId, renditionId, method })
       const resolved = acquisition.asset || (typeof service?.resolveStreamAsset === 'function'
         ? await service.resolveStreamAsset({
@@ -275,7 +327,7 @@ export function createCompanionStreamRoute ({
       setHeaders(response, headers)
       response.statusCode = range.statusCode
       response.writeHead(range.statusCode)
-      await writeChunk(response, first, controller.signal)
+      await writeChunk(response, first, controller.signal, streamWriteIdleMs, stallWrite)
       offset = firstEnd
 
       while (offset <= range.end) {
@@ -287,7 +339,7 @@ export function createCompanionStreamRoute ({
           deadlineMs: rangeDeadlineMs,
           signal: controller.signal
         }), byteEnd - offset)
-        await writeChunk(response, bytes, controller.signal)
+        await writeChunk(response, bytes, controller.signal, streamWriteIdleMs, stallWrite)
         offset = byteEnd
       }
 
@@ -325,7 +377,11 @@ export function createCompanionStreamRoute ({
       signal?.removeEventListener?.('abort', abort)
       request?.removeListener?.('aborted', abort)
       response?.removeListener?.('close', abort)
-      acquisition?.release()
+      try {
+        if (writeStalled && token !== null) capabilities.close(token)
+      } finally {
+        acquisition?.release()
+      }
     }
   }
 

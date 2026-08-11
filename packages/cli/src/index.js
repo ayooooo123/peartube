@@ -4,7 +4,7 @@ import { createRelayRuntime } from './runtime.js'
 import { createRelayService } from './service.js'
 
 export { createCompanionServer } from './companion/server.js'
-export { createCompanionRouter, createStreamLeaseStore } from './companion/routes.js'
+export { createCompanionRouter } from './companion/routes.js'
 export {
   CompanionContractError,
   decodeIngestJobBody,

@@ -375,3 +375,132 @@ test('stream backpressure pauses range acquisition until response drain', async 
   t.alike(calls, [[0, 4], [4, 8]])
   t.is(response.headers['content-type'], 'application/octet-stream')
 })
+
+test('progressing writes may outlive one write-idle interval', async (t) => {
+  const calls = []
+  const writes = []
+  let releases = 0
+  const capabilities = createStreamCapabilityStore({ now: () => NOW, randomBytes: () => b4a.alloc(32, 22) })
+  const asset = {
+    assetId: 'asset-1',
+    byteLength: 80 * 1024,
+    blockSize: 16 * 1024,
+    mimeType: 'video/mp4',
+    etag: ETAG,
+    seek () {},
+    async requestRange ({ byteStart, byteEnd }) {
+      calls.push([byteStart, byteEnd])
+      return { status: 'ok', verified: true, bytes: b4a.alloc(byteEnd - byteStart) }
+    },
+    async release () { releases++ }
+  }
+  const grant = capabilities.issue({
+    clientIdentity: CLIENT,
+    publicationId: 'pub-1',
+    renditionId: 'rend-1',
+    assetId: 'asset-1',
+    asset
+  })
+  const response = new EventEmitter()
+  response.headers = {}
+  response.statusCode = 0
+  response.headersSent = false
+  response.writableEnded = false
+  response.destroyed = false
+  response.setHeader = (name, value) => { response.headers[name.toLowerCase()] = String(value) }
+  response.writeHead = statusCode => { response.statusCode = statusCode; response.headersSent = true }
+  response.write = (bytes, callback) => {
+    writes.push(bytes.byteLength)
+    setTimeout(callback, 25)
+    return true
+  }
+  response.end = () => { response.writableEnded = true; response.emit('finish') }
+  response.destroy = () => { response.destroyed = true; response.emit('close') }
+
+  const route = createCompanionStreamRoute({
+    capabilities,
+    streamChunkBytes: 80 * 1024,
+    streamWriteIdleMs: 100
+  })
+  await route.handle({
+    method: 'GET',
+    url: `/api/v2/stream/pub-1/rend-1?cap=${grant.token}`,
+    headers: {}
+  }, response)
+
+  t.alike(calls, [[0, 80 * 1024]])
+  t.alike(writes, [16, 16, 16, 16, 16].map(kib => kib * 1024))
+  t.is(response.writableEnded, true)
+  t.is(response.destroyed, false)
+  t.is(capabilities.size, 1)
+  capabilities.clear()
+  await capabilities.drain()
+  t.is(releases, 1)
+})
+
+test('stalled response writes abort and retire their pinned capability', async (t) => {
+  const calls = []
+  let releases = 0
+  let schedulerSignal = null
+  const capabilities = createStreamCapabilityStore({ now: () => NOW, randomBytes: () => b4a.alloc(32, 22) })
+  const asset = {
+    assetId: 'asset-1',
+    byteLength: 8,
+    blockSize: 4,
+    mimeType: 'video/mp4',
+    etag: ETAG,
+    seek () {},
+    async requestRange ({ byteStart, byteEnd, signal }) {
+      calls.push([byteStart, byteEnd])
+      schedulerSignal = signal
+      return { status: 'ok', verified: true, bytes: b4a.alloc(byteEnd - byteStart) }
+    },
+    async release () { releases++ }
+  }
+  const grant = capabilities.issue({
+    clientIdentity: CLIENT,
+    publicationId: 'pub-1',
+    renditionId: 'rend-1',
+    assetId: 'asset-1',
+    asset
+  })
+  const response = new EventEmitter()
+  response.headers = {}
+  response.statusCode = 0
+  response.headersSent = false
+  response.writableEnded = false
+  response.destroyed = false
+  response.setHeader = (name, value) => { response.headers[name.toLowerCase()] = String(value) }
+  response.writeHead = statusCode => { response.statusCode = statusCode; response.headersSent = true }
+  response.write = () => false
+  response.end = () => { response.writableEnded = true; response.emit('finish') }
+  response.destroy = () => { response.destroyed = true; response.emit('close') }
+
+  const route = createCompanionStreamRoute({
+    capabilities,
+    streamChunkBytes: 4,
+    streamWriteIdleMs: 10
+  })
+  const pending = route.handle({
+    method: 'GET',
+    url: `/api/v2/stream/pub-1/rend-1?cap=${grant.token}`,
+    headers: {}
+  }, response)
+  const completed = await Promise.race([
+    pending.then(() => true),
+    new Promise(resolve => setTimeout(() => resolve(false), 50))
+  ])
+  if (!completed) {
+    response.destroy()
+    capabilities.clear()
+    await pending
+  }
+  await capabilities.drain()
+
+  t.is(completed, true)
+  t.alike(calls, [[0, 4]])
+  t.is(response.destroyed, true)
+  t.is(schedulerSignal.aborted, true)
+  t.is(capabilities.size, 0)
+  t.is(releases, 1)
+})

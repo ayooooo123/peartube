@@ -297,7 +297,8 @@ export function createCompanionServer ({
   probeSocket = (socketPath) => probeUnixSocket(socketPath),
   setUmask = typeof process.umask === 'function' ? process.umask.bind(process) : null,
   requestDeadlineMs = 30_000,
-  streamChunkBytes = undefined
+  streamChunkBytes = undefined,
+  streamWriteIdleMs = undefined
 } = {}) {
   if (!service) throw new Error('service is required')
   if (!config) throw new Error('companion config is required')
@@ -311,7 +312,8 @@ export function createCompanionServer ({
     capabilities: router.capabilities,
     service,
     streamChunkBytes,
-    rangeDeadlineMs: requestDeadlineMs
+    rangeDeadlineMs: requestDeadlineMs,
+    streamWriteIdleMs
   })
   const connections = new Set()
   const firstRequestDeadlines = new Map()

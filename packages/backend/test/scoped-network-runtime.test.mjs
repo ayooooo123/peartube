@@ -1069,11 +1069,22 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
   t.is(await readerCore.has(4), false, 'global ceiling reduction serves no asset block')
 
   await runtimeA.applyNetworkPolicy(contributionPolicy())
-  for (let attempt = 0; attempt < 20; attempt++) {
-    if (runtimeA.getDiagnostics().sessions.some(session =>
-      session.purpose === 'asset' && session.state === 'active')) break
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const providerActive = runtimeA.getDiagnostics().sessions.some(session =>
+      session.purpose === 'asset' && session.state === 'active')
+    const requesterActive = runtimeB.getDiagnostics().sessions.some(session =>
+      session.purpose === 'asset' && session.state === 'active')
+    if (providerActive && requesterActive) break
     await settle()
   }
+  t.absent(pair.a.destroyed, 'rapid ceiling restore preserves the provider duplex')
+  t.absent(pair.b.destroyed, 'rapid ceiling restore preserves the requester duplex')
+  t.ok(runtimeA.getDiagnostics().sessions.some(session =>
+    session.purpose === 'asset' && session.state === 'active'),
+    'provider session activates under the restored ceiling')
+  t.ok(runtimeB.getDiagnostics().sessions.some(session =>
+    session.purpose === 'asset' && session.state === 'active'),
+    'requester session activates under the restored ceiling')
   const closedBeforeRoleBudget = runtimeA.getDiagnostics().counters.closedSessions
   const uploadedBeforeRoleBudget = runtimeA.getDiagnostics().policy.uploadedBytes
   await runtimeA.applyNetworkPolicy(contributionPolicy({ contributionBudgetBytes: 0 }))

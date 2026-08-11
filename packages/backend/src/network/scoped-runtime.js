@@ -1962,6 +1962,8 @@ export function createScopedNetworkRuntime (options = {}) {
         const archiveChanged = (archiveScope || retainedArchiveScope) && archiveServingPolicyChanged
         if (contributionChanged || archiveChanged) {
           for (const peerId of [...scope.sessions.keys()]) {
+            const session = scope.sessions.get(peerId)
+            if (session?.state !== 'active') continue
             if (closeSession(scope, peerId, 'network-policy-role-changed')) servingSessionClosed = true
           }
         }

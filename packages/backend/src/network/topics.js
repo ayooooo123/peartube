@@ -11,6 +11,17 @@ function cleanString(value, name) {
   return next
 }
 
+function cleanId32(value, name) {
+  if (b4a.isBuffer(value) || value instanceof Uint8Array) {
+    const bytes = b4a.from(value)
+    if (bytes.byteLength !== 32) throw new Error(`${name} must be 32 bytes`)
+    return b4a.toString(bytes, 'hex')
+  }
+  const next = cleanString(value, name).toLowerCase()
+  if (!/^[0-9a-f]{64}$/.test(next)) throw new Error(`${name} must be 32-byte hex`)
+  return next
+}
+
 function cleanMajor(value) {
   const major = Number(value ?? PROTOCOL_MAJOR)
   if (!Number.isSafeInteger(major) || major < 1 || major > 255) throw new Error('protocolMajor must be between 1 and 255')
@@ -71,6 +82,13 @@ export function deriveArchiveTopic(input = {}) {
   })
 }
 
+export function deriveIndexTopic(input = {}) {
+  return topic('index', {
+    protocolMajor: cleanMajor(input.protocolMajor),
+    indexerId: cleanId32(input.indexerId, 'indexerId'),
+  })
+}
+
 export function describeScopedTopic(role, input = {}) {
   switch (role) {
     case 'bootstrap':
@@ -85,6 +103,8 @@ export function describeScopedTopic(role, input = {}) {
       return { role, protocolMajor: cleanMajor(input.protocolMajor), networkId: cleanString(input.networkId || 'peartube-main', 'networkId'), topicHex: topicHex(deriveArchiveDiscoveryTopic(input)) }
     case 'archive':
       return { role, protocolMajor: cleanMajor(input.protocolMajor), archiveId: cleanString(input.archiveId, 'archiveId'), topicHex: topicHex(deriveArchiveTopic(input)) }
+    case 'index':
+      return { role, protocolMajor: cleanMajor(input.protocolMajor), indexerId: cleanId32(input.indexerId, 'indexerId'), topicHex: topicHex(deriveIndexTopic(input)) }
     default:
       throw new Error('unknown topic role')
   }

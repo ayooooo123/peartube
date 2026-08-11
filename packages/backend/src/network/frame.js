@@ -52,6 +52,7 @@ const PURPOSE_CODES = new Map([
   ['live', 4],
   ['archive', 5],
   ['archive-discovery', 6],
+  ['index', 7],
 ])
 const PURPOSE_NAMES = new Map(Array.from(PURPOSE_CODES, ([name, code]) => [code, name]))
 

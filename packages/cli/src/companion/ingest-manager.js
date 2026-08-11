@@ -838,8 +838,8 @@ export function createIngestManager ({
           }
         }
 
-        const normalizedSpool = spool == null ? null : normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
         const capability = normalizeSourceCapability(sourceCapability)
+        const normalizedSpool = spool == null ? null : normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
         const initial = buildJob(key, idempotencyDigest, normalized, fingerprint)
         let spoolAccepted = false
         let spoolAdopted = false

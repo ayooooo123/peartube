@@ -348,6 +348,23 @@ test('idempotency conflicts and prohibited source material fail before job mutat
   }
 })
 
+test('invalid source capability is rejected before direct spool ownership is considered', async (t) => {
+  const bytes = Buffer.from('invalid capability payload')
+  const { files, manager, bee, publisher } = harness(t)
+  const descriptor = files.writeSpool(bytes, 'invalid-capability-caller-owned.mkv')
+  const error = await manager.submitJob({
+    idempotencyKey: 'invalid-source-capability',
+    request: movieRequest(bytes),
+    spool: descriptor,
+    sourceCapability: 'too-short'
+  }).then(() => null, value => value)
+
+  t.is(error?.code, 'SOURCE_CAPABILITY_INVALID')
+  t.is(bee.map.size, 0)
+  t.is(publisher.calls.import, 0)
+  t.is(readFileSync(join(files.spoolRoot, 'invalid-capability-caller-owned.mkv')).byteLength, bytes.byteLength)
+})
+
 test('episode coordinates and tracker-independent public infohash are canonical and bounded', async (t) => {
   const bytes = Buffer.from('episode payload')
   const { manager, store } = harness(t)

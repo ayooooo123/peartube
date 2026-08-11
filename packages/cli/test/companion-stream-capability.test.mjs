@@ -44,6 +44,32 @@ function tokenFrom (url) {
   return new URL(url, 'http://companion.invalid').searchParams.get('cap')
 }
 
+function fakeTimers (start = NOW) {
+  let now = start
+  const scheduled = []
+  const cleared = []
+  return {
+    now: () => now,
+    advance (milliseconds) { now += milliseconds },
+    scheduled,
+    cleared,
+    setTimeoutFn (callback, delay) {
+      const handle = {
+        callback,
+        delay,
+        unrefed: false,
+        unref () { this.unrefed = true }
+      }
+      scheduled.push(handle)
+      return handle
+    },
+    clearTimeoutFn (handle) {
+      handle.cleared = true
+      cleared.push(handle)
+    }
+  }
+}
+
 test('capabilities bind exact scope, methods, expiry, and reusable active leases', (t) => {
   let now = NOW
   const capabilities = createStreamCapabilityStore({
@@ -118,6 +144,90 @@ test('expiry pruning reclaims bounded capacity without evicting live capabilitie
   const replacement = capabilities.issue(scope({ publicationId: 'pub-2' }))
   t.is(capabilities.size, 1)
   t.is(replacement.publicationId, 'pub-2')
+})
+
+test('idle expiry timer retires assets and defers active release until acquisition cleanup', async (t) => {
+  const timers = fakeTimers()
+  let byte = 30
+  let releases = 0
+  const capabilities = createStreamCapabilityStore({
+    now: timers.now,
+    randomBytes: () => b4a.alloc(32, byte++),
+    ttlMs: 100,
+    setTimeoutFn: timers.setTimeoutFn,
+    clearTimeoutFn: timers.clearTimeoutFn
+  })
+  const idle = capabilities.issue({
+    ...scope(),
+    asset: { assetId: 'asset-1', async release () { releases++ } }
+  })
+  const idleTimer = timers.scheduled.at(-1)
+  t.is(idleTimer.delay, 100)
+  t.is(idleTimer.unrefed, true)
+
+  timers.advance(100)
+  idleTimer.callback()
+  await capabilities.drain()
+  t.is(releases, 1)
+  t.is(capabilities.size, 0)
+  t.is(errorCode(() => capabilities.consume(idle.token, scope({ method: 'GET', methods: undefined }))), 'CAPABILITY_INVALID')
+
+  const activeGrant = capabilities.issue({
+    ...scope({ publicationId: 'pub-active' }),
+    asset: { assetId: 'asset-1', async release () { releases++ } }
+  })
+  const acquisition = capabilities.consume(activeGrant.token, {
+    publicationId: 'pub-active',
+    renditionId: 'rend-1',
+    method: 'GET'
+  })
+  const activeTimer = timers.scheduled.at(-1)
+  timers.advance(100)
+  activeTimer.callback()
+  await capabilities.drain()
+  t.is(releases, 1)
+  t.is(capabilities.size, 0)
+
+  acquisition.release()
+  await capabilities.drain()
+  t.is(releases, 2)
+})
+
+test('capability expiry timer reschedules on issue and close then cancels on clear', async (t) => {
+  const timers = fakeTimers()
+  let byte = 40
+  let releases = 0
+  const capabilities = createStreamCapabilityStore({
+    now: timers.now,
+    randomBytes: () => b4a.alloc(32, byte++),
+    ttlMs: 100,
+    setTimeoutFn: timers.setTimeoutFn,
+    clearTimeoutFn: timers.clearTimeoutFn
+  })
+  const first = capabilities.issue({
+    ...scope(),
+    asset: { assetId: 'asset-1', async release () { releases++ } }
+  })
+  const firstTimer = timers.scheduled.at(-1)
+  timers.advance(20)
+  capabilities.issue({
+    ...scope({ publicationId: 'pub-2', assetId: 'asset-2' }),
+    asset: { assetId: 'asset-2', async release () { releases++ } }
+  })
+  const secondTimer = timers.scheduled.at(-1)
+  t.is(firstTimer.cleared, true)
+  t.is(secondTimer.delay, 80)
+
+  t.is(capabilities.close(first.token), true)
+  const finalTimer = timers.scheduled.at(-1)
+  t.is(secondTimer.cleared, true)
+  t.is(finalTimer.delay, 100)
+
+  capabilities.clear()
+  await capabilities.drain()
+  t.is(finalTimer.cleared, true)
+  t.is(capabilities.size, 0)
+  t.is(releases, 2)
 })
 
 test('open preserves its response shape and embeds the resolved asset only in the capability', async (t) => {

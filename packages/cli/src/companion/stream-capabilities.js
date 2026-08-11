@@ -50,12 +50,15 @@ function boundMethods (methods) {
 export function createStreamCapabilityStore ({
   now = Date.now,
   randomBytes = crypto.randomBytes,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout,
   ttlMs = DEFAULT_TTL_MS,
   maxEntries = DEFAULT_MAX_ENTRIES,
   maxConcurrentUses = DEFAULT_MAX_CONCURRENT_USES
 } = {}) {
-  if (typeof now !== 'function' || typeof randomBytes !== 'function') {
-    throw new TypeError('capability clock and random source are required')
+  if (typeof now !== 'function' || typeof randomBytes !== 'function' ||
+      typeof setTimeoutFn !== 'function' || typeof clearTimeoutFn !== 'function') {
+    throw new TypeError('capability clock, random source, and timer hooks are required')
   }
   boundedInteger(ttlMs, 'capability ttl', MAX_TTL_MS)
   boundedInteger(maxEntries, 'capability capacity', MAX_ENTRIES)
@@ -63,6 +66,7 @@ export function createStreamCapabilityStore ({
 
   const entries = new Map()
   const pendingReleases = new Set()
+  let expiryTimer = null
 
   function dispose (entry) {
     if (entry.disposed || !entry.retired || entry.activeUses > 0) return
@@ -96,6 +100,30 @@ export function createStreamCapabilityStore ({
       removed++
     }
     return removed
+  }
+
+  function cancelExpiryTimer () {
+    if (expiryTimer === null) return
+    clearTimeoutFn(expiryTimer)
+    expiryTimer = null
+  }
+
+  function scheduleExpiry (at) {
+    cancelExpiryTimer()
+    let nextExpiry = null
+    for (const entry of entries.values()) {
+      if (nextExpiry === null || entry.scope.expiresAt < nextExpiry) nextExpiry = entry.scope.expiresAt
+    }
+    if (nextExpiry === null) return
+    expiryTimer = setTimeoutFn(expireIdleCapabilities, Math.max(0, nextExpiry - at))
+    expiryTimer?.unref?.()
+  }
+
+  function expireIdleCapabilities () {
+    expiryTimer = null
+    const at = currentTime()
+    pruneAt(at)
+    scheduleExpiry(at)
   }
 
   function issue ({
@@ -143,6 +171,7 @@ export function createStreamCapabilityStore ({
       const digest = digestToken(token)
       if (entries.has(digest)) continue
       entries.set(digest, { scope, activeUses: 0, retired: false, disposed: false })
+      scheduleExpiry(issuedAt)
       return Object.freeze({
         token,
         expiresAt,
@@ -164,6 +193,7 @@ export function createStreamCapabilityStore ({
     const at = currentTime()
     if (entry.scope.expiresAt <= at) {
       retire(digest, entry)
+      scheduleExpiry(at)
       throw capabilityError(410, 'CAPABILITY_EXPIRED', 'Stream capability expired')
     }
     if (
@@ -202,10 +232,12 @@ export function createStreamCapabilityStore ({
     const entry = entries.get(digest)
     if (!entry) return false
     retire(digest, entry)
+    scheduleExpiry(currentTime())
     return true
   }
 
   function clear () {
+    cancelExpiryTimer()
     for (const [digest, entry] of entries) retire(digest, entry)
   }
 
@@ -219,7 +251,16 @@ export function createStreamCapabilityStore ({
     close,
     clear,
     drain,
-    prune () { return pruneAt(currentTime()) },
-    get size () { pruneAt(currentTime()); return entries.size }
+    prune () {
+      const at = currentTime()
+      const removed = pruneAt(at)
+      if (removed > 0) scheduleExpiry(at)
+      return removed
+    },
+    get size () {
+      const at = currentTime()
+      if (pruneAt(at) > 0) scheduleExpiry(at)
+      return entries.size
+    }
   })
 }

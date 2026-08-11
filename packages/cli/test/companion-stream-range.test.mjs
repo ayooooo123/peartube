@@ -90,7 +90,11 @@ function streamAsset (bytes = BODY, overrides = {}) {
   return { asset, calls }
 }
 
-async function startHarness (t, asset, { capabilities = null, streamChunkBytes = 4 } = {}) {
+async function startHarness (t, asset, {
+  capabilities = null,
+  streamChunkBytes = 4,
+  requestDeadlineMs = 5_000
+} = {}) {
   const service = {
     async verifyIndexCandidate () {
       return {
@@ -109,7 +113,7 @@ async function startHarness (t, asset, { capabilities = null, streamChunkBytes =
     config: config(),
     clock: () => NOW,
     capabilities,
-    requestDeadlineMs: 5_000,
+    requestDeadlineMs,
     streamChunkBytes
   })
   t.teardown(() => server.close().catch(() => {}))
@@ -253,6 +257,34 @@ test('verified-source exhaustion is structured before headers and terminates aft
   t.is(terminated.statusCode, 200)
   t.is(terminated.aborted, true)
   t.alike(terminated.body, BODY.subarray(0, 4))
+})
+
+
+test('slow progressing streams outlive the control request deadline', async (t) => {
+  const signals = []
+  const { asset } = streamAsset(BODY, {
+    async requestRange ({ byteStart, byteEnd, signal }) {
+      signals.push(signal)
+      await new Promise(resolve => setTimeout(resolve, 25))
+      if (signal.aborted) {
+        const error = new Error('aborted')
+        error.name = 'AbortError'
+        throw error
+      }
+      return {
+        status: 'ok',
+        verified: true,
+        bytes: BODY.subarray(byteStart, byteEnd)
+      }
+    }
+  })
+  const { state, opened } = await startHarness(t, asset, { requestDeadlineMs: 40 })
+  const response = await request({ host: state.host, port: state.port, path: opened.url })
+
+  t.is(response.statusCode, 200)
+  t.alike(response.body, BODY)
+  t.ok(signals.length > 1)
+  t.ok(signals.every(signal => signal.aborted === false))
 })
 
 test('disconnect aborts the in-flight scheduler request and releases capability concurrency', async (t) => {

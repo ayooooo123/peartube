@@ -331,6 +331,7 @@ export function createCompanionServer ({
     clearTimeout(firstRequestDeadlines.get(request.socket))
     firstRequestDeadlines.delete(request.socket)
     response.setHeader('connection', 'close')
+    const streamRequest = streamRoute.matches(request.url)
     const controller = new AbortController()
     const cancelRequest = () => {
       controller.abort()
@@ -339,10 +340,10 @@ export function createCompanionServer ({
     const onSocketClose = () => controller.abort()
     activeRequestControllers.add(controller)
     request.socket?.once?.('close', onSocketClose)
-    const deadline = setTimeout(cancelRequest, requestDeadlineMs)
-    deadline.unref?.()
+    const deadline = streamRequest ? null : setTimeout(cancelRequest, requestDeadlineMs)
+    deadline?.unref?.()
     try {
-      if (streamRoute.matches(request.url)) {
+      if (streamRequest) {
         await streamRoute.handle(request, response, { signal: controller.signal })
         return
       }

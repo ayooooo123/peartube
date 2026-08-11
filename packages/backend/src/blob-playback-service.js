@@ -24,6 +24,17 @@ function safeMediaType(value) {
   return MEDIA_TYPES.get(normalized) || 'application/octet-stream'
 }
 
+function hasLiveStaticAssetOwner(entry) {
+  if (entry?.authorizations instanceof Map) return entry.authorizations.size > 0
+  return typeof entry?.release === 'function'
+}
+
+function staticAssetCapacityError() {
+  const error = new Error('static playback asset capacity is exhausted by live streams')
+  error.code = 'STATIC_ASSET_CAPACITY_EXHAUSTED'
+  return error
+}
+
 function getCorePeerList(core) {
   const peers = core?.peers
   if (Array.isArray(peers)) return peers
@@ -172,6 +183,18 @@ export class BlobPlaybackService {
       entry.authorizations = authorizations
     }
 
+    const evictions = []
+    if (!reused) {
+      let required = entries.size - this.maxStaticAssetEntries + 1
+      for (const [assetId, candidate] of entries) {
+        if (required <= 0) break
+        if (hasLiveStaticAssetOwner(candidate)) continue
+        evictions.push([assetId, candidate])
+        required--
+      }
+      if (required > 0) throw staticAssetCapacityError()
+    }
+
     const commit = () => {
       if (addAuthorization) authorizations.set(authorizationKey, release)
       if (!existingEntries) ctx.staticAssetPlaybackEntries = entries
@@ -179,13 +202,11 @@ export class BlobPlaybackService {
         entries.delete(normalized.assetId)
         entries.set(normalized.assetId, entry)
       } else {
-        entries.set(normalized.assetId, entry)
-        while (entries.size > this.maxStaticAssetEntries) {
-          const oldestAssetId = entries.keys().next().value
-          const oldest = entries.get(oldestAssetId)
-          entries.delete(oldestAssetId)
-          this.releaseStaticAssetEntry(oldest)
+        for (const [assetId, candidate] of evictions) {
+          entries.delete(assetId)
+          this.releaseStaticAssetEntry(candidate)
         }
+        entries.set(normalized.assetId, entry)
       }
       return { entry, normalized, effectiveMimeType, reused }
     }

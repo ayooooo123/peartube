@@ -12,6 +12,7 @@ import { RelaySettings, resolveTmdbOptions } from './settings.js'
 import { TrustedClients, mergeTrustedClientKeys } from './trusted-clients.js'
 import { classifySourceUrl } from './archive/source-id.js'
 import { createStorageGuard } from './storage-guard.js'
+import { createCompanionServer } from './companion/server.js'
 import tmdbFetch from '#fetch'
 
 
@@ -26,7 +27,8 @@ export async function createRelayService({
   fsModule = null,
   pathModule = null,
   spawnFn = null,
-  nowFn = Date.now
+  nowFn = Date.now,
+  companionServerFactory = createCompanionServer
 }) {
   if (!config) throw new Error('config is required')
   if (typeof runtimeFactory !== 'function') throw new Error('runtimeFactory is required')
@@ -86,6 +88,7 @@ export async function createRelayService({
   let localMirrorTimer = null
   let localMirrorRunning = false
   let archiveConsole = null
+  let companionServer = null
   const localMirrorState = createLocalDriveMirrorState()
 
   function createLocalDrivePublisher(runtimeFsModule) {
@@ -405,6 +408,8 @@ export async function createRelayService({
         configuredOwners: config.admission.owners?.length || 0
       })
 
+      try {
+
       const bootStartedAt = Date.now()
       runtime.setCandidateHandler?.((candidate) => scheduleCandidate({
         source: 'discovered',
@@ -457,6 +462,15 @@ export async function createRelayService({
           port: config.archive.uiPort || 8174,
           bootMs: Date.now() - bootStartedAt
         })
+      }
+      if (config.companion?.enabled !== false) {
+        companionServer = await companionServerFactory({
+          service,
+          config: config.companion,
+          clock: nowFn,
+          logger
+        })
+        await companionServer.start()
       }
 
       const runtimeStartedAt = Date.now()
@@ -571,6 +585,28 @@ export async function createRelayService({
 
 
       return service
+      } catch (error) {
+        if (heartbeatTimer) {
+          clearIntervalFn(heartbeatTimer)
+          heartbeatTimer = null
+        }
+        if (localMirrorTimer) {
+          clearIntervalFn(localMirrorTimer)
+          localMirrorTimer = null
+        }
+        if (companionServer) {
+          await companionServer.close().catch(() => {})
+          companionServer = null
+        }
+        if (archiveConsole) {
+          await archiveConsole.close().catch(() => {})
+          archiveConsole = null
+        }
+        try {
+          await runtime.close?.()
+        } catch {}
+        throw error
+      }
     },
     async processCandidate(candidate) {
       return scheduleCandidate(candidate)
@@ -634,6 +670,12 @@ export async function createRelayService({
         maxFiles: Number.isFinite(Number(input.maxFiles)) ? Number(input.maxFiles) : Infinity
       })
     },
+    getCompanionState() {
+      return companionServer?.state?.() || {
+        enabled: false,
+        transport: config.companion?.transport || 'unix'
+      }
+    },
     getStatus() {
       return currentStatus || buildRelayStatus({
         config,
@@ -650,6 +692,10 @@ export async function createRelayService({
       if (localMirrorTimer) {
         clearIntervalFn(localMirrorTimer)
         localMirrorTimer = null
+      }
+      if (companionServer) {
+        await companionServer.close().catch(() => {})
+        companionServer = null
       }
       if (archiveConsole) {
         await archiveConsole.close().catch(() => {})

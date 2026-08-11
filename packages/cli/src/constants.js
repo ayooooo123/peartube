@@ -17,6 +17,19 @@ export const DEFAULT_MAX_BYTES = 100000 * 1024 * 1024
 // it crashes the process with ENOSPC. 0 disables the floor.
 export const DEFAULT_MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
 
+export const DEFAULT_COMPANION_CONFIG = {
+  enabled: false,
+  transport: 'unix',
+  socketPath: null,
+  host: '127.0.0.1',
+  port: 8175,
+  client: 'mediastorm',
+  sharedSecret: '',
+  maxBodyBytes: 1024 * 1024,
+  maxClockSkewMs: 30_000,
+  maxNonces: 4096
+}
+
 export const DEFAULT_DISCOVERY_MAX_CHANNELS = 0
 export const DEFAULT_DISCOVERY_MAX_CHANNELS_PER_OWNER = 0
 
@@ -128,6 +141,7 @@ export const DEFAULT_RELAY_CONFIG = {
     bootstrap: 'default',
     trustedRelayKeys: []
   },
+  companion: DEFAULT_COMPANION_CONFIG,
   archive: DEFAULT_ARCHIVE_CONFIG,
   classification: DEFAULT_CLASSIFICATION_CONFIG,
   logging: {

@@ -31,7 +31,8 @@ export async function createRelayService({
   pathModule = null,
   spawnFn = null,
   nowFn = Date.now,
-  companionServerFactory = createCompanionServer
+  companionServerFactory = createCompanionServer,
+  archiveConsoleFactory = createArchiveConsole
 }) {
   if (!config) throw new Error('config is required')
   if (typeof runtimeFactory !== 'function') throw new Error('runtimeFactory is required')
@@ -296,7 +297,8 @@ export async function createRelayService({
     const classifiedPreview = await classifyPreviewVideo(job.previewVideo)
     const publication = classifiedPreview?.immutablePublication
     const published = await runtime.publishPublisherCatalog({
-      publisherId: job.publisherId
+      publisherId: job.publisherId,
+      retentionClass: 'archive-pin'
     })
     if (published?.status !== 'published' && published?.status !== 'already-published') {
       return { published: false, reason: published?.status || 'catalog-publication-failed' }
@@ -306,7 +308,8 @@ export async function createRelayService({
     if (publication?.manifest && publication?.renditionId) {
       retained.push(await runtime.retainRendition({
         manifest: publication.manifest,
-        renditionId: publication.renditionId
+        renditionId: publication.renditionId,
+        retentionClass: 'archive-pin'
       }))
     }
     if (classifiedPreview?.archivePledge && classifiedPreview?.blobsCoreKey) {
@@ -556,7 +559,7 @@ export async function createRelayService({
       if (config.archive?.uiEnabled) {
         const runtimeFsModule = fsModule || await import('#fs')
         const runtimePathModule = pathModule || await import('#path')
-        archiveConsole = await createArchiveConsole({
+        archiveConsole = await archiveConsoleFactory({
           service,
           logger,
           host: config.archive.uiHost || '127.0.0.1',
@@ -651,7 +654,8 @@ export async function createRelayService({
           uploadManager: runtime.uploadManager,
           api: runtime.api,
           runtime,
-          fs: runtimeFsModule
+          fs: runtimeFsModule,
+          canPublish: retentionPermission
         }))
       }
 

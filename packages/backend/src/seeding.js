@@ -743,7 +743,8 @@ export class SeedingManager {
     const budget = retentionClass === 'archive-pin' ? policy.archiveBudgetBytes : policy.contributionBudgetBytes
     const usage = this.retentionUsage(key)
     const otherUsed = retentionClass === 'archive-pin' ? usage.archiveUsedBytes : usage.contributionUsedBytes
-    if (policy.migrationRequired || !allowed || otherUsed + Math.max(0, Math.round(Number(byteLength) || 0)) > budget) {
+    if (policy.migrationRequired || !allowed ||
+        otherUsed + normalizeStorageBytes(seed.thumbnailBytes) + Math.max(0, Math.round(Number(byteLength) || 0)) > budget) {
       return false
     }
 

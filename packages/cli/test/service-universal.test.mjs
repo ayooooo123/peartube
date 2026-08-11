@@ -173,6 +173,69 @@ test('companion startup cannot accept ingest before runtime policy readiness', a
   await service.close()
 })
 
+
+test('archive WebUI publisher follows current explicit archive consent', async (t) => {
+  const storagePath = mkdtempSync(join(tmpdir(), 'peartube-cli-archive-ui-policy-'))
+  t.teardown(() => rmSync(storagePath, { recursive: true, force: true }))
+  const calls = []
+  const runtime = fakeRuntime(calls)
+  const config = configFor(storagePath)
+  config.archive = { ...config.archive, uiEnabled: true }
+  let uiPublisher = null
+  const service = await createRelayService({
+    config,
+    logger,
+    runtimeFactory: async () => runtime,
+    archiveConsoleFactory: async ({ publisher }) => {
+      uiPublisher = publisher
+      return { async start () {}, async close () {} }
+    },
+    writeStatusFile: async () => {},
+    setIntervalFn: () => ({ unref: noop }),
+    clearIntervalFn: noop
+  })
+  await service.start()
+
+  await service.applyNetworkPolicy({
+    policyVersion: 2,
+    consentVersion: 1,
+    migrationRequired: false,
+    contributeWatchedMedia: true,
+    archiveEnabled: false,
+    contributionBudgetBytes: 4096,
+    archiveBudgetBytes: 4096,
+    uploadPermission: 'enabled',
+    uploadCeilingBytes: 4096,
+  })
+  const denied = await uiPublisher.publishCatalog({
+    publisherId: 'archive-ui-publisher',
+    retentionClass: 'archive-pin'
+  }).then(() => null, error => error)
+  t.is(denied?.code, 'RETENTION_PERMISSION_DENIED')
+  t.absent(calls.some(([name]) => name === 'publish'))
+
+  await service.applyNetworkPolicy({
+    policyVersion: 2,
+    consentVersion: 1,
+    migrationRequired: false,
+    contributeWatchedMedia: true,
+    archiveEnabled: true,
+    contributionBudgetBytes: 4096,
+    archiveBudgetBytes: 4096,
+    uploadPermission: 'enabled',
+    uploadCeilingBytes: 4096,
+  })
+  t.is((await uiPublisher.publishCatalog({
+    publisherId: 'archive-ui-publisher',
+    retentionClass: 'archive-pin'
+  })).status, 'published')
+  t.alike(calls.find(([name]) => name === 'publish')?.[1], {
+    publisherId: 'archive-ui-publisher',
+    retentionClass: 'archive-pin'
+  })
+  await service.close()
+})
+
 test('completed archive publishes an authenticated catalog and retains bounded assets', async (t) => {
   const storagePath = mkdtempSync(join(tmpdir(), 'peartube-cli-archive-'))
   t.teardown(() => rmSync(storagePath, { recursive: true, force: true }))
@@ -198,9 +261,9 @@ test('completed archive publishes an authenticated catalog and retains bounded a
     policyVersion: 2,
     consentVersion: 1,
     migrationRequired: false,
-    contributeWatchedMedia: false,
+    contributeWatchedMedia: true,
     archiveEnabled: true,
-    contributionBudgetBytes: 0,
+    contributionBudgetBytes: 4096,
     archiveBudgetBytes: 4096,
     uploadPermission: 'enabled',
     uploadCeilingBytes: 4096,
@@ -222,6 +285,15 @@ test('completed archive publishes an authenticated catalog and retains bounded a
 
   t.alike(result, { published: true, previewVideos: 1, retained: 2 })
   t.alike(calls.map(([name]) => name), ['publish', 'retain-rendition', 'retain-archive'])
+  t.alike(calls.find(([name]) => name === 'publish')?.[1], {
+    publisherId: 'a'.repeat(64),
+    retentionClass: 'archive-pin'
+  })
+  t.alike(calls.find(([name]) => name === 'retain-rendition')?.[1], {
+    manifest: { body: { publisherId: 'a'.repeat(64), renditions: [] } },
+    renditionId: 'rendition-1',
+    retentionClass: 'archive-pin'
+  })
   t.is(service.catalog.getChannel('channel-1').publisherId, 'a'.repeat(64))
   await service.close()
 })

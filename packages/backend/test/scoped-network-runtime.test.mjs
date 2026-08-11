@@ -215,6 +215,33 @@ test('role budgets cannot bypass disabled upload permission', async (t) => {
   await runtime.close()
 })
 
+test('positive role budget cannot bypass a zero global upload ceiling', async (t) => {
+  const root = crypto.keyPair(bytes(32, 30))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 31),
+  })
+  const registry = fakeRegistry(descriptor)
+  registry.binding.catalog.listProjections = async () => ({ items: [{ accepted: true }], nextCursor: null })
+  const swarm = fakeSwarm()
+  const runtime = createScopedNetworkRuntime({
+    swarm,
+    store: {},
+    catalogRegistry: registry,
+    initialNetworkPolicy: contributionPolicy({ uploadCeilingBytes: 0 }),
+  })
+  await runtime.start()
+
+  await t.exception(
+    runtime.publishLocalPublisherCatalog({ publisherId: descriptor.publisherId }),
+    /explicit contribution upload permission/
+  )
+  t.is(runtime.getDiagnostics().publicWork.activeAnnouncements, 0)
+  t.is(swarm.joins.every(join => join.options.server === false), true)
+  await runtime.close()
+})
+
+
 test('archive consent with zero archive budget cannot allocate retention', async (t) => {
   const runtime = createScopedNetworkRuntime({
     swarm: fakeSwarm(),
@@ -309,6 +336,43 @@ test('watch-only downgrade closes local publisher catalog sessions and removes i
   t.ok(runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'publisher'))
   t.ok(runtimeA.getDiagnostics().topics.find(topic => topic.purpose === 'publisher')?.publicAnnounced)
 
+  await runtimeA.applyNetworkPolicy(contributionPolicy({ contributionBudgetBytes: 0 }))
+  await settle()
+  let transitionDiagnostics = runtimeA.getDiagnostics()
+  t.absent(transitionDiagnostics.sessions.find(session => session.purpose === 'publisher'),
+    'contribution budget reduction closes the local catalog session')
+  t.absent(transitionDiagnostics.topics.find(topic => topic.purpose === 'publisher')?.publicAnnounced,
+    'zero contribution budget suppresses the local catalog announcement')
+  t.ok(runtimeB.getDiagnostics().topics.some(topic => topic.purpose === 'publisher'),
+    'the client-only followed catalog scope remains retained')
+
+  await runtimeA.applyNetworkPolicy(contributionPolicy())
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if (runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'publisher')) break
+    await settle()
+  }
+  t.ok(runtimeA.getDiagnostics().topics.find(topic => topic.purpose === 'publisher')?.publicAnnounced,
+    'restoring the contribution budget rejoins public catalog discovery')
+
+  await runtimeA.applyNetworkPolicy(contributionPolicy({ uploadCeilingBytes: 0 }))
+  await settle()
+  transitionDiagnostics = runtimeA.getDiagnostics()
+  t.absent(transitionDiagnostics.sessions.find(session => session.purpose === 'publisher'),
+    'zero global upload ceiling closes the local catalog session')
+  t.absent(transitionDiagnostics.topics.find(topic => topic.purpose === 'publisher')?.publicAnnounced,
+    'zero global upload ceiling suppresses the local catalog announcement')
+  t.ok(runtimeB.getDiagnostics().topics.some(topic => topic.purpose === 'publisher'),
+    'global upload cutover preserves the followed client scope')
+
+  await runtimeA.applyNetworkPolicy(contributionPolicy())
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if (runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'publisher')) break
+    await settle()
+  }
+  t.ok(runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'publisher'),
+    'restoring the global upload ceiling rejoins the public catalog session')
+
+
   await runtimeA.applyNetworkPolicy({
     networkEnabled: true,
     uploadPermission: 'disabled',
@@ -387,6 +451,46 @@ test('persisted runtime policy gates discovery startup and resumes without dupli
   t.is(swarm.joins.at(-1).options.server, false)
   await runtime.close()
 })
+
+test('suspended public discovery restores its announcement count when the network resumes', async (t) => {
+  const root = crypto.keyPair(bytes(32, 34))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 35),
+  })
+  const registry = fakeRegistry(descriptor)
+  registry.binding.catalog.listProjections = async () => ({ items: [{ accepted: true }], nextCursor: null })
+  const swarm = fakeSwarm()
+  const runtime = createScopedNetworkRuntime({
+    swarm,
+    store: {},
+    catalogRegistry: registry,
+    initialNetworkPolicy: contributionPolicy(),
+  })
+  await runtime.start()
+  await runtime.publishLocalPublisherCatalog({ publisherId: descriptor.publisherId })
+  const publisherJoin = swarm.joins.find(join =>
+    b4a.equals(join.topic, derivePublisherTopic({
+      publisherId: descriptor.publisherId,
+      catalogEpoch: descriptor.catalogEpoch,
+      protocolMajor: PROTOCOL_MAJOR,
+    })))
+  t.ok(publisherJoin?.options.server)
+  t.is(runtime.getDiagnostics().publicWork.activeAnnouncements, 1)
+
+  await runtime.applyNetworkPolicy(contributionPolicy({ networkEnabled: false }))
+  t.is(publisherJoin.suspended, 1, 'network pause suspends rather than replaces public discovery')
+  t.is(publisherJoin.destroyed, 0)
+  t.is(runtime.getDiagnostics().publicWork.activeAnnouncements, 0)
+
+  await runtime.applyNetworkPolicy(contributionPolicy())
+  t.is(publisherJoin.resumed, 1)
+  t.is(runtime.getDiagnostics().publicWork.activeAnnouncements, 1,
+    'resumed discovery reports its restored serving role')
+  t.is(swarm.joins.filter(join => b4a.equals(join.topic, publisherJoin.topic)).length, 1)
+  await runtime.close()
+})
+
 
 
 function makeProtocolSession ({ purpose = 'bootstrap', topic = deriveBootstrapTopic({ protocolMajor: PROTOCOL_MAJOR }), capability = BOOTSTRAP_LOCATOR_CAPABILITY, work } = {}) {
@@ -827,10 +931,34 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
   })
   await readerCore.ready()
   const swarmA = fakeSwarm()
+  let markGlobalReductionProofStarted
+  let releaseGlobalReductionProof
+  let holdGlobalReductionProof = false
+  const globalReductionProofStarted = new Promise(resolve => { markGlobalReductionProofStarted = resolve })
+  const globalReductionProofRelease = new Promise(resolve => { releaseGlobalReductionProof = resolve })
+  const patchedSourceCores = new WeakSet()
+  const sourceRuntimeStore = {
+    get (options) {
+      const core = sourceStore.get(options)
+      if (patchedSourceCores.has(core)) return core
+      patchedSourceCores.add(core)
+      const proof = core.proof.bind(core)
+      core.proof = async request => {
+        const result = await proof(request)
+        if (holdGlobalReductionProof && request?.block?.index === 4) {
+          holdGlobalReductionProof = false
+          markGlobalReductionProofStarted()
+          await globalReductionProofRelease
+        }
+        return result
+      }
+      return core
+    }
+  }
   const swarmB = fakeSwarm()
   const runtimeA = createScopedNetworkRuntime({
     swarm: swarmA,
-    store: sourceStore,
+    store: sourceRuntimeStore,
     authorizePublication: async request => request.manifest === manifest,
     initialNetworkPolicy: contributionPolicy(),
   })
@@ -914,25 +1042,45 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
     ))
   }
   t.is(await readerCore.has(5), false, 'the peer never receives a block at or above its authorized range end')
+  holdGlobalReductionProof = true
   await readerCore.clear(4)
   const uploadedBeforeExhaustion = runtimeA.getDiagnostics().policy.uploadedBytes
-  await runtimeA.applyNetworkPolicy(contributionPolicy({
-    uploadCeilingBytes: 1,
-    contributionBudgetBytes: 1,
-  }))
-  const exhausted = await runtimeB.requestAssetBlocks({
+  const closedBeforeGlobalReduction = runtimeA.getDiagnostics().counters.closedSessions
+  const inFlight = runtimeB.requestAssetBlocks({
     assetId: staticCore.assetId,
     startBlock: 4,
     endBlock: 5,
     requirePeerEvidence: true,
-  }).then(() => null, error => error)
-  t.ok(exhausted, 'exhausted upload budget settles the accepted peer request')
+  })
+  const observedInFlight = inFlight.then(() => null, error => error)
+  await globalReductionProofStarted
+  await runtimeA.applyNetworkPolicy(contributionPolicy({ uploadCeilingBytes: 1 }))
+  releaseGlobalReductionProof()
+  const exhausted = await observedInFlight
+  t.ok(exhausted, 'global ceiling reduction settles the already accepted peer request')
   t.is(exhausted.code, 'UNAVAILABLE')
   t.is(exhausted.peerId, b4a.toString(pair.b.remotePublicKey, 'hex'))
   t.ok(exhausted.message.length <= 256)
+  t.ok(runtimeA.getDiagnostics().counters.closedSessions > closedBeforeGlobalReduction,
+    'global ceiling reduction closes the affected asset session before rejoin')
   t.is(runtimeA.getDiagnostics().policy.uploadedBytes, uploadedBeforeExhaustion,
-    'reservation denial commits no uploaded bytes')
-  t.is(await readerCore.has(4), false, 'budget exhaustion serves no asset block')
+    'global ceiling reduction preserves committed accounting')
+  t.is(await readerCore.has(4), false, 'global ceiling reduction serves no asset block')
+
+  await runtimeA.applyNetworkPolicy(contributionPolicy())
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if (runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'asset')) break
+    await settle()
+  }
+  await runtimeA.applyNetworkPolicy(contributionPolicy({ contributionBudgetBytes: 0 }))
+  await settle()
+  const roleBudgetDiagnostics = runtimeA.getDiagnostics()
+  t.absent(roleBudgetDiagnostics.sessions.find(session => session.purpose === 'asset'),
+    'zero contribution role budget closes the affected asset session')
+  t.absent(roleBudgetDiagnostics.topics.find(topic => topic.purpose === 'asset')?.publicAnnounced,
+    'zero contribution role budget suppresses asset announcement')
+  t.ok(runtimeB.getDiagnostics().topics.some(topic => topic.purpose === 'asset'),
+    'the watch-only client asset scope remains retained')
   t.is(runtimeA.getDiagnostics().status, 'active')
   t.is(runtimeB.getDiagnostics().status, 'active')
 })
@@ -1512,11 +1660,21 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   t.alike([...received.keys()].sort((a, b) => a - b), [2, 3, 4])
   const committedUploadBytes = runtimeA.getDiagnostics().policy.uploadedBytes
   t.ok(committedUploadBytes > 0)
-  await runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 0 }))
-  t.is(runtimeA.getDiagnostics().policy.uploadedBytes, committedUploadBytes, 'lower ceilings preserve committed upload accounting')
+  await runtimeA.applyNetworkPolicy(archivePolicy({
+    uploadCeilingBytes: 256 * 1024,
+    archiveBudgetBytes: 0
+  }))
+  diagnostics = runtimeA.getDiagnostics()
+  t.is(diagnostics.policy.uploadedBytes, committedUploadBytes,
+    'archive budget reduction preserves committed upload accounting')
+  t.absent(diagnostics.sessions.find(session => session.purpose === 'archive'),
+    'zero archive role budget closes the affected archive session')
+  t.absent(diagnostics.topics.find(topic => topic.purpose === 'archive')?.publicAnnounced,
+    'zero archive role budget suppresses archive announcement')
   await runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 256 * 1024 }))
   for (let attempt = 0; attempt < 20; attempt++) await settle()
-  t.alike([...received.keys()].sort((a, b) => a - b), [2, 3, 4], 'policy toggles do not reset committed upload accounting')
+  t.alike([...received.keys()].sort((a, b) => a - b), [2, 3, 4],
+    'role-budget toggles do not reset committed upload accounting')
   t.is(received.has(1), false, 'the peer never receives a block below its pledged range')
   t.is(received.has(5), false, 'the peer never receives a block exceeding the runtime upload ceiling')
   const challengeProof = await runtimeA.createAuthorizedArchiveChallengeProof({

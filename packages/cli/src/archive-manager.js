@@ -620,7 +620,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       if (!publisherId || typeof runtime?.publishPublisherCatalog !== 'function') {
         throw new Error('publisher catalog is unavailable')
       }
-      const result = await runtime.publishPublisherCatalog({ publisherId })
+      const result = await runtime.publishPublisherCatalog({ publisherId, retentionClass })
       if (result?.status !== 'published' && result?.status !== 'already-published') {
         throw new Error(`publisher catalog publication failed: ${result?.status || 'unknown'}`)
       }
@@ -634,7 +634,8 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         if (publication?.manifest && publication?.renditionId && typeof runtime?.retainRendition === 'function') {
           results.push(await runtime.retainRendition({
             manifest: publication.manifest,
-            renditionId: publication.renditionId
+            renditionId: publication.renditionId,
+            retentionClass
           }))
         }
         if (video?.archivePledge && video?.blobsCoreKey && typeof runtime?.retainArchive === 'function') {

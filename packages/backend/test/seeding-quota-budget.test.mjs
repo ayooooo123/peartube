@@ -144,3 +144,28 @@ test('generic seed removal cannot release an archive pin', async (t) => {
   t.ok(await manager.removeArchivePin('drive-archive', 'video-pin'), 'explicit archive removal releases the pin')
   t.is((await manager.getStatus()).activeArchivePins, 0)
 })
+
+test('cached video updates include the seed thumbnail in class-budget admission', async (t) => {
+  const manager = new SeedingManager(createStore(), createMetaDb(), { storageMaintenanceDelayMs: 0 })
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: false,
+    archiveEnabled: true,
+    contributionBudgetBytes: 0,
+    archiveBudgetBytes: 50,
+    migrationRequired: false
+  })
+  await manager.addSeed('drive-thumbnail', 'video-pin', 'archive', {
+    byteLength: 10,
+    thumbnailByteLength: 30,
+    blobId: '0:1:0:10',
+    blobsCoreKey: 'ad'.repeat(32)
+  }, { authorized: true })
+
+  t.absent(await manager.updateSeedCachedBytes('drive-thumbnail', 'video-pin', 21, { persist: true }),
+    'thumbnail plus updated video bytes cannot exceed the archive budget')
+  t.is(manager.getRetentionBudgetStatus().archiveUsedBytes, 40,
+    'rejected updates preserve the committed video and thumbnail accounting')
+  t.ok(await manager.updateSeedCachedBytes('drive-thumbnail', 'video-pin', 20, { persist: true }),
+    'the exact thumbnail-inclusive budget boundary is admitted')
+  t.is(manager.getRetentionBudgetStatus().archiveUsedBytes, 50)
+})

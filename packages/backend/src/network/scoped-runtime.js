@@ -301,10 +301,13 @@ export function createScopedNetworkRuntime (options = {}) {
     : Number.MAX_SAFE_INTEGER
   let contributionAllowed = initialNetworkPolicy.permissions?.contribute === true
   let archiveAllowed = initialNetworkPolicy.permissions?.archive === true
-  let publicServingAllowed = hasInitialNetworkPolicy &&
+  let publicServingRequested = hasInitialNetworkPolicy &&
     initialNetworkPolicy.publicServingAllowed === true &&
     (contributionAllowed || archiveAllowed)
-  let uploadAllowed = publicServingAllowed && uploadPermission === 'enabled'
+  let publicServingAllowed = publicServingRequested && networkEnabled
+  let uploadAllowed = publicServingAllowed &&
+    uploadPermission === 'enabled' &&
+    uploadCeilingBytes > 0
   let contributionUploadedBytes = 0
   let archiveUploadedBytes = 0
   let uploadedBytes = 0
@@ -366,14 +369,15 @@ export function createScopedNetworkRuntime (options = {}) {
     if (scope.purpose === 'publisher') {
       return scope.modes?.has?.('local') === true && scopeUploadRetentionClass(scope) !== null
     }
-    return (scope.purpose === 'archive' || scope.purpose === 'archive-discovery') && archiveAllowed
+    return (scope.purpose === 'archive' || scope.purpose === 'archive-discovery') &&
+      retentionClassAllowed('archive-pin')
   }
 
   function scopeMayAttach (scope) {
     if (scope.purpose === 'publisher') {
-      return scope.modes.has('followed') || (scope.modes.has('local') && scopeUploadRetentionClass(scope) !== null)
+      return scope.modes.has('followed') || scopeMayServe(scope)
     }
-    if (scope.purpose === 'archive' || scope.purpose === 'archive-discovery') return archiveAllowed
+    if (scope.purpose === 'archive' || scope.purpose === 'archive-discovery') return scopeMayServe(scope)
     return true
   }
 
@@ -399,6 +403,7 @@ export function createScopedNetworkRuntime (options = {}) {
     if (scope.discovery) {
       if (scope.discoverySuspended) {
         scope.discoverySuspended = false
+        scope.serverAnnounced = scopeMayServe(scope)
         void Promise.resolve(scope.discovery.resume?.()).catch(() => {})
       }
       return scope.discovery
@@ -1476,12 +1481,12 @@ export function createScopedNetworkRuntime (options = {}) {
       return { status: 'authorized', action: 'retained-range', coreKey: scope.coreKey, range: { ...scope.range } }
     }
     if (scope.purpose === 'archive-discovery') {
-      return archiveAllowed
+      return scopeMayServe(scope)
         ? { status: 'authorized', action: 'archive-discovery' }
         : { status: 'rejected', reason: 'archive-policy-disabled' }
     }
     if (scope.purpose === 'archive') {
-      if (!archiveAllowed) return { status: 'rejected', reason: 'archive-policy-disabled' }
+      if (!scopeMayServe(scope)) return { status: 'rejected', reason: 'archive-policy-disabled' }
       if (scope.archiveDiscovery) fail('archive custody scope cannot be discovery')
       const requested = requestedCoreKey ? hex32(requestedCoreKey, 'requestedCoreKey') : null
       const resource = requested
@@ -1867,7 +1872,7 @@ export function createScopedNetworkRuntime (options = {}) {
     const nextDiskCeilingBytes = Number(policy.diskCeilingBytes ?? diskCeilingBytes)
     const nextContributionAllowed = policy.permissions?.contribute === true
     const nextArchiveAllowed = policy.permissions?.archive === true
-    const nextPublicServingAllowed = policy.publicServingAllowed === true &&
+    const nextPublicServingRequested = policy.publicServingAllowed === true &&
       (nextContributionAllowed || nextArchiveAllowed)
     const nextContributionUploadCeilingBytes = Number(policy.contributionBudgetBytes ?? 0)
     const nextArchiveUploadCeilingBytes = Number(policy.archiveBudgetBytes ?? 0)
@@ -1879,10 +1884,11 @@ export function createScopedNetworkRuntime (options = {}) {
     if (!Number.isSafeInteger(nextDiskCeilingBytes) || nextDiskCeilingBytes < 0) fail('invalid disk ceiling')
 
     const wasNetworkEnabled = networkEnabled
-    const wasPublicServingAllowed = publicServingAllowed
-    const wasUploadAllowed = uploadAllowed
+    const wasPublicServingRequested = publicServingRequested
+    const wasUploadPermission = uploadPermission
     const wasContributionAllowed = contributionAllowed
     const wasArchiveAllowed = archiveAllowed
+    const wasUploadCeilingBytes = uploadCeilingBytes
     const wasContributionUploadCeilingBytes = contributionUploadCeilingBytes
     const wasArchiveUploadCeilingBytes = archiveUploadCeilingBytes
     networkEnabled = policy.networkEnabled !== false
@@ -1893,27 +1899,35 @@ export function createScopedNetworkRuntime (options = {}) {
     diskCeilingBytes = nextDiskCeilingBytes
     contributionAllowed = nextContributionAllowed
     archiveAllowed = nextArchiveAllowed
-    publicServingAllowed = nextPublicServingAllowed && networkEnabled
-    uploadAllowed = publicServingAllowed && uploadPermission === 'enabled'
+    publicServingRequested = nextPublicServingRequested
+    publicServingAllowed = publicServingRequested && networkEnabled
+    uploadAllowed = publicServingAllowed &&
+      uploadPermission === 'enabled' &&
+      uploadCeilingBytes > 0
     networkPolicyEpoch++
-    if (wasPublicServingAllowed !== publicServingAllowed ||
-        wasUploadAllowed !== uploadAllowed ||
+    const uploadPolicyChanged =
+      wasPublicServingRequested !== publicServingRequested ||
+      wasUploadPermission !== uploadPermission ||
+      wasUploadCeilingBytes !== uploadCeilingBytes
+    const contributionServingPolicyChanged =
+      (wasContributionAllowed || contributionAllowed) && (
         wasContributionAllowed !== contributionAllowed ||
-        wasArchiveAllowed !== archiveAllowed ||
         wasContributionUploadCeilingBytes !== contributionUploadCeilingBytes ||
-        wasArchiveUploadCeilingBytes !== archiveUploadCeilingBytes) {
+        uploadPolicyChanged
+      )
+    const archiveServingPolicyChanged =
+      (wasArchiveAllowed || archiveAllowed) && (
+        wasArchiveAllowed !== archiveAllowed ||
+        wasArchiveUploadCeilingBytes !== archiveUploadCeilingBytes ||
+        uploadPolicyChanged
+      )
+    if (contributionServingPolicyChanged || archiveServingPolicyChanged) {
       for (const scope of scopes.values()) {
         if (scope.purpose !== 'asset') continue
-        const contributionChanged = scope.retentionClasses?.has?.('contribution-cache') && (
-          wasContributionAllowed !== contributionAllowed ||
-          wasContributionUploadCeilingBytes !== contributionUploadCeilingBytes ||
-          wasUploadAllowed !== uploadAllowed
-        )
-        const archiveChanged = scope.retentionClasses?.has?.('archive-pin') && (
-          wasArchiveAllowed !== archiveAllowed ||
-          wasArchiveUploadCeilingBytes !== archiveUploadCeilingBytes ||
-          wasUploadAllowed !== uploadAllowed
-        )
+        const contributionChanged = scope.retentionClasses?.has?.('contribution-cache') &&
+          contributionServingPolicyChanged
+        const archiveChanged = scope.retentionClasses?.has?.('archive-pin') &&
+          archiveServingPolicyChanged
         if (!contributionChanged && !archiveChanged) continue
         for (const tracked of scope.sessions.values()) {
           for (const response of tracked.assetResponses?.values?.() || []) {
@@ -1929,28 +1943,18 @@ export function createScopedNetworkRuntime (options = {}) {
       }
     }
 
-    if (wasPublicServingAllowed !== publicServingAllowed ||
-        wasUploadAllowed !== uploadAllowed ||
-        wasContributionAllowed !== contributionAllowed ||
-        wasArchiveAllowed !== archiveAllowed ||
-        wasContributionUploadCeilingBytes !== contributionUploadCeilingBytes ||
-        wasArchiveUploadCeilingBytes !== archiveUploadCeilingBytes) {
+    if (contributionServingPolicyChanged || archiveServingPolicyChanged) {
       await Promise.allSettled([...scopes.values()].map(async scope => {
         const contributionScope = (scope.purpose === 'asset' || scope.purpose === 'publisher') &&
           scope.retentionClasses?.has?.('contribution-cache')
         const retainedArchiveScope = (scope.purpose === 'asset' || scope.purpose === 'publisher') &&
           scope.retentionClasses?.has?.('archive-pin')
         const archiveScope = scope.purpose === 'archive' || scope.purpose === 'archive-discovery'
-        if ((contributionScope && (
-          wasContributionAllowed !== contributionAllowed ||
-          wasUploadAllowed !== uploadAllowed
-        )) || ((archiveScope || retainedArchiveScope) && (
-          wasArchiveAllowed !== archiveAllowed ||
-          wasUploadAllowed !== uploadAllowed
-        ))) {
-          for (const peerId of [...scope.sessions.keys()]) {
-            closeSession(scope, peerId, 'network-policy-role-changed')
-          }
+        const contributionChanged = contributionScope && contributionServingPolicyChanged
+        const archiveChanged = (archiveScope || retainedArchiveScope) && archiveServingPolicyChanged
+        if (!contributionChanged && !archiveChanged) return
+        for (const peerId of [...scope.sessions.keys()]) {
+          closeSession(scope, peerId, 'network-policy-role-changed')
         }
         await rejoinScopeDiscovery(scope)
       }))

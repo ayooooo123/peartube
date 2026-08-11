@@ -490,10 +490,10 @@ export function createScopedNetworkRuntime (options = {}) {
     if (scope.purpose === 'asset') failAssetRequestPeer(scope, peerId, 'DISCONNECTED')
     session.closed = true
     for (const cleanup of session.cleanupFns.splice(0)) {
-      try { cleanup() } catch {}
+      try { cleanup() } catch { /* best-effort session cleanup */ }
     }
     session.protocol.close(reason)
-    try { session.channel?.close?.() } catch {}
+    try { session.channel?.close?.() } catch { /* best-effort channel close */ }
     if (scope.sessions.get(peerId) === session) scope.sessions.delete(peerId)
     counters.closedSessions++
     return true
@@ -1323,7 +1323,7 @@ export function createScopedNetworkRuntime (options = {}) {
     scope.archiveChallengeProofTransfers?.clear()
     for (const peerId of [...scope.sessions.keys()]) closeSession(scope, peerId, 'scope-released')
     for (const resource of scope.archiveResources?.values() || []) {
-      try { resource.releaseArchiveProtection?.() } catch {}
+      try { resource.releaseArchiveProtection?.() } catch { /* best-effort protection release */ }
       resource.releaseArchiveProtection = null
     }
     const resources = scope.archiveResources
@@ -1502,7 +1502,7 @@ export function createScopedNetworkRuntime (options = {}) {
           cancelAssetSummaryScan(tracked)
           tracked.closed = true
           for (const cleanup of tracked.cleanupFns.splice(0)) {
-            try { cleanup() } catch {}
+            try { cleanup() } catch { /* best-effort session cleanup */ }
           }
           if (scope.sessions.get(remoteKey) === tracked) scope.sessions.delete(remoteKey)
           counters.closedSessions++
@@ -1518,7 +1518,7 @@ export function createScopedNetworkRuntime (options = {}) {
         counters.rejectedFrames++
         recordProtocolError(scope, remoteKey, error)
         protocolSession.close(error.code || error.message)
-        try { channel?.close?.() } catch {}
+        try { channel?.close?.() } catch { /* best-effort rejected channel close */ }
       }),
     }
     channel = mux.createChannel({
@@ -1530,7 +1530,7 @@ export function createScopedNetworkRuntime (options = {}) {
         counters.rejectedFrames++
         protocolSession.close(error.code || error.message)
         recordProtocolError(scope, remoteKey, error)
-        try { channel?.close?.() } catch {}
+        try { channel?.close?.() } catch { /* best-effort handshake channel close */ }
       }),
       onclose: isRemote => protocolSession.close(isRemote ? 'remote-channel-closed' : 'local-channel-closed'),
     })
@@ -1901,7 +1901,7 @@ export function createScopedNetworkRuntime (options = {}) {
         try {
           existing.client?.refreshAnnouncement(announcement, retainedIndexClientLimits(limits))
         } catch (error) {
-          try { (limits.clearTimeout || clearTimeout)(candidateTimer) } catch {}
+          try { (limits.clearTimeout || clearTimeout)(candidateTimer) } catch { /* best-effort candidate timer cleanup */ }
           throw error
         }
         existing.announcement = announcement
@@ -1911,7 +1911,7 @@ export function createScopedNetworkRuntime (options = {}) {
         existing.expiryTimer = candidateTimer
         indexSequenceFloors.set(indexerId, announcement.sequence)
         if (previousTimer) {
-          try { (previousLimits.clearTimeout || clearTimeout)(previousTimer) } catch {}
+          try { (previousLimits.clearTimeout || clearTimeout)(previousTimer) } catch { /* best-effort superseded timer cleanup */ }
         }
         return {
           status: 'superseded',
@@ -2198,7 +2198,7 @@ export function createScopedNetworkRuntime (options = {}) {
           ]]),
         }))
       } catch (error) {
-        try { await assetSession?.close?.() } catch {}
+        try { await assetSession?.close?.() } catch { /* best-effort failed-session close */ }
         throw error
       }
     }
@@ -2771,8 +2771,8 @@ export function createScopedNetworkRuntime (options = {}) {
       archives.set(resourceId, { scope, resource, result })
       return result
     } catch (error) {
-      try { releaseArchiveProtection?.() } catch {}
-      try { await core.close?.() } catch {}
+      try { releaseArchiveProtection?.() } catch { /* best-effort protection release */ }
+      try { await core.close?.() } catch { /* best-effort failed-retention core close */ }
       throw error
     }
   }
@@ -2827,7 +2827,7 @@ export function createScopedNetworkRuntime (options = {}) {
     for (const [resourceId, value] of retained) {
       archives.delete(resourceId)
       value.scope.archiveResources?.delete(resourceId)
-      try { value.resource.releaseArchiveProtection?.() } catch {}
+      try { value.resource.releaseArchiveProtection?.() } catch { /* best-effort protection release */ }
       value.resource.releaseArchiveProtection = null
       await Promise.allSettled([
         cleanupResource(value.resource.download, ['destroy', 'close']),

@@ -771,7 +771,7 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
   t.is(await readerCore.has(5), false, 'the peer never receives a block at or above its authorized range end')
 })
 
-test('watch-only asset serving rejects through the pending request without an unhandled protocol error', async (t) => {
+test('watch-only requester receives a bounded unavailable error from a contributor without protocol failure', async (t) => {
   const publisher = crypto.keyPair(bytes(32, 91))
   const staticCore = createStaticAssetManifest({
     treeHash: bytes(32, 92),
@@ -804,6 +804,7 @@ test('watch-only asset serving rejects through the pending request without an un
   const swarmB = fakeSwarm()
   const runtimeA = createScopedNetworkRuntime({
     swarm: swarmA,
+    initialNetworkPolicy: contributionPolicy(),
     store: emptyStore,
     authorizePublication: async request => request.manifest === manifest,
   })
@@ -835,6 +836,11 @@ test('watch-only asset serving rejects through the pending request without an un
   }
   t.ok(runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'asset' && session.state === 'active'))
   t.ok(runtimeB.getDiagnostics().sessions.some(session => session.purpose === 'asset' && session.state === 'active'))
+  const assetTopic = deriveStaticAssetTopic(staticCore.assetId)
+  const sourceAssetJoin = swarmA.joins.find(join => b4a.equals(join.topic, assetTopic))
+  const requesterAssetJoin = swarmB.joins.find(join => b4a.equals(join.topic, assetTopic))
+  t.is(sourceAssetJoin?.options.server, true, 'explicit contributor serves the scoped asset topic')
+  t.is(requesterAssetJoin?.options.server, false, 'watch-only requester joins the scoped asset topic as a client')
 
   const rejection = runtimeB.requestAssetBlocks({
     assetId: staticCore.assetId,

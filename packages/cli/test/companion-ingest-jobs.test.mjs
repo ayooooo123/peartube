@@ -756,7 +756,12 @@ test('persistence failures expose one bounded stable error and never half-write 
   const bee = fakeBee({ failFlush: true })
   const store = createIngestJobStore({ bee })
   const publisher = fakePublisher()
-  const manager = createIngestManager({ store, publisher, spoolRoot: files.spoolRoot })
+  const manager = createIngestManager({
+    store,
+    publisher,
+    spoolRoot: files.spoolRoot,
+    canIngest: request => request?.retentionClass === 'contribution-cache'
+  })
   t.teardown(() => manager.close())
   await manager.start()
   const descriptor = files.writeSpool(bytes, 'persistence-failure.mkv')
@@ -790,7 +795,13 @@ test('direct spool abort during committed persistence cleans the unadopted file 
   const files = fixture(t)
   const store = createIngestJobStore({ bee })
   const publisher = fakePublisher()
-  const manager = createIngestManager({ store, publisher, spoolRoot: files.spoolRoot, verifyChunkBytes: 64 })
+  const manager = createIngestManager({
+    store,
+    publisher,
+    spoolRoot: files.spoolRoot,
+    verifyChunkBytes: 64,
+    canIngest: request => request?.retentionClass === 'contribution-cache'
+  })
   t.teardown(() => manager.close())
   await manager.start()
   const bytes = Buffer.from('direct abort persistence payload '.repeat(10))
@@ -843,7 +854,13 @@ test('manager close during committed persistence cleans a direct spool and leave
   const files = fixture(t)
   const publisher = fakePublisher()
   const firstStore = createIngestJobStore({ bee })
-  const first = createIngestManager({ store: firstStore, publisher, spoolRoot: files.spoolRoot, verifyChunkBytes: 64 })
+  const first = createIngestManager({
+    store: firstStore,
+    publisher,
+    spoolRoot: files.spoolRoot,
+    verifyChunkBytes: 64,
+    canIngest: request => request?.retentionClass === 'contribution-cache'
+  })
   await first.start()
   const bytes = Buffer.from('direct close persistence payload '.repeat(10))
   const request = movieRequest(bytes)
@@ -866,7 +883,13 @@ test('manager close during committed persistence cleans a direct spool and leave
   const jobId = jobKey.slice('companion-ingest/v1/job/'.length)
 
   const secondStore = createIngestJobStore({ bee })
-  const second = createIngestManager({ store: secondStore, publisher, spoolRoot: files.spoolRoot, verifyChunkBytes: 64 })
+  const second = createIngestManager({
+    store: secondStore,
+    publisher,
+    spoolRoot: files.spoolRoot,
+    verifyChunkBytes: 64,
+    canIngest: request => request?.retentionClass === 'contribution-cache'
+  })
   t.teardown(() => second.close())
   await second.start()
   t.is((await second.getJob(jobId)).state, 'queued')
@@ -963,7 +986,13 @@ async function createMultipartHarness (t, {
 } = {}) {
   const files = fixture(t)
   const store = createIngestJobStore({ bee })
-  const manager = createIngestManager({ store, publisher, spoolRoot: files.spoolRoot, verifyChunkBytes: 64 })
+  const manager = createIngestManager({
+    store,
+    publisher,
+    spoolRoot: files.spoolRoot,
+    verifyChunkBytes: 64,
+    canIngest: request => canArchive(request)
+  })
   await manager.start()
   let submissions = 0
   const service = {

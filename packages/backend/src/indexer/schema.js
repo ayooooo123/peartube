@@ -351,7 +351,7 @@ function acquireSerializer(owner, id) {
   }
 }
 
-function createSurface(db, serializer) {
+function createSurface(db, serializer, core) {
   let accepting = true
   let closePromise = null
   const pending = new Set()
@@ -391,6 +391,7 @@ function createSurface(db, serializer) {
         const tx = await db.exclusiveTransaction()
         try {
           const api = Object.freeze({
+            sourceRevision: `${core.fork}:${core.length}`,
             async upsert(collection, record) {
               validateIndexerRecord(collection, record)
               await tx.insert(collection, record)
@@ -450,5 +451,5 @@ export async function openIndexerDatabase(store, options = {}) {
     else await core.close()
     throw error
   }
-  return createSurface(db, serializer)
+  return createSurface(db, serializer, core)
 }

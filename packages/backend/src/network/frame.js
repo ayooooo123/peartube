@@ -79,6 +79,10 @@ export const PEER_FRAME_TYPE_NAMES = Object.freeze(Object.fromEntries([
   'archive-block-proof',
   'archive-block-chunk',
   'archive-block-unavailable',
+  'index-query-request',
+  'index-query-page',
+  'index-query-error',
+  'index-query-cancel',
 ].map(type => [peerFrameTypeCode(type), type])))
 const TYPE_NAMES = new Map()
 
@@ -436,7 +440,7 @@ function typeToCode(type = '') {
 }
 
 function codeToType(code, known = {}) {
-  return known[code] || TYPE_NAMES.get(code) || String(code)
+  return known[code] || PEER_FRAME_TYPE_NAMES[code] || TYPE_NAMES.get(code) || String(code)
 }
 
 export function encodePeerFrame(input = {}) {

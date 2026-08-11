@@ -7,7 +7,7 @@ import {
   createIndexServiceAnnouncement,
   deriveIndexerId,
 } from '../src/indexer/service-announcement.js'
-import { attachIndexServiceProtocol } from '../src/indexer/protocol.js'
+import { INDEX_SERVICE_PROTOCOL, attachIndexServiceProtocol } from '../src/indexer/protocol.js'
 import * as indexerEntry from '../src/indexer/index.js'
 import {
   INDEX_QUERY_CAPABILITY,
@@ -45,14 +45,20 @@ function fakeMux({ autoOpen = false } = {}) {
     channels,
     pairs,
     pair(spec, onpair) { pairs.push({ spec, onpair }) },
+    unpair(spec) {
+      const index = pairs.findIndex(pair => pair.spec.protocol === spec.protocol)
+      if (index !== -1) pairs.splice(index, 1)
+    },
     cork() {},
     uncork() {},
     createChannel(spec) {
       const channel = {
         closed: false,
+        opened: false,
         closeCount: 0,
         messages: spec.messages.map(message => ({ ...message, send() { return true } })),
         open(localHello) {
+          this.opened = true
           this.localHello = localHello
           if (autoOpen) queueMicrotask(() => spec.onopen(localHello))
         },
@@ -69,20 +75,26 @@ function fakeMux({ autoOpen = false } = {}) {
   }
 }
 
+
 function attach(overrides = {}) {
   const service = overrides.announcement || announcement()
   const connection = overrides.connection || Object.assign(new EventEmitter(), {
-    remotePublicKey: b4a.from(service.transportPublicKey),
+    remotePublicKey: b4a.alloc(32, 77),
     destroyCount: 0,
     destroy() { this.destroyCount++ },
   })
   const mux = overrides.mux || fakeMux()
-  const indexStore = overrides.indexStore || { closeCount: 0, close() { this.closeCount++ } }
+  const indexStore = overrides.indexStore || {
+    closeCount: 0,
+    close() { this.closeCount++ },
+    async queryIndexPage() { return { results: [], continuation: null, sourceRevision: '0:0' } },
+  }
   const protocol = attachIndexServiceProtocol({
     connection,
     announcement: service,
     indexStore,
     limits: {
+      localTransportPublicKey: b4a.from(service.transportPublicKey),
       sequenceState: new Map(),
       now: () => NOW + 1,
       muxFactory: () => mux,
@@ -90,6 +102,8 @@ function attach(overrides = {}) {
       ...overrides.limits,
     },
   })
+  mux.pairs.find(pair => pair.spec.protocol === INDEX_SERVICE_PROTOCOL)
+    ?.onpair(deriveIndexTopic({ indexerId: service.indexerId }))
   return { connection, indexStore, mux, protocol, service }
 }
 
@@ -141,15 +155,20 @@ test('index protocol requires the scoped hello before use and activates only aft
   t.is(fixture.protocol.maxFrameBytes, 4096)
 })
 
-test('index protocol compares the live Noise transport key before creating a channel', t => {
+test('index service binds trusted local transport configuration to the announcement and requires the live remote key', t => {
   const service = announcement()
   const mux = fakeMux()
   t.exception(() => attach({
     announcement: service,
-    connection: { remotePublicKey: b4a.alloc(32, 99) },
     mux,
-  }), /transport public key mismatch/)
+    limits: { localTransportPublicKey: b4a.alloc(32, 99) },
+  }), /local transport public key/)
   t.is(mux.channels.length, 0)
+  t.exception(() => attach({
+    announcement: service,
+    mux,
+    limits: { localTransportPublicKey: null },
+  }), /trusted 32-byte local transport key/)
   t.exception(() => attach({
     announcement: service,
     connection: { remotePublicKey: b4a.alloc(31) },
@@ -223,9 +242,9 @@ test('index protocol requires explicit monotonic sequence state and rejects stal
   t.exception(() => attach({ announcement: stale, limits: { sequenceState } }), /invalid|replay|sequence/)
   t.exception(() => attach({ announcement: current, limits: { sequenceState } }), /invalid|replay|sequence/)
   t.exception(() => attachIndexServiceProtocol({
-    connection: { remotePublicKey: transportPublicKey },
+    connection: { publicKey: transportPublicKey, remotePublicKey: b4a.alloc(32, 77) },
     announcement: current,
-    indexStore: {},
+    indexStore: { queryIndexPage() {} },
     limits: { now: () => NOW + 1, muxFactory: () => fakeMux() },
   }), /sequenceState/)
 })
@@ -261,9 +280,13 @@ test('scoped runtime ref-counts direct peers and never globally discovers index 
   const swarm = fakeSwarm()
   const runtime = createScopedNetworkRuntime({ swarm, store: {}, bootstrapEnabled: false, now: () => NOW + 1 })
   await runtime.start()
+  await t.exception(
+    runtime.retainIndexService({ announcement: first, indexStore: { queryIndexPage() {} } }),
+    /unsupported retain index service field indexStore/,
+  )
 
-  await runtime.retainIndexService({ announcement: first, indexStore: {} })
-  await runtime.retainIndexService({ announcement: second, indexStore: {} })
+  await runtime.retainIndexService({ announcement: first })
+  await runtime.retainIndexService({ announcement: second })
   t.is(swarm.joinedPeers.length, 1)
   t.is(swarm.joins.length, 0, 'index service does not create a global topic discovery')
 
@@ -295,7 +318,7 @@ test('overlapping network disable and enable leaves retained direct peers joined
   }
   const runtime = createScopedNetworkRuntime({ swarm, store: {}, bootstrapEnabled: false, now: () => NOW + 1 })
   await runtime.start()
-  await runtime.retainIndexService({ announcement: service, indexStore: {} })
+  await runtime.retainIndexService({ announcement: service })
   const disable = runtime.applyNetworkPolicy({
     networkEnabled: false,
     uploadPermission: 'disabled',
@@ -323,8 +346,8 @@ test('monotonic supersession on one transport avoids direct-peer join churn', as
   const swarm = fakeSwarm()
   const runtime = createScopedNetworkRuntime({ swarm, store: {}, bootstrapEnabled: false, now: () => NOW + 1 })
   await runtime.start()
-  await runtime.retainIndexService({ announcement: announcement({ signer, transportPublicKey, sequence: 1 }), indexStore: {} })
-  const result = await runtime.retainIndexService({ announcement: announcement({ signer, transportPublicKey, sequence: 2 }), indexStore: {} })
+  await runtime.retainIndexService({ announcement: announcement({ signer, transportPublicKey, sequence: 1 }) })
+  const result = await runtime.retainIndexService({ announcement: announcement({ signer, transportPublicKey, sequence: 2 }) })
   t.is(result.status, 'superseded')
   t.is(swarm.joinedPeers.length, 1)
   t.is(swarm.leftPeers.length, 0)
@@ -353,10 +376,10 @@ test('concurrent different-transport supersessions cannot overwrite a newer sequ
   }
   const runtime = createScopedNetworkRuntime({ swarm, store: {}, bootstrapEnabled: false, now: () => NOW + 1 })
   await runtime.start()
-  await runtime.retainIndexService({ announcement: announcement({ signer, transportPublicKey: transport1, sequence: 1 }), indexStore: {} })
-  const sequence2 = runtime.retainIndexService({ announcement: announcement({ signer, transportPublicKey: transport2, sequence: 2 }), indexStore: {} })
+  await runtime.retainIndexService({ announcement: announcement({ signer, transportPublicKey: transport1, sequence: 1 }) })
+  const sequence2 = runtime.retainIndexService({ announcement: announcement({ signer, transportPublicKey: transport2, sequence: 2 }) })
   await releaseEntered
-  const sequence3 = runtime.retainIndexService({ announcement: announcement({ signer, transportPublicKey: transport3, sequence: 3 }), indexStore: {} })
+  const sequence3 = runtime.retainIndexService({ announcement: announcement({ signer, transportPublicKey: transport3, sequence: 3 }) })
   releaseBarrier()
   await Promise.all([sequence2, sequence3])
   t.alike(swarm.joinedPeers.at(-1), transport3)
@@ -379,13 +402,11 @@ test('runtime close drains a blocked supersession and prevents post-close servic
     enteredRelease()
     return barrier
   }
-  const indexStore = { closes: 0, close() { this.closes++ } }
   const runtime = createScopedNetworkRuntime({ swarm, store: {}, bootstrapEnabled: false, now: () => NOW + 1 })
   await runtime.start()
-  await runtime.retainIndexService({ announcement: announcement({ signer, transportPublicKey: transport1, sequence: 1 }), indexStore })
+  await runtime.retainIndexService({ announcement: announcement({ signer, transportPublicKey: transport1, sequence: 1 }) })
   const replacement = runtime.retainIndexService({
     announcement: announcement({ signer, transportPublicKey: transport2, sequence: 2 }),
-    indexStore,
   })
   await releaseEntered
   const closing = runtime.close()
@@ -395,7 +416,6 @@ test('runtime close drains a blocked supersession and prevents post-close servic
   t.is(runtime.getDiagnostics().status, 'closed')
   t.absent(runtime.getDiagnostics().topics.find(topic => topic.purpose === 'index'))
   t.is(swarm.joinedPeers.length, 1)
-  t.is(indexStore.closes, 0)
   await runtime.close()
 })
 
@@ -405,12 +425,10 @@ test('announcement expiry closes the retained index scope and releases its direc
   const timer = { unref() {} }
   const service = announcement({ transportPublicKey: b4a.alloc(32, 45), expiresAt: NOW + 2 })
   const swarm = fakeSwarm()
-  const indexStore = { closes: 0, close() { this.closes++ } }
   const runtime = createScopedNetworkRuntime({ swarm, store: {}, bootstrapEnabled: false, now: () => clock })
   await runtime.start()
   await runtime.retainIndexService({
     announcement: service,
-    indexStore,
     limits: {
       setTimeout(callback) { expire = callback; return timer },
       clearTimeout() {},
@@ -422,11 +440,10 @@ test('announcement expiry closes the retained index scope and releases its direc
   await new Promise(resolve => setTimeout(resolve, 0))
   t.is(swarm.leftPeers.length, 1)
   t.absent(runtime.getDiagnostics().topics.find(topic => topic.purpose === 'index'))
-  t.is(indexStore.closes, 0)
   await runtime.close()
 })
 
-test('scoped runtime authorizes index channels only on the signed transport connection', async t => {
+test('retained consumer does not eagerly open or serve index channels', async t => {
   const service = announcement({ transportPublicKey: b4a.alloc(32, 55) })
   const swarm = fakeSwarm()
   const wrongMux = fakeMux({ autoOpen: true })
@@ -446,7 +463,7 @@ test('scoped runtime authorizes index channels only on the signed transport conn
     },
   })
   await runtime.start()
-  await runtime.retainIndexService({ announcement: service, indexStore: {} })
+  await runtime.retainIndexService({ announcement: service })
   t.is(runtime.authorizeConnection({
     purpose: 'index',
     topic: deriveIndexTopic({ indexerId: service.indexerId }),
@@ -456,19 +473,15 @@ test('scoped runtime authorizes index channels only on the signed transport conn
   swarm.emit('connection', missing, { publicKey: service.transportPublicKey, client: true })
   swarm.emit('connection', right, { publicKey: right.remotePublicKey, client: true })
   await new Promise(resolve => setTimeout(resolve, 0))
-
   t.is(wrongMux.channels.length, 0)
-  t.is(muxedConnections.includes(wrong), true)
-  t.is(muxedConnections.includes(missing), true)
-  t.is(rightMux.channels.length, 1)
-  t.ok(runtime.getDiagnostics().sessions.some(session => session.purpose === 'index' && session.state === 'active'))
-
+  t.is(rightMux.channels.length, 0)
+  t.is(muxedConnections.length, 0)
+  t.absent(runtime.getDiagnostics().sessions.find(session => session.purpose === 'index'))
   await runtime.releaseIndexService({ indexerId: service.indexerId })
-  t.ok(rightMux.channels[0].channel.closed)
   await runtime.close()
 })
 
-test('incoming unmatched connection is paired before a later retained index scope opens', async t => {
+test('retained consumer never registers a generic inbound index responder', async t => {
   const first = announcement({ signer: keyPair(19), transportPublicKey: b4a.alloc(32, 57) })
   const second = announcement({ signer: keyPair(20), transportPublicKey: b4a.alloc(32, 58) })
   const swarm = fakeSwarm()
@@ -482,36 +495,28 @@ test('incoming unmatched connection is paired before a later retained index scop
     muxFactory: () => mux,
   })
   await runtime.start()
-  await runtime.retainIndexService({ announcement: first, indexStore: {} })
+  await runtime.retainIndexService({ announcement: first })
   swarm.emit('connection', connection, { publicKey: first.transportPublicKey, client: false })
-  const pair = mux.pairs.find(entry => entry.spec.protocol.endsWith('/index'))
-  t.ok(pair)
-  await runtime.retainIndexService({ announcement: second, indexStore: {} })
-  pair.onpair(deriveIndexTopic({ indexerId: second.indexerId }))
+  t.absent(mux.pairs.find(entry => entry.spec.protocol.endsWith('/index')))
+  await runtime.retainIndexService({ announcement: second })
   await new Promise(resolve => setTimeout(resolve, 0))
-  t.is(mux.channels.length, 1)
-  t.ok(runtime.getDiagnostics().sessions.some(session =>
-    session.purpose === 'index' &&
-    session.peerId === b4a.toString(second.transportPublicKey, 'hex') &&
-    session.state === 'active'
-  ))
+  t.is(mux.channels.length, 0)
+  t.absent(runtime.getDiagnostics().sessions.find(session => session.purpose === 'index'))
   await runtime.releaseIndexService({ indexerId: first.indexerId })
   await runtime.releaseIndexService({ indexerId: second.indexerId })
   await runtime.close()
 })
 
-test('runtime close releases each retained direct transport once without closing caller resources', async t => {
+test('runtime close releases each retained direct transport once without closing caller connections', async t => {
   const service = announcement({ transportPublicKey: b4a.alloc(32, 66) })
   const swarm = fakeSwarm()
-  const indexStore = { closes: 0, close() { this.closes++ } }
   const connection = Object.assign(new EventEmitter(), { remotePublicKey: b4a.from(service.transportPublicKey), destroys: 0, destroy() { this.destroys++ } })
   swarm.connections.add(connection)
   const runtime = createScopedNetworkRuntime({ swarm, store: {}, bootstrapEnabled: false, now: () => NOW + 1, muxFactory: () => fakeMux({ autoOpen: true }) })
   await runtime.start()
-  await runtime.retainIndexService({ announcement: service, indexStore })
+  await runtime.retainIndexService({ announcement: service })
   await runtime.close()
   await runtime.close()
   t.is(swarm.leftPeers.length, 1)
-  t.is(indexStore.closes, 0)
   t.is(connection.destroys, 0)
 })

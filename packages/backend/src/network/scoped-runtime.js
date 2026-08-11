@@ -13,7 +13,6 @@ import {
   decodeAssetIdPrefix,
   decodeAssetRangeSummaryPage,
   decodeAssetRangeSummaryRequest,
-  decodePeerFrame,
   encodeAssetBlockError,
   encodeAssetBlockRequest,
   encodeAssetBlockResponse,
@@ -21,9 +20,27 @@ import {
   encodeAssetRangeSummaryRequest,
   encodePeerFrame,
   MAX_PEER_FRAME_BYTES,
-  PEER_FRAME_TYPE_NAMES,
   PROTOCOL_MAJOR,
 } from './frame.js'
+import {
+  ARCHIVE_DISCOVERY_CAPABILITY,
+  ARCHIVE_RANGE_CAPABILITY,
+  ASSET_RENDITION_CAPABILITY,
+  INDEX_QUERY_CAPABILITY,
+  SCOPED_NETWORK_PROTOCOL,
+  createScopedProtocolSession,
+  encodeScopedHello,
+} from './scoped-protocol.js'
+export {
+  ARCHIVE_DISCOVERY_CAPABILITY,
+  ARCHIVE_RANGE_CAPABILITY,
+  ASSET_RENDITION_CAPABILITY,
+  INDEX_QUERY_CAPABILITY,
+  SCOPED_NETWORK_PROTOCOL,
+  createScopedProtocolSession,
+  decodeScopedHello,
+  encodeScopedHello,
+} from './scoped-protocol.js'
 import {
   deriveArchiveDiscoveryTopic,
   deriveArchiveTopic,
@@ -51,20 +68,10 @@ import { normalizeAssetCoreRefV2 } from '../assets/rendition.js'
 import { deriveStaticAssetTopic } from '../assets/static-core.js'
 import { createAssetSession } from '../assets/asset-session.js'
 import { verifyIndexServiceAnnouncement } from '../indexer/service-announcement.js'
+import { createIndexQueryClient } from '../indexer/protocol.js'
 
 
-const FRAME_TYPES = PEER_FRAME_TYPE_NAMES
-export const ASSET_RENDITION_CAPABILITY = 'asset-rendition:v2'
-export const ARCHIVE_RANGE_CAPABILITY = 'archive-range:v1'
-export const ARCHIVE_DISCOVERY_CAPABILITY = 'archive-discovery:v1'
-export const INDEX_QUERY_CAPABILITY = 'index-query:v1'
-export const SCOPED_NETWORK_PROTOCOL = 'peartube/scoped-network'
-
-const PURPOSE_CODES = Object.freeze({ bootstrap: 1, publisher: 2, asset: 3, archive: 5, 'archive-discovery': 6, index: 7 })
-const PURPOSE_NAMES = new Map(Object.entries(PURPOSE_CODES).map(([name, code]) => [code, name]))
-const MAX_HELLO_BYTES = 2048
-const MAX_CAPABILITIES = 16
-const MAX_CAPABILITY_BYTES = 128
+const GENERIC_PURPOSES = Object.freeze(['bootstrap', 'publisher', 'asset', 'archive', 'archive-discovery'])
 const MAX_ASSET_BLOCK_BYTES = 256 * 1024
 const MAX_ASSET_PROOF_BYTES = 32 * 1024
 const MAX_ARCHIVE_CHALLENGE_PROOF_BYTES = 320 * 1024
@@ -132,142 +139,6 @@ function safeRange (startValue = 0, endValue = null) {
   return { start, end }
 }
 
-function normalizeCapabilities (values) {
-  if (!Array.isArray(values) || values.length > MAX_CAPABILITIES) fail('capabilities exceed bounded limit')
-  const result = []
-  for (const value of values) {
-    const capability = String(value || '')
-    const encoded = b4a.from(capability)
-    if (!capability || encoded.byteLength > MAX_CAPABILITY_BYTES) fail('capability exceeds bounded limit')
-    if (result.includes(capability)) fail('capabilities must be distinct')
-    result.push(capability)
-  }
-  return result.sort()
-}
-
-export function encodeScopedHello (input = {}) {
-  const purposeCode = PURPOSE_CODES[input.purpose]
-  if (!purposeCode) fail('unknown purpose')
-  const topic = exactBuffer(input.topic, 32, 'topic')
-  const protocolMajor = Number(input.protocolMajor ?? PROTOCOL_MAJOR)
-  const maxFrameBytes = Number(input.maxFrameBytes ?? MAX_PEER_FRAME_BYTES)
-  if (!Number.isSafeInteger(protocolMajor) || protocolMajor < 1 || protocolMajor > 255) fail('invalid protocol major')
-  if (!Number.isSafeInteger(maxFrameBytes) || maxFrameBytes < 32 || maxFrameBytes > MAX_PEER_FRAME_BYTES) fail('invalid frame limit')
-  const capabilities = normalizeCapabilities(input.capabilities || [])
-  let length = 40
-  for (const capability of capabilities) length += 1 + b4a.byteLength(capability)
-  if (length > MAX_HELLO_BYTES) fail('hello exceeds bounded limit')
-  const output = b4a.alloc(length)
-  let offset = 0
-  output.writeUInt8(1, offset++)
-  output.writeUInt8(protocolMajor, offset++)
-  output.writeUInt8(purposeCode, offset++)
-  output.writeUInt8(capabilities.length, offset++)
-  output.writeUInt32BE(maxFrameBytes, offset); offset += 4
-  b4a.copy(topic, output, offset); offset += 32
-  for (const capability of capabilities) {
-    const encoded = b4a.from(capability)
-    output.writeUInt8(encoded.byteLength, offset++)
-    b4a.copy(encoded, output, offset); offset += encoded.byteLength
-  }
-  return output
-}
-
-export function decodeScopedHello (input) {
-  const buffer = b4a.from(input || [])
-  if (buffer.byteLength < 40 || buffer.byteLength > MAX_HELLO_BYTES) fail('invalid bounded hello')
-  let offset = 0
-  if (buffer.readUInt8(offset++) !== 1) fail('unsupported hello version')
-  const protocolMajor = buffer.readUInt8(offset++)
-  const purpose = PURPOSE_NAMES.get(buffer.readUInt8(offset++))
-  if (!purpose) fail('unknown purpose')
-  const count = buffer.readUInt8(offset++)
-  if (count > MAX_CAPABILITIES) fail('capabilities exceed bounded limit')
-  const maxFrameBytes = buffer.readUInt32BE(offset); offset += 4
-  if (maxFrameBytes < 32 || maxFrameBytes > MAX_PEER_FRAME_BYTES) fail('invalid frame limit')
-  const topic = b4a.from(buffer.subarray(offset, offset + 32)); offset += 32
-  const capabilities = []
-  for (let index = 0; index < count; index++) {
-    if (offset >= buffer.byteLength) fail('truncated hello')
-    const length = buffer.readUInt8(offset++)
-    if (!length || length > MAX_CAPABILITY_BYTES || offset + length > buffer.byteLength) fail('truncated capability')
-    const capability = b4a.toString(buffer.subarray(offset, offset + length)); offset += length
-    if (!b4a.equals(b4a.from(capability), buffer.subarray(offset - length, offset))) fail('noncanonical capability')
-    capabilities.push(capability)
-  }
-  if (offset !== buffer.byteLength) fail('trailing hello bytes')
-  return { protocolMajor, purpose, topic, maxFrameBytes, capabilities: normalizeCapabilities(capabilities) }
-}
-
-
-export function createScopedProtocolSession (options = {}) {
-  const purpose = String(options.purpose || '')
-  const topic = exactBuffer(options.topic, 32, 'topic')
-  const protocolMajor = Number(options.protocolMajor ?? PROTOCOL_MAJOR)
-  const requiredCapability = String(options.requiredCapability || '')
-  const peerId = String(options.peerId || 'unknown')
-  const admission = options.admission?.reserve ? options.admission : createNetworkAdmission(options.admission)
-  const localMaxFrameBytes = Number(options.maxFrameBytes || MAX_PEER_FRAME_BYTES)
-  let state = 'noise-authenticated'
-  let negotiatedMaxFrameBytes = null
-  let lastRequestId = 0
-  let activated = false
-  let closed = false
-
-  return {
-    get state () { return state },
-    get maxFrameBytes () { return negotiatedMaxFrameBytes || localMaxFrameBytes },
-    async acceptHello (encoded) {
-      if (closed) fail('session is closed')
-      const bytes = encoded?.byteLength ?? 0
-      if (bytes < 40 || bytes > MAX_HELLO_BYTES) fail('invalid bounded hello')
-      const reservation = admission.reserve({ peerId, bytes, verify: true })
-      if (!reservation.accepted) fail(reservation.reason, 'SCOPED_NETWORK_ADMISSION_REJECTED')
-      try {
-        const hello = decodeScopedHello(encoded)
-        if (hello.purpose !== purpose) fail('purpose mismatch')
-        if (!b4a.equals(hello.topic, topic)) fail('topic mismatch')
-        if (hello.protocolMajor !== protocolMajor) fail('major mismatch')
-        if (!hello.capabilities.includes(requiredCapability)) fail('required capability missing')
-        negotiatedMaxFrameBytes = Math.min(localMaxFrameBytes, hello.maxFrameBytes)
-        state = 'active'
-        if (!activated) {
-          activated = true
-          await options.onActivate?.({ peerId, purpose, topic, capabilities: hello.capabilities, maxFrameBytes: negotiatedMaxFrameBytes })
-        }
-        return { purpose, topic: b4a.from(topic), protocolMajor, maxFrameBytes: negotiatedMaxFrameBytes }
-      } finally {
-        reservation.release('complete')
-      }
-    },
-    async receive (encoded) {
-      if (state !== 'active') fail('handshake required')
-      const bytes = encoded?.byteLength ?? 0
-      if (bytes > negotiatedMaxFrameBytes) fail('frame exceeds negotiated maximum')
-      const frame = decodePeerFrame(b4a.from(encoded), { typeCodes: FRAME_TYPES })
-      if (frame.purpose !== purpose) fail('purpose mismatch')
-      if (frame.protocolMajor !== protocolMajor) fail('major mismatch')
-      if (!Number.isSafeInteger(frame.requestId) || frame.requestId <= lastRequestId) fail('replay rejected')
-      lastRequestId = frame.requestId
-      const admissionExempt = options.isAdmissionExempt?.(frame) === true
-      const reservation = admissionExempt ? null : admission.reserve({ peerId, bytes, verify: purpose === 'bootstrap' })
-      if (reservation && !reservation.accepted) fail(reservation.reason, 'SCOPED_NETWORK_ADMISSION_REJECTED')
-      try {
-        return await options.onFrame?.(frame, { peerId, purpose, topic })
-      } finally {
-        reservation?.release('complete')
-      }
-    },
-    close (reason = 'closed') {
-      if (closed) return false
-      closed = true
-      state = 'closed'
-      admission.disconnect(peerId)
-      options.onClose?.(reason)
-      return true
-    },
-  }
-}
 
 function capabilityForPurpose (purpose) {
   switch (purpose) {
@@ -517,7 +388,7 @@ export function createScopedNetworkRuntime (options = {}) {
     scopes.set(id, scope)
     counters.joinedTopics++
     ensureScopeDiscovery(scope)
-    if (networkEnabled) {
+    if (networkEnabled && purpose !== 'index') {
       for (const [connection, info] of activeConnections) {
         if (info?.client === false) continue
         attachScope(scope, connection, info)
@@ -1493,7 +1364,7 @@ export function createScopedNetworkRuntime (options = {}) {
     if (!networkEnabled) return { status: 'rejected', reason: 'network-policy-disabled' }
     if (!scope || scope.closed) return { status: 'rejected', reason: 'scope-not-retained' }
     if (scope.purpose === 'index') {
-      if (!scope.announcement || !scope.indexStore || !scope.transportPublicKey) return { status: 'rejected', reason: 'index-service-not-retained' }
+      if (!scope.announcement || !scope.transportPublicKey) return { status: 'rejected', reason: 'index-service-not-retained' }
       const liveRemoteKey = authenticatedRemoteKey(connection)
       if (!liveRemoteKey || liveRemoteKey !== scope.transportPublicKey) return { status: 'rejected', reason: 'index-transport-key-mismatch' }
       return { status: 'authorized', action: 'index-service', indexerId: scope.indexerId }
@@ -1537,11 +1408,9 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   function attachScope (scope, connection, info) {
-    if (!networkEnabled || scope.closed) return
-    const remoteKey = scope.purpose === 'index'
-      ? authenticatedRemoteKey(connection)
-      : connectionKey(connection, info)
-    if (!remoteKey || (scope.purpose === 'index' && remoteKey !== scope.transportPublicKey)) return
+    if (!networkEnabled || scope.closed || scope.purpose === 'index') return
+    const remoteKey = connectionKey(connection, info)
+    if (!remoteKey) return
     if (scope.sessions.has(remoteKey)) return scope.sessions.get(remoteKey)
     const mux = muxFactory(connection)
     if (!mux || typeof mux.createChannel !== 'function') return
@@ -1634,7 +1503,7 @@ export function createScopedNetworkRuntime (options = {}) {
         recordProtocolError(scope, remoteKey, error)
         try { channel?.close?.() } catch {}
       }),
-      onclose: () => protocolSession.close('channel-closed'),
+      onclose: isRemote => protocolSession.close(isRemote ? 'remote-channel-closed' : 'local-channel-closed'),
     })
     if (!channel) return
     const tracked = {
@@ -1671,6 +1540,7 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
 
+
   function handleConnection (connection, info = {}) {
     if (!networkEnabled) return
     const firstSeen = !activeConnections.has(connection)
@@ -1682,16 +1552,6 @@ export function createScopedNetworkRuntime (options = {}) {
         for (const scope of scopes.values()) closeSession(scope, peerId, 'connection-closed')
       })
     }
-    const mux = muxFactory(connection)
-    if (mux && typeof mux.pair === 'function' && !pairedConnections.has(connection)) {
-      pairedConnections.add(connection)
-      for (const purpose of Object.keys(PURPOSE_CODES)) {
-        mux.pair({ protocol: protocolForPurpose(purpose, protocolMajor), id: null }, id => {
-          const scope = id ? findScope(purpose, id) : null
-          if (scope) attachScope(scope, connection, info)
-        })
-      }
-    }
     let onlyIndexScopes = scopes.size > 0
     let matchesRetainedIndex = false
     const liveRemoteKey = authenticatedRemoteKey(connection)
@@ -1699,13 +1559,28 @@ export function createScopedNetworkRuntime (options = {}) {
       if (scope.purpose !== 'index') onlyIndexScopes = false
       else if (liveRemoteKey !== null && scope.transportPublicKey === liveRemoteKey) matchesRetainedIndex = true
     }
-    if (onlyIndexScopes && !matchesRetainedIndex) return
+    if (onlyIndexScopes) {
+      if (!matchesRetainedIndex) return
+      return
+    }
+    const mux = muxFactory(connection)
+    if (mux && typeof mux.pair === 'function' && !pairedConnections.has(connection)) {
+      pairedConnections.add(connection)
+      for (const purpose of GENERIC_PURPOSES) {
+        mux.pair({ protocol: protocolForPurpose(purpose, protocolMajor), id: null }, id => {
+          const scope = id ? findScope(purpose, id) : null
+          if (scope) attachScope(scope, connection, info)
+        })
+      }
+    }
     if (info.client !== false) {
       queueMicrotask(() => {
         if (!activeConnections.has(connection)) return
         mux?.cork?.()
         try {
-          for (const scope of scopes.values()) attachScope(scope, connection, info)
+          for (const scope of scopes.values()) {
+            if (scope.purpose !== 'index') attachScope(scope, connection, info)
+          }
         } finally {
           mux?.uncork?.()
         }
@@ -1792,6 +1667,10 @@ export function createScopedNetworkRuntime (options = {}) {
 
   async function activateNetwork () {
     if (status !== 'active' || !networkEnabled) return
+    for (const retained of indexServices.values()) {
+      if (!retained.client) retained.client = createRetainedIndexClient(retained.announcement, retained.limits)
+      else retained.client.resume()
+    }
     if (!listening) {
       swarm.on?.('connection', handleConnection)
       listening = true
@@ -1812,6 +1691,9 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function deactivateNetwork () {
+    for (const retained of indexServices.values()) {
+      retained.client?.suspend('network-policy-disabled')
+    }
     if (listening) {
       swarm.off?.('connection', handleConnection)
       swarm.removeListener?.('connection', handleConnection)
@@ -1837,7 +1719,9 @@ export function createScopedNetworkRuntime (options = {}) {
     if (!networkEnabled || status !== 'active') return
     for (const [connection, info] of activeConnections) {
       if (info?.client === false) continue
-      for (const scope of scopes.values()) attachScope(scope, connection, info)
+      for (const scope of scopes.values()) {
+        if (scope.purpose !== 'index') attachScope(scope, connection, info)
+      }
     }
     await Promise.all([...scopes.values()].map(scope => pumpArchiveSessions(scope)))
   }
@@ -1893,23 +1777,40 @@ export function createScopedNetworkRuntime (options = {}) {
     return { status: 'active' }
   }
 
-  function scheduleIndexServiceExpiry (retained) {
-    const clearTimer = retained.limits.clearTimeout || clearTimeout
-    if (retained.expiryTimer) clearTimer(retained.expiryTimer)
+  function retainedIndexClientLimits (limits) {
+    return {
+      ...limits,
+      muxFactory,
+      sequenceState: new Map(),
+      now: currentTime,
+    }
+  }
+  function createRetainedIndexClient (announcement, limits) {
+    return createIndexQueryClient({
+      announcement,
+      limits: retainedIndexClientLimits(limits),
+    })
+  }
+  function armIndexServiceExpiry (retained, announcement, limits) {
+    const setTimer = limits.setTimeout || setTimeout
+    let timer = null
     const schedule = () => {
-      if (indexServices.get(retained.indexerId) !== retained) return
-      const remaining = retained.announcement.expiresAt - currentTime()
+      if (indexServices.get(retained.indexerId) !== retained || retained.announcement !== announcement) return
+      const remaining = announcement.expiresAt - currentTime()
       if (remaining < 0) {
         void withIndexTransition(retained.indexerId, () =>
           releaseIndexServiceInternal(retained, 'announcement-expired')
         ).catch(() => {})
         return
       }
-      const setTimer = retained.limits.setTimeout || setTimeout
-      retained.expiryTimer = setTimer(schedule, Math.min(remaining + 1, 0x7fffffff))
-      retained.expiryTimer?.unref?.()
+      timer = setTimer(schedule, Math.min(remaining + 1, 0x7fffffff))
+      retained.expiryTimer = timer
+      timer?.unref?.()
     }
-    schedule()
+    const remaining = announcement.expiresAt - currentTime()
+    timer = setTimer(schedule, Math.min(Math.max(remaining + 1, 1), 0x7fffffff))
+    timer?.unref?.()
+    return timer
   }
 
   async function releaseIndexServiceInternal (retained, reason) {
@@ -1918,20 +1819,26 @@ export function createScopedNetworkRuntime (options = {}) {
     const clearTimer = retained.limits.clearTimeout || clearTimeout
     if (retained.expiryTimer) clearTimer(retained.expiryTimer)
     retained.expiryTimer = null
+    retained.client?.close(reason)
     await leaveScope(retained.scope, retained.mode)
     await releaseDirectPeer(retained.scope)
     return true
   }
 
-  async function retainIndexService ({ announcement, indexStore, limits = {} } = {}) {
+  async function retainIndexService (input = {}) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) fail('retain index service input is required')
+    for (const name of Object.keys(input)) {
+      if (name !== 'announcement' && name !== 'limits') fail(`unsupported retain index service field ${name}`)
+    }
+    const { announcement, limits = {} } = input
     if (status !== 'active') fail('runtime is not active')
-    if (!indexStore || typeof indexStore !== 'object') fail('indexStore is required')
     const indexerId = hex32(announcement?.indexerId, 'indexerId')
     return withIndexTransition(indexerId, async () => {
       if (status !== 'active') fail('runtime is not active')
+      const candidateSequenceFloors = new Map(indexSequenceFloors)
       if (!verifyIndexServiceAnnouncement(announcement, {
         now: currentTime(),
-        sequenceState: indexSequenceFloors,
+        sequenceState: candidateSequenceFloors,
         supportedDimensions: limits.supportedDimensions,
         supportedQueryCapabilities: limits.supportedQueryCapabilities,
       })) {
@@ -1939,22 +1846,25 @@ export function createScopedNetworkRuntime (options = {}) {
       }
       const transportPublicKey = hex32(announcement.transportPublicKey, 'transportPublicKey')
       const existing = indexServices.get(indexerId)
-      if (existing?.transportPublicKey === transportPublicKey) {
-        for (const peerId of [...existing.scope.sessions.keys()]) {
-          closeSession(existing.scope, peerId, 'announcement-superseded')
+      const sameChannelIdentity = existing?.transportPublicKey === transportPublicKey
+      if (sameChannelIdentity) {
+        const previousLimits = existing.limits
+        const previousTimer = existing.expiryTimer
+        const candidateTimer = armIndexServiceExpiry(existing, announcement, limits)
+        try {
+          existing.client?.refreshAnnouncement(announcement, retainedIndexClientLimits(limits))
+        } catch (error) {
+          try { (limits.clearTimeout || clearTimeout)(candidateTimer) } catch {}
+          throw error
         }
         existing.announcement = announcement
-        existing.indexStore = indexStore
         existing.limits = limits
         existing.scope.announcement = announcement
-        existing.scope.indexStore = indexStore
         existing.scope.limits = limits
-        scheduleIndexServiceExpiry(existing)
-        if (networkEnabled) {
-          for (const [connection, info] of activeConnections) {
-            if (info?.client === false) continue
-            attachScope(existing.scope, connection, info)
-          }
+        existing.expiryTimer = candidateTimer
+        indexSequenceFloors.set(indexerId, announcement.sequence)
+        if (previousTimer) {
+          try { (previousLimits.clearTimeout || clearTimeout)(previousTimer) } catch {}
         }
         return {
           status: 'superseded',
@@ -1976,12 +1886,14 @@ export function createScopedNetworkRuntime (options = {}) {
         indexerId,
         transportPublicKey,
         announcement,
-        indexStore,
         limits,
       })
+      let client = null
       try {
+        if (networkEnabled) client = createRetainedIndexClient(announcement, limits)
         retainDirectPeer(scope)
       } catch (error) {
+        client?.close('index-service-retain-failed')
         await leaveScope(scope, mode)
         throw error
       }
@@ -1989,14 +1901,24 @@ export function createScopedNetworkRuntime (options = {}) {
         indexerId,
         transportPublicKey,
         announcement,
-        indexStore,
+        client,
         limits,
         scope,
         mode,
         expiryTimer: null,
       }
+      let initialExpiryTimer
+      try {
+        initialExpiryTimer = armIndexServiceExpiry(retained, announcement, limits)
+      } catch (error) {
+        retained.client?.close('index-service-retain-failed')
+        await leaveScope(scope, mode)
+        await releaseDirectPeer(scope)
+        throw error
+      }
+      retained.expiryTimer = initialExpiryTimer
       indexServices.set(indexerId, retained)
-      scheduleIndexServiceExpiry(retained)
+      indexSequenceFloors.set(indexerId, announcement.sequence)
       return {
         status: existing ? 'superseded' : 'retained',
         indexerId,
@@ -2013,6 +1935,30 @@ export function createScopedNetworkRuntime (options = {}) {
       const released = await releaseIndexServiceInternal(indexServices.get(id), 'index-service-released')
       return { status: 'released', indexerId: id, released }
     })
+  }
+
+  function queryIndexService ({ indexerId, query, signal } = {}) {
+    try {
+      if (!networkEnabled) fail('network policy is disabled')
+      if (status !== 'active') fail('runtime is not active')
+      const id = hex32(indexerId, 'indexerId')
+      if (!query || typeof query !== 'object' || Array.isArray(query)) fail('index query is required')
+      const retained = indexServices.get(id)
+      if (!retained) fail('index service is not retained')
+      let connection = null
+      for (const [candidate, info] of activeConnections) {
+        if (info?.client === false) continue
+        if (authenticatedRemoteKey(candidate) === retained.transportPublicKey) {
+          connection = candidate
+          break
+        }
+      }
+      if (!connection) fail('index service connection is not active')
+      if (!retained.client) fail('index query client is not active')
+      return retained.client.queryIndex({ connection, query, signal })
+    } catch (error) {
+      return Promise.reject(error)
+    }
   }
 
   async function followPublisher ({ publisherId, namespaceDescriptor } = {}) {
@@ -2911,6 +2857,7 @@ export function createScopedNetworkRuntime (options = {}) {
       const clearTimer = retained.limits.clearTimeout || clearTimeout
       if (retained.expiryTimer) clearTimer(retained.expiryTimer)
       retained.expiryTimer = null
+      retained.client?.close('runtime-closed')
     }
     await policyTail
     while (indexTransitions.size > 0) {
@@ -2943,6 +2890,7 @@ export function createScopedNetworkRuntime (options = {}) {
     resolveLocalPublisherCatalog,
     retainAuthorizedRendition,
     releaseAuthorizedRendition,
+    queryIndexService,
     listAssetRanges,
     getActiveAssetSession,
     getActiveAssetPeerIds,
@@ -2983,6 +2931,7 @@ export function createScopedNetworkApi (runtime) {
     resolveLocalPublisherCatalog: request => runtime.resolveLocalPublisherCatalog(request),
     retainAuthorizedRendition: request => runtime.retainAuthorizedRendition(request),
     releaseAuthorizedRendition: request => runtime.releaseAuthorizedRendition(request),
+    queryIndexService: request => runtime.queryIndexService(request),
     listAssetRanges: request => runtime.listAssetRanges(request),
     getActiveAssetPeerIds: request => runtime.getActiveAssetPeerIds(request),
     listPeerAssetRanges: request => runtime.listPeerAssetRanges(request),

@@ -22,6 +22,10 @@ import {
   validateBoundedText,
   validatePublisherId,
 } from './admission.js'
+import {
+  MAX_INDEX_QUERY_RESULTS,
+  normalizeIndexQuerySelectors,
+} from './query-codec.js'
 
 export const INDEXER_CORE_NAME = 'peartube-index-v1'
 
@@ -44,6 +48,12 @@ const EVICTION_FIELDS = new Set(['publisherId', 'reason'])
 const PUBLISHER_FIELDS = new Set(['publisherId'])
 const SOURCE_CURSOR_FIELDS = new Set(['publisherId', 'catalogEpoch'])
 const PUBLISHER_CURSOR_FIELDS = new Set(['publisherId'])
+const QUERY_PAGE_FIELDS = new Set(['selectors', 'limit', 'continuation', 'sourceRevision', 'signal'])
+const QUERY_CONTINUATION_FIELDS = new Set(['selectorIndex', 'after'])
+const EXACT_CONTINUATION_FIELDS = new Set(['namespace', 'normalizedIdentifier', 'publisherId', 'sourceRecordRef', 'entityKind', 'entityId'])
+const TOKEN_CONTINUATION_FIELDS = new Set(['relationType', 'fromId', 'publisherId', 'sourceRecordRef', 'toId'])
+const SOURCE_REVISION = /^(0|[1-9]\d*):(0|[1-9]\d*)$/
+const TOKEN_PREFIX_END = '\u{10ffff}'
 const CURSOR_RECORD_FIELDS = Object.freeze([
   'publisherId',
   'catalogEpoch',
@@ -597,6 +607,170 @@ function validateQuery(selector, limits) {
   return query
 }
 
+function staleRevision() {
+  const error = new Error('index query source revision changed')
+  error.code = 'INDEX_QUERY_STALE_REVISION'
+  throw error
+}
+
+function parseSourceRevision(value) {
+  if (value === undefined) return null
+  if (typeof value !== 'string' || !SOURCE_REVISION.test(value)) {
+    throw invalidOperation('query sourceRevision is invalid', { scope: 'query' })
+  }
+  const [fork, checkout] = value.split(':').map(Number)
+  if (!Number.isSafeInteger(fork) || !Number.isSafeInteger(checkout)) {
+    throw invalidOperation('query sourceRevision is outside safe integer bounds', { scope: 'query' })
+  }
+  return { value, fork, checkout }
+}
+
+function validateContinuation(value, selectors) {
+  if (value === undefined || value === null) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw invalidOperation('query continuation must be an object', { scope: 'query' })
+  }
+  assertOnlyFields(value, QUERY_CONTINUATION_FIELDS, 'query continuation')
+  if (!Number.isSafeInteger(value.selectorIndex) || value.selectorIndex < 0 || value.selectorIndex >= selectors.length) {
+    throw invalidOperation('query continuation selectorIndex is invalid', { scope: 'query' })
+  }
+  const selector = selectors[value.selectorIndex]
+  if (value.after === null) return { selectorIndex: value.selectorIndex, after: null }
+  if (!value.after || typeof value.after !== 'object' || Array.isArray(value.after)) {
+    throw invalidOperation('query continuation key must be an object', { scope: 'query' })
+  }
+  if (selector.type === 'exact-external-ref') {
+    assertOnlyFields(value.after, EXACT_CONTINUATION_FIELDS, 'exact query continuation')
+    if (value.after.namespace !== selector.namespace || value.after.normalizedIdentifier !== selector.identifier) {
+      throw invalidOperation('exact query continuation does not match its selector', { scope: 'query' })
+    }
+    validatePublisherId(value.after.publisherId)
+    validateBoundedText('sourceRecordRef', value.after.sourceRecordRef, INDEX_SCHEMA_LIMITS.maxSourceRecordRefBytes)
+    validateBoundedText('entityKind', value.after.entityKind, INDEX_SCHEMA_LIMITS.maxEntityKindBytes)
+    validateBoundedText('entityId', value.after.entityId, INDEX_SCHEMA_LIMITS.maxEntityIdBytes)
+    return { selectorIndex: value.selectorIndex, after: { ...value.after } }
+  }
+  assertOnlyFields(value.after, TOKEN_CONTINUATION_FIELDS, 'token query continuation')
+  if (value.after.relationType !== 'title-token' || !value.after.fromId.startsWith(selector.prefix)) {
+    throw invalidOperation('token query continuation does not match its selector', { scope: 'query' })
+  }
+  validatePublisherId(value.after.publisherId)
+  validateBoundedText('fromId', value.after.fromId, INDEX_SCHEMA_LIMITS.maxRelationEndpointBytes)
+  validateBoundedText('sourceRecordRef', value.after.sourceRecordRef, INDEX_SCHEMA_LIMITS.maxSourceRecordRefBytes)
+  validateBoundedText('toId', value.after.toId, INDEX_SCHEMA_LIMITS.maxRelationEndpointBytes)
+  return { selectorIndex: value.selectorIndex, after: { ...value.after } }
+}
+
+function querySignal(value) {
+  if (value === undefined) return null
+  if (!value || typeof value !== 'object' || typeof value.aborted !== 'boolean') {
+    throw invalidOperation('query signal is invalid', { scope: 'query' })
+  }
+  return value
+}
+
+function checkQueryAbort(signal) {
+  if (!signal?.aborted) return
+  const error = new Error('index query aborted')
+  error.name = 'AbortError'
+  error.code = 'INDEX_QUERY_ABORTED'
+  throw error
+}
+
+function prepareQueryPage(input, limits) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw invalidOperation('index query page input must be an object', { scope: 'query' })
+  }
+  assertOnlyFields(input, QUERY_PAGE_FIELDS, 'index query page input')
+  const selectors = normalizeIndexQuerySelectors(input.selectors)
+  const maximum = Math.min(MAX_INDEX_QUERY_RESULTS, limits.global.maxRows)
+  if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > maximum) {
+    throw invalidOperation('index query page limit is outside its bound', { scope: 'query', limit: maximum, requested: input.limit })
+  }
+  const sourceRevision = parseSourceRevision(input.sourceRevision)
+  const continuation = validateContinuation(input.continuation, selectors)
+  if (continuation && sourceRevision === null) {
+    throw invalidOperation('query continuation requires sourceRevision', { scope: 'query' })
+  }
+  return { selectors, limit: input.limit, continuation, sourceRevision, signal: querySignal(input.signal) }
+}
+
+function exactContinuation(row) {
+  return {
+    namespace: row.namespace,
+    normalizedIdentifier: row.normalizedIdentifier,
+    publisherId: row.publisherId,
+    sourceRecordRef: row.sourceRecordRef,
+    entityKind: row.entityKind,
+    entityId: row.entityId,
+  }
+}
+
+function tokenContinuation(row) {
+  return {
+    relationType: row.relationType,
+    fromId: row.fromId,
+    publisherId: row.publisherId,
+    sourceRecordRef: row.sourceRecordRef,
+    toId: row.toId,
+  }
+}
+
+async function queryIndexPage(tx, prepared) {
+  checkQueryAbort(prepared.signal)
+  const currentRevision = tx.sourceRevision
+  if (prepared.sourceRevision && prepared.sourceRevision.value !== currentRevision) staleRevision()
+  const checkout = Number(currentRevision.slice(currentRevision.indexOf(':') + 1))
+  const results = []
+  let selectorIndex = prepared.continuation?.selectorIndex ?? 0
+  let after = prepared.continuation?.after ?? null
+
+  while (selectorIndex < prepared.selectors.length && results.length < prepared.limit) {
+    checkQueryAbort(prepared.signal)
+    const selector = prepared.selectors[selectorIndex]
+    const remaining = prepared.limit - results.length
+    let index
+    let range
+    if (selector.type === 'exact-external-ref') {
+      index = INDEXES.externalReferenceExact
+      const exact = { namespace: selector.namespace, normalizedIdentifier: selector.identifier }
+      range = after === null
+        ? { gte: exact, lte: exact, checkout, limit: remaining + 1 }
+        : { gt: after, lte: exact, checkout, limit: remaining + 1 }
+    } else {
+      index = INDEXES.tokenPrefix
+      const lower = { relationType: 'title-token', fromId: selector.prefix }
+      const upper = { relationType: 'title-token', fromId: `${selector.prefix}${TOKEN_PREFIX_END}` }
+      range = after === null
+        ? { gte: lower, lte: upper, checkout, limit: remaining + 1 }
+        : { gt: after, lte: upper, checkout, limit: remaining + 1 }
+    }
+    const found = await tx.find(index, range).toArray()
+    checkQueryAbort(prepared.signal)
+    const pageRows = found.slice(0, remaining)
+    results.push(...pageRows)
+    if (found.length > remaining) {
+      const last = pageRows[pageRows.length - 1]
+      return {
+        results,
+        continuation: {
+          selectorIndex,
+          after: selector.type === 'exact-external-ref' ? exactContinuation(last) : tokenContinuation(last),
+        },
+        sourceRevision: currentRevision,
+      }
+    }
+    selectorIndex++
+    after = null
+  }
+
+  return {
+    results,
+    continuation: selectorIndex < prepared.selectors.length ? { selectorIndex, after: null } : null,
+    sourceRevision: currentRevision,
+  }
+}
+
 async function readScope(tx, scope, maximum) {
   const rows = await tx.find(INDEXES.usageByScope, { scope }, { limit: safeLimit(maximum) }).toArray()
   if (rows.length > maximum) {
@@ -772,6 +946,9 @@ export async function createIndexerStore(options) {
       return accept(() => validateQuery(selector, limits), async (tx, query) => {
         return tx.find(INDEXES.externalReferenceExact, query).toArray()
       })
+    },
+    queryIndexPage(input) {
+      return accept(() => prepareQueryPage(input, limits), (tx, prepared) => queryIndexPage(tx, prepared))
     },
     snapshotUsage() {
       return accept(() => null, tx => buildSnapshot(tx))

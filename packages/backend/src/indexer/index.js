@@ -41,6 +41,36 @@ export {
   verifyIndexServiceAnnouncement,
 } from './service-announcement.js'
 export {
+  INDEX_QUERY_CANCEL_DOMAIN,
+  INDEX_QUERY_ERROR_CODES,
+  INDEX_QUERY_ERROR_DOMAIN,
+  INDEX_QUERY_PAGE_DOMAIN,
+  INDEX_QUERY_REQUEST_DOMAIN,
+  IndexQueryPageV1,
+  IndexQueryV1,
+  MAX_INDEX_QUERY_CURSOR_BYTES,
+  MAX_INDEX_QUERY_DEADLINE_MS,
+  MAX_INDEX_QUERY_ERROR_DETAIL_BYTES,
+  MAX_INDEX_QUERY_FRAME_BYTES,
+  MAX_INDEX_QUERY_ID_BYTES,
+  MAX_INDEX_QUERY_RESULTS,
+  MAX_INDEX_QUERY_SELECTORS,
+  MAX_INDEX_QUERY_SOURCE_REVISION_BYTES,
+  MAX_INDEX_QUERY_TEXT_BYTES,
+  decodeIndexQueryCancel,
+  decodeIndexQueryError,
+  decodeIndexQueryPage,
+  decodeIndexQueryRequest,
+  encodeIndexQueryCancel,
+  encodeIndexQueryError,
+  encodeIndexQueryPage,
+  encodeIndexQueryRequest,
+  normalizeIndexQuerySelectors,
+} from './query-codec.js'
+export {
   INDEX_SERVICE_PROTOCOL,
   attachIndexServiceProtocol,
+  createIndexQueryClient,
+  MIN_INDEX_QUERY_FRAME_BYTES,
 } from './protocol.js'
+export { IndexQueryRemoteError } from './query-requester.js'

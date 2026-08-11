@@ -753,3 +753,88 @@ test('publisher cursor lookup and replacement CAS span catalog epoch changes', a
   assert.deepEqual(await publisherRows(store, PUBLISHER_A), after)
   assert.deepEqual(await index.getPublisherSourceCursor({ publisherId: PUBLISHER_A }), epochTwo)
 })
+
+test('revision-aware exact-ref paging uses compound-key continuation and rejects stale revision', async (t) => {
+  const { index } = await fixture(t)
+  await index.replacePublisherSlice(fullSlice(PUBLISHER_A))
+  await index.replacePublisherSlice(fullSlice(PUBLISHER_B))
+
+  const selectors = [{ type: 'exact-external-ref', namespace: 'imdb', identifier: 'tt123' }]
+  const first = await index.queryIndexPage({ selectors, limit: 1 })
+  assert.equal(first.results.length, 1)
+  assert.equal(first.results[0].publisherId, PUBLISHER_A)
+  assert.ok(first.continuation)
+  assert.match(first.sourceRevision, /^\d+:\d+$/)
+
+  const second = await index.queryIndexPage({
+    selectors,
+    limit: 1,
+    continuation: first.continuation,
+    sourceRevision: first.sourceRevision,
+  })
+  assert.deepEqual(second.results.map(result => result.publisherId), [PUBLISHER_B])
+  assert.equal(second.continuation, null)
+  assert.equal(second.sourceRevision, first.sourceRevision)
+
+  await index.replacePublisherSlice(fullSlice(PUBLISHER_C))
+  await assert.rejects(index.queryIndexPage({
+    selectors,
+    limit: 1,
+    continuation: first.continuation,
+    sourceRevision: first.sourceRevision,
+  }), error => error.code === 'INDEX_QUERY_STALE_REVISION')
+})
+
+test('revision-aware query page honors an aborted signal before durable work', async (t) => {
+  const { index } = await fixture(t)
+  const controller = new AbortController()
+  controller.abort()
+  await assert.rejects(index.queryIndexPage({
+    selectors: [{ type: 'exact-external-ref', namespace: 'imdb', identifier: 'tt123' }],
+    limit: 1,
+    signal: controller.signal,
+  }), error => error.name === 'AbortError' && error.code === 'INDEX_QUERY_ABORTED')
+})
+
+test('revision-aware token-prefix paging remains coherent across restart', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'peartube-index-query-restart-'))
+  const store = new Corestore(directory)
+  await store.ready()
+  let index = await createIndexerStore({ store, limits: limits() })
+  const tokenSlice = (publisherId, token, target) => ({
+    publisherId,
+    rows: [
+      row(COLLECTIONS.sourceRecords, sourceRecord(publisherId)),
+      row(COLLECTIONS.relationshipEdges, {
+        publisherId,
+        sourceRecordRef: 'source-1',
+        relationType: 'title-token',
+        fromId: token,
+        toId: target,
+      }),
+    ],
+    cursor: cursor(publisherId),
+  })
+  await index.replacePublisherSlice(tokenSlice(PUBLISHER_A, 'pilot', 'work-a'))
+  await index.replacePublisherSlice(tokenSlice(PUBLISHER_B, 'pioneer', 'work-b'))
+  await index.replacePublisherSlice(tokenSlice(PUBLISHER_C, 'other', 'work-c'))
+
+  const selectors = [{ type: 'title-token-prefix', prefix: 'pi' }]
+  const first = await index.queryIndexPage({ selectors, limit: 1 })
+  assert.deepEqual(first.results.map(result => result.fromId), ['pilot'])
+  assert.ok(first.continuation)
+  await index.close()
+  index = await createIndexerStore({ store, limits: limits() })
+  const second = await index.queryIndexPage({
+    selectors,
+    limit: 1,
+    continuation: first.continuation,
+    sourceRevision: first.sourceRevision,
+  })
+  assert.deepEqual(second.results.map(result => result.fromId), ['pioneer'])
+  assert.equal(second.continuation, null)
+  assert.equal(second.sourceRevision, first.sourceRevision)
+  await index.close()
+  await store.close()
+  rmSync(directory, { recursive: true, force: true })
+})

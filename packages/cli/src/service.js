@@ -82,6 +82,8 @@ export async function createRelayService({
   const runtime = await runtimeFactory({ config, logger })
 
   let closed = false
+  let started = false
+  let startPromise = null
   let currentStatus = null
   let queue = Promise.resolve()
   let heartbeatTimer = null
@@ -399,6 +401,10 @@ export async function createRelayService({
       return { creator, job }
     },
     async start() {
+      if (closed) throw new Error('relay service is closed')
+      if (started) return service
+      if (startPromise) return startPromise
+      startPromise = (async () => {
       logger.relay.info('Relay starting', {
         mode: config.mode,
         policy: config.policy,
@@ -604,7 +610,18 @@ export async function createRelayService({
         }
         try {
           await runtime.close?.()
-        } catch {}
+        } catch {
+          // Preserve the startup error after best-effort runtime cleanup.
+        }
+        throw error
+      }
+      })()
+      try {
+        const result = await startPromise
+        started = true
+        return result
+      } catch (error) {
+        startPromise = null
         throw error
       }
     },
@@ -613,6 +630,27 @@ export async function createRelayService({
     },
     async publishArchiveJob(job) {
       return publishArchiveJob(job)
+    },
+    async searchIndexCandidates(selector, { cursor = null, limit = undefined, signal = null } = {}) {
+      if (cursor !== null || !selector?.namespace || !selector?.identifier || !selector?.kind) {
+        const error = new Error('Index search selector is unsupported')
+        error.code = 'INDEX_SEARCH_UNSUPPORTED'
+        throw error
+      }
+      if (typeof runtime.api?.searchIndexCandidates !== 'function') {
+        const error = new Error('Index candidate search is unsupported')
+        error.code = 'INDEX_SEARCH_UNSUPPORTED'
+        throw error
+      }
+      return runtime.api.searchIndexCandidates(selector, { limit, signal })
+    },
+    async verifyIndexCandidate(candidateRef, { signal = null } = {}) {
+      if (typeof runtime.api?.verifyIndexCandidate !== 'function') {
+        const error = new Error('Index candidate verification is unsupported')
+        error.code = 'INDEX_VERIFICATION_UNSUPPORTED'
+        throw error
+      }
+      return runtime.api.verifyIndexCandidate(candidateRef, { signal })
     },
     async enqueueArchiveJob(input, { runNow = false } = {}) {
       if (!runtime.ctx?.metaDb) throw new Error('archive jobs require relay runtime metadata storage')
@@ -685,6 +723,7 @@ export async function createRelayService({
     },
     async close() {
       closed = true
+      if (startPromise && !started) await startPromise.catch(() => {})
       if (heartbeatTimer) {
         clearIntervalFn(heartbeatTimer)
         heartbeatTimer = null

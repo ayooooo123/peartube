@@ -1029,5 +1029,28 @@ test('root API and runtime defer source resolution until MediaStorm selects a ca
   t.absent(JSON.stringify(verified).includes('publisher-secret'))
   t.absent(JSON.stringify(verified).includes('bearer-secret'))
   t.is(lifecycle.owned.some(entry => entry.resource === runtime && entry.method === 'close'), true)
+  const requestController = new AbortController()
+  requestController.abort()
+  await t.exception(api.searchIndexCandidates(SELECTOR, { signal: requestController.signal }), /aborted/i)
+  await t.exception(api.verifyIndexCandidate(candidate.candidateRef, { signal: requestController.signal }), /aborted/i)
   await runtime.close()
+})
+
+test('root search API forwards caller limits and abort signals to federation', async t => {
+  const lifecycle = { signal: new AbortController().signal }
+  const caller = new AbortController()
+  let received = null
+  const api = createApi({
+    ctx: { lifecycle },
+    indexVerificationRuntime: {
+      async searchIndexCandidates (input) {
+        received = input
+        return []
+      }
+    }
+  })
+
+  await api.searchIndexCandidates(SELECTOR, { limit: 1, signal: caller.signal })
+  t.is(received.limit, 1)
+  t.is(received.signal, caller.signal)
 })

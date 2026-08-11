@@ -51,6 +51,7 @@
   "dependencies": {
     "@peartube/backend": "file:../backend",
     "@peartube/host": "file:../host",
+    "abort-controller": "^3.0.0",
     "b4a": "^1.8.0",
     "bare-http1": "^4.5.6",
     "bare-net": "^2.3.3",

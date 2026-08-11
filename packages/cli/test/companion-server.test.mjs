@@ -5,12 +5,13 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  renameSync,
   statSync,
   symlinkSync,
   writeFileSync
 } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
-import { once } from 'node:events'
+import { EventEmitter, once } from 'node:events'
 import { createServer as createHttpServer, request as httpRequest } from 'node:http'
 import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -67,12 +68,12 @@ function request ({ socketPath, host, port, method = 'GET', path = '/api/v2/stat
   })
 }
 
-function signedHeaders ({ method = 'GET', path = '/api/v2/status', body = '', nonce = 'server-nonce-0001' } = {}) {
+function signedHeaders ({ method = 'GET', path = '/api/v2/status', body = '', timestamp = NOW, nonce = 'server-nonce-0001' } = {}) {
   return signControlRequest({
     method,
     path,
     body,
-    timestamp: NOW,
+    timestamp,
     nonce,
     client: CLIENT,
     secret: SECRET
@@ -192,7 +193,12 @@ test('authenticated Unix status is bounded, unsigned is rejected, replay conflic
   const headers = signedHeaders()
   const valid = await request({ socketPath: state.socketPath, headers })
   t.is(valid.statusCode, 200)
-  t.alike(JSON.parse(valid.body), { apiVersion: 2, status: 'available', implemented: false })
+  const status = JSON.parse(valid.body)
+  t.is(status.apiVersion, 2)
+  t.is(status.status, 'available')
+  t.is(status.transport.mode, 'unix')
+  t.is(status.auth.mode, 'mac')
+  t.is(status.auth.clientId, CLIENT)
   t.ok(Buffer.byteLength(valid.body) < 256)
 
   const unsigned = await request({ socketPath: state.socketPath })
@@ -301,6 +307,46 @@ test('companion closes a connection that never completes its first request heade
     new Promise((resolve, reject) => setTimeout(() => reject(new Error('first request deadline did not close the socket')), 250))
   ])
   t.pass('deadline closes a pre-request connection')
+})
+
+test('request deadlines abort delegated backend work before server close returns', async (t) => {
+  const storagePath = tempDir(t)
+  let sawAbort = false
+  let backendSettled = false
+  const service = {
+    searchIndexCandidates (selector, { signal } = {}) {
+      return new Promise((resolve) => {
+        signal?.addEventListener('abort', () => {
+          sawAbort = true
+          resolve([])
+        }, { once: true })
+      }).finally(() => {
+        backendSettled = true
+      })
+    }
+  }
+  const server = createCompanionServer({
+    service,
+    config: udsConfig(storagePath),
+    clock: () => NOW,
+    logger,
+    requestDeadlineMs: 20
+  })
+  const state = await server.start()
+  const path = '/api/v2/search?namespace=tmdb&identifier=348&kind=movie'
+  const requestResult = request({
+    socketPath: state.socketPath,
+    path,
+    headers: signedHeaders({ path, nonce: 'backend-deadline-01' })
+  }).then(
+    () => null,
+    error => error
+  )
+
+  t.ok(await requestResult)
+  await server.close()
+  t.is(sawAbort, true)
+  t.is(backendSettled, true)
 })
 
 test('Unix startup refuses a non-socket path without removing it', async (t) => {
@@ -473,6 +519,109 @@ test('explicit authenticated TCP serves only signed requests', async (t) => {
   await server.close()
 })
 
+test('companion serializes concurrent direct starts around one listener', async (t) => {
+  const config = resolveCompanionConfig({
+    enabled: true,
+    transport: 'tcp',
+    host: '127.0.0.1',
+    port: 0,
+    client: CLIENT,
+    sharedSecret: SECRET
+  }, { storagePath: tempDir(t) })
+  const listeners = []
+  const server = createCompanionServer({
+    service: {},
+    config,
+    logger,
+    createServer (handler) {
+      const listener = createHttpServer(handler)
+      listeners.push(listener)
+      return listener
+    }
+  })
+  t.teardown(async () => {
+    await server.close().catch(noop)
+    for (const listener of listeners) {
+      if (listener.listening) await close(listener)
+    }
+  })
+
+  const [first, second] = await Promise.all([server.start(), server.start()])
+  t.is(listeners.length, 1)
+  t.alike(first, second)
+  await server.close()
+  const restarted = await server.start()
+  t.is(listeners.length, 2)
+  t.is(restarted.enabled, true)
+  await server.close()
+})
+
+test('companion close waits for a direct start in progress and owns its listener', async (t) => {
+  const config = resolveCompanionConfig({
+    enabled: true,
+    transport: 'tcp',
+    host: '127.0.0.1',
+    port: 0,
+    client: CLIENT,
+    sharedSecret: SECRET
+  }, { storagePath: tempDir(t) })
+  const listener = new EventEmitter()
+  let releaseListen = null
+  let closed = false
+  listener.listening = false
+  listener.listen = () => {
+    releaseListen = () => {
+      listener.listening = true
+      listener.emit('listening')
+    }
+  }
+  listener.address = () => ({ address: '127.0.0.1', port: 12345 })
+  listener.close = (callback) => {
+    listener.listening = false
+    closed = true
+    callback()
+  }
+  const server = createCompanionServer({
+    service: {},
+    config,
+    logger,
+    createServer: () => listener
+  })
+
+  const starting = server.start()
+  const closing = server.close()
+  let closeSettled = false
+  void closing.then(() => { closeSettled = true })
+  await new Promise(resolve => setImmediate(resolve))
+  t.is(closeSettled, false)
+  releaseListen()
+  const [startResult, closeResult] = await Promise.allSettled([starting, closing])
+  t.is(startResult.status, 'fulfilled')
+  t.is(closeResult.status, 'fulfilled')
+  t.is(closed, true)
+})
+
+test('companion restart binds again after guarded Unix cleanup fails', async (t) => {
+  const storagePath = tempDir(t)
+  const socketDirectory = join(storagePath, '.pt')
+  const movedDirectory = join(storagePath, '.pt-old')
+  const server = createCompanionServer({
+    service: {},
+    config: udsConfig(storagePath),
+    logger
+  })
+  const first = await server.start()
+  renameSync(socketDirectory, movedDirectory)
+  mkdirSync(socketDirectory, { mode: 0o700 })
+
+  await t.exception(server.close(), /socket namespace changed/)
+  t.is(existsSync(first.socketPath), false)
+  const restarted = await server.start()
+  t.is(restarted.enabled, true)
+  t.is(existsSync(restarted.socketPath), true)
+  await server.close()
+})
+
 test('oversized bodies are rejected before v2 dispatch without buffering beyond the configured limit', async (t) => {
   const storagePath = tempDir(t)
   const body = '12345'
@@ -522,11 +671,93 @@ test('missing authentication is rejected before an oversized body is read', asyn
   await server.close()
 })
 
-test('authenticated but unimplemented v2 routes return a deterministic bounded response', async (t) => {
+test('authenticated search reaches the backend and returns URL-free candidates', async (t) => {
+  const storagePath = tempDir(t)
+  let selector = null
+  const service = {
+    async searchIndexCandidates (value) {
+      selector = value
+      return [{
+        candidateRef: 'A'.repeat(43),
+        work: { title: 'The Matrix', releaseYear: 1999 },
+        publication: { publicationId: 'publication-1', publisherId: 'publisher-1' },
+        rendition: { renditionId: 'rendition-1' },
+        asset: { assetId: 'asset-1' },
+        streamUrl: 'https://forbidden.invalid/stream'
+      }]
+    }
+  }
+  const server = createCompanionServer({ service, config: udsConfig(storagePath), clock: () => NOW, logger })
+  const state = await server.start()
+  const path = '/api/v2/search?namespace=tmdb&identifier=348&kind=movie'
+  const response = await request({
+    socketPath: state.socketPath,
+    path,
+    headers: signedHeaders({ path, nonce: 'search-nonce-0001' })
+  })
+
+  t.is(response.statusCode, 200)
+  t.alike(selector, { namespace: 'tmdb', identifier: '348', kind: 'movie' })
+  t.is(JSON.parse(response.body).candidates[0].candidateRef, 'A'.repeat(43))
+  t.not(response.body.includes('forbidden.invalid'), true)
+  await server.close()
+})
+
+test('real relay companion forwards movie limits and rejects unsupported episode search', async (t) => {
+  const storagePath = tempDir(t, 'peartube-companion-search-service-')
+  const config = resolveRelayConfig({
+    storage: { path: storagePath, maxBytes: 4096, minFreeBytes: 0 },
+    companion: { enabled: true, client: CLIENT, sharedSecret: SECRET },
+    archive: { enabled: false, uiEnabled: false, localMirror: { enabled: false } },
+    classification: { tmdb: { enabled: false } },
+    discovery: { enabled: false, seedDiscovered: false },
+    seedPin: { enabled: true, trustedClients: [] }
+  }, { env: {} })
+  const runtime = fakeRuntime()
+  let searches = 0
+  let options = null
+  runtime.api.searchIndexCandidates = async (_selector, value) => {
+    searches++
+    options = value
+    return []
+  }
+  const service = await createRelayService({
+    config,
+    logger,
+    runtimeFactory: async () => runtime,
+    writeStatusFile: async () => {},
+    setIntervalFn: () => ({ unref: noop }),
+    clearIntervalFn: noop
+  })
+  await service.start()
+  const state = service.getCompanionState()
+
+  const moviePath = '/api/v2/search?namespace=tmdb&identifier=348&kind=movie&limit=1'
+  const movie = await request({
+    socketPath: state.socketPath,
+    path: moviePath,
+    headers: signedHeaders({ path: moviePath, timestamp: Date.now(), nonce: 'real-movie-nonce-0001' })
+  })
+  t.is(movie.statusCode, 200)
+  t.is(options.limit, 1)
+
+  const episodePath = '/api/v2/search?namespace=tmdb&identifier=1399&kind=episode&season=1&episode=2'
+  const episode = await request({
+    socketPath: state.socketPath,
+    path: episodePath,
+    headers: signedHeaders({ path: episodePath, timestamp: Date.now(), nonce: 'real-episode-nonce-01' })
+  })
+  t.is(episode.statusCode, 501)
+  t.is(JSON.parse(episode.body).error.code, 'CAPABILITY_UNAVAILABLE')
+  t.is(searches, 1)
+  await service.close()
+})
+
+test('authenticated routes return a deterministic bounded capability error when their backend is absent', async (t) => {
   const storagePath = tempDir(t)
   const server = createCompanionServer({ service: {}, config: udsConfig(storagePath), clock: () => NOW, logger })
   const state = await server.start()
-  const path = '/api/v2/search?query=test'
+  const path = '/api/v2/search?namespace=tmdb&identifier=348&kind=movie'
   const response = await request({
     socketPath: state.socketPath,
     path,
@@ -535,7 +766,7 @@ test('authenticated but unimplemented v2 routes return a deterministic bounded r
 
   t.is(response.statusCode, 501)
   t.alike(JSON.parse(response.body), {
-    error: { code: 'NOT_IMPLEMENTED', message: 'Companion v2 route is not implemented' }
+    error: { code: 'CAPABILITY_UNAVAILABLE', message: 'Index search capability is unavailable' }
   })
   t.ok(Buffer.byteLength(response.body) < 512)
   await server.close()
@@ -564,6 +795,8 @@ test('relay service closes its companion socket during lifecycle teardown', asyn
   const state = service.getCompanionState()
   t.is(existsSync(state.socketPath), true)
   t.is(JSON.stringify(state).includes(SECRET), false)
+  t.is(await service.start(), service)
+  t.is(service.getCompanionState().socketPath, state.socketPath)
 
   await service.close()
   t.is(existsSync(state.socketPath), false)

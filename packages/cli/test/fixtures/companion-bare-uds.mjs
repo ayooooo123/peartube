@@ -2,6 +2,7 @@ import fs from 'bare-fs'
 import net from 'bare-net'
 import process from 'bare-process'
 
+import { decodeSearchQuery } from '../../src/companion/contracts.js'
 import { signControlRequest } from '../../src/companion/auth.js'
 import { resolveCompanionConfig } from '../../src/companion/config.js'
 import { createCompanionServer } from '../../src/companion/server.js'
@@ -11,6 +12,10 @@ const SECRET = 'ef'.repeat(32)
 const storagePath = `/tmp/peartube-bare-companion-${process.pid}`
 let server = null
 let socket = null
+const decodedSearch = decodeSearchQuery(new URLSearchParams('namespace=tmdb&identifier=348&kind=movie&limit=64'))
+if (decodedSearch.selector.identifier !== '348' || decodedSearch.limit !== 64) {
+  throw new Error('Bare companion search query decoding failed')
+}
 
 try {
   fs.mkdirSync(storagePath, { mode: 0o700 })

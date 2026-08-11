@@ -17,24 +17,24 @@ export function createSearchApi({
   loadChannel,
 }) {
   return {
-    async searchIndexCandidates(selector) {
+    async searchIndexCandidates(selector, { limit = undefined, signal = null } = {}) {
       assertContextRunning(ctx)
       if (!indexVerificationRuntime || typeof indexVerificationRuntime.searchIndexCandidates !== 'function') {
         const error = new Error('Index candidate search is unsupported')
         error.code = 'INDEX_SEARCH_UNSUPPORTED'
         throw error
       }
-      return indexVerificationRuntime.searchIndexCandidates({ selector, signal: ctx?.lifecycle?.signal })
+      return indexVerificationRuntime.searchIndexCandidates({ selector, limit, signal: signal || ctx?.lifecycle?.signal })
     },
 
-    async verifyIndexCandidate(candidateRef) {
+    async verifyIndexCandidate(candidateRef, { signal = null } = {}) {
       assertContextRunning(ctx)
       if (!indexVerificationRuntime || typeof indexVerificationRuntime.verifyIndexCandidate !== 'function') {
         const error = new Error('Index candidate verification is unsupported')
         error.code = 'INDEX_VERIFICATION_UNSUPPORTED'
         throw error
       }
-      return indexVerificationRuntime.verifyIndexCandidate({ candidateRef, signal: ctx?.lifecycle?.signal })
+      return indexVerificationRuntime.verifyIndexCandidate({ candidateRef, signal: signal || ctx?.lifecycle?.signal })
     },
 
     /**

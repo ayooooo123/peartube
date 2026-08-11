@@ -1,3 +1,5 @@
+import AbortController from 'abort-controller'
+
 import b4a from 'b4a'
 
 import * as defaultFs from '#fs'
@@ -16,6 +18,7 @@ import {
   prevalidateControlRequest,
   verifyControlRequest
 } from './auth.js'
+import { createCompanionRouter } from './routes.js'
 
 const MAX_UNIX_SOCKET_PATH_BYTES = 103
 const MAX_ERROR_BYTES = 512
@@ -46,13 +49,14 @@ function publicError (error) {
   }
 }
 
-function sendJson (response, statusCode, value) {
+function sendJson (response, statusCode, value, headers = {}) {
   let body = b4a.from(JSON.stringify(value))
   if (statusCode >= 400 && body.byteLength > MAX_ERROR_BYTES) {
     body = b4a.from('{"error":{"code":"INTERNAL_ERROR","message":"Companion request failed"}}')
     statusCode = 500
   }
   response.statusCode = statusCode
+  for (const [name, headerValue] of Object.entries(headers)) response.setHeader(name, headerValue)
   response.setHeader('content-type', 'application/json; charset=utf-8')
   response.setHeader('content-length', body.byteLength)
   response.setHeader('cache-control', 'no-store')
@@ -192,7 +196,7 @@ async function prepareUnixSocket ({ fs, socketPath, probeSocket, namespace }) {
   fs.unlinkSync(socketPath)
 }
 
-function readBodyHash (request, maxBodyBytes) {
+function readBody (request, maxBodyBytes) {
   const declaredLength = request.headers?.['content-length']
   if (declaredLength !== undefined) {
     const parsedLength = Number(declaredLength)
@@ -208,6 +212,7 @@ function readBodyHash (request, maxBodyBytes) {
 
   return new Promise((resolve, reject) => {
     const hasher = createBodyHasher()
+    const chunks = []
     let bytes = 0
     let done = false
     const fail = (error) => {
@@ -225,12 +230,17 @@ function readBodyHash (request, maxBodyBytes) {
         fail(new CompanionRequestError(413, 'REQUEST_TOO_LARGE', 'Companion request body is too large', true))
         return
       }
-      hasher.update(chunk)
+      const buffered = b4a.from(chunk)
+      chunks.push(buffered)
+      hasher.update(buffered)
     })
     request.once('end', () => {
       if (done) return
       done = true
-      resolve(hasher.digest())
+      resolve({
+        body: chunks.length === 0 ? b4a.alloc(0) : b4a.concat(chunks, bytes),
+        bodyHash: hasher.digest()
+      })
     })
     request.once('aborted', () => fail(new CompanionRequestError(400, 'REQUEST_ABORTED', 'Companion request was aborted', true)))
     request.once('error', () => fail(new CompanionRequestError(400, 'REQUEST_FAILED', 'Companion request failed', true)))
@@ -293,10 +303,17 @@ export function createCompanionServer ({
   }
 
   const replayStore = nonceStore || createNonceStore({ maxEntries: config.maxNonces })
+  const router = createCompanionRouter({ service, config, clock })
   const connections = new Set()
   const firstRequestDeadlines = new Map()
+  const activeRequests = new Set()
+  const activeRequestControllers = new Set()
   let httpServer = null
   let started = false
+  let lifecycle = Promise.resolve()
+  let startPromise = null
+  let closePromise = null
+  let closing = false
   let socketIdentity = null
   let socketNamespace = null
   let publicState = { enabled: config.enabled !== false, transport: config.transport }
@@ -305,7 +322,15 @@ export function createCompanionServer ({
     clearTimeout(firstRequestDeadlines.get(request.socket))
     firstRequestDeadlines.delete(request.socket)
     response.setHeader('connection', 'close')
-    const deadline = setTimeout(() => request.socket?.destroy?.(), requestDeadlineMs)
+    const controller = new AbortController()
+    const cancelRequest = () => {
+      controller.abort()
+      request.socket?.destroy?.()
+    }
+    const onSocketClose = () => controller.abort()
+    activeRequestControllers.add(controller)
+    request.socket?.once?.('close', onSocketClose)
+    const deadline = setTimeout(cancelRequest, requestDeadlineMs)
     deadline.unref?.()
     try {
       prevalidateControlRequest({
@@ -314,7 +339,7 @@ export function createCompanionServer ({
         clock,
         maxClockSkewMs: config.maxClockSkewMs
       })
-      const bodyHash = await readBodyHash(request, config.maxBodyBytes)
+      const { body, bodyHash } = await readBody(request, config.maxBodyBytes)
       verifyControlRequest({
         method: request.method,
         path: request.url,
@@ -327,22 +352,16 @@ export function createCompanionServer ({
         maxClockSkewMs: config.maxClockSkewMs
       })
 
-      if (request.method === 'GET' && request.url === '/api/v2/status') {
-        sendJson(response, 200, { apiVersion: 2, status: 'available', implemented: false })
-        return
-      }
-      if (request.url?.startsWith('/api/v2/')) {
-        sendJson(response, 501, {
-          error: {
-            code: 'NOT_IMPLEMENTED',
-            message: 'Companion v2 route is not implemented'
-          }
-        })
-        return
-      }
-      sendJson(response, 404, {
-        error: { code: 'NOT_FOUND', message: 'Companion route not found' }
+      const routed = await router.dispatch({
+        method: request.method,
+        url: request.url,
+        headers: request.headers,
+        body,
+        clientIdentity: request.headers?.['x-peartube-client'],
+        serverState: publicState,
+        signal: controller.signal
       })
+      sendJson(response, routed.statusCode, routed.body, routed.headers)
     } catch (error) {
       const safe = publicError(error)
       const destroyRequest = () => request.socket?.destroy?.()
@@ -353,6 +372,8 @@ export function createCompanionServer ({
       })
     } finally {
       clearTimeout(deadline)
+      request.socket?.removeListener?.('close', onSocketClose)
+      activeRequestControllers.delete(controller)
     }
   }
 
@@ -366,11 +387,31 @@ export function createCompanionServer ({
     socketIdentity = null
   }
 
+  function serialize (operation) {
+    const pending = lifecycle.then(operation, operation)
+    lifecycle = pending.then(() => {}, () => {})
+    return pending
+  }
+
+  function finishStartFailure (pending) {
+    if (startPromise === pending) startPromise = null
+  }
+
+  function finishClose (pending) {
+    if (closePromise !== pending) return
+    startPromise = null
+    closePromise = null
+    closing = false
+  }
+
   return {
     state () {
       return { ...publicState }
     },
-    async start () {
+    start () {
+      if (closing) return Promise.reject(new Error('Companion server is closing'))
+      if (startPromise) return startPromise
+      const pending = serialize(async () => {
       if (started) return { ...publicState }
       if (config.enabled === false) {
         publicState = { enabled: false, transport: config.transport }
@@ -393,7 +434,12 @@ export function createCompanionServer ({
         config.transport === 'unix' ? createUnixServer : defaultCreateServer
       )
       httpServer = serverFactory((request, response) => {
-        void handleRequest(request, response)
+        const activeRequest = handleRequest(request, response)
+        activeRequests.add(activeRequest)
+        void activeRequest.then(
+          () => activeRequests.delete(activeRequest),
+          () => activeRequests.delete(activeRequest)
+        )
       })
       httpServer.on?.('connection', (socket) => {
         const destroy = () => socket.destroy?.()
@@ -446,26 +492,47 @@ export function createCompanionServer ({
         logger?.companion?.info?.('Companion API listening', publicState)
         return { ...publicState }
       } catch (error) {
+        for (const controller of activeRequestControllers) controller.abort()
         for (const connection of connections) connection.destroy?.()
         connections.clear()
         await closeHttpServer(httpServer)
+        await Promise.allSettled([...activeRequests])
         await cleanupOwnedSocket().catch(() => {})
         httpServer = null
         throw error
       }
+      })
+      startPromise = pending
+      void pending.then(
+        () => {},
+        () => finishStartFailure(pending)
+      )
+      return pending
     },
-    async close () {
+    close () {
+      if (closePromise) return closePromise
+      closing = true
+      const pending = serialize(async () => {
       if (!httpServer) {
-        await cleanupOwnedSocket()
         started = false
+        await cleanupOwnedSocket()
         return
       }
+      for (const controller of activeRequestControllers) controller.abort()
       for (const connection of connections) connection.destroy?.()
       connections.clear()
       await closeHttpServer(httpServer)
+      await Promise.allSettled([...activeRequests])
       httpServer = null
-      await cleanupOwnedSocket()
       started = false
+      await cleanupOwnedSocket()
+      })
+      closePromise = pending
+      void pending.then(
+        () => finishClose(pending),
+        () => finishClose(pending)
+      )
+      return pending
     }
   }
 }

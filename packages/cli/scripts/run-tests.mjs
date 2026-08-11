@@ -39,6 +39,7 @@ const TEST_FILES = [
   'config.test.mjs',
   'companion-auth.test.mjs',
   'companion-server.test.mjs',
+  'companion-v2-contract.test.mjs',
   'creators.test.mjs',
   'local-drive-mirror.test.mjs',
   'tmdb-fetch-injection.test.mjs',

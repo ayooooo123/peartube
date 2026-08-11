@@ -35,6 +35,10 @@ function counter (counters, ...names) {
   return 0
 }
 
+function archiveOperatorMode (relayMode) {
+  return relayMode === 'public' ? 'community' : 'local-first'
+}
+
 export async function createRelayRuntime ({ config, logger, dependencies = null } = {}) {
   if (!config?.storage?.path) throw new Error('relay runtime requires config.storage.path')
   const backendFactory = dependencies?.createBackendContext || createBackendContext
@@ -71,7 +75,7 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
       enabled: config.archive?.enabled !== false
     },
     operability: {
-      operatorMode: config.mode || 'community'
+      operatorMode: archiveOperatorMode(config.mode)
     },
     ipcLog: (message) => logger?.runtime?.debug?.(message)
   })

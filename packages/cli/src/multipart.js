@@ -165,7 +165,6 @@ export function receiveMultipartUpload (req, {
       const meta = parsePartHeaders(buf.slice(0, idx).toString('utf8'), strict)
       buf = buf.slice(idx + DOUBLE_CRLF.length)
       partCount++
-      if (partCount > maxFields + 1) throw multipartError('MULTIPART_PARTS_TOO_MANY', 'multipart request has too many parts', 413)
       if (strict) {
         if (!meta.name || seenNames.has(meta.name)) throw multipartError('MULTIPART_FIELD_DUPLICATE', 'multipart fields must be unique')
         if (allowed && !allowed.has(meta.name)) throw multipartError('MULTIPART_FIELD_UNKNOWN', `unknown multipart field ${meta.name}`)
@@ -186,6 +185,7 @@ export function receiveMultipartUpload (req, {
         if (!part.isFile && part.name === fileField) throw multipartError('MULTIPART_FILE_REQUIRED', 'multipart file field requires a filename')
         if (part.isFile && file) throw multipartError('MULTIPART_FILE_DUPLICATE', 'multipart request requires exactly one file')
       }
+      if (partCount > maxFields + 1) throw multipartError('MULTIPART_PARTS_TOO_MANY', 'multipart request has too many parts', 413)
       if (part.isFile && !file) {
         const safeName = (part.filename || 'upload').replace(/[^\w.\-]+/g, '_').replace(/^\.+/, '').slice(-180) || 'upload'
         const uploadsDir = path.join(uploadDir, 'uploads')

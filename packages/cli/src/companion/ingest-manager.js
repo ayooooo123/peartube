@@ -706,14 +706,14 @@ export function createIngestManager ({
           const resolved = await lookupPublication(current)
           if (resolved) {
             await exposePublication(current, resolved.channelInfo, resolved.metadata)
-            return store.completePublication(jobId, { expectedVersion: current.version, result: resolved.result })
+            return await store.completePublication(jobId, { expectedVersion: current.version, result: resolved.result })
           }
         } catch {}
       }
-      if (cancelled) return markTerminal(jobId, 'cancelled', 'CANCELLED', false)
+      if (cancelled) return await markTerminal(jobId, 'cancelled', 'CANCELLED', false)
       const code = publicationErrorCode(error, current?.state || job?.state)
       logger?.archive?.warn?.('Companion ingest job failed', { jobId, state: current?.state || null, errorCode: code })
-      return markTerminal(jobId, 'failed', code, current?.state === 'publishing')
+      return await markTerminal(jobId, 'failed', code, current?.state === 'publishing')
     } finally {
       const final = await store.getJob(jobId).catch(() => null)
       if (closing || TERMINAL.has(final?.state)) cleanupAttachment(jobId)

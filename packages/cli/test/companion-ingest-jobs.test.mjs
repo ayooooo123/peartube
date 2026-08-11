@@ -686,6 +686,15 @@ function sendMultipart ({
     secret: MULTIPART_SECRET
   })
   return new Promise((resolve, reject) => {
+    let settled = false
+    let responseStarted = false
+    let stopWriting = false
+    const settle = (callback, value) => {
+      if (settled) return
+      settled = true
+      stopWriting = true
+      callback(value)
+    }
     const req = httpRequest({
       host: state.host,
       port: state.port,
@@ -697,32 +706,45 @@ function sendMultipart ({
         ...(contentLength ? { 'content-length': body.byteLength } : {})
       }
     }, response => {
+      responseStarted = true
+      stopWriting = true
       const chunks = []
       response.on('data', chunk => chunks.push(chunk))
-      response.on('end', () => resolve({
+      response.on('end', () => settle(resolve, {
         statusCode: response.statusCode,
         body: Buffer.concat(chunks).toString('utf8')
       }))
+      response.once('error', error => settle(reject, error))
     })
     req.once('error', error => {
-      if (abortAfterChunks != null) resolve({ aborted: true, error })
-      else reject(error)
+      if (responseStarted || settled) return
+      if (abortAfterChunks != null) settle(resolve, { aborted: true, error })
+      else settle(reject, error)
     })
     void (async () => {
       let chunkIndex = 0
       for (let offset = 0; offset < body.byteLength; offset += chunkBytes) {
+        if (stopWriting || settled) return
         const chunk = body.subarray(offset, Math.min(offset + chunkBytes, body.byteLength))
-        req.write(chunk)
+        try {
+          req.write(chunk)
+        } catch (error) {
+          if (responseStarted || settled) return
+          throw error
+        }
         chunkIndex++
         onChunk?.(chunkIndex)
         if (abortAfterChunks != null && chunkIndex >= abortAfterChunks) {
+          stopWriting = true
           req.destroy()
           return
         }
         if (delayMs) await new Promise(resolveDelay => setTimeout(resolveDelay, delayMs))
       }
-      req.end()
-    })().catch(reject)
+      if (!stopWriting && !settled) req.end()
+    })().catch(error => {
+      if (!responseStarted && !settled) settle(reject, error)
+    })
   })
 }
 

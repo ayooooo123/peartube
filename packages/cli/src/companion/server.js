@@ -16,14 +16,18 @@ import {
   createBodyHasher,
   createNonceStore,
   prevalidateControlRequest,
-  verifyControlRequest
+  verifyPrevalidatedControlRequest
 } from './auth.js'
 import { createCompanionRouter } from './routes.js'
 import { createCompanionStreamRoute } from './stream-route.js'
+import { parseBoundary, receiveMultipartUpload } from '../multipart.js'
 
 const MAX_UNIX_SOCKET_PATH_BYTES = 103
 const MAX_ERROR_BYTES = 512
 const SOCKET_PROBE_TIMEOUT_MS = 500
+const DEFAULT_MAX_INGEST_BYTES = 5 * 1024 * 1024 * 1024
+const MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+const INGEST_JOBS_PATH = '/api/v2/ingest/jobs'
 
 class CompanionRequestError extends Error {
   constructor (statusCode, code, message, closeConnection = false) {
@@ -248,6 +252,115 @@ function readBody (request, maxBodyBytes) {
   })
 }
 
+function requestContentType (request) {
+  const value = request.headers?.['content-type']
+  return Array.isArray(value) ? value[0] || '' : String(value || '')
+}
+
+function isMultipartIngestRequest (request) {
+  return request.method === 'POST' &&
+    request.url === INGEST_JOBS_PATH &&
+    /^multipart\/form-data(?:\s*;|$)/i.test(requestContentType(request))
+}
+
+function assertMultipartContentLength (request, maxBytes) {
+  const declaredLength = request.headers?.['content-length']
+  if (declaredLength === undefined) return
+  const parsedLength = Number(declaredLength)
+  if (!Number.isSafeInteger(parsedLength) || parsedLength < 0) {
+    request.pause?.()
+    throw new CompanionRequestError(400, 'INVALID_CONTENT_LENGTH', 'Invalid companion content length', true)
+  }
+  if (parsedLength > maxBytes) {
+    request.pause?.()
+    throw new CompanionRequestError(413, 'REQUEST_TOO_LARGE', 'Companion ingest request body is too large', true)
+  }
+}
+
+function asMultipartRequestError (error) {
+  if (error instanceof CompanionRequestError) return error
+  const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 400
+  const code = typeof error?.code === 'string' ? error.code : 'INVALID_MULTIPART'
+  const message = statusCode >= 500 ? 'Companion ingest staging failed' : (error?.message || 'Invalid multipart ingest request')
+  return new CompanionRequestError(statusCode, code, message, true)
+}
+
+function encodeMultipartIngestBody (fields, file) {
+  const spool = {
+    path: file.relativePath,
+    complete: true,
+    mimeType: file.mimeType || 'application/octet-stream',
+    byteLength: file.size,
+    ...(Object.prototype.hasOwnProperty.call(fields, 'etag') ? { etag: fields.etag } : {})
+  }
+  return b4a.from(
+    `{"idempotencyKey":${JSON.stringify(fields.idempotencyKey)},` +
+    `"request":${fields.request},"spool":${JSON.stringify(spool)}}`
+  )
+}
+
+function createIngestSpoolLease (staged) {
+  let accepted = false
+  return Object.freeze({
+    get accepted () {
+      return accepted
+    },
+    accept (spool) {
+      if (!spool ||
+          spool.filePath !== staged.path ||
+          spool.relativePath !== staged.relativePath ||
+          spool.byteLength !== staged.size) {
+        return false
+      }
+      accepted = true
+      return true
+    }
+  })
+}
+
+async function readMultipartIngest (request, {
+  boundary,
+  spoolRoot,
+  maxIngestBytes,
+  maxBodyBytes,
+  fs,
+  signal,
+  onChunk
+}) {
+  const maxTotalBytes = maxIngestBytes + Math.max(MULTIPART_OVERHEAD_BYTES, maxBodyBytes)
+  assertMultipartContentLength(request, maxTotalBytes)
+  const hasher = createBodyHasher()
+  try {
+    const received = await receiveMultipartUpload(request, {
+      boundary,
+      uploadDir: spoolRoot,
+      maxBytes: maxIngestBytes,
+      maxTotalBytes,
+      maxHeaderBytes: 8 * 1024,
+      maxTextFieldBytes: maxBodyBytes,
+      maxTextBytes: maxBodyBytes,
+      maxFields: 3,
+      strict: true,
+      allowedFields: ['idempotencyKey', 'request', 'etag', 'file'],
+      requiredFields: ['idempotencyKey', 'request'],
+      fileField: 'file',
+      fs,
+      signal,
+      onChunk: (chunk, totalBytes) => {
+        hasher.update(b4a.from(chunk))
+        onChunk?.(totalBytes)
+      }
+    })
+    return {
+      body: encodeMultipartIngestBody(received.fields, received.file),
+      bodyHash: hasher.digest(),
+      staged: received.file
+    }
+  } catch (error) {
+    throw asMultipartRequestError(error)
+  }
+}
+
 function listen (server, options) {
   return new Promise((resolve, reject) => {
     const onError = (error) => {
@@ -298,12 +411,17 @@ export function createCompanionServer ({
   setUmask = typeof process.umask === 'function' ? process.umask.bind(process) : null,
   requestDeadlineMs = 30_000,
   streamChunkBytes = undefined,
-  streamWriteIdleMs = undefined
+  streamWriteIdleMs = undefined,
+  ingestSpoolRoot = null,
+  maxIngestBytes = DEFAULT_MAX_INGEST_BYTES
 } = {}) {
   if (!service) throw new Error('service is required')
   if (!config) throw new Error('companion config is required')
   if (!Number.isSafeInteger(requestDeadlineMs) || requestDeadlineMs <= 0) {
     throw new Error('companion request deadline must be a positive integer')
+  }
+  if (!Number.isSafeInteger(maxIngestBytes) || maxIngestBytes <= 0 || maxIngestBytes > DEFAULT_MAX_INGEST_BYTES) {
+    throw new Error('companion ingest byte limit is out of bounds')
   }
 
   const replayStore = nonceStore || createNonceStore({ maxEntries: config.maxNonces })
@@ -334,47 +452,77 @@ export function createCompanionServer ({
     firstRequestDeadlines.delete(request.socket)
     response.setHeader('connection', 'close')
     const streamRequest = streamRoute.matches(request.url)
+    const multipartRequest = isMultipartIngestRequest(request)
     const controller = new AbortController()
+    let staged = null
+    let ingestSpoolLease = null
+    let deadline = null
     const cancelRequest = () => {
       controller.abort()
       request.socket?.destroy?.()
     }
+    const armDeadline = () => {
+      clearTimeout(deadline)
+      deadline = setTimeout(cancelRequest, requestDeadlineMs)
+      deadline.unref?.()
+    }
     const onSocketClose = () => controller.abort()
     activeRequestControllers.add(controller)
     request.socket?.once?.('close', onSocketClose)
-    const deadline = streamRequest ? null : setTimeout(cancelRequest, requestDeadlineMs)
-    deadline?.unref?.()
+    if (!streamRequest) armDeadline()
     try {
       if (streamRequest) {
         await streamRoute.handle(request, response, { signal: controller.signal })
         return
       }
-      prevalidateControlRequest({
+      const authMetadata = prevalidateControlRequest({
         headers: request.headers,
         client: config.client,
         clock,
         maxClockSkewMs: config.maxClockSkewMs
       })
-      const { body, bodyHash } = await readBody(request, config.maxBodyBytes)
-      verifyControlRequest({
+      let bodyRecord
+      if (multipartRequest) {
+        const boundary = parseBoundary(requestContentType(request))
+        if (!boundary) throw new CompanionRequestError(400, 'INVALID_MULTIPART_BOUNDARY', 'Invalid multipart boundary', true)
+        if (!ingestSpoolRoot) throw new CompanionRequestError(503, 'INGEST_STAGING_UNAVAILABLE', 'Companion ingest staging is unavailable', true)
+        if (typeof service.canStageIngest === 'function' && !service.canStageIngest()) {
+          throw new CompanionRequestError(503, 'INGEST_STAGING_UNAVAILABLE', 'Companion ingest staging is unavailable', true)
+        }
+        if (typeof service.canArchive === 'function' && !service.canArchive()) {
+          throw new CompanionRequestError(507, 'STORAGE_ADMISSION_DENIED', 'Companion storage admission denied', true)
+        }
+        bodyRecord = await readMultipartIngest(request, {
+          boundary,
+          spoolRoot: ingestSpoolRoot,
+          maxIngestBytes,
+          maxBodyBytes: config.maxBodyBytes,
+          fs,
+          signal: controller.signal,
+          onChunk: armDeadline
+        })
+        staged = bodyRecord.staged
+        ingestSpoolLease = createIngestSpoolLease(staged)
+      } else {
+        bodyRecord = await readBody(request, config.maxBodyBytes)
+      }
+      verifyPrevalidatedControlRequest({
         method: request.method,
         path: request.url,
-        bodyHash,
-        headers: request.headers,
+        bodyHash: bodyRecord.bodyHash,
+        metadata: authMetadata,
         secret: config.sharedSecret,
-        client: config.client,
-        clock,
-        nonceStore: replayStore,
-        maxClockSkewMs: config.maxClockSkewMs
+        nonceStore: replayStore
       })
 
       const routed = await router.dispatch({
         method: request.method,
         url: request.url,
         headers: request.headers,
-        body,
-        clientIdentity: request.headers?.['x-peartube-client'],
+        body: bodyRecord.body,
+        clientIdentity: authMetadata.client,
         serverState: publicState,
+        ingestSpoolLease,
         signal: controller.signal
       })
       sendJson(response, routed.statusCode, routed.body, routed.headers)
@@ -396,6 +544,9 @@ export function createCompanionServer ({
       }
     } finally {
       clearTimeout(deadline)
+      if (staged && !ingestSpoolLease?.accepted) {
+        try { fs.rmSync(staged.dir, { recursive: true, force: true }) } catch {}
+      }
       request.socket?.removeListener?.('close', onSocketClose)
       activeRequestControllers.delete(controller)
     }

@@ -1,8 +1,9 @@
 import test from 'brittle'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { request as httpRequest } from 'node:http'
 
 import {
   createIngestJobStore,
@@ -13,6 +14,9 @@ import {
   fingerprintIngestRequest,
   normalizeIngestRequest
 } from '../src/companion/ingest-manager.js'
+import { signControlRequest } from '../src/companion/auth.js'
+import { resolveCompanionConfig } from '../src/companion/config.js'
+import { createCompanionServer } from '../src/companion/server.js'
 import { createCompanionRouter } from '../src/companion/routes.js'
 
 function fakeBee ({ failFlush = false } = {}) {
@@ -574,4 +578,388 @@ test('companion routes expose redacted jobs and map idempotency conflict without
   })
   t.is(changed.statusCode, 409)
   t.is(changed.body.error.code, 'IDEMPOTENCY_CONFLICT')
+})
+
+const MULTIPART_SECRET = 'ef'.repeat(32)
+const MULTIPART_CLIENT = 'mediastorm-multipart'
+const MULTIPART_NOW = 1_786_406_400_000
+
+function multipartBody ({ boundary, request, idempotencyKey, bytes, etag = null, extraParts = [], close = true }) {
+  const chunks = []
+  const field = (name, value) => {
+    chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`))
+  }
+  field('idempotencyKey', idempotencyKey)
+  field('request', JSON.stringify(request))
+  if (etag != null) field('etag', etag)
+  chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="media.bin"\r\nContent-Type: video/mp4\r\n\r\n`))
+  chunks.push(bytes, Buffer.from('\r\n'))
+  for (const part of extraParts) {
+    if (part.file) {
+      chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${part.name}"; filename="${part.filename || 'extra.bin'}"\r\nContent-Type: application/octet-stream\r\n\r\n`))
+      chunks.push(part.bytes || Buffer.from('extra'), Buffer.from('\r\n'))
+    } else {
+      field(part.name, part.value)
+    }
+  }
+  if (close) chunks.push(Buffer.from(`--${boundary}--\r\n`))
+  return Buffer.concat(chunks)
+}
+
+function stagingEntries (spoolRoot) {
+  try {
+    return readdirSync(join(spoolRoot, 'uploads'))
+  } catch {
+    return []
+  }
+}
+
+async function createMultipartHarness (t, {
+  requestDeadlineMs = 30_000,
+  maxBodyBytes = 64 * 1024,
+  maxIngestBytes = 1024 * 1024,
+  clock = () => MULTIPART_NOW,
+  canArchive = () => true,
+  publisher = fakePublisher()
+} = {}) {
+  const files = fixture(t)
+  const bee = fakeBee()
+  const store = createIngestJobStore({ bee })
+  const manager = createIngestManager({ store, publisher, spoolRoot: files.spoolRoot, verifyChunkBytes: 64 })
+  await manager.start()
+  let submissions = 0
+  const service = {
+    canArchive,
+    async submitIngestJob (input, { ingestSpoolLease = null } = {}) {
+      submissions++
+      return manager.submitJob({ ...input, ingestSpoolLease })
+    },
+    getIngestJob: jobId => manager.getJob(jobId),
+    cancelIngestJob: jobId => manager.cancelJob(jobId)
+  }
+  const config = resolveCompanionConfig({
+    enabled: true,
+    transport: 'tcp',
+    host: '127.0.0.1',
+    port: 0,
+    client: MULTIPART_CLIENT,
+    sharedSecret: MULTIPART_SECRET,
+    maxBodyBytes
+  }, { storagePath: files.root })
+  const server = createCompanionServer({
+    service,
+    config,
+    clock,
+    ingestSpoolRoot: files.spoolRoot,
+    maxIngestBytes,
+    requestDeadlineMs
+  })
+  const state = await server.start()
+  t.teardown(async () => {
+    await server.close().catch(() => {})
+    await manager.close().catch(() => {})
+  })
+  return { bee, files, manager, publisher, server, state, store, submissions: () => submissions }
+}
+
+function sendMultipart ({
+  state,
+  body,
+  boundary,
+  nonce,
+  timestamp = MULTIPART_NOW,
+  signedBody = body,
+  chunkBytes = body.byteLength,
+  delayMs = 0,
+  contentLength = false,
+  onChunk = null,
+  abortAfterChunks = null
+}) {
+  const path = '/api/v2/ingest/jobs'
+  const auth = signControlRequest({
+    method: 'POST',
+    path,
+    body: signedBody,
+    timestamp,
+    nonce,
+    client: MULTIPART_CLIENT,
+    secret: MULTIPART_SECRET
+  })
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({
+      host: state.host,
+      port: state.port,
+      method: 'POST',
+      path,
+      headers: {
+        ...auth,
+        'content-type': `multipart/form-data; boundary=${boundary}`,
+        ...(contentLength ? { 'content-length': body.byteLength } : {})
+      }
+    }, response => {
+      const chunks = []
+      response.on('data', chunk => chunks.push(chunk))
+      response.on('end', () => resolve({
+        statusCode: response.statusCode,
+        body: Buffer.concat(chunks).toString('utf8')
+      }))
+    })
+    req.once('error', error => {
+      if (abortAfterChunks != null) resolve({ aborted: true, error })
+      else reject(error)
+    })
+    void (async () => {
+      let chunkIndex = 0
+      for (let offset = 0; offset < body.byteLength; offset += chunkBytes) {
+        const chunk = body.subarray(offset, Math.min(offset + chunkBytes, body.byteLength))
+        req.write(chunk)
+        chunkIndex++
+        onChunk?.(chunkIndex)
+        if (abortAfterChunks != null && chunkIndex >= abortAfterChunks) {
+          req.destroy()
+          return
+        }
+        if (delayMs) await new Promise(resolveDelay => setTimeout(resolveDelay, delayMs))
+      }
+      req.end()
+    })().catch(reject)
+  })
+}
+
+test('authenticated multipart ingest streams a chunked body larger than the JSON limit and uses an idle deadline', async (t) => {
+  const bytes = Buffer.from('multipart streamed media '.repeat(80))
+  const request = movieRequest(bytes)
+  const boundary = 'peartubeMultipartSuccess'
+  const body = multipartBody({
+    boundary,
+    request,
+    idempotencyKey: 'multipart-success',
+    bytes,
+    etag: request.expected.etag
+  })
+  let now = MULTIPART_NOW
+  const harness = await createMultipartHarness(t, {
+    requestDeadlineMs: 50,
+    maxBodyBytes: 2048,
+    clock: () => now
+  })
+  t.ok(body.byteLength > 2048)
+  const response = await sendMultipart({
+    state: harness.state,
+    body,
+    boundary,
+    nonce: 'multipart-success-nonce',
+    chunkBytes: 512,
+    delayMs: 20,
+    onChunk (index) {
+      if (index === 2) now = MULTIPART_NOW + 60_000
+    }
+  })
+  t.is(response.statusCode, 202, response.body)
+  const accepted = JSON.parse(response.body).job
+  await waitForState(harness.manager, accepted.jobId, 'completed')
+  const terminalReplay = await sendMultipart({
+    state: harness.state,
+    body,
+    boundary,
+    nonce: 'multipart-terminal-replay',
+    timestamp: now
+  })
+  t.is(terminalReplay.statusCode, 202, terminalReplay.body)
+  t.is(JSON.parse(terminalReplay.body).job.jobId, accepted.jobId)
+  t.is(JSON.parse(terminalReplay.body).job.state, 'completed')
+  t.is(harness.publisher.calls.import, 1)
+  t.alike(stagingEntries(harness.files.spoolRoot), [])
+})
+
+test('multipart replay while the original attachment publishes never transfers the second staging lease', async (t) => {
+  const bytes = Buffer.from('multipart active replay payload '.repeat(20))
+  const request = movieRequest(bytes)
+  const boundary = 'peartubeMultipartActiveReplay'
+  const body = multipartBody({
+    boundary,
+    request,
+    idempotencyKey: 'multipart-active-replay',
+    bytes,
+    etag: request.expected.etag
+  })
+  const publisher = fakePublisher({ blockImport: true })
+  const harness = await createMultipartHarness(t, { publisher })
+  const first = await sendMultipart({
+    state: harness.state,
+    body,
+    boundary,
+    nonce: 'multipart-active-first'
+  })
+  t.is(first.statusCode, 202, first.body)
+  const firstJob = JSON.parse(first.body).job
+  await waitForState(harness.manager, firstJob.jobId, 'publishing')
+  const ownedBeforeReplay = stagingEntries(harness.files.spoolRoot)
+  t.is(ownedBeforeReplay.length, 1)
+
+  const replay = await sendMultipart({
+    state: harness.state,
+    body,
+    boundary,
+    nonce: 'multipart-active-second'
+  })
+  t.is(replay.statusCode, 202, replay.body)
+  t.is(JSON.parse(replay.body).job.jobId, firstJob.jobId)
+  t.alike(stagingEntries(harness.files.spoolRoot), ownedBeforeReplay)
+  t.is(publisher.calls.import, 1)
+
+  publisher.releaseImport()
+  await waitForState(harness.manager, firstJob.jobId, 'completed')
+  t.is(publisher.calls.import, 1)
+  t.alike(stagingEntries(harness.files.spoolRoot), [])
+})
+
+test('multipart invalid MAC and replay delete staging before any second job mutation', async (t) => {
+  const bytes = Buffer.from('multipart authentication payload')
+  const request = movieRequest(bytes)
+  const boundary = 'peartubeMultipartAuth'
+  const body = multipartBody({ boundary, request, idempotencyKey: 'multipart-auth', bytes, etag: request.expected.etag })
+  const harness = await createMultipartHarness(t)
+
+  const invalid = await sendMultipart({
+    state: harness.state,
+    body,
+    signedBody: Buffer.from('different raw body'),
+    boundary,
+    nonce: 'multipart-invalid-mac'
+  })
+  t.is(invalid.statusCode, 401)
+  t.is(harness.submissions(), 0)
+  t.alike(stagingEntries(harness.files.spoolRoot), [])
+
+  const first = await sendMultipart({ state: harness.state, body, boundary, nonce: 'multipart-replay-nonce' })
+  t.is(first.statusCode, 202)
+  await waitForState(harness.manager, JSON.parse(first.body).job.jobId, 'completed')
+  const replay = await sendMultipart({ state: harness.state, body, boundary, nonce: 'multipart-replay-nonce' })
+  t.is(replay.statusCode, 409)
+  t.is(harness.submissions(), 1)
+  t.alike(stagingEntries(harness.files.spoolRoot), [])
+})
+
+test('multipart parser rejects extra files, unknown fields, malformed endings, and bounded content length with cleanup', async (t) => {
+  const bytes = Buffer.from('multipart strict parser payload')
+  const request = movieRequest(bytes)
+  const harness = await createMultipartHarness(t, { maxIngestBytes: 128 })
+  const cases = [
+    {
+      boundary: 'peartubeExtraFile',
+      body: multipartBody({
+        boundary: 'peartubeExtraFile',
+        request,
+        idempotencyKey: 'multipart-extra-file',
+        bytes,
+        etag: request.expected.etag,
+        extraParts: [{ file: true, name: 'file', bytes: Buffer.from('second') }]
+      }),
+      nonce: 'multipart-extra-file-nonce',
+      expected: 400
+    },
+    {
+      boundary: 'peartubeUnknownField',
+      body: multipartBody({
+        boundary: 'peartubeUnknownField',
+        request,
+        idempotencyKey: 'multipart-unknown-field',
+        bytes,
+        etag: request.expected.etag,
+        extraParts: [{ name: 'sourceUrl', value: 'opaque' }]
+      }),
+      nonce: 'multipart-unknown-nonce',
+      expected: 400
+    },
+    {
+      boundary: 'peartubeMalformed',
+      body: multipartBody({
+        boundary: 'peartubeMalformed',
+        request,
+        idempotencyKey: 'multipart-malformed',
+        bytes,
+        etag: request.expected.etag,
+        close: false
+      }),
+      nonce: 'multipart-malformed-nonce',
+      expected: 400
+    },
+    {
+      boundary: 'peartubeOversize',
+      body: multipartBody({
+        boundary: 'peartubeOversize',
+        request,
+        idempotencyKey: 'multipart-oversize',
+        bytes: Buffer.alloc(2 * 1024 * 1024, 1),
+        etag: request.expected.etag
+      }),
+      nonce: 'multipart-oversize-nonce',
+      expected: 413,
+      contentLength: true
+    }
+  ]
+  for (const item of cases) {
+    const response = await sendMultipart({
+      state: harness.state,
+      body: item.body,
+      boundary: item.boundary,
+      nonce: item.nonce,
+      contentLength: item.contentLength
+    })
+    t.is(response.statusCode, item.expected, response.body)
+    t.alike(stagingEntries(harness.files.spoolRoot), [])
+  }
+  t.is(harness.submissions(), 0)
+})
+
+test('multipart abort, staging admission, and request/file size mismatch never leave a spool or durable job', async (t) => {
+  const bytes = Buffer.from('multipart abort payload '.repeat(20))
+  const request = movieRequest(bytes)
+
+  {
+    const boundary = 'peartubeAbort'
+    const body = multipartBody({ boundary, request, idempotencyKey: 'multipart-abort', bytes, etag: request.expected.etag })
+    const harness = await createMultipartHarness(t)
+    const aborted = await sendMultipart({
+      state: harness.state,
+      body,
+      boundary,
+      nonce: 'multipart-abort-nonce',
+      chunkBytes: 256,
+      abortAfterChunks: 6
+    })
+    t.is(aborted.aborted, true)
+    await new Promise(resolve => setTimeout(resolve, 25))
+    t.is(harness.submissions(), 0)
+    t.alike(stagingEntries(harness.files.spoolRoot), [])
+  }
+
+  {
+    const boundary = 'peartubeAdmission'
+    const body = multipartBody({ boundary, request, idempotencyKey: 'multipart-admission', bytes, etag: request.expected.etag })
+    const harness = await createMultipartHarness(t, { canArchive: () => false })
+    const denied = await sendMultipart({ state: harness.state, body, boundary, nonce: 'multipart-admission-nonce' })
+    t.is(denied.statusCode, 507)
+    t.is(harness.submissions(), 0)
+    t.alike(stagingEntries(harness.files.spoolRoot), [])
+  }
+
+  {
+    const boundary = 'peartubeSizeMismatch'
+    const changed = movieRequest(Buffer.concat([bytes, Buffer.from('drift')]))
+    const body = multipartBody({
+      boundary,
+      request: changed,
+      idempotencyKey: 'multipart-size-mismatch',
+      bytes,
+      etag: changed.expected.etag
+    })
+    const harness = await createMultipartHarness(t)
+    const mismatch = await sendMultipart({ state: harness.state, body, boundary, nonce: 'multipart-size-nonce' })
+    t.is(mismatch.statusCode, 400)
+    t.is(harness.submissions(), 1)
+    t.alike(stagingEntries(harness.files.spoolRoot), [])
+    t.is(harness.bee?.map?.size || 0, 0)
+  }
 })

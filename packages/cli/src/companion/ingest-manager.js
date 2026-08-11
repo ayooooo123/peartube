@@ -404,24 +404,31 @@ function sha256State () {
   }
 }
 
+function publicationIdentifier (value, field, required = true) {
+  if (value == null && !required) return null
+  if (typeof value !== 'string' ||
+      value !== value.normalize('NFC').trim() ||
+      byteLength(value) > 512 ||
+      !TOKEN.test(value)) {
+    fail('PUBLICATION_INVALID', `publication result has invalid ${field}`, 502)
+  }
+  return value
+}
+
 function publicationFromMetadata (job, channelInfo, metadata) {
   const immutable = metadata?.immutablePublication
   if (!immutable || typeof immutable !== 'object') return null
-  const result = {
-    videoId: job.publicationFence.videoId,
-    publicationId: immutable.publicationId,
-    manifestId: immutable.manifestId,
-    renditionId: immutable.renditionId,
-    assetId: immutable.assetId,
-    coreKey: immutable.coreKey,
-    channelKey: channelInfo.channelKey,
-    publicBeeKey: channelInfo.publicBeeKey || null,
-    publisherId: channelInfo.publisherId
+  return {
+    videoId: publicationIdentifier(job.publicationFence.videoId, 'videoId'),
+    publicationId: publicationIdentifier(immutable.publicationId, 'publicationId'),
+    manifestId: publicationIdentifier(immutable.manifestId, 'manifestId'),
+    renditionId: publicationIdentifier(immutable.renditionId, 'renditionId'),
+    assetId: publicationIdentifier(immutable.assetId, 'assetId'),
+    coreKey: publicationIdentifier(immutable.coreKey, 'coreKey'),
+    channelKey: publicationIdentifier(channelInfo.channelKey, 'channelKey'),
+    publicBeeKey: publicationIdentifier(channelInfo.publicBeeKey, 'publicBeeKey', false),
+    publisherId: publicationIdentifier(channelInfo.publisherId, 'publisherId')
   }
-  for (const field of ['videoId', 'publicationId', 'manifestId', 'renditionId', 'assetId', 'coreKey', 'channelKey', 'publisherId']) {
-    if (typeof result[field] !== 'string' || !result[field]) fail('PUBLICATION_INVALID', `publication result is missing ${field}`, 502)
-  }
-  return result
 }
 
 function sourceIdentityFor (job) {
@@ -498,15 +505,36 @@ export function createIngestManager ({
     }
   }
 
-  function cleanupAttachment (jobId) {
-    const attachment = ephemeral.get(jobId)
-    ephemeral.delete(jobId)
-    if (!attachment?.spool?.filePath) return
+  function cleanupSpool (spool, jobId = null) {
+    if (!spool?.filePath) return
     try {
-      fs.rmSync(attachment.spool.filePath, { force: true })
+      const relativeParts = String(spool.relativePath || '').split('/')
+      const parent = path.dirname(spool.filePath)
+      if (relativeParts.length === 3 && relativeParts[0] === 'uploads' && parent && parent !== spoolRoot) {
+        fs.rmSync(parent, { recursive: true, force: true })
+      } else {
+        fs.rmSync(spool.filePath, { force: true })
+      }
     } catch (error) {
       logger?.archive?.warn?.('Companion ingest staging cleanup failed', { jobId, error: error?.code || 'CLEANUP_FAILED' })
     }
+  }
+
+  function acceptSpoolLease (lease, spool) {
+    if (lease == null) return
+    if (typeof lease.accept !== 'function' || lease.accept(spool) !== true) {
+      fail('SPOOL_OWNERSHIP_INVALID', 'ingest spool ownership handoff failed', 500)
+    }
+  }
+
+  function discardUnacceptedSpool (lease, spool, jobId) {
+    if (lease == null) cleanupSpool(spool, jobId)
+  }
+
+  function cleanupAttachment (jobId) {
+    const attachment = ephemeral.get(jobId)
+    ephemeral.delete(jobId)
+    cleanupSpool(attachment?.spool, jobId)
   }
 
   async function channelFor (job) {
@@ -575,7 +603,6 @@ export function createIngestManager ({
       result = publicationFromMetadata(job, channelInfo, metadata)
       if (!result) fail('PUBLICATION_INVALID', 'static publisher returned no immutable publication', 502)
     }
-    if (signal?.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
     await exposePublication(job, channelInfo, metadata)
     return result
   }
@@ -664,19 +691,29 @@ export function createIngestManager ({
       if (entry.controller.signal.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
       job = await store.transition(jobId, { expectedVersion: job.version, from: 'acquiring', to: 'verifying' })
       job = await verifySpool(job, spool, entry.controller.signal)
+      if (entry.controller.signal.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
       job = await store.transition(jobId, { expectedVersion: job.version, from: 'verifying', to: 'publishing' })
+      if (entry.controller.signal.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
       const result = await publishSpool(job, spool, entry.controller.signal)
       job = await store.completePublication(jobId, { expectedVersion: job.version, result })
       return job
     } catch (error) {
       if (closing || entry.closing) return store.getJob(jobId)
-      if (entry.cancelled || error?.code === 'CANCELLED' || error?.code === 'ABORT_ERR') {
-        return markTerminal(jobId, 'cancelled', 'CANCELLED', false)
-      }
+      const cancelled = entry.cancelled || error?.code === 'CANCELLED' || error?.code === 'ABORT_ERR'
       const current = await store.getJob(jobId)
+      if (current?.state === 'publishing') {
+        try {
+          const resolved = await lookupPublication(current)
+          if (resolved) {
+            await exposePublication(current, resolved.channelInfo, resolved.metadata)
+            return store.completePublication(jobId, { expectedVersion: current.version, result: resolved.result })
+          }
+        } catch {}
+      }
+      if (cancelled) return markTerminal(jobId, 'cancelled', 'CANCELLED', false)
       const code = publicationErrorCode(error, current?.state || job?.state)
       logger?.archive?.warn?.('Companion ingest job failed', { jobId, state: current?.state || null, errorCode: code })
-      return markTerminal(jobId, 'failed', code, false)
+      return markTerminal(jobId, 'failed', code, current?.state === 'publishing')
     } finally {
       const final = await store.getJob(jobId).catch(() => null)
       if (closing || TERMINAL.has(final?.state)) cleanupAttachment(jobId)
@@ -716,8 +753,15 @@ export function createIngestManager ({
   }
 
   return Object.freeze({
-    async submitJob ({ idempotencyKey, request, spool = null, sourceCapability = null } = {}) {
+    async submitJob ({
+      idempotencyKey,
+      request,
+      spool = null,
+      sourceCapability = null,
+      ingestSpoolLease = null
+    } = {}) {
       if (closed || closing) fail('INGEST_MANAGER_CLOSED', 'ingest manager is closed', 503)
+      if (ingestSpoolLease != null && spool == null) fail('SPOOL_OWNERSHIP_INVALID', 'ingest spool ownership handoff failed', 500)
       const key = text(idempotencyKey, 'idempotencyKey', 128, { pattern: ID })
       const normalized = normalizeIngestRequest(request)
       const fingerprint = normalizedFingerprint(normalized)
@@ -727,11 +771,20 @@ export function createIngestManager ({
       if (existing) {
         if (existing.requestFingerprint !== fingerprint) fail('IDEMPOTENCY_CONFLICT', 'idempotency key is already bound to another request', 409)
         const attached = ephemeral.get(existing.jobId)
-        if (!TERMINAL.has(existing.state) && !attached?.spool && spool != null) {
-          const normalizedSpool = normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
-          ephemeral.set(existing.jobId, { ...attached, descriptor: spool, spool: normalizedSpool, sourceCapability: attached?.sourceCapability || null })
-          schedule(existing.jobId)
+        let incomingSpool = null
+        if (spool != null) {
+          incomingSpool = normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
+          if (!TERMINAL.has(existing.state) && !attached?.spool) {
+            acceptSpoolLease(ingestSpoolLease, incomingSpool)
+            ephemeral.set(existing.jobId, { ...attached, descriptor: spool, spool: incomingSpool, sourceCapability: attached?.sourceCapability || null })
+            incomingSpool = null
+            schedule(existing.jobId)
+          } else if (incomingSpool.filePath === attached?.spool?.filePath) {
+            acceptSpoolLease(ingestSpoolLease, incomingSpool)
+            incomingSpool = null
+          }
         }
+        if (incomingSpool) discardUnacceptedSpool(ingestSpoolLease, incomingSpool, existing.jobId)
         if (!TERMINAL.has(existing.state) && !ephemeral.get(existing.jobId)?.sourceCapability && sourceCapability != null) {
           const current = ephemeral.get(existing.jobId) || {}
           ephemeral.set(existing.jobId, { ...current, sourceCapability: normalizeSourceCapability(sourceCapability) })
@@ -745,12 +798,19 @@ export function createIngestManager ({
       const outcome = await store.createOrReplay({ idempotencyDigest, requestFingerprint: fingerprint, job: initial })
       if (!TERMINAL.has(outcome.job.state) && (normalizedSpool || capability)) {
         const attached = ephemeral.get(outcome.job.jobId) || {}
+        if (normalizedSpool && !attached.spool) acceptSpoolLease(ingestSpoolLease, normalizedSpool)
+        else if (normalizedSpool && normalizedSpool.filePath === attached.spool?.filePath) acceptSpoolLease(ingestSpoolLease, normalizedSpool)
         ephemeral.set(outcome.job.jobId, {
           descriptor: attached.spool ? attached.descriptor : spool,
           spool: attached.spool || normalizedSpool,
           sourceCapability: attached.sourceCapability || capability
         })
+        if (normalizedSpool && attached.spool && normalizedSpool.filePath !== attached.spool.filePath) {
+          discardUnacceptedSpool(ingestSpoolLease, normalizedSpool, outcome.job.jobId)
+        }
         schedule(outcome.job.jobId)
+      } else if (normalizedSpool) {
+        discardUnacceptedSpool(ingestSpoolLease, normalizedSpool, outcome.job.jobId)
       }
       return publicJob(outcome.job)
     },

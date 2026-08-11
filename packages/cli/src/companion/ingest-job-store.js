@@ -34,6 +34,10 @@ const PATCH_FIELDS = new Set([
 const ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/
 const FORBIDDEN_DURABLE_KEY = /(?:^|_)(?:spool|sourcecapability|capability|cookie|authorization|credential|secret|password|passkey|debrid|headers?|sourceurl|fetchurl|signedurl|localpath|filepath)(?:$|_)/i
 const LOCATOR_VALUE = /(?:[a-z][a-z0-9+.-]*:\/\/|^(?:magnet|data|file|ftp|rtsp):|^\/\/)/i
+const MAX_DURABLE_STRING_BYTES = 4096
+const MAX_DURABLE_KEY_BYTES = 128
+const MAX_DURABLE_ENTRIES = 512
+const MAX_DURABLE_RECORD_BYTES = 128 * 1024
 
 export class IngestJobStoreError extends Error {
   constructor (code, message) {
@@ -57,29 +61,36 @@ function decode (value) {
   }
 }
 
-function assertDurableValue (value, depth = 0, seen = new Set()) {
+function assertDurableValue (value, depth = 0, state = { seen: new Set(), entries: 0 }) {
   if (depth > 16) throw storeError('INGEST_PERSISTENCE_INVALID', 'Ingest record exceeds its bounds')
+  state.entries++
+  if (state.entries > MAX_DURABLE_ENTRIES) throw storeError('INGEST_PERSISTENCE_INVALID', 'Ingest record exceeds its bounds')
   if (typeof value === 'string') {
+    if (Buffer.byteLength(value) > MAX_DURABLE_STRING_BYTES) throw storeError('INGEST_PERSISTENCE_INVALID', 'Ingest string exceeds its bound')
     if (LOCATOR_VALUE.test(value)) throw storeError('INGEST_PERSISTENCE_INVALID', 'Ingest record contains a locator')
     return
   }
   if (!value || typeof value !== 'object') return
-  if (seen.has(value)) throw storeError('INGEST_PERSISTENCE_INVALID', 'Ingest record contains a cycle')
-  seen.add(value)
+  if (state.seen.has(value)) throw storeError('INGEST_PERSISTENCE_INVALID', 'Ingest record contains a cycle')
+  state.seen.add(value)
   try {
-    if (Array.isArray(value)) {
-      for (const child of value) assertDurableValue(child, depth + 1, seen)
-      return
-    }
-    for (const [key, child] of Object.entries(value)) {
-      const compact = key.replaceAll('-', '_').replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase()
-      if (FORBIDDEN_DURABLE_KEY.test(compact)) {
-        throw storeError('INGEST_PERSISTENCE_INVALID', 'Ingest record contains prohibited source material')
+    const entries = Array.isArray(value) ? value.map((child, index) => [String(index), child]) : Object.entries(value)
+    if (entries.length > MAX_DURABLE_ENTRIES) throw storeError('INGEST_PERSISTENCE_INVALID', 'Ingest record exceeds its bounds')
+    for (const [key, child] of entries) {
+      if (Buffer.byteLength(key) > MAX_DURABLE_KEY_BYTES) throw storeError('INGEST_PERSISTENCE_INVALID', 'Ingest field exceeds its bound')
+      if (!Array.isArray(value)) {
+        const compact = key.replaceAll('-', '_').replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase()
+        if (FORBIDDEN_DURABLE_KEY.test(compact)) {
+          throw storeError('INGEST_PERSISTENCE_INVALID', 'Ingest record contains prohibited source material')
+        }
       }
-      assertDurableValue(child, depth + 1, seen)
+      assertDurableValue(child, depth + 1, state)
     }
   } finally {
-    seen.delete(value)
+    state.seen.delete(value)
+  }
+  if (depth === 0 && Buffer.byteLength(JSON.stringify(value)) > MAX_DURABLE_RECORD_BYTES) {
+    throw storeError('INGEST_PERSISTENCE_INVALID', 'Ingest record exceeds its byte bound')
   }
 }
 

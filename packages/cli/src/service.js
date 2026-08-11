@@ -94,6 +94,7 @@ export async function createRelayService({
   let archiveConsole = null
   let companionServer = null
   let ingestManager = null
+  let ingestReady = false
   const localMirrorState = createLocalDriveMirrorState()
 
   function createLocalDrivePublisher(runtimeFsModule) {
@@ -310,6 +311,7 @@ export async function createRelayService({
     storageGuard,
     canIngest: () => storageGuard.canIngest(),
     canArchive: () => storageGuard.hasMinFreeDisk(),
+    canStageIngest: () => ingestReady,
     getClassifier() {
       return classifier
     },
@@ -473,9 +475,10 @@ export async function createRelayService({
         })
       }
       if (config.companion?.enabled !== false) {
+        const companionFsModule = fsModule || await import('#fs')
+        const companionPathModule = pathModule || await import('#path')
+        const ingestSpoolRoot = companionPathModule.join(config.storage.path, 'companion', 'ingest-spool')
         if (runtime.ctx?.metaDb) {
-          const runtimeFsModule = fsModule || await import('#fs')
-          const runtimePathModule = pathModule || await import('#path')
           ingestManager = createIngestManager({
             store: createIngestJobStore({ bee: runtime.ctx.metaDb, now: nowFn }),
             publisher: createArchivePublisher({
@@ -483,11 +486,11 @@ export async function createRelayService({
               uploadManager: runtime.uploadManager,
               api: runtime.api,
               runtime,
-              fs: runtimeFsModule
+              fs: companionFsModule
             }),
-            spoolRoot: runtimePathModule.join(config.storage.path, 'companion', 'ingest-spool'),
-            fs: runtimeFsModule,
-            path: runtimePathModule,
+            spoolRoot: ingestSpoolRoot,
+            fs: companionFsModule,
+            path: companionPathModule,
             canIngest: () => storageGuard.hasMinFreeDisk(),
             now: nowFn,
             logger
@@ -497,7 +500,9 @@ export async function createRelayService({
           service,
           config: config.companion,
           clock: nowFn,
-          logger
+          logger,
+          fs: companionFsModule,
+          ingestSpoolRoot
         })
         await companionServer.start()
       }
@@ -506,6 +511,7 @@ export async function createRelayService({
       await runtime.start?.()
       logger.relay.info('Relay runtime network ready', { runtimeStartMs: Date.now() - runtimeStartedAt })
       await ingestManager?.start()
+      ingestReady = Boolean(ingestManager)
 
       // Managers exist now — bind the real archive publisher behind the lazy proxy.
       if (config.archive?.uiEnabled) {
@@ -624,6 +630,7 @@ export async function createRelayService({
           clearIntervalFn(localMirrorTimer)
           localMirrorTimer = null
         }
+        ingestReady = false
         if (companionServer) {
           await companionServer.close().catch(() => {})
           companionServer = null
@@ -691,13 +698,13 @@ export async function createRelayService({
     async getPublication(publicationId) {
       return runtime.ctx?.assetManifestStore?.getManifest?.(publicationId) || null
     },
-    async submitIngestJob(input) {
+    async submitIngestJob(input, { ingestSpoolLease = null } = {}) {
       if (!ingestManager) {
         const error = new Error('Companion ingest jobs are unavailable')
         error.code = 'INGEST_UNAVAILABLE'
         throw error
       }
-      return ingestManager.submitJob(input)
+      return ingestManager.submitJob({ ...input, ingestSpoolLease })
     },
     async getIngestJob(jobId) {
       if (!ingestManager) return null
@@ -778,7 +785,9 @@ export async function createRelayService({
     },
     async close() {
       closed = true
+      ingestReady = false
       if (startPromise && !started) await startPromise.catch(() => {})
+      ingestReady = false
       if (heartbeatTimer) {
         clearIntervalFn(heartbeatTimer)
         heartbeatTimer = null

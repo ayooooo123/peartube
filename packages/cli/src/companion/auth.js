@@ -246,21 +246,26 @@ export function prevalidateControlRequest ({
   if (!/^[a-fA-F0-9]+$/.test(macHex) || macHex.length !== sodium.crypto_auth_BYTES * 2) {
     throw authError('INVALID_MAC', 'Invalid companion authentication')
   }
-  return { client: requestClient, timestamp, nonce, macHex, now, skew }
+  return Object.freeze({ client: requestClient, timestamp, nonce, macHex, now, skew })
 }
 
-export function verifyControlRequest ({
+export function verifyPrevalidatedControlRequest ({
   method,
   path,
   bodyHash,
-  headers,
+  metadata,
   secret,
-  client,
-  clock = Date.now,
-  nonceStore = createNonceStore(),
-  maxClockSkewMs = 30_000
+  nonceStore = createNonceStore()
 }) {
-  const metadata = prevalidateControlRequest({ headers, client, clock, maxClockSkewMs })
+  if (!metadata || typeof metadata !== 'object' ||
+      typeof metadata.client !== 'string' ||
+      !Number.isSafeInteger(metadata.timestamp) ||
+      typeof metadata.nonce !== 'string' ||
+      typeof metadata.macHex !== 'string' ||
+      !Number.isFinite(metadata.now) ||
+      !Number.isFinite(metadata.skew)) {
+    throw authError('INVALID_MAC', 'Invalid companion authentication')
+  }
   const canonical = canonicalControlRequest({
     method,
     path,
@@ -292,4 +297,26 @@ export function verifyControlRequest ({
     timestamp: metadata.timestamp,
     nonce: metadata.nonce
   }
+}
+
+export function verifyControlRequest ({
+  method,
+  path,
+  bodyHash,
+  headers,
+  secret,
+  client,
+  clock = Date.now,
+  nonceStore = createNonceStore(),
+  maxClockSkewMs = 30_000
+}) {
+  const metadata = prevalidateControlRequest({ headers, client, clock, maxClockSkewMs })
+  return verifyPrevalidatedControlRequest({
+    method,
+    path,
+    bodyHash,
+    metadata,
+    secret,
+    nonceStore
+  })
 }

@@ -247,7 +247,10 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
   async function submitJob (input) {
     const value = decodeIngestJobBody(input.body)
     if (typeof service.submitIngestJob !== 'function') unavailable('Ingest jobs')
-    const job = await callBackend(service.submitIngestJob.bind(service), [value, { signal: input.signal }], input.signal)
+    const job = await callBackend(service.submitIngestJob.bind(service), [
+      value,
+      { signal: input.signal, ingestSpoolLease: input.ingestSpoolLease || null }
+    ], input.signal)
     return routeResponse(202, { job: boundedPublicValue(job, { stripUrls: true, stripSecrets: true }) })
   }
 

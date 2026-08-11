@@ -956,6 +956,50 @@ test('physical store execution cap survives cancellation across a fresh attachme
   t.is(calls, 2)
 })
 
+test('physical store execution capacity recovers after a lower-limit attachment closes', async t => {
+  const work = []
+  let calls = 0
+  const indexStore = {
+    async queryIndexPage() {
+      calls++
+      const next = gate()
+      work.push(next)
+      return next.promise
+    },
+  }
+  const first = paired(t, indexStore, { serverLimits: { maxExecutingQueries: 1 } })
+  const initial = first.client.queryIndex({
+    connection: first.pair.client,
+    query: request(),
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  t.is(calls, 1)
+  work[0].resolve({ results: [], continuation: null, sourceRevision: '0:31' })
+  await initial
+  first.client.close('lower-limit-complete')
+  first.server.close('lower-limit-complete')
+
+  const second = paired(t, indexStore, { serverLimits: { maxExecutingQueries: 3 } })
+  const admitted = [
+    second.client.queryIndex({ connection: second.pair.client, query: request({ queryId: QUERY_B }) }),
+    second.client.queryIndex({ connection: second.pair.client, query: request({ queryId: '03'.repeat(32) }) }),
+    second.client.queryIndex({ connection: second.pair.client, query: request({ queryId: '04'.repeat(32) }) }),
+  ]
+  const allAdmitted = Promise.all(admitted)
+  await new Promise(resolve => setImmediate(resolve))
+  t.is(calls, 4)
+  await t.exception(second.client.queryIndex({
+    connection: second.pair.client,
+    query: request({ queryId: '05'.repeat(32) }),
+  }), { code: INDEX_QUERY_ERROR_CODES.OVERLOADED })
+  t.is(calls, 4)
+  for (const pending of work.slice(1, 4)) {
+    pending.resolve({ results: [], continuation: null, sourceRevision: '0:31' })
+  }
+  const pages = await allAdmitted
+  t.is(pages.length, 3)
+})
+
 test('server returns bounded structured request result and remote errors', async t => {
   const detail = 'private '.repeat(1_000)
   const indexStore = {

@@ -70,12 +70,10 @@ function executionLimit(value) {
 function acquireExecution(indexStore, requestedLimit) {
   let budget = EXECUTION_BUDGETS.get(indexStore)
   if (!budget) {
-    budget = { active: 0, limit: requestedLimit }
+    budget = { active: 0 }
     EXECUTION_BUDGETS.set(indexStore, budget)
-  } else {
-    budget.limit = Math.min(budget.limit, requestedLimit)
   }
-  if (budget.active >= budget.limit) return null
+  if (budget.active >= requestedLimit) return null
   budget.active++
   let released = false
   return () => {

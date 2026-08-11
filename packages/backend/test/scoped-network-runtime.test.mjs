@@ -1648,6 +1648,7 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   const proofStarted = new Promise(resolve => { markProofStarted = resolve })
   const proofRelease = new Promise(resolve => { releaseProof = resolve })
   let holdFirstProof = true
+  const archiveProofIndexes = []
   const pledge = createArchivePledge({
     archivistId: archivist.publicKey,
     publicationId: bytes(32, 57),
@@ -1664,6 +1665,7 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
     async ready () {},
     async has (index) { return sourceBlocks.has(index) },
     async proof ({ block }) {
+      archiveProofIndexes.push(block.index)
       if (holdFirstProof) {
         holdFirstProof = false
         markProofStarted()
@@ -1750,6 +1752,11 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   await settle()
   for (let attempt = 0; attempt < 20 && received.size < 1; attempt++) await settle()
   t.alike([...received.keys()], [2], 'the runtime upload ceiling stops the next oversized transfer')
+  for (let attempt = 0; attempt < 20 && !archiveProofIndexes.includes(3); attempt++) await settle()
+  const failedThreeAttempt = archiveProofIndexes.lastIndexOf(3)
+  t.ok(failedThreeAttempt >= 0, 'the first oversized retry reaches index 3')
+  t.absent(archiveProofIndexes.slice(failedThreeAttempt + 1).some(index => index > 3),
+    'a failed earliest retry blocks later indexes on the same peer session')
   await runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 256 * 1024 }))
   await runtimeB.applyNetworkPolicy(archivePolicy())
   await settle()

@@ -1151,7 +1151,7 @@ export function createScopedNetworkRuntime (options = {}) {
   async function nextArchiveBlock (scope, tracked) {
     for (const [key, request] of scope.archiveRetries) {
       if (scope.archivePending.has(key)) continue
-      if (scope.archiveFailures.get(key)?.has(tracked.peerId)) continue
+      if (scope.archiveFailures.get(key)?.has(tracked.peerId)) return null
       scope.archiveRetries.delete(key)
       return request
     }

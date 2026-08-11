@@ -24,9 +24,8 @@ function safeMediaType(value) {
   return MEDIA_TYPES.get(normalized) || 'application/octet-stream'
 }
 
-function hasLiveStaticAssetOwner(entry) {
-  if (entry?.authorizations instanceof Map) return entry.authorizations.size > 0
-  return typeof entry?.release === 'function'
+function hasLiveStreamCapabilityPin(entry) {
+  return entry?.streamCapabilityPins instanceof Set && entry.streamCapabilityPins.size > 0
 }
 
 function staticAssetCapacityError() {
@@ -79,6 +78,7 @@ export class BlobPlaybackService {
       ? [...entry.authorizations.values()]
       : (typeof entry.release === 'function' ? [entry.release] : [])
     entry.authorizations?.clear?.()
+    entry.streamCapabilityPins?.clear?.()
     for (const release of releases) {
       try {
         Promise.resolve(release()).catch(() => {})
@@ -137,7 +137,14 @@ export class BlobPlaybackService {
     return { url }
   }
 
-  prepareStaticAssetRegistration({ coreRef, scheduler, mimeType = 'video/mp4', authorizationKey, release } = {}) {
+  prepareStaticAssetRegistration({
+    coreRef,
+    scheduler,
+    mimeType = 'video/mp4',
+    authorizationKey,
+    release,
+    streamCapabilityPin = false,
+  } = {}) {
     const ctx = this.ctx
     const normalized = normalizeAssetCoreRefV2(coreRef, 'coreRef')
     const existingEntries = ctx.staticAssetPlaybackEntries
@@ -160,15 +167,23 @@ export class BlobPlaybackService {
     const authorizations = entry?.authorizations instanceof Map
       ? entry.authorizations
       : new Map()
+    const streamCapabilityPins = entry?.streamCapabilityPins instanceof Set
+      ? entry.streamCapabilityPins
+      : new Set()
     let addAuthorization = false
+    let addStreamCapabilityPin = false
     if (authorizationKey != null) {
       if (typeof authorizationKey !== 'string' || authorizationKey.length === 0) {
         throw new Error('static playback authorization key is invalid')
       }
       addAuthorization = !authorizations.has(authorizationKey)
+      addStreamCapabilityPin = streamCapabilityPin && !streamCapabilityPins.has(authorizationKey)
       if (addAuthorization && typeof release !== 'function') {
         throw new Error('static playback authorization release is required')
       }
+    }
+    if (streamCapabilityPin && authorizationKey == null) {
+      throw new Error('stream capability pin requires an authorization key')
     }
     const effectiveMimeType = entry?.mimeType || safeMediaType(mimeType)
     if (!entry) {
@@ -177,10 +192,12 @@ export class BlobPlaybackService {
         scheduler,
         mimeType: effectiveMimeType,
         authorizations,
+        streamCapabilityPins,
         released: false,
       }
-    } else if (entry.authorizations !== authorizations) {
-      entry.authorizations = authorizations
+    } else {
+      if (entry.authorizations !== authorizations) entry.authorizations = authorizations
+      if (entry.streamCapabilityPins !== streamCapabilityPins) entry.streamCapabilityPins = streamCapabilityPins
     }
 
     const evictions = []
@@ -188,7 +205,7 @@ export class BlobPlaybackService {
       let required = entries.size - this.maxStaticAssetEntries + 1
       for (const [assetId, candidate] of entries) {
         if (required <= 0) break
-        if (hasLiveStaticAssetOwner(candidate)) continue
+        if (hasLiveStreamCapabilityPin(candidate)) continue
         evictions.push([assetId, candidate])
         required--
       }
@@ -197,6 +214,7 @@ export class BlobPlaybackService {
 
     const commit = () => {
       if (addAuthorization) authorizations.set(authorizationKey, release)
+      if (addStreamCapabilityPin) streamCapabilityPins.add(authorizationKey)
       if (!existingEntries) ctx.staticAssetPlaybackEntries = entries
       if (reused) {
         entries.delete(normalized.assetId)
@@ -242,7 +260,10 @@ export class BlobPlaybackService {
     if (typeof input.authorizationKey !== 'string' || input.authorizationKey.length === 0) {
       throw new Error('route stream authorization key is required')
     }
-    const { entry, normalized, effectiveMimeType } = this.prepareStaticAssetRegistration(input).commit()
+    const { entry, normalized, effectiveMimeType } = this.prepareStaticAssetRegistration({
+      ...input,
+      streamCapabilityPin: true,
+    }).commit()
     let released = false
     return Object.freeze({
       assetId: normalized.assetId,
@@ -268,6 +289,7 @@ export class BlobPlaybackService {
       : null
     if (typeof release !== 'function') return false
     entry.authorizations.delete(authorizationKey)
+    entry.streamCapabilityPins?.delete?.(authorizationKey)
     try {
       await release()
     } finally {

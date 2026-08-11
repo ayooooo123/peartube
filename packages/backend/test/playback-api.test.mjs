@@ -402,6 +402,8 @@ test('static playback URL reuses blob capability links and registers an exact ma
   service.resolveStaticAssetUrl({
     coreRef: middleCoreRef,
     scheduler: { requestRange() {}, seek() {} },
+    authorizationKey: 'publication-middle:rendition-middle',
+    release: release(middleCoreRef.assetId),
   })
   const repeated = service.resolveStaticAssetUrl({
     coreRef,
@@ -427,7 +429,7 @@ test('static playback URL reuses blob capability links and registers an exact ma
   t.is(ctx.staticAssetPlaybackEntries.size, 2)
   t.ok(ctx.staticAssetPlaybackEntries.has(assetId), 'repeat touches the exact asset entry')
   t.absent(ctx.staticAssetPlaybackEntries.get(middleCoreRef.assetId), 'least-recent exact asset is evicted')
-  t.is(releases.get(middleCoreRef.assetId) || 0, 0)
+  t.is(releases.get(middleCoreRef.assetId), 1)
   t.is(releases.get(assetId) || 0, 0)
 })
 
@@ -535,6 +537,68 @@ test('live route assets survive LRU pressure until their capability retires', as
   await first.release()
   t.is(firstReleases, 1)
   t.absent(ctx.staticAssetPlaybackEntries.get(firstCoreRef.assetId))
+})
+
+test('ordinary static URL LRU exceeds default capacity while skipping a capability pin', async (t) => {
+  const calls = []
+  let pinnedReleases = 0
+  const ordinaryReleases = Array(130).fill(0)
+  const scheduler = {
+    seek() {},
+    async requestRange(request) {
+      calls.push(request)
+      return { status: 'ok', verified: true, bytes: Buffer.alloc(request.byteEnd - request.byteStart) }
+    },
+  }
+  const ctx = {
+    staticAssetPlaybackEntries: new Map(),
+    blobServer: {
+      getLink() { return 'http://127.0.0.1/static-capability?token=secret' },
+    },
+  }
+  const service = new BlobPlaybackService({ ctx })
+  const pinnedCoreRef = normalizeAssetCoreRefV2(createStaticAssetManifest({
+    treeHash: Buffer.alloc(32, 250),
+    blockLength: 1,
+    byteLength: 256 * 1024,
+  }))
+  const pinned = service.resolveStaticAssetStream({
+    coreRef: pinnedCoreRef,
+    scheduler,
+    authorizationKey: 'route-capability-pin',
+    release: async () => { pinnedReleases++ },
+  })
+  const ordinaryCoreRefs = []
+
+  for (let index = 0; index < ordinaryReleases.length; index++) {
+    const coreRef = normalizeAssetCoreRefV2(createStaticAssetManifest({
+      treeHash: Buffer.alloc(32, index + 1),
+      blockLength: 1,
+      byteLength: 256 * 1024,
+    }))
+    ordinaryCoreRefs.push(coreRef)
+    service.resolveStaticAssetUrl({
+      coreRef,
+      scheduler,
+      authorizationKey: `ordinary-static-url-${index}`,
+      release: async () => { ordinaryReleases[index]++ },
+    })
+  }
+  await Promise.resolve()
+
+  t.is(ctx.staticAssetPlaybackEntries.size, 128)
+  t.ok(ctx.staticAssetPlaybackEntries.has(pinnedCoreRef.assetId))
+  for (const coreRef of ordinaryCoreRefs.slice(0, 3)) t.absent(ctx.staticAssetPlaybackEntries.get(coreRef.assetId))
+  t.alike(ordinaryReleases.slice(0, 4), [1, 1, 1, 0])
+  t.is(pinnedReleases, 0)
+
+  const result = await pinned.requestRange({ byteStart: 0, byteEnd: 4 })
+  t.is(result.status, 'ok')
+  t.is(result.bytes.byteLength, 4)
+  t.alike(calls.map(({ byteStart, byteEnd }) => ({ byteStart, byteEnd })), [{ byteStart: 0, byteEnd: 4 }])
+
+  await pinned.release()
+  t.is(pinnedReleases, 1)
 })
 
 test('verified index candidates open exact route assets and release their retained scope once', async (t) => {
@@ -700,7 +764,7 @@ test('getVideoUrl prefers verified immutable static playback over supplied legac
   t.is(calls.some(call => call[0] === 'release'), false)
 })
 
-test('shared static assets reject capacity without evicting live publication authorizations', async (t) => {
+test('shared static assets retain and evict each exact publication authorization once', async (t) => {
   const first = immutablePlaybackFixture(61)
   const second = immutablePlaybackFixtureForCore(first.coreRef, 62, 'Independent shared asset')
   const evicting = immutablePlaybackFixture(63)
@@ -759,26 +823,20 @@ test('shared static assets reject capacity without evicting live publication aut
   t.is(ctx.staticAssetPlaybackEntries.get(first.coreRef.assetId).authorizations.size, 2)
 
   metadata = { immutablePublication: evicting.immutablePublication, mimeType: 'video/mp4' }
-  let capacityError = null
-  try {
-    await api.getVideoUrl('channel', 'evicting.mp4')
-  } catch (error) {
-    capacityError = error
-  }
+  await api.getVideoUrl('channel', 'evicting.mp4')
   await Promise.resolve()
 
-  t.is(capacityError?.code, 'STATIC_ASSET_CAPACITY_EXHAUSTED')
+  const sharedReleases = retains.slice(0, 2).map(request => ({
+    renditionId: request.renditionId,
+    ownerId: request.ownerId,
+    assetId: first.coreRef.assetId,
+  }))
   t.is(retains.length, 3)
-  t.alike(releases, [{
-    renditionId: retains[2].renditionId,
-    ownerId: retains[2].ownerId,
-    assetId: evicting.coreRef.assetId,
-  }])
-  t.is(ctx.staticAssetPlaybackEntries.get(first.coreRef.assetId).authorizations.size, 2)
-  t.is(ctx.staticAssetPlaybackEntries.get(first.coreRef.assetId).scheduler, firstPlayback.scheduler)
+  t.alike(releases, sharedReleases)
+  t.is(new Set(sharedReleases.map(request => request.ownerId)).size, 2)
 })
 
-test('failed static capability links and live capacity leave authorization state atomic', async (t) => {
+test('failed static capability links leave authorization registry and LRU state atomic', async (t) => {
   const first = immutablePlaybackFixture(71)
   const secondOwner = immutablePlaybackFixtureForCore(first.coreRef, 72, 'Second owner')
   const other = immutablePlaybackFixture(73)
@@ -867,11 +925,30 @@ test('failed static capability links and live capacity leave authorization state
   t.alike([...ctx.staticAssetPlaybackEntries.keys()], [first.coreRef.assetId, other.coreRef.assetId])
   t.is(ctx.staticAssetPlaybackEntries.get(first.coreRef.assetId).authorizations.size, 2)
 
-  const capacityError = await resolve(newest.immutablePublication).then(() => null, error => error)
-  t.is(capacityError?.code, 'STATIC_ASSET_CAPACITY_EXHAUSTED')
+  const failedNew = await failResolve(newest.immutablePublication)
+  t.ok(failedNew)
   t.is(releases.filter(request => request.ownerId === retains[retains.length - 1].ownerId).length, 1)
   t.alike([...ctx.staticAssetPlaybackEntries.keys()], [first.coreRef.assetId, other.coreRef.assetId])
   t.absent(ctx.staticAssetPlaybackEntries.get(newest.coreRef.assetId))
+
+  const failedNewOwnerId = retains[retains.length - 1].ownerId
+  const releasesBeforeSuccessfulEviction = releases.length
+  await resolve(newest.immutablePublication)
+  t.is(retains.filter(request => request.ownerId === failedNewOwnerId).length, 2)
+  t.ok(ctx.staticAssetPlaybackEntries.has(newest.coreRef.assetId))
+  t.absent(ctx.staticAssetPlaybackEntries.get(first.coreRef.assetId))
+  t.alike(releases.slice(releasesBeforeSuccessfulEviction), [
+    {
+      renditionId: retains[0].renditionId,
+      ownerId: retains[0].ownerId,
+      assetId: first.coreRef.assetId,
+    },
+    {
+      renditionId: retains[3].renditionId,
+      ownerId: retains[3].ownerId,
+      assetId: first.coreRef.assetId,
+    },
+  ])
 })
 
 test('getVideoUrl fails closed for malformed or mismatched immutable publication metadata', async (t) => {

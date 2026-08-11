@@ -188,7 +188,9 @@ export function projectSourceSelectionDiagnostics(sources = [], options = {}) {
   })
 
   let selectedIndex = typeof options.selectedPublicationId === 'string'
-    ? sources.findIndex(source => source?.publicationId === options.selectedPublicationId)
+    ? sources.findIndex(source =>
+        (source?.publication?.publicationId ?? source?.publicationId) === options.selectedPublicationId
+      )
     : 0
   if (options.requireAuthorization === true && evaluations[selectedIndex]?.authorizationReasons.length !== 0) {
     selectedIndex = evaluations.findIndex(evaluation => evaluation.authorizationReasons.length === 0)
@@ -202,7 +204,9 @@ export function projectSourceSelectionDiagnostics(sources = [], options = {}) {
       ? []
       : rejectionReasonCodes(source, context, sourceScore(source), stale, incomplete, availabilityState)
     const item = {
-      publicationId: typeof source.publicationId === 'string' ? source.publicationId : '',
+      publicationId: typeof (source.publication?.publicationId ?? source.publicationId) === 'string'
+        ? (source.publication?.publicationId ?? source.publicationId)
+        : '',
       selected,
       selectionReasonCodes: selected ? selectionReasonCodes(context) : [],
       rejectionReasonCodes: selected
@@ -211,6 +215,7 @@ export function projectSourceSelectionDiagnostics(sources = [], options = {}) {
       introductionPublisherIds: boundedPublicIds(
         MAX_INTRODUCTION_DIAGNOSTIC_IDS,
         source.publisherId,
+        source.publication?.publisherId,
         source.introductionPublisherIds,
       ),
       introductionIndexIds: boundedPublicIds(
@@ -218,6 +223,7 @@ export function projectSourceSelectionDiagnostics(sources = [], options = {}) {
         source.indexFeedId,
         source.indexFeedIds,
         source.introductionIndexIds,
+        source.sourceIndexers?.map(indexer => indexer?.indexerId),
       ),
       moderationFeedIds: boundedPublicIds(
         MAX_INTRODUCTION_DIAGNOSTIC_IDS,

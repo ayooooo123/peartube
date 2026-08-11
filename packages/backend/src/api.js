@@ -761,6 +761,7 @@ export function createApi({
   sourceOffload = {},
   loadChannel = storageLoadChannel,
   loadPublicBee = storageLoadPublicBee,
+  getPreviewVideoFromFeed = () => null,
 }) {
   const blobPlayback = createBlobPlaybackService(ctx)
   const pendingStaticPlaybackAuthorizations = new Map()
@@ -2291,6 +2292,14 @@ export function createApi({
     ...operabilityApi,
     ...scopedNetworkApi,
     ...archiveParticipationApi,
+    ...createSearchApi({
+      ctx,
+      ensureSemanticFinder,
+      buildSearchEnvelope,
+      getPreviewVideoFromFeed,
+      isMultiWriterChannelKey,
+      loadChannel: (_ctx, channelKey) => loadChannelBounded(channelKey),
+    }),
     ...createPairingApi({
       ctx,
       loadChannel: (_ctx, channelKey) => loadChannelBounded(channelKey),

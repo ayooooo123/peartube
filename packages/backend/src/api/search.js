@@ -2,7 +2,7 @@
 // Keeps the main API file focused while injecting the local helpers that still
 // serve other indexing paths in api.js.
 import b4a from 'b4a'
-import { FederatedSearch } from '../search/federated-search.js'
+
 function assertContextRunning(ctx) {
   if (ctx?.lifecycle?.signal?.aborted) throw new Error('Backend is shutting down')
 }
@@ -22,38 +22,13 @@ export function createSearchApi({
      * @param {string} query
      * @param {Object} [options]
      * @param {number} [options.topK=10]
-     * @param {boolean} [options.federated=true]
      * @returns {Promise<Array<{id: string, score: number, metadata: any}>>}
      */
     async searchVideos(channelKey, query, options = {}) {
-      const { topK = 10, federated = true } = options
-
-      // Ensure semantic finder is initialized with persistence
-      await ensureSemanticFinder(ctx)
+      const { topK = 10 } = options
+      const finder = await ensureSemanticFinder(ctx)
       assertContextRunning(ctx)
-
-      // Initialize federated search if not already done
-      if (!ctx.federatedSearch && ctx.swarm) {
-        const federatedSearch = new FederatedSearch(ctx.swarm, ctx.semanticFinder)
-        const ownership = ctx?.ownResource?.('federated search', federatedSearch, 'close', 5000)
-          || ctx?.lifecycle?.ownResource?.('federated search', federatedSearch, 'close', 5000)
-          || null
-        ctx.federatedSearch = federatedSearch
-        try {
-          const channelKeyBuf = b4a.from(channelKey, 'hex')
-          federatedSearch.setupTopic(channelKeyBuf)
-          assertContextRunning(ctx)
-        } catch (error) {
-          if (ctx.federatedSearch === federatedSearch) ctx.federatedSearch = null
-          await ownership?.cleanup?.()
-          throw error
-        }
-      }
-
-      // Use federated search if available, otherwise local only
-      const results = ctx.federatedSearch && federated
-        ? await ctx.federatedSearch.search(query, { topK, federated, timeout: 5000 })
-        : await ctx.semanticFinder.search(query, topK)
+      const results = await finder.search(query, topK)
       assertContextRunning(ctx)
       return results
     },

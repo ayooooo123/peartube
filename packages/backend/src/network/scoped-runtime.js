@@ -457,7 +457,6 @@ export function createScopedNetworkRuntime (options = {}) {
       modes: new Set([mode]),
       serverAnnounced: false,
       sessions: new Map(),
-      pendingReattaches: new Map(),
       discovery: null,
       discoverySuspended: false,
       closed: false,
@@ -487,56 +486,6 @@ export function createScopedNetworkRuntime (options = {}) {
     return id
   }
 
-  function scopeSupportsReattach (scope) {
-    return scope?.purpose === 'publisher' || scope?.purpose === 'asset' ||
-      scope?.purpose === 'archive' || scope?.purpose === 'archive-discovery'
-  }
-
-  function clearPendingScopeReattach (scope, peerId, connection = null) {
-    const pending = scope?.pendingReattaches?.get(peerId)
-    if (!pending || (connection && pending.connection !== connection)) return false
-    scope.pendingReattaches.delete(peerId)
-    return true
-  }
-
-  function scheduleScopeReattach (scope, peerId, connection, channel) {
-    if (!scopeSupportsReattach(scope) || scope.closed || scope.sessions.has(peerId)) return null
-    const existing = scope.pendingReattaches.get(peerId)
-    if (existing) return existing.connection === connection ? existing.promise : null
-
-    const pending = { connection, promise: null }
-    scope.pendingReattaches.set(peerId, pending)
-    let fullyClosed
-    try {
-      fullyClosed = typeof channel?.fullyClosed === 'function'
-        ? channel.fullyClosed()
-        : Promise.reject(new Error('scoped channel cannot confirm closure'))
-    } catch (error) {
-      fullyClosed = Promise.reject(error)
-    }
-    pending.promise = Promise.resolve(fullyClosed)
-      .then(() => new Promise(resolve => {
-        const timer = setTimeout(() => resolve(true), 0)
-        timer?.unref?.()
-      }), error => {
-        recordProtocolError(scope, peerId, error)
-        return false
-      })
-      .then(closureConfirmed => {
-        if (scope.pendingReattaches.get(peerId) !== pending || !closureConfirmed) return null
-        scope.pendingReattaches.delete(peerId)
-        if (status !== 'active' || !networkEnabled || scope.closed || connection?.destroyed === true ||
-            !activeConnections.has(connection) || !scopeMayAttach(scope) || scope.sessions.has(peerId)) return null
-        const currentInfo = activeConnections.get(connection)
-        try {
-          return attachScope(scope, connection, currentInfo)
-        } catch (error) {
-          recordProtocolError(scope, peerId, error)
-          return null
-        }
-      })
-    return pending.promise
-  }
 
   function authenticatedRemoteKey (connection) {
     const value = connection?.remotePublicKey
@@ -1445,7 +1394,6 @@ export function createScopedNetworkRuntime (options = {}) {
     if (mode) scope.modes.delete(mode)
     if (scope.modes.size > 0) return false
     scope.closed = true
-    scope.pendingReattaches?.clear()
     for (const session of scope.sessions.values()) cancelAssetSummaryScan(session)
     for (const request of [...(scope.assetRequests?.values() || [])]) {
       closeAssetRequest(scope, request, new Error('asset scope was released'))
@@ -1568,11 +1516,6 @@ export function createScopedNetworkRuntime (options = {}) {
     if (!scopeMayAttach(scope)) return
     const remoteKey = connectionKey(connection, info)
     if (!remoteKey) return
-    const pendingReattach = scope.pendingReattaches?.get(remoteKey)
-    if (pendingReattach) {
-      if (pendingReattach.connection === connection) return
-      scope.pendingReattaches.delete(remoteKey)
-    }
     const existing = scope.sessions.get(remoteKey)
     if (existing) {
       const sameLiveConnection = existing.connection === connection &&
@@ -1631,7 +1574,7 @@ export function createScopedNetworkRuntime (options = {}) {
         if (scope.purpose === 'archive-discovery') return handleArchiveFrame(scope, ownedSession, frame)
         return frame.type === 'probe' ? { status: 'ok' } : fail('frame type is not allowed for this purpose')
       },
-      onClose: reason => {
+      onClose: () => {
         const tracked = ownedSession
         if (!tracked || tracked.closed || scope.sessions.get(remoteKey) !== tracked) return
         closeAssetInventoryRequest(
@@ -1655,9 +1598,6 @@ export function createScopedNetworkRuntime (options = {}) {
           }
           if (scope.sessions.get(remoteKey) === tracked) scope.sessions.delete(remoteKey)
           counters.closedSessions++
-          if (reason === 'remote-channel-closed' || reason === 'local-channel-closed') {
-            scheduleScopeReattach(scope, remoteKey, connection, tracked.channel)
-          }
         }
       },
     })
@@ -1731,7 +1671,6 @@ export function createScopedNetworkRuntime (options = {}) {
         activeConnections.delete(connection)
         const peerId = authenticatedRemoteKey(connection) || connectionKey(connection, info)
         for (const scope of scopes.values()) {
-          clearPendingScopeReattach(scope, peerId, connection)
           const tracked = scope.sessions.get(peerId)
           if (tracked?.connection === connection) closeSession(scope, peerId, 'connection-closed', tracked)
         }
@@ -1998,6 +1937,7 @@ export function createScopedNetworkRuntime (options = {}) {
     }
 
     if (contributionServingPolicyChanged || archiveServingPolicyChanged) {
+      const cutoverConnections = new Set()
       await Promise.allSettled([...scopes.values()].map(async scope => {
         const contributionScope = (scope.purpose === 'asset' || scope.purpose === 'publisher') &&
           scope.retentionClasses?.has?.('contribution-cache')
@@ -2010,14 +1950,16 @@ export function createScopedNetworkRuntime (options = {}) {
           for (const peerId of [...scope.sessions.keys()]) {
             const session = scope.sessions.get(peerId)
             if (!session) continue
-            const channel = session.channel
-            const connection = session.connection
             if (!closeSession(scope, peerId, 'network-policy-role-changed', session)) continue
-            scheduleScopeReattach(scope, peerId, connection, channel)
+            if (session.connection) cutoverConnections.add(session.connection)
           }
         }
         await rejoinScopeDiscovery(scope)
       }))
+      for (const connection of cutoverConnections) {
+        activeConnections.delete(connection)
+        try { connection.destroy?.() } catch { /* fail closed after removing the cutover connection */ }
+      }
     }
     if (wasNetworkEnabled && !networkEnabled) await deactivateNetwork()
     else if (!wasNetworkEnabled && networkEnabled) await activateNetwork()

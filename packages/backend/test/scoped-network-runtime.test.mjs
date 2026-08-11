@@ -327,16 +327,24 @@ test('watch-only downgrade closes local publisher catalog sessions and removes i
   const publisherId = b4a.toString(descriptor.publisherId, 'hex')
   const published = await runtimeA.publishLocalPublisherCatalog({ publisherId })
   await runtimeB.followPublisher({ publisherId, namespaceDescriptor: descriptor })
-  const pair = connectionPair(23, 24)
-  swarmA.connections.add(pair.a)
-  swarmB.connections.add(pair.b)
-  swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, client: true })
-  swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey, client: false })
+  const pairs = []
+  const connectPair = () => {
+    const next = connectionPair(23, 24)
+    pairs.push(next)
+    swarmA.connections.add(next.a)
+    swarmB.connections.add(next.b)
+    swarmA.emit('connection', next.a, { publicKey: next.a.remotePublicKey, client: true })
+    swarmB.emit('connection', next.b, { publicKey: next.b.remotePublicKey, client: false })
+    return next
+  }
+  let pair = connectPair()
   await settle()
   t.ok(runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'publisher'))
   t.ok(runtimeA.getDiagnostics().topics.find(topic => topic.purpose === 'publisher')?.publicAnnounced)
 
   await runtimeA.applyNetworkPolicy(contributionPolicy({ contributionBudgetBytes: 0 }))
+  t.ok(pair.a.destroyed, 'contribution-budget cutover destroys the old publisher transport')
+  t.ok(pair.b.destroyed, 'contribution-budget cutover destroys the old follower transport')
   await settle()
   let transitionDiagnostics = runtimeA.getDiagnostics()
   t.absent(transitionDiagnostics.sessions.find(session => session.purpose === 'publisher'),
@@ -347,6 +355,8 @@ test('watch-only downgrade closes local publisher catalog sessions and removes i
     'the client-only followed catalog scope remains retained')
 
   await runtimeA.applyNetworkPolicy(contributionPolicy())
+  pair = connectPair()
+  await settle()
   for (let attempt = 0; attempt < 20; attempt++) {
     if (runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'publisher')) break
     await settle()
@@ -355,6 +365,8 @@ test('watch-only downgrade closes local publisher catalog sessions and removes i
     'restoring the contribution budget rejoins public catalog discovery')
 
   await runtimeA.applyNetworkPolicy(contributionPolicy({ uploadCeilingBytes: 0 }))
+  t.ok(pair.a.destroyed, 'global-ceiling cutover destroys the old publisher transport')
+  t.ok(pair.b.destroyed, 'global-ceiling cutover destroys the old follower transport')
   await settle()
   transitionDiagnostics = runtimeA.getDiagnostics()
   t.absent(transitionDiagnostics.sessions.find(session => session.purpose === 'publisher'),
@@ -365,6 +377,8 @@ test('watch-only downgrade closes local publisher catalog sessions and removes i
     'global upload cutover preserves the followed client scope')
 
   await runtimeA.applyNetworkPolicy(contributionPolicy())
+  pair = connectPair()
+  await settle()
   for (let attempt = 0; attempt < 20; attempt++) {
     if (runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'publisher')) break
     await settle()
@@ -383,6 +397,8 @@ test('watch-only downgrade closes local publisher catalog sessions and removes i
     contributionBudgetBytes: 0,
     archiveBudgetBytes: 0,
   })
+  t.ok(pair.a.destroyed, 'upload-permission cutover destroys the old publisher transport')
+  t.ok(pair.b.destroyed, 'upload-permission cutover destroys the old follower transport')
   const diagnostics = runtimeA.getDiagnostics()
   t.absent(diagnostics.sessions.find(session => session.purpose === 'publisher'),
     'local catalog has no stale handshaking session immediately after downgrade')
@@ -393,8 +409,10 @@ test('watch-only downgrade closes local publisher catalog sessions and removes i
 
   await runtimeA.close()
   await runtimeB.close()
-  pair.a.destroy()
-  pair.b.destroy()
+  for (const connection of pairs) {
+    connection.a.destroy()
+    connection.b.destroy()
+  }
 })
 
 test('persisted runtime policy gates discovery startup and resumes without duplicate scopes', async (t) => {
@@ -969,12 +987,24 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
     store: readerStore,
     authorizePublication: async request => request.manifest === manifest,
   })
-  const pair = connectionPair()
+  const pairs = []
+  let pair = null
+  const connectPair = () => {
+    const next = connectionPair()
+    pairs.push(next)
+    swarmA.connections.add(next.a)
+    swarmB.connections.add(next.b)
+    swarmA.emit('connection', next.a, { publicKey: next.a.remotePublicKey })
+    swarmB.emit('connection', next.b, { publicKey: next.b.remotePublicKey })
+    return next
+  }
   t.teardown(async () => {
     await runtimeA.close().catch(() => {})
     await runtimeB.close().catch(() => {})
-    pair.a.destroy()
-    pair.b.destroy()
+    for (const connection of pairs) {
+      connection.a.destroy()
+      connection.b.destroy()
+    }
     await readerCore.close().catch(() => {})
     await asset.core.close().catch(() => {})
     await sourceStore.close()
@@ -985,10 +1015,7 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
 
   await runtimeA.start()
   await runtimeB.start()
-  swarmA.connections.add(pair.a)
-  swarmB.connections.add(pair.b)
-  swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey })
-  swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey })
+  pair = connectPair()
   await settle()
   await runtimeA.retainAuthorizedRendition({ manifest, renditionId, start: 2, end: 5 })
   await runtimeB.retainAuthorizedRendition({ manifest, renditionId, start: 2, end: 5 })
@@ -1059,6 +1086,8 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
   await runtimeA.applyNetworkPolicy(contributionPolicy({ uploadCeilingBytes: 1 }))
   t.absent(runtimeA.getDiagnostics().sessions.find(session => session.purpose === 'asset'),
     'cutover returns after removing the serving session without awaiting held channel work')
+  t.ok(pair.a.destroyed, 'global ceiling cutover destroys the old provider transport')
+  t.ok(pair.b.destroyed, 'global ceiling cutover destroys the old requester transport')
   releaseGlobalReductionProof()
   const exhausted = await observedInFlight
   t.ok(exhausted, 'global ceiling reduction settles the already accepted peer request')
@@ -1072,6 +1101,8 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
   t.is(await readerCore.has(4), false, 'global ceiling reduction serves no asset block')
 
   await runtimeA.applyNetworkPolicy(contributionPolicy())
+  pair = connectPair()
+  await settle()
   for (let attempt = 0; attempt < 30; attempt++) {
     const providerActive = runtimeA.getDiagnostics().sessions.some(session =>
       session.purpose === 'asset' && session.state === 'active')
@@ -1080,8 +1111,8 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
     if (providerActive && requesterActive) break
     await settle()
   }
-  t.absent(pair.a.destroyed, 'rapid ceiling restore preserves the provider duplex')
-  t.absent(pair.b.destroyed, 'rapid ceiling restore preserves the requester duplex')
+  t.absent(pair.a.destroyed, 'fresh provider transport survives restored activation')
+  t.absent(pair.b.destroyed, 'fresh requester transport survives restored activation')
   t.ok(runtimeA.getDiagnostics().sessions.some(session =>
     session.purpose === 'asset' && session.state === 'active'),
     'provider session activates under the restored ceiling')
@@ -1090,7 +1121,12 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
     'requester session activates under the restored ceiling')
   const closedBeforeRoleBudget = runtimeA.getDiagnostics().counters.closedSessions
   const uploadedBeforeRoleBudget = runtimeA.getDiagnostics().policy.uploadedBytes
+  const servingPair = pair
   await runtimeA.applyNetworkPolicy(contributionPolicy({ contributionBudgetBytes: 0 }))
+  t.ok(servingPair.a.destroyed, 'role-budget cutover destroys the old provider transport')
+  t.ok(servingPair.b.destroyed, 'role-budget cutover destroys the old requester transport')
+  pair = connectPair()
+  await settle()
   for (let attempt = 0; attempt < 30; attempt++) {
     const current = runtimeA.getDiagnostics()
     const closedServingSession = current.counters.closedSessions > closedBeforeRoleBudget
@@ -1104,7 +1140,7 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
     'zero contribution budget closes the old serving asset session')
   const clientOnlyAssetSession = roleBudgetDiagnostics.sessions.find(session =>
     session.purpose === 'asset' && session.state === 'active')
-  t.ok(clientOnlyAssetSession, 'the retained asset rejoins over the same transport as a client-only session')
+  t.ok(clientOnlyAssetSession, 'the retained asset rejoins on a fresh transport as a client-only session')
   t.is(clientOnlyAssetSession?.assetResponseCount, 0)
   t.absent(roleBudgetDiagnostics.topics.find(topic => topic.purpose === 'asset')?.publicAnnounced,
     'zero contribution role budget suppresses asset announcement')
@@ -1661,13 +1697,20 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
     store: { get: () => targetCore },
     initialNetworkPolicy: archivePolicy(),
   })
+  const pairs = []
+  let pair = null
+  const connectPair = () => {
+    const next = connectionPair()
+    pairs.push(next)
+    swarmA.connections.add(next.a)
+    swarmB.connections.add(next.b)
+    swarmA.emit('connection', next.a, { publicKey: next.a.remotePublicKey })
+    swarmB.emit('connection', next.b, { publicKey: next.b.remotePublicKey })
+    return next
+  }
   await runtimeA.start()
   await runtimeB.start()
-  const pair = connectionPair()
-  swarmA.connections.add(pair.a)
-  swarmB.connections.add(pair.b)
-  swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey })
-  swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey })
+  pair = connectPair()
   await settle()
   await runtimeA.retainAuthorizedArchive({ pledge, coreKey, start: 2, end: 6 })
   await runtimeB.retainAuthorizedArchive({ pledge, coreKey, start: 2, end: 6 })
@@ -1676,6 +1719,8 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   t.ok(runtimeA.getDiagnostics().sessions.some(session => session.archiveServing), 'archiveServing is exposed as a bounded boolean')
   await runtimeA.applyNetworkPolicy(contributionPolicy())
   await runtimeB.applyNetworkPolicy(contributionPolicy())
+  t.ok(pair.a.destroyed, 'archive-consent cutover destroys the old provider transport')
+  t.ok(pair.b.destroyed, 'archive-consent cutover destroys the old requester transport')
   let diagnostics = runtimeA.getDiagnostics()
   t.absent(diagnostics.sessions.find(session => session.purpose === 'archive'), 'archive sessions close when archive consent is withdrawn')
   t.absent(diagnostics.topics.find(topic => topic.purpose === 'archive')?.publicAnnounced, 'archive scope stops announcing')
@@ -1688,10 +1733,16 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
     runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 1024 })),
     runtimeB.applyNetworkPolicy(archivePolicy()),
   ])
+  pair = connectPair()
+  await settle()
   for (let attempt = 0; attempt < 20 && received.size < 1; attempt++) await settle()
   t.alike([...received.keys()], [2], 'the runtime upload ceiling stops the next oversized transfer')
   await runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 256 * 1024 }))
   await runtimeB.applyNetworkPolicy(archivePolicy())
+  t.ok(pair.a.destroyed, 'archive ceiling cutover destroys the old provider transport')
+  t.ok(pair.b.destroyed, 'archive ceiling cutover destroys the old requester transport')
+  pair = connectPair()
+  await settle()
   for (let attempt = 0; attempt < 30; attempt++) {
     const providerActive = runtimeA.getDiagnostics().sessions.some(session =>
       session.purpose === 'archive' && session.state === 'active')
@@ -1702,19 +1753,22 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   }
   t.ok(runtimeA.getDiagnostics().sessions.some(session =>
     session.purpose === 'archive' && session.state === 'active'),
-    'provider replacement archive session is active before retry')
+    'provider fresh-transport archive session is active before retry')
   t.ok(runtimeB.getDiagnostics().sessions.some(session =>
     session.purpose === 'archive' && session.state === 'active'),
-    'requester replacement archive session is active before retry')
+    'requester fresh-transport archive session is active before retry')
   for (let attempt = 0; attempt < 30 && received.size < 3; attempt++) await settle()
 
   t.alike([...received.keys()].sort((a, b) => a - b), [2, 3, 4])
   const committedUploadBytes = runtimeA.getDiagnostics().policy.uploadedBytes
   t.ok(committedUploadBytes > 0)
+  const archiveServingPair = pair
   await runtimeA.applyNetworkPolicy(archivePolicy({
     uploadCeilingBytes: 256 * 1024,
     archiveBudgetBytes: 0
   }))
+  t.ok(archiveServingPair.a.destroyed, 'archive-budget cutover destroys the old provider transport')
+  t.ok(archiveServingPair.b.destroyed, 'archive-budget cutover destroys the old requester transport')
   diagnostics = runtimeA.getDiagnostics()
   t.is(diagnostics.policy.uploadedBytes, committedUploadBytes,
     'archive budget reduction preserves committed upload accounting')
@@ -1723,7 +1777,15 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   t.absent(diagnostics.topics.find(topic => topic.purpose === 'archive')?.publicAnnounced,
     'zero archive role budget suppresses archive announcement')
   await runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 256 * 1024 }))
-  for (let attempt = 0; attempt < 20; attempt++) await settle()
+  pair = connectPair()
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const providerActive = runtimeA.getDiagnostics().sessions.some(session =>
+      session.purpose === 'archive' && session.state === 'active')
+    const requesterActive = runtimeB.getDiagnostics().sessions.some(session =>
+      session.purpose === 'archive' && session.state === 'active')
+    if (providerActive && requesterActive) break
+    await settle()
+  }
   t.alike([...received.keys()].sort((a, b) => a - b), [2, 3, 4],
     'role-budget toggles do not reset committed upload accounting')
   t.is(received.has(1), false, 'the peer never receives a block below its pledged range')
@@ -1742,8 +1804,10 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
 
   await runtimeA.close()
   await runtimeB.close()
-  pair.a.destroy()
-  pair.b.destroy()
+  for (const connection of pairs) {
+    connection.a.destroy()
+    connection.b.destroy()
+  }
 })
 
 test('permissionless archive discovery carries bounded signed requests and pledges without a relay registry', async (t) => {

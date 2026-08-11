@@ -484,7 +484,7 @@ export function createIngestManager ({
   fs = defaultFs,
   path = defaultPath,
   sourceClient = null,
-  canIngest = () => true,
+  canIngest = () => false,
   verifyChunkBytes = 256 * 1024,
   now = () => Date.now(),
   logger = null
@@ -613,7 +613,8 @@ export function createIngestManager ({
     return publisher.ensureAnonymousChannel({
       channelName: sourceIdentity.creatorName,
       sourceIdentity,
-      requireSourceChannel: true
+      requireSourceChannel: true,
+      retentionClass: job.retentionClass
     })
   }
 
@@ -627,13 +628,17 @@ export function createIngestManager ({
   }
 
   async function exposePublication (job, channelInfo, metadata) {
-    if (channelInfo && typeof publisher.publishCatalog === 'function') await publisher.publishCatalog(channelInfo)
-    if (job.retentionClass === 'archive-pin' && channelInfo && typeof publisher.retainAssets === 'function') {
+    if (channelInfo && typeof publisher.publishCatalog === 'function') {
+      await publisher.publishCatalog({ ...channelInfo, retentionClass: job.retentionClass })
+    }
+    if (channelInfo && typeof publisher.retainAssets === 'function') {
       await publisher.retainAssets({
+        retentionClass: job.retentionClass,
         ...channelInfo,
         previewVideos: [{
           id: job.publicationFence.videoId,
-          immutablePublication: metadata?.immutablePublication || null
+          immutablePublication: metadata?.immutablePublication || null,
+          ...(job.retentionClass === 'archive-pin' ? { archivePledge: metadata?.archivePledge || null } : {})
         }]
       })
     }
@@ -651,6 +656,7 @@ export function createIngestManager ({
         ? context.identifier
         : (context.providerEpisodeIdentifier || `${context.seriesIdentifier}:${context.seasonNumber}:${context.episodeNumber}`)
       const imported = await publisher.importVideo({
+        retentionClass: job.retentionClass,
         channel: channelInfo.channel,
         filePath: spool.filePath,
         videoId: job.publicationFence.videoId,
@@ -732,6 +738,7 @@ export function createIngestManager ({
     let current = job
     try {
       while (current.bytesReceived < current.expectedBytes) {
+        if (!canIngest(current.request)) fail('RETENTION_ADMISSION_DENIED', 'retention permission was withdrawn', 403)
         if (signal?.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
         const start = current.bytesReceived
         const end = Math.min(start + sourceClient.chunkBytes, current.expectedBytes) - 1
@@ -848,7 +855,7 @@ export function createIngestManager ({
     try {
       if (!job || job.state !== 'queued') return job
       if (!attachment?.spool && !attachment?.sourceCapability) return job
-      if (!canIngest()) fail('STORAGE_ADMISSION_DENIED', 'storage admission denied', 507)
+      if (!canIngest(job.request)) fail('STORAGE_ADMISSION_DENIED', 'retention admission denied', 507)
       job = await store.transition(jobId, { expectedVersion: job.version, from: 'queued', to: 'acquiring' })
       let spool
       if (attachment.spool) {
@@ -859,11 +866,14 @@ export function createIngestManager ({
         spool = acquired.spool
       }
       if (entry.controller.signal.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
+      if (!canIngest(job.request)) fail('RETENTION_ADMISSION_DENIED', 'retention permission was withdrawn', 403)
       job = await store.transition(jobId, { expectedVersion: job.version, from: 'acquiring', to: 'verifying' })
       job = await verifySpool(job, spool, entry.controller.signal)
       if (entry.controller.signal.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
+      if (!canIngest(job.request)) fail('RETENTION_ADMISSION_DENIED', 'retention permission was withdrawn', 403)
       job = await store.transition(jobId, { expectedVersion: job.version, from: 'verifying', to: 'publishing' })
       if (entry.controller.signal.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
+      if (!canIngest(job.request)) fail('RETENTION_ADMISSION_DENIED', 'retention permission was withdrawn', 403)
       const result = await publishSpool(job, spool, entry.controller.signal)
       job = await store.completePublication(jobId, { expectedVersion: job.version, result })
       return job
@@ -1043,6 +1053,10 @@ export function createIngestManager ({
           }
         }
 
+        if (!canIngest(normalized)) {
+          fail('RETENTION_ADMISSION_DENIED', 'explicit retention consent and budget are required', 403)
+        }
+
         const capability = normalizeSourceCapability(sourceCapability)
         const normalizedSpool = spool == null ? null : normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
         const initial = buildJob(key, idempotencyDigest, normalized, fingerprint)
@@ -1095,6 +1109,27 @@ export function createIngestManager ({
         job = await store.getJob(jobId)
       }
       return publicJob(job)
+    },
+
+    async getStatus () {
+      const jobs = typeof store.listRecent === 'function'
+        ? await store.listRecent(64)
+        : await store.listActive()
+      const jobsByState = {
+        queued: 0,
+        acquiring: 0,
+        verifying: 0,
+        publishing: 0,
+        completed: 0,
+        failed: 0,
+        cancelled: 0
+      }
+      const lastErrors = []
+      for (const job of jobs) {
+        if (Object.prototype.hasOwnProperty.call(jobsByState, job.state)) jobsByState[job.state]++
+        if (job.errorCode && lastErrors.length < 8) lastErrors.push(String(job.errorCode).slice(0, 64))
+      }
+      return { jobsByState, activeAcquisitions: active.size, lastErrors }
     },
 
     async cancelJob (jobId) {

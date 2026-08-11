@@ -149,8 +149,13 @@ test('startup republishes only persisted writable catalogs with accepted project
 
   await runtime.start()
 
-  t.is(swarm.joins.length, 2, 'bootstrap and persisted non-empty publisher scopes are joined')
-  t.ok(runtime.getDiagnostics().topics.some(topic => topic.purpose === 'publisher'))
+  t.is(swarm.joins.length, 1, 'watch-only startup joins only private bootstrap discovery')
+  t.is(swarm.joins[0].options.server, false)
+  t.absent(runtime.getDiagnostics().topics.some(topic => topic.purpose === 'publisher'))
+  await t.exception(
+    runtime.publishLocalPublisherCatalog({ publisherId: descriptor.publisherId }),
+    /explicit contribution or archive consent/
+  )
   await runtime.close()
 })
 
@@ -175,6 +180,10 @@ test('persisted runtime policy gates discovery startup and resumes without dupli
     uploadPermission: 'enabled',
     uploadCeilingBytes: 1024,
     diskCeilingBytes: 1024,
+    permissions: { contribute: true, archive: false },
+    publicServingAllowed: true,
+    contributionBudgetBytes: 1024,
+    archiveBudgetBytes: 0,
   })
   t.is(swarm.joins.length, 1)
 
@@ -183,8 +192,12 @@ test('persisted runtime policy gates discovery startup and resumes without dupli
     uploadPermission: 'disabled',
     uploadCeilingBytes: 0,
     diskCeilingBytes: 0,
+    permissions: { contribute: false, archive: false },
+    publicServingAllowed: false,
+    contributionBudgetBytes: 0,
+    archiveBudgetBytes: 0,
   })
-  t.is(swarm.joins[0].suspended, 1)
+  t.is(swarm.joins[0].destroyed, 1)
   t.is(runtime.getDiagnostics().sessions.length, 0)
 
   await runtime.applyNetworkPolicy({
@@ -192,9 +205,13 @@ test('persisted runtime policy gates discovery startup and resumes without dupli
     uploadPermission: 'enabled',
     uploadCeilingBytes: 1024,
     diskCeilingBytes: 1024,
+    permissions: { contribute: false, archive: false },
+    publicServingAllowed: false,
+    contributionBudgetBytes: 0,
+    archiveBudgetBytes: 0,
   })
-  t.is(swarm.joins.length, 1, 'resume reuses the existing bounded scope')
-  t.is(swarm.joins[0].resumed, 1)
+  t.is(swarm.joins.length, 2, 'role downgrade replaced the public join with client-only discovery')
+  t.is(swarm.joins.at(-1).options.server, false)
   await runtime.close()
 })
 

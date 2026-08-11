@@ -413,10 +413,17 @@ export function createRoutingDownloader ({ directDownloader, ytDlpDownloader } =
   }
 }
 
-export function createArchivePublisher({ identityManager, uploadManager, api, runtime, fs, createChannelFn = null }) {
+export function createArchivePublisher({ identityManager, uploadManager, api, runtime, fs, createChannelFn = null, canPublish = () => false }) {
   if (!identityManager) throw new Error('identityManager is required')
   if (!uploadManager) throw new Error('uploadManager is required')
   if (!api) throw new Error('api is required')
+
+  const assertRetentionPermission = (retentionClass, requestedBytes = 0) => {
+    if (canPublish(retentionClass, requestedBytes) === true) return
+    const error = new Error('explicit retention consent and budget are required')
+    error.code = 'RETENTION_PERMISSION_DENIED'
+    throw error
+  }
 
   const sourceChannels = new Map()
 
@@ -457,7 +464,8 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
   }
 
   return {
-    async ensureAnonymousChannel({ channelName, sourceIdentity = null, requireSourceChannel = false } = {}) {
+    async ensureAnonymousChannel({ channelName, sourceIdentity = null, requireSourceChannel = false, retentionClass } = {}) {
+      assertRetentionPermission(retentionClass)
       const sourceKey = sourceIdentity?.sourceId || null
       if (sourceKey && sourceChannels.has(sourceKey)) return sourceChannels.get(sourceKey)
 
@@ -493,6 +501,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       return { channel, channelKey: identity.driveKey || identity.channelKey, publicBeeKey, publisherId: identity.publicKey }
     },
     async importVideo({
+      retentionClass,
       channel,
       filePath,
       videoId,
@@ -526,6 +535,8 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       tmdbEpisode,
       publish
     }) {
+      const requestedBytes = Number(fs?.statSync?.(filePath)?.size || 0)
+      assertRetentionPermission(retentionClass, requestedBytes)
       const mediaCoordinates = contentKind
         ? { contentKind, mediaProvider, mediaId, seasonNumber, episodeNumber }
         : deriveMediaCoordinates({ tmdbType, tmdbId, tmdbSeason, tmdbEpisode })
@@ -555,6 +566,29 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         ...mediaCoordinates
       }, fs)
       if (!result?.success) throw new Error(result?.error || 'Archive import failed')
+      if (runtime?.seedingManager?.addSeed) {
+        const metadata = result.metadata || result
+        const retentionDriveKey = b4a.isBuffer(channel.key)
+          ? b4a.toString(channel.key, 'hex')
+          : String(channel.key || channel.discoveryKey || metadata.driveKey || 'local-publication')
+        await runtime.seedingManager.addSeed(
+          retentionDriveKey,
+          String(metadata.path || `/videos/${result.videoId}.mp4`),
+          retentionClass === 'archive-pin' ? 'archive' : 'watched',
+          {
+            byteLength: Number(metadata.size || requestedBytes) || 0,
+            thumbnailByteLength: Number(metadata.thumbnailSize || 0) || 0,
+            publicBeeKey: metadata.publicBeeKey || channel.publicBeeKey || null,
+            blobId: metadata.blobId || null,
+            blobsCoreKey: metadata.blobsCoreKey || channel.blobsKeyHex || null,
+            thumbnailBlobId: metadata.thumbnailBlobId || null,
+            thumbnailBlobsCoreKey: metadata.thumbnailBlobsCoreKey || null,
+            mimeType: metadata.mimeType || mimeType || null,
+            thumbnailMimeType: metadata.thumbnailMimeType || null
+          },
+          { authorized: true, protectSelf: retentionClass === 'archive-pin' }
+        )
+      }
 
       if (thumbnailFile && typeof fs?.readFileSync === 'function') {
         try {
@@ -580,7 +614,8 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       }
       return result
     },
-    async publishCatalog({ publisherId }) {
+    async publishCatalog({ publisherId, retentionClass }) {
+      assertRetentionPermission(retentionClass)
       if (!publisherId || typeof runtime?.publishPublisherCatalog !== 'function') {
         throw new Error('publisher catalog is unavailable')
       }
@@ -590,7 +625,8 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       }
       return result
     },
-    async retainAssets({ previewVideos }) {
+    async retainAssets({ previewVideos, retentionClass }) {
+      assertRetentionPermission(retentionClass)
       const results = []
       for (const video of Array.isArray(previewVideos) ? previewVideos : []) {
         const publication = video?.immutablePublication
@@ -683,11 +719,16 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
           : await downloader.download({ id, ...privateInput })
         const sourceIdentity = privateInput.sourceIdentity || deriveArchiveSourceIdentity(privateInput)
         logger?.archive?.info?.('[archive-stage] ensuring-channel', { id, sourceId: sourceIdentity?.sourceId || null })
-        const channelInfo = await publisher.ensureAnonymousChannel({ ...privateInput, sourceIdentity })
+        const channelInfo = await publisher.ensureAnonymousChannel({
+          ...privateInput,
+          sourceIdentity,
+          retentionClass: 'archive-pin'
+        })
         logger?.archive?.info?.('[archive-stage] channel-ready', { id, channelKey: channelInfo?.channelKey || null, publicBeeKey: channelInfo?.publicBeeKey || null })
         const sourceTitle = downloaded.title || privateInput.title
         const sourceDescription = downloaded.description || privateInput.description
         const imported = await publisher.importVideo({
+          retentionClass: 'archive-pin',
           ...privateInput,
           ...downloaded,
           channel: channelInfo.channel,
@@ -732,8 +773,8 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
         } : null
         logger?.archive?.info?.('[archive-stage] publishing', { id, publish: privateInput.publish !== false })
         if (privateInput.publish !== false) {
-          await publisher.publishCatalog(channelInfo)
-          await publisher.retainAssets({ ...channelInfo, previewVideos: previewVideo ? [previewVideo] : [] })
+          await publisher.publishCatalog({ ...channelInfo, retentionClass: 'archive-pin' })
+          await publisher.retainAssets({ ...channelInfo, retentionClass: 'archive-pin', previewVideos: previewVideo ? [previewVideo] : [] })
         }
         logger?.archive?.info?.('[archive-stage] published', { id })
 

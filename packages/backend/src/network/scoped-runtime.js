@@ -285,18 +285,19 @@ export function createScopedNetworkRuntime (options = {}) {
   let networkEnabled = hasInitialNetworkPolicy ? initialNetworkPolicy.networkEnabled !== false : true
   let uploadPermission = hasInitialNetworkPolicy
     ? String(initialNetworkPolicy.uploadPermission || 'disabled')
-    : 'enabled'
+    : 'disabled'
   let uploadCeilingBytes = hasInitialNetworkPolicy
     ? Number(initialNetworkPolicy.uploadCeilingBytes || 0)
-    : Number.MAX_SAFE_INTEGER
+    : 0
   let diskCeilingBytes = hasInitialNetworkPolicy
     ? Number(initialNetworkPolicy.diskCeilingBytes || 0)
     : Number.MAX_SAFE_INTEGER
-  let uploadAllowed = hasInitialNetworkPolicy
-    ? (initialNetworkPolicy.uploadAllowed ?? (
-        networkEnabled && uploadPermission === 'enabled' && uploadCeilingBytes > 0
-      ))
-    : true
+  let contributionAllowed = initialNetworkPolicy.permissions?.contribute === true
+  let archiveAllowed = initialNetworkPolicy.permissions?.archive === true
+  let publicServingAllowed = hasInitialNetworkPolicy &&
+    initialNetworkPolicy.publicServingAllowed === true &&
+    (contributionAllowed || archiveAllowed)
+  let uploadAllowed = publicServingAllowed
   let uploadedBytes = 0
   let networkPolicyEpoch = 0
 
@@ -345,7 +346,7 @@ export function createScopedNetworkRuntime (options = {}) {
       }
       return scope.discovery
     }
-    const discovery = swarm.join(scope.topic, { server: true, client: true })
+    const discovery = swarm.join(scope.topic, { server: publicServingAllowed, client: true })
     scope.discovery = discovery
     scope.discoverySuspended = false
     Promise.resolve(discovery?.flushed?.()).catch(() => {})
@@ -362,6 +363,14 @@ export function createScopedNetworkRuntime (options = {}) {
     await cleanupResource(scope.discovery, ['destroy', 'close'])
     scope.discovery = null
     scope.discoverySuspended = false
+  }
+
+  async function rejoinScopeDiscovery (scope) {
+    if (scope.direct || !scope.discovery) return
+    await cleanupResource(scope.discovery, ['destroy', 'close'])
+    scope.discovery = null
+    scope.discoverySuspended = false
+    ensureScopeDiscovery(scope)
   }
 
   function joinScope ({ purpose, topic, scopeId, mode, ...metadata }) {
@@ -1650,6 +1659,7 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function restoreLocalPublisherScopes () {
+    if (!publicServingAllowed) return
     if (typeof catalogRegistry?.getWritableBindings !== 'function') return
     const bindings = await catalogRegistry.getWritableBindings()
     if (!Array.isArray(bindings) || bindings.length > 64) fail('writable catalog restore exceeds its bound')
@@ -1739,29 +1749,42 @@ export function createScopedNetworkRuntime (options = {}) {
 
   async function applyNetworkPolicyTransition (policy = {}) {
     const nextUploadPermission = String(policy.uploadPermission || 'disabled')
-    const nextUploadCeilingBytes = Number(policy.uploadCeilingBytes ?? 0)
     const nextDiskCeilingBytes = Number(policy.diskCeilingBytes ?? diskCeilingBytes)
+    const nextContributionAllowed = policy.permissions?.contribute === true
+    const nextArchiveAllowed = policy.permissions?.archive === true
+    const nextPublicServingAllowed = policy.publicServingAllowed === true &&
+      (nextContributionAllowed || nextArchiveAllowed)
+    const nextUploadCeilingBytes = Number(
+      policy.contributionBudgetBytes ?? 0
+    ) + Number(policy.archiveBudgetBytes ?? 0)
     if (!['disabled', 'manual', 'enabled'].includes(nextUploadPermission)) fail('invalid upload permission')
     if (!Number.isSafeInteger(nextUploadCeilingBytes) || nextUploadCeilingBytes < 0) fail('invalid upload ceiling')
     if (!Number.isSafeInteger(nextDiskCeilingBytes) || nextDiskCeilingBytes < 0) fail('invalid disk ceiling')
 
     const wasNetworkEnabled = networkEnabled
-    const wasUploadAllowed = uploadAllowed
+    const wasPublicServingAllowed = publicServingAllowed
     networkEnabled = policy.networkEnabled !== false
     uploadPermission = nextUploadPermission
     uploadCeilingBytes = nextUploadCeilingBytes
     diskCeilingBytes = nextDiskCeilingBytes
-    uploadAllowed = policy.uploadAllowed ?? (
-      networkEnabled && uploadPermission === 'enabled' && uploadCeilingBytes > 0
-    )
+    contributionAllowed = nextContributionAllowed
+    archiveAllowed = nextArchiveAllowed
+    publicServingAllowed = nextPublicServingAllowed && networkEnabled
+    uploadAllowed = publicServingAllowed
     networkPolicyEpoch++
 
+    if (wasPublicServingAllowed !== publicServingAllowed) {
+      await Promise.allSettled([...scopes.values()].map(rejoinScopeDiscovery))
+    }
     if (wasNetworkEnabled && !networkEnabled) await deactivateNetwork()
     else if (!wasNetworkEnabled && networkEnabled) await activateNetwork()
-    await restartTransferSessions(wasUploadAllowed && !uploadAllowed)
+    await restartTransferSessions(false)
     return {
       networkEnabled,
       uploadAllowed,
+      publicServingAllowed,
+      contributionAllowed,
+      archiveAllowed,
       uploadPermission,
       uploadCeilingBytes,
       uploadedBytes,
@@ -2010,6 +2033,7 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function publishLocalPublisherCatalog ({ publisherId } = {}) {
+    if (!publicServingAllowed) fail('explicit contribution or archive consent is required')
     if (status !== 'active') fail('runtime is not active')
     const id = hex32(publisherId, 'publisherId')
     const existing = localPublishers.get(id)
@@ -2616,18 +2640,22 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function publishArchiveRequest ({ request, envelope } = {}) {
+    if (!archiveAllowed) fail('explicit archive consent is required')
     return publishArchiveEnvelope('archive-request', envelope || request?.envelope || request)
   }
 
   async function publishArchivePledge ({ pledge, envelope } = {}) {
+    if (!archiveAllowed) fail('explicit archive consent is required')
     return publishArchiveEnvelope('archive-pledge', envelope || pledge?.envelope || pledge)
   }
 
   async function publishArchiveChallenge ({ challenge, envelope } = {}) {
+    if (!archiveAllowed) fail('explicit archive consent is required')
     return publishArchiveEnvelope('archive-challenge', envelope || challenge?.envelope || challenge)
   }
 
   async function publishArchiveChallengeProof ({ envelope, proofBytes } = {}) {
+    if (!archiveAllowed) fail('explicit archive consent is required')
     const scope = findScope('archive-discovery', deriveArchiveDiscoveryTopic({ protocolMajor, networkId }))
     if (!scope?.archiveDiscovery) fail('archive discovery is disabled')
     const proof = b4a.from(proofBytes || [])
@@ -2658,6 +2686,7 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function retainAuthorizedArchive ({ pledge, coreKey: requestedCoreKey, start, end, download: shouldDownload = true } = {}) {
+    if (!archiveAllowed) fail('explicit archive consent is required')
     if (status !== 'active') fail('runtime is not active')
     const envelope = pledge?.envelope || pledge
     const verified = await verifyArchivePledge(envelope, { now: options.now?.() })
@@ -2783,6 +2812,7 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function publishBootstrapLocator ({ locator, envelope } = {}) {
+    if (!publicServingAllowed) fail('explicit contribution or archive consent is required')
     const bootstrapScope = findScope('bootstrap', deriveBootstrapTopic({ protocolMajor, networkId }))
     if (!bootstrapScope) fail('bootstrap discovery is disabled')
     const value = envelope || locator?.envelope || locator

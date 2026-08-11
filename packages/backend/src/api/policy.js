@@ -1,4 +1,15 @@
+export const NETWORK_POLICY_VERSION = 2
+
 export const DEFAULT_NETWORK_POLICY = Object.freeze({
+  policyVersion: NETWORK_POLICY_VERSION,
+  consentVersion: 1,
+  migrationRequired: false,
+  effectiveRole: 'watch-only',
+  permissions: Object.freeze({ contribute: false, archive: false }),
+  contributeWatchedMedia: false,
+  archiveEnabled: false,
+  contributionBudgetBytes: 0,
+  archiveBudgetBytes: 0,
   uploadPermission: 'manual',
   meteredNetwork: 'pause-network',
   backgroundMode: 'local-only',
@@ -17,6 +28,30 @@ const ENUMS = {
   backgroundMode: new Set(['pause-network', 'local-only', 'allow']),
   retentionMode: new Set(['none', 'local-pin', 'archive-pledges']),
   aiAnalysis: new Set(['disabled', 'local-only', 'enabled']),
+}
+
+function effectiveRole(contribute, archive) {
+  if (archive) return 'archive-enabled'
+  if (contribute) return 'contributor'
+  return 'watch-only'
+}
+
+export function evaluateNetworkRole(policy = {}) {
+  const current = policy.policyVersion === NETWORK_POLICY_VERSION &&
+    policy.migrationRequired !== true
+  const contribute = current && policy.contributeWatchedMedia === true
+  const archive = current && policy.archiveEnabled === true
+  const contributionBudgetBytes = boundedBytes(policy.contributionBudgetBytes ?? 0, 'contributionBudgetBytes')
+  const archiveBudgetBytes = boundedBytes(policy.archiveBudgetBytes ?? 0, 'archiveBudgetBytes')
+  return Object.freeze({
+    policyVersion: NETWORK_POLICY_VERSION,
+    consentVersion: boundedBytes(policy.consentVersion ?? 0, 'consentVersion'),
+    migrationRequired: !current,
+    effectiveRole: effectiveRole(contribute, archive),
+    permissions: Object.freeze({ contribute, archive }),
+    contributionBudgetBytes,
+    archiveBudgetBytes,
+  })
 }
 
 const NETWORK_POLICY_KEY = 'network-policy:v1'
@@ -67,18 +102,31 @@ function decodeNetworkPolicyPatch(input = {}) {
     if (input[wireName] != null) patch[policyName] = decodeBoundedList(input[wireName], policyName)
     delete patch[wireName]
   }
-  for (const key of ['diskCeilingBytes', 'uploadCeilingBytes']) {
+  for (const key of [
+    'diskCeilingBytes',
+    'uploadCeilingBytes',
+    'contributionBudgetBytes',
+    'archiveBudgetBytes',
+  ]) {
     const flag = `${key}Present`
     if (hasOwn(input, flag) && input[flag] !== true) delete patch[key]
     else if (input[flag] === true && !hasOwn(input, key)) patch[key] = 0
+    delete patch[flag]
   }
-  delete patch.diskCeilingBytesPresent
-  delete patch.uploadCeilingBytesPresent
   return patch
 }
 
 function networkPolicyWireFields(policy) {
   return {
+    policyVersion: policy.policyVersion,
+    consentVersion: policy.consentVersion,
+    migrationRequired: policy.migrationRequired,
+    effectiveRole: policy.effectiveRole,
+    permissions: { ...policy.permissions },
+    contributeWatchedMedia: policy.contributeWatchedMedia,
+    archiveEnabled: policy.archiveEnabled,
+    contributionBudgetBytes: policy.contributionBudgetBytes,
+    archiveBudgetBytes: policy.archiveBudgetBytes,
     uploadPermission: policy.uploadPermission,
     meteredNetwork: policy.meteredNetwork,
     backgroundMode: policy.backgroundMode,
@@ -100,11 +148,31 @@ export function normalizeNetworkPolicy(input = {}, base = DEFAULT_NETWORK_POLICY
       policy[key] = input[key]
     }
   }
-  if (input.diskCeilingBytes !== undefined) policy.diskCeilingBytes = boundedBytes(input.diskCeilingBytes, 'diskCeilingBytes')
-  if (input.uploadCeilingBytes !== undefined) policy.uploadCeilingBytes = boundedBytes(input.uploadCeilingBytes, 'uploadCeilingBytes')
+  for (const key of [
+    'diskCeilingBytes',
+    'uploadCeilingBytes',
+    'contributionBudgetBytes',
+    'archiveBudgetBytes',
+  ]) {
+    if (input[key] !== undefined) policy[key] = boundedBytes(input[key], key)
+  }
   for (const key of ['followedPublishers', 'followedIndexes', 'trustedModerationFeeds']) {
     if (input[key] !== undefined) policy[key] = boundedList(input[key], key)
   }
+  policy.policyVersion = NETWORK_POLICY_VERSION
+  policy.consentVersion = boundedBytes(input.consentVersion ?? policy.consentVersion ?? 0, 'consentVersion')
+  policy.migrationRequired = hasOwn(input, 'migrationRequired')
+    ? input.migrationRequired === true
+    : policy.migrationRequired === true
+  policy.contributeWatchedMedia = hasOwn(input, 'contributeWatchedMedia')
+    ? input.contributeWatchedMedia === true
+    : policy.contributeWatchedMedia === true
+  policy.archiveEnabled = hasOwn(input, 'archiveEnabled')
+    ? input.archiveEnabled === true
+    : policy.archiveEnabled === true
+  const role = evaluateNetworkRole(policy)
+  policy.effectiveRole = role.effectiveRole
+  policy.permissions = role.permissions
   return policy
 }
 
@@ -126,7 +194,20 @@ async function writePolicyStore(store, policy) {
 export async function loadNetworkPolicy({ store = new Map(), defaults = DEFAULT_NETWORK_POLICY } = {}) {
   const base = normalizeNetworkPolicy(defaults, DEFAULT_NETWORK_POLICY)
   const stored = await readPolicyStore(store)
-  return stored == null ? base : normalizeNetworkPolicy(stored, base)
+  if (stored == null) return base
+  if (stored.policyVersion !== NETWORK_POLICY_VERSION) {
+    return normalizeNetworkPolicy({
+      ...stored,
+      policyVersion: NETWORK_POLICY_VERSION,
+      consentVersion: 0,
+      migrationRequired: true,
+      contributeWatchedMedia: false,
+      archiveEnabled: false,
+      contributionBudgetBytes: 0,
+      archiveBudgetBytes: 0,
+    }, base)
+  }
+  return normalizeNetworkPolicy(stored, base)
 }
 
 function unsupportedPolicyError(field, detail) {
@@ -149,21 +230,24 @@ export function assertNetworkPolicyRuntimeSupported(policy) {
 }
 
 export function resolveNetworkPolicyForEnvironment(policy, environment = {}) {
+  const normalized = normalizeNetworkPolicy(policy, DEFAULT_NETWORK_POLICY)
+  const role = evaluateNetworkRole(normalized)
   const constrainedModes = []
-  if (environment.metered) constrainedModes.push(policy.meteredNetwork)
-  if (environment.background) constrainedModes.push(policy.backgroundMode)
+  if (environment.metered) constrainedModes.push(normalized.meteredNetwork)
+  if (environment.background) constrainedModes.push(normalized.backgroundMode)
   const networkMode = constrainedModes.includes('pause-network')
     ? 'pause-network'
     : (constrainedModes.includes('local-only') ? 'local-only' : 'allow')
   const networkEnabled = networkMode === 'allow'
-  const uploadAllowed = networkEnabled &&
-    policy.uploadPermission === 'enabled' &&
-    policy.uploadCeilingBytes > 0
+  const publicServingAllowed = networkEnabled &&
+    (role.permissions.contribute || role.permissions.archive)
   return {
-    ...policy,
+    ...normalized,
+    ...role,
     networkMode,
     networkEnabled,
-    uploadAllowed,
+    publicServingAllowed,
+    uploadAllowed: publicServingAllowed,
   }
 }
 
@@ -192,8 +276,8 @@ export function createNetworkPolicyRuntime({
   const normalizeSupported = candidate => {
     const normalized = normalizeNetworkPolicy(candidate, DEFAULT_NETWORK_POLICY)
     assertNetworkPolicyRuntimeSupported(normalized)
-    if (normalized.retentionMode === 'archive-pledges' && !archiveNetwork?.setParticipation) {
-      throw unsupportedPolicyError('retentionMode', 'archive participation is unavailable on this runtime')
+    if (normalized.archiveEnabled && !archiveNetwork?.setParticipation) {
+      throw unsupportedPolicyError('archiveEnabled', 'archive participation is unavailable on this runtime')
     }
     return normalized
   }
@@ -205,12 +289,15 @@ export function createNetworkPolicyRuntime({
 
     await scopedNetwork?.applyNetworkPolicy?.(effective)
     await seedingManager?.applyNetworkPolicy?.({
-      diskCeilingBytes: nextPolicy.diskCeilingBytes,
-      retentionMode: nextPolicy.retentionMode,
+      contributeWatchedMedia: effective.permissions.contribute,
+      archiveEnabled: effective.permissions.archive,
+      contributionBudgetBytes: effective.contributionBudgetBytes,
+      archiveBudgetBytes: effective.archiveBudgetBytes,
+      migrationRequired: effective.migrationRequired,
     })
     const archiveResult = await archiveNetwork?.setParticipation?.({
-      enabled: nextPolicy.retentionMode === 'archive-pledges',
-      capacityBytes: nextPolicy.diskCeilingBytes,
+      enabled: effective.permissions.archive,
+      capacityBytes: effective.archiveBudgetBytes,
     })
     if (archiveResult?.errorCode) {
       const error = new Error(archiveResult.errorCode)

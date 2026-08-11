@@ -233,6 +233,7 @@ function harness (t, { bee = fakeBee(), publisher = fakePublisher(), client, roo
     publisher,
     spoolRoot: join(storage, 'spool'),
     sourceClient: client,
+    canIngest: () => true,
     verifyChunkBytes: 4,
     now: () => NOW
   })

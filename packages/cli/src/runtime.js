@@ -167,18 +167,33 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
     },
 
     async getDiagnostics () {
-      const [scoped, locators, seedRetention, archive, storage] = await Promise.all([
+      const [scoped, locators, seedRetention, archive, storage, policyResult] = await Promise.all([
         backend.api.getScopedNetworkDiagnostics(),
         backend.api.listBootstrapLocators(),
         backend.seedingManager?.getStatus?.() || {},
         backend.api.getArchiveOperatorStatus?.({}) || {},
-        backend.api.getStorageStats?.() || {}
+        backend.api.getStorageStats?.() || {},
+        backend.api.getNetworkPolicy?.() || {}
       ])
       const counters = scoped?.counters || {}
       const swarm = backend.ctx?.swarm
       const publisherTopics = roleCount(scoped?.topics, 'publisher')
       const assetTopics = roleCount(scoped?.topics, 'asset')
+      const policy = policyResult?.policy || {}
       return {
+        policy: {
+          policyVersion: Number(policy.policyVersion) || 0,
+          consentVersion: Number(policy.consentVersion) || 0,
+          migrationRequired: policy.migrationRequired !== false,
+          effectiveRole: policy.effectiveRole || 'watch-only',
+          permissions: {
+            contribute: policy.permissions?.contribute === true,
+            archive: policy.permissions?.archive === true
+          },
+          contributionBudgetBytes: Number(policy.contributionBudgetBytes) || 0,
+          archiveBudgetBytes: Number(policy.archiveBudgetBytes) || 0,
+          selectedIndexers: []
+        },
         network: {
           status: scoped?.status || 'unknown',
           protocolMajor: scoped?.protocolMajor ?? PROTOCOL_VERSION,
@@ -192,7 +207,10 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
           },
           offline: Boolean(swarm?._peartubeOffline),
           offlineReason: swarm?._peartubeOfflineReason || null,
-          listenResolved: Boolean(swarm?._peartubeListenResolved)
+          listenResolved: Boolean(swarm?._peartubeListenResolved),
+          lastErrors: Array.isArray(scoped?.recentErrors)
+            ? scoped.recentErrors.slice(-8).map(error => String(error?.code || 'SCOPED_NETWORK_ERROR').slice(0, 64))
+            : []
         },
         publisher: {
           catalogs: counter(counters, 'publisherCatalogs', 'catalogs') || publisherTopics,
@@ -209,6 +227,10 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
           retainedRenditions: counter(counters, 'retainedRenditions'),
           activeSessions: roleCount(scoped?.sessions, 'asset'),
           topics: assetTopics,
+          activeUploads: Array.isArray(scoped?.sessions)
+            ? scoped.sessions.reduce((total, session) => total + Number(session.assetResponseCount || 0), 0)
+            : 0,
+          uploadedBytes: Number(scoped?.policy?.uploadedBytes) || 0,
           maxSessions: counter(counters, 'maxAssetSessions', 'assetSessionLimit')
         },
         seedRetention: seedRetention || {},

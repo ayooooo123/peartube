@@ -98,13 +98,34 @@ export async function createRelayService({
   let ingestReady = false
   const localMirrorState = createLocalDriveMirrorState()
 
+  function retentionPermission(retentionClass, requestedBytes = 0) {
+    const policy = runtime.ctx?.networkPolicyRuntime?.getPolicy?.()
+    if (policy?.policyVersion !== 2 || policy.migrationRequired === true) return false
+    const contribution = retentionClass === 'contribution-cache'
+    const allowed = contribution
+      ? policy.contributeWatchedMedia === true
+      : retentionClass === 'archive-pin' && policy.archiveEnabled === true
+    if (!allowed) return false
+    const budget = Number(contribution ? policy.contributionBudgetBytes : policy.archiveBudgetBytes)
+    const usage = runtime.seedingManager?.getRetentionBudgetStatus?.() || {}
+    const used = Number(contribution ? usage.contributionUsedBytes : usage.archiveUsedBytes) || 0
+    const requested = Math.max(0, Number(requestedBytes) || 0)
+    return Number.isSafeInteger(budget) && budget > 0 && used + requested <= budget
+  }
+
+  function canRetain(request = {}) {
+    return storageGuard.hasMinFreeDisk() &&
+      retentionPermission(request.retentionClass, request.expected?.byteLength || 0)
+  }
+
   function createLocalDrivePublisher(runtimeFsModule) {
     return createArchivePublisher({
       identityManager: runtime.identityManager,
       uploadManager: runtime.uploadManager,
       api: runtime.api,
       runtime,
-      fs: runtimeFsModule
+      fs: runtimeFsModule,
+      canPublish: retentionPermission,
     })
   }
 
@@ -186,13 +207,19 @@ export async function createRelayService({
   }
 
   async function persistStatus() {
-    const runtimeStats = typeof runtime.getDiagnostics === 'function'
-      ? await runtime.getDiagnostics()
-      : {}
+    const [runtimeStats, ingestStatus] = await Promise.all([
+      typeof runtime.getDiagnostics === 'function' ? runtime.getDiagnostics() : {},
+      ingestManager?.getStatus?.().catch(() => ({
+        jobsByState: {},
+        activeAcquisitions: 0,
+        lastErrors: ['INGEST_STATUS_UNAVAILABLE']
+      })) || {}
+    ])
     currentStatus = buildRelayStatus({
       config,
       catalog: relayCatalog,
       runtimeStats,
+      ingestStatus,
       trustedClientsCount: trustedClients.list().length
     })
 
@@ -236,6 +263,7 @@ export async function createRelayService({
   }
 
   async function publishArchiveJob(job) {
+    if (!retentionPermission('archive-pin')) return { published: false, reason: 'archive-consent-required' }
     if (closed) return { published: false, reason: 'closed' }
     if (job?.status !== 'completed') return { published: false, reason: 'not-completed' }
     if (job?.publish === false) return { published: false, reason: 'not-published' }
@@ -310,8 +338,8 @@ export async function createRelayService({
     settings: relaySettings,
     trustedClients,
     storageGuard,
-    canIngest: () => storageGuard.canIngest(),
-    canArchive: () => storageGuard.hasMinFreeDisk(),
+    canIngest: request => canRetain(request),
+    canArchive: () => canRetain({ retentionClass: 'archive-pin' }),
     canStageIngest: () => ingestReady,
     getClassifier() {
       return classifier
@@ -497,13 +525,14 @@ export async function createRelayService({
               uploadManager: runtime.uploadManager,
               api: runtime.api,
               runtime,
-              fs: companionFsModule
+              fs: companionFsModule,
+              canPublish: retentionPermission
             }),
             spoolRoot: ingestSpoolRoot,
             fs: companionFsModule,
             path: companionPathModule,
             sourceClient,
-            canIngest: () => storageGuard.hasMinFreeDisk(),
+            canIngest: request => canRetain(request),
             now: nowFn,
             logger
           })
@@ -727,6 +756,9 @@ export async function createRelayService({
       return ingestManager.cancelJob(jobId)
     },
     async enqueueArchiveJob(input, { runNow = false } = {}) {
+      if (!retentionPermission('archive-pin')) {
+        throw new Error('explicit archive consent is required')
+      }
       if (!runtime.ctx?.metaDb) throw new Error('archive jobs require relay runtime metadata storage')
       // Deliberate uploads are the relay's purpose; they are only refused when
       // the disk is genuinely low (ENOSPC risk), NOT when the evictable
@@ -745,7 +777,7 @@ export async function createRelayService({
       const manager = createArchiveManager({
         store,
         logger,
-        canIngest: () => storageGuard.hasMinFreeDisk(),
+        canIngest: () => canRetain({ retentionClass: 'archive-pin' }),
         downloader: createYtDlpDownloader({
           bin: config.archive?.ytDlpPath,
           outputDir: config.archive?.tmpPath || './peartube-relay/archive-tmp',
@@ -764,7 +796,8 @@ export async function createRelayService({
           uploadManager: runtime.uploadManager,
           api: runtime.api,
           runtime,
-          fs: runtimeFsModule
+          fs: runtimeFsModule,
+          canPublish: retentionPermission
         }),
         onCompleted: (job) => service.publishArchiveJob(job)
       })

@@ -119,6 +119,15 @@ function mergeSeedReason(existingReason, nextReason) {
     : existingReason
 }
 
+function retentionClassForReason(reason) {
+  return isProtectedSeedReason(reason) ? 'archive-pin' : 'contribution-cache'
+}
+
+function seedStorageBytes(seed) {
+  return normalizeStorageBytes(seed?.bytes) + normalizeStorageBytes(seed?.thumbnailBytes)
+}
+
+
 function hasFiniteByteLength(blobInfo) {
   return Number.isFinite(Number(blobInfo?.byteLength)) && Number(blobInfo.byteLength) >= 0
 }
@@ -185,6 +194,13 @@ export class SeedingManager {
       autoSeedWatched: true,      // Automatically seed videos you watch
       autoSeedSubscribed: false,  // Automatically seed subscribed channels (opt-in)
       maxVideosPerChannel: 10     // Max videos to seed per channel if auto-seeding subscriptions
+    };
+    this.retentionPolicy = {
+      contributeWatchedMedia: false,
+      archiveEnabled: false,
+      contributionBudgetBytes: 0,
+      archiveBudgetBytes: 0,
+      migrationRequired: true
     };
     console.log('[SeedingManager] Initialized');
   }
@@ -317,12 +333,49 @@ export class SeedingManager {
     const seedsData = await this.metaDb.get('active-seeds');
     if (seedsData?.value) {
       for (const [key, info] of Object.entries(seedsData.value)) {
-        this.activeSeeds.set(key, /** @type {SeedInfo} */ (info));
+        this.activeSeeds.set(key, {
+          ...info,
+          retentionClass: info.retentionClass || retentionClassForReason(info.reason)
+        });
       }
       console.log('[SeedingManager] Loaded', this.activeSeeds.size, 'active seeds');
     }
   }
 
+
+  retentionUsage(excludeKey = null) {
+    const usage = { contributionUsedBytes: 0, archiveUsedBytes: 0 }
+    for (const [key, seed] of this.activeSeeds) {
+      if (key === excludeKey) continue
+      const field = seed.retentionClass === 'archive-pin' ? 'archiveUsedBytes' : 'contributionUsedBytes'
+      usage[field] += seedStorageBytes(seed)
+    }
+    return usage
+  }
+
+  assertRetentionAdmission(reason, blobInfo, existingKey = null) {
+    const retentionClass = retentionClassForReason(reason)
+    const policy = this.retentionPolicy
+    const allowed = retentionClass === 'archive-pin'
+      ? policy.archiveEnabled
+      : policy.contributeWatchedMedia
+    const budget = retentionClass === 'archive-pin'
+      ? policy.archiveBudgetBytes
+      : policy.contributionBudgetBytes
+    if (policy.migrationRequired || !allowed || budget <= 0) {
+      throw new SeedingAuthorizationError(`explicit ${retentionClass} permission is required`)
+    }
+    const usage = this.retentionUsage(existingKey)
+    const used = retentionClass === 'archive-pin'
+      ? usage.archiveUsedBytes
+      : usage.contributionUsedBytes
+    const requested = normalizeByteLength(blobInfo, 0) +
+      normalizeStorageBytes(blobInfo?.thumbnailByteLength)
+    if (used + requested > budget) {
+      throw new SeedingAuthorizationError(`${retentionClass} budget exceeded`)
+    }
+    return retentionClass
+  }
 
   /**
    * Add a seed for a video
@@ -335,13 +388,15 @@ export class SeedingManager {
    */
   async addSeed(driveKey, videoPath, reason, blobInfo, options = {}) {
     this.assertAuthorizedForSeed(driveKey, reason, options)
+    const key = `${driveKey}:${videoPath}`;
+    const retentionClass = this.assertRetentionAdmission(reason, blobInfo, key)
 
     if (!this.config.autoSeedWatched && reason === 'watched') {
       console.log('[SeedingManager] Auto-seed watched disabled, skipping');
       return false;
     }
 
-    const key = `${driveKey}:${videoPath}`;
+    // Admission is rechecked at the mutation boundary above.
 
     // Check if already seeding
     if (this.activeSeeds.has(key)) {
@@ -350,6 +405,7 @@ export class SeedingManager {
       const updatedSeedInfo = {
         ...existing,
         reason: mergeSeedReason(existing.reason, reason),
+        retentionClass,
         blocks: blobInfo?.blockLength || existing.blocks || 0,
         bytes: normalizeByteLength(blobInfo, existing.bytes || 0),
         thumbnailBytes: blobInfo?.thumbnailByteLength == null
@@ -376,6 +432,7 @@ export class SeedingManager {
       driveKey,
       videoPath,
       reason,
+      retentionClass,
       addedAt: Date.now(),
       blocks: blobInfo?.blockLength || 0,
       bytes: normalizeByteLength(blobInfo, 0),
@@ -460,23 +517,58 @@ export class SeedingManager {
     console.log('[SeedingManager] Updated config:', this.config);
   }
 
-  async applyNetworkPolicy({ diskCeilingBytes } = {}) {
-    const ceiling = Number(diskCeilingBytes)
-    if (!Number.isSafeInteger(ceiling) || ceiling < 0) {
-      throw new TypeError('diskCeilingBytes must be a non-negative safe integer')
+  async applyNetworkPolicy({
+    contributeWatchedMedia = false,
+    archiveEnabled = false,
+    contributionBudgetBytes = 0,
+    archiveBudgetBytes = 0,
+    migrationRequired = true
+  } = {}) {
+    const contribution = normalizeStorageBytes(contributionBudgetBytes)
+    const archive = normalizeStorageBytes(archiveBudgetBytes)
+    this.retentionPolicy = {
+      contributeWatchedMedia: contributeWatchedMedia === true && migrationRequired !== true,
+      archiveEnabled: archiveEnabled === true && migrationRequired !== true,
+      contributionBudgetBytes: contribution,
+      archiveBudgetBytes: archive,
+      migrationRequired: migrationRequired === true
     }
-    const previousBytes = this.config.maxStorageGB * 1024 * 1024 * 1024
     this.config = {
       ...this.config,
-      maxStorageGB: ceiling / (1024 * 1024 * 1024)
+      maxStorageGB: (contribution + archive) / (1024 * 1024 * 1024)
     }
     await this.metaDb.put('seeding-config', this.config)
-    if (ceiling < previousBytes) {
-      const partials = await this.clearDownloadIntents()
-      if (partials.clearedBlob) await this.flushClearedBlobRanges('policy partial download clear')
+    await this.enforceContributionRetention()
+    return this.getRetentionBudgetStatus()
+  }
+
+  async enforceContributionRetention() {
+    const policy = this.retentionPolicy
+    const candidates = Array.from(this.activeSeeds.entries())
+      .filter(([, seed]) => seed.retentionClass !== 'archive-pin')
+      .sort((left, right) => {
+        const age = normalizeStorageBytes(left[1].addedAt) - normalizeStorageBytes(right[1].addedAt)
+        return age || left[0].localeCompare(right[0])
+      })
+    let used = candidates.reduce((total, [, seed]) => total + seedStorageBytes(seed), 0)
+    const allowed = !policy.migrationRequired && policy.contributeWatchedMedia
+    let clearedBlob = false
+    for (const [key, seed] of candidates) {
+      if (allowed && used <= policy.contributionBudgetBytes) break
+      this.activeSeeds.delete(key)
+      used -= seedStorageBytes(seed)
+      clearedBlob = (await this.clearSeedBlob(seed)) || clearedBlob
     }
-    await this.enforceQuota()
-    return { diskCeilingBytes: ceiling }
+    await this.persistSeeds()
+    if (clearedBlob) await this.flushClearedBlobRanges('contribution retention policy')
+  }
+
+  getRetentionBudgetStatus() {
+    const usage = this.retentionUsage()
+    return {
+      ...this.retentionPolicy,
+      ...usage
+    }
   }
 
   /**
@@ -484,27 +576,16 @@ export class SeedingManager {
    * @returns {Promise<Object>}
    */
   async getStatus() {
-    const storageUsed = this.calculateStorage();
+    const retention = this.getRetentionBudgetStatus()
     return {
       activeSeeds: this.activeSeeds.size,
+      activeContributionSeeds: Array.from(this.activeSeeds.values())
+        .filter(seed => seed.retentionClass !== 'archive-pin').length,
+      activeArchivePins: Array.from(this.activeSeeds.values())
+        .filter(seed => seed.retentionClass === 'archive-pin').length,
       pinnedChannels: this.pinnedChannels.size,
-      storageUsedBytes: storageUsed,
-      storageUsedGB: (storageUsed / (1024 * 1024 * 1024)).toFixed(2),
-      maxStorageGB: this.config.maxStorageGB,
-      config: this.config,
-      seeds: Array.from(this.activeSeeds.values()).map(s => ({
-        videoPath: s.videoPath,
-        reason: s.reason,
-        bytes: s.bytes,
-        addedAt: s.addedAt,
-        publicBeeKey: s.publicBeeKey || null,
-        blobId: s.blobId || null,
-        blobsCoreKey: s.blobsCoreKey || null,
-        thumbnailBlobId: s.thumbnailBlobId || null,
-        thumbnailBlobsCoreKey: s.thumbnailBlobsCoreKey || null,
-        mimeType: s.mimeType || null,
-        thumbnailMimeType: s.thumbnailMimeType || null
-      }))
+      storageUsedBytes: retention.contributionUsedBytes + retention.archiveUsedBytes,
+      retention
     };
   }
 
@@ -618,6 +699,15 @@ export class SeedingManager {
     const key = `${driveKey}:${videoPath}`;
     const seed = this.activeSeeds.get(key);
     if (!seed) return false;
+    const retentionClass = seed.retentionClass || retentionClassForReason(seed.reason)
+    const policy = this.retentionPolicy
+    const allowed = retentionClass === 'archive-pin' ? policy.archiveEnabled : policy.contributeWatchedMedia
+    const budget = retentionClass === 'archive-pin' ? policy.archiveBudgetBytes : policy.contributionBudgetBytes
+    const usage = this.retentionUsage(key)
+    const otherUsed = retentionClass === 'archive-pin' ? usage.archiveUsedBytes : usage.contributionUsedBytes
+    if (policy.migrationRequired || !allowed || otherUsed + Math.max(0, Math.round(Number(byteLength) || 0)) > budget) {
+      return false
+    }
 
     const nextBytes = Math.max(0, Math.round(Number(byteLength) || 0));
     if (nextBytes === (seed.bytes || 0)) return false;

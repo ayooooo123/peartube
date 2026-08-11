@@ -61,6 +61,12 @@ test('persisted policy loads before manager startup and survives restart', async
     diskCeilingBytes: 2048,
     uploadCeilingBytes: 512,
     retentionMode: 'archive-pledges',
+    consentVersion: 2,
+    migrationRequired: false,
+    contributeWatchedMedia: true,
+    archiveEnabled: true,
+    contributionBudgetBytes: 1536,
+    archiveBudgetBytes: 2048,
   })
   t.is(saved.success, true)
 
@@ -69,9 +75,9 @@ test('persisted policy loads before manager startup and survives restart', async
   await restarted.runtime.start()
 
   t.alike(restarted.events.map(([name]) => name), ['scoped', 'seeding', 'archive'])
-  t.is(restarted.events[0][1].uploadCeilingBytes, 512)
+  t.is(restarted.events[0][1].uploadAllowed, true)
   t.is(restarted.events[0][1].networkEnabled, true)
-  t.is(restarted.events[1][1].diskCeilingBytes, 2048)
+  t.is(restarted.events[1][1].contributionBudgetBytes, 1536)
   t.is(restarted.events[2][1].enabled, true)
   t.is(restarted.events[2][1].capacityBytes, 2048)
 })
@@ -87,6 +93,12 @@ test('runtime policy transitions stop forbidden work, release reservations, and 
     uploadCeilingBytes: 1024,
     retentionMode: 'archive-pledges',
     diskCeilingBytes: 4096,
+    consentVersion: 2,
+    migrationRequired: false,
+    contributeWatchedMedia: true,
+    archiveEnabled: true,
+    contributionBudgetBytes: 2048,
+    archiveBudgetBytes: 4096,
   })
   await harness.runtime.setEnvironment({ background: true })
   const stopped = harness.events.filter(([name]) => name === 'scoped').at(-1)[1]
@@ -99,9 +111,13 @@ test('runtime policy transitions stop forbidden work, release reservations, and 
     uploadCeilingBytes: 0,
     retentionMode: 'none',
     diskCeilingBytes: 0,
+    contributeWatchedMedia: false,
+    archiveEnabled: false,
+    contributionBudgetBytes: 0,
+    archiveBudgetBytes: 0,
   })
   t.is(harness.reservations, 0, 'disabling archive retention releases reservations')
-  t.is(harness.events.filter(([name]) => name === 'seeding').at(-1)[1].diskCeilingBytes, 0)
+  t.is(harness.events.filter(([name]) => name === 'seeding').at(-1)[1].contributionBudgetBytes, 0)
 
   await harness.runtime.setEnvironment({ background: false })
   const restarted = harness.events.filter(([name]) => name === 'scoped').at(-1)[1]
@@ -116,8 +132,11 @@ test('deferred runtime startup applies the latest policy exactly once', async (t
     ...initialPolicy,
     uploadPermission: 'enabled',
     uploadCeilingBytes: 77,
+    consentVersion: 2,
+    migrationRequired: false,
+    contributeWatchedMedia: true,
+    contributionBudgetBytes: 77,
   })
-
   t.alike(harness.events.map(([name]) => name), ['scoped', 'seeding', 'archive'])
   t.is(harness.events[0][1].uploadCeilingBytes, 77)
 })
@@ -157,6 +176,10 @@ test('failed manager reconfiguration rolls runtime and persisted policy back', a
     retentionMode: 'archive-pledges',
     uploadPermission: 'enabled',
     uploadCeilingBytes: 1024,
+    consentVersion: 2,
+    migrationRequired: false,
+    archiveEnabled: true,
+    archiveBudgetBytes: 1024,
   })
 
   t.is(result.success, false)
@@ -165,11 +188,16 @@ test('failed manager reconfiguration rolls runtime and persisted policy back', a
   t.is(applied.at(-1).uploadCeilingBytes, 0)
 })
 
-test('unsupported persisted policy fails before deferred manager startup', async (t) => {
+test('archive consent is unsupported when the archive runtime is unavailable', async (t) => {
   const initialPolicy = await loadNetworkPolicy({ store: asyncPolicyStore() })
   t.exception(() => createNetworkPolicyRuntime({
-    initialPolicy: { ...initialPolicy, retentionMode: 'archive-pledges' },
-  }), /retentionMode is unsupported/)
+    initialPolicy: {
+      ...initialPolicy,
+      migrationRequired: false,
+      archiveEnabled: true,
+      archiveBudgetBytes: 1024,
+    },
+  }), /archiveEnabled is unsupported/)
 })
 
 test('policy API rejects fields with no production runtime consumer', async (t) => {
@@ -196,6 +224,23 @@ test('policy API rejects fields with no production runtime consumer', async (t) 
     t.is(result.errorCode, 'UNSUPPORTED_POLICY_FIELD')
   }
   t.alike((await api.getNetworkPolicy()).policy, initialPolicy)
+})
+
+test('legacy persisted policy is migration-required watch-only despite permissive legacy fields', async (t) => {
+  const policy = await loadNetworkPolicy({
+    store: asyncPolicyStore({
+      uploadPermission: 'enabled',
+      uploadCeilingBytes: 4096,
+      retentionMode: 'archive-pledges',
+      diskCeilingBytes: 8192,
+    }),
+  })
+  t.is(policy.migrationRequired, true)
+  t.is(policy.effectiveRole, 'watch-only')
+  t.is(policy.permissions.contribute, false)
+  t.is(policy.permissions.archive, false)
+  t.is(policy.contributionBudgetBytes, 0)
+  t.is(policy.archiveBudgetBytes, 0)
 })
 
 test('foreground policy refresh resumes transport even when no policy suspension ran', async (t) => {

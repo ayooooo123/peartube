@@ -1420,3 +1420,15 @@ test('multipart abort, staging admission, and request/file size mismatch never l
     t.is(harness.bee?.map?.size || 0, 0)
   }
 })
+
+test('watch-only admission rejects before creating an ingest job', async (t) => {
+  const { files, manager, store } = harness(t, { canIngest: () => false })
+  const bytes = Buffer.from('watch-only bytes')
+  const descriptor = files.writeSpool(bytes, 'watch-only.mkv')
+  await t.exception(manager.submitJob({
+    idempotencyKey: 'watch-only-no-job',
+    request: movieRequest(bytes),
+    spool: descriptor
+  }), /explicit retention consent and budget/)
+  t.is((await store.listRecent()).length, 0)
+})

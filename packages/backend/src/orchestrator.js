@@ -520,7 +520,9 @@ export async function createBackendContext(config) {
 
   const desiredArchiveParticipationEnabled =
     archive.enabled !== false &&
-    initialNetworkPolicy.retentionMode === 'archive-pledges'
+    initialNetworkPolicy.policyVersion === 2 &&
+    initialNetworkPolicy.migrationRequired !== true &&
+    initialNetworkPolicy.archiveEnabled === true
   const permissionlessArchiveNetwork = deviceKeyPair?.publicKey && deviceKeyPair?.secretKey
     ? createPermissionlessArchiveNetwork({
         keyPair: deviceKeyPair,
@@ -536,7 +538,7 @@ export async function createBackendContext(config) {
           },
         },
         enabled: false,
-        capacityBytes: archive.capacityBytes,
+        capacityBytes: initialNetworkPolicy.archiveBudgetBytes,
         maxRequestBytes: archive.maxRequestBytes,
         diagnostics: archiveDiagnostics,
         peerScorer,
@@ -715,7 +717,7 @@ export async function createBackendContext(config) {
       } else if (permissionlessArchiveNetwork && desiredArchiveParticipationEnabled) {
         await permissionlessArchiveNetwork.setParticipation({
           enabled: true,
-          capacityBytes: archive.capacityBytes,
+          capacityBytes: initialNetworkPolicy.archiveBudgetBytes,
           maxRequestBytes: archive.maxRequestBytes,
           acceptanceProbability: archive.acceptanceProbability,
         })

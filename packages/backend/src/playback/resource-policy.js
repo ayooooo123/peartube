@@ -19,15 +19,20 @@ export function createPlaybackResourcePolicy(options = {}) {
     },
     evaluate(state = {}) {
       const foreground = state.foreground !== false
-      const allowed = state.userAllowsP2P !== false
+      const discoveryAllowed = state.userAllowsP2P !== false
       const unconstrained = state.metered !== true && state.thermalState !== 'serious' && state.thermalState !== 'critical'
       const powered = state.charging !== false
+      const contribute = state.permissions?.contribute === true &&
+        state.migrationRequired !== true
+      const archive = state.permissions?.archive === true &&
+        state.migrationRequired !== true
       return {
         localPlayback: true,
-        peerDiscovery: allowed && foreground && unconstrained,
-        upload: allowed && foreground && unconstrained && powered,
-        cacheFill: allowed && foreground && unconstrained,
-        archiving: allowed && foreground && unconstrained && powered,
+        peerDiscovery: discoveryAllowed && foreground && unconstrained,
+        upload: (contribute || archive) && foreground && unconstrained && powered,
+        cacheFill: discoveryAllowed && foreground && unconstrained,
+        contributionCache: contribute && foreground && unconstrained,
+        archiving: archive && foreground && unconstrained && powered,
       }
     },
   }

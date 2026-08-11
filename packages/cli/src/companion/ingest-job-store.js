@@ -362,6 +362,27 @@ export function createIngestJobStore ({ bee, now = () => Date.now() } = {}) {
       }
     },
 
+    async listRecent (limit = 64) {
+      await writes
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 64) {
+        throw storeError('INGEST_LIST_LIMIT_INVALID', 'recent ingest job limit is invalid')
+      }
+      const jobs = []
+      try {
+        for await (const entry of bee.createReadStream({ gte: JOB_PREFIX, lt: `${JOB_PREFIX}\uffff` })) {
+          const job = decode(entry.value)
+          if (!job?.jobId || !INGEST_JOB_STATES.includes(job.state)) {
+            throw storeError('INGEST_PERSISTENCE_CORRUPT', 'Ingest job record is corrupt')
+          }
+          jobs.push(job)
+        }
+        jobs.sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0))
+        return jobs.slice(0, limit).map(clone)
+      } catch (error) {
+        throw persistenceFailure(error)
+      }
+    },
+
     async close () {
       await writes
     }

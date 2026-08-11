@@ -7,6 +7,7 @@ const PUBLISHER_A = '11'.repeat(32)
 const SELECTOR = Object.freeze({ namespace: 'tmdb', identifier: '348', kind: 'movie' })
 const WORK_ID = '22'.repeat(32)
 const PUBLICATION_ID = '33'.repeat(32)
+const MANIFEST_ID = '66'.repeat(32)
 const RENDITION_ID = '44'.repeat(32)
 const ASSET_ID = '55'.repeat(32)
 const PUBLICATION_SOURCE = 'publication-source'
@@ -42,7 +43,7 @@ function publicationResult(overrides = {}) {
     workEntityId: WORK_ID,
     normalizedTitle: 'Pilot',
     releaseYear: 2020,
-    manifestId: '66'.repeat(32),
+    manifestId: MANIFEST_ID,
     provenanceSummary: null,
     ...overrides,
   }
@@ -198,6 +199,7 @@ test('federation returns exact URL-less CompanionCandidateV2 facts', async t => 
     sourceRecordRef: 'source-a',
     publicationSourceRecordRef: PUBLICATION_SOURCE,
     publicationId: PUBLICATION_ID,
+    candidateManifestId: MANIFEST_ID,
     renditionId: RENDITION_ID,
     assetId: ASSET_ID,
   })
@@ -227,6 +229,7 @@ test('federation merges only identical cached locator tuples and preserves confl
     sourceRecordRef: 'same-source',
     publicationSourceRecordRef: PUBLICATION_SOURCE,
     publicationId: PUBLICATION_ID,
+    candidateManifestId: MANIFEST_ID,
     renditionId: RENDITION_ID,
     assetId: ASSET_ID,
   })
@@ -307,6 +310,43 @@ test('one service error or shared-deadline timeout cannot erase successful resul
   t.alike(results.map(candidate => cachedLocator(cache, candidate).sourceRecordRef), ['available'])
   t.is(timeoutAbort, true)
   t.is(timers[0].cleared, true)
+})
+
+test('default real deadline settles stalled searches and preserves isolated successful results', async t => {
+  const stalled = createService('stalled', ({ signal }) => new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+  }))
+  const emptyFederation = createFederation([stalled], { limits: { deadlineMs: 20 } })
+  t.alike(await emptyFederation.search({ selector: SELECTOR, limit: 1 }), [])
+
+  const good = createService('good', ({ query }) => page(query, typedResults(query, [exactResult('available')])))
+  const mixedFederation = createFederation([good, stalled], { limits: { deadlineMs: 20 } })
+  const results = await mixedFederation.search({ selector: SELECTOR, limit: 1 })
+  t.alike(results.map(candidate => candidate.work.entityId), [WORK_ID])
+})
+
+test('federation resolves the bounded retained-service provider at each deferred search', async t => {
+  const retained = []
+  let requestedMaximum = null
+  const federation = createIndexFederation({
+    services: maximum => {
+      requestedMaximum = maximum
+      return retained.slice(0, maximum)
+    },
+    cache: new Map(),
+    now: () => 1_700_000_000_000,
+    limits: { randomBytes: randomSource(), maxServices: 2 },
+  })
+  t.alike(await federation.search({ selector: SELECTOR, limit: 1 }), [])
+  const services = ['a', 'b', 'c'].map(indexerId =>
+    createService(indexerId, ({ query }) => page(query, typedResults(query, [exactResult('late-source')]))))
+  retained.push(...services)
+  const results = await federation.search({ selector: SELECTOR, limit: 1 })
+  t.is(requestedMaximum, 2)
+  t.alike(results[0].sourceIndexers.map(value => value.indexerId), ['a', 'b'])
+  t.is(services[2].calls.length, 0)
+  retained.length = 0
+  t.alike(await federation.search({ selector: SELECTOR, limit: 1 }), [])
 })
 
 test('caller abort rejects search and removes the shared deadline', async t => {
@@ -391,6 +431,10 @@ test('diagnostics retain bounded provenance from nested candidates', t => {
 test('configuration, requested counts, and page counts remain bounded', async t => {
   const services = Array.from({ length: 3 }, (_, index) => createService(`i${index}`, ({ query }) => page(query, [])))
   t.exception(() => createFederation(services, { limits: { maxServices: 2 } }), {
+    message: 'services exceed their bounded limit',
+  })
+  const overflowingProvider = createFederation(() => services, { limits: { maxServices: 2 } })
+  await t.exception(overflowingProvider.search({ selector: SELECTOR, limit: 1 }), {
     message: 'services exceed their bounded limit',
   })
 

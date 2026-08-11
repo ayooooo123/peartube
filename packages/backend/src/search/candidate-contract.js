@@ -41,6 +41,14 @@ function uint(value, name, nullable = true) {
   return value
 }
 
+function wireUint(value, name, field) {
+  const normalized = uint(value, name)
+  return {
+    [field]: normalized ?? 0,
+    [`${field}Present`]: normalized !== null,
+  }
+}
+
 function list(value, name, maximum) {
   if (!Array.isArray(value) || value.length > maximum) fail(`${name} exceeds its bound`)
   return value
@@ -71,9 +79,9 @@ function episode(value) {
 function work(value) {
   value = object(value, 'work')
   return Object.freeze(compact({
-    entityId: text(value.entityId, 'work.entityId', 128, false),
+    entityId: text(value.entityId, 'work.entityId', 128),
     title: text(value.title, 'work.title'),
-    releaseYear: uint(value.releaseYear, 'work.releaseYear'),
+    ...wireUint(value.releaseYear, 'work.releaseYear', 'releaseYear'),
     externalRefs: Object.freeze(list(value.externalRefs, 'work.externalRefs', INDEX_CANDIDATE_CONTRACT_LIMITS.maxExternalRefs)
       .map(externalReference)),
     episode: episode(value.episode),
@@ -97,7 +105,7 @@ function publication(value) {
     publicationId: text(value.publicationId, 'publication.publicationId', 128, false),
     publisherId: text(value.publisherId, 'publication.publisherId', 128, false),
     manifestId: text(value.manifestId, 'publication.manifestId', 128, false),
-    catalogEpoch: uint(value.catalogEpoch, 'publication.catalogEpoch'),
+    ...wireUint(value.catalogEpoch, 'publication.catalogEpoch', 'catalogEpoch'),
     catalogHead: text(value.catalogHead, 'publication.catalogHead', 128),
     title: text(value.descriptor?.title ?? value.title, 'publication.title'),
   }))
@@ -107,7 +115,7 @@ function audioTrack(value, trackIndex) {
   value = object(value, `audioTracks[${trackIndex}]`)
   return Object.freeze(compact({
     codec: text(value.codec, `audioTracks[${trackIndex}].codec`, 128),
-    channels: uint(value.channels, `audioTracks[${trackIndex}].channels`),
+    ...wireUint(value.channels, `audioTracks[${trackIndex}].channels`, 'channels'),
     languages: Object.freeze(list(value.languages || [], `audioTracks[${trackIndex}].languages`, INDEX_CANDIDATE_CONTRACT_LIMITS.maxTrackLanguages)
       .map((language, languageIndex) => text(language, `audioTracks[${trackIndex}].languages[${languageIndex}]`, 64, false))),
   }))
@@ -127,8 +135,8 @@ function rendition(value) {
     renditionId: text(value.renditionId, 'rendition.renditionId', 128, false),
     container: text(value.container, 'rendition.container', 128),
     videoCodec: text(value.videoCodec, 'rendition.videoCodec', 128),
-    width: uint(value.width, 'rendition.width'),
-    height: uint(value.height, 'rendition.height'),
+    ...wireUint(value.width, 'rendition.width', 'width'),
+    ...wireUint(value.height, 'rendition.height', 'height'),
     resolutionLabel: text(value.resolutionLabel, 'rendition.resolutionLabel', 128),
     hdrFormats: Object.freeze(list(value.hdrFormats || [], 'rendition.hdrFormats', INDEX_CANDIDATE_CONTRACT_LIMITS.maxHdrFormats)
       .map((format, index) => text(format, `rendition.hdrFormats[${index}]`, 128, false))),
@@ -137,19 +145,19 @@ function rendition(value) {
     subtitleTracks: Object.freeze(list(value.subtitleTracks || [], 'rendition.subtitleTracks', INDEX_CANDIDATE_CONTRACT_LIMITS.maxSubtitleTracks)
       .map(subtitleTrack)),
     purpose: text(value.purpose, 'rendition.purpose', 128),
-    byteLength: uint(value.byteLength, 'rendition.byteLength', false),
+    ...wireUint(value.byteLength, 'rendition.byteLength', 'byteLength'),
   }))
 }
 
 function asset(value) {
   value = object(value, 'asset')
   return Object.freeze(compact({
-    assetId: text(value.assetId, 'asset.assetId', 128, false),
+    assetId: text(value.assetId, 'asset.assetId', 128),
     coreKey: text(value.coreKey, 'asset.coreKey', 128),
     treeHash: text(value.treeHash, 'asset.treeHash', 128),
-    blockLength: uint(value.blockLength, 'asset.blockLength'),
-    blockSize: uint(value.blockSize, 'asset.blockSize'),
-    byteLength: uint(value.byteLength, 'asset.byteLength', false),
+    ...wireUint(value.blockLength, 'asset.blockLength', 'blockLength'),
+    ...wireUint(value.blockSize, 'asset.blockSize', 'blockSize'),
+    ...wireUint(value.byteLength, 'asset.byteLength', 'byteLength'),
   }))
 }
 
@@ -165,10 +173,10 @@ function provenance(value) {
 function availability(value) {
   value = object(value, 'availability')
   return Object.freeze(compact({
-    peers: uint(value.peers, 'availability.peers'),
-    completeSeeders: uint(value.completeSeeders, 'availability.completeSeeders'),
-    observedAtMs: uint(value.observedAtMs, 'availability.observedAtMs'),
-    expiresAtMs: uint(value.expiresAtMs, 'availability.expiresAtMs'),
+    ...wireUint(value.peers, 'availability.peers', 'peers'),
+    ...wireUint(value.completeSeeders, 'availability.completeSeeders', 'completeSeeders'),
+    ...wireUint(value.observedAtMs, 'availability.observedAtMs', 'observedAtMs'),
+    ...wireUint(value.expiresAtMs, 'availability.expiresAtMs', 'expiresAtMs'),
   }))
 }
 
@@ -177,9 +185,10 @@ function publisherDescriptor(value) {
   value = object(value, 'verification.publisherDescriptor')
   return Object.freeze({
     publisherId: text(value.publisherId, 'verification.publisherDescriptor.publisherId', 128, false),
-    genesisRootKey: text(value.genesisRootKey, 'verification.publisherDescriptor.genesisRootKey', 128, false),
+    publisherRootKey: text(value.publisherRootKey, 'verification.publisherDescriptor.publisherRootKey', 128, false),
     catalogBootstrapKey: text(value.catalogBootstrapKey, 'verification.publisherDescriptor.catalogBootstrapKey', 128, false),
     catalogEpoch: uint(value.catalogEpoch, 'verification.publisherDescriptor.catalogEpoch', false),
+    policySequence: uint(value.policySequence, 'verification.publisherDescriptor.policySequence', false),
   })
 }
 
@@ -241,6 +250,81 @@ export function normalizeIndexCandidateForTransport(value) {
     sourceIndexers: Object.freeze(list(value.sourceIndexers, 'sourceIndexers', INDEX_CANDIDATE_CONTRACT_LIMITS.maxSourceIndexers)
       .map(sourceIndexer)),
   }))
+}
+
+function readWireUint(value, field, name) {
+  value = object(value, name)
+  const presentField = `${field}Present`
+  if (typeof value[presentField] !== 'boolean') fail(`${name}.${presentField} is invalid`)
+  const stored = uint(value[field], `${name}.${field}`, false)
+  if (!value[presentField] && stored !== 0) fail(`${name}.${field} has hidden absent data`)
+  return value[presentField] ? stored : null
+}
+
+function exposeWireUints(value, fields) {
+  const exposed = { ...value }
+  for (const field of fields) {
+    exposed[field] = value[`${field}Present`] ? value[field] : null
+    delete exposed[`${field}Present`]
+  }
+  return exposed
+}
+
+export function normalizeIndexCandidateFromTransport(value) {
+  value = object(value, 'candidate')
+  const rawRendition = object(value.rendition, 'candidate.rendition')
+  const publicInput = {
+    ...value,
+    work: {
+      ...object(value.work, 'candidate.work'),
+      releaseYear: readWireUint(value.work, 'releaseYear', 'candidate.work'),
+    },
+    publication: {
+      ...object(value.publication, 'candidate.publication'),
+      catalogEpoch: readWireUint(value.publication, 'catalogEpoch', 'candidate.publication'),
+    },
+    rendition: {
+      ...rawRendition,
+      width: readWireUint(rawRendition, 'width', 'candidate.rendition'),
+      height: readWireUint(rawRendition, 'height', 'candidate.rendition'),
+      byteLength: readWireUint(rawRendition, 'byteLength', 'candidate.rendition'),
+      audioTracks: list(rawRendition.audioTracks || [], 'candidate.rendition.audioTracks', INDEX_CANDIDATE_CONTRACT_LIMITS.maxAudioTracks)
+        .map((track, index) => ({
+          ...object(track, `candidate.rendition.audioTracks[${index}]`),
+          channels: readWireUint(track, 'channels', `candidate.rendition.audioTracks[${index}]`),
+        })),
+    },
+    asset: {
+      ...object(value.asset, 'candidate.asset'),
+      blockLength: readWireUint(value.asset, 'blockLength', 'candidate.asset'),
+      blockSize: readWireUint(value.asset, 'blockSize', 'candidate.asset'),
+      byteLength: readWireUint(value.asset, 'byteLength', 'candidate.asset'),
+    },
+    availability: {
+      ...object(value.availability, 'candidate.availability'),
+      peers: readWireUint(value.availability, 'peers', 'candidate.availability'),
+      completeSeeders: readWireUint(value.availability, 'completeSeeders', 'candidate.availability'),
+      observedAtMs: readWireUint(value.availability, 'observedAtMs', 'candidate.availability'),
+      expiresAtMs: readWireUint(value.availability, 'expiresAtMs', 'candidate.availability'),
+    },
+  }
+  const wire = normalizeIndexCandidateForTransport(publicInput)
+  const candidate = {
+    ...wire,
+    work: Object.freeze(exposeWireUints(wire.work, ['releaseYear'])),
+    publication: Object.freeze(exposeWireUints(wire.publication, ['catalogEpoch'])),
+    rendition: Object.freeze({
+      ...exposeWireUints(wire.rendition, ['width', 'height', 'byteLength']),
+      audioTracks: Object.freeze(wire.rendition.audioTracks.map(track =>
+        Object.freeze(exposeWireUints(track, ['channels'])))),
+    }),
+    asset: Object.freeze(exposeWireUints(wire.asset, ['blockLength', 'blockSize', 'byteLength'])),
+    availability: Object.freeze(exposeWireUints(
+      wire.availability,
+      ['peers', 'completeSeeders', 'observedAtMs', 'expiresAtMs'],
+    )),
+  }
+  return Object.freeze(candidate)
 }
 
 function failure(error, message, candidates) {

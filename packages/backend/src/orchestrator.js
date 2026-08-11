@@ -39,6 +39,7 @@ import { createPersonalManager } from './personal/personal-manager.js';
 import { createUploadManager } from './upload.js';
 import { createPublisherCatalogRegistry } from './api/publisher.js'
 import { createScopedNetworkRuntime } from './network/scoped-runtime.js'
+import { createIndexVerificationRuntime } from './runtime.js'
 import { createPublisherCatalogProjection } from './media-graph/catalog-projection.js'
 import {
   createPublicationV1CheckpointRepository,
@@ -481,6 +482,13 @@ export async function createBackendContext(config) {
   })
   ctx.scopedNetwork = scopedNetwork
   lifecycle.ownResource('scoped network runtime', scopedNetwork, 'close', 5000)
+  const indexVerificationRuntime = createIndexVerificationRuntime({
+    services: maximum => scopedNetwork.listRetainedIndexServiceAdapters(maximum),
+    catalogRegistry,
+    scopedNetwork,
+    lifecycle,
+  })
+  ctx.indexVerificationRuntime = indexVerificationRuntime
   const configuredOperabilityServices = config.operability?.services
     ? await Promise.resolve(config.operability.services)
     : config.operability?.servicesPromise
@@ -771,6 +779,7 @@ export async function createBackendContext(config) {
     catalogRegistry,
     scopedNetwork,
     permissionlessArchiveNetwork,
+    indexVerificationRuntime,
     policyApi,
     networkPolicyRuntime,
   });

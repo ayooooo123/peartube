@@ -4,6 +4,7 @@ import crypto from 'hypercore-crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createRequire } from 'node:module'
 import Corestore from 'corestore'
 
 import { createApi } from '../src/api.js'
@@ -30,12 +31,24 @@ import {
 import { createEntityReference, createMediaClaim } from '../src/media-graph/index.js'
 import { encodeApplicationEnvelope } from '../src/records/application-envelope.js'
 import { createIndexFederation } from '../src/search/index-federation.js'
-import { SOURCE_VERIFICATION_ERROR_CODES, createSourceVerifier } from '../src/search/source-verifier.js'
+import {
+  SOURCE_VERIFICATION_ERROR_CODES,
+  createScopedAssetAvailabilityProbe,
+  createSourceVerifier,
+} from '../src/search/source-verifier.js'
+import {
+  normalizeIndexCandidateForTransport,
+  normalizeIndexCandidateFromTransport,
+  searchIndexCandidatesForTransport,
+  verifyIndexCandidateForTransport,
+} from '../src/search/candidate-contract.js'
 import { COLLECTIONS, createIndexerStore } from '../src/indexer/index.js'
 import { createIndexVerificationRuntime } from '../src/runtime.js'
 
 const NOW = 1_800_000_000_000
 const SELECTOR = Object.freeze({ namespace: 'tmdb', identifier: '348', kind: 'movie' })
+const require = createRequire(import.meta.url)
+const schemaCodecs = require('../../spec/spec/schema/index.js')
 
 function hex(value) {
   return b4a.toString(value, 'hex')
@@ -66,7 +79,7 @@ function serviceFor(fixture, state = {}) {
       state.searchCalls = (state.searchCalls || 0) + 1
       let results
       if (query.selectors[0].type === 'exact-external-ref') {
-        results = [exactResult(fixture)]
+        results = [{ ...exactResult(fixture), ...state.indexOverrides?.external }]
       } else if (query.selectors[0].type === 'publication-by-work') {
         results = [{
           type: 'publication',
@@ -180,7 +193,14 @@ async function sourceFixture(options = {}) {
   const externalClaim = createMediaClaim({
     claimType: 'ExternalReferenceClaim',
     subjectRefs: [work],
-    payload: { externalRef: { namespace: SELECTOR.namespace, identifier: SELECTOR.identifier } },
+    payload: {
+      externalRef: {
+        namespace: SELECTOR.namespace,
+        identifier: SELECTOR.identifier,
+        ...(options.externalRefExtras || {}),
+      },
+      ...(options.claimPayloadExtras || {}),
+    },
     confidence: 900,
     issuerSequence: 1,
     policyEpoch: 0,
@@ -216,7 +236,7 @@ async function sourceFixture(options = {}) {
     sequence: 1,
     title: 'Current signed source',
     renditions: renditionFixtures.map(value => value.descriptor),
-    provenance: [{ sourceKind: 'upload', releaseName: 'Current signed source' }],
+    provenance: options.provenance || [{ sourceKind: 'upload', releaseName: 'Current signed source' }],
     keyPair: device,
     claims: [{ claimId: externalClaim.claimId, role: 'work', entityId: work.entityId }],
     signedAt: NOW - 1_000,
@@ -343,7 +363,11 @@ async function candidateHarness(options = {}) {
     catalogRegistry: fixture.registry,
     availabilityProbe,
     now: options.now || (() => NOW),
-    limits: { verificationDeadlineMs: 1_000, availabilityDeadlineMs: 500 },
+    limits: {
+      verificationDeadlineMs: 1_000,
+      availabilityDeadlineMs: 500,
+      ...(options.limits || {}),
+    },
   })
   return { fixture, cache, state, federation, candidate, verifier, probeState }
 }
@@ -383,18 +407,85 @@ test('selected current source verifies exact canonical descriptors and fresh ava
   t.alike(verified.availability, { peers: 2, completeSeeders: 1, observedAtMs: NOW, expiresAtMs: NOW + 5_000 })
   t.is(verified.verification.publisherDescriptor.publisherId, harness.fixture.publisherId)
   t.is(verified.verification.publisherDescriptor.catalogEpoch, 0)
+  t.is(verified.edition, null)
+  t.is(Object.isFrozen(verified.publication.descriptor), true)
+  t.alike(Object.keys(verified.publication.descriptor).sort(), ['manifestId', 'publicationId', 'title'])
+  t.is(Object.isFrozen(verified.rendition.descriptor.core), true)
+  t.is(Object.isFrozen(verified.asset.descriptor), true)
+  t.alike(verified.provenance, {
+    sourceKind: null,
+    releaseName: null,
+    publicInfohash: null,
+  })
   t.is(verified.verification.catalogHead.digest, verified.publication.catalogHead)
   t.alike(unsafeKeys(verified), [])
   t.is(Object.isFrozen(verified), true)
   t.is(Object.isFrozen(verified.verification.publisherDescriptor), true)
+  const transported = normalizeIndexCandidateForTransport(verified)
+  t.is(transported.verification.publisherDescriptor.publisherRootKey, hex(harness.fixture.descriptor.publisherRootKey))
+  t.is(transported.verification.publisherDescriptor.policySequence, harness.fixture.descriptor.policySequence)
+})
+
+test('real null-fact federation candidate searches, verifies, transports, and codec-round-trips without sentinels', async t => {
+  const harness = await candidateHarness({
+    indexOverrides: { rendition: { format: null, byteLength: null } },
+  })
+  t.is(harness.candidate.rendition.container, null)
+  t.is(harness.candidate.rendition.byteLength, null)
+  t.is(harness.candidate.asset.byteLength, null)
+
+  const searched = await searchIndexCandidatesForTransport({
+    searchIndexCandidates: async () => [harness.candidate],
+  }, { selector: SELECTOR })
+  t.ok(searched.success)
+  t.absent(Object.hasOwn(searched.candidates[0].rendition, 'container'))
+  t.is(searched.candidates[0].rendition.byteLength, 0)
+  t.is(searched.candidates[0].rendition.byteLengthPresent, false)
+  t.is(searched.candidates[0].asset.byteLength, 0)
+  t.is(searched.candidates[0].asset.byteLengthPresent, false)
+  const searchedDecoded = schemaCodecs.decode(
+    '@peartube/index-candidate-v2',
+    schemaCodecs.encode('@peartube/index-candidate-v2', searched.candidates[0]),
+  )
+  t.is(searchedDecoded.rendition.container, null)
+  t.is(searchedDecoded.rendition.byteLengthPresent, false)
+  t.is(searchedDecoded.asset.byteLengthPresent, false)
+  const searchedPublic = normalizeIndexCandidateFromTransport(searchedDecoded)
+  t.is(searchedPublic.rendition.byteLength, null)
+  t.is(searchedPublic.asset.byteLength, null)
+
+  const verified = await verifyIndexCandidateForTransport({
+    verifyIndexCandidate: candidateRef => harness.verifier.verifySelectedCandidate({ candidateRef }),
+  }, { candidateRef: harness.candidate.candidateRef })
+  t.ok(verified.success)
+  t.is(verified.candidate.rendition.container, harness.fixture.rendition.format)
+  t.is(verified.candidate.rendition.byteLength, harness.fixture.staticAsset.byteLength)
+  t.is(verified.candidate.asset.byteLength, harness.fixture.staticAsset.byteLength)
+  t.is(verified.candidate.verification.publisherDescriptor.publisherRootKey, hex(harness.fixture.descriptor.publisherRootKey))
+  t.is(verified.candidate.verification.publisherDescriptor.policySequence, harness.fixture.descriptor.policySequence)
+  const verifiedDecoded = schemaCodecs.decode(
+    '@peartube/index-candidate-v2',
+    schemaCodecs.encode('@peartube/index-candidate-v2', verified.candidate),
+  )
+  t.is(verifiedDecoded.rendition.byteLengthPresent, true)
+  const verifiedPublic = normalizeIndexCandidateFromTransport(verifiedDecoded)
+  t.is(verifiedPublic.rendition.byteLength, harness.fixture.staticAsset.byteLength)
+  t.is(verifiedDecoded.rendition.byteLength, harness.fixture.staticAsset.byteLength)
+  t.is(verifiedDecoded.verification.publisherDescriptor.publisherRootKey, hex(harness.fixture.descriptor.publisherRootKey))
 })
 
 test('forged publisher root and bootstrap bindings fail before manifest or availability use', async t => {
-  for (const mutation of ['root', 'bootstrap', 'catalog-key']) {
+  for (const mutation of ['root', 'bootstrap', 'catalog-key', 'descriptor-policy']) {
     const harness = await candidateHarness()
     if (mutation === 'root') harness.fixture.binding.genesisRootKey = b4a.alloc(32, 99)
     if (mutation === 'bootstrap') harness.fixture.binding.catalogBootstrapKey = b4a.alloc(32, 98)
     if (mutation === 'catalog-key') harness.fixture.catalog.key = b4a.alloc(32, 97)
+    if (mutation === 'descriptor-policy') {
+      await harness.fixture.view.put('state/descriptor', encodePublisherNamespaceDescriptor({
+        ...harness.fixture.descriptor,
+        policySequence: harness.fixture.descriptor.policySequence + 1,
+      }))
+    }
 
     await expectCode(
       t,
@@ -415,8 +506,6 @@ test('wrong manifest, rendition, asset, and reconstructed static-key facts fail 
   for (const rendition of [
     { renditionId: 'ee'.repeat(32) },
     { assetId: 'dd'.repeat(32) },
-    { format: 'video/webm' },
-    { byteLength: 1 },
   ]) {
     const harness = await candidateHarness({ indexOverrides: { rendition } })
     await expectCode(
@@ -426,13 +515,23 @@ test('wrong manifest, rendition, asset, and reconstructed static-key facts fail 
     )
     t.is(harness.probeState.calls, 0)
   }
-  const wrongTitle = await candidateHarness({ indexOverrides: { publication: { normalizedTitle: 'Forged title' } } })
-  await expectCode(
-    t,
-    wrongTitle.verifier.verifySelectedCandidate({ candidateRef: wrongTitle.candidate.candidateRef }),
-    SOURCE_VERIFICATION_ERROR_CODES.SOURCE_MISMATCH,
-  )
-  t.is(wrongTitle.probeState.calls, 0)
+  const misleading = await candidateHarness({
+    indexOverrides: {
+      external: { entityId: 'fa'.repeat(32) },
+      publication: { workEntityId: 'fa'.repeat(32), normalizedTitle: 'Untrusted index title' },
+      rendition: { format: 'video/webm', byteLength: 1 },
+    },
+  })
+  const corrected = await misleading.verifier.verifySelectedCandidate({
+    candidateRef: misleading.candidate.candidateRef,
+  })
+  t.is(misleading.candidate.work.entityId, 'fa'.repeat(32))
+  t.is(corrected.work.entityId, misleading.fixture.workEntityId)
+  t.is(corrected.work.title, misleading.fixture.manifest.body.title)
+  t.is(corrected.rendition.container, misleading.fixture.rendition.format)
+  t.is(corrected.rendition.byteLength, misleading.fixture.staticAsset.byteLength)
+  t.is(corrected.asset.byteLength, misleading.fixture.staticAsset.byteLength)
+  t.is(misleading.probeState.calls, 1)
 
 
   for (const offset of [17, 73, 141]) {
@@ -562,6 +661,9 @@ test('availability timeout, malformed evidence, unavailable evidence, and caller
   for (const evidence of [
     { peers: 1, completeSeeders: 2, observedAtMs: NOW, expiresAtMs: NOW + 1_000 },
     { peers: 1, completeSeeders: 1, observedAtMs: NOW, expiresAtMs: NOW + 60_000, extra: true },
+    { peers: 1, completeSeeders: 1, observedAtMs: NOW + 1, expiresAtMs: NOW + 1_000 },
+    { peers: 1, completeSeeders: 1, observedAtMs: NOW, expiresAtMs: NOW + 60_000 },
+    { peers: 129, completeSeeders: 0, observedAtMs: NOW, expiresAtMs: NOW + 1_000 },
   ]) {
     const malformed = await candidateHarness({ availabilityProbe: async () => evidence })
     await expectCode(
@@ -588,6 +690,114 @@ test('availability timeout, malformed evidence, unavailable evidence, and caller
     aborted.verifier.verifySelectedCandidate({ candidateRef: aborted.candidate.candidateRef, signal: controller.signal }),
     SOURCE_VERIFICATION_ERROR_CODES.ABORTED,
   )
+})
+
+test('scoped one-block availability reports contributors without claiming a complete seeder', async t => {
+  const calls = []
+  const probe = createScopedAssetAvailabilityProbe({
+    scopedNetwork: {
+      async retainAuthorizedRendition(request) {
+        calls.push(['retain', request])
+      },
+      async requestAssetBlocks(request) {
+        calls.push(['request', request])
+        return { verifiedBlockIndexes: [0], peerIds: ['peer-a', 'peer-b'] }
+      },
+      async releaseAuthorizedRendition(request) {
+        calls.push(['release', request])
+      },
+    },
+    now: () => NOW,
+    evidenceLifetimeMs: 1_000,
+    randomBytes: size => b4a.alloc(size, 7),
+  })
+  const request = {
+    manifest: { publicationId: 'manifest' },
+    publicationId: 'publication',
+    renditionId: 'rendition',
+    assetId: 'asset',
+    range: { startBlock: 0, endBlock: 1 },
+    signal: new AbortController().signal,
+  }
+  const evidence = await probe(request)
+  const secondEvidence = await probe(request)
+  t.alike(evidence, { peers: 2, completeSeeders: 0, observedAtMs: NOW, expiresAtMs: NOW + 1_000 })
+  t.alike(secondEvidence, evidence)
+  t.alike(calls.map(([kind]) => kind), ['retain', 'request', 'release', 'retain', 'request', 'release'])
+  t.is(calls.filter(([kind]) => kind === 'request').every(([, value]) => value.requirePeerEvidence === true), true)
+  const ownerIds = calls.filter(([kind]) => kind === 'retain').map(([, value]) => value.ownerId)
+  const releasedOwnerIds = calls.filter(([kind]) => kind === 'release').map(([, value]) => value.ownerId)
+  t.is(new Set(ownerIds).size, 2)
+  t.is(ownerIds.includes('publication'), false)
+  t.alike(releasedOwnerIds, ownerIds)
+})
+test('availability timeout returns promptly but close waits for delayed retain rollback', async t => {
+  let retainStarted
+  const started = new Promise(resolve => { retainStarted = resolve })
+  let finishRetain
+  const delayedRetain = new Promise(resolve => { finishRetain = resolve })
+  const calls = []
+  const availabilityProbe = createScopedAssetAvailabilityProbe({
+    scopedNetwork: {
+      async retainAuthorizedRendition(request) {
+        calls.push(['retain', request])
+        retainStarted()
+        return delayedRetain
+      },
+      async requestAssetBlocks(request) {
+        calls.push(['request', request])
+        return { verifiedBlockIndexes: [0], peerIds: ['peer'] }
+      },
+      async releaseAuthorizedRendition(request) {
+        calls.push(['release', request])
+      },
+    },
+    now: () => NOW,
+    randomBytes: size => b4a.alloc(size, 8),
+  })
+  const harness = await candidateHarness({
+    availabilityProbe,
+    limits: { availabilityDeadlineMs: 20, verificationDeadlineMs: 100 },
+  })
+  const verification = harness.verifier.verifySelectedCandidate({
+    candidateRef: harness.candidate.candidateRef,
+  })
+  await started
+  await expectCode(t, verification, SOURCE_VERIFICATION_ERROR_CODES.AVAILABILITY_TIMEOUT)
+
+  let closeSettled = false
+  const closing = harness.verifier.close().then(value => {
+    closeSettled = true
+    return value
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  t.is(closeSettled, false)
+  finishRetain()
+  t.is(await closing, true)
+  t.alike(calls.map(([kind]) => kind), ['retain', 'release'])
+})
+
+test('verification timeout drains execute and prevents a late catalog resolution from continuing', async t => {
+  const harness = await candidateHarness({ limits: { verificationDeadlineMs: 20 } })
+  let release
+  const stalled = new Promise(resolve => { release = resolve })
+  let readyCalls = 0
+  harness.fixture.registry.resolve = async () => {
+    await stalled
+    return harness.fixture.binding
+  }
+  harness.fixture.binding.catalog.ready = async () => { readyCalls++ }
+
+  await expectCode(
+    t,
+    harness.verifier.verifySelectedCandidate({ candidateRef: harness.candidate.candidateRef }),
+    SOURCE_VERIFICATION_ERROR_CODES.VERIFICATION_TIMEOUT,
+  )
+  t.is(await harness.verifier.close(), true)
+  release()
+  await Promise.resolve()
+  await Promise.resolve()
+  t.is(readyCalls, 0)
 })
 
 test('close aborts and drains verification, invalidates owned refs, and preserves caller cache entries', async t => {
@@ -764,7 +974,24 @@ test('real index store traversal emits two rendition candidates and verifies onl
 })
 
 test('root API and runtime defer source resolution until MediaStorm selects a candidate', async t => {
-  const fixture = await sourceFixture()
+  const fixture = await sourceFixture({
+    externalRefExtras: {
+      url: 'https://forbidden.invalid/play',
+      cookie: 'session=secret',
+      credential: 'bearer-secret',
+      headers: { authorization: 'secret' },
+    },
+    claimPayloadExtras: {
+      playbackUrl: 'https://forbidden.invalid/signed-claim',
+      credential: 'signed-claim-secret',
+      controlCapability: { bearer: 'signed-control-secret' },
+    },
+    provenance: [{
+      sourceKind: 'https://forbidden.invalid/source-kind',
+      releaseName: 'https://forbidden.invalid/source-release',
+      publicInfohash: 'publisher-secret-infohash',
+    }],
+  })
   const state = { searchCalls: 0, probeCalls: 0 }
   const lifecycle = {
     signal: new AbortController().signal,
@@ -797,6 +1024,10 @@ test('root API and runtime defer source resolution until MediaStorm selects a ca
   t.is(verified.verification.state, 'source-verified')
   t.is(fixture.registry.resolveCalls, 1)
   t.is(state.probeCalls, 1)
+  t.alike(unsafeKeys(verified), [])
+  t.absent(JSON.stringify(verified).includes('forbidden.invalid'))
+  t.absent(JSON.stringify(verified).includes('publisher-secret'))
+  t.absent(JSON.stringify(verified).includes('bearer-secret'))
   t.is(lifecycle.owned.some(entry => entry.resource === runtime && entry.method === 'close'), true)
   await runtime.close()
 })

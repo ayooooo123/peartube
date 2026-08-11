@@ -5,6 +5,7 @@ import { buildSharedSystemHandlers } from '../src/runtime.js'
 import {
   INDEX_CANDIDATE_CONTRACT_LIMITS,
   normalizeIndexCandidateForTransport,
+  normalizeIndexCandidateFromTransport,
 } from '../src/search/candidate-contract.js'
 
 const CANDIDATE_REF = 'A'.repeat(43)
@@ -61,9 +62,10 @@ function candidate(state = 'unverified') {
           state,
           publisherDescriptor: {
             publisherId: '22'.repeat(32),
-            genesisRootKey: '88'.repeat(32),
+            publisherRootKey: '88'.repeat(32),
             catalogBootstrapKey: '99'.repeat(32),
             catalogEpoch: 3,
+            policySequence: 4,
           },
           catalogHead: {
             viewKey: 'aa'.repeat(32),
@@ -95,17 +97,47 @@ test('candidate transport is bounded, typed, and strips non-contract capabilitie
   t.alike(forbiddenKeys(value), [])
   t.is(value.candidateRef, CANDIDATE_REF)
   t.is(value.verification.state, 'unverified')
-  t.absent(Object.hasOwn(value.publication, 'catalogEpoch'))
-  t.absent(Object.hasOwn(value.publication, 'catalogHead'))
-  t.absent(Object.hasOwn(value.rendition, 'videoCodec'))
-  t.absent(Object.hasOwn(value.availability, 'observedAtMs'))
+  t.is(value.publication.catalogEpoch, 0)
+  t.is(value.publication.catalogEpochPresent, false)
+  t.is(value.rendition.widthPresent, false)
+  t.is(value.rendition.byteLengthPresent, true)
+  t.is(value.availability.observedAtMs, 0)
+  t.is(value.availability.observedAtMsPresent, false)
   t.absent(Object.hasOwn(value, 'edition'))
   const partial = candidate()
   partial.work.title = null
+  partial.work.entityId = null
   partial.rendition.container = null
+  partial.asset.assetId = null
   const partialValue = normalizeIndexCandidateForTransport(partial)
   t.absent(Object.hasOwn(partialValue.work, 'title'))
+  t.absent(Object.hasOwn(partialValue.work, 'entityId'))
   t.absent(Object.hasOwn(partialValue.rendition, 'container'))
+  t.absent(Object.hasOwn(partialValue.asset, 'assetId'))
+  const partialPublic = normalizeIndexCandidateFromTransport(partialValue)
+  t.is(partialPublic.work.releaseYear, null)
+  t.is(partialPublic.publication.catalogEpoch, null)
+  t.is(partialPublic.rendition.width, null)
+  t.is(partialPublic.asset.blockLength, null)
+  t.is(partialPublic.availability.observedAtMs, null)
+
+  const zero = candidate()
+  zero.work.releaseYear = 0
+  zero.publication.catalogEpoch = 0
+  zero.rendition.width = 0
+  zero.rendition.audioTracks = [{ codec: null, channels: 0, languages: [] }]
+  zero.asset.blockLength = 0
+  zero.availability = { peers: 0, completeSeeders: 0, observedAtMs: 0, expiresAtMs: 0 }
+  const zeroWire = normalizeIndexCandidateForTransport(zero)
+  t.is(zeroWire.work.releaseYearPresent, true)
+  t.is(zeroWire.rendition.audioTracks[0].channelsPresent, true)
+  const zeroPublic = normalizeIndexCandidateFromTransport(zeroWire)
+  t.is(zeroPublic.work.releaseYear, 0)
+  t.is(zeroPublic.publication.catalogEpoch, 0)
+  t.is(zeroPublic.rendition.width, 0)
+  t.is(zeroPublic.rendition.audioTracks[0].channels, 0)
+  t.is(zeroPublic.asset.blockLength, 0)
+  t.is(zeroPublic.availability.observedAtMs, 0)
 
   const oversized = candidate()
   oversized.sourceIndexers = Array.from(

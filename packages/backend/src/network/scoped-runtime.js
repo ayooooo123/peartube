@@ -86,6 +86,7 @@ const ASSET_TRANSPORT_ERROR_CODES = new Set([
 ])
 const MAX_ASSET_PEERS_PER_REQUEST = 16
 const MAX_ASSET_PEER_ID_BYTES = 128
+const MAX_INDEX_SERVICE_ADAPTERS = 32
 const ARCHIVE_CHALLENGE_PROOF_CHUNK_BYTES = 48 * 1024
 const MAX_ARCHIVE_CHALLENGE_TRANSFERS = 16
 const ARCHIVE_CHALLENGE_TRANSFER_TIMEOUT_MS = 10_000
@@ -1937,6 +1938,25 @@ export function createScopedNetworkRuntime (options = {}) {
     })
   }
 
+  function listRetainedIndexServiceAdapters (limit = 8) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_INDEX_SERVICE_ADAPTERS) {
+      fail('index service adapter limit is out of bounds')
+    }
+    if (status === 'closed') return Object.freeze([])
+    const selected = []
+    for (const indexerId of indexServices.keys()) {
+      let offset = 0
+      while (offset < selected.length && selected[offset] < indexerId) offset++
+      if (offset >= limit) continue
+      selected.splice(offset, 0, indexerId)
+      if (selected.length > limit) selected.pop()
+    }
+    return Object.freeze(selected.map(indexerId => Object.freeze({
+      indexerId,
+      queryIndexService: ({ query, signal } = {}) => queryIndexService({ indexerId, query, signal }),
+    })))
+  }
+
   function queryIndexService ({ indexerId, query, signal } = {}) {
     try {
       if (!networkEnabled) fail('network policy is disabled')
@@ -2058,12 +2078,16 @@ export function createScopedNetworkRuntime (options = {}) {
     const existing = renditions.get(id)
     if (existing) {
       if (existing.scope.coreKey !== coreKey ||
-          existing.range.start !== range.start ||
-          existing.range.end !== range.end) {
+          range.start < existing.scope.range.start ||
+          range.end > existing.scope.range.end) {
         fail('rendition is already retained with a different authorization')
       }
-      if (existing.owners.has(ownerId)) {
-        return { ...existing.result, ownerId, status: 'already-retained' }
+      const existingOwner = existing.owners.get(ownerId)
+      if (existingOwner) {
+        if (existingOwner.range.start !== range.start || existingOwner.range.end !== range.end) {
+          fail('retention owner already has a different authorization range')
+        }
+        return { ...existing.result, ownerId, range: { ...range }, status: 'already-retained' }
       }
       const mode = `retained:${id}:${ownerId}`
       joinScope({
@@ -2076,16 +2100,16 @@ export function createScopedNetworkRuntime (options = {}) {
         assetAuthorizationId(id, ownerId),
         { manifest, renditionId: id, range: { ...range } },
       )
-      existing.owners.set(ownerId, { mode, manifest })
-      return { ...existing.result, ownerId, status: 'retained' }
+      existing.owners.set(ownerId, { mode, manifest, range: { ...range } })
+      return { ...existing.result, ownerId, range: { ...range }, status: 'retained' }
     }
 
     const topic = deriveStaticAssetTopic(coreRef.assetId)
     const sharedScope = findScope('asset', topic)
     if (sharedScope && (
       sharedScope.coreKey !== coreKey ||
-      sharedScope.range.start !== range.start ||
-      sharedScope.range.end !== range.end
+      range.start < sharedScope.range.start ||
+      range.end > sharedScope.range.end
     )) {
       fail('static asset is already retained with a different authorization range')
     }
@@ -2144,7 +2168,7 @@ export function createScopedNetworkRuntime (options = {}) {
       scope,
       result,
       range: { ...range },
-      owners: new Map([[ownerId, { mode, manifest }]]),
+      owners: new Map([[ownerId, { mode, manifest, range: { ...range } }]]),
     })
     return result
   }
@@ -2175,19 +2199,30 @@ export function createScopedNetworkRuntime (options = {}) {
     if (assetId && retained.scope.assetId !== assetId) {
       fail('retained rendition asset identity mismatch')
     }
-    const ownerIds = requestedOwnerId === undefined
-      ? [...retained.owners.keys()]
-      : [String(requestedOwnerId)]
+    const requestedOwnerIds = requestedOwnerId === undefined
+      ? new Set(retained.owners.keys())
+      : new Set([String(requestedOwnerId)])
+    const requestedAuthorizationIds = new Set([...requestedOwnerIds].map(ownerId =>
+      assetAuthorizationId(id, ownerId)))
+    const remainingAuthorizations = [...(retained.scope.assetAuthorizations?.entries() || [])]
+      .filter(([authorizationId]) => !requestedAuthorizationIds.has(authorizationId))
+    const scopeRangeStillOwned = remainingAuthorizations.some(([, authorization]) =>
+      authorization.range.start === retained.scope.range.start &&
+      authorization.range.end === retained.scope.range.end)
+    const revokeDependentOwners = remainingAuthorizations.length > 0 && !scopeRangeStillOwned
     let released = false
-    for (const ownerId of ownerIds) {
-      const owner = retained.owners.get(ownerId)
-      if (!owner) continue
-      retained.owners.delete(ownerId)
-      retained.scope.assetAuthorizations?.delete(assetAuthorizationId(id, ownerId))
-      released = true
-      await leaveScope(retained.scope, owner.mode)
+    for (const [retainedId, value] of [...renditions]) {
+      if (value.scope !== retained.scope) continue
+      for (const [ownerId, owner] of [...value.owners]) {
+        if (!revokeDependentOwners && (retainedId !== id || !requestedOwnerIds.has(ownerId))) continue
+        value.owners.delete(ownerId)
+        retained.scope.assetAuthorizations?.delete(assetAuthorizationId(retainedId, ownerId))
+        retained.scope.modes.delete(owner.mode)
+        if (retainedId === id && requestedOwnerIds.has(ownerId)) released = true
+      }
+      if (value.owners.size === 0) renditions.delete(retainedId)
     }
-    if (retained.owners.size === 0) renditions.delete(id)
+    await leaveScope(retained.scope)
     const remainingOwners = retained.scope.assetAuthorizations?.size || 0
     return {
       status: 'released',
@@ -2359,8 +2394,9 @@ export function createScopedNetworkRuntime (options = {}) {
     }
   }
 
-  async function requestAssetBlocks ({ assetId, startBlock, endBlock, peerIds, signal } = {}) {
+  async function requestAssetBlocks ({ assetId, startBlock, endBlock, peerIds, requirePeerEvidence = false, signal } = {}) {
     if (status !== 'active' || !networkEnabled) fail('runtime is not active')
+    if (typeof requirePeerEvidence !== 'boolean') fail('requirePeerEvidence must be a boolean')
     const cancellation = { aborted: signal?.aborted === true, request: null, scope: null }
     if (cancellation.aborted) throw assetAbortError()
     const onAbort = () => {
@@ -2401,7 +2437,7 @@ export function createScopedNetworkRuntime (options = {}) {
         const present = await scope.assetSession.hasVerifiedBlock(index, { isActive: scanActive })
         if (!scanActive()) throw cancellation.aborted ? assetAbortError() : new Error('asset block request is closed')
         if (present) verified.add(index)
-        else remaining.add(index)
+        if (!present || requirePeerEvidence) remaining.add(index)
       }
       if (remaining.size === 0) {
         if (cancellation.aborted) throw assetAbortError()
@@ -2515,8 +2551,8 @@ export function createScopedNetworkRuntime (options = {}) {
         const authorized = await authorizePublication({
           manifest: owner.manifest,
           renditionId,
-          start: retained.range.start,
-          end: retained.range.end,
+          start: owner.range.start,
+          end: owner.range.end,
         }).catch(() => false)
         if (authorized) continue
         await releaseAuthorizedRendition({ renditionId, ownerId })
@@ -2891,6 +2927,7 @@ export function createScopedNetworkRuntime (options = {}) {
     retainAuthorizedRendition,
     releaseAuthorizedRendition,
     queryIndexService,
+    listRetainedIndexServiceAdapters,
     listAssetRanges,
     getActiveAssetSession,
     getActiveAssetPeerIds,

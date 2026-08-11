@@ -7723,11 +7723,11 @@
       "name": "index-work",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": 1,
+      "flagsPosition": 0,
       "fields": [
         {
           "name": "entityId",
-          "required": true,
+          "required": false,
           "type": "string",
           "version": 1
         },
@@ -7739,8 +7739,14 @@
         },
         {
           "name": "releaseYear",
-          "required": false,
+          "required": true,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "releaseYearPresent",
+          "required": false,
+          "type": "bool",
           "version": 1
         },
         {
@@ -7788,7 +7794,7 @@
       "name": "index-publication",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": 3,
+      "flagsPosition": 4,
       "fields": [
         {
           "name": "publicationId",
@@ -7810,8 +7816,14 @@
         },
         {
           "name": "catalogEpoch",
-          "required": false,
+          "required": true,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "catalogEpochPresent",
+          "required": false,
+          "type": "bool",
           "version": 1
         },
         {
@@ -7842,8 +7854,14 @@
         },
         {
           "name": "channels",
-          "required": false,
+          "required": true,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "channelsPresent",
+          "required": false,
+          "type": "bool",
           "version": 1
         },
         {
@@ -7901,14 +7919,26 @@
         },
         {
           "name": "width",
-          "required": false,
+          "required": true,
           "type": "uint",
           "version": 1
         },
         {
-          "name": "height",
+          "name": "widthPresent",
           "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "height",
+          "required": true,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "heightPresent",
+          "required": false,
+          "type": "bool",
           "version": 1
         },
         {
@@ -7949,6 +7979,12 @@
           "required": true,
           "type": "uint",
           "version": 1
+        },
+        {
+          "name": "byteLengthPresent",
+          "required": false,
+          "type": "bool",
+          "version": 1
         }
       ]
     },
@@ -7956,11 +7992,11 @@
       "name": "index-asset",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": 1,
+      "flagsPosition": 0,
       "fields": [
         {
           "name": "assetId",
-          "required": true,
+          "required": false,
           "type": "string",
           "version": 1
         },
@@ -7978,20 +8014,38 @@
         },
         {
           "name": "blockLength",
-          "required": false,
+          "required": true,
           "type": "uint",
           "version": 1
         },
         {
-          "name": "blockSize",
+          "name": "blockLengthPresent",
           "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "blockSize",
+          "required": true,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "blockSizePresent",
+          "required": false,
+          "type": "bool",
           "version": 1
         },
         {
           "name": "byteLength",
           "required": true,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "byteLengthPresent",
+          "required": false,
+          "type": "bool",
           "version": 1
         }
       ]
@@ -8026,30 +8080,54 @@
       "name": "index-availability",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": 0,
+      "flagsPosition": 1,
       "fields": [
         {
           "name": "peers",
-          "required": false,
+          "required": true,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "peersPresent",
+          "required": false,
+          "type": "bool",
           "version": 1
         },
         {
           "name": "completeSeeders",
-          "required": false,
+          "required": true,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "completeSeedersPresent",
+          "required": false,
+          "type": "bool",
           "version": 1
         },
         {
           "name": "observedAtMs",
-          "required": false,
+          "required": true,
           "type": "uint",
           "version": 1
         },
         {
-          "name": "expiresAtMs",
+          "name": "observedAtMsPresent",
           "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "expiresAtMs",
+          "required": true,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "expiresAtMsPresent",
+          "required": false,
+          "type": "bool",
           "version": 1
         }
       ]
@@ -8087,7 +8165,7 @@
           "version": 1
         },
         {
-          "name": "genesisRootKey",
+          "name": "publisherRootKey",
           "required": true,
           "type": "string",
           "version": 1
@@ -8100,6 +8178,12 @@
         },
         {
           "name": "catalogEpoch",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "policySequence",
           "required": true,
           "type": "uint",
           "version": 1

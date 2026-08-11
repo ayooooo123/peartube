@@ -2481,9 +2481,10 @@ ns.register({
 ns.register({
   name: 'index-work',
   fields: [
-    { name: 'entityId', type: 'string', required: true },
+    { name: 'entityId', type: 'string', required: false },
     { name: 'title', type: 'string', required: false },
-    { name: 'releaseYear', type: 'uint', required: false },
+    { name: 'releaseYear', type: 'uint', required: true },
+    { name: 'releaseYearPresent', type: 'bool', required: true },
     { name: 'externalRefs', type: '@peartube/index-external-reference', array: true, required: true },
     { name: 'episode', type: '@peartube/index-episode', required: false }
   ]
@@ -2504,7 +2505,8 @@ ns.register({
     { name: 'publicationId', type: 'string', required: true },
     { name: 'publisherId', type: 'string', required: true },
     { name: 'manifestId', type: 'string', required: true },
-    { name: 'catalogEpoch', type: 'uint', required: false },
+    { name: 'catalogEpoch', type: 'uint', required: true },
+    { name: 'catalogEpochPresent', type: 'bool', required: true },
     { name: 'catalogHead', type: 'string', required: false },
     { name: 'title', type: 'string', required: false }
   ]
@@ -2514,7 +2516,8 @@ ns.register({
   name: 'index-audio-track',
   fields: [
     { name: 'codec', type: 'string', required: false },
-    { name: 'channels', type: 'uint', required: false },
+    { name: 'channels', type: 'uint', required: true },
+    { name: 'channelsPresent', type: 'bool', required: true },
     { name: 'languages', type: 'string', array: true, required: true }
   ]
 })
@@ -2533,26 +2536,32 @@ ns.register({
     { name: 'renditionId', type: 'string', required: true },
     { name: 'container', type: 'string', required: false },
     { name: 'videoCodec', type: 'string', required: false },
-    { name: 'width', type: 'uint', required: false },
-    { name: 'height', type: 'uint', required: false },
+    { name: 'width', type: 'uint', required: true },
+    { name: 'widthPresent', type: 'bool', required: true },
+    { name: 'height', type: 'uint', required: true },
+    { name: 'heightPresent', type: 'bool', required: true },
     { name: 'resolutionLabel', type: 'string', required: false },
     { name: 'hdrFormats', type: 'string', array: true, required: true },
     { name: 'audioTracks', type: '@peartube/index-audio-track', array: true, required: true },
     { name: 'subtitleTracks', type: '@peartube/index-subtitle-track', array: true, required: true },
     { name: 'purpose', type: 'string', required: false },
-    { name: 'byteLength', type: 'uint', required: true }
+    { name: 'byteLength', type: 'uint', required: true },
+    { name: 'byteLengthPresent', type: 'bool', required: true },
   ]
 })
 
 ns.register({
   name: 'index-asset',
   fields: [
-    { name: 'assetId', type: 'string', required: true },
+    { name: 'assetId', type: 'string', required: false },
     { name: 'coreKey', type: 'string', required: false },
     { name: 'treeHash', type: 'string', required: false },
-    { name: 'blockLength', type: 'uint', required: false },
-    { name: 'blockSize', type: 'uint', required: false },
-    { name: 'byteLength', type: 'uint', required: true }
+    { name: 'blockLength', type: 'uint', required: true },
+    { name: 'blockLengthPresent', type: 'bool', required: true },
+    { name: 'blockSize', type: 'uint', required: true },
+    { name: 'blockSizePresent', type: 'bool', required: true },
+    { name: 'byteLength', type: 'uint', required: true },
+    { name: 'byteLengthPresent', type: 'bool', required: true },
   ]
 })
 
@@ -2568,10 +2577,14 @@ ns.register({
 ns.register({
   name: 'index-availability',
   fields: [
-    { name: 'peers', type: 'uint', required: false },
-    { name: 'completeSeeders', type: 'uint', required: false },
-    { name: 'observedAtMs', type: 'uint', required: false },
-    { name: 'expiresAtMs', type: 'uint', required: false }
+    { name: 'peers', type: 'uint', required: true },
+    { name: 'peersPresent', type: 'bool', required: true },
+    { name: 'completeSeeders', type: 'uint', required: true },
+    { name: 'completeSeedersPresent', type: 'bool', required: true },
+    { name: 'observedAtMs', type: 'uint', required: true },
+    { name: 'observedAtMsPresent', type: 'bool', required: true },
+    { name: 'expiresAtMs', type: 'uint', required: true },
+    { name: 'expiresAtMsPresent', type: 'bool', required: true },
   ]
 })
 
@@ -2587,9 +2600,10 @@ ns.register({
   name: 'index-publisher-descriptor',
   fields: [
     { name: 'publisherId', type: 'string', required: true },
-    { name: 'genesisRootKey', type: 'string', required: true },
+    { name: 'publisherRootKey', type: 'string', required: true },
     { name: 'catalogBootstrapKey', type: 'string', required: true },
-    { name: 'catalogEpoch', type: 'uint', required: true }
+    { name: 'catalogEpoch', type: 'uint', required: true },
+    { name: 'policySequence', type: 'uint', required: true }
   ]
 })
 

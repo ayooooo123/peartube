@@ -322,11 +322,16 @@ test('authorized rendition range opens the canonical static core and never cross
   const renditionId = manifest.body.renditions[0].renditionId
   const opened = []
   const downloads = []
+  const destroyedDownloads = []
   const swarm = fakeSwarm()
   let unrestrictedReplications = 0
+  const authorizations = []
   const runtime = createScopedNetworkRuntime({
     swarm,
-    authorizePublication: async request => request.manifest === manifest,
+    authorizePublication: async request => {
+      authorizations.push({ start: request.start, end: request.end })
+      return request.manifest === manifest
+    },
     muxFactory: () => ({}),
     store: {
       get ({ key, manifest: hypercoreManifest, writable }) {
@@ -338,7 +343,10 @@ test('authorized rendition range opens the canonical static core and never cross
           key,
           ready: async () => {},
           replicate: () => { unrestrictedReplications++ },
-          download: range => { downloads.push(range); return { destroy () {} } },
+          download: range => {
+            downloads.push(range)
+            return { destroy () { destroyedDownloads.push(range) } }
+          },
           close () {},
         }
       },
@@ -346,11 +354,29 @@ test('authorized rendition range opens the canonical static core and never cross
     now: () => 20,
   })
   await runtime.start()
-  const retained = await runtime.retainAuthorizedRendition({ manifest, renditionId, start: 2, end: 5 })
+  const retained = await runtime.retainAuthorizedRendition({
+    manifest,
+    renditionId,
+    ownerId: 'playback-owner',
+    start: 0,
+    end: staticCore.length,
+  })
+  const verificationLease = await runtime.retainAuthorizedRendition({
+    manifest,
+    renditionId,
+    ownerId: 'verification-owner',
+    start: 0,
+    end: 1,
+  })
   t.is(retained.status, 'retained')
   t.is(retained.assetId, b4a.toString(allowedCore, 'hex'))
+  t.alike(verificationLease.range, { start: 0, end: 1 })
+  t.alike(authorizations, [
+    { start: 0, end: staticCore.length },
+    { start: 0, end: 1 },
+  ])
   t.alike(opened, [b4a.toString(allowedCore, 'hex')])
-  t.alike(downloads, [{ start: 2, end: 5 }])
+  t.alike(downloads, [{ start: 0, end: staticCore.length }])
   const assetTopic = deriveStaticAssetTopic(allowedCore)
   const authorized = runtime.authorizeConnection({
     purpose: 'asset',
@@ -366,7 +392,53 @@ test('authorized rendition range opens the canonical static core and never cross
   t.is(runtime.authorizeConnection({ purpose: 'asset', topic: deriveStaticAssetTopic(otherCore), peerId: 'asset-b' }).status, 'rejected')
   t.alike(opened, [b4a.toString(allowedCore, 'hex')], 'unauthorized known core is never opened')
 
-  await runtime.releaseAuthorizedRendition({ renditionId })
+  await t.exception(runtime.retainAuthorizedRendition({
+    manifest,
+    renditionId,
+    ownerId: 'playback-owner',
+    start: 0,
+    end: 1,
+  }), /retention owner already has a different authorization range/)
+  const verificationRelease = await runtime.releaseAuthorizedRendition({
+    renditionId,
+    ownerId: 'verification-owner',
+    assetId: staticCore.assetId,
+  })
+  t.is(verificationRelease.released, true)
+  t.is(verificationRelease.remainingOwners, 1)
+  t.is(runtime.authorizeConnection({
+    purpose: 'asset',
+    topic: assetTopic,
+    requestedCoreKey: b4a.toString(allowedCore, 'hex'),
+  }).status, 'authorized', 'releasing the dependent short lease preserves the full owner')
+  await runtime.retainAuthorizedRendition({
+    manifest,
+    renditionId,
+    ownerId: 'verification-owner',
+    start: 0,
+    end: 1,
+  })
+  const playbackRelease = await runtime.releaseAuthorizedRendition({
+    renditionId,
+    ownerId: 'playback-owner',
+    assetId: staticCore.assetId,
+  })
+  t.is(playbackRelease.released, true)
+  t.is(playbackRelease.remainingOwners, 0)
+  t.is(playbackRelease.scopeQuiescent, true)
+  t.alike(destroyedDownloads, [{ start: 0, end: staticCore.length }])
+  const revokedVerificationRelease = await runtime.releaseAuthorizedRendition({
+    renditionId,
+    ownerId: 'verification-owner',
+    assetId: staticCore.assetId,
+  })
+  t.is(revokedVerificationRelease.released, false)
+  t.is(revokedVerificationRelease.remainingOwners, 0)
+  t.is(runtime.authorizeConnection({
+    purpose: 'asset',
+    topic: assetTopic,
+    requestedCoreKey: b4a.toString(allowedCore, 'hex'),
+  }).status, 'rejected', 'releasing the last full-range owner revokes dependent short leases')
   await runtime.close()
 })
 
@@ -615,6 +687,27 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
   t.alike(outcome.value.verifiedBlockIndexes, [2, 3, 4])
   t.alike(outcome.value.peerIds, [b4a.toString(pair.b.remotePublicKey, 'hex')])
   t.is(await readerCore.has(1), false, 'the peer never receives a block below its authorized range')
+  const defaultCached = await runtimeB.requestAssetBlocks({
+    assetId: staticCore.assetId,
+    startBlock: 2,
+    endBlock: 3,
+  })
+  t.alike(defaultCached.verifiedBlockIndexes, [2])
+  t.alike(defaultCached.peerIds, [], 'default cached-block fast path remains local')
+  const cachedPeerEvidence = await runtimeB.requestAssetBlocks({
+    assetId: staticCore.assetId,
+    startBlock: 2,
+    endBlock: 3,
+    requirePeerEvidence: true,
+  })
+  t.alike(cachedPeerEvidence.verifiedBlockIndexes, [2])
+  t.alike(cachedPeerEvidence.peerIds, [b4a.toString(pair.b.remotePublicKey, 'hex')])
+  await t.exception(runtimeB.requestAssetBlocks({
+    assetId: staticCore.assetId,
+    startBlock: 2,
+    endBlock: 3,
+    requirePeerEvidence: 'true',
+  }), /requirePeerEvidence must be a boolean/)
   for (let index = 2; index < 5; index++) {
     t.is(await readerCore.has(index), true)
     t.alike(await readerCore.get(index), sourceBytes.subarray(

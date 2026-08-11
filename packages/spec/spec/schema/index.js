@@ -7129,42 +7129,46 @@ const encoding247 = {
 }
 
 // @peartube/index-work.externalRefs
-const encoding248_3 = c.array(c.frame(encoding246))
+const encoding248_4 = c.array(c.frame(encoding246))
 // @peartube/index-work.episode
-const encoding248_4 = c.frame(encoding247)
+const encoding248_5 = c.frame(encoding247)
 
 // @peartube/index-work
 const encoding248 = {
   preencode(state, m) {
-    c.string.preencode(state, m.entityId)
-    state.end++ // max flag is 4 so always one byte
+    state.end++ // max flag is 8 so always one byte
 
+    if (m.entityId) c.string.preencode(state, m.entityId)
     if (m.title) c.string.preencode(state, m.title)
-    if (m.releaseYear) c.uint.preencode(state, m.releaseYear)
-    encoding248_3.preencode(state, m.externalRefs)
-    if (m.episode) encoding248_4.preencode(state, m.episode)
+    c.uint.preencode(state, m.releaseYear)
+    encoding248_4.preencode(state, m.externalRefs)
+    if (m.episode) encoding248_5.preencode(state, m.episode)
   },
   encode(state, m) {
-    const flags = (m.title ? 1 : 0) | (m.releaseYear ? 2 : 0) | (m.episode ? 4 : 0)
+    const flags =
+      (m.entityId ? 1 : 0) |
+      (m.title ? 2 : 0) |
+      (m.releaseYearPresent ? 4 : 0) |
+      (m.episode ? 8 : 0)
 
-    c.string.encode(state, m.entityId)
     c.uint.encode(state, flags)
 
+    if (m.entityId) c.string.encode(state, m.entityId)
     if (m.title) c.string.encode(state, m.title)
-    if (m.releaseYear) c.uint.encode(state, m.releaseYear)
-    encoding248_3.encode(state, m.externalRefs)
-    if (m.episode) encoding248_4.encode(state, m.episode)
+    c.uint.encode(state, m.releaseYear)
+    encoding248_4.encode(state, m.externalRefs)
+    if (m.episode) encoding248_5.encode(state, m.episode)
   },
   decode(state) {
-    const r0 = c.string.decode(state)
     const flags = c.uint.decode(state)
 
     return {
-      entityId: r0,
-      title: (flags & 1) !== 0 ? c.string.decode(state) : null,
-      releaseYear: (flags & 2) !== 0 ? c.uint.decode(state) : 0,
-      externalRefs: encoding248_3.decode(state),
-      episode: (flags & 4) !== 0 ? encoding248_4.decode(state) : null
+      entityId: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      title: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      releaseYear: c.uint.decode(state),
+      releaseYearPresent: (flags & 4) !== 0,
+      externalRefs: encoding248_4.decode(state),
+      episode: (flags & 8) !== 0 ? encoding248_5.decode(state) : null
     }
   }
 }
@@ -7204,21 +7208,21 @@ const encoding250 = {
     c.string.preencode(state, m.publicationId)
     c.string.preencode(state, m.publisherId)
     c.string.preencode(state, m.manifestId)
+    c.uint.preencode(state, m.catalogEpoch)
     state.end++ // max flag is 4 so always one byte
 
-    if (m.catalogEpoch) c.uint.preencode(state, m.catalogEpoch)
     if (m.catalogHead) c.string.preencode(state, m.catalogHead)
     if (m.title) c.string.preencode(state, m.title)
   },
   encode(state, m) {
-    const flags = (m.catalogEpoch ? 1 : 0) | (m.catalogHead ? 2 : 0) | (m.title ? 4 : 0)
+    const flags = (m.catalogEpochPresent ? 1 : 0) | (m.catalogHead ? 2 : 0) | (m.title ? 4 : 0)
 
     c.string.encode(state, m.publicationId)
     c.string.encode(state, m.publisherId)
     c.string.encode(state, m.manifestId)
+    c.uint.encode(state, m.catalogEpoch)
     c.uint.encode(state, flags)
 
-    if (m.catalogEpoch) c.uint.encode(state, m.catalogEpoch)
     if (m.catalogHead) c.string.encode(state, m.catalogHead)
     if (m.title) c.string.encode(state, m.title)
   },
@@ -7226,13 +7230,15 @@ const encoding250 = {
     const r0 = c.string.decode(state)
     const r1 = c.string.decode(state)
     const r2 = c.string.decode(state)
+    const r3 = c.uint.decode(state)
     const flags = c.uint.decode(state)
 
     return {
       publicationId: r0,
       publisherId: r1,
       manifestId: r2,
-      catalogEpoch: (flags & 1) !== 0 ? c.uint.decode(state) : 0,
+      catalogEpoch: r3,
+      catalogEpochPresent: (flags & 1) !== 0,
       catalogHead: (flags & 2) !== 0 ? c.string.decode(state) : null,
       title: (flags & 4) !== 0 ? c.string.decode(state) : null
     }
@@ -7240,7 +7246,7 @@ const encoding250 = {
 }
 
 // @peartube/index-audio-track.languages
-const encoding251_2 = encoding44_10
+const encoding251_3 = encoding44_10
 
 // @peartube/index-audio-track
 const encoding251 = {
@@ -7248,25 +7254,26 @@ const encoding251 = {
     state.end++ // max flag is 2 so always one byte
 
     if (m.codec) c.string.preencode(state, m.codec)
-    if (m.channels) c.uint.preencode(state, m.channels)
-    encoding251_2.preencode(state, m.languages)
+    c.uint.preencode(state, m.channels)
+    encoding251_3.preencode(state, m.languages)
   },
   encode(state, m) {
-    const flags = (m.codec ? 1 : 0) | (m.channels ? 2 : 0)
+    const flags = (m.codec ? 1 : 0) | (m.channelsPresent ? 2 : 0)
 
     c.uint.encode(state, flags)
 
     if (m.codec) c.string.encode(state, m.codec)
-    if (m.channels) c.uint.encode(state, m.channels)
-    encoding251_2.encode(state, m.languages)
+    c.uint.encode(state, m.channels)
+    encoding251_3.encode(state, m.languages)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
       codec: (flags & 1) !== 0 ? c.string.decode(state) : null,
-      channels: (flags & 2) !== 0 ? c.uint.decode(state) : 0,
-      languages: encoding251_2.decode(state)
+      channels: c.uint.decode(state),
+      channelsPresent: (flags & 2) !== 0,
+      languages: encoding251_3.decode(state)
     }
   }
 }
@@ -7298,26 +7305,26 @@ const encoding252 = {
 }
 
 // @peartube/index-rendition.hdrFormats
-const encoding253_6 = encoding44_10
+const encoding253_8 = encoding44_10
 // @peartube/index-rendition.audioTracks
-const encoding253_7 = c.array(c.frame(encoding251))
+const encoding253_9 = c.array(c.frame(encoding251))
 // @peartube/index-rendition.subtitleTracks
-const encoding253_8 = c.array(c.frame(encoding252))
+const encoding253_10 = c.array(c.frame(encoding252))
 
 // @peartube/index-rendition
 const encoding253 = {
   preencode(state, m) {
     c.string.preencode(state, m.renditionId)
-    state.end++ // max flag is 32 so always one byte
+    state.end++ // max flag is 64 so always one byte
 
     if (m.container) c.string.preencode(state, m.container)
     if (m.videoCodec) c.string.preencode(state, m.videoCodec)
-    if (m.width) c.uint.preencode(state, m.width)
-    if (m.height) c.uint.preencode(state, m.height)
+    c.uint.preencode(state, m.width)
+    c.uint.preencode(state, m.height)
     if (m.resolutionLabel) c.string.preencode(state, m.resolutionLabel)
-    encoding253_6.preencode(state, m.hdrFormats)
-    encoding253_7.preencode(state, m.audioTracks)
-    encoding253_8.preencode(state, m.subtitleTracks)
+    encoding253_8.preencode(state, m.hdrFormats)
+    encoding253_9.preencode(state, m.audioTracks)
+    encoding253_10.preencode(state, m.subtitleTracks)
     if (m.purpose) c.string.preencode(state, m.purpose)
     c.uint.preencode(state, m.byteLength)
   },
@@ -7325,22 +7332,23 @@ const encoding253 = {
     const flags =
       (m.container ? 1 : 0) |
       (m.videoCodec ? 2 : 0) |
-      (m.width ? 4 : 0) |
-      (m.height ? 8 : 0) |
+      (m.widthPresent ? 4 : 0) |
+      (m.heightPresent ? 8 : 0) |
       (m.resolutionLabel ? 16 : 0) |
-      (m.purpose ? 32 : 0)
+      (m.purpose ? 32 : 0) |
+      (m.byteLengthPresent ? 64 : 0)
 
     c.string.encode(state, m.renditionId)
     c.uint.encode(state, flags)
 
     if (m.container) c.string.encode(state, m.container)
     if (m.videoCodec) c.string.encode(state, m.videoCodec)
-    if (m.width) c.uint.encode(state, m.width)
-    if (m.height) c.uint.encode(state, m.height)
+    c.uint.encode(state, m.width)
+    c.uint.encode(state, m.height)
     if (m.resolutionLabel) c.string.encode(state, m.resolutionLabel)
-    encoding253_6.encode(state, m.hdrFormats)
-    encoding253_7.encode(state, m.audioTracks)
-    encoding253_8.encode(state, m.subtitleTracks)
+    encoding253_8.encode(state, m.hdrFormats)
+    encoding253_9.encode(state, m.audioTracks)
+    encoding253_10.encode(state, m.subtitleTracks)
     if (m.purpose) c.string.encode(state, m.purpose)
     c.uint.encode(state, m.byteLength)
   },
@@ -7352,14 +7360,17 @@ const encoding253 = {
       renditionId: r0,
       container: (flags & 1) !== 0 ? c.string.decode(state) : null,
       videoCodec: (flags & 2) !== 0 ? c.string.decode(state) : null,
-      width: (flags & 4) !== 0 ? c.uint.decode(state) : 0,
-      height: (flags & 8) !== 0 ? c.uint.decode(state) : 0,
+      width: c.uint.decode(state),
+      widthPresent: (flags & 4) !== 0,
+      height: c.uint.decode(state),
+      heightPresent: (flags & 8) !== 0,
       resolutionLabel: (flags & 16) !== 0 ? c.string.decode(state) : null,
-      hdrFormats: encoding253_6.decode(state),
-      audioTracks: encoding253_7.decode(state),
-      subtitleTracks: encoding253_8.decode(state),
+      hdrFormats: encoding253_8.decode(state),
+      audioTracks: encoding253_9.decode(state),
+      subtitleTracks: encoding253_10.decode(state),
       purpose: (flags & 32) !== 0 ? c.string.decode(state) : null,
-      byteLength: c.uint.decode(state)
+      byteLength: c.uint.decode(state),
+      byteLengthPresent: (flags & 64) !== 0
     }
   }
 }
@@ -7367,39 +7378,46 @@ const encoding253 = {
 // @peartube/index-asset
 const encoding254 = {
   preencode(state, m) {
-    c.string.preencode(state, m.assetId)
-    state.end++ // max flag is 8 so always one byte
+    state.end++ // max flag is 32 so always one byte
 
+    if (m.assetId) c.string.preencode(state, m.assetId)
     if (m.coreKey) c.string.preencode(state, m.coreKey)
     if (m.treeHash) c.string.preencode(state, m.treeHash)
-    if (m.blockLength) c.uint.preencode(state, m.blockLength)
-    if (m.blockSize) c.uint.preencode(state, m.blockSize)
+    c.uint.preencode(state, m.blockLength)
+    c.uint.preencode(state, m.blockSize)
     c.uint.preencode(state, m.byteLength)
   },
   encode(state, m) {
     const flags =
-      (m.coreKey ? 1 : 0) | (m.treeHash ? 2 : 0) | (m.blockLength ? 4 : 0) | (m.blockSize ? 8 : 0)
+      (m.assetId ? 1 : 0) |
+      (m.coreKey ? 2 : 0) |
+      (m.treeHash ? 4 : 0) |
+      (m.blockLengthPresent ? 8 : 0) |
+      (m.blockSizePresent ? 16 : 0) |
+      (m.byteLengthPresent ? 32 : 0)
 
-    c.string.encode(state, m.assetId)
     c.uint.encode(state, flags)
 
+    if (m.assetId) c.string.encode(state, m.assetId)
     if (m.coreKey) c.string.encode(state, m.coreKey)
     if (m.treeHash) c.string.encode(state, m.treeHash)
-    if (m.blockLength) c.uint.encode(state, m.blockLength)
-    if (m.blockSize) c.uint.encode(state, m.blockSize)
+    c.uint.encode(state, m.blockLength)
+    c.uint.encode(state, m.blockSize)
     c.uint.encode(state, m.byteLength)
   },
   decode(state) {
-    const r0 = c.string.decode(state)
     const flags = c.uint.decode(state)
 
     return {
-      assetId: r0,
-      coreKey: (flags & 1) !== 0 ? c.string.decode(state) : null,
-      treeHash: (flags & 2) !== 0 ? c.string.decode(state) : null,
-      blockLength: (flags & 4) !== 0 ? c.uint.decode(state) : 0,
-      blockSize: (flags & 8) !== 0 ? c.uint.decode(state) : 0,
-      byteLength: c.uint.decode(state)
+      assetId: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      coreKey: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      treeHash: (flags & 4) !== 0 ? c.string.decode(state) : null,
+      blockLength: c.uint.decode(state),
+      blockLengthPresent: (flags & 8) !== 0,
+      blockSize: c.uint.decode(state),
+      blockSizePresent: (flags & 16) !== 0,
+      byteLength: c.uint.decode(state),
+      byteLengthPresent: (flags & 32) !== 0
     }
   }
 }
@@ -7436,35 +7454,38 @@ const encoding255 = {
 // @peartube/index-availability
 const encoding256 = {
   preencode(state, m) {
+    c.uint.preencode(state, m.peers)
     state.end++ // max flag is 8 so always one byte
-
-    if (m.peers) c.uint.preencode(state, m.peers)
-    if (m.completeSeeders) c.uint.preencode(state, m.completeSeeders)
-    if (m.observedAtMs) c.uint.preencode(state, m.observedAtMs)
-    if (m.expiresAtMs) c.uint.preencode(state, m.expiresAtMs)
+    c.uint.preencode(state, m.completeSeeders)
+    c.uint.preencode(state, m.observedAtMs)
+    c.uint.preencode(state, m.expiresAtMs)
   },
   encode(state, m) {
     const flags =
-      (m.peers ? 1 : 0) |
-      (m.completeSeeders ? 2 : 0) |
-      (m.observedAtMs ? 4 : 0) |
-      (m.expiresAtMs ? 8 : 0)
+      (m.peersPresent ? 1 : 0) |
+      (m.completeSeedersPresent ? 2 : 0) |
+      (m.observedAtMsPresent ? 4 : 0) |
+      (m.expiresAtMsPresent ? 8 : 0)
 
+    c.uint.encode(state, m.peers)
     c.uint.encode(state, flags)
-
-    if (m.peers) c.uint.encode(state, m.peers)
-    if (m.completeSeeders) c.uint.encode(state, m.completeSeeders)
-    if (m.observedAtMs) c.uint.encode(state, m.observedAtMs)
-    if (m.expiresAtMs) c.uint.encode(state, m.expiresAtMs)
+    c.uint.encode(state, m.completeSeeders)
+    c.uint.encode(state, m.observedAtMs)
+    c.uint.encode(state, m.expiresAtMs)
   },
   decode(state) {
+    const r0 = c.uint.decode(state)
     const flags = c.uint.decode(state)
 
     return {
-      peers: (flags & 1) !== 0 ? c.uint.decode(state) : 0,
-      completeSeeders: (flags & 2) !== 0 ? c.uint.decode(state) : 0,
-      observedAtMs: (flags & 4) !== 0 ? c.uint.decode(state) : 0,
-      expiresAtMs: (flags & 8) !== 0 ? c.uint.decode(state) : 0
+      peers: r0,
+      peersPresent: (flags & 1) !== 0,
+      completeSeeders: c.uint.decode(state),
+      completeSeedersPresent: (flags & 2) !== 0,
+      observedAtMs: c.uint.decode(state),
+      observedAtMsPresent: (flags & 4) !== 0,
+      expiresAtMs: c.uint.decode(state),
+      expiresAtMsPresent: (flags & 8) !== 0
     }
   }
 }
@@ -7494,27 +7515,31 @@ const encoding257 = {
 const encoding258 = {
   preencode(state, m) {
     c.string.preencode(state, m.publisherId)
-    c.string.preencode(state, m.genesisRootKey)
+    c.string.preencode(state, m.publisherRootKey)
     c.string.preencode(state, m.catalogBootstrapKey)
     c.uint.preencode(state, m.catalogEpoch)
+    c.uint.preencode(state, m.policySequence)
   },
   encode(state, m) {
     c.string.encode(state, m.publisherId)
-    c.string.encode(state, m.genesisRootKey)
+    c.string.encode(state, m.publisherRootKey)
     c.string.encode(state, m.catalogBootstrapKey)
     c.uint.encode(state, m.catalogEpoch)
+    c.uint.encode(state, m.policySequence)
   },
   decode(state) {
     const r0 = c.string.decode(state)
     const r1 = c.string.decode(state)
     const r2 = c.string.decode(state)
     const r3 = c.uint.decode(state)
+    const r4 = c.uint.decode(state)
 
     return {
       publisherId: r0,
-      genesisRootKey: r1,
+      publisherRootKey: r1,
       catalogBootstrapKey: r2,
-      catalogEpoch: r3
+      catalogEpoch: r3,
+      policySequence: r4
     }
   }
 }

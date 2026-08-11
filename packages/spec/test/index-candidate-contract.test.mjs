@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
+import { normalizeIndexCandidateFromTransport } from '../../backend/src/search/candidate-contract.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -36,6 +37,20 @@ test('schema source defines bounded typed URL-less candidate contracts', (t) => 
   for (const name of ['search-index-candidates', 'verify-index-candidate']) {
     t.ok(source.includes(`name: '${name}'`), `${name} is declared at the schema source`)
   }
+  for (const flag of [
+    'releaseYearPresent',
+    'catalogEpochPresent',
+    'channelsPresent',
+    'widthPresent',
+    'heightPresent',
+    'byteLengthPresent',
+    'blockLengthPresent',
+    'blockSizePresent',
+    'peersPresent',
+    'completeSeedersPresent',
+    'observedAtMsPresent',
+    'expiresAtMsPresent',
+  ]) t.ok(source.includes(`name: '${flag}'`), `${flag} preserves nullable uint presence`)
 
   const contractSection = source.slice(
     source.indexOf('// Distributed index candidate search'),
@@ -85,6 +100,36 @@ test('generated schema exposes exact typed candidate request and response record
     'verification',
     'sourceIndexers',
   ])
+  for (const [record, pairs] of [
+    ['index-work', [['releaseYear', 'releaseYearPresent']]],
+    ['index-publication', [['catalogEpoch', 'catalogEpochPresent']]],
+    ['index-audio-track', [['channels', 'channelsPresent']]],
+    ['index-rendition', [
+      ['width', 'widthPresent'],
+      ['height', 'heightPresent'],
+      ['byteLength', 'byteLengthPresent'],
+    ]],
+    ['index-asset', [
+      ['blockLength', 'blockLengthPresent'],
+      ['blockSize', 'blockSizePresent'],
+      ['byteLength', 'byteLengthPresent'],
+    ]],
+    ['index-availability', [
+      ['peers', 'peersPresent'],
+      ['completeSeeders', 'completeSeedersPresent'],
+      ['observedAtMs', 'observedAtMsPresent'],
+      ['expiresAtMs', 'expiresAtMsPresent'],
+    ]],
+  ]) {
+    const byName = new Map(fields(messages.get(record)).map(field => [field.name, field]))
+    for (const [uintField, presentField] of pairs) {
+      t.alike(byName.get(uintField), { name: uintField, type: 'uint', required: true, array: false })
+      // Generated Hyperschema metadata conventionally reports bool fields as
+      // optional even when the schema source requires them; codec behavior below
+      // is the authoritative absent-versus-explicit-zero assertion.
+      t.alike(byName.get(presentField), { name: presentField, type: 'bool', required: false, array: false })
+    }
+  }
   for (const forbidden of ['streamUrl', 'downloadUrl', 'sourceRecordRef', 'credential', 'cookie', 'controlCapability']) {
     t.absent(candidateFields.some(field => field.name === forbidden), `${forbidden} is absent`)
   }
@@ -97,22 +142,45 @@ test('generated candidate codec preserves omitted unknowns and concrete verified
   const minimal = {
     schemaVersion: 2,
     candidateRef: 'A'.repeat(43),
-    work: { entityId: 'work-1', externalRefs: [] },
+    work: { releaseYear: 0, releaseYearPresent: false, externalRefs: [] },
     publication: {
       publicationId: '11'.repeat(32),
       publisherId: '22'.repeat(32),
       manifestId: '33'.repeat(32),
+      catalogEpoch: 0,
+      catalogEpochPresent: false,
     },
     rendition: {
       renditionId: '44'.repeat(32),
+      width: 0,
+      widthPresent: false,
+      height: 0,
+      heightPresent: false,
       hdrFormats: [],
       audioTracks: [],
       subtitleTracks: [],
-      byteLength: 1024,
+      byteLength: 0,
+      byteLengthPresent: false,
     },
-    asset: { assetId: '55'.repeat(32), byteLength: 1024 },
+    asset: {
+      blockLength: 0,
+      blockLengthPresent: false,
+      blockSize: 0,
+      blockSizePresent: false,
+      byteLength: 0,
+      byteLengthPresent: false,
+    },
     provenance: {},
-    availability: {},
+    availability: {
+      peers: 0,
+      peersPresent: false,
+      completeSeeders: 0,
+      completeSeedersPresent: false,
+      observedAtMs: 0,
+      observedAtMsPresent: false,
+      expiresAtMs: 0,
+      expiresAtMsPresent: false,
+    },
     verification: { state: 'unverified' },
     sourceIndexers: [],
   }
@@ -124,29 +192,74 @@ test('generated candidate codec preserves omitted unknowns and concrete verified
   t.is(minimalDecoded.publication.catalogHead, null)
   t.is(minimalDecoded.rendition.videoCodec, null)
   t.is(minimalDecoded.work.title, null)
+  t.is(minimalDecoded.work.entityId, null)
   t.is(minimalDecoded.rendition.container, null)
-  t.is(minimalDecoded.availability.observedAtMs, 0)
+  t.is(minimalDecoded.rendition.byteLengthPresent, false)
+  t.is(minimalDecoded.asset.byteLengthPresent, false)
+  t.is(minimalDecoded.asset.assetId, null)
+  t.is(minimalDecoded.availability.observedAtMsPresent, false)
+  const minimalPublic = normalizeIndexCandidateFromTransport(minimalDecoded)
+  t.is(minimalPublic.work.releaseYear, null)
+  t.is(minimalPublic.rendition.byteLength, null)
+  t.is(minimalPublic.asset.byteLength, null)
+  t.is(minimalPublic.availability.observedAtMs, null)
 
   const concrete = {
     ...minimal,
-    work: { ...minimal.work, title: 'Pilot' },
-    publication: { ...minimal.publication, catalogEpoch: 3, catalogHead: '66'.repeat(32), title: 'Pilot' },
-    rendition: { ...minimal.rendition, container: 'video/mp4', purpose: 'original' },
+    work: {
+      ...minimal.work,
+      entityId: 'work-1',
+      title: 'Pilot',
+      releaseYear: 0,
+      releaseYearPresent: true,
+    },
+    publication: {
+      ...minimal.publication,
+      catalogEpoch: 3,
+      catalogEpochPresent: true,
+      catalogHead: '66'.repeat(32),
+      title: 'Pilot',
+    },
+    rendition: {
+      ...minimal.rendition,
+      container: 'video/mp4',
+      purpose: 'original',
+      width: 0,
+      widthPresent: true,
+      audioTracks: [{ codec: null, channels: 0, channelsPresent: true, languages: [] }],
+      byteLength: 1024,
+      byteLengthPresent: true,
+    },
     asset: {
       ...minimal.asset,
+      assetId: '55'.repeat(32),
       coreKey: '55'.repeat(32),
       treeHash: '77'.repeat(32),
       blockLength: 1,
+      blockLengthPresent: true,
       blockSize: 1024,
+      blockSizePresent: true,
+      byteLength: 1024,
+      byteLengthPresent: true,
     },
-    availability: { peers: 2, completeSeeders: 1, observedAtMs: 10, expiresAtMs: 20 },
+    availability: {
+      peers: 2,
+      peersPresent: true,
+      completeSeeders: 1,
+      completeSeedersPresent: true,
+      observedAtMs: 10,
+      observedAtMsPresent: true,
+      expiresAtMs: 20,
+      expiresAtMsPresent: true,
+    },
     verification: {
       state: 'source-verified',
       publisherDescriptor: {
         publisherId: '22'.repeat(32),
-        genesisRootKey: '88'.repeat(32),
+        publisherRootKey: '88'.repeat(32),
         catalogBootstrapKey: '99'.repeat(32),
         catalogEpoch: 3,
+        policySequence: 4,
       },
       catalogHead: {
         viewKey: 'aa'.repeat(32),
@@ -163,4 +276,11 @@ test('generated candidate codec preserves omitted unknowns and concrete verified
   t.is(concreteDecoded.verification.state, 'source-verified')
   t.is(concreteDecoded.asset.coreKey, concrete.asset.coreKey)
   t.is(concreteDecoded.verification.catalogHead.digest, concrete.verification.catalogHead.digest)
+  t.is(concreteDecoded.work.releaseYearPresent, true)
+  t.is(concreteDecoded.rendition.audioTracks[0].channelsPresent, true)
+  const concretePublic = normalizeIndexCandidateFromTransport(concreteDecoded)
+  t.is(concretePublic.work.releaseYear, 0)
+  t.is(concretePublic.rendition.audioTracks[0].channels, 0)
+  t.is(concretePublic.rendition.byteLength, 1024)
+  t.is(concretePublic.availability.observedAtMs, 10)
 })

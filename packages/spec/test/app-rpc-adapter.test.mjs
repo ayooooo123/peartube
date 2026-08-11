@@ -204,6 +204,67 @@ test('generated media catalog method preserves explicit limit presence', async (
   ])
 })
 
+test('generated index client reconstructs nullable uint presence without fake zero facts', async (t) => {
+  const rawCandidate = present => ({
+    work: { releaseYear: 0, releaseYearPresent: present },
+    publication: { catalogEpoch: 0, catalogEpochPresent: present },
+    rendition: {
+      width: 0,
+      widthPresent: present,
+      height: 0,
+      heightPresent: present,
+      byteLength: 0,
+      byteLengthPresent: present,
+      audioTracks: [{ channels: 0, channelsPresent: present }]
+    },
+    asset: {
+      blockLength: 0,
+      blockLengthPresent: present,
+      blockSize: 0,
+      blockSizePresent: present,
+      byteLength: 0,
+      byteLengthPresent: present
+    },
+    availability: {
+      peers: 0,
+      peersPresent: present,
+      completeSeeders: 0,
+      completeSeedersPresent: present,
+      observedAtMs: 0,
+      observedAtMsPresent: present,
+      expiresAtMs: 0,
+      expiresAtMsPresent: present
+    }
+  })
+  const client = createGeneratedAppRpcClient({
+    rpc: {
+      searchIndexCandidates() {
+        return { success: true, candidates: [rawCandidate(false)] }
+      },
+      verifyIndexCandidate() {
+        return { success: true, candidate: rawCandidate(true) }
+      }
+    },
+    async ready() {},
+    createMissingMethodError(methodName) {
+      return new Error(`missing:${methodName}`)
+    },
+    normalizeError(error) {
+      return error
+    }
+  })
+
+  const searched = await client.search.searchIndexCandidates({})
+  t.is(searched.candidates[0].work.releaseYear, null)
+  t.is(searched.candidates[0].rendition.audioTracks[0].channels, null)
+  t.is(searched.candidates[0].availability.observedAtMs, null)
+  t.absent(Object.hasOwn(searched.candidates[0].work, 'releaseYearPresent'))
+  const verified = await client.search.verifyIndexCandidate({})
+  t.is(verified.candidate.work.releaseYear, 0)
+  t.is(verified.candidate.rendition.audioTracks[0].channels, 0)
+  t.is(verified.candidate.availability.observedAtMs, 0)
+})
+
 test('package exports resolve generated HRPC and schema entry points', async (t) => {
   const hrpc = await import('@peartube/spec')
   const messages = await import('@peartube/spec/messages')

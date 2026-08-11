@@ -3509,6 +3509,42 @@ function normalizePresenceFields(request, presenceFields) {
   return normalized
 }
 
+function exposeUintPresence(value, fields) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const normalized = { ...value }
+  for (const field of fields) {
+    normalized[field] = value[`${field}Present`] === true ? value[field] : null
+    delete normalized[`${field}Present`]
+  }
+  return normalized
+}
+
+function normalizeIndexCandidateResponse(candidate) {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return candidate
+  const rendition = exposeUintPresence(candidate.rendition, ['width', 'height', 'byteLength'])
+  if (Array.isArray(rendition?.audioTracks)) {
+    rendition.audioTracks = rendition.audioTracks.map(track => exposeUintPresence(track, ['channels']))
+  }
+  return {
+    ...candidate,
+    work: exposeUintPresence(candidate.work, ['releaseYear']),
+    publication: exposeUintPresence(candidate.publication, ['catalogEpoch']),
+    rendition,
+    asset: exposeUintPresence(candidate.asset, ['blockLength', 'blockSize', 'byteLength']),
+    availability: exposeUintPresence(candidate.availability, ['peers', 'completeSeeders', 'observedAtMs', 'expiresAtMs'])
+  }
+}
+
+function normalizeIndexResponse(methodName, response) {
+  if (methodName === 'searchIndexCandidates' && Array.isArray(response?.candidates)) {
+    return { ...response, candidates: response.candidates.map(normalizeIndexCandidateResponse) }
+  }
+  if (methodName === 'verifyIndexCandidate' && response?.candidate) {
+    return { ...response, candidate: normalizeIndexCandidateResponse(response.candidate) }
+  }
+  return response
+}
+
 function createMethodCaller(rpc, ready, methodMetadata, createMissingMethodError, normalizeError) {
   return async (request = {}) => {
     await ready()
@@ -3516,7 +3552,8 @@ function createMethodCaller(rpc, ready, methodMetadata, createMissingMethodError
     const method = rpc?.[methodName]
     if (typeof method !== 'function') throw createMissingMethodError(methodName)
     try {
-      return await method.call(rpc, normalizePresenceFields(request, methodMetadata.presenceFields))
+      const response = await method.call(rpc, normalizePresenceFields(request, methodMetadata.presenceFields))
+      return normalizeIndexResponse(methodName, response)
     } catch (error) {
       throw normalizeError(error)
     }

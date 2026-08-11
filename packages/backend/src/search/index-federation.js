@@ -110,6 +110,7 @@ function identityKey(candidate) {
     candidate.sourceRecordRef,
     candidate.publicationSourceRecordRef,
     candidate.publicationId,
+    candidate.candidateManifestId,
     candidate.renditionId,
     candidate.assetId,
   ])
@@ -150,7 +151,11 @@ function normalizeServices(services, maximum) {
 
 export function createIndexFederation({ services, cache = new Map(), limits = {}, now = Date.now } = {}) {
   const maximumServices = boundedInteger(limits.maxServices, DEFAULT_MAX_SERVICES, MAX_SERVICES, 'maxServices')
-  const configuredServices = normalizeServices(services, maximumServices)
+  const servicesProvider = typeof services === 'function' ? services : null
+  const staticServices = servicesProvider === null ? normalizeServices(services, maximumServices) : null
+  const resolveConfiguredServices = servicesProvider === null
+    ? () => staticServices
+    : () => normalizeServices(servicesProvider(maximumServices), maximumServices)
   const maximumPages = boundedInteger(
     limits.maxPagesPerService,
     DEFAULT_MAX_PAGES_PER_SERVICE,
@@ -428,6 +433,7 @@ export function createIndexFederation({ services, cache = new Map(), limits = {}
               sourceRecordRef: external.sourceRecordRef,
               publicationSourceRecordRef: publication.sourceRecordRef,
               publicationId: publication.publicationId,
+              candidateManifestId: publication.manifestId,
               renditionId: rendition.renditionId,
               assetId: rendition.assetId,
             }),
@@ -457,6 +463,7 @@ export function createIndexFederation({ services, cache = new Map(), limits = {}
     )) fail('search signal must be an AbortSignal')
     if (signal?.aborted) throw abortError(signal.reason)
     pruneCandidateCache()
+    const configuredServices = resolveConfiguredServices()
     if (configuredServices.length === 0) return []
 
     const controller = new AbortController()
@@ -474,7 +481,6 @@ export function createIndexFederation({ services, cache = new Map(), limits = {}
         if (!active) return
         controller.abort(deadlineError())
       }, configuredDeadlineMs)
-      timer?.unref?.()
     } catch (error) {
       activeControllers.delete(controller)
       signal?.removeEventListener('abort', onCallerAbort)

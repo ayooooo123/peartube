@@ -40,6 +40,7 @@ export const SOURCE_VERIFICATION_ERROR_CODES = Object.freeze({
 const DEFAULT_VERIFICATION_DEADLINE_MS = 5_000
 const DEFAULT_AVAILABILITY_DEADLINE_MS = 2_000
 const DEFAULT_MAX_EVIDENCE_LIFETIME_MS = 30_000
+const MAX_AVAILABILITY_PEERS = 128
 const MAX_DEADLINE_MS = 30_000
 const HEX_32 = /^[0-9a-f]{64}$/
 
@@ -119,6 +120,17 @@ function raceAbort(work, signal) {
   })
 }
 
+function throwIfAborted(signal) {
+  if (signal.aborted) throw abortCode(signal.reason)
+}
+
+async function awaitAbort(work, signal) {
+  throwIfAborted(signal)
+  const value = await raceAbort(work, signal)
+  throwIfAborted(signal)
+  return value
+}
+
 function catalogHead(head) {
   return Object.freeze({
     viewKey: hex(head.viewKey, 'catalog head viewKey'),
@@ -145,7 +157,7 @@ function publicDescriptor(descriptor) {
   })
 }
 
-async function loadNamespace(binding, expectedPublisherId) {
+async function loadNamespace(binding, expectedPublisherId, signal) {
   const catalog = binding?.catalog
   const view = catalog?.view
   if (!catalog || !view || typeof view.get !== 'function') reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID)
@@ -157,7 +169,7 @@ async function loadNamespace(binding, expectedPublisherId) {
       !sameBytes(binding.catalogBootstrapKey, view.key)) {
     reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID)
   }
-  const descriptorEntry = await view.get('state/descriptor')
+  const descriptorEntry = await awaitAbort(view.get('state/descriptor'), signal)
   if (!descriptorEntry?.value) reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID)
   const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value)
   verifyPublisherNamespaceDescriptor(descriptor)
@@ -166,8 +178,10 @@ async function loadNamespace(binding, expectedPublisherId) {
       (descriptor.catalogEpoch === 0 && !sameBytes(descriptor.publisherRootKey, binding.genesisRootKey))) {
     reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID)
   }
-  const authorization = await getPublisherAuthorizationState(view)
-  if (!authorization) reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID)
+  const authorization = await awaitAbort(getPublisherAuthorizationState(view), signal)
+  if (!authorization || authorization.policySequence !== descriptor.policySequence) {
+    reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID)
+  }
   return { catalog, view, descriptor, authorization }
 }
 
@@ -206,11 +220,11 @@ function verifyAcceptedWriter(operation, body, descriptor, authorization) {
   }
 }
 
-async function loadCurrentOperation(view, sourceRecordRef, descriptor, authorization) {
+async function loadCurrentOperation(view, sourceRecordRef, descriptor, authorization, signal) {
   if (typeof sourceRecordRef !== 'string' || !HEX_32.test(sourceRecordRef)) {
     reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID)
   }
-  const accepted = await view.get(`accepted/${sourceRecordRef}`)
+  const accepted = await awaitAbort(view.get(`accepted/${sourceRecordRef}`), signal)
   if (!accepted?.value) reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_NOT_CURRENT)
   let operation
   let body
@@ -226,7 +240,7 @@ async function loadCurrentOperation(view, sourceRecordRef, descriptor, authoriza
   verifyAcceptedWriter(operation, body, descriptor, authorization)
   const identity = publisherProjectionIdentity(operation.recordType, body, operation)
   if (!identity?.id) reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID)
-  const projection = await getPublisherProjection(view, identity.kind, identity.id)
+  const projection = await awaitAbort(getPublisherProjection(view, identity.kind, identity.id), signal)
   if (!projection || !sameBytes(projection.recordId, operation.recordId)) {
     reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_NOT_CURRENT)
   }
@@ -236,7 +250,7 @@ async function loadCurrentOperation(view, sourceRecordRef, descriptor, authoriza
   return { operation, body, identity }
 }
 
-async function verifyExternalClaim(current, locator, candidate) {
+async function verifyExternalClaim(current, locator, candidate, signal) {
   if (current.operation.recordType !== 'publisher.claim' || hex(current.body.claimId, 'claimId') !== hex(current.identity.id, 'claim identity')) {
     reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_MISMATCH)
   }
@@ -248,10 +262,10 @@ async function verifyExternalClaim(current, locator, candidate) {
   } catch (error) {
     reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID, error)
   }
-  const verified = await verifyMediaClaim(envelope, {
+  const verified = await awaitAbort(verifyMediaClaim(envelope, {
     authorizeSigner: signer => sameBytes(signer, current.operation.signerKey),
     now: current.operation.signedAt,
-  })
+  }), signal)
   if (!verified ||
       hex(envelope.recordId, 'claim envelope recordId') !== hex(current.body.claimId, 'publisher claimId') ||
       current.body.claimType !== claim.claimType ||
@@ -260,15 +274,14 @@ async function verifyExternalClaim(current, locator, candidate) {
   }
   const expectedRef = candidate.work.externalRefs[0]
   const externalRef = claim.payload?.externalRef
-  if (!externalRef || externalRef.namespace !== expectedRef.namespace || externalRef.identifier !== expectedRef.identifier ||
-      !claim.subjectRefs.some(subject => subject.entityId === candidate.work.entityId)) {
+  if (!externalRef || externalRef.namespace !== expectedRef.namespace || externalRef.identifier !== expectedRef.identifier) {
     reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_MISMATCH)
   }
   if (locator.publisherId !== candidate.publication.publisherId) reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_MISMATCH)
   return claim
 }
 
-async function verifyPublication(current, locator, descriptor, now) {
+async function verifyPublication(current, locator, descriptor, now, signal) {
   if (current.operation.recordType !== 'publisher.publication' ||
       hex(current.body.publicationId, 'publicationId') !== locator.publicationId ||
       hex(current.body.manifestId, 'manifestId') !== locator.candidateManifestId) {
@@ -280,14 +293,14 @@ async function verifyPublication(current, locator, descriptor, now) {
   } catch (error) {
     reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID, error)
   }
-  const verified = await verifyCatalogPublicationManifest(manifest, {
+  const verified = await awaitAbort(verifyCatalogPublicationManifest(manifest, {
     publisherId: descriptor.publisherId,
     publicationId: current.body.publicationId,
     manifestId: current.body.manifestId,
     signer: current.operation.signerKey,
     payload: current.body.payload,
     now,
-  })
+  }), signal)
   if (!verified || manifest.publicationId !== locator.publicationId || manifest.body.manifestId !== locator.candidateManifestId) {
     reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_MISMATCH)
   }
@@ -319,34 +332,43 @@ function validateAvailability(value, now, maximumLifetime) {
     if (!Number.isSafeInteger(value[field]) || value[field] < 0) reject(SOURCE_VERIFICATION_ERROR_CODES.AVAILABILITY_INVALID)
   }
   if (value.completeSeeders > value.peers || value.observedAtMs > now || value.expiresAtMs <= now ||
-      value.expiresAtMs - value.observedAtMs > maximumLifetime) {
+      value.peers > MAX_AVAILABILITY_PEERS || value.expiresAtMs - value.observedAtMs > maximumLifetime) {
     reject(SOURCE_VERIFICATION_ERROR_CODES.AVAILABILITY_INVALID)
   }
   if (value.peers < 1) reject(SOURCE_VERIFICATION_ERROR_CODES.UNAVAILABLE)
   return Object.freeze({ ...value })
 }
 
+function freezeTree(value) {
+  if (!value || typeof value !== 'object') return value
+  for (const child of Object.values(value)) freezeTree(child)
+  return Object.isFrozen(value) ? value : Object.freeze(value)
+}
+
 function deepFreezeCandidate(candidate) {
-  return Object.freeze({
+  return freezeTree({
     ...candidate,
-    work: Object.freeze({ ...candidate.work, externalRefs: Object.freeze(candidate.work.externalRefs.map(ref => Object.freeze({ ...ref }))) }),
-    edition: Object.freeze({ ...candidate.edition }),
-    publication: Object.freeze({ ...candidate.publication }),
-    rendition: Object.freeze({
+    work: {
+      ...candidate.work,
+      externalRefs: candidate.work.externalRefs.map(ref => ({ ...ref })),
+    },
+    edition: candidate.edition == null ? null : { ...candidate.edition },
+    publication: { ...candidate.publication },
+    rendition: {
       ...candidate.rendition,
-      hdrFormats: Object.freeze([...candidate.rendition.hdrFormats]),
-      audioTracks: Object.freeze([...candidate.rendition.audioTracks]),
-      subtitleTracks: Object.freeze([...candidate.rendition.subtitleTracks]),
-    }),
-    asset: Object.freeze({ ...candidate.asset }),
-    provenance: Object.freeze({ ...candidate.provenance }),
-    availability: Object.freeze({ ...candidate.availability }),
-    verification: Object.freeze({
+      hdrFormats: [...candidate.rendition.hdrFormats],
+      audioTracks: candidate.rendition.audioTracks.map(track => ({ ...track })),
+      subtitleTracks: candidate.rendition.subtitleTracks.map(track => ({ ...track })),
+    },
+    asset: { ...candidate.asset },
+    provenance: { ...candidate.provenance },
+    availability: { ...candidate.availability },
+    verification: {
       ...candidate.verification,
-      publisherDescriptor: Object.freeze({ ...candidate.verification.publisherDescriptor }),
-      catalogHead: Object.freeze({ ...candidate.verification.catalogHead }),
-    }),
-    sourceIndexers: Object.freeze(candidate.sourceIndexers.map(value => Object.freeze({ ...value }))),
+      publisherDescriptor: { ...candidate.verification.publisherDescriptor },
+      catalogHead: { ...candidate.verification.catalogHead },
+    },
+    sourceIndexers: candidate.sourceIndexers.map(value => ({ ...value })),
   })
 }
 
@@ -364,43 +386,61 @@ export function createSourceVerifier({ federation, catalogRegistry, availability
   let closed = false
   const controllers = new Set()
   const drainWaiters = new Set()
+  const availabilityTasks = new Set()
+
+  function trackAvailability(request) {
+    const task = Promise.resolve().then(() => availabilityProbe(request))
+    availabilityTasks.add(task)
+    const remove = () => availabilityTasks.delete(task)
+    task.then(remove, remove)
+    return task
+  }
 
   async function execute(record, signal) {
-    const locator = { ...record.locator, candidateManifestId: record.candidate.publication.manifestId }
+    const locator = record.locator
     let binding
     try {
-      binding = await catalogRegistry.resolve(b4a.from(locator.publisherId, 'hex'))
-      await binding.catalog?.ready?.()
-      await binding.catalog?.update?.()
+      binding = await awaitAbort(catalogRegistry.resolve(b4a.from(locator.publisherId, 'hex')), signal)
+      await awaitAbort(binding.catalog?.ready?.(), signal)
+      await awaitAbort(binding.catalog?.update?.(), signal)
     } catch (error) {
+      if (error instanceof SourceVerificationError) throw error
       reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID, error)
     }
-    const namespace = await loadNamespace(binding, locator.publisherId)
-    const firstHead = catalogHead(await getPublisherViewHead(namespace.view))
-    const externalCurrent = await loadCurrentOperation(namespace.view, locator.sourceRecordRef, namespace.descriptor, namespace.authorization)
-    const publicationCurrent = await loadCurrentOperation(namespace.view, locator.publicationSourceRecordRef, namespace.descriptor, namespace.authorization)
-    const claim = await verifyExternalClaim(externalCurrent, locator, record.candidate)
-    const manifest = await verifyPublication(publicationCurrent, locator, namespace.descriptor, currentTime(now))
-    if (!manifest.body.claims.some(value => value.claimId === hex(externalCurrent.body.claimId, 'claimId') && value.entityId === record.candidate.work.entityId)) {
+    const namespace = await awaitAbort(loadNamespace(binding, locator.publisherId, signal), signal)
+    const firstHead = catalogHead(await awaitAbort(getPublisherViewHead(namespace.view), signal))
+    const externalCurrent = await awaitAbort(
+      loadCurrentOperation(namespace.view, locator.sourceRecordRef, namespace.descriptor, namespace.authorization, signal),
+      signal,
+    )
+    const publicationCurrent = await awaitAbort(
+      loadCurrentOperation(namespace.view, locator.publicationSourceRecordRef, namespace.descriptor, namespace.authorization, signal),
+      signal,
+    )
+    const claim = await awaitAbort(verifyExternalClaim(externalCurrent, locator, record.candidate, signal), signal)
+    const manifest = await awaitAbort(
+      verifyPublication(publicationCurrent, locator, namespace.descriptor, currentTime(now), signal),
+      signal,
+    )
+    const externalClaimId = hex(externalCurrent.body.claimId, 'claimId')
+    const claimLinks = manifest.body.claims.filter(value => value.claimId === externalClaimId)
+    if (claimLinks.length !== 1 || !claim.subjectRefs.some(subject => subject.entityId === claimLinks[0].entityId)) {
       reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_MISMATCH)
     }
+    const workEntityId = claimLinks[0].entityId
     const selected = verifySelectedRendition(manifest, locator)
-    if (
-      (record.candidate.work.title != null && record.candidate.work.title !== manifest.body.title) ||
-      (record.candidate.rendition.container != null && record.candidate.rendition.container !== selected.rendition.format) ||
-      record.candidate.rendition.byteLength !== selected.core.byteLength
-    ) reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_MISMATCH)
 
     const availabilityController = new AbortController()
     const onAbort = () => availabilityController.abort(signal.reason)
-    signal.addEventListener('abort', onAbort, { once: true })
+    if (signal.aborted) onAbort()
+    else signal.addEventListener('abort', onAbort, { once: true })
     let availabilityTimer
     let availability
     try {
       availabilityTimer = schedule(() => availabilityController.abort(
         new SourceVerificationError(SOURCE_VERIFICATION_ERROR_CODES.AVAILABILITY_TIMEOUT),
       ), availabilityDeadlineMs)
-      availability = await raceAbort(availabilityProbe({
+      const availabilityWork = trackAvailability({
         publisherId: locator.publisherId,
         publicationId: locator.publicationId,
         renditionId: locator.renditionId,
@@ -411,7 +451,9 @@ export function createSourceVerifier({ federation, catalogRegistry, availability
         catalog: namespace.catalog,
         descriptor: namespace.descriptor,
         signal: availabilityController.signal,
-      }), availabilityController.signal)
+      })
+      // Keep the deadline responsive; the verifier owns this task until close() drains its rollback.
+      availability = await raceAbort(availabilityWork, availabilityController.signal)
     } catch (error) {
       if (error instanceof SourceVerificationError) throw error
       reject(SOURCE_VERIFICATION_ERROR_CODES.UNAVAILABLE, error)
@@ -419,25 +461,36 @@ export function createSourceVerifier({ federation, catalogRegistry, availability
       signal.removeEventListener('abort', onAbort)
       if (availabilityTimer !== undefined) cancelScheduled(availabilityTimer)
     }
+    throwIfAborted(signal)
     const evidence = validateAvailability(availability, currentTime(now), maximumEvidenceLifetimeMs)
-    await namespace.catalog.update?.()
-    const finalHead = catalogHead(await getPublisherViewHead(namespace.view))
-    const finalDescriptorEntry = await namespace.view.get('state/descriptor')
+    await awaitAbort(namespace.catalog.update?.(), signal)
+    const finalHead = catalogHead(await awaitAbort(getPublisherViewHead(namespace.view), signal))
+    const finalDescriptorEntry = await awaitAbort(namespace.view.get('state/descriptor'), signal)
     const finalDescriptor = finalDescriptorEntry?.value ? decodePublisherNamespaceDescriptor(finalDescriptorEntry.value) : null
     if (!finalDescriptor || finalDescriptor.catalogEpoch !== namespace.descriptor.catalogEpoch || !sameHead(firstHead, finalHead)) {
       reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_NOT_CURRENT)
     }
-    await loadCurrentOperation(namespace.view, locator.sourceRecordRef, namespace.descriptor, namespace.authorization)
-    await loadCurrentOperation(namespace.view, locator.publicationSourceRecordRef, namespace.descriptor, namespace.authorization)
+    await awaitAbort(
+      loadCurrentOperation(namespace.view, locator.sourceRecordRef, namespace.descriptor, namespace.authorization, signal),
+      signal,
+    )
+    await awaitAbort(
+      loadCurrentOperation(namespace.view, locator.publicationSourceRecordRef, namespace.descriptor, namespace.authorization, signal),
+      signal,
+    )
+    throwIfAborted(signal)
 
     return deepFreezeCandidate({
       ...record.candidate,
       edition: null,
       work: {
-        entityId: record.candidate.work.entityId,
+        entityId: workEntityId,
         title: manifest.body.title,
         releaseYear: null,
-        externalRefs: [{ ...claim.payload.externalRef }],
+        externalRefs: [{
+          namespace: claim.payload.externalRef.namespace,
+          identifier: claim.payload.externalRef.identifier,
+        }],
         episode: null,
       },
       publication: {
@@ -450,8 +503,6 @@ export function createSourceVerifier({ federation, catalogRegistry, availability
           publicationId: manifest.publicationId,
           manifestId: manifest.body.manifestId,
           title: manifest.body.title,
-          provenance: manifest.body.provenance.map(value => ({ ...value })),
-          claims: manifest.body.claims.map(value => ({ ...value })),
         },
       },
       rendition: {
@@ -509,13 +560,16 @@ export function createSourceVerifier({ federation, catalogRegistry, availability
     const onAbort = () => controller.abort(new SourceVerificationError(SOURCE_VERIFICATION_ERROR_CODES.ABORTED, signal.reason))
     signal?.addEventListener('abort', onAbort, { once: true })
     let timer
+    let work
     try {
       timer = schedule(() => controller.abort(new SourceVerificationError(SOURCE_VERIFICATION_ERROR_CODES.VERIFICATION_TIMEOUT)), verificationDeadlineMs)
-      return await raceAbort(execute(record, controller.signal), controller.signal)
+      work = execute(record, controller.signal)
+      return await raceAbort(work, controller.signal)
     } catch (error) {
       if (error instanceof SourceVerificationError) throw error
       reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID, error)
     } finally {
+      if (work) await Promise.resolve(work).catch(() => {})
       if (timer !== undefined) cancelScheduled(timer)
       signal?.removeEventListener('abort', onAbort)
       controllers.delete(controller)
@@ -532,40 +586,70 @@ export function createSourceVerifier({ federation, catalogRegistry, availability
     const error = new SourceVerificationError(SOURCE_VERIFICATION_ERROR_CODES.VERIFIER_CLOSED)
     for (const controller of controllers) controller.abort(error)
     if (controllers.size > 0) await new Promise(resolve => drainWaiters.add(resolve))
+    while (availabilityTasks.size > 0) {
+      await Promise.allSettled([...availabilityTasks])
+    }
     return true
   }
 
   return Object.freeze({ verifySelectedCandidate, close })
 }
 
-export function createScopedAssetAvailabilityProbe({ scopedNetwork, now = Date.now, evidenceLifetimeMs = 5_000 } = {}) {
+export function createScopedAssetAvailabilityProbe({
+  scopedNetwork,
+  now = Date.now,
+  evidenceLifetimeMs = 5_000,
+  randomBytes = crypto.randomBytes,
+} = {}) {
   if (!scopedNetwork || typeof scopedNetwork.retainAuthorizedRendition !== 'function' ||
       typeof scopedNetwork.requestAssetBlocks !== 'function' ||
       typeof scopedNetwork.releaseAuthorizedRendition !== 'function') {
     throw new TypeError('scoped asset range transport is required')
   }
+  if (typeof randomBytes !== 'function') throw new TypeError('randomBytes must be a function')
+  const ownerNonce = b4a.from(randomBytes(16))
+  if (ownerNonce.byteLength !== 16) throw new TypeError('randomBytes must return 16 bytes')
+  const ownerPrefix = b4a.toString(ownerNonce, 'hex')
+  let ownerSequence = 0
   const lifetime = boundedInteger(evidenceLifetimeMs, 5_000, DEFAULT_MAX_EVIDENCE_LIFETIME_MS, 'evidenceLifetimeMs')
-  return async function probe({ manifest, publicationId, renditionId, assetId, range, signal }) {
-    await scopedNetwork.retainAuthorizedRendition({
+  return async function probe({ manifest, renditionId, assetId, range, signal }) {
+    if (ownerSequence >= Number.MAX_SAFE_INTEGER) throw new Error('availability probe owner sequence exhausted')
+    const ownerId = `source-verification:${ownerPrefix}:${ownerSequence++}`
+    let retained = false
+    let requestWork = null
+    const retainWork = Promise.resolve().then(() => scopedNetwork.retainAuthorizedRendition({
       manifest,
       renditionId,
-      ownerId: publicationId,
+      ownerId,
       start: range.startBlock,
       end: range.endBlock,
-    })
+    }))
     try {
-      const result = await scopedNetwork.requestAssetBlocks({
+      await raceAbort(retainWork, signal)
+      retained = true
+      requestWork = Promise.resolve().then(() => scopedNetwork.requestAssetBlocks({
         assetId,
         startBlock: range.startBlock,
         endBlock: range.endBlock,
+        requirePeerEvidence: true,
         signal,
-      })
+      }))
+      const result = await raceAbort(requestWork, signal)
       const verified = Array.isArray(result?.verifiedBlockIndexes) && result.verifiedBlockIndexes.includes(range.startBlock)
       const observedAtMs = currentTime(now)
-      const peers = verified ? Math.max(1, Array.isArray(result.peerIds) ? result.peerIds.length : 0) : 0
-      return { peers, completeSeeders: verified ? 1 : 0, observedAtMs, expiresAtMs: observedAtMs + lifetime }
+      const peers = verified && Array.isArray(result.peerIds) ? new Set(result.peerIds).size : 0
+      return { peers, completeSeeders: 0, observedAtMs, expiresAtMs: observedAtMs + lifetime }
     } finally {
-      await scopedNetwork.releaseAuthorizedRendition({ renditionId, ownerId: publicationId, assetId })
+      try {
+        await retainWork
+        retained = true
+      } catch {
+        // A failed retain acquired no ownership.
+      }
+      if (requestWork) await requestWork.catch(() => {})
+      if (retained) {
+        await scopedNetwork.releaseAuthorizedRendition({ renditionId, ownerId, assetId })
+      }
     }
   }
 }

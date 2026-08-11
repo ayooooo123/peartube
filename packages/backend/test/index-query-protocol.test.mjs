@@ -102,7 +102,7 @@ const renditionResult = (publisherId = PUBLISHER_A, renditionId = '66'.repeat(32
   codec: null,
   dimensions: null,
   mediaFeatures: 'original',
-  byteLength: 1024,
+  byteLength: null,
 })
 const exactRow = (publisherId = PUBLISHER_A, sourceRecordRef = 'source-1') => ({
   publisherId,
@@ -135,7 +135,7 @@ const renditionRow = (publisherId = PUBLISHER_A, renditionId = '66'.repeat(32)) 
   assetId: '77'.repeat(32),
   format: null,
   mediaFeatures: 'original',
-  byteLength: 1024,
+  byteLength: null,
 })
 
 function serviceAnnouncement({
@@ -408,7 +408,7 @@ test('query codecs enforce selector text cursor result detail and frame maxima',
 test('typed query result codec preserves concrete publication and rendition facts', t => {
   const values = [
     { ...publicationResult(), normalizedTitle: 'Pilot' },
-    { ...renditionResult(), format: 'video/mp4' },
+    { ...renditionResult(), format: 'video/mp4', byteLength: 1024 },
   ]
   const decoded = decodeIndexQueryPage(encodeIndexQueryPage({
     queryId: QUERY_A,

@@ -248,7 +248,7 @@ function normalizeRenditionResult(value) {
     codec: nullableText(value.codec, 'codec', INDEX_SCHEMA_LIMITS.maxMediaDescriptorBytes),
     dimensions: nullableText(value.dimensions, 'dimensions', INDEX_SCHEMA_LIMITS.maxMediaDescriptorBytes),
     mediaFeatures: nullableText(value.mediaFeatures, 'mediaFeatures', INDEX_SCHEMA_LIMITS.maxMediaDescriptorBytes),
-    byteLength: safeUint(value.byteLength, 'byteLength'),
+    byteLength: value.byteLength === null ? null : safeUint(value.byteLength, 'byteLength'),
   })
 }
 

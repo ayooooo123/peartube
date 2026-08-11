@@ -820,15 +820,15 @@ test('watch-only requester receives a bounded unavailable error from a contribut
     pair.b.destroy()
   })
 
-  await Promise.all([runtimeA.start(), runtimeB.start()])
+  await runtimeA.start()
+  await runtimeB.start()
   swarmA.connections.add(pair.a)
   swarmB.connections.add(pair.b)
   swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey })
   swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey })
-  await Promise.all([
-    runtimeA.retainAuthorizedRendition({ manifest, renditionId, start: 0, end: 1 }),
-    runtimeB.retainAuthorizedRendition({ manifest, renditionId, start: 0, end: 1 }),
-  ])
+  await settle()
+  await runtimeA.retainAuthorizedRendition({ manifest, renditionId, start: 0, end: 1 })
+  await runtimeB.retainAuthorizedRendition({ manifest, renditionId, start: 0, end: 1 })
   for (let attempt = 0; attempt < 20; attempt++) {
     if (runtimeA.getDiagnostics().sessions.some(session => session.purpose === 'asset' && session.state === 'active') &&
         runtimeB.getDiagnostics().sessions.some(session => session.purpose === 'asset' && session.state === 'active')) break

@@ -791,7 +791,7 @@ export function createScopedNetworkRuntime (options = {}) {
         tracked.assetResponses.has(range.transferId)) {
       fail('asset responder request limit exceeded')
     }
-    const responseState = { cancelled: false, policyEpoch: networkPolicyEpoch }
+    const responseState = { cancelled: false, policyEpoch: networkPolicyEpoch, range }
     tracked.assetResponses.set(range.transferId, responseState)
     let served = 0
     try {
@@ -1829,7 +1829,6 @@ export function createScopedNetworkRuntime (options = {}) {
     }
     if (!networkEnabled || status !== 'active') return
     for (const [connection, info] of activeConnections) {
-      if (info?.client === false) continue
       for (const scope of scopes.values()) {
         if (scope.purpose !== 'index' && scopeMayAttach(scope)) attachScope(scope, connection, info)
       }
@@ -1881,6 +1880,38 @@ export function createScopedNetworkRuntime (options = {}) {
     publicServingAllowed = nextPublicServingAllowed && networkEnabled
     uploadAllowed = publicServingAllowed && uploadPermission === 'enabled'
     networkPolicyEpoch++
+    if (wasPublicServingAllowed !== publicServingAllowed ||
+        wasUploadAllowed !== uploadAllowed ||
+        wasContributionAllowed !== contributionAllowed ||
+        wasArchiveAllowed !== archiveAllowed ||
+        wasContributionUploadCeilingBytes !== contributionUploadCeilingBytes ||
+        wasArchiveUploadCeilingBytes !== archiveUploadCeilingBytes) {
+      for (const scope of scopes.values()) {
+        if (scope.purpose !== 'asset') continue
+        const contributionChanged = scope.retentionClasses?.has?.('contribution-cache') && (
+          wasContributionAllowed !== contributionAllowed ||
+          wasContributionUploadCeilingBytes !== contributionUploadCeilingBytes ||
+          wasUploadAllowed !== uploadAllowed
+        )
+        const archiveChanged = scope.retentionClasses?.has?.('archive-pin') && (
+          wasArchiveAllowed !== archiveAllowed ||
+          wasArchiveUploadCeilingBytes !== archiveUploadCeilingBytes ||
+          wasUploadAllowed !== uploadAllowed
+        )
+        if (!contributionChanged && !archiveChanged) continue
+        for (const tracked of scope.sessions.values()) {
+          for (const response of tracked.assetResponses?.values?.() || []) {
+            if (response.cancelled) continue
+            response.cancelled = true
+            try {
+              sendAssetError(scope, tracked, response.range, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
+            } catch (error) {
+              recordProtocolError(scope, tracked.peerId, error)
+            }
+          }
+        }
+      }
+    }
 
     if (wasPublicServingAllowed !== publicServingAllowed ||
         wasUploadAllowed !== uploadAllowed ||
@@ -1896,11 +1927,9 @@ export function createScopedNetworkRuntime (options = {}) {
         const archiveScope = scope.purpose === 'archive' || scope.purpose === 'archive-discovery'
         if ((contributionScope && (
           wasContributionAllowed !== contributionAllowed ||
-          wasContributionUploadCeilingBytes !== contributionUploadCeilingBytes ||
           wasUploadAllowed !== uploadAllowed
         )) || ((archiveScope || retainedArchiveScope) && (
           wasArchiveAllowed !== archiveAllowed ||
-          wasArchiveUploadCeilingBytes !== archiveUploadCeilingBytes ||
           wasUploadAllowed !== uploadAllowed
         ))) {
           for (const peerId of [...scope.sessions.keys()]) {
@@ -2173,7 +2202,10 @@ export function createScopedNetworkRuntime (options = {}) {
   async function publishLocalPublisherCatalog ({ publisherId, retentionClass: requestedRetentionClass } = {}) {
     const retentionClass = normalizeRetentionClass(requestedRetentionClass)
     if (!retentionClassAllowed(retentionClass) || !uploadAllowed) {
-      fail(`explicit ${retentionClass} upload permission is required`)
+      if (retentionClass === 'contribution-cache') {
+        fail('explicit contribution upload permission is required')
+      }
+      fail('explicit archive upload permission is required')
     }
     if (status !== 'active') fail('runtime is not active')
     const id = hex32(publisherId, 'publisherId')

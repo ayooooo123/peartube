@@ -44,6 +44,13 @@ test('getQuotaBudget measures the tracked cache, excluding the user\'s own uploa
   // from the network under a 5 GB quota.
   const manager = new SeedingManager(createStore({ diskUsageBytes: 40 * GB }), createMetaDb())
   await manager.setConfig({ maxStorageGB: 5 })
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: true,
+    archiveEnabled: false,
+    contributionBudgetBytes: 5 * GB,
+    archiveBudgetBytes: 0,
+    migrationRequired: false
+  })
   await manager.addSeed('drive-a', 'videos/a.mp4', 'watched', {
     byteLength: 2 * GB,
     blobId: '10:4:0:4096',

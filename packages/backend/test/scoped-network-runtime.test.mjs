@@ -265,7 +265,7 @@ test('archive-only role publishes archive catalogs without contribution permissi
       publisherId: descriptor.publisherId,
       retentionClass: 'contribution-cache',
     }),
-    /explicit contribution-cache upload permission/
+    /explicit contribution upload permission/
   )
 
   await runtime.close()

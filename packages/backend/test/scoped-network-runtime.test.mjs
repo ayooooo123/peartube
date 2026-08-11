@@ -787,12 +787,12 @@ test('watch-only requester receives a bounded unavailable error from a contribut
     expiresAt: 1000,
   })
   const renditionId = manifest.body.renditions[0].renditionId
-  const emptyStore = {
+  const unavailableStore = {
     get ({ key }) {
       return {
         key,
-        length: 0,
-        byteLength: 0,
+        length: staticCore.length,
+        byteLength: staticCore.byteLength,
         async ready () {},
         async has () { return false },
         download () { return { destroy () {} } },
@@ -805,12 +805,12 @@ test('watch-only requester receives a bounded unavailable error from a contribut
   const runtimeA = createScopedNetworkRuntime({
     swarm: swarmA,
     initialNetworkPolicy: contributionPolicy(),
-    store: emptyStore,
+    store: unavailableStore,
     authorizePublication: async request => request.manifest === manifest,
   })
   const runtimeB = createScopedNetworkRuntime({
     swarm: swarmB,
-    store: emptyStore,
+    store: unavailableStore,
     authorizePublication: async request => request.manifest === manifest,
   })
   const pair = connectionPair(211, 212)

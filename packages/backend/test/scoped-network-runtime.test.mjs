@@ -1490,13 +1490,19 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   t.is(runtimeA.getDiagnostics().publicWork.activeUploads, 1, 'archive proof generation counts as an active upload')
   t.ok(runtimeA.getDiagnostics().sessions.some(session => session.archiveServing), 'archiveServing is exposed as a bounded boolean')
   await runtimeA.applyNetworkPolicy(contributionPolicy())
+  await runtimeB.applyNetworkPolicy(contributionPolicy())
   let diagnostics = runtimeA.getDiagnostics()
   t.absent(diagnostics.sessions.find(session => session.purpose === 'archive'), 'archive sessions close when archive consent is withdrawn')
   t.absent(diagnostics.topics.find(topic => topic.purpose === 'archive')?.publicAnnounced, 'archive scope stops announcing')
   const archiveTopic = deriveArchiveTopic({ archiveId: pledge.pledgeId, protocolMajor: PROTOCOL_MAJOR })
   t.is(runtimeA.authorizeConnection({ purpose: 'archive', topic: archiveTopic, requestedCoreKey: b4a.toString(coreKey, 'hex') }).reason, 'archive-policy-disabled')
+  await settle()
+  t.absent(runtimeB.getDiagnostics().sessions.find(session => session.purpose === 'archive'), 'the requester closes its in-flight archive session on consent withdrawal')
   releaseProof()
-  await runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 1024 }))
+  await Promise.all([
+    runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 1024 })),
+    runtimeB.applyNetworkPolicy(archivePolicy()),
+  ])
   for (let attempt = 0; attempt < 20 && received.size < 1; attempt++) await settle()
   t.alike([...received.keys()], [2], 'the runtime upload ceiling stops the next oversized transfer')
   await runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 256 * 1024 }))

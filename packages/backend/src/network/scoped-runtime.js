@@ -551,6 +551,11 @@ export function createScopedNetworkRuntime (options = {}) {
     for (const response of session.assetResponses?.values() || []) response.cancelled = true
     session.assetResponses?.clear()
     if (scope.purpose === 'asset') failAssetRequestPeer(scope, peerId, 'DISCONNECTED')
+    if (scope.purpose === 'archive' && session.archiveRequest) {
+      queueArchiveRetry(scope, session, session.archiveRequest)
+    } else if (scope.purpose === 'archive') {
+      clearArchiveTimer(session)
+    }
     session.closed = true
     for (const cleanup of session.cleanupFns.splice(0)) {
       try { cleanup() } catch { /* best-effort session cleanup */ }

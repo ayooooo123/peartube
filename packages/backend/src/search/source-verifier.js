@@ -44,6 +44,12 @@ const MAX_AVAILABILITY_PEERS = 128
 const MAX_DEADLINE_MS = 30_000
 const HEX_32 = /^[0-9a-f]{64}$/
 
+export const VERIFIED_CANDIDATE_MANIFEST = Symbol('verified-candidate-manifest')
+
+export function verifiedCandidateManifest(candidate) {
+  return candidate?.[VERIFIED_CANDIDATE_MANIFEST] || null
+}
+
 class SourceVerificationError extends Error {
   constructor(code, cause = null) {
     super(code)
@@ -481,6 +487,7 @@ export function createSourceVerifier({ federation, catalogRegistry, availability
     throwIfAborted(signal)
 
     return deepFreezeCandidate({
+      [VERIFIED_CANDIDATE_MANIFEST]: manifest,
       ...record.candidate,
       edition: null,
       work: {

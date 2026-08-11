@@ -62,6 +62,25 @@ export function createStreamCapabilityStore ({
   boundedInteger(maxConcurrentUses, 'capability concurrency', MAX_CONCURRENT_USES)
 
   const entries = new Map()
+  const pendingReleases = new Set()
+
+  function dispose (entry) {
+    if (entry.disposed || !entry.retired || entry.activeUses > 0) return
+    entry.disposed = true
+    if (typeof entry.scope.asset?.release !== 'function') return
+    const pending = Promise.resolve().then(() => entry.scope.asset.release())
+    pendingReleases.add(pending)
+    void pending.then(
+      () => pendingReleases.delete(pending),
+      () => pendingReleases.delete(pending)
+    )
+  }
+
+  function retire (digest, entry) {
+    if (entries.get(digest) === entry) entries.delete(digest)
+    entry.retired = true
+    dispose(entry)
+  }
 
   function currentTime () {
     const value = now()
@@ -73,7 +92,7 @@ export function createStreamCapabilityStore ({
     let removed = 0
     for (const [digest, entry] of entries) {
       if (entry.scope.expiresAt > at) continue
-      entries.delete(digest)
+      retire(digest, entry)
       removed++
     }
     return removed
@@ -84,6 +103,7 @@ export function createStreamCapabilityStore ({
     publicationId,
     renditionId,
     assetId,
+    asset = null,
     methods = ['GET', 'HEAD'],
     maxConcurrentUses: entryConcurrency = maxConcurrentUses
   } = {}) {
@@ -95,11 +115,21 @@ export function createStreamCapabilityStore ({
       throw capabilityError(503, 'CAPABILITY_CAPACITY_EXHAUSTED', 'Stream capability capacity is exhausted')
     }
 
+    const boundAssetId = decodeId(assetId, 'assetId')
+    if (asset !== null && (
+      !asset ||
+      typeof asset !== 'object' ||
+      Array.isArray(asset) ||
+      asset.assetId !== boundAssetId
+    )) {
+      throw new TypeError('capability asset must match assetId')
+    }
     const scope = Object.freeze({
       clientIdentity: decodeId(clientIdentity, 'clientIdentity'),
       publicationId: decodeId(publicationId, 'publicationId'),
       renditionId: decodeId(renditionId, 'renditionId'),
-      assetId: decodeId(assetId, 'assetId'),
+      assetId: boundAssetId,
+      asset,
       methods: boundMethods(methods),
       issuedAt,
       expiresAt,
@@ -112,7 +142,7 @@ export function createStreamCapabilityStore ({
       const token = base64Url(bytes)
       const digest = digestToken(token)
       if (entries.has(digest)) continue
-      entries.set(digest, { scope, activeUses: 0 })
+      entries.set(digest, { scope, activeUses: 0, retired: false, disposed: false })
       return Object.freeze({
         token,
         expiresAt,
@@ -133,11 +163,11 @@ export function createStreamCapabilityStore ({
 
     const at = currentTime()
     if (entry.scope.expiresAt <= at) {
-      entries.delete(digest)
+      retire(digest, entry)
       throw capabilityError(410, 'CAPABILITY_EXPIRED', 'Stream capability expired')
     }
     if (
-      entry.scope.clientIdentity !== clientIdentity ||
+      (clientIdentity !== undefined && entry.scope.clientIdentity !== clientIdentity) ||
       entry.scope.publicationId !== publicationId ||
       entry.scope.renditionId !== renditionId ||
       !entry.scope.methods.includes(method)
@@ -155,22 +185,32 @@ export function createStreamCapabilityStore ({
       publicationId: entry.scope.publicationId,
       renditionId: entry.scope.renditionId,
       assetId: entry.scope.assetId,
+      asset: entry.scope.asset,
       expiresAt: entry.scope.expiresAt,
       release () {
         if (released) return
         released = true
         entry.activeUses--
+        dispose(entry)
       }
     })
   }
 
   function close (token) {
     if (typeof token !== 'string' || !TOKEN_PATTERN.test(token)) return false
-    return entries.delete(digestToken(token))
+    const digest = digestToken(token)
+    const entry = entries.get(digest)
+    if (!entry) return false
+    retire(digest, entry)
+    return true
   }
 
   function clear () {
-    entries.clear()
+    for (const [digest, entry] of entries) retire(digest, entry)
+  }
+
+  async function drain () {
+    while (pendingReleases.size > 0) await Promise.allSettled([...pendingReleases])
   }
 
   return Object.freeze({
@@ -178,6 +218,7 @@ export function createStreamCapabilityStore ({
     consume,
     close,
     clear,
+    drain,
     prune () { return pruneAt(currentTime()) },
     get size () { pruneAt(currentTime()); return entries.size }
   })

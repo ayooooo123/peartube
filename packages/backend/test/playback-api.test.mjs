@@ -9,6 +9,7 @@ import { createPublicationManifest } from '../src/assets/manifest.js'
 import { createRenditionDescriptor } from '../src/assets/rendition.js'
 import { normalizeAssetCoreRefV2 } from '../src/assets/rendition.js'
 import { createStaticAssetPlayback } from '../src/playback/index.js'
+import { VERIFIED_CANDIDATE_MANIFEST } from '../src/search/source-verifier.js'
 
 function immutablePlaybackFixture(fill = 21) {
   const keyPair = crypto.keyPair(Buffer.alloc(32, fill))
@@ -430,6 +431,98 @@ test('static playback URL reuses blob capability links and registers an exact ma
   t.absent(ctx.staticAssetPlaybackEntries.get(middleCoreRef.assetId), 'least-recent exact asset is evicted')
   t.is(releases.get(middleCoreRef.assetId), 1)
   t.is(releases.get(assetId) || 0, 0)
+})
+
+test('static route assets expose exact verified scheduler ranges without minting blob URLs', async (t) => {
+  const coreRef = normalizeAssetCoreRefV2(createStaticAssetManifest({
+    treeHash: Buffer.alloc(32, 10),
+    blockLength: 2,
+    byteLength: 512 * 1024,
+  }))
+  const calls = []
+  let released = 0
+  const scheduler = {
+    seek(request) { calls.push(['seek', request]) },
+    async requestRange(request) {
+      calls.push(['requestRange', request])
+      return { status: 'ok', verified: true, bytes: Buffer.alloc(request.byteEnd - request.byteStart) }
+    },
+  }
+  const ctx = {
+    staticAssetPlaybackEntries: new Map(),
+    blobServer: {
+      getLink() { t.fail('route-scoped streaming must not mint a blob-server URL') },
+    },
+  }
+  const service = new BlobPlaybackService({ ctx })
+  const asset = service.resolveStaticAssetStream({
+    coreRef,
+    scheduler,
+    mimeType: 'text/html',
+    authorizationKey: 'companion-capability-1',
+    release: async () => { released++ },
+  })
+
+  t.is(asset.assetId, coreRef.assetId)
+  t.is(asset.byteLength, coreRef.byteLength)
+  t.is(asset.blockSize, coreRef.blockSize)
+  t.is(asset.mimeType, 'application/octet-stream')
+  t.is(asset.etag, `"${coreRef.treeHash}"`)
+  asset.seek({ byteStart: 7 })
+  const signal = new AbortController().signal
+  await asset.requestRange({ assetId: coreRef.assetId, byteStart: 7, byteEnd: 19, signal })
+  t.alike(calls, [
+    ['seek', { byteStart: 7 }],
+    ['requestRange', { assetId: coreRef.assetId, byteStart: 7, byteEnd: 19, signal }],
+  ])
+
+  await asset.release()
+  await asset.release()
+  t.is(released, 1)
+  t.absent(ctx.staticAssetPlaybackEntries.get(coreRef.assetId))
+})
+
+test('verified index candidates open exact route assets and release their retained scope once', async (t) => {
+  const fixture = immutablePlaybackFixture(14)
+  const retains = []
+  const releases = []
+  const ctx = { staticAssetPlaybackEntries: new Map() }
+  const scopedNetwork = {
+    async retainAuthorizedRendition(request) { retains.push(request) },
+    async releaseAuthorizedRendition(request) { releases.push(request); return { released: true } },
+    getActiveAssetSession() { return { assetId: fixture.coreRef.assetId, coreRef: fixture.coreRef } },
+    getActiveAssetPeerIds() { return [] },
+    async listPeerAssetRanges() { return { ranges: [], nextCursor: null } },
+    async hasVerifiedAssetBlock() { return true },
+    async readVerifiedAssetBlock() { return Buffer.alloc(fixture.coreRef.blockSize) },
+    async requestAssetBlocks() { throw new Error('local verified bytes should be reused') },
+  }
+  const api = createApi({ ctx, scopedNetwork })
+  const candidate = Object.freeze({
+    [VERIFIED_CANDIDATE_MANIFEST]: fixture.manifest,
+    verification: { state: 'source-verified' },
+    publication: { publicationId: fixture.manifest.publicationId },
+    rendition: { renditionId: fixture.rendition.renditionId, container: 'mp4' },
+    asset: {
+      assetId: fixture.coreRef.assetId,
+      coreKey: fixture.coreRef.key,
+      treeHash: fixture.coreRef.treeHash,
+      blockLength: fixture.coreRef.length,
+      blockSize: fixture.coreRef.blockSize,
+      byteLength: fixture.coreRef.byteLength,
+    },
+  })
+
+  const asset = await api.openVerifiedCandidateStream(candidate)
+  t.is(asset.assetId, fixture.coreRef.assetId)
+  t.is(asset.byteLength, fixture.coreRef.byteLength)
+  t.is(asset.mimeType, 'video/mp4')
+  t.is(retains.length, 1)
+  t.is(retains[0].manifest, fixture.manifest)
+  await asset.release()
+  await asset.release()
+  t.is(releases.length, 1)
+  t.absent(ctx.staticAssetPlaybackEntries.get(fixture.coreRef.assetId))
 })
 
 test('static playback composition binds one exact scheduler to the shared playback service', (t) => {

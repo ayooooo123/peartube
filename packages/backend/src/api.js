@@ -52,7 +52,8 @@ import { buildCatalogGroupPage, buildChannelCatalog } from './catalog/channel-ca
 import { normalizeAssetCoreRefV2 } from './assets/rendition.js'
 import { createStaticAssetManifest } from './assets/static-core.js'
 import { verifyPublicationManifest } from './assets/manifest.js'
-import { createStaticAssetPlayback } from './playback/index.js'
+import { createMultiPeerScheduler, createStaticAssetPlayback } from './playback/index.js'
+import { verifiedCandidateManifest } from './search/source-verifier.js'
 
 function assertApiContextRunning(ctx) {
   if (ctx?.lifecycle?.signal?.aborted) throw new Error('Backend is shutting down')
@@ -178,9 +179,9 @@ function isCatalogStorageKey(value) {
 
 function isCatalogKey(value) {
   if (typeof value !== 'string' || value.length === 0 || b4a.byteLength(value) > 256) return false
-  if (/[\u0000-\u001f\u007f-\u009f]/u.test(value)) return false
   for (let index = 0; index < value.length; index++) {
     const code = value.charCodeAt(index)
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return false
     if (code >= 0xd800 && code <= 0xdbff) {
       if (++index >= value.length) return false
       const low = value.charCodeAt(index)
@@ -325,7 +326,11 @@ function finishAvailabilityEntry(state, entry, evidence) {
   clearTimeout(entry.timer)
   state.inflight.delete(entry.batchStart)
   if (entry.sent) {
-    try { state.peer.wireUnwant.send(entry.want) } catch {}
+    try {
+      state.peer.wireUnwant.send(entry.want)
+    } catch {
+      // The peer may close while availability cleanup is withdrawing its request.
+    }
   }
   entry.resolve(evidence)
   if (state.inflight.size !== 0) return
@@ -766,6 +771,7 @@ export function createApi({
 }) {
   const blobPlayback = createBlobPlaybackService(ctx)
   const pendingStaticPlaybackAuthorizations = new Map()
+  let companionStreamSequence = 0
   const publisherApi = createPublisherApi({ ctx, catalogRegistry, now: () => Date.now() })
   const mediaGraphApi = createMediaGraphApi({ ctx })
   const scopedNetworkApi = scopedNetwork ? createScopedNetworkApi(scopedNetwork) : {}
@@ -1942,6 +1948,97 @@ export function createApi({
     }
   }
 
+  async function resolveVerifiedCandidateStream(candidate, { signal = null } = {}) {
+    assertApiContextRunning(ctx)
+    if (!candidate || typeof candidate !== 'object' || candidate.verification?.state !== 'source-verified') {
+      throw immutablePublicationError('verified candidate is invalid')
+    }
+    const manifest = verifiedCandidateManifest(candidate)
+    if (!manifest || !await verifyPublicationManifest(manifest, {
+      allowedSigners: [manifest?.body?.publisherId],
+    })) {
+      throw immutablePublicationError('verified candidate manifest is unavailable')
+    }
+    if (signal?.aborted) {
+      const error = new Error('verified candidate stream open aborted')
+      error.name = 'AbortError'
+      throw error
+    }
+    const publicationId = candidate.publication?.publicationId
+    const renditionId = candidate.rendition?.renditionId
+    if (manifest.publicationId !== publicationId) {
+      throw immutablePublicationError('verified candidate publication identity mismatch')
+    }
+    const rendition = manifest.body.renditions.find(value => value.renditionId === renditionId)
+    if (!rendition) throw immutablePublicationError('verified candidate rendition identity mismatch')
+    const coreRef = normalizeAssetCoreRefV2(rendition.core)
+    const expectedAsset = candidate.asset || {}
+    for (const [field, expected] of [
+      ['assetId', coreRef.assetId],
+      ['coreKey', coreRef.key],
+      ['treeHash', coreRef.treeHash],
+      ['blockLength', coreRef.length],
+      ['blockSize', coreRef.blockSize],
+      ['byteLength', coreRef.byteLength],
+    ]) {
+      if (expectedAsset[field] !== expected) {
+        throw immutablePublicationError(`verified candidate ${field} mismatch`)
+      }
+    }
+    if (typeof scopedNetwork?.retainAuthorizedRendition !== 'function' ||
+        typeof scopedNetwork?.releaseAuthorizedRendition !== 'function' ||
+        typeof scopedNetwork?.getActiveAssetSession !== 'function') {
+      throw immutablePublicationError('scoped playback transport is unavailable')
+    }
+    if (companionStreamSequence >= Number.MAX_SAFE_INTEGER) {
+      throw immutablePublicationError('stream authorization sequence exhausted')
+    }
+
+    const authorizationKey = `companion-stream:${publicationId}:${renditionId}:${companionStreamSequence++}`
+    const releaseRequest = {
+      renditionId,
+      ownerId: authorizationKey,
+      assetId: coreRef.assetId,
+    }
+    await scopedNetwork.retainAuthorizedRendition({
+      manifest,
+      renditionId,
+      ownerId: authorizationKey,
+      start: 0,
+      end: coreRef.length,
+    })
+    let registered = false
+    try {
+      if (signal?.aborted) {
+        const error = new Error('verified candidate stream open aborted')
+        error.name = 'AbortError'
+        throw error
+      }
+      const release = () => scopedNetwork.releaseAuthorizedRendition(releaseRequest)
+      let scheduler
+      if (ctx?.staticAssetPlaybackEntries?.has(coreRef.assetId)) {
+        scheduler = ctx.staticAssetPlaybackEntries.get(coreRef.assetId).scheduler
+      } else {
+        scheduler = createMultiPeerScheduler({
+          coreRef,
+          session: scopedNetwork.getActiveAssetSession({ assetId: coreRef.assetId }),
+          transport: scopedNetwork,
+        })
+      }
+      const asset = blobPlayback.resolveStaticAssetStream({
+        coreRef,
+        scheduler,
+        mimeType: rendition.format || candidate.rendition?.container || 'application/octet-stream',
+        authorizationKey,
+        release,
+      })
+      registered = true
+      return asset
+    } finally {
+      if (!registered) await scopedNetwork.releaseAuthorizedRendition(releaseRequest)
+    }
+  }
+
   function localSwarmPeerId() {
     try {
       const key = ctx?.swarm?.keyPair?.publicKey
@@ -2302,6 +2399,9 @@ export function createApi({
       isMultiWriterChannelKey,
       loadChannel: (_ctx, channelKey) => loadChannelBounded(channelKey),
     }),
+    openVerifiedCandidateStream(candidate, options = {}) {
+      return resolveVerifiedCandidateStream(candidate, options)
+    },
     ...createPairingApi({
       ctx,
       loadChannel: (_ctx, channelKey) => loadChannelBounded(channelKey),

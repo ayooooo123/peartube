@@ -19,6 +19,7 @@ import {
   verifyControlRequest
 } from './auth.js'
 import { createCompanionRouter } from './routes.js'
+import { createCompanionStreamRoute } from './stream-route.js'
 
 const MAX_UNIX_SOCKET_PATH_BYTES = 103
 const MAX_ERROR_BYTES = 512
@@ -295,7 +296,8 @@ export function createCompanionServer ({
   createUnixServer = defaultCreateUnixServer,
   probeSocket = (socketPath) => probeUnixSocket(socketPath),
   setUmask = typeof process.umask === 'function' ? process.umask.bind(process) : null,
-  requestDeadlineMs = 30_000
+  requestDeadlineMs = 30_000,
+  streamChunkBytes = undefined
 } = {}) {
   if (!service) throw new Error('service is required')
   if (!config) throw new Error('companion config is required')
@@ -305,6 +307,12 @@ export function createCompanionServer ({
 
   const replayStore = nonceStore || createNonceStore({ maxEntries: config.maxNonces })
   const router = createCompanionRouter({ service, config, clock, capabilities })
+  const streamRoute = createCompanionStreamRoute({
+    capabilities: router.capabilities,
+    service,
+    streamChunkBytes,
+    rangeDeadlineMs: requestDeadlineMs
+  })
   const connections = new Set()
   const firstRequestDeadlines = new Map()
   const activeRequests = new Set()
@@ -334,6 +342,10 @@ export function createCompanionServer ({
     const deadline = setTimeout(cancelRequest, requestDeadlineMs)
     deadline.unref?.()
     try {
+      if (streamRoute.matches(request.url)) {
+        await streamRoute.handle(request, response, { signal: controller.signal })
+        return
+      }
       prevalidateControlRequest({
         headers: request.headers,
         client: config.client,
@@ -364,13 +376,21 @@ export function createCompanionServer ({
       })
       sendJson(response, routed.statusCode, routed.body, routed.headers)
     } catch (error) {
-      const safe = publicError(error)
-      const destroyRequest = () => request.socket?.destroy?.()
-      response.setHeader('connection', 'close')
-      response.once?.('finish', destroyRequest)
-      sendJson(response, safe.statusCode, {
-        error: { code: safe.code, message: safe.message }
-      })
+      if (response.headersSent || response.writableEnded || response.destroyed) {
+        try {
+          response.destroy?.(error)
+        } catch {
+          // The transport may already be closed by the failed request.
+        }
+      } else {
+        const safe = publicError(error)
+        const destroyRequest = () => request.socket?.destroy?.()
+        response.setHeader('connection', 'close')
+        response.once?.('finish', destroyRequest)
+        sendJson(response, safe.statusCode, {
+          error: { code: safe.code, message: safe.message }
+        })
+      }
     } finally {
       clearTimeout(deadline)
       request.socket?.removeListener?.('close', onSocketClose)
@@ -499,12 +519,14 @@ export function createCompanionServer ({
         await closeHttpServer(httpServer)
         await Promise.allSettled([...activeRequests])
         router.capabilities.clear()
+        await router.capabilities.drain?.()
         await cleanupOwnedSocket().catch(() => {})
         httpServer = null
         throw error
       }
-      }).catch(error => {
+      }).catch(async error => {
         router.capabilities.clear()
+        await router.capabilities.drain?.()
         throw error
       })
       startPromise = pending
@@ -522,6 +544,7 @@ export function createCompanionServer ({
       if (!httpServer) {
         started = false
         await cleanupOwnedSocket()
+        await router.capabilities.drain?.()
         return
       }
       for (const controller of activeRequestControllers) controller.abort()
@@ -530,6 +553,7 @@ export function createCompanionServer ({
       await closeHttpServer(httpServer)
       await Promise.allSettled([...activeRequests])
       router.capabilities.clear()
+      await router.capabilities.drain?.()
       httpServer = null
       started = false
       await cleanupOwnedSocket()

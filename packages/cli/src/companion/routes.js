@@ -152,16 +152,6 @@ function backendCandidate (candidate, expectedRef = null) {
   }
 }
 
-function onlyCapabilityQuery (values) {
-  for (const [key] of values) {
-    if (key !== 'cap') throw contractError(400, 'UNKNOWN_FIELD', 'Unknown stream query field', key)
-  }
-  const caps = values.getAll('cap')
-  if (caps.length !== 1) {
-    throw contractError(400, caps.length > 1 ? 'DUPLICATE_FIELD' : 'INVALID_FIELD', 'Stream capability is required', 'cap')
-  }
-  return caps[0]
-}
 
 function rejectQuery (values) {
   for (const [field] of values) {
@@ -208,11 +198,24 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
     const raw = await callBackend(service.verifyIndexCandidate.bind(service), [candidateRef, { signal: input.signal }], input.signal)
     const candidate = verifiedCandidate(raw)
     const { scope } = backendCandidate(candidate, candidateRef)
-    const grant = capabilityStore.issue({
-      clientIdentity: input.clientIdentity,
-      ...scope,
-      methods: ['GET', 'HEAD']
-    })
+    if (typeof service.openStreamAsset !== 'function') unavailable('Asset streaming')
+    const asset = await callBackend(service.openStreamAsset.bind(service), [candidate, { signal: input.signal }], input.signal)
+    if (!asset || typeof asset !== 'object' || Array.isArray(asset) || asset.assetId !== scope.assetId) {
+      await Promise.resolve(asset?.release?.()).catch(() => {})
+      throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Stream backend returned a mismatched asset')
+    }
+    let grant
+    try {
+      grant = capabilityStore.issue({
+        clientIdentity: input.clientIdentity,
+        ...scope,
+        asset,
+        methods: ['GET', 'HEAD']
+      })
+    } catch (error) {
+      await Promise.resolve(asset.release?.()).catch(() => {})
+      throw error
+    }
     return routeResponse(200, {
       url: `/api/v2/stream/${encodeURIComponent(scope.publicationId)}/${encodeURIComponent(scope.renditionId)}?cap=${grant.token}`,
       expiresAt: grant.expiresAt,
@@ -221,35 +224,6 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
     })
   }
 
-  async function stream (input, url, publicationPart, renditionPart) {
-    const publicationId = decodedSegment(publicationPart, 'publicationId')
-    const renditionId = decodedSegment(renditionPart, 'renditionId')
-    const token = onlyCapabilityQuery(url.searchParams)
-    const consumption = capabilityStore.consume(token, {
-      clientIdentity: input.clientIdentity,
-      publicationId,
-      renditionId,
-      method: input.method
-    })
-    try {
-      if (typeof service.streamAsset !== 'function') unavailable('Asset streaming')
-      const delegated = await callBackend(service.streamAsset.bind(service), [{
-        clientIdentity: input.clientIdentity,
-        publicationId,
-        renditionId,
-        assetId: consumption.assetId,
-        method: input.method,
-        headers: input.headers || {},
-        signal: input.signal
-      }], input.signal)
-      if (delegated && Number.isSafeInteger(delegated.statusCode) && delegated.statusCode >= 100 && delegated.statusCode <= 599) {
-        return routeResponse(delegated.statusCode, delegated.body, delegated.headers || {})
-      }
-      return routeResponse(200, delegated)
-    } finally {
-      consumption.release()
-    }
-  }
 
   async function publication (input, publicationPart) {
     const publicationId = decodedSegment(publicationPart, 'publicationId')
@@ -332,11 +306,6 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
         if (method !== 'GET') allow(['GET'])
         rejectQuery(url.searchParams)
         return await publication(input, match[1])
-      }
-      match = path.match(/^\/api\/v2\/stream\/([^/]+)\/([^/]+)$/)
-      if (match) {
-        if (method !== 'GET' && method !== 'HEAD') allow(['GET', 'HEAD'])
-        return await stream({ ...input, method }, url, match[1], match[2])
       }
       match = path.match(/^\/api\/v2\/ingest\/jobs\/([^/]+)$/)
       if (match) {

@@ -652,6 +652,14 @@ export async function createRelayService({
       }
       return runtime.api.verifyIndexCandidate(candidateRef, { signal })
     },
+    async openStreamAsset(candidate, { signal = null } = {}) {
+      if (typeof runtime.api?.openVerifiedCandidateStream !== 'function') {
+        const error = new Error('Verified asset streaming is unsupported')
+        error.code = 'STREAM_ASSET_UNSUPPORTED'
+        throw error
+      }
+      return runtime.api.openVerifiedCandidateStream(candidate, { signal })
+    },
     async enqueueArchiveJob(input, { runNow = false } = {}) {
       if (!runtime.ctx?.metaDb) throw new Error('archive jobs require relay runtime metadata storage')
       // Deliberate uploads are the relay's purpose; they are only refused when

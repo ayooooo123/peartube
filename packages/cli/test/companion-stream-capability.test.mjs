@@ -120,8 +120,14 @@ test('expiry pruning reclaims bounded capacity without evicting live capabilitie
   t.is(replacement.publicationId, 'pub-2')
 })
 
-test('open preserves its response shape and stream failures precede backend delegation', async (t) => {
+test('open preserves its response shape and embeds the resolved asset only in the capability', async (t) => {
   let calls = 0
+  const asset = {
+    assetId: 'asset-1',
+    byteLength: 8,
+    async requestRange () {},
+    async release () {}
+  }
   const capabilities = createStreamCapabilityStore({
     now: () => NOW,
     randomBytes: () => b4a.alloc(32, 9),
@@ -137,9 +143,9 @@ test('open preserves its response shape and stream failures precede backend dele
           asset: { assetId: 'asset-1' }
         }
       },
-      async streamAsset () {
+      async openStreamAsset () {
         calls++
-        return { ok: true }
+        return asset
       }
     },
     config: { client: { id: CLIENT } },
@@ -155,47 +161,46 @@ test('open preserves its response shape and stream failures precede backend dele
   t.alike(Object.keys(opened.body).sort(), ['expiresAt', 'publicationId', 'renditionId', 'url'])
   t.is(opened.body.url, `/api/v2/stream/pub-1/rend-1?cap=${token}`)
   t.not(opened.body.url.includes(CLIENT), true)
-
-  const held = capabilities.consume(token, scope({ method: 'GET', methods: undefined }))
-  const overConcurrency = await router.dispatch(request('GET', opened.body.url))
-  t.is(overConcurrency.statusCode, 429)
-  t.is(overConcurrency.body.error.code, 'CAPABILITY_CONCURRENCY_EXHAUSTED')
-  held.release()
-
-  t.is((await router.dispatch(request('GET', `/api/v2/stream/pub-2/rend-1?cap=${token}`))).statusCode, 403)
-  t.is((await router.dispatch(request('GET', `/api/v2/stream/pub-1/rend-1?cap=${'C'.repeat(43)}`))).statusCode, 403)
-  const otherClient = request('GET', opened.body.url, { clientIdentity: 'mediastorm-b' })
-  t.is((await router.dispatch(otherClient)).statusCode, 403)
-  t.is((await router.dispatch(request('POST', opened.body.url))).statusCode, 405)
-  t.is(calls, 0)
-
-  t.is((await router.dispatch(request('GET', opened.body.url))).statusCode, 200)
+  t.not(opened.body.url.includes('asset-1'), true)
   t.is(calls, 1)
+
+  const exact = { publicationId: 'pub-1', renditionId: 'rend-1', method: 'GET' }
+  const held = capabilities.consume(token, exact)
+  t.is(held.asset, asset)
+  t.is(errorCode(() => capabilities.consume(token, exact)), 'CAPABILITY_CONCURRENCY_EXHAUSTED')
+  t.is(errorCode(() => capabilities.consume(token, { ...exact, publicationId: 'pub-2' })), 'CAPABILITY_SCOPE_MISMATCH')
+  t.is(errorCode(() => capabilities.consume('C'.repeat(43), exact)), 'CAPABILITY_INVALID')
+  t.is(errorCode(() => capabilities.consume(token, { ...exact, clientIdentity: 'mediastorm-b' })), 'CAPABILITY_SCOPE_MISMATCH')
+  held.release()
+  const replay = capabilities.consume(token, { ...exact, method: 'HEAD' })
+  replay.release()
 })
 
-test('stream delegation releases acquisition after backend error', async (t) => {
-  let calls = 0
+test('retiring an active capability releases its asset exactly once after acquisition cleanup', async (t) => {
+  let releases = 0
+  const asset = {
+    assetId: 'asset-1',
+    async release () { releases++ }
+  }
   const capabilities = createStreamCapabilityStore({
     now: () => NOW,
     randomBytes: () => b4a.alloc(32, 10),
     maxConcurrentUses: 1
   })
-  const grant = capabilities.issue(scope())
-  const router = createCompanionRouter({
-    service: {
-      async streamAsset () {
-        calls++
-        if (calls === 1) throw new Error('backend failed')
-        return { ok: true }
-      }
-    },
-    capabilities
+  const grant = capabilities.issue({ ...scope(), asset })
+  const acquisition = capabilities.consume(grant.token, {
+    publicationId: 'pub-1',
+    renditionId: 'rend-1',
+    method: 'GET'
   })
-  const url = `/api/v2/stream/pub-1/rend-1?cap=${grant.token}`
 
-  t.is((await router.dispatch(request('GET', url))).statusCode, 502)
-  t.is((await router.dispatch(request('GET', url))).statusCode, 200)
-  t.is(calls, 2)
+  t.is(capabilities.close(grant.token), true)
+  t.is(releases, 0)
+  acquisition.release()
+  acquisition.release()
+  await capabilities.drain()
+  t.is(releases, 1)
+  t.is(capabilities.close(grant.token), false)
 })
 
 test('server shutdown clears capabilities and duplicate close is safe', async (t) => {

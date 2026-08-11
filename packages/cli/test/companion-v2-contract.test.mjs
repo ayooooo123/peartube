@@ -158,8 +158,14 @@ test('episode search returns an explicit capability error before backend delegat
   t.is(delegated, false)
 })
 
-test('open verifies a candidate and returns a scoped reusable capability', async (t) => {
+test('open verifies a candidate, resolves its asset, and returns a scoped reusable capability', async (t) => {
   let verifiedRef = null
+  const asset = {
+    assetId: 'asset-1',
+    byteLength: 8,
+    async requestRange () {},
+    async release () {}
+  }
   const capabilities = createStreamCapabilityStore({
     now: () => NOW,
     randomBytes: () => b4a.alloc(32, 7),
@@ -172,8 +178,8 @@ test('open verifies a candidate and returns a scoped reusable capability', async
         verifiedRef = candidateRef
         return candidate({ streamUrl: 'https://forbidden.invalid' })
       },
-      async streamAsset (scope) {
-        return { scope }
+      async openStreamAsset () {
+        return asset
       }
     },
     config: { client: { id: CLIENT } },
@@ -189,37 +195,28 @@ test('open verifies a candidate and returns a scoped reusable capability', async
   const token = new URL(opened.body.url, 'http://companion.invalid').searchParams.get('cap')
   t.ok(token)
 
-  const get = await router.dispatch(request('GET', `${opened.body.url}`))
-  const head = await router.dispatch(request('HEAD', `${opened.body.url}`))
-  const replay = await router.dispatch(request('GET', `${opened.body.url}`))
-  t.is(get.statusCode, 200)
-  t.is(head.statusCode, 200)
-  t.is(replay.statusCode, 200)
-  t.is(get.body.scope.assetId, 'asset-1')
-  t.is(get.body.scope.method, 'GET')
-  t.is(head.body.scope.method, 'HEAD')
+  const publicRequest = capabilities.consume(token, {
+    publicationId: 'publication-1',
+    renditionId: 'rendition-1',
+    method: 'GET'
+  })
+  t.is(publicRequest.asset, asset)
+  publicRequest.release()
 })
 
-test('stream capability rejects wrong client, path scope, token, and expiry before delegation', async (t) => {
+test('stream capability rejects wrong client, path scope, token, and expiry before acquisition', (t) => {
   let now = NOW
-  let calls = 0
   const capabilities = createStreamCapabilityStore({ now: () => now, randomBytes: () => b4a.alloc(32, 8), ttlMs: 100, maxEntries: 4 })
   const granted = capabilities.issue({ clientIdentity: CLIENT, publicationId: 'pub-1', renditionId: 'rend-1', assetId: 'asset-1' })
-  const router = createCompanionRouter({
-    service: { async streamAsset () { calls++; return { ok: true } } },
-    config: { client: { id: CLIENT } },
-    clock: () => now,
-    capabilities
-  })
-  const path = `/api/v2/stream/pub-1/rend-1?cap=${granted.token}`
-  const wrongClient = request('GET', path)
-  wrongClient.clientIdentity = 'other-client'
-  t.is((await router.dispatch(wrongClient)).statusCode, 403)
-  t.is((await router.dispatch(request('GET', `/api/v2/stream/pub-2/rend-1?cap=${granted.token}`))).statusCode, 403)
-  t.is((await router.dispatch(request('GET', '/api/v2/stream/pub-1/rend-1?cap=bad'))).statusCode, 403)
+  const exact = { publicationId: 'pub-1', renditionId: 'rend-1', method: 'GET' }
+
+  t.exception(() => capabilities.consume(granted.token, { ...exact, clientIdentity: 'other-client' }))
+  t.exception(() => capabilities.consume(granted.token, { ...exact, publicationId: 'pub-2' }))
+  t.exception(() => capabilities.consume('bad', exact))
+  const publicRequest = capabilities.consume(granted.token, exact)
+  publicRequest.release()
   now += 101
-  t.is((await router.dispatch(request('GET', path))).statusCode, 410)
-  t.is(calls, 0)
+  t.exception(() => capabilities.consume(granted.token, exact))
 })
 
 test('capability capacity fails closed without evicting live grants', (t) => {

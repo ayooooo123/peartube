@@ -5,6 +5,25 @@ import { normalizeBlobRefInput, parseBlobRef } from './blob-ref.js'
 import { attachBlobPlaybackProfile } from './blob-playback-profile.js'
 import { retainSwarmDiscovery } from './storage.js'
 
+const MEDIA_TYPES = new Map([
+  ['m4a', 'audio/mp4'],
+  ['mkv', 'video/x-matroska'],
+  ['mov', 'video/quicktime'],
+  ['mp3', 'audio/mpeg'],
+  ['mp4', 'video/mp4'],
+  ['mpegts', 'video/mp2t'],
+  ['ts', 'video/mp2t'],
+  ['webm', 'video/webm'],
+])
+const SAFE_MEDIA_TYPE = /^(?:audio|video)\/[A-Za-z0-9][A-Za-z0-9.+-]{0,126}$/
+
+function safeMediaType(value) {
+  if (typeof value !== 'string') return 'application/octet-stream'
+  const normalized = value.trim().toLowerCase()
+  if (SAFE_MEDIA_TYPE.test(normalized)) return normalized
+  return MEDIA_TYPES.get(normalized) || 'application/octet-stream'
+}
+
 function getCorePeerList(core) {
   const peers = core?.peers
   if (Array.isArray(peers)) return peers
@@ -52,7 +71,9 @@ export class BlobPlaybackService {
     for (const release of releases) {
       try {
         Promise.resolve(release()).catch(() => {})
-      } catch {}
+      } catch {
+        // Static-entry eviction is best effort; the authorization was already removed.
+      }
     }
   }
 
@@ -105,9 +126,8 @@ export class BlobPlaybackService {
     return { url }
   }
 
-  resolveStaticAssetUrl({ coreRef, scheduler, mimeType = 'video/mp4', authorizationKey, release } = {}) {
+  prepareStaticAssetRegistration({ coreRef, scheduler, mimeType = 'video/mp4', authorizationKey, release } = {}) {
     const ctx = this.ctx
-    if (!ctx?.blobServer?.getLink) throw new Error('BlobServer not initialized')
     const normalized = normalizeAssetCoreRefV2(coreRef, 'coreRef')
     const existingEntries = ctx.staticAssetPlaybackEntries
     const entries = existingEntries || new Map()
@@ -139,21 +159,7 @@ export class BlobPlaybackService {
         throw new Error('static playback authorization release is required')
       }
     }
-    const effectiveMimeType = entry?.mimeType || mimeType
-    const capabilityUrl = ctx.blobServer.getLink(b4a.from(normalized.key, 'hex'), {
-      blob: {
-        blockOffset: 0,
-        blockLength: normalized.length,
-        byteOffset: 0,
-        byteLength: normalized.byteLength,
-      },
-      type: effectiveMimeType,
-      host: ctx.blobServerHost || '127.0.0.1',
-      port: ctx.blobServer?.port || ctx.blobServerPort,
-    })
-    if (typeof capabilityUrl !== 'string') throw new Error('BlobServer returned an invalid capability URL')
-    const separator = capabilityUrl.includes('?') ? '&' : '?'
-
+    const effectiveMimeType = entry?.mimeType || safeMediaType(mimeType)
     if (!entry) {
       entry = {
         coreRef: normalized,
@@ -165,25 +171,91 @@ export class BlobPlaybackService {
     } else if (entry.authorizations !== authorizations) {
       entry.authorizations = authorizations
     }
-    if (addAuthorization) authorizations.set(authorizationKey, release)
-    if (!existingEntries) ctx.staticAssetPlaybackEntries = entries
-    if (reused) {
-      entries.delete(normalized.assetId)
-      entries.set(normalized.assetId, entry)
-    } else {
-      entries.set(normalized.assetId, entry)
-      while (entries.size > this.maxStaticAssetEntries) {
-        const oldestAssetId = entries.keys().next().value
-        const oldest = entries.get(oldestAssetId)
-        entries.delete(oldestAssetId)
-        this.releaseStaticAssetEntry(oldest)
+
+    const commit = () => {
+      if (addAuthorization) authorizations.set(authorizationKey, release)
+      if (!existingEntries) ctx.staticAssetPlaybackEntries = entries
+      if (reused) {
+        entries.delete(normalized.assetId)
+        entries.set(normalized.assetId, entry)
+      } else {
+        entries.set(normalized.assetId, entry)
+        while (entries.size > this.maxStaticAssetEntries) {
+          const oldestAssetId = entries.keys().next().value
+          const oldest = entries.get(oldestAssetId)
+          entries.delete(oldestAssetId)
+          this.releaseStaticAssetEntry(oldest)
+        }
       }
+      return { entry, normalized, effectiveMimeType, reused }
     }
+    return { entry, normalized, effectiveMimeType, reused, commit }
+  }
+
+  resolveStaticAssetUrl(input = {}) {
+    const ctx = this.ctx
+    if (!ctx?.blobServer?.getLink) throw new Error('BlobServer not initialized')
+    const registration = this.prepareStaticAssetRegistration(input)
+    const capabilityUrl = ctx.blobServer.getLink(b4a.from(registration.normalized.key, 'hex'), {
+      blob: {
+        blockOffset: 0,
+        blockLength: registration.normalized.length,
+        byteOffset: 0,
+        byteLength: registration.normalized.byteLength,
+      },
+      type: registration.effectiveMimeType,
+      host: ctx.blobServerHost || '127.0.0.1',
+      port: ctx.blobServer?.port || ctx.blobServerPort,
+    })
+    if (typeof capabilityUrl !== 'string') throw new Error('BlobServer returned an invalid capability URL')
+    const separator = capabilityUrl.includes('?') ? '&' : '?'
+    const { entry, normalized, reused } = registration.commit()
     return {
       url: `${capabilityUrl}${separator}pt_static_asset=${normalized.assetId}`,
       scheduler: entry.scheduler,
       reused,
     }
+  }
+
+  resolveStaticAssetStream(input = {}) {
+    if (typeof input.authorizationKey !== 'string' || input.authorizationKey.length === 0) {
+      throw new Error('route stream authorization key is required')
+    }
+    const { entry, normalized, effectiveMimeType } = this.prepareStaticAssetRegistration(input).commit()
+    let released = false
+    return Object.freeze({
+      assetId: normalized.assetId,
+      byteLength: normalized.byteLength,
+      blockSize: normalized.blockSize,
+      mimeType: effectiveMimeType,
+      etag: `"${normalized.treeHash}"`,
+      seek: request => entry.scheduler.seek(request),
+      requestRange: request => entry.scheduler.requestRange(request),
+      release: async () => {
+        if (released) return false
+        released = true
+        return this.releaseStaticAssetAuthorization(normalized.assetId, input.authorizationKey)
+      },
+    })
+  }
+
+  async releaseStaticAssetAuthorization(assetId, authorizationKey) {
+    const entries = this.ctx?.staticAssetPlaybackEntries
+    const entry = entries?.get(assetId)
+    const release = entry?.authorizations instanceof Map
+      ? entry.authorizations.get(authorizationKey)
+      : null
+    if (typeof release !== 'function') return false
+    entry.authorizations.delete(authorizationKey)
+    try {
+      await release()
+    } finally {
+      if (entry.authorizations.size === 0 && entries.get(assetId) === entry) {
+        entries.delete(assetId)
+        entry.released = true
+      }
+    }
+    return true
   }
 
   scheduleFindingPeerRelease(core, lease) {
@@ -193,7 +265,9 @@ export class BlobPlaybackService {
       this.findingPeerLeases.delete(core)
       try {
         lease.done()
-      } catch {}
+      } catch {
+        // Discovery teardown is best effort after the lease has left the registry.
+      }
     }, this.findingPeerLeaseMs)
     lease.timer.unref?.()
   }

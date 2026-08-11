@@ -1035,24 +1035,42 @@ test('three real scoped runtimes keep disjoint peer inventory, transfers, loss, 
   const observedDisconnect = interrupted.then(() => null, error => error)
   for (let attempt = 0; attempt < 100 && !lastProofStarted; attempt++) await settle()
   t.ok(lastProofStarted)
-  pairC.a.destroy()
-  pairC.b.destroy()
-  releaseLastProof()
-  const disconnected = await observedDisconnect
-  t.ok(disconnected)
-  t.is(disconnected.code, 'DISCONNECTED')
-  t.is(disconnected.peerId, secondPeerId)
-
+  const oldPairC = pairC
+  const readerClosedBeforeReplacement = runtimeB.getDiagnostics().counters.closedSessions
+  const sourceClosedBeforeReplacement = runtimeC.getDiagnostics().counters.closedSessions
   holdLastProof = false
   pairC = connectionPair(203, 204)
   swarmC.connections.add(pairC.a)
   swarmB.connections.add(pairC.b)
   swarmC.emit('connection', pairC.a, { publicKey: pairC.a.remotePublicKey })
   swarmB.emit('connection', pairC.b, { publicKey: pairC.b.remotePublicKey })
+  await settle()
+  releaseLastProof()
+  const disconnected = await observedDisconnect
+  t.ok(disconnected)
+  t.is(disconnected.code, 'DISCONNECTED')
+  t.is(disconnected.peerId, secondPeerId)
+
   for (let attempt = 0; attempt < 20; attempt++) {
     if (runtimeB.getActiveAssetPeerIds({ assetId: descriptor.assetId }).includes(secondPeerId)) break
     await settle()
   }
+  t.is(runtimeB.getDiagnostics().counters.closedSessions, readerClosedBeforeReplacement + 1,
+    'replacement closes the old reader session exactly once')
+  t.is(runtimeC.getDiagnostics().counters.closedSessions, sourceClosedBeforeReplacement + 1,
+    'replacement closes the old source session exactly once')
+  oldPairC.a.destroy()
+  oldPairC.b.destroy()
+  await settle()
+  t.is(runtimeB.getDiagnostics().counters.closedSessions, readerClosedBeforeReplacement + 1,
+    'delayed old reader connection close cannot close the replacement twice')
+  t.is(runtimeC.getDiagnostics().counters.closedSessions, sourceClosedBeforeReplacement + 1,
+    'delayed old source connection close cannot close the replacement twice')
+  t.ok(runtimeB.getActiveAssetPeerIds({ assetId: descriptor.assetId }).includes(secondPeerId),
+    'delayed old connection close preserves the replacement reader session')
+  t.ok(runtimeC.getDiagnostics().sessions.some(session =>
+    session.purpose === 'asset' && session.state === 'active'),
+    'delayed old connection close preserves the replacement source session')
   const secondRun = await runtimeB.requestAssetBlocks({
     assetId: descriptor.assetId,
     startBlock: 3,
@@ -1074,6 +1092,9 @@ test('three real scoped runtimes keep disjoint peer inventory, transfers, loss, 
   t.is(invalid.code, 'INVALID_PROOF')
   t.is(invalid.peerId, secondPeerId)
   t.ok(invalid.message.length <= 256)
+  await settle()
+  t.is(runtimeB.getDiagnostics().status, 'active')
+  t.is(runtimeC.getDiagnostics().status, 'active')
 })
 
 test('separate publishers and assets never cross-open and cleanup is exactly once', async (t) => {

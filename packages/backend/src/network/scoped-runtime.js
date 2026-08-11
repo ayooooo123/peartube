@@ -476,9 +476,9 @@ export function createScopedNetworkRuntime (options = {}) {
     return true
   }
 
-  function closeSession (scope, peerId, reason) {
+  function closeSession (scope, peerId, reason, ownedSession = null) {
     const session = scope.sessions.get(peerId)
-    if (!session || session.closed) return false
+    if (!session || session.closed || (ownedSession && session !== ownedSession)) return false
     cancelAssetSummaryScan(session)
     closeAssetInventoryRequest(
       session,
@@ -494,7 +494,7 @@ export function createScopedNetworkRuntime (options = {}) {
     }
     session.protocol.close(reason)
     try { session.channel?.close?.() } catch {}
-    scope.sessions.delete(peerId)
+    if (scope.sessions.get(peerId) === session) scope.sessions.delete(peerId)
     counters.closedSessions++
     return true
   }
@@ -1105,7 +1105,7 @@ export function createScopedNetworkRuntime (options = {}) {
     const opened = tracked.channel?.fullyOpened?.()
     void Promise.resolve(opened === undefined ? true : opened).then(ready => {
       if (ready !== false) return pumpArchiveSession(scope, tracked)
-    }).catch(() => closeSession(scope, tracked.peerId, 'archive-channel-open-failed'))
+    }).catch(() => closeSession(scope, tracked.peerId, 'archive-channel-open-failed', tracked))
   }
 
   async function pumpArchiveSessions (scope) {
@@ -1355,11 +1355,11 @@ export function createScopedNetworkRuntime (options = {}) {
           sync()
           if (onCatalogUpdate) {
             Promise.resolve(onCatalogUpdate({ publisherId: scope.publisherId })).catch(() => {
-              closeSession(scope, tracked.peerId, 'catalog-projection-update-failed')
+              closeSession(scope, tracked.peerId, 'catalog-projection-update-failed', tracked)
             })
           }
         } catch {
-          closeSession(scope, tracked.peerId, 'catalog-authorization-changed')
+          closeSession(scope, tracked.peerId, 'catalog-authorization-changed', tracked)
         }
       }
       base.on?.('update', onupdate)
@@ -1418,12 +1418,22 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   function attachScope (scope, connection, info) {
-    if (!networkEnabled || scope.closed || scope.purpose === 'index') return
+    if (!networkEnabled || scope.closed || scope.purpose === 'index' || connection?.destroyed === true) return
     const remoteKey = connectionKey(connection, info)
     if (!remoteKey) return
-    if (scope.sessions.has(remoteKey)) return scope.sessions.get(remoteKey)
+    const existing = scope.sessions.get(remoteKey)
+    if (existing) {
+      const sameLiveConnection = existing.connection === connection &&
+        activeConnections.has(connection) && !existing.closed && existing.channel?.closed !== true
+      if (sameLiveConnection) return existing
+      if (!existing.closed) closeSession(scope, remoteKey, 'connection-replaced', existing)
+      else if (scope.sessions.get(remoteKey) === existing) scope.sessions.delete(remoteKey)
+    }
     const mux = muxFactory(connection)
     if (!mux || typeof mux.createChannel !== 'function') return
+    let ownedSession = null
+    const isCurrentSession = () => ownedSession !== null &&
+      !ownedSession.closed && scope.sessions.get(remoteKey) === ownedSession
     const protocolSession = createScopedProtocolSession({
       peerId: remoteKey,
       purpose: scope.purpose,
@@ -1435,7 +1445,8 @@ export function createScopedNetworkRuntime (options = {}) {
         (scope.purpose === 'asset' && ASSET_TRANSFER_TYPES.has(frame.type)) ||
         (scope.purpose === 'archive' && ARCHIVE_TRANSFER_TYPES.has(frame.type)),
       onActivate: async () => {
-        let tracked = scope.sessions.get(remoteKey)
+        if (!isCurrentSession()) return
+        const tracked = ownedSession
         if (scope.purpose === 'asset') {
           let current = false
           for (const authorization of scope.assetAuthorizations?.values?.() || []) {
@@ -1448,24 +1459,26 @@ export function createScopedNetworkRuntime (options = {}) {
             if (current) break
           }
           if (!current) fail('publication manifest authorization failed')
-          tracked = scope.sessions.get(remoteKey)
+          if (!isCurrentSession()) return
         }
         const result = authorizeScopeConnection(scope, { peerId: remoteKey, connection, tracked })
         if (result.status !== 'authorized') fail(result.reason)
-        if (tracked) {
+        if (isCurrentSession()) {
           tracked.state = 'active'
           if (scope.purpose === 'archive' && !scope.archiveDiscovery) startArchivePumpWhenOpen(scope, tracked)
         }
       },
       onFrame: frame => {
+        if (!isCurrentSession()) fail('scoped session is no longer current')
         if (scope.purpose === 'bootstrap') return handleBootstrapFrame(frame, { peerId: remoteKey })
-        if (scope.purpose === 'asset') return handleAssetFrame(scope, scope.sessions.get(remoteKey), frame)
-        if (scope.purpose === 'archive') return handleArchiveFrame(scope, scope.sessions.get(remoteKey), frame)
-        if (scope.purpose === 'archive-discovery') return handleArchiveFrame(scope, scope.sessions.get(remoteKey), frame)
+        if (scope.purpose === 'asset') return handleAssetFrame(scope, ownedSession, frame)
+        if (scope.purpose === 'archive') return handleArchiveFrame(scope, ownedSession, frame)
+        if (scope.purpose === 'archive-discovery') return handleArchiveFrame(scope, ownedSession, frame)
         return frame.type === 'probe' ? { status: 'ok' } : fail('frame type is not allowed for this purpose')
       },
       onClose: () => {
-        const tracked = scope.sessions.get(remoteKey)
+        const tracked = ownedSession
+        if (!tracked || tracked.closed || scope.sessions.get(remoteKey) !== tracked) return
         closeAssetInventoryRequest(
           tracked,
           tracked?.assetInventoryRequest,
@@ -1485,7 +1498,7 @@ export function createScopedNetworkRuntime (options = {}) {
           for (const cleanup of tracked.cleanupFns.splice(0)) {
             try { cleanup() } catch {}
           }
-          scope.sessions.delete(remoteKey)
+          if (scope.sessions.get(remoteKey) === tracked) scope.sessions.delete(remoteKey)
           counters.closedSessions++
           if (scope.purpose === 'archive') void pumpArchiveSessions(scope)
         }
@@ -1537,6 +1550,7 @@ export function createScopedNetworkRuntime (options = {}) {
       archiveLastServed: new Map(),
       archiveServedBytes: 0,
     }
+    ownedSession = tracked
     scope.sessions.set(remoteKey, tracked)
     if (tracked.state === 'active' && scope.purpose === 'archive' && !scope.archiveDiscovery) startArchivePumpWhenOpen(scope, tracked)
     channel.open(encodeScopedHello({
@@ -1559,7 +1573,10 @@ export function createScopedNetworkRuntime (options = {}) {
       connection?.once?.('close', () => {
         activeConnections.delete(connection)
         const peerId = authenticatedRemoteKey(connection) || connectionKey(connection, info)
-        for (const scope of scopes.values()) closeSession(scope, peerId, 'connection-closed')
+        for (const scope of scopes.values()) {
+          const tracked = scope.sessions.get(peerId)
+          if (tracked?.connection === connection) closeSession(scope, peerId, 'connection-closed', tracked)
+        }
       })
     }
     let onlyIndexScopes = scopes.size > 0
@@ -2357,7 +2374,7 @@ export function createScopedNetworkRuntime (options = {}) {
         request,
         assetAbortError(id, 'asset inventory request aborted'),
       )) return
-      closeSession(scope, id, 'asset-inventory-aborted')
+      closeSession(scope, id, 'asset-inventory-aborted', session)
     }
     session.assetInventoryRequest = request
     signal?.addEventListener?.('abort', request.onAbort, { once: true })
@@ -2367,7 +2384,7 @@ export function createScopedNetworkRuntime (options = {}) {
         request,
         assetTransportError('TIMEOUT', id, 'asset inventory request timed out'),
       )) return
-      closeSession(scope, id, 'asset-inventory-timeout')
+      closeSession(scope, id, 'asset-inventory-timeout', session)
     }, assetTransferTimeoutMs)
     request.timer?.unref?.()
     if (signal?.aborted) {

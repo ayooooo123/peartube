@@ -622,7 +622,6 @@ export function createScopedNetworkRuntime (options = {}) {
     try { channel?.close?.() } catch { /* best-effort channel close */ }
     if (scope.sessions.get(peerId) === session) scope.sessions.delete(peerId)
     counters.closedSessions++
-    if (reason.startsWith('network-policy-')) scheduleScopeReattach(scope, peerId, session.connection, channel)
     return true
   }
 

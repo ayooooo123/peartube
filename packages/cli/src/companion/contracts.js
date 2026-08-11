@@ -305,7 +305,7 @@ function inspectIngestValue (value, depth = 0) {
   }
   if (!value || typeof value !== 'object') return
   for (const [field, child] of Object.entries(value)) {
-    if (FORBIDDEN_INGEST_FIELD.test(field)) throw new CompanionContractError(400, 'UNKNOWN_FIELD', 'Ingest request contains a prohibited field', boundedFieldName(field))
+    if (field !== 'publicTrackerIndependent' && FORBIDDEN_INGEST_FIELD.test(field)) throw new CompanionContractError(400, 'UNKNOWN_FIELD', 'Ingest request contains a prohibited field', boundedFieldName(field))
     inspectIngestValue(child, depth + 1)
   }
 }

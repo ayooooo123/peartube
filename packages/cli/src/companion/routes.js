@@ -52,6 +52,17 @@ function backendFailure (error) {
   const raw = typeof error?.code === 'string' ? error.code.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') : ''
   if (raw === 'CANDIDATE_EXPIRED') return contractError(410, 'CANDIDATE_EXPIRED', 'Candidate reference expired')
   if (raw === 'SOURCE_NOT_CURRENT') return contractError(409, 'SOURCE_NOT_CURRENT', 'Candidate source is no longer current')
+  if (raw === 'IDEMPOTENCY_CONFLICT') return contractError(409, raw, 'Idempotency key is already bound to another request')
+  if (raw === 'INGEST_JOB_TERMINAL' || raw === 'INGEST_VERSION_CONFLICT') return contractError(409, raw, 'Ingest job state conflict')
+  if (raw === 'STORAGE_ADMISSION_DENIED') return contractError(507, raw, 'Insufficient storage for ingest')
+  if (raw === 'INGEST_MANAGER_CLOSED' || raw === 'INGEST_PERSISTENCE_FAILED' || raw === 'INGEST_PERSISTENCE_CORRUPT') {
+    return contractError(503, raw, 'Ingest service is unavailable')
+  }
+  if (raw === 'INGEST_REQUEST_INVALID' || raw === 'SOURCE_CAPABILITY_INVALID' ||
+      raw === 'SPOOL_INCOMPLETE' || raw === 'SPOOL_PATH_INVALID' || raw === 'SPOOL_TYPE_INVALID' ||
+      raw === 'SPOOL_LENGTH_MISMATCH' || raw === 'HASH_MISMATCH' || raw === 'ETAG_MISMATCH') {
+    return contractError(400, raw, 'Invalid ingest request')
+  }
   if (raw === 'UNAVAILABLE' || raw.endsWith('_UNAVAILABLE')) return contractError(503, 'BACKEND_UNAVAILABLE', 'Companion backend is unavailable')
   if (raw === 'UNSUPPORTED' || raw.endsWith('_UNSUPPORTED')) return contractError(501, 'CAPABILITY_UNAVAILABLE', 'Companion capability is unavailable')
   return contractError(502, 'BACKEND_ERROR', 'Companion backend request failed')

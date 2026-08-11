@@ -13,6 +13,8 @@ import { TrustedClients, mergeTrustedClientKeys } from './trusted-clients.js'
 import { classifySourceUrl } from './archive/source-id.js'
 import { createStorageGuard } from './storage-guard.js'
 import { createCompanionServer } from './companion/server.js'
+import { createIngestJobStore } from './companion/ingest-job-store.js'
+import { createIngestManager } from './companion/ingest-manager.js'
 import tmdbFetch from '#fetch'
 
 
@@ -91,6 +93,7 @@ export async function createRelayService({
   let localMirrorRunning = false
   let archiveConsole = null
   let companionServer = null
+  let ingestManager = null
   const localMirrorState = createLocalDriveMirrorState()
 
   function createLocalDrivePublisher(runtimeFsModule) {
@@ -470,6 +473,26 @@ export async function createRelayService({
         })
       }
       if (config.companion?.enabled !== false) {
+        if (runtime.ctx?.metaDb) {
+          const runtimeFsModule = fsModule || await import('#fs')
+          const runtimePathModule = pathModule || await import('#path')
+          ingestManager = createIngestManager({
+            store: createIngestJobStore({ bee: runtime.ctx.metaDb, now: nowFn }),
+            publisher: createArchivePublisher({
+              identityManager: runtime.identityManager,
+              uploadManager: runtime.uploadManager,
+              api: runtime.api,
+              runtime,
+              fs: runtimeFsModule
+            }),
+            spoolRoot: runtimePathModule.join(config.storage.path, 'companion', 'ingest-spool'),
+            fs: runtimeFsModule,
+            path: runtimePathModule,
+            canIngest: () => storageGuard.hasMinFreeDisk(),
+            now: nowFn,
+            logger
+          })
+        }
         companionServer = await companionServerFactory({
           service,
           config: config.companion,
@@ -482,6 +505,7 @@ export async function createRelayService({
       const runtimeStartedAt = Date.now()
       await runtime.start?.()
       logger.relay.info('Relay runtime network ready', { runtimeStartMs: Date.now() - runtimeStartedAt })
+      await ingestManager?.start()
 
       // Managers exist now — bind the real archive publisher behind the lazy proxy.
       if (config.archive?.uiEnabled) {
@@ -604,6 +628,10 @@ export async function createRelayService({
           await companionServer.close().catch(() => {})
           companionServer = null
         }
+        if (ingestManager) {
+          await ingestManager.close().catch(() => {})
+          ingestManager = null
+        }
         if (archiveConsole) {
           await archiveConsole.close().catch(() => {})
           archiveConsole = null
@@ -659,6 +687,25 @@ export async function createRelayService({
         throw error
       }
       return runtime.api.openVerifiedCandidateStream(candidate, { signal })
+    },
+    async getPublication(publicationId) {
+      return runtime.ctx?.assetManifestStore?.getManifest?.(publicationId) || null
+    },
+    async submitIngestJob(input) {
+      if (!ingestManager) {
+        const error = new Error('Companion ingest jobs are unavailable')
+        error.code = 'INGEST_UNAVAILABLE'
+        throw error
+      }
+      return ingestManager.submitJob(input)
+    },
+    async getIngestJob(jobId) {
+      if (!ingestManager) return null
+      return ingestManager.getJob(jobId)
+    },
+    async cancelIngestJob(jobId) {
+      if (!ingestManager) return null
+      return ingestManager.cancelJob(jobId)
     },
     async enqueueArchiveJob(input, { runNow = false } = {}) {
       if (!runtime.ctx?.metaDb) throw new Error('archive jobs require relay runtime metadata storage')
@@ -743,6 +790,10 @@ export async function createRelayService({
       if (companionServer) {
         await companionServer.close().catch(() => {})
         companionServer = null
+      }
+      if (ingestManager) {
+        await ingestManager.close().catch(() => {})
+        ingestManager = null
       }
       if (archiveConsole) {
         await archiveConsole.close().catch(() => {})

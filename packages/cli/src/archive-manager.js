@@ -490,13 +490,54 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       const publicBeeKey = channel.publicBeeKey || meta?.publicBeeKey || null
       return { channel, channelKey: identity.driveKey || identity.channelKey, publicBeeKey, publisherId: identity.publicKey }
     },
-    async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, thumbnailFile, tags, sourceType, sourceUrl, sourceVideoId, creatorSourceId, creatorName, creatorHandle, thumbnailUrl, tmdbType, tmdbId, tmdbSeason, tmdbEpisode, publish }) {
+    async importVideo({
+      channel,
+      filePath,
+      videoId,
+      signal,
+      title,
+      description,
+      mimeType,
+      category,
+      duration,
+      width,
+      height,
+      videoCodec,
+      thumbnail,
+      thumbnailFile,
+      tags,
+      sourceType,
+      sourceUrl,
+      sourceVideoId,
+      creatorSourceId,
+      creatorName,
+      creatorHandle,
+      thumbnailUrl,
+      contentKind,
+      mediaProvider,
+      mediaId,
+      seasonNumber,
+      episodeNumber,
+      tmdbType,
+      tmdbId,
+      tmdbSeason,
+      tmdbEpisode,
+      publish
+    }) {
+      const mediaCoordinates = contentKind
+        ? { contentKind, mediaProvider, mediaId, seasonNumber, episodeNumber }
+        : deriveMediaCoordinates({ tmdbType, tmdbId, tmdbSeason, tmdbEpisode })
       const result = await uploadManager.uploadFromPath(channel, filePath, {
         title,
+        videoId,
+        signal,
         description,
         mimeType,
         category: category || 'archive',
         duration,
+        width,
+        height,
+        videoCodec,
         thumbnail,
         tags,
         sourceType,
@@ -507,10 +548,9 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         creatorHandle,
         thumbnailUrl,
         publicationState: publish === false ? 'replicationPending' : undefined,
-        // TMDB coordinates make the movie/TV identity durable on the canonical
-        // video record (schema already supports these fields), not just on the
-        // relay-side job/feed previews.
-        ...deriveMediaCoordinates({ tmdbType, tmdbId, tmdbSeason, tmdbEpisode })
+        // Provider-neutral ingest jobs pass exact coordinates directly; legacy
+        // archive jobs continue to derive the same fields from TMDB inputs.
+        ...mediaCoordinates
       }, fs)
       if (!result?.success) throw new Error(result?.error || 'Archive import failed')
 

@@ -769,6 +769,27 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
     ))
   }
   t.is(await readerCore.has(5), false, 'the peer never receives a block at or above its authorized range end')
+  await readerCore.clear(4)
+  const uploadedBeforeExhaustion = runtimeA.getDiagnostics().policy.uploadedBytes
+  await runtimeA.applyNetworkPolicy(contributionPolicy({
+    uploadCeilingBytes: 1,
+    contributionBudgetBytes: 1,
+  }))
+  const exhausted = await runtimeB.requestAssetBlocks({
+    assetId: staticCore.assetId,
+    startBlock: 4,
+    endBlock: 5,
+    requirePeerEvidence: true,
+  }).then(() => null, error => error)
+  t.ok(exhausted, 'exhausted upload budget settles the accepted peer request')
+  t.is(exhausted.code, 'UNAVAILABLE')
+  t.is(exhausted.peerId, b4a.toString(pair.b.remotePublicKey, 'hex'))
+  t.ok(exhausted.message.length <= 256)
+  t.is(runtimeA.getDiagnostics().policy.uploadedBytes, uploadedBeforeExhaustion,
+    'reservation denial commits no uploaded bytes')
+  t.is(await readerCore.has(4), false, 'budget exhaustion serves no asset block')
+  t.is(runtimeA.getDiagnostics().status, 'active')
+  t.is(runtimeB.getDiagnostics().status, 'active')
 })
 
 test('watch-only requester receives a bounded unavailable error from a contributor without protocol failure', async (t) => {
@@ -943,7 +964,10 @@ test('three real scoped runtimes keep disjoint peer inventory, transfers, loss, 
     swarm: swarmC,
     store: secondRuntimeStore,
     authorizePublication: async request => request.manifest === manifest,
-    initialNetworkPolicy: contributionPolicy(),
+    initialNetworkPolicy: contributionPolicy({
+      uploadCeilingBytes: 4 * 1024 * 1024,
+      contributionBudgetBytes: 4 * 1024 * 1024,
+    }),
   })
   const pairA = connectionPair(201, 202)
   let pairC = connectionPair(203, 204)
@@ -1055,17 +1079,17 @@ test('three real scoped runtimes keep disjoint peer inventory, transfers, loss, 
     if (runtimeB.getActiveAssetPeerIds({ assetId: descriptor.assetId }).includes(secondPeerId)) break
     await settle()
   }
-  t.is(runtimeB.getDiagnostics().counters.closedSessions, readerClosedBeforeReplacement + 1,
-    'replacement closes the old reader session exactly once')
-  t.is(runtimeC.getDiagnostics().counters.closedSessions, sourceClosedBeforeReplacement + 1,
-    'replacement closes the old source session exactly once')
+  t.is(runtimeB.getDiagnostics().counters.closedSessions, readerClosedBeforeReplacement + 2,
+    'replacement closes the old reader bootstrap and asset scopes exactly once')
+  t.is(runtimeC.getDiagnostics().counters.closedSessions, sourceClosedBeforeReplacement + 2,
+    'replacement closes the old source bootstrap and asset scopes exactly once')
   oldPairC.a.destroy()
   oldPairC.b.destroy()
   await settle()
-  t.is(runtimeB.getDiagnostics().counters.closedSessions, readerClosedBeforeReplacement + 1,
-    'delayed old reader connection close cannot close the replacement twice')
-  t.is(runtimeC.getDiagnostics().counters.closedSessions, sourceClosedBeforeReplacement + 1,
-    'delayed old source connection close cannot close the replacement twice')
+  t.is(runtimeB.getDiagnostics().counters.closedSessions, readerClosedBeforeReplacement + 2,
+    'delayed old reader connection close cannot recount either replaced scope')
+  t.is(runtimeC.getDiagnostics().counters.closedSessions, sourceClosedBeforeReplacement + 2,
+    'delayed old source connection close cannot recount either replaced scope')
   t.ok(runtimeB.getActiveAssetPeerIds({ assetId: descriptor.assetId }).includes(secondPeerId),
     'delayed old connection close preserves the replacement reader session')
   t.ok(runtimeC.getDiagnostics().sessions.some(session =>

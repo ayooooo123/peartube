@@ -759,7 +759,13 @@ export function createScopedNetworkRuntime (options = {}) {
         const reservation = responseState.policyEpoch === networkPolicyEpoch
           ? reservePolicyUpload(value.byteLength)
           : null
-        if (!reservation) return
+        if (!reservation) {
+          const current = !responseState.cancelled && !scope.closed && !tracked.closed &&
+            responseState.policyEpoch === networkPolicyEpoch &&
+            scope.sessions.get(tracked.peerId) === tracked
+          if (current) sendAssetError(scope, tracked, range, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
+          return
+        }
         const canBatch = typeof tracked.channel?.cork === 'function' && typeof tracked.channel?.uncork === 'function'
         if (canBatch) tracked.channel.cork()
         try {

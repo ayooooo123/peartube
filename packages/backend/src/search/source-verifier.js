@@ -1,4 +1,5 @@
 import b4a from 'b4a'
+import crypto from 'hypercore-crypto'
 
 import {
   createRenditionDescriptor,

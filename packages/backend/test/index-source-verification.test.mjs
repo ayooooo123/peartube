@@ -692,6 +692,24 @@ test('availability timeout, malformed evidence, unavailable evidence, and caller
   )
 })
 
+test('scoped availability probe entropy does not require the Web Crypto global', t => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'crypto')
+  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: undefined })
+  try {
+    const probe = createScopedAssetAvailabilityProbe({
+      scopedNetwork: {
+        retainAuthorizedRendition() {},
+        requestAssetBlocks() {},
+        releaseAuthorizedRendition() {},
+      },
+    })
+    t.is(typeof probe, 'function')
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, 'crypto', descriptor)
+    else delete globalThis.crypto
+  }
+})
+
 test('scoped one-block availability reports contributors without claiming a complete seeder', async t => {
   const calls = []
   const probe = createScopedAssetAvailabilityProbe({

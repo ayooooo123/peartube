@@ -1950,6 +1950,7 @@ export function createScopedNetworkRuntime (options = {}) {
       }
     }
 
+    let servingSessionClosed = false
     if (contributionServingPolicyChanged || archiveServingPolicyChanged) {
       await Promise.allSettled([...scopes.values()].map(async scope => {
         const contributionScope = (scope.purpose === 'asset' || scope.purpose === 'publisher') &&
@@ -1961,11 +1962,16 @@ export function createScopedNetworkRuntime (options = {}) {
         const archiveChanged = (archiveScope || retainedArchiveScope) && archiveServingPolicyChanged
         if (contributionChanged || archiveChanged) {
           for (const peerId of [...scope.sessions.keys()]) {
-            closeSession(scope, peerId, 'network-policy-role-changed')
+            if (closeSession(scope, peerId, 'network-policy-role-changed')) servingSessionClosed = true
           }
         }
         await rejoinScopeDiscovery(scope)
       }))
+    }
+    if (servingSessionClosed) {
+      // Let Protomux deliver close callbacks before either side opens the
+      // replacement channel for the same scope and authenticated peer key.
+      await new Promise(resolve => setTimeout(resolve, 0))
     }
     if (wasNetworkEnabled && !networkEnabled) await deactivateNetwork()
     else if (!wasNetworkEnabled && networkEnabled) await activateNetwork()

@@ -1094,7 +1094,7 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
     endBlock: 5,
     requirePeerEvidence: true,
   }).then(() => null, error => error)
-  t.is(roleDenied?.code, 'UNAVAILABLE', 'client-only session cannot serve an asset block')
+  t.is(roleDenied?.code, 'DISCONNECTED', 'client-only replacement cannot serve the closed upload session')
   t.is(runtimeA.getDiagnostics().policy.uploadedBytes, uploadedBeforeRoleBudget)
   t.ok(runtimeB.getDiagnostics().topics.some(topic => topic.purpose === 'asset'),
     'the watch-only client asset scope remains retained')
@@ -1672,6 +1672,20 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   t.alike([...received.keys()], [2], 'the runtime upload ceiling stops the next oversized transfer')
   await runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 256 * 1024 }))
   await runtimeB.applyNetworkPolicy(archivePolicy())
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const providerActive = runtimeA.getDiagnostics().sessions.some(session =>
+      session.purpose === 'archive' && session.state === 'active')
+    const requesterActive = runtimeB.getDiagnostics().sessions.some(session =>
+      session.purpose === 'archive' && session.state === 'active')
+    if (providerActive && requesterActive) break
+    await settle()
+  }
+  t.ok(runtimeA.getDiagnostics().sessions.some(session =>
+    session.purpose === 'archive' && session.state === 'active'),
+    'provider replacement archive session is active before retry')
+  t.ok(runtimeB.getDiagnostics().sessions.some(session =>
+    session.purpose === 'archive' && session.state === 'active'),
+    'requester replacement archive session is active before retry')
   for (let attempt = 0; attempt < 30 && received.size < 3; attempt++) await settle()
 
   t.alike([...received.keys()].sort((a, b) => a - b), [2, 3, 4])

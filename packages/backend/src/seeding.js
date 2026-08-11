@@ -471,6 +471,9 @@ export class SeedingManager {
     const key = `${driveKey}:${videoPath}`;
     if (this.activeSeeds.has(key)) {
       const seed = this.activeSeeds.get(key);
+      if (seed.retentionClass === 'archive-pin' && options.archivePinRemoval !== true) {
+        return false;
+      }
       this.activeSeeds.delete(key);
       let clearedBlob = false;
       if (options.clearBlob !== false) {
@@ -484,6 +487,17 @@ export class SeedingManager {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Remove an archive pin only through an explicit archive operation.
+   * Generic cache eviction/removal cannot release archival custody.
+   */
+  async removeArchivePin(driveKey, videoPath, options = {}) {
+    const key = `${driveKey}:${videoPath}`;
+    const seed = this.activeSeeds.get(key);
+    if (!seed || seed.retentionClass !== 'archive-pin') return false;
+    return this.removeSeed(driveKey, videoPath, { ...options, archivePinRemoval: true });
   }
 
   /**

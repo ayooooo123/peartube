@@ -218,6 +218,36 @@ test('published uploads use one verified static descriptor and converge across p
   assert.notEqual(results[0].manifest.body.publisherId, results[1].manifest.body.publisherId)
 })
 
+test('archive publication carries its explicit retention class to asset and catalog serving', async (t) => {
+  const store = makeStore(t, 'archive-retention-class')
+  const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 5))
+  const calls = []
+  const manager = makePublishingManager({
+    store,
+    deviceKeyPair,
+    catalog: makeCatalog(deviceKeyPair, []),
+    scopedNetwork: {
+      async retainAuthorizedRendition(request) {
+        calls.push(['asset', request.retentionClass])
+        return { status: 'retained' }
+      },
+      async publishLocalPublisherCatalog(request) {
+        calls.push(['catalog', request.retentionClass])
+        return { status: 'published' }
+      },
+    },
+  })
+
+  const result = await manager.uploadFromBuffer(
+    makeChannel(),
+    Buffer.from('archive publication bytes'),
+    { title: 'Archive fixture', retentionClass: 'archive-pin' },
+  )
+
+  assert.equal(result.success, true)
+  assert.deepEqual(calls, [['asset', 'archive-pin'], ['catalog', 'archive-pin']])
+})
+
 test('path publication materializes the file once and derives playback bytes from the verified core', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-static-path-'))
   const filePath = path.join(directory, 'fixture.webm')

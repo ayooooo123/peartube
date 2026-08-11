@@ -234,6 +234,43 @@ test('archive consent with zero archive budget cannot allocate retention', async
   await runtime.close()
 })
 
+test('archive-only role publishes archive catalogs without contribution permission', async (t) => {
+  const root = crypto.keyPair(bytes(32, 28))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 29),
+  })
+  const registry = fakeRegistry(descriptor)
+  registry.binding.catalog.listProjections = async kind => ({
+    items: kind === 'publication' ? [{ accepted: true }] : [],
+    nextCursor: null,
+  })
+  const swarm = fakeSwarm()
+  const runtime = createScopedNetworkRuntime({
+    swarm,
+    store: {},
+    catalogRegistry: registry,
+    initialNetworkPolicy: archivePolicy(),
+  })
+  await runtime.start()
+
+  const published = await runtime.publishLocalPublisherCatalog({
+    publisherId: descriptor.publisherId,
+    retentionClass: 'archive-pin',
+  })
+  t.is(published.status, 'published')
+  t.ok(runtime.getDiagnostics().topics.find(topic => topic.purpose === 'publisher')?.publicAnnounced)
+  await t.exception(
+    runtime.publishLocalPublisherCatalog({
+      publisherId: descriptor.publisherId,
+      retentionClass: 'contribution-cache',
+    }),
+    /explicit contribution-cache upload permission/
+  )
+
+  await runtime.close()
+})
+
 test('watch-only downgrade closes local publisher catalog sessions and removes its announcement', async (t) => {
   const root = crypto.keyPair(bytes(32, 21))
   const descriptor = createPublisherNamespaceDescriptor({

@@ -544,6 +544,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         title,
         videoId,
         signal,
+        retentionClass,
         description,
         mimeType,
         category: category || 'archive',

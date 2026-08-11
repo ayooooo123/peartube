@@ -338,6 +338,45 @@ export function createScopedNetworkRuntime (options = {}) {
     }
   }
 
+  function normalizeRetentionClass (value) {
+    if (value === 'archive-pin') return value
+    if (value === 'contribution-cache') return value
+    return archiveAllowed && !contributionAllowed ? 'archive-pin' : 'contribution-cache'
+  }
+
+  function retentionClassAllowed (retentionClass) {
+    if (retentionClass === 'archive-pin') {
+      return archiveAllowed && archiveUploadCeilingBytes > 0
+    }
+    return contributionAllowed && contributionUploadCeilingBytes > 0
+  }
+
+  function scopeUploadRetentionClass (scope) {
+    const retentionClasses = scope?.retentionClasses instanceof Set
+      ? scope.retentionClasses
+      : new Set([normalizeRetentionClass(scope?.retentionClass)])
+    if (retentionClasses.has('contribution-cache') && retentionClassAllowed('contribution-cache')) return 'contribution-cache'
+    if (retentionClasses.has('archive-pin') && retentionClassAllowed('archive-pin')) return 'archive-pin'
+    return null
+  }
+
+  function scopeMayServe (scope) {
+    if (!uploadAllowed) return false
+    if (scope.purpose === 'asset') return scopeUploadRetentionClass(scope) !== null
+    if (scope.purpose === 'publisher') {
+      return scope.modes?.has?.('local') === true && scopeUploadRetentionClass(scope) !== null
+    }
+    return (scope.purpose === 'archive' || scope.purpose === 'archive-discovery') && archiveAllowed
+  }
+
+  function scopeMayAttach (scope) {
+    if (scope.purpose === 'publisher') {
+      return scope.modes.has('followed') || (scope.modes.has('local') && scopeUploadRetentionClass(scope) !== null)
+    }
+    if (scope.purpose === 'archive' || scope.purpose === 'archive-discovery') return archiveAllowed
+    return true
+  }
+
   function recordProtocolError (scope, peerId, error) {
     recentErrors.push({
       purpose: scope.purpose,
@@ -364,13 +403,7 @@ export function createScopedNetworkRuntime (options = {}) {
       }
       return scope.discovery
     }
-    const server = uploadAllowed && (
-      scope.purpose === 'asset' || scope.purpose === 'publisher'
-        ? contributionAllowed
-        : scope.purpose === 'archive' || scope.purpose === 'archive-discovery'
-          ? archiveAllowed
-          : false
-    )
+    const server = scopeMayServe(scope)
     const discovery = swarm.join(scope.topic, { server, client: true })
     scope.serverAnnounced = server
     scope.discovery = discovery
@@ -762,23 +795,24 @@ export function createScopedNetworkRuntime (options = {}) {
     tracked.assetResponses.set(range.transferId, responseState)
     let served = 0
     try {
-      if (!contributionAllowed || !uploadAllowed || !networkEnabled) {
+      const retentionClass = scopeUploadRetentionClass(scope)
+      if (!retentionClass || !networkEnabled) {
         sendAssetError(scope, tracked, range, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
         return
       }
       const core = await scope.assetSession.ready()
       for (let index = range.startBlock; index < range.endBlock; index++) {
-        if (!contributionAllowed || responseState.cancelled || scope.closed || tracked.closed ||
+        if (!scopeUploadRetentionClass(scope) || responseState.cancelled || scope.closed || tracked.closed ||
             responseState.policyEpoch !== networkPolicyEpoch) return
         const present = await core.has(index)
-        if (!contributionAllowed || responseState.cancelled || scope.closed || tracked.closed ||
+        if (!scopeUploadRetentionClass(scope) || responseState.cancelled || scope.closed || tracked.closed ||
             responseState.policyEpoch !== networkPolicyEpoch) return
         if (!present) continue
         const proof = await core.proof({
           block: { index, nodes: 0 },
           upgrade: { start: 0, length: scope.assetSession.coreRef.length },
         })
-        if (!contributionAllowed || responseState.cancelled || scope.closed || tracked.closed ||
+        if (!scopeUploadRetentionClass(scope) || responseState.cancelled || scope.closed || tracked.closed ||
             responseState.policyEpoch !== networkPolicyEpoch) return
         const value = proof?.block?.value
         if (!b4a.isBuffer(value) || proof.block.index !== index ||
@@ -787,7 +821,7 @@ export function createScopedNetworkRuntime (options = {}) {
         }
         const proofBytes = encodeAssetProof(index, proof, value)
         const reservation = responseState.policyEpoch === networkPolicyEpoch
-          ? reservePolicyUpload('contribution-cache', value.byteLength)
+          ? reservePolicyUpload(retentionClass, value.byteLength)
           : null
         if (!reservation) {
           const current = !responseState.cancelled && !scope.closed && !tracked.closed &&
@@ -1422,7 +1456,9 @@ export function createScopedNetworkRuntime (options = {}) {
     if (scope.purpose === 'bootstrap') return { status: 'authorized', action: 'metadata-only' }
     if (scope.purpose === 'publisher') {
       if (!scope.binding?.catalog || (!scope.modes.has('followed') && !scope.modes.has('local'))) return { status: 'rejected', reason: 'publisher-not-followed' }
-      if (scope.modes.has('local') && !contributionAllowed) return { status: 'rejected', reason: 'contribution-policy-disabled' }
+      if (scope.modes.has('local') && !scope.modes.has('followed') && !scopeMayServe(scope)) {
+        return { status: 'rejected', reason: 'publisher-serving-policy-disabled' }
+      }
       if (connection) {
         attachCatalogReplication(scope, connection, tracked)
         counters.openedCatalogs++
@@ -1430,7 +1466,6 @@ export function createScopedNetworkRuntime (options = {}) {
       return { status: 'authorized', action: 'catalog', publisherId: scope.publisherId }
     }
     if (scope.purpose === 'asset') {
-      if (!contributionAllowed) return { status: 'rejected', reason: 'contribution-policy-disabled' }
       if (!scope.assetSession || !scope.coreKey) return { status: 'rejected', reason: 'core-not-authorized' }
       if (requestedCoreKey && hex32(requestedCoreKey, 'requestedCoreKey') !== scope.coreKey) return { status: 'rejected', reason: 'core-not-authorized' }
       return { status: 'authorized', action: 'retained-range', coreKey: scope.coreKey, range: { ...scope.range } }
@@ -1466,6 +1501,7 @@ export function createScopedNetworkRuntime (options = {}) {
 
   function attachScope (scope, connection, info) {
     if (!networkEnabled || scope.closed || scope.purpose === 'index' || connection?.destroyed === true) return
+    if (!scopeMayAttach(scope)) return
     const remoteKey = connectionKey(connection, info)
     if (!remoteKey) return
     const existing = scope.sessions.get(remoteKey)
@@ -1795,7 +1831,7 @@ export function createScopedNetworkRuntime (options = {}) {
     for (const [connection, info] of activeConnections) {
       if (info?.client === false) continue
       for (const scope of scopes.values()) {
-        if (scope.purpose !== 'index') attachScope(scope, connection, info)
+        if (scope.purpose !== 'index' && scopeMayAttach(scope)) attachScope(scope, connection, info)
       }
     }
     await Promise.all([...scopes.values()].map(scope => pumpArchiveSessions(scope)))
@@ -1832,6 +1868,8 @@ export function createScopedNetworkRuntime (options = {}) {
     const wasUploadAllowed = uploadAllowed
     const wasContributionAllowed = contributionAllowed
     const wasArchiveAllowed = archiveAllowed
+    const wasContributionUploadCeilingBytes = contributionUploadCeilingBytes
+    const wasArchiveUploadCeilingBytes = archiveUploadCeilingBytes
     networkEnabled = policy.networkEnabled !== false
     uploadPermission = nextUploadPermission
     uploadCeilingBytes = nextUploadCeilingBytes
@@ -1847,15 +1885,22 @@ export function createScopedNetworkRuntime (options = {}) {
     if (wasPublicServingAllowed !== publicServingAllowed ||
         wasUploadAllowed !== uploadAllowed ||
         wasContributionAllowed !== contributionAllowed ||
-        wasArchiveAllowed !== archiveAllowed) {
+        wasArchiveAllowed !== archiveAllowed ||
+        wasContributionUploadCeilingBytes !== contributionUploadCeilingBytes ||
+        wasArchiveUploadCeilingBytes !== archiveUploadCeilingBytes) {
       await Promise.allSettled([...scopes.values()].map(async scope => {
-        const contributionScope = scope.purpose === 'asset' || scope.purpose === 'publisher'
+        const contributionScope = (scope.purpose === 'asset' || scope.purpose === 'publisher') &&
+          scope.retentionClasses?.has?.('contribution-cache')
+        const retainedArchiveScope = (scope.purpose === 'asset' || scope.purpose === 'publisher') &&
+          scope.retentionClasses?.has?.('archive-pin')
         const archiveScope = scope.purpose === 'archive' || scope.purpose === 'archive-discovery'
         if ((contributionScope && (
           wasContributionAllowed !== contributionAllowed ||
+          wasContributionUploadCeilingBytes !== contributionUploadCeilingBytes ||
           wasUploadAllowed !== uploadAllowed
-        )) || (archiveScope && (
+        )) || ((archiveScope || retainedArchiveScope) && (
           wasArchiveAllowed !== archiveAllowed ||
+          wasArchiveUploadCeilingBytes !== archiveUploadCeilingBytes ||
           wasUploadAllowed !== uploadAllowed
         ))) {
           for (const peerId of [...scope.sessions.keys()]) {
@@ -2125,12 +2170,20 @@ export function createScopedNetworkRuntime (options = {}) {
     return { status: 'unfollowed', publisherId: id, released }
   }
 
-  async function publishLocalPublisherCatalog ({ publisherId } = {}) {
-    if (!contributionAllowed || !uploadAllowed) fail('explicit contribution upload permission is required')
+  async function publishLocalPublisherCatalog ({ publisherId, retentionClass: requestedRetentionClass } = {}) {
+    const retentionClass = normalizeRetentionClass(requestedRetentionClass)
+    if (!retentionClassAllowed(retentionClass) || !uploadAllowed) {
+      fail(`explicit ${retentionClass} upload permission is required`)
+    }
     if (status !== 'active') fail('runtime is not active')
     const id = hex32(publisherId, 'publisherId')
     const existing = localPublishers.get(id)
-    if (existing) return { ...existing.result, status: 'already-published' }
+    if (existing) {
+      existing.scope.retentionClasses ??= new Set()
+      existing.scope.retentionClasses.add(retentionClass)
+      await rejoinScopeDiscovery(existing.scope)
+      return { ...existing.result, status: 'already-published' }
+    }
     if (!catalogRegistry?.resolve) fail('catalog registry is unavailable')
     const binding = await catalogRegistry.resolve(b4a.from(id, 'hex'))
     await binding.catalog?.ready?.()
@@ -2147,7 +2200,18 @@ export function createScopedNetworkRuntime (options = {}) {
     if (b4a.toString(descriptor.publisherId, 'hex') !== id) fail('local catalog namespace mismatch')
     if (hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey') !== b4a.toString(descriptor.catalogBootstrapKey, 'hex')) fail('local catalog binding mismatch')
     const topic = derivePublisherTopic({ protocolMajor, publisherId: id, catalogEpoch: descriptor.catalogEpoch })
-    const { scope } = joinScope({ purpose: 'publisher', topic, scopeId: id, mode: 'local', publisherId: id, descriptor, binding })
+    const { scope } = joinScope({
+      purpose: 'publisher',
+      topic,
+      scopeId: id,
+      mode: 'local',
+      publisherId: id,
+      descriptor,
+      binding,
+      retentionClasses: new Set([retentionClass]),
+    })
+    scope.retentionClasses ??= new Set()
+    scope.retentionClasses.add(retentionClass)
     const result = { status: 'published', publisherId: id, catalogBootstrapKey: hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey'), topic: stableScopeDiagnostic(scope) }
     localPublishers.set(id, { scope, result })
     return result
@@ -2176,9 +2240,11 @@ export function createScopedNetworkRuntime (options = {}) {
     manifest,
     renditionId,
     ownerId: requestedOwnerId,
+    retentionClass: requestedRetentionClass,
     start = 0,
     end = null,
   } = {}) {
+    const retentionClass = normalizeRetentionClass(requestedRetentionClass)
     if (status !== 'active') fail('runtime is not active')
     const id = String(renditionId || '')
     const ownerId = String(requestedOwnerId || manifest?.publicationId || id)
@@ -2204,6 +2270,8 @@ export function createScopedNetworkRuntime (options = {}) {
         if (existingOwner.range.start !== range.start || existingOwner.range.end !== range.end) {
           fail('retention owner already has a different authorization range')
         }
+        existing.scope.retentionClasses ??= new Set()
+        existing.scope.retentionClasses.add(retentionClass)
         return { ...existing.result, ownerId, range: { ...range }, status: 'already-retained' }
       }
       const mode = `retained:${id}:${ownerId}`
@@ -2213,6 +2281,8 @@ export function createScopedNetworkRuntime (options = {}) {
         scopeId: coreRef.assetId,
         mode,
       })
+      existing.scope.retentionClasses ??= new Set()
+      existing.scope.retentionClasses.add(retentionClass)
       existing.scope.assetAuthorizations.set(
         assetAuthorizationId(id, ownerId),
         { manifest, renditionId: id, range: { ...range } },
@@ -2234,6 +2304,8 @@ export function createScopedNetworkRuntime (options = {}) {
     let scope = sharedScope
     if (scope) {
       joinScope({ purpose: 'asset', topic, scopeId: coreRef.assetId, mode })
+      scope.retentionClasses ??= new Set()
+      scope.retentionClasses.add(retentionClass)
       scope.assetAuthorizations.set(
         assetAuthorizationId(id, ownerId),
         { manifest, renditionId: id, range: { ...range } },
@@ -2262,6 +2334,7 @@ export function createScopedNetworkRuntime (options = {}) {
           range,
           assetSession,
           assetRequests: new Map(),
+          retentionClasses: new Set([retentionClass]),
           assetAuthorizations: new Map([[
             assetAuthorizationId(id, ownerId),
             { manifest, renditionId: id, range: { ...range } },

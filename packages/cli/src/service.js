@@ -226,12 +226,16 @@ export async function createRelayService({
 
   async function persistStatus() {
     const [runtimeStats, ingestStatus] = await Promise.all([
-      typeof runtime.getDiagnostics === 'function' ? runtime.getDiagnostics() : {},
-      ingestManager?.getStatus?.().catch(() => ({
-        jobsByState: {},
-        activeAcquisitions: 0,
-        lastErrors: ['INGEST_STATUS_UNAVAILABLE']
-      })) || {}
+      Promise.resolve()
+        .then(() => typeof runtime.getDiagnostics === 'function' ? runtime.getDiagnostics() : {})
+        .catch(() => ({ network: { lastErrors: ['RUNTIME_STATUS_UNAVAILABLE'] } })),
+      Promise.resolve()
+        .then(() => ingestManager?.getStatus?.() || {})
+        .catch(() => ({
+          jobsByState: {},
+          activeAcquisitions: 0,
+          lastErrors: ['INGEST_STATUS_UNAVAILABLE']
+        }))
     ])
     currentStatus = buildRelayStatus({
       config,
@@ -653,13 +657,15 @@ export async function createRelayService({
 
 
       const status = await persistStatus()
+      const networkStatus = status.network || {}
+      const publicWorkStatus = status.publicWork || {}
       logger.relay.info('Relay started', {
-        peers: status.runtime.network?.peers || 0,
-        connections: status.runtime.network?.connections || 0,
-        publisherCatalogs: status.runtime.publisher?.catalogs || 0,
-        bootstrapLocators: status.runtime.bootstrap?.locators || 0,
-        retainedRenditions: status.runtime.assets?.retainedRenditions || 0,
-        archivedChannels: status.summary.totalChannels
+        peers: networkStatus.peers || 0,
+        connections: networkStatus.connections || 0,
+        activeAnnouncements: publicWorkStatus.activeAnnouncements || 0,
+        activeUploads: publicWorkStatus.activeUploads || 0,
+        activeAcquisitions: publicWorkStatus.activeAcquisitions || 0,
+        archivedChannels: status.summary?.totalChannels || 0
       })
 
       // Reconcile completed archives against authenticated publisher catalogs
@@ -708,7 +714,7 @@ export async function createRelayService({
         try {
           await syncCreators()
           const heartbeatStatus = await persistStatus()
-          const network = heartbeatStatus.runtime.network || {}
+          const network = heartbeatStatus.network || {}
           if ((network.peers || 0) > 0 && (network.connections || 0) === 0) {
             logger.status.warn('Relay discovered peers without sockets', {
               peers: network.peers,
@@ -728,15 +734,14 @@ export async function createRelayService({
               offlineReason: network.offlineReason || null
             })
           }
+          const publicWork = heartbeatStatus.publicWork || {}
           logger.status.info('Relay heartbeat', {
             peers: network.peers || 0,
             connections: network.connections || 0,
-            publisherCatalogs: heartbeatStatus.runtime.publisher?.catalogs || 0,
-            followedPublishers: heartbeatStatus.runtime.publisher?.followed || 0,
-            bootstrapLocators: heartbeatStatus.runtime.bootstrap?.locators || 0,
-            retainedRenditions: heartbeatStatus.runtime.assets?.retainedRenditions || 0,
-            activeArchivePledges: heartbeatStatus.runtime.archive?.activePledgeCount || 0,
-            activeSeeds: heartbeatStatus.runtime.seedRetention?.activeSeeds || 0
+            activeAnnouncements: publicWork.activeAnnouncements || 0,
+            activeUploads: publicWork.activeUploads || 0,
+            uploadedBytes: publicWork.uploadedBytes || 0,
+            activeAcquisitions: publicWork.activeAcquisitions || 0
           })
         } catch (err) {
           logger.status.error('Relay heartbeat failed', {

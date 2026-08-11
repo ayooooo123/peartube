@@ -116,3 +116,24 @@ test('strong archive seed class survives watched merge and archive budget alone 
   t.is(status.activeContributionSeeds, 0, 'archive pin is not reclassified into contribution cache')
   t.is(cleared.length, 1, 'evicted archive bytes are released once')
 })
+
+test('generic seed removal cannot release an archive pin', async (t) => {
+  const manager = new SeedingManager(createStore(), createMetaDb(), { storageMaintenanceDelayMs: 0 })
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: false,
+    archiveEnabled: true,
+    contributionBudgetBytes: 0,
+    archiveBudgetBytes: 100,
+    migrationRequired: false
+  })
+  await manager.addSeed('drive-archive', 'video-pin', 'archive', {
+    byteLength: 40,
+    blobId: '0:1:0:40',
+    blobsCoreKey: 'ac'.repeat(32)
+  }, { authorized: true })
+
+  t.absent(await manager.removeSeed('drive-archive', 'video-pin'), 'generic removal preserves archive custody')
+  t.is((await manager.getStatus()).activeArchivePins, 1)
+  t.ok(await manager.removeArchivePin('drive-archive', 'video-pin'), 'explicit archive removal releases the pin')
+  t.is((await manager.getStatus()).activeArchivePins, 0)
+})

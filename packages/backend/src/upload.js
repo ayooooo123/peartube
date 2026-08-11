@@ -533,6 +533,7 @@ async function finalizeAcceptedPublication(metadata, runtime = {}) {
       manifest: publication.manifest,
       renditionId: publication.renditionId,
       ownerId: publication.publicationId,
+      retentionClass: runtime.retentionClass,
       start: 0,
       end: rendition.core.length,
     });
@@ -542,6 +543,7 @@ async function finalizeAcceptedPublication(metadata, runtime = {}) {
   }
   const announcement = await runtime.scopedNetwork?.publishLocalPublisherCatalog?.({
     publisherId: publication.publisherId,
+    retentionClass: runtime.retentionClass,
   });
   if (announcement?.status && announcement.status !== 'published') {
     throw new Error('publisher catalog was not announced');
@@ -897,6 +899,7 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
  * @property {string} [thumbnailBlobsCoreKey] - Thumbnail blobs core key
  * @property {string} [thumbnailMimeType] - Thumbnail MIME type
  * @property {string} [category] - Video category
+ * @property {'contribution-cache'|'archive-pin'} [retentionClass] - Explicit retention role for public serving
  * @property {number} [width] - Video width in pixels
  * @property {number} [height] - Video height in pixels
  * @property {string} [contentKind] - Structured content kind
@@ -1036,6 +1039,7 @@ export function createUploadManager({
         const metadata = normalizeVideoMetadata(options, videoId);
         const uploadControl = {
           publisherId: options.publisherId,
+          retentionClass: options.retentionClass,
           signal: options.signal
         };
         assertUploadNotCancelled(uploadControl.signal);
@@ -1218,6 +1222,7 @@ export function createUploadManager({
         const metadata = normalizeVideoMetadata(options, videoId);
         const uploadControl = {
           publisherId: options.publisherId,
+          retentionClass: options.retentionClass,
           signal: options.signal
         };
         assertUploadNotCancelled(uploadControl.signal);

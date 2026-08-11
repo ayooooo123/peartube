@@ -8,7 +8,6 @@ import { signControlRequest } from './auth.js'
 const SOURCE_PREFIX = '/internal/peartube/v2/sources/'
 const CAPABILITY = /^[A-Za-z0-9._~-]{16,256}$/
 const CLIENT = /^[A-Za-z0-9._-]{1,128}$/
-const ETAG = /^"[^"\u0000-\u001f\u007f]{1,254}"$/
 const MIME_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$/
 const DEFAULT_CHUNK_BYTES = 4 * 1024 * 1024
 const DEFAULT_TIMEOUT_MS = 20_000
@@ -25,6 +24,18 @@ export class SourceCallbackError extends Error {
 
 function fail (code, recoverable = true) {
   throw new SourceCallbackError(code, recoverable)
+}
+
+function validETag (value) {
+  if (typeof value !== 'string' || value.length < 3 || value.length > 256 ||
+      value.charCodeAt(0) !== 0x22 || value.charCodeAt(value.length - 1) !== 0x22) {
+    return false
+  }
+  for (let index = 1; index < value.length - 1; index++) {
+    const code = value.charCodeAt(index)
+    if (code === 0x22 || code <= 0x1f || code === 0x7f) return false
+  }
+  return true
 }
 
 function normalizedOrigin (value) {
@@ -213,7 +224,7 @@ export function createSourceCallbackClient ({
     if (!Number.isSafeInteger(length) || length < 1 || length > MAX_SOURCE_BYTES) {
       fail('SOURCE_LENGTH_MISMATCH', false)
     }
-    if (!ETAG.test(etag || '')) fail('SOURCE_ETAG_MISMATCH', false)
+    if (!validETag(etag)) fail('SOURCE_ETAG_MISMATCH', false)
     const path = requestPath(capability)
     return open({
       method: 'HEAD',
@@ -239,7 +250,7 @@ export function createSourceCallbackClient ({
   }
 
   async function getRange ({ capability, jobId, etag, length, start, end, onChunk, signal = null }) {
-    if (!ETAG.test(etag || '')) fail('SOURCE_ETAG_MISMATCH', false)
+    if (!validETag(etag)) fail('SOURCE_ETAG_MISMATCH', false)
     if (!Number.isSafeInteger(length) || length < 1 || length > MAX_SOURCE_BYTES ||
         !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end >= length ||
         end - start + 1 > chunkBytes || typeof onChunk !== 'function') {

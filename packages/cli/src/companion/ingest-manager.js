@@ -60,7 +60,7 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const NAMESPACE = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/
 const TOKEN = /^[a-z0-9][a-z0-9._+-]{0,63}$/
 const MIME_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$/
-const LOCATOR = /^(?:[a-z][a-z0-9+.-]*:(?:\/\/)?|\/\/)/i
+const LOCATOR = /^(?:[a-z][a-z0-9+.-]*:(?=\S)|\/\/)/i
 const SENSITIVE_FIELD = /(?:url|uri|href|link|magnet|cookie|authorization|credential|secret|password|passkey|debrid|headers?|capability|spool|localpath|filepath|torrentfile|privateinfohash|tracker(?:url|id|announce)?)/i
 const SENSITIVE_VALUE = /(?:[a-z][a-z0-9+.-]*:\/\/|\bmagnet:|\b(?:passkey|authkey|torrent[_-]?pass|private[_-]?infohash|tracker(?:url|id))\s*[:=])/i
 const MAX_SAFE_MEDIA_BYTES = 5 * 1024 * 1024 * 1024
@@ -963,6 +963,21 @@ export function createIngestManager ({
           let spoolAdopted = false
           let capabilityAdopted = false
           try {
+            if (existing.state === 'failed' && existing.recoverable === true && (spool != null || incomingCapability)) {
+              const settling = active.get(existing.jobId)
+              if (settling) {
+                // The old run owns its attachment through async revocation and
+                // cleanup. Wait until its finalizer and active-map deletion
+                // finish before a fresh capability can be attached.
+                await settling.promise.catch(() => {})
+                assertSubmissionActive(signal)
+                existing = await store.findByIdempotency(idempotencyDigest)
+                if (!existing) fail('INGEST_PERSISTENCE_CORRUPT', 'idempotent ingest job disappeared', 500)
+                if (existing.requestFingerprint !== fingerprint) {
+                  fail('IDEMPOTENCY_CONFLICT', 'idempotency key is already bound to another request', 409)
+                }
+              }
+            }
             if (spool != null) incomingSpool = normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
             if (existing.state === 'failed' && existing.recoverable === true && (incomingSpool || incomingCapability)) {
               existing = await store.reopenRecoverable(existing.jobId, {

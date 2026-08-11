@@ -113,6 +113,10 @@ function callbackServer (t, bytes, behavior = {}) {
   let releaseHold = null
   const held = new Promise(resolve => { holdResponse = resolve })
   const gate = new Promise(resolve => { releaseHold = resolve })
+  let holdDeleteResponse = null
+  let releaseDeleteHold = null
+  const deleteHeld = new Promise(resolve => { holdDeleteResponse = resolve })
+  const deleteGate = new Promise(resolve => { releaseDeleteHold = resolve })
   const server = createServer(async (request, response) => {
     const path = request.url
     const capability = decodeURIComponent(path.split('/').pop())
@@ -138,6 +142,10 @@ function callbackServer (t, bytes, behavior = {}) {
     }
     if (request.method === 'DELETE') {
       calls.deletes.push(capability)
+      if (behavior.holdDelete) {
+        holdDeleteResponse()
+        await deleteGate
+      }
       response.writeHead(204).end()
       return
     }
@@ -198,7 +206,9 @@ function callbackServer (t, bytes, behavior = {}) {
     server,
     calls,
     held,
+    deleteHeld,
     release: () => releaseHold(),
+    releaseDelete: () => releaseDeleteHold(),
     async origin () { return listen(server) }
   }
 }
@@ -239,19 +249,28 @@ async function waitForState (manager, jobId, state) {
   throw new Error(`job ${jobId} did not reach ${state}`)
 }
 
+async function waitForDurableState (store, jobId, state) {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const job = await store.getJob(jobId)
+    if (job?.state === state) return job
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  throw new Error(`durable job ${jobId} did not reach ${state}`)
+}
+
 test('production MediaStorm handler key shares canonical nested Unicode ingest identity bytes', (t) => {
   const request = {
     retentionClass: 'archive-pin',
     mediaContext: { namespace: 'tmdb', identifier: '603', kind: 'movie' },
     measuredFacts: {
       durationMs: 7_200_000,
-      title: 'Café <>& \u2028 \u2029 / \\ \"',
+      title: 'Café <>& \u2028 \u2029 / \\ "',
       container: 'mkv',
       byteLength: 12
     },
     expected: {
       sha256: 'ab'.repeat(32),
-      etag: '\"source-immutable-v1\"',
+      etag: '"source-immutable-v1"',
       byteLength: 12
     },
     bundleProvenance: {
@@ -268,6 +287,25 @@ test('production MediaStorm handler key shares canonical nested Unicode ingest i
   t.is(ingestJobIdForRequest(idempotencyKey, request), 'ing_f8fe3828098633aca86ba6cf16eba692')
   const productionHandlerKey = 'mediastorm-v1_41e3f4eca5fe977d4cf54af8b70e45ddb536fa6c463777947d0598c72157b025'
   t.is(ingestJobIdForRequest(productionHandlerKey, request), 'ing_5395d7396d3d186ed35148b3f123d6ec')
+  const titleVectors = [
+    ['Alien: Covenant', '7c44c2de36d8d1321ddfebf40eed7ce920781d7e75ab4bf1e3d5a36f2afc52ad', 'ing_e6f968c0d313415764791cb0b74cf390'],
+    ['Cars: The Movie', 'b64b733743df6c57b202e38219c8fb29964b5ca0c57b6650a7577e9cdc46447a', 'ing_a7417b2161a2ec2dfc9bb71976eb310f']
+  ]
+  for (const [title, fingerprint, jobId] of titleVectors) {
+    const titledRequest = {
+      ...request,
+      measuredFacts: { ...request.measuredFacts, title }
+    }
+    t.is(fingerprintIngestRequest(titledRequest), fingerprint)
+    t.is(ingestJobIdForRequest(idempotencyKey, titledRequest), jobId)
+  }
+  for (const title of ['https://private.invalid/a', 'magnet:?xt=urn:btih:abc', 'file:/private/a', 'C:\\private\\a.mkv']) {
+    const locatorRequest = {
+      ...request,
+      measuredFacts: { ...request.measuredFacts, title }
+    }
+    t.exception(() => fingerprintIngestRequest(locatorRequest), /INGEST_REQUEST_INVALID/)
+  }
 })
 
 test('source capability acquisition resumes the same recoverable job and publishes exactly once', async (t) => {
@@ -310,6 +348,53 @@ test('source capability acquisition resumes the same recoverable job and publish
   }
 })
 
+test('fresh recovery waits for the failed run finalizer before attaching and scheduling', async (t) => {
+  const bytes = Buffer.from('abcdefghijkl')
+  let jobId = null
+  const callback = callbackServer(t, bytes, {
+    shortOnce: true,
+    holdDelete: true,
+    jobId: () => jobId
+  })
+  const origin = await callback.origin()
+  const { manager, publisher, store } = harness(t, { client: sourceClient(origin) })
+  t.teardown(() => manager.close())
+  await manager.start()
+
+  const request = movieRequest(bytes)
+  const firstCapability = 'source-capability-race-first-00000000000000001'
+  const first = await manager.submitJob({
+    idempotencyKey: 'source-finalizer-race',
+    request,
+    sourceCapability: firstCapability
+  })
+  jobId = first.jobId
+  const failed = await waitForDurableState(store, jobId, 'failed')
+  t.is(failed.recoverable, true)
+  await callback.deleteHeld
+
+  const freshCapability = 'source-capability-race-fresh-00000000000000001'
+  let replaySettled = false
+  const replayPromise = manager.submitJob({
+    idempotencyKey: 'source-finalizer-race',
+    request,
+    sourceCapability: freshCapability
+  }).then(job => {
+    replaySettled = true
+    return job
+  })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  t.is(replaySettled, false, 'recovery waits while the old finalizer owns the attachment')
+  callback.releaseDelete()
+
+  const replay = await replayPromise
+  t.is(replay.jobId, jobId)
+  const completed = await waitForState(manager, jobId, 'completed')
+  t.is(completed.jobId, jobId)
+  t.is(publisher.calls.imports, 1)
+  t.ok(callback.calls.heads.includes(freshCapability))
+})
+
 test('source callback HEAD requires a bounded durable expected length', async (t) => {
   const client = sourceClient('http://127.0.0.1:1')
   for (const length of [undefined, 0, Number.MAX_SAFE_INTEGER]) {
@@ -320,6 +405,15 @@ test('source callback HEAD requires a bounded durable expected length', async (t
       length
     }).then(() => null, value => value)
     t.is(error?.code, 'SOURCE_LENGTH_MISMATCH')
+  }
+  for (const etag of [undefined, '""', '"line\nbreak"', '"inner"quote"', 'unquoted']) {
+    const error = await client.head({
+      capability: 'source-capability-invalid-etag-0000000000001',
+      jobId: 'ing_invalid_etag',
+      etag,
+      length: 12
+    }).then(() => null, value => value)
+    t.is(error?.code, 'SOURCE_ETAG_MISMATCH')
   }
 })
 
@@ -406,7 +500,7 @@ test('cancellation aborts acquisition, revokes the grant, and removes partial st
   t.is(cancelled.state, 'cancelled')
   t.ok(callback.calls.deletes.includes(capability))
   let entries = []
-  try { entries = readdirSync(join(root, 'spool', 'sources')) } catch {}
+  try { entries = readdirSync(join(root, 'spool', 'sources')) } catch { entries = [] }
   t.alike(entries, [])
 })
 

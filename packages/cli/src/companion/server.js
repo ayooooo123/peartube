@@ -503,6 +503,9 @@ export function createCompanionServer ({
         httpServer = null
         throw error
       }
+      }).catch(error => {
+        router.capabilities.clear()
+        throw error
       })
       startPromise = pending
       void pending.then(

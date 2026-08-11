@@ -216,3 +216,36 @@ test('server shutdown clears capabilities and duplicate close is safe', async (t
   t.is(capabilities.size, 0)
   t.is(errorCode(() => capabilities.consume(grant.token, scope({ method: 'GET', methods: undefined }))), 'CAPABILITY_INVALID')
 })
+
+test('failed server creation clears live capabilities before retry', async (t) => {
+  const capabilities = createStreamCapabilityStore({
+    now: () => NOW,
+    randomBytes: () => b4a.alloc(32, 12)
+  })
+  const grant = capabilities.issue(scope())
+  let attempts = 0
+  const server = createCompanionServer({
+    service: {},
+    config: {
+      enabled: true,
+      transport: 'tcp',
+      host: '127.0.0.1',
+      port: 0,
+      sharedSecret: 'a'.repeat(64)
+    },
+    clock: () => NOW,
+    capabilities,
+    createServer () {
+      attempts++
+      throw new Error('server factory failed')
+    }
+  })
+
+  await t.exception(server.start(), /server factory failed/)
+  t.is(capabilities.size, 0)
+  t.is(errorCode(() => capabilities.consume(grant.token, scope({ method: 'GET', methods: undefined }))), 'CAPABILITY_INVALID')
+
+  await t.exception(server.start(), /server factory failed/)
+  t.is(attempts, 2)
+  t.is(errorCode(() => capabilities.consume(grant.token, scope({ method: 'GET', methods: undefined }))), 'CAPABILITY_INVALID')
+})

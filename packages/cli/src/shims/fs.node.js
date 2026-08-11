@@ -2,6 +2,7 @@ export {
   closeSync,
   chmodSync,
   createReadStream,
+  fsyncSync,
   existsSync,
   mkdirSync,
   openSync,

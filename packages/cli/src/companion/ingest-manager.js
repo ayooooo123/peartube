@@ -45,6 +45,12 @@ const BUNDLE_FIELDS = new Set([
   'publicTrackerIndependent',
   'publicInfohash'
 ])
+const SOURCE_RESET_PROGRESS_ERRORS = new Set([
+  'HASH_MISMATCH',
+  'SOURCE_PROGRESS_MISSING',
+  'SOURCE_PROGRESS_INVALID',
+  'SPOOL_LENGTH_MISMATCH'
+])
 const SPOOL_FIELDS = new Set(['path', 'complete', 'mimeType', 'byteLength', 'sha256', 'etag'])
 const RETENTION_CLASSES = new Set(['contribution-cache', 'archive-pin'])
 const SOURCE_KINDS = new Set(['public-torrent', 'release', 'folder', 'archive'])
@@ -321,12 +327,26 @@ function hashHex (domain, value) {
   return b4a.toString(crypto.hash(b4a.from(`${domain}\u0000${value}`)), 'hex')
 }
 
+export function canonicalIngestRequest (request) {
+  return canonicalize(normalizeIngestRequest(request))
+}
+
 export function fingerprintIngestRequest (request) {
-  return hashHex('peartube.companion.ingest.request.v1', canonicalize(normalizeIngestRequest(request)))
+  return hashHex('peartube.companion.ingest.request.v1', canonicalIngestRequest(request))
 }
 
 function normalizedFingerprint (request) {
   return hashHex('peartube.companion.ingest.request.v1', canonicalize(request))
+}
+
+function jobIdFor (idempotencyKey, fingerprint) {
+  return `ing_${hashHex('peartube.companion.ingest.job.v1', `${idempotencyKey}\u0000${fingerprint}`).slice(0, 32)}`
+}
+
+export function ingestJobIdForRequest (idempotencyKey, request) {
+  const key = text(idempotencyKey, 'idempotencyKey', 128, { pattern: ID })
+  const normalized = normalizeIngestRequest(request)
+  return jobIdFor(key, normalizedFingerprint(normalized))
 }
 
 function publicJob (job) {
@@ -463,6 +483,7 @@ export function createIngestManager ({
   spoolRoot,
   fs = defaultFs,
   path = defaultPath,
+  sourceClient = null,
   canIngest = () => true,
   verifyChunkBytes = 256 * 1024,
   now = () => Date.now(),
@@ -476,11 +497,21 @@ export function createIngestManager ({
   if (!Number.isSafeInteger(verifyChunkBytes) || verifyChunkBytes < 1 || verifyChunkBytes > 1024 * 1024) {
     throw new TypeError('verifyChunkBytes must be between 1 and 1048576')
   }
+  if (sourceClient != null && (
+    typeof sourceClient.head !== 'function' ||
+    typeof sourceClient.getRange !== 'function' ||
+    typeof sourceClient.revoke !== 'function' ||
+    !Number.isSafeInteger(sourceClient.chunkBytes) ||
+    sourceClient.chunkBytes < 1
+  )) {
+    throw new TypeError('sourceClient must implement bounded source callbacks')
+  }
 
   const ephemeral = new Map()
   const active = new Map()
   let started = false
   let closing = false
+  const sourceSpoolRoot = path.join(spoolRoot, 'sources')
   let closed = false
 
   let mutations = Promise.resolve()
@@ -494,9 +525,6 @@ export function createIngestManager ({
   function assertSubmissionActive (signal) {
     if (closed || closing) fail('INGEST_MANAGER_CLOSED', 'ingest manager is closed', 503)
     if (signal?.aborted) fail('CANCELLED', 'ingest submission was cancelled', 499)
-  }
-  function jobIdFor (idempotencyKey, fingerprint) {
-    return `ing_${hashHex('peartube.companion.ingest.job.v1', `${idempotencyKey}\u0000${fingerprint}`).slice(0, 32)}`
   }
 
   function buildJob (idempotencyKey, idempotencyDigest, request, fingerprint) {
@@ -551,10 +579,33 @@ export function createIngestManager ({
     if (lease == null) cleanupSpool(spool, jobId)
   }
 
-  function cleanupAttachment (jobId) {
+  function sourceSpool (jobId) {
+    const relativePath = `sources/${jobId}.part`
+    return { relativePath, filePath: path.join(sourceSpoolRoot, `${jobId}.part`) }
+  }
+
+  function cleanupAttachment (jobId, { preserveSource = false } = {}) {
     const attachment = ephemeral.get(jobId)
     ephemeral.delete(jobId)
-    cleanupSpool(attachment?.spool, jobId)
+    const source = attachment?.sourceSpool
+    if (!preserveSource && source?.filePath && source.filePath !== attachment?.spool?.filePath) {
+      cleanupSpool(source, jobId)
+    }
+    if (!(preserveSource && source?.filePath === attachment?.spool?.filePath)) {
+      cleanupSpool(attachment?.spool, jobId)
+    }
+  }
+
+  async function revokeAttachmentSource (jobId, attachment = ephemeral.get(jobId)) {
+    if (!sourceClient || !attachment?.sourceCapability) return
+    try {
+      await sourceClient.revoke({ capability: attachment.sourceCapability, jobId })
+    } catch (error) {
+      logger?.archive?.warn?.('Companion source grant revocation failed', {
+        jobId,
+        errorCode: ERROR_CODE.test(error?.code || '') ? error.code : 'SOURCE_REVOKE_FAILED'
+      })
+    }
   }
 
   async function channelFor (job) {
@@ -626,6 +677,96 @@ export function createIngestManager ({
     }
     await exposePublication(job, channelInfo, metadata)
     return result
+  }
+
+  function writeSourceChunk (descriptor, chunk, position) {
+    let written = 0
+    while (written < chunk.byteLength) {
+      const count = fs.writeSync(
+        descriptor,
+        chunk,
+        written,
+        chunk.byteLength - written,
+        position + written
+      )
+      if (!Number.isSafeInteger(count) || count <= 0) fail('SOURCE_WRITE_FAILED', 'source staging write failed', 503)
+      written += count
+    }
+  }
+
+  async function acquireSource (job, attachment, signal) {
+    if (!sourceClient) fail('SOURCE_CALLBACK_UNAVAILABLE', 'source callback is unavailable', 503)
+    if (!attachment?.sourceCapability) fail('SOURCE_REATTACH_REQUIRED', 'source capability reattachment is required', 409)
+    const expectedETag = job.request.expected.etag
+    if (typeof expectedETag !== 'string') fail('SOURCE_ETAG_MISMATCH', 'source ETag is required')
+    const metadata = await sourceClient.head({
+      capability: attachment.sourceCapability,
+      jobId: job.jobId,
+      etag: expectedETag,
+      signal
+    })
+    if (metadata.length !== job.expectedBytes) fail('SOURCE_LENGTH_MISMATCH', 'source length does not match')
+    if (metadata.etag !== expectedETag) fail('SOURCE_ETAG_MISMATCH', 'source ETag does not match')
+
+    fs.mkdirSync(sourceSpoolRoot, { recursive: true })
+    const source = sourceSpool(job.jobId)
+    attachment.sourceSpool = source
+    let descriptor
+    if (job.bytesReceived === 0) {
+      fs.rmSync(source.filePath, { force: true })
+      descriptor = fs.openSync(source.filePath, 'w+', 0o600)
+    } else {
+      let stat
+      try {
+        stat = fs.statSync(source.filePath)
+      } catch {
+        fail('SOURCE_PROGRESS_MISSING', 'verified source progress is missing')
+      }
+      if (!stat.isFile?.() || stat.size < job.bytesReceived || stat.size > job.expectedBytes) {
+        fail('SOURCE_PROGRESS_INVALID', 'verified source progress is invalid')
+      }
+      descriptor = fs.openSync(source.filePath, 'r+')
+    }
+
+    let current = job
+    try {
+      while (current.bytesReceived < current.expectedBytes) {
+        if (signal?.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
+        const start = current.bytesReceived
+        const end = Math.min(start + sourceClient.chunkBytes, current.expectedBytes) - 1
+        await sourceClient.getRange({
+          capability: attachment.sourceCapability,
+          jobId: current.jobId,
+          etag: expectedETag,
+          length: current.expectedBytes,
+          start,
+          end,
+          signal,
+          onChunk: (chunk, rangeOffset) => writeSourceChunk(descriptor, chunk, start + rangeOffset)
+        })
+        if (signal?.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
+        fs.fsyncSync(descriptor)
+        current = await store.updateProgress(current.jobId, {
+          expectedVersion: current.version,
+          state: 'acquiring',
+          bytesReceived: end + 1
+        })
+      }
+    } finally {
+      fs.closeSync(descriptor)
+    }
+
+    const descriptorValue = {
+      path: source.relativePath,
+      complete: true,
+      mimeType: metadata.mimeType,
+      byteLength: current.expectedBytes,
+      etag: expectedETag
+    }
+    const spool = normalizeSpoolDescriptor(descriptorValue, current.request, { spoolRoot, fs, path })
+    attachment.descriptor = descriptorValue
+    attachment.spool = spool
+    return { job: current, spool }
   }
 
   async function verifySpool (job, spool, signal) {
@@ -702,13 +843,20 @@ export function createIngestManager ({
 
   async function runJob (jobId, entry) {
     let job = await store.getJob(jobId)
+    let attachment = ephemeral.get(jobId)
     try {
       if (!job || job.state !== 'queued') return job
-      const attachment = ephemeral.get(jobId)
-      if (!attachment?.spool) return job
+      if (!attachment?.spool && !attachment?.sourceCapability) return job
       if (!canIngest()) fail('STORAGE_ADMISSION_DENIED', 'storage admission denied', 507)
       job = await store.transition(jobId, { expectedVersion: job.version, from: 'queued', to: 'acquiring' })
-      const spool = normalizeSpoolDescriptor(attachment.descriptor, job.request, { spoolRoot, fs, path })
+      let spool
+      if (attachment.spool) {
+        spool = normalizeSpoolDescriptor(attachment.descriptor, job.request, { spoolRoot, fs, path })
+      } else {
+        const acquired = await acquireSource(job, attachment, entry.controller.signal)
+        job = acquired.job
+        spool = acquired.spool
+      }
       if (entry.controller.signal.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
       job = await store.transition(jobId, { expectedVersion: job.version, from: 'acquiring', to: 'verifying' })
       job = await verifySpool(job, spool, entry.controller.signal)
@@ -735,16 +883,28 @@ export function createIngestManager ({
       }
       if (cancelled) return await markTerminal(jobId, 'cancelled', 'CANCELLED', false)
       const code = publicationErrorCode(error, current?.state || job?.state)
+      const sourceRecoverable = Boolean(attachment?.sourceCapability) &&
+        (current?.state === 'acquiring' || current?.state === 'verifying' || current?.state === 'publishing')
       logger?.archive?.warn?.('Companion ingest job failed', { jobId, state: current?.state || null, errorCode: code })
-      return await markTerminal(jobId, 'failed', code, current?.state === 'publishing')
+      return await markTerminal(jobId, 'failed', code, sourceRecoverable || current?.state === 'publishing')
     } finally {
       const final = await store.getJob(jobId).catch(() => null)
-      if (closing || TERMINAL.has(final?.state)) cleanupAttachment(jobId)
+      attachment = ephemeral.get(jobId) || attachment
+      if (TERMINAL.has(final?.state)) {
+        await revokeAttachmentSource(jobId, attachment)
+        cleanupAttachment(jobId, {
+          preserveSource: final.state === 'failed' && final.recoverable === true && Boolean(attachment?.sourceSpool)
+        })
+      } else if (closing || entry.closing) {
+        await revokeAttachmentSource(jobId, attachment)
+        cleanupAttachment(jobId, { preserveSource: Boolean(attachment?.sourceSpool) })
+      }
     }
   }
 
   function schedule (jobId) {
-    if (!started || closing || active.has(jobId) || !ephemeral.get(jobId)?.spool) return
+    const attachment = ephemeral.get(jobId)
+    if (!started || closing || active.has(jobId) || (!attachment?.spool && !attachment?.sourceCapability)) return
     const entry = { controller: new AbortController(), cancelled: false, closing: false, promise: null }
     entry.promise = runJob(jobId, entry).finally(() => {
       if (active.get(jobId) === entry) active.delete(jobId)
@@ -792,28 +952,47 @@ export function createIngestManager ({
         const fingerprint = normalizedFingerprint(normalized)
         const idempotencyDigest = hashHex('peartube.companion.ingest.idempotency.v1', key)
 
-        const existing = await store.findByIdempotency(idempotencyDigest)
+        let existing = await store.findByIdempotency(idempotencyDigest)
         assertSubmissionActive(signal)
         if (existing) {
           if (existing.requestFingerprint !== fingerprint) fail('IDEMPOTENCY_CONFLICT', 'idempotency key is already bound to another request', 409)
-          const attached = ephemeral.get(existing.jobId)
+          const incomingCapability = normalizeSourceCapability(sourceCapability)
           let incomingSpool = null
           let spoolAccepted = false
           let spoolAdopted = false
+          let capabilityAdopted = false
           try {
-            const incomingCapability = normalizeSourceCapability(sourceCapability)
-            if (spool != null) {
-              incomingSpool = normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
-              if (!TERMINAL.has(existing.state) && !attached?.spool) {
+            if (spool != null) incomingSpool = normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
+            if (existing.state === 'failed' && existing.recoverable === true && (incomingSpool || incomingCapability)) {
+              existing = await store.reopenRecoverable(existing.jobId, {
+                expectedVersion: existing.version,
+                resetProgress: SOURCE_RESET_PROGRESS_ERRORS.has(existing.errorCode)
+              })
+            }
+            let attached = ephemeral.get(existing.jobId)
+            if (TERMINAL.has(existing.state)) {
+              if (incomingSpool) {
+                discardUnacceptedSpool(ingestSpoolLease, incomingSpool, existing.jobId)
+                incomingSpool = null
+              }
+              if (incomingCapability) await revokeAttachmentSource(existing.jobId, { sourceCapability: incomingCapability })
+              return publicJob(existing)
+            }
+            if (incomingSpool != null) {
+              if (!attached?.spool) {
                 // Lease acceptance, attachment, and scheduling are one synchronous ownership handoff.
                 assertSubmissionActive(signal)
                 acceptSpoolLease(ingestSpoolLease, incomingSpool)
                 spoolAccepted = true
-                ephemeral.set(existing.jobId, { ...attached, descriptor: spool, spool: incomingSpool, sourceCapability: attached?.sourceCapability || null })
+                ephemeral.set(existing.jobId, {
+                  ...attached,
+                  descriptor: spool,
+                  spool: incomingSpool,
+                  sourceCapability: attached?.sourceCapability || null
+                })
                 spoolAdopted = true
                 incomingSpool = null
-                schedule(existing.jobId)
-              } else if (incomingSpool.filePath === attached?.spool?.filePath) {
+              } else if (incomingSpool.filePath === attached.spool.filePath) {
                 assertSubmissionActive(signal)
                 acceptSpoolLease(ingestSpoolLease, incomingSpool)
                 spoolAccepted = true
@@ -825,15 +1004,25 @@ export function createIngestManager ({
               discardUnacceptedSpool(ingestSpoolLease, incomingSpool, existing.jobId)
               incomingSpool = null
             }
-            if (!TERMINAL.has(existing.state) && !ephemeral.get(existing.jobId)?.sourceCapability && incomingCapability != null) {
-              const current = ephemeral.get(existing.jobId) || {}
-              ephemeral.set(existing.jobId, { ...current, sourceCapability: incomingCapability })
+            attached = ephemeral.get(existing.jobId) || {}
+            if (!attached.sourceCapability && incomingCapability != null) {
+              ephemeral.set(existing.jobId, { ...attached, sourceCapability: incomingCapability })
+              capabilityAdopted = true
+            } else if (incomingCapability != null && incomingCapability !== attached.sourceCapability) {
+              await revokeAttachmentSource(existing.jobId, { sourceCapability: incomingCapability })
             }
+            if (ephemeral.has(existing.jobId)) schedule(existing.jobId)
             return publicJob(existing)
           } finally {
             if (incomingSpool && !spoolAdopted) {
               if (spoolAccepted) cleanupSpool(incomingSpool, existing.jobId)
               else discardUnacceptedSpool(ingestSpoolLease, incomingSpool, existing.jobId)
+            }
+            if (incomingCapability && !capabilityAdopted && !TERMINAL.has(existing.state)) {
+              const attached = ephemeral.get(existing.jobId)
+              if (attached?.sourceCapability !== incomingCapability) {
+                await revokeAttachmentSource(existing.jobId, { sourceCapability: incomingCapability })
+              }
             }
           }
         }
@@ -904,6 +1093,7 @@ export function createIngestManager ({
           return { job, running }
         }
         const cancelled = await markTerminal(jobId, 'cancelled', 'CANCELLED', false)
+        await revokeAttachmentSource(jobId)
         cleanupAttachment(jobId)
         return { job: cancelled, running: null }
       })
@@ -916,10 +1106,8 @@ export function createIngestManager ({
       if (closed || closing) fail('INGEST_MANAGER_CLOSED', 'ingest manager is closed', 503)
       if (started) return this
       fs.mkdirSync(spoolRoot, { recursive: true })
-      if (ephemeral.size === 0) {
-        fs.rmSync(spoolRoot, { recursive: true, force: true })
-        fs.mkdirSync(spoolRoot, { recursive: true })
-      }
+      if (ephemeral.size === 0) fs.rmSync(path.join(spoolRoot, 'uploads'), { recursive: true, force: true })
+      fs.mkdirSync(sourceSpoolRoot, { recursive: true })
       started = true
       for (const job of await store.listActive()) await recover(job)
       return this
@@ -938,7 +1126,10 @@ export function createIngestManager ({
         entry.controller.abort()
       }
       await Promise.all([...active.values()].map(entry => entry.promise.catch(() => {})))
-      for (const jobId of [...ephemeral.keys()]) cleanupAttachment(jobId)
+      await Promise.all([...ephemeral.keys()].map(jobId => revokeAttachmentSource(jobId)))
+      for (const jobId of [...ephemeral.keys()]) {
+        cleanupAttachment(jobId, { preserveSource: Boolean(ephemeral.get(jobId)?.sourceSpool) })
+      }
       await store.close?.()
       started = false
       closed = true

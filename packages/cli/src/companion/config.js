@@ -24,6 +24,25 @@ function positiveInteger (value, fallback, name) {
   return parsed
 }
 
+function exactOrigin (value) {
+  if (value == null || value === '') return null
+  if (typeof value !== 'string' || value !== value.trim()) {
+    throw new Error('companion.sourceOrigin must be an exact HTTP(S) origin')
+  }
+  let parsed
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error('companion.sourceOrigin must be an exact HTTP(S) origin')
+  }
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
+      parsed.username || parsed.password || parsed.search || parsed.hash ||
+      (parsed.pathname !== '' && parsed.pathname !== '/')) {
+    throw new Error('companion.sourceOrigin must be an exact HTTP(S) origin')
+  }
+  return parsed.origin
+}
+
 export function companionConfigFromEnv (env = {}) {
   const config = {}
   if (has(env, 'PEARTUBE_COMPANION_ENABLED')) config.enabled = env.PEARTUBE_COMPANION_ENABLED
@@ -36,6 +55,11 @@ export function companionConfigFromEnv (env = {}) {
   if (has(env, 'PEARTUBE_COMPANION_MAX_BODY_BYTES')) config.maxBodyBytes = env.PEARTUBE_COMPANION_MAX_BODY_BYTES
   if (has(env, 'PEARTUBE_COMPANION_MAX_CLOCK_SKEW_MS')) config.maxClockSkewMs = env.PEARTUBE_COMPANION_MAX_CLOCK_SKEW_MS
   if (has(env, 'PEARTUBE_COMPANION_MAX_NONCES')) config.maxNonces = env.PEARTUBE_COMPANION_MAX_NONCES
+  if (has(env, 'PEARTUBE_COMPANION_SOURCE_ORIGIN')) config.sourceOrigin = env.PEARTUBE_COMPANION_SOURCE_ORIGIN
+  if (has(env, 'PEARTUBE_COMPANION_SOURCE_CLIENT')) config.sourceClient = env.PEARTUBE_COMPANION_SOURCE_CLIENT
+  if (has(env, 'PEARTUBE_COMPANION_SOURCE_SHARED_SECRET')) config.sourceSharedSecret = env.PEARTUBE_COMPANION_SOURCE_SHARED_SECRET
+  if (has(env, 'PEARTUBE_COMPANION_SOURCE_CHUNK_BYTES')) config.sourceChunkBytes = env.PEARTUBE_COMPANION_SOURCE_CHUNK_BYTES
+  if (has(env, 'PEARTUBE_COMPANION_SOURCE_REQUEST_TIMEOUT_MS')) config.sourceRequestTimeoutMs = env.PEARTUBE_COMPANION_SOURCE_REQUEST_TIMEOUT_MS
   return Object.keys(config).length ? { companion: config } : {}
 }
 
@@ -53,7 +77,12 @@ export function companionConfigFromCli (cli = {}) {
     companionSharedSecret: 'sharedSecret',
     companionMaxBodyBytes: 'maxBodyBytes',
     companionMaxClockSkewMs: 'maxClockSkewMs',
-    companionMaxNonces: 'maxNonces'
+    companionMaxNonces: 'maxNonces',
+    companionSourceOrigin: 'sourceOrigin',
+    companionSourceClient: 'sourceClient',
+    companionSourceSharedSecret: 'sourceSharedSecret',
+    companionSourceChunkBytes: 'sourceChunkBytes',
+    companionSourceRequestTimeoutMs: 'sourceRequestTimeoutMs'
   }
   for (const [source, target] of Object.entries(fields)) {
     if (has(cli, source)) config[target] = cli[source]
@@ -98,5 +127,24 @@ export function resolveCompanionConfig (raw = {}, { storagePath } = {}) {
   config.maxBodyBytes = positiveInteger(config.maxBodyBytes, undefined, 'companion.maxBodyBytes')
   config.maxClockSkewMs = positiveInteger(config.maxClockSkewMs, undefined, 'companion.maxClockSkewMs')
   config.maxNonces = positiveInteger(config.maxNonces, undefined, 'companion.maxNonces')
+  config.sourceOrigin = exactOrigin(config.sourceOrigin)
+  config.sourceClient = typeof config.sourceClient === 'string' ? config.sourceClient.trim() : ''
+  if (!/^[A-Za-z0-9._-]{1,128}$/.test(config.sourceClient)) {
+    throw new Error('companion.sourceClient must be 1 to 128 identifier characters')
+  }
+  config.sourceSharedSecret = typeof config.sourceSharedSecret === 'string' && config.sourceSharedSecret
+    ? config.sourceSharedSecret
+    : config.sharedSecret
+  if (config.sourceSharedSecret && !/^[a-f0-9]{64}$/.test(config.sourceSharedSecret)) {
+    throw new Error('companion.sourceSharedSecret must be 64 lowercase hexadecimal characters')
+  }
+  if (config.sourceOrigin && !config.sourceSharedSecret) {
+    throw new Error('companion.sourceSharedSecret is required when sourceOrigin is configured')
+  }
+  config.sourceChunkBytes = positiveInteger(config.sourceChunkBytes, undefined, 'companion.sourceChunkBytes')
+  if (config.sourceChunkBytes > 4 * 1024 * 1024) {
+    throw new Error('companion.sourceChunkBytes must not exceed 4194304')
+  }
+  config.sourceRequestTimeoutMs = positiveInteger(config.sourceRequestTimeoutMs, undefined, 'companion.sourceRequestTimeoutMs')
   return config
 }

@@ -15,6 +15,7 @@ import { createStorageGuard } from './storage-guard.js'
 import { createCompanionServer } from './companion/server.js'
 import { createIngestJobStore } from './companion/ingest-job-store.js'
 import { createIngestManager } from './companion/ingest-manager.js'
+import { createSourceCallbackClient } from './companion/source-client.js'
 import tmdbFetch from '#fetch'
 
 
@@ -478,6 +479,16 @@ export async function createRelayService({
         const companionFsModule = fsModule || await import('#fs')
         const companionPathModule = pathModule || await import('#path')
         const ingestSpoolRoot = companionPathModule.join(config.storage.path, 'companion', 'ingest-spool')
+        const sourceClient = config.companion.sourceOrigin
+          ? createSourceCallbackClient({
+              origin: config.companion.sourceOrigin,
+              client: config.companion.sourceClient,
+              sharedSecret: config.companion.sourceSharedSecret,
+              chunkBytes: config.companion.sourceChunkBytes,
+              requestTimeoutMs: config.companion.sourceRequestTimeoutMs,
+              clock: nowFn
+            })
+          : null
         if (runtime.ctx?.metaDb) {
           ingestManager = createIngestManager({
             store: createIngestJobStore({ bee: runtime.ctx.metaDb, now: nowFn }),
@@ -491,6 +502,7 @@ export async function createRelayService({
             spoolRoot: ingestSpoolRoot,
             fs: companionFsModule,
             path: companionPathModule,
+            sourceClient,
             canIngest: () => storageGuard.hasMinFreeDisk(),
             now: nowFn,
             logger

@@ -281,6 +281,32 @@ export function createIngestJobStore ({ bee, now = () => Date.now() } = {}) {
       })
     },
 
+    reopenRecoverable (jobId, { expectedVersion, resetProgress = false } = {}) {
+      return serialized(async () => {
+        const current = await readNodeUnserialized(jobKey(jobId))
+        checkedCurrent(current, { jobId, expectedVersion, from: 'failed' })
+        if (current.recoverable !== true) {
+          throw storeError('INGEST_JOB_TERMINAL', 'INGEST_JOB_TERMINAL: failed')
+        }
+        const next = {
+          ...current,
+          bytesReceived: resetProgress ? 0 : current.bytesReceived,
+          state: 'queued',
+          version: current.version + 1,
+          errorCode: null,
+          failedAt: null,
+          recoverable: false,
+          updatedAt: now()
+        }
+        assertDurableValue(next)
+        await atomic([
+          ['put', jobKey(jobId), next],
+          ['put', activeKey(jobId), { jobId }]
+        ])
+        return clone(next)
+      })
+    },
+
     completePublication (jobId, { expectedVersion, result } = {}) {
       return serialized(async () => {
         const current = await readNodeUnserialized(jobKey(jobId))

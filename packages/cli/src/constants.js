@@ -27,7 +27,12 @@ export const DEFAULT_COMPANION_CONFIG = {
   sharedSecret: '',
   maxBodyBytes: 1024 * 1024,
   maxClockSkewMs: 30_000,
-  maxNonces: 4096
+  maxNonces: 4096,
+  sourceOrigin: null,
+  sourceClient: 'peartube-companion',
+  sourceSharedSecret: '',
+  sourceChunkBytes: 4 * 1024 * 1024,
+  sourceRequestTimeoutMs: 20_000,
 }
 
 export const DEFAULT_DISCOVERY_MAX_CHANNELS = 0

@@ -28,25 +28,45 @@ function diagnostics () {
 }
 
 function fakeRuntime (calls) {
+  let currentPolicy = {
+    policyVersion: 2,
+    consentVersion: 0,
+    migrationRequired: true,
+    contributeWatchedMedia: false,
+    archiveEnabled: false,
+    contributionBudgetBytes: 0,
+    archiveBudgetBytes: 0,
+    uploadPermission: 'disabled',
+    uploadCeilingBytes: 0,
+  }
   return {
-    ctx: { metaDb: null },
+    ctx: {
+      metaDb: null,
+      networkPolicyRuntime: {
+        getPolicy: () => ({ ...currentPolicy }),
+      },
+    },
     api: {
       async setNetworkPolicy(policy) {
-        return {
-          success: true,
-          policy: {
-            ...policy,
-            effectiveRole: policy.archiveEnabled ? 'archive-enabled' : (policy.contributeWatchedMedia ? 'contributor' : 'watch-only'),
-            permissions: {
-              contribute: policy.contributeWatchedMedia === true,
-              archive: policy.archiveEnabled === true,
-            },
+        currentPolicy = {
+          ...policy,
+          effectiveRole: policy.archiveEnabled ? 'archive-enabled' : (policy.contributeWatchedMedia ? 'contributor' : 'watch-only'),
+          permissions: {
+            contribute: policy.contributeWatchedMedia === true,
+            archive: policy.archiveEnabled === true,
           },
         }
+        return { success: true, policy: { ...currentPolicy } }
       },
     },
     identityManager: {},
     uploadManager: {},
+    seedingManager: {
+      getRetentionBudgetStatus: () => ({
+        contributionUsedBytes: 0,
+        archiveUsedBytes: 0,
+      }),
+    },
     setCandidateHandler (handler) { calls.push(['candidate-handler', typeof handler]) },
     async start () { calls.push(['start']) },
     async close () { calls.push(['close']) },

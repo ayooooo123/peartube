@@ -1152,30 +1152,31 @@ export function createUploadManager({
 
         return completedUploadResult(videoId, metadata);
       } catch (err) {
+        let failure = err;
         if (prepared?.renditionWrite?.core && !prepared.renditionWrite.core.closed) {
           try {
             await prepared.renditionWrite.core.close();
-          } catch {}
+          } catch { /* best-effort staged rendition close after path upload failure */ }
         }
         if (blobResult && !immutableCommitConfirmed &&
-            err?.uploadCommitSucceeded !== true &&
-            err?.uploadCommitUncertain !== true &&
-            err?.uploadRollbackCompleted !== true &&
-            err?.uploadRollbackPending !== true) {
+            failure?.uploadCommitSucceeded !== true &&
+            failure?.uploadCommitUncertain !== true &&
+            failure?.uploadRollbackCompleted !== true &&
+            failure?.uploadRollbackPending !== true) {
           try {
             await rollbackUploadedBlob(channel, blobResult);
           } catch {
-            err = new Error('Upload failed and rollback could not be completed');
+            failure = new Error('Upload failed and rollback could not be completed');
           }
         }
-        console.error('[Upload] Failed:', err.message);
+        console.error('[Upload] Failed:', failure.message);
         return {
           success: false,
-          error: err.message,
-          ...(err?.uploadCommitUncertain === true
-            ? { commitUncertain: true, reconciliationRequired: true, reconciliation: err.reconciliation }
+          error: failure.message,
+          ...(failure?.uploadCommitUncertain === true
+            ? { commitUncertain: true, reconciliationRequired: true, reconciliation: failure.reconciliation }
             : {}),
-          ...(err?.uploadRollbackPending === true ? { rollbackPending: true } : {})
+          ...(failure?.uploadRollbackPending === true ? { rollbackPending: true } : {})
         };
       }
     },
@@ -1286,30 +1287,31 @@ export function createUploadManager({
 
         return completedUploadResult(videoId, metadata);
       } catch (err) {
+        let failure = err;
         if (prepared?.renditionWrite?.core && !prepared.renditionWrite.core.closed) {
           try {
             await prepared.renditionWrite.core.close();
-          } catch {}
+          } catch { /* best-effort staged rendition close after buffer upload failure */ }
         }
         if (blobResult && !immutableCommitConfirmed &&
-            err?.uploadCommitSucceeded !== true &&
-            err?.uploadCommitUncertain !== true &&
-            err?.uploadRollbackCompleted !== true &&
-            err?.uploadRollbackPending !== true) {
+            failure?.uploadCommitSucceeded !== true &&
+            failure?.uploadCommitUncertain !== true &&
+            failure?.uploadRollbackCompleted !== true &&
+            failure?.uploadRollbackPending !== true) {
           try {
             await rollbackUploadedBlob(channel, blobResult);
           } catch {
-            err = new Error('Upload failed and rollback could not be completed');
+            failure = new Error('Upload failed and rollback could not be completed');
           }
         }
-        console.error('[Upload] Failed:', err.message);
+        console.error('[Upload] Failed:', failure.message);
         return {
           success: false,
-          error: err.message,
-          ...(err?.uploadCommitUncertain === true
-            ? { commitUncertain: true, reconciliationRequired: true, reconciliation: err.reconciliation }
+          error: failure.message,
+          ...(failure?.uploadCommitUncertain === true
+            ? { commitUncertain: true, reconciliationRequired: true, reconciliation: failure.reconciliation }
             : {}),
-          ...(err?.uploadRollbackPending === true ? { rollbackPending: true } : {})
+          ...(failure?.uploadRollbackPending === true ? { rollbackPending: true } : {})
         };
       }
     },

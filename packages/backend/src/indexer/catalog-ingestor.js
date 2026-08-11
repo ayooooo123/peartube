@@ -19,6 +19,8 @@ import {
   decodePublisherNamespaceDescriptor,
   decodePublisherOperationBody,
   getPublisherAuthorizationState,
+  publisherProjectionIdentity,
+  requiredPublisherCapability,
   encodePublisherCatalogFrame,
   encodePublisherNamespaceDescriptor,
   verifyPublisherNamespaceDescriptor,
@@ -43,7 +45,14 @@ const PROJECTION_RANGE = Object.freeze({
   gte: PROJECTION_PREFIX,
   lt: 'projection0',
 })
-const PROJECTION_KEY = /^projection\/(publication|claim)\/([0-9a-f]{64})$/
+const HEX_PROJECTION_KEY = /^projection\/(publication|claim|collection|(?:owner|retraction)-(?:claim|collection|publication))\/([0-9a-f]{64})$/
+const LATEST_VIEW_HEAD_KEY = 'projection/view-head/latest'
+const RAW_ONLY_RECORD_TYPES = new Set([
+  PUBLISHER_RECORD_TYPES.COLLECTION_RELEASE,
+  PUBLISHER_RECORD_TYPES.RETRACTION,
+  PUBLISHER_RECORD_TYPES.OWNER_ACTION,
+  PUBLISHER_RECORD_TYPES.VIEW_HEAD,
+])
 const MAX_INGEST_ROWS = PUBLISHER_LIMITS.maxJournalOperations
 const MAX_INGEST_BYTES = PUBLISHER_LIMITS.maxSnapshotBytes
 const HEX_32 = /^[0-9a-f]{64}$/
@@ -128,12 +137,8 @@ function currentWriter(authorization, operation, capability, now) {
   if (!writer || !Array.isArray(writer.capabilities) || !writer.capabilities.includes(capability)) {
     invalid(`operation signer is not authorized for ${capability}`)
   }
-  if (writer.revocation) invalid('operation signer is revoked')
   const writerExpiry = boundedUint(writer.expiresAt, 'writer expiry')
   if (writerExpiry < now) invalid('operation signer authorization is expired')
-  if (boundedUint(writer.admissionPolicyEpoch, 'writer policy epoch') !== operation.policyEpoch) {
-    invalid('operation policy epoch does not match writer admission')
-  }
   const signedAt = boundedUint(operation.signedAt, 'operation signedAt')
   if (signedAt > now) invalid('operation is future-issued')
   if (operation.expiresAt !== undefined) {
@@ -144,6 +149,21 @@ function currentWriter(authorization, operation, capability, now) {
   const first = boundedUint(writer.firstAcceptedSequence, 'writer first sequence')
   const last = boundedUint(writer.lastAcceptedSequence, 'writer last sequence')
   if (sequence < first || sequence > last) invalid('operation sequence is outside writer authorization')
+
+  const admissionPolicyEpoch = boundedUint(writer.admissionPolicyEpoch, 'writer admission policy epoch')
+  const operationPolicyEpoch = boundedUint(operation.policyEpoch, 'operation policy epoch')
+  if (operationPolicyEpoch < admissionPolicyEpoch) {
+    invalid('operation policy epoch predates writer admission')
+  }
+  if (writer.revocation) {
+    const revokedFromEpoch = boundedUint(writer.revocation.revokedFromEpoch, 'writer revocation policy epoch')
+    const acceptedThroughSequence = boundedUint(writer.revocation.acceptedThroughSequence, 'writer revocation sequence cutoff')
+    if (operationPolicyEpoch > revokedFromEpoch || sequence > acceptedThroughSequence) {
+      invalid('operation signer is revoked')
+    }
+  } else if (operationPolicyEpoch !== boundedUint(authorization.policyEpoch, 'authorization policy epoch')) {
+    invalid('operation policy epoch is stale against pinned authorization state')
+  }
 }
 
 function verifyPublisherFrame(frame, raw, publisherId) {
@@ -203,6 +223,18 @@ function exactWorkId(manifest, publicationId) {
   return publicationId
 }
 
+
+function validateProjectionKey(key) {
+  if (key === LATEST_VIEW_HEAD_KEY || HEX_PROJECTION_KEY.test(key)) return
+  invalid(`projection key ${key} is invalid or unsupported`)
+}
+
+function canonicalProjectionKey(frame, body) {
+  const identity = publisherProjectionIdentity(frame.recordType, body, frame)
+  if (!identity) invalid('projection contains a record type that the publisher view does not project')
+  if (frame.recordType === PUBLISHER_RECORD_TYPES.VIEW_HEAD) return LATEST_VIEW_HEAD_KEY
+  return `${PROJECTION_PREFIX}${identity.kind}/${exactHex(identity.id, 'projection identity')}`
+}
 async function normalizePublication(context, keyId, frame, body, raw, requireCurrentAuthorization) {
   if (frame.recordType !== PUBLISHER_RECORD_TYPES.PUBLICATION) invalid('publication projection contains the wrong record type')
   const publicationId = exactHex(body.publicationId, 'publicationId')
@@ -230,13 +262,14 @@ async function normalizePublication(context, keyId, frame, body, raw, requireCur
 
   const sourceRecordRef = exactHex(frame.recordId, 'operation recordId')
   const normalizedTitle = normalizeTitle(manifest.body.title)
+  const workEntityId = exactWorkId(manifest, publicationId)
   const rows = [
     row(COLLECTIONS.sourceRecords, sourceRow(context, frame, raw)),
     row(COLLECTIONS.publicationProjections, {
       publisherId: context.publisherId,
       sourceRecordRef,
       publicationId,
-      workEntityId: exactWorkId(manifest, publicationId),
+      workEntityId,
       normalizedTitle,
       manifestId,
     }),
@@ -246,8 +279,8 @@ async function normalizePublication(context, keyId, frame, body, raw, requireCur
       publisherId: context.publisherId,
       sourceRecordRef,
       relationType: 'title-token',
-      fromId: publicationId,
-      toId: token,
+      fromId: token,
+      toId: workEntityId,
     }))
   }
 
@@ -419,15 +452,27 @@ async function normalizeProjection(context, entry, requireCurrentAuthorization) 
   if (!entry || typeof entry.key !== 'string' || !(b4a.isBuffer(entry.value) || entry.value instanceof Uint8Array)) {
     invalid('projection entry is malformed')
   }
-  const match = PROJECTION_KEY.exec(entry.key)
-  if (!match) invalid(`projection key ${entry.key} is invalid or unsupported`)
-  const [, kind, keyId] = match
+  validateProjectionKey(entry.key)
   const raw = b4a.from(entry.value)
   const frame = decodePublisherCatalogFrame(raw)
   verifyPublisherFrame(frame, raw, context.publisherId)
   const body = decodePublisherOperationBody(frame.recordType, frame.canonicalBody)
-  if (kind === 'publication') return normalizePublication(context, keyId, frame, body, raw, requireCurrentAuthorization)
-  return normalizeClaim(context, keyId, frame, body, raw, requireCurrentAuthorization)
+  if (entry.key !== canonicalProjectionKey(frame, body)) {
+    invalid('projection key does not match publisher operation identity')
+  }
+  if (frame.recordType === PUBLISHER_RECORD_TYPES.PUBLICATION) {
+    return normalizePublication(context, exactHex(body.publicationId, 'publicationId'), frame, body, raw, requireCurrentAuthorization)
+  }
+  if (frame.recordType === PUBLISHER_RECORD_TYPES.CLAIM) {
+    return normalizeClaim(context, exactHex(body.claimId, 'claimId'), frame, body, raw, requireCurrentAuthorization)
+  }
+  if (!RAW_ONLY_RECORD_TYPES.has(frame.recordType)) {
+    invalid('projection contains an unsupported publisher operation')
+  }
+  const capability = requiredPublisherCapability(frame.recordType, body)
+  if (!capability) invalid('projection operation has no publisher capability')
+  if (requireCurrentAuthorization) currentWriter(context.authorization, frame, capability, context.ingestedAt)
+  return [row(COLLECTIONS.sourceRecords, sourceRow(context, frame, raw))]
 }
 
 function cursorFor(context) {

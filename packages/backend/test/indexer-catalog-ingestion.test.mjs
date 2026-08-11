@@ -50,14 +50,14 @@ const limits = () => ({
 const hex = value => b4a.toString(value, 'hex')
 const bytes = value => b4a.from(value, 'hex')
 
-function signPublisherOperation({ descriptor, signer, recordType, sequence, body, signedAt = 100 }) {
+function signPublisherOperation({ descriptor, signer, recordType, sequence, body, signedAt = 100, policyEpoch = 0 }) {
   const prepared = prepareSignedEnvelope({
     recordType,
     schemaMajor: 1,
     schemaMinor: 0,
     issuerIdentityKey: descriptor.publisherId,
     signerKey: signer.publicKey,
-    policyEpoch: 0,
+    policyEpoch,
     issuerSequence: sequence,
     signedAt,
     canonicalBody: encodePublisherOperationBody(recordType, body),
@@ -105,12 +105,13 @@ function publicationManifest(fixture, sequence = 1, title = '  Pilot   Episode  
   })
 }
 
-function publicationOperation(fixture, manifest, sequence) {
+function publicationOperation(fixture, manifest, sequence, policyEpoch = 0) {
   return signPublisherOperation({
     descriptor: fixture.descriptor,
     signer: fixture.device,
     recordType: PUBLISHER_RECORD_TYPES.PUBLICATION,
     sequence,
+    policyEpoch,
     body: {
       publicationId: bytes(manifest.publicationId),
       manifestId: bytes(manifest.body.manifestId),
@@ -208,6 +209,12 @@ async function putProjection(fixture, kind, id, operation) {
   await fixture.view.put(`projection/${kind}/${id}`, encodePublisherCatalogFrame(operation))
 }
 
+async function setWriterPolicyEpoch(fixture, { admissionPolicyEpoch, policyEpoch }) {
+  fixture.persistedWriter.admissionPolicyEpoch = admissionPolicyEpoch
+  fixture.authorizationState.policyEpoch = policyEpoch
+  await fixture.view.put('state/authorization', encodePublisherAuthorizationState(fixture.authorizationState))
+}
+
 async function publisherRows(store, publisherId) {
   const db = await openIndexerDatabase(store, { name: INDEXER_CORE_NAME })
   try {
@@ -261,7 +268,7 @@ async function fixture(t, { injectableIndexFailure = false, writerExpiresAt = Nu
   const persistedWriter = {
     writerKey: b4a.from(view.key),
     signerKey: b4a.from(device.publicKey),
-    capabilities: ['claim', 'publish'],
+    capabilities: ['announce', 'claim', 'moderate', 'publish'],
     firstAcceptedSequence: 1,
     lastAcceptedSequence: Number.MAX_SAFE_INTEGER,
     expiresAt: writerExpiresAt,
@@ -297,7 +304,7 @@ async function fixture(t, { injectableIndexFailure = false, writerExpiresAt = Nu
     writers: [{
       key: hex(view.key),
       signerKey: hex(device.publicKey),
-      capabilities: ['claim', 'publish'],
+      capabilities: ['announce', 'claim', 'moderate', 'publish'],
       firstAcceptedSequence: 1,
       lastAcceptedSequence: Number.MAX_SAFE_INTEGER,
       expiresAt: writerExpiresAt,
@@ -364,10 +371,13 @@ test('initial ingestion materializes canonical raw publication and claim records
   t.alike(
     rows.relationshipEdges
       .filter(row => row.relationType === 'title-token')
-      .map(row => row.toId)
+      .map(row => row.fromId)
       .sort(),
     ['episode', 'pilot'],
   )
+  t.ok(rows.relationshipEdges
+    .filter(row => row.relationType === 'title-token')
+    .every(row => row.toId === manifest.publicationId))
   t.is(rows.externalReferenceProjections.length, 2)
   t.ok(rows.externalReferenceProjections.some(row => row.namespace === 'imdb-title' && row.normalizedIdentifier === 'tt0903747'))
   t.is(rows.sourceCursors.length, 1)
@@ -375,6 +385,152 @@ test('initial ingestion materializes canonical raw publication and claim records
   t.is(rows.sourceCursors[0].catalogBootstrapKey, hex(f.view.key))
   t.is(f.checkouts.opened, 1)
   t.is(f.checkouts.closed, 1)
+})
+
+test('every canonical raw-only projection key kind retains its exact source frame without unsupported derived rows', async (t) => {
+  const f = await fixture(t)
+  let sequence = 1
+  const projections = []
+  const collectionId = b4a.alloc(32, 61)
+  projections.push({
+    key: `projection/collection/${hex(collectionId)}`,
+    operation: signPublisherOperation({
+      descriptor: f.descriptor,
+      signer: f.device,
+      recordType: PUBLISHER_RECORD_TYPES.COLLECTION_RELEASE,
+      sequence: sequence++,
+      body: {
+        collectionId,
+        releaseId: b4a.alloc(32, 62),
+        payload: b4a.from('canonical collection release'),
+      },
+    }),
+  })
+  for (const [offset, targetType] of ['claim', 'collection', 'publication'].entries()) {
+    const ownerTargetId = b4a.alloc(32, 70 + offset)
+    projections.push({
+      key: `projection/owner-${targetType}/${hex(ownerTargetId)}`,
+      operation: signPublisherOperation({
+        descriptor: f.descriptor,
+        signer: f.device,
+        recordType: PUBLISHER_RECORD_TYPES.OWNER_ACTION,
+        sequence: sequence++,
+        body: {
+          action: 'feature',
+          targetType,
+          targetId: ownerTargetId,
+          reason: b4a.from('publisher selection'),
+        },
+      }),
+    })
+    const retractionTargetId = b4a.alloc(32, 80 + offset)
+    projections.push({
+      key: `projection/retraction-${targetType}/${hex(retractionTargetId)}`,
+      operation: signPublisherOperation({
+        descriptor: f.descriptor,
+        signer: f.device,
+        recordType: PUBLISHER_RECORD_TYPES.RETRACTION,
+        sequence: sequence++,
+        body: {
+          targetType,
+          targetId: retractionTargetId,
+          reason: b4a.from('publisher retraction'),
+        },
+      }),
+    })
+  }
+  projections.push({
+    key: 'projection/view-head/latest',
+    operation: signPublisherOperation({
+      descriptor: f.descriptor,
+      signer: f.device,
+      recordType: PUBLISHER_RECORD_TYPES.VIEW_HEAD,
+      sequence,
+      body: {
+        viewKey: f.view.key,
+        length: 7,
+        digest: b4a.alloc(32, 90),
+        authorizationStateDigest: b4a.alloc(32, 91),
+      },
+    }),
+  })
+  for (const projection of projections) {
+    await f.view.put(projection.key, encodePublisherCatalogFrame(projection.operation))
+  }
+
+  const result = await ingestor(f).ingest({
+    publisherId: f.publisherId,
+    descriptor: f.descriptor,
+    catalog: f.catalog,
+  })
+  const rows = await publisherRows(f.indexStore, f.publisherId)
+  const expectedFrames = new Map(projections.map(({ operation }) => [
+    hex(operation.recordId),
+    encodePublisherCatalogFrame(operation),
+  ]))
+
+  t.is(result.mode, 'bootstrap')
+  t.is(rows.sourceRecords.length, projections.length)
+  for (const source of rows.sourceRecords) {
+    t.ok(b4a.equals(source.canonicalEnvelope, expectedFrames.get(source.recordId)))
+  }
+  t.is(rows.publicationProjections.length, 0)
+  t.is(rows.renditionProjections.length, 0)
+  t.is(rows.externalReferenceProjections.length, 0)
+  t.is(rows.availabilityProjections.length, 0)
+  t.is(rows.relationshipEdges.length, 0)
+  t.is(rows.sourceCursors.length, 1)
+})
+
+test('active writer epochs accept the current transitioned policy and reject pre-admission or stale operations', async (t) => {
+  for (const scenario of [
+    { operationPolicyEpoch: 2, accepted: true },
+    { operationPolicyEpoch: 0, error: /predates writer admission/ },
+    { operationPolicyEpoch: 1, error: /stale against pinned authorization state/ },
+  ]) {
+    const f = await fixture(t)
+    await setWriterPolicyEpoch(f, { admissionPolicyEpoch: 1, policyEpoch: 2 })
+    const manifest = publicationManifest(f)
+    const operation = publicationOperation(f, manifest, 1, scenario.operationPolicyEpoch)
+    await putProjection(f, 'publication', manifest.publicationId, operation)
+
+    const ingestion = ingestor(f).ingest({
+      publisherId: f.publisherId,
+      descriptor: f.descriptor,
+      catalog: f.catalog,
+    })
+    if (scenario.accepted) {
+      const result = await ingestion
+      const rows = await publisherRows(f.indexStore, f.publisherId)
+      t.is(result.mode, 'bootstrap')
+      t.is(rows.sourceRecords.length, 1)
+      t.is(rows.sourceRecords[0].recordId, hex(operation.recordId))
+    } else {
+      await t.exception(ingestion, scenario.error)
+      t.absent(await f.index.getSourceCursor({ publisherId: f.publisherId, catalogEpoch: 0 }))
+    }
+  }
+})
+
+test('token-prefix lookup uses the normalized token as fromId and returns the ingested work target', async (t) => {
+  const f = await fixture(t)
+  const manifest = publicationManifest(f)
+  await putProjection(f, 'publication', manifest.publicationId, publicationOperation(f, manifest, 1))
+  await ingestor(f).ingest({ publisherId: f.publisherId, descriptor: f.descriptor, catalog: f.catalog })
+
+  const db = await openIndexerDatabase(f.indexStore, { name: INDEXER_CORE_NAME })
+  try {
+    const found = await db.find(INDEXES.tokenPrefix, {
+      relationType: 'title-token',
+      fromId: 'pilot',
+      limit: 10,
+    }).toArray()
+    t.is(found.length, 1)
+    t.is(found[0].fromId, 'pilot')
+    t.is(found[0].toId, manifest.publicationId)
+  } finally {
+    await db.close()
+  }
 })
 
 test('same-fork update diffs from the exact stored cursor and advances only the changed source projection', async (t) => {
@@ -514,6 +670,33 @@ test('aggregate normalized rows and bytes are bounded before index mutation', as
     t.alike(calls, { replace: 0, apply: 0 })
     t.absent(await f.index.getSourceCursor({ publisherId: f.publisherId, catalogEpoch: 0 }))
   }
+})
+
+test('revoked writer operation within the authorized cutoff remains raw and projected', async (t) => {
+  const f = await fixture(t)
+  f.authorizationState.policyEpoch = 1
+  f.persistedWriter.revocation = {
+    revokedFromEpoch: 0,
+    revokedAtEpoch: 1,
+    acceptedThroughSequence: 1,
+  }
+  await f.view.put('state/authorization', encodePublisherAuthorizationState(f.authorizationState))
+  const manifest = publicationManifest(f)
+  const operation = publicationOperation(f, manifest, 1, 0)
+  await putProjection(f, 'publication', manifest.publicationId, operation)
+
+  const result = await ingestor(f).ingest({
+    publisherId: f.publisherId,
+    descriptor: f.descriptor,
+    catalog: f.catalog,
+  })
+  const rows = await publisherRows(f.indexStore, f.publisherId)
+
+  t.is(result.mode, 'bootstrap')
+  t.is(rows.sourceRecords.length, 1)
+  t.is(rows.sourceRecords[0].recordId, hex(operation.recordId))
+  t.is(rows.publicationProjections.length, 1)
+  t.is(rows.publicationProjections[0].publicationId, manifest.publicationId)
 })
 
 test('authorization-only view changes revalidate unchanged projections before cursor advancement', async (t) => {

@@ -91,3 +91,39 @@ These tests were added before the source changes but were not executed, as this 
 
 - No implementation blocker identified.
 - Focused Plan 05 validation is intentionally pending for the parent because this round prohibited test, build, schema, generation, lint, formatter, and typecheck commands.
+
+
+## Fresh final-review integration fix round
+
+### Status
+
+IMPLEMENTATION COMPLETE — VALIDATION PENDING
+
+### Files changed
+
+- Modified `packages/backend/src/indexer/catalog-ingestor.js`.
+- Modified `packages/backend/test/indexer-catalog-ingestion.test.mjs`.
+- Updated `.superpowers/sdd/2026-08-09-05-catalog-ingestion/task-2-report.md`.
+
+### RED coverage and prior failure reasons
+
+The focused tests were added before the source changes. They were not executed because this round explicitly prohibits commands and validation.
+
+1. A table-driven catalog containing canonical collection-release, all owner-action target kinds, all retraction target kinds, and `projection/view-head/latest` entries must ingest each exact raw source frame and emit no unsupported derived rows. The prior implementation rejected the first such entry because its key router accepted only publication and claim keys and assumed every accepted key ended in a 64-hex projection ID.
+2. An active writer admitted at policy epoch 1 with pinned current policy epoch 2 must accept an operation at epoch 2, reject an operation at epoch 0 as predating admission, and reject an operation at epoch 1 as stale. The prior implementation required operation epoch to equal admission epoch: it rejected the valid epoch-2 operation, did not distinguish the pre-admission failure, and accepted the stale epoch-1 operation.
+3. Publication title-token rows and a real `INDEXES.tokenPrefix` lookup must use normalized token `pilot` as `fromId` and return the ingested work target as `toId`. The prior implementation stored publication ID as `fromId` and token as `toId`, so the updated row assertions failed and the token-prefix lookup returned no row.
+4. A writer operation at or before both root-authorized revocation cutoffs must remain valid and produce its raw source plus supported publication projection. The prior blanket `writer.revocation` rejection discarded operations that `publisher/authorization.js` accepts through `revokedFromEpoch` and `acceptedThroughSequence`.
+
+### Final behavior
+
+- Projection scanning remains a complete bounded scan of the pinned view's `projection/` prefix. Accepted keys are explicitly limited to canonical publication, claim, collection, owner-claim, owner-collection, owner-publication, retraction-claim, retraction-collection, retraction-publication, and the special `projection/view-head/latest` forms; malformed and unknown forms still fail closed.
+- Every accepted entry is decoded as a canonical publisher frame, checked for exact raw-frame canonicality, publisher identity, record ID, signature, canonical operation body, and exact publisher projection identity. Publication and claim retain their existing normalization.
+- Canonical collection-release, owner-action, retraction, and view-head projections additionally require the publisher convention's record-specific writer capability and pinned authorization, then retain only the exact raw source record. No unsupported collection, moderation, retraction, or announcement-derived rows are invented.
+- Every writer operation must use a policy epoch at least as new as its admission epoch. Active writers must use the pinned current policy epoch. Revoked writers remain accepted only through both root-authorized cutoffs (`policyEpoch <= revokedFromEpoch` and `issuerSequence <= acceptedThroughSequence`); exceeding either cutoff fails as revoked. Existing current-time writer-expiry rejection remains unchanged.
+- `title-token` relationships now store each normalized token in `fromId` and the publication's exact work/entity target in `toId`, matching the Plan 04 `INDEXES.tokenPrefix` key contract. Publisher, source-record, and relation fields are unchanged.
+- Existing row/byte limits, bounded projection and diff scans, exact cursor CAS, cancellation checks, pinned-checkout lifecycle, and raw source bytes are unchanged.
+
+### Blockers / concerns
+
+- No implementation blocker identified.
+- Focused Plan 05 validation is intentionally pending for the parent because this round prohibits tests, builds, schema/generation, lint, formatter, typecheck, and commits.

@@ -199,8 +199,11 @@ export function createIngestJobStore ({ bee, now = () => Date.now() } = {}) {
     async findByIdempotency (digest) {
       const index = await readNode(idempotencyKey(digest))
       if (!index) return null
+      if (index.idempotencyDigest !== digest) {
+        throw storeError('INGEST_PERSISTENCE_CORRUPT', 'Ingest idempotency index is corrupt')
+      }
       const job = await readNode(jobKey(index.jobId))
-      if (!job || job.requestFingerprint !== index.requestFingerprint) {
+      if (!job || job.idempotencyDigest !== digest || job.requestFingerprint !== index.requestFingerprint) {
         throw storeError('INGEST_PERSISTENCE_CORRUPT', 'Ingest idempotency index is corrupt')
       }
       return clone(job)
@@ -210,21 +213,24 @@ export function createIngestJobStore ({ bee, now = () => Date.now() } = {}) {
       return serialized(async () => {
         const index = await readNodeUnserialized(idempotencyKey(idempotencyDigest))
         if (index) {
+          if (index.idempotencyDigest !== idempotencyDigest) {
+            throw storeError('INGEST_PERSISTENCE_CORRUPT', 'Ingest idempotency index is corrupt')
+          }
           if (index.requestFingerprint !== requestFingerprint) {
             throw storeError('IDEMPOTENCY_CONFLICT', 'IDEMPOTENCY_CONFLICT')
           }
           const existing = await readNodeUnserialized(jobKey(index.jobId))
-          if (!existing || existing.requestFingerprint !== requestFingerprint) {
+          if (!existing || existing.idempotencyDigest !== idempotencyDigest || existing.requestFingerprint !== requestFingerprint) {
             throw storeError('INGEST_PERSISTENCE_CORRUPT', 'Ingest idempotency index is corrupt')
           }
           return { created: false, job: clone(existing) }
         }
-        if (!job || job.state !== 'queued' || job.version !== 0 || job.requestFingerprint !== requestFingerprint) {
+        if (!job || job.state !== 'queued' || job.version !== 0 || job.idempotencyDigest !== idempotencyDigest || job.requestFingerprint !== requestFingerprint) {
           throw storeError('INGEST_PERSISTENCE_INVALID', 'Invalid initial ingest job')
         }
         assertDurableValue(job)
         const record = clone(job)
-        const pointer = Object.freeze({ schemaVersion: 1, jobId: record.jobId, requestFingerprint })
+        const pointer = Object.freeze({ schemaVersion: 1, idempotencyDigest, jobId: record.jobId, requestFingerprint })
         await atomic([
           ['put', jobKey(record.jobId), record],
           ['put', idempotencyKey(idempotencyDigest), pointer],

@@ -18,13 +18,17 @@ import { signControlRequest } from '../src/companion/auth.js'
 import { resolveCompanionConfig } from '../src/companion/config.js'
 import { createCompanionServer } from '../src/companion/server.js'
 import { createCompanionRouter } from '../src/companion/routes.js'
+import { createArchivePublisher } from '../src/archive-manager.js'
 
-function fakeBee ({ failFlush = false } = {}) {
+function fakeBee ({ failFlush = false, beforeGet = null } = {}) {
   const map = new Map()
   const clone = value => JSON.parse(JSON.stringify(value))
   return {
     map,
-    async get (key) { return map.has(key) ? { value: clone(map.get(key)) } : null },
+    async get (key) {
+      await beforeGet?.(key)
+      return map.has(key) ? { value: clone(map.get(key)) } : null
+    },
     batch () {
       const operations = []
       return {
@@ -183,10 +187,14 @@ function publicationFor (videoId, byte = '1') {
   return { id: videoId, immutablePublication }
 }
 
-function fakePublisher ({ blockImport = false, importError = null } = {}) {
+function fakePublisher ({ blockImport = false, importError = null, commitThenThrow = false, blockAfterCommit = false } = {}) {
   const videos = new Map()
-  const calls = { ensure: 0, import: 0, catalog: 0, retain: 0 }
+  const calls = { ensure: 0, ensureOptions: [], import: 0, importSignals: [], catalog: 0, retain: 0 }
   let releaseImport = null
+  let releaseCommitted = null
+  let notifyCommitted = null
+  const committed = blockAfterCommit ? new Promise(resolve => { notifyCommitted = resolve }) : null
+  const committedGate = blockAfterCommit ? new Promise(resolve => { releaseCommitted = resolve }) : null
   const importGate = blockImport
     ? new Promise(resolve => { releaseImport = resolve })
     : null
@@ -198,8 +206,11 @@ function fakePublisher ({ blockImport = false, importError = null } = {}) {
     videos,
     releaseImport,
     seed (videoId, byte) { videos.set(videoId, publicationFor(videoId, byte)) },
-    async ensureAnonymousChannel () {
+    committed,
+    releaseCommitted,
+    async ensureAnonymousChannel (options) {
       calls.ensure++
+      calls.ensureOptions.push(options)
       return {
         channel,
         channelKey: 'c'.repeat(64),
@@ -209,6 +220,7 @@ function fakePublisher ({ blockImport = false, importError = null } = {}) {
     },
     async importVideo (input) {
       calls.import++
+      calls.importSignals.push(input.signal)
       if (importGate) {
         await new Promise((resolve, reject) => {
           const abort = () => reject(Object.assign(new Error('cancelled'), { code: 'ABORT_ERR' }))
@@ -223,6 +235,11 @@ function fakePublisher ({ blockImport = false, importError = null } = {}) {
       if (input.signal?.aborted) throw Object.assign(new Error('cancelled'), { code: 'ABORT_ERR' })
       const metadata = publicationFor(input.videoId)
       videos.set(input.videoId, metadata)
+      if (committedGate) {
+        notifyCommitted()
+        await committedGate
+      }
+      if (commitThenThrow) throw new Error('publication acknowledgement lost')
       return { success: true, videoId: input.videoId, metadata, ...metadata.immutablePublication }
     },
     async publishCatalog () {
@@ -320,6 +337,7 @@ test('idempotency conflicts and prohibited source material fail before job mutat
     { ...request, bundleProvenance: { ...request.bundleProvenance, sourceKind: 'private-torrent' } },
     { ...request, bundleProvenance: { ...request.bundleProvenance, publicTrackerIndependent: false } },
     { ...request, bundleProvenance: { ...request.bundleProvenance, publicTrackerIndependent: undefined } },
+    { ...request, expected: { byteLength: bytes.byteLength } },
     { ...request, unknown: true }
   ]
   for (let index = 0; index < invalid.length; index++) {
@@ -357,6 +375,24 @@ test('job store enforces legal serialized CAS transitions and terminal rules', a
   raw = await store.transition(created.jobId, { expectedVersion: raw.version, from: 'verifying', to: 'failed', patch: { errorCode: 'HASH_MISMATCH', recoverable: false } })
   t.is(raw.state, 'failed')
   await t.exception(store.transition(created.jobId, { expectedVersion: raw.version, from: 'failed', to: 'cancelled' }), /INGEST_JOB_TERMINAL/)
+})
+
+test('job store rejects duplicate idempotency aliases and corrupt index bindings', async (t) => {
+  const bytes = Buffer.from('index corruption payload')
+  const { manager, store, bee } = harness(t)
+  const created = await manager.submitJob({ idempotencyKey: 'index-original', request: movieRequest(bytes) })
+  const originalIndexKey = [...bee.map.keys()].find(key => key.startsWith('companion-ingest/v1/idempotency/'))
+  const originalDigest = originalIndexKey.slice('companion-ingest/v1/idempotency/'.length)
+  const pointer = bee.map.get(originalIndexKey)
+  const duplicateDigest = 'f'.repeat(64)
+  bee.map.set(`companion-ingest/v1/idempotency/${duplicateDigest}`, { ...pointer, idempotencyDigest: duplicateDigest })
+
+  await t.exception(store.findByIdempotency(duplicateDigest), /INGEST_PERSISTENCE_CORRUPT/)
+
+  const jobKey = `companion-ingest/v1/job/${created.jobId}`
+  const record = bee.map.get(jobKey)
+  bee.map.set(jobKey, { ...record, requestFingerprint: '0'.repeat(64) })
+  await t.exception(store.findByIdempotency(originalDigest), /INGEST_PERSISTENCE_CORRUPT/)
 })
 
 test('restart bounds acquiring and verifying jobs as recoverable source reattachment failures', async (t) => {
@@ -402,6 +438,93 @@ test('restart reconciles a publishing fence through result lookup without a seco
   t.is(publisher.calls.catalog, 1)
 })
 
+test('an uncertain publication acknowledgement reconciles the fenced result without publishing twice', async (t) => {
+  const bytes = Buffer.from('uncertain publication payload')
+  const publisher = fakePublisher({ commitThenThrow: true })
+  const { files, manager } = harness(t, { publisher })
+  await manager.start()
+  const descriptor = files.writeSpool(bytes, 'uncertain.mkv')
+  const created = await manager.submitJob({ idempotencyKey: 'uncertain-1', request: movieRequest(bytes), spool: descriptor })
+  const completed = await waitForState(manager, created.jobId, 'completed')
+
+  t.ok(completed.publicationId)
+  t.is(publisher.calls.import, 1)
+  t.is(publisher.calls.catalog, 1)
+
+  t.exception(() => readFileSync(join(files.spoolRoot, 'uncertain.mkv')), /ENOENT/)
+})
+
+test('a publication crossing its commit fence wins cancellation without a second import', async (t) => {
+  const bytes = Buffer.from('publication cancellation fence payload')
+  const publisher = fakePublisher({ commitThenThrow: true, blockAfterCommit: true })
+  const { files, manager } = harness(t, { publisher })
+  await manager.start()
+  const descriptor = files.writeSpool(bytes, 'cancel-fence.mkv')
+  const created = await manager.submitJob({ idempotencyKey: 'cancel-fence-1', request: movieRequest(bytes), spool: descriptor })
+  await publisher.committed
+  const cancellation = manager.cancelJob(created.jobId)
+  while (!publisher.calls.importSignals[0]?.aborted) {
+    await new Promise(resolve => setTimeout(resolve, 1))
+  }
+  publisher.releaseCommitted()
+  const completed = await cancellation
+
+  t.is(completed.state, 'completed')
+  t.ok(completed.publicationId)
+  t.is(publisher.calls.import, 1)
+  t.is(publisher.calls.catalog, 1)
+  t.exception(() => readFileSync(join(files.spoolRoot, 'cancel-fence.mkv')), /ENOENT/)
+})
+
+test('ingest publication requires a deterministic media-context source channel', async (t) => {
+  const bytes = Buffer.from('deterministic source payload')
+  const { files, manager, publisher } = harness(t)
+  await manager.start()
+  const first = await manager.submitJob({
+    idempotencyKey: 'source-channel-1',
+    request: movieRequest(bytes),
+    spool: files.writeSpool(bytes, 'source-1.mkv')
+  })
+  await waitForState(manager, first.jobId, 'completed')
+  const secondRequest = movieRequest(bytes, {
+    measuredFacts: { ...movieRequest(bytes).measuredFacts, title: 'A Different Display Title' }
+  })
+  const second = await manager.submitJob({
+    idempotencyKey: 'source-channel-2',
+    request: secondRequest,
+    spool: files.writeSpool(bytes, 'source-2.mkv')
+  })
+  await waitForState(manager, second.jobId, 'completed')
+
+  t.is(publisher.calls.ensureOptions.length, 2)
+  t.ok(publisher.calls.ensureOptions.every(options => options.requireSourceChannel === true))
+  t.is(publisher.calls.ensureOptions[0].sourceIdentity.sourceId, publisher.calls.ensureOptions[1].sourceIdentity.sourceId)
+  t.not(publisher.calls.ensureOptions[0].sourceIdentity.creatorName, publisher.calls.ensureOptions[1].sourceIdentity.creatorName)
+})
+
+test('archive publisher does not fall back to the shared channel when deterministic source creation fails', async (t) => {
+  let sharedChannelReads = 0
+  const publisher = createArchivePublisher({
+    identityManager: {
+      getActiveIdentity () { return { driveKey: 'd'.repeat(64), publicKey: 'a'.repeat(64) } },
+      async getActiveChannel () {
+        sharedChannelReads++
+        return { blobs: {}, async getMetadata () { return { publicBeeKey: 'b'.repeat(64) } } }
+      }
+    },
+    uploadManager: {},
+    api: {},
+    runtime: { ctx: {}, logger: { archive: { warn () {} } } },
+    createChannelFn: async () => { throw new Error('source channel unavailable') }
+  })
+
+  await t.exception(publisher.ensureAnonymousChannel({
+    sourceIdentity: { sourceId: 'companion-source', creatorName: 'Archive' },
+    requireSourceChannel: true
+  }), /source channel unavailable/)
+  t.is(sharedChannelReads, 0)
+})
+
 test('completed spools stream through the static publisher once and are removed', async (t) => {
   const bytes = Buffer.from('streamed static media '.repeat(100))
   const { files, manager, publisher } = harness(t)
@@ -443,6 +566,55 @@ test('DELETE cancellation aborts active publication, reaches terminal state, and
   t.is(cancelled.errorCode, 'CANCELLED')
   t.exception(() => readFileSync(join(files.spoolRoot, 'cancel.mkv')), /ENOENT/)
   t.alike(await manager.cancelJob(created.jobId), cancelled, 'terminal DELETE is idempotent')
+})
+
+test('cancellation serializes with replay attachment without orphaning or conflicting the accepted spool', async (t) => {
+  let blockReplayRead = false
+  let enterReplayRead
+  let releaseReplayRead
+  const replayReadEntered = new Promise(resolve => { enterReplayRead = resolve })
+  const replayReadGate = new Promise(resolve => { releaseReplayRead = resolve })
+  const bee = fakeBee({
+    beforeGet: async key => {
+      if (!blockReplayRead || !key.startsWith('companion-ingest/v1/idempotency/')) return
+      blockReplayRead = false
+      enterReplayRead()
+      await replayReadGate
+    }
+  })
+  const publisher = fakePublisher({ blockImport: true })
+  const { files, manager } = harness(t, { bee, publisher })
+  await manager.start()
+  const bytes = Buffer.from('cancel replay race payload '.repeat(20))
+  const request = movieRequest(bytes)
+  const created = await manager.submitJob({ idempotencyKey: 'cancel-replay-race', request })
+  const descriptor = files.writeSpool(bytes, 'cancel-replay-race.mkv')
+  let accepted = 0
+  blockReplayRead = true
+  const replayPromise = manager.submitJob({
+    idempotencyKey: 'cancel-replay-race',
+    request,
+    spool: descriptor,
+    ingestSpoolLease: {
+      accept (spool) {
+        accepted++
+        t.is(spool.filePath, join(files.spoolRoot, 'cancel-replay-race.mkv'))
+        return true
+      }
+    }
+  })
+  await replayReadEntered
+  const cancelPromise = manager.cancelJob(created.jobId)
+  releaseReplayRead()
+
+  const replay = await replayPromise
+  const cancelled = await cancelPromise
+  publisher.releaseImport()
+  t.is(replay.jobId, created.jobId)
+  t.is(accepted, 1)
+  t.is(cancelled.state, 'cancelled')
+  t.is(cancelled.errorCode, 'CANCELLED')
+  t.exception(() => readFileSync(join(files.spoolRoot, 'cancel-replay-race.mkv')), /ENOENT/)
 })
 
 test('size, hash, and ETag mismatches fail closed without publication', async (t) => {
@@ -620,19 +792,19 @@ async function createMultipartHarness (t, {
   maxIngestBytes = 1024 * 1024,
   clock = () => MULTIPART_NOW,
   canArchive = () => true,
-  publisher = fakePublisher()
+  publisher = fakePublisher(),
+  bee = fakeBee()
 } = {}) {
   const files = fixture(t)
-  const bee = fakeBee()
   const store = createIngestJobStore({ bee })
   const manager = createIngestManager({ store, publisher, spoolRoot: files.spoolRoot, verifyChunkBytes: 64 })
   await manager.start()
   let submissions = 0
   const service = {
     canArchive,
-    async submitIngestJob (input, { ingestSpoolLease = null } = {}) {
+    async submitIngestJob (input, { ingestSpoolLease = null, signal = null } = {}) {
       submissions++
-      return manager.submitJob({ ...input, ingestSpoolLease })
+      return manager.submitJob({ ...input, ingestSpoolLease, signal })
     },
     getIngestJob: jobId => manager.getJob(jobId),
     cancelIngestJob: jobId => manager.cancelJob(jobId)
@@ -674,7 +846,8 @@ function sendMultipart ({
   contentLength = false,
   headersOnly = false,
   onChunk = null,
-  abortAfterChunks = null
+  abortAfterChunks = null,
+  onRequest = null
 }) {
   const path = '/api/v2/ingest/jobs'
   const auth = signControlRequest({
@@ -717,6 +890,7 @@ function sendMultipart ({
       }))
       response.once('error', error => settle(reject, error))
     })
+    onRequest?.(req)
     req.once('error', error => {
       if (responseStarted || settled) return
       if (abortAfterChunks != null) settle(resolve, { aborted: true, error })
@@ -797,6 +971,55 @@ test('authenticated multipart ingest streams a chunked body larger than the JSON
   t.is(JSON.parse(terminalReplay.body).job.state, 'completed')
   t.is(harness.publisher.calls.import, 1)
   t.alike(stagingEntries(harness.files.spoolRoot), [])
+})
+
+test('client disconnect during submit persistence aborts before durable mutation and removes unaccepted staging', async (t) => {
+  let blockSubmission = false
+  let enterPersistence
+  let releasePersistence
+  const persistenceEntered = new Promise(resolve => { enterPersistence = resolve })
+  const persistenceGate = new Promise(resolve => { releasePersistence = resolve })
+  const bee = fakeBee({
+    beforeGet: async key => {
+      if (!blockSubmission || !key.startsWith('companion-ingest/v1/idempotency/')) return
+      blockSubmission = false
+      enterPersistence()
+      await persistenceGate
+    }
+  })
+  const harness = await createMultipartHarness(t, { bee })
+  const bytes = Buffer.from('disconnect after staging payload '.repeat(10))
+  const request = movieRequest(bytes)
+  const boundary = 'peartubeMultipartDisconnect'
+  const body = multipartBody({
+    boundary,
+    request,
+    idempotencyKey: 'multipart-disconnect',
+    bytes,
+    etag: request.expected.etag
+  })
+  let clientRequest = null
+  blockSubmission = true
+  const response = sendMultipart({
+    state: harness.state,
+    body,
+    boundary,
+    nonce: 'multipart-disconnect-nonce',
+    onRequest (value) { clientRequest = value }
+  })
+  await persistenceEntered
+  clientRequest.destroy(new Error('client disconnected'))
+  releasePersistence()
+  await t.exception(response)
+
+  const deadline = Date.now() + 2000
+  while (stagingEntries(harness.files.spoolRoot).length > 0 && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  t.is(harness.submissions(), 1)
+  t.alike(stagingEntries(harness.files.spoolRoot), [])
+  t.is([...bee.map.keys()].some(key => key.startsWith('companion-ingest/v1/job/')), false)
+  t.is([...bee.map.keys()].some(key => key.startsWith('companion-ingest/v1/idempotency/')), false)
 })
 
 test('multipart replay while the original attachment publishes never transfers the second staging lease', async (t) => {

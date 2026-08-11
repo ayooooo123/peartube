@@ -249,9 +249,8 @@ function normalizeExpected (input, measuredBytes) {
   onlyFields(input, EXPECTED_FIELDS, 'expected')
   const byteLength = integer(input.byteLength, 'expected.byteLength', { minimum: 1, maximum: MAX_SAFE_MEDIA_BYTES })
   if (byteLength !== measuredBytes) fail('INGEST_REQUEST_INVALID', 'expected byte length must equal measured byte length')
-  const result = { byteLength }
-  const sha256 = normalizeSha256(input.sha256, 'expected.sha256')
-  if (sha256) result.sha256 = sha256
+  const sha256 = normalizeSha256(input.sha256, 'expected.sha256', true)
+  const result = { byteLength, sha256 }
   if (input.etag != null) result.etag = text(input.etag, 'expected.etag', 256)
   return result
 }
@@ -484,11 +483,23 @@ export function createIngestManager ({
   let closing = false
   let closed = false
 
+  let mutations = Promise.resolve()
+
+  function serializeMutation (operation) {
+    const result = mutations.then(operation, operation)
+    mutations = result.catch(() => {})
+    return result
+  }
+
+  function assertSubmissionActive (signal) {
+    if (closed || closing) fail('INGEST_MANAGER_CLOSED', 'ingest manager is closed', 503)
+    if (signal?.aborted) fail('CANCELLED', 'ingest submission was cancelled', 499)
+  }
   function jobIdFor (idempotencyKey, fingerprint) {
     return `ing_${hashHex('peartube.companion.ingest.job.v1', `${idempotencyKey}\u0000${fingerprint}`).slice(0, 32)}`
   }
 
-  function buildJob (idempotencyKey, request, fingerprint) {
+  function buildJob (idempotencyKey, idempotencyDigest, request, fingerprint) {
     const jobId = jobIdFor(idempotencyKey, fingerprint)
     const timestamp = now()
     return {
@@ -496,6 +507,7 @@ export function createIngestManager ({
       jobId,
       state: 'queued',
       version: 0,
+      idempotencyDigest,
       requestFingerprint: fingerprint,
       request,
       retentionClass: request.retentionClass,
@@ -549,7 +561,8 @@ export function createIngestManager ({
     const sourceIdentity = sourceIdentityFor(job)
     return publisher.ensureAnonymousChannel({
       channelName: sourceIdentity.creatorName,
-      sourceIdentity
+      sourceIdentity,
+      requireSourceChannel: true
     })
   }
 
@@ -616,7 +629,7 @@ export function createIngestManager ({
   }
 
   async function verifySpool (job, spool, signal) {
-    const hasher = job.request.expected.sha256 ? sha256State() : null
+    const hasher = sha256State()
     const stream = fs.createReadStream(spool.filePath, { highWaterMark: verifyChunkBytes })
     let bytesReceived = 0
     let persistedAt = job.bytesReceived
@@ -632,8 +645,8 @@ export function createIngestManager ({
         if (error) reject(error)
         else pending.then(() => {
           if (bytesReceived !== job.expectedBytes) fail('SPOOL_LENGTH_MISMATCH', 'spool ended at the wrong length')
-          const digest = hasher?.digest()
-          if (job.request.expected.sha256 && digest !== job.request.expected.sha256) fail('HASH_MISMATCH', 'spool SHA-256 does not match')
+          const digest = hasher.digest()
+          if (digest !== job.request.expected.sha256) fail('HASH_MISMATCH', 'spool SHA-256 does not match')
           resolve(current)
         }).catch(reject)
       }
@@ -649,7 +662,7 @@ export function createIngestManager ({
           stream.destroy(new IngestJobError('SPOOL_LENGTH_MISMATCH', 'spool exceeds expected length'))
           return
         }
-        hasher?.update(b4a.from(chunk))
+        hasher.update(b4a.from(chunk))
         if (bytesReceived === job.expectedBytes || bytesReceived - persistedAt >= MAX_PROGRESS_INTERVAL) {
           stream.pause?.()
           const checkpoint = bytesReceived
@@ -768,61 +781,73 @@ export function createIngestManager ({
       request,
       spool = null,
       sourceCapability = null,
-      ingestSpoolLease = null
+      ingestSpoolLease = null,
+      signal = null
     } = {}) {
-      if (closed || closing) fail('INGEST_MANAGER_CLOSED', 'ingest manager is closed', 503)
-      if (ingestSpoolLease != null && spool == null) fail('SPOOL_OWNERSHIP_INVALID', 'ingest spool ownership handoff failed', 500)
-      const key = text(idempotencyKey, 'idempotencyKey', 128, { pattern: ID })
-      const normalized = normalizeIngestRequest(request)
-      const fingerprint = normalizedFingerprint(normalized)
-      const idempotencyDigest = hashHex('peartube.companion.ingest.idempotency.v1', key)
+      return serializeMutation(async () => {
+        assertSubmissionActive(signal)
+        if (ingestSpoolLease != null && spool == null) fail('SPOOL_OWNERSHIP_INVALID', 'ingest spool ownership handoff failed', 500)
+        const key = text(idempotencyKey, 'idempotencyKey', 128, { pattern: ID })
+        const normalized = normalizeIngestRequest(request)
+        const fingerprint = normalizedFingerprint(normalized)
+        const idempotencyDigest = hashHex('peartube.companion.ingest.idempotency.v1', key)
 
-      const existing = await store.findByIdempotency(idempotencyDigest)
-      if (existing) {
-        if (existing.requestFingerprint !== fingerprint) fail('IDEMPOTENCY_CONFLICT', 'idempotency key is already bound to another request', 409)
-        const attached = ephemeral.get(existing.jobId)
-        let incomingSpool = null
-        if (spool != null) {
-          incomingSpool = normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
-          if (!TERMINAL.has(existing.state) && !attached?.spool) {
-            acceptSpoolLease(ingestSpoolLease, incomingSpool)
-            ephemeral.set(existing.jobId, { ...attached, descriptor: spool, spool: incomingSpool, sourceCapability: attached?.sourceCapability || null })
-            incomingSpool = null
-            schedule(existing.jobId)
-          } else if (incomingSpool.filePath === attached?.spool?.filePath) {
-            acceptSpoolLease(ingestSpoolLease, incomingSpool)
-            incomingSpool = null
+        const existing = await store.findByIdempotency(idempotencyDigest)
+        assertSubmissionActive(signal)
+        if (existing) {
+          if (existing.requestFingerprint !== fingerprint) fail('IDEMPOTENCY_CONFLICT', 'idempotency key is already bound to another request', 409)
+          const attached = ephemeral.get(existing.jobId)
+          let incomingSpool = null
+          if (spool != null) {
+            incomingSpool = normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
+            if (!TERMINAL.has(existing.state) && !attached?.spool) {
+              assertSubmissionActive(signal)
+              acceptSpoolLease(ingestSpoolLease, incomingSpool)
+              ephemeral.set(existing.jobId, { ...attached, descriptor: spool, spool: incomingSpool, sourceCapability: attached?.sourceCapability || null })
+              incomingSpool = null
+              schedule(existing.jobId)
+            } else if (incomingSpool.filePath === attached?.spool?.filePath) {
+              assertSubmissionActive(signal)
+              acceptSpoolLease(ingestSpoolLease, incomingSpool)
+              incomingSpool = null
+            }
           }
+          if (incomingSpool) discardUnacceptedSpool(ingestSpoolLease, incomingSpool, existing.jobId)
+          if (!TERMINAL.has(existing.state) && !ephemeral.get(existing.jobId)?.sourceCapability && sourceCapability != null) {
+            assertSubmissionActive(signal)
+            const current = ephemeral.get(existing.jobId) || {}
+            ephemeral.set(existing.jobId, { ...current, sourceCapability: normalizeSourceCapability(sourceCapability) })
+          }
+          const current = await store.getJob(existing.jobId)
+          assertSubmissionActive(signal)
+          return publicJob(current)
         }
-        if (incomingSpool) discardUnacceptedSpool(ingestSpoolLease, incomingSpool, existing.jobId)
-        if (!TERMINAL.has(existing.state) && !ephemeral.get(existing.jobId)?.sourceCapability && sourceCapability != null) {
-          const current = ephemeral.get(existing.jobId) || {}
-          ephemeral.set(existing.jobId, { ...current, sourceCapability: normalizeSourceCapability(sourceCapability) })
-        }
-        return publicJob(await store.getJob(existing.jobId))
-      }
 
-      const normalizedSpool = spool == null ? null : normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
-      const capability = normalizeSourceCapability(sourceCapability)
-      const initial = buildJob(key, normalized, fingerprint)
-      const outcome = await store.createOrReplay({ idempotencyDigest, requestFingerprint: fingerprint, job: initial })
-      if (!TERMINAL.has(outcome.job.state) && (normalizedSpool || capability)) {
-        const attached = ephemeral.get(outcome.job.jobId) || {}
-        if (normalizedSpool && !attached.spool) acceptSpoolLease(ingestSpoolLease, normalizedSpool)
-        else if (normalizedSpool && normalizedSpool.filePath === attached.spool?.filePath) acceptSpoolLease(ingestSpoolLease, normalizedSpool)
-        ephemeral.set(outcome.job.jobId, {
-          descriptor: attached.spool ? attached.descriptor : spool,
-          spool: attached.spool || normalizedSpool,
-          sourceCapability: attached.sourceCapability || capability
-        })
-        if (normalizedSpool && attached.spool && normalizedSpool.filePath !== attached.spool.filePath) {
+        const normalizedSpool = spool == null ? null : normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
+        const capability = normalizeSourceCapability(sourceCapability)
+        const initial = buildJob(key, idempotencyDigest, normalized, fingerprint)
+        const outcome = await store.createOrReplay({ idempotencyDigest, requestFingerprint: fingerprint, job: initial })
+        assertSubmissionActive(signal)
+        if (!TERMINAL.has(outcome.job.state) && (normalizedSpool || capability)) {
+          const attached = ephemeral.get(outcome.job.jobId) || {}
+          assertSubmissionActive(signal)
+          if (normalizedSpool && !attached.spool) acceptSpoolLease(ingestSpoolLease, normalizedSpool)
+          else if (normalizedSpool && normalizedSpool.filePath === attached.spool?.filePath) acceptSpoolLease(ingestSpoolLease, normalizedSpool)
+          ephemeral.set(outcome.job.jobId, {
+            descriptor: attached.spool ? attached.descriptor : spool,
+            spool: attached.spool || normalizedSpool,
+            sourceCapability: attached.sourceCapability || capability
+          })
+          if (normalizedSpool && attached.spool && normalizedSpool.filePath !== attached.spool.filePath) {
+            discardUnacceptedSpool(ingestSpoolLease, normalizedSpool, outcome.job.jobId)
+          }
+          assertSubmissionActive(signal)
+          schedule(outcome.job.jobId)
+        } else if (normalizedSpool) {
           discardUnacceptedSpool(ingestSpoolLease, normalizedSpool, outcome.job.jobId)
         }
-        schedule(outcome.job.jobId)
-      } else if (normalizedSpool) {
-        discardUnacceptedSpool(ingestSpoolLease, normalizedSpool, outcome.job.jobId)
-      }
-      return publicJob(outcome.job)
+        return publicJob(outcome.job)
+      })
     },
 
     async getJob (jobId) {
@@ -836,19 +861,23 @@ export function createIngestManager ({
     },
 
     async cancelJob (jobId) {
-      const job = await store.getJob(jobId)
-      if (!job) return null
-      if (TERMINAL.has(job.state)) return publicJob(job)
-      const running = active.get(jobId)
-      if (running) {
-        running.cancelled = true
-        running.controller.abort()
-        await running.promise.catch(() => {})
-      } else {
-        await markTerminal(jobId, 'cancelled', 'CANCELLED', false)
+      const decision = await serializeMutation(async () => {
+        if (closed || closing) fail('INGEST_MANAGER_CLOSED', 'ingest manager is closed', 503)
+        const job = await store.getJob(jobId)
+        if (!job || TERMINAL.has(job.state)) return { job, running: null }
+        const running = active.get(jobId)
+        if (running) {
+          running.cancelled = true
+          running.controller.abort()
+          return { job, running }
+        }
+        const cancelled = await markTerminal(jobId, 'cancelled', 'CANCELLED', false)
         cleanupAttachment(jobId)
-      }
-      return publicJob(await store.getJob(jobId))
+        return { job: cancelled, running: null }
+      })
+      if (decision.running) await decision.running.promise.catch(() => {})
+      const current = await store.getJob(jobId)
+      return publicJob(current || decision.job)
     },
 
     async start () {
@@ -867,6 +896,11 @@ export function createIngestManager ({
     async close () {
       if (closed) return
       closing = true
+      for (const entry of active.values()) {
+        entry.closing = true
+        entry.controller.abort()
+      }
+      await mutations
       for (const entry of active.values()) {
         entry.closing = true
         entry.controller.abort()

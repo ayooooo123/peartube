@@ -698,13 +698,13 @@ export async function createRelayService({
     async getPublication(publicationId) {
       return runtime.ctx?.assetManifestStore?.getManifest?.(publicationId) || null
     },
-    async submitIngestJob(input, { ingestSpoolLease = null } = {}) {
+    async submitIngestJob(input, { ingestSpoolLease = null, signal = null } = {}) {
       if (!ingestManager) {
         const error = new Error('Companion ingest jobs are unavailable')
         error.code = 'INGEST_UNAVAILABLE'
         throw error
       }
-      return ingestManager.submitJob({ ...input, ingestSpoolLease })
+      return ingestManager.submitJob({ ...input, ingestSpoolLease, signal })
     },
     async getIngestJob(jobId) {
       if (!ingestManager) return null

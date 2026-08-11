@@ -457,7 +457,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
   }
 
   return {
-    async ensureAnonymousChannel({ channelName, sourceIdentity = null } = {}) {
+    async ensureAnonymousChannel({ channelName, sourceIdentity = null, requireSourceChannel = false } = {}) {
       const sourceKey = sourceIdentity?.sourceId || null
       if (sourceKey && sourceChannels.has(sourceKey)) return sourceChannels.get(sourceKey)
 
@@ -469,9 +469,11 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
           sourceChannels.set(sourceKey, entry)
           return entry
         } catch (err) {
+          if (requireSourceChannel) throw err
           runtime?.logger?.archive?.warn?.('Grouped source channel failed; using shared channel', { sourceId: sourceKey, error: err?.message || String(err) })
         }
       }
+      if (requireSourceChannel) throw new Error('deterministic source channel is required')
 
       let identity = identityManager.getActiveIdentity?.()
       if (!identity?.driveKey) {

@@ -317,18 +317,20 @@ test('canonical request normalization makes property-order replay stable and kee
 test('idempotency conflicts and prohibited source material fail before job mutation', async (t) => {
   const bytes = Buffer.from('conflict payload')
   const request = movieRequest(bytes)
-  const { manager, bee } = harness(t)
+  const { manager, bee, files } = harness(t)
   await manager.submitJob({ idempotencyKey: 'watch-conflict', request })
   const before = JSON.stringify([...bee.map.entries()])
+  const callerSpool = files.writeSpool(bytes, 'conflict-caller-owned.mkv')
   await t.exception(
     manager.submitJob({
       idempotencyKey: 'watch-conflict',
       request: { ...request, retentionClass: 'archive-pin' },
-      spool: { path: '../escape', complete: true, mimeType: 'video/mp4', byteLength: bytes.byteLength }
+      spool: callerSpool
     }),
     /IDEMPOTENCY_CONFLICT/
   )
   t.is(JSON.stringify([...bee.map.entries()]), before)
+  t.is(readFileSync(join(files.spoolRoot, 'conflict-caller-owned.mkv')).byteLength, bytes.byteLength)
 
   const invalid = [
     { ...request, sourceUrl: 'https://private.invalid/movie' },
@@ -545,6 +547,29 @@ test('completed spools stream through the static publisher once and are removed'
   t.exception(() => readFileSync(join(files.spoolRoot, 'success.mkv')), /ENOENT/)
 })
 
+test('direct queued and terminal replays discard only the unadopted spool', async (t) => {
+  const bytes = Buffer.from('direct replay cleanup payload '.repeat(20))
+  const request = movieRequest(bytes)
+  const { files, manager, publisher } = harness(t)
+  const accepted = files.writeSpool(bytes, 'direct-accepted.mkv')
+  const created = await manager.submitJob({ idempotencyKey: 'direct-replay-cleanup', request, spool: accepted })
+  const queuedReplay = files.writeSpool(bytes, 'direct-queued-replay.mkv')
+  const replayed = await manager.submitJob({ idempotencyKey: 'direct-replay-cleanup', request, spool: queuedReplay })
+
+  t.is(replayed.jobId, created.jobId)
+  t.is(readFileSync(join(files.spoolRoot, 'direct-accepted.mkv')).byteLength, bytes.byteLength)
+  t.exception(() => readFileSync(join(files.spoolRoot, 'direct-queued-replay.mkv')), /ENOENT/)
+
+  await manager.start()
+  await waitForState(manager, created.jobId, 'completed')
+  t.is(publisher.calls.import, 1)
+  const terminalReplay = files.writeSpool(bytes, 'direct-terminal-replay.mkv')
+  const completed = await manager.submitJob({ idempotencyKey: 'direct-replay-cleanup', request, spool: terminalReplay })
+  t.is(completed.state, 'completed')
+  t.is(publisher.calls.import, 1)
+  t.exception(() => readFileSync(join(files.spoolRoot, 'direct-terminal-replay.mkv')), /ENOENT/)
+})
+
 test('archive-pin publication retains only the completed independent rendition', async (t) => {
   const bytes = Buffer.from('archive pin payload')
   const { files, manager, publisher } = harness(t)
@@ -710,13 +735,130 @@ test('persistence failures expose one bounded stable error and never half-write 
   const files = fixture(t)
   const bee = fakeBee({ failFlush: true })
   const store = createIngestJobStore({ bee })
-  const manager = createIngestManager({ store, publisher: fakePublisher(), spoolRoot: files.spoolRoot })
+  const publisher = fakePublisher()
+  const manager = createIngestManager({ store, publisher, spoolRoot: files.spoolRoot })
   t.teardown(() => manager.close())
-  const error = await manager.submitJob({ idempotencyKey: 'persistence-1', request: movieRequest(bytes) }).then(() => null, value => value)
+  await manager.start()
+  const descriptor = files.writeSpool(bytes, 'persistence-failure.mkv')
+  const error = await manager.submitJob({
+    idempotencyKey: 'persistence-1',
+    request: movieRequest(bytes),
+    spool: descriptor
+  }).then(() => null, value => value)
   t.ok(error instanceof IngestJobStoreError)
   t.is(error.code, 'INGEST_PERSISTENCE_FAILED')
   t.ok(Buffer.byteLength(error.message) <= 128)
   t.is(bee.map.size, 0)
+  t.is(publisher.calls.import, 0)
+  t.exception(() => readFileSync(join(files.spoolRoot, 'persistence-failure.mkv')), /ENOENT/)
+})
+
+test('direct spool abort during committed persistence cleans the unadopted file and permits replay', async (t) => {
+  let blockPersistence = false
+  let enterPersistence
+  let releasePersistence
+  const persistenceEntered = new Promise(resolve => { enterPersistence = resolve })
+  const persistenceGate = new Promise(resolve => { releasePersistence = resolve })
+  const bee = fakeBee({
+    afterFlush: async () => {
+      if (!blockPersistence) return
+      blockPersistence = false
+      enterPersistence()
+      await persistenceGate
+    }
+  })
+  const files = fixture(t)
+  const store = createIngestJobStore({ bee })
+  const publisher = fakePublisher()
+  const manager = createIngestManager({ store, publisher, spoolRoot: files.spoolRoot, verifyChunkBytes: 64 })
+  t.teardown(() => manager.close())
+  await manager.start()
+  const bytes = Buffer.from('direct abort persistence payload '.repeat(10))
+  const request = movieRequest(bytes)
+  const controller = new globalThis.AbortController()
+  blockPersistence = true
+  const submission = manager.submitJob({
+    idempotencyKey: 'direct-abort-persistence',
+    request,
+    spool: files.writeSpool(bytes, 'direct-abort.mkv'),
+    signal: controller.signal
+  })
+  await persistenceEntered
+  controller.abort()
+  releasePersistence()
+  const error = await submission.then(() => null, value => value)
+
+  t.is(error?.code, 'CANCELLED')
+  t.is(publisher.calls.import, 0)
+  t.exception(() => readFileSync(join(files.spoolRoot, 'direct-abort.mkv')), /ENOENT/)
+  const jobKey = [...bee.map.keys()].find(key => key.startsWith('companion-ingest/v1/job/'))
+  const jobId = jobKey.slice('companion-ingest/v1/job/'.length)
+  t.is((await manager.getJob(jobId)).state, 'queued')
+
+  const replay = await manager.submitJob({
+    idempotencyKey: 'direct-abort-persistence',
+    request,
+    spool: files.writeSpool(bytes, 'direct-abort-replay.mkv')
+  })
+  t.is(replay.jobId, jobId)
+  await waitForState(manager, jobId, 'completed')
+  t.is(publisher.calls.import, 1)
+  t.exception(() => readFileSync(join(files.spoolRoot, 'direct-abort-replay.mkv')), /ENOENT/)
+})
+
+test('manager close during committed persistence cleans a direct spool and leaves a replayable job', async (t) => {
+  let blockPersistence = false
+  let enterPersistence
+  let releasePersistence
+  const persistenceEntered = new Promise(resolve => { enterPersistence = resolve })
+  const persistenceGate = new Promise(resolve => { releasePersistence = resolve })
+  const bee = fakeBee({
+    afterFlush: async () => {
+      if (!blockPersistence) return
+      blockPersistence = false
+      enterPersistence()
+      await persistenceGate
+    }
+  })
+  const files = fixture(t)
+  const publisher = fakePublisher()
+  const firstStore = createIngestJobStore({ bee })
+  const first = createIngestManager({ store: firstStore, publisher, spoolRoot: files.spoolRoot, verifyChunkBytes: 64 })
+  await first.start()
+  const bytes = Buffer.from('direct close persistence payload '.repeat(10))
+  const request = movieRequest(bytes)
+  blockPersistence = true
+  const submission = first.submitJob({
+    idempotencyKey: 'direct-close-persistence',
+    request,
+    spool: files.writeSpool(bytes, 'direct-close.mkv')
+  })
+  await persistenceEntered
+  const closing = first.close()
+  releasePersistence()
+  const error = await submission.then(() => null, value => value)
+  await closing
+
+  t.is(error?.code, 'INGEST_MANAGER_CLOSED')
+  t.is(publisher.calls.import, 0)
+  t.exception(() => readFileSync(join(files.spoolRoot, 'direct-close.mkv')), /ENOENT/)
+  const jobKey = [...bee.map.keys()].find(key => key.startsWith('companion-ingest/v1/job/'))
+  const jobId = jobKey.slice('companion-ingest/v1/job/'.length)
+
+  const secondStore = createIngestJobStore({ bee })
+  const second = createIngestManager({ store: secondStore, publisher, spoolRoot: files.spoolRoot, verifyChunkBytes: 64 })
+  t.teardown(() => second.close())
+  await second.start()
+  t.is((await second.getJob(jobId)).state, 'queued')
+  const replay = await second.submitJob({
+    idempotencyKey: 'direct-close-persistence',
+    request,
+    spool: files.writeSpool(bytes, 'direct-close-replay.mkv')
+  })
+  t.is(replay.jobId, jobId)
+  await waitForState(second, jobId, 'completed')
+  t.is(publisher.calls.import, 1)
+  t.exception(() => readFileSync(join(files.spoolRoot, 'direct-close-replay.mkv')), /ENOENT/)
 })
 
 test('companion routes expose redacted jobs and map idempotency conflict without weakening the route contract', async (t) => {

@@ -797,55 +797,88 @@ export function createIngestManager ({
         if (existing) {
           if (existing.requestFingerprint !== fingerprint) fail('IDEMPOTENCY_CONFLICT', 'idempotency key is already bound to another request', 409)
           const attached = ephemeral.get(existing.jobId)
-          const incomingCapability = normalizeSourceCapability(sourceCapability)
           let incomingSpool = null
-          if (spool != null) {
-            incomingSpool = normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
-            if (!TERMINAL.has(existing.state) && !attached?.spool) {
-              // Lease acceptance, attachment, and scheduling are one synchronous ownership handoff.
-              assertSubmissionActive(signal)
-              acceptSpoolLease(ingestSpoolLease, incomingSpool)
-              ephemeral.set(existing.jobId, { ...attached, descriptor: spool, spool: incomingSpool, sourceCapability: attached?.sourceCapability || null })
-              incomingSpool = null
-              schedule(existing.jobId)
-            } else if (incomingSpool.filePath === attached?.spool?.filePath) {
-              assertSubmissionActive(signal)
-              acceptSpoolLease(ingestSpoolLease, incomingSpool)
+          let spoolAccepted = false
+          let spoolAdopted = false
+          try {
+            const incomingCapability = normalizeSourceCapability(sourceCapability)
+            if (spool != null) {
+              incomingSpool = normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
+              if (!TERMINAL.has(existing.state) && !attached?.spool) {
+                // Lease acceptance, attachment, and scheduling are one synchronous ownership handoff.
+                assertSubmissionActive(signal)
+                acceptSpoolLease(ingestSpoolLease, incomingSpool)
+                spoolAccepted = true
+                ephemeral.set(existing.jobId, { ...attached, descriptor: spool, spool: incomingSpool, sourceCapability: attached?.sourceCapability || null })
+                spoolAdopted = true
+                incomingSpool = null
+                schedule(existing.jobId)
+              } else if (incomingSpool.filePath === attached?.spool?.filePath) {
+                assertSubmissionActive(signal)
+                acceptSpoolLease(ingestSpoolLease, incomingSpool)
+                spoolAccepted = true
+                spoolAdopted = true
+                incomingSpool = null
+              }
+            }
+            if (incomingSpool) {
+              discardUnacceptedSpool(ingestSpoolLease, incomingSpool, existing.jobId)
               incomingSpool = null
             }
+            if (!TERMINAL.has(existing.state) && !ephemeral.get(existing.jobId)?.sourceCapability && incomingCapability != null) {
+              const current = ephemeral.get(existing.jobId) || {}
+              ephemeral.set(existing.jobId, { ...current, sourceCapability: incomingCapability })
+            }
+            return publicJob(existing)
+          } finally {
+            if (incomingSpool && !spoolAdopted) {
+              if (spoolAccepted) cleanupSpool(incomingSpool, existing.jobId)
+              else discardUnacceptedSpool(ingestSpoolLease, incomingSpool, existing.jobId)
+            }
           }
-          if (incomingSpool) discardUnacceptedSpool(ingestSpoolLease, incomingSpool, existing.jobId)
-          if (!TERMINAL.has(existing.state) && !ephemeral.get(existing.jobId)?.sourceCapability && incomingCapability != null) {
-            const current = ephemeral.get(existing.jobId) || {}
-            ephemeral.set(existing.jobId, { ...current, sourceCapability: incomingCapability })
-          }
-          return publicJob(existing)
         }
 
         const normalizedSpool = spool == null ? null : normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
         const capability = normalizeSourceCapability(sourceCapability)
         const initial = buildJob(key, idempotencyDigest, normalized, fingerprint)
-        const outcome = await store.createOrReplay({ idempotencyDigest, requestFingerprint: fingerprint, job: initial })
-        assertSubmissionActive(signal)
-        if (!TERMINAL.has(outcome.job.state) && (normalizedSpool || capability)) {
-          const attached = ephemeral.get(outcome.job.jobId) || {}
-          // Once accepted, this manager must attach and schedule without another abort checkpoint.
+        let spoolAccepted = false
+        let spoolAdopted = false
+        try {
+          const outcome = await store.createOrReplay({ idempotencyDigest, requestFingerprint: fingerprint, job: initial })
           assertSubmissionActive(signal)
-          if (normalizedSpool && !attached.spool) acceptSpoolLease(ingestSpoolLease, normalizedSpool)
-          else if (normalizedSpool && normalizedSpool.filePath === attached.spool?.filePath) acceptSpoolLease(ingestSpoolLease, normalizedSpool)
-          ephemeral.set(outcome.job.jobId, {
-            descriptor: attached.spool ? attached.descriptor : spool,
-            spool: attached.spool || normalizedSpool,
-            sourceCapability: attached.sourceCapability || capability
-          })
-          if (normalizedSpool && attached.spool && normalizedSpool.filePath !== attached.spool.filePath) {
+          if (!TERMINAL.has(outcome.job.state) && (normalizedSpool || capability)) {
+            const attached = ephemeral.get(outcome.job.jobId) || {}
+            // Once accepted, this manager must attach and schedule without another abort checkpoint.
+            assertSubmissionActive(signal)
+            if (normalizedSpool && !attached.spool) {
+              acceptSpoolLease(ingestSpoolLease, normalizedSpool)
+              spoolAccepted = true
+            } else if (normalizedSpool && normalizedSpool.filePath === attached.spool?.filePath) {
+              acceptSpoolLease(ingestSpoolLease, normalizedSpool)
+              spoolAccepted = true
+              spoolAdopted = true
+            }
+            ephemeral.set(outcome.job.jobId, {
+              descriptor: attached.spool ? attached.descriptor : spool,
+              spool: attached.spool || normalizedSpool,
+              sourceCapability: attached.sourceCapability || capability
+            })
+            if (normalizedSpool && !attached.spool) spoolAdopted = true
+            if (normalizedSpool && attached.spool && normalizedSpool.filePath !== attached.spool.filePath) {
+              discardUnacceptedSpool(ingestSpoolLease, normalizedSpool, outcome.job.jobId)
+            }
+            schedule(outcome.job.jobId)
+          } else if (normalizedSpool) {
             discardUnacceptedSpool(ingestSpoolLease, normalizedSpool, outcome.job.jobId)
           }
-          schedule(outcome.job.jobId)
-        } else if (normalizedSpool) {
-          discardUnacceptedSpool(ingestSpoolLease, normalizedSpool, outcome.job.jobId)
+          return publicJob(outcome.job)
+        } catch (error) {
+          if (normalizedSpool && !spoolAdopted) {
+            if (spoolAccepted) cleanupSpool(normalizedSpool, initial.jobId)
+            else discardUnacceptedSpool(ingestSpoolLease, normalizedSpool, initial.jobId)
+          }
+          throw error
         }
-        return publicJob(outcome.job)
       })
     },
 

@@ -1548,7 +1548,10 @@ export function createScopedNetworkRuntime (options = {}) {
         if (result.status !== 'authorized') fail(result.reason)
         if (isCurrentSession()) {
           tracked.state = 'active'
-          if (scope.purpose === 'archive' && !scope.archiveDiscovery) startArchivePumpWhenOpen(scope, tracked)
+          if (scope.purpose === 'archive' && !scope.archiveDiscovery) {
+            for (const failures of scope.archiveFailures?.values?.() || []) failures.delete(remoteKey)
+            startArchivePumpWhenOpen(scope, tracked)
+          }
         }
       },
       onFrame: frame => {
@@ -1583,7 +1586,15 @@ export function createScopedNetworkRuntime (options = {}) {
           }
           if (scope.sessions.get(remoteKey) === tracked) scope.sessions.delete(remoteKey)
           counters.closedSessions++
-          if (scope.purpose === 'archive') void pumpArchiveSessions(scope)
+          if (scope.purpose === 'archive') {
+            void Promise.resolve().then(() => {
+              const info = activeConnections.get(connection)
+              if (status !== 'active' || !info || scope.closed || !scopeMayAttach(scope) ||
+                  scope.sessions.has(remoteKey) || connection?.destroyed === true) return
+              attachScope(scope, connection, info)
+            }).catch(error => recordProtocolError(scope, remoteKey, error))
+            void pumpArchiveSessions(scope)
+          }
         }
       },
     })

@@ -9,7 +9,8 @@ import {
   decodeSearchQuery,
   errorBody
 } from '../src/companion/contracts.js'
-import { createCompanionRouter, createStreamLeaseStore } from '../src/companion/routes.js'
+import { createCompanionRouter } from '../src/companion/routes.js'
+import { createStreamCapabilityStore } from '../src/companion/stream-capabilities.js'
 
 const CLIENT = 'mediastorm-test'
 const NOW = 1_786_406_400_000
@@ -157,9 +158,9 @@ test('episode search returns an explicit capability error before backend delegat
   t.is(delegated, false)
 })
 
-test('open verifies a candidate and returns a digest-only scoped reusable lease', async (t) => {
+test('open verifies a candidate and returns a scoped reusable capability', async (t) => {
   let verifiedRef = null
-  const leases = createStreamLeaseStore({
+  const capabilities = createStreamCapabilityStore({
     now: () => NOW,
     randomBytes: () => b4a.alloc(32, 7),
     ttlMs: 1_000,
@@ -177,7 +178,7 @@ test('open verifies a candidate and returns a digest-only scoped reusable lease'
     },
     config: { client: { id: CLIENT } },
     clock: () => NOW,
-    leases
+    capabilities
   })
   const opened = await router.dispatch(request('POST', '/api/v2/streams/open', `{"candidateRef":"${REF}"}`))
   t.is(opened.statusCode, 200)
@@ -187,7 +188,6 @@ test('open verifies a candidate and returns a digest-only scoped reusable lease'
   t.is(opened.body.renditionId, 'rendition-1')
   const token = new URL(opened.body.url, 'http://companion.invalid').searchParams.get('cap')
   t.ok(token)
-  t.not(leases.debugEntries()[0].includes(token), true)
 
   const get = await router.dispatch(request('GET', `${opened.body.url}`))
   const head = await router.dispatch(request('HEAD', `${opened.body.url}`))
@@ -200,16 +200,16 @@ test('open verifies a candidate and returns a digest-only scoped reusable lease'
   t.is(head.body.scope.method, 'HEAD')
 })
 
-test('stream lease rejects wrong client, path scope, token, and expiry before delegation', async (t) => {
+test('stream capability rejects wrong client, path scope, token, and expiry before delegation', async (t) => {
   let now = NOW
   let calls = 0
-  const leases = createStreamLeaseStore({ now: () => now, randomBytes: () => b4a.alloc(32, 8), ttlMs: 100, maxEntries: 4 })
-  const granted = leases.issue({ clientIdentity: CLIENT, publicationId: 'pub-1', renditionId: 'rend-1', assetId: 'asset-1' })
+  const capabilities = createStreamCapabilityStore({ now: () => now, randomBytes: () => b4a.alloc(32, 8), ttlMs: 100, maxEntries: 4 })
+  const granted = capabilities.issue({ clientIdentity: CLIENT, publicationId: 'pub-1', renditionId: 'rend-1', assetId: 'asset-1' })
   const router = createCompanionRouter({
     service: { async streamAsset () { calls++; return { ok: true } } },
     config: { client: { id: CLIENT } },
     clock: () => now,
-    leases
+    capabilities
   })
   const path = `/api/v2/stream/pub-1/rend-1?cap=${granted.token}`
   const wrongClient = request('GET', path)
@@ -222,20 +222,22 @@ test('stream lease rejects wrong client, path scope, token, and expiry before de
   t.is(calls, 0)
 })
 
-test('lease capacity fails closed without evicting live grants', (t) => {
+test('capability capacity fails closed without evicting live grants', (t) => {
   let byte = 1
-  const leases = createStreamLeaseStore({ now: () => NOW, randomBytes: () => b4a.alloc(32, byte++), ttlMs: 1_000, maxEntries: 2 })
-  const first = leases.issue({ clientIdentity: CLIENT, publicationId: 'p1', renditionId: 'r1', assetId: 'a1' })
-  leases.issue({ clientIdentity: CLIENT, publicationId: 'p2', renditionId: 'r2', assetId: 'a2' })
+  const capabilities = createStreamCapabilityStore({ now: () => NOW, randomBytes: () => b4a.alloc(32, byte++), ttlMs: 1_000, maxEntries: 2 })
+  const first = capabilities.issue({ clientIdentity: CLIENT, publicationId: 'p1', renditionId: 'r1', assetId: 'a1' })
+  capabilities.issue({ clientIdentity: CLIENT, publicationId: 'p2', renditionId: 'r2', assetId: 'a2' })
   let error = null
   try {
-    leases.issue({ clientIdentity: CLIENT, publicationId: 'p3', renditionId: 'r3', assetId: 'a3' })
+    capabilities.issue({ clientIdentity: CLIENT, publicationId: 'p3', renditionId: 'r3', assetId: 'a3' })
   } catch (caught) {
     error = caught
   }
-  t.is(error?.code, 'LEASE_CAPACITY_EXHAUSTED')
-  t.is(leases.size(), 2)
-  t.is(leases.authorize(first.token, { clientIdentity: CLIENT, publicationId: 'p1', renditionId: 'r1', method: 'GET' }).assetId, 'a1')
+  t.is(error?.code, 'CAPABILITY_CAPACITY_EXHAUSTED')
+  t.is(capabilities.size, 2)
+  const consumption = capabilities.consume(first.token, { clientIdentity: CLIENT, publicationId: 'p1', renditionId: 'r1', method: 'GET' })
+  t.is(consumption.assetId, 'a1')
+  consumption.release()
 })
 
 test('publication, job, status, method, and path routes dispatch deterministically', async (t) => {

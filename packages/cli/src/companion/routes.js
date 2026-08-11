@@ -1,5 +1,4 @@
 import b4a from 'b4a'
-import crypto from 'hypercore-crypto'
 
 import {
   CompanionContractError,
@@ -10,22 +9,12 @@ import {
   decodeSearchQuery,
   errorBody
 } from './contracts.js'
+import { createStreamCapabilityStore } from './stream-capabilities.js'
 
-const TOKEN_BYTES = 32
-const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
-const DEFAULT_LEASE_TTL_MS = 60_000
-const DEFAULT_MAX_LEASES = 1024
+const CANDIDATE_REF_PATTERN = /^[A-Za-z0-9_-]{43}$/
 const SENSITIVE_STATUS_FIELD = /(?:secret|password|credential|authorization|cookie|token|capability|privatekey|signingkey|clientkey|mac|nonce)/i
 const LOCATOR_FIELD = /(?:urls?|uris?|links?|href|magnet|torrent)$/i
 const LOCATOR_VALUE = /(?:[a-z][a-z0-9+.-]*:(?:\/\/)?[^\s]|\/\/[^\s])/i
-
-function base64Url (bytes) {
-  return b4a.toString(bytes, 'base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
-}
-
-function digestToken (token) {
-  return b4a.toString(crypto.hash(b4a.from(token)), 'hex')
-}
 
 function contractError (statusCode, code, message, field = null) {
   return new CompanionContractError(statusCode, code, message, field)
@@ -150,7 +139,7 @@ function exactCandidateScope (candidate) {
 }
 
 function backendCandidate (candidate, expectedRef = null) {
-  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate) || !TOKEN_PATTERN.test(candidate.candidateRef || '')) {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate) || !CANDIDATE_REF_PATTERN.test(candidate.candidateRef || '')) {
     throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Candidate backend returned an invalid response')
   }
   if (expectedRef !== null && candidate.candidateRef !== expectedRef) {
@@ -184,83 +173,10 @@ function allow (methods) {
   throw Object.assign(contractError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed'), { allow: methods.join(', ') })
 }
 
-export function createStreamLeaseStore ({
-  now = Date.now,
-  randomBytes = crypto.randomBytes,
-  ttlMs = DEFAULT_LEASE_TTL_MS,
-  maxEntries = DEFAULT_MAX_LEASES
-} = {}) {
-  if (typeof now !== 'function' || typeof randomBytes !== 'function') throw new TypeError('lease clock and random source are required')
-  if (!Number.isSafeInteger(ttlMs) || ttlMs < 1 || ttlMs > 10 * 60_000) throw new TypeError('lease ttl must be between 1 and 600000 milliseconds')
-  if (!Number.isSafeInteger(maxEntries) || maxEntries < 1 || maxEntries > 65_536) throw new TypeError('lease capacity must be between 1 and 65536')
-
-  const leases = new Map()
-
-  function purgeExpired (at = now()) {
-    for (const [digest, lease] of leases) {
-      if (lease.expiresAt <= at) leases.delete(digest)
-    }
-  }
-
-  function issue ({ clientIdentity, publicationId, renditionId, assetId }) {
-    clientIdentity = decodeId(clientIdentity, 'clientIdentity')
-    publicationId = decodeId(publicationId, 'publicationId')
-    renditionId = decodeId(renditionId, 'renditionId')
-    assetId = decodeId(assetId, 'assetId')
-    const issuedAt = now()
-    if (!Number.isSafeInteger(issuedAt) || issuedAt < 0) throw new TypeError('lease clock returned an invalid time')
-    purgeExpired(issuedAt)
-    if (leases.size >= maxEntries) {
-      throw contractError(503, 'LEASE_CAPACITY_EXHAUSTED', 'Stream capability capacity is exhausted')
-    }
-
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const bytes = b4a.from(randomBytes(TOKEN_BYTES))
-      if (bytes.byteLength !== TOKEN_BYTES) throw new TypeError('lease random source must return 32 bytes')
-      const token = base64Url(bytes)
-      const digest = digestToken(token)
-      if (leases.has(digest)) continue
-      const expiresAt = issuedAt + ttlMs
-      leases.set(digest, Object.freeze({ clientIdentity, publicationId, renditionId, assetId, issuedAt, expiresAt }))
-      return { token, expiresAt, publicationId, renditionId }
-    }
-    throw new Error('Could not issue a unique stream capability')
-  }
-
-  function authorize (token, { clientIdentity, publicationId, renditionId, method }) {
-    if (typeof token !== 'string' || !TOKEN_PATTERN.test(token)) throw contractError(403, 'CAPABILITY_INVALID', 'Invalid stream capability')
-    const digest = digestToken(token)
-    const lease = leases.get(digest)
-    if (!lease) throw contractError(403, 'CAPABILITY_INVALID', 'Invalid stream capability')
-    const at = now()
-    if (lease.expiresAt <= at) {
-      leases.delete(digest)
-      throw contractError(410, 'CAPABILITY_EXPIRED', 'Stream capability expired')
-    }
-    if (
-      lease.clientIdentity !== clientIdentity ||
-      lease.publicationId !== publicationId ||
-      lease.renditionId !== renditionId ||
-      (method !== 'GET' && method !== 'HEAD')
-    ) throw contractError(403, 'CAPABILITY_SCOPE_MISMATCH', 'Stream capability scope mismatch')
-    return lease
-  }
-
-  return Object.freeze({
-    issue,
-    authorize,
-    size () { purgeExpired(); return leases.size },
-    debugEntries () {
-      return [...leases.entries()].map(([digest, lease]) => JSON.stringify({ digest, ...lease }))
-    }
-  })
-}
-
-export function createCompanionRouter ({ service, config = {}, clock = Date.now, leases = null } = {}) {
+export function createCompanionRouter ({ service, config = {}, clock = Date.now, capabilities = null } = {}) {
   if (!service) throw new TypeError('service is required')
   if (typeof clock !== 'function') throw new TypeError('clock is required')
-  const leaseStore = leases || createStreamLeaseStore({ now: clock })
-
+  const capabilityStore = capabilities || createStreamCapabilityStore({ now: clock })
   async function search (input, url) {
     const query = decodeSearchQuery(url.searchParams)
     if (query.selector.kind === 'episode') unavailable('Episode index search')
@@ -292,7 +208,11 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
     const raw = await callBackend(service.verifyIndexCandidate.bind(service), [candidateRef, { signal: input.signal }], input.signal)
     const candidate = verifiedCandidate(raw)
     const { scope } = backendCandidate(candidate, candidateRef)
-    const grant = leaseStore.issue({ clientIdentity: input.clientIdentity, ...scope })
+    const grant = capabilityStore.issue({
+      clientIdentity: input.clientIdentity,
+      ...scope,
+      methods: ['GET', 'HEAD']
+    })
     return routeResponse(200, {
       url: `/api/v2/stream/${encodeURIComponent(scope.publicationId)}/${encodeURIComponent(scope.renditionId)}?cap=${grant.token}`,
       expiresAt: grant.expiresAt,
@@ -305,26 +225,30 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
     const publicationId = decodedSegment(publicationPart, 'publicationId')
     const renditionId = decodedSegment(renditionPart, 'renditionId')
     const token = onlyCapabilityQuery(url.searchParams)
-    const lease = leaseStore.authorize(token, {
+    const consumption = capabilityStore.consume(token, {
       clientIdentity: input.clientIdentity,
       publicationId,
       renditionId,
       method: input.method
     })
-    if (typeof service.streamAsset !== 'function') unavailable('Asset streaming')
-    const delegated = await callBackend(service.streamAsset.bind(service), [{
-      clientIdentity: input.clientIdentity,
-      publicationId,
-      renditionId,
-      assetId: lease.assetId,
-      method: input.method,
-      headers: input.headers || {},
-      signal: input.signal
-    }], input.signal)
-    if (delegated && Number.isSafeInteger(delegated.statusCode) && delegated.statusCode >= 100 && delegated.statusCode <= 599) {
-      return routeResponse(delegated.statusCode, delegated.body, delegated.headers || {})
+    try {
+      if (typeof service.streamAsset !== 'function') unavailable('Asset streaming')
+      const delegated = await callBackend(service.streamAsset.bind(service), [{
+        clientIdentity: input.clientIdentity,
+        publicationId,
+        renditionId,
+        assetId: consumption.assetId,
+        method: input.method,
+        headers: input.headers || {},
+        signal: input.signal
+      }], input.signal)
+      if (delegated && Number.isSafeInteger(delegated.statusCode) && delegated.statusCode >= 100 && delegated.statusCode <= 599) {
+        return routeResponse(delegated.statusCode, delegated.body, delegated.headers || {})
+      }
+      return routeResponse(200, delegated)
+    } finally {
+      consumption.release()
     }
-    return routeResponse(200, delegated)
   }
 
   async function publication (input, publicationPart) {
@@ -429,5 +353,5 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
     }
   }
 
-  return Object.freeze({ dispatch, leases: leaseStore })
+  return Object.freeze({ dispatch, capabilities: capabilityStore })
 }

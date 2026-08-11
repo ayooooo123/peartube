@@ -288,6 +288,7 @@ export function createCompanionServer ({
   config,
   clock = Date.now,
   nonceStore = null,
+  capabilities = null,
   logger = null,
   fs = defaultFs,
   createServer = null,
@@ -303,7 +304,7 @@ export function createCompanionServer ({
   }
 
   const replayStore = nonceStore || createNonceStore({ maxEntries: config.maxNonces })
-  const router = createCompanionRouter({ service, config, clock })
+  const router = createCompanionRouter({ service, config, clock, capabilities })
   const connections = new Set()
   const firstRequestDeadlines = new Map()
   const activeRequests = new Set()
@@ -497,6 +498,7 @@ export function createCompanionServer ({
         connections.clear()
         await closeHttpServer(httpServer)
         await Promise.allSettled([...activeRequests])
+        router.capabilities.clear()
         await cleanupOwnedSocket().catch(() => {})
         httpServer = null
         throw error
@@ -512,6 +514,7 @@ export function createCompanionServer ({
     close () {
       if (closePromise) return closePromise
       closing = true
+      router.capabilities.clear()
       const pending = serialize(async () => {
       if (!httpServer) {
         started = false
@@ -523,6 +526,7 @@ export function createCompanionServer ({
       connections.clear()
       await closeHttpServer(httpServer)
       await Promise.allSettled([...activeRequests])
+      router.capabilities.clear()
       httpServer = null
       started = false
       await cleanupOwnedSocket()

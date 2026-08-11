@@ -5,6 +5,11 @@ import { createIndexFederation } from '../src/search/index-federation.js'
 
 const PUBLISHER_A = '11'.repeat(32)
 const SELECTOR = Object.freeze({ namespace: 'tmdb', identifier: '348', kind: 'movie' })
+const WORK_ID = '22'.repeat(32)
+const PUBLICATION_ID = '33'.repeat(32)
+const RENDITION_ID = '44'.repeat(32)
+const ASSET_ID = '55'.repeat(32)
+const PUBLICATION_SOURCE = 'publication-source'
 
 function immediate() {
   return new Promise(resolve => setImmediate(resolve))
@@ -15,7 +20,7 @@ function randomSource() {
   return size => Buffer.alloc(size, ++value)
 }
 
-function exactResult(sourceRecordRef = 'source-a', entityId = 'work-a', evidenceWeight = 10) {
+function exactResult(sourceRecordRef = 'source-a', entityId = WORK_ID, evidenceWeight = 10) {
   return {
     type: 'external-ref',
     publisherId: PUBLISHER_A,
@@ -26,6 +31,46 @@ function exactResult(sourceRecordRef = 'source-a', entityId = 'work-a', evidence
     entityId,
     evidenceWeight,
   }
+}
+
+function publicationResult(overrides = {}) {
+  return {
+    type: 'publication',
+    publisherId: PUBLISHER_A,
+    sourceRecordRef: PUBLICATION_SOURCE,
+    publicationId: PUBLICATION_ID,
+    workEntityId: WORK_ID,
+    normalizedTitle: 'Pilot',
+    releaseYear: 2020,
+    manifestId: '66'.repeat(32),
+    provenanceSummary: null,
+    ...overrides,
+  }
+}
+
+function renditionResult(overrides = {}) {
+  return {
+    type: 'rendition',
+    publisherId: PUBLISHER_A,
+    sourceRecordRef: PUBLICATION_SOURCE,
+    publicationId: PUBLICATION_ID,
+    renditionId: RENDITION_ID,
+    assetId: ASSET_ID,
+    format: 'video/mp4',
+    codec: 'avc1',
+    dimensions: '1920x1080',
+    mediaFeatures: null,
+    byteLength: 1024,
+    ...overrides,
+  }
+}
+
+function typedResults(query, exact = [exactResult()], publications = [publicationResult()], renditions = [renditionResult()]) {
+  const type = query.selectors[0].type
+  if (type === 'exact-external-ref') return exact
+  if (type === 'publication-by-work') return publications
+  if (type === 'rendition-by-publication') return renditions
+  throw new Error(`unexpected selector ${type}`)
 }
 
 function page(query, results, nextCursor = null, sourceRevision = '0:1') {
@@ -76,11 +121,10 @@ test('federation returns exact URL-less CompanionCandidateV2 facts', async t => 
   let release
   const gate = new Promise(resolve => { release = resolve })
   const cache = new Map()
-  const shared = exactResult()
   const services = ['i1', 'i2'].map(indexerId => createService(indexerId, async ({ query }) => {
     started++
     await gate
-    return page(query, [shared])
+    return page(query, typedResults(query))
   }))
   const federation = createFederation(services, { cache, limits: { maxServices: 2 } })
 
@@ -100,37 +144,37 @@ test('federation returns exact URL-less CompanionCandidateV2 facts', async t => 
     schemaVersion: 2,
     candidateRef: 'opaque',
     work: {
-      entityId: 'work-a',
-      title: null,
-      releaseYear: null,
+      entityId: WORK_ID,
+      title: 'Pilot',
+      releaseYear: 2020,
       externalRefs: [{ namespace: 'tmdb', identifier: '348' }],
       episode: null,
     },
     edition: { entityId: null, label: null, kind: null },
     publication: {
-      publicationId: null,
+      publicationId: PUBLICATION_ID,
       publisherId: PUBLISHER_A,
-      manifestId: null,
+      manifestId: '66'.repeat(32),
       catalogEpoch: null,
       catalogHead: null,
     },
     rendition: {
-      renditionId: null,
-      container: null,
-      videoCodec: null,
+      renditionId: RENDITION_ID,
+      container: 'video/mp4',
+      videoCodec: 'avc1',
       width: null,
       height: null,
-      resolutionLabel: null,
+      resolutionLabel: '1920x1080',
       hdrFormats: [],
       audioTracks: [],
       subtitleTracks: [],
-      byteLength: null,
+      byteLength: 1024,
     },
     asset: {
-      assetId: null,
+      assetId: ASSET_ID,
       coreKey: null,
       blockLength: null,
-      byteLength: null,
+      byteLength: 1024,
     },
     provenance: {
       sourceKind: null,
@@ -152,9 +196,10 @@ test('federation returns exact URL-less CompanionCandidateV2 facts', async t => 
   t.alike(cachedLocator(cache, results[0]), {
     publisherId: PUBLISHER_A,
     sourceRecordRef: 'source-a',
-    publicationId: null,
-    renditionId: null,
-    assetId: null,
+    publicationSourceRecordRef: PUBLICATION_SOURCE,
+    publicationId: PUBLICATION_ID,
+    renditionId: RENDITION_ID,
+    assetId: ASSET_ID,
   })
   t.alike(unsafeKeys(results[0]), [])
   t.is(results[0].sourceRecordRef, undefined)
@@ -166,24 +211,24 @@ test('federation returns exact URL-less CompanionCandidateV2 facts', async t => 
 
 test('federation merges only identical cached locator tuples and preserves conflicts', async t => {
   const cache = new Map()
-  const first = createService('i1', ({ query }) => page(query, [
-    exactResult('same-source', 'work-a'),
-    exactResult('conflicting-source', 'work-a'),
-  ]))
-  const second = createService('i2', ({ query }) => page(query, [
-    exactResult('same-source', 'work-a', 20),
-    exactResult('other-conflicting-source', 'work-a'),
-  ]))
-  const results = await createFederation([first, second], { cache }).search({ selector: SELECTOR, limit: 64 })
+  const firstExact = [exactResult('same-source'), exactResult('conflicting-source')]
+  const secondExact = [exactResult('same-source', WORK_ID, 20), exactResult('other-conflicting-source')]
+  const first = createService('i1', ({ query }) => page(query, typedResults(query, firstExact)))
+  const second = createService('i2', ({ query }) => page(query, typedResults(query, secondExact)))
+  const results = await createFederation([first, second], {
+    cache,
+    limits: { maxPagesPerService: 16 },
+  }).search({ selector: SELECTOR, limit: 64 })
 
   t.is(results.length, 3)
   const exact = results.find(candidate => cachedLocator(cache, candidate)?.sourceRecordRef === 'same-source')
   t.alike(cachedLocator(cache, exact), {
     publisherId: PUBLISHER_A,
     sourceRecordRef: 'same-source',
-    publicationId: null,
-    renditionId: null,
-    assetId: null,
+    publicationSourceRecordRef: PUBLICATION_SOURCE,
+    publicationId: PUBLICATION_ID,
+    renditionId: RENDITION_ID,
+    assetId: ASSET_ID,
   })
   t.alike(exact.sourceIndexers.map(row => row.indexerId).sort(), ['i1', 'i2'])
   t.is(exact.sourceIndexers.every(row => Object.keys(row).sort().join(',') === 'indexerId,observedAtMs'), true)
@@ -192,18 +237,28 @@ test('federation merges only identical cached locator tuples and preserves confl
 
 test('federation validates every page and isolates malformed pagination to its service', async t => {
   const cache = new Map()
-  const good = createService('good', ({ query }, index) => index === 0
-    ? page(query, [exactResult('good-a')], 'next-good')
-    : page(query, [exactResult('good-b')]))
-  const malformed = createService('bad', ({ query }, index) => index === 0
-    ? page(query, [exactResult('bad-a')], 'next-bad')
-    : { ...page(query, [exactResult('bad-b')]), queryId: 'ff'.repeat(32) })
+  const good = createService('good', ({ query }) => {
+    if (query.selectors[0].type !== 'exact-external-ref') return page(query, typedResults(query))
+    return query.cursor === null
+      ? page(query, [exactResult('good-a')], 'next-good')
+      : page(query, [exactResult('good-b')])
+  })
+  const malformed = createService('bad', ({ query }) => {
+    if (query.selectors[0].type !== 'exact-external-ref') return page(query, typedResults(query))
+    return query.cursor === null
+      ? page(query, [exactResult('bad-a')], 'next-bad')
+      : { ...page(query, [exactResult('bad-b')]), queryId: 'ff'.repeat(32) }
+  })
 
-  const results = await createFederation([good, malformed], { cache }).search({ selector: SELECTOR, limit: 4 })
+  const results = await createFederation([good, malformed], {
+    cache,
+    limits: { maxPagesPerService: 6 },
+  }).search({ selector: SELECTOR, limit: 4 })
   t.alike(results.map(candidate => cachedLocator(cache, candidate).sourceRecordRef).sort(), ['good-a', 'good-b'])
-  t.is(good.calls.length, 2)
+  t.is(good.calls.length, 6)
   t.is(good.calls[0].query.cursor, null)
   t.is(good.calls[1].query.cursor, 'next-good')
+  t.is(good.calls[2].query.sourceRevision, '0:1')
   t.unlike(good.calls[0].query.queryId, good.calls[1].query.queryId)
   t.is(malformed.calls.length, 2)
 })
@@ -212,7 +267,7 @@ test('one service error or shared-deadline timeout cannot erase successful resul
   const timers = []
   const cache = new Map()
   let timeoutAbort = false
-  const good = createService('good', ({ query }) => page(query, [exactResult('available')]))
+  const good = createService('good', ({ query }) => page(query, typedResults(query, [exactResult('available')])))
   const failed = createService('failed', async () => { throw new Error('private remote failure') })
   const unsafe = createService('unsafe', ({ query }) => page(query, [{
     ...exactResult('unsafe'),
@@ -290,7 +345,12 @@ test('candidate refs are opaque, expiring, and evicted within the cache bound', 
   let now = 10_000
   let source = 0
   const cache = new Map()
-  const service = createService('i1', ({ query }) => page(query, [exactResult(`source-${++source}`)]))
+  const service = createService('i1', ({ query }) => page(
+    query,
+    query.selectors[0].type === 'exact-external-ref'
+      ? [exactResult(`source-${++source}`)]
+      : typedResults(query),
+  ))
   const federation = createFederation([service], {
     cache,
     now: () => now,
@@ -307,7 +367,7 @@ test('candidate refs are opaque, expiring, and evicted within the cache bound', 
   t.is(federation.resolveCandidate(first.candidateRef), null)
   t.is(cachedLocator(cache, second)?.sourceRecordRef, 'source-2')
   t.is(cachedLocator(cache, third)?.sourceRecordRef, 'source-3')
-  t.is(federation.resolveCandidate(second.candidateRef)?.work.entityId, 'work-a')
+  t.is(federation.resolveCandidate(second.candidateRef)?.work.entityId, WORK_ID)
   t.is(federation.resolveCandidate(second.candidateRef)?.sourceRecordRef, undefined)
 
   now += 51
@@ -338,7 +398,7 @@ test('configuration, requested counts, and page counts remain bounded', async t 
   const federation = createFederation([endless], { limits: { maxPagesPerService: 2, maxCandidates: 4 } })
   const results = await federation.search({ selector: SELECTOR, limit: 4 })
   t.is(endless.calls.length, 2)
-  t.is(results.length, 2)
+  t.is(results.length, 0)
   await t.exception(federation.search({ selector: SELECTOR, limit: 5 }), {
     message: 'search limit is outside its bounded limit',
   })

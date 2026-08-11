@@ -108,6 +108,8 @@ function requiredCapabilities(selectors) {
   const capabilities = []
   if (selectors.some(selector => selector.type === 'exact-external-ref')) capabilities.push('exact-external-ref')
   if (selectors.some(selector => selector.type === 'title-token-prefix')) capabilities.push('text-prefix')
+  if (selectors.some(selector => selector.type === 'publication-by-work')) capabilities.push('publication-by-work')
+  if (selectors.some(selector => selector.type === 'rendition-by-publication')) capabilities.push('rendition-by-publication')
   return capabilities
 }
 
@@ -131,6 +133,34 @@ function mapResult(row) {
       sourceRecordRef: row.sourceRecordRef,
       token: row.fromId,
       targetId: row.toId,
+    }
+  }
+  if (row?.publicationId && row.workEntityId && row.manifestId && !row.renditionId) {
+    return {
+      type: 'publication',
+      publisherId: row.publisherId,
+      sourceRecordRef: row.sourceRecordRef,
+      publicationId: row.publicationId,
+      workEntityId: row.workEntityId,
+      normalizedTitle: row.normalizedTitle ?? null,
+      releaseYear: row.releaseYear ?? null,
+      manifestId: row.manifestId,
+      provenanceSummary: row.provenanceSummary ?? null,
+    }
+  }
+  if (row?.publicationId && row.renditionId && row.assetId) {
+    return {
+      type: 'rendition',
+      publisherId: row.publisherId,
+      sourceRecordRef: row.sourceRecordRef,
+      publicationId: row.publicationId,
+      renditionId: row.renditionId,
+      assetId: row.assetId,
+      format: row.format ?? null,
+      codec: row.codec ?? null,
+      dimensions: row.dimensions ?? null,
+      mediaFeatures: row.mediaFeatures ?? null,
+      byteLength: row.byteLength ?? null,
     }
   }
   fail('index store returned an unsupported query result')
@@ -250,7 +280,7 @@ export function createIndexQueryDispatcher({ indexStore, announcement, limits = 
           selectors: tracked.request.selectors,
           limit: tracked.request.limit,
           continuation: tracked.cursor?.continuation,
-          sourceRevision: tracked.cursor?.sourceRevision,
+          sourceRevision: tracked.cursor?.sourceRevision ?? tracked.request.sourceRevision ?? undefined,
           signal: tracked.controller.signal,
         })
       } catch (error) {
@@ -310,6 +340,9 @@ export function createIndexQueryDispatcher({ indexStore, announcement, limits = 
     if (request.cursor !== null) {
       cursor = lookupCursor(request.cursor, request.selectors)
       if (cursor === null) return sendError(request.queryId, INDEX_QUERY_ERROR_CODES.INVALID_CURSOR)
+      if (request.sourceRevision !== null && request.sourceRevision !== cursor.sourceRevision) {
+        return sendError(request.queryId, INDEX_QUERY_ERROR_CODES.INVALID_CURSOR)
+      }
     }
     const startedAt = currentTime(limits)
     const executionRelease = acquireExecution(indexStore, maximumExecuting)

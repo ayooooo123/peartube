@@ -34,7 +34,9 @@ export const INDEX_SERVICE_QUERY_CAPABILITIES = Object.freeze([
   'exact-entity',
   'exact-external-ref',
   'exact-publication',
+  'publication-by-work',
   'publisher-prefix',
+  'rendition-by-publication',
   'text-prefix',
 ])
 

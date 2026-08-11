@@ -44,11 +44,22 @@ const SERVICE_KEY = b4a.alloc(32, 31)
 const CLIENT_KEY = b4a.alloc(32, 32)
 const exact = (identifier = '348') => ({ type: 'exact-external-ref', namespace: 'tmdb', identifier })
 const prefix = (value = 'pil') => ({ type: 'title-token-prefix', prefix: value })
+const publicationByWork = (publisherId = PUBLISHER_A, workEntityId = '33'.repeat(32)) => ({
+  type: 'publication-by-work',
+  publisherId,
+  workEntityId,
+})
+const renditionByPublication = (publisherId = PUBLISHER_A, publicationId = '44'.repeat(32)) => ({
+  type: 'rendition-by-publication',
+  publisherId,
+  publicationId,
+})
 const request = (overrides = {}) => ({
   queryId: QUERY_A,
   selectors: [exact()],
   limit: 2,
   cursor: null,
+  sourceRevision: null,
   deadlineMs: 3_000,
   ...overrides,
 })
@@ -69,6 +80,30 @@ const tokenResult = (publisherId = PUBLISHER_A, token = 'pilot') => ({
   token,
   targetId: `work-${publisherId.slice(0, 4)}`,
 })
+const publicationResult = (publisherId = PUBLISHER_A) => ({
+  type: 'publication',
+  publisherId,
+  sourceRecordRef: `publication-${publisherId.slice(0, 4)}`,
+  publicationId: '44'.repeat(32),
+  workEntityId: '33'.repeat(32),
+  normalizedTitle: null,
+  releaseYear: null,
+  manifestId: '55'.repeat(32),
+  provenanceSummary: null,
+})
+const renditionResult = (publisherId = PUBLISHER_A, renditionId = '66'.repeat(32)) => ({
+  type: 'rendition',
+  publisherId,
+  sourceRecordRef: `publication-${publisherId.slice(0, 4)}`,
+  publicationId: '44'.repeat(32),
+  renditionId,
+  assetId: '77'.repeat(32),
+  format: null,
+  codec: null,
+  dimensions: null,
+  mediaFeatures: 'original',
+  byteLength: 1024,
+})
 const exactRow = (publisherId = PUBLISHER_A, sourceRecordRef = 'source-1') => ({
   publisherId,
   sourceRecordRef,
@@ -85,11 +120,28 @@ const tokenRow = (publisherId = PUBLISHER_A, token = 'pilot') => ({
   fromId: token,
   toId: `work-${publisherId.slice(0, 4)}`,
 })
+const publicationRow = (publisherId = PUBLISHER_A) => ({
+  publisherId,
+  sourceRecordRef: `publication-${publisherId.slice(0, 4)}`,
+  publicationId: '44'.repeat(32),
+  workEntityId: '33'.repeat(32),
+  manifestId: '55'.repeat(32),
+})
+const renditionRow = (publisherId = PUBLISHER_A, renditionId = '66'.repeat(32)) => ({
+  publisherId,
+  sourceRecordRef: `publication-${publisherId.slice(0, 4)}`,
+  publicationId: '44'.repeat(32),
+  renditionId,
+  assetId: '77'.repeat(32),
+  format: null,
+  mediaFeatures: 'original',
+  byteLength: 1024,
+})
 
 function serviceAnnouncement({
   signer = crypto.keyPair(b4a.alloc(32, 7)),
   transportPublicKey = SERVICE_KEY,
-  queryCapabilities = ['exact-external-ref', 'text-prefix'],
+  queryCapabilities = ['exact-external-ref', 'publication-by-work', 'rendition-by-publication', 'text-prefix'],
   sequence = 1,
   issuedAt = NOW,
   expiresAt = NOW + 60_000,
@@ -236,7 +288,6 @@ function paired(t, indexStore, overrides = {}) {
   })
   t.teardown(() => {
     client.close()
-    server.close()
     pair.client.destroy()
     pair.server.destroy()
   })
@@ -282,10 +333,13 @@ test('configured client authenticates the live remote service transport key befo
 
 test('canonical query request page error and cancel codecs round trip exact fields', t => {
   const values = [
-    [encodeIndexQueryRequest, decodeIndexQueryRequest, request({ selectors: [exact(), prefix()] })],
+    [encodeIndexQueryRequest, decodeIndexQueryRequest, request({
+      selectors: [exact(), prefix(), publicationByWork(), renditionByPublication()],
+      sourceRevision: '0:42',
+    })],
     [encodeIndexQueryPage, decodeIndexQueryPage, {
       queryId: QUERY_A,
-      results: [exactResult(), tokenResult(PUBLISHER_B)],
+      results: [exactResult(), tokenResult(PUBLISHER_B), publicationResult(), renditionResult()],
       nextCursor: 'AQID',
       sourceRevision: '0:42',
     }],
@@ -310,6 +364,13 @@ test('query request rejects duplicate noncanonical and malformed selectors', t =
   t.exception(() => encodeIndexQueryRequest(request({ selectors: [{ ...exact(), extra: true }] })), /fields/)
   t.exception(() => encodeIndexQueryRequest(request({ selectors: [{ ...exact(), namespace: 'TMDB' }] })), /namespace|canonical/)
   t.exception(() => encodeIndexQueryRequest(request({ selectors: [{ ...prefix(), prefix: 'Pilot' }] })), /prefix|canonical/)
+  t.exception(() => encodeIndexQueryRequest(request({
+    selectors: [publicationByWork(PUBLISHER_A), publicationByWork(PUBLISHER_A)],
+  })), /distinct|duplicate/)
+  t.exception(() => encodeIndexQueryRequest(request({
+    selectors: [{ ...renditionByPublication(), publicationId: 'not-an-id' }],
+  })), /publicationId/)
+  t.exception(() => encodeIndexQueryRequest(request({ sourceRevision: 'stale' })), /sourceRevision/)
 })
 
 test('query codecs reject invalid UTF-8 domain and protocol identifiers', t => {
@@ -344,6 +405,20 @@ test('query codecs enforce selector text cursor result detail and frame maxima',
   }), /frame|maximum/)
 })
 
+test('typed query result codec preserves concrete publication and rendition facts', t => {
+  const values = [
+    { ...publicationResult(), normalizedTitle: 'Pilot' },
+    { ...renditionResult(), format: 'video/mp4' },
+  ]
+  const decoded = decodeIndexQueryPage(encodeIndexQueryPage({
+    queryId: QUERY_A,
+    results: values,
+    nextCursor: null,
+    sourceRevision: '0:1',
+  }))
+  t.alike(decoded.results, values)
+})
+
 test('query codecs reject trailing truncated malformed and noncanonical bytes', t => {
   for (const [encode, decode, value] of [
     [encodeIndexQueryRequest, decodeIndexQueryRequest, request()],
@@ -360,27 +435,50 @@ test('query codecs reject trailing truncated malformed and noncanonical bytes', 
   t.exception(() => decodeIndexQueryRequest(b4a.alloc(MAX_INDEX_QUERY_FRAME_BYTES + 1)), /frame|maximum/)
 })
 
-test('paired Protomux returns source-attributed exact-ref and token-prefix pages', async t => {
+test('paired Protomux returns revision-bound source-attributed discovery publication and rendition pages', async t => {
   const calls = []
   const indexStore = {
     closeCount: 0,
     close() { this.closeCount++ },
     async queryIndexPage(input) {
       calls.push(input)
-      return {
-        results: input.selectors[0].type === 'exact-external-ref' ? [exactRow()] : [tokenRow()],
-        continuation: null,
-        sourceRevision: '0:7',
+      const rows = {
+        'exact-external-ref': [exactRow()],
+        'title-token-prefix': [tokenRow()],
+        'publication-by-work': [publicationRow()],
+        'rendition-by-publication': [renditionRow()],
       }
+      return { results: rows[input.selectors[0].type], continuation: null, sourceRevision: '0:7' }
     },
   }
   const { client, pair } = paired(t, indexStore)
   const exactPage = await client.queryIndex({ connection: pair.client, query: request() })
   const tokenPage = await client.queryIndex({ connection: pair.client, query: request({ queryId: QUERY_B, selectors: [prefix()] }) })
+  const publicationPage = await client.queryIndex({
+    connection: pair.client,
+    query: request({
+      queryId: '03'.repeat(32),
+      selectors: [publicationByWork()],
+      sourceRevision: exactPage.sourceRevision,
+    }),
+  })
+  const renditionPage = await client.queryIndex({
+    connection: pair.client,
+    query: request({
+      queryId: '04'.repeat(32),
+      selectors: [renditionByPublication()],
+      sourceRevision: exactPage.sourceRevision,
+    }),
+  })
   t.alike(exactPage.results, [exactResult()])
   t.alike(tokenPage.results, [tokenResult()])
-  t.ok([...exactPage.results, ...tokenPage.results].every(row => row.publisherId && row.sourceRecordRef))
-  t.is(calls.length, 2)
+  t.alike(publicationPage.results, [publicationResult()])
+  t.alike(renditionPage.results, [renditionResult()])
+  t.is(calls[2].sourceRevision, exactPage.sourceRevision)
+  t.is(calls[3].sourceRevision, exactPage.sourceRevision)
+  t.ok([...exactPage.results, ...tokenPage.results, ...publicationPage.results, ...renditionPage.results]
+    .every(row => row.publisherId && row.sourceRecordRef))
+  t.is(calls.length, 4)
   t.is(indexStore.closeCount, 0)
 })
 

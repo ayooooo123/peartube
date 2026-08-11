@@ -33,9 +33,19 @@ export const INDEX_QUERY_ERROR_CODES = Object.freeze({
 const ERROR_CODES = Object.freeze(Object.values(INDEX_QUERY_ERROR_CODES))
 const ERROR_CODE_TO_NUMBER = new Map(ERROR_CODES.map((code, index) => [code, index + 1]))
 const ERROR_NUMBER_TO_CODE = new Map(ERROR_CODES.map((code, index) => [index + 1, code]))
-const SELECTOR_TYPE_TO_NUMBER = new Map([['exact-external-ref', 1], ['title-token-prefix', 2]])
+const SELECTOR_TYPE_TO_NUMBER = new Map([
+  ['exact-external-ref', 1],
+  ['title-token-prefix', 2],
+  ['publication-by-work', 3],
+  ['rendition-by-publication', 4],
+])
 const SELECTOR_NUMBER_TO_TYPE = new Map(Array.from(SELECTOR_TYPE_TO_NUMBER, ([type, number]) => [number, type]))
-const RESULT_TYPE_TO_NUMBER = new Map([['external-ref', 1], ['title-token', 2]])
+const RESULT_TYPE_TO_NUMBER = new Map([
+  ['external-ref', 1],
+  ['title-token', 2],
+  ['publication', 3],
+  ['rendition', 4],
+])
 const RESULT_NUMBER_TO_TYPE = new Map(Array.from(RESULT_TYPE_TO_NUMBER, ([type, number]) => [number, type]))
 const HEX_32 = /^[0-9a-f]{64}$/
 const CURSOR_TEXT = /^[A-Za-z0-9_-]+$/
@@ -108,13 +118,30 @@ function normalizeSelector(value) {
     onlyFields(value, ['type', 'prefix'], 'title-token prefix selector')
     return Object.freeze({ type: value.type, prefix: normalizeTokenPrefix(value.prefix) })
   }
+  if (value.type === 'publication-by-work') {
+    onlyFields(value, ['type', 'publisherId', 'workEntityId'], 'publication-by-work selector')
+    return Object.freeze({
+      type: value.type,
+      publisherId: publisherId(value.publisherId),
+      workEntityId: protocolId(value.workEntityId, 'workEntityId'),
+    })
+  }
+  if (value.type === 'rendition-by-publication') {
+    onlyFields(value, ['type', 'publisherId', 'publicationId'], 'rendition-by-publication selector')
+    return Object.freeze({
+      type: value.type,
+      publisherId: publisherId(value.publisherId),
+      publicationId: protocolId(value.publicationId, 'publicationId'),
+    })
+  }
   fail('selector type is invalid')
 }
 
 function selectorToken(selector) {
-  return selector.type === 'exact-external-ref'
-    ? `1\0${selector.namespace}\0${selector.identifier}`
-    : `2\0${selector.prefix}`
+  if (selector.type === 'exact-external-ref') return `1\0${selector.namespace}\0${selector.identifier}`
+  if (selector.type === 'title-token-prefix') return `2\0${selector.prefix}`
+  if (selector.type === 'publication-by-work') return `3\0${selector.publisherId}\0${selector.workEntityId}`
+  return `4\0${selector.publisherId}\0${selector.publicationId}`
 }
 
 export function normalizeIndexQuerySelectors(values) {
@@ -136,7 +163,8 @@ function normalizeCursorText(value, name = 'cursor') {
   return value
 }
 
-function normalizeSourceRevision(value) {
+function normalizeSourceRevision(value, { nullable = false } = {}) {
+  if (nullable && value === null) return null
   boundedText(value, 'sourceRevision', MAX_INDEX_QUERY_SOURCE_REVISION_BYTES)
   const match = SOURCE_REVISION.exec(value)
   if (!match) fail('sourceRevision is invalid')
@@ -146,12 +174,13 @@ function normalizeSourceRevision(value) {
 }
 
 function normalizeRequest(value) {
-  onlyFields(value, ['queryId', 'selectors', 'limit', 'cursor', 'deadlineMs'], 'query request')
+  onlyFields(value, ['queryId', 'selectors', 'limit', 'cursor', 'sourceRevision', 'deadlineMs'], 'query request')
   return Object.freeze({
     queryId: protocolId(value.queryId),
     selectors: normalizeIndexQuerySelectors(value.selectors),
     limit: safeUint(value.limit, 'query limit', 1, MAX_INDEX_QUERY_RESULTS),
     cursor: normalizeCursorText(value.cursor),
+    sourceRevision: normalizeSourceRevision(value.sourceRevision, { nullable: true }),
     deadlineMs: safeUint(value.deadlineMs, 'query deadlineMs', 1, MAX_INDEX_QUERY_DEADLINE_MS),
   })
 }
@@ -181,10 +210,54 @@ function normalizeTokenResult(value) {
     targetId: boundedText(value.targetId, 'targetId', INDEX_SCHEMA_LIMITS.maxRelationEndpointBytes),
   })
 }
+function nullableText(value, name, maximum) {
+  return value === null ? null : boundedText(value, name, maximum)
+}
+
+function normalizePublicationResult(value) {
+  onlyFields(value, [
+    'type', 'publisherId', 'sourceRecordRef', 'publicationId', 'workEntityId',
+    'normalizedTitle', 'releaseYear', 'manifestId', 'provenanceSummary',
+  ], 'publication result')
+  return Object.freeze({
+    type: 'publication',
+    publisherId: publisherId(value.publisherId),
+    sourceRecordRef: boundedText(value.sourceRecordRef, 'sourceRecordRef', INDEX_SCHEMA_LIMITS.maxSourceRecordRefBytes),
+    publicationId: protocolId(value.publicationId, 'publicationId'),
+    workEntityId: boundedText(value.workEntityId, 'workEntityId', INDEX_SCHEMA_LIMITS.maxEntityIdBytes),
+    normalizedTitle: nullableText(value.normalizedTitle, 'normalizedTitle', INDEX_SCHEMA_LIMITS.maxNormalizedTitleBytes),
+    releaseYear: value.releaseYear === null ? null : safeUint(value.releaseYear, 'releaseYear', 0, 9999),
+    manifestId: protocolId(value.manifestId, 'manifestId'),
+    provenanceSummary: nullableText(value.provenanceSummary, 'provenanceSummary', INDEX_SCHEMA_LIMITS.maxProvenanceSummaryBytes),
+  })
+}
+
+function normalizeRenditionResult(value) {
+  onlyFields(value, [
+    'type', 'publisherId', 'sourceRecordRef', 'publicationId', 'renditionId', 'assetId',
+    'format', 'codec', 'dimensions', 'mediaFeatures', 'byteLength',
+  ], 'rendition result')
+  return Object.freeze({
+    type: 'rendition',
+    publisherId: publisherId(value.publisherId),
+    sourceRecordRef: boundedText(value.sourceRecordRef, 'sourceRecordRef', INDEX_SCHEMA_LIMITS.maxSourceRecordRefBytes),
+    publicationId: protocolId(value.publicationId, 'publicationId'),
+    renditionId: protocolId(value.renditionId, 'renditionId'),
+    assetId: protocolId(value.assetId, 'assetId'),
+    format: nullableText(value.format, 'format', INDEX_SCHEMA_LIMITS.maxMediaDescriptorBytes),
+    codec: nullableText(value.codec, 'codec', INDEX_SCHEMA_LIMITS.maxMediaDescriptorBytes),
+    dimensions: nullableText(value.dimensions, 'dimensions', INDEX_SCHEMA_LIMITS.maxMediaDescriptorBytes),
+    mediaFeatures: nullableText(value.mediaFeatures, 'mediaFeatures', INDEX_SCHEMA_LIMITS.maxMediaDescriptorBytes),
+    byteLength: safeUint(value.byteLength, 'byteLength'),
+  })
+}
+
 
 function normalizeResult(value) {
   if (value?.type === 'external-ref') return normalizeExactResult(value)
   if (value?.type === 'title-token') return normalizeTokenResult(value)
+  if (value?.type === 'publication') return normalizePublicationResult(value)
+  if (value?.type === 'rendition') return normalizeRenditionResult(value)
   fail('query result type is invalid')
 }
 
@@ -219,7 +292,15 @@ function encodeSelector(state, selector) {
   if (selector.type === 'exact-external-ref') {
     c.string.encode(state, selector.namespace)
     c.string.encode(state, selector.identifier)
-  } else c.string.encode(state, selector.prefix)
+  } else if (selector.type === 'title-token-prefix') {
+    c.string.encode(state, selector.prefix)
+  } else if (selector.type === 'publication-by-work') {
+    c.string.encode(state, selector.publisherId)
+    c.string.encode(state, selector.workEntityId)
+  } else {
+    c.string.encode(state, selector.publisherId)
+    c.string.encode(state, selector.publicationId)
+  }
 }
 
 function preencodeSelector(state, selector) {
@@ -227,14 +308,34 @@ function preencodeSelector(state, selector) {
   if (selector.type === 'exact-external-ref') {
     c.string.preencode(state, selector.namespace)
     c.string.preencode(state, selector.identifier)
-  } else c.string.preencode(state, selector.prefix)
+  } else if (selector.type === 'title-token-prefix') {
+    c.string.preencode(state, selector.prefix)
+  } else if (selector.type === 'publication-by-work') {
+    c.string.preencode(state, selector.publisherId)
+    c.string.preencode(state, selector.workEntityId)
+  } else {
+    c.string.preencode(state, selector.publisherId)
+    c.string.preencode(state, selector.publicationId)
+  }
 }
 
 function decodeSelector(state) {
   const type = SELECTOR_NUMBER_TO_TYPE.get(c.uint.decode(state))
   if (type === 'exact-external-ref') return { type, namespace: c.string.decode(state), identifier: c.string.decode(state) }
   if (type === 'title-token-prefix') return { type, prefix: c.string.decode(state) }
+  if (type === 'publication-by-work') return { type, publisherId: c.string.decode(state), workEntityId: c.string.decode(state) }
+  if (type === 'rendition-by-publication') return { type, publisherId: c.string.decode(state), publicationId: c.string.decode(state) }
   fail('selector type is invalid')
+}
+
+function preencodeOptional(state, value, codec) {
+  c.bool.preencode(state, value !== null)
+  if (value !== null) codec.preencode(state, value)
+}
+
+function encodeOptional(state, value, codec) {
+  c.bool.encode(state, value !== null)
+  if (value !== null) codec.encode(state, value)
 }
 
 function preencodeResult(state, result) {
@@ -246,11 +347,26 @@ function preencodeResult(state, result) {
     c.string.preencode(state, result.identifier)
     c.string.preencode(state, result.entityKind)
     c.string.preencode(state, result.entityId)
-    c.bool.preencode(state, result.evidenceWeight !== null)
-    if (result.evidenceWeight !== null) c.uint.preencode(state, result.evidenceWeight)
-  } else {
+    preencodeOptional(state, result.evidenceWeight, c.uint)
+  } else if (result.type === 'title-token') {
     c.string.preencode(state, result.token)
     c.string.preencode(state, result.targetId)
+  } else if (result.type === 'publication') {
+    c.string.preencode(state, result.publicationId)
+    c.string.preencode(state, result.workEntityId)
+    preencodeOptional(state, result.normalizedTitle, c.string)
+    preencodeOptional(state, result.releaseYear, c.uint)
+    c.string.preencode(state, result.manifestId)
+    preencodeOptional(state, result.provenanceSummary, c.string)
+  } else {
+    c.string.preencode(state, result.publicationId)
+    c.string.preencode(state, result.renditionId)
+    c.string.preencode(state, result.assetId)
+    preencodeOptional(state, result.format, c.string)
+    preencodeOptional(state, result.codec, c.string)
+    preencodeOptional(state, result.dimensions, c.string)
+    preencodeOptional(state, result.mediaFeatures, c.string)
+    preencodeOptional(state, result.byteLength, c.uint)
   }
 }
 
@@ -263,12 +379,31 @@ function encodeResult(state, result) {
     c.string.encode(state, result.identifier)
     c.string.encode(state, result.entityKind)
     c.string.encode(state, result.entityId)
-    c.bool.encode(state, result.evidenceWeight !== null)
-    if (result.evidenceWeight !== null) c.uint.encode(state, result.evidenceWeight)
-  } else {
+    encodeOptional(state, result.evidenceWeight, c.uint)
+  } else if (result.type === 'title-token') {
     c.string.encode(state, result.token)
     c.string.encode(state, result.targetId)
+  } else if (result.type === 'publication') {
+    c.string.encode(state, result.publicationId)
+    c.string.encode(state, result.workEntityId)
+    encodeOptional(state, result.normalizedTitle, c.string)
+    encodeOptional(state, result.releaseYear, c.uint)
+    c.string.encode(state, result.manifestId)
+    encodeOptional(state, result.provenanceSummary, c.string)
+  } else {
+    c.string.encode(state, result.publicationId)
+    c.string.encode(state, result.renditionId)
+    c.string.encode(state, result.assetId)
+    encodeOptional(state, result.format, c.string)
+    encodeOptional(state, result.codec, c.string)
+    encodeOptional(state, result.dimensions, c.string)
+    encodeOptional(state, result.mediaFeatures, c.string)
+    encodeOptional(state, result.byteLength, c.uint)
   }
+}
+
+function decodeOptional(state, codec) {
+  return c.bool.decode(state) ? codec.decode(state) : null
 }
 
 function decodeResult(state) {
@@ -281,10 +416,36 @@ function decodeResult(state) {
     const identifier = c.string.decode(state)
     const entityKind = c.string.decode(state)
     const entityId = c.string.decode(state)
-    const evidenceWeight = c.bool.decode(state) ? c.uint.decode(state) : null
+    const evidenceWeight = decodeOptional(state, c.uint)
     return { type, publisherId, sourceRecordRef, namespace, identifier, entityKind, entityId, evidenceWeight }
   }
-  return { type, publisherId, sourceRecordRef, token: c.string.decode(state), targetId: c.string.decode(state) }
+  if (type === 'title-token') {
+    return { type, publisherId, sourceRecordRef, token: c.string.decode(state), targetId: c.string.decode(state) }
+  }
+  if (type === 'publication') {
+    const publicationId = c.string.decode(state)
+    const workEntityId = c.string.decode(state)
+    const normalizedTitle = decodeOptional(state, c.string)
+    const releaseYear = decodeOptional(state, c.uint)
+    const manifestId = c.string.decode(state)
+    const provenanceSummary = decodeOptional(state, c.string)
+    return {
+      type, publisherId, sourceRecordRef, publicationId, workEntityId,
+      normalizedTitle, releaseYear, manifestId, provenanceSummary,
+    }
+  }
+  const publicationId = c.string.decode(state)
+  const renditionId = c.string.decode(state)
+  const assetId = c.string.decode(state)
+  const format = decodeOptional(state, c.string)
+  const codec = decodeOptional(state, c.string)
+  const dimensions = decodeOptional(state, c.string)
+  const mediaFeatures = decodeOptional(state, c.string)
+  const byteLength = decodeOptional(state, c.uint)
+  return {
+    type, publisherId, sourceRecordRef, publicationId, renditionId, assetId,
+    format, codec, dimensions, mediaFeatures, byteLength,
+  }
 }
 
 function fixedCodec(domain, preencodeBody, encodeBody, decodeBody) {
@@ -312,6 +473,8 @@ const requestCodec = fixedCodec(INDEX_QUERY_REQUEST_DOMAIN,
     c.uint.preencode(state, value.limit)
     c.bool.preencode(state, value.cursor !== null)
     if (value.cursor !== null) c.string.preencode(state, value.cursor)
+    c.bool.preencode(state, value.sourceRevision !== null)
+    if (value.sourceRevision !== null) c.string.preencode(state, value.sourceRevision)
     c.uint.preencode(state, value.deadlineMs)
   },
   (state, value) => {
@@ -321,6 +484,8 @@ const requestCodec = fixedCodec(INDEX_QUERY_REQUEST_DOMAIN,
     c.uint.encode(state, value.limit)
     c.bool.encode(state, value.cursor !== null)
     if (value.cursor !== null) c.string.encode(state, value.cursor)
+    c.bool.encode(state, value.sourceRevision !== null)
+    if (value.sourceRevision !== null) c.string.encode(state, value.sourceRevision)
     c.uint.encode(state, value.deadlineMs)
   },
   state => {
@@ -331,8 +496,9 @@ const requestCodec = fixedCodec(INDEX_QUERY_REQUEST_DOMAIN,
     for (let index = 0; index < count; index++) selectors[index] = decodeSelector(state)
     const limit = c.uint.decode(state)
     const cursor = c.bool.decode(state) ? c.string.decode(state) : null
+    const sourceRevision = c.bool.decode(state) ? c.string.decode(state) : null
     const deadlineMs = c.uint.decode(state)
-    return { queryId, selectors, limit, cursor, deadlineMs }
+    return { queryId, selectors, limit, cursor, sourceRevision, deadlineMs }
   })
 
 const pageCodec = fixedCodec(INDEX_QUERY_PAGE_DOMAIN,

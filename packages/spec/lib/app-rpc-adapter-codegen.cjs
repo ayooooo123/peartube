@@ -131,7 +131,9 @@ const APP_RPC_NAMESPACES = Object.freeze({
   search: [
     'search-videos',
     'global-search-videos',
-    'index-video-vectors'
+    'index-video-vectors',
+    'search-index-candidates',
+    'verify-index-candidate'
   ],
   shell: [
     'pick-video-file',

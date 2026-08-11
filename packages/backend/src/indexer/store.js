@@ -51,7 +51,8 @@ const PUBLISHER_CURSOR_FIELDS = new Set(['publisherId'])
 const QUERY_PAGE_FIELDS = new Set(['selectors', 'limit', 'continuation', 'sourceRevision', 'signal'])
 const QUERY_CONTINUATION_FIELDS = new Set(['selectorIndex', 'after'])
 const EXACT_CONTINUATION_FIELDS = new Set(['namespace', 'normalizedIdentifier', 'publisherId', 'sourceRecordRef', 'entityKind', 'entityId'])
-const TOKEN_CONTINUATION_FIELDS = new Set(['relationType', 'fromId', 'publisherId', 'sourceRecordRef', 'toId'])
+const PUBLICATION_CONTINUATION_FIELDS = new Set(['workEntityId', 'publisherId', 'sourceRecordRef', 'publicationId'])
+const RELATION_CONTINUATION_FIELDS = new Set(['relationType', 'fromId', 'publisherId', 'sourceRecordRef', 'toId'])
 const SOURCE_REVISION = /^(0|[1-9]\d*):(0|[1-9]\d*)$/
 const TOKEN_PREFIX_END = '\u{10ffff}'
 const CURSOR_RECORD_FIELDS = Object.freeze([
@@ -650,9 +651,24 @@ function validateContinuation(value, selectors) {
     validateBoundedText('entityId', value.after.entityId, INDEX_SCHEMA_LIMITS.maxEntityIdBytes)
     return { selectorIndex: value.selectorIndex, after: { ...value.after } }
   }
-  assertOnlyFields(value.after, TOKEN_CONTINUATION_FIELDS, 'token query continuation')
-  if (value.after.relationType !== 'title-token' || !value.after.fromId.startsWith(selector.prefix)) {
-    throw invalidOperation('token query continuation does not match its selector', { scope: 'query' })
+  if (selector.type === 'publication-by-work') {
+    assertOnlyFields(value.after, PUBLICATION_CONTINUATION_FIELDS, 'publication query continuation')
+    if (value.after.workEntityId !== selector.workEntityId || value.after.publisherId !== selector.publisherId) {
+      throw invalidOperation('publication query continuation does not match its selector', { scope: 'query' })
+    }
+    validateBoundedText('sourceRecordRef', value.after.sourceRecordRef, INDEX_SCHEMA_LIMITS.maxSourceRecordRefBytes)
+    validateBoundedText('publicationId', value.after.publicationId, INDEX_SCHEMA_LIMITS.maxRelationEndpointBytes)
+    return { selectorIndex: value.selectorIndex, after: { ...value.after } }
+  }
+  assertOnlyFields(value.after, RELATION_CONTINUATION_FIELDS, 'relation query continuation')
+  const expectedType = selector.type === 'title-token-prefix' ? 'title-token' : 'publication-rendition'
+  const expectedFrom = selector.type === 'title-token-prefix' ? null : selector.publicationId
+  if (
+    value.after.relationType !== expectedType ||
+    (expectedFrom === null ? !value.after.fromId.startsWith(selector.prefix) : value.after.fromId !== expectedFrom) ||
+    (selector.publisherId !== undefined && value.after.publisherId !== selector.publisherId)
+  ) {
+    throw invalidOperation('relation query continuation does not match its selector', { scope: 'query' })
   }
   validatePublisherId(value.after.publisherId)
   validateBoundedText('fromId', value.after.fromId, INDEX_SCHEMA_LIMITS.maxRelationEndpointBytes)
@@ -706,13 +722,22 @@ function exactContinuation(row) {
   }
 }
 
-function tokenContinuation(row) {
+function relationContinuation(row) {
   return {
     relationType: row.relationType,
     fromId: row.fromId,
     publisherId: row.publisherId,
     sourceRecordRef: row.sourceRecordRef,
     toId: row.toId,
+  }
+}
+
+function publicationContinuation(row) {
+  return {
+    workEntityId: row.workEntityId,
+    publisherId: row.publisherId,
+    sourceRecordRef: row.sourceRecordRef,
+    publicationId: row.publicationId,
   }
 }
 
@@ -737,26 +762,69 @@ async function queryIndexPage(tx, prepared) {
       range = after === null
         ? { gte: exact, lte: exact, checkout, limit: remaining + 1 }
         : { gt: after, lte: exact, checkout, limit: remaining + 1 }
-    } else {
+    } else if (selector.type === 'title-token-prefix') {
       index = INDEXES.tokenPrefix
       const lower = { relationType: 'title-token', fromId: selector.prefix }
       const upper = { relationType: 'title-token', fromId: `${selector.prefix}${TOKEN_PREFIX_END}` }
       range = after === null
         ? { gte: lower, lte: upper, checkout, limit: remaining + 1 }
         : { gt: after, lte: upper, checkout, limit: remaining + 1 }
+    } else if (selector.type === 'publication-by-work') {
+      index = INDEXES.publicationByWork
+      const exact = { workEntityId: selector.workEntityId, publisherId: selector.publisherId }
+      range = after === null
+        ? { gte: exact, lte: exact, checkout, limit: remaining + 1 }
+        : { gt: after, lte: exact, checkout, limit: remaining + 1 }
+    } else {
+      index = INDEXES.relationshipByFrom
+      const exact = {
+        relationType: 'publication-rendition',
+        fromId: selector.publicationId,
+        publisherId: selector.publisherId,
+      }
+      range = after === null
+        ? { gte: exact, lte: exact, checkout, limit: remaining + 1 }
+        : { gt: after, lte: exact, checkout, limit: remaining + 1 }
     }
     const found = await tx.find(index, range).toArray()
     checkQueryAbort(prepared.signal)
     const pageRows = found.slice(0, remaining)
-    results.push(...pageRows)
+    if (selector.type === 'rendition-by-publication') {
+      for (const edge of pageRows) {
+        checkQueryAbort(prepared.signal)
+        const exact = {
+          renditionId: edge.toId,
+          publisherId: selector.publisherId,
+          sourceRecordRef: edge.sourceRecordRef,
+        }
+        const renditions = await tx.find(INDEXES.renditionExact, {
+          gte: exact,
+          lte: exact,
+          checkout,
+          limit: 2,
+        }).toArray()
+        if (renditions.length !== 1) {
+          throw invalidOperation('publication rendition relation does not resolve exactly', {
+            scope: 'query',
+            scopeId: edge.toId,
+            requested: renditions.length,
+          })
+        }
+        results.push({ ...renditions[0], publicationId: selector.publicationId })
+      }
+    } else {
+      results.push(...pageRows)
+    }
     if (found.length > remaining) {
       const last = pageRows[pageRows.length - 1]
+      const continuation = selector.type === 'exact-external-ref'
+        ? exactContinuation(last)
+        : selector.type === 'publication-by-work'
+          ? publicationContinuation(last)
+          : relationContinuation(last)
       return {
         results,
-        continuation: {
-          selectorIndex,
-          after: selector.type === 'exact-external-ref' ? exactContinuation(last) : tokenContinuation(last),
-        },
+        continuation: { selectorIndex, after: continuation },
         sourceRevision: currentRevision,
       }
     }

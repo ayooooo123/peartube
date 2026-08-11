@@ -785,6 +785,92 @@ test('revision-aware exact-ref paging uses compound-key continuation and rejects
   }), error => error.code === 'INDEX_QUERY_STALE_REVISION')
 })
 
+
+test('revision-bound exact work traversal pages publications and renditions without scans', async (t) => {
+  const { index } = await fixture(t)
+  const workEntityId = '77'.repeat(32)
+  const publicationId = '88'.repeat(32)
+  const firstRenditionId = '99'.repeat(32)
+  const secondRenditionId = 'aa'.repeat(32)
+  await index.replacePublisherSlice({
+    publisherId: PUBLISHER_A,
+    rows: [
+      row(COLLECTIONS.sourceRecords, sourceRecord(PUBLISHER_A)),
+      row(COLLECTIONS.externalReferenceProjections, externalReference(PUBLISHER_A, 'tt348', {
+        sourceRecordRef: 'claim-source',
+        entityId: workEntityId,
+      })),
+      row(COLLECTIONS.publicationProjections, {
+        publisherId: PUBLISHER_A,
+        sourceRecordRef: 'publication-source',
+        publicationId,
+        workEntityId,
+        normalizedTitle: 'two renditions',
+        manifestId: 'bb'.repeat(32),
+      }),
+      row(COLLECTIONS.renditionProjections, {
+        publisherId: PUBLISHER_A,
+        sourceRecordRef: 'publication-source',
+        renditionId: firstRenditionId,
+        assetId: 'cc'.repeat(32),
+        format: 'video/mp4',
+        byteLength: 100,
+      }),
+      row(COLLECTIONS.renditionProjections, {
+        publisherId: PUBLISHER_A,
+        sourceRecordRef: 'publication-source',
+        renditionId: secondRenditionId,
+        assetId: 'dd'.repeat(32),
+        format: 'video/webm',
+        byteLength: 200,
+      }),
+      row(COLLECTIONS.relationshipEdges, {
+        publisherId: PUBLISHER_A,
+        sourceRecordRef: 'publication-source',
+        relationType: 'publication-rendition',
+        fromId: publicationId,
+        toId: firstRenditionId,
+      }),
+      row(COLLECTIONS.relationshipEdges, {
+        publisherId: PUBLISHER_A,
+        sourceRecordRef: 'publication-source',
+        relationType: 'publication-rendition',
+        fromId: publicationId,
+        toId: secondRenditionId,
+      }),
+    ],
+    cursor: cursor(PUBLISHER_A),
+  })
+
+  const discovery = await index.queryIndexPage({
+    selectors: [{ type: 'exact-external-ref', namespace: 'imdb', identifier: 'tt348' }],
+    limit: 4,
+  })
+  const publications = await index.queryIndexPage({
+    selectors: [{ type: 'publication-by-work', publisherId: PUBLISHER_A, workEntityId }],
+    limit: 4,
+    sourceRevision: discovery.sourceRevision,
+  })
+  assert.deepEqual(publications.results.map(row => row.publicationId), [publicationId])
+  assert.equal(publications.results[0].sourceRecordRef, 'publication-source')
+
+  const renditions = await index.queryIndexPage({
+    selectors: [{ type: 'rendition-by-publication', publisherId: PUBLISHER_A, publicationId }],
+    limit: 1,
+    sourceRevision: discovery.sourceRevision,
+  })
+  assert.deepEqual(renditions.results.map(row => row.renditionId), [firstRenditionId])
+  assert.ok(renditions.continuation)
+  const next = await index.queryIndexPage({
+    selectors: [{ type: 'rendition-by-publication', publisherId: PUBLISHER_A, publicationId }],
+    limit: 1,
+    continuation: renditions.continuation,
+    sourceRevision: discovery.sourceRevision,
+  })
+  assert.deepEqual(next.results.map(row => row.renditionId), [secondRenditionId])
+  assert.equal(next.continuation, null)
+})
+
 test('revision-aware query page honors an aborted signal before durable work', async (t) => {
   const { index } = await fixture(t)
   const controller = new AbortController()

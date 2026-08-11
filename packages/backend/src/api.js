@@ -756,6 +756,7 @@ export function createApi({
   catalogRegistry,
   scopedNetwork,
   permissionlessArchiveNetwork = ctx?.permissionlessArchiveNetwork,
+  indexVerificationRuntime = ctx?.indexVerificationRuntime || null,
   policyApi = null,
   networkPolicyRuntime = ctx?.networkPolicyRuntime || null,
   sourceOffload = {},
@@ -2294,6 +2295,7 @@ export function createApi({
     ...archiveParticipationApi,
     ...createSearchApi({
       ctx,
+      indexVerificationRuntime,
       ensureSemanticFinder,
       buildSearchEnvelope,
       getPreviewVideoFromFeed,

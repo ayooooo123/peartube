@@ -9,6 +9,7 @@ function assertContextRunning(ctx) {
 
 export function createSearchApi({
   ctx,
+  indexVerificationRuntime = null,
   ensureSemanticFinder,
   buildSearchEnvelope,
   getPreviewVideoFromFeed,
@@ -16,6 +17,26 @@ export function createSearchApi({
   loadChannel,
 }) {
   return {
+    async searchIndexCandidates(selector) {
+      assertContextRunning(ctx)
+      if (!indexVerificationRuntime || typeof indexVerificationRuntime.searchIndexCandidates !== 'function') {
+        const error = new Error('Index candidate search is unsupported')
+        error.code = 'INDEX_SEARCH_UNSUPPORTED'
+        throw error
+      }
+      return indexVerificationRuntime.searchIndexCandidates({ selector, signal: ctx?.lifecycle?.signal })
+    },
+
+    async verifyIndexCandidate(candidateRef) {
+      assertContextRunning(ctx)
+      if (!indexVerificationRuntime || typeof indexVerificationRuntime.verifyIndexCandidate !== 'function') {
+        const error = new Error('Index candidate verification is unsupported')
+        error.code = 'INDEX_VERIFICATION_UNSUPPORTED'
+        throw error
+      }
+      return indexVerificationRuntime.verifyIndexCandidate({ candidateRef, signal: ctx?.lifecycle?.signal })
+    },
+
     /**
      * Search videos in a channel using semantic search
      * @param {string} channelKey

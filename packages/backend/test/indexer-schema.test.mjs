@@ -137,7 +137,6 @@ test('exact search dimensions federate matching rows across publishers', async (
       [INDEXES.externalReferenceExact, { namespace: 'imdb', normalizedIdentifier: 'tt123' }],
       [INDEXES.entityExact, { entityKind: 'work', entityId: 'work-1' }],
       [INDEXES.publicationExact, { publicationId: PUBLICATION_ID }],
-      [INDEXES.publicationByWork, { workEntityId: 'work-1' }],
       [INDEXES.assetExact, { assetId: ASSET_ID }],
       [INDEXES.renditionExact, { renditionId: RENDITION_ID }],
       [INDEXES.availabilityByAsset, { assetId: ASSET_ID }],

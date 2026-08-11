@@ -41,7 +41,8 @@ function harness () {
     },
     api: {},
     runtime: {},
-    fs: {}
+    fs: {},
+    canPublish: retentionClass => retentionClass === 'archive-pin',
   })
   const manager = createArchiveManager({ store, downloader, publisher })
   return { store, manager, calls }

@@ -537,12 +537,14 @@ test('archive publisher does not fall back to the shared channel when determinis
     uploadManager: {},
     api: {},
     runtime: { ctx: {}, logger: { archive: { warn () {} } } },
-    createChannelFn: async () => { throw new Error('source channel unavailable') }
+    createChannelFn: async () => { throw new Error('source channel unavailable') },
+    canPublish: retentionClass => retentionClass === 'archive-pin',
   })
 
   await t.exception(publisher.ensureAnonymousChannel({
     sourceIdentity: { sourceId: 'companion-source', creatorName: 'Archive' },
-    requireSourceChannel: true
+    requireSourceChannel: true,
+    retentionClass: 'archive-pin'
   }), /source channel unavailable/)
   t.is(sharedChannelReads, 0)
 })
@@ -698,7 +700,8 @@ test('size, hash, and ETag mismatches fail closed without publication', async (t
 
 test('disk admission failure is terminal and removes the accepted spool', async (t) => {
   const bytes = Buffer.from('disk admission payload')
-  const { files, manager, publisher } = harness(t, { canIngest: () => false })
+  let admissionChecks = 0
+  const { files, manager, publisher } = harness(t, { canIngest: () => ++admissionChecks === 1 })
   await manager.start()
   const descriptor = files.writeSpool(bytes, 'no-space.bin')
   const created = await manager.submitJob({ idempotencyKey: 'disk-1', request: movieRequest(bytes), spool: descriptor })

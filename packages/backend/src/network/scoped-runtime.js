@@ -2498,6 +2498,10 @@ export function createScopedNetworkRuntime (options = {}) {
       resolve = onResolve
       reject = onReject
     })
+    // A peer may answer synchronously through an in-memory Protomux pair before
+    // this async function returns the request promise. Mark the owned promise
+    // handled immediately; callers still receive and observe its rejection.
+    void promise.catch(() => {})
     const request = {
       key: range.transferId,
       transferId: range.transferId,

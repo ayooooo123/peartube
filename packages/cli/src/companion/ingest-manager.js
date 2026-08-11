@@ -631,14 +631,16 @@ export function createIngestManager ({
     if (channelInfo && typeof publisher.publishCatalog === 'function') {
       await publisher.publishCatalog({ ...channelInfo, retentionClass: job.retentionClass })
     }
-    if (channelInfo && typeof publisher.retainAssets === 'function') {
+    if (job.retentionClass === 'archive-pin' &&
+        channelInfo &&
+        typeof publisher.retainAssets === 'function') {
       await publisher.retainAssets({
         retentionClass: job.retentionClass,
         ...channelInfo,
         previewVideos: [{
           id: job.publicationFence.videoId,
           immutablePublication: metadata?.immutablePublication || null,
-          ...(job.retentionClass === 'archive-pin' ? { archivePledge: metadata?.archivePledge || null } : {})
+          archivePledge: metadata?.archivePledge || null
         }]
       })
     }

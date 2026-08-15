@@ -613,7 +613,7 @@ B.subscribeChannel = async (r: any) => { await api.subscribeChannel(r.channelKey
 B.unsubscribeChannel = async (r: any) => { await api.unsubscribeChannel(r.channelKey); return { success: true } }
 B.getSubscriptions = async () => { const s = await api.getSubscriptions(); return { subscriptions: s.map((i: any) => ({ channelKey: i.driveKey, channelName: i.name })) } }
 B.joinChannel = async (r: any) => { await api.subscribeChannel(r.channelKey); return { success: true } }
-B.getStatus = async () => ({ status: { ready: true, hasIdentity: identityManager.getIdentities().length > 0, blobServerPort: getBlobPort() } })
+B.getStatus = async () => ({ status: { ready: true, hasIdentity: identityManager.getIdentities().length > 0, blobServerPort: getBlobPort(), protocolVersion: PROTOCOL_VERSION } })
 B.getSwarmStatus = async () => {
   const s = api.getSwarmStatus()
   const scopedDiagnostics = scopedNetwork?.getDiagnostics?.() || null
@@ -801,7 +801,7 @@ B.eventTranscodeProgress = () => {}
 if (typeof ipcPipe.resume === 'function') {
   ipcPipe.resume()
 }
-rpc.eventReady({ blobServerPort: getBlobPort() })
+rpc.eventReady({ blobServerPort: getBlobPort(), protocolVersion: PROTOCOL_VERSION })
 console.log('[Worker] HRPC ready, all handlers attached')
 
 ipcPipe.on('error', (err: Error) => console.error('[Worker] Pipe error:', err))

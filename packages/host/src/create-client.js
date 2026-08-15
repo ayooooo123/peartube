@@ -46,7 +46,8 @@ function normalizeReadyPayload(payload = {}) {
     blobServerPort: status?.blobServerPort ?? null,
     blobServerReady: Boolean(status?.blobServerReady),
     blobServerError: status?.blobServerError ?? null,
-    protocolVersion: status?.protocolVersion ?? PROTOCOL_VERSION
+    // Absent means unverifiable, not compatible — emitHostReady rejects null.
+    protocolVersion: status?.protocolVersion ?? null
   }
 }
 
@@ -183,8 +184,19 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
   void appendDebugLine('[createProtocolClient] HRPC client constructed')
 
   let lastReady = null
+  // Single choke point for readiness: an unsupported backend must never reach
+  // HOST_READY listeners, because they apply backend data (blob server port,
+  // catalog reads) as soon as they fire.
   const emitHostReady = (payload) => {
     const normalized = normalizeReadyPayload(payload)
+    if (normalized.protocolVersion !== PROTOCOL_VERSION) {
+      emitHostError(createHostError(
+        HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH,
+        HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH
+      ))
+      return null
+    }
+
     if (
       lastReady &&
       lastReady.blobServerPort === normalized.blobServerPort &&
@@ -257,6 +269,8 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
           reject(error)
         }
 
+        // emitHostReady gates the protocol version, so anything reaching this
+        // listener is a supported backend.
         const offReady = events.on(PROTOCOL_EVENTS.HOST_READY, (payload) => {
           settleResolve(normalizeReadyPayload(payload))
         })
@@ -272,16 +286,10 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
             await appendDebugLine('[createProtocolClient] getStatus request start')
             const statusResponse = await rpc.getStatus({})
             await appendDebugLine('[createProtocolClient] getStatus response received')
-            const status = normalizeReadyPayload(statusResponse)
-
-            if (status.protocolVersion !== PROTOCOL_VERSION) {
-              throw createHostError(
-                HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH,
-                HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH
-              )
-            }
-
-            settleResolve(emitHostReady(status))
+            const ready = emitHostReady(statusResponse)
+            // null means emitHostReady rejected the protocol version; it has
+            // already emitted HOST_ERROR, which settles this promise.
+            if (ready) settleResolve(ready)
           } catch (error) {
             const failureCode = error?.code || 'ERR'
             const failureMessage = error?.message || String(error)

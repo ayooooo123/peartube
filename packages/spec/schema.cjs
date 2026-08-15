@@ -2349,7 +2349,8 @@ ns.register({
     { name: 'hasIdentity', type: 'bool', required: false },
     { name: 'blobServerPort', type: 'uint', required: false },
     { name: 'blobServerReady', type: 'bool', required: false },
-    { name: 'blobServerError', type: 'string', required: false }
+    { name: 'blobServerError', type: 'string', required: false },
+    { name: 'protocolVersion', type: 'uint', required: false }
   ]
 })
 
@@ -2520,7 +2521,10 @@ ns.register({
 ns.register({
   name: 'event-ready',
   fields: [
-    { name: 'blobServerPort', type: 'uint', required: false }
+    { name: 'blobServerPort', type: 'uint', required: false },
+    { name: 'protocolVersion', type: 'uint', required: false },
+    { name: 'blobServerReady', type: 'bool', required: false },
+    { name: 'blobServerError', type: 'string', required: false }
   ]
 })
 
@@ -3328,6 +3332,50 @@ ns.register({
     { name: 'success', type: 'bool', required: false },
     { name: 'recommendations', type: '@peartube/recommendation', array: true, required: true },
     { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'suspend-network-request',
+  fields: []
+})
+
+ns.register({
+  name: 'suspend-network-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'resume-network-request',
+  fields: []
+})
+
+ns.register({
+  name: 'resume-network-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'set-playback-active-request',
+  fields: [
+    { name: 'active', type: 'bool', required: true },
+    { name: 'ttlMs', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'set-playback-active-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'active', type: 'bool', required: true },
+    { name: 'updatedAt', type: 'uint', required: false },
+    { name: 'expiresAt', type: 'uint', required: false }
   ]
 })
 
@@ -4152,6 +4200,26 @@ rpcNs.register({
 rpcNs.register({
   name: 'event-transcode-progress',
   request: { name: '@peartube/event-transcode-progress', stream: false, send: true }
+})
+
+// Network lifecycle commands (mobile background / playback state).
+// Appended last so existing command ids stay stable.
+rpcNs.register({
+  name: 'suspend-network',
+  request: { name: '@peartube/suspend-network-request', stream: false },
+  response: { name: '@peartube/suspend-network-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'resume-network',
+  request: { name: '@peartube/resume-network-request', stream: false },
+  response: { name: '@peartube/resume-network-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'set-playback-active',
+  request: { name: '@peartube/set-playback-active-request', stream: false },
+  response: { name: '@peartube/set-playback-active-response', stream: false }
 })
 
 // Save HRPC interface to disk

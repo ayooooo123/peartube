@@ -103,6 +103,7 @@ export async function createBackend(opts = {}) {
       ctx: backend.ctx,
       rpc,
       storagePath,
+      protocolVersion: hostProtocolVersion,
       autoAttachSharedAppHandlers,
       loadSharedAppHandlers
     })

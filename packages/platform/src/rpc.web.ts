@@ -415,10 +415,16 @@ export const rpc = {
     return ensureRPC().preparePlayback(req);
   },
 
-  async setPlaybackActive(req: { active: boolean }) {
-    const rpcInstance = ensureRPC() as any;
-    if (typeof rpcInstance.setPlaybackActive !== 'function') return { success: true };
-    return rpcInstance.setPlaybackActive(req);
+  async setPlaybackActive(req: { active: boolean; ttlMs?: number }) {
+    return ensureProtocolClient().system.setPlaybackActive(req);
+  },
+
+  async suspendNetwork() {
+    return ensureProtocolClient().system.suspendNetwork({});
+  },
+
+  async resumeNetwork() {
+    return ensureProtocolClient().system.resumeNetwork({});
   },
 
   async webPreparePlayback(req: { channelKey: string; videoId: string; publicBeeKey?: string; blobId?: string; blobsCoreKey?: string; mimeType?: string }): Promise<{ url: string | null; transcoded?: boolean; audioCodec?: string; transcodeError?: string }> {
@@ -556,11 +562,7 @@ export const rpc = {
   },
 
   async getSwarmStatus() {
-    const client = mainBridge.getClient() as any;
-    if (typeof client?.system?.getSwarmStatus === 'function') {
-      return client.system.getSwarmStatus({});
-    }
-    return ensureRPC().getSwarmStatus({});
+    return ensureProtocolClient().system.getSwarmStatus({});
   },
 
   async getBlobServerPort() {

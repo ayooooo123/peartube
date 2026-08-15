@@ -296,7 +296,13 @@ const methods = new Map([
   ['@peartube/transcode-status', 143],
   [143, '@peartube/transcode-status'],
   ['@peartube/event-transcode-progress', 144],
-  [144, '@peartube/event-transcode-progress']
+  [144, '@peartube/event-transcode-progress'],
+  ['@peartube/suspend-network', 145],
+  [145, '@peartube/suspend-network'],
+  ['@peartube/resume-network', 146],
+  [146, '@peartube/resume-network'],
+  ['@peartube/set-playback-active', 147],
+  [147, '@peartube/set-playback-active']
 ])
 
 class HRPC {
@@ -448,7 +454,10 @@ class HRPC {
       ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-request')],
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-request')],
       ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-request')],
-      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')]
+      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')],
+      ['@peartube/suspend-network', getEncoding('@peartube/suspend-network-request')],
+      ['@peartube/resume-network', getEncoding('@peartube/resume-network-request')],
+      ['@peartube/set-playback-active', getEncoding('@peartube/set-playback-active-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -583,7 +592,10 @@ class HRPC {
       ['@peartube/update-channel-avatar', getEncoding('@peartube/update-channel-avatar-response')],
       ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-response')],
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-response')],
-      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')]
+      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')],
+      ['@peartube/suspend-network', getEncoding('@peartube/suspend-network-response')],
+      ['@peartube/resume-network', getEncoding('@peartube/resume-network-response')],
+      ['@peartube/set-playback-active', getEncoding('@peartube/set-playback-active-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -1262,6 +1274,18 @@ class HRPC {
     return this._callSync('@peartube/event-transcode-progress', args)
   }
 
+  async suspendNetwork(args) {
+    return this._call('@peartube/suspend-network', args)
+  }
+
+  async resumeNetwork(args) {
+    return this._call('@peartube/resume-network', args)
+  }
+
+  async setPlaybackActive(args) {
+    return this._call('@peartube/set-playback-active', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -1840,6 +1864,18 @@ class HRPC {
 
   onEventTranscodeProgress(responseFn) {
     this._handlers['@peartube/event-transcode-progress'] = responseFn
+  }
+
+  onSuspendNetwork(responseFn) {
+    this._handlers['@peartube/suspend-network'] = responseFn
+  }
+
+  onResumeNetwork(responseFn) {
+    this._handlers['@peartube/resume-network'] = responseFn
+  }
+
+  onSetPlaybackActive(responseFn) {
+    this._handlers['@peartube/set-playback-active'] = responseFn
   }
 
   _requestIsStream(command) {

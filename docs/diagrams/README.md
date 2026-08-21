@@ -16,6 +16,7 @@ skill's `lint-skin.py` and `self_check.py`.
 | Diagram | Answers |
 |---|---|
 | [`one-video.html`](one-video.html) | What actually happens between picking a file and it playing on someone else's device? |
+| [`one-device-joins.html`](one-device-joins.html) | How does a second device get access to a channel from a short code? |
 | [`../architecture.html`](../architecture.html) | What are the pieces, and how do four shells share one backend? |
 
 **Read `one-video` first.** It is the whole system as a single story, and it names where every
@@ -62,7 +63,6 @@ Listed so the gap is visible rather than implied. Verified facts in hand for the
   released on `complete` or `disconnect`
 - Seed-pin exchange — 256 KiB frames; `seed-pin/auth.js:371` verifies with `expectedIdentity` **and**
   `expectedDevice: remotePublicKey`
-- Channel and device enrolment over `blind-pairing`
 - Personal store `apply`, including the determinism defect
 - Discovery records and topic derivation
 - Schema codegen — 4,207-line source to 45,261 generated lines across JS and Swift

@@ -22,6 +22,7 @@ Read in this order. Each one is a single story, and together they cover the back
 | [`one-device-joins.html`](one-device-joins.html) | How does a second device get access to a channel from a short code? |
 | [`one-request-refused.html`](one-request-refused.html) | What stops a hostile peer, and why does a friendly one eventually get refused too? |
 | [`one-pledge-audited.html`](one-pledge-audited.html) | If a stranger promises to store your video, how do you know they kept it? |
+| [`one-op-applied.html`](one-op-applied.html) | Why do two peers replaying the same log end up with different data? |
 | [`../architecture.html`](../architecture.html) | What are the pieces, and how do four shells share one backend? |
 
 **Start with `one-video`.** It is the whole system as one story and names where every subsystem sits,
@@ -60,7 +61,8 @@ Three defects surfaced from having to name every arrow, all recorded in `CLEANUP
   back, and `refillPerTick` is declared and never read. (`one-request-refused`)
 - The channel invite grants read access plus a roster row, not write authority — so the roster is not
   an authorisation. (`one-device-joins`)
-- `apply` in the personal store is non-deterministic. (Not yet drawn.)
+- `apply` in the personal store is non-deterministic — randomness and wall clock feed the view key.
+  (`one-op-applied`)
 
 ## Conventions
 
@@ -72,6 +74,5 @@ Three defects surfaced from having to name every arrow, all recorded in `CLEANUP
 
 ## Not yet drawn
 
-- Personal store `apply` — the op types and the determinism defect
 - Discovery records and topic derivation
 - Schema codegen — 4,207-line source to 45,261 generated lines across JS and Swift

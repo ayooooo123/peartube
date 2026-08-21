@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Permissionless media CDN · pledge and audit</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1200px; width: 100%; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Sequence · permissionless media CDN</p>
+    <h1>Anyone can pledge storage. Proving they kept it is the hard part.</h1>
+
+    <svg viewBox="0 0 1000 636" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="one-pledge-audited-title one-pledge-audited-desc">
+      <title id="one-pledge-audited-title">Permissionless CDN pledge and audit sequence</title>
+      <desc id="one-pledge-audited-desc">Sequence diagram with three participants: a publisher that also acts as auditor, an archivist peer, and the archivist's local capacity ledger. The publisher announces a signed archive request. The archivist reserves capacity locally, retains the byte ranges, and returns a signed pledge. The publisher verifies the pledge against the original request. A repeating audit loop then challenges the archivist for a randomly chosen block, and the archivist answers with a Hypercore possession proof, highlighted as the key response. When retention expires the reservation is released.</desc>
+
+      <defs>
+        <pattern id="one-pledge-audited-dots" width="22" height="22" patternUnits="userSpaceOnUse">
+          <circle cx="1" cy="1" r="0.9" fill="rgba(45,49,66,0.10)"/>
+        </pattern>
+        <marker id="one-pledge-audited-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/>
+        </marker>
+        <marker id="one-pledge-audited-arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polyline points="0 0, 8 3, 0 6" fill="none" stroke="#4f5d75" stroke-width="1.2"/>
+        </marker>
+        <marker id="one-pledge-audited-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/>
+        </marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+      <rect width="100%" height="100%" fill="url(#one-pledge-audited-dots)" opacity="0.55"/>
+
+      <!-- Actors -->
+      <rect x="80" y="56" width="200" height="44" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="180" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Publisher</text>
+      <text x="180" y="90" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">requester · auditor</text>
+
+      <rect x="420" y="56" width="200" height="44" rx="4" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+      <text x="520" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Archivist</text>
+      <text x="520" y="90" fill="#eb6c36" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">any peer · untrusted</text>
+
+      <rect x="760" y="56" width="200" height="44" rx="4" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <text x="860" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Capacity ledger</text>
+      <text x="860" y="90" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">local · persisted</text>
+
+      <!-- Lifelines -->
+      <line x1="180" y1="100" x2="180" y2="524" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="520" y1="100" x2="520" y2="524" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="860" y1="100" x2="860" y2="524" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+
+      <!-- Activation bars -->
+      <rect x="176" y="132" width="8" height="368" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="516" y="132" width="8" height="368" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+      <rect x="856" y="168" width="8" height="48" fill="rgba(45,49,66,0.06)" stroke="#4f5d75" stroke-width="0.8"/>
+
+      <!-- 1. archive request -->
+      <line x1="184" y1="136" x2="512" y2="136" stroke="#4f5d75" stroke-width="1" marker-end="url(#one-pledge-audited-arrow)"/>
+      <text x="348" y="128" fill="#2d3142" font-size="11" font-weight="500" font-family="'Geist', sans-serif" text-anchor="middle">ARCHIVE REQUEST</text>
+      <text x="348" y="150" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">signed · ranges · requestedBytes · retentionUntil</text>
+
+      <!-- 2. reserve -->
+      <line x1="524" y1="176" x2="852" y2="176" stroke="#4f5d75" stroke-width="1" marker-end="url(#one-pledge-audited-arrow)"/>
+      <text x="688" y="168" fill="#2d3142" font-size="11" font-weight="500" font-family="'Geist', sans-serif" text-anchor="middle">reserve(bytes, expiresAt)</text>
+
+      <!-- 3. accepted / rejected -->
+      <line x1="852" y1="208" x2="524" y2="208" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#one-pledge-audited-arrow)"/>
+      <text x="688" y="202" fill="#4f5d75" font-size="11" font-family="'Geist', sans-serif" text-anchor="middle">accepted</text>
+      <text x="688" y="222" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">held = Σ max(reserved, actual) ≤ capacity, else capacity-exceeded</text>
+
+      <!-- 4. self-message: retain ranges -->
+      <path d="M 524,248 H 576 V 272 H 528" fill="none" stroke="#4f5d75" stroke-width="1" marker-end="url(#one-pledge-audited-arrow)"/>
+      <text x="592" y="256" fill="#2d3142" font-size="11" font-weight="500" font-family="'Geist', sans-serif">retainAuthorizedArchive(range)</text>
+      <text x="592" y="272" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">per range · then reconcile(actualBytes)</text>
+
+      <!-- 5. pledge -->
+      <line x1="512" y1="304" x2="184" y2="304" stroke="#4f5d75" stroke-width="1" marker-end="url(#one-pledge-audited-arrow)"/>
+      <text x="348" y="296" fill="#2d3142" font-size="11" font-weight="500" font-family="'Geist', sans-serif" text-anchor="middle">PLEDGE</text>
+      <text x="348" y="318" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">rejected if replayed · unsolicited · request mismatch</text>
+
+      <!-- LOOP fragment: audit -->
+      <rect x="152" y="344" width="416" height="132" rx="4" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+      <rect x="152" y="344" width="48" height="16" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.22)" stroke-width="1"/>
+      <text x="176" y="356" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.12em">LOOP</text>
+      <text x="208" y="356" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.04em">[while retentionUntil &gt; now · rate-limited per auditor]</text>
+
+      <line x1="184" y1="396" x2="512" y2="396" stroke="#4f5d75" stroke-width="1" marker-end="url(#one-pledge-audited-arrow)"/>
+      <text x="348" y="388" fill="#2d3142" font-size="11" font-weight="500" font-family="'Geist', sans-serif" text-anchor="middle">CHALLENGE</text>
+      <text x="348" y="410" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">random block from a random range · signed · deadline</text>
+
+      <line x1="512" y1="448" x2="184" y2="448" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#one-pledge-audited-arrow-accent)"/>
+      <text x="348" y="440" fill="#eb6c36" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">POSSESSION PROOF</text>
+      <text x="348" y="462" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">Hypercore proof for that exact index · verified or challenge-failed</text>
+
+      <!-- 6. release on expiry -->
+      <line x1="524" y1="500" x2="852" y2="500" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#one-pledge-audited-arrow-open)"/>
+      <text x="688" y="492" fill="#4f5d75" font-size="11" font-family="'Geist', sans-serif" text-anchor="middle">release(pledgeId)</text>
+      <text x="688" y="514" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">expiry · failure · shutdown · restart recovery</text>
+
+      <!-- Captions -->
+      <text x="80" y="568" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">WHY A PROOF</text>
+      <text x="216" y="568" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif" font-style="italic">A pledge is a promise. The audit loop is what makes it evidence: a random block, chosen by the auditor, answered with a Hypercore proof that cannot be forged without the data.</text>
+      <text x="80" y="592" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">UNTRUSTED BOTH WAYS</text>
+      <text x="216" y="592" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif" font-style="italic">The archivist can lie about storage, so it is audited. The publisher can lie about the request, so the pledge is checked field-by-field against it before any bytes are held.</text>
+      <text x="80" y="616" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">CAPACITY FIRST</text>
+      <text x="216" y="616" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif" font-style="italic">Nothing is retained before the ledger accepts the reservation, and the reservation is persisted so a restart cannot lose track of what this peer already owes.</text>
+    </svg>
+  </div>
+</body>
+</html>

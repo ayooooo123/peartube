@@ -14,7 +14,7 @@ import {
   createScopedNetworkRuntime,
   encodeScopedHello,
 } from '../src/network/scoped-runtime.js'
-import { deriveIndexTopic } from '../src/network/topics.js'
+import { deriveIndexerTopic } from '../src/network/topics.js'
 import { MAX_PEER_FRAME_BYTES, decodePeerFrame, encodePeerFrame } from '../src/network/frame.js'
 import { PROTOCOL_MAJOR } from '../src/network/version.js'
 
@@ -103,7 +103,7 @@ function attach(overrides = {}) {
     },
   })
   mux.pairs.find(pair => pair.spec.protocol === INDEX_SERVICE_PROTOCOL)
-    ?.onpair(deriveIndexTopic({ indexerId: service.indexerId }))
+    ?.onpair(deriveIndexerTopic({ indexerId: service.indexerId }))
   return { connection, indexStore, mux, protocol, service }
 }
 
@@ -146,7 +146,7 @@ test('index protocol requires the scoped hello before use and activates only aft
   const entry = fixture.mux.channels[0]
   await entry.spec.onopen(encodeScopedHello({
     purpose: 'index',
-    topic: deriveIndexTopic({ indexerId: fixture.service.indexerId }),
+    topic: deriveIndexerTopic({ indexerId: fixture.service.indexerId }),
     protocolMajor: PROTOCOL_MAJOR,
     capabilities: [INDEX_QUERY_CAPABILITY],
     maxFrameBytes: 4096,
@@ -181,7 +181,7 @@ test('index protocol rejects a peer without index-query:v1', async t => {
   const entry = fixture.mux.channels[0]
   await entry.spec.onopen(encodeScopedHello({
     purpose: 'index',
-    topic: deriveIndexTopic({ indexerId: fixture.service.indexerId }),
+    topic: deriveIndexerTopic({ indexerId: fixture.service.indexerId }),
     protocolMajor: PROTOCOL_MAJOR,
     capabilities: [],
     maxFrameBytes: 4096,
@@ -208,7 +208,7 @@ test('index protocol negotiates the lower bounded frame ceiling', async t => {
   const entry = fixture.mux.channels[0]
   await entry.spec.onopen(encodeScopedHello({
     purpose: 'index',
-    topic: deriveIndexTopic({ indexerId: fixture.service.indexerId }),
+    topic: deriveIndexerTopic({ indexerId: fixture.service.indexerId }),
     protocolMajor: PROTOCOL_MAJOR,
     capabilities: [INDEX_QUERY_CAPABILITY],
     maxFrameBytes: 2048,
@@ -466,7 +466,7 @@ test('retained consumer does not eagerly open or serve index channels', async t 
   await runtime.retainIndexService({ announcement: service })
   t.is(runtime.authorizeConnection({
     purpose: 'index',
-    topic: deriveIndexTopic({ indexerId: service.indexerId }),
+    topic: deriveIndexerTopic({ indexerId: service.indexerId }),
     peerId: b4a.toString(service.transportPublicKey, 'hex'),
   }).status, 'rejected')
   swarm.emit('connection', wrong, { publicKey: service.transportPublicKey, client: true })

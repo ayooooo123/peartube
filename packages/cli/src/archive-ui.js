@@ -9,16 +9,17 @@ function escapeHtml(value) {
 
 export function renderArchiveTui(model = {}) {
   const status = model.status || {}
-  const runtime = status.runtime || {}
-  const network = runtime.network || {}
-  const publisher = runtime.publisher || {}
-  const bootstrap = runtime.bootstrap || {}
-  const assets = runtime.assets || {}
+  // The bounded relay status keeps network at the top level and reports archive
+  // work as aggregate public work; per-core publisher/bootstrap/asset counters
+  // are no longer published, so the console does not pretend to know them.
+  const network = status.network || {}
+  const work = status.publicWork || {}
+  const archiveBudget = status.budgets?.archive || {}
   const jobs = Array.isArray(model.jobs) ? model.jobs : []
   const lines = [
     'PearTube Relay Archive Console',
     '================================',
-    `Peers: ${network.peers || 0}  Publisher catalogs: ${publisher.catalogs || 0}  Bootstrap locators: ${bootstrap.locators || 0}  Retained renditions: ${assets.retainedRenditions || 0}`,
+    `Peers: ${network.peers || 0}  Announcements: ${work.activeAnnouncements || 0}  Uploads: ${work.activeUploads || 0}  Archive used: ${archiveBudget.usedBytes || 0}/${archiveBudget.configuredBytes || 0} bytes`,
     '',
     'Anonymous channel archival',
     'Paste a YouTube video URL or channel URL, import into a local relay-owned channel, then Publish to network.',
@@ -349,12 +350,14 @@ function friendlyJobError(error) {
 
 export function renderArchiveWebHome(model = {}) {
   const status = model.status || {}
-  // The runtime diagnostics object, as the relay actually shapes it. `peers`
-  // and `seeding` were read off the top level, where neither has ever lived,
-  // so the header read a confident 0 peers and 0 seeded next to a shelf of
-  // titles it was plainly seeding.
+  // The bounded relay status reports network at the top level and disk use as
+  // the catalog summary plus the archive budget, so the header reads real
+  // numbers instead of a `storage` block the relay no longer publishes.
   const network = status.network || {}
-  const storage = status.storage || {}
+  const storage = {
+    totalStorageBytes: status.summary?.usedBytes,
+    maxBytes: status.budgets?.archive?.configuredBytes
+  }
   const jobs = Array.isArray(model.jobs) ? model.jobs : []
   const library = Array.isArray(model.library) ? model.library : []
   const creators = Array.isArray(model.creators) ? model.creators : []

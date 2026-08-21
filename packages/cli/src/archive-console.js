@@ -955,7 +955,10 @@ export async function createArchiveConsole({
     // own "adding"/"could not be added" states are the same records.
     const jobs = await store.listJobs()
     return {
-      status: status.runtime || {},
+      // The relay status is a flat, bounded contract now: network, budgets and
+      // publicWork live at the top level, so the console hands over the whole
+      // record instead of digging for a `runtime` blob that no longer exists.
+      status,
       jobs,
       library: await libraryView(jobs),
       creators: creatorsView(),

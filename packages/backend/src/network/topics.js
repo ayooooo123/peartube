@@ -96,7 +96,9 @@ export function deriveArchiveTopic(input = {}) {
   })
 }
 
-export function deriveIndexTopic(input = {}) {
+// The curator feed scope above and an index service are both 'index' purposes
+// but they are addressed by different identities, so each keeps its own topic.
+export function deriveIndexerTopic(input = {}) {
   return topic('index', {
     protocolMajor: cleanMajor(input.protocolMajor),
     indexerId: cleanId32(input.indexerId, 'indexerId'),

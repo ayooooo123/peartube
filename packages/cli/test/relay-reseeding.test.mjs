@@ -335,7 +335,28 @@ test('a failed archive request is recorded and never fails the publication', asy
 
 function serviceRuntime(calls, { mirrorResult = { requested: true, status: 'published' } } = {}) {
   return {
-    ctx: {},
+    // The archive-pin retention gate reads consent off the live policy, so a
+    // relay fixture that expects to publish and mirror has to carry it.
+    ctx: {
+      networkPolicyRuntime: {
+        getPolicy() {
+          return {
+            policyVersion: 2,
+            consentVersion: 1,
+            migrationRequired: false,
+            contributeWatchedMedia: true,
+            archiveEnabled: true,
+            contributionBudgetBytes: 4096,
+            archiveBudgetBytes: 4096
+          }
+        }
+      }
+    },
+    seedingManager: {
+      getRetentionBudgetStatus() {
+        return { contributionUsedBytes: 0, archiveUsedBytes: 0 }
+      }
+    },
     api: {},
     identityManager: {},
     uploadManager: {},
@@ -439,39 +460,36 @@ test('relay status reports both mirroring directions', async (t) => {
     config,
     catalog,
     runtimeStats: {
-      archiveRequests: [
-        { publicationId: PUBLICATION_ID, renditionId: RENDITION_ID, status: 'published', requestId: 'r1', requestedAt: 5, errorCode: null, archivists: 2, freshArchivists: 1 },
-        { publicationId: 'e'.repeat(64), renditionId: 'f'.repeat(64), status: 'failed', requestId: '', requestedAt: 6, errorCode: 'ARCHIVE_REQUEST_FAILED', archivists: 0, freshArchivists: 0 }
-      ],
-      archiveParticipation: {
-        success: true,
-        enabled: true,
-        capacityBytes: 4096,
-        maxRequestBytes: 2048,
-        reservedBytes: 1024,
-        availableBytes: 3072,
-        acceptedRequests: 3,
-        knownRequests: 9,
-        receivedPledges: 2,
-        randomRejections: 1,
-        capacityRejections: 4,
-        authorizationRejections: 0,
-        acceptancePermille: 1000
-      }
+      policy: {
+        policyVersion: 1,
+        consentVersion: 1,
+        migrationRequired: false,
+        effectiveRole: 'archive-enabled',
+        permissions: { contribute: true, archive: true },
+        contributionBudgetBytes: 2048,
+        archiveBudgetBytes: 4096
+      },
+      seedRetention: { retention: { contributionUsedBytes: 512, archiveUsedBytes: 1024 } },
+      archive: { activePledgeCount: 2 },
+      assets: { activeUploads: 1, uploadedBytes: 3072 }
     }
   })
 
-  // Existing shape is preserved; the new fields are additions.
-  t.ok(status.runtime.network)
-  t.ok(status.runtime.assets)
-  t.is(status.runtime.archiveRequests.length, 2)
-  t.is(status.runtime.archiveParticipation.reservedBytes, 1024)
+  // The bounded status contract reports archive work as budgets and aggregate
+  // public work. Per-publication request records are deliberately not surfaced.
+  t.absent(Object.hasOwn(status, 'runtime'), 'the bounded contract exposes no runtime blob')
+  t.is(status.budgets.archive.configuredBytes, 4096)
+  t.is(status.budgets.archive.usedBytes, 1024)
+  t.is(status.budgets.contribution.configuredBytes, 2048)
+  t.is(status.budgets.contribution.usedBytes, 512)
+  t.is(status.effectivePolicy.effectiveRole, 'archive-enabled')
+  t.is(status.effectivePolicy.permissions.archive, true)
 
   const text = formatRelayStatus(status)
-  t.ok(text.includes('archiveRequests: total=2 published=1 failed=1 withArchivistEvidence=1'), text)
-  t.ok(text.includes('archiveMirroring: enabled=true reservedBytes=1024 availableBytes=3072 capacityBytes=4096 receivedPledges=2 acceptedRequests=3 rejected=capacity:4/random:1/authorization:0'), text)
-  t.ok(text.includes(`- ${PUBLICATION_ID}/${RENDITION_ID} status=published archivists=2 fresh=1`), text)
-  t.ok(text.includes(`- ${'e'.repeat(64)}/${'f'.repeat(64)} status=failed archivists=0 fresh=0 error=ARCHIVE_REQUEST_FAILED`), text)
+  t.ok(text.includes('archiveBudget: 1024/4096 bytes'), text)
+  t.ok(text.includes('contributionBudget: 512/2048 bytes'), text)
+  t.ok(text.includes('permissions: contribute=true archive=true'), text)
+  t.ok(text.includes('publicWork: announcements=2 uploads=1 uploadedBytes=3072'), text)
 })
 
 test('a relay that has mirrored nothing says so without implying durability', async (t) => {
@@ -480,12 +498,16 @@ test('a relay that has mirrored nothing says so without implying durability', as
   const catalog = await RelayCatalog.open({ storagePath: dir })
 
   const status = buildRelayStatus({ config: relayConfig(dir), catalog, runtimeStats: {} })
-  t.alike(status.runtime.archiveRequests, [])
-  t.alike(status.runtime.archiveParticipation, {})
+  t.absent(Object.hasOwn(status, 'runtime'), 'the bounded contract exposes no runtime blob')
+  t.is(status.budgets.archive.configuredBytes, 0)
+  t.is(status.budgets.archive.usedBytes, 0)
+  t.is(status.effectivePolicy.effectiveRole, 'watch-only')
+  t.is(status.effectivePolicy.migrationRequired, true)
 
   const text = formatRelayStatus(status)
-  t.ok(text.includes('archiveRequests: total=0 published=0 failed=0 withArchivistEvidence=0'), text)
-  t.ok(text.includes('archiveMirroring: enabled=false reservedBytes=0 availableBytes=0 capacityBytes=0 receivedPledges=0 acceptedRequests=0 rejected=capacity:0/random:0/authorization:0'), text)
+  t.ok(text.includes('archiveBudget: 0/0 bytes'), text)
+  t.ok(text.includes('permissions: contribute=false archive=false'), text)
+  t.ok(text.includes('publicWork: announcements=0 uploads=0 uploadedBytes=0'), text)
   t.absent(/durab|redundan|safe|backed up|protected by/i.test(text),
     'a relay with no archivist evidence never claims the content is kept anywhere else')
 })
@@ -601,13 +623,18 @@ test('a host that cannot measure its disk reports nothing and says why', async (
   t.ok(warnings.some(([message]) => /will not take archive pledges/.test(message)),
     'the operator is told why their relay is not pledging')
 
+  // The bounded status contract deliberately publishes no host-disk material,
+  // so the unmeasurable disk is proven above through the diagnostics object and
+  // the operator warning. What the rendered status must not do is imply custody.
   const catalog = await RelayCatalog.open({ storagePath: dir })
   const text = formatRelayStatus(buildRelayStatus({
     config: relayConfig(dir),
     catalog,
     runtimeStats: diagnostics
   }))
-  t.ok(text.includes('archiveHostDisk: measured=false freeBytes=unknown totalBytes=unknown reason=statfs-unavailable'), text)
+  t.absent(/archiveHostDisk|freeBytes|totalBytes/.test(text),
+    'the bounded contract never publishes host-disk material')
+  t.ok(text.includes('archiveBudget: 0/0 bytes'), text)
 })
 
 test('a statfs that reports free blocks but no total leaves custody unknown', async (t) => {

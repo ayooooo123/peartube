@@ -97,7 +97,22 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
       ...(reseedEnabled
         ? {
             retentionMode: 'archive-pledges',
-            ...(maxBytes > 0 ? { diskCeilingBytes: maxBytes, diskCeilingExplicit: true } : {})
+            // Consent is a device-owner question on a phone; on a relay the
+            // operator already answered it by configuring re-seeding. Without
+            // these the consent gate leaves permissions.archive false and the
+            // archive network stays idle no matter what the operator asked for.
+            consentVersion: 1,
+            migrationRequired: false,
+            contributeWatchedMedia: true,
+            archiveEnabled: true,
+            ...(maxBytes > 0
+              ? {
+                  diskCeilingBytes: maxBytes,
+                  diskCeilingExplicit: true,
+                  contributionBudgetBytes: maxBytes,
+                  archiveBudgetBytes: maxBytes
+                }
+              : {})
           }
         : {}),
       ...(config.networkPolicy || {}),
@@ -117,22 +132,18 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
     // accepts both knobs and only ever saw its own defaults, so custody could
     // not be confirmed sooner than every five minutes - or verified at all
     // inside a test - without reaching into the runtime by hand.
-    ...(reseedEnabled
-      ? {
-          archive: {
-            enabled: true,
-            ...(config.archive?.challengeIntervalMs === undefined
-              ? {}
-              : { challengeIntervalMs: config.archive.challengeIntervalMs }),
-            ...(config.archive?.challengeTimeoutMs === undefined
-              ? {}
-              : { challengeTimeoutMs: config.archive.challengeTimeoutMs }),
-          },
-        }
-      : {}),
     seedPin: config.seedPin || {},
+    // One archive option, not two: a second `archive` key in this literal
+    // silently overwrote the re-seeding block, so a relay asked to re-seed
+    // still handed the backend `enabled: false`.
     archive: {
-      enabled: config.archive?.enabled !== false
+      enabled: reseedEnabled ? true : config.archive?.enabled !== false,
+      ...(config.archive?.challengeIntervalMs === undefined
+        ? {}
+        : { challengeIntervalMs: config.archive.challengeIntervalMs }),
+      ...(config.archive?.challengeTimeoutMs === undefined
+        ? {}
+        : { challengeTimeoutMs: config.archive.challengeTimeoutMs }),
     },
     operability: {
       // Relay mode (public/private) and archive operator mode

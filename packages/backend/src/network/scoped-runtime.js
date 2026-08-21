@@ -47,6 +47,7 @@ import {
   deriveArchiveTopic,
   deriveBootstrapTopic,
   deriveIndexTopic,
+  deriveIndexerTopic,
   deriveModerationTopic,
   derivePublisherTopic,
   topicHex,
@@ -3284,7 +3285,7 @@ export function createScopedNetworkRuntime (options = {}) {
       if (existing) await releaseIndexServiceInternal(existing, 'announcement-superseded')
       if (status !== 'active') fail('runtime is not active')
       const mode = `index-service:${indexerId}`
-      const topic = deriveIndexTopic({ protocolMajor, indexerId })
+      const topic = deriveIndexerTopic({ protocolMajor, indexerId })
       const { scope } = joinScope({
         purpose: 'index',
         topic,

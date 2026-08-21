@@ -12,7 +12,7 @@ import {
   createScopedProtocolSession,
   encodeScopedHello,
 } from '../network/scoped-protocol.js'
-import { deriveIndexTopic } from '../network/topics.js'
+import { deriveIndexerTopic } from '../network/topics.js'
 import { PROTOCOL_MAJOR } from '../network/version.js'
 import {
   INDEX_SERVICE_QUERY_CAPABILITIES,
@@ -96,7 +96,7 @@ function commitSequence(announcement, sequenceState) {
 
 function setupContext(connection, announcement, limits, peerKey) {
   const maxFrameBytes = normalizeMaxFrameBytes(limits.maxFrameBytes)
-  const topic = deriveIndexTopic({ protocolMajor: PROTOCOL_MAJOR, indexerId: b4a.toString(announcement.indexerId, 'hex') })
+  const topic = deriveIndexerTopic({ protocolMajor: PROTOCOL_MAJOR, indexerId: b4a.toString(announcement.indexerId, 'hex') })
   const mux = limits.muxFactory ? limits.muxFactory(connection) : Protomux.from(connection)
   if (!mux || typeof mux.createChannel !== 'function') fail('Protomux is unavailable for index service connection')
   return { maxFrameBytes, topic, mux, peerId: b4a.toString(peerKey, 'hex') }

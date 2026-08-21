@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>peartube/scoped-network · frame layout</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Data model · peartube/scoped-network</p>
+    <h1>The peer frame, byte for byte</h1>
+
+    <svg viewBox="0 0 1000 616" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="peer-frame-title peer-frame-desc">
+      <title id="peer-frame-title">peartube scoped-network peer frame layout</title>
+      <desc id="peer-frame-desc">Byte layout of a scoped-network peer frame: a four byte big-endian body length, then a twenty-eight byte fixed header containing protocol major and minor, purpose code, tag count, type code, request id, payload length, tag bytes and two reserved words, followed by optional tags and the payload. The declared body length is highlighted because the decoder validates it before reading anything else.</desc>
+
+      <defs>
+        <pattern id="peer-frame-dots" width="22" height="22" patternUnits="userSpaceOnUse">
+          <circle cx="1" cy="1" r="0.9" fill="rgba(45,49,66,0.10)"/>
+        </pattern>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+      <rect width="100%" height="100%" fill="url(#peer-frame-dots)" opacity="0.55"/>
+
+      <!-- Offset ruler -->
+      <text x="80" y="80" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">OFFSET</text>
+      <text x="180" y="80" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">FIELD</text>
+      <text x="620" y="80" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">WIDTH</text>
+      <text x="760" y="80" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">ENCODING</text>
+      <line x1="80" y1="88" x2="920" y2="88" stroke="#bfc0c0" stroke-width="1"/>
+
+      <!-- Row 0: declared body length (FOCAL) -->
+      <rect x="80" y="96" width="840" height="40" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+      <text x="96" y="121" fill="#eb6c36" font-size="9" font-family="'Geist Mono', monospace" font-weight="600">0x00</text>
+      <text x="180" y="121" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif">bodyBytes</text>
+      <text x="292" y="121" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">= 28 + tagBytes + payload</text>
+      <text x="620" y="121" fill="#eb6c36" font-size="9" font-family="'Geist Mono', monospace" font-weight="600">4</text>
+      <text x="760" y="121" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">uint32BE</text>
+
+      <!-- Fixed header zone label -->
+      <rect x="80" y="144" width="840" height="248" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+      <rect x="428" y="148" width="144" height="12" rx="2" fill="#f5f5f5"/>
+      <text x="500" y="157" fill="rgba(45,49,66,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">FIXED HEADER · 28 BYTES</text>
+
+      <!-- Header rows -->
+      <text x="96" y="188" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">0x04</text>
+      <text x="180" y="188" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif">protocolMajor</text>
+      <text x="620" y="188" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">1</text>
+      <text x="760" y="188" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">uint8</text>
+      <line x1="96" y1="196" x2="904" y2="196" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+
+      <text x="96" y="216" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">0x05</text>
+      <text x="180" y="216" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif">protocolMinor</text>
+      <text x="620" y="216" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">1</text>
+      <text x="760" y="216" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">uint8</text>
+      <line x1="96" y1="224" x2="904" y2="224" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+
+      <text x="96" y="244" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">0x06</text>
+      <text x="180" y="244" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif">purposeCode</text>
+      <text x="292" y="244" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">one per topic role · values 1 to 6</text>
+      <text x="620" y="244" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">1</text>
+      <text x="760" y="244" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">uint8</text>
+      <line x1="96" y1="252" x2="904" y2="252" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+
+      <text x="96" y="272" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">0x07</text>
+      <text x="180" y="272" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif">tagCount</text>
+      <text x="620" y="272" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">1</text>
+      <text x="760" y="272" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">uint8</text>
+      <line x1="96" y1="280" x2="904" y2="280" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+
+      <text x="96" y="300" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">0x08</text>
+      <text x="180" y="300" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif">typeCode</text>
+      <text x="292" y="300" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">hash of the type name · 14 known types</text>
+      <text x="620" y="300" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">4</text>
+      <text x="760" y="300" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">uint32BE</text>
+      <line x1="96" y1="308" x2="904" y2="308" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+
+      <text x="96" y="328" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">0x0c</text>
+      <text x="180" y="328" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif">requestId</text>
+      <text x="620" y="328" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">4</text>
+      <text x="760" y="328" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">uint32BE</text>
+      <line x1="96" y1="336" x2="904" y2="336" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+
+      <text x="96" y="356" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">0x10</text>
+      <text x="180" y="356" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif">payloadLength · tagBytes</text>
+      <text x="620" y="356" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">4 + 4</text>
+      <text x="760" y="356" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">uint32BE ×2</text>
+      <line x1="96" y1="364" x2="904" y2="364" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+
+      <text x="96" y="384" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">0x18</text>
+      <text x="180" y="384" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif">reserved</text>
+      <text x="292" y="384" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">two zero words · the append-only room for v1.x fields</text>
+      <text x="620" y="384" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">4 + 4</text>
+      <text x="760" y="384" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">uint32BE ×2</text>
+
+      <!-- Variable section -->
+      <rect x="80" y="408" width="840" height="40" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <text x="96" y="433" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">0x20</text>
+      <text x="180" y="433" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif">tags[]</text>
+      <text x="292" y="433" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">code uint16BE · length uint16BE · value</text>
+      <text x="620" y="433" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">tagBytes</text>
+      <text x="760" y="433" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">repeated</text>
+
+      <rect x="80" y="456" width="840" height="40" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+      <text x="180" y="481" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif">payload</text>
+      <text x="292" y="481" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">opaque to this codec · compact-encoding per type</text>
+      <text x="620" y="481" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">payloadLength</text>
+      <text x="760" y="481" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">bytes</text>
+
+      <!-- Captions -->
+      <text x="80" y="536" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">CHECKED FIRST</text>
+      <text x="216" y="536" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif" font-style="italic">The decoder rejects a frame over MAX_PEER_FRAME_BYTES (64 KiB), shorter than 4 + 28, or whose declared bodyBytes is not exactly byteLength − 4 — before it reads a single field.</text>
+      <text x="80" y="560" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">NEGOTIATED DOWN</text>
+      <text x="216" y="560" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif" font-style="italic">The hello carries each side's maxFrameBytes and the session uses min(local, remote), so a peer can only ever shrink the ceiling, never raise it.</text>
+      <text x="80" y="584" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">PURPOSE CODES</text>
+      <text x="216" y="584" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif" font-style="italic">1 bootstrap · 2 publisher · 3 asset · 4 live · 5 archive · 6 archive-discovery. The eight reserved bytes are how a v1.x field gets added without renumbering any of this.</text>
+    </svg>
+  </div>
+</body>
+</html>

@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>One request gets refused</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #eb6c36;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Flowchart · admission control</p>
+    <h1>One request gets refused, and the counter never comes back</h1>
+
+    <svg viewBox="0 0 1000 660" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="one-request-refused-title one-request-refused-desc">
+      <title id="one-request-refused-title">Admission control decision path</title>
+      <desc id="one-request-refused-desc">A frame arrives and passes four sequential budget checks: message count against 128, cumulative bytes against one mebibyte, verification count against 32 when verification is needed, and in-flight bytes against one mebibyte. Any failure returns a named rejection. On success the reservation is granted and later released. The release step is highlighted because it only gives back in-flight bytes and verifications; the message and byte counters are never decremented.</desc>
+
+      <defs>
+        <pattern id="one-request-refused-dots" width="22" height="22" patternUnits="userSpaceOnUse">
+          <circle cx="1" cy="1" r="0.9" fill="rgba(45,49,66,0.10)"/>
+        </pattern>
+        <marker id="one-request-refused-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/>
+        </marker>
+        <marker id="one-request-refused-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/>
+        </marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+      <rect width="100%" height="100%" fill="url(#one-request-refused-dots)" opacity="0.55"/>
+
+      <!-- Connectors first -->
+      <line x1="240" y1="92" x2="240" y2="120" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#one-request-refused-arrow)"/>
+      <line x1="240" y1="176" x2="240" y2="204" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#one-request-refused-arrow)"/>
+      <line x1="240" y1="260" x2="240" y2="288" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#one-request-refused-arrow)"/>
+      <line x1="240" y1="344" x2="240" y2="372" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#one-request-refused-arrow)"/>
+      <line x1="240" y1="428" x2="240" y2="456" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#one-request-refused-arrow-accent)"/>
+      <line x1="240" y1="512" x2="240" y2="540" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#one-request-refused-arrow-accent)"/>
+
+      <!-- Reject exits to the right -->
+      <line x1="324" y1="148" x2="612" y2="148" stroke="#4f5d75" stroke-width="1" marker-end="url(#one-request-refused-arrow)"/>
+      <line x1="324" y1="232" x2="612" y2="232" stroke="#4f5d75" stroke-width="1" marker-end="url(#one-request-refused-arrow)"/>
+      <line x1="324" y1="316" x2="612" y2="316" stroke="#4f5d75" stroke-width="1" marker-end="url(#one-request-refused-arrow)"/>
+      <line x1="324" y1="400" x2="612" y2="400" stroke="#4f5d75" stroke-width="1" marker-end="url(#one-request-refused-arrow)"/>
+
+      <!-- Start -->
+      <rect x="160" y="56" width="160" height="36" rx="20" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="240" y="79" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">frame arrives</text>
+
+      <!-- Gate 1 -->
+      <polygon points="240,120 324,148 240,176 156,148" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="240" y="145" fill="#2d3142" font-size="10" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">messages + 1</text>
+      <text x="240" y="158" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">&gt; 128 ?</text>
+
+      <!-- Gate 2 -->
+      <polygon points="240,204 324,232 240,260 156,232" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="240" y="229" fill="#2d3142" font-size="10" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">bytes + size</text>
+      <text x="240" y="242" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">&gt; 1 MiB ?</text>
+
+      <!-- Gate 3 -->
+      <polygon points="240,288 324,316 240,344 156,316" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="240" y="313" fill="#2d3142" font-size="10" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">verifications + 1</text>
+      <text x="240" y="326" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">&gt; 32 ?</text>
+
+      <!-- Gate 4 -->
+      <polygon points="240,372 324,400 240,428 156,400" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="240" y="397" fill="#2d3142" font-size="10" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">inFlight + size</text>
+      <text x="240" y="410" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">&gt; 1 MiB ?</text>
+
+      <!-- No labels on the vertical path -->
+      <text x="252" y="196" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">no</text>
+      <text x="252" y="280" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">no</text>
+      <text x="252" y="364" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">no</text>
+      <text x="252" y="448" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace">no</text>
+
+      <!-- Yes labels -->
+      <text x="380" y="142" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">yes</text>
+      <text x="380" y="226" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">yes</text>
+      <text x="380" y="310" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">yes</text>
+      <text x="380" y="394" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">yes</text>
+
+      <!-- Reject terminals -->
+      <rect x="616" y="130" width="240" height="36" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <text x="736" y="152" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">message-budget</text>
+
+      <rect x="616" y="214" width="240" height="36" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <text x="736" y="236" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">byte-budget</text>
+
+      <rect x="616" y="298" width="240" height="36" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <text x="736" y="320" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">verification-budget</text>
+
+      <rect x="616" y="382" width="240" height="36" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+      <text x="736" y="404" fill="#2d3142" font-size="10" font-family="'Geist Mono', monospace" text-anchor="middle">in-flight-bytes</text>
+
+      <!-- Accept -->
+      <rect x="140" y="456" width="200" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+      <text x="240" y="478" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">reserve</text>
+      <text x="240" y="494" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">all four counters go up</text>
+
+      <!-- Release (FOCAL) -->
+      <rect x="140" y="540" width="200" height="56" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+      <text x="240" y="562" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">release(reason)</text>
+      <text x="240" y="578" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">only two come back down</text>
+
+      <!-- Annotation on the focal -->
+      <path d="M 344,568 H 420 Q 428,568 428,560 V 476" fill="none" stroke="#eb6c36" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="440" y="500" fill="#eb6c36" font-size="10" font-family="'Geist', sans-serif" font-style="italic">inFlightBytes and verifications</text>
+      <text x="440" y="514" fill="#eb6c36" font-size="10" font-family="'Geist', sans-serif" font-style="italic">are given back. messages and</text>
+      <text x="440" y="528" fill="#eb6c36" font-size="10" font-family="'Geist', sans-serif" font-style="italic">bytes are not.</text>
+      <text x="440" y="548" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">admission.js:42-49</text>
+
+      <!-- Captions -->
+      <text x="80" y="624" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">THE CONSEQUENCE</text>
+      <text x="216" y="624" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif" font-style="italic">The first two gates are lifetime quotas, not rate limits. After 128 frames or 1 MiB from one peer, every later request is refused with message-budget — for as long as that peer state lives.</text>
+      <text x="80" y="644" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">THE MISSING PIECE</text>
+      <text x="216" y="644" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif" font-style="italic">A refillPerTick option is declared on line 7, defaults to 0, and is never read anywhere in the repo. The refill was intended and never wired. disconnect() clears in-flight and verifications only.</text>
+    </svg>
+  </div>
+</body>
+</html>

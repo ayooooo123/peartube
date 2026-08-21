@@ -71,6 +71,37 @@ thing a reviewer greps.
 
 **Size:** L for (a), S for (b). **Buys:** the architecture matching its own labels.
 
+### 3. Admission budgets are lifetime quotas, not rate limits.
+
+`packages/backend/src/network/admission.js`
+
+`reserve()` increments four counters (lines 35-38) and `release()` gives back only two (42-49):
+
+| Counter | Limit | Given back on release? | Cleared on disconnect? |
+|---|---|---|---|
+| `inFlightBytes` | 1 MiB | yes | yes |
+| `verifications` | 32 | yes | yes |
+| `messages` | 128 | **no** | **no** |
+| `bytes` | 1 MiB | **no** | **no** |
+
+So the first two gates are lifetime quotas. After 128 frames — or 1 MiB cumulative — from one peer,
+every later `reserve()` returns `message-budget` or `byte-budget` for as long as that peer's state
+object lives. For a video app moving blocks, 128 frames is a few seconds of playback.
+
+`defaults()` declares `refillPerTick` on line 7, defaults it to `0`, and **nothing in the repo ever
+reads it**. The refill was intended and never wired.
+
+This is worth confirming against a long-lived session before deciding severity: if `scoped-runtime.js`
+creates a fresh admission per session (line 180) rather than sharing the runtime-level one (line 330),
+the blast radius is one session rather than the process. Either way the counters only ever go up.
+
+**Fix:** decide whether these are per-window or per-lifetime. If per-window, implement the refill the
+parameter already promises and decrement in `release()`. If per-lifetime, rename them so the next
+reader is not misled, and make the rejection reason say so.
+
+**Size:** S. **Buys:** removes a class of silent stall where a peer is refused forever and the log
+says `message-budget`.
+
 ---
 
 ## P1 — Rule violations that cause silent stalls.
@@ -212,7 +243,8 @@ Verified in code, not in plan docs:
 ## Order
 
 1. Item 1 (apply determinism) — correctness, and it is contained.
-2. Item 2 (decide (a) or (b)) — everything else in `channel/` depends on the answer.
+2. Item 3 (admission refill) — smallest of the three P0s, and it is a live stall.
+3. Item 2 (decide (a) or (b)) — everything else in `channel/` depends on the answer.
 3. Items 4, 5 — small, mechanical, remove rule violations.
 4. Item 3 — classify the 79, fix the archive ones first.
 5. Items 6, 7, 9 — noise and honesty, cheap.

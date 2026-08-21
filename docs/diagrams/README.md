@@ -17,6 +17,7 @@ skill's `lint-skin.py` and `self_check.py`.
 |---|---|
 | [`one-video.html`](one-video.html) | What actually happens between picking a file and it playing on someone else's device? |
 | [`one-device-joins.html`](one-device-joins.html) | How does a second device get access to a channel from a short code? |
+| [`one-request-refused.html`](one-request-refused.html) | What stops a hostile peer, and why does a friendly one eventually get refused too? |
 | [`../architecture.html`](../architecture.html) | What are the pieces, and how do four shells share one backend? |
 
 **Read `one-video` first.** It is the whole system as a single story, and it names where every
@@ -59,8 +60,6 @@ subsystem sits, so the references below have somewhere to attach.
 Listed so the gap is visible rather than implied. Verified facts in hand for the first three:
 
 - Playback read path — 16 MiB max priority span, 15 s priority timeout, 10 s finding-peers lease
-- Admission control lifecycle — budgets 128 messages / 1 MiB / 32 verifications / 1 MiB in flight;
-  released on `complete` or `disconnect`
 - Seed-pin exchange — 256 KiB frames; `seed-pin/auth.js:371` verifies with `expectedIdentity` **and**
   `expectedDevice: remotePublicKey`
 - Personal store `apply`, including the determinism defect

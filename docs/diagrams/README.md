@@ -1,50 +1,68 @@
 # Backend diagrams
 
-One overview, then a deep dive per subsystem. Each diagram is a self-contained HTML file that opens
-offline, plus a PNG for embedding. Every label is traced to code — no diagram describes a plan.
+Two kinds of thing live here, and mixing them up is what makes documentation useless:
 
-Built with [`diagram-design`](https://github.com/cathrynlavery/diagram-design). Regenerate a PNG by
-opening the HTML and exporting the `<svg>`; validate with that skill's `lint-skin.py` and
-`self_check.py`.
+- **Explainers** — follow one thing through the system. Read these to *understand* it.
+- **References** — exact field layouts and constants. Read these when you already understand it and
+  need the byte offsets.
 
-## Start here
+Every label is traced to code. No diagram here describes a plan.
 
-| Diagram | Answers | Type |
-|---|---|---|
-| [`../architecture.html`](../architecture.html) | What are the pieces and how do four shells share one backend? | Architecture |
+Built with [`diagram-design`](https://github.com/cathrynlavery/diagram-design). Validate with that
+skill's `lint-skin.py` and `self_check.py`.
 
-## Deep dives
+## Explainers — start here
 
-| Diagram | Answers | Type |
-|---|---|---|
-| [`peer-frame.html`](peer-frame.html) | What is actually on the wire between two peers, byte for byte? | Data model |
+| Diagram | Answers |
+|---|---|
+| [`one-video.html`](one-video.html) | What actually happens between picking a file and it playing on someone else's device? |
+| [`../architecture.html`](../architecture.html) | What are the pieces, and how do four shells share one backend? |
 
-## Reading order
+**Read `one-video` first.** It is the whole system as a single story, and it names where every
+subsystem sits, so the references below have somewhere to attach.
 
-The overview names the four storage primitives and the transport. The deep dives open one box each.
-If you only read two, read the overview and `peer-frame` — the frame is where the protocol claims
-become concrete.
+## References
+
+| Diagram | Answers |
+|---|---|
+| [`peer-frame.html`](peer-frame.html) | Exact byte layout of a scoped-network peer frame |
+
+## Glossary of terms that only exist in this codebase
+
+- **Peer frame** — one message sent directly between two PearTube peers, defined in
+  `network/frame.js`, used only by `network/scoped-runtime.js`. It is *not* Hypercore replication
+  traffic; Hypercore handles its own. This is the envelope for PearTube's own requests, and its 14
+  type names say what they are: `locator`, `probe`, `asset-block-{request,proof,chunk,unavailable}`,
+  `archive-{request,pledge,challenge,challenge-proof}`,
+  `archive-block-{request,proof,chunk,unavailable}`.
+- **Purpose** — which of six topic roles a frame belongs to: bootstrap, publisher, asset, live,
+  archive, archive-discovery. It is a routing tag, not a message type.
+- **Scoped network** — the layer that owns peer frames: one session per peer per purpose, with
+  admission control and a negotiated frame ceiling.
+- **Pledge** — an archivist's signed promise to keep specific byte ranges until a deadline. A promise
+  only; the audit loop is what turns it into evidence.
+- **Seed pin** — a request asking a peer to keep seeding something durably, authorised by an
+  attestation bound to the live connection's Noise key.
 
 ## Conventions
 
-- **One accent per diagram.** The coral element is the thing to look at first, and it is chosen
-  deliberately: the generated contract in the overview, the declared length in the frame.
-- **Mono is for technical content** — offsets, constants, encodings. Never decoration.
+- **One accent per diagram**, chosen deliberately. In `one-video` it marks the single step that is
+  PearTube's own code rather than a Holepunch primitive.
+- **Mono is for technical content** — offsets, constants, module names. Never decoration.
 - **Captions carry the non-obvious fact**, not a restatement of the picture.
-- **Honest labels.** Where the code disagrees with its own naming, the diagram says so rather than
-  flattering the design. See `CLEANUP_PLAN.md` at the repo root for the audit those notes come from.
+- **Honest labels.** Where the code disagrees with its own naming, the diagram says so. See
+  `CLEANUP_PLAN.md` at the repo root.
 
 ## Not yet drawn
 
-Deliberately listed so the gap is visible rather than implied. Each needs its facts verified against
-code first:
+Listed so the gap is visible rather than implied. Verified facts in hand for the first three:
 
-- Playback sparse read path — `blob-playback-service.js`, `blob-range-priority.js`
-  (16 MiB max priority span, 15 s priority timeout, 10 s finding-peers lease)
-- Admission control lifecycle — `network/admission.js`, as a state machine
-- Seed-pin durability exchange — `seed-pin/*`, including the attestation bound to the live Noise key
-- Upload and publish pipeline — `upload.js` through manifest signing and catalog announce
-- Channel and device enrolment — `channel/pairer.js` over `blind-pairing`
-- Personal store `apply` — `personal/personal-store.js`, including the determinism defect
-- Discovery records and topics — `discovery/*`, `network/topics.js`
-- Schema codegen — one 4,207-line source to 45,261 generated lines across JS and Swift
+- Playback read path — 16 MiB max priority span, 15 s priority timeout, 10 s finding-peers lease
+- Admission control lifecycle — budgets 128 messages / 1 MiB / 32 verifications / 1 MiB in flight;
+  released on `complete` or `disconnect`
+- Seed-pin exchange — 256 KiB frames; `seed-pin/auth.js:371` verifies with `expectedIdentity` **and**
+  `expectedDevice: remotePublicKey`
+- Channel and device enrolment over `blind-pairing`
+- Personal store `apply`, including the determinism defect
+- Discovery records and topic derivation
+- Schema codegen — 4,207-line source to 45,261 generated lines across JS and Swift

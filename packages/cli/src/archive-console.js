@@ -961,6 +961,7 @@ export async function createArchiveConsole({
       creators: creatorsView(),
       unseededTargets: service.getCreatorTargets?.({ limit: 25 }) || status.creators?.unseededTargets || [],
       tmdb: tmdbView(),
+      s3: service.s3 || { configured: false, endpoint: '', bucket: '', region: '', prefix: '' },
       discover: await discoverView(discoverParams),
       trustedClients: service.getTrustedClients?.() || [],
       link: service.getLinkDescriptor?.() || null

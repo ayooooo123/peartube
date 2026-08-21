@@ -325,7 +325,15 @@ function configFromEnv(env = {}) {
     env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_CHANNEL_NAME ||
     env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION ||
     env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE ||
-    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES
+    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES ||
+    env.PEARTUBE_ARCHIVE_S3_ENDPOINT ||
+    env.PEARTUBE_ARCHIVE_S3_BUCKET ||
+    env.PEARTUBE_ARCHIVE_S3_REGION ||
+    env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID ||
+    env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY ||
+    env.PEARTUBE_ARCHIVE_S3_PREFIX ||
+    env.PEARTUBE_ARCHIVE_S3_ENABLED ||
+    env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE
   ) {
     config.archive = {}
     if (env.PEARTUBE_ARCHIVE_UI_ENABLED) config.archive.uiEnabled = parseBoolean(env.PEARTUBE_ARCHIVE_UI_ENABLED)
@@ -347,6 +355,26 @@ function configFromEnv(env = {}) {
     if (env.PEARTUBE_ARCHIVE_COOKIES_PATH) config.archive.cookiesPath = env.PEARTUBE_ARCHIVE_COOKIES_PATH
     if (env.PEARTUBE_ARCHIVE_JS_RUNTIME) config.archive.jsRuntime = env.PEARTUBE_ARCHIVE_JS_RUNTIME
     if (env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS) config.archive.ytDlpExtraArgs = splitShellArgs(env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS)
+    if (
+      env.PEARTUBE_ARCHIVE_S3_ENDPOINT ||
+      env.PEARTUBE_ARCHIVE_S3_BUCKET ||
+      env.PEARTUBE_ARCHIVE_S3_REGION ||
+      env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID ||
+      env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY ||
+      env.PEARTUBE_ARCHIVE_S3_PREFIX ||
+      env.PEARTUBE_ARCHIVE_S3_ENABLED ||
+      env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE
+    ) {
+      config.archive.s3 = {}
+      if (env.PEARTUBE_ARCHIVE_S3_ENDPOINT) config.archive.s3.endpoint = env.PEARTUBE_ARCHIVE_S3_ENDPOINT
+      if (env.PEARTUBE_ARCHIVE_S3_BUCKET) config.archive.s3.bucket = env.PEARTUBE_ARCHIVE_S3_BUCKET
+      if (env.PEARTUBE_ARCHIVE_S3_REGION) config.archive.s3.region = env.PEARTUBE_ARCHIVE_S3_REGION
+      if (env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID) config.archive.s3.accessKeyId = env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID
+      if (env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY) config.archive.s3.secretAccessKey = env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY
+      if (env.PEARTUBE_ARCHIVE_S3_PREFIX) config.archive.s3.prefix = env.PEARTUBE_ARCHIVE_S3_PREFIX
+      if (env.PEARTUBE_ARCHIVE_S3_ENABLED) config.archive.s3.enabled = parseBoolean(env.PEARTUBE_ARCHIVE_S3_ENABLED)
+      if (env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE) config.archive.s3.forcePathStyle = parseBoolean(env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE)
+    }
     if (env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS) {
       config.archive.ytDlpRetryExtraArgs = String(env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS)
         .split(/\s*\|\|\s*/)

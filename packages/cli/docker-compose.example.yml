@@ -21,6 +21,16 @@ services:
       # Create a key at https://www.themoviedb.org/settings/api
       PEARTUBE_TMDB_API_KEY: your-tmdb-api-key-here
       PEARTUBE_TMDB_ENABLED: "true"
+      # Optional S3-compatible archive configuration. Credentials stay in
+      # environment variables and are never written to the relay feed.
+      # PEARTUBE_ARCHIVE_S3_ENDPOINT: https://s3.example.com
+      # PEARTUBE_ARCHIVE_S3_BUCKET: peartube-relay
+      # PEARTUBE_ARCHIVE_S3_REGION: us-east-1
+      # PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID: your-access-key
+      # PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY: your-secret-key
+      # PEARTUBE_ARCHIVE_S3_PREFIX: peartube/
+      # PEARTUBE_ARCHIVE_S3_ENABLED: "true"
+      # PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE: "false"
       # Optional allowlist keys for private or curated public mode:
       # PEARTUBE_ADMISSION_CHANNELS: chan-key-1,chan-key-2
       # PEARTUBE_ADMISSION_OWNERS: owner-key-1

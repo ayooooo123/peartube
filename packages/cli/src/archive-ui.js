@@ -360,6 +360,7 @@ export function renderArchiveWebHome(model = {}) {
   const creators = Array.isArray(model.creators) ? model.creators : []
   const unseededTargets = Array.isArray(model.unseededTargets) ? model.unseededTargets : []
   const tmdb = model.tmdb || {}
+  const s3 = model.s3 || {}
   const discover = model.discover || { type: 'movie', query: '', items: [] }
   const discoverItems = Array.isArray(discover.items) ? discover.items : []
   const trustedClients = Array.isArray(model.trustedClients) ? model.trustedClients : []
@@ -664,6 +665,12 @@ export function renderArchiveWebHome(model = {}) {
             <label class="check"><input type="checkbox" name="enabled" value="true" ${tmdb.enabled ? 'checked' : ''}> Enable classification</label>
             <button type="submit">Save TMDB settings</button>
           </form>
+        </section>
+        <section class="card">
+          <h2>S3 archive provider</h2>
+          <p class="sub">Read-only status. Configure S3 with Docker environment variables, then restart the relay.</p>
+          <p class="note">Status: <span class="status-line ${s3.configured ? 'on' : ''}">${s3.configured ? 'configured' : 'not configured'}</span></p>
+          ${s3.configured ? `<p class="note">Endpoint: ${escapeHtml(s3.endpoint)}<br>Bucket: ${escapeHtml(s3.bucket)}<br>Region: ${escapeHtml(s3.region)}<br>Prefix: ${escapeHtml(s3.prefix || '(none)')}</p>` : ''}
         </section>
 
         <section class="card">

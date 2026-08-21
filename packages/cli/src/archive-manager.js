@@ -1197,7 +1197,7 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
         error: null
       })
       if (typeof onCompleted === 'function') {
-        await onCompleted(completed)
+        await onCompleted({ ...completed, archivePath: downloaded.filePath })
       }
       return completed
     } catch (err) {

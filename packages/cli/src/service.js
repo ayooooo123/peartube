@@ -493,8 +493,38 @@ async function buildRelayService({
     queue = queue.then(() => processCandidate(candidate))
     return queue
   }
+  let s3Signer = null
+  const s3Config = config.archive?.s3 || {}
+  if (s3Config.endpoint && s3Config.accessKeyId && s3Config.secretAccessKey && globalThis.process?.versions?.node) {
+    try {
+      const { createS3Signer } = await import('./s3-signer.js')
+      s3Signer = createS3Signer(s3Config)
+    } catch (error) {
+      logger.status?.warn?.('S3 configuration is invalid', { error: error?.message || String(error) })
+    }
+  }
+  async function archiveCompletedToS3(job) {
+    if (!s3Signer || s3Config.enabled === false || !job?.archivePath) return null
+    const fs = fsModule || await import('#fs')
+    const data = fs.readFileSync(job.archivePath)
+    const key = `${s3Config.prefix || 'peartube/'}${job.channelKey || 'archive'}/${job.videoId || job.id}`
+    const signed = await s3Signer({ operation: 'put', key, method: 'PUT', headers: { 'content-length': String(data.length) } })
+    const fetchImpl = globalThis.fetch
+    if (typeof fetchImpl !== 'function') throw new Error('S3 upload requires a fetch implementation')
+    const response = await fetchImpl(signed.url, { method: 'PUT', headers: signed.headers, body: data })
+    if (!response.ok) throw new Error(`S3 archive upload failed with HTTP ${response.status}`)
+    logger.archive?.info?.('Archived media to S3', { key, bytes: data.length })
+    return { key, bytes: data.length, uploadedAt: Date.now(), status: 'uploaded' }
+  }
 
   const service = {
+    s3: {
+      configured: Boolean(s3Signer),
+      endpoint: s3Config.endpoint || '',
+      bucket: s3Config.bucket || '',
+      region: s3Config.region || 'us-east-1',
+      prefix: s3Config.prefix || ''
+    },
     config,
     logger,
     runtime,
@@ -1144,7 +1174,12 @@ async function buildRelayService({
           fs: runtimeFsModule,
           canPublish: retentionPermission
         }),
-        onCompleted: (job) => service.publishArchiveJob(job),
+        onCompleted: async (job) => {
+          try { await archiveCompletedToS3(job) } catch (error) {
+            logger.archive?.warn?.('S3 archive upload failed; local archive remains available', { error: error?.message || String(error) })
+          }
+          return service.publishArchiveJob(job)
+        },
         stagingRoot: config.archive?.tmpPath || './peartube-relay/archive-tmp'
       })
       const job = await manager.enqueue(input)

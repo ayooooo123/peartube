@@ -2,6 +2,10 @@
 
 PearTube is a pre-alpha decentralized video platform built on the Hypercore stack. It runs mobile, Electrobun desktop, and relay surfaces against one shared backend contract instead of maintaining separate platform backends.
 
+![PearTube architecture](docs/architecture.png)
+
+<sub>Source: [`docs/architecture.html`](docs/architecture.html) — self-contained, opens offline.</sub>
+
 ## Current State
 
 | Surface | Status | Primary command |

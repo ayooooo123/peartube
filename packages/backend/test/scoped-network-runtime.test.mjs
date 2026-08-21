@@ -225,8 +225,12 @@ function fakeSwarm () {
   return swarm
 }
 
-function fakeRegistry (descriptor) {
+// Publishing a local catalog proves its namespace from the genesis operation.
+// Pass the root key pair and the fixture serves that proof; tests that need a
+// different accepted page still override listAcceptedPage themselves.
+function fakeRegistry (descriptor, root = null) {
   const catalogEvents = new EventEmitter()
+  const genesis = root ? namespaceGenesis(descriptor, root) : null
   const catalog = {
     key: descriptor.catalogBootstrapKey,
     writable: true,
@@ -234,7 +238,17 @@ function fakeRegistry (descriptor) {
     async ready () {},
     async close () {},
     async listProjections () { return { items: [], nextCursor: null } },
-    async listAcceptedPage () { return { entries: [], nextCursor: null } },
+    async listAcceptedPage ({ cursor } = {}) {
+      if (!genesis || cursor !== null) return { entries: [], nextCursor: null }
+      return {
+        entries: [{
+          operationId: b4a.toString(genesis.recordId, 'hex'),
+          sourceWriterKey: bytes(32, 21),
+          frame: encodePublisherCatalogFrame(genesis),
+        }],
+        nextCursor: null,
+      }
+    },
     async getViewHead () {
       return {
         viewKey: descriptor.catalogBootstrapKey,
@@ -408,7 +422,7 @@ test('archive-only role publishes archive catalogs without contribution permissi
     genesisRootKey: root.publicKey,
     catalogBootstrapKey: bytes(32, 29),
   })
-  const registry = fakeRegistry(descriptor)
+  const registry = fakeRegistry(descriptor, root)
   registry.binding.catalog.listProjections = async kind => ({
     items: kind === 'publication' ? [{ accepted: true }] : [],
     nextCursor: null,
@@ -445,7 +459,7 @@ test('watch-only downgrade closes local publisher catalog sessions and removes i
     genesisRootKey: root.publicKey,
     catalogBootstrapKey: bytes(32, 22),
   })
-  const registryA = fakeRegistry(descriptor)
+  const registryA = fakeRegistry(descriptor, root)
   registryA.binding.catalog.listProjections = async kind => ({
     items: kind === 'publication' ? [{ accepted: true }] : [],
     nextCursor: null,

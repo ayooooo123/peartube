@@ -98,6 +98,7 @@ function makeUploadChannel() {
         writer.id = { blockOffset: blockOffset++, blockLength: 1, byteOffset: 0, byteLength: 0 }
         return writer
       },
+      async get() { return b4a.from('cover-bytes') },
       async clear() {},
     },
     async putBlob(buffer) {
@@ -525,14 +526,15 @@ test('episode upload publishes canonical collection claims and projects an order
     PUBLISHER_RECORD_TYPES.CLAIM,
     PUBLISHER_RECORD_TYPES.CLAIM,
   ])
-  t.ok(result.metadata.immutablePublication?.manifest)
   t.is(rebuilt, 1)
   t.is(joined.length, 1)
   t.is(joined[0].publisherId, hex(publisherId))
   t.alike(lifecycle, ['rebuild', 'retain', 'publish'])
   t.is(retained.length, 1)
-  t.is(retained[0].manifest, result.manifest)
-  t.is(retained[0].renditionId, result.renditionId)
+  // The handler returns a view for the app; the upload result it recorded is
+  // what carries the publication, so the manifest assertions read that.
+  t.is(retained[0].manifest, handlerResults[0].manifest)
+  t.is(retained[0].renditionId, handlerResults[0].renditionId)
   t.ok(handlerResults[0].metadata.immutablePublication?.manifest)
   t.ok((await handlerBackend.uploadVideo({
     filePath: '/fixtures/second.webm',
@@ -694,7 +696,9 @@ test('a published cover rides the manifest and never stands in for the media', a
   }
   const binding = { publisherId, catalog }
   const manager = createUploadManager({
-    ctx: {},
+    // The static-core rendition write needs a real Corestore, same as the
+    // other upload tests in this file.
+    ctx: { store: makeStore(t, 'media-catalog-cover-upload') },
     catalogRegistry: {
       async getWritableBindings() { return [binding] },
       async resolve() { return binding },
@@ -707,16 +711,10 @@ test('a published cover rides the manifest and never stands in for the media', a
     deviceKeyPair: device,
     now: () => 200,
   })
-  const blobsKeyHex = hex(b4a.alloc(32, 42))
-  const channel = {
-    blobs: true,
-    blobsKeyHex,
-    localWriterKeyHex: hex(b4a.alloc(32, 43)),
-    async putBlob(buffer) {
-      return { id: `0:1:0:${buffer.byteLength}`, blockOffset: 0, blockLength: 1, byteOffset: 0, byteLength: buffer.byteLength }
-    },
-    async addVideo(metadata) { this.metadata = metadata },
-  }
+  // The publication path writes the rendition through a real blob stream, so
+  // this test uses the same channel fixture as the other upload tests.
+  const channel = makeUploadChannel()
+  const blobsKeyHex = channel.blobsKeyHex
 
   const result = await manager.uploadFromBuffer(channel, b4a.from('video-bytes'), {
     title: 'Illustrated',
@@ -733,8 +731,11 @@ test('a published cover rides the manifest and never stands in for the media', a
   const poster = renditions.find(rendition => rendition.purpose === 'poster')
   t.ok(poster, 'the manifest carries the cover as a rendition a peer can be authorized for')
   t.is(poster.format, 'image/jpeg')
-  t.is(poster.core.key, blobsKeyHex, 'the cover lives in the same core the publisher already seeds')
-  t.is(poster.core.length, 8, 'the authorized read is bounded by the block the cover occupies')
+  // A v2 rendition names a static asset core, so the cover gets one of its own
+  // rather than borrowing a block range out of the channel's blob core.
+  t.is(poster.core.kind, 'static-prologue-v1')
+  t.is(poster.core.assetId, poster.core.key, 'the cover is addressed as its own asset')
+  t.not(poster.core.key, blobsKeyHex, 'the cover is a published asset, not a blob reference')
 
   // The whole point of the provenance entry: byteOffset cannot be recovered
   // from a block range, and reading the wrong offset returns the wrong bytes.
@@ -752,9 +753,14 @@ test('a published cover rides the manifest and never stands in for the media', a
   // Announcing a catalog only says the title exists. A consumer looks for the
   // bytes on the rendition's asset scope, so a publisher that never joins it is
   // a title nobody can fetch: catalog syncs, sources read awaiting replication.
-  t.is(retained.length, 1, 'publishing makes the publisher a source for its own title')
-  t.is(retained[0].renditionId, renditions.find(rendition => rendition.purpose === 'original').renditionId)
-  t.is(retained[0].publicationId, manifest.publicationId, 'it is held as the publication it belongs to')
+  // The cover is retained too: a relay that seeds this movie holds the poster,
+  // so a consumer fetches both over the same authorized asset path.
+  t.is(retained.length, 2, 'publishing makes the publisher a source for its own title')
+  const retainedMedia = retained.find(request =>
+    request.renditionId === renditions.find(rendition => rendition.purpose === 'original').renditionId)
+  t.ok(retainedMedia, 'the media rendition is held')
+  t.is(retainedMedia.ownerId, manifest.publicationId, 'it is held as the publication it belongs to')
+  t.ok(retained.some(request => request.renditionId === poster.renditionId), 'the cover is held as well')
 })
 
 test('an upload with no cover publishes exactly one rendition', async t => {
@@ -790,20 +796,16 @@ test('an upload with no cover publishes exactly one rendition', async t => {
   }
   const binding = { publisherId, catalog }
   const manager = createUploadManager({
-    ctx: {},
+    ctx: { store: makeStore(t, 'media-catalog-plain-upload') },
     catalogRegistry: { async getWritableBindings() { return [binding] }, async resolve() { return binding } },
     mediaCatalogProjection: { async rebuild() {} },
     scopedNetwork: { async publishLocalPublisherCatalog() { return { status: 'published' } } },
     deviceKeyPair: device,
     now: () => 200,
   })
-  const channel = {
-    blobs: true,
-    blobsKeyHex: hex(b4a.alloc(32, 46)),
-    localWriterKeyHex: hex(b4a.alloc(32, 47)),
-    async putBlob(buffer) { return { id: `0:1:0:${buffer.byteLength}`, blockOffset: 0, blockLength: 1, byteOffset: 0, byteLength: buffer.byteLength } },
-    async addVideo(metadata) { this.metadata = metadata },
-  }
+  // Same channel surface as the other publication tests: the rendition is
+  // written through a blob stream and finalized through the channel.
+  const channel = makeUploadChannel()
 
   const result = await manager.uploadFromBuffer(channel, b4a.from('video-bytes'), {
     title: 'Plain',

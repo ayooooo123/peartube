@@ -18,6 +18,7 @@ import { probeMp4File, probeMp4Buffer, isMp4MimeType } from './mp4-playback-prob
 import { saveBlobPlaybackProfile } from './blob-playback-profile.js';
 import { MEDIA_COORDINATE_SHAPES, normalizeContentDetails } from './channel/structured-content.js';
 import {
+  ARTWORK_RENDITION_PURPOSES,
   createImmutableRenditionWriter,
   createPublicationManifest,
   createRenditionDescriptor,
@@ -38,13 +39,18 @@ import {
   encodePublisherCatalogFrame,
 } from './publisher/catalog-view.js';
 
-const IMMUTABLE_PUBLICATION_OPERATION_COUNT = 3;
+// A publication batch is one PUBLICATION operation followed by its claims. The
+// claim set is not fixed: an episode also carries collection structure and
+// membership claims, so the batch length travels in the frame header instead of
+// being asserted as a constant.
+const MIN_IMMUTABLE_PUBLICATION_OPERATION_COUNT = 3;
+const MAX_IMMUTABLE_PUBLICATION_OPERATION_COUNT = 8;
 const IMMUTABLE_PUBLICATION_FRAME_VERSION = 1;
 const IMMUTABLE_PUBLICATION_FRAME_HEADER_BYTES = 2;
 const IMMUTABLE_PUBLICATION_FRAME_LENGTH_BYTES = 4;
 const MAX_IMMUTABLE_PUBLICATION_FRAMES_BYTES =
   IMMUTABLE_PUBLICATION_FRAME_HEADER_BYTES +
-  IMMUTABLE_PUBLICATION_OPERATION_COUNT *
+  MAX_IMMUTABLE_PUBLICATION_OPERATION_COUNT *
     (IMMUTABLE_PUBLICATION_FRAME_LENGTH_BYTES + PUBLISHER_LIMITS.maxOperationBytes);
 
 /**
@@ -269,17 +275,8 @@ function buildVideoMetadata(metadata, blobResult, channel, fileSize, mimeType) {
   return metadata;
 }
 
-function hashUploadFallback(metadata, blobResult, channel, fileSize) {
-  return b4a.toString(crypto.hash(b4a.from(JSON.stringify({
-    blobsCoreKey: channel.blobsKeyHex,
-    blobId: blobResult.id,
-    fileSize,
-    fingerprint: metadata.contentFingerprint || null
-  }))), 'hex');
-}
-
-// The poster's identity label, mirroring uploadTreeHash for video: a stable
-// digest of what the publisher claims these bytes are, not a merkle root.
+// The poster's identity label: a stable digest of what the publisher claims
+// these bytes are, not a merkle root.
 function posterTreeHash(entry, blob) {
   return b4a.toString(
     crypto.hash(b4a.from([
@@ -290,12 +287,6 @@ function posterTreeHash(entry, blob) {
     ].join('\n'))),
     'hex'
   )
-}
-
-function uploadTreeHash(metadata, blobResult, channel, fileSize) {
-  const fingerprint = typeof metadata.contentFingerprint === 'string' ? metadata.contentFingerprint : '';
-  if (/^sha256:[0-9a-f]{64}$/i.test(fingerprint)) return fingerprint.slice(7).toLowerCase();
-  return hashUploadFallback(metadata, blobResult, channel, fileSize);
 }
 
 const catalogWriteQueues = new WeakMap();
@@ -431,17 +422,17 @@ function publisherOperationIdHex(operation) {
 }
 
 function encodeImmutablePublicationFrames(signedOperations, operationIds) {
-  if (!Array.isArray(signedOperations) ||
-      signedOperations.length !== IMMUTABLE_PUBLICATION_OPERATION_COUNT ||
+  const operationCount = Array.isArray(signedOperations) ? signedOperations.length : 0;
+  if (operationCount < MIN_IMMUTABLE_PUBLICATION_OPERATION_COUNT ||
+      operationCount > MAX_IMMUTABLE_PUBLICATION_OPERATION_COUNT ||
       !Array.isArray(operationIds) ||
-      operationIds.length !== IMMUTABLE_PUBLICATION_OPERATION_COUNT) {
-    throw new Error('immutable publication operation batch must contain exactly three frames');
+      operationIds.length !== operationCount) {
+    throw new Error('immutable publication operation batch is out of bounds');
   }
-  const expectedTypes = [
-    PUBLISHER_RECORD_TYPES.PUBLICATION,
-    PUBLISHER_RECORD_TYPES.CLAIM,
-    PUBLISHER_RECORD_TYPES.CLAIM,
-  ];
+  // One publication, then its claims.
+  const expectedTypes = signedOperations.map((_, index) => index === 0
+    ? PUBLISHER_RECORD_TYPES.PUBLICATION
+    : PUBLISHER_RECORD_TYPES.CLAIM);
   const frames = signedOperations.map((operation, index) => {
     const frame = encodePublisherCatalogFrame(operation);
     if (frame.byteLength === 0 || frame.byteLength > PUBLISHER_LIMITS.maxOperationBytes) {
@@ -462,7 +453,7 @@ function encodeImmutablePublicationFrames(signedOperations, operationIds) {
   }
   const encoded = b4a.allocUnsafe(byteLength);
   encoded[0] = IMMUTABLE_PUBLICATION_FRAME_VERSION;
-  encoded[1] = IMMUTABLE_PUBLICATION_OPERATION_COUNT;
+  encoded[1] = operationCount;
   let offset = IMMUTABLE_PUBLICATION_FRAME_HEADER_BYTES;
   for (const frame of frames) {
     const length = frame.byteLength;
@@ -486,17 +477,19 @@ function decodeImmutablePublicationFrames(publication) {
     throw new Error('uncertain upload operation frames are unavailable');
   }
   const encoded = b4a.from(hex, 'hex');
+  const operationCount = encoded.byteLength >= IMMUTABLE_PUBLICATION_FRAME_HEADER_BYTES ? encoded[1] : 0;
   if (encoded.byteLength < IMMUTABLE_PUBLICATION_FRAME_HEADER_BYTES ||
       encoded[0] !== IMMUTABLE_PUBLICATION_FRAME_VERSION ||
-      encoded[1] !== IMMUTABLE_PUBLICATION_OPERATION_COUNT) {
+      operationCount < MIN_IMMUTABLE_PUBLICATION_OPERATION_COUNT ||
+      operationCount > MAX_IMMUTABLE_PUBLICATION_OPERATION_COUNT ||
+      operationIds.length !== operationCount) {
     throw new Error('uncertain upload operation frame header is invalid');
   }
-  const expectedTypes = [
-    PUBLISHER_RECORD_TYPES.PUBLICATION,
-    PUBLISHER_RECORD_TYPES.CLAIM,
-    PUBLISHER_RECORD_TYPES.CLAIM,
-  ];
-  const frames = new Array(IMMUTABLE_PUBLICATION_OPERATION_COUNT);
+  // One publication, then its claims.
+  const expectedTypes = Array.from({ length: operationCount }, (_, index) => index === 0
+    ? PUBLISHER_RECORD_TYPES.PUBLICATION
+    : PUBLISHER_RECORD_TYPES.CLAIM);
+  const frames = new Array(operationCount);
   let offset = IMMUTABLE_PUBLICATION_FRAME_HEADER_BYTES;
   for (let index = 0; index < frames.length; index++) {
     if (offset + IMMUTABLE_PUBLICATION_FRAME_LENGTH_BYTES > encoded.byteLength) {
@@ -530,7 +523,9 @@ function decodeImmutablePublicationFrames(publication) {
 
 function immutablePublicationOperations(publication) {
   const operationIds = publication?.operationIds;
-  if (!Array.isArray(operationIds) || operationIds.length !== 3 ||
+  if (!Array.isArray(operationIds) ||
+      operationIds.length < MIN_IMMUTABLE_PUBLICATION_OPERATION_COUNT ||
+      operationIds.length > MAX_IMMUTABLE_PUBLICATION_OPERATION_COUNT ||
       operationIds.some(id => typeof id !== 'string' || !/^[0-9a-f]{64}$/.test(id))) {
     throw new Error('uncertain upload operation identities are unavailable');
   }
@@ -687,6 +682,35 @@ function completedUploadResult(videoId, metadata) {
     manifest: publication.manifest
   };
 }
+// Cover art is referenced by a blob the publisher already stored, so the bytes
+// are read back from that blob and written as a static asset of their own.
+// Artwork whose bytes cannot be read is left out rather than published as a
+// reference no peer could verify.
+async function collectArtworkSources(channel, metadata) {
+  const entries = Array.isArray(metadata.artwork) ? metadata.artwork : [];
+  if (entries.length === 0 || typeof channel?.blobs?.get !== 'function') return [];
+  const sources = [];
+  for (const entry of entries) {
+    if (!ARTWORK_RENDITION_PURPOSES.has(String(entry?.role || ''))) continue;
+    const blob = parseBlobId(String(entry.blobId || ''));
+    if (!blob) continue;
+    let bytes = null;
+    try {
+      bytes = await channel.blobs.get(blob);
+    } catch {
+      bytes = null;
+    }
+    if (!bytes?.byteLength) continue;
+    sources.push({
+      role: String(entry.role),
+      mimeType: entry.mimeType,
+      blobId: String(entry.blobId),
+      source: [bytes]
+    });
+  }
+  return sources;
+}
+
 
 async function prepareImmutablePublication(metadata, runtime = {}) {
   const { catalogRegistry, deviceKeyPair } = runtime;
@@ -722,7 +746,25 @@ async function prepareImmutablePublication(metadata, runtime = {}) {
       ? Math.round(durationSeconds * 1000)
       : 1
   });
-  return { catalog, publisherId, renditionWrite };
+  // Cover art rides the manifest, so it has to be a real asset like the media:
+  // a v2 rendition descriptor only accepts a static prologue core, not a blob
+  // range borrowed from the channel's blob core.
+  const artworkWrites = [];
+  const artworkSources = (await runtime.createArtworkSources?.()) || [];
+  for (const artwork of artworkSources) {
+    assertUploadNotCancelled(runtime.signal);
+    artworkWrites.push({
+      role: artwork.role,
+      blobId: artwork.blobId,
+      write: await renditionWriter.writeRendition({
+        purpose: artwork.role,
+        format: String(artwork.mimeType || 'image/jpeg'),
+        source: artwork.source,
+        durationMs: 1
+      })
+    });
+  }
+  return { catalog, publisherId, renditionWrite, artworkWrites };
 }
 
 function finalizePreparedRendition(prepared, mimeType) {
@@ -801,53 +843,29 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
     throw new Error('Publisher writer sequence is unavailable');
   }
   assertUploadNotCancelled(runtime.signal);
-  const blockOffset = Number(blobResult.blockOffset || 0);
-  const blockLength = Number(blobResult.blockLength || 1);
-  if (!Number.isSafeInteger(blockOffset) || blockOffset < 0 || !Number.isSafeInteger(blockLength) || blockLength < 1) {
-    throw new Error('Uploaded blob range is invalid');
-  }
-  const rendition = createRenditionDescriptor({
-    purpose: 'original',
-    format: String(mimeType || metadata.mimeType || 'video/mp4'),
-    core: {
-      key: channel.blobsKeyHex,
-      length: blockOffset + blockLength,
-      treeHash: uploadTreeHash(metadata, blobResult, channel, fileSize),
-      byteLength: fileSize
-    }
-  });
+  // The rendition descriptor is the one the caller already wrote (prepared),
+  // so the publication describes exactly the bytes that landed.
+  const coreKey = rendition.core.key;
   // Cover art is part of the publication, not a side channel: a relay that
   // seeds this movie holds the poster too, and a consumer fetches it over the
   // same authorized asset path as the video. Nothing has to leave the swarm.
+  // The descriptors were written as static assets alongside the media, so the
+  // manifest names cores a peer can actually be authorized for.
   const posterRenditions = []
   const posterProvenance = []
-  for (const entry of Array.isArray(metadata.artwork) ? metadata.artwork : []) {
-    if (entry?.role !== 'poster') continue
-    if (entry.blobsCoreKey !== channel.blobsKeyHex) continue
-    const blob = parseBlobId(String(entry.blobId || ''))
-    if (!blob) continue
-    const posterRendition = createRenditionDescriptor({
-      purpose: 'poster',
-      format: String(entry.mimeType || 'image/jpeg'),
-      core: {
-        key: channel.blobsKeyHex,
-        length: blob.blockOffset + blob.blockLength,
-        treeHash: posterTreeHash(entry, blob),
-        byteLength: blob.byteLength
-      }
-    })
+  for (const artwork of Array.isArray(prepared.artworkWrites) ? prepared.artworkWrites : []) {
+    const posterRendition = artwork.write?.descriptor
+    if (!posterRendition) continue
     posterRenditions.push(posterRendition)
     posterProvenance.push({
       type: 'artwork',
-      role: 'poster',
+      role: artwork.role,
       videoId: metadata.id,
-      blobId: String(entry.blobId),
-      coreKey: channel.blobsKeyHex,
-      renditionId: posterRendition.renditionId,
-      start: blob.blockOffset,
-      end: blob.blockOffset + blob.blockLength
+      blobId: artwork.blobId ? String(artwork.blobId) : null,
+      assetId: posterRendition.core.assetId,
+      coreKey: posterRendition.core.key,
+      renditionId: posterRendition.renditionId
     })
-    break
   }
   const manifest = createPublicationManifest({
     publisherId,
@@ -858,12 +876,10 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
     provenance: [{
       type: 'upload',
       videoId: metadata.id,
-      blobId: blobResult.id,
+      blobId: metadata.blobId || null,
       assetId: rendition.core.assetId,
-      coreKey: channel.blobsKeyHex,
-      renditionId: rendition.renditionId,
-      start: blockOffset,
-      end: blockOffset + blockLength
+      coreKey,
+      renditionId: rendition.renditionId
     }, ...posterProvenance],
     keyPair: deviceKeyPair,
     signedAt: currentTime
@@ -1119,20 +1135,27 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
   // Announcing a catalog only tells peers the title exists. A consumer finds
   // the bytes on the asset scope for the rendition, and until the publisher
   // joins that scope there is nobody there to answer: the catalog syncs, every
-  // source reads as awaiting replication, and no cover ever arrives. Holding
-  // its own publication is what makes a publisher a source for it, and the
-  // runtime retains the cover published alongside it in the same step.
-  try {
-    await scopedNetwork?.retainAuthorizedRendition?.({
-      manifest,
-      renditionId: rendition.renditionId,
-      entityRef: subjectRef.entityId,
-      publicationId: manifest.publicationId
-    });
-  } catch (error) {
-    // A publisher that cannot serve yet still published; the catalog entry is
-    // committed and retention is retried by the runtime's own lifecycle.
-    console.log('[Upload] Publication is not being served yet:', error?.message);
+  // source reads as awaiting replication, and no cover ever arrives.
+  //
+  // finalizeAcceptedPublication already held the media rendition, so retaining
+  // it again here would only duplicate the request. What is left is the cover
+  // published alongside it, which needs its own scope for the same reason.
+  for (const posterRendition of posterRenditions) {
+    try {
+      await scopedNetwork?.retainAuthorizedRendition?.({
+        manifest,
+        renditionId: posterRendition.renditionId,
+        entityRef: subjectRef.entityId,
+        publicationId: manifest.publicationId,
+        retentionClass: runtime.retentionClass,
+        start: 0,
+        end: posterRendition.core.length
+      });
+    } catch (error) {
+      // A publisher that cannot serve the cover yet still published; the
+      // catalog entry is committed and retention is retried by the lifecycle.
+      console.log('[Upload] Cover is not being served yet:', error?.message);
+    }
   }
   return metadata;
   });
@@ -1306,7 +1329,8 @@ export function createUploadManager({
         prepared = await prepareImmutablePublication(metadata, {
           ...publicationRuntime,
           ...uploadControl,
-          createSource: () => fs.createReadStream(filePath)
+          createSource: () => fs.createReadStream(filePath),
+          createArtworkSources: () => collectArtworkSources(channel, metadata)
         });
         if (prepared) {
           fileSize = prepared.renditionWrite.descriptor.core.byteLength;
@@ -1486,7 +1510,8 @@ export function createUploadManager({
         prepared = await prepareImmutablePublication(metadata, {
           ...publicationRuntime,
           ...uploadControl,
-          createSource: () => [buffer]
+          createSource: () => [buffer],
+          createArtworkSources: () => collectArtworkSources(channel, metadata)
         });
         let fileSize;
         let mimeType;

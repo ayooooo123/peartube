@@ -781,8 +781,11 @@ export function createPolicyApi({
     try {
       await onPolicyChange?.(policy)
     } catch (error) {
+      // Only the persisted record is ours to restore. The change handler is
+      // transactional (runtime.apply rolls its own managers back before it
+      // throws), so re-driving it here would replay the whole rollback a
+      // second time against managers that are already restored.
       await writePolicyStore(store, previous)
-      await onPolicyChange?.(previous).catch(() => {})
       throw error
     }
     current = policy

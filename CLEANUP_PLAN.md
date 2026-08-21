@@ -91,9 +91,12 @@ object lives. For a video app moving blocks, 128 frames is a few seconds of play
 `defaults()` declares `refillPerTick` on line 7, defaults it to `0`, and **nothing in the repo ever
 reads it**. The refill was intended and never wired.
 
-This is worth confirming against a long-lived session before deciding severity: if `scoped-runtime.js`
-creates a fresh admission per session (line 180) rather than sharing the runtime-level one (line 330),
-the blast radius is one session rather than the process. Either way the counters only ever go up.
+**Resolved:** the runtime-level admission (line 330) is passed into every session it creates
+(lines 1165 and 1821), so the counters are shared per peer for the whole runtime lifetime, not per
+session. Severity is lower than that sounds, because `isAdmissionExempt` (1166-1168) exempts asset and
+archive *transfer* frame types — the high-volume block traffic never reaches admission. What is capped
+is control traffic: bootstrap locators, probes, and archive negotiation. Those get 128 frames per peer,
+ever.
 
 **Fix:** decide whether these are per-window or per-lifetime. If per-window, implement the refill the
 parameter already promises and decrement in `release()`. If per-lifetime, rename them so the next

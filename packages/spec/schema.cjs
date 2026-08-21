@@ -3766,25 +3766,6 @@ ns.register({
 })
 
 ns.register({
-  name: 'log-watch-event-request',
-  fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'duration', type: 'uint', required: false },
-    { name: 'completed', type: 'bool', required: false },
-    { name: 'share', type: 'bool', required: false }
-  ]
-})
-
-ns.register({
-  name: 'log-watch-event-response',
-  fields: [
-    { name: 'success', type: 'bool', required: false },
-    { name: 'error', type: 'string', required: false }
-  ]
-})
-
-ns.register({
   name: 'index-video-vectors-request',
   fields: [
     { name: 'channelKey', type: 'string', required: true },
@@ -4604,12 +4585,6 @@ rpcNs.register({
   name: 'verify-index-candidate',
   request: { name: '@peartube/verify-index-candidate-request', stream: false },
   response: { name: '@peartube/verify-index-candidate-response', stream: false }
-})
-
-rpcNs.register({
-  name: 'log-watch-event',
-  request: { name: '@peartube/log-watch-event-request', stream: false },
-  response: { name: '@peartube/log-watch-event-response', stream: false }
 })
 
 rpcNs.register({

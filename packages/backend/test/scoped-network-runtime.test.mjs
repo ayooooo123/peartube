@@ -472,10 +472,19 @@ test('watch-only downgrade closes local publisher catalog sessions and removes i
     catalogRegistry: registryA,
     initialNetworkPolicy: contributionPolicy(),
   })
+  // The follower walks the publisher's accepted pages here, and that page now
+  // carries the namespace genesis registryA serves. A real consumer catalog
+  // admits a root record, so the fixture must too; the default stub reports
+  // every entry inadmissible and would kill the publisher session under test.
+  const registryB = fakeRegistry(descriptor)
+  registryB.binding.catalog.ingestAcceptedPage = async entries => ({
+    accepted: entries.length,
+    rejected: 0,
+  })
   const runtimeB = createScopedNetworkRuntime({
     swarm: swarmB,
     store: {},
-    catalogRegistry: fakeRegistry(descriptor),
+    catalogRegistry: registryB,
   })
   await runtimeA.start()
   await runtimeB.start()
@@ -635,7 +644,7 @@ test('suspended public discovery restores its announcement count when the networ
     genesisRootKey: root.publicKey,
     catalogBootstrapKey: bytes(32, 35),
   })
-  const registry = fakeRegistry(descriptor)
+  const registry = fakeRegistry(descriptor, root)
   registry.binding.catalog.listProjections = async () => ({ items: [{ accepted: true }], nextCursor: null })
   const swarm = fakeSwarm()
   const runtime = createScopedNetworkRuntime({
@@ -825,7 +834,12 @@ test('publisher scope transfers exact-provenance accepted pages only after names
   })
   const swarmA = fakeSwarm()
   const swarmB = fakeSwarm()
-  const source = createScopedNetworkRuntime({ swarm: swarmA, store: {}, catalogRegistry: sourceRegistry })
+  const source = createScopedNetworkRuntime({
+    swarm: swarmA,
+    store: {},
+    catalogRegistry: sourceRegistry,
+    initialNetworkPolicy: contributionPolicy(),
+  })
   let catalogUpdates = 0
   const publisherStates = new Map()
   let globalPublisherBudget = null
@@ -1901,16 +1915,16 @@ test('scoped index and moderation feeds transfer only signed bounded pages', asy
   const publisherId = b4a.toString(publisher.publicKey, 'hex')
   const curatorId = b4a.toString(curator.publicKey, 'hex')
   const moderatorId = b4a.toString(moderator.publicKey, 'hex')
-  const coreKey = bytes(32, 144)
+  const staticCore = createStaticAssetManifest({
+    treeHash: bytes(32, 145),
+    blockLength: 4,
+    byteLength: 4 * ASSET_BLOCK_SIZE,
+  })
+  const coreKey = staticCore.key
   const rendition = createRenditionDescriptor({
     purpose: 'original',
     format: 'video/mp4',
-    core: {
-      key: coreKey,
-      length: 4,
-      treeHash: bytes(32, 145),
-      byteLength: 4096,
-    },
+    core: staticCore,
   })
   const manifest = createPublicationManifest({
     publisherId: publisher.publicKey,
@@ -1999,6 +2013,7 @@ test('scoped index and moderation feeds transfer only signed bounded pages', asy
     moderationManager: consumerModerationManager,
     authorizePublication: async ({ manifest: proposed }) => proposed === manifest,
     authorizeConsumerWork: async ({ publicationId: proposed }) => projection.isPublicationVisible(proposed),
+    initialNetworkPolicy: archivePolicy(),
   })
   const archiveNetwork = createPermissionlessArchiveNetwork({
     keyPair: crypto.keyPair(bytes(32, 146)),
@@ -2144,12 +2159,14 @@ test('signed remote moderation cancels an archivist pledge and permits only futu
       },
     },
     moderationManager,
+    initialNetworkPolicy: archivePolicy(),
     now: () => 20,
   })
   const requesterRuntime = createScopedNetworkRuntime({
     swarm: requesterSwarm,
     store: {},
     now: () => 20,
+    initialNetworkPolicy: archivePolicy(),
   })
   await Promise.all([
     sourceRuntime.start(),
@@ -2355,6 +2372,7 @@ test('locator authorization digests are hints while reconstructed announce autho
     swarm: sourceSwarm,
     store: {},
     catalogRegistry: sourceRegistry,
+    initialNetworkPolicy: contributionPolicy(),
     now: () => 20,
   })
   const consumerSwarms = [fakeSwarm(), fakeSwarm()]
@@ -2528,6 +2546,7 @@ test('a local publisher automatically advertises a signed locator and consumers 
     swarm: sourceSwarm,
     store: {},
     catalogRegistry: sourceRegistry,
+    initialNetworkPolicy: contributionPolicy(),
     now: () => sourceTime,
     setBootstrapLocatorTimer(callback) {
       refreshCallback = callback
@@ -2683,6 +2702,7 @@ test('live publisher root rotation rebinds advertisements, proof, pages, and exi
     swarm: sourceSwarm,
     store: {},
     catalogRegistry: sourceRegistry,
+    initialNetworkPolicy: contributionPolicy(),
     now: () => sourceTime,
   })
   const consumers = consumerSwarms.map((swarm, index) => createScopedNetworkRuntime({

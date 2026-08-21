@@ -10524,56 +10524,20 @@ const encoding370 = {
   }
 }
 
-// @peartube/log-watch-event-request
-const encoding371 = {
-  preencode(state, m) {
-    c.string.preencode(state, m.channelKey)
-    c.string.preencode(state, m.videoId)
-    state.end++ // max flag is 4 so always one byte
-
-    if (m.duration) c.uint.preencode(state, m.duration)
-  },
-  encode(state, m) {
-    const flags = (m.duration ? 1 : 0) | (m.completed ? 2 : 0) | (m.share ? 4 : 0)
-
-    c.string.encode(state, m.channelKey)
-    c.string.encode(state, m.videoId)
-    c.uint.encode(state, flags)
-
-    if (m.duration) c.uint.encode(state, m.duration)
-  },
-  decode(state) {
-    const r0 = c.string.decode(state)
-    const r1 = c.string.decode(state)
-    const flags = c.uint.decode(state)
-
-    return {
-      channelKey: r0,
-      videoId: r1,
-      duration: (flags & 1) !== 0 ? c.uint.decode(state) : 0,
-      completed: (flags & 2) !== 0,
-      share: (flags & 4) !== 0
-    }
-  }
-}
-
-// @peartube/log-watch-event-response
-const encoding372 = encoding92
-
 // @peartube/index-video-vectors-request
-const encoding373 = encoding166
+const encoding371 = encoding166
 
 // @peartube/index-video-vectors-response
-const encoding374 = encoding92
+const encoding372 = encoding92
 
 // @peartube/get-participation-status-request
-const encoding375 = encoding0
+const encoding373 = encoding0
 
 // @peartube/get-participation-status-response.reasonCodes
-const encoding376_13 = encoding44_11
+const encoding374_13 = encoding44_11
 
 // @peartube/get-participation-status-response
-const encoding376 = {
+const encoding374 = {
   preencode(state, m) {
     state.end++ // max flag is 16 so always one byte
     c.string.preencode(state, m.mode)
@@ -10585,7 +10549,7 @@ const encoding376 = {
     c.uint.preencode(state, m.postPlaybackGraceMs)
     c.uint.preencode(state, m.backgroundRemainingSessionMs)
     c.uint.preencode(state, m.backgroundRemainingDailyMs)
-    encoding376_13.preencode(state, m.reasonCodes)
+    encoding374_13.preencode(state, m.reasonCodes)
 
     if (m.errorCode) c.string.preencode(state, m.errorCode)
   },
@@ -10607,7 +10571,7 @@ const encoding376 = {
     c.uint.encode(state, m.postPlaybackGraceMs)
     c.uint.encode(state, m.backgroundRemainingSessionMs)
     c.uint.encode(state, m.backgroundRemainingDailyMs)
-    encoding376_13.encode(state, m.reasonCodes)
+    encoding374_13.encode(state, m.reasonCodes)
 
     if (m.errorCode) c.string.encode(state, m.errorCode)
   },
@@ -10628,14 +10592,14 @@ const encoding376 = {
       postPlaybackGraceMs: c.uint.decode(state),
       backgroundRemainingSessionMs: c.uint.decode(state),
       backgroundRemainingDailyMs: c.uint.decode(state),
-      reasonCodes: encoding376_13.decode(state),
+      reasonCodes: encoding374_13.decode(state),
       errorCode: (flags & 16) !== 0 ? c.string.decode(state) : null
     }
   }
 }
 
 // @peartube/set-device-conditions-request
-const encoding377 = {
+const encoding375 = {
   preencode(state, m) {
     const flags =
       (m.metered ? 1 : 0) |
@@ -10704,7 +10668,7 @@ const encoding377 = {
 }
 
 // @peartube/set-device-conditions-response
-const encoding378 = {
+const encoding376 = {
   preencode(state, m) {
     state.end++ // max flag is 2 so always one byte
 
@@ -11511,22 +11475,18 @@ function getEncoding(name) {
       return encoding369
     case '@peartube/search-videos-response':
       return encoding370
-    case '@peartube/log-watch-event-request':
-      return encoding371
-    case '@peartube/log-watch-event-response':
-      return encoding372
     case '@peartube/index-video-vectors-request':
-      return encoding373
+      return encoding371
     case '@peartube/index-video-vectors-response':
-      return encoding374
+      return encoding372
     case '@peartube/get-participation-status-request':
-      return encoding375
+      return encoding373
     case '@peartube/get-participation-status-response':
-      return encoding376
+      return encoding374
     case '@peartube/set-device-conditions-request':
-      return encoding377
+      return encoding375
     case '@peartube/set-device-conditions-response':
-      return encoding378
+      return encoding376
     default:
       throw new Error('Encoder not found ' + name)
   }

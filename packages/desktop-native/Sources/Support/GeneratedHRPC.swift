@@ -3681,7 +3681,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 126:   // @peartube/index-video-vectors
+    case 128:   // @peartube/index-video-vectors
       guard let handler = _handlers["@peartube/index-video-vectors"] as? (IndexVideoVectorsRequest) async throws -> IndexVideoVectorsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3710,7 +3710,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 127:   // @peartube/update-video-metadata
+    case 129:   // @peartube/update-video-metadata
       guard let handler = _handlers["@peartube/update-video-metadata"] as? (UpdateVideoMetadataRequest) async throws -> UpdateVideoMetadataResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3723,7 +3723,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 128:   // @peartube/get-media-catalog
+    case 130:   // @peartube/get-media-catalog
       guard let handler = _handlers["@peartube/get-media-catalog"] as? (MediaPageRequest) async throws -> GetMediaCatalogResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3736,7 +3736,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 129:   // @peartube/get-media-entity
+    case 131:   // @peartube/get-media-entity
       guard let handler = _handlers["@peartube/get-media-entity"] as? (GetMediaEntityRequest) async throws -> GetMediaEntityResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3749,7 +3749,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 130:   // @peartube/get-media-collection
+    case 132:   // @peartube/get-media-collection
       guard let handler = _handlers["@peartube/get-media-collection"] as? (GetMediaCollectionRequest) async throws -> GetMediaCollectionResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3762,7 +3762,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 131:   // @peartube/get-media-collection-items
+    case 133:   // @peartube/get-media-collection-items
       guard let handler = _handlers["@peartube/get-media-collection-items"] as? (GetMediaCollectionItemsRequest) async throws -> GetMediaCollectionItemsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3775,7 +3775,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 132:   // @peartube/get-media-agent
+    case 134:   // @peartube/get-media-agent
       guard let handler = _handlers["@peartube/get-media-agent"] as? (GetMediaAgentRequest) async throws -> GetMediaAgentResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3788,7 +3788,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 133:   // @peartube/get-agent-contributions
+    case 135:   // @peartube/get-agent-contributions
       guard let handler = _handlers["@peartube/get-agent-contributions"] as? (GetAgentContributionsRequest) async throws -> GetAgentContributionsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3801,7 +3801,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 134:   // @peartube/get-publication-sources
+    case 136:   // @peartube/get-publication-sources
       guard let handler = _handlers["@peartube/get-publication-sources"] as? (GetPublicationSourcesRequest) async throws -> GetPublicationSourcesResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3814,7 +3814,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 136:   // @peartube/get-claim-provenance
+    case 138:   // @peartube/get-claim-provenance
       guard let handler = _handlers["@peartube/get-claim-provenance"] as? (GetClaimProvenanceRequest) async throws -> GetClaimProvenanceResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3827,7 +3827,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 137:   // @peartube/set-source-preference
+    case 139:   // @peartube/set-source-preference
       guard let handler = _handlers["@peartube/set-source-preference"] as? (SetSourcePreferenceRequest) async throws -> SetSourcePreferenceResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3840,7 +3840,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 138:   // @peartube/prepare-media-playback
+    case 140:   // @peartube/prepare-media-playback
       guard let handler = _handlers["@peartube/prepare-media-playback"] as? (PrepareMediaPlaybackRequest) async throws -> PrepareMediaPlaybackResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3853,7 +3853,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 139:   // @peartube/desktop-bootstrap
+    case 141:   // @peartube/desktop-bootstrap
       guard let handler = _handlers["@peartube/desktop-bootstrap"] as? (DesktopBootstrapRequest) async throws -> DesktopBootstrapResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3866,7 +3866,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 140:   // @peartube/desktop-shutdown
+    case 142:   // @peartube/desktop-shutdown
       guard let handler = _handlers["@peartube/desktop-shutdown"] as? (DesktopShutdownRequest) async throws -> DesktopShutdownResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3879,7 +3879,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 141:   // @peartube/desktop-refresh-browse
+    case 143:   // @peartube/desktop-refresh-browse
       guard let handler = _handlers["@peartube/desktop-refresh-browse"] as? (DesktopRefreshBrowseRequest) async throws -> DesktopRefreshBrowseResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3892,7 +3892,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 142:   // @peartube/ffmpeg-decode-available
+    case 144:   // @peartube/ffmpeg-decode-available
       guard let handler = _handlers["@peartube/ffmpeg-decode-available"] as? (FfmpegDecodeAvailableRequest) async throws -> FfmpegDecodeAvailableResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3905,7 +3905,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 143:   // @peartube/update-channel-avatar
+    case 145:   // @peartube/update-channel-avatar
       guard let handler = _handlers["@peartube/update-channel-avatar"] as? (UpdateChannelAvatarRequest) async throws -> UpdateChannelAvatarResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3918,7 +3918,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 144:   // @peartube/transcode-start
+    case 146:   // @peartube/transcode-start
       guard let handler = _handlers["@peartube/transcode-start"] as? (TranscodeStartRequest) async throws -> TranscodeStartResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3931,7 +3931,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 145:   // @peartube/transcode-stop
+    case 147:   // @peartube/transcode-stop
       guard let handler = _handlers["@peartube/transcode-stop"] as? (TranscodeStopRequest) async throws -> TranscodeStopResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3944,7 +3944,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 146:   // @peartube/transcode-status
+    case 148:   // @peartube/transcode-status
       guard let handler = _handlers["@peartube/transcode-status"] as? (TranscodeStatusRequest) async throws -> TranscodeStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -4009,7 +4009,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 148:   // @peartube/get-participation-status
+    case 150:   // @peartube/get-participation-status
       guard let handler = _handlers["@peartube/get-participation-status"] as? (GetParticipationStatusRequest) async throws -> GetParticipationStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -4022,7 +4022,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 149:   // @peartube/set-device-conditions
+    case 151:   // @peartube/set-device-conditions
       guard let handler = _handlers["@peartube/set-device-conditions"] as? (SetDeviceConditionsRequest) async throws -> SetDeviceConditionsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -4140,7 +4140,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 147:   // @peartube/event-transcode-progress
+    case 149:   // @peartube/event-transcode-progress
       guard let handler = _handlers["@peartube/event-transcode-progress"] as? (EventTranscodeProgress) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {

@@ -95,9 +95,6 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'get-livestream-status',
     'prepare-live-playback'
   ],
-  watch: [
-    'log-watch-event'
-  ],
   personal: [
     'get-playlists',
     'get-playlist-items',

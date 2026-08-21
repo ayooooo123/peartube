@@ -744,7 +744,14 @@ export function createScopedNetworkRuntime (options = {}) {
 
   function scopeMayAttach (scope) {
     if (scope.purpose === 'publisher') {
-      return scope.modes.has('followed') || scopeMayServe(scope)
+      // A candidate scope exists only for the bounded namespace-proof exchange
+      // that turns untrusted bootstrap metadata into a verified binding, and
+      // authorizeConnection already restricts it to exactly that action: it has
+      // no catalog binding, so no page or block can be served through it.
+      // Gating it behind serving consent strands every locator-discovered
+      // publisher, because neither side would ever attach the scope that
+      // carries the proof.
+      return scope.modes.has('followed') || scope.modes.has('candidate') || scopeMayServe(scope)
     }
     if (scope.purpose === 'archive' || scope.purpose === 'archive-discovery') return scopeMayServe(scope)
     return true

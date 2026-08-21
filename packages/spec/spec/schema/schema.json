@@ -11522,64 +11522,6 @@
       ]
     },
     {
-      "name": "log-watch-event-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 2,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "duration",
-          "required": false,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "completed",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "share",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "log-watch-event-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
       "name": "index-video-vectors-request",
       "namespace": "peartube",
       "compact": false,

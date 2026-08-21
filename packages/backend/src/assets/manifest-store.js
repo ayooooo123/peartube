@@ -24,6 +24,7 @@ export function createAssetManifestStore(options = {}) {
   const byPublication = new Map()
   const byPublisherSequence = new Map()
   const byRendition = new Map()
+  const byAssetId = new Map()
   const bySupersession = new Map()
   const currentByPublisher = new Map()
   const quarantined = []
@@ -51,7 +52,15 @@ export function createAssetManifestStore(options = {}) {
       byPublication.set(publicationId, manifest)
       const publisherId = manifest.body.publisherId
       byPublisherSequence.set(`${publisherId}:${manifest.body.sequence}`, publicationId)
-      for (const rendition of manifest.body.renditions || []) append(byRendition, rendition.renditionId, publicationId)
+      const renditions = [
+        ...(manifest.body.renditions || []),
+        ...(manifest.body.artwork || []),
+        ...(manifest.body.subtitles || []),
+      ]
+      for (const rendition of renditions) {
+        append(byRendition, rendition.renditionId, publicationId)
+        append(byAssetId, rendition.core.assetId, publicationId)
+      }
       if (manifest.body.previousManifestId) append(bySupersession, manifest.body.previousManifestId, publicationId)
 
       const current = currentByPublisher.get(publisherId)
@@ -100,6 +109,10 @@ export function createAssetManifestStore(options = {}) {
 
     getManifestsByRendition(renditionId) {
       return rows(byRendition.get(renditionId) || [])
+    },
+
+    getManifestsByAssetId(assetId) {
+      return rows(byAssetId.get(assetId) || [])
     },
 
     getSupersedingManifests(manifestId) {

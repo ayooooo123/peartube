@@ -45,6 +45,13 @@ test('getQuotaBudget counts what is on disk, not only what it tracked', async (t
   // limit. The relay is far over; nothing more may be admitted.
   const manager = new SeedingManager(createStore({ diskUsageBytes: 40 * GB }), createMetaDb())
   await manager.setConfig({ maxStorageGB: 5 })
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: true,
+    archiveEnabled: false,
+    contributionBudgetBytes: 5 * GB,
+    archiveBudgetBytes: 0,
+    migrationRequired: false
+  })
   await manager.addSeed('drive-a', 'videos/a.mp4', 'watched', {
     byteLength: 2 * GB,
     blobId: '10:4:0:4096',
@@ -127,4 +134,97 @@ test('a failed measurement keeps the last known reading', async (t) => {
   const budget = await manager.getQuotaBudget()
   t.is(budget.usageBytes, 4 * GB, 'an unreadable disk does not read as empty')
   t.is(budget.headroomBytes, 1 * GB)
+})
+
+
+test('strong archive seed class survives watched merge and archive budget alone evicts it', async (t) => {
+  const cleared = []
+  const store = {
+    get(key) {
+      return {
+        async ready() {},
+        async clear(start, end) {
+          cleared.push({ key: Buffer.from(key).toString('hex'), start, end })
+        },
+        async close() {}
+      }
+    }
+  }
+  const manager = new SeedingManager(store, createMetaDb(), { storageMaintenanceDelayMs: 0 })
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: true,
+    archiveEnabled: true,
+    contributionBudgetBytes: 100,
+    archiveBudgetBytes: 100,
+    migrationRequired: false
+  })
+  const blob = {
+    byteLength: 40,
+    blobId: '0:1:0:40',
+    blobsCoreKey: 'ab'.repeat(32)
+  }
+  await manager.addSeed('drive-a', 'video-a', 'pledged', blob, { authorized: true })
+  await manager.addSeed('drive-a', 'video-a', 'watched', blob, { authorized: true })
+
+  let status = manager.getRetentionBudgetStatus()
+  t.is(status.archiveUsedBytes, 40, 'stronger pledged reason keeps archive accounting')
+  t.is(status.contributionUsedBytes, 0, 'watched merge cannot downgrade into contribution cache')
+
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: true,
+    archiveEnabled: true,
+    contributionBudgetBytes: 100,
+    archiveBudgetBytes: 0,
+    migrationRequired: false
+  })
+  status = await manager.getStatus()
+  t.is(status.activeArchivePins, 0, 'archive budget reduction evicts archive pins')
+  t.is(status.activeContributionSeeds, 0, 'archive pin is not reclassified into contribution cache')
+  t.is(cleared.length, 1, 'evicted archive bytes are released once')
+})
+
+test('generic seed removal cannot release an archive pin', async (t) => {
+  const manager = new SeedingManager(createStore(), createMetaDb(), { storageMaintenanceDelayMs: 0 })
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: false,
+    archiveEnabled: true,
+    contributionBudgetBytes: 0,
+    archiveBudgetBytes: 100,
+    migrationRequired: false
+  })
+  await manager.addSeed('drive-archive', 'video-pin', 'archive', {
+    byteLength: 40,
+    blobId: '0:1:0:40',
+    blobsCoreKey: 'ac'.repeat(32)
+  }, { authorized: true })
+
+  t.absent(await manager.removeSeed('drive-archive', 'video-pin'), 'generic removal preserves archive custody')
+  t.is((await manager.getStatus()).activeArchivePins, 1)
+  t.ok(await manager.removeArchivePin('drive-archive', 'video-pin'), 'explicit archive removal releases the pin')
+  t.is((await manager.getStatus()).activeArchivePins, 0)
+})
+
+test('cached video updates include the seed thumbnail in class-budget admission', async (t) => {
+  const manager = new SeedingManager(createStore(), createMetaDb(), { storageMaintenanceDelayMs: 0 })
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: false,
+    archiveEnabled: true,
+    contributionBudgetBytes: 0,
+    archiveBudgetBytes: 50,
+    migrationRequired: false
+  })
+  await manager.addSeed('drive-thumbnail', 'video-pin', 'archive', {
+    byteLength: 10,
+    thumbnailByteLength: 30,
+    blobId: '0:1:0:10',
+    blobsCoreKey: 'ad'.repeat(32)
+  }, { authorized: true })
+
+  t.absent(await manager.updateSeedCachedBytes('drive-thumbnail', 'video-pin', 21, { persist: true }),
+    'thumbnail plus updated video bytes cannot exceed the archive budget')
+  t.is(manager.getRetentionBudgetStatus().archiveUsedBytes, 40,
+    'rejected updates preserve the committed video and thumbnail accounting')
+  t.ok(await manager.updateSeedCachedBytes('drive-thumbnail', 'video-pin', 20, { persist: true }),
+    'the exact thumbnail-inclusive budget boundary is admitted')
+  t.is(manager.getRetentionBudgetStatus().archiveUsedBytes, 50)
 })

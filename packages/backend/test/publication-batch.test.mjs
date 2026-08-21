@@ -3,7 +3,7 @@ import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 
 import { createPublicationBatch } from '../src/assets/publication-batch.js'
-import { createRenditionDescriptor } from '../src/assets/index.js'
+import { createRenditionDescriptor, createStaticAssetManifest } from '../src/assets/index.js'
 
 function hex(byte) {
   return b4a.toString(b4a.alloc(32, byte), 'hex')
@@ -12,7 +12,12 @@ function hex(byte) {
 const publisher = crypto.keyPair(Buffer.alloc(32, 1))
 
 function rendition(byte) {
-  return createRenditionDescriptor({ purpose: 'original', format: 'video/mp4', core: { key: hex(byte), length: 1, treeHash: hex(byte + 1), byteLength: 100 } })
+  const core = createStaticAssetManifest({
+    treeHash: b4a.alloc(32, byte),
+    blockLength: 1,
+    byteLength: 100,
+  })
+  return createRenditionDescriptor({ purpose: 'original', format: 'video/mp4', core })
 }
 
 test('publication batch seals child publications, typed claims, bounded pages, and one catalog digest', (t) => {
@@ -27,6 +32,27 @@ test('publication batch seals child publications, typed claims, bounded pages, a
   t.alike(sealed.catalogCommit.batchDigest, sealed.digest)
   t.alike(claim.claimType, 'CollectionMembershipClaim')
   t.exception(() => batch.addPublication({ publicationId: hex(40), manifestId: hex(41), renditions: [rendition(42)] }), /sealed/)
+})
+
+test('publication batch rejects legacy writable-range rendition shapes', (t) => {
+  const batch = createPublicationBatch({ publisherId: publisher.publicKey, sequence: 3 })
+  t.exception(() => batch.addPublication({
+    publicationId: hex(60),
+    manifestId: hex(61),
+    renditions: [{
+      version: 1,
+      renditionId: hex(62),
+      purpose: 'original',
+      format: 'video/mp4',
+      core: {
+        key: hex(63),
+        length: 2,
+        treeHash: hex(64),
+        byteLength: 100,
+      },
+      range: { start: 1, end: 2 },
+    }],
+  }), /static asset core reference required/)
 })
 
 test('publication batch readers project zero before seal and all after commit, never half imports', (t) => {

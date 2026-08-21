@@ -719,23 +719,28 @@ test('archive publisher opens separate deterministic channels per source identit
     api: {},
     runtime: { ctx: {} },
     fs: {},
-    createChannelFn
+    createChannelFn,
+    canPublish: retentionClass => retentionClass === 'archive-pin',
   })
 
   const oneA = await publisher.ensureAnonymousChannel({
     channelName: 'Creator One',
-    sourceIdentity: { platform: 'youtube', sourceId: 'youtube:channel:UC1', creatorName: 'Creator One', creatorHandle: null }
+    sourceIdentity: { platform: 'youtube', sourceId: 'youtube:channel:UC1', creatorName: 'Creator One', creatorHandle: null },
+    retentionClass: 'archive-pin',
   })
   const two = await publisher.ensureAnonymousChannel({
     channelName: 'Creator Two',
-    sourceIdentity: { platform: 'youtube', sourceId: 'youtube:channel:UC2', creatorName: 'Creator Two', creatorHandle: null }
+    sourceIdentity: { platform: 'youtube', sourceId: 'youtube:channel:UC2', creatorName: 'Creator Two', creatorHandle: null },
+    retentionClass: 'archive-pin',
   })
   const oneB = await publisher.ensureAnonymousChannel({
     channelName: 'Creator One',
-    sourceIdentity: { platform: 'youtube', sourceId: 'youtube:channel:UC1', creatorName: 'Creator One', creatorHandle: null }
+    sourceIdentity: { platform: 'youtube', sourceId: 'youtube:channel:UC1', creatorName: 'Creator One', creatorHandle: null },
+    retentionClass: 'archive-pin',
   })
 
   await publisher.importVideo({
+    retentionClass: 'archive-pin',
     channel: oneA.channel,
     filePath: '/tmp/one.mp4',
     title: 'One',

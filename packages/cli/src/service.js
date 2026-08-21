@@ -13,6 +13,10 @@ import { RelaySettings, resolveTmdbOptions } from './settings.js'
 import { TrustedClients, mergeTrustedClientKeys } from './trusted-clients.js'
 import { classifySourceUrl } from './archive/source-id.js'
 import { createStorageGuard } from './storage-guard.js'
+import { createCompanionServer } from './companion/server.js'
+import { createIngestJobStore } from './companion/ingest-job-store.js'
+import { createIngestManager } from './companion/ingest-manager.js'
+import { createSourceCallbackClient } from './companion/source-client.js'
 import tmdbFetch from '#fetch'
 
 
@@ -104,7 +108,9 @@ async function buildRelayService({
   pathModule = null,
   spawnFn = null,
   nowFn = Date.now,
-  archiveHttp = null
+  archiveHttp = null,
+  companionServerFactory = createCompanionServer,
+  archiveConsoleFactory = createArchiveConsole
 }) {
   if (!config) throw new Error('config is required')
   if (typeof runtimeFactory !== 'function') throw new Error('runtimeFactory is required')
@@ -159,13 +165,56 @@ async function buildRelayService({
   const runtime = await runtimeFactory({ config, logger })
 
   let closed = false
+  let started = false
+  let startPromise = null
   let currentStatus = null
   let queue = Promise.resolve()
   let heartbeatTimer = null
   let localMirrorTimer = null
   let localMirrorRunning = false
   let archiveConsole = null
+  let companionServer = null
+  let ingestManager = null
+  let ingestReady = false
+  let ingestManagerStarted = false
+  let policyControlApplied = false
+  let ingestPolicyEligible = false
   const localMirrorState = createLocalDriveMirrorState()
+
+  function completePolicyControl(policy) {
+    return policy?.policyVersion === 2 &&
+      policy?.consentVersion === 1 &&
+      policy?.migrationRequired === false &&
+      typeof policy?.contributeWatchedMedia === 'boolean' &&
+      typeof policy?.archiveEnabled === 'boolean' &&
+      Number.isSafeInteger(policy?.contributionBudgetBytes) &&
+      policy.contributionBudgetBytes >= 0 &&
+      Number.isSafeInteger(policy?.archiveBudgetBytes) &&
+      policy.archiveBudgetBytes >= 0 &&
+      ['disabled', 'manual', 'enabled'].includes(policy?.uploadPermission) &&
+      Number.isSafeInteger(policy?.uploadCeilingBytes) &&
+      policy.uploadCeilingBytes >= 0
+  }
+
+  function retentionPermission(retentionClass, requestedBytes = 0) {
+    const policy = runtime.ctx?.networkPolicyRuntime?.getPolicy?.()
+    if (policy?.policyVersion !== 2 || policy.migrationRequired === true) return false
+    const contribution = retentionClass === 'contribution-cache'
+    const allowed = contribution
+      ? policy.contributeWatchedMedia === true
+      : retentionClass === 'archive-pin' && policy.archiveEnabled === true
+    if (!allowed) return false
+    const budget = Number(contribution ? policy.contributionBudgetBytes : policy.archiveBudgetBytes)
+    const usage = runtime.seedingManager?.getRetentionBudgetStatus?.() || {}
+    const used = Number(contribution ? usage.contributionUsedBytes : usage.archiveUsedBytes) || 0
+    const requested = Math.max(0, Number(requestedBytes) || 0)
+    return Number.isSafeInteger(budget) && budget > 0 && used + requested <= budget
+  }
+
+  function canRetain(request = {}) {
+    return storageGuard.canIngest() &&
+      retentionPermission(request.retentionClass, request.expected?.byteLength || 0)
+  }
 
   function createLocalDrivePublisher(runtimeFsModule) {
     return createArchivePublisher({
@@ -174,7 +223,8 @@ async function buildRelayService({
       uploadManager: runtime.uploadManager,
       api: runtime.api,
       runtime,
-      fs: runtimeFsModule
+      fs: runtimeFsModule,
+      canPublish: retentionPermission,
     })
   }
 
@@ -256,13 +306,23 @@ async function buildRelayService({
   }
 
   async function persistStatus() {
-    const runtimeStats = typeof runtime.getDiagnostics === 'function'
-      ? await runtime.getDiagnostics()
-      : {}
+    const [runtimeStats, ingestStatus] = await Promise.all([
+      Promise.resolve()
+        .then(() => typeof runtime.getDiagnostics === 'function' ? runtime.getDiagnostics() : {})
+        .catch(() => ({ network: { lastErrors: ['RUNTIME_STATUS_UNAVAILABLE'] } })),
+      Promise.resolve()
+        .then(() => ingestManager?.getStatus?.() || {})
+        .catch(() => ({
+          jobsByState: {},
+          activeAcquisitions: 0,
+          lastErrors: ['INGEST_STATUS_UNAVAILABLE']
+        }))
+    ])
     currentStatus = buildRelayStatus({
       config,
       catalog: relayCatalog,
       runtimeStats,
+      ingestStatus,
       trustedClientsCount: trustedClients.list().length
     })
 
@@ -336,6 +396,7 @@ async function buildRelayService({
   }
 
   async function publishArchiveJob(job) {
+    if (!retentionPermission('archive-pin')) return { published: false, reason: 'archive-consent-required' }
     if (closed) return { published: false, reason: 'closed' }
     if (job?.status !== 'completed') return { published: false, reason: 'not-completed' }
     if (job?.publish === false) return { published: false, reason: 'not-published' }
@@ -346,7 +407,8 @@ async function buildRelayService({
     const classifiedPreview = await classifyPreviewVideo(job.previewVideo)
     const publication = classifiedPreview?.immutablePublication
     const published = await runtime.publishPublisherCatalog({
-      publisherId: job.publisherId
+      publisherId: job.publisherId,
+      retentionClass: 'archive-pin'
     })
     // 'refreshed' means the local publisher scope already existed and was
     // rebound, which is a successful publication.
@@ -359,7 +421,8 @@ async function buildRelayService({
     if (publication?.manifest && publication?.renditionId) {
       retained.push(await runtime.retainRendition({
         manifest: publication.manifest,
-        renditionId: publication.renditionId
+        renditionId: publication.renditionId,
+        retentionClass: 'archive-pin'
       }))
       // Now that this relay holds the bytes, ask peer relays to mirror them.
       // An archive request that fails or is unavailable is recorded and left
@@ -441,8 +504,9 @@ async function buildRelayService({
     settings: relaySettings,
     trustedClients,
     storageGuard,
-    canIngest: () => storageGuard.canIngest(),
-    canArchive: () => storageGuard.canIngest(),
+    canIngest: request => canRetain(request),
+    canArchive: () => canRetain({ retentionClass: 'archive-pin' }),
+    canStageIngest: () => ingestReady,
     getClassifier() {
       return classifier
     },
@@ -483,6 +547,72 @@ async function buildRelayService({
         await persistStatus()
       }
       return { removed: Boolean(removed) }
+    },
+    async applyNetworkPolicy(policy) {
+      ingestReady = false
+      policyControlApplied = false
+      ingestPolicyEligible = false
+      const controlledPolicy = completePolicyControl(policy)
+        ? policy
+        : {
+            policyVersion: 2,
+            consentVersion: 0,
+            migrationRequired: true,
+            contributeWatchedMedia: false,
+            archiveEnabled: false,
+            contributionBudgetBytes: 0,
+            archiveBudgetBytes: 0,
+            uploadPermission: 'disabled',
+            uploadCeilingBytes: 0
+          }
+      if (!runtime.api || typeof runtime.api.setNetworkPolicy !== 'function') {
+        throw new Error('network policy control is unavailable')
+      }
+      const result = await runtime.api.setNetworkPolicy({
+        policyVersion: controlledPolicy.policyVersion,
+        consentVersion: controlledPolicy.consentVersion,
+        migrationRequired: controlledPolicy.migrationRequired,
+        contributeWatchedMedia: controlledPolicy.contributeWatchedMedia,
+        archiveEnabled: controlledPolicy.archiveEnabled,
+        contributionBudgetBytes: controlledPolicy.contributionBudgetBytes,
+        contributionBudgetBytesPresent: true,
+        archiveBudgetBytes: controlledPolicy.archiveBudgetBytes,
+        archiveBudgetBytesPresent: true,
+        uploadPermission: controlledPolicy.uploadPermission,
+        uploadCeilingBytes: controlledPolicy.uploadCeilingBytes,
+        uploadCeilingBytesPresent: true,
+        retentionMode: controlledPolicy.archiveEnabled ? 'archive-pledges' : 'none'
+      })
+      if (!result?.success) {
+        const error = new Error(result?.errorCode || 'POLICY_APPLY_FAILED')
+        error.code = result?.errorCode || 'POLICY_APPLY_FAILED'
+        throw error
+      }
+      const effective = result.policy
+      if (!effective || typeof effective !== 'object') {
+        throw new Error('network policy result is unavailable')
+      }
+      policyControlApplied = effective?.policyVersion === 2 &&
+        effective?.consentVersion === 1 &&
+        effective?.migrationRequired === false
+      ingestPolicyEligible = policyControlApplied && (
+        (effective.contributeWatchedMedia === true && effective.contributionBudgetBytes > 0) ||
+        (effective.archiveEnabled === true && effective.archiveBudgetBytes > 0)
+      )
+      await ingestManager?.cancelPolicyDeniedJobs?.()
+      ingestReady = ingestManagerStarted && ingestPolicyEligible
+      return {
+        policyVersion: effective.policyVersion,
+        consentVersion: effective.consentVersion,
+        migrationRequired: effective.migrationRequired,
+        effectiveRole: effective.effectiveRole,
+        permissions: { ...effective.permissions },
+        contributionBudgetBytes: effective.contributionBudgetBytes,
+        archiveBudgetBytes: effective.archiveBudgetBytes,
+        uploadPermission: effective.uploadPermission,
+        uploadCeilingBytes: effective.uploadCeilingBytes,
+        ingestReady
+      }
     },
     getLinkDescriptor() {
       return {
@@ -538,6 +668,10 @@ async function buildRelayService({
       return { creator, job }
     },
     async start() {
+      if (closed) throw new Error('relay service is closed')
+      if (started) return service
+      if (startPromise) return startPromise
+      startPromise = (async () => {
       logger.relay.info('Relay starting', {
         mode: config.mode,
         policy: config.policy,
@@ -546,6 +680,8 @@ async function buildRelayService({
         configuredChannels: config.admission.channels?.length || 0,
         configuredOwners: config.admission.owners?.length || 0
       })
+
+      try {
 
       const bootStartedAt = Date.now()
       runtime.setCandidateHandler?.((candidate) => scheduleCandidate({
@@ -603,7 +739,7 @@ async function buildRelayService({
           bytes: 0,
           invalidate: () => storageGuard.invalidate()
         }
-        archiveConsole = await createArchiveConsole({
+        archiveConsole = await archiveConsoleFactory({
           service,
           logger,
           host: archiveUiHost(config),
@@ -652,10 +788,57 @@ async function buildRelayService({
           bootMs: Date.now() - bootStartedAt
         })
       }
+      if (config.companion?.enabled !== false) {
+        const companionFsModule = fsModule || await import('#fs')
+        const companionPathModule = pathModule || await import('#path')
+        const ingestSpoolRoot = companionPathModule.join(config.storage.path, 'companion', 'ingest-spool')
+        const sourceClient = config.companion.sourceOrigin
+          ? createSourceCallbackClient({
+              origin: config.companion.sourceOrigin,
+              client: config.companion.sourceClient,
+              sharedSecret: config.companion.sourceSharedSecret,
+              chunkBytes: config.companion.sourceChunkBytes,
+              requestTimeoutMs: config.companion.sourceRequestTimeoutMs,
+              clock: nowFn
+            })
+          : null
+        if (runtime.ctx?.metaDb) {
+          ingestManager = createIngestManager({
+            store: createIngestJobStore({ bee: runtime.ctx.metaDb, now: nowFn }),
+            publisher: createArchivePublisher({
+              identityManager: runtime.identityManager,
+              uploadManager: runtime.uploadManager,
+              api: runtime.api,
+              runtime,
+              fs: companionFsModule,
+              canPublish: retentionPermission
+            }),
+            spoolRoot: ingestSpoolRoot,
+            fs: companionFsModule,
+            path: companionPathModule,
+            sourceClient,
+            canIngest: request => canRetain(request),
+            now: nowFn,
+            logger
+          })
+        }
+        companionServer = await companionServerFactory({
+          service,
+          config: config.companion,
+          clock: nowFn,
+          logger,
+          fs: companionFsModule,
+          ingestSpoolRoot
+        })
+        await companionServer.start()
+      }
 
       const runtimeStartedAt = Date.now()
       await runtime.start?.()
       logger.relay.info('Relay runtime network ready', { runtimeStartMs: Date.now() - runtimeStartedAt })
+      await ingestManager?.start()
+      ingestManagerStarted = Boolean(ingestManager)
+      ingestReady = ingestManagerStarted && policyControlApplied && ingestPolicyEligible
 
       // The publisher root is CLI-owned, so the backend cannot restore a
       // writable binding by itself: restoreLocalPublisherScopes() finds nothing
@@ -701,7 +884,8 @@ async function buildRelayService({
           api: runtime.api,
           runtime,
           publisherShell,
-          fs: runtimeFsModule
+          fs: runtimeFsModule,
+          canPublish: retentionPermission
         }))
       }
 
@@ -712,13 +896,15 @@ async function buildRelayService({
 
 
       const status = await persistStatus()
+      const networkStatus = status.network || {}
+      const publicWorkStatus = status.publicWork || {}
       logger.relay.info('Relay started', {
-        peers: status.runtime.network?.peers || 0,
-        connections: status.runtime.network?.connections || 0,
-        publisherCatalogs: status.runtime.publisher?.catalogs || 0,
-        bootstrapLocators: status.runtime.bootstrap?.locators || 0,
-        retainedRenditions: status.runtime.assets?.retainedRenditions || 0,
-        archivedChannels: status.summary.totalChannels
+        peers: networkStatus.peers || 0,
+        connections: networkStatus.connections || 0,
+        activeAnnouncements: publicWorkStatus.activeAnnouncements || 0,
+        activeUploads: publicWorkStatus.activeUploads || 0,
+        activeAcquisitions: publicWorkStatus.activeAcquisitions || 0,
+        archivedChannels: status.summary?.totalChannels || 0
       })
 
       // Reconcile completed archives against authenticated publisher catalogs
@@ -772,7 +958,7 @@ async function buildRelayService({
           storageGuard.invalidate()
           await refreshArchiveCapacity()
           const heartbeatStatus = await persistStatus()
-          const network = heartbeatStatus.runtime.network || {}
+          const network = heartbeatStatus.network || {}
           if ((network.peers || 0) > 0 && (network.connections || 0) === 0) {
             logger.status.warn('Relay discovered peers without sockets', {
               peers: network.peers,
@@ -792,15 +978,14 @@ async function buildRelayService({
               offlineReason: network.offlineReason || null
             })
           }
+          const publicWork = heartbeatStatus.publicWork || {}
           logger.status.info('Relay heartbeat', {
             peers: network.peers || 0,
             connections: network.connections || 0,
-            publisherCatalogs: heartbeatStatus.runtime.publisher?.catalogs || 0,
-            followedPublishers: heartbeatStatus.runtime.publisher?.followed || 0,
-            bootstrapLocators: heartbeatStatus.runtime.bootstrap?.locators || 0,
-            retainedRenditions: heartbeatStatus.runtime.assets?.retainedRenditions || 0,
-            activeArchivePledges: heartbeatStatus.runtime.archive?.activePledgeCount || 0,
-            activeSeeds: heartbeatStatus.runtime.seedRetention?.activeSeeds || 0
+            activeAnnouncements: publicWork.activeAnnouncements || 0,
+            activeUploads: publicWork.activeUploads || 0,
+            uploadedBytes: publicWork.uploadedBytes || 0,
+            activeAcquisitions: publicWork.activeAcquisitions || 0
           })
         } catch (err) {
           logger.status.error('Relay heartbeat failed', {
@@ -811,6 +996,44 @@ async function buildRelayService({
 
 
       return service
+      } catch (error) {
+        if (heartbeatTimer) {
+          clearIntervalFn(heartbeatTimer)
+          heartbeatTimer = null
+        }
+        if (localMirrorTimer) {
+          clearIntervalFn(localMirrorTimer)
+          localMirrorTimer = null
+        }
+        ingestReady = false
+        if (companionServer) {
+          await companionServer.close().catch(() => {})
+          companionServer = null
+        }
+        if (ingestManager) {
+          await ingestManager.close().catch(() => {})
+          ingestManager = null
+        }
+        if (archiveConsole) {
+          await archiveConsole.close().catch(() => {})
+          archiveConsole = null
+        }
+        try {
+          await runtime.close?.()
+        } catch {
+          // Preserve the startup error after best-effort runtime cleanup.
+        }
+        throw error
+      }
+      })()
+      try {
+        const result = await startPromise
+        started = true
+        return result
+      } catch (error) {
+        startPromise = null
+        throw error
+      }
     },
     async processCandidate(candidate) {
       return scheduleCandidate(candidate)
@@ -818,7 +1041,63 @@ async function buildRelayService({
     async publishArchiveJob(job) {
       return publishArchiveJob(job)
     },
+    async searchIndexCandidates(selector, { cursor = null, limit = undefined, signal = null } = {}) {
+      if (cursor !== null || !selector?.namespace || !selector?.identifier || !selector?.kind) {
+        const error = new Error('Index search selector is unsupported')
+        error.code = 'INDEX_SEARCH_UNSUPPORTED'
+        throw error
+      }
+      if (typeof runtime.api?.searchIndexCandidates !== 'function') {
+        const error = new Error('Index candidate search is unsupported')
+        error.code = 'INDEX_SEARCH_UNSUPPORTED'
+        throw error
+      }
+      return runtime.api.searchIndexCandidates(selector, { limit, signal })
+    },
+    async verifyIndexCandidate(candidateRef, { signal = null } = {}) {
+      if (typeof runtime.api?.verifyIndexCandidate !== 'function') {
+        const error = new Error('Index candidate verification is unsupported')
+        error.code = 'INDEX_VERIFICATION_UNSUPPORTED'
+        throw error
+      }
+      return runtime.api.verifyIndexCandidate(candidateRef, { signal })
+    },
+    async openStreamAsset(candidate, { signal = null } = {}) {
+      if (typeof runtime.api?.openVerifiedCandidateStream !== 'function') {
+        const error = new Error('Verified asset streaming is unsupported')
+        error.code = 'STREAM_ASSET_UNSUPPORTED'
+        throw error
+      }
+      return runtime.api.openVerifiedCandidateStream(candidate, { signal })
+    },
+    async getPublication(publicationId) {
+      return runtime.ctx?.assetManifestStore?.getManifest?.(publicationId) || null
+    },
+    async submitIngestJob(input, { ingestSpoolLease = null, signal = null } = {}) {
+      if (!ingestReady) {
+        const error = new Error('Explicit retention policy is not ready')
+        error.code = 'RETENTION_ADMISSION_DENIED'
+        throw error
+      }
+      if (!ingestManager) {
+        const error = new Error('Companion ingest jobs are unavailable')
+        error.code = 'INGEST_UNAVAILABLE'
+        throw error
+      }
+      return ingestManager.submitJob({ ...input, ingestSpoolLease, signal })
+    },
+    async getIngestJob(jobId) {
+      if (!ingestManager) return null
+      return ingestManager.getJob(jobId)
+    },
+    async cancelIngestJob(jobId) {
+      if (!ingestManager) return null
+      return ingestManager.cancelJob(jobId)
+    },
     async enqueueArchiveJob(input, { runNow = false } = {}) {
+      if (!retentionPermission('archive-pin')) {
+        throw new Error('explicit archive consent is required')
+      }
       if (!runtime.ctx?.metaDb) throw new Error('archive jobs require relay runtime metadata storage')
       // Protected archives are not evicted, but they still share the operator's
       // hard aggregate budget with cache data. Refuse before scheduling when
@@ -840,7 +1119,7 @@ async function buildRelayService({
         store,
         logger,
         runQueue: archiveRunQueue,
-        canIngest: () => storageGuard.canIngest(),
+        canIngest: () => canRetain({ retentionClass: 'archive-pin' }),
         downloader: createYtDlpDownloader({
           bin: config.archive?.ytDlpPath,
           outputDir: config.archive?.tmpPath || './peartube-relay/archive-tmp',
@@ -862,7 +1141,8 @@ async function buildRelayService({
           uploadManager: runtime.uploadManager,
           api: runtime.api,
           runtime,
-          fs: runtimeFsModule
+          fs: runtimeFsModule,
+          canPublish: retentionPermission
         }),
         onCompleted: (job) => service.publishArchiveJob(job),
         stagingRoot: config.archive?.tmpPath || './peartube-relay/archive-tmp'
@@ -881,6 +1161,12 @@ async function buildRelayService({
         maxFiles: Number.isFinite(Number(input.maxFiles)) ? Number(input.maxFiles) : Infinity
       })
     },
+    getCompanionState() {
+      return companionServer?.state?.() || {
+        enabled: false,
+        transport: config.companion?.transport || 'unix'
+      }
+    },
     getStatus() {
       return currentStatus || buildRelayStatus({
         config,
@@ -890,6 +1176,12 @@ async function buildRelayService({
     },
     async close() {
       closed = true
+      ingestReady = false
+      ingestManagerStarted = false
+      policyControlApplied = false
+      ingestPolicyEligible = false
+      if (startPromise && !started) await startPromise.catch(() => {})
+      ingestReady = false
       if (heartbeatTimer) {
         clearIntervalFn(heartbeatTimer)
         heartbeatTimer = null
@@ -897,6 +1189,14 @@ async function buildRelayService({
       if (localMirrorTimer) {
         clearIntervalFn(localMirrorTimer)
         localMirrorTimer = null
+      }
+      if (companionServer) {
+        await companionServer.close().catch(() => {})
+        companionServer = null
+      }
+      if (ingestManager) {
+        await ingestManager.close().catch(() => {})
+        ingestManager = null
       }
       if (archiveConsole) {
         await archiveConsole.close().catch(() => {})

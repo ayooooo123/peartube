@@ -14,12 +14,14 @@ import { PublicChannelBee } from './public-channel-bee.js'
 import { normalizeBlobRefInput } from '../blob-ref.js'
 import { compareSignedChannelRootDescriptors } from '../channel-descriptor.js'
 import channelDbDefinition from './channel-hyperdb-spec/hyperdb/index.js'
+import { decodePublicationManifest } from '../assets/index.js'
 import {
   normalizeArtworkRole,
   normalizeChannelArtwork,
   normalizeChannelProfile,
   normalizeChannelSource,
   normalizeContentDetails,
+  normalizePublicationOperationFramesHex,
   normalizeImportClaim,
   resolveClaimWinner
 } from './structured-content.js'
@@ -113,7 +115,20 @@ const CONTENT_DETAIL_FIELDS = [
   'publicationState',
   'contentFingerprint',
   'importIdentityKey',
-  'importClaimantId'
+  'importClaimantId',
+  'publicationId',
+  'manifestId',
+  'renditionId',
+  'assetId',
+  'coreKey',
+  'publisherId',
+  'publicationSequence',
+  'metadataClaimId',
+  'availabilityClaimId',
+  'publicationOperationId',
+  'metadataClaimOperationId',
+  'availabilityClaimOperationId',
+  'publicationManifestHex',
 ]
 const CONTENT_STORAGE_DEFAULTS = {
   contentKind: '',
@@ -122,7 +137,8 @@ const CONTENT_STORAGE_DEFAULTS = {
   sourcePublishedAt: MAX_SAFE_RANGE,
   seasonNumber: MAX_SAFE_RANGE,
   episodeNumber: MAX_SAFE_RANGE,
-  originalAirDate: MAX_SAFE_RANGE
+  originalAirDate: MAX_SAFE_RANGE,
+  publicationSequence: MAX_SAFE_RANGE
 }
 
 function toBuffer(value) {
@@ -175,8 +191,60 @@ function encodeContentDetails(details) {
   return encodeStoredRecord(details, CONTENT_STORAGE_DEFAULTS)
 }
 
-function decodeContentDetails(details) {
+function decodeStoredContentDetails(details) {
   return decodeStoredRecord(details, CONTENT_DETAIL_FIELDS, CONTENT_STORAGE_DEFAULTS)
+}
+
+function decodeContentDetails(details) {
+  const decoded = decodeStoredContentDetails(details)
+  if (!decoded?.publicationId) return decoded
+  const manifest = decodePublicationManifest(b4a.from(decoded.publicationManifestHex, 'hex'))
+  return {
+    ...decoded,
+    immutablePublication: {
+      publicationId: decoded.publicationId,
+      manifestId: decoded.manifestId,
+      renditionId: decoded.renditionId,
+      assetId: decoded.assetId,
+      coreKey: decoded.coreKey,
+      publisherId: decoded.publisherId,
+      sequence: decoded.publicationSequence,
+      claimIds: [decoded.metadataClaimId, decoded.availabilityClaimId],
+      operationIds: [
+        decoded.publicationOperationId,
+        decoded.metadataClaimOperationId,
+        decoded.availabilityClaimOperationId,
+      ],
+      manifest,
+    },
+  }
+}
+function mergeVideoContentDetails(video, details, publicationOperationFrames) {
+  if (!details) return video
+  const decoded = decodeContentDetails(details)
+  if (decoded?.immutablePublication && publicationOperationFrames?.publicationOperationFramesHex) {
+    decoded.immutablePublication = {
+      ...decoded.immutablePublication,
+      operationFramesHex: publicationOperationFrames.publicationOperationFramesHex
+    }
+  }
+  return {
+    ...video,
+    ...decoded,
+    ...(publicationOperationFrames || {})
+  }
+}
+
+function normalizePublicationOperationFramesRecord(id, value) {
+  return {
+    id,
+    publicationOperationFramesHex: normalizePublicationOperationFramesHex(value)
+  }
+}
+
+
+function isPrivatePublicationState(value) {
+  return value === 'replicationPending' || value === 'commitUncertain'
 }
 
 function assertFiniteNonnegative(value, name) {
@@ -454,9 +522,9 @@ export class MultiWriterChannel extends ReadyResource {
     await this._syncPublicBeeFromFeedChannel()
   }
 
-  async _syncPublicBeeFromFeedChannel() {
+  async _syncPublicBeeFromFeedChannel(options = {}) {
     if (!this._publicProjectionActive || !this.publicBee?.writable) return
-    await this.publicBee.syncFromChannel(this)
+    await this.publicBee.syncFromChannel(this, options)
   }
  
   async _flushPublicDiscovery(discovery) {
@@ -1169,30 +1237,34 @@ export class MultiWriterChannel extends ReadyResource {
 
   async listVideos() {
     await this._update()
-    const [videos, details] = await Promise.all([
+    const [videos, details, operationFrames] = await Promise.all([
       this.db.find('@peartubeChannel/videos-by-uploaded-at', {}, { reverse: true }).toArray(),
-      this.db.find('@peartubeChannel/contentDetails', {}).toArray()
+      this.db.find('@peartubeChannel/contentDetails', {}).toArray(),
+      this.db.find('@peartubeChannel/publicationOperationFrames', {}).toArray()
     ])
     if (details.length === 0) return videos
-    const detailsById = new Map(details.map((record) => [record.id, decodeContentDetails(record)]))
-    return videos.map((video) => {
-      const sidecar = detailsById.get(video.id)
-      return sidecar ? { ...video, ...sidecar } : video
-    })
+    const detailsById = new Map(details.map((record) => [record.id, record]))
+    const operationFramesById = new Map(operationFrames.map((record) => [record.id, record]))
+    return videos.map((video) => mergeVideoContentDetails(
+      video,
+      detailsById.get(video.id),
+      operationFramesById.get(video.id)
+    ))
   }
 
   async getVideo(id) {
     if (!id) return null
     await this._update()
-    const [video, details] = await Promise.all([
+    const [video, details, operationFrames] = await Promise.all([
       this.db.get('@peartubeChannel/videos', { id }),
-      this.db.get('@peartubeChannel/contentDetails', { id })
+      this.db.get('@peartubeChannel/contentDetails', { id }),
+      this.db.get('@peartubeChannel/publicationOperationFrames', { id })
     ])
     if (!video) return null
-    return details ? { ...video, ...decodeContentDetails(details) } : video
+    return mergeVideoContentDetails(video, details, operationFrames)
   }
 
-  async addVideo(meta, { syncPublic = meta?.publicationState !== 'replicationPending' } = {}) {
+  async addVideo(meta, { syncPublic = !isPrivatePublicationState(meta?.publicationState) } = {}) {
     const id = meta?.id
     if (!id) throw new Error('Video id required')
     const nextClock = this._nextVideoLogicalClock()
@@ -1212,23 +1284,36 @@ export class MultiWriterChannel extends ReadyResource {
       await this._update()
       const existingDetails = await this.db.get('@peartubeChannel/contentDetails', { id })
       details = normalizeContentDetails({
-        ...(decodeContentDetails(existingDetails) || {}),
+        ...(decodeStoredContentDetails(existingDetails) || {}),
         ...detailsInput,
         id
       })
     }
+    const operationFrames = meta.publicationOperationFramesHex !== undefined
+      ? normalizePublicationOperationFramesRecord(id, meta.publicationOperationFramesHex)
+      : null
 
     await this.db.insert('@peartubeChannel/videos', videoMeta)
     if (details) await this.db.insert('@peartubeChannel/contentDetails', encodeContentDetails(details))
+    if (operationFrames) {
+      await this.db.insert('@peartubeChannel/publicationOperationFrames', operationFrames)
+    }
     await this._flush()
-    if (details?.publicationState === 'replicationPending') {
+    if (isPrivatePublicationState(details?.publicationState)) {
       await this._suppressPublicVideo(id)
     } else if (syncPublic) {
       await this._syncPublicBeeFromFeedChannel()
     }
   }
 
-  async updateVideo(id, updates, { syncPublic = updates?.publicationState !== 'replicationPending' } = {}) {
+  async updateVideo(
+    id,
+    updates,
+    {
+      syncPublic = !isPrivatePublicationState(updates?.publicationState),
+      commitAfterPublicSync = false
+    } = {}
+  ) {
     if (!id) throw new Error('Video id required')
     await this._update()
     const [existing, existingDetails] = await Promise.all([
@@ -1246,17 +1331,43 @@ export class MultiWriterChannel extends ReadyResource {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       logicalClock: nextClock
     })
+    const decodedDetails = decodeStoredContentDetails(existingDetails) || {}
     const detailsPatch = pickDefinedFields(updates, CONTENT_DETAIL_FIELDS)
     const details = Object.keys(detailsPatch).length > 0
-      ? normalizeContentDetails({ ...(decodeContentDetails(existingDetails) || {}), ...detailsPatch, id })
+      ? normalizeContentDetails({ ...decodedDetails, ...detailsPatch, id })
       : null
+    const operationFrames = updates?.publicationOperationFramesHex !== undefined
+      ? normalizePublicationOperationFramesRecord(id, updates.publicationOperationFramesHex)
+      : null
+
+    if (commitAfterPublicSync) {
+      if (
+        !syncPublic ||
+        decodedDetails.publicationState !== 'commitUncertain' ||
+        details?.publicationState !== 'published'
+      ) {
+        throw new Error('Commit-uncertain finalization requires a published public sync')
+      }
+      const projectionVideos = await this.listVideos()
+      const candidate = { ...videoMeta, ...details }
+      const index = projectionVideos.findIndex(video => video.id === id)
+      if (index < 0) throw new Error('Video not found: ' + id)
+      projectionVideos[index] = candidate
+      await this._syncPublicBeeFromFeedChannel({
+        projectionVideos,
+        throwOnError: true
+      })
+    }
 
     await this.db.insert('@peartubeChannel/videos', videoMeta)
     if (details) await this.db.insert('@peartubeChannel/contentDetails', encodeContentDetails(details))
+    if (operationFrames) {
+      await this.db.insert('@peartubeChannel/publicationOperationFrames', operationFrames)
+    }
     await this._flush()
-    if (details?.publicationState === 'replicationPending') {
+    if (isPrivatePublicationState(details?.publicationState)) {
       await this._suppressPublicVideo(id)
-    } else if (syncPublic) {
+    } else if (syncPublic && !commitAfterPublicSync) {
       await this._syncPublicBeeFromFeedChannel()
     }
   }
@@ -1265,6 +1376,7 @@ export class MultiWriterChannel extends ReadyResource {
     if (!this.writable) throw new Error('Channel is not writable')
     await this.db.delete('@peartubeChannel/videos', { id })
     await this.db.delete('@peartubeChannel/contentDetails', { id })
+    await this.db.delete('@peartubeChannel/publicationOperationFrames', { id })
     await this._flush()
     await this._suppressPublicVideo(id)
   }

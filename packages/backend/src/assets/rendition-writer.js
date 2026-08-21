@@ -1,23 +1,31 @@
-import b4a from 'b4a'
-import crypto from 'hypercore-crypto'
-
 import { createRenditionDescriptor } from './rendition.js'
 import { createSegmentIndexDescriptor } from './segment-index.js'
+import { createStaticAssetManifest, writeStaticAsset } from './static-core.js'
 
-function hashHex(buffer) {
-  return b4a.toString(crypto.hash(buffer), 'hex')
+const PREFLIGHT_CORE = createStaticAssetManifest({
+  treeHash: '00'.repeat(32),
+  blockLength: 0,
+  byteLength: 0,
+})
+
+function validateRenditionMetadata(input) {
+  if (input.segments) {
+    createSegmentIndexDescriptor({
+      codec: input.segmentCodec || 'peartube-inline-segments-v1',
+      mediaByteLength: Number.MAX_SAFE_INTEGER,
+      entries: input.segments,
+      indexCore: input.indexCore,
+    })
+  }
+
+  createRenditionDescriptor({
+    purpose: input.purpose,
+    format: input.format,
+    core: PREFLIGHT_CORE,
+  })
 }
 
-function assertNotCancelled(signal) {
-  if (signal?.aborted) throw new Error('rendition write cancelled')
-}
-
-function concatChunks(chunks = []) {
-  if (!Array.isArray(chunks) || chunks.length === 0) throw new Error('chunks are required')
-  return b4a.concat(chunks.map((chunk) => b4a.from(chunk)))
-}
-
-export function createImmutableRenditionWriter() {
+export function createImmutableRenditionWriter(defaults = {}) {
   let initialized = false
   let openWrites = 0
 
@@ -33,28 +41,52 @@ export function createImmutableRenditionWriter() {
     async writeRendition(input = {}) {
       if (!initialized) throw new Error('rendition writer must initialize before writes')
       openWrites++
+      let staticAsset = null
       try {
-        assertNotCancelled(input.signal)
-        const bytes = concatChunks(input.chunks)
-        assertNotCancelled(input.signal)
+        validateRenditionMetadata(input)
+        staticAsset = await writeStaticAsset({
+          store: input.store || defaults.store,
+          source: input.source || defaults.source,
+          signal: input.signal || defaults.signal,
+        })
         const segmentIndex = createSegmentIndexDescriptor({
           codec: input.segmentCodec || 'peartube-inline-segments-v1',
-          mediaByteLength: bytes.byteLength,
-          entries: input.segments || [{ timeStartMs: 0, durationMs: Number(input.durationMs || 1), byteStart: 0, byteEnd: bytes.byteLength, independent: true }],
+          mediaByteLength: staticAsset.descriptor.byteLength,
+          entries: input.segments || [{
+            timeStartMs: 0,
+            durationMs: Number(input.durationMs || 1),
+            byteStart: 0,
+            byteEnd: staticAsset.descriptor.byteLength,
+            independent: true,
+          }],
           indexCore: input.indexCore,
         })
         const descriptor = createRenditionDescriptor({
           purpose: input.purpose,
           format: input.format,
-          core: {
-            key: hashHex(b4a.concat([b4a.from('core-key'), bytes])),
-            length: Number(input.coreLength || 1),
-            treeHash: hashHex(bytes),
-            byteLength: bytes.byteLength,
-          },
+          core: staticAsset.descriptor,
           segmentIndex,
         })
-        return { descriptor, segmentIndex, bytes: b4a.from(bytes), sealed: true, readOnly: true }
+        return {
+          descriptor,
+          segmentIndex,
+          core: staticAsset.core,
+          staticAsset: staticAsset.descriptor,
+          sealed: true,
+          readOnly: true,
+        }
+      } catch (error) {
+        if (staticAsset && !staticAsset.core.closed) {
+          try {
+            await staticAsset.core.close()
+          } catch (closeError) {
+            throw new AggregateError(
+              [error, closeError],
+              'rendition failure and static core close failed'
+            )
+          }
+        }
+        throw error
       } finally {
         openWrites--
       }

@@ -1,0 +1,445 @@
+{
+  "version": 2,
+  "schema": [
+    {
+      "name": "sourceRecord",
+      "namespace": "peartubeIndex",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "catalogEpoch",
+          "required": true,
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "recordId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "recordType",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceSequence",
+          "required": true,
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "canonicalEnvelope",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        },
+        {
+          "name": "projectionState",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "ingestedAt",
+          "required": true,
+          "type": "uint64",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "sourceCursor",
+      "namespace": "peartubeIndex",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "catalogEpoch",
+          "required": true,
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "catalogBootstrapKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "viewFork",
+          "required": true,
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "viewVersion",
+          "required": true,
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "sourceHead",
+          "required": true,
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "lastVerifiedDescriptor",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "externalReferenceProjection",
+      "namespace": "peartubeIndex",
+      "compact": true,
+      "flagsPosition": 6,
+      "fields": [
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceRecordRef",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "namespace",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "normalizedIdentifier",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "entityKind",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "entityId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "evidenceWeight",
+          "type": "uint64",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "publicationProjection",
+      "namespace": "peartubeIndex",
+      "compact": true,
+      "flagsPosition": 5,
+      "fields": [
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceRecordRef",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicationId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "workEntityId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "normalizedTitle",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "releaseYear",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "manifestId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "provenanceSummary",
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "renditionProjection",
+      "namespace": "peartubeIndex",
+      "compact": true,
+      "flagsPosition": 4,
+      "fields": [
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceRecordRef",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "renditionId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "assetId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "format",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "codec",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "dimensions",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mediaFeatures",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "byteLength",
+          "type": "uint64",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "availabilityProjection",
+      "namespace": "peartubeIndex",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceRecordRef",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "assetId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "observerId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "observedSeeders",
+          "required": true,
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "observedCompleteSeeders",
+          "required": true,
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "observedAt",
+          "required": true,
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "expiresAt",
+          "required": true,
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "availabilityState",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "relationshipEdge",
+      "namespace": "peartubeIndex",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceRecordRef",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "relationType",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "fromId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "toId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "usageCounter",
+      "namespace": "peartubeIndex",
+      "compact": true,
+      "flagsPosition": 5,
+      "fields": [
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "scope",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "bucketId",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "retainedBytes",
+          "required": true,
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "rows",
+          "required": true,
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "shardId",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "trustClass",
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "admissionTombstone",
+      "namespace": "peartubeIndex",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "reason",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "evictedAt",
+          "required": true,
+          "type": "uint64",
+          "version": 2
+        }
+      ]
+    }
+  ]
+}

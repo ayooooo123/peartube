@@ -93,10 +93,23 @@ const contentDetails = {
   originalAirDate: 1212537600000,
   thumbnailUrl: 'https://images.example.test/pilot.jpg',
   provenanceVersion: 'tmdb-resolver@1',
-  publicationState: 'replicationPending',
+  publicationState: 'commitUncertain',
   contentFingerprint: 'sha256:abc',
   importIdentityKey: 'tmdb:episode:62085',
-  importClaimantId: 'claimant-1'
+  importClaimantId: 'claimant-1',
+  publicationId: '10'.repeat(32),
+  manifestId: '11'.repeat(32),
+  renditionId: '12'.repeat(32),
+  assetId: '13'.repeat(32),
+  coreKey: '13'.repeat(32),
+  publisherId: '14'.repeat(32),
+  publicationSequence: 7,
+  metadataClaimId: '15'.repeat(32),
+  availabilityClaimId: '16'.repeat(32),
+  publicationOperationId: '17'.repeat(32),
+  metadataClaimOperationId: '18'.repeat(32),
+  availabilityClaimOperationId: '19'.repeat(32),
+  publicationManifestHex: 'abcd'
 }
 
 const channelSource = {
@@ -324,6 +337,23 @@ test('existing private and public video codecs retain the legacy compact record'
   assertRetains(t, roundTripPrivate('@peartubeChannel/video', legacyVideo), legacyVideo)
   assertRetains(t, roundTripPublic('@peartubePublic/video', legacyVideo), legacyVideo)
 })
+test('signed upload frames round-trip only through the private sidecar codec', async (t) => {
+  const record = {
+    id: 'publication-private',
+    publicationOperationFramesHex: '00112233'
+  }
+  assertRetains(
+    t,
+    roundTripPrivate('@peartubeChannel/publicationOperationFrames', record),
+    record
+  )
+  await t.exception(
+    () => encodePublic('@peartubePublic/publicationOperationFrames', record),
+    /Encoder not found/,
+    'replay frames have no public codec'
+  )
+})
+
 
 test('private and public channel profile sidecars retain structured fields', (t) => {
   assertRetains(t, roundTripPrivate('@peartubeChannel/channelProfile', profile), profile)
@@ -335,8 +365,25 @@ test('private and public channel profile sidecars retain structured fields', (t)
 test('private and public content detail sidecars retain structured and reconciliation fields', (t) => {
   assertRetains(t, roundTripPrivate('@peartubeChannel/contentDetails', contentDetails), contentDetails)
 
+  const {
+    publicationId,
+    manifestId,
+    renditionId,
+    assetId,
+    coreKey,
+    publisherId,
+    publicationSequence,
+    metadataClaimId,
+    availabilityClaimId,
+    publicationOperationId,
+    metadataClaimOperationId,
+    availabilityClaimOperationId,
+    publicationManifestHex,
+    ...publicContentDetails
+  } = contentDetails
   const publicDetails = {
-    ...contentDetails,
+    ...publicContentDetails,
+    publicationState: 'replicationPending',
     canonicalVisibility: 'suppressed',
     duplicateOfClaimantId: 'claimant-0'
   }

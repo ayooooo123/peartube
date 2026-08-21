@@ -28,7 +28,7 @@ services:
       PEARTUBE_LOG_LEVEL: info
     volumes:
       - peartube-relay-data:/var/lib/peartube-relay
-      - /home/user/peartube-local-videos:/mirror:ro
+      - ${PEARTUBE_MIRROR_DIR:-/home/user/peartube-local-videos}:/mirror:ro
     command: ["ui", "--host", "0.0.0.0", "--port", "8174"]
 
 volumes:

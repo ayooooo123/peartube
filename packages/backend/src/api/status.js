@@ -2,6 +2,7 @@
 import b4a from 'b4a'
 import { getNetworkStats } from '../storage.js'
 import { describeScopedTopic } from '../network/topics.js'
+import { PROTOCOL_MAJOR } from '../network/version.js'
 
 export function createStatusApi({ ctx, recentPlaybackTimings = [] }) {
   return {
@@ -25,7 +26,7 @@ export function createStatusApi({ ctx, recentPlaybackTimings = [] }) {
      */
     getSwarmStatus() {
       const scopedTopics = ctx.scopedNetwork?.getDiagnostics?.().topics || [
-        describeScopedTopic('bootstrap', { networkId: ctx.networkId || 'peartube-main', protocolMajor: 1 }),
+        describeScopedTopic('bootstrap', { networkId: ctx.networkId || 'peartube-main', protocolMajor: PROTOCOL_MAJOR }),
       ]
       const networkDebug = getNetworkStats()
       const startupTiming = {

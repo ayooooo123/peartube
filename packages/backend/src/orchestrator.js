@@ -40,6 +40,7 @@ import { createPersonalManager } from './personal/personal-manager.js';
 import { createUploadManager } from './upload.js';
 import { createPublisherCatalogRegistry } from './api/publisher.js'
 import { createScopedNetworkRuntime } from './network/scoped-runtime.js'
+import { createIndexVerificationRuntime } from './runtime.js'
 import {
   createConsumerCatalogProjection,
   createPublisherCatalogProjection,
@@ -716,6 +717,13 @@ export async function createBackendContext(config) {
   } catch (error) {
     console.log('[Orchestrator] consumer catalog projection rebuild failed at startup:', error?.message || error)
   }
+  const indexVerificationRuntime = createIndexVerificationRuntime({
+    services: maximum => scopedNetwork.listRetainedIndexServiceAdapters(maximum),
+    catalogRegistry,
+    scopedNetwork,
+    lifecycle,
+  })
+  ctx.indexVerificationRuntime = indexVerificationRuntime
   const configuredOperabilityServices = config.operability?.services
     ? await Promise.resolve(config.operability.services)
     : config.operability?.servicesPromise
@@ -751,7 +759,9 @@ export async function createBackendContext(config) {
 
   const desiredArchiveParticipationEnabled =
     archive.enabled !== false &&
-    initialNetworkPolicy.retentionMode === 'archive-pledges'
+    initialNetworkPolicy.policyVersion === 2 &&
+    initialNetworkPolicy.migrationRequired !== true &&
+    initialNetworkPolicy.archiveEnabled === true
   const permissionlessArchiveNetwork = deviceKeyPair?.publicKey && deviceKeyPair?.secretKey
     ? createPermissionlessArchiveNetwork({
         keyPair: deviceKeyPair,
@@ -767,7 +777,7 @@ export async function createBackendContext(config) {
           },
         },
         enabled: false,
-        capacityBytes: archive.capacityBytes,
+        capacityBytes: initialNetworkPolicy.archiveBudgetBytes,
         maxRequestBytes: archive.maxRequestBytes,
         diagnostics: archiveDiagnostics,
         peerScorer,
@@ -899,7 +909,10 @@ export async function createBackendContext(config) {
   // downloading *ahead* of the playhead so a fast peer builds a real buffer
   // instead of the on-demand stream settling at playback bitrate. The window
   // cache trims behind, so the two together bound the on-disk footprint.
-  const playbackForwardFill = createPlaybackForwardFill({ store: ctx.store });
+  const playbackForwardFill = createPlaybackForwardFill({
+    store: ctx.store,
+    staticAssetEntries: ctx.staticAssetPlaybackEntries,
+  });
   lifecycle.ownResource('playback forward fill', playbackForwardFill, 'stop', 2000)
   playbackForwardFill.start();
   ctx.playbackForwardFill = playbackForwardFill;
@@ -985,7 +998,7 @@ export async function createBackendContext(config) {
       } else if (permissionlessArchiveNetwork && desiredArchiveParticipationEnabled) {
         await permissionlessArchiveNetwork.setParticipation({
           enabled: true,
-          capacityBytes: archive.capacityBytes,
+          capacityBytes: initialNetworkPolicy.archiveBudgetBytes,
           maxRequestBytes: archive.maxRequestBytes,
           acceptanceProbability: archive.acceptanceProbability,
         })
@@ -1095,6 +1108,7 @@ export async function createBackendContext(config) {
     catalogRegistry,
     scopedNetwork,
     permissionlessArchiveNetwork,
+    indexVerificationRuntime,
     policyApi,
     networkPolicyRuntime,
     // A relay is a headless server, not a viewer's device: it has no battery,

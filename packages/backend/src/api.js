@@ -49,6 +49,11 @@ import { createOperabilityApi } from './api/operability.js'
 import { createScopedNetworkApi } from './network/scoped-runtime.js'
 import { createArchiveManager } from './archive/manager.js'
 import { buildCatalogGroupPage, buildChannelCatalog } from './catalog/channel-catalog.js'
+import { normalizeAssetCoreRefV2 } from './assets/rendition.js'
+import { createStaticAssetManifest } from './assets/static-core.js'
+import { verifyPublicationManifest } from './assets/manifest.js'
+import { createMultiPeerScheduler, createStaticAssetPlayback } from './playback/index.js'
+import { verifiedCandidateManifest } from './search/source-verifier.js'
 
 function assertApiContextRunning(ctx) {
   if (ctx?.lifecycle?.signal?.aborted) throw new Error('Backend is shutting down')
@@ -192,9 +197,9 @@ function isCatalogStorageKey(value) {
 
 function isCatalogKey(value) {
   if (typeof value !== 'string' || value.length === 0 || b4a.byteLength(value) > 256) return false
-  if (/[\u0000-\u001f\u007f-\u009f]/u.test(value)) return false
   for (let index = 0; index < value.length; index++) {
     const code = value.charCodeAt(index)
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return false
     if (code >= 0xd800 && code <= 0xdbff) {
       if (++index >= value.length) return false
       const low = value.charCodeAt(index)
@@ -339,7 +344,11 @@ function finishAvailabilityEntry(state, entry, evidence) {
   clearTimeout(entry.timer)
   state.inflight.delete(entry.batchStart)
   if (entry.sent) {
-    try { state.peer.wireUnwant.send(entry.want) } catch {}
+    try {
+      state.peer.wireUnwant.send(entry.want)
+    } catch {
+      // The peer may close while availability cleanup is withdrawing its request.
+    }
   }
   entry.resolve(evidence)
   if (state.inflight.size !== 0) return
@@ -770,6 +779,7 @@ export function createApi({
   catalogRegistry,
   scopedNetwork,
   permissionlessArchiveNetwork = ctx?.permissionlessArchiveNetwork,
+  indexVerificationRuntime = ctx?.indexVerificationRuntime || null,
   policyApi = null,
   networkPolicyRuntime = ctx?.networkPolicyRuntime || null,
   sourceOffload = {},
@@ -778,8 +788,11 @@ export function createApi({
   // 'device' or 'server'. A headless relay/seeder is a server: it has no
   // battery, thermal envelope, metered link, app lifecycle or playback window.
   hostKind = 'device',
+  getPreviewVideoFromFeed = () => null,
 }) {
   const blobPlayback = createBlobPlaybackService(ctx)
+  const pendingStaticPlaybackAuthorizations = new Map()
+  let companionStreamSequence = 0
   const publisherApi = createPublisherApi({ ctx, catalogRegistry, now: () => Date.now() })
   const mediaGraphApi = createMediaGraphApi({ ctx })
   const scopedNetworkApi = scopedNetwork ? createScopedNetworkApi(scopedNetwork) : {}
@@ -998,7 +1011,10 @@ export function createApi({
     if (!Array.isArray(records)) return records ?? []
     const visible = []
     for (const record of records) {
-      if (record?.publicationState === 'replicationPending') continue
+      if (
+        record?.publicationState === 'replicationPending' ||
+        record?.publicationState === 'commitUncertain'
+      ) continue
       if (record?.canonicalVisibility === 'suppressed') continue
       visible.push(record)
     }
@@ -1855,6 +1871,194 @@ export function createApi({
       : { blobId, blobsCoreKey, mimeType }
   }
 
+  function immutablePublicationError(reason) {
+    return new Error(`immutable publication ${reason}`)
+  }
+
+  async function resolveImmutableStaticPlayback(meta, requestedMimeType) {
+    const publication = meta?.immutablePublication
+    if (publication == null) return null
+    if (!publication || typeof publication !== 'object') throw immutablePublicationError('metadata is malformed')
+    const manifest = publication.manifest
+    if (!manifest || !await verifyPublicationManifest(manifest, {
+      allowedSigners: [manifest?.body?.publisherId],
+    })) {
+      throw immutablePublicationError('manifest verification failed')
+    }
+    if (publication.publicationId !== manifest.publicationId ||
+        publication.manifestId !== manifest.body.manifestId ||
+        publication.publisherId !== manifest.body.publisherId) {
+      throw immutablePublicationError('manifest identity mismatch')
+    }
+    const rendition = manifest.body.renditions.find(candidate =>
+      candidate.renditionId === publication.renditionId)
+    if (!rendition) throw immutablePublicationError('rendition identity mismatch')
+    let coreRef
+    try {
+      coreRef = normalizeAssetCoreRefV2(rendition.core)
+    } catch {
+      throw immutablePublicationError('rendition core is malformed')
+    }
+    if (publication.assetId !== coreRef.assetId || publication.coreKey !== coreRef.key) {
+      throw immutablePublicationError('rendition core identity mismatch')
+    }
+    const mimeType = rendition.format || meta?.mimeType || requestedMimeType || 'video/mp4'
+    const authorizationKey = `${publication.publicationId}:${rendition.renditionId}`
+    if (blobPlayback.hasStaticAssetAuthorization(coreRef.assetId, authorizationKey)) {
+      return blobPlayback.resolveStaticAssetUrl({ coreRef, mimeType, authorizationKey })
+    }
+    if (typeof scopedNetwork?.retainAuthorizedRendition !== 'function' ||
+        typeof scopedNetwork?.releaseAuthorizedRendition !== 'function' ||
+        typeof scopedNetwork?.getActiveAssetSession !== 'function') {
+      throw immutablePublicationError('scoped playback transport is unavailable')
+    }
+    const pendingKey = `${coreRef.assetId}:${authorizationKey}`
+    const pending = pendingStaticPlaybackAuthorizations.get(pendingKey)
+    if (pending) return pending
+    const ownerId = `playback:${publication.publicationId}:${rendition.renditionId}`
+    const releaseRequest = {
+      renditionId: rendition.renditionId,
+      ownerId,
+      assetId: coreRef.assetId,
+    }
+    const resolution = (async () => {
+      await scopedNetwork.retainAuthorizedRendition({
+        manifest,
+        renditionId: rendition.renditionId,
+        ownerId,
+        start: 0,
+        end: coreRef.length,
+      })
+      let registered = false
+      try {
+        const release = () => scopedNetwork.releaseAuthorizedRendition(releaseRequest)
+        let playback
+        if (ctx?.staticAssetPlaybackEntries?.has(coreRef.assetId)) {
+          playback = blobPlayback.resolveStaticAssetUrl({
+            coreRef,
+            mimeType,
+            authorizationKey,
+            release,
+          })
+        } else {
+          const session = scopedNetwork.getActiveAssetSession({ assetId: coreRef.assetId })
+          playback = createStaticAssetPlayback({
+            coreRef,
+            session,
+            transport: scopedNetwork,
+            playbackService: blobPlayback,
+            mimeType,
+            authorizationKey,
+            release,
+          })
+        }
+        registered = true
+        return playback
+      } finally {
+        if (!registered) await scopedNetwork.releaseAuthorizedRendition(releaseRequest)
+      }
+    })()
+    pendingStaticPlaybackAuthorizations.set(pendingKey, resolution)
+    try {
+      return await resolution
+    } finally {
+      if (pendingStaticPlaybackAuthorizations.get(pendingKey) === resolution) {
+        pendingStaticPlaybackAuthorizations.delete(pendingKey)
+      }
+    }
+  }
+
+  async function resolveVerifiedCandidateStream(candidate, { signal = null } = {}) {
+    assertApiContextRunning(ctx)
+    if (!candidate || typeof candidate !== 'object' || candidate.verification?.state !== 'source-verified') {
+      throw immutablePublicationError('verified candidate is invalid')
+    }
+    const manifest = verifiedCandidateManifest(candidate)
+    if (!manifest || !await verifyPublicationManifest(manifest, {
+      allowedSigners: [manifest?.body?.publisherId],
+    })) {
+      throw immutablePublicationError('verified candidate manifest is unavailable')
+    }
+    if (signal?.aborted) {
+      const error = new Error('verified candidate stream open aborted')
+      error.name = 'AbortError'
+      throw error
+    }
+    const publicationId = candidate.publication?.publicationId
+    const renditionId = candidate.rendition?.renditionId
+    if (manifest.publicationId !== publicationId) {
+      throw immutablePublicationError('verified candidate publication identity mismatch')
+    }
+    const rendition = manifest.body.renditions.find(value => value.renditionId === renditionId)
+    if (!rendition) throw immutablePublicationError('verified candidate rendition identity mismatch')
+    const coreRef = normalizeAssetCoreRefV2(rendition.core)
+    const expectedAsset = candidate.asset || {}
+    for (const [field, expected] of [
+      ['assetId', coreRef.assetId],
+      ['coreKey', coreRef.key],
+      ['treeHash', coreRef.treeHash],
+      ['blockLength', coreRef.length],
+      ['blockSize', coreRef.blockSize],
+      ['byteLength', coreRef.byteLength],
+    ]) {
+      if (expectedAsset[field] !== expected) {
+        throw immutablePublicationError(`verified candidate ${field} mismatch`)
+      }
+    }
+    if (typeof scopedNetwork?.retainAuthorizedRendition !== 'function' ||
+        typeof scopedNetwork?.releaseAuthorizedRendition !== 'function' ||
+        typeof scopedNetwork?.getActiveAssetSession !== 'function') {
+      throw immutablePublicationError('scoped playback transport is unavailable')
+    }
+    if (companionStreamSequence >= Number.MAX_SAFE_INTEGER) {
+      throw immutablePublicationError('stream authorization sequence exhausted')
+    }
+
+    const authorizationKey = `companion-stream:${publicationId}:${renditionId}:${companionStreamSequence++}`
+    const releaseRequest = {
+      renditionId,
+      ownerId: authorizationKey,
+      assetId: coreRef.assetId,
+    }
+    await scopedNetwork.retainAuthorizedRendition({
+      manifest,
+      renditionId,
+      ownerId: authorizationKey,
+      start: 0,
+      end: coreRef.length,
+    })
+    let registered = false
+    try {
+      if (signal?.aborted) {
+        const error = new Error('verified candidate stream open aborted')
+        error.name = 'AbortError'
+        throw error
+      }
+      const release = () => scopedNetwork.releaseAuthorizedRendition(releaseRequest)
+      let scheduler
+      if (ctx?.staticAssetPlaybackEntries?.has(coreRef.assetId)) {
+        scheduler = ctx.staticAssetPlaybackEntries.get(coreRef.assetId).scheduler
+      } else {
+        scheduler = createMultiPeerScheduler({
+          coreRef,
+          session: scopedNetwork.getActiveAssetSession({ assetId: coreRef.assetId }),
+          transport: scopedNetwork,
+        })
+      }
+      const asset = blobPlayback.resolveStaticAssetStream({
+        coreRef,
+        scheduler,
+        mimeType: rendition.format || candidate.rendition?.container || 'application/octet-stream',
+        authorizationKey,
+        release,
+      })
+      registered = true
+      return asset
+    } finally {
+      if (!registered) await scopedNetwork.releaseAuthorizedRendition(releaseRequest)
+    }
+  }
+
   function localSwarmPeerId() {
     try {
       const key = ctx?.swarm?.keyPair?.publicKey
@@ -1945,31 +2149,20 @@ export function createApi({
 
   function exactSourceLocators(manifest) {
     const renditions = (manifest?.body?.renditions || []).filter(rendition => rendition?.purpose === 'original')
-    const provenance = (manifest?.body?.provenance || []).filter(entry => entry?.type === 'upload')
-    const locators = []
-    for (const rendition of renditions) {
-      const matches = provenance.filter(entry =>
-        entry?.renditionId === rendition.renditionId &&
-        entry?.coreKey === rendition?.core?.key
-      )
-      if (matches.length !== 1) throw new Error('publication source locator is ambiguous')
-      const entry = matches[0]
-      const start = Number(entry.start)
-      const end = Number(entry.end)
-      if (!Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(end) ||
-          end <= start || end > Number(rendition.core.length)) {
-        throw new Error('publication source locator is invalid')
-      }
-      locators.push({
+    const locators = renditions.map(rendition => {
+      const core = normalizeAssetCoreRefV2(rendition?.core)
+      return {
         renditionId: rendition.renditionId,
-        coreKey: rendition.core.key,
-        start,
-        end,
-        blobId: typeof entry.blobId === 'string' ? entry.blobId : null,
-        byteLength: Number(rendition.core.byteLength) || 0,
-      })
-    }
-    // Multiple independently-cleared originals cannot be deleted atomically.
+        assetId: core.assetId,
+        coreKey: core.key,
+        start: 0,
+        end: core.length,
+        blobId: null,
+        byteLength: core.byteLength,
+        treeHash: core.treeHash,
+        blockSize: core.blockSize,
+      }
+    })
     if (locators.length !== 1) throw new Error('publication must have exactly one local original source')
     return locators
   }
@@ -1978,11 +2171,14 @@ export function createApi({
     return left.length === right.length && left.every((locator, index) => {
       const other = right[index]
       return locator.renditionId === other.renditionId &&
+        locator.assetId === other.assetId &&
         locator.coreKey === other.coreKey &&
         locator.start === other.start &&
         locator.end === other.end &&
         locator.blobId === other.blobId &&
-        locator.byteLength === other.byteLength
+        locator.byteLength === other.byteLength &&
+        locator.treeHash === other.treeHash &&
+        locator.blockSize === other.blockSize
     })
   }
 
@@ -2034,8 +2230,22 @@ export function createApi({
     return false
   }
 
+
+  function openStaticSourceCore(locator) {
+    const descriptor = createStaticAssetManifest({
+      treeHash: locator.treeHash,
+      blockLength: locator.end,
+      byteLength: locator.byteLength,
+      blockSize: locator.blockSize,
+    })
+    return ctx.store.get({
+      key: b4a.from(locator.coreKey, 'hex'),
+      manifest: descriptor.hypercoreManifest,
+      writable: false,
+    })
+  }
   async function inspectSourcePeers(locator) {
-    const core = ctx.store.get({ key: b4a.from(locator.coreKey, 'hex') })
+    const core = openStaticSourceCore(locator)
     const ownership = ownManagedApiResource(core, 'close')
     try {
       await core.ready()
@@ -2125,26 +2335,63 @@ export function createApi({
     if (sourceIsManuallyPinned(locators)) return authorize({ refusalReason: 'source-pinned' })
 
     const collectLockedEvidence = () => collectSourceOffloadEvidence(publicationId, { manifest, locators })
-    if (typeof sourceOffload.deleteSource === 'function') {
-      const authorization = await authorize({ collectEvidence: collectLockedEvidence })
-      if (!authorization.success) return authorization
-      return sourceOffload.deleteSource({ publicationId, manifest, locators })
-    }
-
     const locator = locators[0]
-    const core = ctx.store.get({ key: b4a.from(locator.coreKey, 'hex') })
-    const ownership = ownManagedApiResource(core, 'close')
+    const customDeletion = typeof sourceOffload.deleteSource === 'function'
+    let releasedOwnership = false
+    let core = null
+    let ownership = null
+    const reacquireReleasedOwnership = async () => {
+      if (!releasedOwnership || typeof scopedNetwork?.retainAuthorizedRendition !== 'function') return
+      await scopedNetwork.retainAuthorizedRendition({
+        manifest,
+        renditionId: locator.renditionId,
+        ownerId: publicationId,
+        start: locator.start,
+        end: locator.end,
+      })
+      releasedOwnership = false
+    }
     try {
-      await core.ready()
-      if (sourceIsManuallyPinned(locators)) return authorize({ refusalReason: 'source-pinned' })
+      if (!customDeletion) {
+        core = openStaticSourceCore(locator)
+        ownership = ownManagedApiResource(core, 'close')
+        await core.ready()
+        if (sourceIsManuallyPinned(locators)) return authorize({ refusalReason: 'source-pinned' })
+        if (typeof core.clear !== 'function') return { success: false, reason: 'delete-unavailable' }
+      }
+
       const authorization = await authorize({ collectEvidence: collectLockedEvidence })
       if (!authorization.success) return authorization
-      if (typeof core.clear !== 'function') return { success: false, reason: 'delete-unavailable' }
+      if (typeof scopedNetwork?.releaseAuthorizedRendition === 'function') {
+        const released = await scopedNetwork.releaseAuthorizedRendition({
+          renditionId: locator.renditionId,
+          ownerId: publicationId,
+          assetId: locator.assetId,
+        })
+        releasedOwnership = released?.released === true
+        if (released?.scopeQuiescent === false) {
+          return { success: true, freedBytes: 0, sharedRetention: true }
+        }
+      }
+
+      if (customDeletion) {
+        const result = await sourceOffload.deleteSource({ publicationId, manifest, locators })
+        if (result?.success !== true) await reacquireReleasedOwnership()
+        return result
+      }
+
       await core.clear(locator.start, locator.end)
-      await collectCorestoreGarbage(ctx.store, { label: 'confirmed source offload', log: console.warn })
+      const garbage = await collectCorestoreGarbage(ctx.store, {
+        label: 'confirmed source offload',
+        log: console.warn,
+      })
+      if (garbage.error) throw new Error(`source garbage collection failed: ${garbage.error}`)
       return { success: true, freedBytes: locator.byteLength }
+    } catch (error) {
+      await reacquireReleasedOwnership()
+      throw error
     } finally {
-      await ownership.cleanup()
+      await ownership?.cleanup?.()
     }
   }
 
@@ -2163,6 +2410,18 @@ export function createApi({
     ...operabilityApi,
     ...scopedNetworkApi,
     ...archiveParticipationApi,
+    ...createSearchApi({
+      ctx,
+      indexVerificationRuntime,
+      ensureSemanticFinder,
+      buildSearchEnvelope,
+      getPreviewVideoFromFeed,
+      isMultiWriterChannelKey,
+      loadChannel: (_ctx, channelKey) => loadChannelBounded(channelKey),
+    }),
+    openVerifiedCandidateStream(candidate, options = {}) {
+      return resolveVerifiedCandidateStream(candidate, options)
+    },
     ...createPairingApi({
       ctx,
       loadChannel: (_ctx, channelKey) => loadChannelBounded(channelKey),
@@ -3053,26 +3312,31 @@ export function createApi({
      * @param {string} driveKey
      * @param {string} videoPath
      * @param {string} [publicBeeKey] - PublicBee key for fast viewer access
-     * @param {string} [blobId] - Direct blobId (skip metadata fetch if provided)
-     * @param {string} [blobsCoreKey] - Direct blobsCoreKey (skip metadata fetch if provided)
+     * @param {string} [blobId] - Legacy direct blobId
+     * @param {string} [blobsCoreKey] - Legacy direct blobsCoreKey
      * @param {string} [mimeType] - MIME type
      * @returns {Promise<{url: string}>}
      */
     async getVideoUrl(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType) {
       console.log('[API] getVideoUrl:', driveKey?.slice(0, 16), videoPath);
 
+      const meta = await this.getVideoData(driveKey, videoPath, publicBeeKey)
+      console.log('[API] getVideoUrl meta:', meta?.id, 'blobId:', meta?.blobId, 'blobsCoreKey:', meta?.blobsCoreKey?.slice(0, 16))
+      const immutablePlayback = await resolveImmutableStaticPlayback(meta, mimeType)
+      if (immutablePlayback) return immutablePlayback
+      if (!meta || typeof meta !== 'object') {
+        throw new Error('authoritative playback metadata is unavailable')
+      }
+
       const playbackBlobRef = resolvePlaybackBlobRef(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType)
       if (playbackBlobRef?.blobId && playbackBlobRef?.blobsCoreKey) {
-        console.log('[API] getVideoUrl: INSTANT - using direct blobId/blobsCoreKey');
+        console.log('[API] getVideoUrl: immutable publication absent; using legacy direct blobId/blobsCoreKey')
         return blobPlayback.resolveDirectBlobUrl({
           blobsCoreKey: playbackBlobRef.blobsCoreKey,
           blobId: playbackBlobRef.blobId,
           mimeType: playbackBlobRef.mimeType || 'video/mp4',
         })
       }
-
-      const meta = await this.getVideoData(driveKey, videoPath, publicBeeKey)
-      console.log('[API] getVideoUrl meta:', meta?.id, 'blobId:', meta?.blobId, 'blobsCoreKey:', meta?.blobsCoreKey?.slice(0, 16))
 
       let channel = null
       if (meta?.blobId && !meta?.blobsCoreKey) {
@@ -3141,6 +3405,18 @@ export function createApi({
         resolveUrl: (...args) => this.getVideoUrl(...args),
       })
       markPlaybackTiming(timingKey, 'url-resolved')
+      if (String(prepared.url || '').includes('pt_static_asset=')) {
+        trackPlaybackTiming({
+          at: startedAt,
+          driveKey: driveKey ? String(driveKey).slice(0, 16) : null,
+          videoId: videoPath || null,
+          stages: { totalMs: Date.now() - startedAt },
+          readyForPlayback: null,
+          peerCount: null,
+          hasHeadBlock: null,
+        })
+        return prepared
+      }
       let playbackStats = null
       const onDemandStatsPromise = startOnDemandPlaybackStats(driveKey, videoPath, playbackBlobRef)
         .catch((err) => {

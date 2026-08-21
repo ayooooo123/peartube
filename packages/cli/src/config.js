@@ -32,6 +32,11 @@ import {
   VALID_MODES,
   VALID_POLICIES
 } from './constants.js'
+import {
+  companionConfigFromCli,
+  companionConfigFromEnv,
+  resolveCompanionConfig
+} from './companion/config.js'
 import { buildSourceId, classifySourceUrl } from './archive/source-id.js'
 
 function isPlainObject(value) {
@@ -376,6 +381,8 @@ function configFromEnv(env = {}) {
     }
   }
 
+  Object.assign(config, companionConfigFromEnv(env))
+
   return config
 }
 
@@ -430,6 +437,8 @@ function configFromCli(cli = {}) {
     if (cli.localMirrorPoll) config.archive.localMirror.poll = Number(cli.localMirrorPoll)
     if (cli.localMirrorChannelName) config.archive.localMirror.channelName = cli.localMirrorChannelName
   }
+
+  Object.assign(config, companionConfigFromCli(cli))
 
   return config
 }
@@ -741,6 +750,10 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
 
   config.network = deepMerge(DEFAULT_RELAY_CONFIG.network, config.network || {})
   config.logging = deepMerge(DEFAULT_RELAY_CONFIG.logging, config.logging || {})
+  config.companion = resolveCompanionConfig(config.companion, {
+    storagePath: config.storage.path
+  })
+
 
   // Whether this relay accepts other relays' archive requests and asks the
   // network to mirror what it publishes. On unless the operator says otherwise.
@@ -839,6 +852,21 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
   lines.push(
     'reseed:',
     `  enabled: ${config.reseed?.enabled !== false}`
+  )
+
+  const companion = config.companion || DEFAULT_RELAY_CONFIG.companion
+  lines.push(
+    'companion:',
+    `  enabled: ${companion.enabled !== false}`,
+    `  transport: ${companion.transport || 'unix'}`,
+    `  socketPath: ${companion.socketPath || ''}`,
+    `  host: ${companion.host || '127.0.0.1'}`,
+    `  port: ${companion.port ?? 8175}`,
+    `  client: ${companion.client || 'mediastorm'}`,
+    `  maxBodyBytes: ${companion.maxBodyBytes ?? 1048576}`,
+    `  maxClockSkewMs: ${companion.maxClockSkewMs ?? 30000}`,
+    `  maxNonces: ${companion.maxNonces ?? 4096}`,
+    '  # Set sharedSecret with PEARTUBE_COMPANION_SHARED_SECRET; secrets are never rendered.'
   )
 
   const archive = config.archive || DEFAULT_ARCHIVE_CONFIG

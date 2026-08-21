@@ -2706,6 +2706,247 @@ ns.register({
 })
 
 // ============================================
+// Distributed index candidate search
+// ============================================
+// Wire bounds are enforced by both backend adapters:
+// MAX_INDEX_CANDIDATES = 64
+// MAX_CANDIDATE_REF_BYTES = 64
+// MAX_INDEX_EXTERNAL_REFS = 32
+// MAX_INDEX_SOURCE_INDEXERS = 32
+// MAX_INDEX_HDR_FORMATS = 16
+// MAX_INDEX_AUDIO_TRACKS = 32
+// MAX_INDEX_SUBTITLE_TRACKS = 64
+// MAX_INDEX_TRACK_LANGUAGES = 32
+// MAX_INDEX_TEXT_BYTES = 512
+// No record in this contract contains a playback URL, credential, request
+// header, cookie, source record reference, or control capability.
+
+ns.register({
+  name: 'index-search-selector',
+  fields: [
+    { name: 'namespace', type: 'string', required: true },
+    { name: 'identifier', type: 'string', required: true },
+    { name: 'kind', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'index-external-reference',
+  fields: [
+    { name: 'namespace', type: 'string', required: true },
+    { name: 'identifier', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'index-episode',
+  fields: [
+    { name: 'seriesEntityId', type: 'string', required: true },
+    { name: 'seasonNumber', type: 'uint', required: true },
+    { name: 'episodeNumber', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'index-work',
+  fields: [
+    { name: 'entityId', type: 'string', required: false },
+    { name: 'title', type: 'string', required: false },
+    { name: 'releaseYear', type: 'uint', required: true },
+    { name: 'releaseYearPresent', type: 'bool', required: true },
+    { name: 'externalRefs', type: '@peartube/index-external-reference', array: true, required: true },
+    { name: 'episode', type: '@peartube/index-episode', required: false }
+  ]
+})
+
+ns.register({
+  name: 'index-edition',
+  fields: [
+    { name: 'entityId', type: 'string', required: false },
+    { name: 'label', type: 'string', required: false },
+    { name: 'kind', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'index-publication',
+  fields: [
+    { name: 'publicationId', type: 'string', required: true },
+    { name: 'publisherId', type: 'string', required: true },
+    { name: 'manifestId', type: 'string', required: true },
+    { name: 'catalogEpoch', type: 'uint', required: true },
+    { name: 'catalogEpochPresent', type: 'bool', required: true },
+    { name: 'catalogHead', type: 'string', required: false },
+    { name: 'title', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'index-audio-track',
+  fields: [
+    { name: 'codec', type: 'string', required: false },
+    { name: 'channels', type: 'uint', required: true },
+    { name: 'channelsPresent', type: 'bool', required: true },
+    { name: 'languages', type: 'string', array: true, required: true }
+  ]
+})
+
+ns.register({
+  name: 'index-subtitle-track',
+  fields: [
+    { name: 'format', type: 'string', required: false },
+    { name: 'language', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'index-rendition',
+  fields: [
+    { name: 'renditionId', type: 'string', required: true },
+    { name: 'container', type: 'string', required: false },
+    { name: 'videoCodec', type: 'string', required: false },
+    { name: 'width', type: 'uint', required: true },
+    { name: 'widthPresent', type: 'bool', required: true },
+    { name: 'height', type: 'uint', required: true },
+    { name: 'heightPresent', type: 'bool', required: true },
+    { name: 'resolutionLabel', type: 'string', required: false },
+    { name: 'hdrFormats', type: 'string', array: true, required: true },
+    { name: 'audioTracks', type: '@peartube/index-audio-track', array: true, required: true },
+    { name: 'subtitleTracks', type: '@peartube/index-subtitle-track', array: true, required: true },
+    { name: 'purpose', type: 'string', required: false },
+    { name: 'byteLength', type: 'uint', required: true },
+    { name: 'byteLengthPresent', type: 'bool', required: true },
+  ]
+})
+
+ns.register({
+  name: 'index-asset',
+  fields: [
+    { name: 'assetId', type: 'string', required: false },
+    { name: 'coreKey', type: 'string', required: false },
+    { name: 'treeHash', type: 'string', required: false },
+    { name: 'blockLength', type: 'uint', required: true },
+    { name: 'blockLengthPresent', type: 'bool', required: true },
+    { name: 'blockSize', type: 'uint', required: true },
+    { name: 'blockSizePresent', type: 'bool', required: true },
+    { name: 'byteLength', type: 'uint', required: true },
+    { name: 'byteLengthPresent', type: 'bool', required: true },
+  ]
+})
+
+ns.register({
+  name: 'index-provenance',
+  fields: [
+    { name: 'sourceKind', type: 'string', required: false },
+    { name: 'releaseName', type: 'string', required: false },
+    { name: 'publicInfohash', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'index-availability',
+  fields: [
+    { name: 'peers', type: 'uint', required: true },
+    { name: 'peersPresent', type: 'bool', required: true },
+    { name: 'completeSeeders', type: 'uint', required: true },
+    { name: 'completeSeedersPresent', type: 'bool', required: true },
+    { name: 'observedAtMs', type: 'uint', required: true },
+    { name: 'observedAtMsPresent', type: 'bool', required: true },
+    { name: 'expiresAtMs', type: 'uint', required: true },
+    { name: 'expiresAtMsPresent', type: 'bool', required: true },
+  ]
+})
+
+ns.register({
+  name: 'index-source-indexer',
+  fields: [
+    { name: 'indexerId', type: 'string', required: true },
+    { name: 'observedAtMs', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'index-publisher-descriptor',
+  fields: [
+    { name: 'publisherId', type: 'string', required: true },
+    { name: 'publisherRootKey', type: 'string', required: true },
+    { name: 'catalogBootstrapKey', type: 'string', required: true },
+    { name: 'catalogEpoch', type: 'uint', required: true },
+    { name: 'policySequence', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'index-catalog-head',
+  fields: [
+    { name: 'viewKey', type: 'string', required: true },
+    { name: 'length', type: 'uint', required: true },
+    { name: 'digest', type: 'string', required: true },
+    { name: 'authorizationStateDigest', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'index-verification',
+  fields: [
+    { name: 'state', type: 'string', required: true },
+    { name: 'publisherDescriptor', type: '@peartube/index-publisher-descriptor', required: false },
+    { name: 'catalogHead', type: '@peartube/index-catalog-head', required: false }
+  ]
+})
+
+ns.register({
+  name: 'index-candidate-v2',
+  fields: [
+    { name: 'schemaVersion', type: 'uint', required: true },
+    { name: 'candidateRef', type: 'string', required: true },
+    { name: 'work', type: '@peartube/index-work', required: true },
+    { name: 'edition', type: '@peartube/index-edition', required: false },
+    { name: 'publication', type: '@peartube/index-publication', required: true },
+    { name: 'rendition', type: '@peartube/index-rendition', required: true },
+    { name: 'asset', type: '@peartube/index-asset', required: true },
+    { name: 'provenance', type: '@peartube/index-provenance', required: true },
+    { name: 'availability', type: '@peartube/index-availability', required: true },
+    { name: 'verification', type: '@peartube/index-verification', required: true },
+    { name: 'sourceIndexers', type: '@peartube/index-source-indexer', array: true, required: true }
+  ]
+})
+
+ns.register({
+  name: 'search-index-candidates-request',
+  fields: [
+    { name: 'selector', type: '@peartube/index-search-selector', required: true }
+  ]
+})
+
+ns.register({
+  name: 'search-index-candidates-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'candidates', type: '@peartube/index-candidate-v2', array: true, required: true },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'errorMessage', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'verify-index-candidate-request',
+  fields: [
+    { name: 'candidateRef', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'verify-index-candidate-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'candidate', type: '@peartube/index-candidate-v2', required: false },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'errorMessage', type: 'string', required: false }
+  ]
+})
+
+// ============================================
 // Multi-device channel pairing
 // ============================================
 
@@ -3525,6 +3766,25 @@ ns.register({
 })
 
 ns.register({
+  name: 'log-watch-event-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'duration', type: 'uint', required: false },
+    { name: 'completed', type: 'bool', required: false },
+    { name: 'share', type: 'bool', required: false }
+  ]
+})
+
+ns.register({
+  name: 'log-watch-event-response',
+  fields: [
+    { name: 'success', type: 'bool', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
   name: 'index-video-vectors-request',
   fields: [
     { name: 'channelKey', type: 'string', required: true },
@@ -4332,6 +4592,24 @@ rpcNs.register({
   name: 'search-videos',
   request: { name: '@peartube/search-videos-request', stream: false },
   response: { name: '@peartube/search-videos-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'search-index-candidates',
+  request: { name: '@peartube/search-index-candidates-request', stream: false },
+  response: { name: '@peartube/search-index-candidates-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'verify-index-candidate',
+  request: { name: '@peartube/verify-index-candidate-request', stream: false },
+  response: { name: '@peartube/verify-index-candidate-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'log-watch-event',
+  request: { name: '@peartube/log-watch-event-request', stream: false },
+  response: { name: '@peartube/log-watch-event-response', stream: false }
 })
 
 rpcNs.register({

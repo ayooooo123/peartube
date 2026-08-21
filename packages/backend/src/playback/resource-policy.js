@@ -361,6 +361,34 @@ export function createPlaybackResourcePolicy(options = {}) {
     maxDiskBytes: boundedInteger(options.maxDiskBytes, 'maxDiskBytes', 512 * 1024 * 1024),
     deadlineMs: boundedInteger(options.deadlineMs, 'deadlineMs', 15000),
   }
+  let generation = 0
+  let previousAcquisitionRole = null
+
+  /**
+   * The acquisition-role decision: what this host may hold on to, gated by the
+   * two explicit permissions (contribute, archive) and by a pending policy
+   * migration. It is separate from the five-key playback projection below,
+   * because a role change has to invalidate in-flight acquisition, while a
+   * device-signal change only narrows what playback itself may do.
+   */
+  function evaluateAcquisition(state = {}) {
+    const foreground = state.foreground !== false
+    const discoveryAllowed = state.userAllowsP2P !== false
+    const unconstrained = state.metered !== true && state.thermalState !== 'serious' && state.thermalState !== 'critical'
+    const powered = state.charging !== false
+    const contribute = state.permissions?.contribute === true &&
+      state.migrationRequired !== true
+    const archive = state.permissions?.archive === true &&
+      state.migrationRequired !== true
+    return {
+      localPlayback: true,
+      peerDiscovery: discoveryAllowed && foreground && unconstrained,
+      upload: (contribute || archive) && foreground && unconstrained && powered,
+      cacheFill: discoveryAllowed && foreground && unconstrained,
+      contributionCache: contribute && foreground && unconstrained,
+      archiving: archive && foreground && unconstrained && powered,
+    }
+  }
 
   return {
     limits() {
@@ -368,6 +396,14 @@ export function createPlaybackResourcePolicy(options = {}) {
     },
     evaluate(state = {}) {
       const source = state == null ? {} : state
+      // An explicit permission set is theirs to withhold: a watch-only viewer
+      // downloads and discovers, and uploads nothing. Legacy state that never
+      // mentions permissions keeps its historical contribution.
+      const permissions = source.permissions
+      const contributeAllowed = permissions == null
+        ? true
+        : (permissions.contribute === true || permissions.archive === true) &&
+          source.migrationRequired !== true
       const participation = evaluateParticipation({
         ...source,
         thermalState: source.thermalState ?? LEGACY_SIGNAL_DEFAULTS.thermalState,
@@ -384,15 +420,25 @@ export function createPlaybackResourcePolicy(options = {}) {
         // The pledge is never assumed: an archive commitment needs the same
         // explicit opt-in here as anywhere else, and it is owned by the archive
         // policy, which reads evaluateParticipation() with the real opt-in.
-        archiveOptIn: source.archiveOptIn === true,
+        // The archive permission is that same pledge arriving through the
+        // permission set, and a pending migration withdraws it.
+        archiveOptIn: source.archiveOptIn === true ||
+          (permissions?.archive === true && source.migrationRequired !== true),
       })
       return {
         localPlayback: participation.localPlayback,
         peerDiscovery: participation.peerDiscovery,
-        upload: participation.upload,
+        upload: participation.upload && contributeAllowed,
         cacheFill: participation.cacheFill,
         archiving: participation.archiving,
       }
+    },
+    transition(state = {}) {
+      const decision = evaluateAcquisition(state)
+      const acquisitionRole = `${decision.contributionCache}:${decision.archiving}`
+      if (previousAcquisitionRole !== null && acquisitionRole !== previousAcquisitionRole) generation++
+      previousAcquisitionRole = acquisitionRole
+      return { ...decision, generation }
     },
   }
 }

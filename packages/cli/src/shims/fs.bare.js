@@ -4,10 +4,13 @@
 // project measuring nothing on a Bare relay while its tests passed on Node.
 export {
   closeSync,
+  chmodSync,
   createReadStream,
+  fsyncSync,
   existsSync,
   mkdirSync,
   openSync,
+  lstatSync,
   readdirSync,
   readFileSync,
   rmSync,

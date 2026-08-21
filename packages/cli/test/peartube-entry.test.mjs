@@ -34,6 +34,12 @@ test('package exposes only the new peartube alias beside legacy executables', (t
   })
 })
 
+test('CLI source entrypoint instantiates without obsolete stream lease exports', async (t) => {
+  const entry = await import('../src/index.js')
+  t.is(typeof entry.createCompanionRouter, 'function')
+  t.is('createStreamLeaseStore' in entry, false)
+})
+
 test('help prints stable usage without loading command modules', async (t) => {
   const stdout = memoryStream()
   const stderr = memoryStream()

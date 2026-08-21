@@ -36,6 +36,11 @@ test('backend result and CLI-facing API use only the universal scoped network co
     t.ok(runtime.includes(method), `runtime implements ${method}`)
     t.ok(api.includes('createScopedNetworkApi'), 'API composes scoped runtime methods')
   }
+  t.ok(
+    orchestrator.includes('services: maximum => scopedNetwork.listRetainedIndexServiceAdapters(maximum)'),
+    'production verifier resolves retained index services only when MediaStorm searches',
+  )
+  t.ok(runtime.includes('listRetainedIndexServiceAdapters'), 'scoped runtime owns the bounded index query adapters')
   t.is(cliRuntime.includes('publicFeed'), false, 'CLI-facing runtime type has no publicFeed result')
 })
 

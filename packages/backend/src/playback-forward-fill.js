@@ -40,6 +40,9 @@ export const DEFAULT_FORWARD_FILL_CONFIG = {
   minIntervalMs: 1000,
   // Bound how many blob cores we keep a fill session open for at once.
   maxTrackedCores: 4,
+  // Static prefetch shares the scheduler's 64 MiB global transfer budget.
+  maxStaticFillBytes: 64 * MB,
+  staticDeadlineMs: 15_000,
 }
 
 /**
@@ -87,10 +90,11 @@ export function computeForwardFillRange(event, config, lastAnchorBlock = null) {
 
 export class PlaybackForwardFill {
   /**
-   * @param {{ store: import('corestore'), config?: Partial<typeof DEFAULT_FORWARD_FILL_CONFIG>, log?: (...args: any[]) => void }} options
+   * @param {{ store: import('corestore'), staticAssetEntries?: Map<string, any>, config?: Partial<typeof DEFAULT_FORWARD_FILL_CONFIG>, log?: (...args: any[]) => void }} options
    */
-  constructor({ store, config = {}, log = console.log } = {}) {
+  constructor({ store, staticAssetEntries = new Map(), config = {}, log = console.log } = {}) {
     this.store = store
+    this.staticAssetEntries = staticAssetEntries
     this.config = { ...DEFAULT_FORWARD_FILL_CONFIG, ...config }
     this.log = typeof log === 'function' ? log : () => {}
     /** @type {Map<string, { core: any, range: any, anchorBlock: number, lastFillAt: number, opening: boolean }>} */
@@ -118,20 +122,65 @@ export class PlaybackForwardFill {
   }
 
   onPlayhead(event) {
-    if (this.stopped) return
-    if (!this.store || !event?.coreKeyHex) return
+    if (this.stopped || !event?.coreKeyHex) return
+    const isStatic = typeof event.staticAssetId === 'string'
+    if (!isStatic && !this.store) return
     const state = this.coreState.get(event.coreKeyHex) || null
 
     const now = Date.now()
-    if (state?.opening) return
+    if (!isStatic && state?.opening) return
     if (state && now - state.lastFillAt < this.config.minIntervalMs) return
 
     const range = computeForwardFillRange(event, this.config, state ? state.anchorBlock : null)
     if (!range) return
 
+    if (isStatic) {
+      const entry = this.staticAssetEntries.get(event.staticAssetId)
+      if (!entry || entry.coreRef?.assetId !== event.staticAssetId || typeof entry.scheduler?.requestRange !== 'function') return
+      this.anchorStaticFill(event.coreKeyHex, entry, range.start, range.end)
+        .catch((err) => this.log('[PlaybackForwardFill] static fill failed:', err?.errorCode || err?.message))
+      return
+    }
+
     // Fire-and-forget: filling must never block or throw into the serving path.
     this.anchorFill(event.coreKeyHex, range.start, range.end)
       .catch((err) => this.log('[PlaybackForwardFill] fill failed:', err?.message))
+  }
+
+  async anchorStaticFill(coreKeyHex, entry, start, end) {
+    if (this.stopped) return
+    let state = this.coreState.get(coreKeyHex)
+    if (!state) {
+      state = { core: null, range: null, controller: null, anchorBlock: -1, lastFillAt: 0, opening: false, released: false }
+      this.coreState.set(coreKeyHex, state)
+    }
+    state.controller?.abort()
+    const controller = new AbortController()
+    state.controller = controller
+    state.anchorBlock = start
+    state.lastFillAt = Date.now()
+    state.released = false
+    this._enforceTrackedLimit(coreKeyHex)
+
+    const byteStart = start * entry.coreRef.blockSize
+    const requestedEnd = Math.min(entry.coreRef.byteLength, end * entry.coreRef.blockSize)
+    const byteEnd = Math.min(requestedEnd, byteStart + this.config.maxStaticFillBytes)
+    entry.scheduler.seek({ byteStart })
+    const result = await entry.scheduler.requestRange({
+      assetId: entry.coreRef.assetId,
+      byteStart,
+      byteEnd,
+      deadlineMs: this.config.staticDeadlineMs,
+      priority: 'prefetch',
+      materialize: false,
+      signal: controller.signal,
+    })
+    if (result?.status !== 'ok') {
+      const error = new Error(result?.errorCode || 'static forward fill unavailable')
+      error.errorCode = result?.errorCode || 'NO_VERIFIED_SOURCE'
+      throw error
+    }
+    if (state.controller === controller) state.controller = null
   }
 
   async anchorFill(coreKeyHex, start, end) {
@@ -204,6 +253,8 @@ export class PlaybackForwardFill {
   _releaseState(state) {
     if (!state) return Promise.resolve()
     state.released = true
+    state.controller?.abort()
+    state.controller = null
     if (state.range) {
       try { state.range.destroy?.() } catch { /* best effort */ }
       state.range = null

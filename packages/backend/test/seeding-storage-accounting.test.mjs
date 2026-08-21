@@ -70,8 +70,19 @@ const GB = 1024 * 1024 * 1024
 const coreA = 'aa'.repeat(32)
 const coreB = 'bb'.repeat(32)
 
+async function enableRetention(manager, contributionBudgetBytes = 20 * GB, archiveBudgetBytes = 20 * GB) {
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: true,
+    archiveEnabled: true,
+    contributionBudgetBytes,
+    archiveBudgetBytes,
+    migrationRequired: false
+  })
+}
+
 test('storage stats include actual app P2P disk usage separately from tracked cache quota', async (t) => {
   const manager = new SeedingManager(createStore({ diskUsageBytes: 10 * GB }), createMetaDb())
+  await enableRetention(manager)
   await manager.setConfig({ maxStorageGB: 20 })
 
   await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', {
@@ -93,6 +104,7 @@ test('storage stats include actual app P2P disk usage separately from tracked ca
 test('clearCache reports app P2P disk usage after clearing tracked non-pinned cache', async (t) => {
   const store = createStore({ diskUsageBytes: 6 * GB })
   const manager = new SeedingManager(store, createMetaDb())
+  await enableRetention(manager)
   await manager.setConfig({ maxStorageGB: 20 })
 
   await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', {
@@ -120,6 +132,7 @@ test('clearCache schedules Corestore compaction after returning storage stats', 
     compactedDiskUsageBytes: 4 * GB
   })
   const manager = new SeedingManager(store, createMetaDb(), createTimerOptions(timers))
+  await enableRetention(manager)
   await manager.setConfig({ maxStorageGB: 20 })
 
   await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', {
@@ -153,6 +166,7 @@ test('quota enforcement evicts tracked cache once the cached bytes exceed the li
   const timers = []
   const store = createStore({ diskUsageBytes: 10 * GB, clearDiskUsageBytes: 4 * GB })
   const manager = new SeedingManager(store, createMetaDb(), createTimerOptions(timers))
+  await enableRetention(manager)
   await manager.setConfig({ maxStorageGB: 20 })
 
   await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', {
@@ -178,6 +192,7 @@ test('quota enforcement evicts tracked cache once the cached bytes exceed the li
 test('network policy applies an exact byte disk ceiling including zero', async (t) => {
   const store = createStore({ diskUsageBytes: 1, clearDiskUsageBytes: 1 })
   const manager = new SeedingManager(store, createMetaDb())
+  await enableRetention(manager)
   await manager.setConfig({ maxStorageGB: 20 })
   await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', {
     byteLength: 1,
@@ -198,6 +213,7 @@ test('quota enforcement leaves cache intact when only the user\'s uploads exceed
   // must NOT evict that cache — uploads do not count against the cache quota.
   const store = createStore({ diskUsageBytes: 10 * GB, clearDiskUsageBytes: 4 * GB })
   const manager = new SeedingManager(store, createMetaDb())
+  await enableRetention(manager)
   await manager.setConfig({ maxStorageGB: 20 })
 
   await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', {
@@ -233,4 +249,32 @@ test('the runtime fs resolvers an ES module can actually use', async (t) => {
     'and it exposes a stat the measurer can walk a directory with'
   )
   t.ok(typeof path.join === 'function', 'and a join to descend with')
+})
+
+test('watch-only blocks public seeds while contribution eviction preserves archive pins', async (t) => {
+  const manager = new SeedingManager(createStore(), createMetaDb())
+  await t.exception(
+    manager.addSeed('drive-a', 'videos/watch.mp4', 'watched', { byteLength: 4 }),
+    /explicit contribution-cache permission/
+  )
+
+  await enableRetention(manager, 8, 16)
+  await manager.addSeed('drive-a', 'videos/watch.mp4', 'watched', { byteLength: 8 })
+  await manager.addSeed('drive-b', 'videos/archive.mp4', 'archive', { byteLength: 12 })
+  await t.exception(
+    manager.addSeed('drive-c', 'videos/over.mp4', 'watched', { byteLength: 1 }),
+    /contribution-cache budget exceeded/
+  )
+
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: false,
+    archiveEnabled: true,
+    contributionBudgetBytes: 0,
+    archiveBudgetBytes: 16,
+    migrationRequired: false
+  })
+  const status = await manager.getStatus()
+  t.is(status.activeContributionSeeds, 0)
+  t.is(status.activeArchivePins, 1)
+  t.is(status.retention.archiveUsedBytes, 12)
 })

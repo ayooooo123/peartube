@@ -121,6 +121,7 @@ export const SHARED_HANDLER_NAMES = [
   'GetNetworkPolicy',
   'RetrySyncChannel',
   'SearchVideos',
+  'SearchIndexCandidates',
   'SetActiveIdentity',
   'SetSeedingConfig',
   'SetNetworkPolicy',
@@ -144,6 +145,7 @@ export const SHARED_HANDLER_NAMES = [
   'UpdateVideoMetadata',
   'UploadVideo',
   'VerifyAttestation',
+  'VerifyIndexCandidate',
   'WebPreparePlayback',
   // Operability, migration, portability, and local capacity diagnostics
   'GetMigrationStatus',

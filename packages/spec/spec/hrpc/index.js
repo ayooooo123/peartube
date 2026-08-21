@@ -259,54 +259,60 @@ const methods = new Map([
   [124, '@peartube/event-cast-time-update'],
   ['@peartube/search-videos', 125],
   [125, '@peartube/search-videos'],
-  ['@peartube/index-video-vectors', 126],
-  [126, '@peartube/index-video-vectors'],
-  ['@peartube/update-video-metadata', 127],
-  [127, '@peartube/update-video-metadata'],
-  ['@peartube/get-media-catalog', 128],
-  [128, '@peartube/get-media-catalog'],
-  ['@peartube/get-media-entity', 129],
-  [129, '@peartube/get-media-entity'],
-  ['@peartube/get-media-collection', 130],
-  [130, '@peartube/get-media-collection'],
-  ['@peartube/get-media-collection-items', 131],
-  [131, '@peartube/get-media-collection-items'],
-  ['@peartube/get-media-agent', 132],
-  [132, '@peartube/get-media-agent'],
-  ['@peartube/get-agent-contributions', 133],
-  [133, '@peartube/get-agent-contributions'],
-  ['@peartube/get-publication-sources', 134],
-  [134, '@peartube/get-publication-sources'],
-  ['@peartube/get-entity-artwork', 135],
-  [135, '@peartube/get-entity-artwork'],
-  ['@peartube/get-claim-provenance', 136],
-  [136, '@peartube/get-claim-provenance'],
-  ['@peartube/set-source-preference', 137],
-  [137, '@peartube/set-source-preference'],
-  ['@peartube/prepare-media-playback', 138],
-  [138, '@peartube/prepare-media-playback'],
-  ['@peartube/desktop-bootstrap', 139],
-  [139, '@peartube/desktop-bootstrap'],
-  ['@peartube/desktop-shutdown', 140],
-  [140, '@peartube/desktop-shutdown'],
-  ['@peartube/desktop-refresh-browse', 141],
-  [141, '@peartube/desktop-refresh-browse'],
-  ['@peartube/ffmpeg-decode-available', 142],
-  [142, '@peartube/ffmpeg-decode-available'],
-  ['@peartube/update-channel-avatar', 143],
-  [143, '@peartube/update-channel-avatar'],
-  ['@peartube/transcode-start', 144],
-  [144, '@peartube/transcode-start'],
-  ['@peartube/transcode-stop', 145],
-  [145, '@peartube/transcode-stop'],
-  ['@peartube/transcode-status', 146],
-  [146, '@peartube/transcode-status'],
-  ['@peartube/event-transcode-progress', 147],
-  [147, '@peartube/event-transcode-progress'],
-  ['@peartube/get-participation-status', 148],
-  [148, '@peartube/get-participation-status'],
-  ['@peartube/set-device-conditions', 149],
-  [149, '@peartube/set-device-conditions']
+  ['@peartube/search-index-candidates', 126],
+  [126, '@peartube/search-index-candidates'],
+  ['@peartube/verify-index-candidate', 127],
+  [127, '@peartube/verify-index-candidate'],
+  ['@peartube/log-watch-event', 128],
+  [128, '@peartube/log-watch-event'],
+  ['@peartube/index-video-vectors', 129],
+  [129, '@peartube/index-video-vectors'],
+  ['@peartube/update-video-metadata', 130],
+  [130, '@peartube/update-video-metadata'],
+  ['@peartube/get-media-catalog', 131],
+  [131, '@peartube/get-media-catalog'],
+  ['@peartube/get-media-entity', 132],
+  [132, '@peartube/get-media-entity'],
+  ['@peartube/get-media-collection', 133],
+  [133, '@peartube/get-media-collection'],
+  ['@peartube/get-media-collection-items', 134],
+  [134, '@peartube/get-media-collection-items'],
+  ['@peartube/get-media-agent', 135],
+  [135, '@peartube/get-media-agent'],
+  ['@peartube/get-agent-contributions', 136],
+  [136, '@peartube/get-agent-contributions'],
+  ['@peartube/get-publication-sources', 137],
+  [137, '@peartube/get-publication-sources'],
+  ['@peartube/get-entity-artwork', 138],
+  [138, '@peartube/get-entity-artwork'],
+  ['@peartube/get-claim-provenance', 139],
+  [139, '@peartube/get-claim-provenance'],
+  ['@peartube/set-source-preference', 140],
+  [140, '@peartube/set-source-preference'],
+  ['@peartube/prepare-media-playback', 141],
+  [141, '@peartube/prepare-media-playback'],
+  ['@peartube/desktop-bootstrap', 142],
+  [142, '@peartube/desktop-bootstrap'],
+  ['@peartube/desktop-shutdown', 143],
+  [143, '@peartube/desktop-shutdown'],
+  ['@peartube/desktop-refresh-browse', 144],
+  [144, '@peartube/desktop-refresh-browse'],
+  ['@peartube/ffmpeg-decode-available', 145],
+  [145, '@peartube/ffmpeg-decode-available'],
+  ['@peartube/update-channel-avatar', 146],
+  [146, '@peartube/update-channel-avatar'],
+  ['@peartube/transcode-start', 147],
+  [147, '@peartube/transcode-start'],
+  ['@peartube/transcode-stop', 148],
+  [148, '@peartube/transcode-stop'],
+  ['@peartube/transcode-status', 149],
+  [149, '@peartube/transcode-status'],
+  ['@peartube/event-transcode-progress', 150],
+  [150, '@peartube/event-transcode-progress'],
+  ['@peartube/get-participation-status', 151],
+  [151, '@peartube/get-participation-status'],
+  ['@peartube/set-device-conditions', 152],
+  [152, '@peartube/set-device-conditions']
 ])
 
 class HRPC {
@@ -440,6 +446,9 @@ class HRPC {
       ['@peartube/event-cast-playback-state', getEncoding('@peartube/event-cast-playback-state')],
       ['@peartube/event-cast-time-update', getEncoding('@peartube/event-cast-time-update')],
       ['@peartube/search-videos', getEncoding('@peartube/search-videos-request')],
+      ['@peartube/search-index-candidates', getEncoding('@peartube/search-index-candidates-request')],
+      ['@peartube/verify-index-candidate', getEncoding('@peartube/verify-index-candidate-request')],
+      ['@peartube/log-watch-event', getEncoding('@peartube/log-watch-event-request')],
       ['@peartube/index-video-vectors', getEncoding('@peartube/index-video-vectors-request')],
       ['@peartube/update-video-metadata', getEncoding('@peartube/update-video-metadata-request')],
       ['@peartube/get-media-catalog', getEncoding('@peartube/media-page-request')],
@@ -581,6 +590,9 @@ class HRPC {
       ['@peartube/cast-get-state', getEncoding('@peartube/cast-get-state-response')],
       ['@peartube/cast-is-connected', getEncoding('@peartube/cast-is-connected-response')],
       ['@peartube/search-videos', getEncoding('@peartube/search-videos-response')],
+      ['@peartube/search-index-candidates', getEncoding('@peartube/search-index-candidates-response')],
+      ['@peartube/verify-index-candidate', getEncoding('@peartube/verify-index-candidate-response')],
+      ['@peartube/log-watch-event', getEncoding('@peartube/log-watch-event-response')],
       ['@peartube/index-video-vectors', getEncoding('@peartube/index-video-vectors-response')],
       ['@peartube/update-video-metadata', getEncoding('@peartube/update-video-metadata-response')],
       ['@peartube/get-media-catalog', getEncoding('@peartube/get-media-catalog-response')],
@@ -611,17 +623,17 @@ class HRPC {
       const responseEncoding = this._responseEncodings.get(command)
       const requestEncoding = this._requestEncodings.get(command)
       if (this._requestIsSend(command)) {
-        const request = req.data ? c.decode(requestEncoding, req.data) : null
+        const request = req.data && req.data.byteLength > 0 ? c.decode(requestEncoding, req.data) : null
         await this._handlers[command](request)
         return
       }
       if (!this._requestIsStream(command) && !this._responseIsStream(command)) {
-        const request = req.data ? c.decode(requestEncoding, req.data) : null
+        const request = req.data && req.data.byteLength > 0 ? c.decode(requestEncoding, req.data) : null
         const response = await this._handlers[command](request)
         req.reply(c.encode(responseEncoding, response))
       }
       if (!this._requestIsStream(command) && this._responseIsStream(command)) {
-        const request = req.data ? c.decode(requestEncoding, req.data) : null
+        const request = req.data && req.data.byteLength > 0 ? c.decode(requestEncoding, req.data) : null
         const responseStream = new RPCStream(
           null,
           null,
@@ -1204,6 +1216,18 @@ class HRPC {
 
   async searchVideos(args) {
     return this._call('@peartube/search-videos', args)
+  }
+
+  async searchIndexCandidates(args) {
+    return this._call('@peartube/search-index-candidates', args)
+  }
+
+  async verifyIndexCandidate(args) {
+    return this._call('@peartube/verify-index-candidate', args)
+  }
+
+  async logWatchEvent(args) {
+    return this._call('@peartube/log-watch-event', args)
   }
 
   async indexVideoVectors(args) {
@@ -1804,6 +1828,18 @@ class HRPC {
 
   onSearchVideos(responseFn) {
     this._handlers['@peartube/search-videos'] = responseFn
+  }
+
+  onSearchIndexCandidates(responseFn) {
+    this._handlers['@peartube/search-index-candidates'] = responseFn
+  }
+
+  onVerifyIndexCandidate(responseFn) {
+    this._handlers['@peartube/verify-index-candidate'] = responseFn
+  }
+
+  onLogWatchEvent(responseFn) {
+    this._handlers['@peartube/log-watch-event'] = responseFn
   }
 
   onIndexVideoVectors(responseFn) {

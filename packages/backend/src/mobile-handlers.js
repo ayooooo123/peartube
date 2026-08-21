@@ -9,6 +9,10 @@
 
 import { resolveCompatPlaybackUrl } from './transcode/playback-compat-runtime.mjs'
 import { normalizeUploadVideoMediaMetadata } from './upload-video-contract.js'
+import {
+  searchIndexCandidatesForTransport,
+  verifyIndexCandidateForTransport,
+} from './search/candidate-contract.js'
 
 function isPearTubeLoopbackBlobUrl(value) {
   if (typeof value !== 'string' || value.length === 0) return false
@@ -398,6 +402,9 @@ export function attachMobileHandlers(B, deps) {
   }
   B.transcodeStop = async (r) => { try { const res = await transcoder.stopTranscode(r.sessionId); return { success: res.success, error: res.error || '' } } catch (err) { return { success: false, error: err?.message } } }
   B.transcodeStatus = async (r) => { try { const s = await transcoder.getStatus(r.sessionId); return { status: s.status || '', progress: s.progress || 0, bytesWritten: s.bytesWritten || 0, error: s.error || '' } } catch (err) { return { status: 'error', progress: 0, bytesWritten: 0, error: err?.message } } }
+
+  B.searchIndexCandidates = (r) => searchIndexCandidatesForTransport(api, r)
+  B.verifyIndexCandidate = (r) => verifyIndexCandidateForTransport(api, r)
 
   B.globalSearchVideos = async (r) => {
     try { const raw = await api.globalSearchVideos(r.query, { topK: r.topK || 20 }); return { results: (raw || []).map((i) => ({ id: String(i.id || ''), score: i.score != null ? String(i.score) : null, metadata: i.metadata ? JSON.stringify(i.metadata) : null })) } }

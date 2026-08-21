@@ -132,6 +132,15 @@ function mergeSeedReason(existingReason, nextReason) {
     : existingReason
 }
 
+function retentionClassForReason(reason) {
+  return isProtectedSeedReason(reason) ? 'archive-pin' : 'contribution-cache'
+}
+
+function seedStorageBytes(seed) {
+  return normalizeStorageBytes(seed?.bytes) + normalizeStorageBytes(seed?.thumbnailBytes)
+}
+
+
 function hasFiniteByteLength(blobInfo) {
   return Number.isFinite(Number(blobInfo?.byteLength)) && Number(blobInfo.byteLength) >= 0
 }
@@ -218,6 +227,13 @@ export class SeedingManager {
       uploadAllowed: false,
       outboundBytesPerSecond: null,
       outboundRateEnforced: false,
+    };
+    this.retentionPolicy = {
+      contributeWatchedMedia: false,
+      archiveEnabled: false,
+      contributionBudgetBytes: 0,
+      archiveBudgetBytes: 0,
+      migrationRequired: true
     };
     console.log('[SeedingManager] Initialized');
   }
@@ -350,12 +366,49 @@ export class SeedingManager {
     const seedsData = await this.metaDb.get('active-seeds');
     if (seedsData?.value) {
       for (const [key, info] of Object.entries(seedsData.value)) {
-        this.activeSeeds.set(key, /** @type {SeedInfo} */ (info));
+        this.activeSeeds.set(key, {
+          ...info,
+          retentionClass: info.retentionClass || retentionClassForReason(info.reason)
+        });
       }
       console.log('[SeedingManager] Loaded', this.activeSeeds.size, 'active seeds');
     }
   }
 
+
+  retentionUsage(excludeKey = null) {
+    const usage = { contributionUsedBytes: 0, archiveUsedBytes: 0 }
+    for (const [key, seed] of this.activeSeeds) {
+      if (key === excludeKey) continue
+      const field = seed.retentionClass === 'archive-pin' ? 'archiveUsedBytes' : 'contributionUsedBytes'
+      usage[field] += seedStorageBytes(seed)
+    }
+    return usage
+  }
+
+  assertRetentionAdmission(reason, blobInfo, existingKey = null) {
+    const retentionClass = retentionClassForReason(reason)
+    const policy = this.retentionPolicy
+    const allowed = retentionClass === 'archive-pin'
+      ? policy.archiveEnabled
+      : policy.contributeWatchedMedia
+    const budget = retentionClass === 'archive-pin'
+      ? policy.archiveBudgetBytes
+      : policy.contributionBudgetBytes
+    if (policy.migrationRequired || !allowed || budget <= 0) {
+      throw new SeedingAuthorizationError(`explicit ${retentionClass} permission is required`)
+    }
+    const usage = this.retentionUsage(existingKey)
+    const used = retentionClass === 'archive-pin'
+      ? usage.archiveUsedBytes
+      : usage.contributionUsedBytes
+    const requested = normalizeByteLength(blobInfo, 0) +
+      normalizeStorageBytes(blobInfo?.thumbnailByteLength)
+    if (used + requested > budget) {
+      throw new SeedingAuthorizationError(`${retentionClass} budget exceeded`)
+    }
+    return retentionClass
+  }
 
   /**
    * Add a seed for a video
@@ -368,21 +421,26 @@ export class SeedingManager {
    */
   async addSeed(driveKey, videoPath, reason, blobInfo, options = {}) {
     this.assertAuthorizedForSeed(driveKey, reason, options)
+    const key = `${driveKey}:${videoPath}`;
+    const existingSeed = this.activeSeeds.get(key)
+    const mergedReason = existingSeed ? mergeSeedReason(existingSeed.reason, reason) : reason
+    const retentionClass = this.assertRetentionAdmission(mergedReason, blobInfo, key)
 
     if (!this.config.autoSeedWatched && reason === 'watched') {
       console.log('[SeedingManager] Auto-seed watched disabled, skipping');
       return false;
     }
 
-    const key = `${driveKey}:${videoPath}`;
+    // Admission is rechecked at the mutation boundary above.
 
     // Check if already seeding
-    if (this.activeSeeds.has(key)) {
+    if (existingSeed) {
       console.log('[SeedingManager] Already seeding:', key.slice(0, 32));
-      const existing = this.activeSeeds.get(key)
+      const existing = existingSeed
       const updatedSeedInfo = {
         ...existing,
-        reason: mergeSeedReason(existing.reason, reason),
+        reason: mergedReason,
+        retentionClass,
         blocks: blobInfo?.blockLength || existing.blocks || 0,
         bytes: normalizeByteLength(blobInfo, existing.bytes || 0),
         thumbnailBytes: blobInfo?.thumbnailByteLength == null
@@ -409,6 +467,7 @@ export class SeedingManager {
       driveKey,
       videoPath,
       reason,
+      retentionClass,
       addedAt: Date.now(),
       blocks: blobInfo?.blockLength || 0,
       bytes: normalizeByteLength(blobInfo, 0),
@@ -445,6 +504,9 @@ export class SeedingManager {
     const key = `${driveKey}:${videoPath}`;
     if (this.activeSeeds.has(key)) {
       const seed = this.activeSeeds.get(key);
+      if (seed.retentionClass === 'archive-pin' && options.archivePinRemoval !== true) {
+        return false;
+      }
       this.activeSeeds.delete(key);
       let clearedBlob = false;
       if (options.clearBlob !== false) {
@@ -458,6 +520,17 @@ export class SeedingManager {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Remove an archive pin only through an explicit archive operation.
+   * Generic cache eviction/removal cannot release archival custody.
+   */
+  async removeArchivePin(driveKey, videoPath, options = {}) {
+    const key = `${driveKey}:${videoPath}`;
+    const seed = this.activeSeeds.get(key);
+    if (!seed || seed.retentionClass !== 'archive-pin') return false;
+    return this.removeSeed(driveKey, videoPath, { ...options, archivePinRemoval: true });
   }
 
   /**
@@ -498,9 +571,17 @@ export class SeedingManager {
     uploadAllowed,
     outboundBytesPerSecond,
     outboundRateEnforced,
+    contributeWatchedMedia = false,
+    archiveEnabled = false,
+    contributionBudgetBytes = 0,
+    archiveBudgetBytes = 0,
+    migrationRequired = true
   } = {}) {
-    const ceiling = Number(diskCeilingBytes)
-    if (!Number.isSafeInteger(ceiling) || ceiling < 0) {
+    // The operator ceiling is optional: a consent-only policy carries just the
+    // per-class budgets. When it is supplied it must still be a real byte count.
+    const ceilingProvided = diskCeilingBytes !== undefined && diskCeilingBytes !== null
+    const ceiling = ceilingProvided ? Number(diskCeilingBytes) : Number.POSITIVE_INFINITY
+    if (ceilingProvided && (!Number.isSafeInteger(ceiling) || ceiling < 0)) {
       throw new TypeError('diskCeilingBytes must be a non-negative safe integer')
     }
     // Only the transport that applied the rate may claim it. Without that
@@ -513,18 +594,88 @@ export class SeedingManager {
       outboundBytesPerSecond: enforced ? outbound : null,
       outboundRateEnforced: enforced,
     }
+    const contribution = normalizeStorageBytes(contributionBudgetBytes)
+    const archive = normalizeStorageBytes(archiveBudgetBytes)
+    this.retentionPolicy = {
+      contributeWatchedMedia: contributeWatchedMedia === true && migrationRequired !== true,
+      archiveEnabled: archiveEnabled === true && migrationRequired !== true,
+      contributionBudgetBytes: contribution,
+      archiveBudgetBytes: archive,
+      migrationRequired: migrationRequired === true
+    }
+    // Two caps now describe the same disk: the operator's absolute ceiling and
+    // the per-class retention budgets. Honour whichever is tighter so neither
+    // the operator's limit nor a class budget can be exceeded.
+    const budgetedBytes = contribution + archive
+    const effectiveBytes = budgetedBytes > 0 ? Math.min(ceiling, budgetedBytes) : (ceilingProvided ? ceiling : 0)
     const previousBytes = this.config.maxStorageGB * BYTES_PER_GB
     this.config = {
       ...this.config,
-      maxStorageGB: ceiling / BYTES_PER_GB
+      maxStorageGB: effectiveBytes / BYTES_PER_GB
     }
     await this.metaDb.put('seeding-config', this.config)
-    if (ceiling < previousBytes) {
+    if (effectiveBytes < previousBytes) {
       const partials = await this.clearDownloadIntents()
       if (partials.clearedBlob) await this.flushClearedBlobRanges('policy partial download clear')
     }
+    await this.enforceContributionRetention()
+    await this.enforceArchiveRetention()
     await this.enforceQuota()
-    return { diskCeilingBytes: ceiling, ...this.contribution }
+    return {
+      diskCeilingBytes: ceilingProvided ? ceiling : null,
+      ...this.contribution,
+      ...this.getRetentionBudgetStatus()
+    }
+  }
+
+  async enforceContributionRetention() {
+    const policy = this.retentionPolicy
+    const candidates = Array.from(this.activeSeeds.entries())
+      .filter(([, seed]) => seed.retentionClass !== 'archive-pin')
+      .sort((left, right) => {
+        const age = normalizeStorageBytes(left[1].addedAt) - normalizeStorageBytes(right[1].addedAt)
+        return age || left[0].localeCompare(right[0])
+      })
+    let used = candidates.reduce((total, [, seed]) => total + seedStorageBytes(seed), 0)
+    const allowed = !policy.migrationRequired && policy.contributeWatchedMedia
+    let clearedBlob = false
+    for (const [key, seed] of candidates) {
+      if (allowed && used <= policy.contributionBudgetBytes) break
+      this.activeSeeds.delete(key)
+      used -= seedStorageBytes(seed)
+      clearedBlob = (await this.clearSeedBlob(seed)) || clearedBlob
+    }
+    await this.persistSeeds()
+    if (clearedBlob) await this.flushClearedBlobRanges('contribution retention policy')
+  }
+
+  async enforceArchiveRetention() {
+    const policy = this.retentionPolicy
+    const candidates = Array.from(this.activeSeeds.entries())
+      .filter(([, seed]) => seed.retentionClass === 'archive-pin')
+      .sort((left, right) => {
+        const age = normalizeStorageBytes(left[1].addedAt) - normalizeStorageBytes(right[1].addedAt)
+        return age || left[0].localeCompare(right[0])
+      })
+    let used = candidates.reduce((total, [, seed]) => total + seedStorageBytes(seed), 0)
+    const allowed = !policy.migrationRequired && policy.archiveEnabled
+    let clearedBlob = false
+    for (const [key, seed] of candidates) {
+      if (allowed && used <= policy.archiveBudgetBytes) break
+      this.activeSeeds.delete(key)
+      used -= seedStorageBytes(seed)
+      clearedBlob = (await this.clearSeedBlob(seed)) || clearedBlob
+    }
+    await this.persistSeeds()
+    if (clearedBlob) await this.flushClearedBlobRanges('archive retention policy')
+  }
+
+  getRetentionBudgetStatus() {
+    const usage = this.retentionUsage()
+    return {
+      ...this.retentionPolicy,
+      ...usage
+    }
   }
 
   /**
@@ -532,14 +683,19 @@ export class SeedingManager {
    * @returns {Promise<Object>}
    */
   async getStatus() {
-    const storageUsed = this.calculateStorage();
+    const retention = this.getRetentionBudgetStatus()
     return {
       activeSeeds: this.activeSeeds.size,
+      activeContributionSeeds: Array.from(this.activeSeeds.values())
+        .filter(seed => seed.retentionClass !== 'archive-pin').length,
+      activeArchivePins: Array.from(this.activeSeeds.values())
+        .filter(seed => seed.retentionClass === 'archive-pin').length,
       pinnedChannels: this.pinnedChannels.size,
-      storageUsedBytes: storageUsed,
-      storageUsedGB: (storageUsed / (1024 * 1024 * 1024)).toFixed(2),
+      storageUsedBytes: retention.contributionUsedBytes + retention.archiveUsedBytes,
+      storageUsedGB: ((retention.contributionUsedBytes + retention.archiveUsedBytes) / (1024 * 1024 * 1024)).toFixed(2),
       maxStorageGB: this.config.maxStorageGB,
       contribution: { ...this.contribution },
+      retention,
       config: this.config,
       seeds: Array.from(this.activeSeeds.values()).map(s => ({
         videoPath: s.videoPath,
@@ -667,6 +823,16 @@ export class SeedingManager {
     const key = `${driveKey}:${videoPath}`;
     const seed = this.activeSeeds.get(key);
     if (!seed) return false;
+    const retentionClass = seed.retentionClass || retentionClassForReason(seed.reason)
+    const policy = this.retentionPolicy
+    const allowed = retentionClass === 'archive-pin' ? policy.archiveEnabled : policy.contributeWatchedMedia
+    const budget = retentionClass === 'archive-pin' ? policy.archiveBudgetBytes : policy.contributionBudgetBytes
+    const usage = this.retentionUsage(key)
+    const otherUsed = retentionClass === 'archive-pin' ? usage.archiveUsedBytes : usage.contributionUsedBytes
+    if (policy.migrationRequired || !allowed ||
+        otherUsed + normalizeStorageBytes(seed.thumbnailBytes) + Math.max(0, Math.round(Number(byteLength) || 0)) > budget) {
+      return false
+    }
 
     const nextBytes = Math.max(0, Math.round(Number(byteLength) || 0));
     if (nextBytes === (seed.bytes || 0)) return false;

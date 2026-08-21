@@ -25,6 +25,28 @@ function createFakeLogger() {
   return logger
 }
 
+test('relay visibility modes map to valid archive operator modes', async t => {
+  for (const [mode, expected] of [['public', 'community'], ['private', 'local-first']]) {
+    let backendOptions
+    const config = resolveRelayConfig({
+      mode,
+      storage: { path: `/tmp/peartube-relay-${mode}`, maxBytes: 1_000_000 },
+    }, { env: {} })
+    const runtime = await createRelayRuntime({
+      config,
+      logger: createFakeLogger(),
+      dependencies: {
+        async createBackendContext(options) {
+          backendOptions = options
+          return { ctx: {}, api: {}, async destroy() {} }
+        },
+      },
+    })
+    t.is(backendOptions.operability.operatorMode, expected)
+    await runtime.close()
+  }
+})
+
 test('relay runtime persists and reuses primary-key across restart on same storage path', async (t) => {
   const dir = makeTempDir('peartube-relay-runtime-')
   const logger = createFakeLogger()

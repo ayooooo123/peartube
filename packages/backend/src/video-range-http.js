@@ -9,6 +9,7 @@
  * from Hypercore to the response with plain res.write().
  */
 
+import b4a from 'b4a'
 import {
   decodeBlobServerBlobRef,
   getPrioritizedBlobDownloadRange,
@@ -99,13 +100,44 @@ async function syncVideoRangeRemoteLength(core, startBlock) {
   }
 }
 
-async function writeResponseChunk(res, chunk) {
+function waitForResponseDrain(res, signal) {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const cleanup = () => {
+      res.off?.('drain', onDrain)
+      res.off?.('error', onError)
+      res.off?.('close', onClose)
+      signal?.removeEventListener?.('abort', onAbort)
+    }
+    const finish = (callback, value) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      callback(value)
+    }
+    const aborted = () => {
+      if (signal?.reason?.name === 'AbortError') return signal.reason
+      const error = new Error(signal?.reason?.message || 'static playback response aborted')
+      error.name = 'AbortError'
+      return error
+    }
+    const onDrain = () => finish(resolve)
+    const onError = error => finish(reject, error)
+    const onClose = () => finish(reject, aborted())
+    const onAbort = () => finish(reject, aborted())
+    res.once?.('drain', onDrain)
+    res.once?.('error', onError)
+    res.once?.('close', onClose)
+    signal?.addEventListener?.('abort', onAbort, { once: true })
+    if (signal?.aborted || res.writableEnded || res.destroyed) onAbort()
+  })
+}
+
+async function writeResponseChunk(res, chunk, signal) {
   if (!chunk || chunk.byteLength === 0) return
-  if (res.writableEnded || res.destroyed) return
+  if (res.writableEnded || res.destroyed || signal?.aborted) return
   const ok = res.write(chunk)
-  if (ok === false && typeof res.once === 'function') {
-    await once(res, 'drain')
-  }
+  if (ok === false) await waitForResponseDrain(res, signal)
 }
 
 async function resolveStartPosition(core, blob, start) {
@@ -166,12 +198,151 @@ async function writeBlobRange({ core, blob, start, length, res, isCancelled, key
   return remaining === 0
 }
 
+function staticAssetMarker(req) {
+  try {
+    const values = new URL(req?.url || '/', 'http://127.0.0.1').searchParams.getAll('pt_static_asset')
+    if (values.length === 0) return null
+    return { assetId: values.length === 1 ? values[0] : null }
+  } catch {
+    return String(req?.url || '').includes('pt_static_asset') ? { assetId: null } : null
+  }
+}
+
+function exactStaticByteRange(header, byteLength) {
+  if (typeof header !== 'string' || header.includes(',')) return null
+  const match = header.match(/^bytes=(\d*)-(\d*)$/)
+  if (!match || (!match[1] && !match[2])) return null
+  let start
+  let end
+  if (!match[1]) {
+    const suffix = Number(match[2])
+    if (!Number.isSafeInteger(suffix) || suffix <= 0 || suffix > byteLength) return null
+    start = byteLength - suffix
+    end = byteLength - 1
+  } else {
+    start = Number(match[1])
+    end = match[2] ? Number(match[2]) : byteLength - 1
+  }
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
+      start < 0 || end < start || start >= byteLength || end >= byteLength) return null
+  return { start, end }
+}
+
+function endBoundedStaticResponse(req, res, statusCode, byteLength, message) {
+  const body = b4a.from(message)
+  res.statusCode = statusCode
+  res.setHeader('Accept-Ranges', 'bytes')
+  res.setHeader('Cache-Control', 'no-store')
+  res.setHeader('Content-Type', 'text/plain')
+  res.setHeader('Content-Length', String(body.byteLength))
+  if (statusCode === 416) res.setHeader('Content-Range', `bytes */${byteLength}`)
+  res.writeHead(statusCode)
+  res.end(req?.method === 'HEAD' ? undefined : body)
+  return true
+}
+
+async function serveStaticAssetRangeHttpRequest(deps, req, res, marker) {
+  const entries = deps?.staticAssetEntries
+  const blobServer = deps?.blobServer
+  const assetId = marker?.assetId
+  const entry = typeof assetId === 'string' && /^[a-f0-9]{64}$/.test(assetId)
+    ? entries?.get(assetId)
+    : null
+  if (!entry || !blobServer) {
+    return endBoundedStaticResponse(req, res, 503, Number(entry?.coreRef?.byteLength || 0), 'verified static source unavailable')
+  }
+  if (req?.method !== 'GET' && req?.method !== 'HEAD') {
+    return endBoundedStaticResponse(req, res, 405, entry.coreRef.byteLength, 'method not allowed')
+  }
+
+  const ref = decodeBlobServerBlobRef(blobServer, req)
+  const keyHex = ref?.key?.toString?.('hex')
+  const blob = ref?.blob
+  if (!ref || keyHex !== assetId || entry.coreRef?.assetId !== assetId ||
+      blob?.blockOffset !== 0 || blob?.blockLength !== entry.coreRef.length ||
+      blob?.byteOffset !== 0 || blob?.byteLength !== entry.coreRef.byteLength) {
+    return endBoundedStaticResponse(req, res, 416, entry.coreRef.byteLength, 'invalid static asset capability')
+  }
+  const range = exactStaticByteRange(req?.headers?.range, entry.coreRef.byteLength)
+  if (!range) return endBoundedStaticResponse(req, res, 416, entry.coreRef.byteLength, 'invalid byte range')
+
+  const length = range.end - range.start + 1
+  const controller = new AbortController()
+  let completed = false
+  const close = () => {
+    if (!completed) controller.abort()
+  }
+  res.on?.('close', close)
+
+  if (req.method === 'HEAD') {
+    completed = true
+    res.statusCode = 206
+    res.setHeader('Accept-Ranges', 'bytes')
+    res.setHeader('Content-Type', entry.mimeType || ref.type || 'video/mp4')
+    res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${entry.coreRef.byteLength}`)
+    res.setHeader('Content-Length', String(length))
+    res.setHeader('Cache-Control', 'no-store')
+    res.writeHead(206)
+    res.end()
+    return true
+  }
+
+  try {
+    entry.scheduler.seek({ byteStart: range.start })
+    const result = await entry.scheduler.requestRange({
+      assetId,
+      byteStart: range.start,
+      byteEnd: range.end + 1,
+      deadlineMs: 15_000,
+      signal: controller.signal,
+    })
+    if (controller.signal.aborted || res.writableEnded || res.destroyed) return true
+    if (result?.status !== 'ok' || result.verified !== true ||
+        !b4a.isBuffer(result.bytes) || result.bytes.byteLength !== length) {
+      return endBoundedStaticResponse(req, res, 503, entry.coreRef.byteLength, 'verified static source unavailable')
+    }
+
+    res.statusCode = 206
+    res.setHeader('Accept-Ranges', 'bytes')
+    res.setHeader('Content-Type', entry.mimeType || ref.type || 'video/mp4')
+    res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${entry.coreRef.byteLength}`)
+    res.setHeader('Content-Length', String(length))
+    res.setHeader('Cache-Control', 'no-store')
+    res.writeHead(206)
+    await writeResponseChunk(res, result.bytes, controller.signal)
+    if (controller.signal.aborted || res.writableEnded || res.destroyed) return true
+    completed = true
+    res.end()
+    deps.onStaticPlayhead?.({
+      staticAssetId: assetId,
+      coreKeyHex: assetId,
+      blockOffset: 0,
+      blockLength: entry.coreRef.length,
+      byteLength: entry.coreRef.byteLength,
+      windowStart: Math.floor(range.start / entry.coreRef.blockSize),
+      windowEnd: Math.ceil((range.end + 1) / entry.coreRef.blockSize),
+    })
+    return true
+  } catch (error) {
+    if (controller.signal.aborted || error?.name === 'AbortError' || res.writableEnded || res.destroyed) return true
+    if (res.headersSent) {
+      try { res.destroy?.(error) } catch {}
+      return true
+    }
+    return endBoundedStaticResponse(req, res, 503, entry.coreRef.byteLength, 'verified static source unavailable')
+  } finally {
+    res.off?.('close', close)
+  }
+}
+
 /**
  * Serve a video Range request from the blob server.
  * @returns {Promise<boolean>} true if it wrote the response, false to fall
  * through to hypercore-blob-server.
  */
 export async function serveVideoRangeHttpRequest(deps, req, res) {
+  const marker = staticAssetMarker(req)
+  if (marker) return serveStaticAssetRangeHttpRequest(deps, req, res, marker)
   const blobServer = deps?.blobServer
   if (!blobServer || typeof blobServer._getCore !== 'function') return false
   if (req?.method !== 'GET' && req?.method !== 'HEAD') return false

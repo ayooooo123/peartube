@@ -37,7 +37,8 @@ function harness () {
     },
     api: {},
     runtime: { publishPublisherCatalog: async () => ({ status: 'published' }) },
-    fs: {}
+    fs: {},
+    canPublish: retentionClass => retentionClass === 'archive-pin',
   })
   const manager = createArchiveManager({ store, downloader, publisher })
   return { store, manager, calls }

@@ -325,12 +325,21 @@ export function createArchiveManager(options = {}) {
         const audit = await recordAudit({
           publicationId,
           assessmentId,
-          outcome: 'deleted',
+          outcome: deletion.sharedRetention === true ? 'retention-released' : 'deleted',
           evidenceDigest: freshDigest,
           freedBytes,
+          ...(deletion.sharedRetention === true ? { sharedRetention: true } : {}),
           observedAt: now(),
         })
-        return { success: true, accepted: true, publicationId, assessmentId, freedBytes, auditId: audit.auditId }
+        return {
+          success: true,
+          accepted: true,
+          publicationId,
+          assessmentId,
+          freedBytes,
+          auditId: audit.auditId,
+          ...(deletion.sharedRetention === true ? { sharedRetention: true } : {}),
+        }
       })
     },
 

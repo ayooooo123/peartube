@@ -51,7 +51,15 @@ function normalizeState(value, allowed) {
 export function projectSourceSelectionDiagnostics(sources = [], options = {}) {
   if (!Array.isArray(sources) || sources.length === 0) return []
 
-  const selection = options.selection || selectPlaybackSource(sources, {
+  // A source may carry its id nested under `publication`. The selector reads
+  // the flat field, so lift it before selecting rather than diverge from the
+  // one selector on which id a source has.
+  const selection = options.selection || selectPlaybackSource(sources.map(input => {
+    const source = input || {}
+    if (typeof source.publicationId === 'string' && source.publicationId !== '') return source
+    const nested = source.publication?.publicationId
+    return typeof nested === 'string' && nested !== '' ? { ...source, publicationId: nested } : source
+  }), {
     capabilities: options.capabilities,
     selectedPublicationId: options.selectedPublicationId,
     now: options.now,
@@ -62,7 +70,8 @@ export function projectSourceSelectionDiagnostics(sources = [], options = {}) {
     const archiveState = normalizeState(source.archiveState, ARCHIVE_STATES)
     const cacheState = normalizeState(source.cacheState, CACHE_STATES)
     const item = {
-      publicationId: candidate.publicationId,
+      publicationId: candidate.publicationId ||
+        (typeof source.publication?.publicationId === 'string' ? source.publication.publicationId : ''),
       selected: candidate.selected,
       eligible: candidate.eligible,
       selectionReasonCodes: candidate.selectionReasonCodes,
@@ -70,6 +79,7 @@ export function projectSourceSelectionDiagnostics(sources = [], options = {}) {
       introductionPublisherIds: boundedPublicIds(
         MAX_INTRODUCTION_DIAGNOSTIC_IDS,
         source.publisherId,
+        source.publication?.publisherId,
         source.introductionPublisherIds,
       ),
       introductionIndexIds: boundedPublicIds(
@@ -77,6 +87,7 @@ export function projectSourceSelectionDiagnostics(sources = [], options = {}) {
         source.indexFeedId,
         source.indexFeedIds,
         source.introductionIndexIds,
+        source.sourceIndexers?.map(indexer => indexer?.indexerId),
       ),
       moderationFeedIds: boundedPublicIds(
         MAX_INTRODUCTION_DIAGNOSTIC_IDS,

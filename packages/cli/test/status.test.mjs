@@ -37,7 +37,7 @@ test('RelayCatalog persists accepted channels to disk', async (t) => {
   }
 })
 
-test('buildRelayStatus orders eviction candidates by retention class', async (t) => {
+test('buildRelayStatus emits bounded aggregate status without channel identities', async (t) => {
   const dir = makeTempDir('peartube-relay-status-')
 
   try {
@@ -87,14 +87,12 @@ test('buildRelayStatus orders eviction candidates by retention class', async (t)
     t.is(status.summary.totalChannels, 3)
     t.is(status.summary.protectedChannels, 2)
     t.is(status.summary.usedBytes, 7168)
-    t.is(status.runtime.network.peers, 2)
-    t.is(status.runtime.network.connections, 1)
-    t.is(status.runtime.publisher.catalogs, 2)
-    t.is(status.runtime.publisher.followed, 1)
-    t.is(status.runtime.assets.retainedRenditions, 3)
-    t.is(status.evictionCandidates[0].channelKey, 'discover-1')
-    t.is(status.evictionCandidates[1].channelKey, 'allow-1')
-    t.is(status.evictionCandidates[2].channelKey, 'private-1')
+    t.is(status.network.peers, 2)
+    t.is(status.network.connections, 1)
+    const serialized = JSON.stringify(status)
+    t.absent(serialized.includes('discover-1'))
+    t.absent(serialized.includes('owner-private'))
+    t.absent(serialized.includes(dir))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -126,7 +124,7 @@ test('readRelayStatus returns persisted runtime stats when present', async (t) =
   }
 })
 
-test('buildRelayStatus preserves scoped network and publisher diagnostics', async (t) => {
+test('buildRelayStatus preserves safe policy, network, budget and public-work diagnostics', async (t) => {
   const dir = makeTempDir('peartube-relay-status-scoped-semantics-')
 
   try {
@@ -139,23 +137,33 @@ test('buildRelayStatus preserves scoped network and publisher diagnostics', asyn
       },
       catalog,
       runtimeStats: {
+        policy: {
+          policyVersion: 2,
+          consentVersion: 3,
+          migrationRequired: false,
+          effectiveRole: 'contributor',
+          permissions: { contribute: true, archive: false },
+          contributionBudgetBytes: 100,
+          archiveBudgetBytes: 200,
+          selectedIndexers: []
+        },
         network: { peers: 3, connections: 1, offline: false },
         publisher: { catalogs: 4, followed: 2, lastErrorCode: null },
         bootstrap: { joined: true, locators: 6, rejected: 1, maxLocators: 32 },
-        assets: { retainedRenditions: 5, activeSessions: 2, maxSessions: 8 }
+        assets: { retainedRenditions: 5, activeSessions: 2, activeUploads: 1, uploadedBytes: 8, maxSessions: 8 },
+        seedRetention: { retention: { contributionUsedBytes: 40, archiveUsedBytes: 12 } }
       }
     })
 
-    t.is(status.runtime.network.peers, 3)
-    t.is(status.runtime.publisher.catalogs, 4)
-    t.is(status.runtime.bootstrap.locators, 6)
-    t.is(status.runtime.assets.activeSessions, 2)
+    t.is(status.network.peers, 3)
+    t.is(status.effectivePolicy.effectiveRole, 'contributor')
+    t.is(status.budgets.contribution.usedBytes, 40)
+    t.is(status.publicWork.activeAnnouncements, 4)
+    t.is(status.publicWork.activeUploads, 1)
 
     const formatted = formatRelayStatus(status)
-    t.ok(formatted.includes('network: peers=3 connections=1 offline=false'))
-    t.ok(formatted.includes('publisher: catalogs=4 followed=2 lastError=none'))
-    t.ok(formatted.includes('bootstrap: joined=true locators=6 rejected=1 limit=32'))
-    t.ok(formatted.includes('assets: retainedRenditions=5 activeSessions=2 limit=8'))
+    t.ok(formatted.includes('role: contributor'))
+    t.ok(formatted.includes('network: status=unknown peers=3 connections=1 offline=false'))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -186,10 +194,50 @@ test('buildRelayStatus surfaces scoped DHT boundary diagnostics', async (t) => {
       }
     })
 
-    t.is(status.runtime.network.offlineReason, 'transport-unreachable')
+    t.is(status.network.offline, true)
     const formatted = formatRelayStatus(status)
-    t.ok(formatted.includes('network: peers=2 connections=0 offline=true reason=transport-unreachable listenResolved=true'))
-    t.ok(formatted.includes('dht: bootstrapped=true firewalled=true online=false'))
+    t.ok(formatted.includes('network: status=unknown peers=2 connections=0 offline=true'))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('status recursively excludes protected configuration and runtime material', async (t) => {
+  const dir = makeTempDir('peartube-relay-status-redaction-')
+  try {
+    const catalog = await RelayCatalog.open({ storagePath: dir })
+    const status = buildRelayStatus({
+      config: {
+        mode: 'public',
+        storage: { path: '/secret/storage', maxBytes: 1 },
+        callbackOrigin: 'https://callback.example',
+        sourceCapability: 'opaque-capability'
+      },
+      catalog,
+      runtimeStats: {
+        network: { peers: 1, sourceUrl: 'https://source.example/video' },
+        publisher: { key: 'deadbeef', localPath: '/secret/file' },
+        policy: {
+          policyVersion: 2,
+          consentVersion: 1,
+          migrationRequired: false,
+          effectiveRole: 'watch-only',
+          permissions: { contribute: false, archive: false }
+        }
+      },
+      ingestStatus: { lastErrors: ['SAFE_CODE'], sourceCapability: 'hidden' }
+    })
+    const serialized = JSON.stringify(status)
+    for (const protectedValue of [
+      '/secret/storage',
+      'https://callback.example',
+      'opaque-capability',
+      'https://source.example/video',
+      'deadbeef',
+      '/secret/file',
+      'hidden'
+    ]) t.absent(serialized.includes(protectedValue))
+    t.alike(status.lastErrors, ['SAFE_CODE'])
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

@@ -9,10 +9,10 @@ import {
 } from '../records/application-envelope.js'
 import { createRenditionDescriptor } from './rendition.js'
 
-export const MANIFEST_VERSION = 1
-export const MANIFEST_ID_DOMAIN = 'peartube.asset.manifest.v1'
-export const PUBLICATION_ID_DOMAIN = 'peartube.asset.publication.v1'
-export const MANIFEST_RECORD_TYPE = 'peartube.asset.manifest.v1'
+export const MANIFEST_VERSION = 2
+export const MANIFEST_ID_DOMAIN = 'peartube.asset.manifest.v2'
+export const PUBLICATION_ID_DOMAIN = 'peartube.asset.publication.v2'
+export const MANIFEST_RECORD_TYPE = 'peartube.asset.manifest.v2'
 
 function boundedString(value, name, max = 4096, required = false) {
   if (value == null && !required) return null
@@ -48,6 +48,12 @@ function unsignedManifestBody(input = {}) {
   })
 }
 
+function canonicalManifestBody(input = {}) {
+  const unsignedBody = unsignedManifestBody(input.unsignedBody)
+  const manifestId = deriveManifestId({ unsignedBody })
+  return sortPlain({ manifestId, unsignedBody, ...unsignedBody })
+}
+
 export function deriveManifestId(input = {}) {
   const unsignedBody = input.unsignedBody ? input.unsignedBody : unsignedManifestBody(input)
   return b4a.toString(hashCanonical(MANIFEST_ID_DOMAIN, unsignedBody), 'hex')
@@ -81,7 +87,12 @@ export function createPublicationManifest(input = {}) {
 
 export function encodePublicationManifest(manifest) {
   if (!manifest?.body || !manifest?.envelope) throw new Error('publication manifest is required')
-  if (!b4a.equals(manifest.envelope.body, encodeCanonical(manifest.body))) {
+  const body = canonicalManifestBody(manifest.body)
+  const encodedBody = encodeCanonical(body)
+  if (!b4a.equals(encodedBody, encodeCanonical(manifest.body))) {
+    throw new Error('publication manifest body is noncanonical')
+  }
+  if (!b4a.equals(manifest.envelope.body, encodedBody)) {
     throw new Error('publication manifest envelope body mismatch')
   }
   return encodeApplicationEnvelope(manifest.envelope)
@@ -95,14 +106,12 @@ export function decodePublicationManifest(input) {
   } catch {
     throw new Error('publication manifest body is not canonical JSON')
   }
-  const unsignedBody = unsignedManifestBody(parsed?.unsignedBody)
-  const manifestId = deriveManifestId({ unsignedBody })
-  const body = sortPlain({ manifestId, unsignedBody, ...unsignedBody })
+  const body = canonicalManifestBody(parsed)
   if (!b4a.equals(envelope.body, encodeCanonical(body))) {
     throw new Error('publication manifest body is noncanonical')
   }
   return {
-    publicationId: derivePublicationId({ publisherId: body.publisherId, manifestId }),
+    publicationId: derivePublicationId({ publisherId: body.publisherId, manifestId: body.manifestId }),
     body,
     envelope,
   }
@@ -144,6 +153,11 @@ export async function verifyCatalogPublicationManifest(manifest, options = {}) {
 
 export async function verifyPublicationManifest(manifest, options = {}) {
   if (!manifest?.body || !manifest?.envelope) return false
+  try {
+    encodePublicationManifest(manifest)
+  } catch {
+    return false
+  }
   const expectedManifestId = deriveManifestId({ unsignedBody: manifest.body.unsignedBody })
   if (manifest.body.manifestId !== expectedManifestId) return false
   const expectedPublicationId = derivePublicationId({ publisherId: manifest.body.publisherId, manifestId: expectedManifestId })
@@ -154,5 +168,5 @@ export async function verifyPublicationManifest(manifest, options = {}) {
     ...options,
     recordType: MANIFEST_RECORD_TYPE,
   })
-  return Boolean(verified && b4a.equals(manifest.envelope.body, encodeCanonical(manifest.body)))
+  return Boolean(verified)
 }

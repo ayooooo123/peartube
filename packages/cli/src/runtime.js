@@ -41,6 +41,10 @@ function counter (counters, ...names) {
   return 0
 }
 
+function archiveOperatorMode (relayMode) {
+  return relayMode === 'public' ? 'community' : 'local-first'
+}
+
 export async function createRelayRuntime ({ config, logger, dependencies = null } = {}) {
   if (!config?.storage?.path) throw new Error('relay runtime requires config.storage.path')
   const backendFactory = dependencies?.createBackendContext || createBackendContext
@@ -127,13 +131,16 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
         }
       : {}),
     seedPin: config.seedPin || {},
+    archive: {
+      enabled: config.archive?.enabled !== false
+    },
     operability: {
       // Relay mode (public/private) and archive operator mode
       // (local-first/altruistic/friend-family/community/...) are different
       // vocabularies. Passing the relay mode straight through made every
       // public relay fail startup with "invalid archive operator mode", so the
-      // operator intent is configured on its own or defaults to community.
-      operatorMode: config.archiveOperatorMode || 'community'
+      // operator intent is configured on its own or derived from the relay mode.
+      operatorMode: config.archiveOperatorMode || archiveOperatorMode(config.mode)
     },
     ipcLog: (message) => logger?.runtime?.debug?.(message)
   })
@@ -419,19 +426,40 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
     },
 
     async getDiagnostics () {
-      const [scoped, locators, seedRetention, archive, storage, archiveParticipation] = await Promise.all([
+      const [scoped, locators, seedRetention, archive, storage, archiveParticipation, policyResult] = await Promise.all([
         backend.api.getScopedNetworkDiagnostics(),
         backend.api.listBootstrapLocators(),
         backend.seedingManager?.getStatus?.() || {},
         backend.api.getArchiveOperatorStatus?.({}) || {},
         backend.api.getStorageStats?.() || {},
-        backend.api.getArchiveParticipation?.({}) || {}
+        backend.api.getArchiveParticipation?.({}) || {},
+        backend.api.getNetworkPolicy?.() || {}
       ])
       const counters = scoped?.counters || {}
       const swarm = backend.ctx?.swarm
       const publisherTopics = purposeCount(scoped?.topics, 'publisher')
       const assetTopics = purposeCount(scoped?.topics, 'asset')
+      const policy = policyResult?.policy || {}
       return {
+        policy: {
+          policyVersion: Number(policy.policyVersion) || 0,
+          consentVersion: Number(policy.consentVersion) || 0,
+          migrationRequired: policy.migrationRequired !== false,
+          effectiveRole: policy.effectiveRole || 'watch-only',
+          permissions: {
+            contribute: policy.permissions?.contribute === true,
+            archive: policy.permissions?.archive === true
+          },
+          contributionBudgetBytes: Number(policy.contributionBudgetBytes) || 0,
+          archiveBudgetBytes: Number(policy.archiveBudgetBytes) || 0,
+          selectedIndexerCount: Number(scoped?.selectedIndexerCount) || 0,
+          selectedIndexers: Array.isArray(scoped?.selectedIndexers)
+            ? scoped.selectedIndexers.slice(0, 8).map((indexer, index) => ({
+                id: String(indexer?.id || `selected-${index + 1}`).slice(0, 32),
+                status: String(indexer?.status || 'unknown').slice(0, 32)
+              }))
+            : []
+        },
         network: {
           status: scoped?.status || 'unknown',
           protocolMajor: scoped?.protocolMajor ?? PROTOCOL_VERSION,
@@ -445,7 +473,15 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
           },
           offline: Boolean(swarm?._peartubeOffline),
           offlineReason: swarm?._peartubeOfflineReason || null,
-          listenResolved: Boolean(swarm?._peartubeListenResolved)
+          listenResolved: Boolean(swarm?._peartubeListenResolved),
+          lastErrors: Array.isArray(scoped?.recentErrors)
+            ? scoped.recentErrors.slice(-8).map(error => String(error?.code || 'SCOPED_NETWORK_ERROR').slice(0, 64))
+            : []
+        },
+        publicWork: {
+          activeAnnouncements: Number(scoped?.publicWork?.activeAnnouncements) || 0,
+          activeUploads: Number(scoped?.publicWork?.activeUploads) || 0,
+          uploadedBytes: Number(scoped?.publicWork?.uploadedBytes) || 0
         },
         publisher: {
           catalogs: counter(counters, 'publisherCatalogs', 'catalogs') || publisherTopics,
@@ -465,6 +501,8 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
           retainedRenditions: counter(counters, 'retainedRenditions'),
           activeSessions: purposeCount(scoped?.sessions, 'asset'),
           topics: assetTopics,
+          activeUploads: Number(scoped?.publicWork?.activeUploads) || 0,
+          uploadedBytes: Number(scoped?.publicWork?.uploadedBytes) || 0,
           maxSessions: counter(counters, 'maxAssetSessions', 'assetSessionLimit')
         },
         seedRetention: seedRetention || {},

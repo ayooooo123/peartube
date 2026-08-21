@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "schema": [
     {
       "name": "metadata",
@@ -617,6 +617,71 @@
           "array": true,
           "type": "@peartubeChannel/contentArtwork",
           "version": 3
+        },
+        {
+          "name": "publicationId",
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "manifestId",
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "renditionId",
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "assetId",
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "coreKey",
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "publisherId",
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "publicationSequence",
+          "type": "uint64",
+          "version": 4
+        },
+        {
+          "name": "metadataClaimId",
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "availabilityClaimId",
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "publicationOperationId",
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "metadataClaimOperationId",
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "availabilityClaimOperationId",
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "publicationManifestHex",
+          "type": "string",
+          "version": 4
         }
       ]
     },
@@ -795,6 +860,26 @@
           "name": "remoteUrl",
           "type": "string",
           "version": 3
+        }
+      ]
+    },
+    {
+      "name": "publicationOperationFrames",
+      "namespace": "peartubeChannel",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "id",
+          "required": true,
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "publicationOperationFramesHex",
+          "required": true,
+          "type": "string",
+          "version": 4
         }
       ]
     }

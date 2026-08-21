@@ -1796,19 +1796,28 @@ export function createScopedNetworkRuntime (options = {}) {
         return
       }
       const core = await scope.assetSession.ready()
+      // Abandoning a transfer without a terminal frame leaves the requester
+      // waiting on a response that will never come. A policy change mid-range
+      // is exactly that case, so every give-up path answers UNAVAILABLE while
+      // the session is still there to answer on.
+      const abandon = () => {
+        const current = !responseState.cancelled && !scope.closed && !tracked.closed &&
+          scope.sessions.get(tracked.peerId) === tracked
+        if (current) sendAssetError(scope, tracked, range, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
+      }
       for (let index = range.startBlock; index < range.endBlock; index++) {
         if (!scopeUploadRetentionClass(scope) || responseState.cancelled || scope.closed || tracked.closed ||
-            responseState.policyEpoch !== networkPolicyEpoch) return
+            responseState.policyEpoch !== networkPolicyEpoch) return abandon()
         const present = await core.has(index)
         if (!scopeUploadRetentionClass(scope) || responseState.cancelled || scope.closed || tracked.closed ||
-            responseState.policyEpoch !== networkPolicyEpoch) return
+            responseState.policyEpoch !== networkPolicyEpoch) return abandon()
         if (!present) continue
         const proof = await core.proof({
           block: { index, nodes: 0 },
           upgrade: { start: 0, length: scope.assetSession.coreRef.length },
         })
         if (!scopeUploadRetentionClass(scope) || responseState.cancelled || scope.closed || tracked.closed ||
-            responseState.policyEpoch !== networkPolicyEpoch) return
+            responseState.policyEpoch !== networkPolicyEpoch) return abandon()
         const value = proof?.block?.value
         if (!b4a.isBuffer(value) || proof.block.index !== index ||
             value.byteLength !== expectedAssetValueBytes(scope, index)) {
@@ -1818,19 +1827,13 @@ export function createScopedNetworkRuntime (options = {}) {
         const reservation = responseState.policyEpoch === networkPolicyEpoch
           ? await reservePolicyUpload(retentionClass, value.byteLength)
           : null
-        if (!reservation) {
-          const current = !responseState.cancelled && !scope.closed && !tracked.closed &&
-            responseState.policyEpoch === networkPolicyEpoch &&
-            scope.sessions.get(tracked.peerId) === tracked
-          if (current) sendAssetError(scope, tracked, range, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
-          return
-        }
+        if (!reservation) return abandon()
         const canBatch = typeof tracked.channel?.cork === 'function' && typeof tracked.channel?.uncork === 'function'
         if (canBatch) tracked.channel.cork()
         try {
           const proofSent = sendAssetResponseBytes(scope, tracked, responseState, range, index, 'proof', proofBytes)
           const blockSent = proofSent && sendAssetResponseBytes(scope, tracked, responseState, range, index, 'block', value)
-          if (!blockSent) return
+          if (!blockSent) return abandon()
           reservation.commit()
           served++
         } finally {
@@ -2151,19 +2154,42 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function pumpArchiveSession (scope, tracked) {
-    if (!networkEnabled || scope.archiveDiscovery || scope.closed || tracked.closed || tracked.state !== 'active' || tracked.archiveRequest) return
-    const request = await nextArchiveBlock(scope, tracked)
-    if (!request || scope.closed || tracked.closed) return
-    tracked.archiveRequest = request
-    scope.archivePending.add(archiveBlockKey(request.coreKey, request.index))
-    if (!sendScopedFrame(tracked, 'archive', 'archive-block-request', encodeArchiveBlockRef(request.coreKey, request.index))) {
-      queueArchiveRetry(scope, tracked, request)
+    if (!networkEnabled || scope.archiveDiscovery || scope.closed || tracked.closed || tracked.state !== 'active') return
+    // nextArchiveBlock awaits the core, so without a synchronous claim two
+    // callers both pass the in-flight check below and pipeline two requests to
+    // the same peer. A responder serves one block per session and refuses the
+    // second as a monotonic-range violation, which fails the session closed in
+    // the middle of the transfer the first request was already getting. A
+    // caller that arrives while this one is deciding hands its turn over
+    // instead, so a peer that answers inside send still advances the range.
+    if (tracked.archivePumping) {
+      tracked.archivePumpQueued = true
       return
     }
-    tracked.archiveTimer = setTimeout(() => {
-      queueArchiveRetry(scope, tracked, request)
-      void pumpArchiveSessions(scope)
-    }, ASSET_TRANSFER_TIMEOUT_MS)
+    tracked.archivePumping = true
+    try {
+      do {
+        tracked.archivePumpQueued = false
+        if (tracked.archiveRequest || scope.closed || tracked.closed || tracked.state !== 'active') break
+        const request = await nextArchiveBlock(scope, tracked)
+        if (!request || scope.closed || tracked.closed) break
+        tracked.archiveRequest = request
+        scope.archivePending.add(archiveBlockKey(request.coreKey, request.index))
+        if (!sendScopedFrame(tracked, 'archive', 'archive-block-request', encodeArchiveBlockRef(request.coreKey, request.index))) {
+          queueArchiveRetry(scope, tracked, request)
+          break
+        }
+        // A peer that answered inside the send above has already cleared this
+        // request; arming its timeout would retry a block that arrived.
+        if (tracked.archiveRequest !== request) continue
+        tracked.archiveTimer = setTimeout(() => {
+          queueArchiveRetry(scope, tracked, request)
+          void pumpArchiveSessions(scope)
+        }, ASSET_TRANSFER_TIMEOUT_MS)
+      } while (tracked.archivePumpQueued)
+    } finally {
+      tracked.archivePumping = false
+    }
   }
 
   function startArchivePumpWhenOpen (scope, tracked) {
@@ -2686,6 +2712,8 @@ export function createScopedNetworkRuntime (options = {}) {
       assetInventoryRequest: null,
       lastAssetTransferId: 0n,
       archiveRequest: null,
+      archivePumping: false,
+      archivePumpQueued: false,
       archiveTransfer: null,
       archiveTimer: null,
       archiveServing: false,
@@ -2714,6 +2742,29 @@ export function createScopedNetworkRuntime (options = {}) {
       maxFrameBytes: MAX_PEER_FRAME_BYTES,
     }))
     return tracked
+  }
+
+  // Protomux writes one frame per send, and a peer applies each frame on its
+  // own. Work that changes several channels at once therefore leaks a
+  // half-applied state onto the wire unless the frames travel together, so this
+  // corks every live connection for the duration and lets Protomux flush one
+  // batch per peer. Only local work may run inside: a corked connection cannot
+  // answer a peer until the batch flushes.
+  async function withBatchedConnectionWrites (work) {
+    const corked = []
+    for (const connection of activeConnections.keys()) {
+      const mux = muxFactory(connection)
+      if (typeof mux?.cork !== 'function' || typeof mux?.uncork !== 'function') continue
+      mux.cork()
+      corked.push(mux)
+    }
+    try {
+      return await work()
+    } finally {
+      for (const mux of corked) {
+        try { mux.uncork() } catch { /* best-effort batch flush */ }
+      }
+    }
   }
 
 
@@ -3795,8 +3846,16 @@ export function createScopedNetworkRuntime (options = {}) {
     localPublishers.delete(id)
     existing.scope.retired = true
     existing.scope.modes.add('rotation-drain')
-    const result = await publishLocalPublisherCatalog({ publisherId: id })
-    await leaveScope(existing.scope, 'local')
+    // A rotation writes three things that only make sense together: the new
+    // epoch's channel, the signed locator advertising it, and the retirement of
+    // the old channel. Batch them per connection so a peer applies the whole
+    // rotation from one Protomux frame instead of observing a half-rotated
+    // publisher, which is also one write per peer instead of three.
+    const result = await withBatchedConnectionWrites(async () => {
+      const published = await publishLocalPublisherCatalog({ publisherId: id })
+      await leaveScope(existing.scope, 'local')
+      return published
+    })
     const timer = schedulePublisherRotationDrain(() => {
       publisherRotationDrainTimers.delete(timer)
       void leaveScope(existing.scope, 'rotation-drain')
@@ -4367,11 +4426,19 @@ export function createScopedNetworkRuntime (options = {}) {
       startBlock: range.startBlock,
       endBlock: range.endBlock,
     })
+    // Record every peer this request targets before a single frame goes out. A
+    // peer can answer re-entrantly - an in-process transport, or a mux that
+    // flushes inside send - and an answer from a peer the request has not
+    // recorded yet is discarded as unsolicited, which strands the caller until
+    // the transfer timeout instead of failing it now. Registering the whole set
+    // first also keeps a synchronous refusal from one peer from settling a
+    // request that still has others outstanding.
+    for (const peer of peers) request.requestedPeers.add(peer.peerId)
     try {
       for (const peer of peers) {
         if (request.closed) break
-        if (sendScopedFrame(peer, 'asset', 'asset-block-request', payload)) {
-          request.requestedPeers.add(peer.peerId)
+        if (!sendScopedFrame(peer, 'asset', 'asset-block-request', payload)) {
+          request.requestedPeers.delete(peer.peerId)
         }
       }
     } catch (cause) {

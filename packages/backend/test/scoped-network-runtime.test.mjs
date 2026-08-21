@@ -80,13 +80,31 @@ function connectionPair (options = {}, remoteBFill = 202) {
     ? options
     : { consumerPeerFill: options, sourcePeerFill: remoteBFill }
   const { sourcePeerFill = 202, consumerPeerFill = 201, highWaterMark } = config
-  // A tiny highWaterMark makes write() report backpressure while still
-  // buffering, which is exactly what a real socket does under a large frame.
+  // Protomux decodes exactly one message per stream data event; real transports
+  // under it frame every message, so that holds. A Duplex.from over a
+  // PassThrough does not: two writes queued in the same tick arrive as one
+  // concatenated chunk and every message after the first is silently dropped,
+  // which quietly rewrote what several tests observed. Push each write on its
+  // own so the double frames like the real thing.
   const opts = highWaterMark == null ? {} : { highWaterMark }
-  const aToB = new PassThrough(opts)
-  const bToA = new PassThrough(opts)
-  const a = Duplex.from({ readable: bToA, writable: aToB })
-  const b = Duplex.from({ readable: aToB, writable: bToA })
+  const make = (peer) => new Duplex({
+    ...opts,
+    write (chunk, _encoding, callback) {
+      const target = peer()
+      if (target && !target.destroyed && !target.readableEnded) target.push(chunk)
+      callback()
+    },
+    final (callback) {
+      const target = peer()
+      if (target && !target.destroyed && !target.readableEnded) target.push(null)
+      callback()
+    },
+    read () {},
+  })
+  let a = null
+  let b = null
+  a = make(() => b)
+  b = make(() => a)
   a.userData = null
   b.userData = null
   a.remotePublicKey = bytes(32, consumerPeerFill)
@@ -1435,7 +1453,13 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
   releaseGlobalReductionProof()
   const exhausted = await observedInFlight
   t.ok(exhausted, 'global ceiling reduction settles the already accepted peer request')
-  t.is(exhausted.code, 'DISCONNECTED')
+  // The provider refuses the held block with a bounded UNAVAILABLE error before
+  // the cutover destroys the transport, and failAssetRequestPeer keeps the first
+  // failure recorded per peer, so that is what the caller sees. It read
+  // DISCONNECTED only while this harness concatenated same-tick writes and
+  // dropped the frame carrying the refusal, leaving the session close as the
+  // only outcome the requester ever observed.
+  t.is(exhausted.code, 'UNAVAILABLE')
   t.is(exhausted.peerId, b4a.toString(pair.b.remotePublicKey, 'hex'))
   t.ok(exhausted.message.length <= 256)
   t.ok(runtimeA.getDiagnostics().counters.closedSessions > closedBeforeGlobalReduction,
@@ -2745,19 +2769,23 @@ test('live publisher root rotation rebinds advertisements, proof, pages, and exi
   sourceSwarm.emit('connection', latePair.a, { publicKey: latePair.a.remotePublicKey, client: false })
   consumerSwarms[2].emit('connection', latePair.b, { publicKey: latePair.b.remotePublicKey, client: true })
 
-  for (let attempt = 0; attempt < 40; attempt++) {
-    if (consumers.every(consumer =>
-      consumer.listBootstrapLocators()[0]?.catalogEpoch === 1 &&
-      consumer.getDiagnostics().topics.filter(topic =>
-        topic.purpose === 'publisher' && topic.modes.includes('followed')
-      ).length === 1
-    )) break
-    await settle()
-  }
   const currentTopicHex = b4a.toString(derivePublisherTopic({
     publisherId: b4a.toString(descriptor.publisherId, 'hex'),
     catalogEpoch: 1,
   }), 'hex')
+  // A consumer that already follows the retired epoch satisfies "one followed
+  // publisher scope" before it has promoted anything, so waiting on the count
+  // alone races the promotion it is meant to wait for. Wait for the state the
+  // assertions below actually check.
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (consumers.every(consumer => {
+      const followed = consumer.getDiagnostics().topics.filter(topic =>
+        topic.purpose === 'publisher' && topic.modes.includes('followed'))
+      return consumer.listBootstrapLocators()[0]?.catalogEpoch === 1 &&
+        followed.length === 1 && followed[0].topicHex === currentTopicHex
+    })) break
+    await settle()
+  }
   for (const consumer of consumers) {
     t.is(consumer.listBootstrapLocators()[0]?.catalogEpoch, 1, 'live peer accepts only the current bounded advertisement')
     const followed = consumer.getDiagnostics().topics.filter(topic =>
@@ -3265,17 +3293,17 @@ test('release waits for asynchronous discovery and core cleanup', async (t) => {
 // "publication manifest authorization failed".
 test('retaining a rendition without a range uses its own upload span, not the whole shared core', async (t) => {
   const publisher = crypto.keyPair(bytes(32, 61))
-  const coreKey = bytes(32, 62)
+  // Six blocks total: an earlier rendition occupies 0..3, this one 3..6.
+  const staticCore = createStaticAssetManifest({
+    treeHash: bytes(32, 63),
+    blockLength: 6,
+    byteLength: 6 * ASSET_BLOCK_SIZE,
+  })
+  const coreKey = staticCore.key
   const rendition = createRenditionDescriptor({
     purpose: 'original',
     format: 'video/mp4',
-    core: {
-      key: coreKey,
-      // Six blocks total: an earlier rendition occupies 0..3, this one 3..6.
-      length: 6,
-      treeHash: bytes(32, 63),
-      byteLength: 6144,
-    },
+    core: staticCore,
   })
   const manifest = createPublicationManifest({
     publisherId: publisher.publicKey,
@@ -3418,7 +3446,12 @@ test('a catalog page too large for one frame fails loudly instead of stalling', 
 
   const swarmA = fakeSwarm()
   const swarmB = fakeSwarm()
-  const source = createScopedNetworkRuntime({ swarm: swarmA, store: {}, catalogRegistry: sourceRegistry })
+  const source = createScopedNetworkRuntime({
+    swarm: swarmA,
+    store: {},
+    catalogRegistry: sourceRegistry,
+    initialNetworkPolicy: contributionPolicy(),
+  })
   const consumer = createScopedNetworkRuntime({ swarm: swarmB, store: {}, catalogRegistry: consumerRegistry })
   await source.start()
   await consumer.start()
@@ -3532,7 +3565,12 @@ test('a backpressured socket does not abort the catalog walk', async (t) => {
 
   const swarmA = fakeSwarm()
   const swarmB = fakeSwarm()
-  const source = createScopedNetworkRuntime({ swarm: swarmA, store: {}, catalogRegistry: sourceRegistry })
+  const source = createScopedNetworkRuntime({
+    swarm: swarmA,
+    store: {},
+    catalogRegistry: sourceRegistry,
+    initialNetworkPolicy: contributionPolicy(),
+  })
   const consumer = createScopedNetworkRuntime({ swarm: swarmB, store: {}, catalogRegistry: consumerRegistry })
   await source.start()
   await consumer.start()
@@ -3566,16 +3604,28 @@ test('a backpressured socket does not abort the catalog walk', async (t) => {
 // caller means the one seeder that forgets breaks the title for everyone.
 test('retaining a title also retains the cover published with it', async (t) => {
   const publisher = crypto.keyPair(bytes(32, 71))
-  const coreKey = bytes(32, 72)
+  // Each asset is its own canonical static core under the v2 descriptor, so the
+  // media and its cover are keyed separately; the cover still occupies only the
+  // span its artwork provenance published.
+  const mediaCore = createStaticAssetManifest({
+    treeHash: bytes(32, 73),
+    blockLength: 6,
+    byteLength: 6 * ASSET_BLOCK_SIZE,
+  })
+  const posterCore = createStaticAssetManifest({
+    treeHash: bytes(32, 74),
+    blockLength: 8,
+    byteLength: 8 * ASSET_BLOCK_SIZE,
+  })
   const media = createRenditionDescriptor({
     purpose: 'original',
     format: 'video/mp4',
-    core: { key: coreKey, length: 6, treeHash: bytes(32, 73), byteLength: 6144 },
+    core: mediaCore,
   })
   const poster = createRenditionDescriptor({
     purpose: 'poster',
     format: 'image/jpeg',
-    core: { key: coreKey, length: 8, treeHash: bytes(32, 74), byteLength: 53905 },
+    core: posterCore,
   })
   const manifest = createPublicationManifest({
     publisherId: publisher.publicKey,
@@ -3583,8 +3633,8 @@ test('retaining a title also retains the cover published with it', async (t) => 
     title: 'Seeded with its cover',
     renditions: [media, poster],
     provenance: [
-      { type: 'upload', renditionId: media.renditionId, coreKey: b4a.toString(coreKey, 'hex'), start: 0, end: 6 },
-      { type: 'artwork', role: 'poster', renditionId: poster.renditionId, coreKey: b4a.toString(coreKey, 'hex'), blobId: '7:1:900:53905', start: 7, end: 8 },
+      { type: 'upload', renditionId: media.renditionId, coreKey: b4a.toString(mediaCore.key, 'hex'), start: 0, end: 6 },
+      { type: 'artwork', role: 'poster', renditionId: poster.renditionId, coreKey: b4a.toString(posterCore.key, 'hex'), blobId: '7:1:900:53905', start: 7, end: 8 },
     ],
     keyPair: publisher,
     signedAt: 10,

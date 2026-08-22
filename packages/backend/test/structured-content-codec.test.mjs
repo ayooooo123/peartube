@@ -97,19 +97,21 @@ const contentDetails = {
   contentFingerprint: 'sha256:abc',
   importIdentityKey: 'tmdb:episode:62085',
   importClaimantId: 'claimant-1',
-  publicationId: '10'.repeat(32),
-  manifestId: '11'.repeat(32),
-  renditionId: '12'.repeat(32),
-  assetId: '13'.repeat(32),
-  coreKey: '13'.repeat(32),
-  publisherId: '14'.repeat(32),
-  publicationSequence: 7,
-  metadataClaimId: '15'.repeat(32),
-  availabilityClaimId: '16'.repeat(32),
-  publicationOperationId: '17'.repeat(32),
-  metadataClaimOperationId: '18'.repeat(32),
-  availabilityClaimOperationId: '19'.repeat(32),
-  publicationManifestHex: 'abcd'
+  publication: {
+    publicationId: '10'.repeat(32),
+    manifestId: '11'.repeat(32),
+    renditionId: '12'.repeat(32),
+    assetId: '13'.repeat(32),
+    coreKey: '13'.repeat(32),
+    publisherId: '14'.repeat(32),
+    sequence: 7,
+    metadataClaimId: '15'.repeat(32),
+    availabilityClaimId: '16'.repeat(32),
+    publicationOperationId: '17'.repeat(32),
+    metadataClaimOperationId: '18'.repeat(32),
+    availabilityClaimOperationId: '19'.repeat(32),
+    manifestHex: 'abcd'
+  }
 }
 
 const channelSource = {
@@ -363,24 +365,14 @@ test('private and public channel profile sidecars retain structured fields', (t)
 })
 
 test('private and public content detail sidecars retain structured and reconciliation fields', (t) => {
+  t.is(
+    Object.keys(contentDetails.publication).length,
+    13,
+    'the fixture carries the whole publication cluster'
+  )
   assertRetains(t, roundTripPrivate('@peartubeChannel/contentDetails', contentDetails), contentDetails)
 
-  const {
-    publicationId,
-    manifestId,
-    renditionId,
-    assetId,
-    coreKey,
-    publisherId,
-    publicationSequence,
-    metadataClaimId,
-    availabilityClaimId,
-    publicationOperationId,
-    metadataClaimOperationId,
-    availabilityClaimOperationId,
-    publicationManifestHex,
-    ...publicContentDetails
-  } = contentDetails
+  const { publication, ...publicContentDetails } = contentDetails
   const publicDetails = {
     ...publicContentDetails,
     publicationState: 'replicationPending',

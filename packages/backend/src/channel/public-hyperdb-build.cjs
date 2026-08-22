@@ -10,6 +10,24 @@ const DB_DIR = path.join(ROOT, 'hyperdb')
 const schema = Hyperschema.from(SCHEMA_DIR)
 const publicSchema = schema.namespace('peartubePublic')
 
+// Optional fields share one flags word that the generated encoder builds with
+// a chain of bitwise `|` - a SIGNED 32-bit operation. The 32nd optional field
+// contributes 2**31, turning the word negative and failing `c.uint` encoding
+// at write time, so the struct silently cannot be persisted. Refuse it here.
+const MAX_OPTIONAL_FIELDS = 31
+const registerPublicStruct = publicSchema.register.bind(publicSchema)
+publicSchema.register = (definition) => {
+  const optional = (definition?.fields || []).filter((field) => field.required !== true)
+  if (optional.length > MAX_OPTIONAL_FIELDS) {
+    throw new Error(
+      `struct '${definition?.name}' has ${optional.length} optional fields; ` +
+      `at most ${MAX_OPTIONAL_FIELDS} can be encoded. Mark a field ` +
+      'required, or split the struct.',
+    )
+  }
+  return registerPublicStruct(definition)
+}
+
 publicSchema.register({
   name: 'metadata',
   compact: true,

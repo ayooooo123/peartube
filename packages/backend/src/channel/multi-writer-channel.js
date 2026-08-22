@@ -116,19 +116,7 @@ const CONTENT_DETAIL_FIELDS = [
   'contentFingerprint',
   'importIdentityKey',
   'importClaimantId',
-  'publicationId',
-  'manifestId',
-  'renditionId',
-  'assetId',
-  'coreKey',
-  'publisherId',
-  'publicationSequence',
-  'metadataClaimId',
-  'availabilityClaimId',
-  'publicationOperationId',
-  'metadataClaimOperationId',
-  'availabilityClaimOperationId',
-  'publicationManifestHex',
+  'publication',
 ]
 const CONTENT_STORAGE_DEFAULTS = {
   contentKind: '',
@@ -137,8 +125,28 @@ const CONTENT_STORAGE_DEFAULTS = {
   sourcePublishedAt: MAX_SAFE_RANGE,
   seasonNumber: MAX_SAFE_RANGE,
   episodeNumber: MAX_SAFE_RANGE,
-  originalAirDate: MAX_SAFE_RANGE,
-  publicationSequence: MAX_SAFE_RANGE
+  originalAirDate: MAX_SAFE_RANGE
+}
+// The publication cluster is one nested struct on the record, so its own
+// optional values need the same sentinel round trip the flat columns had:
+// without it an unset sequence would read back as a real sequence 0.
+const PUBLICATION_FIELDS = [
+  'publicationId',
+  'manifestId',
+  'renditionId',
+  'assetId',
+  'coreKey',
+  'publisherId',
+  'sequence',
+  'metadataClaimId',
+  'availabilityClaimId',
+  'publicationOperationId',
+  'metadataClaimOperationId',
+  'availabilityClaimOperationId',
+  'manifestHex',
+]
+const PUBLICATION_STORAGE_DEFAULTS = {
+  sequence: MAX_SAFE_RANGE
 }
 
 function toBuffer(value) {
@@ -188,37 +196,51 @@ function decodeStoredRecord(record, fields, defaults) {
 }
 
 function encodeContentDetails(details) {
-  return encodeStoredRecord(details, CONTENT_STORAGE_DEFAULTS)
+  const encoded = encodeStoredRecord(details, CONTENT_STORAGE_DEFAULTS)
+  if (encoded.publication) {
+    encoded.publication = encodeStoredRecord(encoded.publication, PUBLICATION_STORAGE_DEFAULTS)
+  }
+  return encoded
 }
 
 function decodeStoredContentDetails(details) {
-  return decodeStoredRecord(details, CONTENT_DETAIL_FIELDS, CONTENT_STORAGE_DEFAULTS)
+  const decoded = decodeStoredRecord(details, CONTENT_DETAIL_FIELDS, CONTENT_STORAGE_DEFAULTS)
+  if (decoded?.publication) {
+    decoded.publication = decodeStoredRecord(
+      decoded.publication,
+      PUBLICATION_FIELDS,
+      PUBLICATION_STORAGE_DEFAULTS
+    )
+  }
+  return decoded
 }
 
 function decodeContentDetails(details) {
   const decoded = decodeStoredContentDetails(details)
-  if (!decoded?.publicationId) return decoded
-  const manifest = decodePublicationManifest(b4a.from(decoded.publicationManifestHex, 'hex'))
+  const publication = decoded?.publication
+  if (!publication?.publicationId) return decoded
+  const manifest = decodePublicationManifest(b4a.from(publication.manifestHex, 'hex'))
   return {
     ...decoded,
     immutablePublication: {
-      publicationId: decoded.publicationId,
-      manifestId: decoded.manifestId,
-      renditionId: decoded.renditionId,
-      assetId: decoded.assetId,
-      coreKey: decoded.coreKey,
-      publisherId: decoded.publisherId,
-      sequence: decoded.publicationSequence,
-      claimIds: [decoded.metadataClaimId, decoded.availabilityClaimId],
+      publicationId: publication.publicationId,
+      manifestId: publication.manifestId,
+      renditionId: publication.renditionId,
+      assetId: publication.assetId,
+      coreKey: publication.coreKey,
+      publisherId: publication.publisherId,
+      sequence: publication.sequence,
+      claimIds: [publication.metadataClaimId, publication.availabilityClaimId],
       operationIds: [
-        decoded.publicationOperationId,
-        decoded.metadataClaimOperationId,
-        decoded.availabilityClaimOperationId,
+        publication.publicationOperationId,
+        publication.metadataClaimOperationId,
+        publication.availabilityClaimOperationId,
       ],
       manifest,
     },
   }
 }
+
 function mergeVideoContentDetails(video, details, publicationOperationFrames) {
   if (!details) return video
   const decoded = decodeContentDetails(details)

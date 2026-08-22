@@ -316,8 +316,14 @@ function markUploadCommitState(error, state) {
 }
 
 function stagedRollbackPendingError(error, rollbackError) {
+  // The rollback message alone hides WHY the upload was being rolled back, and
+  // that original error is usually the actionable one. Carry both.
+  const rollbackMessage = rollbackError?.message || rollbackError || 'staged metadata could not be deleted';
+  const causeMessage = error?.message || (error ? String(error) : '');
   const pending = new Error(
-    `Upload rollback is pending: ${rollbackError?.message || rollbackError || 'staged metadata could not be deleted'}`,
+    causeMessage
+      ? `Upload rollback is pending: ${rollbackMessage} (rolling back after: ${causeMessage})`
+      : `Upload rollback is pending: ${rollbackMessage}`,
     { cause: error },
   );
   return markUploadCommitState(pending, 'uploadRollbackPending');
@@ -600,8 +606,15 @@ async function finalizeAcceptedPublication(metadata, runtime = {}) {
     publisherId: publication.publisherId,
     retentionClass: runtime.retentionClass,
   });
-  if (announcement?.status && announcement.status !== 'published') {
-    throw new Error('publisher catalog was not announced');
+  // A publisher that already has a live binding is re-announced rather than
+  // announced from scratch: 'refreshed' keeps the existing locator alive and
+  // 'rebound' replaces it. Both mean the catalog is discoverable, so only an
+  // unrecognised status is a failure.
+  if (announcement?.status &&
+      announcement.status !== 'published' &&
+      announcement.status !== 'refreshed' &&
+      announcement.status !== 'rebound') {
+    throw new Error(`publisher catalog was not announced: ${announcement.status}`);
   }
   if (typeof runtime.finalizeMetadata !== 'function') {
     throw new Error('published metadata update is unavailable');
@@ -1091,19 +1104,21 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
     manifest
   };
   Object.assign(metadata, {
-    publicationId: manifest.publicationId,
-    manifestId: manifest.body.manifestId,
-    renditionId: rendition.renditionId,
-    assetId: rendition.core.assetId,
-    coreKey: rendition.core.key,
-    publisherId: manifest.body.publisherId,
-    publicationSequence: firstSequence,
-    metadataClaimId: claims[0].claimId,
-    availabilityClaimId: claims[1].claimId,
-    publicationOperationId: operationIds[0],
-    metadataClaimOperationId: operationIds[1],
-    availabilityClaimOperationId: operationIds[2],
-    publicationManifestHex: b4a.toString(manifestPayload, 'hex'),
+    publication: {
+      publicationId: manifest.publicationId,
+      manifestId: manifest.body.manifestId,
+      renditionId: rendition.renditionId,
+      assetId: rendition.core.assetId,
+      coreKey: rendition.core.key,
+      publisherId: manifest.body.publisherId,
+      sequence: firstSequence,
+      metadataClaimId: claims[0].claimId,
+      availabilityClaimId: claims[1].claimId,
+      publicationOperationId: operationIds[0],
+      metadataClaimOperationId: operationIds[1],
+      availabilityClaimOperationId: operationIds[2],
+      manifestHex: b4a.toString(manifestPayload, 'hex'),
+    },
     publicationOperationFramesHex: operationFramesHex,
   });
   metadata.publicationState = 'commitUncertain';

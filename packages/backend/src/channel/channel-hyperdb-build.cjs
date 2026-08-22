@@ -10,6 +10,26 @@ const DB_DIR = path.join(ROOT, 'hyperdb')
 const schema = Hyperschema.from(SCHEMA_DIR)
 const ns = schema.namespace('peartubeChannel')
 
+// Every optional field in a struct gets a bit in a single flags word, and the
+// generated encoder builds that word with a chain of bitwise `|`. That is a
+// SIGNED 32-bit operation, so the 32nd optional field contributes 2**31 and
+// turns the whole word negative, which then fails `c.uint` encoding at write
+// time - a struct that silently cannot be persisted. Refuse to generate one.
+const MAX_OPTIONAL_FIELDS = 31
+const registerStruct = ns.register.bind(ns)
+ns.register = (definition) => {
+  const fields = definition?.fields || []
+  const optional = fields.filter((field) => field.required !== true)
+  if (optional.length > MAX_OPTIONAL_FIELDS) {
+    throw new Error(
+      `struct '${definition?.name}' has ${optional.length} optional fields; ` +
+      `at most ${MAX_OPTIONAL_FIELDS} can be encoded. Mark a field ` +
+      'required, or split the struct.',
+    )
+  }
+  return registerStruct(definition)
+}
+
 ns.register({
   name: 'metadata',
   compact: true,
@@ -107,6 +127,33 @@ ns.register({
   ]
 })
 
+// The immutable publication cluster is written once, read once, and only ever
+// makes sense whole: `decodeContentDetails` assembles it into a single logical
+// object or ignores it entirely. Keeping its thirteen values as flat optionals
+// on `contentDetails` spent thirteen of that struct's flag bits and pushed the
+// flags word past 2**31 (see MAX_OPTIONAL_FIELDS above), so the cluster travels
+// as one nested struct that costs the parent a single bit. The parent field is
+// named `publication` because `immutablePublication` is the logical read shape
+// (claim/operation id arrays plus a decoded manifest), not what is stored.
+ns.register({
+  name: 'immutablePublication',
+  fields: [
+    { name: 'publicationId', type: 'string' },
+    { name: 'manifestId', type: 'string' },
+    { name: 'renditionId', type: 'string' },
+    { name: 'assetId', type: 'string' },
+    { name: 'coreKey', type: 'string' },
+    { name: 'publisherId', type: 'string' },
+    { name: 'sequence', type: 'uint64' },
+    { name: 'metadataClaimId', type: 'string' },
+    { name: 'availabilityClaimId', type: 'string' },
+    { name: 'publicationOperationId', type: 'string' },
+    { name: 'metadataClaimOperationId', type: 'string' },
+    { name: 'availabilityClaimOperationId', type: 'string' },
+    { name: 'manifestHex', type: 'string' }
+  ]
+})
+
 ns.register({
   name: 'contentDetails',
   fields: [
@@ -130,19 +177,7 @@ ns.register({
     { name: 'importIdentityKey', type: 'string' },
     { name: 'importClaimantId', type: 'string' },
     { name: 'artwork', type: '@peartubeChannel/contentArtwork', array: true },
-    { name: 'publicationId', type: 'string' },
-    { name: 'manifestId', type: 'string' },
-    { name: 'renditionId', type: 'string' },
-    { name: 'assetId', type: 'string' },
-    { name: 'coreKey', type: 'string' },
-    { name: 'publisherId', type: 'string' },
-    { name: 'publicationSequence', type: 'uint64' },
-    { name: 'metadataClaimId', type: 'string' },
-    { name: 'availabilityClaimId', type: 'string' },
-    { name: 'publicationOperationId', type: 'string' },
-    { name: 'metadataClaimOperationId', type: 'string' },
-    { name: 'availabilityClaimOperationId', type: 'string' },
-    { name: 'publicationManifestHex', type: 'string' }
+    { name: 'publication', type: '@peartubeChannel/immutablePublication' }
   ]
 })
 ns.register({

@@ -198,20 +198,41 @@ const CONTENT_FIELDS = new Set([
   'contentFingerprint',
   'importIdentityKey',
   'importClaimantId',
+  'publication'
+])
+
+// The publication cluster is persisted as one nested record. Every value keeps
+// the bounds it had as a flat column: 32-byte hex for each identity, the
+// persisted-integer path for the sequence, and the manifest hex bound.
+const CONTENT_PUBLICATION_ID_FIELDS = [
   'publicationId',
   'manifestId',
   'renditionId',
   'assetId',
   'coreKey',
   'publisherId',
-  'publicationSequence',
   'metadataClaimId',
   'availabilityClaimId',
   'publicationOperationId',
   'metadataClaimOperationId',
-  'availabilityClaimOperationId',
-  'publicationManifestHex',
+  'availabilityClaimOperationId'
+]
+const CONTENT_PUBLICATION_FIELDS = new Set([
+  ...CONTENT_PUBLICATION_ID_FIELDS,
+  'sequence',
+  'manifestHex'
 ])
+
+function normalizeContentPublication (publication) {
+  const input = assertAllowedFields(publication, CONTENT_PUBLICATION_FIELDS, 'content publication')
+  const out = {}
+  for (const field of CONTENT_PUBLICATION_ID_FIELDS) {
+    assignString(out, input, field, 64, HEX_32_PATTERN)
+  }
+  assignPersistedInteger(out, input, 'sequence')
+  assignString(out, input, 'manifestHex', MAX_MANIFEST_HEX_LENGTH, MANIFEST_HEX_PATTERN)
+  return out
+}
 
 export function normalizeContentDetails (details) {
   const input = assertAllowedFields(details, CONTENT_FIELDS, 'content details')
@@ -238,23 +259,10 @@ export function normalizeContentDetails (details) {
     out.publicationState = normalizePublicationState(input.publicationState)
   }
   assignString(out, input, 'contentFingerprint', MAX_FINGERPRINT_LENGTH, SHA256_FINGERPRINT_PATTERN)
-  for (const field of [
-    'publicationId',
-    'manifestId',
-    'renditionId',
-    'assetId',
-    'coreKey',
-    'publisherId',
-    'metadataClaimId',
-    'availabilityClaimId',
-    'publicationOperationId',
-    'metadataClaimOperationId',
-    'availabilityClaimOperationId',
-  ]) {
-    assignString(out, input, field, 64, HEX_32_PATTERN)
+  if (input.publication !== undefined && input.publication !== null) {
+    const publication = normalizeContentPublication(input.publication)
+    if (Object.keys(publication).length > 0) out.publication = publication
   }
-  assignPersistedInteger(out, input, 'publicationSequence')
-  assignString(out, input, 'publicationManifestHex', MAX_MANIFEST_HEX_LENGTH, MANIFEST_HEX_PATTERN)
   const normalizedImportIdentityKey = optionalString(input.importIdentityKey, 'importIdentityKey', MAX_IDENTITY_KEY_LENGTH)
   const normalizedImportClaimantId = optionalString(input.importClaimantId, 'importClaimantId', 64, CLAIMANT_ID_PATTERN)
   if ((normalizedImportIdentityKey === undefined) !== (normalizedImportClaimantId === undefined)) {

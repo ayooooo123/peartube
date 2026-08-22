@@ -328,19 +328,21 @@ test('MultiWriterChannel round-trips the private immutable publication reconcili
     })
     const persisted = {
       publicationState: 'commitUncertain',
-      publicationId: manifest.publicationId,
-      manifestId: manifest.body.manifestId,
-      renditionId: rendition.renditionId,
-      assetId: core.assetId,
-      coreKey: b4a.toString(core.key, 'hex'),
-      publisherId: b4a.toString(keyPair.publicKey, 'hex'),
-      publicationSequence: 7,
-      metadataClaimId: '23'.repeat(32),
-      availabilityClaimId: '24'.repeat(32),
-      publicationOperationId: '25'.repeat(32),
-      metadataClaimOperationId: '26'.repeat(32),
-      availabilityClaimOperationId: '27'.repeat(32),
-      publicationManifestHex: b4a.toString(encodePublicationManifest(manifest), 'hex'),
+      publication: {
+        publicationId: manifest.publicationId,
+        manifestId: manifest.body.manifestId,
+        renditionId: rendition.renditionId,
+        assetId: core.assetId,
+        coreKey: b4a.toString(core.key, 'hex'),
+        publisherId: b4a.toString(keyPair.publicKey, 'hex'),
+        sequence: 7,
+        metadataClaimId: '23'.repeat(32),
+        availabilityClaimId: '24'.repeat(32),
+        publicationOperationId: '25'.repeat(32),
+        metadataClaimOperationId: '26'.repeat(32),
+        availabilityClaimOperationId: '27'.repeat(32),
+        manifestHex: b4a.toString(encodePublicationManifest(manifest), 'hex'),
+      },
       publicationOperationFramesHex: '00112233',
     }
 
@@ -349,27 +351,28 @@ test('MultiWriterChannel round-trips the private immutable publication reconcili
     const physicalFrames = await channel.db.get('@peartubeChannel/publicationOperationFrames', {
       id: 'publication-private'
     })
-    for (const [field, value] of Object.entries(persisted)) {
-      if (field === 'publicationOperationFramesHex') continue
-      assert.equal(physicalDetails[field], value)
+    assert.equal(Object.keys(persisted.publication).length, 13, 'the whole cluster is persisted')
+    assert.equal(physicalDetails.publicationState, persisted.publicationState)
+    for (const [field, value] of Object.entries(persisted.publication)) {
+      assert.equal(physicalDetails.publication[field], value, `${field} persists verbatim`)
     }
     assert.equal(physicalFrames.publicationOperationFramesHex, persisted.publicationOperationFramesHex)
     assert.equal('publicationOperationFramesHex' in physicalDetails, false)
 
     const logical = await channel.getVideo('publication-private')
     assert.deepEqual(logical.immutablePublication, {
-      publicationId: persisted.publicationId,
-      manifestId: persisted.manifestId,
-      renditionId: persisted.renditionId,
-      assetId: persisted.assetId,
-      coreKey: persisted.coreKey,
-      publisherId: persisted.publisherId,
-      sequence: persisted.publicationSequence,
-      claimIds: [persisted.metadataClaimId, persisted.availabilityClaimId],
+      publicationId: persisted.publication.publicationId,
+      manifestId: persisted.publication.manifestId,
+      renditionId: persisted.publication.renditionId,
+      assetId: persisted.publication.assetId,
+      coreKey: persisted.publication.coreKey,
+      publisherId: persisted.publication.publisherId,
+      sequence: persisted.publication.sequence,
+      claimIds: [persisted.publication.metadataClaimId, persisted.publication.availabilityClaimId],
       operationIds: [
-        persisted.publicationOperationId,
-        persisted.metadataClaimOperationId,
-        persisted.availabilityClaimOperationId,
+        persisted.publication.publicationOperationId,
+        persisted.publication.metadataClaimOperationId,
+        persisted.publication.availabilityClaimOperationId,
       ],
       operationFramesHex: persisted.publicationOperationFramesHex,
       manifest,

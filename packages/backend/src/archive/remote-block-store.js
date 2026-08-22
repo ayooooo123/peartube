@@ -1,5 +1,15 @@
 import crypto from 'hypercore-crypto'
 import b4a from 'b4a'
+import sodium from 'sodium-universal'
+
+// S3's `x-amz-checksum-sha256` is the base64 of a raw SHA-256 digest. Hypercore
+// hashes are BLAKE2b, so none of them can stand in for it. Taken from
+// sodium-universal rather than node:crypto so this stays usable under Bare.
+function sha256Base64 (data) {
+  const digest = b4a.alloc(sodium.crypto_hash_sha256_BYTES)
+  sodium.crypto_hash_sha256(digest, data)
+  return b4a.toString(digest, 'base64')
+}
 
 // A relay's capacity is its disk. Cover art and metadata are small, but the
 // media blocks are the whole title, so a relay that must hold every block it
@@ -70,10 +80,14 @@ export function createRemoteBlockStore({ provider, prefix = '', coreKey } = {}) 
       return provider.putBlock({
         key: keyFor(blockIndex),
         data,
-        // Handed to the provider so the object carries its own checksum where
-        // the vendor supports one. It is not what we verify against on read:
-        // that is the tree, which the provider never sees.
-        contentHash: b4a.toString(crypto.data(data), 'hex')
+        // Vendor-side integrity, in the one format S3 accepts: the BASE64 of a
+        // raw SHA-256 digest. This used to hand over a hex Hypercore leaf hash,
+        // which is neither base64 nor SHA-256, so every upload to Backblaze
+        // failed with `400 InvalidDigest` and the whole feature was dead.
+        //
+        // It is not what we verify against on read - that is the tree, which
+        // the provider never sees - so it stays a belt to the tree's braces.
+        checksumSha256Base64: sha256Base64(data)
       })
     },
 

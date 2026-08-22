@@ -9,6 +9,34 @@ function responseError(response, operation) {
   return error
 }
 
+// Archiving one title is hundreds of block requests, and an object store will
+// occasionally reset a connection or answer 500/503. Without a retry a single
+// transient blip fails the whole archive - which is exactly what happened here:
+// a bare `fetch failed` part-way through a 20 MiB title.
+//
+// Every operation this provider issues is idempotent - blocks are addressed by
+// core and index and their bytes are fixed - so a retry can never write
+// something different from what the first attempt would have written.
+const MAX_ATTEMPTS = 4
+const RETRY_BASE_MS = 200
+
+// 4xx is the caller's fault and will fail identically forever; 408 and 429 are
+// the exceptions the spec carves out for "come back later".
+function isRetryable(error) {
+  const status = error?.statusCode
+  if (status === undefined) return true // network-level: no response at all
+  if (status === 408 || status === 429) return true
+  return status >= 500
+}
+
+function backoffMs(attempt) {
+  // Exponential with jitter, so a relay retrying many blocks at once does not
+  // resend them all on the same beat.
+  return (RETRY_BASE_MS * (2 ** (attempt - 1))) * (0.5 + Math.random())
+}
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+
 /**
  * S3 archive access through presigned URLs.
  *
@@ -27,32 +55,54 @@ export function createS3ArchiveProvider(options = {}) {
   })
   let requests = 0
   let failures = 0
+  let retries = 0
 
   function getStatus() {
-    return { ...config, requests, failures, healthy: failures === 0 }
+    // `failures` counts requests that failed for good, after retries. A blip
+    // that a retry absorbed is visible as `retries`, not as ill health.
+    return { ...config, requests, failures, retries, healthy: failures === 0 }
+  }
+  async function attempt(operation, key, init) {
+    const signed = await sign({ operation, key, method: init.method || 'GET', headers: init.headers || {} })
+    const response = await fetchImpl(assertString(signed.url, 'signed.url'), {
+      ...init,
+      headers: { ...(init.headers || {}), ...(signed.headers || {}) },
+    })
+    if (!response.ok) throw responseError(response, operation)
+    return response
   }
   async function request(operation, key, init = {}) {
     assertString(key, 'key')
     requests++
-    try {
-      const signed = await sign({ operation, key, method: init.method || 'GET', headers: init.headers || {} })
-      const response = await fetchImpl(assertString(signed.url, 'signed.url'), {
-        ...init,
-        headers: { ...(init.headers || {}), ...(signed.headers || {}) },
-      })
-      if (!response.ok) throw responseError(response, operation)
-      return response
-    } catch (error) {
-      failures++
-      throw error
+    for (let n = 1; ; n++) {
+      try {
+        return await attempt(operation, key, init)
+      } catch (error) {
+        // A HEAD that answers 404 is a normal answer to "is this block here?",
+        // and hasBlock() reads it as `false`. Retrying it would turn every
+        // absent block into four requests and a delay.
+        if (n >= MAX_ATTEMPTS || !isRetryable(error)) {
+          failures++
+          throw error
+        }
+        retries++
+        await sleep(backoffMs(n))
+      }
     }
   }
 
   return {
     getStatus,
-    async putBlock({ key, data, contentHash }) {
+    /**
+     * `checksumSha256Base64` is named for its exact wire format because that
+     * is the whole contract: S3 wants the BASE64 of the raw SHA-256 digest.
+     * A hex digest, or a hash that is not SHA-256, is rejected outright -
+     * Backblaze answers `400 InvalidDigest` - so a vaguely named "hash"
+     * parameter here is a live foot-gun rather than a convenience.
+     */
+    async putBlock({ key, data, checksumSha256Base64 }) {
       const headers = {}
-      if (contentHash) headers['x-amz-checksum-sha256'] = contentHash
+      if (checksumSha256Base64) headers['x-amz-checksum-sha256'] = checksumSha256Base64
       await request('put', key, { method: 'PUT', headers, body: data })
       return { success: true, key }
     },

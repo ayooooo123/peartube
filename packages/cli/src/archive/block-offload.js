@@ -6,6 +6,9 @@ import {
   createRemoteBlockStore,
   createS3ArchiveProvider
 } from '@peartube/backend/archive'
+import { ASSET_BLOCK_SIZE } from '@peartube/backend/assets'
+
+import { boundedIngestBytes } from '../storage-guard.js'
 
 // Relay-side wiring for block offload. The mechanism lives in the backend:
 //   * archive/block-offloader.js  puts a block in the bucket and drops the
@@ -103,6 +106,17 @@ export async function createRelayBlockOffload ({
     prefix,
 
     /**
+     * Local working space a bounded ingest of `streamBytes` needs on this
+     * volume: the window it keeps resident plus the two blocks in flight plus
+     * the merkle bookkeeping neither the window nor the bucket holds. Never the
+     * size of the title — that is the whole point of the window — so the
+     * archive download guard sizes its requirement with this instead.
+     */
+    localWorkingBytes (streamBytes = 0) {
+      return boundedIngestBytes({ windowBytes, blockBytes: ASSET_BLOCK_SIZE, streamBytes })
+    },
+
+    /**
      * Wraps the CorestoreStorage so a local block miss is answered from the
      * bucket, verified against the core's own merkle tree.
      *
@@ -154,6 +168,43 @@ export async function createRelayBlockOffload ({
         })
       }
       return result
+    },
+
+    /**
+     * Bounded/streaming ingest. `offloadAsset` above runs ONCE on a finished
+     * core; this hands the writer an offloader it drives per block, so block
+     * data leaves the volume as it arrives instead of after the whole title
+     * has landed. Same offloader, same window - only the caller's cadence
+     * differs. `drain` is wrapped so the relay's totals count every block that
+     * leaves during an ingest, not just the ones offloadAsset moved.
+     */
+    createOffloader ({ core }) {
+      const offloader = createBlockOffloader({
+        core,
+        store: storeFor(keyHexOf(core)),
+        windowBytes,
+        log
+      })
+      return {
+        track: (index, byteLength) => offloader.track(index, byteLength),
+        stats: () => offloader.stats?.(),
+        async drain () {
+          const result = await offloader.drain()
+          blocksOffloaded += result.blocksOffloaded
+          bytesOffloaded += result.bytesOffloaded
+          return result
+        }
+      }
+    },
+
+    /**
+     * Where a streaming ingest parks blocks it has read but cannot keep: the
+     * staging core's own keyspace in the bucket. The writer restores from here
+     * on its second pass and purges the keys once the finished core verifies,
+     * so nothing outlives the archive that produced it.
+     */
+    createStagingStore ({ core }) {
+      return storeFor(keyHexOf(core))
     },
 
     stats () {

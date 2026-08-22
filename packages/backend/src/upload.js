@@ -1258,7 +1258,15 @@ export function createUploadManager({
   deviceKeyPair = null,
   now = () => Date.now()
 }) {
-  const publicationRuntime = { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair, store: ctx?.store, offload: ctx?.blockOffload?.offloadAsset || null, now };
+  // Hand the asset writer the whole offload capability when the relay exposes
+  // one. Reducing it to `offloadAsset` here silently hid `createOffloader` and
+  // `createStagingStore`, so bounded and streaming ingest could never be
+  // reached through this seam no matter how the relay was configured. A relay
+  // that only has the legacy hook still passes just the function.
+  const blockOffload = typeof ctx?.blockOffload?.createOffloader === 'function'
+    ? ctx.blockOffload
+    : (ctx?.blockOffload?.offloadAsset || null);
+  const publicationRuntime = { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair, store: ctx?.store, offload: blockOffload, now };
   /**
    * Probe the uploaded MP4 for its playback profile (moov position +
    * keyframe index) and persist it for range prioritization at playback

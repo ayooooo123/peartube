@@ -130,10 +130,30 @@ function reserveAdjustedHeadroom(snapshot, reservedBytes) {
   }
 }
 
-function storageHeadroomError(snapshot, written, chunkLength, kind, state = null) {
+// A bounded ingest's local footprint does not grow with the title, so the
+// question is only whether its working set fits in the live room — asked again
+// on every chunk, against the same floor-adjusted number, so free disk still
+// governs even though the title no longer does.
+//
+// The chunk in flight is not added to the working set: that set already carries
+// two whole blocks of slack for exactly this. It is compared against the room
+// on its own, because a chunk larger than everything left is unwritable no
+// matter how modest the window is.
+function boundedRoomError(bounded, room, chunkLength, kind) {
+  const need = Math.max(bounded, chunkLength)
+  if (need <= room) return null
+  return `${kind} needs ${need} bytes of bounded-ingest working space but only ${Math.max(0, room)} bytes of storage headroom remain`
+}
+
+// `bounded` is null unless the caller has told this download its bytes never
+// all land on the volume. Null keeps every branch below byte-for-byte what it
+// was: the staged file plus its eventual persisted copy, both title-sized.
+function storageHeadroomError(snapshot, written, chunkLength, kind, state = null, boundedBytes = null) {
+  const bounded = Number.isFinite(boundedBytes) && boundedBytes > 0 ? Math.floor(boundedBytes) : null
   const staged = written + chunkLength
   if (Number.isFinite(snapshot)) {
     const room = Math.floor(snapshot)
+    if (bounded !== null) return boundedRoomError(bounded, room, chunkLength, kind)
     if (state && !Number.isFinite(state.sharedRoom)) state.sharedRoom = room
     const baseline = state && Number.isFinite(state.sharedRoom) ? state.sharedRoom : room
     if ((2 * staged) <= baseline && written + (2 * chunkLength) <= room) return null
@@ -145,10 +165,17 @@ function storageHeadroomError(snapshot, written, chunkLength, kind, state = null
   if (!Number.isFinite(tmp) || !Number.isFinite(storage)) return `${kind} cannot measure archive storage headroom`
   if (snapshot.sharedVolume !== false) {
     const room = Math.min(tmp, storage)
+    if (bounded !== null) return boundedRoomError(bounded, room, chunkLength, kind)
     if (state && !Number.isFinite(state.sharedRoom)) state.sharedRoom = room
     const baseline = state && Number.isFinite(state.sharedRoom) ? state.sharedRoom : room
     if ((2 * staged) <= baseline && written + (2 * chunkLength) <= room) return null
     return `${kind} exceeded available storage headroom of ${Math.max(0, room)} bytes`
+  }
+  // The temp volume still has to hold the chunk in flight in either mode; only
+  // the persisted side stops being title-sized.
+  if (bounded !== null) {
+    if (tmp < chunkLength) return `${kind} exceeded available archive temp headroom of ${Math.max(0, tmp)} bytes`
+    return boundedRoomError(bounded, storage, chunkLength, kind)
   }
   if (state && !Number.isFinite(state.tmpRoom)) state.tmpRoom = tmp
   if (state && !Number.isFinite(state.storageRoom)) state.storageRoom = storage
@@ -159,7 +186,7 @@ function storageHeadroomError(snapshot, written, chunkLength, kind, state = null
   return null
 }
 
-function pipeToFile (res, filePath, fs, { storageHeadroom = null, headroomState = null, reserveStorageBytes = null, releaseStorageBytes = null } = {}) {
+function pipeToFile (res, filePath, fs, { storageHeadroom = null, headroomState = null, reserveStorageBytes = null, releaseStorageBytes = null, boundedBytesFor = null, reserveBoundedBytes = null } = {}) {
   return new Promise((resolve, reject) => {
     let fd
     try { fd = fs.openSync(filePath, 'w') } catch (err) { reject(err); return }
@@ -173,24 +200,31 @@ function pipeToFile (res, filePath, fs, { storageHeadroom = null, headroomState 
     }
     res.on('data', (chunk) => {
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      const bounded = boundedBytesFor ? boundedBytesFor(written + bytes.length) : null
       if (typeof storageHeadroom === 'function') {
-        const error = storageHeadroomError(storageHeadroom(), written, bytes.length, 'direct download', headroomState)
+        const error = storageHeadroomError(storageHeadroom(), written, bytes.length, 'direct download', headroomState, bounded)
         if (error) {
           res.destroy?.()
           finish(new Error(error))
           return
         }
       }
-      let reserved = false
-      if (typeof reserveStorageBytes === 'function') {
+      // Unbounded, this job claims the persisted copy it is about to create,
+      // byte for byte. Bounded, what it will keep is the working set, so it
+      // claims that instead — a title-sized claim would deny a concurrent
+      // archive room this job never occupies.
+      let claimed = 0
+      if (bounded !== null) {
+        if (typeof reserveBoundedBytes === 'function') claimed = reserveBoundedBytes(bounded)
+      } else if (typeof reserveStorageBytes === 'function') {
         reserveStorageBytes(bytes.length)
-        reserved = true
+        claimed = bytes.length
       }
       try {
         fs.writeSync(fd, bytes)
         written += bytes.length
       } catch (err) {
-        if (reserved && typeof releaseStorageBytes === 'function') releaseStorageBytes(bytes.length)
+        if (claimed > 0 && typeof releaseStorageBytes === 'function') releaseStorageBytes(claimed)
         res.destroy?.()
         finish(err)
       }
@@ -211,7 +245,20 @@ export function byteCeiling (_maxBytes, _requirePublicSource, headroomBytes) {
 // live temp-volume room and aggregate persisted-storage room. It is checked
 // while streaming, so concurrent fetches cannot reserve the same bytes and
 // failed huge fetches clean up their partial temp directories.
-export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lookup = null, storageHeadroom = null, storageReservations = null } = {}) {
+//
+// `boundedLocalBytes` is how the caller says the bytes of this download do not
+// all come to rest here: a number, or a function of the bytes streamed so far,
+// giving the local working space the ingest behind this download needs. Set,
+// the guard sizes the requirement by that working set instead of by the title,
+// and the live free-disk room is still what it is measured against. Unset —
+// the default, and every path with no block offload configured — nothing below
+// changes.
+export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lookup = null, storageHeadroom = null, storageReservations = null, boundedLocalBytes = null } = {}) {
+  const boundedBytesFor = typeof boundedLocalBytes === 'function'
+    ? (streamBytes) => Math.max(0, Math.floor(Number(boundedLocalBytes(streamBytes)) || 0))
+    : (Number.isFinite(boundedLocalBytes) && boundedLocalBytes > 0
+        ? () => Math.floor(boundedLocalBytes)
+        : null)
   if (!outputDir) throw new Error('outputDir is required')
   return {
     async download (input = {}) {
@@ -248,7 +295,7 @@ export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lo
       if (typeof measuredHeadroom === 'function') {
         const snapshot = measuredHeadroom()
         if (atStorageFloor(snapshot)) throw new Error('relay has no archive storage headroom; refusing direct download')
-        const error = storageHeadroomError(snapshot, 0, 1, 'direct download', headroomState)
+        const error = storageHeadroomError(snapshot, 0, 1, 'direct download', headroomState, boundedBytesFor ? boundedBytesFor(0) : null)
         if (error) throw new Error(error)
       }
       const targetDir = path.join(outputDir, id)
@@ -288,7 +335,13 @@ export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lo
           storageHeadroom: measuredHeadroom,
           headroomState,
           reserveStorageBytes: reserveBytes,
-          releaseStorageBytes: releaseBytes
+          releaseStorageBytes: releaseBytes,
+          boundedBytesFor,
+          reserveBoundedBytes: (target) => {
+            const claim = Math.max(0, Math.floor(target) - reservation.bytes)
+            if (claim > 0) reserveBytes(claim)
+            return claim
+          }
         })
       } catch (err) {
         try { fs.rmSync(targetDir, { recursive: true, force: true }) } catch {}

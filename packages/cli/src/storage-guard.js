@@ -47,6 +47,39 @@ export function measureVolumeBytes({ storagePath, statfsSync = null, log = null 
   }
 }
 
+// Per-block bookkeeping a bounded ingest keeps on the local volume: roughly 64
+// bytes of merkle tree and bitfield for the staging core plus the same for the
+// final core.
+export const INGEST_TREE_BYTES_PER_BLOCK = 128
+
+// Local bytes a bounded (offloading) ingest needs while it streams a title,
+// which is deliberately NOT the size of the title.
+//
+// The bounded ingest holds one offload window of block data, plus the block it
+// is building and the block it is uploading, and drops every block the bucket
+// has confirmed. That bound is the backend's own — peak local block data is
+// `windowBytes + 2 * blockBytes` however long the title runs
+// (packages/backend/src/assets/static-core.js).
+//
+// What does still grow with the title is the bookkeeping the bucket never
+// takes: the merkle tree and bitfield of the staging core and of the final
+// core. At ~128 bytes per 256 KiB block that is one 2048th of the title —
+// about 20 MiB for a 40 GiB film — small enough to disappear next to the
+// title, and far too large to call zero on a volume near its floor.
+//
+// `blockBytes` is required rather than defaulted: the block size belongs to the
+// backend's asset writer, and a copy of it here would be a second authority
+// that drifts in silence.
+export function boundedIngestBytes ({ windowBytes = 0, blockBytes = 0, streamBytes = 0 } = {}) {
+  const block = Math.floor(Number(blockBytes))
+  if (!Number.isFinite(block) || block <= 0) {
+    throw new Error('boundedIngestBytes needs the ingest block size in bytes')
+  }
+  const window = Math.max(0, Math.floor(Number(windowBytes)) || 0)
+  const seen = Math.max(0, Math.floor(Number(streamBytes)) || 0)
+  return window + (2 * block) + (Math.ceil(seen / block) * INGEST_TREE_BYTES_PER_BLOCK)
+}
+
 export function createStorageGuard({
   storagePath,
   maxBytes = 0,

@@ -1,6 +1,6 @@
 import test from 'brittle'
 import { readFile } from 'node:fs/promises'
-import { createStorageGuard } from '../src/storage-guard.js'
+import { boundedIngestBytes, createStorageGuard } from '../src/storage-guard.js'
 
 // Build a fake fs over an in-memory tree: { 'db': { 'a.blob': blocks, ... } }.
 function fakeFs (tree) {
@@ -161,4 +161,28 @@ test('the Bare fs shim exports every name the storage guard reads', async functi
   for (const name of ['statfsSync', 'statSync', 'readdirSync']) {
     t.ok(new RegExp(`^\\s*${name},?$`, 'm').test(source), `#fs exports ${name} under Bare`)
   }
+})
+
+// The number that decides whether a relay may archive something bigger than
+// its disk. It must not be a function of the title, and it must not pretend
+// the bookkeeping is free.
+test('a bounded ingest is sized by its window, not by the title', function (t) {
+  const block = 256 * 1024
+  const window = 8 * 1024 * 1024
+  const idle = boundedIngestBytes({ windowBytes: window, blockBytes: block })
+  t.is(idle, window + (2 * block), 'the window plus the block being built and the block in flight')
+
+  const oneGiB = boundedIngestBytes({ windowBytes: window, blockBytes: block, streamBytes: 1024 * 1024 * 1024 })
+  const fortyGiB = boundedIngestBytes({ windowBytes: window, blockBytes: block, streamBytes: 40 * 1024 * 1024 * 1024 })
+  t.is(oneGiB - idle, 4096 * 128, 'a 1 GiB title costs 128 bytes of tree per block and nothing else')
+  t.is(fortyGiB - idle, 20 * 1024 * 1024, 'and 40 GiB of title costs 20 MiB, not 40 GiB')
+  t.ok(fortyGiB < window + (32 * 1024 * 1024), 'so the requirement stays near the window however long the film runs')
+
+  t.is(boundedIngestBytes({ blockBytes: block }), 2 * block, 'no window still needs the two blocks in flight')
+  t.is(boundedIngestBytes({ windowBytes: window, blockBytes: block, streamBytes: 1 }), idle + 128, 'a single byte is still a whole block of tree')
+  t.exception(
+    () => boundedIngestBytes({ windowBytes: window }),
+    /needs the ingest block size/,
+    'the block size belongs to the backend and is never guessed here'
+  )
 })

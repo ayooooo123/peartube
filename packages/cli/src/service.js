@@ -812,7 +812,15 @@ async function buildRelayService({
               // No per-file media cap: live temp, aggregate storage budget, and
               // persisted-volume headroom are the byte bounds.
               storageHeadroom: archiveHeadroom,
-              storageReservations: archiveStorageReservations
+              storageReservations: archiveStorageReservations,
+              // With block offload configured the ingest behind this download
+              // keeps one window of blocks on the volume and puts the rest in
+              // the bucket, so the title stops being the requirement and the
+              // window becomes it. Without offload this is null and the guard
+              // is unchanged. The free-disk floor is not part of this: it is
+              // already subtracted from every number `archiveHeadroom` reports,
+              // and the guard still re-reads that live on every chunk.
+              boundedLocalBytes: blockOffload ? blockOffload.localWorkingBytes : null
             }),
             ytDlpDownloader: createYtDlpDownloader({
               bin: config.archive.ytDlpPath,

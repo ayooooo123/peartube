@@ -1,12 +1,14 @@
 import b4a from 'b4a'
 
 import {
+  DEFAULT_OFFLOAD_WINDOW_BYTES,
   createBlockOffloader,
   createOffloadStorage,
   createRemoteBlockStore,
   createS3ArchiveProvider
 } from '@peartube/backend/archive'
 import { ASSET_BLOCK_SIZE } from '@peartube/backend/assets'
+import { isBlockPlaybackPinned } from '@peartube/backend/blob-range-priority'
 
 import { boundedIngestBytes } from '../storage-guard.js'
 
@@ -16,7 +18,9 @@ import { boundedIngestBytes } from '../storage-guard.js'
 //   * archive/remote-block-store.js  addresses and verifies one block,
 //   * archive/offload-storage.js  brings an offloaded block back on a local
 //     miss, so `core.has()` and `core.proof()` answer an authorized peer
-//     exactly as they did before.
+//     exactly as they did before — and holds each offload-backed core's local
+//     block data to the same window, so blocks that come back do not silently
+//     turn the bucket back into a copy of the volume.
 //
 // This module is the operator's side of it: turn the resolved relay config into
 // the two things the backend needs — a storage wrapper for the read path and an
@@ -88,6 +92,12 @@ export async function createRelayBlockOffload ({
   }
 
   const windowBytes = Number(s3.offloadWindowBytes)
+  // The read path's bound must be the same number as the ingest path's window,
+  // including when the operator's is unusable: the offloader falls back to its
+  // own default rather than keeping everything, so this falls back with it.
+  const residentWindowBytes = Number.isSafeInteger(windowBytes) && windowBytes >= 0
+    ? windowBytes
+    : DEFAULT_OFFLOAD_WINDOW_BYTES
   const prefix = typeof s3.prefix === 'string' ? s3.prefix : ''
   const provider = createS3ArchiveProvider({ fetch: fetchImpl, sign, bucket: s3.bucket, prefix })
   const log = (message) => logger?.archive?.debug?.(message)
@@ -118,7 +128,9 @@ export async function createRelayBlockOffload ({
 
     /**
      * Wraps the CorestoreStorage so a local block miss is answered from the
-     * bucket, verified against the core's own merkle tree.
+     * bucket, verified against the core's own merkle tree — and so each
+     * offload-backed core's local block data stays inside the same window it
+     * was ingested under, however it grew back.
      *
      * `resolveStore` answers for every core with a real public key rather than
      * for a remembered set of offloaded ones. A remembered set would be
@@ -134,6 +146,14 @@ export async function createRelayBlockOffload ({
         resolveStore: ({ keyHex }) => (
           typeof keyHex === 'string' && keyHex.length === 64 ? storeFor(keyHex) : null
         ),
+        eviction: {
+          windowBytes: residentWindowBytes,
+          // Playback interest, per block. `blob-range-priority.js` holds the
+          // exact block range each active player is blocking on, and the
+          // backend runs in this process, so this reads the same registry the
+          // blob server writes into — no second model of the playhead.
+          isPinned: ({ keyHex, index }) => isBlockPlaybackPinned(keyHex, index)
+        },
         log
       })
       offloadStats = wrapped.offloadStats
@@ -207,13 +227,32 @@ export async function createRelayBlockOffload ({
       return storeFor(keyHexOf(core))
     },
 
+    /**
+     * What an operator needs to see: how much block data has left the volume,
+     * how much came back, and — the number that says whether this bucket is a
+     * storage extension or just a one-time saving — how much block data the
+     * offload-backed cores are holding locally right now, against the window
+     * they are held to.
+     *
+     * `residentBytes` is what each offload-backed core's last sweep left, with
+     * the retained window counted at the size its merkle tree says it is rather
+     * than re-read to be measured. So it is a ceiling per swept core, and a
+     * core opened but not yet swept is not in it yet.
+     */
     stats () {
+      const offload = offloadStats()
+      const eviction = offload.eviction || null
       return {
         enabled: true,
         windowBytes,
         blocksOffloaded,
         bytesOffloaded,
-        restored: offloadStats().restored
+        restored: offload.restored,
+        residentBytes: eviction === null ? 0 : eviction.residentBytes,
+        blocksEvicted: eviction === null ? 0 : eviction.evicted,
+        bytesEvicted: eviction === null ? 0 : eviction.bytesEvicted,
+        playbackPinned: eviction === null ? 0 : eviction.pinned,
+        residencySweeps: eviction === null ? 0 : eviction.sweeps
       }
     }
   }

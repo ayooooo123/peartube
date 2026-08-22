@@ -130,6 +130,33 @@ export function releaseAllPrioritizedBlobRanges() {
   activePriorityRanges.clear()
 }
 
+/**
+ * Is block `index` of core `coreKeyHex` inside a playback range that is being
+ * prioritized RIGHT NOW?
+ *
+ * The registry above is the only per-block statement of playback interest this
+ * process makes: `prioritizeBlobServerRangeRequest` puts the exact block range
+ * a player is blocking on in it, and `destroyPriorityRange` nulls the range the
+ * moment that window is finished, seeked away from or timed out — while the
+ * core session stays pooled for reuse. So a live `range` is the liveness test,
+ * not the presence of the entry.
+ *
+ * Read by the archive's residency sweep (archive/offload-storage.js), which
+ * must not take a block back off local disk while a player is reading through
+ * it.
+ */
+export function isBlockPlaybackPinned(coreKeyHex, index) {
+  if (typeof coreKeyHex !== 'string' || coreKeyHex.length === 0) return false
+  if (!isFiniteNonNegativeInteger(index)) return false
+  const prefix = `${coreKeyHex}:`
+  for (const [registryKey, entry] of activePriorityRanges) {
+    if (entry.range === null || entry.range === undefined) continue
+    if (!registryKey.startsWith(prefix)) continue
+    if (index >= entry.start && index < entry.end) return true
+  }
+  return false
+}
+
 const blobIdEncoding = {
   preencode(state, blob) {
     c.uint.preencode(state, blob.blockOffset)

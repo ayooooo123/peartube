@@ -50,9 +50,18 @@ function offloadError (message, code, index) {
  * un-offloaded block data left resident is within `windowBytes`, so peak
  * resident block data tracks the window and not the size of the title.
  *
+ * `evict(index)` is the same thing for a block that came BACK — a block this
+ * relay restored from the object store and now has to give up again so its
+ * local footprint stays a window rather than a growing copy of the corpus.
+ * Both go through one upload-confirm-delete step, so there is exactly one
+ * place a local block copy is ever dropped.
+ *
  * @param core          a ready Hypercore. Only `core.state.storage` is used:
  *                      block reads and the delete both go straight through the
  *                      storage layer, never through `core.clear()`.
+ * @param storage       that per-core hypercore-storage instance, for a caller
+ *                      that holds one without a Hypercore around it (the read
+ *                      path's residency sweep). Defaults to the core's own.
  * @param store         a createRemoteBlockStore()-shaped store for this core.
  * @param windowBytes   un-offloaded block data allowed to stay resident. 0
  *                      offloads every tracked block.
@@ -61,14 +70,15 @@ function offloadError (message, code, index) {
  *                      block's local copy is gone.
  */
 export function createBlockOffloader ({
-  core,
+  core = null,
+  storage = core?.state?.storage ?? null,
   store,
   windowBytes = DEFAULT_OFFLOAD_WINDOW_BYTES,
   log = null,
   onOffloaded = null,
 } = {}) {
-  if (!core || typeof core !== 'object' || !core.state || typeof core.state.storage !== 'object') {
-    throw new TypeError('core must be a ready Hypercore')
+  if (!storage || typeof storage !== 'object' || typeof storage.read !== 'function' || typeof storage.write !== 'function') {
+    throw new TypeError('core must be a ready Hypercore, or storage its hypercore-storage instance')
   }
   if (!store || typeof store.put !== 'function' || typeof store.has !== 'function') {
     throw new TypeError('store must be a remote block store with put and has')
@@ -77,7 +87,6 @@ export function createBlockOffloader ({
     ? windowBytes
     : DEFAULT_OFFLOAD_WINDOW_BYTES
 
-  const storage = core.state.storage
   const report = typeof log === 'function' ? log : null
   const notify = typeof onOffloaded === 'function' ? onOffloaded : null
 
@@ -152,17 +161,38 @@ export function createBlockOffloader ({
     if (residentBytes < 0) residentBytes = 0
   }
 
-  async function offloadHead () {
-    const entry = queue[0]
-    const index = entry.index
+  /**
+   * An evicted block may also be sitting in the ingest FIFO — an eviction and
+   * an ingest can be looking at the same core. Drop it there too, so the
+   * window's accounting keeps matching local disk.
+   */
+  function forget (index) {
+    if (!tracked.delete(index)) return
+    const at = queue.findIndex((entry) => entry.index === index)
+    if (at === -1) return
+    residentBytes -= queue[at].byteLength
+    if (residentBytes < 0) residentBytes = 0
+    queue.splice(at, 1)
+  }
 
+  /**
+   * Hand one block's DATA to the object store and drop the local copy. The one
+   * path any local block copy is ever dropped through, for both reasons a
+   * block leaves: ingest moving past it, and residency having outgrown the
+   * window.
+   *
+   * `probeRemote` asks the object store whether it already holds the block
+   * before uploading. An eviction wants that — the block it is giving up is
+   * usually one this relay restored FROM the bucket, so re-uploading it buys
+   * nothing — while an ingest knows the object is not there yet and skips the
+   * round trip. Either way the local copy only goes after a `store.has()` that
+   * answered true.
+   *
+   * @returns the byte length dropped, or 0 when there was no local copy left.
+   */
+  async function retireBlock (index, { probeRemote = false } = {}) {
     const data = await readOnce((rx) => rx.getBlock(index))
-    if (data === null || data === undefined) {
-      // Already gone — an earlier run offloaded it, or it was never resident.
-      // Nothing to upload and nothing to delete; stop accounting for it.
-      release(entry)
-      return false
-    }
+    if (data === null || data === undefined) return 0
 
     const expectedHash = await leafHash(index)
     if (expectedHash === null) {
@@ -180,12 +210,15 @@ export function createBlockOffloader ({
       )
     }
 
-    await store.put(index, data)
-
     // The confirmation is a real round trip against the object store, not the
     // put's own return value: a put that reported success and did not land is
     // exactly the failure that would turn a delete into a hole.
-    if (await store.has(index) !== true) {
+    let held = probeRemote === true && await store.has(index) === true
+    if (!held) {
+      await store.put(index, data)
+      held = await store.has(index) === true
+    }
+    if (!held) {
       throw offloadError(
         `block ${index} was uploaded but the object store does not report holding it; the local copy is kept`,
         'OFFLOAD_BLOCK_UNCONFIRMED',
@@ -195,13 +228,22 @@ export function createBlockOffloader ({
     confirmed++
 
     await deleteLocalBlock(index)
-    release(entry)
     blocksOffloaded++
     bytesOffloaded += data.byteLength
+    return data.byteLength
+  }
+
+  async function offloadHead () {
+    const entry = queue[0]
+    const byteLength = await retireBlock(entry.index)
+    // Either the block is gone now, or it was already gone — an earlier run
+    // offloaded it, or it was never resident. Both stop accounting for it.
+    release(entry)
+    if (byteLength === 0) return false
 
     if (notify !== null) {
       try {
-        notify({ index, byteLength: data.byteLength, ...stats() })
+        notify({ index: entry.index, byteLength, ...stats() })
       } catch {
         // A progress callback must never take down an offload.
       }
@@ -242,6 +284,27 @@ export function createBlockOffloader ({
         await offloadHead()
       }
       return stats()
+    },
+
+    /**
+     * Give block `index` up because local residency has outgrown the window,
+     * not because an ingest is moving past it. Same upload-confirm-delete
+     * sequence, asking the object store first: an evicted block is normally
+     * one this relay restored from the bucket, and the bucket still has it.
+     *
+     * Throws rather than delete when the block has no merkle leaf that commits
+     * to its bytes, or when the object store will not confirm it holds them.
+     * The local copy stays in both cases; it is the only copy.
+     *
+     * @returns the byte length dropped, or 0 when there was no local copy.
+     */
+    async evict (index) {
+      if (!Number.isSafeInteger(index) || index < 0) {
+        throw new Error('index must be a non-negative safe integer')
+      }
+      const byteLength = await retireBlock(index, { probeRemote: true })
+      if (byteLength > 0) forget(index)
+      return byteLength
     },
   }
 }

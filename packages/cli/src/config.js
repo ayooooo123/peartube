@@ -9,6 +9,8 @@ import {
   DEFAULT_ARCHIVE_MAX_ITEMS,
   DEFAULT_ARCHIVE_MAX_RETRIES,
   DEFAULT_ARCHIVE_POLL_SECONDS,
+  DEFAULT_ARCHIVE_S3_CONFIG,
+  DEFAULT_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES,
   DEFAULT_ARCHIVE_YT_DLP_EXTRA_ARGS,
   DEFAULT_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS,
   DEFAULT_ARCHIVE_YT_DLP_PATH,
@@ -338,7 +340,9 @@ function configFromEnv(env = {}) {
     env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY ||
     env.PEARTUBE_ARCHIVE_S3_PREFIX ||
     env.PEARTUBE_ARCHIVE_S3_ENABLED ||
-    env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE
+    env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE ||
+    env.PEARTUBE_ARCHIVE_S3_OFFLOAD ||
+    env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES
   ) {
     config.archive = {}
     if (env.PEARTUBE_ARCHIVE_UI_ENABLED) config.archive.uiEnabled = parseBoolean(env.PEARTUBE_ARCHIVE_UI_ENABLED)
@@ -368,7 +372,9 @@ function configFromEnv(env = {}) {
       env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY ||
       env.PEARTUBE_ARCHIVE_S3_PREFIX ||
       env.PEARTUBE_ARCHIVE_S3_ENABLED ||
-      env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE
+      env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE ||
+      env.PEARTUBE_ARCHIVE_S3_OFFLOAD ||
+      env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES
     ) {
       config.archive.s3 = {}
       if (env.PEARTUBE_ARCHIVE_S3_ENDPOINT) config.archive.s3.endpoint = env.PEARTUBE_ARCHIVE_S3_ENDPOINT
@@ -379,6 +385,8 @@ function configFromEnv(env = {}) {
       if (env.PEARTUBE_ARCHIVE_S3_PREFIX) config.archive.s3.prefix = env.PEARTUBE_ARCHIVE_S3_PREFIX
       if (env.PEARTUBE_ARCHIVE_S3_ENABLED) config.archive.s3.enabled = parseBoolean(env.PEARTUBE_ARCHIVE_S3_ENABLED)
       if (env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE) config.archive.s3.forcePathStyle = parseBoolean(env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE)
+      if (env.PEARTUBE_ARCHIVE_S3_OFFLOAD) config.archive.s3.offload = parseBoolean(env.PEARTUBE_ARCHIVE_S3_OFFLOAD)
+      if (env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES) config.archive.s3.offloadWindowBytes = Number(env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES)
     }
     if (env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS) {
       config.archive.ytDlpRetryExtraArgs = String(env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS)
@@ -522,6 +530,43 @@ function boundedChallengeMs(value) {
   return ms
 }
 
+// Block offload sends media block DATA to the bucket and keeps only the merkle
+// tree and the bitfield on disk, so the relay keeps advertising and serving a
+// block whose bytes are no longer local. That makes the bucket load bearing for
+// playback, so it is opt-in, and a half-configured bucket is refused rather
+// than downgraded: silently running local-only would fill the volume the
+// operator was trying to stop filling.
+const REQUIRED_S3_OFFLOAD_FIELDS = ['endpoint', 'bucket', 'accessKeyId', 'secretAccessKey']
+
+function resolveArchiveS3Config(rawS3) {
+  const merged = deepMerge(DEFAULT_ARCHIVE_S3_CONFIG, isPlainObject(rawS3) ? rawS3 : {})
+
+  for (const field of ['endpoint', 'bucket', 'region', 'accessKeyId', 'secretAccessKey', 'prefix']) {
+    merged[field] = typeof merged[field] === 'string' ? merged[field].trim() : ''
+  }
+  if (!merged.region) merged.region = DEFAULT_ARCHIVE_S3_CONFIG.region
+  merged.enabled = merged.enabled !== false
+  merged.forcePathStyle = Boolean(merged.forcePathStyle)
+  merged.offload = Boolean(merged.offload)
+
+  merged.offloadWindowBytes = Number(merged.offloadWindowBytes)
+  if (!Number.isSafeInteger(merged.offloadWindowBytes) || merged.offloadWindowBytes < 0) {
+    merged.offloadWindowBytes = DEFAULT_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES
+  }
+
+  if (merged.offload) {
+    const missing = REQUIRED_S3_OFFLOAD_FIELDS.filter((field) => !merged[field])
+    if (missing.length) {
+      throw new Error(`archive.s3.offload is true but archive.s3 is incomplete: missing ${missing.join(', ')}`)
+    }
+    if (!merged.enabled) {
+      throw new Error('archive.s3.offload is true but archive.s3.enabled is false')
+    }
+  }
+
+  return merged
+}
+
 function resolveArchiveConfig(rawArchive, { storagePath }) {
   const merged = deepMerge(DEFAULT_ARCHIVE_CONFIG, isPlainObject(rawArchive) ? rawArchive : {})
 
@@ -653,6 +698,8 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
   // not quietly become a hot loop against every peer.
   merged.challengeIntervalMs = boundedChallengeMs(merged.challengeIntervalMs)
   merged.challengeTimeoutMs = boundedChallengeMs(merged.challengeTimeoutMs)
+
+  merged.s3 = resolveArchiveS3Config(merged.s3)
 
 
   return merged

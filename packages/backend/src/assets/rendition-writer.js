@@ -48,6 +48,7 @@ export function createImmutableRenditionWriter(defaults = {}) {
           store: input.store || defaults.store,
           source: input.source || defaults.source,
           signal: input.signal || defaults.signal,
+          offload: input.offload || defaults.offload || null,
         })
         const segmentIndex = createSegmentIndexDescriptor({
           codec: input.segmentCodec || 'peartube-inline-segments-v1',

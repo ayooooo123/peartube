@@ -735,7 +735,11 @@ async function prepareImmutablePublication(metadata, runtime = {}) {
   const renditionWriter = createImmutableRenditionWriter({
     store: runtime.store,
     source: runtime.createSource?.(),
-    signal: runtime.signal
+    signal: runtime.signal,
+    // Optional: set only when the relay is configured to offload block data to
+    // an object store (see archive/block-offloader.js). Absent everywhere else,
+    // which leaves the asset write path exactly as it was.
+    offload: runtime.offload || null
   });
   await renditionWriter.initialize();
   const durationSeconds = Number(metadata.duration);
@@ -1239,7 +1243,7 @@ export function createUploadManager({
   deviceKeyPair = null,
   now = () => Date.now()
 }) {
-  const publicationRuntime = { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair, store: ctx?.store, now };
+  const publicationRuntime = { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair, store: ctx?.store, offload: ctx?.blockOffload?.offloadAsset || null, now };
   /**
    * Probe the uploaded MP4 for its playback profile (moov position +
    * keyframe index) and persist it for range prioritization at playback

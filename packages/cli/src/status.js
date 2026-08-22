@@ -55,7 +55,11 @@ export function buildRelayStatus({
   runtimeStats = {},
   ingestStatus = {},
   creators = null,
-  trustedClientsCount = 0
+  trustedClientsCount = 0,
+  // null unless the operator enabled block offload. Media block data living in
+  // an object store changes what "this relay holds the title" means, so it is
+  // reported rather than inferred from byte counters that no longer match disk.
+  blockOffload = null
 }) {
   const channels = catalog.getChannels()
   const summary = catalog.getSummary()
@@ -126,7 +130,14 @@ export function buildRelayStatus({
       usedBytes: count(summary.usedBytes)
     },
     creators: summarizeCreators(creatorRecords),
-    authorizedClients: count(trustedClientsCount)
+    authorizedClients: count(trustedClientsCount),
+    blockOffload: {
+      enabled: blockOffload?.enabled === true,
+      windowBytes: count(blockOffload?.windowBytes),
+      blocksOffloaded: count(blockOffload?.blocksOffloaded),
+      bytesOffloaded: count(blockOffload?.bytesOffloaded),
+      restored: count(blockOffload?.restored)
+    }
   }
 }
 
@@ -161,6 +172,7 @@ export function formatRelayStatus(status) {
     `selectedIndexers: ${(status.selectedIndexers || []).map(indexer => `${indexer.id}:${indexer.status}`).join(',') || 'none'}`,
     `lastErrors: ${(status.lastErrors || []).join(',') || 'none'}`,
     `authorizedClients: ${status.authorizedClients || 0}`,
+    `blockOffload: enabled=${status.blockOffload?.enabled === true} windowBytes=${status.blockOffload?.windowBytes || 0} blocks=${status.blockOffload?.blocksOffloaded || 0} bytes=${status.blockOffload?.bytesOffloaded || 0} restored=${status.blockOffload?.restored || 0}`,
     `creators: total=${status.creators?.totalCreators || 0} archived=${status.creators?.videosArchived || 0} unseeded=${status.creators?.videosUnseeded || 0}`
   ]
   return lines.join('\n')

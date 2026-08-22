@@ -5,6 +5,7 @@
  */
 
 import Corestore from 'corestore'
+import Hypercore from 'hypercore'
 import { createAbortController } from './abort-controller.js';
 import Hyperbee from 'hyperbee';
 import BlobServer from 'hypercore-blob-server';
@@ -1128,7 +1129,22 @@ export async function createCorestoreInstance(storagePath, options = {}) {
     await appendDebugLine('[storage] embedded BareKit using plain Corestore(storagePath, options)')
   }
 
-  return new Corestore(storagePath, options)
+  const { wrapStorage = null, ...corestoreOptions } = options
+  if (typeof wrapStorage !== 'function') return new Corestore(storagePath, corestoreOptions)
+
+  // Corestore forwards these five to Hypercore.defaultStorage only when it
+  // builds the storage itself. Handing it a ready instance silently drops them,
+  // and two of them are load bearing here: `wait` is the lock behaviour and
+  // `allowBackup` is the backup behaviour. So build the storage exactly as
+  // Corestore would, wrap that, and hand the wrapper over.
+  const storage = Hypercore.defaultStorage(storagePath, {
+    id: corestoreOptions.id,
+    allowBackup: corestoreOptions.allowBackup,
+    readOnly: corestoreOptions.readOnly,
+    wait: corestoreOptions.wait,
+    treeCache: corestoreOptions.treeCache
+  })
+  return new Corestore(await wrapStorage(storage), corestoreOptions)
 }
 
 export async function openDeterministicNamedCore(store, name) {
@@ -1360,6 +1376,12 @@ export async function initializeStorage(config) {
     swarmOptions = {},
     expectedProtocolVersion,
     storedProtocolMigrations = DEFAULT_STORED_PROTOCOL_MIGRATIONS,
+    // Optional block offload. `wrapStorage` wraps the CorestoreStorage so an
+    // offloaded block is restored from the object store on a local miss
+    // (archive/offload-storage.js); the object as a whole is published on the
+    // context so the write path can reach `offloadAsset`. Absent by default,
+    // and absent means no wrapping at all.
+    blockOffload = null,
   } = config;
 
   // This sidecar is deliberately validated before Corestore, migrations,
@@ -1570,9 +1592,14 @@ export async function initializeStorage(config) {
   await appendDebugLine('[storage] creating corestore')
   console.log('[Storage] Corestore primaryKey:', primaryKey ? 'provided (deterministic)' : 'not provided (random)');
   console.log('[Storage] Corestore lock wait:', corestoreWaitForLock ? 'enabled' : 'disabled');
+  const offloadWrapStorage = typeof blockOffload?.wrapStorage === 'function' ? blockOffload.wrapStorage : null
+  if (offloadWrapStorage !== null) {
+    console.log('[Storage] Corestore block offload: enabled (block data may live in an object store)');
+    await appendDebugLine('[storage] corestore block offload enabled')
+  }
   const corestoreOptions = primaryKey
-    ? { primaryKey, unsafe: true, wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup }
-    : { wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup }
+    ? { primaryKey, unsafe: true, wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup, wrapStorage: offloadWrapStorage }
+    : { wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup, wrapStorage: offloadWrapStorage }
   let store
   let storeOwnership = null
   try {
@@ -2022,6 +2049,9 @@ export async function initializeStorage(config) {
     knownPeerCache,
     platform,
     storedProtocol,
+    // null unless the operator configured block offload. The upload path reads
+    // `blockOffload.offloadAsset` off this to hand writeStaticAsset its hook.
+    blockOffload,
     lifecycle,
     ownResource(label, resource, methods, timeoutMs) {
       return ownContextResource(storageContext, label, resource, methods, timeoutMs)

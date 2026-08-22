@@ -364,6 +364,16 @@ export function renderArchiveWebHome(model = {}) {
   const unseededTargets = Array.isArray(model.unseededTargets) ? model.unseededTargets : []
   const tmdb = model.tmdb || {}
   const s3 = model.s3 || {}
+  // Offload is what makes a bucket load bearing for playback, so it reads as
+  // its own line rather than as another field of the connection details.
+  const offloadState = s3.offload || {}
+  const offload = {
+    enabled: offloadState.enabled === true,
+    windowBytes: Number(offloadState.windowBytes) || 0,
+    blocksOffloaded: Number(offloadState.blocksOffloaded) || 0,
+    bytesOffloaded: Number(offloadState.bytesOffloaded) || 0,
+    restored: Number(offloadState.restored) || 0
+  }
   const discover = model.discover || { type: 'movie', query: '', items: [] }
   const discoverItems = Array.isArray(discover.items) ? discover.items : []
   const trustedClients = Array.isArray(model.trustedClients) ? model.trustedClients : []
@@ -674,6 +684,8 @@ export function renderArchiveWebHome(model = {}) {
           <p class="sub">Read-only status. Configure S3 with Docker environment variables, then restart the relay.</p>
           <p class="note">Status: <span class="status-line ${s3.configured ? 'on' : ''}">${s3.configured ? 'configured' : 'not configured'}</span></p>
           ${s3.configured ? `<p class="note">Endpoint: ${escapeHtml(s3.endpoint)}<br>Bucket: ${escapeHtml(s3.bucket)}<br>Region: ${escapeHtml(s3.region)}<br>Prefix: ${escapeHtml(s3.prefix || '(none)')}</p>` : ''}
+          <p class="note">Block offload: <span class="status-line ${offload.enabled ? 'on' : ''}">${offload.enabled ? 'enabled' : 'disabled'}</span></p>
+          ${offload.enabled ? `<p class="note">Resident window: ${escapeHtml(formatSize(offload.windowBytes) || '0 KB')}<br>Offloaded: ${escapeHtml(String(offload.blocksOffloaded))} block(s), ${escapeHtml(formatSize(offload.bytesOffloaded) || '0 KB')}<br>Restored on read: ${escapeHtml(String(offload.restored))} block(s)</p>` : '<p class="note">Media block data stays on this relay\'s volume.</p>'}
         </section>
 
         <section class="card">

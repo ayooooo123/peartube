@@ -282,3 +282,86 @@ test('a config file can set the archive UI host and port, and flags still win', 
   t.is(overridden.archive.uiHost, '0.0.0.0', 'an explicit flag still overrides the file')
   t.is(overridden.archive.uiPort, 9999)
 })
+
+test('block offload is off unless the operator asks for it', async (t) => {
+  const unset = resolveRelayConfig({}, { env: {} })
+  t.is(unset.archive.s3.offload, false, 'block offload defaults to off')
+  t.is(unset.archive.s3.offloadWindowBytes, 2 * 1024 * 1024 * 1024, 'the resident window defaults to 2 GiB')
+
+  // A fully configured bucket is still not permission to start deleting local
+  // block data: offload is the separate decision.
+  const bucketOnly = resolveRelayConfig({}, {
+    env: {
+      PEARTUBE_ARCHIVE_S3_ENDPOINT: 'https://s3.us-west-002.backblazeb2.com',
+      PEARTUBE_ARCHIVE_S3_BUCKET: 'peartube-relay',
+      PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID: 'key',
+      PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY: 'secret'
+    }
+  })
+  t.is(bucketOnly.archive.s3.offload, false, 'a configured bucket alone does not enable offload')
+})
+
+test('resolveRelayConfig reads the block offload env vars', async (t) => {
+  const config = resolveRelayConfig({}, {
+    env: {
+      PEARTUBE_ARCHIVE_S3_ENDPOINT: 'https://s3.us-west-002.backblazeb2.com',
+      PEARTUBE_ARCHIVE_S3_BUCKET: 'peartube-relay',
+      PEARTUBE_ARCHIVE_S3_REGION: 'us-west-002',
+      PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID: 'key',
+      PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY: 'secret',
+      PEARTUBE_ARCHIVE_S3_PREFIX: 'relay-a',
+      PEARTUBE_ARCHIVE_S3_OFFLOAD: 'true',
+      PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES: '1073741824'
+    }
+  })
+
+  t.is(config.archive.s3.offload, true)
+  t.is(config.archive.s3.offloadWindowBytes, 1073741824)
+  t.is(config.archive.s3.prefix, 'relay-a')
+
+  // A window that is not a byte count falls back to the default rather than
+  // becoming NaN and offloading every block on the first append.
+  for (const value of ['soon', '-1', '1.5']) {
+    const fallback = resolveRelayConfig({}, {
+      env: {
+        PEARTUBE_ARCHIVE_S3_ENDPOINT: 'https://s3.example.com',
+        PEARTUBE_ARCHIVE_S3_BUCKET: 'bucket',
+        PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID: 'key',
+        PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY: 'secret',
+        PEARTUBE_ARCHIVE_S3_OFFLOAD: 'true',
+        PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES: value
+      }
+    })
+    t.is(fallback.archive.s3.offloadWindowBytes, 2 * 1024 * 1024 * 1024, `${value} is not a window`)
+  }
+})
+
+test('block offload with a half-configured bucket is refused, never downgraded to local-only', async (t) => {
+  // Offload makes the bucket load bearing for playback. Starting local-only
+  // would fill the exact volume the operator was trying to stop filling, and
+  // they would not find out until it was full.
+  const complete = {
+    endpoint: 'https://s3.example.com',
+    bucket: 'peartube-relay',
+    accessKeyId: 'key',
+    secretAccessKey: 'secret'
+  }
+  for (const field of ['endpoint', 'bucket', 'accessKeyId', 'secretAccessKey']) {
+    const s3 = { ...complete, offload: true }
+    delete s3[field]
+    t.exception(
+      () => resolveRelayConfig({ archive: { s3 } }, { env: {} }),
+      new RegExp(`incomplete: missing ${field}`),
+      `offload without ${field} refuses at startup`
+    )
+  }
+
+  t.exception(
+    () => resolveRelayConfig({ archive: { s3: { ...complete, offload: true, enabled: false } } }, { env: {} }),
+    /archive\.s3\.enabled is false/,
+    'offload cannot be enabled while the provider itself is disabled'
+  )
+
+  const accepted = resolveRelayConfig({ archive: { s3: { ...complete, offload: true } } }, { env: {} })
+  t.is(accepted.archive.s3.offload, true, 'a complete bucket is accepted')
+})

@@ -120,6 +120,9 @@ export function buildStorageConfig(config, primaryKey) {
     swarmOptions: config.swarmOptions ?? {},
     expectedProtocolVersion: config.expectedProtocolVersion,
     storedProtocolMigrations: config.storedProtocolMigrations ?? DEFAULT_STORED_PROTOCOL_MIGRATIONS,
+    // Optional relay block offload. Reaches initializeStorage, which wraps the
+    // CorestoreStorage with it and publishes it on the storage context.
+    blockOffload: config.blockOffload ?? null,
     lifecycle: config.lifecycle,
   }
 }

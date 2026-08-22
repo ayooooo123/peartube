@@ -34,6 +34,13 @@ services:
       # PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY: your-secret-key
       # PEARTUBE_ARCHIVE_S3_PREFIX: peartube/
       # PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE: "false"
+      # Block offload: move media block DATA to the bucket above and keep only
+      # the merkle tree and bitfield on disk, so this relay can archive titles
+      # larger than its volume. Off by default; a half-configured bucket refuses
+      # to start rather than quietly filling the volume.
+      # PEARTUBE_ARCHIVE_S3_OFFLOAD: "true"
+      # Un-offloaded block data kept on local disk. Default 2 GiB.
+      # PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES: "2147483648"
       PEARTUBE_LOG_LEVEL: info
     volumes:
       - peartube-relay-data:/var/lib/peartube-relay

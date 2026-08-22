@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import test from 'brittle'
+import b4a from 'b4a'
 
 import { resolveRelayConfig } from '../src/config.js'
 import { createRelayService } from '../src/service.js'
@@ -66,6 +67,22 @@ function fakeRuntime (calls) {
           },
         }
         return { success: true, policy: { ...currentPolicy } }
+      },
+      // publisher-shell provisions the relay's own catalog before it publishes.
+      // The fake answers with the shape api/publisher.js returns, so the shell
+      // takes its success path without reaching a real registry.
+      async provisionPublisherCatalog({ publisherId }) {
+        return {
+          success: true,
+          publisherId,
+          catalogBootstrapKey: b4a.alloc(32, 7),
+          localWriterKey: b4a.alloc(32, 8),
+          localSignerKey: b4a.alloc(32, 9),
+          writable: true,
+          namespaceInitialized: true,
+          admitted: true,
+          errorCode: null,
+        }
       },
     },
     identityManager: {},
@@ -221,7 +238,14 @@ test('archive WebUI publisher follows current explicit archive consent', async (
     retentionClass: 'archive-pin'
   }).then(() => null, error => error)
   t.is(denied?.code, 'RETENTION_PERMISSION_DENIED')
-  t.absent(calls.some(([name]) => name === 'publish'))
+  // The relay publishes its OWN catalog at startup, and a UI publish is
+  // addressed by the relay's provisioned publisher root rather than the
+  // caller's label — publishing under the caller's identity would name a
+  // catalog this relay cannot write. So the question is not whether anything
+  // published, it is whether an archive-pin publish happened for this request.
+  const archivePublishes = () => calls.filter(([name, request]) =>
+    name === 'publish' && request?.retentionClass === 'archive-pin')
+  t.absent(archivePublishes().length, 'a refused request publishes nothing')
 
   await service.applyNetworkPolicy({
     policyVersion: 2,
@@ -238,10 +262,10 @@ test('archive WebUI publisher follows current explicit archive consent', async (
     publisherId: 'archive-ui-publisher',
     retentionClass: 'archive-pin'
   })).status, 'published')
-  t.alike(calls.find(([name]) => name === 'publish')?.[1], {
-    publisherId: 'archive-ui-publisher',
-    retentionClass: 'archive-pin'
-  })
+  const published = archivePublishes()
+  t.is(published.length, 1, 'consent admits exactly one archive-pin publish')
+  t.ok(/^[0-9a-f]{64}$/.test(published[0][1].publisherId),
+    "the publish is addressed by the relay's own publisher root")
   await service.close()
 })
 

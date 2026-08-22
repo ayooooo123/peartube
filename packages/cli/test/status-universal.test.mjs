@@ -180,6 +180,7 @@ test('relay status exposes the bounded policy-v2 contract without protected runt
     'selectedIndexers: selected-1:active,selected-2:pending,selected-3:unknown,selected-4:unknown,selected-5:unknown,selected-6:unknown,selected-7:unknown,selected-8:unknown',
     'lastErrors: SOURCE_FAILED,NETWORK_TIMEOUT,PUBLISH_FAILED',
     'authorizedClients: 2',
+    'blockOffload: enabled=false windowBytes=0 blocks=0 bytes=0 restored=0',
     'creators: total=1 archived=4 unseeded=2'
   ].join('\n'))
 })

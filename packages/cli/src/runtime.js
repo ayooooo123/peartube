@@ -45,7 +45,7 @@ function archiveOperatorMode (relayMode) {
   return relayMode === 'public' ? 'community' : 'local-first'
 }
 
-export async function createRelayRuntime ({ config, logger, dependencies = null } = {}) {
+export async function createRelayRuntime ({ config, logger, dependencies = null, blockOffload = null } = {}) {
   if (!config?.storage?.path) throw new Error('relay runtime requires config.storage.path')
   const backendFactory = dependencies?.createBackendContext || createBackendContext
   const networkConfig = config.network || {}
@@ -68,6 +68,11 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
   const archiveRequests = new Map()
   const backend = await backendFactory({
     storagePath: config.storage.path,
+    // Optional. When the operator enabled block offload the backend opens its
+    // Corestore over the wrapped storage, so a block whose data now lives in
+    // the object store is restored and served exactly as a local one, and the
+    // asset write path gets the hook that puts it there.
+    blockOffload,
     platform: 'relay',
     role: 'relay',
     expectedProtocolVersion: PROTOCOL_VERSION,

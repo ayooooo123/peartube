@@ -88,6 +88,23 @@ export const DEFAULT_ARCHIVE_JS_RUNTIME = ''
 export const DEFAULT_ARCHIVE_YT_DLP_EXTRA_ARGS = []
 export const DEFAULT_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS = []
 export const DEFAULT_LOCAL_MIRROR_POLL_SECONDS = 30
+// Block offload moves media block DATA to the configured S3 bucket and keeps
+// the merkle tree and bitfield on local disk, so a relay can archive a title
+// far larger than its volume. Off by default: it is an operator decision that
+// makes every served block depend on a third party being reachable.
+export const DEFAULT_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES = 2 * 1024 * 1024 * 1024
+export const DEFAULT_ARCHIVE_S3_CONFIG = {
+  endpoint: '',
+  bucket: '',
+  region: 'us-east-1',
+  accessKeyId: '',
+  secretAccessKey: '',
+  prefix: '',
+  enabled: true,
+  forcePathStyle: false,
+  offload: false,
+  offloadWindowBytes: DEFAULT_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES
+}
 export const DEFAULT_ARCHIVE_CONFIG = {
   enabled: false,
   poll: DEFAULT_ARCHIVE_POLL_SECONDS,
@@ -113,6 +130,7 @@ export const DEFAULT_ARCHIVE_CONFIG = {
     recursive: true,
     maxFiles: DEFAULT_ARCHIVE_MAX_ITEMS
   },
+  s3: DEFAULT_ARCHIVE_S3_CONFIG,
   uiEnabled: false,
   uiHost: '127.0.0.1',
   uiPort: 8174,

@@ -162,8 +162,28 @@ export function createStaticAssetManifest(input = {}) {
   }
 }
 
-export async function writeStaticAsset({ store, source, signal } = {}) {
+/**
+ * Write one immutable static asset core.
+ *
+ * `offload` is optional and, when absent, this function behaves byte for byte
+ * as it always has. When supplied it is `({ core, descriptor, signal })` and is
+ * called once, on the finished asset core, after the prologue has been copied
+ * and the descriptor verified — the first moment every block is durably
+ * written, every merkle leaf exists, and the core's key is the content-
+ * addressed key the network will ask for. It runs after the staging core is
+ * removed, so the staging bytes are already back on the volume before a single
+ * byte is uploaded.
+ *
+ * It cannot run earlier. The prologue copy reads the staging core through
+ * `storage.createBlockStream()`, which is not the restoring read path that
+ * offload-storage.js intercepts, so staging block data has to stay resident
+ * until the copy completes.
+ */
+export async function writeStaticAsset({ store, source, signal, offload = null } = {}) {
   assertWriteInput(store, source)
+  if (offload !== null && typeof offload !== 'function') {
+    throw new Error('offload must be a function')
+  }
   assertNotCancelled(signal)
 
   const randomId = b4a.toString(crypto.randomBytes(16), 'hex')
@@ -208,6 +228,8 @@ export async function writeStaticAsset({ store, source, signal } = {}) {
       await removeStagingCore(staging)
     }
 
+    assertNotCancelled(signal)
+    if (offload !== null) await offload({ core: finalCore, descriptor, signal })
     assertNotCancelled(signal)
     return { core: finalCore, descriptor }
   } catch (error) {

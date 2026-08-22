@@ -12,6 +12,7 @@ import { createTmdbClassifier, createTmdbDiscoverClient } from './classification
 import { RelaySettings, resolveTmdbOptions } from './settings.js'
 import { TrustedClients, mergeTrustedClientKeys } from './trusted-clients.js'
 import { classifySourceUrl } from './archive/source-id.js'
+import { createRelayBlockOffload } from './archive/block-offload.js'
 import { createStorageGuard } from './storage-guard.js'
 import { COMPANION_API_PREFIX, createCompanionServer } from './companion/server.js'
 import { createIngestJobStore } from './companion/ingest-job-store.js'
@@ -162,7 +163,23 @@ async function buildRelayService({
     trustedClients.keys()
   )
 
-  const runtime = await runtimeFactory({ config, logger })
+  // Block offload, decided before the runtime exists because it changes how the
+  // Corestore is opened: the storage is wrapped so a block whose data now lives
+  // in the bucket is still restored, verified and served. Off by default, and
+  // when it is off nothing is wrapped and nothing is injected. Enabled with a
+  // half-configured bucket throws here rather than downgrading to local-only.
+  const blockOffload = await createRelayBlockOffload({ config, logger })
+  if (blockOffload) {
+    logger.relay?.info?.('Relay block offload enabled', {
+      windowBytes: blockOffload.windowBytes,
+      bucket: config.archive?.s3?.bucket || '',
+      prefix: blockOffload.prefix
+    })
+  } else {
+    logger.relay?.info?.('Relay block offload disabled; block data stays on the local volume')
+  }
+
+  const runtime = await runtimeFactory({ config, logger, blockOffload })
 
   let closed = false
   let started = false
@@ -323,7 +340,8 @@ async function buildRelayService({
       catalog: relayCatalog,
       runtimeStats,
       ingestStatus,
-      trustedClientsCount: trustedClients.list().length
+      trustedClientsCount: trustedClients.list().length,
+      blockOffload: blockOffload?.stats() || null
     })
 
     await Promise.resolve(writeStatusFile(config.paths.status, currentStatus))
@@ -518,12 +536,19 @@ async function buildRelayService({
   }
 
   const service = {
-    s3: {
-      configured: Boolean(s3Signer),
-      endpoint: s3Config.endpoint || '',
-      bucket: s3Config.bucket || '',
-      region: s3Config.region || 'us-east-1',
-      prefix: s3Config.prefix || ''
+    // A getter, not a literal: the offload counters move while the relay runs,
+    // and the archive console reads this every time it renders.
+    get s3() {
+      return {
+        configured: Boolean(s3Signer),
+        endpoint: s3Config.endpoint || '',
+        bucket: s3Config.bucket || '',
+        region: s3Config.region || 'us-east-1',
+        prefix: s3Config.prefix || '',
+        offload: blockOffload
+          ? blockOffload.stats()
+          : { enabled: false, windowBytes: 0, blocksOffloaded: 0, bytesOffloaded: 0, restored: 0 }
+      }
     },
     config,
     logger,
@@ -1235,7 +1260,8 @@ async function buildRelayService({
       return currentStatus || buildRelayStatus({
         config,
         catalog: relayCatalog,
-        runtimeStats: {}
+        runtimeStats: {},
+        blockOffload: blockOffload?.stats() || null
       })
     },
     async close() {

@@ -22,7 +22,7 @@ export async function startRelay({ config, logger = null } = {}) {
   const service = await createRelayService({
     config,
     logger: relayLogger,
-    runtimeFactory: async () => createRelayRuntime({ config, logger: relayLogger })
+    runtimeFactory: async ({ blockOffload }) => createRelayRuntime({ config, logger: relayLogger, blockOffload })
   })
   await service.start()
   return service

@@ -6,6 +6,8 @@ import * as defaultFs from '#fs'
 import * as defaultPath from '#path'
 import process from '#process'
 
+import { reclaimStagingState } from '@peartube/backend/assets'
+
 import { TERMINAL_INGEST_JOB_STATES } from './ingest-job-store.js'
 
 const REQUEST_FIELDS = new Set(['retentionClass', 'mediaContext', 'measuredFacts', 'expected', 'bundleProvenance'])
@@ -45,11 +47,52 @@ const BUNDLE_FIELDS = new Set([
   'publicTrackerIndependent',
   'publicInfohash'
 ])
+// Progress that has to be thrown away rather than resumed from — the staged
+// prefix's own indictment. HASH_MISMATCH is the case that matters: those are
+// exactly the bytes whose digest failed, so resuming from them recomputes the
+// same wrong digest for as long as anyone keeps trying.
+//
+// These jobs stay RECOVERABLE, because corruption need not recur and a resubmit
+// is worth making. They just cannot start where the last attempt stopped. Which
+// means this one set drives the same decision across both substrates: it zeroes
+// `bytesReceived` for a spooled job, and it reclaims the staging core for a
+// granted one, whose resume offset is read off the staged merkle tree and would
+// otherwise ignore the zeroed counter entirely.
 const SOURCE_RESET_PROGRESS_ERRORS = new Set([
   'HASH_MISMATCH',
-  'SOURCE_PROGRESS_MISSING',
-  'SOURCE_PROGRESS_INVALID',
   'SPOOL_LENGTH_MISMATCH'
+])
+// A failure that is the transport's fault, or the process's, is an
+// INTERRUPTION: the bytes already on disk are still a truthful prefix of the
+// title this job asked for, so the job keeps its progress and its grant and a
+// resubmit resumes from `bytesReceived`.
+//
+// These are the failures that are themselves evidence the bytes CANNOT be
+// completed into what was asked for: the source states a different identity or
+// a different length than the request expects, or the spool handed over is not
+// the shape a spool has. No retry changes any of them, so the job ends and its
+// staging is cleaned up.
+//
+// A transport that carries its own verdict is believed rather than second-
+// guessed: SourceCallbackError sets `recoverable === false` for exactly the
+// statuses a retry cannot get past.
+const PERMANENT_INGEST_ERRORS = new Set([
+  'ETAG_MISMATCH',
+  'SOURCE_ETAG_MISMATCH',
+  'SOURCE_LENGTH_MISMATCH',
+  'PUBLICATION_INVALID',
+  'SPOOL_CHUNK_INVALID',
+  'SPOOL_INCOMPLETE',
+  'SPOOL_OWNERSHIP_INVALID',
+  'SPOOL_PATH_INVALID',
+  'SPOOL_TYPE_INVALID'
+])
+// Consent, and only consent. A job stops being a job because the caller
+// cancelled it or because the retention policy that admitted it no longer does
+// — never because a connection died or a viewer closed a tab.
+const CONSENT_WITHDRAWN_ERRORS = new Set([
+  'RETENTION_ADMISSION_DENIED',
+  'STORAGE_ADMISSION_DENIED'
 ])
 const SPOOL_FIELDS = new Set(['path', 'complete', 'mimeType', 'byteLength', 'sha256', 'etag'])
 const RETENTION_CLASSES = new Set(['contribution-cache', 'archive-pin'])
@@ -251,13 +294,31 @@ function normalizeSha256 (value, name, required = false) {
   return normalized
 }
 
+/**
+ * `expected` is the request's claim about which bytes this job is for, and every
+ * later check is against it.
+ *
+ * `sha256` is OPTIONAL, because a granted remote source cannot state one: a
+ * whole-file digest of a debrid-backed title means pulling every byte of it
+ * through MediaStorm first, which is the exact cost the granted path exists to
+ * avoid. A local file still sends a real digest and is still verified against it
+ * byte for byte — a digest that is PRESENT is never skipped.
+ *
+ * What is not optional is having SOME identity: a request with neither a digest
+ * nor an ETag claims nothing about its content beyond a length, and nothing
+ * downstream could ever catch it being handed the wrong title. So at least one
+ * of the two is required.
+ */
 function normalizeExpected (input, measuredBytes) {
   onlyFields(input, EXPECTED_FIELDS, 'expected')
   const byteLength = integer(input.byteLength, 'expected.byteLength', { minimum: 1, maximum: MAX_SAFE_MEDIA_BYTES })
   if (byteLength !== measuredBytes) fail('INGEST_REQUEST_INVALID', 'expected byte length must equal measured byte length')
-  const sha256 = normalizeSha256(input.sha256, 'expected.sha256', true)
+  const sha256 = normalizeSha256(input.sha256, 'expected.sha256')
   const result = { byteLength, sha256 }
   if (input.etag != null) result.etag = text(input.etag, 'expected.etag', 256)
+  if (sha256 === null && result.etag === undefined) {
+    fail('INGEST_REQUEST_INVALID', 'expected must carry a SHA-256 digest or an ETag')
+  }
   return result
 }
 
@@ -471,10 +532,23 @@ function sourceIdentityFor (job) {
 
 function publicationErrorCode (error, state) {
   if (error instanceof IngestJobError && ERROR_CODE.test(error.code)) return error.code
+  // A source callback failure names itself. It used to be flattened into
+  // ACQUISITION_FAILED, which told an operator nothing about whether the grant
+  // had expired, the bucket was throttling, or the file was gone — and told the
+  // recovery decision below nothing either.
+  if (error?.name === 'SourceCallbackError' && ERROR_CODE.test(error.code || '')) return error.code
   if (state === 'acquiring') return 'ACQUISITION_FAILED'
   if (state === 'verifying') return 'VERIFICATION_FAILED'
   if (state === 'publishing') return 'PUBLICATION_FAILED'
   return 'INGEST_FAILED'
+}
+
+/**
+ * Can a resubmit of this job get past this failure, or is the job over?
+ */
+function ingestFailureIsPermanent (error, code) {
+  if (error?.name === 'SourceCallbackError') return error.recoverable === false
+  return PERMANENT_INGEST_ERRORS.has(code)
 }
 
 export function createIngestManager ({
@@ -484,6 +558,11 @@ export function createIngestManager ({
   fs = defaultFs,
   path = defaultPath,
   sourceClient = null,
+  // Where a resumable ingest's staged prefix lives, so a job that ends can take
+  // it with it. Both absent means block offload is unconfigured, no staging
+  // state can exist, and reclamation is a no-op.
+  assetStore = null,
+  createStagingStore = null,
   canIngest = () => false,
   verifyChunkBytes = 256 * 1024,
   now = () => Date.now(),
@@ -506,6 +585,7 @@ export function createIngestManager ({
   )) {
     throw new TypeError('sourceClient must implement bounded source callbacks')
   }
+  const stagingOwned = Boolean(assetStore) && typeof createStagingStore === 'function'
 
   const ephemeral = new Map()
   const active = new Map()
@@ -579,20 +659,39 @@ export function createIngestManager ({
     if (lease == null) cleanupSpool(spool, jobId)
   }
 
-  function sourceSpool (jobId) {
-    const relativePath = `sources/${jobId}.part`
-    return { relativePath, filePath: path.join(sourceSpoolRoot, `${jobId}.part`) }
-  }
-
-  function cleanupAttachment (jobId, { preserveSource = false } = {}) {
+  function cleanupAttachment (jobId) {
     const attachment = ephemeral.get(jobId)
     ephemeral.delete(jobId)
-    const source = attachment?.sourceSpool
-    if (!preserveSource && source?.filePath && source.filePath !== attachment?.spool?.filePath) {
-      cleanupSpool(source, jobId)
-    }
-    if (!(preserveSource && source?.filePath === attachment?.spool?.filePath)) {
-      cleanupSpool(attachment?.spool, jobId)
+    cleanupSpool(attachment?.spool, jobId)
+  }
+
+  // A granted ingest keeps its part-read title in the staging core the asset
+  // writer opened under this job id, NOT on the volume. So the thing to reclaim
+  // when a job ends for good is that staging state, and the job id is the only
+  // handle needed to find it again — after a restart, with nothing held in
+  // memory.
+  //
+  // Best effort on purpose: a bucket that refuses a delete must not turn a
+  // cancellation into a failure, and the startup sweep is the backstop, because
+  // a terminal job's id is in `ids` and never in `keep`.
+  async function reclaimStaging (jobId) {
+    if (!stagingOwned) return
+    try {
+      const outcome = await reclaimStagingState({ store: assetStore, id: jobId, createStagingStore })
+      if (outcome.blocks > 0 || outcome.reclaimed !== true) {
+        logger?.archive?.info?.('Companion ingest staging state reclaimed', {
+          jobId,
+          blocks: outcome.blocks,
+          deleted: outcome.deleted,
+          orphaned: outcome.orphaned.length,
+          reclaimed: outcome.reclaimed
+        })
+      }
+    } catch (error) {
+      logger?.archive?.warn?.('Companion ingest staging reclamation failed', {
+        jobId,
+        error: ERROR_CODE.test(error?.code || '') ? error.code : 'STAGING_RECLAIM_FAILED'
+      })
     }
   }
 
@@ -646,7 +745,11 @@ export function createIngestManager ({
     }
   }
 
-  async function publishSpool (job, spool, signal) {
+  // Where the bytes come from is the ONLY difference between a spooled ingest
+  // and a granted one, so it is the only thing that varies here: `source` is
+  // either `{ filePath, mimeType }` for a file this relay already holds, or
+  // `{ sourceGrant, mimeType }` for an origin it reads ranges from.
+  async function publishJob (job, source, signal) {
     const channelInfo = await channelFor(job)
     const existing = await channelInfo.channel?.getVideo?.(job.publicationFence.videoId).catch(() => null)
     let metadata = existing
@@ -660,12 +763,11 @@ export function createIngestManager ({
       const imported = await publisher.importVideo({
         retentionClass: job.retentionClass,
         channel: channelInfo.channel,
-        filePath: spool.filePath,
+        ...source,
         videoId: job.publicationFence.videoId,
         signal,
         title: measured.title || sourceVideoId,
         description: '',
-        mimeType: spool.mimeType,
         duration: measured.durationMs == null ? undefined : measured.durationMs / 1000,
         width: measured.width,
         height: measured.height,
@@ -687,96 +789,105 @@ export function createIngestManager ({
     return result
   }
 
-  function writeSourceChunk (descriptor, chunk, position) {
-    let written = 0
-    while (written < chunk.byteLength) {
-      const count = fs.writeSync(
-        descriptor,
-        chunk,
-        written,
-        chunk.byteLength - written,
-        position + written
-      )
-      if (!Number.isSafeInteger(count) || count <= 0) fail('SOURCE_WRITE_FAILED', 'source staging write failed', 503)
-      written += count
-    }
-  }
-
-  async function acquireSource (job, attachment, signal) {
+  // Ask the grant what it is serving. No byte of the title is spent here: the
+  // total length, the identity and the media type all come from the HEAD, which
+  // is what lets the retention budget and the storage gates be answered before
+  // the first range is requested — the job the spool's `stat` used to do, done
+  // earlier and from an authoritative source rather than from a copy.
+  async function describeGrantedSource (job, attachment, signal) {
     if (!sourceClient) fail('SOURCE_CALLBACK_UNAVAILABLE', 'source callback is unavailable', 503)
     if (!attachment?.sourceCapability) fail('SOURCE_REATTACH_REQUIRED', 'source capability reattachment is required', 409)
-    const expectedETag = job.request.expected.etag
-    if (typeof expectedETag !== 'string') fail('SOURCE_ETAG_MISMATCH', 'source ETag is required')
+    const etag = job.request.expected.etag
+    if (typeof etag !== 'string') fail('SOURCE_ETAG_MISMATCH', 'source ETag is required')
+    const capability = attachment.sourceCapability
     const metadata = await sourceClient.head({
-      capability: attachment.sourceCapability,
+      capability,
       jobId: job.jobId,
-      etag: expectedETag,
+      etag,
       length: job.expectedBytes,
       signal
     })
-    if (metadata.length !== job.expectedBytes) fail('SOURCE_LENGTH_MISMATCH', 'source length does not match')
-    if (metadata.etag !== expectedETag) fail('SOURCE_ETAG_MISMATCH', 'source ETag does not match')
+    return { capability, etag, metadata }
+  }
 
-    fs.mkdirSync(sourceSpoolRoot, { recursive: true })
-    const source = sourceSpool(job.jobId)
-    attachment.sourceSpool = source
-    let descriptor
-    if (job.bytesReceived === 0) {
-      fs.rmSync(source.filePath, { force: true })
-      descriptor = fs.openSync(source.filePath, 'w+', 0o600)
-    } else {
-      let stat
-      try {
-        stat = fs.statSync(source.filePath)
-      } catch {
-        fail('SOURCE_PROGRESS_MISSING', 'verified source progress is missing')
-      }
-      if (!stat.isFile?.() || stat.size < job.bytesReceived || stat.size > job.expectedBytes) {
-        fail('SOURCE_PROGRESS_INVALID', 'verified source progress is invalid')
-      }
-      descriptor = fs.openSync(source.filePath, 'r+')
-    }
+  // Is what the grant serves what this job asked for? A length or an identity
+  // that does not match is permanent — no retry makes an origin start serving
+  // different bytes — and it is caught before anything is downloaded.
+  function verifyGrantedSource (job, granted) {
+    if (granted.metadata.length !== job.expectedBytes) fail('SOURCE_LENGTH_MISMATCH', 'source length does not match')
+    if (granted.metadata.etag !== granted.etag) fail('SOURCE_ETAG_MISMATCH', 'source ETag does not match')
+  }
 
+  // How far a granted ingest has got. The bytes arrive during publication now
+  // rather than into a file beforehand, so this is where progress comes from.
+  // One write per range, exactly the cadence the download loop used to keep —
+  // the grant's range size IS the granularity — and forward only, because a
+  // resumed attempt starts at the offset its staged prefix reached, which can be
+  // behind what an earlier attempt reported.
+  function grantedProgress (job) {
     let current = job
-    try {
-      while (current.bytesReceived < current.expectedBytes) {
-        if (!canIngest(current.request)) fail('RETENTION_ADMISSION_DENIED', 'retention permission was withdrawn', 403)
-        if (signal?.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
-        const start = current.bytesReceived
-        const end = Math.min(start + sourceClient.chunkBytes, current.expectedBytes) - 1
-        await sourceClient.getRange({
-          capability: attachment.sourceCapability,
-          jobId: current.jobId,
-          etag: expectedETag,
-          length: current.expectedBytes,
-          start,
-          end,
-          signal,
-          onChunk: (chunk, rangeOffset) => writeSourceChunk(descriptor, chunk, start + rangeOffset)
-        })
-        if (signal?.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
-        fs.fsyncSync(descriptor)
-        current = await store.updateProgress(current.jobId, {
-          expectedVersion: current.version,
-          state: 'acquiring',
-          bytesReceived: end + 1
-        })
+    let persisted = job.bytesReceived
+    return {
+      get job () { return current },
+      async record (bytes) {
+        if (bytes <= persisted) return
+        try {
+          current = await store.updateProgress(current.jobId, {
+            expectedVersion: current.version,
+            state: 'publishing',
+            bytesReceived: bytes
+          })
+          persisted = bytes
+        } catch {
+          // A progress figure must never be the thing that fails an ingest. If
+          // the version drifted — the job was cancelled from under this pass,
+          // say — re-base on what is durable and keep the bytes flowing; the
+          // abort check below is what actually stops this run.
+          current = (await store.getJob(current.jobId).catch(() => null)) || current
+          persisted = current.bytesReceived
+        }
       }
-    } finally {
-      fs.closeSync(descriptor)
     }
+  }
 
-    const descriptorValue = {
-      path: source.relativePath,
-      complete: true,
-      mimeType: metadata.mimeType,
-      byteLength: current.expectedBytes,
-      etag: expectedETag
+  // Failures the ranged source raises in this manager's own vocabulary are
+  // adopted as such, so a granted ingest and a spooled one classify a mismatched
+  // digest identically. Everything else — a transport carrying its own verdict,
+  // this manager's own consent errors — travels exactly as it was thrown.
+  function adoptSourceFailure (error) {
+    if (error instanceof IngestJobError) return error
+    if (error?.code === 'HASH_MISMATCH') {
+      return new IngestJobError('HASH_MISMATCH', 'granted source bytes do not match the expected digest')
     }
-    const spool = normalizeSpoolDescriptor(descriptorValue, current.request, { spoolRoot, fs, path })
-    attachment.descriptor = descriptorValue
-    attachment.spool = spool
-    return { job: current, spool }
+    return error
+  }
+
+  // The grant, in the shape the archive publisher opens ranges from.
+  //
+  // `jobId` is doing two jobs and must be the durable one for both: the grant
+  // authorizes ranges against it, and the asset writer names the staging core
+  // that carries a part-read title between attempts after it. That is what lets
+  // a resumed attempt — even one on the far side of a relay restart — find the
+  // prefix the last one left instead of downloading the title again.
+  //
+  // The consent and cancellation gates that used to run per range inside the
+  // download loop run here, once per range, for the same reason: an hour-long
+  // ingest has to notice that the operator withdrew permission.
+  function grantedSourceFor (job, granted, progress, entry) {
+    return {
+      client: sourceClient,
+      capability: granted.capability,
+      jobId: job.jobId,
+      etag: granted.etag,
+      length: job.expectedBytes,
+      sha256: job.request.expected.sha256 ?? null,
+      onProgress: async (bytes) => {
+        if (entry.controller.signal.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
+        if (!canIngest(job.request)) fail('RETENTION_ADMISSION_DENIED', 'retention permission was withdrawn', 403)
+        await progress.record(bytes)
+      },
+      onFailure: (error) => { entry.sourceFailure = adoptSourceFailure(error) }
+    }
   }
 
   async function verifySpool (job, spool, signal) {
@@ -796,8 +907,18 @@ export function createIngestManager ({
         if (error) reject(error)
         else pending.then(() => {
           if (bytesReceived !== job.expectedBytes) fail('SPOOL_LENGTH_MISMATCH', 'spool ended at the wrong length')
+          // A digest that was stated is always checked. One that was not stated
+          // is not invented: a granted remote source cannot produce a whole-file
+          // SHA-256 without first pulling the whole file, so its identity is
+          // carried by the ETag matched on HEAD and on every single range, plus
+          // the exact-length framing of each of those ranges. The read still
+          // happens either way — it is what enforces the length above and feeds
+          // the merkle tree the asset key comes from.
+          const expected = job.request.expected.sha256
           const digest = hasher.digest()
-          if (digest !== job.request.expected.sha256) fail('HASH_MISMATCH', 'spool SHA-256 does not match')
+          if (expected !== null && expected !== undefined && digest !== expected) {
+            fail('HASH_MISMATCH', 'spool SHA-256 does not match')
+          }
           resolve(current)
         }).catch(reject)
       }
@@ -859,29 +980,54 @@ export function createIngestManager ({
       if (!attachment?.spool && !attachment?.sourceCapability) return job
       if (!canIngest(job.request)) fail('STORAGE_ADMISSION_DENIED', 'retention admission denied', 507)
       job = await store.transition(jobId, { expectedVersion: job.version, from: 'queued', to: 'acquiring' })
-      let spool
-      if (attachment.spool) {
-        spool = normalizeSpoolDescriptor(attachment.descriptor, job.request, { spoolRoot, fs, path })
-      } else {
-        const acquired = await acquireSource(job, attachment, entry.controller.signal)
-        job = acquired.job
-        spool = acquired.spool
-      }
+      // A file this relay already holds is spooled and verified exactly as it
+      // always was. A granted origin is never copied here at all: it is
+      // described, checked against the request, and then read as ranges
+      // straight into the asset core while it publishes. That is what lets a
+      // title be larger than the volume archiving it — and it is why there is
+      // no `sources/` spool any more.
+      const spool = attachment.spool
+        ? normalizeSpoolDescriptor(attachment.descriptor, job.request, { spoolRoot, fs, path })
+        : null
+      const granted = spool === null
+        ? await describeGrantedSource(job, attachment, entry.controller.signal)
+        : null
       if (entry.controller.signal.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
       if (!canIngest(job.request)) fail('RETENTION_ADMISSION_DENIED', 'retention permission was withdrawn', 403)
       job = await store.transition(jobId, { expectedVersion: job.version, from: 'acquiring', to: 'verifying' })
-      job = await verifySpool(job, spool, entry.controller.signal)
+      if (spool) job = await verifySpool(job, spool, entry.controller.signal)
+      else verifyGrantedSource(job, granted)
       if (entry.controller.signal.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
       if (!canIngest(job.request)) fail('RETENTION_ADMISSION_DENIED', 'retention permission was withdrawn', 403)
       job = await store.transition(jobId, { expectedVersion: job.version, from: 'verifying', to: 'publishing' })
       if (entry.controller.signal.aborted) fail('CANCELLED', 'ingest was cancelled', 499)
       if (!canIngest(job.request)) fail('RETENTION_ADMISSION_DENIED', 'retention permission was withdrawn', 403)
-      const result = await publishSpool(job, spool, entry.controller.signal)
-      job = await store.completePublication(jobId, { expectedVersion: job.version, result })
+      const progress = spool ? null : grantedProgress(job)
+      const result = spool
+        ? await publishJob(job, { filePath: spool.filePath, mimeType: spool.mimeType }, entry.controller.signal)
+        : await publishJob(job, {
+          sourceGrant: grantedSourceFor(job, granted, progress, entry),
+          mimeType: granted.metadata.mimeType
+        }, entry.controller.signal)
+      // A granted ingest records byte progress while it publishes, so the
+      // version this pass started with is stale by the time it commits.
+      job = await store.completePublication(jobId, { expectedVersion: (progress?.job || job).version, result })
       return job
-    } catch (error) {
+    } catch (raised) {
       if (closing || entry.closing) return store.getJob(jobId)
-      const cancelled = entry.cancelled || error?.code === 'CANCELLED' || error?.code === 'ABORT_ERR'
+      // A granted ingest's bytes flow through the upload manager, which reports
+      // a failure as a message rather than as the exception it was. The latched
+      // failure is that exception with its identity intact, so the decision
+      // below is made on what actually went wrong rather than on a flattened
+      // string that says only that publication failed.
+      const error = entry.sourceFailure || raised
+      // Consent, not liveness. A job is `cancelled` because somebody cancelled
+      // it — `cancelJob` sets this before it aborts — and for no other reason.
+      // It used to be cancelled by ANY abort reaching here, including one raised
+      // downstream when a playback session's connection went away, and a
+      // cancelled job's spool is deleted. So a viewer moving on could delete a
+      // part-downloaded archive nobody had withdrawn consent for.
+      const cancelled = entry.cancelled === true
       const current = await store.getJob(jobId)
       if (current?.state === 'publishing') {
         try {
@@ -894,23 +1040,45 @@ export function createIngestManager ({
           // Fall through to the bounded terminal publication error below.
         }
       }
-      if (cancelled) return await markTerminal(jobId, 'cancelled', 'CANCELLED', false)
+      if (cancelled) {
+        const terminal = await markTerminal(jobId, 'cancelled', 'CANCELLED', false)
+        await reclaimStaging(jobId)
+        return terminal
+      }
       const code = publicationErrorCode(error, current?.state || job?.state)
-      const sourceRecoverable = Boolean(attachment?.sourceCapability) &&
-        (current?.state === 'acquiring' || current?.state === 'verifying' || current?.state === 'publishing')
-      logger?.archive?.warn?.('Companion ingest job failed', { jobId, state: current?.state || null, errorCode: code })
-      return await markTerminal(jobId, 'failed', code, sourceRecoverable || current?.state === 'publishing')
+      // `recoverable` decides whether a resubmit resumes from what this job
+      // already has or starts again. It used to key off the mere presence of a
+      // source capability, which said nothing about whether a retry could get
+      // past the failure. Now the failure itself decides.
+      const withdrawn = CONSENT_WITHDRAWN_ERRORS.has(code)
+      const resumable = !withdrawn && !ingestFailureIsPermanent(error, code)
+      const recoverable = resumable && (
+        Boolean(attachment?.sourceCapability) ||
+        current?.state === 'publishing'
+      )
+      logger?.archive?.warn?.('Companion ingest job failed', {
+        jobId,
+        state: current?.state || null,
+        errorCode: code,
+        recoverable
+      })
+      const terminal = await markTerminal(jobId, 'failed', code, recoverable)
+      // Nothing will ever come back for the staged prefix of a job that cannot
+      // be resumed, so it goes with the job. A recoverable one keeps it: that
+      // prefix is the entire reason a resubmit is cheap.
+      //
+      // Unless the prefix is what failed. A digest mismatch condemns the staged
+      // bytes without condemning the job, and those are two different questions:
+      // resuming into them could only ever reproduce the same mismatch, so the
+      // staging state goes even though the job survives to be retried from zero.
+      if (!recoverable || SOURCE_RESET_PROGRESS_ERRORS.has(code)) await reclaimStaging(jobId)
+      return terminal
     } finally {
       const final = await store.getJob(jobId).catch(() => null)
       attachment = ephemeral.get(jobId) || attachment
-      if (TERMINAL.has(final?.state)) {
+      if (TERMINAL.has(final?.state) || closing || entry.closing) {
         await revokeAttachmentSource(jobId, attachment)
-        cleanupAttachment(jobId, {
-          preserveSource: final.state === 'failed' && final.recoverable === true && Boolean(attachment?.sourceSpool)
-        })
-      } else if (closing || entry.closing) {
-        await revokeAttachmentSource(jobId, attachment)
-        cleanupAttachment(jobId, { preserveSource: Boolean(attachment?.sourceSpool) })
+        cleanupAttachment(jobId)
       }
     }
   }
@@ -918,7 +1086,7 @@ export function createIngestManager ({
   function schedule (jobId) {
     const attachment = ephemeral.get(jobId)
     if (!started || closing || active.has(jobId) || (!attachment?.spool && !attachment?.sourceCapability)) return
-    const entry = { controller: new AbortController(), cancelled: false, closing: false, promise: null }
+    const entry = { controller: new AbortController(), cancelled: false, closing: false, sourceFailure: null, promise: null }
     entry.promise = runJob(jobId, entry).finally(() => {
       if (active.get(jobId) === entry) active.delete(jobId)
     })
@@ -1148,6 +1316,10 @@ export function createIngestManager ({
         const cancelled = await markTerminal(jobId, 'cancelled', 'CANCELLED', false)
         await revokeAttachmentSource(jobId)
         cleanupAttachment(jobId)
+        // A queued job can already own staging state — it may be the resubmit of
+        // an attempt that got most of the way — so a cancellation that never
+        // reaches runJob still has to hand it back.
+        await reclaimStaging(jobId)
         return { job: cancelled, running: null }
       })
       if (decision.running) await decision.running.promise.catch(() => {})
@@ -1166,12 +1338,40 @@ export function createIngestManager ({
       return { cancelled }
     },
 
+    /**
+     * Which resume ids the staging sweep may consider, and which of them must
+     * survive it.
+     *
+     * `ids` is every job this relay has ever recorded, because the sweep is
+     * complete rather than best-effort: the bucket is never enumerated, so an id
+     * that is left out is staging state nothing will ever reclaim. `keep` is the
+     * jobs that have not settled and could still be resumed.
+     *
+     * A job whose ingest is RUNNING is in neither list. Reading a staged length
+     * that is being appended to would not be reading a length at all, so it is
+     * excluded from the set the sweep is handed rather than merely spared by it.
+     */
+    async stagingSweepPlan () {
+      const ids = []
+      const keep = []
+      for (const entry of await store.listJobIds()) {
+        if (active.has(entry.jobId)) continue
+        ids.push(entry.jobId)
+        if (!entry.terminal) keep.push(entry.jobId)
+      }
+      return { ids, keep }
+    },
+
     async start () {
       if (closed || closing) fail('INGEST_MANAGER_CLOSED', 'ingest manager is closed', 503)
       if (started) return this
       fs.mkdirSync(spoolRoot, { recursive: true })
       if (ephemeral.size === 0) fs.rmSync(path.join(spoolRoot, 'uploads'), { recursive: true, force: true })
-      fs.mkdirSync(sourceSpoolRoot, { recursive: true })
+      // Nothing writes a source spool any more — a granted source streams its
+      // ranges straight into the asset core — so anything still here is a
+      // part-downloaded title from a relay that predates that, and it is dead
+      // weight on the volume.
+      fs.rmSync(sourceSpoolRoot, { recursive: true, force: true })
       started = true
       for (const job of await store.listActive()) await recover(job)
       return this
@@ -1191,9 +1391,7 @@ export function createIngestManager ({
       }
       await Promise.all([...active.values()].map(entry => entry.promise.catch(() => {})))
       await Promise.all([...ephemeral.keys()].map(jobId => revokeAttachmentSource(jobId)))
-      for (const jobId of [...ephemeral.keys()]) {
-        cleanupAttachment(jobId, { preserveSource: Boolean(ephemeral.get(jobId)?.sourceSpool) })
-      }
+      for (const jobId of [...ephemeral.keys()]) cleanupAttachment(jobId)
       await store.close?.()
       started = false
       closed = true

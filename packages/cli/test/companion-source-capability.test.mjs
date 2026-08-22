@@ -6,6 +6,7 @@ import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
+import { createGrantedRangedSource } from '../src/archive-manager.js'
 import { createNonceStore, hashControlBody, verifyControlRequest } from '../src/companion/auth.js'
 import { createIngestJobStore } from '../src/companion/ingest-job-store.js'
 import {
@@ -63,7 +64,7 @@ function fakeBee () {
 }
 
 function fakePublisher () {
-  const calls = { imports: 0 }
+  const calls = { imports: 0, attempts: 0, bytes: 0 }
   const videos = new Map()
   const publication = videoId => ({
     id: videoId,
@@ -85,10 +86,20 @@ function fakePublisher () {
         publisherId: 'a'.repeat(64)
       }
     },
-    async importVideo ({ videoId }) {
-      calls.imports++
+    // A granted title is read as ranges straight through to the asset writer, so
+    // the publisher is where the bytes actually move and an attempt that loses
+    // the source fails HERE. `imports` therefore counts publications that
+    // completed — the thing that must happen exactly once — and `attempts`
+    // counts the tries it took.
+    async importVideo ({ videoId, sourceGrant }) {
+      calls.attempts++
+      if (sourceGrant) {
+        const source = createGrantedRangedSource(sourceGrant)
+        for await (const chunk of source.open(0)) calls.bytes += chunk.byteLength
+      }
       const metadata = publication(videoId)
       videos.set(videoId, metadata)
+      calls.imports++
       return { metadata }
     },
     async publishCatalog () {},
@@ -534,7 +545,12 @@ test('restart preserves verified partial bytes and fresh capability reattachment
   await second.manager.start()
   const detached = await second.manager.getJob(created.jobId)
   t.is(detached.state, 'failed')
-  t.is(detached.errorCode, 'SOURCE_REATTACH_REQUIRED')
+  // A granted title is read as ranges DURING publication now — there is no
+  // separate acquisition phase and no part-file — so a restart mid-download
+  // leaves a job whose publication result never arrived. What the client acts
+  // on is unchanged: recoverable, so a fresh grant resumes the same job.
+  t.is(detached.errorCode, 'PUBLICATION_RESULT_UNAVAILABLE')
+  t.is(detached.recoverable, true)
   const replay = await second.manager.submitJob({
     idempotencyKey: 'restart-source',
     request: movieRequest(bytes),

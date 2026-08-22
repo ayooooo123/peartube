@@ -765,6 +765,11 @@ async function prepareImmutablePublication(metadata, runtime = {}) {
   const renditionWriter = createImmutableRenditionWriter({
     store: runtime.store,
     source: runtime.createSource?.(),
+    // Set instead of `source` when the caller's origin can be re-opened at a
+    // byte offset, which is what lets an interrupted media ingest pick up from
+    // its staged prefix. Artwork renditions carry their own bytes and never
+    // inherit it.
+    resume: runtime.resume || null,
     signal: runtime.signal,
     // Optional: set only when the relay is configured to offload block data to
     // an object store (see archive/block-offloader.js). Absent everywhere else,
@@ -846,6 +851,56 @@ function staticPlaybackBlobRef(prepared) {
     // bytes resolve to the SAME core. Nothing about this upload owns it, and
     // rollback must never clear it.
     shared: true
+  };
+}
+
+// A RANGED upload source: a source that can be re-opened at a byte offset
+// rather than only from the start. It is what makes an interrupted archive
+// resumable — a second attempt asks the origin for the bytes it still needs
+// instead of the whole title again — and the only shape that can express that
+// is an opener, because the offset it must start at is not known until the
+// staging core left behind by the previous attempt has been read.
+//
+//   id     stable across attempts; it is what names the staging core, so two
+//          different assets must never share one.
+//   open   `(byteOffset)` returning a ONE-SHOT iterable of the source bytes
+//          from there on. Called at most once per attempt, always on a
+//          canonical block boundary, and an offset equal to the whole length
+//          is legal and must yield nothing.
+//   etag   the origin's own statement of which bytes it is serving, compared
+//          on every later attempt so two different sources can never be
+//          spliced into one content-addressed core.
+//
+// An ITERABLE is never treated as a ranged source, whatever else it carries: a
+// stream object may well have an `open` method of its own, and the iterable
+// form is the one every caller without a ranged origin passes. So the
+// discriminator is "not iterable, but openable", and returning null here is
+// what keeps that caller's behaviour exactly as it was.
+function rangedUploadSource(source) {
+  if (!source || typeof source.open !== 'function') return null;
+  if (typeof source[Symbol.asyncIterator] === 'function' ||
+      typeof source[Symbol.iterator] === 'function') {
+    return null;
+  }
+  const id = typeof source.id === 'string' ? source.id.trim() : '';
+  if (id.length === 0 || id.length > 128) {
+    throw new Error('Ranged upload source requires an id of 1 to 128 characters');
+  }
+  const etag = source.etag === null || source.etag === undefined ? null : source.etag;
+  if (etag !== null && (typeof etag !== 'string' || etag.length === 0 || etag.length > 256)) {
+    throw new Error('Ranged upload source etag must be an identity token of 1 to 256 characters');
+  }
+  return {
+    id,
+    etag,
+    open(byteOffset) {
+      const opened = source.open(byteOffset);
+      if (!opened || (typeof opened[Symbol.asyncIterator] !== 'function' &&
+          typeof opened[Symbol.iterator] !== 'function')) {
+        throw new Error('Ranged upload source open() must return an iterable of byte chunks');
+      }
+      return opened;
+    }
   };
 }
 
@@ -1339,6 +1394,13 @@ export function createUploadManager({
   const blockOffload = typeof ctx?.blockOffload?.createOffloader === 'function'
     ? ctx.blockOffload
     : (ctx?.blockOffload?.offloadAsset || null);
+  // Resumable ingest keeps its staged prefix in the object store, so it can
+  // only be offered when the relay actually has one. With offload unconfigured
+  // — or configured with only the legacy hook — there is nowhere durable to put
+  // a partial title, and a ranged origin is read once from byte zero exactly as
+  // an ordinary one-shot stream is.
+  const resumableIngest = typeof blockOffload?.createOffloader === 'function' &&
+    typeof blockOffload?.createStagingStore === 'function';
   const publicationRuntime = { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair, store: ctx?.store, offload: blockOffload, now };
   /**
    * Probe the uploaded MP4 for its playback profile (moov position +
@@ -1725,8 +1787,19 @@ export function createUploadManager({
      * ASSET_SOURCE_NOT_REOPENABLE — because its second pass would have nowhere
      * to read from; callers keep `uploadFromPath` for that.
      *
+     * `source` may instead be a RANGED source — `{ id, etag, open(byteOffset) }`
+     * — for an origin that serves byte ranges. Then the write becomes
+     * RESUMABLE: the staged prefix is keyed by `id` and survives the process,
+     * so a second attempt calls `open()` at the first byte it does not already
+     * hold rather than pulling the title again from zero. `etag` is the
+     * origin's identity for those bytes and is what stops two different sources
+     * being spliced into one content-addressed core. Resumption needs somewhere
+     * durable to keep the prefix, so with offload unconfigured a ranged source
+     * is simply opened once at zero and takes the plain path above.
+     *
      * @param {MultiWriterChannel} channel - Target channel
-     * @param {AsyncIterable<Buffer>|Iterable<Buffer>} source - One-shot chunks
+     * @param {AsyncIterable<Buffer>|Iterable<Buffer>|{id: string, etag?: string|null, open: (byteOffset: number) => AsyncIterable<Buffer>|Iterable<Buffer>}} source
+     *   One-shot chunks, or a ranged source that can be re-opened at an offset
      * @param {UploadOptions} options - Upload options; `byteLength` is an
      *   optional content-length hint used only for progress percentages
      * @param {ProgressCallback} [onProgress] - Progress callback
@@ -1740,8 +1813,9 @@ export function createUploadManager({
         if (!channel.blobs) {
           throw new Error('Channel blobs not initialized');
         }
-        if (!source || (typeof source[Symbol.asyncIterator] !== 'function' &&
-            typeof source[Symbol.iterator] !== 'function')) {
+        const ranged = rangedUploadSource(source);
+        if (!ranged && (!source || (typeof source[Symbol.asyncIterator] !== 'function' &&
+            typeof source[Symbol.iterator] !== 'function'))) {
           throw new Error('Upload stream source must be an iterable of byte chunks');
         }
 
@@ -1773,14 +1847,25 @@ export function createUploadManager({
           signal: options.signal
         };
         assertUploadNotCancelled(uploadControl.signal);
-        // The iterable is handed over as-is. `resolveSource` in static-core.js
-        // treats anything that is not an array as unrepeatable, so this is the
-        // seam that selects streaming ingest — nothing here re-opens, buffers or
-        // tees it.
+        // A ranged origin becomes a resumable write only when there is an
+        // object store to keep its staged prefix in; otherwise it degrades to
+        // one read from byte zero and is indistinguishable from a plain stream.
+        // Either way the bytes reach the writer exactly once — `resolveSource`
+        // in static-core.js treats anything that is not an array as
+        // unrepeatable, so this is the seam that selects streaming ingest and
+        // nothing here re-opens, buffers or tees it.
+        const resume = ranged && resumableIngest
+          ? { id: ranged.id, etag: ranged.etag, open: ({ byteOffset }) => ranged.open(byteOffset) }
+          : null;
+        // Called at most once: prepareImmutablePublication opens the source
+        // only when it has a catalog to publish against, and the fallback below
+        // runs only when it did not.
+        const openStream = () => (ranged ? ranged.open(0) : source);
         prepared = await prepareImmutablePublication(metadata, {
           ...publicationRuntime,
           ...uploadControl,
-          createSource: () => source,
+          createSource: resume ? null : openStream,
+          resume,
           createArtworkSources: () => collectArtworkSources(channel, metadata)
         });
         let fileSize;
@@ -1797,7 +1882,7 @@ export function createUploadManager({
         } else {
           const streamed = await writeStreamedPlaybackBlob(
             channel,
-            source,
+            openStream(),
             uploadControl.signal,
             onProgress,
             Number(options.byteLength)

@@ -44,11 +44,21 @@ export function createImmutableRenditionWriter(defaults = {}) {
       let staticAsset = null
       try {
         validateRenditionMetadata(input)
+        // A resumable opener REPLACES the source rather than joining it: the
+        // offset it has to start at is only known once the staging core on disk
+        // has been read, so bytes handed in up front could not have started in
+        // the right place. Only the rendition that brought no source of its own
+        // inherits the writer's opener — artwork writes carry their own bytes
+        // and stay ordinary one-shot writes. Passing both on one write is left
+        // to writeStaticAsset to refuse rather than silently resolved here.
+        const source = input.source || defaults.source
+        const resume = input.resume || (input.source ? null : defaults.resume) || null
         staticAsset = await writeStaticAsset({
           store: input.store || defaults.store,
-          source: input.source || defaults.source,
+          source,
           signal: input.signal || defaults.signal,
           offload: input.offload || defaults.offload || null,
+          resume,
         })
         const segmentIndex = createSegmentIndexDescriptor({
           codec: input.segmentCodec || 'peartube-inline-segments-v1',

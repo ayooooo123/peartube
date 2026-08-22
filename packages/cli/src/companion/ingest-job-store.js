@@ -383,6 +383,27 @@ export function createIngestJobStore ({ bee, now = () => Date.now() } = {}) {
       }
     },
 
+    // Every job id this relay has ever recorded, with whether it has settled.
+    // The staging sweep needs the WHOLE set rather than the recent window
+    // `listRecent` returns: an id it never hears about is staging state that
+    // nothing will ever reclaim, and the bucket is never enumerated to find it.
+    async listJobIds () {
+      await writes
+      const ids = []
+      try {
+        for await (const entry of bee.createReadStream({ gte: JOB_PREFIX, lt: `${JOB_PREFIX}\uffff` })) {
+          const job = decode(entry.value)
+          if (!job?.jobId || !INGEST_JOB_STATES.includes(job.state)) {
+            throw storeError('INGEST_PERSISTENCE_CORRUPT', 'Ingest job record is corrupt')
+          }
+          ids.push({ jobId: job.jobId, terminal: TERMINAL.has(job.state) })
+        }
+        return ids
+      } catch (error) {
+        throw persistenceFailure(error)
+      }
+    },
+
     async close () {
       await writes
     }

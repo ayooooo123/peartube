@@ -94,10 +94,33 @@ function exactIntegerHeader (response, name) {
   return Number.isSafeInteger(parsed) ? parsed : null
 }
 
+// The relay's decision to keep or discard a part-downloaded title turns on the
+// `recoverable` flag below, so the statuses a granted source promises are mapped
+// deliberately rather than lumped together:
+//
+//   3xx  a grant must never redirect; following one would fetch bytes nothing
+//        authorised. Permanent.
+//   401  the grant's TTL lapsed. RECOVERABLE — the companion asks for a fresh
+//        grant and resumes from the last confirmed offset. A long archive
+//        outliving its grant is the most likely interruption there is, and it is
+//        not a reason to throw away a download.
+//   403  the grant belongs to another job, or the shared secret is wrong. No
+//        retry fixes a misconfiguration.
+//   404  the file behind the grant is gone.
+//   410  the grant was revoked, or the upstream length stopped matching what the
+//        grant was issued for — an identity change either way.
+//   412  If-Match failed: the source is serving different bytes than the ones
+//        the staged prefix was read under.
+//   416  the range is outside the length the grant stated.
+//   else 429 and 5xx are upstream throttling or a re-resolve in flight, which is
+//        exactly what a retry is for.
 function mapStatus (status) {
   if (status >= 300 && status < 400) fail('SOURCE_REDIRECT', false)
-  if (status === 401 || status === 403) fail('SOURCE_AUTH_FAILED')
-  if (status === 404 || status === 410) fail('SOURCE_GRANT_UNAVAILABLE')
+  if (status === 401) fail('SOURCE_AUTH_FAILED')
+  if (status === 403) fail('SOURCE_AUTH_FAILED', false)
+  if (status === 404 || status === 410) fail('SOURCE_GRANT_UNAVAILABLE', false)
+  if (status === 412) fail('SOURCE_ETAG_MISMATCH', false)
+  if (status === 416) fail('SOURCE_RANGE_INVALID', false)
   fail('SOURCE_UNAVAILABLE')
 }
 

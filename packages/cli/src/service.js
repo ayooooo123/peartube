@@ -19,6 +19,7 @@ import { createIngestJobStore } from './companion/ingest-job-store.js'
 import { createIngestManager } from './companion/ingest-manager.js'
 import { createSourceCallbackClient } from './companion/source-client.js'
 import tmdbFetch from '#fetch'
+import { sweepStagingState } from '@peartube/backend/assets'
 
 
 // 0 means "any free port", so the default must not swallow it.
@@ -880,6 +881,13 @@ async function buildRelayService({
             fs: companionFsModule,
             path: companionPathModule,
             sourceClient,
+            // Where a resumable ingest's staged prefix lives. Both are absent
+            // unless block offload is configured, and then no staging state can
+            // exist for a job to hand back.
+            assetStore: blockOffload?.createStagingStore ? runtime.ctx.store : null,
+            createStagingStore: blockOffload?.createStagingStore
+              ? (input) => blockOffload.createStagingStore(input)
+              : null,
             canIngest: request => canRetain(request),
             now: nowFn,
             logger
@@ -928,6 +936,39 @@ async function buildRelayService({
       const runtimeStartedAt = Date.now()
       await runtime.start?.()
       logger.relay.info('Relay runtime network ready', { runtimeStartMs: Date.now() - runtimeStartedAt })
+      // Reclaim the staged prefixes of ingests that will never come back for
+      // them — a job that was cancelled while the relay was down, one whose
+      // reclamation failed at the time, one nobody retried inside the TTL.
+      // Bounded by the job store rather than by enumerating the bucket: an id
+      // the store does not know about is not this relay's to delete.
+      //
+      // ONCE, and HERE: before `ingestManager.start()` schedules a single job,
+      // so no ingest is running and a staged length cannot be a length that is
+      // being appended to. `stagingSweepPlan()` also leaves out anything in
+      // flight, so the guarantee holds however this is reached.
+      if (ingestManager && blockOffload?.createStagingStore && runtime.ctx?.store) {
+        try {
+          const plan = await ingestManager.stagingSweepPlan()
+          const swept = await sweepStagingState({
+            store: runtime.ctx.store,
+            createStagingStore: (input) => blockOffload.createStagingStore(input),
+            ids: plan.ids,
+            keep: plan.keep
+          })
+          if (swept.reclaimed.length > 0 || swept.orphaned.length > 0) {
+            logger.relay.info('Relay ingest staging state swept', {
+              reclaimed: swept.reclaimed.length,
+              retained: swept.retained.length,
+              orphaned: swept.orphaned.length
+            })
+          }
+        } catch (error) {
+          // Staging state left behind costs bucket storage the TTL already
+          // bounds, and the next boot tries again. It is not a reason to refuse
+          // to start the relay.
+          logger.relay.warn?.('Relay ingest staging sweep failed', { error: error?.message || String(error) })
+        }
+      }
       await ingestManager?.start()
       ingestManagerStarted = Boolean(ingestManager)
       ingestReady = ingestManagerStarted && policyControlApplied && ingestPolicyEligible

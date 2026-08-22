@@ -1,6 +1,7 @@
 import { spawn } from '#subprocess'
 import crypto from 'hypercore-crypto'
 import b4a from 'b4a'
+import sodium from 'sodium-universal'
 import { mkdirSync, rmSync, existsSync, readFileSync } from '#fs'
 import { join } from '#path'
 import {
@@ -658,6 +659,125 @@ export function createRoutingDownloader ({ directDownloader, ytDlpDownloader } =
   }
 }
 
+const SHA256_BYTES = 32
+
+function sha256Hasher () {
+  const state = b4a.alloc(sodium.crypto_hash_sha256_STATEBYTES)
+  sodium.crypto_hash_sha256_init(state)
+  return {
+    update (chunk) { sodium.crypto_hash_sha256_update(state, chunk) },
+    digest () {
+      const out = b4a.alloc(SHA256_BYTES)
+      sodium.crypto_hash_sha256_final(state, out)
+      return b4a.toString(out, 'hex')
+    }
+  }
+}
+
+/**
+ * A GRANTED source is a byte-addressable origin: the grant states the total
+ * length up front, carries an ETag that survives the origin re-resolving the
+ * same content, and answers one bounded range at a time with HTTP 206.
+ *
+ * That is precisely what a resumable ingest needs and what a one-shot response
+ * body can never be. An attempt that was interrupted forty minutes in asks for
+ * the bytes after the prefix it already staged instead of pulling the title
+ * again from byte zero, and the ETag travelling on every range as `If-Match` is
+ * what makes splicing those two reads into one content-addressed core safe.
+ *
+ * Nothing here touches the disk. The ranges are handed straight to the asset
+ * writer, which is the whole reason a title may be larger than the volume it is
+ * being archived on.
+ */
+export function createGrantedRangedSource ({
+  client,
+  capability,
+  jobId,
+  etag,
+  length,
+  sha256 = null,
+  signal = null,
+  onProgress = null,
+  // Called with the failure that stopped a read, before it is thrown. The
+  // upload manager reports a failure as a message rather than as the exception
+  // it was, so a caller that has to tell a lapsed grant from a revoked one
+  // needs to see the exception while it still exists.
+  onFailure = null
+} = {}) {
+  if (!client || typeof client.getRange !== 'function') {
+    throw new Error('granted source requires a range-capable source client')
+  }
+  const chunkBytes = Number(client.chunkBytes)
+  if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1) {
+    throw new Error('granted source client must declare a positive chunkBytes')
+  }
+  if (!Number.isSafeInteger(length) || length < 1) {
+    throw new Error('granted source requires the authoritative total length')
+  }
+  if (typeof jobId !== 'string' || jobId.length === 0) throw new Error('granted source requires the ingest job id')
+  if (typeof etag !== 'string' || etag.length === 0) throw new Error('granted source requires the grant ETag')
+  const digest = typeof sha256 === 'string' && sha256.length > 0 ? sha256 : null
+
+  async function *readFrom (byteOffset) {
+    try {
+      // An offset equal to the length is the attempt whose download finished and
+      // then died before the core was sealed: there is nothing left to ask for,
+      // and asking would be a 416 against a grant that is behaving correctly.
+      if (!Number.isSafeInteger(byteOffset) || byteOffset < 0 || byteOffset > length) {
+        throw new Error(`granted source cannot open at byte ${byteOffset} of ${length}`)
+      }
+      const hasher = digest === null ? null : sha256Hasher()
+      let position = byteOffset
+      while (position < length) {
+        // One range is held while its body arrives, because getRange pushes
+        // chunks through a callback rather than yielding them. The bound is the
+        // client's own range size, so it does not grow with the title.
+        const end = Math.min(position + chunkBytes, length) - 1
+        const parts = []
+        await client.getRange({
+          capability,
+          jobId,
+          etag,
+          length,
+          start: position,
+          end,
+          signal,
+          onChunk: (chunk) => { parts.push(chunk) }
+        })
+        for (const part of parts) {
+          hasher?.update(part)
+          yield part
+        }
+        position = end + 1
+        if (onProgress) await onProgress(position)
+      }
+      if (hasher !== null && hasher.digest() !== digest) {
+        const mismatch = new Error('granted source bytes do not match the expected SHA-256 digest')
+        mismatch.code = 'HASH_MISMATCH'
+        throw mismatch
+      }
+    } catch (error) {
+      onFailure?.(error)
+      throw error
+    }
+  }
+
+  return {
+    id: jobId,
+    etag,
+    length,
+    // A whole-file digest can only be checked by an attempt that reads the
+    // whole file, so a request that states one is ingested in a single pass
+    // from byte zero rather than resumed from a staged prefix — the digest
+    // stays exactly as verifiable as it was when the title was spooled and
+    // re-read. MediaStorm cannot state one for a debrid-backed title without
+    // pulling it through itself first, so every grant production issues carries
+    // an ETag and no digest, and takes the resumable shape.
+    resumable: digest === null,
+    open: (byteOffset) => readFrom(byteOffset)
+  }
+}
+
 export function createArchivePublisher({ identityManager, uploadManager, api, runtime, fs, storagePath = null, publisherShell = null, createChannelFn = null, canPublish = () => false }) {
   if (!identityManager) throw new Error('identityManager is required')
   if (!uploadManager) throw new Error('uploadManager is required')
@@ -835,6 +955,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       channel,
       filePath,
       stream,
+      sourceGrant,
       byteLength,
       videoId,
       signal,
@@ -872,14 +993,22 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       tmdbGenres,
       publish
     }) {
+      // A granted source is byte-addressable, so it never becomes a file here
+      // and there is nothing to stat: the grant states the authoritative total
+      // up front, which is a stronger figure for the retention budget than the
+      // size of something already downloaded, and it is known before a single
+      // byte is spent.
+      const granted = sourceGrant ? createGrantedRangedSource({ ...sourceGrant, signal }) : null
       // A streaming source has no file to stat, and with block offload behind it
       // the title is not what comes to rest here anyway. The content-length the
       // server reported is the honest figure for the retention budget; when the
       // server gave none there is nothing to claim up front and the per-chunk
       // free-disk guard in the downloader is what holds.
-      const requestedBytes = stream
-        ? Math.max(0, Math.floor(Number(byteLength) || 0))
-        : Number(fs?.statSync?.(filePath)?.size || 0)
+      const requestedBytes = granted
+        ? granted.length
+        : stream
+          ? Math.max(0, Math.floor(Number(byteLength) || 0))
+          : Number(fs?.statSync?.(filePath)?.size || 0)
       assertRetentionPermission(retentionClass, requestedBytes)
       // upload.js refuses to publish unless the registry hands back exactly one
       // writable binding, so the catalog has to exist before the file moves.
@@ -922,12 +1051,22 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         ...mediaCoordinates,
         ...poster
       }
-      // One-shot body, read exactly once, never staged as a file. The temp-file
-      // path below is unchanged and is what every unbounded downloader still
-      // takes.
-      const result = stream
-        ? await uploadManager.uploadFromStream(channel, stream, { ...uploadOptions, byteLength: requestedBytes })
-        : await uploadManager.uploadFromPath(channel, filePath, uploadOptions, fs)
+      // One-shot body, read exactly once, never staged as a file. A granted
+      // source is the same read, except it can be re-opened at an offset, which
+      // is what lets an interrupted archive resume from its staged prefix
+      // instead of starting the download again — so it is handed over whole,
+      // opener and identity together, rather than as a bare iterable. The
+      // temp-file path below is unchanged and is what every unbounded
+      // downloader still takes.
+      let result
+      if (granted) {
+        const uploadSource = granted.resumable ? granted : granted.open(0)
+        result = await uploadManager.uploadFromStream(channel, uploadSource, { ...uploadOptions, byteLength: requestedBytes })
+      } else if (stream) {
+        result = await uploadManager.uploadFromStream(channel, stream, { ...uploadOptions, byteLength: requestedBytes })
+      } else {
+        result = await uploadManager.uploadFromPath(channel, filePath, uploadOptions, fs)
+      }
       if (!result?.success) throw new Error(result?.error || 'Archive import failed')
       if (runtime?.seedingManager?.addSeed) {
         const metadata = result.metadata || result

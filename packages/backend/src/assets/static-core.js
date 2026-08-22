@@ -92,13 +92,26 @@ function resolveSource({ source, createSource }) {
  *   null                 no offload; the classic single-pass write.
  *   function             the classic single-pass write, then one call with
  *                        `({ core, descriptor, signal })` on the finished core.
- *   { createOffloader }  bounded ingest — see writeStaticAsset.
+ *   { createOffloader,   bounded ingest — see writeStaticAsset.
+ *     createStagingStore }
  */
 function normalizeOffload(offload) {
-  if (offload === null || offload === undefined) return { hook: null, createOffloader: null }
-  if (typeof offload === 'function') return { hook: offload, createOffloader: null }
+  if (offload === null || offload === undefined) {
+    return { hook: null, createOffloader: null, createStagingStore: null }
+  }
+  if (typeof offload === 'function') {
+    return { hook: offload, createOffloader: null, createStagingStore: null }
+  }
   if (typeof offload === 'object' && typeof offload.createOffloader === 'function') {
-    return { hook: null, createOffloader: (input) => offload.createOffloader(input) }
+    const staging = offload.createStagingStore
+    if (staging !== null && staging !== undefined && typeof staging !== 'function') {
+      throw new Error('offload.createStagingStore must be a function')
+    }
+    return {
+      hook: null,
+      createOffloader: (input) => offload.createOffloader(input),
+      createStagingStore: typeof staging === 'function' ? (input) => staging(input) : null,
+    }
   }
   throw new Error('offload must be a function or an object with createOffloader()')
 }
@@ -110,9 +123,20 @@ function assertOffloader(offloader) {
   return offloader
 }
 
+const STAGING_STORE_METHODS = ['put', 'has', 'get', 'purge']
+
+function assertStagingStore(store) {
+  for (const name of STAGING_STORE_METHODS) {
+    if (!store || typeof store[name] !== 'function') {
+      throw new Error(`createStagingStore() must return a remote block store with ${STAGING_STORE_METHODS.join('(), ')}()`)
+    }
+  }
+  return store
+}
+
 function sourceNotReopenableError() {
   const error = new Error(
-    'bounded offload ingest reads the source twice and this source can only be read once: pass createSource(), a function returning a fresh iterable, instead of a one-shot source'
+    'bounded offload ingest needs the title twice and this source can only be read once: pass createSource(), a function returning a fresh iterable, or offload.createStagingStore() so the second pass can read the staged blocks back from the object store'
   )
   error.code = 'ASSET_SOURCE_NOT_REOPENABLE'
   return error
@@ -121,6 +145,13 @@ function sourceNotReopenableError() {
 function sourceChangedError(message, index) {
   const error = new Error(`the source changed between passes: ${message}`)
   error.code = 'ASSET_SOURCE_CHANGED'
+  error.blockIndex = index
+  return error
+}
+
+function stagedBlockError(message, code, index) {
+  const error = new Error(message)
+  error.code = code
   error.blockIndex = index
   return error
 }
@@ -188,10 +219,10 @@ async function eachCanonicalBlock(source, { blockSize, signal, onBlock }) {
 /**
  * Append every canonical block of the source to `core`.
  *
- * `onAppended(index, byteLength)` is optional and, when absent, this is the
- * append loop it always was. Bounded ingest uses it to drop each staged
- * block's DATA the moment the block is durably written, keeping the merkle tree
- * the append built and nothing else.
+ * `onAppended(index, block)` is optional and, when absent, this is the append
+ * loop it always was. Bounded ingest uses it to deal with each staged block's
+ * DATA the moment the block is durably written — dropped, or uploaded and then
+ * dropped — keeping the merkle tree the append built and nothing else.
  */
 async function appendCanonicalSource(core, source, { blockSize, signal, onAppended = null }) {
   await eachCanonicalBlock(source, {
@@ -199,7 +230,7 @@ async function appendCanonicalSource(core, source, { blockSize, signal, onAppend
     signal,
     async onBlock(block, index) {
       await core.append(block)
-      if (onAppended !== null) await onAppended(index, block.byteLength)
+      if (onAppended !== null) await onAppended(index, block)
     },
   })
 }
@@ -254,77 +285,105 @@ function residentBytesOf(offloader) {
 }
 
 /**
- * Second pass: re-read the source and move it into the finished core one block
- * at a time, giving each block up to the object store as soon as the window
- * says so.
+ * Read block `index` from the staging core through its own storage layer.
  *
- * Per block: stage the bytes, transplant them, drop the staged copy, then let
- * the offloader take the oldest end. So the only block data on local disk at
- * any moment is the window the offloader has not given up yet plus the one
- * block being moved — never the title.
- *
- * The bytes are checked against the staged tree BEFORE they are written.
- * `copyPrologue` verifies the source core's roots against the prologue, but it
- * does not hash the block data it copies, so a source that read back
- * differently on the second pass would otherwise put bytes the tree does not
- * commit to into a core whose key says otherwise — unprovable to every peer
- * that asked for it. A mismatch fails the write instead.
+ * In streaming mode the local copy was dropped in pass 1, so this read misses
+ * locally and the offload storage wrapper (archive/offload-storage.js) fetches
+ * the object it was uploaded to and verifies it against the staged tree before
+ * handing it back. Nothing above this line knows the difference.
  */
-async function ingestBoundedSource({ staging, finalCore, descriptor, source, offloader, signal }) {
+async function readStagedBlockData(storage, index) {
+  const rx = storage.read()
+  let pending = null
+  try {
+    pending = rx.getBlock(index)
+  } finally {
+    rx.tryFlush()
+  }
+  const data = await pending
+  return data === undefined ? null : data
+}
+
+/**
+ * The staged tree's commitment for block `index`, refusing a block the tree the
+ * asset key came from never committed to.
+ */
+async function stagedLeafFor(stagingStorage, index, descriptor) {
+  if (index >= descriptor.length) {
+    throw sourceChangedError(`block ${index} is past the end of the tree the asset key was derived from`, index)
+  }
+  const expectedHash = await stagedLeafHash(stagingStorage, index)
+  if (expectedHash === null) {
+    throw sourceChangedError(`block ${index} has no leaf in the tree the asset key was derived from`, index)
+  }
+  return expectedHash
+}
+
+/**
+ * The bytes for block `index` are checked against the staged tree BEFORE they
+ * are written into the finished core.
+ *
+ * `copyPrologue` verifies the source core's roots against the prologue, but it
+ * never hashes the block data it copies, so bytes that read back differently —
+ * a source that changed between passes, an object store that handed back
+ * something else — would otherwise land in a core whose key says they cannot
+ * have, leaving every peer that asked for that block unable to verify the proof
+ * the relay serves it. This check is the only thing standing there, so it stays
+ * on the write side of the write.
+ */
+function assertMatchesStagedLeaf(block, index, expectedHash) {
+  if (!b4a.equals(crypto.data(block), expectedHash)) {
+    throw sourceChangedError(`block ${index} does not match the tree the asset key was derived from`, index)
+  }
+}
+
+/**
+ * Move one verified block from the staging core into the finished core.
+ *
+ * Stage the bytes, transplant them, drop the staged copy, then let the offloader
+ * take the oldest end. So the only block data on local disk at any moment is the
+ * window the offloader has not given up yet plus the one block being moved —
+ * never the title.
+ */
+async function transplantStagedBlock({ staging, finalCore, offloader, signal, progress }, block, index) {
+  // Both copies of this block are on local disk between the two writes below:
+  // the staged one the transplant reads and the final one it writes. That pair,
+  // on top of the window the offloader has not given up yet, is the peak this
+  // whole path exists to bound.
+  const local = residentBytesOf(offloader) + (2 * block.byteLength)
+  if (local > progress.peakLocalBytes) progress.peakLocalBytes = local
+
   const stagingStorage = staging.core.state.storage
-  let blocks = 0
-  let bytes = 0
-  let peakLocalBytes = 0
+  await putStagedBlockData(stagingStorage, index, block)
+  assertNotCancelled(signal)
+  await copyStaticPrologue({ sourceState: staging.core.state, target: finalCore })
+  assertNotCancelled(signal)
+  // Redundant now rather than lost: the finished core holds it durably, and the
+  // finished core's own offload has not started for this block yet, so no delete
+  // here can be the delete of a block whose only other copy is remote.
+  await dropStagedBlockData(stagingStorage, index)
+  assertNotCancelled(signal)
 
-  await eachCanonicalBlock(source, {
-    blockSize: ASSET_BLOCK_SIZE,
-    signal,
-    async onBlock(block, index) {
-      if (index >= descriptor.length) {
-        throw sourceChangedError(`block ${index} is past the end of the tree the asset key was derived from`, index)
-      }
-      const expectedHash = await stagedLeafHash(stagingStorage, index)
-      if (expectedHash === null) {
-        throw sourceChangedError(`block ${index} has no leaf in the tree the asset key was derived from`, index)
-      }
-      if (!b4a.equals(crypto.data(block), expectedHash)) {
-        throw sourceChangedError(`block ${index} does not match the tree the asset key was derived from`, index)
-      }
+  offloader.track(index, block.byteLength)
+  await offloader.drain()
+  assertNotCancelled(signal)
 
-      // Both copies of this block are on local disk between the two writes
-      // below: the staged one the transplant reads and the final one it writes.
-      // That pair, on top of the window the offloader has not given up yet, is
-      // the peak this whole path exists to bound.
-      const local = residentBytesOf(offloader) + (2 * block.byteLength)
-      if (local > peakLocalBytes) peakLocalBytes = local
+  progress.blocks++
+  progress.bytes += block.byteLength
+}
 
-      await putStagedBlockData(stagingStorage, index, block)
-      assertNotCancelled(signal)
-      await copyStaticPrologue({ sourceState: staging.core.state, target: finalCore })
-      assertNotCancelled(signal)
-      // Redundant now rather than lost: the finished core holds it durably, and
-      // nothing has been uploaded yet, so no local delete here can be the
-      // delete of a block whose only other copy is remote.
-      await dropStagedBlockData(stagingStorage, index)
-      assertNotCancelled(signal)
-
-      offloader.track(index, block.byteLength)
-      await offloader.drain()
-      assertNotCancelled(signal)
-
-      blocks++
-      bytes += block.byteLength
-    },
-  })
-
-  if (blocks !== descriptor.length || bytes !== descriptor.byteLength) {
+/**
+ * Close the finished core's accounting and describe what the pass cost.
+ */
+async function finishIngest({ mode, finalCore, descriptor, offloader, progress }) {
+  if (progress.blocks !== descriptor.length || progress.bytes !== descriptor.byteLength) {
     throw sourceChangedError(
-      `it ended at ${blocks} block(s) and ${bytes} byte(s), but the asset key was derived from ${descriptor.length} block(s) and ${descriptor.byteLength} byte(s)`,
-      blocks
+      `it ended at ${progress.blocks} block(s) and ${progress.bytes} byte(s), but the asset key was derived from ${descriptor.length} block(s) and ${descriptor.byteLength} byte(s)`,
+      progress.blocks
     )
   }
 
-  if (blocks > 0) {
+  if (progress.blocks > 0) {
     // `copyPrologue` sets the contiguous-length hint from the run of blocks one
     // call saw, and here every call sees exactly one, so the finished core is
     // told the truth once at the end. It is only a fast path — a full core
@@ -335,11 +394,157 @@ async function ingestBoundedSource({ staging, finalCore, descriptor, source, off
   }
 
   return {
-    blocks,
-    bytes,
-    peakLocalBytes,
+    mode,
+    blocks: progress.blocks,
+    bytes: progress.bytes,
+    peakLocalBytes: progress.peakLocalBytes,
     windowBytes: Number.isSafeInteger(offloader.windowBytes) ? offloader.windowBytes : null,
     offload: typeof offloader.stats === 'function' ? offloader.stats() : null,
+  }
+}
+
+/**
+ * Second pass over a RE-OPENABLE source: read the source again and move it into
+ * the finished core one block at a time. Nothing leaves for the object store
+ * except through the offloader's window, and the source is a local file or an
+ * array, so re-reading it is cheaper than a round trip to a bucket.
+ */
+async function ingestBoundedSource({ staging, finalCore, descriptor, source, offloader, signal }) {
+  const stagingStorage = staging.core.state.storage
+  const progress = { blocks: 0, bytes: 0, peakLocalBytes: 0 }
+
+  await eachCanonicalBlock(source, {
+    blockSize: ASSET_BLOCK_SIZE,
+    signal,
+    async onBlock(block, index) {
+      const expectedHash = await stagedLeafFor(stagingStorage, index, descriptor)
+      assertMatchesStagedLeaf(block, index, expectedHash)
+      await transplantStagedBlock({ staging, finalCore, offloader, signal, progress }, block, index)
+    },
+  })
+
+  return finishIngest({ mode: 'reopen', finalCore, descriptor, offloader, progress })
+}
+
+// ---------------------------------------------------------------------------
+// streaming ingest: one read of the source, ever
+// ---------------------------------------------------------------------------
+//
+// A network download cannot be re-opened, and a relay that must stage the whole
+// title on disk before ingest can only archive what its volume holds — which is
+// the failure this mode exists for. So pass 1 sends each staged block to the
+// object store under the STAGING core's key as it is appended, and pass 2 reads
+// them back from there instead of from the network.
+//
+// Objects are addressed BY CORE KEY, so the staging objects cannot be handed to
+// the finished core: each restored block is re-uploaded under the finished
+// core's own key by its own offloader, and the staging objects are deleted once
+// the finished core verifies.
+
+/**
+ * Pass 1, per appended block: upload it under the staging core's key, make the
+ * object store confirm it holds it, and only then drop the local copy.
+ *
+ * That is the order block-offloader.js uses, for the same reason: a delete that
+ * happens before the confirmation is a delete of the only copy. The staged leaf
+ * is checked first because that leaf is what pass 2 verifies the restored object
+ * against — a block dropped without one is a block nobody can prove again.
+ */
+async function offloadStagedBlock({ staging, stagingStore, staged, index, block, signal }) {
+  const storage = staging.core.state.storage
+  const expectedHash = await stagedLeafHash(storage, index)
+  if (expectedHash === null || !b4a.equals(crypto.data(block), expectedHash)) {
+    throw stagedBlockError(
+      `staged block ${index} has no matching leaf in the staging tree; refusing to drop a block that could never be verified again`,
+      'ASSET_STAGED_BLOCK_UNVERIFIABLE',
+      index
+    )
+  }
+
+  await stagingStore.put(index, block)
+  assertNotCancelled(signal)
+  if (await stagingStore.has(index) !== true) {
+    throw stagedBlockError(
+      `staged block ${index} was uploaded but the object store does not report holding it; the local copy is kept`,
+      'ASSET_STAGED_UPLOAD_UNCONFIRMED',
+      index
+    )
+  }
+  staged.uploaded = index + 1
+
+  await dropStagedBlockData(storage, index)
+  assertNotCancelled(signal)
+}
+
+/**
+ * Pass 2's source in streaming mode.
+ *
+ * The wrapper restores the block for us when the host's `resolveStore` answers
+ * for staging cores, which is the normal wiring. The direct read is for a host
+ * whose does not: without it a write that has already spent the entire download
+ * would fail on a wiring detail, and there is no second download.
+ */
+async function restoreStagedBlock({ storage, stagingStore, index, expectedHash }) {
+  const local = await readStagedBlockData(storage, index)
+  if (local !== null) return local
+
+  const restored = await stagingStore.get(index, { expectedHash })
+  if (restored === null || restored === undefined) {
+    throw stagedBlockError(
+      `staged block ${index} is not on local disk and the object store does not hold it`,
+      'ASSET_STAGED_BLOCK_MISSING',
+      index
+    )
+  }
+  return restored
+}
+
+/**
+ * Second pass with no source: walk the staged tree and pull every block back
+ * from the object store, one at a time, into the finished core.
+ */
+async function ingestStagedBlocks({ staging, finalCore, descriptor, stagingStore, staged, offloader, signal }) {
+  const stagingStorage = staging.core.state.storage
+  const progress = { blocks: 0, bytes: 0, peakLocalBytes: 0 }
+
+  for (let index = 0; index < descriptor.length; index++) {
+    assertNotCancelled(signal)
+    const expectedHash = await stagedLeafFor(stagingStorage, index, descriptor)
+
+    const block = await restoreStagedBlock({ storage: stagingStorage, stagingStore, index, expectedHash })
+    staged.restored++
+    assertNotCancelled(signal)
+    assertMatchesStagedLeaf(block, index, expectedHash)
+    await transplantStagedBlock({ staging, finalCore, offloader, signal, progress }, block, index)
+  }
+
+  return finishIngest({ mode: 'streaming', finalCore, descriptor, offloader, progress })
+}
+
+/**
+ * Drop every staging object. They exist only to carry the title from pass 1 to
+ * pass 2, so past that point they are pure cost.
+ *
+ * This never throws: on the success path a bucket that will not delete must not
+ * lose the caller an archive that is already verified, and on the failure path
+ * it must not bury the error that got us here. What it cannot delete it names.
+ */
+async function purgeStagingObjects(stagingStore, uploaded) {
+  if (stagingStore === null || uploaded === 0) {
+    return { uploaded, deleted: 0, orphaned: [], error: null }
+  }
+  try {
+    const { deleted, orphaned } = await stagingStore.purge({ length: uploaded })
+    return {
+      uploaded,
+      deleted,
+      orphaned: orphaned.map((entry) => entry.key),
+      error: orphaned.length > 0 ? orphaned[0].error : null,
+    }
+  } catch (error) {
+    const orphaned = []
+    for (let index = 0; index < uploaded; index++) orphaned.push(stagingStore.key(index))
+    return { uploaded, deleted: 0, orphaned, error }
   }
 }
 
@@ -398,7 +603,7 @@ export function createStaticAssetManifest(input = {}) {
  *
  * The asset's key is derived from the content, so the bytes have to be hashed
  * before the core they belong in can be opened. That is what shapes this
- * function, and `offload` decides which of the two shapes it takes.
+ * function, and `offload` decides which of the three shapes it takes.
  *
  * WITHOUT OFFLOAD (`offload` null, or a plain function) it is one pass: the
  * whole source is appended to a staging core, the descriptor is derived from
@@ -418,15 +623,29 @@ export function createStaticAssetManifest(input = {}) {
  *      this pass costs one block of disk and still yields the tree hash the
  *      key is derived from;
  *   2. `createOffloader({ core, descriptor, signal })` is asked for a windowed
- *      offloader over the finished core, and then the source is re-read and
- *      moved into that core one block at a time, the offloader giving up the
- *      oldest end as it goes (see ingestBoundedSource).
+ *      offloader over the finished core, and then the title is moved into that
+ *      core one block at a time, the offloader giving up the oldest end as it
+ *      goes.
  *
- * Peak local block data is then the offload window plus the single block being
- * moved, whatever the title's size — reported as `ingest.peakLocalBytes`.
+ * Where pass 2 gets the title decides the mode, and `ingest.mode` reports it:
  *
- * Pass 2 needs the source again, so bounded ingest requires `createSource()`
- * (or an array); a one-shot source is refused rather than buffered.
+ *   'reopen'     a re-openable source (`createSource()`, or an array) is read a
+ *                second time. Cheapest when the source is a local file: nothing
+ *                is uploaded except through the offloader's window.
+ *   'streaming'  the source is ONE-SHOT — a network download, a pipe — and
+ *                `offload.createStagingStore({ core, signal })` supplied an
+ *                object store for the staging core. Pass 1 then uploads each
+ *                staged block under the STAGING core's key before dropping it,
+ *                and pass 2 reads them back from there. The source is consumed
+ *                exactly once, so a relay archives a title larger than its own
+ *                volume off a single download.
+ *
+ * Peak local block data is the offload window plus the single block being moved
+ * (its staged copy and its finished copy), whatever the title's size — reported
+ * as `ingest.peakLocalBytes`, bounded by `windowBytes + 2 * ASSET_BLOCK_SIZE`.
+ *
+ * A one-shot source with no staging store is refused with
+ * `ASSET_SOURCE_NOT_REOPENABLE` rather than buffered.
  */
 export async function writeStaticAsset({
   store,
@@ -436,9 +655,13 @@ export async function writeStaticAsset({
   offload = null,
 } = {}) {
   assertWriteInput(store, source, createSource)
-  const { hook, createOffloader } = normalizeOffload(offload)
+  const { hook, createOffloader, createStagingStore } = normalizeOffload(offload)
   const resolved = resolveSource({ source, createSource })
-  if (createOffloader !== null && !resolved.reopenable) throw sourceNotReopenableError()
+  // A source that can be re-opened is re-opened: a caller with a local file
+  // should not be pushed through a bucket for pass 2. Streaming is what the
+  // one-shot sources get, and only if they brought a staging store.
+  const streaming = createOffloader !== null && !resolved.reopenable
+  if (streaming && createStagingStore === null) throw sourceNotReopenableError()
   assertNotCancelled(signal)
 
   const randomId = b4a.toString(crypto.randomBytes(16), 'hex')
@@ -449,15 +672,26 @@ export async function writeStaticAsset({
   let finalCore = null
   let descriptor = null
   let ingest = null
+  let stagingStore = null
+  // How much of the staging core made it to the object store, and how much came
+  // back. `uploaded` is what the cleanup has to account for on either path.
+  const staged = { uploaded: 0, restored: 0 }
   try {
     try {
       await staging.ready()
+      if (streaming) {
+        stagingStore = assertStagingStore(await createStagingStore({ core: staging, signal }))
+        assertNotCancelled(signal)
+      }
+
       await appendCanonicalSource(staging, resolved.open(), {
         blockSize: ASSET_BLOCK_SIZE,
         signal,
         onAppended: createOffloader === null
           ? null
-          : (index) => dropStagedBlockData(staging.core.state.storage, index),
+          : (streaming
+              ? (index, block) => offloadStagedBlock({ staging, stagingStore, staged, index, block, signal })
+              : (index) => dropStagedBlockData(staging.core.state.storage, index)),
       })
 
       assertNotCancelled(signal)
@@ -493,14 +727,24 @@ export async function writeStaticAsset({
         assertNotCancelled(signal)
         const offloader = assertOffloader(await createOffloader({ core: finalCore, descriptor, signal }))
         assertNotCancelled(signal)
-        ingest = await ingestBoundedSource({
-          staging,
-          finalCore,
-          descriptor,
-          source: resolved.open(),
-          offloader,
-          signal,
-        })
+        ingest = streaming
+          ? await ingestStagedBlocks({
+            staging,
+            finalCore,
+            descriptor,
+            stagingStore,
+            staged,
+            offloader,
+            signal,
+          })
+          : await ingestBoundedSource({
+            staging,
+            finalCore,
+            descriptor,
+            source: resolved.open(),
+            offloader,
+            signal,
+          })
       }
       assertNotCancelled(signal)
       const verified = await verifyStaticAssetDescriptor(finalCore, descriptor)
@@ -510,12 +754,35 @@ export async function writeStaticAsset({
       await removeStagingCore(staging)
     }
 
+    // The finished core is verified, so the staging objects have carried the
+    // title as far as they ever will.
+    if (stagingStore !== null) {
+      const cleanup = await purgeStagingObjects(stagingStore, staged.uploaded)
+      ingest.staging = {
+        uploaded: cleanup.uploaded,
+        restored: staged.restored,
+        deleted: cleanup.deleted,
+        orphaned: cleanup.orphaned,
+      }
+      if (cleanup.error !== null) ingest.staging.error = cleanup.error
+    }
+
     assertNotCancelled(signal)
     if (hook !== null) await hook({ core: finalCore, descriptor, signal })
     assertNotCancelled(signal)
     return ingest === null ? { core: finalCore, descriptor } : { core: finalCore, descriptor, ingest }
   } catch (error) {
     await closeUnreturnedCore(finalCore, error)
+    // A failed write must not leave the bucket paying for a staging copy of a
+    // title nobody will ever finish. What cannot be deleted is named on the
+    // error rather than forgotten.
+    if (stagingStore !== null && error !== null && typeof error === 'object') {
+      const cleanup = await purgeStagingObjects(stagingStore, staged.uploaded)
+      if (cleanup.orphaned.length > 0) {
+        error.orphanedStagingKeys = cleanup.orphaned
+        if (cleanup.error !== null) error.stagingCleanupError = cleanup.error
+      }
+    }
     throw error
   }
 }

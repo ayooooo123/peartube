@@ -94,6 +94,7 @@ export function isLoopbackHost(host) {
 }
 
 const CONTENT_KINDS = new Set(['movie', 'episode'])
+const RETENTION_CLASSES = new Set(['contribution-cache', 'archive-pin'])
 // The id/title/part bounds the upload contract enforces
 // (packages/backend/src/upload-video-contract.js), applied at the door so a
 // malformed submission is refused before it becomes a background job that fails
@@ -346,11 +347,26 @@ export function normalizeArchiveSubmission(fields = {}, file = null) {
     return invalid('INVALID_TMDB_GENRES', `tmdbGenres must be at most ${MAX_GENRES_BYTES} bytes`, 'tmdbGenres')
   }
 
+  // A watched-media contribution and a deliberate archive pin are different
+  // promises with different budgets and different eviction rules, so the caller
+  // says which one it is asking for. Absent means the historical behaviour: a
+  // submission to this endpoint is an archive pin.
+  const submittedRetention = text(fields, 'retentionClass')
+  if (submittedRetention && !RETENTION_CLASSES.has(submittedRetention)) {
+    return invalid(
+      'INVALID_RETENTION_CLASS',
+      "retentionClass must be 'contribution-cache' or 'archive-pin'",
+      'retentionClass'
+    )
+  }
+  const retentionClass = submittedRetention || 'archive-pin'
+
   return {
     entityHint: deriveEntityHint({ contentKind, tmdbId, tmdbSeason, tmdbEpisode }),
     // The url still needs its host resolved before anything is enqueued; the
     // caller of this function owns that step.
     remoteSource,
+    retentionClass,
     // Overrides on top of the console's own form. `tmdbType` is the vocabulary
     // the pipeline speaks; the catalogue title also names the grouped channel,
     // exactly as the console's Discover form does, so both entry points land in
@@ -674,6 +690,7 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
             ...normalized.form,
             idempotencyKey,
             entityHint: normalized.entityHint,
+            retentionClass: normalized.retentionClass,
             reuseJobId: existing.id
           }, submission.file)
         }
@@ -682,7 +699,8 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
         ...submission.form,
         ...normalized.form,
         idempotencyKey,
-        entityHint: normalized.entityHint
+        entityHint: normalized.entityHint,
+        retentionClass: normalized.retentionClass
       }, submission.file)
     })
     send(res, 202, { jobId: job.id, status: job.status, entityHint: job.entityHint || normalized.entityHint })

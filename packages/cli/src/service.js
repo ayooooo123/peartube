@@ -13,7 +13,7 @@ import { RelaySettings, resolveTmdbOptions } from './settings.js'
 import { TrustedClients, mergeTrustedClientKeys } from './trusted-clients.js'
 import { classifySourceUrl } from './archive/source-id.js'
 import { createStorageGuard } from './storage-guard.js'
-import { createCompanionServer } from './companion/server.js'
+import { COMPANION_API_PREFIX, createCompanionServer } from './companion/server.js'
 import { createIngestJobStore } from './companion/ingest-job-store.js'
 import { createIngestManager } from './companion/ingest-manager.js'
 import { createSourceCallbackClient } from './companion/source-client.js'
@@ -852,15 +852,44 @@ async function buildRelayService({
             logger
           })
         }
+        // One listener for both API versions whenever both are HTTP. The only
+        // consumer of this relay builds its /api/v1 and /api/v2 URLs from a
+        // single configured base URL and signs nothing on the v1 half, so two
+        // ports meant half of its calls always landed on the wrong surface. The
+        // archive surface owns the listener — it is bound before the store opens
+        // and answers from the first moment — and the companion mounts on it
+        // under its own prefix, unchanged in every other respect: it still
+        // verifies every request it is handed, and the v1 API keeps its own
+        // loopback/apiOpen gate.
+        //
+        // Nothing else moves. With no archive surface, or on the Unix transport,
+        // the companion binds its own transport exactly as before, so a
+        // configuration that asked for a companion port still gets one. In the
+        // shared shape the configured companion port is never bound at all,
+        // which is what stops it from colliding with the archive port.
+        const sharedListener = config.companion.transport === 'tcp' && typeof archiveHttp?.mount === 'function'
+          ? archiveHttp.mount(COMPANION_API_PREFIX)
+          : null
         companionServer = await companionServerFactory({
           service,
           config: config.companion,
           clock: nowFn,
           logger,
           fs: companionFsModule,
-          ingestSpoolRoot
+          ingestSpoolRoot,
+          createServer: sharedListener
         })
-        await companionServer.start()
+        const companionState = await companionServer.start()
+        if (sharedListener && companionState?.enabled !== false) {
+          logger.relay.info('Companion API mounted on the archive HTTP listener', {
+            host: companionState.host,
+            port: companionState.port,
+            prefix: COMPANION_API_PREFIX,
+            // The port the configuration asked for and did not get, so an
+            // operator reading this never goes looking for it.
+            configuredPort: config.companion.port
+          })
+        }
       }
 
       const runtimeStartedAt = Date.now()

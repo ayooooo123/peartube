@@ -27,7 +27,11 @@ const MAX_ERROR_BYTES = 512
 const SOCKET_PROBE_TIMEOUT_MS = 500
 const DEFAULT_MAX_INGEST_BYTES = 5 * 1024 * 1024 * 1024
 const MULTIPART_OVERHEAD_BYTES = 1024 * 1024
-const INGEST_JOBS_PATH = '/api/v2/ingest/jobs'
+// The one path prefix every companion route lives under. Exported because
+// whoever wires the companion up has to know which prefix belongs to it — a
+// shared HTTP listener routes on exactly this.
+export const COMPANION_API_PREFIX = '/api/v2'
+const INGEST_JOBS_PATH = `${COMPANION_API_PREFIX}/ingest/jobs`
 
 class CompanionRequestError extends Error {
   constructor (statusCode, code, message, closeConnection = false) {

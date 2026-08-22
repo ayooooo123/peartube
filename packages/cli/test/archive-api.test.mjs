@@ -390,6 +390,50 @@ test('a url seed is validated against the same coordinates an upload is', async 
   }, { consoleOptions: { sourceLookup: PUBLIC_LOOKUP } })
 })
 
+// A watched-media contribution and a deliberate archive pin draw on different
+// budgets and are evicted by different rules, so the caller says which one it
+// is asking for. An older caller that says nothing still gets an archive pin.
+test('a url seed carries the retention class it is asking for', async function (t) {
+  const seen = []
+  await withRelay(async ({ base }) => {
+    const contribution = await fetch(`${base}/api/v1/archive`, seed({
+      url: 'https://cdn.example.com/watched.mkv',
+      contentKind: 'movie',
+      tmdbId: '603',
+      tmdbTitle: 'The Matrix',
+      retentionClass: 'contribution-cache'
+    }))
+    t.is(contribution.status, 202)
+    await settledJob(base, (await contribution.json()).jobId)
+
+    const unspecified = await fetch(`${base}/api/v1/archive`, seed({
+      url: 'https://cdn.example.com/archived.mkv',
+      contentKind: 'movie',
+      tmdbId: '604',
+      tmdbTitle: 'The Matrix Reloaded'
+    }))
+    t.is(unspecified.status, 202)
+    await settledJob(base, (await unspecified.json()).jobId)
+
+    t.is(seen.length, 2)
+    t.is(seen[0].retentionClass, 'contribution-cache',
+      'a contribution is charged against the contribution budget')
+    t.is(seen[1].retentionClass, 'archive-pin',
+      'a caller that names no class still means an archive pin')
+
+    const bogus = await fetch(`${base}/api/v1/archive`, seed({
+      url: 'https://cdn.example.com/x.mkv',
+      contentKind: 'movie',
+      tmdbId: '605',
+      tmdbTitle: 'The Matrix Revolutions',
+      retentionClass: 'whatever-i-like'
+    }))
+    t.is(bogus.status, 400)
+    t.is((await bogus.json()).error.code, 'INVALID_RETENTION_CLASS')
+    t.is(seen.length, 2, 'a refused class never became a job')
+  }, { consoleOptions: { sourceLookup: PUBLIC_LOOKUP, downloader: recordingDownloader(seen) } })
+})
+
 test('a submission carries either a file or a url, never both and never neither', async function (t) {
   await withRelay(async ({ base, uploadDir }) => {
     const neither = new FormData()

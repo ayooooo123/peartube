@@ -184,6 +184,92 @@ function warmingPage() {
 `
 }
 
+// Which mounted prefix a request target belongs to, read off the request's own
+// pathname so this dispatch and the mounted server's own routing agree on what
+// the path is. Percent-encodings are left exactly as they arrived — URL#pathname
+// decodes none of them, and neither does the companion router — so no request
+// can be dispatched to one owner while being routed as if it belonged to the
+// other. Only an origin-form target can belong to a mount: absolute-form and
+// protocol-relative targets stay with whoever answered them before anything was
+// mounted.
+function mountedPrefix(mounts, url) {
+  const raw = String(url == null ? '/' : url)
+  if (!raw.startsWith('/') || raw.startsWith('//')) return null
+  let pathname = null
+  try {
+    pathname = new URL(raw, 'http://relay.local').pathname
+  } catch {
+    return null
+  }
+  for (const prefix of mounts.keys()) {
+    if (pathname === prefix || pathname.startsWith(`${prefix}/`)) return prefix
+  }
+  return null
+}
+
+// The listener a mounted server drives in place of one of its own. Only what a
+// mounted server actually calls is here: once/removeListener for the promise it
+// wraps around its bind, listen/address for the state it publishes, and
+// listening/close for its teardown. Binding, for a mounted server, is taking
+// its prefix on the surface's listener and giving it back.
+//
+// Deliberately no 'connection' event. A server's per-socket timers (a
+// first-request deadline, an idle destroy) fire on every socket it is told
+// about, and on a shared listener nearly every socket carries requests it never
+// sees — the v1 API streams whole videos on one — so a forwarded connection
+// would be destroyed mid-response by a deadline meant for a request that never
+// arrived. Socket-level exposure does not change by mounting: these are the
+// archive listener's sockets, which never had such timers, and the runtime's own
+// header and request timeouts still bound an incomplete request.
+function createMountedListener({ prefix, requestListener, mounts, address }) {
+  const listeners = new Map()
+  let mounted = false
+
+  function emit(event, ...args) {
+    const handlers = listeners.get(event)
+    if (!handlers) return
+    listeners.delete(event)
+    for (const handler of handlers) handler(...args)
+  }
+
+  return {
+    get listening() { return mounted },
+    address,
+    once(event, handler) {
+      const handlers = listeners.get(event) || new Set()
+      handlers.add(handler)
+      listeners.set(event, handlers)
+      return this
+    },
+    removeListener(event, handler) {
+      listeners.get(event)?.delete(handler)
+      return this
+    },
+    listen() {
+      if (mounted) {
+        // Already bound. Answer it anyway: a caller awaiting the event would
+        // otherwise wait for one that never comes.
+        emit('listening')
+        return this
+      }
+      if (mounts.has(prefix)) {
+        emit('error', new Error(`${prefix} is already mounted on the archive HTTP listener`))
+        return this
+      }
+      mounts.set(prefix, requestListener)
+      mounted = true
+      emit('listening')
+      return this
+    },
+    close(callback) {
+      if (mounted && mounts.get(prefix) === requestListener) mounts.delete(prefix)
+      mounted = false
+      if (typeof callback === 'function') callback()
+      return this
+    }
+  }
+}
+
 export function createArchiveHttpSurface({
   host = '127.0.0.1',
   port = 8174,
@@ -241,20 +327,64 @@ export function createArchiveHttpSurface({
     res.end(`${WARMING_NOTICE}\n`)
   }
 
+  // Request handlers that own a path prefix on this listener, consulted before
+  // this surface's own router. See mount() below.
+  const mounts = new Map()
+
   let handler = warmingHandler
-  const server = serverFactory((req, res) => handler(req, res))
+  const server = serverFactory((req, res) => {
+    const prefix = mounts.size ? mountedPrefix(mounts, req.url) : null
+    if (prefix !== null) return mounts.get(prefix)(req, res)
+    return handler(req, res)
+  })
 
   return {
     server,
     host,
     get port() { return boundPort },
     get adopted() { return handler !== warmingHandler },
+    get mounted() { return [...mounts.keys()] },
     // How long the surface answered as a warming relay, which is what tells an
     // operator "still opening the store" from "stuck".
     warmupMs() { return now() - createdAt },
     adopt(next) {
       if (typeof next !== 'function') throw new Error('archive http surface requires a request handler')
       handler = next
+    },
+    // Hands another HTTP server this listener instead of a port of its own.
+    //
+    // The signed companion API (/api/v2) and this surface's v1 API have to
+    // answer on one origin: its only real consumer builds both from a single
+    // configured relay base URL and sends no auth headers on the v1 half, so a
+    // v1/v2 split across two ports leaves half of those calls unroutable
+    // whichever port is configured.
+    //
+    // This surface owns the listener because it binds before the store opens and
+    // answers as a warming relay from the first moment; a companion is created
+    // minutes later, once the store is up. So rather than re-implementing that
+    // server behind this router, mount() returns a factory shaped exactly like
+    // the `createServer` injection point such a server already has: it builds
+    // itself as always and is handed this listener's requests — the same
+    // req/res objects, so method, target, headers and body arrive precisely as
+    // they were signed, and its authentication, replay protection, body limits,
+    // request deadline and streaming routes all run on their usual code path.
+    mount(prefix) {
+      if (typeof prefix !== 'string' || !prefix.startsWith('/') || prefix.endsWith('/') || prefix.includes('?')) {
+        throw new Error('archive http surface mounts need an absolute path prefix')
+      }
+      return (requestListener) => {
+        if (typeof requestListener !== 'function') {
+          throw new Error('archive http surface mounts need a request handler')
+        }
+        return createMountedListener({
+          prefix,
+          requestListener,
+          mounts,
+          // The bind as it really happened, so a mounted server publishes where
+          // it is actually reachable rather than what it was configured with.
+          address: () => server.address?.() || { address: host, port: boundPort }
+        })
+      }
     },
     // Memoized rather than flagged: whoever calls this second — the service, a
     // console adopting the surface, a test — must get the bound port, not an

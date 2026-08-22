@@ -22,6 +22,7 @@ import { resolveCompanionConfig } from '../src/companion/config.js'
 import { signControlRequest } from '../src/companion/auth.js'
 import { createCompanionServer } from '../src/companion/server.js'
 import { createRelayService } from '../src/service.js'
+import { createArchiveHttpSurface } from '../src/archive-console.js'
 
 const SECRET = 'cd'.repeat(32)
 const CLIENT = 'mediastorm-test'
@@ -124,6 +125,37 @@ function fakeRuntime () {
     async start () {},
     async close () {},
     async getDiagnostics () { return {} }
+  }
+}
+
+// Enough of a Hyperbee for the stores a relay opens when its archive surface is
+// enabled: get/put for the archive job store, atomic batches and a bounded
+// range read for the companion ingest store.
+function fakeMetaDb () {
+  const entries = new Map()
+  const commit = (operations) => {
+    for (const [operation, key, value] of operations) {
+      if (operation === 'put') entries.set(key, value)
+      else entries.delete(key)
+    }
+  }
+  return {
+    async get (key) { return entries.has(key) ? { value: entries.get(key) } : null },
+    async put (key, value) { commit([['put', key, value]]) },
+    async del (key) { commit([['del', key]]) },
+    batch () {
+      const staged = []
+      return {
+        async put (key, value) { staged.push(['put', key, value]) },
+        async del (key) { staged.push(['del', key]) },
+        async flush () { commit(staged) }
+      }
+    },
+    async * createReadStream ({ gte = '', lt = '\uffff' } = {}) {
+      for (const key of [...entries.keys()].sort()) {
+        if (key >= gte && key < lt) yield { key, value: entries.get(key) }
+      }
+    }
   }
 }
 
@@ -873,6 +905,101 @@ test('relay startup failure closes an already-started companion', async (t) => {
 
   await t.exception(service.start(), /runtime failed/)
   t.is(existsSync(config.companion.socketPath), false)
+})
+
+test('a TCP companion shares the archive listener so one port serves both API versions', async (t) => {
+  const storagePath = tempDir(t, 'peartube-companion-shared-')
+  const surface = createArchiveHttpSurface({ host: '127.0.0.1', port: 0, logger })
+  t.teardown(() => surface.close().catch(noop))
+  // Bound before the relay is built, exactly as a warming relay binds it. So
+  // this is also the collision the two-listener shape could not survive: a
+  // companion that bound a socket of its own here would fail with EADDRINUSE.
+  const port = await surface.listen()
+  const config = resolveRelayConfig({
+    storage: { path: storagePath, maxBytes: 4096, minFreeBytes: 0 },
+    companion: { enabled: true, transport: 'tcp', host: '127.0.0.1', port, client: CLIENT, sharedSecret: SECRET },
+    archive: { enabled: false, uiEnabled: true, uiHost: '127.0.0.1', uiPort: port, localMirror: { enabled: false } },
+    classification: { tmdb: { enabled: false } },
+    discovery: { enabled: false, seedDiscovered: false },
+    seedPin: { enabled: true, trustedClients: [] }
+  }, { env: {} })
+  const runtime = fakeRuntime()
+  runtime.ctx.metaDb = fakeMetaDb()
+  runtime.api.getMediaCatalog = async () => ({ success: true, items: [], nextCursor: null })
+  runtime.api.searchIndexCandidates = async () => []
+  const service = await createRelayService({
+    config,
+    logger,
+    archiveHttp: surface,
+    runtimeFactory: async () => runtime,
+    writeStatusFile: async () => {},
+    setIntervalFn: () => ({ unref: noop }),
+    clearIntervalFn: noop
+  })
+  t.teardown(() => service.close().catch(noop))
+  await service.start()
+
+  const state = service.getCompanionState()
+  t.is(state.transport, 'tcp')
+  t.is(state.port, port, 'the companion reports the listener it shares rather than a port of its own')
+  t.alike(surface.mounted, ['/api/v2'], 'and only the v2 prefix is routed away from the archive surface')
+
+  const signed = await request({
+    host: '127.0.0.1',
+    port,
+    headers: signedHeaders({ timestamp: Date.now(), nonce: 'shared-listener-0001' })
+  })
+  t.is(signed.statusCode, 200, 'a signed /api/v2 request is served on the archive port')
+  t.is(JSON.parse(signed.body).transport.port, port, 'and reports where it is really listening')
+
+  const unsigned = await request({ host: '127.0.0.1', port })
+  t.is(unsigned.statusCode, 401, 'sharing a port authenticates nothing for free')
+  t.is(JSON.parse(unsigned.body).error.code, 'AUTH_REQUIRED')
+
+  // The MAC covers the method, the canonical path and query, and a hash of the
+  // body. A target or body that arrived re-encoded, normalized or re-read would
+  // read as unsigned, so these two are the proof that the shared listener hands
+  // the companion the request exactly as the client signed it.
+  const searchPath = '/api/v2/search?namespace=tmdb&identifier=348&kind=movie&limit=1'
+  const search = await request({
+    host: '127.0.0.1',
+    port,
+    path: searchPath,
+    headers: signedHeaders({ path: searchPath, timestamp: Date.now(), nonce: 'shared-listener-0002' })
+  })
+  t.is(search.statusCode, 200, 'a signed query string arrives exactly as it was signed')
+
+  const openBody = JSON.stringify({ candidateRef: 'A'.repeat(43) })
+  const opened = await request({
+    host: '127.0.0.1',
+    port,
+    method: 'POST',
+    path: '/api/v2/streams/open',
+    body: openBody,
+    headers: {
+      'content-type': 'application/json',
+      'content-length': Buffer.byteLength(openBody),
+      ...signedHeaders({
+        method: 'POST',
+        path: '/api/v2/streams/open',
+        body: openBody,
+        timestamp: Date.now(),
+        nonce: 'shared-listener-0003'
+      })
+    }
+  })
+  t.is(opened.statusCode, 501, 'and a signed body hashes to the same digest on the far side')
+  t.is(
+    JSON.parse(opened.body).error.code,
+    'CAPABILITY_UNAVAILABLE',
+    'refused by the route it authenticated into rather than by authentication'
+  )
+
+  const catalog = await request({ host: '127.0.0.1', port, path: '/api/v1/catalog' })
+  t.is(catalog.statusCode, 200, 'a non-v2 path still reaches the archive surface')
+  t.alike(JSON.parse(catalog.body).entities, [], 'answered by the unsigned v1 API, not by the companion')
+  const health = await request({ host: '127.0.0.1', port, path: '/health' })
+  t.alike(JSON.parse(health.body), { ok: true, ready: true }, 'on the one socket the console adopted')
 })
 
 test('Bare serves authenticated companion HTTP over a Unix socket', (t) => {

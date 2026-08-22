@@ -416,7 +416,12 @@ export async function enqueueArchiveJob(store, input = {}) {
     // lost to every viewer downstream.
     tmdbOverview: input.tmdbOverview ? String(input.tmdbOverview) : null,
     tmdbRuntime: input.tmdbRuntime ? String(input.tmdbRuntime) : null,
-    tmdbGenres: input.tmdbGenres ? String(input.tmdbGenres) : null
+    tmdbGenres: input.tmdbGenres ? String(input.tmdbGenres) : null,
+    // Which promise this job is: a watched-media contribution or a deliberate
+    // archive pin. It decides the budget the bytes are charged against and the
+    // eviction rules that apply, so it travels with the job rather than being
+    // assumed at publish time.
+    retentionClass: input.retentionClass === 'contribution-cache' ? 'contribution-cache' : 'archive-pin'
   }
   return input.reuseJobId
     ? store.replaceJob(job.id, job, privateInput)
@@ -1129,13 +1134,19 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
         ? loadUploadedFile(privateInput)
         : await downloader.download({ id, ...privateInput })
       const sourceIdentity = privateInput.sourceIdentity || deriveArchiveSourceIdentity(privateInput)
-      logger?.archive?.info?.('[archive-stage] ensuring-channel', { id, sourceId: sourceIdentity?.sourceId || null })
-      const channelInfo = await publisher.ensureAnonymousChannel({ ...privateInput, sourceIdentity, retentionClass: 'archive-pin' })
+      // The job said which promise it is when it was enqueued. Older jobs
+      // persisted before that field existed carry none, and an archive pin is
+      // what this path has always meant, so that stays the default.
+      const retentionClass = privateInput.retentionClass === 'contribution-cache'
+        ? 'contribution-cache'
+        : 'archive-pin'
+      logger?.archive?.info?.('[archive-stage] ensuring-channel', { id, sourceId: sourceIdentity?.sourceId || null, retentionClass })
+      const channelInfo = await publisher.ensureAnonymousChannel({ ...privateInput, sourceIdentity, retentionClass })
       logger?.archive?.info?.('[archive-stage] channel-ready', { id, channelKey: channelInfo?.channelKey || null, publicBeeKey: channelInfo?.publicBeeKey || null })
       const sourceTitle = downloaded.title || privateInput.title
       const sourceDescription = downloaded.description || privateInput.description
       const imported = await publisher.importVideo({
-        retentionClass: 'archive-pin',
+        retentionClass,
         ...privateInput,
         ...downloaded,
         channel: channelInfo.channel,
@@ -1180,8 +1191,8 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
       } : null
       logger?.archive?.info?.('[archive-stage] publishing', { id, publish: privateInput.publish !== false })
       if (privateInput.publish !== false) {
-        await publisher.publishCatalog({ ...channelInfo, retentionClass: 'archive-pin' })
-        await publisher.retainAssets({ ...channelInfo, retentionClass: 'archive-pin', previewVideos: previewVideo ? [previewVideo] : [] })
+        await publisher.publishCatalog({ ...channelInfo, retentionClass })
+        await publisher.retainAssets({ ...channelInfo, retentionClass, previewVideos: previewVideo ? [previewVideo] : [] })
       }
       logger?.archive?.info?.('[archive-stage] published', { id })
 

@@ -268,7 +268,9 @@ function buildVideoMetadata(metadata, blobResult, channel, fileSize, mimeType) {
     uploadedAt: Date.now(),
     uploadedBy: channel.localWriterKeyHex,
     blobId: blobResult.id,
-    blobsCoreKey: channel.blobsKeyHex,
+    // An immutable publication names its own rendition core; a legacy
+    // hyperblobs upload lives in the channel's blob core.
+    blobsCoreKey: blobResult.blobsCoreKey || channel.blobsKeyHex,
     availability: playbackSupport.availability,
     playbackSupport: playbackSupport.playbackSupport
   });
@@ -373,14 +375,25 @@ async function appendImmutablePublication(catalog, signedOperations) {
   throw error;
 }
 
+// What a failed upload is allowed to undo is exactly what it added.
+//
+// A legacy hyperblobs-backed upload appended blocks to the channel's own blob
+// core, and those blocks belong to it alone, so clearing them is correct.
+//
+// An immutable publication appended nothing: playback points at the rendition
+// core, which is CONTENT-ADDRESSED and therefore shared by every publication of
+// identical bytes. Clearing it would delete the archived asset out from under
+// whichever other publication still serves it, so it is left untouched and only
+// the staged metadata this upload wrote is removed by the caller.
 async function rollbackUploadedBlob(channel, blobResult) {
+  if (blobResult?.shared === true) return;
   if (!channel?.blobs || typeof channel.blobs.clear !== 'function') {
     throw new Error('Upload rollback is unavailable');
   }
   await channel.blobs.clear(blobResult);
 }
 
-function storedBlobResult(metadata) {
+function storedBlobResult(metadata, channel) {
   const parts = String(metadata?.blobId || '').split(':').map(Number);
   if (parts.length !== 4 ||
       parts.some(value => !Number.isSafeInteger(value) || value < 0) ||
@@ -388,12 +401,19 @@ function storedBlobResult(metadata) {
       parts[3] < 1) {
     throw new Error('pending upload blob reference is invalid');
   }
+  const coreKey = metadata?.blobsCoreKey ? String(metadata.blobsCoreKey) : '';
+  if (coreKey && !/^[0-9a-f]{64}$/i.test(coreKey)) {
+    throw new Error('pending upload blob core key is invalid');
+  }
   return {
     id: String(metadata.blobId),
     blockOffset: parts[0],
     blockLength: parts[1],
     byteOffset: parts[2],
-    byteLength: parts[3]
+    byteLength: parts[3],
+    // Any core that is not the channel's own blob core is a rendition core this
+    // upload does not own. Never clear it.
+    shared: Boolean(coreKey) && coreKey.toLowerCase() !== String(channel?.blobsKeyHex || '').toLowerCase()
   };
 }
 
@@ -401,12 +421,9 @@ async function reconcilePendingUpload(channel, metadata) {
   if (typeof channel?.deleteVideo !== 'function') {
     throw stagedRollbackPendingError(null, new Error('staged metadata deletion is unavailable'));
   }
-  if (metadata?.blobsCoreKey && metadata.blobsCoreKey !== channel.blobsKeyHex) {
-    throw stagedRollbackPendingError(null, new Error('pending upload belongs to another blob core'));
-  }
   let blobResult;
   try {
-    blobResult = storedBlobResult(metadata);
+    blobResult = storedBlobResult(metadata, channel);
   } catch (error) {
     throw stagedRollbackPendingError(null, error);
   }
@@ -795,11 +812,56 @@ function finalizePreparedRendition(prepared, mimeType) {
   });
 }
 
-async function writeStaticPlaybackBlob(channel, prepared, signal, onProgress) {
+// Playback for an immutable publication resolves against the rendition core
+// itself. Hyperblobs has no per-blob framing — hyperblobs/lib/streams.js
+// BlobReadStream reads raw core.get(i) for i in [blockOffset, blockOffset +
+// blockLength) and slices by byteOffset/byteLength — so the finished rendition
+// core IS already a valid hyperblobs blob spanning its whole length. Copying it
+// into channel.blobs would have meant a second, full-size, never-offloaded
+// local copy of every archived title, which capped archive size at the volume
+// regardless of block offload.
+//
+// `blockMap` is deliberately absent: hyperblobs/index.js:173 only builds a
+// block map when the id carries one, and building it fetches EVERY block
+// (409,600 reads for a 100 GiB title at the 256 KiB asset block size).
+function staticPlaybackBlobRef(prepared) {
+  const asset = prepared.renditionWrite.descriptor.core;
+  const blockLength = Number(asset.length);
+  const byteLength = Number(asset.byteLength);
+  if (!Number.isSafeInteger(blockLength) || blockLength < 1 ||
+      !Number.isSafeInteger(byteLength) || byteLength < 1) {
+    throw new Error('rendition core has no playable extent');
+  }
+  if (typeof asset.key !== 'string' || !/^[0-9a-f]{64}$/.test(asset.key)) {
+    throw new Error('rendition core key is unavailable');
+  }
+  return {
+    id: `0:${blockLength}:0:${byteLength}`,
+    blockOffset: 0,
+    blockLength,
+    byteOffset: 0,
+    byteLength,
+    blobsCoreKey: asset.key,
+    // The rendition core is content-addressed, so two publications of identical
+    // bytes resolve to the SAME core. Nothing about this upload owns it, and
+    // rollback must never clear it.
+    shared: true
+  };
+}
+
+// The fallback for a one-shot stream with no immutable publication behind it:
+// no publisher catalog means no rendition core and no block offload to put
+// blocks in, so the bytes go into the channel's blob core. Still never a file —
+// chunks are forwarded as they arrive — but this copy IS title-sized, which is
+// why `uploadFromStream` is only worth reaching for when offload is configured.
+//
+// The first 4100 bytes are the only ones kept, so the MIME type is still read
+// off the magic bytes instead of trusted from the caller.
+async function writeStreamedPlaybackBlob(channel, source, signal, onProgress, expectedBytes) {
   if (!channel?.blobs || typeof channel.blobs.createWriteStream !== 'function') {
     throw new Error('Channel blob stream is unavailable');
   }
-  const { core, descriptor } = prepared.renditionWrite;
+  const total = Number.isFinite(expectedBytes) && expectedBytes > 0 ? Math.floor(expectedBytes) : 0;
   const writeStream = channel.blobs.createWriteStream();
   const completed = new Promise((resolve, reject) => {
     writeStream.once('error', reject);
@@ -808,29 +870,40 @@ async function writeStaticPlaybackBlob(channel, prepared, signal, onProgress) {
       resolve({ id: `${id.blockOffset}:${id.blockLength}:${id.byteOffset}:${id.byteLength}`, ...id });
     });
   });
+  const head = [];
+  let headBytes = 0;
+  let byteLength = 0;
+  let lastProgressUpdate = Date.now();
   try {
-    let bytesWritten = 0;
-    for (let index = 0; index < descriptor.core.length; index++) {
+    for await (const chunk of source) {
       assertUploadNotCancelled(signal);
-      const block = await core.get(index);
-      assertUploadNotCancelled(signal);
-      if (!writeStream.write(block)) {
+      const bytes = b4a.isBuffer(chunk) ? chunk : b4a.from(chunk);
+      if (headBytes < 4100) {
+        const slice = bytes.subarray(0, Math.min(4100 - headBytes, bytes.byteLength));
+        head.push(slice);
+        headBytes += slice.byteLength;
+      }
+      if (!writeStream.write(bytes)) {
         await new Promise((resolve, reject) => {
           writeStream.once('drain', resolve);
           writeStream.once('error', reject);
         });
       }
-      bytesWritten += block.byteLength;
-      onProgress?.(
-        Math.round((bytesWritten / descriptor.core.byteLength) * 100),
-        bytesWritten,
-        descriptor.core.byteLength,
-        { speed: 0, eta: 0 }
-      );
+      byteLength += bytes.byteLength;
+      const currentTime = Date.now();
+      if (onProgress && currentTime - lastProgressUpdate > 500) {
+        onProgress(
+          total > 0 ? Math.min(99, Math.round((byteLength / total) * 100)) : 0,
+          byteLength,
+          total > 0 ? total : byteLength,
+          { speed: 0, eta: 0 }
+        );
+        lastProgressUpdate = currentTime;
+      }
     }
     assertUploadNotCancelled(signal);
     writeStream.end();
-    return await completed;
+    return { blobResult: await completed, byteLength, header: b4a.concat(head) };
   } catch (error) {
     if (typeof writeStream.destroy === 'function') writeStream.destroy(error);
     else writeStream.end();
@@ -1366,7 +1439,7 @@ export function createUploadManager({
             metadata.mimeType ||
             'video/mp4';
           finalizePreparedRendition(prepared, mimeType);
-          blobResult = await writeStaticPlaybackBlob(channel, prepared, uploadControl.signal, onProgress);
+          blobResult = staticPlaybackBlobRef(prepared);
           await prepared.renditionWrite.core.close();
         } else {
           const headerSize = Math.min(4100, fileSize);
@@ -1455,7 +1528,7 @@ export function createUploadManager({
           });
         }
 
-        console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', channel.blobsKeyHex?.slice(0, 16), 'keyLen:', channel.blobsKeyHex?.length);
+        console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', metadata.blobsCoreKey?.slice(0, 16), 'keyLen:', metadata.blobsCoreKey?.length);
 
         return completedUploadResult(videoId, metadata);
       } catch (err) {
@@ -1549,15 +1622,17 @@ export function createUploadManager({
             metadata.mimeType ||
             'video/mp4';
           finalizePreparedRendition(prepared, mimeType);
-          blobResult = await writeStaticPlaybackBlob(channel, prepared, uploadControl.signal, onProgress);
+          blobResult = staticPlaybackBlobRef(prepared);
           await prepared.renditionWrite.core.close();
         } else {
           fileSize = buffer.length;
           const headerBuffer = buffer.subarray(0, Math.min(4100, fileSize));
           mimeType = detectMimeType(headerBuffer) || metadata.mimeType || 'video/mp4';
           blobResult = await channel.putBlob(buffer);
-          onProgress?.(100, fileSize, fileSize);
         }
+        // The bytes landed in the rendition core, not in a second blob copy, so
+        // completion is reported here for both shapes.
+        onProgress?.(100, fileSize, fileSize, { speed: 0, eta: 0 });
 
         buildVideoMetadata(metadata, blobResult, channel, fileSize, mimeType);
         await maybeAttachImmutablePublication(metadata, prepared, {
@@ -1593,7 +1668,7 @@ export function createUploadManager({
           });
         }
 
-        console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', channel.blobsKeyHex?.slice(0, 16), 'keyLen:', channel.blobsKeyHex?.length);
+        console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', metadata.blobsCoreKey?.slice(0, 16), 'keyLen:', metadata.blobsCoreKey?.length);
 
         return completedUploadResult(videoId, metadata);
       } catch (err) {
@@ -1602,6 +1677,181 @@ export function createUploadManager({
           try {
             await prepared.renditionWrite.core.close();
           } catch { /* best-effort staged rendition close after buffer upload failure */ }
+        }
+        if (blobResult && !immutableCommitConfirmed &&
+            failure?.uploadCommitSucceeded !== true &&
+            failure?.uploadCommitUncertain !== true &&
+            failure?.uploadRollbackCompleted !== true &&
+            failure?.uploadRollbackPending !== true) {
+          try {
+            await rollbackUploadedBlob(channel, blobResult);
+          } catch {
+            failure = new Error('Upload failed and rollback could not be completed');
+          }
+        }
+        console.error('[Upload] Failed:', failure.message);
+        return {
+          success: false,
+          error: failure.message,
+          ...(failure?.uploadCommitUncertain === true
+            ? { commitUncertain: true, reconciliationRequired: true, reconciliation: failure.reconciliation }
+            : {}),
+          ...(failure?.uploadRollbackPending === true ? { rollbackPending: true } : {})
+        };
+      }
+    },
+
+    /**
+     * Upload video from a ONE-SHOT stream (an HTTP download, a pipe).
+     *
+     * What this entry point does NOT do is the point of it: the title is never
+     * staged as a file first, so a relay can archive one larger than its own
+     * volume. `source` is an async iterable of byte chunks readable exactly
+     * once, which is what makes writeStaticAsset choose streaming ingest —
+     * every canonical block is uploaded to the object store as it is appended
+     * and dropped locally, and the second pass restores from there. Peak local
+     * block data is the offload window plus the block in flight, whatever the
+     * title's size.
+     *
+     * Chunk boundaries here are irrelevant and deliberately not handled: only
+     * eachCanonicalBlock() in assets/static-core.js decides where a block ends,
+     * which is what keeps the asset key a function of the bytes alone.
+     *
+     * With offload unconfigured the writer takes its single-pass shape instead:
+     * the source is still read exactly once and there is still no file, but the
+     * whole title comes to rest in the rendition core on this volume. Nothing
+     * is buffered in memory either way. An offload that supplies
+     * `createOffloader` without `createStagingStore` is the one refused case —
+     * ASSET_SOURCE_NOT_REOPENABLE — because its second pass would have nowhere
+     * to read from; callers keep `uploadFromPath` for that.
+     *
+     * @param {MultiWriterChannel} channel - Target channel
+     * @param {AsyncIterable<Buffer>|Iterable<Buffer>} source - One-shot chunks
+     * @param {UploadOptions} options - Upload options; `byteLength` is an
+     *   optional content-length hint used only for progress percentages
+     * @param {ProgressCallback} [onProgress] - Progress callback
+     * @returns {Promise<UploadResult>}
+     */
+    async uploadFromStream(channel, source, options, onProgress) {
+      let blobResult = null;
+      let immutableCommitConfirmed = false;
+      let prepared = null;
+      try {
+        if (!channel.blobs) {
+          throw new Error('Channel blobs not initialized');
+        }
+        if (!source || (typeof source[Symbol.asyncIterator] !== 'function' &&
+            typeof source[Symbol.iterator] !== 'function')) {
+          throw new Error('Upload stream source must be an iterable of byte chunks');
+        }
+
+        const providedVideoId = typeof options.videoId === 'string' && /^[0-9a-f]{1,64}$/i.test(options.videoId)
+          ? options.videoId
+          : null;
+        if (providedVideoId && typeof channel.getVideo === 'function') {
+          const existing = await channel.getVideo(providedVideoId).catch(() => null);
+          if (existing?.publicationState === 'commitUncertain') {
+            const outcome = await reconcileUncertainUpload(channel, existing, {
+              ...publicationRuntime,
+              publisherId: options.publisherId,
+              signal: options.signal,
+            });
+            if (outcome === 'accepted') {
+              return { ...completedUploadResult(providedVideoId, existing), reused: true };
+            }
+          } else if (existing?.publicationState === 'replicationPending') {
+            await reconcilePendingUpload(channel, existing);
+          } else if (existing) {
+            return { ...completedUploadResult(providedVideoId, existing), reused: true };
+          }
+        }
+        const videoId = providedVideoId || b4a.toString(crypto.randomBytes(16), 'hex');
+        const metadata = normalizeVideoMetadata(options, videoId);
+        const uploadControl = {
+          publisherId: options.publisherId,
+          retentionClass: options.retentionClass,
+          signal: options.signal
+        };
+        assertUploadNotCancelled(uploadControl.signal);
+        // The iterable is handed over as-is. `resolveSource` in static-core.js
+        // treats anything that is not an array as unrepeatable, so this is the
+        // seam that selects streaming ingest — nothing here re-opens, buffers or
+        // tees it.
+        prepared = await prepareImmutablePublication(metadata, {
+          ...publicationRuntime,
+          ...uploadControl,
+          createSource: () => source,
+          createArtworkSources: () => collectArtworkSources(channel, metadata)
+        });
+        let fileSize;
+        let mimeType;
+        if (prepared) {
+          fileSize = prepared.renditionWrite.descriptor.core.byteLength;
+          const firstBlock = fileSize > 0 ? await prepared.renditionWrite.core.get(0) : b4a.alloc(0);
+          mimeType = detectMimeType(firstBlock.subarray(0, Math.min(4100, firstBlock.byteLength))) ||
+            metadata.mimeType ||
+            'video/mp4';
+          finalizePreparedRendition(prepared, mimeType);
+          blobResult = staticPlaybackBlobRef(prepared);
+          await prepared.renditionWrite.core.close();
+        } else {
+          const streamed = await writeStreamedPlaybackBlob(
+            channel,
+            source,
+            uploadControl.signal,
+            onProgress,
+            Number(options.byteLength)
+          );
+          blobResult = streamed.blobResult;
+          fileSize = streamed.byteLength;
+          mimeType = detectMimeType(streamed.header) || metadata.mimeType || 'video/mp4';
+        }
+        onProgress?.(100, fileSize, fileSize, { speed: 0, eta: 0 });
+
+        buildVideoMetadata(metadata, blobResult, channel, fileSize, mimeType);
+        await maybeAttachImmutablePublication(metadata, prepared, {
+          ...publicationRuntime,
+          publisherId: options.publisherId,
+          mediaMetadata: options.mediaMetadata,
+          ...uploadControl,
+          stageMetadata: value => channel.addVideo(value, { syncPublic: false }),
+          markRollbackPending: value => channel.updateVideo?.(value.id, value, { syncPublic: false }),
+          rollbackMetadata: async value => {
+            await rollbackUploadedBlob(channel, blobResult);
+            if (typeof channel.deleteVideo !== 'function') throw new Error('staged metadata deletion is unavailable');
+            await channel.deleteVideo(value.id);
+          },
+          finalizeMetadata: value => {
+            if (typeof channel.updateVideo !== 'function') {
+              throw new Error('published metadata update is unavailable');
+            }
+            return channel.updateVideo(value.id, value, {
+              syncPublic: true,
+              commitAfterPublicSync: true,
+            });
+          }
+        });
+        immutableCommitConfirmed = Boolean(metadata.immutablePublication);
+        // No playback profile: probing an MP4 needs the moov atom, which can
+        // sit at the end of the file, and the bytes are gone by now. A profile
+        // is a range-prioritization hint, so its absence costs nothing but a
+        // colder first seek.
+
+        if (!prepared) {
+          await channel.addVideo(metadata, {
+            syncPublic: metadata.publicationState !== 'replicationPending'
+          });
+        }
+
+        console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', metadata.blobsCoreKey?.slice(0, 16), 'keyLen:', metadata.blobsCoreKey?.length);
+
+        return completedUploadResult(videoId, metadata);
+      } catch (err) {
+        let failure = err;
+        if (prepared?.renditionWrite?.core && !prepared.renditionWrite.core.closed) {
+          try {
+            await prepared.renditionWrite.core.close();
+          } catch { /* best-effort staged rendition close after stream upload failure */ }
         }
         if (blobResult && !immutableCommitConfirmed &&
             failure?.uploadCommitSucceeded !== true &&

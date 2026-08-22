@@ -7,9 +7,11 @@ import { Writable } from 'node:stream'
 
 import Corestore from 'corestore'
 import crypto from 'hypercore-crypto'
+import Hyperblobs from 'hyperblobs'
 
 import { decodePublicationManifest } from '../src/assets/index.js'
 import { createUploadManager } from '../src/upload.js'
+import { normalizeBlobRefInput } from '../src/blob-utils.js'
 import {
   encodePublisherCatalogFrame,
   encodePublisherOperationBody,
@@ -277,8 +279,11 @@ test('path publication materializes the file once and derives playback bytes fro
 
   assert.equal(result.success, true)
   assert.equal(sourceReads, 1)
-  assert.deepEqual(channel.blobWrites, [bytes])
+  assert.deepEqual(channel.blobWrites, [], 'the archived media is never copied a second time into the channel blob core')
   assert.equal(result.manifest.body.renditions[0].core.byteLength, bytes.byteLength)
+  const published = channel.videos[0]
+  assert.equal(published.blobsCoreKey, result.coreKey, 'playback resolves against the rendition core')
+  assert.equal(published.blobId, `0:1:0:${bytes.byteLength}`, 'the playback id spans the whole rendition core')
 })
 
 test('mid-signing cancellation appends no catalog batch', async (t) => {
@@ -408,7 +413,7 @@ test('accepted normal append stays private until every post-commit side effect s
   assert.equal(channel.videos[0].publicationState, 'published')
   assert.equal(appendAttempts, 1)
   assert.equal(counters.created, 3)
-  assert.equal(channel.blobWrites.length, 1)
+  assert.equal(channel.blobWrites.length, 0, 'no publication attempt copies the media into the blob core')
   assert.deepEqual(lifecycle, [
     'projection',
     'retention',
@@ -521,7 +526,7 @@ test('staged upload replays the exact persisted signed frames after a pre-append
   assert.equal(retried.reused, true)
   assert.equal(appendAttempts, 2)
   assert.equal(counters.created, 3)
-  assert.equal(channel.blobWrites.length, 1)
+  assert.equal(channel.blobWrites.length, 0, 'replay reuses the rendition core instead of rewriting a blob copy')
   assert.equal(channel.videos[0].publicationState, 'published')
 })
 
@@ -570,7 +575,7 @@ test('catalog rejection with staged metadata rollback failure reconciles determi
   assert.match(rejected.error, /rollback.*pending/i)
   assert.equal(channel.videos.length, 1)
   assert.equal(channel.videos[0].publicationState, 'replicationPending')
-  assert.equal(cleared.length, 1, 'blob clear completes before pending metadata deletion is attempted')
+  assert.equal(cleared.length, 0, 'the content-addressed rendition core is never cleared on rollback')
 
   const retried = await manager.uploadFromPath(channel, filePath, options, fs)
   assert.equal(retried.success, true)
@@ -578,8 +583,8 @@ test('catalog rejection with staged metadata rollback failure reconciles determi
   assert.equal(appendAttempts, 2)
   assert.equal(channel.videos.length, 1)
   assert.equal(channel.videos[0].publicationState, 'published')
-  assert.equal(cleared.length, 2, 'retry may idempotently clear before deleting the durable anchor')
-  assert.equal(channel.blobWrites.length, 2, 'retry writes one replacement playback blob')
+  assert.equal(cleared.length, 0, 'reconciliation still never clears the shared rendition core')
+  assert.equal(channel.blobWrites.length, 0, 'the retry writes no replacement playback blob')
 })
 
 test('buffer upload reconciles rollback-pending metadata with the same deterministic id', async (t) => {
@@ -598,18 +603,17 @@ test('buffer upload reconciles rollback-pending metadata with the same determini
   }
   const channel = makeChannel()
   const cleared = []
-  let clearAttempts = 0
   channel.blobs.clear = async value => {
     cleared.push(value)
-    clearAttempts++
-    if (clearAttempts === 1) throw new Error('injected mobile staged blob clear failure')
   }
   channel.getVideo = async id => channel.videos.find(video => video.id === id) || null
   const deleteVideo = channel.deleteVideo.bind(channel)
   let deleteAttempts = 0
+  // Staged metadata is the only thing an immutable upload actually added, so it
+  // is the only thing whose deletion can leave the rollback pending.
   channel.deleteVideo = async id => {
     deleteAttempts++
-    if (deleteAttempts === 1) throw new Error('injected mobile staged metadata delete failure')
+    if (deleteAttempts <= 2) throw new Error('injected mobile staged metadata delete failure')
     return deleteVideo(id)
   }
   const manager = makePublishingManager({ store, deviceKeyPair, catalog })
@@ -625,7 +629,7 @@ test('buffer upload reconciles rollback-pending metadata with the same determini
   assert.equal(rejected.rollbackPending, true)
   assert.equal(channel.videos.length, 1)
   assert.equal(channel.videos[0].id, options.videoId)
-  assert.equal(cleared.length, 1)
+  assert.equal(deleteAttempts, 1)
 
   const deleteRejected = await manager.uploadFromBuffer(channel, buffer, options)
   assert.equal(deleteRejected.success, false)
@@ -633,7 +637,7 @@ test('buffer upload reconciles rollback-pending metadata with the same determini
   assert.equal(appendAttempts, 1, 'pending reconciliation never reaches catalog append')
   assert.equal(channel.videos.length, 1)
   assert.equal(channel.videos[0].publicationState, 'replicationPending')
-  assert.equal(cleared.length, 2)
+  assert.equal(deleteAttempts, 2)
 
   const retried = await manager.uploadFromBuffer(channel, buffer, options)
   assert.equal(retried.success, true)
@@ -642,8 +646,9 @@ test('buffer upload reconciles rollback-pending metadata with the same determini
   assert.equal(appendAttempts, 2)
   assert.equal(channel.videos.length, 1)
   assert.equal(channel.videos[0].publicationState, 'published')
-  assert.equal(cleared.length, 3)
-  assert.equal(channel.blobWrites.length, 2)
+  assert.equal(deleteAttempts, 3)
+  assert.deepEqual(cleared, [], 'no rollback attempt ever clears the shared rendition core')
+  assert.equal(channel.blobWrites.length, 0)
 })
 
 test('deterministic reused uploads return the original publication contract', async () => {
@@ -719,7 +724,7 @@ test('static upload cancellation closes staging and emits no catalog operation',
   assert.equal(opened[0].closed, true)
 })
 
-test('catalog commit failure clears the newly written blob and leaves no upload metadata', async (t) => {
+test('catalog commit failure leaves the shared rendition core intact and no upload metadata', async (t) => {
   const store = makeStore(t, 'failed-static-upload')
   const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 7))
   const blob = { id: '4:2:128:64', blockOffset: 4, blockLength: 2, byteOffset: 128, byteLength: 64 }
@@ -797,7 +802,7 @@ test('catalog commit failure clears the newly written blob and leaves no upload 
 
   assert.equal(result.success, false)
   assert.match(result.error, /catalog commit failure/)
-  assert.deepEqual(cleared, [blob])
+  assert.deepEqual(cleared, [], 'a failed immutable upload never clears the content-addressed rendition core')
   assert.deepEqual(videos, [])
 })
 
@@ -854,7 +859,7 @@ test('uncertain accepted commit remains retryable across a post-commit public sy
   assert.equal(channel.videos.length, 1)
   assert.equal(channel.videos[0].publicationState, 'commitUncertain')
   assert.equal(cleared.length, 0)
-  assert.equal(channel.blobWrites.length, 1)
+  assert.equal(channel.blobWrites.length, 0)
 
   for (const operation of appended[0]) {
     receipts.set(Buffer.from(operation.recordId).toString('hex'), { accepted: true })
@@ -864,7 +869,7 @@ test('uncertain accepted commit remains retryable across a post-commit public sy
   assert.equal(failedFinalization.commitUncertain, true)
   assert.equal(channel.videos[0].publicationState, 'commitUncertain')
   assert.equal(cleared.length, 0)
-  assert.equal(channel.blobWrites.length, 1)
+  assert.equal(channel.blobWrites.length, 0)
   assert.equal(appendAttempts, 1)
   assert.equal(publicSyncAttempts, 1)
 
@@ -874,7 +879,7 @@ test('uncertain accepted commit remains retryable across a post-commit public sy
   assert.equal(retried.publicationId, channel.videos[0].immutablePublication.publicationId)
   assert.equal(channel.videos[0].publicationState, 'published')
   assert.equal(cleared.length, 0)
-  assert.equal(channel.blobWrites.length, 1)
+  assert.equal(channel.blobWrites.length, 0)
   assert.equal(appendAttempts, 1)
   assert.equal(publicSyncAttempts, 2)
 })
@@ -923,7 +928,7 @@ test('uncertain catalog commit rolls back only after exact operations are confir
   assert.equal(stillUncertain.commitUncertain, true)
   assert.equal(channel.videos[0].publicationState, 'commitUncertain')
   assert.equal(cleared.length, 0)
-  assert.equal(channel.blobWrites.length, 1)
+  assert.equal(channel.blobWrites.length, 0)
   assert.equal(appendAttempts, 1)
 
   receiptsState = 'rejected'
@@ -932,7 +937,178 @@ test('uncertain catalog commit rolls back only after exact operations are confir
   assert.equal(retried.reused, undefined)
   assert.equal(channel.videos.length, 1)
   assert.equal(channel.videos[0].publicationState, 'published')
-  assert.equal(cleared.length, 1)
-  assert.equal(channel.blobWrites.length, 2)
+  assert.deepEqual(cleared, [], 'a confirmed rejection still leaves the shared rendition core alone')
+  assert.equal(channel.blobWrites.length, 0)
   assert.equal(appendAttempts, 2)
+})
+
+
+// A channel whose blob core is a REAL Hyperblobs over a real Corestore core, so
+// "did this upload add a second copy of the media?" is answered by the core's
+// own length rather than by a spy.
+async function makeRealBlobChannel(store, name = 'channel-blobs') {
+  const core = store.get({ name })
+  await core.ready()
+  const blobs = new Hyperblobs(core)
+  const videos = []
+  const cleared = []
+  return {
+    localWriterKeyHex: '11'.repeat(32),
+    blobsKeyHex: Buffer.from(core.key).toString('hex'),
+    core,
+    blobs,
+    videos,
+    cleared,
+    async putBlob(data) {
+      const id = await blobs.put(data)
+      return { id: `${id.blockOffset}:${id.blockLength}:${id.byteOffset}:${id.byteLength}`, ...id }
+    },
+    async updateVideo(id, value) {
+      const index = videos.findIndex(video => video.id === id)
+      if (index >= 0) videos[index] = value
+    },
+    async addVideo(metadata) {
+      videos.push({ ...metadata })
+    },
+    async deleteVideo(id) {
+      const index = videos.findIndex(video => video.id === id)
+      if (index >= 0) videos.splice(index, 1)
+    },
+  }
+}
+
+// Resolve a published record exactly the way playback does: take whatever core
+// its blobsCoreKey names out of the store and read the blob id off it. Nothing
+// here knows or cares whether that core is a hyperblobs core or a rendition
+// core, which is the whole point.
+async function readPlaybackBytes(store, record) {
+  const blob = normalizeBlobRefInput(record.blobId)
+  assert.notEqual(blob, null, 'the persisted blob id parses')
+  assert.equal('blockMap' in blob, false, 'a playback id never carries a block map')
+  const core = store.get({ key: Buffer.from(record.blobsCoreKey, 'hex') })
+  await core.ready()
+  try {
+    return await new Hyperblobs(core).get(blob)
+  } finally {
+    await core.close()
+  }
+}
+
+test('an immutable publication adds no blocks to the channel blob core and plays back byte-exact from the rendition core', async (t) => {
+  const store = makeStore(t, 'no-second-copy')
+  const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 31))
+  const channel = await makeRealBlobChannel(store)
+  // Deliberately larger than one 256 KiB asset block: the rendition core is only
+  // a valid hyperblobs blob if reading it concatenates raw blocks with no
+  // per-blob framing anywhere.
+  const bytes = Buffer.alloc(300 * 1024)
+  bytes.set([0x1A, 0x45, 0xDF, 0xA3], 0)
+  for (let i = 4; i < bytes.byteLength; i++) bytes[i] = (i * 31) & 0xff
+
+  assert.equal(channel.core.length, 0)
+  const result = await makePublishingManager({
+    store,
+    deviceKeyPair,
+    catalog: makeCatalog(deviceKeyPair, []),
+  }).uploadFromBuffer(channel, bytes, { title: 'No second copy' })
+
+  assert.equal(result.success, true)
+  assert.equal(channel.core.length, 0, 'the channel blob core gained no blocks')
+  assert.equal(channel.core.byteLength, 0)
+
+  const record = channel.videos[0]
+  assert.equal(record.blobsCoreKey, result.coreKey, 'playback names the rendition core')
+  assert.notEqual(record.blobsCoreKey, channel.blobsKeyHex)
+  assert.equal(record.blobId, `0:2:0:${bytes.byteLength}`, 'the id spans the whole rendition core')
+  assert.equal(record.size, bytes.byteLength)
+
+  assert.deepEqual(await readPlaybackBytes(store, record), bytes, 'playback yields byte-exact media')
+})
+
+test('rollback of a failed publication never clears the deduped rendition core another publication serves', async (t) => {
+  const store = makeStore(t, 'dedupe-safe-rollback')
+  const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 32))
+  // Identical bytes on purpose: rendition cores are content-addressed, so both
+  // publications resolve to one shared core.
+  const bytes = Buffer.concat([
+    Buffer.from([0x1A, 0x45, 0xDF, 0xA3]),
+    Buffer.from('shared content-addressed rendition bytes'),
+  ])
+
+  const keeper = await makeRealBlobChannel(store, 'keeper-blobs')
+  const kept = await makePublishingManager({
+    store,
+    deviceKeyPair,
+    catalog: makeCatalog(deviceKeyPair, []),
+  }).uploadFromBuffer(keeper, bytes, { videoId: '31'.repeat(16), title: 'Keeper' })
+  assert.equal(kept.success, true)
+  const keptRecord = keeper.videos[0]
+  assert.deepEqual(await readPlaybackBytes(store, keptRecord), bytes)
+
+  const doomedChannel = await makeRealBlobChannel(store, 'doomed-blobs')
+  doomedChannel.blobs.clear = async value => {
+    doomedChannel.cleared.push({ ...value })
+  }
+  const doomedCatalog = makeCatalog(deviceKeyPair, [])
+  let doomedCoreKey = null
+  doomedCatalog.getOperationReceipt = async () => ({ accepted: false, rejectionCode: 'POLICY_REJECTED' })
+  doomedCatalog.appendBatchAndConfirm = async operations => {
+    doomedCoreKey = decodePublicationManifest(operations[0].body.payload).body.renditions[0].core.key
+    return operations.map(() => ({ accepted: false, rejectionCode: 'POLICY_REJECTED' }))
+  }
+  const doomed = await makePublishingManager({
+    store,
+    deviceKeyPair,
+    catalog: doomedCatalog,
+  }).uploadFromBuffer(doomedChannel, bytes, { videoId: '32'.repeat(16), title: 'Doomed' })
+
+  assert.equal(doomed.success, false)
+  assert.equal(doomed.coreKey, undefined)
+  assert.equal(
+    doomedCoreKey,
+    kept.coreKey,
+    'both publications of identical bytes really did resolve to one content-addressed core',
+  )
+  assert.deepEqual(doomedChannel.videos, [], 'the failed upload leaves no staged metadata')
+  assert.deepEqual(doomedChannel.cleared, [], 'rollback clears nothing on the shared core')
+
+  // The dedupe this test guards against is real, not hypothetical: both uploads
+  // named the same core.
+  assert.equal(keptRecord.blobsCoreKey, kept.coreKey)
+  assert.deepEqual(
+    await readPlaybackBytes(store, keptRecord),
+    bytes,
+    'the surviving publication still serves byte-exact media after the other upload rolled back',
+  )
+})
+
+test('a legacy hyperblobs-backed record still resolves byte-exact and still clears on rollback', async (t) => {
+  const store = makeStore(t, 'legacy-hyperblobs-record')
+  const channel = await makeRealBlobChannel(store, 'legacy-blobs')
+  // No catalogRegistry: prepareImmutablePublication returns null, so this takes
+  // the pre-existing hyperblobs path exactly as it did before.
+  const legacyManager = createUploadManager({ ctx: { store } })
+  const bytes = Buffer.concat([
+    Buffer.from([0x1A, 0x45, 0xDF, 0xA3]),
+    Buffer.from('legacy hyperblobs playback bytes'),
+  ])
+
+  const result = await legacyManager.uploadFromBuffer(channel, bytes, { title: 'Legacy record' })
+  assert.equal(result.success, true)
+  const record = channel.videos[0]
+  assert.equal(record.blobsCoreKey, channel.blobsKeyHex, 'a legacy record still names the channel blob core')
+  assert.equal(channel.core.length > 0, true, 'the legacy path really did write blob blocks')
+  assert.deepEqual(await readPlaybackBytes(store, record), bytes)
+
+  // And the blocks a legacy upload adds are still its own to clear.
+  const cleared = []
+  const failing = await makeRealBlobChannel(store, 'legacy-rollback-blobs')
+  failing.blobs.clear = async value => { cleared.push({ ...value }) }
+  failing.addVideo = async () => { throw new Error('injected legacy metadata failure') }
+  const failed = await createUploadManager({ ctx: { store } })
+    .uploadFromBuffer(failing, bytes, { title: 'Legacy rollback' })
+  assert.equal(failed.success, false)
+  assert.equal(cleared.length, 1, 'the legacy path still clears the blocks it appended')
+  assert.equal(cleared[0].blockLength, 1)
+  assert.equal(cleared[0].byteLength, bytes.byteLength)
 })

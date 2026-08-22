@@ -644,6 +644,15 @@ export function createRoutingDownloader ({ directDownloader, ytDlpDownloader } =
       const useDirect = Boolean(directDownloader) && !isCreatorImport
       const downloader = useDirect ? directDownloader : ytDlpDownloader
       if (!downloader) throw new Error('no downloader available for this archive source')
+      // With block offload configured the direct downloader can hand the body
+      // straight to the ingest, so the title is never staged on the volume as a
+      // file and its size stops being the bound. Without offload there is
+      // nowhere for the blocks to go but here, and the temp-file path is the
+      // one that stays correct — so that is what an unbounded downloader gets,
+      // unchanged.
+      if (useDirect && downloader.bounded === true && typeof downloader.downloadStream === 'function') {
+        return downloader.downloadStream(input)
+      }
       return downloader.download(input)
     }
   }
@@ -825,6 +834,8 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       retentionClass,
       channel,
       filePath,
+      stream,
+      byteLength,
       videoId,
       signal,
       title,
@@ -861,7 +872,14 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       tmdbGenres,
       publish
     }) {
-      const requestedBytes = Number(fs?.statSync?.(filePath)?.size || 0)
+      // A streaming source has no file to stat, and with block offload behind it
+      // the title is not what comes to rest here anyway. The content-length the
+      // server reported is the honest figure for the retention budget; when the
+      // server gave none there is nothing to claim up front and the per-chunk
+      // free-disk guard in the downloader is what holds.
+      const requestedBytes = stream
+        ? Math.max(0, Math.floor(Number(byteLength) || 0))
+        : Number(fs?.statSync?.(filePath)?.size || 0)
       assertRetentionPermission(retentionClass, requestedBytes)
       // upload.js refuses to publish unless the registry hands back exactly one
       // writable binding, so the catalog has to exist before the file moves.
@@ -873,7 +891,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       const mediaCoordinates = contentKind
         ? { contentKind, mediaProvider, mediaId, seasonNumber, episodeNumber }
         : deriveMediaCoordinates({ tmdbType, tmdbId, tmdbSeason, tmdbEpisode })
-      const result = await uploadManager.uploadFromPath(channel, filePath, {
+      const uploadOptions = {
         mediaMetadata: describeTmdbMedia({ tmdbYear, tmdbOverview, tmdbRuntime, tmdbGenres }),
         title,
         videoId,
@@ -903,7 +921,13 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         // fields from TMDB inputs.
         ...mediaCoordinates,
         ...poster
-      }, fs)
+      }
+      // One-shot body, read exactly once, never staged as a file. The temp-file
+      // path below is unchanged and is what every unbounded downloader still
+      // takes.
+      const result = stream
+        ? await uploadManager.uploadFromStream(channel, stream, { ...uploadOptions, byteLength: requestedBytes })
+        : await uploadManager.uploadFromPath(channel, filePath, uploadOptions, fs)
       if (!result?.success) throw new Error(result?.error || 'Archive import failed')
       if (runtime?.seedingManager?.addSeed) {
         const metadata = result.metadata || result

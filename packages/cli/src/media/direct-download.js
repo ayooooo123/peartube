@@ -253,6 +253,18 @@ export function byteCeiling (_maxBytes, _requirePublicSource, headroomBytes) {
 // and the live free-disk room is still what it is measured against. Unset —
 // the default, and every path with no block offload configured — nothing below
 // changes.
+//
+// Two ways to take the bytes:
+//
+//   download()        writes them to a file under `outputDir` and hands back
+//                     its path. The title has to fit on the volume.
+//   downloadStream()  hands back a ONE-SHOT async iterable of the response's
+//                     chunks and never creates a staging directory at all, so
+//                     the title only has to fit through the relay, not on it.
+//
+// Both run exactly the same prologue and the same per-chunk guard: the floor is
+// re-read on every chunk either way. Streaming relaxes the title-sized
+// reservation, never the floor.
 export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lookup = null, storageHeadroom = null, storageReservations = null, boundedLocalBytes = null } = {}) {
   const boundedBytesFor = typeof boundedLocalBytes === 'function'
     ? (streamBytes) => Math.max(0, Math.floor(Number(boundedLocalBytes(streamBytes)) || 0))
@@ -260,111 +272,214 @@ export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lo
         ? () => Math.floor(boundedLocalBytes)
         : null)
   if (!outputDir) throw new Error('outputDir is required')
+
+  // Everything both entry points do before a byte of the body is taken: the
+  // floor pre-check, the reservation bookkeeping, the guarded fetch, the
+  // content check and the name. `stage` is the only difference — a streaming
+  // consumer gets no staging directory, which is how the temp file disappears
+  // rather than merely shrinking.
+  async function open (input, { stage }) {
+    const url = input.url
+    if (!url) throw new Error('direct download requires a url')
+    const requirePublicSource = input.requirePublicSource === true
+    const id = input.id || `dl_${Date.now()}`
+    // Read once, before a byte is fetched: the same free-disk floor archive
+    // ingestion is gated on. At or below the floor there is nothing to write
+    // into, so say so instead of streaming a body onto a full volume.
+    const reservation = { bytes: 0, released: false }
+    const reserveBytes = (bytes) => {
+      const size = Math.max(0, Math.floor(Number(bytes) || 0))
+      if (size <= 0 || !storageReservations) return
+      reservation.bytes += size
+      storageReservations.bytes = Math.max(0, Math.floor(Number(storageReservations.bytes) || 0)) + size
+    }
+    const releaseBytes = (bytes) => {
+      const size = Math.max(0, Math.min(reservation.bytes, Math.floor(Number(bytes) || 0)))
+      if (size <= 0 || !storageReservations) return
+      reservation.bytes -= size
+      storageReservations.bytes = Math.max(0, Math.floor(Number(storageReservations.bytes) || 0) - size)
+    }
+    const releaseReservation = () => {
+      if (reservation.released) return
+      reservation.released = true
+      releaseBytes(reservation.bytes)
+      storageReservations?.invalidate?.()
+    }
+    const reserveBoundedBytes = (target) => {
+      const claim = Math.max(0, Math.floor(target) - reservation.bytes)
+      if (claim > 0) reserveBytes(claim)
+      return claim
+    }
+    const measuredHeadroom = typeof storageHeadroom === 'function'
+      ? () => reserveAdjustedHeadroom(storageHeadroom(), Math.max(0, Math.floor(Number(storageReservations?.bytes) || 0) - reservation.bytes))
+      : null
+    const headroomState = {}
+    if (typeof measuredHeadroom === 'function') {
+      const snapshot = measuredHeadroom()
+      if (atStorageFloor(snapshot)) throw new Error('relay has no archive storage headroom; refusing direct download')
+      const error = storageHeadroomError(snapshot, 0, 1, 'direct download', headroomState, boundedBytesFor ? boundedBytesFor(0) : null)
+      if (error) throw new Error(error)
+    }
+    const targetDir = stage ? path.join(outputDir, id) : null
+    const discard = () => {
+      if (!targetDir) return
+      try { fs.rmSync(targetDir, { recursive: true, force: true }) } catch { /* best effort */ }
+    }
+    if (targetDir) fs.mkdirSync(targetDir, { recursive: true })
+
+    let res
+    try {
+      ({ res } = await openStream(url, { timeoutMs, requirePublicSource, lookup }))
+    } catch (err) {
+      discard()
+      throw err
+    }
+
+    const contentType = res.headers?.['content-type'] || ''
+    const disposition = res.headers?.['content-disposition'] || ''
+    const dispositionName = filenameFromDisposition(disposition)
+    // A guarded fetch takes the server's word for what this is and nothing
+    // else: the path and the filename are both chosen by the caller, so
+    // letting either vouch for the content would make the check decorative.
+    const looksVideo = requirePublicSource
+      ? VIDEO_CONTENT_TYPE.test(contentType)
+      : VIDEO_CONTENT_TYPE.test(contentType) || isDirectVideoUrl(url) || VIDEO_EXT.test(dispositionName || '')
+    if (!looksVideo) {
+      res.destroy?.()
+      discard()
+      throw new Error(`URL did not return a downloadable video file (content-type: ${contentType || 'unknown'})`)
+    }
+
+    const ext = extensionForContentType(contentType)
+    let urlName = ''
+    try { urlName = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch { urlName = '' }
+    const fileName = safeName(dispositionName || urlName, ext)
+
+    return {
+      res,
+      contentType,
+      fileName,
+      targetDir,
+      discard,
+      measuredHeadroom,
+      headroomState,
+      reserveBytes,
+      releaseBytes,
+      releaseReservation,
+      reserveBoundedBytes
+    }
+  }
+
+  // The name is the only thing left to go on once there is no file to sniff,
+  // and it is the same fallback the file path used.
+  function mimeTypeFor (contentType, name) {
+    const clean = contentType.split(';')[0].trim()
+    return clean && /^video\//i.test(clean) ? clean : getVideoMimeType(name)
+  }
+
+  function describe (input, fileName) {
+    return {
+      title: input.title || fileName.replace(/\.[^.]+$/, '') || 'Archived video',
+      description: input.description || '',
+      duration: undefined,
+      thumbnailUrl: null,
+      thumbnailFile: null,
+      creatorName: input.creatorName || null
+    }
+  }
+
   return {
+    // True when the caller told this downloader its bytes do not all come to
+    // rest here — i.e. block offload is configured. `downloadStream` is only
+    // worth taking then, because the ingest behind it needs somewhere other
+    // than this volume to put the blocks.
+    bounded: boundedBytesFor !== null,
+
     async download (input = {}) {
-      const url = input.url
-      if (!url) throw new Error('direct download requires a url')
-      const requirePublicSource = input.requirePublicSource === true
-      const id = input.id || `dl_${Date.now()}`
-      // Read once, before a byte is fetched: the same free-disk floor archive
-      // ingestion is gated on. At or below the floor there is nothing to write
-      // into, so say so instead of streaming a body onto a full volume.
-      const reservation = { bytes: 0, released: false }
-      const reserveBytes = (bytes) => {
-        const size = Math.max(0, Math.floor(Number(bytes) || 0))
-        if (size <= 0 || !storageReservations) return
-        reservation.bytes += size
-        storageReservations.bytes = Math.max(0, Math.floor(Number(storageReservations.bytes) || 0)) + size
-      }
-      const releaseBytes = (bytes) => {
-        const size = Math.max(0, Math.min(reservation.bytes, Math.floor(Number(bytes) || 0)))
-        if (size <= 0 || !storageReservations) return
-        reservation.bytes -= size
-        storageReservations.bytes = Math.max(0, Math.floor(Number(storageReservations.bytes) || 0) - size)
-      }
-      const releaseReservation = () => {
-        if (reservation.released) return
-        reservation.released = true
-        releaseBytes(reservation.bytes)
-        storageReservations?.invalidate?.()
-      }
-      const measuredHeadroom = typeof storageHeadroom === 'function'
-        ? () => reserveAdjustedHeadroom(storageHeadroom(), Math.max(0, Math.floor(Number(storageReservations?.bytes) || 0) - reservation.bytes))
-        : null
-      const headroomState = {}
-      if (typeof measuredHeadroom === 'function') {
-        const snapshot = measuredHeadroom()
-        if (atStorageFloor(snapshot)) throw new Error('relay has no archive storage headroom; refusing direct download')
-        const error = storageHeadroomError(snapshot, 0, 1, 'direct download', headroomState, boundedBytesFor ? boundedBytesFor(0) : null)
-        if (error) throw new Error(error)
-      }
-      const targetDir = path.join(outputDir, id)
-      fs.mkdirSync(targetDir, { recursive: true })
-
-      let res
-      try {
-        ({ res } = await openStream(url, { timeoutMs, requirePublicSource, lookup }))
-      } catch (err) {
-        try { fs.rmSync(targetDir, { recursive: true, force: true }) } catch {}
-        throw err
-      }
-
-      const contentType = res.headers?.['content-type'] || ''
-      const disposition = res.headers?.['content-disposition'] || ''
-      const dispositionName = filenameFromDisposition(disposition)
-      // A guarded fetch takes the server's word for what this is and nothing
-      // else: the path and the filename are both chosen by the caller, so
-      // letting either vouch for the content would make the check decorative.
-      const looksVideo = requirePublicSource
-        ? VIDEO_CONTENT_TYPE.test(contentType)
-        : VIDEO_CONTENT_TYPE.test(contentType) || isDirectVideoUrl(url) || VIDEO_EXT.test(dispositionName || '')
-      if (!looksVideo) {
-        res.destroy?.()
-        try { fs.rmSync(targetDir, { recursive: true, force: true }) } catch {}
-        throw new Error(`URL did not return a downloadable video file (content-type: ${contentType || 'unknown'})`)
-      }
-
-      const ext = extensionForContentType(contentType)
-      let urlName = ''
-      try { urlName = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch { urlName = '' }
-      const fileName = safeName(dispositionName || urlName, ext)
-      const filePath = path.join(targetDir, fileName)
+      const opened = await open(input, { stage: true })
+      const filePath = path.join(opened.targetDir, opened.fileName)
 
       try {
-        await pipeToFile(res, filePath, fs, {
-          storageHeadroom: measuredHeadroom,
-          headroomState,
-          reserveStorageBytes: reserveBytes,
-          releaseStorageBytes: releaseBytes,
+        await pipeToFile(opened.res, filePath, fs, {
+          storageHeadroom: opened.measuredHeadroom,
+          headroomState: opened.headroomState,
+          reserveStorageBytes: opened.reserveBytes,
+          releaseStorageBytes: opened.releaseBytes,
           boundedBytesFor,
-          reserveBoundedBytes: (target) => {
-            const claim = Math.max(0, Math.floor(target) - reservation.bytes)
-            if (claim > 0) reserveBytes(claim)
-            return claim
-          }
+          reserveBoundedBytes: opened.reserveBoundedBytes
         })
       } catch (err) {
-        try { fs.rmSync(targetDir, { recursive: true, force: true }) } catch {}
-        releaseReservation()
+        opened.discard()
+        opened.releaseReservation()
         throw err
       }
-
-      const cleanContentType = contentType.split(';')[0].trim()
-      const mimeType = cleanContentType && /^video\//i.test(cleanContentType) ? cleanContentType : getVideoMimeType(filePath)
 
       return {
         filePath,
-        title: input.title || fileName.replace(/\.[^.]+$/, '') || 'Archived video',
-        description: input.description || '',
-        duration: undefined,
-        thumbnailUrl: null,
-        thumbnailFile: null,
-        creatorName: input.creatorName || null,
-        mimeType,
-        releaseStorageReservation: releaseReservation,
+        ...describe(input, opened.fileName),
+        mimeType: mimeTypeFor(opened.contentType, filePath),
+        releaseStorageReservation: opened.releaseReservation,
         cleanup () {
-          try { fs.rmSync(targetDir, { recursive: true, force: true }) } catch { /* best effort */ }
-          releaseReservation()
+          opened.discard()
+          opened.releaseReservation()
+        }
+      }
+    },
+
+    // No file, no staging directory: the body is handed over chunk by chunk and
+    // the consumer decides where each one goes. `stream` is ONE-SHOT — it is
+    // the HTTP response, so there is no second read of it — which is exactly
+    // what makes the backend's asset writer pick its streaming ingest.
+    //
+    // Every guard the file path applies per chunk applies here per chunk: the
+    // live floor-adjusted headroom is re-read before the chunk is handed on,
+    // and the reservation is claimed before it is. Abandoning the iterable, or
+    // a guard refusing mid-flight, destroys the response and gives the
+    // reservation back; a completed stream keeps it until `cleanup`, because
+    // the ingest behind it is still holding its working set.
+    async downloadStream (input = {}) {
+      const opened = await open(input, { stage: false })
+      let streamed = 0
+
+      async function *chunks () {
+        let completed = false
+        try {
+          for await (const chunk of opened.res) {
+            const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+            const bounded = boundedBytesFor ? boundedBytesFor(streamed + bytes.length) : null
+            if (typeof opened.measuredHeadroom === 'function') {
+              const error = storageHeadroomError(opened.measuredHeadroom(), streamed, bytes.length, 'direct download', opened.headroomState, bounded)
+              if (error) throw new Error(error)
+            }
+            if (bounded !== null) opened.reserveBoundedBytes(bounded)
+            else opened.reserveBytes(bytes.length)
+            streamed += bytes.length
+            input.onProgress?.(streamed)
+            yield bytes
+          }
+          completed = true
+        } finally {
+          opened.res.destroy?.()
+          if (!completed) opened.releaseReservation()
+        }
+      }
+
+      // `byteLength` is what the server SAID, not a promise: it is used for the
+      // retention budget and progress percentages only. `0` when the response
+      // was chunked and gave none, in which case the per-chunk free-disk guard
+      // above is the only bound, exactly as it is for a length that lied.
+      const declared = Number(opened.res.headers?.['content-length'])
+
+      return {
+        stream: chunks(),
+        byteLength: Number.isFinite(declared) && declared > 0 ? Math.floor(declared) : 0,
+        bytesStreamed: () => streamed,
+        ...describe(input, opened.fileName),
+        mimeType: mimeTypeFor(opened.contentType, opened.fileName),
+        releaseStorageReservation: opened.releaseReservation,
+        cleanup () {
+          opened.res.destroy?.()
+          opened.releaseReservation()
         }
       }
     }

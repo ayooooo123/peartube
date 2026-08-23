@@ -282,6 +282,41 @@ test('a source that reports a different identity is terminal and takes the parti
   t.ok(client.revokes.includes('source-capability-identity-drift-00000001'), 'and the unused grant is revoked')
 })
 
+// A grant that expired or was revoked is a failure about REACHING the source,
+// not about what the source is. Without this, one such failure memoized forever:
+// every later submission got the old failure back, so a title broken by a
+// since-fixed bug could never be archived again. Observed live - four titles
+// stuck on SOURCE_GRANT_UNAVAILABLE that no amount of replaying could revive.
+test('a fresh grant revives a job that died because its grant was gone', async (t) => {
+  const bytes = Buffer.from('abcdefghijkl')
+  const client = stubSourceClient(bytes, {
+    failWith: new SourceCallbackError('SOURCE_GRANT_UNAVAILABLE', false)
+  })
+  const { manager } = harness(t, { client })
+  t.teardown(() => manager.close())
+  await manager.start()
+
+  const job = await manager.submitJob({
+    idempotencyKey: 'grant-gone',
+    request: movieRequest(bytes),
+    sourceCapability: CAPABILITY
+  })
+  const failed = await waitForState(manager, job.jobId, 'failed')
+  t.is(failed.errorCode, 'SOURCE_GRANT_UNAVAILABLE', 'the grant failure names itself')
+  t.is(failed.recoverable, false, 'and the run that hit it is over')
+
+  // The stub disarms itself after firing once, so the source is reachable again,
+  // and the caller has a new grant to prove it re-authorized the source.
+  const revived = await manager.submitJob({
+    idempotencyKey: 'grant-gone',
+    request: movieRequest(bytes),
+    sourceCapability: 'source-capability-grant-gone-000000001'
+  })
+  t.not(revived.state, 'failed', 'a fresh grant reopens it instead of replaying the failure')
+  t.is(revived.jobId, job.jobId, 'as the same job, so idempotency still holds')
+  t.is(revived.bytesReceived, 0, 'starting over, because a terminal failure keeps no progress worth trusting')
+})
+
 test('withdrawn retention consent terminates the job and deletes what it had downloaded', async (t) => {
   const bytes = Buffer.from('abcdefghijkl')
   let admitted = true

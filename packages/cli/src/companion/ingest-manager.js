@@ -65,6 +65,18 @@ const SOURCE_RESET_PROGRESS_ERRORS = new Set([
   'HASH_MISMATCH',
   'SPOOL_LENGTH_MISMATCH'
 ])
+
+// A terminal failure about REACHING the source, as opposed to what the source
+// turned out to be. A fresh grant genuinely answers these: the capability had
+// expired, been revoked, or was refused. Everything else stays terminal, and the
+// identity failures must: the job id is a hash of the request INCLUDING
+// expected.etag, so a resubmit that lands on this job id necessarily carries the
+// same identity - retrying it would retry against bytes we already know
+// disagree. A genuinely different source produces a different job id.
+const REVIVABLE_TERMINAL_ERRORS = new Set([
+  'SOURCE_GRANT_UNAVAILABLE',
+  'SOURCE_AUTH_FAILED'
+])
 // A failure that is the transport's fault, or the process's, is an
 // INTERRUPTION: the bytes already on disk are still a truthful prefix of the
 // title this job asked for, so the job keeps its progress and its grant and a
@@ -1155,7 +1167,16 @@ export function createIngestManager ({
           let spoolAdopted = false
           let capabilityAdopted = false
           try {
-            if (existing.state === 'failed' && existing.recoverable === true && (spool != null || incomingCapability)) {
+            // A fresh capability is the caller re-authorizing this source, and
+            // that has to be able to revive a job that failed for good. Without
+            // this, one permanent failure memoizes forever: every later
+            // submission gets the old failure back, so a title broken by a bug
+            // stays unarchivable even after the bug is fixed. Retry is bounded
+            // by whatever makes the caller ask again - for a relay that is a
+            // human pressing play, not a loop.
+            if (existing.state === 'failed' &&
+              (existing.recoverable === true || REVIVABLE_TERMINAL_ERRORS.has(existing.errorCode)) &&
+              (spool != null || incomingCapability)) {
               const settling = active.get(existing.jobId)
               if (settling) {
                 // The old run owns its attachment through async revocation and
@@ -1171,10 +1192,16 @@ export function createIngestManager ({
               }
             }
             if (spool != null) incomingSpool = normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
-            if (existing.state === 'failed' && existing.recoverable === true && (incomingSpool || incomingCapability)) {
+            const revivable = existing.recoverable === true ||
+              REVIVABLE_TERMINAL_ERRORS.has(existing.errorCode)
+            if (existing.state === 'failed' && revivable && (incomingSpool || incomingCapability)) {
               existing = await store.reopenRecoverable(existing.jobId, {
                 expectedVersion: existing.version,
-                resetProgress: SOURCE_RESET_PROGRESS_ERRORS.has(existing.errorCode)
+                // A terminal failure keeps no progress worth trusting: whatever
+                // ended it was, by definition, not a transport blip. A
+                // recoverable one still resumes from its confirmed bytes.
+                resetProgress: existing.recoverable !== true || SOURCE_RESET_PROGRESS_ERRORS.has(existing.errorCode),
+                allowUnrecoverable: existing.recoverable !== true
               })
             }
             let attached = ephemeral.get(existing.jobId)

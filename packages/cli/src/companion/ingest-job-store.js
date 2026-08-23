@@ -281,11 +281,15 @@ export function createIngestJobStore ({ bee, now = () => Date.now() } = {}) {
       })
     },
 
-    reopenRecoverable (jobId, { expectedVersion, resetProgress = false } = {}) {
+    // `allowUnrecoverable` is the caller stating it has something new to try
+    // with - a fresh source capability or spool. Without it a job that failed
+    // for good is memoized forever: every later submission gets the old failure
+    // back, so a title broken by a since-fixed bug can never be archived again.
+    reopenRecoverable (jobId, { expectedVersion, resetProgress = false, allowUnrecoverable = false } = {}) {
       return serialized(async () => {
         const current = await readNodeUnserialized(jobKey(jobId))
         checkedCurrent(current, { jobId, expectedVersion, from: 'failed' })
-        if (current.recoverable !== true) {
+        if (current.recoverable !== true && allowUnrecoverable !== true) {
           throw storeError('INGEST_JOB_TERMINAL', 'INGEST_JOB_TERMINAL: failed')
         }
         const next = {

@@ -718,7 +718,50 @@ export function createGrantedRangedSource ({
   if (typeof etag !== 'string' || etag.length === 0) throw new Error('granted source requires the grant ETag')
   const digest = typeof sha256 === 'string' && sha256.length > 0 ? sha256 : null
 
+  // A range in flight and a range being consumed, and never more than that.
+  //
+  // getRange pushes chunks through a callback rather than yielding them, so a
+  // range is materialised whole before any of it can be handed on. Asking for
+  // the NEXT range the moment the current one's body has ended keeps the
+  // upstream pulling while this one is hashed, appended and — under block
+  // offload — uploaded, work the asset writer awaits per block and which would
+  // otherwise leave the connection idle for the whole of it.
+  //
+  // Exactly one request is ever open, because the read-ahead is issued after
+  // its predecessor's body ended rather than alongside it, and at most one
+  // completed range is held unconsumed. So an ingest's resident cost is two
+  // ranges and still does not grow with the title. Reading further ahead would
+  // put the title back in memory, which is the one thing this path exists to
+  // avoid.
+  function fetchRange (start, readSignal) {
+    const end = Math.min(start + chunkBytes, length) - 1
+    const parts = []
+    const pending = client.getRange({
+      capability,
+      jobId,
+      etag,
+      length,
+      start,
+      end,
+      signal: readSignal,
+      onChunk: (chunk) => { parts.push(chunk) }
+    }).then(() => ({ parts, end }))
+    // A read-ahead can fail while its predecessor is still being consumed, with
+    // nothing awaiting it yet. It is re-raised at the await below; this keeps it
+    // from being an unhandled rejection until then, and from becoming one at all
+    // if the consumer stops before it gets there.
+    pending.catch(() => {})
+    return pending
+  }
+
   async function *readFrom (byteOffset) {
+    // Scoped to this read, and following the caller's signal rather than
+    // replacing it: a consumer that stops mid-title leaves no read-ahead
+    // transferring bytes nobody will ask for.
+    const reads = new AbortController()
+    const abortReads = () => reads.abort()
+    signal?.addEventListener?.('abort', abortReads, { once: true })
+    if (signal?.aborted === true) reads.abort()
     try {
       // An offset equal to the length is the attempt whose download finished and
       // then died before the core was sealed: there is nothing left to ask for,
@@ -727,28 +770,15 @@ export function createGrantedRangedSource ({
         throw new Error(`granted source cannot open at byte ${byteOffset} of ${length}`)
       }
       const hasher = digest === null ? null : sha256Hasher()
-      let position = byteOffset
-      while (position < length) {
-        // One range is held while its body arrives, because getRange pushes
-        // chunks through a callback rather than yielding them. The bound is the
-        // client's own range size, so it does not grow with the title.
-        const end = Math.min(position + chunkBytes, length) - 1
-        const parts = []
-        await client.getRange({
-          capability,
-          jobId,
-          etag,
-          length,
-          start: position,
-          end,
-          signal,
-          onChunk: (chunk) => { parts.push(chunk) }
-        })
+      let pending = byteOffset < length ? fetchRange(byteOffset, reads.signal) : null
+      while (pending !== null) {
+        const { parts, end } = await pending
+        const position = end + 1
+        pending = position < length ? fetchRange(position, reads.signal) : null
         for (const part of parts) {
           hasher?.update(part)
           yield part
         }
-        position = end + 1
         if (onProgress) await onProgress(position)
       }
       if (hasher !== null && hasher.digest() !== digest) {
@@ -759,6 +789,9 @@ export function createGrantedRangedSource ({
     } catch (error) {
       onFailure?.(error)
       throw error
+    } finally {
+      signal?.removeEventListener?.('abort', abortReads)
+      reads.abort()
     }
   }
 

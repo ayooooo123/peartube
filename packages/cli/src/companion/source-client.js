@@ -3,13 +3,13 @@ import crypto from 'hypercore-crypto'
 import { request as requestHTTP } from '#http'
 import { request as requestHTTPS } from '#https'
 
+import { MAX_SOURCE_CHUNK_BYTES } from '../constants.js'
 import { signControlRequest } from './auth.js'
 
 const SOURCE_PREFIX = '/internal/peartube/v2/sources/'
 const CAPABILITY = /^[A-Za-z0-9._~-]{16,256}$/
 const CLIENT = /^[A-Za-z0-9._-]{1,128}$/
 const MIME_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$/
-const DEFAULT_CHUNK_BYTES = 4 * 1024 * 1024
 const DEFAULT_TIMEOUT_MS = 20_000
 const MAX_SOURCE_BYTES = 5 * 1024 * 1024 * 1024
 
@@ -136,7 +136,7 @@ export function createSourceCallbackClient ({
   origin,
   client,
   sharedSecret,
-  chunkBytes = DEFAULT_CHUNK_BYTES,
+  chunkBytes = MAX_SOURCE_CHUNK_BYTES,
   requestTimeoutMs = DEFAULT_TIMEOUT_MS,
   clock = Date.now,
   randomBytes = crypto.randomBytes,
@@ -148,8 +148,8 @@ export function createSourceCallbackClient ({
   if (typeof sharedSecret !== 'string' || !/^[a-f0-9]{64}$/.test(sharedSecret)) {
     throw new TypeError('source callback shared secret must be 64 lowercase hexadecimal characters')
   }
-  if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1 || chunkBytes > DEFAULT_CHUNK_BYTES) {
-    throw new TypeError('source callback chunkBytes must be between 1 and 4194304')
+  if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1 || chunkBytes > MAX_SOURCE_CHUNK_BYTES) {
+    throw new TypeError(`source callback chunkBytes must be between 1 and ${MAX_SOURCE_CHUNK_BYTES}`)
   }
   if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1) {
     throw new TypeError('source callback request timeout must be positive')

@@ -1,5 +1,5 @@
 import { join } from '#path'
-import { DEFAULT_COMPANION_CONFIG } from '../constants.js'
+import { DEFAULT_COMPANION_CONFIG, MAX_SOURCE_CHUNK_BYTES } from '../constants.js'
 
 function has (object, key) {
   return Object.prototype.hasOwnProperty.call(object || {}, key)
@@ -142,8 +142,8 @@ export function resolveCompanionConfig (raw = {}, { storagePath } = {}) {
     throw new Error('companion.sourceSharedSecret is required when sourceOrigin is configured')
   }
   config.sourceChunkBytes = positiveInteger(config.sourceChunkBytes, undefined, 'companion.sourceChunkBytes')
-  if (config.sourceChunkBytes > 4 * 1024 * 1024) {
-    throw new Error('companion.sourceChunkBytes must not exceed 4194304')
+  if (config.sourceChunkBytes > MAX_SOURCE_CHUNK_BYTES) {
+    throw new Error(`companion.sourceChunkBytes must not exceed ${MAX_SOURCE_CHUNK_BYTES}`)
   }
   config.sourceRequestTimeoutMs = positiveInteger(config.sourceRequestTimeoutMs, undefined, 'companion.sourceRequestTimeoutMs')
   return config

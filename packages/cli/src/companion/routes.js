@@ -49,7 +49,29 @@ function decodedSegment (value, field) {
   }
 }
 
+// The specific reason is deliberately NOT returned to the caller: a public relay
+// should not narrate its validation to whoever is probing it. Swallowing it
+// entirely, though, leaves an operator watching their own relay refuse a real
+// archive with nothing to go on - that cost hours today. So the original code,
+// message and field ride along on the contract error under `backendDetail`,
+// where the request handler logs them locally. `backendDetail` is not part of
+// any response body.
 function backendFailure (error) {
+  // An error with no code is the interesting case, not the boring one: it is an
+  // unexpected throw that becomes an opaque BACKEND_ERROR on the wire, so the
+  // stack is the only thing that will ever explain it.
+  const detail = {
+    code: typeof error?.code === 'string' ? error.code : null,
+    reason: typeof error?.message === 'string' ? error.message.slice(0, 300) : null,
+    field: typeof error?.field === 'string' ? error.field : null,
+    at: typeof error?.stack === 'string' ? error.stack.split('\n').slice(1, 4).join(' | ').slice(0, 400) : null
+  }
+  const translated = translateBackendFailure(error)
+  if (detail.code !== null || detail.reason !== null) translated.backendDetail = detail
+  return translated
+}
+
+function translateBackendFailure (error) {
   const raw = typeof error?.code === 'string' ? error.code.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') : ''
   if (raw === 'CANDIDATE_EXPIRED') return contractError(410, 'CANDIDATE_EXPIRED', 'Candidate reference expired')
   if (raw === 'SOURCE_NOT_CURRENT') return contractError(409, 'SOURCE_NOT_CURRENT', 'Candidate source is no longer current')
@@ -175,7 +197,7 @@ function allow (methods) {
   throw Object.assign(contractError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed'), { allow: methods.join(', ') })
 }
 
-export function createCompanionRouter ({ service, config = {}, clock = Date.now, capabilities = null } = {}) {
+export function createCompanionRouter ({ service, config = {}, clock = Date.now, capabilities = null, logger = null } = {}) {
   if (!service) throw new TypeError('service is required')
   if (typeof clock !== 'function') throw new TypeError('clock is required')
   const capabilityStore = capabilities || createStreamCapabilityStore({ now: clock })
@@ -357,6 +379,9 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
       throw contractError(404, 'NOT_FOUND', 'Companion route not found')
     } catch (error) {
       const known = error instanceof CompanionContractError ? error : backendFailure(error)
+      // The caller gets a deliberately generic body; the operator gets the real
+      // reason in their own logs.
+      if (known.backendDetail) logger?.archive?.warn?.('Companion request refused', known.backendDetail)
       const headers = error?.allow ? { allow: error.allow } : {}
       return routeResponse(known.statusCode, errorBody(known), headers)
     }

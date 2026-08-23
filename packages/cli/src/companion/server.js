@@ -429,7 +429,7 @@ export function createCompanionServer ({
   }
 
   const replayStore = nonceStore || createNonceStore({ maxEntries: config.maxNonces })
-  const router = createCompanionRouter({ service, config, clock, capabilities })
+  const router = createCompanionRouter({ service, config, clock, capabilities, logger })
   const streamRoute = createCompanionStreamRoute({
     capabilities: router.capabilities,
     service,

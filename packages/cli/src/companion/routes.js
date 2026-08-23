@@ -78,6 +78,14 @@ function translateBackendFailure (error) {
   if (raw === 'IDEMPOTENCY_CONFLICT') return contractError(409, raw, 'Idempotency key is already bound to another request')
   if (raw === 'INGEST_JOB_TERMINAL' || raw === 'INGEST_VERSION_CONFLICT') return contractError(409, raw, 'Ingest job state conflict')
   if (raw === 'STORAGE_ADMISSION_DENIED') return contractError(507, raw, 'Insufficient storage for ingest')
+  // Retention admission is a policy state, not a backend fault. It falls out of
+  // the relay having no control policy yet - which is the normal condition for
+  // the seconds between a restart and the operator's next policy push - and
+  // reporting it as BACKEND_ERROR made a transient startup window look like the
+  // relay had crashed. 503 says "not yet", which is what a caller can act on.
+  if (raw === 'RETENTION_ADMISSION_DENIED') {
+    return contractError(503, raw, 'Retention policy is not ready')
+  }
   if (raw === 'INGEST_MANAGER_CLOSED' || raw === 'INGEST_PERSISTENCE_FAILED' || raw === 'INGEST_PERSISTENCE_CORRUPT') {
     return contractError(503, raw, 'Ingest service is unavailable')
   }

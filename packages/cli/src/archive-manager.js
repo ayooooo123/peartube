@@ -702,7 +702,8 @@ export function createGrantedRangedSource ({
   // upload manager reports a failure as a message rather than as the exception
   // it was, so a caller that has to tell a lapsed grant from a revoked one
   // needs to see the exception while it still exists.
-  onFailure = null
+  onFailure = null,
+  logger = null
 } = {}) {
   if (!client || typeof client.getRange !== 'function') {
     throw new Error('granted source requires a range-capable source client')
@@ -772,13 +773,30 @@ export function createGrantedRangedSource ({
       const hasher = digest === null ? null : sha256Hasher()
       let pending = byteOffset < length ? fetchRange(byteOffset, reads.signal) : null
       while (pending !== null) {
+        // Where an archive's time actually goes. The read-ahead means awaiting
+        // the upstream should cost nothing once the first range has landed, so a
+        // non-zero wait says the source is the limit, and a large consume says
+        // this relay's own hash/append/offload path is. Measured because the
+        // arithmetic was wrong twice: cold opens were eliminated and throughput
+        // did not move.
+        const fetchStartedAt = Date.now()
         const { parts, end } = await pending
+        const fetchMs = Date.now() - fetchStartedAt
         const position = end + 1
         pending = position < length ? fetchRange(position, reads.signal) : null
+        const consumeStartedAt = Date.now()
+        let rangeBytes = 0
         for (const part of parts) {
           hasher?.update(part)
+          rangeBytes += part.byteLength ?? part.length ?? 0
           yield part
         }
+        logger?.archive?.info?.('[archive-range] served', {
+          jobId,
+          bytes: rangeBytes,
+          fetchMs,
+          consumeMs: Date.now() - consumeStartedAt
+        })
         if (onProgress) await onProgress(position)
       }
       if (hasher !== null && hasher.digest() !== digest) {
@@ -1031,7 +1049,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       // up front, which is a stronger figure for the retention budget than the
       // size of something already downloaded, and it is known before a single
       // byte is spent.
-      const granted = sourceGrant ? createGrantedRangedSource({ ...sourceGrant, signal }) : null
+      const granted = sourceGrant ? createGrantedRangedSource({ ...sourceGrant, signal, logger: runtime?.logger }) : null
       // A streaming source has no file to stat, and with block offload behind it
       // the title is not what comes to rest here anyway. The content-length the
       // server reported is the honest figure for the retention budget; when the

@@ -16,7 +16,7 @@ import { parseBlobId } from './blob-utils.js';
 
 import { probeMp4File, probeMp4Buffer, isMp4MimeType } from './mp4-playback-probe.js';
 import { saveBlobPlaybackProfile } from './blob-playback-profile.js';
-import { MEDIA_COORDINATE_SHAPES, normalizeContentDetails } from './channel/structured-content.js';
+import { MEDIA_COORDINATE_SHAPES, episodeWorkIdentifier, normalizeContentDetails } from './channel/structured-content.js';
 import {
   ARTWORK_RENDITION_PURPOSES,
   createImmutableRenditionWriter,
@@ -1056,7 +1056,7 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
   // Every authority numbers its kinds in separate spaces, and an episode
   // upload carries its show's id, so the shape has to say which is meant.
   const workIdentifier = episodic
-    ? `show:${providerId}:s${metadata.seasonNumber}:e${metadata.episodeNumber}`
+    ? episodeWorkIdentifier(providerId, metadata.seasonNumber, metadata.episodeNumber)
     : `${metadata.contentKind}:${providerId}`;
   const subjectRef = providerId
     ? createEntityReference({

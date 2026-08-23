@@ -735,7 +735,7 @@ test('authenticated search reaches the backend and returns URL-free candidates',
   await server.close()
 })
 
-test('real relay companion forwards movie limits and rejects unsupported episode search', async (t) => {
+test('real relay companion forwards movie limits and episode coordinates alike', async (t) => {
   const storagePath = tempDir(t, 'peartube-companion-search-service-')
   const config = resolveRelayConfig({
     storage: { path: storagePath, maxBytes: 4096, minFreeBytes: 0 },
@@ -748,9 +748,11 @@ test('real relay companion forwards movie limits and rejects unsupported episode
   const runtime = fakeRuntime()
   let searches = 0
   let options = null
-  runtime.api.searchIndexCandidates = async (_selector, value) => {
+  let selector = null
+  runtime.api.searchIndexCandidates = async (value, searchOptions) => {
     searches++
-    options = value
+    selector = value
+    options = searchOptions
     return []
   }
   const service = await createRelayService({
@@ -773,15 +775,17 @@ test('real relay companion forwards movie limits and rejects unsupported episode
   t.is(movie.statusCode, 200)
   t.is(options.limit, 1)
 
-  const episodePath = '/api/v2/search?namespace=tmdb&identifier=1399&kind=episode&season=1&episode=2'
+  const episodePath = '/api/v2/search?namespace=tmdb&identifier=1399&kind=episode&season=1&episode=2&limit=4'
   const episode = await request({
     socketPath: state.socketPath,
     path: episodePath,
     headers: signedHeaders({ path: episodePath, timestamp: Date.now(), nonce: 'real-episode-nonce-01' })
   })
-  t.is(episode.statusCode, 501)
-  t.is(JSON.parse(episode.body).error.code, 'CAPABILITY_UNAVAILABLE')
-  t.is(searches, 1)
+  t.is(episode.statusCode, 200)
+  t.alike(JSON.parse(episode.body), { candidates: [], cursor: null })
+  t.alike(selector, { namespace: 'tmdb', identifier: '1399', kind: 'episode', season: 1, episode: 2 })
+  t.is(options.limit, 4)
+  t.is(searches, 2)
   await service.close()
 })
 

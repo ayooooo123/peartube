@@ -142,21 +142,40 @@ test('router dispatches search with bounded work and strips embedded locators re
   t.not(serialized.includes('magnet:'), true)
 })
 
-test('episode search returns an explicit capability error before backend delegation', async (t) => {
-  let delegated = false
+test('episode search delegates the show coordinates and its ordinals', async (t) => {
+  let selector = null
+  let options = null
+  const router = createCompanionRouter({
+    service: {
+      async searchIndexCandidates (input, searchOptions) {
+        selector = input
+        options = searchOptions
+        return [candidate({ work: { title: 'Winter Is Coming', releaseYear: 2011 } })]
+      }
+    },
+    clock: () => NOW
+  })
+  const result = await router.dispatch(request('GET', '/api/v2/search?namespace=tmdb&identifier=1399&kind=episode&season=1&episode=2&limit=3&cursor=page_2'))
+  t.is(result.statusCode, 200)
+  t.alike(selector, { namespace: 'tmdb', identifier: '1399', kind: 'episode', season: 1, episode: 2 })
+  t.is(options.limit, 3)
+  t.is(options.cursor, 'page_2')
+  t.is(result.body.candidates.length, 1)
+  t.not(hasUrlField(result.body), true)
+})
+
+test('an episode the relay does not hold answers 200 with no candidates', async (t) => {
   const router = createCompanionRouter({
     service: {
       async searchIndexCandidates () {
-        delegated = true
         return []
       }
     },
     clock: () => NOW
   })
-  const result = await router.dispatch(request('GET', '/api/v2/search?namespace=tmdb&identifier=1399&kind=episode&season=1&episode=2'))
-  t.is(result.statusCode, 501)
-  t.is(result.body.error.code, 'CAPABILITY_UNAVAILABLE')
-  t.is(delegated, false)
+  const result = await router.dispatch(request('GET', '/api/v2/search?namespace=tmdb&identifier=1399&kind=episode&season=9&episode=9'))
+  t.is(result.statusCode, 200)
+  t.alike(result.body, { candidates: [], cursor: null })
 })
 
 test('open verifies a candidate, resolves its asset, and returns a scoped reusable capability', async (t) => {

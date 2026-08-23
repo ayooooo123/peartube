@@ -53,11 +53,14 @@ const BUNDLE_FIELDS = new Set([
 // same wrong digest for as long as anyone keeps trying.
 //
 // These jobs stay RECOVERABLE, because corruption need not recur and a resubmit
-// is worth making. They just cannot start where the last attempt stopped. Which
-// means this one set drives the same decision across both substrates: it zeroes
-// `bytesReceived` for a spooled job, and it reclaims the staging core for a
-// granted one, whose resume offset is read off the staged merkle tree and would
-// otherwise ignore the zeroed counter entirely.
+// is worth making. They just cannot start where the last attempt stopped.
+//
+// One name, two mechanisms, because it is one decision about two substrates:
+// on reopen it zeroes `bytesReceived`, which is where a SPOOLED job resumes
+// from; in runJob's catch it reclaims the staging core, which is where a
+// GRANTED job resumes from. A granted job reads its offset off the staged
+// merkle tree, so zeroing the counter alone would leave it resuming into the
+// same bytes.
 const SOURCE_RESET_PROGRESS_ERRORS = new Set([
   'HASH_MISMATCH',
   'SPOOL_LENGTH_MISMATCH'
@@ -1067,10 +1070,19 @@ export function createIngestManager ({
       // be resumed, so it goes with the job. A recoverable one keeps it: that
       // prefix is the entire reason a resubmit is cheap.
       //
-      // Unless the prefix is what failed. A digest mismatch condemns the staged
-      // bytes without condemning the job, and those are two different questions:
-      // resuming into them could only ever reproduce the same mismatch, so the
-      // staging state goes even though the job survives to be retried from zero.
+      // The second clause is a GUARD, not a live path. Today no job can hold
+      // staging state and fail this way: archive-manager's ranged source sets
+      // `resumable: digest === null`, so a grant that states a SHA-256 is read
+      // in one pass from byte zero and never builds `resume` at all, and the two
+      // spool-path producers of these codes never pass `resume` either. So the
+      // combination cannot arise — while that gate holds.
+      //
+      // It is worth keeping because that gate is the tempting thing to relax:
+      // it is the only reason a digest-bearing grant cannot resume, and the day
+      // someone lets one resume, this line is what stops a condemned prefix
+      // being resumed into forever. Relaxing `resumable: digest === null`
+      // without this is the bug. See test/poisoned-progress.test.mjs, which
+      // reaches the combination deliberately.
       if (!recoverable || SOURCE_RESET_PROGRESS_ERRORS.has(code)) await reclaimStaging(jobId)
       return terminal
     } finally {

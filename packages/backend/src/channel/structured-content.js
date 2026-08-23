@@ -50,6 +50,15 @@ export const MEDIA_COORDINATE_SHAPES = Object.freeze({
 
 export const MEDIA_COORDINATE_KINDS = Object.freeze(Object.keys(MEDIA_COORDINATE_SHAPES))
 
+// The coordinate an episode's work is named by. An episode is a show plus a
+// place in it, so its work identifier is the show's provider id with the
+// ordinals appended, under the show's own namespace. The archive writes this
+// string and index search reads it back, and those two spelling it separately
+// is precisely how an archived episode stayed invisible to a relay holding it.
+export function episodeWorkIdentifier (mediaId, seasonNumber, episodeNumber) {
+  return `show:${mediaId}:s${seasonNumber}:e${episodeNumber}`
+}
+
 // A channel and a work do not illustrate themselves the same way, and asset
 // bindings require every role ARTWORK_ROLES names. Content roles therefore live
 // in their own set: widening the channel set silently demands new bound assets.

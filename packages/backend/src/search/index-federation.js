@@ -1,9 +1,11 @@
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 
+import { episodeWorkIdentifier } from '../channel/structured-content.js'
 import {
   MAX_INDEX_QUERY_DEADLINE_MS,
   MAX_INDEX_QUERY_RESULTS,
+  MAX_INDEX_QUERY_TEXT_BYTES,
   decodeIndexQueryPage,
   encodeIndexQueryPage,
   normalizeIndexQuerySelectors,
@@ -57,17 +59,42 @@ function exactFields(value, fields, name) {
   for (const field of fields) if (!Object.hasOwn(value, field)) fail(`${name} must have exact fields`)
 }
 
+function ordinal(value, name) {
+  if (!Number.isSafeInteger(value) || value < 1) fail(`${name} must be a positive integer`)
+  return value
+}
+
+// A movie is named directly by its provider id; an episode is named by its
+// show's id plus its place in the show. Locating either is the same
+// exact-external-ref index lookup against the same coordinate the archive
+// signed — only the coordinate an episode is keyed by has to be composed here
+// rather than passed through, because a caller holds the show and the ordinals
+// separately and never the joined string.
 function normalizeSearchSelector(value) {
-  exactFields(value, ['namespace', 'identifier', 'kind'], 'search selector')
+  if (!value || typeof value !== 'object' || Array.isArray(value)) fail('search selector must be an object')
+  const kind = boundedText(value.kind, MAX_KIND_BYTES, 'selector kind')
+  const episodic = kind === 'episode'
+  exactFields(
+    value,
+    episodic ? ['namespace', 'identifier', 'kind', 'season', 'episode'] : ['namespace', 'identifier', 'kind'],
+    'search selector',
+  )
+  const identifier = episodic
+    ? episodeWorkIdentifier(
+        boundedText(value.identifier, MAX_INDEX_QUERY_TEXT_BYTES, 'selector identifier'),
+        ordinal(value.season, 'selector season'),
+        ordinal(value.episode, 'selector episode'),
+      )
+    : value.identifier
   const protocolSelector = normalizeIndexQuerySelectors([{
     type: 'exact-external-ref',
     namespace: value.namespace,
-    identifier: value.identifier,
+    identifier,
   }])[0]
   return Object.freeze({
     namespace: protocolSelector.namespace,
     identifier: protocolSelector.identifier,
-    kind: boundedText(value.kind, MAX_KIND_BYTES, 'selector kind'),
+    kind,
   })
 }
 

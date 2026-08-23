@@ -181,13 +181,20 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
   const capabilityStore = capabilities || createStreamCapabilityStore({ now: clock })
   async function search (input, url) {
     const query = decodeSearchQuery(url.searchParams)
-    if (query.selector.kind === 'episode') unavailable('Episode index search')
     if (typeof service.searchIndexCandidates !== 'function') unavailable('Index search')
+    // An exact selector is rebuilt field by field so a title selector's own
+    // fields can never reach the backend as an exact one. An episode carries
+    // its place in the show alongside the show's coordinates: without the
+    // ordinals the backend can only find the series, which is not what was
+    // asked for.
     const delegatedSelector = query.selector.namespace
       ? {
           namespace: query.selector.namespace,
           identifier: query.selector.identifier,
-          kind: query.selector.kind
+          kind: query.selector.kind,
+          ...(query.selector.kind === 'episode'
+            ? { season: query.selector.season, episode: query.selector.episode }
+            : {})
         }
       : query.selector
     const options = { limit: query.limit, cursor: query.cursor, signal: input.signal }

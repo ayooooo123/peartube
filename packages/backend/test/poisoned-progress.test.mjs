@@ -24,7 +24,20 @@ import { SourceCallbackError } from '../../cli/src/companion/source-client.js'
 //
 // Conflating them costs a job that retries forever and can never succeed: every
 // attempt resumes from the same poisoned prefix and recomputes the same wrong
-// digest until the staging TTL expires. This file is about that distinction.
+// digest until the staging TTL expires.
+//
+// READ THIS BEFORE CHANGING THE GATE. The first test reaches a combination the
+// wiring currently prevents. archive-manager's ranged source sets
+// `resumable: digest === null`, so a grant that states a SHA-256 is read in one
+// pass from byte zero and never builds `resume`, which means no job that owns
+// staging state can fail with HASH_MISMATCH today. The test gets there by
+// latching that failure onto a digest-less grant.
+//
+// That is deliberate, and it is why the test exists rather than in spite of it.
+// `resumable: digest === null` is the only reason a digest-bearing grant cannot
+// resume, so it is the obvious thing to relax — and the moment it is relaxed
+// this combination becomes live. The test pins the behaviour now so relaxing
+// the gate later is a one-line change rather than a silent livelock.
 //
 // It lives in the backend package because it needs a real Corestore and real
 // staging objects for the reclaim to be observable at all — a manager with no

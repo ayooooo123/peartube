@@ -484,7 +484,11 @@ test('offload stays off until the selected provider asks for it', async (t) => {
 test('an unusable window is reported and reserved against as the number actually enforced', async (t) => {
   const { DEFAULT_OFFLOAD_WINDOW_BYTES } = await import('@peartube/backend/archive')
 
-  for (const unusable of [undefined, null, 'lots', Number.NaN, -1, 1.5, Number.MAX_SAFE_INTEGER + 2]) {
+  // `null`, `''` and `false` are the coercion traps: Number() turns all three
+  // into 0, which is a REAL setting meaning offload every tracked block. An
+  // absent value collapsing into the most aggressive policy the relay has is
+  // the same class of bug as the divergence this test exists for.
+  for (const unusable of [undefined, null, '', '   ', false, true, 'lots', Number.NaN, -1, 1.5, Number.MAX_SAFE_INTEGER + 2]) {
     const s3 = s3Recorder()
     const offload = await createRelayBlockOffload({
       config: { archive: { s3: { ...S3_SETTINGS, offloadWindowBytes: unusable } } },
@@ -511,4 +515,14 @@ test('an unusable window is reported and reserved against as the number actually
     createSigner: zero.createSigner
   })
   t.is(offloadEverything.windowBytes, 0, 'a window of zero is kept, not treated as absent')
+
+  // A config file or an environment variable says numbers as strings, and that
+  // is the operator having configured a window, not having failed to.
+  const stringy = s3Recorder()
+  const fromString = await createRelayBlockOffload({
+    config: { archive: { s3: { ...S3_SETTINGS, offloadWindowBytes: String(WINDOW_BYTES) } } },
+    fetchImpl: stringy.fetchImpl,
+    createSigner: stringy.createSigner
+  })
+  t.is(fromString.windowBytes, WINDOW_BYTES, 'a numeric string is the number it says')
 })

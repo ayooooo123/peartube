@@ -78,6 +78,21 @@ function selectProvider (archive) {
   return { name, section, config: archive[section] || {} }
 }
 
+// A usable resident window, or the default. Only a number or a numeric string
+// counts as the operator having said one: `null`, `undefined`, `''`, a boolean
+// and anything unparseable all mean "not configured", and must NOT collapse to
+// 0 — which is a real setting that offloads every tracked block.
+function resolveWindowBytes (value) {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value >= 0 ? value : DEFAULT_OFFLOAD_WINDOW_BYTES
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value)
+    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : DEFAULT_OFFLOAD_WINDOW_BYTES
+  }
+  return DEFAULT_OFFLOAD_WINDOW_BYTES
+}
+
 /**
  * Build the relay's block offload, or return null when the operator has not
  * asked for it.
@@ -86,6 +101,7 @@ function selectProvider (archive) {
  * configured. That is deliberate: the alternative is a relay that quietly keeps
  * every block on the volume the operator was trying to stop filling.
  */
+
 export async function createRelayBlockOffload ({
   config,
   logger = null,
@@ -116,12 +132,15 @@ export async function createRelayBlockOffload ({
   // itself by it, and `localWorkingBytes` reserves disk against it. Only the
   // offloader validated its own argument, so an unusable configured value left
   // it quietly working to the default while reporting and admission carried the
-  // raw NaN — a relay enforcing one number and reserving disk against another.
-  // 0 stays meaningful and means offload every tracked block.
-  const configuredWindowBytes = Number(settings.offloadWindowBytes)
-  const windowBytes = Number.isSafeInteger(configuredWindowBytes) && configuredWindowBytes >= 0
-    ? configuredWindowBytes
-    : DEFAULT_OFFLOAD_WINDOW_BYTES
+  // raw value — a relay enforcing one number and reserving disk against another.
+  //
+  // Presence and type are checked BEFORE any coercion, and that order is the
+  // whole point: `Number(null)` is 0, and 0 is a legitimate setting meaning
+  // offload every tracked block. Coercing first therefore turns a JSON null —
+  // an absent value — into the most aggressive retention policy the relay has,
+  // silently. A numeric string is accepted on purpose, because a config file or
+  // an environment variable is a perfectly ordinary way to say 8388608.
+  const windowBytes = resolveWindowBytes(settings.offloadWindowBytes)
   const prefix = typeof settings.prefix === 'string' ? settings.prefix : ''
 
   // Everything below this block is provider-blind: the three factories return

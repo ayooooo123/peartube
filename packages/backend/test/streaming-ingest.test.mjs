@@ -12,6 +12,7 @@ import { createOffloadStorage } from '../src/archive/offload-storage.js'
 import { createRemoteBlockStore, remoteBlockKey } from '../src/archive/remote-block-store.js'
 import {
   ASSET_BLOCK_SIZE,
+  STAGING_UPLOAD_CONCURRENCY,
   verifyStaticAssetDescriptor,
   writeStaticAsset,
 } from '../src/assets/static-core.js'
@@ -33,9 +34,9 @@ const BYTE_LENGTH = ((BLOCK_COUNT - 1) * ASSET_BLOCK_SIZE) + TAIL_BYTES
 const OFFLOADED_BLOCKS = 5
 const RESIDENT_AFTER = ASSET_BLOCK_SIZE + TAIL_BYTES
 
-// The bound this mode exists to hold: the offload window, plus the one block
-// being moved, held twice while it is being moved (its staged copy and its
-// finished copy). Independent of the size of the title.
+// The bound pass 2 exists to hold: the offload window, plus the one block being
+// moved, held twice while it is being moved (its staged copy and its finished
+// copy). Independent of the size of the title.
 const PEAK_BOUND = WINDOW_BYTES + (2 * ASSET_BLOCK_SIZE)
 
 const PREFIX = 'relay'
@@ -206,13 +207,18 @@ test('streaming ingest archives a title larger than its local footprint from a s
     return onDisk
   }
 
-  // Pass 1 has its own worst instant: the block is on local disk and is being
-  // uploaded. Sampling inside the put is the only honest place to catch it.
+  // Pass 1 has its own worst instant: a block is on local disk and is being
+  // uploaded, alongside every other upload still waiting to be confirmed.
+  // Sampling inside the put is the only honest place to catch it, and it is
+  // kept apart from `peakOnDisk` because the two passes bound different things:
+  // pass 1 by how many uploads may overlap, pass 2 by the offload window.
   hooks.onPut = async (key) => {
-    const onDisk = await sample()
     if (stagingKeyHex !== null && key.startsWith(`${PREFIX}/blocks/${stagingKeyHex}/`)) {
+      const onDisk = await residentBlockBytes()
       if (onDisk > pass1Peak) pass1Peak = onDisk
+      return
     }
+    await sample()
   }
 
   const written = await writeStaticAsset({
@@ -257,9 +263,19 @@ test('streaming ingest archives a title larger than its local footprint from a s
   t.is(source.iterations, 1, 'the one-shot source was read exactly once: one CDN fetch for the whole archive')
   t.is(written.ingest.mode, 'streaming', 'and the write reports it took the streaming path')
   t.is(stagedObjectsAtHandover.length, BLOCK_COUNT, 'pass 1 put the whole title in the object store under the staging key')
-  t.is(pass1Peak, ASSET_BLOCK_SIZE, 'while pass 1 never held more than the block it was uploading')
+  // Pass 1 uploads several blocks at once so the download is not stopped for
+  // each round trip, and a block's local copy is the only copy until the object
+  // store confirms the object — so it has to outlive its own upload. That makes
+  // the footprint the overlap depth, not one block. What still matters, and is
+  // what this asserts, is that it is a CONSTANT: bounded, and no function of how
+  // large the title is.
+  t.ok(
+    pass1Peak <= STAGING_UPLOAD_CONCURRENCY * ASSET_BLOCK_SIZE,
+    `pass 1 held ${pass1Peak} B, within the ${STAGING_UPLOAD_CONCURRENCY} blocks its overlapped uploads allow`
+  )
+  t.ok(pass1Peak < BYTE_LENGTH, 'which is less than the title, so overlapping uploads is not buffering the title')
 
-  // The bound.
+  // Pass 2's bound.
   t.is(peakOnDisk, PEAK_BOUND, 'peak block data on local disk is the window plus the block in flight')
   t.is(written.ingest.peakLocalBytes, peakOnDisk, 'and the reported peak is the peak that really happened on disk')
   t.ok(peakOnDisk < BYTE_LENGTH, 'which is less than the title, so a title larger than the volume ingests')

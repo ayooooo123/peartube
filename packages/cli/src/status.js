@@ -26,6 +26,18 @@ function count(value) {
   return Number.isSafeInteger(next) && next >= 0 ? next : 0
 }
 
+// A byte reading that may not exist on this runtime. `count` folds an
+// unmeasurable signal into 0, which reads exactly like a measured zero; a
+// capacity number has to keep the two apart, so presence is decided BEFORE any
+// conversion. `Number(null)` is 0, so converting first turned every signal a
+// runtime without statfs cannot read into a volume with nothing left on it —
+// the precise misreading this helper exists to prevent. A measurement is a
+// number; anything else is the absence of one.
+function measured(value) {
+  if (typeof value !== 'number') return null
+  return Number.isSafeInteger(value) && value >= 0 ? value : null
+}
+
 function boundedErrorCodes(values) {
   const result = []
   for (const value of Array.isArray(values) ? values : []) {
@@ -59,7 +71,11 @@ export function buildRelayStatus({
   // null unless the operator enabled block offload. Media block data living in
   // an object store changes what "this relay holds the title" means, so it is
   // reported rather than inferred from byte counters that no longer match disk.
-  blockOffload = null
+  blockOffload = null,
+  // null unless the caller measured it. Capacity divides between the local
+  // volume and the object store once block offload is on, and a status file
+  // that reports only one of the two describes a relay that does not exist.
+  capacity = null
 }) {
   const channels = catalog.getChannels()
   const summary = catalog.getSummary()
@@ -136,7 +152,20 @@ export function buildRelayStatus({
       windowBytes: count(blockOffload?.windowBytes),
       blocksOffloaded: count(blockOffload?.blocksOffloaded),
       bytesOffloaded: count(blockOffload?.bytesOffloaded),
-      restored: count(blockOffload?.restored)
+      restored: count(blockOffload?.restored),
+      residentBytes: count(blockOffload?.residentBytes)
+    },
+    // Named field by field on purpose: this file is world-readable to anything
+    // that can read the relay's storage directory, and a passthrough spread
+    // would be one careless caller away from writing a bucket name or a key
+    // into it.
+    capacity: {
+      localUsedBytes: measured(capacity?.localUsedBytes),
+      localFreeBytes: measured(capacity?.localFreeBytes),
+      localHeadroomBytes: measured(capacity?.localHeadroomBytes),
+      residentBytes: count(capacity?.residentBytes),
+      offloadedBytes: count(capacity?.offloadedBytes),
+      effectiveCapacityBytes: measured(capacity?.effectiveCapacityBytes)
     }
   }
 }

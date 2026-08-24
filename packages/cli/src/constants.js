@@ -103,10 +103,10 @@ export const DEFAULT_ARCHIVE_JS_RUNTIME = ''
 export const DEFAULT_ARCHIVE_YT_DLP_EXTRA_ARGS = []
 export const DEFAULT_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS = []
 export const DEFAULT_LOCAL_MIRROR_POLL_SECONDS = 30
-// Block offload moves media block DATA to the configured S3 bucket and keeps
-// the merkle tree and bitfield on local disk, so a relay can archive a title
-// far larger than its volume. Off by default: it is an operator decision that
-// makes every served block depend on a third party being reachable.
+// Block offload moves media block DATA to an object store and keeps the merkle
+// tree and bitfield on local disk, so a relay can archive a title far larger
+// than its volume. Off by default: it is an operator decision that makes every
+// served block depend on a third party being reachable.
 export const DEFAULT_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES = 2 * 1024 * 1024 * 1024
 export const DEFAULT_ARCHIVE_S3_CONFIG = {
   endpoint: '',
@@ -117,6 +117,52 @@ export const DEFAULT_ARCHIVE_S3_CONFIG = {
   prefix: '',
   enabled: true,
   forcePathStyle: false,
+  offload: false,
+  offloadWindowBytes: DEFAULT_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES
+}
+
+// Which object store backs block offload, and the config section that
+// configures it. Three named backends behind one switch — an operator picks a
+// name, and the section of that name holds its credentials and its window.
+// `s3` is the default because it is the only backend that existed before, so a
+// relay that was already offloading to a bucket keeps exactly the behaviour it
+// had without naming a provider at all.
+export const ARCHIVE_OFFLOAD_PROVIDER_SECTIONS = {
+  s3: 's3',
+  'google-drive': 'googleDrive',
+  mega: 'mega'
+}
+export const ARCHIVE_OFFLOAD_PROVIDERS = Object.keys(ARCHIVE_OFFLOAD_PROVIDER_SECTIONS)
+export const DEFAULT_ARCHIVE_OFFLOAD_PROVIDER = 's3'
+
+// Drive's OAuth exchange stays outside the relay, the way SigV4 signing does:
+// the operator supplies an access token the same way they supply a bucket key.
+// Drive's API hosts are operator-supplied and deliberately have no default
+// anywhere in this source tree. The anti-centralization guard rejects a remote
+// origin in production source, and it is right to: a relay that ships pointing
+// at somebody's service is not permissionless, however convenient the default.
+// An operator running against Drive itself sets filesEndpoint to Drive's v3
+// files API and uploadEndpoint to its upload counterpart; the values belong in
+// their config file, not in ours.
+export const DEFAULT_ARCHIVE_GOOGLE_DRIVE_CONFIG = {
+  accessToken: '',
+  folderId: '',
+  prefix: '',
+  filesEndpoint: '',
+  uploadEndpoint: '',
+  offload: false,
+  offloadWindowBytes: DEFAULT_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES
+}
+
+// Mega's session id (`sid`), likewise: turning an email and password into one
+// needs AES and RSA that the universal backend does not have, so the credential
+// exchange is the operator's, not the relay's. `apiUrl` is left empty to mean
+// Mega's own endpoint.
+export const DEFAULT_ARCHIVE_MEGA_CONFIG = {
+  session: '',
+  folder: '',
+  prefix: '',
+  apiUrl: '',
   offload: false,
   offloadWindowBytes: DEFAULT_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES
 }
@@ -145,7 +191,11 @@ export const DEFAULT_ARCHIVE_CONFIG = {
     recursive: true,
     maxFiles: DEFAULT_ARCHIVE_MAX_ITEMS
   },
+  // Which of the sections below backs block offload.
+  provider: DEFAULT_ARCHIVE_OFFLOAD_PROVIDER,
   s3: DEFAULT_ARCHIVE_S3_CONFIG,
+  googleDrive: DEFAULT_ARCHIVE_GOOGLE_DRIVE_CONFIG,
+  mega: DEFAULT_ARCHIVE_MEGA_CONFIG,
   uiEnabled: false,
   uiHost: '127.0.0.1',
   uiPort: 8174,

@@ -1100,7 +1100,7 @@ export async function createArchiveConsole({
         bucket: '',
         region: '',
         prefix: '',
-        offload: { enabled: false, windowBytes: 0, blocksOffloaded: 0, bytesOffloaded: 0, restored: 0 }
+        offload: { enabled: false, windowBytes: 0, blocksOffloaded: 0, bytesOffloaded: 0, restored: 0, residentBytes: 0 }
       },
       discover: await discoverView(discoverParams),
       trustedClients: service.getTrustedClients?.() || [],

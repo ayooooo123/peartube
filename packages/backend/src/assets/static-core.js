@@ -9,6 +9,28 @@ import {
 
 export const ASSET_BLOCK_SIZE = 256 * 1024
 
+// How many of pass 1's staged uploads may be in the air at once.
+//
+// One meant the download was stopped for the whole of every upload: measured
+// against an object store with a realistic round trip, the source spent 94% of
+// pass 1 handed nothing to read while a 256 KiB block went to the bucket and
+// came back confirmed, and only 6% being hashed and appended. A held HTTP
+// response drains at the rate its consumer asks for it, so that is not an
+// upload cost, it is the archive's throughput.
+//
+// It cannot be unbounded. A block's local copy is the only copy until the
+// object store confirms the object (see offloadStagedBlock), so N uploads in
+// flight is N block copies on local disk and N in memory — which is the title
+// again if N is allowed to follow it.
+//
+// Eight is where that trade sits. Hiding the round trip completely would take
+// round-trip over local-work, which on the same measurement is 1026ms over
+// 67ms — about fifteen in flight — and the last few of those buy progressively
+// less while asking progressively more of the provider and of the operator's
+// uplink, which is the real ceiling once the idling stops. Eight removes most
+// of the idle and holds pass 1's footprint at 2 MiB whatever the title's size.
+export const STAGING_UPLOAD_CONCURRENCY = 8
+
 const STATIC_ASSET_KIND = 'static-prologue-v1'
 
 // --- resumable streaming ingest --------------------------------------------
@@ -626,10 +648,67 @@ async function ingestBoundedSource({ staging, finalCore, descriptor, source, off
 // object store under the STAGING core's key as it is appended, and pass 2 reads
 // them back from there instead of from the network.
 //
+// Pass 1 does NOT wait for one block's upload before reading the next. A held
+// response only moves as fast as somebody asks it for bytes, so an upload
+// awaited inline is not a cost paid alongside the download, it IS the download
+// time. Up to STAGING_UPLOAD_CONCURRENCY uploads run against the read instead,
+// which is why the confirmed staging objects are no longer an exact prefix of
+// the staged tree — the two places that used to rely on that, the resume
+// bisection and the tail confirmation, say how they cope.
+//
 // Objects are addressed BY CORE KEY, so the staging objects cannot be handed to
 // the finished core: each restored block is re-uploaded under the finished
 // core's own key by its own offloader, and the staging objects are deleted once
 // the finished core verifies.
+
+/**
+ * Run up to `limit` uploads at once, oldest first, and remember the first one
+ * that fails.
+ *
+ * `start` returns as soon as the OLDEST upload has finished, not as soon as any
+ * of them has. That distinction is load-bearing. A plain counting semaphore
+ * would let the read run arbitrarily far ahead of one slow upload — a block
+ * near the start of the title can still be in the air while the tail is already
+ * confirmed — and then the missing objects are scattered through the tree
+ * instead of sitting at the end of it, which is a question the resume path
+ * cannot answer cheaply. Waiting on the head keeps the gap between the staged
+ * tree and the confirmed objects at most `limit` blocks wide, which is what
+ * confirmedStagingBlocks relies on.
+ *
+ * A failure is latched and re-thrown at the next `start` or at `settle`, so an
+ * upload that never lands still fails the ingest: the block it was carrying is
+ * one pass 2 would go looking for in the bucket.
+ */
+function createUploadPipeline (limit) {
+  // Uploads in the order they were started. An entry may already be settled;
+  // awaiting it again costs nothing and keeps the order honest.
+  const queue = []
+  let failure = null
+
+  function track (run) {
+    queue.push(run().then(null, (error) => {
+      if (failure === null) failure = error
+    }))
+  }
+
+  return {
+    async start (run) {
+      if (failure !== null) throw failure
+      track(run)
+      while (queue.length >= limit) await queue.shift()
+      if (failure !== null) throw failure
+    },
+
+    /**
+     * Wait for every upload still in the air. The staging core must not be
+     * closed, removed or handed to pass 2 while one is still writing to it.
+     */
+    async settle () {
+      while (queue.length > 0) await queue.shift()
+      if (failure !== null) throw failure
+    },
+  }
+}
 
 /**
  * Pass 1, per appended block: upload it under the staging core's key, make the
@@ -639,6 +718,10 @@ async function ingestBoundedSource({ staging, finalCore, descriptor, source, off
  * happens before the confirmation is a delete of the only copy. The staged leaf
  * is checked first because that leaf is what pass 2 verifies the restored object
  * against — a block dropped without one is a block nobody can prove again.
+ *
+ * Several of these run at once, so `block` must be memory this call owns for as
+ * long as the upload takes: the read loop hands out views into the source's own
+ * chunk, and it goes back to reading the moment this is scheduled.
  */
 async function offloadStagedBlock({ staging, stagingStore, staged, index, block, signal }) {
   const storage = staging.core.state.storage
@@ -660,7 +743,9 @@ async function offloadStagedBlock({ staging, stagingStore, staged, index, block,
       index
     )
   }
-  staged.uploaded = index + 1
+  // A high-water mark, not a counter: uploads finish out of order now, and what
+  // a purge has to account for is the whole prefix anything was ever put under.
+  if (index + 1 > staged.uploaded) staged.uploaded = index + 1
 
   await dropStagedBlockData(storage, index)
   assertNotCancelled(signal)
@@ -870,25 +955,36 @@ async function writeStagingIdentity(staging, record) {
 }
 
 /**
- * How many staged blocks the object store actually holds, found by bisection.
+ * The first staged block the object store does NOT hold.
  *
- * Pass 1 uploads in index order and will not touch block `n + 1` until the
- * store has confirmed `n`, so presence is a PREFIX and the boundary is what a
- * bisection finds: seventeen HEAD requests for a title of a hundred thousand
- * blocks rather than a hundred thousand. Nothing here trusts a counter —
- * `length` bounds the search because it is the tree on disk, and every other
- * bit of the answer comes from the bucket.
+ * Below the last STAGING_UPLOAD_CONCURRENCY blocks presence is still a PREFIX,
+ * and it is createUploadPipeline's FIFO shape that makes it one: the read loop
+ * will not start block `n + STAGING_UPLOAD_CONCURRENCY` until block `n`'s
+ * upload has finished, so nothing older than that window can still be missing.
+ * That part is a bisection — seventeen HEAD requests for a title of a hundred
+ * thousand blocks rather than a hundred thousand. Inside the window uploads
+ * land out of order, so it is walked, which is at most a handful of requests.
+ *
+ * Nothing here trusts a counter: `length` bounds the search because it is the
+ * tree on disk, and every other bit of the answer comes from the bucket.
  */
 async function confirmedStagingBlocks({ stagingStore, length, signal }) {
+  const settled = Math.max(0, length - STAGING_UPLOAD_CONCURRENCY)
   let low = 0
-  let high = length
+  let high = settled
   while (low < high) {
     assertNotCancelled(signal)
     const middle = low + Math.floor((high - low) / 2)
     if (await stagingStore.has(middle) === true) low = middle + 1
     else high = middle
   }
-  return low
+  if (low < settled) return low
+
+  for (let index = settled; index < length; index++) {
+    assertNotCancelled(signal)
+    if (await stagingStore.has(index) !== true) return index
+  }
+  return length
 }
 
 /**
@@ -900,15 +996,22 @@ async function confirmedStagingBlocks({ stagingStore, length, signal }) {
  * confirms the object — so they go up now and the resumed read starts after
  * them.
  *
- * A block in that window on neither disk nor in the bucket means the one
- * invariant this whole path rests on was broken: a local copy was dropped
- * without remote confirmation. Nothing can recover it, so it says so rather
- * than quietly re-reading bytes the tree has already committed to.
+ * A block above that boundary whose local copy is gone is not automatically a
+ * lost block: uploads overlap, so the block after a missing one may well have
+ * landed and had its local copy dropped for the best of reasons. Only a block
+ * the bucket does not hold EITHER means the one invariant this whole path rests
+ * on was broken — a local copy dropped without remote confirmation. Nothing can
+ * recover that, so it says so rather than quietly re-reading bytes the tree has
+ * already committed to.
  */
 async function confirmStagedTail({ staging, stagingStore, staged, confirmed, signal }) {
   const storage = staging.core.state.storage
   for (let index = confirmed; index < staging.length; index++) {
     assertNotCancelled(signal)
+    if (await stagingStore.has(index) === true) {
+      if (index + 1 > staged.uploaded) staged.uploaded = index + 1
+      continue
+    }
     const block = await readStagedBlockData(storage, index)
     if (block === null) {
       throw stagedBlockError(
@@ -1150,13 +1253,19 @@ export function createStaticAssetManifest(input = {}) {
  *                `offload.createStagingStore({ core, signal })` supplied an
  *                object store for the staging core. Pass 1 then uploads each
  *                staged block under the STAGING core's key before dropping it,
- *                and pass 2 reads them back from there. The source is consumed
- *                exactly once, so a relay archives a title larger than its own
- *                volume off a single download.
+ *                up to STAGING_UPLOAD_CONCURRENCY of them at a time so the
+ *                download is not stopped for each round trip, and pass 2 reads
+ *                them back from there. The source is consumed exactly once, so
+ *                a relay archives a title larger than its own volume off a
+ *                single download.
  *
- * Peak local block data is the offload window plus the single block being moved
- * (its staged copy and its finished copy), whatever the title's size — reported
- * as `ingest.peakLocalBytes`, bounded by `windowBytes + 2 * ASSET_BLOCK_SIZE`.
+ * Peak local block data in pass 2 is the offload window plus the single block
+ * being moved (its staged copy and its finished copy), whatever the title's
+ * size — reported as `ingest.peakLocalBytes`, bounded by
+ * `windowBytes + 2 * ASSET_BLOCK_SIZE`. Streaming pass 1 costs
+ * `STAGING_UPLOAD_CONCURRENCY * ASSET_BLOCK_SIZE` before that, for the blocks
+ * whose local copies are waiting on their objects to be confirmed. Both are
+ * constants: neither follows the title.
  *
  * A one-shot source with no staging store is refused with
  * `ASSET_SOURCE_NOT_REOPENABLE` rather than buffered.
@@ -1208,6 +1317,8 @@ export async function writeStaticAsset({
   // How much of the staging core made it to the object store, and how much came
   // back. `uploaded` is what the cleanup has to account for on either path.
   const staged = { uploaded: 0, restored: 0 }
+  // Pass 1's uploads, running against the read rather than in front of it.
+  const uploads = createUploadPipeline(STAGING_UPLOAD_CONCURRENCY)
   // Set when an interruption leaves the staging core and its confirmed objects
   // worth keeping. This one boolean is the difference between "the download died
   // at minute 42" and "the download has to start again", so it is decided once,
@@ -1238,10 +1349,25 @@ export async function writeStaticAsset({
           onAppended: createOffloader === null
             ? null
             : (streaming
-                ? (index, block) => offloadStagedBlock({ staging, stagingStore, staged, index, block, signal })
+                // The block is a view into the chunk the source just handed
+                // over, and the read resumes the instant this is scheduled, so
+                // the upload gets its own copy rather than a window onto a
+                // buffer the source is free to fill again. One memcpy per block
+                // against a round trip, bounded by the pipeline's depth.
+                ? (index, block) => uploads.start(() => offloadStagedBlock({
+                  staging,
+                  stagingStore,
+                  staged,
+                  index,
+                  block: b4a.from(block),
+                  signal,
+                }))
                 : (index) => dropStagedBlockData(staging.core.state.storage, index)),
         })
       }
+      // Pass 2 reads what pass 1 uploaded, so every upload has to have landed
+      // before the tree is closed off and handed to it.
+      await uploads.settle()
 
       assertNotCancelled(signal)
       const treeHash = await staging.treeHash()
@@ -1300,6 +1426,13 @@ export async function writeStaticAsset({
       assertNotCancelled(signal)
       if (!verified) throw new Error('static asset verification failed')
     } catch (error) {
+      // An upload in the air is still writing to the staging core, and it is
+      // still capable of confirming a block this attempt has to account for.
+      // Both of those have to be finished with before the decision below is
+      // taken and before the core is closed or deleted underneath them. The
+      // failure that got us here is the one worth reporting, so a second one
+      // from a doomed upload is dropped.
+      await uploads.settle().catch(() => {})
       retainStaging = retainStagingState(error, resumeState)
       if (retainStaging) annotateRetainedStaging(error, staging, resumeState)
       // Reclaiming a RESUMED write has to account for the objects an earlier

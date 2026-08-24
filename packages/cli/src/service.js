@@ -173,7 +173,8 @@ async function buildRelayService({
   if (blockOffload) {
     logger.relay?.info?.('Relay block offload enabled', {
       windowBytes: blockOffload.windowBytes,
-      bucket: config.archive?.s3?.bucket || '',
+      provider: blockOffload.provider,
+      bucket: blockOffload.bucket,
       prefix: blockOffload.prefix
     })
   } else {
@@ -214,24 +215,129 @@ async function buildRelayService({
       policy.uploadCeilingBytes >= 0
   }
 
-  function retentionPermission(retentionClass, requestedBytes = 0) {
+  // The budget the operator authorized for this retention class and how much of
+  // it is already spent, or null when the class is not permitted at all: a
+  // caller has to be able to tell "never consented" from "consented and full".
+  function retentionBudget(retentionClass) {
     const policy = runtime.ctx?.networkPolicyRuntime?.getPolicy?.()
-    if (policy?.policyVersion !== 2 || policy.migrationRequired === true) return false
+    if (policy?.policyVersion !== 2 || policy.migrationRequired === true) return null
     const contribution = retentionClass === 'contribution-cache'
     const allowed = contribution
       ? policy.contributeWatchedMedia === true
       : retentionClass === 'archive-pin' && policy.archiveEnabled === true
-    if (!allowed) return false
+    if (!allowed) return null
     const budget = Number(contribution ? policy.contributionBudgetBytes : policy.archiveBudgetBytes)
+    if (!Number.isSafeInteger(budget) || budget <= 0) return null
     const usage = runtime.seedingManager?.getRetentionBudgetStatus?.() || {}
     const used = Number(contribution ? usage.contributionUsedBytes : usage.archiveUsedBytes) || 0
-    const requested = Math.max(0, Number(requestedBytes) || 0)
-    return Number.isSafeInteger(budget) && budget > 0 && used + requested <= budget
+    return { budget, used, remaining: Math.max(0, budget - used) }
+  }
+
+  function retentionPermission(retentionClass, requestedBytes = 0) {
+    const authorized = retentionBudget(retentionClass)
+    if (authorized === null) return false
+    return authorized.used + Math.max(0, Number(requestedBytes) || 0) <= authorized.budget
+  }
+
+  // What `bytes` of media actually costs THIS volume.
+  //
+  // Without block offload every archived byte is a byte on this disk, so the
+  // cost is the byte count itself. With offload the ingest holds one window of
+  // block data plus the two blocks in flight and the bucket takes the rest, so
+  // the cost is the window plus the merkle bookkeeping the bucket never takes
+  // — tens of megabytes for a title of any size. This is the same number the
+  // archive download guard already sizes its requirement with, so the two
+  // gates cannot disagree about what an offloading ingest needs from the disk.
+  function localFootprintBytes(bytes) {
+    if (!blockOffload) return Math.max(0, Number(bytes) || 0)
+    return blockOffload.localWorkingBytes(bytes)
+  }
+
+  // Whether the volume can still hold what a request costs it.
+  //
+  // Consulted only with offload on. Without offload the aggregate guard is
+  // already this volume's boundary and a second gate here would refuse ingests
+  // the relay accepts today. With offload on it is what stops the bucket from
+  // turning a full disk into an accepted ingest: the title no longer has to
+  // fit, but the window still does. Headroom that cannot be measured fails
+  // open, exactly as the storage guard does on a runtime with no statfs.
+  function localVolumeAdmits(bytes) {
+    const headroom = storageGuard.headroomBytes()
+    if (headroom === null) return true
+    return localFootprintBytes(bytes) <= headroom
   }
 
   function canRetain(request = {}) {
-    return storageGuard.canIngest() &&
-      retentionPermission(request.retentionClass, request.expected?.byteLength || 0)
+    const requestedBytes = request.expected?.byteLength || 0
+    if (!storageGuard.canIngest()) return false
+    if (blockOffload && !localVolumeAdmits(requestedBytes)) return false
+    return retentionPermission(request.retentionClass, requestedBytes)
+  }
+
+  // The largest title this volume would actually admit, at most `ceiling`.
+  //
+  // A title's local cost is not flat: the window and the two blocks in flight
+  // are, but the merkle tree and bitfield the bucket never takes grow with the
+  // title, so a volume that can hold the window is not thereby a volume that
+  // can hold any title. Advertising against a zero-byte probe is what made the
+  // relay pledge a terabyte it would then refuse.
+  //
+  // Found by asking `localFootprintBytes` — which is monotone in the title
+  // size — rather than by inverting it here: the footprint formula belongs to
+  // storage-guard.js, and a second copy of it in this file would go stale the
+  // day the window or the block size moves. The common case costs one probe;
+  // only a disk-bound relay pays the search, once per capacity report.
+  function largestAdmissibleBytes(ceiling) {
+    if (storageGuard.headroomBytes() === null) return ceiling
+    if (localVolumeAdmits(ceiling)) return ceiling
+    let low = 0
+    let high = ceiling
+    while (low < high) {
+      const mid = low + Math.ceil((high - low) / 2)
+      if (localVolumeAdmits(mid)) low = mid
+      else high = mid - 1
+    }
+    return low
+  }
+
+  // Bytes this relay can still take on for the archive network.
+  //
+  // Without block offload that is the local volume's headroom: every pledged
+  // byte lands on this disk. With offload the pledged bytes land in the bucket
+  // and only a window of them is ever here, so what bounds a new pledge is the
+  // operator's archive budget rather than the disk — which is the whole reason
+  // a relay with an 8 MiB window can hold a terabyte. The volume keeps its
+  // veto, and it is the same veto admission applies: the number pledged here is
+  // a title `canIngest` would take, so the relay never advertises work it is
+  // about to refuse.
+  function archiveCapacityBytes() {
+    const localHeadroom = storageGuard.headroomBytes()
+    if (!blockOffload) return localHeadroom
+    const authorized = retentionBudget('archive-pin')
+    const ceiling = authorized === null ? localHeadroom : authorized.remaining
+    if (ceiling === null) return null
+    return largestAdmissibleBytes(ceiling)
+  }
+
+  // How this relay's capacity divides between the volume and the bucket.
+  //
+  // Both the status file and the archive console reported archived bytes as
+  // though every one of them were on this disk. With offload on those are no
+  // longer the same number, and an operator sizing a relay has to be able to
+  // see which of the two they are reading. A signal this runtime cannot
+  // measure stays null rather than being reported as a zero that looks like a
+  // measurement.
+  function capacityStats() {
+    const snapshot = storageGuard.snapshot()
+    const offload = blockOffload?.stats() || null
+    return {
+      localUsedBytes: snapshot.usedBytes,
+      localFreeBytes: snapshot.freeBytes,
+      localHeadroomBytes: storageGuard.headroomBytes(),
+      residentBytes: offload === null ? 0 : offload.residentBytes,
+      offloadedBytes: offload === null ? 0 : offload.bytesOffloaded,
+      effectiveCapacityBytes: archiveCapacityBytes()
+    }
   }
 
   function createLocalDrivePublisher(runtimeFsModule) {
@@ -342,7 +448,8 @@ async function buildRelayService({
       runtimeStats,
       ingestStatus,
       trustedClientsCount: trustedClients.list().length,
-      blockOffload: blockOffload?.stats() || null
+      blockOffload: blockOffload?.stats() || null,
+      capacity: capacityStats()
     })
 
     await Promise.resolve(writeStatusFile(config.paths.status, currentStatus))
@@ -385,13 +492,17 @@ async function buildRelayService({
   }
 
   // One ceiling governs the local store and the archive pledges this relay
-  // takes on for other relays, so the storage guard's live headroom is pushed
-  // into the archive network every time it is re-evaluated. A relay with no
-  // room left declines new pledges; it never drops the ones it already made.
+  // takes on for other relays, so the relay's live capacity is pushed into the
+  // archive network every time it is re-evaluated. A relay with no room left
+  // declines new pledges; it never drops the ones it already made.
+  //
+  // With block offload that ceiling stopped being the local volume: pledged
+  // block data lives in the bucket, so a relay whose disk is smaller than its
+  // archive budget can still take pledges for the difference.
   async function refreshArchiveCapacity() {
     if (typeof runtime.applyArchiveCapacity !== 'function') return null
     try {
-      const result = await runtime.applyArchiveCapacity({ headroomBytes: storageGuard.headroomBytes() })
+      const result = await runtime.applyArchiveCapacity({ headroomBytes: archiveCapacityBytes() })
       if (result?.applied === false && result.reason !== 'reseed-disabled') {
         logger.status?.debug?.('Archive capacity was not applied', { reason: result.reason })
       }
@@ -548,7 +659,7 @@ async function buildRelayService({
         prefix: s3Config.prefix || '',
         offload: blockOffload
           ? blockOffload.stats()
-          : { enabled: false, windowBytes: 0, blocksOffloaded: 0, bytesOffloaded: 0, restored: 0 }
+          : { enabled: false, windowBytes: 0, blocksOffloaded: 0, bytesOffloaded: 0, restored: 0, residentBytes: 0 }
       }
     },
     config,
@@ -1310,7 +1421,8 @@ async function buildRelayService({
         config,
         catalog: relayCatalog,
         runtimeStats: {},
-        blockOffload: blockOffload?.stats() || null
+        blockOffload: blockOffload?.stats() || null,
+        capacity: capacityStats()
       })
     },
     async close() {

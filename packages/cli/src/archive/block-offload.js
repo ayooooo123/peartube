@@ -3,6 +3,8 @@ import b4a from 'b4a'
 import {
   DEFAULT_OFFLOAD_WINDOW_BYTES,
   createBlockOffloader,
+  createGoogleDriveArchiveProvider,
+  createMegaArchiveProvider,
   createOffloadStorage,
   createRemoteBlockStore,
   createS3ArchiveProvider
@@ -10,6 +12,7 @@ import {
 import { ASSET_BLOCK_SIZE } from '@peartube/backend/assets'
 import { isBlockPlaybackPinned } from '@peartube/backend/blob-range-priority'
 
+import { ARCHIVE_OFFLOAD_PROVIDERS, ARCHIVE_OFFLOAD_PROVIDER_SECTIONS, DEFAULT_ARCHIVE_OFFLOAD_PROVIDER } from '../constants.js'
 import { boundedIngestBytes } from '../storage-guard.js'
 
 // Relay-side wiring for block offload. The mechanism lives in the backend:
@@ -26,10 +29,16 @@ import { boundedIngestBytes } from '../storage-guard.js'
 // the two things the backend needs — a storage wrapper for the read path and an
 // asset hook for the write path — or nothing at all when offload is off.
 
-const REQUIRED_S3_FIELDS = ['endpoint', 'bucket', 'accessKeyId', 'secretAccessKey']
+// What each backend cannot run without. Same rule for all three: offload that
+// is asked for and cannot work is refused, never downgraded to local-only.
+const REQUIRED_FIELDS = {
+  s3: ['endpoint', 'bucket', 'accessKeyId', 'secretAccessKey'],
+  'google-drive': ['accessToken', 'folderId'],
+  mega: ['session', 'folder']
+}
 
-function missingS3Fields (s3) {
-  return REQUIRED_S3_FIELDS.filter((field) => !(typeof s3?.[field] === 'string' && s3[field].trim()))
+function missingFields (fields, section) {
+  return fields.filter((field) => !(typeof section?.[field] === 'string' && section[field].trim()))
 }
 
 function keyHexOf (core) {
@@ -53,12 +62,29 @@ function assetBlockLength (descriptor, index) {
 }
 
 /**
+ * Which object store the operator selected, and the config section holding its
+ * credentials. The config loader normalizes `archive.provider`, but this is
+ * also handed hand-built config objects, so an unknown name is refused here
+ * too: falling back to S3 would offload someone's blocks to a store they did
+ * not name.
+ */
+function selectProvider (archive) {
+  const raw = typeof archive.provider === 'string' ? archive.provider.trim() : ''
+  const name = raw || DEFAULT_ARCHIVE_OFFLOAD_PROVIDER
+  const section = ARCHIVE_OFFLOAD_PROVIDER_SECTIONS[name]
+  if (!section) {
+    throw new Error(`archive.provider must be one of ${ARCHIVE_OFFLOAD_PROVIDERS.join(', ')} (got "${name}")`)
+  }
+  return { name, section, config: archive[section] || {} }
+}
+
+/**
  * Build the relay's block offload, or return null when the operator has not
  * asked for it.
  *
- * Throws when offload is enabled and the bucket is only half configured. That
- * is deliberate: the alternative is a relay that quietly keeps every block on
- * the volume the operator was trying to stop filling.
+ * Throws when offload is enabled and the selected store is only half
+ * configured. That is deliberate: the alternative is a relay that quietly keeps
+ * every block on the volume the operator was trying to stop filling.
  */
 export async function createRelayBlockOffload ({
   config,
@@ -66,40 +92,76 @@ export async function createRelayBlockOffload ({
   fetchImpl = globalThis.fetch,
   createSigner = null
 } = {}) {
-  const s3 = config?.archive?.s3 || {}
-  if (s3.offload !== true) return null
+  const archive = config?.archive || {}
+  const selected = selectProvider(archive)
+  const settings = selected.config
+  if (settings.offload !== true) return null
 
-  const missing = missingS3Fields(s3)
+  const missing = missingFields(REQUIRED_FIELDS[selected.name], settings)
   if (missing.length) {
-    throw new Error(`archive.s3.offload is enabled but archive.s3 is incomplete: missing ${missing.join(', ')}`)
+    throw new Error(`archive.${selected.section}.offload is enabled but archive.${selected.section} is incomplete: missing ${missing.join(', ')}`)
   }
-  if (s3.enabled === false) {
+  // S3 is also an archive STORAGE tier, and that tier has its own switch. The
+  // other two backends exist only for offload, so they have no such flag to
+  // contradict.
+  if (selected.name === 's3' && settings.enabled === false) {
     throw new Error('archive.s3.offload is enabled but archive.s3.enabled is false')
   }
   if (typeof fetchImpl !== 'function') {
-    throw new Error('archive.s3.offload is enabled but this runtime has no fetch implementation')
+    throw new Error(`archive.${selected.section}.offload is enabled but this runtime has no fetch implementation`)
   }
 
-  let sign = createSigner
-  if (typeof sign !== 'function') {
-    // The SigV4 signer is Node-only (node:crypto). Say so rather than letting a
-    // module resolution failure be the operator's first clue.
-    if (!globalThis.process?.versions?.node) {
-      throw new Error('archive.s3.offload is enabled but S3 request signing needs the Node runtime')
-    }
-    const { createS3Signer } = await import('../s3-signer.js')
-    sign = createS3Signer(s3)
-  }
-
-  const windowBytes = Number(s3.offloadWindowBytes)
+  const windowBytes = Number(settings.offloadWindowBytes)
   // The read path's bound must be the same number as the ingest path's window,
   // including when the operator's is unusable: the offloader falls back to its
   // own default rather than keeping everything, so this falls back with it.
   const residentWindowBytes = Number.isSafeInteger(windowBytes) && windowBytes >= 0
     ? windowBytes
     : DEFAULT_OFFLOAD_WINDOW_BYTES
-  const prefix = typeof s3.prefix === 'string' ? s3.prefix : ''
-  const provider = createS3ArchiveProvider({ fetch: fetchImpl, sign, bucket: s3.bucket, prefix })
+  const prefix = typeof settings.prefix === 'string' ? settings.prefix : ''
+
+  // Everything below this block is provider-blind: the three factories return
+  // the same five methods, so the offloader, the remote block store and the
+  // read path cannot tell which one they were handed. The only per-provider
+  // work is turning config into one of them, plus naming the container the
+  // blocks land in — a bucket, a Drive folder id or a Mega folder handle — so
+  // the operator's log line says where its data went. `bucket` is that name and
+  // nothing else: no token, session or key is carried out of here.
+  let objectStore = null
+  let bucket = ''
+  if (selected.name === 's3') {
+    let sign = createSigner
+    if (typeof sign !== 'function') {
+      // The SigV4 signer is Node-only (node:crypto). Say so rather than letting a
+      // module resolution failure be the operator's first clue.
+      if (!globalThis.process?.versions?.node) {
+        throw new Error('archive.s3.offload is enabled but S3 request signing needs the Node runtime')
+      }
+      const { createS3Signer } = await import('../s3-signer.js')
+      sign = createS3Signer(settings)
+    }
+    bucket = settings.bucket
+    objectStore = createS3ArchiveProvider({ fetch: fetchImpl, sign, bucket, prefix })
+  } else if (selected.name === 'google-drive') {
+    bucket = settings.folderId
+    objectStore = createGoogleDriveArchiveProvider({
+      fetch: fetchImpl,
+      accessToken: settings.accessToken,
+      folderId: bucket,
+      prefix,
+      filesEndpoint: settings.filesEndpoint,
+      uploadEndpoint: settings.uploadEndpoint
+    })
+  } else {
+    bucket = settings.folder
+    objectStore = createMegaArchiveProvider({
+      fetch: fetchImpl,
+      session: settings.session,
+      folder: bucket,
+      prefix,
+      apiUrl: settings.apiUrl
+    })
+  }
   const log = (message) => logger?.archive?.debug?.(message)
 
   let blocksOffloaded = 0
@@ -107,13 +169,18 @@ export async function createRelayBlockOffload ({
   let offloadStats = () => ({ restored: 0, missing: 0, failed: 0, corrupt: 0 })
 
   function storeFor (coreKey) {
-    return createRemoteBlockStore({ provider, prefix, coreKey })
+    return createRemoteBlockStore({ provider: objectStore, prefix, coreKey })
   }
 
   return {
     enabled: true,
     windowBytes,
     prefix,
+    // The two things an operator's log line needs to say where block data goes,
+    // and the only two this module will hand out: the backend's name and the
+    // container inside it.
+    provider: selected.name,
+    bucket,
 
     /**
      * Local working space a bounded ingest of `streamBytes` needs on this
@@ -179,7 +246,8 @@ export async function createRelayBlockOffload ({
       blocksOffloaded += result.blocksOffloaded
       bytesOffloaded += result.bytesOffloaded
       if (result.blocksOffloaded > 0) {
-        logger?.archive?.info?.('Offloaded asset block data to S3', {
+        logger?.archive?.info?.('Offloaded asset block data', {
+          provider: selected.name,
           assetId: descriptor.assetId,
           blocks: result.blocksOffloaded,
           bytes: result.bytesOffloaded,
@@ -205,13 +273,26 @@ export async function createRelayBlockOffload ({
         windowBytes,
         log
       })
+      // An offloader's stats are CUMULATIVE, and the bounded ingest path drains
+      // once per block, so adding each drain's totals counts every offloaded
+      // block again for every drain that follows it - quadratic in the length of
+      // the title, which for a feature-length archive is millions of blocks and
+      // terabytes claimed for a few gigabytes moved. Only the difference a drain
+      // made belongs to the relay's totals.
+      let countedBlocks = 0
+      let countedBytes = 0
       return {
+        // The writer reports the window its ingest was bounded by, and it reads
+        // it off the offloader it was handed.
+        windowBytes: offloader.windowBytes,
         track: (index, byteLength) => offloader.track(index, byteLength),
         stats: () => offloader.stats?.(),
         async drain () {
           const result = await offloader.drain()
-          blocksOffloaded += result.blocksOffloaded
-          bytesOffloaded += result.bytesOffloaded
+          blocksOffloaded += result.blocksOffloaded - countedBlocks
+          bytesOffloaded += result.bytesOffloaded - countedBytes
+          countedBlocks = result.blocksOffloaded
+          countedBytes = result.bytesOffloaded
           return result
         }
       }
@@ -257,5 +338,3 @@ export async function createRelayBlockOffload ({
     }
   }
 }
-
-export { missingS3Fields }

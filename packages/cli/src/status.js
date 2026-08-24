@@ -152,6 +152,8 @@ export function buildRelayStatus({
       windowBytes: count(blockOffload?.windowBytes),
       blocksOffloaded: count(blockOffload?.blocksOffloaded),
       bytesOffloaded: count(blockOffload?.bytesOffloaded),
+      uploadedBlocks: count(blockOffload?.uploadedBlocks),
+      uploadedBytes: count(blockOffload?.uploadedBytes),
       restored: count(blockOffload?.restored),
       residentBytes: count(blockOffload?.residentBytes)
     },
@@ -201,7 +203,7 @@ export function formatRelayStatus(status) {
     `selectedIndexers: ${(status.selectedIndexers || []).map(indexer => `${indexer.id}:${indexer.status}`).join(',') || 'none'}`,
     `lastErrors: ${(status.lastErrors || []).join(',') || 'none'}`,
     `authorizedClients: ${status.authorizedClients || 0}`,
-    `blockOffload: enabled=${status.blockOffload?.enabled === true} windowBytes=${status.blockOffload?.windowBytes || 0} blocks=${status.blockOffload?.blocksOffloaded || 0} bytes=${status.blockOffload?.bytesOffloaded || 0} restored=${status.blockOffload?.restored || 0}`,
+    `blockOffload: enabled=${status.blockOffload?.enabled === true} windowBytes=${status.blockOffload?.windowBytes || 0} uploaded=${status.blockOffload?.uploadedBlocks || 0}/${status.blockOffload?.uploadedBytes || 0} blocks=${status.blockOffload?.blocksOffloaded || 0} bytes=${status.blockOffload?.bytesOffloaded || 0} restored=${status.blockOffload?.restored || 0}`,
     `creators: total=${status.creators?.totalCreators || 0} archived=${status.creators?.videosArchived || 0} unseeded=${status.creators?.videosUnseeded || 0}`
   ]
   return lines.join('\n')

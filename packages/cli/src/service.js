@@ -659,7 +659,7 @@ async function buildRelayService({
         prefix: s3Config.prefix || '',
         offload: blockOffload
           ? blockOffload.stats()
-          : { enabled: false, windowBytes: 0, blocksOffloaded: 0, bytesOffloaded: 0, restored: 0, residentBytes: 0 }
+          : { enabled: false, windowBytes: 0, blocksOffloaded: 0, bytesOffloaded: 0, uploadedBlocks: 0, uploadedBytes: 0, restored: 0, residentBytes: 0 }
       }
     },
     config,

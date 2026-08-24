@@ -243,6 +243,16 @@ test('a title written through the relay capability leaves the volume for the buc
   t.is(stats.bytesOffloaded, OFFLOADED_BYTES, 'and the bytes reported are those blocks bytes')
   t.is(bucket.objects.size, OFFLOADED_BLOCKS, 'the bucket holds exactly them')
 
+  // The counter that answers the question `blocksOffloaded` cannot: is the
+  // bucket receiving anything at all? During a streaming ingest every staged
+  // block is written to the store and later purged, so it never reaches
+  // `blocksOffloaded` — and a relay hours into an archive reported 0 while
+  // gigabytes were arriving. `uploaded*` counts at the write itself.
+  t.ok(stats.uploadedBlocks >= stats.blocksOffloaded,
+    'every block that left the volume was written to the store, so uploads are never fewer')
+  t.ok(stats.uploadedBytes >= stats.bytesOffloaded, 'and the same holds for their bytes')
+  t.is(stats.uploadedBlocks, OFFLOADED_BLOCKS, 'a re-openable source writes each offloaded block once and stages nothing')
+
   // Confirm-before-delete, per block. A delete without its own confirmation is
   // a delete of the only copy.
   t.is(written.ingest.offload.confirmed, stats.blocksOffloaded, 'no block was deleted locally without the bucket confirming it holds it')
@@ -301,6 +311,17 @@ test('a one-shot download archives through the capability staging store and leav
   t.is(stats.blocksOffloaded, OFFLOADED_BLOCKS, 'the relay counted the blocks that left, once each')
   t.is(stats.bytesOffloaded, OFFLOADED_BYTES, 'and their bytes')
   t.is(bucket.objects.size, OFFLOADED_BLOCKS, 'and what the bucket is left holding is the offloaded title, not a staging copy of it')
+
+  // The exact case that made the tier look dead. A one-shot download stages
+  // every block into the store and the finished core then supersedes those
+  // objects, so the bucket ends up holding only the offloaded blocks and
+  // `blocksOffloaded` never accounts for the staging traffic. Reported alone,
+  // that reads as a bucket receiving nothing while gigabytes arrive.
+  t.ok(stats.uploadedBlocks > stats.blocksOffloaded,
+    'a staged download writes more blocks to the store than it ends up offloading')
+  t.is(stats.uploadedBlocks, BLOCK_COUNT + OFFLOADED_BLOCKS,
+    'every block was staged once and the offloaded ones written again from the finished core')
+  t.ok(stats.uploadedBytes > stats.bytesOffloaded, 'so upload bytes exceed the bytes left offloaded')
 
   const resident = await residentBlockBytes()
   t.is(resident, RESIDENT_AFTER, 'local block data is the window, off a download that was never re-read')

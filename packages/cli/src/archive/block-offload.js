@@ -166,10 +166,32 @@ export async function createRelayBlockOffload ({
 
   let blocksOffloaded = 0
   let bytesOffloaded = 0
+  // Block data written to the object store, counted where every write passes
+  // through rather than where residency is decided. The two are different
+  // questions and conflating them cost an afternoon: a streaming ingest uploads
+  // each staged block here, and those uploads are purged when the finished core
+  // supersedes them, so they never appear in `blocksOffloaded`. A relay hours
+  // into a multi-GB archive had genuinely moved gigabytes into the bucket while
+  // reporting `blocksOffloaded: 0`, which reads as a bucket receiving nothing.
+  // `uploaded*` answers "is anything arriving"; `*Offloaded` answers "is this
+  // bucket holding block data the volume no longer has to".
+  let uploadedBlocks = 0
+  let uploadedBytes = 0
   let offloadStats = () => ({ restored: 0, missing: 0, failed: 0, corrupt: 0 })
 
   function storeFor (coreKey) {
-    return createRemoteBlockStore({ provider: objectStore, prefix, coreKey })
+    const store = createRemoteBlockStore({ provider: objectStore, prefix, coreKey })
+    return {
+      ...store,
+      async put (blockIndex, data) {
+        const result = await store.put(blockIndex, data)
+        // Counted after the put resolves, so this reports what the bucket
+        // accepted rather than what was attempted.
+        uploadedBlocks++
+        uploadedBytes += data?.byteLength ?? 0
+        return result
+      }
+    }
   }
 
   return {
@@ -328,6 +350,8 @@ export async function createRelayBlockOffload ({
         windowBytes,
         blocksOffloaded,
         bytesOffloaded,
+        uploadedBlocks,
+        uploadedBytes,
         restored: offload.restored,
         residentBytes: eviction === null ? 0 : eviction.residentBytes,
         blocksEvicted: eviction === null ? 0 : eviction.evicted,

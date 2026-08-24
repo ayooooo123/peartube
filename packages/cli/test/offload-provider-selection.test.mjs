@@ -108,7 +108,10 @@ function driveRecorder () {
     calls,
     async fetchImpl (url, init = {}) {
       const parsed = new URL(url)
-      if (parsed.host !== 'www.googleapis.com') throw new Error(`not a Drive request: ${url}`)
+      // The host is whatever the operator configured, not Drive's own: the
+      // provider carries no default origin, so pinning the real hostname here
+      // would be asserting a default that deliberately does not exist.
+      if (parsed.host !== new URL(DRIVE_SETTINGS.filesEndpoint).host) throw new Error(`not a Drive request: ${url}`)
       calls.push({
         host: parsed.host,
         path: parsed.pathname,
@@ -239,7 +242,7 @@ test('provider: google-drive reaches Drive, addressing the same block key', asyn
 
   t.is(await offload.createStagingStore({ core }).has(BLOCK_INDEX), false)
   t.is(drive.calls.length, 1, 'one request')
-  t.is(drive.calls[0].host, 'www.googleapis.com')
+  t.is(drive.calls[0].host, new URL(DRIVE_SETTINGS.filesEndpoint).host, 'the request goes where the operator pointed it')
   t.is(drive.calls[0].path, '/drive/v3/files')
   t.ok(drive.calls[0].q.includes(`name = '${BLOCK_KEY}'`), 'looked up by the same block key S3 uses')
   t.ok(drive.calls[0].q.includes("'drive-folder-1' in parents"), 'inside the configured folder')
@@ -449,6 +452,10 @@ test('the provider and its credentials come through the environment too', async 
       PEARTUBE_ARCHIVE_PROVIDER: 'google-drive',
       PEARTUBE_ARCHIVE_GOOGLE_DRIVE_ACCESS_TOKEN: DRIVE_TOKEN,
       PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FOLDER_ID: 'drive-folder-1',
+      // Required, because no endpoint is defaulted anywhere in source: a Drive
+      // relay has to be told where Drive is, the same way it is told the token.
+      PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FILES_ENDPOINT: DRIVE_SETTINGS.filesEndpoint,
+      PEARTUBE_ARCHIVE_GOOGLE_DRIVE_UPLOAD_ENDPOINT: DRIVE_SETTINGS.uploadEndpoint,
       PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD: 'true'
     }
   })
@@ -467,4 +474,41 @@ test('offload stays off until the selected provider asks for it', async (t) => {
     'nor is a Drive folder'
   )
   t.absent(await createRelayBlockOffload({ config: {} }), 'and an unconfigured relay has no offload at all')
+})
+
+// The offloader validated its own window argument and quietly fell back to the
+// default; nothing else did. So an unusable configured value left the relay
+// enforcing one number while reporting another and reserving disk against NaN —
+// and because the offloader self-healed, every existing test still passed. The
+// window is now derived once, so the three consumers cannot disagree.
+test('an unusable window is reported and reserved against as the number actually enforced', async (t) => {
+  const { DEFAULT_OFFLOAD_WINDOW_BYTES } = await import('@peartube/backend/archive')
+
+  for (const unusable of [undefined, null, 'lots', Number.NaN, -1, 1.5, Number.MAX_SAFE_INTEGER + 2]) {
+    const s3 = s3Recorder()
+    const offload = await createRelayBlockOffload({
+      config: { archive: { s3: { ...S3_SETTINGS, offloadWindowBytes: unusable } } },
+      fetchImpl: s3.fetchImpl,
+      createSigner: s3.createSigner
+    })
+
+    const label = JSON.stringify(unusable) ?? String(unusable)
+    t.is(offload.windowBytes, DEFAULT_OFFLOAD_WINDOW_BYTES, `${label} reports the default it fell back to`)
+    t.is(offload.stats().windowBytes, DEFAULT_OFFLOAD_WINDOW_BYTES, `${label} reports it in stats too`)
+    t.is(
+      offload.localWorkingBytes(40 * 1024 * 1024 * 1024),
+      boundedIngestBytes({ windowBytes: DEFAULT_OFFLOAD_WINDOW_BYTES, blockBytes: ASSET_BLOCK_SIZE, streamBytes: 40 * 1024 * 1024 * 1024 }),
+      `${label} reserves disk against the enforced window, not against NaN`
+    )
+  }
+
+  // 0 is a legitimate setting — offload every tracked block — and must survive
+  // the same validation that rejects garbage.
+  const zero = s3Recorder()
+  const offloadEverything = await createRelayBlockOffload({
+    config: { archive: { s3: { ...S3_SETTINGS, offloadWindowBytes: 0 } } },
+    fetchImpl: zero.fetchImpl,
+    createSigner: zero.createSigner
+  })
+  t.is(offloadEverything.windowBytes, 0, 'a window of zero is kept, not treated as absent')
 })

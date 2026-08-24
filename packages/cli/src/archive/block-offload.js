@@ -111,12 +111,16 @@ export async function createRelayBlockOffload ({
     throw new Error(`archive.${selected.section}.offload is enabled but this runtime has no fetch implementation`)
   }
 
-  const windowBytes = Number(settings.offloadWindowBytes)
-  // The read path's bound must be the same number as the ingest path's window,
-  // including when the operator's is unusable: the offloader falls back to its
-  // own default rather than keeping everything, so this falls back with it.
-  const residentWindowBytes = Number.isSafeInteger(windowBytes) && windowBytes >= 0
-    ? windowBytes
+  // One window, validated once, because three different consumers read it and
+  // they must agree: the offloader enforces it, the residency sweep bounds
+  // itself by it, and `localWorkingBytes` reserves disk against it. Only the
+  // offloader validated its own argument, so an unusable configured value left
+  // it quietly working to the default while reporting and admission carried the
+  // raw NaN — a relay enforcing one number and reserving disk against another.
+  // 0 stays meaningful and means offload every tracked block.
+  const configuredWindowBytes = Number(settings.offloadWindowBytes)
+  const windowBytes = Number.isSafeInteger(configuredWindowBytes) && configuredWindowBytes >= 0
+    ? configuredWindowBytes
     : DEFAULT_OFFLOAD_WINDOW_BYTES
   const prefix = typeof settings.prefix === 'string' ? settings.prefix : ''
 
@@ -236,7 +240,7 @@ export async function createRelayBlockOffload ({
           typeof keyHex === 'string' && keyHex.length === 64 ? storeFor(keyHex) : null
         ),
         eviction: {
-          windowBytes: residentWindowBytes,
+          windowBytes,
           // Playback interest, per block. `blob-range-priority.js` holds the
           // exact block range each active player is blocking on, and the
           // backend runs in this process, so this reads the same registry the

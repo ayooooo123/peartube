@@ -1,5 +1,6 @@
 import { createTorBoxSourceClient } from './torbox-source.js'
 import { createFileSourceClient } from './file-source.js'
+import { tmpdir } from 'node:os'
 import nodeFs from 'node:fs'
 
 /**
@@ -41,10 +42,17 @@ export class SourceProviderRegistry {
   getFileClient () {
     if (this._fileClient) return this._fileClient
     const fileConfig = this.config.sources?.file || {}
+    const defaultAllowed = ['/Users/jd/mediastorm-local', '/tmp', '/var', '/private/var', tmpdir()].filter(Boolean)
+    const envAllowed = process.env.PEARTUBE_FILE_ALLOWED_PATHS
+      ? process.env.PEARTUBE_FILE_ALLOWED_PATHS.split(',').map(s => s.trim()).filter(Boolean)
+      : defaultAllowed
+    const allowedPaths = Array.isArray(fileConfig.allowedPaths) && fileConfig.allowedPaths.length > 0
+      ? fileConfig.allowedPaths
+      : envAllowed
     this._fileClient = createFileSourceClient({
       fs: this.fs,
       chunkBytes: fileConfig.chunkBytes,
-      allowedPaths: fileConfig.allowedPaths || [],
+      allowedPaths,
       defaultWebdavBase: fileConfig.webdavBase || '',
       webdavUsername: fileConfig.webdavUsername || process.env.PEARTUBE_WEBDAV_USER || '',
       webdavPassword: fileConfig.webdavPassword || process.env.PEARTUBE_WEBDAV_PASS || '',

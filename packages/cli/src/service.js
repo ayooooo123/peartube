@@ -18,6 +18,7 @@ import { COMPANION_API_PREFIX, createCompanionServer } from './companion/server.
 import { createIngestJobStore } from './companion/ingest-job-store.js'
 import { createIngestManager } from './companion/ingest-manager.js'
 import { createSourceCallbackClient } from './companion/source-client.js'
+import { createSourceProviderRegistry } from './companion/sources/index.js'
 import tmdbFetch from '#fetch'
 import { sweepStagingState } from '@peartube/backend/assets'
 
@@ -977,6 +978,11 @@ async function buildRelayService({
               clock: nowFn
             })
           : null
+        const sourceRegistry = createSourceProviderRegistry({
+          config: config.archive || {},
+          fs: companionFsModule,
+          legacySourceClient: sourceClient
+        })
         if (runtime.ctx?.metaDb) {
           ingestManager = createIngestManager({
             store: createIngestJobStore({ bee: runtime.ctx.metaDb, now: nowFn }),
@@ -992,6 +998,7 @@ async function buildRelayService({
             fs: companionFsModule,
             path: companionPathModule,
             sourceClient,
+            sourceRegistry,
             // Where a resumable ingest's staged prefix lives. Both are absent
             // unless block offload is configured, and then no staging state can
             // exist for a job to hand back.

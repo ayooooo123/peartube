@@ -8,6 +8,7 @@ import process from '#process'
 
 import { reclaimStagingState } from '@peartube/backend/assets'
 
+import { createSourceProviderRegistry } from './sources/index.js'
 import { TERMINAL_INGEST_JOB_STATES } from './ingest-job-store.js'
 
 const REQUEST_FIELDS = new Set(['retentionClass', 'mediaContext', 'measuredFacts', 'expected', 'bundleProvenance'])
@@ -573,7 +574,7 @@ export function createIngestManager ({
   fs = defaultFs,
   path = defaultPath,
   sourceClient = null,
-  // Where a resumable ingest's staged prefix lives, so a job that ends can take
+  sourceRegistry = null,
   // it with it. Both absent means block offload is unconfigured, no staging
   // state can exist, and reclamation is a no-op.
   assetStore = null,
@@ -601,6 +602,7 @@ export function createIngestManager ({
     throw new TypeError('sourceClient must implement bounded source callbacks')
   }
   const stagingOwned = Boolean(assetStore) && typeof createStagingStore === 'function'
+  const registry = sourceRegistry || createSourceProviderRegistry({ fs, legacySourceClient: sourceClient })
 
   const ephemeral = new Map()
   const active = new Map()
@@ -711,8 +713,9 @@ export function createIngestManager ({
   }
 
   async function revokeAttachmentSource (jobId, attachment = ephemeral.get(jobId)) {
-    if (!sourceClient || !attachment?.sourceCapability) return
+    if (!attachment?.sourceCapability) return
     try {
+      if (sourceClient) await sourceClient.revoke({ capability: attachment.sourceCapability, jobId })
       await sourceClient.revoke({ capability: attachment.sourceCapability, jobId })
     } catch (error) {
       logger?.archive?.warn?.('Companion source grant revocation failed', {
@@ -810,27 +813,28 @@ export function createIngestManager ({
   // the first range is requested — the job the spool's `stat` used to do, done
   // earlier and from an authoritative source rather than from a copy.
   async function describeGrantedSource (job, attachment, signal) {
-    if (!sourceClient) fail('SOURCE_CALLBACK_UNAVAILABLE', 'source callback is unavailable', 503)
-    if (!attachment?.sourceCapability) fail('SOURCE_REATTACH_REQUIRED', 'source capability reattachment is required', 409)
-    const etag = job.request.expected.etag
-    if (typeof etag !== 'string') fail('SOURCE_ETAG_MISMATCH', 'source ETag is required')
-    const capability = attachment.sourceCapability
-    const metadata = await sourceClient.head({
-      capability,
+    const resolved = registry.resolveSourceClient(attachment)
+    if (!resolved) fail('SOURCE_UNAVAILABLE', 'No usable source provider or callback capability available for this job', 503)
+    const { client, params } = resolved
+    const isDirect = Boolean(attachment?.sourceDescriptor)
+    const etag = isDirect ? null : job.request.expected.etag
+    const metadata = await client.head({
+      ...params,
       jobId: job.jobId,
-      etag,
-      length: job.expectedBytes,
+      etag: etag || undefined,
+      length: isDirect ? undefined : job.expectedBytes,
       signal
     })
-    return { capability, etag, metadata }
+    const authoritativeEtag = isDirect ? metadata.etag : etag
+    return { client, capability: params, etag: authoritativeEtag, metadata }
   }
 
-  // Is what the grant serves what this job asked for? A length or an identity
-  // that does not match is permanent — no retry makes an origin start serving
-  // different bytes — and it is caught before anything is downloaded.
+  // Is what the grant serves what this job asked for? For direct source descriptors,
+  // the client's direct probe is authoritative. For legacy grants, the stated expectation
+  // must match what the remote callback serves.
   function verifyGrantedSource (job, granted) {
     if (granted.metadata.length !== job.expectedBytes) fail('SOURCE_LENGTH_MISMATCH', 'source length does not match')
-    if (granted.metadata.etag !== granted.etag) fail('SOURCE_ETAG_MISMATCH', 'source ETag does not match')
+    if (granted.etag && granted.metadata.etag !== granted.etag) fail('SOURCE_ETAG_MISMATCH', 'source ETag does not match')
   }
 
   // How far a granted ingest has got. The bytes arrive during publication now
@@ -890,7 +894,7 @@ export function createIngestManager ({
   // ingest has to notice that the operator withdrew permission.
   function grantedSourceFor (job, granted, progress, entry) {
     return {
-      client: sourceClient,
+      client: granted.client || sourceClient,
       capability: granted.capability,
       jobId: job.jobId,
       etag: granted.etag,
@@ -992,7 +996,7 @@ export function createIngestManager ({
     let attachment = ephemeral.get(jobId)
     try {
       if (!job || job.state !== 'queued') return job
-      if (!attachment?.spool && !attachment?.sourceCapability) return job
+      if (!attachment?.spool && !attachment?.sourceCapability && !attachment?.sourceDescriptor) return job
       if (!canIngest(job.request)) fail('STORAGE_ADMISSION_DENIED', 'retention admission denied', 507)
       job = await store.transition(jobId, { expectedVersion: job.version, from: 'queued', to: 'acquiring' })
       // A file this relay already holds is spooled and verified exactly as it
@@ -1130,7 +1134,7 @@ export function createIngestManager ({
 
   function schedule (jobId) {
     const attachment = ephemeral.get(jobId)
-    if (!started || closing || active.has(jobId) || (!attachment?.spool && !attachment?.sourceCapability)) return
+    if (!started || closing || active.has(jobId) || (!attachment?.spool && !attachment?.sourceCapability && !attachment?.sourceDescriptor)) return
     const entry = { controller: new AbortController(), cancelled: false, closing: false, sourceFailure: null, promise: null }
     entry.promise = runJob(jobId, entry).finally(() => {
       if (active.get(jobId) === entry) active.delete(jobId)
@@ -1167,6 +1171,7 @@ export function createIngestManager ({
       request,
       spool = null,
       sourceCapability = null,
+      sourceDescriptor = null,
       ingestSpoolLease = null,
       signal = null
     } = {}) {
@@ -1174,7 +1179,30 @@ export function createIngestManager ({
         assertSubmissionActive(signal)
         if (ingestSpoolLease != null && spool == null) fail('SPOOL_OWNERSHIP_INVALID', 'ingest spool ownership handoff failed', 500)
         const key = text(idempotencyKey, 'idempotencyKey', 128, { pattern: ID })
-        const normalized = normalizeIngestRequest(request)
+
+        let preppedRequest = request
+        if (sourceDescriptor) {
+          const resolved = registry.resolveSourceClient({ sourceDescriptor })
+          if (!resolved) fail('SOURCE_UNAVAILABLE', 'No usable source provider configured for this descriptor', 503)
+          const directProbed = await resolved.client.head({ ...resolved.params, signal })
+          if (!Number.isSafeInteger(directProbed?.length) || directProbed.length <= 0) {
+            fail('SOURCE_LENGTH_INVALID', 'Direct source provider returned invalid length', 502)
+          }
+          preppedRequest = {
+            ...request,
+            expected: {
+              ...(request?.expected || {}),
+              byteLength: directProbed.length,
+              etag: directProbed.etag || request?.expected?.etag
+            },
+            measuredFacts: {
+              ...(request?.measuredFacts || {}),
+              byteLength: directProbed.length
+            }
+          }
+        }
+
+        const normalized = normalizeIngestRequest(preppedRequest)
         const fingerprint = normalizedFingerprint(normalized)
         const idempotencyDigest = hashHex('peartube.companion.ingest.idempotency.v1', key)
 
@@ -1183,6 +1211,7 @@ export function createIngestManager ({
         if (existing) {
           if (existing.requestFingerprint !== fingerprint) fail('IDEMPOTENCY_CONFLICT', 'idempotency key is already bound to another request', 409)
           const incomingCapability = normalizeSourceCapability(sourceCapability)
+          const incomingDescriptor = sourceDescriptor || null
           let incomingSpool = null
           let spoolAccepted = false
           let spoolAdopted = false
@@ -1197,7 +1226,7 @@ export function createIngestManager ({
             // human pressing play, not a loop.
             if (existing.state === 'failed' &&
               (existing.recoverable === true || REVIVABLE_TERMINAL_ERRORS.has(existing.errorCode)) &&
-              (spool != null || incomingCapability)) {
+              (spool != null || incomingCapability || incomingDescriptor)) {
               const settling = active.get(existing.jobId)
               if (settling) {
                 // The old run owns its attachment through async revocation and
@@ -1215,7 +1244,7 @@ export function createIngestManager ({
             if (spool != null) incomingSpool = normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
             const revivable = existing.recoverable === true ||
               REVIVABLE_TERMINAL_ERRORS.has(existing.errorCode)
-            if (existing.state === 'failed' && revivable && (incomingSpool || incomingCapability)) {
+            if (existing.state === 'failed' && revivable && (incomingSpool || incomingCapability || incomingDescriptor)) {
               existing = await store.reopenRecoverable(existing.jobId, {
                 expectedVersion: existing.version,
                 // A terminal failure keeps no progress worth trusting: whatever
@@ -1244,7 +1273,8 @@ export function createIngestManager ({
                   ...attached,
                   descriptor: spool,
                   spool: incomingSpool,
-                  sourceCapability: attached?.sourceCapability || null
+                  sourceCapability: attached?.sourceCapability || null,
+                  sourceDescriptor: attached?.sourceDescriptor || incomingDescriptor
                 })
                 spoolAdopted = true
                 incomingSpool = null
@@ -1264,6 +1294,8 @@ export function createIngestManager ({
             if (!attached.sourceCapability && incomingCapability != null) {
               ephemeral.set(existing.jobId, { ...attached, sourceCapability: incomingCapability })
               capabilityAdopted = true
+            } else if (!attached.sourceDescriptor && incomingDescriptor != null) {
+              ephemeral.set(existing.jobId, { ...attached, sourceDescriptor: incomingDescriptor })
             } else if (incomingCapability != null && incomingCapability !== attached.sourceCapability) {
               await revokeAttachmentSource(existing.jobId, { sourceCapability: incomingCapability })
             }
@@ -1288,6 +1320,7 @@ export function createIngestManager ({
         }
 
         const capability = normalizeSourceCapability(sourceCapability)
+        const descriptor = sourceDescriptor || null
         const normalizedSpool = spool == null ? null : normalizeSpoolDescriptor(spool, normalized, { spoolRoot, fs, path })
         const initial = buildJob(key, idempotencyDigest, normalized, fingerprint)
         let spoolAccepted = false
@@ -1295,7 +1328,7 @@ export function createIngestManager ({
         try {
           const outcome = await store.createOrReplay({ idempotencyDigest, requestFingerprint: fingerprint, job: initial })
           assertSubmissionActive(signal)
-          if (!TERMINAL.has(outcome.job.state) && (normalizedSpool || capability)) {
+          if (!TERMINAL.has(outcome.job.state) && (normalizedSpool || capability || descriptor)) {
             const attached = ephemeral.get(outcome.job.jobId) || {}
             // Once accepted, this manager must attach and schedule without another abort checkpoint.
             assertSubmissionActive(signal)
@@ -1310,7 +1343,8 @@ export function createIngestManager ({
             ephemeral.set(outcome.job.jobId, {
               descriptor: attached.spool ? attached.descriptor : spool,
               spool: attached.spool || normalizedSpool,
-              sourceCapability: attached.sourceCapability || capability
+              sourceCapability: attached.sourceCapability || capability,
+              sourceDescriptor: attached.sourceDescriptor || descriptor
             })
             if (normalizedSpool && !attached.spool) spoolAdopted = true
             if (normalizedSpool && attached.spool && normalizedSpool.filePath !== attached.spool.filePath) {

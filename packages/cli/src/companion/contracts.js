@@ -25,7 +25,7 @@ const KIND = new Set(['movie', 'episode'])
 const CANONICAL_NAMESPACE = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/
 const SEARCH_FIELDS = new Set(['namespace', 'identifier', 'kind', 'season', 'episode', 'title', 'year', 'limit', 'cursor'])
 const OPEN_FIELDS = new Set(['candidateRef'])
-const INGEST_FIELDS = new Set(['idempotencyKey', 'request', 'spool', 'sourceCapability'])
+const INGEST_FIELDS = new Set(['idempotencyKey', 'request', 'spool', 'sourceCapability', 'sourceDescriptor'])
 const POLICY_FIELDS = new Set([
   'policyVersion',
   'consentVersion',
@@ -316,7 +316,8 @@ function inspectIngestValue (value, depth = 0) {
   }
   if (!value || typeof value !== 'object') return
   for (const [field, child] of Object.entries(value)) {
-    if (field !== 'publicTrackerIndependent' && FORBIDDEN_INGEST_FIELD.test(field)) throw new CompanionContractError(400, 'UNKNOWN_FIELD', 'Ingest request contains a prohibited field', boundedFieldName(field))
+    const isAllowedField = field === 'publicTrackerIndependent' || field === 'torrentId' || field === 'webdavUrl' || field === 'webdavPath'
+    if (!isAllowedField && FORBIDDEN_INGEST_FIELD.test(field)) throw new CompanionContractError(400, 'UNKNOWN_FIELD', 'Ingest request contains a prohibited field', boundedFieldName(field))
     inspectIngestValue(child, depth + 1)
   }
 }
@@ -338,6 +339,15 @@ export function decodeIngestJobBody (body) {
   }
   if (value.sourceCapability !== undefined) {
     result.sourceCapability = boundedString(value.sourceCapability, 'sourceCapability', 256, { pattern: /^[A-Za-z0-9._~-]+$/ })
+  }
+  if (value.sourceDescriptor !== undefined) {
+    if (value.sourceDescriptor !== null && (!value.sourceDescriptor || typeof value.sourceDescriptor !== 'object' || Array.isArray(value.sourceDescriptor))) {
+      throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid sourceDescriptor', 'sourceDescriptor')
+    }
+    if (value.sourceDescriptor) {
+      inspectIngestValue(value.sourceDescriptor)
+      result.sourceDescriptor = value.sourceDescriptor
+    }
   }
   return result
 }

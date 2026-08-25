@@ -45,7 +45,7 @@ export class FileSourceClient {
     this.fs = fs
     this.chunkBytes = Number.isSafeInteger(chunkBytes) && chunkBytes > 0 ? chunkBytes : DEFAULT_CHUNK_BYTES
     this.timeoutMs = Number.isSafeInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS
-    const rawAllowed = Array.isArray(allowedPaths) && allowedPaths.length > 0 ? allowedPaths : DEFAULT_ALLOWED_PATHS
+    const rawAllowed = Array.isArray(allowedPaths) ? allowedPaths : DEFAULT_ALLOWED_PATHS
     this.allowedPaths = rawAllowed.map(p => nodePath.resolve(String(p).trim())).filter(Boolean)
     this.defaultWebdavBase = typeof defaultWebdavBase === 'string' ? defaultWebdavBase.trim() : ''
     this.webdavUsername = typeof webdavUsername === 'string' ? webdavUsername.trim() : ''
@@ -53,12 +53,28 @@ export class FileSourceClient {
     this.fetchImpl = typeof fetchImpl === 'function' ? fetchImpl : globalThis.fetch
   }
 
+  _canonicalPath (targetPath) {
+    if (!targetPath) return ''
+    let resolved = nodePath.resolve(targetPath)
+    if (this.fs && typeof this.fs.realpathSync === 'function') {
+      try {
+        resolved = this.fs.realpathSync(resolved)
+      } catch {}
+    }
+    return resolved
+  }
+
   _isPathAllowed (filePath) {
     if (!filePath || this.allowedPaths.length === 0) return false
-    const resolved = nodePath.resolve(filePath)
-    return this.allowedPaths.some(prefix => (
-      resolved === prefix || resolved.startsWith(prefix.endsWith(nodePath.sep) ? prefix : prefix + nodePath.sep)
-    ))
+    const canonicalTarget = this._canonicalPath(filePath)
+    if (!canonicalTarget) return false
+
+    return this.allowedPaths.some(rawPrefix => {
+      const canonicalPrefix = this._canonicalPath(rawPrefix)
+      if (!canonicalPrefix) return false
+      return canonicalTarget === canonicalPrefix ||
+        canonicalTarget.startsWith(canonicalPrefix.endsWith(nodePath.sep) ? canonicalPrefix : canonicalPrefix + nodePath.sep)
+    })
   }
   _resolveDescriptor (descriptor = {}) {
     const cap = typeof descriptor.capability === 'object' && descriptor.capability !== null ? descriptor.capability : {}

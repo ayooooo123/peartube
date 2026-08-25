@@ -67,6 +67,47 @@ test('FileSourceClient resolves and blocks path traversal attempts', async (t) =
   }
 })
 
+test('FileSourceClient with explicit allowedPaths: [] fails closed for all paths', async (t) => {
+  const tmpPath = join(tmpdir(), `peartube-failclosed-test-${Date.now()}.mkv`)
+  writeFileSync(tmpPath, b4a.from('Secret data'))
+  t.teardown(() => { try { unlinkSync(tmpPath) } catch {} })
+
+  const client = createFileSourceClient({ allowedPaths: [] })
+  try {
+    await client.head({ filePath: tmpPath })
+    t.fail('should have thrown access denied')
+  } catch (err) {
+    t.is(err.code, 'FILE_ACCESS_DENIED', 'empty allowlist fails closed')
+  }
+})
+
+test('FileSourceClient catches and blocks symlinks pointing outside allowed paths', async (t) => {
+  const { symlinkSync, mkdirSync, rmSync } = await import('node:fs')
+  const testRoot = join(tmpdir(), `peartube-symlink-root-${Date.now()}`)
+  const allowedDir = join(testRoot, 'allowed')
+  const outsideDir = join(testRoot, 'outside')
+  mkdirSync(allowedDir, { recursive: true })
+  mkdirSync(outsideDir, { recursive: true })
+
+  const secretFile = join(outsideDir, 'secret.mkv')
+  const linkFile = join(allowedDir, 'link-to-secret.mkv')
+  writeFileSync(secretFile, b4a.from('Secret movie bytes'))
+  symlinkSync(secretFile, linkFile)
+
+  t.teardown(() => { try { rmSync(testRoot, { recursive: true, force: true }) } catch {} })
+
+  const client = createFileSourceClient({
+    allowedPaths: [allowedDir]
+  })
+
+  try {
+    await client.head({ filePath: linkFile })
+    t.fail('should have thrown access denied for symlink pointing outside')
+  } catch (err) {
+    t.is(err.code, 'FILE_ACCESS_DENIED', 'symlink escape blocked via realpath')
+  }
+})
+
 test('FileSourceClient head and getRange via WebDAV mock', async (t) => {
   const content = b4a.from('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz')
   const calls = []

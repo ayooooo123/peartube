@@ -1051,8 +1051,20 @@ export function createIngestManager ({
             await exposePublication(current, resolved.channelInfo, resolved.metadata)
             return await store.completePublication(jobId, { expectedVersion: current.version, result: resolved.result })
           }
-        } catch {
-          // Fall through to the bounded terminal publication error below.
+        } catch (publicationError) {
+          // Fall through to the bounded terminal publication error below, but
+          // not silently. This is a second failure, while finishing a job that
+          // had already reached `publishing`, and swallowed it is
+          // indistinguishable from the first — leaving PUBLICATION_FAILED with
+          // its cause recorded nowhere at all. Two titles transferred every
+          // byte and died here with nothing to explain them.
+          logger?.archive?.warn?.('Companion publication could not be finished', {
+            jobId,
+            reason: publicationError?.message || String(publicationError),
+            at: typeof publicationError?.stack === 'string'
+              ? publicationError.stack.split('\n').slice(1, 3).map(line => line.trim()).join(' <- ')
+              : null
+          })
         }
       }
       if (cancelled) {
@@ -1071,11 +1083,20 @@ export function createIngestManager ({
         Boolean(attachment?.sourceCapability) ||
         current?.state === 'publishing'
       )
+      // A code that came from the job's STATE rather than from the error means
+      // the error carried none of its own — an unexpected throw, where the
+      // message is the only thing that can ever explain it. PUBLICATION_FAILED
+      // is the clearest example: it says only "it broke while publishing".
+      const uncoded = !(error?.code && ERROR_CODE.test(String(error.code)))
       logger?.archive?.warn?.('Companion ingest job failed', {
         jobId,
         state: current?.state || null,
         errorCode: code,
-        recoverable
+        recoverable,
+        reason: error?.message || String(error),
+        at: uncoded && typeof error?.stack === 'string'
+          ? error.stack.split('\n').slice(1, 3).map(line => line.trim()).join(' <- ')
+          : null
       })
       const terminal = await markTerminal(jobId, 'failed', code, recoverable)
       // Nothing will ever come back for the staged prefix of a job that cannot

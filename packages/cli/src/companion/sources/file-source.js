@@ -1,5 +1,14 @@
 import b4a from 'b4a'
 import nodeFs from 'node:fs'
+import nodePath from 'node:path'
+import { tmpdir } from 'node:os'
+
+const DEFAULT_ALLOWED_PATHS = Object.freeze([
+  '/Users/jd/mediastorm-local/cache/streams',
+  '/Users/jd/mediastorm-local',
+  '/tmp',
+  tmpdir()
+].filter(Boolean).map(p => nodePath.resolve(p)))
 
 const DEFAULT_CHUNK_BYTES = 16 * 1024 * 1024
 const DEFAULT_TIMEOUT_MS = 20_000
@@ -27,7 +36,7 @@ export class FileSourceClient {
     fs = nodeFs,
     chunkBytes = DEFAULT_CHUNK_BYTES,
     timeoutMs = DEFAULT_TIMEOUT_MS,
-    allowedPaths = [],
+    allowedPaths = DEFAULT_ALLOWED_PATHS,
     defaultWebdavBase = '',
     webdavUsername = '',
     webdavPassword = '',
@@ -36,7 +45,8 @@ export class FileSourceClient {
     this.fs = fs
     this.chunkBytes = Number.isSafeInteger(chunkBytes) && chunkBytes > 0 ? chunkBytes : DEFAULT_CHUNK_BYTES
     this.timeoutMs = Number.isSafeInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS
-    this.allowedPaths = Array.isArray(allowedPaths) ? allowedPaths.map(p => String(p).trim()).filter(Boolean) : []
+    const rawAllowed = Array.isArray(allowedPaths) && allowedPaths.length > 0 ? allowedPaths : DEFAULT_ALLOWED_PATHS
+    this.allowedPaths = rawAllowed.map(p => nodePath.resolve(String(p).trim())).filter(Boolean)
     this.defaultWebdavBase = typeof defaultWebdavBase === 'string' ? defaultWebdavBase.trim() : ''
     this.webdavUsername = typeof webdavUsername === 'string' ? webdavUsername.trim() : ''
     this.webdavPassword = typeof webdavPassword === 'string' ? webdavPassword.trim() : ''
@@ -44,10 +54,12 @@ export class FileSourceClient {
   }
 
   _isPathAllowed (filePath) {
-    if (this.allowedPaths.length === 0) return true
-    return this.allowedPaths.some(prefix => filePath === prefix || filePath.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))
+    if (!filePath || this.allowedPaths.length === 0) return false
+    const resolved = nodePath.resolve(filePath)
+    return this.allowedPaths.some(prefix => (
+      resolved === prefix || resolved.startsWith(prefix.endsWith(nodePath.sep) ? prefix : prefix + nodePath.sep)
+    ))
   }
-
   _resolveDescriptor (descriptor = {}) {
     const cap = typeof descriptor.capability === 'object' && descriptor.capability !== null ? descriptor.capability : {}
     const rawFilePath = descriptor.filePath ?? cap.filePath

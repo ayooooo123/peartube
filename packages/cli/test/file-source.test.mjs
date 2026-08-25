@@ -54,6 +54,19 @@ test('FileSourceClient enforces allowedPaths whitelist', async (t) => {
   }
 })
 
+test('FileSourceClient resolves and blocks path traversal attempts', async (t) => {
+  const client = createFileSourceClient({
+    allowedPaths: ['/tmp/allowed-folder']
+  })
+
+  try {
+    await client.head({ filePath: '/tmp/allowed-folder/../../etc/passwd' })
+    t.fail('should have thrown access denied')
+  } catch (err) {
+    t.is(err.code, 'FILE_ACCESS_DENIED', 'traversal attack rejected')
+  }
+})
+
 test('FileSourceClient head and getRange via WebDAV mock', async (t) => {
   const content = b4a.from('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz')
   const calls = []

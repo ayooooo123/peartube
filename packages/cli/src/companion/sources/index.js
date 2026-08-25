@@ -77,7 +77,7 @@ export class SourceProviderRegistry {
           params
         }
       }
-      if (provider === 'file' || provider === 'local-file' || provider === 'webdav' || provider === 'usenet') {
+      if (provider === 'file' || provider === 'local-file' || provider === 'webdav') {
         const client = this.getFileClient()
         const params = {
           filePath: descriptor.filePath || null,

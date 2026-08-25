@@ -1175,37 +1175,38 @@ export function createIngestManager ({
       ingestSpoolLease = null,
       signal = null
     } = {}) {
-      return serializeMutation(async () => {
-        assertSubmissionActive(signal)
-        if (ingestSpoolLease != null && spool == null) fail('SPOOL_OWNERSHIP_INVALID', 'ingest spool ownership handoff failed', 500)
-        const key = text(idempotencyKey, 'idempotencyKey', 128, { pattern: ID })
+      assertSubmissionActive(signal)
+      if (ingestSpoolLease != null && spool == null) fail('SPOOL_OWNERSHIP_INVALID', 'ingest spool ownership handoff failed', 500)
+      const key = text(idempotencyKey, 'idempotencyKey', 128, { pattern: ID })
 
-        let preppedRequest = request
-        if (sourceDescriptor) {
-          const resolved = registry.resolveSourceClient({ sourceDescriptor })
-          if (!resolved) fail('SOURCE_UNAVAILABLE', 'No usable source provider configured for this descriptor', 503)
-          const directProbed = await resolved.client.head({ ...resolved.params, signal })
-          if (!Number.isSafeInteger(directProbed?.length) || directProbed.length <= 0) {
-            fail('SOURCE_LENGTH_INVALID', 'Direct source provider returned invalid length', 502)
-          }
-          preppedRequest = {
-            ...request,
-            expected: {
-              ...(request?.expected || {}),
-              byteLength: directProbed.length,
-              etag: directProbed.etag || request?.expected?.etag
-            },
-            measuredFacts: {
-              ...(request?.measuredFacts || {}),
-              byteLength: directProbed.length
-            }
+      let preppedRequest = request
+      if (sourceDescriptor) {
+        const resolved = registry.resolveSourceClient({ sourceDescriptor })
+        if (!resolved) fail('SOURCE_UNAVAILABLE', 'No usable source provider configured for this descriptor', 503)
+        const directProbed = await resolved.client.head({ ...resolved.params, signal })
+        if (!Number.isSafeInteger(directProbed?.length) || directProbed.length <= 0) {
+          fail('SOURCE_LENGTH_INVALID', 'Direct source provider returned invalid length', 502)
+        }
+        preppedRequest = {
+          ...request,
+          expected: {
+            ...(request?.expected || {}),
+            byteLength: directProbed.length,
+            etag: directProbed.etag || request?.expected?.etag
+          },
+          measuredFacts: {
+            ...(request?.measuredFacts || {}),
+            byteLength: directProbed.length
           }
         }
+      }
 
-        const normalized = normalizeIngestRequest(preppedRequest)
-        const fingerprint = normalizedFingerprint(normalized)
-        const idempotencyDigest = hashHex('peartube.companion.ingest.idempotency.v1', key)
+      const normalized = normalizeIngestRequest(preppedRequest)
+      const fingerprint = normalizedFingerprint(normalized)
+      const idempotencyDigest = hashHex('peartube.companion.ingest.idempotency.v1', key)
 
+      return serializeMutation(async () => {
+        assertSubmissionActive(signal)
         let existing = await store.findByIdempotency(idempotencyDigest)
         assertSubmissionActive(signal)
         if (existing) {

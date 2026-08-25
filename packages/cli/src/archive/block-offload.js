@@ -217,9 +217,13 @@ export async function createRelayBlockOffload ({
     }
   }
 
+  const rawConcurrency = Number(settings.uploadConcurrency || process.env.PEARTUBE_ARCHIVE_UPLOAD_CONCURRENCY || 16)
+  const uploadConcurrency = Number.isSafeInteger(rawConcurrency) && rawConcurrency > 0 ? rawConcurrency : 16
+
   return {
     enabled: true,
     windowBytes,
+    uploadConcurrency,
     prefix,
     // The two things an operator's log line needs to say where block data goes,
     // and the only two this module will hand out: the backend's name and the

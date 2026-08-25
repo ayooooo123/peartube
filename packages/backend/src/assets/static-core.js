@@ -27,8 +27,6 @@ export const ASSET_BLOCK_SIZE = 256 * 1024
 // round-trip over local-work, which on the same measurement is 1026ms over
 // 67ms — about fifteen in flight — and the last few of those buy progressively
 // less while asking progressively more of the provider and of the operator's
-// uplink, which is the real ceiling once the idling stops. Eight removes most
-// of the idle and holds pass 1's footprint at 2 MiB whatever the title's size.
 export const STAGING_UPLOAD_CONCURRENCY = 8
 
 const STATIC_ASSET_KIND = 'static-prologue-v1'
@@ -1318,7 +1316,10 @@ export async function writeStaticAsset({
   // back. `uploaded` is what the cleanup has to account for on either path.
   const staged = { uploaded: 0, restored: 0 }
   // Pass 1's uploads, running against the read rather than in front of it.
-  const uploads = createUploadPipeline(STAGING_UPLOAD_CONCURRENCY)
+  const stagingConcurrency = Number.isSafeInteger(options.offload?.uploadConcurrency) && options.offload.uploadConcurrency > 0
+    ? options.offload.uploadConcurrency
+    : STAGING_UPLOAD_CONCURRENCY
+  const uploads = createUploadPipeline(stagingConcurrency)
   // Set when an interruption leaves the staging core and its confirmed objects
   // worth keeping. This one boolean is the difference between "the download died
   // at minute 42" and "the download has to start again", so it is decided once,

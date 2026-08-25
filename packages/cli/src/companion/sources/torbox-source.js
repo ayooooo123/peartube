@@ -1,7 +1,7 @@
 import b4a from 'b4a'
 
-const DEFAULT_CHUNK_BYTES = 32 * 1024 * 1024
-const DEFAULT_TIMEOUT_MS = 20_000
+const DEFAULT_CHUNK_BYTES = 16 * 1024 * 1024
+const DEFAULT_TIMEOUT_MS = 60_000
 const TORBOX_API_BASE = 'https://api.torbox.app/v1/api'
 const LINK_TTL_MS = 15 * 60 * 1000 // 15 min cache before re-verifying
 

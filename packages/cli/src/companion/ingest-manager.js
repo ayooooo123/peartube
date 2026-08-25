@@ -122,7 +122,7 @@ const MIME_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}\/[a-z0-9][a-z0-9!#$&^_.+-]{0
 const LOCATOR = /^(?:[a-z][a-z0-9+.-]*:(?=\S)|\/\/)/i
 const SENSITIVE_FIELD = /(?:url|uri|href|link|magnet|cookie|authorization|credential|secret|password|passkey|debrid|headers?|capability|spool|localpath|filepath|torrentfile|privateinfohash|tracker(?:url|id|announce)?)/i
 const SENSITIVE_VALUE = /(?:[a-z][a-z0-9+.-]*:\/\/|\bmagnet:|\b(?:passkey|authkey|torrent[_-]?pass|private[_-]?infohash|tracker(?:url|id))\s*[:=])/i
-const MAX_SAFE_MEDIA_BYTES = 5 * 1024 * 1024 * 1024
+const MAX_SAFE_MEDIA_BYTES = 500 * 1024 * 1024 * 1024
 const MAX_PROGRESS_INTERVAL = 4 * 1024 * 1024
 const SHA256_BYTES = 32
 

@@ -25,7 +25,7 @@ import { parseBoundary, receiveMultipartUpload } from '../multipart.js'
 const MAX_UNIX_SOCKET_PATH_BYTES = 103
 const MAX_ERROR_BYTES = 512
 const SOCKET_PROBE_TIMEOUT_MS = 500
-const DEFAULT_MAX_INGEST_BYTES = 5 * 1024 * 1024 * 1024
+const DEFAULT_MAX_INGEST_BYTES = 500 * 1024 * 1024 * 1024
 const MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 // The one path prefix every companion route lives under. Exported because
 // whoever wires the companion up has to know which prefix belongs to it — a

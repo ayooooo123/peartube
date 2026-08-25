@@ -11,7 +11,7 @@ const CAPABILITY = /^[A-Za-z0-9._~-]{16,256}$/
 const CLIENT = /^[A-Za-z0-9._-]{1,128}$/
 const MIME_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$/
 const DEFAULT_TIMEOUT_MS = 20_000
-const MAX_SOURCE_BYTES = 5 * 1024 * 1024 * 1024
+const MAX_SOURCE_BYTES = 500 * 1024 * 1024 * 1024
 
 export class SourceCallbackError extends Error {
   constructor (code, recoverable = true) {

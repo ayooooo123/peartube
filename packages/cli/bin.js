@@ -116,9 +116,7 @@ async function runCommand(flags) {
       await closeRelay('SIGINT')
       process.exit?.(0)
     })
-    process.on('beforeExit', async () => {
-      await closeRelay('beforeExit')
-    })
+    // Keep process alive for daemon workloads; explicit SIGTERM/SIGINT handles graceful shutdown.
   }
 }
 

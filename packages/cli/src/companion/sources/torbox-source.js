@@ -187,28 +187,28 @@ export class TorBoxSourceClient {
       fail('TORBOX_CALLBACK_REQUIRED', 'onChunk callback is required', false)
     }
 
-    let downloadUrl = await this._fetchDownloadLink(torrentId, fileId, { signal })
+    const expectedBytes = end - start + 1
+    let lastError = null
 
-    let response
-    try {
-      response = await this.fetchImpl(downloadUrl, {
-        method: 'GET',
-        headers: {
-          Range: `bytes=${start}-${end}`,
-          'User-Agent': 'peartube-relay/1.0'
-        },
-        signal
-      })
-    } catch (err) {
-      if (signal?.aborted) throw err
-      fail('TORBOX_CDN_UNREACHABLE', `TorBox CDN range read failed: ${err?.message || String(err)}`, true)
-    }
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      if (signal?.aborted) fail('CANCELLED', 'Range read cancelled', true)
 
-    // If CDN link expired, retry once with forceFresh
-    if (response.status === 401 || response.status === 403 || response.status === 410) {
-      downloadUrl = await this._fetchDownloadLink(torrentId, fileId, { forceFresh: true, signal })
+      const forceFresh = attempt > 1
+      let downloadUrl
       try {
-        response = await this.fetchImpl(downloadUrl, {
+        downloadUrl = await this._fetchDownloadLink(torrentId, fileId, { forceFresh, signal })
+      } catch (err) {
+        lastError = err
+        if (attempt === 4) throw err
+        await new Promise(r => setTimeout(r, attempt * 1000))
+        continue
+      }
+
+      const receivedChunks = []
+      let totalStreamed = 0
+
+      try {
+        const response = await this.fetchImpl(downloadUrl, {
           method: 'GET',
           headers: {
             Range: `bytes=${start}-${end}`,
@@ -216,50 +216,60 @@ export class TorBoxSourceClient {
           },
           signal
         })
-      } catch (err) {
-        if (signal?.aborted) throw err
-        fail('TORBOX_CDN_UNREACHABLE', `TorBox CDN range read retry failed: ${err?.message || String(err)}`, true)
-      }
-    }
 
-    if (response.status !== 206 && response.status !== 200) {
-      fail('TORBOX_RANGE_FAILED', `TorBox CDN range request failed with HTTP ${response.status}`, response.status >= 500)
-    }
-
-    let totalStreamed = 0
-    const expectedBytes = end - start + 1
-
-    if (response.body && typeof response.body.getReader === 'function') {
-      const reader = response.body.getReader()
-      try {
-        while (true) {
-          if (signal?.aborted) {
-            await reader.cancel().catch(() => {})
-            fail('CANCELLED', 'Range read cancelled', true)
-          }
-          const { done, value } = await reader.read()
-          if (done) break
-          if (value && value.byteLength > 0) {
-            const buf = ArrayBuffer.isView(value) ? value : b4a.from(value)
-            onChunk(buf)
-            totalStreamed += buf.byteLength
-          }
+        if (response.status === 401 || response.status === 403 || response.status === 410) {
+          throw new Error(`CDN token expired: HTTP ${response.status}`)
         }
-      } finally {
-        reader.releaseLock?.()
+
+        if (response.status !== 206 && response.status !== 200) {
+          throw new Error(`TorBox CDN range request returned HTTP ${response.status}`)
+        }
+
+        if (response.body && typeof response.body.getReader === 'function') {
+          const reader = response.body.getReader()
+          try {
+            while (true) {
+              if (signal?.aborted) {
+                await reader.cancel().catch(() => {})
+                fail('CANCELLED', 'Range read cancelled', true)
+              }
+              const { done, value } = await reader.read()
+              if (done) break
+              if (value && value.byteLength > 0) {
+                const buf = ArrayBuffer.isView(value) ? value : b4a.from(value)
+                receivedChunks.push(buf)
+                totalStreamed += buf.byteLength
+              }
+            }
+          } finally {
+            reader.releaseLock?.()
+          }
+        } else if (typeof response.arrayBuffer === 'function') {
+          const ab = await response.arrayBuffer()
+          const buf = b4a.from(ab)
+          receivedChunks.push(buf)
+          totalStreamed += buf.byteLength
+        }
+
+        if (totalStreamed !== expectedBytes) {
+          throw new Error(`Streamed ${totalStreamed} bytes, expected ${expectedBytes}`)
+        }
+
+        // Successfully received complete range! Emit chunks
+        for (const chunk of receivedChunks) {
+          onChunk(chunk)
+        }
+        return
+      } catch (err) {
+        lastError = err
+        if (signal?.aborted) throw err
+        if (attempt < 4) {
+          await new Promise(r => setTimeout(r, attempt * 1000))
+        }
       }
-    } else if (typeof response.arrayBuffer === 'function') {
-      const ab = await response.arrayBuffer()
-      const buf = b4a.from(ab)
-      onChunk(buf)
-      totalStreamed += buf.byteLength
-    } else {
-      fail('TORBOX_BODY_UNREADABLE', 'Response body has no reader or arrayBuffer', true)
     }
 
-    if (totalStreamed !== expectedBytes) {
-      fail('TORBOX_BYTES_MISMATCH', `Streamed ${totalStreamed} bytes, expected ${expectedBytes}`, true)
-    }
+    fail('TORBOX_CDN_UNREACHABLE', `TorBox CDN range read failed after 4 attempts: ${lastError?.message || String(lastError)}`, true)
   }
 
   async revoke () {

@@ -1468,10 +1468,18 @@ export function createIngestManager ({
       // weight on the volume.
       fs.rmSync(sourceSpoolRoot, { recursive: true, force: true })
       started = true
-      for (const job of await store.listActive()) await recover(job)
+      for (const job of await store.listActive()) {
+        try {
+          await recover(job)
+        } catch (error) {
+          logger?.archive?.warn?.('Companion ingest job recovery failed on boot', {
+            jobId: job?.jobId,
+            error: error?.message || String(error)
+          })
+        }
+      }
       return this
     },
-
     async close () {
       if (closed) return
       closing = true

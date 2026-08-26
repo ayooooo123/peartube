@@ -172,9 +172,8 @@ async function buildRelayService({
   // half-configured bucket throws here rather than downgrading to local-only.
   const blockOffload = await createRelayBlockOffload({ config, logger })
   if (blockOffload) {
-    logger.relay?.info?.('Relay block offload enabled', {
+    logger.relay?.info?.('S3 block offload enabled', {
       windowBytes: blockOffload.windowBytes,
-      provider: blockOffload.provider,
       bucket: blockOffload.bucket,
       prefix: blockOffload.prefix
     })
@@ -320,23 +319,15 @@ async function buildRelayService({
     return largestAdmissibleBytes(ceiling)
   }
 
-  // How this relay's capacity divides between the volume and the bucket.
-  //
-  // Both the status file and the archive console reported archived bytes as
-  // though every one of them were on this disk. With offload on those are no
-  // longer the same number, and an operator sizing a relay has to be able to
-  // see which of the two they are reading. A signal this runtime cannot
-  // measure stays null rather than being reported as a zero that looks like a
-  // measurement.
+  // Capacity is admission policy, not an object-store inventory. S3 objects are
+  // proven per completed publication; process-local transfer counters reset and
+  // include temporary staging copies, so they do not belong here.
   function capacityStats() {
     const snapshot = storageGuard.snapshot()
-    const offload = blockOffload?.stats() || null
     return {
       localUsedBytes: snapshot.usedBytes,
       localFreeBytes: snapshot.freeBytes,
       localHeadroomBytes: storageGuard.headroomBytes(),
-      residentBytes: offload === null ? 0 : offload.residentBytes,
-      offloadedBytes: offload === null ? 0 : offload.bytesOffloaded,
       effectiveCapacityBytes: archiveCapacityBytes()
     }
   }
@@ -624,43 +615,23 @@ async function buildRelayService({
     queue = queue.then(() => processCandidate(candidate))
     return queue
   }
-  let s3Signer = null
   const s3Config = config.archive?.s3 || {}
-  if (s3Config.endpoint && s3Config.accessKeyId && s3Config.secretAccessKey && globalThis.process?.versions?.node) {
-    try {
-      const { createS3Signer } = await import('./s3-signer.js')
-      s3Signer = createS3Signer(s3Config)
-    } catch (error) {
-      logger.status?.warn?.('S3 configuration is invalid', { error: error?.message || String(error) })
-    }
-  }
-  async function archiveCompletedToS3(job) {
-    if (!s3Signer || s3Config.enabled === false || !job?.archivePath) return null
-    const fs = fsModule || await import('#fs')
-    const data = fs.readFileSync(job.archivePath)
-    const key = `${s3Config.prefix || 'peartube/'}${job.channelKey || 'archive'}/${job.videoId || job.id}`
-    const signed = await s3Signer({ operation: 'put', key, method: 'PUT', headers: { 'content-length': String(data.length) } })
-    const fetchImpl = globalThis.fetch
-    if (typeof fetchImpl !== 'function') throw new Error('S3 upload requires a fetch implementation')
-    const response = await fetchImpl(signed.url, { method: 'PUT', headers: signed.headers, body: data })
-    if (!response.ok) throw new Error(`S3 archive upload failed with HTTP ${response.status}`)
-    logger.archive?.info?.('Archived media to S3', { key, bytes: data.length })
-    return { key, bytes: data.length, uploadedAt: Date.now(), status: 'uploaded' }
-  }
+  const s3Configured = ['endpoint', 'bucket', 'accessKeyId', 'secretAccessKey']
+    .every((field) => typeof s3Config[field] === 'string' && s3Config[field].length > 0)
 
   const service = {
-    // A getter, not a literal: the offload counters move while the relay runs,
-    // and the archive console reads this every time it renders.
+    // A getter because residency and restore activity change while the relay
+    // runs. Durable bucket inventory is not guessed from process-local totals.
     get s3() {
       return {
-        configured: Boolean(s3Signer),
+        configured: s3Configured,
         endpoint: s3Config.endpoint || '',
         bucket: s3Config.bucket || '',
         region: s3Config.region || 'us-east-1',
         prefix: s3Config.prefix || '',
         offload: blockOffload
           ? blockOffload.stats()
-          : { enabled: false, windowBytes: 0, blocksOffloaded: 0, bytesOffloaded: 0, uploadedBlocks: 0, uploadedBytes: 0, restored: 0, residentBytes: 0 }
+          : { enabled: false, windowBytes: 0, restored: 0, residentBytes: 0 }
       }
     },
     config,
@@ -768,7 +739,7 @@ async function buildRelayService({
         (effective.archiveEnabled === true && effective.archiveBudgetBytes > 0)
       )
       await ingestManager?.cancelPolicyDeniedJobs?.()
-      ingestReady = ingestManagerStarted && ingestPolicyEligible
+      ingestReady = Boolean(ingestManager) && ingestPolicyEligible
       return {
         policyVersion: effective.policyVersion,
         consentVersion: effective.consentVersion,
@@ -1153,7 +1124,7 @@ async function buildRelayService({
         peers: networkStatus.peers || 0,
         connections: networkStatus.connections || 0,
         activeAnnouncements: publicWorkStatus.activeAnnouncements || 0,
-        activeUploads: publicWorkStatus.activeUploads || 0,
+        activeServes: publicWorkStatus.activeServes || 0,
         activeAcquisitions: publicWorkStatus.activeAcquisitions || 0,
         archivedChannels: status.summary?.totalChannels || 0
       })
@@ -1234,8 +1205,8 @@ async function buildRelayService({
             peers: network.peers || 0,
             connections: network.connections || 0,
             activeAnnouncements: publicWork.activeAnnouncements || 0,
-            activeUploads: publicWork.activeUploads || 0,
-            uploadedBytes: publicWork.uploadedBytes || 0,
+            activeServes: publicWork.activeServes || 0,
+            servedBytes: publicWork.servedBytes || 0,
             activeAcquisitions: publicWork.activeAcquisitions || 0
           })
         } catch (err) {
@@ -1395,12 +1366,7 @@ async function buildRelayService({
           fs: runtimeFsModule,
           canPublish: retentionPermission
         }),
-        onCompleted: async (job) => {
-          try { await archiveCompletedToS3(job) } catch (error) {
-            logger.archive?.warn?.('S3 archive upload failed; local archive remains available', { error: error?.message || String(error) })
-          }
-          return service.publishArchiveJob(job)
-        },
+        onCompleted: (job) => service.publishArchiveJob(job),
         stagingRoot: config.archive?.tmpPath || './peartube-relay/archive-tmp'
       })
       const job = await manager.enqueue(input)

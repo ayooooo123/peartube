@@ -50,6 +50,8 @@ import { createAvailabilityEvidenceStore } from './assets/availability-evidence.
 import { createLocalMediaIndex } from './indexing/local-index.js'
 import { createIndexFeedManager } from './indexing/feed-manager.js'
 import { createIndexPublisherFollowReconciler } from './indexing/publisher-follow-reconciler.js'
+import { createLocalCatalogIndex } from './indexer/local-catalog-index.js'
+import { createLocalAssetAvailabilityProbe } from './search/source-verifier.js'
 import {
   CONSUMER_MODERATION_PROFILE_SETTING_KEY,
   createConsumerModerationPolicy,
@@ -552,6 +554,15 @@ export async function createBackendContext(config) {
     deviceSigner
   })
   lifecycle.ownResource('publisher catalog registry', catalogRegistry, 'close', 5000)
+  const localCatalogIndex = await createLocalCatalogIndex({
+    store: ctx.store,
+    catalogRegistry,
+    onError: (error, { publisherId } = {}) => {
+      console.log('[Orchestrator] local catalog indexing failed:', publisherId || 'unknown', error?.message || error)
+    },
+  })
+  ctx.localCatalogIndex = localCatalogIndex
+  lifecycle.ownResource('local publisher catalog index', localCatalogIndex, 'close', 5000)
   let scopedNetwork = null
   const protectedArchiveCores = new Map()
   const retainArchiveCore = ({ coreKey }) => {
@@ -568,9 +579,12 @@ export async function createBackendContext(config) {
   const mediaCatalogProjection = createPublisherCatalogProjection({
     catalogRegistry,
     now: () => Date.now(),
-    onUpdate: event => typeof onMediaGraphUpdate === 'function'
-      ? onMediaGraphUpdate(event)
-      : undefined
+    onUpdate: async event => {
+      await localCatalogIndex.refresh()
+      return typeof onMediaGraphUpdate === 'function'
+        ? onMediaGraphUpdate(event)
+        : undefined
+    }
   })
   ctx.mediaCatalogProjection = mediaCatalogProjection
   ctx.mediaGraphStore = mediaCatalogProjection.mediaGraphStore
@@ -716,13 +730,28 @@ export async function createBackendContext(config) {
     console.log('[Orchestrator] media catalog projection rebuild failed at startup:', error?.message || error)
   })
   try {
+    const backfill = await localCatalogIndex.refresh()
+    console.log('[Orchestrator] local catalog index backfill:', backfill)
+  } catch (error) {
+    console.log('[Orchestrator] local catalog index backfill failed at startup:', error?.message || error)
+  }
+  try {
     consumerCatalogProjection.rebuild()
   } catch (error) {
     console.log('[Orchestrator] consumer catalog projection rebuild failed at startup:', error?.message || error)
   }
+  const localAssetAvailabilityProbe = createLocalAssetAvailabilityProbe({
+    openAssetCore: ctx.openAssetCore,
+    now: () => Date.now(),
+  })
   const indexVerificationRuntime = createIndexVerificationRuntime({
-    services: maximum => scopedNetwork.listRetainedIndexServiceAdapters(maximum),
+    services: maximum => [
+      localCatalogIndex.service,
+      ...scopedNetwork.listRetainedIndexServiceAdapters(Math.max(0, maximum - 1)),
+    ],
     catalogRegistry,
+    localIndexServiceId: localCatalogIndex.service.indexerId,
+    localAvailabilityProbe: localAssetAvailabilityProbe,
     scopedNetwork,
     lifecycle,
   })
@@ -844,6 +873,10 @@ export async function createBackendContext(config) {
     const pk = publicKey || identityManager.getActivePublicKey?.()
     if (!pk) return
     const store = await personalManager.setActive(pk, { allowDeviceLocal })
+    if (ctx.platform === 'relay') {
+      ctx.personal = store || null
+      return store || null
+    }
     const explicitDeviceLocal = (
       allowDeviceLocal &&
       personalManager.getActivePublicKey() === 'device-local' &&

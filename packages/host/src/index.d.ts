@@ -701,6 +701,14 @@ export type SystemProtocolNamespace = ProtocolNamespace & {
   getMigrationStatus(request: MigrationStatusRequest): Promise<MigrationStatusResponse>
   retryMigration(request: MigrationStatusRequest): Promise<RetryMigrationResponse>
   exportMigrationReport(request: MigrationStatusRequest): Promise<ExportMigrationReportResponse>
+  suspendNetwork(request?: Record<string, never>): Promise<{ success: boolean; error?: string }>
+  resumeNetwork(request?: Record<string, never>): Promise<{ success: boolean; error?: string }>
+  setPlaybackActive(request: { active: boolean; ttlMs?: number }): Promise<{
+    success: boolean
+    active: boolean
+    updatedAt?: number
+    expiresAt?: number
+  }>
 }
 
 export type TransferProtocolNamespace = ProtocolNamespace & {

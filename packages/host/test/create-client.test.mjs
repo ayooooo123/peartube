@@ -418,6 +418,67 @@ test('createProtocolClient rejects ready once when host error event arrives', as
   t.is(error.message, 'boom')
 })
 
+test('createProtocolClient rejects an eventReady payload with no protocol version', async (t) => {
+  FakeHRPC.instances.length = 0
+  const readyEvents = []
+
+  class PendingHRPC extends FakeHRPC {
+    getStatus() {
+      return new Promise(() => {})
+    }
+
+    onEventReady(handler) {
+      this.handlers.ready = handler
+    }
+  }
+
+  const client = createProtocolClient({
+    stream: {},
+    HRPCImpl: PendingHRPC
+  })
+
+  client.events.on(PROTOCOL_EVENTS.HOST_READY, (payload) => {
+    readyEvents.push(payload)
+  })
+
+  const readyPromise = client.ready().catch((error) => error)
+  // A backend that omits protocolVersion is unverifiable, so readiness must not
+  // be assumed compatible and must never reach HOST_READY listeners.
+  FakeHRPC.instances[0].handlers.ready({ blobServerPort: 4242 })
+
+  const error = await readyPromise
+
+  t.is(error.code, HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH)
+  t.alike(readyEvents, [])
+})
+
+test('createProtocolClient resolves ready from an eventReady payload carrying the protocol version', async (t) => {
+  FakeHRPC.instances.length = 0
+
+  class PendingHRPC extends FakeHRPC {
+    getStatus() {
+      return new Promise(() => {})
+    }
+
+    onEventReady(handler) {
+      this.handlers.ready = handler
+    }
+  }
+
+  const client = createProtocolClient({
+    stream: {},
+    HRPCImpl: PendingHRPC
+  })
+
+  const readyPromise = client.ready()
+  FakeHRPC.instances[0].handlers.ready({
+    blobServerPort: 4242,
+    protocolVersion: PROTOCOL_VERSION
+  })
+
+  t.is((await readyPromise).blobServerPort, 4242)
+})
+
 test('createProtocolClient treats transient backend-not-ready status probes as startup noise', async (t) => {
   FakeHRPC.instances.length = 0
   const warnCalls = []

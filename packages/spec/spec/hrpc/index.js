@@ -310,7 +310,13 @@ const methods = new Map([
   ['@peartube/get-participation-status', 150],
   [150, '@peartube/get-participation-status'],
   ['@peartube/set-device-conditions', 151],
-  [151, '@peartube/set-device-conditions']
+  [151, '@peartube/set-device-conditions'],
+  ['@peartube/suspend-network', 152],
+  [152, '@peartube/suspend-network'],
+  ['@peartube/resume-network', 153],
+  [153, '@peartube/resume-network'],
+  ['@peartube/set-playback-active', 154],
+  [154, '@peartube/set-playback-active']
 ])
 
 class HRPC {
@@ -469,7 +475,10 @@ class HRPC {
       ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-request')],
       ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')],
       ['@peartube/get-participation-status', getEncoding('@peartube/get-participation-status-request')],
-      ['@peartube/set-device-conditions', getEncoding('@peartube/set-device-conditions-request')]
+      ['@peartube/set-device-conditions', getEncoding('@peartube/set-device-conditions-request')],
+      ['@peartube/suspend-network', getEncoding('@peartube/suspend-network-request')],
+      ['@peartube/resume-network', getEncoding('@peartube/resume-network-request')],
+      ['@peartube/set-playback-active', getEncoding('@peartube/set-playback-active-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -611,7 +620,10 @@ class HRPC {
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-response')],
       ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')],
       ['@peartube/get-participation-status', getEncoding('@peartube/get-participation-status-response')],
-      ['@peartube/set-device-conditions', getEncoding('@peartube/set-device-conditions-response')]
+      ['@peartube/set-device-conditions', getEncoding('@peartube/set-device-conditions-response')],
+      ['@peartube/suspend-network', getEncoding('@peartube/suspend-network-response')],
+      ['@peartube/resume-network', getEncoding('@peartube/resume-network-response')],
+      ['@peartube/set-playback-active', getEncoding('@peartube/set-playback-active-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -619,17 +631,17 @@ class HRPC {
       const responseEncoding = this._responseEncodings.get(command)
       const requestEncoding = this._requestEncodings.get(command)
       if (this._requestIsSend(command)) {
-        const request = req.data && req.data.byteLength > 0 ? c.decode(requestEncoding, req.data) : null
+        const request = req.data ? c.decode(requestEncoding, req.data) : null
         await this._handlers[command](request)
         return
       }
       if (!this._requestIsStream(command) && !this._responseIsStream(command)) {
-        const request = req.data && req.data.byteLength > 0 ? c.decode(requestEncoding, req.data) : null
+        const request = req.data ? c.decode(requestEncoding, req.data) : null
         const response = await this._handlers[command](request)
         req.reply(c.encode(responseEncoding, response))
       }
       if (!this._requestIsStream(command) && this._responseIsStream(command)) {
-        const request = req.data && req.data.byteLength > 0 ? c.decode(requestEncoding, req.data) : null
+        const request = req.data ? c.decode(requestEncoding, req.data) : null
         const responseStream = new RPCStream(
           null,
           null,
@@ -1318,6 +1330,18 @@ class HRPC {
     return this._call('@peartube/set-device-conditions', args)
   }
 
+  async suspendNetwork(args) {
+    return this._call('@peartube/suspend-network', args)
+  }
+
+  async resumeNetwork(args) {
+    return this._call('@peartube/resume-network', args)
+  }
+
+  async setPlaybackActive(args) {
+    return this._call('@peartube/set-playback-active', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -1924,6 +1948,18 @@ class HRPC {
 
   onSetDeviceConditions(responseFn) {
     this._handlers['@peartube/set-device-conditions'] = responseFn
+  }
+
+  onSuspendNetwork(responseFn) {
+    this._handlers['@peartube/suspend-network'] = responseFn
+  }
+
+  onResumeNetwork(responseFn) {
+    this._handlers['@peartube/resume-network'] = responseFn
+  }
+
+  onSetPlaybackActive(responseFn) {
+    this._handlers['@peartube/set-playback-active'] = responseFn
   }
 
   _requestIsStream(command) {

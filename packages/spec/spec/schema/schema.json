@@ -8233,6 +8233,12 @@
           "required": false,
           "type": "string",
           "version": 1
+        },
+        {
+          "name": "protocolVersion",
+          "required": false,
+          "type": "uint",
+          "version": 1
         }
       ]
     },
@@ -9389,6 +9395,24 @@
           "name": "blobServerPort",
           "required": false,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "protocolVersion",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "blobServerReady",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "blobServerError",
+          "required": false,
+          "type": "string",
           "version": 1
         }
       ]
@@ -11769,6 +11793,112 @@
           "name": "errorCode",
           "required": false,
           "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "suspend-network-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "suspend-network-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "resume-network-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "resume-network-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "set-playback-active-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "active",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "ttlMs",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "set-playback-active-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "active",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "updatedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "expiresAt",
+          "required": false,
+          "type": "uint",
           "version": 1
         }
       ]

@@ -132,6 +132,7 @@ export function buildSharedSystemHandlers(backend, options = {}) {
         status: {
           ready: true,
           hasIdentity: getIdentityCount(backend) > 0,
+          protocolVersion,
           ...getBlobServerStatus(backend)
         }
       }
@@ -181,6 +182,7 @@ export async function attachSharedAppHandlers(options) {
     ctx,
     rpc,
     storagePath,
+    protocolVersion,
     autoAttachSharedAppHandlers = false,
     loadSharedAppHandlers = () => import('./mobile-handlers.js')
   } = options
@@ -192,6 +194,7 @@ export async function attachSharedAppHandlers(options) {
 
   attachMobileHandlers(backend, {
     api,
+    protocolVersion,
     identityManager,
     uploadManager,
     ctx,

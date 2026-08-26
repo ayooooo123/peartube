@@ -819,6 +819,7 @@ function removeStaleLocks(storageDir) {
 
   attachMobileHandlers(backend, {
     api,
+    protocolVersion,
     identityManager,
     uploadManager,
     ctx,
@@ -916,10 +917,7 @@ function removeStaleLocks(storageDir) {
   onReady({ blobServerPort: blobPort, protocolVersion })
 
   try {
-    rpc.eventReady({
-      blobServerPort: blobPort,
-      blobServerHost: ctx.blobServerHost || '127.0.0.1'
-    })
+    rpc.eventReady({ blobServerPort: blobPort, protocolVersion })
   } catch (error) {
     console.error('[Backend] Failed to send eventReady:', error.message)
   }

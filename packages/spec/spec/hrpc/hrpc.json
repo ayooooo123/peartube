@@ -1940,6 +1940,45 @@
         "stream": false
       },
       "version": 1
+    },
+    {
+      "id": 152,
+      "name": "@peartube/suspend-network",
+      "request": {
+        "name": "@peartube/suspend-network-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/suspend-network-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 153,
+      "name": "@peartube/resume-network",
+      "request": {
+        "name": "@peartube/resume-network-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/resume-network-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 154,
+      "name": "@peartube/set-playback-active",
+      "request": {
+        "name": "@peartube/set-playback-active-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/set-playback-active-response",
+        "stream": false
+      },
+      "version": 1
     }
   ]
 }

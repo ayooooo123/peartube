@@ -40,6 +40,7 @@ import type {
   PrepareMediaPlaybackResponse,
   PublicationSourcesResponse,
   SetSourcePreferenceResponse,
+  SystemProtocolNamespace,
 } from '@peartube/host'
 import { PROTOCOL_VERSION } from '@peartube/host/contracts'
 import { PROTOCOL_EVENTS } from '@peartube/host/events'
@@ -380,9 +381,7 @@ export type ProtocolClientLike = ChannelCatalogProtocolClient & MediaGraphProtoc
   events: {
     on(event: string, listener: (payload: any) => void): () => void
   }
-  system?: {
-    getSwarmStatus?(request?: any): Promise<NetworkStatusData>
-  }
+  system: SystemProtocolNamespace
   publisher?: PublisherProtocolClient['publisher']
 }
 

@@ -15,7 +15,10 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'set-device-conditions',
     'get-migration-status',
     'retry-migration',
-    'export-migration-report'
+    'export-migration-report',
+    'suspend-network',
+    'resume-network',
+    'set-playback-active'
   ],
   identity: [
     'create-identity',
@@ -165,13 +168,6 @@ const APP_RPC_NAMESPACES = Object.freeze({
   ]
 })
 
-const RUNTIME_ONLY_METHODS = Object.freeze([
-  // Exposed by the native/desktop platform bridge, not the schema HRPC surface.
-  'suspendNetwork',
-  'resumeNetwork',
-  'setPlaybackActive'
-])
-
 const PLATFORM_ONLY_COMMANDS = Object.freeze([
   // Backend lifecycle and push events are registered in HRPC but consumed by
   // platform runners/event maps instead of the app-facing request facade.
@@ -282,8 +278,7 @@ function createAppRpcMetadata(entries) {
     commands: entries,
     namespaces,
     appCommands: [...appCommands].sort(),
-    platformOnlyCommands: platformOnly,
-    runtimeOnlyMethods: [...RUNTIME_ONLY_METHODS]
+    platformOnlyCommands: platformOnly
   }
 }
 
@@ -301,7 +296,7 @@ function generateAppRpcAdapterSource(metadata) {
     `))\n\n` +
     `export const APP_RPC_COMMANDS = Object.freeze(APP_RPC_METADATA.appCommands)\n` +
     `export const PLATFORM_ONLY_COMMANDS = Object.freeze(APP_RPC_METADATA.platformOnlyCommands.map((command) => command.command))\n` +
-    `export const RUNTIME_ONLY_METHODS = Object.freeze(APP_RPC_METADATA.runtimeOnlyMethods)\n\n` +
+    `\n` +
     `function normalizePresenceFields(request, presenceFields) {\n` +
     `  if (!request || typeof request !== 'object' || Array.isArray(request) || !presenceFields?.length) return request\n` +
     `  let normalized = request\n` +
@@ -387,7 +382,6 @@ function writeAppRpcAdapter({ hrpcJsonPath, schemaJsonPath, outputPath }) {
 module.exports = {
   APP_RPC_NAMESPACES,
   PLATFORM_ONLY_COMMANDS,
-  RUNTIME_ONLY_METHODS,
   createAppRpcMetadata,
   generateAppRpcAdapterSource,
   readHrpcSchema,

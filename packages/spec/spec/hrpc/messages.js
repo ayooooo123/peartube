@@ -7610,10 +7610,11 @@ const encoding250 = {
 // @peartube/status
 const encoding251 = {
   preencode(state, m) {
-    state.end++ // max flag is 16 so always one byte
+    state.end++ // max flag is 32 so always one byte
 
     if (m.blobServerPort) c.uint.preencode(state, m.blobServerPort)
     if (m.blobServerError) c.string.preencode(state, m.blobServerError)
+    if (m.protocolVersion) c.uint.preencode(state, m.protocolVersion)
   },
   encode(state, m) {
     const flags =
@@ -7621,12 +7622,14 @@ const encoding251 = {
       (m.hasIdentity ? 2 : 0) |
       (m.blobServerPort ? 4 : 0) |
       (m.blobServerReady ? 8 : 0) |
-      (m.blobServerError ? 16 : 0)
+      (m.blobServerError ? 16 : 0) |
+      (m.protocolVersion ? 32 : 0)
 
     c.uint.encode(state, flags)
 
     if (m.blobServerPort) c.uint.encode(state, m.blobServerPort)
     if (m.blobServerError) c.string.encode(state, m.blobServerError)
+    if (m.protocolVersion) c.uint.encode(state, m.protocolVersion)
   },
   decode(state) {
     const flags = c.uint.decode(state)
@@ -7636,7 +7639,8 @@ const encoding251 = {
       hasIdentity: (flags & 2) !== 0,
       blobServerPort: (flags & 4) !== 0 ? c.uint.decode(state) : 0,
       blobServerReady: (flags & 8) !== 0,
-      blobServerError: (flags & 16) !== 0 ? c.string.decode(state) : null
+      blobServerError: (flags & 16) !== 0 ? c.string.decode(state) : null,
+      protocolVersion: (flags & 32) !== 0 ? c.uint.decode(state) : 0
     }
   }
 }
@@ -8717,22 +8721,33 @@ const encoding292 = {
 // @peartube/event-ready
 const encoding293 = {
   preencode(state, m) {
-    state.end++ // max flag is 1 so always one byte
+    state.end++ // max flag is 8 so always one byte
 
     if (m.blobServerPort) c.uint.preencode(state, m.blobServerPort)
+    if (m.protocolVersion) c.uint.preencode(state, m.protocolVersion)
+    if (m.blobServerError) c.string.preencode(state, m.blobServerError)
   },
   encode(state, m) {
-    const flags = m.blobServerPort ? 1 : 0
+    const flags =
+      (m.blobServerPort ? 1 : 0) |
+      (m.protocolVersion ? 2 : 0) |
+      (m.blobServerReady ? 4 : 0) |
+      (m.blobServerError ? 8 : 0)
 
     c.uint.encode(state, flags)
 
     if (m.blobServerPort) c.uint.encode(state, m.blobServerPort)
+    if (m.protocolVersion) c.uint.encode(state, m.protocolVersion)
+    if (m.blobServerError) c.string.encode(state, m.blobServerError)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
-      blobServerPort: (flags & 1) !== 0 ? c.uint.decode(state) : 0
+      blobServerPort: (flags & 1) !== 0 ? c.uint.decode(state) : 0,
+      protocolVersion: (flags & 2) !== 0 ? c.uint.decode(state) : 0,
+      blobServerReady: (flags & 4) !== 0,
+      blobServerError: (flags & 8) !== 0 ? c.string.decode(state) : null
     }
   }
 }
@@ -10691,6 +10706,71 @@ const encoding376 = {
   }
 }
 
+// @peartube/suspend-network-request
+const encoding377 = encoding0
+
+// @peartube/suspend-network-response
+const encoding378 = encoding92
+
+// @peartube/resume-network-request
+const encoding379 = encoding0
+
+// @peartube/resume-network-response
+const encoding380 = encoding92
+
+// @peartube/set-playback-active-request
+const encoding381 = {
+  preencode(state, m) {
+    state.end++ // max flag is 2 so always one byte
+
+    if (m.ttlMs) c.uint.preencode(state, m.ttlMs)
+  },
+  encode(state, m) {
+    const flags = (m.active ? 1 : 0) | (m.ttlMs ? 2 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.ttlMs) c.uint.encode(state, m.ttlMs)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      active: (flags & 1) !== 0,
+      ttlMs: (flags & 2) !== 0 ? c.uint.decode(state) : 0
+    }
+  }
+}
+
+// @peartube/set-playback-active-response
+const encoding382 = {
+  preencode(state, m) {
+    state.end++ // max flag is 8 so always one byte
+
+    if (m.updatedAt) c.uint.preencode(state, m.updatedAt)
+    if (m.expiresAt) c.uint.preencode(state, m.expiresAt)
+  },
+  encode(state, m) {
+    const flags =
+      (m.success ? 1 : 0) | (m.active ? 2 : 0) | (m.updatedAt ? 4 : 0) | (m.expiresAt ? 8 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.updatedAt) c.uint.encode(state, m.updatedAt)
+    if (m.expiresAt) c.uint.encode(state, m.expiresAt)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      success: (flags & 1) !== 0,
+      active: (flags & 2) !== 0,
+      updatedAt: (flags & 4) !== 0 ? c.uint.decode(state) : 0,
+      expiresAt: (flags & 8) !== 0 ? c.uint.decode(state) : 0
+    }
+  }
+}
+
 // @peartube/prepare-playback-response.stats, deferred due to recusive use
 const encoding83_1 = c.frame(encoding165)
 // @peartube/web-prepare-playback-response.stats, deferred due to recusive use
@@ -11487,6 +11567,18 @@ function getEncoding(name) {
       return encoding375
     case '@peartube/set-device-conditions-response':
       return encoding376
+    case '@peartube/suspend-network-request':
+      return encoding377
+    case '@peartube/suspend-network-response':
+      return encoding378
+    case '@peartube/resume-network-request':
+      return encoding379
+    case '@peartube/resume-network-response':
+      return encoding380
+    case '@peartube/set-playback-active-request':
+      return encoding381
+    case '@peartube/set-playback-active-response':
+      return encoding382
     default:
       throw new Error('Encoder not found ' + name)
   }

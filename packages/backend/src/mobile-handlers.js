@@ -71,7 +71,9 @@ function normalizeSeedingStatus(s) {
 }
 
 export function attachMobileHandlers(B, deps) {
-  const { api, identityManager, uploadManager, ctx, initializeIdentityFromMnemonic, rpc, fs, path, generateAndStoreThumbnail, transcoder, castTranscoder, player } = deps
+  const { api, identityManager, uploadManager, ctx, initializeIdentityFromMnemonic, rpc, fs, path, generateAndStoreThumbnail, transcoder, castTranscoder, player, protocolVersion } = deps
+  // getStatus must carry protocolVersion: the host client rejects readiness it
+  // cannot version-check (see @peartube/host create-client emitHostReady).
 
 
   B.createIdentity = async (r) => {
@@ -240,8 +242,7 @@ export function attachMobileHandlers(B, deps) {
   B.unsubscribeChannel = async (r) => { await api.unsubscribeChannel(r.channelKey); return { success: true } }
   B.getSubscriptions = async () => { const s = await api.getSubscriptions(); return { subscriptions: s.map(i => ({ channelKey: i.driveKey, channelName: i.name })) } }
   B.joinChannel = async (r) => { await api.subscribeChannel(r.channelKey); return { success: true } }
-
-  B.getStatus = async () => ({ status: { ready: true, hasIdentity: identityManager.getActiveIdentity() !== null, blobServerPort: ctx.blobServer?.port || ctx.blobServerPort || 0 } })
+  B.getStatus = async () => ({ status: { ready: true, hasIdentity: identityManager.getActiveIdentity() !== null, blobServerPort: ctx.blobServer?.port || ctx.blobServerPort || 0, protocolVersion } })
   B.getBlobServerPort = async () => ({ port: ctx.blobServer?.port || ctx.blobServerPort || 0 })
   B.getSwarmStatus = async () => {
     const s = await api.getSwarmStatus()

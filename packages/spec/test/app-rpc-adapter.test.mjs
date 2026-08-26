@@ -6,7 +6,6 @@ import {
   APP_RPC_METADATA,
   APP_RPC_METHODS,
   PLATFORM_ONLY_COMMANDS,
-  RUNTIME_ONLY_METHODS,
   createGeneratedAppRpcClient
 } from '../spec/hrpc/app-rpc-adapter.mjs'
 import { SHARED_HANDLER_NAMES } from '../../backend/src/hrpc-handlers.js'
@@ -31,8 +30,10 @@ test('generated app RPC metadata is deterministic and covers classified schema c
   const unclassified = schemaCommands.filter((command) => !classified.has(command))
   t.alike(unclassified, [], 'all HRPC commands are classified as app-facing or platform-only')
 
-  t.ok(RUNTIME_ONLY_METHODS.includes('suspendNetwork'), 'documents runtime-only platform methods')
-  t.ok(RUNTIME_ONLY_METHODS.includes('resumeNetwork'), 'documents runtime-only platform methods')
+  const systemMethods = APP_RPC_METADATA.namespaces.system.map((method) => method.method)
+  for (const method of ['suspendNetwork', 'resumeNetwork', 'setPlaybackActive']) {
+    t.ok(systemMethods.includes(method), `${method} is an app-facing system method`)
+  }
   t.absent(APP_RPC_METADATA.namespaces.feed, 'legacy feed namespace is removed')
   for (const command of ['refresh-feed', 'submit-to-feed', 'unpublish-from-feed', 'is-channel-published']) {
     t.absent(APP_RPC_COMMANDS.includes(command), `${command} is not app-facing`)

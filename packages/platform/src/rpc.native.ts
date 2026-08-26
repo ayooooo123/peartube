@@ -1185,11 +1185,7 @@ export const rpc = {
   },
 
   async getSwarmStatus() {
-    const client = mainBridge.getClient() as any;
-    if (typeof client?.system?.getSwarmStatus === 'function') {
-      return client.system.getSwarmStatus({});
-    }
-    return ensureRPC().getSwarmStatus({});
+    return ensureProtocolClient().system.getSwarmStatus({});
   },
 
   // File pickers
@@ -1349,31 +1345,16 @@ export const rpc = {
   },
 
   // Network lifecycle (background playback)
-  async suspendNetwork(): Promise<{ success: boolean }> {
-    const rpc = ensureRPC() as unknown as Record<string, unknown>
-    const fn = rpc.suspendNetwork
-    if (typeof fn !== 'function') {
-      return { success: true }
-    }
-    return await (fn as (req: {}) => Promise<{ success: boolean }>).call(rpc, {})
+  async suspendNetwork(): Promise<{ success: boolean; error?: string }> {
+    return ensureProtocolClient().system.suspendNetwork({})
   },
 
-  async resumeNetwork(): Promise<{ success: boolean }> {
-    const rpc = ensureRPC() as unknown as Record<string, unknown>
-    const fn = rpc.resumeNetwork
-    if (typeof fn !== 'function') {
-      return { success: true }
-    }
-    return await (fn as (req: {}) => Promise<{ success: boolean }>).call(rpc, {})
+  async resumeNetwork(): Promise<{ success: boolean; error?: string }> {
+    return ensureProtocolClient().system.resumeNetwork({})
   },
 
-  async setPlaybackActive(req: { active: boolean }): Promise<{ success: boolean }> {
-    const rpc = ensureRPC() as unknown as Record<string, unknown>
-    const fn = rpc.setPlaybackActive
-    if (typeof fn !== 'function') {
-      return { success: true }
-    }
-    return await (fn as (request: { active: boolean }) => Promise<{ success: boolean }>).call(rpc, req)
+  async setPlaybackActive(req: { active: boolean; ttlMs?: number }): Promise<{ success: boolean; active: boolean }> {
+    return ensureProtocolClient().system.setPlaybackActive(req)
   },
 
   // Channel and metadata updates

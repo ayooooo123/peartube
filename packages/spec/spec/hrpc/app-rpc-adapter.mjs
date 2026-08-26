@@ -1741,6 +1741,39 @@ export const APP_RPC_METADATA = Object.freeze({
           "flag": "totalDiskBytesProvided"
         }
       ]
+    },
+    {
+      "id": 152,
+      "command": "suspend-network",
+      "method": "suspendNetwork",
+      "handler": "SuspendNetwork",
+      "request": "@peartube/suspend-network-request",
+      "response": "@peartube/suspend-network-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 153,
+      "command": "resume-network",
+      "method": "resumeNetwork",
+      "handler": "ResumeNetwork",
+      "request": "@peartube/resume-network-request",
+      "response": "@peartube/resume-network-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 154,
+      "command": "set-playback-active",
+      "method": "setPlaybackActive",
+      "handler": "SetPlaybackActive",
+      "request": "@peartube/set-playback-active-request",
+      "response": "@peartube/set-playback-active-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
     }
   ],
   "namespaces": {
@@ -1887,6 +1920,39 @@ export const APP_RPC_METADATA = Object.freeze({
         "handler": "ExportMigrationReport",
         "request": "@peartube/export-migration-report-request",
         "response": "@peartube/export-migration-report-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
+        "id": 152,
+        "command": "suspend-network",
+        "method": "suspendNetwork",
+        "handler": "SuspendNetwork",
+        "request": "@peartube/suspend-network-request",
+        "response": "@peartube/suspend-network-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
+        "id": 153,
+        "command": "resume-network",
+        "method": "resumeNetwork",
+        "handler": "ResumeNetwork",
+        "request": "@peartube/resume-network-request",
+        "response": "@peartube/resume-network-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
+        "id": 154,
+        "command": "set-playback-active",
+        "method": "setPlaybackActive",
+        "handler": "SetPlaybackActive",
+        "request": "@peartube/set-playback-active-request",
+        "response": "@peartube/set-playback-active-response",
         "send": false,
         "requestStream": false,
         "responseStream": false
@@ -3434,6 +3500,7 @@ export const APP_RPC_METADATA = Object.freeze({
     "remove-reaction",
     "request-archive-publication",
     "restore-portable-state",
+    "resume-network",
     "retry-migration",
     "revoke-personal-device",
     "search-index-candidates",
@@ -3443,6 +3510,7 @@ export const APP_RPC_METADATA = Object.freeze({
     "set-device-conditions",
     "set-network-policy",
     "set-personal-setting",
+    "set-playback-active",
     "set-seeding-config",
     "set-source-preference",
     "set-storage-limit",
@@ -3453,6 +3521,7 @@ export const APP_RPC_METADATA = Object.freeze({
     "stop-livestream",
     "submit-publisher-root-operation",
     "subscribe-channel",
+    "suspend-network",
     "transcode-start",
     "transcode-status",
     "transcode-stop",
@@ -3644,11 +3713,6 @@ export const APP_RPC_METADATA = Object.freeze({
       "requestStream": false,
       "responseStream": false
     }
-  ],
-  "runtimeOnlyMethods": [
-    "suspendNetwork",
-    "resumeNetwork",
-    "setPlaybackActive"
   ]
 })
 
@@ -3661,7 +3725,6 @@ export const APP_RPC_METHODS = Object.freeze(Object.fromEntries(
 
 export const APP_RPC_COMMANDS = Object.freeze(APP_RPC_METADATA.appCommands)
 export const PLATFORM_ONLY_COMMANDS = Object.freeze(APP_RPC_METADATA.platformOnlyCommands.map((command) => command.command))
-export const RUNTIME_ONLY_METHODS = Object.freeze(APP_RPC_METADATA.runtimeOnlyMethods)
 
 function normalizePresenceFields(request, presenceFields) {
   if (!request || typeof request !== 'object' || Array.isArray(request) || !presenceFields?.length) return request

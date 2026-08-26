@@ -13,7 +13,7 @@ const publisherA = crypto.keyPair(Buffer.alloc(32, 2))
 const publisherB = crypto.keyPair(Buffer.alloc(32, 3))
 
 function workRef(id) {
-  return createEntityReference({ entityKind: 'work', namespace: 'youtube-video', normalizedIdentifier: id })
+  return createEntityReference({ entityKind: 'work', namespace: 'youtube-video', normalizedIdentifier: `${id}___________`.slice(0, 11) })
 }
 
 function nativeWork(id, issuer = publisherA.publicKey) {
@@ -22,7 +22,7 @@ function nativeWork(id, issuer = publisherA.publicKey) {
 
 test('resolver produces deterministic projections from accepted metadata claims', async (t) => {
   const store = createMediaGraphStore({ trustedSigners: [publisherA.publicKey, publisherB.publicKey] })
-  const subject = workRef('episode-1')
+  const subject = workRef('dQw4w9WgXcQ')
   await store.ingestClaim(createMediaClaim({ claimType: 'EntityMetadataClaim', subjectRefs: [subject], payload: { title: 'Pilot B' }, confidence: 700, keyPair: publisherB }).envelope)
   await store.ingestClaim(createMediaClaim({ claimType: 'EntityMetadataClaim', subjectRefs: [subject], payload: { title: 'Pilot A' }, confidence: 900, keyPair: publisherA }).envelope)
 
@@ -37,7 +37,7 @@ test('resolver produces deterministic projections from accepted metadata claims'
 
 test('resolver applies trusted equivalence claims without serializing local cluster ids as global truth', async (t) => {
   const store = createMediaGraphStore({ trustedSigners: [curator.publicKey, publisherA.publicKey] })
-  const external = workRef('episode-1')
+  const external = workRef('dQw4w9WgXcQ')
   const native = nativeWork('local-episode-1')
   await store.ingestClaim(createMediaClaim({ claimType: 'EquivalentEntityClaim', subjectRefs: [external, native], payload: { relation: 'same-work' }, keyPair: curator }).envelope)
   await store.ingestClaim(createMediaClaim({ claimType: 'EntityMetadataClaim', subjectRefs: [native], payload: { title: 'Native Pilot' }, confidence: 800, keyPair: publisherA }).envelope)

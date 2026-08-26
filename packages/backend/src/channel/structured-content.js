@@ -12,20 +12,57 @@ const MAX_PROVENANCE_LENGTH = 256
 const MAX_IDENTITY_KEY_LENGTH = 1024
 const MAX_FINGERPRINT_LENGTH = 128
 const MAX_JOB_ID_LENGTH = 256
+const MAX_MANIFEST_HEX_LENGTH = 2 * 1024 * 1024
+const MAX_OPERATION_FRAMES_HEX_LENGTH = 2 * (2 + 3 * (4 + 1024 * 1024))
 
 const PROVIDER_PATTERN = /^[a-z0-9][a-z0-9._-]*$/
 const WRITER_KEY_PATTERN = /^[0-9a-f]{64}$/i
 const CLAIMANT_ID_PATTERN = /^[0-9a-f]{64}$/
 const SHA256_FINGERPRINT_PATTERN = /^sha256:[0-9a-f]{64}$/
+const HEX_32_PATTERN = /^[0-9a-f]{64}$/
+const MANIFEST_HEX_PATTERN = /^(?:[0-9a-f]{2})+$/
 const JOB_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/+~-]*$/
 const CLAIM_STATES = new Set(['reserved', 'published', 'released'])
 const CLAIM_DOMAIN = b4a.from('peartube-import-claim/v1\0')
 const ZERO_BYTE = b4a.from('\0')
 
 export const PROFILE_KINDS = new Set(['standard', 'tvShow', 'movie', 'creator'])
-export const CONTENT_KINDS = new Set(['episode', 'movie', 'video', 'stream', 'trailer', 'extra'])
-export const PUBLICATION_STATES = new Set(['replicationPending', 'durabilityVerified', 'published'])
+export const CONTENT_KINDS = new Set(['episode', 'movie', 'video', 'stream', 'trailer', 'extra', 'track', 'release'])
+export const PUBLICATION_STATES = new Set(['replicationPending', 'commitUncertain', 'durabilityVerified', 'published'])
 export const ARTWORK_ROLES = new Set(['avatar', 'poster', 'banner', 'backdrop'])
+
+// Which metadata authority may categorize which kind of work, and the exact
+// coordinate shape that pairing takes. One table, because the alternative is a
+// provider name spelled separately into a validator, an identity key and a CLI
+// flag — and those three drifting is how `tvdb` came to be a declared
+// namespace that the one place which mattered refused by name, and how
+// MusicBrainz came to have reference namespaces no publication could reach.
+//
+// `ordinals` are the coordinate fields a kind requires and, by omission, the
+// ones it may not carry: a track has no season, an album has no episode. A
+// kind absent from this table takes no media coordinates at all.
+export const MEDIA_COORDINATE_SHAPES = Object.freeze({
+  episode: Object.freeze({ providers: Object.freeze(['tmdb', 'tvdb']), ordinals: Object.freeze(['seasonNumber', 'episodeNumber']) }),
+  movie: Object.freeze({ providers: Object.freeze(['tmdb', 'tvdb']), ordinals: Object.freeze([]) }),
+  track: Object.freeze({ providers: Object.freeze(['musicbrainz']), ordinals: Object.freeze([]) }),
+  release: Object.freeze({ providers: Object.freeze(['musicbrainz']), ordinals: Object.freeze([]) }),
+})
+
+export const MEDIA_COORDINATE_KINDS = Object.freeze(Object.keys(MEDIA_COORDINATE_SHAPES))
+
+// The coordinate an episode's work is named by. An episode is a show plus a
+// place in it, so its work identifier is the show's provider id with the
+// ordinals appended, under the show's own namespace. The archive writes this
+// string and index search reads it back, and those two spelling it separately
+// is precisely how an archived episode stayed invisible to a relay holding it.
+export function episodeWorkIdentifier (mediaId, seasonNumber, episodeNumber) {
+  return `show:${mediaId}:s${seasonNumber}:e${episodeNumber}`
+}
+
+// A channel and a work do not illustrate themselves the same way, and asset
+// bindings require every role ARTWORK_ROLES names. Content roles therefore live
+// in their own set: widening the channel set silently demands new bound assets.
+export const CONTENT_ARTWORK_ROLES = new Set(['poster', 'backdrop', 'thumbnail', 'still'])
 
 function sha256Hex (payload) {
   const digest = b4a.allocUnsafe(sodium.crypto_hash_sha256_BYTES)
@@ -113,6 +150,19 @@ export function normalizeArtworkRole (value) {
   return normalizeSetValue(value, ARTWORK_ROLES, 'artwork role')
 }
 
+export function normalizeContentArtworkRole (value) {
+  return normalizeSetValue(value, CONTENT_ARTWORK_ROLES, 'content artwork role')
+}
+
+export function normalizePublicationOperationFramesHex (value) {
+  return requiredString(
+    value,
+    'publicationOperationFramesHex',
+    MAX_OPERATION_FRAMES_HEX_LENGTH,
+    MANIFEST_HEX_PATTERN
+  )
+}
+
 const PROFILE_FIELDS = new Set([
   'id',
   'profileKind',
@@ -151,12 +201,47 @@ const CONTENT_FIELDS = new Set([
   'episodeNumber',
   'originalAirDate',
   'thumbnailUrl',
+  'artwork',
   'provenanceVersion',
   'publicationState',
   'contentFingerprint',
   'importIdentityKey',
-  'importClaimantId'
+  'importClaimantId',
+  'publication'
 ])
+
+// The publication cluster is persisted as one nested record. Every value keeps
+// the bounds it had as a flat column: 32-byte hex for each identity, the
+// persisted-integer path for the sequence, and the manifest hex bound.
+const CONTENT_PUBLICATION_ID_FIELDS = [
+  'publicationId',
+  'manifestId',
+  'renditionId',
+  'assetId',
+  'coreKey',
+  'publisherId',
+  'metadataClaimId',
+  'availabilityClaimId',
+  'publicationOperationId',
+  'metadataClaimOperationId',
+  'availabilityClaimOperationId'
+]
+const CONTENT_PUBLICATION_FIELDS = new Set([
+  ...CONTENT_PUBLICATION_ID_FIELDS,
+  'sequence',
+  'manifestHex'
+])
+
+function normalizeContentPublication (publication) {
+  const input = assertAllowedFields(publication, CONTENT_PUBLICATION_FIELDS, 'content publication')
+  const out = {}
+  for (const field of CONTENT_PUBLICATION_ID_FIELDS) {
+    assignString(out, input, field, 64, HEX_32_PATTERN)
+  }
+  assignPersistedInteger(out, input, 'sequence')
+  assignString(out, input, 'manifestHex', MAX_MANIFEST_HEX_LENGTH, MANIFEST_HEX_PATTERN)
+  return out
+}
 
 export function normalizeContentDetails (details) {
   const input = assertAllowedFields(details, CONTENT_FIELDS, 'content details')
@@ -175,11 +260,18 @@ export function normalizeContentDetails (details) {
   assignPersistedInteger(out, input, 'episodeNumber')
   assignPersistedInteger(out, input, 'originalAirDate')
   assignString(out, input, 'thumbnailUrl', MAX_URL_LENGTH)
+  if (input.artwork !== undefined && input.artwork !== null) {
+    out.artwork = normalizeContentArtworkList(input.artwork)
+  }
   assignString(out, input, 'provenanceVersion', MAX_PROVENANCE_LENGTH)
   if (input.publicationState !== undefined && input.publicationState !== null) {
     out.publicationState = normalizePublicationState(input.publicationState)
   }
   assignString(out, input, 'contentFingerprint', MAX_FINGERPRINT_LENGTH, SHA256_FINGERPRINT_PATTERN)
+  if (input.publication !== undefined && input.publication !== null) {
+    const publication = normalizeContentPublication(input.publication)
+    if (Object.keys(publication).length > 0) out.publication = publication
+  }
   const normalizedImportIdentityKey = optionalString(input.importIdentityKey, 'importIdentityKey', MAX_IDENTITY_KEY_LENGTH)
   const normalizedImportClaimantId = optionalString(input.importClaimantId, 'importClaimantId', 64, CLAIMANT_ID_PATTERN)
   if ((normalizedImportIdentityKey === undefined) !== (normalizedImportClaimantId === undefined)) {
@@ -232,18 +324,26 @@ export function importIdentityKey (identity) {
     throw new Error('import identity requires both sourceProvider and sourceVideoId')
   }
 
-  const hasMediaGroup = mediaProvider !== undefined || mediaId !== undefined || seasonNumber !== undefined || episodeNumber !== undefined
+  const ordinals = { seasonNumber, episodeNumber }
+  const hasMediaGroup = mediaProvider !== undefined || mediaId !== undefined ||
+    seasonNumber !== undefined || episodeNumber !== undefined
   if (hasMediaGroup) {
-    if (contentKind === 'episode') {
-      if (mediaProvider !== 'tmdb' || mediaId === undefined || seasonNumber === undefined || episodeNumber === undefined) {
-        throw new Error('import identity episode coordinates require tmdb mediaId, seasonNumber, and episodeNumber')
+    const shape = MEDIA_COORDINATE_SHAPES[contentKind]
+    if (!shape) throw new Error(`import identity ${contentKind} cannot use media coordinates`)
+    if (!shape.providers.includes(mediaProvider)) {
+      throw new Error(`import identity ${contentKind} coordinates require one of ${shape.providers.join(', ')}`)
+    }
+    if (mediaId === undefined) throw new Error(`import identity ${contentKind} coordinates require mediaId`)
+    for (const [name, value] of Object.entries(ordinals)) {
+      const required = shape.ordinals.includes(name)
+      if (required && value === undefined) {
+        throw new Error(`import identity ${contentKind} coordinates require ${name}`)
       }
-    } else if (contentKind === 'movie') {
-      if (mediaProvider !== 'tmdb' || mediaId === undefined || seasonNumber !== undefined || episodeNumber !== undefined) {
-        throw new Error('import identity movie coordinates require only tmdb mediaId')
+      // A coordinate a kind does not have is refused, not stored empty: a track
+      // with a season number is a mistake someone should hear about.
+      if (!required && value !== undefined) {
+        throw new Error(`import identity ${contentKind} coordinates cannot carry ${name}`)
       }
-    } else {
-      throw new Error(`import identity ${contentKind} cannot use media coordinates`)
     }
   }
 
@@ -252,10 +352,14 @@ export function importIdentityKey (identity) {
   }
 
   if (hasSourceGroup) return `${sourceProvider}:${contentKind}:${sourceVideoId}`
+  // The tmdb spellings below are byte-identical to the ones this function has
+  // always produced. They are durable idempotency identities recorded in
+  // published claims, so a tidier scheme would orphan every import already in
+  // the network and re-fetch all of it.
   if (hasMediaGroup && contentKind === 'episode') {
-    return `tmdb:episode:show:${mediaId}:s${seasonNumber}:e${episodeNumber}`
+    return `${mediaProvider}:episode:show:${mediaId}:s${seasonNumber}:e${episodeNumber}`
   }
-  if (hasMediaGroup && contentKind === 'movie') return `tmdb:movie:${mediaId}`
+  if (hasMediaGroup) return `${mediaProvider}:${contentKind}:${mediaId}`
   if (contentFingerprint !== undefined) return `fingerprint:${contentFingerprint}`
   throw new Error('import identity is insufficient or ambiguous')
 }
@@ -306,6 +410,8 @@ export function normalizeChannelSource (source) {
   return out
 }
 
+const MAX_CONTENT_ARTWORK_ENTRIES = 8
+
 const CHANNEL_ARTWORK_FIELDS = new Set([
   'role',
   'blobId',
@@ -315,9 +421,35 @@ const CHANNEL_ARTWORK_FIELDS = new Set([
   'updatedAt'
 ])
 
-export function normalizeChannelArtwork (artwork) {
+// Cover art reaches a consumer only as publisher-signed metadata, and it
+// originates in operator form input. Every entry is validated with the same
+// role and URL rules as channel artwork before it can be signed into a claim.
+export function normalizeContentArtworkList (artwork) {
+  if (!Array.isArray(artwork)) throw new Error('artwork must be an array')
+  if (artwork.length > MAX_CONTENT_ARTWORK_ENTRIES) {
+    throw new Error(`artwork must hold at most ${MAX_CONTENT_ARTWORK_ENTRIES} entries`)
+  }
+  const out = []
+  const seenRoles = new Set()
+  for (const entry of artwork) {
+    const normalized = normalizeChannelArtwork(entry, normalizeContentArtworkRole)
+    // Content artwork is published through the media-graph content-artwork
+    // struct, which carries no updatedAt. Dropping it here keeps a claim from
+    // signing a field the wire format cannot represent.
+    delete normalized.updatedAt
+    if (normalized.blobId === undefined && normalized.remoteUrl === undefined) {
+      throw new Error('artwork requires either blobId or remoteUrl')
+    }
+    if (seenRoles.has(normalized.role)) throw new Error(`artwork role ${normalized.role} is duplicated`)
+    seenRoles.add(normalized.role)
+    out.push(normalized)
+  }
+  return out
+}
+
+export function normalizeChannelArtwork (artwork, normalizeRole = normalizeArtworkRole) {
   const input = assertAllowedFields(artwork, CHANNEL_ARTWORK_FIELDS, 'channel artwork')
-  const out = { role: normalizeArtworkRole(input.role) }
+  const out = { role: normalizeRole(input.role) }
   assignString(out, input, 'blobId', MAX_ID_LENGTH)
   assignString(out, input, 'blobsCoreKey', MAX_ID_LENGTH)
   assignString(out, input, 'mimeType', MAX_MIME_TYPE_LENGTH)

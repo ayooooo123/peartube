@@ -187,6 +187,96 @@ test('PlaybackForwardFill closes a core that becomes ready after stop without op
   t.is(fill.coreState.size, 0, 'shutdown does not restore cleared state')
 })
 
+test('marked static playhead fills only through the verified scheduler without raw core download', async (t) => {
+  const assetId = 'ab'.repeat(32)
+  const calls = []
+  const scheduler = {
+    seek(request) { calls.push(['seek', request]) },
+    async requestRange(request) {
+      calls.push(['requestRange', request])
+      return { status: 'ok', verified: true, peerIds: [] }
+    },
+  }
+  const entries = new Map([[
+    assetId,
+    {
+      scheduler,
+      coreRef: {
+        assetId,
+        blockSize: 256 * 1024,
+        length: 1024,
+        byteLength: 1024 * 256 * 1024,
+      },
+    },
+  ]])
+  const fill = new PlaybackForwardFill({
+    store: { get() { t.fail('marked static playback must not open a legacy core') } },
+    staticAssetEntries: entries,
+    config: { ...cfg, minIntervalMs: 0 },
+    log: () => {},
+  })
+
+  fill.onPlayhead({
+    staticAssetId: assetId,
+    coreKeyHex: assetId,
+    blockOffset: 0,
+    blockLength: 1024,
+    byteLength: 1024 * 256 * 1024,
+    windowStart: 4,
+    windowEnd: 4,
+  })
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  t.alike(calls[0], ['seek', { byteStart: 4 * 256 * 1024 }])
+  const { signal, ...request } = calls[1][1]
+  t.ok(signal)
+  t.alike(['requestRange', request], ['requestRange', {
+    assetId,
+    byteStart: 4 * 256 * 1024,
+    byteEnd: 260 * 256 * 1024,
+    deadlineMs: 15_000,
+    priority: 'prefetch',
+    materialize: false,
+  }])
+})
+
+test('failed marked static forward fill is logged and never falls back to legacy replication', async (t) => {
+  const assetId = 'cd'.repeat(32)
+  let legacyOpens = 0
+  const logs = []
+  const fill = new PlaybackForwardFill({
+    store: { get() { legacyOpens++; return null } },
+    staticAssetEntries: new Map([[
+      assetId,
+      {
+        coreRef: { assetId, blockSize: 256 * 1024, length: 2, byteLength: 512 * 1024 },
+        scheduler: {
+          seek() {},
+          async requestRange() {
+            return { status: 'unavailable', errorCode: 'NO_VERIFIED_SOURCE', originAttempted: false }
+          },
+        },
+      },
+    ]]),
+    config: { ...cfg, minIntervalMs: 0 },
+    log: (...args) => logs.push(args.join(' ')),
+  })
+
+  fill.onPlayhead({
+    staticAssetId: assetId,
+    coreKeyHex: assetId,
+    blockOffset: 0,
+    blockLength: 2,
+    byteLength: 512 * 1024,
+    windowStart: 0,
+    windowEnd: 0,
+  })
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  t.is(legacyOpens, 0)
+  t.ok(logs.some(line => line.includes('NO_VERIFIED_SOURCE')))
+})
+
 test('default look-ahead is deep but bounded', (t) => {
   const c = DEFAULT_FORWARD_FILL_CONFIG
   t.ok(c.lookAheadBytes >= 64 * MB, 'deep enough to outpace playback bitrate')

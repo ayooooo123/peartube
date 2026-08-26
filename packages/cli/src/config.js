@@ -2,13 +2,20 @@ import { readFileSync } from '#fs'
 import { join } from '#path'
 import process from '#process'
 import {
+  ARCHIVE_OFFLOAD_PROVIDERS,
+  ARCHIVE_OFFLOAD_PROVIDER_SECTIONS,
   DEFAULT_ARCHIVE_CONFIG,
   DEFAULT_ARCHIVE_FFMPEG_PATH,
   DEFAULT_ARCHIVE_FORMAT,
+  DEFAULT_ARCHIVE_GOOGLE_DRIVE_CONFIG,
   DEFAULT_ARCHIVE_JS_RUNTIME,
   DEFAULT_ARCHIVE_MAX_ITEMS,
   DEFAULT_ARCHIVE_MAX_RETRIES,
+  DEFAULT_ARCHIVE_MEGA_CONFIG,
+  DEFAULT_ARCHIVE_OFFLOAD_PROVIDER,
   DEFAULT_ARCHIVE_POLL_SECONDS,
+  DEFAULT_ARCHIVE_S3_CONFIG,
+  DEFAULT_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES,
   DEFAULT_ARCHIVE_YT_DLP_EXTRA_ARGS,
   DEFAULT_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS,
   DEFAULT_ARCHIVE_YT_DLP_PATH,
@@ -32,6 +39,11 @@ import {
   VALID_MODES,
   VALID_POLICIES
 } from './constants.js'
+import {
+  companionConfigFromCli,
+  companionConfigFromEnv,
+  resolveCompanionConfig
+} from './companion/config.js'
 import { buildSourceId, classifySourceUrl } from './archive/source-id.js'
 
 function isPlainObject(value) {
@@ -284,6 +296,10 @@ function configFromEnv(env = {}) {
   if (env.PEARTUBE_LOG_LEVEL) {
     config.logging = { level: env.PEARTUBE_LOG_LEVEL }
   }
+  if (env.PEARTUBE_RESEED_ENABLED) {
+    const parsed = parseBoolean(env.PEARTUBE_RESEED_ENABLED)
+    if (parsed !== undefined) config.reseed = { enabled: parsed }
+  }
   if (
     env.PEARTUBE_TMDB_API_KEY ||
     env.PEARTUBE_TMDB_ENABLED ||
@@ -303,6 +319,7 @@ function configFromEnv(env = {}) {
     env.PEARTUBE_ARCHIVE_UI_ENABLED ||
     env.PEARTUBE_ARCHIVE_UI_HOST ||
     env.PEARTUBE_ARCHIVE_UI_PORT ||
+    env.PEARTUBE_ARCHIVE_API_OPEN ||
     env.PEARTUBE_ARCHIVE_TMP_PATH ||
     env.PEARTUBE_ARCHIVE_ENABLED ||
     env.PEARTUBE_ARCHIVE_POLL ||
@@ -320,12 +337,40 @@ function configFromEnv(env = {}) {
     env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_CHANNEL_NAME ||
     env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION ||
     env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE ||
-    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES
+    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES ||
+    env.PEARTUBE_ARCHIVE_S3_ENDPOINT ||
+    env.PEARTUBE_ARCHIVE_S3_BUCKET ||
+    env.PEARTUBE_ARCHIVE_S3_REGION ||
+    env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID ||
+    env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY ||
+    env.PEARTUBE_ARCHIVE_S3_PREFIX ||
+    env.PEARTUBE_ARCHIVE_S3_ENABLED ||
+    env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE ||
+    env.PEARTUBE_ARCHIVE_S3_OFFLOAD ||
+    env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES ||
+    env.PEARTUBE_ARCHIVE_PROVIDER ||
+    env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_ACCESS_TOKEN ||
+    env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FOLDER_ID ||
+    env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_PREFIX ||
+    env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FILES_ENDPOINT ||
+    env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_UPLOAD_ENDPOINT ||
+    env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD ||
+    env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD_WINDOW_BYTES ||
+    env.PEARTUBE_ARCHIVE_MEGA_SESSION ||
+    env.PEARTUBE_ARCHIVE_MEGA_FOLDER ||
+    env.PEARTUBE_ARCHIVE_MEGA_PREFIX ||
+    env.PEARTUBE_ARCHIVE_MEGA_API_URL ||
+    env.PEARTUBE_ARCHIVE_MEGA_OFFLOAD ||
+    env.PEARTUBE_ARCHIVE_MEGA_OFFLOAD_WINDOW_BYTES
   ) {
     config.archive = {}
     if (env.PEARTUBE_ARCHIVE_UI_ENABLED) config.archive.uiEnabled = parseBoolean(env.PEARTUBE_ARCHIVE_UI_ENABLED)
     if (env.PEARTUBE_ARCHIVE_UI_HOST) config.archive.uiHost = env.PEARTUBE_ARCHIVE_UI_HOST
     if (env.PEARTUBE_ARCHIVE_UI_PORT) config.archive.uiPort = Number(env.PEARTUBE_ARCHIVE_UI_PORT)
+    if (env.PEARTUBE_ARCHIVE_API_OPEN) {
+      const parsed = parseBoolean(env.PEARTUBE_ARCHIVE_API_OPEN)
+      if (parsed !== undefined) config.archive.apiOpen = parsed
+    }
     if (env.PEARTUBE_ARCHIVE_TMP_PATH) config.archive.tmpPath = env.PEARTUBE_ARCHIVE_TMP_PATH
     if (env.PEARTUBE_ARCHIVE_ENABLED) {
       const parsed = parseBoolean(env.PEARTUBE_ARCHIVE_ENABLED)
@@ -338,6 +383,65 @@ function configFromEnv(env = {}) {
     if (env.PEARTUBE_ARCHIVE_COOKIES_PATH) config.archive.cookiesPath = env.PEARTUBE_ARCHIVE_COOKIES_PATH
     if (env.PEARTUBE_ARCHIVE_JS_RUNTIME) config.archive.jsRuntime = env.PEARTUBE_ARCHIVE_JS_RUNTIME
     if (env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS) config.archive.ytDlpExtraArgs = splitShellArgs(env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS)
+    if (env.PEARTUBE_ARCHIVE_PROVIDER) config.archive.provider = env.PEARTUBE_ARCHIVE_PROVIDER
+    if (
+      env.PEARTUBE_ARCHIVE_S3_ENDPOINT ||
+      env.PEARTUBE_ARCHIVE_S3_BUCKET ||
+      env.PEARTUBE_ARCHIVE_S3_REGION ||
+      env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID ||
+      env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY ||
+      env.PEARTUBE_ARCHIVE_S3_PREFIX ||
+      env.PEARTUBE_ARCHIVE_S3_ENABLED ||
+      env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE ||
+      env.PEARTUBE_ARCHIVE_S3_OFFLOAD ||
+      env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES
+    ) {
+      config.archive.s3 = {}
+      if (env.PEARTUBE_ARCHIVE_S3_ENDPOINT) config.archive.s3.endpoint = env.PEARTUBE_ARCHIVE_S3_ENDPOINT
+      if (env.PEARTUBE_ARCHIVE_S3_BUCKET) config.archive.s3.bucket = env.PEARTUBE_ARCHIVE_S3_BUCKET
+      if (env.PEARTUBE_ARCHIVE_S3_REGION) config.archive.s3.region = env.PEARTUBE_ARCHIVE_S3_REGION
+      if (env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID) config.archive.s3.accessKeyId = env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID
+      if (env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY) config.archive.s3.secretAccessKey = env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY
+      if (env.PEARTUBE_ARCHIVE_S3_PREFIX) config.archive.s3.prefix = env.PEARTUBE_ARCHIVE_S3_PREFIX
+      if (env.PEARTUBE_ARCHIVE_S3_ENABLED) config.archive.s3.enabled = parseBoolean(env.PEARTUBE_ARCHIVE_S3_ENABLED)
+      if (env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE) config.archive.s3.forcePathStyle = parseBoolean(env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE)
+      if (env.PEARTUBE_ARCHIVE_S3_OFFLOAD) config.archive.s3.offload = parseBoolean(env.PEARTUBE_ARCHIVE_S3_OFFLOAD)
+      if (env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES) config.archive.s3.offloadWindowBytes = Number(env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES)
+    }
+    if (
+      env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_ACCESS_TOKEN ||
+      env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FOLDER_ID ||
+      env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_PREFIX ||
+      env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FILES_ENDPOINT ||
+      env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_UPLOAD_ENDPOINT ||
+      env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD ||
+      env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD_WINDOW_BYTES
+    ) {
+      config.archive.googleDrive = {}
+      if (env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_ACCESS_TOKEN) config.archive.googleDrive.accessToken = env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_ACCESS_TOKEN
+      if (env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FOLDER_ID) config.archive.googleDrive.folderId = env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FOLDER_ID
+      if (env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_PREFIX) config.archive.googleDrive.prefix = env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_PREFIX
+      if (env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FILES_ENDPOINT) config.archive.googleDrive.filesEndpoint = env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FILES_ENDPOINT
+      if (env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_UPLOAD_ENDPOINT) config.archive.googleDrive.uploadEndpoint = env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_UPLOAD_ENDPOINT
+      if (env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD) config.archive.googleDrive.offload = parseBoolean(env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD)
+      if (env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD_WINDOW_BYTES) config.archive.googleDrive.offloadWindowBytes = Number(env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD_WINDOW_BYTES)
+    }
+    if (
+      env.PEARTUBE_ARCHIVE_MEGA_SESSION ||
+      env.PEARTUBE_ARCHIVE_MEGA_FOLDER ||
+      env.PEARTUBE_ARCHIVE_MEGA_PREFIX ||
+      env.PEARTUBE_ARCHIVE_MEGA_API_URL ||
+      env.PEARTUBE_ARCHIVE_MEGA_OFFLOAD ||
+      env.PEARTUBE_ARCHIVE_MEGA_OFFLOAD_WINDOW_BYTES
+    ) {
+      config.archive.mega = {}
+      if (env.PEARTUBE_ARCHIVE_MEGA_SESSION) config.archive.mega.session = env.PEARTUBE_ARCHIVE_MEGA_SESSION
+      if (env.PEARTUBE_ARCHIVE_MEGA_FOLDER) config.archive.mega.folder = env.PEARTUBE_ARCHIVE_MEGA_FOLDER
+      if (env.PEARTUBE_ARCHIVE_MEGA_PREFIX) config.archive.mega.prefix = env.PEARTUBE_ARCHIVE_MEGA_PREFIX
+      if (env.PEARTUBE_ARCHIVE_MEGA_API_URL) config.archive.mega.apiUrl = env.PEARTUBE_ARCHIVE_MEGA_API_URL
+      if (env.PEARTUBE_ARCHIVE_MEGA_OFFLOAD) config.archive.mega.offload = parseBoolean(env.PEARTUBE_ARCHIVE_MEGA_OFFLOAD)
+      if (env.PEARTUBE_ARCHIVE_MEGA_OFFLOAD_WINDOW_BYTES) config.archive.mega.offloadWindowBytes = Number(env.PEARTUBE_ARCHIVE_MEGA_OFFLOAD_WINDOW_BYTES)
+    }
     if (env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS) {
       config.archive.ytDlpRetryExtraArgs = String(env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS)
         .split(/\s*\|\|\s*/)
@@ -366,6 +470,8 @@ function configFromEnv(env = {}) {
       if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES) config.archive.localMirror.maxFiles = Number(env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES)
     }
   }
+
+  Object.assign(config, companionConfigFromEnv(env))
 
   return config
 }
@@ -396,10 +502,19 @@ function configFromCli(cli = {}) {
     config.logging = { level: cli.logLevel }
   }
 
-  if (cli.host || cli.port) {
+  // Bare flag, and only ever turns re-seeding OFF: its absence must not
+  // overwrite an operator's config file the way a tri-state value would.
+  if (cli.noReseed) {
+    config.reseed = { enabled: false }
+  }
+
+  if (cli.host || cli.port || cli.apiOpen) {
     config.archive = config.archive || {}
     if (cli.host) config.archive.uiHost = cli.host
     if (cli.port) config.archive.uiPort = Number(cli.port)
+    // Only ever turned on from here: --api-open is a bare flag, so its absence
+    // must not overwrite an operator's config file either way.
+    if (cli.apiOpen) config.archive.apiOpen = true
   }
 
   if (cli.localMirrorPath || cli.localMirrorPoll || cli.localMirrorChannelName) {
@@ -412,6 +527,8 @@ function configFromCli(cli = {}) {
     if (cli.localMirrorPoll) config.archive.localMirror.poll = Number(cli.localMirrorPoll)
     if (cli.localMirrorChannelName) config.archive.localMirror.channelName = cli.localMirrorChannelName
   }
+
+  Object.assign(config, companionConfigFromCli(cli))
 
   return config
 }
@@ -451,6 +568,118 @@ function normalizeSource(rawSource, defaults) {
       ? Number(rawSource.maxItems)
       : defaults.maxItems
   }
+}
+
+// A challenge cadence has to be a whole number of milliseconds inside a sane
+// band: below a second it is a hot loop against a peer, and past a day it is
+// indistinguishable from never asking. Anything else is treated as unset so
+// the backend default applies.
+const MIN_CHALLENGE_MS = 1_000
+const MAX_CHALLENGE_MS = 24 * 60 * 60 * 1000
+
+function boundedChallengeMs(value) {
+  if (value === undefined || value === null || value === '') return undefined
+  const ms = Number(value)
+  if (!Number.isSafeInteger(ms) || ms < MIN_CHALLENGE_MS || ms > MAX_CHALLENGE_MS) return undefined
+  return ms
+}
+
+// Block offload sends media block DATA to the object store and keeps only the
+// merkle tree and the bitfield on disk, so the relay keeps advertising and
+// serving a block whose bytes are no longer local. That makes the store load
+// bearing for playback, so it is opt-in, and a half-configured store is refused
+// rather than downgraded: silently running local-only would fill the volume the
+// operator was trying to stop filling. That holds for every backend, so the
+// required fields are named per provider and checked the same way.
+const REQUIRED_S3_OFFLOAD_FIELDS = ['endpoint', 'bucket', 'accessKeyId', 'secretAccessKey']
+// The endpoints are required as well as the credential: they default to Drive's
+// own hosts here in the config layer, because the provider itself may not carry
+// a remote origin, so an operator who blanks them gets a startup error rather
+// than a provider that cannot address anything.
+const REQUIRED_GOOGLE_DRIVE_OFFLOAD_FIELDS = ['accessToken', 'folderId', 'filesEndpoint', 'uploadEndpoint']
+const REQUIRED_MEGA_OFFLOAD_FIELDS = ['session', 'folder']
+
+function boundedOffloadWindowBytes(value) {
+  const bytes = Number(value)
+  if (!Number.isSafeInteger(bytes) || bytes < 0) return DEFAULT_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES
+  return bytes
+}
+
+function resolveArchiveS3Config(rawS3) {
+  const merged = deepMerge(DEFAULT_ARCHIVE_S3_CONFIG, isPlainObject(rawS3) ? rawS3 : {})
+
+  for (const field of ['endpoint', 'bucket', 'region', 'accessKeyId', 'secretAccessKey', 'prefix']) {
+    merged[field] = typeof merged[field] === 'string' ? merged[field].trim() : ''
+  }
+  if (!merged.region) merged.region = DEFAULT_ARCHIVE_S3_CONFIG.region
+  merged.enabled = merged.enabled !== false
+  merged.forcePathStyle = Boolean(merged.forcePathStyle)
+  merged.offload = Boolean(merged.offload)
+
+  merged.offloadWindowBytes = boundedOffloadWindowBytes(merged.offloadWindowBytes)
+
+  if (merged.offload) {
+    const missing = REQUIRED_S3_OFFLOAD_FIELDS.filter((field) => !merged[field])
+    if (missing.length) {
+      throw new Error(`archive.s3.offload is true but archive.s3 is incomplete: missing ${missing.join(', ')}`)
+    }
+    if (!merged.enabled) {
+      throw new Error('archive.s3.offload is true but archive.s3.enabled is false')
+    }
+  }
+
+  return merged
+}
+
+function resolveArchiveGoogleDriveConfig(rawDrive) {
+  const merged = deepMerge(DEFAULT_ARCHIVE_GOOGLE_DRIVE_CONFIG, isPlainObject(rawDrive) ? rawDrive : {})
+
+  for (const field of ['accessToken', 'folderId', 'prefix', 'filesEndpoint', 'uploadEndpoint']) {
+    merged[field] = typeof merged[field] === 'string' ? merged[field].trim() : ''
+  }
+  merged.offload = Boolean(merged.offload)
+  merged.offloadWindowBytes = boundedOffloadWindowBytes(merged.offloadWindowBytes)
+
+  if (merged.offload) {
+    const missing = REQUIRED_GOOGLE_DRIVE_OFFLOAD_FIELDS.filter((field) => !merged[field])
+    if (missing.length) {
+      throw new Error(`archive.googleDrive.offload is true but archive.googleDrive is incomplete: missing ${missing.join(', ')}`)
+    }
+  }
+
+  return merged
+}
+
+function resolveArchiveMegaConfig(rawMega) {
+  const merged = deepMerge(DEFAULT_ARCHIVE_MEGA_CONFIG, isPlainObject(rawMega) ? rawMega : {})
+
+  for (const field of ['session', 'folder', 'prefix', 'apiUrl']) {
+    merged[field] = typeof merged[field] === 'string' ? merged[field].trim() : ''
+  }
+  merged.offload = Boolean(merged.offload)
+  merged.offloadWindowBytes = boundedOffloadWindowBytes(merged.offloadWindowBytes)
+
+  if (merged.offload) {
+    const missing = REQUIRED_MEGA_OFFLOAD_FIELDS.filter((field) => !merged[field])
+    if (missing.length) {
+      throw new Error(`archive.mega.offload is true but archive.mega is incomplete: missing ${missing.join(', ')}`)
+    }
+  }
+
+  return merged
+}
+
+// One switch, three names. An unrecognised name is refused rather than treated
+// as "the default": an operator who typed `gdrive` asked for Drive, and starting
+// a relay that offloads to their S3 config instead — or to nothing — is the
+// worst answer available.
+function resolveArchiveOffloadProvider(rawProvider) {
+  const name = typeof rawProvider === 'string' ? rawProvider.trim() : ''
+  if (!name) return DEFAULT_ARCHIVE_OFFLOAD_PROVIDER
+  if (!ARCHIVE_OFFLOAD_PROVIDERS.includes(name)) {
+    throw new Error(`archive.provider must be one of ${ARCHIVE_OFFLOAD_PROVIDERS.join(', ')} (got "${name}")`)
+  }
+  return name
 }
 
 function resolveArchiveConfig(rawArchive, { storagePath }) {
@@ -515,6 +744,11 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
     merged.maxItems = DEFAULT_ARCHIVE_MAX_ITEMS
   }
 
+  // Legacy archive.maxDirectDownloadBytes is no longer a policy surface.
+  // File-size limits are storage policy, not archive downloader policy, so
+  // normalize every value to the no-cap sentinel.
+  merged.maxDirectDownloadBytes = 0
+
   if (typeof merged.tmpPath !== 'string' || !merged.tmpPath) {
     merged.tmpPath = join(storagePath, 'archive-tmp')
   }
@@ -527,6 +761,7 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
   if (!Number.isFinite(merged.uiPort) || merged.uiPort <= 0) {
     throw new Error('archive.uiPort must be a positive number')
   }
+  merged.apiOpen = Boolean(merged.apiOpen)
 
   const sourceDefaults = {
     format: merged.format,
@@ -568,6 +803,30 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
   }
   if (merged.localMirror.enabled && !merged.localMirror.path) {
     throw new Error('archive.localMirror.enabled is true but archive.localMirror.path is empty')
+  }
+  // How often this relay challenges the archivists holding its content, and
+  // how long it waits for a proof. Left unset the backend picks its own
+  // defaults; an operator who wants custody confirmed sooner than every five
+  // minutes - or anyone trying to prove mirroring works at all - had no way to
+  // ask for it, because these never reached the backend that already accepts
+  // them. Out-of-range values are dropped rather than clamped, so a typo does
+  // not quietly become a hot loop against every peer.
+  merged.challengeIntervalMs = boundedChallengeMs(merged.challengeIntervalMs)
+  merged.challengeTimeoutMs = boundedChallengeMs(merged.challengeTimeoutMs)
+
+  merged.provider = resolveArchiveOffloadProvider(merged.provider)
+  merged.s3 = resolveArchiveS3Config(merged.s3)
+  merged.googleDrive = resolveArchiveGoogleDriveConfig(merged.googleDrive)
+  merged.mega = resolveArchiveMegaConfig(merged.mega)
+
+  // Offload is enabled by the SELECTED provider's section, so `offload: true` in
+  // a section nobody selected would be a relay running local-only while its
+  // operator believes block data is leaving the volume. Refused, for the same
+  // reason a half-configured store is refused.
+  for (const [name, section] of Object.entries(ARCHIVE_OFFLOAD_PROVIDER_SECTIONS)) {
+    if (name !== merged.provider && merged[section].offload) {
+      throw new Error(`archive.${section}.offload is true but archive.provider is "${merged.provider}"`)
+    }
   }
 
   return merged
@@ -693,6 +952,14 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
 
   config.network = deepMerge(DEFAULT_RELAY_CONFIG.network, config.network || {})
   config.logging = deepMerge(DEFAULT_RELAY_CONFIG.logging, config.logging || {})
+  config.companion = resolveCompanionConfig(config.companion, {
+    storagePath: config.storage.path
+  })
+
+
+  // Whether this relay accepts other relays' archive requests and asks the
+  // network to mirror what it publishes. On unless the operator says otherwise.
+  config.reseed = { enabled: (config.reseed || {}).enabled !== false }
 
   config.archive = resolveArchiveConfig(config.archive, { storagePath: config.storage.path })
   config.classification = resolveClassificationConfig(config.classification)
@@ -784,12 +1051,33 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
     `  maxChannelsPerOwner: ${config.discovery.maxChannelsPerOwner}`
   )
 
+  lines.push(
+    'reseed:',
+    `  enabled: ${config.reseed?.enabled !== false}`
+  )
+
+  const companion = config.companion || DEFAULT_RELAY_CONFIG.companion
+  lines.push(
+    'companion:',
+    `  enabled: ${companion.enabled !== false}`,
+    `  transport: ${companion.transport || 'unix'}`,
+    `  socketPath: ${companion.socketPath || ''}`,
+    `  host: ${companion.host || '127.0.0.1'}`,
+    `  port: ${companion.port ?? 8175}`,
+    `  client: ${companion.client || 'mediastorm'}`,
+    `  maxBodyBytes: ${companion.maxBodyBytes ?? 1048576}`,
+    `  maxClockSkewMs: ${companion.maxClockSkewMs ?? 30000}`,
+    `  maxNonces: ${companion.maxNonces ?? 4096}`,
+    '  # Set sharedSecret with PEARTUBE_COMPANION_SHARED_SECRET; secrets are never rendered.'
+  )
+
   const archive = config.archive || DEFAULT_ARCHIVE_CONFIG
   lines.push(
     'archive:',
     `  uiEnabled: ${Boolean(archive.uiEnabled)}`,
     `  uiHost: ${archive.uiHost || '127.0.0.1'}`,
     `  uiPort: ${archive.uiPort || 8174}`,
+    `  apiOpen: ${Boolean(archive.apiOpen)}`,
     `  tmpPath: ${archive.tmpPath || './peartube-relay/archive-tmp'}`,
     `  enabled: ${Boolean(archive.enabled)}`,
     `  poll: ${archive.poll || DEFAULT_ARCHIVE_POLL_SECONDS}`,

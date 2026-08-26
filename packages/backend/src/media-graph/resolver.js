@@ -58,3 +58,13 @@ export function resolveMediaEntity(store, entityId, options = {}) {
     conflicts: metadataClaims.slice(1),
   }
 }
+
+// Consumer projections deliberately reuse the graph resolver.  The returned
+// kind is a local presentation hint, never an assertion about global identity.
+export function resolveConsumerMediaEntity(store, entityId, options = {}) {
+  const resolved = resolveMediaEntity(store, entityId, options)
+  return {
+    ...resolved,
+    entityKind: options.entityKind || resolved.claims[0]?.body?.subjectRefs?.[0]?.entityKind || 'unknown',
+  }
+}

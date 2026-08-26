@@ -17,13 +17,22 @@ function readRepo(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8')
 }
 
-test('mobile design tokens move away from Twitch purple toward the PearTube pear-green premium dark system', () => {
+test('mobile design tokens use the MediaStorm dark catalog system', () => {
   const source = readRepo('packages/core/src/utils/index.ts')
 
-  assert.match(source, /primary:\s*'#a3e635'/, 'primary accent should use the pear-green brand token instead of the old saturated Twitch purple')
-  assert.match(source, /bg:\s*'#0a0c0a'/, 'mobile surface should use the current green-tinted near-black base')
-  assert.match(source, /surfaceBorder:\s*'rgba\(255,255,255,0\.08\)'/, 'surface borders should use translucent dark-mode-native separators')
-  assert.doesNotMatch(source, /primary:\s*'#9147ff'/, 'old Twitch purple should not remain as the primary brand color')
+  // Supersedes the earlier violet-on-navy system. The product now adopts
+  // MediaStorm's dark theme wholesale — an accent blue on a neutral near-black
+  // with two solid lift steps — so these assertions pin the new palette rather
+  // than the violet one they replace.
+  assert.match(source, /primary:\s*'#3f66ff'/, 'primary accent should use the MediaStorm accent blue')
+  assert.match(source, /accentSecondary:\s*'#ff9f1a'/, 'the amber secondary accent has to stay available for badges and warnings')
+  assert.match(source, /onPrimary:\s*'#ffffff'/, 'text on accent fills has to be white to stay legible')
+  assert.match(source, /bg:\s*'#0b0b0f'/, 'the base surface should be the neutral near-black')
+  assert.match(source, /surface:\s*'#16161f'/, 'cards and panels sit one solid step above the base')
+  assert.match(source, /surfaceBorder:\s*'#2b2f3c'/, 'separators are a solid subtle border, not a translucent white wash')
+  assert.match(source, /overlayButton:\s*'rgba\(255, 255, 255, 0\.12\)'/, 'secondary actions over artwork need the button overlay fill')
+  assert.doesNotMatch(source, /#a3e635|#bef264|#65a30d/, 'no lime tokens should survive the recolor')
+  assert.doesNotMatch(source, /primary:\s*'#7b5bf5'/, 'the violet brand accent is fully replaced by the MediaStorm blue')
 })
 
 test('native video cards use premium app-native surfaces and cover thumbnails', () => {
@@ -108,9 +117,8 @@ test('mobile home preserves resolved entity type and payload in detail navigatio
 
   for (const required of [
     'useMediaCatalog',
-    'MediaCatalogView',
+    'ConsumerHomeView',
     'onRefresh={() => { void catalog.refresh() }}',
-    'onLoadNext={() => { void catalog.loadNext() }}',
     "item.entityKind === 'collection'",
     "item.entityKind === 'agent'",
     "'/collection/[id]'",

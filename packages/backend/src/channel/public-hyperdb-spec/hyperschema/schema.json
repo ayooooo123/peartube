@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "schema": [
     {
       "name": "metadata",
@@ -329,6 +329,12 @@
           "name": "duplicateOfClaimantId",
           "type": "string",
           "version": 2
+        },
+        {
+          "name": "artwork",
+          "array": true,
+          "type": "@peartubePublic/contentArtwork",
+          "version": 3
         }
       ]
     },
@@ -418,6 +424,40 @@
           "name": "updatedAt",
           "type": "uint64",
           "version": 2
+        }
+      ]
+    },
+    {
+      "name": "contentArtwork",
+      "namespace": "peartubePublic",
+      "compact": true,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "role",
+          "required": true,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "blobId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "blobsCoreKey",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "mimeType",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "remoteUrl",
+          "type": "string",
+          "version": 3
         }
       ]
     }

@@ -2,7 +2,7 @@ export type HostReadyData = {
   blobServerPort: number | null
   blobServerReady?: boolean
   blobServerError?: string | null
-  protocolVersion: 6
+  protocolVersion: 9
 }
 
 export type HostLifecycleEvent =
@@ -10,7 +10,7 @@ export type HostLifecycleEvent =
   | { type: 'host.error'; code: string; message: string; retryable: boolean; storedVersion?: number | null; expectedVersion?: number | null }
   | { type: 'transport.closed'; reason?: string }
 
-export const PROTOCOL_VERSION: 6
+export const PROTOCOL_VERSION: 9
 
 export const HOST_ERROR_CODES: {
   readonly HOST_START_FAILED: 'HOST_START_FAILED'
@@ -36,7 +36,7 @@ export function createHostError(
 
 export type ProtocolReadyData = {
   blobServerPort: number | null
-  protocolVersion: 6
+  protocolVersion: 9
 }
 
 export type ProtocolNetworkStatus = {
@@ -73,6 +73,22 @@ export const PROTOCOL_EVENT_BINDINGS: ReadonlyArray<readonly [string, string]>
 
 type ProtocolMethod = (request?: any) => Promise<any>
 type ProtocolNamespace = Record<string, ProtocolMethod>
+
+export type UploadVideoRequest = {
+  filePath: string
+  title: string
+  description?: string | null
+  category?: string | null
+  skipThumbnailGeneration?: boolean
+  contentKind?: 'episode' | 'movie' | null
+  seriesId?: string | null
+  seriesTitle?: string | null
+  mediaProvider?: 'tmdb' | null
+  mediaId?: string | null
+  seasonNumber?: number | null
+  episodeNumber?: number | null
+  expectedEpisodeCount?: number | null
+}
 
 export type PublisherRootRecordType =
   | 'publisher.namespace'
@@ -389,17 +405,65 @@ export type RequestArchivePublicationResponse = {
   errorCode?: string | null
 }
 
+/**
+ * Local, point-in-time reachability assessment for one immutable rendition.
+ *
+ * It is not durability, consensus, or an SLA: `healthy` only means this device
+ * currently holds fresh hash-verified evidence from `MIN_HEALTHY_PEERS`
+ * independent transport identities, and it decays at `expiresAt`.
+ */
+export type MediaAvailabilityState =
+  | 'awaiting-replication'
+  | 'limited'
+  | 'healthy'
+  | 'unavailable'
+
+export type MediaAvailability = {
+  state: MediaAvailabilityState
+  renditionId?: string | null
+  /** Epoch ms of this assessment. */
+  observedAt: number
+  /** Epoch ms after which the supporting evidence is stale. */
+  expiresAt: number
+  requiredRangeCount: number
+  reachableRangeCount: number
+  /** Distinct authenticated Noise keys currently contributing fresh evidence. */
+  independentPeerCount: number
+  /** Of those, the ones proving every required range. */
+  completePeerCount: number
+  /** Best round trip measured against a contributing peer; 0 means unmeasured. */
+  measuredLatencyMs: number
+  /** A local complete copy. Never counted as network availability. */
+  offlinePlayable: boolean
+  /** A static retention pledge. Durability evidence only. */
+  archivePledged: boolean
+  /** Stable codes in canonical order; at most 8 entries. */
+  reasonCodes: string[]
+}
+
+export type MediaSourceCoordinates = {
+  contentKind: 'movie' | 'episode'
+  mediaProvider: string
+  mediaId: string
+  seasonNumber?: number | null
+  episodeNumber?: number | null
+}
+
 export type MediaPublicationSource = {
   publicationId: string
   publisherId: string
   manifestId: string
   renditionId?: string | null
+  mediaCoordinates?: MediaSourceCoordinates | null
   score?: number | null
   availabilityScore?: number | null
   formatSupport?: number | null
   moderationPenalty?: number | null
   preferred?: boolean | null
+  /** Chosen by the one playback selector. */
   selected?: boolean | null
+  /** Passed every hard gate, so Play may fail over to it. */
+  eligible?: boolean | null
   /** Stable codes in deterministic order; at most 32 entries. */
   selectionReasonCodes?: string[] | null
   /** Stable codes in deterministic order; at most 32 entries. */
@@ -414,16 +478,20 @@ export type MediaPublicationSource = {
   claimConflictIds?: string[] | null
   /** Sorted and deduplicated; at most 64 entries. */
   provenanceClaimIds?: string[] | null
-  scoreMetadataConfidence?: number | null
-  scorePublisherTrust?: number | null
-  scoreAvailability?: number | null
+  /** Playback score components. Local playability facts only. */
+  scoreLocalCompleteness?: number | null
+  scoreStartupReachability?: number | null
+  scorePeerEvidence?: number | null
   scoreFormatSupport?: number | null
-  scoreModerationPenalty?: number | null
+  /** Startup-latency penalty, reported as a positive magnitude. */
+  scoreStartupLatency?: number | null
+  scoreUserOverride?: number | null
   archiveState?: string | null
   cacheState?: string | null
   availabilityState?: 'available' | 'unavailable' | 'unknown' | 'stale' | null
   stale?: boolean | null
   incomplete?: boolean | null
+  availability?: MediaAvailability | null
 }
 
 export type MediaRenditionDescriptor = {
@@ -445,8 +513,18 @@ export type MediaEntitySummary = {
   subtitle?: string | null
   claimCount?: number | null
   conflictCount?: number | null
+  availability?: MediaAvailability | null
   sources: MediaPublicationSource[]
   renditions: MediaRenditionDescriptor[]
+  /**
+   * What a viewer reads before pressing play, carried on the publisher's signed
+   * metadata claim because a consumer cannot look any of it up. A category the
+   * publisher did not supply is absent, never an empty string or a zero.
+   */
+  releaseYear?: number
+  runtimeMinutes?: number
+  overview?: string
+  genres?: string[]
 }
 
 export type MediaAgentSummary = {
@@ -553,6 +631,69 @@ export type PublicationSourcesResponse = {
   nextCursor?: string | null
 }
 
+export type MediaPlaybackAttempt = {
+  publicationId: string
+  /** `null` on the attempt that succeeded. */
+  errorCode?: PlaybackErrorCode | null
+}
+
+/**
+ * The complete playback failure vocabulary. Every viewer-visible playback
+ * failure is exactly one of these; there is no generic fallback code.
+ */
+export type PlaybackErrorCode =
+  | 'AVAILABILITY_BOUNDARY'
+  | 'NO_COMPATIBLE_SOURCE'
+  | 'PEER_TIMEOUT'
+  | 'PEER_DISCONNECT'
+  | 'RANGE_MISMATCH'
+  | 'SESSION_LIMIT'
+  | 'PREPARATION_DEADLINE'
+  | 'PREPARATION_CANCELLED'
+  | 'ATTEMPT_LIMIT'
+
+/**
+ * `automatic` - preparation may try another equivalent source itself.
+ * `manual` - only a new user action can change the outcome.
+ * `evidence` - nothing changes until new availability evidence or a new device
+ * capability arrives.
+ */
+export type PlaybackRetryPolicy = 'automatic' | 'manual' | 'evidence'
+
+/**
+ * Result of one Play action. The backend already selected the source and, if
+ * needed, failed over between equivalent sources; the client renders the
+ * outcome rather than choosing.
+ */
+export type PrepareMediaPlaybackResponse = {
+  success: boolean
+  errorCode?: PlaybackErrorCode | null
+  error?: string | null
+  retry?: PlaybackRetryPolicy | null
+  publicationId?: string | null
+  renditionId?: string | null
+  coreKey?: string | null
+  attempts?: MediaPlaybackAttempt[] | null
+  sources?: MediaPublicationSource[] | null
+}
+
+/**
+ * Cover art for one entity. The poster is a rendition of the publication, so it
+ * arrives over the same authorized asset path as the video and is already byte-
+ * local by the time a URL is handed back.
+ *
+ * `exists: false` with no `errorCode` is not a failure: the publication is
+ * known and its poster simply has not replicated here yet, so asking again
+ * later is the correct response.
+ */
+export type EntityArtworkResponse = {
+  success: boolean
+  exists: boolean
+  url?: string | null
+  errorCode?: string | null
+  error?: string | null
+}
+
 export type SystemProtocolNamespace = ProtocolNamespace & {
   getStatus(request?: Record<string, never>): Promise<any>
   getSwarmStatus(request?: Record<string, never>): Promise<ProtocolNetworkStatus>
@@ -605,6 +746,19 @@ export type MediaGraphProtocolNamespace = ProtocolNamespace & {
     publicationId: string
     preferred: boolean
   }): Promise<SetSourcePreferenceResponse>
+  prepareMediaPlayback(request: {
+    entityId: string
+    /** Optional override from Other Sources; honoured only while eligible. */
+    publicationId?: string
+  }): Promise<PrepareMediaPlaybackResponse>
+  getEntityArtwork(request: {
+    entityId?: string
+    publicationId?: string
+  }): Promise<EntityArtworkResponse>
+}
+
+export type VideoProtocolNamespace = ProtocolNamespace & {
+  uploadVideo(request: UploadVideoRequest): Promise<any>
 }
 
 export type PublisherProtocolNamespace = {
@@ -644,8 +798,7 @@ export function createProtocolClient(options: {
   publisher: PublisherProtocolNamespace
   channel: ProtocolNamespace
   mediaGraph: MediaGraphProtocolNamespace
-  video: ProtocolNamespace
-  watch: ProtocolNamespace
+  video: VideoProtocolNamespace
   transfer: TransferProtocolNamespace
   search: ProtocolNamespace
   shell: ProtocolNamespace

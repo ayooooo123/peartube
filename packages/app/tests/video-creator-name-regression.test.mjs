@@ -22,9 +22,10 @@ test('VideoCard display falls back to archived creatorName before generic channe
   assert.match(webCard, /video\.creatorName \|\| video\.channel\?\.name/)
 })
 
-test('Search results preserve creatorName from vector metadata', () => {
+test('Search renders publisher attribution from projected media summaries', () => {
   const search = readApp('app/search.tsx')
 
-  assert.match(search, /creatorName:\s*metadata\.creatorName \|\| undefined/)
-  assert.match(search, /channel:\s*metadata\.creatorName \|\| metadata\.channelName/)
+  assert.match(search, /MediaCatalogView/)
+  assert.match(search, /MediaEntitySummary/)
+  assert.doesNotMatch(search, /\bmetadata\b|creatorName:/)
 })

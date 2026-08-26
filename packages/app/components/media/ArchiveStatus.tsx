@@ -88,8 +88,8 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   cardPositive: {
-    borderColor: 'rgba(163,230,53,0.32)',
-    backgroundColor: 'rgba(163,230,53,0.08)',
+    borderColor: 'rgba(123, 91, 245,0.32)',
+    backgroundColor: 'rgba(123, 91, 245,0.08)',
   },
   cardWarning: {
     borderColor: 'rgba(251,191,36,0.30)',
@@ -107,8 +107,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.04)',
   },
   iconPositive: {
-    borderColor: 'rgba(163,230,53,0.36)',
-    backgroundColor: 'rgba(163,230,53,0.10)',
+    borderColor: 'rgba(123, 91, 245,0.36)',
+    backgroundColor: 'rgba(123, 91, 245,0.10)',
   },
   iconWarning: {
     borderColor: 'rgba(251,191,36,0.34)',

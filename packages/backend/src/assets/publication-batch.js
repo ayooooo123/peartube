@@ -1,6 +1,8 @@
 import b4a from 'b4a'
 
 import { hashCanonical, sortPlain, toHex } from '../publisher/canonical.js'
+import { createRenditionDescriptor } from './rendition.js'
+import { normalizeAssetBundleManifest } from './bundle.js'
 
 export const PUBLICATION_BATCH_VERSION = 1
 export const PUBLICATION_BATCH_DIGEST_DOMAIN = 'peartube.asset.publication-batch.v1'
@@ -18,11 +20,16 @@ function boundedPositive(value, name, max = 1024) {
 function normalizePublication(input = {}) {
   const renditions = input.renditions || []
   if (!Array.isArray(renditions) || renditions.length === 0) throw new Error('publication renditions are required')
+  const normalizedRenditions = renditions.map((rendition) => {
+    const normalized = createRenditionDescriptor(rendition)
+    if (rendition.renditionId !== normalized.renditionId) throw new Error('publication renditionId does not match descriptor')
+    return normalized
+  })
   return sortPlain({
     kind: 'publication',
     publicationId: toHex(input.publicationId, 32, 'publicationId'),
     manifestId: toHex(input.manifestId, 32, 'manifestId'),
-    renditions: renditions.map((rendition) => sortPlain(rendition)).sort((a, b) => a.renditionId.localeCompare(b.renditionId)),
+    renditions: normalizedRenditions.sort((a, b) => a.renditionId.localeCompare(b.renditionId)),
   })
 }
 
@@ -35,6 +42,29 @@ function normalizeClaim(input = {}) {
     subjectRefs: Array.isArray(input.subjectRefs) ? input.subjectRefs.map(String).sort() : [],
     payload: sortPlain(input.payload || {}),
   })
+}
+
+function normalizeBundle(input = {}) {
+  const bundle = normalizeAssetBundleManifest(input)
+  return sortPlain({ kind: 'bundle', ...bundle })
+}
+
+function validateBundleMappings(entries) {
+  const publications = new Map(
+    entries
+      .filter(entry => entry.kind === 'publication')
+      .map(entry => [entry.publicationId, entry]),
+  )
+  for (const bundle of entries.filter(entry => entry.kind === 'bundle')) {
+    for (const mapping of bundle.entries) {
+      const publication = publications.get(mapping.publicationId)
+      if (!publication) continue
+      const rendition = publication.renditions.find(candidate => candidate.renditionId === mapping.renditionId)
+      if (!rendition || rendition.core.assetId !== mapping.assetId) {
+        throw new Error('publication rendition does not match mapped asset')
+      }
+    }
+  }
 }
 
 function digestFor(body) {
@@ -82,8 +112,16 @@ export function createPublicationBatch(input = {}) {
       return normalized
     },
 
+    addBundle(bundle) {
+      assertOpen()
+      const normalized = normalizeBundle(bundle)
+      entries.push(normalized)
+      return normalized
+    },
+
     seal() {
       if (sealed) return sealed
+      validateBundleMappings(entries)
       const body = sortPlain({ version: PUBLICATION_BATCH_VERSION, publisherId, sequence, entries: entries.slice() })
       const pages = paginate(body.entries, pageSize)
       const digest = digestFor({ ...body, pages: pages.map(page => ({ index: page.index, digest: page.digest })) })

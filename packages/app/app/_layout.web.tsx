@@ -19,6 +19,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { colors } from '@/lib/colors'
 import { AppContext, type AppContextType } from '@/lib/AppContext'
+import { ensureDesktopBackendReadiness } from '@/lib/desktop-backend-readiness'
 export { useApp } from '@/lib/AppContext'
 
 // Configure Reanimated logger to disable strict mode warnings
@@ -74,15 +75,16 @@ export default function RootLayout() {
   })
 
   // Initialize state from cache if available (for soft navigation)
-  const [ready, setReady] = useState(() => cachedAppState !== null)
+  const [ready, setReady] = useState(() => !isPear && cachedAppState !== null)
   const [identity, setIdentity] = useState<Identity | null>(() => cachedAppState?.identity ?? null)
   const [videos, setVideos] = useState<Video[]>(() => cachedAppState?.videos ?? [])
-  const [loading, setLoading] = useState(() => cachedAppState === null)
+  const [loading, setLoading] = useState(() => isPear || cachedAppState === null)
   const [blobServerPort, setBlobServerPort] = useState<number | null>(() => cachedAppState?.blobServerPort ?? null)
   const [backendError, setBackendError] = useState<string | null>(null)
   const statsPollersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
   const desktopStartupTimerRef = useRef<NodeJS.Timeout | null>(null)
   const desktopBackendReadyRef = useRef(false)
+  const desktopReadinessInFlightRef = useRef<Promise<void> | null>(null)
 
   // Backend init effect is declared after initPearBackend
 
@@ -195,6 +197,44 @@ export default function RootLayout() {
     }
   }, [])
 
+  const markDesktopBackendReady = useCallback(async (data?: any) => {
+    if (desktopBackendReadyRef.current) return
+    if (desktopReadinessInFlightRef.current) {
+      await desktopReadinessInFlightRef.current
+      return
+    }
+    const run = ensureDesktopBackendReadiness(platformRPC?.rpc, async () => {
+      desktopBackendReadyRef.current = true
+      if (desktopStartupTimerRef.current) {
+        clearTimeout(desktopStartupTimerRef.current)
+        desktopStartupTimerRef.current = null
+      }
+      const eventPort = data?.blobServerPort
+      const modulePort = platformRPC?.getBlobServerPort?.()
+      const port = isValidBlobServerPort(eventPort) ? eventPort : modulePort
+      setBlobServerPort(isValidBlobServerPort(port) ? port : null)
+      setBackendError(null)
+      setReady(true)
+      setLoading(false)
+      loadInitialData().catch((err: any) => {
+        console.error('[App] Background initial data load failed:', err?.message || err)
+      })
+    })
+    desktopReadinessInFlightRef.current = run
+    try {
+      await run
+    } catch (err) {
+      setBackendError(err instanceof Error ? err.message : 'Personal encryption could not be provisioned')
+      setReady(false)
+      setLoading(false)
+      throw err
+    } finally {
+      if (desktopReadinessInFlightRef.current === run) {
+        desktopReadinessInFlightRef.current = null
+      }
+    }
+  }, [loadInitialData])
+
   const initPearBackend = useCallback(async () => {
     console.log('[App] Initializing Pear desktop backend via platform RPC...')
     desktopBackendReadyRef.current = false
@@ -214,28 +254,18 @@ export default function RootLayout() {
         desktopStartupTimerRef.current = setTimeout(() => {
           if (!desktopBackendReadyRef.current) {
             console.warn('[App] Desktop backend startup timeout after', DESKTOP_BACKEND_STARTUP_TIMEOUT_MS, 'ms - entering degraded mode')
-            setBackendError('Backend is taking longer than expected. You can browse the UI - it will connect when ready.')
-            setReady(true)
+            setBackendError('Backend is taking longer than expected. Retry when the local backend is available.')
+            setReady(false)
             setLoading(false)
           }
           desktopStartupTimerRef.current = null
         }, DESKTOP_BACKEND_STARTUP_TIMEOUT_MS)
 
         // Subscribe to events only on first init
-        platformRPC.events.onReady(async (data: any) => {
-          if (desktopBackendReadyRef.current) return
-          desktopBackendReadyRef.current = true
-          if (desktopStartupTimerRef.current) {
-            clearTimeout(desktopStartupTimerRef.current)
-            desktopStartupTimerRef.current = null
-          }
+        platformRPC.events.onReady((data: any) => {
           console.log('[App] Backend ready, blobServerPort:', data?.blobServerPort)
-          setBlobServerPort(isValidBlobServerPort(data?.blobServerPort) ? data.blobServerPort : null)
-          setReady(true)
-          setLoading(false)
-          setBackendError(null)
-          loadInitialData().catch((err: any) => {
-            console.error('[App] Background initial data load failed:', err?.message || err)
+          void markDesktopBackendReady(data).catch((err: any) => {
+            console.error('[App] Desktop personal readiness failed:', err?.message || err)
           })
         })
 
@@ -251,46 +281,10 @@ export default function RootLayout() {
 
         // Initialize
         await platformRPC.initPlatformRPC()
-        if (!desktopBackendReadyRef.current) {
-          desktopBackendReadyRef.current = true
-          if (desktopStartupTimerRef.current) {
-            clearTimeout(desktopStartupTimerRef.current)
-            desktopStartupTimerRef.current = null
-          }
-          const existingBlobServerPort = platformRPC.getBlobServerPort()
-          setBlobServerPort(isValidBlobServerPort(existingBlobServerPort) ? existingBlobServerPort : null)
-          setReady(true)
-          setLoading(false)
-          setBackendError(null)
-          loadInitialData().catch((err: any) => {
-            console.error('[App] Background initial data load failed:', err?.message || err)
-          })
-        }
+        await markDesktopBackendReady()
       } else {
-        // Already initialized - restore from cache or load fresh
         console.log('[App] RPC already initialized, cached state:', cachedAppState ? 'yes' : 'no')
-        const existingBlobServerPort = platformRPC.getBlobServerPort()
-        setBlobServerPort(isValidBlobServerPort(existingBlobServerPort) ? existingBlobServerPort : null)
-
-        if (cachedAppState) {
-          // State already restored from cache in useState initializers
-          // Just mark as ready immediately for instant navigation
-          console.log('[App] Using cached state for instant navigation')
-          setReady(true)
-          setLoading(false)
-          // Optionally refresh in background to catch any updates
-          // (don't await - let it happen async)
-          loadInitialData().catch(() => {})
-          return // Early return since we already set ready/loading
-        } else {
-          // No cache, need to load in the background after unblocking the shell
-          setReady(true)
-          setLoading(false)
-          loadInitialData().catch((err: any) => {
-            console.error('[App] Background initial data load failed:', err?.message || err)
-          })
-          return
-        }
+        await markDesktopBackendReady()
       }
     } catch (err) {
       console.error('[App] Failed to initialize Pear backend:', err)
@@ -299,10 +293,10 @@ export default function RootLayout() {
         desktopStartupTimerRef.current = null
       }
       setBackendError(err instanceof Error ? err.message : 'Failed to initialize desktop backend')
-      setReady(true)
+      setReady(false)
       setLoading(false)
     }
-  }, [loadInitialData])
+  }, [markDesktopBackendReady])
 
   useEffect(() => {
     if (isPear) {
@@ -413,7 +407,8 @@ export default function RootLayout() {
     mimeType: string = 'video/mp4',
     category: string = 'Other',
     onProgress?: (progress: number, speed?: number, eta?: number, isTranscoding?: boolean) => void,
-    skipThumbnailGeneration: boolean = false
+    skipThumbnailGeneration: boolean = false,
+    mediaMetadata?: import('@peartube/core').UploadVideoEpisodeMetadata
   ): Promise<any> => {
     if (!platformRPC) throw new Error('RPC not ready')
 
@@ -441,6 +436,7 @@ export default function RootLayout() {
         description,
         category,
         skipThumbnailGeneration,
+        ...mediaMetadata,
       })
       console.log('[App] Upload RPC returned:', JSON.stringify(result))
 

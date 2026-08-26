@@ -58,5 +58,6 @@ export default function CollectionPage({ id, mediaGraph, collection = null }: Co
         sources: Array.isArray(resolved.sources) ? resolved.sources : [],
       } as any)
     : undefined
-  return <MediaEntityDetailScreen type="collection" routeId={entityId} itemParam={itemParam} />
+  // A collection page is about its structure, so its detail panels lead.
+  return <MediaEntityDetailScreen type="collection" routeId={entityId} itemParam={itemParam} initialDetailsOpen />
 }

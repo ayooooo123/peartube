@@ -152,3 +152,17 @@ export function mapContentItems(response = {}, profile = null) {
     nextCursor: response?.nextCursor ?? null,
   }
 }
+
+// The consumer catalog is one locally projected list. Artwork candidates are
+// accepted only when the backend has already admitted the entity; this mapper
+// never turns an arbitrary index URL into a fetch request.
+export function mapConsumerCatalog(response = {}) {
+  return asArray(response.items).filter(item => nonEmptyString(item?.entityId)).map(item => ({
+    id: item.entityId,
+    entityKind: item.entityKind || 'unknown',
+    title: item.title || null,
+    subtitle: item.subtitle || null,
+    sources: asArray(item.sources),
+    artworkCandidates: asArray(item.artworkCandidates),
+  }))
+}

@@ -63,7 +63,7 @@ export function buildShowChannelDraft (show) {
     profileKind: 'tvShow',
     name: show.name || show.title || 'Untitled show',
     description: show.description || '',
-    mediaProvider: show.mediaProvider || show.provider || 'tmdb',
+    mediaProvider: show.mediaProvider || show.provider || null,
     mediaId: show.mediaId != null ? String(show.mediaId) : null,
     sources: [],
     artwork: normalizeArtwork(show.artwork),
@@ -77,7 +77,7 @@ export function buildMovieChannelDraft (movie) {
     profileKind: 'movie',
     name: movie.title || movie.name || 'Untitled movie',
     description: movie.description || '',
-    mediaProvider: movie.mediaProvider || movie.provider || 'tmdb',
+    mediaProvider: movie.mediaProvider || movie.provider || null,
     mediaId: movie.mediaId != null ? String(movie.mediaId) : null,
     sources: [],
     artwork: normalizeArtwork(movie.artwork),
@@ -114,7 +114,10 @@ export function buildCreatorChannelDraft (creator, channelTarget = { mode: 'new'
   })
 }
 
-export function buildEpisodeItemDraft (episode, source = {}, { mediaProvider = 'tmdb', mediaId = null } = {}) {
+// Media coordinates always arrive from the caller: the publisher's `--provider`
+// is the authority, never the metadata client's own idea of who it is, and an
+// authority nobody named stays absent rather than defaulting to a popular one.
+export function buildEpisodeItemDraft (episode, source = {}, { mediaProvider = null, mediaId = null } = {}) {
   return buildItemDraft({
     contentKind: 'episode',
     title: episode.title || null,
@@ -128,14 +131,38 @@ export function buildEpisodeItemDraft (episode, source = {}, { mediaProvider = '
   })
 }
 
-export function buildMovieItemDraft (movie, source = {}) {
+export function buildMovieItemDraft (movie, source = {}, { mediaProvider = null, mediaId = null } = {}) {
   return buildItemDraft({
     contentKind: 'movie',
     title: movie.title || movie.name || null,
     sourcePublishedAt: movie.releaseDate || null,
     artwork: normalizeArtwork(movie.artwork),
-    mediaProvider: movie.mediaProvider || movie.provider || 'tmdb',
-    mediaId: movie.mediaId != null ? String(movie.mediaId) : null,
+    mediaProvider,
+    mediaId: mediaId != null ? String(mediaId) : null,
+    source
+  })
+}
+
+export function buildTrackItemDraft (track, source = {}, { mediaProvider = null, mediaId = null } = {}) {
+  return buildItemDraft({
+    contentKind: 'track',
+    title: track.title || track.name || null,
+    sourcePublishedAt: track.releaseDate || track.firstReleaseDate || null,
+    artwork: normalizeArtwork(track.artwork),
+    mediaProvider,
+    mediaId: mediaId != null ? String(mediaId) : null,
+    source
+  })
+}
+
+export function buildReleaseItemDraft (release, source = {}, { mediaProvider = null, mediaId = null } = {}) {
+  return buildItemDraft({
+    contentKind: 'release',
+    title: release.title || release.name || null,
+    sourcePublishedAt: release.releaseDate || release.date || null,
+    artwork: normalizeArtwork(release.artwork),
+    mediaProvider,
+    mediaId: mediaId != null ? String(mediaId) : null,
     source
   })
 }

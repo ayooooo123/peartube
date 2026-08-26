@@ -2,6 +2,7 @@
 import b4a from 'b4a'
 import { getNetworkStats } from '../storage.js'
 import { describeScopedTopic } from '../network/topics.js'
+import { PROTOCOL_MAJOR } from '../network/version.js'
 
 export function createStatusApi({ ctx, recentPlaybackTimings = [] }) {
   return {
@@ -25,7 +26,7 @@ export function createStatusApi({ ctx, recentPlaybackTimings = [] }) {
      */
     getSwarmStatus() {
       const scopedTopics = ctx.scopedNetwork?.getDiagnostics?.().topics || [
-        describeScopedTopic('bootstrap', { networkId: ctx.networkId || 'peartube-main', protocolMajor: 1 }),
+        describeScopedTopic('bootstrap', { networkId: ctx.networkId || 'peartube-main', protocolMajor: PROTOCOL_MAJOR }),
       ]
       const networkDebug = getNetworkStats()
       const startupTiming = {
@@ -53,6 +54,17 @@ export function createStatusApi({ ctx, recentPlaybackTimings = [] }) {
         playback: {
           lastPreparePlayback: recentPlaybackTimings[recentPlaybackTimings.length - 1] || null,
           recentPreparePlayback: recentPlaybackTimings.slice(-5),
+          // Strict P2P is a claim this device can be held to. Media bytes reach
+          // the player only through the loopback blob server, which exposes
+          // already-authorized Hypercore blocks and cannot fetch over HTTP;
+          // everything allowed to leave the device is control plane.
+          transport: {
+            mediaOrigin: 'peer-only',
+            mediaLoopbackHost: ctx.blobServerHost || '127.0.0.1',
+            mediaLoopbackPort: ctx.blobServer?.port || ctx.blobServerPort || 0,
+            httpMediaFallback: false,
+            controlPlanePurposes: ['manifest', 'artwork', 'diagnostics'],
+          },
         },
         recommendedBoundary: null,
       }

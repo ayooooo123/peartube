@@ -295,14 +295,6 @@ function attachMobileOnlyRpcHandlers(rpc, api) {
     })
   }
 
-  if (typeof rpc.onGetRecommendations === 'function') {
-    rpc.onGetRecommendations(async () => ({ success: true, recommendations: [] }))
-  }
-
-  if (typeof rpc.onGetVideoRecommendations === 'function') {
-    rpc.onGetVideoRecommendations(async () => ({ success: true, recommendations: [] }))
-  }
-
   if (typeof rpc.onIndexVideoVectors === 'function') {
     rpc.onIndexVideoVectors(async (request) => {
       try {
@@ -312,10 +304,6 @@ function attachMobileOnlyRpcHandlers(rpc, api) {
         return { success: false, error: error?.message }
       }
     })
-  }
-
-  if (typeof rpc.onLogWatchEvent === 'function') {
-    rpc.onLogWatchEvent(async () => ({ success: true }))
   }
 
   if (typeof rpc.onRetrySyncChannel === 'function') {

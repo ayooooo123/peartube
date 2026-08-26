@@ -5,6 +5,7 @@
  * chain is fully deterministic and reproducible across instances.
  */
 
+import brittle from 'brittle'
 import assert from 'node:assert'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -186,4 +187,8 @@ await test('Full mnemonic → channel key chain is deterministic end-to-end', as
 // Summary
 // ---------------------------------------------------------------------------
 console.log(`\n${passed} passed, ${failed} failed`)
-if (failed > 0) process.exit(1)
+// Reported through brittle rather than an exit code: this file shares its
+// process with every other test file in the directory.
+brittle(`deterministic keypair derivation`, t => {
+  t.is(failed, 0, `${failed} of ${passed + failed} assertions failed`)
+})

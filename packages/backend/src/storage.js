@@ -4,12 +4,15 @@
  * Handles Corestore, Hyperbee, Hyperblobs, and BlobServer setup.
  */
 
-import Corestore from 'corestore';
+import Corestore from 'corestore'
+import Hypercore from 'hypercore'
+import { createAbortController } from './abort-controller.js';
 import Hyperbee from 'hyperbee';
 import BlobServer from 'hypercore-blob-server';
 import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
 import { MultiWriterChannel, ChannelPairer } from './channel/index.js'
+import { assertLoopbackPlaybackUrl } from './playback/transport-guard.js'
 import { PublicChannelBee } from './channel/public-channel-bee.js'
 import { loadPublicBeeFromCache } from './public-bee-loader.js'
 import { logger } from './logger.js'
@@ -26,6 +29,7 @@ import {
 import { normalizeBlobRefInput } from './blob-ref.js'
 import { redactCapabilityUrl } from './capability-url.js'
 import { createKnownPeerCache, loadKnownPeers } from './known-peers.js'
+import { readStoredIdentityRecords } from './identity-state.js'
 import { createMetaSubspaces, migrateMetaSubspaces } from './meta-subspaces.js'
 import { prioritizeBlobServerRangeRequest, releaseAllPrioritizedBlobRanges } from './blob-range-priority.js'
 import { serveThumbnailHttpRequest } from './thumbnail-http.js'
@@ -37,55 +41,13 @@ export { DEFAULT_STORED_PROTOCOL_MIGRATIONS, prepareStoredProtocolState }
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000
 
-function createLifecycleAbortController() {
-  const AbortControllerCtor = globalThis?.AbortController
-  if (typeof AbortControllerCtor === 'function') return new AbortControllerCtor()
-
-  let aborted = false
-  const listeners = new Map()
-  const signal = {
-    onabort: null,
-    get aborted() {
-      return aborted
-    },
-    addEventListener(type, listener, options = {}) {
-      if (type !== 'abort' || (!listener?.handleEvent && typeof listener !== 'function')) return
-      listeners.set(listener, options?.once === true)
-    },
-    removeEventListener(type, listener) {
-      if (type === 'abort') listeners.delete(listener)
-    },
-  }
-
-  return {
-    signal,
-    abort() {
-      if (aborted) return
-      aborted = true
-      const event = { type: 'abort', target: signal, currentTarget: signal }
-      const notify = (listener) => {
-        try {
-          if (typeof listener === 'function') listener.call(signal, event)
-          else listener.handleEvent(event)
-        } catch (error) {
-          console.warn('[BackendLifecycle] abort listener failed:', error?.message || error)
-        }
-      }
-      const onabort = signal.onabort
-      const pendingListeners = Array.from(listeners.keys())
-      listeners.clear()
-      if (typeof onabort === 'function') notify(onabort)
-      for (const listener of pendingListeners) notify(listener)
-    },
-  }
-}
 
 export function createBackendLifecycle({
   scheduleDeferred = typeof setImmediate === 'function' ? setImmediate : (fn) => setTimeout(fn, 0),
   cancelDeferred = typeof clearImmediate === 'function' ? clearImmediate : clearTimeout,
   shutdownTimeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
 } = {}) {
-  const controller = createLifecycleAbortController()
+  const controller = createAbortController()
   const ownership = new Set()
   let shutdownPromise = null
 
@@ -1167,7 +1129,22 @@ export async function createCorestoreInstance(storagePath, options = {}) {
     await appendDebugLine('[storage] embedded BareKit using plain Corestore(storagePath, options)')
   }
 
-  return new Corestore(storagePath, options)
+  const { wrapStorage = null, ...corestoreOptions } = options
+  if (typeof wrapStorage !== 'function') return new Corestore(storagePath, corestoreOptions)
+
+  // Corestore forwards these five to Hypercore.defaultStorage only when it
+  // builds the storage itself. Handing it a ready instance silently drops them,
+  // and two of them are load bearing here: `wait` is the lock behaviour and
+  // `allowBackup` is the backup behaviour. So build the storage exactly as
+  // Corestore would, wrap that, and hand the wrapper over.
+  const storage = Hypercore.defaultStorage(storagePath, {
+    id: corestoreOptions.id,
+    allowBackup: corestoreOptions.allowBackup,
+    readOnly: corestoreOptions.readOnly,
+    wait: corestoreOptions.wait,
+    treeCache: corestoreOptions.treeCache
+  })
+  return new Corestore(await wrapStorage(storage), corestoreOptions)
 }
 
 export async function openDeterministicNamedCore(store, name) {
@@ -1399,6 +1376,12 @@ export async function initializeStorage(config) {
     swarmOptions = {},
     expectedProtocolVersion,
     storedProtocolMigrations = DEFAULT_STORED_PROTOCOL_MIGRATIONS,
+    // Optional block offload. `wrapStorage` wraps the CorestoreStorage so an
+    // offloaded block is restored from the object store on a local miss
+    // (archive/offload-storage.js); the object as a whole is published on the
+    // context so the write path can reach `offloadAsset`. Absent by default,
+    // and absent means no wrapping at all.
+    blockOffload = null,
   } = config;
 
   // This sidecar is deliberately validated before Corestore, migrations,
@@ -1428,20 +1411,51 @@ export async function initializeStorage(config) {
   // peer discovery still flows exclusively through the Hyperswarm topic.
   let keyPair = null;
   const resolvedSwarmKeyPath = swarmKeyPath || (path && storagePath ? path.join(storagePath, 'swarm-key.json') : null);
+  // hypercore-storage sweeps every unrecognized entry at the storage root into
+  // db/ when it opens. This key is written at the root and is not on its
+  // allowlist, so from the second startup onward the original only exists in
+  // db/. Reading just the root path made every restart mint a new device
+  // keypair, which silently invalidated the publisher writer admission bound to
+  // the old one.
+  //
+  // db/ is checked first on purpose: a relay that already suffered the rotation
+  // has the swept original in db/ and a newer replacement at the root, and the
+  // original is the identity peers and prior admissions know.
+  const swarmKeyCandidates = resolvedSwarmKeyPath
+    ? [...(path && storagePath && !swarmKeyPath
+        ? [path.join(storagePath, 'db', 'swarm-key.json')]
+        : []), resolvedSwarmKeyPath]
+    : [];
 
-  if (resolvedSwarmKeyPath && fs) {
+  for (const candidate of swarmKeyCandidates) {
+    if (keyPair || !fs) break;
     try {
-      const raw = fs.readFileSync(resolvedSwarmKeyPath, 'utf-8');
-      const parsed = JSON.parse(raw);
+      const raw = fs.readFileSync(candidate, 'utf-8');
+      const parsed = JSON.parse(typeof raw === 'string' ? raw : b4a.toString(raw, 'utf8'));
       if (parsed?.publicKey && parsed?.secretKey) {
         keyPair = {
           publicKey: b4a.from(parsed.publicKey, 'hex'),
           secretKey: b4a.from(parsed.secretKey, 'hex')
         };
-        console.log('[Storage] Loaded persisted swarm key:', parsed.publicKey.slice(0, 16));
+        console.log('[Storage] Loaded persisted swarm key:', parsed.publicKey.slice(0, 16), 'from', candidate);
       }
     } catch (e) {
-      // If missing or invalid, we'll generate below
+      // Missing or invalid at this location; try the next one, then generate.
+    }
+  }
+
+  // The sweep renames the root file over db/, so a stale root copy left behind
+  // by an earlier rotation would overwrite the key just chosen and poison the
+  // next startup. Writing the chosen key back to the root makes that rename a
+  // no-op whichever copy the sweep moves.
+  if (keyPair && resolvedSwarmKeyPath && fs) {
+    try {
+      fs.writeFileSync(resolvedSwarmKeyPath, JSON.stringify({
+        publicKey: b4a.toString(keyPair.publicKey, 'hex'),
+        secretKey: b4a.toString(keyPair.secretKey, 'hex')
+      }));
+    } catch (e) {
+      console.log('[Storage] Could not canonicalize swarm key:', e.message);
     }
   }
 
@@ -1578,9 +1592,14 @@ export async function initializeStorage(config) {
   await appendDebugLine('[storage] creating corestore')
   console.log('[Storage] Corestore primaryKey:', primaryKey ? 'provided (deterministic)' : 'not provided (random)');
   console.log('[Storage] Corestore lock wait:', corestoreWaitForLock ? 'enabled' : 'disabled');
+  const offloadWrapStorage = typeof blockOffload?.wrapStorage === 'function' ? blockOffload.wrapStorage : null
+  if (offloadWrapStorage !== null) {
+    console.log('[Storage] Corestore block offload: enabled (block data may live in an object store)');
+    await appendDebugLine('[storage] corestore block offload enabled')
+  }
   const corestoreOptions = primaryKey
-    ? { primaryKey, unsafe: true, wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup }
-    : { wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup }
+    ? { primaryKey, unsafe: true, wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup, wrapStorage: offloadWrapStorage }
+    : { wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup, wrapStorage: offloadWrapStorage }
   let store
   let storeOwnership = null
   try {
@@ -1629,6 +1648,7 @@ export async function initializeStorage(config) {
     resolveBlobServerReady = resolve
   })
   let storageContext = null
+  const staticAssetPlaybackEntries = new Map()
   let blobServerHost = blobServerHostOverride || '127.0.0.1';
   let blobServerBindHost = blobServerBindHostOverride || blobServerHost;
 
@@ -1768,10 +1788,25 @@ export async function initializeStorage(config) {
       }
 
       try {
-        const handled = await serveVideoRangeHttpRequest({ blobServer }, req, res)
+        const handled = await serveVideoRangeHttpRequest({
+          blobServer,
+          staticAssetEntries: staticAssetPlaybackEntries,
+          onStaticPlayhead: event => storageContext?.playbackForwardFill?.onPlayhead?.(event),
+        }, req, res)
         if (handled) return
       } catch (err) {
         console.log('[Storage] Video range serve failed:', err?.message || err)
+        if (String(req.url || '').includes('pt_static_asset=')) {
+          if (!res.headersSent && !res.writableEnded) {
+            const body = b4a.from('verified static source unavailable')
+            res.statusCode = 503
+            res.setHeader('Content-Type', 'text/plain')
+            res.setHeader('Content-Length', String(body.byteLength))
+            res.writeHead(503)
+            res.end(req.method === 'HEAD' ? undefined : body)
+          }
+          return
+        }
       }
 
       try {
@@ -2007,12 +2042,16 @@ export async function initializeStorage(config) {
     blobServerReady,
     blobServerError,
     blobServerHost,
+    staticAssetPlaybackEntries,
     blobServerBindHost,
     channels,
     wakeup,
     knownPeerCache,
     platform,
     storedProtocol,
+    // null unless the operator configured block offload. The upload path reads
+    // `blockOffload.offloadAsset` off this to hand writeStaticAsset its hook.
+    blockOffload,
     lifecycle,
     ownResource(label, resource, methods, timeoutMs) {
       return ownContextResource(storageContext, label, resource, methods, timeoutMs)
@@ -2082,8 +2121,8 @@ function createPublicProjectionStateWriter(ctx, channelKeyHex) {
 async function resolveChannelLoadOptions(ctx, channelKeyHex, options) {
   if (typeof ctx.metaDb?.get !== 'function') return options
   try {
-    const stored = await ctx.metaDb.get('identities')
-    const identity = (stored?.value || []).find((candidate) =>
+    const identities = await readStoredIdentityRecords(ctx.metaDb)
+    const identity = identities.find((candidate) =>
       identityChannelKey(candidate) === channelKeyHex)
     const deferPublicProjection =
       options?.deferPublicProjection === true ||
@@ -2587,6 +2626,7 @@ export function getVideoUrlInstant(ctx, blobsCoreKeyHex, blobId, options = {}) {
     host: ctx.blobServerHost || '127.0.0.1',
     port: ctx.blobServer?.port || ctx.blobServerPort
   });
+  assertLoopbackPlaybackUrl(url, 'instant blob playback url')
 
   // Kick off background sync (don't await)
   const blobsCore = ctx.store.get(keyBuffer)
@@ -2703,6 +2743,10 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
       host: ctx.blobServerHost || '127.0.0.1',
       port: ctx.blobServer?.port || ctx.blobServerPort
     });
+    // Strict P2P: the only URL a player may ever receive is the local blob
+    // server. A non-loopback link here would mean media bytes could come from
+    // an origin, so refuse to hand it out at all.
+    assertLoopbackPlaybackUrl(url, 'direct blob playback url')
 
     console.log('[Storage] Direct blob URL (hyperblobs):', redactCapabilityUrl(url));
     return { url };

@@ -17,7 +17,7 @@ import {
   createPersonalRpc,
   createPublisherRootOperationRpc,
 } from './rpc.shared';
-import type { ProtocolClientLike, PublisherRootIntentRequest, StorageStatsResponse } from './rpc.shared';
+import type { ProtocolClientLike, PublisherRootIntentRequest, StorageStatsResponse, UploadVideoRequest } from './rpc.shared';
 import { createWebRunner } from './runner.web';
 import type { VideoStats } from './types';
 
@@ -444,7 +444,7 @@ export const rpc = {
     return ensureRPC().getVideoStats(req);
   },
 
-  async uploadVideo(filePathOrReq: string | { filePath: string; title: string; description: string; category?: string }, title?: string, description?: string, category?: string) {
+  async uploadVideo(filePathOrReq: string | UploadVideoRequest, title?: string, description?: string, category?: string) {
     const req = typeof filePathOrReq === 'string'
       ? { filePath: filePathOrReq, title: title!, description: description!, category }
       : filePathOrReq;
@@ -625,19 +625,6 @@ export const rpc = {
 
   async retrySyncChannel(req: { channelKey: string }): Promise<{ success: boolean }> {
     return ensureRPC().retrySyncChannel(req);
-  },
-
-  // Watch events & recommendations
-  async logWatchEvent(req: { channelKey: string; videoId: string; duration?: number; completed?: boolean; share?: boolean }): Promise<{ success: boolean }> {
-    return ensureRPC().logWatchEvent(req);
-  },
-
-  async getRecommendations(req: { channelKey: string; limit?: number }): Promise<{ results: Array<{ id: string; score: number; metadata: any }> }> {
-    return ensureRPC().getRecommendations(req);
-  },
-
-  async getVideoRecommendations(req: { channelKey: string; videoId: string; limit?: number }): Promise<{ results: Array<{ id: string; score: number; metadata: any }> }> {
-    return ensureRPC().getVideoRecommendations(req);
   },
 
   // Comments

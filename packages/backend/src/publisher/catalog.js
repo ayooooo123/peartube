@@ -35,6 +35,7 @@ import {
   getPublisherViewSnapshot,
   listPublisherProjections,
   listPublisherRejections,
+  listPublisherAcceptedPage,
   openPublisherCatalogView
 } from './catalog-view.js'
 
@@ -86,6 +87,49 @@ function validateOptions (store, options) {
   return { key, publisherId, namespace, ownsStore: options.ownsStore === true, ackInterval, journalLimit, keyProvider: options.keyProvider || createPublisherKeyProvider(), deviceSigner }
 }
 
+// Replay order for a rebuilt catalog. The producer appended its namespace, then
+// its writer admissions, then data, and its journal positions follow that order.
+// comparePublisherOperationEntries cannot be reused here: it exists to resolve
+// conflicts and does not treat the namespace as a root record, so it replays an
+// admission ahead of the namespace and lands both at swapped journal positions,
+// which is enough to make the rebuilt head digest disagree with the advertised
+// one even though every operation was accepted.
+const REPLAY_ROOT_TYPES = new Set([
+  PUBLISHER_RECORD_TYPES.NAMESPACE,
+  PUBLISHER_RECORD_TYPES.WRITER_ADMISSION,
+  PUBLISHER_RECORD_TYPES.WRITER_REVOCATION,
+  PUBLISHER_RECORD_TYPES.ROOT_TRANSITION
+])
+
+function compareReplayOrder (left, right) {
+  const leftRoot = REPLAY_ROOT_TYPES.has(left.operation.recordType)
+  const rightRoot = REPLAY_ROOT_TYPES.has(right.operation.recordType)
+  if (leftRoot !== rightRoot) return leftRoot ? -1 : 1
+  if (left.operation.policyEpoch !== right.operation.policyEpoch) {
+    return left.operation.policyEpoch - right.operation.policyEpoch
+  }
+  if (left.operation.issuerSequence !== right.operation.issuerSequence) {
+    return left.operation.issuerSequence - right.operation.issuerSequence
+  }
+  return b4a.compare(left.operationId, right.operationId)
+}
+
+// A follower's catalog is rebuilt from verified accepted pages, so it must not
+// be held hostage by an Autobase that can only open once a peer replicates.
+const REMOTE_CATALOG_OPEN_TIMEOUT_MS = 5000
+
+async function raceOpenBudget (promise, timeoutMs) {
+  let timer = null
+  try {
+    return await Promise.race([
+      promise.then(() => true),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), timeoutMs) })
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 export class PublisherCatalog extends ReadyResource {
   constructor (store, options = {}) {
     const normalized = validateOptions(store, options)
@@ -96,6 +140,8 @@ export class PublisherCatalog extends ReadyResource {
     this.store = typeof store.namespace === 'function' ? store.namespace(normalized.namespace) : store
     this.ownsScopedStore = this.store !== store
     this.base = null
+    this.verifiedPageView = null
+    this.baseUpdating = null
     this.publisherPinned = false
     this.ready().catch(() => {})
   }
@@ -108,25 +154,43 @@ export class PublisherCatalog extends ReadyResource {
       open: openPublisherCatalogView,
       apply: (nodes, view, host) => applyPublisherCatalogNodes(nodes, view, host, { keyProvider, publisherId: this.options.publisherId, journalLimit: this.options.journalLimit })
     })
-    await this.base.ready()
-    const descriptorEntry = await this.base.view.get('state/descriptor')
-    const journalCountEntry = await this.base.view.get('meta/journal-count')
-    let pinError = null
-    if (descriptorEntry) {
-      const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value, { legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY })
-      if (!equalBytes(descriptor.publisherId, this.options.publisherId)) pinError = 'persisted descriptor publisherId does not match expected publisherId'
-    } else if (journalCountEntry && b4a.toString(journalCountEntry.value) !== '0') {
-      pinError = 'persisted catalog history has no descriptor matching expected publisherId'
-    }
-    if (pinError) {
-      const base = this.base
-      this.base = null
-      try {
-        await base.close()
-      } finally {
-        invalid(pinError)
+
+    // A follower opens this from a publisher's bootstrap key with no local
+    // history, so the Autobase cannot become ready until that core's first
+    // block replicates - and the scope that would replicate it is only joined
+    // after this call returns. Awaiting unconditionally deadlocks the first
+    // follow of every publisher, which is the whole of discovery.
+    //
+    // A follower does not need the base: its catalog is rebuilt locally from
+    // verified accepted pages. So bound the wait, and when it lapses continue
+    // with the page path while the base catches up on its own.
+    const readyWithinBudget = this.options.key
+      ? await raceOpenBudget(this.base.ready(), REMOTE_CATALOG_OPEN_TIMEOUT_MS)
+      : (await this.base.ready(), true)
+
+    if (readyWithinBudget) {
+      const descriptorEntry = await this.base.view.get('state/descriptor')
+      const journalCountEntry = await this.base.view.get('meta/journal-count')
+      let pinError = null
+      if (descriptorEntry) {
+        const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value, { legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY })
+        if (!equalBytes(descriptor.publisherId, this.options.publisherId)) pinError = 'persisted descriptor publisherId does not match expected publisherId'
+      } else if (journalCountEntry && b4a.toString(journalCountEntry.value) !== '0') {
+        pinError = 'persisted catalog history has no descriptor matching expected publisherId'
+      }
+      if (pinError) {
+        const base = this.base
+        this.base = null
+        try {
+          await base.close()
+        } finally {
+          invalid(pinError)
+        }
       }
     }
+    // Nothing is pinned against yet when the base never opened: there is no
+    // persisted history to contradict the expected publisher, and every page
+    // ingested later is verified against it regardless.
     this.publisherPinned = true
   }
 
@@ -155,11 +219,28 @@ export class PublisherCatalog extends ReadyResource {
   }
 
   get view () {
-    return this.publisherPinned ? this.base?.view || null : null
+    return this.publisherPinned ? this.verifiedPageView || this.base?.view || null : null
   }
 
   async update () {
     await this.ready()
+    if (!this.base) return
+    // A follower reads through the view it rebuilt from verified accepted
+    // pages. Its Autobase is opened from the publisher's bootstrap key and may
+    // never become ready, so `base.update()` can block indefinitely. Awaiting it
+    // here made every local read - including the head check that completes a
+    // sync, and every projection scan afterwards - wait on a remote core that
+    // owes this catalog nothing. Advance the base in the background instead and
+    // answer from the view that is already local and already verified.
+    if (this.verifiedPageView) {
+      if (!this.baseUpdating) {
+        this.baseUpdating = Promise.resolve()
+          .then(() => this.base?.update())
+          .catch(() => {})
+          .finally(() => { this.baseUpdating = null })
+      }
+      return
+    }
     await this.base.update()
   }
 
@@ -261,6 +342,97 @@ export class PublisherCatalog extends ReadyResource {
     return listPublisherProjections(this.view, kind, options)
   }
 
+  async listAcceptedPage (options) {
+    await this.update()
+    return listPublisherAcceptedPage(this.view, options)
+  }
+
+  async openVerifiedPageView () {
+    await this.ready()
+    if (!this.verifiedPageView) {
+      const publisherHex = b4a.toString(this.options.publisherId, 'hex')
+      this.verifiedPageView = openPublisherCatalogView({
+        get: () => this.store.get({ name: `verified-page-view-${publisherHex}` })
+      })
+      await this.verifiedPageView.ready()
+    }
+    return this.verifiedPageView
+  }
+
+  async ingestAcceptedPage (entries) {
+    await this.ready()
+    if (!Array.isArray(entries) || entries.length < 1 || entries.length > 128) {
+      invalid('accepted page batch is out of bounds')
+    }
+    let prior = null
+    const nodes = entries.map(entry => {
+      if (!entry || typeof entry.operationId !== 'string' || !/^[0-9a-f]{64}$/.test(entry.operationId)) {
+        invalid('accepted page operationId is invalid')
+      }
+      assertBytes(entry.sourceWriterKey, 32, 'accepted page sourceWriterKey')
+      if (!isBytes(entry.frame)) invalid('accepted page frame must be bytes')
+      const frame = b4a.from(entry.frame)
+      if (frame.byteLength < 1 || frame.byteLength > PUBLISHER_LIMITS.maxOperationBytes) invalid('accepted page frame is out of bounds')
+      const operation = decodePublisherCatalogFrame(frame)
+      if (!b4a.equals(encodePublisherCatalogFrame(operation), frame)) invalid('accepted page frame is noncanonical')
+      const operationId = b4a.toString(operation.recordId || operation.transitionId, 'hex')
+      if (operationId !== entry.operationId || (prior !== null && operationId <= prior)) {
+        invalid('accepted page operation ordering or identity is invalid')
+      }
+      prior = operationId
+      return {
+        node: { value: frame, from: { key: b4a.from(entry.sourceWriterKey) } },
+        operation,
+        operationId: b4a.from(operationId, 'hex')
+      }
+    })
+    await this.openVerifiedPageView()
+    // The wire order is operation-id ascending, which is a hash order and says
+    // nothing about causality. applyPublisherCatalogNodes replays nodes exactly
+    // as given, so a claim whose id sorts below the writer-admission that
+    // authorizes it gets reduced first and rejected WRITER_NOT_ADMITTED, which
+    // then voids the entire page. Replay in the same causal order the producer
+    // reduced them in: root records first, then by policy epoch and issuer
+    // sequence. The transmitted order is untouched, so page verification and
+    // deduplication are unaffected.
+    const ordered = [...nodes].sort(compareReplayOrder).map(entry => entry.node)
+    const rebuilt = await applyPublisherCatalogNodes(ordered, this.verifiedPageView, {
+      key: this.base?.key || this.options.key,
+      async addWriter () {},
+      removeable () { return false },
+      async removeWriter () {},
+    }, {
+      keyProvider: this.options.keyProvider,
+      publisherId: this.options.publisherId,
+      journalLimit: this.options.journalLimit,
+    })
+    if (rebuilt.rejected.length > 0) {
+      // The consumer aborts the whole page on any rejection, so without the
+      // per-operation code an empty catalog is indistinguishable from a
+      // transport failure.
+      console.log('[PublisherCatalog] accepted page rejected', rebuilt.rejected.length, 'of', entries.length,
+        rebuilt.rejected.slice(0, 4).map(candidate => `${candidate?.code || 'UNKNOWN'}:${candidate?.reason || candidate?.value?.recordType || ''}`).join(' | '))
+    }
+    const acceptedCount = entries.filter(entry => rebuilt.accepted.some(candidate =>
+      b4a.toString(candidate.value.recordId || candidate.value.transitionId, 'hex') === entry.operationId
+    )).length
+    if (acceptedCount !== entries.length && rebuilt.rejected.length === 0) {
+      // Operations can also be dropped without being rejected: a page whose
+      // namespace genesis or writer admission sits in a different page applies
+      // nothing at all. Without this the consumer reports the page inadmissible
+      // with no per-operation code and an empty catalog looks like a transport
+      // fault rather than a causally incomplete page.
+      console.log('[PublisherCatalog] accepted page applied nothing', acceptedCount, 'of', entries.length,
+        'types:', entries.map(entry => decodePublisherCatalogFrame(entry.frame).recordType).join(','))
+    }
+    return {
+      accepted: acceptedCount,
+      rejected: entries.filter(entry => rebuilt.rejected.some(candidate =>
+        b4a.toString(candidate.value.recordId || candidate.value.transitionId, 'hex') === entry.operationId
+      )).length,
+    }
+  }
+
   async getOperationReceipt (operationId) {
     await this.update()
     return getPublisherOperationReceipt(this.view, operationId)
@@ -306,8 +478,11 @@ export class PublisherCatalog extends ReadyResource {
       try { await resource?.close?.() } catch { /* close every owned layer */ }
     }
     const base = this.base
+    const verifiedPageView = this.verifiedPageView
     this.publisherPinned = false
     this.base = null
+    this.verifiedPageView = null
+    await close(verifiedPageView)
     await close(base)
     if (this.ownsScopedStore) await close(this.store)
     if (this.ownsStore) await close(this.rootStore)

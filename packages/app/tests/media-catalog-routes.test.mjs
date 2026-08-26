@@ -5,10 +5,24 @@ import path from 'node:path'
 
 const appRoot = path.resolve(import.meta.dirname, '..')
 const read = (relative) => fs.readFileSync(path.join(appRoot, relative), 'utf8')
-const routes = ['app/(tabs)/index.tsx', 'app/(tabs)/index.web.tsx', 'app/(tabs)/discover.tsx']
+// Home is a consumer rail surface; Discover still lists the paged catalog.
+const homeRoutes = ['app/(tabs)/index.tsx', 'app/(tabs)/index.web.tsx']
+const routes = ['app/(tabs)/discover.tsx']
 const forbidden = /publicFeed|PublicFeed|getPublicFeed|refreshFeed|submitToFeed|unpublishFromFeed|onFeedUpdate|FEED_UPDATED|publicFeedDiscoveryJoined/
 
-test('native and web catalog routes share the paged media catalog view and navigate by entity id', () => {
+test('native and web Home render consumer rails and navigate by entity id', () => {
+  for (const route of homeRoutes) {
+    const source = read(route)
+    assert.match(source, /useMediaCatalog/)
+    assert.match(source, /ConsumerHomeView/)
+    assert.doesNotMatch(source, /MediaCatalogView/)
+    assert.match(source, /['\"]\/collection\/\[id\]['\"][\s\S]*['\"]\/creator\/\[id\]['\"][\s\S]*['\"]\/media\/\[id\]['\"]/)
+    assert.match(source, /getMediaEntityRouteId\(item as any\)/)
+    assert.doesNotMatch(source, forbidden)
+  }
+})
+
+test('the discover route shares the paged media catalog view and navigates by entity id', () => {
   for (const route of routes) {
     const source = read(route)
     assert.match(source, /useMediaCatalog/)

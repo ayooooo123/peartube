@@ -1618,6 +1618,125 @@
       ]
     },
     {
+      "name": "media-availability",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "state",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "renditionId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "observedAt",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "expiresAt",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "requiredRangeCount",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "reachableRangeCount",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "independentPeerCount",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "completePeerCount",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "measuredLatencyMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "offlinePlayable",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "archivePledged",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "reasonCodes",
+          "required": true,
+          "array": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "media-source-coordinates",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 3,
+      "fields": [
+        {
+          "name": "contentKind",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mediaProvider",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mediaId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "seasonNumber",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "episodeNumber",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "media-publication-source",
       "namespace": "peartube",
       "compact": false,
@@ -1684,6 +1803,12 @@
           "version": 1
         },
         {
+          "name": "eligible",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
           "name": "selectionReasonCodes",
           "required": false,
           "array": true,
@@ -1733,19 +1858,19 @@
           "version": 1
         },
         {
-          "name": "scoreMetadataConfidence",
+          "name": "scoreLocalCompleteness",
           "required": false,
           "type": "uint",
           "version": 1
         },
         {
-          "name": "scorePublisherTrust",
+          "name": "scoreStartupReachability",
           "required": false,
           "type": "uint",
           "version": 1
         },
         {
-          "name": "scoreAvailability",
+          "name": "scorePeerEvidence",
           "required": false,
           "type": "uint",
           "version": 1
@@ -1757,7 +1882,13 @@
           "version": 1
         },
         {
-          "name": "scoreModerationPenalty",
+          "name": "scoreStartupLatency",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "scoreUserOverride",
           "required": false,
           "type": "uint",
           "version": 1
@@ -1790,6 +1921,18 @@
           "name": "incomplete",
           "required": false,
           "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "availability",
+          "required": false,
+          "type": "@peartube/media-availability",
+          "version": 1
+        },
+        {
+          "name": "mediaCoordinates",
+          "required": false,
+          "type": "@peartube/media-source-coordinates",
           "version": 1
         }
       ]
@@ -2007,6 +2150,12 @@
           "version": 1
         },
         {
+          "name": "availability",
+          "required": false,
+          "type": "@peartube/media-availability",
+          "version": 1
+        },
+        {
           "name": "sources",
           "array": true,
           "type": "@peartube/media-publication-source",
@@ -2016,6 +2165,54 @@
           "name": "renditions",
           "array": true,
           "type": "@peartube/media-rendition-descriptor",
+          "version": 1
+        },
+        {
+          "name": "releaseYear",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "runtimeMinutes",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "overview",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "genres",
+          "array": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "posterBlobId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "posterBlobsCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "posterMimeType",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "posterUrl",
+          "required": false,
+          "type": "string",
           "version": 1
         }
       ]
@@ -2475,6 +2672,174 @@
           "name": "nextCursor",
           "required": false,
           "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-entity-artwork-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "entityId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicationId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-entity-artwork-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "exists",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "url",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "media-playback-attempt",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "publicationId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "prepare-media-playback-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "entityId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicationId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "prepare-media-playback-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "retry",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicationId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "renditionId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "coreKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "url",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "attempts",
+          "required": false,
+          "array": true,
+          "type": "@peartube/media-playback-attempt",
+          "version": 1
+        },
+        {
+          "name": "sources",
+          "required": false,
+          "array": true,
+          "type": "@peartube/media-publication-source",
           "version": 1
         }
       ]
@@ -3226,6 +3591,54 @@
           "required": false,
           "type": "bool",
           "version": 1
+        },
+        {
+          "name": "contentKind",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "seriesId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "seriesTitle",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mediaProvider",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mediaId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "seasonNumber",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "episodeNumber",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "expectedEpisodeCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
         }
       ]
     },
@@ -3889,6 +4302,82 @@
           "required": false,
           "type": "uint",
           "version": 1
+        },
+        {
+          "name": "identity",
+          "required": false,
+          "type": "@peartube/personal-progress-identity",
+          "version": 1
+        },
+        {
+          "name": "saved",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "order",
+          "required": false,
+          "type": "@peartube/personal-progress-order",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "personal-progress-identity",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "entityRef",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "editionRef",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "memberRef",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "personal-progress-order",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 3,
+      "fields": [
+        {
+          "name": "playbackGeneration",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "lamport",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "writerKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "tombstone",
+          "required": false,
+          "type": "bool",
+          "version": 1
         }
       ]
     },
@@ -3938,6 +4427,56 @@
           "name": "updatedAt",
           "required": false,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "identity",
+          "required": false,
+          "type": "@peartube/personal-progress-identity",
+          "version": 1
+        },
+        {
+          "name": "saved",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "order",
+          "required": false,
+          "type": "@peartube/personal-progress-order",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "personal-device",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "keyHex",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "deviceName",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "addedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "self",
+          "required": false,
+          "type": "bool",
           "version": 1
         }
       ]
@@ -4252,6 +4791,30 @@
           "required": false,
           "type": "uint",
           "version": 1
+        },
+        {
+          "name": "identity",
+          "required": false,
+          "type": "@peartube/personal-progress-identity",
+          "version": 1
+        },
+        {
+          "name": "saved",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "playbackGeneration",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "tombstone",
+          "required": false,
+          "type": "bool",
+          "version": 1
         }
       ]
     },
@@ -4417,12 +4980,24 @@
       "name": "provision-personal-encryption-request",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": 0,
+      "flagsPosition": 1,
       "fields": [
         {
           "name": "secret",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "bootstrapKey",
           "required": false,
           "type": "string",
+          "version": 1
+        },
+        {
+          "name": "deviceLocal",
+          "required": false,
+          "type": "bool",
           "version": 1
         }
       ]
@@ -4440,7 +5015,7 @@
           "version": 1
         },
         {
-          "name": "secret",
+          "name": "bootstrapKey",
           "required": false,
           "type": "string",
           "version": 1
@@ -4449,6 +5024,195 @@
           "name": "encrypted",
           "required": false,
           "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "create-personal-device-invite-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "expiresInMs",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "create-personal-device-invite-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "inviteCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "expiresAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "redeem-personal-device-invite-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "inviteCode",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "deviceName",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "redeem-personal-device-invite-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "secret",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "bootstrapKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "list-personal-devices-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "list-personal-devices-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "devices",
+          "array": true,
+          "type": "@peartube/personal-device",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "revoke-personal-device-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "keyHex",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "secret",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "deviceName",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "revoke-personal-device-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "bootstrapKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "remainingDeviceCount",
+          "required": false,
+          "type": "uint",
           "version": 1
         },
         {
@@ -6339,6 +7103,12 @@
           "required": false,
           "type": "string",
           "version": 1
+        },
+        {
+          "name": "participationMode",
+          "required": false,
+          "type": "string",
+          "version": 1
         }
       ]
     },
@@ -6416,6 +7186,12 @@
         },
         {
           "name": "aiAnalysis",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "participationMode",
           "required": false,
           "type": "string",
           "version": 1
@@ -7643,6 +8419,775 @@
           "required": true,
           "array": true,
           "type": "@peartube/search-result",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-search-selector",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "namespace",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "identifier",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "kind",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-external-reference",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "namespace",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "identifier",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-episode",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "seriesEntityId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "seasonNumber",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "episodeNumber",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-work",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "entityId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "title",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "releaseYear",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "releaseYearPresent",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "externalRefs",
+          "required": true,
+          "array": true,
+          "type": "@peartube/index-external-reference",
+          "version": 1
+        },
+        {
+          "name": "episode",
+          "required": false,
+          "type": "@peartube/index-episode",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-edition",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "entityId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "label",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "kind",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-publication",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 4,
+      "fields": [
+        {
+          "name": "publicationId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "manifestId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "catalogEpoch",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "catalogEpochPresent",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "catalogHead",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "title",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-audio-track",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "codec",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "channels",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "channelsPresent",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "languages",
+          "required": true,
+          "array": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-subtitle-track",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "format",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "language",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-rendition",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "renditionId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "container",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoCodec",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "width",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "widthPresent",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "height",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "heightPresent",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "resolutionLabel",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "hdrFormats",
+          "required": true,
+          "array": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "audioTracks",
+          "required": true,
+          "array": true,
+          "type": "@peartube/index-audio-track",
+          "version": 1
+        },
+        {
+          "name": "subtitleTracks",
+          "required": true,
+          "array": true,
+          "type": "@peartube/index-subtitle-track",
+          "version": 1
+        },
+        {
+          "name": "purpose",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "byteLength",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "byteLengthPresent",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-asset",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "assetId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "coreKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "treeHash",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "blockLength",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "blockLengthPresent",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "blockSize",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "blockSizePresent",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "byteLength",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "byteLengthPresent",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-provenance",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "sourceKind",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "releaseName",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicInfohash",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-availability",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "peers",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "peersPresent",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "completeSeeders",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "completeSeedersPresent",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "observedAtMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "observedAtMsPresent",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "expiresAtMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "expiresAtMsPresent",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-source-indexer",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "indexerId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "observedAtMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-publisher-descriptor",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publisherRootKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "catalogBootstrapKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "catalogEpoch",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "policySequence",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-catalog-head",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 3,
+      "fields": [
+        {
+          "name": "viewKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "length",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "digest",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "authorizationStateDigest",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-verification",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "state",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publisherDescriptor",
+          "required": false,
+          "type": "@peartube/index-publisher-descriptor",
+          "version": 1
+        },
+        {
+          "name": "catalogHead",
+          "required": false,
+          "type": "@peartube/index-catalog-head",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-candidate-v2",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 3,
+      "fields": [
+        {
+          "name": "schemaVersion",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "candidateRef",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "work",
+          "required": true,
+          "type": "@peartube/index-work",
+          "version": 1
+        },
+        {
+          "name": "edition",
+          "required": false,
+          "type": "@peartube/index-edition",
+          "version": 1
+        },
+        {
+          "name": "publication",
+          "required": true,
+          "type": "@peartube/index-publication",
+          "version": 1
+        },
+        {
+          "name": "rendition",
+          "required": true,
+          "type": "@peartube/index-rendition",
+          "version": 1
+        },
+        {
+          "name": "asset",
+          "required": true,
+          "type": "@peartube/index-asset",
+          "version": 1
+        },
+        {
+          "name": "provenance",
+          "required": true,
+          "type": "@peartube/index-provenance",
+          "version": 1
+        },
+        {
+          "name": "availability",
+          "required": true,
+          "type": "@peartube/index-availability",
+          "version": 1
+        },
+        {
+          "name": "verification",
+          "required": true,
+          "type": "@peartube/index-verification",
+          "version": 1
+        },
+        {
+          "name": "sourceIndexers",
+          "required": true,
+          "array": true,
+          "type": "@peartube/index-source-indexer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "search-index-candidates-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "selector",
+          "required": true,
+          "type": "@peartube/index-search-selector",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "search-index-candidates-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "candidates",
+          "required": true,
+          "array": true,
+          "type": "@peartube/index-candidate-v2",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "errorMessage",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "verify-index-candidate-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "candidateRef",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "verify-index-candidate-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "candidate",
+          "required": false,
+          "type": "@peartube/index-candidate-v2",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "errorMessage",
+          "required": false,
+          "type": "string",
           "version": 1
         }
       ]
@@ -9977,64 +11522,6 @@
       ]
     },
     {
-      "name": "log-watch-event-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 2,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "duration",
-          "required": false,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "completed",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "share",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "log-watch-event-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
       "name": "index-video-vectors-request",
       "namespace": "peartube",
       "compact": false,
@@ -10075,53 +11562,14 @@
       ]
     },
     {
-      "name": "recommendation",
+      "name": "get-participation-status-request",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": 1,
-      "fields": [
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "score",
-          "required": false,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "reason",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
+      "flagsPosition": -1,
+      "fields": []
     },
     {
-      "name": "get-recommendations-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 1,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "limit",
-          "required": false,
-          "type": "uint",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "get-recommendations-response",
+      "name": "get-participation-status-response",
       "namespace": "peartube",
       "compact": false,
       "flagsPosition": 0,
@@ -10133,14 +11581,86 @@
           "version": 1
         },
         {
-          "name": "recommendations",
+          "name": "mode",
           "required": true,
-          "array": true,
-          "type": "@peartube/recommendation",
+          "type": "string",
           "version": 1
         },
         {
-          "name": "error",
+          "name": "state",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "uploadEligible",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "uploading",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "backgroundEligible",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "cacheCeilingBytes",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "uploadCeilingBytesPer24h",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "uploadedBytesLast24h",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "outboundBytesPerSecond",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "postPlaybackGraceMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "backgroundRemainingSessionMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "backgroundRemainingDailyMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "reasonCodes",
+          "required": true,
+          "array": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
           "required": false,
           "type": "string",
           "version": 1
@@ -10148,33 +11668,93 @@
       ]
     },
     {
-      "name": "get-video-recommendations-request",
+      "name": "set-device-conditions-request",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": 2,
+      "flagsPosition": 0,
       "fields": [
         {
-          "name": "channelKey",
-          "required": true,
+          "name": "metered",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "meteredProvided",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "thermalState",
+          "required": false,
           "type": "string",
           "version": 1
         },
         {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "limit",
+          "name": "batteryPercent",
           "required": false,
           "type": "uint",
           "version": 1
+        },
+        {
+          "name": "batteryPercentProvided",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "charging",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "chargingProvided",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "backgroundPermitted",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "backgroundPermittedProvided",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "freeDiskBytes",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "freeDiskBytesProvided",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "totalDiskBytes",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "totalDiskBytesProvided",
+          "required": false,
+          "type": "bool",
+          "version": 1
         }
       ]
     },
     {
-      "name": "get-video-recommendations-response",
+      "name": "set-device-conditions-response",
       "namespace": "peartube",
       "compact": false,
       "flagsPosition": 0,
@@ -10186,14 +11766,7 @@
           "version": 1
         },
         {
-          "name": "recommendations",
-          "required": true,
-          "array": true,
-          "type": "@peartube/recommendation",
-          "version": 1
-        },
-        {
-          "name": "error",
+          "name": "errorCode",
           "required": false,
           "type": "string",
           "version": 1

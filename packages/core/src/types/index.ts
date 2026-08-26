@@ -85,6 +85,33 @@ export interface UploadVideoResult {
   metadata: Video;
 }
 
+export interface UploadVideoEpisodeMetadata {
+  contentKind: 'episode';
+  seriesId: string;
+  seriesTitle: string;
+  mediaProvider: 'tmdb';
+  mediaId: string;
+  seasonNumber: number;
+  episodeNumber: number;
+  expectedEpisodeCount: number;
+}
+
+export interface UploadVideoRequest {
+  filePath: string;
+  title: string;
+  description?: string;
+  category?: string;
+  skipThumbnailGeneration?: boolean;
+  contentKind?: 'episode' | 'movie';
+  seriesId?: string;
+  seriesTitle?: string;
+  mediaProvider?: 'tmdb';
+  mediaId?: string;
+  seasonNumber?: number;
+  episodeNumber?: number;
+  expectedEpisodeCount?: number;
+}
+
 // ============================================
 // Channel Types
 // ============================================
@@ -185,17 +212,78 @@ export interface MediaRenditionDescriptor {
   segmentIndexId?: string | null;
 }
 
+/**
+ * The complete playback failure vocabulary. Every viewer-visible playback
+ * failure is exactly one of these; there is no generic fallback code.
+ */
+export type PlaybackErrorCode =
+  | 'AVAILABILITY_BOUNDARY'
+  | 'NO_COMPATIBLE_SOURCE'
+  | 'PEER_TIMEOUT'
+  | 'PEER_DISCONNECT'
+  | 'RANGE_MISMATCH'
+  | 'SESSION_LIMIT'
+  | 'PREPARATION_DEADLINE'
+  | 'PREPARATION_CANCELLED'
+  | 'ATTEMPT_LIMIT';
+
+/**
+ * `automatic` - preparation may try another equivalent source itself.
+ * `manual` - only a new user action can change the outcome.
+ * `evidence` - nothing changes until new availability evidence or a new device
+ * capability arrives; retrying in a loop cannot help.
+ */
+export type PlaybackRetryPolicy = 'automatic' | 'manual' | 'evidence';
+
+/** How media bytes reached, or failed to reach, the player. */
+export type PlaybackTrafficClass = 'media-loopback' | 'control-plane' | 'forbidden-origin';
+
+/**
+ * Local, point-in-time reachability assessment for one immutable rendition.
+ * Never a durability or availability guarantee: it expires at `expiresAt`.
+ */
+export type MediaAvailabilityState =
+  | 'awaiting-replication'
+  | 'limited'
+  | 'healthy'
+  | 'unavailable';
+
+export interface MediaAvailability {
+  state: MediaAvailabilityState;
+  renditionId?: string | null;
+  observedAt: number;
+  expiresAt: number;
+  requiredRangeCount: number;
+  reachableRangeCount: number;
+  independentPeerCount: number;
+  completePeerCount: number;
+  measuredLatencyMs: number;
+  offlinePlayable: boolean;
+  archivePledged: boolean;
+  reasonCodes: string[];
+}
+
+export interface MediaSourceCoordinates {
+  contentKind: 'movie' | 'episode';
+  mediaProvider: string;
+  mediaId: string;
+  seasonNumber?: number | null;
+  episodeNumber?: number | null;
+}
+
 export interface MediaPublicationSource {
   publicationId: string;
   publisherId: string;
   manifestId?: string | null;
   renditionId?: string | null;
+  mediaCoordinates?: MediaSourceCoordinates | null;
   score?: number | null;
   availabilityScore?: number | null;
   formatSupport?: number | null;
   moderationPenalty?: number | null;
   preferred?: boolean | null;
   selected?: boolean | null;
+  eligible?: boolean | null;
   selectionReasonCodes?: string[] | null;
   rejectionReasonCodes?: string[] | null;
   introductionPublisherIds?: string[] | null;
@@ -203,16 +291,18 @@ export interface MediaPublicationSource {
   moderationFeedIds?: string[] | null;
   claimConflictIds?: string[] | null;
   provenanceClaimIds?: string[] | null;
-  scoreMetadataConfidence?: number | null;
-  scorePublisherTrust?: number | null;
-  scoreAvailability?: number | null;
+  scoreLocalCompleteness?: number | null;
+  scoreStartupReachability?: number | null;
+  scorePeerEvidence?: number | null;
   scoreFormatSupport?: number | null;
-  scoreModerationPenalty?: number | null;
+  scoreStartupLatency?: number | null;
+  scoreUserOverride?: number | null;
   archiveState?: string | null;
   cacheState?: string | null;
   availabilityState?: 'available' | 'unavailable' | 'unknown' | 'stale' | null;
   stale?: boolean | null;
   incomplete?: boolean | null;
+  availability?: MediaAvailability | null;
 }
 
 export interface MediaEntitySummary {
@@ -223,8 +313,19 @@ export interface MediaEntitySummary {
   subtitle?: string | null;
   claimCount?: number | null;
   conflictCount?: number | null;
+  availability?: MediaAvailability | null;
   sources: MediaPublicationSource[];
   renditions: MediaRenditionDescriptor[];
+  /**
+   * What a viewer reads before pressing play. A consumer holds no
+   * metadata-provider credentials, so these arrive on the publisher's signed
+   * metadata claim or not at all; a category nobody claimed is absent, never
+   * an empty string and never a zero.
+   */
+  releaseYear?: number;
+  runtimeMinutes?: number;
+  overview?: string;
+  genres?: string[];
 }
 
 export interface MediaPageRequest {
@@ -265,4 +366,33 @@ export interface ChannelMetadata {
   thumbnail?: string;
   videoCount?: number;
   driveKey?: string;
+}
+
+/**
+ * Media identity for one piece of device-local viewer progress. A series
+ * episode needs the member reference; a re-cut needs the edition reference.
+ */
+export interface PersonalProgressIdentity {
+  entityRef?: string | null;
+  editionRef?: string | null;
+  memberRef?: string | null;
+}
+
+/**
+ * Deterministic ordering for concurrent progress written on paired devices.
+ * Resolution is (playbackGeneration, lamport, writerKey) — never wall clock.
+ */
+export interface PersonalProgressOrder {
+  playbackGeneration: number;
+  lamport: number;
+  writerKey: string;
+  tombstone: boolean;
+}
+
+/** One device authorized to write the viewer's own encrypted state. */
+export interface PersonalDevice {
+  keyHex: string;
+  deviceName?: string | null;
+  addedAt?: number | null;
+  self?: boolean | null;
 }

@@ -20,8 +20,10 @@ import { PublisherCatalog } from '../publisher/catalog.js'
 import {
   decodePublisherNamespaceDescriptor,
   derivePublisherId,
+  encodePublisherNamespaceDescriptor,
   verifyPublisherNamespaceDescriptor
 } from '../publisher/namespace.js'
+import { verifyPublisherNamespaceProof } from '../publisher/namespace-proof.js'
 
 const MAX_INTENT_TTL_MS = 5 * 60_000
 const DEFAULT_MAX_INTENTS = 128
@@ -289,14 +291,12 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
     if (cached) {
       if (genesisRootKey && !equalBytes(cached.genesisRootKey, genesisRootKey)) fail('PUBLISHER_CATALOG_MISMATCH')
       if (requestedKey && !equalBytes(cached.catalogBootstrapKey, requestedKey)) fail('PUBLISHER_CATALOG_MISMATCH')
-      if (namespaceDescriptor) cached.namespaceDescriptor = namespaceDescriptor
       return cached
     }
     if (opening.has(id)) {
       const binding = await opening.get(id)
       if (genesisRootKey && !equalBytes(binding.genesisRootKey, genesisRootKey)) fail('PUBLISHER_CATALOG_MISMATCH')
       if (requestedKey && !equalBytes(binding.catalogBootstrapKey, requestedKey)) fail('PUBLISHER_CATALOG_MISMATCH')
-      if (namespaceDescriptor) binding.namespaceDescriptor = namespaceDescriptor
       return binding
     }
     if (opened.size + opening.size >= maxOpenCatalogs) fail('PUBLISHER_CATALOG_CAPACITY')
@@ -388,23 +388,51 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
       if (!equalBytes(derivePublisherId(genesisRootKey), publisherId)) fail('PUBLISHER_ID_MISMATCH')
       return openCatalog(publisherId, { genesisRootKey, create: true })
     },
-    async bindNamespace(descriptorValue) {
+    async bindNamespace(descriptorValue, { verifiedNamespaceProof = null } = {}) {
       let descriptor
       try {
         descriptor = verifyPublisherNamespaceDescriptor(descriptorValue).descriptor
       } catch {
         fail('PUBLISHER_NAMESPACE_INVALID')
       }
-      if (descriptor.catalogEpoch !== 0) fail('PUBLISHER_NAMESPACE_TRANSITION_UNVERIFIED')
       const publisherId = exactBytes(descriptor.publisherId, 32, 'PUBLISHER_NAMESPACE_INVALID')
       const catalogBootstrapKey = exactBytes(descriptor.catalogBootstrapKey, 32, 'PUBLISHER_NAMESPACE_INVALID')
-      const genesisRootKey = exactBytes(descriptor.publisherRootKey, 32, 'PUBLISHER_NAMESPACE_INVALID')
-      return openCatalog(publisherId, {
+      let genesisRootKey = descriptor.publisherRootKey
+      if (descriptor.catalogEpoch > 0) {
+        if (!verifiedNamespaceProof) fail('PUBLISHER_NAMESPACE_TRANSITION_UNVERIFIED')
+        try {
+          const verified = verifyPublisherNamespaceProof({
+            locator: {
+              publisherId: publisherHex(publisherId),
+              catalogBootstrapKey: publisherHex(catalogBootstrapKey),
+              catalogEpoch: descriptor.catalogEpoch,
+            },
+            descriptor,
+            ...verifiedNamespaceProof,
+          })
+          const genesisDescriptor = decodePublisherNamespaceDescriptor(verified.genesis?.canonicalBody || verifiedNamespaceProof.genesis.canonicalBody)
+          genesisRootKey = genesisDescriptor.publisherRootKey
+        } catch {
+          fail('PUBLISHER_NAMESPACE_TRANSITION_UNVERIFIED')
+        }
+      }
+      genesisRootKey = exactBytes(genesisRootKey, 32, 'PUBLISHER_NAMESPACE_INVALID')
+      const binding = await openCatalog(publisherId, {
         genesisRootKey,
         create: true,
         catalogBootstrapKey,
-        namespaceDescriptor: descriptor
       })
+      const current = binding.namespaceDescriptor || null
+      if (current) {
+        if (descriptor.catalogEpoch < current.catalogEpoch) fail('PUBLISHER_NAMESPACE_EPOCH_STALE')
+        if (descriptor.catalogEpoch === current.catalogEpoch &&
+            !equalBytes(encodePublisherNamespaceDescriptor(descriptor), encodePublisherNamespaceDescriptor(current))) {
+          fail('PUBLISHER_NAMESPACE_EPOCH_CONFLICT')
+        }
+        if (descriptor.catalogEpoch > current.catalogEpoch + 1) fail('PUBLISHER_NAMESPACE_EPOCH_SKIP')
+      }
+      binding.namespaceDescriptor = descriptor
+      return binding
     },
 
 
@@ -608,6 +636,7 @@ async function getRootAuthorization(binding, recordType, body) {
 
 export function createPublisherApi(options = {}) {
   const now = typeof options.now === 'function' ? options.now : () => Date.now()
+  const ctx = options.ctx || null
   const maxIntents = options.maxIntents ?? DEFAULT_MAX_INTENTS
   if (!Number.isSafeInteger(maxIntents) || maxIntents < 1 || maxIntents > MAX_INTENTS_LIMIT) {
     throw new TypeError('publisher API maxIntents is out of bounds')
@@ -1058,6 +1087,13 @@ export function createPublisherApi(options = {}) {
           fail('PUBLISHER_CATALOG_APPEND_FAILED')
         }
         await registry.deletePendingTransition(intent.publisherIdBytes, candidateRecordId)
+        try {
+          await ctx?.scopedNetwork?.rebindLocalPublisherCatalog?.({
+            publisherId: intent.publisherId,
+          })
+        } catch (error) {
+          console.warn('[PublisherApi] Accepted root transition network rebind failed:', error?.message || error)
+        }
         return {
           intentId: intent.intentId,
           success: true,

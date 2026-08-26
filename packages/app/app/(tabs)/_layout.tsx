@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { DesktopLayout } from '@/components/desktop/DesktopLayout'
 import { PillTabBar } from '@/components/PillTabBar'
-import { colors } from '../_layout'
+import { colors } from '@/lib/colors'
 
 export default function TabLayout() {
   const { isDesktop: platformIsDesktop } = usePlatform()
@@ -37,7 +37,8 @@ export default function TabLayout() {
       >
         <Tabs.Screen name="index" />
         <Tabs.Screen name="discover" />
-        <Tabs.Screen name="studio" />
+        {/* Registered for deep links, but intentionally absent from consumer navigation. */}
+        <Tabs.Screen name="studio" options={{ href: null }} />
         <Tabs.Screen name="library" />
         {/* Legacy routes kept as redirects so deep links survive */}
         <Tabs.Screen name="subscriptions" />

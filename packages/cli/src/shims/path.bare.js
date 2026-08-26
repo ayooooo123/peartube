@@ -1,5 +1,9 @@
 export {
   basename,
+  dirname,
   extname,
-  join
+  join,
+  relative,
+  resolve,
+  sep
 } from 'bare-path'

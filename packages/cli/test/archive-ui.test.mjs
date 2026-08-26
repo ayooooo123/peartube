@@ -275,6 +275,95 @@ test('yt-dlp downloader extracts the actual after_move filepath and verifies it 
   t.ok(calls[0].args.includes('after_move:filepath'), 'keeps yt-dlp after_move filepath print')
 })
 
+test('yt-dlp downloader clamps one file to aggregate archive headroom', async (t) => {
+  const calls = []
+  const reservations = { bytes: 100 }
+  const downloader = createYtDlpDownloader({
+    outputDir: '/archive/tmp',
+    storageHeadroom: () => ({ tmp: 1_000, storage: 1_000, sharedVolume: true }),
+    storageReservations: reservations,
+    fs: {
+      mkdirSync() {},
+      rmSync() {},
+      existsSync() { return true }
+    },
+    path: {
+      join(...parts) { return parts.join('/').replace(/\/+/g, '/') }
+    },
+    spawnFn(binary, args) {
+      calls.push({ binary, args })
+      return {
+        stdout: { on(event, cb) { if (event === 'data') cb('filepath\n/archive/tmp/arch_cap/example.mp4\n') } },
+        stderr: { on() {} },
+        on(event, cb) { if (event === 'close') cb(0) }
+      }
+    }
+  })
+
+  const result = await downloader.download({ id: 'arch_cap', url: 'https://www.youtube.com/watch?v=abc' })
+  const maxIndex = calls[0].args.indexOf('--max-filesize')
+  t.ok(maxIndex >= 0, 'yt-dlp receives a hard file-size bound')
+  t.is(calls[0].args[maxIndex + 1], '225', 'shared-volume staging leaves room for video, audio, merge, and persistence')
+  t.is(reservations.bytes, 325, 'yt-dlp reserves its eventual persisted copy beside existing work')
+  result.cleanup()
+  t.is(reservations.bytes, 100, 'cleanup releases only yt-dlp ownership')
+})
+
+test('yt-dlp downloader terminates and cleans up when live headroom is exhausted', async (t) => {
+  let headroomChecks = 0
+  let cached = false
+  let invalidations = 0
+  let killed = false
+  const removed = []
+  const downloader = createYtDlpDownloader({
+    outputDir: '/archive/tmp',
+    storageHeadroom: () => {
+      headroomChecks += 1
+      if (headroomChecks === 1) {
+        cached = true
+        return { tmp: 1_000, storage: 1_000, sharedVolume: true }
+      }
+      return cached
+        ? { tmp: 1_000, storage: 1_000, sharedVolume: true }
+        : { tmp: 0, storage: 1_000, sharedVolume: true }
+    },
+    onStorageChanged() {
+      invalidations += 1
+      cached = false
+    },
+    fs: {
+      mkdirSync() {},
+      rmSync(path) { removed.push(path) },
+      existsSync() { return true }
+    },
+    path: {
+      join(...parts) { return parts.join('/').replace(/\/+/g, '/') }
+    },
+    spawnFn() {
+      cached = true
+      const handlers = { close: [], error: [] }
+      return {
+        stdout: { on(event, cb) { if (event === 'data') cb('filepath\n/archive/tmp/arch_live/example.mp4\n') } },
+        stderr: { on() {} },
+        on(event, cb) { handlers[event]?.push(cb) },
+        kill() {
+          killed = true
+          for (const close of handlers.close) close(1)
+        }
+      }
+    }
+  })
+
+  await t.exception(
+    downloader.download({ id: 'arch_live', url: 'https://www.youtube.com/watch?v=abc' }),
+    /storage headroom/,
+    'live aggregate exhaustion aborts the subprocess'
+  )
+  t.ok(killed, 'the running yt-dlp process is terminated')
+  t.ok(invalidations > 0, 'the monitor invalidates cached headroom without a reservation ledger')
+  t.ok(removed.includes('/archive/tmp/arch_live'), 'the partial target directory is removed')
+})
+
 
 test('yt-dlp downloader reads source title duration channel and thumbnail URL from info json', async (t) => {
   const infoPath = '/archive/tmp/arch_meta/example.info.json'
@@ -630,23 +719,28 @@ test('archive publisher opens separate deterministic channels per source identit
     api: {},
     runtime: { ctx: {} },
     fs: {},
-    createChannelFn
+    createChannelFn,
+    canPublish: retentionClass => retentionClass === 'archive-pin',
   })
 
   const oneA = await publisher.ensureAnonymousChannel({
     channelName: 'Creator One',
-    sourceIdentity: { platform: 'youtube', sourceId: 'youtube:channel:UC1', creatorName: 'Creator One', creatorHandle: null }
+    sourceIdentity: { platform: 'youtube', sourceId: 'youtube:channel:UC1', creatorName: 'Creator One', creatorHandle: null },
+    retentionClass: 'archive-pin',
   })
   const two = await publisher.ensureAnonymousChannel({
     channelName: 'Creator Two',
-    sourceIdentity: { platform: 'youtube', sourceId: 'youtube:channel:UC2', creatorName: 'Creator Two', creatorHandle: null }
+    sourceIdentity: { platform: 'youtube', sourceId: 'youtube:channel:UC2', creatorName: 'Creator Two', creatorHandle: null },
+    retentionClass: 'archive-pin',
   })
   const oneB = await publisher.ensureAnonymousChannel({
     channelName: 'Creator One',
-    sourceIdentity: { platform: 'youtube', sourceId: 'youtube:channel:UC1', creatorName: 'Creator One', creatorHandle: null }
+    sourceIdentity: { platform: 'youtube', sourceId: 'youtube:channel:UC1', creatorName: 'Creator One', creatorHandle: null },
+    retentionClass: 'archive-pin',
   })
 
   await publisher.importVideo({
+    retentionClass: 'archive-pin',
     channel: oneA.channel,
     filePath: '/tmp/one.mp4',
     title: 'One',
@@ -693,4 +787,63 @@ test('archive WebUI renders a season/episode picker for TV Discover cards', asyn
   t.ok(html.includes('name="sourceVideoId" value=""'), 'tv source id deferred to server')
   t.ok(html.includes('/discover/seasons.json'), 'picker script fetches seasons')
   t.ok(html.includes('TV'), 'card labels the TV type')
+})
+
+test('an archive submission with no file and no URL is visibly ignored, not silently accepted', async (t) => {
+  // Regression: both POST handlers redirected 303 back to the page when the
+  // form carried neither a file nor a source URL. Nothing was enqueued and
+  // nothing was said, so the operator saw what looked like an accepted upload
+  // and waited for a job that never existed.
+  const console = readFileSync(join(__dirname, '..', 'src', 'archive-console.js'), 'utf8')
+
+  t.ok(console.includes('EMPTY_SUBMISSION_NOTICE'), 'the empty submission has a message')
+  t.is(
+    console.match(/\$\{EMPTY_SUBMISSION_QUERY\}/g)?.length,
+    2,
+    'both /discover/archive and /archive report an empty submission'
+  )
+  t.ok(
+    console.includes("logger?.archive?.warn?.('Archive submission ignored: no file and no source URL')"),
+    'an ignored submission is logged rather than dropped in silence'
+  )
+
+  const withNotice = renderArchiveWebHome({ notice: 'Nothing was archived: attach a video file or paste a source URL first.' })
+  t.ok(withNotice.includes('class="notice"'), 'the notice renders as a banner')
+  t.ok(withNotice.includes('Nothing was archived'), 'the banner carries the reason')
+  t.ok(withNotice.includes('role="status"'), 'the banner is announced to assistive tech')
+
+  const withoutNotice = renderArchiveWebHome({})
+  t.absent(withoutNotice.includes('class="notice"'), 'a normal page shows no banner')
+})
+
+test('the read-only S3 panel reports block offload state', async (t) => {
+  // Offload makes the bucket load bearing for playback: an operator looking at
+  // this page has to be able to see that block data is leaving the volume, how
+  // much has left, and how much is coming back on read.
+  const enabled = renderArchiveWebHome({
+    s3: {
+      configured: true,
+      endpoint: 'https://s3.us-west-002.backblazeb2.com',
+      bucket: 'peartube-relay',
+      region: 'us-west-002',
+      prefix: 'relay-a',
+      offload: {
+        enabled: true,
+        windowBytes: 2 * 1024 ** 3,
+        blocksOffloaded: 12,
+        bytesOffloaded: 3 * 1024 ** 3,
+        restored: 5
+      }
+    }
+  })
+
+  t.ok(enabled.includes('Block offload: <span class="status-line on">enabled</span>'), 'the panel calls out that offload is on')
+  t.ok(enabled.includes('Resident window: 2.0 GB'), 'the panel shows the resident window')
+  t.ok(enabled.includes('Offloaded: 12 block(s), 3.0 GB'), 'the panel shows what has been offloaded')
+  t.ok(enabled.includes('Restored on read: 5 block(s)'), 'the panel shows what came back from the bucket')
+
+  const disabled = renderArchiveWebHome({ s3: { configured: true, endpoint: 'https://s3.example.com', bucket: 'b', region: 'r', prefix: '' } })
+  t.ok(disabled.includes('Block offload: <span class="status-line ">disabled</span>'), 'a relay with no offload says so')
+  t.ok(disabled.includes("Media block data stays on this relay's volume."), 'and says where the block data is instead')
+  t.absent(disabled.includes('Resident window'), 'no window is reported when nothing is offloaded')
 })

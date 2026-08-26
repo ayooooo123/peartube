@@ -1,4 +1,6 @@
+import { requiredRangesForRendition } from './availability.js'
 import { verifyPublicationManifest } from './manifest.js'
+import { isArtworkRendition } from './rendition.js'
 
 function signerHex(value) {
   return Buffer.from(value).toString('hex')
@@ -22,6 +24,7 @@ export function createAssetManifestStore(options = {}) {
   const byPublication = new Map()
   const byPublisherSequence = new Map()
   const byRendition = new Map()
+  const byAssetId = new Map()
   const bySupersession = new Map()
   const currentByPublisher = new Map()
   const quarantined = []
@@ -49,7 +52,15 @@ export function createAssetManifestStore(options = {}) {
       byPublication.set(publicationId, manifest)
       const publisherId = manifest.body.publisherId
       byPublisherSequence.set(`${publisherId}:${manifest.body.sequence}`, publicationId)
-      for (const rendition of manifest.body.renditions || []) append(byRendition, rendition.renditionId, publicationId)
+      const renditions = [
+        ...(manifest.body.renditions || []),
+        ...(manifest.body.artwork || []),
+        ...(manifest.body.subtitles || []),
+      ]
+      for (const rendition of renditions) {
+        append(byRendition, rendition.renditionId, publicationId)
+        append(byAssetId, rendition.core.assetId, publicationId)
+      }
       if (manifest.body.previousManifestId) append(bySupersession, manifest.body.previousManifestId, publicationId)
 
       const current = currentByPublisher.get(publisherId)
@@ -64,12 +75,44 @@ export function createAssetManifestStore(options = {}) {
       return byPublication.get(publicationId) || null
     },
 
+    /**
+     * The immutable rendition a consumer must actually receive, plus the block
+     * ranges a peer has to advertise and prove. Availability is assessed
+     * against this, never against the publisher's claimed status.
+     */
+    getRenditionRequirement(publicationId, renditionId = null) {
+      const manifest = byPublication.get(publicationId)
+      if (!manifest) return null
+      const rendition = (manifest.body?.renditions || []).find(candidate => (
+        candidate &&
+        candidate.blocked !== true &&
+        candidate.superseded !== true &&
+        typeof candidate.renditionId === 'string' &&
+        candidate.renditionId.length > 0 &&
+        // Asked for by id, artwork answers for itself. Choosing on its own,
+        // this is picking the media a viewer came for, never its cover.
+        (renditionId == null ? !isArtworkRendition(candidate) : candidate.renditionId === renditionId)
+      ))
+      if (!rendition) return null
+      return {
+        publicationId,
+        renditionId: rendition.renditionId,
+        coreKey: rendition.core?.key || null,
+        coreLength: Number(rendition.core?.length) || 0,
+        requiredRanges: requiredRangesForRendition(rendition),
+      }
+    },
+
     getManifestByPublisherSequence(publisherId, sequence) {
       return byPublication.get(byPublisherSequence.get(`${publisherId}:${sequence}`)) || null
     },
 
     getManifestsByRendition(renditionId) {
       return rows(byRendition.get(renditionId) || [])
+    },
+
+    getManifestsByAssetId(assetId) {
+      return rows(byAssetId.get(assetId) || [])
     },
 
     getSupersedingManifests(manifestId) {

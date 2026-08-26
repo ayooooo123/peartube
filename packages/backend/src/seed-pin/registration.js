@@ -396,19 +396,77 @@ const IDENTITY_MUTATIONS = Object.freeze([
 export function installSeedPinIdentityMutationHooks ({
   identityManager,
   onMutation,
+  onRollback = async () => {},
 } = {}) {
   if (!identityManager || typeof identityManager !== 'object') {
     throw new TypeError('identityManager is required')
   }
   if (typeof onMutation !== 'function') throw new TypeError('onMutation must be a function')
+  if (typeof onRollback !== 'function') throw new TypeError('onRollback must be a function')
   const installed = []
+  const restoreActiveIdentity = identityManager.setActiveIdentity
+  let identityMutations = Promise.resolve()
+  const enqueueMutation = operation => {
+    const next = identityMutations.then(operation, operation)
+    identityMutations = next.catch(() => {})
+    return next
+  }
   for (const mutation of IDENTITY_MUTATIONS) {
     const original = identityManager[mutation.method]
     if (typeof original !== 'function') continue
     const wrapped = async (...args) => {
-      const result = await original.apply(identityManager, args)
-      await onMutation(mutation)
-      return result
+      return enqueueMutation(async () => {
+        const previousState = typeof identityManager.createQueuedStateSnapshot === 'function'
+          ? await identityManager.createQueuedStateSnapshot()
+          : (identityManager.createStateSnapshot?.() || null)
+        const previousPublicKey = previousState?.activeIdentity ??
+          identityManager.getActivePublicKey?.() ??
+          null
+        let postMutationState = null
+        let mutationCompleted = false
+        try {
+          const result = await original.apply(identityManager, args)
+          postMutationState = identityManager.createStateSnapshot?.() || null
+          mutationCompleted = true
+          await onMutation(mutation)
+          return result
+        } catch (error) {
+          const currentPublicKey = identityManager.getActivePublicKey?.() || null
+          if (mutationCompleted) {
+            const rollbackErrors = []
+            try {
+              if (previousState && typeof identityManager.restoreState === 'function') {
+                await identityManager.restoreState(previousState, { postMutationState })
+              } else if (
+                previousPublicKey &&
+                currentPublicKey !== previousPublicKey &&
+                typeof restoreActiveIdentity === 'function'
+              ) {
+                await restoreActiveIdentity.call(identityManager, previousPublicKey)
+              }
+            } catch (rollbackError) {
+              rollbackErrors.push(rollbackError)
+            }
+            try {
+              await onRollback({
+                mutation,
+                previousPublicKey,
+                failedPublicKey: currentPublicKey || args[0],
+                error,
+              })
+            } catch (rollbackError) {
+              rollbackErrors.push(rollbackError)
+            }
+            if (rollbackErrors.length > 0) {
+              throw new AggregateError(
+                [error, ...rollbackErrors],
+                'Identity mutation and compensation both failed',
+              )
+            }
+          }
+          throw error
+        }
+      })
     }
     identityManager[mutation.method] = wrapped
     installed.push({ method: mutation.method, original, wrapped })

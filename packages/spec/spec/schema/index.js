@@ -1624,23 +1624,121 @@ const encoding43 = {
   }
 }
 
+// @peartube/media-availability.reasonCodes
+const encoding44_11 = c.array(c.string)
+
+// @peartube/media-availability
+const encoding44 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.state)
+    state.end++ // max flag is 4 so always one byte
+
+    if (m.renditionId) c.string.preencode(state, m.renditionId)
+    c.uint.preencode(state, m.observedAt)
+    c.uint.preencode(state, m.expiresAt)
+    c.uint.preencode(state, m.requiredRangeCount)
+    c.uint.preencode(state, m.reachableRangeCount)
+    c.uint.preencode(state, m.independentPeerCount)
+    c.uint.preencode(state, m.completePeerCount)
+    c.uint.preencode(state, m.measuredLatencyMs)
+    encoding44_11.preencode(state, m.reasonCodes)
+  },
+  encode(state, m) {
+    const flags = (m.renditionId ? 1 : 0) | (m.offlinePlayable ? 2 : 0) | (m.archivePledged ? 4 : 0)
+
+    c.string.encode(state, m.state)
+    c.uint.encode(state, flags)
+
+    if (m.renditionId) c.string.encode(state, m.renditionId)
+    c.uint.encode(state, m.observedAt)
+    c.uint.encode(state, m.expiresAt)
+    c.uint.encode(state, m.requiredRangeCount)
+    c.uint.encode(state, m.reachableRangeCount)
+    c.uint.encode(state, m.independentPeerCount)
+    c.uint.encode(state, m.completePeerCount)
+    c.uint.encode(state, m.measuredLatencyMs)
+    encoding44_11.encode(state, m.reasonCodes)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      state: r0,
+      renditionId: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      observedAt: c.uint.decode(state),
+      expiresAt: c.uint.decode(state),
+      requiredRangeCount: c.uint.decode(state),
+      reachableRangeCount: c.uint.decode(state),
+      independentPeerCount: c.uint.decode(state),
+      completePeerCount: c.uint.decode(state),
+      measuredLatencyMs: c.uint.decode(state),
+      offlinePlayable: (flags & 2) !== 0,
+      archivePledged: (flags & 4) !== 0,
+      reasonCodes: encoding44_11.decode(state)
+    }
+  }
+}
+
+// @peartube/media-source-coordinates
+const encoding45 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.contentKind)
+    c.string.preencode(state, m.mediaProvider)
+    c.string.preencode(state, m.mediaId)
+    state.end++ // max flag is 2 so always one byte
+
+    if (m.seasonNumber) c.uint.preencode(state, m.seasonNumber)
+    if (m.episodeNumber) c.uint.preencode(state, m.episodeNumber)
+  },
+  encode(state, m) {
+    const flags = (m.seasonNumber ? 1 : 0) | (m.episodeNumber ? 2 : 0)
+
+    c.string.encode(state, m.contentKind)
+    c.string.encode(state, m.mediaProvider)
+    c.string.encode(state, m.mediaId)
+    c.uint.encode(state, flags)
+
+    if (m.seasonNumber) c.uint.encode(state, m.seasonNumber)
+    if (m.episodeNumber) c.uint.encode(state, m.episodeNumber)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const r1 = c.string.decode(state)
+    const r2 = c.string.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      contentKind: r0,
+      mediaProvider: r1,
+      mediaId: r2,
+      seasonNumber: (flags & 1) !== 0 ? c.uint.decode(state) : 0,
+      episodeNumber: (flags & 2) !== 0 ? c.uint.decode(state) : 0
+    }
+  }
+}
+
 // @peartube/media-publication-source.selectionReasonCodes
-const encoding44_10 = c.array(c.string)
+const encoding46_11 = encoding44_11
 // @peartube/media-publication-source.rejectionReasonCodes
-const encoding44_11 = encoding44_10
+const encoding46_12 = encoding44_11
 // @peartube/media-publication-source.introductionPublisherIds
-const encoding44_12 = encoding44_10
+const encoding46_13 = encoding44_11
 // @peartube/media-publication-source.introductionIndexIds
-const encoding44_13 = encoding44_10
+const encoding46_14 = encoding44_11
 // @peartube/media-publication-source.moderationFeedIds
-const encoding44_14 = encoding44_10
+const encoding46_15 = encoding44_11
 // @peartube/media-publication-source.claimConflictIds
-const encoding44_15 = encoding44_10
+const encoding46_16 = encoding44_11
 // @peartube/media-publication-source.provenanceClaimIds
-const encoding44_16 = encoding44_10
+const encoding46_17 = encoding44_11
+// @peartube/media-publication-source.availability
+const encoding46_29 = c.frame(encoding44)
+// @peartube/media-publication-source.mediaCoordinates
+const encoding46_30 = c.frame(encoding45)
 
 // @peartube/media-publication-source
-const encoding44 = {
+const encoding46 = {
   preencode(state, m) {
     const flags =
       (m.manifestId ? 1 : 0) |
@@ -1651,23 +1749,27 @@ const encoding44 = {
       (m.moderationPenalty ? 32 : 0) |
       (m.preferred ? 64 : 0) |
       (m.selected ? 128 : 0) |
-      (m.selectionReasonCodes ? 256 : 0) |
-      (m.rejectionReasonCodes ? 512 : 0) |
-      (m.introductionPublisherIds ? 1024 : 0) |
-      (m.introductionIndexIds ? 2048 : 0) |
-      (m.moderationFeedIds ? 4096 : 0) |
-      (m.claimConflictIds ? 8192 : 0) |
-      (m.provenanceClaimIds ? 16384 : 0) |
-      (m.scoreMetadataConfidence ? 32768 : 0) |
-      (m.scorePublisherTrust ? 65536 : 0) |
-      (m.scoreAvailability ? 131072 : 0) |
-      (m.scoreFormatSupport ? 262144 : 0) |
-      (m.scoreModerationPenalty ? 524288 : 0) |
-      (m.archiveState ? 1048576 : 0) |
-      (m.cacheState ? 2097152 : 0) |
-      (m.availabilityState ? 4194304 : 0) |
-      (m.stale ? 8388608 : 0) |
-      (m.incomplete ? 16777216 : 0)
+      (m.eligible ? 256 : 0) |
+      (m.selectionReasonCodes ? 512 : 0) |
+      (m.rejectionReasonCodes ? 1024 : 0) |
+      (m.introductionPublisherIds ? 2048 : 0) |
+      (m.introductionIndexIds ? 4096 : 0) |
+      (m.moderationFeedIds ? 8192 : 0) |
+      (m.claimConflictIds ? 16384 : 0) |
+      (m.provenanceClaimIds ? 32768 : 0) |
+      (m.scoreLocalCompleteness ? 65536 : 0) |
+      (m.scoreStartupReachability ? 131072 : 0) |
+      (m.scorePeerEvidence ? 262144 : 0) |
+      (m.scoreFormatSupport ? 524288 : 0) |
+      (m.scoreStartupLatency ? 1048576 : 0) |
+      (m.scoreUserOverride ? 2097152 : 0) |
+      (m.archiveState ? 4194304 : 0) |
+      (m.cacheState ? 8388608 : 0) |
+      (m.availabilityState ? 16777216 : 0) |
+      (m.stale ? 33554432 : 0) |
+      (m.incomplete ? 67108864 : 0) |
+      (m.availability ? 134217728 : 0) |
+      (m.mediaCoordinates ? 268435456 : 0)
 
     c.string.preencode(state, m.publicationId)
     c.string.preencode(state, m.publisherId)
@@ -1679,21 +1781,24 @@ const encoding44 = {
     if (m.availabilityScore) c.uint.preencode(state, m.availabilityScore)
     if (m.formatSupport) c.uint.preencode(state, m.formatSupport)
     if (m.moderationPenalty) c.uint.preencode(state, m.moderationPenalty)
-    if (m.selectionReasonCodes) encoding44_10.preencode(state, m.selectionReasonCodes)
-    if (m.rejectionReasonCodes) encoding44_11.preencode(state, m.rejectionReasonCodes)
-    if (m.introductionPublisherIds) encoding44_12.preencode(state, m.introductionPublisherIds)
-    if (m.introductionIndexIds) encoding44_13.preencode(state, m.introductionIndexIds)
-    if (m.moderationFeedIds) encoding44_14.preencode(state, m.moderationFeedIds)
-    if (m.claimConflictIds) encoding44_15.preencode(state, m.claimConflictIds)
-    if (m.provenanceClaimIds) encoding44_16.preencode(state, m.provenanceClaimIds)
-    if (m.scoreMetadataConfidence) c.uint.preencode(state, m.scoreMetadataConfidence)
-    if (m.scorePublisherTrust) c.uint.preencode(state, m.scorePublisherTrust)
-    if (m.scoreAvailability) c.uint.preencode(state, m.scoreAvailability)
+    if (m.selectionReasonCodes) encoding46_11.preencode(state, m.selectionReasonCodes)
+    if (m.rejectionReasonCodes) encoding46_12.preencode(state, m.rejectionReasonCodes)
+    if (m.introductionPublisherIds) encoding46_13.preencode(state, m.introductionPublisherIds)
+    if (m.introductionIndexIds) encoding46_14.preencode(state, m.introductionIndexIds)
+    if (m.moderationFeedIds) encoding46_15.preencode(state, m.moderationFeedIds)
+    if (m.claimConflictIds) encoding46_16.preencode(state, m.claimConflictIds)
+    if (m.provenanceClaimIds) encoding46_17.preencode(state, m.provenanceClaimIds)
+    if (m.scoreLocalCompleteness) c.uint.preencode(state, m.scoreLocalCompleteness)
+    if (m.scoreStartupReachability) c.uint.preencode(state, m.scoreStartupReachability)
+    if (m.scorePeerEvidence) c.uint.preencode(state, m.scorePeerEvidence)
     if (m.scoreFormatSupport) c.uint.preencode(state, m.scoreFormatSupport)
-    if (m.scoreModerationPenalty) c.uint.preencode(state, m.scoreModerationPenalty)
+    if (m.scoreStartupLatency) c.uint.preencode(state, m.scoreStartupLatency)
+    if (m.scoreUserOverride) c.uint.preencode(state, m.scoreUserOverride)
     if (m.archiveState) c.string.preencode(state, m.archiveState)
     if (m.cacheState) c.string.preencode(state, m.cacheState)
     if (m.availabilityState) c.string.preencode(state, m.availabilityState)
+    if (m.availability) encoding46_29.preencode(state, m.availability)
+    if (m.mediaCoordinates) encoding46_30.preencode(state, m.mediaCoordinates)
   },
   encode(state, m) {
     const flags =
@@ -1705,23 +1810,27 @@ const encoding44 = {
       (m.moderationPenalty ? 32 : 0) |
       (m.preferred ? 64 : 0) |
       (m.selected ? 128 : 0) |
-      (m.selectionReasonCodes ? 256 : 0) |
-      (m.rejectionReasonCodes ? 512 : 0) |
-      (m.introductionPublisherIds ? 1024 : 0) |
-      (m.introductionIndexIds ? 2048 : 0) |
-      (m.moderationFeedIds ? 4096 : 0) |
-      (m.claimConflictIds ? 8192 : 0) |
-      (m.provenanceClaimIds ? 16384 : 0) |
-      (m.scoreMetadataConfidence ? 32768 : 0) |
-      (m.scorePublisherTrust ? 65536 : 0) |
-      (m.scoreAvailability ? 131072 : 0) |
-      (m.scoreFormatSupport ? 262144 : 0) |
-      (m.scoreModerationPenalty ? 524288 : 0) |
-      (m.archiveState ? 1048576 : 0) |
-      (m.cacheState ? 2097152 : 0) |
-      (m.availabilityState ? 4194304 : 0) |
-      (m.stale ? 8388608 : 0) |
-      (m.incomplete ? 16777216 : 0)
+      (m.eligible ? 256 : 0) |
+      (m.selectionReasonCodes ? 512 : 0) |
+      (m.rejectionReasonCodes ? 1024 : 0) |
+      (m.introductionPublisherIds ? 2048 : 0) |
+      (m.introductionIndexIds ? 4096 : 0) |
+      (m.moderationFeedIds ? 8192 : 0) |
+      (m.claimConflictIds ? 16384 : 0) |
+      (m.provenanceClaimIds ? 32768 : 0) |
+      (m.scoreLocalCompleteness ? 65536 : 0) |
+      (m.scoreStartupReachability ? 131072 : 0) |
+      (m.scorePeerEvidence ? 262144 : 0) |
+      (m.scoreFormatSupport ? 524288 : 0) |
+      (m.scoreStartupLatency ? 1048576 : 0) |
+      (m.scoreUserOverride ? 2097152 : 0) |
+      (m.archiveState ? 4194304 : 0) |
+      (m.cacheState ? 8388608 : 0) |
+      (m.availabilityState ? 16777216 : 0) |
+      (m.stale ? 33554432 : 0) |
+      (m.incomplete ? 67108864 : 0) |
+      (m.availability ? 134217728 : 0) |
+      (m.mediaCoordinates ? 268435456 : 0)
 
     c.string.encode(state, m.publicationId)
     c.string.encode(state, m.publisherId)
@@ -1733,21 +1842,24 @@ const encoding44 = {
     if (m.availabilityScore) c.uint.encode(state, m.availabilityScore)
     if (m.formatSupport) c.uint.encode(state, m.formatSupport)
     if (m.moderationPenalty) c.uint.encode(state, m.moderationPenalty)
-    if (m.selectionReasonCodes) encoding44_10.encode(state, m.selectionReasonCodes)
-    if (m.rejectionReasonCodes) encoding44_11.encode(state, m.rejectionReasonCodes)
-    if (m.introductionPublisherIds) encoding44_12.encode(state, m.introductionPublisherIds)
-    if (m.introductionIndexIds) encoding44_13.encode(state, m.introductionIndexIds)
-    if (m.moderationFeedIds) encoding44_14.encode(state, m.moderationFeedIds)
-    if (m.claimConflictIds) encoding44_15.encode(state, m.claimConflictIds)
-    if (m.provenanceClaimIds) encoding44_16.encode(state, m.provenanceClaimIds)
-    if (m.scoreMetadataConfidence) c.uint.encode(state, m.scoreMetadataConfidence)
-    if (m.scorePublisherTrust) c.uint.encode(state, m.scorePublisherTrust)
-    if (m.scoreAvailability) c.uint.encode(state, m.scoreAvailability)
+    if (m.selectionReasonCodes) encoding46_11.encode(state, m.selectionReasonCodes)
+    if (m.rejectionReasonCodes) encoding46_12.encode(state, m.rejectionReasonCodes)
+    if (m.introductionPublisherIds) encoding46_13.encode(state, m.introductionPublisherIds)
+    if (m.introductionIndexIds) encoding46_14.encode(state, m.introductionIndexIds)
+    if (m.moderationFeedIds) encoding46_15.encode(state, m.moderationFeedIds)
+    if (m.claimConflictIds) encoding46_16.encode(state, m.claimConflictIds)
+    if (m.provenanceClaimIds) encoding46_17.encode(state, m.provenanceClaimIds)
+    if (m.scoreLocalCompleteness) c.uint.encode(state, m.scoreLocalCompleteness)
+    if (m.scoreStartupReachability) c.uint.encode(state, m.scoreStartupReachability)
+    if (m.scorePeerEvidence) c.uint.encode(state, m.scorePeerEvidence)
     if (m.scoreFormatSupport) c.uint.encode(state, m.scoreFormatSupport)
-    if (m.scoreModerationPenalty) c.uint.encode(state, m.scoreModerationPenalty)
+    if (m.scoreStartupLatency) c.uint.encode(state, m.scoreStartupLatency)
+    if (m.scoreUserOverride) c.uint.encode(state, m.scoreUserOverride)
     if (m.archiveState) c.string.encode(state, m.archiveState)
     if (m.cacheState) c.string.encode(state, m.cacheState)
     if (m.availabilityState) c.string.encode(state, m.availabilityState)
+    if (m.availability) encoding46_29.encode(state, m.availability)
+    if (m.mediaCoordinates) encoding46_30.encode(state, m.mediaCoordinates)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -1765,29 +1877,33 @@ const encoding44 = {
       moderationPenalty: (flags & 32) !== 0 ? c.uint.decode(state) : 0,
       preferred: (flags & 64) !== 0,
       selected: (flags & 128) !== 0,
-      selectionReasonCodes: (flags & 256) !== 0 ? encoding44_10.decode(state) : null,
-      rejectionReasonCodes: (flags & 512) !== 0 ? encoding44_11.decode(state) : null,
-      introductionPublisherIds: (flags & 1024) !== 0 ? encoding44_12.decode(state) : null,
-      introductionIndexIds: (flags & 2048) !== 0 ? encoding44_13.decode(state) : null,
-      moderationFeedIds: (flags & 4096) !== 0 ? encoding44_14.decode(state) : null,
-      claimConflictIds: (flags & 8192) !== 0 ? encoding44_15.decode(state) : null,
-      provenanceClaimIds: (flags & 16384) !== 0 ? encoding44_16.decode(state) : null,
-      scoreMetadataConfidence: (flags & 32768) !== 0 ? c.uint.decode(state) : 0,
-      scorePublisherTrust: (flags & 65536) !== 0 ? c.uint.decode(state) : 0,
-      scoreAvailability: (flags & 131072) !== 0 ? c.uint.decode(state) : 0,
-      scoreFormatSupport: (flags & 262144) !== 0 ? c.uint.decode(state) : 0,
-      scoreModerationPenalty: (flags & 524288) !== 0 ? c.uint.decode(state) : 0,
-      archiveState: (flags & 1048576) !== 0 ? c.string.decode(state) : null,
-      cacheState: (flags & 2097152) !== 0 ? c.string.decode(state) : null,
-      availabilityState: (flags & 4194304) !== 0 ? c.string.decode(state) : null,
-      stale: (flags & 8388608) !== 0,
-      incomplete: (flags & 16777216) !== 0
+      eligible: (flags & 256) !== 0,
+      selectionReasonCodes: (flags & 512) !== 0 ? encoding46_11.decode(state) : null,
+      rejectionReasonCodes: (flags & 1024) !== 0 ? encoding46_12.decode(state) : null,
+      introductionPublisherIds: (flags & 2048) !== 0 ? encoding46_13.decode(state) : null,
+      introductionIndexIds: (flags & 4096) !== 0 ? encoding46_14.decode(state) : null,
+      moderationFeedIds: (flags & 8192) !== 0 ? encoding46_15.decode(state) : null,
+      claimConflictIds: (flags & 16384) !== 0 ? encoding46_16.decode(state) : null,
+      provenanceClaimIds: (flags & 32768) !== 0 ? encoding46_17.decode(state) : null,
+      scoreLocalCompleteness: (flags & 65536) !== 0 ? c.uint.decode(state) : 0,
+      scoreStartupReachability: (flags & 131072) !== 0 ? c.uint.decode(state) : 0,
+      scorePeerEvidence: (flags & 262144) !== 0 ? c.uint.decode(state) : 0,
+      scoreFormatSupport: (flags & 524288) !== 0 ? c.uint.decode(state) : 0,
+      scoreStartupLatency: (flags & 1048576) !== 0 ? c.uint.decode(state) : 0,
+      scoreUserOverride: (flags & 2097152) !== 0 ? c.uint.decode(state) : 0,
+      archiveState: (flags & 4194304) !== 0 ? c.string.decode(state) : null,
+      cacheState: (flags & 8388608) !== 0 ? c.string.decode(state) : null,
+      availabilityState: (flags & 16777216) !== 0 ? c.string.decode(state) : null,
+      stale: (flags & 33554432) !== 0,
+      incomplete: (flags & 67108864) !== 0,
+      availability: (flags & 134217728) !== 0 ? encoding46_29.decode(state) : null,
+      mediaCoordinates: (flags & 268435456) !== 0 ? encoding46_30.decode(state) : null
     }
   }
 }
 
 // @peartube/media-claim-provenance
-const encoding45 = {
+const encoding47 = {
   preencode(state, m) {
     c.string.preencode(state, m.claimId)
     c.string.preencode(state, m.claimType)
@@ -1837,17 +1953,17 @@ const encoding45 = {
 }
 
 // @peartube/media-conflict-summary.claimIds
-const encoding46_3 = encoding44_10
+const encoding48_3 = encoding44_11
 
 // @peartube/media-conflict-summary
-const encoding46 = {
+const encoding48 = {
   preencode(state, m) {
     c.string.preencode(state, m.conflictId)
     c.string.preencode(state, m.claimType)
     c.string.preencode(state, m.subjectEntityId)
     state.end++ // max flag is 2 so always one byte
 
-    if (m.claimIds) encoding46_3.preencode(state, m.claimIds)
+    if (m.claimIds) encoding48_3.preencode(state, m.claimIds)
     if (m.preferredClaimId) c.string.preencode(state, m.preferredClaimId)
   },
   encode(state, m) {
@@ -1858,7 +1974,7 @@ const encoding46 = {
     c.string.encode(state, m.subjectEntityId)
     c.uint.encode(state, flags)
 
-    if (m.claimIds) encoding46_3.encode(state, m.claimIds)
+    if (m.claimIds) encoding48_3.encode(state, m.claimIds)
     if (m.preferredClaimId) c.string.encode(state, m.preferredClaimId)
   },
   decode(state) {
@@ -1871,14 +1987,14 @@ const encoding46 = {
       conflictId: r0,
       claimType: r1,
       subjectEntityId: r2,
-      claimIds: (flags & 1) !== 0 ? encoding46_3.decode(state) : null,
+      claimIds: (flags & 1) !== 0 ? encoding48_3.decode(state) : null,
       preferredClaimId: (flags & 2) !== 0 ? c.string.decode(state) : null
     }
   }
 }
 
 // @peartube/media-agent-summary
-const encoding47 = {
+const encoding49 = {
   preencode(state, m) {
     c.string.preencode(state, m.entityId)
     state.end++ // max flag is 4 so always one byte
@@ -1911,7 +2027,7 @@ const encoding47 = {
 }
 
 // @peartube/media-contribution-summary
-const encoding48 = {
+const encoding50 = {
   preencode(state, m) {
     c.string.preencode(state, m.agentEntityId)
     c.string.preencode(state, m.role)
@@ -1947,25 +2063,56 @@ const encoding48 = {
   }
 }
 
+// @peartube/media-entity-summary.availability
+const encoding51_7 = encoding46_29
 // @peartube/media-entity-summary.sources
-const encoding49_7 = c.array(c.frame(encoding44))
+const encoding51_8 = c.array(c.frame(encoding46))
 // @peartube/media-entity-summary.renditions
-const encoding49_8 = c.array(c.frame(encoding43))
+const encoding51_9 = c.array(c.frame(encoding43))
+// @peartube/media-entity-summary.genres
+const encoding51_13 = encoding44_11
 
 // @peartube/media-entity-summary
-const encoding49 = {
+const encoding51 = {
   preencode(state, m) {
+    const flags =
+      (m.localClusterId ? 1 : 0) |
+      (m.title ? 2 : 0) |
+      (m.subtitle ? 4 : 0) |
+      (m.claimCount ? 8 : 0) |
+      (m.conflictCount ? 16 : 0) |
+      (m.availability ? 32 : 0) |
+      (m.sources ? 64 : 0) |
+      (m.renditions ? 128 : 0) |
+      (m.releaseYear ? 256 : 0) |
+      (m.runtimeMinutes ? 512 : 0) |
+      (m.overview ? 1024 : 0) |
+      (m.genres ? 2048 : 0) |
+      (m.posterBlobId ? 4096 : 0) |
+      (m.posterBlobsCoreKey ? 8192 : 0) |
+      (m.posterMimeType ? 16384 : 0) |
+      (m.posterUrl ? 32768 : 0)
+
     c.string.preencode(state, m.entityId)
     c.string.preencode(state, m.entityKind)
-    state.end++ // max flag is 64 so always one byte
+    c.uint.preencode(state, flags)
 
     if (m.localClusterId) c.string.preencode(state, m.localClusterId)
     if (m.title) c.string.preencode(state, m.title)
     if (m.subtitle) c.string.preencode(state, m.subtitle)
     if (m.claimCount) c.uint.preencode(state, m.claimCount)
     if (m.conflictCount) c.uint.preencode(state, m.conflictCount)
-    if (m.sources) encoding49_7.preencode(state, m.sources)
-    if (m.renditions) encoding49_8.preencode(state, m.renditions)
+    if (m.availability) encoding51_7.preencode(state, m.availability)
+    if (m.sources) encoding51_8.preencode(state, m.sources)
+    if (m.renditions) encoding51_9.preencode(state, m.renditions)
+    if (m.releaseYear) c.uint.preencode(state, m.releaseYear)
+    if (m.runtimeMinutes) c.uint.preencode(state, m.runtimeMinutes)
+    if (m.overview) c.string.preencode(state, m.overview)
+    if (m.genres) encoding51_13.preencode(state, m.genres)
+    if (m.posterBlobId) c.string.preencode(state, m.posterBlobId)
+    if (m.posterBlobsCoreKey) c.string.preencode(state, m.posterBlobsCoreKey)
+    if (m.posterMimeType) c.string.preencode(state, m.posterMimeType)
+    if (m.posterUrl) c.string.preencode(state, m.posterUrl)
   },
   encode(state, m) {
     const flags =
@@ -1974,8 +2121,17 @@ const encoding49 = {
       (m.subtitle ? 4 : 0) |
       (m.claimCount ? 8 : 0) |
       (m.conflictCount ? 16 : 0) |
-      (m.sources ? 32 : 0) |
-      (m.renditions ? 64 : 0)
+      (m.availability ? 32 : 0) |
+      (m.sources ? 64 : 0) |
+      (m.renditions ? 128 : 0) |
+      (m.releaseYear ? 256 : 0) |
+      (m.runtimeMinutes ? 512 : 0) |
+      (m.overview ? 1024 : 0) |
+      (m.genres ? 2048 : 0) |
+      (m.posterBlobId ? 4096 : 0) |
+      (m.posterBlobsCoreKey ? 8192 : 0) |
+      (m.posterMimeType ? 16384 : 0) |
+      (m.posterUrl ? 32768 : 0)
 
     c.string.encode(state, m.entityId)
     c.string.encode(state, m.entityKind)
@@ -1986,8 +2142,17 @@ const encoding49 = {
     if (m.subtitle) c.string.encode(state, m.subtitle)
     if (m.claimCount) c.uint.encode(state, m.claimCount)
     if (m.conflictCount) c.uint.encode(state, m.conflictCount)
-    if (m.sources) encoding49_7.encode(state, m.sources)
-    if (m.renditions) encoding49_8.encode(state, m.renditions)
+    if (m.availability) encoding51_7.encode(state, m.availability)
+    if (m.sources) encoding51_8.encode(state, m.sources)
+    if (m.renditions) encoding51_9.encode(state, m.renditions)
+    if (m.releaseYear) c.uint.encode(state, m.releaseYear)
+    if (m.runtimeMinutes) c.uint.encode(state, m.runtimeMinutes)
+    if (m.overview) c.string.encode(state, m.overview)
+    if (m.genres) encoding51_13.encode(state, m.genres)
+    if (m.posterBlobId) c.string.encode(state, m.posterBlobId)
+    if (m.posterBlobsCoreKey) c.string.encode(state, m.posterBlobsCoreKey)
+    if (m.posterMimeType) c.string.encode(state, m.posterMimeType)
+    if (m.posterUrl) c.string.encode(state, m.posterUrl)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -2002,23 +2167,32 @@ const encoding49 = {
       subtitle: (flags & 4) !== 0 ? c.string.decode(state) : null,
       claimCount: (flags & 8) !== 0 ? c.uint.decode(state) : 0,
       conflictCount: (flags & 16) !== 0 ? c.uint.decode(state) : 0,
-      sources: (flags & 32) !== 0 ? encoding49_7.decode(state) : null,
-      renditions: (flags & 64) !== 0 ? encoding49_8.decode(state) : null
+      availability: (flags & 32) !== 0 ? encoding51_7.decode(state) : null,
+      sources: (flags & 64) !== 0 ? encoding51_8.decode(state) : null,
+      renditions: (flags & 128) !== 0 ? encoding51_9.decode(state) : null,
+      releaseYear: (flags & 256) !== 0 ? c.uint.decode(state) : 0,
+      runtimeMinutes: (flags & 512) !== 0 ? c.uint.decode(state) : 0,
+      overview: (flags & 1024) !== 0 ? c.string.decode(state) : null,
+      genres: (flags & 2048) !== 0 ? encoding51_13.decode(state) : null,
+      posterBlobId: (flags & 4096) !== 0 ? c.string.decode(state) : null,
+      posterBlobsCoreKey: (flags & 8192) !== 0 ? c.string.decode(state) : null,
+      posterMimeType: (flags & 16384) !== 0 ? c.string.decode(state) : null,
+      posterUrl: (flags & 32768) !== 0 ? c.string.decode(state) : null
     }
   }
 }
 
 // @peartube/get-media-catalog-response.items
-const encoding50_3 = c.array(c.frame(encoding49))
+const encoding52_3 = c.array(c.frame(encoding51))
 
 // @peartube/get-media-catalog-response
-const encoding50 = {
+const encoding52 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
 
     if (m.errorCode) c.string.preencode(state, m.errorCode)
     if (m.error) c.string.preencode(state, m.error)
-    encoding50_3.preencode(state, m.items)
+    encoding52_3.preencode(state, m.items)
     if (m.nextCursor) c.string.preencode(state, m.nextCursor)
   },
   encode(state, m) {
@@ -2029,7 +2203,7 @@ const encoding50 = {
 
     if (m.errorCode) c.string.encode(state, m.errorCode)
     if (m.error) c.string.encode(state, m.error)
-    encoding50_3.encode(state, m.items)
+    encoding52_3.encode(state, m.items)
     if (m.nextCursor) c.string.encode(state, m.nextCursor)
   },
   decode(state) {
@@ -2039,14 +2213,14 @@ const encoding50 = {
       success: (flags & 1) !== 0,
       errorCode: (flags & 2) !== 0 ? c.string.decode(state) : null,
       error: (flags & 4) !== 0 ? c.string.decode(state) : null,
-      items: encoding50_3.decode(state),
+      items: encoding52_3.decode(state),
       nextCursor: (flags & 8) !== 0 ? c.string.decode(state) : null
     }
   }
 }
 
 // @peartube/get-media-entity-request
-const encoding51 = {
+const encoding53 = {
   preencode(state, m) {
     c.string.preencode(state, m.entityId)
     state.end++ // max flag is 2 so always one byte
@@ -2070,65 +2244,13 @@ const encoding51 = {
 }
 
 // @peartube/get-media-entity-response.entity
-const encoding52_3 = c.frame(encoding49)
+const encoding54_3 = c.frame(encoding51)
 // @peartube/get-media-entity-response.claims
-const encoding52_4 = c.array(c.frame(encoding45))
+const encoding54_4 = c.array(c.frame(encoding47))
 // @peartube/get-media-entity-response.conflicts
-const encoding52_5 = c.array(c.frame(encoding46))
+const encoding54_5 = c.array(c.frame(encoding48))
 
 // @peartube/get-media-entity-response
-const encoding52 = {
-  preencode(state, m) {
-    state.end++ // max flag is 32 so always one byte
-
-    if (m.errorCode) c.string.preencode(state, m.errorCode)
-    if (m.error) c.string.preencode(state, m.error)
-    if (m.entity) encoding52_3.preencode(state, m.entity)
-    if (m.claims) encoding52_4.preencode(state, m.claims)
-    if (m.conflicts) encoding52_5.preencode(state, m.conflicts)
-  },
-  encode(state, m) {
-    const flags =
-      (m.success ? 1 : 0) |
-      (m.errorCode ? 2 : 0) |
-      (m.error ? 4 : 0) |
-      (m.entity ? 8 : 0) |
-      (m.claims ? 16 : 0) |
-      (m.conflicts ? 32 : 0)
-
-    c.uint.encode(state, flags)
-
-    if (m.errorCode) c.string.encode(state, m.errorCode)
-    if (m.error) c.string.encode(state, m.error)
-    if (m.entity) encoding52_3.encode(state, m.entity)
-    if (m.claims) encoding52_4.encode(state, m.claims)
-    if (m.conflicts) encoding52_5.encode(state, m.conflicts)
-  },
-  decode(state) {
-    const flags = c.uint.decode(state)
-
-    return {
-      success: (flags & 1) !== 0,
-      errorCode: (flags & 2) !== 0 ? c.string.decode(state) : null,
-      error: (flags & 4) !== 0 ? c.string.decode(state) : null,
-      entity: (flags & 8) !== 0 ? encoding52_3.decode(state) : null,
-      claims: (flags & 16) !== 0 ? encoding52_4.decode(state) : null,
-      conflicts: (flags & 32) !== 0 ? encoding52_5.decode(state) : null
-    }
-  }
-}
-
-// @peartube/get-media-collection-request
-const encoding53 = encoding51
-
-// @peartube/get-media-collection-response.entity
-const encoding54_3 = encoding52_3
-// @peartube/get-media-collection-response.claims
-const encoding54_4 = encoding52_4
-// @peartube/get-media-collection-response.conflicts
-const encoding54_5 = encoding52_5
-
-// @peartube/get-media-collection-response
 const encoding54 = {
   preencode(state, m) {
     state.end++ // max flag is 32 so always one byte
@@ -2170,17 +2292,17 @@ const encoding54 = {
   }
 }
 
-// @peartube/get-media-agent-request
-const encoding55 = encoding51
+// @peartube/get-media-collection-request
+const encoding55 = encoding53
 
-// @peartube/get-media-agent-response.entity
-const encoding56_3 = c.frame(encoding47)
-// @peartube/get-media-agent-response.claims
-const encoding56_4 = encoding52_4
-// @peartube/get-media-agent-response.conflicts
-const encoding56_5 = encoding52_5
+// @peartube/get-media-collection-response.entity
+const encoding56_3 = encoding54_3
+// @peartube/get-media-collection-response.claims
+const encoding56_4 = encoding54_4
+// @peartube/get-media-collection-response.conflicts
+const encoding56_5 = encoding54_5
 
-// @peartube/get-media-agent-response
+// @peartube/get-media-collection-response
 const encoding56 = {
   preencode(state, m) {
     state.end++ // max flag is 32 so always one byte
@@ -2222,8 +2344,60 @@ const encoding56 = {
   }
 }
 
+// @peartube/get-media-agent-request
+const encoding57 = encoding53
+
+// @peartube/get-media-agent-response.entity
+const encoding58_3 = c.frame(encoding49)
+// @peartube/get-media-agent-response.claims
+const encoding58_4 = encoding54_4
+// @peartube/get-media-agent-response.conflicts
+const encoding58_5 = encoding54_5
+
+// @peartube/get-media-agent-response
+const encoding58 = {
+  preencode(state, m) {
+    state.end++ // max flag is 32 so always one byte
+
+    if (m.errorCode) c.string.preencode(state, m.errorCode)
+    if (m.error) c.string.preencode(state, m.error)
+    if (m.entity) encoding58_3.preencode(state, m.entity)
+    if (m.claims) encoding58_4.preencode(state, m.claims)
+    if (m.conflicts) encoding58_5.preencode(state, m.conflicts)
+  },
+  encode(state, m) {
+    const flags =
+      (m.success ? 1 : 0) |
+      (m.errorCode ? 2 : 0) |
+      (m.error ? 4 : 0) |
+      (m.entity ? 8 : 0) |
+      (m.claims ? 16 : 0) |
+      (m.conflicts ? 32 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.errorCode) c.string.encode(state, m.errorCode)
+    if (m.error) c.string.encode(state, m.error)
+    if (m.entity) encoding58_3.encode(state, m.entity)
+    if (m.claims) encoding58_4.encode(state, m.claims)
+    if (m.conflicts) encoding58_5.encode(state, m.conflicts)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      success: (flags & 1) !== 0,
+      errorCode: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      error: (flags & 4) !== 0 ? c.string.decode(state) : null,
+      entity: (flags & 8) !== 0 ? encoding58_3.decode(state) : null,
+      claims: (flags & 16) !== 0 ? encoding58_4.decode(state) : null,
+      conflicts: (flags & 32) !== 0 ? encoding58_5.decode(state) : null
+    }
+  }
+}
+
 // @peartube/get-media-collection-items-request
-const encoding57 = {
+const encoding59 = {
   preencode(state, m) {
     c.string.preencode(state, m.collectionEntityId)
     state.end++ // max flag is 4 so always one byte
@@ -2254,81 +2428,9 @@ const encoding57 = {
 }
 
 // @peartube/get-media-collection-items-response.items
-const encoding58_3 = encoding50_3
+const encoding60_3 = encoding52_3
 
 // @peartube/get-media-collection-items-response
-const encoding58 = {
-  preencode(state, m) {
-    state.end++ // max flag is 16 so always one byte
-
-    if (m.errorCode) c.string.preencode(state, m.errorCode)
-    if (m.error) c.string.preencode(state, m.error)
-    if (m.items) encoding58_3.preencode(state, m.items)
-    if (m.nextCursor) c.string.preencode(state, m.nextCursor)
-  },
-  encode(state, m) {
-    const flags =
-      (m.success ? 1 : 0) |
-      (m.errorCode ? 2 : 0) |
-      (m.error ? 4 : 0) |
-      (m.items ? 8 : 0) |
-      (m.nextCursor ? 16 : 0)
-
-    c.uint.encode(state, flags)
-
-    if (m.errorCode) c.string.encode(state, m.errorCode)
-    if (m.error) c.string.encode(state, m.error)
-    if (m.items) encoding58_3.encode(state, m.items)
-    if (m.nextCursor) c.string.encode(state, m.nextCursor)
-  },
-  decode(state) {
-    const flags = c.uint.decode(state)
-
-    return {
-      success: (flags & 1) !== 0,
-      errorCode: (flags & 2) !== 0 ? c.string.decode(state) : null,
-      error: (flags & 4) !== 0 ? c.string.decode(state) : null,
-      items: (flags & 8) !== 0 ? encoding58_3.decode(state) : null,
-      nextCursor: (flags & 16) !== 0 ? c.string.decode(state) : null
-    }
-  }
-}
-
-// @peartube/get-agent-contributions-request
-const encoding59 = {
-  preencode(state, m) {
-    c.string.preencode(state, m.agentEntityId)
-    state.end++ // max flag is 4 so always one byte
-
-    if (m.cursor) c.string.preencode(state, m.cursor)
-    if (m.limit) c.uint.preencode(state, m.limit)
-  },
-  encode(state, m) {
-    const flags = (m.cursor ? 1 : 0) | (m.limit ? 2 : 0) | (m.limitProvided ? 4 : 0)
-
-    c.string.encode(state, m.agentEntityId)
-    c.uint.encode(state, flags)
-
-    if (m.cursor) c.string.encode(state, m.cursor)
-    if (m.limit) c.uint.encode(state, m.limit)
-  },
-  decode(state) {
-    const r0 = c.string.decode(state)
-    const flags = c.uint.decode(state)
-
-    return {
-      agentEntityId: r0,
-      cursor: (flags & 1) !== 0 ? c.string.decode(state) : null,
-      limit: (flags & 2) !== 0 ? c.uint.decode(state) : 0,
-      limitProvided: (flags & 4) !== 0
-    }
-  }
-}
-
-// @peartube/get-agent-contributions-response.items
-const encoding60_3 = c.array(c.frame(encoding48))
-
-// @peartube/get-agent-contributions-response
 const encoding60 = {
   preencode(state, m) {
     state.end++ // max flag is 16 so always one byte
@@ -2366,10 +2468,10 @@ const encoding60 = {
   }
 }
 
-// @peartube/get-publication-sources-request
+// @peartube/get-agent-contributions-request
 const encoding61 = {
   preencode(state, m) {
-    c.string.preencode(state, m.entityId)
+    c.string.preencode(state, m.agentEntityId)
     state.end++ // max flag is 4 so always one byte
 
     if (m.cursor) c.string.preencode(state, m.cursor)
@@ -2378,7 +2480,7 @@ const encoding61 = {
   encode(state, m) {
     const flags = (m.cursor ? 1 : 0) | (m.limit ? 2 : 0) | (m.limitProvided ? 4 : 0)
 
-    c.string.encode(state, m.entityId)
+    c.string.encode(state, m.agentEntityId)
     c.uint.encode(state, flags)
 
     if (m.cursor) c.string.encode(state, m.cursor)
@@ -2389,7 +2491,7 @@ const encoding61 = {
     const flags = c.uint.decode(state)
 
     return {
-      entityId: r0,
+      agentEntityId: r0,
       cursor: (flags & 1) !== 0 ? c.string.decode(state) : null,
       limit: (flags & 2) !== 0 ? c.uint.decode(state) : 0,
       limitProvided: (flags & 4) !== 0
@@ -2397,10 +2499,10 @@ const encoding61 = {
   }
 }
 
-// @peartube/get-publication-sources-response.items
-const encoding62_3 = encoding49_7
+// @peartube/get-agent-contributions-response.items
+const encoding62_3 = c.array(c.frame(encoding50))
 
-// @peartube/get-publication-sources-response
+// @peartube/get-agent-contributions-response
 const encoding62 = {
   preencode(state, m) {
     state.end++ // max flag is 16 so always one byte
@@ -2438,8 +2540,271 @@ const encoding62 = {
   }
 }
 
-// @peartube/get-claim-provenance-request
+// @peartube/get-publication-sources-request
 const encoding63 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.entityId)
+    state.end++ // max flag is 4 so always one byte
+
+    if (m.cursor) c.string.preencode(state, m.cursor)
+    if (m.limit) c.uint.preencode(state, m.limit)
+  },
+  encode(state, m) {
+    const flags = (m.cursor ? 1 : 0) | (m.limit ? 2 : 0) | (m.limitProvided ? 4 : 0)
+
+    c.string.encode(state, m.entityId)
+    c.uint.encode(state, flags)
+
+    if (m.cursor) c.string.encode(state, m.cursor)
+    if (m.limit) c.uint.encode(state, m.limit)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      entityId: r0,
+      cursor: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      limit: (flags & 2) !== 0 ? c.uint.decode(state) : 0,
+      limitProvided: (flags & 4) !== 0
+    }
+  }
+}
+
+// @peartube/get-publication-sources-response.items
+const encoding64_3 = encoding51_8
+
+// @peartube/get-publication-sources-response
+const encoding64 = {
+  preencode(state, m) {
+    state.end++ // max flag is 16 so always one byte
+
+    if (m.errorCode) c.string.preencode(state, m.errorCode)
+    if (m.error) c.string.preencode(state, m.error)
+    if (m.items) encoding64_3.preencode(state, m.items)
+    if (m.nextCursor) c.string.preencode(state, m.nextCursor)
+  },
+  encode(state, m) {
+    const flags =
+      (m.success ? 1 : 0) |
+      (m.errorCode ? 2 : 0) |
+      (m.error ? 4 : 0) |
+      (m.items ? 8 : 0) |
+      (m.nextCursor ? 16 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.errorCode) c.string.encode(state, m.errorCode)
+    if (m.error) c.string.encode(state, m.error)
+    if (m.items) encoding64_3.encode(state, m.items)
+    if (m.nextCursor) c.string.encode(state, m.nextCursor)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      success: (flags & 1) !== 0,
+      errorCode: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      error: (flags & 4) !== 0 ? c.string.decode(state) : null,
+      items: (flags & 8) !== 0 ? encoding64_3.decode(state) : null,
+      nextCursor: (flags & 16) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/get-entity-artwork-request
+const encoding65 = {
+  preencode(state, m) {
+    state.end++ // max flag is 2 so always one byte
+
+    if (m.entityId) c.string.preencode(state, m.entityId)
+    if (m.publicationId) c.string.preencode(state, m.publicationId)
+  },
+  encode(state, m) {
+    const flags = (m.entityId ? 1 : 0) | (m.publicationId ? 2 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.entityId) c.string.encode(state, m.entityId)
+    if (m.publicationId) c.string.encode(state, m.publicationId)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      entityId: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      publicationId: (flags & 2) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/get-entity-artwork-response
+const encoding66 = {
+  preencode(state, m) {
+    state.end++ // max flag is 16 so always one byte
+
+    if (m.errorCode) c.string.preencode(state, m.errorCode)
+    if (m.error) c.string.preencode(state, m.error)
+    if (m.url) c.string.preencode(state, m.url)
+  },
+  encode(state, m) {
+    const flags =
+      (m.success ? 1 : 0) |
+      (m.errorCode ? 2 : 0) |
+      (m.error ? 4 : 0) |
+      (m.exists ? 8 : 0) |
+      (m.url ? 16 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.errorCode) c.string.encode(state, m.errorCode)
+    if (m.error) c.string.encode(state, m.error)
+    if (m.url) c.string.encode(state, m.url)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      success: (flags & 1) !== 0,
+      errorCode: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      error: (flags & 4) !== 0 ? c.string.decode(state) : null,
+      exists: (flags & 8) !== 0,
+      url: (flags & 16) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/media-playback-attempt
+const encoding67 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.publicationId)
+    state.end++ // max flag is 1 so always one byte
+
+    if (m.errorCode) c.string.preencode(state, m.errorCode)
+  },
+  encode(state, m) {
+    const flags = m.errorCode ? 1 : 0
+
+    c.string.encode(state, m.publicationId)
+    c.uint.encode(state, flags)
+
+    if (m.errorCode) c.string.encode(state, m.errorCode)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      publicationId: r0,
+      errorCode: (flags & 1) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/prepare-media-playback-request
+const encoding68 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.entityId)
+    state.end++ // max flag is 1 so always one byte
+
+    if (m.publicationId) c.string.preencode(state, m.publicationId)
+  },
+  encode(state, m) {
+    const flags = m.publicationId ? 1 : 0
+
+    c.string.encode(state, m.entityId)
+    c.uint.encode(state, flags)
+
+    if (m.publicationId) c.string.encode(state, m.publicationId)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      entityId: r0,
+      publicationId: (flags & 1) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/prepare-media-playback-response.attempts
+const encoding69_8 = c.array(c.frame(encoding67))
+// @peartube/prepare-media-playback-response.sources
+const encoding69_9 = encoding51_8
+
+// @peartube/prepare-media-playback-response
+const encoding69 = {
+  preencode(state, m) {
+    const flags =
+      (m.success ? 1 : 0) |
+      (m.errorCode ? 2 : 0) |
+      (m.error ? 4 : 0) |
+      (m.retry ? 8 : 0) |
+      (m.publicationId ? 16 : 0) |
+      (m.renditionId ? 32 : 0) |
+      (m.coreKey ? 64 : 0) |
+      (m.url ? 128 : 0) |
+      (m.attempts ? 256 : 0) |
+      (m.sources ? 512 : 0)
+
+    c.uint.preencode(state, flags)
+
+    if (m.errorCode) c.string.preencode(state, m.errorCode)
+    if (m.error) c.string.preencode(state, m.error)
+    if (m.retry) c.string.preencode(state, m.retry)
+    if (m.publicationId) c.string.preencode(state, m.publicationId)
+    if (m.renditionId) c.string.preencode(state, m.renditionId)
+    if (m.coreKey) c.string.preencode(state, m.coreKey)
+    if (m.url) c.string.preencode(state, m.url)
+    if (m.attempts) encoding69_8.preencode(state, m.attempts)
+    if (m.sources) encoding69_9.preencode(state, m.sources)
+  },
+  encode(state, m) {
+    const flags =
+      (m.success ? 1 : 0) |
+      (m.errorCode ? 2 : 0) |
+      (m.error ? 4 : 0) |
+      (m.retry ? 8 : 0) |
+      (m.publicationId ? 16 : 0) |
+      (m.renditionId ? 32 : 0) |
+      (m.coreKey ? 64 : 0) |
+      (m.url ? 128 : 0) |
+      (m.attempts ? 256 : 0) |
+      (m.sources ? 512 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.errorCode) c.string.encode(state, m.errorCode)
+    if (m.error) c.string.encode(state, m.error)
+    if (m.retry) c.string.encode(state, m.retry)
+    if (m.publicationId) c.string.encode(state, m.publicationId)
+    if (m.renditionId) c.string.encode(state, m.renditionId)
+    if (m.coreKey) c.string.encode(state, m.coreKey)
+    if (m.url) c.string.encode(state, m.url)
+    if (m.attempts) encoding69_8.encode(state, m.attempts)
+    if (m.sources) encoding69_9.encode(state, m.sources)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      success: (flags & 1) !== 0,
+      errorCode: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      error: (flags & 4) !== 0 ? c.string.decode(state) : null,
+      retry: (flags & 8) !== 0 ? c.string.decode(state) : null,
+      publicationId: (flags & 16) !== 0 ? c.string.decode(state) : null,
+      renditionId: (flags & 32) !== 0 ? c.string.decode(state) : null,
+      coreKey: (flags & 64) !== 0 ? c.string.decode(state) : null,
+      url: (flags & 128) !== 0 ? c.string.decode(state) : null,
+      attempts: (flags & 256) !== 0 ? encoding69_8.decode(state) : null,
+      sources: (flags & 512) !== 0 ? encoding69_9.decode(state) : null
+    }
+  }
+}
+
+// @peartube/get-claim-provenance-request
+const encoding70 = {
   preencode(state, m) {
     c.string.preencode(state, m.claimId)
   },
@@ -2456,16 +2821,16 @@ const encoding63 = {
 }
 
 // @peartube/get-claim-provenance-response.claim
-const encoding64_3 = c.frame(encoding45)
+const encoding71_3 = c.frame(encoding47)
 
 // @peartube/get-claim-provenance-response
-const encoding64 = {
+const encoding71 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
 
     if (m.errorCode) c.string.preencode(state, m.errorCode)
     if (m.error) c.string.preencode(state, m.error)
-    if (m.claim) encoding64_3.preencode(state, m.claim)
+    if (m.claim) encoding71_3.preencode(state, m.claim)
   },
   encode(state, m) {
     const flags =
@@ -2475,7 +2840,7 @@ const encoding64 = {
 
     if (m.errorCode) c.string.encode(state, m.errorCode)
     if (m.error) c.string.encode(state, m.error)
-    if (m.claim) encoding64_3.encode(state, m.claim)
+    if (m.claim) encoding71_3.encode(state, m.claim)
   },
   decode(state) {
     const flags = c.uint.decode(state)
@@ -2484,13 +2849,13 @@ const encoding64 = {
       success: (flags & 1) !== 0,
       errorCode: (flags & 2) !== 0 ? c.string.decode(state) : null,
       error: (flags & 4) !== 0 ? c.string.decode(state) : null,
-      claim: (flags & 8) !== 0 ? encoding64_3.decode(state) : null
+      claim: (flags & 8) !== 0 ? encoding71_3.decode(state) : null
     }
   }
 }
 
 // @peartube/set-source-preference-request
-const encoding65 = {
+const encoding72 = {
   preencode(state, m) {
     c.string.preencode(state, m.entityId)
     c.string.preencode(state, m.publicationId)
@@ -2517,7 +2882,7 @@ const encoding65 = {
 }
 
 // @peartube/set-source-preference-response
-const encoding66 = {
+const encoding73 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
@@ -2544,7 +2909,7 @@ const encoding66 = {
 }
 
 // @peartube/video-immutable-publication
-const encoding67 = {
+const encoding74 = {
   preencode(state, m) {
     c.string.preencode(state, m.publicationId)
     state.end++ // max flag is 4 so always one byte
@@ -2577,10 +2942,10 @@ const encoding67 = {
 }
 
 // @peartube/video.immutablePublication
-const encoding68_24 = c.frame(encoding67)
+const encoding75_24 = c.frame(encoding74)
 
 // @peartube/video
-const encoding68 = {
+const encoding75 = {
   preencode(state, m) {
     const flags =
       (m.description ? 1 : 0) |
@@ -2631,7 +2996,7 @@ const encoding68 = {
     if (m.byteAvailability) c.string.preencode(state, m.byteAvailability)
     if (m.contiguousBlocks) c.uint.preencode(state, m.contiguousBlocks)
     if (m.publicationId) c.string.preencode(state, m.publicationId)
-    if (m.immutablePublication) encoding68_24.preencode(state, m.immutablePublication)
+    if (m.immutablePublication) encoding75_24.preencode(state, m.immutablePublication)
   },
   encode(state, m) {
     const flags =
@@ -2683,7 +3048,7 @@ const encoding68 = {
     if (m.byteAvailability) c.string.encode(state, m.byteAvailability)
     if (m.contiguousBlocks) c.uint.encode(state, m.contiguousBlocks)
     if (m.publicationId) c.string.encode(state, m.publicationId)
-    if (m.immutablePublication) encoding68_24.encode(state, m.immutablePublication)
+    if (m.immutablePublication) encoding75_24.encode(state, m.immutablePublication)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -2715,13 +3080,13 @@ const encoding68 = {
       contiguousBlocks: (flags & 524288) !== 0 ? c.uint.decode(state) : 0,
       readyForPlayback: (flags & 1048576) !== 0,
       publicationId: (flags & 2097152) !== 0 ? c.string.decode(state) : null,
-      immutablePublication: (flags & 4194304) !== 0 ? encoding68_24.decode(state) : null
+      immutablePublication: (flags & 4194304) !== 0 ? encoding75_24.decode(state) : null
     }
   }
 }
 
 // @peartube/list-videos-request
-const encoding69 = {
+const encoding76 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
 
@@ -2754,33 +3119,33 @@ const encoding69 = {
 }
 
 // @peartube/list-videos-response.videos
-const encoding70_0 = c.array(c.frame(encoding68))
+const encoding77_0 = c.array(c.frame(encoding75))
 
 // @peartube/list-videos-response
-const encoding70 = {
+const encoding77 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
 
-    if (m.videos) encoding70_0.preencode(state, m.videos)
+    if (m.videos) encoding77_0.preencode(state, m.videos)
   },
   encode(state, m) {
     const flags = m.videos ? 1 : 0
 
     c.uint.encode(state, flags)
 
-    if (m.videos) encoding70_0.encode(state, m.videos)
+    if (m.videos) encoding77_0.encode(state, m.videos)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
-      videos: (flags & 1) !== 0 ? encoding70_0.decode(state) : null
+      videos: (flags & 1) !== 0 ? encoding77_0.decode(state) : null
     }
   }
 }
 
 // @peartube/get-video-url-request
-const encoding71 = {
+const encoding78 = {
   preencode(state, m) {
     c.string.preencode(state, m.channelKey)
     c.string.preencode(state, m.videoId)
@@ -2824,7 +3189,7 @@ const encoding71 = {
 }
 
 // @peartube/get-video-url-response
-const encoding72 = {
+const encoding79 = {
   preencode(state, m) {
     c.string.preencode(state, m.url)
   },
@@ -2841,10 +3206,10 @@ const encoding72 = {
 }
 
 // @peartube/prepare-playback-request
-const encoding73 = encoding71
+const encoding80 = encoding78
 
 // @peartube/selected-blob-warmup
-const encoding74 = {
+const encoding81 = {
   preencode(state, m) {
     const flags =
       (m.blobsCoreKey ? 1 : 0) |
@@ -2930,7 +3295,7 @@ const encoding74 = {
 }
 
 // @peartube/peer-warmup
-const encoding75 = {
+const encoding82 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
 
@@ -2959,19 +3324,19 @@ const encoding75 = {
 }
 
 // @peartube/prepare-playback-response.selectedBlobWarmup
-const encoding76_4 = c.frame(encoding74)
+const encoding83_4 = c.frame(encoding81)
 // @peartube/prepare-playback-response.peerWarmup
-const encoding76_5 = c.frame(encoding75)
+const encoding83_5 = c.frame(encoding82)
 
 // @peartube/prepare-playback-response
-const encoding76 = {
+const encoding83 = {
   preencode(state, m) {
     state.end++ // max flag is 32 so always one byte
 
     if (m.url) c.string.preencode(state, m.url)
-    if (m.stats) encoding76_1.preencode(state, m.stats)
-    if (m.selectedBlobWarmup) encoding76_4.preencode(state, m.selectedBlobWarmup)
-    if (m.peerWarmup) encoding76_5.preencode(state, m.peerWarmup)
+    if (m.stats) encoding83_1.preencode(state, m.stats)
+    if (m.selectedBlobWarmup) encoding83_4.preencode(state, m.selectedBlobWarmup)
+    if (m.peerWarmup) encoding83_5.preencode(state, m.peerWarmup)
   },
   encode(state, m) {
     const flags =
@@ -2985,31 +3350,31 @@ const encoding76 = {
     c.uint.encode(state, flags)
 
     if (m.url) c.string.encode(state, m.url)
-    if (m.stats) encoding76_1.encode(state, m.stats)
-    if (m.selectedBlobWarmup) encoding76_4.encode(state, m.selectedBlobWarmup)
-    if (m.peerWarmup) encoding76_5.encode(state, m.peerWarmup)
+    if (m.stats) encoding83_1.encode(state, m.stats)
+    if (m.selectedBlobWarmup) encoding83_4.encode(state, m.selectedBlobWarmup)
+    if (m.peerWarmup) encoding83_5.encode(state, m.peerWarmup)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
       url: (flags & 1) !== 0 ? c.string.decode(state) : null,
-      stats: (flags & 2) !== 0 ? encoding76_1.decode(state) : null,
+      stats: (flags & 2) !== 0 ? encoding83_1.decode(state) : null,
       warmupStarted: (flags & 4) !== 0,
       peerWarmupStarted: (flags & 8) !== 0,
-      selectedBlobWarmup: (flags & 16) !== 0 ? encoding76_4.decode(state) : null,
-      peerWarmup: (flags & 32) !== 0 ? encoding76_5.decode(state) : null
+      selectedBlobWarmup: (flags & 16) !== 0 ? encoding83_4.decode(state) : null,
+      peerWarmup: (flags & 32) !== 0 ? encoding83_5.decode(state) : null
     }
   }
 }
 
 // @peartube/web-prepare-playback-response.selectedBlobWarmup
-const encoding77_8 = encoding76_4
+const encoding84_8 = encoding83_4
 // @peartube/web-prepare-playback-response.peerWarmup
-const encoding77_9 = encoding76_5
+const encoding84_9 = encoding83_5
 
 // @peartube/web-prepare-playback-response
-const encoding77 = {
+const encoding84 = {
   preencode(state, m) {
     const flags =
       (m.transcoded ? 1 : 0) |
@@ -3028,9 +3393,9 @@ const encoding77 = {
     if (m.audioCodec) c.string.preencode(state, m.audioCodec)
     if (m.videoCodec) c.string.preencode(state, m.videoCodec)
     if (m.transcodeError) c.string.preencode(state, m.transcodeError)
-    if (m.stats) encoding77_5.preencode(state, m.stats)
-    if (m.selectedBlobWarmup) encoding77_8.preencode(state, m.selectedBlobWarmup)
-    if (m.peerWarmup) encoding77_9.preencode(state, m.peerWarmup)
+    if (m.stats) encoding84_5.preencode(state, m.stats)
+    if (m.selectedBlobWarmup) encoding84_8.preencode(state, m.selectedBlobWarmup)
+    if (m.peerWarmup) encoding84_9.preencode(state, m.peerWarmup)
   },
   encode(state, m) {
     const flags =
@@ -3050,9 +3415,9 @@ const encoding77 = {
     if (m.audioCodec) c.string.encode(state, m.audioCodec)
     if (m.videoCodec) c.string.encode(state, m.videoCodec)
     if (m.transcodeError) c.string.encode(state, m.transcodeError)
-    if (m.stats) encoding77_5.encode(state, m.stats)
-    if (m.selectedBlobWarmup) encoding77_8.encode(state, m.selectedBlobWarmup)
-    if (m.peerWarmup) encoding77_9.encode(state, m.peerWarmup)
+    if (m.stats) encoding84_5.encode(state, m.stats)
+    if (m.selectedBlobWarmup) encoding84_8.encode(state, m.selectedBlobWarmup)
+    if (m.peerWarmup) encoding84_9.encode(state, m.peerWarmup)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -3064,17 +3429,17 @@ const encoding77 = {
       audioCodec: (flags & 2) !== 0 ? c.string.decode(state) : null,
       videoCodec: (flags & 4) !== 0 ? c.string.decode(state) : null,
       transcodeError: (flags & 8) !== 0 ? c.string.decode(state) : null,
-      stats: (flags & 16) !== 0 ? encoding77_5.decode(state) : null,
+      stats: (flags & 16) !== 0 ? encoding84_5.decode(state) : null,
       warmupStarted: (flags & 32) !== 0,
       peerWarmupStarted: (flags & 64) !== 0,
-      selectedBlobWarmup: (flags & 128) !== 0 ? encoding77_8.decode(state) : null,
-      peerWarmup: (flags & 256) !== 0 ? encoding77_9.decode(state) : null
+      selectedBlobWarmup: (flags & 128) !== 0 ? encoding84_8.decode(state) : null,
+      peerWarmup: (flags & 256) !== 0 ? encoding84_9.decode(state) : null
     }
   }
 }
 
 // @peartube/get-video-data-request
-const encoding78 = {
+const encoding85 = {
   preencode(state, m) {
     c.string.preencode(state, m.channelKey)
     c.string.preencode(state, m.videoId)
@@ -3105,18 +3470,18 @@ const encoding78 = {
 }
 
 // @peartube/get-video-data-response.video
-const encoding79_0 = c.frame(encoding68)
+const encoding86_0 = c.frame(encoding75)
 
 // @peartube/get-video-data-response
-const encoding79 = {
+const encoding86 = {
   preencode(state, m) {
-    encoding79_0.preencode(state, m.video)
+    encoding86_0.preencode(state, m.video)
   },
   encode(state, m) {
-    encoding79_0.encode(state, m.video)
+    encoding86_0.encode(state, m.video)
   },
   decode(state) {
-    const r0 = encoding79_0.decode(state)
+    const r0 = encoding86_0.decode(state)
 
     return {
       video: r0
@@ -3125,18 +3490,49 @@ const encoding79 = {
 }
 
 // @peartube/upload-video-request
-const encoding80 = {
+const encoding87 = {
   preencode(state, m) {
+    const flags =
+      (m.description ? 1 : 0) |
+      (m.category ? 2 : 0) |
+      (m.skipThumbnailGeneration ? 4 : 0) |
+      (m.contentKind ? 8 : 0) |
+      (m.seriesId ? 16 : 0) |
+      (m.seriesTitle ? 32 : 0) |
+      (m.mediaProvider ? 64 : 0) |
+      (m.mediaId ? 128 : 0) |
+      (m.seasonNumber ? 256 : 0) |
+      (m.episodeNumber ? 512 : 0) |
+      (m.expectedEpisodeCount ? 1024 : 0)
+
     c.string.preencode(state, m.filePath)
     c.string.preencode(state, m.title)
-    state.end++ // max flag is 4 so always one byte
+    c.uint.preencode(state, flags)
 
     if (m.description) c.string.preencode(state, m.description)
     if (m.category) c.string.preencode(state, m.category)
+    if (m.contentKind) c.string.preencode(state, m.contentKind)
+    if (m.seriesId) c.string.preencode(state, m.seriesId)
+    if (m.seriesTitle) c.string.preencode(state, m.seriesTitle)
+    if (m.mediaProvider) c.string.preencode(state, m.mediaProvider)
+    if (m.mediaId) c.string.preencode(state, m.mediaId)
+    if (m.seasonNumber) c.uint.preencode(state, m.seasonNumber)
+    if (m.episodeNumber) c.uint.preencode(state, m.episodeNumber)
+    if (m.expectedEpisodeCount) c.uint.preencode(state, m.expectedEpisodeCount)
   },
   encode(state, m) {
     const flags =
-      (m.description ? 1 : 0) | (m.category ? 2 : 0) | (m.skipThumbnailGeneration ? 4 : 0)
+      (m.description ? 1 : 0) |
+      (m.category ? 2 : 0) |
+      (m.skipThumbnailGeneration ? 4 : 0) |
+      (m.contentKind ? 8 : 0) |
+      (m.seriesId ? 16 : 0) |
+      (m.seriesTitle ? 32 : 0) |
+      (m.mediaProvider ? 64 : 0) |
+      (m.mediaId ? 128 : 0) |
+      (m.seasonNumber ? 256 : 0) |
+      (m.episodeNumber ? 512 : 0) |
+      (m.expectedEpisodeCount ? 1024 : 0)
 
     c.string.encode(state, m.filePath)
     c.string.encode(state, m.title)
@@ -3144,6 +3540,14 @@ const encoding80 = {
 
     if (m.description) c.string.encode(state, m.description)
     if (m.category) c.string.encode(state, m.category)
+    if (m.contentKind) c.string.encode(state, m.contentKind)
+    if (m.seriesId) c.string.encode(state, m.seriesId)
+    if (m.seriesTitle) c.string.encode(state, m.seriesTitle)
+    if (m.mediaProvider) c.string.encode(state, m.mediaProvider)
+    if (m.mediaId) c.string.encode(state, m.mediaId)
+    if (m.seasonNumber) c.uint.encode(state, m.seasonNumber)
+    if (m.episodeNumber) c.uint.encode(state, m.episodeNumber)
+    if (m.expectedEpisodeCount) c.uint.encode(state, m.expectedEpisodeCount)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -3155,24 +3559,32 @@ const encoding80 = {
       title: r1,
       description: (flags & 1) !== 0 ? c.string.decode(state) : null,
       category: (flags & 2) !== 0 ? c.string.decode(state) : null,
-      skipThumbnailGeneration: (flags & 4) !== 0
+      skipThumbnailGeneration: (flags & 4) !== 0,
+      contentKind: (flags & 8) !== 0 ? c.string.decode(state) : null,
+      seriesId: (flags & 16) !== 0 ? c.string.decode(state) : null,
+      seriesTitle: (flags & 32) !== 0 ? c.string.decode(state) : null,
+      mediaProvider: (flags & 64) !== 0 ? c.string.decode(state) : null,
+      mediaId: (flags & 128) !== 0 ? c.string.decode(state) : null,
+      seasonNumber: (flags & 256) !== 0 ? c.uint.decode(state) : 0,
+      episodeNumber: (flags & 512) !== 0 ? c.uint.decode(state) : 0,
+      expectedEpisodeCount: (flags & 1024) !== 0 ? c.uint.decode(state) : 0
     }
   }
 }
 
 // @peartube/upload-video-response.video
-const encoding81_0 = encoding79_0
+const encoding88_0 = encoding86_0
 
 // @peartube/upload-video-response
-const encoding81 = {
+const encoding88 = {
   preencode(state, m) {
-    encoding81_0.preencode(state, m.video)
+    encoding88_0.preencode(state, m.video)
   },
   encode(state, m) {
-    encoding81_0.encode(state, m.video)
+    encoding88_0.encode(state, m.video)
   },
   decode(state) {
-    const r0 = encoding81_0.decode(state)
+    const r0 = encoding88_0.decode(state)
 
     return {
       video: r0
@@ -3181,7 +3593,7 @@ const encoding81 = {
 }
 
 // @peartube/download-video-request
-const encoding82 = {
+const encoding89 = {
   preencode(state, m) {
     c.string.preencode(state, m.channelKey)
     c.string.preencode(state, m.videoId)
@@ -3216,7 +3628,7 @@ const encoding82 = {
 }
 
 // @peartube/download-video-response
-const encoding83 = {
+const encoding90 = {
   preencode(state, m) {
     state.end++ // max flag is 16 so always one byte
 
@@ -3254,7 +3666,7 @@ const encoding83 = {
 }
 
 // @peartube/delete-video-request
-const encoding84 = {
+const encoding91 = {
   preencode(state, m) {
     c.string.preencode(state, m.videoId)
   },
@@ -3271,7 +3683,7 @@ const encoding84 = {
 }
 
 // @peartube/delete-video-response
-const encoding85 = {
+const encoding92 = {
   preencode(state, m) {
     state.end++ // max flag is 2 so always one byte
 
@@ -3295,7 +3707,7 @@ const encoding85 = {
 }
 
 // @peartube/start-livestream-request
-const encoding86 = {
+const encoding93 = {
   preencode(state, m) {
     state.end++ // max flag is 16 so always one byte
 
@@ -3335,7 +3747,7 @@ const encoding86 = {
 }
 
 // @peartube/start-livestream-response
-const encoding87 = {
+const encoding94 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
 
@@ -3366,10 +3778,10 @@ const encoding87 = {
 }
 
 // @peartube/stop-livestream-request
-const encoding88 = encoding84
+const encoding95 = encoding91
 
 // @peartube/livestream-status
-const encoding89 = {
+const encoding96 = {
   preencode(state, m) {
     c.string.preencode(state, m.state)
     state.end++ // max flag is 64 so always one byte
@@ -3421,14 +3833,14 @@ const encoding89 = {
 }
 
 // @peartube/stop-livestream-response.status
-const encoding90_1 = c.frame(encoding89)
+const encoding97_1 = c.frame(encoding96)
 
 // @peartube/stop-livestream-response
-const encoding90 = {
+const encoding97 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
-    if (m.status) encoding90_1.preencode(state, m.status)
+    if (m.status) encoding97_1.preencode(state, m.status)
     if (m.error) c.string.preencode(state, m.error)
   },
   encode(state, m) {
@@ -3436,7 +3848,7 @@ const encoding90 = {
 
     c.uint.encode(state, flags)
 
-    if (m.status) encoding90_1.encode(state, m.status)
+    if (m.status) encoding97_1.encode(state, m.status)
     if (m.error) c.string.encode(state, m.error)
   },
   decode(state) {
@@ -3444,24 +3856,24 @@ const encoding90 = {
 
     return {
       success: (flags & 1) !== 0,
-      status: (flags & 2) !== 0 ? encoding90_1.decode(state) : null,
+      status: (flags & 2) !== 0 ? encoding97_1.decode(state) : null,
       error: (flags & 4) !== 0 ? c.string.decode(state) : null
     }
   }
 }
 
 // @peartube/get-livestream-status-request
-const encoding91 = encoding84
+const encoding98 = encoding91
 
 // @peartube/get-livestream-status-response.status
-const encoding92_0 = encoding90_1
+const encoding99_0 = encoding97_1
 
 // @peartube/get-livestream-status-response
-const encoding92 = {
+const encoding99 = {
   preencode(state, m) {
     state.end++ // max flag is 2 so always one byte
 
-    if (m.status) encoding92_0.preencode(state, m.status)
+    if (m.status) encoding99_0.preencode(state, m.status)
     if (m.error) c.string.preencode(state, m.error)
   },
   encode(state, m) {
@@ -3469,21 +3881,21 @@ const encoding92 = {
 
     c.uint.encode(state, flags)
 
-    if (m.status) encoding92_0.encode(state, m.status)
+    if (m.status) encoding99_0.encode(state, m.status)
     if (m.error) c.string.encode(state, m.error)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
-      status: (flags & 1) !== 0 ? encoding92_0.decode(state) : null,
+      status: (flags & 1) !== 0 ? encoding99_0.decode(state) : null,
       error: (flags & 2) !== 0 ? c.string.decode(state) : null
     }
   }
 }
 
 // @peartube/prepare-live-playback-request
-const encoding93 = {
+const encoding100 = {
   preencode(state, m) {
     c.string.preencode(state, m.liveCoreKey)
   },
@@ -3500,7 +3912,7 @@ const encoding93 = {
 }
 
 // @peartube/prepare-live-playback-response
-const encoding94 = {
+const encoding101 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
@@ -3527,7 +3939,7 @@ const encoding94 = {
 }
 
 // @peartube/update-video-metadata-request
-const encoding95 = {
+const encoding102 = {
   preencode(state, m) {
     c.string.preencode(state, m.channelKey)
     c.string.preencode(state, m.videoId)
@@ -3564,10 +3976,10 @@ const encoding95 = {
 }
 
 // @peartube/update-video-metadata-response
-const encoding96 = encoding85
+const encoding103 = encoding92
 
 // @peartube/subscription
-const encoding97 = {
+const encoding104 = {
   preencode(state, m) {
     c.string.preencode(state, m.channelKey)
     state.end++ // max flag is 4 so always one byte
@@ -3600,7 +4012,7 @@ const encoding97 = {
 }
 
 // @peartube/subscribe-channel-request
-const encoding98 = {
+const encoding105 = {
   preencode(state, m) {
     c.string.preencode(state, m.channelKey)
   },
@@ -3617,45 +4029,45 @@ const encoding98 = {
 }
 
 // @peartube/subscribe-channel-response
-const encoding99 = encoding13
+const encoding106 = encoding13
 
 // @peartube/unsubscribe-channel-request
-const encoding100 = encoding98
+const encoding107 = encoding105
 
 // @peartube/unsubscribe-channel-response
-const encoding101 = encoding13
+const encoding108 = encoding13
 
 // @peartube/get-subscriptions-request
-const encoding102 = encoding0
+const encoding109 = encoding0
 
 // @peartube/get-subscriptions-response.subscriptions
-const encoding103_0 = c.array(c.frame(encoding97))
+const encoding110_0 = c.array(c.frame(encoding104))
 
 // @peartube/get-subscriptions-response
-const encoding103 = {
+const encoding110 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
 
-    if (m.subscriptions) encoding103_0.preencode(state, m.subscriptions)
+    if (m.subscriptions) encoding110_0.preencode(state, m.subscriptions)
   },
   encode(state, m) {
     const flags = m.subscriptions ? 1 : 0
 
     c.uint.encode(state, flags)
 
-    if (m.subscriptions) encoding103_0.encode(state, m.subscriptions)
+    if (m.subscriptions) encoding110_0.encode(state, m.subscriptions)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
-      subscriptions: (flags & 1) !== 0 ? encoding103_0.decode(state) : null
+      subscriptions: (flags & 1) !== 0 ? encoding110_0.decode(state) : null
     }
   }
 }
 
 // @peartube/playlist
-const encoding104 = {
+const encoding111 = {
   preencode(state, m) {
     c.string.preencode(state, m.id)
     state.end++ // max flag is 8 so always one byte
@@ -3692,7 +4104,7 @@ const encoding104 = {
 }
 
 // @peartube/playlist-item
-const encoding105 = {
+const encoding112 = {
   preencode(state, m) {
     c.string.preencode(state, m.playlistId)
     c.string.preencode(state, m.videoKey)
@@ -3729,7 +4141,7 @@ const encoding105 = {
 }
 
 // @peartube/history-entry
-const encoding106 = {
+const encoding113 = {
   preencode(state, m) {
     const flags =
       (m.eventId ? 1 : 0) |
@@ -3740,7 +4152,10 @@ const encoding106 = {
       (m.duration ? 32 : 0) |
       (m.position ? 64 : 0) |
       (m.completed ? 128 : 0) |
-      (m.timestamp ? 256 : 0)
+      (m.timestamp ? 256 : 0) |
+      (m.identity ? 512 : 0) |
+      (m.saved ? 1024 : 0) |
+      (m.order ? 2048 : 0)
 
     c.uint.preencode(state, flags)
 
@@ -3752,6 +4167,8 @@ const encoding106 = {
     if (m.duration) c.uint.preencode(state, m.duration)
     if (m.position) c.uint.preencode(state, m.position)
     if (m.timestamp) c.uint.preencode(state, m.timestamp)
+    if (m.identity) encoding113_9.preencode(state, m.identity)
+    if (m.order) encoding113_11.preencode(state, m.order)
   },
   encode(state, m) {
     const flags =
@@ -3763,7 +4180,10 @@ const encoding106 = {
       (m.duration ? 32 : 0) |
       (m.position ? 64 : 0) |
       (m.completed ? 128 : 0) |
-      (m.timestamp ? 256 : 0)
+      (m.timestamp ? 256 : 0) |
+      (m.identity ? 512 : 0) |
+      (m.saved ? 1024 : 0) |
+      (m.order ? 2048 : 0)
 
     c.uint.encode(state, flags)
 
@@ -3775,6 +4195,8 @@ const encoding106 = {
     if (m.duration) c.uint.encode(state, m.duration)
     if (m.position) c.uint.encode(state, m.position)
     if (m.timestamp) c.uint.encode(state, m.timestamp)
+    if (m.identity) encoding113_9.encode(state, m.identity)
+    if (m.order) encoding113_11.encode(state, m.order)
   },
   decode(state) {
     const flags = c.uint.decode(state)
@@ -3788,22 +4210,98 @@ const encoding106 = {
       duration: (flags & 32) !== 0 ? c.uint.decode(state) : 0,
       position: (flags & 64) !== 0 ? c.uint.decode(state) : 0,
       completed: (flags & 128) !== 0,
-      timestamp: (flags & 256) !== 0 ? c.uint.decode(state) : 0
+      timestamp: (flags & 256) !== 0 ? c.uint.decode(state) : 0,
+      identity: (flags & 512) !== 0 ? encoding113_9.decode(state) : null,
+      saved: (flags & 1024) !== 0,
+      order: (flags & 2048) !== 0 ? encoding113_11.decode(state) : null
+    }
+  }
+}
+
+// @peartube/personal-progress-identity
+const encoding114 = {
+  preencode(state, m) {
+    state.end++ // max flag is 4 so always one byte
+
+    if (m.entityRef) c.string.preencode(state, m.entityRef)
+    if (m.editionRef) c.string.preencode(state, m.editionRef)
+    if (m.memberRef) c.string.preencode(state, m.memberRef)
+  },
+  encode(state, m) {
+    const flags = (m.entityRef ? 1 : 0) | (m.editionRef ? 2 : 0) | (m.memberRef ? 4 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.entityRef) c.string.encode(state, m.entityRef)
+    if (m.editionRef) c.string.encode(state, m.editionRef)
+    if (m.memberRef) c.string.encode(state, m.memberRef)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      entityRef: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      editionRef: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      memberRef: (flags & 4) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/personal-progress-order
+const encoding115 = {
+  preencode(state, m) {
+    c.uint.preencode(state, m.playbackGeneration)
+    c.uint.preencode(state, m.lamport)
+    c.string.preencode(state, m.writerKey)
+    state.end++ // max flag is 1 so always one byte
+  },
+  encode(state, m) {
+    const flags = m.tombstone ? 1 : 0
+
+    c.uint.encode(state, m.playbackGeneration)
+    c.uint.encode(state, m.lamport)
+    c.string.encode(state, m.writerKey)
+    c.uint.encode(state, flags)
+  },
+  decode(state) {
+    const r0 = c.uint.decode(state)
+    const r1 = c.uint.decode(state)
+    const r2 = c.string.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      playbackGeneration: r0,
+      lamport: r1,
+      writerKey: r2,
+      tombstone: (flags & 1) !== 0
     }
   }
 }
 
 // @peartube/resume-entry
-const encoding107 = {
+const encoding116 = {
   preencode(state, m) {
+    const flags =
+      (m.channelKey ? 1 : 0) |
+      (m.videoId ? 2 : 0) |
+      (m.position ? 4 : 0) |
+      (m.duration ? 8 : 0) |
+      (m.completed ? 16 : 0) |
+      (m.updatedAt ? 32 : 0) |
+      (m.identity ? 64 : 0) |
+      (m.saved ? 128 : 0) |
+      (m.order ? 256 : 0)
+
     c.string.preencode(state, m.videoKey)
-    state.end++ // max flag is 32 so always one byte
+    c.uint.preencode(state, flags)
 
     if (m.channelKey) c.string.preencode(state, m.channelKey)
     if (m.videoId) c.string.preencode(state, m.videoId)
     if (m.position) c.uint.preencode(state, m.position)
     if (m.duration) c.uint.preencode(state, m.duration)
     if (m.updatedAt) c.uint.preencode(state, m.updatedAt)
+    if (m.identity) encoding116_7.preencode(state, m.identity)
+    if (m.order) encoding116_9.preencode(state, m.order)
   },
   encode(state, m) {
     const flags =
@@ -3812,7 +4310,10 @@ const encoding107 = {
       (m.position ? 4 : 0) |
       (m.duration ? 8 : 0) |
       (m.completed ? 16 : 0) |
-      (m.updatedAt ? 32 : 0)
+      (m.updatedAt ? 32 : 0) |
+      (m.identity ? 64 : 0) |
+      (m.saved ? 128 : 0) |
+      (m.order ? 256 : 0)
 
     c.string.encode(state, m.videoKey)
     c.uint.encode(state, flags)
@@ -3822,6 +4323,8 @@ const encoding107 = {
     if (m.position) c.uint.encode(state, m.position)
     if (m.duration) c.uint.encode(state, m.duration)
     if (m.updatedAt) c.uint.encode(state, m.updatedAt)
+    if (m.identity) encoding116_7.encode(state, m.identity)
+    if (m.order) encoding116_9.encode(state, m.order)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -3834,13 +4337,47 @@ const encoding107 = {
       position: (flags & 4) !== 0 ? c.uint.decode(state) : 0,
       duration: (flags & 8) !== 0 ? c.uint.decode(state) : 0,
       completed: (flags & 16) !== 0,
-      updatedAt: (flags & 32) !== 0 ? c.uint.decode(state) : 0
+      updatedAt: (flags & 32) !== 0 ? c.uint.decode(state) : 0,
+      identity: (flags & 64) !== 0 ? encoding116_7.decode(state) : null,
+      saved: (flags & 128) !== 0,
+      order: (flags & 256) !== 0 ? encoding116_9.decode(state) : null
+    }
+  }
+}
+
+// @peartube/personal-device
+const encoding117 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.keyHex)
+    state.end++ // max flag is 4 so always one byte
+
+    if (m.deviceName) c.string.preencode(state, m.deviceName)
+    if (m.addedAt) c.uint.preencode(state, m.addedAt)
+  },
+  encode(state, m) {
+    const flags = (m.deviceName ? 1 : 0) | (m.addedAt ? 2 : 0) | (m.self ? 4 : 0)
+
+    c.string.encode(state, m.keyHex)
+    c.uint.encode(state, flags)
+
+    if (m.deviceName) c.string.encode(state, m.deviceName)
+    if (m.addedAt) c.uint.encode(state, m.addedAt)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      keyHex: r0,
+      deviceName: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      addedAt: (flags & 2) !== 0 ? c.uint.decode(state) : 0,
+      self: (flags & 4) !== 0
     }
   }
 }
 
 // @peartube/personal-setting
-const encoding108 = {
+const encoding118 = {
   preencode(state, m) {
     c.string.preencode(state, m.key)
     state.end++ // max flag is 1 so always one byte
@@ -3867,36 +4404,36 @@ const encoding108 = {
 }
 
 // @peartube/get-playlists-request
-const encoding109 = encoding0
+const encoding119 = encoding0
 
 // @peartube/get-playlists-response.playlists
-const encoding110_0 = c.array(c.frame(encoding104))
+const encoding120_0 = c.array(c.frame(encoding111))
 
 // @peartube/get-playlists-response
-const encoding110 = {
+const encoding120 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
 
-    if (m.playlists) encoding110_0.preencode(state, m.playlists)
+    if (m.playlists) encoding120_0.preencode(state, m.playlists)
   },
   encode(state, m) {
     const flags = m.playlists ? 1 : 0
 
     c.uint.encode(state, flags)
 
-    if (m.playlists) encoding110_0.encode(state, m.playlists)
+    if (m.playlists) encoding120_0.encode(state, m.playlists)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
-      playlists: (flags & 1) !== 0 ? encoding110_0.decode(state) : null
+      playlists: (flags & 1) !== 0 ? encoding120_0.decode(state) : null
     }
   }
 }
 
 // @peartube/get-playlist-items-request
-const encoding111 = {
+const encoding121 = {
   preencode(state, m) {
     c.string.preencode(state, m.playlistId)
   },
@@ -3913,33 +4450,33 @@ const encoding111 = {
 }
 
 // @peartube/get-playlist-items-response.items
-const encoding112_0 = c.array(c.frame(encoding105))
+const encoding122_0 = c.array(c.frame(encoding112))
 
 // @peartube/get-playlist-items-response
-const encoding112 = {
+const encoding122 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
 
-    if (m.items) encoding112_0.preencode(state, m.items)
+    if (m.items) encoding122_0.preencode(state, m.items)
   },
   encode(state, m) {
     const flags = m.items ? 1 : 0
 
     c.uint.encode(state, flags)
 
-    if (m.items) encoding112_0.encode(state, m.items)
+    if (m.items) encoding122_0.encode(state, m.items)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
-      items: (flags & 1) !== 0 ? encoding112_0.decode(state) : null
+      items: (flags & 1) !== 0 ? encoding122_0.decode(state) : null
     }
   }
 }
 
 // @peartube/create-playlist-request
-const encoding113 = {
+const encoding123 = {
   preencode(state, m) {
     state.end++ // max flag is 2 so always one byte
 
@@ -3965,7 +4502,7 @@ const encoding113 = {
 }
 
 // @peartube/create-playlist-response
-const encoding114 = {
+const encoding124 = {
   preencode(state, m) {
     state.end++ // max flag is 2 so always one byte
 
@@ -3989,7 +4526,7 @@ const encoding114 = {
 }
 
 // @peartube/update-playlist-request
-const encoding115 = {
+const encoding125 = {
   preencode(state, m) {
     c.string.preencode(state, m.id)
     state.end++ // max flag is 2 so always one byte
@@ -4019,10 +4556,10 @@ const encoding115 = {
 }
 
 // @peartube/update-playlist-response
-const encoding116 = encoding13
+const encoding126 = encoding13
 
 // @peartube/delete-playlist-request
-const encoding117 = {
+const encoding127 = {
   preencode(state, m) {
     c.string.preencode(state, m.id)
   },
@@ -4039,10 +4576,10 @@ const encoding117 = {
 }
 
 // @peartube/delete-playlist-response
-const encoding118 = encoding13
+const encoding128 = encoding13
 
 // @peartube/add-to-playlist-request
-const encoding119 = {
+const encoding129 = {
   preencode(state, m) {
     c.string.preencode(state, m.playlistId)
     state.end++ // max flag is 4 so always one byte
@@ -4075,10 +4612,10 @@ const encoding119 = {
 }
 
 // @peartube/add-to-playlist-response
-const encoding120 = encoding13
+const encoding130 = encoding13
 
 // @peartube/remove-from-playlist-request
-const encoding121 = {
+const encoding131 = {
   preencode(state, m) {
     c.string.preencode(state, m.playlistId)
     c.string.preencode(state, m.videoKey)
@@ -4099,10 +4636,10 @@ const encoding121 = {
 }
 
 // @peartube/remove-from-playlist-response
-const encoding122 = encoding13
+const encoding132 = encoding13
 
 // @peartube/log-watch-history-request
-const encoding123 = {
+const encoding133 = {
   preencode(state, m) {
     const flags =
       (m.channelKey ? 1 : 0) |
@@ -4112,7 +4649,11 @@ const encoding123 = {
       (m.duration ? 16 : 0) |
       (m.position ? 32 : 0) |
       (m.completed ? 64 : 0) |
-      (m.timestamp ? 128 : 0)
+      (m.timestamp ? 128 : 0) |
+      (m.identity ? 256 : 0) |
+      (m.saved ? 512 : 0) |
+      (m.playbackGeneration ? 1024 : 0) |
+      (m.tombstone ? 2048 : 0)
 
     c.uint.preencode(state, flags)
 
@@ -4123,6 +4664,8 @@ const encoding123 = {
     if (m.duration) c.uint.preencode(state, m.duration)
     if (m.position) c.uint.preencode(state, m.position)
     if (m.timestamp) c.uint.preencode(state, m.timestamp)
+    if (m.identity) encoding133_8.preencode(state, m.identity)
+    if (m.playbackGeneration) c.uint.preencode(state, m.playbackGeneration)
   },
   encode(state, m) {
     const flags =
@@ -4133,7 +4676,11 @@ const encoding123 = {
       (m.duration ? 16 : 0) |
       (m.position ? 32 : 0) |
       (m.completed ? 64 : 0) |
-      (m.timestamp ? 128 : 0)
+      (m.timestamp ? 128 : 0) |
+      (m.identity ? 256 : 0) |
+      (m.saved ? 512 : 0) |
+      (m.playbackGeneration ? 1024 : 0) |
+      (m.tombstone ? 2048 : 0)
 
     c.uint.encode(state, flags)
 
@@ -4144,6 +4691,8 @@ const encoding123 = {
     if (m.duration) c.uint.encode(state, m.duration)
     if (m.position) c.uint.encode(state, m.position)
     if (m.timestamp) c.uint.encode(state, m.timestamp)
+    if (m.identity) encoding133_8.encode(state, m.identity)
+    if (m.playbackGeneration) c.uint.encode(state, m.playbackGeneration)
   },
   decode(state) {
     const flags = c.uint.decode(state)
@@ -4156,13 +4705,17 @@ const encoding123 = {
       duration: (flags & 16) !== 0 ? c.uint.decode(state) : 0,
       position: (flags & 32) !== 0 ? c.uint.decode(state) : 0,
       completed: (flags & 64) !== 0,
-      timestamp: (flags & 128) !== 0 ? c.uint.decode(state) : 0
+      timestamp: (flags & 128) !== 0 ? c.uint.decode(state) : 0,
+      identity: (flags & 256) !== 0 ? encoding133_8.decode(state) : null,
+      saved: (flags & 512) !== 0,
+      playbackGeneration: (flags & 1024) !== 0 ? c.uint.decode(state) : 0,
+      tombstone: (flags & 2048) !== 0
     }
   }
 }
 
 // @peartube/log-watch-history-response
-const encoding124 = {
+const encoding134 = {
   preencode(state, m) {
     state.end++ // max flag is 2 so always one byte
 
@@ -4186,7 +4739,7 @@ const encoding124 = {
 }
 
 // @peartube/get-watch-history-request
-const encoding125 = {
+const encoding135 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
 
@@ -4209,33 +4762,33 @@ const encoding125 = {
 }
 
 // @peartube/get-watch-history-response.entries
-const encoding126_0 = c.array(c.frame(encoding106))
+const encoding136_0 = c.array(c.frame(encoding113))
 
 // @peartube/get-watch-history-response
-const encoding126 = {
+const encoding136 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
 
-    if (m.entries) encoding126_0.preencode(state, m.entries)
+    if (m.entries) encoding136_0.preencode(state, m.entries)
   },
   encode(state, m) {
     const flags = m.entries ? 1 : 0
 
     c.uint.encode(state, flags)
 
-    if (m.entries) encoding126_0.encode(state, m.entries)
+    if (m.entries) encoding136_0.encode(state, m.entries)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
-      entries: (flags & 1) !== 0 ? encoding126_0.decode(state) : null
+      entries: (flags & 1) !== 0 ? encoding136_0.decode(state) : null
     }
   }
 }
 
 // @peartube/get-resume-position-request
-const encoding127 = {
+const encoding137 = {
   preencode(state, m) {
     c.string.preencode(state, m.videoKey)
   },
@@ -4252,134 +4805,251 @@ const encoding127 = {
 }
 
 // @peartube/get-resume-position-response.resume
-const encoding128_1 = c.frame(encoding107)
+const encoding138_1 = c.frame(encoding116)
 
 // @peartube/get-resume-position-response
-const encoding128 = {
+const encoding138 = {
   preencode(state, m) {
     state.end++ // max flag is 2 so always one byte
 
-    if (m.resume) encoding128_1.preencode(state, m.resume)
+    if (m.resume) encoding138_1.preencode(state, m.resume)
   },
   encode(state, m) {
     const flags = (m.found ? 1 : 0) | (m.resume ? 2 : 0)
 
     c.uint.encode(state, flags)
 
-    if (m.resume) encoding128_1.encode(state, m.resume)
+    if (m.resume) encoding138_1.encode(state, m.resume)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
       found: (flags & 1) !== 0,
-      resume: (flags & 2) !== 0 ? encoding128_1.decode(state) : null
+      resume: (flags & 2) !== 0 ? encoding138_1.decode(state) : null
     }
   }
 }
 
 // @peartube/list-resume-positions-request
-const encoding129 = encoding0
+const encoding139 = encoding0
 
 // @peartube/list-resume-positions-response.entries
-const encoding130_0 = c.array(c.frame(encoding107))
+const encoding140_0 = c.array(c.frame(encoding116))
 
 // @peartube/list-resume-positions-response
-const encoding130 = {
+const encoding140 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
 
-    if (m.entries) encoding130_0.preencode(state, m.entries)
+    if (m.entries) encoding140_0.preencode(state, m.entries)
   },
   encode(state, m) {
     const flags = m.entries ? 1 : 0
 
     c.uint.encode(state, flags)
 
-    if (m.entries) encoding130_0.encode(state, m.entries)
+    if (m.entries) encoding140_0.encode(state, m.entries)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
-      entries: (flags & 1) !== 0 ? encoding130_0.decode(state) : null
+      entries: (flags & 1) !== 0 ? encoding140_0.decode(state) : null
     }
   }
 }
 
 // @peartube/set-personal-setting-request
-const encoding131 = encoding108
+const encoding141 = encoding118
 
 // @peartube/set-personal-setting-response
-const encoding132 = encoding13
+const encoding142 = encoding13
 
 // @peartube/get-personal-settings-request
-const encoding133 = encoding0
+const encoding143 = encoding0
 
 // @peartube/get-personal-settings-response.settings
-const encoding134_0 = c.array(c.frame(encoding108))
+const encoding144_0 = c.array(c.frame(encoding118))
 
 // @peartube/get-personal-settings-response
-const encoding134 = {
+const encoding144 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
 
-    if (m.settings) encoding134_0.preencode(state, m.settings)
+    if (m.settings) encoding144_0.preencode(state, m.settings)
   },
   encode(state, m) {
     const flags = m.settings ? 1 : 0
 
     c.uint.encode(state, flags)
 
-    if (m.settings) encoding134_0.encode(state, m.settings)
+    if (m.settings) encoding144_0.encode(state, m.settings)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
-      settings: (flags & 1) !== 0 ? encoding134_0.decode(state) : null
+      settings: (flags & 1) !== 0 ? encoding144_0.decode(state) : null
     }
   }
 }
 
 // @peartube/provision-personal-encryption-request
-const encoding135 = {
+const encoding145 = {
   preencode(state, m) {
-    state.end++ // max flag is 1 so always one byte
+    c.string.preencode(state, m.secret)
+    state.end++ // max flag is 2 so always one byte
 
-    if (m.secret) c.string.preencode(state, m.secret)
+    if (m.bootstrapKey) c.string.preencode(state, m.bootstrapKey)
   },
   encode(state, m) {
-    const flags = m.secret ? 1 : 0
+    const flags = (m.bootstrapKey ? 1 : 0) | (m.deviceLocal ? 2 : 0)
 
+    c.string.encode(state, m.secret)
     c.uint.encode(state, flags)
 
-    if (m.secret) c.string.encode(state, m.secret)
+    if (m.bootstrapKey) c.string.encode(state, m.bootstrapKey)
   },
   decode(state) {
+    const r0 = c.string.decode(state)
     const flags = c.uint.decode(state)
 
     return {
-      secret: (flags & 1) !== 0 ? c.string.decode(state) : null
+      secret: r0,
+      bootstrapKey: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      deviceLocal: (flags & 2) !== 0
     }
   }
 }
 
 // @peartube/provision-personal-encryption-response
-const encoding136 = {
+const encoding146 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
 
-    if (m.secret) c.string.preencode(state, m.secret)
+    if (m.bootstrapKey) c.string.preencode(state, m.bootstrapKey)
     if (m.error) c.string.preencode(state, m.error)
   },
   encode(state, m) {
     const flags =
-      (m.success ? 1 : 0) | (m.secret ? 2 : 0) | (m.encrypted ? 4 : 0) | (m.error ? 8 : 0)
+      (m.success ? 1 : 0) | (m.bootstrapKey ? 2 : 0) | (m.encrypted ? 4 : 0) | (m.error ? 8 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.bootstrapKey) c.string.encode(state, m.bootstrapKey)
+    if (m.error) c.string.encode(state, m.error)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      success: (flags & 1) !== 0,
+      bootstrapKey: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      encrypted: (flags & 4) !== 0,
+      error: (flags & 8) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/create-personal-device-invite-request
+const encoding147 = {
+  preencode(state, m) {
+    state.end++ // max flag is 1 so always one byte
+
+    if (m.expiresInMs) c.uint.preencode(state, m.expiresInMs)
+  },
+  encode(state, m) {
+    const flags = m.expiresInMs ? 1 : 0
+
+    c.uint.encode(state, flags)
+
+    if (m.expiresInMs) c.uint.encode(state, m.expiresInMs)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      expiresInMs: (flags & 1) !== 0 ? c.uint.decode(state) : 0
+    }
+  }
+}
+
+// @peartube/create-personal-device-invite-response
+const encoding148 = {
+  preencode(state, m) {
+    state.end++ // max flag is 8 so always one byte
+
+    if (m.inviteCode) c.string.preencode(state, m.inviteCode)
+    if (m.expiresAt) c.uint.preencode(state, m.expiresAt)
+    if (m.error) c.string.preencode(state, m.error)
+  },
+  encode(state, m) {
+    const flags =
+      (m.success ? 1 : 0) | (m.inviteCode ? 2 : 0) | (m.expiresAt ? 4 : 0) | (m.error ? 8 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.inviteCode) c.string.encode(state, m.inviteCode)
+    if (m.expiresAt) c.uint.encode(state, m.expiresAt)
+    if (m.error) c.string.encode(state, m.error)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      success: (flags & 1) !== 0,
+      inviteCode: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      expiresAt: (flags & 4) !== 0 ? c.uint.decode(state) : 0,
+      error: (flags & 8) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/redeem-personal-device-invite-request
+const encoding149 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.inviteCode)
+    state.end++ // max flag is 1 so always one byte
+
+    if (m.deviceName) c.string.preencode(state, m.deviceName)
+  },
+  encode(state, m) {
+    const flags = m.deviceName ? 1 : 0
+
+    c.string.encode(state, m.inviteCode)
+    c.uint.encode(state, flags)
+
+    if (m.deviceName) c.string.encode(state, m.deviceName)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      inviteCode: r0,
+      deviceName: (flags & 1) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/redeem-personal-device-invite-response
+const encoding150 = {
+  preencode(state, m) {
+    state.end++ // max flag is 8 so always one byte
+
+    if (m.secret) c.string.preencode(state, m.secret)
+    if (m.bootstrapKey) c.string.preencode(state, m.bootstrapKey)
+    if (m.error) c.string.preencode(state, m.error)
+  },
+  encode(state, m) {
+    const flags =
+      (m.success ? 1 : 0) | (m.secret ? 2 : 0) | (m.bootstrapKey ? 4 : 0) | (m.error ? 8 : 0)
 
     c.uint.encode(state, flags)
 
     if (m.secret) c.string.encode(state, m.secret)
+    if (m.bootstrapKey) c.string.encode(state, m.bootstrapKey)
     if (m.error) c.string.encode(state, m.error)
   },
   decode(state) {
@@ -4388,29 +5058,127 @@ const encoding136 = {
     return {
       success: (flags & 1) !== 0,
       secret: (flags & 2) !== 0 ? c.string.decode(state) : null,
-      encrypted: (flags & 4) !== 0,
+      bootstrapKey: (flags & 4) !== 0 ? c.string.decode(state) : null,
+      error: (flags & 8) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/list-personal-devices-request
+const encoding151 = encoding0
+
+// @peartube/list-personal-devices-response.devices
+const encoding152_1 = c.array(c.frame(encoding117))
+
+// @peartube/list-personal-devices-response
+const encoding152 = {
+  preencode(state, m) {
+    state.end++ // max flag is 4 so always one byte
+
+    if (m.devices) encoding152_1.preencode(state, m.devices)
+    if (m.error) c.string.preencode(state, m.error)
+  },
+  encode(state, m) {
+    const flags = (m.success ? 1 : 0) | (m.devices ? 2 : 0) | (m.error ? 4 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.devices) encoding152_1.encode(state, m.devices)
+    if (m.error) c.string.encode(state, m.error)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      success: (flags & 1) !== 0,
+      devices: (flags & 2) !== 0 ? encoding152_1.decode(state) : null,
+      error: (flags & 4) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/revoke-personal-device-request
+const encoding153 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.keyHex)
+    c.string.preencode(state, m.secret)
+    state.end++ // max flag is 1 so always one byte
+
+    if (m.deviceName) c.string.preencode(state, m.deviceName)
+  },
+  encode(state, m) {
+    const flags = m.deviceName ? 1 : 0
+
+    c.string.encode(state, m.keyHex)
+    c.string.encode(state, m.secret)
+    c.uint.encode(state, flags)
+
+    if (m.deviceName) c.string.encode(state, m.deviceName)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const r1 = c.string.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      keyHex: r0,
+      secret: r1,
+      deviceName: (flags & 1) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/revoke-personal-device-response
+const encoding154 = {
+  preencode(state, m) {
+    state.end++ // max flag is 8 so always one byte
+
+    if (m.bootstrapKey) c.string.preencode(state, m.bootstrapKey)
+    if (m.remainingDeviceCount) c.uint.preencode(state, m.remainingDeviceCount)
+    if (m.error) c.string.preencode(state, m.error)
+  },
+  encode(state, m) {
+    const flags =
+      (m.success ? 1 : 0) |
+      (m.bootstrapKey ? 2 : 0) |
+      (m.remainingDeviceCount ? 4 : 0) |
+      (m.error ? 8 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.bootstrapKey) c.string.encode(state, m.bootstrapKey)
+    if (m.remainingDeviceCount) c.uint.encode(state, m.remainingDeviceCount)
+    if (m.error) c.string.encode(state, m.error)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      success: (flags & 1) !== 0,
+      bootstrapKey: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      remainingDeviceCount: (flags & 4) !== 0 ? c.uint.decode(state) : 0,
       error: (flags & 8) !== 0 ? c.string.decode(state) : null
     }
   }
 }
 
 // @peartube/join-channel-request
-const encoding137 = encoding98
+const encoding155 = encoding105
 
 // @peartube/join-channel-response
-const encoding138 = encoding13
+const encoding156 = encoding13
 
 // @peartube/hide-channel-request
-const encoding139 = encoding98
+const encoding157 = encoding105
 
 // @peartube/hide-channel-response
-const encoding140 = encoding13
+const encoding158 = encoding13
 
 // @peartube/get-channel-meta-request
-const encoding141 = encoding38
+const encoding159 = encoding38
 
 // @peartube/get-channel-meta-response
-const encoding142 = {
+const encoding160 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
@@ -4439,10 +5207,10 @@ const encoding142 = {
 }
 
 // @peartube/get-swarm-status-request
-const encoding143 = encoding0
+const encoding161 = encoding0
 
 // @peartube/get-swarm-status-response
-const encoding144 = {
+const encoding162 = {
   preencode(state, m) {
     const flags =
       (m.connected ? 1 : 0) |
@@ -4521,13 +5289,13 @@ const encoding144 = {
 }
 
 // @peartube/prefetch-video-request
-const encoding145 = encoding78
+const encoding163 = encoding85
 
 // @peartube/prefetch-video-response
-const encoding146 = encoding13
+const encoding164 = encoding13
 
 // @peartube/video-stats
-const encoding147 = {
+const encoding165 = {
   preencode(state, m) {
     const flags =
       (m.videoId ? 1 : 0) |
@@ -4627,7 +5395,7 @@ const encoding147 = {
 }
 
 // @peartube/get-video-stats-request
-const encoding148 = {
+const encoding166 = {
   preencode(state, m) {
     c.string.preencode(state, m.channelKey)
     c.string.preencode(state, m.videoId)
@@ -4648,30 +5416,30 @@ const encoding148 = {
 }
 
 // @peartube/get-video-stats-response
-const encoding149 = {
+const encoding167 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
 
-    if (m.stats) encoding149_0.preencode(state, m.stats)
+    if (m.stats) encoding167_0.preencode(state, m.stats)
   },
   encode(state, m) {
     const flags = m.stats ? 1 : 0
 
     c.uint.encode(state, flags)
 
-    if (m.stats) encoding149_0.encode(state, m.stats)
+    if (m.stats) encoding167_0.encode(state, m.stats)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
-      stats: (flags & 1) !== 0 ? encoding149_0.decode(state) : null
+      stats: (flags & 1) !== 0 ? encoding167_0.decode(state) : null
     }
   }
 }
 
 // @peartube/seeding-config
-const encoding150 = {
+const encoding168 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
@@ -4698,7 +5466,7 @@ const encoding150 = {
 }
 
 // @peartube/seeding-status
-const encoding151 = {
+const encoding169 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
 
@@ -4732,21 +5500,21 @@ const encoding151 = {
 }
 
 // @peartube/get-seeding-status-request
-const encoding152 = encoding0
+const encoding170 = encoding0
 
 // @peartube/get-seeding-status-response.status
-const encoding153_0 = c.frame(encoding151)
+const encoding171_0 = c.frame(encoding169)
 
 // @peartube/get-seeding-status-response
-const encoding153 = {
+const encoding171 = {
   preencode(state, m) {
-    encoding153_0.preencode(state, m.status)
+    encoding171_0.preencode(state, m.status)
   },
   encode(state, m) {
-    encoding153_0.encode(state, m.status)
+    encoding171_0.encode(state, m.status)
   },
   decode(state) {
-    const r0 = encoding153_0.decode(state)
+    const r0 = encoding171_0.decode(state)
 
     return {
       status: r0
@@ -4755,18 +5523,18 @@ const encoding153 = {
 }
 
 // @peartube/set-seeding-config-request.config
-const encoding154_0 = c.frame(encoding150)
+const encoding172_0 = c.frame(encoding168)
 
 // @peartube/set-seeding-config-request
-const encoding154 = {
+const encoding172 = {
   preencode(state, m) {
-    encoding154_0.preencode(state, m.config)
+    encoding172_0.preencode(state, m.config)
   },
   encode(state, m) {
-    encoding154_0.encode(state, m.config)
+    encoding172_0.encode(state, m.config)
   },
   decode(state) {
-    const r0 = encoding154_0.decode(state)
+    const r0 = encoding172_0.decode(state)
 
     return {
       config: r0
@@ -4775,10 +5543,10 @@ const encoding154 = {
 }
 
 // @peartube/set-seeding-config-response
-const encoding155 = encoding13
+const encoding173 = encoding13
 
 // @peartube/transcode-settings
-const encoding156 = {
+const encoding174 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
 
@@ -4808,21 +5576,21 @@ const encoding156 = {
 }
 
 // @peartube/get-transcode-settings-request
-const encoding157 = encoding0
+const encoding175 = encoding0
 
 // @peartube/get-transcode-settings-response.settings
-const encoding158_0 = c.frame(encoding156)
+const encoding176_0 = c.frame(encoding174)
 
 // @peartube/get-transcode-settings-response
-const encoding158 = {
+const encoding176 = {
   preencode(state, m) {
-    encoding158_0.preencode(state, m.settings)
+    encoding176_0.preencode(state, m.settings)
   },
   encode(state, m) {
-    encoding158_0.encode(state, m.settings)
+    encoding176_0.encode(state, m.settings)
   },
   decode(state) {
-    const r0 = encoding158_0.decode(state)
+    const r0 = encoding176_0.decode(state)
 
     return {
       settings: r0
@@ -4831,7 +5599,7 @@ const encoding158 = {
 }
 
 // @peartube/set-transcode-settings-request
-const encoding159 = {
+const encoding177 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
   },
@@ -4850,13 +5618,13 @@ const encoding159 = {
 }
 
 // @peartube/set-transcode-settings-response.settings
-const encoding160_1 = encoding158_0
+const encoding178_1 = encoding176_0
 
 // @peartube/set-transcode-settings-response
-const encoding160 = {
+const encoding178 = {
   preencode(state, m) {
     state.end++ // max flag is 2 so always one byte
-    encoding160_1.preencode(state, m.settings)
+    encoding178_1.preencode(state, m.settings)
 
     if (m.error) c.string.preencode(state, m.error)
   },
@@ -4864,7 +5632,7 @@ const encoding160 = {
     const flags = (m.success ? 1 : 0) | (m.error ? 2 : 0)
 
     c.uint.encode(state, flags)
-    encoding160_1.encode(state, m.settings)
+    encoding178_1.encode(state, m.settings)
 
     if (m.error) c.string.encode(state, m.error)
   },
@@ -4873,58 +5641,58 @@ const encoding160 = {
 
     return {
       success: (flags & 1) !== 0,
-      settings: encoding160_1.decode(state),
+      settings: encoding178_1.decode(state),
       error: (flags & 2) !== 0 ? c.string.decode(state) : null
     }
   }
 }
 
 // @peartube/pin-channel-request
-const encoding161 = encoding98
+const encoding179 = encoding105
 
 // @peartube/pin-channel-response
-const encoding162 = encoding13
+const encoding180 = encoding13
 
 // @peartube/unpin-channel-request
-const encoding163 = encoding98
+const encoding181 = encoding105
 
 // @peartube/unpin-channel-response
-const encoding164 = encoding13
+const encoding182 = encoding13
 
 // @peartube/get-pinned-channels-request
-const encoding165 = encoding0
+const encoding183 = encoding0
 
 // @peartube/get-pinned-channels-response.channels
-const encoding166_0 = encoding44_10
+const encoding184_0 = encoding44_11
 
 // @peartube/get-pinned-channels-response
-const encoding166 = {
+const encoding184 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
 
-    if (m.channels) encoding166_0.preencode(state, m.channels)
+    if (m.channels) encoding184_0.preencode(state, m.channels)
   },
   encode(state, m) {
     const flags = m.channels ? 1 : 0
 
     c.uint.encode(state, flags)
 
-    if (m.channels) encoding166_0.encode(state, m.channels)
+    if (m.channels) encoding184_0.encode(state, m.channels)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
-      channels: (flags & 1) !== 0 ? encoding166_0.decode(state) : null
+      channels: (flags & 1) !== 0 ? encoding184_0.decode(state) : null
     }
   }
 }
 
 // @peartube/get-storage-stats-request
-const encoding167 = encoding0
+const encoding185 = encoding0
 
 // @peartube/get-storage-stats-response
-const encoding168 = {
+const encoding186 = {
   preencode(state, m) {
     const flags =
       (m.totalStorageBytes ? 1 : 0) |
@@ -5040,7 +5808,7 @@ const encoding168 = {
 }
 
 // @peartube/set-storage-limit-request
-const encoding169 = {
+const encoding187 = {
   preencode(state, m) {
     c.uint.preencode(state, m.maxGB)
   },
@@ -5057,10 +5825,10 @@ const encoding169 = {
 }
 
 // @peartube/set-storage-limit-response
-const encoding170 = encoding13
+const encoding188 = encoding13
 
 // @peartube/get-migration-status-request
-const encoding171 = {
+const encoding189 = {
   preencode(state, m) {
     c.string.preencode(state, m.migrationId)
   },
@@ -5077,7 +5845,7 @@ const encoding171 = {
 }
 
 // @peartube/get-migration-status-response
-const encoding172 = {
+const encoding190 = {
   preencode(state, m) {
     state.end++ // max flag is 16 so always one byte
     c.string.preencode(state, m.migrationId)
@@ -5143,10 +5911,10 @@ const encoding172 = {
 }
 
 // @peartube/retry-migration-request
-const encoding173 = encoding171
+const encoding191 = encoding189
 
 // @peartube/retry-migration-response
-const encoding174 = {
+const encoding192 = {
   preencode(state, m) {
     state.end++ // max flag is 32 so always one byte
     c.string.preencode(state, m.migrationId)
@@ -5214,10 +5982,10 @@ const encoding174 = {
 }
 
 // @peartube/export-migration-report-request
-const encoding175 = encoding171
+const encoding193 = encoding189
 
 // @peartube/export-migration-report-response
-const encoding176 = {
+const encoding194 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
     c.string.preencode(state, m.migrationId)
@@ -5254,7 +6022,7 @@ const encoding176 = {
 }
 
 // @peartube/get-publisher-device-status-request
-const encoding177 = {
+const encoding195 = {
   preencode(state, m) {
     state.end++ // max flag is 2 so always one byte
 
@@ -5280,7 +6048,7 @@ const encoding177 = {
 }
 
 // @peartube/get-publisher-device-status-response
-const encoding178 = {
+const encoding196 = {
   preencode(state, m) {
     const flags =
       (m.success ? 1 : 0) |
@@ -5363,10 +6131,10 @@ const encoding178 = {
 }
 
 // @peartube/export-portable-state-request
-const encoding179 = encoding0
+const encoding197 = encoding0
 
 // @peartube/export-portable-state-response
-const encoding180 = {
+const encoding198 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
     c.uint.preencode(state, m.schemaVersion)
@@ -5406,7 +6174,7 @@ const encoding180 = {
 }
 
 // @peartube/restore-portable-state-request
-const encoding181 = {
+const encoding199 = {
   preencode(state, m) {
     c.buffer.preencode(state, m.manifestBytes)
     state.end++ // max flag is 1 so always one byte
@@ -5433,7 +6201,7 @@ const encoding181 = {
 }
 
 // @peartube/restore-portable-state-response
-const encoding182 = {
+const encoding200 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
     c.uint.preencode(state, m.schemaVersion)
@@ -5471,7 +6239,7 @@ const encoding182 = {
 }
 
 // @peartube/preview-storage-limit-request
-const encoding183 = {
+const encoding201 = {
   preencode(state, m) {
     c.uint.preencode(state, m.maxBytes)
   },
@@ -5488,12 +6256,12 @@ const encoding183 = {
 }
 
 // @peartube/preview-storage-limit-response.affectedCategories
-const encoding184_7 = encoding44_10
+const encoding202_7 = encoding44_11
 // @peartube/preview-storage-limit-response.consequences
-const encoding184_8 = encoding44_10
+const encoding202_8 = encoding44_11
 
 // @peartube/preview-storage-limit-response
-const encoding184 = {
+const encoding202 = {
   preencode(state, m) {
     state.end++ // max flag is 16 so always one byte
     c.uint.preencode(state, m.requestedMaxBytes)
@@ -5503,8 +6271,8 @@ const encoding184 = {
     c.uint.preencode(state, m.protectedBytes)
     c.uint.preencode(state, m.affectedSeedCount)
 
-    if (m.affectedCategories) encoding184_7.preencode(state, m.affectedCategories)
-    if (m.consequences) encoding184_8.preencode(state, m.consequences)
+    if (m.affectedCategories) encoding202_7.preencode(state, m.affectedCategories)
+    if (m.consequences) encoding202_8.preencode(state, m.consequences)
     if (m.errorCode) c.string.preencode(state, m.errorCode)
   },
   encode(state, m) {
@@ -5523,8 +6291,8 @@ const encoding184 = {
     c.uint.encode(state, m.protectedBytes)
     c.uint.encode(state, m.affectedSeedCount)
 
-    if (m.affectedCategories) encoding184_7.encode(state, m.affectedCategories)
-    if (m.consequences) encoding184_8.encode(state, m.consequences)
+    if (m.affectedCategories) encoding202_7.encode(state, m.affectedCategories)
+    if (m.consequences) encoding202_8.encode(state, m.consequences)
     if (m.errorCode) c.string.encode(state, m.errorCode)
   },
   decode(state) {
@@ -5538,8 +6306,8 @@ const encoding184 = {
       evictableBytes: c.uint.decode(state),
       protectedBytes: c.uint.decode(state),
       affectedSeedCount: c.uint.decode(state),
-      affectedCategories: (flags & 2) !== 0 ? encoding184_7.decode(state) : null,
-      consequences: (flags & 4) !== 0 ? encoding184_8.decode(state) : null,
+      affectedCategories: (flags & 2) !== 0 ? encoding202_7.decode(state) : null,
+      consequences: (flags & 4) !== 0 ? encoding202_8.decode(state) : null,
       feasible: (flags & 8) !== 0,
       errorCode: (flags & 16) !== 0 ? c.string.decode(state) : null
     }
@@ -5547,13 +6315,13 @@ const encoding184 = {
 }
 
 // @peartube/get-archive-operator-status-request
-const encoding185 = encoding0
+const encoding203 = encoding0
 
 // @peartube/get-archive-operator-status-response.recentFailureCodes
-const encoding186_12 = encoding44_10
+const encoding204_12 = encoding44_11
 
 // @peartube/get-archive-operator-status-response
-const encoding186 = {
+const encoding204 = {
   preencode(state, m) {
     state.end++ // max flag is 32 so always one byte
     c.string.preencode(state, m.operatorMode)
@@ -5568,7 +6336,7 @@ const encoding186 = {
     if (m.capacityAvailableBytes) c.uint.preencode(state, m.capacityAvailableBytes)
     c.uint.preencode(state, m.capacityRejectionCount)
     c.uint.preencode(state, m.offloadRejectionCount)
-    if (m.recentFailureCodes) encoding186_12.preencode(state, m.recentFailureCodes)
+    if (m.recentFailureCodes) encoding204_12.preencode(state, m.recentFailureCodes)
     c.uint.preencode(state, m.updatedAt)
     if (m.errorCode) c.string.preencode(state, m.errorCode)
   },
@@ -5594,7 +6362,7 @@ const encoding186 = {
     if (m.capacityAvailableBytes) c.uint.encode(state, m.capacityAvailableBytes)
     c.uint.encode(state, m.capacityRejectionCount)
     c.uint.encode(state, m.offloadRejectionCount)
-    if (m.recentFailureCodes) encoding186_12.encode(state, m.recentFailureCodes)
+    if (m.recentFailureCodes) encoding204_12.encode(state, m.recentFailureCodes)
     c.uint.encode(state, m.updatedAt)
     if (m.errorCode) c.string.encode(state, m.errorCode)
   },
@@ -5614,7 +6382,7 @@ const encoding186 = {
       capacityAvailableBytes: (flags & 8) !== 0 ? c.uint.decode(state) : 0,
       capacityRejectionCount: c.uint.decode(state),
       offloadRejectionCount: c.uint.decode(state),
-      recentFailureCodes: (flags & 16) !== 0 ? encoding186_12.decode(state) : null,
+      recentFailureCodes: (flags & 16) !== 0 ? encoding204_12.decode(state) : null,
       updatedAt: c.uint.decode(state),
       errorCode: (flags & 32) !== 0 ? c.string.decode(state) : null
     }
@@ -5622,10 +6390,10 @@ const encoding186 = {
 }
 
 // @peartube/get-archive-participation-request
-const encoding187 = encoding0
+const encoding205 = encoding0
 
 // @peartube/get-archive-participation-response
-const encoding188 = {
+const encoding206 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
     c.uint.preencode(state, m.capacityBytes)
@@ -5683,7 +6451,7 @@ const encoding188 = {
 }
 
 // @peartube/set-archive-participation-request
-const encoding189 = {
+const encoding207 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
     c.uint.preencode(state, m.capacityBytes)
@@ -5711,10 +6479,10 @@ const encoding189 = {
 }
 
 // @peartube/set-archive-participation-response
-const encoding190 = encoding188
+const encoding208 = encoding206
 
 // @peartube/request-archive-publication-request
-const encoding191 = {
+const encoding209 = {
   preencode(state, m) {
     c.string.preencode(state, m.publicationId)
     c.string.preencode(state, m.renditionId)
@@ -5745,7 +6513,7 @@ const encoding191 = {
 }
 
 // @peartube/request-archive-publication-response
-const encoding192 = {
+const encoding210 = {
   preencode(state, m) {
     state.end++ // max flag is 2 so always one byte
     c.string.preencode(state, m.status)
@@ -5775,10 +6543,10 @@ const encoding192 = {
 }
 
 // @peartube/get-network-policy-request
-const encoding193 = encoding0
+const encoding211 = encoding0
 
 // @peartube/get-network-policy-response
-const encoding194 = {
+const encoding212 = {
   preencode(state, m) {
     const flags =
       (m.uploadPermission ? 1 : 0) |
@@ -5790,7 +6558,8 @@ const encoding194 = {
       (m.followedPublishersJson ? 64 : 0) |
       (m.followedIndexesJson ? 128 : 0) |
       (m.trustedModerationFeedsJson ? 256 : 0) |
-      (m.aiAnalysis ? 512 : 0)
+      (m.aiAnalysis ? 512 : 0) |
+      (m.participationMode ? 1024 : 0)
 
     c.uint.preencode(state, flags)
 
@@ -5804,6 +6573,7 @@ const encoding194 = {
     if (m.followedIndexesJson) c.string.preencode(state, m.followedIndexesJson)
     if (m.trustedModerationFeedsJson) c.string.preencode(state, m.trustedModerationFeedsJson)
     if (m.aiAnalysis) c.string.preencode(state, m.aiAnalysis)
+    if (m.participationMode) c.string.preencode(state, m.participationMode)
   },
   encode(state, m) {
     const flags =
@@ -5816,7 +6586,8 @@ const encoding194 = {
       (m.followedPublishersJson ? 64 : 0) |
       (m.followedIndexesJson ? 128 : 0) |
       (m.trustedModerationFeedsJson ? 256 : 0) |
-      (m.aiAnalysis ? 512 : 0)
+      (m.aiAnalysis ? 512 : 0) |
+      (m.participationMode ? 1024 : 0)
 
     c.uint.encode(state, flags)
 
@@ -5830,6 +6601,7 @@ const encoding194 = {
     if (m.followedIndexesJson) c.string.encode(state, m.followedIndexesJson)
     if (m.trustedModerationFeedsJson) c.string.encode(state, m.trustedModerationFeedsJson)
     if (m.aiAnalysis) c.string.encode(state, m.aiAnalysis)
+    if (m.participationMode) c.string.encode(state, m.participationMode)
   },
   decode(state) {
     const flags = c.uint.decode(state)
@@ -5844,13 +6616,14 @@ const encoding194 = {
       followedPublishersJson: (flags & 64) !== 0 ? c.string.decode(state) : null,
       followedIndexesJson: (flags & 128) !== 0 ? c.string.decode(state) : null,
       trustedModerationFeedsJson: (flags & 256) !== 0 ? c.string.decode(state) : null,
-      aiAnalysis: (flags & 512) !== 0 ? c.string.decode(state) : null
+      aiAnalysis: (flags & 512) !== 0 ? c.string.decode(state) : null,
+      participationMode: (flags & 1024) !== 0 ? c.string.decode(state) : null
     }
   }
 }
 
 // @peartube/set-network-policy-request
-const encoding195 = {
+const encoding213 = {
   preencode(state, m) {
     const flags =
       (m.uploadPermission ? 1 : 0) |
@@ -5864,7 +6637,8 @@ const encoding195 = {
       (m.followedPublishersJson ? 256 : 0) |
       (m.followedIndexesJson ? 512 : 0) |
       (m.trustedModerationFeedsJson ? 1024 : 0) |
-      (m.aiAnalysis ? 2048 : 0)
+      (m.aiAnalysis ? 2048 : 0) |
+      (m.participationMode ? 4096 : 0)
 
     c.uint.preencode(state, flags)
 
@@ -5878,6 +6652,7 @@ const encoding195 = {
     if (m.followedIndexesJson) c.string.preencode(state, m.followedIndexesJson)
     if (m.trustedModerationFeedsJson) c.string.preencode(state, m.trustedModerationFeedsJson)
     if (m.aiAnalysis) c.string.preencode(state, m.aiAnalysis)
+    if (m.participationMode) c.string.preencode(state, m.participationMode)
   },
   encode(state, m) {
     const flags =
@@ -5892,7 +6667,8 @@ const encoding195 = {
       (m.followedPublishersJson ? 256 : 0) |
       (m.followedIndexesJson ? 512 : 0) |
       (m.trustedModerationFeedsJson ? 1024 : 0) |
-      (m.aiAnalysis ? 2048 : 0)
+      (m.aiAnalysis ? 2048 : 0) |
+      (m.participationMode ? 4096 : 0)
 
     c.uint.encode(state, flags)
 
@@ -5906,6 +6682,7 @@ const encoding195 = {
     if (m.followedIndexesJson) c.string.encode(state, m.followedIndexesJson)
     if (m.trustedModerationFeedsJson) c.string.encode(state, m.trustedModerationFeedsJson)
     if (m.aiAnalysis) c.string.encode(state, m.aiAnalysis)
+    if (m.participationMode) c.string.encode(state, m.participationMode)
   },
   decode(state) {
     const flags = c.uint.decode(state)
@@ -5922,19 +6699,20 @@ const encoding195 = {
       followedPublishersJson: (flags & 256) !== 0 ? c.string.decode(state) : null,
       followedIndexesJson: (flags & 512) !== 0 ? c.string.decode(state) : null,
       trustedModerationFeedsJson: (flags & 1024) !== 0 ? c.string.decode(state) : null,
-      aiAnalysis: (flags & 2048) !== 0 ? c.string.decode(state) : null
+      aiAnalysis: (flags & 2048) !== 0 ? c.string.decode(state) : null,
+      participationMode: (flags & 4096) !== 0 ? c.string.decode(state) : null
     }
   }
 }
 
 // @peartube/set-network-policy-response
-const encoding196 = encoding66
+const encoding214 = encoding73
 
 // @peartube/clear-cache-request
-const encoding197 = encoding0
+const encoding215 = encoding0
 
 // @peartube/clear-cache-response
-const encoding198 = {
+const encoding216 = {
   preencode(state, m) {
     state.end++ // max flag is 2 so always one byte
 
@@ -5958,7 +6736,7 @@ const encoding198 = {
 }
 
 // @peartube/assess-source-offload-request
-const encoding199 = {
+const encoding217 = {
   preencode(state, m) {
     c.string.preencode(state, m.publicationId)
   },
@@ -5975,10 +6753,10 @@ const encoding199 = {
 }
 
 // @peartube/assess-source-offload-response.limitations
-const encoding200_9 = encoding44_10
+const encoding218_9 = encoding44_11
 
 // @peartube/assess-source-offload-response
-const encoding200 = {
+const encoding218 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
     c.string.preencode(state, m.publicationId)
@@ -5989,7 +6767,7 @@ const encoding200 = {
     c.uint.preencode(state, m.policyVersion)
     c.uint.preencode(state, m.byteLength)
 
-    if (m.limitations) encoding200_9.preencode(state, m.limitations)
+    if (m.limitations) encoding218_9.preencode(state, m.limitations)
     if (m.errorCode) c.string.preencode(state, m.errorCode)
   },
   encode(state, m) {
@@ -6005,7 +6783,7 @@ const encoding200 = {
     c.uint.encode(state, m.policyVersion)
     c.uint.encode(state, m.byteLength)
 
-    if (m.limitations) encoding200_9.encode(state, m.limitations)
+    if (m.limitations) encoding218_9.encode(state, m.limitations)
     if (m.errorCode) c.string.encode(state, m.errorCode)
   },
   decode(state) {
@@ -6021,14 +6799,14 @@ const encoding200 = {
       expiresAt: c.uint.decode(state),
       policyVersion: c.uint.decode(state),
       byteLength: c.uint.decode(state),
-      limitations: (flags & 4) !== 0 ? encoding200_9.decode(state) : null,
+      limitations: (flags & 4) !== 0 ? encoding218_9.decode(state) : null,
       errorCode: (flags & 8) !== 0 ? c.string.decode(state) : null
     }
   }
 }
 
 // @peartube/confirm-source-offload-request
-const encoding201 = {
+const encoding219 = {
   preencode(state, m) {
     c.string.preencode(state, m.publicationId)
     c.string.preencode(state, m.assessmentId)
@@ -6067,7 +6845,7 @@ const encoding201 = {
 }
 
 // @peartube/confirm-source-offload-response
-const encoding202 = {
+const encoding220 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
     c.string.preencode(state, m.publicationId)
@@ -6107,7 +6885,7 @@ const encoding202 = {
 }
 
 // @peartube/get-video-thumbnail-request
-const encoding203 = {
+const encoding221 = {
   preencode(state, m) {
     c.string.preencode(state, m.channelKey)
     c.string.preencode(state, m.videoId)
@@ -6147,7 +6925,7 @@ const encoding203 = {
 }
 
 // @peartube/get-video-thumbnail-response
-const encoding204 = {
+const encoding222 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
@@ -6174,21 +6952,21 @@ const encoding204 = {
 }
 
 // @peartube/get-video-metadata-request
-const encoding205 = encoding148
+const encoding223 = encoding166
 
 // @peartube/get-video-metadata-response.video
-const encoding206_0 = encoding79_0
+const encoding224_0 = encoding86_0
 
 // @peartube/get-video-metadata-response
-const encoding206 = {
+const encoding224 = {
   preencode(state, m) {
-    encoding206_0.preencode(state, m.video)
+    encoding224_0.preencode(state, m.video)
   },
   encode(state, m) {
-    encoding206_0.encode(state, m.video)
+    encoding224_0.encode(state, m.video)
   },
   decode(state) {
-    const r0 = encoding206_0.decode(state)
+    const r0 = encoding224_0.decode(state)
 
     return {
       video: r0
@@ -6197,7 +6975,7 @@ const encoding206 = {
 }
 
 // @peartube/set-video-thumbnail-request
-const encoding207 = {
+const encoding225 = {
   preencode(state, m) {
     c.string.preencode(state, m.videoId)
     c.string.preencode(state, m.imageData)
@@ -6228,7 +7006,7 @@ const encoding207 = {
 }
 
 // @peartube/set-video-thumbnail-from-file-request
-const encoding208 = {
+const encoding226 = {
   preencode(state, m) {
     c.string.preencode(state, m.videoId)
     c.string.preencode(state, m.filePath)
@@ -6249,18 +7027,18 @@ const encoding208 = {
 }
 
 // @peartube/set-video-thumbnail-from-file-response
-const encoding209 = encoding13
+const encoding227 = encoding13
 
 // @peartube/set-video-thumbnail-response
-const encoding210 = encoding13
+const encoding228 = encoding13
 
 // @peartube/desktop-browse-video.tags
-const encoding211_8 = encoding44_10
+const encoding229_8 = encoding44_11
 // @peartube/desktop-browse-video.sections
-const encoding211_10 = encoding44_10
+const encoding229_10 = encoding44_11
 
 // @peartube/desktop-browse-video
-const encoding211 = {
+const encoding229 = {
   preencode(state, m) {
     const flags =
       (m.publicBeeKey ? 1 : 0) |
@@ -6287,9 +7065,9 @@ const encoding211 = {
     c.string.preencode(state, m.channelName)
     if (m.durationText) c.string.preencode(state, m.durationText)
     if (m.summary) c.string.preencode(state, m.summary)
-    if (m.tags) encoding211_8.preencode(state, m.tags)
+    if (m.tags) encoding229_8.preencode(state, m.tags)
     if (m.accentHex) c.string.preencode(state, m.accentHex)
-    if (m.sections) encoding211_10.preencode(state, m.sections)
+    if (m.sections) encoding229_10.preencode(state, m.sections)
     if (m.thumbnailUrl) c.string.preencode(state, m.thumbnailUrl)
     if (m.path) c.string.preencode(state, m.path)
     if (m.blobId) c.string.preencode(state, m.blobId)
@@ -6324,9 +7102,9 @@ const encoding211 = {
     c.string.encode(state, m.channelName)
     if (m.durationText) c.string.encode(state, m.durationText)
     if (m.summary) c.string.encode(state, m.summary)
-    if (m.tags) encoding211_8.encode(state, m.tags)
+    if (m.tags) encoding229_8.encode(state, m.tags)
     if (m.accentHex) c.string.encode(state, m.accentHex)
-    if (m.sections) encoding211_10.encode(state, m.sections)
+    if (m.sections) encoding229_10.encode(state, m.sections)
     if (m.thumbnailUrl) c.string.encode(state, m.thumbnailUrl)
     if (m.path) c.string.encode(state, m.path)
     if (m.blobId) c.string.encode(state, m.blobId)
@@ -6350,9 +7128,9 @@ const encoding211 = {
       channelName: c.string.decode(state),
       durationText: (flags & 2) !== 0 ? c.string.decode(state) : null,
       summary: (flags & 4) !== 0 ? c.string.decode(state) : null,
-      tags: (flags & 8) !== 0 ? encoding211_8.decode(state) : null,
+      tags: (flags & 8) !== 0 ? encoding229_8.decode(state) : null,
       accentHex: (flags & 16) !== 0 ? c.string.decode(state) : null,
-      sections: (flags & 32) !== 0 ? encoding211_10.decode(state) : null,
+      sections: (flags & 32) !== 0 ? encoding229_10.decode(state) : null,
       thumbnailUrl: (flags & 64) !== 0 ? c.string.decode(state) : null,
       path: (flags & 128) !== 0 ? c.string.decode(state) : null,
       blobId: (flags & 256) !== 0 ? c.string.decode(state) : null,
@@ -6365,26 +7143,26 @@ const encoding211 = {
 }
 
 // @peartube/desktop-browse-sections.home
-const encoding212_0 = c.array(c.frame(encoding211))
+const encoding230_0 = c.array(c.frame(encoding229))
 // @peartube/desktop-browse-sections.subscriptions
-const encoding212_1 = encoding212_0
+const encoding230_1 = encoding230_0
 // @peartube/desktop-browse-sections.library
-const encoding212_2 = encoding212_0
+const encoding230_2 = encoding230_0
 // @peartube/desktop-browse-sections.studio
-const encoding212_3 = encoding212_0
+const encoding230_3 = encoding230_0
 // @peartube/desktop-browse-sections.diagnostics
-const encoding212_4 = encoding212_0
+const encoding230_4 = encoding230_0
 
 // @peartube/desktop-browse-sections
-const encoding212 = {
+const encoding230 = {
   preencode(state, m) {
     state.end++ // max flag is 16 so always one byte
 
-    if (m.home) encoding212_0.preencode(state, m.home)
-    if (m.subscriptions) encoding212_1.preencode(state, m.subscriptions)
-    if (m.library) encoding212_2.preencode(state, m.library)
-    if (m.studio) encoding212_3.preencode(state, m.studio)
-    if (m.diagnostics) encoding212_4.preencode(state, m.diagnostics)
+    if (m.home) encoding230_0.preencode(state, m.home)
+    if (m.subscriptions) encoding230_1.preencode(state, m.subscriptions)
+    if (m.library) encoding230_2.preencode(state, m.library)
+    if (m.studio) encoding230_3.preencode(state, m.studio)
+    if (m.diagnostics) encoding230_4.preencode(state, m.diagnostics)
   },
   encode(state, m) {
     const flags =
@@ -6396,27 +7174,27 @@ const encoding212 = {
 
     c.uint.encode(state, flags)
 
-    if (m.home) encoding212_0.encode(state, m.home)
-    if (m.subscriptions) encoding212_1.encode(state, m.subscriptions)
-    if (m.library) encoding212_2.encode(state, m.library)
-    if (m.studio) encoding212_3.encode(state, m.studio)
-    if (m.diagnostics) encoding212_4.encode(state, m.diagnostics)
+    if (m.home) encoding230_0.encode(state, m.home)
+    if (m.subscriptions) encoding230_1.encode(state, m.subscriptions)
+    if (m.library) encoding230_2.encode(state, m.library)
+    if (m.studio) encoding230_3.encode(state, m.studio)
+    if (m.diagnostics) encoding230_4.encode(state, m.diagnostics)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
-      home: (flags & 1) !== 0 ? encoding212_0.decode(state) : null,
-      subscriptions: (flags & 2) !== 0 ? encoding212_1.decode(state) : null,
-      library: (flags & 4) !== 0 ? encoding212_2.decode(state) : null,
-      studio: (flags & 8) !== 0 ? encoding212_3.decode(state) : null,
-      diagnostics: (flags & 16) !== 0 ? encoding212_4.decode(state) : null
+      home: (flags & 1) !== 0 ? encoding230_0.decode(state) : null,
+      subscriptions: (flags & 2) !== 0 ? encoding230_1.decode(state) : null,
+      library: (flags & 4) !== 0 ? encoding230_2.decode(state) : null,
+      studio: (flags & 8) !== 0 ? encoding230_3.decode(state) : null,
+      diagnostics: (flags & 16) !== 0 ? encoding230_4.decode(state) : null
     }
   }
 }
 
 // @peartube/desktop-browse-stats
-const encoding213 = {
+const encoding231 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
 
@@ -6452,17 +7230,17 @@ const encoding213 = {
 }
 
 // @peartube/desktop-browse-state.subscriptionChannelKeys
-const encoding214_0 = encoding44_10
+const encoding232_0 = encoding44_11
 // @peartube/desktop-browse-state.identityChannelKeys
-const encoding214_1 = encoding44_10
+const encoding232_1 = encoding44_11
 
 // @peartube/desktop-browse-state
-const encoding214 = {
+const encoding232 = {
   preencode(state, m) {
     state.end++ // max flag is 16 so always one byte
 
-    if (m.subscriptionChannelKeys) encoding214_0.preencode(state, m.subscriptionChannelKeys)
-    if (m.identityChannelKeys) encoding214_1.preencode(state, m.identityChannelKeys)
+    if (m.subscriptionChannelKeys) encoding232_0.preencode(state, m.subscriptionChannelKeys)
+    if (m.identityChannelKeys) encoding232_1.preencode(state, m.identityChannelKeys)
     if (m.activeIdentityName) c.string.preencode(state, m.activeIdentityName)
     if (m.activeIdentityChannelKey) c.string.preencode(state, m.activeIdentityChannelKey)
   },
@@ -6476,8 +7254,8 @@ const encoding214 = {
 
     c.uint.encode(state, flags)
 
-    if (m.subscriptionChannelKeys) encoding214_0.encode(state, m.subscriptionChannelKeys)
-    if (m.identityChannelKeys) encoding214_1.encode(state, m.identityChannelKeys)
+    if (m.subscriptionChannelKeys) encoding232_0.encode(state, m.subscriptionChannelKeys)
+    if (m.identityChannelKeys) encoding232_1.encode(state, m.identityChannelKeys)
     if (m.activeIdentityName) c.string.encode(state, m.activeIdentityName)
     if (m.activeIdentityChannelKey) c.string.encode(state, m.activeIdentityChannelKey)
   },
@@ -6485,8 +7263,8 @@ const encoding214 = {
     const flags = c.uint.decode(state)
 
     return {
-      subscriptionChannelKeys: (flags & 1) !== 0 ? encoding214_0.decode(state) : null,
-      identityChannelKeys: (flags & 2) !== 0 ? encoding214_1.decode(state) : null,
+      subscriptionChannelKeys: (flags & 1) !== 0 ? encoding232_0.decode(state) : null,
+      identityChannelKeys: (flags & 2) !== 0 ? encoding232_1.decode(state) : null,
       activeIdentityName: (flags & 4) !== 0 ? c.string.decode(state) : null,
       activeIdentityChannelKey: (flags & 8) !== 0 ? c.string.decode(state) : null,
       activeChannelPublished: (flags & 16) !== 0
@@ -6495,21 +7273,21 @@ const encoding214 = {
 }
 
 // @peartube/desktop-browse-snapshot.sections
-const encoding215_1 = c.frame(encoding212)
+const encoding233_1 = c.frame(encoding230)
 // @peartube/desktop-browse-snapshot.stats
-const encoding215_2 = c.frame(encoding213)
+const encoding233_2 = c.frame(encoding231)
 // @peartube/desktop-browse-snapshot.state
-const encoding215_3 = c.frame(encoding214)
+const encoding233_3 = c.frame(encoding232)
 
 // @peartube/desktop-browse-snapshot
-const encoding215 = {
+const encoding233 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
 
     if (m.generatedAt) c.uint.preencode(state, m.generatedAt)
-    encoding215_1.preencode(state, m.sections)
-    encoding215_2.preencode(state, m.stats)
-    encoding215_3.preencode(state, m.state)
+    encoding233_1.preencode(state, m.sections)
+    encoding233_2.preencode(state, m.stats)
+    encoding233_3.preencode(state, m.state)
   },
   encode(state, m) {
     const flags = m.generatedAt ? 1 : 0
@@ -6517,24 +7295,24 @@ const encoding215 = {
     c.uint.encode(state, flags)
 
     if (m.generatedAt) c.uint.encode(state, m.generatedAt)
-    encoding215_1.encode(state, m.sections)
-    encoding215_2.encode(state, m.stats)
-    encoding215_3.encode(state, m.state)
+    encoding233_1.encode(state, m.sections)
+    encoding233_2.encode(state, m.stats)
+    encoding233_3.encode(state, m.state)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
       generatedAt: (flags & 1) !== 0 ? c.uint.decode(state) : 0,
-      sections: encoding215_1.decode(state),
-      stats: encoding215_2.decode(state),
-      state: encoding215_3.decode(state)
+      sections: encoding233_1.decode(state),
+      stats: encoding233_2.decode(state),
+      state: encoding233_3.decode(state)
     }
   }
 }
 
 // @peartube/desktop-bootstrap-request
-const encoding216 = {
+const encoding234 = {
   preencode(state, m) {
     c.string.preencode(state, m.storagePath)
   },
@@ -6551,10 +7329,10 @@ const encoding216 = {
 }
 
 // @peartube/desktop-bootstrap-response.snapshot
-const encoding217_5 = c.frame(encoding215)
+const encoding235_5 = c.frame(encoding233)
 
 // @peartube/desktop-bootstrap-response
-const encoding217 = {
+const encoding235 = {
   preencode(state, m) {
     state.end++ // max flag is 16 so always one byte
 
@@ -6562,7 +7340,7 @@ const encoding217 = {
     if (m.blobServerError) c.string.preencode(state, m.blobServerError)
     if (m.protocolVersion) c.uint.preencode(state, m.protocolVersion)
     if (m.storagePath) c.string.preencode(state, m.storagePath)
-    encoding217_5.preencode(state, m.snapshot)
+    encoding235_5.preencode(state, m.snapshot)
   },
   encode(state, m) {
     const flags =
@@ -6578,7 +7356,7 @@ const encoding217 = {
     if (m.blobServerError) c.string.encode(state, m.blobServerError)
     if (m.protocolVersion) c.uint.encode(state, m.protocolVersion)
     if (m.storagePath) c.string.encode(state, m.storagePath)
-    encoding217_5.encode(state, m.snapshot)
+    encoding235_5.encode(state, m.snapshot)
   },
   decode(state) {
     const flags = c.uint.decode(state)
@@ -6589,33 +7367,33 @@ const encoding217 = {
       blobServerError: (flags & 4) !== 0 ? c.string.decode(state) : null,
       protocolVersion: (flags & 8) !== 0 ? c.uint.decode(state) : 0,
       storagePath: (flags & 16) !== 0 ? c.string.decode(state) : null,
-      snapshot: encoding217_5.decode(state)
+      snapshot: encoding235_5.decode(state)
     }
   }
 }
 
 // @peartube/desktop-shutdown-request
-const encoding218 = encoding0
+const encoding236 = encoding0
 
 // @peartube/desktop-shutdown-response
-const encoding219 = encoding13
+const encoding237 = encoding13
 
 // @peartube/desktop-refresh-browse-request
-const encoding220 = encoding0
+const encoding238 = encoding0
 
 // @peartube/desktop-refresh-browse-response.snapshot
-const encoding221_0 = encoding217_5
+const encoding239_0 = encoding235_5
 
 // @peartube/desktop-refresh-browse-response
-const encoding221 = {
+const encoding239 = {
   preencode(state, m) {
-    encoding221_0.preencode(state, m.snapshot)
+    encoding239_0.preencode(state, m.snapshot)
   },
   encode(state, m) {
-    encoding221_0.encode(state, m.snapshot)
+    encoding239_0.encode(state, m.snapshot)
   },
   decode(state) {
-    const r0 = encoding221_0.decode(state)
+    const r0 = encoding239_0.decode(state)
 
     return {
       snapshot: r0
@@ -6624,10 +7402,10 @@ const encoding221 = {
 }
 
 // @peartube/ffmpeg-decode-available-request
-const encoding222 = encoding0
+const encoding240 = encoding0
 
 // @peartube/ffmpeg-decode-available-response
-const encoding223 = {
+const encoding241 = {
   preencode(state, m) {
     state.end++ // max flag is 2 so always one byte
 
@@ -6651,7 +7429,7 @@ const encoding223 = {
 }
 
 // @peartube/update-channel-avatar-request
-const encoding224 = {
+const encoding242 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
@@ -6680,10 +7458,10 @@ const encoding224 = {
 }
 
 // @peartube/update-channel-avatar-response
-const encoding225 = encoding85
+const encoding243 = encoding92
 
 // @peartube/transcode-start-request
-const encoding226 = {
+const encoding244 = {
   preencode(state, m) {
     c.string.preencode(state, m.sourceUrl)
     state.end++ // max flag is 2 so always one byte
@@ -6713,7 +7491,7 @@ const encoding226 = {
 }
 
 // @peartube/transcode-start-response
-const encoding227 = {
+const encoding245 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
 
@@ -6744,7 +7522,7 @@ const encoding227 = {
 }
 
 // @peartube/transcode-stop-request
-const encoding228 = {
+const encoding246 = {
   preencode(state, m) {
     c.string.preencode(state, m.sessionId)
   },
@@ -6761,13 +7539,13 @@ const encoding228 = {
 }
 
 // @peartube/transcode-stop-response
-const encoding229 = encoding85
+const encoding247 = encoding92
 
 // @peartube/transcode-status-request
-const encoding230 = encoding228
+const encoding248 = encoding246
 
 // @peartube/transcode-status-response
-const encoding231 = {
+const encoding249 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
 
@@ -6800,7 +7578,7 @@ const encoding231 = {
 }
 
 // @peartube/event-transcode-progress
-const encoding232 = {
+const encoding250 = {
   preencode(state, m) {
     c.string.preencode(state, m.sessionId)
     state.end++ // max flag is 2 so always one byte
@@ -6830,7 +7608,7 @@ const encoding232 = {
 }
 
 // @peartube/status
-const encoding233 = {
+const encoding251 = {
   preencode(state, m) {
     state.end++ // max flag is 16 so always one byte
 
@@ -6864,21 +7642,21 @@ const encoding233 = {
 }
 
 // @peartube/get-status-request
-const encoding234 = encoding0
+const encoding252 = encoding0
 
 // @peartube/get-status-response.status
-const encoding235_0 = c.frame(encoding233)
+const encoding253_0 = c.frame(encoding251)
 
 // @peartube/get-status-response
-const encoding235 = {
+const encoding253 = {
   preencode(state, m) {
-    encoding235_0.preencode(state, m.status)
+    encoding253_0.preencode(state, m.status)
   },
   encode(state, m) {
-    encoding235_0.encode(state, m.status)
+    encoding253_0.encode(state, m.status)
   },
   decode(state) {
-    const r0 = encoding235_0.decode(state)
+    const r0 = encoding253_0.decode(state)
 
     return {
       status: r0
@@ -6887,10 +7665,10 @@ const encoding235 = {
 }
 
 // @peartube/pick-video-file-request
-const encoding236 = encoding0
+const encoding254 = encoding0
 
 // @peartube/pick-video-file-response
-const encoding237 = {
+const encoding255 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
 
@@ -6920,10 +7698,10 @@ const encoding237 = {
 }
 
 // @peartube/pick-image-file-request
-const encoding238 = encoding0
+const encoding256 = encoding0
 
 // @peartube/pick-image-file-response
-const encoding239 = {
+const encoding257 = {
   preencode(state, m) {
     state.end++ // max flag is 16 so always one byte
 
@@ -6961,10 +7739,10 @@ const encoding239 = {
 }
 
 // @peartube/get-blob-server-port-request
-const encoding240 = encoding0
+const encoding258 = encoding0
 
 // @peartube/get-blob-server-port-response
-const encoding241 = {
+const encoding259 = {
   preencode(state, m) {
     c.uint.preencode(state, m.port)
   },
@@ -6981,7 +7759,7 @@ const encoding241 = {
 }
 
 // @peartube/search-result
-const encoding242 = {
+const encoding260 = {
   preencode(state, m) {
     c.string.preencode(state, m.id)
     state.end++ // max flag is 2 so always one byte
@@ -7011,7 +7789,7 @@ const encoding242 = {
 }
 
 // @peartube/global-search-videos-request
-const encoding243 = {
+const encoding261 = {
   preencode(state, m) {
     c.string.preencode(state, m.query)
     state.end++ // max flag is 1 so always one byte
@@ -7038,18 +7816,18 @@ const encoding243 = {
 }
 
 // @peartube/global-search-videos-response.results
-const encoding244_0 = c.array(c.frame(encoding242))
+const encoding262_0 = c.array(c.frame(encoding260))
 
 // @peartube/global-search-videos-response
-const encoding244 = {
+const encoding262 = {
   preencode(state, m) {
-    encoding244_0.preencode(state, m.results)
+    encoding262_0.preencode(state, m.results)
   },
   encode(state, m) {
-    encoding244_0.encode(state, m.results)
+    encoding262_0.encode(state, m.results)
   },
   decode(state) {
-    const r0 = encoding244_0.decode(state)
+    const r0 = encoding262_0.decode(state)
 
     return {
       results: r0
@@ -7057,8 +7835,744 @@ const encoding244 = {
   }
 }
 
+// @peartube/index-search-selector
+const encoding263 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.namespace)
+    c.string.preencode(state, m.identifier)
+    c.string.preencode(state, m.kind)
+  },
+  encode(state, m) {
+    c.string.encode(state, m.namespace)
+    c.string.encode(state, m.identifier)
+    c.string.encode(state, m.kind)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const r1 = c.string.decode(state)
+    const r2 = c.string.decode(state)
+
+    return {
+      namespace: r0,
+      identifier: r1,
+      kind: r2
+    }
+  }
+}
+
+// @peartube/index-external-reference
+const encoding264 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.namespace)
+    c.string.preencode(state, m.identifier)
+  },
+  encode(state, m) {
+    c.string.encode(state, m.namespace)
+    c.string.encode(state, m.identifier)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const r1 = c.string.decode(state)
+
+    return {
+      namespace: r0,
+      identifier: r1
+    }
+  }
+}
+
+// @peartube/index-episode
+const encoding265 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.seriesEntityId)
+    c.uint.preencode(state, m.seasonNumber)
+    c.uint.preencode(state, m.episodeNumber)
+  },
+  encode(state, m) {
+    c.string.encode(state, m.seriesEntityId)
+    c.uint.encode(state, m.seasonNumber)
+    c.uint.encode(state, m.episodeNumber)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const r1 = c.uint.decode(state)
+    const r2 = c.uint.decode(state)
+
+    return {
+      seriesEntityId: r0,
+      seasonNumber: r1,
+      episodeNumber: r2
+    }
+  }
+}
+
+// @peartube/index-work.externalRefs
+const encoding266_4 = c.array(c.frame(encoding264))
+// @peartube/index-work.episode
+const encoding266_5 = c.frame(encoding265)
+
+// @peartube/index-work
+const encoding266 = {
+  preencode(state, m) {
+    state.end++ // max flag is 8 so always one byte
+
+    if (m.entityId) c.string.preencode(state, m.entityId)
+    if (m.title) c.string.preencode(state, m.title)
+    c.uint.preencode(state, m.releaseYear)
+    encoding266_4.preencode(state, m.externalRefs)
+    if (m.episode) encoding266_5.preencode(state, m.episode)
+  },
+  encode(state, m) {
+    const flags =
+      (m.entityId ? 1 : 0) |
+      (m.title ? 2 : 0) |
+      (m.releaseYearPresent ? 4 : 0) |
+      (m.episode ? 8 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.entityId) c.string.encode(state, m.entityId)
+    if (m.title) c.string.encode(state, m.title)
+    c.uint.encode(state, m.releaseYear)
+    encoding266_4.encode(state, m.externalRefs)
+    if (m.episode) encoding266_5.encode(state, m.episode)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      entityId: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      title: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      releaseYear: c.uint.decode(state),
+      releaseYearPresent: (flags & 4) !== 0,
+      externalRefs: encoding266_4.decode(state),
+      episode: (flags & 8) !== 0 ? encoding266_5.decode(state) : null
+    }
+  }
+}
+
+// @peartube/index-edition
+const encoding267 = {
+  preencode(state, m) {
+    state.end++ // max flag is 4 so always one byte
+
+    if (m.entityId) c.string.preencode(state, m.entityId)
+    if (m.label) c.string.preencode(state, m.label)
+    if (m.kind) c.string.preencode(state, m.kind)
+  },
+  encode(state, m) {
+    const flags = (m.entityId ? 1 : 0) | (m.label ? 2 : 0) | (m.kind ? 4 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.entityId) c.string.encode(state, m.entityId)
+    if (m.label) c.string.encode(state, m.label)
+    if (m.kind) c.string.encode(state, m.kind)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      entityId: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      label: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      kind: (flags & 4) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/index-publication
+const encoding268 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.publicationId)
+    c.string.preencode(state, m.publisherId)
+    c.string.preencode(state, m.manifestId)
+    c.uint.preencode(state, m.catalogEpoch)
+    state.end++ // max flag is 4 so always one byte
+
+    if (m.catalogHead) c.string.preencode(state, m.catalogHead)
+    if (m.title) c.string.preencode(state, m.title)
+  },
+  encode(state, m) {
+    const flags = (m.catalogEpochPresent ? 1 : 0) | (m.catalogHead ? 2 : 0) | (m.title ? 4 : 0)
+
+    c.string.encode(state, m.publicationId)
+    c.string.encode(state, m.publisherId)
+    c.string.encode(state, m.manifestId)
+    c.uint.encode(state, m.catalogEpoch)
+    c.uint.encode(state, flags)
+
+    if (m.catalogHead) c.string.encode(state, m.catalogHead)
+    if (m.title) c.string.encode(state, m.title)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const r1 = c.string.decode(state)
+    const r2 = c.string.decode(state)
+    const r3 = c.uint.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      publicationId: r0,
+      publisherId: r1,
+      manifestId: r2,
+      catalogEpoch: r3,
+      catalogEpochPresent: (flags & 1) !== 0,
+      catalogHead: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      title: (flags & 4) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/index-audio-track.languages
+const encoding269_3 = encoding44_11
+
+// @peartube/index-audio-track
+const encoding269 = {
+  preencode(state, m) {
+    state.end++ // max flag is 2 so always one byte
+
+    if (m.codec) c.string.preencode(state, m.codec)
+    c.uint.preencode(state, m.channels)
+    encoding269_3.preencode(state, m.languages)
+  },
+  encode(state, m) {
+    const flags = (m.codec ? 1 : 0) | (m.channelsPresent ? 2 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.codec) c.string.encode(state, m.codec)
+    c.uint.encode(state, m.channels)
+    encoding269_3.encode(state, m.languages)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      codec: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      channels: c.uint.decode(state),
+      channelsPresent: (flags & 2) !== 0,
+      languages: encoding269_3.decode(state)
+    }
+  }
+}
+
+// @peartube/index-subtitle-track
+const encoding270 = {
+  preencode(state, m) {
+    state.end++ // max flag is 2 so always one byte
+
+    if (m.format) c.string.preencode(state, m.format)
+    if (m.language) c.string.preencode(state, m.language)
+  },
+  encode(state, m) {
+    const flags = (m.format ? 1 : 0) | (m.language ? 2 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.format) c.string.encode(state, m.format)
+    if (m.language) c.string.encode(state, m.language)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      format: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      language: (flags & 2) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/index-rendition.hdrFormats
+const encoding271_8 = encoding44_11
+// @peartube/index-rendition.audioTracks
+const encoding271_9 = c.array(c.frame(encoding269))
+// @peartube/index-rendition.subtitleTracks
+const encoding271_10 = c.array(c.frame(encoding270))
+
+// @peartube/index-rendition
+const encoding271 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.renditionId)
+    state.end++ // max flag is 64 so always one byte
+
+    if (m.container) c.string.preencode(state, m.container)
+    if (m.videoCodec) c.string.preencode(state, m.videoCodec)
+    c.uint.preencode(state, m.width)
+    c.uint.preencode(state, m.height)
+    if (m.resolutionLabel) c.string.preencode(state, m.resolutionLabel)
+    encoding271_8.preencode(state, m.hdrFormats)
+    encoding271_9.preencode(state, m.audioTracks)
+    encoding271_10.preencode(state, m.subtitleTracks)
+    if (m.purpose) c.string.preencode(state, m.purpose)
+    c.uint.preencode(state, m.byteLength)
+  },
+  encode(state, m) {
+    const flags =
+      (m.container ? 1 : 0) |
+      (m.videoCodec ? 2 : 0) |
+      (m.widthPresent ? 4 : 0) |
+      (m.heightPresent ? 8 : 0) |
+      (m.resolutionLabel ? 16 : 0) |
+      (m.purpose ? 32 : 0) |
+      (m.byteLengthPresent ? 64 : 0)
+
+    c.string.encode(state, m.renditionId)
+    c.uint.encode(state, flags)
+
+    if (m.container) c.string.encode(state, m.container)
+    if (m.videoCodec) c.string.encode(state, m.videoCodec)
+    c.uint.encode(state, m.width)
+    c.uint.encode(state, m.height)
+    if (m.resolutionLabel) c.string.encode(state, m.resolutionLabel)
+    encoding271_8.encode(state, m.hdrFormats)
+    encoding271_9.encode(state, m.audioTracks)
+    encoding271_10.encode(state, m.subtitleTracks)
+    if (m.purpose) c.string.encode(state, m.purpose)
+    c.uint.encode(state, m.byteLength)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      renditionId: r0,
+      container: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      videoCodec: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      width: c.uint.decode(state),
+      widthPresent: (flags & 4) !== 0,
+      height: c.uint.decode(state),
+      heightPresent: (flags & 8) !== 0,
+      resolutionLabel: (flags & 16) !== 0 ? c.string.decode(state) : null,
+      hdrFormats: encoding271_8.decode(state),
+      audioTracks: encoding271_9.decode(state),
+      subtitleTracks: encoding271_10.decode(state),
+      purpose: (flags & 32) !== 0 ? c.string.decode(state) : null,
+      byteLength: c.uint.decode(state),
+      byteLengthPresent: (flags & 64) !== 0
+    }
+  }
+}
+
+// @peartube/index-asset
+const encoding272 = {
+  preencode(state, m) {
+    state.end++ // max flag is 32 so always one byte
+
+    if (m.assetId) c.string.preencode(state, m.assetId)
+    if (m.coreKey) c.string.preencode(state, m.coreKey)
+    if (m.treeHash) c.string.preencode(state, m.treeHash)
+    c.uint.preencode(state, m.blockLength)
+    c.uint.preencode(state, m.blockSize)
+    c.uint.preencode(state, m.byteLength)
+  },
+  encode(state, m) {
+    const flags =
+      (m.assetId ? 1 : 0) |
+      (m.coreKey ? 2 : 0) |
+      (m.treeHash ? 4 : 0) |
+      (m.blockLengthPresent ? 8 : 0) |
+      (m.blockSizePresent ? 16 : 0) |
+      (m.byteLengthPresent ? 32 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.assetId) c.string.encode(state, m.assetId)
+    if (m.coreKey) c.string.encode(state, m.coreKey)
+    if (m.treeHash) c.string.encode(state, m.treeHash)
+    c.uint.encode(state, m.blockLength)
+    c.uint.encode(state, m.blockSize)
+    c.uint.encode(state, m.byteLength)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      assetId: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      coreKey: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      treeHash: (flags & 4) !== 0 ? c.string.decode(state) : null,
+      blockLength: c.uint.decode(state),
+      blockLengthPresent: (flags & 8) !== 0,
+      blockSize: c.uint.decode(state),
+      blockSizePresent: (flags & 16) !== 0,
+      byteLength: c.uint.decode(state),
+      byteLengthPresent: (flags & 32) !== 0
+    }
+  }
+}
+
+// @peartube/index-provenance
+const encoding273 = {
+  preencode(state, m) {
+    state.end++ // max flag is 4 so always one byte
+
+    if (m.sourceKind) c.string.preencode(state, m.sourceKind)
+    if (m.releaseName) c.string.preencode(state, m.releaseName)
+    if (m.publicInfohash) c.string.preencode(state, m.publicInfohash)
+  },
+  encode(state, m) {
+    const flags = (m.sourceKind ? 1 : 0) | (m.releaseName ? 2 : 0) | (m.publicInfohash ? 4 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.sourceKind) c.string.encode(state, m.sourceKind)
+    if (m.releaseName) c.string.encode(state, m.releaseName)
+    if (m.publicInfohash) c.string.encode(state, m.publicInfohash)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      sourceKind: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      releaseName: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      publicInfohash: (flags & 4) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/index-availability
+const encoding274 = {
+  preencode(state, m) {
+    c.uint.preencode(state, m.peers)
+    state.end++ // max flag is 8 so always one byte
+    c.uint.preencode(state, m.completeSeeders)
+    c.uint.preencode(state, m.observedAtMs)
+    c.uint.preencode(state, m.expiresAtMs)
+  },
+  encode(state, m) {
+    const flags =
+      (m.peersPresent ? 1 : 0) |
+      (m.completeSeedersPresent ? 2 : 0) |
+      (m.observedAtMsPresent ? 4 : 0) |
+      (m.expiresAtMsPresent ? 8 : 0)
+
+    c.uint.encode(state, m.peers)
+    c.uint.encode(state, flags)
+    c.uint.encode(state, m.completeSeeders)
+    c.uint.encode(state, m.observedAtMs)
+    c.uint.encode(state, m.expiresAtMs)
+  },
+  decode(state) {
+    const r0 = c.uint.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      peers: r0,
+      peersPresent: (flags & 1) !== 0,
+      completeSeeders: c.uint.decode(state),
+      completeSeedersPresent: (flags & 2) !== 0,
+      observedAtMs: c.uint.decode(state),
+      observedAtMsPresent: (flags & 4) !== 0,
+      expiresAtMs: c.uint.decode(state),
+      expiresAtMsPresent: (flags & 8) !== 0
+    }
+  }
+}
+
+// @peartube/index-source-indexer
+const encoding275 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.indexerId)
+    c.uint.preencode(state, m.observedAtMs)
+  },
+  encode(state, m) {
+    c.string.encode(state, m.indexerId)
+    c.uint.encode(state, m.observedAtMs)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const r1 = c.uint.decode(state)
+
+    return {
+      indexerId: r0,
+      observedAtMs: r1
+    }
+  }
+}
+
+// @peartube/index-publisher-descriptor
+const encoding276 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.publisherId)
+    c.string.preencode(state, m.publisherRootKey)
+    c.string.preencode(state, m.catalogBootstrapKey)
+    c.uint.preencode(state, m.catalogEpoch)
+    c.uint.preencode(state, m.policySequence)
+  },
+  encode(state, m) {
+    c.string.encode(state, m.publisherId)
+    c.string.encode(state, m.publisherRootKey)
+    c.string.encode(state, m.catalogBootstrapKey)
+    c.uint.encode(state, m.catalogEpoch)
+    c.uint.encode(state, m.policySequence)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const r1 = c.string.decode(state)
+    const r2 = c.string.decode(state)
+    const r3 = c.uint.decode(state)
+    const r4 = c.uint.decode(state)
+
+    return {
+      publisherId: r0,
+      publisherRootKey: r1,
+      catalogBootstrapKey: r2,
+      catalogEpoch: r3,
+      policySequence: r4
+    }
+  }
+}
+
+// @peartube/index-catalog-head
+const encoding277 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.viewKey)
+    c.uint.preencode(state, m.length)
+    c.string.preencode(state, m.digest)
+    state.end++ // max flag is 1 so always one byte
+
+    if (m.authorizationStateDigest) c.string.preencode(state, m.authorizationStateDigest)
+  },
+  encode(state, m) {
+    const flags = m.authorizationStateDigest ? 1 : 0
+
+    c.string.encode(state, m.viewKey)
+    c.uint.encode(state, m.length)
+    c.string.encode(state, m.digest)
+    c.uint.encode(state, flags)
+
+    if (m.authorizationStateDigest) c.string.encode(state, m.authorizationStateDigest)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const r1 = c.uint.decode(state)
+    const r2 = c.string.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      viewKey: r0,
+      length: r1,
+      digest: r2,
+      authorizationStateDigest: (flags & 1) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/index-verification.publisherDescriptor
+const encoding278_1 = c.frame(encoding276)
+// @peartube/index-verification.catalogHead
+const encoding278_2 = c.frame(encoding277)
+
+// @peartube/index-verification
+const encoding278 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.state)
+    state.end++ // max flag is 2 so always one byte
+
+    if (m.publisherDescriptor) encoding278_1.preencode(state, m.publisherDescriptor)
+    if (m.catalogHead) encoding278_2.preencode(state, m.catalogHead)
+  },
+  encode(state, m) {
+    const flags = (m.publisherDescriptor ? 1 : 0) | (m.catalogHead ? 2 : 0)
+
+    c.string.encode(state, m.state)
+    c.uint.encode(state, flags)
+
+    if (m.publisherDescriptor) encoding278_1.encode(state, m.publisherDescriptor)
+    if (m.catalogHead) encoding278_2.encode(state, m.catalogHead)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      state: r0,
+      publisherDescriptor: (flags & 1) !== 0 ? encoding278_1.decode(state) : null,
+      catalogHead: (flags & 2) !== 0 ? encoding278_2.decode(state) : null
+    }
+  }
+}
+
+// @peartube/index-candidate-v2.work
+const encoding279_2 = c.frame(encoding266)
+// @peartube/index-candidate-v2.edition
+const encoding279_3 = c.frame(encoding267)
+// @peartube/index-candidate-v2.publication
+const encoding279_4 = c.frame(encoding268)
+// @peartube/index-candidate-v2.rendition
+const encoding279_5 = c.frame(encoding271)
+// @peartube/index-candidate-v2.asset
+const encoding279_6 = c.frame(encoding272)
+// @peartube/index-candidate-v2.provenance
+const encoding279_7 = c.frame(encoding273)
+// @peartube/index-candidate-v2.availability
+const encoding279_8 = c.frame(encoding274)
+// @peartube/index-candidate-v2.verification
+const encoding279_9 = c.frame(encoding278)
+// @peartube/index-candidate-v2.sourceIndexers
+const encoding279_10 = c.array(c.frame(encoding275))
+
+// @peartube/index-candidate-v2
+const encoding279 = {
+  preencode(state, m) {
+    c.uint.preencode(state, m.schemaVersion)
+    c.string.preencode(state, m.candidateRef)
+    encoding279_2.preencode(state, m.work)
+    state.end++ // max flag is 1 so always one byte
+
+    if (m.edition) encoding279_3.preencode(state, m.edition)
+    encoding279_4.preencode(state, m.publication)
+    encoding279_5.preencode(state, m.rendition)
+    encoding279_6.preencode(state, m.asset)
+    encoding279_7.preencode(state, m.provenance)
+    encoding279_8.preencode(state, m.availability)
+    encoding279_9.preencode(state, m.verification)
+    encoding279_10.preencode(state, m.sourceIndexers)
+  },
+  encode(state, m) {
+    const flags = m.edition ? 1 : 0
+
+    c.uint.encode(state, m.schemaVersion)
+    c.string.encode(state, m.candidateRef)
+    encoding279_2.encode(state, m.work)
+    c.uint.encode(state, flags)
+
+    if (m.edition) encoding279_3.encode(state, m.edition)
+    encoding279_4.encode(state, m.publication)
+    encoding279_5.encode(state, m.rendition)
+    encoding279_6.encode(state, m.asset)
+    encoding279_7.encode(state, m.provenance)
+    encoding279_8.encode(state, m.availability)
+    encoding279_9.encode(state, m.verification)
+    encoding279_10.encode(state, m.sourceIndexers)
+  },
+  decode(state) {
+    const r0 = c.uint.decode(state)
+    const r1 = c.string.decode(state)
+    const r2 = encoding279_2.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      schemaVersion: r0,
+      candidateRef: r1,
+      work: r2,
+      edition: (flags & 1) !== 0 ? encoding279_3.decode(state) : null,
+      publication: encoding279_4.decode(state),
+      rendition: encoding279_5.decode(state),
+      asset: encoding279_6.decode(state),
+      provenance: encoding279_7.decode(state),
+      availability: encoding279_8.decode(state),
+      verification: encoding279_9.decode(state),
+      sourceIndexers: encoding279_10.decode(state)
+    }
+  }
+}
+
+// @peartube/search-index-candidates-request.selector
+const encoding280_0 = c.frame(encoding263)
+
+// @peartube/search-index-candidates-request
+const encoding280 = {
+  preencode(state, m) {
+    encoding280_0.preencode(state, m.selector)
+  },
+  encode(state, m) {
+    encoding280_0.encode(state, m.selector)
+  },
+  decode(state) {
+    const r0 = encoding280_0.decode(state)
+
+    return {
+      selector: r0
+    }
+  }
+}
+
+// @peartube/search-index-candidates-response.candidates
+const encoding281_1 = c.array(c.frame(encoding279))
+
+// @peartube/search-index-candidates-response
+const encoding281 = {
+  preencode(state, m) {
+    state.end++ // max flag is 4 so always one byte
+    encoding281_1.preencode(state, m.candidates)
+
+    if (m.errorCode) c.string.preencode(state, m.errorCode)
+    if (m.errorMessage) c.string.preencode(state, m.errorMessage)
+  },
+  encode(state, m) {
+    const flags = (m.success ? 1 : 0) | (m.errorCode ? 2 : 0) | (m.errorMessage ? 4 : 0)
+
+    c.uint.encode(state, flags)
+    encoding281_1.encode(state, m.candidates)
+
+    if (m.errorCode) c.string.encode(state, m.errorCode)
+    if (m.errorMessage) c.string.encode(state, m.errorMessage)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      success: (flags & 1) !== 0,
+      candidates: encoding281_1.decode(state),
+      errorCode: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      errorMessage: (flags & 4) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/verify-index-candidate-request
+const encoding282 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.candidateRef)
+  },
+  encode(state, m) {
+    c.string.encode(state, m.candidateRef)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+
+    return {
+      candidateRef: r0
+    }
+  }
+}
+
+// @peartube/verify-index-candidate-response.candidate
+const encoding283_1 = c.frame(encoding279)
+
+// @peartube/verify-index-candidate-response
+const encoding283 = {
+  preencode(state, m) {
+    state.end++ // max flag is 8 so always one byte
+
+    if (m.candidate) encoding283_1.preencode(state, m.candidate)
+    if (m.errorCode) c.string.preencode(state, m.errorCode)
+    if (m.errorMessage) c.string.preencode(state, m.errorMessage)
+  },
+  encode(state, m) {
+    const flags =
+      (m.success ? 1 : 0) | (m.candidate ? 2 : 0) | (m.errorCode ? 4 : 0) | (m.errorMessage ? 8 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.candidate) encoding283_1.encode(state, m.candidate)
+    if (m.errorCode) c.string.encode(state, m.errorCode)
+    if (m.errorMessage) c.string.encode(state, m.errorMessage)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      success: (flags & 1) !== 0,
+      candidate: (flags & 2) !== 0 ? encoding283_1.decode(state) : null,
+      errorCode: (flags & 4) !== 0 ? c.string.decode(state) : null,
+      errorMessage: (flags & 8) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
 // @peartube/device
-const encoding245 = {
+const encoding284 = {
   preencode(state, m) {
     c.string.preencode(state, m.keyHex)
     state.end++ // max flag is 8 so always one byte
@@ -7095,10 +8609,10 @@ const encoding245 = {
 }
 
 // @peartube/create-device-invite-request
-const encoding246 = encoding98
+const encoding285 = encoding105
 
 // @peartube/create-device-invite-response
-const encoding247 = {
+const encoding286 = {
   preencode(state, m) {
     c.string.preencode(state, m.inviteCode)
   },
@@ -7115,34 +8629,10 @@ const encoding247 = {
 }
 
 // @peartube/pair-device-request
-const encoding248 = {
-  preencode(state, m) {
-    c.string.preencode(state, m.inviteCode)
-    state.end++ // max flag is 1 so always one byte
-
-    if (m.deviceName) c.string.preencode(state, m.deviceName)
-  },
-  encode(state, m) {
-    const flags = m.deviceName ? 1 : 0
-
-    c.string.encode(state, m.inviteCode)
-    c.uint.encode(state, flags)
-
-    if (m.deviceName) c.string.encode(state, m.deviceName)
-  },
-  decode(state) {
-    const r0 = c.string.decode(state)
-    const flags = c.uint.decode(state)
-
-    return {
-      inviteCode: r0,
-      deviceName: (flags & 1) !== 0 ? c.string.decode(state) : null
-    }
-  }
-}
+const encoding287 = encoding149
 
 // @peartube/pair-device-response
-const encoding249 = {
+const encoding288 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
     c.string.preencode(state, m.channelKey)
@@ -7172,10 +8662,10 @@ const encoding249 = {
 }
 
 // @peartube/retry-sync-channel-request
-const encoding250 = encoding98
+const encoding289 = encoding105
 
 // @peartube/retry-sync-channel-response
-const encoding251 = {
+const encoding290 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
@@ -7202,21 +8692,21 @@ const encoding251 = {
 }
 
 // @peartube/list-devices-request
-const encoding252 = encoding98
+const encoding291 = encoding105
 
 // @peartube/list-devices-response.devices
-const encoding253_0 = c.array(c.frame(encoding245))
+const encoding292_0 = c.array(c.frame(encoding284))
 
 // @peartube/list-devices-response
-const encoding253 = {
+const encoding292 = {
   preencode(state, m) {
-    encoding253_0.preencode(state, m.devices)
+    encoding292_0.preencode(state, m.devices)
   },
   encode(state, m) {
-    encoding253_0.encode(state, m.devices)
+    encoding292_0.encode(state, m.devices)
   },
   decode(state) {
-    const r0 = encoding253_0.decode(state)
+    const r0 = encoding292_0.decode(state)
 
     return {
       devices: r0
@@ -7225,7 +8715,7 @@ const encoding253 = {
 }
 
 // @peartube/event-ready
-const encoding254 = {
+const encoding293 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
 
@@ -7248,7 +8738,7 @@ const encoding254 = {
 }
 
 // @peartube/event-error
-const encoding255 = {
+const encoding294 = {
   preencode(state, m) {
     state.end++ // max flag is 2 so always one byte
 
@@ -7275,7 +8765,7 @@ const encoding255 = {
 }
 
 // @peartube/event-upload-progress
-const encoding256 = {
+const encoding295 = {
   preencode(state, m) {
     c.string.preencode(state, m.videoId)
     c.uint.preencode(state, m.progress)
@@ -7316,7 +8806,7 @@ const encoding256 = {
 }
 
 // @peartube/event-download-progress
-const encoding257 = {
+const encoding296 = {
   preencode(state, m) {
     c.string.preencode(state, m.id)
     c.uint.preencode(state, m.progress)
@@ -7350,7 +8840,7 @@ const encoding257 = {
 }
 
 // @peartube/event-media-graph-update
-const encoding258 = {
+const encoding297 = {
   preencode(state, m) {
     c.string.preencode(state, m.revision)
     c.uint.preencode(state, m.changedCount)
@@ -7371,7 +8861,7 @@ const encoding258 = {
 }
 
 // @peartube/event-log
-const encoding259 = {
+const encoding298 = {
   preencode(state, m) {
     c.string.preencode(state, m.level)
     c.string.preencode(state, m.message)
@@ -7402,15 +8892,15 @@ const encoding259 = {
 }
 
 // @peartube/event-video-stats
-const encoding260 = {
+const encoding299 = {
   preencode(state, m) {
-    encoding260_0.preencode(state, m.stats)
+    encoding299_0.preencode(state, m.stats)
   },
   encode(state, m) {
-    encoding260_0.encode(state, m.stats)
+    encoding299_0.encode(state, m.stats)
   },
   decode(state) {
-    const r0 = encoding260_0.decode(state)
+    const r0 = encoding299_0.decode(state)
 
     return {
       stats: r0
@@ -7419,7 +8909,7 @@ const encoding260 = {
 }
 
 // @peartube/channel-op-base
-const encoding261 = {
+const encoding300 = {
   preencode(state, m) {
     c.string.preencode(state, m.type)
     state.end++ // max flag is 1 so always one byte
@@ -7446,7 +8936,7 @@ const encoding261 = {
 }
 
 // @peartube/channel-op-update-channel
-const encoding262 = {
+const encoding301 = {
   preencode(state, m) {
     const flags =
       (m.schemaVersion ? 1 : 0) |
@@ -7517,7 +9007,7 @@ const encoding262 = {
 }
 
 // @peartube/channel-op-add-video
-const encoding263 = {
+const encoding302 = {
   preencode(state, m) {
     const flags =
       (m.schemaVersion ? 1 : 0) |
@@ -7609,7 +9099,7 @@ const encoding263 = {
 }
 
 // @peartube/channel-op-update-video
-const encoding264 = {
+const encoding303 = {
   preencode(state, m) {
     c.string.preencode(state, m.type)
     state.end++ // max flag is 64 so always one byte
@@ -7664,7 +9154,7 @@ const encoding264 = {
 }
 
 // @peartube/channel-op-delete-video
-const encoding265 = {
+const encoding304 = {
   preencode(state, m) {
     c.string.preencode(state, m.type)
     state.end++ // max flag is 1 so always one byte
@@ -7694,7 +9184,7 @@ const encoding265 = {
 }
 
 // @peartube/channel-op-add-writer
-const encoding266 = {
+const encoding305 = {
   preencode(state, m) {
     c.string.preencode(state, m.type)
     state.end++ // max flag is 16 so always one byte
@@ -7741,10 +9231,10 @@ const encoding266 = {
 }
 
 // @peartube/channel-op-upsert-writer
-const encoding267 = encoding266
+const encoding306 = encoding305
 
 // @peartube/channel-op-remove-writer
-const encoding268 = {
+const encoding307 = {
   preencode(state, m) {
     c.string.preencode(state, m.type)
     state.end++ // max flag is 2 so always one byte
@@ -7775,7 +9265,7 @@ const encoding268 = {
 }
 
 // @peartube/channel-op-add-invite
-const encoding269 = {
+const encoding308 = {
   preencode(state, m) {
     c.string.preencode(state, m.type)
     state.end++ // max flag is 8 so always one byte
@@ -7821,7 +9311,7 @@ const encoding269 = {
 }
 
 // @peartube/channel-op-delete-invite
-const encoding270 = {
+const encoding309 = {
   preencode(state, m) {
     c.string.preencode(state, m.type)
     state.end++ // max flag is 1 so always one byte
@@ -7851,7 +9341,7 @@ const encoding270 = {
 }
 
 // @peartube/channel-op-add-comment
-const encoding271 = {
+const encoding310 = {
   preencode(state, m) {
     c.string.preencode(state, m.type)
     state.end++ // max flag is 4 so always one byte
@@ -7896,7 +9386,7 @@ const encoding271 = {
 }
 
 // @peartube/channel-op-add-reaction
-const encoding272 = {
+const encoding311 = {
   preencode(state, m) {
     c.string.preencode(state, m.type)
     state.end++ // max flag is 2 so always one byte
@@ -7935,7 +9425,7 @@ const encoding272 = {
 }
 
 // @peartube/channel-op-remove-reaction
-const encoding273 = {
+const encoding312 = {
   preencode(state, m) {
     c.string.preencode(state, m.type)
     state.end++ // max flag is 1 so always one byte
@@ -7968,7 +9458,7 @@ const encoding273 = {
 }
 
 // @peartube/channel-op-hide-comment
-const encoding274 = {
+const encoding313 = {
   preencode(state, m) {
     c.string.preencode(state, m.type)
     state.end++ // max flag is 1 so always one byte
@@ -8004,7 +9494,7 @@ const encoding274 = {
 }
 
 // @peartube/channel-op-remove-comment
-const encoding275 = {
+const encoding314 = {
   preencode(state, m) {
     c.string.preencode(state, m.type)
     state.end++ // max flag is 4 so always one byte
@@ -8043,7 +9533,7 @@ const encoding275 = {
 }
 
 // @peartube/channel-op-add-vector-index
-const encoding276 = {
+const encoding315 = {
   preencode(state, m) {
     c.string.preencode(state, m.type)
     state.end++ // max flag is 8 so always one byte
@@ -8083,7 +9573,7 @@ const encoding276 = {
 }
 
 // @peartube/channel-op-log-watch-event
-const encoding277 = {
+const encoding316 = {
   preencode(state, m) {
     c.string.preencode(state, m.type)
     state.end++ // max flag is 32 so always one byte
@@ -8132,7 +9622,7 @@ const encoding277 = {
 }
 
 // @peartube/channel-op-migrate-schema
-const encoding278 = {
+const encoding317 = {
   preencode(state, m) {
     c.string.preencode(state, m.type)
     c.uint.preencode(state, m.schemaVersion)
@@ -8171,7 +9661,7 @@ const encoding278 = {
 }
 
 // @peartube/add-comment-request
-const encoding279 = {
+const encoding318 = {
   preencode(state, m) {
     c.string.preencode(state, m.channelKey)
     c.string.preencode(state, m.videoId)
@@ -8212,7 +9702,7 @@ const encoding279 = {
 }
 
 // @peartube/add-comment-response
-const encoding280 = {
+const encoding319 = {
   preencode(state, m) {
     state.end++ // max flag is 8 so always one byte
 
@@ -8241,7 +9731,7 @@ const encoding280 = {
 }
 
 // @peartube/list-comments-request
-const encoding281 = {
+const encoding320 = {
   preencode(state, m) {
     c.string.preencode(state, m.channelKey)
     c.string.preencode(state, m.videoId)
@@ -8278,7 +9768,7 @@ const encoding281 = {
 }
 
 // @peartube/comment
-const encoding282 = {
+const encoding321 = {
   preencode(state, m) {
     c.string.preencode(state, m.videoId)
     c.string.preencode(state, m.commentId)
@@ -8321,13 +9811,13 @@ const encoding282 = {
 }
 
 // @peartube/list-comments-response.comments
-const encoding283_1 = c.array(c.frame(encoding282))
+const encoding322_1 = c.array(c.frame(encoding321))
 
 // @peartube/list-comments-response
-const encoding283 = {
+const encoding322 = {
   preencode(state, m) {
     state.end++ // max flag is 2 so always one byte
-    encoding283_1.preencode(state, m.comments)
+    encoding322_1.preencode(state, m.comments)
 
     if (m.error) c.string.preencode(state, m.error)
   },
@@ -8335,7 +9825,7 @@ const encoding283 = {
     const flags = (m.success ? 1 : 0) | (m.error ? 2 : 0)
 
     c.uint.encode(state, flags)
-    encoding283_1.encode(state, m.comments)
+    encoding322_1.encode(state, m.comments)
 
     if (m.error) c.string.encode(state, m.error)
   },
@@ -8344,14 +9834,14 @@ const encoding283 = {
 
     return {
       success: (flags & 1) !== 0,
-      comments: encoding283_1.decode(state),
+      comments: encoding322_1.decode(state),
       error: (flags & 2) !== 0 ? c.string.decode(state) : null
     }
   }
 }
 
 // @peartube/hide-comment-request
-const encoding284 = {
+const encoding323 = {
   preencode(state, m) {
     c.string.preencode(state, m.channelKey)
     c.string.preencode(state, m.videoId)
@@ -8386,10 +9876,10 @@ const encoding284 = {
 }
 
 // @peartube/hide-comment-response
-const encoding285 = encoding85
+const encoding324 = encoding92
 
 // @peartube/remove-comment-request
-const encoding286 = {
+const encoding325 = {
   preencode(state, m) {
     c.string.preencode(state, m.channelKey)
     c.string.preencode(state, m.videoId)
@@ -8427,7 +9917,7 @@ const encoding286 = {
 }
 
 // @peartube/remove-comment-response
-const encoding287 = {
+const encoding326 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
@@ -8452,7 +9942,7 @@ const encoding287 = {
 }
 
 // @peartube/reaction-count
-const encoding288 = {
+const encoding327 = {
   preencode(state, m) {
     c.string.preencode(state, m.reactionType)
     c.uint.preencode(state, m.count)
@@ -8473,7 +9963,7 @@ const encoding288 = {
 }
 
 // @peartube/add-reaction-request
-const encoding289 = {
+const encoding328 = {
   preencode(state, m) {
     c.string.preencode(state, m.channelKey)
     c.string.preencode(state, m.videoId)
@@ -8511,10 +10001,10 @@ const encoding289 = {
 }
 
 // @peartube/add-reaction-response
-const encoding290 = encoding287
+const encoding329 = encoding326
 
 // @peartube/remove-reaction-request
-const encoding291 = {
+const encoding330 = {
   preencode(state, m) {
     c.string.preencode(state, m.channelKey)
     c.string.preencode(state, m.videoId)
@@ -8548,19 +10038,19 @@ const encoding291 = {
 }
 
 // @peartube/remove-reaction-response
-const encoding292 = encoding287
+const encoding331 = encoding326
 
 // @peartube/get-reactions-request
-const encoding293 = encoding291
+const encoding332 = encoding330
 
 // @peartube/get-reactions-response.counts
-const encoding294_1 = c.array(c.frame(encoding288))
+const encoding333_1 = c.array(c.frame(encoding327))
 
 // @peartube/get-reactions-response
-const encoding294 = {
+const encoding333 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
-    encoding294_1.preencode(state, m.counts)
+    encoding333_1.preencode(state, m.counts)
 
     if (m.userReaction) c.string.preencode(state, m.userReaction)
     if (m.error) c.string.preencode(state, m.error)
@@ -8569,7 +10059,7 @@ const encoding294 = {
     const flags = (m.success ? 1 : 0) | (m.userReaction ? 2 : 0) | (m.error ? 4 : 0)
 
     c.uint.encode(state, flags)
-    encoding294_1.encode(state, m.counts)
+    encoding333_1.encode(state, m.counts)
 
     if (m.userReaction) c.string.encode(state, m.userReaction)
     if (m.error) c.string.encode(state, m.error)
@@ -8579,7 +10069,7 @@ const encoding294 = {
 
     return {
       success: (flags & 1) !== 0,
-      counts: encoding294_1.decode(state),
+      counts: encoding333_1.decode(state),
       userReaction: (flags & 2) !== 0 ? c.string.decode(state) : null,
       error: (flags & 4) !== 0 ? c.string.decode(state) : null
     }
@@ -8587,7 +10077,7 @@ const encoding294 = {
 }
 
 // @peartube/cast-device
-const encoding295 = {
+const encoding334 = {
   preencode(state, m) {
     c.string.preencode(state, m.id)
     c.string.preencode(state, m.name)
@@ -8620,10 +10110,10 @@ const encoding295 = {
 }
 
 // @peartube/cast-available-request
-const encoding296 = encoding0
+const encoding335 = encoding0
 
 // @peartube/cast-available-response
-const encoding297 = {
+const encoding336 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
   },
@@ -8642,33 +10132,33 @@ const encoding297 = {
 }
 
 // @peartube/cast-start-discovery-request
-const encoding298 = encoding0
+const encoding337 = encoding0
 
 // @peartube/cast-start-discovery-response
-const encoding299 = encoding13
+const encoding338 = encoding13
 
 // @peartube/cast-stop-discovery-request
-const encoding300 = encoding0
+const encoding339 = encoding0
 
 // @peartube/cast-stop-discovery-response
-const encoding301 = encoding13
+const encoding340 = encoding13
 
 // @peartube/cast-get-devices-request
-const encoding302 = encoding0
+const encoding341 = encoding0
 
 // @peartube/cast-get-devices-response.devices
-const encoding303_0 = c.array(c.frame(encoding295))
+const encoding342_0 = c.array(c.frame(encoding334))
 
 // @peartube/cast-get-devices-response
-const encoding303 = {
+const encoding342 = {
   preencode(state, m) {
-    encoding303_0.preencode(state, m.devices)
+    encoding342_0.preencode(state, m.devices)
   },
   encode(state, m) {
-    encoding303_0.encode(state, m.devices)
+    encoding342_0.encode(state, m.devices)
   },
   decode(state) {
-    const r0 = encoding303_0.decode(state)
+    const r0 = encoding342_0.decode(state)
 
     return {
       devices: r0
@@ -8677,7 +10167,7 @@ const encoding303 = {
 }
 
 // @peartube/cast-add-manual-device-request
-const encoding304 = {
+const encoding343 = {
   preencode(state, m) {
     c.string.preencode(state, m.name)
     c.string.preencode(state, m.host)
@@ -8711,14 +10201,14 @@ const encoding304 = {
 }
 
 // @peartube/cast-add-manual-device-response.device
-const encoding305_1 = c.frame(encoding295)
+const encoding344_1 = c.frame(encoding334)
 
 // @peartube/cast-add-manual-device-response
-const encoding305 = {
+const encoding344 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
-    if (m.device) encoding305_1.preencode(state, m.device)
+    if (m.device) encoding344_1.preencode(state, m.device)
     if (m.error) c.string.preencode(state, m.error)
   },
   encode(state, m) {
@@ -8726,7 +10216,7 @@ const encoding305 = {
 
     c.uint.encode(state, flags)
 
-    if (m.device) encoding305_1.encode(state, m.device)
+    if (m.device) encoding344_1.encode(state, m.device)
     if (m.error) c.string.encode(state, m.error)
   },
   decode(state) {
@@ -8734,14 +10224,14 @@ const encoding305 = {
 
     return {
       success: (flags & 1) !== 0,
-      device: (flags & 2) !== 0 ? encoding305_1.decode(state) : null,
+      device: (flags & 2) !== 0 ? encoding344_1.decode(state) : null,
       error: (flags & 4) !== 0 ? c.string.decode(state) : null
     }
   }
 }
 
 // @peartube/cast-connect-request
-const encoding306 = {
+const encoding345 = {
   preencode(state, m) {
     c.string.preencode(state, m.deviceId)
   },
@@ -8758,16 +10248,16 @@ const encoding306 = {
 }
 
 // @peartube/cast-connect-response
-const encoding307 = encoding85
+const encoding346 = encoding92
 
 // @peartube/cast-disconnect-request
-const encoding308 = encoding0
+const encoding347 = encoding0
 
 // @peartube/cast-disconnect-response
-const encoding309 = encoding85
+const encoding348 = encoding92
 
 // @peartube/cast-play-request
-const encoding310 = {
+const encoding349 = {
   preencode(state, m) {
     c.string.preencode(state, m.url)
     c.string.preencode(state, m.contentType)
@@ -8807,28 +10297,28 @@ const encoding310 = {
 }
 
 // @peartube/cast-play-response
-const encoding311 = encoding85
+const encoding350 = encoding92
 
 // @peartube/cast-pause-request
-const encoding312 = encoding0
+const encoding351 = encoding0
 
 // @peartube/cast-pause-response
-const encoding313 = encoding85
+const encoding352 = encoding92
 
 // @peartube/cast-resume-request
-const encoding314 = encoding0
+const encoding353 = encoding0
 
 // @peartube/cast-resume-response
-const encoding315 = encoding85
+const encoding354 = encoding92
 
 // @peartube/cast-stop-request
-const encoding316 = encoding0
+const encoding355 = encoding0
 
 // @peartube/cast-stop-response
-const encoding317 = encoding85
+const encoding356 = encoding92
 
 // @peartube/cast-seek-request
-const encoding318 = {
+const encoding357 = {
   preencode(state, m) {
     c.uint.preencode(state, m.time)
   },
@@ -8845,10 +10335,10 @@ const encoding318 = {
 }
 
 // @peartube/cast-seek-response
-const encoding319 = encoding85
+const encoding358 = encoding92
 
 // @peartube/cast-set-volume-request
-const encoding320 = {
+const encoding359 = {
   preencode(state, m) {
     c.uint.preencode(state, m.volume)
   },
@@ -8865,13 +10355,13 @@ const encoding320 = {
 }
 
 // @peartube/cast-set-volume-response
-const encoding321 = encoding85
+const encoding360 = encoding92
 
 // @peartube/cast-get-state-request
-const encoding322 = encoding0
+const encoding361 = encoding0
 
 // @peartube/cast-get-state-response
-const encoding323 = {
+const encoding362 = {
   preencode(state, m) {
     c.string.preencode(state, m.state)
     state.end++ // max flag is 4 so always one byte
@@ -8904,10 +10394,10 @@ const encoding323 = {
 }
 
 // @peartube/cast-is-connected-request
-const encoding324 = encoding0
+const encoding363 = encoding0
 
 // @peartube/cast-is-connected-response
-const encoding325 = {
+const encoding364 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
   },
@@ -8926,18 +10416,18 @@ const encoding325 = {
 }
 
 // @peartube/event-cast-device-found.device
-const encoding326_0 = encoding305_1
+const encoding365_0 = encoding344_1
 
 // @peartube/event-cast-device-found
-const encoding326 = {
+const encoding365 = {
   preencode(state, m) {
-    encoding326_0.preencode(state, m.device)
+    encoding365_0.preencode(state, m.device)
   },
   encode(state, m) {
-    encoding326_0.encode(state, m.device)
+    encoding365_0.encode(state, m.device)
   },
   decode(state) {
-    const r0 = encoding326_0.decode(state)
+    const r0 = encoding365_0.decode(state)
 
     return {
       device: r0
@@ -8946,10 +10436,10 @@ const encoding326 = {
 }
 
 // @peartube/event-cast-device-lost
-const encoding327 = encoding306
+const encoding366 = encoding345
 
 // @peartube/event-cast-playback-state
-const encoding328 = {
+const encoding367 = {
   preencode(state, m) {
     c.string.preencode(state, m.state)
   },
@@ -8966,7 +10456,7 @@ const encoding328 = {
 }
 
 // @peartube/event-cast-time-update
-const encoding329 = {
+const encoding368 = {
   preencode(state, m) {
     c.uint.preencode(state, m.currentTime)
   },
@@ -8983,7 +10473,7 @@ const encoding329 = {
 }
 
 // @peartube/search-videos-request
-const encoding330 = {
+const encoding369 = {
   preencode(state, m) {
     c.string.preencode(state, m.channelKey)
     c.string.preencode(state, m.query)
@@ -9015,18 +10505,18 @@ const encoding330 = {
 }
 
 // @peartube/search-videos-response.results
-const encoding331_0 = encoding244_0
+const encoding370_0 = encoding262_0
 
 // @peartube/search-videos-response
-const encoding331 = {
+const encoding370 = {
   preencode(state, m) {
-    encoding331_0.preencode(state, m.results)
+    encoding370_0.preencode(state, m.results)
   },
   encode(state, m) {
-    encoding331_0.encode(state, m.results)
+    encoding370_0.encode(state, m.results)
   },
   decode(state) {
-    const r0 = encoding331_0.decode(state)
+    const r0 = encoding370_0.decode(state)
 
     return {
       results: r0
@@ -9034,204 +10524,191 @@ const encoding331 = {
   }
 }
 
-// @peartube/log-watch-event-request
-const encoding332 = {
-  preencode(state, m) {
-    c.string.preencode(state, m.channelKey)
-    c.string.preencode(state, m.videoId)
-    state.end++ // max flag is 4 so always one byte
-
-    if (m.duration) c.uint.preencode(state, m.duration)
-  },
-  encode(state, m) {
-    const flags = (m.duration ? 1 : 0) | (m.completed ? 2 : 0) | (m.share ? 4 : 0)
-
-    c.string.encode(state, m.channelKey)
-    c.string.encode(state, m.videoId)
-    c.uint.encode(state, flags)
-
-    if (m.duration) c.uint.encode(state, m.duration)
-  },
-  decode(state) {
-    const r0 = c.string.decode(state)
-    const r1 = c.string.decode(state)
-    const flags = c.uint.decode(state)
-
-    return {
-      channelKey: r0,
-      videoId: r1,
-      duration: (flags & 1) !== 0 ? c.uint.decode(state) : 0,
-      completed: (flags & 2) !== 0,
-      share: (flags & 4) !== 0
-    }
-  }
-}
-
-// @peartube/log-watch-event-response
-const encoding333 = encoding85
-
 // @peartube/index-video-vectors-request
-const encoding334 = encoding148
+const encoding371 = encoding166
 
 // @peartube/index-video-vectors-response
-const encoding335 = encoding85
+const encoding372 = encoding92
 
-// @peartube/recommendation
-const encoding336 = {
+// @peartube/get-participation-status-request
+const encoding373 = encoding0
+
+// @peartube/get-participation-status-response.reasonCodes
+const encoding374_13 = encoding44_11
+
+// @peartube/get-participation-status-response
+const encoding374 = {
   preencode(state, m) {
-    c.string.preencode(state, m.videoId)
-    state.end++ // max flag is 2 so always one byte
+    state.end++ // max flag is 16 so always one byte
+    c.string.preencode(state, m.mode)
+    c.string.preencode(state, m.state)
+    c.uint.preencode(state, m.cacheCeilingBytes)
+    c.uint.preencode(state, m.uploadCeilingBytesPer24h)
+    c.uint.preencode(state, m.uploadedBytesLast24h)
+    c.uint.preencode(state, m.outboundBytesPerSecond)
+    c.uint.preencode(state, m.postPlaybackGraceMs)
+    c.uint.preencode(state, m.backgroundRemainingSessionMs)
+    c.uint.preencode(state, m.backgroundRemainingDailyMs)
+    encoding374_13.preencode(state, m.reasonCodes)
 
-    if (m.score) c.string.preencode(state, m.score)
-    if (m.reason) c.string.preencode(state, m.reason)
+    if (m.errorCode) c.string.preencode(state, m.errorCode)
   },
   encode(state, m) {
-    const flags = (m.score ? 1 : 0) | (m.reason ? 2 : 0)
-
-    c.string.encode(state, m.videoId)
-    c.uint.encode(state, flags)
-
-    if (m.score) c.string.encode(state, m.score)
-    if (m.reason) c.string.encode(state, m.reason)
-  },
-  decode(state) {
-    const r0 = c.string.decode(state)
-    const flags = c.uint.decode(state)
-
-    return {
-      videoId: r0,
-      score: (flags & 1) !== 0 ? c.string.decode(state) : null,
-      reason: (flags & 2) !== 0 ? c.string.decode(state) : null
-    }
-  }
-}
-
-// @peartube/get-recommendations-request
-const encoding337 = {
-  preencode(state, m) {
-    c.string.preencode(state, m.channelKey)
-    state.end++ // max flag is 1 so always one byte
-
-    if (m.limit) c.uint.preencode(state, m.limit)
-  },
-  encode(state, m) {
-    const flags = m.limit ? 1 : 0
-
-    c.string.encode(state, m.channelKey)
-    c.uint.encode(state, flags)
-
-    if (m.limit) c.uint.encode(state, m.limit)
-  },
-  decode(state) {
-    const r0 = c.string.decode(state)
-    const flags = c.uint.decode(state)
-
-    return {
-      channelKey: r0,
-      limit: (flags & 1) !== 0 ? c.uint.decode(state) : 0
-    }
-  }
-}
-
-// @peartube/get-recommendations-response.recommendations
-const encoding338_1 = c.array(c.frame(encoding336))
-
-// @peartube/get-recommendations-response
-const encoding338 = {
-  preencode(state, m) {
-    state.end++ // max flag is 2 so always one byte
-    encoding338_1.preencode(state, m.recommendations)
-
-    if (m.error) c.string.preencode(state, m.error)
-  },
-  encode(state, m) {
-    const flags = (m.success ? 1 : 0) | (m.error ? 2 : 0)
+    const flags =
+      (m.success ? 1 : 0) |
+      (m.uploadEligible ? 2 : 0) |
+      (m.uploading ? 4 : 0) |
+      (m.backgroundEligible ? 8 : 0) |
+      (m.errorCode ? 16 : 0)
 
     c.uint.encode(state, flags)
-    encoding338_1.encode(state, m.recommendations)
+    c.string.encode(state, m.mode)
+    c.string.encode(state, m.state)
+    c.uint.encode(state, m.cacheCeilingBytes)
+    c.uint.encode(state, m.uploadCeilingBytesPer24h)
+    c.uint.encode(state, m.uploadedBytesLast24h)
+    c.uint.encode(state, m.outboundBytesPerSecond)
+    c.uint.encode(state, m.postPlaybackGraceMs)
+    c.uint.encode(state, m.backgroundRemainingSessionMs)
+    c.uint.encode(state, m.backgroundRemainingDailyMs)
+    encoding374_13.encode(state, m.reasonCodes)
 
-    if (m.error) c.string.encode(state, m.error)
+    if (m.errorCode) c.string.encode(state, m.errorCode)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
       success: (flags & 1) !== 0,
-      recommendations: encoding338_1.decode(state),
-      error: (flags & 2) !== 0 ? c.string.decode(state) : null
+      mode: c.string.decode(state),
+      state: c.string.decode(state),
+      uploadEligible: (flags & 2) !== 0,
+      uploading: (flags & 4) !== 0,
+      backgroundEligible: (flags & 8) !== 0,
+      cacheCeilingBytes: c.uint.decode(state),
+      uploadCeilingBytesPer24h: c.uint.decode(state),
+      uploadedBytesLast24h: c.uint.decode(state),
+      outboundBytesPerSecond: c.uint.decode(state),
+      postPlaybackGraceMs: c.uint.decode(state),
+      backgroundRemainingSessionMs: c.uint.decode(state),
+      backgroundRemainingDailyMs: c.uint.decode(state),
+      reasonCodes: encoding374_13.decode(state),
+      errorCode: (flags & 16) !== 0 ? c.string.decode(state) : null
     }
   }
 }
 
-// @peartube/get-video-recommendations-request
-const encoding339 = {
+// @peartube/set-device-conditions-request
+const encoding375 = {
   preencode(state, m) {
-    c.string.preencode(state, m.channelKey)
-    c.string.preencode(state, m.videoId)
-    state.end++ // max flag is 1 so always one byte
+    const flags =
+      (m.metered ? 1 : 0) |
+      (m.meteredProvided ? 2 : 0) |
+      (m.thermalState ? 4 : 0) |
+      (m.batteryPercent ? 8 : 0) |
+      (m.batteryPercentProvided ? 16 : 0) |
+      (m.charging ? 32 : 0) |
+      (m.chargingProvided ? 64 : 0) |
+      (m.backgroundPermitted ? 128 : 0) |
+      (m.backgroundPermittedProvided ? 256 : 0) |
+      (m.freeDiskBytes ? 512 : 0) |
+      (m.freeDiskBytesProvided ? 1024 : 0) |
+      (m.totalDiskBytes ? 2048 : 0) |
+      (m.totalDiskBytesProvided ? 4096 : 0)
 
-    if (m.limit) c.uint.preencode(state, m.limit)
+    c.uint.preencode(state, flags)
+
+    if (m.thermalState) c.string.preencode(state, m.thermalState)
+    if (m.batteryPercent) c.uint.preencode(state, m.batteryPercent)
+    if (m.freeDiskBytes) c.uint.preencode(state, m.freeDiskBytes)
+    if (m.totalDiskBytes) c.uint.preencode(state, m.totalDiskBytes)
   },
   encode(state, m) {
-    const flags = m.limit ? 1 : 0
+    const flags =
+      (m.metered ? 1 : 0) |
+      (m.meteredProvided ? 2 : 0) |
+      (m.thermalState ? 4 : 0) |
+      (m.batteryPercent ? 8 : 0) |
+      (m.batteryPercentProvided ? 16 : 0) |
+      (m.charging ? 32 : 0) |
+      (m.chargingProvided ? 64 : 0) |
+      (m.backgroundPermitted ? 128 : 0) |
+      (m.backgroundPermittedProvided ? 256 : 0) |
+      (m.freeDiskBytes ? 512 : 0) |
+      (m.freeDiskBytesProvided ? 1024 : 0) |
+      (m.totalDiskBytes ? 2048 : 0) |
+      (m.totalDiskBytesProvided ? 4096 : 0)
 
-    c.string.encode(state, m.channelKey)
-    c.string.encode(state, m.videoId)
     c.uint.encode(state, flags)
 
-    if (m.limit) c.uint.encode(state, m.limit)
+    if (m.thermalState) c.string.encode(state, m.thermalState)
+    if (m.batteryPercent) c.uint.encode(state, m.batteryPercent)
+    if (m.freeDiskBytes) c.uint.encode(state, m.freeDiskBytes)
+    if (m.totalDiskBytes) c.uint.encode(state, m.totalDiskBytes)
   },
   decode(state) {
-    const r0 = c.string.decode(state)
-    const r1 = c.string.decode(state)
     const flags = c.uint.decode(state)
 
     return {
-      channelKey: r0,
-      videoId: r1,
-      limit: (flags & 1) !== 0 ? c.uint.decode(state) : 0
+      metered: (flags & 1) !== 0,
+      meteredProvided: (flags & 2) !== 0,
+      thermalState: (flags & 4) !== 0 ? c.string.decode(state) : null,
+      batteryPercent: (flags & 8) !== 0 ? c.uint.decode(state) : 0,
+      batteryPercentProvided: (flags & 16) !== 0,
+      charging: (flags & 32) !== 0,
+      chargingProvided: (flags & 64) !== 0,
+      backgroundPermitted: (flags & 128) !== 0,
+      backgroundPermittedProvided: (flags & 256) !== 0,
+      freeDiskBytes: (flags & 512) !== 0 ? c.uint.decode(state) : 0,
+      freeDiskBytesProvided: (flags & 1024) !== 0,
+      totalDiskBytes: (flags & 2048) !== 0 ? c.uint.decode(state) : 0,
+      totalDiskBytesProvided: (flags & 4096) !== 0
     }
   }
 }
 
-// @peartube/get-video-recommendations-response.recommendations
-const encoding340_1 = encoding338_1
-
-// @peartube/get-video-recommendations-response
-const encoding340 = {
+// @peartube/set-device-conditions-response
+const encoding376 = {
   preencode(state, m) {
     state.end++ // max flag is 2 so always one byte
-    encoding340_1.preencode(state, m.recommendations)
 
-    if (m.error) c.string.preencode(state, m.error)
+    if (m.errorCode) c.string.preencode(state, m.errorCode)
   },
   encode(state, m) {
-    const flags = (m.success ? 1 : 0) | (m.error ? 2 : 0)
+    const flags = (m.success ? 1 : 0) | (m.errorCode ? 2 : 0)
 
     c.uint.encode(state, flags)
-    encoding340_1.encode(state, m.recommendations)
 
-    if (m.error) c.string.encode(state, m.error)
+    if (m.errorCode) c.string.encode(state, m.errorCode)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
       success: (flags & 1) !== 0,
-      recommendations: encoding340_1.decode(state),
-      error: (flags & 2) !== 0 ? c.string.decode(state) : null
+      errorCode: (flags & 2) !== 0 ? c.string.decode(state) : null
     }
   }
 }
 
 // @peartube/prepare-playback-response.stats, deferred due to recusive use
-const encoding76_1 = c.frame(encoding147)
+const encoding83_1 = c.frame(encoding165)
 // @peartube/web-prepare-playback-response.stats, deferred due to recusive use
-const encoding77_5 = encoding76_1
+const encoding84_5 = encoding83_1
+// @peartube/history-entry.identity, deferred due to recusive use
+const encoding113_9 = c.frame(encoding114)
+// @peartube/history-entry.order, deferred due to recusive use
+const encoding113_11 = c.frame(encoding115)
+// @peartube/resume-entry.identity, deferred due to recusive use
+const encoding116_7 = encoding113_9
+// @peartube/resume-entry.order, deferred due to recusive use
+const encoding116_9 = encoding113_11
+// @peartube/log-watch-history-request.identity, deferred due to recusive use
+const encoding133_8 = encoding113_9
 // @peartube/get-video-stats-response.stats, deferred due to recusive use
-const encoding149_0 = encoding76_1
+const encoding167_0 = encoding83_1
 // @peartube/event-video-stats.stats, deferred due to recusive use
-const encoding260_0 = encoding76_1
+const encoding299_0 = encoding83_1
 
 function setVersion(v) {
   version = v
@@ -9344,600 +10821,672 @@ function getEncoding(name) {
       return encoding42
     case '@peartube/media-rendition-descriptor':
       return encoding43
-    case '@peartube/media-publication-source':
+    case '@peartube/media-availability':
       return encoding44
-    case '@peartube/media-claim-provenance':
+    case '@peartube/media-source-coordinates':
       return encoding45
-    case '@peartube/media-conflict-summary':
+    case '@peartube/media-publication-source':
       return encoding46
-    case '@peartube/media-agent-summary':
+    case '@peartube/media-claim-provenance':
       return encoding47
-    case '@peartube/media-contribution-summary':
+    case '@peartube/media-conflict-summary':
       return encoding48
-    case '@peartube/media-entity-summary':
+    case '@peartube/media-agent-summary':
       return encoding49
-    case '@peartube/get-media-catalog-response':
+    case '@peartube/media-contribution-summary':
       return encoding50
-    case '@peartube/get-media-entity-request':
+    case '@peartube/media-entity-summary':
       return encoding51
-    case '@peartube/get-media-entity-response':
+    case '@peartube/get-media-catalog-response':
       return encoding52
-    case '@peartube/get-media-collection-request':
+    case '@peartube/get-media-entity-request':
       return encoding53
-    case '@peartube/get-media-collection-response':
+    case '@peartube/get-media-entity-response':
       return encoding54
-    case '@peartube/get-media-agent-request':
+    case '@peartube/get-media-collection-request':
       return encoding55
-    case '@peartube/get-media-agent-response':
+    case '@peartube/get-media-collection-response':
       return encoding56
-    case '@peartube/get-media-collection-items-request':
+    case '@peartube/get-media-agent-request':
       return encoding57
-    case '@peartube/get-media-collection-items-response':
+    case '@peartube/get-media-agent-response':
       return encoding58
-    case '@peartube/get-agent-contributions-request':
+    case '@peartube/get-media-collection-items-request':
       return encoding59
-    case '@peartube/get-agent-contributions-response':
+    case '@peartube/get-media-collection-items-response':
       return encoding60
-    case '@peartube/get-publication-sources-request':
+    case '@peartube/get-agent-contributions-request':
       return encoding61
-    case '@peartube/get-publication-sources-response':
+    case '@peartube/get-agent-contributions-response':
       return encoding62
-    case '@peartube/get-claim-provenance-request':
+    case '@peartube/get-publication-sources-request':
       return encoding63
-    case '@peartube/get-claim-provenance-response':
+    case '@peartube/get-publication-sources-response':
       return encoding64
-    case '@peartube/set-source-preference-request':
+    case '@peartube/get-entity-artwork-request':
       return encoding65
-    case '@peartube/set-source-preference-response':
+    case '@peartube/get-entity-artwork-response':
       return encoding66
-    case '@peartube/video-immutable-publication':
+    case '@peartube/media-playback-attempt':
       return encoding67
-    case '@peartube/video':
+    case '@peartube/prepare-media-playback-request':
       return encoding68
-    case '@peartube/list-videos-request':
+    case '@peartube/prepare-media-playback-response':
       return encoding69
-    case '@peartube/list-videos-response':
+    case '@peartube/get-claim-provenance-request':
       return encoding70
-    case '@peartube/get-video-url-request':
+    case '@peartube/get-claim-provenance-response':
       return encoding71
-    case '@peartube/get-video-url-response':
+    case '@peartube/set-source-preference-request':
       return encoding72
-    case '@peartube/prepare-playback-request':
+    case '@peartube/set-source-preference-response':
       return encoding73
-    case '@peartube/selected-blob-warmup':
+    case '@peartube/video-immutable-publication':
       return encoding74
-    case '@peartube/peer-warmup':
+    case '@peartube/video':
       return encoding75
-    case '@peartube/prepare-playback-response':
+    case '@peartube/list-videos-request':
       return encoding76
-    case '@peartube/web-prepare-playback-response':
+    case '@peartube/list-videos-response':
       return encoding77
-    case '@peartube/get-video-data-request':
+    case '@peartube/get-video-url-request':
       return encoding78
-    case '@peartube/get-video-data-response':
+    case '@peartube/get-video-url-response':
       return encoding79
-    case '@peartube/upload-video-request':
+    case '@peartube/prepare-playback-request':
       return encoding80
-    case '@peartube/upload-video-response':
+    case '@peartube/selected-blob-warmup':
       return encoding81
-    case '@peartube/download-video-request':
+    case '@peartube/peer-warmup':
       return encoding82
-    case '@peartube/download-video-response':
+    case '@peartube/prepare-playback-response':
       return encoding83
-    case '@peartube/delete-video-request':
+    case '@peartube/web-prepare-playback-response':
       return encoding84
-    case '@peartube/delete-video-response':
+    case '@peartube/get-video-data-request':
       return encoding85
-    case '@peartube/start-livestream-request':
+    case '@peartube/get-video-data-response':
       return encoding86
-    case '@peartube/start-livestream-response':
+    case '@peartube/upload-video-request':
       return encoding87
-    case '@peartube/stop-livestream-request':
+    case '@peartube/upload-video-response':
       return encoding88
-    case '@peartube/livestream-status':
+    case '@peartube/download-video-request':
       return encoding89
-    case '@peartube/stop-livestream-response':
+    case '@peartube/download-video-response':
       return encoding90
-    case '@peartube/get-livestream-status-request':
+    case '@peartube/delete-video-request':
       return encoding91
-    case '@peartube/get-livestream-status-response':
+    case '@peartube/delete-video-response':
       return encoding92
-    case '@peartube/prepare-live-playback-request':
+    case '@peartube/start-livestream-request':
       return encoding93
-    case '@peartube/prepare-live-playback-response':
+    case '@peartube/start-livestream-response':
       return encoding94
-    case '@peartube/update-video-metadata-request':
+    case '@peartube/stop-livestream-request':
       return encoding95
-    case '@peartube/update-video-metadata-response':
+    case '@peartube/livestream-status':
       return encoding96
-    case '@peartube/subscription':
+    case '@peartube/stop-livestream-response':
       return encoding97
-    case '@peartube/subscribe-channel-request':
+    case '@peartube/get-livestream-status-request':
       return encoding98
-    case '@peartube/subscribe-channel-response':
+    case '@peartube/get-livestream-status-response':
       return encoding99
-    case '@peartube/unsubscribe-channel-request':
+    case '@peartube/prepare-live-playback-request':
       return encoding100
-    case '@peartube/unsubscribe-channel-response':
+    case '@peartube/prepare-live-playback-response':
       return encoding101
-    case '@peartube/get-subscriptions-request':
+    case '@peartube/update-video-metadata-request':
       return encoding102
-    case '@peartube/get-subscriptions-response':
+    case '@peartube/update-video-metadata-response':
       return encoding103
-    case '@peartube/playlist':
+    case '@peartube/subscription':
       return encoding104
-    case '@peartube/playlist-item':
+    case '@peartube/subscribe-channel-request':
       return encoding105
-    case '@peartube/history-entry':
+    case '@peartube/subscribe-channel-response':
       return encoding106
-    case '@peartube/resume-entry':
+    case '@peartube/unsubscribe-channel-request':
       return encoding107
-    case '@peartube/personal-setting':
+    case '@peartube/unsubscribe-channel-response':
       return encoding108
-    case '@peartube/get-playlists-request':
+    case '@peartube/get-subscriptions-request':
       return encoding109
-    case '@peartube/get-playlists-response':
+    case '@peartube/get-subscriptions-response':
       return encoding110
-    case '@peartube/get-playlist-items-request':
+    case '@peartube/playlist':
       return encoding111
-    case '@peartube/get-playlist-items-response':
+    case '@peartube/playlist-item':
       return encoding112
-    case '@peartube/create-playlist-request':
+    case '@peartube/history-entry':
       return encoding113
-    case '@peartube/create-playlist-response':
+    case '@peartube/personal-progress-identity':
       return encoding114
-    case '@peartube/update-playlist-request':
+    case '@peartube/personal-progress-order':
       return encoding115
-    case '@peartube/update-playlist-response':
+    case '@peartube/resume-entry':
       return encoding116
-    case '@peartube/delete-playlist-request':
+    case '@peartube/personal-device':
       return encoding117
-    case '@peartube/delete-playlist-response':
+    case '@peartube/personal-setting':
       return encoding118
-    case '@peartube/add-to-playlist-request':
+    case '@peartube/get-playlists-request':
       return encoding119
-    case '@peartube/add-to-playlist-response':
+    case '@peartube/get-playlists-response':
       return encoding120
-    case '@peartube/remove-from-playlist-request':
+    case '@peartube/get-playlist-items-request':
       return encoding121
-    case '@peartube/remove-from-playlist-response':
+    case '@peartube/get-playlist-items-response':
       return encoding122
-    case '@peartube/log-watch-history-request':
+    case '@peartube/create-playlist-request':
       return encoding123
-    case '@peartube/log-watch-history-response':
+    case '@peartube/create-playlist-response':
       return encoding124
-    case '@peartube/get-watch-history-request':
+    case '@peartube/update-playlist-request':
       return encoding125
-    case '@peartube/get-watch-history-response':
+    case '@peartube/update-playlist-response':
       return encoding126
-    case '@peartube/get-resume-position-request':
+    case '@peartube/delete-playlist-request':
       return encoding127
-    case '@peartube/get-resume-position-response':
+    case '@peartube/delete-playlist-response':
       return encoding128
-    case '@peartube/list-resume-positions-request':
+    case '@peartube/add-to-playlist-request':
       return encoding129
-    case '@peartube/list-resume-positions-response':
+    case '@peartube/add-to-playlist-response':
       return encoding130
-    case '@peartube/set-personal-setting-request':
+    case '@peartube/remove-from-playlist-request':
       return encoding131
-    case '@peartube/set-personal-setting-response':
+    case '@peartube/remove-from-playlist-response':
       return encoding132
-    case '@peartube/get-personal-settings-request':
+    case '@peartube/log-watch-history-request':
       return encoding133
-    case '@peartube/get-personal-settings-response':
+    case '@peartube/log-watch-history-response':
       return encoding134
-    case '@peartube/provision-personal-encryption-request':
+    case '@peartube/get-watch-history-request':
       return encoding135
-    case '@peartube/provision-personal-encryption-response':
+    case '@peartube/get-watch-history-response':
       return encoding136
-    case '@peartube/join-channel-request':
+    case '@peartube/get-resume-position-request':
       return encoding137
-    case '@peartube/join-channel-response':
+    case '@peartube/get-resume-position-response':
       return encoding138
-    case '@peartube/hide-channel-request':
+    case '@peartube/list-resume-positions-request':
       return encoding139
-    case '@peartube/hide-channel-response':
+    case '@peartube/list-resume-positions-response':
       return encoding140
-    case '@peartube/get-channel-meta-request':
+    case '@peartube/set-personal-setting-request':
       return encoding141
-    case '@peartube/get-channel-meta-response':
+    case '@peartube/set-personal-setting-response':
       return encoding142
-    case '@peartube/get-swarm-status-request':
+    case '@peartube/get-personal-settings-request':
       return encoding143
-    case '@peartube/get-swarm-status-response':
+    case '@peartube/get-personal-settings-response':
       return encoding144
-    case '@peartube/prefetch-video-request':
+    case '@peartube/provision-personal-encryption-request':
       return encoding145
-    case '@peartube/prefetch-video-response':
+    case '@peartube/provision-personal-encryption-response':
       return encoding146
-    case '@peartube/video-stats':
+    case '@peartube/create-personal-device-invite-request':
       return encoding147
-    case '@peartube/get-video-stats-request':
+    case '@peartube/create-personal-device-invite-response':
       return encoding148
-    case '@peartube/get-video-stats-response':
+    case '@peartube/redeem-personal-device-invite-request':
       return encoding149
-    case '@peartube/seeding-config':
+    case '@peartube/redeem-personal-device-invite-response':
       return encoding150
-    case '@peartube/seeding-status':
+    case '@peartube/list-personal-devices-request':
       return encoding151
-    case '@peartube/get-seeding-status-request':
+    case '@peartube/list-personal-devices-response':
       return encoding152
-    case '@peartube/get-seeding-status-response':
+    case '@peartube/revoke-personal-device-request':
       return encoding153
-    case '@peartube/set-seeding-config-request':
+    case '@peartube/revoke-personal-device-response':
       return encoding154
-    case '@peartube/set-seeding-config-response':
+    case '@peartube/join-channel-request':
       return encoding155
-    case '@peartube/transcode-settings':
+    case '@peartube/join-channel-response':
       return encoding156
-    case '@peartube/get-transcode-settings-request':
+    case '@peartube/hide-channel-request':
       return encoding157
-    case '@peartube/get-transcode-settings-response':
+    case '@peartube/hide-channel-response':
       return encoding158
-    case '@peartube/set-transcode-settings-request':
+    case '@peartube/get-channel-meta-request':
       return encoding159
-    case '@peartube/set-transcode-settings-response':
+    case '@peartube/get-channel-meta-response':
       return encoding160
-    case '@peartube/pin-channel-request':
+    case '@peartube/get-swarm-status-request':
       return encoding161
-    case '@peartube/pin-channel-response':
+    case '@peartube/get-swarm-status-response':
       return encoding162
-    case '@peartube/unpin-channel-request':
+    case '@peartube/prefetch-video-request':
       return encoding163
-    case '@peartube/unpin-channel-response':
+    case '@peartube/prefetch-video-response':
       return encoding164
-    case '@peartube/get-pinned-channels-request':
+    case '@peartube/video-stats':
       return encoding165
-    case '@peartube/get-pinned-channels-response':
+    case '@peartube/get-video-stats-request':
       return encoding166
-    case '@peartube/get-storage-stats-request':
+    case '@peartube/get-video-stats-response':
       return encoding167
-    case '@peartube/get-storage-stats-response':
+    case '@peartube/seeding-config':
       return encoding168
-    case '@peartube/set-storage-limit-request':
+    case '@peartube/seeding-status':
       return encoding169
-    case '@peartube/set-storage-limit-response':
+    case '@peartube/get-seeding-status-request':
       return encoding170
-    case '@peartube/get-migration-status-request':
+    case '@peartube/get-seeding-status-response':
       return encoding171
-    case '@peartube/get-migration-status-response':
+    case '@peartube/set-seeding-config-request':
       return encoding172
-    case '@peartube/retry-migration-request':
+    case '@peartube/set-seeding-config-response':
       return encoding173
-    case '@peartube/retry-migration-response':
+    case '@peartube/transcode-settings':
       return encoding174
-    case '@peartube/export-migration-report-request':
+    case '@peartube/get-transcode-settings-request':
       return encoding175
-    case '@peartube/export-migration-report-response':
+    case '@peartube/get-transcode-settings-response':
       return encoding176
-    case '@peartube/get-publisher-device-status-request':
+    case '@peartube/set-transcode-settings-request':
       return encoding177
-    case '@peartube/get-publisher-device-status-response':
+    case '@peartube/set-transcode-settings-response':
       return encoding178
-    case '@peartube/export-portable-state-request':
+    case '@peartube/pin-channel-request':
       return encoding179
-    case '@peartube/export-portable-state-response':
+    case '@peartube/pin-channel-response':
       return encoding180
-    case '@peartube/restore-portable-state-request':
+    case '@peartube/unpin-channel-request':
       return encoding181
-    case '@peartube/restore-portable-state-response':
+    case '@peartube/unpin-channel-response':
       return encoding182
-    case '@peartube/preview-storage-limit-request':
+    case '@peartube/get-pinned-channels-request':
       return encoding183
-    case '@peartube/preview-storage-limit-response':
+    case '@peartube/get-pinned-channels-response':
       return encoding184
-    case '@peartube/get-archive-operator-status-request':
+    case '@peartube/get-storage-stats-request':
       return encoding185
-    case '@peartube/get-archive-operator-status-response':
+    case '@peartube/get-storage-stats-response':
       return encoding186
-    case '@peartube/get-archive-participation-request':
+    case '@peartube/set-storage-limit-request':
       return encoding187
-    case '@peartube/get-archive-participation-response':
+    case '@peartube/set-storage-limit-response':
       return encoding188
-    case '@peartube/set-archive-participation-request':
+    case '@peartube/get-migration-status-request':
       return encoding189
-    case '@peartube/set-archive-participation-response':
+    case '@peartube/get-migration-status-response':
       return encoding190
-    case '@peartube/request-archive-publication-request':
+    case '@peartube/retry-migration-request':
       return encoding191
-    case '@peartube/request-archive-publication-response':
+    case '@peartube/retry-migration-response':
       return encoding192
-    case '@peartube/get-network-policy-request':
+    case '@peartube/export-migration-report-request':
       return encoding193
-    case '@peartube/get-network-policy-response':
+    case '@peartube/export-migration-report-response':
       return encoding194
-    case '@peartube/set-network-policy-request':
+    case '@peartube/get-publisher-device-status-request':
       return encoding195
-    case '@peartube/set-network-policy-response':
+    case '@peartube/get-publisher-device-status-response':
       return encoding196
-    case '@peartube/clear-cache-request':
+    case '@peartube/export-portable-state-request':
       return encoding197
-    case '@peartube/clear-cache-response':
+    case '@peartube/export-portable-state-response':
       return encoding198
-    case '@peartube/assess-source-offload-request':
+    case '@peartube/restore-portable-state-request':
       return encoding199
-    case '@peartube/assess-source-offload-response':
+    case '@peartube/restore-portable-state-response':
       return encoding200
-    case '@peartube/confirm-source-offload-request':
+    case '@peartube/preview-storage-limit-request':
       return encoding201
-    case '@peartube/confirm-source-offload-response':
+    case '@peartube/preview-storage-limit-response':
       return encoding202
-    case '@peartube/get-video-thumbnail-request':
+    case '@peartube/get-archive-operator-status-request':
       return encoding203
-    case '@peartube/get-video-thumbnail-response':
+    case '@peartube/get-archive-operator-status-response':
       return encoding204
-    case '@peartube/get-video-metadata-request':
+    case '@peartube/get-archive-participation-request':
       return encoding205
-    case '@peartube/get-video-metadata-response':
+    case '@peartube/get-archive-participation-response':
       return encoding206
-    case '@peartube/set-video-thumbnail-request':
+    case '@peartube/set-archive-participation-request':
       return encoding207
-    case '@peartube/set-video-thumbnail-from-file-request':
+    case '@peartube/set-archive-participation-response':
       return encoding208
-    case '@peartube/set-video-thumbnail-from-file-response':
+    case '@peartube/request-archive-publication-request':
       return encoding209
-    case '@peartube/set-video-thumbnail-response':
+    case '@peartube/request-archive-publication-response':
       return encoding210
-    case '@peartube/desktop-browse-video':
+    case '@peartube/get-network-policy-request':
       return encoding211
-    case '@peartube/desktop-browse-sections':
+    case '@peartube/get-network-policy-response':
       return encoding212
-    case '@peartube/desktop-browse-stats':
+    case '@peartube/set-network-policy-request':
       return encoding213
-    case '@peartube/desktop-browse-state':
+    case '@peartube/set-network-policy-response':
       return encoding214
-    case '@peartube/desktop-browse-snapshot':
+    case '@peartube/clear-cache-request':
       return encoding215
-    case '@peartube/desktop-bootstrap-request':
+    case '@peartube/clear-cache-response':
       return encoding216
-    case '@peartube/desktop-bootstrap-response':
+    case '@peartube/assess-source-offload-request':
       return encoding217
-    case '@peartube/desktop-shutdown-request':
+    case '@peartube/assess-source-offload-response':
       return encoding218
-    case '@peartube/desktop-shutdown-response':
+    case '@peartube/confirm-source-offload-request':
       return encoding219
-    case '@peartube/desktop-refresh-browse-request':
+    case '@peartube/confirm-source-offload-response':
       return encoding220
-    case '@peartube/desktop-refresh-browse-response':
+    case '@peartube/get-video-thumbnail-request':
       return encoding221
-    case '@peartube/ffmpeg-decode-available-request':
+    case '@peartube/get-video-thumbnail-response':
       return encoding222
-    case '@peartube/ffmpeg-decode-available-response':
+    case '@peartube/get-video-metadata-request':
       return encoding223
-    case '@peartube/update-channel-avatar-request':
+    case '@peartube/get-video-metadata-response':
       return encoding224
-    case '@peartube/update-channel-avatar-response':
+    case '@peartube/set-video-thumbnail-request':
       return encoding225
-    case '@peartube/transcode-start-request':
+    case '@peartube/set-video-thumbnail-from-file-request':
       return encoding226
-    case '@peartube/transcode-start-response':
+    case '@peartube/set-video-thumbnail-from-file-response':
       return encoding227
-    case '@peartube/transcode-stop-request':
+    case '@peartube/set-video-thumbnail-response':
       return encoding228
-    case '@peartube/transcode-stop-response':
+    case '@peartube/desktop-browse-video':
       return encoding229
-    case '@peartube/transcode-status-request':
+    case '@peartube/desktop-browse-sections':
       return encoding230
-    case '@peartube/transcode-status-response':
+    case '@peartube/desktop-browse-stats':
       return encoding231
-    case '@peartube/event-transcode-progress':
+    case '@peartube/desktop-browse-state':
       return encoding232
-    case '@peartube/status':
+    case '@peartube/desktop-browse-snapshot':
       return encoding233
-    case '@peartube/get-status-request':
+    case '@peartube/desktop-bootstrap-request':
       return encoding234
-    case '@peartube/get-status-response':
+    case '@peartube/desktop-bootstrap-response':
       return encoding235
-    case '@peartube/pick-video-file-request':
+    case '@peartube/desktop-shutdown-request':
       return encoding236
-    case '@peartube/pick-video-file-response':
+    case '@peartube/desktop-shutdown-response':
       return encoding237
-    case '@peartube/pick-image-file-request':
+    case '@peartube/desktop-refresh-browse-request':
       return encoding238
-    case '@peartube/pick-image-file-response':
+    case '@peartube/desktop-refresh-browse-response':
       return encoding239
-    case '@peartube/get-blob-server-port-request':
+    case '@peartube/ffmpeg-decode-available-request':
       return encoding240
-    case '@peartube/get-blob-server-port-response':
+    case '@peartube/ffmpeg-decode-available-response':
       return encoding241
-    case '@peartube/search-result':
+    case '@peartube/update-channel-avatar-request':
       return encoding242
-    case '@peartube/global-search-videos-request':
+    case '@peartube/update-channel-avatar-response':
       return encoding243
-    case '@peartube/global-search-videos-response':
+    case '@peartube/transcode-start-request':
       return encoding244
-    case '@peartube/device':
+    case '@peartube/transcode-start-response':
       return encoding245
-    case '@peartube/create-device-invite-request':
+    case '@peartube/transcode-stop-request':
       return encoding246
-    case '@peartube/create-device-invite-response':
+    case '@peartube/transcode-stop-response':
       return encoding247
-    case '@peartube/pair-device-request':
+    case '@peartube/transcode-status-request':
       return encoding248
-    case '@peartube/pair-device-response':
+    case '@peartube/transcode-status-response':
       return encoding249
-    case '@peartube/retry-sync-channel-request':
+    case '@peartube/event-transcode-progress':
       return encoding250
-    case '@peartube/retry-sync-channel-response':
+    case '@peartube/status':
       return encoding251
-    case '@peartube/list-devices-request':
+    case '@peartube/get-status-request':
       return encoding252
-    case '@peartube/list-devices-response':
+    case '@peartube/get-status-response':
       return encoding253
-    case '@peartube/event-ready':
+    case '@peartube/pick-video-file-request':
       return encoding254
-    case '@peartube/event-error':
+    case '@peartube/pick-video-file-response':
       return encoding255
-    case '@peartube/event-upload-progress':
+    case '@peartube/pick-image-file-request':
       return encoding256
-    case '@peartube/event-download-progress':
+    case '@peartube/pick-image-file-response':
       return encoding257
-    case '@peartube/event-media-graph-update':
+    case '@peartube/get-blob-server-port-request':
       return encoding258
-    case '@peartube/event-log':
+    case '@peartube/get-blob-server-port-response':
       return encoding259
-    case '@peartube/event-video-stats':
+    case '@peartube/search-result':
       return encoding260
-    case '@peartube/channel-op-base':
+    case '@peartube/global-search-videos-request':
       return encoding261
-    case '@peartube/channel-op-update-channel':
+    case '@peartube/global-search-videos-response':
       return encoding262
-    case '@peartube/channel-op-add-video':
+    case '@peartube/index-search-selector':
       return encoding263
-    case '@peartube/channel-op-update-video':
+    case '@peartube/index-external-reference':
       return encoding264
-    case '@peartube/channel-op-delete-video':
+    case '@peartube/index-episode':
       return encoding265
-    case '@peartube/channel-op-add-writer':
+    case '@peartube/index-work':
       return encoding266
-    case '@peartube/channel-op-upsert-writer':
+    case '@peartube/index-edition':
       return encoding267
-    case '@peartube/channel-op-remove-writer':
+    case '@peartube/index-publication':
       return encoding268
-    case '@peartube/channel-op-add-invite':
+    case '@peartube/index-audio-track':
       return encoding269
-    case '@peartube/channel-op-delete-invite':
+    case '@peartube/index-subtitle-track':
       return encoding270
-    case '@peartube/channel-op-add-comment':
+    case '@peartube/index-rendition':
       return encoding271
-    case '@peartube/channel-op-add-reaction':
+    case '@peartube/index-asset':
       return encoding272
-    case '@peartube/channel-op-remove-reaction':
+    case '@peartube/index-provenance':
       return encoding273
-    case '@peartube/channel-op-hide-comment':
+    case '@peartube/index-availability':
       return encoding274
-    case '@peartube/channel-op-remove-comment':
+    case '@peartube/index-source-indexer':
       return encoding275
-    case '@peartube/channel-op-add-vector-index':
+    case '@peartube/index-publisher-descriptor':
       return encoding276
-    case '@peartube/channel-op-log-watch-event':
+    case '@peartube/index-catalog-head':
       return encoding277
-    case '@peartube/channel-op-migrate-schema':
+    case '@peartube/index-verification':
       return encoding278
-    case '@peartube/add-comment-request':
+    case '@peartube/index-candidate-v2':
       return encoding279
-    case '@peartube/add-comment-response':
+    case '@peartube/search-index-candidates-request':
       return encoding280
-    case '@peartube/list-comments-request':
+    case '@peartube/search-index-candidates-response':
       return encoding281
-    case '@peartube/comment':
+    case '@peartube/verify-index-candidate-request':
       return encoding282
-    case '@peartube/list-comments-response':
+    case '@peartube/verify-index-candidate-response':
       return encoding283
-    case '@peartube/hide-comment-request':
+    case '@peartube/device':
       return encoding284
-    case '@peartube/hide-comment-response':
+    case '@peartube/create-device-invite-request':
       return encoding285
-    case '@peartube/remove-comment-request':
+    case '@peartube/create-device-invite-response':
       return encoding286
-    case '@peartube/remove-comment-response':
+    case '@peartube/pair-device-request':
       return encoding287
-    case '@peartube/reaction-count':
+    case '@peartube/pair-device-response':
       return encoding288
-    case '@peartube/add-reaction-request':
+    case '@peartube/retry-sync-channel-request':
       return encoding289
-    case '@peartube/add-reaction-response':
+    case '@peartube/retry-sync-channel-response':
       return encoding290
-    case '@peartube/remove-reaction-request':
+    case '@peartube/list-devices-request':
       return encoding291
-    case '@peartube/remove-reaction-response':
+    case '@peartube/list-devices-response':
       return encoding292
-    case '@peartube/get-reactions-request':
+    case '@peartube/event-ready':
       return encoding293
-    case '@peartube/get-reactions-response':
+    case '@peartube/event-error':
       return encoding294
-    case '@peartube/cast-device':
+    case '@peartube/event-upload-progress':
       return encoding295
-    case '@peartube/cast-available-request':
+    case '@peartube/event-download-progress':
       return encoding296
-    case '@peartube/cast-available-response':
+    case '@peartube/event-media-graph-update':
       return encoding297
-    case '@peartube/cast-start-discovery-request':
+    case '@peartube/event-log':
       return encoding298
-    case '@peartube/cast-start-discovery-response':
+    case '@peartube/event-video-stats':
       return encoding299
-    case '@peartube/cast-stop-discovery-request':
+    case '@peartube/channel-op-base':
       return encoding300
-    case '@peartube/cast-stop-discovery-response':
+    case '@peartube/channel-op-update-channel':
       return encoding301
-    case '@peartube/cast-get-devices-request':
+    case '@peartube/channel-op-add-video':
       return encoding302
-    case '@peartube/cast-get-devices-response':
+    case '@peartube/channel-op-update-video':
       return encoding303
-    case '@peartube/cast-add-manual-device-request':
+    case '@peartube/channel-op-delete-video':
       return encoding304
-    case '@peartube/cast-add-manual-device-response':
+    case '@peartube/channel-op-add-writer':
       return encoding305
-    case '@peartube/cast-connect-request':
+    case '@peartube/channel-op-upsert-writer':
       return encoding306
-    case '@peartube/cast-connect-response':
+    case '@peartube/channel-op-remove-writer':
       return encoding307
-    case '@peartube/cast-disconnect-request':
+    case '@peartube/channel-op-add-invite':
       return encoding308
-    case '@peartube/cast-disconnect-response':
+    case '@peartube/channel-op-delete-invite':
       return encoding309
-    case '@peartube/cast-play-request':
+    case '@peartube/channel-op-add-comment':
       return encoding310
-    case '@peartube/cast-play-response':
+    case '@peartube/channel-op-add-reaction':
       return encoding311
-    case '@peartube/cast-pause-request':
+    case '@peartube/channel-op-remove-reaction':
       return encoding312
-    case '@peartube/cast-pause-response':
+    case '@peartube/channel-op-hide-comment':
       return encoding313
-    case '@peartube/cast-resume-request':
+    case '@peartube/channel-op-remove-comment':
       return encoding314
-    case '@peartube/cast-resume-response':
+    case '@peartube/channel-op-add-vector-index':
       return encoding315
-    case '@peartube/cast-stop-request':
+    case '@peartube/channel-op-log-watch-event':
       return encoding316
-    case '@peartube/cast-stop-response':
+    case '@peartube/channel-op-migrate-schema':
       return encoding317
-    case '@peartube/cast-seek-request':
+    case '@peartube/add-comment-request':
       return encoding318
-    case '@peartube/cast-seek-response':
+    case '@peartube/add-comment-response':
       return encoding319
-    case '@peartube/cast-set-volume-request':
+    case '@peartube/list-comments-request':
       return encoding320
-    case '@peartube/cast-set-volume-response':
+    case '@peartube/comment':
       return encoding321
-    case '@peartube/cast-get-state-request':
+    case '@peartube/list-comments-response':
       return encoding322
-    case '@peartube/cast-get-state-response':
+    case '@peartube/hide-comment-request':
       return encoding323
-    case '@peartube/cast-is-connected-request':
+    case '@peartube/hide-comment-response':
       return encoding324
-    case '@peartube/cast-is-connected-response':
+    case '@peartube/remove-comment-request':
       return encoding325
-    case '@peartube/event-cast-device-found':
+    case '@peartube/remove-comment-response':
       return encoding326
-    case '@peartube/event-cast-device-lost':
+    case '@peartube/reaction-count':
       return encoding327
-    case '@peartube/event-cast-playback-state':
+    case '@peartube/add-reaction-request':
       return encoding328
-    case '@peartube/event-cast-time-update':
+    case '@peartube/add-reaction-response':
       return encoding329
-    case '@peartube/search-videos-request':
+    case '@peartube/remove-reaction-request':
       return encoding330
-    case '@peartube/search-videos-response':
+    case '@peartube/remove-reaction-response':
       return encoding331
-    case '@peartube/log-watch-event-request':
+    case '@peartube/get-reactions-request':
       return encoding332
-    case '@peartube/log-watch-event-response':
+    case '@peartube/get-reactions-response':
       return encoding333
-    case '@peartube/index-video-vectors-request':
+    case '@peartube/cast-device':
       return encoding334
-    case '@peartube/index-video-vectors-response':
+    case '@peartube/cast-available-request':
       return encoding335
-    case '@peartube/recommendation':
+    case '@peartube/cast-available-response':
       return encoding336
-    case '@peartube/get-recommendations-request':
+    case '@peartube/cast-start-discovery-request':
       return encoding337
-    case '@peartube/get-recommendations-response':
+    case '@peartube/cast-start-discovery-response':
       return encoding338
-    case '@peartube/get-video-recommendations-request':
+    case '@peartube/cast-stop-discovery-request':
       return encoding339
-    case '@peartube/get-video-recommendations-response':
+    case '@peartube/cast-stop-discovery-response':
       return encoding340
+    case '@peartube/cast-get-devices-request':
+      return encoding341
+    case '@peartube/cast-get-devices-response':
+      return encoding342
+    case '@peartube/cast-add-manual-device-request':
+      return encoding343
+    case '@peartube/cast-add-manual-device-response':
+      return encoding344
+    case '@peartube/cast-connect-request':
+      return encoding345
+    case '@peartube/cast-connect-response':
+      return encoding346
+    case '@peartube/cast-disconnect-request':
+      return encoding347
+    case '@peartube/cast-disconnect-response':
+      return encoding348
+    case '@peartube/cast-play-request':
+      return encoding349
+    case '@peartube/cast-play-response':
+      return encoding350
+    case '@peartube/cast-pause-request':
+      return encoding351
+    case '@peartube/cast-pause-response':
+      return encoding352
+    case '@peartube/cast-resume-request':
+      return encoding353
+    case '@peartube/cast-resume-response':
+      return encoding354
+    case '@peartube/cast-stop-request':
+      return encoding355
+    case '@peartube/cast-stop-response':
+      return encoding356
+    case '@peartube/cast-seek-request':
+      return encoding357
+    case '@peartube/cast-seek-response':
+      return encoding358
+    case '@peartube/cast-set-volume-request':
+      return encoding359
+    case '@peartube/cast-set-volume-response':
+      return encoding360
+    case '@peartube/cast-get-state-request':
+      return encoding361
+    case '@peartube/cast-get-state-response':
+      return encoding362
+    case '@peartube/cast-is-connected-request':
+      return encoding363
+    case '@peartube/cast-is-connected-response':
+      return encoding364
+    case '@peartube/event-cast-device-found':
+      return encoding365
+    case '@peartube/event-cast-device-lost':
+      return encoding366
+    case '@peartube/event-cast-playback-state':
+      return encoding367
+    case '@peartube/event-cast-time-update':
+      return encoding368
+    case '@peartube/search-videos-request':
+      return encoding369
+    case '@peartube/search-videos-response':
+      return encoding370
+    case '@peartube/index-video-vectors-request':
+      return encoding371
+    case '@peartube/index-video-vectors-response':
+      return encoding372
+    case '@peartube/get-participation-status-request':
+      return encoding373
+    case '@peartube/get-participation-status-response':
+      return encoding374
+    case '@peartube/set-device-conditions-request':
+      return encoding375
+    case '@peartube/set-device-conditions-response':
+      return encoding376
     default:
       throw new Error('Encoder not found ' + name)
   }

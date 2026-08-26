@@ -10,6 +10,26 @@ const DB_DIR = path.join(ROOT, 'hyperdb')
 const schema = Hyperschema.from(SCHEMA_DIR)
 const ns = schema.namespace('peartubeChannel')
 
+// Every optional field in a struct gets a bit in a single flags word, and the
+// generated encoder builds that word with a chain of bitwise `|`. That is a
+// SIGNED 32-bit operation, so the 32nd optional field contributes 2**31 and
+// turns the whole word negative, which then fails `c.uint` encoding at write
+// time - a struct that silently cannot be persisted. Refuse to generate one.
+const MAX_OPTIONAL_FIELDS = 31
+const registerStruct = ns.register.bind(ns)
+ns.register = (definition) => {
+  const fields = definition?.fields || []
+  const optional = fields.filter((field) => field.required !== true)
+  if (optional.length > MAX_OPTIONAL_FIELDS) {
+    throw new Error(
+      `struct '${definition?.name}' has ${optional.length} optional fields; ` +
+      `at most ${MAX_OPTIONAL_FIELDS} can be encoded. Mark a field ` +
+      'required, or split the struct.',
+    )
+  }
+  return registerStruct(definition)
+}
+
 ns.register({
   name: 'metadata',
   compact: true,
@@ -75,7 +95,7 @@ ns.register({
     { name: 'updatedAt', type: 'uint64' },
     { name: 'updatedBy', type: 'string' },
     { name: 'schemaVersion', type: 'uint64' },
-    { name: 'logicalClock', type: 'uint64' }
+    { name: 'logicalClock', type: 'uint64' },
   ]
 })
 
@@ -89,6 +109,48 @@ ns.register({
     { name: 'originalLanguage', type: 'string' },
     { name: 'releaseDate', type: 'uint64' },
     { name: 'releaseYear', type: 'uint64' }
+  ]
+})
+
+// Cover art has to survive a restart on the publisher as well as travel on a
+// claim, so the content record carries the same role/locator shape the media
+// graph publishes.
+ns.register({
+  name: 'contentArtwork',
+  compact: true,
+  fields: [
+    { name: 'role', type: 'string', required: true },
+    { name: 'blobId', type: 'string' },
+    { name: 'blobsCoreKey', type: 'string' },
+    { name: 'mimeType', type: 'string' },
+    { name: 'remoteUrl', type: 'string' }
+  ]
+})
+
+// The immutable publication cluster is written once, read once, and only ever
+// makes sense whole: `decodeContentDetails` assembles it into a single logical
+// object or ignores it entirely. Keeping its thirteen values as flat optionals
+// on `contentDetails` spent thirteen of that struct's flag bits and pushed the
+// flags word past 2**31 (see MAX_OPTIONAL_FIELDS above), so the cluster travels
+// as one nested struct that costs the parent a single bit. The parent field is
+// named `publication` because `immutablePublication` is the logical read shape
+// (claim/operation id arrays plus a decoded manifest), not what is stored.
+ns.register({
+  name: 'immutablePublication',
+  fields: [
+    { name: 'publicationId', type: 'string' },
+    { name: 'manifestId', type: 'string' },
+    { name: 'renditionId', type: 'string' },
+    { name: 'assetId', type: 'string' },
+    { name: 'coreKey', type: 'string' },
+    { name: 'publisherId', type: 'string' },
+    { name: 'sequence', type: 'uint64' },
+    { name: 'metadataClaimId', type: 'string' },
+    { name: 'availabilityClaimId', type: 'string' },
+    { name: 'publicationOperationId', type: 'string' },
+    { name: 'metadataClaimOperationId', type: 'string' },
+    { name: 'availabilityClaimOperationId', type: 'string' },
+    { name: 'manifestHex', type: 'string' }
   ]
 })
 
@@ -113,9 +175,20 @@ ns.register({
     { name: 'publicationState', type: 'string' },
     { name: 'contentFingerprint', type: 'string' },
     { name: 'importIdentityKey', type: 'string' },
-    { name: 'importClaimantId', type: 'string' }
+    { name: 'importClaimantId', type: 'string' },
+    { name: 'artwork', type: '@peartubeChannel/contentArtwork', array: true },
+    { name: 'publication', type: '@peartubeChannel/immutablePublication' }
   ]
 })
+ns.register({
+  name: 'publicationOperationFrames',
+  compact: true,
+  fields: [
+    { name: 'id', type: 'string', required: true },
+    { name: 'publicationOperationFramesHex', type: 'string', required: true }
+  ]
+})
+
 
 ns.register({
   name: 'channelSource',
@@ -244,6 +317,11 @@ ch.collections.register({ name: 'invites', schema: '@peartubeChannel/invite', ke
 ch.collections.register({ name: 'watchEvents', schema: '@peartubeChannel/watchEvent', key: ['videoId', 'eventId'] })
 ch.collections.register({ name: 'vectorIndexes', schema: '@peartubeChannel/vectorIndex', key: ['videoId'] })
 ch.collections.register({ name: 'channelProfiles', schema: '@peartubeChannel/channelProfile', key: ['id'] })
+ch.collections.register({
+  name: 'publicationOperationFrames',
+  schema: '@peartubeChannel/publicationOperationFrames',
+  key: ['id']
+})
 ch.collections.register({ name: 'contentDetails', schema: '@peartubeChannel/contentDetails', key: ['id'] })
 ch.collections.register({ name: 'channelSources', schema: '@peartubeChannel/channelSource', key: ['provider', 'identityKey'] })
 ch.collections.register({ name: 'channelArtwork', schema: '@peartubeChannel/channelArtwork', key: ['role'] })

@@ -43,8 +43,12 @@ export function createLocalMediaIndex(options = {}) {
     }
   }
 
-  function logicalKey(record, dimensions) {
-    return `${dimensions.index}\0${record.publisherId || ''}\0${record.publicationId}`
+  function logicalKey(record) {
+    // A publication remains the same candidate when its discovery/index
+    // provenance changes. Keeping provenance out of the identity key makes an
+    // update replaceable in place and, crucially, retains the previous row
+    // when admission of the proposed replacement fails.
+    return `${record.publisherId || ''}\0${record.publicationId}`
   }
 
   function adjustCounts(record, delta) {
@@ -82,14 +86,10 @@ export function createLocalMediaIndex(options = {}) {
   }
 
   function metadataFingerprint(record) {
-    return JSON.stringify([
-      record.entityRef,
-      record.title || null,
-      record.creator || null,
-      record.collectionId || null,
-      Array.isArray(record.tags) ? record.tags : [],
-      record.playable === true,
-    ])
+    // normalizeRecord fixes property order and bounds every value. Fingerprint
+    // the complete stored payload so version/digest/provenance updates cannot
+    // be mistaken for duplicates merely because their display title matches.
+    return JSON.stringify(record)
   }
 
   function metadataByteLength(record) {
@@ -97,6 +97,8 @@ export function createLocalMediaIndex(options = {}) {
       record.title || null,
       record.creator || null,
       record.collectionId || null,
+      record.expectedEpisodeCount || 0,
+      record.seriesEpisode || null,
       Array.isArray(record.tags) ? record.tags : [],
       record.artwork || null,
     ]))
@@ -152,12 +154,44 @@ export function createLocalMediaIndex(options = {}) {
       title: record.title || null,
       creator: record.creator || null,
       collectionId: record.collectionId || null,
+      contentKind: typeof record.contentKind === 'string' ? record.contentKind : null,
+      mediaProvider: typeof record.mediaProvider === 'string' ? record.mediaProvider : null,
+      mediaId: typeof record.mediaId === 'string' ? record.mediaId : null,
+      seasonNumber: Number.isSafeInteger(record.seasonNumber) ? record.seasonNumber : null,
+      episodeNumber: Number.isSafeInteger(record.episodeNumber) ? record.episodeNumber : null,
+      expectedEpisodeCount: Number.isSafeInteger(record.expectedEpisodeCount) ? record.expectedEpisodeCount : 0,
+      seriesEpisode: record.seriesEpisode
+        ? {
+            entityRef: record.seriesEpisode.entityRef,
+            title: record.seriesEpisode.title || null,
+            seasonNumber: record.seriesEpisode.seasonNumber,
+            episodeNumber: record.seriesEpisode.episodeNumber,
+            publicationId: record.seriesEpisode.publicationId,
+            publisherId: record.seriesEpisode.publisherId || null,
+            contentKind: typeof record.seriesEpisode.contentKind === 'string' ? record.seriesEpisode.contentKind : null,
+            mediaProvider: typeof record.seriesEpisode.mediaProvider === 'string' ? record.seriesEpisode.mediaProvider : null,
+            mediaId: typeof record.seriesEpisode.mediaId === 'string' ? record.seriesEpisode.mediaId : null,
+          }
+        : null,
       tags: Array.isArray(record.tags) ? record.tags.slice(0, maxTagsPerEntity) : [],
       ranking: Number.isFinite(record.ranking) ? record.ranking : null,
       model: typeof record.model === 'string' ? record.model : null,
       sourceId: record.sourceId || null,
       indexId: record.indexId || null,
       agentId: record.agentId || null,
+      artwork: record.artwork || null,
+      // A swarm blob carries no content type of its own, and a viewer's image
+      // decoder needs one. Losing it here means a correct cover that will not
+      // decode on some platforms.
+      artworkMimeType: typeof record.artworkMimeType === 'string' ? record.artworkMimeType : null,
+      // A viewer reads these before pressing play, and a consumer cannot look
+      // any of them up, so they have to survive indexing to be worth publishing.
+      releaseYear: Number.isSafeInteger(record.releaseYear) ? record.releaseYear : null,
+      runtimeMinutes: Number.isSafeInteger(record.runtimeMinutes) ? record.runtimeMinutes : null,
+      overview: typeof record.overview === 'string' ? record.overview : null,
+      genres: Array.isArray(record.genres)
+        ? record.genres.filter(genre => typeof genre === 'string' && genre).slice(0, 8)
+        : [],
       playable: record.playable === true,
     }
   }
@@ -176,10 +210,16 @@ export function createLocalMediaIndex(options = {}) {
       [record.title, 512],
       [record.creator, 512],
       [record.collectionId, 512],
+      [record.contentKind, 32],
+      [record.mediaProvider, 64],
+      [record.mediaId, 128],
       [record.sourceId, 1024],
       [record.indexId, 512],
       [record.agentId, 512],
       [record.model, 512],
+      [record.artwork, 2048],
+      [record.artworkMimeType, 128],
+      [record.overview, 4096],
     ]) {
       if (!boundedString(value, max)) return false
     }
@@ -187,7 +227,33 @@ export function createLocalMediaIndex(options = {}) {
     for (const tag of record.tags || []) {
       if (!boundedString(tag, 128, true)) return false
     }
+    if (record.genres != null) {
+      if (!Array.isArray(record.genres) || record.genres.length > 8) return false
+      for (const genre of record.genres) {
+        if (!boundedString(genre, 64, true)) return false
+      }
+    }
+    if (record.releaseYear != null && !Number.isSafeInteger(record.releaseYear)) return false
+    if (record.seasonNumber != null && (!Number.isSafeInteger(record.seasonNumber) || record.seasonNumber < 1)) return false
+    if (record.episodeNumber != null && (!Number.isSafeInteger(record.episodeNumber) || record.episodeNumber < 1)) return false
+    if (record.runtimeMinutes != null && !Number.isSafeInteger(record.runtimeMinutes)) return false
     if (record.ranking != null && !Number.isFinite(record.ranking)) return false
+    if (record.expectedEpisodeCount != null &&
+        (!Number.isSafeInteger(record.expectedEpisodeCount) ||
+          record.expectedEpisodeCount < 0 ||
+          record.expectedEpisodeCount > 100000)) return false
+    if (record.seriesEpisode != null) {
+      const episode = record.seriesEpisode
+      if (!boundedString(episode.entityRef, 512, true) ||
+          !boundedString(episode.title, 512) ||
+          !boundedString(episode.publicationId, 512, true) ||
+          !boundedString(episode.publisherId, 128) ||
+          !boundedString(episode.contentKind, 32) ||
+          !boundedString(episode.mediaProvider, 64) ||
+          !boundedString(episode.mediaId, 128) ||
+          !Number.isSafeInteger(episode.seasonNumber) || episode.seasonNumber < 0 ||
+          !Number.isSafeInteger(episode.episodeNumber) || episode.episodeNumber < 0) return false
+    }
     return true
   }
 
@@ -196,7 +262,14 @@ export function createLocalMediaIndex(options = {}) {
     const publications = new Map()
     const provenance = new Set()
     const tags = new Set()
+    const episodes = new Map()
+    let expectedEpisodes = 0
     for (const record of recordGroup) {
+      expectedEpisodes = Math.max(expectedEpisodes, record.expectedEpisodeCount || 0)
+      if (record.seriesEpisode) {
+        const episodeKey = record.seriesEpisode.entityRef
+        if (!episodes.has(episodeKey)) episodes.set(episodeKey, record.seriesEpisode)
+      }
       if (record.sourceId && provenance.size < maxProvenancePerEntity) provenance.add(record.sourceId)
       for (const tag of record.tags || []) {
         if (tags.size >= maxTagsPerEntity) break
@@ -204,24 +277,71 @@ export function createLocalMediaIndex(options = {}) {
       }
       const publicationKey = `${record.publisherId || ''}\0${record.publicationId}`
       if (!publications.has(publicationKey) && publications.size < maxPublicationsPerEntity) {
+        const coordinates = record.seriesEpisode || record
         publications.set(publicationKey, {
           publicationId: record.publicationId,
           publisherId: record.publisherId,
           title: record.title || null,
           playable: record.playable === true,
+          contentKind: coordinates.contentKind || null,
+          mediaProvider: coordinates.mediaProvider || null,
+          mediaId: coordinates.mediaId || null,
+          seasonNumber: coordinates.seasonNumber || null,
+          episodeNumber: coordinates.episodeNumber || null,
         })
       }
     }
     const projectedPublications = Array.from(publications.values())
+    const orderedEpisodes = [...episodes.values()].sort((left, right) => (
+      left.seasonNumber - right.seasonNumber ||
+      left.episodeNumber - right.episodeNumber ||
+      left.entityRef.localeCompare(right.entityRef) ||
+      String(left.publisherId || '').localeCompare(String(right.publisherId || '')) ||
+      left.publicationId.localeCompare(right.publicationId)
+    ))
+    const seasons = new Map()
+    for (const episode of orderedEpisodes) {
+      const season = seasons.get(episode.seasonNumber) || []
+      season.push(episode)
+      seasons.set(episode.seasonNumber, season)
+    }
     return {
       entityRef: first.entityRef,
+      entityKind: first.kind || 'unknown',
       title: first.title || projectedPublications.find(publication => publication.title)?.title || null,
       creator: first.creator || null,
+      // Any publisher in the group may be the one that knows the cover, and the
+      // group is not ordered by who does, so fall back across the group rather
+      // than letting an art-less record decide the entity renders blank.
+      artwork: first.artwork || recordGroup.find(record => record.artwork)?.artwork || null,
+      artworkMimeType: first.artwork
+        ? first.artworkMimeType
+        : (recordGroup.find(record => record.artwork)?.artworkMimeType ?? null),
+      // As with cover art, the publisher that described the title may not be
+      // the one that sorts first in the group.
+      releaseYear: first.releaseYear ?? recordGroup.find(record => record.releaseYear != null)?.releaseYear ?? null,
+      runtimeMinutes: first.runtimeMinutes ?? recordGroup.find(record => record.runtimeMinutes != null)?.runtimeMinutes ?? null,
+      overview: first.overview || recordGroup.find(record => record.overview)?.overview || null,
+      genres: first.genres?.length
+        ? first.genres
+        : (recordGroup.find(record => record.genres?.length)?.genres ?? []),
       collectionId: first.collectionId || null,
       tags: Array.from(tags).sort(),
       publications: projectedPublications,
       provenance: Array.from(provenance).sort(),
       playable: projectedPublications.some(publication => publication.playable),
+      series: first.kind === 'series'
+        ? {
+            expectedEpisodes,
+            availableEpisodes: orderedEpisodes.length,
+            complete: expectedEpisodes > 0 && orderedEpisodes.length >= expectedEpisodes,
+            seasons: [...seasons].map(([seasonNumber, seasonEpisodes]) => ({
+              seasonNumber,
+              availableEpisodes: seasonEpisodes.length,
+              episodes: seasonEpisodes,
+            })),
+          }
+        : null,
     }
   }
 
@@ -242,7 +362,7 @@ export function createLocalMediaIndex(options = {}) {
         }
         const record = normalizeRecord(input)
         const dimensions = dimensionKeys(record)
-        const key = logicalKey(record, dimensions)
+        const key = logicalKey(record)
         const previous = records.get(key) || null
         const fingerprint = metadataFingerprint(record)
         if (previous && metadataFingerprint(previous) === fingerprint) {
@@ -303,6 +423,41 @@ export function createLocalMediaIndex(options = {}) {
       else if (duplicates > 0 && rejected === 0) status = 'duplicate'
       return { status, errorCode: firstErrorCode, accepted, duplicates, rejected, results }
     },
+    replaceRecords(nextRecords = []) {
+      // Reconcile rather than clear/re-ingest. A catalog refresh often changes
+      // one candidate; unchanged records must not burn a new sliding-window
+      // reservation simply because another publisher changed.
+      const desired = new Map()
+      for (const input of nextRecords || []) {
+        if (!validRecordInput(input)) continue
+        const record = normalizeRecord(input)
+        desired.set(logicalKey(record), record)
+      }
+      for (const [key, previous] of records) {
+        if (desired.has(key)) continue
+        records.delete(key)
+        adjustCounts(previous, -1)
+      }
+      const changed = []
+      let duplicates = 0
+      for (const [key, record] of desired) {
+        const previous = records.get(key)
+        if (previous && metadataFingerprint(previous) === metadataFingerprint(record)) {
+          duplicates++
+          continue
+        }
+        changed.push(record)
+      }
+      const result = this.ingestRecords(changed)
+      // The caller must commit visibility and downstream work from these
+      // authoritative stored rows, not from the proposed inputs. In
+      // particular, a rejected update leaves its previous row admitted.
+      return {
+        ...result,
+        duplicates: result.duplicates + duplicates,
+        admittedRecords: this.records(),
+      }
+    },
     search(query = '') {
       const q = String(query).toLowerCase()
       const byEntity = new Map()
@@ -316,7 +471,8 @@ export function createLocalMediaIndex(options = {}) {
       return Array.from(byEntity.values()).map(project)
     },
     records() {
-      return Array.from(records.values())
+      // Never expose mutable references to authoritative index state.
+      return Array.from(records.values(), normalizeRecord)
     },
   }
 }

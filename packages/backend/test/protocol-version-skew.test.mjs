@@ -2,18 +2,45 @@ import test from 'brittle'
 import crypto from 'hypercore-crypto'
 
 import {
+  ASSET_RENDITION_CAPABILITY,
   PROTOCOL_ERROR_CODES,
+  PROTOCOL_MAJOR,
   assertProtocolCompatibility,
   createProtocolAdvertisement,
   decodePeerFrame,
-  encodePeerFrame
+  encodePeerFrame,
 } from '../src/network/index.js'
 import { createLiveEventDescriptor, createLiveEpochDescriptor, verifyLiveEpochChain } from '../src/live/live-descriptor.js'
+import { createStatusApi } from '../src/api/status.js'
+import { deriveBootstrapTopic } from '../src/network/topics.js'
 
 const publisher = crypto.keyPair(Buffer.alloc(32, 1))
 const device = crypto.keyPair(Buffer.alloc(32, 2))
 const publisherId = Buffer.from(publisher.publicKey).toString('hex')
 const deviceId = Buffer.from(device.publicKey).toString('hex')
+
+test('protocol major and asset capability make the scoped asset surface a clean v2 cutover', (t) => {
+  t.is(PROTOCOL_MAJOR, 2)
+  t.is(ASSET_RENDITION_CAPABILITY, 'asset-rendition:v2')
+  const advertisement = createProtocolAdvertisement({ requiredCapabilities: [ASSET_RENDITION_CAPABILITY] })
+  t.is(advertisement.minimumProtocolMajor, 2)
+  t.alike(advertisement.requiredCapabilities, ['asset-rendition:v2'])
+  t.alike(assertProtocolCompatibility(advertisement, {
+    mandatoryCapabilities: [ASSET_RENDITION_CAPABILITY],
+    supportedCapabilities: [ASSET_RENDITION_CAPABILITY],
+  }), advertisement)
+})
+
+test('status fallback advertises the exported current protocol-major topic', (t) => {
+  const networkId = 'status-major-parity'
+  const status = createStatusApi({ ctx: { networkId } }).getSwarmStatus()
+  t.is(status.scopedTopics.length, 1)
+  t.is(status.scopedTopics[0].protocolMajor, PROTOCOL_MAJOR)
+  t.is(
+    status.scopedTopics[0].topicHex,
+    Buffer.from(deriveBootstrapTopic({ networkId, protocolMajor: PROTOCOL_MAJOR })).toString('hex'),
+  )
+})
 
 test('protocol advertisements tolerate compatible minor changes and canonicalize bounded capabilities', (t) => {
   const advertisement = createProtocolAdvertisement({
@@ -28,11 +55,11 @@ test('protocol advertisements tolerate compatible minor changes and canonicalize
 
 test('signed compatibility validation rejects coerced, noncanonical, and incomplete advertisements with a stable code', (t) => {
   const malformed = [
-    { minimumProtocolMajor: '1', protocolMinor: 0, requiredCapabilities: [] },
+    { minimumProtocolMajor: '2', protocolMinor: 0, requiredCapabilities: [] },
     { minimumProtocolMajor: null, protocolMinor: 0, requiredCapabilities: [] },
-    { minimumProtocolMajor: 1, protocolMinor: false, requiredCapabilities: [] },
-    { minimumProtocolMajor: 1, protocolMinor: 0, requiredCapabilities: ['z:v1', 'a:v1'] },
-    { minimumProtocolMajor: 1, protocolMinor: 0, requiredCapabilities: ['a:v1', 'a:v1'] },
+    { minimumProtocolMajor: 2, protocolMinor: false, requiredCapabilities: [] },
+    { minimumProtocolMajor: 2, protocolMinor: 0, requiredCapabilities: ['z:v1', 'a:v1'] },
+    { minimumProtocolMajor: 2, protocolMinor: 0, requiredCapabilities: ['a:v1', 'a:v1'] },
   ]
   for (const advertisement of malformed) {
     try {
@@ -53,8 +80,9 @@ test('signed compatibility validation rejects coerced, noncanonical, and incompl
     t.is(error.code, PROTOCOL_ERROR_CODES.ADVERTISEMENT_REQUIRED)
   }
 })
+
 test('protocol compatibility fails closed with stable major, capability, and omission codes', (t) => {
-  const mismatch = createProtocolAdvertisement({ minimumProtocolMajor: 2 })
+  const mismatch = createProtocolAdvertisement({ minimumProtocolMajor: 1 })
   try {
     assertProtocolCompatibility(mismatch)
     t.fail('cross-major advertisement must be rejected')
@@ -70,6 +98,15 @@ test('protocol compatibility fails closed with stable major, capability, and omi
     t.is(error.capability, 'future-projection:v1')
   }
   try {
+    assertProtocolCompatibility(createProtocolAdvertisement({ requiredCapabilities: ['asset-rendition:v1'] }), {
+      mandatoryCapabilities: [ASSET_RENDITION_CAPABILITY],
+      supportedCapabilities: [ASSET_RENDITION_CAPABILITY],
+    })
+    t.fail('v1 asset capability must not be accepted as a v2 alias')
+  } catch (error) {
+    t.is(error.code, PROTOCOL_ERROR_CODES.ADVERTISEMENT_REQUIRED)
+  }
+  try {
     assertProtocolCompatibility({})
     t.fail('omitted compatibility fields must be rejected by default')
   } catch (error) {
@@ -77,16 +114,16 @@ test('protocol compatibility fails closed with stable major, capability, and omi
   }
   const acceptedLegacy = assertProtocolCompatibility({}, {
     legacyCompatibility: {
-      minimumProtocolMajor: 1,
+      minimumProtocolMajor: 2,
       protocolMinor: 0,
       requiredCapabilities: [],
     },
   })
-  t.is(acceptedLegacy.minimumProtocolMajor, 1)
+  t.is(acceptedLegacy.minimumProtocolMajor, 2)
   try {
     assertProtocolCompatibility({}, {
       legacyCompatibility: {
-        minimumProtocolMajor: 2,
+        minimumProtocolMajor: 1,
         protocolMinor: 0,
         requiredCapabilities: [],
       },
@@ -97,11 +134,11 @@ test('protocol compatibility fails closed with stable major, capability, and omi
   }
 })
 
-test('protocol version skew rejects cross-major peer frames with the stable compatibility code', (t) => {
-  const frame = encodePeerFrame({ type: 'catalog', body: Buffer.from('hello'), protocolMajor: 2, protocolMinor: 0 })
+test('protocol version skew rejects v1 peer frames with the stable compatibility code', (t) => {
+  const frame = encodePeerFrame({ type: 'catalog', payload: Buffer.from('hello'), protocolMajor: 1, protocolMinor: 0 })
   try {
     decodePeerFrame(frame)
-    t.fail('cross-major peer frame must be rejected')
+    t.fail('v1 peer frame must be rejected')
   } catch (error) {
     t.is(error.code, PROTOCOL_ERROR_CODES.MAJOR_UNSUPPORTED)
     t.ok(/unsupported protocol major/.test(error.message))

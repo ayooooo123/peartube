@@ -1,14 +1,13 @@
-import { ChoiceGroup, PolicyCard, PolicyHeading, PolicyListEditor } from './PolicyControls'
-import type { NetworkPolicy, NetworkPolicyPatch } from '@/lib/network-policy'
+import { PolicyCard, PolicyHeading, PolicyListEditor } from './PolicyControls'
 
 export function ModerationFeedEditor({
-  policy,
+  subscriptions,
   disabled = false,
-  onChange,
+  onReplace,
 }: {
-  policy: NetworkPolicy
+  subscriptions: string[]
   disabled?: boolean
-  onChange(patch: NetworkPolicyPatch): void
+  onReplace(subscriptions: string[]): void
 }) {
   return (
     <PolicyCard>
@@ -17,23 +16,12 @@ export function ModerationFeedEditor({
         description="Signed moderation records are local policy on your device. They do not edit publisher catalogs or control another device."
       />
       <PolicyListEditor
-        label="Trusted moderation feeds"
-        description="Add only feed identifiers whose publisher, publication, work, creator, or rendition decisions you want to apply locally."
-        values={policy.trustedModerationFeeds}
-        placeholder="Moderation feed identifier"
+        label="Subscription signer IDs"
+        description="Replace the active profile set with canonical 32-byte signer identifiers whose decisions you want to apply locally."
+        values={subscriptions}
+        placeholder="64-character signer ID"
         disabled={disabled}
-        onChange={(trustedModerationFeeds) => onChange({ trustedModerationFeeds })}
-      />
-      <ChoiceGroup
-        label="Optional AI analysis"
-        value={policy.aiAnalysis}
-        disabled={disabled}
-        options={[
-          { value: 'disabled', label: 'Disabled', detail: 'Do not run automated media analysis.' },
-          { value: 'local-only', label: 'Local only', detail: 'Keep derived annotations on this device.' },
-          { value: 'enabled', label: 'Share enabled', detail: 'Allow configured analysis outputs to be published as non-canonical annotations.' },
-        ]}
-        onChange={(aiAnalysis) => onChange({ aiAnalysis })}
+        onChange={onReplace}
       />
     </PolicyCard>
   )

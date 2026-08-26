@@ -39,6 +39,50 @@ test('media entity loader exposes sources, provenance, conflicts, and archive ev
   assert.equal(result.archiveStatus.pledgeCount, 2)
 })
 
+test('media entity loader never resurrects an embedded source excluded by the local-policy source page', async () => {
+  const rpc = {
+    async getMediaEntity() {
+      return {
+        success: true,
+        entity: {
+          entityId: 'work-hidden-source',
+          title: 'Locally filtered source',
+          sources: [{ publicationId: 'hidden-publication', artwork: 'https://hidden.invalid/poster' }],
+        },
+      }
+    },
+    async getPublicationSources() {
+      return { success: true, items: [], nextCursor: null }
+    },
+  }
+
+  const result = await loadMediaEntity({ rpc, entityId: 'work-hidden-source' })
+  assert.deepEqual(result.sources, [])
+})
+
+test('media entity loader keeps an all-hidden entity out of normal detail state', async () => {
+  let sourceCalls = 0
+  const rpc = {
+    async getMediaEntity() {
+      return {
+        success: false,
+        errorCode: 'MEDIA_ENTITY_NOT_VISIBLE',
+        error: 'Media entity is not visible under this device policy',
+      }
+    },
+    async getPublicationSources() {
+      sourceCalls++
+      return { success: true, items: [{ publicationId: 'hidden-publication' }] }
+    },
+  }
+
+  await assert.rejects(
+    loadMediaEntity({ rpc, entityId: 'work-all-hidden' }),
+    error => error.code === 'MEDIA_ENTITY_NOT_VISIBLE',
+  )
+  assert.equal(sourceCalls, 0)
+})
+
 test('source selector preserves playback source identity while route identity remains entity id', () => {
   const component = read('components/media/SourceSelector.tsx')
   assert.match(component, /publicationId/)

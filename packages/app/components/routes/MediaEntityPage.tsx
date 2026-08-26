@@ -2,7 +2,7 @@ import React from 'react'
 import { useLocalSearchParams } from 'expo-router'
 import { isPublicationSourceSelectable, type PublicationSource } from '../media/SourceSelector'
 import { MediaEntityDetailScreen, encodeMediaEntityRouteParam } from '../media/MediaEntityDetailScreen'
-import { loadMediaEntity } from './media-entity-loaders.js'
+import { loadMediaEntity, startMediaPlayback } from './media-entity-loaders.js'
 import { firstRouteParam, useRouteEntityLoader } from './useRouteEntityLoader'
 import type {
   PublisherCapabilityAction,
@@ -13,6 +13,8 @@ type MediaEntityInput = {
   entityId?: string | null
   title?: string | null
   sources?: PublicationSource[] | null
+  /** Media renditions as the signed manifest declares them, size included. */
+  renditions?: Array<{ renditionId?: string, byteLength?: number }> | null
   selectedPublicationId?: string | null
   provenance?: unknown[] | null
   conflicts?: unknown[] | null
@@ -76,11 +78,38 @@ type Props = {
   mediaGraph?: {
     getMediaEntity?: (request: Record<string, unknown>) => Promise<any>
     getPublicationSources?: (request: Record<string, unknown>) => Promise<any>
+    prepareMediaPlayback?: (request: Record<string, unknown>) => Promise<any>
   } | null
   entity?: MediaEntityInput | null
   publisherDeviceStatus?: PublisherDeviceStatusInput | null
   publisherActionHandlers?: Partial<Record<PublisherCapabilityAction, () => void>>
   onSelectSource?: (source: { entityId: string, publicationId: string, renditionId: string }) => void
+  /** Receives the source Play actually started, after any backend failover. */
+  onPlaybackPrepared?: (playback: {
+    entityId: string,
+    publicationId: string | null,
+    renditionId: string | null,
+    // What preparation was for. A caller handed only ids has to go find the
+    // bytes itself, which is why Play used to stop here.
+    url: string | null,
+    title: string,
+    // Byte length the signed manifest declares for the rendition that started.
+    // Null when this device has not received a manifest that states one.
+    byteLength: number | null,
+  }) => void
+  onPlaybackFailed?: (failure: { entityId: string, errorCode: string, message: string }) => void
+}
+
+/**
+ * Byte length of the rendition Play actually started, as the signed manifest
+ * declares it. A rendition the entity response never named has no size here,
+ * which is not zero.
+ */
+function renditionByteLength(entity: MediaEntityInput | null, renditionId: string | null): number | null {
+  const renditions = Array.isArray(entity?.renditions) ? entity.renditions : []
+  const match = renditions.find(rendition => rendition?.renditionId === renditionId)
+  const byteLength = Number(match?.byteLength)
+  return Number.isSafeInteger(byteLength) && byteLength > 0 ? byteLength : null
 }
 
 export default function MediaEntityPage({
@@ -90,6 +119,8 @@ export default function MediaEntityPage({
   publisherDeviceStatus = null,
   publisherActionHandlers,
   onSelectSource,
+  onPlaybackPrepared,
+  onPlaybackFailed,
 }: Props) {
   const params = useLocalSearchParams<{ id?: string | string[] }>()
   const entityId = id || firstRouteParam(params.id)
@@ -126,6 +157,58 @@ export default function MediaEntityPage({
         publisherDeviceStatus: securityStatus,
       } as any)
     : undefined
+  // Choosing a source in Other Sources is a Play with an explicit override, not
+  // a local re-rank: it goes back through the backend selector, which still
+  // refuses the choice if it fails a hard gate and still fails over between
+  // equivalent sources.
+  const play = React.useCallback(async (publicationId: string | null) => {
+    // Every one of these used to be the same silent return, which is
+    // indistinguishable from a dead button to anyone holding the device.
+    if (!entityId) {
+      onPlaybackFailed?.({ entityId: '', errorCode: 'ENTITY_ID_MISSING', message: 'This screen has no entity to play' })
+      return
+    }
+    if (!mediaGraph) {
+      onPlaybackFailed?.({ entityId, errorCode: 'RPC_NOT_READY', message: 'The backend connection is not ready yet' })
+      return
+    }
+    if (!mediaGraph.prepareMediaPlayback) {
+      onPlaybackFailed?.({ entityId, errorCode: 'PREPARE_METHOD_MISSING', message: 'This build cannot ask the backend to prepare playback' })
+      return
+    }
+    try {
+      const prepared = await startMediaPlayback({ rpc: mediaGraph, entityId, publicationId })
+      // A source chosen but not servable is a failure with a name, not a Play
+      // button that quietly does nothing.
+      if (!prepared.url) {
+        onPlaybackFailed?.({
+          entityId,
+          errorCode: 'PLAYBACK_URL_UNAVAILABLE',
+          message: 'This source was selected but is not servable yet',
+        })
+        return
+      }
+      onPlaybackPrepared?.({
+        entityId,
+        publicationId: prepared.publicationId,
+        renditionId: prepared.renditionId,
+        url: prepared.url,
+        title: resolved.title,
+        byteLength: renditionByteLength(sourceEntity, prepared.renditionId),
+      })
+    } catch (error: unknown) {
+      const failure = error instanceof Error ? error : null
+      const code = failure && 'code' in failure && typeof failure.code === 'string'
+        ? failure.code
+        : 'PLAYBACK_PREPARATION_FAILED'
+      onPlaybackFailed?.({
+        entityId,
+        errorCode: code,
+        message: failure?.message || 'Playback could not start',
+      })
+    }
+  }, [mediaGraph, entityId, resolved.title, sourceEntity, onPlaybackPrepared, onPlaybackFailed])
+
   return (
     <MediaEntityDetailScreen
       type="media"
@@ -133,7 +216,11 @@ export default function MediaEntityPage({
       itemParam={itemParam}
       publisherDeviceStatus={securityStatus}
       publisherActionHandlers={publisherActionHandlers}
-      onSelectSource={onSelectSource}
+      onPlay={() => { void play(null) }}
+      onSelectSource={(source) => {
+        onSelectSource?.(source)
+        void play(source.publicationId || null)
+      }}
     />
   )
 }

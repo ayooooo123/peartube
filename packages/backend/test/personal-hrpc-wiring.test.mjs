@@ -61,6 +61,85 @@ test('identity mutation hooks await personal store activation before returning',
   removeHooks()
 })
 
+test('identity mutation hooks serialize identity and personal-store activation transactions', async t => {
+  let releaseB
+  const bActivation = new Promise(resolve => { releaseB = resolve })
+  let activePublicKey = 'identity-a'
+  const events = []
+  const identityManager = {
+    getActivePublicKey() { return activePublicKey },
+    async setActiveIdentity(publicKey) {
+      activePublicKey = publicKey
+      events.push(`identity:${publicKey}`)
+    },
+  }
+  const removeHooks = installSeedPinIdentityMutationHooks({
+    identityManager,
+    onMutation: async () => {
+      const publicKey = activePublicKey
+      events.push(`personal:${publicKey}:start`)
+      if (publicKey === 'identity-b') await bActivation
+      events.push(`personal:${publicKey}:ready`)
+    },
+  })
+
+  const switchB = identityManager.setActiveIdentity('identity-b')
+  await new Promise(resolve => setImmediate(resolve))
+  const switchC = identityManager.setActiveIdentity('identity-c')
+  await new Promise(resolve => setImmediate(resolve))
+  t.alike(
+    events,
+    ['identity:identity-b', 'personal:identity-b:start'],
+    'C cannot persist while the B PersonalStore transaction is in flight',
+  )
+
+  releaseB()
+  await Promise.all([switchB, switchC])
+  t.alike(events, [
+    'identity:identity-b',
+    'personal:identity-b:start',
+    'personal:identity-b:ready',
+    'identity:identity-c',
+    'personal:identity-c:start',
+    'personal:identity-c:ready',
+  ])
+  removeHooks()
+})
+
+test('identity mutation hooks compensate every mutation that changes the active identity', async t => {
+  let activePublicKey = 'identity-a'
+  const rollbacks = []
+  const identityManager = {
+    getActivePublicKey() { return activePublicKey },
+    async setActiveIdentity(publicKey) {
+      activePublicKey = publicKey
+    },
+    async addPairedChannelIdentity() {
+      activePublicKey = 'identity-b'
+      return { publicKey: activePublicKey }
+    },
+  }
+  const removeHooks = installSeedPinIdentityMutationHooks({
+    identityManager,
+    onMutation: async mutation => {
+      if (mutation.method === 'addPairedChannelIdentity') throw new Error('PersonalStore activation rejected')
+    },
+    onRollback: async rollback => {
+      rollbacks.push(rollback)
+    },
+  })
+
+  await t.exception(
+    identityManager.addPairedChannelIdentity('channel-b'),
+    /PersonalStore activation rejected/,
+  )
+  t.is(activePublicKey, 'identity-a', 'the previously active identity is restored')
+  t.is(rollbacks.length, 1)
+  t.is(rollbacks[0].mutation.method, 'addPairedChannelIdentity')
+  t.is(rollbacks[0].failedPublicKey, 'identity-b')
+  removeHooks()
+})
+
 test('personal-sync commands are registered as shared handlers', (t) => {
   for (const name of PERSONAL_HANDLERS) {
     t.ok(SHARED_HANDLER_NAMES.includes(name), `${name} in SHARED_HANDLER_NAMES`)

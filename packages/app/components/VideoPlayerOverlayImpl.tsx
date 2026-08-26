@@ -70,6 +70,7 @@ import {
   SEEK_STEP_SECONDS,
   // Formatters
   formatSize,
+  formatSizeLabel,
   formatTimeAgo,
   formatDuration,
   // Styles
@@ -170,6 +171,7 @@ export function VideoPlayerOverlay() {
     videoUrl,
     isPlaying,
     isLoading,
+    playbackError,
     playerMode,
     videoStats,
     playbackSession,
@@ -394,8 +396,15 @@ export function VideoPlayerOverlay() {
   // Debounce cast buffering — brief BUFFERING from HLS segment transitions shouldn't flash the overlay
   const castBufferingDebounced = useCastBufferingDebounced(castPlayback.state)
 
-  const showLoadingOverlay = isCasting ? castBufferingDebounced : isLoading
-  const loadingLabel = isCasting ? `Casting to ${castDeviceName}...` : 'Connecting to P2P...'
+  // A terminal failure replaces the loading gate: the source will not decode on
+  // a later attempt, so a spinner and "connecting" would both be untrue.
+  const terminalPlaybackError = playbackError?.terminal ? playbackError : null
+  const showLoadingOverlay = terminalPlaybackError
+    ? true
+    : isCasting ? castBufferingDebounced : isLoading
+  const loadingLabel = terminalPlaybackError
+    ? terminalPlaybackError.message
+    : isCasting ? `Casting to ${castDeviceName}...` : 'Connecting to P2P...'
   const castAutoPlayRef = useRef<string | null>(null)
   const castAutoPlayInFlightRef = useRef(false)
 
@@ -1911,6 +1920,9 @@ export function VideoPlayerOverlay() {
     currentVideo.channel?.name ||
     `Channel ${currentVideo.channelKey?.slice(0, 8) || 'Unknown'}`
   const channelInitial = channelName.charAt(0).toUpperCase()
+  // A publication-backed title carries its byte length on the signed manifest;
+  // a title that reached the player without one has no size to state at all.
+  const sizeLabel = formatSizeLabel(currentVideo.size)
 
   // Desktop mini player mode
   if (isDesktop && Platform.OS === 'web' && playerMode === 'mini') {
@@ -2242,7 +2254,7 @@ export function VideoPlayerOverlay() {
               )}
               {showLoadingOverlay && (
                 <div style={desktopStyles.loadingOverlay}>
-                  <ActivityIndicator color="white" size="large" />
+                  {!terminalPlaybackError && <ActivityIndicator color="white" size="large" />}
                   <Text style={{ color: '#fff', marginTop: 12 }}>{loadingLabel}</Text>
                 </div>
               )}
@@ -2330,8 +2342,8 @@ export function VideoPlayerOverlay() {
 
               <div style={desktopStyles.meta}>
                 <span>{formatTimeAgo(currentVideo.uploadedAt)}</span>
-                <span style={desktopStyles.dot}>•</span>
-                <span>{formatSize(currentVideo.size)}</span>
+                {sizeLabel ? <span style={desktopStyles.dot}>•</span> : null}
+                {sizeLabel ? <span>{sizeLabel}</span> : null}
               </div>
 
               {/* Channel info */}
@@ -2480,7 +2492,7 @@ export function VideoPlayerOverlay() {
     <>
       {showLoadingOverlay && !isInPipMode && (
         <View style={styles.loadingOverlay}>
-          <ActivityIndicator color="white" size="large" />
+          {!terminalPlaybackError && <ActivityIndicator color="white" size="large" />}
           <Text style={styles.loadingText}>{loadingLabel}</Text>
         </View>
       )}
@@ -2732,7 +2744,14 @@ export function VideoPlayerOverlay() {
         >
           <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
             {/* P2P Stats - show on native and Pear desktop */}
-            {(Platform.OS !== 'web' || isPear) && <P2PStatsBar stats={videoStats} />}
+            {(Platform.OS !== 'web' || isPear) && (
+              <P2PStatsBar
+                stats={videoStats}
+                playing={effectiveIsPlaying}
+                started={effectiveCurrentTime > 0}
+                failed={Boolean(terminalPlaybackError)}
+              />
+            )}
 
             {/* Video Info */}
             <View style={styles.videoInfo}>
@@ -2747,7 +2766,7 @@ export function VideoPlayerOverlay() {
                 </View>
               )}
               <Text style={styles.videoMeta}>
-                {formatTimeAgo(currentVideo.uploadedAt)} · {formatSize(currentVideo.size)}
+                {formatTimeAgo(currentVideo.uploadedAt)}{sizeLabel ? ` · ${sizeLabel}` : ''}
               </Text>
             </View>
 

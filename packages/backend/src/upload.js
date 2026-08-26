@@ -12,11 +12,14 @@
 
 import crypto from 'hypercore-crypto';
 import b4a from 'b4a';
+import { parseBlobId } from './blob-utils.js';
 
 import { probeMp4File, probeMp4Buffer, isMp4MimeType } from './mp4-playback-probe.js';
 import { saveBlobPlaybackProfile } from './blob-playback-profile.js';
-import { normalizeContentDetails } from './channel/structured-content.js';
+import { MEDIA_COORDINATE_SHAPES, episodeWorkIdentifier, normalizeContentDetails } from './channel/structured-content.js';
 import {
+  ARTWORK_RENDITION_PURPOSES,
+  createImmutableRenditionWriter,
   createPublicationManifest,
   createRenditionDescriptor,
   encodePublicationManifest,
@@ -24,9 +27,31 @@ import {
 import {
   createEntityReference,
   createMediaClaim,
+  describeMedia,
   encodeMediaClaimEnvelope,
 } from './media-graph/index.js';
-import { PUBLISHER_RECORD_TYPES } from './publisher/canonical.js';
+import {
+  PUBLISHER_LIMITS,
+  PUBLISHER_RECORD_TYPES,
+} from './publisher/canonical.js';
+import {
+  decodePublisherCatalogFrame,
+  encodePublisherCatalogFrame,
+} from './publisher/catalog-view.js';
+
+// A publication batch is one PUBLICATION operation followed by its claims. The
+// claim set is not fixed: an episode also carries collection structure and
+// membership claims, so the batch length travels in the frame header instead of
+// being asserted as a constant.
+const MIN_IMMUTABLE_PUBLICATION_OPERATION_COUNT = 3;
+const MAX_IMMUTABLE_PUBLICATION_OPERATION_COUNT = 8;
+const IMMUTABLE_PUBLICATION_FRAME_VERSION = 1;
+const IMMUTABLE_PUBLICATION_FRAME_HEADER_BYTES = 2;
+const IMMUTABLE_PUBLICATION_FRAME_LENGTH_BYTES = 4;
+const MAX_IMMUTABLE_PUBLICATION_FRAMES_BYTES =
+  IMMUTABLE_PUBLICATION_FRAME_HEADER_BYTES +
+  MAX_IMMUTABLE_PUBLICATION_OPERATION_COUNT *
+    (IMMUTABLE_PUBLICATION_FRAME_LENGTH_BYTES + PUBLISHER_LIMITS.maxOperationBytes);
 
 /**
  * Detect MIME type from file magic bytes
@@ -102,10 +127,12 @@ function detectMimeType(buffer) {
 }
 
 /**
- * Get file extension for a MIME type
- * @param {string} mimeType - MIME type
- * @returns {string} File extension without dot
+ * Bounding descriptive metadata is shared with the read paths that replay these
+ * claims, so it lives beside the media graph rather than here. Re-exported
+ * because `@peartube/backend/upload` is where callers already reach for it.
  */
+export { describeMedia }
+
 export function getPlaybackSupportForMimeType(mimeType) {
   const normalized = String(mimeType || '').toLowerCase();
   if (normalized === 'video/mp4' || normalized === 'video/webm') {
@@ -114,6 +141,11 @@ export function getPlaybackSupportForMimeType(mimeType) {
   return { availability: 'playable', playbackSupport: 'unverified-container' };
 }
 
+/**
+ * Get file extension for a MIME type
+ * @param {string} mimeType - MIME type
+ * @returns {string} File extension without dot
+ */
 function getExtensionForMime(mimeType) {
   const mimeToExt = {
     'video/mp4': 'mp4',
@@ -167,6 +199,10 @@ function normalizeVideoMetadata(options, videoId) {
   const contentFingerprint = options.contentFingerprint;
   const importIdentityKey = options.importIdentityKey;
   const importClaimantId = options.importClaimantId;
+  const seriesId = options.seriesId;
+  const seriesTitle = options.seriesTitle;
+  const expectedEpisodeCount = options.expectedEpisodeCount;
+  const artwork = options.artwork;
 
   const metadata = normalizeContentDetails({
     id: videoId,
@@ -183,6 +219,7 @@ function normalizeVideoMetadata(options, videoId) {
     episodeNumber,
     originalAirDate,
     thumbnailUrl,
+    artwork,
     provenanceVersion,
     publicationState,
     contentFingerprint,
@@ -202,6 +239,24 @@ function normalizeVideoMetadata(options, videoId) {
   if (thumbnailBlobId !== undefined) metadata.thumbnailBlobId = thumbnailBlobId;
   if (thumbnailBlobsCoreKey !== undefined) metadata.thumbnailBlobsCoreKey = thumbnailBlobsCoreKey;
   if (thumbnailMimeType !== undefined) metadata.thumbnailMimeType = thumbnailMimeType;
+  if (seriesId !== undefined) {
+    if (typeof seriesId !== 'string' || seriesId.length < 1 || b4a.byteLength(seriesId) > 512) {
+      throw new Error('seriesId must be a bounded non-empty string');
+    }
+    metadata.seriesId = seriesId;
+  }
+  if (seriesTitle !== undefined) {
+    if (typeof seriesTitle !== 'string' || seriesTitle.length < 1 || b4a.byteLength(seriesTitle) > 512) {
+      throw new Error('seriesTitle must be a bounded non-empty string');
+    }
+    metadata.seriesTitle = seriesTitle;
+  }
+  if (expectedEpisodeCount !== undefined) {
+    if (!Number.isSafeInteger(expectedEpisodeCount) || expectedEpisodeCount < 0 || expectedEpisodeCount > 100000) {
+      throw new Error('expectedEpisodeCount must be between 0 and 100000');
+    }
+    metadata.expectedEpisodeCount = expectedEpisodeCount;
+  }
   return metadata;
 }
 
@@ -213,26 +268,27 @@ function buildVideoMetadata(metadata, blobResult, channel, fileSize, mimeType) {
     uploadedAt: Date.now(),
     uploadedBy: channel.localWriterKeyHex,
     blobId: blobResult.id,
-    blobsCoreKey: channel.blobsKeyHex,
+    // An immutable publication names its own rendition core; a legacy
+    // hyperblobs upload lives in the channel's blob core.
+    blobsCoreKey: blobResult.blobsCoreKey || channel.blobsKeyHex,
     availability: playbackSupport.availability,
     playbackSupport: playbackSupport.playbackSupport
   });
   return metadata;
 }
 
-function hashUploadFallback(metadata, blobResult, channel, fileSize) {
-  return b4a.toString(crypto.hash(b4a.from(JSON.stringify({
-    blobsCoreKey: channel.blobsKeyHex,
-    blobId: blobResult.id,
-    fileSize,
-    fingerprint: metadata.contentFingerprint || null
-  }))), 'hex');
-}
-
-function uploadTreeHash(metadata, blobResult, channel, fileSize) {
-  const fingerprint = typeof metadata.contentFingerprint === 'string' ? metadata.contentFingerprint : '';
-  if (/^sha256:[0-9a-f]{64}$/i.test(fingerprint)) return fingerprint.slice(7).toLowerCase();
-  return hashUploadFallback(metadata, blobResult, channel, fileSize);
+// The poster's identity label: a stable digest of what the publisher claims
+// these bytes are, not a merkle root.
+function posterTreeHash(entry, blob) {
+  return b4a.toString(
+    crypto.hash(b4a.from([
+      String(entry.blobsCoreKey || ''),
+      String(entry.blobId || ''),
+      String(entry.mimeType || ''),
+      String(blob.byteLength)
+    ].join('\n'))),
+    'hex'
+  )
 }
 
 const catalogWriteQueues = new WeakMap();
@@ -261,7 +317,31 @@ function markUploadCommitState(error, state) {
   return target;
 }
 
-async function catalogOperationsAreAbsent(catalog, operations) {
+function stagedRollbackPendingError(error, rollbackError) {
+  // The rollback message alone hides WHY the upload was being rolled back, and
+  // that original error is usually the actionable one. Carry both.
+  const rollbackMessage = rollbackError?.message || rollbackError || 'staged metadata could not be deleted';
+  const causeMessage = error?.message || (error ? String(error) : '');
+  const pending = new Error(
+    causeMessage
+      ? `Upload rollback is pending: ${rollbackMessage} (rolling back after: ${causeMessage})`
+      : `Upload rollback is pending: ${rollbackMessage}`,
+    { cause: error },
+  );
+  return markUploadCommitState(pending, 'uploadRollbackPending');
+}
+
+function isAcceptedCatalogReceipt(receipt) {
+  return receipt?.accepted === true;
+}
+
+function isExplicitlyRejectedCatalogReceipt(receipt) {
+  return receipt?.accepted === false &&
+    typeof receipt.rejectionCode === 'string' &&
+    receipt.rejectionCode.length > 0;
+}
+
+async function catalogOperationsAreRejected(catalog, operations) {
   if (typeof catalog?.getOperationReceipt !== 'function') return false;
   try {
     const receipts = await Promise.all(operations.map(operation => {
@@ -269,7 +349,7 @@ async function catalogOperationsAreAbsent(catalog, operations) {
       if (!operationId) throw new Error('operation id unavailable');
       return catalog.getOperationReceipt(operationId);
     }));
-    return receipts.every(receipt => receipt?.accepted !== true);
+    return receipts.every(isExplicitlyRejectedCatalogReceipt);
   } catch {
     return false;
   }
@@ -280,37 +360,393 @@ async function appendImmutablePublication(catalog, signedOperations) {
   try {
     receipts = await catalog.appendBatchAndConfirm(signedOperations);
   } catch (error) {
-    if (!await catalogOperationsAreAbsent(catalog, signedOperations)) {
+    if (!await catalogOperationsAreRejected(catalog, signedOperations)) {
       throw markUploadCommitState(error, 'uploadCommitUncertain');
     }
     throw error;
   }
-  if (!Array.isArray(receipts) || receipts.length !== signedOperations.length ||
-      receipts.some(receipt => receipt?.accepted !== true)) {
-    const error = new Error('Publisher catalog rejected upload projection');
-    if (receipts?.some?.(receipt => receipt?.accepted === true)) {
-      throw markUploadCommitState(error, 'uploadCommitUncertain');
-    }
-    throw error;
+  const complete = Array.isArray(receipts) && receipts.length === signedOperations.length;
+  if (complete && receipts.every(isAcceptedCatalogReceipt)) return receipts;
+
+  const error = new Error('Publisher catalog rejected upload projection');
+  if (!complete || !receipts.every(isExplicitlyRejectedCatalogReceipt)) {
+    throw markUploadCommitState(error, 'uploadCommitUncertain');
   }
-  return receipts;
+  throw error;
 }
 
+// What a failed upload is allowed to undo is exactly what it added.
+//
+// A legacy hyperblobs-backed upload appended blocks to the channel's own blob
+// core, and those blocks belong to it alone, so clearing them is correct.
+//
+// An immutable publication appended nothing: playback points at the rendition
+// core, which is CONTENT-ADDRESSED and therefore shared by every publication of
+// identical bytes. Clearing it would delete the archived asset out from under
+// whichever other publication still serves it, so it is left untouched and only
+// the staged metadata this upload wrote is removed by the caller.
 async function rollbackUploadedBlob(channel, blobResult) {
+  if (blobResult?.shared === true) return;
   if (!channel?.blobs || typeof channel.blobs.clear !== 'function') {
     throw new Error('Upload rollback is unavailable');
   }
   await channel.blobs.clear(blobResult);
 }
 
+function storedBlobResult(metadata, channel) {
+  const parts = String(metadata?.blobId || '').split(':').map(Number);
+  if (parts.length !== 4 ||
+      parts.some(value => !Number.isSafeInteger(value) || value < 0) ||
+      parts[1] < 1 ||
+      parts[3] < 1) {
+    throw new Error('pending upload blob reference is invalid');
+  }
+  const coreKey = metadata?.blobsCoreKey ? String(metadata.blobsCoreKey) : '';
+  if (coreKey && !/^[0-9a-f]{64}$/i.test(coreKey)) {
+    throw new Error('pending upload blob core key is invalid');
+  }
+  return {
+    id: String(metadata.blobId),
+    blockOffset: parts[0],
+    blockLength: parts[1],
+    byteOffset: parts[2],
+    byteLength: parts[3],
+    // Any core that is not the channel's own blob core is a rendition core this
+    // upload does not own. Never clear it.
+    shared: Boolean(coreKey) && coreKey.toLowerCase() !== String(channel?.blobsKeyHex || '').toLowerCase()
+  };
+}
 
-async function maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, runtime = {}) {
-  const { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair } = runtime;
-  if (!catalogRegistry || !deviceKeyPair?.publicKey || !deviceKeyPair?.secretKey) return metadata;
-  const currentTime = runtime.now();
-  const requestedPublisherId = runtime.publisherId;
-  const bindings = requestedPublisherId
-    ? [await catalogRegistry.resolve(requestedPublisherId)]
+async function reconcilePendingUpload(channel, metadata) {
+  if (typeof channel?.deleteVideo !== 'function') {
+    throw stagedRollbackPendingError(null, new Error('staged metadata deletion is unavailable'));
+  }
+  let blobResult;
+  try {
+    blobResult = storedBlobResult(metadata, channel);
+  } catch (error) {
+    throw stagedRollbackPendingError(null, error);
+  }
+  try {
+    await rollbackUploadedBlob(channel, blobResult);
+  } catch (error) {
+    throw stagedRollbackPendingError(null, error);
+  }
+  try {
+    await channel.deleteVideo(metadata.id);
+  } catch (error) {
+    throw stagedRollbackPendingError(null, error);
+  }
+}
+function publisherOperationIdHex(operation) {
+  const id = b4a.from(operation?.recordId || operation?.transitionId || []);
+  if (id.byteLength !== 32) throw new Error('catalog operation id unavailable');
+  return b4a.toString(id, 'hex');
+}
+
+function encodeImmutablePublicationFrames(signedOperations, operationIds) {
+  const operationCount = Array.isArray(signedOperations) ? signedOperations.length : 0;
+  if (operationCount < MIN_IMMUTABLE_PUBLICATION_OPERATION_COUNT ||
+      operationCount > MAX_IMMUTABLE_PUBLICATION_OPERATION_COUNT ||
+      !Array.isArray(operationIds) ||
+      operationIds.length !== operationCount) {
+    throw new Error('immutable publication operation batch is out of bounds');
+  }
+  // One publication, then its claims.
+  const expectedTypes = signedOperations.map((_, index) => index === 0
+    ? PUBLISHER_RECORD_TYPES.PUBLICATION
+    : PUBLISHER_RECORD_TYPES.CLAIM);
+  const frames = signedOperations.map((operation, index) => {
+    const frame = encodePublisherCatalogFrame(operation);
+    if (frame.byteLength === 0 || frame.byteLength > PUBLISHER_LIMITS.maxOperationBytes) {
+      throw new Error('immutable publication operation frame is out of bounds');
+    }
+    const decoded = decodePublisherCatalogFrame(frame);
+    if (decoded.recordType !== expectedTypes[index] ||
+        publisherOperationIdHex(decoded) !== operationIds[index] ||
+        !b4a.equals(encodePublisherCatalogFrame(decoded), frame)) {
+      throw new Error('immutable publication operation frame does not match its persisted identity');
+    }
+    return frame;
+  });
+  const byteLength = IMMUTABLE_PUBLICATION_FRAME_HEADER_BYTES +
+    frames.reduce((total, frame) => total + IMMUTABLE_PUBLICATION_FRAME_LENGTH_BYTES + frame.byteLength, 0);
+  if (byteLength > MAX_IMMUTABLE_PUBLICATION_FRAMES_BYTES) {
+    throw new Error('immutable publication operation frames exceed their byte limit');
+  }
+  const encoded = b4a.allocUnsafe(byteLength);
+  encoded[0] = IMMUTABLE_PUBLICATION_FRAME_VERSION;
+  encoded[1] = operationCount;
+  let offset = IMMUTABLE_PUBLICATION_FRAME_HEADER_BYTES;
+  for (const frame of frames) {
+    const length = frame.byteLength;
+    encoded[offset] = length >>> 24;
+    encoded[offset + 1] = length >>> 16;
+    encoded[offset + 2] = length >>> 8;
+    encoded[offset + 3] = length;
+    offset += IMMUTABLE_PUBLICATION_FRAME_LENGTH_BYTES;
+    encoded.set(frame, offset);
+    offset += length;
+  }
+  return b4a.toString(encoded, 'hex');
+}
+
+function decodeImmutablePublicationFrames(publication) {
+  const operationIds = immutablePublicationOperations(publication);
+  const hex = publication?.operationFramesHex;
+  if (typeof hex !== 'string' || hex.length === 0 ||
+      hex.length > MAX_IMMUTABLE_PUBLICATION_FRAMES_BYTES * 2 ||
+      !/^(?:[0-9a-f]{2})+$/.test(hex)) {
+    throw new Error('uncertain upload operation frames are unavailable');
+  }
+  const encoded = b4a.from(hex, 'hex');
+  const operationCount = encoded.byteLength >= IMMUTABLE_PUBLICATION_FRAME_HEADER_BYTES ? encoded[1] : 0;
+  if (encoded.byteLength < IMMUTABLE_PUBLICATION_FRAME_HEADER_BYTES ||
+      encoded[0] !== IMMUTABLE_PUBLICATION_FRAME_VERSION ||
+      operationCount < MIN_IMMUTABLE_PUBLICATION_OPERATION_COUNT ||
+      operationCount > MAX_IMMUTABLE_PUBLICATION_OPERATION_COUNT ||
+      operationIds.length !== operationCount) {
+    throw new Error('uncertain upload operation frame header is invalid');
+  }
+  // One publication, then its claims.
+  const expectedTypes = Array.from({ length: operationCount }, (_, index) => index === 0
+    ? PUBLISHER_RECORD_TYPES.PUBLICATION
+    : PUBLISHER_RECORD_TYPES.CLAIM);
+  const frames = new Array(operationCount);
+  let offset = IMMUTABLE_PUBLICATION_FRAME_HEADER_BYTES;
+  for (let index = 0; index < frames.length; index++) {
+    if (offset + IMMUTABLE_PUBLICATION_FRAME_LENGTH_BYTES > encoded.byteLength) {
+      throw new Error('uncertain upload operation frame is truncated');
+    }
+    const length = encoded[offset] * 0x1000000 +
+      encoded[offset + 1] * 0x10000 +
+      encoded[offset + 2] * 0x100 +
+      encoded[offset + 3];
+    offset += IMMUTABLE_PUBLICATION_FRAME_LENGTH_BYTES;
+    if (length < 1 || length > PUBLISHER_LIMITS.maxOperationBytes ||
+        offset + length > encoded.byteLength) {
+      throw new Error('uncertain upload operation frame length is invalid');
+    }
+    const frame = encoded.subarray(offset, offset + length);
+    offset += length;
+    const decoded = decodePublisherCatalogFrame(frame);
+    if (decoded.recordType !== expectedTypes[index] ||
+        publisherOperationIdHex(decoded) !== operationIds[index] ||
+        !b4a.equals(encodePublisherCatalogFrame(decoded), frame)) {
+      throw new Error('uncertain upload operation frame does not match its persisted identity');
+    }
+    frames[index] = frame;
+  }
+  if (offset !== encoded.byteLength) {
+    throw new Error('uncertain upload operation frames contain trailing bytes');
+  }
+  return frames;
+}
+
+
+function immutablePublicationOperations(publication) {
+  const operationIds = publication?.operationIds;
+  if (!Array.isArray(operationIds) ||
+      operationIds.length < MIN_IMMUTABLE_PUBLICATION_OPERATION_COUNT ||
+      operationIds.length > MAX_IMMUTABLE_PUBLICATION_OPERATION_COUNT ||
+      operationIds.some(id => typeof id !== 'string' || !/^[0-9a-f]{64}$/.test(id))) {
+    throw new Error('uncertain upload operation identities are unavailable');
+  }
+  return operationIds;
+}
+function isMissingCatalogReceipt(receipt) {
+  return receipt !== null &&
+    typeof receipt === 'object' &&
+    !Array.isArray(receipt) &&
+    receipt.accepted === false &&
+    Object.keys(receipt).length === 1;
+}
+
+
+function uncertainCommitError(publication, message = 'Upload catalog commit requires reconciliation') {
+  const error = markUploadCommitState(new Error(message), 'uploadCommitUncertain');
+  error.reconciliationRequired = true;
+  error.reconciliation = {
+    publicationId: publication.publicationId,
+    manifestId: publication.manifestId,
+    renditionId: publication.renditionId,
+    assetId: publication.assetId,
+    coreKey: publication.coreKey,
+    operationIds: immutablePublicationOperations(publication),
+  };
+  return error;
+}
+
+async function resolvePersistedPublisherCatalog(catalogRegistry, publisherId) {
+  if (!catalogRegistry) throw new Error('publisher catalog registry is unavailable');
+  if (typeof publisherId !== 'string' || !/^[0-9a-f]{64}$/.test(publisherId)) {
+    throw new Error('persisted publisher identity is unavailable');
+  }
+  const publisherIdBytes = b4a.from(publisherId, 'hex');
+  if (typeof catalogRegistry.resolve === 'function') {
+    const binding = await catalogRegistry.resolve(publisherIdBytes);
+    const resolvedId = b4a.from(binding?.publisherId || []);
+    if (binding?.catalog && resolvedId.byteLength === 32 && b4a.equals(resolvedId, publisherIdBytes)) {
+      return binding.catalog;
+    }
+  }
+  const bindings = await catalogRegistry.getWritableBindings?.();
+  const binding = bindings?.find(candidate => {
+    const id = b4a.from(candidate?.publisherId || []);
+    return id.byteLength === 32 && b4a.equals(id, publisherIdBytes);
+  });
+  if (!binding?.catalog) throw new Error('persisted publisher catalog is unavailable');
+  return binding.catalog;
+}
+async function finalizeAcceptedPublication(metadata, runtime = {}) {
+  const publication = metadata?.immutablePublication;
+  immutablePublicationOperations(publication);
+  await runtime.mediaCatalogProjection?.rebuild?.();
+  const rendition = publication.manifest?.body?.renditions?.find(
+    candidate => candidate.renditionId === publication.renditionId,
+  );
+  if (!rendition) throw new Error('Persisted upload rendition is unavailable');
+  if (typeof runtime.scopedNetwork?.retainAuthorizedRendition === 'function') {
+    const retention = await runtime.scopedNetwork.retainAuthorizedRendition({
+      manifest: publication.manifest,
+      renditionId: publication.renditionId,
+      ownerId: publication.publicationId,
+      retentionClass: runtime.retentionClass,
+      start: 0,
+      end: rendition.core.length,
+    });
+    if (retention?.status !== 'retained' && retention?.status !== 'already-retained') {
+      throw new Error('upload retention was not acquired');
+    }
+  }
+  const announcement = await runtime.scopedNetwork?.publishLocalPublisherCatalog?.({
+    publisherId: publication.publisherId,
+    retentionClass: runtime.retentionClass,
+  });
+  // A publisher that already has a live binding is re-announced rather than
+  // announced from scratch: 'refreshed' keeps the existing locator alive and
+  // 'rebound' replaces it. Both mean the catalog is discoverable, so only an
+  // unrecognised status is a failure.
+  if (announcement?.status &&
+      announcement.status !== 'published' &&
+      announcement.status !== 'refreshed' &&
+      announcement.status !== 'rebound') {
+    throw new Error(`publisher catalog was not announced: ${announcement.status}`);
+  }
+  if (typeof runtime.finalizeMetadata !== 'function') {
+    throw new Error('published metadata update is unavailable');
+  }
+  const published = { ...metadata, publicationState: 'published' };
+  await runtime.finalizeMetadata(published);
+  Object.assign(metadata, published);
+}
+
+
+async function reconcileUncertainUpload(channel, metadata, runtime = {}) {
+  const publication = metadata?.immutablePublication;
+  const operationIds = immutablePublicationOperations(publication);
+  let catalog;
+  let receipts;
+  try {
+    catalog = await resolvePersistedPublisherCatalog(runtime.catalogRegistry, publication.publisherId);
+    if (typeof catalog.getOperationReceipt !== 'function') throw new Error('catalog receipt lookup is unavailable');
+    receipts = await Promise.all(operationIds.map(id => catalog.getOperationReceipt(b4a.from(id, 'hex'))));
+  } catch (error) {
+    throw uncertainCommitError(publication, error?.message);
+  }
+  let accepted = receipts.every(isAcceptedCatalogReceipt);
+  if (!accepted && receipts.every(isMissingCatalogReceipt)) {
+    try {
+      const frames = decodeImmutablePublicationFrames(publication);
+      await appendImmutablePublication(catalog, frames);
+      accepted = true;
+    } catch (error) {
+      throw uncertainCommitError(publication, error?.message);
+    }
+  }
+  if (accepted) {
+    try {
+      await finalizeAcceptedPublication(metadata, {
+        ...runtime,
+        finalizeMetadata: value => {
+          if (typeof channel.updateVideo !== 'function') {
+            throw new Error('published metadata update is unavailable');
+          }
+          return channel.updateVideo(metadata.id, value, {
+            syncPublic: true,
+            commitAfterPublicSync: true,
+          });
+        },
+      });
+    } catch (error) {
+      throw uncertainCommitError(publication, error?.message);
+    }
+    return 'accepted';
+  }
+  if (receipts.every(isExplicitlyRejectedCatalogReceipt)) {
+    metadata.publicationState = 'replicationPending';
+    await channel.updateVideo?.(metadata.id, metadata, { syncPublic: false });
+    await reconcilePendingUpload(channel, metadata);
+    return 'rejected';
+  }
+  throw uncertainCommitError(publication);
+}
+
+
+function assertUploadNotCancelled(signal) {
+  if (signal?.aborted) throw new Error('static asset write cancelled');
+}
+
+function completedUploadResult(videoId, metadata) {
+  const publication = metadata.immutablePublication;
+  if (!publication) return { success: true, videoId, metadata };
+  return {
+    success: true,
+    videoId,
+    metadata,
+    publicationId: publication.publicationId,
+    manifestId: publication.manifestId,
+    renditionId: publication.renditionId,
+    assetId: publication.assetId,
+    coreKey: publication.coreKey,
+    manifest: publication.manifest
+  };
+}
+// Cover art is referenced by a blob the publisher already stored, so the bytes
+// are read back from that blob and written as a static asset of their own.
+// Artwork whose bytes cannot be read is left out rather than published as a
+// reference no peer could verify.
+async function collectArtworkSources(channel, metadata) {
+  const entries = Array.isArray(metadata.artwork) ? metadata.artwork : [];
+  if (entries.length === 0 || typeof channel?.blobs?.get !== 'function') return [];
+  const sources = [];
+  for (const entry of entries) {
+    if (!ARTWORK_RENDITION_PURPOSES.has(String(entry?.role || ''))) continue;
+    const blob = parseBlobId(String(entry.blobId || ''));
+    if (!blob) continue;
+    let bytes = null;
+    try {
+      bytes = await channel.blobs.get(blob);
+    } catch {
+      bytes = null;
+    }
+    if (!bytes?.byteLength) continue;
+    sources.push({
+      role: String(entry.role),
+      mimeType: entry.mimeType,
+      blobId: String(entry.blobId),
+      source: [bytes]
+    });
+  }
+  return sources;
+}
+
+
+async function prepareImmutablePublication(metadata, runtime = {}) {
+  const { catalogRegistry, deviceKeyPair } = runtime;
+  if (!catalogRegistry || !deviceKeyPair?.publicKey || !deviceKeyPair?.secretKey) return null;
+  const bindings = runtime.publisherId
+    ? [await catalogRegistry.resolve(runtime.publisherId)]
     : await catalogRegistry.getWritableBindings();
   if (!Array.isArray(bindings) || bindings.length !== 1) {
     throw new Error(bindings?.length ? 'Upload publisher catalog is ambiguous' : 'No admitted publisher catalog is available');
@@ -324,7 +760,221 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
       typeof catalog.appendBatchAndConfirm !== 'function') {
     throw new Error('Upload publisher catalog is unavailable');
   }
+
+  assertUploadNotCancelled(runtime.signal);
+  const renditionWriter = createImmutableRenditionWriter({
+    store: runtime.store,
+    source: runtime.createSource?.(),
+    // Set instead of `source` when the caller's origin can be re-opened at a
+    // byte offset, which is what lets an interrupted media ingest pick up from
+    // its staged prefix. Artwork renditions carry their own bytes and never
+    // inherit it.
+    resume: runtime.resume || null,
+    signal: runtime.signal,
+    // Optional: set only when the relay is configured to offload block data to
+    // an object store (see archive/block-offloader.js). Absent everywhere else,
+    // which leaves the asset write path exactly as it was.
+    offload: runtime.offload || null
+  });
+  await renditionWriter.initialize();
+  const durationSeconds = Number(metadata.duration);
+  const renditionWrite = await renditionWriter.writeRendition({
+    purpose: 'original',
+    format: String(metadata.mimeType || 'application/octet-stream'),
+    durationMs: Number.isFinite(durationSeconds) && durationSeconds > 0
+      ? Math.round(durationSeconds * 1000)
+      : 1
+  });
+  // Cover art rides the manifest, so it has to be a real asset like the media:
+  // a v2 rendition descriptor only accepts a static prologue core, not a blob
+  // range borrowed from the channel's blob core.
+  const artworkWrites = [];
+  const artworkSources = (await runtime.createArtworkSources?.()) || [];
+  for (const artwork of artworkSources) {
+    assertUploadNotCancelled(runtime.signal);
+    artworkWrites.push({
+      role: artwork.role,
+      blobId: artwork.blobId,
+      write: await renditionWriter.writeRendition({
+        purpose: artwork.role,
+        format: String(artwork.mimeType || 'image/jpeg'),
+        source: artwork.source,
+        durationMs: 1
+      })
+    });
+  }
+  return { catalog, publisherId, renditionWrite, artworkWrites };
+}
+
+function finalizePreparedRendition(prepared, mimeType) {
+  if (!prepared) return;
+  const write = prepared.renditionWrite;
+  write.descriptor = createRenditionDescriptor({
+    purpose: write.descriptor.purpose,
+    format: String(mimeType || write.descriptor.format || 'application/octet-stream'),
+    core: write.staticAsset,
+    segmentIndex: write.segmentIndex
+  });
+}
+
+// Playback for an immutable publication resolves against the rendition core
+// itself. Hyperblobs has no per-blob framing — hyperblobs/lib/streams.js
+// BlobReadStream reads raw core.get(i) for i in [blockOffset, blockOffset +
+// blockLength) and slices by byteOffset/byteLength — so the finished rendition
+// core IS already a valid hyperblobs blob spanning its whole length. Copying it
+// into channel.blobs would have meant a second, full-size, never-offloaded
+// local copy of every archived title, which capped archive size at the volume
+// regardless of block offload.
+//
+// `blockMap` is deliberately absent: hyperblobs/index.js:173 only builds a
+// block map when the id carries one, and building it fetches EVERY block
+// (409,600 reads for a 100 GiB title at the 256 KiB asset block size).
+function staticPlaybackBlobRef(prepared) {
+  const asset = prepared.renditionWrite.descriptor.core;
+  const blockLength = Number(asset.length);
+  const byteLength = Number(asset.byteLength);
+  if (!Number.isSafeInteger(blockLength) || blockLength < 1 ||
+      !Number.isSafeInteger(byteLength) || byteLength < 1) {
+    throw new Error('rendition core has no playable extent');
+  }
+  if (typeof asset.key !== 'string' || !/^[0-9a-f]{64}$/.test(asset.key)) {
+    throw new Error('rendition core key is unavailable');
+  }
+  return {
+    id: `0:${blockLength}:0:${byteLength}`,
+    blockOffset: 0,
+    blockLength,
+    byteOffset: 0,
+    byteLength,
+    blobsCoreKey: asset.key,
+    // The rendition core is content-addressed, so two publications of identical
+    // bytes resolve to the SAME core. Nothing about this upload owns it, and
+    // rollback must never clear it.
+    shared: true
+  };
+}
+
+// A RANGED upload source: a source that can be re-opened at a byte offset
+// rather than only from the start. It is what makes an interrupted archive
+// resumable — a second attempt asks the origin for the bytes it still needs
+// instead of the whole title again — and the only shape that can express that
+// is an opener, because the offset it must start at is not known until the
+// staging core left behind by the previous attempt has been read.
+//
+//   id     stable across attempts; it is what names the staging core, so two
+//          different assets must never share one.
+//   open   `(byteOffset)` returning a ONE-SHOT iterable of the source bytes
+//          from there on. Called at most once per attempt, always on a
+//          canonical block boundary, and an offset equal to the whole length
+//          is legal and must yield nothing.
+//   etag   the origin's own statement of which bytes it is serving, compared
+//          on every later attempt so two different sources can never be
+//          spliced into one content-addressed core.
+//
+// An ITERABLE is never treated as a ranged source, whatever else it carries: a
+// stream object may well have an `open` method of its own, and the iterable
+// form is the one every caller without a ranged origin passes. So the
+// discriminator is "not iterable, but openable", and returning null here is
+// what keeps that caller's behaviour exactly as it was.
+function rangedUploadSource(source) {
+  if (!source || typeof source.open !== 'function') return null;
+  if (typeof source[Symbol.asyncIterator] === 'function' ||
+      typeof source[Symbol.iterator] === 'function') {
+    return null;
+  }
+  const id = typeof source.id === 'string' ? source.id.trim() : '';
+  if (id.length === 0 || id.length > 128) {
+    throw new Error('Ranged upload source requires an id of 1 to 128 characters');
+  }
+  const etag = source.etag === null || source.etag === undefined ? null : source.etag;
+  if (etag !== null && (typeof etag !== 'string' || etag.length === 0 || etag.length > 256)) {
+    throw new Error('Ranged upload source etag must be an identity token of 1 to 256 characters');
+  }
+  return {
+    id,
+    etag,
+    open(byteOffset) {
+      const opened = source.open(byteOffset);
+      if (!opened || (typeof opened[Symbol.asyncIterator] !== 'function' &&
+          typeof opened[Symbol.iterator] !== 'function')) {
+        throw new Error('Ranged upload source open() must return an iterable of byte chunks');
+      }
+      return opened;
+    }
+  };
+}
+
+// The fallback for a one-shot stream with no immutable publication behind it:
+// no publisher catalog means no rendition core and no block offload to put
+// blocks in, so the bytes go into the channel's blob core. Still never a file —
+// chunks are forwarded as they arrive — but this copy IS title-sized, which is
+// why `uploadFromStream` is only worth reaching for when offload is configured.
+//
+// The first 4100 bytes are the only ones kept, so the MIME type is still read
+// off the magic bytes instead of trusted from the caller.
+async function writeStreamedPlaybackBlob(channel, source, signal, onProgress, expectedBytes) {
+  if (!channel?.blobs || typeof channel.blobs.createWriteStream !== 'function') {
+    throw new Error('Channel blob stream is unavailable');
+  }
+  const total = Number.isFinite(expectedBytes) && expectedBytes > 0 ? Math.floor(expectedBytes) : 0;
+  const writeStream = channel.blobs.createWriteStream();
+  const completed = new Promise((resolve, reject) => {
+    writeStream.once('error', reject);
+    writeStream.once('close', () => {
+      const id = writeStream.id;
+      resolve({ id: `${id.blockOffset}:${id.blockLength}:${id.byteOffset}:${id.byteLength}`, ...id });
+    });
+  });
+  const head = [];
+  let headBytes = 0;
+  let byteLength = 0;
+  let lastProgressUpdate = Date.now();
+  try {
+    for await (const chunk of source) {
+      assertUploadNotCancelled(signal);
+      const bytes = b4a.isBuffer(chunk) ? chunk : b4a.from(chunk);
+      if (headBytes < 4100) {
+        const slice = bytes.subarray(0, Math.min(4100 - headBytes, bytes.byteLength));
+        head.push(slice);
+        headBytes += slice.byteLength;
+      }
+      if (!writeStream.write(bytes)) {
+        await new Promise((resolve, reject) => {
+          writeStream.once('drain', resolve);
+          writeStream.once('error', reject);
+        });
+      }
+      byteLength += bytes.byteLength;
+      const currentTime = Date.now();
+      if (onProgress && currentTime - lastProgressUpdate > 500) {
+        onProgress(
+          total > 0 ? Math.min(99, Math.round((byteLength / total) * 100)) : 0,
+          byteLength,
+          total > 0 ? total : byteLength,
+          { speed: 0, eta: 0 }
+        );
+        lastProgressUpdate = currentTime;
+      }
+    }
+    assertUploadNotCancelled(signal);
+    writeStream.end();
+    return { blobResult: await completed, byteLength, header: b4a.concat(head) };
+  } catch (error) {
+    if (typeof writeStream.destroy === 'function') writeStream.destroy(error);
+    else writeStream.end();
+    await completed.catch(() => {});
+    throw error;
+  }
+}
+
+async function maybeAttachImmutablePublication(metadata, prepared, runtime = {}) {
+  if (!prepared) return metadata;
+  const { mediaCatalogProjection, scopedNetwork, deviceKeyPair } = runtime;
+  const { catalog, publisherId } = prepared;
+  const rendition = prepared.renditionWrite.descriptor;
+
   return serializeCatalogWrite(catalog, async () => {
+  const currentTime = runtime.now();
   const authorization = await catalog.getAuthorizationState();
   const signerKey = b4a.toString(deviceKeyPair.publicKey, 'hex');
   const writer = authorization?.writers?.find(candidate => candidate.signerKey === signerKey);
@@ -337,45 +987,103 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
   if (!Number.isSafeInteger(firstSequence) || firstSequence < writer.firstAcceptedSequence) {
     throw new Error('Publisher writer sequence is unavailable');
   }
-  const blockOffset = Number(blobResult.blockOffset || 0);
-  const blockLength = Number(blobResult.blockLength || 1);
-  if (!Number.isSafeInteger(blockOffset) || blockOffset < 0 || !Number.isSafeInteger(blockLength) || blockLength < 1) {
-    throw new Error('Uploaded blob range is invalid');
+  assertUploadNotCancelled(runtime.signal);
+  // The rendition descriptor is the one the caller already wrote (prepared),
+  // so the publication describes exactly the bytes that landed.
+  const coreKey = rendition.core.key;
+  // Cover art is part of the publication, not a side channel: a relay that
+  // seeds this movie holds the poster too, and a consumer fetches it over the
+  // same authorized asset path as the video. Nothing has to leave the swarm.
+  // The descriptors were written as static assets alongside the media, so the
+  // manifest names cores a peer can actually be authorized for.
+  const posterRenditions = []
+  const posterProvenance = []
+  for (const artwork of Array.isArray(prepared.artworkWrites) ? prepared.artworkWrites : []) {
+    const posterRendition = artwork.write?.descriptor
+    if (!posterRendition) continue
+    posterRenditions.push(posterRendition)
+    posterProvenance.push({
+      type: 'artwork',
+      role: artwork.role,
+      videoId: metadata.id,
+      blobId: artwork.blobId ? String(artwork.blobId) : null,
+      assetId: posterRendition.core.assetId,
+      coreKey: posterRendition.core.key,
+      renditionId: posterRendition.renditionId
+    })
   }
-  const rendition = createRenditionDescriptor({
-    purpose: 'original',
-    format: String(mimeType || metadata.mimeType || 'video/mp4'),
-    core: {
-      key: channel.blobsKeyHex,
-      length: blockOffset + blockLength,
-      treeHash: uploadTreeHash(metadata, blobResult, channel, fileSize),
-      byteLength: fileSize
-    }
-  });
   const manifest = createPublicationManifest({
     publisherId,
     sequence: firstSequence,
     title: metadata.title || metadata.id,
     description: metadata.description || null,
-    renditions: [rendition],
+    renditions: [rendition, ...posterRenditions],
     provenance: [{
       type: 'upload',
       videoId: metadata.id,
-      blobId: blobResult.id,
-      coreKey: channel.blobsKeyHex,
-      renditionId: rendition.renditionId,
-      start: blockOffset,
-      end: blockOffset + blockLength
-    }],
+      blobId: metadata.blobId || null,
+      assetId: rendition.core.assetId,
+      coreKey,
+      renditionId: rendition.renditionId
+    }, ...posterProvenance],
     keyPair: deviceKeyPair,
     signedAt: currentTime
   });
-  const subjectRef = createEntityReference({
-    entityKind: 'work',
-    namespace: 'issuer-native',
-    issuerRootKey: publisherId,
-    issuerLocalId: metadata.id
-  });
+  const episodic = metadata.contentKind === 'episode' &&
+    Number.isSafeInteger(metadata.seasonNumber) &&
+    Number.isSafeInteger(metadata.episodeNumber);
+  // Two people uploading the same film are describing one work, and the entity
+  // id is a hash of what it is named by. Keyed on the uploader and the upload's
+  // own id, every copy was a separate title forever - four Wedding Crashers
+  // cards, none of them a source for the others. A provider identity is the
+  // one name both uploads already agree on, so it decides the entity and
+  // 'issuer-native' stays the fallback for titles no catalogue knows.
+  //
+  // Which authority may name which kind of work, and the coordinate shape that
+  // pairing takes, is one shared table. Reading it here is what lets a title
+  // arrive under TMDB, TVDB or MusicBrainz through this one path instead of
+  // through a provider name spelled separately into every gate. A kind the
+  // table does not name, or one missing an ordinal the table requires, takes
+  // no coordinates at all rather than a guessed one.
+  const coordinateShape = MEDIA_COORDINATE_SHAPES[metadata.contentKind] || null;
+  const coordinated = Boolean(
+    coordinateShape &&
+    metadata.mediaId &&
+    coordinateShape.providers.includes(metadata.mediaProvider) &&
+    coordinateShape.ordinals.every(ordinal => Number.isSafeInteger(metadata[ordinal]))
+  );
+  const providerId = coordinated ? String(metadata.mediaId) : null;
+  // Every authority numbers its kinds in separate spaces, and an episode
+  // upload carries its show's id, so the shape has to say which is meant.
+  const workIdentifier = episodic
+    ? episodeWorkIdentifier(providerId, metadata.seasonNumber, metadata.episodeNumber)
+    : `${metadata.contentKind}:${providerId}`;
+  const subjectRef = providerId
+    ? createEntityReference({
+        entityKind: 'work',
+        namespace: metadata.mediaProvider,
+        normalizedIdentifier: workIdentifier
+      })
+    : createEntityReference({
+        entityKind: 'work',
+        namespace: 'issuer-native',
+        issuerRootKey: publisherId,
+        issuerLocalId: metadata.id
+      });
+  const collectionRef = !episodic
+    ? null
+    : providerId
+      ? createEntityReference({
+          entityKind: 'collection',
+          namespace: metadata.mediaProvider,
+          normalizedIdentifier: `show:${providerId}`
+        })
+      : createEntityReference({
+          entityKind: 'collection',
+          namespace: 'issuer-native',
+          issuerRootKey: publisherId,
+          issuerLocalId: metadata.seriesId || `series:${metadata.id}`
+        });
   const claims = [
     createMediaClaim({
       claimType: 'EntityMetadataClaim',
@@ -383,7 +1091,28 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
       payload: {
         title: metadata.title || metadata.id,
         description: metadata.description || null,
-        publicationId: manifest.publicationId
+        publicationId: manifest.publicationId,
+        // A recording is not a film. Where the coordinate table names the kind,
+        // say it; 'movie' stays the fallback for uploads no table describes.
+        presentationKind: coordinateShape ? metadata.contentKind : 'movie',
+        // Artwork travels with the metadata claim: a consumer has no metadata
+        // provider credentials of its own, so a publisher that knows the cover
+        // has to say so or every catalog renders as blank placeholders.
+        ...(Array.isArray(metadata.artwork) && metadata.artwork.length > 0
+          ? { artwork: metadata.artwork }
+          : {}),
+        // The same reasoning covers the rest of what a viewer reads before
+        // pressing play. A consumer cannot look a title up, so a year, plot,
+        // runtime, or genre that stays with the publisher is a year, plot,
+        // runtime, or genre nobody downstream will ever see.
+        ...describeMedia(runtime.mediaMetadata),
+        ...(episodic
+          ? {
+              collectionRef,
+              seasonNumber: metadata.seasonNumber,
+              episodeNumber: metadata.episodeNumber
+            }
+          : {})
       },
       confidence: 1000,
       issuerSequence: firstSequence + 1,
@@ -391,6 +1120,56 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
       keyPair: deviceKeyPair,
       signedAt: currentTime
     }),
+    ...(episodic ? [
+      createMediaClaim({
+        claimType: 'EntityMetadataClaim',
+        subjectRefs: [collectionRef],
+        payload: {
+          title: metadata.seriesTitle || metadata.title || metadata.seriesId,
+          presentationKind: 'series',
+          publicationId: manifest.publicationId
+        },
+        confidence: 1000,
+        issuerSequence: firstSequence + 2,
+        policyEpoch: writer.admissionPolicyEpoch,
+        keyPair: deviceKeyPair,
+        signedAt: currentTime
+      }),
+      createMediaClaim({
+        claimType: 'CollectionStructureClaim',
+        subjectRefs: [collectionRef],
+        payload: {
+          collectionRef,
+          collectionRole: 'series',
+          expectedSlots: metadata.expectedEpisodeCount || 0,
+          publicationId: manifest.publicationId
+        },
+        confidence: 1000,
+        issuerSequence: firstSequence + 3,
+        policyEpoch: writer.admissionPolicyEpoch,
+        keyPair: deviceKeyPair,
+        signedAt: currentTime
+      }),
+      createMediaClaim({
+        claimType: 'CollectionMembershipClaim',
+        subjectRefs: [collectionRef, subjectRef],
+        payload: {
+          collectionRef,
+          memberRef: subjectRef,
+          memberRole: 'episode',
+          publicationId: manifest.publicationId,
+          position: {
+            season: metadata.seasonNumber,
+            episode: metadata.episodeNumber
+          }
+        },
+        confidence: 1000,
+        issuerSequence: firstSequence + 4,
+        policyEpoch: writer.admissionPolicyEpoch,
+        keyPair: deviceKeyPair,
+        signedAt: currentTime
+      })
+    ] : []),
     createMediaClaim({
       claimType: 'AvailabilityObservation',
       subjectRefs: [subjectRef],
@@ -400,19 +1179,20 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
         availabilityStatus: 'available'
       },
       confidence: 1000,
-      issuerSequence: firstSequence + 2,
+      issuerSequence: firstSequence + (episodic ? 5 : 2),
       policyEpoch: writer.admissionPolicyEpoch,
       keyPair: deviceKeyPair,
       signedAt: currentTime
     })
   ];
+  const manifestPayload = encodePublicationManifest(manifest);
   const operations = [{
     recordType: PUBLISHER_RECORD_TYPES.PUBLICATION,
     sequence: firstSequence,
     body: {
       publicationId: b4a.from(manifest.publicationId, 'hex'),
       manifestId: b4a.from(manifest.body.manifestId, 'hex'),
-      payload: encodePublicationManifest(manifest)
+      payload: manifestPayload
     }
   }, ...claims.map((claim, index) => ({
     recordType: PUBLISHER_RECORD_TYPES.CLAIM,
@@ -423,29 +1203,106 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
       payload: encodeMediaClaimEnvelope(claim.envelope)
     }
   }))];
-  const signedOperations = []
+  const signedOperations = [];
   for (const candidate of operations) {
-    signedOperations.push(await catalog.createLocalOperation({
+    const signed = await catalog.createLocalOperation({
       ...candidate,
       policyEpoch: writer.admissionPolicyEpoch,
       signedAt: currentTime
-    }))
+    });
+    assertUploadNotCancelled(runtime.signal);
+    signedOperations.push(signed);
   }
-  await appendImmutablePublication(catalog, signedOperations)
+  assertUploadNotCancelled(runtime.signal);
+  const operationIds = signedOperations.map(publisherOperationIdHex);
+  const operationFramesHex = encodeImmutablePublicationFrames(signedOperations, operationIds);
   metadata.immutablePublication = {
     publicationId: manifest.publicationId,
     manifestId: manifest.body.manifestId,
     renditionId: rendition.renditionId,
+    assetId: rendition.core.assetId,
+    coreKey: rendition.core.key,
     publisherId: manifest.body.publisherId,
     sequence: firstSequence,
+    entityRef: subjectRef.entityId,
+    collectionRef: collectionRef?.entityId || null,
     claimIds: claims.map(claim => claim.claimId),
+    operationIds,
+    operationFramesHex,
     manifest
   };
+  Object.assign(metadata, {
+    publication: {
+      publicationId: manifest.publicationId,
+      manifestId: manifest.body.manifestId,
+      renditionId: rendition.renditionId,
+      assetId: rendition.core.assetId,
+      coreKey: rendition.core.key,
+      publisherId: manifest.body.publisherId,
+      sequence: firstSequence,
+      metadataClaimId: claims[0].claimId,
+      availabilityClaimId: claims[1].claimId,
+      publicationOperationId: operationIds[0],
+      metadataClaimOperationId: operationIds[1],
+      availabilityClaimOperationId: operationIds[2],
+      manifestHex: b4a.toString(manifestPayload, 'hex'),
+    },
+    publicationOperationFramesHex: operationFramesHex,
+  });
+  metadata.publicationState = 'commitUncertain';
+  let metadataStaged = false;
   try {
-    await mediaCatalogProjection?.rebuild?.();
-    await scopedNetwork?.publishLocalPublisherCatalog?.({ publisherId });
+    if (typeof runtime.stageMetadata === 'function') {
+      await runtime.stageMetadata(metadata);
+      metadataStaged = true;
+    }
+    assertUploadNotCancelled(runtime.signal);
+    await appendImmutablePublication(catalog, signedOperations);
   } catch (error) {
-    throw markUploadCommitState(error, 'uploadCommitSucceeded');
+    if (error?.uploadCommitUncertain === true) {
+      throw uncertainCommitError(metadata.immutablePublication, error.message);
+    }
+    if (metadataStaged || typeof runtime.stageMetadata === 'function') {
+      metadata.publicationState = 'replicationPending';
+      try {
+        await runtime.markRollbackPending?.(metadata);
+        await runtime.rollbackMetadata?.(metadata);
+      } catch (rollbackError) {
+        throw stagedRollbackPendingError(error, rollbackError);
+      }
+      throw markUploadCommitState(error, 'uploadRollbackCompleted');
+    }
+    throw error;
+  }
+  try {
+    await finalizeAcceptedPublication(metadata, runtime);
+  } catch (error) {
+    throw uncertainCommitError(metadata.immutablePublication, error?.message);
+  }
+  // Announcing a catalog only tells peers the title exists. A consumer finds
+  // the bytes on the asset scope for the rendition, and until the publisher
+  // joins that scope there is nobody there to answer: the catalog syncs, every
+  // source reads as awaiting replication, and no cover ever arrives.
+  //
+  // finalizeAcceptedPublication already held the media rendition, so retaining
+  // it again here would only duplicate the request. What is left is the cover
+  // published alongside it, which needs its own scope for the same reason.
+  for (const posterRendition of posterRenditions) {
+    try {
+      await scopedNetwork?.retainAuthorizedRendition?.({
+        manifest,
+        renditionId: posterRendition.renditionId,
+        entityRef: subjectRef.entityId,
+        publicationId: manifest.publicationId,
+        retentionClass: runtime.retentionClass,
+        start: 0,
+        end: posterRendition.core.length
+      });
+    } catch (error) {
+      // A publisher that cannot serve the cover yet still published; the
+      // catalog entry is committed and retention is retried by the lifecycle.
+      console.log('[Upload] Cover is not being served yet:', error?.message);
+    }
   }
   return metadata;
   });
@@ -463,6 +1320,7 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
  * @property {string} [thumbnailBlobsCoreKey] - Thumbnail blobs core key
  * @property {string} [thumbnailMimeType] - Thumbnail MIME type
  * @property {string} [category] - Video category
+ * @property {'contribution-cache'|'archive-pin'} [retentionClass] - Explicit retention role for public serving
  * @property {number} [width] - Video width in pixels
  * @property {number} [height] - Video height in pixels
  * @property {string} [contentKind] - Structured content kind
@@ -476,12 +1334,17 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
  * @property {string} [mediaId] - Stable media provider ID
  * @property {number} [seasonNumber] - Season number
  * @property {number} [episodeNumber] - Episode number
+ * @property {string} [seriesId] - Canonical local series identifier
+ * @property {string} [seriesTitle] - Authenticated series title
+ * @property {number} [expectedEpisodeCount] - Expected collection member count
  * @property {number} [originalAirDate] - Original air date timestamp
  * @property {string} [provenanceVersion] - Metadata resolver version
  * @property {string} [publicationState] - Private/public publication state
  * @property {string} [contentFingerprint] - Stable content fingerprint
  * @property {string} [importIdentityKey] - Normalized import identity
  * @property {string} [importClaimantId] - Import claim contender ID
+ * @property {string} [publisherId] - Publisher catalog identity
+ * @property {AbortSignal} [signal] - Upload cancellation signal
  */
 
 /**
@@ -489,6 +1352,12 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
  * @property {boolean} success - Whether upload succeeded
  * @property {string} [videoId] - Generated video ID
  * @property {VideoMetadata} [metadata] - Video metadata
+ * @property {string} [publicationId] - Published catalog record ID
+ * @property {string} [manifestId] - Published v2 manifest ID
+ * @property {string} [renditionId] - Published original rendition ID
+ * @property {string} [assetId] - Canonical immutable asset ID
+ * @property {string} [coreKey] - Canonical readonly Hypercore key
+ * @property {Object} [manifest] - Signed v2 publication manifest
  * @property {string} [error] - Error message if failed
  */
 
@@ -517,7 +1386,22 @@ export function createUploadManager({
   deviceKeyPair = null,
   now = () => Date.now()
 }) {
-  const publicationRuntime = { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair, now };
+  // Hand the asset writer the whole offload capability when the relay exposes
+  // one. Reducing it to `offloadAsset` here silently hid `createOffloader` and
+  // `createStagingStore`, so bounded and streaming ingest could never be
+  // reached through this seam no matter how the relay was configured. A relay
+  // that only has the legacy hook still passes just the function.
+  const blockOffload = typeof ctx?.blockOffload?.createOffloader === 'function'
+    ? ctx.blockOffload
+    : (ctx?.blockOffload?.offloadAsset || null);
+  // Resumable ingest keeps its staged prefix in the object store, so it can
+  // only be offered when the relay actually has one. With offload unconfigured
+  // — or configured with only the legacy hook — there is nowhere durable to put
+  // a partial title, and a ranged origin is read once from byte zero exactly as
+  // an ordinary one-shot stream is.
+  const resumableIngest = typeof blockOffload?.createOffloader === 'function' &&
+    typeof blockOffload?.createStagingStore === 'function';
+  const publicationRuntime = { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair, store: ctx?.store, offload: blockOffload, now };
   /**
    * Probe the uploaded MP4 for its playback profile (moov position +
    * keyframe index) and persist it for range prioritization at playback
@@ -562,7 +1446,7 @@ export function createUploadManager({
     async uploadFromPath(channel, filePath, options, fs, onProgress) {
       let blobResult = null;
       let immutableCommitConfirmed = false;
-
+      let prepared = null;
       try {
         if (!channel.blobs) {
           throw new Error('Channel blobs not initialized');
@@ -575,133 +1459,166 @@ export function createUploadManager({
           : null
         if (providedVideoId && typeof channel.getVideo === 'function') {
           const existing = await channel.getVideo(providedVideoId).catch(() => null)
-          if (existing) {
-            return { success: true, videoId: providedVideoId, metadata: existing, reused: true }
+          if (existing?.publicationState === 'commitUncertain') {
+            const outcome = await reconcileUncertainUpload(channel, existing, {
+              ...publicationRuntime,
+              publisherId: options.publisherId,
+              signal: options.signal,
+            });
+            if (outcome === 'accepted') {
+              return { ...completedUploadResult(providedVideoId, existing), reused: true };
+            }
+          } else if (existing?.publicationState === 'replicationPending') {
+            await reconcilePendingUpload(channel, existing);
+          } else if (existing) {
+            return { ...completedUploadResult(providedVideoId, existing), reused: true };
           }
         }
         const videoId = providedVideoId || b4a.toString(crypto.randomBytes(16), 'hex');
         const metadata = normalizeVideoMetadata(options, videoId);
+        const uploadControl = {
+          publisherId: options.publisherId,
+          retentionClass: options.retentionClass,
+          signal: options.signal
+        };
+        assertUploadNotCancelled(uploadControl.signal);
 
-        // Get file size
         const stat = fs.statSync(filePath);
-        const fileSize = stat.size;
-
-        // Detect MIME type from file magic bytes (first 4KB is enough)
-        // Use chunked read to avoid issues with large files in bare runtime
-        const headerSize = Math.min(4100, fileSize);
-        let headerBuffer;
-
-        if (fs.createReadStream) {
-          // Use streaming for header detection
-          headerBuffer = await new Promise((resolve, reject) => {
-            const chunks = [];
-            let bytesRead = 0;
-            const stream = fs.createReadStream(filePath, { start: 0, end: headerSize - 1 });
-            stream.on('data', chunk => {
-              chunks.push(chunk);
-              bytesRead += chunk.length;
-            });
-            stream.on('end', () => resolve(b4a.concat(chunks)));
-            stream.on('error', reject);
-          });
-        } else {
-          // Fallback for environments without createReadStream
-          const fd = fs.openSync(filePath, 'r');
-          headerBuffer = b4a.alloc(headerSize);
-          fs.readSync(fd, headerBuffer, 0, headerSize, 0);
-          fs.closeSync(fd);
-        }
-
-        const detectedMimeType = detectMimeType(headerBuffer);
-        const mimeType = detectedMimeType || metadata.mimeType || 'video/mp4';
-
-        console.log(`[Upload] Starting: ${filePath} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
-
+        let fileSize = stat.size;
+        let mimeType;
         const startTime = Date.now();
-        let bytesWritten = 0;
-        let lastProgressUpdate = Date.now();
 
-        // Use streaming upload for large files
-        blobResult = await new Promise((resolve, reject) => {
-          const writeStream = channel.blobs.createWriteStream();
-          const readStream = fs.createReadStream(filePath);
-
-          readStream.on('data', (chunk) => {
-            bytesWritten += chunk.length;
-            const now = Date.now();
-            // Update progress every 500ms to avoid flooding
-            if (onProgress && (now - lastProgressUpdate > 500 || bytesWritten === fileSize)) {
-              const progress = Math.round((bytesWritten / fileSize) * 100);
-              const elapsed = (now - startTime) / 1000;
-              const speed = elapsed > 0 ? bytesWritten / elapsed : 0;
-              const remaining = fileSize - bytesWritten;
-              const eta = speed > 0 ? remaining / speed : 0;
-              onProgress(progress, bytesWritten, fileSize, { speed, eta });
-              lastProgressUpdate = now;
-            }
-          });
-
-          readStream.on('error', reject);
-          writeStream.on('error', reject);
-          writeStream.on('close', () => {
-            // Format blob ID as string like putBlob does
-            const id = writeStream.id;
-            const idStr = `${id.blockOffset}:${id.blockLength}:${id.byteOffset}:${id.byteLength}`;
-            resolve({ id: idStr, ...id });
-          });
-
-          readStream.pipe(writeStream);
+        prepared = await prepareImmutablePublication(metadata, {
+          ...publicationRuntime,
+          ...uploadControl,
+          createSource: () => fs.createReadStream(filePath),
+          createArtworkSources: () => collectArtworkSources(channel, metadata)
         });
-
-        if (onProgress) {
-          onProgress(100, fileSize, fileSize, { speed: 0, eta: 0 });
+        if (prepared) {
+          fileSize = prepared.renditionWrite.descriptor.core.byteLength;
+          const firstBlock = fileSize > 0 ? await prepared.renditionWrite.core.get(0) : b4a.alloc(0);
+          mimeType = detectMimeType(firstBlock.subarray(0, Math.min(4100, firstBlock.byteLength))) ||
+            metadata.mimeType ||
+            'video/mp4';
+          finalizePreparedRendition(prepared, mimeType);
+          blobResult = staticPlaybackBlobRef(prepared);
+          await prepared.renditionWrite.core.close();
+        } else {
+          const headerSize = Math.min(4100, fileSize);
+          let headerBuffer;
+          if (fs.createReadStream) {
+            headerBuffer = await new Promise((resolve, reject) => {
+              const chunks = [];
+              const stream = fs.createReadStream(filePath, { start: 0, end: headerSize - 1 });
+              stream.on('data', chunk => chunks.push(chunk));
+              stream.on('end', () => resolve(b4a.concat(chunks)));
+              stream.on('error', reject);
+            });
+          } else {
+            const fd = fs.openSync(filePath, 'r');
+            headerBuffer = b4a.alloc(headerSize);
+            fs.readSync(fd, headerBuffer, 0, headerSize, 0);
+            fs.closeSync(fd);
+          }
+          mimeType = detectMimeType(headerBuffer) || metadata.mimeType || 'video/mp4';
+          let bytesWritten = 0;
+          let lastProgressUpdate = Date.now();
+          blobResult = await new Promise((resolve, reject) => {
+            const writeStream = channel.blobs.createWriteStream();
+            const readStream = fs.createReadStream(filePath);
+            readStream.on('data', (chunk) => {
+              bytesWritten += chunk.length;
+              const currentTime = Date.now();
+              if (onProgress && (currentTime - lastProgressUpdate > 500 || bytesWritten === fileSize)) {
+                const progress = Math.round((bytesWritten / fileSize) * 100);
+                const elapsed = (currentTime - startTime) / 1000;
+                const speed = elapsed > 0 ? bytesWritten / elapsed : 0;
+                const remaining = fileSize - bytesWritten;
+                onProgress(progress, bytesWritten, fileSize, {
+                  speed,
+                  eta: speed > 0 ? remaining / speed : 0
+                });
+                lastProgressUpdate = currentTime;
+              }
+            });
+            readStream.on('error', reject);
+            writeStream.on('error', reject);
+            writeStream.on('close', () => {
+              const id = writeStream.id;
+              resolve({ id: `${id.blockOffset}:${id.blockLength}:${id.byteOffset}:${id.byteLength}`, ...id });
+            });
+            readStream.pipe(writeStream);
+          });
         }
 
+        onProgress?.(100, fileSize, fileSize, { speed: 0, eta: 0 });
         const totalTime = (Date.now() - startTime) / 1000;
-        const avgSpeed = fileSize / totalTime;
+        const avgSpeed = totalTime > 0 ? fileSize / totalTime : 0;
         console.log(`[Upload] Transfer complete in ${totalTime.toFixed(1)}s (avg ${(avgSpeed / 1024 / 1024).toFixed(2)} MB/s)`);
 
-
-        // Complete the validated metadata with generated upload values
-        buildVideoMetadata(
-          metadata,
-          blobResult,
-          channel,
-          fileSize,
-          mimeType
-        );
-        await maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, {
+        buildVideoMetadata(metadata, blobResult, channel, fileSize, mimeType);
+        await maybeAttachImmutablePublication(metadata, prepared, {
           ...publicationRuntime,
-          publisherId: options.publisherId
+          publisherId: options.publisherId,
+          mediaMetadata: options.mediaMetadata,
+          ...uploadControl,
+          stageMetadata: value => channel.addVideo(value, { syncPublic: false }),
+          markRollbackPending: value => channel.updateVideo?.(value.id, value, { syncPublic: false }),
+          rollbackMetadata: async value => {
+            await rollbackUploadedBlob(channel, blobResult);
+            if (typeof channel.deleteVideo !== 'function') throw new Error('staged metadata deletion is unavailable');
+            await channel.deleteVideo(value.id);
+          },
+          finalizeMetadata: value => {
+            if (typeof channel.updateVideo !== 'function') {
+              throw new Error('published metadata update is unavailable');
+            }
+            return channel.updateVideo(value.id, value, {
+              syncPublic: true,
+              commitAfterPublicSync: true,
+            });
+          }
         });
         immutableCommitConfirmed = Boolean(metadata.immutablePublication);
-        await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4File(fs, filePath, { fileSize }));
+        if (!prepared) {
+          await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4File(fs, filePath, { fileSize }));
+        }
 
-        // Store metadata in channel HyperDB
-        await channel.addVideo(metadata, {
-          syncPublic: metadata.publicationState !== 'replicationPending'
-        });
+        if (!prepared) {
+          await channel.addVideo(metadata, {
+            syncPublic: metadata.publicationState !== 'replicationPending'
+          });
+        }
 
-        console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', channel.blobsKeyHex?.slice(0, 16), 'keyLen:', channel.blobsKeyHex?.length);
+        console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', metadata.blobsCoreKey?.slice(0, 16), 'keyLen:', metadata.blobsCoreKey?.length);
 
-        return {
-          success: true,
-          videoId,
-          metadata
-        };
+        return completedUploadResult(videoId, metadata);
       } catch (err) {
+        let failure = err;
+        if (prepared?.renditionWrite?.core && !prepared.renditionWrite.core.closed) {
+          try {
+            await prepared.renditionWrite.core.close();
+          } catch { /* best-effort staged rendition close after path upload failure */ }
+        }
         if (blobResult && !immutableCommitConfirmed &&
-            err?.uploadCommitSucceeded !== true && err?.uploadCommitUncertain !== true) {
+            failure?.uploadCommitSucceeded !== true &&
+            failure?.uploadCommitUncertain !== true &&
+            failure?.uploadRollbackCompleted !== true &&
+            failure?.uploadRollbackPending !== true) {
           try {
             await rollbackUploadedBlob(channel, blobResult);
           } catch {
-            err = new Error('Upload failed and rollback could not be completed');
+            failure = new Error('Upload failed and rollback could not be completed');
           }
         }
-        console.error('[Upload] Failed:', err.message);
+        console.error('[Upload] Failed:', failure.message);
         return {
           success: false,
-          error: err.message
+          error: failure.message,
+          ...(failure?.uploadCommitUncertain === true
+            ? { commitUncertain: true, reconciliationRequired: true, reconciliation: failure.reconciliation }
+            : {}),
+          ...(failure?.uploadRollbackPending === true ? { rollbackPending: true } : {})
         };
       }
     },
@@ -718,71 +1635,328 @@ export function createUploadManager({
     async uploadFromBuffer(channel, buffer, options, onProgress) {
       let blobResult = null;
       let immutableCommitConfirmed = false;
-
+      let prepared = null;
       try {
         if (!channel.blobs) {
           throw new Error('Channel blobs not initialized');
         }
 
-        const videoId = b4a.toString(crypto.randomBytes(16), 'hex');
-        const metadata = normalizeVideoMetadata(options, videoId);
-        const fileSize = buffer.length;
-
-        // Detect MIME type from buffer magic bytes
-        const headerBuffer = buffer.subarray(0, Math.min(4100, fileSize));
-        const detectedMimeType = detectMimeType(headerBuffer);
-        const mimeType = detectedMimeType || metadata.mimeType || 'video/mp4';
-
-        console.log(`[Upload] Starting buffer upload (${(fileSize / 1024 / 1024).toFixed(2)} MB), MIME: ${mimeType}`);
-
-        // Store video bytes in Hyperblobs
-        blobResult = await channel.putBlob(buffer);
-
-        if (onProgress) {
-          onProgress(100, fileSize, fileSize);
+        const providedVideoId = typeof options.videoId === 'string' && /^[0-9a-f]{1,64}$/i.test(options.videoId)
+          ? options.videoId
+          : null;
+        if (providedVideoId && typeof channel.getVideo === 'function') {
+          const existing = await channel.getVideo(providedVideoId).catch(() => null);
+          if (existing?.publicationState === 'commitUncertain') {
+            const outcome = await reconcileUncertainUpload(channel, existing, {
+              ...publicationRuntime,
+              publisherId: options.publisherId,
+              signal: options.signal,
+            });
+            if (outcome === 'accepted') {
+              return { ...completedUploadResult(providedVideoId, existing), reused: true };
+            }
+          } else if (existing?.publicationState === 'replicationPending') {
+            await reconcilePendingUpload(channel, existing);
+          } else if (existing) {
+            return { ...completedUploadResult(providedVideoId, existing), reused: true };
+          }
         }
-
-
-        // Complete the validated metadata with generated upload values
-        buildVideoMetadata(
-          metadata,
-          blobResult,
-          channel,
-          fileSize,
-          mimeType
-        );
-        await maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, {
+        const videoId = providedVideoId || b4a.toString(crypto.randomBytes(16), 'hex');
+        const metadata = normalizeVideoMetadata(options, videoId);
+        const uploadControl = {
+          publisherId: options.publisherId,
+          retentionClass: options.retentionClass,
+          signal: options.signal
+        };
+        assertUploadNotCancelled(uploadControl.signal);
+        prepared = await prepareImmutablePublication(metadata, {
           ...publicationRuntime,
-          publisherId: options.publisherId
+          ...uploadControl,
+          createSource: () => [buffer],
+          createArtworkSources: () => collectArtworkSources(channel, metadata)
+        });
+        let fileSize;
+        let mimeType;
+        if (prepared) {
+          fileSize = prepared.renditionWrite.descriptor.core.byteLength;
+          const firstBlock = fileSize > 0 ? await prepared.renditionWrite.core.get(0) : b4a.alloc(0);
+          mimeType = detectMimeType(firstBlock.subarray(0, Math.min(4100, firstBlock.byteLength))) ||
+            metadata.mimeType ||
+            'video/mp4';
+          finalizePreparedRendition(prepared, mimeType);
+          blobResult = staticPlaybackBlobRef(prepared);
+          await prepared.renditionWrite.core.close();
+        } else {
+          fileSize = buffer.length;
+          const headerBuffer = buffer.subarray(0, Math.min(4100, fileSize));
+          mimeType = detectMimeType(headerBuffer) || metadata.mimeType || 'video/mp4';
+          blobResult = await channel.putBlob(buffer);
+        }
+        // The bytes landed in the rendition core, not in a second blob copy, so
+        // completion is reported here for both shapes.
+        onProgress?.(100, fileSize, fileSize, { speed: 0, eta: 0 });
+
+        buildVideoMetadata(metadata, blobResult, channel, fileSize, mimeType);
+        await maybeAttachImmutablePublication(metadata, prepared, {
+          ...publicationRuntime,
+          publisherId: options.publisherId,
+          mediaMetadata: options.mediaMetadata,
+          ...uploadControl,
+          stageMetadata: value => channel.addVideo(value, { syncPublic: false }),
+          markRollbackPending: value => channel.updateVideo?.(value.id, value, { syncPublic: false }),
+          rollbackMetadata: async value => {
+            await rollbackUploadedBlob(channel, blobResult);
+            if (typeof channel.deleteVideo !== 'function') throw new Error('staged metadata deletion is unavailable');
+            await channel.deleteVideo(value.id);
+          },
+          finalizeMetadata: value => {
+            if (typeof channel.updateVideo !== 'function') {
+              throw new Error('published metadata update is unavailable');
+            }
+            return channel.updateVideo(value.id, value, {
+              syncPublic: true,
+              commitAfterPublicSync: true,
+            });
+          }
         });
         immutableCommitConfirmed = Boolean(metadata.immutablePublication);
-        await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4Buffer(buffer));
+        if (!prepared) {
+          await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4Buffer(buffer));
+        }
 
-        // Store metadata in channel HyperDB
-        await channel.addVideo(metadata, {
-          syncPublic: metadata.publicationState !== 'replicationPending'
-        });
+        if (!prepared) {
+          await channel.addVideo(metadata, {
+            syncPublic: metadata.publicationState !== 'replicationPending'
+          });
+        }
 
-        console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', channel.blobsKeyHex?.slice(0, 16), 'keyLen:', channel.blobsKeyHex?.length);
+        console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', metadata.blobsCoreKey?.slice(0, 16), 'keyLen:', metadata.blobsCoreKey?.length);
 
-        return {
-          success: true,
-          videoId,
-          metadata
-        };
+        return completedUploadResult(videoId, metadata);
       } catch (err) {
+        let failure = err;
+        if (prepared?.renditionWrite?.core && !prepared.renditionWrite.core.closed) {
+          try {
+            await prepared.renditionWrite.core.close();
+          } catch { /* best-effort staged rendition close after buffer upload failure */ }
+        }
         if (blobResult && !immutableCommitConfirmed &&
-            err?.uploadCommitSucceeded !== true && err?.uploadCommitUncertain !== true) {
+            failure?.uploadCommitSucceeded !== true &&
+            failure?.uploadCommitUncertain !== true &&
+            failure?.uploadRollbackCompleted !== true &&
+            failure?.uploadRollbackPending !== true) {
           try {
             await rollbackUploadedBlob(channel, blobResult);
           } catch {
-            err = new Error('Upload failed and rollback could not be completed');
+            failure = new Error('Upload failed and rollback could not be completed');
           }
         }
-        console.error('[Upload] Failed:', err.message);
+        console.error('[Upload] Failed:', failure.message);
         return {
           success: false,
-          error: err.message
+          error: failure.message,
+          ...(failure?.uploadCommitUncertain === true
+            ? { commitUncertain: true, reconciliationRequired: true, reconciliation: failure.reconciliation }
+            : {}),
+          ...(failure?.uploadRollbackPending === true ? { rollbackPending: true } : {})
+        };
+      }
+    },
+
+    /**
+     * Upload video from a ONE-SHOT stream (an HTTP download, a pipe).
+     *
+     * What this entry point does NOT do is the point of it: the title is never
+     * staged as a file first, so a relay can archive one larger than its own
+     * volume. `source` is an async iterable of byte chunks readable exactly
+     * once, which is what makes writeStaticAsset choose streaming ingest —
+     * every canonical block is uploaded to the object store as it is appended
+     * and dropped locally, and the second pass restores from there. Peak local
+     * block data is the offload window plus the block in flight, whatever the
+     * title's size.
+     *
+     * Chunk boundaries here are irrelevant and deliberately not handled: only
+     * eachCanonicalBlock() in assets/static-core.js decides where a block ends,
+     * which is what keeps the asset key a function of the bytes alone.
+     *
+     * With offload unconfigured the writer takes its single-pass shape instead:
+     * the source is still read exactly once and there is still no file, but the
+     * whole title comes to rest in the rendition core on this volume. Nothing
+     * is buffered in memory either way. An offload that supplies
+     * `createOffloader` without `createStagingStore` is the one refused case —
+     * ASSET_SOURCE_NOT_REOPENABLE — because its second pass would have nowhere
+     * to read from; callers keep `uploadFromPath` for that.
+     *
+     * `source` may instead be a RANGED source — `{ id, etag, open(byteOffset) }`
+     * — for an origin that serves byte ranges. Then the write becomes
+     * RESUMABLE: the staged prefix is keyed by `id` and survives the process,
+     * so a second attempt calls `open()` at the first byte it does not already
+     * hold rather than pulling the title again from zero. `etag` is the
+     * origin's identity for those bytes and is what stops two different sources
+     * being spliced into one content-addressed core. Resumption needs somewhere
+     * durable to keep the prefix, so with offload unconfigured a ranged source
+     * is simply opened once at zero and takes the plain path above.
+     *
+     * @param {MultiWriterChannel} channel - Target channel
+     * @param {AsyncIterable<Buffer>|Iterable<Buffer>|{id: string, etag?: string|null, open: (byteOffset: number) => AsyncIterable<Buffer>|Iterable<Buffer>}} source
+     *   One-shot chunks, or a ranged source that can be re-opened at an offset
+     * @param {UploadOptions} options - Upload options; `byteLength` is an
+     *   optional content-length hint used only for progress percentages
+     * @param {ProgressCallback} [onProgress] - Progress callback
+     * @returns {Promise<UploadResult>}
+     */
+    async uploadFromStream(channel, source, options, onProgress) {
+      let blobResult = null;
+      let immutableCommitConfirmed = false;
+      let prepared = null;
+      try {
+        if (!channel.blobs) {
+          throw new Error('Channel blobs not initialized');
+        }
+        const ranged = rangedUploadSource(source);
+        if (!ranged && (!source || (typeof source[Symbol.asyncIterator] !== 'function' &&
+            typeof source[Symbol.iterator] !== 'function'))) {
+          throw new Error('Upload stream source must be an iterable of byte chunks');
+        }
+
+        const providedVideoId = typeof options.videoId === 'string' && /^[0-9a-f]{1,64}$/i.test(options.videoId)
+          ? options.videoId
+          : null;
+        if (providedVideoId && typeof channel.getVideo === 'function') {
+          const existing = await channel.getVideo(providedVideoId).catch(() => null);
+          if (existing?.publicationState === 'commitUncertain') {
+            const outcome = await reconcileUncertainUpload(channel, existing, {
+              ...publicationRuntime,
+              publisherId: options.publisherId,
+              signal: options.signal,
+            });
+            if (outcome === 'accepted') {
+              return { ...completedUploadResult(providedVideoId, existing), reused: true };
+            }
+          } else if (existing?.publicationState === 'replicationPending') {
+            await reconcilePendingUpload(channel, existing);
+          } else if (existing) {
+            return { ...completedUploadResult(providedVideoId, existing), reused: true };
+          }
+        }
+        const videoId = providedVideoId || b4a.toString(crypto.randomBytes(16), 'hex');
+        const metadata = normalizeVideoMetadata(options, videoId);
+        const uploadControl = {
+          publisherId: options.publisherId,
+          retentionClass: options.retentionClass,
+          signal: options.signal
+        };
+        assertUploadNotCancelled(uploadControl.signal);
+        // A ranged origin becomes a resumable write only when there is an
+        // object store to keep its staged prefix in; otherwise it degrades to
+        // one read from byte zero and is indistinguishable from a plain stream.
+        // Either way the bytes reach the writer exactly once — `resolveSource`
+        // in static-core.js treats anything that is not an array as
+        // unrepeatable, so this is the seam that selects streaming ingest and
+        // nothing here re-opens, buffers or tees it.
+        const resume = ranged && resumableIngest
+          ? { id: ranged.id, etag: ranged.etag, open: ({ byteOffset }) => ranged.open(byteOffset) }
+          : null;
+        // Called at most once: prepareImmutablePublication opens the source
+        // only when it has a catalog to publish against, and the fallback below
+        // runs only when it did not.
+        const openStream = () => (ranged ? ranged.open(0) : source);
+        prepared = await prepareImmutablePublication(metadata, {
+          ...publicationRuntime,
+          ...uploadControl,
+          createSource: resume ? null : openStream,
+          resume,
+          createArtworkSources: () => collectArtworkSources(channel, metadata)
+        });
+        let fileSize;
+        let mimeType;
+        if (prepared) {
+          fileSize = prepared.renditionWrite.descriptor.core.byteLength;
+          const firstBlock = fileSize > 0 ? await prepared.renditionWrite.core.get(0) : b4a.alloc(0);
+          mimeType = detectMimeType(firstBlock.subarray(0, Math.min(4100, firstBlock.byteLength))) ||
+            metadata.mimeType ||
+            'video/mp4';
+          finalizePreparedRendition(prepared, mimeType);
+          blobResult = staticPlaybackBlobRef(prepared);
+          await prepared.renditionWrite.core.close();
+        } else {
+          const streamed = await writeStreamedPlaybackBlob(
+            channel,
+            openStream(),
+            uploadControl.signal,
+            onProgress,
+            Number(options.byteLength)
+          );
+          blobResult = streamed.blobResult;
+          fileSize = streamed.byteLength;
+          mimeType = detectMimeType(streamed.header) || metadata.mimeType || 'video/mp4';
+        }
+        onProgress?.(100, fileSize, fileSize, { speed: 0, eta: 0 });
+
+        buildVideoMetadata(metadata, blobResult, channel, fileSize, mimeType);
+        await maybeAttachImmutablePublication(metadata, prepared, {
+          ...publicationRuntime,
+          publisherId: options.publisherId,
+          mediaMetadata: options.mediaMetadata,
+          ...uploadControl,
+          stageMetadata: value => channel.addVideo(value, { syncPublic: false }),
+          markRollbackPending: value => channel.updateVideo?.(value.id, value, { syncPublic: false }),
+          rollbackMetadata: async value => {
+            await rollbackUploadedBlob(channel, blobResult);
+            if (typeof channel.deleteVideo !== 'function') throw new Error('staged metadata deletion is unavailable');
+            await channel.deleteVideo(value.id);
+          },
+          finalizeMetadata: value => {
+            if (typeof channel.updateVideo !== 'function') {
+              throw new Error('published metadata update is unavailable');
+            }
+            return channel.updateVideo(value.id, value, {
+              syncPublic: true,
+              commitAfterPublicSync: true,
+            });
+          }
+        });
+        immutableCommitConfirmed = Boolean(metadata.immutablePublication);
+        // No playback profile: probing an MP4 needs the moov atom, which can
+        // sit at the end of the file, and the bytes are gone by now. A profile
+        // is a range-prioritization hint, so its absence costs nothing but a
+        // colder first seek.
+
+        if (!prepared) {
+          await channel.addVideo(metadata, {
+            syncPublic: metadata.publicationState !== 'replicationPending'
+          });
+        }
+
+        console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', metadata.blobsCoreKey?.slice(0, 16), 'keyLen:', metadata.blobsCoreKey?.length);
+
+        return completedUploadResult(videoId, metadata);
+      } catch (err) {
+        let failure = err;
+        if (prepared?.renditionWrite?.core && !prepared.renditionWrite.core.closed) {
+          try {
+            await prepared.renditionWrite.core.close();
+          } catch { /* best-effort staged rendition close after stream upload failure */ }
+        }
+        if (blobResult && !immutableCommitConfirmed &&
+            failure?.uploadCommitSucceeded !== true &&
+            failure?.uploadCommitUncertain !== true &&
+            failure?.uploadRollbackCompleted !== true &&
+            failure?.uploadRollbackPending !== true) {
+          try {
+            await rollbackUploadedBlob(channel, blobResult);
+          } catch {
+            failure = new Error('Upload failed and rollback could not be completed');
+          }
+        }
+        console.error('[Upload] Failed:', failure.message);
+        return {
+          success: false,
+          error: failure.message,
+          ...(failure?.uploadCommitUncertain === true
+            ? { commitUncertain: true, reconciliationRequired: true, reconciliation: failure.reconciliation }
+            : {}),
+          ...(failure?.uploadRollbackPending === true ? { rollbackPending: true } : {})
         };
       }
     },

@@ -3,6 +3,15 @@ import { resolveRelayConfig } from './config.js'
 import { createRelayRuntime } from './runtime.js'
 import { createRelayService } from './service.js'
 
+export { createCompanionServer } from './companion/server.js'
+export { createCompanionRouter } from './companion/routes.js'
+export {
+  CompanionContractError,
+  decodeIngestJobBody,
+  decodeOpenStreamBody,
+  decodeSearchQuery
+} from './companion/contracts.js'
+
 export async function startRelay({ config, logger = null } = {}) {
   if (!config) {
     throw new Error('startRelay requires a resolved config')
@@ -13,7 +22,7 @@ export async function startRelay({ config, logger = null } = {}) {
   const service = await createRelayService({
     config,
     logger: relayLogger,
-    runtimeFactory: async () => createRelayRuntime({ config, logger: relayLogger })
+    runtimeFactory: async ({ blockOffload }) => createRelayRuntime({ config, logger: relayLogger, blockOffload })
   })
   await service.start()
   return service

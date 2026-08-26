@@ -106,6 +106,18 @@ export type PearTubeRPC = {
         params: { action: 'ensure-local-publisher' }
         response: PublisherLifecycleResponse
       }
+      personalSecureGet: {
+        params: { account: string }
+        response: { value: string | null }
+      }
+      personalSecureSet: {
+        params: { account: string; value: string }
+        response: { success: true }
+      }
+      personalSecureDelete: {
+        params: { account: string }
+        response: { success: true }
+      }
     }
     messages: {
       workerWrite: { specifier: string; data: number[] }

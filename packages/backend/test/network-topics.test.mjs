@@ -2,6 +2,8 @@ import test from 'brittle'
 import b4a from 'b4a'
 
 import {
+  PROTOCOL_MAJOR,
+  deriveArchiveDiscoveryTopic,
   deriveArchiveTopic,
   deriveAssetTopic,
   deriveBootstrapTopic,
@@ -33,6 +35,20 @@ test('network topic derivation vectors are stable and domain separated by purpos
   t.not(topicHex(publisher), topicHex(asset))
   t.not(topicHex(asset), topicHex(live))
   t.not(topicHex(live), topicHex(archive))
+})
+
+test('omitted topic majors use the exported current major while explicit v1 vectors remain distinct', (t) => {
+  const vectors = [
+    [deriveBootstrapTopic, { networkId: 'current-default' }],
+    [derivePublisherTopic, { publisherId, catalogEpoch: 3 }],
+    [deriveArchiveDiscoveryTopic, { networkId: 'current-default' }],
+    [deriveArchiveTopic, { archiveId: 'current-default' }],
+  ]
+  for (const [derive, input] of vectors) {
+    t.alike(derive(input), derive({ ...input, protocolMajor: PROTOCOL_MAJOR }))
+    t.not(topicHex(derive(input)), topicHex(derive({ ...input, protocolMajor: 1 })))
+    t.exception(() => derive({ ...input, protocolMajor: 0 }), /protocolMajor/)
+  }
 })
 
 test('publisher topics change by publisher id, catalog epoch, and protocol major', (t) => {

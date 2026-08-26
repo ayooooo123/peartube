@@ -126,6 +126,48 @@ test('typed catalog operation bodies reject unknown fields, unknown variants, no
   t.is(opened, 0, 'invalid bounds are rejected before namespacing or opening storage')
 })
 
+test('accepted page ingest rebuilds an isolated catalog view with exact source provenance', async (t) => {
+  const dir = tempDir('peartube-publisher-page-ingest-')
+  const store = new Corestore(dir)
+  await store.ready()
+  const root = crypto.keyPair(bytes(32, 252))
+  const publisherId = derivePublisherId(root.publicKey)
+  const catalog = new PublisherCatalog(store, { publisherId })
+  await catalog.ready()
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: catalog.key,
+  })
+  const genesis = signed({
+    descriptor,
+    signer: root,
+    recordType: PUBLISHER_RECORD_TYPES.NAMESPACE,
+    policyEpoch: 0,
+    sequence: 0,
+    body: descriptor,
+  })
+  const frame = encodePublisherCatalogFrame(genesis)
+
+  const result = await catalog.ingestAcceptedPage([{
+    operationId: b4a.toString(genesis.recordId, 'hex'),
+    sourceWriterKey: catalog.localWriterKey,
+    frame,
+  }])
+  const authorization = await catalog.getAuthorizationState()
+
+  t.is(result.accepted, 1)
+  t.is(authorization.policyEpoch, 0)
+  const storedDescriptor = decodePublisherNamespaceDescriptor((await catalog.view.get('state/descriptor')).value)
+  t.ok(equal(storedDescriptor.publisherId, publisherId))
+  const page = await catalog.listAcceptedPage({ limit: 1 })
+  t.ok(equal(page.entries[0].sourceWriterKey, catalog.localWriterKey))
+  t.ok(equal(page.entries[0].frame, frame))
+
+  await catalog.close()
+  await store.close()
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
 test('two real device writers converge on canonical conflict winners, signed heads, and restart state', async (t) => {
   const dirA = tempDir('peartube-publisher-a-')
   const dirB = tempDir('peartube-publisher-b-')
@@ -2124,4 +2166,141 @@ test('persisted pre-cutover namespace genesis migrates once and survives strict 
   await view.close()
   await store.close()
   fs.rmSync(dir, { recursive: true, force: true })
+})
+
+// Discovery hands a consumer a publisher's bootstrap key and nothing else. The
+// Autobase behind that key cannot open until a peer replicates its first
+// block, and the scope that would replicate it is only joined once the catalog
+// has been bound - so awaiting Autobase readiness deadlocks the very first
+// follow of every publisher. A follower rebuilds the catalog locally from
+// verified accepted pages instead, so opening must not wait on the base.
+test('a catalog opened from an unreachable remote bootstrap key still becomes usable', async (t) => {
+  const dir = tempDir('peartube-publisher-remote-open-')
+  const store = new Corestore(dir)
+  await store.ready()
+  const root = crypto.keyPair(bytes(32, 231))
+  const publisherId = derivePublisherId(root.publicKey)
+  // A key no peer will ever serve, which is exactly a freshly discovered
+  // publisher before its scope is joined.
+  const unreachableBootstrapKey = bytes(32, 232)
+
+  const catalog = new PublisherCatalog(store, { publisherId, key: unreachableBootstrapKey })
+  const opened = await Promise.race([
+    catalog.ready().then(() => 'ready'),
+    new Promise(resolve => setTimeout(() => resolve('stalled'), 20000))
+  ])
+  t.is(opened, 'ready', 'opening does not block on an unreachable base')
+
+  // The base never opened, so nothing may present this as a writable catalog.
+  t.absent(catalog.writable, 'an unreplicated remote catalog is never writable')
+
+  // The verified page view is local and must be available for page ingest.
+  const view = await catalog.openVerifiedPageView()
+  t.ok(view, 'the verified page view opens without the base')
+
+  await catalog.close()
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+// A consumer rebuilds a followed publisher's catalog purely from accepted
+// pages, then checks the result against the head the publisher advertised.
+// Pages travel in operation-id order, which is a hash order, so the replay
+// must reach the same head as the producer regardless of how that order
+// relates to causality.
+test('a consumer rebuilds the producer head from an accepted page', async (t) => {
+  const dirA = tempDir('peartube-publisher-head-producer-')
+  const dirB = tempDir('peartube-publisher-head-consumer-')
+  const storeA = new Corestore(dirA)
+  const storeB = new Corestore(dirB)
+  await Promise.all([storeA.ready(), storeB.ready()])
+
+  const root = crypto.keyPair(bytes(32, 241))
+  const publisherId = derivePublisherId(root.publicKey)
+  const producer = new PublisherCatalog(storeA, { publisherId, deviceSigner: deviceSigner(crypto.keyPair(bytes(32, 242))) })
+  await producer.ready()
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: producer.key,
+  })
+
+  await producer.append(signed({
+    descriptor, signer: root, recordType: PUBLISHER_RECORD_TYPES.NAMESPACE,
+    policyEpoch: 0, sequence: 0, body: descriptor,
+  }))
+  await producer.append(signed({
+    descriptor, signer: root, recordType: PUBLISHER_RECORD_TYPES.WRITER_ADMISSION,
+    policyEpoch: 0, sequence: 1,
+    body: {
+      writerKey: producer.localWriterKey,
+      signerKey: producer.localSignerKey,
+      capabilities: ['announce', 'publish'],
+      firstAcceptedSequence: 1,
+      expiresAt: 1_800_000_000_000,
+      admissionNonce: bytes(16, 71),
+    }
+  }))
+  // Several publications, so the hash order of the page is very unlikely to
+  // match the order the producer reduced them in.
+  for (let sequence = 1; sequence <= 4; sequence++) {
+    await producer.append(await producer.createLocalOperation({
+      recordType: PUBLISHER_RECORD_TYPES.PUBLICATION,
+      policyEpoch: 0,
+      sequence,
+      signedAt: 1_700_000_000_000,
+      body: { publicationId: id(180 + sequence), manifestId: id(190 + sequence), payload: b4a.from(`pub-${sequence}`) }
+    }))
+  }
+  await producer.update()
+
+  const producerHead = await producer.getViewHead()
+  const page = await producer.listAcceptedPage({ limit: 128 })
+  t.ok(page.entries.length >= 6, 'the page carries the namespace, the admission, and every publication')
+
+  // A follower binds the producer's catalog key, exactly as bindNamespace does.
+  const consumer = new PublisherCatalog(storeB, { publisherId, key: producer.key, deviceSigner: deviceSigner(crypto.keyPair(bytes(32, 243))) })
+  await consumer.ready()
+  const ingested = await consumer.ingestAcceptedPage(page.entries)
+
+  t.is(ingested.rejected, 0, 'a consumer accepts every operation the producer accepted')
+  t.is(ingested.accepted, page.entries.length, 'every operation lands')
+
+  const consumerHead = await consumer.getViewHead()
+  // The consumer's view is a standalone rebuild while the producer's is an
+  // Autobase-linearized view, so their core lengths differ by construction.
+  // What must match is the logical state the head digest commits to, because
+  // that is what the consumer compares against the advertised head.
+  const prefixes = async (view) => {
+    const counts = {}
+    for await (const entry of view.createReadStream()) {
+      const key = String(entry.key).split('/')[0]
+      counts[key] = (counts[key] || 0) + 1
+    }
+    return counts
+  }
+  const dump = async (view) => {
+    const map = new Map()
+    for await (const entry of view.createReadStream()) {
+      map.set(String(entry.key), b4a.toString(crypto.hash(entry.value || b4a.alloc(0)), 'hex').slice(0, 12))
+    }
+    return map
+  }
+  const pk = await dump(producer.view)
+  const ck = await dump(consumer.view)
+  for (const [key, digest] of pk) {
+    const other = ck.get(key)
+    if (other !== digest) console.log('[test] DIFFERS', key, 'producer', digest, 'consumer', other || 'MISSING')
+  }
+  for (const key of ck.keys()) if (!pk.has(key)) console.log('[test] EXTRA on consumer', key)
+  console.log('[test] producer head', producerHead.length, b4a.toString(producerHead.digest, 'hex').slice(0, 16),
+    'consumer head', consumerHead.length, b4a.toString(consumerHead.digest, 'hex').slice(0, 16))
+  t.ok(equal(consumerHead.authorizationStateDigest, producerHead.authorizationStateDigest),
+    'the rebuilt authorization state matches the producer')
+  t.ok(equal(consumerHead.digest, producerHead.digest),
+    'the rebuilt head digest matches the advertised head')
+
+  await producer.close()
+  await consumer.close()
+  await Promise.all([storeA.close(), storeB.close()])
+  fs.rmSync(dirA, { recursive: true, force: true })
+  fs.rmSync(dirB, { recursive: true, force: true })
 })

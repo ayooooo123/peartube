@@ -12,7 +12,7 @@ import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { SwarmIndicator } from '@/components/primitives'
-import { formatBytes as formatSize, formatTimeAgo, formatViews } from '@/lib/formatters'
+import { formatSizeLabel, formatTimeAgo, formatViews } from '@/lib/formatters'
 import { getPlayerPageVideoHeight } from '@/lib/video-layout'
 import { useVideoPlayerActions, useVideoPlayerSession, VideoStats } from '@/lib/VideoPlayerContext'
 import { useCast } from '@/lib/cast'
@@ -309,6 +309,7 @@ function MobileVideoPlayerScreen() {
     currentVideo,
     videoUrl,
     isLoading: loadingVideo,
+    playbackError,
     videoStats,
   } = useVideoPlayerSession()
   const { minimizePlayer, loadAndPlayVideo, setIsLoading } = useVideoPlayerActions()
@@ -618,7 +619,13 @@ function MobileVideoPlayerScreen() {
         </Pressable>
 
         <View style={[styles.player, { height: videoHeight }]}>
-          {loadingVideo ? (
+          {playbackError?.terminal ? (
+            // The source will not decode on a later attempt, so this replaces
+            // the loading gate rather than sitting behind it.
+            <View style={styles.loadingContainer}>
+              <Text style={styles.loadingText}>{playbackError.message}</Text>
+            </View>
+          ) : loadingVideo ? (
             <View style={styles.loadingContainer}>
               <ActivityIndicator color="white" size="large" />
               <Text style={styles.loadingText}>Connecting to P2P network...</Text>
@@ -682,7 +689,9 @@ function MobileVideoPlayerScreen() {
             </View>
           )}
           <Text style={styles.videoMeta}>
-            {formatTimeAgo(videoData?.uploadedAt || Date.now())} · {formatSize(videoData?.size || 0)}
+            {[formatTimeAgo(videoData?.uploadedAt || Date.now()), formatSizeLabel(videoData?.size)]
+              .filter(Boolean)
+              .join(' · ')}
           </Text>
         </View>
 

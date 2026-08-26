@@ -34,7 +34,6 @@ test('low-frequency UI consumers avoid the combined high-frequency player contex
 
 test('command-only screens use the action context instead of progress-carrying context', () => {
   for (const relativePath of [
-    'app/search.tsx',
     'app/(tabs)/studio.tsx',
   ]) {
     const source = readAppFile(relativePath)
@@ -42,6 +41,13 @@ test('command-only screens use the action context instead of progress-carrying c
     assert.match(source, /useVideoPlayerActions/)
     assert.doesNotMatch(source, /useVideoPlayerContext\(/)
   }
+})
+
+test('consumer Search opens media detail without subscribing to player state', () => {
+  const source = readAppFile('app/search.tsx')
+
+  assert.match(source, /MediaCatalogView/)
+  assert.doesNotMatch(source, /useVideoPlayer(?:Context|Session|Progress|Actions)\(/)
 })
 
 test('watch page composes focused player hooks without subscribing to progress ticks', () => {

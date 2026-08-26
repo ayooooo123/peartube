@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { loadRelayConfig, resolveRelayConfig } from '../src/config.js'
+import { loadRelayConfig, resolveRelayConfig, renderExampleConfig } from '../src/config.js'
 
 function makeTempDir(prefix) {
   return mkdtempSync(join(tmpdir(), prefix))
@@ -105,6 +105,22 @@ test('loadRelayConfig uses built-in defaults without a config file', async (t) =
   t.is(config.paths.catalog, 'peartube-relay/db/relay-catalog.json')
   t.is(config.paths.status, 'peartube-relay/db/relay-status.json')
   t.is(config.paths.config, undefined)
+})
+
+test('direct downloads have no file-size ceiling config surface', async (t) => {
+  const fromDefaults = await loadRelayConfig({}, { env: {} })
+  t.is(fromDefaults.archive.maxDirectDownloadBytes, 0, 'zero means no archive file-size cap')
+
+  const fromEnv = await loadRelayConfig({}, { env: { PEARTUBE_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES: '17179869184' } })
+  t.is(fromEnv.archive.maxDirectDownloadBytes, 0, 'legacy env ceiling is ignored')
+
+  const fromProgrammaticLegacy = await loadRelayConfig({ maxDirectDownloadBytes: '4096' }, { env: { PEARTUBE_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES: '17179869184' } })
+  t.is(fromProgrammaticLegacy.archive.maxDirectDownloadBytes, 0, 'legacy programmatic ceiling is ignored')
+
+  t.absent(
+    renderExampleConfig(fromEnv).includes('maxDirectDownloadBytes'),
+    'the example config does not advertise an archive file-size cap'
+  )
 })
 
 test('loadRelayConfig supports env-only relay configuration', async (t) => {
@@ -218,4 +234,134 @@ test('resolveRelayConfig reads local mirror env vars', async (t) => {
     recursive: false,
     maxFiles: 12
   })
+})
+
+test('the archive challenge cadence is an operator setting, and a nonsense one is ignored', async (t) => {
+  // The backend has always accepted these two; the relay never passed them, so
+  // custody could not be confirmed sooner than the backend's own five minutes,
+  // and no test could observe an archivist proving possession at all.
+  const configured = resolveRelayConfig({
+    archive: { challengeIntervalMs: 5_000, challengeTimeoutMs: 4_000 },
+  }, { env: {} })
+  t.is(configured.archive.challengeIntervalMs, 5_000)
+  t.is(configured.archive.challengeTimeoutMs, 4_000)
+
+  const unset = resolveRelayConfig({}, { env: {} })
+  t.is(unset.archive.challengeIntervalMs, undefined, 'an unset cadence leaves the backend default alone')
+  t.is(unset.archive.challengeTimeoutMs, undefined)
+
+  for (const value of [5, 0, -1, 25 * 60 * 60 * 1000, 'soon', 1.5]) {
+    const rejected = resolveRelayConfig({ archive: { challengeIntervalMs: value } }, { env: {} })
+    t.is(rejected.archive.challengeIntervalMs, undefined, `${JSON.stringify(value)} is not a cadence`)
+  }
+})
+
+test('a config file can set the archive UI host and port, and flags still win', async (t) => {
+  // uiCommand used to pass its own fallback in as a CLI value, which outranked
+  // the file it was meant to fall back to: every relay started from a config
+  // bound 0.0.0.0:8174, so a second one on the same machine died with
+  // EADDRINUSE while its own file named a free port.
+  const dir = makeTempDir('peartube-relay-ui-config-')
+  t.teardown(() => rmSync(dir, { recursive: true, force: true }))
+  const configPath = join(dir, 'relay.json')
+  writeFileSync(configPath, JSON.stringify({
+    storage: { path: join(dir, 'store') },
+    archive: { uiHost: '127.0.0.1', uiPort: 8175 },
+  }))
+
+  // Guard the fix itself: with the old code this call also carried
+  // uiHost/uiPort fallbacks, which is exactly what silenced the file.
+  const fromFile = await loadRelayConfig({ config: configPath, archive: { uiEnabled: true } }, { env: {} })
+  t.is(fromFile.archive.uiHost, '127.0.0.1')
+  t.is(fromFile.archive.uiPort, 8175)
+
+  const overridden = await loadRelayConfig({
+    config: configPath,
+    archive: { uiEnabled: true, uiHost: '0.0.0.0', uiPort: 9999 },
+  }, { env: {} })
+  t.is(overridden.archive.uiHost, '0.0.0.0', 'an explicit flag still overrides the file')
+  t.is(overridden.archive.uiPort, 9999)
+})
+
+test('block offload is off unless the operator asks for it', async (t) => {
+  const unset = resolveRelayConfig({}, { env: {} })
+  t.is(unset.archive.s3.offload, false, 'block offload defaults to off')
+  t.is(unset.archive.s3.offloadWindowBytes, 2 * 1024 * 1024 * 1024, 'the resident window defaults to 2 GiB')
+
+  // A fully configured bucket is still not permission to start deleting local
+  // block data: offload is the separate decision.
+  const bucketOnly = resolveRelayConfig({}, {
+    env: {
+      PEARTUBE_ARCHIVE_S3_ENDPOINT: 'https://s3.us-west-002.backblazeb2.com',
+      PEARTUBE_ARCHIVE_S3_BUCKET: 'peartube-relay',
+      PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID: 'key',
+      PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY: 'secret'
+    }
+  })
+  t.is(bucketOnly.archive.s3.offload, false, 'a configured bucket alone does not enable offload')
+})
+
+test('resolveRelayConfig reads the block offload env vars', async (t) => {
+  const config = resolveRelayConfig({}, {
+    env: {
+      PEARTUBE_ARCHIVE_S3_ENDPOINT: 'https://s3.us-west-002.backblazeb2.com',
+      PEARTUBE_ARCHIVE_S3_BUCKET: 'peartube-relay',
+      PEARTUBE_ARCHIVE_S3_REGION: 'us-west-002',
+      PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID: 'key',
+      PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY: 'secret',
+      PEARTUBE_ARCHIVE_S3_PREFIX: 'relay-a',
+      PEARTUBE_ARCHIVE_S3_OFFLOAD: 'true',
+      PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES: '1073741824'
+    }
+  })
+
+  t.is(config.archive.s3.offload, true)
+  t.is(config.archive.s3.offloadWindowBytes, 1073741824)
+  t.is(config.archive.s3.prefix, 'relay-a')
+
+  // A window that is not a byte count falls back to the default rather than
+  // becoming NaN and offloading every block on the first append.
+  for (const value of ['soon', '-1', '1.5']) {
+    const fallback = resolveRelayConfig({}, {
+      env: {
+        PEARTUBE_ARCHIVE_S3_ENDPOINT: 'https://s3.example.com',
+        PEARTUBE_ARCHIVE_S3_BUCKET: 'bucket',
+        PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID: 'key',
+        PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY: 'secret',
+        PEARTUBE_ARCHIVE_S3_OFFLOAD: 'true',
+        PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES: value
+      }
+    })
+    t.is(fallback.archive.s3.offloadWindowBytes, 2 * 1024 * 1024 * 1024, `${value} is not a window`)
+  }
+})
+
+test('block offload with a half-configured bucket is refused, never downgraded to local-only', async (t) => {
+  // Offload makes the bucket load bearing for playback. Starting local-only
+  // would fill the exact volume the operator was trying to stop filling, and
+  // they would not find out until it was full.
+  const complete = {
+    endpoint: 'https://s3.example.com',
+    bucket: 'peartube-relay',
+    accessKeyId: 'key',
+    secretAccessKey: 'secret'
+  }
+  for (const field of ['endpoint', 'bucket', 'accessKeyId', 'secretAccessKey']) {
+    const s3 = { ...complete, offload: true }
+    delete s3[field]
+    t.exception(
+      () => resolveRelayConfig({ archive: { s3 } }, { env: {} }),
+      new RegExp(`incomplete: missing ${field}`),
+      `offload without ${field} refuses at startup`
+    )
+  }
+
+  t.exception(
+    () => resolveRelayConfig({ archive: { s3: { ...complete, offload: true, enabled: false } } }, { env: {} }),
+    /archive\.s3\.enabled is false/,
+    'offload cannot be enabled while the provider itself is disabled'
+  )
+
+  const accepted = resolveRelayConfig({ archive: { s3: { ...complete, offload: true } } }, { env: {} })
+  t.is(accepted.archive.s3.offload, true, 'a complete bucket is accepted')
 })

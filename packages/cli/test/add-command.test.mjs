@@ -22,10 +22,10 @@ function capture () {
 
 const CHANNEL = { channelKey: 'chan-1', writerKeyHex: 'a'.repeat(64), publicBeeKey: 'b'.repeat(64) }
 
-function fakeExecutorDeps ({ jobStore, uploads, downloads, durable = { verified: true } }) {
+function fakeExecutorDeps ({ jobStore, uploads, downloads, channels = [], durable = { verified: true } }) {
   return {
     jobStore,
-    resolveChannel: async () => CHANNEL,
+    resolveChannel: async ({ channelDraft }) => { channels.push(channelDraft); return CHANNEL },
     loadChannel: async () => CHANNEL,
     duplicateCheck: { check: async () => ({ status: 'ok', advisories: [] }) },
     deriveImportClaimantId: (w, j) => `claim:${j}`,
@@ -44,13 +44,34 @@ function fakeExecutorDeps ({ jobStore, uploads, downloads, durable = { verified:
   }
 }
 
-function tmdbFake () {
-  return {
-    createTmdbProvider: () => ({
+const RECORDING_MBID = 'b1a9c0e8-2f9d-4b3e-9a24-6f3c1d9a7b55'
+
+// One fake per authority, shaped exactly like the real clients, behind the
+// registry function `add` now injects instead of a single TMDB factory.
+function metadataFake (calls) {
+  const clients = {
+    tmdb: {
       async getShow () { return { name: 'Breaking Bad', mediaId: '1396', provider: 'tmdb', artwork: [] } },
       async getSeason () { return [{ seasonNumber: 1, episodeNumber: 1, title: 'Pilot', airDate: '2008-01-20', artwork: [] }] },
       async getMovie () { return { title: 'The Matrix', mediaId: '603', provider: 'tmdb', year: 1999, artwork: [] } }
-    })
+    },
+    tvdb: {
+      async getShow () { return { name: 'Breaking Bad', mediaId: '81189', provider: 'tvdb', artwork: [] } },
+      async getSeason () { return [{ seasonNumber: 1, episodeNumber: 2, title: "Cat's in the Bag...", airDate: '2008-01-27', artwork: [] }] },
+      async getMovie () { return { title: 'The Matrix', mediaId: '290434', provider: 'tvdb', year: 1999, artwork: [] } }
+    },
+    musicbrainz: {
+      async getRecording () { return { title: 'Paranoid Android', artist: 'Radiohead', mediaId: RECORDING_MBID, provider: 'musicbrainz', firstReleaseDate: '1997-05-21', artwork: [] } },
+      async getRelease () { return { title: 'OK Computer', artist: 'Radiohead', mediaId: '550e8400-e29b-41d4-a716-446655440000', provider: 'musicbrainz', date: '1997-05-21', artwork: [] } }
+    }
+  }
+  return {
+    createMetadataProvider: async (authority, options) => {
+      calls.push({ authority, options })
+      const client = clients[authority]
+      if (!client) throw new Error(`no fake metadata client for ${authority}`)
+      return client
+    }
   }
 }
 
@@ -59,14 +80,16 @@ function baseContext (overrides = {}) {
   const stderr = capture()
   const uploads = []
   const downloads = []
+  const channels = []
+  const providerCalls = []
   const durable = overrides.durable || { verified: true }
   const bee = fakeBee()
   const deps = {
-    ...tmdbFake(),
+    ...metadataFake(providerCalls),
     openAddRuntime: async () => ({ metadataBee: bee, close: async () => {} }),
     createJobStore,
     createExecutor,
-    buildExecutorDeps: ({ jobStore }) => fakeExecutorDeps({ jobStore, uploads, downloads, durable })
+    buildExecutorDeps: ({ jobStore }) => fakeExecutorDeps({ jobStore, uploads, downloads, channels, durable })
   }
   return {
     context: {
@@ -83,7 +106,9 @@ function baseContext (overrides = {}) {
     stdout,
     stderr,
     uploads,
-    downloads
+    downloads,
+    channels,
+    providerCalls
   }
 }
 
@@ -150,11 +175,136 @@ test('no eligible durable peer keeps the job pending and retains local bytes', a
   t.ok(stderr.text().includes('Local bytes retained') || stderr.text().includes('retained'))
 })
 
-test('a missing TMDB key for scripted metadata is an actionable usage error', async (t) => {
-  const { context, stderr } = baseContext({
+test('a missing TMDB key for scripted metadata names the variable and the --title escape', async (t) => {
+  const { context, stderr, providerCalls } = baseContext({
     context: { flags: { type: 'movie', provider: 'tmdb', movieId: '603', yes: true }, resolveConfig: async () => ({}) }
   })
   const code = await runAddCommand(context)
   t.is(code, 2)
-  t.ok(stderr.text().includes('TMDB API key'))
+  t.ok(stderr.text().includes('TMDB_API_KEY'))
+  t.ok(stderr.text().includes('--title'))
+  t.is(providerCalls.length, 0, 'no client is built for an authority that cannot be read')
+})
+
+test('a TVDB movie with a configured key needs no --title and enriches from the provider', async (t) => {
+  const { context, stdout, downloads, channels, providerCalls } = baseContext({
+    context: {
+      flags: { type: 'movie', provider: 'tvdb', movieId: '290434', yes: true, json: true },
+      resolveConfig: async () => ({ content: { tvdbApiKey: 'tvdb-token' } })
+    }
+  })
+  const code = await runAddCommand(context)
+  t.is(code, 0)
+  t.is(JSON.parse(stdout.text()).status, 'published')
+  t.is(providerCalls[0].authority, 'tvdb')
+  t.is(downloads[0].title, 'The Matrix', 'title comes from the TVDB lookup, not a flag')
+  t.is(downloads[0].mediaProvider, 'tvdb')
+  t.is(downloads[0].mediaId, '290434')
+  t.is(channels[0].name, 'The Matrix')
+})
+
+test('a TVDB episode with a configured key resolves the season without --title', async (t) => {
+  const { context, downloads, channels } = baseContext({
+    context: {
+      flags: { type: 'episode', provider: 'tvdb', showId: '81189', season: 1, episode: 2, yes: true },
+      resolveConfig: async () => ({ content: { tvdbApiKey: 'tvdb-token' } })
+    }
+  })
+  t.is(await runAddCommand(context), 0)
+  t.is(downloads[0].title, "Cat's in the Bag...")
+  t.is(downloads[0].episodeNumber, 2)
+  t.is(channels[0].name, 'Breaking Bad')
+  t.is(channels[0].mediaProvider, 'tvdb')
+})
+
+test('a TVDB movie with no key is refused by a message naming the variable and --title', async (t) => {
+  const { context, stderr, providerCalls } = baseContext({
+    context: {
+      flags: { type: 'movie', provider: 'tvdb', movieId: '290434', yes: true },
+      resolveConfig: async () => ({})
+    }
+  })
+  const code = await runAddCommand(context)
+  t.is(code, 2)
+  t.ok(stderr.text().includes('PEARTUBE_TVDB_API_KEY'), 'names the exact variable to set')
+  t.ok(stderr.text().includes('--title'), 'offers the escape hatch')
+  t.is(providerCalls.length, 0)
+})
+
+test('a TVDB movie with no key still publishes when --title supplies the name', async (t) => {
+  const { context, downloads, providerCalls } = baseContext({
+    context: {
+      flags: { type: 'movie', provider: 'tvdb', movieId: '290434', title: 'The Matrix', yes: true },
+      resolveConfig: async () => ({})
+    }
+  })
+  t.is(await runAddCommand(context), 0)
+  t.is(downloads[0].title, 'The Matrix')
+  t.is(providerCalls.length, 0, 'an unreadable authority is never asked')
+})
+
+test('a MusicBrainz track needs neither a key nor a --title', async (t) => {
+  const { context, downloads, channels, providerCalls } = baseContext({
+    context: {
+      flags: { type: 'track', provider: 'musicbrainz', recordingId: RECORDING_MBID, yes: true },
+      resolveConfig: async () => ({})
+    }
+  })
+  t.is(await runAddCommand(context), 0)
+  t.is(providerCalls[0].authority, 'musicbrainz')
+  t.is(downloads[0].title, 'Paranoid Android')
+  t.is(downloads[0].mediaProvider, 'musicbrainz')
+  t.is(downloads[0].mediaId, RECORDING_MBID)
+  t.is(channels[0].name, 'Radiohead', 'the artist credit names the channel')
+  t.is(downloads[0].sourcePublishedAt, '1997-05-21', 'the first release date carries through')
+})
+
+test('a MusicBrainz release enriches the same way', async (t) => {
+  const { context, downloads, channels } = baseContext({
+    context: {
+      flags: { type: 'release', provider: 'musicbrainz', releaseId: '550e8400-e29b-41d4-a716-446655440000', yes: true },
+      resolveConfig: async () => ({})
+    }
+  })
+  t.is(await runAddCommand(context), 0)
+  t.is(downloads[0].title, 'OK Computer')
+  t.is(channels[0].name, 'Radiohead')
+  t.is(downloads[0].sourcePublishedAt, '1997-05-21')
+})
+
+test('--title wins over looked-up metadata when both exist', async (t) => {
+  const { context, downloads, channels, providerCalls } = baseContext({
+    context: {
+      flags: { type: 'movie', provider: 'tvdb', movieId: '290434', title: 'The Matrix (1999 remaster)', yes: true },
+      resolveConfig: async () => ({ content: { tvdbApiKey: 'tvdb-token' } })
+    }
+  })
+  t.is(await runAddCommand(context), 0)
+  t.is(providerCalls.length, 1, 'the authority is still read for description and artwork')
+  t.is(downloads[0].title, 'The Matrix (1999 remaster)')
+  t.is(channels[0].name, 'The Matrix (1999 remaster)')
+})
+
+test('--channel-name overrides the looked-up channel without touching the item title', async (t) => {
+  const { context, downloads, channels } = baseContext({
+    context: {
+      flags: { type: 'episode', provider: 'tvdb', showId: '81189', season: 1, episode: 2, channelName: 'Breaking Bad (AMC)', yes: true },
+      resolveConfig: async () => ({ content: { tvdbApiKey: 'tvdb-token' } })
+    }
+  })
+  t.is(await runAddCommand(context), 0)
+  t.is(channels[0].name, 'Breaking Bad (AMC)')
+  t.is(downloads[0].title, "Cat's in the Bag...")
+})
+
+test('the TVDB PIN reaches the provider beside its key', async (t) => {
+  const { context, providerCalls } = baseContext({
+    context: {
+      flags: { type: 'movie', provider: 'tvdb', movieId: '290434', yes: true },
+      resolveConfig: async () => ({ content: { tvdbApiKey: 'tvdb-token', tvdbPin: '4321' } })
+    }
+  })
+  t.is(await runAddCommand(context), 0)
+  t.is(providerCalls[0].options.pin, '4321')
+  t.is(providerCalls[0].options.preferences.tvdbApiKey, 'tvdb-token', 'the registry reads the key from preferences')
 })

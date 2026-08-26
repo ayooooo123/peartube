@@ -1,0 +1,57 @@
+{
+  "status": "success",
+  "data": [
+    {
+      "objectID": "series-81189",
+      "id": "series-81189",
+      "tvdb_id": "81189",
+      "type": "series",
+      "primary_type": "series",
+      "name": "Breaking Bad",
+      "overview": "A high school chemistry teacher diagnosed with terminal lung cancer turns to manufacturing methamphetamine.",
+      "first_air_time": "2008-01-20",
+      "year": "2008",
+      "primary_language": "eng",
+      "country": "usa",
+      "status": "Ended",
+      "image_url": "https://artworks.thetvdb.com/banners/posters/81189-6.jpg",
+      "thumbnail": "https://artworks.thetvdb.com/banners/posters/81189-6_t.jpg"
+    },
+    {
+      "objectID": "movie-604",
+      "id": "movie-604",
+      "tvdb_id": "604",
+      "type": "movie",
+      "primary_type": "movie",
+      "name": "The Matrix",
+      "overview": "A computer hacker learns the true nature of his reality.",
+      "first_air_time": "1999-03-31",
+      "year": "1999",
+      "primary_language": "eng",
+      "image_url": "http://artworks.thetvdb.com/banners/movies/604/posters/604.jpg"
+    },
+    {
+      "objectID": "series-424242",
+      "id": "series-424242",
+      "type": "series",
+      "name": "Never Aired",
+      "image_url": "/banners/posters/424242-1.jpg"
+    },
+    {
+      "objectID": "person-2734",
+      "id": "person-2734",
+      "tvdb_id": "2734",
+      "type": "person",
+      "name": "Bryan Cranston",
+      "image_url": "https://artworks.thetvdb.com/banners/person/2734/primary.jpg"
+    },
+    {
+      "objectID": "company-3021",
+      "id": "company-3021",
+      "tvdb_id": "3021",
+      "type": "company",
+      "name": "AMC"
+    }
+  ],
+  "links": { "prev": null, "self": "https://api4.thetvdb.com/v4/search?query=breaking+bad", "next": null, "total_items": 5, "page_size": 500 }
+}

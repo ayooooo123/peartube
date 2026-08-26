@@ -19,12 +19,16 @@ import type {
   RequestArchivePublicationResponse,
   SetArchiveParticipationRequest,
   StorageStatsResponse,
+  UploadVideoRequest,
   PreparePublisherRootOperationRequest,
   PreparePublisherRootOperationResponse,
   SubmitPublisherRootOperationRequest,
   SubmitPublisherRootOperationResponse,
 } from '@peartube/host'
 import type {
+  EntityArtworkResponse,
+  MediaAvailability,
+  MediaAvailabilityState,
   MediaAgentContributionsResponse,
   MediaAgentResponse,
   MediaCatalogResponse,
@@ -32,6 +36,8 @@ import type {
   MediaCollectionItemsResponse,
   MediaEntityResponse,
   MediaPageRequest,
+  MediaPlaybackAttempt,
+  PrepareMediaPlaybackResponse,
   PublicationSourcesResponse,
   SetSourcePreferenceResponse,
 } from '@peartube/host'
@@ -59,8 +65,12 @@ export type {
   RequestArchivePublicationResponse,
   SetArchiveParticipationRequest,
   StorageStatsResponse,
+  UploadVideoRequest,
 }
 export type {
+  EntityArtworkResponse,
+  MediaAvailability,
+  MediaAvailabilityState,
   MediaAgentContributionsResponse,
   MediaAgentResponse,
   MediaCatalogResponse,
@@ -68,6 +78,8 @@ export type {
   MediaCollectionItemsResponse,
   MediaEntityResponse,
   MediaPageRequest,
+  MediaPlaybackAttempt,
+  PrepareMediaPlaybackResponse,
   PublicationSourcesResponse,
   SetSourcePreferenceResponse,
 }
@@ -302,6 +314,14 @@ type MediaGraphMethods = {
     publicationId: string
     preferred: boolean
   }): Promise<SetSourcePreferenceResponse>
+  prepareMediaPlayback(request: {
+    entityId: string
+    publicationId?: string
+  }): Promise<PrepareMediaPlaybackResponse>
+  getEntityArtwork(request: {
+    entityId?: string
+    publicationId?: string
+  }): Promise<EntityArtworkResponse>
 }
 
 type MediaGraphProtocolClient = {
@@ -777,6 +797,31 @@ export function createMediaGraphRpc(ensureClient: () => MediaGraphProtocolClient
       if (!handler) throw new Error('Host protocol client does not expose mediaGraph.setSourcePreference')
       return handler(request)
     },
+
+    /**
+     * One Play action. The backend selects the source and fails over between
+     * equivalent sources; the app renders the outcome, it never picks.
+     */
+    async prepareMediaPlayback(request: { entityId: string; publicationId?: string }) {
+      const client = ensureClient()
+      await client.ready()
+      const handler = client.mediaGraph.prepareMediaPlayback
+      if (!handler) throw new Error('Host protocol client does not expose mediaGraph.prepareMediaPlayback')
+      return handler(request)
+    },
+
+    /**
+     * Cover art for one entity, resolved from the publication manifest's poster
+     * rendition over the authorized asset path — the same path the video takes.
+     * The answer is a loopback URL, so it is already byte-local.
+     */
+    async getEntityArtwork(request: { entityId?: string; publicationId?: string }) {
+      const client = ensureClient()
+      await client.ready()
+      const handler = client.mediaGraph.getEntityArtwork
+      if (!handler) throw new Error('Host protocol client does not expose mediaGraph.getEntityArtwork')
+      return handler(request)
+    },
   }
 }
 
@@ -903,7 +948,20 @@ export function createPersonalRpc(ensureRPC: () => any) {
     },
 
     // Watch history / resume
-    async logWatchHistory(req: { channelKey?: string; videoId?: string; videoKey?: string; title?: string; duration?: number; position?: number; completed?: boolean; timestamp?: number }) {
+    async logWatchHistory(req: {
+      channelKey?: string
+      videoId?: string
+      videoKey?: string
+      title?: string
+      duration?: number
+      position?: number
+      completed?: boolean
+      timestamp?: number
+      identity?: { entityRef?: string; editionRef?: string; memberRef?: string }
+      saved?: boolean
+      playbackGeneration?: number
+      tombstone?: boolean
+    }) {
       return ensureRPC().logWatchHistory(req);
     },
     async getWatchHistory(req: { limit?: number } = {}) {
@@ -927,8 +985,27 @@ export function createPersonalRpc(ensureRPC: () => any) {
     },
 
     // At-rest encryption provisioning (keychain-backed)
-    async provisionPersonalEncryption(req: { secret?: string } = {}) {
+    async provisionPersonalEncryption(req: {
+      secret: string
+      bootstrapKey?: string
+      deviceLocal?: boolean
+    }) {
       return ensureRPC().provisionPersonalEncryption(req);
+    },
+
+    // Personal-store device pairing. Deliberately distinct from publisher
+    // channel pairing: it moves only the viewer's own encrypted state.
+    async createPersonalDeviceInvite(req: { expiresInMs?: number } = {}) {
+      return ensureRPC().createPersonalDeviceInvite(req);
+    },
+    async redeemPersonalDeviceInvite(req: { inviteCode: string; deviceName?: string }) {
+      return ensureRPC().redeemPersonalDeviceInvite(req);
+    },
+    async listPersonalDevices() {
+      return ensureRPC().listPersonalDevices({});
+    },
+    async revokePersonalDevice(req: { keyHex: string; secret: string; deviceName?: string }) {
+      return ensureRPC().revokePersonalDevice(req);
     }
   };
 }
@@ -993,6 +1070,54 @@ export function createOperabilityRpc(ensureRPC: () => any) {
       request: Record<string, unknown>,
     ): Promise<Record<string, unknown>> {
       return ensureRPC().setNetworkPolicy(request)
+    },
+
+    /** Live contribution state: eligible, actively uploading, or suspended. */
+    async getParticipationStatus(): Promise<Record<string, unknown>> {
+      return ensureRPC().getParticipationStatus({})
+    },
+
+    /**
+     * Report the OS categorical signals the participation decision runs on.
+     * Omit a signal the platform cannot read: absent stays unknown, and
+     * unknown constrains rather than permits.
+     */
+    async setDeviceConditions(conditions: {
+      metered?: boolean
+      thermalState?: string
+      batteryPercent?: number
+      charging?: boolean
+      backgroundPermitted?: boolean
+      freeDiskBytes?: number
+      totalDiskBytes?: number
+    }): Promise<Record<string, unknown>> {
+      const request: Record<string, unknown> = {}
+      if (typeof conditions.metered === 'boolean') {
+        request.metered = conditions.metered
+        request.meteredProvided = true
+      }
+      if (typeof conditions.thermalState === 'string') request.thermalState = conditions.thermalState
+      if (Number.isFinite(conditions.batteryPercent)) {
+        request.batteryPercent = conditions.batteryPercent
+        request.batteryPercentProvided = true
+      }
+      if (typeof conditions.charging === 'boolean') {
+        request.charging = conditions.charging
+        request.chargingProvided = true
+      }
+      if (typeof conditions.backgroundPermitted === 'boolean') {
+        request.backgroundPermitted = conditions.backgroundPermitted
+        request.backgroundPermittedProvided = true
+      }
+      if (Number.isFinite(conditions.freeDiskBytes)) {
+        request.freeDiskBytes = conditions.freeDiskBytes
+        request.freeDiskBytesProvided = true
+      }
+      if (Number.isFinite(conditions.totalDiskBytes)) {
+        request.totalDiskBytes = conditions.totalDiskBytes
+        request.totalDiskBytesProvided = true
+      }
+      return ensureRPC().setDeviceConditions(request)
     },
 
     async previewStorageLimit(

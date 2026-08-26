@@ -244,7 +244,10 @@ test('moderation feed budget cannot be bypassed with repeated page syncs and res
     keyPair: moderator,
     expiresAt: 100_000,
   })
-  t.is((await manager.syncFeed({ moderatorId, fetchPage: async () => firstPage })).status, 'partial')
+  t.is((await manager.syncFeed({
+    moderatorId,
+    fetchPage: async cursor => cursor === '0' ? firstPage : secondPage,
+  })).status, 'partial')
   const blocked = await manager.syncFeed({ moderatorId, startCursor: '1', fetchPage: async () => secondPage })
   t.is(blocked.status, 'partial')
   t.is(blocked.errorCode, 'MODERATION_INDEX_WINDOW_BUDGET_EXCEEDED')

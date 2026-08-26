@@ -1,5 +1,6 @@
 /**
- * Profile — identity, devices, storage & network support, advanced settings.
+ * Profile — identity, devices, how this device helps the network, storage,
+ * advanced settings.
  * Replaces the old Settings tab (which now redirects here).
  */
 import { useCallback, useEffect, useState } from 'react'
@@ -15,7 +16,7 @@ import {
   TextInput,
   View,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { Redirect, useLocalSearchParams, useRouter } from 'expo-router'
 import * as Clipboard from 'expo-clipboard'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
@@ -26,6 +27,15 @@ import { useApp, colors } from './_layout'
 import { GlassCard, SectionHeader } from '@/components/primitives'
 import { fonts } from '@/lib/typography'
 import * as haptics from '@/lib/haptics'
+import { useDeveloperMode } from '@/lib/developer-mode'
+import { canShowIdentityTools, developerModeDestination } from '@/lib/developer-mode-routes'
+import {
+  ensurePersonalEncryption,
+  generatePersonalSecretHex,
+  persistPersonalSecret,
+  readPersonalSecretRecord,
+} from '@/lib/personal-encryption'
+import { hasSecureVault } from '@/lib/secure-storage'
 import {
   buildStorageLimitConfirmationCopy,
   runStorageLimitChange,
@@ -33,6 +43,14 @@ import {
   type StorageCategoryStats,
   type StorageLimitPreview,
 } from '@/lib/storage-operability.js'
+import { useDeviceConditionsReporter, useNetworkPolicy, useParticipationStatus } from '@/hooks/useNetworkPolicy'
+import {
+  PARTICIPATION_MODE_OPTIONS,
+  PARTICIPATION_STATE_COPY,
+  PARTICIPATION_UNAVAILABLE_COPY,
+  participationReasonCopy,
+  type ParticipationMode,
+} from '@/lib/network-policy'
 
 interface StorageStats extends StorageCategoryStats {
   usedBytes: number
@@ -50,19 +68,6 @@ interface StorageStats extends StorageCategoryStats {
   untrackedStorageGB?: string
 }
 
-interface ArchiveParticipationStatus {
-  success: boolean
-  enabled: boolean
-  capacityBytes: number
-  maxRequestBytes: number
-  reservedBytes: number
-  availableBytes: number
-  acceptedRequests: number
-  receivedPledges: number
-  acceptancePermille: number
-  errorCode?: string | null
-}
-
 interface TranscodeSettings {
   videoToolboxDecodeEnabled: boolean
   videoToolboxDecodeLocked?: boolean
@@ -74,20 +79,34 @@ interface TranscodeSettings {
   videoToolboxHwMapSource?: string
 }
 
-function formatArchiveBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 GB'
-  const gib = bytes / GIB
-  return `${gib >= 10 ? gib.toFixed(0) : gib.toFixed(1)} GB`
+/** A device authorized to replicate this viewer's encrypted personal store. */
+interface PersonalDevice {
+  keyHex?: string
+  deviceName?: string
+  addedAt?: number
+  self?: boolean
 }
 
-/** Network-support presets are cache budgets — the knob that actually feeds peers. */
-const SUPPORT_PRESETS: Array<{ label: string; gb: number; blurb: string }> = [
-  { label: 'Light', gb: 5, blurb: 'Host a little for the network' },
-  { label: 'Balanced', gb: 20, blurb: 'A solid contribution' },
-  { label: 'Generous', gb: 50, blurb: 'Keep lots of videos alive' },
-]
-
+/**
+ * There is exactly one contribution choice on this screen: the participation
+ * mode. The old Light/Balanced/Generous cache presets wrote the same seeding
+ * budget the mode now decides, so two controls disagreed about how much this
+ * device helps. The exact byte ceiling stays available to operators in
+ * Developer Settings and in the developer-gated field on the storage card.
+ */
 const GIB = 1024 ** 3
+
+/** Personal-store invites are single-use; the backend clamps anything longer. */
+const PERSONAL_INVITE_TTL_MS = 5 * 60 * 1000
+
+/**
+ * The one revoke failure where the new encrypted epoch is already recorded and
+ * a restart reopens it, so the key this device just supplied has to stay. Every
+ * other refusal — including `personal-revoke-failed` and
+ * `personal-epoch-unavailable` — is raised with nothing written, and the
+ * pre-rotation key is still the live one.
+ */
+const ROTATION_ALREADY_RECORDED = 'personal-revoke-incomplete'
 
 function notify(title: string, message?: string) {
   if (Platform.OS === 'web') {
@@ -123,6 +142,8 @@ function requestStorageLimitConfirmation(title: string, message: string): Promis
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
+  const params = useLocalSearchParams<{ developer?: string }>()
+  const developerMode = useDeveloperMode()
   const { identity, createIdentity, rpc, loadIdentity } = useApp()
 
   const [newName, setNewName] = useState('')
@@ -137,19 +158,25 @@ export default function ProfileScreen() {
   const [customStorageLimit, setCustomStorageLimit] = useState('')
   const [storageLimitSaving, setStorageLimitSaving] = useState(false)
   const [clearingCache, setClearingCache] = useState(false)
-  const [archiveParticipation, setArchiveParticipation] = useState<ArchiveParticipationStatus | null>(null)
-  const [archiveParticipationSaving, setArchiveParticipationSaving] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [developerModeError, setDeveloperModeError] = useState<string | null>(null)
 
-  // Devices
-  const [devices, setDevices] = useState<any[]>([])
+  // Personal-store devices. This is the viewer's own encrypted watch state and
+  // library — deliberately not publisher-channel pairing, which lives in
+  // Studio behind Developer Mode and never appears on this screen.
+  const [devices, setDevices] = useState<PersonalDevice[]>([])
   const [devicesLoading, setDevicesLoading] = useState(false)
   const [inviteCode, setInviteCode] = useState<string | null>(null)
+  const [inviteExpiresAt, setInviteExpiresAt] = useState<number | null>(null)
   const [inviteLoading, setInviteLoading] = useState(false)
   const [pairInviteCode, setPairInviteCode] = useState('')
   const [pairDeviceName, setPairDeviceName] = useState('')
   const [pairing, setPairing] = useState(false)
   const [showPairForm, setShowPairForm] = useState(false)
+  const [revokingKey, setRevokingKey] = useState<string | null>(null)
+  // null while the vault probe is in flight; false means "no vault on this device".
+  const [vaultAvailable, setVaultAvailable] = useState<boolean | null>(null)
+  const personalOwner = identity?.publicKey || null
 
   const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
   const canManageTranscodeSettings = isPear && typeof (rpc as any)?.getTranscodeSettings === 'function'
@@ -159,6 +186,20 @@ export default function ProfileScreen() {
   const [swarmStatus, setSwarmStatus] = useState<any | null>(null)
   const [seedingStatus, setSeedingStatus] = useState<any | null>(null)
   const [archiveOperatorStatus, setArchiveOperatorStatus] = useState<ArchiveOperatorStatus | null>(null)
+  const diagnosticsDestination = developerModeDestination(developerMode.enabled, '/profile?developer=diagnostics')
+  const showIdentityTools = canShowIdentityTools(developerMode.enabled)
+
+  // The contribution choice and its live state both come from the backend. The
+  // screen only picks a mode and renders what the resource policy reports; it
+  // never decides locally whether this device is eligible or uploading.
+  const networkPolicy = useNetworkPolicy(rpc)
+  const participation = useParticipationStatus(rpc)
+  // The status below is only as truthful as the signals the backend holds, and
+  // the desktop shell has its own root layout, so the card reports this
+  // device's OS signals for as long as it is on screen. The reporter is shared
+  // per backend connection, so mounting it here as well costs nothing.
+  useDeviceConditionsReporter(rpc)
+  const [participationSaving, setParticipationSaving] = useState(false)
 
 
   const loadStorageStats = useCallback(async () => {
@@ -173,19 +214,6 @@ export default function ProfileScreen() {
   }, [rpc])
 
   useEffect(() => { loadStorageStats() }, [loadStorageStats])
-
-  const loadArchiveParticipation = useCallback(async () => {
-    if (!rpc || typeof rpc.getArchiveParticipation !== 'function') return
-    try {
-      const status = await rpc.getArchiveParticipation()
-      setArchiveParticipation(status || null)
-    } catch (err) {
-      console.error('[Profile] Failed to load archive participation:', err)
-      setArchiveParticipation(null)
-    }
-  }, [rpc])
-
-  useEffect(() => { loadArchiveParticipation() }, [loadArchiveParticipation])
 
   const loadDiagnostics = useCallback(async () => {
     if (!rpc) return
@@ -206,22 +234,40 @@ export default function ProfileScreen() {
     }
   }, [rpc])
 
-  useEffect(() => { if (advancedOpen) loadDiagnostics() }, [advancedOpen, loadDiagnostics])
+  useEffect(() => {
+    if (!developerMode.enabled) setAdvancedOpen(false)
+    if (developerMode.enabled && params.developer === 'diagnostics') setAdvancedOpen(true)
+  }, [developerMode.enabled, params.developer])
 
-  const loadDevices = useCallback(async () => {
-    if (!rpc || !identity?.driveKey) return
+  useEffect(() => {
+    if (developerMode.enabled && advancedOpen) loadDiagnostics()
+  }, [advancedOpen, developerMode.enabled, loadDiagnostics])
+
+  // Linking moves a 32-byte store key onto this device. With no OS vault to
+  // hold it, this device stays device-local instead of quietly writing the key
+  // to a plaintext file, so the controls below are disabled and say why.
+  useEffect(() => {
+    let cancelled = false
+    hasSecureVault()
+      .then((available) => { if (!cancelled) setVaultAvailable(available) })
+      .catch(() => { if (!cancelled) setVaultAvailable(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  const loadPersonalDevices = useCallback(async () => {
+    if (typeof rpc?.listPersonalDevices !== 'function') return
     setDevicesLoading(true)
     try {
-      const res = await (rpc as any).listDevices(identity.driveKey)
-      setDevices(res?.devices || [])
-    } catch (err) {
-      console.error('[Profile] Failed to load devices:', err)
+      const res = await rpc.listPersonalDevices()
+      setDevices(res?.success === false ? [] : (res?.devices || []))
+    } catch (err: unknown) {
+      console.error('[Profile] Failed to load paired devices:', err instanceof Error ? err.message : err)
     } finally {
       setDevicesLoading(false)
     }
-  }, [rpc, identity?.driveKey])
+  }, [rpc])
 
-  useEffect(() => { loadDevices() }, [loadDevices])
+  useEffect(() => { loadPersonalDevices() }, [loadPersonalDevices])
 
   const loadTranscodeSettings = useCallback(async () => {
     if (!canManageTranscodeSettings) return
@@ -255,49 +301,120 @@ export default function ProfileScreen() {
     }
   }
 
-  const createInvite = async () => {
-    if (!rpc || !identity?.driveKey) return
+  const createPersonalInvite = async () => {
+    if (!rpc || vaultAvailable !== true) return
     setInviteLoading(true)
     try {
-      const res = await (rpc as any).createDeviceInvite(identity.driveKey)
-      if (res?.inviteCode) {
-        setInviteCode(res.inviteCode)
-        haptics.success()
-      }
-    } catch (err: any) {
-      console.error('[Profile] Failed to create invite:', err)
-      notify('Error', err?.message || 'Failed to create invite')
+      const res = await rpc.createPersonalDeviceInvite({ expiresInMs: PERSONAL_INVITE_TTL_MS })
+      if (!res?.success || !res?.inviteCode) throw new Error(res?.error || 'Failed to create invite')
+      setInviteCode(res.inviteCode)
+      setInviteExpiresAt(typeof res.expiresAt === 'number' ? res.expiresAt : null)
+      haptics.success()
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to create invite'
+      console.error('[Profile] Failed to create device invite:', message)
+      notify('Error', message)
     } finally {
       setInviteLoading(false)
     }
   }
 
-  const pairDevice = async () => {
-    if (!rpc) return
+  const linkThisDevice = async () => {
+    if (!rpc || vaultAvailable !== true) return
     const code = pairInviteCode.trim()
     if (!code) return
     setPairing(true)
     try {
-      const res = await (rpc as any).pairDevice({
+      const res = await rpc.redeemPersonalDeviceInvite({
         inviteCode: code,
         deviceName: pairDeviceName.trim() || undefined,
       })
-      if (res?.success) {
-        setPairInviteCode('')
-        setPairDeviceName('')
-        setShowPairForm(false)
-        haptics.success()
-        notify('Linked', 'This device is now part of your channel.')
-        await loadDevices()
-      } else {
-        throw new Error('Pair failed')
-      }
-    } catch (err: any) {
-      console.error('[Profile] Pair device failed:', err)
-      notify('Error', err?.message || 'Failed to link device')
+      if (!res?.success || !res?.secret) throw new Error(res?.error || 'Failed to link this device')
+      // The one response in the protocol that carries the store key. Persist it
+      // durably before anything opens the store, then drop the response copy.
+      // JS strings cannot be zeroed, so the discipline is: never render it,
+      // never log it, never hold a reference past this block.
+      await persistPersonalSecret(res.secret, {
+        publicKey: personalOwner,
+        bootstrapKey: res.bootstrapKey,
+      })
+      res.secret = ''
+      await ensurePersonalEncryption(rpc, personalOwner, { force: true, required: true })
+      setPairInviteCode('')
+      setPairDeviceName('')
+      setShowPairForm(false)
+      haptics.success()
+      notify('Device linked', 'Your watch state and library now sync between your linked devices.')
+      await loadPersonalDevices()
+    } catch (err: unknown) {
+      // Only the block above ever holds the store key; error text never does.
+      const message = err instanceof Error ? err.message : 'Failed to link this device'
+      console.error('[Profile] Failed to link device:', message)
+      notify('Error', message)
     } finally {
       setPairing(false)
     }
+  }
+
+  const unlinkDevice = (device: PersonalDevice) => {
+    const keyHex = String(device?.keyHex || '')
+    if (!rpc || !keyHex || vaultAvailable !== true) return
+    confirmDestructive(
+      'Unlink this device?',
+      'Your other devices move to a new key and keep syncing; each of them has to be linked again. The unlinked device stops receiving updates, but everything it already read stays on it — unlinking cannot take that back.',
+      'Unlink',
+      async () => {
+        setRevokingKey(keyHex)
+        try {
+          // Forward-only rotation: this device mints the next epoch key, and the
+          // backend opens a new encrypted store with it. The old key is dead the
+          // moment the backend rotates, so the new one has to be in the vault
+          // before the request goes out — not after the response comes back. The
+          // pre-rotation key rides along as the startup fallback for the one
+          // outcome where the epoch is recorded but never activated.
+          const previous = await readPersonalSecretRecord(personalOwner)
+          const secret = generatePersonalSecretHex()
+          await persistPersonalSecret(secret, { publicKey: personalOwner, previousSecret: previous?.secret })
+
+          const res = await rpc.revokePersonalDevice({
+            keyHex,
+            secret,
+            deviceName: device?.deviceName || undefined,
+          })
+          if (!res?.success) {
+            if (res?.error === ROTATION_ALREADY_RECORDED) {
+              // The new epoch is already recorded and a restart reopens it, so
+              // restoring the old key here would leave this device unable to
+              // unwrap its own store. The new one stays.
+              notify(
+                'Unlink did not finish',
+                'The new key is saved on this device. Restart PearTube and unlink again — your library may take a moment to reopen.',
+              )
+              return
+            }
+            // Every other refusal is raised before anything is written, so the
+            // previous key is still the live one and has to go back.
+            if (previous) await persistPersonalSecret(previous.secret, { publicKey: personalOwner, bootstrapKey: previous.bootstrapKey })
+            throw new Error(res?.error || 'Failed to unlink device')
+          }
+
+          await persistPersonalSecret(secret, { publicKey: personalOwner, bootstrapKey: res.bootstrapKey })
+          await ensurePersonalEncryption(rpc, personalOwner, { force: true, required: true })
+          haptics.success()
+          notify(
+            'Device unlinked',
+            'Future state stays on this device. Every device you keep has to be linked again before it syncs.',
+          )
+          await loadPersonalDevices()
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Failed to unlink device'
+          console.error('[Profile] Failed to unlink device:', message)
+          notify('Error', message)
+        } finally {
+          setRevokingKey(null)
+        }
+      },
+    )
   }
 
   const applyStorageLimit = async (boundedLimit: number) => {
@@ -354,28 +471,22 @@ export default function ProfileScreen() {
     await handleStorageLimitChange(parsed)
   }
 
-  const handleArchiveParticipationChange = async (enabled: boolean) => {
-    if (!rpc || typeof rpc.setArchiveParticipation !== 'function' || archiveParticipationSaving) return
-    const defaultCapacity = Math.max(GIB, Math.min(storageStats?.maxBytes || (5 * GIB), 5 * GIB))
-    const capacityBytes = archiveParticipation?.capacityBytes || defaultCapacity
-    const maxRequestBytes = Math.min(archiveParticipation?.maxRequestBytes || capacityBytes, capacityBytes)
-    const acceptancePermille = archiveParticipation?.acceptancePermille ?? 250
-    setArchiveParticipationSaving(true)
+  /**
+   * Record the viewer's choice and re-read the backend. The new ceilings and
+   * the new contribution state are both the backend's answer, so nothing here
+   * predicts them: the card keeps showing the previous reported state until the
+   * policy has actually been re-read. `update` reports a rejected save through
+   * `networkPolicy.error`, so there is no success signal to fire here.
+   */
+  const handleParticipationModeChange = async (participationMode: ParticipationMode) => {
+    if (!rpc || participationSaving) return
+    setParticipationSaving(true)
     try {
-      const status = await rpc.setArchiveParticipation({
-        enabled,
-        capacityBytes,
-        maxRequestBytes,
-        acceptancePermille,
-      })
-      if (!status?.success) throw new Error(status?.errorCode || 'Archive participation is unavailable')
-      setArchiveParticipation(status)
-      haptics.success()
-    } catch (err: unknown) {
-      notify('Archive setting not changed', err instanceof Error ? err.message : 'The backend rejected this setting.')
-      await loadArchiveParticipation()
+      await networkPolicy.update({ participationMode })
+      await participation.reload()
+      await loadStorageStats()
     } finally {
-      setArchiveParticipationSaving(false)
+      setParticipationSaving(false)
     }
   }
 
@@ -492,6 +603,15 @@ export default function ProfileScreen() {
     }
   }
 
+  const handleDeveloperModeChange = async (enabled: boolean) => {
+    setDeveloperModeError(null)
+    try {
+      await developerMode.setEnabled(enabled)
+    } catch {
+      setDeveloperModeError('Unable to update Developer Mode locally. Please try again.')
+    }
+  }
+
 
   // The budget tracks cache fetched from the network (seeded content). The
   // user's own uploads live in the same store but are never charged against
@@ -510,6 +630,38 @@ export default function ProfileScreen() {
     </View>
   )
 
+  const developerModeCard = (
+    <>
+      <SectionHeader title="Developer Mode" subtitle="Local operator tools for this device" />
+      <GlassCard style={styles.sectionCard}>
+        <View style={styles.switchRow}>
+          <View style={{ flex: 1, paddingRight: 12 }}>
+            <Text style={styles.cardTitle}>Developer Mode</Text>
+            <Text style={styles.cardMeta}>Shows publishing and network administration tools locally. It does not grant publishing permission.</Text>
+          </View>
+          <NativeSwitch
+            value={developerMode.enabled}
+            disabled={developerMode.isLoading}
+            onValueChange={(enabled: boolean) => { void handleDeveloperModeChange(enabled) }}
+            trackColor={{ false: colors.border, true: colors.primary }}
+            thumbColor={colors.text}
+          />
+        </View>
+        {developerModeError ? <Text accessibilityRole="alert" style={styles.developerModeError}>{developerModeError}</Text> : null}
+        {developerMode.enabled ? (
+          <Pressable onPress={() => router.push('/developer-settings')} style={styles.secondaryButton} accessibilityRole="button">
+            <Feather name="tool" size={15} color={colors.text} />
+            <Text style={styles.secondaryLabel}>Open Developer Settings</Text>
+          </Pressable>
+        ) : null}
+      </GlassCard>
+    </>
+  )
+
+  if (!developerMode.isLoading && params.developer && diagnosticsDestination) {
+    return <Redirect href={diagnosticsDestination as any} />
+  }
+
   // ---------- Onboarding (no identity yet) ----------
   if (!identity) {
     return (
@@ -521,6 +673,7 @@ export default function ProfileScreen() {
             <Text style={styles.heroSubtitle}>Video, peer to peer. No servers, no accounts.</Text>
           </View>
 
+          {showIdentityTools && <>
           <SectionHeader title="Start a channel" subtitle="Your channel lives on your devices" />
           <GlassCard highlight style={styles.sectionCard}>
             <TextInput
@@ -545,62 +698,20 @@ export default function ProfileScreen() {
             </Pressable>
           </GlassCard>
 
-          <SectionHeader title="Already have a channel?" subtitle="Link this device with an invite code" />
-          <GlassCard style={styles.sectionCard}>
-            <TextInput
-              placeholder="Paste invite code"
-              value={pairInviteCode}
-              onChangeText={setPairInviteCode}
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              style={styles.input}
-            />
-            <TextInput
-              placeholder="Device name (optional)"
-              value={pairDeviceName}
-              onChangeText={setPairDeviceName}
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              style={styles.input}
-            />
-            <Pressable
-              onPress={async () => { await pairDevice(); await loadIdentity() }}
-              disabled={pairing || !pairInviteCode.trim()}
-              style={[styles.secondaryButton, (pairing || !pairInviteCode.trim()) && { opacity: 0.4 }]}
-            >
-              {pairing ? <ActivityIndicator size="small" color={colors.text} /> : (
-                <>
-                  <Feather name="link" size={15} color={colors.text} />
-                  <Text style={styles.secondaryLabel}>Link this device</Text>
-                </>
-              )}
-            </Pressable>
-          </GlassCard>
-
           <SectionHeader title="Restore a channel" subtitle="Recover with your 12-word phrase" />
           {renderRestoreCard()}
+          </>}
 
-          <SectionHeader title="Network cache" subtitle="Works even without a channel" />
+          {renderPersonalDevicesCard()}
+
+          {renderPrivacyCard()}
+
+          {renderParticipationCard()}
+
+          <SectionHeader title="Storage used for sharing" subtitle="Works even without a channel" />
           {renderStorageCard()}
 
-          <SectionHeader title="Diagnostics" subtitle="Swarm, storage, and seeding state" />
-          <GlassCard padded={false} style={styles.sectionCard}>
-            <Pressable onPress={() => setAdvancedOpen((v) => !v)} style={styles.advancedToggle}>
-              <Feather name="terminal" size={15} color={colors.textMuted} />
-              <Text style={styles.advancedLabel}>Network diagnostics</Text>
-              <Feather name={advancedOpen ? 'chevron-up' : 'chevron-down'} size={17} color={colors.textMuted} />
-            </Pressable>
-            {advancedOpen && (
-              <DiagnosticsPanel
-                swarmStatus={swarmStatus}
-                storageStats={storageStats}
-                seedingStatus={seedingStatus}
-                operatorStatus={archiveOperatorStatus}
-                loading={diagnosticsLoading}
-                onRefresh={loadDiagnostics}
-              />
-            )}
-          </GlassCard>
+          {developerModeCard}
         </ScrollView>
       </View>
     )
@@ -665,9 +776,292 @@ export default function ProfileScreen() {
     )
   }
 
+  function renderPersonalDevicesCard() {
+    const vaultReady = vaultAvailable === true
+    return (
+      <>
+        <SectionHeader title="Your devices" subtitle="Sync your watch state and library to devices you link" />
+        <GlassCard style={styles.sectionCard}>
+          {devices.length ? (
+            <View style={{ gap: 8, marginBottom: 12 }}>
+              {devices.map((device, idx) => {
+                const keyHex = String(device?.keyHex || '')
+                const isSelf = device?.self === true
+                const busy = revokingKey === keyHex
+                return (
+                  <View key={keyHex || idx} style={styles.deviceRow}>
+                    <Feather name="smartphone" size={16} color={colors.textSecondary} />
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={styles.deviceName}>
+                        {device?.deviceName || (isSelf ? 'This device' : `Device ${idx + 1}`)}
+                      </Text>
+                      <Text style={styles.deviceKey} numberOfLines={1}>{keyHex}</Text>
+                    </View>
+                    {isSelf || !vaultReady ? null : (
+                      <Pressable
+                        onPress={() => unlinkDevice(device)}
+                        disabled={busy}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Unlink ${device?.deviceName || 'device'}`}
+                        style={[styles.ghostButton, { marginTop: 0 }, busy && { opacity: 0.5 }]}
+                      >
+                        <Feather name="x-circle" size={14} color={colors.textMuted} />
+                        <Text style={styles.ghostLabel}>{busy ? 'Unlinking…' : 'Unlink'}</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                )
+              })}
+            </View>
+          ) : (
+            <Text style={[styles.cardMeta, { marginBottom: 12 }]}>
+              {devicesLoading ? 'Checking linked devices…' : 'Only this device holds your watch state and library.'}
+            </Text>
+          )}
+
+          {vaultAvailable === false ? (
+            <Text style={styles.cardMeta}>
+              This device has no secure keychain that will hold a key for us, so it cannot hold the
+              one that encrypts your personal store. Nothing is written to an encrypted store here
+              and nothing syncs: your watch state, library, and recommendations stay on this device.
+              Linking is turned off instead of keeping the key in plain text beside the data it
+              protects.
+            </Text>
+          ) : (
+            <>
+              {inviteCode ? (
+                <View style={styles.inviteBox}>
+                  <Text style={styles.inviteLabel}>
+                    Single-use code — enter it on your other device within 5 minutes
+                    {inviteExpiresAt ? ` (by ${new Date(inviteExpiresAt).toLocaleTimeString()})` : ''}
+                  </Text>
+                  <Text style={styles.inviteCode} selectable>{inviteCode}</Text>
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                    <Pressable onPress={() => copyToClipboard(inviteCode, 'Invite code')} style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}>
+                      <Feather name="copy" size={14} color={colors.text} />
+                      <Text style={styles.secondaryLabel}>Copy</Text>
+                    </Pressable>
+                    <Pressable onPress={() => shareInviteCode(inviteCode)} style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}>
+                      <Feather name="share-2" size={14} color={colors.text} />
+                      <Text style={styles.secondaryLabel}>Share</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : null}
+
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <Pressable
+                  onPress={createPersonalInvite}
+                  disabled={inviteLoading || !vaultReady}
+                  style={[styles.primaryButton, { flex: 1 }, (inviteLoading || !vaultReady) && { opacity: 0.6 }]}
+                  accessibilityRole="button"
+                >
+                  {inviteLoading ? <ActivityIndicator size="small" color={colors.onPrimary} /> : (
+                    <>
+                      <Feather name="plus" size={15} color={colors.onPrimary} />
+                      <Text style={styles.primaryLabel}>Link a device</Text>
+                    </>
+                  )}
+                </Pressable>
+                <Pressable
+                  onPress={() => setShowPairForm((v) => !v)}
+                  disabled={!vaultReady}
+                  style={[styles.secondaryButton, { flex: 1, marginTop: 0 }, !vaultReady && { opacity: 0.4 }]}
+                  accessibilityRole="button"
+                >
+                  <Feather name="key" size={14} color={colors.text} />
+                  <Text style={styles.secondaryLabel}>Enter code</Text>
+                </Pressable>
+              </View>
+
+              {showPairForm && (
+                <View style={{ marginTop: 12 }}>
+                  <TextInput
+                    placeholder="Paste invite code"
+                    value={pairInviteCode}
+                    onChangeText={setPairInviteCode}
+                    placeholderTextColor={colors.textMuted}
+                    autoCapitalize="none"
+                    style={styles.input}
+                  />
+                  <TextInput
+                    placeholder="Device name (optional)"
+                    value={pairDeviceName}
+                    onChangeText={setPairDeviceName}
+                    placeholderTextColor={colors.textMuted}
+                    autoCapitalize="none"
+                    style={styles.input}
+                  />
+                  <Pressable
+                    onPress={linkThisDevice}
+                    disabled={pairing || !pairInviteCode.trim() || !vaultReady}
+                    style={[styles.secondaryButton, (pairing || !pairInviteCode.trim() || !vaultReady) && { opacity: 0.4 }]}
+                  >
+                    {pairing ? (
+                      <>
+                        <ActivityIndicator size="small" color={colors.text} />
+                        <Text style={styles.secondaryLabel}>Linking…</Text>
+                      </>
+                    ) : (
+                      <Text style={styles.secondaryLabel}>Link with this code</Text>
+                    )}
+                  </Pressable>
+                  {pairing ? (
+                    <Text style={[styles.cardMeta, { marginTop: 8 }]}>
+                      Finding your other device over the peer network. This usually takes a few
+                      seconds and can take up to a minute — keep both devices online.
+                    </Text>
+                  ) : null}
+                </View>
+              )}
+            </>
+          )}
+        </GlassCard>
+      </>
+    )
+  }
+
+  function renderPrivacyCard() {
+    return (
+      <>
+        <SectionHeader title="Privacy" subtitle="What stays here, and what other machines see" />
+        <GlassCard style={styles.sectionCard}>
+          <Text style={styles.cardTitle}>Your viewing stays on your devices</Text>
+          <Text style={styles.cardMeta}>
+            Watch position, completion, your library, and your recommendations are worked out
+            on this device. PearTube collects no viewing analytics and runs no view counter.
+            This state reaches another machine only if you link a device above.
+          </Text>
+          {vaultAvailable === false ? (
+            <Text style={styles.cardMeta}>
+              This device has no secure keychain, so there is no key to encrypt a personal store
+              with and none is opened here. Anything that needs one stays unavailable rather than
+              being stored unprotected.
+            </Text>
+          ) : (
+            <Text style={styles.cardMeta}>
+              It is stored in a personal store encrypted with a key that never leaves this
+              device&apos;s keychain.
+            </Text>
+          )}
+
+          <Text style={[styles.cardTitle, { marginTop: 14 }]}>Peers see your address and requests</Text>
+          <Text style={styles.cardMeta}>
+            Playback is peer-to-peer. The peers you swarm with see your IP address and the
+            topics and byte ranges you ask for. That is how the transfer works and PearTube
+            cannot hide it, so this is not anonymous browsing.
+          </Text>
+
+          <Text style={[styles.cardTitle, { marginTop: 14 }]}>Unlinking works forward only</Text>
+          <Text style={styles.cardMeta}>
+            Unlinking a device rotates your key so that device receives nothing further. It
+            cannot erase what that device already read, and it cannot reach copies already
+            made from it.
+          </Text>
+        </GlassCard>
+      </>
+    )
+  }
+
+  /**
+   * The one contribution control a normal viewer sees. It writes a mode and
+   * renders `getParticipationStatus`; it never evaluates a gate itself, so it
+   * cannot claim this device is helping when the backend says it is suspended.
+   */
+  function renderParticipationCard() {
+    const selectedMode = networkPolicy.policy?.participationMode ?? null
+    const status = participation.status
+    const stateCopy = status ? PARTICIPATION_STATE_COPY[status.state] : null
+    const stateColor = !status
+      ? colors.textMuted
+      : status.state === 'uploading' ? colors.success
+      : status.state === 'eligible' ? colors.swarm
+      : colors.warning
+    const busy = participationSaving || networkPolicy.saving
+    const locked = busy || !networkPolicy.policy
+    return (
+      <>
+        <SectionHeader title="How you help" subtitle="Sharing what you have watched keeps it reachable for other viewers" />
+        <GlassCard style={styles.sectionCard}>
+          <View style={styles.participationStateRow}>
+            <View style={[styles.participationDot, { backgroundColor: stateColor }]} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.cardTitle}>
+                {stateCopy ? stateCopy.label : participation.loading ? 'Checking…' : 'Contribution status unavailable'}
+              </Text>
+              <Text style={styles.cardMeta}>
+                {stateCopy
+                  ? stateCopy.detail
+                  : participation.loading
+                    ? 'Reading this device\u2019s contribution state.'
+                    : 'This device could not read its contribution state, so it is not reporting one.'}
+              </Text>
+            </View>
+          </View>
+
+          {status && (status.errorCode || status.reasonCodes.length > 0) ? (
+            <View style={styles.participationReasons}>
+              {status.errorCode ? (
+                <Text style={styles.participationReason}>{`\u2022  ${PARTICIPATION_UNAVAILABLE_COPY}`}</Text>
+              ) : null}
+              {status.reasonCodes.map((code) => (
+                <Text key={code} style={styles.participationReason}>{`\u2022  ${participationReasonCopy(code)}`}</Text>
+              ))}
+            </View>
+          ) : null}
+
+          {!status && participation.error ? (
+            <View style={styles.participationReasons}>
+              <Text style={styles.participationReason}>{participation.error}</Text>
+            </View>
+          ) : null}
+
+          <View style={styles.participationModes} accessibilityRole="radiogroup">
+            {PARTICIPATION_MODE_OPTIONS.map((option) => {
+              const selected = selectedMode === option.value
+              return (
+                <Pressable
+                  key={option.value}
+                  onPress={() => { void handleParticipationModeChange(option.value) }}
+                  disabled={locked}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected, disabled: locked }}
+                  style={[
+                    styles.participationMode,
+                    selected && styles.participationModeSelected,
+                    locked && { opacity: 0.7 },
+                  ]}
+                >
+                  <View style={styles.participationModeHeader}>
+                    <Text style={[styles.participationModeLabel, selected && { color: colors.onPrimary }]}>{option.label}</Text>
+                    {selected ? <Feather name="check" size={15} color={colors.onPrimary} /> : null}
+                  </View>
+                  <Text style={[styles.participationModeDetail, selected && { color: colors.onPrimary, opacity: 0.85 }]}>
+                    {option.detail}
+                  </Text>
+                </Pressable>
+              )
+            })}
+          </View>
+
+          {networkPolicy.error ? (
+            <Text accessibilityRole="alert" style={styles.developerModeError}>{networkPolicy.error}</Text>
+          ) : null}
+
+          <Text style={styles.participationFootnote}>
+            When your system reports that this device is warm, low on battery, low on storage, on a
+            metered connection, or not allowed to work in the background, it stops on its own. Where
+            it cannot read one of those signals it keeps background sharing off rather than guess.
+            Helping is best effort: nothing here promises a video stays online, and none of these
+            choices creates an archive pledge.
+          </Text>
+        </GlassCard>
+      </>
+    )
+  }
+
   // ---------- Authenticated profile ----------
   function renderStorageCard() {
-    const currentGB = storageStats?.maxGB ?? null
     return (
       <GlassCard style={styles.sectionCard}>
         <View style={styles.storageHeader}>
@@ -712,41 +1106,40 @@ export default function ProfileScreen() {
 
         <StorageOperabilityDetails stats={storageStats} preview={storageLimitPreview} />
 
-        <View style={styles.presetRow}>
-          {SUPPORT_PRESETS.map((preset) => {
-            const selected = currentGB === preset.gb
-            return (
-              <Pressable
-                key={preset.label}
-                onPress={() => handleStorageLimitChange(preset.gb)}
-                disabled={storageLimitSaving}
-                style={[styles.preset, selected && styles.presetSelected, storageLimitSaving && { opacity: 0.7 }]}
-              >
-                <Text style={[styles.presetLabel, selected && { color: colors.onPrimary }]}>{preset.label}</Text>
-                <Text style={[styles.presetGb, selected && { color: colors.onPrimary, opacity: 0.8 }]}>{preset.gb} GB</Text>
-              </Pressable>
-            )
-          })}
-        </View>
+        <Text style={styles.cardMeta}>
+          Your sharing choice above sets this budget, unless a different one has been set in
+          Developer Settings. Cached video is evicted to stay inside it.
+        </Text>
 
-        <View style={styles.customRow}>
-          <TextInput
-            value={customStorageLimit}
-            onChangeText={setCustomStorageLimit}
-            onSubmitEditing={handleCustomStorageLimitApply}
-            keyboardType="numeric"
-            placeholder="Custom GB"
-            placeholderTextColor={colors.textMuted}
-            style={[styles.input, { flex: 1, marginBottom: 0 }]}
-          />
-          <Pressable
-            onPress={handleCustomStorageLimitApply}
-            disabled={storageLimitSaving}
-            style={[styles.secondaryButton, { marginTop: 0, paddingHorizontal: 16 }, storageLimitSaving && { opacity: 0.7 }]}
-          >
-            <Text style={styles.secondaryLabel}>{storageLimitSaving ? 'Saving…' : 'Set'}</Text>
-          </Pressable>
-        </View>
+        {developerMode.enabled ? (
+          <View style={styles.developerLimitBlock}>
+            <Text style={styles.advancedFieldLabel}>Cache budget override (GB)</Text>
+            <Text style={styles.cardMeta}>
+              The same disk ceiling Developer Settings › Network policy edits. Set it to anything other
+              than the sharing choice's own value and it stops following that choice in either
+              direction; set it back and it follows again. Lowering it previews and confirms eviction
+              before anything is removed.
+            </Text>
+            <View style={[styles.customRow, { marginTop: 10 }]}>
+              <TextInput
+                value={customStorageLimit}
+                onChangeText={setCustomStorageLimit}
+                onSubmitEditing={handleCustomStorageLimitApply}
+                keyboardType="numeric"
+                placeholder="Custom GB"
+                placeholderTextColor={colors.textMuted}
+                style={[styles.input, { flex: 1, marginBottom: 0 }]}
+              />
+              <Pressable
+                onPress={handleCustomStorageLimitApply}
+                disabled={storageLimitSaving}
+                style={[styles.secondaryButton, { marginTop: 0, paddingHorizontal: 16 }, storageLimitSaving && { opacity: 0.7 }]}
+              >
+                <Text style={styles.secondaryLabel}>{storageLimitSaving ? 'Saving…' : 'Set'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
 
         {storageStats && storageStats.pinnedCount > 0 ? (
           <Text style={styles.pinnedNote}>
@@ -754,36 +1147,6 @@ export default function ProfileScreen() {
             {'  '}{storageStats.pinnedCount} channel{storageStats.pinnedCount === 1 ? '' : 's'} kept online from your Library
           </Text>
         ) : null}
-
-        <View style={styles.archiveParticipation}>
-          <View style={styles.archiveParticipationCopy}>
-            <View style={styles.archiveTitleRow}>
-              <Feather name="archive" size={14} color={archiveParticipation?.enabled ? colors.swarm : colors.textMuted} />
-              <Text style={styles.archiveTitle}>Volunteer archive</Text>
-            </View>
-            <Text style={styles.archiveDescription}>
-              Randomly accept complete-copy requests from publishers. No allowlist or operator account required.
-            </Text>
-            <Text style={styles.archiveStatus}>
-              {typeof rpc?.getArchiveParticipation !== 'function'
-                ? 'Unavailable in this backend'
-                : !archiveParticipation
-                  ? 'Loading archive status…'
-                  : !archiveParticipation.success
-                    ? `Unavailable · ${archiveParticipation.errorCode || 'backend rejected status'}`
-                    : archiveParticipation.enabled
-                      ? `${formatArchiveBytes(archiveParticipation.reservedBytes)} pledged of ${formatArchiveBytes(archiveParticipation.capacityBytes)} · ${archiveParticipation.acceptedRequests} accepted`
-                      : 'Off · no new archive requests will be accepted'}
-            </Text>
-          </View>
-          <NativeSwitch
-            value={archiveParticipation?.enabled === true}
-            onValueChange={handleArchiveParticipationChange}
-            disabled={!archiveParticipation?.success || archiveParticipationSaving}
-            trackColor={{ false: colors.border, true: colors.primary }}
-            thumbColor={colors.text}
-          />
-        </View>
 
         <Pressable
           onPress={handleClearCache}
@@ -801,6 +1164,7 @@ export default function ProfileScreen() {
     <View style={styles.screen}>
       {header}
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 32 }} showsVerticalScrollIndicator={false}>
+        {showIdentityTools && <>
         {renderRecoveryPhraseCard()}
 
         {/* Identity */}
@@ -830,97 +1194,6 @@ export default function ProfileScreen() {
 
         </GlassCard>
 
-        {/* Devices */}
-        <SectionHeader title="Your devices" subtitle="One channel, synced across devices" />
-        <GlassCard style={styles.sectionCard}>
-          {devices?.length ? (
-            <View style={{ gap: 8, marginBottom: 12 }}>
-              {devices.map((d, idx) => (
-                <View key={`${d?.keyHex || idx}`} style={styles.deviceRow}>
-                  <Feather name="smartphone" size={16} color={colors.textSecondary} />
-                  <View style={{ flex: 1, marginLeft: 10 }}>
-                    <Text style={styles.deviceName}>{d?.deviceName || `Device ${idx + 1}`}</Text>
-                    <Text style={styles.deviceKey} numberOfLines={1}>{d?.keyHex || ''}</Text>
-                  </View>
-                </View>
-              ))}
-            </View>
-          ) : (
-            <Text style={[styles.cardMeta, { marginBottom: 12 }]}>
-              {devicesLoading ? 'Looking for linked devices…' : 'Just this device so far.'}
-            </Text>
-          )}
-
-          {inviteCode ? (
-            <View style={styles.inviteBox}>
-              <Text style={styles.inviteLabel}>Invite code — enter it on your other device</Text>
-              <Text style={styles.inviteCode} selectable>{inviteCode}</Text>
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-                <Pressable onPress={() => copyToClipboard(inviteCode, 'Invite code')} style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}>
-                  <Feather name="copy" size={14} color={colors.text} />
-                  <Text style={styles.secondaryLabel}>Copy</Text>
-                </Pressable>
-                <Pressable onPress={() => shareInviteCode(inviteCode)} style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}>
-                  <Feather name="share-2" size={14} color={colors.text} />
-                  <Text style={styles.secondaryLabel}>Share</Text>
-                </Pressable>
-              </View>
-            </View>
-          ) : null}
-
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <Pressable
-              onPress={createInvite}
-              disabled={inviteLoading}
-              style={[styles.primaryButton, { flex: 1 }, inviteLoading && { opacity: 0.8 }]}
-            >
-              {inviteLoading ? <ActivityIndicator size="small" color={colors.onPrimary} /> : (
-                <>
-                  <Feather name="plus" size={15} color={colors.onPrimary} />
-                  <Text style={styles.primaryLabel}>Link a device</Text>
-                </>
-              )}
-            </Pressable>
-            <Pressable
-              onPress={() => setShowPairForm((v) => !v)}
-              style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}
-            >
-              <Feather name="key" size={14} color={colors.text} />
-              <Text style={styles.secondaryLabel}>Enter code</Text>
-            </Pressable>
-          </View>
-
-          {showPairForm && (
-            <View style={{ marginTop: 12 }}>
-              <TextInput
-                placeholder="Paste invite code"
-                value={pairInviteCode}
-                onChangeText={setPairInviteCode}
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="none"
-                style={styles.input}
-              />
-              <TextInput
-                placeholder="Device name (optional)"
-                value={pairDeviceName}
-                onChangeText={setPairDeviceName}
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="none"
-                style={styles.input}
-              />
-              <Pressable
-                onPress={pairDevice}
-                disabled={pairing || !pairInviteCode.trim()}
-                style={[styles.secondaryButton, (pairing || !pairInviteCode.trim()) && { opacity: 0.4 }]}
-              >
-                {pairing ? <ActivityIndicator size="small" color={colors.text} /> : (
-                  <Text style={styles.secondaryLabel}>Link with this code</Text>
-                )}
-              </Pressable>
-            </View>
-          )}
-        </GlassCard>
-
         {/* Backup & recovery */}
         <SectionHeader title="Backup & recovery" subtitle="Restore a channel from its 12-word phrase" />
         {restoreOpen ? renderRestoreCard() : (
@@ -932,60 +1205,30 @@ export default function ProfileScreen() {
             </Pressable>
           </GlassCard>
         )}
+        </>}
 
-        <GlassCard padded={false} style={styles.sectionCard}>
-          <Pressable onPress={() => router.push('/maintenance')} style={styles.advancedToggle} accessibilityRole="button">
-            <Feather name="archive" size={15} color={colors.textMuted} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.advancedLabel}>Maintenance & portable backup</Text>
-              <Text style={styles.cardMeta}>Migration status, reports, export, and restore</Text>
-            </View>
-            <Feather name="chevron-right" size={17} color={colors.textMuted} />
-          </Pressable>
-        </GlassCard>
+        {renderPersonalDevicesCard()}
 
-        {/* Storage / network support */}
-        <SectionHeader title="Network support" subtitle="Cache space you donate to keep videos alive" />
+        {renderPrivacyCard()}
+
+        {renderParticipationCard()}
+
+        {/* What the sharing choice above is actually using on disk. */}
+        <SectionHeader title="Storage used for sharing" subtitle="Cache space this device is holding for other viewers" />
         {renderStorageCard()}
 
-        {/* Local trust and transfer policy */}
-        <SectionHeader title="Local policy" subtitle="Control what this device discovers, transfers, and trusts" />
-        <GlassCard padded={false} style={styles.sectionCard}>
-          <Pressable onPress={() => router.push('/network-policy')} style={styles.advancedToggle} accessibilityRole="button">
-            <Feather name="sliders" size={15} color={colors.textMuted} />
-            <Text style={styles.advancedLabel}>Network, storage & retention</Text>
-            <Feather name="chevron-right" size={17} color={colors.textMuted} />
-          </Pressable>
-          <Pressable
-            onPress={() => router.push('/subscriptions')}
-            style={[styles.advancedToggle, { borderTopWidth: 1, borderTopColor: colors.glassBorder }]}
-            accessibilityRole="button"
-          >
-            <Feather name="rss" size={15} color={colors.textMuted} />
-            <Text style={styles.advancedLabel}>Subscriptions & feed trust</Text>
-            <Feather name="chevron-right" size={17} color={colors.textMuted} />
-          </Pressable>
-          <Pressable
-            onPress={() => router.push('/moderation')}
-            style={[styles.advancedToggle, { borderTopWidth: 1, borderTopColor: colors.glassBorder }]}
-            accessibilityRole="button"
-          >
-            <Feather name="shield" size={15} color={colors.textMuted} />
-            <Text style={styles.advancedLabel}>Moderation & analysis</Text>
-            <Feather name="chevron-right" size={17} color={colors.textMuted} />
-          </Pressable>
-        </GlassCard>
+        {developerModeCard}
 
-        {/* Advanced */}
-        <SectionHeader title="Advanced" />
-        <GlassCard padded={false} style={styles.sectionCard}>
-          <Pressable onPress={() => setAdvancedOpen((v) => !v)} style={styles.advancedToggle}>
-            <Feather name="terminal" size={15} color={colors.textMuted} />
-            <Text style={styles.advancedLabel}>Diagnostics & technical settings</Text>
-            <Feather name={advancedOpen ? 'chevron-up' : 'chevron-down'} size={17} color={colors.textMuted} />
-          </Pressable>
-
-          {advancedOpen && (
+        {developerMode.enabled && (
+          <>
+            <SectionHeader title="Diagnostics" subtitle="Local swarm, storage, and technical state" />
+            <GlassCard padded={false} style={styles.sectionCard}>
+              <Pressable onPress={() => setAdvancedOpen((v) => !v)} style={styles.advancedToggle}>
+                <Feather name="terminal" size={15} color={colors.textMuted} />
+                <Text style={styles.advancedLabel}>Diagnostics & technical settings</Text>
+                <Feather name={advancedOpen ? 'chevron-up' : 'chevron-down'} size={17} color={colors.textMuted} />
+              </Pressable>
+              {advancedOpen && (
             <View style={styles.advancedBody}>
               <Text style={styles.advancedFieldLabel}>Public key</Text>
               <Pressable onPress={() => copyToClipboard(identity.publicKey, 'Public key')}>
@@ -1039,8 +1282,10 @@ export default function ProfileScreen() {
                 />
               </View>
             </View>
-          )}
-        </GlassCard>
+              )}
+            </GlassCard>
+          </>
+        )}
 
         <Text style={styles.footer}>PearTube · Powered by Hyperswarm & Hyperdrive</Text>
       </ScrollView>
@@ -1321,33 +1566,76 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  presetRow: {
+  participationStateRow: {
     flexDirection: 'row',
-    gap: 8,
-    marginBottom: 10,
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 12,
   },
-  preset: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderRadius: 12,
+  participationDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    marginTop: 5,
+  },
+  participationReasons: {
     backgroundColor: colors.glass,
     borderWidth: 1,
     borderColor: colors.glassBorder,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    gap: 6,
+    marginBottom: 14,
   },
-  presetSelected: {
+  participationReason: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  participationModes: {
+    gap: 8,
+  },
+  participationMode: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.glassBorder,
+    backgroundColor: colors.glass,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  participationModeSelected: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
-  presetLabel: {
+  participationModeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  participationModeLabel: {
     color: colors.text,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
   },
-  presetGb: {
+  participationModeDetail: {
     color: colors.textMuted,
-    fontSize: 11,
-    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 4,
+  },
+  participationFootnote: {
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 14,
+  },
+  developerLimitBlock: {
+    borderTopWidth: 1,
+    borderTopColor: colors.glassBorder,
+    marginTop: 14,
+    paddingTop: 14,
   },
   customRow: {
     flexDirection: 'row',
@@ -1358,40 +1646,6 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 12,
     marginTop: 12,
-  },
-  archiveParticipation: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    marginTop: 16,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: colors.glassBorder,
-  },
-  archiveParticipationCopy: {
-    flex: 1,
-  },
-  archiveTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-  },
-  archiveTitle: {
-    color: colors.text,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  archiveDescription: {
-    color: colors.textMuted,
-    fontSize: 11,
-    lineHeight: 16,
-    marginTop: 5,
-  },
-  archiveStatus: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 7,
   },
   advancedToggle: {
     flexDirection: 'row',
@@ -1428,6 +1682,12 @@ const styles = StyleSheet.create({
   switchRow: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  developerModeError: {
+    color: colors.error,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 10,
   },
   footer: {
     color: colors.textDisabled,

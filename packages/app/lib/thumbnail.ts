@@ -151,13 +151,21 @@ export async function fetchThumbnailUrlWithRetry(args: {
   blobRefs?: ThumbnailBlobRefs | null
 }): Promise<string | null> {
   const { rpc, channelKey, videoId, expectedPort, blobRefs } = args
-  if (!rpc || !channelKey || !videoId) return null
+  const blobId = blobRefs?.thumbnailBlobId || ''
+  const blobsCoreKey = blobRefs?.thumbnailBlobsCoreKey || ''
+  // A complete blob ref is sufficient on its own: the backend resolves the
+  // poster straight from the ref, opening the blobs core from the swarm and
+  // localizing the blocks. channelKey/videoId only feed a cache lookup there.
+  // Media-graph entities have neither — they are not channel uploads — so
+  // demanding them would leave every catalog poster on a placeholder.
+  if (!rpc) return null
+  if (!(channelKey && videoId) && !(blobId && blobsCoreKey)) return null
 
   const request: ThumbnailRequest = {
     channelKey,
     videoId,
-    thumbnailBlobId: blobRefs?.thumbnailBlobId || undefined,
-    thumbnailBlobsCoreKey: blobRefs?.thumbnailBlobsCoreKey || undefined,
+    thumbnailBlobId: blobId || undefined,
+    thumbnailBlobsCoreKey: blobsCoreKey || undefined,
     thumbnailMimeType: blobRefs?.thumbnailMimeType || undefined,
   }
 

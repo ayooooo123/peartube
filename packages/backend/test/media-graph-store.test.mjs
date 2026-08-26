@@ -13,7 +13,7 @@ const otherIssuer = crypto.keyPair(Buffer.alloc(32, 2))
 const untrusted = crypto.keyPair(Buffer.alloc(32, 3))
 
 function workRef(id = 'episode-1') {
-  return createEntityReference({ entityKind: 'work', namespace: 'youtube-video', normalizedIdentifier: id })
+  return createEntityReference({ entityKind: 'work', namespace: 'youtube-video', normalizedIdentifier: `${id}___________`.slice(0, 11) })
 }
 
 function metadataClaim(keyPair = issuer, title = 'Pilot') {

@@ -3,6 +3,7 @@ import { VideoView, useVideoPlayer, type VideoPlayer, type VideoSource } from 'e
 import { memo, ReactNode, RefObject, useCallback, useEffect, useMemo, useRef } from 'react'
 import { AppState, AppStateStatus, Platform, StyleProp, StyleSheet, View, ViewStyle } from 'react-native'
 import { createPlayerPort, type PlayerPort } from '@/lib/video-player'
+import { classifyPlayerError } from '@/lib/video-player/playback-errors'
 import { WebMseVideoBackend } from './WebMseVideoBackend'
 import type { CompatPlaybackResult } from './WebMseVideoBackend.types'
 
@@ -83,19 +84,6 @@ function getExpoEventDurationMs(data: any, player?: VideoPlayer | null) {
   return 0
 }
 
-/**
- * Format/codec errors are deterministic — reloading the same source can never
- * succeed, and on desktop web the watch page uses the surfaced error (code 4,
- * MEDIA_ERR_SRC_NOT_SUPPORTED) to fall back to the MSE remux backend. Those
- * must bypass the stall-recovery retries and surface immediately.
- */
-function isUnrecoverableSourceError(error: any) {
-  const code = Number(error?.code ?? error?.error?.code)
-  if (code === 4) return true
-  const message = String(error?.message || '')
-  return /not supported|MEDIA_ERR_SRC_NOT_SUPPORTED|cannot be played|unsupported/i.test(message)
-}
-
 function getExpoEventVideoSize(data: any, player?: VideoPlayer | null) {
   const track = data?.videoTrack ?? player?.videoTrack
   const width = Number(data?.videoSize?.width ?? data?.width ?? data?.naturalSize?.width ?? track?.size?.width ?? track?.width)
@@ -160,6 +148,10 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   const errorRecoveryAttemptsRef = useRef(0)
   const errorRecoveryResumePositionRef = useRef(0)
   const errorRecoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Set to the vocabulary code once a failure is classified terminal: the
+  // source itself cannot be decoded, so every automatic path that would fetch
+  // or re-assert playback stops until a new source/session arrives.
+  const terminalPlaybackErrorRef = useRef<string | null>(null)
   const autoplayVerifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const webVideoStartListenersCleanupRef = useRef<(() => void) | null>(null)
   const useMseBackend = Platform.OS === 'web' && webPlaybackBackend === 'mse'
@@ -202,6 +194,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     lastPlaybackPositionSecRef.current = 0
     errorRecoveryAttemptsRef.current = 0
     errorRecoveryResumePositionRef.current = 0
+    terminalPlaybackErrorRef.current = null
     if (errorRecoveryTimerRef.current) {
       clearTimeout(errorRecoveryTimerRef.current)
       errorRecoveryTimerRef.current = null
@@ -319,6 +312,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   }, [player])
 
   const scheduleAutoplayVerify = useCallback((attempt: number = 0) => {
+    if (terminalPlaybackErrorRef.current) return
     if (attempt === 0 && autoplayVerifyTimerRef.current) return
     clearAutoplayVerify()
     if (attempt >= AUTOPLAY_VERIFY_MAX_ATTEMPTS) {
@@ -361,6 +355,9 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
 
   useEffect(() => {
     if (useMseBackend) return
+    // Re-attaching a source the demuxer already rejected re-reads every byte
+    // from the peer for the same answer.
+    if (terminalPlaybackErrorRef.current) return
     let cancelled = false
     const generation = sourceReplaceGenerationRef.current + 1
     sourceReplaceGenerationRef.current = generation
@@ -436,6 +433,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
    * the error instead.
    */
   const tryRecoverFromPlaybackError = useCallback(() => {
+    if (terminalPlaybackErrorRef.current) return false
     if (errorRecoveryAttemptsRef.current >= PLAYBACK_ERROR_RECOVERY_MAX_ATTEMPTS) return false
     errorRecoveryAttemptsRef.current += 1
     const attempt = errorRecoveryAttemptsRef.current
@@ -447,7 +445,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     if (errorRecoveryTimerRef.current) clearTimeout(errorRecoveryTimerRef.current)
     errorRecoveryTimerRef.current = setTimeout(() => {
       errorRecoveryTimerRef.current = null
-      if (sourceReplaceGenerationRef.current !== generation) return
+      if (sourceReplaceGenerationRef.current !== generation || terminalPlaybackErrorRef.current) return
       void (async () => {
         try {
           if (typeof player.replaceAsync === 'function') {
@@ -706,7 +704,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       return
     }
 
-    if (!hasReceivedPlayEventRef.current && isPlayingRef.current) {
+    if (!hasReceivedPlayEventRef.current && isPlayingRef.current && !terminalPlaybackErrorRef.current) {
       try {
         requestNativePlayback()
       } catch {
@@ -744,26 +742,37 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       }
     }
     if (status === 'error') {
-      console.error('[PearInlineVideoView] error:', error)
-      if (!isUnrecoverableSourceError(error) && tryRecoverFromPlaybackError()) return
-      // Browsers surface fatal MediaError details under error.error. Forward
-      // the nested code and message so the active route can select a compatible
-      // playback backend when the native element cannot demux the source.
+      const classified = classifyPlayerError(error)
+      console.error('[PearInlineVideoView] error:', classified.code, error)
+      if (!classified.terminal && tryRecoverFromPlaybackError()) return
+      if (classified.terminal) {
+        // Nothing about the bytes will differ on a second read, so stop here
+        // instead of re-fetching the whole file every few seconds.
+        terminalPlaybackErrorRef.current = classified.code
+        if (errorRecoveryTimerRef.current) {
+          clearTimeout(errorRecoveryTimerRef.current)
+          errorRecoveryTimerRef.current = null
+        }
+        clearAutoplayVerify()
+      }
+      // Browsers surface fatal MediaError details under error.error. Forward the
+      // nested code so the active route can select a compatible playback backend
+      // when the native element cannot demux the source.
       const raw: unknown = error
       let code: number | undefined
-      let message: string | undefined
       if (raw && typeof raw === 'object') {
         if ('code' in raw && typeof raw.code === 'number') code = raw.code
-        if ('message' in raw && typeof raw.message === 'string') message = raw.message
         if ('error' in raw && raw.error && typeof raw.error === 'object') {
           const nested = raw.error
           if (code === undefined && 'code' in nested && typeof nested.code === 'number') code = nested.code
-          if (message === undefined && 'message' in nested && typeof nested.message === 'string') message = nested.message
         }
       }
       onError?.({
-        message: message || 'Unknown error',
+        message: classified.message,
+        detail: classified.detail,
         code,
+        errorCode: classified.code,
+        terminal: classified.terminal,
         engine: 'expo-video',
       })
     }

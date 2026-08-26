@@ -1,7 +1,8 @@
 import { createCliLogger } from './cli-logger.js'
 import { RelayCatalog } from './catalog.js'
 import { buildRelayStatus, writeRelayStatus } from './status.js'
-import { createArchiveConsole } from './archive-console.js'
+import { createArchiveConsole, createArchiveHttpSurface } from './archive-console.js'
+import { createRelayPublisherShell } from './publisher-shell.js'
 import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createDeferredPublisher, createYtDlpDownloader, createRoutingDownloader } from './archive-manager.js'
 import { createDirectDownloader } from './media/direct-download.js'
 import { createLocalDriveMirrorState, mirrorLocalDriveToRelayChannel } from './local-drive-mirror.js'
@@ -11,11 +12,94 @@ import { createTmdbClassifier, createTmdbDiscoverClient } from './classification
 import { RelaySettings, resolveTmdbOptions } from './settings.js'
 import { TrustedClients, mergeTrustedClientKeys } from './trusted-clients.js'
 import { classifySourceUrl } from './archive/source-id.js'
+import { createRelayBlockOffload } from './archive/block-offload.js'
 import { createStorageGuard } from './storage-guard.js'
+import { COMPANION_API_PREFIX, createCompanionServer } from './companion/server.js'
+import { createIngestJobStore } from './companion/ingest-job-store.js'
+import { createIngestManager } from './companion/ingest-manager.js'
+import { createSourceCallbackClient } from './companion/source-client.js'
+import { createSourceProviderRegistry } from './companion/sources/index.js'
 import tmdbFetch from '#fetch'
+import { sweepStagingState } from '@peartube/backend/assets'
 
 
-export async function createRelayService({
+// 0 means "any free port", so the default must not swallow it.
+function archiveUiPort(config) {
+  const port = Number(config?.archive?.uiPort)
+  return Number.isSafeInteger(port) && port >= 0 ? port : 8174
+}
+
+function archiveUiHost(config) {
+  return config?.archive?.uiHost || '127.0.0.1'
+}
+
+function liveFreeDiskHeadroom({ fsModule, path, minFreeBytes = 0, log = null }) {
+  const floor = Number.isFinite(Number(minFreeBytes)) && Number(minFreeBytes) > 0 ? Math.floor(Number(minFreeBytes)) : 0
+  return () => {
+    if (!path || typeof fsModule?.statfsSync !== 'function') return null
+    try {
+      const st = fsModule.statfsSync(path)
+      const bsize = Number(st?.bsize) || 0
+      const bavail = Number(st?.bavail) || 0
+      if (bsize <= 0 || bavail < 0) return null
+      return Math.max(0, (bavail * bsize) - floor)
+    } catch (err) {
+      log?.('[archive-headroom] statfs failed', err?.message || String(err))
+      return null
+    }
+  }
+}
+
+function maybeSameVolume(fsModule, left, right) {
+  if (typeof fsModule?.statSync !== 'function' || !left || !right) return true
+  try {
+    return fsModule.statSync(left).dev === fsModule.statSync(right).dev
+  } catch {
+    return true
+  }
+}
+
+function archiveWriteHeadroom({ tmpHeadroom, storageHeadroom, sharedVolume = true }) {
+  return () => ({
+    tmp: typeof tmpHeadroom === 'function' ? tmpHeadroom() : null,
+    storage: typeof storageHeadroom === 'function' ? storageHeadroom() : null,
+    sharedVolume
+  })
+}
+
+// Bind the operator's HTTP surface before anything reads the store.
+//
+// Everything below this line walks storage: the relay catalog, the creators DB,
+// and above all the universal backend, whose bring-up rebuilds the media graph,
+// runs the publication-v1 migration and registers seed-pin before it hands back
+// a context. On a large store that is minutes, and it can stall indefinitely on
+// a core waiting for a peer. Binding after it is what left a populated relay
+// answering P2P traffic with its console port closed forever, indistinguishable
+// from a dead process.
+//
+// The surface answers as a warming relay until the console adopts it, so the
+// bind is unconditional and readiness is what arrives late.
+export async function createRelayService(options = {}) {
+  const uiEnabled = Boolean(options.config?.archive?.uiEnabled)
+  const archiveHttp = options.archiveHttp || (uiEnabled
+    ? createArchiveHttpSurface({
+      host: archiveUiHost(options.config),
+      port: archiveUiPort(options.config),
+      apiOpen: Boolean(options.config?.archive?.apiOpen),
+      logger: options.logger
+    })
+    : null)
+  await archiveHttp?.listen()
+  try {
+    return await buildRelayService({ ...options, archiveHttp })
+  } catch (error) {
+    // The relay never came up, so the socket must not outlive it.
+    await archiveHttp?.close().catch(() => {})
+    throw error
+  }
+}
+
+async function buildRelayService({
   config,
   runtimeFactory,
   writeStatusFile = writeRelayStatus,
@@ -26,7 +110,10 @@ export async function createRelayService({
   fsModule = null,
   pathModule = null,
   spawnFn = null,
-  nowFn = Date.now
+  nowFn = Date.now,
+  archiveHttp = null,
+  companionServerFactory = createCompanionServer,
+  archiveConsoleFactory = createArchiveConsole
 }) {
   if (!config) throw new Error('config is required')
   if (typeof runtimeFactory !== 'function') throw new Error('runtimeFactory is required')
@@ -39,6 +126,7 @@ export async function createRelayService({
     storagePath: config.storage.path,
     creatorsPath: config.paths.creators
   })
+  const archiveRunQueue = { tail: Promise.resolve() }
   const relaySettings = await RelaySettings.open({ storagePath: config.storage.path })
 
   // Storage threshold gate: refuse new ingestion (discovery mirroring, archive
@@ -77,24 +165,191 @@ export async function createRelayService({
     trustedClients.keys()
   )
 
-  const runtime = await runtimeFactory({ config, logger })
+  // Block offload, decided before the runtime exists because it changes how the
+  // Corestore is opened: the storage is wrapped so a block whose data now lives
+  // in the bucket is still restored, verified and served. Off by default, and
+  // when it is off nothing is wrapped and nothing is injected. Enabled with a
+  // half-configured bucket throws here rather than downgrading to local-only.
+  const blockOffload = await createRelayBlockOffload({ config, logger })
+  if (blockOffload) {
+    logger.relay?.info?.('Relay block offload enabled', {
+      windowBytes: blockOffload.windowBytes,
+      provider: blockOffload.provider,
+      bucket: blockOffload.bucket,
+      prefix: blockOffload.prefix
+    })
+  } else {
+    logger.relay?.info?.('Relay block offload disabled; block data stays on the local volume')
+  }
+
+  const runtime = await runtimeFactory({ config, logger, blockOffload })
 
   let closed = false
+  let started = false
+  let startPromise = null
   let currentStatus = null
   let queue = Promise.resolve()
   let heartbeatTimer = null
   let localMirrorTimer = null
   let localMirrorRunning = false
   let archiveConsole = null
+  let companionServer = null
+  let ingestManager = null
+  let ingestReady = false
+  let ingestManagerStarted = false
+  let policyControlApplied = false
+  let ingestPolicyEligible = false
   const localMirrorState = createLocalDriveMirrorState()
+
+  function completePolicyControl(policy) {
+    return policy?.policyVersion === 2 &&
+      policy?.consentVersion === 1 &&
+      policy?.migrationRequired === false &&
+      typeof policy?.contributeWatchedMedia === 'boolean' &&
+      typeof policy?.archiveEnabled === 'boolean' &&
+      Number.isSafeInteger(policy?.contributionBudgetBytes) &&
+      policy.contributionBudgetBytes >= 0 &&
+      Number.isSafeInteger(policy?.archiveBudgetBytes) &&
+      policy.archiveBudgetBytes >= 0 &&
+      ['disabled', 'manual', 'enabled'].includes(policy?.uploadPermission) &&
+      Number.isSafeInteger(policy?.uploadCeilingBytes) &&
+      policy.uploadCeilingBytes >= 0
+  }
+
+  // The budget the operator authorized for this retention class and how much of
+  // it is already spent, or null when the class is not permitted at all: a
+  // caller has to be able to tell "never consented" from "consented and full".
+  function retentionBudget(retentionClass) {
+    const policy = runtime.ctx?.networkPolicyRuntime?.getPolicy?.()
+    if (policy?.policyVersion !== 2 || policy.migrationRequired === true) return null
+    const contribution = retentionClass === 'contribution-cache'
+    const allowed = contribution
+      ? policy.contributeWatchedMedia === true
+      : retentionClass === 'archive-pin' && policy.archiveEnabled === true
+    if (!allowed) return null
+    const budget = Number(contribution ? policy.contributionBudgetBytes : policy.archiveBudgetBytes)
+    if (!Number.isSafeInteger(budget) || budget <= 0) return null
+    const usage = runtime.seedingManager?.getRetentionBudgetStatus?.() || {}
+    const used = Number(contribution ? usage.contributionUsedBytes : usage.archiveUsedBytes) || 0
+    return { budget, used, remaining: Math.max(0, budget - used) }
+  }
+
+  function retentionPermission(retentionClass, requestedBytes = 0) {
+    const authorized = retentionBudget(retentionClass)
+    if (authorized === null) return false
+    return authorized.used + Math.max(0, Number(requestedBytes) || 0) <= authorized.budget
+  }
+
+  // What `bytes` of media actually costs THIS volume.
+  //
+  // Without block offload every archived byte is a byte on this disk, so the
+  // cost is the byte count itself. With offload the ingest holds one window of
+  // block data plus the two blocks in flight and the bucket takes the rest, so
+  // the cost is the window plus the merkle bookkeeping the bucket never takes
+  // — tens of megabytes for a title of any size. This is the same number the
+  // archive download guard already sizes its requirement with, so the two
+  // gates cannot disagree about what an offloading ingest needs from the disk.
+  function localFootprintBytes(bytes) {
+    if (!blockOffload) return Math.max(0, Number(bytes) || 0)
+    return blockOffload.localWorkingBytes(bytes)
+  }
+
+  // Whether the volume can still hold what a request costs it.
+  //
+  // Consulted only with offload on. Without offload the aggregate guard is
+  // already this volume's boundary and a second gate here would refuse ingests
+  // the relay accepts today. With offload on it is what stops the bucket from
+  // turning a full disk into an accepted ingest: the title no longer has to
+  // fit, but the window still does. Headroom that cannot be measured fails
+  // open, exactly as the storage guard does on a runtime with no statfs.
+  function localVolumeAdmits(bytes) {
+    const headroom = storageGuard.headroomBytes()
+    if (headroom === null) return true
+    return localFootprintBytes(bytes) <= headroom
+  }
+
+  function canRetain(request = {}) {
+    const requestedBytes = request.expected?.byteLength || 0
+    if (!storageGuard.canIngest()) return false
+    if (blockOffload && !localVolumeAdmits(requestedBytes)) return false
+    return retentionPermission(request.retentionClass, requestedBytes)
+  }
+
+  // The largest title this volume would actually admit, at most `ceiling`.
+  //
+  // A title's local cost is not flat: the window and the two blocks in flight
+  // are, but the merkle tree and bitfield the bucket never takes grow with the
+  // title, so a volume that can hold the window is not thereby a volume that
+  // can hold any title. Advertising against a zero-byte probe is what made the
+  // relay pledge a terabyte it would then refuse.
+  //
+  // Found by asking `localFootprintBytes` — which is monotone in the title
+  // size — rather than by inverting it here: the footprint formula belongs to
+  // storage-guard.js, and a second copy of it in this file would go stale the
+  // day the window or the block size moves. The common case costs one probe;
+  // only a disk-bound relay pays the search, once per capacity report.
+  function largestAdmissibleBytes(ceiling) {
+    if (storageGuard.headroomBytes() === null) return ceiling
+    if (localVolumeAdmits(ceiling)) return ceiling
+    let low = 0
+    let high = ceiling
+    while (low < high) {
+      const mid = low + Math.ceil((high - low) / 2)
+      if (localVolumeAdmits(mid)) low = mid
+      else high = mid - 1
+    }
+    return low
+  }
+
+  // Bytes this relay can still take on for the archive network.
+  //
+  // Without block offload that is the local volume's headroom: every pledged
+  // byte lands on this disk. With offload the pledged bytes land in the bucket
+  // and only a window of them is ever here, so what bounds a new pledge is the
+  // operator's archive budget rather than the disk — which is the whole reason
+  // a relay with an 8 MiB window can hold a terabyte. The volume keeps its
+  // veto, and it is the same veto admission applies: the number pledged here is
+  // a title `canIngest` would take, so the relay never advertises work it is
+  // about to refuse.
+  function archiveCapacityBytes() {
+    const localHeadroom = storageGuard.headroomBytes()
+    if (!blockOffload) return localHeadroom
+    const authorized = retentionBudget('archive-pin')
+    const ceiling = authorized === null ? localHeadroom : authorized.remaining
+    if (ceiling === null) return null
+    return largestAdmissibleBytes(ceiling)
+  }
+
+  // How this relay's capacity divides between the volume and the bucket.
+  //
+  // Both the status file and the archive console reported archived bytes as
+  // though every one of them were on this disk. With offload on those are no
+  // longer the same number, and an operator sizing a relay has to be able to
+  // see which of the two they are reading. A signal this runtime cannot
+  // measure stays null rather than being reported as a zero that looks like a
+  // measurement.
+  function capacityStats() {
+    const snapshot = storageGuard.snapshot()
+    const offload = blockOffload?.stats() || null
+    return {
+      localUsedBytes: snapshot.usedBytes,
+      localFreeBytes: snapshot.freeBytes,
+      localHeadroomBytes: storageGuard.headroomBytes(),
+      residentBytes: offload === null ? 0 : offload.residentBytes,
+      offloadedBytes: offload === null ? 0 : offload.bytesOffloaded,
+      effectiveCapacityBytes: archiveCapacityBytes()
+    }
+  }
 
   function createLocalDrivePublisher(runtimeFsModule) {
     return createArchivePublisher({
       identityManager: runtime.identityManager,
+      storagePath: config.storage?.path,
       uploadManager: runtime.uploadManager,
       api: runtime.api,
       runtime,
-      fs: runtimeFsModule
+      fs: runtimeFsModule,
+      canPublish: retentionPermission,
     })
   }
 
@@ -176,14 +431,26 @@ export async function createRelayService({
   }
 
   async function persistStatus() {
-    const runtimeStats = typeof runtime.getDiagnostics === 'function'
-      ? await runtime.getDiagnostics()
-      : {}
+    const [runtimeStats, ingestStatus] = await Promise.all([
+      Promise.resolve()
+        .then(() => typeof runtime.getDiagnostics === 'function' ? runtime.getDiagnostics() : {})
+        .catch(() => ({ network: { lastErrors: ['RUNTIME_STATUS_UNAVAILABLE'] } })),
+      Promise.resolve()
+        .then(() => ingestManager?.getStatus?.() || {})
+        .catch(() => ({
+          jobsByState: {},
+          activeAcquisitions: 0,
+          lastErrors: ['INGEST_STATUS_UNAVAILABLE']
+        }))
+    ])
     currentStatus = buildRelayStatus({
       config,
       catalog: relayCatalog,
       runtimeStats,
-      trustedClientsCount: trustedClients.list().length
+      ingestStatus,
+      trustedClientsCount: trustedClients.list().length,
+      blockOffload: blockOffload?.stats() || null,
+      capacity: capacityStats()
     })
 
     await Promise.resolve(writeStatusFile(config.paths.status, currentStatus))
@@ -225,7 +492,42 @@ export async function createRelayService({
     }
   }
 
+  // One ceiling governs the local store and the archive pledges this relay
+  // takes on for other relays, so the relay's live capacity is pushed into the
+  // archive network every time it is re-evaluated. A relay with no room left
+  // declines new pledges; it never drops the ones it already made.
+  //
+  // With block offload that ceiling stopped being the local volume: pledged
+  // block data lives in the bucket, so a relay whose disk is smaller than its
+  // archive budget can still take pledges for the difference.
+  async function refreshArchiveCapacity() {
+    if (typeof runtime.applyArchiveCapacity !== 'function') return null
+    try {
+      const result = await runtime.applyArchiveCapacity({ headroomBytes: archiveCapacityBytes() })
+      if (result?.applied === false && result.reason !== 'reseed-disabled') {
+        logger.status?.debug?.('Archive capacity was not applied', { reason: result.reason })
+      }
+      return result
+    } catch (err) {
+      logger.status?.warn?.('Archive capacity update failed', { error: err?.message || String(err) })
+      return null
+    }
+  }
+
+  // The byte ranges of the rendition this relay just retained, named the way a
+  // possession challenge names them. The archive network derives the same
+  // ranges from the signed manifest; these travel with the request so status
+  // can read the archivists' evidence back for this exact rendition.
+  function renditionLocators(publication) {
+    const rendition = (publication?.manifest?.body?.renditions || [])
+      .find((candidate) => candidate.renditionId === publication.renditionId)
+    const core = rendition?.core
+    if (!core?.key || !Number.isSafeInteger(core.length) || core.length < 1) return []
+    return [{ coreKey: core.key, start: 0, end: core.length, renditionId: publication.renditionId }]
+  }
+
   async function publishArchiveJob(job) {
+    if (!retentionPermission('archive-pin')) return { published: false, reason: 'archive-consent-required' }
     if (closed) return { published: false, reason: 'closed' }
     if (job?.status !== 'completed') return { published: false, reason: 'not-completed' }
     if (job?.publish === false) return { published: false, reason: 'not-published' }
@@ -236,18 +538,51 @@ export async function createRelayService({
     const classifiedPreview = await classifyPreviewVideo(job.previewVideo)
     const publication = classifiedPreview?.immutablePublication
     const published = await runtime.publishPublisherCatalog({
-      publisherId: job.publisherId
+      publisherId: job.publisherId,
+      retentionClass: 'archive-pin'
     })
-    if (published?.status !== 'published' && published?.status !== 'already-published') {
+    // 'refreshed' means the local publisher scope already existed and was
+    // rebound, which is a successful publication.
+    if (published?.status !== 'published' && published?.status !== 'already-published' && published?.status !== 'refreshed') {
       return { published: false, reason: published?.status || 'catalog-publication-failed' }
     }
 
     const retained = []
+    let mirrorRequested = false
     if (publication?.manifest && publication?.renditionId) {
       retained.push(await runtime.retainRendition({
         manifest: publication.manifest,
-        renditionId: publication.renditionId
+        renditionId: publication.renditionId,
+        retentionClass: 'archive-pin'
       }))
+      // Now that this relay holds the bytes, ask peer relays to mirror them.
+      // An archive request that fails or is unavailable is recorded and left
+      // there: a publication that reached the network is published whether or
+      // not anyone else agreed to keep a copy, and saying otherwise would make
+      // the relay refuse to publish the moment the archive network hiccuped.
+      if (publication.publicationId && typeof runtime.requestArchiveMirror === 'function') {
+        try {
+          const mirror = await runtime.requestArchiveMirror({
+            publicationId: publication.publicationId,
+            renditionId: publication.renditionId,
+            locators: renditionLocators(publication)
+          })
+          mirrorRequested = mirror?.requested === true
+          if (!mirrorRequested) {
+            logger.archive?.warn?.('Archive mirror request was not published', {
+              publicationId: publication.publicationId,
+              renditionId: publication.renditionId,
+              reason: mirror?.errorCode || mirror?.reason || mirror?.status || 'unknown'
+            })
+          }
+        } catch (err) {
+          logger.archive?.warn?.('Archive mirror request failed', {
+            publicationId: publication.publicationId,
+            renditionId: publication.renditionId,
+            error: err?.message || String(err)
+          })
+        }
+      }
     }
     if (classifiedPreview?.archivePledge && classifiedPreview?.blobsCoreKey) {
       const [start, length] = String(classifiedPreview.blobId || '').split(':').map(Number)
@@ -282,15 +617,52 @@ export async function createRelayService({
     })
     await syncCreators()
     await persistStatus()
-    return { published: true, previewVideos: previewVideos.length, retained: retained.length }
+    return { published: true, previewVideos: previewVideos.length, retained: retained.length, mirrorRequested }
   }
 
   function scheduleCandidate(candidate) {
     queue = queue.then(() => processCandidate(candidate))
     return queue
   }
+  let s3Signer = null
+  const s3Config = config.archive?.s3 || {}
+  if (s3Config.endpoint && s3Config.accessKeyId && s3Config.secretAccessKey && globalThis.process?.versions?.node) {
+    try {
+      const { createS3Signer } = await import('./s3-signer.js')
+      s3Signer = createS3Signer(s3Config)
+    } catch (error) {
+      logger.status?.warn?.('S3 configuration is invalid', { error: error?.message || String(error) })
+    }
+  }
+  async function archiveCompletedToS3(job) {
+    if (!s3Signer || s3Config.enabled === false || !job?.archivePath) return null
+    const fs = fsModule || await import('#fs')
+    const data = fs.readFileSync(job.archivePath)
+    const key = `${s3Config.prefix || 'peartube/'}${job.channelKey || 'archive'}/${job.videoId || job.id}`
+    const signed = await s3Signer({ operation: 'put', key, method: 'PUT', headers: { 'content-length': String(data.length) } })
+    const fetchImpl = globalThis.fetch
+    if (typeof fetchImpl !== 'function') throw new Error('S3 upload requires a fetch implementation')
+    const response = await fetchImpl(signed.url, { method: 'PUT', headers: signed.headers, body: data })
+    if (!response.ok) throw new Error(`S3 archive upload failed with HTTP ${response.status}`)
+    logger.archive?.info?.('Archived media to S3', { key, bytes: data.length })
+    return { key, bytes: data.length, uploadedAt: Date.now(), status: 'uploaded' }
+  }
 
   const service = {
+    // A getter, not a literal: the offload counters move while the relay runs,
+    // and the archive console reads this every time it renders.
+    get s3() {
+      return {
+        configured: Boolean(s3Signer),
+        endpoint: s3Config.endpoint || '',
+        bucket: s3Config.bucket || '',
+        region: s3Config.region || 'us-east-1',
+        prefix: s3Config.prefix || '',
+        offload: blockOffload
+          ? blockOffload.stats()
+          : { enabled: false, windowBytes: 0, blocksOffloaded: 0, bytesOffloaded: 0, uploadedBlocks: 0, uploadedBytes: 0, restored: 0, residentBytes: 0 }
+      }
+    },
     config,
     logger,
     runtime,
@@ -300,8 +672,9 @@ export async function createRelayService({
     settings: relaySettings,
     trustedClients,
     storageGuard,
-    canIngest: () => storageGuard.canIngest(),
-    canArchive: () => storageGuard.hasMinFreeDisk(),
+    canIngest: request => canRetain(request),
+    canArchive: () => canRetain({ retentionClass: 'archive-pin' }),
+    canStageIngest: () => ingestReady,
     getClassifier() {
       return classifier
     },
@@ -338,9 +711,76 @@ export async function createRelayService({
       if (removed) {
         config.seedPin.trustedClients = mergeTrustedClientKeys([], trustedClients.keys())
         await runtime.refreshAuthorization?.(config.seedPin.trustedClients).catch?.(() => false)
+
         await persistStatus()
       }
       return { removed: Boolean(removed) }
+    },
+    async applyNetworkPolicy(policy) {
+      ingestReady = false
+      policyControlApplied = false
+      ingestPolicyEligible = false
+      const controlledPolicy = completePolicyControl(policy)
+        ? policy
+        : {
+            policyVersion: 2,
+            consentVersion: 0,
+            migrationRequired: true,
+            contributeWatchedMedia: false,
+            archiveEnabled: false,
+            contributionBudgetBytes: 0,
+            archiveBudgetBytes: 0,
+            uploadPermission: 'disabled',
+            uploadCeilingBytes: 0
+          }
+      if (!runtime.api || typeof runtime.api.setNetworkPolicy !== 'function') {
+        throw new Error('network policy control is unavailable')
+      }
+      const result = await runtime.api.setNetworkPolicy({
+        policyVersion: controlledPolicy.policyVersion,
+        consentVersion: controlledPolicy.consentVersion,
+        migrationRequired: controlledPolicy.migrationRequired,
+        contributeWatchedMedia: controlledPolicy.contributeWatchedMedia,
+        archiveEnabled: controlledPolicy.archiveEnabled,
+        contributionBudgetBytes: controlledPolicy.contributionBudgetBytes,
+        contributionBudgetBytesPresent: true,
+        archiveBudgetBytes: controlledPolicy.archiveBudgetBytes,
+        archiveBudgetBytesPresent: true,
+        uploadPermission: controlledPolicy.uploadPermission,
+        uploadCeilingBytes: controlledPolicy.uploadCeilingBytes,
+        uploadCeilingBytesPresent: true,
+        retentionMode: controlledPolicy.archiveEnabled ? 'archive-pledges' : 'none'
+      })
+      if (!result?.success) {
+        const error = new Error(result?.errorCode || 'POLICY_APPLY_FAILED')
+        error.code = result?.errorCode || 'POLICY_APPLY_FAILED'
+        throw error
+      }
+      const effective = result.policy
+      if (!effective || typeof effective !== 'object') {
+        throw new Error('network policy result is unavailable')
+      }
+      policyControlApplied = effective?.policyVersion === 2 &&
+        effective?.consentVersion === 1 &&
+        effective?.migrationRequired === false
+      ingestPolicyEligible = policyControlApplied && (
+        (effective.contributeWatchedMedia === true && effective.contributionBudgetBytes > 0) ||
+        (effective.archiveEnabled === true && effective.archiveBudgetBytes > 0)
+      )
+      await ingestManager?.cancelPolicyDeniedJobs?.()
+      ingestReady = ingestManagerStarted && ingestPolicyEligible
+      return {
+        policyVersion: effective.policyVersion,
+        consentVersion: effective.consentVersion,
+        migrationRequired: effective.migrationRequired,
+        effectiveRole: effective.effectiveRole,
+        permissions: { ...effective.permissions },
+        contributionBudgetBytes: effective.contributionBudgetBytes,
+        archiveBudgetBytes: effective.archiveBudgetBytes,
+        uploadPermission: effective.uploadPermission,
+        uploadCeilingBytes: effective.uploadCeilingBytes,
+        ingestReady
+      }
     },
     getLinkDescriptor() {
       return {
@@ -396,6 +836,10 @@ export async function createRelayService({
       return { creator, job }
     },
     async start() {
+      if (closed) throw new Error('relay service is closed')
+      if (started) return service
+      if (startPromise) return startPromise
+      startPromise = (async () => {
       logger.relay.info('Relay starting', {
         mode: config.mode,
         policy: config.policy,
@@ -405,35 +849,91 @@ export async function createRelayService({
         configuredOwners: config.admission.owners?.length || 0
       })
 
+      try {
+
       const bootStartedAt = Date.now()
       runtime.setCandidateHandler?.((candidate) => scheduleCandidate({
         source: 'discovered',
         ...candidate
       }))
 
-      // Bring the archive web console up FIRST — before the slow, network-bound
-      // runtime bring-up (swarm join + channel seeding) — so the operator web UI
-      // is reachable within seconds instead of waiting minutes on boot. The
-      // console only needs metaDb (opened by the runtime factory, already ready)
-      // to serve browse/discover/settings/upload pages. The archive *publisher*
-      // needs managers created during runtime.start(), so it is bound lazily: an
-      // archive submitted in the brief pre-ready window waits for the publisher
-      // (see below) rather than failing and discarding the upload.
+      // The socket is already bound and answering as a warming relay (see
+      // createRelayService). This is where the console takes it over: the job
+      // store needs metaDb, which only exists once the runtime factory has
+      // returned. The archive *publisher* needs managers created during
+      // runtime.start(), so it is bound lazily: an archive submitted in the
+      // brief pre-ready window waits for the publisher (see below) rather than
+      // failing and discarding the upload.
       const deferredPublisher = createDeferredPublisher()
+      if (runtime.ctx?.metaDb && config.archive?.tmpPath) {
+        const store = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
+        const recoveryManager = createArchiveManager({
+          store,
+          logger,
+          runQueue: archiveRunQueue,
+          downloader: {},
+          publisher: {},
+          stagingRoot: config.archive.tmpPath
+        })
+        const recovered = await recoveryManager.recoverInterruptedJobs().catch((err) => {
+          logger.archive.warn('Interrupted archive recovery failed', { error: err?.message || String(err) })
+          return { recovered: 0 }
+        })
+        if (recovered.recovered > 0) {
+          logger.archive.warn('Recovered interrupted archive jobs during relay startup', { recovered: recovered.recovered })
+        }
+      }
+
       if (config.archive?.uiEnabled) {
         const runtimeFsModule = fsModule || await import('#fs')
         const runtimePathModule = pathModule || await import('#path')
-        archiveConsole = await createArchiveConsole({
+        try { runtimeFsModule?.mkdirSync?.(config.archive.tmpPath, { recursive: true }) } catch {}
+        const tmpHeadroom = liveFreeDiskHeadroom({
+          fsModule: runtimeFsModule,
+          path: config.archive.tmpPath,
+          minFreeBytes: config.storage.minFreeBytes || 0,
+          log: (...args) => logger.status?.debug?.(args.map(String).join(' '))
+        })
+        // The archive temp volume is bounded by free disk. The persisted copy
+        // is bounded by BOTH free disk and storage.maxBytes; reservations below
+        // subtract concurrent staged/copy bytes from that aggregate room.
+        const persistedHeadroom = () => storageGuard.headroomBytes()
+        const archiveHeadroom = archiveWriteHeadroom({
+          tmpHeadroom,
+          storageHeadroom: persistedHeadroom,
+          sharedVolume: maybeSameVolume(runtimeFsModule, config.archive.tmpPath, config.storage.path)
+        })
+        const archiveStorageReservations = {
+          bytes: 0,
+          invalidate: () => storageGuard.invalidate()
+        }
+        archiveConsole = await archiveConsoleFactory({
           service,
           logger,
-          host: config.archive.uiHost || '127.0.0.1',
-          port: config.archive.uiPort || 8174,
+          host: archiveUiHost(config),
+          port: archiveUiPort(config),
+          apiOpen: Boolean(config.archive.apiOpen),
           uploadDir: config.archive.tmpPath,
+          uploadStorageHeadroom: archiveHeadroom,
+          storageReservations: archiveStorageReservations,
+          runQueue: archiveRunQueue,
           downloader: createRoutingDownloader({
             directDownloader: createDirectDownloader({
               outputDir: config.archive.tmpPath,
               fs: runtimeFsModule,
-              path: runtimePathModule
+              path: runtimePathModule,
+              // No per-file media cap: live temp, aggregate storage budget, and
+              // persisted-volume headroom are the byte bounds.
+              storageHeadroom: archiveHeadroom,
+              storageReservations: archiveStorageReservations,
+              // With block offload configured the ingest behind this download
+              // keeps one window of blocks on the volume and puts the rest in
+              // the bucket, so the title stops being the requirement and the
+              // window becomes it. Without offload this is null and the guard
+              // is unchanged. The free-disk floor is not part of this: it is
+              // already subtracted from every number `archiveHeadroom` reports,
+              // and the guard still re-reads that live on every chunk.
+              boundedLocalBytes: blockOffload ? blockOffload.localWorkingBytes : null
             }),
             ytDlpDownloader: createYtDlpDownloader({
               bin: config.archive.ytDlpPath,
@@ -442,6 +942,9 @@ export async function createRelayService({
               ffmpegPath: config.archive.ffmpegPath,
               cookiesPath: config.archive.cookiesPath,
               jsRuntime: config.archive.jsRuntime,
+              storageHeadroom: archiveHeadroom,
+              storageReservations: archiveStorageReservations,
+              onStorageChanged: () => storageGuard.invalidate(),
               ytDlpExtraArgs: config.archive.ytDlpExtraArgs,
               ytDlpRetryExtraArgs: config.archive.ytDlpRetryExtraArgs,
               spawnFn: spawnFn || undefined,
@@ -449,41 +952,210 @@ export async function createRelayService({
               path: runtimePathModule
             })
           }),
-          publisher: deferredPublisher.publisher
+          publisher: deferredPublisher.publisher,
+          httpSurface: archiveHttp
         })
         await archiveConsole.start()
-        logger.relay.info('Relay archive WebUI listening', {
-          host: config.archive.uiHost || '127.0.0.1',
-          port: config.archive.uiPort || 8174,
+        // The one line that separates "still opening the store" from "stuck":
+        // everything the console reads is answerable from here on.
+        logger.relay.info('Relay archive console ready', {
+          host: archiveUiHost(config),
+          port: archiveHttp ? archiveHttp.port : archiveUiPort(config),
           bootMs: Date.now() - bootStartedAt
         })
+      }
+      if (config.companion?.enabled !== false) {
+        const companionFsModule = fsModule || await import('#fs')
+        const companionPathModule = pathModule || await import('#path')
+        const ingestSpoolRoot = companionPathModule.join(config.storage.path, 'companion', 'ingest-spool')
+        const sourceClient = config.companion.sourceOrigin
+          ? createSourceCallbackClient({
+              origin: config.companion.sourceOrigin,
+              client: config.companion.sourceClient,
+              sharedSecret: config.companion.sourceSharedSecret,
+              chunkBytes: config.companion.sourceChunkBytes,
+              requestTimeoutMs: config.companion.sourceRequestTimeoutMs,
+              clock: nowFn
+            })
+          : null
+        const sourceRegistry = createSourceProviderRegistry({
+          config: config.archive || {},
+          fs: companionFsModule,
+          legacySourceClient: sourceClient
+        })
+        if (runtime.ctx?.metaDb) {
+          ingestManager = createIngestManager({
+            store: createIngestJobStore({ bee: runtime.ctx.metaDb, now: nowFn }),
+            publisher: createArchivePublisher({
+              identityManager: runtime.identityManager,
+              uploadManager: runtime.uploadManager,
+              api: runtime.api,
+              runtime,
+              fs: companionFsModule,
+              canPublish: retentionPermission
+            }),
+            spoolRoot: ingestSpoolRoot,
+            fs: companionFsModule,
+            path: companionPathModule,
+            sourceClient,
+            sourceRegistry,
+            // Where a resumable ingest's staged prefix lives. Both are absent
+            // unless block offload is configured, and then no staging state can
+            // exist for a job to hand back.
+            assetStore: blockOffload?.createStagingStore ? runtime.ctx.store : null,
+            createStagingStore: blockOffload?.createStagingStore
+              ? (input) => blockOffload.createStagingStore(input)
+              : null,
+            canIngest: request => canRetain(request),
+            now: nowFn,
+            logger
+          })
+        }
+        // One listener for both API versions whenever both are HTTP. The only
+        // consumer of this relay builds its /api/v1 and /api/v2 URLs from a
+        // single configured base URL and signs nothing on the v1 half, so two
+        // ports meant half of its calls always landed on the wrong surface. The
+        // archive surface owns the listener — it is bound before the store opens
+        // and answers from the first moment — and the companion mounts on it
+        // under its own prefix, unchanged in every other respect: it still
+        // verifies every request it is handed, and the v1 API keeps its own
+        // loopback/apiOpen gate.
+        //
+        // Nothing else moves. With no archive surface, or on the Unix transport,
+        // the companion binds its own transport exactly as before, so a
+        // configuration that asked for a companion port still gets one. In the
+        // shared shape the configured companion port is never bound at all,
+        // which is what stops it from colliding with the archive port.
+        const sharedListener = config.companion.transport === 'tcp' && typeof archiveHttp?.mount === 'function'
+          ? archiveHttp.mount(COMPANION_API_PREFIX)
+          : null
+        companionServer = await companionServerFactory({
+          service,
+          config: config.companion,
+          clock: nowFn,
+          logger,
+          fs: companionFsModule,
+          ingestSpoolRoot,
+          createServer: sharedListener
+        })
+        const companionState = await companionServer.start()
+        if (sharedListener && companionState?.enabled !== false) {
+          logger.relay.info('Companion API mounted on the archive HTTP listener', {
+            host: companionState.host,
+            port: companionState.port,
+            prefix: COMPANION_API_PREFIX,
+            // The port the configuration asked for and did not get, so an
+            // operator reading this never goes looking for it.
+            configuredPort: config.companion.port
+          })
+        }
       }
 
       const runtimeStartedAt = Date.now()
       await runtime.start?.()
       logger.relay.info('Relay runtime network ready', { runtimeStartMs: Date.now() - runtimeStartedAt })
+      // Reclaim the staged prefixes of ingests that will never come back for
+      // them — a job that was cancelled while the relay was down, one whose
+      // reclamation failed at the time, one nobody retried inside the TTL.
+      // Bounded by the job store rather than by enumerating the bucket: an id
+      // the store does not know about is not this relay's to delete.
+      //
+      // ONCE, and HERE: before `ingestManager.start()` schedules a single job,
+      // so no ingest is running and a staged length cannot be a length that is
+      // being appended to. `stagingSweepPlan()` also leaves out anything in
+      // flight, so the guarantee holds however this is reached.
+      if (ingestManager && blockOffload?.createStagingStore && runtime.ctx?.store) {
+        try {
+          const plan = await ingestManager.stagingSweepPlan()
+          const swept = await sweepStagingState({
+            store: runtime.ctx.store,
+            createStagingStore: (input) => blockOffload.createStagingStore(input),
+            ids: plan.ids,
+            keep: plan.keep
+          })
+          if (swept.reclaimed.length > 0 || swept.orphaned.length > 0) {
+            logger.relay.info('Relay ingest staging state swept', {
+              reclaimed: swept.reclaimed.length,
+              retained: swept.retained.length,
+              orphaned: swept.orphaned.length
+            })
+          }
+        } catch (error) {
+          // Staging state left behind costs bucket storage the TTL already
+          // bounds, and the next boot tries again. It is not a reason to refuse
+          // to start the relay.
+          logger.relay.warn?.('Relay ingest staging sweep failed', { error: error?.message || String(error) })
+        }
+      }
+      await ingestManager?.start()
+      ingestManagerStarted = Boolean(ingestManager)
+      ingestReady = ingestManagerStarted && policyControlApplied && ingestPolicyEligible
+
+      // The publisher root is CLI-owned, so the backend cannot restore a
+      // writable binding by itself: restoreLocalPublisherScopes() finds nothing
+      // at boot and the relay joins no publisher scope and announces no
+      // bootstrap locator. Consumers can connect and still discover nothing
+      // until some archive job happens to bind the catalog. Bind it here so a
+      // restarted relay is discoverable immediately.
+      //
+      // One shell instance is shared with the archive publisher; two would race
+      // over the same publisher-root file.
+      const runtimeFsModule = fsModule || await import('#fs')
+      const publisherShell = createRelayPublisherShell({
+        api: runtime.api,
+        storagePath: config.storage?.path,
+        fs: runtimeFsModule,
+        logger
+      })
+      try {
+        const local = await publisherShell.ensureLocalPublisher()
+        const published = await runtime.publishPublisherCatalog({ publisherId: local.publisherId })
+        logger.relay.info('Relay publisher catalog announced', {
+          publisherId: local.publisherId,
+          status: published?.status || 'unknown'
+        })
+      } catch (error) {
+        // An empty relay has no accepted publication to announce yet. That is
+        // normal on a fresh install and must not stop startup; a genuine
+        // provisioning failure is a different matter and says so.
+        const message = error?.message || String(error)
+        if (/no accepted publication or claim/.test(message)) {
+          logger.relay.info('Relay publisher catalog has nothing to announce yet')
+        } else {
+          logger.relay.warn('Relay publisher catalog announcement failed', { error: message })
+        }
+      }
 
       // Managers exist now — bind the real archive publisher behind the lazy proxy.
       if (config.archive?.uiEnabled) {
-        const runtimeFsModule = fsModule || await import('#fs')
         deferredPublisher.bind(createArchivePublisher({
           identityManager: runtime.identityManager,
+          storagePath: config.storage?.path,
           uploadManager: runtime.uploadManager,
           api: runtime.api,
           runtime,
-          fs: runtimeFsModule
+          publisherShell,
+          fs: runtimeFsModule,
+          canPublish: retentionPermission
         }))
       }
 
+      // Hand the archive network this relay's real headroom before it can be
+      // offered any pledge. Restored pledges are already in place by now, so
+      // the ceiling is computed above them, never under them.
+      await refreshArchiveCapacity()
+
 
       const status = await persistStatus()
+      const networkStatus = status.network || {}
+      const publicWorkStatus = status.publicWork || {}
       logger.relay.info('Relay started', {
-        peers: status.runtime.network?.peers || 0,
-        connections: status.runtime.network?.connections || 0,
-        publisherCatalogs: status.runtime.publisher?.catalogs || 0,
-        bootstrapLocators: status.runtime.bootstrap?.locators || 0,
-        retainedRenditions: status.runtime.assets?.retainedRenditions || 0,
-        archivedChannels: status.summary.totalChannels
+        peers: networkStatus.peers || 0,
+        connections: networkStatus.connections || 0,
+        activeAnnouncements: publicWorkStatus.activeAnnouncements || 0,
+        activeUploads: publicWorkStatus.activeUploads || 0,
+        activeAcquisitions: publicWorkStatus.activeAcquisitions || 0,
+        archivedChannels: status.summary?.totalChannels || 0
       })
 
       // Reconcile completed archives against authenticated publisher catalogs
@@ -531,8 +1203,13 @@ export async function createRelayService({
       heartbeatTimer = setIntervalFn(async () => {
         try {
           await syncCreators()
+          // Headroom moves as the relay archives, evicts and grows. Re-derive
+          // it before status is written so what the archive network will accept
+          // and what status reports are the same number.
+          storageGuard.invalidate()
+          await refreshArchiveCapacity()
           const heartbeatStatus = await persistStatus()
-          const network = heartbeatStatus.runtime.network || {}
+          const network = heartbeatStatus.network || {}
           if ((network.peers || 0) > 0 && (network.connections || 0) === 0) {
             logger.status.warn('Relay discovered peers without sockets', {
               peers: network.peers,
@@ -552,15 +1229,14 @@ export async function createRelayService({
               offlineReason: network.offlineReason || null
             })
           }
+          const publicWork = heartbeatStatus.publicWork || {}
           logger.status.info('Relay heartbeat', {
             peers: network.peers || 0,
             connections: network.connections || 0,
-            publisherCatalogs: heartbeatStatus.runtime.publisher?.catalogs || 0,
-            followedPublishers: heartbeatStatus.runtime.publisher?.followed || 0,
-            bootstrapLocators: heartbeatStatus.runtime.bootstrap?.locators || 0,
-            retainedRenditions: heartbeatStatus.runtime.assets?.retainedRenditions || 0,
-            activeArchivePledges: heartbeatStatus.runtime.archive?.activePledgeCount || 0,
-            activeSeeds: heartbeatStatus.runtime.seedRetention?.activeSeeds || 0
+            activeAnnouncements: publicWork.activeAnnouncements || 0,
+            activeUploads: publicWork.activeUploads || 0,
+            uploadedBytes: publicWork.uploadedBytes || 0,
+            activeAcquisitions: publicWork.activeAcquisitions || 0
           })
         } catch (err) {
           logger.status.error('Relay heartbeat failed', {
@@ -571,6 +1247,44 @@ export async function createRelayService({
 
 
       return service
+      } catch (error) {
+        if (heartbeatTimer) {
+          clearIntervalFn(heartbeatTimer)
+          heartbeatTimer = null
+        }
+        if (localMirrorTimer) {
+          clearIntervalFn(localMirrorTimer)
+          localMirrorTimer = null
+        }
+        ingestReady = false
+        if (companionServer) {
+          await companionServer.close().catch(() => {})
+          companionServer = null
+        }
+        if (ingestManager) {
+          await ingestManager.close().catch(() => {})
+          ingestManager = null
+        }
+        if (archiveConsole) {
+          await archiveConsole.close().catch(() => {})
+          archiveConsole = null
+        }
+        try {
+          await runtime.close?.()
+        } catch {
+          // Preserve the startup error after best-effort runtime cleanup.
+        }
+        throw error
+      }
+      })()
+      try {
+        const result = await startPromise
+        started = true
+        return result
+      } catch (error) {
+        startPromise = null
+        throw error
+      }
     },
     async processCandidate(candidate) {
       return scheduleCandidate(candidate)
@@ -578,18 +1292,76 @@ export async function createRelayService({
     async publishArchiveJob(job) {
       return publishArchiveJob(job)
     },
+    async searchIndexCandidates(selector, { cursor = null, limit = undefined, signal = null } = {}) {
+      if (cursor !== null || !selector?.namespace || !selector?.identifier || !selector?.kind) {
+        const error = new Error('Index search selector is unsupported')
+        error.code = 'INDEX_SEARCH_UNSUPPORTED'
+        throw error
+      }
+      if (typeof runtime.api?.searchIndexCandidates !== 'function') {
+        const error = new Error('Index candidate search is unsupported')
+        error.code = 'INDEX_SEARCH_UNSUPPORTED'
+        throw error
+      }
+      return runtime.api.searchIndexCandidates(selector, { limit, signal })
+    },
+    async verifyIndexCandidate(candidateRef, { signal = null } = {}) {
+      if (typeof runtime.api?.verifyIndexCandidate !== 'function') {
+        const error = new Error('Index candidate verification is unsupported')
+        error.code = 'INDEX_VERIFICATION_UNSUPPORTED'
+        throw error
+      }
+      return runtime.api.verifyIndexCandidate(candidateRef, { signal })
+    },
+    async openStreamAsset(candidate, { signal = null } = {}) {
+      if (typeof runtime.api?.openVerifiedCandidateStream !== 'function') {
+        const error = new Error('Verified asset streaming is unsupported')
+        error.code = 'STREAM_ASSET_UNSUPPORTED'
+        throw error
+      }
+      return runtime.api.openVerifiedCandidateStream(candidate, { signal })
+    },
+    async getPublication(publicationId) {
+      return runtime.ctx?.assetManifestStore?.getManifest?.(publicationId) || null
+    },
+    async submitIngestJob(input, { ingestSpoolLease = null, signal = null } = {}) {
+      if (!ingestReady) {
+        const error = new Error('Explicit retention policy is not ready')
+        error.code = 'RETENTION_ADMISSION_DENIED'
+        throw error
+      }
+      if (!ingestManager) {
+        const error = new Error('Companion ingest jobs are unavailable')
+        error.code = 'INGEST_UNAVAILABLE'
+        throw error
+      }
+      return ingestManager.submitJob({ ...input, ingestSpoolLease, signal })
+    },
+    async getIngestJob(jobId) {
+      if (!ingestManager) return null
+      return ingestManager.getJob(jobId)
+    },
+    async cancelIngestJob(jobId) {
+      if (!ingestManager) return null
+      return ingestManager.cancelJob(jobId)
+    },
     async enqueueArchiveJob(input, { runNow = false } = {}) {
+      if (!retentionPermission('archive-pin')) {
+        throw new Error('explicit archive consent is required')
+      }
       if (!runtime.ctx?.metaDb) throw new Error('archive jobs require relay runtime metadata storage')
-      // Deliberate uploads are the relay's purpose; they are only refused when
-      // the disk is genuinely low (ENOSPC risk), NOT when the evictable
-      // discovery cache merely filled the logical storage.maxBytes budget.
-      if (!storageGuard.hasMinFreeDisk()) {
+      // Protected archives are not evicted, but they still share the operator's
+      // hard aggregate budget with cache data. Refuse before scheduling when
+      // either storage.maxBytes or the free-disk floor is exhausted.
+      if (!storageGuard.canIngest()) {
         const snap = storageGuard.snapshot()
-        logger.status?.warn?.('Storage floor reached; refusing archive ingestion', {
+        logger.status?.warn?.('Storage limit reached; refusing archive ingestion', {
+          usedBytes: snap.usedBytes,
+          maxBytes: snap.maxBytes,
           freeBytes: snap.freeBytes,
           minFreeBytes: snap.minFreeBytes
         })
-        throw new Error(`relay storage low on disk (free ${snap.freeBytes ?? 'unknown'} < floor ${snap.minFreeBytes}); free space before archiving`)
+        throw new Error(`relay storage limit reached (used ${snap.usedBytes ?? 'unknown'} of ${snap.maxBytes || 'unbounded'}, free ${snap.freeBytes ?? 'unknown'} with floor ${snap.minFreeBytes}); free space or raise storage.maxBytes before archiving`)
       }
       const runtimeFsModule = fsModule || await import('#fs')
       const runtimePathModule = pathModule || await import('#path')
@@ -597,7 +1369,8 @@ export async function createRelayService({
       const manager = createArchiveManager({
         store,
         logger,
-        canIngest: () => storageGuard.hasMinFreeDisk(),
+        runQueue: archiveRunQueue,
+        canIngest: () => canRetain({ retentionClass: 'archive-pin' }),
         downloader: createYtDlpDownloader({
           bin: config.archive?.ytDlpPath,
           outputDir: config.archive?.tmpPath || './peartube-relay/archive-tmp',
@@ -607,18 +1380,28 @@ export async function createRelayService({
           jsRuntime: config.archive?.jsRuntime,
           ytDlpExtraArgs: config.archive?.ytDlpExtraArgs,
           ytDlpRetryExtraArgs: config.archive?.ytDlpRetryExtraArgs,
+          storageHeadroom: () => storageGuard.headroomBytes(),
+          onStorageChanged: () => storageGuard.invalidate(),
           spawnFn: spawnFn || undefined,
           fs: runtimeFsModule,
           path: runtimePathModule
         }),
         publisher: createArchivePublisher({
           identityManager: runtime.identityManager,
+          storagePath: config.storage?.path,
           uploadManager: runtime.uploadManager,
           api: runtime.api,
           runtime,
-          fs: runtimeFsModule
+          fs: runtimeFsModule,
+          canPublish: retentionPermission
         }),
-        onCompleted: (job) => service.publishArchiveJob(job)
+        onCompleted: async (job) => {
+          try { await archiveCompletedToS3(job) } catch (error) {
+            logger.archive?.warn?.('S3 archive upload failed; local archive remains available', { error: error?.message || String(error) })
+          }
+          return service.publishArchiveJob(job)
+        },
+        stagingRoot: config.archive?.tmpPath || './peartube-relay/archive-tmp'
       })
       const job = await manager.enqueue(input)
       if (runNow) return manager.runJob(job.id)
@@ -634,15 +1417,29 @@ export async function createRelayService({
         maxFiles: Number.isFinite(Number(input.maxFiles)) ? Number(input.maxFiles) : Infinity
       })
     },
+    getCompanionState() {
+      return companionServer?.state?.() || {
+        enabled: false,
+        transport: config.companion?.transport || 'unix'
+      }
+    },
     getStatus() {
       return currentStatus || buildRelayStatus({
         config,
         catalog: relayCatalog,
-        runtimeStats: {}
+        runtimeStats: {},
+        blockOffload: blockOffload?.stats() || null,
+        capacity: capacityStats()
       })
     },
     async close() {
       closed = true
+      ingestReady = false
+      ingestManagerStarted = false
+      policyControlApplied = false
+      ingestPolicyEligible = false
+      if (startPromise && !started) await startPromise.catch(() => {})
+      ingestReady = false
       if (heartbeatTimer) {
         clearIntervalFn(heartbeatTimer)
         heartbeatTimer = null
@@ -651,10 +1448,21 @@ export async function createRelayService({
         clearIntervalFn(localMirrorTimer)
         localMirrorTimer = null
       }
+      if (companionServer) {
+        await companionServer.close().catch(() => {})
+        companionServer = null
+      }
+      if (ingestManager) {
+        await ingestManager.close().catch(() => {})
+        ingestManager = null
+      }
       if (archiveConsole) {
         await archiveConsole.close().catch(() => {})
         archiveConsole = null
       }
+      // The surface outlives the console when the relay never got far enough to
+      // build one, which is exactly the case a shutdown has to clean up after.
+      await archiveHttp?.close().catch(() => {})
       await queue.catch(() => {})
       await persistStatus()
       await runtime.close?.()

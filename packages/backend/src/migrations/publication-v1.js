@@ -5,6 +5,7 @@ import {
   createRenditionDescriptor,
   encodePublicationManifest,
 } from '../assets/index.js'
+import { classifyLegacyAssetReference } from './asset-core-v2.js'
 import { parseBlobRef } from '../blob-ref.js'
 import {
   createEntityReference,
@@ -253,6 +254,13 @@ function normalizeSource(source) {
     parsedBlob,
     fingerprint,
     provenance: sourceProvenance(source, parsedBlob),
+    disposition: classifyLegacyAssetReference({
+      key: parsedBlob.blobsCoreKey,
+      start: parsedBlob.blob.blockOffset,
+      end: parsedBlob.blob.blockOffset + parsedBlob.blob.blockLength,
+      sourcePath: video.sourcePath,
+      localFilePath: video.localFilePath,
+    }),
   }
 }
 
@@ -359,6 +367,56 @@ function summary(checkpoint) {
   }
 }
 
+function catalogUnavailable(error) {
+  return error?.code === 'PUBLISHER_CATALOG_UNAVAILABLE' ||
+    /PUBLISHER_CATALOG_UNAVAILABLE/.test(error?.message || '')
+}
+
+/**
+ * Find the catalog a legacy local source should migrate into.
+ *
+ * Legacy sources are this device's own channels, and their owner id is the
+ * channel identity key. A catalog is not required to be keyed by that: a relay
+ * provisions one from a publisher root instead. When nothing resolves from the
+ * owner key the migration can never complete, and because
+ * completeAdmissionLifecycle runs on every provisionPublisherCatalog, the
+ * device stops being able to publish at all.
+ *
+ * Falling back to the sole local writable catalog is what the migration plan
+ * already assumes, since it builds its operations against binding.publisherId.
+ * More than one writable catalog is ambiguous, so it resolves nothing rather
+ * than guessing which publisher owns the history.
+ *
+ * derivePublisherId is injected: importing it here would run back through the
+ * publisher barrel, which re-exports this module.
+ */
+export function createLegacyCatalogResolver({ catalogRegistry, derivePublisherId } = {}) {
+  if (!catalogRegistry) throw new TypeError('legacy catalog resolver requires catalogRegistry')
+  if (typeof derivePublisherId !== 'function') {
+    throw new TypeError('legacy catalog resolver requires derivePublisherId')
+  }
+
+  return async function resolveCatalog(source) {
+    const ownerPublisherId = String(source?.ownerPublisherId || '')
+    if (/^[0-9a-f]{64}$/.test(ownerPublisherId)) {
+      try {
+        const owned = await catalogRegistry.resolve(derivePublisherId(b4a.from(ownerPublisherId, 'hex')))
+        if (owned) return owned
+      } catch (error) {
+        if (!catalogUnavailable(error)) throw error
+      }
+    }
+
+    try {
+      const writable = await catalogRegistry.getWritableBindings()
+      return writable?.length === 1 ? writable[0] : null
+    } catch (error) {
+      if (catalogUnavailable(error)) return null
+      throw error
+    }
+  }
+}
+
 export function createPublicationV1StartupLifecycle({ migrate, startDiscovery } = {}) {
   if (typeof migrate !== 'function') throw new TypeError('publication v1 startup lifecycle requires migrate')
   if (typeof startDiscovery !== 'function') throw new TypeError('publication v1 startup lifecycle requires startDiscovery')
@@ -434,6 +492,27 @@ export async function runPublicationV1StartupMigration(options = {}) {
       quarantined.push(quarantine)
       checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'failed', quarantined })
       throw error
+    }
+    if (normalized.disposition) {
+      const quarantine = {
+        sourceKey,
+        code: normalized.disposition === 'reingest-required'
+          ? 'PUBLICATION_V1_REINGEST_REQUIRED'
+          : 'PUBLICATION_V1_QUARANTINED',
+        disposition: normalized.disposition,
+        message: normalized.disposition === 'reingest-required'
+          ? 'legacy publication source bytes must be re-ingested'
+          : 'legacy publication cannot be verified as a static asset',
+      }
+      const quarantined = checkpoint.quarantined.filter(entry => entry.sourceKey !== sourceKey)
+      quarantined.push(quarantine)
+      checkpoint = await checkpointRepository.save({
+        ...checkpoint,
+        status: 'running',
+        pending: null,
+        quarantined,
+      })
+      continue
     }
 
     const binding = await resolveCatalog(normalized.source)

@@ -1,4 +1,5 @@
 import { createRequire } from 'module'
+import brittle from 'brittle'
 import assert from 'node:assert/strict'
 import sodium from 'sodium-universal'
 // NOTE: IdentityKey.bootstrap uses Keet's SLIP-48 type 5338 internally.
@@ -73,4 +74,8 @@ await test('chained attestation extends the proof chain', async () => {
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)
-if (failed > 0) process.exit(1)
+// Reported through brittle rather than an exit code: this file shares its
+// process with every other test file in the directory.
+brittle(`device attestation proofs`, t => {
+  t.is(failed, 0, `${failed} of ${passed + failed} assertions failed`)
+})

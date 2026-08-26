@@ -339,7 +339,9 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
     channel: appRpc.channel,
     mediaGraph: appRpc.mediaGraph,
     video: appRpc.video,
-    watch: appRpc.watch,
+    // The viewer's own encrypted state: watch progress, library, and the
+    // device pairing that moves only that state between the user's devices.
+    personal: appRpc.personal,
     transfer: appRpc.transfer,
     search: appRpc.search,
     shell: appRpc.shell

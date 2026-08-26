@@ -42,7 +42,9 @@ const styles = StyleSheet.create({
   },
   title: {
     color: colors.text,
-    fontSize: 18,
+    fontSize: 13,
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
     fontFamily: fonts.heading,
   },
   subtitle: {

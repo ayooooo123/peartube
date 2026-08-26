@@ -83,9 +83,9 @@ function fakeYtDlp () {
   }
 }
 
-function driveTerminal ({ initialQuery, tmdb, ytDlp, execute }) {
+function driveTerminal ({ initialQuery, tmdb, ytDlp, execute, authority }) {
   const h = harness()
-  const driver = createInteractiveDriver({ tmdb, ytDlp, execute })
+  const driver = createInteractiveDriver({ metadata: tmdb, authority, ytDlp, execute })
   const done = runTerminal({
     ...h,
     initialState: createPickerState({ query: initialQuery }),
@@ -125,6 +125,40 @@ test('interactive movie: search selects a movie, accepts a URL source, and publi
   t.is(executed.fetchUrl, 'https://example.com/clip.mp4')
   t.is(executed.itemDraft.contentKind, 'movie')
   t.is(executed.channelDraft.mediaId, '603')
+})
+
+// The picker browses one authority per session, and the coordinates it stamps
+// on the drafts are that authority's — never a default it was not given.
+test('interactive movie: the browsed authority owns the coordinates it produces', async (t) => {
+  let executed = null
+  const term = driveTerminal({
+    initialQuery: 'matrix',
+    authority: 'tvdb',
+    tmdb: {
+      async search () {
+        return [{ kind: 'movie', id: 'tvdb:movie:290434', title: 'The Matrix', year: 1999, mediaId: '290434', description: '', artwork: [] }]
+      }
+    },
+    execute: async (plan) => {
+      executed = plan
+      return { status: 'replicationPending', videoId: 'v3', jobId: 'add_3' }
+    }
+  })
+
+  await delay(40)
+  term.input.write(Buffer.from(KEY.enter)) // select The Matrix -> movieSource
+  await delay(40)
+  term.input.write(Buffer.from('https://example.com/matrix.mp4'))
+  await delay(200)
+  term.input.write(Buffer.from(KEY.enter)) // commit URL -> review
+  await delay(40)
+  term.input.write(Buffer.from(KEY.enter)) // review -> progress -> execute
+
+  await term.done
+  t.ok(executed, 'execute was invoked')
+  t.is(executed.itemDraft.mediaProvider, 'tvdb')
+  t.is(executed.itemDraft.mediaId, '290434')
+  t.is(executed.channelDraft.mediaProvider, 'tvdb')
 })
 
 test('interactive tv: drills show -> season -> episode, then publishes a local source', async (t) => {

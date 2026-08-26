@@ -11,6 +11,7 @@
 
 import crypto from 'hypercore-crypto'
 import b4a from 'b4a'
+import { isArtworkRendition } from './assets/rendition.js'
 import {
   DEFAULT_STORED_PROTOCOL_MIGRATIONS,
   initializeStorage,
@@ -39,8 +40,26 @@ import { createPersonalManager } from './personal/personal-manager.js';
 import { createUploadManager } from './upload.js';
 import { createPublisherCatalogRegistry } from './api/publisher.js'
 import { createScopedNetworkRuntime } from './network/scoped-runtime.js'
-import { createPublisherCatalogProjection } from './media-graph/catalog-projection.js'
+import { createIndexVerificationRuntime } from './runtime.js'
 import {
+  createConsumerCatalogProjection,
+  createPublisherCatalogProjection,
+  projectAuthenticatedPublisherMediaRecords,
+} from './media-graph/catalog-projection.js'
+import { createAvailabilityEvidenceStore } from './assets/availability-evidence.js'
+import { createLocalMediaIndex } from './indexing/local-index.js'
+import { createIndexFeedManager } from './indexing/feed-manager.js'
+import { createIndexPublisherFollowReconciler } from './indexing/publisher-follow-reconciler.js'
+import {
+  CONSUMER_MODERATION_PROFILE_SETTING_KEY,
+  createConsumerModerationPolicy,
+  createConsumerModerationProfileController,
+  createConsumerModerationProfileTransaction,
+  createConsumerWorkRevalidator,
+  createModerationManager,
+} from './moderation/index.js'
+import {
+  createLegacyCatalogResolver,
   createPublicationV1CheckpointRepository,
   createPublicationV1LegacyRepository,
   createPublicationV1StartupLifecycle,
@@ -75,8 +94,8 @@ import {
   loadBarePathModule,
   resolveBareFsModuleSync,
   resolveBarePathModuleSync,
-  resolveBareOrNodeFsModuleSync,
-  resolveBareOrNodePathModuleSync,
+  loadBareOrNodeFsModule,
+  loadBareOrNodePathModule,
 } from './runtime-modules.js'
 import {
   isCorestoreLockError,
@@ -101,6 +120,9 @@ export function buildStorageConfig(config, primaryKey) {
     swarmOptions: config.swarmOptions ?? {},
     expectedProtocolVersion: config.expectedProtocolVersion,
     storedProtocolMigrations: config.storedProtocolMigrations ?? DEFAULT_STORED_PROTOCOL_MIGRATIONS,
+    // Optional relay block offload. Reaches initializeStorage, which wraps the
+    // CorestoreStorage with it and publishes it on the storage context.
+    blockOffload: config.blockOffload ?? null,
     lifecycle: config.lifecycle,
   }
 }
@@ -124,8 +146,16 @@ function resolveAsyncFsOp(fs, name) {
 
 function createStorageUsageMeasurer(storagePath) {
   return async function getDiskUsageBytes() {
-    const fs = resolveBareOrNodeFsModuleSync()
-    const path = resolveBareOrNodePathModuleSync()
+    // Load fs/path through the async resolvers, not the *Sync ones. The sync
+    // resolvers reach the runtime through `require`, which does not exist in
+    // an ES module under Node - so they returned null in the relay and the
+    // desktop host, the measurer bailed, and storage read a flat 0 while
+    // gigabytes sat on disk. Bare keeps `require` as a global, which is why
+    // this only ever worked on mobile.
+    const [fs, path] = await Promise.all([
+      loadBareOrNodeFsModule().catch(() => null),
+      loadBareOrNodePathModule().catch(() => null)
+    ])
     if (!fs || !path || !storagePath) return null
     const stat = resolveAsyncFsOp(fs, 'stat')
     const readdir = resolveAsyncFsOp(fs, 'readdir')
@@ -235,6 +265,57 @@ export async function startBackendSeedPin({
  * @param {BackendConfig} config - Configuration options
  * @returns {Promise<BackendContext>} - All backend components
  */
+// A publisher is only a source for what it currently holds. Publishing takes
+// custody for the life of that process; nothing did so again on the next start,
+// so a restarted relay advertised a catalog whose bytes no peer could fetch.
+// Bounded on purpose: this runs on every boot, and a publisher with a large
+// catalog must not spend its startup taking custody of all of it at once.
+const MAX_SERVED_LOCAL_PUBLICATIONS = 256
+
+async function serveLocalPublications(ctx, { catalogRegistry, assetManifestStore, scopedNetwork } = {}) {
+  if (typeof catalogRegistry?.getWritableBindings !== 'function') return
+  if (typeof scopedNetwork?.retainAuthorizedRendition !== 'function') return
+  if (typeof assetManifestStore?.getManifest !== 'function') return
+
+  let served = 0
+  const bindings = await catalogRegistry.getWritableBindings()
+  for (const binding of Array.isArray(bindings) ? bindings : []) {
+    const catalog = binding?.catalog
+    if (!catalog?.writable || typeof catalog.listProjections !== 'function') continue
+    let cursor = null
+    do {
+      if (isContextShuttingDown(ctx)) return
+      const page = await catalog.listProjections('publication', { cursor, limit: 64 })
+      for (const item of page?.items || []) {
+        if (served >= MAX_SERVED_LOCAL_PUBLICATIONS) break
+        const publicationId = item?.body?.publicationId
+        const publicationIdHex = typeof publicationId === 'string'
+          ? publicationId
+          : (publicationId ? b4a.toString(publicationId, 'hex') : null)
+        if (!publicationIdHex) continue
+        const manifest = assetManifestStore.getManifest(publicationIdHex)
+        const rendition = (manifest?.body?.renditions || []).find(candidate => (
+          candidate && !candidate.blocked && !candidate.superseded && !isArtworkRendition(candidate)
+        ))
+        if (!rendition) continue
+        try {
+          // Artwork published with the title is taken along by the runtime.
+          await scopedNetwork.retainAuthorizedRendition({
+            manifest,
+            renditionId: rendition.renditionId,
+            publicationId: publicationIdHex,
+          })
+          served++
+        } catch {
+          // One title that cannot be served must not stop the rest.
+        }
+      }
+      cursor = served >= MAX_SERVED_LOCAL_PUBLICATIONS ? null : (page?.nextCursor || null)
+    } while (cursor)
+  }
+  if (served > 0) console.log('[Orchestrator] Serving local publications:', served)
+}
+
 export async function createBackendContext(config) {
   const {
     storagePath,
@@ -411,16 +492,51 @@ export async function createBackendContext(config) {
   try {
   // Phase 2: Create managers (synchronous, fast)
   const networkPolicyStore = ctx.metaDb
-  const initialNetworkPolicy = await loadNetworkPolicy({
+  let initialNetworkPolicy = await loadNetworkPolicy({
     store: networkPolicyStore,
     defaults: networkPolicy,
   })
+  // A stored policy wins over defaults, which is right for a person's device
+  // and wrong for a host whose whole job is serving. The shared default upload
+  // permission is 'manual' and uploadAllowed demands 'enabled', so a relay that
+  // booted once before it was configured keeps refusing every block request
+  // forever: it advertises a catalog it will never serve. When the caller
+  // starts a process whose purpose is to serve, that intent outranks a stored
+  // value nobody chose.
+  if (networkPolicy?.uploadPermission === 'enabled' && initialNetworkPolicy.uploadPermission !== 'enabled') {
+    console.log('[Orchestrator] Enabling uploads: this process is configured to serve')
+    initialNetworkPolicy = {
+      ...initialNetworkPolicy,
+      uploadPermission: 'enabled',
+      uploadCeilingBytes: Number(networkPolicy.uploadCeilingBytes || initialNetworkPolicy.uploadCeilingBytes || 0),
+    }
+  }
+  const consumerModerationProfile = createConsumerModerationProfileController({
+    repository: {
+      async load() {
+        return ctx.personal?.getSetting
+          ? ctx.personal.getSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
+          : null
+      },
+      async save(state) {
+        if (ctx.personal?.writable) {
+          await ctx.personal.setSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY, state)
+        }
+      },
+    },
+  })
+  await consumerModerationProfile.ready
+  ctx.consumerModerationProfile = consumerModerationProfile
+  initialNetworkPolicy = {
+    ...initialNetworkPolicy,
+    trustedModerationFeeds: consumerModerationProfile.getEffectiveCuratorSubscriptions(),
+  }
   assertNetworkPolicyRuntimeSupported(initialNetworkPolicy)
   const initialNetworkEnvironment = {
     metered: network.metered === true,
     background: false,
   }
-  const initialRuntimeNetworkPolicy = resolveNetworkPolicyForEnvironment(
+  let initialRuntimeNetworkPolicy = resolveNetworkPolicyForEnvironment(
     initialNetworkPolicy,
     initialNetworkEnvironment,
   )
@@ -459,7 +575,61 @@ export async function createBackendContext(config) {
   ctx.mediaCatalogProjection = mediaCatalogProjection
   ctx.mediaGraphStore = mediaCatalogProjection.mediaGraphStore
   ctx.assetManifestStore = mediaCatalogProjection.assetManifestStore
+  // Availability evidence is collected lazily by the asset/playback layer and
+  // read passively by the media graph API. An empty store honestly reports
+  // "awaiting replication" rather than inventing reachability.
+  ctx.availabilityEvidenceStore = createAvailabilityEvidenceStore()
+  // Opens the immutable rendition core a signed manifest names. Playback
+  // preparation authorizes the key against the manifest before reading, so this
+  // never widens what a selected source is allowed to touch. A core that cannot
+  // become ready is closed and reported as a failure, so preparation can fail
+  // over instead of handing the player a dead session.
+  ctx.openAssetCore = async coreKey => {
+    const core = ctx.store.get({ key: b4a.from(String(coreKey), 'hex') })
+    try {
+      await core.ready()
+    } catch (error) {
+      try { await core.close() } catch {}
+      throw error
+    }
+    return core
+  }
   lifecycle.ownResource('publisher media catalog projection', mediaCatalogProjection, 'close', 5000)
+  // These managers are deliberately shared by the scoped transport and local
+  // consumer projection. Signed page ingestion happens once; catalog reads only
+  // project the resulting local state and never initiate transport work.
+  let consumerIndexFeedManager = null
+  const indexPublisherFollowReconciler = createIndexPublisherFollowReconciler({
+    getScopedNetwork: () => scopedNetwork,
+    getRecords: () => consumerIndexFeedManager?.getRecords?.() || [],
+  })
+  consumerIndexFeedManager = createIndexFeedManager({
+    now: () => Date.now(),
+    onAcceptedRecord: indexPublisherFollowReconciler.onAcceptedRecord,
+    onRecordsRemoved: indexPublisherFollowReconciler.onRecordsRemoved,
+    stateRepository: {
+      async load() {
+        return (await ctx.metaDb.get('consumer-index-feed-state:v1'))?.value || null
+      },
+      async save(state) {
+        await ctx.metaDb.put('consumer-index-feed-state:v1', state)
+      },
+    },
+  })
+  let onConsumerModerationRecordsChanged = async () => {}
+  const consumerModerationManager = createModerationManager({
+    now: () => Date.now(),
+    onRecordsChanged: event => onConsumerModerationRecordsChanged(event),
+    stateRepository: {
+      async load() {
+        return (await ctx.metaDb.get('consumer-moderation-feed-state:v1'))?.value || null
+      },
+      async save(state) {
+        await ctx.metaDb.put('consumer-moderation-feed-state:v1', state)
+      },
+    },
+  })
+  let consumerCatalogProjection = null
   scopedNetwork = createScopedNetworkRuntime({
     swarm: ctx.swarm,
     store: ctx.store,
@@ -469,18 +639,94 @@ export async function createBackendContext(config) {
     trustedBootstrapSigners: network.trustedBootstrapSigners,
     trustedBootstrapRootIds: network.trustedBootstrapRootIds,
     authorizePublication: request => mediaCatalogProjection.authorizeRendition(request),
+    authorizeConsumerWork: async ({ entityRef, publicationId }) => {
+      if (!consumerCatalogProjection) return false
+      await mediaCatalogProjection.rebuild()
+      consumerCatalogProjection.rebuild()
+      if (entityRef != null) return consumerCatalogProjection.isVisible(entityRef)
+      if (publicationId != null) return consumerCatalogProjection.isPublicationVisible(publicationId)
+      return false
+    },
     onCatalogUpdate: async () => {
       try {
         await mediaCatalogProjection.rebuild()
+        // The consumer projection is what every catalog surface reads through.
+        // Rebuilding only the media graph leaves it holding the state from
+        // before the sync, so freshly ingested publications stay invisible and
+        // the app shows an empty catalog despite a clean ingest.
+        consumerCatalogProjection?.rebuild()
       } finally {
         await scopedNetwork?.revalidateRetainedRenditions?.()
       }
     },
     retainArchiveCore,
+    indexFeedManager: consumerIndexFeedManager,
+    moderationManager: consumerModerationManager,
+    bootstrapLocatorKeyPair: deviceKeyPair,
+    publisherSyncStateRepository: {
+      async load(publisherId) {
+        return (await ctx.metaDb.get(`consumer-publisher-sync-state:v1:${publisherId}`))?.value || null
+      },
+      async save(publisherId, state) {
+        await ctx.metaDb.put(`consumer-publisher-sync-state:v1:${publisherId}`, state)
+      },
+      async clear(publisherId) {
+        await ctx.metaDb.del(`consumer-publisher-sync-state:v1:${publisherId}`)
+      },
+      async loadGlobal() {
+        return (await ctx.metaDb.get('consumer-publisher-sync-budget-global:v1'))?.value || null
+      },
+      async saveGlobal(state) {
+        await ctx.metaDb.put('consumer-publisher-sync-budget-global:v1', state)
+      },
+    },
     initialNetworkPolicy: initialRuntimeNetworkPolicy,
   })
   ctx.scopedNetwork = scopedNetwork
+  await consumerIndexFeedManager.ready
+  await indexPublisherFollowReconciler.reconcile()
   lifecycle.ownResource('scoped network runtime', scopedNetwork, 'close', 5000)
+  // Consumer projection is a local view over the authenticated publisher graph
+  // plus optional bounded index records. It owns neither a feed nor authority.
+  const consumerModerationPolicy = createConsumerModerationPolicy({
+    profileController: consumerModerationProfile,
+    moderationManager: consumerModerationManager,
+  })
+  consumerCatalogProjection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex(),
+    indexFeedManager: consumerIndexFeedManager,
+    bootstrapManager: { listLocators: () => scopedNetwork.listBootstrapLocators() },
+    mediaGraphStore: mediaCatalogProjection.mediaGraphStore,
+    moderationPolicy: consumerModerationPolicy,
+    publisherRecords: ({ moderationPolicy, visibleClaims } = {}) => projectAuthenticatedPublisherMediaRecords({
+      mediaGraphStore: mediaCatalogProjection.mediaGraphStore,
+      assetManifestStore: mediaCatalogProjection.assetManifestStore,
+      moderationPolicy,
+      consumerClaims: visibleClaims,
+    }),
+  })
+  ctx.consumerIndexFeedManager = consumerIndexFeedManager
+  ctx.consumerModerationManager = consumerModerationManager
+  ctx.consumerCatalogProjection = consumerCatalogProjection
+  // A device that already holds a synced catalog receives no further pages, so
+  // onCatalogUpdate never fires and nothing else populates these projections
+  // from what is already on disk. Without this, every catalog surface is empty
+  // after a restart until some publisher happens to append.
+  await mediaCatalogProjection.rebuild().catch(error => {
+    console.log('[Orchestrator] media catalog projection rebuild failed at startup:', error?.message || error)
+  })
+  try {
+    consumerCatalogProjection.rebuild()
+  } catch (error) {
+    console.log('[Orchestrator] consumer catalog projection rebuild failed at startup:', error?.message || error)
+  }
+  const indexVerificationRuntime = createIndexVerificationRuntime({
+    services: maximum => scopedNetwork.listRetainedIndexServiceAdapters(maximum),
+    catalogRegistry,
+    scopedNetwork,
+    lifecycle,
+  })
+  ctx.indexVerificationRuntime = indexVerificationRuntime
   const configuredOperabilityServices = config.operability?.services
     ? await Promise.resolve(config.operability.services)
     : config.operability?.servicesPromise
@@ -499,6 +745,10 @@ export async function createBackendContext(config) {
     capacityBytes: archive.capacityBytes,
     diagnostics: archiveDiagnostics,
     now: typeof archive.now === 'function' ? archive.now : () => Date.now(),
+    // Published by the network lifecycle API on every evaluation. Until one has
+    // been published this device has not been cleared to promise anyone durable
+    // storage, so the ledger refuses new pledges and keeps the ones it holds.
+    participation: () => ctx.participationDecision ?? null,
     repository: {
       async load() {
         return (await ctx.metaDb.get(archiveReservationStateKey))?.value || null
@@ -512,7 +762,9 @@ export async function createBackendContext(config) {
 
   const desiredArchiveParticipationEnabled =
     archive.enabled !== false &&
-    initialNetworkPolicy.retentionMode === 'archive-pledges'
+    initialNetworkPolicy.policyVersion === 2 &&
+    initialNetworkPolicy.migrationRequired !== true &&
+    initialNetworkPolicy.archiveEnabled === true
   const permissionlessArchiveNetwork = deviceKeyPair?.publicKey && deviceKeyPair?.secretKey
     ? createPermissionlessArchiveNetwork({
         keyPair: deviceKeyPair,
@@ -528,7 +780,7 @@ export async function createBackendContext(config) {
           },
         },
         enabled: false,
-        capacityBytes: archive.capacityBytes,
+        capacityBytes: initialNetworkPolicy.archiveBudgetBytes,
         maxRequestBytes: archive.maxRequestBytes,
         diagnostics: archiveDiagnostics,
         peerScorer,
@@ -540,9 +792,25 @@ export async function createBackendContext(config) {
         authorizeRequest: request => authorizeArchiveRequestFromManifestStore(request, {
           manifestStore: mediaCatalogProjection.assetManifestStore,
           authorizeRendition: input => mediaCatalogProjection.authorizeRendition(input),
+          resolveManifest: async publicationId => {
+            await mediaCatalogProjection.update()
+            return mediaCatalogProjection.assetManifestStore.getManifest(publicationId)
+          },
         }),
+        authorizeConsumerVisibility: async request => {
+          await mediaCatalogProjection.rebuild()
+          consumerCatalogProjection.rebuild()
+          return consumerCatalogProjection.isPublicationVisible(request.body.publicationId)
+        },
       })
     : null
+  const revalidateConsumerWork = createConsumerWorkRevalidator({
+    mediaCatalogProjection,
+    getConsumerCatalogProjection: () => consumerCatalogProjection,
+    scopedNetwork,
+    getArchiveNetwork: () => permissionlessArchiveNetwork,
+  })
+  onConsumerModerationRecordsChanged = revalidateConsumerWork
   await permissionlessArchiveNetwork?.ready
   ctx.archiveStore = archiveStore
   ctx.archivePolicy = archivePolicy
@@ -558,24 +826,60 @@ export async function createBackendContext(config) {
   lifecycle.ownResource('video statistics', videoStats)
   const identityManager = createIdentityManager({ ctx });
   lifecycle.ownResource('identity manager', identityManager)
-  const personalManager = createPersonalManager({ ctx, identityManager });
+  const personalManager = createPersonalManager({
+    ctx,
+    identityManager,
+    onActiveStoreChanged: async () => {
+      await ctx.reloadConsumerModerationProfile?.()
+    },
+  });
   lifecycle.ownResource('personal manager', personalManager, 'close', 2000)
   ctx.personalManager = personalManager;
 
   // Keep the active personal store in sync with the active identity across all
   // platforms by wrapping the identity-manager mutators in one place (every
-  // platform changes identities through these). Best-effort: a personal-store
-  // failure must not break identity switching/creation.
-  const refreshActivePersonalStore = async (publicKey) => {
+  // platform changes identities through these). Store activation is committed
+  // only after the consumer profile and transport subscriptions reconcile.
+  const refreshActivePersonalStore = async (publicKey, { allowDeviceLocal = false } = {}) => {
     const pk = publicKey || identityManager.getActivePublicKey?.()
     if (!pk) return
-    ctx.personal = null
-    await personalManager.setActive(pk)
+    const store = await personalManager.setActive(pk, { allowDeviceLocal })
+    const explicitDeviceLocal = (
+      allowDeviceLocal &&
+      personalManager.getActivePublicKey() === 'device-local' &&
+      personalManager.getAnonymous() === store &&
+      ctx.personal === store
+    )
+    if (explicitDeviceLocal) return store
+    if (
+      !store ||
+      personalManager.getActivePublicKey() !== pk ||
+      personalManager.getActive() !== store ||
+      ctx.personal !== store
+    ) {
+      const error = new Error(`Active PersonalStore does not match identity ${pk}`)
+      error.code = 'PERSONAL_STORE_IDENTITY_MISMATCH'
+      throw error
+    }
+    return store
   }
   const removeIdentityMutationHooks = installSeedPinIdentityMutationHooks({
     identityManager,
-    onMutation: async () => {
-      await refreshActivePersonalStore()
+    onMutation: async mutation => {
+      const allowDeviceLocal = (
+        personalManager.getActivePublicKey() === 'device-local' &&
+        (
+          mutation.method === 'createIdentity' ||
+          mutation.method === 'addPairedChannelIdentity'
+        )
+      )
+      await refreshActivePersonalStore(null, { allowDeviceLocal })
+      await ctx.seedPinRegistration?.refreshClientAuth?.()
+    },
+    onRollback: async ({ previousPublicKey }) => {
+      await refreshActivePersonalStore(previousPublicKey, {
+        allowDeviceLocal: personalManager.getActivePublicKey() === 'device-local',
+      })
       await ctx.seedPinRegistration?.refreshClientAuth?.()
     },
   })
@@ -608,7 +912,10 @@ export async function createBackendContext(config) {
   // downloading *ahead* of the playhead so a fast peer builds a real buffer
   // instead of the on-demand stream settling at playback bitrate. The window
   // cache trims behind, so the two together bound the on-disk footprint.
-  const playbackForwardFill = createPlaybackForwardFill({ store: ctx.store });
+  const playbackForwardFill = createPlaybackForwardFill({
+    store: ctx.store,
+    staticAssetEntries: ctx.staticAssetPlaybackEntries,
+  });
   lifecycle.ownResource('playback forward fill', playbackForwardFill, 'stop', 2000)
   playbackForwardFill.start();
   ctx.playbackForwardFill = playbackForwardFill;
@@ -683,17 +990,7 @@ export async function createBackendContext(config) {
     migrate: () => runPublicationV1StartupMigration({
       sourceRepository: publicationV1SourceRepository,
       checkpointRepository: publicationV1CheckpointRepository,
-      resolveCatalog: async source => {
-        const genesisRootKey = b4a.from(source.ownerPublisherId, 'hex')
-        const publisherId = derivePublisherId(genesisRootKey)
-        try {
-          return await catalogRegistry.resolve(publisherId)
-        } catch (error) {
-          if (error?.code === 'PUBLISHER_CATALOG_UNAVAILABLE' ||
-              /PUBLISHER_CATALOG_UNAVAILABLE/.test(error?.message || '')) return null
-          throw error
-        }
-      },
+      resolveCatalog: createLegacyCatalogResolver({ catalogRegistry, derivePublisherId }),
       deviceKeyPair,
       mediaCatalogProjection,
     }),
@@ -704,7 +1001,7 @@ export async function createBackendContext(config) {
       } else if (permissionlessArchiveNetwork && desiredArchiveParticipationEnabled) {
         await permissionlessArchiveNetwork.setParticipation({
           enabled: true,
-          capacityBytes: archive.capacityBytes,
+          capacityBytes: initialNetworkPolicy.archiveBudgetBytes,
           maxRequestBytes: archive.maxRequestBytes,
           acceptanceProbability: archive.acceptanceProbability,
         })
@@ -726,12 +1023,28 @@ export async function createBackendContext(config) {
       ctx.completePublicationV1Migration = null
     }
   })
-  await completePublicationV1Migration()
+  // Scoped discovery only starts once this reports 'complete'. When it does
+  // not, the device stays on legacy channel discovery, joins no bootstrap
+  // scope, follows no publisher, and every catalog surface is empty with no
+  // indication of why. Say so plainly instead of leaving it to be inferred
+  // from an absence of logs.
+  const bootMigration = await completePublicationV1Migration()
+  console.log('[Orchestrator] publication v1 migration status:', bootMigration?.status ?? 'unknown',
+    'scopedDiscoveryStarted:', publicationV1Startup.ready)
 
   // Open the active identity's private multi-writer personal store (subscriptions,
   // playlists, watch history, settings) and expose it on ctx. Best-effort: a
   // failure here must not block backend startup.
   await personalManager.init().catch((err) => ipcLog('[orchestrator] personal store init failed: ' + (err?.message || err)))
+  // PersonalStore is the durable, encrypted device/paired-device authority for
+  // the local moderation profile. Network policy mirrors only its effective
+  // feed set so transport has no independent profile state to drift from.
+  if (ctx.personal) await consumerModerationProfile.reload()
+  initialNetworkPolicy = {
+    ...initialNetworkPolicy,
+    trustedModerationFeeds: consumerModerationProfile.getEffectiveCuratorSubscriptions(),
+  }
+  initialRuntimeNetworkPolicy = resolveNetworkPolicyForEnvironment(initialNetworkPolicy, initialNetworkEnvironment)
 
   networkPolicyRuntime = createNetworkPolicyRuntime({
     initialPolicy: initialNetworkPolicy,
@@ -746,18 +1059,48 @@ export async function createBackendContext(config) {
   ctx.networkPolicyRuntime = networkPolicyRuntime
   ctx.networkPolicyStore = networkPolicyStore
   ctx.onNetworkPolicyChange = async policy => {
-    pendingNetworkPolicy = policy
     if (!publicationV1Startup.ready) {
+      pendingNetworkPolicy = policy
       return resolveNetworkPolicyForEnvironment(policy, initialNetworkEnvironment)
     }
-    return networkPolicyRuntime.apply(policy)
+    const effective = await networkPolicyRuntime.apply(policy)
+    pendingNetworkPolicy = policy
+    await revalidateConsumerWork()
+    return effective
   }
+  let consumerPolicyWrites = Promise.resolve()
+  const consumerPolicyTransactionQueue = Object.freeze({
+    run(operation) {
+      const next = consumerPolicyWrites.then(operation, operation)
+      consumerPolicyWrites = next.catch(() => {})
+      return next
+    },
+  })
   const policyApi = createPolicyApi({
     store: networkPolicyStore,
     initialPolicy: initialNetworkPolicy,
     onPolicyChange: ctx.onNetworkPolicyChange,
     validatePolicy: policy => networkPolicyRuntime.assertSupported(policy),
+    getProfileModerationFeeds: () =>
+      consumerModerationProfile.getEffectiveCuratorSubscriptions(),
+    transactionQueue: consumerPolicyTransactionQueue,
   })
+  const applyProfileState = async (state, transactionContext) => {
+    const response = await policyApi.setProfileModerationFeeds(
+      state.profile.enabled === false ? [] : state.profile.curatorSubscriptions,
+      transactionContext,
+    )
+    if (response.success === false) throw new Error(response.errorCode || 'consumer moderation profile rejected')
+    return state
+  }
+  const moderationProfileTransaction = createConsumerModerationProfileTransaction({
+    profileController: consumerModerationProfile,
+    applyState: applyProfileState,
+    afterCommit: revalidateConsumerWork,
+    transactionQueue: consumerPolicyTransactionQueue,
+  })
+  ctx.setConsumerModerationProfile = input => moderationProfileTransaction.apply(input)
+  ctx.reloadConsumerModerationProfile = () => moderationProfileTransaction.reload()
 
   // Phase 6: Create the universal API over the single scoped P2P runtime.
   const api = createApi({
@@ -768,8 +1111,14 @@ export async function createBackendContext(config) {
     catalogRegistry,
     scopedNetwork,
     permissionlessArchiveNetwork,
+    indexVerificationRuntime,
     policyApi,
     networkPolicyRuntime,
+    // A relay is a headless server, not a viewer's device: it has no battery,
+    // thermal envelope, metered link, app lifecycle or playback window, and
+    // the participation decision has to say so or its archive custody gate
+    // never opens.
+    hostKind: platform === 'relay' ? 'server' : 'device',
   });
 
 
@@ -886,6 +1235,23 @@ export async function createBackendContext(config) {
         // Skip prefetch - it was causing errors and slowing things down
       } catch (e) {
         console.log('[Orchestrator] Warm-up skipped:', e?.message)
+      }
+
+      if (signal.aborted || isContextShuttingDown(ctx)) return
+      // Publishing announces a catalog for the life of one process, but the
+      // bytes are served from the rendition's asset scope, which only exists
+      // while something holds the publication. Restart the publisher and it
+      // keeps advertising titles nobody can fetch: peers ask, nothing answers,
+      // and every source reads as awaiting replication. Take custody of what
+      // this device published so it stays a source for it.
+      try {
+        await serveLocalPublications(ctx, {
+          catalogRegistry,
+          assetManifestStore: ctx.assetManifestStore,
+          scopedNetwork,
+        })
+      } catch (e) {
+        console.log('[Orchestrator] Local publications are not being served:', e?.message)
       }
 
       if (signal.aborted || isContextShuttingDown(ctx)) return

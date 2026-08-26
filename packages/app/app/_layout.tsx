@@ -25,6 +25,7 @@ import { colors } from '@/lib/colors'
 import { AppContext, type AppContextType } from '@/lib/AppContext'
 import { buildBundleVersionKey } from '@peartube/platform/native-bundle-cache'
 import { getNativePublisherKeyVault, getNativePublisherSigner } from '@/lib/publisher-shell-signer'
+import { useDeviceConditionsReporter } from '@/hooks/useNetworkPolicy'
 export { useApp } from '@/lib/AppContext'
 
 // Configure Reanimated logger to disable strict mode warnings
@@ -552,6 +553,7 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
         migrateLegacyPublisherRoot: async (request: unknown) =>
           publisherKeyVault.importLegacyRootMigration(request),
       })
+      await ensurePersonalEncryption(platformRPC.rpc)
       startupLog('[Startup] initPlatformRPC returned ms=', Date.now() - t0)
 
       if (!backendReadyRef.current) {
@@ -621,6 +623,7 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
 
         await platformRPC.initPlatformRPC()
       }
+      await ensurePersonalEncryption(platformRPC.rpc)
 
       // Upload UI cannot become ready until the privileged Bun shell has
       // provisioned, initialized, and admitted the one local publisher catalog.
@@ -1052,7 +1055,8 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
     mimeType: string = 'video/mp4',
     category: string = 'Other',
     onProgress?: (progress: number, speed?: number, eta?: number, isTranscoding?: boolean) => void,
-    skipThumbnailGeneration: boolean = false
+    skipThumbnailGeneration: boolean = false,
+    mediaMetadata?: import('@peartube/core').UploadVideoEpisodeMetadata
   ): Promise<any> => {
     if (!platformRPC) throw new Error('RPC not ready')
 
@@ -1089,6 +1093,7 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
         description,
         category,
         skipThumbnailGeneration,
+        ...mediaMetadata,
       })
       console.log('[App] Upload RPC returned:', JSON.stringify(result))
 
@@ -1133,6 +1138,13 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
     setBackendError(null)
     initNativeBackend()
   }, [initNativeBackend])
+
+  // Nothing else in the app supplies the OS signals the backend participation
+  // decision runs on, and an unreported signal stays unknown — which the
+  // decision treats as a constraint. Reporting starts as soon as the backend is
+  // up and re-reports on lifecycle, network, and power changes.
+  const activeRpc = platformRPC?.isInitialized?.() ? platformRPC.rpc : null
+  useDeviceConditionsReporter(activeRpc)
 
   const contextValue: AppContextType = {
     ready,

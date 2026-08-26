@@ -31,10 +31,13 @@ export async function createDeps (context) {
   const pending = env.PEARTUBE_FAKE_PENDING === '1'
   return {
     openAddRuntime: async () => ({ metadataBee: bee, close: async () => {} }),
-    createTmdbProvider: () => ({
-      async getShow () { return { name: 'Breaking Bad', mediaId: '1396', provider: 'tmdb', artwork: [] } },
-      async getSeason () { return [{ seasonNumber: 1, episodeNumber: 1, title: 'Pilot', airDate: '2008-01-20', artwork: [] }] },
-      async getMovie () { return { title: 'The Matrix', mediaId: '603', provider: 'tmdb', year: 1999, artwork: [] } }
+    createMetadataProvider: async (authority) => ({
+      async search () { return [] },
+      async getShow () { return { name: 'Breaking Bad', mediaId: '1396', provider: authority, artwork: [] } },
+      async getSeason () { return [{ seasonNumber: 1, episodeNumber: 1, title: 'Pilot', airDate: '2008-01-20', artwork: [] }, { seasonNumber: 1, episodeNumber: 2, title: "Cat's in the Bag...", airDate: '2008-01-27', artwork: [] }] },
+      async getMovie () { return { title: 'The Matrix', mediaId: '603', provider: authority, year: 1999, artwork: [] } },
+      async getRecording () { return { title: 'Paranoid Android', artist: 'Radiohead', mediaId: 'b1a9c0e8-2f9d-4b3e-9a24-6f3c1d9a7b55', provider: authority, firstReleaseDate: '1997-05-21', artwork: [] } },
+      async getRelease () { return { title: 'OK Computer', artist: 'Radiohead', mediaId: '550e8400-e29b-41d4-a716-446655440000', provider: authority, date: '1997-05-21', artwork: [] } }
     }),
     createJobStore,
     createExecutor,

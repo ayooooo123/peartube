@@ -9,7 +9,8 @@ import {
   PolicyScreenFrame,
 } from '@/components/library/PolicyControls'
 import { RetentionPolicyEditor } from '@/components/library/RetentionPolicyEditor'
-import type { NetworkPolicy, NetworkPolicyRpc } from '@/lib/network-policy'
+import { PARTICIPATION_MODE_LABELS, type NetworkPolicy, type NetworkPolicyRpc } from '@/lib/network-policy'
+import { DeveloperModeGate } from '@/lib/developer-mode'
 
 const UPLOAD_OPTIONS = [
   { value: 'disabled', label: 'Do not upload', detail: 'This device will not serve media blocks to peers.' },
@@ -28,9 +29,13 @@ type Props = {
   policy?: Partial<NetworkPolicy> | null
 }
 
-export default function NetworkPolicyScreen({ rpc, policy }: Props) {
+function NetworkPolicyScreen({ rpc, policy }: Props) {
   if (rpc) return <NetworkPolicyContent rpc={rpc} initialPolicy={policy} />
   return <ConnectedNetworkPolicy initialPolicy={policy} />
+}
+
+export default function DeveloperNetworkPolicyScreen(props: Props) {
+  return <DeveloperModeGate><NetworkPolicyScreen {...props} /></DeveloperModeGate>
 }
 
 function ConnectedNetworkPolicy({ initialPolicy }: { initialPolicy?: Partial<NetworkPolicy> | null }) {
@@ -50,7 +55,7 @@ function NetworkPolicyContent({
   return (
     <PolicyScreenFrame
       title="Network policy"
-      subtitle="Bandwidth, background behavior, storage, and retention decisions for this device."
+      subtitle="Exact overrides for this device. The everyday Data Saver / Balanced / Help More choice lives in Profile."
       loading={state.loading}
       saving={state.saving}
       error={state.error}
@@ -63,6 +68,12 @@ function NetworkPolicyContent({
             <PolicyHeading
               title="P2P traffic is observable"
               description="Sharing may expose your public IP. You cannot retract bytes peers already downloaded."
+            />
+          </PolicyCard>
+          <PolicyCard>
+            <PolicyHeading
+              title={`Participation mode: ${PARTICIPATION_MODE_LABELS[state.policy.participationMode]}`}
+              description="Chosen in Profile › How you help. The mode supplies this device's default ceilings. A ceiling counts as chosen once its value differs from the current mode's preset, and it then stays put: Help More will not widen it and Data Saver will not shrink it. Set it back to the mode's own value and it follows the mode again. Saving this form without changing a ceiling freezes nothing. The mode never relaxes an operating-system or hard device limit, and it never creates an archive pledge."
             />
           </PolicyCard>
           <PolicyCard>

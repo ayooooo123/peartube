@@ -1,4 +1,17 @@
-const COMMANDS = new Set(['add', 'config', 'help'])
+import {
+  ALL_COORDINATE_FLAGS,
+  canBrowse,
+  CONTENT_TYPES,
+  coordinateCollision,
+  coordinateRefusal,
+  coordinateRequirement,
+  coordinatesComplete,
+  mediaShape,
+  modeLabel,
+  providerRefusal
+} from './media-coordinates.js'
+
+const COMMANDS = new Set(['add', 'config', 'get', 'help', 'search'])
 
 const VALUE_FLAGS = new Map([
   ['--storage', 'storage'],
@@ -9,10 +22,17 @@ const VALUE_FLAGS = new Map([
   ['--season', 'season'],
   ['--episode', 'episode'],
   ['--movie-id', 'movieId'],
+  ['--recording-id', 'recordingId'],
+  ['--release-id', 'releaseId'],
   ['--title', 'title'],
   ['--channel-name', 'channelName'],
   ['--relay-ui', 'relayUi'],
-  ['--invidious', 'invidious']
+  ['--invidious', 'invidious'],
+  ['--output', 'output'],
+  ['--rendition', 'rendition'],
+  ['--limit', 'limit'],
+  ['--kind', 'kind'],
+  ['--timeout', 'timeout']
 ])
 
 const BOOLEAN_FLAGS = new Map([
@@ -27,17 +47,27 @@ const BOOLEAN_FLAGS = new Map([
 ])
 
 const REPEATABLE_FLAGS = new Map([
-  ['--relay', 'relay']
+  ['--relay', 'relay'],
+  ['--genre', 'genres']
 ])
 
-const EPISODE_COORDINATES = ['showId', 'season', 'episode']
 const ADD_ONLY_FLAGS = [
   ['type', '--type'],
   ['provider', '--provider'],
-  ['showId', '--show-id'],
-  ['season', '--season'],
-  ['episode', '--episode'],
-  ['movieId', '--movie-id']
+  ...ALL_COORDINATE_FLAGS.map(([key, flag]) => [key, flag])
+]
+
+// Network commands read the swarm; add/config never take these, and the two
+// network commands do not share each other's.
+const SEARCH_ONLY_FLAGS = [
+  ['limit', '--limit'],
+  ['kind', '--kind'],
+  ['genres', '--genre']
+]
+const GET_ONLY_FLAGS = [
+  ['output', '--output'],
+  ['rendition', '--rendition'],
+  ['timeout', '--timeout']
 ]
 
 export class PeartubeUsageError extends Error {
@@ -157,19 +187,8 @@ function parseFlagsAndPositionals(args) {
   return { flags, positionals }
 }
 
-function validateProvider(flags) {
-  if (flags.provider && flags.provider !== 'tmdb') {
-    throw new PeartubeUsageError(`Provider "${flags.provider}" is unavailable; only "tmdb" is supported`)
-  }
-}
-
-function validateCoordinateFamily(flags) {
-  const hasEpisodeCoordinate = EPISODE_COORDINATES.some(key => Object.hasOwn(flags, key))
-  const hasMovieCoordinate = Object.hasOwn(flags, 'movieId')
-
-  if (hasEpisodeCoordinate && hasMovieCoordinate && flags.type === undefined) {
-    throw new PeartubeUsageError('Cannot combine movie and episode coordinates')
-  }
+function refuse(message) {
+  if (message) throw new PeartubeUsageError(message)
 }
 
 function validateScriptedSource(query, positionalCount) {
@@ -186,16 +205,19 @@ function parseAdd(flags, positionals, options) {
   const fetchUrl = runtimeUrl(query)
   const interactive = canPrompt(options, flags)
 
-  validateProvider(flags)
-  validateCoordinateFamily(flags)
-
-  if (flags.type && flags.type !== 'episode' && flags.type !== 'movie' && flags.type !== 'video') {
-    throw new PeartubeUsageError(`Unsupported content type "${flags.type}"; expected "episode", "movie", or "video"`)
+  if (flags.type && !CONTENT_TYPES.includes(flags.type)) {
+    throw new PeartubeUsageError(`Unsupported content type "${flags.type}"; expected ${CONTENT_TYPES.map(type => `"${type}"`).join(', ')}`)
   }
 
+  refuse(providerRefusal(flags.type, flags.provider))
+  if (flags.type === undefined) refuse(coordinateCollision(flags))
+
   if (flags.type === 'video') {
-    if (Object.hasOwn(flags, 'movieId') || EPISODE_COORDINATES.some(key => Object.hasOwn(flags, key))) {
-      throw new PeartubeUsageError('Direct video mode does not accept TMDB coordinates')
+    // No authority categorizes a direct video, so every media coordinate —
+    // including the authority itself — is a contradiction rather than a hint.
+    const stray = [['provider', '--provider'], ...ALL_COORDINATE_FLAGS].find(([key]) => Object.hasOwn(flags, key))
+    if (stray) {
+      throw new PeartubeUsageError(`Direct video mode does not accept ${stray[1]}`)
     }
     if (flags.yes) {
       validateScriptedSource(query, positionals.length)
@@ -207,12 +229,10 @@ function parseAdd(flags, positionals, options) {
     return result('add', query, fetchUrl, flags, 'interactive')
   }
 
-  if (flags.type === 'episode') {
-    if (Object.hasOwn(flags, 'movieId')) {
-      throw new PeartubeUsageError('Episode mode does not accept --movie-id')
-    }
+  if (mediaShape(flags.type)) {
+    refuse(coordinateRefusal(flags.type, flags))
 
-    const complete = flags.provider === 'tmdb' && EPISODE_COORDINATES.every(key => Object.hasOwn(flags, key))
+    const complete = coordinatesComplete(flags.type, flags)
     if (complete && flags.yes) {
       validateScriptedSource(query, positionals.length)
       return result('add', query, fetchUrl, flags, 'scripted')
@@ -220,27 +240,12 @@ function parseAdd(flags, positionals, options) {
     if (complete && !interactive) {
       throw new PeartubeUsageError('Complete scripted coordinates require --yes')
     }
-    if (!interactive) {
-      throw new PeartubeUsageError('Episode mode requires --provider tmdb, --show-id, --season, and --episode')
-    }
-    return result('add', query, fetchUrl, flags, 'interactive')
-  }
-
-  if (flags.type === 'movie') {
-    if (EPISODE_COORDINATES.some(key => Object.hasOwn(flags, key))) {
-      throw new PeartubeUsageError('Movie mode does not accept --show-id, --season, or --episode')
-    }
-
-    const complete = flags.provider === 'tmdb' && Object.hasOwn(flags, 'movieId')
-    if (complete && flags.yes) {
-      validateScriptedSource(query, positionals.length)
-      return result('add', query, fetchUrl, flags, 'scripted')
-    }
-    if (complete && !interactive) {
-      throw new PeartubeUsageError('Complete scripted coordinates require --yes')
-    }
-    if (!interactive) {
-      throw new PeartubeUsageError('Movie mode requires --provider tmdb and --movie-id')
+    // Incomplete coordinates are finished in the picker, which browses one
+    // authority at a time and only where it has screens. Anything it cannot
+    // browse must arrive complete rather than be resolved against the wrong
+    // catalogue.
+    if (!interactive || !canBrowse(flags.type, flags.provider)) {
+      throw new PeartubeUsageError(`${modeLabel(flags.type)} mode requires ${coordinateRequirement(flags.type)}`)
     }
     return result('add', query, fetchUrl, flags, 'interactive')
   }
@@ -255,8 +260,56 @@ function parseAdd(flags, positionals, options) {
   if (!interactive) {
     throw new PeartubeUsageError('Non-interactive add requires --type and complete provider coordinates')
   }
+  if (flags.provider && !canBrowse(null, flags.provider)) {
+    throw new PeartubeUsageError(`The interactive picker cannot browse ${flags.provider}; add --type with complete coordinates`)
+  }
 
   return result('add', query, fetchUrl, flags, 'interactive')
+}
+
+function rejectForeignFlags(flags, forbidden, command) {
+  const found = forbidden.find(([key]) => Object.hasOwn(flags, key))
+  if (found) {
+    throw new PeartubeUsageError(`${found[1]} is only valid with ${command}`)
+  }
+}
+
+function positiveInteger(value, name) {
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new PeartubeUsageError(`${name} must be a positive integer`)
+  }
+  return parsed
+}
+
+function parseSearch(flags, positionals) {
+  rejectForeignFlags(flags, GET_ONLY_FLAGS, 'get')
+  const query = positionals.join(' ').trim()
+  if (!query) {
+    throw new PeartubeUsageError('Search requires a query')
+  }
+  if (Object.hasOwn(flags, 'limit')) flags.limit = positiveInteger(flags.limit, '--limit')
+  // Vocabulary belongs to the network command: an unknown genre is an honest
+  // empty result, but a blank filter is a typo the caller should hear about.
+  if (Object.hasOwn(flags, 'kind') && flags.kind.trim() === '') {
+    throw new PeartubeUsageError('--kind requires a value')
+  }
+  if (Object.hasOwn(flags, 'genres') && flags.genres.some(genre => genre.trim() === '')) {
+    throw new PeartubeUsageError('--genre requires a value')
+  }
+  return result('search', query, null, flags, 'scripted')
+}
+
+function parseGet(flags, positionals) {
+  rejectForeignFlags(flags, SEARCH_ONLY_FLAGS, 'search')
+  if (positionals.length === 0) {
+    throw new PeartubeUsageError('Get requires one entity or publication id')
+  }
+  if (positionals.length > 1) {
+    throw new PeartubeUsageError('Get accepts exactly one entity or publication id')
+  }
+  if (Object.hasOwn(flags, 'timeout')) flags.timeout = positiveInteger(flags.timeout, '--timeout')
+  return result('get', positionals[0], null, flags, 'scripted')
 }
 
 export function parsePeartubeArgv(argv = [], options = {}) {
@@ -293,6 +346,16 @@ export function parsePeartubeArgv(argv = [], options = {}) {
   if (addOnlyFlag) {
     throw new PeartubeUsageError(`${addOnlyFlag[1]} is only valid with add`)
   }
+
+  if (command === 'search') {
+    return parseSearch(flags, positionals)
+  }
+  if (command === 'get') {
+    return parseGet(flags, positionals)
+  }
+
+  rejectForeignFlags(flags, SEARCH_ONLY_FLAGS, 'search')
+  rejectForeignFlags(flags, GET_ONLY_FLAGS, 'get')
 
   if (positionals.length > 0) {
     throw new PeartubeUsageError(`Unexpected argument ${positionals[0]}`)

@@ -78,8 +78,56 @@ export function createWindowedIngestBudget(options = {}) {
     }
   }
 
+  function snapshot() {
+    refresh()
+    return {
+      version: 1,
+      windowStartedAt,
+      usage: [...usage.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, units]) => [key, units]),
+    }
+  }
+
+  function restore(state) {
+    if (state == null) return true
+    if (
+      !state ||
+      state.version !== 1 ||
+      !Number.isSafeInteger(state.windowStartedAt) ||
+      state.windowStartedAt < 0 ||
+      !Array.isArray(state.usage) ||
+      state.usage.length > maxTrackedKeys
+    ) {
+      return false
+    }
+    const restored = new Map()
+    for (const entry of state.usage) {
+      if (
+        !Array.isArray(entry) ||
+        entry.length !== 2 ||
+        typeof entry[0] !== 'string' ||
+        entry[0].length < 1 ||
+        entry[0].length > 1024 ||
+        !Number.isSafeInteger(entry[1]) ||
+        entry[1] < 1 ||
+        restored.has(entry[0])
+      ) {
+        return false
+      }
+      restored.set(entry[0], entry[1])
+    }
+    usage.clear()
+    for (const [key, units] of restored) usage.set(key, units)
+    windowStartedAt = Number(state.windowStartedAt)
+    refresh()
+    return true
+  }
+
   return {
     reserve,
+    restore,
+    snapshot,
     resetAt() {
       refresh()
       return windowStartedAt + windowMs

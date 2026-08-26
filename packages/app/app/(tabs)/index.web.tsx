@@ -4,17 +4,21 @@ import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 
-import { MediaCatalogView } from '@/components/media/MediaCatalogView'
+import { ConsumerHomeView } from '@/components/media/ConsumerHomeView'
 import { encodeMediaEntityRouteParam, getMediaEntityRouteId } from '@/components/media/MediaEntityDetailScreen'
 import type { MediaEntitySummary } from '@peartube/core'
 import { useMediaCatalog } from '@/hooks/useMediaCatalog'
 import { colors } from '@/lib/colors'
+import { useLocalWatchState } from '@/lib/watch-history'
 import { useApp } from '../_layout'
 
 export default function WebHomeScreen() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
   const { ready, rpc, platformEvents, backendError, startupStatus } = useApp()
+  // Continue Watching and Recommended are this device's own state. They come
+  // from the encrypted personal store, never from a request.
+  const watchState = useLocalWatchState()
   const catalog = useMediaCatalog({
     ready,
     rpc,
@@ -38,14 +42,12 @@ export default function WebHomeScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
-      <MediaCatalogView
-        title="Home"
-        subtitle="Resolved media from publishers you are authorized to discover"
+      <ConsumerHomeView
         state={catalog}
         diagnostic={catalog.diagnostic}
+        watchState={watchState}
         onRefresh={() => { void catalog.refresh() }}
-        onLoadNext={() => { void catalog.loadNext() }}
-        onEntityPress={openEntity}
+        onOpenEntity={openEntity}
         contentBottomInset={Math.max(insets.bottom + 32, 48)}
       />
     </View>

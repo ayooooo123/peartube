@@ -8,6 +8,11 @@
  */
 
 import { resolveCompatPlaybackUrl } from './transcode/playback-compat-runtime.mjs'
+import { normalizeUploadVideoMediaMetadata } from './upload-video-contract.js'
+import {
+  searchIndexCandidatesForTransport,
+  verifyIndexCandidateForTransport,
+} from './search/candidate-contract.js'
 
 function isPearTubeLoopbackBlobUrl(value) {
   if (typeof value !== 'string' || value.length === 0) return false
@@ -107,8 +112,10 @@ export function attachMobileHandlers(B, deps) {
   B.getMediaAgent = async (r) => api.getMediaAgent(r)
   B.getAgentContributions = async (r) => api.getAgentContributions(r)
   B.getPublicationSources = async (r) => api.getPublicationSources(r)
+  B.getEntityArtwork = async (r) => api.getEntityArtwork(r)
   B.getClaimProvenance = async (r) => api.getClaimProvenance(r)
   B.setSourcePreference = async (r) => api.setSourcePreference(r)
+  B.prepareMediaPlayback = async (r) => api.prepareMediaPlayback(r)
   B.provisionPublisherCatalog = async (r) => api.provisionPublisherCatalog(r)
   B.preparePublisherRootOperation = async (r) => api.preparePublisherRootOperation(r)
   B.submitPublisherRootOperation = async (r) => api.submitPublisherRootOperation(r)
@@ -338,7 +345,14 @@ export function attachMobileHandlers(B, deps) {
     if (filePath.startsWith('file://')) filePath = filePath.slice(7)
     const ext = filePath.split('.').pop()?.toLowerCase() || 'mp4'
     const mimeType = { mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', mov: 'video/quicktime', avi: 'video/x-msvideo' }[ext] || 'video/mp4'
-    const result = await uploadManager.uploadFromPath(channel, filePath, { title: r.title, description: r.description || '', mimeType, category: r.category || '' }, fs, (progress, bytesWritten, totalBytes, stats) => {
+    const mediaMetadata = normalizeUploadVideoMediaMetadata(r)
+    const result = await uploadManager.uploadFromPath(channel, filePath, {
+      title: r.title,
+      description: r.description || '',
+      mimeType,
+      category: r.category || '',
+      ...mediaMetadata,
+    }, fs, (progress, bytesWritten, totalBytes, stats) => {
       rpc.eventUploadProgress({ videoId: 'upload', progress, bytesUploaded: bytesWritten, totalBytes, speed: stats?.speed ? Math.max(0, Math.round(stats.speed)) : 0, eta: stats?.eta ? Math.max(0, Math.round(stats.eta)) : 0 })
     })
     if (!result?.success) throw new Error(result?.error || 'Upload failed')
@@ -388,6 +402,9 @@ export function attachMobileHandlers(B, deps) {
   }
   B.transcodeStop = async (r) => { try { const res = await transcoder.stopTranscode(r.sessionId); return { success: res.success, error: res.error || '' } } catch (err) { return { success: false, error: err?.message } } }
   B.transcodeStatus = async (r) => { try { const s = await transcoder.getStatus(r.sessionId); return { status: s.status || '', progress: s.progress || 0, bytesWritten: s.bytesWritten || 0, error: s.error || '' } } catch (err) { return { status: 'error', progress: 0, bytesWritten: 0, error: err?.message } } }
+
+  B.searchIndexCandidates = (r) => searchIndexCandidatesForTransport(api, r)
+  B.verifyIndexCandidate = (r) => verifyIndexCandidateForTransport(api, r)
 
   B.globalSearchVideos = async (r) => {
     try { const raw = await api.globalSearchVideos(r.query, { topK: r.topK || 20 }); return { results: (raw || []).map((i) => ({ id: String(i.id || ''), score: i.score != null ? String(i.score) : null, metadata: i.metadata ? JSON.stringify(i.metadata) : null })) } }

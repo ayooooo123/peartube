@@ -163,23 +163,26 @@ export async function verifyBootstrapLocator(envelope, options = {}) {
   if (!Number.isSafeInteger(now) || !Number.isSafeInteger(skew) || skew < 0) return false
   if (body.expiresAt + skew < now) return false
   if (body.issuedAt - skew > now) return false
-  const trustedSigners = options.trustedSigners || []
+  // A locator is self-authenticating metadata. Unknown signers are retained as
+  // *unverified candidates* for namespace proof, never treated as trust roots.
+  // The optional allowlist is diagnostic/operational policy only.
   const signed = await verifyApplicationEnvelope(envelope, {
     recordType: BOOTSTRAP_LOCATOR_RECORD_TYPE,
-    allowedSigners: trustedSigners,
+    allowedSigners: [envelope?.signer],
     now,
+    maxClockSkewMs: skew,
   })
   assertProtocolCompatibility(body, {
     protocolMajor: options.protocolMajor,
     supportedCapabilities: options.supportedCapabilities || [BOOTSTRAP_LOCATOR_CAPABILITY],
     mandatoryCapabilities: [BOOTSTRAP_LOCATOR_CAPABILITY],
   })
+  if (!signed) return false
   const signerId = envelope.signer ? toHex(envelope.signer) : null
-  const trusted = Boolean(signed)
+  const trusted = (options.trustedSigners || []).some(candidate => toHex(candidate) === signerId)
   let catalogChainVerified = false
-  if (!trusted && body.rootSignerId && (options.trustedRootIds || []).includes(body.rootSignerId) && typeof options.verifyCatalogChain === 'function') {
+  if (body.rootSignerId && (options.trustedRootIds || []).includes(body.rootSignerId) && typeof options.verifyCatalogChain === 'function') {
     catalogChainVerified = Boolean(await options.verifyCatalogChain(body))
   }
-  if (!trusted && !catalogChainVerified) return false
   return { trusted, catalogChainVerified, acceptedHead: body.catalogHead, signerId, body }
 }

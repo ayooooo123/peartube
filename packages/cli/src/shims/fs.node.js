@@ -1,9 +1,12 @@
 export {
   closeSync,
+  chmodSync,
   createReadStream,
+  fsyncSync,
   existsSync,
   mkdirSync,
   openSync,
+  lstatSync,
   readdirSync,
   readFileSync,
   rmSync,

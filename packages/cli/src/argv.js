@@ -62,8 +62,23 @@ export function parseArgv(argv = []) {
       continue
     }
 
+    // Opens the machine API's catalog/stream routes on a non-loopback bind. A
+    // bare flag, so it cannot be set by a stray value the way --host can.
+    if (arg === '--api-open') {
+      flags.apiOpen = true
+      continue
+    }
+
     if (arg === '--run-now') {
       flags.runNow = true
+      continue
+    }
+
+    // Stops this relay taking on NEW archive pledges for peer relays and stops
+    // it asking the network to mirror what it publishes. A bare flag, so it
+    // cannot be set by a stray value; pledges already held are untouched.
+    if (arg === '--no-reseed') {
+      flags.noReseed = true
       continue
     }
 
@@ -110,6 +125,7 @@ export function parseArgv(argv = []) {
       flags.minFreeBytes = consumeValue()
       continue
     }
+
 
     if (arg === '--key') {
       flags.key = consumeValue()

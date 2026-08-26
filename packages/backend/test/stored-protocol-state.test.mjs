@@ -6,6 +6,7 @@ import test from 'node:test'
 
 import {
   STORED_PROTOCOL_ERROR_CODE,
+  DEFAULT_STORED_PROTOCOL_MIGRATIONS,
   STORED_PROTOCOL_MARKER_FILENAME,
   prepareStoredProtocolState,
 } from '../src/stored-protocol.js'
@@ -77,6 +78,18 @@ test('older stored state runs every explicitly registered migration before commi
 
   state.commit()
   assert.deepEqual(JSON.parse(fs.readFileSync(markerPath(storagePath), 'utf8')), { protocolVersion: 4 })
+})
+
+test('protocol 9 accepts protocol 8 storage without rewriting user data', async (t) => {
+  const storagePath = makeStorage(t)
+  writeMarker(storagePath, { protocolVersion: 8 })
+  const state = prepareStoredProtocolState({ storagePath, expectedVersion: 9, migrations: DEFAULT_STORED_PROTOCOL_MIGRATIONS, fs, path })
+
+  assert.equal(state.status, 'migration-required')
+  await state.migrate({})
+  assert.deepEqual(JSON.parse(fs.readFileSync(markerPath(storagePath), 'utf8')), { protocolVersion: 8 })
+  state.commit()
+  assert.deepEqual(JSON.parse(fs.readFileSync(markerPath(storagePath), 'utf8')), { protocolVersion: 9 })
 })
 
 test('newer or unregistered older state fails closed with stable version details and no write', (t) => {

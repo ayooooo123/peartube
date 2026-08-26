@@ -15,6 +15,71 @@
 
 const DEFAULT_TTL_MS = 30_000
 
+// The host volume's real numbers, straight off one statfs: bytes a
+// non-privileged writer may still add, and the volume's full size.
+//
+// This is a different question from the operator's byte budget, and the two
+// must never be substituted for each other: the budget says how much of this
+// machine the operator lent to PearTube, while these say how much machine
+// there is. The participation decision measures its free-disk floor against
+// the volume, so handing it storage.maxBytes would have it guard a number that
+// is not a disk.
+//
+// A runtime without statfs (Bare's `#fs` does not export statfsSync) returns
+// null, and a statfs that reports usable free blocks but no total reports
+// `totalBytes: null` rather than dragging the free reading down with it — the
+// free-disk floor needs only the first number. Nothing is estimated or
+// substituted: what cannot be measured is reported as null, and every gate
+// that needs the reading keeps failing closed.
+export function measureVolumeBytes({ storagePath, statfsSync = null, log = null } = {}) {
+  if (typeof storagePath !== 'string' || storagePath.length === 0) return null
+  if (typeof statfsSync !== 'function') return null
+  try {
+    const st = statfsSync(storagePath)
+    const bsize = Number(st?.bsize) || 0
+    const bavail = Number(st?.bavail) || 0
+    const blocks = Number(st?.blocks) || 0
+    if (bsize <= 0 || bavail < 0) return null
+    return { freeBytes: bavail * bsize, totalBytes: blocks > 0 ? blocks * bsize : null }
+  } catch (err) {
+    log?.(`[storage-guard] statfs failed: ${err?.message || String(err)}`)
+    return null
+  }
+}
+
+// Per-block bookkeeping a bounded ingest keeps on the local volume: roughly 64
+// bytes of merkle tree and bitfield for the staging core plus the same for the
+// final core.
+export const INGEST_TREE_BYTES_PER_BLOCK = 128
+
+// Local bytes a bounded (offloading) ingest needs while it streams a title,
+// which is deliberately NOT the size of the title.
+//
+// The bounded ingest holds one offload window of block data, plus the block it
+// is building and the block it is uploading, and drops every block the bucket
+// has confirmed. That bound is the backend's own — peak local block data is
+// `windowBytes + 2 * blockBytes` however long the title runs
+// (packages/backend/src/assets/static-core.js).
+//
+// What does still grow with the title is the bookkeeping the bucket never
+// takes: the merkle tree and bitfield of the staging core and of the final
+// core. At ~128 bytes per 256 KiB block that is one 2048th of the title —
+// about 20 MiB for a 40 GiB film — small enough to disappear next to the
+// title, and far too large to call zero on a volume near its floor.
+//
+// `blockBytes` is required rather than defaulted: the block size belongs to the
+// backend's asset writer, and a copy of it here would be a second authority
+// that drifts in silence.
+export function boundedIngestBytes ({ windowBytes = 0, blockBytes = 0, streamBytes = 0 } = {}) {
+  const block = Math.floor(Number(blockBytes))
+  if (!Number.isFinite(block) || block <= 0) {
+    throw new Error('boundedIngestBytes needs the ingest block size in bytes')
+  }
+  const window = Math.max(0, Math.floor(Number(windowBytes)) || 0)
+  const seen = Math.max(0, Math.floor(Number(streamBytes)) || 0)
+  return window + (2 * block) + (Math.ceil(seen / block) * INGEST_TREE_BYTES_PER_BLOCK)
+}
+
 export function createStorageGuard({
   storagePath,
   maxBytes = 0,
@@ -35,6 +100,22 @@ export function createStorageGuard({
 
   let cached = null
   let cachedAt = 0
+
+  // What this runtime can actually measure, stated once at construction.
+  //
+  // A missing fs primitive degrades silently: the affected signal reads null,
+  // its boundary never trips, and nothing anywhere says so. That is not
+  // hypothetical — `#fs` did not export `statfsSync` for Bare, so on every real
+  // relay `canMeasureFree` was false, `lowDisk` was permanently false, and the
+  // configured free-disk floor measured nothing for this project's entire life
+  // while the Node tests passed. A gate you cannot see is a gate you cannot
+  // trust, so it reports its own capability, and the free-space probe runs once
+  // here so the number is on the record rather than inferred from a later
+  // refusal that may never come.
+  log?.(`[storage-guard] path=${hasPath ? storagePath : 'unset'}` +
+    ` budget=${budget > 0 ? budget : 'off'} usage=${canMeasureUsage ? 'measurable' : 'unmeasurable'}` +
+    ` floor=${floor > 0 ? floor : 'off'} free=${canMeasureFree ? 'measurable' : 'unmeasurable'}`)
+  if (canMeasureFree) log?.(`[storage-guard] statfs ${storagePath}: freeBytes=${measureFreeBytes()}`)
 
   // Actual allocated bytes under the storage dir. Uses block allocation
   // (blocks * 512) so sparse Hypercore/RocksDB .blob files — and holes punched
@@ -72,16 +153,7 @@ export function createStorageGuard({
   }
 
   function measureFreeBytes() {
-    try {
-      const st = statfsSync(storagePath)
-      const bsize = Number(st?.bsize) || 0
-      const bavail = Number(st?.bavail) || 0
-      if (bsize <= 0 || bavail < 0) return null
-      return bavail * bsize
-    } catch (err) {
-      log?.('[storage-guard] statfs failed', err?.message || String(err))
-      return null
-    }
+    return measureVolumeBytes({ storagePath, statfsSync, log })?.freeBytes ?? null
   }
 
   function compute() {
@@ -118,12 +190,19 @@ export function createStorageGuard({
     canIngest() {
       return snapshot().ok
     },
-    // Free-disk floor ONLY, for DELIBERATE content (archive uploads/imports —
-    // the relay's actual purpose). These must not be blocked just because the
-    // evictable discovery cache filled the logical budget; only a genuinely low
-    // disk (ENOSPC risk) refuses them.
-    hasMinFreeDisk() {
-      return !snapshot().lowDisk
+    // Bytes one archive may still add before either the aggregate storage
+    // budget or the free-disk floor is reached. A signal that cannot be
+    // measured is omitted; null means neither bound is measurable.
+    headroomBytes() {
+      const snap = snapshot()
+      const limits = []
+      if (snap.usedBytes !== null && snap.maxBytes > 0) {
+        limits.push(Math.max(0, snap.maxBytes - snap.usedBytes))
+      }
+      if (snap.freeBytes !== null && snap.minFreeBytes > 0) {
+        limits.push(Math.max(0, snap.freeBytes - snap.minFreeBytes))
+      }
+      return limits.length > 0 ? Math.min(...limits) : null
     },
     snapshot,
     // Force the next snapshot to re-measure (e.g. right after an eviction).

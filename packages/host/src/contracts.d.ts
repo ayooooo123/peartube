@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION: 6
+export const PROTOCOL_VERSION: 9
 
 export const HOST_ERROR_CODES: {
   readonly HOST_START_FAILED: 'HOST_START_FAILED'

@@ -2,7 +2,9 @@ import test from 'brittle'
 import b4a from 'b4a'
 
 import {
+  createRenditionDescriptor,
   createSegmentIndexDescriptor,
+  createStaticAssetManifest,
   decodeSegmentIndex,
   deriveSegmentIndexId,
   encodeSegmentIndex,
@@ -10,6 +12,14 @@ import {
 
 function hex(byte) {
   return b4a.toString(b4a.alloc(32, byte), 'hex')
+}
+
+function assetRef(byte = 3, byteLength = 3600) {
+  return createStaticAssetManifest({
+    treeHash: b4a.alloc(32, byte),
+    blockLength: Math.ceil(byteLength / (256 * 1024)),
+    byteLength,
+  })
 }
 
 const entries = [
@@ -41,6 +51,23 @@ test('segment index validation rejects unsafe sparse seek coordinates before pla
   t.exception(() => createSegmentIndexDescriptor({ codec: 'x', mediaByteLength: 100, entries: [{ timeStartMs: 0, durationMs: 1, byteStart: 20, byteEnd: 30 }, { timeStartMs: 1, durationMs: 1, byteStart: 25, byteEnd: 40 }] }), /overlap|monotonic/i)
   t.exception(() => createSegmentIndexDescriptor({ codec: 'x', mediaByteLength: 100, entries: [{ timeStartMs: 0, durationMs: 1, byteStart: 0, byteEnd: 101 }] }), /media/i)
   t.exception(() => createSegmentIndexDescriptor({ codec: 'x', mediaByteLength: 100, entries: Array.from({ length: 100001 }, (_, i) => ({ timeStartMs: i, durationMs: 1, byteStart: i, byteEnd: i + 1 })) }), /entry/i)
+})
+
+test('renditions reject segment ranges outside the referenced static asset byte length', (t) => {
+  const segmentIndex = createSegmentIndexDescriptor({
+    codec: 'fmp4-sidx-v1',
+    mediaByteLength: 3601,
+    entries: [
+      { timeStartMs: 0, durationMs: 1000, byteStart: 0, byteEnd: 3601, independent: true },
+    ],
+  })
+
+  t.exception(() => createRenditionDescriptor({
+    purpose: 'original',
+    format: 'video/mp4',
+    core: assetRef(3, 3600),
+    segmentIndex,
+  }), /byte length/i)
 })
 
 test('segment indexes may reference separate immutable index cores', (t) => {

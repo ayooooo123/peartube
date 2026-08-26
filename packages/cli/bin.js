@@ -57,6 +57,7 @@ function printHelp() {
     '  --storage, -s <path>',
     '  --max-bytes <n>',
     '  --max-storage <mb>',
+    '  --max-direct-download-bytes <n>  (per-download ceiling for url seeds)',
     '  --channel <key>',
     '  --owner <key>',
     '  --key <device-key-hex>',
@@ -72,6 +73,8 @@ function printHelp() {
     '  --description <text>',
     '  --host <host>',
     '  --port <port>',
+    '  --api-open  (open /api/v1 catalog and stream when bound off loopback)',
+    '  --no-reseed  (stop taking new archive pledges and stop asking peers to mirror)',
     '  --run-now',
     '  --debug, -d',
     '  --json',
@@ -120,11 +123,26 @@ async function runCommand(flags) {
 }
 
 async function uiCommand(flags) {
-  const config = await loadRelayConfig({ ...flags, archive: { uiEnabled: true, uiHost: flags.host || '0.0.0.0', uiPort: Number(flags.port || 8174) } })
+  // Only what the operator actually typed may override the file. Passing the
+  // fallback in as a CLI value outranked the config file it was meant to fall
+  // back to, so `--config` could not set the UI host or port at all: every
+  // relay started from a file bound 0.0.0.0:8174, and a second one on the same
+  // machine died with EADDRINUSE while its own file named a free port.
+  const archiveOverrides = { uiEnabled: true }
+  if (flags.host) archiveOverrides.uiHost = flags.host
+  // 0 is a real port here - it means "any free one" - so presence decides.
+  if (flags.port !== undefined && flags.port !== null && flags.port !== '') {
+    archiveOverrides.uiPort = Number(flags.port)
+  }
+  const config = await loadRelayConfig({ ...flags, archive: archiveOverrides })
   config.archive.uiEnabled = true
-  config.archive.uiHost = flags.host || config.archive.uiHost || '0.0.0.0'
-  config.archive.uiPort = Number(flags.port || config.archive.uiPort || 8174)
-  writeLine(`[relay] archive WebUI listening on ${config.archive.uiHost}:${config.archive.uiPort}\n`)
+  config.archive.uiHost = config.archive.uiHost || '0.0.0.0'
+  const resolvedPort = Number(config.archive.uiPort)
+  config.archive.uiPort = Number.isSafeInteger(resolvedPort) && resolvedPort >= 0 ? resolvedPort : 8174
+  // Intent, not fact: the bind happens inside startRelay. Printing it as though
+  // the port were already open is what made a relay that never bound look like
+  // one that had.
+  writeLine(`[relay] starting archive WebUI on ${config.archive.uiHost}:${config.archive.uiPort}\n`)
   await runCommand({ ...flags, archive: config.archive })
 }
 

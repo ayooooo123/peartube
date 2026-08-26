@@ -30,6 +30,7 @@ export { SeedingManager } from './seeding.js';
 
 // API - Shared backend methods
 export { assessDurableManifest, createApi } from './api.js';
+export { parseHttpByteRange } from './blob-range-priority.js';
 export {
   createDurableOperabilityServices,
   createOperabilityApi,

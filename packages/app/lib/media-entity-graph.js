@@ -35,6 +35,26 @@ function metadata(entity) {
       : {}
 }
 
+// Year, runtime and genre reach the app only because the publisher's metadata
+// claim carried them: a consumer holds no metadata-provider credentials and
+// cannot look any of it up. A category nobody claimed is therefore left off the
+// projected entity entirely rather than defaulted, so a caller can tell "the
+// publisher said nothing" apart from "the publisher said none".
+function describedCategories(entity) {
+  const meta = metadata(entity)
+  const out = {}
+  for (const field of ['releaseYear', 'runtimeMinutes']) {
+    const value = Number.isSafeInteger(entity?.[field]) ? entity[field] : meta[field]
+    if (Number.isSafeInteger(value) && value > 0) out[field] = value
+  }
+  const overview = nonEmptyString(entity?.overview) ? entity.overview : meta.overview
+  if (nonEmptyString(overview)) out.overview = overview
+  const claimed = Array.isArray(entity?.genres) ? entity.genres : meta.genres
+  const genres = asArray(claimed).filter(nonEmptyString)
+  if (genres.length > 0) out.genres = genres
+  return out
+}
+
 function classification(entity) {
   return nonArrayObject(entity?.classification)
     ? entity.classification
@@ -334,6 +354,7 @@ function normalizeGraphEntity(entity, index = 0, options = {}) {
     collectionRefs: asArray(entity?.collectionRefs),
     collections: asArray(entity?.collections),
     createdAt: entityCreatedAt(entity),
+    ...describedCategories(entity),
     progress: finiteNumber(entity?.progress) ? Math.max(0, Math.min(1, entity.progress)) : 0,
     item: { ...entity, selectedSource: selected, alternateSources: sourceSelection.alternateSources },
   }
@@ -357,6 +378,11 @@ function mergeProjectedEntity(existing, incoming) {
   if (!existing.sourceProviderName && incoming.sourceProviderName) existing.sourceProviderName = incoming.sourceProviderName
   for (const field of ['posterUrl', 'backdropUrl', 'stillUrl', 'thumbnailUrl', 'thumbnail', 'duration', 'durationSec', 'seasonNumber', 'episodeNumber', 'trackNumber', 'archiveStatus', 'availabilityStatus']) {
     if ((existing[field] === null || existing[field] === undefined || existing[field] === '') && incoming[field] !== null && incoming[field] !== undefined && incoming[field] !== '') existing[field] = incoming[field]
+  }
+  // Whichever publisher described the title wins over one that carried nothing,
+  // and an entity that was never described keeps no key at all.
+  for (const [field, value] of Object.entries(describedCategories(incoming))) {
+    if (existing[field] === null || existing[field] === undefined) existing[field] = value
   }
   mergeArraysByKey(existing.sources, incoming.sources, mediaSourceMergeKey)
   mergeArraysByKey(existing.alternateSources, incoming.alternateSources, mediaSourceMergeKey)
@@ -559,6 +585,7 @@ function projectSingleMediaEntity(input) {
           ? 'complete'
           : 'partial',
     },
+    ...describedCategories(entity),
     archiveStatus: input.archiveStatus || null,
   }
 }

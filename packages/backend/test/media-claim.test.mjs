@@ -16,7 +16,7 @@ const issuer = crypto.keyPair(Buffer.alloc(32, 1))
 const otherIssuer = crypto.keyPair(Buffer.alloc(32, 2))
 
 function workRef(id = 'episode-1') {
-  return createEntityReference({ entityKind: 'work', namespace: 'youtube-video', normalizedIdentifier: id })
+  return createEntityReference({ entityKind: 'work', namespace: 'youtube-video', normalizedIdentifier: `${id}___________`.slice(0, 11) })
 }
 
 function collectionRef(id = 'show:season:1') {

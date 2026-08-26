@@ -44,6 +44,9 @@ export function createMediaGraphStore(options = {}) {
   const trustedSigners = new Set((options.trustedSigners || []).map(hex))
   const allowedSigners = Array.from(trustedSigners)
   const authorizeSigner = typeof options.authorizeSigner === 'function' ? options.authorizeSigner : null
+  const resolvePublisherId = typeof options.resolvePublisherId === 'function'
+    ? options.resolvePublisherId
+    : null
   const maxClaims = normalizeBudgetLimit(options.maxClaims, 10_000)
   const maxQuarantinedClaims = normalizeBudgetLimit(options.maxQuarantinedClaims, 256)
   const maxClaimsPerPublisher = normalizeBudgetLimit(options.maxClaimsPerPublisher, maxClaims)
@@ -233,6 +236,18 @@ export function createMediaGraphStore(options = {}) {
       }
 
       const issuer = signerHex(envelope)
+      let publisherId = issuer
+      if (resolvePublisherId) {
+        try {
+          const resolved = await resolvePublisherId(body, { claimId, issuer, envelope })
+          if (typeof resolved !== 'string' || !/^[0-9a-f]{64}$/i.test(resolved)) {
+            return { status: 'rejected', errorCode: 'INVALID_PUBLISHER_PROVENANCE', claimId }
+          }
+          publisherId = resolved.toLowerCase()
+        } catch {
+          return { status: 'rejected', errorCode: 'INVALID_PUBLISHER_PROVENANCE', claimId }
+        }
+      }
       if (issuerSequenceFork(issuer, body.issuerSequence, claimId)) {
         return { status: 'rejected', errorCode: 'ISSUER_SEQUENCE_FORK', claimId }
       }
@@ -258,6 +273,7 @@ export function createMediaGraphStore(options = {}) {
         envelope,
         body,
         issuer,
+        publisherId,
         subjects: body.subjectRefs.map(ref => ref.entityId).sort(),
         revoked: false,
       }

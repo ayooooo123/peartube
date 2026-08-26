@@ -1,0 +1,82 @@
+{
+  "status": "success",
+  "data": {
+    "id": 81189,
+    "name": "Breaking Bad",
+    "slug": "breaking-bad",
+    "image": "https://artworks.thetvdb.com/banners/posters/81189-6.jpg",
+    "firstAired": "2008-01-20",
+    "lastAired": "2013-09-29",
+    "year": "2008",
+    "originalLanguage": "eng",
+    "originalCountry": "usa",
+    "averageRuntime": 47,
+    "overview": "A high school chemistry teacher diagnosed with terminal lung cancer turns to manufacturing methamphetamine.",
+    "status": { "id": 2, "name": "Ended", "recordType": "series", "keepUpdated": false },
+    "artworks": [
+      {
+        "id": 1001,
+        "type": 2,
+        "score": 100000,
+        "language": "eng",
+        "image": "https://artworks.thetvdb.com/banners/posters/81189-6.jpg",
+        "thumbnail": "https://artworks.thetvdb.com/banners/posters/81189-6_t.jpg"
+      },
+      {
+        "id": 1002,
+        "type": 3,
+        "score": 900,
+        "language": null,
+        "image": "http://artworks.thetvdb.com/banners/fanart/original/81189-14.jpg",
+        "thumbnail": "http://artworks.thetvdb.com/banners/fanart/original/81189-14_t.jpg"
+      },
+      {
+        "id": 1003,
+        "type": 3,
+        "score": 9000,
+        "language": null,
+        "image": "https://artworks.thetvdb.com/banners/fanart/original/81189-3.jpg",
+        "thumbnail": "https://artworks.thetvdb.com/banners/fanart/original/81189-3_t.jpg"
+      },
+      {
+        "id": 1004,
+        "type": 5,
+        "score": 12,
+        "language": "eng",
+        "image": "https://artworks.thetvdb.com/banners/images/icons/81189.png"
+      }
+    ],
+    "seasons": [
+      {
+        "id": 27272,
+        "seriesId": 81189,
+        "type": { "id": 1, "name": "Aired Order", "type": "official" },
+        "number": 1,
+        "image": "https://artworks.thetvdb.com/banners/seasons/81189-1.jpg",
+        "lastUpdated": "2021-03-01 12:00:00"
+      },
+      {
+        "id": 27273,
+        "seriesId": 81189,
+        "type": { "id": 1, "name": "Aired Order", "type": "official" },
+        "number": 0,
+        "lastUpdated": "2021-03-01 12:00:00"
+      },
+      {
+        "id": 27274,
+        "seriesId": 81189,
+        "type": { "id": 1, "name": "Aired Order", "type": "official" },
+        "number": 2,
+        "name": "The One With The Plane",
+        "lastUpdated": "2021-03-01 12:00:00"
+      },
+      {
+        "id": 99991,
+        "seriesId": 81189,
+        "type": { "id": 2, "name": "DVD Order", "type": "dvd" },
+        "number": 1,
+        "lastUpdated": "2021-03-01 12:00:00"
+      }
+    ]
+  }
+}

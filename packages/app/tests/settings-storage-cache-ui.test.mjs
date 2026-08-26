@@ -25,12 +25,16 @@ test('profile storage card surfaces real disk usage, not only the tracked cache 
   assert.match(storageSection, /app\/P2P data outside tracked peer cache/)
   assert.match(storageSection, /totalStorageGB/)
   assert.match(storageSection, /untrackedStorageGB/)
-  assert.match(storageSection, /handleStorageLimitChange/)
+  // The cache budget itself is now the participation mode's; the card only
+  // reports usage, points at that choice, and can still clear the cache.
+  assert.match(storageSection, /Your sharing choice above sets this budget/)
+  assert.match(storageSection, /handleCustomStorageLimitApply/)
   assert.match(storageSection, /handleClearCache/)
 })
 
-test('profile exposes a custom cache limit input rather than only preset buttons', () => {
+test('the exact cache limit input survives, gated behind Developer Mode', () => {
   assert.match(profileSource, /customStorageLimit/)
   assert.match(profileSource, /handleCustomStorageLimitApply/)
   assert.match(profileSource, /keyboardType="numeric"/)
+  assert.match(profileSource, /\{developerMode\.enabled \? \([\s\S]*?keyboardType="numeric"/)
 })

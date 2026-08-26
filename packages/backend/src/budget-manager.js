@@ -115,6 +115,13 @@ export function decodeBudgetState(buffer) {
 export function createBudgetManager(options = {}) {
   const role = normalizeRole(options.role)
   const profile = { ...(role === ROLE_RELAY ? DEFAULT_POLICY.relay : DEFAULT_POLICY.mobile), ...(options.profile || {}) }
+  // These two floors, and the thermal penalty in budgetFor below, schedule
+  // background *work* on this device: how often it syncs, emits proofs, and
+  // fetches. They are not a second opinion on whether the device may
+  // contribute bandwidth to the swarm. That question belongs to the
+  // participation policy alone, which answers it from categorical OS signals
+  // and hands the result to the transport; a numeric battery percentage or
+  // thermal score never widens or narrows it.
   const batteryFloor = safeNumber(options.batteryFloor, role === ROLE_RELAY ? 5 : 25)
   const bandwidthFloor = safeNumber(options.bandwidthFloor, role === ROLE_RELAY ? 0 : 5)
   const baseConcurrentSync = safeNumber(options.maxConcurrentSync, role === ROLE_RELAY ? 8 : 1)
@@ -218,6 +225,10 @@ export function createBudgetManager(options = {}) {
     const charging = Boolean(resource.isCharging)
     const thresholds = getThresholds(resource)
 
+    // Scheduling only: credit and the can* gates below decide how hard this
+    // device works for itself, never whether it is allowed to serve the swarm.
+    // Contribution eligibility comes from the participation policy's
+    // categorical OS signals, not from this numeric thermal score.
     const mobilePenalty = role === ROLE_MOBILE ? Math.max(0, 30 - battery) + Math.max(0, 20 - bandwidth) + Math.max(0, thermal) : 0
     const memoryPenalty = Math.max(0, thresholds.memoryPressure - 70)
     const cpuPenalty = Math.max(0, Math.floor((thresholds.cpuPressure - 75) / 2))
@@ -232,6 +243,11 @@ export function createBudgetManager(options = {}) {
       maxFanout: thresholds.maxFanout,
       maxRequestsPerWindow: thresholds.maxRequestsPerWindow,
       maxFeedEntries: thresholds.maxFeedEntries,
+      // The role's own scheduling budget for background work. The contribution
+      // ceiling a viewer device may upload in 24h is a different number owned
+      // by the participation policy and enforced by the transport, and it is
+      // deliberately not mirrored here: two copies of a ceiling is one copy too
+      // many, and the unread one always wins the argument in review.
       maxBytesPerDay: profile.maxBytesPerDay,
       batteryFloor,
       bandwidthFloor,

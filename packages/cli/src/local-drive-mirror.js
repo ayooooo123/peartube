@@ -274,7 +274,8 @@ export async function mirrorLocalDriveToRelayChannel({
     const sourceIdentity = localMetadata.sourceIdentity || null
     const info = await publisher.ensureAnonymousChannel({
       channelName: sourceIdentity?.creatorName || channelName,
-      sourceIdentity
+      sourceIdentity,
+      retentionClass: 'archive-pin',
     })
     const entry = {
       ...info,
@@ -291,6 +292,7 @@ export async function mirrorLocalDriveToRelayChannel({
       const localMetadata = metadataByPath.get(video.filePath) || metadataForLocalVideo(video, fs)
       const channelInfo = await channelForMetadata(localMetadata)
       const result = await publisher.importVideo({
+        retentionClass: 'archive-pin',
         channel: channelInfo.channel,
         filePath: video.filePath,
         title: localMetadata.title,
@@ -366,8 +368,8 @@ export async function mirrorLocalDriveToRelayChannel({
 
   for (const channelInfo of channelInfoByKey.values()) {
     if (channelInfo.previewVideos.length > 0) {
-      await publisher.publishCatalog(channelInfo)
-      await publisher.retainAssets({ ...channelInfo, previewVideos: channelInfo.previewVideos })
+      await publisher.publishCatalog({ ...channelInfo, retentionClass: 'archive-pin' })
+      await publisher.retainAssets({ ...channelInfo, retentionClass: 'archive-pin', previewVideos: channelInfo.previewVideos })
     }
   }
 

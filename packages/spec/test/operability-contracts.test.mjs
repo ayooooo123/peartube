@@ -1,7 +1,9 @@
 import test from 'brittle'
+import c from 'compact-encoding'
 import fs from 'node:fs'
 
 import { APP_RPC_METADATA } from '../spec/hrpc/app-rpc-adapter.mjs'
+import wireSchema from '../spec/schema/index.js'
 
 const readJson = (path) => JSON.parse(fs.readFileSync(new URL(path, import.meta.url), 'utf8'))
 const messageFields = (schema, name) => {
@@ -82,10 +84,44 @@ test('publication sources, storage stats, previews, and archive status are struc
     'selected', 'selectionReasonCodes', 'rejectionReasonCodes', 'introductionPublisherIds',
     'introductionIndexIds', 'moderationFeedIds', 'claimConflictIds', 'provenanceClaimIds',
     'score', 'availabilityScore', 'formatSupport', 'moderationPenalty',
-    'scoreMetadataConfidence', 'scorePublisherTrust', 'scoreAvailability',
-    'scoreFormatSupport', 'scoreModerationPenalty', 'archiveState', 'cacheState',
-    'availabilityState', 'stale', 'incomplete'
+    'scoreLocalCompleteness', 'scoreStartupReachability', 'scorePeerEvidence',
+    'scoreFormatSupport', 'scoreStartupLatency', 'scoreUserOverride',
+    'eligible', 'archiveState', 'cacheState',
+    'availabilityState', 'stale', 'incomplete', 'mediaCoordinates'
   ]) t.ok(messageFields(schema, 'media-publication-source').has(field), `publication source has ${field}`)
+
+
+  const publicationSource = schema.schema.find((entry) => entry.name === 'media-publication-source')
+  t.is(publicationSource.fields.at(-1)?.name, 'mediaCoordinates', 'coordinates append without shifting existing source flags')
+  t.ok(
+    publicationSource.fields.filter((field) => field.required === false).length < 32,
+    'publication source optional flags remain representable by JavaScript bitwise operations'
+  )
+  t.alike(
+    publicationSource.fields.slice(0, 5).map((field) => field.name),
+    ['publicationId', 'publisherId', 'manifestId', 'renditionId', 'score'],
+    'existing source field positions remain stable'
+  )
+  t.alike(
+    [...messageFields(schema, 'media-source-coordinates')],
+    ['contentKind', 'mediaProvider', 'mediaId', 'seasonNumber', 'episodeNumber'],
+    'provider coordinates use one bounded nested source field'
+  )
+  const availability = schema.schema.find((entry) => entry.name === 'media-availability')
+  const requiredAvailabilityFields = new Set([
+    'state', 'observedAt', 'expiresAt', 'requiredRangeCount', 'reachableRangeCount',
+    'independentPeerCount', 'completePeerCount', 'measuredLatencyMs', 'reasonCodes'
+  ])
+  for (const field of availability?.fields || []) {
+    if (requiredAvailabilityFields.has(field.name)) {
+      t.is(field.required, true, `availability ${field.name} is explicit on every frame`)
+    }
+  }
+  t.is(
+    [...requiredAvailabilityFields].every((name) => availability?.fields?.some((field) => field.name === name)),
+    true,
+    'availability frames contain every required non-boolean contract field'
+  )
 
   for (const field of [
     'ownedOriginalBytes', 'immutablePublicationBytes', 'pledgedArchiveBytes', 'localCacheBytes',
@@ -104,4 +140,39 @@ test('publication sources, storage stats, previews, and archive status are struc
     'capacityReservedBytes', 'capacityAvailableBytes', 'capacityRejectionCount',
     'offloadRejectionCount', 'recentFailureCodes', 'updatedAt', 'errorCode'
   ]) t.ok(messageFields(schema, 'get-archive-operator-status-response').has(field), `archive operator status has ${field}`)
+})
+
+test('publication source high optional flags round-trip with coordinates', (t) => {
+  const encoding = wireSchema.getEncoding('@peartube/media-publication-source')
+  const source = {
+    publicationId: 'publication-1',
+    publisherId: 'publisher-1',
+    incomplete: true,
+    availability: {
+      state: 'healthy',
+      renditionId: 'rendition-1',
+      observedAt: 100,
+      expiresAt: 200,
+      requiredRangeCount: 1,
+      reachableRangeCount: 1,
+      independentPeerCount: 2,
+      completePeerCount: 2,
+      measuredLatencyMs: 5,
+      offlinePlayable: false,
+      archivePledged: false,
+      reasonCodes: []
+    },
+    mediaCoordinates: {
+      contentKind: 'episode',
+      mediaProvider: 'tmdb',
+      mediaId: '95396',
+      seasonNumber: 2,
+      episodeNumber: 4
+    }
+  }
+  const decoded = c.decode(encoding, c.encode(encoding, source))
+
+  t.is(decoded.incomplete, true, 'the prior highest boolean flag remains usable')
+  t.is(decoded.availability.state, 'healthy', 'the prior highest nested field remains usable')
+  t.alike(decoded.mediaCoordinates, source.mediaCoordinates, 'the appended coordinate envelope round-trips')
 })

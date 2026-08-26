@@ -10,6 +10,7 @@ export function createBootstrapManager(options = {}) {
   const maxPublishers = normalizeBudgetLimit(options.maxPublishers, 4096)
   const maxSeenLocators = normalizeBudgetLimit(options.maxSeenLocators, 4096)
   const acceptLocator = typeof options.acceptLocator === 'function' ? options.acceptLocator : () => true
+  const onAcceptedLocator = typeof options.onAcceptedLocator === 'function' ? options.onAcceptedLocator : () => true
   const budget = createWindowedIngestBudget({
     now,
     windowMs: budgetWindowMs,
@@ -17,6 +18,12 @@ export function createBootstrapManager(options = {}) {
   })
   const locatorsByPublisher = new Map()
   const seen = new Map()
+
+  function pruneExpired(current = Number(now())) {
+    for (const [publisherId, locator] of locatorsByPublisher) {
+      if (locator.expiresAt < current) locatorsByPublisher.delete(publisherId)
+    }
+  }
 
   function pruneSeen(current) {
     for (const [key, seenAt] of seen) {
@@ -35,6 +42,7 @@ export function createBootstrapManager(options = {}) {
   return {
     async ingestLocator(peerId, envelope) {
       const currentTime = Number(now())
+      pruneExpired(currentTime)
       const peerReservation = budget.reserve([{
         scope: 'bootstrap-peer',
         key: String(peerId),
@@ -95,19 +103,30 @@ export function createBootstrapManager(options = {}) {
         return { status: 'rejected', errorCode: 'PUBLISHER_PROJECTION_BUDGET_EXCEEDED' }
       }
       if (!current || body.issuedAt > current.issuedAt || (body.issuedAt === current.issuedAt && body.catalogEpoch >= current.catalogEpoch)) {
-        locatorsByPublisher.set(body.publisherId, {
+        const locator = {
           ...body,
+          signerId: verified.signerId,
           trusted: verified.trusted,
           catalogChainVerified: verified.catalogChainVerified,
-        })
+        }
+        if (!await onAcceptedLocator(locator, { peerId: String(peerId) })) {
+          return { status: 'rejected', errorCode: 'LOCAL_PROJECTION_REJECTED' }
+        }
+        locatorsByPublisher.set(body.publisherId, locator)
       }
       return { status: 'accepted', publisherId: body.publisherId }
     },
     getLocator(publisherId) {
+      pruneExpired()
       return locatorsByPublisher.get(String(publisherId).toLowerCase()) || null
     },
     listLocators() {
+      pruneExpired()
       return Array.from(locatorsByPublisher.values()).sort((a, b) => a.publisherId.localeCompare(b.publisherId))
+    },
+    getIntroducedPublisherIds() {
+      pruneExpired()
+      return Array.from(locatorsByPublisher.keys()).sort()
     },
   }
 }

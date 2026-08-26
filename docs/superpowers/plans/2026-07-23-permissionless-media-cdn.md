@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: use `superpowers:subagent-driven-development` when subagents are available, otherwise use `superpowers:executing-plans`. Execute one task at a time. Each task uses tests first, focused verification, and an atomic commit.
 
-**Goal:** Replace PearTube's global consumer feed and channel-sized media replication with publisher-signed namespaces, immutable rendition swarms, a cross-publisher media entity graph, bounded permissionless discovery, voluntary archival evidence, client-selected moderation, a unified native media library, and opaque-ciphertext distribution for provider-protected media.
+**Goal:** Replace PearTube's global consumer feed and channel-sized media replication with publisher-signed namespaces, immutable rendition swarms, a cross-publisher media entity graph, bounded permissionless discovery, voluntary archival evidence, client-selected moderation, and a unified native media library.
 
 **Architecture:** Publishers append signed publications and claims to publisher-scoped feeds. Immutable asset manifests reference original and playback-optimized rendition cores. Clients join publisher topics for catalog state and asset topics only for media they play, cache, audit, or archive. Local resolvers combine publisher, curator, index, moderation, and optional AI claims into a provenance-preserving media graph. Archivists publish voluntary pledges and answer possession challenges. No PearTube-operated control plane is introduced.
 
@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-23-permissionless-media-cdn-design.md`
 
-**Scope decisions:** Public and provider-protected media; native mobile and Electrobun desktop first; no PearTube-operated central catalog, media origin, or analytics service; no browser transport; no payment system; provider authentication and license services are external control planes and may never serve media bytes; optional local AI only.
+**Scope decisions:** Public media only — no protected/DRM, entitlement, or license concept; native mobile and Electrobun desktop first; no PearTube-operated central catalog, media origin, or analytics service; no browser transport; no payment system; optional local AI only.
 
 ## Product Direction Amendment — 2026-07-24
 
@@ -25,10 +25,10 @@ Locked product decisions:
 - Play selects the best currently playable source automatically and fails over among equivalent sources. An optional Other Sources view remains available.
 - Default participation is balanced: seed during playback and briefly afterward, then perform bounded background seeding subject to explicit metered, battery, thermal, storage, and upload ceilings.
 - No account is required. Watch progress, library, and recommendations are local by default; optional encrypted device pairing is user-initiated.
-- Public and provider-protected media coexist. Protected rendition swarms carry opaque ciphertext; provider authentication and short-lived license acquisition occur outside PearTube's media plane.
-- PearTube collects no playback, engagement, recommendation, or CDN-savings analytics. Providers may observe their own authentication/license service and origin systems, but PearTube does not aggregate or forward viewer telemetry.
+- All media is public. There is no protected rendition, entitlement, or license path anywhere in the product or protocol.
+- PearTube collects no playback, engagement, recommendation, or CDN-savings analytics, and does not aggregate or forward viewer telemetry.
 - Playback is strict P2P. There is no HTTP media-origin fallback and no required provider-operated seed. Catalog visibility and playback UI must therefore expose Awaiting replication, Limited availability, Healthy, and Unavailable honestly.
-- Relay nodes are permissionless volunteer discovery/archive nodes. They may gossip catalog records, cache opaque media bytes, satisfy archive pledges, and seed retained ranges; they gain no publication, moderation, entitlement, or catalog authority.
+- Relay nodes are permissionless volunteer discovery/archive/mirror nodes. They may follow MediaStorm instances, gossip catalog records, cache media bytes, satisfy archive pledges, and seed retained ranges; they gain no publication, moderation, or catalog authority over anyone else.
 
 
 ---

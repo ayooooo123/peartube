@@ -48,6 +48,9 @@ export {
   listPublisherRejections,
   getPublisherViewSnapshot,
   getPublisherViewHead,
+  listPublisherAcceptedPage,
+  decodeAcceptedEntry,
   getLatestPublisherAnnouncement
 } from './catalog-view.js'
+export { verifyPublisherNamespaceProof } from './namespace-proof.js'
 export { PublisherCatalog } from './catalog.js'

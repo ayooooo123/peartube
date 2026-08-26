@@ -3,9 +3,19 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
+import b4a from 'b4a'
+import crypto from 'hypercore-crypto'
 
 import Corestore from 'corestore'
 import { MultiWriterChannel } from '../src/channel/multi-writer-channel.js'
+import {
+  createPublicationManifest,
+  createRenditionDescriptor,
+  createStaticAssetManifest,
+  encodePublicationManifest,
+} from '../src/assets/index.js'
 
 async function withChannel(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'peartube-channel-hyperdb-'))
@@ -298,6 +308,128 @@ test('MultiWriterChannel splits structured videos physically and joins logical r
   })
 })
 
+test('MultiWriterChannel round-trips the private immutable publication reconciliation contract', async () => {
+  await withChannel(async (channel) => {
+    const keyPair = crypto.keyPair(Buffer.alloc(32, 21))
+    const core = createStaticAssetManifest({
+      treeHash: Buffer.alloc(32, 22),
+      blockLength: 1,
+      byteLength: 123,
+      blockSize: 256 * 1024,
+    })
+    const rendition = createRenditionDescriptor({ purpose: 'original', format: 'video/mp4', core })
+    const manifest = createPublicationManifest({
+      publisherId: keyPair.publicKey,
+      sequence: 7,
+      title: 'Persisted publication',
+      renditions: [rendition],
+      keyPair,
+      signedAt: 1_700_000_000_000,
+    })
+    const persisted = {
+      publicationState: 'commitUncertain',
+      publication: {
+        publicationId: manifest.publicationId,
+        manifestId: manifest.body.manifestId,
+        renditionId: rendition.renditionId,
+        assetId: core.assetId,
+        coreKey: b4a.toString(core.key, 'hex'),
+        publisherId: b4a.toString(keyPair.publicKey, 'hex'),
+        sequence: 7,
+        metadataClaimId: '23'.repeat(32),
+        availabilityClaimId: '24'.repeat(32),
+        publicationOperationId: '25'.repeat(32),
+        metadataClaimOperationId: '26'.repeat(32),
+        availabilityClaimOperationId: '27'.repeat(32),
+        manifestHex: b4a.toString(encodePublicationManifest(manifest), 'hex'),
+      },
+      publicationOperationFramesHex: '00112233',
+    }
+
+    await channel.addVideo({ id: 'publication-private', title: 'Private', ...persisted })
+    const physicalDetails = await channel.db.get('@peartubeChannel/contentDetails', { id: 'publication-private' })
+    const physicalFrames = await channel.db.get('@peartubeChannel/publicationOperationFrames', {
+      id: 'publication-private'
+    })
+    assert.equal(Object.keys(persisted.publication).length, 13, 'the whole cluster is persisted')
+    assert.equal(physicalDetails.publicationState, persisted.publicationState)
+    for (const [field, value] of Object.entries(persisted.publication)) {
+      assert.equal(physicalDetails.publication[field], value, `${field} persists verbatim`)
+    }
+    assert.equal(physicalFrames.publicationOperationFramesHex, persisted.publicationOperationFramesHex)
+    assert.equal('publicationOperationFramesHex' in physicalDetails, false)
+
+    const logical = await channel.getVideo('publication-private')
+    assert.deepEqual(logical.immutablePublication, {
+      publicationId: persisted.publication.publicationId,
+      manifestId: persisted.publication.manifestId,
+      renditionId: persisted.publication.renditionId,
+      assetId: persisted.publication.assetId,
+      coreKey: persisted.publication.coreKey,
+      publisherId: persisted.publication.publisherId,
+      sequence: persisted.publication.sequence,
+      claimIds: [persisted.publication.metadataClaimId, persisted.publication.availabilityClaimId],
+      operationIds: [
+        persisted.publication.publicationOperationId,
+        persisted.publication.metadataClaimOperationId,
+        persisted.publication.availabilityClaimOperationId,
+      ],
+      operationFramesHex: persisted.publicationOperationFramesHex,
+      manifest,
+    })
+    assert.equal(await channel.publicBee.getVideo('publication-private'), null)
+  })
+})
+
+test('MultiWriterChannel keeps an uncertain candidate private when loser suppression fails', async () => {
+  await withChannel(async (channel) => {
+    await channel.addVideo({
+      id: 'uncertain-finalization',
+      title: 'Accepted publication',
+      publicationState: 'commitUncertain',
+    })
+
+    let suppressionAttempts = 0
+    const suppressResolvedLosers = channel.publicBee._suppressResolvedLosers.bind(channel.publicBee)
+    channel.publicBee._suppressResolvedLosers = async (...args) => {
+      suppressionAttempts++
+      await suppressResolvedLosers(...args)
+      if (suppressionAttempts === 1) throw new Error('injected loser suppression failure')
+    }
+
+    await assert.rejects(
+      channel.updateVideo(
+        'uncertain-finalization',
+        { publicationState: 'published' },
+        { syncPublic: true, commitAfterPublicSync: true },
+      ),
+      /injected loser suppression failure/,
+    )
+    assert.equal(
+      (await channel.getVideo('uncertain-finalization')).publicationState,
+      'commitUncertain',
+      'failed public sync leaves the durable retry anchor private',
+    )
+    assert.equal(
+      await channel.publicBee.getVideo('uncertain-finalization'),
+      null,
+      'a failure after loser suppression cannot leave the uncertain candidate publicly visible',
+    )
+
+    await channel.updateVideo(
+      'uncertain-finalization',
+      { publicationState: 'published' },
+      { syncPublic: true, commitAfterPublicSync: true },
+    )
+    assert.equal((await channel.getVideo('uncertain-finalization')).publicationState, 'published')
+    assert.equal(
+      (await channel.publicBee.getVideo('uncertain-finalization')).publicationState,
+      'published',
+    )
+    assert.equal(suppressionAttempts, 2)
+  })
+})
+
 test('MultiWriterChannel preserves legacy public sync defaults and honors explicit sync control', async () => {
   await withChannel(async (channel) => {
     let publicSyncs = 0
@@ -337,21 +469,21 @@ test('MultiWriterChannel reuses pairing discovery while waiting for a peer', asy
     },
     async close() {},
   }
-  const swarm = {
-    connections: new Set([{}]),
-    join() {
-      joinCalls += 1
-      return discovery
-    },
+  const swarm = new EventEmitter()
+  swarm.connections = new Set([new PassThrough()])
+  swarm.join = () => {
+    joinCalls += 1
+    return discovery
   }
   const channel = Object.create(MultiWriterChannel.prototype)
   Object.assign(channel, {
     _pairingSetupDone: false,
     _channelDiscovery: null,
+    _replicatedConnections: new WeakSet(),
     _publicDiscovery: null,
     _publicActivation: null,
     swarm: null,
-    core: { discoveryKey: Buffer.alloc(32, 1), writable: false },
+    core: { discoveryKey: Buffer.alloc(32, 1), writable: false, replicate() {} },
     db: null,
     wakeupSession: null,
     publicBee: null,
@@ -395,5 +527,58 @@ test('MultiWriterChannel decodes a referenced blobs key without opening a redund
     blockLength: 2,
     byteOffset: 0,
     byteLength: 128,
+  })
+})
+
+// Cover art is only useful if it survives a restart: the record is what a
+// republish reads from. A schema that accepts artwork and drops it on encode
+// looks identical to a working one until the process comes back up.
+test('MultiWriterChannel persists cover art through a HyperDB round trip', async () => {
+  await withChannel(async (channel) => {
+    const artwork = [
+      { role: 'poster', remoteUrl: 'https://image.example/poster.jpg', mimeType: 'image/jpeg' },
+      { role: 'thumbnail', blobId: 'blob-1', blobsCoreKey: 'ff00' }
+    ]
+    await channel.addVideo({ id: 'art', title: 'Art', uploadedAt: 10, artwork })
+
+    // HyperDB materializes absent optionals as null rather than omitting them,
+    // so compare the fields that were actually claimed.
+    const stored = await channel.getVideo('art')
+    assert.deepEqual(
+      stored.artwork.map((entry) => Object.fromEntries(
+        Object.entries(entry).filter(([, value]) => value !== null && value !== undefined)
+      )),
+      artwork,
+      'every claimed role and locator decodes back out of HyperDB'
+    )
+
+    const published = await channel.publicBee.getVideo('art')
+    assert.deepEqual(
+      published.artwork.map((entry) => entry.role),
+      ['poster', 'thumbnail'],
+      'the public row carries the art a consumer needs'
+    )
+  })
+})
+
+// The whole point of publishing cover art as a blob is that the reference on
+// the claim resolves to bytes any peer can replicate from the publisher's own
+// core. If the ref does not round-trip locally it cannot round-trip remotely.
+test('a published cover reference resolves to the exact bytes', async () => {
+  await withChannel(async (channel) => {
+    const cover = Buffer.from('jpeg-cover-bytes-for-the-swarm')
+    const stored = await channel.putBlob(cover)
+
+    assert.ok(channel.blobsKeyHex, 'the publisher exposes the core a peer must replicate')
+    assert.match(channel.blobsKeyHex, /^[0-9a-f]{64}$/, 'the core key is a replicable hypercore key')
+
+    // Exactly the reference shape the metadata claim carries.
+    const locator = `blob:${channel.blobsKeyHex}@${stored.id}`
+    const [, coreKey, blobId] = locator.match(/^blob:([0-9a-f]{64})@(.+)$/)
+    assert.equal(coreKey, channel.blobsKeyHex)
+
+    const readBack = await channel.getBlob(blobId)
+    assert.ok(readBack, 'the reference on the claim resolves')
+    assert.equal(Buffer.from(readBack).toString(), cover.toString(), 'byte for byte, the cover the publisher claimed')
   })
 })

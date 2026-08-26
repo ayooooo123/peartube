@@ -83,26 +83,99 @@ test('receiveMultipartUpload is robust to 1-byte-at-a-time chunking', async func
   }
 })
 
-test('receiveMultipartUpload rejects and cleans up when over the size cap', async function (t) {
+test('receiveMultipartUpload has no arbitrary file-size cap', async function (t) {
   const data = Buffer.alloc(4096, 0x61)
   const body = buildBody({}, { field: 'file', filename: 'big.mp4', contentType: 'video/mp4', data })
   const req = new EventEmitter()
-  const uploadDir = mkdtempSync(join(tmpdir(), 'pt-multipart-cap-'))
+  const uploadDir = mkdtempSync(join(tmpdir(), 'pt-multipart-no-cap-'))
   const promise = receiveMultipartUpload(req, { boundary: BOUNDARY, uploadDir, maxBytes: 1024 })
   queueMicrotask(() => {
     req.emit('data', body)
     req.emit('end')
   })
   try {
-    await t.exception(promise, /max size/)
+    const { file } = await promise
+    t.is(file.size, data.length, 'legacy maxBytes is ignored; storage policy owns capacity')
+    t.alike(readFileSync(file.path), data, 'file bytes are intact')
+  } finally {
+    rmSync(uploadDir, { recursive: true, force: true })
+  }
+})
+
+test('receiveMultipartUpload stops at storage headroom and cleans up', async function (t) {
+  const data = Buffer.alloc(4096, 0x61)
+  const body = buildBody({}, { field: 'file', filename: 'big.mp4', contentType: 'video/mp4', data })
+  const req = new EventEmitter()
+  const uploadDir = mkdtempSync(join(tmpdir(), 'pt-multipart-headroom-'))
+  const promise = receiveMultipartUpload(req, { boundary: BOUNDARY, uploadDir, storageHeadroom: () => 32 })
+  queueMicrotask(() => {
+    req.emit('data', body)
+    req.emit('end')
+  })
+  try {
+    await t.exception(promise, /storage headroom/)
     const uploads = join(uploadDir, 'uploads')
-    // The partial upload directory must be cleaned up on failure.
     if (existsSync(uploads)) {
       const { readdirSync } = await import('node:fs')
       t.is(readdirSync(uploads).length, 0, 'partial upload cleaned up')
     } else {
       t.pass('no upload dir left behind')
     }
+  } finally {
+    rmSync(uploadDir, { recursive: true, force: true })
+  }
+})
+
+test('receiveMultipartUpload accepts object storage headroom snapshots', async function (t) {
+  const data = Buffer.alloc(4096, 0x62)
+  const body = buildBody({}, { field: 'file', filename: 'big.mp4', contentType: 'video/mp4', data })
+  const uploadDir = mkdtempSync(join(tmpdir(), 'pt-multipart-object-headroom-'))
+  try {
+    const sharedReq = new EventEmitter()
+    const shared = receiveMultipartUpload(sharedReq, {
+      boundary: BOUNDARY,
+      uploadDir,
+      storageHeadroom: () => ({ tmp: data.length * 3, storage: data.length * 3, sharedVolume: true })
+    })
+    queueMicrotask(() => {
+      sharedReq.emit('data', body)
+      sharedReq.emit('end')
+    })
+    const { file: sharedFile } = await shared
+    t.alike(readFileSync(sharedFile.path), data, 'shared-volume objects reserve staged bytes plus the eventual copy')
+
+    const separateReq = new EventEmitter()
+    const separate = receiveMultipartUpload(separateReq, {
+      boundary: BOUNDARY,
+      uploadDir,
+      storageHeadroom: () => ({ tmp: data.length + 1, storage: data.length + 1, sharedVolume: false })
+    })
+    queueMicrotask(() => {
+      separateReq.emit('data', body)
+      separateReq.emit('end')
+    })
+    const { file: separateFile } = await separate
+    t.alike(readFileSync(separateFile.path), data, 'separate-volume objects check tmp and persisted storage independently')
+
+    let checks = 0
+    const crampedReq = new EventEmitter()
+    const cramped = receiveMultipartUpload(crampedReq, {
+      boundary: BOUNDARY,
+      uploadDir,
+      storageHeadroom: () => {
+        checks += 1
+        return { tmp: data.length + 1, storage: data.length + 1, sharedVolume: true }
+      }
+    })
+    queueMicrotask(async () => {
+      for (let i = 0; i < body.length; i += 64) {
+        crampedReq.emit('data', body.subarray(i, Math.min(i + 64, body.length)))
+        await Promise.resolve()
+      }
+      crampedReq.emit('end')
+    })
+    await t.exception(cramped, /storage headroom/, 'shared-volume objects compare the staged total, not just each chunk')
+    t.ok(checks > 10, 'the fixture exercised many small upload chunks')
   } finally {
     rmSync(uploadDir, { recursive: true, force: true })
   }

@@ -96,3 +96,23 @@ export function assessArchiveConfidence(input = {}) {
     evidence,
   }
 }
+
+/**
+ * Archive confidence answers "will this survive?", never "can a peer serve it
+ * right now?". Availability assessment consumes this as a pledge count only:
+ * a pledge can never advance network availability, and a fresh archivist
+ * possession proof counts as reachability only through that archivist's own
+ * active transport session, which the caller must supply as a normal peer.
+ */
+export function archiveDurabilityContribution(input = {}) {
+  const assessed = Array.isArray(input.durableArchivists) && Array.isArray(input.durablePublisherDevices)
+  const assessment = assessed ? input : assessArchiveConfidence(input)
+  return Object.freeze({
+    archivePledgeCount: assessment.durablePublisherDevices.length + assessment.durableArchivists.length,
+    contributesToNetworkAvailability: false,
+    limitations: Object.freeze([
+      'archive-pledge-is-durability-not-reachability',
+      ...(Array.isArray(assessment.limitations) ? assessment.limitations : []),
+    ]),
+  })
+}

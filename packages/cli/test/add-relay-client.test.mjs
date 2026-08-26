@@ -183,7 +183,7 @@ test('runAddCommand relay-interactive: pick a title, give a source URL, relay pu
     signals: new EventEmitter(),
     flags: { relayUi: base, noColor: true },
     env: { TMDB_API_KEY: 'k' },
-    deps: { runTerminal, createTmdbProvider: fakeTmdb }
+    deps: { runTerminal, createMetadataProvider: async () => fakeTmdb() }
   })
 
   await delay(40)

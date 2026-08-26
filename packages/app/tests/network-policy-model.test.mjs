@@ -24,11 +24,13 @@ test('network policy model decodes bounded wire fields and encodes explicit zero
     followedIndexesJson: '["index-a"]',
     trustedModerationFeedsJson: '["moderator-a"]',
     aiAnalysis: 'local-only',
+    participationMode: 'help-more',
   })
 
   assert.deepEqual(policy.followedPublishers, ['publisher-a'])
   assert.deepEqual(policy.followedIndexes, ['index-a'])
   assert.deepEqual(policy.trustedModerationFeeds, ['moderator-a'])
+  assert.equal(policy.participationMode, 'help-more')
   assert.deepEqual(networkPolicyRequest(policy), {
     uploadPermission: 'enabled',
     meteredNetwork: 'local-only',
@@ -42,6 +44,7 @@ test('network policy model decodes bounded wire fields and encodes explicit zero
     followedIndexesJson: '["index-a"]',
     trustedModerationFeedsJson: '["moderator-a"]',
     aiAnalysis: 'local-only',
+    participationMode: 'help-more',
   })
 })
 
@@ -72,6 +75,16 @@ test('network policy actions load and persist the complete local policy through 
   assert.deepEqual(updated.followedPublishers, ['publisher-a'])
 })
 
+test('an absent participation mode decodes as balanced and a bad one is refused', async () => {
+  const { normalizeNetworkPolicyResponse, DEFAULT_NETWORK_POLICY } = await loadModel()
+
+  assert.equal(DEFAULT_NETWORK_POLICY.participationMode, 'balanced')
+  assert.equal(DEFAULT_NETWORK_POLICY.diskCeilingBytes, 20 * 1024 * 1024 * 1024)
+  assert.equal(DEFAULT_NETWORK_POLICY.uploadCeilingBytes, 1024 * 1024 * 1024)
+  assert.equal(normalizeNetworkPolicyResponse({}).participationMode, 'balanced')
+  assert.throws(() => normalizeNetworkPolicyResponse({ participationMode: 'unlimited' }), /participation mode/)
+})
+
 test('native policy routes use the initialized RPC and React Native primitives', () => {
   const routeNames = ['network-policy.tsx', 'subscriptions.tsx', 'moderation.tsx']
   const primitives = fs.readFileSync(path.resolve(import.meta.dirname, '../components/library/PolicyControls.tsx'), 'utf8')
@@ -84,9 +97,11 @@ test('native policy routes use the initialized RPC and React Native primitives',
   }
 })
 
-test('profile exposes the three local policy screens', () => {
-  const source = fs.readFileSync(path.resolve(import.meta.dirname, '../app/profile.tsx'), 'utf8')
-  assert.match(source, /\/network-policy/)
-  assert.match(source, /\/subscriptions/)
-  assert.match(source, /\/moderation/)
+test('Developer Settings exposes the three gated local policy screens', () => {
+  const profile = fs.readFileSync(path.resolve(import.meta.dirname, '../app/profile.tsx'), 'utf8')
+  const developerSettings = fs.readFileSync(path.resolve(import.meta.dirname, '../app/developer-settings.tsx'), 'utf8')
+  for (const route of ['/network-policy', '/subscriptions', '/moderation']) {
+    assert.doesNotMatch(profile, new RegExp(`router\\.push\\('${route.replace('/', '\\/')}'\\)`))
+    assert.match(developerSettings, new RegExp(`path: '${route.replace('/', '\\/')}'`))
+  }
 })

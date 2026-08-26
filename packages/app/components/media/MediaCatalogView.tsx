@@ -11,6 +11,7 @@ import {
 } from 'react-native'
 import type { MediaCatalogState, MediaEntitySummary, MediaPublicationSource } from '@peartube/core'
 import type { MediaCatalogDiagnostic } from '@/lib/media-catalog-controller.mjs'
+import { describeAvailability } from '@/lib/media-availability'
 import { colors } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 
@@ -37,7 +38,10 @@ function MediaCatalogEntityCard({ item, onPress }: { item: MediaEntitySummary; o
   const sourceCount = item.sources.length
   const claimCount = item.claimCount ?? 0
   const conflictCount = item.conflictCount ?? 0
-  const archiveState = source?.archiveState || source?.cacheState || source?.availabilityState || 'not archived'
+  const archiveState = source?.archiveState || source?.cacheState || 'not archived'
+  // One assessment, one answer: the card quotes exactly what detail and Other
+  // Sources quote, and it decays with the same expiry.
+  const availability = describeAvailability(item.availability ?? source?.availability ?? null)
 
   return (
     <Pressable
@@ -57,6 +61,10 @@ function MediaCatalogEntityCard({ item, onPress }: { item: MediaEntitySummary; o
       <View style={styles.factRow}>
         <Text style={styles.factLabel}>Source</Text>
         <Text style={styles.factValue} numberOfLines={1}>{source?.publisherId || 'No playable publication'}</Text>
+      </View>
+      <View style={styles.factRow}>
+        <Text style={styles.factLabel}>Availability</Text>
+        <Text style={styles.factValue} numberOfLines={1}>{availability.label}</Text>
       </View>
       <View style={styles.factRow}>
         <Text style={styles.factLabel}>Archive</Text>

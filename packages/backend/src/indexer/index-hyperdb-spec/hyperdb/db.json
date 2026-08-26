@@ -1,0 +1,516 @@
+{
+  "version": 2,
+  "offset": 0,
+  "schema": [
+    {
+      "name": "sourceRecords",
+      "namespace": "peartubeIndex",
+      "id": 0,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [
+        "@peartubeIndex/source-records-by-publisher"
+      ],
+      "schema": "@peartubeIndex/sourceRecord",
+      "derived": false,
+      "key": [
+        "publisherId",
+        "catalogEpoch",
+        "recordId"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "sourceCursors",
+      "namespace": "peartubeIndex",
+      "id": 1,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [
+        "@peartubeIndex/source-cursors-by-publisher"
+      ],
+      "schema": "@peartubeIndex/sourceCursor",
+      "derived": false,
+      "key": [
+        "publisherId",
+        "catalogEpoch"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "externalReferenceProjections",
+      "namespace": "peartubeIndex",
+      "id": 2,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [
+        "@peartubeIndex/external-references-by-publisher",
+        "@peartubeIndex/external-reference-exact",
+        "@peartubeIndex/entity-exact"
+      ],
+      "schema": "@peartubeIndex/externalReferenceProjection",
+      "derived": false,
+      "key": [
+        "publisherId",
+        "sourceRecordRef",
+        "namespace",
+        "normalizedIdentifier",
+        "entityKind",
+        "entityId"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "publicationProjections",
+      "namespace": "peartubeIndex",
+      "id": 3,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [
+        "@peartubeIndex/publications-by-publisher",
+        "@peartubeIndex/publication-exact",
+        "@peartubeIndex/publication-by-work",
+        "@peartubeIndex/normalized-title"
+      ],
+      "schema": "@peartubeIndex/publicationProjection",
+      "derived": false,
+      "key": [
+        "publisherId",
+        "sourceRecordRef",
+        "publicationId"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "renditionProjections",
+      "namespace": "peartubeIndex",
+      "id": 4,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [
+        "@peartubeIndex/renditions-by-publisher",
+        "@peartubeIndex/asset-exact",
+        "@peartubeIndex/rendition-exact"
+      ],
+      "schema": "@peartubeIndex/renditionProjection",
+      "derived": false,
+      "key": [
+        "publisherId",
+        "sourceRecordRef",
+        "renditionId"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "availabilityProjections",
+      "namespace": "peartubeIndex",
+      "id": 5,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [
+        "@peartubeIndex/availability-by-publisher",
+        "@peartubeIndex/availability-by-asset"
+      ],
+      "schema": "@peartubeIndex/availabilityProjection",
+      "derived": false,
+      "key": [
+        "publisherId",
+        "sourceRecordRef",
+        "assetId",
+        "observerId",
+        "observedAt"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "relationshipEdges",
+      "namespace": "peartubeIndex",
+      "id": 6,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [
+        "@peartubeIndex/relationships-by-publisher",
+        "@peartubeIndex/relationship-by-type",
+        "@peartubeIndex/relationship-by-from",
+        "@peartubeIndex/relationship-by-to",
+        "@peartubeIndex/token-prefix"
+      ],
+      "schema": "@peartubeIndex/relationshipEdge",
+      "derived": false,
+      "key": [
+        "publisherId",
+        "sourceRecordRef",
+        "relationType",
+        "fromId",
+        "toId"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "source-records-by-publisher",
+      "namespace": "peartubeIndex",
+      "id": 7,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/sourceRecords",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "publisherId",
+        "catalogEpoch",
+        "recordId"
+      ]
+    },
+    {
+      "name": "source-cursors-by-publisher",
+      "namespace": "peartubeIndex",
+      "id": 8,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/sourceCursors",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "publisherId",
+        "catalogEpoch"
+      ]
+    },
+    {
+      "name": "external-references-by-publisher",
+      "namespace": "peartubeIndex",
+      "id": 9,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/externalReferenceProjections",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "publisherId",
+        "sourceRecordRef",
+        "namespace",
+        "normalizedIdentifier",
+        "entityKind",
+        "entityId"
+      ]
+    },
+    {
+      "name": "publications-by-publisher",
+      "namespace": "peartubeIndex",
+      "id": 10,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/publicationProjections",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "publisherId",
+        "sourceRecordRef",
+        "publicationId"
+      ]
+    },
+    {
+      "name": "renditions-by-publisher",
+      "namespace": "peartubeIndex",
+      "id": 11,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/renditionProjections",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "publisherId",
+        "sourceRecordRef",
+        "renditionId"
+      ]
+    },
+    {
+      "name": "availability-by-publisher",
+      "namespace": "peartubeIndex",
+      "id": 12,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/availabilityProjections",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "publisherId",
+        "sourceRecordRef",
+        "assetId",
+        "observerId",
+        "observedAt"
+      ]
+    },
+    {
+      "name": "relationships-by-publisher",
+      "namespace": "peartubeIndex",
+      "id": 13,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/relationshipEdges",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "publisherId",
+        "sourceRecordRef",
+        "relationType",
+        "fromId",
+        "toId"
+      ]
+    },
+    {
+      "name": "external-reference-exact",
+      "namespace": "peartubeIndex",
+      "id": 14,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/externalReferenceProjections",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "namespace",
+        "normalizedIdentifier",
+        "publisherId",
+        "sourceRecordRef",
+        "entityKind",
+        "entityId"
+      ]
+    },
+    {
+      "name": "entity-exact",
+      "namespace": "peartubeIndex",
+      "id": 15,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/externalReferenceProjections",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "entityKind",
+        "entityId",
+        "publisherId",
+        "sourceRecordRef",
+        "namespace",
+        "normalizedIdentifier"
+      ]
+    },
+    {
+      "name": "publication-exact",
+      "namespace": "peartubeIndex",
+      "id": 16,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/publicationProjections",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "publicationId",
+        "publisherId",
+        "sourceRecordRef"
+      ]
+    },
+    {
+      "name": "publication-by-work",
+      "namespace": "peartubeIndex",
+      "id": 17,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/publicationProjections",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "workEntityId",
+        "publisherId",
+        "sourceRecordRef",
+        "publicationId"
+      ]
+    },
+    {
+      "name": "normalized-title",
+      "namespace": "peartubeIndex",
+      "id": 18,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/publicationProjections",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "normalizedTitle",
+        "publisherId",
+        "sourceRecordRef",
+        "publicationId"
+      ]
+    },
+    {
+      "name": "asset-exact",
+      "namespace": "peartubeIndex",
+      "id": 19,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/renditionProjections",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "assetId",
+        "publisherId",
+        "sourceRecordRef",
+        "renditionId"
+      ]
+    },
+    {
+      "name": "rendition-exact",
+      "namespace": "peartubeIndex",
+      "id": 20,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/renditionProjections",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "renditionId",
+        "publisherId",
+        "sourceRecordRef"
+      ]
+    },
+    {
+      "name": "availability-by-asset",
+      "namespace": "peartubeIndex",
+      "id": 21,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/availabilityProjections",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "assetId",
+        "publisherId",
+        "sourceRecordRef",
+        "observerId",
+        "observedAt"
+      ]
+    },
+    {
+      "name": "relationship-by-type",
+      "namespace": "peartubeIndex",
+      "id": 22,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/relationshipEdges",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "relationType",
+        "publisherId",
+        "sourceRecordRef",
+        "fromId",
+        "toId"
+      ]
+    },
+    {
+      "name": "relationship-by-from",
+      "namespace": "peartubeIndex",
+      "id": 23,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/relationshipEdges",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "relationType",
+        "fromId",
+        "publisherId",
+        "sourceRecordRef",
+        "toId"
+      ]
+    },
+    {
+      "name": "relationship-by-to",
+      "namespace": "peartubeIndex",
+      "id": 24,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/relationshipEdges",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "relationType",
+        "toId",
+        "publisherId",
+        "sourceRecordRef",
+        "fromId"
+      ]
+    },
+    {
+      "name": "token-prefix",
+      "namespace": "peartubeIndex",
+      "id": 25,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeIndex/relationshipEdges",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "relationType",
+        "fromId",
+        "publisherId",
+        "sourceRecordRef",
+        "toId"
+      ]
+    },
+    {
+      "name": "usageCounters",
+      "namespace": "peartubeIndex",
+      "id": 26,
+      "type": 1,
+      "version": 2,
+      "versionField": null,
+      "indexes": [
+        "@peartubeIndex/usage-by-scope"
+      ],
+      "schema": "@peartubeIndex/usageCounter",
+      "derived": false,
+      "key": [
+        "publisherId",
+        "scope",
+        "bucketId"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "admissionTombstones",
+      "namespace": "peartubeIndex",
+      "id": 27,
+      "type": 1,
+      "version": 2,
+      "versionField": null,
+      "indexes": [],
+      "schema": "@peartubeIndex/admissionTombstone",
+      "derived": false,
+      "key": [
+        "publisherId"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "usage-by-scope",
+      "namespace": "peartubeIndex",
+      "id": 28,
+      "type": 2,
+      "version": 2,
+      "collection": "@peartubeIndex/usageCounters",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "scope",
+        "bucketId",
+        "publisherId"
+      ]
+    }
+  ]
+}

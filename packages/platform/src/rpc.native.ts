@@ -18,6 +18,7 @@ import type {
   PublisherRootIntentRequest,
   PublisherSignerBridgeLike,
   StorageStatsResponse,
+  UploadVideoRequest,
 } from './rpc.shared';
 import {
   createNativeRunner,
@@ -1051,7 +1052,7 @@ export const rpc = {
     return ensureRPC().getVideoStats(req);
   },
 
-  async uploadVideo(filePathOrReq: string | { filePath: string; title: string; description: string; category?: string }, title?: string, description?: string, category?: string) {
+  async uploadVideo(filePathOrReq: string | UploadVideoRequest, title?: string, description?: string, category?: string) {
     const req = typeof filePathOrReq === 'string'
       ? { filePath: filePathOrReq, title: title!, description: description!, category }
       : filePathOrReq;
@@ -1176,19 +1177,6 @@ export const rpc = {
       ? { query: queryOrReq, topK: topK || 20 }
       : queryOrReq;
     return ensureRPC().globalSearchVideos(req);
-  },
-
-  // Recommendations / watch events
-  async logWatchEvent(req: { channelKey: string; videoId: string; duration?: number; completed?: boolean; share?: boolean }) {
-    return ensureRPC().logWatchEvent(req);
-  },
-
-  async getRecommendations(req: { channelKey: string; limit?: number }) {
-    return ensureRPC().getRecommendations(req);
-  },
-
-  async getVideoRecommendations(req: { channelKey: string; videoId: string; limit?: number }) {
-    return ensureRPC().getVideoRecommendations(req);
   },
 
   // Status

@@ -41,7 +41,8 @@ function publisherWith (createChannelFn, { signCalls = null } = {}) {
     api: {},
     runtime: { ctx: {} },
     fs: {},
-    createChannelFn
+    createChannelFn,
+    canPublish: retentionClass => retentionClass === 'archive-pin',
   })
 }
 
@@ -53,8 +54,8 @@ test('ensureAnonymousChannel creates one deterministic channel per show and reus
   })
   const identity = deriveArchiveSourceIdentity({ tmdbType: 'tv', tmdbId: '95396', tmdbTitle: 'Severance' })
 
-  const first = await publisher.ensureAnonymousChannel({ channelName: 'Severance', sourceIdentity: identity })
-  const second = await publisher.ensureAnonymousChannel({ channelName: 'Severance', sourceIdentity: identity })
+  const first = await publisher.ensureAnonymousChannel({ channelName: 'Severance', sourceIdentity: identity, retentionClass: 'archive-pin' })
+  const second = await publisher.ensureAnonymousChannel({ channelName: 'Severance', sourceIdentity: identity, retentionClass: 'archive-pin' })
 
   t.is(created.length, 1, 'the show channel is created once, then cached')
   t.is(created[0], 'peartube-archive-writer:tmdb:tv:95396', 'deterministic writer key from the show source id')
@@ -65,13 +66,13 @@ test('ensureAnonymousChannel creates one deterministic channel per show and reus
 test('ensureAnonymousChannel falls back to the shared channel when createChannel fails', async function (t) {
   const publisher = publisherWith(async () => { throw new Error('boom') })
   const identity = deriveArchiveSourceIdentity({ tmdbType: 'movie', tmdbId: '603', tmdbTitle: 'The Matrix' })
-  const info = await publisher.ensureAnonymousChannel({ channelName: 'The Matrix', sourceIdentity: identity })
+  const info = await publisher.ensureAnonymousChannel({ channelName: 'The Matrix', sourceIdentity: identity, retentionClass: 'archive-pin' })
   t.is(info.channelKey, 'active-channel', 'archiving never hard-fails: falls back to the shared channel')
 })
 
 test('ensureAnonymousChannel uses the shared channel for plain archives', async function (t) {
   const publisher = publisherWith(async () => { throw new Error('must not be called') })
-  const info = await publisher.ensureAnonymousChannel({ channelName: 'Anonymous Archive', sourceIdentity: null })
+  const info = await publisher.ensureAnonymousChannel({ channelName: 'Anonymous Archive', sourceIdentity: null, retentionClass: 'archive-pin' })
   t.is(info.channelKey, 'active-channel')
 })
 
@@ -82,7 +83,7 @@ test('ensureAnonymousChannel signs the grouped channel root descriptor', async f
   }, { signCalls })
   const identity = deriveArchiveSourceIdentity({ tmdbType: 'tv', tmdbId: '95396', tmdbTitle: 'Severance' })
 
-  await publisher.ensureAnonymousChannel({ channelName: 'Severance', sourceIdentity: identity })
+  await publisher.ensureAnonymousChannel({ channelName: 'Severance', sourceIdentity: identity, retentionClass: 'archive-pin' })
 
   t.is(signCalls.length, 1, 'the grouped channel is signed so strict feed peers accept it')
   t.is(signCalls[0].channelKey, 'ck-peartube-archive-writer:tmdb:tv:95396')
@@ -101,9 +102,10 @@ test('ensureAnonymousChannel falls back to the shared channel when signing fails
     api: {},
     runtime: { ctx: {} },
     fs: {},
-    createChannelFn: async (ctx, opts) => ({ channel: { ...stubChannel(opts.writerKeyName), keyHex: `ck-${opts.writerKeyName}` }, channelKeyHex: `ck-${opts.writerKeyName}` })
+    createChannelFn: async (ctx, opts) => ({ channel: { ...stubChannel(opts.writerKeyName), keyHex: `ck-${opts.writerKeyName}` }, channelKeyHex: `ck-${opts.writerKeyName}` }),
+    canPublish: retentionClass => retentionClass === 'archive-pin',
   })
   const identity = deriveArchiveSourceIdentity({ tmdbType: 'movie', tmdbId: '603', tmdbTitle: 'The Matrix' })
-  const info = await publisher.ensureAnonymousChannel({ channelName: 'The Matrix', sourceIdentity: identity })
+  const info = await publisher.ensureAnonymousChannel({ channelName: 'The Matrix', sourceIdentity: identity, retentionClass: 'archive-pin' })
   t.is(info.channelKey, 'active-channel', 'an unsignable grouped channel falls back to the signed shared channel')
 })

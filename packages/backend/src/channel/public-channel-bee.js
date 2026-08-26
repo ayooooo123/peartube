@@ -92,6 +92,7 @@ const CONTENT_DETAIL_FIELDS = [
   'episodeNumber',
   'originalAirDate',
   'thumbnailUrl',
+  'artwork',
   'provenanceVersion',
   'publicationState',
   'contentFingerprint',
@@ -248,6 +249,10 @@ function groupClaimsByIdentity(claims) {
     grouped.set(claim.identityKey, entries)
   }
   return grouped
+}
+
+function isPrivatePublicationState(value) {
+  return value === 'replicationPending' || value === 'commitUncertain'
 }
 
 export function isPubliclyProjectable(video, claimWinner = null) {
@@ -1095,7 +1100,7 @@ export class PublicChannelBee extends ReadyResource {
     const claimWinners = opts.claimWinners instanceof Map ? opts.claimWinners : new Map()
     let materializeContentDetails = opts.materializeContentDetails === true
     const hasStructuredProjection = (videos || []).some((candidate) => {
-      if (!candidate?.id || candidate.publicationState === 'replicationPending') return false
+      if (!candidate?.id || isPrivatePublicationState(candidate.publicationState)) return false
       const winner = candidate.importIdentityKey
         ? claimWinners.get(candidate.importIdentityKey) || null
         : null
@@ -1126,12 +1131,12 @@ export class PublicChannelBee extends ReadyResource {
     }
 
     const sourceIds = new Set()
-    const explicitlyPendingIds = new Set()
+    const explicitlyPrivateIds = new Set()
     const now = Date.now()
     for (const candidate of videos || []) {
       if (!candidate?.id) continue
-      if (candidate.publicationState === 'replicationPending') {
-        explicitlyPendingIds.add(candidate.id)
+      if (isPrivatePublicationState(candidate.publicationState)) {
+        explicitlyPrivateIds.add(candidate.id)
         this._explicitlyDeletedVideoIds?.add(candidate.id)
         await this._writeProjectionClaimIndex({ id: candidate.id })
         batch.push(['@peartubePublic/videos', { id: candidate.id }, { type: 'delete' }])
@@ -1185,7 +1190,7 @@ export class PublicChannelBee extends ReadyResource {
 
     if (destructive) {
       for (const id of existing) {
-        if (!sourceIds.has(id) && !explicitlyPendingIds.has(id)) {
+        if (!sourceIds.has(id) && !explicitlyPrivateIds.has(id)) {
           this._explicitlyDeletedVideoIds?.add(id)
           batch.push(['@peartubePublic/videos', { id }, { type: 'delete' }])
           await this._writeProjectionClaimIndex({ id })
@@ -1396,7 +1401,10 @@ export class PublicChannelBee extends ReadyResource {
     return result
   }
 
-  async _syncFromChannelUnlocked(channel, { throwOnError = false } = {}) {
+  async _syncFromChannelUnlocked(channel, {
+    throwOnError = false,
+    projectionVideos = undefined
+  } = {}) {
     if (!this.writable) {
       console.log('[PublicBee] Not writable, skipping sync')
       return
@@ -1405,7 +1413,7 @@ export class PublicChannelBee extends ReadyResource {
     try {
       const [meta, videos, profile, sources, artwork] = await Promise.all([
         channel.getMetadata?.() || null,
-        channel.listVideos?.() || [],
+        projectionVideos === undefined ? channel.listVideos?.() || [] : projectionVideos,
         channel.getChannelProfile?.() || null,
         channel.listChannelSources?.() || [],
         channel.listChannelArtwork?.() || []
@@ -1501,12 +1509,12 @@ export class PublicChannelBee extends ReadyResource {
         claimWinners
       )
 
+      await this._suppressResolvedLosers(videos, publicCandidates, groupedClaims, claimWinners)
       await this.syncVideos(videos || [], {
         destructive: false,
         claimWinners,
         materializeContentDetails
       })
-      await this._suppressResolvedLosers(videos, publicCandidates, groupedClaims, claimWinners)
       console.log('[PublicBee] Synced from channel:', channel.keyHex?.slice(0, 16))
       return { claims, blockAllClaimPromotions }
     } catch (err) {

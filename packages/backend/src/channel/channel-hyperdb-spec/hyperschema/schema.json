@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "schema": [
     {
       "name": "metadata",
@@ -611,6 +611,17 @@
           "name": "importClaimantId",
           "type": "string",
           "version": 2
+        },
+        {
+          "name": "artwork",
+          "array": true,
+          "type": "@peartubeChannel/contentArtwork",
+          "version": 3
+        },
+        {
+          "name": "publication",
+          "type": "@peartubeChannel/immutablePublication",
+          "version": 3
         }
       ]
     },
@@ -755,6 +766,133 @@
           "name": "releasedAt",
           "type": "uint64",
           "version": 2
+        }
+      ]
+    },
+    {
+      "name": "contentArtwork",
+      "namespace": "peartubeChannel",
+      "compact": true,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "role",
+          "required": true,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "blobId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "blobsCoreKey",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "mimeType",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "remoteUrl",
+          "type": "string",
+          "version": 3
+        }
+      ]
+    },
+    {
+      "name": "immutablePublication",
+      "namespace": "peartubeChannel",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "publicationId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "manifestId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "renditionId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "assetId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "coreKey",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "publisherId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "sequence",
+          "type": "uint64",
+          "version": 3
+        },
+        {
+          "name": "metadataClaimId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "availabilityClaimId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "publicationOperationId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "metadataClaimOperationId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "availabilityClaimOperationId",
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "manifestHex",
+          "type": "string",
+          "version": 3
+        }
+      ]
+    },
+    {
+      "name": "publicationOperationFrames",
+      "namespace": "peartubeChannel",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "id",
+          "required": true,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "publicationOperationFramesHex",
+          "required": true,
+          "type": "string",
+          "version": 3
         }
       ]
     }

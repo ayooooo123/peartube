@@ -36,6 +36,26 @@ test('bootstrap manager replaces per-publisher locators and suppresses replay', 
   t.is(manager.getLocator(first.body.publisherId).catalogHead, '2'.repeat(64))
 })
 
+test('bootstrap manager removes an expired availability locator from every read surface', async (t) => {
+  let time = 15_000
+  const manager = createBootstrapManager({ now: () => time })
+  const advertised = locator()
+  t.is((await manager.ingestLocator('peer-a', advertised.envelope)).status, 'accepted')
+  t.is(manager.listLocators().length, 1)
+  time = advertised.body.expiresAt + 1
+  t.absent(manager.getLocator(advertised.body.publisherId))
+  t.alike(manager.listLocators(), [])
+  t.alike(manager.getIntroducedPublisherIds(), [])
+})
+
+test('a structurally valid unknown locator is retained only as an unverified proof candidate', async (t) => {
+  const manager = createBootstrapManager({ now: () => 15_000, trustedSigners: [] })
+  const result = await manager.ingestLocator('peer-a', locator().envelope)
+  t.is(result.status, 'accepted')
+  t.is(manager.getLocator('a'.repeat(64)).trusted, false)
+  t.is(manager.getLocator('a'.repeat(64)).catalogChainVerified, false)
+})
+
 test('bootstrap manager enforces per-peer quotas and never opens media/core replication', async (t) => {
   const opened = []
   const manager = createBootstrapManager({ now: () => 15_000, trustedSigners: [signer.publicKey], maxLocatorsPerPeer: 1, openCore: key => opened.push(key) })

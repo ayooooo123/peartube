@@ -9,7 +9,10 @@ import {
 } from '../assets/index.js'
 import { decodeApplicationEnvelope, encodeApplicationEnvelope } from '../records/application-envelope.js'
 import { PUBLISHER_LIMITS, PUBLISHER_RECORD_TYPES, toHex } from '../publisher/canonical.js'
+import { MEDIA_COORDINATE_SHAPES } from '../channel/structured-content.js'
 import { decodeClaimBody } from './claims.js'
+import { describeMedia } from './described-media.js'
+import { resolveConsumerMediaEntity } from './resolver.js'
 import { createMediaGraphStore } from './store.js'
 
 const PAGE_LIMIT = PUBLISHER_LIMITS.maxApplyBatch
@@ -76,6 +79,39 @@ function revisionFor(keys) {
   return b4a.toString(crypto.hash(b4a.from([...keys].sort().join('\n'))), 'hex')
 }
 
+// A binding that cannot be read must not take the whole projection down with it.
+//
+// Reading a publisher catalog answers from its Autobase view, and both the
+// advance that precedes the read and the view read itself wait on peers with no
+// bound of their own. Observed on a live relay: seconds after the swarm attaches
+// peers, one bound catalog stops answering entirely. Because every media-graph
+// surface projects through this rebuild, that single quiet peer hung everything
+// behind it — the boot-time rebuild never returned, so the relay's backend never
+// handed back a context and its HTTP port never opened, and once past boot every
+// catalog read rode its own deadline into a permanent 503.
+//
+// So each binding is read under a deadline, and a binding that misses it keeps
+// the records it contributed to the previous pass instead of vanishing from the
+// catalog. Nothing is discarded on a timeout, only deferred: the next pass reads
+// it again, by which time the blocks it was waiting on may well be local.
+// A binding that just missed its deadline is left alone for a while too: without
+// that, every pass — and so every catalog read behind it — pays the deadline
+// again, and a relay with one dead publisher answers everything slowly forever.
+const BINDING_SCAN_TIMEOUT_MS = 2_000
+const BINDING_SCAN_BACKOFF_MS = 30_000
+const SCAN_TIMED_OUT = Symbol('binding-scan-timed-out')
+
+function withScanDeadline(pending, timeoutMs) {
+  let timer = null
+  return Promise.race([
+    pending,
+    // Deliberately refed: this timer is the only thing that will finish a pass
+    // whose binding never answers, so it has to keep the loop alive until it
+    // fires. It is cleared as soon as the race settles.
+    new Promise((resolve) => { timer = setTimeout(() => resolve(SCAN_TIMED_OUT), timeoutMs) })
+  ]).finally(() => clearTimeout(timer))
+}
+
 export function createPublisherCatalogProjection(options = {}) {
   const registry = options.catalogRegistry
   if (!registry || typeof registry.listBindings !== 'function') throw new TypeError('catalogRegistry.listBindings is required')
@@ -83,6 +119,13 @@ export function createPublisherCatalogProjection(options = {}) {
   const onUpdate = typeof options.onUpdate === 'function' ? options.onUpdate : null
   const maxCatalogs = safeLimit(options.maxCatalogs, DEFAULT_MAX_CATALOGS, DEFAULT_MAX_CATALOGS, 'maxCatalogs')
   const maxOperations = safeLimit(options.maxOperations, DEFAULT_MAX_OPERATIONS, DEFAULT_MAX_OPERATIONS, 'maxOperations')
+  // Wall clock, deliberately not `now`: `now` is the logical clock a record's
+  // validity is judged against, and a deadline is not a judgement about records.
+  const bindingScanTimeoutMs = Number.isFinite(Number(options.bindingScanTimeoutMs))
+    ? Math.max(0, Number(options.bindingScanTimeoutMs))
+    : BINDING_SCAN_TIMEOUT_MS
+  // What each publisher contributed to the last pass that could read it.
+  const lastScanByPublisher = new Map()
 
   let activePublicationRecords = new Map()
   let activeClaimRecords = new Map()
@@ -91,6 +134,7 @@ export function createPublisherCatalogProjection(options = {}) {
   let revision = revisionFor(new Set())
   let acceptedKeys = new Set()
   let rebuilding = null
+  let currentPass = null
   let rebuildRequested = false
   let closed = false
 
@@ -101,7 +145,8 @@ export function createPublisherCatalogProjection(options = {}) {
   ])
   const assetManifestStore = proxyStore(() => manifests, [
     'getManifest', 'getManifestByPublisherSequence', 'getManifestsByRendition',
-    'getSupersedingManifests', 'getCurrentPublisherHead', 'getQuarantinedManifests', 'ingestManifest',
+    'getManifestsByAssetId', 'getSupersedingManifests', 'getCurrentPublisherHead',
+    'getQuarantinedManifests', 'ingestManifest', 'getRenditionRequirement',
   ])
 
   async function catalogOperations(catalog, kind, remaining) {
@@ -122,6 +167,34 @@ export function createPublisherCatalogProjection(options = {}) {
     return output
   }
 
+  // One binding's whole contribution, or what it last contributed if it cannot
+  // answer in time. Returns null only for a binding that has never been read.
+  async function scanBinding(catalog, publisherId, remaining) {
+    const remembered = lastScanByPublisher.get(publisherId) || null
+    if (remembered && remembered.stalledUntil > Date.now()) return remembered.scan
+    const pending = (async () => {
+      const authorization = await catalog.getAuthorizationState()
+      const publications = await catalogOperations(catalog, 'publication', remaining)
+      const claims = await catalogOperations(catalog, 'claim', remaining - publications.length)
+      return { authorization, publications, claims }
+    })()
+    // The abandoned read still settles; nothing is left to reject into the void
+    // once this pass has moved on without it.
+    pending.catch(() => {})
+    const scan = bindingScanTimeoutMs > 0
+      ? await withScanDeadline(pending, bindingScanTimeoutMs)
+      : await pending
+    if (scan !== SCAN_TIMED_OUT) {
+      lastScanByPublisher.set(publisherId, { scan, stalledUntil: 0 })
+      return scan
+    }
+    lastScanByPublisher.set(publisherId, {
+      scan: remembered?.scan || null,
+      stalledUntil: Date.now() + BINDING_SCAN_BACKOFF_MS
+    })
+    return remembered?.scan || null
+  }
+
   async function performRebuild() {
     if (closed) throw new Error('publisher catalog projection is closed')
     const bindings = await registry.listBindings()
@@ -136,15 +209,12 @@ export function createPublisherCatalogProjection(options = {}) {
       if (!catalog || typeof catalog.update !== 'function' || typeof catalog.getAuthorizationState !== 'function' || typeof catalog.listProjections !== 'function') {
         throw new Error('publisher catalog binding is incomplete')
       }
-      await catalog.update()
-      const authorization = await catalog.getAuthorizationState()
       const publisherId = exactHex(binding.publisherId, 'publisherId')
-      const publications = await catalogOperations(catalog, 'publication', maxOperations - scanned)
-      scanned += publications.length
-      const claims = await catalogOperations(catalog, 'claim', maxOperations - scanned)
-      scanned += claims.length
-      for (const operation of publications) publicationCandidates.push({ authorization, publisherId, operation })
-      for (const operation of claims) claimCandidates.push({ authorization, publisherId, operation })
+      const scan = await scanBinding(catalog, publisherId, maxOperations - scanned)
+      if (!scan) continue
+      scanned += scan.publications.length + scan.claims.length
+      for (const operation of scan.publications) publicationCandidates.push({ authorization: scan.authorization, publisherId, operation })
+      for (const operation of scan.claims) claimCandidates.push({ authorization: scan.authorization, publisherId, operation })
     }
 
     const nextPublicationRecords = new Map()
@@ -209,6 +279,7 @@ export function createPublisherCatalogProjection(options = {}) {
     const nextGraph = createMediaGraphStore({
       authorizeSigner: signer => allowedSigners.has(exactHex(signer, 'claim signer')),
       acceptClaim: (_body, context) => allowedClaimIds.has(context.claimId),
+      resolvePublisherId: (_body, context) => nextClaimRecords.get(context.claimId)?.publisherId,
     })
     const orderedClaims = [...nextClaimRecords.values()].sort((left, right) => {
       const publisherOrder = left.publisherId.localeCompare(right.publisherId)
@@ -266,18 +337,41 @@ export function createPublisherCatalogProjection(options = {}) {
       let result
       do {
         rebuildRequested = false
-        result = await performRebuild()
+        currentPass = performRebuild()
+        try {
+          result = await currentPass
+        } finally {
+          currentPass = null
+        }
       } while (rebuildRequested && !closed)
       return result
     })().finally(() => { rebuilding = null })
     return rebuilding
   }
 
+  // What a reader waits for.
+  //
+  // `rebuild()` drains every pass requested while it runs, which is what a
+  // writer or an authorizer needs: their decision must see state that postdates
+  // their own request. A reader needs no such thing, and paying for it is what
+  // starves it — on a relay whose peers keep appending, each arriving catalog
+  // update requests another pass, so a reader that joined mid-drain waits on a
+  // sequence with no end. Every catalog read then rides its deadline into a 503
+  // while the projection is in fact healthy and advancing.
+  //
+  // A pass walks the whole registry, so its result is complete as of the moment
+  // it started, which is exactly what a read can answer from. Join the pass that
+  // is already running; start one only when none is.
+  function update() {
+    if (currentPass) return currentPass
+    return rebuild()
+  }
+
   return Object.freeze({
     mediaGraphStore,
     assetManifestStore,
     rebuild,
-    update: rebuild,
+    update,
     get revision() { return revision },
     async authorizeRendition({ manifest, renditionId, start = 0, end = null } = {}) {
       await rebuild()
@@ -308,6 +402,569 @@ export function createPublisherCatalogProjection(options = {}) {
     async close() {
       closed = true
       if (rebuilding) await rebuilding.catch(() => {})
+    },
+  })
+}
+
+const CONSUMER_DEFAULT_LIMIT = 20
+const CONSUMER_MAX_LIMIT = 50
+const CONSUMER_MAX_REJECTIONS = 256
+
+function consumerLimit(value) {
+  if (value == null) return CONSUMER_DEFAULT_LIMIT
+  const limit = Number(value)
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > CONSUMER_MAX_LIMIT) throw new Error('consumer catalog limit must be between 1 and 50')
+  return limit
+}
+
+function isVisibleDecision(decision) {
+  return !decision || decision.action === 'visible' || decision.action === 'allow'
+}
+
+function consumerKindRank(kind) {
+  if (kind === 'movie') return 0
+  if (kind === 'series') return 1
+  return 2
+}
+
+function getProfileEnabled(profile) {
+  if (!profile) return true
+  return typeof profile.enabled === 'function' ? profile.enabled() !== false : profile.enabled !== false
+}
+
+function claimCollectionId(row) {
+  return row?.body?.payload?.collectionRef?.entityId || null
+}
+
+function claimMemberId(row) {
+  return row?.body?.payload?.memberRef?.entityId || null
+}
+
+function claimModerationEntity(row, publicationId = null) {
+  const subjectRefs = row?.body?.subjectRefs || []
+  const payload = row?.body?.payload || {}
+  const relatedRefs = [
+    ...subjectRefs,
+    payload.collectionRef,
+    payload.memberRef,
+    payload.subjectRef,
+  ].filter(ref => ref?.entityId)
+  const workIds = Array.from(new Set(
+    relatedRefs.filter(ref => ref.entityKind === 'work').map(ref => ref.entityId)
+  ))
+  const collectionIds = Array.from(new Set(
+    relatedRefs.filter(ref => ref.entityKind === 'collection').map(ref => ref.entityId)
+  ))
+  const work = workIds[0] || null
+  const collection = collectionIds[0] || null
+  const entityRef = subjectRefs[0]?.entityId || work || collection || null
+  return {
+    entityRef,
+    entityId: entityRef,
+    workId: work,
+    workIds,
+    collectionId: collection,
+    collectionIds,
+    publisherId: row?.publisherId || row?.issuer || null,
+    publisherRootKey: row?.publisherId || row?.issuer || null,
+    publicationId: publicationId || payload.publicationId || null,
+  }
+}
+
+function claimRelatedEntityIds(row) {
+  const payload = row?.body?.payload || {}
+  return Array.from(new Set([
+    ...(row?.body?.subjectRefs || []).map(ref => ref?.entityId),
+    payload.collectionRef?.entityId,
+    payload.memberRef?.entityId,
+    payload.subjectRef?.entityId,
+  ].filter(Boolean)))
+}
+
+function publicationLinksByClaim(topologyClaims, availabilityClaims = topologyClaims) {
+  const parents = new Map()
+
+  function root(entityId) {
+    if (!parents.has(entityId)) parents.set(entityId, entityId)
+    let value = entityId
+    while (parents.get(value) !== value) value = parents.get(value)
+    let current = entityId
+    while (parents.get(current) !== current) {
+      const next = parents.get(current)
+      parents.set(current, value)
+      current = next
+    }
+    return value
+  }
+
+  function union(entityIds) {
+    if (entityIds.length < 2) return
+    const first = root(entityIds[0])
+    for (const entityId of entityIds.slice(1)) {
+      const next = root(entityId)
+      if (next !== first) parents.set(next, first)
+    }
+  }
+
+  for (const row of topologyClaims) {
+    const related = claimRelatedEntityIds(row)
+    for (const entityId of related) root(entityId)
+    if (
+      row.body?.claimType === 'EquivalentEntityClaim' ||
+      row.body?.claimType === 'CollectionMembershipClaim'
+    ) union(related)
+  }
+
+  const byIssuerAndCluster = new Map()
+  for (const row of availabilityClaims) {
+    if (row.body?.claimType !== 'AvailabilityObservation') continue
+    const publicationId = row.body?.payload?.publicationId
+    if (!publicationId) continue
+    const publisherId = row.publisherId || row.issuer
+    for (const entityId of claimRelatedEntityIds(row)) {
+      const key = `${publisherId}\0${root(entityId)}`
+      const linked = byIssuerAndCluster.get(key) || new Set()
+      linked.add(publicationId)
+      byIssuerAndCluster.set(key, linked)
+    }
+  }
+
+  return row => {
+    if (row.body?.payload?.publicationId) {
+      return new Set([row.body.payload.publicationId])
+    }
+    const publicationIds = new Set()
+    const publisherId = row.publisherId || row.issuer
+    for (const entityId of claimRelatedEntityIds(row)) {
+      const linked = byIssuerAndCluster.get(`${publisherId}\0${root(entityId)}`)
+      for (const publicationId of linked || []) publicationIds.add(publicationId)
+    }
+    return publicationIds
+  }
+}
+
+function visibleClaimsForConsumer(claims, moderationPolicy) {
+  const evaluation = typeof moderationPolicy?.beginEvaluation === 'function'
+    ? moderationPolicy.beginEvaluation()
+    : moderationPolicy
+  const enabled = getProfileEnabled(evaluation)
+  if (!enabled || typeof evaluation?.evaluate !== 'function') return claims.slice()
+  const baseVisibleClaims = claims.filter(row => {
+    const base = claimModerationEntity(row)
+    return isVisibleDecision(evaluation.evaluate(base))
+  })
+  const linkedPublicationIds = publicationLinksByClaim(baseVisibleClaims, claims)
+  return baseVisibleClaims.filter(row => {
+    if (row.body?.payload?.publicationId) return true
+    for (const publicationId of linkedPublicationIds(row)) {
+      if (!isVisibleDecision(evaluation.evaluate(claimModerationEntity(row, publicationId)))) return false
+    }
+    return true
+  })
+}
+
+function claimStoreView(store, claims) {
+  const allowed = new Set(claims.map(row => row.claimId))
+  return {
+    getClaims() {
+      return claims.slice()
+    },
+    getClaimsBySubject(entityId) {
+      return store.getClaimsBySubject(entityId).filter(row => allowed.has(row.claimId))
+    },
+  }
+}
+
+/**
+ * Project only authenticated publisher catalog state into consumer records.
+ * Collections remain graph entities; "series" is strictly a local presentation.
+ */
+// A publisher may claim several artwork roles; the catalog record carries one
+// display locator, and moderation is applied to that locator. Preferring the
+// poster keeps a shelf uniform, and a plain string stays supported because
+// older claims carry the locator directly.
+//
+// A blob in the publisher's own core wins over any origin the claim names: it
+// replicates on the same swarm as the content, so it works offline and does not
+// tell a third party who is browsing what. The locator is the canonical blob
+// ref string, which parseBlobRef already understands.
+// Exported because the graph-resolver paths in the media-graph API must land on
+// the same single display locator this projection picks; two pickers would mean a
+// title showing art on a shelf and none on its own page.
+export function artworkEntry(artwork) {
+  if (typeof artwork === 'string') return artwork ? { locator: artwork, mimeType: null } : null
+  if (!Array.isArray(artwork)) return null
+  const roles = ['poster', 'thumbnail', 'still', 'backdrop']
+  for (const preferBlob of [true, false]) {
+    for (const role of roles) {
+      for (const entry of artwork) {
+        if (entry?.role !== role) continue
+        const mimeType = typeof entry.mimeType === 'string' && entry.mimeType ? entry.mimeType : null
+        const blobId = typeof entry.blobId === 'string' ? entry.blobId.trim() : ''
+        const blobsCoreKey = typeof entry.blobsCoreKey === 'string' ? entry.blobsCoreKey.trim() : ''
+        if (blobId && blobsCoreKey) return { locator: `blob:${blobsCoreKey}@${blobId}`, mimeType }
+        if (preferBlob) continue
+        const remoteUrl = typeof entry.remoteUrl === 'string' ? entry.remoteUrl.trim() : ''
+        if (remoteUrl) return { locator: remoteUrl, mimeType }
+      }
+    }
+  }
+  return null
+}
+
+function artworkLocator(artwork) {
+  return artworkEntry(artwork)?.locator ?? null
+}
+
+function artworkMimeType(artwork) {
+  return artworkEntry(artwork)?.mimeType ?? null
+}
+
+function mediaCoordinatesFromReference(ref) {
+  const namespace = ref?.namespace
+  const identifier = ref?.normalizedIdentifier
+  if (typeof namespace !== 'string' || typeof identifier !== 'string') return {}
+  for (const [contentKind, shape] of Object.entries(MEDIA_COORDINATE_SHAPES)) {
+    if (!shape.providers.includes(namespace)) continue
+    // An episode is named by its show plus its place in it, so its identifier
+    // is the show's with the ordinals appended; every other kind is named
+    // directly. Reading the shape here rather than a provider name is what
+    // keeps a TVDB movie and a MusicBrainz release reaching the catalog
+    // through the same parse a TMDB movie already did.
+    const pattern = shape.ordinals.length > 0
+      ? /^show:([1-9][0-9]{0,19}):s([1-9][0-9]{0,5}):e([1-9][0-9]{0,5})$/
+      : new RegExp(`^${contentKind}:([^:]{1,128})$`)
+    const match = pattern.exec(identifier)
+    if (!match) continue
+    const out = { contentKind, mediaProvider: namespace, mediaId: match[1] }
+    if (shape.ordinals.length > 0) {
+      out.seasonNumber = Number(match[2])
+      out.episodeNumber = Number(match[3])
+    }
+    return out
+  }
+  return {}
+}
+
+export function projectAuthenticatedPublisherMediaRecords({
+  mediaGraphStore,
+  assetManifestStore,
+  moderationPolicy = null,
+  consumerClaims = null,
+} = {}) {
+  if (!mediaGraphStore?.getClaims || !assetManifestStore?.getManifest) return []
+  const authenticatedClaims = mediaGraphStore.getClaims().filter(row => !row.revoked)
+  const claims = Array.isArray(consumerClaims)
+    ? consumerClaims
+    : visibleClaimsForConsumer(authenticatedClaims, moderationPolicy)
+  const resolverStore = claimStoreView(mediaGraphStore, claims)
+  const memberships = claims.filter(row =>
+    row.body?.claimType === 'CollectionMembershipClaim' &&
+    row.body?.payload?.memberRole === 'episode' &&
+    claimCollectionId(row) &&
+    claimMemberId(row)
+  )
+  const structures = claims.filter(row => row.body?.claimType === 'CollectionStructureClaim')
+  const records = []
+  for (const availability of claims) {
+    if (availability.body?.claimType !== 'AvailabilityObservation') continue
+    const publicationId = availability.body?.payload?.publicationId
+    const manifest = assetManifestStore.getManifest(publicationId)
+    if (!manifest?.body?.publisherId) continue
+    for (const subject of availability.body.subjectRefs || []) {
+      const memberOf = memberships.filter(row => claimMemberId(row) === subject.entityId)
+      const work = resolveConsumerMediaEntity(resolverStore, subject.entityId, { entityKind: 'work' })
+      const coordinates = mediaCoordinatesFromReference(subject)
+      if (memberOf.length === 0) {
+        records.push({
+          directPublisher: true,
+          // A standalone entry is a movie unless its coordinates say otherwise.
+          // A MusicBrainz recording filed as a movie would answer `--kind
+          // movie` and never answer `--kind track`, which is worse than not
+          // being categorized at all.
+          kind: coordinates.contentKind === 'track' || coordinates.contentKind === 'release'
+            ? coordinates.contentKind
+            : 'movie',
+          entityRef: subject.entityId,
+          publicationId: manifest.publicationId,
+          publisherId: manifest.body.publisherId,
+          title: work.metadata.title || manifest.body.title || null,
+          artwork: artworkLocator(work.metadata.artwork),
+          artworkMimeType: artworkMimeType(work.metadata.artwork),
+          ranking: Number.isFinite(work.metadata.ranking) ? work.metadata.ranking : null,
+          ...describeMedia(work.metadata),
+          ...coordinates,
+          playable: true,
+        })
+        continue
+      }
+      for (const membership of memberOf) {
+        const collectionId = claimCollectionId(membership)
+        const collection = resolveConsumerMediaEntity(resolverStore, collectionId, { entityKind: 'collection' })
+        const expectedEpisodeCount = structures
+          .filter(row => claimCollectionId(row) === collectionId)
+          .reduce((maximum, row) => Math.max(maximum, Number(row.body.payload.expectedSlots || 0)), 0)
+        records.push({
+          directPublisher: true,
+          kind: 'series',
+          entityRef: collectionId,
+          collectionId,
+          publicationId: manifest.publicationId,
+          publisherId: manifest.body.publisherId,
+          title: collection.metadata.title || work.metadata.title || manifest.body.title || null,
+          artwork: artworkLocator(collection.metadata.artwork) || artworkLocator(work.metadata.artwork),
+          artworkMimeType: artworkMimeType(collection.metadata.artwork) || artworkMimeType(work.metadata.artwork),
+          ranking: Number.isFinite(collection.metadata.ranking)
+            ? collection.metadata.ranking
+            : (Number.isFinite(work.metadata.ranking) ? work.metadata.ranking : null),
+          playable: true,
+          expectedEpisodeCount,
+          seriesEpisode: {
+            entityRef: subject.entityId,
+            title: work.metadata.title || manifest.body.title || null,
+            seasonNumber: Number(membership.body.payload.position?.season || 0),
+            episodeNumber: Number(membership.body.payload.position?.episode || 0),
+            publicationId: manifest.publicationId,
+            publisherId: manifest.body.publisherId,
+            ...mediaCoordinatesFromReference(subject),
+          },
+        })
+      }
+    }
+  }
+  return records.sort((left, right) => (
+    consumerKindRank(left.kind) - consumerKindRank(right.kind) ||
+    String(left.entityRef).localeCompare(String(right.entityRef)) ||
+    Number(left.seriesEpisode?.seasonNumber || 0) - Number(right.seriesEpisode?.seasonNumber || 0) ||
+    Number(left.seriesEpisode?.episodeNumber || 0) - Number(right.seriesEpisode?.episodeNumber || 0) ||
+    String(left.publisherId).localeCompare(String(right.publisherId)) ||
+    String(left.publicationId).localeCompare(String(right.publicationId))
+  ))
+}
+
+/**
+ * A local view over the existing bounded index. It owns no feed and performs no
+ * network or asset work: sources feed it only after their normal authentication
+ * and ingestion checks have completed.
+ */
+export function createConsumerCatalogProjection(options = {}) {
+  const localIndex = options.localIndex
+  if (
+    !localIndex ||
+    typeof localIndex.replaceRecords !== 'function' ||
+    typeof localIndex.search !== 'function' ||
+    typeof localIndex.records !== 'function'
+  ) {
+    throw new TypeError('localIndex with replaceRecords, search, and records is required')
+  }
+  const bootstrapManager = options.bootstrapManager || null
+  const indexFeedManager = options.indexFeedManager || null
+  const mediaGraphStore = options.mediaGraphStore || null
+  const moderationPolicy = options.moderationPolicy || null
+  const now = typeof options.now === 'function' ? options.now : () => Date.now()
+  const maxCandidates = safeLimit(options.maxCandidates, 4096, 10_000, 'maxCandidates')
+  let rejectedCandidates = []
+  let introducedPublisherIds = []
+  let lastInputFingerprint = null
+  let lastNextRetryAt = null
+  let lastRebuild = { accepted: 0, rejected: 0, rejectionCodes: {} }
+  let acceptedCandidates = new Map()
+  let visibleEntityRefs = new Set()
+  let visiblePublicationIds = new Set()
+  let visibleClaimIds = null
+  const downstream = {
+    artwork: options.onArtwork,
+    topic: options.onTopicJoin,
+    playback: options.onPlaybackPreparation,
+    cache: options.onCache,
+    seed: options.onSeed,
+    archive: options.onArchive,
+  }
+
+  function availablePublishers() {
+    if (!bootstrapManager || typeof bootstrapManager.listLocators !== 'function') return null
+    return new Set(bootstrapManager.listLocators().map(locator => String(locator?.publisherId || '').toLowerCase()).filter(Boolean))
+  }
+
+  function reject(record, reason, rejectionCodes, rejectionCode = reason) {
+    if (rejectedCandidates.length < CONSUMER_MAX_REJECTIONS) {
+      rejectedCandidates.push({ entityRef: record.entityRef, reason })
+    }
+    rejectionCodes[rejectionCode] = (rejectionCodes[rejectionCode] || 0) + 1
+  }
+
+  function resolvedRecord(record, resolverStore) {
+    if (!mediaGraphStore || typeof mediaGraphStore.getClaimsBySubject !== 'function') return record
+    if (mediaGraphStore.getClaimsBySubject(record.entityRef).length === 0) return record
+    const resolved = resolveConsumerMediaEntity(
+      resolverStore,
+      record.entityRef,
+      { entityKind: record.kind },
+    )
+    return {
+      ...record,
+      title: resolved.metadata.title || record.title,
+      artwork: artworkLocator(resolved.metadata.artwork) || record.artwork,
+      artworkMimeType: artworkMimeType(resolved.metadata.artwork) || record.artworkMimeType || null,
+      ranking: Number.isFinite(resolved.metadata.ranking) ? resolved.metadata.ranking : record.ranking,
+      // Resolution can merge claims from several publishers; whichever one
+      // described the title wins over a record that carries nothing.
+      ...describeMedia(record),
+      ...describeMedia(resolved.metadata),
+      entityKind: resolved.entityKind,
+    }
+  }
+
+  return Object.freeze({
+    rebuild() {
+      const indexCandidates = indexFeedManager?.getRecords?.() || []
+      const moderationEvaluation = typeof moderationPolicy?.beginEvaluation === 'function'
+        ? moderationPolicy.beginEvaluation()
+        : moderationPolicy
+      const visibleClaims = mediaGraphStore?.getClaims
+        ? visibleClaimsForConsumer(
+            mediaGraphStore.getClaims().filter(row => !row.revoked),
+            moderationEvaluation,
+          )
+        : null
+      const resolverStore = visibleClaims
+        ? claimStoreView(mediaGraphStore, visibleClaims)
+        : mediaGraphStore
+      // Catalog claims are the only display authority. Curator records are
+      // bounded discovery/deduplication hints and are never returned as titles,
+      // kinds, creators, or playable state.
+      const publisherRecords = (typeof options.publisherRecords === 'function'
+        ? options.publisherRecords({ moderationPolicy: moderationEvaluation, visibleClaims }) || []
+        : [])
+        .filter(record => record?.directPublisher === true)
+      const authenticated = new Map()
+      for (const record of publisherRecords) {
+        authenticated.set(`${String(record.publisherId).toLowerCase()}\0${String(record.publicationId)}`, record)
+      }
+      const records = [...publisherRecords]
+      for (const hint of indexCandidates) {
+        const authoritative = authenticated.get(`${String(hint?.publisherId).toLowerCase()}\0${String(hint?.publicationId)}`)
+        if (authoritative) records.push(authoritative)
+      }
+      const accepted = []
+      const acceptedKeys = new Set()
+      const consideredKeys = new Set()
+      const rejectionCodes = {}
+      const publishers = availablePublishers()
+      rejectedCandidates = []
+      introducedPublisherIds = publishers ? Array.from(publishers).sort() : []
+      for (const record of records) {
+        const publisherId = String(record?.publisherId || '').toLowerCase()
+        if (record?.directPublisher !== true) { reject(record, 'PUBLISHER_RECORD_UNAUTHENTICATED', rejectionCodes); continue }
+        const candidateKey = `${publisherId}\0${String(record.publicationId)}`
+        if (acceptedKeys.has(candidateKey) || consideredKeys.has(candidateKey)) continue
+        consideredKeys.add(candidateKey)
+        const enabled = getProfileEnabled(moderationEvaluation)
+        const decision = enabled && typeof moderationEvaluation?.evaluate === 'function'
+          ? moderationEvaluation.evaluate(record)
+          : { action: 'visible', reason: enabled ? 'default' : 'disabled' }
+        if (!isVisibleDecision(decision)) {
+          const code = `LOCAL_MODERATION_${String(decision.action || 'BLOCKED').toUpperCase()}`
+          reject(record, decision.reason || code, rejectionCodes, code)
+          continue
+        }
+        if (accepted.length >= maxCandidates) {
+          reject(record, 'CONSUMER_CANDIDATE_BUDGET_EXCEEDED', rejectionCodes)
+          continue
+        }
+        accepted.push(resolvedRecord(record, resolverStore))
+        acceptedKeys.add(candidateKey)
+      }
+      accepted.sort((left, right) => (
+        String(left.entityRef).localeCompare(String(right.entityRef)) ||
+        String(left.publisherId).localeCompare(String(right.publisherId)) ||
+        String(left.publicationId).localeCompare(String(right.publicationId)) ||
+        String(left.sourceId || '').localeCompare(String(right.sourceId || ''))
+      ))
+      const fingerprint = JSON.stringify({
+        accepted,
+        rejected: rejectedCandidates,
+        introducedPublisherIds,
+        visibleClaimIds: visibleClaims?.map(row => row.claimId).sort() || null,
+      })
+      const currentTime = Number(now())
+      if (
+        fingerprint === lastInputFingerprint &&
+        (
+          lastNextRetryAt == null ||
+          !Number.isFinite(currentTime) ||
+          currentTime < lastNextRetryAt
+        )
+      ) {
+        return { ...lastRebuild, rejectionCodes: { ...lastRebuild.rejectionCodes } }
+      }
+      const indexed = localIndex.replaceRecords(accepted)
+      const admitted = Array.isArray(indexed.admittedRecords)
+        ? indexed.admittedRecords
+        : (typeof localIndex.records === 'function' ? localIndex.records() : [])
+      acceptedCandidates = new Map(admitted.map(record => [record.entityRef, record]))
+      visibleEntityRefs = new Set(admitted.flatMap(record => [
+        String(record.entityRef),
+        ...(record.seriesEpisode?.entityRef ? [String(record.seriesEpisode.entityRef)] : []),
+      ]))
+      visiblePublicationIds = new Set(admitted.map(record => String(record.publicationId)))
+      visibleClaimIds = visibleClaims == null
+        ? null
+        : new Set(visibleClaims.map(row => row.claimId))
+      lastInputFingerprint = fingerprint
+      const retryTimes = (indexed.results || [])
+        .map(result => Number(result?.resetAt))
+        .filter(resetAt => Number.isSafeInteger(resetAt) && resetAt >= 0)
+      lastNextRetryAt = retryTimes.length > 0 ? Math.min(...retryTimes) : null
+      lastRebuild = {
+        accepted: indexed.accepted + indexed.duplicates,
+        rejected: rejectedCandidates.length + indexed.rejected,
+        rejectionCodes,
+        ...(lastNextRetryAt == null ? {} : { nextRetryAt: lastNextRetryAt }),
+      }
+      return { ...lastRebuild, rejectionCodes: { ...lastRebuild.rejectionCodes } }
+    },
+    update() { return this.rebuild() },
+    getCatalog(request = {}) {
+      const limit = consumerLimit(request.limit)
+      const rows = localIndex.search('').slice().sort((left, right) => {
+        const kind = consumerKindRank(left.entityKind) - consumerKindRank(right.entityKind)
+        return kind || left.entityRef.localeCompare(right.entityRef)
+      })
+      let offset = 0
+      if (request.cursor != null) {
+        const index = rows.findIndex(row => row.entityRef === request.cursor)
+        if (index < 0) return { success: false, errorCode: 'INVALID_CURSOR', items: [], nextCursor: null }
+        offset = index + 1
+      }
+      const items = rows.slice(offset, offset + limit)
+      return {
+        success: true,
+        items,
+        nextCursor: offset + limit < rows.length ? items.at(-1).entityRef : null,
+      }
+    },
+    getRejectedCandidates() { return rejectedCandidates.slice() },
+    isVisible(entityRef) { return visibleEntityRefs.has(String(entityRef)) },
+    isPublicationVisible(publicationId) {
+      const value = b4a.isBuffer(publicationId) || publicationId instanceof Uint8Array
+        ? b4a.toString(b4a.from(publicationId), 'hex')
+        : String(publicationId)
+      return visiblePublicationIds.has(value)
+    },
+    isClaimVisible(claimId) {
+      return visibleClaimIds == null || visibleClaimIds.has(String(claimId))
+    },
+    getIntroducedPublishers() { return introducedPublisherIds.slice() },
+    getCuratorSubscriptions() {
+      return Array.from(moderationPolicy?.curatorSubscriptions || []).map(String).sort()
+    },
+    async schedule(entityRef, operations = []) {
+      const record = acceptedCandidates.get(String(entityRef))
+      if (!record) return { scheduled: false, errorCode: 'CONSUMER_CANDIDATE_NOT_VISIBLE' }
+      const names = Array.from(new Set(operations)).filter(name => Object.hasOwn(downstream, name))
+      for (const name of names) await downstream[name]?.(record)
+      return { scheduled: true, operations: names }
     },
   })
 }

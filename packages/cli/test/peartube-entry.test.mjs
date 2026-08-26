@@ -34,6 +34,12 @@ test('package exposes only the new peartube alias beside legacy executables', (t
   })
 })
 
+test('CLI source entrypoint instantiates without obsolete stream lease exports', async (t) => {
+  const entry = await import('../src/index.js')
+  t.is(typeof entry.createCompanionRouter, 'function')
+  t.is('createStreamLeaseStore' in entry, false)
+})
+
 test('help prints stable usage without loading command modules', async (t) => {
   const stdout = memoryStream()
   const stderr = memoryStream()
@@ -60,6 +66,9 @@ test('help prints stable usage without loading command modules', async (t) => {
     '',
     'Commands:',
     '  add [query-or-url]  Add content',
+    '  search <query>      Find titles on the network',
+    '  get <entity-or-publication>',
+    '                      Retrieve a title to a local file',
     '  config              Configure content settings',
     '  help                Show this help',
     '',
@@ -71,7 +80,29 @@ test('help prints stable usage without loading command modules', async (t) => {
     '  --no-input          Never prompt for input',
     '  --yes               Accept review confirmation',
     '  --force             Retry a failed local source job',
-    '  -h, --help          Show this help'
+    '  --output <path>     Destination file for get',
+    '  --rendition <id>    Rendition to retrieve',
+    '  --limit <n>         Maximum search results',
+    '  --kind <kind>       Narrow search to a kind (movie, series, episode, track, release)',
+    '  --genre <name>      Narrow search to a genre; repeat to require several',
+    '  --timeout <s>       Seconds to wait for the next block',
+    '  -h, --help          Show this help',
+    '',
+    'Add coordinates:',
+    '  --type <kind>       episode, movie, track, release, video',
+    '  --provider <name>   tmdb|tvdb (episode, movie); musicbrainz (track, release)',
+    '  --show-id <id>      Series id, with --season and --episode',
+    '  --movie-id <id>     Movie id',
+    '  --recording-id <id> MusicBrainz recording MBID',
+    '  --release-id <id>   MusicBrainz release MBID',
+    '  --title <text>      Title to publish under; optional when the authority',
+    '                      can be read, required when it cannot',
+    '  --channel-name <t>  Channel to publish into',
+    '',
+    'Metadata credentials (an authority is read only once its key is set):',
+    '  tmdb         TMDB_API_KEY',
+    '  tvdb         PEARTUBE_TVDB_API_KEY (+ PEARTUBE_TVDB_PIN)',
+    '  musicbrainz  no credential required'
   ].join('\n'))
 })
 

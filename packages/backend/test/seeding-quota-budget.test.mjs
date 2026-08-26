@@ -14,9 +14,10 @@ function createMetaDb(seed = {}) {
   }
 }
 
-// The user's own uploads live in the same corestore, so raw disk usage is much
-// larger than the tracked cache. The quota must ignore that — uploads never
-// count against the cache limit.
+// Everything under the storage path counts. Published uploads used to be
+// excluded on the grounds that they are not "cache", which meant a relay
+// holding gigabytes of its own publications reported zero usage and admitted
+// downloads until the disk filled.
 function createStore({ diskUsageBytes = 0 } = {}) {
   return {
     async getDiskUsageBytes() {
@@ -39,33 +40,191 @@ test('fullDownloadFitsQuota admits only downloads that fit the remaining headroo
   t.ok(fullDownloadFitsQuota(NaN, 0), 'zero remaining fits even with unknown headroom')
 })
 
-test('getQuotaBudget measures the tracked cache, excluding the user\'s own uploads', async (t) => {
-  // 40 GB on disk (mostly the user's own uploaded videos) but only 2 GB cached
-  // from the network under a 5 GB quota.
+test('getQuotaBudget counts what is on disk, not only what it tracked', async (t) => {
+  // 40 GB under the storage path, 2 GB of it tracked as cache, under a 5 GB
+  // limit. The relay is far over; nothing more may be admitted.
   const manager = new SeedingManager(createStore({ diskUsageBytes: 40 * GB }), createMetaDb())
   await manager.setConfig({ maxStorageGB: 5 })
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: true,
+    archiveEnabled: false,
+    contributionBudgetBytes: 5 * GB,
+    archiveBudgetBytes: 0,
+    migrationRequired: false
+  })
   await manager.addSeed('drive-a', 'videos/a.mp4', 'watched', {
     byteLength: 2 * GB,
     blobId: '10:4:0:4096',
     blobsCoreKey: 'aa'.repeat(32)
   })
 
-  const budget = manager.getQuotaBudget()
+  const budget = await manager.getQuotaBudget()
   t.is(budget.maxBytes, 5 * GB)
-  t.is(budget.usageBytes, 2 * GB, 'usage is the tracked cache, not the 40 GB on disk')
-  t.is(budget.headroomBytes, 3 * GB)
-
-  // A 4 GB video does not fit the 3 GB of remaining cache headroom...
-  t.absent(fullDownloadFitsQuota(budget.headroomBytes, 4 * GB), 'oversized video rejected')
-  // ...but a 1 GB video does, regardless of the 40 GB of uploads on disk.
-  t.ok(fullDownloadFitsQuota(budget.headroomBytes, 1 * GB), 'small video admitted despite large uploads')
+  t.is(budget.usageBytes, 40 * GB, 'usage is what the storage path holds')
+  t.is(budget.trackedBytes, 2 * GB, 'tracked cache is still reported, as a component')
+  t.is(budget.headroomBytes, 0, 'no headroom while over the limit')
+  t.absent(fullDownloadFitsQuota(budget.headroomBytes, 1), 'not one further byte is admitted')
 })
 
-test('getQuotaBudget reports full headroom when nothing is cached', async (t) => {
-  const manager = new SeedingManager(createStore({ diskUsageBytes: 12 * GB }), createMetaDb())
+test('getQuotaBudget admits what fits under the limit', async (t) => {
+  const manager = new SeedingManager(createStore({ diskUsageBytes: 3 * GB }), createMetaDb())
   await manager.setConfig({ maxStorageGB: 5 })
 
-  const budget = manager.getQuotaBudget()
-  t.is(budget.usageBytes, 0, 'no seeds means zero cache usage even with uploads on disk')
-  t.is(budget.headroomBytes, 5 * GB)
+  const budget = await manager.getQuotaBudget()
+  t.is(budget.usageBytes, 3 * GB, 'published content counts even with nothing tracked')
+  t.is(budget.headroomBytes, 2 * GB)
+  t.ok(fullDownloadFitsQuota(budget.headroomBytes, 2 * GB), 'a download that fits is admitted')
+  t.absent(fullDownloadFitsQuota(budget.headroomBytes, 2 * GB + 1), 'one byte past the limit is not')
+})
+
+test('tracked usage is the floor when the disk cannot be measured', async (t) => {
+  // An unmeasurable disk must never read as empty, or the limit stops
+  // existing exactly when it is least observable.
+  const manager = new SeedingManager({ get: () => ({ async ready() {}, async clear() {} }) }, createMetaDb())
+  await manager.setConfig({ maxStorageGB: 5 })
+  await manager.addSeed('drive-a', 'videos/a.mp4', 'watched', {
+    byteLength: 4 * GB,
+    blobId: '10:4:0:4096',
+    blobsCoreKey: 'aa'.repeat(32)
+  })
+
+  const budget = await manager.getQuotaBudget()
+  t.is(budget.measuredBytes, null, 'no measurement was available')
+  t.is(budget.usageBytes, 4 * GB, 'the tracked cache still binds the limit')
+  t.is(budget.headroomBytes, 1 * GB)
+})
+
+test('a measurement is reused briefly, then retaken', async (t) => {
+  let walks = 0
+  let onDisk = 1 * GB
+  const manager = new SeedingManager({
+    async getDiskUsageBytes() {
+      walks += 1
+      return onDisk
+    },
+    get: () => ({ async ready() {}, async clear() {} })
+  }, createMetaDb())
+  await manager.setConfig({ maxStorageGB: 5 })
+
+  t.is((await manager.getQuotaBudget()).usageBytes, 1 * GB)
+  onDisk = 4 * GB
+  t.is((await manager.getQuotaBudget()).usageBytes, 1 * GB, 'a burst of checks walks the tree once')
+  t.is(walks, 1)
+
+  // Expire the cached reading the way time would.
+  manager._measuredStorageAt = 0
+  t.is((await manager.getQuotaBudget()).usageBytes, 4 * GB, 'growth is picked up on the next walk')
+  t.is(walks, 2)
+})
+
+test('a failed measurement keeps the last known reading', async (t) => {
+  let fail = false
+  const manager = new SeedingManager({
+    async getDiskUsageBytes() {
+      if (fail) throw new Error('storage unreadable')
+      return 4 * GB
+    },
+    get: () => ({ async ready() {}, async clear() {} })
+  }, createMetaDb())
+  await manager.setConfig({ maxStorageGB: 5 })
+
+  t.is((await manager.getQuotaBudget()).usageBytes, 4 * GB)
+  fail = true
+  manager._measuredStorageAt = 0
+  const budget = await manager.getQuotaBudget()
+  t.is(budget.usageBytes, 4 * GB, 'an unreadable disk does not read as empty')
+  t.is(budget.headroomBytes, 1 * GB)
+})
+
+
+test('strong archive seed class survives watched merge and archive budget alone evicts it', async (t) => {
+  const cleared = []
+  const store = {
+    get(key) {
+      return {
+        async ready() {},
+        async clear(start, end) {
+          cleared.push({ key: Buffer.from(key).toString('hex'), start, end })
+        },
+        async close() {}
+      }
+    }
+  }
+  const manager = new SeedingManager(store, createMetaDb(), { storageMaintenanceDelayMs: 0 })
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: true,
+    archiveEnabled: true,
+    contributionBudgetBytes: 100,
+    archiveBudgetBytes: 100,
+    migrationRequired: false
+  })
+  const blob = {
+    byteLength: 40,
+    blobId: '0:1:0:40',
+    blobsCoreKey: 'ab'.repeat(32)
+  }
+  await manager.addSeed('drive-a', 'video-a', 'pledged', blob, { authorized: true })
+  await manager.addSeed('drive-a', 'video-a', 'watched', blob, { authorized: true })
+
+  let status = manager.getRetentionBudgetStatus()
+  t.is(status.archiveUsedBytes, 40, 'stronger pledged reason keeps archive accounting')
+  t.is(status.contributionUsedBytes, 0, 'watched merge cannot downgrade into contribution cache')
+
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: true,
+    archiveEnabled: true,
+    contributionBudgetBytes: 100,
+    archiveBudgetBytes: 0,
+    migrationRequired: false
+  })
+  status = await manager.getStatus()
+  t.is(status.activeArchivePins, 0, 'archive budget reduction evicts archive pins')
+  t.is(status.activeContributionSeeds, 0, 'archive pin is not reclassified into contribution cache')
+  t.is(cleared.length, 1, 'evicted archive bytes are released once')
+})
+
+test('generic seed removal cannot release an archive pin', async (t) => {
+  const manager = new SeedingManager(createStore(), createMetaDb(), { storageMaintenanceDelayMs: 0 })
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: false,
+    archiveEnabled: true,
+    contributionBudgetBytes: 0,
+    archiveBudgetBytes: 100,
+    migrationRequired: false
+  })
+  await manager.addSeed('drive-archive', 'video-pin', 'archive', {
+    byteLength: 40,
+    blobId: '0:1:0:40',
+    blobsCoreKey: 'ac'.repeat(32)
+  }, { authorized: true })
+
+  t.absent(await manager.removeSeed('drive-archive', 'video-pin'), 'generic removal preserves archive custody')
+  t.is((await manager.getStatus()).activeArchivePins, 1)
+  t.ok(await manager.removeArchivePin('drive-archive', 'video-pin'), 'explicit archive removal releases the pin')
+  t.is((await manager.getStatus()).activeArchivePins, 0)
+})
+
+test('cached video updates include the seed thumbnail in class-budget admission', async (t) => {
+  const manager = new SeedingManager(createStore(), createMetaDb(), { storageMaintenanceDelayMs: 0 })
+  await manager.applyNetworkPolicy({
+    contributeWatchedMedia: false,
+    archiveEnabled: true,
+    contributionBudgetBytes: 0,
+    archiveBudgetBytes: 50,
+    migrationRequired: false
+  })
+  await manager.addSeed('drive-thumbnail', 'video-pin', 'archive', {
+    byteLength: 10,
+    thumbnailByteLength: 30,
+    blobId: '0:1:0:10',
+    blobsCoreKey: 'ad'.repeat(32)
+  }, { authorized: true })
+
+  t.absent(await manager.updateSeedCachedBytes('drive-thumbnail', 'video-pin', 21, { persist: true }),
+    'thumbnail plus updated video bytes cannot exceed the archive budget')
+  t.is(manager.getRetentionBudgetStatus().archiveUsedBytes, 40,
+    'rejected updates preserve the committed video and thumbnail accounting')
+  t.ok(await manager.updateSeedCachedBytes('drive-thumbnail', 'video-pin', 20, { persist: true }),
+    'the exact thumbnail-inclusive budget boundary is admitted')
+  t.is(manager.getRetentionBudgetStatus().archiveUsedBytes, 50)
 })

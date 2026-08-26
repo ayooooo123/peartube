@@ -136,6 +136,13 @@ function ownerFixture () {
           episodeNumber: 1,
           publicationState: 'replicationPending',
         }),
+        new StoredRecord({
+          id: 'uncertain-draft',
+          title: 'Uncertain Draft',
+          contentKind: 'extra',
+          sourcePublishedAt: 130,
+          publicationState: 'commitUncertain',
+        }),
       ]
     },
   }

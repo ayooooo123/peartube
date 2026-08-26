@@ -34,7 +34,7 @@ export function MediaRail<T>({
   return (
     <View testID={testID} style={styles.container}>
       <SectionHeader title={title} subtitle={subtitle} action={action} style={[styles.header, { marginTop: topSpacing }]} />
-      <Rail data={data} itemWidth={itemWidth} renderItem={renderItem} keyExtractor={keyExtractor} />
+      <Rail data={data} itemWidth={itemWidth} itemHeight={Math.round(itemWidth * 1.5) + 74} renderItem={renderItem} keyExtractor={keyExtractor} />
     </View>
   )
 }

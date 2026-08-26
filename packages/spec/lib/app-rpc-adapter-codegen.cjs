@@ -11,6 +11,8 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'get-blob-server-port',
     'get-network-policy',
     'set-network-policy',
+    'get-participation-status',
+    'set-device-conditions',
     'get-migration-status',
     'retry-migration',
     'export-migration-report'
@@ -60,8 +62,10 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'get-media-agent',
     'get-agent-contributions',
     'get-publication-sources',
+    'get-entity-artwork',
     'get-claim-provenance',
-    'set-source-preference'
+    'set-source-preference',
+    'prepare-media-playback'
   ],
   video: [
     'list-videos',
@@ -91,11 +95,6 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'get-livestream-status',
     'prepare-live-playback'
   ],
-  watch: [
-    'log-watch-event',
-    'get-recommendations',
-    'get-video-recommendations'
-  ],
   personal: [
     'get-playlists',
     'get-playlist-items',
@@ -110,7 +109,11 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'list-resume-positions',
     'set-personal-setting',
     'get-personal-settings',
-    'provision-personal-encryption'
+    'provision-personal-encryption',
+    'create-personal-device-invite',
+    'redeem-personal-device-invite',
+    'list-personal-devices',
+    'revoke-personal-device'
   ],
   transfer: [
     'upload-video',
@@ -131,7 +134,9 @@ const APP_RPC_NAMESPACES = Object.freeze({
   search: [
     'search-videos',
     'global-search-videos',
-    'index-video-vectors'
+    'index-video-vectors',
+    'search-index-candidates',
+    'verify-index-candidate'
   ],
   shell: [
     'pick-video-file',
@@ -307,6 +312,39 @@ function generateAppRpcAdapterSource(metadata) {
     `  }\n` +
     `  return normalized\n` +
     `}\n\n` +
+    `function exposeUintPresence(value, fields) {\n` +
+    `  if (!value || typeof value !== 'object' || Array.isArray(value)) return value\n` +
+    `  const normalized = { ...value }\n` +
+    `  for (const field of fields) {\n` +
+    `    normalized[field] = value[\`\${field}Present\`] === true ? value[field] : null\n` +
+    `    delete normalized[\`\${field}Present\`]\n` +
+    `  }\n` +
+    `  return normalized\n` +
+    `}\n\n` +
+    `function normalizeIndexCandidateResponse(candidate) {\n` +
+    `  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return candidate\n` +
+    `  const rendition = exposeUintPresence(candidate.rendition, ['width', 'height', 'byteLength'])\n` +
+    `  if (Array.isArray(rendition?.audioTracks)) {\n` +
+    `    rendition.audioTracks = rendition.audioTracks.map(track => exposeUintPresence(track, ['channels']))\n` +
+    `  }\n` +
+    `  return {\n` +
+    `    ...candidate,\n` +
+    `    work: exposeUintPresence(candidate.work, ['releaseYear']),\n` +
+    `    publication: exposeUintPresence(candidate.publication, ['catalogEpoch']),\n` +
+    `    rendition,\n` +
+    `    asset: exposeUintPresence(candidate.asset, ['blockLength', 'blockSize', 'byteLength']),\n` +
+    `    availability: exposeUintPresence(candidate.availability, ['peers', 'completeSeeders', 'observedAtMs', 'expiresAtMs'])\n` +
+    `  }\n` +
+    `}\n\n` +
+    `function normalizeIndexResponse(methodName, response) {\n` +
+    `  if (methodName === 'searchIndexCandidates' && Array.isArray(response?.candidates)) {\n` +
+    `    return { ...response, candidates: response.candidates.map(normalizeIndexCandidateResponse) }\n` +
+    `  }\n` +
+    `  if (methodName === 'verifyIndexCandidate' && response?.candidate) {\n` +
+    `    return { ...response, candidate: normalizeIndexCandidateResponse(response.candidate) }\n` +
+    `  }\n` +
+    `  return response\n` +
+    `}\n\n` +
     `function createMethodCaller(rpc, ready, methodMetadata, createMissingMethodError, normalizeError) {\n` +
     `  return async (request = {}) => {\n` +
     `    await ready()\n` +
@@ -314,7 +352,8 @@ function generateAppRpcAdapterSource(metadata) {
     `    const method = rpc?.[methodName]\n` +
     `    if (typeof method !== 'function') throw createMissingMethodError(methodName)\n` +
     `    try {\n` +
-    `      return await method.call(rpc, normalizePresenceFields(request, methodMetadata.presenceFields))\n` +
+    `      const response = await method.call(rpc, normalizePresenceFields(request, methodMetadata.presenceFields))\n` +
+    `      return normalizeIndexResponse(methodName, response)\n` +
     `    } catch (error) {\n` +
     `      throw normalizeError(error)\n` +
     `    }\n` +

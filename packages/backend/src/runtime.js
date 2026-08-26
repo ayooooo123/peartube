@@ -1,3 +1,10 @@
+import { createIndexFederation } from './search/index-federation.js'
+import { createScopedAssetAvailabilityProbe, createSourceVerifier } from './search/source-verifier.js'
+import {
+  searchIndexCandidatesForTransport,
+  verifyIndexCandidateForTransport,
+} from './search/candidate-contract.js'
+
 function getBlobServerStatus(backend) {
   const ctx = backend?.ctx
   const port = Number(ctx?.blobServer?.port || ctx?.blobServerPort || 0) || 0
@@ -24,6 +31,55 @@ function safeJson(value) {
   } catch {
     return null
   }
+}
+
+export function createIndexVerificationRuntime({
+  services,
+  catalogRegistry,
+  availabilityProbe,
+  scopedNetwork,
+  lifecycle,
+  cache = new Map(),
+  now = Date.now,
+  limits = {},
+} = {}) {
+  const federation = createIndexFederation({ services, cache, limits, now })
+  const probe = availabilityProbe || createScopedAssetAvailabilityProbe({ scopedNetwork, now })
+  const verifier = createSourceVerifier({
+    federation,
+    catalogRegistry,
+    availabilityProbe: probe,
+    now,
+    limits,
+  })
+  let closed = false
+  const runtime = Object.freeze({
+    searchIndexCandidates({ selector, limit, signal } = {}) {
+      if (closed) {
+        const error = new Error('Index verification runtime is closed')
+        error.code = 'INDEX_VERIFICATION_CLOSED'
+        throw error
+      }
+      return federation.search({ selector, ...(limit === undefined ? {} : { limit }), signal })
+    },
+    verifyIndexCandidate({ candidateRef, signal } = {}) {
+      if (closed) {
+        const error = new Error('Index verification runtime is closed')
+        error.code = 'INDEX_VERIFICATION_CLOSED'
+        throw error
+      }
+      return verifier.verifySelectedCandidate({ candidateRef, signal })
+    },
+    async close() {
+      if (closed) return false
+      closed = true
+      await verifier.close()
+      await federation.close()
+      return true
+    },
+  })
+  lifecycle?.ownResource?.('index verification runtime', runtime, 'close')
+  return runtime
 }
 
 export function requireHostProtocolVersion(protocolVersion, callerName) {
@@ -106,7 +162,13 @@ export function buildSharedSystemHandlers(backend, options = {}) {
         startupTiming: swarmStatus.startupTiming ?? null,
         doctor: swarmStatus.doctor ?? null,
       }
-    }
+    },
+    async SearchIndexCandidates(request) {
+      return searchIndexCandidatesForTransport(backend?.api, request)
+    },
+    async VerifyIndexCandidate(request) {
+      return verifyIndexCandidateForTransport(backend?.api, request)
+    },
   }
 }
 

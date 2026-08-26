@@ -525,6 +525,43 @@ ns.register({
   ]
 })
 
+// Availability is a local, point-in-time, expiring assessment. `state` is one
+// of awaiting-replication | limited | healthy | unavailable. Counters and the
+// reason list are required so older frames cannot silently decode absence as
+// a zero-count assessment; compact booleans are always represented in flags.
+// MAX_AVAILABILITY_REASON_CODES = 8
+ns.register({
+  name: 'media-availability',
+  fields: [
+    { name: 'state', type: 'string', required: true },
+    { name: 'renditionId', type: 'string', required: false },
+    { name: 'observedAt', type: 'uint', required: true },
+    { name: 'expiresAt', type: 'uint', required: true },
+    { name: 'requiredRangeCount', type: 'uint', required: true },
+    { name: 'reachableRangeCount', type: 'uint', required: true },
+    { name: 'independentPeerCount', type: 'uint', required: true },
+    { name: 'completePeerCount', type: 'uint', required: true },
+    { name: 'measuredLatencyMs', type: 'uint', required: true },
+    { name: 'offlinePlayable', type: 'bool', required: true },
+    { name: 'archivePledged', type: 'bool', required: true },
+    { name: 'reasonCodes', type: 'string', array: true, required: true },
+  ]
+})
+
+// Appended as one bounded field so the publication-source optional bitmap
+// remains below JavaScript's 32-bit bitwise ceiling and all existing source
+// flag positions stay unchanged.
+ns.register({
+  name: 'media-source-coordinates',
+  fields: [
+    { name: 'contentKind', type: 'string', required: true },
+    { name: 'mediaProvider', type: 'string', required: true },
+    { name: 'mediaId', type: 'string', required: true },
+    { name: 'seasonNumber', type: 'uint', required: false },
+    { name: 'episodeNumber', type: 'uint', required: false },
+  ]
+})
+
 ns.register({
   name: 'media-publication-source',
   fields: [
@@ -538,6 +575,7 @@ ns.register({
     { name: 'moderationPenalty', type: 'uint', required: false },
     { name: 'preferred', type: 'bool', required: false },
     { name: 'selected', type: 'bool', required: false },
+    { name: 'eligible', type: 'bool', required: false },
     { name: 'selectionReasonCodes', type: 'string', array: true, required: false },
     { name: 'rejectionReasonCodes', type: 'string', array: true, required: false },
     { name: 'introductionPublisherIds', type: 'string', array: true, required: false },
@@ -545,16 +583,21 @@ ns.register({
     { name: 'moderationFeedIds', type: 'string', array: true, required: false },
     { name: 'claimConflictIds', type: 'string', array: true, required: false },
     { name: 'provenanceClaimIds', type: 'string', array: true, required: false },
-    { name: 'scoreMetadataConfidence', type: 'uint', required: false },
-    { name: 'scorePublisherTrust', type: 'uint', required: false },
-    { name: 'scoreAvailability', type: 'uint', required: false },
+    // Playback score components. Every one is a local playability fact; there
+    // is deliberately no publisher-popularity or paid-placement component.
+    { name: 'scoreLocalCompleteness', type: 'uint', required: false },
+    { name: 'scoreStartupReachability', type: 'uint', required: false },
+    { name: 'scorePeerEvidence', type: 'uint', required: false },
     { name: 'scoreFormatSupport', type: 'uint', required: false },
-    { name: 'scoreModerationPenalty', type: 'uint', required: false },
+    { name: 'scoreStartupLatency', type: 'uint', required: false },
+    { name: 'scoreUserOverride', type: 'uint', required: false },
     { name: 'archiveState', type: 'string', required: false },
     { name: 'cacheState', type: 'string', required: false },
     { name: 'availabilityState', type: 'string', required: false },
     { name: 'stale', type: 'bool', required: false },
     { name: 'incomplete', type: 'bool', required: false },
+    { name: 'availability', type: '@peartube/media-availability', required: false },
+    { name: 'mediaCoordinates', type: '@peartube/media-source-coordinates', required: false },
   ]
 })
 
@@ -614,8 +657,26 @@ ns.register({
     { name: 'subtitle', type: 'string', required: false },
     { name: 'claimCount', type: 'uint', required: false },
     { name: 'conflictCount', type: 'uint', required: false },
+    { name: 'availability', type: '@peartube/media-availability', required: false },
     { name: 'sources', type: '@peartube/media-publication-source', array: true },
-    { name: 'renditions', type: '@peartube/media-rendition-descriptor', array: true }
+    { name: 'renditions', type: '@peartube/media-rendition-descriptor', array: true },
+    // A consumer holds no metadata-provider credentials, so cover art only
+    // reaches it if the publisher's claim carries it and this summary passes it
+    // on. Without this the catalog arrives complete and still renders blank.
+    // The cover is a blob in the publisher's core, replicated on the same swarm
+    // as the content: no origin to reach, nothing leaked about who is browsing,
+    // and it still resolves offline. posterUrl remains for claims that predate
+    // that and name an origin instead.
+    // A consumer cannot look a title up, so everything a viewer reads before
+    // pressing play has to arrive with the catalog entry itself.
+    { name: 'releaseYear', type: 'uint', required: false },
+    { name: 'runtimeMinutes', type: 'uint', required: false },
+    { name: 'overview', type: 'string', required: false },
+    { name: 'genres', type: 'string', array: true },
+    { name: 'posterBlobId', type: 'string', required: false },
+    { name: 'posterBlobsCoreKey', type: 'string', required: false },
+    { name: 'posterMimeType', type: 'string', required: false },
+    { name: 'posterUrl', type: 'string', required: false }
   ]
 })
 
@@ -681,6 +742,74 @@ for (const name of [
     ]
   })
 }
+
+// Cover art is an asset OF the publication: it rides the manifest as a `poster`
+// rendition and transfers over the same authorized asset protocol as the video.
+// The backend answers with a loopback blob-server URL, so the bytes are already
+// local by the time a client sees the URL and no image request ever leaves the
+// device. Either key identifies the artwork; a client that only knows the entity
+// does not have to learn which publication carries it.
+ns.register({
+  name: 'get-entity-artwork-request',
+  fields: [
+    { name: 'entityId', type: 'string', required: false },
+    { name: 'publicationId', type: 'string', required: false }
+  ]
+})
+
+// `exists: false` without an errorCode means the poster has not replicated yet.
+// That is retryable, not a failure: the call is bounded so a cold cover never
+// holds an RPC open.
+ns.register({
+  name: 'get-entity-artwork-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false },
+    { name: 'exists', type: 'bool', required: true },
+    { name: 'url', type: 'string', required: false }
+  ]
+})
+
+// One Play action. The backend selects a source, opens it, and fails over
+// between equivalent sources within one deadline; the client never picks.
+ns.register({
+  name: 'media-playback-attempt',
+  fields: [
+    { name: 'publicationId', type: 'string', required: true },
+    { name: 'errorCode', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'prepare-media-playback-request',
+  fields: [
+    { name: 'entityId', type: 'string', required: true },
+    // An explicit override from Other Sources. It is honoured only while that
+    // source still passes every hard gate.
+    { name: 'publicationId', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'prepare-media-playback-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false },
+    // automatic | manual | evidence. What, if anything, can change the answer.
+    { name: 'retry', type: 'string', required: false },
+    { name: 'publicationId', type: 'string', required: false },
+    { name: 'renditionId', type: 'string', required: false },
+    { name: 'coreKey', type: 'string', required: false },
+    // The loopback URL a player can open. A core key names bytes; this serves
+    // them, streaming ranges as replication delivers them.
+    { name: 'url', type: 'string', required: false },
+    // Ordered, bounded record of what Play tried and why each attempt ended.
+    { name: 'attempts', type: '@peartube/media-playback-attempt', array: true, required: false },
+    { name: 'sources', type: '@peartube/media-publication-source', array: true, required: false }
+  ]
+})
 
 ns.register({
   name: 'get-claim-provenance-request',
@@ -891,7 +1020,15 @@ ns.register({
     { name: 'title', type: 'string', required: true },
     { name: 'description', type: 'string', required: false },
     { name: 'category', type: 'string', required: false },
-    { name: 'skipThumbnailGeneration', type: 'bool', required: false }
+    { name: 'skipThumbnailGeneration', type: 'bool', required: false },
+    { name: 'contentKind', type: 'string', required: false },
+    { name: 'seriesId', type: 'string', required: false },
+    { name: 'seriesTitle', type: 'string', required: false },
+    { name: 'mediaProvider', type: 'string', required: false },
+    { name: 'mediaId', type: 'string', required: false },
+    { name: 'seasonNumber', type: 'uint', required: false },
+    { name: 'episodeNumber', type: 'uint', required: false },
+    { name: 'expectedEpisodeCount', type: 'uint', required: false }
   ]
 })
 
@@ -1132,7 +1269,33 @@ ns.register({
     { name: 'duration', type: 'uint', required: false },
     { name: 'position', type: 'uint', required: false },
     { name: 'completed', type: 'bool', required: false },
-    { name: 'timestamp', type: 'uint', required: false }
+    { name: 'timestamp', type: 'uint', required: false },
+    { name: 'identity', type: '@peartube/personal-progress-identity', required: false },
+    { name: 'saved', type: 'bool', required: false },
+    { name: 'order', type: '@peartube/personal-progress-order', required: false }
+  ]
+})
+
+// Device-local viewer progress identity and ordering. Media identity is the
+// entity/edition/member triple; `videoKey` remains only so legacy device state
+// can be migrated. Concurrent devices are resolved by
+// (playbackGeneration, lamport, writerKey) and never by wall-clock time.
+ns.register({
+  name: 'personal-progress-identity',
+  fields: [
+    { name: 'entityRef', type: 'string', required: false },
+    { name: 'editionRef', type: 'string', required: false },
+    { name: 'memberRef', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'personal-progress-order',
+  fields: [
+    { name: 'playbackGeneration', type: 'uint', required: true },
+    { name: 'lamport', type: 'uint', required: true },
+    { name: 'writerKey', type: 'string', required: true },
+    { name: 'tombstone', type: 'bool', required: true }
   ]
 })
 
@@ -1145,7 +1308,20 @@ ns.register({
     { name: 'position', type: 'uint', required: false },
     { name: 'duration', type: 'uint', required: false },
     { name: 'completed', type: 'bool', required: false },
-    { name: 'updatedAt', type: 'uint', required: false }
+    { name: 'updatedAt', type: 'uint', required: false },
+    { name: 'identity', type: '@peartube/personal-progress-identity', required: false },
+    { name: 'saved', type: 'bool', required: false },
+    { name: 'order', type: '@peartube/personal-progress-order', required: false }
+  ]
+})
+
+ns.register({
+  name: 'personal-device',
+  fields: [
+    { name: 'keyHex', type: 'string', required: true },
+    { name: 'deviceName', type: 'string', required: false },
+    { name: 'addedAt', type: 'uint', required: false },
+    { name: 'self', type: 'bool', required: false }
   ]
 })
 
@@ -1272,7 +1448,13 @@ ns.register({
     { name: 'duration', type: 'uint', required: false },
     { name: 'position', type: 'uint', required: false },
     { name: 'completed', type: 'bool', required: false },
-    { name: 'timestamp', type: 'uint', required: false }
+    { name: 'timestamp', type: 'uint', required: false },
+    // Media identity and device ordering for the canonical progress record.
+    // `saved` is the library flag; a replay bumps `playbackGeneration`.
+    { name: 'identity', type: '@peartube/personal-progress-identity', required: false },
+    { name: 'saved', type: 'bool', required: false },
+    { name: 'playbackGeneration', type: 'uint', required: false },
+    { name: 'tombstone', type: 'bool', required: false }
   ]
 })
 
@@ -1355,8 +1537,12 @@ ns.register({
 ns.register({
   name: 'provision-personal-encryption-request',
   fields: [
-    // 32-byte secret (hex) from the device keychain; omit to have one generated.
-    { name: 'secret', type: 'string', required: false }
+    // Platform-generated 32-byte secret (hex) from the device keychain.
+    { name: 'secret', type: 'string', required: true },
+    // Device-local bootstrap key retained beside the encryption secret.
+    { name: 'bootstrapKey', type: 'string', required: false },
+    // Explicit anonymous/device-local provisioning, independent of identity pairing.
+    { name: 'deviceLocal', type: 'bool', required: false }
   ]
 })
 
@@ -1364,8 +1550,87 @@ ns.register({
   name: 'provision-personal-encryption-response',
   fields: [
     { name: 'success', type: 'bool', required: true },
-    { name: 'secret', type: 'string', required: false },
+    { name: 'bootstrapKey', type: 'string', required: false },
     { name: 'encrypted', type: 'bool', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+// Personal-store device pairing. This is the viewer's own encrypted state and
+// is deliberately separate from publisher-channel pairing: it transfers only
+// the personal-store bootstrap key, one writer authorization, and the 32-byte
+// keychain secret to a device the user explicitly paired.
+ns.register({
+  name: 'create-personal-device-invite-request',
+  fields: [
+    // Bounded by the protocol maximum; a longer request is clamped, never honored.
+    { name: 'expiresInMs', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'create-personal-device-invite-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'inviteCode', type: 'string', required: false },
+    { name: 'expiresAt', type: 'uint', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'redeem-personal-device-invite-request',
+  fields: [
+    { name: 'inviteCode', type: 'string', required: true },
+    { name: 'deviceName', type: 'string', required: false }
+  ]
+})
+
+// The only response in the protocol that carries the personal-store secret,
+// and only to the joining device that just completed local pairing. The
+// platform persists it in its keychain and erases the response copy.
+ns.register({
+  name: 'redeem-personal-device-invite-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'secret', type: 'string', required: false },
+    { name: 'bootstrapKey', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'list-personal-devices-request',
+  fields: []
+})
+
+ns.register({
+  name: 'list-personal-devices-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'devices', type: '@peartube/personal-device', array: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+// Revocation is forward-only: the platform supplies a freshly generated
+// secret, the backend rewrites current bounded state into a new epoch, and the
+// revoked device keeps whatever it already read.
+ns.register({
+  name: 'revoke-personal-device-request',
+  fields: [
+    { name: 'keyHex', type: 'string', required: true },
+    { name: 'secret', type: 'string', required: true },
+    { name: 'deviceName', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'revoke-personal-device-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'bootstrapKey', type: 'string', required: false },
+    { name: 'remainingDeviceCount', type: 'uint', required: false },
     { name: 'error', type: 'string', required: false }
   ]
 })
@@ -1964,7 +2229,10 @@ ns.register({
     { name: 'followedPublishersJson', type: 'string', required: false },
     { name: 'followedIndexesJson', type: 'string', required: false },
     { name: 'trustedModerationFeedsJson', type: 'string', required: false },
-    { name: 'aiAnalysis', type: 'string', required: false }
+    { name: 'aiAnalysis', type: 'string', required: false },
+    // Data Saver | Balanced | Help More. One choice that decides every
+    // contribution ceiling; the exact byte values stay visible above it.
+    { name: 'participationMode', type: 'string', required: false }
   ]
 })
 
@@ -1982,7 +2250,8 @@ ns.register({
     { name: 'followedPublishersJson', type: 'string', required: false },
     { name: 'followedIndexesJson', type: 'string', required: false },
     { name: 'trustedModerationFeedsJson', type: 'string', required: false },
-    { name: 'aiAnalysis', type: 'string', required: false }
+    { name: 'aiAnalysis', type: 'string', required: false },
+    { name: 'participationMode', type: 'string', required: false }
   ]
 })
 
@@ -2437,6 +2706,247 @@ ns.register({
 })
 
 // ============================================
+// Distributed index candidate search
+// ============================================
+// Wire bounds are enforced by both backend adapters:
+// MAX_INDEX_CANDIDATES = 64
+// MAX_CANDIDATE_REF_BYTES = 64
+// MAX_INDEX_EXTERNAL_REFS = 32
+// MAX_INDEX_SOURCE_INDEXERS = 32
+// MAX_INDEX_HDR_FORMATS = 16
+// MAX_INDEX_AUDIO_TRACKS = 32
+// MAX_INDEX_SUBTITLE_TRACKS = 64
+// MAX_INDEX_TRACK_LANGUAGES = 32
+// MAX_INDEX_TEXT_BYTES = 512
+// No record in this contract contains a playback URL, credential, request
+// header, cookie, source record reference, or control capability.
+
+ns.register({
+  name: 'index-search-selector',
+  fields: [
+    { name: 'namespace', type: 'string', required: true },
+    { name: 'identifier', type: 'string', required: true },
+    { name: 'kind', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'index-external-reference',
+  fields: [
+    { name: 'namespace', type: 'string', required: true },
+    { name: 'identifier', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'index-episode',
+  fields: [
+    { name: 'seriesEntityId', type: 'string', required: true },
+    { name: 'seasonNumber', type: 'uint', required: true },
+    { name: 'episodeNumber', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'index-work',
+  fields: [
+    { name: 'entityId', type: 'string', required: false },
+    { name: 'title', type: 'string', required: false },
+    { name: 'releaseYear', type: 'uint', required: true },
+    { name: 'releaseYearPresent', type: 'bool', required: true },
+    { name: 'externalRefs', type: '@peartube/index-external-reference', array: true, required: true },
+    { name: 'episode', type: '@peartube/index-episode', required: false }
+  ]
+})
+
+ns.register({
+  name: 'index-edition',
+  fields: [
+    { name: 'entityId', type: 'string', required: false },
+    { name: 'label', type: 'string', required: false },
+    { name: 'kind', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'index-publication',
+  fields: [
+    { name: 'publicationId', type: 'string', required: true },
+    { name: 'publisherId', type: 'string', required: true },
+    { name: 'manifestId', type: 'string', required: true },
+    { name: 'catalogEpoch', type: 'uint', required: true },
+    { name: 'catalogEpochPresent', type: 'bool', required: true },
+    { name: 'catalogHead', type: 'string', required: false },
+    { name: 'title', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'index-audio-track',
+  fields: [
+    { name: 'codec', type: 'string', required: false },
+    { name: 'channels', type: 'uint', required: true },
+    { name: 'channelsPresent', type: 'bool', required: true },
+    { name: 'languages', type: 'string', array: true, required: true }
+  ]
+})
+
+ns.register({
+  name: 'index-subtitle-track',
+  fields: [
+    { name: 'format', type: 'string', required: false },
+    { name: 'language', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'index-rendition',
+  fields: [
+    { name: 'renditionId', type: 'string', required: true },
+    { name: 'container', type: 'string', required: false },
+    { name: 'videoCodec', type: 'string', required: false },
+    { name: 'width', type: 'uint', required: true },
+    { name: 'widthPresent', type: 'bool', required: true },
+    { name: 'height', type: 'uint', required: true },
+    { name: 'heightPresent', type: 'bool', required: true },
+    { name: 'resolutionLabel', type: 'string', required: false },
+    { name: 'hdrFormats', type: 'string', array: true, required: true },
+    { name: 'audioTracks', type: '@peartube/index-audio-track', array: true, required: true },
+    { name: 'subtitleTracks', type: '@peartube/index-subtitle-track', array: true, required: true },
+    { name: 'purpose', type: 'string', required: false },
+    { name: 'byteLength', type: 'uint', required: true },
+    { name: 'byteLengthPresent', type: 'bool', required: true },
+  ]
+})
+
+ns.register({
+  name: 'index-asset',
+  fields: [
+    { name: 'assetId', type: 'string', required: false },
+    { name: 'coreKey', type: 'string', required: false },
+    { name: 'treeHash', type: 'string', required: false },
+    { name: 'blockLength', type: 'uint', required: true },
+    { name: 'blockLengthPresent', type: 'bool', required: true },
+    { name: 'blockSize', type: 'uint', required: true },
+    { name: 'blockSizePresent', type: 'bool', required: true },
+    { name: 'byteLength', type: 'uint', required: true },
+    { name: 'byteLengthPresent', type: 'bool', required: true },
+  ]
+})
+
+ns.register({
+  name: 'index-provenance',
+  fields: [
+    { name: 'sourceKind', type: 'string', required: false },
+    { name: 'releaseName', type: 'string', required: false },
+    { name: 'publicInfohash', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'index-availability',
+  fields: [
+    { name: 'peers', type: 'uint', required: true },
+    { name: 'peersPresent', type: 'bool', required: true },
+    { name: 'completeSeeders', type: 'uint', required: true },
+    { name: 'completeSeedersPresent', type: 'bool', required: true },
+    { name: 'observedAtMs', type: 'uint', required: true },
+    { name: 'observedAtMsPresent', type: 'bool', required: true },
+    { name: 'expiresAtMs', type: 'uint', required: true },
+    { name: 'expiresAtMsPresent', type: 'bool', required: true },
+  ]
+})
+
+ns.register({
+  name: 'index-source-indexer',
+  fields: [
+    { name: 'indexerId', type: 'string', required: true },
+    { name: 'observedAtMs', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'index-publisher-descriptor',
+  fields: [
+    { name: 'publisherId', type: 'string', required: true },
+    { name: 'publisherRootKey', type: 'string', required: true },
+    { name: 'catalogBootstrapKey', type: 'string', required: true },
+    { name: 'catalogEpoch', type: 'uint', required: true },
+    { name: 'policySequence', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'index-catalog-head',
+  fields: [
+    { name: 'viewKey', type: 'string', required: true },
+    { name: 'length', type: 'uint', required: true },
+    { name: 'digest', type: 'string', required: true },
+    { name: 'authorizationStateDigest', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'index-verification',
+  fields: [
+    { name: 'state', type: 'string', required: true },
+    { name: 'publisherDescriptor', type: '@peartube/index-publisher-descriptor', required: false },
+    { name: 'catalogHead', type: '@peartube/index-catalog-head', required: false }
+  ]
+})
+
+ns.register({
+  name: 'index-candidate-v2',
+  fields: [
+    { name: 'schemaVersion', type: 'uint', required: true },
+    { name: 'candidateRef', type: 'string', required: true },
+    { name: 'work', type: '@peartube/index-work', required: true },
+    { name: 'edition', type: '@peartube/index-edition', required: false },
+    { name: 'publication', type: '@peartube/index-publication', required: true },
+    { name: 'rendition', type: '@peartube/index-rendition', required: true },
+    { name: 'asset', type: '@peartube/index-asset', required: true },
+    { name: 'provenance', type: '@peartube/index-provenance', required: true },
+    { name: 'availability', type: '@peartube/index-availability', required: true },
+    { name: 'verification', type: '@peartube/index-verification', required: true },
+    { name: 'sourceIndexers', type: '@peartube/index-source-indexer', array: true, required: true }
+  ]
+})
+
+ns.register({
+  name: 'search-index-candidates-request',
+  fields: [
+    { name: 'selector', type: '@peartube/index-search-selector', required: true }
+  ]
+})
+
+ns.register({
+  name: 'search-index-candidates-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'candidates', type: '@peartube/index-candidate-v2', array: true, required: true },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'errorMessage', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'verify-index-candidate-request',
+  fields: [
+    { name: 'candidateRef', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'verify-index-candidate-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'candidate', type: '@peartube/index-candidate-v2', required: false },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'errorMessage', type: 'string', required: false }
+  ]
+})
+
+// ============================================
 // Multi-device channel pairing
 // ============================================
 
@@ -2782,6 +3292,9 @@ ns.register({
   ]
 })
 
+// Legacy, read-only: no writer produces this op any more (viewer ranking is
+// device-local). The message stays registered so channel logs written before
+// the watch-telemetry removal still decode and replay deterministically.
 ns.register({
   name: 'channel-op-log-watch-event',
   fields: [
@@ -3232,7 +3745,7 @@ ns.register({
 })
 
 // ============================================
-// Search / Watch Events (appended for compat)
+// Search (appended for compat)
 // ============================================
 
 ns.register({
@@ -3253,25 +3766,6 @@ ns.register({
 })
 
 ns.register({
-  name: 'log-watch-event-request',
-  fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'duration', type: 'uint', required: false },
-    { name: 'completed', type: 'bool', required: false },
-    { name: 'share', type: 'bool', required: false }
-  ]
-})
-
-ns.register({
-  name: 'log-watch-event-response',
-  fields: [
-    { name: 'success', type: 'bool', required: false },
-    { name: 'error', type: 'string', required: false }
-  ]
-})
-
-ns.register({
   name: 'index-video-vectors-request',
   fields: [
     { name: 'channelKey', type: 'string', required: true },
@@ -3287,50 +3781,65 @@ ns.register({
   ]
 })
 
+// ============================================
+// Participation (appended for compat)
+// ============================================
+
 ns.register({
-  name: 'recommendation',
+  name: 'get-participation-status-request',
+  fields: []
+})
+
+ns.register({
+  name: 'get-participation-status-response',
   fields: [
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'score', type: 'string', required: false },
-    { name: 'reason', type: 'string', required: false }
+    { name: 'success', type: 'bool', required: true },
+    { name: 'mode', type: 'string', required: true },
+    { name: 'state', type: 'string', required: true },
+    { name: 'uploadEligible', type: 'bool', required: true },
+    { name: 'uploading', type: 'bool', required: true },
+    { name: 'backgroundEligible', type: 'bool', required: true },
+    { name: 'cacheCeilingBytes', type: 'uint', required: true },
+    { name: 'uploadCeilingBytesPer24h', type: 'uint', required: true },
+    { name: 'uploadedBytesLast24h', type: 'uint', required: true },
+    { name: 'outboundBytesPerSecond', type: 'uint', required: true },
+    { name: 'postPlaybackGraceMs', type: 'uint', required: true },
+    { name: 'backgroundRemainingSessionMs', type: 'uint', required: true },
+    { name: 'backgroundRemainingDailyMs', type: 'uint', required: true },
+    // At most MAX_PARTICIPATION_REASON_CODES entries, canonical order.
+    { name: 'reasonCodes', type: 'string', array: true, required: true },
+    { name: 'errorCode', type: 'string', required: false }
+  ]
+})
+
+// Categorical OS signals only. Every field is optional and every presence flag
+// defaults false, so an omitted signal stays unknown — and unknown constrains.
+ns.register({
+  name: 'set-device-conditions-request',
+  fields: [
+    { name: 'metered', type: 'bool', required: false },
+    { name: 'meteredProvided', type: 'bool', required: false },
+    { name: 'thermalState', type: 'string', required: false },
+    { name: 'batteryPercent', type: 'uint', required: false },
+    { name: 'batteryPercentProvided', type: 'bool', required: false },
+    { name: 'charging', type: 'bool', required: false },
+    { name: 'chargingProvided', type: 'bool', required: false },
+    { name: 'backgroundPermitted', type: 'bool', required: false },
+    { name: 'backgroundPermittedProvided', type: 'bool', required: false },
+    { name: 'freeDiskBytes', type: 'uint', required: false },
+    { name: 'freeDiskBytesProvided', type: 'bool', required: false },
+    { name: 'totalDiskBytes', type: 'uint', required: false },
+    { name: 'totalDiskBytesProvided', type: 'bool', required: false }
   ]
 })
 
 ns.register({
-  name: 'get-recommendations-request',
+  name: 'set-device-conditions-response',
   fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'limit', type: 'uint', required: false }
+    { name: 'success', type: 'bool', required: true },
+    { name: 'errorCode', type: 'string', required: false }
   ]
 })
-
-ns.register({
-  name: 'get-recommendations-response',
-  fields: [
-    { name: 'success', type: 'bool', required: false },
-    { name: 'recommendations', type: '@peartube/recommendation', array: true, required: true },
-    { name: 'error', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'get-video-recommendations-request',
-  fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'limit', type: 'uint', required: false }
-  ]
-})
-
-ns.register({
-  name: 'get-video-recommendations-response',
-  fields: [
-    { name: 'success', type: 'bool', required: false },
-    { name: 'recommendations', type: '@peartube/recommendation', array: true, required: true },
-    { name: 'error', type: 'string', required: false }
-  ]
-})
-
 
 // Save schema to disk
 Hyperschema.toDisk(schema)
@@ -3614,6 +4123,30 @@ rpcNs.register({
   name: 'provision-personal-encryption',
   request: { name: '@peartube/provision-personal-encryption-request', stream: false },
   response: { name: '@peartube/provision-personal-encryption-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'create-personal-device-invite',
+  request: { name: '@peartube/create-personal-device-invite-request', stream: false },
+  response: { name: '@peartube/create-personal-device-invite-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'redeem-personal-device-invite',
+  request: { name: '@peartube/redeem-personal-device-invite-request', stream: false },
+  response: { name: '@peartube/redeem-personal-device-invite-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'list-personal-devices',
+  request: { name: '@peartube/list-personal-devices-request', stream: false },
+  response: { name: '@peartube/list-personal-devices-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'revoke-personal-device',
+  request: { name: '@peartube/revoke-personal-device-request', stream: false },
+  response: { name: '@peartube/revoke-personal-device-response', stream: false }
 })
 
 rpcNs.register({
@@ -4035,7 +4568,7 @@ rpcNs.register({
   request: { name: '@peartube/event-cast-time-update', stream: false, send: true }
 })
 
-// Search / Watch events (appended for compat)
+// Search (appended for compat)
 rpcNs.register({
   name: 'search-videos',
   request: { name: '@peartube/search-videos-request', stream: false },
@@ -4043,27 +4576,21 @@ rpcNs.register({
 })
 
 rpcNs.register({
-  name: 'log-watch-event',
-  request: { name: '@peartube/log-watch-event-request', stream: false },
-  response: { name: '@peartube/log-watch-event-response', stream: false }
+  name: 'search-index-candidates',
+  request: { name: '@peartube/search-index-candidates-request', stream: false },
+  response: { name: '@peartube/search-index-candidates-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'verify-index-candidate',
+  request: { name: '@peartube/verify-index-candidate-request', stream: false },
+  response: { name: '@peartube/verify-index-candidate-response', stream: false }
 })
 
 rpcNs.register({
   name: 'index-video-vectors',
   request: { name: '@peartube/index-video-vectors-request', stream: false },
   response: { name: '@peartube/index-video-vectors-response', stream: false }
-})
-
-rpcNs.register({
-  name: 'get-recommendations',
-  request: { name: '@peartube/get-recommendations-request', stream: false },
-  response: { name: '@peartube/get-recommendations-response', stream: false }
-})
-
-rpcNs.register({
-  name: 'get-video-recommendations',
-  request: { name: '@peartube/get-video-recommendations-request', stream: false },
-  response: { name: '@peartube/get-video-recommendations-response', stream: false }
 })
 
 rpcNs.register({
@@ -4086,8 +4613,10 @@ for (const name of [
   'get-media-agent',
   'get-agent-contributions',
   'get-publication-sources',
+  'get-entity-artwork',
   'get-claim-provenance',
-  'set-source-preference'
+  'set-source-preference',
+  'prepare-media-playback'
 ]) {
   rpcNs.register({
     name,
@@ -4152,6 +4681,27 @@ rpcNs.register({
 rpcNs.register({
   name: 'event-transcode-progress',
   request: { name: '@peartube/event-transcode-progress', stream: false, send: true }
+})
+
+// ============================================
+// Participation (appended for compat)
+// ============================================
+
+// Live contribution state, so the UI can distinguish "eligible", "actively
+// uploading", and "suspended" instead of implying a promise the device is not
+// currently keeping. Every constraint is reported as a bounded reason code.
+rpcNs.register({
+  name: 'get-participation-status',
+  request: { name: '@peartube/get-participation-status-request', stream: false },
+  response: { name: '@peartube/get-participation-status-response', stream: false }
+})
+
+// The OS categorical signals the participation decision runs on. Every field is
+// optional: an omitted signal stays unknown, and unknown is a constraint.
+rpcNs.register({
+  name: 'set-device-conditions',
+  request: { name: '@peartube/set-device-conditions-request', stream: false },
+  response: { name: '@peartube/set-device-conditions-response', stream: false }
 })
 
 // Save HRPC interface to disk

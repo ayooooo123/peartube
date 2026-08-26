@@ -180,7 +180,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   kicker: {
-    color: '#a3e635',
+    color: '#7b5bf5',
     fontSize: 11,
     fontWeight: '900',
     letterSpacing: 0.7,
@@ -207,11 +207,11 @@ const styles = StyleSheet.create({
   },
   action: {
     borderWidth: 1,
-    borderColor: 'rgba(163,230,53,0.30)',
+    borderColor: 'rgba(123, 91, 245,0.30)',
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    backgroundColor: 'rgba(163,230,53,0.08)',
+    backgroundColor: 'rgba(123, 91, 245,0.08)',
   },
   actionDenied: {
     borderColor: 'rgba(148,163,184,0.20)',

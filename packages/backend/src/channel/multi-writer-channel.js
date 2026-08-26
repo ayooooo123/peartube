@@ -10,17 +10,18 @@ import crypto from 'hypercore-crypto'
 import { fromHex } from './util.js'
 import { CommentsChannel } from './comments-channel.js'
 import { ReactionsManager } from './reactions.js'
-import { WatchEventLogger } from '../recommendations/watch-events.js'
 import { PublicChannelBee } from './public-channel-bee.js'
 import { normalizeBlobRefInput } from '../blob-ref.js'
 import { compareSignedChannelRootDescriptors } from '../channel-descriptor.js'
 import channelDbDefinition from './channel-hyperdb-spec/hyperdb/index.js'
+import { decodePublicationManifest } from '../assets/index.js'
 import {
   normalizeArtworkRole,
   normalizeChannelArtwork,
   normalizeChannelProfile,
   normalizeChannelSource,
   normalizeContentDetails,
+  normalizePublicationOperationFramesHex,
   normalizeImportClaim,
   resolveClaimWinner
 } from './structured-content.js'
@@ -109,11 +110,13 @@ const CONTENT_DETAIL_FIELDS = [
   'episodeNumber',
   'originalAirDate',
   'thumbnailUrl',
+  'artwork',
   'provenanceVersion',
   'publicationState',
   'contentFingerprint',
   'importIdentityKey',
-  'importClaimantId'
+  'importClaimantId',
+  'publication',
 ]
 const CONTENT_STORAGE_DEFAULTS = {
   contentKind: '',
@@ -123,6 +126,27 @@ const CONTENT_STORAGE_DEFAULTS = {
   seasonNumber: MAX_SAFE_RANGE,
   episodeNumber: MAX_SAFE_RANGE,
   originalAirDate: MAX_SAFE_RANGE
+}
+// The publication cluster is one nested struct on the record, so its own
+// optional values need the same sentinel round trip the flat columns had:
+// without it an unset sequence would read back as a real sequence 0.
+const PUBLICATION_FIELDS = [
+  'publicationId',
+  'manifestId',
+  'renditionId',
+  'assetId',
+  'coreKey',
+  'publisherId',
+  'sequence',
+  'metadataClaimId',
+  'availabilityClaimId',
+  'publicationOperationId',
+  'metadataClaimOperationId',
+  'availabilityClaimOperationId',
+  'manifestHex',
+]
+const PUBLICATION_STORAGE_DEFAULTS = {
+  sequence: MAX_SAFE_RANGE
 }
 
 function toBuffer(value) {
@@ -172,11 +196,77 @@ function decodeStoredRecord(record, fields, defaults) {
 }
 
 function encodeContentDetails(details) {
-  return encodeStoredRecord(details, CONTENT_STORAGE_DEFAULTS)
+  const encoded = encodeStoredRecord(details, CONTENT_STORAGE_DEFAULTS)
+  if (encoded.publication) {
+    encoded.publication = encodeStoredRecord(encoded.publication, PUBLICATION_STORAGE_DEFAULTS)
+  }
+  return encoded
+}
+
+function decodeStoredContentDetails(details) {
+  const decoded = decodeStoredRecord(details, CONTENT_DETAIL_FIELDS, CONTENT_STORAGE_DEFAULTS)
+  if (decoded?.publication) {
+    decoded.publication = decodeStoredRecord(
+      decoded.publication,
+      PUBLICATION_FIELDS,
+      PUBLICATION_STORAGE_DEFAULTS
+    )
+  }
+  return decoded
 }
 
 function decodeContentDetails(details) {
-  return decodeStoredRecord(details, CONTENT_DETAIL_FIELDS, CONTENT_STORAGE_DEFAULTS)
+  const decoded = decodeStoredContentDetails(details)
+  const publication = decoded?.publication
+  if (!publication?.publicationId) return decoded
+  const manifest = decodePublicationManifest(b4a.from(publication.manifestHex, 'hex'))
+  return {
+    ...decoded,
+    immutablePublication: {
+      publicationId: publication.publicationId,
+      manifestId: publication.manifestId,
+      renditionId: publication.renditionId,
+      assetId: publication.assetId,
+      coreKey: publication.coreKey,
+      publisherId: publication.publisherId,
+      sequence: publication.sequence,
+      claimIds: [publication.metadataClaimId, publication.availabilityClaimId],
+      operationIds: [
+        publication.publicationOperationId,
+        publication.metadataClaimOperationId,
+        publication.availabilityClaimOperationId,
+      ],
+      manifest,
+    },
+  }
+}
+
+function mergeVideoContentDetails(video, details, publicationOperationFrames) {
+  if (!details) return video
+  const decoded = decodeContentDetails(details)
+  if (decoded?.immutablePublication && publicationOperationFrames?.publicationOperationFramesHex) {
+    decoded.immutablePublication = {
+      ...decoded.immutablePublication,
+      operationFramesHex: publicationOperationFrames.publicationOperationFramesHex
+    }
+  }
+  return {
+    ...video,
+    ...decoded,
+    ...(publicationOperationFrames || {})
+  }
+}
+
+function normalizePublicationOperationFramesRecord(id, value) {
+  return {
+    id,
+    publicationOperationFramesHex: normalizePublicationOperationFramesHex(value)
+  }
+}
+
+
+function isPrivatePublicationState(value) {
+  return value === 'replicationPending' || value === 'commitUncertain'
 }
 
 function assertFiniteNonnegative(value, name) {
@@ -270,7 +360,6 @@ export class MultiWriterChannel extends ReadyResource {
     this._publicProjectionClosing = false
     this.comments = null
     this.reactions = null
-    this.watchLogger = null
     this.wakeupSession = null
 
     this._localWriterKey = null
@@ -360,7 +449,6 @@ export class MultiWriterChannel extends ReadyResource {
 
     this.comments = new CommentsChannel(this)
     this.reactions = new ReactionsManager(this)
-    this.watchLogger = new WatchEventLogger(this)
   }
 
   async _ensureBootstrapRecords() {
@@ -456,9 +544,9 @@ export class MultiWriterChannel extends ReadyResource {
     await this._syncPublicBeeFromFeedChannel()
   }
 
-  async _syncPublicBeeFromFeedChannel() {
+  async _syncPublicBeeFromFeedChannel(options = {}) {
     if (!this._publicProjectionActive || !this.publicBee?.writable) return
-    await this.publicBee.syncFromChannel(this)
+    await this.publicBee.syncFromChannel(this, options)
   }
  
   async _flushPublicDiscovery(discovery) {
@@ -778,6 +866,9 @@ export class MultiWriterChannel extends ReadyResource {
       case 'remove-comment': return this.comments.removeComment(op.videoId, op.commentId, op)
       case 'add-reaction': return this.reactions.addReaction(op.videoId, op.reactionType, op)
       case 'remove-reaction': return this.reactions.removeReaction(op.videoId, op)
+      // Legacy, read-only: nothing produces 'log-watch-event' any more — viewer
+      // ranking is device-local. The case stays so channel logs written before
+      // the watch-telemetry removal keep replaying to the same derived state.
       case 'log-watch-event': return this.addWatchEvent(op)
       case 'add-vector-index': return this.addVectorIndex(op)
       default: return null
@@ -1168,30 +1259,34 @@ export class MultiWriterChannel extends ReadyResource {
 
   async listVideos() {
     await this._update()
-    const [videos, details] = await Promise.all([
+    const [videos, details, operationFrames] = await Promise.all([
       this.db.find('@peartubeChannel/videos-by-uploaded-at', {}, { reverse: true }).toArray(),
-      this.db.find('@peartubeChannel/contentDetails', {}).toArray()
+      this.db.find('@peartubeChannel/contentDetails', {}).toArray(),
+      this.db.find('@peartubeChannel/publicationOperationFrames', {}).toArray()
     ])
     if (details.length === 0) return videos
-    const detailsById = new Map(details.map((record) => [record.id, decodeContentDetails(record)]))
-    return videos.map((video) => {
-      const sidecar = detailsById.get(video.id)
-      return sidecar ? { ...video, ...sidecar } : video
-    })
+    const detailsById = new Map(details.map((record) => [record.id, record]))
+    const operationFramesById = new Map(operationFrames.map((record) => [record.id, record]))
+    return videos.map((video) => mergeVideoContentDetails(
+      video,
+      detailsById.get(video.id),
+      operationFramesById.get(video.id)
+    ))
   }
 
   async getVideo(id) {
     if (!id) return null
     await this._update()
-    const [video, details] = await Promise.all([
+    const [video, details, operationFrames] = await Promise.all([
       this.db.get('@peartubeChannel/videos', { id }),
-      this.db.get('@peartubeChannel/contentDetails', { id })
+      this.db.get('@peartubeChannel/contentDetails', { id }),
+      this.db.get('@peartubeChannel/publicationOperationFrames', { id })
     ])
     if (!video) return null
-    return details ? { ...video, ...decodeContentDetails(details) } : video
+    return mergeVideoContentDetails(video, details, operationFrames)
   }
 
-  async addVideo(meta, { syncPublic = meta?.publicationState !== 'replicationPending' } = {}) {
+  async addVideo(meta, { syncPublic = !isPrivatePublicationState(meta?.publicationState) } = {}) {
     const id = meta?.id
     if (!id) throw new Error('Video id required')
     const nextClock = this._nextVideoLogicalClock()
@@ -1211,23 +1306,36 @@ export class MultiWriterChannel extends ReadyResource {
       await this._update()
       const existingDetails = await this.db.get('@peartubeChannel/contentDetails', { id })
       details = normalizeContentDetails({
-        ...(decodeContentDetails(existingDetails) || {}),
+        ...(decodeStoredContentDetails(existingDetails) || {}),
         ...detailsInput,
         id
       })
     }
+    const operationFrames = meta.publicationOperationFramesHex !== undefined
+      ? normalizePublicationOperationFramesRecord(id, meta.publicationOperationFramesHex)
+      : null
 
     await this.db.insert('@peartubeChannel/videos', videoMeta)
     if (details) await this.db.insert('@peartubeChannel/contentDetails', encodeContentDetails(details))
+    if (operationFrames) {
+      await this.db.insert('@peartubeChannel/publicationOperationFrames', operationFrames)
+    }
     await this._flush()
-    if (details?.publicationState === 'replicationPending') {
+    if (isPrivatePublicationState(details?.publicationState)) {
       await this._suppressPublicVideo(id)
     } else if (syncPublic) {
       await this._syncPublicBeeFromFeedChannel()
     }
   }
 
-  async updateVideo(id, updates, { syncPublic = updates?.publicationState !== 'replicationPending' } = {}) {
+  async updateVideo(
+    id,
+    updates,
+    {
+      syncPublic = !isPrivatePublicationState(updates?.publicationState),
+      commitAfterPublicSync = false
+    } = {}
+  ) {
     if (!id) throw new Error('Video id required')
     await this._update()
     const [existing, existingDetails] = await Promise.all([
@@ -1245,17 +1353,43 @@ export class MultiWriterChannel extends ReadyResource {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       logicalClock: nextClock
     })
+    const decodedDetails = decodeStoredContentDetails(existingDetails) || {}
     const detailsPatch = pickDefinedFields(updates, CONTENT_DETAIL_FIELDS)
     const details = Object.keys(detailsPatch).length > 0
-      ? normalizeContentDetails({ ...(decodeContentDetails(existingDetails) || {}), ...detailsPatch, id })
+      ? normalizeContentDetails({ ...decodedDetails, ...detailsPatch, id })
       : null
+    const operationFrames = updates?.publicationOperationFramesHex !== undefined
+      ? normalizePublicationOperationFramesRecord(id, updates.publicationOperationFramesHex)
+      : null
+
+    if (commitAfterPublicSync) {
+      if (
+        !syncPublic ||
+        decodedDetails.publicationState !== 'commitUncertain' ||
+        details?.publicationState !== 'published'
+      ) {
+        throw new Error('Commit-uncertain finalization requires a published public sync')
+      }
+      const projectionVideos = await this.listVideos()
+      const candidate = { ...videoMeta, ...details }
+      const index = projectionVideos.findIndex(video => video.id === id)
+      if (index < 0) throw new Error('Video not found: ' + id)
+      projectionVideos[index] = candidate
+      await this._syncPublicBeeFromFeedChannel({
+        projectionVideos,
+        throwOnError: true
+      })
+    }
 
     await this.db.insert('@peartubeChannel/videos', videoMeta)
     if (details) await this.db.insert('@peartubeChannel/contentDetails', encodeContentDetails(details))
+    if (operationFrames) {
+      await this.db.insert('@peartubeChannel/publicationOperationFrames', operationFrames)
+    }
     await this._flush()
-    if (details?.publicationState === 'replicationPending') {
+    if (isPrivatePublicationState(details?.publicationState)) {
       await this._suppressPublicVideo(id)
-    } else if (syncPublic) {
+    } else if (syncPublic && !commitAfterPublicSync) {
       await this._syncPublicBeeFromFeedChannel()
     }
   }
@@ -1264,6 +1398,7 @@ export class MultiWriterChannel extends ReadyResource {
     if (!this.writable) throw new Error('Channel is not writable')
     await this.db.delete('@peartubeChannel/videos', { id })
     await this.db.delete('@peartubeChannel/contentDetails', { id })
+    await this.db.delete('@peartubeChannel/publicationOperationFrames', { id })
     await this._flush()
     await this._suppressPublicVideo(id)
   }
@@ -1428,6 +1563,9 @@ export class MultiWriterChannel extends ReadyResource {
     return { success: false, videoCount: 0, state: 'failed' }
   }
 
+  // Applies a legacy 'log-watch-event' op during replay. No producer calls this
+  // any more and no API reads the collection back; it exists only so a channel
+  // log written before the watch-telemetry removal derives the same state.
   async addWatchEvent(event) {
     const eventId = event.eventId || b4a.toString(crypto.randomBytes(16), 'hex')
     await this.db.insert('@peartubeChannel/watchEvents', stripUndefined({
@@ -1439,15 +1577,6 @@ export class MultiWriterChannel extends ReadyResource {
     }))
     await this._flush()
     return { success: true, eventId }
-  }
-
-  async listWatchEvents(videoId = null) {
-    await this._update()
-    if (!videoId) return this.db.find('@peartubeChannel/watchEvents', {}).toArray()
-    return this.db.find('@peartubeChannel/watch-events-by-video-timestamp', {
-      gte: { videoId },
-      lte: { videoId, timestamp: MAX_SAFE_RANGE }
-    }).toArray()
   }
 
   async addVectorIndex(record) {

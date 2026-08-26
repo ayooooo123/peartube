@@ -106,6 +106,10 @@ docker compose -f docker-compose.relay.yml exec relay \
 
 Use `docker-compose.local-relay.yml` for the local directory mirror workflow. Adjust the host-side `/home/user/peartube-local-videos` volume before running it.
 
+The relay also provides the authenticated MediaStorm companion API. Unix-domain socket transport is the default. Container TCP use must configure the shared request secret; there is no unauthenticated mode.
+
+Cloud offload is optional and S3-compatible only. Configure the bucket, endpoint, region, access key, and secret key through the relay environment shown in `docker-compose.relay.yml`. Offload stores verified asset blocks; it is not an HTTP playback origin.
+
 ## Troubleshooting
 
 ### Backend Not Starting On Mobile

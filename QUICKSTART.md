@@ -48,6 +48,8 @@ docker compose -f docker-compose.relay.yml exec relay /peartube-relay status --j
 open http://127.0.0.1:8174
 ```
 
+This starts the volunteer relay/archive surface. MediaStorm companion access is disabled unless its authenticated transport is configured. Optional cloud offload uses S3-compatible block storage only.
+
 ## 5. Verify A Change
 
 ```bash

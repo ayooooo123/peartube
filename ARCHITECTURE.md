@@ -1,6 +1,6 @@
 # PearTube Architecture
 
-PearTube is organized around a universal backend. Platform shells differ, but they all talk to the same host/protocol/backend contract.
+PearTube is a permissionless media CDN organized around one universal backend. Platform shells differ, but clients and relays use the same signed publication, immutable asset, policy, and scoped-network contracts.
 
 ```text
 Client shell
@@ -26,9 +26,9 @@ packages/
   core/             Shared app components, hooks, stores, and types
   platform/         App-facing runner selection and RPC facade
   host/             Backend lifecycle, host error codes, PROTOCOL_VERSION, universal HRPC client (readiness, errors, events, namespaces)
-  backend/          P2P storage, discovery, API surface, playback, relay logic
+  backend/          Publisher catalogs, indexes, immutable assets, scoped P2P, policy, playback, archive evidence
   spec/             HRPC schema source and generated JS code
-  cli/              Relay CLI, standalone build, Docker artifact support
+  cli/              Relay, MediaStorm companion API, ingest jobs, archive UI, Docker support
   bare-*/           Native Bare support packages
 ```
 
@@ -77,22 +77,46 @@ npm run schema:full
 npm test --prefix packages/spec
 ```
 
-## Backend Storage Model
+## Media And Catalog Model
 
-The current backend implementation uses:
+- Publishers own signed namespaces and device-writer authorization. A publisher identity is provenance, not ownership of a movie, episode, or other work.
+- Publications bind media claims to immutable rendition descriptors. Static rendition cores use canonical blocks and Hypercore verification.
+- Local and remote index services project signed catalog records into bounded, queryable views. Indexers return candidate facts; they do not grant trust or rank globally.
+- Clients verify the selected candidate against the current publisher catalog before opening an asset session.
+- Media identity uses normalized external coordinates such as TMDB movie or series/season/episode identifiers. Equivalent publications remain separate sources with preserved provenance.
 
-- Corestore for core lifecycle and replication;
-- Hyperbee for local metadata and materialized views;
-- Autobase for multi-writer channel state;
-- PublicBee for fast public viewer reads;
-- Hyperblobs and `hypercore-blob-server` for video/thumbnail byte storage and local playback URLs;
-- Hyperswarm plus Protomux for discovery and peer connections.
+## Storage And Transfer
 
-The current source tree does not use Hyperdrive as the primary video storage path. Historical docs may still mention Hyperdrive; prefer this architecture doc and `docs/p2p-backend-audit.md` when reasoning about current storage code.
+- Corestore owns core lifecycle and replication.
+- Hyperbee stores local metadata and materialized views.
+- Autobase projects multi-writer publisher catalog state.
+- Hyperswarm and Protomux provide purpose-scoped bootstrap, publisher, index, asset, archive, and archive-discovery sessions.
+- Playback and retention operate on exact immutable rendition ranges. There is no HTTP media-origin fallback.
+- S3-compatible storage is the only cloud block-offload backend. Offloaded blocks restore into the same verified asset cores used for playback and seeding.
 
-## Discovery And Empty States
+## MediaStorm Companion Boundary
 
-Public discovery is anchored around the shared public feed topic and feed entries that carry enough channel/video references for fast viewer reads. UI empty states should inspect structured diagnostics from `system.getSwarmStatus()` before deciding whether the user has no content, no DHT/bootstrap path, no feed peers, no loaded channels, or no feed entries.
+The relay exposes an authenticated local `/api/v2` companion surface. Unix-domain sockets are the default. TCP/container use requires configured request authentication.
+
+```text
+MediaStorm exact selector
+  -> bounded PearTube candidate search
+  -> MediaStorm ranks all providers
+  -> selected opaque candidate reference
+  -> PearTube re-verifies current publisher state and availability
+  -> route-scoped playback capability
+```
+
+MediaStorm keeps tracker/debrid credentials, source URLs, cookies, and acquisition policy private. PearTube publishes verified immutable descriptors and non-secret claims, never bearer URLs.
+
+## Participation And Authority
+
+- Watch-only peers consume without offering archival custody.
+- Balanced peers seed within explicit device and network budgets.
+- Archive-enabled peers may retain ranges, issue pledges, and answer possession challenges.
+- Local moderation and followed publisher/index lists decide what work this device performs.
+- Relays, indexers, MediaStorm instances, and archivists gain no publisher or global moderation authority.
+- Catalog presence, peer reachability, and archival durability are separate facts. UI and APIs must not turn any one of them into an availability guarantee.
 
 ## Generated Artifacts
 
@@ -126,4 +150,4 @@ CI splits coverage across fast tests, mobile builds, Electrobun desktop, relay b
 - Native clients must reject unsupported protocol versions before using backend data.
 - Platform-only backend behavior should be added only when the runtime limitation is real and documented.
 
-Last updated: 2026-06-26.
+Last updated: 2026-08-26.

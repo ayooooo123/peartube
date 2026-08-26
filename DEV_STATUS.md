@@ -1,6 +1,6 @@
 # Development Status
 
-Status as of 2026-06-26: pre-alpha, active development.
+Status as of 2026-08-26: pre-alpha, active development.
 
 ## Platform Status
 
@@ -18,20 +18,28 @@ Status as of 2026-06-26: pre-alpha, active development.
 - Shared HRPC handlers are centralized in `packages/backend/src/hrpc-handlers.js` and registered by `packages/backend/src/backend-entry.js`.
 - Schema generation produces JS HRPC/schema output via `npm run schema:full`.
 - Electrobun desktop is off the old `pear run` path and uses embedded `pear-runtime`.
-- Relay support includes CLI tests, standalone builds, Docker artifacts, archive UI, YouTube archive support, and local mirror support.
+- Relay support includes the authenticated MediaStorm companion API, bounded ingest jobs, archive UI, local mirror workflows, local catalog indexing, and S3-compatible block offload.
+
+## Current Product Direction
+
+- Consumer-first Home, Search/Discover, Library, and playback surfaces; publishing and network controls stay behind Developer Settings or the relay CLI.
+- Permissionless signed catalogs with local moderation, bounded index federation, and provenance-preserving source selection.
+- Strict P2P immutable-rendition playback with structured availability errors and no HTTP origin fallback.
+- MediaStorm performs cross-provider ranking and private acquisition. PearTube verifies, publishes, transfers, retains, and archives selected media.
+- Relays are voluntary peers, not trusted infrastructure. S3 is an operator-selected block tier, not a media authority or public origin.
 
 ## Backend Capability Progress
 
-The shared backend includes current work for:
+The shared backend includes:
 
-- identities, channel metadata, and multi-device pairing;
-- public feed discovery with structured swarm diagnostics;
-- PublicBee fast-path reads for discovered channels;
-- uploads, download intents, seeding, pinning, storage quotas, and cache clearing;
-- playback URL preparation, blob playback, transcode settings, cast compatibility, and Chromecast sender support;
-- comments, moderation actions, reactions, playlists, watch history, resume positions, and personal settings;
-- search, semantic/vector indexing, recommendations, and livestream start/stop/playback status;
-- relay/offload assessment and relay seeding workflows.
+- publisher roots, admitted device writers, namespace rotation, signed catalogs, and immutable publication manifests;
+- local and federated index services, exact TMDB movie/episode selectors, candidate verification, and source provenance;
+- purpose-scoped bootstrap, publisher, index, asset, archive, and archive-discovery networking;
+- static rendition cores, exact-range transfer, multi-peer playback, availability evidence, seeding, and retention;
+- watch-only, balanced, and archive-enabled participation policy with device/network/storage budgets;
+- archive pledges, possession challenges, S3 block offload, restore-on-read, and relay reseeding;
+- authenticated MediaStorm companion search, deferred open, ingest jobs, and route-scoped streams;
+- local encrypted personal state, optional device pairing, moderation, library, watch history, and recommendations without viewer analytics.
 
 ## Reproducibility Status
 
@@ -43,8 +51,8 @@ The shared backend includes current work for:
 ## Known Constraints
 
 - Pear OTA desktop release flow is not wired. Use the Electrobun desktop release artifact workflows, and see `docs/pear-runtime-evolution-readiness.md` before adding OTA automation.
-- P2P peer visibility depends on DHT/bootstrap reachability, NAT/firewall behavior, active feed peers, and whether feed entries include enough PublicBee/blob references for fast viewer reads.
-- Some historical roadmap and handoff docs still contain old path examples. Prefer README, QUICKSTART, SETUP, DEVELOPMENT, DEV_STATUS, and ARCHITECTURE for current commands.
+- Network catalog visibility does not prove current media reachability. Availability requires fresh verified range evidence; archival durability is reported separately.
+- Historical plans and handoffs describe the path to the current design and can contain superseded file names or incomplete checklists. README, QUICKSTART, SETUP, DEVELOPMENT, DEV_STATUS, and ARCHITECTURE are the current contract.
 
 ## Before Handoff
 
@@ -57,4 +65,4 @@ npm test
 npm run desktop:smoke --prefix packages/app
 ```
 
-Last updated: 2026-06-26.
+Last updated: 2026-08-26.

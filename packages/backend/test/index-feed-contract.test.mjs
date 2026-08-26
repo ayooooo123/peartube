@@ -7,7 +7,7 @@ import {
   createIndexFeedPage,
   verifyIndexFeedPage
 } from '../src/indexing/feed-contract.js'
-import { PROTOCOL_ERROR_CODES } from '../src/network/index.js'
+import { PROTOCOL_ERROR_CODES, PROTOCOL_MAJOR } from '../src/network/index.js'
 import { encodeCanonical } from '../src/publisher/canonical.js'
 import { createApplicationEnvelope } from '../src/records/application-envelope.js'
 
@@ -50,7 +50,7 @@ test('index pages advertise sorted requirements and reject unsupported capabilit
     protocolMinor: 5,
     requiredCapabilities: ['z-index:v1', 'a-index:v1', 'z-index:v1'],
   })
-  t.is(page.body.minimumProtocolMajor, 1)
+  t.is(page.body.minimumProtocolMajor, PROTOCOL_MAJOR)
   t.is(page.body.protocolMinor, 5)
   t.alike(page.body.requiredCapabilities, ['a-index:v1', INDEX_FEED_CAPABILITY, 'z-index:v1'])
   try {

@@ -1,6 +1,7 @@
 import test from 'brittle'
 
 import { createArchiveParticipationApi } from '../src/api/archive-participation.js'
+import { createStaticAssetManifest } from '../src/assets/static-core.js'
 
 const publicationId = 'a'.repeat(64)
 const renditionId = 'b'.repeat(64)
@@ -34,12 +35,17 @@ function fixture() {
       return { status: 'published', requestId: 'd'.repeat(64) }
     },
   }
+  const core = createStaticAssetManifest({
+    treeHash: 'c'.repeat(64),
+    blockLength: 8,
+    byteLength: 8 * 262144,
+  })
   const manifest = {
     publicationId,
     body: {
       renditions: [{
         renditionId,
-        core: { key: coreKey, length: 8, byteLength: 8192 },
+        core,
       }],
     },
   }
@@ -47,7 +53,7 @@ function fixture() {
     archiveNetwork,
     manifestStore: { getManifest: id => id === publicationId ? manifest : null },
   })
-  return { api, calls }
+  return { api, calls, core }
 }
 
 test('archive participation is explicit, capacity-bounded, and observable', async (t) => {
@@ -84,14 +90,14 @@ test('archive participation is explicit, capacity-bounded, and observable', asyn
 })
 
 test('archive requests derive a complete rendition range and byte count from the accepted manifest', async (t) => {
-  const { api, calls } = fixture()
+  const { api, calls, core } = fixture()
   const result = await api.requestArchivePublication({ publicationId, renditionId, retentionUntil: 50_000 })
   t.alike(result, { success: true, status: 'published', requestId: 'd'.repeat(64) })
   t.alike(calls[0], ['request', {
     publicationId,
     renditionId,
-    ranges: [{ coreKey, start: 0, end: 8 }],
-    requestedBytes: 8192,
+    ranges: [{ coreKey: core.assetId, start: 0, end: 8 }],
+    requestedBytes: core.byteLength,
     retentionUntil: 50_000,
   }])
   t.is((await api.requestArchivePublication({ publicationId: 'x', renditionId })).errorCode, 'ARCHIVE_REQUEST_INVALID')

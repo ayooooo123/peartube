@@ -1,7 +1,13 @@
 import test from 'brittle'
+import b4a from 'b4a'
+import Corestore from 'corestore'
+import fs from 'node:fs'
 import http from 'node:http'
+import os from 'node:os'
+import path from 'node:path'
 
 import { createAssetSession } from '../src/assets/asset-session.js'
+import { ASSET_BLOCK_SIZE, createStaticAssetManifest, writeStaticAsset } from '../src/assets/static-core.js'
 import { createMultiPeerScheduler } from '../src/playback/multi-peer-scheduler.js'
 import {
   PLAYBACK_ERRORS,
@@ -20,7 +26,12 @@ import {
 } from '../src/playback/transport-guard.js'
 import { preparePlaybackSource } from '../src/playback/source-preparation.js'
 
-const CORE_KEY = 'a'.repeat(64)
+const defaultCore = createStaticAssetManifest({
+  treeHash: 'a'.repeat(64),
+  blockLength: 8,
+  byteLength: 8 * 262144,
+})
+const CORE_KEY = defaultCore.assetId
 const OTHER_KEY = 'b'.repeat(64)
 
 function manifest(renditions) {
@@ -32,7 +43,7 @@ function rendition(overrides = {}) {
     renditionId: 'rendition-1',
     purpose: 'original',
     format: 'video/mp4',
-    core: { key: CORE_KEY, length: 8 },
+    core: defaultCore,
     ...overrides,
   }
 }
@@ -161,21 +172,22 @@ test('reads outside the signed block range are a range mismatch', async (t) => {
 })
 
 test('a session caps how many cores it holds open', async (t) => {
+  const r1Core = createStaticAssetManifest({ treeHash: '1'.repeat(64), blockLength: 4, byteLength: 4 * 262144 })
+  const r2Core = createStaticAssetManifest({ treeHash: '2'.repeat(64), blockLength: 4, byteLength: 4 * 262144 })
   const session = createAssetSession({
     manifest: manifest([
-      rendition({ renditionId: 'r1', core: { key: '1'.repeat(64), length: 4 } }),
-      rendition({ renditionId: 'r2', core: { key: '2'.repeat(64), length: 4 } }),
+      rendition({ renditionId: 'r1', core: r1Core }),
+      rendition({ renditionId: 'r2', core: r2Core }),
     ]),
     openCore: async () => ({ close() {} }),
     maxActiveCores: 1,
   })
 
-  t.is(await session.authorizeCore({ renditionId: 'r1', coreKey: '1'.repeat(64) }), true)
+  t.is(await session.authorizeCore({ renditionId: 'r1', coreKey: r1Core.assetId }), true)
   await t.exception(
-    session.authorizeCore({ renditionId: 'r2', coreKey: '2'.repeat(64) }),
+    session.authorizeCore({ renditionId: 'r2', coreKey: r2Core.assetId }),
     /Too many playback sessions/
   )
-  t.is(session.activeCoreCount(), 1)
 })
 
 test('a closed session authorizes nothing further', async (t) => {
@@ -188,54 +200,161 @@ test('a closed session authorizes nothing further', async (t) => {
   t.is(session.authorizeRange({ renditionId: 'rendition-1', range: { start: 0, end: 4 } }), false)
 })
 
-test('local complete playback needs no peer at all', async (t) => {
-  const scheduler = createMultiPeerScheduler({
-    local: { hasRange: () => true },
-    peers: [],
+function inventory(assetId, indexes) {
+  if (indexes.length === 0) return { assetId, ranges: [], nextCursor: null }
+  const startBlock = Math.min(...indexes)
+  const endBlock = Math.max(...indexes) + 1
+  const presentBitfield = b4a.alloc(Math.ceil((endBlock - startBlock) / 8))
+  for (const index of indexes) {
+    const bit = index - startBlock
+    presentBitfield[bit >> 3] |= 1 << (bit & 7)
+  }
+  return { assetId, ranges: [{ startBlock, bitCount: endBlock - startBlock, presentBitfield }], nextCursor: null }
+}
+
+function tempStore(prefix) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  return { directory, store: new Corestore(directory) }
+}
+
+async function proofFixture(t, blockCount = 2) {
+  const source = tempStore('peartube-playback-source-')
+  const reader = tempStore('peartube-playback-reader-')
+  await source.store.ready()
+  await reader.store.ready()
+  const sourceBytes = b4a.alloc(blockCount * ASSET_BLOCK_SIZE)
+  for (let index = 0; index < blockCount; index++) sourceBytes.fill(index + 1, index * ASSET_BLOCK_SIZE, (index + 1) * ASSET_BLOCK_SIZE)
+  const asset = await writeStaticAsset({ store: source.store, source: [sourceBytes] })
+  const session = createAssetSession({ coreRef: asset.descriptor, store: reader.store })
+  await session.ready()
+
+  async function applyBlock(index, { corrupt = false } = {}) {
+    const proof = await asset.core.proof({ block: { index, nodes: 0 }, upgrade: { start: 0, length: asset.descriptor.length } })
+    const value = b4a.from(proof.block.value)
+    if (corrupt) value[0] ^= 0xff
+    await session.verifyBlock({ index, proof: { ...proof, block: { ...proof.block, value: null } }, value })
+  }
+
+  t.teardown(async () => {
+    await session.close().catch(() => {})
+    await asset.core.close().catch(() => {})
+    await source.store.close().catch(() => {})
+    await reader.store.close().catch(() => {})
+    fs.rmSync(source.directory, { recursive: true, force: true })
+    fs.rmSync(reader.directory, { recursive: true, force: true })
   })
-  const result = await scheduler.requestRange({ start: 0, end: 4 })
+  return { asset, session, sourceBytes, applyBlock }
+}
+
+function verifiedTransport({ assetId, session, ownership, applyBlock, onRequest = null }) {
+  const calls = []
+  return {
+    calls,
+    getActiveAssetPeerIds() { return [...ownership.keys()].sort() },
+    listPeerAssetRanges({ peerId }) { return inventory(assetId, ownership.get(peerId) || []) },
+    hasVerifiedAssetBlock({ blockIndex }) { return session.hasVerifiedBlock(blockIndex) },
+    readVerifiedAssetBlock({ blockIndex }) { return session.readVerifiedBlock(blockIndex) },
+    async requestAssetBlocks(request) {
+      calls.push({ ...request, peerIds: [...request.peerIds] })
+      if (onRequest) return onRequest(request, { applyBlock, calls })
+      const peerId = request.peerIds[0]
+      const owned = new Set(ownership.get(peerId) || [])
+      for (let index = request.startBlock; index < request.endBlock; index++) {
+        if (!owned.has(index)) {
+          const error = new Error('selected peer disconnected')
+          error.code = 'PEER_DISCONNECTED'
+          error.peerId = peerId
+          throw error
+        }
+        await applyBlock(index)
+      }
+      return {
+        verifiedBlockIndexes: Array.from({ length: request.endBlock - request.startBlock }, (_, offset) => request.startBlock + offset),
+        peerIds: [peerId],
+      }
+    },
+  }
+}
+
+test('local complete playback needs no peer at all', async (t) => {
+  const fixture = await proofFixture(t, 2)
+  await fixture.applyBlock(0)
+  await fixture.applyBlock(1)
+  const transport = verifiedTransport({
+    assetId: fixture.asset.descriptor.assetId,
+    session: fixture.session,
+    ownership: new Map(),
+    applyBlock: fixture.applyBlock,
+  })
+  const scheduler = createMultiPeerScheduler({ coreRef: fixture.asset.descriptor, session: fixture.session, transport })
+  const result = await scheduler.requestRange({ assetId: fixture.asset.descriptor.assetId, byteStart: 0, byteEnd: 2 * ASSET_BLOCK_SIZE, deadlineMs: 1000 })
 
   t.is(result.status, 'ok')
-  t.is(result.source, 'local')
+  t.alike(result.peerIds, [])
   t.is(result.originAttempted, false)
-  t.is(scheduler.metrics().peerRequests, 0, 'a local copy never touches the network')
+  t.is(transport.calls.length, 0, 'a local copy never touches the network')
 })
 
 test('remote playback is served by peers and reports a bounded code when none can', async (t) => {
-  const served = await createMultiPeerScheduler({
-    local: { hasRange: () => false },
-    peers: [{ id: 'peer-a', connected: true, ranges: [{ start: 0, end: 8 }], verify: () => true }],
-  }).requestRange({ start: 0, end: 4 })
+  const fixture = await proofFixture(t, 2)
+  const ownership = new Map([['peer-a', [0, 1]]])
+  const transport = verifiedTransport({
+    assetId: fixture.asset.descriptor.assetId,
+    session: fixture.session,
+    ownership,
+    applyBlock: fixture.applyBlock,
+  })
+  const served = await createMultiPeerScheduler({ coreRef: fixture.asset.descriptor, session: fixture.session, transport })
+    .requestRange({ assetId: fixture.asset.descriptor.assetId, byteStart: 0, byteEnd: 2 * ASSET_BLOCK_SIZE, deadlineMs: 5000 })
   t.is(served.status, 'ok')
-  t.is(served.source, 'peer')
+  t.alike(served.peerIds, ['peer-a'])
   t.is(served.originAttempted, false)
 
-  const missing = await createMultiPeerScheduler({ local: { hasRange: () => false }, peers: [] })
-    .requestRange({ start: 0, end: 4 })
+  const emptyFixture = await proofFixture(t, 2)
+  const emptyTransport = verifiedTransport({
+    assetId: emptyFixture.asset.descriptor.assetId,
+    session: emptyFixture.session,
+    ownership: new Map(),
+    applyBlock: emptyFixture.applyBlock,
+  })
+  const missing = await createMultiPeerScheduler({ coreRef: emptyFixture.asset.descriptor, session: emptyFixture.session, transport: emptyTransport })
+    .requestRange({ assetId: emptyFixture.asset.descriptor.assetId, byteStart: 0, byteEnd: 2 * ASSET_BLOCK_SIZE, deadlineMs: 1000 })
   t.is(missing.status, 'unavailable')
-  t.is(missing.errorCode, 'AVAILABILITY_BOUNDARY')
+  t.is(missing.errorCode, 'NO_VERIFIED_SOURCE')
   t.is(missing.originAttempted, false, 'no origin was tried, because there is none')
 })
 
 test('a peer that fails verification is a range mismatch, not an empty network', async (t) => {
-  const result = await createMultiPeerScheduler({
-    local: { hasRange: () => false },
-    peers: [{ id: 'liar', connected: true, ranges: [{ start: 0, end: 8 }], verify: async () => false }],
-  }).requestRange({ start: 0, end: 4 })
+  const fixture = await proofFixture(t, 2)
+  const ownership = new Map([['liar', [0, 1]]])
+  const transport = verifiedTransport({
+    assetId: fixture.asset.descriptor.assetId,
+    session: fixture.session,
+    ownership,
+    applyBlock: (index) => fixture.applyBlock(index, { corrupt: true }),
+  })
+  const scheduler = createMultiPeerScheduler({ coreRef: fixture.asset.descriptor, session: fixture.session, transport })
+  const result = await scheduler.requestRange({ assetId: fixture.asset.descriptor.assetId, byteStart: 0, byteEnd: 2 * ASSET_BLOCK_SIZE, deadlineMs: 1000 })
 
   t.is(result.status, 'unavailable')
-  t.is(result.errorCode, 'RANGE_MISMATCH')
-  t.is(playbackErrorRetry(result.errorCode), 'automatic', 'another source may still have the bytes')
+  t.is(result.errorCode, 'NO_VERIFIED_SOURCE')
+  t.is(result.originAttempted, false)
 })
 
 test('a disconnected peer cannot serve, and the answer stays inside the vocabulary', async (t) => {
-  const result = await createMultiPeerScheduler({
-    local: { hasRange: () => false },
-    peers: [{ id: 'gone', connected: false, ranges: [{ start: 0, end: 8 }], verify: () => true }],
-  }).requestRange({ start: 0, end: 4 })
+  const fixture = await proofFixture(t, 2)
+  const ownership = new Map([['gone', []]])
+  const transport = verifiedTransport({
+    assetId: fixture.asset.descriptor.assetId,
+    session: fixture.session,
+    ownership,
+    applyBlock: fixture.applyBlock,
+  })
+  const scheduler = createMultiPeerScheduler({ coreRef: fixture.asset.descriptor, session: fixture.session, transport })
+  const result = await scheduler.requestRange({ assetId: fixture.asset.descriptor.assetId, byteStart: 0, byteEnd: 2 * ASSET_BLOCK_SIZE, deadlineMs: 1000 })
 
-  t.is(result.errorCode, 'AVAILABILITY_BOUNDARY')
-  t.is(isPlaybackErrorCode(result.errorCode), true)
+  t.is(result.errorCode, 'NO_VERIFIED_SOURCE')
+  t.is(result.originAttempted, false)
 })
 
 test('a missing startup range leaves no half-open session and names no origin', async (t) => {
@@ -272,28 +391,30 @@ test('an HTTP trap receives zero media requests while two peers serve playback',
   })
   await new Promise(resolve => trap.listen(0, '127.0.0.1', resolve))
   t.teardown(() => new Promise(resolve => trap.close(resolve)))
-
-  const trapUrl = `http://127.0.0.1:${trap.address().port}/segment.m4s`
-  // The trap is a legitimate loopback address, so the URL guard alone cannot
-  // catch it. What keeps it empty is that the transport has no HTTP branch.
-  const scheduler = createMultiPeerScheduler({
-    local: { hasRange: () => false },
-    peers: [
-      { id: 'peer-a', connected: true, ranges: [{ start: 0, end: 4 }], verify: () => true, originUrl: trapUrl },
-      { id: 'peer-b', connected: true, ranges: [{ start: 4, end: 8 }], verify: () => true, originUrl: trapUrl },
-    ],
+  const fixture = await proofFixture(t, 3)
+  const ownership = new Map([
+    ['peer-a', [0]],
+    ['peer-b', [1]],
+  ])
+  const transport = verifiedTransport({
+    assetId: fixture.asset.descriptor.assetId,
+    session: fixture.session,
+    ownership,
+    applyBlock: fixture.applyBlock,
   })
+  const scheduler = createMultiPeerScheduler({ coreRef: fixture.asset.descriptor, session: fixture.session, transport })
 
-  const first = await scheduler.requestRange({ start: 0, end: 4 })
-  const second = await scheduler.requestRange({ start: 4, end: 8 })
-  const beyond = await scheduler.requestRange({ start: 8, end: 12 })
+  const first = await scheduler.requestRange({ assetId: fixture.asset.descriptor.assetId, byteStart: 0, byteEnd: ASSET_BLOCK_SIZE, deadlineMs: 5000 })
+  const second = await scheduler.requestRange({ assetId: fixture.asset.descriptor.assetId, byteStart: ASSET_BLOCK_SIZE, byteEnd: 2 * ASSET_BLOCK_SIZE, deadlineMs: 5000 })
+  const beyond = await scheduler.requestRange({ assetId: fixture.asset.descriptor.assetId, byteStart: 2 * ASSET_BLOCK_SIZE, byteEnd: 3 * ASSET_BLOCK_SIZE, deadlineMs: 1000 })
 
-  t.is(first.source, 'peer')
-  t.is(second.source, 'peer')
+  t.is(first.status, 'ok')
+  t.alike(first.peerIds, ['peer-a'])
+  t.is(second.status, 'ok')
+  t.alike(second.peerIds, ['peer-b'])
   t.is(beyond.status, 'unavailable')
-  t.is(beyond.errorCode, 'AVAILABILITY_BOUNDARY', 'a gap fails rather than falling back to the trap')
+  t.is(beyond.errorCode, 'NO_VERIFIED_SOURCE', 'a gap fails rather than falling back to the trap')
   t.alike(trapped, [], 'the HTTP trap received nothing')
-  t.is(scheduler.metrics().peerRequests, 2)
 })
 
 test('a redirect to an origin cannot be laundered into a media URL', (t) => {

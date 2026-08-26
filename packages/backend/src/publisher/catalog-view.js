@@ -190,20 +190,23 @@ async function getPersistedLegacyGenesisId (view, bootstrapKey, publisherId) {
       !equalBytes(descriptor.catalogBootstrapKey, bootstrapKey)) return null
 
   for (const entry of await collectPrefix(view, PREFIX.ACCEPTED)) {
+    let value = null
     try {
       const accepted = decodeAcceptedEntry(entry.value)
-      // Legacy accepted frames are intentionally non-pageable, but may still
-      // establish the one bounded pre-cutover genesis migration.
-      const value = accepted?.value || decodePublisherCatalogFrame(entry.value)
-      const operationId = idHex(value)
-      if (value.recordType !== PUBLISHER_RECORD_TYPES.NAMESPACE ||
-          entry.key !== `${PREFIX.ACCEPTED}${operationId}` ||
-          !equalBytes(value.canonicalBody, descriptorEntry.value)) continue
-      await view.put(LEGACY_GENESIS_ID_KEY, b4a.from(operationId))
-      return operationId
-    } catch {
-      // Ignore corrupt derived entries; they cannot establish a compatibility exception.
+      if (accepted) value = accepted.value
+    } catch {}
+    if (!value) {
+      try {
+        value = decodePublisherCatalogFrame(entry.value)
+      } catch {}
     }
+    if (!value) continue
+    const operationId = idHex(value)
+    if (value.recordType !== PUBLISHER_RECORD_TYPES.NAMESPACE ||
+        entry.key !== `${PREFIX.ACCEPTED}${operationId}` ||
+        !equalBytes(value.canonicalBody, descriptorEntry.value)) continue
+    await view.put(LEGACY_GENESIS_ID_KEY, b4a.from(operationId))
+    return operationId
   }
   return null
 }

@@ -11,7 +11,7 @@ import {
   verifyPublisherNamespaceDescriptor
 } from '../src/publisher/index.js'
 import { PUBLISHER_CATALOG_CAPABILITY } from '../src/publisher/namespace.js'
-import { PROTOCOL_ERROR_CODES } from '../src/network/index.js'
+import { PROTOCOL_ERROR_CODES, PROTOCOL_MAJOR } from '../src/network/index.js'
 
 const bytes = (length, seed = 0) => b4a.from(Array.from({ length }, (_, index) => (seed + index) & 255))
 const key = seed => bytes(32, seed)
@@ -84,7 +84,7 @@ test('publisher namespace advertises canonical compatibility before catalog proj
     protocolMinor: 8,
     requiredCapabilities: ['z-catalog:v1', 'a-catalog:v1', 'z-catalog:v1'],
   })
-  t.is(descriptor.minimumProtocolMajor, 1)
+  t.is(descriptor.minimumProtocolMajor, PROTOCOL_MAJOR)
   t.is(descriptor.protocolMinor, 8)
   t.alike(descriptor.requiredCapabilities, [
     'a-catalog:v1',
@@ -108,7 +108,7 @@ test('publisher namespace advertises canonical compatibility before catalog proj
   const incompatible = createPublisherNamespaceDescriptor({
     genesisRootKey: key(6),
     catalogBootstrapKey: key(38),
-    minimumProtocolMajor: 2,
+    minimumProtocolMajor: PROTOCOL_MAJOR + 1,
   })
   try {
     decodePublisherNamespaceDescriptor(encodePublisherNamespaceDescriptor(incompatible))
@@ -133,6 +133,7 @@ test('legacy namespace omissions require an explicit compatible protocol declara
     t.is(error.code, PROTOCOL_ERROR_CODES.ADVERTISEMENT_REQUIRED)
   }
   const decoded = decodePublisherNamespaceDescriptor(legacy, {
+    protocolMajor: 1,
     legacyCompatibility: {
       minimumProtocolMajor: 1,
       protocolMinor: 0,

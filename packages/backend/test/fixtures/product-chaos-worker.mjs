@@ -64,6 +64,16 @@ class JsonMigrationStore {
     await writeJson(this.file, state)
   }
 }
+function fileStateRepository(file) {
+  return {
+    async load() {
+      return readJson(file, null)
+    },
+    async save(state) {
+      await writeJson(file, state)
+    }
+  }
+}
 
 function publicationBatch(sequence = 1) {
   const publisher = keyPair(31)
@@ -98,8 +108,7 @@ function publisherPage(cursor, nextCursor, sequence, title = `Chaos ${sequence}`
   })
 }
 
-function indexPage(cursor = '0', title = 'Stable') {
-  const curator = keyPair(41)
+function indexPage(cursor = '0', title = 'Stable', curator = keyPair(41)) {
   const curatorId = hex(curator.publicKey)
   return {
     curatorId,
@@ -109,7 +118,7 @@ function indexPage(cursor = '0', title = 'Stable') {
       nextCursor: null,
       records: [{
         kind: 'publication-reference',
-        entityRef: 'work:chaos',
+        entityRef: `work:${title.toLowerCase()}`,
         publicationId: 'a'.repeat(64),
         publisherId: 'b'.repeat(64),
         title,
@@ -294,17 +303,27 @@ async function stalePublisher() {
 }
 
 async function equivocatedIndex() {
-  const original = indexPage('0', 'Stable')
+  const stateFile = path.join(storagePath, 'chaos-index-state.json')
+  const stateRepository = fileStateRepository(stateFile)
+  const stable = indexPage('0', 'Stable', keyPair(40))
+  const original = indexPage('0', 'Original', keyPair(41))
   if (phase === 'prepare') {
-    const manager = createIndexFeedManager({ now: () => 150, acceptRecord: async () => barrier('index-transfer-active') })
-    manager.subscribe(original.curatorId)
-    await manager.syncFeed({ curatorId: original.curatorId, fetchPage: async () => original.page })
+    const manager = createIndexFeedManager({ now: () => 150, stateRepository })
+    await manager.subscribe(stable.curatorId)
+    await manager.syncFeed({ curatorId: stable.curatorId, fetchPage: async () => stable.page })
+    await manager.subscribe(original.curatorId)
+    const activeManager = createIndexFeedManager({
+      now: () => 150,
+      stateRepository,
+      acceptRecord: async () => barrier('index-transfer-active')
+    })
+    await activeManager.syncFeed({ curatorId: original.curatorId, fetchPage: async () => original.page })
     return
   }
-  const manager = createIndexFeedManager({ now: () => 150 })
-  manager.subscribe(original.curatorId)
+  const manager = createIndexFeedManager({ now: () => 150, stateRepository })
+  await manager.subscribe(original.curatorId)
   await manager.syncFeed({ curatorId: original.curatorId, fetchPage: async () => original.page })
-  const fork = indexPage('0', 'Equivocated')
+  const fork = indexPage('0', 'Equivocated', keyPair(41))
   const outcome = await manager.syncFeed({ curatorId: fork.curatorId, fetchPage: async () => fork.page })
   result({ ...outcome, projectedCount: manager.getRecords().length })
 }

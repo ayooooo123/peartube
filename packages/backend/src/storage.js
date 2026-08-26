@@ -397,6 +397,7 @@ function createNetworkStartupTiming() {
 let globalSwarm = null;
 let globalBlobServer = null;
 let globalChannels = null;
+
 let globalSwarmDiagnostics = null;
 let globalNetworkStartupTiming = null;
 let globalKnownPeerCache = null;
@@ -1337,6 +1338,101 @@ export function retainSwarmDiscovery(ctx, discoveryKey, options = {}) {
   return handle
 }
 
+function isValidCoreKeyHex(value) {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value)
+}
+
+/**
+ * Retain discovery for a PublicBee and the video/thumbnail blob cores it advertises.
+ *
+ * @param {import('./types.js').StorageContext} ctx
+ * @param {string} publicBeeKeyHex
+ * @param {{ label?: string, maxVideos?: number, loadPublicBee?: Function }} [options]
+ * @returns {Promise<{publicBeeKey: string, videos: number, blobCores: number, thumbnailBlobCores: number, discoveryHandles: number, retained: number, errors: number, lastError: string | null}>}
+ */
+export async function retainPublicBeeContentDiscovery(ctx, publicBeeKeyHex, options = {}) {
+  const stats = {
+    publicBeeKey: publicBeeKeyHex,
+    videos: 0,
+    blobCores: 0,
+    thumbnailBlobCores: 0,
+    discoveryHandles: getSwarmDiscoveryHandles(ctx).size,
+    retained: 0,
+    errors: 0,
+    lastError: null,
+  }
+  const signal = ctx?.lifecycle?.signal
+  const loadPublicBeeImpl = typeof options.loadPublicBee === 'function'
+    ? options.loadPublicBee
+    : loadPublicBee
+  if (signal?.aborted) return stats
+
+  if (!isValidCoreKeyHex(publicBeeKeyHex)) {
+    stats.errors += 1
+    stats.lastError = 'invalid-publicBeeKey'
+    return stats
+  }
+
+  let publicBee = null
+  try {
+    publicBee = await loadPublicBeeImpl(ctx, publicBeeKeyHex)
+    if (signal?.aborted) return stats
+  } catch (err) {
+    stats.errors += 1
+    stats.lastError = err?.message || String(err)
+    return stats
+  }
+
+  let videos = []
+  try {
+    videos = await publicBee?.listVideos?.().catch(() => [])
+    if (signal?.aborted) return stats
+  } catch (err) {
+    stats.errors += 1
+    stats.lastError = err?.message || String(err)
+    videos = []
+  }
+
+  const maxVideos = Number.isFinite(options.maxVideos) && options.maxVideos > 0
+    ? Math.floor(options.maxVideos)
+    : 200
+  const coreKeys = new Map()
+  for (const video of (Array.isArray(videos) ? videos.slice(0, maxVideos) : [])) {
+    stats.videos += 1
+    if (isValidCoreKeyHex(video?.blobsCoreKey)) coreKeys.set(video.blobsCoreKey.toLowerCase(), 'blob')
+    if (isValidCoreKeyHex(video?.thumbnailBlobsCoreKey)) coreKeys.set(video.thumbnailBlobsCoreKey.toLowerCase(), 'thumbnail')
+  }
+
+  for (const [coreKeyHex, kind] of coreKeys) {
+    if (signal?.aborted) return stats
+    try {
+      const core = ctx.store?.get?.(b4a.from(coreKeyHex, 'hex'))
+      if (core) {
+        if (typeof ctx.ownResource === 'function') {
+          ctx.ownResource(`retained ${kind} core ${coreKeyHex.slice(0, 16)}`, core, 'close')
+        } else {
+          ownContextResource(ctx, `retained ${kind} core ${coreKeyHex.slice(0, 16)}`, core, 'close')
+        }
+      }
+      await core?.ready?.()
+      if (signal?.aborted) return stats
+      if (core?.discoveryKey && retainSwarmDiscovery(ctx, core.discoveryKey, {
+        label: `${options.label || 'publicBee'}:${kind}:${coreKeyHex.slice(0, 16)}`
+      })) {
+        stats.retained += 1
+        if (kind === 'thumbnail') stats.thumbnailBlobCores += 1
+        else stats.blobCores += 1
+      }
+    } catch (err) {
+      stats.errors += 1
+      stats.lastError = err?.message || String(err)
+    }
+  }
+
+  stats.discoveryHandles = getSwarmDiscoveryHandles(ctx).size
+  return stats
+}
+
 
 
 
@@ -1952,6 +2048,8 @@ export async function initializeStorage(config) {
   // playback stuck at "0 peers"; re-dialing known-good peers (seeders/relays we
   // have reached before) gives an immediate path while DHT discovery catches up.
   // Bounded and best-effort; joinPeer is idempotent so this never duplicates an
+
+
   // existing connection.
   if (!swarm._peartubeOffline && typeof swarm.joinPeer === 'function') {
     lifecycle.defer('known peer warm reconnect', async (signal) => {
@@ -2026,6 +2124,7 @@ export async function initializeStorage(config) {
     if (globalChannels === channels) globalChannels = null
     if (globalMetaDb === metaDb) globalMetaDb = null
     if (globalKnownPeerCache === knownPeerCache) globalKnownPeerCache = null
+
     globalSwarmDiagnostics = null
     globalNetworkStartupTiming = null
     networkStats = null
@@ -2047,6 +2146,7 @@ export async function initializeStorage(config) {
     channels,
     wakeup,
     knownPeerCache,
+
     platform,
     storedProtocol,
     // null unless the operator configured block offload. The upload path reads
@@ -2393,6 +2493,12 @@ export async function loadPublicBee(ctx, publicBeeKeyHex) {
         console.error('[Storage] loadPublicBee failed:', err.message)
         try { await cleanupContextResource(ctx, bee) } catch { /* best effort */ }
         throw err
+      }
+      if (ctx.swarm && bee.discoveryKey) {
+        retainSwarmDiscovery(ctx, bee.discoveryKey, {
+          label: `publicBee:${publicBeeKeyHex.slice(0, 16)}`
+        })
+        console.log('[Storage] loadPublicBee: joined swarm for:', publicBeeKeyHex.slice(0, 16))
       }
 
       console.log('[Storage] loadPublicBee: ready:', publicBeeKeyHex.slice(0, 16), 'length:', bee.core?.length)
@@ -3117,6 +3223,7 @@ export function getNetworkStats() {
         offline: Boolean(globalSwarm._peartubeOffline),
         offlineReason: globalSwarm._peartubeOfflineReason || null,
         listenResolved: Boolean(globalSwarm._peartubeListenResolved),
+
         dht: {
           firewalled: globalSwarm.dht?.firewalled ?? null,
           bootstrapped: globalSwarm.dht?.bootstrapped ?? null,
@@ -3153,8 +3260,8 @@ export function getNetworkStatsReadable() {
         `Connections: ${globalSwarm.connections?.size || 0}`,
         `Peers discovered: ${globalSwarm.peers?.size || 0}`,
         `Swarm offline: ${Boolean(globalSwarm._peartubeOffline)}`,
-        `Swarm offline reason: ${globalSwarm._peartubeOfflineReason || 'none'}`,
         `Swarm listen resolved: ${Boolean(globalSwarm._peartubeListenResolved)}`,
+
         `DHT firewalled: ${dht?.firewalled ?? 'unknown'}`,
         `DHT bootstrapped: ${dht?.bootstrapped ?? 'unknown'}`,
         `DHT online: ${dht?.online ?? 'unknown'}`

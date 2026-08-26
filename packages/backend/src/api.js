@@ -2149,9 +2149,15 @@ export function createApi({
 
   function exactSourceLocators(manifest) {
     const renditions = (manifest?.body?.renditions || []).filter(rendition => rendition?.purpose === 'original')
-    const locators = renditions.map(rendition => {
-      const core = normalizeAssetCoreRefV2(rendition?.core)
-      return {
+    const locators = []
+    for (const rendition of renditions) {
+      let core
+      try {
+        core = normalizeAssetCoreRefV2(rendition?.core)
+      } catch {
+        continue
+      }
+      locators.push({
         renditionId: rendition.renditionId,
         assetId: core.assetId,
         coreKey: core.key,
@@ -2161,8 +2167,8 @@ export function createApi({
         byteLength: core.byteLength,
         treeHash: core.treeHash,
         blockSize: core.blockSize,
-      }
-    })
+      })
+    }
     if (locators.length !== 1) throw new Error('publication must have exactly one local original source')
     return locators
   }
@@ -2616,7 +2622,9 @@ export function createApi({
               'watched',
               seedMetadata,
               { protectSelf: true, protectedKeys: getActiveRangeSeedKeys() },
-            )
+            ).catch(err => {
+              console.log('[API] Failed to register seed:', err?.message || err)
+            })
           }
 
           if (videoStats) {
@@ -2680,7 +2688,7 @@ export function createApi({
             cachedBytes = Math.min(totalBytes, cachedBytes + (
               Number.isFinite(byteLength) && byteLength > 0 ? byteLength : bytesPerBlock
             ))
-            void seedingManager?.updateSeedCachedBytes?.(driveKey, videoPath, Math.round(cachedBytes))
+            seedingManager?.updateSeedCachedBytes?.(driveKey, videoPath, Math.round(cachedBytes))?.catch?.(() => {})
             if (videoStats) {
               videoStats.updateStats(driveKey, videoPath, {
                 downloadedBlocks: downloaded.size,
@@ -2699,14 +2707,70 @@ export function createApi({
           core.on?.('download', onDownload)
           core.on?.('upload', onUpload)
 
-          const range = core.download({ start: startBlock, end: endBlock, linear: true })
-          const timers = new Set()
-          const cleanup = async () => {
-            await cleanupRangeRequest(prefetchKey)
+          const getHeadBlockCount = (totalBlocks, totalBytes) => {
+            if (!totalBlocks || totalBlocks <= 0) return 0
+            if (!totalBytes || totalBytes <= 0) return Math.min(totalBlocks, 16)
+            const bytesPerBlock = totalBytes / totalBlocks
+            const minHeadBytes = 4 * 1024 * 1024
+            const maxHeadBytes = 32 * 1024 * 1024
+            const adaptiveBytes = Math.round(totalBytes * 0.02)
+            const headTargetBytes = Math.min(maxHeadBytes, Math.max(minHeadBytes, adaptiveBytes))
+            const headBlocks = Math.ceil(headTargetBytes / bytesPerBlock)
+            return Math.max(1, Math.min(totalBlocks, headBlocks))
           }
-          activeRangeRequests.set(prefetchKey, {
-            ranges: [range],
-            timers,
+
+          const getTailBlockCount = (totalBlocks, totalBytes) => {
+            if (!totalBlocks || totalBlocks <= 0) return 0
+            if (!totalBytes || totalBytes <= 0) return Math.min(totalBlocks, 16)
+            const bytesPerBlock = totalBytes / totalBlocks
+            const minTailBytes = 2 * 1024 * 1024
+            const maxTailBytes = 16 * 1024 * 1024
+            const adaptiveBytes = Math.round(totalBytes * 0.01)
+            const tailTargetBytes = Math.min(maxTailBytes, Math.max(minTailBytes, adaptiveBytes))
+            const tailBlocks = Math.ceil(tailTargetBytes / bytesPerBlock)
+            return Math.max(1, Math.min(totalBlocks, tailBlocks))
+          }
+
+          const getMidBlockCount = (totalBlocks, totalBytes) => {
+            if (!totalBlocks || totalBlocks <= 0) return 0
+            if (!totalBytes || totalBytes <= 0) return Math.min(totalBlocks, 8)
+            const bytesPerBlock = totalBytes / totalBlocks
+            const targetBytes = 2 * 1024 * 1024
+            const midBlocks = Math.ceil(targetBytes / bytesPerBlock)
+            return Math.max(1, Math.min(totalBlocks, midBlocks))
+          }
+
+          const headBlocks = getHeadBlockCount(totalBlocks, totalBytes)
+          const tailBlocks = getTailBlockCount(totalBlocks, totalBytes)
+          const midBlocks = getMidBlockCount(totalBlocks, totalBytes)
+
+          let fullDownloadStarted = false
+          let fillCancelled = false
+          let currentFillRange = null
+          const blobCoreKeyHex = String(blobsCoreKey || '').toLowerCase()
+
+          let finishFullDownload = null
+          let startFillPass = null
+          let startFullDownload = null
+
+          const unsubscribePlayhead = subscribeBlobPlayhead((event) => {
+            if (fillCancelled || !fullDownloadStarted) return
+            if (event.coreKeyHex !== blobCoreKeyHex) return
+            if (event.windowEnd <= startBlock || event.windowStart >= endBlock) return
+            const nextAnchor = Math.max(startBlock, Math.min(event.windowEnd, endBlock - 1))
+            const staleRange = currentFillRange
+            currentFillRange = null
+            if (staleRange) {
+              const idx = rangeEntry.ranges.indexOf(staleRange)
+              if (idx >= 0) rangeEntry.ranges.splice(idx, 1)
+              try { staleRange.destroy() } catch { /* best effort */ }
+            }
+            startFillPass?.(nextAnchor)
+          })
+
+          const rangeEntry = {
+            ranges: [],
+            timers: new Set(),
             core,
             onDownload,
             onUpload,
@@ -2715,11 +2779,17 @@ export function createApi({
             seedKey: `${driveKey}:${videoPath}`,
             release: releasePrefetchGuards,
             cancel: () => {
-              try { range.destroy?.() } catch { /* best effort */ }
+              fillCancelled = true
+              unsubscribePlayhead()
+              for (const r of rangeEntry.ranges) {
+                try { r.destroy?.() } catch { /* best effort */ }
+              }
             },
-          })
-          Promise.resolve(range.done()).then(async completed => {
-            if (completed === false) return cleanup()
+          }
+          activeRangeRequests.set(prefetchKey, rangeEntry)
+
+          finishFullDownload = async () => {
+            unsubscribePlayhead()
             await deleteDownloadIntent(ctx, driveKey, videoPath).catch(() => {})
             if (seedingManager) {
               await seedingManager.addSeed(
@@ -2728,18 +2798,87 @@ export function createApi({
                 'watched',
                 { ...seedMetadata, byteLength: totalBytes },
                 { protectSelf: true, protectedKeys: getActiveRangeSeedKeys() },
-              )
+              ).catch(() => {})
             }
             if (videoStats) {
               videoStats.updateStats(driveKey, videoPath, { status: 'complete', downloadedBlocks: totalBlocks })
               videoStats.emitStats(driveKey, videoPath, true)
             }
-            await cleanup()
-          }).catch(async error => {
-            console.log('[API] Prefetch range failed:', error?.message || error)
-            await cleanup()
-          })
+            await cleanupRangeRequest(prefetchKey)
+          }
 
+          const failFullDownload = async (error) => {
+            unsubscribePlayhead()
+            console.log('[API] Prefetch range failed:', error?.message || error)
+            await cleanupRangeRequest(prefetchKey)
+          }
+
+          startFillPass = (anchor) => {
+            if (fillCancelled) return
+            const fillRange = core.download({ start: anchor, end: endBlock, linear: true })
+            currentFillRange = fillRange
+            rangeEntry.ranges.push(fillRange)
+            fillRange.done().then((completed) => {
+              if (completed === false || fillCancelled || currentFillRange !== fillRange) return
+              if (anchor > startBlock) {
+                startFillPass(startBlock)
+                return
+              }
+              void finishFullDownload()
+            }).catch(failFullDownload)
+          }
+
+          startFullDownload = () => {
+            if (fullDownloadStarted || fillCancelled) return
+            fullDownloadStarted = true
+            startFillPass(startBlock)
+          }
+
+          const startInitPrefetch = () => {
+            if (headBlocks > 0 && headBlocks < totalBlocks) {
+              const headEnd = Math.min(endBlock, startBlock + headBlocks)
+              const headRange = core.download({ start: startBlock, end: headEnd, linear: true })
+              rangeEntry.ranges.push(headRange)
+              let headTimeout = setTimeout(() => {
+                startFullDownload()
+              }, 1500)
+              headRange.done().then((completed) => {
+                if (headTimeout) clearTimeout(headTimeout)
+                if (completed === false || fillCancelled) return
+                startFullDownload()
+              }).catch(() => {
+                if (headTimeout) clearTimeout(headTimeout)
+                startFullDownload()
+              })
+            } else {
+              startFullDownload()
+            }
+
+            if (tailBlocks > 0 && tailBlocks < totalBlocks) {
+              const tailStart = Math.max(startBlock, endBlock - tailBlocks)
+              if (tailStart > startBlock + Math.max(1, headBlocks)) {
+                const tailRange = core.download({ start: tailStart, end: endBlock })
+                rangeEntry.ranges.push(tailRange)
+                tailRange.done().then((completed) => {
+                  if (completed === false) return
+                }).catch(() => {})
+              }
+            }
+
+            if (midBlocks > 0 && midBlocks < totalBlocks && totalBlocks > (headBlocks + tailBlocks + midBlocks + 4)) {
+              const midStart = startBlock + Math.floor((totalBlocks - midBlocks) / 2)
+              const midEnd = midStart + midBlocks
+              if (midStart > startBlock + headBlocks && midEnd < endBlock - tailBlocks) {
+                const midRange = core.download({ start: midStart, end: midEnd })
+                rangeEntry.ranges.push(midRange)
+                midRange.done().then((completed) => {
+                  if (completed === false) return
+                }).catch(() => {})
+              }
+            }
+          }
+
+          startInitPrefetch()
           return {
             success: true,
             totalBlocks,

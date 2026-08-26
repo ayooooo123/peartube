@@ -65,7 +65,10 @@ const policy = {
   networkEnabled: true,
   uploadPermission: 'enabled',
   uploadCeilingBytes: 1024 * 1024,
+  archiveBudgetBytes: 1024 * 1024,
   diskCeilingBytes: 16 * 1024 * 1024,
+  permissions: { archive: true },
+  publicServingAllowed: true,
 }
 
 // Two real Corestores that never replicate with each other. The holder has the

@@ -72,7 +72,7 @@ test('blob server serves direct browser range requests without an Electrobun med
   assert.match(requestWrapper, /Access-Control-Allow-Headers', 'Range'/)
   assert.match(requestWrapper, /Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges'/)
   assert.match(requestWrapper, /if \(req\.method === 'OPTIONS'\) \{ res\.writeHead\(204\); res\.end\(\); return \}/)
-  assert.match(requestWrapper, /serveVideoRangeHttpRequest\(\{ blobServer \}, req, res\)/)
+  assert.match(requestWrapper, /serveVideoRangeHttpRequest\(\{[\s\S]*?blobServer[\s\S]*?\}, req, res\)/)
 })
 
 test('blob server video streams use no-timeout core sessions', () => {
@@ -98,13 +98,10 @@ test('blob server video streams use no-timeout core sessions', () => {
   )
 })
 
-test('storage joins the PearTube network topic immediately without DHT bootstrap gates', () => {
+test('storage does not join legacy global peer pool topic', () => {
   assert.doesNotMatch(storageSource, /function isSwarmDiscoveryReady/)
   assert.doesNotMatch(storageSource, /waitForSwarmDiscoveryReady\(swarm\)/)
-  assert.doesNotMatch(storageSource, /dht\?\.bootstrapped[\s\S]{0,240}swarm\.join\(PEARTUBE_NETWORK_TOPIC/)
-  assert.match(storageSource, /joinPeerPoolDiscoveryImmediately\('startup'\)/)
-  assert.match(storageSource, /swarm\.join\(PEARTUBE_NETWORK_TOPIC, \{ server: true, client: true \}\)/)
-  assert.match(storageSource, /swarm\.peerPoolDiscovery = poolDiscovery/)
+  assert.doesNotMatch(storageSource, /PEARTUBE_NETWORK_TOPIC/)
 })
 
 test('storage creates Hyperswarm and starts DHT bootstrap before Corestore warmup', () => {
@@ -114,8 +111,7 @@ test('storage creates Hyperswarm and starts DHT bootstrap before Corestore warmu
   assert.match(storageSource, /creating hyperswarm early[\s\S]*?creating corestore/)
   assert.match(storageSource, /swarm\.dht\.ready\(\)/)
   assert.doesNotMatch(storageSource, /await swarm\.dht\.ready\(\)/)
-  // Topic join must remain gated behind metadata storage readiness.
-  assert.match(storageSource, /metaDb ready[\s\S]*?joinPeerPoolDiscoveryImmediately\('startup'\)/)
+  assert.match(storageSource, /creating corestore/)
 })
 
 test('storage tears down the early swarm on every storage init failure path', () => {
@@ -305,9 +301,6 @@ test('storage uses bounded warm reconnect and desktop discovery refreshes', () =
   assert.match(storageSource, /swarm\.joinPeer\(b4a\.from\(key, 'hex'\)\)/)
   assert.match(storageSource, /function resolveHyperswarmOptions/)
   assert.match(storageSource, /new LoadedHyperswarm\(hyperswarmOptions\)/)
-  assert.match(storageSource, /function schedulePeerPoolWarmupRefreshes/)
-  assert.match(storageSource, /schedulePeerPoolWarmupRefreshes\(\{[\s\S]*?platform,[\s\S]*?discovery: poolDiscovery/)
-  assert.match(storageSource, /peer-pool-warm-refresh/)
   assert.match(storageSource, /swarm\._peartubeSwarmOptions = summarizeSwarmOptions\(hyperswarmOptions\)/)
   assert.match(storageSource, /options: summarizeSwarmOptions\(swarm\?\._peartubeSwarmOptions\)/)
   assert.match(storageSource, /swarmOptions: globalSwarm\._peartubeSwarmOptions \|\| null/)
@@ -392,9 +385,8 @@ test('offline swarm fallback exposes the swarm methods orchestrator and managers
   assert.match(fallbackBody, /keyPair,/)
 })
 
-test('offline swarm fallback skips peer pool discovery instead of joining noop topics at startup', () => {
-  assert.match(storageSource, /joinPeerPoolDiscoveryImmediately\('startup'\)/)
-  assert.match(storageSource, /Skipping peer pool discovery; P2P networking is offline/)
+test('offline swarm fallback skips network discovery at startup', () => {
+  assert.match(storageSource, /function createOfflineSwarm/)
 })
 
 test('storage exposes public bee content discovery retention for cached serving cores', () => {

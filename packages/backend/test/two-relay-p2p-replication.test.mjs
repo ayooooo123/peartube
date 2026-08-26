@@ -10,7 +10,7 @@ import test from 'brittle'
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 import { EventEmitter } from 'node:events'
-import { Duplex, PassThrough } from 'node:stream'
+import { Duplex } from 'node:stream'
 
 import {
   createPermissionlessArchiveNetwork,
@@ -30,14 +30,29 @@ const transportIdA = bytes(32, 201)
 const transportIdB = bytes(32, 202)
 
 function connectionPair () {
-  const aToB = new PassThrough()
-  const bToA = new PassThrough()
-  const a = Duplex.from({ readable: bToA, writable: aToB })
-  const b = Duplex.from({ readable: aToB, writable: bToA })
+  const make = (peer) => new Duplex({
+    write (chunk, _encoding, callback) {
+      const target = peer()
+      if (target && !target.destroyed && !target.readableEnded) target.push(chunk)
+      callback()
+    },
+    final (callback) {
+      const target = peer()
+      if (target && !target.destroyed && !target.readableEnded) target.push(null)
+      callback()
+    },
+    read () {},
+  })
+  let a = null
+  let b = null
+  a = make(() => b)
+  b = make(() => a)
   a.userData = null
   b.userData = null
   a.remotePublicKey = transportIdB
   b.remotePublicKey = transportIdA
+  a.once('close', () => { if (!b.destroyed) b.destroy() })
+  b.once('close', () => { if (!a.destroyed) a.destroy() })
   return { a, b }
 }
 
@@ -64,7 +79,7 @@ function mockCore () {
     ready: async () => {},
     length: 8,
     has: async () => true,
-    proof: async ({ block }) => ({ block: { index: block.index, value: bytes(64, 9) } }),
+    proof: async ({ block }) => ({ block: { index: block?.index ?? 0, value: bytes(64, 9) } }),
     verifyFullyRemote: async () => true,
     download: () => {},
   }
@@ -80,13 +95,25 @@ test('two relays carry a pledge from request to verified offload evidence over t
   const swarmA = fakeSwarm({ publicKey: transportIdA, secretKey: bytes(32, 1) })
   const swarmB = fakeSwarm({ publicKey: transportIdB, secretKey: bytes(32, 2) })
 
+  const serverPolicy = {
+    networkEnabled: true,
+    uploadPermission: 'enabled',
+    publicServingAllowed: true,
+    uploadCeilingBytes: 10 * 1024 * 1024 * 1024,
+    archiveBudgetBytes: 10 * 1024 * 1024 * 1024,
+    contributionBudgetBytes: 10 * 1024 * 1024 * 1024,
+    permissions: { archive: true, contribute: true },
+  }
+
   const scopedA = createScopedNetworkRuntime({
     swarm: swarmA,
     store: { get: () => mockCore() },
+    initialNetworkPolicy: serverPolicy,
   })
   const scopedB = createScopedNetworkRuntime({
     swarm: swarmB,
     store: { get: () => mockCore() },
+    initialNetworkPolicy: serverPolicy,
   })
 
   await scopedA.start()
@@ -150,7 +177,8 @@ test('two relays carry a pledge from request to verified offload evidence over t
 
   t.is(reqResult.status, 'published')
 
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 20; i++) {
+    if (networkA.getStatus().receivedPledges >= 1) break
     await new Promise(r => setTimeout(r, 50))
   }
 
@@ -162,14 +190,17 @@ test('two relays carry a pledge from request to verified offload evidence over t
   t.is(challengeCycleResult.status, 'published', 'Relay A issued possession challenge')
 
   for (let i = 0; i < 20; i++) {
+    if (networkA.getOffloadEvidence(publicationId, [{ coreKey, start: 0, end: 8 }]).length >= 1) break
     await new Promise(r => setTimeout(r, 50))
   }
 
   const evidence = networkA.getOffloadEvidence(publicationId, [{ coreKey, start: 0, end: 8 }])
   t.is(evidence.length, 1, 'Relay A verified offload evidence')
-  t.is(evidence[0].passed, true, 'Possession proof passed')
-  t.is(evidence[0].connected, true, 'Relay B is connected as a peer')
-  t.is(evidence[0].recent, true, 'Evidence timestamp is fresh')
+  if (evidence[0]) {
+    t.is(evidence[0].passed, true, 'Possession proof passed')
+    t.is(evidence[0].connected, true, 'Relay B is connected as a peer')
+    t.is(evidence[0].recent, true, 'Evidence timestamp is fresh')
+  }
 
   await networkA.close()
   await networkB.close()

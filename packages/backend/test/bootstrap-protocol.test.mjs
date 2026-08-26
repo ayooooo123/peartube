@@ -12,7 +12,7 @@ import {
 } from '../src/discovery/bootstrap-protocol.js'
 import { createApplicationEnvelope } from '../src/records/application-envelope.js'
 import { encodeCanonical } from '../src/publisher/canonical.js'
-import { PROTOCOL_ERROR_CODES } from '../src/network/index.js'
+import { PROTOCOL_ERROR_CODES, PROTOCOL_MAJOR } from '../src/network/index.js'
 
 const signer = crypto.keyPair(Buffer.alloc(32, 1))
 const trustedRoot = crypto.keyPair(Buffer.alloc(32, 2))
@@ -43,7 +43,7 @@ test('bootstrap locator is bounded, signed, expiring, and metadata-only', async 
 })
 test('bootstrap locator advertises canonical compatibility and rejects unknown requirements before catalog verification', async (t) => {
   const record = locator({ requiredCapabilities: ['z-extension:v1', 'a-extension:v1', 'z-extension:v1'], protocolMinor: 9 })
-  t.is(record.body.minimumProtocolMajor, 1)
+  t.is(record.body.minimumProtocolMajor, PROTOCOL_MAJOR)
   t.is(record.body.protocolMinor, 9)
   t.alike(record.body.requiredCapabilities, [
     'a-extension:v1',

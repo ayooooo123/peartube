@@ -33,6 +33,7 @@ import {
 import {
   PUBLISHER_LIMITS,
   PUBLISHER_RECORD_TYPES,
+  toHex,
 } from './publisher/canonical.js';
 import {
   decodePublisherCatalogFrame,
@@ -990,7 +991,7 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
   assertUploadNotCancelled(runtime.signal);
   // The rendition descriptor is the one the caller already wrote (prepared),
   // so the publication describes exactly the bytes that landed.
-  const coreKey = rendition.core.key;
+  const coreKey = toHex(rendition.core.key, 32);
   // Cover art is part of the publication, not a side channel: a relay that
   // seeds this movie holds the poster too, and a consumer fetches it over the
   // same authorized asset path as the video. Nothing has to leave the swarm.
@@ -1008,7 +1009,7 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
       videoId: metadata.id,
       blobId: artwork.blobId ? String(artwork.blobId) : null,
       assetId: posterRendition.core.assetId,
-      coreKey: posterRendition.core.key,
+      coreKey: toHex(posterRendition.core.key, 32),
       renditionId: posterRendition.renditionId
     })
   }
@@ -1221,7 +1222,7 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
     manifestId: manifest.body.manifestId,
     renditionId: rendition.renditionId,
     assetId: rendition.core.assetId,
-    coreKey: rendition.core.key,
+    coreKey: toHex(rendition.core.key, 32),
     publisherId: manifest.body.publisherId,
     sequence: firstSequence,
     entityRef: subjectRef.entityId,
@@ -1237,7 +1238,7 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
       manifestId: manifest.body.manifestId,
       renditionId: rendition.renditionId,
       assetId: rendition.core.assetId,
-      coreKey: rendition.core.key,
+      coreKey: toHex(rendition.core.key, 32),
       publisherId: manifest.body.publisherId,
       sequence: firstSequence,
       metadataClaimId: claims[0].claimId,

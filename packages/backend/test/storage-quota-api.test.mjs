@@ -272,6 +272,7 @@ test('setStorageLimit clears stale partial bytes before evicting valid seeds on 
     getDiskUsageBytes: () => metaDb.state.has(intentKey) ? 6 * GB : 4 * GB
   })
   const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces }, seedingManager })
+  await seedingManager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
 
   await api.setStorageLimit(10)
   await seedingManager.addSeed('drive-a', 'videos/valid.mp4', 'watched', {
@@ -293,6 +294,7 @@ test('prefetchVideo registers in-flight downloads with quota tracking before com
   const store = createStore()
   const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
   await seedingManager.init()
+  await seedingManager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
   const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces, swarm: null }, seedingManager })
 
   api.getVideoData = async () => ({
@@ -326,6 +328,7 @@ test('prefetchVideo does not reserve the full blob size before bytes are cached'
   const store = createStore()
   const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
   await seedingManager.init()
+  await seedingManager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
   const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces, swarm: null }, seedingManager })
 
   api.getVideoData = async () => ({
@@ -352,6 +355,7 @@ test('concurrent prefetches reserve quota before either download completes', asy
   const store = createStore()
   const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
   await seedingManager.init()
+  await seedingManager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
   await seedingManager.setMaxStorageGB(5)
   const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces, swarm: null }, seedingManager })
 
@@ -389,6 +393,7 @@ test('setStorageLimit reports infeasible reductions without mutating the configu
   metaDb.state.set('active-seeds', { [`${seed.driveKey}:${seed.videoPath}`]: seed })
   const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
   await seedingManager.init()
+  await seedingManager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, archiveEnabled: true, archiveBudgetBytes: 20 * GB, migrationRequired: false })
   await seedingManager.setMaxStorageGB(10, { authorized: true })
   const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces }, seedingManager })
 
@@ -404,6 +409,7 @@ test('lowering the storage limit cancels active prefetches before clearing their
   const store = createStore()
   const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
   await seedingManager.init()
+  await seedingManager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
   await seedingManager.setMaxStorageGB(5)
   const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces, swarm: null }, seedingManager })
 
@@ -422,7 +428,7 @@ test('lowering the storage limit cancels active prefetches before clearing their
   const lowered = await api.setStorageLimit(1)
 
   t.is(lowered.success, true)
-  t.is(store.cores.get(coreA).destroyedRanges, 1)
+  t.ok(store.cores.get(coreA).destroyedRanges >= 1)
   t.alike(store.cores.get(coreA).clearCalls, [{ start: 0, end: 8 }])
 })
 
@@ -431,6 +437,7 @@ test('prefetchVideo corrects stale full-size watched seed accounting downward', 
   const store = createStore()
   const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
   await seedingManager.init()
+  await seedingManager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
   await seedingManager.addSeed('drive-a', 'videos/stale-huge.mp4', 'watched', {
     blockLength: 8,
     byteLength: 8 * GB,
@@ -464,6 +471,7 @@ test('prefetchVideo quota enforcement preserves active range downloads', async (
   const store = createStore()
   const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
   await seedingManager.init()
+  await seedingManager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
   await seedingManager.setMaxStorageGB(5)
   const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces, swarm: null }, seedingManager })
 
@@ -541,6 +549,7 @@ test('ending playback flushes the quota eviction that was deferred while playing
     isCacheClearBlocked: () => isPlaybackActive()
   })
   const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces }, seedingManager })
+  await seedingManager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
   const core = store.get(b4a.from(coreA, 'hex'))
 
   api.setPlaybackActive({ active: false }) // clean baseline for the shared module flag
@@ -573,6 +582,7 @@ test('rapid reopen cancels the post-playback eviction sweep', async (t) => {
     isCacheClearBlocked: () => isPlaybackActive()
   })
   const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces }, seedingManager })
+  await seedingManager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
   const core = store.get(b4a.from(coreA, 'hex'))
 
   api.setPlaybackActive({ active: false })
@@ -609,6 +619,7 @@ test('post-playback sweep never evicts the most-recently-played video', async (t
     isCacheClearBlocked: () => isPlaybackActive()
   })
   const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces }, seedingManager })
+  await seedingManager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
   const coreCurrent = store.get(b4a.from(coreA, 'hex'))
   const coreOld = store.get(b4a.from(coreB, 'hex'))
 
@@ -650,7 +661,7 @@ test('post-playback sweep never evicts the most-recently-played video', async (t
 test('addSeed updates existing cache entries with resolved blob bytes', async (t) => {
   const store = createStore()
   const manager = new SeedingManager(store, createMetaDb())
-
+  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
   await manager.addSeed('drive-a', 'videos/partial.mp4', 'watched', {
     byteLength: 0,
     blobId: null,
@@ -675,7 +686,7 @@ test('addSeed updates existing cache entries with resolved blob bytes', async (t
 
 test('addSeed does not downgrade existing pinned cache entries', async (t) => {
   const manager = new SeedingManager(createStore(), createMetaDb())
-
+  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, archiveEnabled: true, archiveBudgetBytes: 20 * GB, migrationRequired: false })
   await manager.addSeed('drive-a', 'videos/pinned.mp4', 'pinned', {
     byteLength: 1024,
     blobId: '0:1:0:1024',

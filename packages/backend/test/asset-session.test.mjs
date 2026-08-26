@@ -457,6 +457,15 @@ async function scopedAssetHarness(t, coreOverrides = {}, descriptorOverrides = {
     muxFactory: () => mux,
     authorizePublication: async request => request.manifest === manifest,
     store: { get() { return core } },
+    initialNetworkPolicy: {
+      networkEnabled: true,
+      uploadPermission: 'enabled',
+      uploadCeilingBytes: 1024 * 1024,
+      contributionBudgetBytes: 1024 * 1024,
+      publicServingAllowed: true,
+      permissions: { contribute: true, archive: true },
+      ...runtimeOverrides.initialNetworkPolicy,
+    },
     ...runtimeOverrides,
   })
   await runtime.start()
@@ -1052,7 +1061,7 @@ test('peer inventory timeout rejects with peer identity and closes the late-fram
   t.is(error.code, 'TIMEOUT')
   t.is(error.peerId, peerId)
   t.ok(assetChannel.channel.closed)
-  assetChannel.spec.messages[0].onmessage(encodePeerFrame({
+  await assetChannel.spec.messages[0].onmessage(encodePeerFrame({
     purpose: 'asset',
     type: 'asset-range-summary-page',
     requestId: 1,

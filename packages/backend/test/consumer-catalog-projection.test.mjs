@@ -2,7 +2,7 @@ import test from 'brittle'
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 
-import { createAssetManifestStore, createPublicationManifest } from '../src/assets/index.js'
+import { createAssetManifestStore, createPublicationManifest, createRenditionDescriptor, createStaticAssetManifest } from '../src/assets/index.js'
 import {
   createConsumerCatalogProjection,
   projectAuthenticatedPublisherMediaRecords,
@@ -22,16 +22,15 @@ async function ingestClaim(store, input) {
 }
 
 function testRendition(seed) {
-  return {
+  return createRenditionDescriptor({
     purpose: 'original',
     format: 'video/mp4',
-    core: {
-      key: b4a.alloc(32, seed),
-      length: 1,
+    core: createStaticAssetManifest({
       treeHash: b4a.alloc(32, seed + 1),
+      blockLength: 1,
       byteLength: 32,
-    },
-  }
+    }),
+  })
 }
 
 test('one consumer projection deduplicates bounded publisher and index introductions, with movies and series first', (t) => {

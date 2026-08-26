@@ -1316,8 +1316,8 @@ export async function writeStaticAsset({
   // back. `uploaded` is what the cleanup has to account for on either path.
   const staged = { uploaded: 0, restored: 0 }
   // Pass 1's uploads, running against the read rather than in front of it.
-  const stagingConcurrency = Number.isSafeInteger(options.offload?.uploadConcurrency) && options.offload.uploadConcurrency > 0
-    ? options.offload.uploadConcurrency
+  const stagingConcurrency = Number.isSafeInteger(offload?.uploadConcurrency) && offload.uploadConcurrency > 0
+    ? offload.uploadConcurrency
     : STAGING_UPLOAD_CONCURRENCY
   const uploads = createUploadPipeline(stagingConcurrency)
   // Set when an interruption leaves the staging core and its confirmed objects

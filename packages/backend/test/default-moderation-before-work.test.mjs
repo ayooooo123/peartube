@@ -4,12 +4,13 @@ import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 
 import { createPublicationManifest } from '../src/assets/index.js'
-import { createArchiveRequest } from '../src/archive/request.js'
+import { createStaticAssetManifest } from '../src/assets/static-core.js'
 import { createMediaGraphApi } from '../src/api/media-graph.js'
 import { createConsumerCatalogProjection } from '../src/media-graph/catalog-projection.js'
 import { createLocalMediaIndex } from '../src/indexing/local-index.js'
 import { evaluateModerationPolicy } from '../src/moderation/index.js'
 import { createScopedNetworkRuntime } from '../src/network/scoped-runtime.js'
+import { createArchiveRequest } from '../src/archive/request.js'
 
 const id = (character) => character.repeat(64)
 
@@ -137,12 +138,11 @@ test('real media graph and retained asset seams reject hidden consumer work befo
     renditions: [{
       purpose: 'video',
       format: 'video/mp4',
-      core: {
-        key: b4a.alloc(32, 92),
-        length: 2,
+      core: createStaticAssetManifest({
         treeHash: b4a.alloc(32, 93),
-        byteLength: 2048,
-      },
+        blockLength: 2,
+        byteLength: 2 * 262144,
+      }),
     }],
     keyPair: publisher,
   })
@@ -155,6 +155,10 @@ test('real media graph and retained asset seams reject hidden consumer work befo
   const swarm = fakeSwarm()
   const runtime = createScopedNetworkRuntime({
     swarm,
+    initialNetworkPolicy: {
+      networkEnabled: true,
+      permissions: { archive: true, contribute: true },
+    },
     authorizePublication: async () => true,
     authorizeConsumerWork: async ({ entityRef }) => !hiddenEntityRefs.has(entityRef),
     store: {

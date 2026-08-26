@@ -8,19 +8,33 @@ import { createStaticAssetManifest } from './static-core.js'
 const DEFAULT_MAX_ACTIVE_CORES = 4
 
 function coreKeyOf(rendition = {}) {
-  return rendition.core?.key || rendition.coreKey || null
+  let coreRef
+  try {
+    coreRef = normalizeAssetCoreRefV2(rendition.core)
+  } catch {
+    coreRef = null
+  }
+  return coreRef?.key || rendition.core?.key || rendition.coreKey || null
 }
 
 function normalizeKey(value) {
+  if (b4a.isBuffer(value) || value instanceof Uint8Array) {
+    return value.byteLength === 32 ? b4a.toString(value, 'hex') : null
+  }
   const next = String(value || '').toLowerCase()
   return /^[0-9a-f]{64}$/.test(next) ? next : null
 }
 
 function coreLengthOf(rendition = {}) {
-  const length = Number(rendition.core?.length ?? rendition.coreLength)
+  let coreRef
+  try {
+    coreRef = normalizeAssetCoreRefV2(rendition.core)
+  } catch {
+    coreRef = null
+  }
+  const length = Number(coreRef?.length ?? rendition.core?.length ?? rendition.coreLength)
   return Number.isSafeInteger(length) && length > 0 ? length : 0
 }
-
 function normalizeRange(range = {}) {
   const start = Number(range.start)
   const end = Number(range.end)

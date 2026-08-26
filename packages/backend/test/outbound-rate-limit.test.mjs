@@ -149,7 +149,10 @@ async function connectArchivePair (fixture, { schedule, sourcePolicy }) {
       networkEnabled: true,
       uploadPermission: 'enabled',
       uploadCeilingBytes: UPLOAD_CEILING_BYTES,
+      archiveBudgetBytes: UPLOAD_CEILING_BYTES,
       diskCeilingBytes: 64 * 1024 * 1024,
+      permissions: { archive: true },
+      publicServingAllowed: true,
       ...sourcePolicy,
     },
   })
@@ -161,7 +164,10 @@ async function connectArchivePair (fixture, { schedule, sourcePolicy }) {
       networkEnabled: true,
       uploadPermission: 'enabled',
       uploadCeilingBytes: UPLOAD_CEILING_BYTES,
+      archiveBudgetBytes: UPLOAD_CEILING_BYTES,
       diskCeilingBytes: 64 * 1024 * 1024,
+      permissions: { archive: true },
+      publicServingAllowed: true,
     },
   })
   await source.start()
@@ -309,7 +315,10 @@ test('a rate that survives a policy round trip still throttles the wire', async 
       networkEnabled: true,
       uploadPermission: 'enabled',
       uploadCeilingBytes: UPLOAD_CEILING_BYTES,
+      archiveBudgetBytes: UPLOAD_CEILING_BYTES,
       diskCeilingBytes: 64 * 1024 * 1024,
+      permissions: { archive: true },
+      publicServingAllowed: true,
       outboundBytesPerSecond: RATE_BYTES_PER_SECOND,
     },
   })
@@ -321,7 +330,10 @@ test('a rate that survives a policy round trip still throttles the wire', async 
       networkEnabled: true,
       uploadPermission: 'enabled',
       uploadCeilingBytes: UPLOAD_CEILING_BYTES,
+      archiveBudgetBytes: UPLOAD_CEILING_BYTES,
       diskCeilingBytes: 64 * 1024 * 1024,
+      permissions: { archive: true },
+      publicServingAllowed: true,
     },
   })
   t.teardown(async () => {
@@ -336,7 +348,10 @@ test('a rate that survives a policy round trip still throttles the wire', async 
     networkEnabled: true,
     uploadPermission: 'enabled',
     uploadCeilingBytes: UPLOAD_CEILING_BYTES,
+    archiveBudgetBytes: UPLOAD_CEILING_BYTES,
     diskCeilingBytes: 32 * 1024 * 1024,
+    permissions: { archive: true },
+    publicServingAllowed: true,
   })
 
   const pair = connectionPair({ sourcePeerFill: 212, consumerPeerFill: 211 })

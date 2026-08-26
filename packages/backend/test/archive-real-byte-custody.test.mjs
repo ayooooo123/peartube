@@ -85,6 +85,15 @@ async function createFixture (t, peerNames) {
     const runtime = createScopedNetworkRuntime({
       swarm: inertSwarm(bytes(32, 200 + offset)),
       store,
+      initialNetworkPolicy: {
+        networkEnabled: true,
+        uploadPermission: 'enabled',
+        uploadCeilingBytes: 1024 * 1024,
+        archiveBudgetBytes: 1024 * 1024,
+        diskCeilingBytes: 16 * 1024 * 1024,
+        permissions: { archive: true },
+        publicServingAllowed: true,
+      },
     })
     await runtime.start()
     runtimes.set(name, runtime)

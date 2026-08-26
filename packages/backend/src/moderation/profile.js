@@ -2,9 +2,7 @@ import { createModerationPolicyEvaluator } from './policy.js'
 
 export const CONSUMER_MODERATION_PROFILE_SETTING_KEY = 'consumer-moderation-profile:v1'
 
-export const DEFAULT_CURATED_MODERATION_FEED_IDS = Object.freeze([
-  '3f41c5f2d9a0e74c8b1f36a5d0e2947bc91e8a42f674d2be09c51a8734f0bd62',
-])
+export const DEFAULT_CURATED_MODERATION_FEED_IDS = Object.freeze([])
 
 export const DEFAULT_CONSUMER_MODERATION_PROFILE = Object.freeze({
   version: 1,

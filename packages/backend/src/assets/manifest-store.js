@@ -1,6 +1,7 @@
 import { requiredRangesForRendition } from './availability.js'
 import { verifyPublicationManifest } from './manifest.js'
-import { isArtworkRendition } from './rendition.js'
+import { isArtworkRendition, normalizeAssetCoreRefV2 } from './rendition.js'
+import { toHex } from '../publisher/canonical.js'
 
 function signerHex(value) {
   return Buffer.from(value).toString('hex')
@@ -94,11 +95,19 @@ export function createAssetManifestStore(options = {}) {
         (renditionId == null ? !isArtworkRendition(candidate) : candidate.renditionId === renditionId)
       ))
       if (!rendition) return null
+      let coreRef
+      try {
+        coreRef = normalizeAssetCoreRefV2(rendition.core)
+      } catch {
+        coreRef = null
+      }
+      const coreKey = coreRef?.key || (rendition.core?.key ? toHex(rendition.core.key, 32) : null)
+      const coreLength = coreRef?.length ?? (Number(rendition.core?.length) || 0)
       return {
         publicationId,
         renditionId: rendition.renditionId,
-        coreKey: rendition.core?.key || null,
-        coreLength: Number(rendition.core?.length) || 0,
+        coreKey,
+        coreLength,
         requiredRanges: requiredRangesForRendition(rendition),
       }
     },

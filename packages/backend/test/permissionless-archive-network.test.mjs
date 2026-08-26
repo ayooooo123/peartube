@@ -10,8 +10,9 @@ import {
   createPermissionlessArchiveNetwork,
   createArchivePolicy,
   authorizeArchiveRequestFromManifestStore,
-  verifyArchiveRequest,
+  verifyArchiveRequest
 } from '../src/archive/index.js'
+import { createStaticAssetManifest } from '../src/assets/static-core.js'
 
 const requester = crypto.keyPair(b4a.alloc(32, 71))
 const volunteer = crypto.keyPair(b4a.alloc(32, 72))
@@ -368,18 +369,23 @@ test('unverified manifests, request replay, and unsolicited pledges fail closed'
     keyPair: requester,
   })
   t.is((await network.ingestRequest(request.envelope)).reason, 'manifest-not-authorized')
-  t.is((await network.ingestRequest(request.envelope)).reason, 'request-replayed')
+  t.is((await network.ingestRequest(request.envelope)).reason, 'request-deferred')
   t.is((await network.ingestPledge({})).reason, 'pledge-invalid')
   t.is(scoped.retained.length, 0)
 })
 
 test('manifest authorization recomputes full-copy bytes instead of trusting requester accounting', async (t) => {
+  const core = createStaticAssetManifest({
+    treeHash: 'c'.repeat(64),
+    blockLength: 4,
+    byteLength: 4 * 262144,
+  })
   const manifest = {
     publicationId,
     body: {
       renditions: [{
         renditionId,
-        core: { key: coreKey, length: 4, byteLength: 4096 },
+        core,
       }],
     },
   }
@@ -388,26 +394,27 @@ test('manifest authorization recomputes full-copy bytes instead of trusting requ
       return id === publicationId ? manifest : null
     },
   }
-  const authorizeRendition = async input => input.manifest === manifest && input.start === 0 && input.end === 4
+  const authorizeRendition = async input => input.manifest === manifest && input.start === 0 && input.end === 4 && input.renditionId === renditionId
+  const testRanges = [{ coreKey: core.assetId, start: 0, end: 4 }]
   const request = {
     body: {
       publicationId,
       renditionId,
-      ranges,
-      requestedBytes: 4096,
+      ranges: testRanges,
+      requestedBytes: core.byteLength,
     },
   }
 
   t.alike(await authorizeArchiveRequestFromManifestStore(request, { manifestStore, authorizeRendition }), {
     accepted: true,
-    requestedBytes: 4096,
-    ranges,
+    requestedBytes: core.byteLength,
+    ranges: testRanges,
   })
   t.is(await authorizeArchiveRequestFromManifestStore({
     body: { ...request.body, requestedBytes: 1 },
   }, { manifestStore, authorizeRendition }), false, 'a requester cannot reserve a full core as one byte')
   t.is(await authorizeArchiveRequestFromManifestStore({
-    body: { ...request.body, ranges: [{ coreKey, start: 1, end: 4 }] },
+    body: { ...request.body, ranges: [{ coreKey: core.assetId, start: 1, end: 4 }] },
   }, { manifestStore, authorizeRendition }), false, 'archive participation accepts complete copies only')
 })
 

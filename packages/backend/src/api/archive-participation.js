@@ -1,3 +1,5 @@
+import { normalizeAssetCoreRefV2 } from '../assets/rendition.js'
+
 const HEX_32 = /^[0-9a-f]{64}$/
 const ALLOWED_STATUS_FIELDS = Object.freeze([
   'capacityBytes',
@@ -104,9 +106,10 @@ export function createArchiveParticipationApi(options = {}) {
         const manifest = manifestStore?.getManifest?.(request.publicationId)
         if (!manifest) return requestFailure('ARCHIVE_PUBLICATION_NOT_FOUND')
         const rendition = manifest.body?.renditions?.find(candidate => candidate.renditionId === request.renditionId)
-        const core = rendition?.core
-        if (!core || !HEX_32.test(core.key || '') || !Number.isSafeInteger(core.length) || core.length < 1 ||
-            !Number.isSafeInteger(core.byteLength) || core.byteLength < 1) {
+        let core
+        try {
+          core = normalizeAssetCoreRefV2(rendition?.core)
+        } catch {
           return requestFailure('ARCHIVE_RENDITION_NOT_FOUND')
         }
         const result = await archiveNetwork.requestArchive({

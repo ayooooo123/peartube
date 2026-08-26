@@ -82,6 +82,7 @@ test('tracked usage is the floor when the disk cannot be measured', async (t) =>
   // existing exactly when it is least observable.
   const manager = new SeedingManager({ get: () => ({ async ready() {}, async clear() {} }) }, createMetaDb())
   await manager.setConfig({ maxStorageGB: 5 })
+  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 5 * GB, migrationRequired: false })
   await manager.addSeed('drive-a', 'videos/a.mp4', 'watched', {
     byteLength: 4 * GB,
     blobId: '10:4:0:4096',

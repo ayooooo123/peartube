@@ -50,6 +50,26 @@ test('manifest store indexes by publication, publisher sequence, rendition, and 
   t.alike(store.getCurrentPublisherHead(Buffer.from(publisher.publicKey).toString('hex')).publicationId, second.publicationId)
   t.alike(store.getSupersedingManifests(first.body.manifestId).map(row => row.publicationId), [second.publicationId])
 })
+test('getRenditionRequirement returns normalized hex coreKey and exact block ranges for static manifests', async (t) => {
+  const store = createAssetManifestStore({ trustedSigners: [publisher.publicKey] })
+  const r = rendition(5)
+  const manifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    sequence: 1,
+    title: 'Requirement test',
+    renditions: [r],
+    keyPair: publisher,
+  })
+  await store.ingestManifest(manifest)
+
+  const req = store.getRenditionRequirement(manifest.publicationId)
+  t.is(typeof req.coreKey, 'string')
+  t.is(/^[0-9a-f]{64}$/.test(req.coreKey), true)
+  t.is(req.coreKey, r.core.assetId)
+  t.is(req.coreLength, 2)
+  t.alike(req.requiredRanges, [{ start: 0, end: 2 }])
+})
+
 
 test('manifest store deduplicates asset references per publication without conflating publishers', async (t) => {
   const store = createAssetManifestStore({ trustedSigners: [publisher.publicKey, otherPublisher.publicKey] })

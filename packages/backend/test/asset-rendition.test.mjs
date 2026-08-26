@@ -4,6 +4,7 @@ import b4a from 'b4a'
 import {
   createRenditionDescriptor,
   createSegmentIndexDescriptor,
+  createStaticAssetManifest,
   deriveRenditionId,
 } from '../src/assets/index.js'
 
@@ -23,17 +24,18 @@ function indexDescriptor() {
 }
 
 test('rendition id derives from exact reusable content, not publisher identity', (t) => {
+  const core = createStaticAssetManifest({ treeHash: hex(2), blockLength: 1, byteLength: 2048 })
   const descriptor = createRenditionDescriptor({
     purpose: 'video-playback',
     format: 'video/mp4; codecs="avc1.640028"',
-    core: { key: hex(1), length: 42, treeHash: hex(2), byteLength: 2048 },
+    core,
     segmentIndex: indexDescriptor(),
   })
   const byOtherPublisher = createRenditionDescriptor({
     publisherId: hex(99),
     purpose: 'video-playback',
     format: 'video/mp4; codecs="avc1.640028"',
-    core: { key: hex(1), length: 42, treeHash: hex(2), byteLength: 2048 },
+    core,
     segmentIndex: indexDescriptor(),
   })
 
@@ -45,15 +47,15 @@ test('rendition id changes for one-field content changes and validates core boun
   const base = createRenditionDescriptor({
     purpose: 'original',
     format: 'video/mp4',
-    core: { key: hex(3), length: 1, treeHash: hex(4), byteLength: 10 },
+    core: createStaticAssetManifest({ treeHash: hex(4), blockLength: 1, byteLength: 10 }),
   })
   const changed = createRenditionDescriptor({
     purpose: 'original',
     format: 'video/mp4',
-    core: { key: hex(3), length: 1, treeHash: hex(5), byteLength: 10 },
+    core: createStaticAssetManifest({ treeHash: hex(5), blockLength: 1, byteLength: 10 }),
   })
 
   t.unlike(base.renditionId, changed.renditionId)
-  t.exception(() => createRenditionDescriptor({ purpose: 'original', format: 'video/mp4', core: { key: 'abc', length: 1, treeHash: hex(4), byteLength: 10 } }), /core.key/)
-  t.exception(() => createRenditionDescriptor({ purpose: 'original', format: 'video/mp4', core: { key: hex(3), length: -1, treeHash: hex(4), byteLength: 10 } }), /length/)
+  t.exception(() => createRenditionDescriptor({ purpose: 'original', format: 'video/mp4', core: { kind: 'static-prologue-v1', blockSize: 262144, key: 'abc', length: 1, treeHash: hex(4), byteLength: 10 } }), /core\.key/)
+  t.exception(() => createRenditionDescriptor({ purpose: 'original', format: 'video/mp4', core: { kind: 'static-prologue-v1', blockSize: 262144, key: hex(3), length: -1, treeHash: hex(4), byteLength: 10 } }), /length/)
 })

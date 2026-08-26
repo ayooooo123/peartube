@@ -17,6 +17,7 @@ import {
   MAX_PROTOCOL_CAPABILITIES,
   MAX_PROTOCOL_CAPABILITIES_BYTES,
   MAX_PROTOCOL_CAPABILITY_BYTES,
+  PROTOCOL_MAJOR,
   assertProtocolCompatibility,
   createProtocolAdvertisement
 } from '../network/version.js'
@@ -26,7 +27,7 @@ const PUBLISHER_ID_DOMAIN = b4a.from('peartube/publisher-id/v1')
 const NAMESPACE_VERSION = 1
 export const PUBLISHER_CATALOG_CAPABILITY = 'publisher-catalog:v1'
 export const PUBLISHER_CATALOG_LEGACY_COMPATIBILITY = Object.freeze({
-  minimumProtocolMajor: 1,
+  minimumProtocolMajor: PROTOCOL_MAJOR,
   protocolMinor: 0,
   requiredCapabilities: Object.freeze([PUBLISHER_CATALOG_CAPABILITY]),
 })

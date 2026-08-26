@@ -226,6 +226,14 @@ test('a publisher scope that loses its catalog peer recovers on the next republi
     store: {},
     catalogRegistry: sourceRegistry,
     muxFactory: recordChannels(sourceChannels, 'source'),
+    initialNetworkPolicy: {
+      networkEnabled: true,
+      uploadPermission: 'enabled',
+      uploadCeilingBytes: 1024 * 1024,
+      contributionBudgetBytes: 1024 * 1024,
+      publicServingAllowed: true,
+      permissions: { contribute: true },
+    },
     now: () => clock,
     setBootstrapLocatorTimer (callback) {
       refreshCallback = callback

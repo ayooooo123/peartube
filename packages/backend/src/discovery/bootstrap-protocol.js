@@ -179,10 +179,10 @@ export async function verifyBootstrapLocator(envelope, options = {}) {
   })
   if (!signed) return false
   const signerId = envelope.signer ? toHex(envelope.signer) : null
-  const trusted = (options.trustedSigners || []).some(candidate => toHex(candidate) === signerId)
+  const isDesignatedSigner = (options.trustedSigners || []).some(candidate => toHex(candidate) === signerId)
   let catalogChainVerified = false
   if (body.rootSignerId && (options.trustedRootIds || []).includes(body.rootSignerId) && typeof options.verifyCatalogChain === 'function') {
     catalogChainVerified = Boolean(await options.verifyCatalogChain(body))
   }
-  return { trusted, catalogChainVerified, acceptedHead: body.catalogHead, signerId, body }
+  return { trusted: isDesignatedSigner, catalogChainVerified, acceptedHead: body.catalogHead, signerId, body }
 }

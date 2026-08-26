@@ -89,7 +89,7 @@ test('SeedingManager allows automatic watched seeds but requires active identity
   const manager = new SeedingManager(createStore(), metaDb, {
     identityManager: createIdentityManager(null)
   })
-
+  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 10 * 1024 * 1024, migrationRequired: false })
   t.is(await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', { byteLength: 1024 }), true)
   t.is(manager.getActiveSeeds().length, 1)
 
@@ -104,7 +104,7 @@ test('SeedingManager allows explicit seeding mutations for the active channel id
   const manager = new SeedingManager(createStore(), createMetaDb(), {
     identityManager: createIdentityManager(active)
   })
-
+  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 10 * 1024 * 1024, archiveEnabled: true, archiveBudgetBytes: 10 * 1024 * 1024, migrationRequired: false })
   await manager.pinChannel('channel-a')
   t.alike(manager.getPinnedChannels(), ['channel-a'])
 
@@ -123,7 +123,7 @@ test('seeding API keeps pin auth but allows local cache controls without active 
   const api = createApi({ ctx: { store: createStore(), metaDb: createMetaDb() }, seedingManager: manager })
 
   t.alike(await api.pinChannel('aa'.repeat(32)), { success: false, error: 'Unauthorized seeding mutation' })
-  t.alike(await api.setStorageLimit(5), { success: true })
+  t.is((await api.setStorageLimit(5)).success, true)
   t.is(manager.config.maxStorageGB, 5)
   t.alike(await api.clearCache(), {
     success: true,

@@ -9,7 +9,7 @@ import { projectSourceSelectionDiagnostics } from '../media-graph/selection-diag
 import { preparePlaybackSource } from '../playback/source-preparation.js'
 import { isPlaybackErrorCode, playbackErrorMessage, playbackErrorRetry } from '../playback/errors.js'
 import { parseBlobRef } from '../blob-utils.js'
-import { isArtworkRendition } from '../assets/rendition.js'
+import { isArtworkRendition, normalizeAssetCoreRefV2 } from '../assets/rendition.js'
 import b4a from 'b4a'
 
 const DEFAULT_PAGE_LIMIT = 50
@@ -115,7 +115,13 @@ function findPosterRendition(manifest) {
  * term survives on its own.
  */
 function renditionBlobRef(manifest, rendition) {
-  const coreKey = rendition?.core?.key
+  let core
+  try {
+    core = normalizeAssetCoreRefV2(rendition?.core)
+  } catch {
+    return null
+  }
+  const coreKey = core.key
   if (!coreKey) return null
   const entry = (manifest?.body?.provenance || []).find(candidate => (
     candidate.renditionId === rendition.renditionId &&
@@ -133,7 +139,7 @@ function renditionBlobRef(manifest, rendition) {
       blockOffset: start,
       blockLength: end - start,
       byteOffset: 0,
-      byteLength: schemaUint(rendition.core?.byteLength),
+      byteLength: schemaUint(core.byteLength),
     },
   })
 }
@@ -359,6 +365,7 @@ function schemaUint(value) {
 }
 
 function sourceDiagnosticsResponse(item) {
+  if (!item) return {}
   return {
     ...item,
     scoreLocalCompleteness: schemaUint(item.scoreLocalCompleteness),
@@ -405,14 +412,20 @@ function sourceResponse(source) {
 }
 
 function renditionResponse(rendition) {
+  let core
+  try {
+    core = normalizeAssetCoreRefV2(rendition?.core)
+  } catch {
+    core = rendition?.core || {}
+  }
   return {
     renditionId: rendition.renditionId,
     purpose: rendition.purpose,
     format: rendition.format,
-    coreKey: rendition.core.key,
-    coreLength: schemaUint(rendition.core.length),
-    treeHash: rendition.core.treeHash,
-    byteLength: schemaUint(rendition.core.byteLength),
+    coreKey: core.key || '',
+    coreLength: schemaUint(core.length),
+    treeHash: core.treeHash || '',
+    byteLength: schemaUint(core.byteLength),
   }
 }
 
@@ -640,6 +653,7 @@ export function createMediaGraphApi(options = {}) {
   function decorateSources(built, selection = built.selection) {
     const diagnostics = new Map(
       projectSourceSelectionDiagnostics(built.sources, { selection })
+        .filter(item => item && item.publicationId)
         .map(item => [item.publicationId, sourceDiagnosticsResponse(item)])
     )
     return built.sources.map(source => ({

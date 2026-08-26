@@ -7,6 +7,7 @@ import {
   createAssetManifestStore,
   createPublicationManifest,
   createRenditionDescriptor,
+  createStaticAssetManifest,
   verifyPublicationManifest,
 } from '../src/assets/index.js'
 import { authorizeArchiveRequestFromManifestStore } from '../src/archive/permissionless-network.js'
@@ -28,7 +29,7 @@ import {
   createConsumerModerationPolicy,
   createConsumerModerationProfileController,
 } from '../src/moderation/profile.js'
-import { encodePeerFrame } from '../src/network/frame.js'
+import { encodePeerFrame, PROTOCOL_MAJOR } from '../src/network/frame.js'
 import {
   createScopedNetworkRuntime,
   createScopedProtocolSession,
@@ -90,7 +91,7 @@ function catalogPeer({ peerId, topic, publisherId, received }) {
     peerId,
     purpose: 'publisher',
     topic,
-    protocolMajor: 1,
+    protocolMajor: PROTOCOL_MAJOR,
     requiredCapability: PUBLISHER_CATALOG_CAPABILITY,
     onFrame: async frame => {
       if (frame.type !== 'catalog-page-response') return { status: 'rejected' }
@@ -115,12 +116,11 @@ test('curator signatures affect only local policy while publisher and media auth
   const rendition = createRenditionDescriptor({
     purpose: 'original',
     format: 'video/mp4',
-    core: {
-      key: coreKey,
-      length: 4,
+    core: createStaticAssetManifest({
       treeHash,
-      byteLength: 4096,
-    },
+      blockLength: 4,
+      byteLength: 4 * 262144,
+    }),
   })
   const manifest = createPublicationManifest({
     publisherId: publisher.publicKey,
@@ -316,7 +316,7 @@ test('curator signatures affect only local policy while publisher and media auth
     await session.acceptHello(encodeScopedHello({
       purpose: 'publisher',
       topic,
-      protocolMajor: 1,
+      protocolMajor: PROTOCOL_MAJOR,
       capabilities: [PUBLISHER_CATALOG_CAPABILITY],
       maxFrameBytes: 64 * 1024,
     }))
@@ -397,14 +397,14 @@ test('curator signatures affect only local policy while publisher and media auth
     start: 0,
     end: 4,
   })).status, 'retained')
-  t.alike(opened, [hex(coreKey)], 'local allow permits publisher-authorized media retention')
+  t.alike(opened, [rendition.core.key], 'local allow permits publisher-authorized media retention')
 
   const archiveRequest = createArchiveRequest({
     requesterId: requester.publicKey,
     publicationId: manifest.publicationId,
     renditionId: rendition.renditionId,
-    ranges: [{ coreKey, start: 0, end: 4 }],
-    requestedBytes: 4096,
+    ranges: [{ coreKey: rendition.core.key, start: 0, end: 4 }],
+    requestedBytes: rendition.core.byteLength,
     retentionUntil: 200,
     expiresAt: 100,
     issuedAt: 20,
@@ -439,8 +439,8 @@ test('curator signatures affect only local policy while publisher and media auth
     requesterId: curator.publicKey,
     publicationId: curatorPublication.publicationId,
     renditionId: rendition.renditionId,
-    ranges: [{ coreKey, start: 0, end: 4 }],
-    requestedBytes: 4096,
+    ranges: [{ coreKey: rendition.core.key, start: 0, end: 4 }],
+    requestedBytes: rendition.core.byteLength,
     retentionUntil: 200,
     expiresAt: 100,
     issuedAt: 20,

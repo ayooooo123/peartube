@@ -95,7 +95,7 @@ test('storage category totals reconcile in deterministic order', (t) => {
 test('clearCache preserves pledged and archive seeds', async (t) => {
   const store = createStore()
   const manager = new seeding.SeedingManager(store, createMetaDb())
-
+  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, archiveEnabled: true, archiveBudgetBytes: 20 * GB, migrationRequired: false })
   await manager.addSeed('drive-watched', 'videos/watched.mp4', 'watched', {
     byteLength: 1 * GB,
     blobId: '0:1:0:1',
@@ -123,6 +123,7 @@ test('clearCache preserves pledged and archive seeds', async (t) => {
 test('quota enforcement preserves pledged and archive seeds', async (t) => {
   const store = createStore()
   const manager = new seeding.SeedingManager(store, createMetaDb())
+  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, archiveEnabled: true, archiveBudgetBytes: 20 * GB, migrationRequired: false })
   await manager.setMaxStorageGB(10)
 
   await manager.addSeed('drive-archive', 'videos/archive.mp4', 'archive', {
@@ -151,7 +152,7 @@ test('quota enforcement preserves pledged and archive seeds', async (t) => {
 
 test('pledged and archive reasons outrank pinned retention', async (t) => {
   const manager = new seeding.SeedingManager(createStore(), createMetaDb())
-
+  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, archiveEnabled: true, archiveBudgetBytes: 20 * GB, migrationRequired: false })
   await manager.addSeed('drive-pledged', 'videos/pledged.mp4', 'pinned', { byteLength: 1 })
   await manager.addSeed('drive-pledged', 'videos/pledged.mp4', 'pledged', { byteLength: 1 })
   await manager.addSeed('drive-archive', 'videos/archive.mp4', 'pinned', { byteLength: 1 })
@@ -329,7 +330,7 @@ test('ordinary cache clearing preserves pledged temporary transfers', async (t) 
 
 test('seed thumbnail bytes are accounted separately from cached publication bytes', async (t) => {
   const manager = new seeding.SeedingManager(createStore(), createMetaDb())
-
+  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
   await manager.addSeed('drive-watch', 'videos/watch.mp4', 'watched', {
     byteLength: 40,
     thumbnailByteLength: 6
@@ -345,6 +346,7 @@ test('seed thumbnail bytes are accounted separately from cached publication byte
 test('ordinary seed eviction clears its thumbnail range', async (t) => {
   const store = createStore()
   const manager = new seeding.SeedingManager(store, createMetaDb())
+  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
   await manager.addSeed('drive-watch', 'videos/watch.mp4', 'watched', {
     byteLength: 40,
     blobId: '2:3:0:40',

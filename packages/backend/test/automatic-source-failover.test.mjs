@@ -1,6 +1,8 @@
 import test from 'brittle'
 
 import { createMediaGraphApi } from '../src/api/media-graph.js'
+import { createStaticAssetManifest } from '../src/assets/static-core.js'
+import { normalizeAssetCoreRefV2 } from '../src/assets/rendition.js'
 import { createPlaybackError } from '../src/playback/errors.js'
 import {
   areSourcesEquivalent,
@@ -286,10 +288,12 @@ test('an abort signal cancels the whole preparation tree', async (t) => {
   t.alike(closed, ['a'])
 })
 
+const coreA = createStaticAssetManifest({ treeHash: 'a'.repeat(64), blockLength: 4, byteLength: 4 * 262144 })
+const coreB = createStaticAssetManifest({ treeHash: 'b'.repeat(64), blockLength: 4, byteLength: 4 * 262144 })
 function graphFixture(overrides = {}) {
   const manifests = new Map([
-    ['pub-a', { publicationId: 'pub-a', body: { publisherId: 'pub', manifestId: 'm-a', renditions: [{ renditionId: 'rendition-pub-a', core: { key: 'a'.repeat(64), length: 4 } }] } }],
-    ['pub-b', { publicationId: 'pub-b', body: { publisherId: 'pub', manifestId: 'm-b', renditions: [{ renditionId: 'rendition-pub-b', core: { key: 'b'.repeat(64), length: 4 } }] } }],
+    ['pub-a', { publicationId: 'pub-a', body: { publisherId: 'pub', manifestId: 'm-a', renditions: [{ renditionId: 'rendition-pub-a', core: coreA }] } }],
+    ['pub-b', { publicationId: 'pub-b', body: { publisherId: 'pub', manifestId: 'm-b', renditions: [{ renditionId: 'rendition-pub-b', core: coreB }] } }],
   ])
   const claim = publicationId => ({
     claimId: `claim-${publicationId}`,
@@ -309,12 +313,13 @@ function graphFixture(overrides = {}) {
       getRenditionRequirement: publicationId => {
         const rendition = manifests.get(publicationId)?.body.renditions[0]
         if (!rendition) return null
+        const coreRef = normalizeAssetCoreRefV2(rendition.core)
         return {
           publicationId,
           renditionId: rendition.renditionId,
-          coreKey: rendition.core.key,
-          coreLength: rendition.core.length,
-          requiredRanges: [{ start: 0, end: rendition.core.length }],
+          coreKey: coreRef.key,
+          coreLength: coreRef.length,
+          requiredRanges: [{ start: 0, end: coreRef.length }],
         }
       },
     },
@@ -401,7 +406,7 @@ test('Play refuses a rendition whose core key does not match the signed manifest
   const result = await api.prepareMediaPlayback({ entityId: 'work:movie-1' })
 
   t.is(result.success, true, 'the manifest-authorized key opens')
-  t.is(result.coreKey, 'a'.repeat(64))
+  t.is(result.coreKey, coreA.assetId)
 })
 
 test('a session limit reaches Play as itself, not as a peer timeout', async (t) => {

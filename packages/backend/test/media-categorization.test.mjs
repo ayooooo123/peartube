@@ -48,11 +48,28 @@ async function addWithCli (argv) {
       openAddRuntime: async () => ({ metadataBee: bee, close: async () => {} }),
       createJobStore,
       createExecutor,
-      createTmdbProvider: () => ({
-        async getShow () { return { name: 'Breaking Bad', mediaId: '1396', provider: 'tmdb', artwork: [] } },
-        async getSeason () { return [{ seasonNumber: 1, episodeNumber: 1, title: 'Pilot', airDate: '2008-01-20', artwork: [] }] },
-        async getMovie () { return { title: 'The Matrix', mediaId: '603', provider: 'tmdb', artwork: [] } }
-      }),
+      createMetadataProvider: async (authority) => {
+        if (authority === 'tmdb') {
+          return {
+            async getShow () { return { name: 'Breaking Bad', mediaId: '1396', provider: 'tmdb', artwork: [] } },
+            async getSeason () { return [{ seasonNumber: 1, episodeNumber: 1, title: 'Pilot', airDate: '2008-01-20', artwork: [] }] },
+            async getMovie () { return { title: 'The Matrix', mediaId: '603', provider: 'tmdb', artwork: [] } }
+          }
+        }
+        if (authority === 'tvdb') {
+          return {
+            async getShow (id) { return { name: 'Breaking Bad', mediaId: String(id), provider: 'tvdb', artwork: [] } },
+            async getSeason (id, season) { return [{ seasonNumber: 1, episodeNumber: 2, title: "Cat's in the Bag...", airDate: '2008-01-27', artwork: [] }] },
+            async getMovie (id) { return { title: 'The Matrix', mediaId: String(id), provider: 'tvdb', artwork: [] } }
+          }
+        }
+        if (authority === 'musicbrainz') {
+          return {
+            async getRecording (id) { return { title: 'Paranoid Android', mediaId: String(id), provider: 'musicbrainz', artwork: [] } },
+            async getRelease (id) { return { title: 'OK Computer', mediaId: String(id), provider: 'musicbrainz', artwork: [] } }
+          }
+        }
+      },
       buildExecutorDeps: ({ jobStore }) => ({
         jobStore,
         resolveChannel: async () => CHANNEL,

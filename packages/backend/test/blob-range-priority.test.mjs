@@ -319,7 +319,7 @@ test('storage installs blob request cancellation handling before blob-server lis
 
 test('storage releases pooled priority ranges during backend shutdown', (t) => {
   const releaseIndex = storageSource.indexOf('releaseAllPrioritizedBlobRanges()')
-  const blobServerCloseIndex = storageSource.indexOf("runShutdownStep('blobServer close'")
+  const blobServerCloseIndex = storageSource.indexOf('await blobServer?.close?.()')
 
   t.ok(releaseIndex >= 0, 'shutdown releases pooled priority ranges')
   t.ok(blobServerCloseIndex >= 0, 'shutdown closes the blob server')

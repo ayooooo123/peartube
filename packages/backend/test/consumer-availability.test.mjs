@@ -3,7 +3,7 @@ import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 
 import { createMediaGraphApi } from '../src/api/media-graph.js'
-import { createAssetManifestStore, createPublicationManifest, createRenditionDescriptor } from '../src/assets/index.js'
+import { createAssetManifestStore, createPublicationManifest, createRenditionDescriptor, createStaticAssetManifest } from '../src/assets/index.js'
 import { createEntityReference, createMediaClaim, createMediaGraphStore } from '../src/media-graph/index.js'
 import { createAvailabilityEvidenceStore } from '../src/assets/availability-evidence.js'
 
@@ -270,7 +270,11 @@ async function graphFixture(evidenceByPublication = new Map()) {
     renditions: [createRenditionDescriptor({
       purpose: 'original',
       format: 'video/mp4',
-      core: { key: '1'.repeat(64), length: CORE_LENGTH, treeHash: '2'.repeat(64), byteLength: 4_096 },
+      core: createStaticAssetManifest({
+        treeHash: '2'.repeat(64),
+        blockLength: CORE_LENGTH,
+        byteLength: CORE_LENGTH * 262144,
+      }),
     })],
     keyPair: publisher,
   })

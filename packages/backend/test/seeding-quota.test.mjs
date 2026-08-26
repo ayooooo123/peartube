@@ -49,7 +49,7 @@ test('setMaxStorageGB enforces quota and clears removed cached blob ranges', asy
   const store = createStore()
   const metaDb = createMetaDb()
   const manager = new SeedingManager(store, metaDb)
-
+  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
   await manager.addSeed('drive-a', 'videos/old.mp4', 'watched', {
     byteLength: 4 * GB,
     blobId: '10:4:0:4096',
@@ -103,7 +103,7 @@ test('setMaxStorageGB enforces quota and clears removed cached blob ranges', asy
 test('protectSelf keeps the current watched seed through quota enforcement', async (t) => {
   const store = createStore()
   const manager = new SeedingManager(store, createMetaDb())
-
+  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
   await manager.setMaxStorageGB(5)
   await manager.addSeed('drive-a', 'videos/large.mp4', 'watched', {
     byteLength: 1 * GB,
@@ -210,7 +210,7 @@ test('clearCache clears non-pinned blob ranges and keeps pinned cached bytes', a
   const store = createStore()
   const metaDb = createMetaDb()
   const manager = new SeedingManager(store, metaDb)
-
+  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, archiveEnabled: true, archiveBudgetBytes: 20 * GB, migrationRequired: false })
   await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', {
     byteLength: 2 * GB,
     blobId: { blockOffset: 3, blockLength: 5, byteOffset: 0, byteLength: 1234 },
@@ -235,7 +235,7 @@ test('clearCache clears non-pinned blob ranges and keeps pinned cached bytes', a
 test('quota enforcement ignores invalid blob refs but still updates seed accounting', async (t) => {
   const store = createStore()
   const manager = new SeedingManager(store, createMetaDb())
-
+  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
   await manager.addSeed('drive-a', 'videos/bad-ref.mp4', 'watched', {
     byteLength: 6 * GB,
     blobId: 'not-a-range',

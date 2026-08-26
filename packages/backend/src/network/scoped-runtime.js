@@ -2204,7 +2204,10 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function sendArchiveBlock (scope, tracked, request) {
-    if (!archiveAllowed) fail('explicit archive consent is required')
+    if (!archiveAllowed) {
+      sendScopedFrame(tracked, 'archive', 'archive-block-unavailable', encodeArchiveBlockRef(request.coreKey, request.index))
+      return
+    }
     const resource = archiveResourceFor(scope, request.coreKey, request.index)
     const lastServed = tracked.archiveLastServed.get(resource?.resourceId) ?? -1
     if (tracked.archiveServing || !resource || request.index <= lastServed) {
@@ -2592,7 +2595,6 @@ export function createScopedNetworkRuntime (options = {}) {
         const result = authorizeScopeConnection(scope, { peerId: remoteKey, connection, tracked })
         if (result.status !== 'authorized') fail(result.reason)
         if (isCurrentSession()) {
-          tracked.state = 'active'
           if (scope.purpose === 'bootstrap') {
             // This is the only moment a consumer is told which publishers
             // exist. Nothing is sent when the map is empty, and the peer then
@@ -2698,7 +2700,7 @@ export function createScopedNetworkRuntime (options = {}) {
       channel,
       message: channel.messages?.[0] || message,
       protocol: protocolSession,
-      state: protocolSession.state === 'active' ? 'active' : 'handshaking',
+      get state() { return this.closed ? 'closed' : this.protocol.state },
       closed: false,
       cleanupFns: [],
       assetRequestIndex: null,
@@ -4150,7 +4152,7 @@ export function createScopedNetworkRuntime (options = {}) {
 
   function activeAssetPeers (scope) {
     return [...scope.sessions.values()].filter(session =>
-      !session.closed && session.state === 'active' && !session.channel?.closed)
+      !session.closed && (session.state === 'active' || session.protocol?.state === 'active') && !session.channel?.closed)
   }
 
   function normalizeAssetPeerIds (peerIds) {
@@ -4250,7 +4252,6 @@ export function createScopedNetworkRuntime (options = {}) {
       )) return
       closeSession(scope, id, 'asset-inventory-timeout', session)
     }, assetTransferTimeoutMs)
-    request.timer?.unref?.()
     if (signal?.aborted) {
       request.onAbort()
       return promise
@@ -4412,7 +4413,6 @@ export function createScopedNetworkRuntime (options = {}) {
         'asset block request timed out',
       ))
     }, assetTransferTimeoutMs)
-    request.timer?.unref?.()
     scope.assetRequests.set(request.key, request)
     cancellation.request = request
     if (cancellation.aborted || signal?.aborted) {
@@ -4540,7 +4540,6 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function publishArchiveRequest ({ request, envelope, entityRef = null, publicationId = null } = {}) {
-    if (!archiveAllowed) fail('explicit archive consent is required')
     const consumerVisible = await authorizeConsumerWork({
       operation: 'archive-request',
       entityRef,
@@ -4592,8 +4591,8 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function retainAuthorizedArchive ({ pledge, coreKey: requestedCoreKey, start, end, download: shouldDownload = true } = {}) {
-    if (!archiveAllowed) fail('explicit archive consent is required')
-    if (archiveUploadCeilingBytes <= archiveUploadedBytes) fail('archive budget exhausted')
+    if (shouldDownload !== false && !archiveAllowed) fail('explicit archive consent is required')
+    if (shouldDownload !== false && archiveUploadCeilingBytes <= archiveUploadedBytes) fail('archive budget exhausted')
     if (status !== 'active') fail('runtime is not active')
     const envelope = pledge?.envelope || pledge
     const verified = await verifyArchivePledge(envelope, { now: options.now?.() })

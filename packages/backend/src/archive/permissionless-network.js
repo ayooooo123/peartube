@@ -11,6 +11,7 @@ import {
 } from './challenge.js'
 import { createArchivePledge, verifyArchivePledge } from './pledge.js'
 import { createArchiveRequest, verifyArchiveRequest } from './request.js'
+import { normalizeAssetCoreRefV2 } from '../assets/rendition.js'
 
 const DEFAULT_REQUEST_TTL_MS = 5 * 60 * 1000
 const DEFAULT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
@@ -90,10 +91,13 @@ export async function authorizeArchiveRequestFromManifestStore(request, options 
     }
   }
   const rendition = manifest?.body?.renditions?.find(candidate => candidate.renditionId === body.renditionId)
-  const core = rendition?.core
-  if (!manifest || !core || !Number.isSafeInteger(core.length) || core.length < 1 ||
-      !Number.isSafeInteger(core.byteLength) || core.byteLength < 1 ||
-      !Array.isArray(body.ranges) || body.ranges.length !== 1) return false
+  let core
+  try {
+    core = normalizeAssetCoreRefV2(rendition?.core)
+  } catch {
+    return false
+  }
+  if (!manifest || !core || !Array.isArray(body.ranges) || body.ranges.length !== 1) return false
   const range = body.ranges[0]
   if (range.coreKey !== core.key || range.start !== 0 || range.end !== core.length ||
       body.requestedBytes !== core.byteLength) return false

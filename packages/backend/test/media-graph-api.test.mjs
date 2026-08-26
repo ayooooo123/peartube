@@ -3,7 +3,7 @@ import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 
 import { createMediaGraphApi } from '../src/api/media-graph.js'
-import { createAssetManifestStore, createPublicationManifest, createRenditionDescriptor } from '../src/assets/index.js'
+import { createAssetManifestStore, createPublicationManifest, createRenditionDescriptor, createStaticAssetManifest } from '../src/assets/index.js'
 import { createEntityReference, createMediaClaim, createMediaGraphStore } from '../src/media-graph/index.js'
 
 const publisherA = crypto.keyPair(Buffer.alloc(32, 1))
@@ -30,12 +30,11 @@ function rendition(id = 1) {
   return createRenditionDescriptor({
     purpose: 'original',
     format: 'video/mp4',
-    core: {
-      key: `${id}`.repeat(64).slice(0, 64),
-      length: 1,
+    core: createStaticAssetManifest({
       treeHash: `${id + 1}`.repeat(64).slice(0, 64),
+      blockLength: 1,
       byteLength: 32,
-    },
+    }),
   })
 }
 
@@ -474,7 +473,11 @@ function posterRendition() {
   return createRenditionDescriptor({
     purpose: 'poster',
     format: 'image/jpeg',
-    core: { key: POSTER_CORE_KEY, length: 9, treeHash: 'cd'.repeat(32), byteLength: 4096 },
+    core: createStaticAssetManifest({
+      treeHash: 'cd'.repeat(32),
+      blockLength: 9,
+      byteLength: 9 * 262144,
+    }),
   })
 }
 
@@ -539,7 +542,7 @@ async function artworkFixture({ poster = true, local = false, localAfterRetain =
         return {
           async ready() {},
           async has(start, end) {
-            return coreKey === POSTER_CORE_KEY && start === 5 && end === 6 && bytesLocal
+            return coreKey === cover.core.key && start === 5 && end === 6 && bytesLocal
           },
           async close() { closedSessions.push(coreKey) },
         }
@@ -566,7 +569,7 @@ test('entity artwork resolves the manifest poster rendition to a loopback URL on
   t.ok(result.url.includes('/__peartube_thumbnail__.jpg'), 'the buffered blob-server path serves it')
   t.ok(result.url.includes('pt_thumbnail=1'), 'the response is buffered so native image loaders accept it')
   t.ok(result.url.includes(`blob=${POSTER_BLOB_ID}`), 'the published hyperblobs id is used verbatim')
-  t.ok(result.url.includes(`key=${POSTER_CORE_KEY}`), 'bytes are read from the rendition core the manifest signed')
+  t.ok(result.url.includes(`key=${cover.core.key}`), 'bytes are read from the rendition core the manifest signed')
   t.ok(result.url.includes('type=image%2Fjpeg') || result.url.includes('type=image/jpeg'), 'the declared encoding is carried')
 
   t.alike(retained, [{
@@ -577,7 +580,7 @@ test('entity artwork resolves the manifest poster rendition to a loopback URL on
     entityRef: subject.entityId,
     publicationId: manifest.publicationId,
   }], 'exactly the poster rendition range is retained over the authorized asset path')
-  t.alike(closedSessions, [POSTER_CORE_KEY], 'the locality probe leaves no open core session')
+  t.alike(closedSessions, [cover.core.key], 'the locality probe leaves no open core session')
 })
 
 test('entity artwork reports a retryable miss instead of failing when a manifest carries no poster', async (t) => {

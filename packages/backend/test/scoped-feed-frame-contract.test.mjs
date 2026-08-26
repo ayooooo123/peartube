@@ -2,6 +2,7 @@ import test from 'brittle'
 import c from 'compact-encoding'
 import crypto from 'hypercore-crypto'
 
+import { PROTOCOL_MAJOR } from '../src/network/version.js'
 import { createIndexFeedPage } from '../src/indexing/feed-contract.js'
 import {
   decodeFeedPageRequest,
@@ -17,7 +18,7 @@ test('scoped feed request framing is exact, versioned, bounded, and canonical', 
   const encoded = encodeFeedPageRequest({ purpose: 'index', cursor: '0' })
   t.alike(decodeFeedPageRequest(encoded, { purpose: 'index' }), {
     cursor: '0',
-    minimumProtocolMajor: 1,
+    minimumProtocolMajor: PROTOCOL_MAJOR,
     protocolMinor: 0,
     requiredCapabilities: ['index-feed:v1'],
   })

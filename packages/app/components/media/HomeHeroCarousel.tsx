@@ -51,7 +51,7 @@ const OVERLAY_LOCATIONS = [0, 0.6, 1] as const
 /**
  * One slide.
  *
- * A landscape source gets MediaStorm's treatment: the still fills the frame and
+ * A landscape source gets client application's treatment: the still fills the frame and
  * the title sits over a gradient ramp at the bottom.
  *
  * A portrait-only title does NOT. Cropping a 2:3 poster into a 16:9 frame is

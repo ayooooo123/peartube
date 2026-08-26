@@ -13,7 +13,7 @@ import {
 import { createCompanionRouter } from '../src/companion/routes.js'
 import { createStreamCapabilityStore } from '../src/companion/stream-capabilities.js'
 
-const CLIENT = 'mediastorm-test'
+const CLIENT = 'client-test'
 const NOW = 1_786_406_400_000
 const REF = 'A'.repeat(43)
 

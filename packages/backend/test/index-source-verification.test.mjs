@@ -880,7 +880,7 @@ test('close aborts and drains verification, invalidates owned refs, and preserve
   t.is(cache.has(harness.candidate.candidateRef), false)
 })
 
-test('real index store traversal emits two rendition candidates and verifies only MediaStorm selected second tuple', async t => {
+test('real index store traversal emits two rendition candidates and verifies only client application selected second tuple', async t => {
   const directory = mkdtempSync(join(tmpdir(), 'peartube-selected-source-'))
   const store = new Corestore(directory)
   await store.ready()
@@ -1026,7 +1026,7 @@ test('real index store traversal emits two rendition candidates and verifies onl
   await federation.close()
 })
 
-test('root API and runtime defer source resolution until MediaStorm selects a candidate', async t => {
+test('root API and runtime defer source resolution until client application selects a candidate', async t => {
   const fixture = await sourceFixture({
     externalRefExtras: {
       url: 'https://forbidden.invalid/play',
@@ -1179,7 +1179,7 @@ test('companion episode search opens a locally indexed candidate and reads a ran
   const streamApi = createApi({ ctx: streamCtx, scopedNetwork: streamNetwork })
   const router = createCompanionRouter({
     clock: () => NOW,
-    config: { client: { id: 'mediastorm' } },
+    config: { client: { id: 'client' } },
     service: {
       searchIndexCandidates: (selector, options) => runtime.searchIndexCandidates({ selector, ...options }),
       verifyIndexCandidate: (candidateRef, options) => runtime.verifyIndexCandidate({ candidateRef, ...options }),
@@ -1194,7 +1194,7 @@ test('companion episode search opens a locally indexed candidate and reads a ran
   const search = await router.dispatch({
     method: 'GET',
     url: '/api/v2/search?episode=2&identifier=95350&kind=episode&namespace=tmdb&season=1',
-    clientIdentity: 'mediastorm',
+    clientIdentity: 'client',
   })
   t.is(search.statusCode, 200)
   t.is(search.body.candidates.length, 1)
@@ -1206,7 +1206,7 @@ test('companion episode search opens a locally indexed candidate and reads a ran
     method: 'POST',
     url: '/api/v2/streams/open',
     body: b4a.from(JSON.stringify({ candidateRef: candidate.candidateRef })),
-    clientIdentity: 'mediastorm',
+    clientIdentity: 'client',
   })
   t.is(opened.statusCode, 200)
   const streamUrl = new URL(opened.body.url, 'http://relay.local')

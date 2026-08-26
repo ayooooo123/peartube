@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Prove the complete Phase 1 path under real process boundaries, deterministic DHT conditions, churn, restart, partition, spam, disk pressure, and MediaStorm fallback.
+**Goal:** Prove the complete Phase 1 path under real process boundaries, deterministic DHT conditions, churn, restart, partition, spam, disk pressure, and client application fallback.
 
 **Architecture:** A reusable `@hyperswarm/testnet` harness launches bootstrap peers, two publishers, two indexers, seeders, a fresh watch-only companion, and optional contributor/archive companions as separate processes with independent stores. Scenario tests drive real signed discovery/query/transfer traffic and collect bounded operability/adoption metrics.
 
@@ -78,7 +78,7 @@ git commit -m "test(p2p): add deterministic archive testnet harness"
 
 - [ ] **Step 1: Write the complete vertical correctness scenario**
 
-Publish one movie and one episode, register with two indexers, stop the publisher origin, boot a fresh watch-only companion, search by exact external refs, resolve through the MediaStorm-shaped API, read sparse ranges from two seeders, kill one seeder during a seek, and assert exact output bytes plus zero companion uploads/public records.
+Publish one movie and one episode, register with two indexers, stop the publisher origin, boot a fresh watch-only companion, search by exact external refs, resolve through the client application-shaped API, read sparse ranges from two seeders, kill one seeder during a seek, and assert exact output bytes plus zero companion uploads/public records.
 
 - [ ] **Step 2: Write partition/restart/anti-entropy scenarios**
 
@@ -101,20 +101,20 @@ git add packages/backend/test/distributed-archive-e2e.test.mjs packages/backend/
 git commit -m "test(p2p): cover archive churn and pressure"
 ```
 
-### Task 3: Prove MediaStorm fallback and run final verification
+### Task 3: Prove client application fallback and run final verification
 
 **Files:**
-- Create: `/Users/jd/projects/mediastorm-backend/backend/services/peartube/companion_e2e_test.go`
-- Modify: `/Users/jd/projects/mediastorm-backend/backend/services/debrid/scraper_peartube_test.go`
-- Modify: `/Users/jd/projects/mediastorm-backend/backend/services/playback/service_test.go`
-- Create: `packages/cli/test/mediastorm-companion-e2e.test.mjs`
+- Create: `/Users/jd/projects/client-backend/backend/services/peartube/companion_e2e_test.go`
+- Modify: `/Users/jd/projects/client-backend/backend/services/debrid/scraper_peartube_test.go`
+- Modify: `/Users/jd/projects/client-backend/backend/services/playback/service_test.go`
+- Create: `packages/cli/test/client-companion-e2e.test.mjs`
 
 **Interfaces:**
 - Cross-repository fixture contract is the checked-in `CompanionCandidateV2`, stream-open, job, status, and error JSON used by both Go and JS tests.
 
 - [ ] **Step 1: Test optional-provider behavior**
 
-Run the same MediaStorm search/resolve suite with companion absent, empty, slow, returning malformed data, and unreachable. Assert existing debrid/other candidates are returned and selected normally with no PearTube-induced delay beyond its configured independent timeout.
+Run the same client application search/resolve suite with companion absent, empty, slow, returning malformed data, and unreachable. Assert existing debrid/other candidates are returned and selected normally with no PearTube-induced delay beyond its configured independent timeout.
 
 - [ ] **Step 2: Test contribution lifecycle**
 
@@ -127,7 +127,7 @@ npm run schema:full
 npm run typecheck
 npm test
 npm test --prefix packages/cli
-cd /Users/jd/projects/mediastorm-backend/backend && go test ./services/peartube ./services/debrid ./services/playback ./handlers ./config
+cd /Users/jd/projects/client-backend/backend && go test ./services/peartube ./services/debrid ./services/playback ./handlers ./config
 ```
 
 Expected: all commands exit 0. The live scenario additionally proves origin-offline playback, multi-peer churn, restart repair, watch-only zero upload, explicit contribution, and normal fallback.
@@ -135,6 +135,6 @@ Expected: all commands exit 0. The live scenario additionally proves origin-offl
 - [ ] **Step 4: Commit in each repository**
 
 ```bash
-cd /Users/jd/projects/mediastorm-backend && git add backend && git commit -m "test(peartube): prove optional companion integration"
+cd /Users/jd/projects/client-backend && git add backend && git commit -m "test(peartube): prove optional companion integration"
 cd /Users/jd/projects/peartube && git add packages/backend packages/cli && git commit -m "test(p2p): prove distributed archive under churn"
 ```

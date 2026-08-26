@@ -110,7 +110,7 @@ export function ConsumerHomeView({
     return Math.max(1, Math.floor((available - COLUMN_GUTTER * (columns - 1)) / columns))
   }, [windowWidth])
 
-  // The hero features the top shelf, the way MediaStorm's does. Artwork is not
+  // The hero features the top shelf, the way client application's does. Artwork is not
   // a condition of appearing there: a title with none draws the same placeholder
   // the grid draws, and a hero that comes and goes with replication state would
   // move the whole screen under the viewer.

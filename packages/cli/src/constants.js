@@ -38,7 +38,7 @@ export const DEFAULT_COMPANION_CONFIG = {
   socketPath: null,
   host: '127.0.0.1',
   port: 8175,
-  client: 'mediastorm',
+  client: 'client',
   sharedSecret: '',
   maxBodyBytes: 1024 * 1024,
   maxClockSkewMs: 30_000,

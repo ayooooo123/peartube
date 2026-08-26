@@ -734,6 +734,7 @@ export function createScopedNetworkRuntime (options = {}) {
 
   function scopeMayServe (scope) {
     if (!uploadAllowed) return false
+    if (scope.purpose === 'bootstrap') return true
     if (scope.purpose === 'asset') return scopeUploadRetentionClass(scope) !== null
     if (scope.purpose === 'publisher') {
       return scope.modes?.has?.('local') === true && scopeUploadRetentionClass(scope) !== null

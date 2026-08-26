@@ -9,7 +9,7 @@ import { createSourceCallbackClient } from '../src/companion/source-client.js'
 //
 // The size is a shared constant on purpose: the callback refuses an over-large
 // Range outright and the relay refuses a configured chunkBytes above its own
-// ceiling, so a title only moves if both sides agree. MediaStorm's half is
+// ceiling, so a title only moves if both sides agree. client application's half is
 // services/peartube/source_callback.go `defaultSourceMaxRangeBytes`, which
 // carries the same figure and a pointer back here.
 //

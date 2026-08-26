@@ -2,14 +2,14 @@
 
 ### Commits
 
-- MediaStorm: `a389a1a638b06f5201361c31d31629332041f735` — `fix(peartube): require explicit contribution consent`
+- client application: `a389a1a638b06f5201361c31d31629332041f735` — `fix(peartube): require explicit contribution consent`
 - PearTube: `5c8c356f4778f095f3e8e7671699efc58a0f3a04` — `feat(policy): enforce watch-only and separate retention budgets`
 
 Both are append-only commits in the specified isolated worktrees. No amend, rebase, squash, or earlier-history modification was performed.
 
 ### Files committed
 
-MediaStorm:
+client application:
 
 - `backend/handlers/peartube.go`
 - `backend/handlers/autoseed_test.go`
@@ -43,7 +43,7 @@ PearTube:
 
 ### Decisions
 
-- Meaningful-watch qualification is a bounded, expiring MediaStorm state machine keyed by stable playback and hashed source identity. It accumulates only bounded monotonic foreground evidence, ignores duplicate/out-of-order/seek/background noise, emits one qualified transition per source, and treats explicit stop/abandon as cancellation rather than qualification.
+- Meaningful-watch qualification is a bounded, expiring client application state machine keyed by stable playback and hashed source identity. It accumulates only bounded monotonic foreground evidence, ignores duplicate/out-of-order/seek/background noise, emits one qualified transition per source, and treats explicit stop/abandon as cancellation rather than qualification.
 - Qualification schedules the existing authenticated Plan 11 local-source ingest flow outside the playback path. Automatic contribution does not hand remote/debrid URLs to the relay. Playback never waits on observation, submission, cancellation, status, or relay outcomes.
 - Consent withdrawal synchronously revokes live source grants, then cancels active contribution jobs out of band. Submission and cancellation bookkeeping is bounded and status exposes only state counts and bounded error codes.
 - Persisted PearTube network policy is schema version 2. Missing, legacy, unsupported, or migration-required policy evaluates watch-only. Contribution and archive permissions are explicit independent booleans; nonzero budgets do not grant either permission.
@@ -69,10 +69,10 @@ PearTube:
 
 New append-only commits:
 
-- MediaStorm: `a177015c0eccda1dda5d0c08a820d6105fa7a064` — `fix(peartube): align consent-gated test fixtures`
+- client application: `a177015c0eccda1dda5d0c08a820d6105fa7a064` — `fix(peartube): align consent-gated test fixtures`
 - PearTube: `b0301e0d3a9b49d1c27bab12779935e74f75aad3` — `fix(policy): settle watch-only asset rejection safely`
 
-MediaStorm files:
+client application files:
 
 - `backend/handlers/peartube.go`
 - `backend/handlers/peartube_settings_test.go`
@@ -220,7 +220,7 @@ File:
 
 - `packages/cli/test/status-universal.test.mjs`
 
-Controller validation now reports MediaStorm full 72 packages passing, PearTube backend focused 38/38 tests with 278/278 assertions passing, and companion/status focused 46/46 tests with 285/285 assertions passing. The remaining exact CLI status command found only this stale universal fixture, which expected the intentionally removed legacy `status.runtime` subtree and old formatter lines.
+Controller validation now reports client application full 72 packages passing, PearTube backend focused 38/38 tests with 278/278 assertions passing, and companion/status focused 46/46 tests with 285/285 assertions passing. The remaining exact CLI status command found only this stale universal fixture, which expected the intentionally removed legacy `status.runtime` subtree and old formatter lines.
 
 The fixture now supplies explicit current policy v2, consent and migration metadata, independent contribution/archive permissions and configured/used budgets, active uploads/announcements/acquisitions, all bounded job states, selected indexers, retention, network, channel, creator, and client counts. It asserts the current `effectivePolicy`, `budgets`, `publicWork`, placeholder indexer list, bounded error codes, network, summary, creators, and exact formatter output. Protected sentinel publisher IDs, indexer IDs, keys/capabilities, local paths, source URLs, callback origins, and overflow indexers are recursively absent. It explicitly asserts the legacy `runtime` subtree is not restored.
 
@@ -252,10 +252,10 @@ Remaining controller concern:
 
 Append-only commits:
 
-- MediaStorm: `2444900f6308f699ae550ab95aa079d2b74991db` — `fix(peartube): require explicit contribution consent`
+- client application: `2444900f6308f699ae550ab95aa079d2b74991db` — `fix(peartube): require explicit contribution consent`
 - PearTube: `5b568ad0d4e0091602eca8f6d287bc8027c561b5` — `feat(policy): enforce watch-only and separate retention budgets`
 
-MediaStorm files:
+client application files:
 
 - `backend/handlers/peartube.go`
 - `backend/handlers/peartube_test.go`
@@ -290,7 +290,7 @@ PearTube files:
 Decisions and fixes:
 
 - The authenticated companion control route now requires a complete current policy-v2 snapshot. Relay startup remains fail-closed until that exact control operation succeeds, and missing/partial direct or persisted policy cannot synthesize consent from defaults.
-- MediaStorm reconciles the complete trusted policy before each Plan 11 submission. Manual and automatic local-source handoffs recheck the matching independent role at submission, and source grants carry a revocation epoch so a prepared file cannot cross a concurrent consent withdrawal.
+- client application reconciles the complete trusted policy before each Plan 11 submission. Manual and automatic local-source handoffs recheck the matching independent role at submission, and source grants carry a revocation epoch so a prepared file cannot cross a concurrent consent withdrawal.
 - Source callback delivery is chunked and checks revocation between bounded reads/writes. Active acquired readers stop after at most the already in-flight chunk.
 - Scoped serving separates contribution and archive upload reservations, counters, and ceilings; disabled upload permission cannot announce or serve even when a role budget is nonzero. Role or upload-policy changes close the affected asset, publisher, and archive sessions and rejoin discovery client-only.
 - Local publisher publication now requires explicit contribution plus upload permission. Archive range allocation requires explicit archive permission and remaining archive budget. Watch-only following, catalog resolution, discovery, and private playback fetch remain available.
@@ -312,10 +312,10 @@ Exact remaining controller concerns:
 
 Append-only commits:
 
-- MediaStorm: `5c4c46d7dff910aaf04e63381871a38ff5a4f223` — `fix(peartube): close consent races and preserve claims`
+- client application: `5c4c46d7dff910aaf04e63381871a38ff5a4f223` — `fix(peartube): close consent races and preserve claims`
 - PearTube: `4c3b044a6c6bc691bb80fb64a9809b75208befca` — `fix(policy): enforce role-scoped serving boundaries`
 
-MediaStorm files:
+client application files:
 
 - `backend/handlers/peartube.go`
 - `backend/handlers/peartube_test.go`
@@ -338,7 +338,7 @@ PearTube files:
 
 Decisions and fixes:
 
-- MediaStorm serializes the short authenticated Plan 11 source handoff against live settings cutover without putting playback on that lock. The source-grant epoch still rejects prepared stale grants, and the new race fixture holds consent withdrawal until an already-started control handoff settles.
+- client application serializes the short authenticated Plan 11 source handoff against live settings cutover without putting playback on that lock. The source-grant epoch still rejects prepared stale grants, and the new race fixture holds consent withdrawal until an already-started control handoff settles.
 - Automatic contribution keeps its bounded claim after a non-seedable private remote source or relay refusal, preserving one qualified attempt per guard window and the recovered TMDB entity claim. Catalog unavailability still releases the claim because no submission decision was reached.
 - Watch-only scoped asset sessions remain eligible as download clients; role checks now govern only announcement/upload serving. Publisher follower sessions likewise remain client-capable while local publication stays role-gated.
 - Contribution and archive assets/catalogs carry an explicit retention class through archive import, immutable upload finalization, rendition retention, catalog publication, discovery, byte reservation, and live policy transitions. Archive-only nodes can publish archive-pin data without acquiring contribution permission, and zero class budget cannot announce or upload it.
@@ -350,7 +350,7 @@ Validation: **NOT RUN.** Per controller instruction, no tests, builds, formatter
 
 Exact remaining controller concerns:
 
-- Run controller-owned gofmt and focused MediaStorm tests, especially the source-handoff/settings race and the two automatic-claim regressions.
+- Run controller-owned gofmt and focused client application tests, especially the source-handoff/settings race and the two automatic-claim regressions.
 - Run the focused backend/CLI suites for watch-only asset download sessions, archive-only catalog/asset publication, class-budget transition quiescence, explicit archive-pin removal, and top-level startup/heartbeat status.
 - Exercise a real companion source callback while policy is withdrawn and real Hyperswarm asset serving while role/budget changes, confirming no post-cutover byte or announcement survives.
 - Verify archive downloaded-byte storage reconstruction across restart against the production archive allocator.
@@ -359,17 +359,17 @@ Exact remaining controller concerns:
 
 Append-only commits:
 
-- MediaStorm: `f65c2918022c9466fee783095c2d7b10a7bb6cb1` — `fix(peartube): reject stale grants before relay mutation`
+- client application: `f65c2918022c9466fee783095c2d7b10a7bb6cb1` — `fix(peartube): reject stale grants before relay mutation`
 - PearTube: `c671221a7688fa3c5e3e55004c4c363113193df5` — `fix(policy): resume scoped transfers across policy changes`
 
 Files:
 
-- MediaStorm: `backend/handlers/peartube.go`, `backend/handlers/peartube_test.go`
+- client application: `backend/handlers/peartube.go`, `backend/handlers/peartube_test.go`
 - PearTube: `packages/backend/src/network/scoped-runtime.js`, `packages/backend/test/scoped-network-runtime.test.mjs`, `packages/backend/test/seeding-quota-budget.test.mjs`
 
 Decisions and fixes:
 
-- A prepared MediaStorm source grant now captures its policy epoch at preparation. The closure checks current relay, current explicit consent/version/migration state, and the unchanged epoch before policy reconciliation, then rechecks after reconciliation while settings cutover is excluded. A stale/withdrawn grant therefore causes zero companion control or ingest mutation. The controller's gofmt changes were preserved in the follow-up commit.
+- A prepared client application source grant now captures its policy epoch at preparation. The closure checks current relay, current explicit consent/version/migration state, and the unchanged epoch before policy reconciliation, then rechecks after reconciliation while settings cutover is excluded. A stale/withdrawn grant therefore causes zero companion control or ingest mutation. The controller's gofmt changes were preserved in the follow-up commit.
 - The outward contribution publication error remains `explicit contribution upload permission is required`; retention-class separation does not churn the established API/test contract.
 - Asset responses accepted before a role/upload/class-budget transition receive bounded `UNAVAILABLE` before affected teardown. Budget-only changes stop byte reservation and change announcement eligibility without converting a settled request into `DISCONNECTED`.
 - Scoped sessions are reattached across every live authenticated connection direction. Restoring archive consent can therefore reopen the custody channel and resume its retained pledge even when the surviving transport was accepted rather than initiated locally.
@@ -379,7 +379,7 @@ Validation: **NOT RUN after these fixes.** Per controller instruction, the worke
 
 Exact remaining controller concerns:
 
-- Re-run the focused MediaStorm packages to confirm stale prepared grants produce no policy/ingest request and that controller gofmt remains clean.
+- Re-run the focused client application packages to confirm stale prepared grants produce no policy/ingest request and that controller gofmt remains clean.
 - Re-run the five focused PearTube files to confirm error compatibility, bounded quota refusal, archive resume, and explicit contributor quota fixtures.
 - Exercise the same settlement/resume paths against real Protomux/Hyperswarm connections and verify archive downloaded-byte reconstruction across restart.
 
@@ -758,7 +758,7 @@ Final observed results after `fed6abbc2d444214a6dae80cee4cf6eef87f2db4`:
 - `npm test` in `packages/cli`: all 47 test files passed.
 - `npm run typecheck` at the PearTube worktree root: `@peartube/platform` `tsc --noEmit` passed.
 - Exact ESLint over the Plan 12 backend/CLI production files and focused tests passed with no output.
-- `go test -p 2 ./...` in the MediaStorm backend: 72 packages passed; 20 packages had no tests.
+- `go test -p 2 ./...` in the client application backend: 72 packages passed; 20 packages had no tests.
 
 The broad `npx eslint packages/backend/src packages/cli/src --quiet` probe still reports 103 existing diagnostics in 33 unrelated files. None are in the exact Plan 12 file set, which passes the same configured linter. No schema regeneration was required by the final lifecycle/retry fixes.
 

@@ -270,7 +270,7 @@ async function waitForDurableState (store, jobId, state) {
   throw new Error(`durable job ${jobId} did not reach ${state}`)
 }
 
-test('production MediaStorm handler key shares canonical nested Unicode ingest identity bytes', (t) => {
+test('generic client handler key shares canonical nested Unicode ingest identity bytes', (t) => {
   const request = {
     retentionClass: 'archive-pin',
     mediaContext: { namespace: 'tmdb', identifier: '603', kind: 'movie' },
@@ -295,13 +295,13 @@ test('production MediaStorm handler key shares canonical nested Unicode ingest i
   const canonicalHex = '7b2262756e646c6550726f76656e616e6365223a7b2272656c656173654e616d65223a224e6573746564206f626a656374222c22736f757263654b696e64223a2261726368697665227d2c226578706563746564223a7b22627974654c656e677468223a31322c2265746167223a225c22736f757263652d696d6d757461626c652d76315c22222c22736861323536223a2261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162227d2c226d656173757265644661637473223a7b22627974654c656e677468223a31322c22636f6e7461696e6572223a226d6b76222c226475726174696f6e4d73223a373230303030302c227469746c65223a22436166c3a9203c3e2620e280a820e280a9202f205c5c205c22227d2c226d65646961436f6e74657874223a7b226964656e746966696572223a22363033222c226b696e64223a226d6f766965222c226e616d657370616365223a22746d6462227d2c22726574656e74696f6e436c617373223a22617263686976652d70696e227d'
   t.is(Buffer.from(canonical, 'utf8').toString('hex'), canonicalHex)
   t.is(fingerprintIngestRequest(request), '93794f73d757f477f8c02d7e26fba7a12e90c9570f5336f25ae2ee9c8ce03a4b')
-  const idempotencyKey = `mediastorm-v1_${'12'.repeat(32)}`
-  t.is(ingestJobIdForRequest(idempotencyKey, request), 'ing_f8fe3828098633aca86ba6cf16eba692')
-  const productionHandlerKey = 'mediastorm-v1_41e3f4eca5fe977d4cf54af8b70e45ddb536fa6c463777947d0598c72157b025'
-  t.is(ingestJobIdForRequest(productionHandlerKey, request), 'ing_5395d7396d3d186ed35148b3f123d6ec')
+  const idempotencyKey = `client-v1_${'12'.repeat(32)}`
+  t.is(ingestJobIdForRequest(idempotencyKey, request), 'ing_12068591dc7762f0860bf7a5767f7afc')
+  const productionHandlerKey = 'client-v1_41e3f4eca5fe977d4cf54af8b70e45ddb536fa6c463777947d0598c72157b025'
+  t.is(ingestJobIdForRequest(productionHandlerKey, request), 'ing_7705e47000844c50a02adeb236dfbd6f')
   const titleVectors = [
-    ['Alien: Covenant', '7c44c2de36d8d1321ddfebf40eed7ce920781d7e75ab4bf1e3d5a36f2afc52ad', 'ing_e6f968c0d313415764791cb0b74cf390'],
-    ['Cars: The Movie', 'b64b733743df6c57b202e38219c8fb29964b5ca0c57b6650a7577e9cdc46447a', 'ing_a7417b2161a2ec2dfc9bb71976eb310f']
+    ['Alien: Covenant', '7c44c2de36d8d1321ddfebf40eed7ce920781d7e75ab4bf1e3d5a36f2afc52ad', 'ing_2d4f5520ff5b1707f35c3587331ee4d4'],
+    ['Cars: The Movie', 'b64b733743df6c57b202e38219c8fb29964b5ca0c57b6650a7577e9cdc46447a', 'ing_94d3356e5282c3e603bd8b8520872665']
   ]
   for (const [title, fingerprint, jobId] of titleVectors) {
     const titledRequest = {

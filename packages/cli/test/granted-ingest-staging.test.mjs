@@ -33,7 +33,7 @@ function movieRequest (bytes, identifier = '603') {
     mediaContext: { kind: 'movie', namespace: 'tmdb', identifier },
     measuredFacts: { title: 'The Matrix', byteLength: bytes.byteLength, container: 'mkv' },
     // No whole-file digest: a debrid-backed title cannot state one without being
-    // pulled through MediaStorm first, so the ETag is its identity.
+    // pulled through client application first, so the ETag is its identity.
     expected: { byteLength: bytes.byteLength, etag: ETAG }
   }
 }

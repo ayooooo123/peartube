@@ -111,7 +111,7 @@ test('load the detail screen once', async () => {
 })
 
 // The primary action reads "Watch Now" rather than "Play": the app adopted
-// MediaStorm's detail screen wholesale, and that dominant accent-blue button
+// client application's detail screen wholesale, and that dominant accent-blue button
 // is its centrepiece. The behaviour behind it is unchanged — one tap, no
 // source picker — so only the label moved.
 test('the detail screen leads with title, synopsis, availability, and one Watch Now action', () => {

@@ -941,7 +941,7 @@ test('companion routes expose redacted jobs and map idempotency conflict without
 })
 
 const MULTIPART_SECRET = 'ef'.repeat(32)
-const MULTIPART_CLIENT = 'mediastorm-multipart'
+const MULTIPART_CLIENT = 'client-multipart'
 const MULTIPART_NOW = 1_786_406_400_000
 
 function multipartBody ({ boundary, request, idempotencyKey, bytes, etag = null, extraParts = [], close = true }) {

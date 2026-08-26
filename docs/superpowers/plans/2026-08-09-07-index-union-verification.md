@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Query several indexers, preserve disagreement and provenance, deduplicate source-identical candidates, and verify only MediaStorm's selected candidate against the current accepted publisher source.
+**Goal:** Query several indexers, preserve disagreement and provenance, deduplicate source-identical candidates, and verify only client application's selected candidate against the current accepted publisher source.
 
 **Architecture:** A replacement federated coordinator sends the same bounded selector query to configured index services, unions results by source identity, and returns URL-less unranked candidate facts. An opaque local `candidateRef` binds the cached facts and locator. Selection triggers publisher namespace verification, current projection lookup, immutable descriptor verification, and live availability probing.
 
@@ -14,7 +14,7 @@
 - One indexer's omission, annotation, or policy decision does not overwrite another indexer's result.
 - Source verification is against the current accepted publisher projection, not merely an old valid signature.
 - `candidateRef` is random/opaque, bounded, local, expiring, and not a network identity.
-- MediaStorm, not PearTube, owns compatibility ranking and final selection.
+- client application, not PearTube, owns compatibility ranking and final selection.
 
 ---
 

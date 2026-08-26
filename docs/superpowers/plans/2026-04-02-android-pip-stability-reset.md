@@ -4,7 +4,7 @@
 
 **Goal:** Make PearTube Android PiP reliable by collapsing PiP ownership back to the active React Native player activity and narrowing `expo-media-session` to transport/metadata duties only.
 
-**Architecture:** PearTube currently spreads PiP responsibilities across `VideoPlayerContext`, `VideoPlayerOverlayImpl`, `expo-media-session`, `PipBridge`, and a separate `PlayerActivity` host. The current worktree has moved further toward a split-host `PlayerActivity` design, so this plan now starts by validating whether that branch actually removed the original invalid `MainActivity` PiP-param write path. If it did not, the fallback remains the simpler MediaStorm-style single-host reset.
+**Architecture:** PearTube currently spreads PiP responsibilities across `VideoPlayerContext`, `VideoPlayerOverlayImpl`, `expo-media-session`, `PipBridge`, and a separate `PlayerActivity` host. The current worktree has moved further toward a split-host `PlayerActivity` design, so this plan now starts by validating whether that branch actually removed the original invalid `MainActivity` PiP-param write path. If it did not, the fallback remains the simpler client application-style single-host reset.
 
 **Tech Stack:** Expo, React Native, `react-native-video`, Expo config plugins, Android `PictureInPictureParams`, Kotlin native module (`expo-media-session`), Node test runner, Maestro repro scripts.
 
@@ -258,7 +258,7 @@ git commit -m "refactor(android): narrow media session responsibilities for pip 
 
 ---
 
-## Chunk 4: Rebuild the JS PiP Flow to Match the Simpler MediaStorm Pattern
+## Chunk 4: Rebuild the JS PiP Flow to Match the Simpler client application Pattern
 
 ### Task 4: Keep PiP state in the player/overlay layer and stop over-correcting in JS
 
@@ -287,7 +287,7 @@ Expected:
 
 - [ ] **Step 3: Implement the minimal JS simplification**
 
-Bring the flow closer to MediaStorm:
+Bring the flow closer to client application:
 - manual PiP button uses `playerRef.current?.enterPip?.()`
 - background-from-fullscreen path triggers PiP directly from the player layer
 - JS keeps a single `isInPipMode` state and stops trying to infer PiP from multiple independent heuristics
@@ -314,7 +314,7 @@ git commit -m "refactor(android): simplify js pip lifecycle around inline player
 
 ## Chunk 5: Device Verification and Decision Gate
 
-### Task 5: Validate the chosen path on real Android behavior and then decide whether iOS needs MediaStorm-style warm-up work
+### Task 5: Validate the chosen path on real Android behavior and then decide whether iOS needs client application-style warm-up work
 
 **Files:**
 - Modify: `packages/app/scripts/maestro-android-pip-repro.sh`
@@ -355,7 +355,7 @@ Manual checks:
 - [ ] **Step 4: Decide whether iOS needs parity work**
 
 Only if iOS still shows first-entry or resume glitches:
-- add MediaStorm-style first-play PiP controller warm-up
+- add client application-style first-play PiP controller warm-up
 - keep iOS PiP ownership in the player layer, not the media-session layer
 
 - [ ] **Step 5: Commit**
@@ -385,4 +385,4 @@ git commit -m "test(android): verify stable pip flow"
 
 - Prefer deleting PiP-specific code over patching it.
 - If a fix depends on another new guard window, pause and question the architecture again.
-- Use MediaStorm as the reference for responsibility boundaries, not as a literal file-by-file port.
+- Use client application as the reference for responsibility boundaries, not as a literal file-by-file port.

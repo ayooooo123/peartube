@@ -12,7 +12,7 @@ import {
 
 const NOW = 1_786_406_400_000
 const SECRET = 'ab'.repeat(32)
-const CLIENT = 'mediastorm-test'
+const CLIENT = 'client-test'
 
 const SEARCH_REQUEST_TARGET = '/api/v2/search?title=M*A*S*H%20~&kind=movie'
 const CANONICAL_SEARCH_TARGET = '/api/v2/search?kind=movie&title=M*A*S*H+%7E'

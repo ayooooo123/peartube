@@ -453,6 +453,14 @@ test('archive-only role publishes archive catalogs without contribution permissi
     initialNetworkPolicy: archivePolicy(),
   })
   await runtime.start()
+  const bootstrapTopic = deriveBootstrapTopic({ protocolMajor: PROTOCOL_MAJOR, networkId: 'peartube-main' })
+  const bootstrapJoin = swarm.joins.find(join => b4a.equals(join.topic, bootstrapTopic))
+  t.ok(bootstrapJoin?.options.server, 'a serving device announces the metadata-only bootstrap scope')
+  t.alike(
+    runtime.authorizeConnection({ purpose: 'bootstrap', topic: bootstrapTopic }),
+    { status: 'authorized', action: 'metadata-only' },
+    'bootstrap announcement never authorizes catalog or media bytes'
+  )
 
   const published = await runtime.publishLocalPublisherCatalog({
     publisherId: descriptor.publisherId,
@@ -681,7 +689,7 @@ test('suspended public discovery restores its announcement count when the networ
     return
   }
   t.ok(publisherJoin.options.server)
-  t.is(runtime.getDiagnostics().publicWork.activeAnnouncements, 1)
+  t.is(runtime.getDiagnostics().publicWork.activeAnnouncements, 2, 'bootstrap metadata and the local catalog are both announced')
 
   await runtime.applyNetworkPolicy(contributionPolicy({ networkEnabled: false }))
   t.is(publisherJoin.suspended, 1, 'network pause suspends rather than replaces public discovery')
@@ -690,8 +698,8 @@ test('suspended public discovery restores its announcement count when the networ
 
   await runtime.applyNetworkPolicy(contributionPolicy())
   t.is(publisherJoin.resumed, 1)
-  t.is(runtime.getDiagnostics().publicWork.activeAnnouncements, 1,
-    'resumed discovery reports its restored serving role')
+  t.is(runtime.getDiagnostics().publicWork.activeAnnouncements, 2,
+    'resumed discovery restores both bootstrap metadata and the local catalog')
   t.is(swarm.joins.filter(join => b4a.equals(join.topic, publisherJoin.topic)).length, 1)
   await runtime.close()
 })

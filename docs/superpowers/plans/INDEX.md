@@ -56,7 +56,7 @@ shell are both absent entirely). They remain in git history if a design decision
 | `2026-08-09-05-catalog-ingestion.md` | 0/7 |
 | `2026-08-09-06-index-service-protocol.md` | 2/9 |
 | `2026-08-09-08-companion-v2-api.md` | 3/13 |
-| `2026-08-09-09-mediastorm-candidate-resolver.md` | 0/1 |
+| `2026-08-09-09-client-candidate-resolver.md` | 0/1 |
 | `2026-08-09-11-ingest-jobs.md` | 1/6 |
 | `2026-08-09-15-indexer-recovery.md` | 1/7 |
 

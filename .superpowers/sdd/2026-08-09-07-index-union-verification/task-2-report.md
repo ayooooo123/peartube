@@ -35,7 +35,7 @@ Implementation and focused adversarial test authorship are complete. The univers
   - Registered the two universal backend handler names and adapters to the root API methods.
 - `packages/backend/src/network/scoped-runtime.js`, `packages/backend/src/orchestrator.js`
   - Added a deterministic bounded runtime-private view of currently retained index-service query adapters, contained same-core dependent subrange owners with exact per-owner authorization/revalidation, fail-closed dependent revocation when the last exact-scope owner releases, and an opt-in `requirePeerEvidence` asset-block mode that bypasses only the local fast return and still requires a cryptographically verified remote block response.
-  - Production search requests no more than the federation’s configured service maximum from that live view only when MediaStorm searches; verification uses the same scoped runtime’s selected `[0,1)` asset-range transport with `requirePeerEvidence: true`.
+  - Production search requests no more than the federation’s configured service maximum from that live view only when client application searches; verification uses the same scoped runtime’s selected `[0,1)` asset-range transport with `requirePeerEvidence: true`.
 - `packages/spec/schema.cjs`
   - Added bounded typed CompanionCandidateV2/current-verification records plus `search-index-candidates` and `verify-index-candidate` requests, responses, and RPC registrations. Nullable strings remain optional; every nullable uint has an explicit required presence boolean. Verified publisher descriptors carry the authenticated current root key and policy sequence. No URL, credential, source record reference, cookie, or capability field exists.
 - `packages/spec/lib/app-rpc-adapter-codegen.cjs`
@@ -91,14 +91,14 @@ Independent index observations remain discovery/ranking evidence only. They neve
 ## Tests authored (not run)
 
 - Valid current signed claim/publication/rendition/static source verification.
-- Real index-store two-rendition traversal, two candidate refs, explicit MediaStorm selection of the second, and exact-second verification/probe.
+- Real index-store two-rendition traversal, two candidate refs, explicit client application selection of the second, and exact-second verification/probe.
 - Forged genesis root, bootstrap binding, catalog key, and descriptor/authorization policy sequence disagreement.
 - Wrong operation manifest ID, selected rendition ID, asset/static key, and corrupted canonical frames.
 - Retracted external claim, retracted publication, superseded projection, and missing accepted operation.
 - Catalog head and epoch mutation during availability probing.
 - Expired, forged, evicted, and cross-federation candidate refs.
 - Availability timeout, malformed/future/overlong/over-count evidence, unavailable evidence, caller abort, close abort/drain, delayed-retain rollback before close settlement, and caller-cache preservation.
-- Deferred root API behavior: search performs typed index traversal but does not resolve catalogs or probe availability until `verifyIndexCandidate` receives MediaStorm’s selected ref; adversarial signed claim/provenance URL, cookie, credential, and header fields are absent from the returned root object.
+- Deferred root API behavior: search performs typed index traversal but does not resolve catalogs or probe availability until `verifyIndexCandidate` receives client application’s selected ref; adversarial signed claim/provenance URL, cookie, credential, and header fields are absent from the returned root object.
 - Real null/unknown index format/byte-length facts survive federation, explicit wire presence encoding, generated decode, and companion reconstruction; false title/work/container/byte-length annotations are corrected rather than treated as publisher authority.
 - Default real-timer stalled-service regressions prove both federation and verifier deadlines remain event-loop-live, settle/drain underlying work, and prevent late source lookup continuation. Dynamic retained-service refresh and max-service subset selection are covered.
 - Scoped one-block availability uses unique owners, coexists as an exact dependent subrange under a full-range owner, releases only its lease when the full owner remains, and is atomically revoked with all narrower dependents if the last exact-scope owner releases. Regression coverage asserts short-first preservation, full-first fail-closed scope teardown and broad-download destruction, cryptographically verified peer evidence even for a cached local block, the default local fast path, exact contributors with `completeSeeders: 0`, and non-boolean peer-evidence rejection.

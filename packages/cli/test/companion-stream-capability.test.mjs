@@ -5,7 +5,7 @@ import { createCompanionRouter } from '../src/companion/routes.js'
 import { createCompanionServer } from '../src/companion/server.js'
 import { createStreamCapabilityStore } from '../src/companion/stream-capabilities.js'
 
-const CLIENT = 'mediastorm-a'
+const CLIENT = 'client-a'
 const NOW = 1_786_406_400_000
 const REF = 'A'.repeat(43)
 
@@ -90,7 +90,7 @@ test('capabilities bind exact scope, methods, expiry, and reusable active leases
   const repeated = capabilities.consume(grant.token, scope({ method: 'HEAD', methods: undefined }))
   repeated.release()
 
-  t.is(errorCode(() => capabilities.consume(grant.token, scope({ clientIdentity: 'mediastorm-b', method: 'GET', methods: undefined }))), 'CAPABILITY_SCOPE_MISMATCH')
+  t.is(errorCode(() => capabilities.consume(grant.token, scope({ clientIdentity: 'client-b', method: 'GET', methods: undefined }))), 'CAPABILITY_SCOPE_MISMATCH')
   t.is(errorCode(() => capabilities.consume(grant.token, scope({ publicationId: 'pub-2', method: 'GET', methods: undefined }))), 'CAPABILITY_SCOPE_MISMATCH')
   t.is(errorCode(() => capabilities.consume(grant.token, scope({ renditionId: 'rend-2', method: 'GET', methods: undefined }))), 'CAPABILITY_SCOPE_MISMATCH')
   t.is(errorCode(() => capabilities.consume(grant.token, scope({ method: 'POST', methods: undefined }))), 'CAPABILITY_SCOPE_MISMATCH')
@@ -280,7 +280,7 @@ test('open preserves its response shape and embeds the resolved asset only in th
   t.is(errorCode(() => capabilities.consume(token, exact)), 'CAPABILITY_CONCURRENCY_EXHAUSTED')
   t.is(errorCode(() => capabilities.consume(token, { ...exact, publicationId: 'pub-2' })), 'CAPABILITY_SCOPE_MISMATCH')
   t.is(errorCode(() => capabilities.consume('C'.repeat(43), exact)), 'CAPABILITY_INVALID')
-  t.is(errorCode(() => capabilities.consume(token, { ...exact, clientIdentity: 'mediastorm-b' })), 'CAPABILITY_SCOPE_MISMATCH')
+  t.is(errorCode(() => capabilities.consume(token, { ...exact, clientIdentity: 'client-b' })), 'CAPABILITY_SCOPE_MISMATCH')
   held.release()
   const replay = capabilities.consume(token, { ...exact, method: 'HEAD' })
   replay.release()

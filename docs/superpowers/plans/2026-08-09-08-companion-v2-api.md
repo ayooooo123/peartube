@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Expose the universal backend to MediaStorm through a versioned authenticated local machine API with bounded request and response contracts.
+**Goal:** Expose the universal backend to client application through a versioned authenticated local machine API with bounded request and response contracts.
 
 **Architecture:** A dedicated companion server listens on a filesystem-protected Unix-domain socket by default. Explicit TCP/container mode requires a pre-shared constant-time MAC challenge capability or mTLS; there is no open-access toggle. Route handlers call Plan 07 search/verification and existing runtime APIs without creating a second backend.
 

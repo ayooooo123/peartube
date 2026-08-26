@@ -1,6 +1,6 @@
 # PearTube
 
-PearTube is a pre-alpha, permissionless media CDN and consumer streaming client built on the Hypercore stack. Mobile, Electrobun desktop, and relay surfaces use one universal backend contract. MediaStorm can use a relay as an authenticated local companion for exact catalog search, deferred source selection, ingest, and route-scoped playback.
+PearTube is a pre-alpha, permissionless media CDN and consumer streaming client built on the Hypercore stack. Mobile, Electrobun desktop, relay, and third-party client surfaces use one universal backend contract. Any application can use the authenticated machine API for exact catalog search, deferred source selection, ingest, and route-scoped playback.
 
 ![PearTube architecture](docs/architecture.png)
 
@@ -21,7 +21,7 @@ Pear OTA desktop release automation is not wired yet. Use the Electrobun build/r
 
 - One moderated consumer catalog assembled from signed publisher records and bounded index feeds.
 - Immutable rendition cores transferred and verified over purpose-scoped P2P sessions; no HTTP media-origin fallback.
-- MediaStorm owns cross-provider ranking and acquisition. PearTube owns verified publication, P2P delivery, local retention, and archival evidence.
+- Client applications own their ranking and acquisition policy. PearTube owns verified publication, P2P delivery, local retention, and archival evidence.
 - Relays are voluntary discovery, ingest, seed, and archive peers. They gain no global catalog, moderation, or publisher authority.
 - Participation is explicit policy: watch-only, balanced contribution, or archive-enabled, with metered, battery, thermal, storage, and upload limits.
 - Watch history, library state, and recommendations remain local. PearTube sends no viewer analytics.
@@ -55,7 +55,7 @@ Client shell
 | `packages/host` | Backend lifecycle wrapper, host errors, shared `PROTOCOL_VERSION`, and the universal protocol client (readiness normalization, event map, grouped namespaces) |
 | `packages/backend` | Signed publisher catalogs, local/federated indexes, immutable assets, scoped networking, playback, participation policy, S3 block offload, and diagnostics |
 | `packages/spec` | HRPC schema source and JS code generation |
-| `packages/cli` | Relay CLI/container, authenticated MediaStorm companion API, archive UI, ingest jobs, and local mirror support |
+| `packages/cli` | Relay CLI/container, authenticated machine API, archive UI, ingest jobs, and local mirror support |
 | `packages/bare-*` | Vendored/native Bare runtime support, including `bare-ffmpeg` |
 
 ## Prerequisites

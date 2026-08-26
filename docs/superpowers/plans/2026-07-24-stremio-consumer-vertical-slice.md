@@ -4,7 +4,7 @@
 
 **Goal:** Turn the completed permissionless media-network foundation into a simple Stremio-like consumer application: one moderated global catalog, one Play action with automatic source selection, strict-P2P playback with honest availability, local-first library and recommendations, and all publisher/operator controls hidden behind Developer Settings or exposed through the CLI/relay.
 
-**Architecture:** The consumer shell reads one local projection assembled from bounded permissionless publisher and index feeds. Client-selected community moderation filters that projection before work is scheduled. A deterministic local ranker builds Home rows from network catalog signals plus device-local watch state. Playback selects a currently reachable immutable rendition, downloads media only from peers, and fails over between equivalent sources without exposing operational complexity. Content enters the network by mirroring: a MediaStorm instance's library flows into any relay that follows it, the relay publishes it as signed immutable renditions, and the swarm carries it from there. Viewer history, recommendations, and resource accounting stay on device.
+**Architecture:** The consumer shell reads one local projection assembled from bounded permissionless publisher and index feeds. Client-selected community moderation filters that projection before work is scheduled. A deterministic local ranker builds Home rows from network catalog signals plus device-local watch state. Playback selects a currently reachable immutable rendition, downloads media only from peers, and fails over between equivalent sources without exposing operational complexity. Content enters the network by mirroring: a client application instance's library flows into any relay that follows it, the relay publishes it as signed immutable renditions, and the swarm carries it from there. Viewer history, recommendations, and resource accounting stay on device.
 
 **Prerequisite:** `docs/superpowers/plans/2026-07-23-permissionless-media-cdn.md` and the release-blocker hardening recorded in `docs/superpowers/progress/2026-07-24-permissionless-media-cdn-progress.md` are complete. This plan changes product projection and adds mirroring plus a network CLI; it does not restore the deleted global-feed data plane.
 
@@ -23,11 +23,11 @@
 5. **Source choice:** Play automatically selects the best currently playable source and may fail over. An optional Other Sources panel explains alternatives.
 6. **Participation:** Balanced is the default. A viewer uploads during playback, briefly after playback, and in bounded background windows only when local policy permits. Metered, battery, thermal, disk, and upload ceilings are hard constraints.
 7. **Identity:** no account is required. Watch state, library, and recommendations are local. Optional encrypted device pairing synchronizes user state only after explicit opt-in.
-8. **Content supply:** relays mirror from MediaStorm instances they follow. Mirroring is permissionless and one-directional — a relay pulls a catalog it chose to follow, republishes it as signed immutable renditions, and seeds it. A MediaStorm instance gains no authority over the relay or the network.
+8. **Content supply:** relays mirror from client application instances they follow. Mirroring is permissionless and one-directional — a relay pulls a catalog it chose to follow, republishes it as signed immutable renditions, and seeds it. A client application instance gains no authority over the relay or the network.
 9. **Analytics:** PearTube collects no viewing, engagement, recommendation, or CDN-savings analytics and sends no playback telemetry to publishers.
 10. **Availability:** no HTTP media-origin fallback and no mandatory provider-operated seed. Playback can fail when peers disappear. The product must never claim conventional CDN availability.
 11. **Publication visibility:** new records appear immediately with one of Awaiting replication, Limited availability, Healthy, or Unavailable. Healthy requires fresh evidence from independent transport identities; metadata existence alone is insufficient.
-12. **Relay role:** permissionless discovery/archive/mirror nodes. Relays may follow MediaStorm instances, gossip records, cache media, satisfy archive pledges, and seed ranges. They receive no publication, moderation, or global-ranking authority over anyone else.
+12. **Relay role:** permissionless discovery/archive/mirror nodes. Relays may follow client application instances, gossip records, cache media, satisfy archive pledges, and seed ranges. They receive no publication, moderation, or global-ranking authority over anyone else.
 13. **Publishing access:** Studio lives inside Developer Settings and remains available through the CLI. Relay deployments may archive/seed published content but are not authoritative publisher infrastructure.
 
 ---
@@ -36,7 +36,7 @@
 
 - **Strict P2P means no availability SLA.** New, rare, and unpopular titles can be unplayable. Product copy, search results, and Play controls must reflect this before a viewer commits to playback.
 - **A peer count is not durability.** Healthy requires fresh, complete-range evidence from independent transport identities and must decay when evidence expires.
-- **Mirroring is not authority.** A relay that mirrors a MediaStorm library republishes it under its own publisher identity and seeds it. It does not speak for the origin instance, and following an instance never lets that instance change the relay's catalog, moderation, or policy.
+- **Mirroring is not authority.** A relay that mirrors a client application library republishes it under its own publisher identity and seeds it. It does not speak for the origin instance, and following an instance never lets that instance change the relay's catalog, moderation, or policy.
 - **Permissionless does not mean unfiltered.** Signed spam is still spam. Moderation and bounded ingestion must execute before artwork fetch, asset discovery, download, archive, or playback work.
 - **No analytics means no hidden compromise.** Do not add telemetry SDKs, playback beacons, remote recommendation calls, stable cross-provider viewer IDs, or “anonymous” event batches.
 
@@ -82,7 +82,7 @@ Blocked publications are absent from normal Home, Search/Discover, Library recom
 4. **Playback gate:** Play never requests HTTP media bytes; it selects and fails over only among compatible, currently reachable P2P sources; missing ranges fail promptly with structured reasons.
 5. **Participation gate:** Balanced mode contributes useful bytes without violating metered, battery, thermal, disk, background, or user upload constraints.
 6. **Privacy gate:** watch history, library, ranking inputs, and recommendations remain local; network inspection shows no PearTube analytics traffic.
-7. **Mirroring gate:** a relay that follows a MediaStorm instance mirrors its library into signed immutable publications, seeds them, resumes a partial mirror after restart, and gains no authority the instance did not already have.
+7. **Mirroring gate:** a relay that follows a client application instance mirrors its library into signed immutable publications, seeds them, resumes a partial mirror after restart, and gains no authority the instance did not already have.
 8. **CLI gate:** a headless CLI can search the network, report what is available and from how many peers, and retrieve a rendition to a local file over P2P only.
 9. **Public vertical-slice gate:** on Electrobun desktop and physical Android/iOS, a fresh anonymous install can discover, search, inspect, play, resume after process restart, and save one multi-source movie or episode. The two serving peers use distinct authenticated Noise keys over real transport sessions. Disconnecting both produces `AVAILABILITY_BOUNDARY` and the visible message “Unavailable — no peer currently serves the required ranges,” with no HTTP fallback.
 
@@ -447,7 +447,7 @@ git commit -m "feat(network): make balanced contribution the default"
 
 Content has to get into the network, and then it has to stay there without depending on the machine that published it. Two facts frame this milestone:
 
-- **Ingest already exists and is already a user choice.** A MediaStorm operator points their instance at a relay (`PEARTUBE_RELAY_URL` or the admin settings page) and turns on auto-seed, and every title a viewer starts watching is published to that relay — `PearTubeHandler.OnPlaybackStarted` → `planAutoSeed` → `Archive`/`ArchiveURL`, deduplicated by a durable idempotency key and a six-hour per-title guard. That path needs verification, not reinvention.
+- **Ingest already exists and is already a user choice.** A client application operator points their instance at a relay (`PEARTUBE_RELAY_URL` or the admin settings page) and turns on auto-seed, and every title a viewer starts watching is published to that relay — `PearTubeHandler.OnPlaybackStarted` → `planAutoSeed` → `Archive`/`ArchiveURL`, deduplicated by a durable idempotency key and a six-hour per-title guard. That path needs verification, not reinvention.
 - **Re-seeding does not exist.** A relay publishes a rendition, gossips its catalog, and is then the only node holding the bytes. Peer relays learn the entity exists and can stream it from the origin, but nothing makes them replicate it. The permissionless archive network already implements exactly this — signed archive requests, capacity-bounded pledges, `core.download()` of the pledged ranges, and possession challenges — and nothing wires a relay into either end of it.
 
 ### Task 9: Make relays re-seed each other's published content
@@ -584,7 +584,7 @@ git commit -m "feat(catalog): categorize content across metadata authorities"
 - two viewer/serving device processes with distinct authenticated Noise keys and real transport sessions;
 - one clean volunteer relay;
 - no HTTP media origin;
-- one MediaStorm instance the relay follows, holding a title the network does not already have;
+- one client application instance the relay follows, holding a title the network does not already have;
 - a trap endpoint that records forbidden media fallback and analytics traffic.
 
 **Acceptance scenarios:**
@@ -598,7 +598,7 @@ git commit -m "feat(catalog): categorize content across metadata authorities"
 7. Continue Watching survives restart and remains absent from network, publisher, relay, and analytics traces.
 8. Balanced mode uploads useful bytes within hard policy limits and suspends on metered/background/thermal constraints.
 9. The relay archives and seeds content without publisher, moderation, or global-ranking authority.
-10. A title added to the followed MediaStorm instance appears in the relay's published catalog on the next poll, seeds to a viewer device, and survives a relay restart mid-mirror without duplicating.
+10. A title added to the followed client application instance appears in the relay's published catalog on the next poll, seeds to a viewer device, and survives a relay restart mid-mirror without duplicating.
 11. The CLI finds that title on the network, reports its availability and peer count, and retrieves it to a verified local file.
 12. Developer Settings contains Studio and technical controls; normal mobile and desktop navigation do not.
 13. No PearTube analytics endpoint, playback beacon, CDN-savings report, or remote recommendation request is observed.
@@ -642,6 +642,6 @@ The revised direction is complete only when all statements below are observed:
 - Watch state and recommendations remain local unless the user explicitly pairs devices.
 - PearTube emits no viewer analytics and makes no CDN-savings claim it cannot measure.
 - Volunteer relays improve discovery and durability without gaining authority.
-- Content reaches the network by mirroring: a relay follows a MediaStorm instance, republishes what it pulls under its own identity, and seeds it, resumably and without duplication.
+- Content reaches the network by mirroring: a relay follows a client application instance, republishes what it pulls under its own identity, and seeds it, resumably and without duplication.
 - A headless CLI can search the network, report honest availability, and retrieve content to a verified local file.
 - Playback, failover, restart, privacy, and no-origin assertions pass on the supported physical platforms.

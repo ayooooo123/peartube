@@ -10,7 +10,7 @@
 // ============================================
 
 export const colors = {
-  // Brand — MediaStorm accent blue, the primary call-to-action fill
+  // Brand — client application accent blue, the primary call-to-action fill
   primary: '#3f66ff',
   primaryHover: '#6b88ff',
   primaryLight: 'rgba(63, 102, 255, 0.18)',
@@ -19,12 +19,12 @@ export const colors = {
   onPrimary: '#ffffff',
 
   // Network/peer presence — teal, used only for swarm/peer ambient UI.
-  // Deliberately outside the MediaStorm palette: it signals P2P state, not brand.
+  // Deliberately outside the client application palette: it signals P2P state, not brand.
   swarm: '#2dd4bf',
   swarmGlow: 'rgba(45, 212, 191, 0.35)',
   swarmDim: 'rgba(45, 212, 191, 0.12)',
 
-  // Accent — MediaStorm has a single accent pair; `accent` mirrors `primary`
+  // Accent — client application has a single accent pair; `accent` mirrors `primary`
   // so legacy call sites that used it for emphasis stay on-brand.
   accent: '#3f66ff',
   accentHover: '#6b88ff',
@@ -40,15 +40,15 @@ export const colors = {
   errorLight: 'rgba(231, 76, 60, 0.18)',
   red: '#e74c3c',
 
-  // Backgrounds — MediaStorm's near-black base with two lift steps
+  // Backgrounds — client application's near-black base with two lift steps
   bg: '#0b0b0f',
-  base: '#0b0b0f', // Alias for bg, matching MediaStorm's `background.base`
+  base: '#0b0b0f', // Alias for bg, matching client application's `background.base`
   bgElevated: '#16161f',
   bgSecondary: '#16161f', // Alias for bgElevated
   bgHover: '#1f1f2a',
   bgActive: '#2b2f3c',
   bgOverlay: 'rgba(11, 11, 15, 0.85)',
-  // Cards sit on the surface step. Solid, not translucent white: MediaStorm
+  // Cards sit on the surface step. Solid, not translucent white: client application
   // poster cards are opaque panels, so stacking this over art no longer bleeds.
   bgCard: '#16161f',
   contrast: '#000000',

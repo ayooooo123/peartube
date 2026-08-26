@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-09  
 **Status:** Approved by JD for implementation planning  
-**Scope:** Permissionless archive substrate, MediaStorm companion, independent indexing, asset delivery, watch-only/contributor roles, and the path to millions of records  
+**Scope:** Permissionless archive substrate, generic client companion, independent indexing, asset delivery, watch-only/contributor roles, and the path to millions of records
 **Related:** `docs/superpowers/plans/2026-07-23-permissionless-media-cdn.md`, `docs/superpowers/specs/2026-07-23-permissionless-media-cdn-design.md`
 
 ## 1. Executive decision
@@ -29,26 +29,26 @@ The central scalability decision is **verifiable index federation**:
 - Search results are references or provisional projections, never new publication authority.
 - Before playback or republishing, the companion verifies the selected source against its publisher catalog and immutable asset descriptor.
 
-This preserves permissionless publication without forcing every MediaStorm installation to replicate every record.
+This preserves permissionless publication without forcing every client application installation to replicate every record.
 
 ## 2. Product direction already settled
 
 The following interview decisions are requirements, not open questions:
 
-- Phase 1 is a PearTube companion process deployed beside each MediaStorm backend.
-- MediaStorm TV, mobile, and desktop clients remain normal MediaStorm clients.
+- Phase 1 is a PearTube companion process deployed beside each client application backend.
+- client application TV, mobile, and desktop clients remain normal client application clients.
 - The companion is **watch-only by default**: it downloads but does not announce or upload asset blocks.
 - Serving watched media requires the explicit **Contribute watched media** opt-in.
 - Permanent preservation is a separate explicit archive opt-in and storage budget.
 - After contribution is enabled, newly acquired exact assets are registered and announced automatically.
 - Auto-seed ingestion starts only after configurable evidence of meaningful watch intent; it never delays or reroutes active playback.
-- MediaStorm resolves the primary TMDB/TVDB/IMDb context for companion ingestion.
+- client application resolves the primary TMDB/TVDB/IMDb context for companion ingestion.
 - Torrent names and measured media facts corroborate or challenge that context; they do not silently replace it.
 - Exact bytes define asset identity. Byte-identical imports must converge on one asset identity and one asset swarm.
 - The user-facing hierarchy is `Work -> Edition -> Rendition -> Asset`.
 - Playable files inside a season pack remain independent assets and swarms. Pack provenance is a metadata-only bundle mapping.
-- PearTube returns an unranked set of candidates plus factual evidence. MediaStorm owns ranking and final selection.
-- PearTube is one optional MediaStorm provider. Its absence or failure never blocks debrid, tracker, or other providers.
+- PearTube returns an unranked set of candidates plus factual evidence. client application owns ranking and final selection.
+- PearTube is one optional client application provider. Its absence or failure never blocks debrid, tracker, or other providers.
 - Every companion can search the complete published catalog, even if it neither seeds media nor stores a complete local index.
 - Indexers retain a raw verifiable layer and build a separate moderated/ranked projection.
 - Phase 1 uses live/recent seeder evidence only. Long-term custody contracts and possession challenges are deferred.
@@ -77,7 +77,7 @@ flowchart LR
     I3[Self-hosted full index]
   end
 
-  subgraph Clients[MediaStorm companions]
+  subgraph Clients[client application companions]
     C1[Watch-only companion]
     C2[Contributor companion]
     C3[Archive-enabled companion]
@@ -127,8 +127,8 @@ There are signed claims and publication manifests from many publishers. Every in
 | Indexer raw store | Verbatim accepted source records and source cursors | Publication authority |
 | Indexer projection | Search keys, grouping, confidence, spam/moderation decisions | Ability to mutate or forge source records |
 | DHT/Hyperswarm | Peer rendezvous and encrypted connections | Catalog data, metadata, search results |
-| MediaStorm companion | Index selection, verification, local cache, availability probes | Universal ranking policy |
-| MediaStorm | Cross-provider ranking and active playback choice | PearTube’s network protocol |
+| client application companion | Index selection, verification, local cache, availability probes | Universal ranking policy |
+| client application | Cross-provider ranking and active playback choice | PearTube’s network protocol |
 
 ## 4. Core data structures
 
@@ -489,14 +489,14 @@ A companion:
 5. sends the same bounded query to several indexers;
 6. unions and deduplicates responses by source record/publication/asset IDs;
 7. preserves disagreements and source attribution;
-8. returns unranked candidates; source-record verification waits for MediaStorm to choose a publication or request its stream; and
+8. returns unranked candidates; source-record verification waits for client application to choose a publication or request its stream; and
 9. caches the verified selected result and source locator locally.
 
 No indexer is mandatory. Operators may add or remove indexers. A full-index companion may query its own local index first and still federate outward.
 
 ### 5.5 Search query contract
 
-Phase 1 prioritizes exact external reference queries because MediaStorm already has authoritative playback context.
+Phase 1 prioritizes exact external reference queries because client application already has authoritative playback context.
 
 ```text
 IndexQuery
@@ -701,7 +701,7 @@ After explicit opt-in:
 - byte-identical known assets add a new seeder and provenance claim, not a duplicate asset;
 - upload and disk ceilings are enforced before joining as a server;
 - eviction never removes explicit pins; and
-- contribution failure never changes the active MediaStorm playback path.
+- contribution failure never changes the active client application playback path.
 
 ### 8.3 Archive invariant
 
@@ -719,7 +719,7 @@ There is no durable global tracker database.
 
 ```mermaid
 sequenceDiagram
-  participant M as MediaStorm
+  participant M as client application
   participant C as PearTube companion
   participant IX as Indexers
   participant PF as Publisher catalog
@@ -759,9 +759,9 @@ Range inventory is also a protocol addition. Add bounded `asset-range-summary-re
 
 Canonical fixed-size blocks make byte-range mapping straightforward. The local HTTP server trims the first and last blocks to the exact requested byte range and emits normal `206`, `Content-Range`, `Content-Length`, and `Accept-Ranges` headers.
 
-## 10. MediaStorm companion contract
+## 10. client application companion contract
 
-The current relay API enumerates a local catalog and MediaStorm scans it. Replace that scale-limited path with a query contract.
+The current relay API enumerates a local catalog and client application scans it. Replace that scale-limited path with a query contract.
 
 ### 10.1 Local transport and HTTP API
 
@@ -795,9 +795,9 @@ fallback:
   title, year?, mediaKind, seasonNumber?, episodeNumber?
 ```
 
-Season and episode are positive integers. A series external ID alone never identifies an episode. The MediaStorm scraper/resolver contract must carry these fields into the PearTube provider instead of reconstructing them from a release title.
+Season and episode are positive integers. A series external ID alone never identifies an episode. The client application scraper/resolver contract must carry these fields into the PearTube provider instead of reconstructing them from a release title.
 
-### 10.2 Candidate schema and MediaStorm mapping
+### 10.2 Candidate schema and client application mapping
 
 Search returns candidates before source verification/live probing. The JSON response schema is versioned and bounded:
 
@@ -854,7 +854,7 @@ CompanionCandidateV2
 
 Absent facts are `null`/empty, never guessed. Availability is usable only before `expiresAtMs`. Search responses are unranked.
 
-The MediaStorm adapter maps each candidate deterministically:
+The client application adapter maps each candidate deterministically:
 
 - add `models.ServiceTypePearTube = "peartube"` and set `NZBResult.ServiceType` to it;
 - `Title` <- `provenance.releaseName`, falling back to the work/episode display title;
@@ -867,7 +867,7 @@ The MediaStorm adapter maps each candidate deterministically:
 - `attributes["languages"]` <- normalized union of audio/subtitle languages; and
 - codec, HDR, peer/complete-seeder counts, and availability expiry remain explicit typed attributes for compatibility and ranking.
 
-This requires a distinct two-stage MediaStorm dispatch. Scrape normalization preserves `ServiceTypePearTube` candidates without requiring a URL. After MediaStorm ranks and selects one, `PlaybackService.Resolve` branches on that service type before the current pre-resolved/debrid paths and calls authenticated `POST /api/v2/streams/open { candidateRef }`. The companion resolves the reference, verifies current source projection, probes the asset, and returns `{streamUrl, expiresAtMs, publicationId, renditionId, assetId, byteLength}`. MediaStorm then constructs `PlaybackResolution`; only this resolver response contains the route-scoped playback URL.
+This requires a distinct two-stage client application dispatch. Scrape normalization preserves `ServiceTypePearTube` candidates without requiring a URL. After client application ranks and selects one, `PlaybackService.Resolve` branches on that service type before the current pre-resolved/debrid paths and calls authenticated `POST /api/v2/streams/open { candidateRef }`. The companion resolves the reference, verifies current source projection, probes the asset, and returns `{streamUrl, expiresAtMs, publicationId, renditionId, assetId, byteLength}`. client application then constructs `PlaybackResolution`; only this resolver response contains the route-scoped playback URL.
 
 Both repositories share canonical JSON fixtures for movie, episode, missing optional facts, stale availability, conflicting candidates, rejected source verification, and deferred stream-open success/failure. PearTube never chooses the winner.
 
@@ -885,11 +885,11 @@ IngestJobRequestV2
                               publicTrackerIndependent, publicInfohash?
 ```
 
-`publicInfohash` is accepted only when MediaStorm explicitly marks the torrent tracker-independent and public. Passkeys, private tracker IDs, debrid credentials, source URLs, cookies, and signed request headers are forbidden.
+`publicInfohash` is accepted only when client application explicitly marks the torrent tracker-independent and public. Passkeys, private tracker IDs, debrid credentials, source URLs, cookies, and signed request headers are forbidden.
 
 `Idempotency-Key` is mandatory, caller-generated, and also serves as the stable job request ID. It durably binds the canonical non-secret request fingerprint. Repeating the same key/body returns the same job; the same key with a different fingerprint returns `409`. Preferred source transfer is the completed multipart spool/file stream.
 
-For fallback acquisition, MediaStorm creates an opaque 256-bit `sourceCapability` bound to `{companionIdentity, idempotencyKey, expectedLength, immutableETag, expiresAt}` before submitting the ingest job. The configured authenticated MediaStorm callback exposes only:
+For fallback acquisition, client application creates an opaque 256-bit `sourceCapability` bound to `{companionIdentity, idempotencyKey, expectedLength, immutableETag, expiresAt}` before submitting the ingest job. The configured authenticated client application callback exposes only:
 
 ```text
 HEAD /internal/peartube/v2/sources/{sourceCapability}
@@ -899,7 +899,7 @@ GET  /internal/peartube/v2/sources/{sourceCapability}
      X-PearTube-Job-ID: idempotencyKey
 ```
 
-`HEAD` returns exact `Content-Length`, immutable `ETag`, and `Accept-Ranges: bytes`. `GET` returns a bounded full body or correct `206/Content-Range`; repeated ranges are allowed only for resume by that same authenticated companion/job before terminal state. MediaStorm validates the underlying source and every redirect on each open/reopen, rejecting scheme/host/IP transitions into loopback, link-local, private, multicast, metadata-service, or other forbidden ranges. It streams bytes and never forwards the source URL, cookies, debrid credentials, or signed headers to the companion.
+`HEAD` returns exact `Content-Length`, immutable `ETag`, and `Accept-Ranges: bytes`. `GET` returns a bounded full body or correct `206/Content-Range`; repeated ranges are allowed only for resume by that same authenticated companion/job before terminal state. client application validates the underlying source and every redirect on each open/reopen, rejecting scheme/host/IP transitions into loopback, link-local, private, multicast, metadata-service, or other forbidden ranges. It streams bytes and never forwards the source URL, cookies, debrid credentials, or signed headers to the companion.
 
 The capability state is `pending | active | consumed | revoked | expired`. Successful verified acquisition consumes it; cancel/failure/expiry revokes it, closes in-flight reads, and deletes source secrets. Length/ETag drift, wrong job/companion, replay after terminal state, or expiry returns a bounded error that maps to `source-expired` or `failed`. Thus fallback acquisition is resumable but the capability is usable by exactly one job.
 
@@ -921,15 +921,15 @@ IngestJobStatusV2
 
 ### 10.4 Consent, watch intent, and publication
 
-Before any automatic ingest submission, MediaStorm must observe explicit `Contribute watched media` consent. Watch-only playback may fill its private bounded byte cache, but it creates no publisher catalog, public claims, index locator, or asset announcement.
+Before any automatic ingest submission, client application must observe explicit `Contribute watched media` consent. Watch-only playback may fill its private bounded byte cache, but it creates no publisher catalog, public claims, index locator, or asset announcement.
 
-The watch-intent setting is `contributionWatchThresholdSeconds`, measured as cumulative foreground time actually playing—not wall time, seek position, or first-play event. Default: 180 seconds. Media shorter than the threshold qualifies only on normal completion. MediaStorm emits one qualifying event per playback after the threshold and only then submits a `contribution-cache` job. An abandoned/error-ended playback before qualification creates no job; if it ends while fallback acquisition is active, MediaStorm calls `DELETE`. Normal completion does not cancel an already qualified job.
+The watch-intent setting is `contributionWatchThresholdSeconds`, measured as cumulative foreground time actually playing—not wall time, seek position, or first-play event. Default: 180 seconds. Media shorter than the threshold qualifies only on normal completion. client application emits one qualifying event per playback after the threshold and only then submits a `contribution-cache` job. An abandoned/error-ended playback before qualification creates no job; if it ends while fallback acquisition is active, client application calls `DELETE`. Normal completion does not cancel an already qualified job.
 
-The legacy MediaStorm `AutoSeed` default is not grandfathered silently. Missing or implicit legacy values migrate to contribution-disabled. Only a persisted explicitly configured `true` may be retained as consent; ambiguous installations remain watch-only and expose `migration-required` until the user chooses. Archive mode always requires its own explicit opt-in.
+The legacy client application `AutoSeed` default is not grandfathered silently. Missing or implicit legacy values migrate to contribution-disabled. Only a persisted explicitly configured `true` may be retained as consent; ambiguous installations remain watch-only and expose `migration-required` until the user chooses. Archive mode always requires its own explicit opt-in.
 
 ```mermaid
 sequenceDiagram
-  participant MS as MediaStorm backend
+  participant MS as client application backend
   participant PC as PearTube companion
   participant CAT as Companion publisher catalog
   participant IX as Independent indexers
@@ -946,11 +946,11 @@ sequenceDiagram
   PC-->>MS: completed publication/rendition/asset IDs
 ```
 
-Preferred acquisition is a completed MediaStorm spool/file handoff. A bounded cancellable fallback fetch is allowed only after the qualifying event and never proxies, reroutes, delays, or changes active playback.
+Preferred acquisition is a completed client application spool/file handoff. A bounded cancellable fallback fetch is allowed only after the qualifying event and never proxies, reroutes, delays, or changes active playback.
 
 ### 10.5 Status and user-visible proof
 
-`GET /api/v2/status` reports `effectiveRole`, contribution/archive enablement, consent/config source (`explicit`, `migrated-explicit`, `disabled`, `migration-required`), cache/archive budgets and usage, active asset announcements, active uploads and uploaded bytes, ingest jobs by state, selected indexers, and last errors. In watch-only mode it additionally reports the checked invariant `assetUploadCapability=false` and `activeAssetUploads=0`. MediaStorm exposes these fields in settings/status so the user can distinguish cached playback, contribution, and permanent archive behavior.
+`GET /api/v2/status` reports `effectiveRole`, contribution/archive enablement, consent/config source (`explicit`, `migrated-explicit`, `disabled`, `migration-required`), cache/archive budgets and usage, active asset announcements, active uploads and uploaded bytes, ingest jobs by state, selected indexers, and last errors. In watch-only mode it additionally reports the checked invariant `assetUploadCapability=false` and `activeAssetUploads=0`. client application exposes these fields in settings/status so the user can distinguish cached playback, contribution, and permanent archive behavior.
 
 ## 11. Metadata truth and user interaction
 
@@ -971,7 +971,7 @@ Conflicting claims remain present. Indexer and client policy decide which projec
 
 ### 11.2 Search behavior
 
-- MediaStorm queries exact TMDB/TVDB/IMDb context first.
+- client application queries exact TMDB/TVDB/IMDb context first.
 - Title/year/season/episode text search is a fallback and human discovery tool.
 - Low-confidence mappings remain queryable but do not silently dominate friendly results.
 - Indexers may suppress spam from their normal projection without deleting the raw source record.
@@ -1055,7 +1055,7 @@ The implementation is not “scalable” until it measures:
 - per-peer useful versus wasted transfer bytes;
 - cache hit rate and eviction churn;
 - complete-seeder coverage distribution; and
-- MediaStorm provider selection and playback success.
+- client application provider selection and playback success.
 
 ## 14. Existing code: retain, replace, add
 
@@ -1176,7 +1176,7 @@ Deliver:
 - signed index service announcement;
 - `joinPeer()` request plus connection-event dispatch into the new index purpose;
 - multiple-index union/dedup; and
-- current-accepted-source verification after MediaStorm selection.
+- current-accepted-source verification after client application selection.
 
 Proof:
 
@@ -1185,24 +1185,24 @@ Proof:
 - a forged index candidate fails source verification;
 - a watch-only companion with no local full index finds and plays the verified asset.
 
-### Gate C: MediaStorm clean cutover
+### Gate C: client application clean cutover
 
 Deliver in both repositories:
 
 - authenticated `/api/v2` search, deferred stream-open, byte-stream, ingest-job, cancellation, and status endpoints;
-- exact movie and series/season/episode MediaStorm query mapping;
+- exact movie and series/season/episode client application query mapping;
 - versioned unranked candidate facts, `ServiceTypePearTube`, deferred resolver dispatch, and shared cross-repository fixtures;
-- MediaStorm-owned compatibility filtering, ranking, and final selection;
+- client application-owned compatibility filtering, ranking, and final selection;
 - route-scoped stream URL/range behavior over v2 assets; and
-- safe completed-spool or authenticated MediaStorm source-capability callback with idempotency, resume, cancellation, redirect, and secret controls;
+- safe completed-spool or authenticated client application source-capability callback with idempotency, resume, cancellation, redirect, and secret controls;
 - threshold-triggered contribution-cache ingestion; and
 - watch-only default, safe legacy migration, and separate contribution/archive consent and budgets.
 
 Proof:
 
-- MediaStorm without PearTube behaves unchanged;
-- MediaStorm with an empty/unreachable PearTube companion falls through normally;
-- MediaStorm accepts URL-less PearTube candidates, ranks them, and dispatches only its chosen `candidateRef` through the PearTube resolver;
+- client application without PearTube behaves unchanged;
+- client application with an empty/unreachable PearTube companion falls through normally;
+- client application accepts URL-less PearTube candidates, ranks them, and dispatches only its chosen `candidateRef` through the PearTube resolver;
 - active non-PearTube playback is never delayed or rerouted by background ingestion;
 - an unauthenticated TCP control/callback request and wrong-job, reused, drifted, or expired source capability are rejected;
 - interrupted source acquisition resumes with correct `Range`/`ETag` and the same idempotency key cannot duplicate it; and
@@ -1237,7 +1237,7 @@ Deliver:
 - optional stable seeder/blind-peer configuration;
 - `@hyperswarm/testnet` multi-process harness;
 - churn, partition, restart, spam, and disk-pressure scenarios; and
-- MediaStorm adoption/reliability metrics.
+- client application adoption/reliability metrics.
 
 Proof:
 
@@ -1261,7 +1261,7 @@ This Phase 1 substrate directly supports creator-first clients later:
 - YouTube/TikTok/Twitch importers become authorized acquisition adapters, not new backend implementations; and
 - polished PearTube-native clients remain thin shells over the same host/backend protocol.
 
-No Phase 1 component may assume TMDB is the owner of identity, MediaStorm is the only client, or companion publishers are permanent pseudonyms.
+No Phase 1 component may assume TMDB is the owner of identity, client application is the only client, or companion publishers are permanent pseudonyms.
 
 ## 18. Non-goals for the first implementation
 
@@ -1270,7 +1270,7 @@ No Phase 1 component may assume TMDB is the owner of identity, MediaStorm is the
 - Durable custody promises and possession challenge markets.
 - Payment, rewards, or token incentives.
 - Encrypted/gated media.
-- Automatic interception of all MediaStorm playback.
+- Automatic interception of all client application playback.
 - A polished standalone PearTube viewer.
 - Full semantic/fuzzy search quality before exact external-reference queries work.
 - A new database or RPC framework where current HyperDB/Protomux primitives suffice.
@@ -1282,7 +1282,7 @@ The refined architecture is successful when all of the following are observable:
 1. Exact byte identity is deterministic across independent imports and backed by the actual Hypercore tree root.
 2. One asset has one static core key and one asset discovery topic regardless of publisher.
 3. Publisher provenance and conflicting metadata remain separate from asset identity.
-4. A watch-only MediaStorm companion can search the broad network without storing the broad index.
+4. A watch-only client application companion can search the broad network without storing the broad index.
 5. Search works through multiple independently operated indexers.
 6. An indexer cannot forge a source publication that passes companion verification.
 7. An ordinary client may change indexers without changing protocol or losing direct publisher/asset verification.
@@ -1293,9 +1293,9 @@ The refined architecture is successful when all of the following are observable:
 12. Warm and cold indexers reach the same checkpoint and authorization state without replaying every capacity epoch.
 13. Indexers restart from durable cursors and repair one publisher without rebuilding every publisher.
 14. Private tracker/debrid secrets never enter public records or the companion job database.
-15. MediaStorm ranks URL-less PearTube candidates before the chosen candidate is verified, probed, and resolved.
+15. client application ranks URL-less PearTube candidates before the chosen candidate is verified, probed, and resolved.
 16. Unauthenticated control/callback calls and replayed, expired, wrong-job, or drifted source capabilities fail closed.
-17. MediaStorm remains fully functional when PearTube is absent, empty, slow, or unreachable.
+17. client application remains fully functional when PearTube is absent, empty, slow, or unreachable.
 18. Real multi-process DHT tests demonstrate discovery, query, transfer, churn, restart, and partition healing.
 
 ## 20. Final architectural verdict
@@ -1309,6 +1309,6 @@ The missing pieces are not another global database. They are:
 - scalable publisher-to-indexer discovery;
 - catalog epoch rollover;
 - multi-peer asset scheduling;
-- and a search-first MediaStorm companion API.
+- and a search-first client application companion API.
 
 Build those around the existing source-of-truth model. Do not replace publisher ownership with a consensus catalog, and do not make ordinary clients carry the world.

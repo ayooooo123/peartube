@@ -6,7 +6,7 @@
  * NativeWind call sites can use the `font-heading` / `font-heading-medium`
  * utilities from tailwind.config.js instead.
  *
- * The nested `title` / `body` / `caption` / `label` scales mirror MediaStorm's
+ * The nested `title` / `body` / `caption` / `label` scales mirror client application's
  * type ramp. Each entry is a partial RN TextStyle meant to be spread into a
  * StyleSheet entry: `title: { ...fonts.title.lg, color: colors.text }`.
  * They carry no fontFamily so they compose with either font above.

@@ -45,7 +45,7 @@ export class SourceProviderRegistry {
   getFileClient () {
     if (this._fileClient) return this._fileClient
     const fileConfig = this.config.file || this.config.sources?.file || this.config.directSources?.file || {}
-    const defaultAllowed = ['/Users/jd/mediastorm-local', '/tmp', '/var', '/private/var', tmpdir()].filter(Boolean)
+    const defaultAllowed = ['/Users/jd/client-local', '/tmp', '/var', '/private/var', tmpdir()].filter(Boolean)
     const envAllowed = process.env.PEARTUBE_FILE_ALLOWED_PATHS
       ? process.env.PEARTUBE_FILE_ALLOWED_PATHS.split(',').map(s => s.trim()).filter(Boolean)
       : defaultAllowed

@@ -319,7 +319,7 @@ export function normalizeArchiveSubmission(fields = {}, file = null) {
   // metadata-provider credentials, and a provider URL in the claim would make
   // browsing the catalog reach an origin outside the swarm. The console form
   // has always carried this; the machine API dropped it, so everything a
-  // MediaStorm-style client seeded rendered as a blank placeholder forever.
+  // client application-style client seeded rendered as a blank placeholder forever.
   const tmdbPosterPath = text(fields, 'tmdbPosterPath')
   if (tmdbPosterPath && !TMDB_POSTER_PATH.test(tmdbPosterPath)) {
     return invalid('INVALID_POSTER_PATH', 'tmdbPosterPath must be a TMDB artwork path such as /abc123.jpg', 'tmdbPosterPath')

@@ -9,7 +9,7 @@ import { createRelayService } from '../src/service.js'
 import { resolveRelayConfig } from '../src/config.js'
 
 // A relay's own console answers submissions with 303 redirects, which a program
-// cannot read. These cover the machine-facing surface a MediaStorm backend
+// cannot read. These cover the machine-facing surface a client application backend
 // drives: enqueue by upload, poll by job id, and read the published catalog as
 // references that mean something on another machine.
 
@@ -266,7 +266,7 @@ test('POST /api/v1/archive deduplicates concurrent submissions with one idempote
     }
     const submit = () => fetch(`${base}/api/v1/archive`, {
       ...seed(body),
-      headers: { 'content-type': 'application/json', 'idempotency-key': 'mediastorm-v1:movie-9367-source-a' }
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'client-v1:movie-9367-source-a' }
     })
 
     const first = await submit()
@@ -305,7 +305,7 @@ test('POST /api/v1/archive requeues the same durable job after failure', async f
     }
     const submit = () => fetch(`${base}/api/v1/archive`, {
       ...seed(body),
-      headers: { 'content-type': 'application/json', 'idempotency-key': 'mediastorm-v1:movie-9367-retryable' }
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'client-v1:movie-9367-retryable' }
     })
 
     const first = await (await submit()).json()
@@ -334,7 +334,7 @@ test('idempotent upload retry replaces failed staged bytes without leaking them'
         tmdbId: '9367',
         tmdbTitle: 'Wedding Crashers'
       })
-      request.headers = { 'idempotency-key': 'mediastorm-v1:movie-9367-upload-retry' }
+      request.headers = { 'idempotency-key': 'client-v1:movie-9367-upload-retry' }
       return fetch(`${base}/api/v1/archive`, request)
     }
 
@@ -656,7 +656,7 @@ test('the catalog resolves an episode rendition its series entity holds no claim
   // while the publication's availability claim is anchored to the EPISODE
   // entity — so the per-entity source lookup asks about a subject that holds no
   // claim and comes back empty. The catalog then advertised renditionId null,
-  // which MediaStorm's search drops outright (nobody can be served the episode)
+  // which client application's search drops outright (nobody can be served the episode)
   // and its own catalog check reads as "not seeded" (so it re-seeds forever).
   const requested = []
   const service = fakeService({
@@ -937,7 +937,7 @@ test('an empty console submission still reports itself rather than redirecting t
 
 // How the relay is bound is the only thing standing in front of an
 // unauthenticated API, so it decides what the enumerating and byte-serving half
-// of it answers. A MediaStorm backend in Docker reaches the relay over a
+// of it answers. A client application backend in Docker reaches the relay over a
 // non-loopback address, which is exactly the case that has to be opted into
 // rather than assumed.
 
@@ -1005,7 +1005,7 @@ test('the same relay serves catalog and stream once the operator sets the switch
     const api = await driveApi(base)
 
     t.is(api.catalog.status, 200)
-    t.is(api.catalogBody.entities.length, 1, 'the MediaStorm integration test can enumerate again')
+    t.is(api.catalogBody.entities.length, 1, 'the client application integration test can enumerate again')
     t.is(api.stream.status, 200)
     t.alike(api.streamBody, RENDITION_BYTES, 'and read the bytes over HTTP')
     t.is(opens.length, 1)

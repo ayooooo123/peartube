@@ -1,18 +1,18 @@
-# MediaStorm PearTube Candidate Resolver Implementation Plan
+# Generic Client PearTube Candidate Resolver Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make PearTube a first-class URL-less MediaStorm service type that participates in normal ranking and resolves only after MediaStorm selects it.
+**Goal:** Make PearTube a first-class URL-less service that participates in a client application's normal ranking and resolves only after that client selects it.
 
 **Architecture:** Replace the v1 full-catalog scan with exact `/api/v2/search`. Search maps factual `CompanionCandidateV2` data into `NZBResult` with `ServiceTypePearTube` and an opaque candidate reference, leaving `Link`, `DownloadURL`, `stream_url`, and `preresolved` empty. The playback service dispatches the chosen PearTube result to `/api/v2/streams/open`.
 
-**Tech Stack:** Go, MediaStorm `models.NZBResult`, existing debrid scraper aggregation/ranking, authenticated companion client, standard `net/http`.
+**Tech Stack:** Go, a client application's result model, existing provider aggregation/ranking, authenticated companion client, standard `net/http`.
 
 ## Global Constraints
 
-- This plan modifies `/Users/jd/projects/mediastorm-backend` as well as PearTube fixtures.
+- This plan originally covered a separate client repository as well as PearTube fixtures.
 - Depends on Plan 08 API contracts.
-- MediaStorm retains cross-provider filtering/ranking/final selection.
+- The client application retains cross-provider filtering, ranking, and final selection.
 - PearTube verification/probing occurs only after selection.
 - No fallback path may reinterpret a PearTube result as `ServiceTypeDebrid`.
 - Existing non-PearTube playback behavior must remain byte-for-byte compatible at the API boundary.
@@ -22,12 +22,12 @@
 ### Task 1: Replace the v1 client/search contract
 
 **Files:**
-- Modify: `/Users/jd/projects/mediastorm-backend/backend/models/indexer.go`
-- Modify: `/Users/jd/projects/mediastorm-backend/backend/services/peartube/client.go`
-- Modify: `/Users/jd/projects/mediastorm-backend/backend/services/peartube/search.go`
-- Modify: `/Users/jd/projects/mediastorm-backend/backend/services/debrid/scraper_peartube.go`
-- Test: `/Users/jd/projects/mediastorm-backend/backend/services/peartube/peartube_test.go`
-- Test: `/Users/jd/projects/mediastorm-backend/backend/services/debrid/scraper_peartube_test.go`
+- Modify: `/Users/jd/projects/client-backend/backend/models/indexer.go`
+- Modify: `/Users/jd/projects/client-backend/backend/services/peartube/client.go`
+- Modify: `/Users/jd/projects/client-backend/backend/services/peartube/search.go`
+- Modify: `/Users/jd/projects/client-backend/backend/services/debrid/scraper_peartube.go`
+- Test: `/Users/jd/projects/client-backend/backend/services/peartube/peartube_test.go`
+- Test: `/Users/jd/projects/client-backend/backend/services/debrid/scraper_peartube_test.go`
 
 **Interfaces:**
 - Adds `models.ServiceTypePearTube ContentServiceType = "peartube"`.
@@ -47,7 +47,7 @@ Also assert exact episode fields reach the HTTP query instead of being reconstru
 
 - [ ] **Step 2: Run the focused Go tests**
 
-Run: `cd /Users/jd/projects/mediastorm-backend/backend && go test ./services/peartube ./services/debrid -run 'PearTube|Search'`
+Run: `cd /Users/jd/projects/client-backend/backend && go test ./services/peartube ./services/debrid -run 'PearTube|Search'`
 
 Expected: FAIL because current code emits v1 direct URLs with `ServiceTypeDebrid`.
 
@@ -62,17 +62,17 @@ Expected: PASS for movie, episode, fallback title, multiple candidates, empty co
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/jd/projects/mediastorm-backend && git add backend/models/indexer.go backend/services/peartube/client.go backend/services/peartube/search.go backend/services/debrid/scraper_peartube.go backend/services/peartube/peartube_test.go backend/services/debrid/scraper_peartube_test.go && git commit -m "feat(peartube): return deferred companion candidates"
+cd /Users/jd/projects/client-backend && git add backend/models/indexer.go backend/services/peartube/client.go backend/services/peartube/search.go backend/services/debrid/scraper_peartube.go backend/services/peartube/peartube_test.go backend/services/debrid/scraper_peartube_test.go && git commit -m "feat(peartube): return deferred companion candidates"
 ```
 
 ### Task 2: Add deferred playback resolution
 
 **Files:**
-- Modify: `/Users/jd/projects/mediastorm-backend/backend/services/playback/service.go`
-- Create: `/Users/jd/projects/mediastorm-backend/backend/services/peartube/resolver.go`
-- Modify: `/Users/jd/projects/mediastorm-backend/backend/main.go`
-- Test: `/Users/jd/projects/mediastorm-backend/backend/services/playback/service_test.go`
-- Test: `/Users/jd/projects/mediastorm-backend/backend/services/debrid/playback_resolve_test.go`
+- Modify: `/Users/jd/projects/client-backend/backend/services/playback/service.go`
+- Create: `/Users/jd/projects/client-backend/backend/services/peartube/resolver.go`
+- Modify: `/Users/jd/projects/client-backend/backend/main.go`
+- Test: `/Users/jd/projects/client-backend/backend/services/playback/service_test.go`
+- Test: `/Users/jd/projects/client-backend/backend/services/debrid/playback_resolve_test.go`
 
 **Interfaces:**
 - Produces `peartube.Resolver.Open(ctx, candidateRef) (*models.PlaybackResolution, error)`.
@@ -91,7 +91,7 @@ if resolver.OpenCalls() != 1 || debrid.ResolveCalls() != 0 { t.Fatal("wrong reso
 
 - [ ] **Step 2: Implement `POST /api/v2/streams/open`**
 
-Send only `candidateRef`, authenticate the call, require a route-scoped URL owned by the configured companion, map structured `candidate-expired`, `source-not-current`, `unavailable`, and `unsupported` errors, and return the normal MediaStorm playback resolution shape.
+Send only `candidateRef`, authenticate the call, require a route-scoped URL owned by the configured companion, map structured `candidate-expired`, `source-not-current`, `unavailable`, and `unsupported` errors, and return the normal client application playback resolution shape.
 
 - [ ] **Step 3: Protect non-PearTube paths**
 
@@ -99,7 +99,7 @@ Run existing debrid/usenet resolver tests and assert PearTube candidates are ski
 
 - [ ] **Step 4: Verify both repositories' fixtures**
 
-Run: `cd /Users/jd/projects/mediastorm-backend/backend && go test ./services/peartube ./services/debrid ./services/playback`
+Run: `cd /Users/jd/projects/client-backend/backend && go test ./services/peartube ./services/debrid ./services/playback`
 
 Run: `cd packages/cli && npx brittle test/companion-v2-contract.test.mjs`
 
@@ -108,6 +108,6 @@ Expected: URL-less search, deferred open, and every existing non-PearTube resolv
 - [ ] **Step 5: Commit in each repository**
 
 ```bash
-cd /Users/jd/projects/mediastorm-backend && git add backend/models backend/services/peartube backend/services/debrid backend/services/playback backend/main.go && git commit -m "feat(peartube): resolve selected candidates after ranking"
-cd /Users/jd/projects/peartube && git add packages/cli/test/companion-v2-contract.test.mjs && git commit -m "test(cli): share MediaStorm v2 candidate fixtures"
+cd /Users/jd/projects/client-backend && git add backend/models backend/services/peartube backend/services/debrid backend/services/playback backend/main.go && git commit -m "feat(peartube): resolve selected candidates after ranking"
+cd /Users/jd/projects/peartube && git add packages/cli/test/companion-v2-contract.test.mjs && git commit -m "test(cli): share client application v2 candidate fixtures"
 ```

@@ -4,8 +4,8 @@ import nodePath from 'node:path'
 import { tmpdir } from 'node:os'
 
 const DEFAULT_ALLOWED_PATHS = Object.freeze([
-  '/Users/jd/mediastorm-local/cache/streams',
-  '/Users/jd/mediastorm-local',
+  '/Users/jd/client-local/cache/streams',
+  '/Users/jd/client-local',
   '/tmp',
   tmpdir()
 ].filter(Boolean).map(p => nodePath.resolve(p)))

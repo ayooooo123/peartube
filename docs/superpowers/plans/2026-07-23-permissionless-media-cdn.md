@@ -28,7 +28,7 @@ Locked product decisions:
 - All media is public. There is no protected rendition, entitlement, or license path anywhere in the product or protocol.
 - PearTube collects no playback, engagement, recommendation, or CDN-savings analytics, and does not aggregate or forward viewer telemetry.
 - Playback is strict P2P. There is no HTTP media-origin fallback and no required provider-operated seed. Catalog visibility and playback UI must therefore expose Awaiting replication, Limited availability, Healthy, and Unavailable honestly.
-- Relay nodes are permissionless volunteer discovery/archive/mirror nodes. They may follow MediaStorm instances, gossip catalog records, cache media bytes, satisfy archive pledges, and seed retained ranges; they gain no publication, moderation, or catalog authority over anyone else.
+- Relay nodes are permissionless volunteer discovery/archive/mirror nodes. They may follow client application instances, gossip catalog records, cache media bytes, satisfy archive pledges, and seed retained ranges; they gain no publication, moderation, or catalog authority over anyone else.
 
 
 ---

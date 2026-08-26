@@ -28,7 +28,7 @@ packages/
   host/             Backend lifecycle, host error codes, PROTOCOL_VERSION, universal HRPC client (readiness, errors, events, namespaces)
   backend/          Publisher catalogs, indexes, immutable assets, scoped P2P, policy, playback, archive evidence
   spec/             HRPC schema source and generated JS code
-  cli/              Relay, MediaStorm companion API, ingest jobs, archive UI, Docker support
+  cli/              Relay, authenticated machine API, ingest jobs, archive UI, Docker support
   bare-*/           Native Bare support packages
 ```
 
@@ -94,20 +94,20 @@ npm test --prefix packages/spec
 - Playback and retention operate on exact immutable rendition ranges. There is no HTTP media-origin fallback.
 - S3-compatible storage is the only cloud block-offload backend. Offloaded blocks restore into the same verified asset cores used for playback and seeding.
 
-## MediaStorm Companion Boundary
+## Generic Client Boundary
 
-The relay exposes an authenticated local `/api/v2` companion surface. Unix-domain sockets are the default. TCP/container use requires configured request authentication.
+The relay exposes an authenticated local `/api/v2` machine surface. Unix-domain sockets are the default. TCP/container use requires configured request authentication.
 
 ```text
-MediaStorm exact selector
+Client application exact selector
   -> bounded PearTube candidate search
-  -> MediaStorm ranks all providers
+  -> client application ranks available sources
   -> selected opaque candidate reference
   -> PearTube re-verifies current publisher state and availability
   -> route-scoped playback capability
 ```
 
-MediaStorm keeps tracker/debrid credentials, source URLs, cookies, and acquisition policy private. PearTube publishes verified immutable descriptors and non-secret claims, never bearer URLs.
+Client applications keep private credentials, source URLs, cookies, and acquisition policy outside PearTube. PearTube publishes verified immutable descriptors and non-secret claims, never bearer URLs.
 
 ## Participation And Authority
 
@@ -115,7 +115,7 @@ MediaStorm keeps tracker/debrid credentials, source URLs, cookies, and acquisiti
 - Balanced peers seed within explicit device and network budgets.
 - Archive-enabled peers may retain ranges, issue pledges, and answer possession challenges.
 - Local moderation and followed publisher/index lists decide what work this device performs.
-- Relays, indexers, MediaStorm instances, and archivists gain no publisher or global moderation authority.
+- Relays, indexers, client applications, and archivists gain no publisher or global moderation authority.
 - Catalog presence, peer reachability, and archival durability are separate facts. UI and APIs must not turn any one of them into an availability guarantee.
 
 ## Generated Artifacts

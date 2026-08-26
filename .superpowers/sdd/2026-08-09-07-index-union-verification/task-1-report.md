@@ -91,7 +91,7 @@ The two existing direct-reference regressions remain unchanged.
 - Public candidates contain no `sourceRecordRef`, flat locator IDs, `evidenceWeight`, query cursor/revision, index annotation, playback URL, credential, cookie, request header, control capability, universal score, or ranking field.
 - `candidateRef` is a fresh random 32-byte base64url token, local to one federation instance, bounded to 43 characters, stored only in the caller-supplied cache, lazily expired, and unrelated to a peer/service/query/network identity.
 - Candidate cache values and locators are immutable. The federation prunes or evicts only entries it owns and never closes or clears caller-owned caches, services, transports, swarms, or connections.
-- Result order is encounter order only. There is no sorting, universal ordering contract, compatibility computation, or final selection. MediaStorm remains responsible for compatibility ranking and selection.
+- Result order is encounter order only. There is no sorting, universal ordering contract, compatibility computation, or final selection. client application remains responsible for compatibility ranking and selection.
 - Diagnostics surface independent introduction IDs only; they do not make indexer evidence authoritative.
 - No payload telemetry was added.
 

@@ -18,14 +18,14 @@ Status as of 2026-08-26: pre-alpha, active development.
 - Shared HRPC handlers are centralized in `packages/backend/src/hrpc-handlers.js` and registered by `packages/backend/src/backend-entry.js`.
 - Schema generation produces JS HRPC/schema output via `npm run schema:full`.
 - Electrobun desktop is off the old `pear run` path and uses embedded `pear-runtime`.
-- Relay support includes the authenticated MediaStorm companion API, bounded ingest jobs, archive UI, local mirror workflows, local catalog indexing, and S3-compatible block offload.
+- Relay support includes the authenticated machine API, bounded ingest jobs, archive UI, local mirror workflows, local catalog indexing, and S3-compatible block offload.
 
 ## Current Product Direction
 
 - Consumer-first Home, Search/Discover, Library, and playback surfaces; publishing and network controls stay behind Developer Settings or the relay CLI.
 - Permissionless signed catalogs with local moderation, bounded index federation, and provenance-preserving source selection.
 - Strict P2P immutable-rendition playback with structured availability errors and no HTTP origin fallback.
-- MediaStorm performs cross-provider ranking and private acquisition. PearTube verifies, publishes, transfers, retains, and archives selected media.
+- Client applications perform their own ranking and private acquisition. PearTube verifies, publishes, transfers, retains, and archives selected media.
 - Relays are voluntary peers, not trusted infrastructure. S3 is an operator-selected block tier, not a media authority or public origin.
 
 ## Backend Capability Progress
@@ -38,7 +38,7 @@ The shared backend includes:
 - static rendition cores, exact-range transfer, multi-peer playback, availability evidence, seeding, and retention;
 - watch-only, balanced, and archive-enabled participation policy with device/network/storage budgets;
 - archive pledges, possession challenges, S3 block offload, restore-on-read, and relay reseeding;
-- authenticated MediaStorm companion search, deferred open, ingest jobs, and route-scoped streams;
+- authenticated machine search, deferred open, ingest jobs, and route-scoped streams;
 - local encrypted personal state, optional device pairing, moderation, library, watch history, and recommendations without viewer analytics.
 
 ## Reproducibility Status

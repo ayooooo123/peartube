@@ -28,7 +28,7 @@ function extractParams (opts = {}) {
 /**
  * Direct TorBox source client for PearTube Companion.
  * Connects directly to TorBox API to request and refresh download links,
- * and streams ranges from TorBox CDN without proxying through MediaStorm.
+ * and streams ranges from TorBox CDN without proxying through client application.
  */
 export class TorBoxSourceClient {
   constructor ({

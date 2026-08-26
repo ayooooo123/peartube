@@ -317,7 +317,7 @@ function normalizeSha256 (value, name, required = false) {
  *
  * `sha256` is OPTIONAL, because a granted remote source cannot state one: a
  * whole-file digest of a debrid-backed title means pulling every byte of it
- * through MediaStorm first, which is the exact cost the granted path exists to
+ * through client application first, which is the exact cost the granted path exists to
  * avoid. A local file still sends a real digest and is still verified against it
  * byte for byte — a digest that is PRESENT is never skipped.
  *
@@ -717,7 +717,6 @@ export function createIngestManager ({
     if (!attachment?.sourceCapability) return
     try {
       if (sourceClient) await sourceClient.revoke({ capability: attachment.sourceCapability, jobId })
-      await sourceClient.revoke({ capability: attachment.sourceCapability, jobId })
     } catch (error) {
       logger?.archive?.warn?.('Companion source grant revocation failed', {
         jobId,

@@ -25,7 +25,7 @@ import { createRelayService } from '../src/service.js'
 import { createArchiveHttpSurface } from '../src/archive-console.js'
 
 const SECRET = 'cd'.repeat(32)
-const CLIENT = 'mediastorm-test'
+const CLIENT = 'client-test'
 const NOW = 1_786_406_400_000
 const noop = () => {}
 const logger = Object.fromEntries(

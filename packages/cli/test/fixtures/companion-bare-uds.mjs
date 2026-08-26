@@ -21,7 +21,7 @@ const canonicalHeaders = signControlRequest({
   path: searchRequestTarget,
   timestamp: NOW,
   nonce: 'canonical-nonce-01',
-  client: 'mediastorm-test',
+  client: 'client-test',
   secret: 'ab'.repeat(32)
 })
 if (canonicalHeaders['X-PearTube-MAC'] !== canonicalSearchMac) {
@@ -38,7 +38,7 @@ try {
   fs.mkdirSync(storagePath, { mode: 0o700 })
   const config = resolveCompanionConfig({
     enabled: true,
-    client: 'mediastorm-bare-test',
+    client: 'client-bare-test',
     sharedSecret: SECRET
   }, { storagePath })
   server = createCompanionServer({ service: {}, config, clock: () => NOW })

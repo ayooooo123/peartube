@@ -821,7 +821,7 @@ export function createGrantedRangedSource ({
     // whole file, so a request that states one is ingested in a single pass
     // from byte zero rather than resumed from a staged prefix — the digest
     // stays exactly as verifiable as it was when the title was spooled and
-    // re-read. MediaStorm cannot state one for a debrid-backed title without
+    // re-read. client application cannot state one for a debrid-backed title without
     // pulling it through itself first, so every grant production issues carries
     // an ETag and no digest, and takes the resumable shape.
     resumable: digest === null,

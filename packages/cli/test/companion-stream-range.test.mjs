@@ -9,7 +9,7 @@ import { createCompanionServer } from '../src/companion/server.js'
 import { createCompanionStreamRoute } from '../src/companion/stream-route.js'
 import { createStreamCapabilityStore } from '../src/companion/stream-capabilities.js'
 
-const CLIENT = 'mediastorm-stream-test'
+const CLIENT = 'client-stream-test'
 const SECRET = 'ab'.repeat(32)
 const NOW = 1_786_406_400_000
 const REF = 'R'.repeat(43)

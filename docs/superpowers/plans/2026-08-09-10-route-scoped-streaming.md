@@ -34,7 +34,7 @@
 - [ ] **Step 1: Write failing scope and expiry tests**
 
 ```js
-const opened = await api.openStream({ candidateRef, clientIdentity: 'mediastorm-a' })
+const opened = await api.openStream({ candidateRef, clientIdentity: 'client-a' })
 t.ok(opened.url.includes('/api/v2/stream/pub-1/rend-1?cap='))
 t.ok(capabilities.consume(parseCap(opened.url), exactRequest))
 t.exception(() => capabilities.consume(parseCap(opened.url), wrongRenditionRequest))
@@ -64,10 +64,10 @@ git commit -m "feat(companion): bind stream route capabilities"
 - Create: `packages/cli/src/companion/stream-route.js`
 - Modify: `packages/cli/src/companion/routes.js`
 - Modify: `packages/backend/src/blob-playback-service.js`
-- Modify: `/Users/jd/projects/mediastorm-backend/backend/services/peartube/client.go`
+- Modify: `/Users/jd/projects/client-backend/backend/services/peartube/client.go`
 - Test: `packages/cli/test/companion-stream-range.test.mjs`
 - Test: `packages/backend/test/playback-api.test.mjs`
-- Test: `/Users/jd/projects/mediastorm-backend/backend/services/peartube/peartube_test.go`
+- Test: `/Users/jd/projects/client-backend/backend/services/peartube/peartube_test.go`
 
 **Interfaces:**
 - Consumes: verified candidate lease and `requestRange()` from Plan 03.
@@ -91,7 +91,7 @@ Cover suffix range, open-ended range, unsatisfiable `416`, `If-Range`, multi-ran
 
 Parse one range, call the backend only for requested bytes, write headers before streaming verified chunks, honor backpressure, avoid chunked transfer when exact length is known, and map verified-source exhaustion to a bounded pre-header error or connection termination after headers.
 
-- [ ] **Step 3: Update MediaStorm ownership validation**
+- [ ] **Step 3: Update client application ownership validation**
 
 Replace origin-only `OwnsURL()` with exact companion route/capability validation. Reject redirects and any returned URL outside the authenticated companion base/UDS proxy.
 
@@ -101,13 +101,13 @@ Run: `cd packages/cli && npx brittle test/companion-stream-capability.test.mjs t
 
 Run: `cd packages/backend && npx brittle test/playback-api.test.mjs test/multi-peer-playback.test.mjs`
 
-Run: `cd /Users/jd/projects/mediastorm-backend/backend && go test ./services/peartube ./services/playback`
+Run: `cd /Users/jd/projects/client-backend/backend && go test ./services/peartube ./services/playback`
 
 Expected: correct range headers/bytes, no full-file buffering, and cancellation reaches the peer scheduler.
 
 - [ ] **Step 5: Commit in each repository**
 
 ```bash
-cd /Users/jd/projects/mediastorm-backend && git add backend/services/peartube/client.go backend/services/peartube/peartube_test.go && git commit -m "fix(peartube): restrict companion stream capabilities"
+cd /Users/jd/projects/client-backend && git add backend/services/peartube/client.go backend/services/peartube/peartube_test.go && git commit -m "fix(peartube): restrict companion stream capabilities"
 cd /Users/jd/projects/peartube && git add packages/cli/src/companion packages/cli/test packages/backend/src/blob-playback-service.js packages/backend/test/playback-api.test.mjs && git commit -m "feat(companion): stream verified bytes with scoped capabilities"
 ```

@@ -205,7 +205,7 @@ test('an abort raised downstream is an interruption, not a cancellation, and lea
   t.alike(sourceSpools(spoolRoot), [], 'and no part-downloaded title was staged on the volume')
 
   // The dead grant is still revoked — it is worthless and holding it open costs
-  // MediaStorm a capability slot. What survives is the PROGRESS, which is the
+  // client application a capability slot. What survives is the PROGRESS, which is the
   // whole difference: a resubmit brings a fresh grant and carries on.
   t.ok(client.revokes.includes(CAPABILITY), 'the spent grant is released')
 })
@@ -391,7 +391,7 @@ test('a granted source with no up-front digest still ingests, and a request with
   await manager.start()
 
   // A debrid-backed title has no whole-file SHA-256 to state: computing one
-  // means pulling every byte through MediaStorm first, which is the cost the
+  // means pulling every byte through client application first, which is the cost the
   // granted path exists to avoid. Its identity is the ETag instead.
   const request = movieRequest(bytes)
   delete request.expected.sha256

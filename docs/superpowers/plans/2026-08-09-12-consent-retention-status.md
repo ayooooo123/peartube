@@ -6,7 +6,7 @@
 
 **Architecture:** Effective policy is computed from versioned persisted settings. Missing or ambiguous legacy `AutoSeed` migrates to contribution-disabled plus `migration-required`; only a persisted explicit true may retain contribution consent. Playback observations feed a threshold state machine, which submits an out-of-band job only after qualification and never alters active playback.
 
-**Tech Stack:** MediaStorm Go settings/migrations/playback events, PearTube resource policy and CLI status, Brittle, Go tests.
+**Tech Stack:** client application Go settings/migrations/playback events, PearTube resource policy and CLI status, Brittle, Go tests.
 
 ## Global Constraints
 
@@ -15,21 +15,21 @@
 - A private bounded playback byte cache is allowed in watch-only mode but is not announced.
 - `contribution-cache` is evictable; `archive-pin` is separately opted in and never selected automatically.
 - Abandoned plays before threshold create no ingest job.
-- MediaStorm remains functional when status or job submission fails.
+- client application remains functional when status or job submission fails.
 
 ---
 
-### Task 1: Migrate MediaStorm settings to explicit consent
+### Task 1: Migrate client application settings to explicit consent
 
 **Files:**
-- Modify: `/Users/jd/projects/mediastorm-backend/backend/config/settings.go`
-- Modify: `/Users/jd/projects/mediastorm-backend/backend/config/migrations.go`
-- Modify: `/Users/jd/projects/mediastorm-backend/backend/services/peartube/config.go`
-- Modify: `/Users/jd/projects/mediastorm-backend/backend/handlers/admin_ui.go`
-- Modify: `/Users/jd/projects/mediastorm-backend/backend/handlers/admin_templates/settings.html`
-- Test: `/Users/jd/projects/mediastorm-backend/backend/config/migrations_test.go`
-- Test: `/Users/jd/projects/mediastorm-backend/backend/services/peartube/config_test.go`
-- Test: `/Users/jd/projects/mediastorm-backend/backend/handlers/peartube_settings_test.go`
+- Modify: `/Users/jd/projects/client-backend/backend/config/settings.go`
+- Modify: `/Users/jd/projects/client-backend/backend/config/migrations.go`
+- Modify: `/Users/jd/projects/client-backend/backend/services/peartube/config.go`
+- Modify: `/Users/jd/projects/client-backend/backend/handlers/admin_ui.go`
+- Modify: `/Users/jd/projects/client-backend/backend/handlers/admin_templates/settings.html`
+- Test: `/Users/jd/projects/client-backend/backend/config/migrations_test.go`
+- Test: `/Users/jd/projects/client-backend/backend/services/peartube/config_test.go`
+- Test: `/Users/jd/projects/client-backend/backend/handlers/peartube_settings_test.go`
 
 **Interfaces:**
 - Replaces implicit `AutoSeed` with versioned settings `ContributeWatchedMedia`, `ContributionBudget`, `ArchiveEnabled`, and `ArchiveBudget`.
@@ -60,26 +60,26 @@ Persist a settings schema version, remove “defaults on whenever relay configur
 
 - [ ] **Step 3: Run settings tests**
 
-Run: `cd /Users/jd/projects/mediastorm-backend/backend && go test ./config ./services/peartube ./handlers -run 'PearTube|Migration|AutoSeed|Contribute'`
+Run: `cd /Users/jd/projects/client-backend/backend && go test ./config ./services/peartube ./handlers -run 'PearTube|Migration|AutoSeed|Contribute'`
 
 Expected: missing/ambiguous installs are watch-only; explicit persisted true remains contributor; archive is never inferred.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Users/jd/projects/mediastorm-backend && git add backend/config/settings.go backend/config/migrations.go backend/services/peartube/config.go backend/handlers/admin_ui.go backend/handlers/admin_templates/settings.html backend/config/migrations_test.go backend/services/peartube/config_test.go backend/handlers/peartube_settings_test.go && git commit -m "fix(peartube): migrate to explicit contribution consent"
+cd /Users/jd/projects/client-backend && git add backend/config/settings.go backend/config/migrations.go backend/services/peartube/config.go backend/handlers/admin_ui.go backend/handlers/admin_templates/settings.html backend/config/migrations_test.go backend/services/peartube/config_test.go backend/handlers/peartube_settings_test.go && git commit -m "fix(peartube): migrate to explicit contribution consent"
 ```
 
 ### Task 2: Gate jobs on meaningful watch intent and enforce backend role policy
 
 **Files:**
-- Modify: `/Users/jd/projects/mediastorm-backend/backend/services/peartube/autoseed.go`
-- Modify: `/Users/jd/projects/mediastorm-backend/backend/handlers/peartube.go`
+- Modify: `/Users/jd/projects/client-backend/backend/services/peartube/autoseed.go`
+- Modify: `/Users/jd/projects/client-backend/backend/handlers/peartube.go`
 - Modify: `packages/backend/src/playback/resource-policy.js`
 - Modify: `packages/backend/src/seeding.js`
 - Modify: `packages/backend/src/api/policy.js`
 - Modify: `packages/cli/src/status.js`
-- Test: `/Users/jd/projects/mediastorm-backend/backend/services/peartube/autoseed_test.go`
+- Test: `/Users/jd/projects/client-backend/backend/services/peartube/autoseed_test.go`
 - Test: `packages/backend/test/playback-resource-policy.test.mjs`
 - Test: `packages/backend/test/network-policy-runtime.test.mjs`
 - Test: `packages/cli/test/status.test.mjs`
@@ -105,7 +105,7 @@ Use configured elapsed-time and/or watched-fraction evidence, deduplicate one jo
 
 - [ ] **Step 3: Enforce role policy at source**
 
-Guard asset announcements, upload serving, publisher creation, locator publication, contribution-cache retention, and archive allocator entry in backend policy APIs. Do not rely only on UI/MediaStorm gating.
+Guard asset announcements, upload serving, publisher creation, locator publication, contribution-cache retention, and archive allocator entry in backend policy APIs. Do not rely only on UI/client application gating.
 
 - [ ] **Step 4: Expand status without secrets**
 
@@ -113,7 +113,7 @@ Report effective mode, migration state, consent versions, configured/used budget
 
 - [ ] **Step 5: Run cross-repository consent proof**
 
-Run: `cd /Users/jd/projects/mediastorm-backend/backend && go test ./services/peartube ./handlers`
+Run: `cd /Users/jd/projects/client-backend/backend && go test ./services/peartube ./handlers`
 
 Run: `cd packages/backend && npx brittle test/playback-resource-policy.test.mjs test/network-policy-runtime.test.mjs test/policy-api.test.mjs`
 
@@ -124,6 +124,6 @@ Expected: watch-only creates no public state and uploads zero bytes; explicit co
 - [ ] **Step 6: Commit in each repository**
 
 ```bash
-cd /Users/jd/projects/mediastorm-backend && git add backend/config backend/services/peartube backend/handlers && git commit -m "fix(peartube): require explicit contribution consent"
+cd /Users/jd/projects/client-backend && git add backend/config backend/services/peartube backend/handlers && git commit -m "fix(peartube): require explicit contribution consent"
 cd /Users/jd/projects/peartube && git add packages/backend/src packages/backend/test packages/cli/src/status.js packages/cli/test && git commit -m "feat(policy): enforce watch-only and separate retention budgets"
 ```

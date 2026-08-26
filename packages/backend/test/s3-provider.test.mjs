@@ -71,35 +71,28 @@ test('a transient blip is retried, a permanent refusal is not', async t => {
   let networkCalls = 0
   const flaky = createS3ArchiveProvider({
     sign,
-    bucket: 'b',
     fetch: async () => {
       networkCalls++
       if (networkCalls < 3) throw new Error('fetch failed')
       return { ok: true, status: 200 }
     }
   })
+  const retryStarted = Date.now()
   await flaky.putBlock({ key: 'block-1' })
   t.is(networkCalls, 3, 'the put was attempted until it landed')
-  const flakyStatus = flaky.getStatus()
-  t.is(flakyStatus.requests, 1, 'and still counts as one request')
-  t.is(flakyStatus.retries, 2, 'with the blips visible as retries')
-  t.is(flakyStatus.failures, 0, 'not as failures')
-  t.ok(flakyStatus.healthy, 'so an absorbed blip never marks the provider unhealthy')
+  t.ok(Date.now() - retryStarted >= 250, 'retryable failures back off instead of hot-looping')
 
   let refusals = 0
   const refused = createS3ArchiveProvider({
     sign,
-    bucket: 'b',
     fetch: async () => { refusals++; return { ok: false, status: 400 } }
   })
   await t.exception(refused.putBlock({ key: 'block-2' }), /HTTP 400/)
   t.is(refusals, 1, 'a 400 is the caller\'s fault and is never retried')
-  t.absent(refused.getStatus().healthy, 'and it does count against health')
 
   let unavailable = 0
   const flapping = createS3ArchiveProvider({
     sign,
-    bucket: 'b',
     fetch: async () => { unavailable++; return { ok: false, status: 503 } }
   })
   await t.exception(flapping.putBlock({ key: 'block-3' }), /HTTP 503/)
@@ -108,7 +101,6 @@ test('a transient blip is retried, a permanent refusal is not', async t => {
   let heads = 0
   const empty = createS3ArchiveProvider({
     sign,
-    bucket: 'b',
     fetch: async () => { heads++; return { ok: false, status: 404 } }
   })
   t.is(await empty.hasBlock({ key: 'absent' }), false, 'an absent block is a normal answer')

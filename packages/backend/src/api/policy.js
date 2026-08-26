@@ -103,10 +103,10 @@ export function evaluateNetworkRole(policy = {}) {
 
 const NETWORK_POLICY_KEY = 'network-policy:v1'
 const UNSUPPORTED_RUNTIME_VALUES = Object.freeze({
-  followedPublishers: 'publisher descriptors are required before scoped discovery can follow a publisher',
   aiAnalysis: 'no bounded AI analysis worker is available',
   retentionMode: 'local-pin retention has no publication pinning consumer',
 })
+const NETWORK_POLICY_PUBLISHER_REASON = 'network-policy'
 
 function boundedTransportIdList(value, name) {
   if (value == null) return []
@@ -411,7 +411,6 @@ function unsupportedPolicyError(field, detail) {
 }
 
 export function assertNetworkPolicyRuntimeSupported(policy) {
-  if (policy.followedPublishers.length > 0) throw unsupportedPolicyError('followedPublishers', UNSUPPORTED_RUNTIME_VALUES.followedPublishers)
   if (policy.aiAnalysis !== 'disabled') {
     throw unsupportedPolicyError('aiAnalysis', UNSUPPORTED_RUNTIME_VALUES.aiAnalysis)
   }
@@ -518,6 +517,7 @@ export function createNetworkPolicyRuntime({
   let transportSuspended = false
   let started = false
   let transition = Promise.resolve()
+  let appliedPublishers = new Set()
   let appliedIndexes = new Set()
   let appliedModerationFeeds = new Set()
   // The last participation decision published by the decision authority. Null
@@ -533,6 +533,10 @@ export function createNetworkPolicyRuntime({
   const normalizeSupported = candidate => {
     const normalized = normalizeNetworkPolicy(candidate, DEFAULT_NETWORK_POLICY)
     assertNetworkPolicyRuntimeSupported(normalized)
+    if (normalized.followedPublishers.length > 0 &&
+      (typeof scopedNetwork?.addPublisherFollowReason !== 'function' || typeof scopedNetwork?.removePublisherFollowReason !== 'function')) {
+      throw unsupportedPolicyError('followedPublishers', 'verified publisher discovery is unavailable on this runtime')
+    }
     if (normalized.followedIndexes.length > 0 &&
       (typeof scopedNetwork?.followIndexFeed !== 'function' || typeof scopedNetwork?.unfollowIndexFeed !== 'function')) {
       throw unsupportedPolicyError('followedIndexes', 'bounded index-feed transport is unavailable on this runtime')
@@ -552,11 +556,22 @@ export function createNetworkPolicyRuntime({
   policy = normalizeSupported(policy)
 
   const reconcileFeedSubscriptions = async nextPolicy => {
+    const publishers = new Set(nextPolicy.followedPublishers)
     const indexes = new Set(nextPolicy.followedIndexes)
     const moderation = new Set(nextPolicy.trustedModerationFeeds)
+    const workingPublishers = new Set(appliedPublishers)
     const workingIndexes = new Set(appliedIndexes)
     const workingModeration = new Set(appliedModerationFeeds)
     try {
+      for (const id of appliedPublishers) {
+        if (!publishers.has(id)) {
+          await scopedNetwork.removePublisherFollowReason({
+            publisherId: id,
+            reason: NETWORK_POLICY_PUBLISHER_REASON,
+          })
+          workingPublishers.delete(id)
+        }
+      }
       for (const id of appliedIndexes) {
         if (!indexes.has(id)) {
           await scopedNetwork.unfollowIndexFeed({ curatorId: id })
@@ -567,6 +582,15 @@ export function createNetworkPolicyRuntime({
         if (!moderation.has(id)) {
           await scopedNetwork.unfollowModerationFeed({ moderatorId: id })
           workingModeration.delete(id)
+        }
+      }
+      for (const id of publishers) {
+        if (!appliedPublishers.has(id)) {
+          await scopedNetwork.addPublisherFollowReason({
+            publisherId: id,
+            reason: NETWORK_POLICY_PUBLISHER_REASON,
+          })
+          workingPublishers.add(id)
         }
       }
       for (const id of indexes) {
@@ -582,10 +606,12 @@ export function createNetworkPolicyRuntime({
         }
       }
     } catch (error) {
+      appliedPublishers = workingPublishers
       appliedIndexes = workingIndexes
       appliedModerationFeeds = workingModeration
       throw error
     }
+    appliedPublishers = publishers
     appliedIndexes = indexes
     appliedModerationFeeds = moderation
   }

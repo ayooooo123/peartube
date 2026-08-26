@@ -7,6 +7,8 @@ import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import Corestore from 'corestore'
 
+import { episodeWorkIdentifier } from '../src/channel/structured-content.js'
+import { createCompanionRouter } from '../../cli/src/companion/routes.js'
 import { createApi } from '../src/api.js'
 import {
   createPublicationManifest,
@@ -33,6 +35,7 @@ import { encodeApplicationEnvelope } from '../src/records/application-envelope.j
 import { createIndexFederation } from '../src/search/index-federation.js'
 import {
   SOURCE_VERIFICATION_ERROR_CODES,
+  createLocalAssetAvailabilityProbe,
   createScopedAssetAvailabilityProbe,
   createSourceVerifier,
 } from '../src/search/source-verifier.js'
@@ -46,6 +49,7 @@ import { COLLECTIONS, createIndexerStore } from '../src/indexer/index.js'
 import { createIndexVerificationRuntime } from '../src/runtime.js'
 
 const NOW = 1_800_000_000_000
+const EPISODE_SELECTOR = Object.freeze({ namespace: 'tmdb', identifier: '95350', kind: 'episode', season: 1, episode: 2 })
 const SELECTOR = Object.freeze({ namespace: 'tmdb', identifier: '348', kind: 'movie' })
 const require = createRequire(import.meta.url)
 const schemaCodecs = require('../../spec/spec/schema/index.js')
@@ -64,8 +68,8 @@ function exactResult(fixture) {
     type: 'external-ref',
     publisherId: fixture.publisherId,
     sourceRecordRef: fixture.sourceRecordRef,
-    namespace: SELECTOR.namespace,
-    identifier: SELECTOR.identifier,
+    namespace: fixture.selector.namespace,
+    identifier: fixture.workIdentifier,
     entityKind: 'work',
     entityId: fixture.workEntityId,
     evidenceWeight: 10,
@@ -178,25 +182,30 @@ function signPublisherOperation({ descriptor, signer, recordType = PUBLISHER_REC
 }
 
 async function sourceFixture(options = {}) {
-  const view = new MemoryView(options.catalogKey || b4a.alloc(32, 31))
+  const selector = options.selector || SELECTOR
+  const workIdentifier = selector.kind === 'episode'
+    ? episodeWorkIdentifier(selector.identifier, selector.season, selector.episode)
+    : selector.identifier
+  const catalogKey = options.catalogKey || b4a.alloc(32, 31)
+  const view = new MemoryView(options.viewKey || b4a.alloc(32, 32))
   const root = crypto.keyPair(b4a.alloc(32, options.rootSeed || 11))
   const device = crypto.keyPair(b4a.alloc(32, options.deviceSeed || 12))
   const descriptor = createPublisherNamespaceDescriptor({
     genesisRootKey: root.publicKey,
-    catalogBootstrapKey: view.key,
+    catalogBootstrapKey: catalogKey,
   })
   const work = createEntityReference({
     entityKind: 'work',
-    namespace: SELECTOR.namespace,
-    normalizedIdentifier: SELECTOR.identifier,
+    namespace: selector.namespace,
+    normalizedIdentifier: workIdentifier,
   })
-  const externalClaim = createMediaClaim({
+  let externalClaim = createMediaClaim({
     claimType: 'ExternalReferenceClaim',
     subjectRefs: [work],
     payload: {
       externalRef: {
-        namespace: SELECTOR.namespace,
-        identifier: SELECTOR.identifier,
+        namespace: selector.namespace,
+        identifier: workIdentifier,
         ...(options.externalRefExtras || {}),
       },
       ...(options.claimPayloadExtras || {}),
@@ -238,9 +247,25 @@ async function sourceFixture(options = {}) {
     renditions: renditionFixtures.map(value => value.descriptor),
     provenance: options.provenance || [{ sourceKind: 'upload', releaseName: 'Current signed source' }],
     keyPair: device,
-    claims: [{ claimId: externalClaim.claimId, role: 'work', entityId: work.entityId }],
+    claims: options.unlinkedManifest ? [] : [{ claimId: externalClaim.claimId, role: 'work', entityId: work.entityId }],
     signedAt: NOW - 1_000,
   })
+  if (options.publicationBoundClaim) {
+    externalClaim = createMediaClaim({
+      claimType: 'EntityMetadataClaim',
+      subjectRefs: [work],
+      payload: {
+        presentationKind: selector.kind,
+        publicationId: manifest.publicationId,
+        title: 'Current signed source',
+      },
+      confidence: 900,
+      issuerSequence: 1,
+      policyEpoch: 0,
+      keyPair: device,
+      signedAt: NOW - 1_000,
+    })
+  }
   const operation = signPublisherOperation({
     descriptor,
     signer: device,
@@ -267,7 +292,7 @@ async function sourceFixture(options = {}) {
   const sourceRecordRef = hex(claimOperation.recordId)
   const authorization = createPublisherAuthorizationState(descriptor)
   const writer = {
-    writerKey: b4a.from(view.key),
+    writerKey: b4a.from(catalogKey),
     signerKey: b4a.from(device.publicKey),
     capabilities: ['announce', 'claim', 'moderate', 'publish'],
     firstAcceptedSequence: 1,
@@ -281,14 +306,14 @@ async function sourceFixture(options = {}) {
   authorization.signers.set(hex(writer.signerKey), writer)
   await view.put('state/descriptor', encodePublisherNamespaceDescriptor(descriptor))
   await view.put('state/authorization', encodePublisherAuthorizationState(authorization))
-  await view.put(`accepted/${publicationSourceRecordRef}`, frame)
-  await view.put(`accepted/${sourceRecordRef}`, claimFrame)
+  await view.put(`accepted/${publicationSourceRecordRef}`, options.legacyAcceptedEntries ? frame : b4a.concat([writer.writerKey, frame]))
+  await view.put(`accepted/${sourceRecordRef}`, options.legacyAcceptedEntries ? claimFrame : b4a.concat([writer.writerKey, claimFrame]))
   await view.put(`projection/publication/${manifest.publicationId}`, frame)
   await view.put(`projection/claim/${externalClaim.claimId}`, claimFrame)
 
   let fixture
   const catalog = {
-    key: view.key,
+    key: b4a.from(catalogKey),
     view,
     updateCalls: 0,
     async update() {
@@ -300,7 +325,7 @@ async function sourceFixture(options = {}) {
     catalog,
     publisherId: b4a.from(descriptor.publisherId),
     genesisRootKey: b4a.from(root.publicKey),
-    catalogBootstrapKey: b4a.from(view.key),
+    catalogBootstrapKey: b4a.from(catalogKey),
     namespaceDescriptor: descriptor,
   }
   const registry = {
@@ -327,6 +352,8 @@ async function sourceFixture(options = {}) {
     claimOperation,
     claimFrame,
     externalClaim,
+    selector,
+    workIdentifier,
     workEntityId: work.entityId,
     publicationSourceRecordRef,
     sourceRecordRef,
@@ -352,7 +379,7 @@ async function candidateHarness(options = {}) {
       deadlineMs: 1_000,
     },
   })
-  const [candidate] = await federation.search({ selector: SELECTOR, limit: 1 })
+  const [candidate] = await federation.search({ selector: fixture.selector, limit: 1 })
   const probeState = { calls: 0 }
   const availabilityProbe = options.availabilityProbe || (async () => {
     probeState.calls++
@@ -424,6 +451,14 @@ test('selected current source verifies exact canonical descriptors and fresh ava
   const transported = normalizeIndexCandidateForTransport(verified)
   t.is(transported.verification.publisherDescriptor.publisherRootKey, hex(harness.fixture.descriptor.publisherRootKey))
   t.is(transported.verification.publisherDescriptor.policySequence, harness.fixture.descriptor.policySequence)
+})
+
+test('legacy accepted entries without writer provenance still verify', async t => {
+  const harness = await candidateHarness({ legacyAcceptedEntries: true })
+  const verified = await harness.verifier.verifySelectedCandidate({ candidateRef: harness.candidate.candidateRef })
+  t.is(verified.verification.state, 'source-verified')
+  await harness.verifier.close()
+  await harness.federation.close()
 })
 
 test('real null-fact federation candidate searches, verifies, transports, and codec-round-trips without sentinels', async t => {
@@ -1052,6 +1087,144 @@ test('root API and runtime defer source resolution until MediaStorm selects a ca
   await t.exception(api.searchIndexCandidates(SELECTOR, { signal: requestController.signal }), /aborted/i)
   await t.exception(api.verifyIndexCandidate(candidate.candidateRef, { signal: requestController.signal }), /aborted/i)
   await runtime.close()
+})
+
+test('local index candidates use verified local custody before remote peer probing', async t => {
+  const fixture = await sourceFixture()
+  const state = { localCalls: 0, networkCalls: 0 }
+  const localService = serviceFor(fixture)
+  localService.indexerId = 'local-relay-index'
+  const runtime = createIndexVerificationRuntime({
+    services: [localService],
+    catalogRegistry: fixture.registry,
+    availabilityProbe: async () => {
+      state.networkCalls++
+      return { peers: 0, completeSeeders: 0, observedAtMs: NOW, expiresAtMs: NOW + 1_000 }
+    },
+    localIndexServiceId: localService.indexerId,
+    localAvailabilityProbe: async () => {
+      state.localCalls++
+      return { peers: 1, completeSeeders: 0, observedAtMs: NOW, expiresAtMs: NOW + 1_000 }
+    },
+    now: () => NOW,
+    limits: { randomBytes: randomSource(), verificationDeadlineMs: 1_000, availabilityDeadlineMs: 500 },
+  })
+  t.teardown(() => runtime.close())
+
+  const [candidate] = await runtime.searchIndexCandidates({ selector: SELECTOR, limit: 1 })
+  const verified = await runtime.verifyIndexCandidate({ candidateRef: candidate.candidateRef })
+  t.is(verified.verification.state, 'source-verified')
+  t.is(state.localCalls, 1, 'the relay proved the candidate from its own custody')
+  t.is(state.networkCalls, 0, 'a local candidate did not require a second network peer')
+  t.is(verified.availability.peers, 1)
+  t.is(verified.availability.completeSeeders, 0)
+})
+
+test('local custody probe restores and reads a block before closing its core session', async t => {
+  const calls = []
+  const probe = createLocalAssetAvailabilityProbe({
+    now: () => NOW,
+    openAssetCore: async key => {
+      calls.push(['open', key])
+      return {
+        async get(index, options) { calls.push(['get', index, options]); return b4a.from('held') },
+        async close() { calls.push(['close']) },
+      }
+    },
+  })
+  const result = await probe({
+    coreKey: 'aa'.repeat(32),
+    range: { startBlock: 0, endBlock: 1 },
+    signal: new AbortController().signal,
+  })
+  t.alike(result, { peers: 1, completeSeeders: 0, observedAtMs: NOW, expiresAtMs: NOW + 5_000 })
+
+  t.alike(calls, [
+    ['open', 'aa'.repeat(32)],
+    ['get', 0, { wait: false }],
+    ['close'],
+  ])
+})
+
+test('companion episode search opens a locally indexed candidate and reads a range', async t => {
+  const fixture = await sourceFixture({
+    selector: EPISODE_SELECTOR,
+    unlinkedManifest: true,
+    publicationBoundClaim: true,
+  })
+  const localService = serviceFor(fixture)
+  localService.indexerId = 'local-relay-index'
+  const runtime = createIndexVerificationRuntime({
+    services: [localService],
+    catalogRegistry: fixture.registry,
+    availabilityProbe: async () => ({ peers: 0, completeSeeders: 0, observedAtMs: NOW, expiresAtMs: NOW + 1_000 }),
+    localIndexServiceId: localService.indexerId,
+    localAvailabilityProbe: async () => ({ peers: 1, completeSeeders: 0, observedAtMs: NOW, expiresAtMs: NOW + 1_000 }),
+    now: () => NOW,
+    limits: { randomBytes: randomSource(), verificationDeadlineMs: 1_000, availabilityDeadlineMs: 500 },
+  })
+  t.teardown(() => runtime.close())
+
+  const streamCtx = { staticAssetPlaybackEntries: new Map() }
+  const streamNetwork = {
+    async retainAuthorizedRendition() {},
+    async releaseAuthorizedRendition() { return { released: true } },
+    getActiveAssetSession() { return { assetId: fixture.staticAsset.assetId, coreRef: fixture.staticAsset } },
+    getActiveAssetPeerIds() { return [] },
+    async listPeerAssetRanges() { return { ranges: [], nextCursor: null } },
+    async hasVerifiedAssetBlock() { return true },
+    async readVerifiedAssetBlock() { return b4a.alloc(fixture.staticAsset.blockSize, 7) },
+    async requestAssetBlocks() { throw new Error('local verified bytes should be reused') },
+  }
+  const streamApi = createApi({ ctx: streamCtx, scopedNetwork: streamNetwork })
+  const router = createCompanionRouter({
+    clock: () => NOW,
+    config: { client: { id: 'mediastorm' } },
+    service: {
+      searchIndexCandidates: (selector, options) => runtime.searchIndexCandidates({ selector, ...options }),
+      verifyIndexCandidate: (candidateRef, options) => runtime.verifyIndexCandidate({ candidateRef, ...options }),
+      openStreamAsset: candidate => streamApi.openVerifiedCandidateStream(candidate),
+    },
+  })
+  t.teardown(async () => {
+    router.capabilities.clear()
+    await router.capabilities.drain()
+  })
+
+  const search = await router.dispatch({
+    method: 'GET',
+    url: '/api/v2/search?episode=2&identifier=95350&kind=episode&namespace=tmdb&season=1',
+    clientIdentity: 'mediastorm',
+  })
+  t.is(search.statusCode, 200)
+  t.is(search.body.candidates.length, 1)
+
+  const candidate = search.body.candidates[0]
+  const directVerified = await runtime.verifyIndexCandidate({ candidateRef: candidate.candidateRef })
+  t.is(directVerified.verification.state, 'source-verified')
+  const opened = await router.dispatch({
+    method: 'POST',
+    url: '/api/v2/streams/open',
+    body: b4a.from(JSON.stringify({ candidateRef: candidate.candidateRef })),
+    clientIdentity: 'mediastorm',
+  })
+  t.is(opened.statusCode, 200)
+  const streamUrl = new URL(opened.body.url, 'http://relay.local')
+  const acquisition = router.capabilities.consume(streamUrl.searchParams.get('cap'), {
+    publicationId: opened.body.publicationId,
+    renditionId: opened.body.renditionId,
+    method: 'GET',
+  })
+  const range = await acquisition.asset.requestRange({
+    assetId: acquisition.asset.assetId,
+    byteStart: 0,
+    byteEnd: 1_024,
+    deadlineMs: 1_000,
+  })
+  acquisition.release()
+  t.is(range.status, 'ok')
+  t.is(range.verified, true)
+  t.is(range.bytes.byteLength, 1_024)
 })
 
 test('root search API forwards caller limits and abort signals to federation', async t => {

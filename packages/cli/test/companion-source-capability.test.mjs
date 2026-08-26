@@ -15,7 +15,7 @@ import {
   fingerprintIngestRequest,
   ingestJobIdForRequest
 } from '../src/companion/ingest-manager.js'
-import { createSourceCallbackClient } from '../src/companion/source-client.js'
+import { createSourceCallbackClient, SourceCallbackError } from '../src/companion/source-client.js'
 
 const NOW = 1_786_406_400_000
 const SECRET = '4d'.repeat(32)
@@ -559,5 +559,49 @@ test('restart preserves verified partial bytes and fresh capability reattachment
   t.is(replay.jobId, created.jobId)
   await waitForState(second.manager, created.jobId, 'completed')
   t.ok(callback.calls.ranges.some(call => call.capability.includes('after-restart') && call.range === 'bytes=4-7'))
+  t.is(publisher.calls.imports, 1)
+})
+
+test('a fresh valid capability revives a job poisoned by the retired internal capability shape', async (t) => {
+  const bytes = Buffer.from('abcdefghijkl')
+  let jobId = null
+  const callback = callbackServer(t, bytes, { jobId: () => jobId })
+  const origin = await callback.origin()
+  const healthy = sourceClient(origin)
+  let injectRetiredFailure = true
+  const client = {
+    chunkBytes: healthy.chunkBytes,
+    head: options => healthy.head(options),
+    revoke: options => healthy.revoke(options),
+    async getRange (options) {
+      if (injectRetiredFailure) {
+        injectRetiredFailure = false
+        throw new SourceCallbackError('SOURCE_CAPABILITY_INVALID', false)
+      }
+      return healthy.getRange(options)
+    }
+  }
+  const { manager, publisher } = harness(t, { client })
+  t.teardown(() => manager.close())
+  await manager.start()
+
+  const first = await manager.submitJob({
+    idempotencyKey: 'retired-capability-shape',
+    request: movieRequest(bytes),
+    sourceCapability: 'source-capability-before-fix-000000000000000001'
+  })
+  jobId = first.jobId
+  const poisoned = await waitForState(manager, first.jobId, 'failed')
+  t.is(poisoned.errorCode, 'SOURCE_CAPABILITY_INVALID')
+  t.is(poisoned.recoverable, false)
+
+  const replay = await manager.submitJob({
+    idempotencyKey: 'retired-capability-shape',
+    request: movieRequest(bytes),
+    sourceCapability: 'source-capability-after-fix-0000000000000000001'
+  })
+  t.is(replay.jobId, first.jobId)
+  const completed = await waitForState(manager, first.jobId, 'completed')
+  t.is(completed.bytesReceived, bytes.byteLength)
   t.is(publisher.calls.imports, 1)
 })

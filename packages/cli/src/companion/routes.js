@@ -15,7 +15,7 @@ import { createStreamCapabilityStore } from './stream-capabilities.js'
 const CANDIDATE_REF_PATTERN = /^[A-Za-z0-9_-]{43}$/
 const SENSITIVE_STATUS_FIELD = /(?:secret|password|credential|authorization|cookie|token|capability|privatekey|signingkey|clientkey|mac|nonce)/i
 const LOCATOR_FIELD = /(?:urls?|uris?|links?|href|magnet|torrent)$/i
-const LOCATOR_VALUE = /(?:[a-z][a-z0-9+.-]*:(?:\/\/)?[^\s]|\/\/[^\s])/i
+const LOCATOR_VALUE = /(?:(?:https?|magnet|ipfs|pear|blob|data|file|ftp|rtsp):(?:\/\/)?[^\s]|\/\/[^\s])/i
 
 function contractError (statusCode, code, message, field = null) {
   return new CompanionContractError(statusCode, code, message, field)
@@ -75,6 +75,11 @@ function translateBackendFailure (error) {
   const raw = typeof error?.code === 'string' ? error.code.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') : ''
   if (raw === 'CANDIDATE_EXPIRED') return contractError(410, 'CANDIDATE_EXPIRED', 'Candidate reference expired')
   if (raw === 'SOURCE_NOT_CURRENT') return contractError(409, 'SOURCE_NOT_CURRENT', 'Candidate source is no longer current')
+  if (raw === 'SOURCE_INVALID') return contractError(502, raw, 'Candidate source failed verification')
+  if (raw === 'SOURCE_MISMATCH') return contractError(409, raw, 'Candidate no longer matches its source')
+  if (raw.startsWith('IMMUTABLE_PUBLICATION_')) {
+    return contractError(502, raw, 'Immutable publication stream is invalid')
+  }
   if (raw === 'IDEMPOTENCY_CONFLICT') return contractError(409, raw, 'Idempotency key is already bound to another request')
   if (raw === 'INGEST_JOB_TERMINAL' || raw === 'INGEST_VERSION_CONFLICT') return contractError(409, raw, 'Ingest job state conflict')
   if (raw === 'STORAGE_ADMISSION_DENIED') return contractError(507, raw, 'Insufficient storage for ingest')

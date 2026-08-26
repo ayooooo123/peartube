@@ -113,7 +113,7 @@ function requiredCapabilities(selectors) {
   return capabilities
 }
 
-function mapResult(row) {
+export function mapIndexQueryResult(row) {
   if (row && row.namespace !== undefined && row.normalizedIdentifier !== undefined) {
     return {
       type: 'external-ref',
@@ -175,7 +175,7 @@ function emitTelemetry(limits, startedAt, code, count, capability) {
       durationMs: Math.max(0, currentTime(limits) - startedAt),
       capability,
     })
-  } catch {}
+  } catch { /* Telemetry must not affect query results. */ }
 }
 
 export function createIndexQueryDispatcher({ indexStore, announcement, limits = {}, send } = {}) {
@@ -210,7 +210,7 @@ export function createIndexQueryDispatcher({ indexStore, announcement, limits = 
     let serialized
     try {
       serialized = JSON.stringify(continuation)
-    } catch {}
+    } catch { /* The bounded error below rejects unserializable continuations. */ }
     if (!serialized || b4a.byteLength(serialized) > MAX_INDEX_QUERY_CURSOR_BYTES) {
       const error = new Error('cursor continuation exceeds bounded limit')
       error.code = 'INDEX_QUERY_RESULT_LIMIT'
@@ -293,7 +293,7 @@ export function createIndexQueryDispatcher({ indexStore, announcement, limits = 
         if (settle(tracked, INDEX_QUERY_ERROR_CODES.RESULT_LIMIT_EXCEEDED)) sendError(tracked.queryId, INDEX_QUERY_ERROR_CODES.RESULT_LIMIT_EXCEEDED)
         return
       }
-      const results = page.results.map(mapResult)
+      const results = page.results.map(mapIndexQueryResult)
       let nextCursor = null
       if (page.continuation !== null) {
         nextCursor = issueCursor(tracked.request.selectors, page.sourceRevision, page.continuation)

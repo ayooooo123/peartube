@@ -496,8 +496,8 @@ export async function createRelayRuntime ({ config, logger, dependencies = null,
         },
         publicWork: {
           activeAnnouncements: Number(scoped?.publicWork?.activeAnnouncements) || 0,
-          activeUploads: Number(scoped?.publicWork?.activeUploads) || 0,
-          uploadedBytes: Number(scoped?.publicWork?.uploadedBytes) || 0
+          activeServes: Number(scoped?.publicWork?.activeServes) || 0,
+          servedBytes: Number(scoped?.publicWork?.servedBytes) || 0
         },
         publisher: {
           catalogs: counter(counters, 'publisherCatalogs', 'catalogs') || publisherTopics,
@@ -517,8 +517,8 @@ export async function createRelayRuntime ({ config, logger, dependencies = null,
           retainedRenditions: counter(counters, 'retainedRenditions'),
           activeSessions: purposeCount(scoped?.sessions, 'asset'),
           topics: assetTopics,
-          activeUploads: Number(scoped?.publicWork?.activeUploads) || 0,
-          uploadedBytes: Number(scoped?.publicWork?.uploadedBytes) || 0,
+          activeServes: Number(scoped?.publicWork?.activeServes) || 0,
+          servedBytes: Number(scoped?.publicWork?.servedBytes) || 0,
           maxSessions: counter(counters, 'maxAssetSessions', 'assetSessionLimit')
         },
         seedRetention: seedRetention || {},

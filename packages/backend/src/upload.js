@@ -1387,19 +1387,10 @@ export function createUploadManager({
   deviceKeyPair = null,
   now = () => Date.now()
 }) {
-  // Hand the asset writer the whole offload capability when the relay exposes
-  // one. Reducing it to `offloadAsset` here silently hid `createOffloader` and
-  // `createStagingStore`, so bounded and streaming ingest could never be
-  // reached through this seam no matter how the relay was configured. A relay
-  // that only has the legacy hook still passes just the function.
-  const blockOffload = typeof ctx?.blockOffload?.createOffloader === 'function'
-    ? ctx.blockOffload
-    : (ctx?.blockOffload?.offloadAsset || null);
-  // Resumable ingest keeps its staged prefix in the object store, so it can
-  // only be offered when the relay actually has one. With offload unconfigured
-  // — or configured with only the legacy hook — there is nowhere durable to put
-  // a partial title, and a ranged origin is read once from byte zero exactly as
-  // an ordinary one-shot stream is.
+  // The storage context owns the one block-offload capability used by both the
+  // read wrapper and the asset writer.
+  const blockOffload = ctx?.blockOffload ?? null;
+  // Resumable ingest needs both a bounded offloader and durable staging.
   const resumableIngest = typeof blockOffload?.createOffloader === 'function' &&
     typeof blockOffload?.createStagingStore === 'function';
   const publicationRuntime = { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair, store: ctx?.store, offload: blockOffload, now };

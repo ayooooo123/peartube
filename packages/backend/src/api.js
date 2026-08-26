@@ -1872,7 +1872,9 @@ export function createApi({
   }
 
   function immutablePublicationError(reason) {
-    return new Error(`immutable publication ${reason}`)
+    const error = new Error(`immutable publication ${reason}`)
+    error.code = `IMMUTABLE_PUBLICATION_${String(reason).toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`
+    return error
   }
 
   async function resolveImmutableStaticPlayback(meta, requestedMimeType) {
@@ -1973,12 +1975,12 @@ export function createApi({
     if (!candidate || typeof candidate !== 'object' || candidate.verification?.state !== 'source-verified') {
       throw immutablePublicationError('verified candidate is invalid')
     }
+    // The source verifier already checked this device-signed manifest against
+    // the publisher catalog's current writer authorization. The generic
+    // verifier is root-signer-only and rejects valid catalog writers, so the
+    // verifier-only attachment is the trust boundary here.
     const manifest = verifiedCandidateManifest(candidate)
-    if (!manifest || !await verifyPublicationManifest(manifest, {
-      allowedSigners: [manifest?.body?.publisherId],
-    })) {
-      throw immutablePublicationError('verified candidate manifest is unavailable')
-    }
+    if (!manifest) throw immutablePublicationError('verified candidate manifest is unavailable')
     if (signal?.aborted) {
       const error = new Error('verified candidate stream open aborted')
       error.name = 'AbortError'

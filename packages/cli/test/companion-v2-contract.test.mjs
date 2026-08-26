@@ -123,7 +123,7 @@ test('router dispatches search with bounded work and strips embedded locators re
         selector = input
         options = searchOptions
         return [candidate({
-          work: { title: 'Watch _magnet:?q=forbidden', releaseYear: 1999 },
+          work: { title: 'Watch _magnet:?q=forbidden', releaseYear: 1999, externalRefs: [{ namespace: 'tmdb', identifier: 'show:95350:s1:e2' }] },
           publication: { publicationId: 'publication-1', publisherId: 'publisher-1', title: 'x:opaque' }
         })]
       }
@@ -140,6 +140,7 @@ test('router dispatches search with bounded work and strips embedded locators re
   const serialized = JSON.stringify(result.body)
   t.not(serialized.includes('forbidden.invalid'), true)
   t.not(serialized.includes('magnet:'), true)
+  t.is(result.body.candidates[0].work.externalRefs[0].identifier, 'show:95350:s1:e2')
 })
 
 test('episode search delegates the show coordinates and its ordinals', async (t) => {

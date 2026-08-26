@@ -25,15 +25,18 @@ export class SourceProviderRegistry {
 
   getTorBoxClient () {
     if (this._torboxClient) return this._torboxClient
-    const apiKey = this.config.sources?.torbox?.apiKey ||
+    const apiKey = this.config.torbox?.apiKey ||
+      this.config.sources?.torbox?.apiKey ||
+      this.config.directSources?.torbox?.apiKey ||
       process.env.PEARTUBE_TORBOX_API_KEY ||
       ''
     if (!apiKey) {
       throw new Error('TorBox direct ingest is requested, but no TorBox API key is configured (set PEARTUBE_TORBOX_API_KEY or sources.torbox.apiKey)')
     }
+    const chunkBytes = this.config.torbox?.chunkBytes || this.config.sources?.torbox?.chunkBytes
     this._torboxClient = createTorBoxSourceClient({
       apiKey,
-      chunkBytes: this.config.sources?.torbox?.chunkBytes,
+      chunkBytes,
       fetchImpl: this.fetchImpl
     })
     return this._torboxClient
@@ -41,7 +44,7 @@ export class SourceProviderRegistry {
 
   getFileClient () {
     if (this._fileClient) return this._fileClient
-    const fileConfig = this.config.sources?.file || {}
+    const fileConfig = this.config.file || this.config.sources?.file || this.config.directSources?.file || {}
     const defaultAllowed = ['/Users/jd/mediastorm-local', '/tmp', '/var', '/private/var', tmpdir()].filter(Boolean)
     const envAllowed = process.env.PEARTUBE_FILE_ALLOWED_PATHS
       ? process.env.PEARTUBE_FILE_ALLOWED_PATHS.split(',').map(s => s.trim()).filter(Boolean)

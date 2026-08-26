@@ -28,6 +28,7 @@ function blocksFor (seed) {
 function createFakeProvider () {
   const objects = new Map()
   const provider = {
+    getCalls: [],
     unreachable: null,
     async putBlock ({ key, data }) {
       objects.set(key, b4a.from(data))
@@ -41,6 +42,7 @@ function createFakeProvider () {
       return { success: true }
     },
     async getBlock ({ key }) {
+      provider.getCalls.push(key)
       if (provider.unreachable) throw provider.unreachable
       return objects.has(key) ? objects.get(key) : null
     },
@@ -136,9 +138,13 @@ test('offload storage with no offloaded core behaves exactly like the storage it
 test('offloaded blocks are restored on read through has, proof and get', async (t) => {
   const { provider, objects } = createFakeProvider()
   let remote = null
+  let storeLookups = 0
 
   const { store, storage } = await fixture(t, {
-    resolveStore: (identity) => (remote && identity.keyHex === remote.coreKey ? remote : null),
+    resolveStore: (identity) => {
+      storeLookups++
+      return remote && identity.keyHex === remote.coreKey ? remote : null
+    },
   })
 
   const blocks = blocksFor(7)
@@ -185,6 +191,21 @@ test('offloaded blocks are restored on read through has, proof and get', async (
   const [a, b] = await Promise.all([first, second])
   t.alike(a, blocks[0], 'a batched restore resolves the first block')
   t.alike(b, blocks[2], 'a batched restore resolves the second block')
+
+  // A player can ask for the same startup block through overlapping proof and
+  // data reads. One bucket request must serve every concurrent waiter.
+  const getCallsBefore = provider.getCalls.length
+  const sameBlockRxA = core.state.storage.read()
+  const sameBlockA = sameBlockRxA.getBlock(0)
+  sameBlockRxA.tryFlush()
+  const sameBlockRxB = core.state.storage.read()
+  const sameBlockB = sameBlockRxB.getBlock(0)
+  sameBlockRxB.tryFlush()
+  const [sameA, sameB] = await Promise.all([sameBlockA, sameBlockB])
+  t.alike(sameA, blocks[0], 'the first concurrent waiter receives the restored block')
+  t.alike(sameB, blocks[0], 'the second concurrent waiter shares the restored block')
+  t.is(provider.getCalls.length, getCallsBefore + 1, 'concurrent reads issue one object-store GET')
+  t.is(storeLookups, 1, 'the remote store is resolved once per opened core')
 
   // A restore only happens for a block the tree committed to.
   t.is(await readBlockDirect(core, BLOCK_COUNT + 5), null, 'a block the tree never committed to is not fetched')

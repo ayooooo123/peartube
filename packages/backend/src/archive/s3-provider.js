@@ -48,20 +48,6 @@ export function createS3ArchiveProvider(options = {}) {
   if (typeof fetchImpl !== 'function') throw new TypeError('fetch is required')
   const sign = options.sign
   if (typeof sign !== 'function') throw new TypeError('sign is required')
-  const config = Object.freeze({
-    provider: 's3',
-    bucket: typeof options.bucket === 'string' ? options.bucket : '',
-    prefix: typeof options.prefix === 'string' ? options.prefix : '',
-  })
-  let requests = 0
-  let failures = 0
-  let retries = 0
-
-  function getStatus() {
-    // `failures` counts requests that failed for good, after retries. A blip
-    // that a retry absorbed is visible as `retries`, not as ill health.
-    return { ...config, requests, failures, retries, healthy: failures === 0 }
-  }
   async function attempt(operation, key, init) {
     const signed = await sign({ operation, key, method: init.method || 'GET', headers: init.headers || {} })
     const response = await fetchImpl(assertString(signed.url, 'signed.url'), {
@@ -73,7 +59,6 @@ export function createS3ArchiveProvider(options = {}) {
   }
   async function request(operation, key, init = {}) {
     assertString(key, 'key')
-    requests++
     for (let n = 1; ; n++) {
       try {
         return await attempt(operation, key, init)
@@ -81,18 +66,13 @@ export function createS3ArchiveProvider(options = {}) {
         // A HEAD that answers 404 is a normal answer to "is this block here?",
         // and hasBlock() reads it as `false`. Retrying it would turn every
         // absent block into four requests and a delay.
-        if (n >= MAX_ATTEMPTS || !isRetryable(error)) {
-          failures++
-          throw error
-        }
-        retries++
+        if (n >= MAX_ATTEMPTS || !isRetryable(error)) throw error
         await sleep(backoffMs(n))
       }
     }
   }
 
   return {
-    getStatus,
     /**
      * `checksumSha256Base64` is named for its exact wire format because that
      * is the whole contract: S3 wants the BASE64 of the raw SHA-256 digest.
@@ -117,10 +97,7 @@ export function createS3ArchiveProvider(options = {}) {
         await request('head', key, { method: 'HEAD' })
         return true
       } catch (error) {
-        if (error.statusCode === 404) {
-          failures--
-          return false
-        }
+        if (error.statusCode === 404) return false
         throw error
       }
     },

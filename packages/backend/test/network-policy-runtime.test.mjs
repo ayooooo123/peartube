@@ -329,7 +329,6 @@ test('policy API rejects fields with no production runtime consumer', async (t) 
   })
 
   for (const patch of [
-    { followedPublishers: ['a'.repeat(64)] },
     { followedIndexes: ['b'.repeat(64)] },
     { trustedModerationFeeds: ['c'.repeat(64)] },
     { aiAnalysis: 'local-only' },
@@ -342,26 +341,37 @@ test('policy API rejects fields with no production runtime consumer', async (t) 
   t.alike((await api.getNetworkPolicy()).policy, initialPolicy)
 })
 
-test('policy reconciles bounded index and moderation subscriptions through the scoped runtime', async (t) => {
+test('policy reconciles bounded publisher, index, and moderation subscriptions through the scoped runtime', async (t) => {
   const initialPolicy = await loadNetworkPolicy({ store: asyncPolicyStore() })
   const calls = []
   const scopedNetwork = {
     async applyNetworkPolicy() {},
+    async addPublisherFollowReason({ publisherId, reason }) { calls.push(['follow-publisher', publisherId, reason]) },
+    async removePublisherFollowReason({ publisherId, reason }) { calls.push(['unfollow-publisher', publisherId, reason]) },
     async followIndexFeed({ curatorId }) { calls.push(['follow-index', curatorId]) },
     async unfollowIndexFeed({ curatorId }) { calls.push(['unfollow-index', curatorId]) },
     async followModerationFeed({ moderatorId }) { calls.push(['follow-moderation', moderatorId]) },
     async unfollowModerationFeed({ moderatorId }) { calls.push(['unfollow-moderation', moderatorId]) },
   }
   const runtime = createNetworkPolicyRuntime({ initialPolicy, scopedNetwork })
+  const publisher = '0'.repeat(64)
   const index = '1'.repeat(64)
   const moderator = '2'.repeat(64)
   await runtime.start()
-  await runtime.apply({ ...initialPolicy, followedIndexes: [index], trustedModerationFeeds: [moderator] })
-  t.alike(calls, [['follow-index', index], ['follow-moderation', moderator]])
+  await runtime.apply({ ...initialPolicy, followedPublishers: [publisher], followedIndexes: [index], trustedModerationFeeds: [moderator] })
+  t.alike(calls, [
+    ['follow-publisher', publisher, 'network-policy'],
+    ['follow-index', index],
+    ['follow-moderation', moderator],
+  ])
   await runtime.apply(initialPolicy)
   t.alike(calls, [
-    ['follow-index', index], ['follow-moderation', moderator],
-    ['unfollow-index', index], ['unfollow-moderation', moderator],
+    ['follow-publisher', publisher, 'network-policy'],
+    ['follow-index', index],
+    ['follow-moderation', moderator],
+    ['unfollow-publisher', publisher, 'network-policy'],
+    ['unfollow-index', index],
+    ['unfollow-moderation', moderator],
   ])
 })
 

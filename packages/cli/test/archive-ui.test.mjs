@@ -816,10 +816,7 @@ test('an archive submission with no file and no URL is visibly ignored, not sile
   t.absent(withoutNotice.includes('class="notice"'), 'a normal page shows no banner')
 })
 
-test('the read-only S3 panel reports block offload state', async (t) => {
-  // Offload makes the bucket load bearing for playback: an operator looking at
-  // this page has to be able to see that block data is leaving the volume, how
-  // much has left, and how much is coming back on read.
+test('the read-only S3 panel reports block offload state without inventing bucket inventory', async (t) => {
   const enabled = renderArchiveWebHome({
     s3: {
       configured: true,
@@ -830,17 +827,19 @@ test('the read-only S3 panel reports block offload state', async (t) => {
       offload: {
         enabled: true,
         windowBytes: 2 * 1024 ** 3,
-        blocksOffloaded: 12,
-        bytesOffloaded: 3 * 1024 ** 3,
-        restored: 5
+        restored: 5,
+        residentBytes: 64 * 1024 ** 2
       }
     }
   })
 
+  t.ok(enabled.includes('S3 block store'), 'the panel names the storage used by the seed path')
   t.ok(enabled.includes('Block offload: <span class="status-line on">enabled</span>'), 'the panel calls out that offload is on')
   t.ok(enabled.includes('Resident window: 2.0 GB'), 'the panel shows the resident window')
-  t.ok(enabled.includes('Offloaded: 12 block(s), 3.0 GB'), 'the panel shows what has been offloaded')
-  t.ok(enabled.includes('Restored on read: 5 block(s)'), 'the panel shows what came back from the bucket')
+  t.ok(enabled.includes('Restored on read: 5 block(s)'), 'the panel shows current restore activity')
+  t.ok(enabled.includes('Held on this volume: 64 MB'), 'the panel shows measured local residency')
+  t.absent(enabled.includes('Written to the store'), 'temporary writes are not presented as durable inventory')
+  t.absent(enabled.includes('Offloaded:'), 'restart-scoped counters are not presented as durable inventory')
 
   const disabled = renderArchiveWebHome({ s3: { configured: true, endpoint: 'https://s3.example.com', bucket: 'b', region: 'r', prefix: '' } })
   t.ok(disabled.includes('Block offload: <span class="status-line ">disabled</span>'), 'a relay with no offload says so')

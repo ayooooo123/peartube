@@ -260,12 +260,28 @@ export function createOffloadStorage ({ storage, resolveStore, log, eviction = n
     return identity.pending
   }
 
-  async function restore (context, index) {
+  async function remoteStoreFor (context) {
+    const identity = context.identity
+    if (identity.remoteStore !== null) return identity.remoteStore
+    if (identity.remoteStorePending !== null) return identity.remoteStorePending
+
+    identity.remoteStorePending = Promise.resolve(resolveStore(await identityOf(context)))
+      .then((store) => {
+        // A configured store is stable for the life of this core. Do not cache
+        // null: a core can become offload-backed after it was opened.
+        if (store) identity.remoteStore = store
+        return store
+      })
+      .finally(() => { identity.remoteStorePending = null })
+    return identity.remoteStorePending
+  }
+
+  async function restoreOnce (context, index) {
     let identity = null
     let store = null
     try {
       identity = await identityOf(context)
-      store = await resolveStore(identity)
+      store = await remoteStoreFor(context)
     } catch (error) {
       counters.failed++
       emit(`no remote store for block ${index}: ${errorText(error)}`)
@@ -310,6 +326,16 @@ export function createOffloadStorage ({ storage, resolveStore, log, eviction = n
       emit(`unreachable ${label}: ${errorText(error)}`)
       return null
     }
+  }
+
+  function restore (context, index) {
+    const pending = context.identity.pendingRestores.get(index)
+    if (pending) return pending
+
+    const restoring = restoreOnce(context, index)
+      .finally(() => { context.identity.pendingRestores.delete(index) })
+    context.identity.pendingRestores.set(index, restoring)
+    return restoring
   }
 
   // ---------------------------------------------------------------------------
@@ -666,5 +692,8 @@ function seedIdentity (method, args) {
     // Set once this core is known to be offload-backed, and shared by every
     // derived read transaction so any of them can arm a residency sweep.
     ledger: null,
+    remoteStore: null,
+    remoteStorePending: null,
+    pendingRestores: new Map(),
   }
 }

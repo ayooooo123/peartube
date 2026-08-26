@@ -1,0 +1,7 @@
+modelRoles:
+  vidar-mobile-worker: google/gemini-3.7-flash
+task:
+  agentModelOverrides:
+    vidar-mobile-peer-worker: "@vidar-mobile-worker"
+    vidar-relay-observer: "@vidar-mobile-worker"
+    vidar-ui-eyes: "@vidar-mobile-worker"

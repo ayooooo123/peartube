@@ -26,7 +26,6 @@ services:
       PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE: "true"
       PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES: "10000"
       # Optional S3-compatible relay archive settings:
-      # PEARTUBE_ARCHIVE_S3_ENABLED: "true"
       # PEARTUBE_ARCHIVE_S3_ENDPOINT: https://s3.example.com
       # PEARTUBE_ARCHIVE_S3_BUCKET: peartube-relay
       # PEARTUBE_ARCHIVE_S3_REGION: us-east-1

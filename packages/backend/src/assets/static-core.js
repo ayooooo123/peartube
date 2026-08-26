@@ -194,21 +194,13 @@ function resolveSource({ source, createSource, resume = null }) {
 }
 
 /**
- * `offload` is one of three things, and which one it is decides how the write
- * runs:
- *
- *   null                 no offload; the classic single-pass write.
- *   function             the classic single-pass write, then one call with
- *                        `({ core, descriptor, signal })` on the finished core.
- *   { createOffloader,   bounded ingest — see writeStaticAsset.
- *     createStagingStore }
+ * `offload` is null for the local path or an object with createOffloader() for
+ * bounded ingest. A staging store is also required for one-shot and resumable
+ * sources.
  */
 function normalizeOffload(offload) {
   if (offload === null || offload === undefined) {
-    return { hook: null, createOffloader: null, createStagingStore: null }
-  }
-  if (typeof offload === 'function') {
-    return { hook: offload, createOffloader: null, createStagingStore: null }
+    return { createOffloader: null, createStagingStore: null }
   }
   if (typeof offload === 'object' && typeof offload.createOffloader === 'function') {
     const staging = offload.createStagingStore
@@ -216,12 +208,11 @@ function normalizeOffload(offload) {
       throw new Error('offload.createStagingStore must be a function')
     }
     return {
-      hook: null,
       createOffloader: (input) => offload.createOffloader(input),
       createStagingStore: typeof staging === 'function' ? (input) => staging(input) : null,
     }
   }
-  throw new Error('offload must be a function or an object with createOffloader()')
+  throw new Error('offload must be an object with createOffloader()')
 }
 
 function assertOffloader(offloader) {
@@ -1217,17 +1208,12 @@ export function createStaticAssetManifest(input = {}) {
  * Write one immutable static asset core.
  *
  * The asset's key is derived from the content, so the bytes have to be hashed
- * before the core they belong in can be opened. That is what shapes this
- * function, and `offload` decides which of the three shapes it takes.
+ * before the core they belong in can be opened. That leaves two write shapes.
  *
- * WITHOUT OFFLOAD (`offload` null, or a plain function) it is one pass: the
- * whole source is appended to a staging core, the descriptor is derived from
- * the staging tree, the prologue is copied into the finished core, the staging
- * core is removed, and a function `offload` is then called once with
- * `({ core, descriptor, signal })` — the first moment every block is durably
- * written, every merkle leaf exists, and the core's key is the content-
- * addressed key the network will ask for. Peak local block data is the title,
- * twice over at the copy, so the title has to fit on the volume.
+ * WITHOUT OFFLOAD the source is appended to a staging core, the descriptor is
+ * derived from its tree, and the prologue is copied into the finished core.
+ * Peak local block data is the title twice over at the copy, so the title has
+ * to fit on the volume.
  *
  * WITH BOUNDED INGEST (`offload` is `{ createOffloader }`) it is two passes and
  * the title does NOT have to fit:
@@ -1288,7 +1274,7 @@ export async function writeStaticAsset({
 } = {}) {
   const resumeState = normalizeResume(resume)
   assertWriteInput(store, source, createSource, resumeState)
-  const { hook, createOffloader, createStagingStore } = normalizeOffload(offload)
+  const { createOffloader, createStagingStore } = normalizeOffload(offload)
   // Resume state IS the staging core plus its objects. Without both there is
   // nowhere for an interrupted attempt's bytes to wait.
   if (resumeState !== null && (createOffloader === null || createStagingStore === null)) {
@@ -1463,8 +1449,6 @@ export async function writeStaticAsset({
       if (resumeState !== null) ingest.staging.resumed = resumeAtBlock
     }
 
-    assertNotCancelled(signal)
-    if (hook !== null) await hook({ core: finalCore, descriptor, signal })
     assertNotCancelled(signal)
     return ingest === null ? { core: finalCore, descriptor } : { core: finalCore, descriptor, ingest }
   } catch (error) {

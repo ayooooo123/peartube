@@ -33,8 +33,6 @@ test('relay status exposes the bounded policy-v2 contract without protected runt
       publicKey: protectedValues.key
     },
     assets: {
-      activeUploads: 1,
-      uploadedBytes: 512,
       localPath: protectedValues.path,
       capability: protectedValues.key
     },
@@ -44,8 +42,8 @@ test('relay status exposes the bounded policy-v2 contract without protected runt
     },
     publicWork: {
       activeAnnouncements: 5,
-      activeUploads: 1,
-      uploadedBytes: 512
+      activeServes: 1,
+      servedBytes: 512
     },
     seedRetention: {
       retention: {
@@ -116,8 +114,8 @@ test('relay status exposes the bounded policy-v2 contract without protected runt
   })
   assert.deepEqual(status.publicWork, {
     activeAnnouncements: 5,
-    activeUploads: 1,
-    uploadedBytes: 512,
+    activeServes: 1,
+    servedBytes: 512,
     activeAcquisitions: 2,
     jobsByState: {
       queued: 2,
@@ -173,14 +171,14 @@ test('relay status exposes the bounded policy-v2 contract without protected runt
     'permissions: contribute=true archive=true',
     'contributionBudget: 123/4096 bytes',
     'archiveBudget: 456/8192 bytes',
-    'publicWork: announcements=5 uploads=1 uploadedBytes=512 acquisitions=2',
+    'publicWork: announcements=5 serves=1 servedBytes=512 acquisitions=2',
     'jobs: queued=2 acquiring=1 verifying=0 publishing=1 completed=9 failed=1 cancelled=1',
     'network: status=active peers=2 connections=1 offline=false',
     'channels: total=3 protected=1 evictable=2',
     'selectedIndexers: selected-1:active,selected-2:pending,selected-3:unknown,selected-4:unknown,selected-5:unknown,selected-6:unknown,selected-7:unknown,selected-8:unknown',
     'lastErrors: SOURCE_FAILED,NETWORK_TIMEOUT,PUBLISH_FAILED',
     'authorizedClients: 2',
-    'blockOffload: enabled=false windowBytes=0 uploaded=0/0 blocks=0 bytes=0 restored=0',
+    'blockOffload: enabled=false windowBytes=0 residentBytes=0 restored=0',
     'creators: total=1 archived=4 unseeded=2'
   ].join('\n'))
 })
@@ -200,16 +198,16 @@ test('watch-only status reports stale public work without restoring protected id
       },
       publicWork: {
         activeAnnouncements: 3,
-        activeUploads: 2,
-        uploadedBytes: 4096,
+        activeServes: 2,
+        servedBytes: 4096,
         publisherId: 'must-not-leak'
       }
     }
   })
 
   assert.equal(status.publicWork.activeAnnouncements, 3)
-  assert.equal(status.publicWork.activeUploads, 2)
-  assert.equal(status.publicWork.uploadedBytes, 4096)
+  assert.equal(status.publicWork.activeServes, 2)
+  assert.equal(status.publicWork.servedBytes, 4096)
   assert.deepEqual(status.selectedIndexers, [
     { id: 'selected-1', status: 'unknown' },
     { id: 'selected-2', status: 'unknown' }

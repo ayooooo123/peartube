@@ -858,7 +858,7 @@ export async function createArchiveConsole({
       logger?.archive?.warn?.('Discarding a rejected upload failed', { error: err?.message || String(err) })
     } finally {
       if (typeof file.releaseStorageReservation === 'function') {
-        try { file.releaseStorageReservation() } catch {}
+        try { file.releaseStorageReservation() } catch { /* Cleanup remains best effort. */ }
       } else if (file.path) {
         releaseUploadReservationByPath(file.path)
       }
@@ -1100,7 +1100,7 @@ export async function createArchiveConsole({
         bucket: '',
         region: '',
         prefix: '',
-        offload: { enabled: false, windowBytes: 0, blocksOffloaded: 0, bytesOffloaded: 0, uploadedBlocks: 0, uploadedBytes: 0, restored: 0, residentBytes: 0 }
+        offload: { enabled: false, windowBytes: 0, restored: 0, residentBytes: 0 }
       },
       discover: await discoverView(discoverParams),
       trustedClients: service.getTrustedClients?.() || [],

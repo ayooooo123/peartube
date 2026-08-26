@@ -76,6 +76,7 @@ const SOURCE_RESET_PROGRESS_ERRORS = new Set([
 // disagree. A genuinely different source produces a different job id.
 const REVIVABLE_TERMINAL_ERRORS = new Set([
   'SOURCE_GRANT_UNAVAILABLE',
+  'SOURCE_CAPABILITY_INVALID',
   'SOURCE_AUTH_FAILED'
 ])
 // A failure that is the transport's fault, or the process's, is an
@@ -826,7 +827,12 @@ export function createIngestManager ({
       signal
     })
     const authoritativeEtag = isDirect ? metadata.etag : etag
-    return { client, capability: params, etag: authoritativeEtag, metadata }
+    return {
+      client,
+      capability: resolved.type === 'legacy' ? params.capability : params,
+      etag: authoritativeEtag,
+      metadata,
+    }
   }
 
   // Is what the grant serves what this job asked for? For direct source descriptors,

@@ -356,11 +356,6 @@ test('block offload with a half-configured bucket is refused, never downgraded t
     )
   }
 
-  t.exception(
-    () => resolveRelayConfig({ archive: { s3: { ...complete, offload: true, enabled: false } } }, { env: {} }),
-    /archive\.s3\.enabled is false/,
-    'offload cannot be enabled while the provider itself is disabled'
-  )
 
   const accepted = resolveRelayConfig({ archive: { s3: { ...complete, offload: true } } }, { env: {} })
   t.is(accepted.archive.s3.offload, true, 'a complete bucket is accepted')

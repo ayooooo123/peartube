@@ -13,8 +13,10 @@ import {
   INDEXES,
   createCatalogIngestor,
   createIndexerStore,
+  createLocalCatalogIndex,
   openIndexerDatabase,
 } from '../src/indexer/index.js'
+import { createIndexFederation } from '../src/search/index-federation.js'
 import {
   PUBLISHER_RECORD_TYPES,
   createPublisherAuthorizationState,
@@ -89,7 +91,7 @@ function rendition(seed, purpose, format, byteLength) {
   return createRenditionDescriptor({ purpose, format, core: assetRef(seed, byteLength) })
 }
 
-function publicationManifest(fixture, sequence = 1, title = '  Pilot   Episode  ') {
+function publicationManifest(fixture, sequence = 1, title = '  Pilot   Episode  ', claims = []) {
   return createPublicationManifest({
     publisherId: fixture.descriptor.publisherId,
     sequence,
@@ -98,7 +100,7 @@ function publicationManifest(fixture, sequence = 1, title = '  Pilot   Episode  
     renditions: [rendition(31 + sequence, 'original', 'video/mp4', 300_000)],
     artwork: [rendition(41 + sequence, 'poster', 'image/jpeg', 20_000)],
     subtitles: [rendition(51 + sequence, 'subtitles', 'text/vtt', 2_000)],
-    claims: [],
+    claims,
     provenance: [{ type: 'upload', source: 'fixture' }],
     keyPair: fixture.device,
     signedAt: 100,
@@ -1170,4 +1172,75 @@ test('every exact pinned checkout closes after both successful and rejected inge
 
   t.alike(f.checkouts, { opened: 2, closed: 2 })
   t.alike(await f.index.getSourceCursor({ publisherId: f.publisherId, catalogEpoch: 0 }), cursor)
+})
+
+test('local catalog index backfills an existing episode for companion federation search', async t => {
+  const f = await fixture(t)
+  const subject = createEntityReference({
+    entityKind: 'work',
+    namespace: 'tmdb',
+    normalizedIdentifier: 'show:95350:s1:e2',
+  })
+  const manifest = publicationManifest(f, 1, 'Lanterns S01E02', [])
+  const claimValue = createMediaClaim({
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [subject],
+    payload: {
+      availabilityStatus: 'available',
+      publicationId: manifest.publicationId,
+      renditionId: manifest.body.renditions[0].renditionId,
+    },
+    confidence: 900,
+    issuerSequence: 2,
+    policyEpoch: 0,
+    keyPair: f.device,
+    signedAt: 100,
+  })
+  const claim = signPublisherOperation({
+    descriptor: f.descriptor,
+    signer: f.device,
+    recordType: PUBLISHER_RECORD_TYPES.CLAIM,
+    sequence: 2,
+    body: {
+      claimId: bytes(claimValue.claimId),
+      claimType: claimValue.body.claimType,
+      payload: encodeApplicationEnvelope(claimValue.envelope),
+    },
+  })
+  await putProjection(f, 'publication', manifest.publicationId, publicationOperation(f, manifest, 1))
+  await putProjection(f, 'claim', claimProjectionId(claim), claim)
+
+  const indexingErrors = []
+  const local = await createLocalCatalogIndex({
+    store: f.catalogStore,
+    catalogRegistry: {
+      async listBindings() {
+        return [{
+          publisherId: bytes(f.publisherId),
+          namespaceDescriptor: f.descriptor,
+          catalog: f.catalog,
+        }]
+      },
+    },
+    onError: error => indexingErrors.push(error),
+  })
+  t.teardown(() => local.close())
+  const refreshed = await local.refresh()
+  if (indexingErrors.length > 0) throw indexingErrors[0]
+  t.alike(refreshed, { indexed: 1, failed: 0 })
+
+  let randomValue = 0
+  const federation = createIndexFederation({
+    services: [local.service],
+    now: () => 1_700_000_000_000,
+    limits: { randomBytes: size => b4a.alloc(size, ++randomValue) },
+  })
+  t.teardown(() => federation.close())
+  const candidates = await federation.search({
+    selector: { namespace: 'tmdb', identifier: '95350', kind: 'episode', season: 1, episode: 2 },
+    limit: 64,
+  })
+  t.ok(candidates.length > 0, 'the existing local episode is searchable without a remote indexer')
+  t.ok(candidates.some(candidate => candidate.rendition.container === 'video/mp4'))
+  t.alike(candidates[0].sourceIndexers, [{ indexerId: local.service.indexerId, observedAtMs: 1_700_000_000_000 }])
 })

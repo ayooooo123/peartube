@@ -150,7 +150,8 @@ test('buildRelayStatus preserves safe policy, network, budget and public-work di
         network: { peers: 3, connections: 1, offline: false },
         publisher: { catalogs: 4, followed: 2, lastErrorCode: null },
         bootstrap: { joined: true, locators: 6, rejected: 1, maxLocators: 32 },
-        assets: { retainedRenditions: 5, activeSessions: 2, activeUploads: 1, uploadedBytes: 8, maxSessions: 8 },
+        assets: { retainedRenditions: 5, activeSessions: 2, maxSessions: 8 },
+        publicWork: { activeServes: 1, servedBytes: 8 },
         seedRetention: { retention: { contributionUsedBytes: 40, archiveUsedBytes: 12 } }
       }
     })
@@ -159,7 +160,7 @@ test('buildRelayStatus preserves safe policy, network, budget and public-work di
     t.is(status.effectivePolicy.effectiveRole, 'contributor')
     t.is(status.budgets.contribution.usedBytes, 40)
     t.is(status.publicWork.activeAnnouncements, 4)
-    t.is(status.publicWork.activeUploads, 1)
+    t.is(status.publicWork.activeServes, 1)
 
     const formatted = formatRelayStatus(status)
     t.ok(formatted.includes('role: contributor'))

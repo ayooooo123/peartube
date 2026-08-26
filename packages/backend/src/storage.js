@@ -1472,11 +1472,9 @@ export async function initializeStorage(config) {
     swarmOptions = {},
     expectedProtocolVersion,
     storedProtocolMigrations = DEFAULT_STORED_PROTOCOL_MIGRATIONS,
-    // Optional block offload. `wrapStorage` wraps the CorestoreStorage so an
-    // offloaded block is restored from the object store on a local miss
-    // (archive/offload-storage.js); the object as a whole is published on the
-    // context so the write path can reach `offloadAsset`. Absent by default,
-    // and absent means no wrapping at all.
+    // Optional block offload. `wrapStorage` restores a block from S3 on a local
+    // miss; the same capability reaches the write path for bounded ingest.
+    // Absent means plain Corestore storage.
     blockOffload = null,
   } = config;
 
@@ -2149,8 +2147,7 @@ export async function initializeStorage(config) {
 
     platform,
     storedProtocol,
-    // null unless the operator configured block offload. The upload path reads
-    // `blockOffload.offloadAsset` off this to hand writeStaticAsset its hook.
+    // null unless the operator configured block offload.
     blockOffload,
     lifecycle,
     ownResource(label, resource, methods, timeoutMs) {

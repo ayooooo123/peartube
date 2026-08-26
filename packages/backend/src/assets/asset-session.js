@@ -119,7 +119,7 @@ function createManifestAssetSession(options) {
     close() {
       closed = true
       for (const core of active.values()) {
-        try { core?.close?.() } catch {}
+        try { core?.close?.() } catch { /* Best-effort session cleanup. */ }
       }
       active.clear()
     },
@@ -317,14 +317,23 @@ function createStaticAssetSession(options) {
       throw error
     }
     let present
+    let value = null
     try {
       present = await handle.has(index)
+      if (!present && typeof handle.get === 'function') value = await handle.get(index, { wait: false })
     } catch (cause) {
       await quarantineCore(handle, cause)
       throw cause
     }
     assertActive(isActive, 'asset block request is closed')
-    return present === true
+    if (present === true) return true
+    if (value == null) return false
+    if (!b4a.isBuffer(value) || value.byteLength !== expectedBlockBytes(coreRef, index)) {
+      const error = new Error('verified asset block does not match the descriptor')
+      await quarantineCore(handle, error)
+      throw error
+    }
+    return true
   }
 
   async function readVerifiedBlock(index, { isActive } = {}) {
@@ -340,18 +349,14 @@ function createStaticAssetSession(options) {
       await quarantineCore(handle, error)
       throw error
     }
-    let present
     let value
     try {
-      present = await handle.has(index)
-      assertActive(isActive, 'asset block read is closed')
-      if (!present) throw new Error('verified asset block is unavailable')
       value = await handle.get(index, { wait: false })
     } catch (cause) {
-      if (cause?.message === 'verified asset block is unavailable') throw cause
       await quarantineCore(handle, cause)
       throw cause
     }
+    if (value == null) throw new Error('verified asset block is unavailable')
     assertActive(isActive, 'asset block read is closed')
     if (!b4a.isBuffer(value) || value.byteLength !== expectedBlockBytes(coreRef, index)) {
       const error = new Error('verified asset block does not match the descriptor')

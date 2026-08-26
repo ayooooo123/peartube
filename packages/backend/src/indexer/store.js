@@ -39,7 +39,7 @@ const MAX_USAGE = Object.freeze({
   maxRows: Number.MAX_SAFE_INTEGER,
 })
 const MUTABLE_DATA_COLLECTIONS = new Set(DATA_COLLECTIONS.filter(collection => collection !== COLLECTIONS.sourceCursors))
-const OPTION_FIELDS = new Set(['store', 'limits', 'policy'])
+const OPTION_FIELDS = new Set(['store', 'limits', 'policy', 'name'])
 const REPLACEMENT_FIELDS = new Set(['publisherId', 'rows', 'cursor', 'expectedCursor'])
 const CHANGE_FIELDS = new Set(['publisherId', 'operations', 'cursor', 'expectedCursor'])
 const ROW_FIELDS = new Set(['collection', 'record'])
@@ -950,7 +950,7 @@ export async function createIndexerStore(options) {
   assertOnlyFields(options, OPTION_FIELDS, 'indexer options')
   const limits = validateAdmissionLimits(options.limits)
   const policy = validateAdmissionPolicy(options.policy)
-  const db = await openIndexerDatabase(options.store, { name: INDEXER_CORE_NAME })
+  const db = await openIndexerDatabase(options.store, { name: options.name || INDEXER_CORE_NAME })
   let accepting = true
   let closePromise = null
 

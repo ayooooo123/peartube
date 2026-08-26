@@ -9,6 +9,7 @@ import {
 } from '../assets/index.js'
 import { decodeClaimBody, verifyMediaClaim } from '../media-graph/index.js'
 import {
+  decodeAcceptedEntry,
   decodePublisherCatalogFrame,
   decodePublisherNamespaceDescriptor,
   decodePublisherOperationBody,
@@ -172,8 +173,7 @@ async function loadNamespace(binding, expectedPublisherId, signal) {
   const expectedBytes = b4a.from(expectedPublisherId, 'hex')
   if (!sameBytes(binding.publisherId, expectedBytes) ||
       !sameBytes(derivePublisherId(binding.genesisRootKey), expectedBytes) ||
-      !sameBytes(binding.catalogBootstrapKey, catalog.key) ||
-      !sameBytes(binding.catalogBootstrapKey, view.key)) {
+      !sameBytes(binding.catalogBootstrapKey, catalog.key)) {
     reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID)
   }
   const descriptorEntry = await awaitAbort(view.get('state/descriptor'), signal)
@@ -233,11 +233,13 @@ async function loadCurrentOperation(view, sourceRecordRef, descriptor, authoriza
   }
   const accepted = await awaitAbort(view.get(`accepted/${sourceRecordRef}`), signal)
   if (!accepted?.value) reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_NOT_CURRENT)
+  const decodedAccepted = decodeAcceptedEntry(accepted.value)
+  const frame = decodedAccepted?.frame || accepted.value
   let operation
   let body
   try {
-    operation = decodePublisherCatalogFrame(accepted.value)
-    if (!b4a.equals(encodePublisherCatalogFrame(operation), accepted.value)) reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID)
+    operation = decodedAccepted?.value || decodePublisherCatalogFrame(frame)
+    if (!b4a.equals(encodePublisherCatalogFrame(operation), frame)) reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID)
     if (hex(operation.recordId, 'recordId') !== sourceRecordRef) reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID)
     body = decodePublisherOperationBody(operation.recordType, operation.canonicalBody)
   } catch (error) {
@@ -251,7 +253,7 @@ async function loadCurrentOperation(view, sourceRecordRef, descriptor, authoriza
   if (!projection || !sameBytes(projection.recordId, operation.recordId)) {
     reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_NOT_CURRENT)
   }
-  if (!b4a.equals(encodePublisherCatalogFrame(projection), accepted.value)) {
+  if (!b4a.equals(encodePublisherCatalogFrame(projection), frame)) {
     reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_NOT_CURRENT)
   }
   return { operation, body, identity }
@@ -275,17 +277,25 @@ async function verifyExternalClaim(current, locator, candidate, signal) {
   }), signal)
   if (!verified ||
       hex(envelope.recordId, 'claim envelope recordId') !== hex(current.body.claimId, 'publisher claimId') ||
-      current.body.claimType !== claim.claimType ||
-      claim.claimType !== 'ExternalReferenceClaim') {
+      current.body.claimType !== claim.claimType) {
     reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_INVALID)
   }
   const expectedRef = candidate.work.externalRefs[0]
+  const subject = claim.subjectRefs.find(ref =>
+    ref.namespace === expectedRef.namespace && ref.normalizedIdentifier === expectedRef.identifier)
   const externalRef = claim.payload?.externalRef
-  if (!externalRef || externalRef.namespace !== expectedRef.namespace || externalRef.identifier !== expectedRef.identifier) {
+  const externalMatches = claim.claimType === 'ExternalReferenceClaim' &&
+    externalRef?.namespace === expectedRef.namespace &&
+    externalRef?.identifier === expectedRef.identifier
+  const publicationMatches = claim.payload?.publicationId === locator.publicationId
+  if ((!subject && !externalMatches) ||
+      (claim.claimType !== 'ExternalReferenceClaim' && !publicationMatches) ||
+      locator.publisherId !== candidate.publication.publisherId) {
     reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_MISMATCH)
   }
-  if (locator.publisherId !== candidate.publication.publisherId) reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_MISMATCH)
-  return claim
+  const workSubject = subject || claim.subjectRefs.find(ref => ref.entityKind === 'work')
+  if (!workSubject) reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_MISMATCH)
+  return { claim, workSubject }
 }
 
 async function verifyPublication(current, locator, descriptor, now, signal) {
@@ -424,17 +434,22 @@ export function createSourceVerifier({ federation, catalogRegistry, availability
       loadCurrentOperation(namespace.view, locator.publicationSourceRecordRef, namespace.descriptor, namespace.authorization, signal),
       signal,
     )
-    const claim = await awaitAbort(verifyExternalClaim(externalCurrent, locator, record.candidate, signal), signal)
+    const verifiedClaim = await awaitAbort(verifyExternalClaim(externalCurrent, locator, record.candidate, signal), signal)
+    const claim = verifiedClaim.claim
     const manifest = await awaitAbort(
       verifyPublication(publicationCurrent, locator, namespace.descriptor, currentTime(now), signal),
       signal,
     )
     const externalClaimId = hex(externalCurrent.body.claimId, 'claimId')
     const claimLinks = manifest.body.claims.filter(value => value.claimId === externalClaimId)
-    if (claimLinks.length !== 1 || !claim.subjectRefs.some(subject => subject.entityId === claimLinks[0].entityId)) {
+    let workEntityId
+    if (claimLinks.length === 1 && claim.subjectRefs.some(subject => subject.entityId === claimLinks[0].entityId)) {
+      workEntityId = claimLinks[0].entityId
+    } else if (claimLinks.length === 0 && claim.payload?.publicationId === manifest.publicationId) {
+      workEntityId = verifiedClaim.workSubject.entityId
+    } else {
       reject(SOURCE_VERIFICATION_ERROR_CODES.SOURCE_MISMATCH)
     }
-    const workEntityId = claimLinks[0].entityId
     const selected = verifySelectedRendition(manifest, locator)
 
     const availabilityController = new AbortController()
@@ -457,6 +472,7 @@ export function createSourceVerifier({ federation, catalogRegistry, availability
         manifest,
         catalog: namespace.catalog,
         descriptor: namespace.descriptor,
+        sourceIndexers: record.candidate.sourceIndexers,
         signal: availabilityController.signal,
       })
       // Keep the deadline responsive; the verifier owns this task until close() drains its rollback.
@@ -495,10 +511,7 @@ export function createSourceVerifier({ federation, catalogRegistry, availability
         entityId: workEntityId,
         title: manifest.body.title,
         releaseYear: null,
-        externalRefs: [{
-          namespace: claim.payload.externalRef.namespace,
-          identifier: claim.payload.externalRef.identifier,
-        }],
+        externalRefs: [{ ...record.candidate.work.externalRefs[0] }],
         episode: null,
       },
       publication: {
@@ -601,6 +614,37 @@ export function createSourceVerifier({ federation, catalogRegistry, availability
   }
 
   return Object.freeze({ verifySelectedCandidate, close })
+}
+
+export function createLocalAssetAvailabilityProbe({
+  openAssetCore,
+  now = Date.now,
+  evidenceLifetimeMs = 5_000,
+} = {}) {
+  if (typeof openAssetCore !== 'function') throw new TypeError('openAssetCore is required')
+  if (typeof now !== 'function') throw new TypeError('now must be a function')
+  const lifetime = boundedInteger(evidenceLifetimeMs, 5_000, DEFAULT_MAX_EVIDENCE_LIFETIME_MS, 'evidenceLifetimeMs')
+  return async function probe({ coreKey, range, signal }) {
+    let core = null
+    try {
+      core = await raceAbort(Promise.resolve().then(() => openAssetCore(coreKey)), signal)
+      const start = range?.startBlock
+      const end = range?.endBlock
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start) {
+        throw new TypeError('local availability range is invalid')
+      }
+      const block = await raceAbort(core.get(start, { wait: false }), signal)
+      const observedAtMs = currentTime(now)
+      return {
+        peers: block ? 1 : 0,
+        completeSeeders: 0,
+        observedAtMs,
+        expiresAtMs: observedAtMs + lifetime,
+      }
+    } finally {
+      await core?.close?.().catch(() => {})
+    }
+  }
 }
 
 export function createScopedAssetAvailabilityProbe({

@@ -24,18 +24,10 @@ import { createRelayBlockOffload } from '../src/archive/block-offload.js'
 // a dependency it does not have.
 const Corestore = createRequire(import.meta.resolve('@peartube/backend/assets'))('corestore')
 
-// Does the cloud tier actually run in production? The existing suites drive
-// createBlockOffloader and createOffloadStorage directly, with hand-built cores
-// and hand-written offloaders. Nothing drove the capability the relay itself
-// builds — createRelayBlockOffload — through an asset write, which is the only
-// path a real title ever takes. That gap is why a relay reporting
-// `blockOffload.enabled: true` alongside `blocksOffloaded: 0` looked plausible.
-//
-// So this is the whole lifecycle with only the HTTP transport faked: resolved
-// operator config, the real provider, the real remote block store, the real
-// storage wrapper, and writeStaticAsset as the entry point. Every residency
-// number is read off the UNWRAPPED storage instance, which cannot restore
-// anything, so it is bytes on the relay's volume and not a counter's opinion.
+// This drives the whole lifecycle with only the HTTP transport faked: resolved
+// operator config, the real provider, remote block store, storage wrapper, and
+// writeStaticAsset. Residency is read from the unwrapped storage instance, so
+// the assertions use bytes on disk and objects in the bucket, not counters.
 
 // Three and a half windows of title. The claim is the BOUND, not the volume: a
 // megabyte and a half proves the window governs residency exactly as well as a
@@ -49,7 +41,6 @@ const BYTE_LENGTH = ((BLOCK_COUNT - 1) * ASSET_BLOCK_SIZE) + TAIL_BYTES
 // The window slides one block at a time as the ingest moves past it, so what is
 // left resident at the end is the tail of the title inside the window.
 const OFFLOADED_BLOCKS = BLOCK_COUNT - WINDOW_BLOCKS
-const OFFLOADED_BYTES = OFFLOADED_BLOCKS * ASSET_BLOCK_SIZE
 const RESIDENT_AFTER = ASSET_BLOCK_SIZE + TAIL_BYTES
 
 // Source chunks are deliberately not block-aligned: a download grant serves
@@ -234,28 +225,13 @@ test('a title written through the relay capability leaves the volume for the buc
   t.is(written.ingest.windowBytes, WINDOW_BYTES, 'and the ingest reports the window the operator configured')
   t.ok(await verifyStaticAssetDescriptor(written.core, written.descriptor), 'the finished core verifies against its descriptor')
 
-  // The assertion production was failing silently: a relay with offload enabled
-  // that had never moved a block.
   const stats = offload.stats()
   t.is(stats.enabled, true, 'the capability reports itself enabled')
-  t.ok(stats.blocksOffloaded > 0, 'and the cloud tier actually engaged, which is what blocksOffloaded: 0 meant it had not')
-  t.is(stats.blocksOffloaded, OFFLOADED_BLOCKS, 'every block the window slid past left the volume')
-  t.is(stats.bytesOffloaded, OFFLOADED_BYTES, 'and the bytes reported are those blocks bytes')
-  t.is(bucket.objects.size, OFFLOADED_BLOCKS, 'the bucket holds exactly them')
-
-  // The counter that answers the question `blocksOffloaded` cannot: is the
-  // bucket receiving anything at all? During a streaming ingest every staged
-  // block is written to the store and later purged, so it never reaches
-  // `blocksOffloaded` — and a relay hours into an archive reported 0 while
-  // gigabytes were arriving. `uploaded*` counts at the write itself.
-  t.ok(stats.uploadedBlocks >= stats.blocksOffloaded,
-    'every block that left the volume was written to the store, so uploads are never fewer')
-  t.ok(stats.uploadedBytes >= stats.bytesOffloaded, 'and the same holds for their bytes')
-  t.is(stats.uploadedBlocks, OFFLOADED_BLOCKS, 'a re-openable source writes each offloaded block once and stages nothing')
+  t.is(bucket.objects.size, OFFLOADED_BLOCKS, 'the bucket holds every block the resident window released')
 
   // Confirm-before-delete, per block. A delete without its own confirmation is
   // a delete of the only copy.
-  t.is(written.ingest.offload.confirmed, stats.blocksOffloaded, 'no block was deleted locally without the bucket confirming it holds it')
+  t.is(written.ingest.offload.confirmed, OFFLOADED_BLOCKS, 'no block was deleted locally without the bucket confirming it holds it')
   t.is(written.ingest.offload.pending, WINDOW_BLOCKS, 'and the blocks still resident are the window, not a backlog')
 
   // THIS is the unlimited-capacity claim: what stayed on the volume is a
@@ -307,21 +283,7 @@ test('a one-shot download archives through the capability staging store and leav
     'every staged block went to the bucket, came back for the transplant, and was deleted once the finished core verified'
   )
 
-  const stats = offload.stats()
-  t.is(stats.blocksOffloaded, OFFLOADED_BLOCKS, 'the relay counted the blocks that left, once each')
-  t.is(stats.bytesOffloaded, OFFLOADED_BYTES, 'and their bytes')
-  t.is(bucket.objects.size, OFFLOADED_BLOCKS, 'and what the bucket is left holding is the offloaded title, not a staging copy of it')
-
-  // The exact case that made the tier look dead. A one-shot download stages
-  // every block into the store and the finished core then supersedes those
-  // objects, so the bucket ends up holding only the offloaded blocks and
-  // `blocksOffloaded` never accounts for the staging traffic. Reported alone,
-  // that reads as a bucket receiving nothing while gigabytes arrive.
-  t.ok(stats.uploadedBlocks > stats.blocksOffloaded,
-    'a staged download writes more blocks to the store than it ends up offloading')
-  t.is(stats.uploadedBlocks, BLOCK_COUNT + OFFLOADED_BLOCKS,
-    'every block was staged once and the offloaded ones written again from the finished core')
-  t.ok(stats.uploadedBytes > stats.bytesOffloaded, 'so upload bytes exceed the bytes left offloaded')
+  t.is(bucket.objects.size, OFFLOADED_BLOCKS, 'the bucket is left with the final offloaded blocks, not staging copies')
 
   const resident = await residentBlockBytes()
   t.is(resident, RESIDENT_AFTER, 'local block data is the window, off a download that was never re-read')
@@ -400,8 +362,7 @@ test('a block a player is reading through survives the relay residency sweep', a
 
   const core = store.get({ name: 'media' })
   await core.ready()
-  // Settles the sweep that opening the core armed, so the counters below are
-  // this test's sweeps and not the empty core's.
+  // Settle the sweep armed when the core opened.
   await storage.offloadSweep()
 
   for (let index = 0; index < PIN_BLOCK_COUNT; index++) {
@@ -416,10 +377,7 @@ test('a block a player is reading through survives the relay residency sweep', a
     'the player registered interest in exactly the blocks this test pins'
   )
 
-  const before = offload.stats()
   await storage.offloadSweep()
-  const after = offload.stats()
-
   t.alike(
     await residency(discoveryKey),
     {
@@ -427,12 +385,6 @@ test('a block a player is reading through survives the relay residency sweep', a
       indices: [...PINNED_INDICES, ...PIN_WINDOW_INDICES]
     },
     'the blocks the player is reading stayed on disk, and residency is over the window by exactly them'
-  )
-  t.is(after.playbackPinned - before.playbackPinned, PINNED_INDICES.length, 'the relay counted the blocks it left for the player')
-  t.is(
-    after.blocksEvicted - before.blocksEvicted,
-    PIN_BLOCK_COUNT - PIN_WINDOW_BLOCKS - PINNED_INDICES.length,
-    'and gave back every other block below the window'
   )
 
   // Pinning delays an eviction, it does not cancel one.

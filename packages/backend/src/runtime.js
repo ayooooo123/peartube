@@ -37,6 +37,8 @@ export function createIndexVerificationRuntime({
   services,
   catalogRegistry,
   availabilityProbe,
+  localIndexServiceId = null,
+  localAvailabilityProbe = null,
   scopedNetwork,
   lifecycle,
   cache = new Map(),
@@ -44,7 +46,27 @@ export function createIndexVerificationRuntime({
   limits = {},
 } = {}) {
   const federation = createIndexFederation({ services, cache, limits, now })
-  const probe = availabilityProbe || createScopedAssetAvailabilityProbe({ scopedNetwork, now })
+  const networkProbe = availabilityProbe || createScopedAssetAvailabilityProbe({ scopedNetwork, now })
+  if (localIndexServiceId !== null && (typeof localIndexServiceId !== 'string' || localIndexServiceId.length === 0)) {
+    throw new TypeError('localIndexServiceId must be non-empty text')
+  }
+  if (localAvailabilityProbe !== null && typeof localAvailabilityProbe !== 'function') {
+    throw new TypeError('localAvailabilityProbe must be a function')
+  }
+  const probe = localIndexServiceId !== null && localAvailabilityProbe !== null
+    ? async request => {
+        const local = request.sourceIndexers?.some(source => source?.indexerId === localIndexServiceId)
+        if (local) {
+          try {
+            const available = await localAvailabilityProbe(request)
+            if (available?.peers > 0) return available
+          } catch (error) {
+            if (request.signal?.aborted) throw error
+          }
+        }
+        return networkProbe(request)
+      }
+    : networkProbe
   const verifier = createSourceVerifier({
     federation,
     catalogRegistry,

@@ -2,17 +2,12 @@ import { readFileSync } from '#fs'
 import { join } from '#path'
 import process from '#process'
 import {
-  ARCHIVE_OFFLOAD_PROVIDERS,
-  ARCHIVE_OFFLOAD_PROVIDER_SECTIONS,
   DEFAULT_ARCHIVE_CONFIG,
   DEFAULT_ARCHIVE_FFMPEG_PATH,
   DEFAULT_ARCHIVE_FORMAT,
-  DEFAULT_ARCHIVE_GOOGLE_DRIVE_CONFIG,
   DEFAULT_ARCHIVE_JS_RUNTIME,
   DEFAULT_ARCHIVE_MAX_ITEMS,
   DEFAULT_ARCHIVE_MAX_RETRIES,
-  DEFAULT_ARCHIVE_MEGA_CONFIG,
-  DEFAULT_ARCHIVE_OFFLOAD_PROVIDER,
   DEFAULT_ARCHIVE_POLL_SECONDS,
   DEFAULT_ARCHIVE_S3_CONFIG,
   DEFAULT_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES,
@@ -344,24 +339,9 @@ function configFromEnv(env = {}) {
     env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID ||
     env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY ||
     env.PEARTUBE_ARCHIVE_S3_PREFIX ||
-    env.PEARTUBE_ARCHIVE_S3_ENABLED ||
     env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE ||
     env.PEARTUBE_ARCHIVE_S3_OFFLOAD ||
-    env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES ||
-    env.PEARTUBE_ARCHIVE_PROVIDER ||
-    env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_ACCESS_TOKEN ||
-    env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FOLDER_ID ||
-    env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_PREFIX ||
-    env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FILES_ENDPOINT ||
-    env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_UPLOAD_ENDPOINT ||
-    env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD ||
-    env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD_WINDOW_BYTES ||
-    env.PEARTUBE_ARCHIVE_MEGA_SESSION ||
-    env.PEARTUBE_ARCHIVE_MEGA_FOLDER ||
-    env.PEARTUBE_ARCHIVE_MEGA_PREFIX ||
-    env.PEARTUBE_ARCHIVE_MEGA_API_URL ||
-    env.PEARTUBE_ARCHIVE_MEGA_OFFLOAD ||
-    env.PEARTUBE_ARCHIVE_MEGA_OFFLOAD_WINDOW_BYTES
+    env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES
   ) {
     config.archive = {}
     if (env.PEARTUBE_ARCHIVE_UI_ENABLED) config.archive.uiEnabled = parseBoolean(env.PEARTUBE_ARCHIVE_UI_ENABLED)
@@ -383,7 +363,6 @@ function configFromEnv(env = {}) {
     if (env.PEARTUBE_ARCHIVE_COOKIES_PATH) config.archive.cookiesPath = env.PEARTUBE_ARCHIVE_COOKIES_PATH
     if (env.PEARTUBE_ARCHIVE_JS_RUNTIME) config.archive.jsRuntime = env.PEARTUBE_ARCHIVE_JS_RUNTIME
     if (env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS) config.archive.ytDlpExtraArgs = splitShellArgs(env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS)
-    if (env.PEARTUBE_ARCHIVE_PROVIDER) config.archive.provider = env.PEARTUBE_ARCHIVE_PROVIDER
     if (
       env.PEARTUBE_ARCHIVE_S3_ENDPOINT ||
       env.PEARTUBE_ARCHIVE_S3_BUCKET ||
@@ -391,7 +370,6 @@ function configFromEnv(env = {}) {
       env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID ||
       env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY ||
       env.PEARTUBE_ARCHIVE_S3_PREFIX ||
-      env.PEARTUBE_ARCHIVE_S3_ENABLED ||
       env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE ||
       env.PEARTUBE_ARCHIVE_S3_OFFLOAD ||
       env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES
@@ -403,44 +381,9 @@ function configFromEnv(env = {}) {
       if (env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID) config.archive.s3.accessKeyId = env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID
       if (env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY) config.archive.s3.secretAccessKey = env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY
       if (env.PEARTUBE_ARCHIVE_S3_PREFIX) config.archive.s3.prefix = env.PEARTUBE_ARCHIVE_S3_PREFIX
-      if (env.PEARTUBE_ARCHIVE_S3_ENABLED) config.archive.s3.enabled = parseBoolean(env.PEARTUBE_ARCHIVE_S3_ENABLED)
       if (env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE) config.archive.s3.forcePathStyle = parseBoolean(env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE)
       if (env.PEARTUBE_ARCHIVE_S3_OFFLOAD) config.archive.s3.offload = parseBoolean(env.PEARTUBE_ARCHIVE_S3_OFFLOAD)
       if (env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES) config.archive.s3.offloadWindowBytes = Number(env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES)
-    }
-    if (
-      env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_ACCESS_TOKEN ||
-      env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FOLDER_ID ||
-      env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_PREFIX ||
-      env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FILES_ENDPOINT ||
-      env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_UPLOAD_ENDPOINT ||
-      env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD ||
-      env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD_WINDOW_BYTES
-    ) {
-      config.archive.googleDrive = {}
-      if (env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_ACCESS_TOKEN) config.archive.googleDrive.accessToken = env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_ACCESS_TOKEN
-      if (env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FOLDER_ID) config.archive.googleDrive.folderId = env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FOLDER_ID
-      if (env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_PREFIX) config.archive.googleDrive.prefix = env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_PREFIX
-      if (env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FILES_ENDPOINT) config.archive.googleDrive.filesEndpoint = env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_FILES_ENDPOINT
-      if (env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_UPLOAD_ENDPOINT) config.archive.googleDrive.uploadEndpoint = env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_UPLOAD_ENDPOINT
-      if (env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD) config.archive.googleDrive.offload = parseBoolean(env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD)
-      if (env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD_WINDOW_BYTES) config.archive.googleDrive.offloadWindowBytes = Number(env.PEARTUBE_ARCHIVE_GOOGLE_DRIVE_OFFLOAD_WINDOW_BYTES)
-    }
-    if (
-      env.PEARTUBE_ARCHIVE_MEGA_SESSION ||
-      env.PEARTUBE_ARCHIVE_MEGA_FOLDER ||
-      env.PEARTUBE_ARCHIVE_MEGA_PREFIX ||
-      env.PEARTUBE_ARCHIVE_MEGA_API_URL ||
-      env.PEARTUBE_ARCHIVE_MEGA_OFFLOAD ||
-      env.PEARTUBE_ARCHIVE_MEGA_OFFLOAD_WINDOW_BYTES
-    ) {
-      config.archive.mega = {}
-      if (env.PEARTUBE_ARCHIVE_MEGA_SESSION) config.archive.mega.session = env.PEARTUBE_ARCHIVE_MEGA_SESSION
-      if (env.PEARTUBE_ARCHIVE_MEGA_FOLDER) config.archive.mega.folder = env.PEARTUBE_ARCHIVE_MEGA_FOLDER
-      if (env.PEARTUBE_ARCHIVE_MEGA_PREFIX) config.archive.mega.prefix = env.PEARTUBE_ARCHIVE_MEGA_PREFIX
-      if (env.PEARTUBE_ARCHIVE_MEGA_API_URL) config.archive.mega.apiUrl = env.PEARTUBE_ARCHIVE_MEGA_API_URL
-      if (env.PEARTUBE_ARCHIVE_MEGA_OFFLOAD) config.archive.mega.offload = parseBoolean(env.PEARTUBE_ARCHIVE_MEGA_OFFLOAD)
-      if (env.PEARTUBE_ARCHIVE_MEGA_OFFLOAD_WINDOW_BYTES) config.archive.mega.offloadWindowBytes = Number(env.PEARTUBE_ARCHIVE_MEGA_OFFLOAD_WINDOW_BYTES)
     }
     if (env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS) {
       config.archive.ytDlpRetryExtraArgs = String(env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS)
@@ -584,20 +527,10 @@ function boundedChallengeMs(value) {
   return ms
 }
 
-// Block offload sends media block DATA to the object store and keeps only the
-// merkle tree and the bitfield on disk, so the relay keeps advertising and
-// serving a block whose bytes are no longer local. That makes the store load
-// bearing for playback, so it is opt-in, and a half-configured store is refused
-// rather than downgraded: silently running local-only would fill the volume the
-// operator was trying to stop filling. That holds for every backend, so the
-// required fields are named per provider and checked the same way.
+// S3 block offload keeps only a bounded resident window on the relay volume,
+// so enabling it makes the bucket load bearing. Refuse incomplete credentials
+// rather than silently filling the volume.
 const REQUIRED_S3_OFFLOAD_FIELDS = ['endpoint', 'bucket', 'accessKeyId', 'secretAccessKey']
-// The endpoints are required as well as the credential: they default to Drive's
-// own hosts here in the config layer, because the provider itself may not carry
-// a remote origin, so an operator who blanks them gets a startup error rather
-// than a provider that cannot address anything.
-const REQUIRED_GOOGLE_DRIVE_OFFLOAD_FIELDS = ['accessToken', 'folderId', 'filesEndpoint', 'uploadEndpoint']
-const REQUIRED_MEGA_OFFLOAD_FIELDS = ['session', 'folder']
 
 function boundedOffloadWindowBytes(value) {
   const bytes = Number(value)
@@ -612,7 +545,6 @@ function resolveArchiveS3Config(rawS3) {
     merged[field] = typeof merged[field] === 'string' ? merged[field].trim() : ''
   }
   if (!merged.region) merged.region = DEFAULT_ARCHIVE_S3_CONFIG.region
-  merged.enabled = merged.enabled !== false
   merged.forcePathStyle = Boolean(merged.forcePathStyle)
   merged.offload = Boolean(merged.offload)
 
@@ -623,64 +555,11 @@ function resolveArchiveS3Config(rawS3) {
     if (missing.length) {
       throw new Error(`archive.s3.offload is true but archive.s3 is incomplete: missing ${missing.join(', ')}`)
     }
-    if (!merged.enabled) {
-      throw new Error('archive.s3.offload is true but archive.s3.enabled is false')
-    }
   }
 
   return merged
 }
 
-function resolveArchiveGoogleDriveConfig(rawDrive) {
-  const merged = deepMerge(DEFAULT_ARCHIVE_GOOGLE_DRIVE_CONFIG, isPlainObject(rawDrive) ? rawDrive : {})
-
-  for (const field of ['accessToken', 'folderId', 'prefix', 'filesEndpoint', 'uploadEndpoint']) {
-    merged[field] = typeof merged[field] === 'string' ? merged[field].trim() : ''
-  }
-  merged.offload = Boolean(merged.offload)
-  merged.offloadWindowBytes = boundedOffloadWindowBytes(merged.offloadWindowBytes)
-
-  if (merged.offload) {
-    const missing = REQUIRED_GOOGLE_DRIVE_OFFLOAD_FIELDS.filter((field) => !merged[field])
-    if (missing.length) {
-      throw new Error(`archive.googleDrive.offload is true but archive.googleDrive is incomplete: missing ${missing.join(', ')}`)
-    }
-  }
-
-  return merged
-}
-
-function resolveArchiveMegaConfig(rawMega) {
-  const merged = deepMerge(DEFAULT_ARCHIVE_MEGA_CONFIG, isPlainObject(rawMega) ? rawMega : {})
-
-  for (const field of ['session', 'folder', 'prefix', 'apiUrl']) {
-    merged[field] = typeof merged[field] === 'string' ? merged[field].trim() : ''
-  }
-  merged.offload = Boolean(merged.offload)
-  merged.offloadWindowBytes = boundedOffloadWindowBytes(merged.offloadWindowBytes)
-
-  if (merged.offload) {
-    const missing = REQUIRED_MEGA_OFFLOAD_FIELDS.filter((field) => !merged[field])
-    if (missing.length) {
-      throw new Error(`archive.mega.offload is true but archive.mega is incomplete: missing ${missing.join(', ')}`)
-    }
-  }
-
-  return merged
-}
-
-// One switch, three names. An unrecognised name is refused rather than treated
-// as "the default": an operator who typed `gdrive` asked for Drive, and starting
-// a relay that offloads to their S3 config instead — or to nothing — is the
-// worst answer available.
-function resolveArchiveOffloadProvider(rawProvider) {
-  const name = typeof rawProvider === 'string' ? rawProvider.trim() : ''
-  if (!name) return DEFAULT_ARCHIVE_OFFLOAD_PROVIDER
-  if (!ARCHIVE_OFFLOAD_PROVIDERS.includes(name)) {
-    throw new Error(`archive.provider must be one of ${ARCHIVE_OFFLOAD_PROVIDERS.join(', ')} (got "${name}")`)
-  }
-  return name
-}
 
 function resolveArchiveConfig(rawArchive, { storagePath }) {
   const merged = deepMerge(DEFAULT_ARCHIVE_CONFIG, isPlainObject(rawArchive) ? rawArchive : {})
@@ -814,20 +693,7 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
   merged.challengeIntervalMs = boundedChallengeMs(merged.challengeIntervalMs)
   merged.challengeTimeoutMs = boundedChallengeMs(merged.challengeTimeoutMs)
 
-  merged.provider = resolveArchiveOffloadProvider(merged.provider)
   merged.s3 = resolveArchiveS3Config(merged.s3)
-  merged.googleDrive = resolveArchiveGoogleDriveConfig(merged.googleDrive)
-  merged.mega = resolveArchiveMegaConfig(merged.mega)
-
-  // Offload is enabled by the SELECTED provider's section, so `offload: true` in
-  // a section nobody selected would be a relay running local-only while its
-  // operator believes block data is leaving the volume. Refused, for the same
-  // reason a half-configured store is refused.
-  for (const [name, section] of Object.entries(ARCHIVE_OFFLOAD_PROVIDER_SECTIONS)) {
-    if (name !== merged.provider && merged[section].offload) {
-      throw new Error(`archive.${section}.offload is true but archive.provider is "${merged.provider}"`)
-    }
-  }
 
   return merged
 }

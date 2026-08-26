@@ -3,8 +3,6 @@ import b4a from 'b4a'
 import {
   DEFAULT_OFFLOAD_WINDOW_BYTES,
   createBlockOffloader,
-  createGoogleDriveArchiveProvider,
-  createMegaArchiveProvider,
   createOffloadStorage,
   createRemoteBlockStore,
   createS3ArchiveProvider
@@ -12,7 +10,6 @@ import {
 import { ASSET_BLOCK_SIZE } from '@peartube/backend/assets'
 import { isBlockPlaybackPinned } from '@peartube/backend/blob-range-priority'
 
-import { ARCHIVE_OFFLOAD_PROVIDERS, ARCHIVE_OFFLOAD_PROVIDER_SECTIONS, DEFAULT_ARCHIVE_OFFLOAD_PROVIDER } from '../constants.js'
 import { boundedIngestBytes } from '../storage-guard.js'
 
 // Relay-side wiring for block offload. The mechanism lives in the backend:
@@ -29,13 +26,9 @@ import { boundedIngestBytes } from '../storage-guard.js'
 // the two things the backend needs — a storage wrapper for the read path and an
 // asset hook for the write path — or nothing at all when offload is off.
 
-// What each backend cannot run without. Same rule for all three: offload that
-// is asked for and cannot work is refused, never downgraded to local-only.
-const REQUIRED_FIELDS = {
-  s3: ['endpoint', 'bucket', 'accessKeyId', 'secretAccessKey'],
-  'google-drive': ['accessToken', 'folderId'],
-  mega: ['session', 'folder']
-}
+// Offload that is asked for and cannot work is refused, never downgraded to
+// local-only.
+const REQUIRED_S3_OFFLOAD_FIELDS = ['endpoint', 'bucket', 'accessKeyId', 'secretAccessKey']
 
 function missingFields (fields, section) {
   return fields.filter((field) => !(typeof section?.[field] === 'string' && section[field].trim()))
@@ -49,34 +42,7 @@ function keyHexOf (core) {
   return b4a.toString(key, 'hex')
 }
 
-/**
- * Per-block byte lengths of a canonical static asset, straight from its
- * descriptor. Every block is `blockSize` except the last, which is the
- * remainder. Reading each block back just to measure it would be the one extra
- * pass over the whole title that the window exists to avoid.
- */
-function assetBlockLength (descriptor, index) {
-  const blockSize = Number(descriptor.blockSize)
-  const byteLength = Number(descriptor.byteLength)
-  return Math.min(blockSize, byteLength - (index * blockSize))
-}
 
-/**
- * Which object store the operator selected, and the config section holding its
- * credentials. The config loader normalizes `archive.provider`, but this is
- * also handed hand-built config objects, so an unknown name is refused here
- * too: falling back to S3 would offload someone's blocks to a store they did
- * not name.
- */
-function selectProvider (archive) {
-  const raw = typeof archive.provider === 'string' ? archive.provider.trim() : ''
-  const name = raw || DEFAULT_ARCHIVE_OFFLOAD_PROVIDER
-  const section = ARCHIVE_OFFLOAD_PROVIDER_SECTIONS[name]
-  if (!section) {
-    throw new Error(`archive.provider must be one of ${ARCHIVE_OFFLOAD_PROVIDERS.join(', ')} (got "${name}")`)
-  }
-  return { name, section, config: archive[section] || {} }
-}
 
 // A usable resident window, or the default. Only a number or a numeric string
 // counts as the operator having said one: `null`, `undefined`, `''`, a boolean
@@ -97,9 +63,9 @@ function resolveWindowBytes (value) {
  * Build the relay's block offload, or return null when the operator has not
  * asked for it.
  *
- * Throws when offload is enabled and the selected store is only half
- * configured. That is deliberate: the alternative is a relay that quietly keeps
- * every block on the volume the operator was trying to stop filling.
+ * Throws when offload is enabled and S3 is only half configured. That is
+ * deliberate: the alternative is a relay that quietly keeps every block on
+ * the volume the operator was trying to stop filling.
  */
 
 export async function createRelayBlockOffload ({
@@ -108,23 +74,15 @@ export async function createRelayBlockOffload ({
   fetchImpl = globalThis.fetch,
   createSigner = null
 } = {}) {
-  const archive = config?.archive || {}
-  const selected = selectProvider(archive)
-  const settings = selected.config
+  const settings = config?.archive?.s3 || {}
   if (settings.offload !== true) return null
 
-  const missing = missingFields(REQUIRED_FIELDS[selected.name], settings)
+  const missing = missingFields(REQUIRED_S3_OFFLOAD_FIELDS, settings)
   if (missing.length) {
-    throw new Error(`archive.${selected.section}.offload is enabled but archive.${selected.section} is incomplete: missing ${missing.join(', ')}`)
-  }
-  // S3 is also an archive STORAGE tier, and that tier has its own switch. The
-  // other two backends exist only for offload, so they have no such flag to
-  // contradict.
-  if (selected.name === 's3' && settings.enabled === false) {
-    throw new Error('archive.s3.offload is enabled but archive.s3.enabled is false')
+    throw new Error(`archive.s3.offload is enabled but archive.s3 is incomplete: missing ${missing.join(', ')}`)
   }
   if (typeof fetchImpl !== 'function') {
-    throw new Error(`archive.${selected.section}.offload is enabled but this runtime has no fetch implementation`)
+    throw new Error('archive.s3.offload is enabled but this runtime has no fetch implementation')
   }
 
   // One window, validated once, because three different consumers read it and
@@ -143,79 +101,22 @@ export async function createRelayBlockOffload ({
   const windowBytes = resolveWindowBytes(settings.offloadWindowBytes)
   const prefix = typeof settings.prefix === 'string' ? settings.prefix : ''
 
-  // Everything below this block is provider-blind: the three factories return
-  // the same five methods, so the offloader, the remote block store and the
-  // read path cannot tell which one they were handed. The only per-provider
-  // work is turning config into one of them, plus naming the container the
-  // blocks land in — a bucket, a Drive folder id or a Mega folder handle — so
-  // the operator's log line says where its data went. `bucket` is that name and
-  // nothing else: no token, session or key is carried out of here.
-  let objectStore = null
-  let bucket = ''
-  if (selected.name === 's3') {
-    let sign = createSigner
-    if (typeof sign !== 'function') {
-      // The SigV4 signer is Node-only (node:crypto). Say so rather than letting a
-      // module resolution failure be the operator's first clue.
-      if (!globalThis.process?.versions?.node) {
-        throw new Error('archive.s3.offload is enabled but S3 request signing needs the Node runtime')
-      }
-      const { createS3Signer } = await import('../s3-signer.js')
-      sign = createS3Signer(settings)
+  let sign = createSigner
+  if (typeof sign !== 'function') {
+    // The SigV4 signer is Node-only (node:crypto). Say so rather than letting a
+    // module resolution failure be the operator's first clue.
+    if (!globalThis.process?.versions?.node) {
+      throw new Error('archive.s3.offload is enabled but S3 request signing needs the Node runtime')
     }
-    bucket = settings.bucket
-    objectStore = createS3ArchiveProvider({ fetch: fetchImpl, sign, bucket, prefix })
-  } else if (selected.name === 'google-drive') {
-    bucket = settings.folderId
-    objectStore = createGoogleDriveArchiveProvider({
-      fetch: fetchImpl,
-      accessToken: settings.accessToken,
-      folderId: bucket,
-      prefix,
-      filesEndpoint: settings.filesEndpoint,
-      uploadEndpoint: settings.uploadEndpoint
-    })
-  } else {
-    bucket = settings.folder
-    objectStore = createMegaArchiveProvider({
-      fetch: fetchImpl,
-      session: settings.session,
-      folder: bucket,
-      prefix,
-      apiUrl: settings.apiUrl
-    })
+    const { createS3Signer } = await import('../s3-signer.js')
+    sign = createS3Signer(settings)
   }
+  const objectStore = createS3ArchiveProvider({ fetch: fetchImpl, sign })
+  const bucket = settings.bucket
   const log = (message) => logger?.archive?.debug?.(message)
 
-  let blocksOffloaded = 0
-  let bytesOffloaded = 0
-  // Block data written to the object store, counted where every write passes
-  // through rather than where residency is decided. The two are different
-  // questions and conflating them cost an afternoon: a streaming ingest uploads
-  // each staged block here, and those uploads are purged when the finished core
-  // supersedes them, so they never appear in `blocksOffloaded`. A relay hours
-  // into a multi-GB archive had genuinely moved gigabytes into the bucket while
-  // reporting `blocksOffloaded: 0`, which reads as a bucket receiving nothing.
-  // `uploaded*` answers "is anything arriving"; `*Offloaded` answers "is this
-  // bucket holding block data the volume no longer has to".
-  let uploadedBlocks = 0
-  let uploadedBytes = 0
-  let offloadStats = () => ({ restored: 0, missing: 0, failed: 0, corrupt: 0 })
-
-  function storeFor (coreKey) {
-    const store = createRemoteBlockStore({ provider: objectStore, prefix, coreKey })
-    return {
-      ...store,
-      async put (blockIndex, data) {
-        const result = await store.put(blockIndex, data)
-        // Counted after the put resolves, so this reports what the bucket
-        // accepted rather than what was attempted.
-        uploadedBlocks++
-        uploadedBytes += data?.byteLength ?? 0
-        return result
-      }
-    }
-  }
+  let offloadStats = () => ({ restored: 0, eviction: null })
+  const storeFor = (coreKey) => createRemoteBlockStore({ provider: objectStore, prefix, coreKey })
 
   const rawConcurrency = Number(settings.uploadConcurrency || process.env.PEARTUBE_ARCHIVE_UPLOAD_CONCURRENCY || 16)
   const uploadConcurrency = Number.isSafeInteger(rawConcurrency) && rawConcurrency > 0 ? rawConcurrency : 16
@@ -225,10 +126,6 @@ export async function createRelayBlockOffload ({
     windowBytes,
     uploadConcurrency,
     prefix,
-    // The two things an operator's log line needs to say where block data goes,
-    // and the only two this module will hand out: the backend's name and the
-    // container inside it.
-    provider: selected.name,
     bucket,
 
     /**
@@ -277,74 +174,16 @@ export async function createRelayBlockOffload ({
     },
 
     /**
-     * The writeStaticAsset hook. Declares every block of the finished asset
-     * oldest-first, then offloads from the oldest end until what is left
-     * resident is within the window.
-     */
-    async offloadAsset ({ core, descriptor }) {
-      const offloader = createBlockOffloader({
-        core,
-        store: storeFor(keyHexOf(core)),
-        windowBytes,
-        log
-      })
-      for (let index = 0; index < descriptor.length; index++) {
-        offloader.track(index, assetBlockLength(descriptor, index))
-      }
-      const result = await offloader.drain()
-      blocksOffloaded += result.blocksOffloaded
-      bytesOffloaded += result.bytesOffloaded
-      if (result.blocksOffloaded > 0) {
-        logger?.archive?.info?.('Offloaded asset block data', {
-          provider: selected.name,
-          assetId: descriptor.assetId,
-          blocks: result.blocksOffloaded,
-          bytes: result.bytesOffloaded,
-          residentBytes: result.residentBytes,
-          windowBytes
-        })
-      }
-      return result
-    },
-
-    /**
-     * Bounded/streaming ingest. `offloadAsset` above runs ONCE on a finished
-     * core; this hands the writer an offloader it drives per block, so block
-     * data leaves the volume as it arrives instead of after the whole title
-     * has landed. Same offloader, same window - only the caller's cadence
-     * differs. `drain` is wrapped so the relay's totals count every block that
-     * leaves during an ingest, not just the ones offloadAsset moved.
+     * Bounded/streaming ingest. The writer drives this offloader once per
+     * canonical block, so local residency never follows the title size.
      */
     createOffloader ({ core }) {
-      const offloader = createBlockOffloader({
+      return createBlockOffloader({
         core,
         store: storeFor(keyHexOf(core)),
         windowBytes,
         log
       })
-      // An offloader's stats are CUMULATIVE, and the bounded ingest path drains
-      // once per block, so adding each drain's totals counts every offloaded
-      // block again for every drain that follows it - quadratic in the length of
-      // the title, which for a feature-length archive is millions of blocks and
-      // terabytes claimed for a few gigabytes moved. Only the difference a drain
-      // made belongs to the relay's totals.
-      let countedBlocks = 0
-      let countedBytes = 0
-      return {
-        // The writer reports the window its ingest was bounded by, and it reads
-        // it off the offloader it was handed.
-        windowBytes: offloader.windowBytes,
-        track: (index, byteLength) => offloader.track(index, byteLength),
-        stats: () => offloader.stats?.(),
-        async drain () {
-          const result = await offloader.drain()
-          blocksOffloaded += result.blocksOffloaded - countedBlocks
-          bytesOffloaded += result.bytesOffloaded - countedBytes
-          countedBlocks = result.blocksOffloaded
-          countedBytes = result.bytesOffloaded
-          return result
-        }
-      }
     },
 
     /**
@@ -358,16 +197,9 @@ export async function createRelayBlockOffload ({
     },
 
     /**
-     * What an operator needs to see: how much block data has left the volume,
-     * how much came back, and — the number that says whether this bucket is a
-     * storage extension or just a one-time saving — how much block data the
-     * offload-backed cores are holding locally right now, against the window
-     * they are held to.
-     *
-     * `residentBytes` is what each offload-backed core's last sweep left, with
-     * the retained window counted at the size its merkle tree says it is rather
-     * than re-read to be measured. So it is a ceiling per swept core, and a
-     * core opened but not yet swept is not in it yet.
+     * Process-local residency and restore activity. Durable S3 inventory is
+     * deliberately not inferred from counters that reset on restart or include
+     * temporary staging objects.
      */
     stats () {
       const offload = offloadStats()
@@ -375,16 +207,8 @@ export async function createRelayBlockOffload ({
       return {
         enabled: true,
         windowBytes,
-        blocksOffloaded,
-        bytesOffloaded,
-        uploadedBlocks,
-        uploadedBytes,
         restored: offload.restored,
         residentBytes: eviction === null ? 0 : eviction.residentBytes,
-        blocksEvicted: eviction === null ? 0 : eviction.evicted,
-        bytesEvicted: eviction === null ? 0 : eviction.bytesEvicted,
-        playbackPinned: eviction === null ? 0 : eviction.pinned,
-        residencySweeps: eviction === null ? 0 : eviction.sweeps
       }
     }
   }

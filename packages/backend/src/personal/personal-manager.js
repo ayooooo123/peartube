@@ -730,6 +730,9 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
           ) {
             return deviceLocal
           }
+          if (ctx.role === 'relay' || ctx.platform === 'relay') {
+            return null
+          }
           throw unavailablePersonalStoreSecret(publicKey)
         }
         await activateStore(publicKey, store, { migrateAnonymous: true })

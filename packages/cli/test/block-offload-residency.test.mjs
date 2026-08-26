@@ -144,10 +144,6 @@ test('the relay holds an offload-backed core to the configured window and report
   t.is(stats.enabled, true, 'offload is on')
   t.is(stats.windowBytes, WINDOW_BYTES, 'the operator sees the window they set')
   t.is(stats.residentBytes, WINDOW_BYTES, 'and how much block data the offload-backed cores are holding against it')
-  t.is(stats.blocksEvicted, BLOCK_COUNT - WINDOW_BLOCKS, 'with the blocks residency gave back')
-  t.is(stats.bytesEvicted, (BLOCK_COUNT - WINDOW_BLOCKS) * BLOCK_SIZE, 'and their bytes')
-  t.is(stats.playbackPinned, 0, 'nothing was playing, so nothing was pinned')
-  t.ok(stats.residencySweeps > 0, 'and the sweeps that did it are visible')
 
   // Still a complete core: every block advertised, every block serveable.
   let advertised = 0

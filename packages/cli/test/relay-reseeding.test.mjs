@@ -471,7 +471,7 @@ test('relay status reports both mirroring directions', async (t) => {
       },
       seedRetention: { retention: { contributionUsedBytes: 512, archiveUsedBytes: 1024 } },
       archive: { activePledgeCount: 2 },
-      assets: { activeUploads: 1, uploadedBytes: 3072 }
+      publicWork: { activeServes: 1, servedBytes: 3072 }
     }
   })
 
@@ -489,7 +489,7 @@ test('relay status reports both mirroring directions', async (t) => {
   t.ok(text.includes('archiveBudget: 1024/4096 bytes'), text)
   t.ok(text.includes('contributionBudget: 512/2048 bytes'), text)
   t.ok(text.includes('permissions: contribute=true archive=true'), text)
-  t.ok(text.includes('publicWork: announcements=2 uploads=1 uploadedBytes=3072'), text)
+  t.ok(text.includes('publicWork: announcements=2 serves=1 servedBytes=3072'), text)
 })
 
 test('a relay that has mirrored nothing says so without implying durability', async (t) => {
@@ -507,7 +507,7 @@ test('a relay that has mirrored nothing says so without implying durability', as
   const text = formatRelayStatus(status)
   t.ok(text.includes('archiveBudget: 0/0 bytes'), text)
   t.ok(text.includes('permissions: contribute=false archive=false'), text)
-  t.ok(text.includes('publicWork: announcements=0 uploads=0 uploadedBytes=0'), text)
+  t.ok(text.includes('publicWork: announcements=0 serves=0 servedBytes=0'), text)
   t.absent(/durab|redundan|safe|backed up|protected by/i.test(text),
     'a relay with no archivist evidence never claims the content is kept anywhere else')
 })

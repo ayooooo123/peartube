@@ -2620,7 +2620,7 @@ export function createScopedNetworkRuntime (options = {}) {
             for (const failures of scope.archiveFailures?.values?.() || []) failures.delete(remoteKey)
             startArchivePumpWhenOpen(scope, tracked)
           }
-          if (scope.purpose === 'archive-discovery' && scope.archivePeerListeners) { for (const listener of scope.archivePeerListeners) { try { listener({ peerId: remoteKey }) } catch {} } }
+          if (scope.purpose === 'archive-discovery' && scope.archivePeerListeners) { for (const listener of scope.archivePeerListeners) { try { listener({ peerId: remoteKey }) } catch { /* Observers must not affect transport. */ } } }
         }
       },
       onFrame: frame => {
@@ -4782,9 +4782,9 @@ export function createScopedNetworkRuntime (options = {}) {
       publicWork: {
         activeAnnouncements: [...scopes.values()]
           .filter(scope => scope.serverAnnounced === true).length,
-        activeUploads: sessions.reduce((total, session) =>
+        activeServes: sessions.reduce((total, session) =>
           total + session.assetResponseCount + (session.archiveServing ? 1 : 0), 0),
-        uploadedBytes,
+        servedBytes: uploadedBytes,
       },
       selectedIndexerCount: Math.min(indexServices.size, 64),
       selectedIndexers: [...indexServices.values()]

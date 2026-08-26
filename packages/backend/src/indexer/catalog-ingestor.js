@@ -214,6 +214,45 @@ function dedupeRows(rows) {
   return output
 }
 
+function legacyPublicationWorkLinks(rows) {
+  const links = new Map()
+  for (const entry of rows) {
+    if (entry.collection !== COLLECTIONS.sourceRecords || entry.record.recordType !== PUBLISHER_RECORD_TYPES.CLAIM) continue
+    try {
+      const frame = decodePublisherCatalogFrame(entry.record.canonicalEnvelope)
+      const body = decodePublisherOperationBody(frame.recordType, frame.canonicalBody)
+      const claim = decodeClaimBody(decodeApplicationEnvelope(body.payload).body)
+      const publicationId = claim.payload?.publicationId
+      if (typeof publicationId !== 'string' || !HEX_32.test(publicationId)) continue
+      for (const subject of claim.subjectRefs) {
+        if (subject?.entityKind !== 'work' || typeof subject.entityId !== 'string' || !HEX_32.test(subject.entityId)) continue
+        const score = /^show:[^:]+:s[1-9]\\d*:e[1-9]\\d*$/.test(subject.normalizedIdentifier) ? 2 : 1
+        const current = links.get(publicationId)
+        if (!current || score > current.score) {
+          links.set(publicationId, { entityId: subject.entityId, score, ambiguous: false })
+        } else if (score === current.score && subject.entityId !== current.entityId) {
+          current.ambiguous = true
+        }
+      }
+    } catch {
+      // Every source row was already verified while it was normalized. A
+      // non-claim or legacy body simply contributes no compatibility link.
+    }
+  }
+  return links
+}
+
+function reconcileLegacyPublicationWorkIds(rows) {
+  const links = legacyPublicationWorkLinks(rows)
+  return rows.map(entry => {
+    if (entry.collection !== COLLECTIONS.publicationProjections ||
+        entry.record.workEntityId !== entry.record.publicationId) return entry
+    const link = links.get(entry.record.publicationId)
+    if (!link || link.ambiguous) return entry
+    return { ...entry, record: { ...entry.record, workEntityId: link.entityId } }
+  })
+}
+
 function exactWorkId(manifest, publicationId) {
   for (const claim of manifest.body.claims) {
     if (claim?.role === 'work' && typeof claim.entityId === 'string' && HEX_32.test(claim.entityId)) {
@@ -555,7 +594,7 @@ async function collectCurrentRows(context, pinnedView, budget) {
     appendBounded(rows, normalized, budget)
   }
   throwIfAborted(context.signal)
-  return rows
+  return reconcileLegacyPublicationWorkIds(rows)
 }
 
 async function collectChanges(context, pinnedView, previousVersion, budget) {

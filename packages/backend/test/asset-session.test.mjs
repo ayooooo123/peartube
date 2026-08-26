@@ -126,6 +126,38 @@ test('asset session applies only valid block proofs and reports possession after
   t.is(await session.core.has(0), true)
 })
 
+test('asset session restores offloaded blocks before reporting verified custody', async t => {
+  const value = b4a.alloc(ASSET_BLOCK_SIZE, 32)
+  const descriptor = createStaticAssetManifest({
+    treeHash: b4a.alloc(32, 52),
+    blockLength: 1,
+    byteLength: value.byteLength,
+  })
+  const calls = []
+  const core = {
+    key: descriptor.key,
+    length: descriptor.length,
+    byteLength: descriptor.byteLength,
+    async ready() {},
+    async has(index) { calls.push(['has', index]); return false },
+    async get(index, options) { calls.push(['get', index, options]); return value },
+    async close() { calls.push(['close']) },
+  }
+  const session = createAssetSession({ coreRef: descriptor, core, ownsCore: true })
+  await session.ready()
+
+  t.is(await session.hasVerifiedBlock(0), true)
+  t.alike(await session.readVerifiedBlock(0), value)
+  t.alike(calls, [
+    ['has', 0],
+    ['get', 0, { wait: false }],
+    ['get', 0, { wait: false }],
+  ])
+
+  await session.close()
+  t.alike(calls.at(-1), ['close'])
+})
+
 test('asset session quarantines descriptor state conflicts before reporting availability', async (t) => {
   const descriptor = createStaticAssetManifest({
     treeHash: b4a.alloc(32, 51),

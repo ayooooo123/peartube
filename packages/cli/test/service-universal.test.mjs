@@ -138,7 +138,7 @@ test('relay service starts one universal runtime and reports structured diagnost
   t.is(status.network.peers, 2)
   t.is(status.network.connections, 1)
   t.is(status.publicWork.activeAnnouncements, 2)
-  t.is(status.publicWork.activeUploads, 0)
+  t.is(status.publicWork.activeServes, 0)
   await timers[0].fn()
   t.is(service.getStatus().network.status, 'ready', 'async heartbeat refreshes the bounded top-level status')
 

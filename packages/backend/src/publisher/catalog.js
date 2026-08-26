@@ -142,6 +142,7 @@ export class PublisherCatalog extends ReadyResource {
     this.base = null
     this.verifiedPageView = null
     this.baseUpdating = null
+    this.baseReady = false
     this.publisherPinned = false
     this.ready().catch(() => {})
   }
@@ -167,6 +168,7 @@ export class PublisherCatalog extends ReadyResource {
     const readyWithinBudget = this.options.key
       ? await raceOpenBudget(this.base.ready(), REMOTE_CATALOG_OPEN_TIMEOUT_MS)
       : (await this.base.ready(), true)
+    this.baseReady = readyWithinBudget
 
     if (readyWithinBudget) {
       const descriptorEntry = await this.base.view.get('state/descriptor')
@@ -336,6 +338,20 @@ export class PublisherCatalog extends ReadyResource {
     await this.update()
     return getPublisherAuthorizationState(this.view)
   }
+  async getNamespaceDescriptor () {
+    await this.ready()
+    // A followed catalog may have no live Autobase peer after restart, while
+    // its verified page view is already local and complete. Use the base when
+    // it opened from local history; otherwise open the persisted page view so
+    // descriptor reads never wait on a remote core.
+    if (!this.baseReady && !this.verifiedPageView) await this.openVerifiedPageView()
+    await this.update()
+    const descriptor = await this.view?.get('state/descriptor')
+    return descriptor
+      ? decodePublisherNamespaceDescriptor(descriptor.value, { legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY })
+      : null
+  }
+
 
   async listProjections (kind, options) {
     await this.update()
@@ -474,6 +490,7 @@ export class PublisherCatalog extends ReadyResource {
   }
 
   async _close () {
+    this.baseReady = false
     const close = async resource => {
       try { await resource?.close?.() } catch { /* close every owned layer */ }
     }

@@ -68,13 +68,10 @@ export function buildRelayStatus({
   ingestStatus = {},
   creators = null,
   trustedClientsCount = 0,
-  // null unless the operator enabled block offload. Media block data living in
-  // an object store changes what "this relay holds the title" means, so it is
-  // reported rather than inferred from byte counters that no longer match disk.
+  // null unless the operator enabled S3 block offload. Only current residency
+  // and restore activity are reported; transfer totals are not durable
+  // inventory and reset when the relay restarts.
   blockOffload = null,
-  // null unless the caller measured it. Capacity divides between the local
-  // volume and the object store once block offload is on, and a status file
-  // that reports only one of the two describes a relay that does not exist.
   capacity = null
 }) {
   const channels = catalog.getChannels()
@@ -82,10 +79,9 @@ export function buildRelayStatus({
   const creatorRecords = Array.isArray(creators) ? creators : summarizeCreatorsFromCatalog(channels)
   const network = runtimeStats.network || {}
   const publisher = runtimeStats.publisher || {}
-  const assets = runtimeStats.assets || {}
+  const policy = runtimeStats.policy || {}
   const archive = runtimeStats.archive || {}
   const retention = runtimeStats.seedRetention?.retention || {}
-  const policy = runtimeStats.policy || {}
   const permissions = {
     contribute: policy.permissions?.contribute === true,
     archive: policy.permissions?.archive === true
@@ -126,8 +122,8 @@ export function buildRelayStatus({
     publicWork: {
       activeAnnouncements: count(publicWork.activeAnnouncements ??
         (count(publisher.catalogs) + count(archive.activePledgeCount))),
-      activeUploads: count(publicWork.activeUploads ?? assets.activeUploads),
-      uploadedBytes: count(publicWork.uploadedBytes ?? assets.uploadedBytes),
+      activeServes: count(publicWork.activeServes),
+      servedBytes: count(publicWork.servedBytes),
       activeAcquisitions: count(ingestStatus.activeAcquisitions),
       jobsByState
     },
@@ -150,10 +146,6 @@ export function buildRelayStatus({
     blockOffload: {
       enabled: blockOffload?.enabled === true,
       windowBytes: count(blockOffload?.windowBytes),
-      blocksOffloaded: count(blockOffload?.blocksOffloaded),
-      bytesOffloaded: count(blockOffload?.bytesOffloaded),
-      uploadedBlocks: count(blockOffload?.uploadedBlocks),
-      uploadedBytes: count(blockOffload?.uploadedBytes),
       restored: count(blockOffload?.restored),
       residentBytes: count(blockOffload?.residentBytes)
     },
@@ -165,8 +157,6 @@ export function buildRelayStatus({
       localUsedBytes: measured(capacity?.localUsedBytes),
       localFreeBytes: measured(capacity?.localFreeBytes),
       localHeadroomBytes: measured(capacity?.localHeadroomBytes),
-      residentBytes: count(capacity?.residentBytes),
-      offloadedBytes: count(capacity?.offloadedBytes),
       effectiveCapacityBytes: measured(capacity?.effectiveCapacityBytes)
     }
   }
@@ -196,14 +186,14 @@ export function formatRelayStatus(status) {
     `permissions: contribute=${policy.permissions?.contribute === true} archive=${policy.permissions?.archive === true}`,
     `contributionBudget: ${contribution.usedBytes || 0}/${contribution.configuredBytes || 0} bytes`,
     `archiveBudget: ${archive.usedBytes || 0}/${archive.configuredBytes || 0} bytes`,
-    `publicWork: announcements=${work.activeAnnouncements || 0} uploads=${work.activeUploads || 0} uploadedBytes=${work.uploadedBytes || 0} acquisitions=${work.activeAcquisitions || 0}`,
+    `publicWork: announcements=${work.activeAnnouncements || 0} serves=${work.activeServes || 0} servedBytes=${work.servedBytes || 0} acquisitions=${work.activeAcquisitions || 0}`,
     `jobs: ${Object.entries(work.jobsByState || {}).map(([state, value]) => `${state}=${value}`).join(' ')}`,
     `network: status=${status.network?.status || 'unknown'} peers=${status.network?.peers || 0} connections=${status.network?.connections || 0} offline=${status.network?.offline === true}`,
     `channels: total=${status.summary?.totalChannels || 0} protected=${status.summary?.protectedChannels || 0} evictable=${status.summary?.evictableChannels || 0}`,
     `selectedIndexers: ${(status.selectedIndexers || []).map(indexer => `${indexer.id}:${indexer.status}`).join(',') || 'none'}`,
     `lastErrors: ${(status.lastErrors || []).join(',') || 'none'}`,
     `authorizedClients: ${status.authorizedClients || 0}`,
-    `blockOffload: enabled=${status.blockOffload?.enabled === true} windowBytes=${status.blockOffload?.windowBytes || 0} uploaded=${status.blockOffload?.uploadedBlocks || 0}/${status.blockOffload?.uploadedBytes || 0} blocks=${status.blockOffload?.blocksOffloaded || 0} bytes=${status.blockOffload?.bytesOffloaded || 0} restored=${status.blockOffload?.restored || 0}`,
+    `blockOffload: enabled=${status.blockOffload?.enabled === true} windowBytes=${status.blockOffload?.windowBytes || 0} residentBytes=${status.blockOffload?.residentBytes || 0} restored=${status.blockOffload?.restored || 0}`,
     `creators: total=${status.creators?.totalCreators || 0} archived=${status.creators?.videosArchived || 0} unseeded=${status.creators?.videosUnseeded || 0}`
   ]
   return lines.join('\n')

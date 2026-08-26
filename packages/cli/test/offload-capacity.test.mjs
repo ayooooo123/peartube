@@ -259,8 +259,6 @@ test('with offload off, admission is byte-for-byte the decision it was', async (
     const capacity = service.getStatus().capacity
     t.is(capacity.effectiveCapacityBytes, capacity.localHeadroomBytes,
       `${scenario.name}: capacity is still the volume's headroom and nothing else`)
-    t.is(capacity.residentBytes, 0, `${scenario.name}: no bytes are resident against a window`)
-    t.is(capacity.offloadedBytes, 0, `${scenario.name}: and none are in a bucket`)
     decisions.push(service.canIngest(archiveRequest))
   }
 
@@ -322,13 +320,11 @@ test('a signal this runtime cannot measure serialises as null, not as a measured
     localUsedBytes: null,
     localFreeBytes: null,
     localHeadroomBytes: null,
-    residentBytes: 0,
-    offloadedBytes: 0,
     effectiveCapacityBytes: null
   }, 'the written status file keeps every unmeasured reading null through JSON')
 })
 
-test('the status file separates bytes on this disk from bytes in the bucket', async (t) => {
+test('the status file reports local capacity without inventing bucket inventory', async (t) => {
   const { service } = await relay(t, { offload: true })
   const status = service.getStatus()
 
@@ -338,12 +334,11 @@ test('the status file separates bytes on this disk from bytes in the bucket', as
     'effectiveCapacityBytes',
     'localFreeBytes',
     'localHeadroomBytes',
-    'localUsedBytes',
-    'offloadedBytes',
-    'residentBytes'
-  ], 'capacity names every quantity it reports')
+    'localUsedBytes'
+  ], 'capacity contains only measured local signals and the admission ceiling')
   t.is(status.capacity.localUsedBytes, 0, 'nothing is on the volume yet')
-  t.is(status.capacity.offloadedBytes, 0, 'and nothing has left it yet')
+  t.absent(Object.hasOwn(status.blockOffload, 'uploadedBytes'), 'temporary writes are not exposed as durable inventory')
+  t.absent(Object.hasOwn(status.blockOffload, 'bytesOffloaded'), 'restart-scoped totals are not exposed as durable inventory')
 
   const serialized = JSON.stringify(status)
   for (const secret of [S3.bucket, S3.accessKeyId, S3.secretAccessKey, S3.endpoint]) {

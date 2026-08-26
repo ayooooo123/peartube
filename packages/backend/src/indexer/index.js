@@ -18,6 +18,8 @@ export {
   createIndexerStore,
 } from './store.js'
 export { createCatalogIngestor } from './catalog-ingestor.js'
+export { createLocalIndexService } from './local-service.js'
+export { createLocalCatalogIndex } from './local-catalog-index.js'
 export {
   INDEXER_ID_DOMAIN,
   INDEX_SERVICE_ANNOUNCEMENT_RECORD_TYPE,

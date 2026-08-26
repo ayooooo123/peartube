@@ -3010,7 +3010,7 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   await runtimeA.retainAuthorizedArchive({ pledge, coreKey, start: 2, end: 6 })
   await runtimeB.retainAuthorizedArchive({ pledge, coreKey, start: 2, end: 6 })
   await proofStarted
-  t.is(runtimeA.getDiagnostics().publicWork.activeUploads, 1, 'archive proof generation counts as an active upload')
+  t.is(runtimeA.getDiagnostics().publicWork.activeServes, 1, 'archive proof generation counts as an active serve')
   t.ok(runtimeA.getDiagnostics().sessions.some(session => session.archiveServing), 'archiveServing is exposed as a bounded boolean')
   await runtimeA.applyNetworkPolicy(contributionPolicy())
   await runtimeB.applyNetworkPolicy(contributionPolicy())

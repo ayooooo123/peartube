@@ -1,4 +1,7 @@
 import b4a from 'b4a'
+import crypto from 'hypercore-crypto'
+import * as runtimeFs from '#fs'
+import { createFileSourceReader } from '@peartube/backend/assets'
 
 import { createBackendContext } from '@peartube/backend'
 import { PROTOCOL_VERSION } from '@peartube/host/contracts'
@@ -22,6 +25,52 @@ function normalizeHexList (values = []) {
 
 function trustedSignerBytes (values) {
   return normalizeHexList(values).map((hex) => b4a.from(hex, 'hex'))
+}
+
+function createLocalFileSourceGrantRegistry ({ fs = runtimeFs, now = Date.now } = {}) {
+  const grants = new Map()
+  async function revokeToken(token) {
+    const entry = grants.get(token)
+    if (!entry) return false
+    grants.delete(token)
+    await entry.dispose?.()
+    return true
+  }
+  return Object.freeze({
+    resolver: Object.freeze({
+      resolve ({ token, adapterId, acquisitionId, principalId, expiresAt }) {
+        const entry = grants.get(token)
+        if (!entry || adapterId !== 'local-file' || entry.acquisitionId !== acquisitionId ||
+            entry.principalId !== principalId || entry.expiresAt !== expiresAt || expiresAt <= now()) {
+          const error = new Error('Local file source grant is unavailable')
+          error.code = 'SOURCE_GRANT_UNAVAILABLE'
+          throw error
+        }
+        return createFileSourceReader({ fs, path: entry.path, mimeType: entry.mimeType })
+      },
+      revoke ({ token }) {
+        return revokeToken(token)
+      }
+    }),
+    issue ({ acquisitionId, principalId, path, mimeType, expiresAt, dispose = null }) {
+      if (typeof path !== 'string' || !path || !Number.isSafeInteger(expiresAt) || expiresAt <= now() ||
+          (dispose !== null && typeof dispose !== 'function')) {
+        throw new TypeError('local file source grant input is invalid')
+      }
+      const token = b4a.toString(crypto.randomBytes(32), 'hex')
+      grants.set(token, { acquisitionId, principalId, path, mimeType, expiresAt, dispose })
+      return Object.freeze({
+        token,
+        adapterId: 'local-file',
+        audience: Object.freeze({ principalId, acquisitionId }),
+        expiresAt
+      })
+    },
+    revoke: revokeToken,
+    async close () {
+      await Promise.all([...grants.keys()].map(revokeToken))
+    }
+  })
 }
 
 // Scope diagnostics carry `purpose`, never `role`. Reading `role` made every
@@ -66,6 +115,9 @@ export async function createRelayRuntime ({ config, logger, dependencies = null,
   // evidence back through these locators; a request with no evidence is
   // reported as a request with no evidence, never as a durable copy.
   const archiveRequests = new Map()
+  const localFileSourceGrants = createLocalFileSourceGrantRegistry({
+    fs: dependencies?.fs || runtimeFs
+  })
   const backend = await backendFactory({
     storagePath: config.storage.path,
     // Optional. When the operator enabled block offload the backend opens its
@@ -158,6 +210,16 @@ export async function createRelayRuntime ({ config, logger, dependencies = null,
       // operator intent is configured on its own or derived from the relay mode.
       operatorMode: config.archiveOperatorMode || archiveOperatorMode(config.mode)
     },
+    provider: {
+      ...(config.provider || {}),
+      sourceGrantResolver: localFileSourceGrants.resolver,
+      principalId: config.companion?.client || 'local-provider',
+      freeDiskBytes: () => measureVolumeBytes({
+        storagePath: config.storage.path,
+        statfsSync: (dependencies?.fs || runtimeFs).statfsSync,
+        log: message => logger?.runtime?.warn?.(message)
+      })?.freeBytes || 0,
+    },
     ipcLog: (message) => logger?.runtime?.debug?.(message)
   })
 
@@ -236,6 +298,10 @@ export async function createRelayRuntime ({ config, logger, dependencies = null,
     backend,
     ctx: backend.ctx,
     api: backend.api,
+    provider: backend.provider || backend.ctx?.providerService || null,
+    acquisitionManager: backend.acquisitionManager || backend.ctx?.acquisitionManager || null,
+    issueLocalProviderResolution: backend.issueLocalProviderResolution || backend.ctx?.issueLocalProviderResolution || null,
+    localFileSourceGrants,
     scopedNetwork: backend.scopedNetwork,
     seedingManager: backend.seedingManager,
     identityManager: backend.identityManager,
@@ -543,6 +609,7 @@ export async function createRelayRuntime ({ config, logger, dependencies = null,
       if (closed) return
       closed = true
       await backend.destroy()
+      await localFileSourceGrants.close()
     }
   }
 

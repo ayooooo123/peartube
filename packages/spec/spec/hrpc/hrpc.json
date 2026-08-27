@@ -1979,6 +1979,198 @@
         "stream": false
       },
       "version": 1
+    },
+    {
+      "id": 155,
+      "name": "@peartube/provider-search",
+      "request": {
+        "name": "@peartube/provider-search-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/provider-search-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 156,
+      "name": "@peartube/resolve-provider-ref",
+      "request": {
+        "name": "@peartube/resolve-provider-ref-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/resolve-provider-ref-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 157,
+      "name": "@peartube/request-acquisition",
+      "request": {
+        "name": "@peartube/request-acquisition-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/request-acquisition-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 158,
+      "name": "@peartube/attach-source-grant",
+      "request": {
+        "name": "@peartube/attach-source-grant-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/attach-source-grant-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 159,
+      "name": "@peartube/get-acquisition",
+      "request": {
+        "name": "@peartube/get-acquisition-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-acquisition-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 160,
+      "name": "@peartube/list-acquisitions",
+      "request": {
+        "name": "@peartube/list-acquisitions-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/list-acquisitions-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 161,
+      "name": "@peartube/cancel-acquisition",
+      "request": {
+        "name": "@peartube/cancel-acquisition-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/cancel-acquisition-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 162,
+      "name": "@peartube/get-provider-publication",
+      "request": {
+        "name": "@peartube/get-provider-publication-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-provider-publication-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 163,
+      "name": "@peartube/open-provider-stream",
+      "request": {
+        "name": "@peartube/open-provider-stream-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/open-provider-stream-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 164,
+      "name": "@peartube/get-provider-status",
+      "request": {
+        "name": "@peartube/get-provider-status-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-provider-status-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 165,
+      "name": "@peartube/get-provider-policy",
+      "request": {
+        "name": "@peartube/get-provider-policy-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-provider-policy-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 166,
+      "name": "@peartube/set-provider-policy",
+      "request": {
+        "name": "@peartube/set-provider-policy-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/set-provider-policy-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 167,
+      "name": "@peartube/get-acquisition-policy",
+      "request": {
+        "name": "@peartube/get-acquisition-policy-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-acquisition-policy-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 168,
+      "name": "@peartube/set-acquisition-policy",
+      "request": {
+        "name": "@peartube/set-acquisition-policy-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/set-acquisition-policy-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 169,
+      "name": "@peartube/event-acquisition-lifecycle",
+      "request": {
+        "name": "@peartube/acquisition-lifecycle-event-v1",
+        "stream": false,
+        "send": true
+      },
+      "version": 1
     }
   ]
 }

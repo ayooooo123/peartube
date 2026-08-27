@@ -26,7 +26,7 @@ function request (method, url, overrides = {}) {
     url,
     headers: {},
     body: b4a.alloc(0),
-    clientIdentity: CLIENT,
+    principal: { id: CLIENT, publisherId: 'publisher-1', scopes: new Set(['*']) },
     ...overrides
   }
 }
@@ -245,17 +245,14 @@ test('open preserves its response shape and embeds the resolved asset only in th
   })
   const router = createCompanionRouter({
     service: {
-      async verifyIndexCandidate () {
-        return {
-          candidateRef: REF,
-          publication: { publicationId: 'pub-1' },
-          rendition: { renditionId: 'rend-1' },
-          asset: { assetId: 'asset-1' }
-        }
-      },
-      async openStreamAsset () {
+      async openStream () {
         calls++
-        return asset
+        return {
+          publicationId: 'pub-1',
+          renditionId: 'rend-1',
+          assetId: 'asset-1',
+          asset
+        }
       }
     },
     config: { client: { id: CLIENT } },

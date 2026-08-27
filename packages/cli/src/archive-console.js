@@ -102,14 +102,6 @@ async function sha256File(filePath) {
   return b4a.toString(digest, 'hex')
 }
 
-function ingestContainer(filePath, mimeType) {
-  const byMime = String(mimeType || '').toLowerCase()
-  if (byMime.includes('matroska')) return 'mkv'
-  if (byMime.includes('webm')) return 'webm'
-  if (byMime.includes('mp4')) return 'mp4'
-  const extension = basename(filePath).split('.').pop()?.toLowerCase()
-  return /^[a-z0-9][a-z0-9._+-]{0,63}$/.test(extension || '') ? extension : 'binary'
-}
 
 // What the relay answers with before its store is open.
 //
@@ -472,10 +464,10 @@ export async function createArchiveConsole({
   storageReservations = null
 }) {
   if (!service?.runtime?.ctx?.metaDb) throw new Error('archive console requires a relay service runtime')
-  if (typeof service.submitArchiveIngestJob !== 'function' ||
-      typeof service.listIngestJobs !== 'function' ||
+  if (typeof service.requestLocalFileAcquisition !== 'function' ||
+      typeof service.listAcquisitions !== 'function' ||
       typeof service.getVerifiedMediaCatalog !== 'function') {
-    throw new Error('archive console requires the verified v2 service')
+    throw new Error('archive console requires the provider acquisition service')
   }
   const localPlaybackAllowed = isLoopbackHost(host)
   const copyReservations = storageReservations || { bytes: 0 }
@@ -507,17 +499,17 @@ export async function createArchiveConsole({
   }
   const stateForUi = state => ['acquiring', 'verifying', 'publishing'].includes(state) ? 'running' : state
   const entityHintFor = context => context?.kind === 'episode'
-    ? `show:${context.seriesIdentifier}:s${context.seasonNumber}:e${context.episodeNumber}`
+    ? `show:${context.identifier}:s${context.season}:e${context.episode}`
     : context?.kind === 'movie' ? `movie:${context.identifier}` : null
-  const listJobs = async () => (await service.listIngestJobs()).map(job => ({
-    id: job.jobId,
-    jobId: job.jobId,
+  const listJobs = async () => (await service.listAcquisitions()).map(job => ({
+    id: job.acquisitionId,
+    jobId: job.acquisitionId,
     status: stateForUi(job.state),
     state: job.state,
-    title: job.title,
+    title: job.title || `Acquisition ${job.acquisitionId.slice(0, 12)}`,
     error: job.errorCode,
     errorCode: job.errorCode,
-    entityHint: entityHintFor(job.mediaContext),
+    entityHint: null,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
     completedAt: job.state === 'completed' ? job.updatedAt : null
@@ -592,19 +584,19 @@ export async function createArchiveConsole({
       }
       const relativePath = staged.relativePath || relative(resolve(uploadDir), resolve(staged.path)).replaceAll('\\', '/')
       if (!relativePath || relativePath === '..' || relativePath.startsWith('../') || relativePath.startsWith('/')) {
-        throw new Error('archive upload is outside the ingest spool root')
+        throw new Error('archive upload is outside the acquisition spool root')
       }
       const byteLength = Number(staged.size || statSync(staged.path).size)
       const sha256 = await sha256File(staged.path)
       const tmdbId = String(form.tmdbId || '').trim()
       const episode = form.tmdbType === 'tv' && tmdbId && Number(form.tmdbSeason) > 0 && Number(form.tmdbEpisode) > 0
-      const mediaContext = episode
+      const selector = episode
         ? {
             kind: 'episode',
-            seriesNamespace: 'tmdb',
-            seriesIdentifier: tmdbId,
-            seasonNumber: Number(form.tmdbSeason),
-            episodeNumber: Number(form.tmdbEpisode)
+            namespace: 'tmdb',
+            identifier: tmdbId,
+            season: Number(form.tmdbSeason),
+            episode: Number(form.tmdbEpisode)
           }
         : {
             kind: 'movie',
@@ -612,44 +604,25 @@ export async function createArchiveConsole({
             identifier: tmdbId || sha256
           }
       const mimeType = staged.mimeType || 'application/octet-stream'
-      const lease = {
-        accept(spool) {
-          if (spool.filePath !== staged.path ||
-              spool.relativePath !== relativePath ||
-              spool.byteLength !== byteLength) return false
-          accepted = true
-          if (typeof staged.releaseStorageReservation === 'function') staged.releaseStorageReservation()
-          else releaseUploadReservationByPath(staged.path)
-          return true
-        }
-      }
-      const job = await service.submitArchiveIngestJob({
+      const title = form.title || form.tmdbTitle || staged.filename || 'Uploaded video'
+      const job = await service.requestLocalFileAcquisition({
         idempotencyKey: `ui:${tmdbId || 'media'}:${sha256.slice(0, 32)}`,
-        request: {
-          retentionClass: 'archive-pin',
-          mediaContext,
-          measuredFacts: {
-            byteLength,
-            container: ingestContainer(staged.path, mimeType),
-            title: form.title || form.tmdbTitle || staged.filename || 'Uploaded video'
-          },
-          expected: { byteLength, sha256 }
-        },
-        spool: {
-          path: relativePath,
-          complete: true,
-          mimeType,
-          byteLength,
-          sha256
-        }
-      }, { ingestSpoolLease: lease })
+        title,
+        selector,
+        expectedBytes: byteLength,
+        retentionClass: 'archive-pin',
+        path: staged.path,
+        mimeType,
+        dispose: () => discardUploadFile(staged)
+      })
+      accepted = job.sourceAccepted === true
       if (!accepted) discardUploadFile(staged)
       return {
-        id: job.jobId,
-        jobId: job.jobId,
+        id: job.acquisitionId,
+        jobId: job.acquisitionId,
         status: stateForUi(job.state),
-        title: form.title || form.tmdbTitle || staged.filename || null,
-        entityHint: entityHintFor(mediaContext)
+        title,
+        entityHint: entityHintFor(selector)
       }
     } catch (err) {
       if (!accepted) discardUploadFile(staged)
@@ -1171,7 +1144,7 @@ export async function createArchiveConsole({
     server,
     async start() {
       // Idempotent on an adopted surface: it is already listening as a warming
-      // relay; only adopt the live handler once the v2 ingest service exists.
+      // relay; only adopt the live handler once the provider acquisition service exists.
       if (httpSurface) {
         await httpSurface.listen()
         httpSurface.adopt(handleRequest)

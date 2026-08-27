@@ -17,20 +17,6 @@ export const DEFAULT_MAX_BYTES = 100000 * 1024 * 1024
 // it crashes the process with ENOSPC. 0 disables the floor.
 export const DEFAULT_MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
 
-// The largest range a granted ingest asks the source callback for, and the
-// ceiling the relay enforces on a configured one. This is a timeout budget
-// rather than a throughput knob: `open()` in companion/source-client.js arms
-// ONE `sourceRequestTimeoutMs` timer across a whole range response — headers
-// and body — so a range has to finish inside it, upstream session
-// establishment included. Cold establishment against a debrid origin measures
-// ~8 s, leaving ~12 s of body under the 20 s default, which 16 MiB clears at
-// any sustained rate above 1.4 MB/s — an order of magnitude below the ~26 MB/s
-// the CDN actually serves. 32 MiB would not clear it on a degraded link.
-//
-// The same figure is what a failed range costs to re-read, and what a
-// concurrent ingest holds resident: one range while its body arrives, two with
-// the one-range read-ahead in archive-manager's granted source.
-export const MAX_SOURCE_CHUNK_BYTES = 16 * 1024 * 1024
 
 export const DEFAULT_COMPANION_CONFIG = {
   enabled: false,
@@ -39,15 +25,12 @@ export const DEFAULT_COMPANION_CONFIG = {
   host: '127.0.0.1',
   port: 8175,
   client: 'client',
+  publisherId: null,
+  scopes: ['*'],
   sharedSecret: '',
   maxBodyBytes: 1024 * 1024,
   maxClockSkewMs: 30_000,
-  maxNonces: 4096,
-  sourceOrigin: null,
-  sourceClient: 'peartube-companion',
-  sourceSharedSecret: '',
-  sourceChunkBytes: MAX_SOURCE_CHUNK_BYTES,
-  sourceRequestTimeoutMs: 20_000,
+  maxNonces: 4096
 }
 
 export const DEFAULT_DISCOVERY_MAX_CHANNELS = 0

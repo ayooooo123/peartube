@@ -9,14 +9,17 @@ async function source(url) {
   return readFile(url, 'utf8')
 }
 
-test('preparePlayback/getVideoUrl delegates known blob refs to the instant playback service', async () => {
+test('getVideoUrl prefers authoritative immutable metadata before bounded legacy direct refs', async () => {
   const src = await source(apiPath)
 
   const getVideoUrlStart = src.indexOf('async getVideoUrl')
   assert.notEqual(getVideoUrlStart, -1, 'expected getVideoUrl implementation')
-  const directBlobKeyBlock = src.slice(getVideoUrlStart, src.indexOf('const meta = await this.getVideoData', getVideoUrlStart))
-  assert.match(directBlobKeyBlock, /if \(playbackBlobRef\?\.blobId && playbackBlobRef\?\.blobsCoreKey\)/, 'expected normalized direct blob fast path')
-  assert.match(directBlobKeyBlock, /blobPlayback\.resolveDirectBlobUrl\(\{[\s\S]*blobsCoreKey: playbackBlobRef\.blobsCoreKey,[\s\S]*blobId: playbackBlobRef\.blobId,/, 'direct blob playback must delegate to the instant playback service')
+  const channelFallback = src.indexOf('let channel = null', getVideoUrlStart)
+  const playbackBlock = src.slice(getVideoUrlStart, channelFallback)
+  assert.match(playbackBlock, /const meta = await this\.getVideoData/, 'authoritative metadata must load first')
+  assert.match(playbackBlock, /resolveImmutableStaticPlayback\(meta, mimeType\)/, 'immutable publication playback has priority')
+  assert.match(playbackBlock, /if \(playbackBlobRef\?\.blobId && playbackBlobRef\?\.blobsCoreKey\)/, 'legacy direct refs remain a bounded fallback')
+  assert.match(playbackBlock, /blobPlayback\.resolveDirectBlobUrl\(\{[\s\S]*blobsCoreKey: playbackBlobRef\.blobsCoreKey,[\s\S]*blobId: playbackBlobRef\.blobId,/, 'legacy direct fallback still uses the instant playback service')
 
   const metaStart = src.indexOf('return blobPlayback.resolveFromMetadata(meta')
   assert.notEqual(metaStart, -1, 'expected metadata playback fallback to use playback service')

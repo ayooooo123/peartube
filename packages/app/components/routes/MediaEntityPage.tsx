@@ -3,6 +3,13 @@ import { useLocalSearchParams } from 'expo-router'
 import { isPublicationSourceSelectable, type PublicationSource } from '../media/SourceSelector'
 import { MediaEntityDetailScreen, encodeMediaEntityRouteParam } from '../media/MediaEntityDetailScreen'
 import { loadMediaEntity, startMediaPlayback } from './media-entity-loaders.js'
+import {
+  acquisitionCanPlay,
+  acquisitionProgressLabel,
+  type Acquisition,
+  type ProviderResolution,
+  type RetentionClass,
+} from '../../lib/provider-consumer-flow'
 import { firstRouteParam, useRouteEntityLoader } from './useRouteEntityLoader'
 import type {
   PublisherCapabilityAction,
@@ -80,6 +87,23 @@ type Props = {
     getPublicationSources?: (request: Record<string, unknown>) => Promise<any>
     prepareMediaPlayback?: (request: Record<string, unknown>) => Promise<any>
   } | null
+  provider?: {
+    requestAcquisition(request: {
+      idempotencyKey: string
+      request: {
+        schemaVersion: 1
+        resolutionRef: string
+        publisherId: string
+        retentionClass: RetentionClass
+      }
+    }): Promise<unknown>
+    getAcquisition(request: { acquisitionId: string }): Promise<unknown>
+    cancelAcquisition(request: { acquisitionId: string }): Promise<unknown>
+    getPublication(request: { publicationId: string }): Promise<unknown>
+  } | null
+  providerEvents?: {
+    onAcquisitionLifecycle?(callback: (event: { acquisitionId?: string }) => void): () => void
+  } | null
   entity?: MediaEntityInput | null
   publisherDeviceStatus?: PublisherDeviceStatusInput | null
   publisherActionHandlers?: Partial<Record<PublisherCapabilityAction, () => void>>
@@ -111,26 +135,59 @@ function renditionByteLength(entity: MediaEntityInput | null, renditionId: strin
   const byteLength = Number(match?.byteLength)
   return Number.isSafeInteger(byteLength) && byteLength > 0 ? byteLength : null
 }
+function providerResolutionFrom(entity: MediaEntityInput | null): ProviderResolution | null {
+  const value = entity?.providerResolution
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  if (
+    !('schemaVersion' in value) || value.schemaVersion !== 1 ||
+    !('resolutionRef' in value) || typeof value.resolutionRef !== 'string' ||
+    !('publisherId' in value) || typeof value.publisherId !== 'string' ||
+    !('title' in value) || typeof value.title !== 'string' ||
+    !('published' in value) || typeof value.published !== 'boolean' ||
+    !('acquirable' in value) || typeof value.acquirable !== 'boolean'
+  ) return null
+  return value as ProviderResolution
+}
+
+function acquisitionFromResponse(response: unknown): Acquisition | null {
+  if (!response || typeof response !== 'object') return null
+  const value = 'acquisition' in response ? response.acquisition : response
+  if (
+    !value || typeof value !== 'object' ||
+    !('acquisitionId' in value) || typeof value.acquisitionId !== 'string' ||
+    !('state' in value) || typeof value.state !== 'string'
+  ) return null
+  return value as Acquisition
+}
+
 
 export default function MediaEntityPage({
   id,
   mediaGraph,
   entity = null,
   publisherDeviceStatus = null,
+  provider = null,
+  providerEvents = null,
   publisherActionHandlers,
   onSelectSource,
   onPlaybackPrepared,
   onPlaybackFailed,
 }: Props) {
-  const params = useLocalSearchParams<{ id?: string | string[] }>()
+  const params = useLocalSearchParams<{ id?: string | string[]; autoplay?: string; publicationId?: string }>()
   const entityId = id || firstRouteParam(params.id)
+  const [retentionClass, setRetentionClass] = React.useState<RetentionClass>('contribution-cache')
+  const [acquisition, setAcquisition] = React.useState<Acquisition | null>(null)
+  const [acquiredEntity, setAcquiredEntity] = React.useState<MediaEntityInput | null>(null)
+  const [acquisitionError, setAcquisitionError] = React.useState<string | null>(null)
+  const idempotencyKey = React.useRef(`app-${Date.now()}`)
+  const autoPlayed = React.useRef(false)
   const loaded = useRouteEntityLoader({
     entityId,
     explicitItem: entity,
     rpc: mediaGraph,
     loader: loadMediaEntity,
   })
-  const sourceEntity = loaded.item || (loaded.error
+  const routeSourceEntity = loaded.item || (loaded.error
     ? {
         entityId,
         title: entityId ? `Media ${entityId}` : 'Media details',
@@ -139,6 +196,8 @@ export default function MediaEntityPage({
         sources: [],
       }
     : null)
+  const sourceEntity = acquiredEntity || routeSourceEntity
+  const providerResolution = providerResolutionFrom(sourceEntity)
   const resolved = normalizeMediaEntityView(sourceEntity, entityId)
   const securityStatus = publisherDeviceStatus || resolved.publisherDeviceStatus
   const itemParam = sourceEntity
@@ -208,6 +267,107 @@ export default function MediaEntityPage({
       })
     }
   }, [mediaGraph, entityId, resolved.title, sourceEntity, onPlaybackPrepared, onPlaybackFailed])
+  const requestAcquisition = React.useCallback(async () => {
+    if (!provider || !providerResolution?.acquirable) return
+    if (acquisition?.state === 'cancelled' || (acquisition?.state === 'failed' && acquisition.recoverable !== true)) {
+      idempotencyKey.current = `app-${Date.now()}-${acquisition.acquisitionId}`
+    }
+    setAcquisitionError(null)
+    try {
+      const response = await provider.requestAcquisition({
+        idempotencyKey: idempotencyKey.current,
+        request: {
+          schemaVersion: 1,
+          resolutionRef: providerResolution.resolutionRef,
+          publisherId: providerResolution.publisherId,
+          retentionClass,
+        },
+      })
+      const next = acquisitionFromResponse(response)
+      if (!next) throw new Error('Acquisition request returned no status')
+      setAcquisition(next)
+    } catch {
+      setAcquisitionError('This title could not be requested.')
+    }
+  }, [acquisition, provider, providerResolution, retentionClass])
+
+  const cancelAcquisition = React.useCallback(async () => {
+    if (!provider || !acquisition) return
+    try {
+      const response = await provider.cancelAcquisition({ acquisitionId: acquisition.acquisitionId })
+      const next = acquisitionFromResponse(response)
+      if (next) setAcquisition(next)
+    } catch {
+      setAcquisitionError('The request could not be cancelled.')
+    }
+  }, [acquisition, provider])
+
+  React.useEffect(() => {
+    if (!providerEvents?.onAcquisitionLifecycle || !provider || !acquisition) return
+    return providerEvents.onAcquisitionLifecycle((event) => {
+      if (event.acquisitionId !== acquisition.acquisitionId) return
+      void provider.getAcquisition({ acquisitionId: acquisition.acquisitionId }).then((response) => {
+        const next = acquisitionFromResponse(response)
+        if (next) setAcquisition(next)
+      }).catch(() => {})
+    })
+  }, [acquisition?.acquisitionId, provider, providerEvents])
+
+  React.useEffect(() => {
+    if (!provider || !mediaGraph || !acquisitionCanPlay(acquisition) || acquiredEntity) return
+    let active = true
+    void provider.getPublication({ publicationId: acquisition.publicationId as string }).then(async (response) => {
+      if (!response || typeof response !== 'object' || !('publication' in response)) {
+        throw new Error('Publication reload failed')
+      }
+      const publication = response.publication
+      if (!publication || typeof publication !== 'object' || !('entityId' in publication) || typeof publication.entityId !== 'string') {
+        throw new Error('Publication has no media entity')
+      }
+      const reloaded = await loadMediaEntity({ rpc: mediaGraph, entityId: publication.entityId })
+      if (active) setAcquiredEntity(reloaded)
+    }).catch(() => {
+      if (active) setAcquisitionError('The completed publication could not be loaded.')
+    })
+    return () => { active = false }
+  }, [acquiredEntity, acquisition, mediaGraph, provider])
+
+  React.useEffect(() => {
+    if (
+      autoPlayed.current ||
+      params.autoplay !== 'true' ||
+      !sourceEntity ||
+      providerResolution
+    ) return
+    autoPlayed.current = true
+    void play(params.publicationId || null)
+  }, [params.autoplay, params.publicationId, play, providerResolution, sourceEntity])
+
+  const activeAcquisition = acquisition && ['queued', 'acquiring', 'verifying', 'publishing'].includes(acquisition.state)
+  const primaryAction = providerResolution && !acquiredEntity
+    ? activeAcquisition
+      ? {
+          label: 'Cancel request',
+          status: acquisitionProgressLabel(acquisition),
+          onPress: () => { void cancelAcquisition() },
+        }
+      : acquisition?.state === 'completed'
+        ? {
+            label: 'Preparing playback…',
+            disabled: true,
+            status: acquisitionError,
+            onPress: () => {},
+          }
+        : {
+            label: acquisition?.state === 'failed' || acquisition?.state === 'cancelled'
+              ? 'Request again'
+              : 'Request this title',
+            disabled: !providerResolution.acquirable,
+            status: acquisitionError || (acquisition ? acquisitionProgressLabel(acquisition) : null),
+            onPress: () => { void requestAcquisition() },
+          }
+    : undefined
+
 
   return (
     <MediaEntityDetailScreen
@@ -217,6 +377,16 @@ export default function MediaEntityPage({
       publisherDeviceStatus={securityStatus}
       publisherActionHandlers={publisherActionHandlers}
       onPlay={() => { void play(null) }}
+      primaryAction={primaryAction}
+      retentionChoice={providerResolution && !acquisition ? {
+        value: retentionClass,
+        onChange: setRetentionClass,
+      } : undefined}
+      availabilityOverride={providerResolution && !acquiredEntity ? {
+        label: 'Available by request',
+        detail: 'Request this title to verify and publish it locally before playback.',
+        playable: false,
+      } : undefined}
       onSelectSource={(source) => {
         onSelectSource?.(source)
         void play(source.publicationId || null)

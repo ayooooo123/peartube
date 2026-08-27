@@ -1,9 +1,9 @@
 import { mkdirSync, openSync, writeSync, closeSync, rmSync } from '#fs'
 import { join } from '#path'
 
-// Streaming multipart/form-data receiver shared by the archive console and the
-// authenticated companion ingest route. File bytes are written directly to a
-// unique staging directory; only explicitly bounded text fields are buffered.
+// Streaming multipart/form-data receiver for the archive console's local
+// provider acquisition upload. File bytes are written directly to a unique
+// staging directory; only explicitly bounded text fields are buffered.
 
 const DOUBLE_CRLF = Buffer.from('\r\n\r\n')
 const DASH = 0x2d
@@ -294,7 +294,7 @@ function uploadHeadroomError(snapshot, written, chunkLength, state = null) {
     function finishPart () {
       if (part.fd != null) {
         try { fs.closeSync(part.fd) } catch {
-          // The completed descriptor is still validated by the ingest manager.
+          // The completed descriptor is still validated by the acquisition manager.
         }
         part.fd = null
         file = {

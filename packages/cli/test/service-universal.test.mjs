@@ -84,6 +84,23 @@ function fakeRuntime (calls) {
         }
       },
     },
+    provider: {
+      async search () { return { candidates: [], nextCursor: null } },
+      async resolve () { throw Object.assign(new Error('disabled'), { code: 'ACQUISITION_DISABLED' }) },
+      async requestAcquisition () { throw Object.assign(new Error('disabled'), { code: 'ACQUISITION_DISABLED' }) },
+      async attachSourceGrant () { throw Object.assign(new Error('disabled'), { code: 'ACQUISITION_DISABLED' }) },
+      async getAcquisition () { return null },
+      async listAcquisitions () { return { items: [], cursor: null } },
+      async cancelAcquisition () { return null },
+      async getPublication () { return null },
+      async openStream () { throw Object.assign(new Error('disabled'), { code: 'ACQUISITION_DISABLED' }) },
+      async getStatus () { return { ready: true } },
+      async getPolicy () { return {} },
+      async setPolicy (value) { return value },
+      async getAcquisitionPolicy () { return { enabled: false, migrationRequired: true } },
+      async setAcquisitionPolicy ({ policy }) { return policy },
+      async migrateLegacyIngest () { return { migrated: 0, skipped: 0 } }
+    },
     identityManager: {},
     uploadManager: {},
     seedingManager: {
@@ -147,7 +164,7 @@ test('relay service starts one universal runtime and reports structured diagnost
   t.is(timers[0].cleared, true)
 })
 
-test('companion startup cannot accept ingest before runtime policy readiness', async (t) => {
+test('companion acquisition remains closed before runtime policy readiness', async (t) => {
   const storagePath = mkdtempSync(join(tmpdir(), 'peartube-cli-policy-startup-'))
   t.teardown(() => rmSync(storagePath, { recursive: true, force: true }))
   const calls = []
@@ -176,7 +193,8 @@ test('companion startup cannot accept ingest before runtime policy readiness', a
       return {
         async start() {
           runtime.markCompanionStarted()
-          t.is(liveService.canStageIngest(), false)
+          const denied = await liveService.requestAcquisition({}).then(() => null, error => error)
+          t.is(denied?.code, 'ACQUISITION_DISABLED')
         },
         async close() {}
       }
@@ -187,12 +205,11 @@ test('companion startup cannot accept ingest before runtime policy readiness', a
   })
   const starting = service.start()
   await companionStarted
-  t.is(companionService.canStageIngest(), false)
-  const denied = await companionService.submitIngestJob({}).then(
+  const denied = await companionService.requestAcquisition({}).then(
     () => null,
     error => error
   )
-  t.is(denied?.code, 'RETENTION_ADMISSION_DENIED')
+  t.is(denied?.code, 'ACQUISITION_DISABLED')
   await runtimeStarted
   releaseRuntime()
   await starting

@@ -96,6 +96,20 @@ export function deriveArchiveTopic(input = {}) {
   })
 }
 
+export function deriveAcquisitionDiscoveryTopic(input = {}) {
+  return topic('acquisition-discovery', {
+    protocolMajor: cleanMajor(input.protocolMajor),
+    networkId: cleanString(input.networkId || 'peartube-main', 'networkId'),
+  })
+}
+
+export function deriveAcquisitionTopic(input = {}) {
+  return topic('acquisition', {
+    protocolMajor: cleanMajor(input.protocolMajor),
+    assignmentId: cleanId32(input.assignmentId, 'assignmentId'),
+  })
+}
+
 // The curator feed scope above and an index service are both 'index' purposes
 // but they are addressed by different identities, so each keeps its own topic.
 export function deriveIndexerTopic(input = {}) {
@@ -123,8 +137,12 @@ export function describeScopedTopic(role, input = {}) {
       return { role, protocolMajor: cleanMajor(input.protocolMajor), networkId: cleanString(input.networkId || 'peartube-main', 'networkId'), topicHex: topicHex(deriveArchiveDiscoveryTopic(input)) }
     case 'archive':
       return { role, protocolMajor: cleanMajor(input.protocolMajor), archiveId: cleanString(input.archiveId, 'archiveId'), topicHex: topicHex(deriveArchiveTopic(input)) }
-    case 'index':
-      return { role, protocolMajor: cleanMajor(input.protocolMajor), indexerId: cleanId32(input.indexerId, 'indexerId'), topicHex: topicHex(deriveIndexTopic(input)) }
+    case 'acquisition-discovery':
+      return { role, protocolMajor: cleanMajor(input.protocolMajor), networkId: cleanString(input.networkId || 'peartube-main', 'networkId'), topicHex: topicHex(deriveAcquisitionDiscoveryTopic(input)) }
+    case 'acquisition':
+      return { role, protocolMajor: cleanMajor(input.protocolMajor), assignmentId: cleanId32(input.assignmentId, 'assignmentId'), topicHex: topicHex(deriveAcquisitionTopic(input)) }
+    case 'indexer':
+      return { role, protocolMajor: cleanMajor(input.protocolMajor), indexerId: cleanId32(input.indexerId, 'indexerId'), topicHex: topicHex(deriveIndexerTopic(input)) }
     default:
       throw new Error('unknown topic role')
   }

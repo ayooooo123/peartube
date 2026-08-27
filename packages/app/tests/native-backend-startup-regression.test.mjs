@@ -319,7 +319,7 @@ test('native root layout does not expose RPC context before the platform bridge 
 
 test('backend orchestrator starts scoped discovery and accounts for scoped peer sessions', () => {
   const orchestrator = readWorkspaceFile('backend/src/orchestrator.js')
-  const runtime = readWorkspaceFile('backend/src/network/scoped-runtime.js')
+  const runtime = readWorkspaceFile('backend/src/network/scoped-session-runtime.js')
 
   assert.match(orchestrator, /createScopedNetworkRuntime/)
   assert.match(orchestrator, /await scopedNetwork\.start\(\)/)

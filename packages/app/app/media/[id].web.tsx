@@ -1,6 +1,6 @@
 import type { ComponentProps } from 'react'
 import React from 'react'
-import { Alert } from 'react-native'
+import { Alert, SafeAreaView } from 'react-native'
 import { useApp } from '@/lib/AppContext'
 import { useOptionalVideoPlayerActions } from '@/lib/VideoPlayerContext'
 import MediaEntityPage, { normalizeMediaEntityView } from '../../components/routes/MediaEntityPage'
@@ -10,7 +10,7 @@ export { normalizeMediaEntityView }
 export type { MediaEntityView }
 
 export default function MediaWebRoute(props: ComponentProps<typeof MediaEntityPage>) {
-  const { rpc } = useApp()
+  const { rpc, platformEvents } = useApp()
   const playerActions = useOptionalVideoPlayerActions()
   // Same wiring as the native route: preparation returns a URL that serves the
   // rendition, and the desktop shell needs a listener for it just as much.
@@ -42,11 +42,15 @@ export default function MediaWebRoute(props: ComponentProps<typeof MediaEntityPa
   }, [])
 
   return (
-    <MediaEntityPage
-      {...props}
-      mediaGraph={props.mediaGraph || rpc}
-      onPlaybackPrepared={props.onPlaybackPrepared || onPlaybackPrepared}
-      onPlaybackFailed={props.onPlaybackFailed || onPlaybackFailed}
-    />
+    <SafeAreaView style={{ flex: 1 }}>
+      <MediaEntityPage
+        {...props}
+        mediaGraph={props.mediaGraph || rpc}
+        provider={props.provider || rpc?.provider}
+        providerEvents={props.providerEvents || platformEvents}
+        onPlaybackPrepared={props.onPlaybackPrepared || onPlaybackPrepared}
+        onPlaybackFailed={props.onPlaybackFailed || onPlaybackFailed}
+      />
+    </SafeAreaView>
   )
 }

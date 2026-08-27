@@ -100,7 +100,7 @@ Do not restore `pear run` or `global.Pear.run` paths. The local desktop shell em
 - Relay code lives in `packages/cli`; shared P2P behavior stays in `packages/backend`.
 - The root `docker-compose.relay.yml` runs the relay with archive UI and authenticated companion configuration.
 - `docker-compose.local-relay.yml` adds a local filesystem mirror volume.
-- Generic client integration uses bounded `/api/v2` search and deferred open. Do not restore full-catalog scans, direct bearer URLs, or a second backend.
+- Generic client integration uses bounded `/api/v2` provider search, resolution, acquisition, policy, publication, and capability-scoped stream routes. Do not restore full-catalog scans, direct bearer URLs, or a second backend.
 - S3-compatible block storage is the only cloud offload path. Do not add provider-specific whole-file uploads beside the verified block store.
 
 ```bash
@@ -126,4 +126,4 @@ npm run desktop:smoke --prefix packages/app
 npm run build:android:apk
 ```
 
-Last updated: 2026-08-26.
+Last updated: 2026-08-27.

@@ -7,6 +7,8 @@ import { ASSET_BLOCK_ERROR_CODES, encodePeerFrame, MAX_PEER_FRAME_BYTES, PROTOCO
 import { MAX_VERIFIED_BLOCK_BYTES } from './block-protocol.js'
 import { createVerifiedBlockEngine } from './verified-block-engine.js'
 import {
+  ACQUISITION_DISCOVERY_CAPABILITY,
+  ACQUISITION_WORK_CAPABILITY,
   ARCHIVE_DISCOVERY_CAPABILITY,
   ARCHIVE_RANGE_CAPABILITY,
   ASSET_RENDITION_CAPABILITY,
@@ -16,6 +18,8 @@ import {
   encodeScopedHello,
 } from './scoped-protocol.js'
 export {
+  ACQUISITION_DISCOVERY_CAPABILITY,
+  ACQUISITION_WORK_CAPABILITY,
   ARCHIVE_DISCOVERY_CAPABILITY,
   ARCHIVE_RANGE_CAPABILITY,
   ASSET_RENDITION_CAPABILITY,
@@ -25,7 +29,13 @@ export {
   decodeScopedHello,
   encodeScopedHello,
 } from './scoped-protocol.js'
-import { deriveBootstrapTopic, deriveIndexerTopic, topicHex } from './topics.js'
+import {
+  deriveAcquisitionDiscoveryTopic,
+  deriveAcquisitionTopic,
+  deriveBootstrapTopic,
+  deriveIndexerTopic,
+  topicHex,
+} from './topics.js'
 import { BOOTSTRAP_LOCATOR_CAPABILITY } from '../discovery/bootstrap-protocol.js'
 import { INDEX_FEED_CAPABILITY } from '../indexing/feed-contract.js'
 import {
@@ -47,7 +57,15 @@ import { createBootstrapLocatorRuntime } from './bootstrap-locator-runtime.js'
 import { createScopedContentRuntime } from './scoped-content-runtime.js'
 import { createPublisherCatalogRuntime } from './publisher-catalog-runtime.js'
 
-const GENERIC_PURPOSES = Object.freeze(['bootstrap', 'publisher', 'asset', 'archive', 'archive-discovery'])
+const GENERIC_PURPOSES = Object.freeze([
+  'bootstrap',
+  'publisher',
+  'asset',
+  'archive',
+  'archive-discovery',
+  'acquisition-discovery',
+  'acquisition',
+])
 const MAX_ASSET_BLOCK_BYTES = MAX_VERIFIED_BLOCK_BYTES
 const ASSET_TRANSFER_TIMEOUT_MS = 10_000
 // Rate-limited sends wait only within the request timeout budget.
@@ -66,6 +84,21 @@ const ARCHIVE_TRANSFER_TYPES = new Set([
   'archive-block-proof',
   'archive-block-chunk',
   'archive-block-unavailable',
+])
+const ACQUISITION_DISCOVERY_FRAME_TYPES = new Set([
+  'acquisition-request',
+  'acquisition-offer',
+  'acquisition-assignment',
+  'acquisition-cancel',
+])
+const ACQUISITION_WORK_FRAME_TYPES = new Set([
+  'acquisition-progress',
+  'acquisition-result',
+  'acquisition-cancel',
+  'acquisition-block-request',
+  'acquisition-block-proof',
+  'acquisition-block-chunk',
+  'acquisition-block-unavailable',
 ])
 
 function fail (message, code = 'SCOPED_NETWORK_REJECTED') {
@@ -103,6 +136,8 @@ function capabilityForPurpose (purpose, { indexService = false } = {}) {
     case 'asset': return ASSET_RENDITION_CAPABILITY
     case 'archive': return ARCHIVE_RANGE_CAPABILITY
     case 'archive-discovery': return ARCHIVE_DISCOVERY_CAPABILITY
+    case 'acquisition-discovery': return ACQUISITION_DISCOVERY_CAPABILITY
+    case 'acquisition': return ACQUISITION_WORK_CAPABILITY
     case 'index': return indexService ? INDEX_QUERY_CAPABILITY : INDEX_FEED_CAPABILITY
     case 'moderation': return MODERATION_FEED_CAPABILITY
     default: fail('unsupported purpose')
@@ -408,6 +443,9 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   function scopeMayServe (scope) {
+    if (scope.purpose === 'acquisition-discovery' || scope.purpose === 'acquisition') {
+      return scope.discoveryServer === true
+    }
     if (!uploadAllowed) return false
     if (scope.purpose === 'bootstrap') return true
     if (scope.purpose === 'asset') return scopeUploadRetentionClass(scope) !== null
@@ -452,13 +490,15 @@ export function createScopedNetworkRuntime (options = {}) {
     if (scope.discovery) {
       if (scope.discoverySuspended) {
         scope.discoverySuspended = false
-        scope.serverAnnounced = scopeMayServe(scope)
+        scope.serverAnnounced = scope.discoveryServer == null ? scopeMayServe(scope) : scope.discoveryServer === true
         void Promise.resolve(scope.discovery.resume?.()).catch(() => {})
       }
       return scope.discovery
     }
-    const server = scopeMayServe(scope)
-    const discovery = swarm.join(scope.topic, { server, client: true })
+    const server = scope.discoveryServer == null ? scopeMayServe(scope) : scope.discoveryServer === true
+    const client = scope.discoveryClient == null ? true : scope.discoveryClient === true
+    if (!server && !client) return null
+    const discovery = swarm.join(scope.topic, { server, client })
     scope.serverAnnounced = server
     scope.discovery = discovery
     scope.discoverySuspended = false
@@ -546,6 +586,21 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
 
+  function notifyAcquisitionPeerClosed(scope, peerId, reason) {
+    if ((scope.purpose !== 'acquisition-discovery' && scope.purpose !== 'acquisition') ||
+        typeof scope.onPeerClose !== 'function') return
+    try {
+      Promise.resolve(scope.onPeerClose({
+        peerId,
+        purpose: scope.purpose,
+        scopeId: scope.scopeId,
+        reason,
+      })).catch(() => {})
+    } catch {
+      // Peer observers do not own transport teardown.
+    }
+  }
+
   function closeSession (scope, peerId, reason, ownedSession = null) {
     const session = scope.sessions.get(peerId)
     if (!session || session.closed || (ownedSession && session !== ownedSession)) return false
@@ -564,6 +619,7 @@ export function createScopedNetworkRuntime (options = {}) {
       clearArchiveTimer(session)
     }
     const channel = session.channel
+    notifyAcquisitionPeerClosed(scope, peerId, reason)
     session.closed = true
     for (const cleanup of session.cleanupFns.splice(0)) {
       try { cleanup() } catch { /* best-effort session cleanup */ }
@@ -700,6 +756,16 @@ export function createScopedNetworkRuntime (options = {}) {
       if (!liveRemoteKey || liveRemoteKey !== scope.transportPublicKey) return { status: 'rejected', reason: 'index-transport-key-mismatch' }
       return { status: 'authorized', action: 'index-service', indexerId: scope.indexerId }
     }
+    if (scope.purpose === 'acquisition-discovery') {
+      return { status: 'authorized', action: 'acquisition-discovery' }
+    }
+    if (scope.purpose === 'acquisition') {
+      const liveRemoteKey = authenticatedRemoteKey(connection)
+      if (!liveRemoteKey || !scope.allowedPeerIds?.has?.(liveRemoteKey)) {
+        return { status: 'rejected', reason: 'acquisition-audience-mismatch' }
+      }
+      return { status: 'authorized', action: 'acquisition-work', assignmentId: scope.assignmentId }
+    }
     if (scope.purpose === 'bootstrap') return { status: 'authorized', action: 'metadata-only' }
     if (scope.purpose === 'publisher') {
       if (scope.modes.has('candidate') && !scope.modes.has('followed') && !scope.modes.has('local')) {
@@ -771,6 +837,7 @@ export function createScopedNetworkRuntime (options = {}) {
     if (!scopeMayAttach(scope)) return
     const remoteKey = connectionKey(connection, info)
     if (!remoteKey) return
+    if (scope.allowedPeerIds instanceof Set && !scope.allowedPeerIds.has(remoteKey)) return
     const existing = scope.sessions.get(remoteKey)
     if (existing) {
       const sameLiveConnection = existing.connection === connection &&
@@ -834,6 +901,10 @@ export function createScopedNetworkRuntime (options = {}) {
             startArchivePumpWhenOpen(scope, tracked)
           }
           if (scope.purpose === 'archive-discovery' && scope.archivePeerListeners) { for (const listener of scope.archivePeerListeners) { try { listener({ peerId: remoteKey }) } catch { /* Observers must not affect transport. */ } } }
+          if ((scope.purpose === 'acquisition-discovery' || scope.purpose === 'acquisition') &&
+              typeof scope.onPeer === 'function') {
+            await scope.onPeer({ peerId: remoteKey, purpose: scope.purpose, scopeId: scope.scopeId })
+          }
         }
       },
       onFrame: frame => {
@@ -844,6 +915,10 @@ export function createScopedNetworkRuntime (options = {}) {
         if (scope.purpose === 'asset') return handleAssetFrame(scope, ownedSession, frame)
         if (scope.purpose === 'archive') return handleArchiveFrame(scope, ownedSession, frame)
         if (scope.purpose === 'archive-discovery') return handleArchiveFrame(scope, ownedSession, frame)
+        if ((scope.purpose === 'acquisition-discovery' || scope.purpose === 'acquisition') &&
+            typeof scope.handleFrame === 'function') {
+          return scope.handleFrame(frame, { peerId: remoteKey, purpose: scope.purpose, scopeId: scope.scopeId })
+        }
         return frame.type === 'probe' ? { status: 'ok' } : fail('frame type is not allowed for this purpose')
       },
       onClose: () => {
@@ -863,6 +938,7 @@ export function createScopedNetworkRuntime (options = {}) {
           clearArchiveTimer(tracked)
         }
         if (tracked && !tracked.closed) {
+          notifyAcquisitionPeerClosed(scope, remoteKey, 'channel-closed')
           cancelAssetSummaryScan(tracked)
           tracked.closed = true
           for (const cleanup of tracked.cleanupFns.splice(0)) {
@@ -1015,12 +1091,23 @@ export function createScopedNetworkRuntime (options = {}) {
       }
     }
     if (info.client !== false) {
+      for (const scope of scopes.values()) {
+        if (scope.purpose === 'acquisition-discovery' || scope.purpose === 'acquisition') {
+          attachScope(scope, connection, info)
+        }
+      }
+    }
+    if (info.client !== false) {
       queueMicrotask(() => {
         if (!activeConnections.has(connection)) return
         mux?.cork?.()
         try {
           for (const scope of scopes.values()) {
-            if (scope.purpose !== 'index' || scope.feedKind) attachScope(scope, connection, info)
+            if ((scope.purpose !== 'index' || scope.feedKind) &&
+                scope.purpose !== 'acquisition-discovery' &&
+                scope.purpose !== 'acquisition') {
+              attachScope(scope, connection, info)
+            }
           }
         } finally {
           mux?.uncork?.()
@@ -1515,6 +1602,110 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
 
+  function acquisitionScopeCallbacks(input = {}) {
+    return {
+      handleFrame: typeof input.onFrame === 'function' ? input.onFrame : null,
+      onPeer: typeof input.onPeer === 'function' ? input.onPeer : null,
+      onPeerClose: typeof input.onPeerClose === 'function' ? input.onPeerClose : null,
+    }
+  }
+
+  async function retainAcquisitionDiscovery(input = {}) {
+    if (status === 'closed') fail('runtime is closed')
+    const requestedNetworkId = String(input.networkId || networkId)
+    if (requestedNetworkId !== networkId) fail('acquisition discovery networkId mismatch')
+    const discoveryServer = input.server === true
+    const discoveryClient = input.client === true
+    if (!discoveryServer && !discoveryClient) fail('acquisition discovery requires a server or client role')
+    const { scope, created } = joinScope({
+      purpose: 'acquisition-discovery',
+      topic: deriveAcquisitionDiscoveryTopic({ protocolMajor, networkId }),
+      scopeId: networkId,
+      mode: 'acquisition-discovery',
+      discoveryServer,
+      discoveryClient,
+      ...acquisitionScopeCallbacks(input),
+    })
+    const changed = scope.discoveryServer !== discoveryServer || scope.discoveryClient !== discoveryClient
+    scope.discoveryServer = discoveryServer
+    scope.discoveryClient = discoveryClient
+    Object.assign(scope, acquisitionScopeCallbacks(input))
+    if (!created && changed) await rejoinScopeDiscovery(scope)
+    else ensureScopeDiscovery(scope)
+    return stableScopeDiagnostic(scope)
+  }
+
+  async function releaseAcquisitionDiscovery() {
+    const topic = deriveAcquisitionDiscoveryTopic({ protocolMajor, networkId })
+    return leaveScope(findScope('acquisition-discovery', topic), 'acquisition-discovery')
+  }
+
+  async function retainAcquisitionAssignment(input = {}) {
+    if (status === 'closed') fail('runtime is closed')
+    const assignmentId = hex32(input.assignmentId, 'assignmentId')
+    const peerId = hex32(input.peerId, 'peerId')
+    const discoveryServer = input.server === true
+    const discoveryClient = input.client === true
+    if (!discoveryServer && !discoveryClient) fail('acquisition assignment requires a server or client role')
+    const topic = deriveAcquisitionTopic({ protocolMajor, assignmentId })
+    const { scope, created } = joinScope({
+      purpose: 'acquisition',
+      topic,
+      scopeId: assignmentId,
+      mode: 'acquisition',
+      assignmentId,
+      allowedPeerIds: new Set([peerId]),
+      discoveryServer,
+      discoveryClient,
+      ...acquisitionScopeCallbacks(input),
+    })
+    if (!scope.allowedPeerIds?.has(peerId) || scope.allowedPeerIds.size !== 1) {
+      fail('acquisition assignment audience mismatch')
+    }
+    const changed = scope.discoveryServer !== discoveryServer || scope.discoveryClient !== discoveryClient
+    scope.discoveryServer = discoveryServer
+    scope.discoveryClient = discoveryClient
+    Object.assign(scope, acquisitionScopeCallbacks(input))
+    if (!created && changed) await rejoinScopeDiscovery(scope)
+    else ensureScopeDiscovery(scope)
+    for (const [connection, info] of activeConnections) attachScope(scope, connection, info)
+    return stableScopeDiagnostic(scope)
+  }
+
+  async function releaseAcquisitionAssignment(input = {}) {
+    const assignmentId = hex32(input.assignmentId, 'assignmentId')
+    const topic = deriveAcquisitionTopic({ protocolMajor, assignmentId })
+    return leaveScope(findScope('acquisition', topic), 'acquisition')
+  }
+
+  function publishAcquisitionFrame(input = {}) {
+    const purpose = String(input.purpose || '')
+    const type = String(input.type || '')
+    if ((purpose === 'acquisition-discovery' && !ACQUISITION_DISCOVERY_FRAME_TYPES.has(type)) ||
+        (purpose === 'acquisition' && !ACQUISITION_WORK_FRAME_TYPES.has(type))) {
+      fail('frame type is not allowed for acquisition purpose')
+    }
+    let topic
+    if (purpose === 'acquisition-discovery') {
+      topic = deriveAcquisitionDiscoveryTopic({ protocolMajor, networkId })
+    } else if (purpose === 'acquisition') {
+      topic = deriveAcquisitionTopic({ protocolMajor, assignmentId: input.assignmentId })
+    } else {
+      fail('invalid acquisition purpose')
+    }
+    const scope = findScope(purpose, topic)
+    if (!scope || scope.closed) return { sent: 0, peerIds: [] }
+    const peerId = input.peerId == null ? null : hex32(input.peerId, 'peerId')
+    const sentPeerIds = []
+    for (const [candidatePeerId, session] of scope.sessions) {
+      if (peerId !== null && candidatePeerId !== peerId) continue
+      if (sendScopedFrame(session, purpose, type, b4a.from(input.payload || []))) {
+        sentPeerIds.push(candidatePeerId)
+      }
+    }
+    return { sent: sentPeerIds.length, peerIds: sentPeerIds }
+  }
+
 
 
   async function inspectIncomingFrame ({ purpose, topic, peerId = 'inspect', frame } = {}) {
@@ -1669,6 +1860,8 @@ export function createScopedNetworkRuntime (options = {}) {
     publishArchivePledge, publishArchiveChallenge, publishArchiveChallengeProof, retainAuthorizedArchive,
     releaseAuthorizedArchive, createAuthorizedArchiveChallengeProof, verifyAuthorizedArchiveChallengeProof,
     publishBootstrapLocator, listBootstrapLocators, getIndexFeedRecords, getModerationFeedRecords,
+    retainAcquisitionDiscovery, releaseAcquisitionDiscovery, retainAcquisitionAssignment,
+    releaseAcquisitionAssignment, publishAcquisitionFrame,
     getDiagnostics, authorizeConnection, getLocalTransportPeerId, isPeerConnected, inspectIncomingFrame, close,
   }
 }

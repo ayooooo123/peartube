@@ -25,6 +25,7 @@ import {
   createSourceReader,
   createPublicationManifest,
   createRenditionDescriptor,
+  createStaticAssetManifest,
   encodePublicationManifest,
 } from './assets/index.js';
 import {
@@ -1358,6 +1359,166 @@ export function createUploadManager({
   const resumableIngest = typeof blockOffload?.createOffloader === 'function' &&
     typeof blockOffload?.createStagingStore === 'function';
   const publicationRuntime = { catalogRegistry, verifiedQueryView, scopedNetwork, deviceKeyPair, store: ctx?.store, offload: blockOffload, now };
+
+  async function resolveAuthorizedPublisher(publisherId) {
+    if (!catalogRegistry || !deviceKeyPair?.publicKey || !deviceKeyPair?.secretKey) return null;
+    const binding = await catalogRegistry.resolve(publisherId);
+    const catalog = binding?.catalog;
+    if (!catalog?.writable || typeof catalog.getAuthorizationState !== 'function' ||
+        typeof catalog.createLocalOperation !== 'function' || typeof catalog.appendBatchAndConfirm !== 'function') {
+      return null;
+    }
+    const authorization = await catalog.getAuthorizationState();
+    const signerKey = b4a.toString(deviceKeyPair.publicKey, 'hex');
+    const writer = authorization?.writers?.find(candidate => candidate.signerKey === signerKey);
+    const currentTime = now();
+    if (!writer || writer.revocation || writer.expiresAt < currentTime ||
+        !writer.capabilities?.includes('publish') || !writer.capabilities?.includes('claim') ||
+        !catalog.localSignerKey || !b4a.equals(catalog.localSignerKey, deviceKeyPair.publicKey)) {
+      return null;
+    }
+    return { binding, catalog };
+  }
+
+  async function getAuthorizedPublisherIds() {
+    if (!catalogRegistry || typeof catalogRegistry.getWritableBindings !== 'function') return []
+    const bindings = await catalogRegistry.getWritableBindings()
+    const authorized = []
+    for (const binding of bindings || []) {
+      const publisherId = b4a.toString(b4a.from(binding?.publisherId || []), 'hex')
+      if (publisherId.length !== 64) continue
+      if (await resolveAuthorizedPublisher(publisherId)) authorized.push(publisherId)
+    }
+    return authorized.sort()
+  }
+
+  function acquisitionPublicationKey(acquisitionId) {
+    if (typeof acquisitionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(acquisitionId)) {
+      throw new Error('Acquisition id is invalid')
+    }
+    return `acquisition/publication/v1/${acquisitionId}`
+  }
+
+  async function getAcquiredPublication({ acquisitionId, publisherId = null, asset = null, resolution = null } = {}) {
+    if (typeof ctx?.metaDb?.get !== 'function') return null
+    const key = acquisitionPublicationKey(acquisitionId)
+    const value = (await ctx.metaDb.get(key))?.value
+    const stored = value?.publication
+    if (value?.schemaVersion === 1 && (publisherId === null || value.publisherId === publisherId) &&
+        stored && ['publicationId', 'manifestId', 'renditionId', 'assetId'].every(field =>
+          typeof stored[field] === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(stored[field]))) {
+      return { ...stored }
+    }
+    if (!verifiedQueryView || typeof verifiedQueryView.getEntity !== 'function' || !publisherId || !asset?.assetId) return null
+    const media = resolution?.mediaContext || {}
+    const coordinateShape = MEDIA_COORDINATE_SHAPES[media.kind] || null
+    const episodic = media.kind === 'episode' && Number.isSafeInteger(media.season) && Number.isSafeInteger(media.episode)
+    const coordinated = Boolean(
+      coordinateShape &&
+      typeof media.identifier === 'string' &&
+      coordinateShape.providers.includes(media.namespace) &&
+      coordinateShape.ordinals.every(ordinal => Number.isSafeInteger(
+        ordinal === 'seasonNumber' ? media.season : ordinal === 'episodeNumber' ? media.episode : media[ordinal]
+      ))
+    )
+    const workIdentifier = episodic && coordinated
+      ? episodeWorkIdentifier(media.identifier, media.season, media.episode)
+      : `${media.kind || 'movie'}:${media.identifier}`
+    const subjectRef = coordinated
+      ? createEntityReference({ entityKind: 'work', namespace: media.namespace, normalizedIdentifier: workIdentifier })
+      : createEntityReference({ entityKind: 'work', namespace: 'issuer-native', issuerRootKey: publisherId, issuerLocalId: acquisitionId })
+    const entity = await verifiedQueryView.getEntity({ entityKind: 'work', entityId: subjectRef.entityId })
+    for (const candidate of entity?.publications || []) {
+      if (candidate.publisherId && candidate.publisherId !== publisherId) continue
+      const manifest = candidate.manifest || await verifiedQueryView.getManifest({ publicationId: candidate.publicationId })
+      const rendition = manifest?.body?.renditions?.find(entry => entry?.core?.assetId === asset.assetId)
+      if (!manifest || !rendition) continue
+      const recovered = {
+        publicationId: candidate.publicationId,
+        manifestId: candidate.manifestId || manifest.body?.manifestId,
+        renditionId: rendition.renditionId,
+        assetId: asset.assetId
+      }
+      if (!Object.values(recovered).every(entry => typeof entry === 'string' && entry)) continue
+      await ctx.metaDb.put(key, { schemaVersion: 1, publisherId, publication: recovered })
+      return recovered
+    }
+    return null
+  }
+
+  async function publishAcquiredAsset({
+    acquisitionId,
+    publisherId,
+    asset,
+    source = {},
+    resolution = {},
+    retentionClass = 'contribution-cache',
+    signal
+  } = {}) {
+    const existing = await getAcquiredPublication({ acquisitionId, publisherId, asset, resolution });
+    if (existing) {
+      if (existing.assetId !== asset?.assetId) throw new Error('Acquisition publication asset does not match');
+      return existing;
+    }
+    const authorized = await resolveAuthorizedPublisher(publisherId);
+    if (!authorized) throw new Error('Local device is not currently authorized to publish and claim');
+    const core = createStaticAssetManifest({
+      treeHash: asset?.treeHash,
+      blockLength: asset?.length,
+      byteLength: asset?.byteLength,
+      blockSize: asset?.blockSize
+    });
+    if (core.assetId !== asset?.assetId || b4a.toString(core.key, 'hex') !== asset?.key) {
+      throw new Error('Acquired asset identity is invalid');
+    }
+    const mimeType = typeof source?.mimeType === 'string' && source.mimeType ? source.mimeType : 'application/octet-stream';
+    const durationMs = Number.isSafeInteger(source?.durationMs) && source.durationMs > 0 ? source.durationMs : 1;
+    const rendition = createRenditionDescriptor({
+      purpose: 'original',
+      format: mimeType,
+      durationMs,
+      core
+    });
+    const media = resolution?.mediaContext || {};
+    const metadata = {
+      id: acquisitionId,
+      title: typeof resolution?.title === 'string' && resolution.title ? resolution.title : acquisitionId,
+      description: null,
+      mimeType,
+      duration: durationMs / 1000,
+      contentKind: typeof media.kind === 'string' && media.kind ? media.kind : 'movie',
+      mediaProvider: typeof media.namespace === 'string' ? media.namespace : null,
+      mediaId: typeof media.identifier === 'string' ? media.identifier : null,
+      seasonNumber: Number.isSafeInteger(media.season) ? media.season : null,
+      episodeNumber: Number.isSafeInteger(media.episode) ? media.episode : null
+    };
+    const published = await maybeAttachImmutablePublication(metadata, {
+      catalog: authorized.catalog,
+      publisherId: b4a.from(authorized.binding.publisherId),
+      renditionWrite: { descriptor: rendition },
+      artworkWrites: []
+    }, {
+      ...publicationRuntime,
+      publisherId,
+      retentionClass,
+      signal
+    });
+    const publication = published?.immutablePublication;
+    if (!publication) throw new Error('Acquired asset publication did not commit');
+    const result = {
+      publicationId: publication.publicationId,
+      manifestId: publication.manifestId,
+      renditionId: publication.renditionId,
+      assetId: publication.assetId
+    };
+    if (typeof ctx?.metaDb?.put !== 'function') throw new Error('Acquisition publication repository is unavailable');
+    await ctx.metaDb.put(acquisitionPublicationKey(acquisitionId), {
+      schemaVersion: 1,
+      publisherId,
+      publication: result
+    });
+    return result;
+  }
   /**
    * Probe the uploaded MP4 for its playback profile (moov position +
    * keyframe index) and persist it for range prioritization at playback
@@ -1388,6 +1549,14 @@ export function createUploadManager({
   }
 
   return {
+    async hasPublisherAuthority({ publisherId } = {}) {
+      return (await resolveAuthorizedPublisher(publisherId)) !== null;
+    },
+
+    publishAcquiredAsset,
+    getAuthorizedPublisherIds,
+    getAcquiredPublication,
+
     /**
      * Upload video from a file path (desktop)
      * Requires fs module to be passed in for platform compatibility

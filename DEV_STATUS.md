@@ -1,6 +1,6 @@
 # Development Status
 
-Status as of 2026-08-26: pre-alpha, active development.
+Status as of 2026-08-27: pre-alpha, active development.
 
 ## Platform Status
 
@@ -18,15 +18,15 @@ Status as of 2026-08-26: pre-alpha, active development.
 - Shared HRPC handlers are centralized in `packages/backend/src/hrpc-handlers.js` and registered by `packages/backend/src/backend-entry.js`.
 - Schema generation produces JS HRPC/schema output via `npm run schema:full`.
 - Electrobun desktop is off the old `pear run` path and uses embedded `pear-runtime`.
-- Relay support includes the authenticated machine API, bounded ingest jobs, archive UI, local mirror workflows, local catalog indexing, and S3-compatible block offload.
+- Relay support includes the authenticated provider machine API, durable acquisition jobs, archive UI, local mirror workflows, local catalog indexing, and S3-compatible block offload.
 
 ## Current Product Direction
 
-- Consumer-first Home, Search/Discover, Library, and playback surfaces; publishing and network controls stay behind Developer Settings or the relay CLI.
+- Consumer-first Home, Search/Discover, Library, provider acquisition, and playback surfaces; publishing and network controls stay behind Developer Settings or the relay CLI.
 - Permissionless signed catalogs with local moderation, bounded index federation, and provenance-preserving source selection.
 - Strict P2P immutable-rendition playback with structured availability errors and no HTTP origin fallback.
-- Client applications perform their own ranking and private acquisition. PearTube verifies, publishes, transfers, retains, and archives selected media.
-- Relays are voluntary peers, not trusted infrastructure. S3 is an operator-selected block tier, not a media authority or public origin.
+- Client applications perform ranking and source choice. PearTube exposes a client-neutral `search -> resolve -> acquire -> verify -> publish -> stream -> retain` contract.
+- Relays are voluntary acquisition and custody peers, not trusted infrastructure. S3 is an operator-selected block tier, not a media authority or public origin.
 
 ## Backend Capability Progress
 
@@ -34,11 +34,11 @@ The shared backend includes:
 
 - publisher roots, admitted device writers, namespace rotation, signed catalogs, and immutable publication manifests;
 - local and federated index services, exact TMDB movie/episode selectors, candidate verification, and source provenance;
-- purpose-scoped bootstrap, publisher, index, asset, archive, and archive-discovery networking;
+- purpose-scoped bootstrap, publisher, index, asset, acquisition-discovery, acquisition, archive, and archive-discovery networking;
 - static rendition cores, exact-range transfer, multi-peer playback, availability evidence, seeding, and retention;
 - watch-only, balanced, and archive-enabled participation policy with device/network/storage budgets;
 - archive pledges, possession challenges, S3 block offload, restore-on-read, and relay reseeding;
-- authenticated machine search, deferred open, ingest jobs, and route-scoped streams;
+- authenticated machine search, opaque resolution leases, private source grants, durable acquisition jobs, provider policy, and route-scoped verified streams;
 - local encrypted personal state, optional device pairing, moderation, library, watch history, and recommendations without viewer analytics.
 
 ## Reproducibility Status
@@ -65,4 +65,4 @@ npm test
 npm run desktop:smoke --prefix packages/app
 ```
 
-Last updated: 2026-08-26.
+Last updated: 2026-08-27.

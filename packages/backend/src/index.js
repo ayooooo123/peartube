@@ -30,6 +30,14 @@ export { SeedingManager } from './seeding.js';
 
 // API - Shared backend methods
 export { assessDurableManifest, createApi } from './api.js';
+export { createProviderApi } from './api/provider.js';
+export {
+  PROVIDER_ERROR_CODES,
+  ProviderError,
+  createProviderService,
+  providerError
+} from './provider/index.js';
+export { createProviderRuntime } from './runtime.js';
 export { parseHttpByteRange } from './blob-range-priority.js';
 export {
   createDurableOperabilityServices,
@@ -95,3 +103,5 @@ export * as records from './records/index.js';
 export * as publisher from './publisher/index.js';
 export * as mediaGraph from './media-graph/index.js';
 export * as assets from './assets/index.js';
+export * as provider from './provider/index.js';
+export * as acquisition from './acquisition/index.js';

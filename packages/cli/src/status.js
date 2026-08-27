@@ -65,7 +65,7 @@ export function buildRelayStatus({
   config,
   catalog,
   runtimeStats = {},
-  ingestStatus = {},
+  acquisitionStatus = {},
   creators = null,
   trustedClientsCount = 0,
   // null unless the operator enabled S3 block offload. Only current residency
@@ -87,12 +87,12 @@ export function buildRelayStatus({
     archive: policy.permissions?.archive === true
   }
   const publicWork = runtimeStats.publicWork || {}
-  const jobsByState = {}
+  const acquisitionsByState = {}
   for (const state of ['queued', 'acquiring', 'verifying', 'publishing', 'completed', 'failed', 'cancelled']) {
-    jobsByState[state] = count(ingestStatus.jobsByState?.[state])
+    acquisitionsByState[state] = count(acquisitionStatus.acquisitionsByState?.[state])
   }
   const errors = boundedErrorCodes([
-    ...(ingestStatus.lastErrors || []),
+    ...(acquisitionStatus.lastErrors || []),
     ...(network.lastErrors || []),
     publisher.lastErrorCode
   ])
@@ -124,8 +124,8 @@ export function buildRelayStatus({
         (count(publisher.catalogs) + count(archive.activePledgeCount))),
       activeServes: count(publicWork.activeServes),
       servedBytes: count(publicWork.servedBytes),
-      activeAcquisitions: count(ingestStatus.activeAcquisitions),
-      jobsByState
+      activeAcquisitions: count(acquisitionStatus.activeAcquisitions),
+      acquisitionsByState
     },
     selectedIndexers: boundedSelectedIndexers(policy),
     lastErrors: errors,
@@ -187,7 +187,7 @@ export function formatRelayStatus(status) {
     `contributionBudget: ${contribution.usedBytes || 0}/${contribution.configuredBytes || 0} bytes`,
     `archiveBudget: ${archive.usedBytes || 0}/${archive.configuredBytes || 0} bytes`,
     `publicWork: announcements=${work.activeAnnouncements || 0} serves=${work.activeServes || 0} servedBytes=${work.servedBytes || 0} acquisitions=${work.activeAcquisitions || 0}`,
-    `jobs: ${Object.entries(work.jobsByState || {}).map(([state, value]) => `${state}=${value}`).join(' ')}`,
+    `acquisitions: ${Object.entries(work.acquisitionsByState || {}).map(([state, value]) => `${state}=${value}`).join(' ')}`,
     `network: status=${status.network?.status || 'unknown'} peers=${status.network?.peers || 0} connections=${status.network?.connections || 0} offline=${status.network?.offline === true}`,
     `channels: total=${status.summary?.totalChannels || 0} protected=${status.summary?.protectedChannels || 0} evictable=${status.summary?.evictableChannels || 0}`,
     `selectedIndexers: ${(status.selectedIndexers || []).map(indexer => `${indexer.id}:${indexer.status}`).join(',') || 'none'}`,

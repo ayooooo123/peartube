@@ -11902,6 +11902,1360 @@
           "version": 1
         }
       ]
+    },
+    {
+      "name": "provider-error",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "code",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "message",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "field",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "retryable",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "provider-search-hit-v1",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 4,
+      "fields": [
+        {
+          "name": "schemaVersion",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "resolutionRef",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "title",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mediaKind",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "subtitle",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "published",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "acquirable",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "entityId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicationId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "expectedBytes",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "provider-search-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "query",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "cursor",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "provider-search-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "hits",
+          "required": true,
+          "array": true,
+          "type": "@peartube/provider-search-hit-v1",
+          "version": 1
+        },
+        {
+          "name": "nextCursor",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "@peartube/provider-error",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "provider-resolution-v1",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 5,
+      "fields": [
+        {
+          "name": "schemaVersion",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "resolutionRef",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "title",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mediaKind",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "subtitle",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "published",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "acquirable",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "entityId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicationId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "expectedBytes",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "resolve-provider-ref-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "resolutionRef",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "resolve-provider-ref-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "resolution",
+          "required": false,
+          "type": "@peartube/provider-resolution-v1",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "@peartube/provider-error",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "acquisition-request-v1",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 4,
+      "fields": [
+        {
+          "name": "schemaVersion",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "resolutionRef",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "retentionClass",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "retentionUntil",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "retentionUntilPresent",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "acquisition-v1",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 5,
+      "fields": [
+        {
+          "name": "schemaVersion",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "acquisitionId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "state",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "retentionClass",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "bytesAcquired",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "expectedBytes",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "publicationId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "manifestId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "renditionId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "assetId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "recoverable",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "createdAt",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "updatedAt",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "request-acquisition-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "idempotencyKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "request",
+          "required": true,
+          "type": "@peartube/acquisition-request-v1",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "request-acquisition-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "acquisition",
+          "required": false,
+          "type": "@peartube/acquisition-v1",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "@peartube/provider-error",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "attach-source-grant-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "acquisitionId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "grant",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "attach-source-grant-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "acquisition",
+          "required": false,
+          "type": "@peartube/acquisition-v1",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "@peartube/provider-error",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-acquisition-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "acquisitionId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-acquisition-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "acquisition",
+          "required": false,
+          "type": "@peartube/acquisition-v1",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "@peartube/provider-error",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "list-acquisitions-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "cursor",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "states",
+          "required": false,
+          "array": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "list-acquisitions-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "acquisitions",
+          "required": true,
+          "array": true,
+          "type": "@peartube/acquisition-v1",
+          "version": 1
+        },
+        {
+          "name": "nextCursor",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "@peartube/provider-error",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "cancel-acquisition-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "acquisitionId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "cancel-acquisition-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "acquisition",
+          "required": false,
+          "type": "@peartube/acquisition-v1",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "@peartube/provider-error",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "provider-publication-v1",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "schemaVersion",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "publicationId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "entityId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "manifestId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "renditionId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "assetId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "title",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-provider-publication-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "publicationId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-provider-publication-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "publication",
+          "required": false,
+          "type": "@peartube/provider-publication-v1",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "@peartube/provider-error",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "provider-stream-v1",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 7,
+      "fields": [
+        {
+          "name": "schemaVersion",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "publicationId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "renditionId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "assetId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "url",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mimeType",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "byteLength",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "etag",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "open-provider-stream-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "publicationId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "renditionId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "open-provider-stream-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "stream",
+          "required": false,
+          "type": "@peartube/provider-stream-v1",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "@peartube/provider-error",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "provider-status-v1",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "schemaVersion",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "ready",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "searchEnabled",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "acquisitionEnabled",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "queuedAcquisitions",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "activeAcquisitions",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-provider-status-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "get-provider-status-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "status",
+          "required": false,
+          "type": "@peartube/provider-status-v1",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "@peartube/provider-error",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "provider-policy-v1",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "schemaVersion",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "revision",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "searchEnabled",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "resolveEnabled",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "acquisitionEnabled",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-provider-policy-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "get-provider-policy-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "policy",
+          "required": false,
+          "type": "@peartube/provider-policy-v1",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "@peartube/provider-error",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "set-provider-policy-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "policy",
+          "required": true,
+          "type": "@peartube/provider-policy-v1",
+          "version": 1
+        },
+        {
+          "name": "expectedRevision",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "set-provider-policy-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "policy",
+          "required": false,
+          "type": "@peartube/provider-policy-v1",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "@peartube/provider-error",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "acquisition-policy-v1",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 3,
+      "fields": [
+        {
+          "name": "policyVersion",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "revision",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "consentVersion",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "migrationRequired",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "enabled",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "acceptPublicRequests",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "requesterMode",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "allowedPublisherIds",
+          "required": true,
+          "array": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "allowedAdapterIds",
+          "required": true,
+          "array": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "maxQueuedJobs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "maxConcurrentJobs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "maxConcurrentPerRequester",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "maxRequestBytes",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "maxAcquireBytesPer24h",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "maxAcquireBytesPerSecond",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "maxStagingBytes",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "minFreeDiskBytes",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "maxJobRuntimeMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceGrantTtlMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "publicRequestsPerMinute",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "maxAttempts",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "retryBaseMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "retryMaxMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-acquisition-policy-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "get-acquisition-policy-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "policy",
+          "required": false,
+          "type": "@peartube/acquisition-policy-v1",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "@peartube/provider-error",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "acquisition-consent-v1",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "version",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "granted",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "set-acquisition-policy-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "policy",
+          "required": true,
+          "type": "@peartube/acquisition-policy-v1",
+          "version": 1
+        },
+        {
+          "name": "expectedRevision",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "consent",
+          "required": true,
+          "type": "@peartube/acquisition-consent-v1",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "set-acquisition-policy-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "policy",
+          "required": false,
+          "type": "@peartube/acquisition-policy-v1",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "@peartube/provider-error",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "acquisition-lifecycle-event-v1",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 8,
+      "fields": [
+        {
+          "name": "schemaVersion",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "eventId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "acquisitionId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "type",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "state",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sequence",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "at",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "bytesAcquired",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "expectedBytes",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicationId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
     }
   ]
 }

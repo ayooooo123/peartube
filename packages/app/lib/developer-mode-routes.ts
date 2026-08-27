@@ -4,6 +4,7 @@ const PRIVILEGED_PREFIXES = [
   '/studio',
   '/publisher-security',
   '/network-policy',
+  '/acquisition-settings',
   '/subscriptions',
   '/moderation',
   '/maintenance',

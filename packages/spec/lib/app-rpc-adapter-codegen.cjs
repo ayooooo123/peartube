@@ -141,6 +141,22 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'search-index-candidates',
     'verify-index-candidate'
   ],
+  provider: [
+    'provider-search',
+    'resolve-provider-ref',
+    'request-acquisition',
+    'attach-source-grant',
+    'get-acquisition',
+    'list-acquisitions',
+    'cancel-acquisition',
+    'get-provider-publication',
+    'open-provider-stream',
+    'get-provider-status',
+    'get-provider-policy',
+    'set-provider-policy',
+    'get-acquisition-policy',
+    'set-acquisition-policy'
+  ],
   shell: [
     'pick-video-file',
     'pick-image-file',
@@ -186,7 +202,8 @@ const PLATFORM_ONLY_COMMANDS = Object.freeze([
   'event-cast-device-lost',
   'event-cast-playback-state',
   'event-cast-time-update',
-  'retry-sync-channel'
+  'retry-sync-channel',
+  'event-acquisition-lifecycle'
 ])
 
 function stripNamespace(name) {

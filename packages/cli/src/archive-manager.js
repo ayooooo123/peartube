@@ -919,9 +919,9 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         publicationState: publish === false ? 'replicationPending' : undefined,
         // TMDB coordinates make the movie/TV identity durable on the canonical
         // video record (schema already supports these fields), not just on the
-        // relay-side job/feed previews. Provider-neutral ingest jobs pass exact
+        // relay-side job/feed previews. Provider acquisition jobs pass exact
         // coordinates directly; legacy archive jobs continue to derive the same
-        // fields from TMDB inputs.
+        // fields from classified metadata inputs.
         ...mediaCoordinates,
         ...poster
       }

@@ -17,13 +17,12 @@ async function loadProfileModule() {
   return import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}#${Math.random()}`)
 }
 
-test('bundled moderation profile is a versioned local descriptor with replaceable curator subscriptions', async () => {
+test('bundled moderation profile is local and carries no hardcoded curator authority', async () => {
   const profile = await loadProfileModule()
   assert.equal(profile.DEFAULT_MODERATION_PROFILE.version, 1)
   assert.equal(profile.DEFAULT_MODERATION_PROFILE.enabled, true)
   assert.ok(Array.isArray(profile.DEFAULT_MODERATION_PROFILE.curatorSubscriptions))
-  assert.ok(profile.DEFAULT_MODERATION_PROFILE.curatorSubscriptions.length > 0)
-  assert.match(profile.DEFAULT_MODERATION_PROFILE.curatorSubscriptions[0], /^[a-f0-9]{64}$/)
+  assert.deepEqual(profile.DEFAULT_MODERATION_PROFILE.curatorSubscriptions, [])
   assert.match(profile.DEFAULT_MODERATION_PROFILE.scope, /local/i)
   assert.equal(profile.DEFAULT_MODERATION_PROFILE.protocolAuthority, false)
 })

@@ -14,6 +14,7 @@ import {
   createMediaGraphRpc,
   createOperabilityRpc,
   createPlatformRpcBridge,
+  createProviderRpc,
   createPersonalRpc,
   createPublisherRootOperationRpc,
 } from './rpc.shared';
@@ -359,6 +360,8 @@ export const rpc = {
   ...createChannelCatalogRpc(ensureProtocolClient),
   // Typed media graph queries with bounded page presence.
   ...createMediaGraphRpc(ensureProtocolClient),
+  // Provider/acquisition facade shared byte-for-byte with mobile.
+  provider: createProviderRpc(ensureProtocolClient),
   // Bounded operability, recovery, storage-preview, and archive diagnostics
   ...createOperabilityRpc(ensureRPC),
   async provisionPublisherCatalog(request: { publisherId: string; genesisRootKey: Uint8Array }) {

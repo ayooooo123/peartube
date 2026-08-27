@@ -116,7 +116,7 @@ function prepareSocketPath (storagePath) {
 }
 
 function fakeRuntime () {
-  return {
+  const runtime = {
     ctx: { metaDb: null },
     api: {},
     identityManager: {},
@@ -126,6 +126,27 @@ function fakeRuntime () {
     async close () {},
     async getDiagnostics () { return {} }
   }
+  runtime.provider = {
+    async search ({ selector, limit, signal }) {
+      const candidates = await runtime.api.searchIndexCandidates?.(selector, { limit, signal }) || []
+      return { candidates, nextCursor: null }
+    },
+    async resolve () { throw new Error('not configured') },
+    async requestAcquisition () { throw new Error('not configured') },
+    async attachSourceGrant () { throw new Error('not configured') },
+    async getAcquisition () { return null },
+    async listAcquisitions () { return { items: [], cursor: null } },
+    async cancelAcquisition () { return null },
+    async getPublication () { return null },
+    async openStream () { throw new Error('not configured') },
+    async getStatus () { return { ready: true } },
+    async getPolicy () { return {} },
+    async setPolicy (value) { return value },
+    async getAcquisitionPolicy () { return {} },
+    async setAcquisitionPolicy ({ policy }) { return policy },
+    async migrateLegacyIngest () { return { migrated: 0, skipped: 0 } }
+  }
+  return runtime
 }
 
 // Enough of a Hyperbee for the stores a relay opens when its archive surface is
@@ -206,6 +227,17 @@ test('enabled companion rejects password-like shared secrets', (t) => {
     client: CLIENT,
     sharedSecret: 'password'
   }, { storagePath: '/var/lib/peartube' }), /64 lowercase hexadecimal characters/)
+})
+
+test('plaintext TCP companion transport is loopback-only', (t) => {
+  t.exception(() => resolveCompanionConfig({
+    enabled: true,
+    transport: 'tcp',
+    host: '0.0.0.0',
+    port: 8175,
+    client: CLIENT,
+    sharedSecret: SECRET
+  }, { storagePath: '/var/lib/peartube' }), /must bind to loopback/)
 })
 
 test('authenticated Unix status is bounded, unsigned is rejected, replay conflicts, and close removes the 0600 socket', async (t) => {
@@ -346,11 +378,11 @@ test('request deadlines abort delegated backend work before server close returns
   let sawAbort = false
   let backendSettled = false
   const service = {
-    searchIndexCandidates (selector, { signal } = {}) {
+    search ({ signal } = {}) {
       return new Promise((resolve) => {
         signal?.addEventListener('abort', () => {
           sawAbort = true
-          resolve([])
+          resolve({ candidates: [] })
         }, { once: true })
       }).finally(() => {
         backendSettled = true
@@ -707,16 +739,16 @@ test('authenticated search reaches the backend and returns URL-free candidates',
   const storagePath = tempDir(t)
   let selector = null
   const service = {
-    async searchIndexCandidates (value) {
+    async search ({ selector: value }) {
       selector = value
-      return [{
+      return { candidates: [{
         candidateRef: 'A'.repeat(43),
         work: { title: 'The Matrix', releaseYear: 1999 },
         publication: { publicationId: 'publication-1', publisherId: 'publisher-1' },
         rendition: { renditionId: 'rendition-1' },
         asset: { assetId: 'asset-1' },
         streamUrl: 'https://forbidden.invalid/stream'
-      }]
+      }] }
     }
   }
   const server = createCompanionServer({ service, config: udsConfig(storagePath), clock: () => NOW, logger })
@@ -808,14 +840,13 @@ test('authenticated routes return a deterministic bounded capability error when 
   await server.close()
 })
 
-test('authenticated policy control reaches the live service before ingest can become eligible', async (t) => {
+test('authenticated policy control reaches ProviderService', async (t) => {
   const storagePath = tempDir(t)
   const applied = []
   const service = {
-    canStageIngest: () => false,
-    async applyNetworkPolicy(policy) {
+    async setPolicy ({ policy }) {
       applied.push(structuredClone(policy))
-      return { ...policy, effectiveRole: 'contributor' }
+      return { policy: { ...policy, effectiveRole: 'contributor' } }
     }
   }
   const server = createCompanionServer({
@@ -825,7 +856,6 @@ test('authenticated policy control reaches the live service before ingest can be
     logger
   })
   const state = await server.start()
-  t.is(service.canStageIngest(), false, 'server startup alone never enables ingest')
   const path = '/api/v2/policy'
   const policy = {
     policyVersion: 2,

@@ -11,12 +11,13 @@ export const COMPANION_CONTRACT_LIMITS = Object.freeze({
   maxTitleBytes: 256,
   maxCursorBytes: 512,
   maxCandidates: 64,
+  maxAcquisitions: 64,
   defaultSearchLimit: 20,
+  defaultAcquisitionLimit: 20,
   maxJsonDepth: 16,
   maxJsonFields: 128,
   maxJsonStringBytes: 4096
 })
-
 const ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/
 const FIELD = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
@@ -25,7 +26,10 @@ const KIND = new Set(['movie', 'episode'])
 const CANONICAL_NAMESPACE = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/
 const SEARCH_FIELDS = new Set(['namespace', 'identifier', 'kind', 'season', 'episode', 'title', 'year', 'limit', 'cursor'])
 const OPEN_FIELDS = new Set(['candidateRef'])
-const INGEST_FIELDS = new Set(['idempotencyKey', 'request', 'spool', 'sourceCapability', 'sourceDescriptor'])
+const ACQUISITION_FIELDS = new Set(['idempotencyKey', 'request'])
+const SOURCE_GRANT_FIELDS = new Set(['grant'])
+const ACQUISITION_LIST_FIELDS = new Set(['cursor', 'limit', 'states'])
+const ACQUISITION_REQUEST_FIELDS = new Set(['schemaVersion', 'resolutionRef', 'publisherId', 'retentionClass', 'retentionUntil'])
 const POLICY_FIELDS = new Set([
   'policyVersion',
   'consentVersion',
@@ -37,7 +41,33 @@ const POLICY_FIELDS = new Set([
   'uploadPermission',
   'uploadCeilingBytes'
 ])
-const FORBIDDEN_INGEST_FIELD = /(?:url|uri|link|href|magnet|torrent|cookie|authorization|credential|secret|password|passkey|tracker|header)/i
+const ACQUISITION_POLICY_FIELDS = new Set([
+  'policyVersion',
+  'consentVersion',
+  'migrationRequired',
+  'enabled',
+  'acceptPublicRequests',
+  'requesterMode',
+  'allowedPublisherIds',
+  'allowedAdapterIds',
+  'maxQueuedJobs',
+  'maxConcurrentJobs',
+  'maxConcurrentPerRequester',
+  'maxRequestBytes',
+  'maxAcquireBytesPer24h',
+  'maxAcquireBytesPerSecond',
+  'maxStagingBytes',
+  'minFreeDiskBytes',
+  'maxJobRuntimeMs',
+  'sourceGrantTtlMs',
+  'publicRequestsPerMinute',
+  'maxAttempts',
+  'retryBaseMs',
+  'retryMaxMs'
+])
+const ACQUISITION_POLICY_UPDATE_FIELDS = new Set(['policy', 'expectedRevision', 'consent'])
+const ACQUISITION_CONSENT_FIELDS = new Set(['version', 'granted'])
+const FORBIDDEN_ACQUISITION_FIELD = /(?:url|uri|link|href|magnet|torrent|cookie|authorization|credential|secret|password|passkey|tracker|header|adapter|source(?:capability|descriptor|grant|token|url|path)|(?:local|file)path)/i
 
 function byteLength (value) {
   return b4a.byteLength(String(value))
@@ -302,55 +332,165 @@ export function decodeOpenStreamBody (body) {
   return { candidateRef: boundedString(value.candidateRef, 'candidateRef', 64, { pattern: CANDIDATE_REF }) }
 }
 
-function inspectIngestValue (value, depth = 0) {
-  if (depth > COMPANION_CONTRACT_LIMITS.maxJsonDepth) throw new CompanionContractError(400, 'INVALID_BODY', 'Ingest request exceeds its depth bound')
-  if (typeof value === 'string') {
-    if (byteLength(value) > COMPANION_CONTRACT_LIMITS.maxJsonStringBytes || /^(?:(?:https?|magnet|ipfs|pear|blob|data|file|ftp|rtsp):|\/\/)/i.test(value)) {
-      throw new CompanionContractError(400, 'INVALID_FIELD', 'Ingest request contains prohibited data')
-    }
-    return
+function inspectBoundedValue (value, {
+  label,
+  prohibitPrivateSource = false
+}, depth = 0, state = { fields: 0, seen: new Set() }) {
+  if (depth > COMPANION_CONTRACT_LIMITS.maxJsonDepth) {
+    throw new CompanionContractError(400, 'INVALID_BODY', `${label} exceeds its depth bound`)
   }
-  if (Array.isArray(value)) {
-    for (const child of value) inspectIngestValue(child, depth + 1)
+  if (typeof value === 'string') {
+    if (byteLength(value) > COMPANION_CONTRACT_LIMITS.maxJsonStringBytes) {
+      throw new CompanionContractError(400, 'INVALID_FIELD', `${label} contains an oversized string`)
+    }
+    if (prohibitPrivateSource && /(?:(?:https?|magnet|ipfs|pear|blob|data|file|ftp|rtsp):(?:\/\/)?[^\s]|\/\/[^\s])/i.test(value)) {
+      throw new CompanionContractError(400, 'INVALID_FIELD', `${label} contains prohibited source material`)
+    }
     return
   }
   if (!value || typeof value !== 'object') return
-  for (const [field, child] of Object.entries(value)) {
-    const isAllowedField = field === 'publicTrackerIndependent' || field === 'torrentId' || field === 'webdavUrl' || field === 'webdavPath'
-    if (!isAllowedField && FORBIDDEN_INGEST_FIELD.test(field)) throw new CompanionContractError(400, 'UNKNOWN_FIELD', 'Ingest request contains a prohibited field', boundedFieldName(field))
-    inspectIngestValue(child, depth + 1)
+  if (state.seen.has(value)) throw new CompanionContractError(400, 'INVALID_BODY', `${label} contains a cycle`)
+  state.seen.add(value)
+  try {
+    const entries = Array.isArray(value)
+      ? value.map((child, index) => [String(index), child])
+      : Object.entries(value)
+    for (const [field, child] of entries) {
+      if (++state.fields > COMPANION_CONTRACT_LIMITS.maxJsonFields) {
+        throw new CompanionContractError(400, 'INVALID_BODY', `${label} exceeds its field bound`)
+      }
+      if (!Array.isArray(value) && prohibitPrivateSource && FORBIDDEN_ACQUISITION_FIELD.test(field)) {
+        throw new CompanionContractError(400, 'UNKNOWN_FIELD', `${label} contains a prohibited field`, boundedFieldName(field))
+      }
+      inspectBoundedValue(child, { label, prohibitPrivateSource }, depth + 1, state)
+    }
+  } finally {
+    state.seen.delete(value)
   }
 }
 
-export function decodeIngestJobBody (body) {
-  const value = onlyFields(decodeJsonBody(body), INGEST_FIELDS, 'ingest-job body')
+export function decodeAcquisitionBody (body) {
+  const value = onlyFields(decodeJsonBody(body), ACQUISITION_FIELDS, 'acquisition body')
   const idempotencyKey = boundedString(value.idempotencyKey, 'idempotencyKey', 128, { pattern: ID })
-  if (!value.request || typeof value.request !== 'object' || Array.isArray(value.request)) {
-    throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid request', 'request')
+  const request = onlyFields(value.request, ACQUISITION_REQUEST_FIELDS, 'acquisition request')
+  if (request.schemaVersion !== 1) {
+    throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid schemaVersion', 'schemaVersion')
   }
-  inspectIngestValue(value.request)
-  const result = { idempotencyKey, request: value.request }
-  if (value.spool !== undefined) {
-    if (value.spool !== null && (!value.spool || typeof value.spool !== 'object' || Array.isArray(value.spool))) {
-      throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid spool', 'spool')
+  const result = {
+    schemaVersion: 1,
+    resolutionRef: boundedString(request.resolutionRef, 'resolutionRef', COMPANION_CONTRACT_LIMITS.maxIdBytes, { pattern: ID }),
+    publisherId: boundedString(request.publisherId, 'publisherId', COMPANION_CONTRACT_LIMITS.maxIdBytes, { pattern: ID }),
+    retentionClass: boundedString(request.retentionClass, 'retentionClass', 64, { pattern: ID })
+  }
+  if (request.retentionUntil !== undefined) {
+    if (!Number.isSafeInteger(request.retentionUntil) || request.retentionUntil < 0) {
+      throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid retentionUntil', 'retentionUntil')
     }
-    inspectIngestValue(value.spool)
-    result.spool = value.spool
+    result.retentionUntil = request.retentionUntil
   }
-  if (value.sourceCapability !== undefined) {
-    result.sourceCapability = boundedString(value.sourceCapability, 'sourceCapability', 256, { pattern: /^[A-Za-z0-9._~-]+$/ })
-  }
-  if (value.sourceDescriptor !== undefined) {
-    if (value.sourceDescriptor !== null && (!value.sourceDescriptor || typeof value.sourceDescriptor !== 'object' || Array.isArray(value.sourceDescriptor))) {
-      throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid sourceDescriptor', 'sourceDescriptor')
-    }
-    if (value.sourceDescriptor) {
-      inspectIngestValue(value.sourceDescriptor)
-      result.sourceDescriptor = value.sourceDescriptor
-    }
-  }
-  return result
+  return { idempotencyKey, request: result }
 }
+
+export function decodeSourceGrantBody (body) {
+  const value = onlyFields(decodeJsonBody(body), SOURCE_GRANT_FIELDS, 'source-grant body')
+  if (!value.grant || typeof value.grant !== 'object' || Array.isArray(value.grant)) {
+    throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid grant', 'grant')
+  }
+  inspectBoundedValue(value.grant, { label: 'Source grant' })
+  return { grant: value.grant }
+}
+
+export function decodeAcquisitionListQuery (values) {
+  if (!values || typeof values.getAll !== 'function') {
+    throw new CompanionContractError(400, 'INVALID_QUERY', 'Invalid acquisition query')
+  }
+  for (const [field] of values) {
+    if (!ACQUISITION_LIST_FIELDS.has(field)) {
+      throw new CompanionContractError(400, 'UNKNOWN_FIELD', 'Unknown acquisition field', boundedFieldName(field))
+    }
+  }
+  const limitText = optionalQueryValue(values, 'limit')
+  const cursorText = optionalQueryValue(values, 'cursor')
+  const stateText = optionalQueryValue(values, 'states')
+  const limit = limitText === null
+    ? COMPANION_CONTRACT_LIMITS.defaultAcquisitionLimit
+    : positiveIntegerText(limitText, 'limit', COMPANION_CONTRACT_LIMITS.maxAcquisitions)
+  const cursor = cursorText === null
+    ? null
+    : boundedString(cursorText, 'cursor', COMPANION_CONTRACT_LIMITS.maxCursorBytes, { pattern: /^[A-Za-z0-9._~-]+$/ })
+  let states = null
+  if (stateText !== null) {
+    states = stateText.split(',')
+    if (states.length === 0 || states.length > 7 || new Set(states).size !== states.length ||
+        states.some(state => !['queued', 'acquiring', 'verifying', 'publishing', 'completed', 'failed', 'cancelled'].includes(state))) {
+      throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid acquisition states', 'states')
+    }
+  }
+  return { cursor, limit, states }
+}
+export function decodeAcquisitionPolicyBody (body) {
+  const update = onlyFields(decodeJsonBody(body), ACQUISITION_POLICY_UPDATE_FIELDS, 'acquisition-policy update')
+  for (const field of ACQUISITION_POLICY_UPDATE_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(update, field)) {
+      throw new CompanionContractError(400, 'MISSING_FIELD', `Missing ${field}`, field)
+    }
+  }
+  const value = onlyFields(update.policy, ACQUISITION_POLICY_FIELDS, 'acquisition-policy body')
+  for (const field of ACQUISITION_POLICY_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+      throw new CompanionContractError(400, 'MISSING_FIELD', `Missing ${field}`, field)
+    }
+  }
+  if (value.policyVersion !== 1) throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid policyVersion', 'policyVersion')
+  if (value.consentVersion !== 1) throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid consentVersion', 'consentVersion')
+  for (const field of ['migrationRequired', 'enabled', 'acceptPublicRequests']) {
+    if (typeof value[field] !== 'boolean') {
+      throw new CompanionContractError(400, 'INVALID_FIELD', `Invalid ${field}`, field)
+    }
+  }
+  if (!['local-only', 'allowlisted', 'public'].includes(value.requesterMode)) {
+    throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid requesterMode', 'requesterMode')
+  }
+  for (const field of ['allowedPublisherIds', 'allowedAdapterIds']) {
+    if (!Array.isArray(value[field]) || value[field].length > 64) {
+      throw new CompanionContractError(400, 'INVALID_FIELD', `Invalid ${field}`, field)
+    }
+    value[field] = value[field].map((entry, index) => decodeId(entry, `${field}.${index}`))
+  }
+  for (const field of [
+    'maxQueuedJobs',
+    'maxConcurrentJobs',
+    'maxConcurrentPerRequester',
+    'maxRequestBytes',
+    'maxAcquireBytesPer24h',
+    'maxAcquireBytesPerSecond',
+    'maxStagingBytes',
+    'minFreeDiskBytes',
+    'maxJobRuntimeMs',
+    'sourceGrantTtlMs',
+    'publicRequestsPerMinute',
+    'maxAttempts',
+    'retryBaseMs',
+    'retryMaxMs'
+  ]) {
+    if (!Number.isSafeInteger(value[field]) || value[field] < 0) {
+      throw new CompanionContractError(400, 'INVALID_FIELD', `Invalid ${field}`, field)
+    }
+  }
+  if (!Number.isSafeInteger(update.expectedRevision) || update.expectedRevision < 0) {
+    throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid expectedRevision', 'expectedRevision')
+  }
+  const consent = onlyFields(update.consent, ACQUISITION_CONSENT_FIELDS, 'acquisition consent')
+  if (consent.version !== 1 || consent.granted !== true) {
+    throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid acquisition consent', 'consent')
+  }
+  return Object.freeze({
+    policy: Object.freeze({ ...value }),
+    expectedRevision: update.expectedRevision,
+    consent: Object.freeze({ version: 1, granted: true })
+  })
+}
+
 
 export function decodePolicyControlBody (body) {
   const value = onlyFields(decodeJsonBody(body), POLICY_FIELDS, 'network-policy body')

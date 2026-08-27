@@ -1,4 +1,13 @@
 import b4a from 'b4a'
+import { createRenditionDescriptor } from '../assets/rendition.js'
+import { encodeCanonical } from '../publisher/canonical.js'
+import {
+  createApplicationEnvelope,
+  decodeApplicationEnvelope,
+  encodeApplicationEnvelope,
+  normalizeFixed,
+  verifyApplicationEnvelope,
+} from '../records/application-envelope.js'
 import {
   PROTOCOL_ERROR_CODES,
   PROTOCOL_MAJOR,
@@ -16,6 +25,16 @@ export const MAX_ASSET_BLOCKS_PER_REQUEST = 16
 export const MAX_ASSET_BLOCK_BYTES = 256 * 1024
 export const MAX_ASSET_PROOF_BYTES = 32 * 1024
 export const MAX_ASSET_TRANSFER_ID = 0xffffffffffffffffn
+export const MAX_ACQUISITION_CONTROL_BODY_BYTES = 48 * 1024
+export const MAX_ACQUISITION_CONTROL_ENVELOPE_BYTES = 50 * 1024
+export const MAX_ACQUISITION_SOURCE_REF_BYTES = 4 * 1024
+export const MAX_ACQUISITION_FORMATS = 8
+export const MAX_ACQUISITION_ASSETS = 8
+export const MAX_ACQUISITION_ASSET_BYTES = 256 * 1024 * 1024 * 1024
+export const MAX_ACQUISITION_REQUEST_TTL_MS = 5 * 60_000
+export const MAX_ACQUISITION_OFFER_TTL_MS = 2 * 60_000
+export const MAX_ACQUISITION_ASSIGNMENT_TTL_MS = 24 * 60 * 60_000
+export const MAX_ACQUISITION_CLOCK_SKEW_MS = 30_000
 
 const PEER_FRAME_HEADER_BYTES = 4 + 28
 const ASSET_ID_BYTES = 32
@@ -54,6 +73,8 @@ const PURPOSE_CODES = new Map([
   ['archive-discovery', 6],
   ['index', 7],
   ['moderation', 8],
+  ['acquisition-discovery', 9],
+  ['acquisition', 10],
 ])
 const PURPOSE_NAMES = new Map(Array.from(PURPOSE_CODES, ([name, code]) => [code, name]))
 
@@ -91,6 +112,16 @@ export const PEER_FRAME_TYPE_NAMES = Object.freeze(Object.fromEntries([
   'index-query-page',
   'index-query-error',
   'index-query-cancel',
+  'acquisition-request',
+  'acquisition-offer',
+  'acquisition-assignment',
+  'acquisition-progress',
+  'acquisition-result',
+  'acquisition-cancel',
+  'acquisition-block-request',
+  'acquisition-block-proof',
+  'acquisition-block-chunk',
+  'acquisition-block-unavailable',
 ].map(type => [peerFrameTypeCode(type), type])))
 const TYPE_NAMES = new Map()
 
@@ -439,6 +470,442 @@ export function decodeAssetBlockError(payload, options = {}) {
   if (!code) throw new Error('asset block error code is invalid')
   return { assetId, transferId, ...range, code }
 }
+
+export const ACQUISITION_RECORD_TYPES = Object.freeze({
+  request: 'peartube.acquisition.request.v1',
+  offer: 'peartube.acquisition.offer.v1',
+  assignment: 'peartube.acquisition.assignment.v1',
+  progress: 'peartube.acquisition.progress.v1',
+  result: 'peartube.acquisition.result.v1',
+  cancellation: 'peartube.acquisition.cancellation.v1',
+})
+
+export const ACQUISITION_PROGRESS_ERROR_CODES = Object.freeze([
+  'ACQUISITION_UNSUPPORTED_SOURCE',
+  'ACQUISITION_POLICY_REJECTED',
+  'ACQUISITION_BUDGET_EXCEEDED',
+  'ACQUISITION_SOURCE_CHANGED',
+  'ACQUISITION_DEADLINE_EXCEEDED',
+  'ACQUISITION_INTERNAL',
+])
+
+export const ACQUISITION_CANCELLATION_REASONS = Object.freeze([
+  'requester-cancelled',
+  'worker-cancelled',
+  'superseded',
+  'policy-changed',
+  'budget-exceeded',
+  'deadline-exceeded',
+  'source-changed',
+  'shutdown',
+])
+
+const ACQUISITION_PROGRESS_PHASES = new Set(['acquiring', 'verifying', 'result-ready', 'failed'])
+const ACQUISITION_PROGRESS_ERRORS = new Set(ACQUISITION_PROGRESS_ERROR_CODES)
+const ACQUISITION_CANCEL_REASONS = new Set(ACQUISITION_CANCELLATION_REASONS)
+const REQUESTER_CANCEL_REASONS = new Set([
+  'requester-cancelled',
+  'superseded',
+  'policy-changed',
+  'budget-exceeded',
+  'deadline-exceeded',
+  'shutdown',
+])
+const WORKER_CANCEL_REASONS = new Set([
+  'worker-cancelled',
+  'policy-changed',
+  'budget-exceeded',
+  'deadline-exceeded',
+  'source-changed',
+  'shutdown',
+])
+const MAX_ACQUISITION_NETWORK_BYTES = MAX_ACQUISITION_ASSET_BYTES * MAX_ACQUISITION_ASSETS
+const ACQUISITION_SOURCE_REF = /^[A-Za-z0-9_-]{43}$/
+const ACQUISITION_BODY_NORMALIZERS = new Map()
+
+function acquisitionFail(message) {
+  const error = new Error(message)
+  error.code = 'ACQUISITION_FRAME_INVALID'
+  throw error
+}
+
+function exactObject(value, fields, name) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) acquisitionFail(`${name} must be an object`)
+  const keys = Object.keys(value).sort()
+  const expected = [...fields].sort()
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+    acquisitionFail(`${name} fields are invalid`)
+  }
+  return value
+}
+
+function acquisitionInt(value, name, minimum = 0, maximum = Number.MAX_SAFE_INTEGER) {
+  const next = Number(value)
+  if (!Number.isSafeInteger(next) || next < minimum || next > maximum) {
+    acquisitionFail(`${name} must be a bounded safe integer`)
+  }
+  return next
+}
+function acquisitionU32(value, name, minimum = 0) {
+  return acquisitionInt(value, name, minimum, 0xffffffff)
+}
+function acquisitionHex32(value, name) {
+  try {
+    return b4a.toString(normalizeFixed(value, 32, name), 'hex')
+  } catch {
+    acquisitionFail(`${name} must be 32-byte lowercase hex`)
+  }
+}
+
+function acquisitionString(value, name, maximum, { allowEmpty = false } = {}) {
+  if (typeof value !== 'string' || (!allowEmpty && value.length === 0) || value.includes('\0')) {
+    acquisitionFail(`${name} must be a bounded string`)
+  }
+  if (b4a.byteLength(value) > maximum) acquisitionFail(`${name} exceeds maximum bytes`)
+  return value
+}
+
+function normalizeAcquisitionBudget(value, name = 'budget') {
+  exactObject(value, ['maxSourceBytes', 'maxOutputBytes', 'maxNetworkBytes', 'maxWallClockMs'], name)
+  return {
+    maxSourceBytes: acquisitionInt(value.maxSourceBytes, `${name}.maxSourceBytes`, 1, MAX_ACQUISITION_NETWORK_BYTES),
+    maxOutputBytes: acquisitionInt(value.maxOutputBytes, `${name}.maxOutputBytes`, 1, MAX_ACQUISITION_NETWORK_BYTES),
+    maxNetworkBytes: acquisitionInt(value.maxNetworkBytes, `${name}.maxNetworkBytes`, 1, MAX_ACQUISITION_NETWORK_BYTES),
+    maxWallClockMs: acquisitionInt(value.maxWallClockMs, `${name}.maxWallClockMs`, 1, MAX_ACQUISITION_ASSIGNMENT_TTL_MS),
+  }
+}
+
+function normalizeAcquisitionOutput(value) {
+  exactObject(value, ['purpose', 'formats'], 'output')
+  if (!Array.isArray(value.formats) || value.formats.length < 1 || value.formats.length > MAX_ACQUISITION_FORMATS) {
+    acquisitionFail('output.formats must be a bounded nonempty array')
+  }
+  const formats = value.formats.map((format, index) =>
+    acquisitionString(format, `output.formats[${index}]`, 64))
+  if (new Set(formats).size !== formats.length) acquisitionFail('output.formats must be distinct')
+  const sorted = [...formats].sort()
+  if (formats.some((format, index) => format !== sorted[index])) acquisitionFail('output.formats must be sorted')
+  return {
+    purpose: acquisitionString(value.purpose, 'output.purpose', 64),
+    formats,
+  }
+}
+
+function normalizeAcquisitionRequestBody(value) {
+  exactObject(value, [
+    'version', 'requesterId', 'requesterTransportKey', 'publisherId', 'sourceRef',
+    'publicationIntentDigest', 'output', 'budget', 'resultHoldUntil',
+  ], 'acquisition request')
+  if (value.version !== 1) acquisitionFail('unsupported acquisition request version')
+  const sourceRef = acquisitionString(value.sourceRef, 'sourceRef', MAX_ACQUISITION_SOURCE_REF_BYTES)
+  if (!ACQUISITION_SOURCE_REF.test(sourceRef)) acquisitionFail('sourceRef must be an opaque public reference')
+  return {
+    version: 1,
+    requesterId: acquisitionHex32(value.requesterId, 'requesterId'),
+    requesterTransportKey: acquisitionHex32(value.requesterTransportKey, 'requesterTransportKey'),
+    publisherId: acquisitionHex32(value.publisherId, 'publisherId'),
+    sourceRef,
+    publicationIntentDigest: acquisitionHex32(value.publicationIntentDigest, 'publicationIntentDigest'),
+    output: normalizeAcquisitionOutput(value.output),
+    budget: normalizeAcquisitionBudget(value.budget),
+    resultHoldUntil: acquisitionInt(value.resultHoldUntil, 'resultHoldUntil', 1),
+  }
+}
+
+function normalizeAcquisitionOfferBody(value) {
+  exactObject(value, [
+    'version', 'requestId', 'acquirerId', 'acquirerTransportKey', 'policyEpoch',
+    'acceptedBudget', 'availableUntil', 'resultHoldUntil', 'sourceCapabilityDigest',
+  ], 'acquisition offer')
+  if (value.version !== 1) acquisitionFail('unsupported acquisition offer version')
+  return {
+    version: 1,
+    requestId: acquisitionHex32(value.requestId, 'requestId'),
+    acquirerId: acquisitionHex32(value.acquirerId, 'acquirerId'),
+    acquirerTransportKey: acquisitionHex32(value.acquirerTransportKey, 'acquirerTransportKey'),
+    policyEpoch: acquisitionInt(value.policyEpoch, 'policyEpoch'),
+    acceptedBudget: normalizeAcquisitionBudget(value.acceptedBudget, 'acceptedBudget'),
+    availableUntil: acquisitionInt(value.availableUntil, 'availableUntil', 1),
+    resultHoldUntil: acquisitionInt(value.resultHoldUntil, 'resultHoldUntil', 1),
+    sourceCapabilityDigest: acquisitionHex32(value.sourceCapabilityDigest, 'sourceCapabilityDigest'),
+  }
+}
+
+function normalizeAcquisitionAssignmentBody(value) {
+  exactObject(value, [
+    'version', 'requestId', 'offerId', 'requesterId', 'requesterTransportKey',
+    'acquirerId', 'acquirerTransportKey', 'publisherId', 'publicationIntentDigest',
+    'budget', 'deadline', 'resultHoldUntil',
+  ], 'acquisition assignment')
+  if (value.version !== 1) acquisitionFail('unsupported acquisition assignment version')
+  const deadline = acquisitionInt(value.deadline, 'deadline', 1)
+  const resultHoldUntil = acquisitionInt(value.resultHoldUntil, 'resultHoldUntil', 1)
+  if (resultHoldUntil <= deadline) acquisitionFail('resultHoldUntil must be after deadline')
+  return {
+    version: 1,
+    requestId: acquisitionHex32(value.requestId, 'requestId'),
+    offerId: acquisitionHex32(value.offerId, 'offerId'),
+    requesterId: acquisitionHex32(value.requesterId, 'requesterId'),
+    requesterTransportKey: acquisitionHex32(value.requesterTransportKey, 'requesterTransportKey'),
+    acquirerId: acquisitionHex32(value.acquirerId, 'acquirerId'),
+    acquirerTransportKey: acquisitionHex32(value.acquirerTransportKey, 'acquirerTransportKey'),
+    publisherId: acquisitionHex32(value.publisherId, 'publisherId'),
+    publicationIntentDigest: acquisitionHex32(value.publicationIntentDigest, 'publicationIntentDigest'),
+    budget: normalizeAcquisitionBudget(value.budget),
+    deadline,
+    resultHoldUntil,
+  }
+}
+
+function normalizeAcquisitionProgressBody(value) {
+  exactObject(value, [
+    'version', 'assignmentId', 'acquirerId', 'sequence', 'phase', 'sourceBytes',
+    'outputBytes', 'verifiedBlocks', 'totalBlocks', 'observedAt', 'errorCode',
+  ], 'acquisition progress')
+  if (value.version !== 1) acquisitionFail('unsupported acquisition progress version')
+  const phase = String(value.phase || '')
+  if (!ACQUISITION_PROGRESS_PHASES.has(phase)) acquisitionFail('acquisition progress phase is invalid')
+  const errorCode = value.errorCode == null ? null : String(value.errorCode)
+  if ((phase === 'failed') !== (errorCode !== null) ||
+      (errorCode !== null && !ACQUISITION_PROGRESS_ERRORS.has(errorCode))) {
+    acquisitionFail('acquisition progress errorCode is invalid')
+  }
+  const verifiedBlocks = acquisitionInt(value.verifiedBlocks, 'verifiedBlocks')
+  const totalBlocks = acquisitionInt(value.totalBlocks, 'totalBlocks')
+  if (verifiedBlocks > totalBlocks) acquisitionFail('verifiedBlocks exceeds totalBlocks')
+  return {
+    version: 1,
+    assignmentId: acquisitionHex32(value.assignmentId, 'assignmentId'),
+    acquirerId: acquisitionHex32(value.acquirerId, 'acquirerId'),
+    sequence: acquisitionU32(value.sequence, 'sequence', 1),
+    phase,
+    sourceBytes: acquisitionInt(value.sourceBytes, 'sourceBytes'),
+    outputBytes: acquisitionInt(value.outputBytes, 'outputBytes'),
+    verifiedBlocks,
+    totalBlocks,
+    observedAt: acquisitionInt(value.observedAt, 'observedAt', 1),
+    errorCode,
+  }
+}
+
+function normalizeAcquisitionSourceIdentity(value) {
+  exactObject(value, ['kind', 'value'], 'sourceIdentity')
+  if (value.kind === 'sha256') {
+    return { kind: value.kind, value: acquisitionHex32(value.value, 'sourceIdentity.value') }
+  }
+  if (value.kind === 'etag') {
+    return { kind: value.kind, value: acquisitionHex32(value.value, 'sourceIdentity.value') }
+  }
+  acquisitionFail('sourceIdentity.kind is invalid')
+}
+
+function normalizeAcquisitionAsset(value, index) {
+  exactObject(value, ['purpose', 'format', 'renditionId', 'core'], `assets[${index}]`)
+  const purpose = acquisitionString(value.purpose, `assets[${index}].purpose`, 64)
+  const format = acquisitionString(value.format, `assets[${index}].format`, 64)
+  const renditionId = acquisitionHex32(value.renditionId, `assets[${index}].renditionId`)
+  exactObject(value.core, ['kind', 'key', 'assetId', 'treeHash', 'length', 'byteLength', 'blockSize'], `assets[${index}].core`)
+  const core = {
+    kind: value.core.kind,
+    key: acquisitionHex32(value.core.key, `assets[${index}].core.key`),
+    assetId: acquisitionHex32(value.core.assetId, `assets[${index}].core.assetId`),
+    treeHash: acquisitionHex32(value.core.treeHash, `assets[${index}].core.treeHash`),
+    length: acquisitionInt(value.core.length, `assets[${index}].core.length`, 1),
+    byteLength: acquisitionInt(value.core.byteLength, `assets[${index}].core.byteLength`, 1, MAX_ACQUISITION_ASSET_BYTES),
+    blockSize: acquisitionInt(value.core.blockSize, `assets[${index}].core.blockSize`, 1),
+  }
+  let reconstructed
+  try {
+    reconstructed = createRenditionDescriptor({ purpose, format, core })
+  } catch {
+    acquisitionFail(`assets[${index}] static core identity is invalid`)
+  }
+  if (reconstructed.renditionId !== renditionId) acquisitionFail(`assets[${index}].renditionId mismatch`)
+  return { purpose, format, renditionId, core: reconstructed.core }
+}
+
+function normalizeAcquisitionResultBody(value) {
+  exactObject(value, [
+    'version', 'requestId', 'offerId', 'assignmentId', 'acquirerId',
+    'publicationIntentDigest', 'sourceIdentity', 'assets', 'acquiredBytes',
+    'completedAt', 'availabilityUntil',
+  ], 'acquisition result')
+  if (value.version !== 1) acquisitionFail('unsupported acquisition result version')
+  if (!Array.isArray(value.assets) || value.assets.length < 1 || value.assets.length > MAX_ACQUISITION_ASSETS) {
+    acquisitionFail('acquisition result assets must be a bounded nonempty array')
+  }
+  const assets = value.assets.map(normalizeAcquisitionAsset)
+  const acquiredBytes = acquisitionInt(value.acquiredBytes, 'acquiredBytes', 1, MAX_ACQUISITION_NETWORK_BYTES)
+  const total = assets.reduce((sum, asset) => sum + asset.core.byteLength, 0)
+  if (!Number.isSafeInteger(total) || total !== acquiredBytes) acquisitionFail('acquiredBytes must equal asset bytes')
+  const completedAt = acquisitionInt(value.completedAt, 'completedAt', 1)
+  const availabilityUntil = acquisitionInt(value.availabilityUntil, 'availabilityUntil', 1)
+  if (availabilityUntil <= completedAt) acquisitionFail('availabilityUntil must be after completedAt')
+  return {
+    version: 1,
+    requestId: acquisitionHex32(value.requestId, 'requestId'),
+    offerId: acquisitionHex32(value.offerId, 'offerId'),
+    assignmentId: acquisitionHex32(value.assignmentId, 'assignmentId'),
+    acquirerId: acquisitionHex32(value.acquirerId, 'acquirerId'),
+    publicationIntentDigest: acquisitionHex32(value.publicationIntentDigest, 'publicationIntentDigest'),
+    sourceIdentity: normalizeAcquisitionSourceIdentity(value.sourceIdentity),
+    assets,
+    acquiredBytes,
+    completedAt,
+    availabilityUntil,
+  }
+}
+
+function normalizeAcquisitionCancellationBody(value) {
+  exactObject(value, [
+    'version', 'requestId', 'assignmentId', 'actorId', 'reasonCode', 'lastProgressSequence',
+  ], 'acquisition cancellation')
+  if (value.version !== 1) acquisitionFail('unsupported acquisition cancellation version')
+  const reasonCode = String(value.reasonCode || '')
+  if (!ACQUISITION_CANCEL_REASONS.has(reasonCode)) acquisitionFail('acquisition cancellation reasonCode is invalid')
+  return {
+    version: 1,
+    requestId: acquisitionHex32(value.requestId, 'requestId'),
+    assignmentId: value.assignmentId == null ? null : acquisitionHex32(value.assignmentId, 'assignmentId'),
+    actorId: acquisitionHex32(value.actorId, 'actorId'),
+    reasonCode,
+    lastProgressSequence: acquisitionU32(value.lastProgressSequence, 'lastProgressSequence'),
+  }
+}
+
+ACQUISITION_BODY_NORMALIZERS.set('request', normalizeAcquisitionRequestBody)
+ACQUISITION_BODY_NORMALIZERS.set('offer', normalizeAcquisitionOfferBody)
+ACQUISITION_BODY_NORMALIZERS.set('assignment', normalizeAcquisitionAssignmentBody)
+ACQUISITION_BODY_NORMALIZERS.set('progress', normalizeAcquisitionProgressBody)
+ACQUISITION_BODY_NORMALIZERS.set('result', normalizeAcquisitionResultBody)
+ACQUISITION_BODY_NORMALIZERS.set('cancellation', normalizeAcquisitionCancellationBody)
+
+function acquisitionSignerFor(kind, body) {
+  if (kind === 'request' || kind === 'assignment') return body.requesterId
+  if (kind === 'offer' || kind === 'progress' || kind === 'result') return body.acquirerId
+  return body.actorId
+}
+
+function validateAcquisitionEnvelopeTimes(kind, body, envelope) {
+  if (envelope.issuedAt < 1) acquisitionFail('acquisition envelope issuedAt must be positive')
+  if (!envelope.nonce) acquisitionFail('acquisition envelope nonce is required')
+  if (kind === 'request') {
+    if (envelope.expiresAt <= envelope.issuedAt ||
+        envelope.expiresAt > envelope.issuedAt + MAX_ACQUISITION_REQUEST_TTL_MS) {
+      acquisitionFail('acquisition request expiry is invalid')
+    }
+    if (body.resultHoldUntil <= envelope.expiresAt) acquisitionFail('resultHoldUntil must be after request expiry')
+  } else if (kind === 'offer') {
+    if (envelope.expiresAt !== body.availableUntil ||
+        envelope.expiresAt <= envelope.issuedAt ||
+        envelope.expiresAt > envelope.issuedAt + MAX_ACQUISITION_OFFER_TTL_MS) {
+      acquisitionFail('acquisition offer expiry is invalid')
+    }
+    if (body.resultHoldUntil <= envelope.expiresAt) acquisitionFail('offer resultHoldUntil must be after offer expiry')
+  } else if (kind === 'assignment') {
+    if (envelope.expiresAt !== body.deadline ||
+        envelope.expiresAt <= envelope.issuedAt ||
+        envelope.expiresAt > envelope.issuedAt + MAX_ACQUISITION_ASSIGNMENT_TTL_MS) {
+      acquisitionFail('acquisition assignment deadline is invalid')
+    }
+  } else if (kind === 'result') {
+    if (envelope.expiresAt !== body.availabilityUntil) acquisitionFail('acquisition result expiry is invalid')
+  } else if (envelope.expiresAt < envelope.issuedAt) {
+    acquisitionFail('acquisition envelope expiry is invalid')
+  }
+}
+
+function encodeSignedAcquisitionControl(kind, input = {}) {
+  const normalize = ACQUISITION_BODY_NORMALIZERS.get(kind)
+  if (!normalize) acquisitionFail('unknown acquisition control kind')
+  const body = normalize(input.body)
+  const encodedBody = encodeCanonical(body)
+  if (encodedBody.byteLength > MAX_ACQUISITION_CONTROL_BODY_BYTES) acquisitionFail('acquisition control body exceeds maximum bytes')
+  const envelope = createApplicationEnvelope({
+    recordType: ACQUISITION_RECORD_TYPES[kind],
+    body: encodedBody,
+    keyPair: input.keyPair,
+    nonce: input.nonce,
+    issuedAt: input.issuedAt,
+    expiresAt: input.expiresAt,
+  })
+  const signer = acquisitionHex32(envelope.signer, 'signer')
+  if (signer !== acquisitionSignerFor(kind, body)) acquisitionFail('acquisition signer does not match body identity')
+  validateAcquisitionEnvelopeTimes(kind, body, envelope)
+  const encoded = encodeApplicationEnvelope(envelope, { maxBodyBytes: MAX_ACQUISITION_CONTROL_BODY_BYTES })
+  if (encoded.byteLength > MAX_ACQUISITION_CONTROL_ENVELOPE_BYTES) acquisitionFail('acquisition control envelope exceeds maximum bytes')
+  return encoded
+}
+
+async function decodeSignedAcquisitionControl(kind, payload, options = {}) {
+  const encoded = assertBuffer(payload, 'acquisition control envelope')
+  if (encoded.byteLength > MAX_ACQUISITION_CONTROL_ENVELOPE_BYTES) acquisitionFail('acquisition control envelope exceeds maximum bytes')
+  let envelope
+  try {
+    envelope = decodeApplicationEnvelope(encoded, { maxBodyBytes: MAX_ACQUISITION_CONTROL_BODY_BYTES })
+    const canonicalEnvelope = encodeApplicationEnvelope(envelope, { maxBodyBytes: MAX_ACQUISITION_CONTROL_BODY_BYTES })
+    if (!b4a.equals(canonicalEnvelope, encoded)) acquisitionFail('acquisition control envelope length is invalid')
+  } catch (error) {
+    if (error?.code === 'ACQUISITION_FRAME_INVALID') throw error
+    acquisitionFail('acquisition control envelope buffer is invalid')
+  }
+  let raw
+  try {
+    raw = JSON.parse(b4a.toString(envelope.body))
+  } catch {
+    acquisitionFail('acquisition control body is not JSON')
+  }
+  const body = ACQUISITION_BODY_NORMALIZERS.get(kind)(raw)
+  const canonical = encodeCanonical(body)
+  if (!b4a.equals(canonical, envelope.body)) acquisitionFail('acquisition control body is not canonical')
+  validateAcquisitionEnvelopeTimes(kind, body, envelope)
+  const signer = acquisitionHex32(envelope.signer, 'signer')
+  if (signer !== acquisitionSignerFor(kind, body)) acquisitionFail('acquisition signer does not match body identity')
+  const verified = await verifyApplicationEnvelope(envelope, {
+    recordType: ACQUISITION_RECORD_TYPES[kind],
+    allowedSigners: [envelope.signer],
+    requireNonce: true,
+    now: options.now,
+    maxClockSkewMs: MAX_ACQUISITION_CLOCK_SKEW_MS,
+    maxBodyBytes: MAX_ACQUISITION_CONTROL_BODY_BYTES,
+  })
+  if (!verified) acquisitionFail('acquisition control signature or lifetime is invalid')
+  const transportPeerId = options.transportPeerId == null
+    ? null
+    : acquisitionHex32(options.transportPeerId, 'transportPeerId')
+  if (transportPeerId !== null && transportPeerId !== signer) acquisitionFail('acquisition signer does not match Noise peer')
+  const recordId = acquisitionHex32(envelope.recordId, 'recordId')
+  const idName = kind === 'request' ? 'requestId' : kind === 'offer' ? 'offerId' : kind === 'assignment' ? 'assignmentId' : 'recordId'
+  return { [idName]: recordId, body, envelope }
+}
+
+export function acquisitionBudgetWidens(candidate, ceiling) {
+  const next = normalizeAcquisitionBudget(candidate, 'candidateBudget')
+  const maximum = normalizeAcquisitionBudget(ceiling, 'ceilingBudget')
+  return next.maxSourceBytes > maximum.maxSourceBytes ||
+    next.maxOutputBytes > maximum.maxOutputBytes ||
+    next.maxNetworkBytes > maximum.maxNetworkBytes ||
+    next.maxWallClockMs > maximum.maxWallClockMs
+}
+
+export function acquisitionCancellationAllowed(reasonCode, actorRole) {
+  if (actorRole === 'requester') return REQUESTER_CANCEL_REASONS.has(reasonCode)
+  if (actorRole === 'worker') return WORKER_CANCEL_REASONS.has(reasonCode)
+  return false
+}
+
+export const encodeAcquisitionRequest = input => encodeSignedAcquisitionControl('request', input)
+export const encodeAcquisitionOffer = input => encodeSignedAcquisitionControl('offer', input)
+export const encodeAcquisitionAssignment = input => encodeSignedAcquisitionControl('assignment', input)
+export const encodeAcquisitionProgress = input => encodeSignedAcquisitionControl('progress', input)
+export const encodeAcquisitionResult = input => encodeSignedAcquisitionControl('result', input)
+export const encodeAcquisitionCancellation = input => encodeSignedAcquisitionControl('cancellation', input)
+export const decodeAcquisitionRequest = (payload, options) => decodeSignedAcquisitionControl('request', payload, options)
+export const decodeAcquisitionOffer = (payload, options) => decodeSignedAcquisitionControl('offer', payload, options)
+export const decodeAcquisitionAssignment = (payload, options) => decodeSignedAcquisitionControl('assignment', payload, options)
+export const decodeAcquisitionProgress = (payload, options) => decodeSignedAcquisitionControl('progress', payload, options)
+export const decodeAcquisitionResult = (payload, options) => decodeSignedAcquisitionControl('result', payload, options)
+export const decodeAcquisitionCancellation = (payload, options) => decodeSignedAcquisitionControl('cancellation', payload, options)
 
 function typeToCode(type = '') {
   const text = String(type)

@@ -1,6 +1,6 @@
 import type { ComponentProps } from 'react'
 import React from 'react'
-import { Alert } from 'react-native'
+import { Alert, SafeAreaView } from 'react-native'
 import { useApp } from '@/lib/AppContext'
 import { useOptionalVideoPlayerActions } from '@/lib/VideoPlayerContext'
 import type { VideoData } from '@peartube/core'
@@ -11,7 +11,7 @@ export { normalizeMediaEntityView }
 export type { MediaEntityView }
 
 export default function MediaRoute(props: ComponentProps<typeof MediaEntityPage>) {
-  const { rpc } = useApp()
+  const { rpc, platformEvents } = useApp()
   const playerActions = useOptionalVideoPlayerActions()
   // Preparation picked a source and a URL that serves it; nothing was listening,
   // so Play resolved a stream and dropped it. Hand it to the same shared player
@@ -50,11 +50,15 @@ export default function MediaRoute(props: ComponentProps<typeof MediaEntityPage>
   }, [])
 
   return (
-    <MediaEntityPage
-      {...props}
-      mediaGraph={props.mediaGraph || rpc}
-      onPlaybackPrepared={props.onPlaybackPrepared || onPlaybackPrepared}
-      onPlaybackFailed={props.onPlaybackFailed || onPlaybackFailed}
-    />
+    <SafeAreaView style={{ flex: 1 }}>
+      <MediaEntityPage
+        {...props}
+        mediaGraph={props.mediaGraph || rpc}
+        provider={props.provider || rpc?.provider}
+        providerEvents={props.providerEvents || platformEvents}
+        onPlaybackPrepared={props.onPlaybackPrepared || onPlaybackPrepared}
+        onPlaybackFailed={props.onPlaybackFailed || onPlaybackFailed}
+      />
+    </SafeAreaView>
   )
 }

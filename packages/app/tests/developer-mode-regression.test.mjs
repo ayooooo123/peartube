@@ -150,6 +150,7 @@ test('privileged routes resolve to Developer Settings while disabled and allow a
   }).outputText
   const routePolicy = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}#${Math.random()}`)
   assert.equal(routePolicy.developerModeDestination(false, '/studio'), '/developer-settings')
+  assert.equal(routePolicy.developerModeDestination(false, '/acquisition-settings'), '/developer-settings')
   assert.equal(routePolicy.developerModeDestination(false, '/profile?developer=diagnostics'), '/developer-settings')
   assert.equal(routePolicy.developerModeDestination(false, '/profile?developer=identity'), '/developer-settings')
   assert.equal(routePolicy.developerModeDestination(true, '/studio'), null)
@@ -160,6 +161,7 @@ test('privileged routes resolve to Developer Settings while disabled and allow a
   const privilegedRoutes = [
     ['app', '(tabs)', 'studio.tsx'],
     ['app', 'network-policy.tsx'],
+    ['app', 'acquisition-settings.tsx'],
     ['app', 'subscriptions.tsx'],
     ['app', 'moderation.tsx'],
     ['app', 'maintenance.tsx'],

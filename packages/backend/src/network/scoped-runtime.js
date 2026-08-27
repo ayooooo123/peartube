@@ -31,6 +31,11 @@ export function createScopedNetworkApi (runtime) {
     createAuthorizedArchiveChallengeProof: request => runtime.createAuthorizedArchiveChallengeProof(request), verifyAuthorizedArchiveChallengeProof: request => runtime.verifyAuthorizedArchiveChallengeProof(request),
     publishBootstrapLocator: request => runtime.publishBootstrapLocator(request), getLocalTransportPeerId: () => runtime.getLocalTransportPeerId(),
     listBootstrapLocators: () => runtime.listBootstrapLocators(), getIndexFeedRecords: () => runtime.getIndexFeedRecords(),
+    retainAcquisitionDiscovery: request => runtime.retainAcquisitionDiscovery(request),
+    releaseAcquisitionDiscovery: request => runtime.releaseAcquisitionDiscovery(request),
+    retainAcquisitionAssignment: request => runtime.retainAcquisitionAssignment(request),
+    releaseAcquisitionAssignment: request => runtime.releaseAcquisitionAssignment(request),
+    publishAcquisitionFrame: request => runtime.publishAcquisitionFrame(request),
     getModerationFeedRecords: () => runtime.getModerationFeedRecords(), getScopedNetworkDiagnostics: () => runtime.getDiagnostics(),
   }
 }

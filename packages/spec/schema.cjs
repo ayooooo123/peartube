@@ -3889,6 +3889,422 @@ ns.register({
   ]
 })
 
+// ============================================
+// Provider and acquisition contracts (append-only)
+// ============================================
+// Public records intentionally contain no source URL, adapter name, credential,
+// token, path, private header, or peer identity. A resolution ref is a bounded,
+// opaque public reference; private source grants cross only the dedicated method.
+
+ns.register({
+  name: 'provider-error',
+  fields: [
+    { name: 'code', type: 'string', required: true },
+    { name: 'message', type: 'string', required: true },
+    { name: 'field', type: 'string', required: false },
+    { name: 'retryable', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'provider-search-hit-v1',
+  fields: [
+    { name: 'schemaVersion', type: 'uint', required: true },
+    { name: 'resolutionRef', type: 'string', required: true },
+    { name: 'title', type: 'string', required: true },
+    { name: 'mediaKind', type: 'string', required: true },
+    { name: 'subtitle', type: 'string', required: false },
+    { name: 'published', type: 'bool', required: true },
+    { name: 'acquirable', type: 'bool', required: true },
+    { name: 'entityId', type: 'string', required: false },
+    { name: 'publicationId', type: 'string', required: false },
+    { name: 'expectedBytes', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'provider-search-request',
+  fields: [
+    { name: 'query', type: 'string', required: true },
+    { name: 'cursor', type: 'string', required: false },
+    { name: 'limit', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'provider-search-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'hits', type: '@peartube/provider-search-hit-v1', array: true, required: true },
+    { name: 'nextCursor', type: 'string', required: false },
+    { name: 'error', type: '@peartube/provider-error', required: false }
+  ]
+})
+
+ns.register({
+  name: 'provider-resolution-v1',
+  fields: [
+    { name: 'schemaVersion', type: 'uint', required: true },
+    { name: 'resolutionRef', type: 'string', required: true },
+    { name: 'publisherId', type: 'string', required: true },
+    { name: 'title', type: 'string', required: true },
+    { name: 'mediaKind', type: 'string', required: true },
+    { name: 'subtitle', type: 'string', required: false },
+    { name: 'published', type: 'bool', required: true },
+    { name: 'acquirable', type: 'bool', required: true },
+    { name: 'entityId', type: 'string', required: false },
+    { name: 'publicationId', type: 'string', required: false },
+    { name: 'expectedBytes', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'resolve-provider-ref-request',
+  fields: [
+    { name: 'resolutionRef', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'resolve-provider-ref-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'resolution', type: '@peartube/provider-resolution-v1', required: false },
+    { name: 'error', type: '@peartube/provider-error', required: false }
+  ]
+})
+
+ns.register({
+  name: 'acquisition-request-v1',
+  fields: [
+    { name: 'schemaVersion', type: 'uint', required: true },
+    { name: 'resolutionRef', type: 'string', required: true },
+    { name: 'publisherId', type: 'string', required: true },
+    { name: 'retentionClass', type: 'string', required: true },
+    { name: 'retentionUntil', type: 'uint', required: false },
+    { name: 'retentionUntilPresent', type: 'bool', required: false }
+  ]
+})
+
+ns.register({
+  name: 'acquisition-v1',
+  fields: [
+    { name: 'schemaVersion', type: 'uint', required: true },
+    { name: 'acquisitionId', type: 'string', required: true },
+    { name: 'state', type: 'string', required: true },
+    { name: 'retentionClass', type: 'string', required: true },
+    { name: 'bytesAcquired', type: 'uint', required: true },
+    { name: 'expectedBytes', type: 'uint', required: false },
+    { name: 'publicationId', type: 'string', required: false },
+    { name: 'manifestId', type: 'string', required: false },
+    { name: 'renditionId', type: 'string', required: false },
+    { name: 'assetId', type: 'string', required: false },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'recoverable', type: 'bool', required: true },
+    { name: 'createdAt', type: 'uint', required: true },
+    { name: 'updatedAt', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'request-acquisition-request',
+  fields: [
+    { name: 'idempotencyKey', type: 'string', required: true },
+    { name: 'request', type: '@peartube/acquisition-request-v1', required: true }
+  ]
+})
+
+ns.register({
+  name: 'request-acquisition-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'acquisition', type: '@peartube/acquisition-v1', required: false },
+    { name: 'error', type: '@peartube/provider-error', required: false }
+  ]
+})
+
+ns.register({
+  name: 'attach-source-grant-request',
+  fields: [
+    { name: 'acquisitionId', type: 'string', required: true },
+    { name: 'grant', type: 'buffer', required: true }
+  ]
+})
+
+ns.register({
+  name: 'attach-source-grant-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'acquisition', type: '@peartube/acquisition-v1', required: false },
+    { name: 'error', type: '@peartube/provider-error', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-acquisition-request',
+  fields: [
+    { name: 'acquisitionId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'get-acquisition-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'acquisition', type: '@peartube/acquisition-v1', required: false },
+    { name: 'error', type: '@peartube/provider-error', required: false }
+  ]
+})
+
+ns.register({
+  name: 'list-acquisitions-request',
+  fields: [
+    { name: 'cursor', type: 'string', required: false },
+    { name: 'limit', type: 'uint', required: false },
+    { name: 'states', type: 'string', array: true, required: false }
+  ]
+})
+
+ns.register({
+  name: 'list-acquisitions-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'acquisitions', type: '@peartube/acquisition-v1', array: true, required: true },
+    { name: 'nextCursor', type: 'string', required: false },
+    { name: 'error', type: '@peartube/provider-error', required: false }
+  ]
+})
+
+ns.register({
+  name: 'cancel-acquisition-request',
+  fields: [
+    { name: 'acquisitionId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'cancel-acquisition-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'acquisition', type: '@peartube/acquisition-v1', required: false },
+    { name: 'error', type: '@peartube/provider-error', required: false }
+  ]
+})
+
+ns.register({
+  name: 'provider-publication-v1',
+  fields: [
+    { name: 'schemaVersion', type: 'uint', required: true },
+    { name: 'publicationId', type: 'string', required: true },
+    { name: 'entityId', type: 'string', required: true },
+    { name: 'manifestId', type: 'string', required: true },
+    { name: 'renditionId', type: 'string', required: true },
+    { name: 'assetId', type: 'string', required: true },
+    { name: 'title', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'get-provider-publication-request',
+  fields: [
+    { name: 'publicationId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'get-provider-publication-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'publication', type: '@peartube/provider-publication-v1', required: false },
+    { name: 'error', type: '@peartube/provider-error', required: false }
+  ]
+})
+
+ns.register({
+  name: 'provider-stream-v1',
+  fields: [
+    { name: 'schemaVersion', type: 'uint', required: true },
+    { name: 'publicationId', type: 'string', required: true },
+    { name: 'renditionId', type: 'string', required: true },
+    { name: 'assetId', type: 'string', required: true },
+    { name: 'url', type: 'string', required: true },
+    { name: 'mimeType', type: 'string', required: true },
+    { name: 'byteLength', type: 'uint', required: true },
+    { name: 'etag', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'open-provider-stream-request',
+  fields: [
+    { name: 'publicationId', type: 'string', required: true },
+    { name: 'renditionId', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'open-provider-stream-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'stream', type: '@peartube/provider-stream-v1', required: false },
+    { name: 'error', type: '@peartube/provider-error', required: false }
+  ]
+})
+
+ns.register({
+  name: 'provider-status-v1',
+  fields: [
+    { name: 'schemaVersion', type: 'uint', required: true },
+    { name: 'ready', type: 'bool', required: true },
+    { name: 'searchEnabled', type: 'bool', required: true },
+    { name: 'acquisitionEnabled', type: 'bool', required: true },
+    { name: 'queuedAcquisitions', type: 'uint', required: true },
+    { name: 'activeAcquisitions', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'get-provider-status-request',
+  fields: []
+})
+
+ns.register({
+  name: 'get-provider-status-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'status', type: '@peartube/provider-status-v1', required: false },
+    { name: 'error', type: '@peartube/provider-error', required: false }
+  ]
+})
+
+ns.register({
+  name: 'provider-policy-v1',
+  fields: [
+    { name: 'schemaVersion', type: 'uint', required: true },
+    { name: 'revision', type: 'uint', required: true },
+    { name: 'searchEnabled', type: 'bool', required: true },
+    { name: 'resolveEnabled', type: 'bool', required: true },
+    { name: 'acquisitionEnabled', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'get-provider-policy-request',
+  fields: []
+})
+
+ns.register({
+  name: 'get-provider-policy-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'policy', type: '@peartube/provider-policy-v1', required: false },
+    { name: 'error', type: '@peartube/provider-error', required: false }
+  ]
+})
+
+ns.register({
+  name: 'set-provider-policy-request',
+  fields: [
+    { name: 'policy', type: '@peartube/provider-policy-v1', required: true },
+    { name: 'expectedRevision', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'set-provider-policy-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'policy', type: '@peartube/provider-policy-v1', required: false },
+    { name: 'error', type: '@peartube/provider-error', required: false }
+  ]
+})
+
+ns.register({
+  name: 'acquisition-policy-v1',
+  fields: [
+    { name: 'policyVersion', type: 'uint', required: true },
+    { name: 'revision', type: 'uint', required: true },
+    { name: 'consentVersion', type: 'uint', required: true },
+    { name: 'migrationRequired', type: 'bool', required: true },
+    { name: 'enabled', type: 'bool', required: true },
+    { name: 'acceptPublicRequests', type: 'bool', required: true },
+    { name: 'requesterMode', type: 'string', required: true },
+    { name: 'allowedPublisherIds', type: 'string', array: true, required: true },
+    { name: 'allowedAdapterIds', type: 'string', array: true, required: true },
+    { name: 'maxQueuedJobs', type: 'uint', required: true },
+    { name: 'maxConcurrentJobs', type: 'uint', required: true },
+    { name: 'maxConcurrentPerRequester', type: 'uint', required: true },
+    { name: 'maxRequestBytes', type: 'uint', required: true },
+    { name: 'maxAcquireBytesPer24h', type: 'uint', required: true },
+    { name: 'maxAcquireBytesPerSecond', type: 'uint', required: true },
+    { name: 'maxStagingBytes', type: 'uint', required: true },
+    { name: 'minFreeDiskBytes', type: 'uint', required: true },
+    { name: 'maxJobRuntimeMs', type: 'uint', required: true },
+    { name: 'sourceGrantTtlMs', type: 'uint', required: true },
+    { name: 'publicRequestsPerMinute', type: 'uint', required: true },
+    { name: 'maxAttempts', type: 'uint', required: true },
+    { name: 'retryBaseMs', type: 'uint', required: true },
+    { name: 'retryMaxMs', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'get-acquisition-policy-request',
+  fields: []
+})
+
+ns.register({
+  name: 'get-acquisition-policy-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'policy', type: '@peartube/acquisition-policy-v1', required: false },
+    { name: 'error', type: '@peartube/provider-error', required: false }
+  ]
+})
+
+ns.register({
+  name: 'acquisition-consent-v1',
+  fields: [
+    { name: 'version', type: 'uint', required: true },
+    { name: 'granted', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'set-acquisition-policy-request',
+  fields: [
+    { name: 'policy', type: '@peartube/acquisition-policy-v1', required: true },
+    { name: 'expectedRevision', type: 'uint', required: true },
+    { name: 'consent', type: '@peartube/acquisition-consent-v1', required: true }
+  ]
+})
+
+ns.register({
+  name: 'set-acquisition-policy-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'policy', type: '@peartube/acquisition-policy-v1', required: false },
+    { name: 'error', type: '@peartube/provider-error', required: false }
+  ]
+})
+
+ns.register({
+  name: 'acquisition-lifecycle-event-v1',
+  fields: [
+    { name: 'schemaVersion', type: 'uint', required: true },
+    { name: 'eventId', type: 'string', required: true },
+    { name: 'acquisitionId', type: 'string', required: true },
+    { name: 'type', type: 'string', required: true },
+    { name: 'state', type: 'string', required: true },
+    { name: 'sequence', type: 'uint', required: true },
+    { name: 'at', type: 'uint', required: true },
+    { name: 'bytesAcquired', type: 'uint', required: true },
+    { name: 'expectedBytes', type: 'uint', required: false },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'publicationId', type: 'string', required: false }
+  ]
+})
+
 // Save schema to disk
 Hyperschema.toDisk(schema)
 
@@ -4770,6 +5186,97 @@ rpcNs.register({
   name: 'set-playback-active',
   request: { name: '@peartube/set-playback-active-request', stream: false },
   response: { name: '@peartube/set-playback-active-response', stream: false }
+})
+
+// Provider and acquisition commands. Appended last so every existing command id
+// remains stable.
+rpcNs.register({
+  name: 'provider-search',
+  request: { name: '@peartube/provider-search-request', stream: false },
+  response: { name: '@peartube/provider-search-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'resolve-provider-ref',
+  request: { name: '@peartube/resolve-provider-ref-request', stream: false },
+  response: { name: '@peartube/resolve-provider-ref-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'request-acquisition',
+  request: { name: '@peartube/request-acquisition-request', stream: false },
+  response: { name: '@peartube/request-acquisition-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'attach-source-grant',
+  request: { name: '@peartube/attach-source-grant-request', stream: false },
+  response: { name: '@peartube/attach-source-grant-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-acquisition',
+  request: { name: '@peartube/get-acquisition-request', stream: false },
+  response: { name: '@peartube/get-acquisition-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'list-acquisitions',
+  request: { name: '@peartube/list-acquisitions-request', stream: false },
+  response: { name: '@peartube/list-acquisitions-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'cancel-acquisition',
+  request: { name: '@peartube/cancel-acquisition-request', stream: false },
+  response: { name: '@peartube/cancel-acquisition-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-provider-publication',
+  request: { name: '@peartube/get-provider-publication-request', stream: false },
+  response: { name: '@peartube/get-provider-publication-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'open-provider-stream',
+  request: { name: '@peartube/open-provider-stream-request', stream: false },
+  response: { name: '@peartube/open-provider-stream-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-provider-status',
+  request: { name: '@peartube/get-provider-status-request', stream: false },
+  response: { name: '@peartube/get-provider-status-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-provider-policy',
+  request: { name: '@peartube/get-provider-policy-request', stream: false },
+  response: { name: '@peartube/get-provider-policy-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'set-provider-policy',
+  request: { name: '@peartube/set-provider-policy-request', stream: false },
+  response: { name: '@peartube/set-provider-policy-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-acquisition-policy',
+  request: { name: '@peartube/get-acquisition-policy-request', stream: false },
+  response: { name: '@peartube/get-acquisition-policy-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'set-acquisition-policy',
+  request: { name: '@peartube/set-acquisition-policy-request', stream: false },
+  response: { name: '@peartube/set-acquisition-policy-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'event-acquisition-lifecycle',
+  request: { name: '@peartube/acquisition-lifecycle-event-v1', stream: false, send: true }
 })
 
 // Save HRPC interface to disk

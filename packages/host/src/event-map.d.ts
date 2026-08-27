@@ -12,6 +12,7 @@ export const PROTOCOL_EVENTS: {
   readonly CAST_DEVICE_LOST: 'cast.deviceLost'
   readonly CAST_PLAYBACK_STATE: 'cast.playbackState'
   readonly CAST_TIME_UPDATE: 'cast.timeUpdate'
+  readonly ACQUISITION_LIFECYCLE: 'acquisition.lifecycle'
   readonly TRANSPORT_CLOSED: 'transport.closed'
 }
 

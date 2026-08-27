@@ -290,10 +290,12 @@ test('an abort signal cancels the whole preparation tree', async (t) => {
 
 const coreA = createStaticAssetManifest({ treeHash: 'a'.repeat(64), blockLength: 4, byteLength: 4 * 262144 })
 const coreB = createStaticAssetManifest({ treeHash: 'b'.repeat(64), blockLength: 4, byteLength: 4 * 262144 })
+const coreRefA = normalizeAssetCoreRefV2(coreA)
+const coreRefB = normalizeAssetCoreRefV2(coreB)
 function graphFixture(overrides = {}) {
   const manifests = new Map([
-    ['pub-a', { publicationId: 'pub-a', body: { publisherId: 'pub', manifestId: 'm-a', renditions: [{ renditionId: 'rendition-pub-a', core: coreA }] } }],
-    ['pub-b', { publicationId: 'pub-b', body: { publisherId: 'pub', manifestId: 'm-b', renditions: [{ renditionId: 'rendition-pub-b', core: coreB }] } }],
+    ['pub-a', { publicationId: 'pub-a', body: { publisherId: 'pub', manifestId: 'm-a', renditions: [{ renditionId: 'rendition-pub-a', core: coreA }], provenance: [{ renditionId: 'rendition-pub-a', coreKey: coreRefA.key, start: 0, end: coreRefA.length }] } }],
+    ['pub-b', { publicationId: 'pub-b', body: { publisherId: 'pub', manifestId: 'm-b', renditions: [{ renditionId: 'rendition-pub-b', core: coreB }], provenance: [{ renditionId: 'rendition-pub-b', coreKey: coreRefB.key, start: 0, end: coreRefB.length }] } }],
   ])
   return {
     verifiedQueryView: {
@@ -368,6 +370,23 @@ test('one Play call selects, opens, and reports the source without a picker', as
   t.is(result.renditionId, 'rendition-pub-a')
   t.alike(opened, ['pub-a'])
   t.ok(result.sources.some(item => item.selected), 'Other Sources explains the same decision')
+})
+
+test('verified rendition URL opener returns a playable loopback URL', async t => {
+  const api = createMediaGraphApi(graphFixture({
+    blobServer: {
+      port: 8080,
+      getLink() { return 'http://127.0.0.1:8080/verified-rendition' }
+    },
+    ctx: { blobServerHost: '127.0.0.1', blobServerPort: 8080 }
+  }))
+  const opened = await api.openMediaRenditionUrl({
+    publicationId: 'pub-a',
+    renditionId: 'rendition-pub-a'
+  })
+  t.is(opened.success, true, opened.errorCode || opened.error || 'opened')
+  t.is(opened.assetId, coreA.assetId)
+  t.is(opened.url, 'http://127.0.0.1:8080/verified-rendition')
 })
 
 test('Play falls over to the equivalent source and reports every attempt', async (t) => {

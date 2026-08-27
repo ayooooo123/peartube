@@ -1,3 +1,5 @@
+import { createProviderApi } from './api/provider.js'
+import { createProviderService } from './provider/service.js'
 import { createIndexFederation } from './search/index-federation.js'
 import { createScopedAssetAvailabilityProbe, createSourceVerifier } from './search/source-verifier.js'
 import {
@@ -102,6 +104,14 @@ export function createIndexVerificationRuntime({
   })
   lifecycle?.ownResource?.('index verification runtime', runtime, 'close')
   return runtime
+}
+
+export function createProviderRuntime(options = {}) {
+  const provider = createProviderService(options)
+  return Object.freeze({
+    provider,
+    api: createProviderApi({ providerService: provider, ...(options.api || {}) }),
+  })
 }
 
 export function requireHostProtocolVersion(protocolVersion, callerName) {

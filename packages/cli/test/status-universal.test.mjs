@@ -68,9 +68,9 @@ test('relay status exposes the bounded policy-v2 contract without protected runt
       callbackOrigin: protectedValues.callbackOrigin
     }
   }
-  const ingestStatus = {
+  const acquisitionStatus = {
     activeAcquisitions: 2,
-    jobsByState: {
+    acquisitionsByState: {
       queued: 2,
       acquiring: 1,
       verifying: 0,
@@ -91,7 +91,7 @@ test('relay status exposes the bounded policy-v2 contract without protected runt
     },
     catalog,
     runtimeStats,
-    ingestStatus,
+    acquisitionStatus,
     creators: [{
       videosArchived: 4,
       videosUnseeded: 2,
@@ -117,7 +117,7 @@ test('relay status exposes the bounded policy-v2 contract without protected runt
     activeServes: 1,
     servedBytes: 512,
     activeAcquisitions: 2,
-    jobsByState: {
+    acquisitionsByState: {
       queued: 2,
       acquiring: 1,
       verifying: 0,
@@ -172,7 +172,7 @@ test('relay status exposes the bounded policy-v2 contract without protected runt
     'contributionBudget: 123/4096 bytes',
     'archiveBudget: 456/8192 bytes',
     'publicWork: announcements=5 serves=1 servedBytes=512 acquisitions=2',
-    'jobs: queued=2 acquiring=1 verifying=0 publishing=1 completed=9 failed=1 cancelled=1',
+    'acquisitions: queued=2 acquiring=1 verifying=0 publishing=1 completed=9 failed=1 cancelled=1',
     'network: status=active peers=2 connections=1 offline=false',
     'channels: total=3 protected=1 evictable=2',
     'selectedIndexers: selected-1:active,selected-2:pending,selected-3:unknown,selected-4:unknown,selected-5:unknown,selected-6:unknown,selected-7:unknown,selected-8:unknown',

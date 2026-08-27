@@ -3,7 +3,7 @@ const IDEMPOTENCY_PREFIX = 'companion-ingest/v1/idempotency/'
 const ACTIVE_PREFIX = 'companion-ingest/v1/active/'
 const PUBLICATION_PREFIX = 'companion-ingest/v1/publication/'
 
-export const INGEST_JOB_STATES = Object.freeze([
+const INGEST_JOB_STATES = Object.freeze([
   'queued',
   'acquiring',
   'verifying',
@@ -13,7 +13,7 @@ export const INGEST_JOB_STATES = Object.freeze([
   'cancelled'
 ])
 
-export const TERMINAL_INGEST_JOB_STATES = Object.freeze(['completed', 'failed', 'cancelled'])
+const TERMINAL_INGEST_JOB_STATES = Object.freeze(['completed', 'failed', 'cancelled'])
 
 const TERMINAL = new Set(TERMINAL_INGEST_JOB_STATES)
 const NEXT = new Map([
@@ -39,16 +39,16 @@ const MAX_DURABLE_KEY_BYTES = 128
 const MAX_DURABLE_ENTRIES = 512
 const MAX_DURABLE_RECORD_BYTES = 128 * 1024
 
-export class IngestJobStoreError extends Error {
+class LegacyIngestStoreError extends Error {
   constructor (code, message) {
     super(message || code)
-    this.name = 'IngestJobStoreError'
+    this.name = 'LegacyIngestStoreError'
     this.code = code
   }
 }
 
 function storeError (code, message) {
-  return new IngestJobStoreError(code, message)
+  return new LegacyIngestStoreError(code, message)
 }
 
 function decode (value) {
@@ -129,7 +129,7 @@ function assertTransition (current, to) {
   }
 }
 
-export function createIngestJobStore ({ bee, now = () => Date.now() } = {}) {
+export function createLegacyIngestMigrationStore ({ bee, now = () => Date.now() } = {}) {
   if (!bee || typeof bee.get !== 'function' || typeof bee.batch !== 'function') {
     throw new TypeError('ingest job store requires an atomic Hyperbee-compatible store')
   }
@@ -142,7 +142,7 @@ export function createIngestJobStore ({ bee, now = () => Date.now() } = {}) {
   let writes = Promise.resolve()
 
   function persistenceFailure (error) {
-    if (error instanceof IngestJobStoreError) return error
+    if (error instanceof LegacyIngestStoreError) return error
     return storeError('INGEST_PERSISTENCE_FAILED', 'Ingest persistence failed')
   }
 

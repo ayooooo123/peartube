@@ -42,6 +42,20 @@ import type {
   SetSourcePreferenceResponse,
   SystemProtocolNamespace,
 } from '@peartube/host'
+import type {
+  Acquisition,
+  AcquisitionLifecycleEvent,
+  AcquisitionPolicy,
+  AcquisitionRequest,
+  AcquisitionState,
+  ProviderPolicy,
+  ProviderProtocolNamespace,
+  ProviderPublication,
+  ProviderResolution,
+  ProviderSearchHit,
+  ProviderStatus,
+  ProviderStream,
+} from '@peartube/host'
 import { PROTOCOL_VERSION } from '@peartube/host/contracts'
 import { PROTOCOL_EVENTS } from '@peartube/host/events'
 
@@ -83,6 +97,19 @@ export type {
   PrepareMediaPlaybackResponse,
   PublicationSourcesResponse,
   SetSourcePreferenceResponse,
+}
+export type {
+  Acquisition,
+  AcquisitionLifecycleEvent,
+  AcquisitionPolicy,
+  AcquisitionRequest,
+  AcquisitionState,
+  ProviderPolicy,
+  ProviderPublication,
+  ProviderResolution,
+  ProviderSearchHit,
+  ProviderStatus,
+  ProviderStream,
 }
 
 export type HostProtocolVersion = typeof PROTOCOL_VERSION
@@ -383,6 +410,7 @@ export type ProtocolClientLike = ChannelCatalogProtocolClient & MediaGraphProtoc
   }
   system: SystemProtocolNamespace
   publisher?: PublisherProtocolClient['publisher']
+  provider: ProviderProtocolNamespace
 }
 
 type ReadyCallback = (data: HostReadyData) => void
@@ -398,6 +426,7 @@ type CastDeviceFoundCallback = (data: any) => void
 type CastDeviceLostCallback = (data: any) => void
 type CastPlaybackStateCallback = (data: any) => void
 type CastTimeUpdateCallback = (data: any) => void
+type AcquisitionLifecycleCallback = (data: AcquisitionLifecycleEvent) => void
 type LogCallback = (data: { level?: string; message: string; timestamp?: number }) => void
 
 type PlatformCallbacks = {
@@ -414,6 +443,7 @@ type PlatformCallbacks = {
   castDeviceLost: CastDeviceLostCallback[]
   castPlaybackState: CastPlaybackStateCallback[]
   castTimeUpdate: CastTimeUpdateCallback[]
+  acquisitionLifecycle: AcquisitionLifecycleCallback[]
 }
 
 type PlatformRpcBridgeOptions = {
@@ -450,7 +480,8 @@ function createCallbackStore(): PlatformCallbacks {
     castDeviceFound: [],
     castDeviceLost: [],
     castPlaybackState: [],
-    castTimeUpdate: []
+    castTimeUpdate: [],
+    acquisitionLifecycle: []
   }
 }
 
@@ -518,7 +549,8 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
       nextClient.events.on(PROTOCOL_EVENTS.CAST_DEVICE_FOUND, (data: any) => safeDispatch(callbacks.castDeviceFound, data)),
       nextClient.events.on(PROTOCOL_EVENTS.CAST_DEVICE_LOST, (data: any) => safeDispatch(callbacks.castDeviceLost, data)),
       nextClient.events.on(PROTOCOL_EVENTS.CAST_PLAYBACK_STATE, (data: any) => safeDispatch(callbacks.castPlaybackState, data)),
-      nextClient.events.on(PROTOCOL_EVENTS.CAST_TIME_UPDATE, (data: any) => safeDispatch(callbacks.castTimeUpdate, data))
+      nextClient.events.on(PROTOCOL_EVENTS.CAST_TIME_UPDATE, (data: any) => safeDispatch(callbacks.castTimeUpdate, data)),
+      nextClient.events.on(PROTOCOL_EVENTS.ACQUISITION_LIFECYCLE, (data: AcquisitionLifecycleEvent) => safeDispatch(callbacks.acquisitionLifecycle, data))
     ]
   }
 
@@ -605,6 +637,10 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
       onCastTimeUpdate(callback: CastTimeUpdateCallback) {
         callbacks.castTimeUpdate.push(callback)
         return () => removeCallback(callbacks.castTimeUpdate, callback)
+      },
+      onAcquisitionLifecycle(callback: AcquisitionLifecycleCallback) {
+        callbacks.acquisitionLifecycle.push(callback)
+        return () => removeCallback(callbacks.acquisitionLifecycle, callback)
       }
     },
 
@@ -820,6 +856,67 @@ export function createMediaGraphRpc(ensureClient: () => MediaGraphProtocolClient
       const handler = client.mediaGraph.getEntityArtwork
       if (!handler) throw new Error('Host protocol client does not expose mediaGraph.getEntityArtwork')
       return handler(request)
+    },
+  }
+}
+
+/**
+ * One provider facade for every shell. Platform runners only supply the
+ * transport; mobile and desktop call the same host namespace.
+ */
+export function createProviderRpc(ensureClient: () => ProtocolClientLike) {
+  const provider = async () => {
+    const client = ensureClient()
+    await client.ready()
+    return client.provider
+  }
+
+  return {
+    async search(request: { query: string; cursor?: string; limit?: number }) {
+      return (await provider()).search(request)
+    },
+    async resolveProviderRef(request: { resolutionRef: string }) {
+      return (await provider()).resolveProviderRef(request)
+    },
+    async requestAcquisition(request: { idempotencyKey: string; request: AcquisitionRequest }) {
+      return (await provider()).requestAcquisition(request)
+    },
+    async attachSourceGrant(request: { acquisitionId: string; grant: Uint8Array }) {
+      return (await provider()).attachSourceGrant(request)
+    },
+    async getAcquisition(request: { acquisitionId: string }) {
+      return (await provider()).getAcquisition(request)
+    },
+    async listAcquisitions(request: { cursor?: string; limit?: number; states?: AcquisitionState[] } = {}) {
+      return (await provider()).listAcquisitions(request)
+    },
+    async cancelAcquisition(request: { acquisitionId: string }) {
+      return (await provider()).cancelAcquisition(request)
+    },
+    async getPublication(request: { publicationId: string }) {
+      return (await provider()).getPublication(request)
+    },
+    async openStream(request: { publicationId: string; renditionId?: string }) {
+      return (await provider()).openStream(request)
+    },
+    async getStatus() {
+      return (await provider()).getStatus({})
+    },
+    async getPolicy() {
+      return (await provider()).getPolicy({})
+    },
+    async setPolicy(request: { policy: ProviderPolicy; expectedRevision: number }) {
+      return (await provider()).setPolicy(request)
+    },
+    async getAcquisitionPolicy() {
+      return (await provider()).getAcquisitionPolicy({})
+    },
+    async setAcquisitionPolicy(request: {
+      policy: AcquisitionPolicy
+      expectedRevision: number
+      consent: { version: 1; granted: boolean }
+    }) {
+      return (await provider()).setAcquisitionPolicy(request)
     },
   }
 }

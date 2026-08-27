@@ -51,6 +51,8 @@
     "./media-graph": "./src/media-graph/index.js",
     "./assets": "./src/assets/index.js",
     "./archive": "./src/archive/index.js",
+    "./provider": "./src/provider/index.js",
+    "./acquisition": "./src/acquisition/index.js",
     "./indexer": "./src/indexer/index.js",
     "./blob-ref": "./src/blob-ref.js",
     "./archive-schema": "./lib/archive-schema.js",

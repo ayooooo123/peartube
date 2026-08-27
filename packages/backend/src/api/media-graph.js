@@ -1069,6 +1069,36 @@ export function createMediaGraphApi(options = {}) {
       }
     },
 
+    async openMediaRenditionUrl(request = {}) {
+      const publicationId = typeof request.publicationId === 'string' ? request.publicationId.trim() : ''
+      const renditionId = typeof request.renditionId === 'string' ? request.renditionId.trim() : ''
+      if (!publicationId || !renditionId) return error('INVALID_RENDITION_REQUEST', 'publicationId and renditionId are required')
+      if (!verifiedQueryView) return error('MEDIA_GRAPH_UNAVAILABLE', 'Media graph is not bound yet')
+      const projected = await verifiedQueryView.getRendition({ publicationId, renditionId })
+      if (!projected) return error('MEDIA_PUBLICATION_NOT_FOUND', 'Media publication not found')
+      const { manifest, rendition } = projected
+      const ref = renditionBlobRef(manifest, rendition)
+      if (!ref) return error('MEDIA_RENDITION_UNRESOLVED', 'Media rendition has no readable blob reference yet')
+      if (!await verifiedQueryView.authorizeRendition({
+        publicationId,
+        renditionId,
+        start: ref.blob.blockOffset,
+        end: ref.blob.blockOffset + ref.blob.blockLength,
+        operation: 'stream',
+      })) return error('MEDIA_RENDITION_NOT_FOUND', 'Media rendition not found')
+      await retainRenditionForRead(manifest, renditionId, publicationId)
+      const url = await resolveRenditionUrl(publicationId, renditionId)
+      if (!url) return error('MEDIA_RENDITION_UNAVAILABLE', 'Media rendition URL is unavailable')
+      return {
+        success: true,
+        publicationId,
+        renditionId,
+        assetId: rendition.core?.assetId || ref.assetId,
+        contentType: typeof rendition.format === 'string' && rendition.format ? rendition.format : 'video/mp4',
+        byteLength: ref.blob.byteLength || rendition.core?.byteLength || 0,
+        url,
+      }
+    },
     /**
      * Open one rendition's bytes for a caller that is not this process. A core key
      * is a swarm reference, not something an HTTP player can read, and the loopback
@@ -1079,6 +1109,7 @@ export function createMediaGraphApi(options = {}) {
      * Not RPC-shaped on purpose: `read` is a function, so this is for in-process
      * callers (the relay's HTTP surface) only.
      */
+
     async openMediaRendition(request = {}) {
       const publicationId = typeof request.publicationId === 'string' ? request.publicationId.trim() : ''
       const renditionId = typeof request.renditionId === 'string' ? request.renditionId.trim() : ''
@@ -1119,6 +1150,7 @@ export function createMediaGraphApi(options = {}) {
         success: true,
         publicationId,
         renditionId,
+        assetId: rendition.core?.assetId || ref.assetId,
         contentType: typeof rendition.format === 'string' && rendition.format ? rendition.format : 'video/mp4',
         byteLength,
         read({ start = 0, length = byteLength - start } = {}) {

@@ -97,16 +97,13 @@ async function startHarness (t, asset, {
   inProcess = false
 } = {}) {
   const service = {
-    async verifyIndexCandidate () {
+    async openStream () {
       return {
-        candidateRef: REF,
-        publication: { publicationId: 'pub-1' },
-        rendition: { renditionId: 'rend-1', container: 'mp4' },
-        asset: { assetId: 'asset-1' }
+        publicationId: 'pub-1',
+        renditionId: 'rend-1',
+        assetId: 'asset-1',
+        asset
       }
-    },
-    async openStreamAsset () {
-      return asset
     }
   }
   const server = createCompanionServer({

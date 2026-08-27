@@ -1,5 +1,5 @@
 import { join } from '#path'
-import { DEFAULT_COMPANION_CONFIG, MAX_SOURCE_CHUNK_BYTES } from '../constants.js'
+import { DEFAULT_COMPANION_CONFIG } from '../constants.js'
 
 function has (object, key) {
   return Object.prototype.hasOwnProperty.call(object || {}, key)
@@ -24,23 +24,18 @@ function positiveInteger (value, fallback, name) {
   return parsed
 }
 
-function exactOrigin (value) {
-  if (value == null || value === '') return null
-  if (typeof value !== 'string' || value !== value.trim()) {
-    throw new Error('companion.sourceOrigin must be an exact HTTP(S) origin')
+function routeScopes (value) {
+  const entries = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : []
+  const scopes = entries.map(scope => String(scope).trim()).filter(Boolean)
+  if (scopes.length === 0 || scopes.length > 32 || new Set(scopes).size !== scopes.length ||
+      scopes.some(scope => scope !== '*' && !/^[a-z][a-z0-9.-]{0,63}$/.test(scope))) {
+    throw new Error('companion.scopes must contain 1 to 32 unique route scopes')
   }
-  let parsed
-  try {
-    parsed = new URL(value)
-  } catch {
-    throw new Error('companion.sourceOrigin must be an exact HTTP(S) origin')
-  }
-  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
-      parsed.username || parsed.password || parsed.search || parsed.hash ||
-      (parsed.pathname !== '' && parsed.pathname !== '/')) {
-    throw new Error('companion.sourceOrigin must be an exact HTTP(S) origin')
-  }
-  return parsed.origin
+  return scopes
 }
 
 export function companionConfigFromEnv (env = {}) {
@@ -51,15 +46,12 @@ export function companionConfigFromEnv (env = {}) {
   if (has(env, 'PEARTUBE_COMPANION_HOST')) config.host = env.PEARTUBE_COMPANION_HOST
   if (has(env, 'PEARTUBE_COMPANION_PORT')) config.port = env.PEARTUBE_COMPANION_PORT
   if (has(env, 'PEARTUBE_COMPANION_CLIENT')) config.client = env.PEARTUBE_COMPANION_CLIENT
+  if (has(env, 'PEARTUBE_COMPANION_PUBLISHER_ID')) config.publisherId = env.PEARTUBE_COMPANION_PUBLISHER_ID
+  if (has(env, 'PEARTUBE_COMPANION_SCOPES')) config.scopes = env.PEARTUBE_COMPANION_SCOPES
   if (has(env, 'PEARTUBE_COMPANION_SHARED_SECRET')) config.sharedSecret = env.PEARTUBE_COMPANION_SHARED_SECRET
   if (has(env, 'PEARTUBE_COMPANION_MAX_BODY_BYTES')) config.maxBodyBytes = env.PEARTUBE_COMPANION_MAX_BODY_BYTES
   if (has(env, 'PEARTUBE_COMPANION_MAX_CLOCK_SKEW_MS')) config.maxClockSkewMs = env.PEARTUBE_COMPANION_MAX_CLOCK_SKEW_MS
   if (has(env, 'PEARTUBE_COMPANION_MAX_NONCES')) config.maxNonces = env.PEARTUBE_COMPANION_MAX_NONCES
-  if (has(env, 'PEARTUBE_COMPANION_SOURCE_ORIGIN')) config.sourceOrigin = env.PEARTUBE_COMPANION_SOURCE_ORIGIN
-  if (has(env, 'PEARTUBE_COMPANION_SOURCE_CLIENT')) config.sourceClient = env.PEARTUBE_COMPANION_SOURCE_CLIENT
-  if (has(env, 'PEARTUBE_COMPANION_SOURCE_SHARED_SECRET')) config.sourceSharedSecret = env.PEARTUBE_COMPANION_SOURCE_SHARED_SECRET
-  if (has(env, 'PEARTUBE_COMPANION_SOURCE_CHUNK_BYTES')) config.sourceChunkBytes = env.PEARTUBE_COMPANION_SOURCE_CHUNK_BYTES
-  if (has(env, 'PEARTUBE_COMPANION_SOURCE_REQUEST_TIMEOUT_MS')) config.sourceRequestTimeoutMs = env.PEARTUBE_COMPANION_SOURCE_REQUEST_TIMEOUT_MS
   return Object.keys(config).length ? { companion: config } : {}
 }
 
@@ -74,15 +66,12 @@ export function companionConfigFromCli (cli = {}) {
     companionHost: 'host',
     companionPort: 'port',
     companionClient: 'client',
+    companionPublisherId: 'publisherId',
+    companionScopes: 'scopes',
     companionSharedSecret: 'sharedSecret',
     companionMaxBodyBytes: 'maxBodyBytes',
     companionMaxClockSkewMs: 'maxClockSkewMs',
-    companionMaxNonces: 'maxNonces',
-    companionSourceOrigin: 'sourceOrigin',
-    companionSourceClient: 'sourceClient',
-    companionSourceSharedSecret: 'sourceSharedSecret',
-    companionSourceChunkBytes: 'sourceChunkBytes',
-    companionSourceRequestTimeoutMs: 'sourceRequestTimeoutMs'
+    companionMaxNonces: 'maxNonces'
   }
   for (const [source, target] of Object.entries(fields)) {
     if (has(cli, source)) config[target] = cli[source]
@@ -109,6 +98,9 @@ export function resolveCompanionConfig (raw = {}, { storagePath } = {}) {
   config.host = typeof config.host === 'string' && config.host.trim()
     ? config.host.trim()
     : DEFAULT_COMPANION_CONFIG.host
+  if (config.transport === 'tcp' && !['127.0.0.1', '::1', '[::1]', 'localhost'].includes(config.host.toLowerCase())) {
+    throw new Error('companion TCP transport must bind to loopback because it does not provide TLS')
+  }
   config.port = Number(config.port)
   if (!Number.isSafeInteger(config.port) || config.port < 0 || config.port > 65535) {
     throw new Error('companion.port must be an integer from 0 through 65535')
@@ -117,6 +109,13 @@ export function resolveCompanionConfig (raw = {}, { storagePath } = {}) {
   if (!/^[A-Za-z0-9._-]{1,128}$/.test(config.client)) {
     throw new Error('companion.client must be 1 to 128 identifier characters')
   }
+  config.publisherId = config.publisherId == null || config.publisherId === ''
+    ? config.client
+    : String(config.publisherId).trim()
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(config.publisherId)) {
+    throw new Error('companion.publisherId must be 1 to 128 identifier characters')
+  }
+  config.scopes = routeScopes(config.scopes)
   config.sharedSecret = typeof config.sharedSecret === 'string' ? config.sharedSecret : ''
   if (config.sharedSecret && !/^[a-f0-9]{64}$/.test(config.sharedSecret)) {
     throw new Error('companion.sharedSecret must be 64 lowercase hexadecimal characters')
@@ -127,24 +126,5 @@ export function resolveCompanionConfig (raw = {}, { storagePath } = {}) {
   config.maxBodyBytes = positiveInteger(config.maxBodyBytes, undefined, 'companion.maxBodyBytes')
   config.maxClockSkewMs = positiveInteger(config.maxClockSkewMs, undefined, 'companion.maxClockSkewMs')
   config.maxNonces = positiveInteger(config.maxNonces, undefined, 'companion.maxNonces')
-  config.sourceOrigin = exactOrigin(config.sourceOrigin)
-  config.sourceClient = typeof config.sourceClient === 'string' ? config.sourceClient.trim() : ''
-  if (!/^[A-Za-z0-9._-]{1,128}$/.test(config.sourceClient)) {
-    throw new Error('companion.sourceClient must be 1 to 128 identifier characters')
-  }
-  config.sourceSharedSecret = typeof config.sourceSharedSecret === 'string' && config.sourceSharedSecret
-    ? config.sourceSharedSecret
-    : config.sharedSecret
-  if (config.sourceSharedSecret && !/^[a-f0-9]{64}$/.test(config.sourceSharedSecret)) {
-    throw new Error('companion.sourceSharedSecret must be 64 lowercase hexadecimal characters')
-  }
-  if (config.sourceOrigin && !config.sourceSharedSecret) {
-    throw new Error('companion.sourceSharedSecret is required when sourceOrigin is configured')
-  }
-  config.sourceChunkBytes = positiveInteger(config.sourceChunkBytes, undefined, 'companion.sourceChunkBytes')
-  if (config.sourceChunkBytes > MAX_SOURCE_CHUNK_BYTES) {
-    throw new Error(`companion.sourceChunkBytes must not exceed ${MAX_SOURCE_CHUNK_BYTES}`)
-  }
-  config.sourceRequestTimeoutMs = positiveInteger(config.sourceRequestTimeoutMs, undefined, 'companion.sourceRequestTimeoutMs')
   return config
 }

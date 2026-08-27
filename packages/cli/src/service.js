@@ -14,12 +14,8 @@ import { classifySourceUrl } from './archive/source-id.js'
 import { createRelayBlockOffload } from './archive/block-offload.js'
 import { createStorageGuard } from './storage-guard.js'
 import { createCompanionServer } from './companion/server.js'
-import { createIngestJobStore } from './companion/ingest-job-store.js'
-import { createIngestManager } from './companion/ingest-manager.js'
-import { createSourceCallbackClient } from './companion/source-client.js'
-import { createSourceProviderRegistry } from './companion/sources/index.js'
+import { createLegacyIngestMigrationStore } from './companion/legacy-ingest-migration-store.js'
 import tmdbFetch from '#fetch'
-import { sweepStagingState } from '@peartube/backend/assets'
 
 const CANDIDATE_REF_PATTERN = /^[A-Za-z0-9_-]{43}$/
 function selectorForMediaCoordinates(source = {}) {
@@ -34,6 +30,42 @@ function selectorForMediaCoordinates(source = {}) {
     return { namespace, identifier, kind: 'episode', season, episode }
   }
   return { namespace, identifier, kind: coordinates.contentKind || 'movie' }
+}
+
+function createProviderMachineService(runtime) {
+  const provider = runtime?.provider
+  if (!provider) return null
+  return Object.freeze({
+    ...provider,
+    async openStream({ candidateRef, signal } = {}) {
+      const resolved = await provider.resolve({ ref: candidateRef, signal })
+      if (resolved.kind !== 'published' || !resolved.publicationId || !resolved.renditionId) {
+        const error = new Error('A verified publication is required before streaming')
+        error.code = 'ACQUISITION_REQUIRED'
+        throw error
+      }
+      const opened = await runtime.api.openMediaRendition({
+        publicationId: resolved.publicationId,
+        renditionId: resolved.renditionId,
+        signal
+      })
+      if (!opened?.success) {
+        const error = new Error(opened?.error || 'Verified rendition is unavailable')
+        error.code = opened?.errorCode || 'PROVIDER_STREAM_UNAVAILABLE'
+        throw error
+      }
+      const asset = Object.freeze({
+        ...opened,
+        release: () => opened.close?.()
+      })
+      return {
+        publicationId: opened.publicationId,
+        renditionId: opened.renditionId,
+        assetId: opened.assetId,
+        asset
+      }
+    }
+  })
 }
 
 
@@ -206,11 +238,7 @@ async function buildRelayService({
   let localMirrorRunning = false
   let archiveConsole = null
   let companionServer = null
-  let ingestManager = null
-  let ingestReady = false
-  let ingestManagerStarted = false
-  let policyControlApplied = false
-  let ingestPolicyEligible = false
+  let publisherShell = null
   const localMirrorState = createLocalDriveMirrorState()
 
   function completePolicyControl(policy) {
@@ -435,23 +463,23 @@ async function buildRelayService({
   }
 
   async function persistStatus() {
-    const [runtimeStats, ingestStatus] = await Promise.all([
+    const [runtimeStats, acquisitionStatus] = await Promise.all([
       Promise.resolve()
         .then(() => typeof runtime.getDiagnostics === 'function' ? runtime.getDiagnostics() : {})
         .catch(() => ({ network: { lastErrors: ['RUNTIME_STATUS_UNAVAILABLE'] } })),
       Promise.resolve()
-        .then(() => ingestManager?.getStatus?.() || {})
+        .then(() => runtime.provider?.getStatus?.() || {})
         .catch(() => ({
-          jobsByState: {},
+          acquisitionsByState: {},
           activeAcquisitions: 0,
-          lastErrors: ['INGEST_STATUS_UNAVAILABLE']
+          lastErrors: ['ACQUISITION_STATUS_UNAVAILABLE']
         }))
     ])
     currentStatus = buildRelayStatus({
       config,
       catalog: relayCatalog,
       runtimeStats,
-      ingestStatus,
+      acquisitionStatus,
       trustedClientsCount: trustedClients.list().length,
       blockOffload: blockOffload?.stats() || null,
       capacity: capacityStats()
@@ -632,7 +660,154 @@ async function buildRelayService({
   const s3Configured = ['endpoint', 'bucket', 'accessKeyId', 'secretAccessKey']
     .every((field) => typeof s3Config[field] === 'string' && s3Config[field].length > 0)
 
+  function providerPrincipal(publisherId) {
+    return {
+      id: config.companion.client,
+      principalId: config.companion.client,
+      publisherId,
+      isLocal: true,
+      publisherIds: [publisherId],
+      scopes: new Set(config.companion.scopes || ['*'])
+    }
+  }
+
+  async function ensureLocalAcquisitionPolicy(publisherId) {
+    const current = await runtime.provider.getAcquisitionPolicy()
+    if (current.migrationRequired !== true) return current
+    const capacity = Number(config.storage?.maxBytes)
+    if (!Number.isSafeInteger(capacity) || capacity < 1) {
+      const error = new Error('storage.maxBytes is required before local acquisitions can be enabled')
+      error.code = 'ACQUISITION_STORAGE_POLICY_REQUIRED'
+      throw error
+    }
+    return runtime.provider.setAcquisitionPolicy({
+      policy: {
+        policyVersion: 1,
+        consentVersion: 1,
+        migrationRequired: false,
+        enabled: true,
+        acceptPublicRequests: false,
+        requesterMode: 'local-only',
+        allowedPublisherIds: [publisherId],
+        allowedAdapterIds: ['local-file'],
+        maxQueuedJobs: 64,
+        maxConcurrentJobs: 1,
+        maxConcurrentPerRequester: 1,
+        maxRequestBytes: 64 * 1024,
+        maxAcquireBytesPer24h: capacity,
+        maxAcquireBytesPerSecond: 64 * 1024 * 1024,
+        maxStagingBytes: capacity,
+        minFreeDiskBytes: Math.max(1, Number(config.storage?.minFreeBytes) || 1),
+        maxJobRuntimeMs: 24 * 60 * 60 * 1000,
+        sourceGrantTtlMs: 24 * 60 * 60 * 1000,
+        publicRequestsPerMinute: 1,
+        maxAttempts: 3,
+        retryBaseMs: 1000,
+        retryMaxMs: 60 * 1000
+      },
+      expectedRevision: current.revision,
+      consent: true
+    })
+  }
+
+  async function requestLocalFileAcquisition(input = {}) {
+    if (!publisherShell) throw new Error('Relay publisher is not initialized')
+    const local = await publisherShell.ensureLocalPublisher()
+    const publisherId = local.publisherId
+    const policy = await ensureLocalAcquisitionPolicy(publisherId)
+    const principal = providerPrincipal(publisherId)
+    const baseIdempotencyKey = String(input.idempotencyKey || '')
+    let requestKey = baseIdempotencyKey
+    let acquisition = null
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const resolution = runtime.issueLocalProviderResolution({
+        title: input.title,
+        selector: input.selector,
+        publisherId,
+        idempotencyKey: requestKey,
+        expectedBytes: input.expectedBytes
+      })
+      acquisition = await runtime.provider.requestAcquisition({
+        idempotencyKey: requestKey,
+        request: {
+          schemaVersion: 1,
+          resolutionRef: resolution.resolutionRef,
+          publisherId,
+          retentionClass: input.retentionClass || 'archive-pin'
+        },
+        principal
+      })
+      const terminalRetry = acquisition.state === 'cancelled' ||
+        (acquisition.state === 'failed' && acquisition.recoverable !== true)
+      if (!terminalRetry) break
+      requestKey = `${baseIdempotencyKey.slice(0, 96)}:retry:${acquisition.acquisitionId}`
+    }
+    if (acquisition === null) throw new Error('Local acquisition request did not return a result')
+    if (acquisition.state === 'cancelled' || (acquisition.state === 'failed' && acquisition.recoverable !== true)) {
+      const error = new Error('Local acquisition retry chain is exhausted')
+      error.code = 'ACQUISITION_RETRY_EXHAUSTED'
+      throw error
+    }
+    if (acquisition.state !== 'queued') return { ...acquisition, sourceAccepted: false }
+    const grant = runtime.localFileSourceGrants.issue({
+      acquisitionId: acquisition.acquisitionId,
+      principalId: principal.principalId,
+      path: input.path,
+      mimeType: input.mimeType || 'application/octet-stream',
+      expiresAt: nowFn() + policy.sourceGrantTtlMs,
+      dispose: input.dispose || null
+    })
+    try {
+      const attached = await runtime.provider.attachSourceGrant({
+        acquisitionId: acquisition.acquisitionId,
+        grant,
+        principal
+      })
+      return { ...attached, sourceAccepted: true }
+    } catch (error) {
+      await runtime.localFileSourceGrants.revoke(grant.token)
+      if (error?.code === 'ACQUISITION_NOT_QUEUED') {
+        const latest = await runtime.provider.getAcquisition({
+          acquisitionId: acquisition.acquisitionId,
+          principal
+        })
+        if (latest) return { ...latest, sourceAccepted: false }
+      }
+      await runtime.provider.cancelAcquisition({
+        acquisitionId: acquisition.acquisitionId,
+        principal
+      }).catch(() => {})
+      throw error
+    }
+  }
+
   const service = {
+    requestLocalFileAcquisition,
+    async listAcquisitions(request = {}) {
+      if (!publisherShell) return []
+      const local = await publisherShell.ensureLocalPublisher()
+      const page = await runtime.provider.listAcquisitions({
+        ...request,
+        principal: providerPrincipal(local.publisherId)
+      })
+      return page.items
+    },
+    async getAcquisition(acquisitionId) {
+      if (!publisherShell) return null
+      const local = await publisherShell.ensureLocalPublisher()
+      return runtime.provider.getAcquisition({
+        acquisitionId,
+        principal: providerPrincipal(local.publisherId)
+      })
+    },
+    async cancelAcquisition(acquisitionId) {
+      if (!publisherShell) return null
+      const local = await publisherShell.ensureLocalPublisher()
+      return runtime.provider.cancelAcquisition({
+        acquisitionId,
+        principal: providerPrincipal(local.publisherId)
+      })
+    },
     // A getter because residency and restore activity change while the relay
     // runs. Durable bucket inventory is not guessed from process-local totals.
     get s3() {
@@ -658,7 +833,6 @@ async function buildRelayService({
     storageGuard,
     canIngest: request => canRetain(request),
     canArchive: () => canRetain({ retentionClass: 'archive-pin' }),
-    canStageIngest: () => ingestReady,
     getClassifier() {
       return classifier
     },
@@ -701,9 +875,6 @@ async function buildRelayService({
       return { removed: Boolean(removed) }
     },
     async applyNetworkPolicy(policy) {
-      ingestReady = false
-      policyControlApplied = false
-      ingestPolicyEligible = false
       const controlledPolicy = completePolicyControl(policy)
         ? policy
         : {
@@ -744,15 +915,9 @@ async function buildRelayService({
       if (!effective || typeof effective !== 'object') {
         throw new Error('network policy result is unavailable')
       }
-      policyControlApplied = effective?.policyVersion === 2 &&
+      const policyControlApplied = effective?.policyVersion === 2 &&
         effective?.consentVersion === 1 &&
         effective?.migrationRequired === false
-      ingestPolicyEligible = policyControlApplied && (
-        (effective.contributeWatchedMedia === true && effective.contributionBudgetBytes > 0) ||
-        (effective.archiveEnabled === true && effective.archiveBudgetBytes > 0)
-      )
-      await ingestManager?.cancelPolicyDeniedJobs?.()
-      ingestReady = Boolean(ingestManager) && ingestPolicyEligible
       return {
         policyVersion: effective.policyVersion,
         consentVersion: effective.consentVersion,
@@ -763,7 +928,7 @@ async function buildRelayService({
         archiveBudgetBytes: effective.archiveBudgetBytes,
         uploadPermission: effective.uploadPermission,
         uploadCeilingBytes: effective.uploadCeilingBytes,
-        ingestReady
+        acquisitionReady: policyControlApplied
       }
     },
     getLinkDescriptor() {
@@ -832,29 +997,14 @@ async function buildRelayService({
 
       const companionFsModule = fsModule || await import('#fs')
       const companionPathModule = pathModule || await import('#path')
-      const ingestSpoolRoot = companionPathModule.join(config.storage.path, 'companion', 'ingest-spool')
-      const sourceClient = config.companion.sourceOrigin
-        ? createSourceCallbackClient({
-            origin: config.companion.sourceOrigin,
-            client: config.companion.sourceClient,
-            sharedSecret: config.companion.sourceSharedSecret,
-            chunkBytes: config.companion.sourceChunkBytes,
-            requestTimeoutMs: config.companion.sourceRequestTimeoutMs,
-            clock: nowFn
-          })
-        : null
-      const sourceRegistry = createSourceProviderRegistry({
-        config: config.archive || {},
-        fs: companionFsModule,
-        legacySourceClient: sourceClient
-      })
-      const publisherShell = createRelayPublisherShell({
+      const archiveSpoolRoot = companionPathModule.join(config.storage.path, 'companion', 'archive-spool')
+      publisherShell = createRelayPublisherShell({
         api: runtime.api,
         storagePath: config.storage?.path,
         fs: companionFsModule,
         logger
       })
-      const ingestPublisher = createArchivePublisher({
+      const archivePublisher = createArchivePublisher({
         identityManager: runtime.identityManager,
         storagePath: config.storage?.path,
         uploadManager: runtime.uploadManager,
@@ -865,30 +1015,23 @@ async function buildRelayService({
         canPublish: retentionPermission
       })
       if (runtime.ctx?.metaDb) {
-        ingestManager = createIngestManager({
-          store: createIngestJobStore({ bee: runtime.ctx.metaDb, now: nowFn }),
-          publisher: ingestPublisher,
-          spoolRoot: ingestSpoolRoot,
-          fs: companionFsModule,
-          path: companionPathModule,
-          sourceClient,
-          sourceRegistry,
-          assetStore: blockOffload?.createStagingStore ? runtime.ctx.store : null,
-          createStagingStore: blockOffload?.createStagingStore
-            ? (input) => blockOffload.createStagingStore(input)
-            : null,
-          canIngest: request => canRetain(request),
-          now: nowFn,
-          logger
+        if (typeof runtime.provider?.migrateLegacyIngest !== 'function') {
+          throw new Error('ProviderService legacy acquisition migration is unavailable')
+        }
+        await runtime.provider.migrateLegacyIngest({
+          legacyStore: createLegacyIngestMigrationStore({ bee: runtime.ctx.metaDb, now: nowFn }),
+          legacyPrincipalId: config.companion.client,
+          legacyPublisherId: config.companion.publisherId,
+          now: nowFn
         })
       }
       if (config.archive?.uiEnabled) {
         const runtimeFsModule = companionFsModule
         const runtimePathModule = companionPathModule
-        try { runtimeFsModule?.mkdirSync?.(ingestSpoolRoot, { recursive: true }) } catch { /* Admission reports missing storage later. */ }
+        try { runtimeFsModule?.mkdirSync?.(archiveSpoolRoot, { recursive: true }) } catch { /* Admission reports missing storage later. */ }
         const tmpHeadroom = liveFreeDiskHeadroom({
           fsModule: runtimeFsModule,
-          path: ingestSpoolRoot,
+          path: archiveSpoolRoot,
           minFreeBytes: config.storage.minFreeBytes || 0,
           log: (...args) => logger.status?.debug?.(args.map(String).join(' '))
         })
@@ -910,13 +1053,13 @@ async function buildRelayService({
           logger,
           host: archiveUiHost(config),
           port: archiveUiPort(config),
-          uploadDir: ingestSpoolRoot,
+          uploadDir: archiveSpoolRoot,
           uploadStorageHeadroom: archiveHeadroom,
           storageReservations: archiveStorageReservations,
-          publisher: ingestPublisher,
+          publisher: archivePublisher,
           downloader: createYtDlpDownloader({
             bin: config.archive.ytDlpPath,
-            outputDir: companionPathModule.join(ingestSpoolRoot, 'uploads'),
+            outputDir: companionPathModule.join(archiveSpoolRoot, 'uploads'),
             format: config.archive.format,
             ffmpegPath: config.archive.ffmpegPath,
             cookiesPath: config.archive.cookiesPath,
@@ -942,13 +1085,13 @@ async function buildRelayService({
         })
       }
       if (config.companion?.enabled !== false) {
+        if (!runtime.provider) throw new Error('Relay runtime did not expose ProviderService')
         companionServer = await companionServerFactory({
-          service,
+          service: createProviderMachineService(runtime),
           config: config.companion,
           clock: nowFn,
           logger,
-          fs: companionFsModule,
-          ingestSpoolRoot
+          fs: companionFsModule
         })
         await companionServer.start()
       }
@@ -956,33 +1099,6 @@ async function buildRelayService({
       const runtimeStartedAt = Date.now()
       await runtime.start?.()
       logger.relay.info('Relay runtime network ready', { runtimeStartMs: Date.now() - runtimeStartedAt })
-      // Reclaim the staged prefixes of ingests that will never come back for
-      // them — a job that was cancelled while the relay was down, one whose
-      await ingestManager?.start()
-      ingestManagerStarted = Boolean(ingestManager)
-      ingestReady = Boolean(ingestManager) && policyControlApplied && ingestPolicyEligible
-
-      // Reclaim the staged prefixes of ingests in the background
-      // so startup is instant and does not block on sequential S3 HEAD/DELETE network calls.
-      if (ingestManager && blockOffload?.createStagingStore && runtime.ctx?.store) {
-        ingestManager.stagingSweepPlan().then(async plan => {
-          const swept = await sweepStagingState({
-            store: runtime.ctx.store,
-            createStagingStore: (input) => blockOffload.createStagingStore(input),
-            ids: plan.ids,
-            keep: plan.keep
-          })
-          if (swept.reclaimed.length > 0 || swept.orphaned.length > 0) {
-            logger.relay.info('Relay ingest staging state swept', {
-              reclaimed: swept.reclaimed.length,
-              retained: swept.retained.length,
-              orphaned: swept.orphaned.length
-            })
-          }
-        }).catch(error => {
-          logger.relay.warn?.('Relay ingest staging sweep failed', { error: error?.message || String(error) })
-        })
-      }
       // The publisher root is CLI-owned, so the backend cannot restore a
       // writable binding by itself: restoreLocalPublisherScopes() finds nothing
       // at boot and the relay joins no publisher scope and announces no
@@ -1110,14 +1226,9 @@ async function buildRelayService({
           clearIntervalFn(localMirrorTimer)
           localMirrorTimer = null
         }
-        ingestReady = false
         if (companionServer) {
           await companionServer.close().catch(() => {})
           companionServer = null
-        }
-        if (ingestManager) {
-          await ingestManager.close().catch(() => {})
-          ingestManager = null
         }
         if (archiveConsole) {
           await archiveConsole.close().catch(() => {})
@@ -1249,53 +1360,27 @@ async function buildRelayService({
     async getPublication(publicationId) {
       return service.getVerifiedManifest(publicationId)
     },
-    async submitIngestJob(input, { ingestSpoolLease = null, signal = null } = {}) {
-      if (!ingestReady) {
-        const error = new Error('Explicit retention policy is not ready')
-        error.code = 'RETENTION_ADMISSION_DENIED'
-        throw error
-      }
-      if (!ingestManager) {
-        const error = new Error('Companion ingest jobs are unavailable')
-        error.code = 'INGEST_UNAVAILABLE'
-        throw error
-      }
-      return ingestManager.submitJob({ ...input, ingestSpoolLease, signal })
-    },
-    async submitArchiveIngestJob(input, { ingestSpoolLease = null, signal = null } = {}) {
-      if (!ingestManager) {
-        const error = new Error('Ingest jobs are unavailable')
-        error.code = 'INGEST_UNAVAILABLE'
-        throw error
-      }
-      return ingestManager.submitJob({ ...input, ingestSpoolLease, signal })
-    },
-    async listIngestJobs(limit = 64) {
-      return ingestManager?.listJobs(limit) || []
-    },
-    async getIngestJob(jobId) {
-      if (!ingestManager) return null
-      return ingestManager.getJob(jobId)
-    },
-    async cancelIngestJob(jobId) {
-      if (!ingestManager) return null
-      return ingestManager.cancelJob(jobId)
-    },
     async enqueueArchiveJob(input, { runNow = false } = {}) {
       if (!archiveConsole?.manager?.enqueue) {
         const error = new Error('Archive submission is unavailable')
-        error.code = 'INGEST_UNAVAILABLE'
+        error.code = 'ACQUISITION_UNAVAILABLE'
         throw error
       }
       const queued = await archiveConsole.manager.enqueue(input)
       if (!runNow) return queued
-      const jobId = queued.jobId || queued.id
-      let job = await ingestManager?.getJob(jobId)
-      while (job && !['completed', 'failed', 'cancelled'].includes(job.state)) {
-        await new Promise(resolve => setTimeout(resolve, 100))
-        job = await ingestManager?.getJob(jobId)
+      const acquisitionId = queued.acquisitionId || queued.id
+      if (!acquisitionId || typeof runtime.provider?.getAcquisition !== 'function') return queued
+      const principal = {
+        id: config.companion.client,
+        publisherId: config.companion.publisherId,
+        scopes: new Set(config.companion.scopes || ['*'])
       }
-      return job || queued
+      let acquisition = await runtime.provider.getAcquisition({ acquisitionId, principal })
+      while (acquisition && !['completed', 'failed', 'cancelled'].includes(acquisition.state)) {
+        await new Promise(resolve => setTimeout(resolve, 100))
+        acquisition = await runtime.provider.getAcquisition({ acquisitionId, principal })
+      }
+      return acquisition || queued
     },
     async mirrorLocalDrive(input = {}) {
       return runLocalMirrorOnce({
@@ -1324,12 +1409,6 @@ async function buildRelayService({
     },
     async close() {
       closed = true
-      ingestReady = false
-      ingestManagerStarted = false
-      policyControlApplied = false
-      ingestPolicyEligible = false
-      if (startPromise && !started) await startPromise.catch(() => {})
-      ingestReady = false
       if (heartbeatTimer) {
         clearIntervalFn(heartbeatTimer)
         heartbeatTimer = null
@@ -1341,10 +1420,6 @@ async function buildRelayService({
       if (companionServer) {
         await companionServer.close().catch(() => {})
         companionServer = null
-      }
-      if (ingestManager) {
-        await ingestManager.close().catch(() => {})
-        ingestManager = null
       }
       if (archiveConsole) {
         await archiveConsole.close().catch(() => {})

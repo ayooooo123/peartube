@@ -40,6 +40,7 @@ import { createUploadManager } from './upload.js';
 import { createPublisherCatalogRegistry } from './api/publisher.js'
 import { createScopedNetworkRuntime } from './network/scoped-runtime.js'
 import { createIndexVerificationRuntime } from './runtime.js'
+import { createProviderSubsystem } from './provider/subsystem.js'
 import { createAvailabilityEvidenceStore } from './assets/availability-evidence.js'
 import { createIndexFeedManager } from './indexing/feed-manager.js'
 import { createIndexPublisherFollowReconciler } from './indexing/publisher-follow-reconciler.js'
@@ -1127,7 +1128,7 @@ export async function createBackendContext(config) {
   ctx.reloadConsumerModerationProfile = () => moderationProfileTransaction.reload()
 
   // Phase 6: Create the universal API over the single scoped P2P runtime.
-  const api = createApi({
+  const baseApi = createApi({
     ctx,
     seedingManager,
     videoStats,
@@ -1144,6 +1145,20 @@ export async function createBackendContext(config) {
     // never opens.
     hostKind: platform === 'relay' ? 'server' : 'device',
   });
+  const providerSubsystem = await createProviderSubsystem({
+    ctx,
+    verifiedQueryView,
+    indexVerificationRuntime,
+    uploadManager,
+    mediaApi: baseApi,
+    policy: config.provider?.policy || null,
+    config: config.provider || {},
+  })
+  ctx.providerService = providerSubsystem.service
+  ctx.acquisitionManager = providerSubsystem.manager
+  ctx.issueLocalProviderResolution = input => providerSubsystem.issueLocalResolution(input)
+  lifecycle.ownResource('provider subsystem', providerSubsystem, 'close', 5000)
+  const api = Object.freeze({ ...baseApi, ...providerSubsystem.api })
 
 
   // Sender auth requires the stored descriptor proof, so backfill completes
@@ -1191,6 +1206,9 @@ export async function createBackendContext(config) {
     verifiedQueryView,
     archiveStore,
     permissionlessArchiveNetwork,
+    provider: providerSubsystem.service,
+    acquisitionManager: providerSubsystem.manager,
+    issueLocalProviderResolution: input => providerSubsystem.issueLocalResolution(input),
     seedPin: seedPinRegistration,
     seedPinClients: seedPinRegistration?.clients || null,
     async destroy() {

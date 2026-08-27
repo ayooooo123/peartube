@@ -1,6 +1,6 @@
 # PearTube Architecture
 
-PearTube is a permissionless media CDN organized around one universal backend. Platform shells differ, but clients and relays use the same signed publication, immutable asset, policy, and scoped-network contracts.
+PearTube is a permissionless media CDN organized around one universal decentralized provider backend. Platform shells differ, but clients and relays use the same search, resolution, acquisition, signed publication, immutable asset, policy, and scoped-network contracts.
 
 ```text
 Client shell
@@ -28,20 +28,22 @@ packages/
   core/             Shared app components, hooks, stores, and types
   platform/         App-facing runner selection and RPC facade
   host/             Backend lifecycle, host error codes, PROTOCOL_VERSION, universal HRPC client (readiness, errors, events, namespaces)
-  backend/          Publisher catalogs, indexes, immutable assets, scoped P2P, policy, playback, archive evidence
+  backend/          Provider service, acquisition manager, publisher catalogs, indexes, immutable assets, scoped P2P, policy, playback, archive evidence
   spec/             HRPC schema source and generated JS code
-  cli/              Relay, authenticated machine API, ingest jobs, archive UI, Docker support
+  cli/              Relay, authenticated provider machine API, acquisition jobs, archive UI, Docker support
   bare-*/           Native Bare support packages
 ```
 
-## Simplified Backend Cutover
+## Provider Cutover
 
-- `PublisherCatalog` is the signed source of publication truth.
+- `ProviderService` owns the client-neutral `search -> resolve -> request acquisition -> verify -> publish -> stream` contract used by app, relay, and third-party surfaces.
+- `PublisherCatalog` remains the signed source of publication truth. An acquisition is complete only after exact static-asset verification, a current publisher-authority check, catalog commit, and verified-query projection.
+- `createAcquisitionManager` owns durable idempotent jobs with the exact public states `queued`, `acquiring`, `verifying`, `publishing`, `completed`, `failed`, and `cancelled`.
+- Private source grants are short-lived, audience-bound, memory-only capabilities. Public requests, durable jobs, events, and machine responses contain no source locator, adapter credential, private header, or local path.
+- Static `SourceReader` acquisition produces one immutable Hypercore per rendition with exact length and identity checks, truthful block-boundary resume, and optional S3-backed staging.
+- Acquisition discovery and assigned work use separate `acquisition-discovery` and `acquisition` scopes. Neither scope creates archive custody; retention and archive pledges happen only after publication.
 - `createVerifiedQueryView` is the only production catalog, entity, manifest, visibility, and rendition-authorization projection.
-- Static `SourceReader` ingest produces one immutable Hypercore per rendition with truthful block-boundary resume and S3-backed staging.
-- `verified-block-engine` owns shared proof, chunk, transfer, timeout, and quarantine behavior for asset and archive paths.
-- The scoped network is split into bootstrap, publisher-catalog, feed, content-transfer, and session-lifecycle modules behind the stable facade.
-- `/api/v2` is the only machine API. The archive UI calls the same verified service in process and can mint playback capabilities only on a loopback bind.
+- `/api/v2` is the only machine API. It exposes acquisitions, source-grant attachment on private transports, policy, publication lookup, and route-scoped verified playback.
 
 Legacy channel, PublicBee, Hyperblobs, seed-pin, and publication-v1 code remains only where active clients or deployed stores still require it. Removing that boundary requires a protocol-major migration and a confirmed upgrade window.
 
@@ -163,4 +165,4 @@ CI splits coverage across fast tests, mobile builds, Electrobun desktop, relay b
 - Native clients must reject unsupported protocol versions before using backend data.
 - Platform-only backend behavior should be added only when the runtime limitation is real and documented.
 
-Last updated: 2026-08-26.
+Last updated: 2026-08-27.

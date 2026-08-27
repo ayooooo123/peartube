@@ -187,6 +187,21 @@ export interface MediaEntityDetailScreenProps {
   onSelectSource?: (source: { entityId: string; publicationId: string; renditionId: string }) => void
   /** One Play/Resume action. The backend chooses the source. */
   onPlay?: () => void
+  primaryAction?: {
+    label: string
+    disabled?: boolean
+    status?: string | null
+    onPress(): void
+  }
+  retentionChoice?: {
+    value: 'contribution-cache' | 'archive-pin'
+    onChange(value: 'contribution-cache' | 'archive-pin'): void
+  }
+  availabilityOverride?: {
+    label: string
+    detail: string
+    playable: boolean
+  }
   /** Fraction watched on this device, when there is something to resume. */
   resumeFraction?: number | null
   /**
@@ -330,6 +345,9 @@ export function MediaEntityDetailScreen({
   publisherActionHandlers,
   onSelectSource,
   onPlay,
+  primaryAction,
+  retentionChoice,
+  availabilityOverride,
   resumeFraction = null,
   initialDetailsOpen = false,
   onBack,
@@ -362,7 +380,7 @@ export function MediaEntityDetailScreen({
   const synopsis = pickString(item?.synopsis, item?.description, item?.overview)
   // One availability answer for the whole screen, from the same assessment the
   // card quoted; the hero shows it plainly and Other Sources explains it.
-  const availabilityView = describeAvailability(
+  const availabilityView = availabilityOverride || describeAvailability(
     item?.availability ?? asArray(item?.sources).find((source) => source?.selected)?.availability ?? null,
   )
   const genres = mediaGenres(item)
@@ -375,7 +393,8 @@ export function MediaEntityDetailScreen({
   const progressPercent = typeof resumeFraction === 'number' && resumeFraction > 0
     ? Math.min(99, Math.max(1, Math.round(resumeFraction * 100)))
     : null
-  const playLabel = progressPercent === null ? 'Watch Now' : 'Resume'
+  const playLabel = primaryAction?.label || (progressPercent === null ? 'Watch Now' : 'Resume')
+  const actionDisabled = primaryAction?.disabled ?? !availabilityView.playable
   const detailsLabel = detailsOpen
     ? 'Hide details'
     : `Details and other sources${sourceCount > 1 ? ` (${sourceCount})` : ''}`
@@ -478,6 +497,28 @@ export function MediaEntityDetailScreen({
             {availabilityView.label}
           </Text>
 
+          {retentionChoice ? (
+            <View style={styles.retentionChoices}>
+              {([
+                ['contribution-cache', 'Stream once'],
+                ['archive-pin', 'Keep after watching'],
+              ] as const).map(([value, label]) => (
+                <Pressable
+                  key={value}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: retentionChoice.value === value }}
+                  onPress={() => retentionChoice.onChange(value)}
+                  style={[
+                    styles.retentionChoice,
+                    retentionChoice.value === value && styles.retentionChoiceSelected,
+                  ]}
+                >
+                  <Text style={styles.secondaryActionLabel}>{label}</Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+
           {/* One tap plays. The backend already picked the source and fails
               over, so nothing stands between this button and playback; the
               per-source diagnostics live behind the disclosure beside it. */}
@@ -489,17 +530,19 @@ export function MediaEntityDetailScreen({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`${playLabel} ${title}`}
-              accessibilityState={{ disabled: !availabilityView.playable }}
-              disabled={!availabilityView.playable}
-              onPress={() => onPlay?.()}
+              accessibilityState={{ disabled: actionDisabled }}
+              disabled={actionDisabled}
+              onPress={() => primaryAction ? primaryAction.onPress() : onPlay?.()}
               style={({ pressed }) => [
                 styles.primaryAction,
-                !availabilityView.playable && styles.actionDisabled,
+                actionDisabled && styles.actionDisabled,
                 pressed && styles.actionPressed,
               ]}
             >
-              <Ionicons name="play" color={colors.onPrimary} size={20} />
-              <Text style={styles.primaryActionLabel}>{playLabel}</Text>
+              <View style={styles.actionContent}>
+                <Ionicons name="play" color={colors.onPrimary} size={20} />
+                <Text style={styles.primaryActionLabel} numberOfLines={1}>{playLabel}</Text>
+              </View>
             </Pressable>
 
             {progressPercent === null ? null : (
@@ -518,10 +561,13 @@ export function MediaEntityDetailScreen({
               onPress={() => setDetailsOpen(open => !open)}
               style={({ pressed }) => [styles.secondaryAction, pressed && styles.actionPressed]}
             >
-              <Text style={styles.secondaryActionLabel}>{detailsLabel}</Text>
-              <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} color={colors.textSecondary} size={16} />
+              <View style={styles.actionContent}>
+                <Text style={styles.secondaryActionLabel} numberOfLines={1}>{detailsLabel}</Text>
+                <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} color={colors.textSecondary} size={16} />
+              </View>
             </Pressable>
           </ScrollView>
+          {primaryAction?.status ? <Text style={styles.availabilityDetail}>{primaryAction.status}</Text> : null}
 
           {availabilityView.playable ? null : (
             <Text style={styles.availabilityDetail}>{availabilityView.detail}</Text>
@@ -733,6 +779,21 @@ const styles = StyleSheet.create({
     ...fonts.body.sm,
     color: colors.textMuted,
   },
+  retentionChoices: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  retentionChoice: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderSubtle,
+  },
+  retentionChoiceSelected: {
+    borderColor: colors.primary,
+    backgroundColor: colors.overlayButton,
+  },
   actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -741,11 +802,18 @@ const styles = StyleSheet.create({
   },
   // Accent blue, taller and wider than anything beside it: the one thing on
   // this screen a viewer is meant to press.
+  actionContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 0,
+    gap: spacing.sm,
+  },
   primaryAction: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.sm,
+    flexShrink: 0,
     minHeight: 52,
     paddingHorizontal: spacing.xxl,
     borderRadius: radius.md,
@@ -760,6 +828,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
+    flexShrink: 0,
     minHeight: 44,
     paddingHorizontal: spacing.lg,
     borderRadius: radius.md,
@@ -778,6 +847,7 @@ const styles = StyleSheet.create({
     opacity: 0.8,
   },
   progressPill: {
+    flexShrink: 0,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
     borderRadius: radius.pill,

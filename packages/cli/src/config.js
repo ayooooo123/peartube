@@ -922,6 +922,8 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
     `  host: ${companion.host || '127.0.0.1'}`,
     `  port: ${companion.port ?? 8175}`,
     `  client: ${companion.client || 'client'}`,
+    `  publisherId: ${companion.publisherId || companion.client || 'client'}`,
+    `  scopes: ${(companion.scopes || ['*']).join(',')}`,
     `  maxBodyBytes: ${companion.maxBodyBytes ?? 1048576}`,
     `  maxClockSkewMs: ${companion.maxClockSkewMs ?? 30000}`,
     `  maxNonces: ${companion.maxNonces ?? 4096}`,

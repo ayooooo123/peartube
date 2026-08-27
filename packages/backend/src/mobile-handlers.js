@@ -331,7 +331,7 @@ export function attachMobileHandlers(B, deps) {
   B.eventCastDeviceFound = () => {}; B.eventCastDeviceLost = () => {}
   B.eventCastPlaybackState = () => {}; B.eventCastTimeUpdate = () => {}
   B.eventUploadProgress = () => {}; B.eventMediaGraphUpdate = () => {}
-  B.eventLog = () => {}
+  B.eventLog = () => {}; B.eventAcquisitionLifecycle = () => {}
   B.eventVideoStats = (data) => {
     try { rpc.eventVideoStats?.(data) } catch {}
   }
@@ -406,6 +406,25 @@ export function attachMobileHandlers(B, deps) {
 
   B.searchIndexCandidates = (r) => searchIndexCandidatesForTransport(api, r)
   B.verifyIndexCandidate = (r) => verifyIndexCandidateForTransport(api, r)
+  B.providerSearch = r => api.providerSearch(r)
+  B.resolveProviderRef = r => api.resolveProviderRef(r)
+  B.requestAcquisition = r => api.requestAcquisition(r)
+  B.attachSourceGrant = r => api.attachSourceGrant(r)
+  B.getAcquisition = r => api.getAcquisition(r)
+  B.listAcquisitions = r => api.listAcquisitions(r)
+  B.cancelAcquisition = r => api.cancelAcquisition(r)
+  B.getProviderPublication = r => api.getProviderPublication(r)
+  B.openProviderStream = r => api.openProviderStream(r)
+  B.getProviderStatus = r => api.getProviderStatus(r)
+  B.getProviderPolicy = r => api.getProviderPolicy(r)
+  B.setProviderPolicy = r => api.setProviderPolicy(r)
+  B.getAcquisitionPolicy = r => api.getAcquisitionPolicy(r)
+  B.setAcquisitionPolicy = r => api.setAcquisitionPolicy(r)
+  const unsubscribeAcquisitions = ctx?.acquisitionManager?.subscribe?.(event => {
+    const payload = Object.fromEntries(Object.entries(event || {}).filter(([, value]) => value !== null && value !== undefined))
+    try { rpc?.eventAcquisitionLifecycle?.(payload)?.catch?.(() => {}) } catch {}
+  })
+  if (unsubscribeAcquisitions) ctx?.registerCleanup?.('acquisition lifecycle RPC', unsubscribeAcquisitions)
 
   B.globalSearchVideos = async (r) => {
     try { const raw = await api.globalSearchVideos(r.query, { topK: r.topK || 20 }); return { results: (raw || []).map((i) => ({ id: String(i.id || ''), score: i.score != null ? String(i.score) : null, metadata: i.metadata ? JSON.stringify(i.metadata) : null })) } }

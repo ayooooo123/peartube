@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Platform, Pressable, Text, TextInput, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { useLocalSearchParams, useRouter } from 'expo-router'
@@ -13,6 +13,7 @@ import { useMediaCatalog } from '@/hooks/useMediaCatalog'
 import { colors } from '@/lib/colors'
 import { searchMediaCatalog } from '@/lib/media-catalog-controller.mjs'
 import { usePlatform } from '@/lib/PlatformProvider'
+import { resolveProviderHit, type ProviderHit } from '@/lib/provider-consumer-flow'
 import { useApp } from './_layout'
 
 function MobileSearchBar({
@@ -81,6 +82,27 @@ function MobileSearchBar({
     </View>
   )
 }
+type ProviderSearchState = {
+  status: 'idle' | 'searching' | 'ready' | 'error'
+  hits: ProviderHit[]
+  openingRef: string | null
+}
+
+function isProviderHit(value: unknown): value is ProviderHit {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    'resolutionRef' in value &&
+    typeof value.resolutionRef === 'string' &&
+    'title' in value &&
+    typeof value.title === 'string' &&
+    'published' in value &&
+    typeof value.published === 'boolean' &&
+    'acquirable' in value &&
+    typeof value.acquirable === 'boolean',
+  )
+}
+
 
 export default function SearchScreen() {
   const router = useRouter()
@@ -88,6 +110,11 @@ export default function SearchScreen() {
   const { isDesktop, insets } = usePlatform()
   const { ready, rpc, platformEvents, backendError, startupStatus } = useApp()
   const query = typeof params.q === 'string' ? params.q.trim() : ''
+  const [providerSearch, setProviderSearch] = useState<ProviderSearchState>({
+    status: 'idle',
+    hits: [],
+    openingRef: null,
+  })
 
   const searchRpc = useMemo(() => {
     if (!rpc || typeof rpc.getMediaCatalog !== 'function' || !query) return null
@@ -107,6 +134,90 @@ export default function SearchScreen() {
     events: platformEvents,
     diagnostics: { backendError, startupStatus },
   })
+  useEffect(() => {
+    const provider = rpc?.provider
+    if (!ready || !query || typeof provider?.search !== 'function') {
+      setProviderSearch({ status: 'idle', hits: [], openingRef: null })
+      return
+    }
+
+    let active = true
+    setProviderSearch({ status: 'searching', hits: [], openingRef: null })
+    void (async () => {
+      try {
+        const response: unknown = await provider.search({ query, limit: 20 })
+        if (!response || typeof response !== 'object' || !('success' in response) || response.success !== true) {
+          throw new Error('Search unavailable')
+        }
+        const hits = 'hits' in response && Array.isArray(response.hits)
+          ? response.hits.filter(isProviderHit)
+          : []
+        if (active) setProviderSearch({ status: 'ready', hits, openingRef: null })
+      } catch {
+        if (active) setProviderSearch({ status: 'error', hits: [], openingRef: null })
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [query, ready, rpc])
+
+  const openProviderHit = useCallback(async (hit: ProviderHit) => {
+    const provider = rpc?.provider
+    if (!provider) return
+    setProviderSearch(current => ({ ...current, openingRef: hit.resolutionRef }))
+    try {
+      const result = await resolveProviderHit(provider, hit)
+      if (result.kind === 'published') {
+        router.push({
+          pathname: '/media/[id]',
+          params: {
+            id: encodeURIComponent(result.entityId),
+            autoplay: 'true',
+            publicationId: result.publicationId,
+          },
+        })
+        return
+      }
+      if (result.kind === 'request') {
+        const routeId = result.resolution.entityId || `request:${result.resolution.resolutionRef}`
+        const item = {
+          entityId: routeId,
+          localEntityId: routeId,
+          entityKind: 'work',
+          title: result.resolution.title,
+          subtitle: result.resolution.subtitle || null,
+          providerResolution: result.resolution,
+          availability: {
+            state: 'unavailable',
+            observedAt: Date.now(),
+            expiresAt: Date.now(),
+            requiredRangeCount: 1,
+            reachableRangeCount: 0,
+            independentPeerCount: 0,
+            completePeerCount: 0,
+            offlinePlayable: false,
+            archivePledged: false,
+            reasonCodes: [],
+          },
+          sources: [],
+        }
+        router.push({
+          pathname: '/media/[id]',
+          params: {
+            id: encodeURIComponent(routeId),
+            item: encodeURIComponent(JSON.stringify(item)),
+          },
+        })
+        return
+      }
+      setProviderSearch(current => ({ ...current, status: 'error', openingRef: null }))
+    } catch {
+      setProviderSearch(current => ({ ...current, status: 'error', openingRef: null }))
+    }
+  }, [router, rpc])
+
 
   const submitSearch = useCallback((nextQuery: string) => {
     router.replace({ pathname: '/search', params: { q: nextQuery } })
@@ -155,22 +266,68 @@ export default function SearchScreen() {
         <MobileSearchBar
           key={query}
           initialQuery={query}
-          searching={catalog.status === 'loading' || catalog.refreshing}
+          searching={catalog.status === 'loading' || catalog.refreshing || providerSearch.status === 'searching'}
           onSubmit={submitSearch}
         />
       ) : null}
 
       {query ? (
-        <MediaCatalogView
-          title={`Search results for “${query}”`}
-          subtitle="Results from the locally projected, moderated media catalog"
-          state={catalog}
-          diagnostic={catalog.diagnostic}
-          onRefresh={() => { void catalog.refresh() }}
-          onLoadNext={() => { void catalog.loadNext() }}
-          onEntityPress={openEntity}
-          contentBottomInset={Math.max(insets.bottom + 24, 24)}
-        />
+        <>
+          {providerSearch.hits.length > 0 ? (
+            <View style={{ paddingHorizontal: 16, paddingVertical: 12, gap: 8 }}>
+              <Text style={{ color: colors.text, fontSize: 16, fontWeight: '700' }}>More results</Text>
+              {providerSearch.hits.slice(0, 3).map((hit) => {
+                const opening = providerSearch.openingRef === hit.resolutionRef
+                return (
+                  <Pressable
+                    key={hit.resolutionRef}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${hit.published ? 'Play' : 'Open'} ${hit.title}`}
+                    disabled={Boolean(providerSearch.openingRef)}
+                    onPress={() => { void openProviderHit(hit) }}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      borderWidth: 1,
+                      borderColor: colors.border,
+                      borderRadius: 12,
+                      backgroundColor: colors.bgSecondary,
+                      paddingHorizontal: 14,
+                      paddingVertical: 12,
+                      opacity: providerSearch.openingRef && !opening ? 0.55 : 1,
+                    }}
+                  >
+                    <View style={{ flex: 1, paddingRight: 12 }}>
+                      <Text style={{ color: colors.text, fontWeight: '700' }} numberOfLines={1}>{hit.title}</Text>
+                      <Text style={{ color: colors.textMuted }} numberOfLines={1}>
+                        {hit.subtitle || (hit.published ? 'Ready to watch' : 'Available by request')}
+                      </Text>
+                    </View>
+                    <Text style={{ color: colors.primary, fontWeight: '700' }}>
+                      {opening ? 'Opening…' : hit.published ? 'Play' : 'View'}
+                    </Text>
+                  </Pressable>
+                )
+              })}
+            </View>
+          ) : null}
+          {providerSearch.status === 'error' ? (
+            <Text accessibilityRole="alert" style={{ color: colors.textMuted, paddingHorizontal: 16, paddingBottom: 8 }}>
+              More results are unavailable.
+            </Text>
+          ) : null}
+          <MediaCatalogView
+            title={`Search results for “${query}”`}
+            subtitle="Results from the locally projected, moderated media catalog"
+            state={catalog}
+            diagnostic={catalog.diagnostic}
+            onRefresh={() => { void catalog.refresh() }}
+            onLoadNext={() => { void catalog.loadNext() }}
+            onEntityPress={openEntity}
+            contentBottomInset={Math.max(insets.bottom + 24, 24)}
+          />
+        </>
       ) : (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 }}>
           <Feather name="search" size={42} color={colors.textMuted} />

@@ -88,20 +88,20 @@ function fakeService(overrides = {}) {
     },
     async setTmdbSettings(form) { calls.setTmdb.push(form); tmdb.apiKey = form.apiKey; tmdb.enabled = form.enabled; return { enabled: form.enabled } },
     async addCreatorSource(form) { calls.addCreator.push(form); return { creator: {}, job: {} } },
-    async submitArchiveIngestJob(input) {
+    async requestLocalFileAcquisition(input) {
       const job = {
-        jobId: `ing_ui_${jobs.length + 1}`,
+        acquisitionId: `acq-ui-${jobs.length + 1}`,
         state: 'queued',
-        title: input.request.measuredFacts.title,
-        mediaContext: input.request.mediaContext,
+        title: input.title,
         errorCode: null,
         createdAt: Date.now(),
-        updatedAt: Date.now()
+        updatedAt: Date.now(),
+        sourceAccepted: true
       }
       jobs.push(job)
       return job
     },
-    async listIngestJobs() { return jobs },
+    async listAcquisitions() { return jobs },
     ...overrides
   }
 }

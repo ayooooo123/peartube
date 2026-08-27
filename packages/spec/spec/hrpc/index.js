@@ -316,7 +316,37 @@ const methods = new Map([
   ['@peartube/resume-network', 153],
   [153, '@peartube/resume-network'],
   ['@peartube/set-playback-active', 154],
-  [154, '@peartube/set-playback-active']
+  [154, '@peartube/set-playback-active'],
+  ['@peartube/provider-search', 155],
+  [155, '@peartube/provider-search'],
+  ['@peartube/resolve-provider-ref', 156],
+  [156, '@peartube/resolve-provider-ref'],
+  ['@peartube/request-acquisition', 157],
+  [157, '@peartube/request-acquisition'],
+  ['@peartube/attach-source-grant', 158],
+  [158, '@peartube/attach-source-grant'],
+  ['@peartube/get-acquisition', 159],
+  [159, '@peartube/get-acquisition'],
+  ['@peartube/list-acquisitions', 160],
+  [160, '@peartube/list-acquisitions'],
+  ['@peartube/cancel-acquisition', 161],
+  [161, '@peartube/cancel-acquisition'],
+  ['@peartube/get-provider-publication', 162],
+  [162, '@peartube/get-provider-publication'],
+  ['@peartube/open-provider-stream', 163],
+  [163, '@peartube/open-provider-stream'],
+  ['@peartube/get-provider-status', 164],
+  [164, '@peartube/get-provider-status'],
+  ['@peartube/get-provider-policy', 165],
+  [165, '@peartube/get-provider-policy'],
+  ['@peartube/set-provider-policy', 166],
+  [166, '@peartube/set-provider-policy'],
+  ['@peartube/get-acquisition-policy', 167],
+  [167, '@peartube/get-acquisition-policy'],
+  ['@peartube/set-acquisition-policy', 168],
+  [168, '@peartube/set-acquisition-policy'],
+  ['@peartube/event-acquisition-lifecycle', 169],
+  [169, '@peartube/event-acquisition-lifecycle']
 ])
 
 class HRPC {
@@ -478,7 +508,22 @@ class HRPC {
       ['@peartube/set-device-conditions', getEncoding('@peartube/set-device-conditions-request')],
       ['@peartube/suspend-network', getEncoding('@peartube/suspend-network-request')],
       ['@peartube/resume-network', getEncoding('@peartube/resume-network-request')],
-      ['@peartube/set-playback-active', getEncoding('@peartube/set-playback-active-request')]
+      ['@peartube/set-playback-active', getEncoding('@peartube/set-playback-active-request')],
+      ['@peartube/provider-search', getEncoding('@peartube/provider-search-request')],
+      ['@peartube/resolve-provider-ref', getEncoding('@peartube/resolve-provider-ref-request')],
+      ['@peartube/request-acquisition', getEncoding('@peartube/request-acquisition-request')],
+      ['@peartube/attach-source-grant', getEncoding('@peartube/attach-source-grant-request')],
+      ['@peartube/get-acquisition', getEncoding('@peartube/get-acquisition-request')],
+      ['@peartube/list-acquisitions', getEncoding('@peartube/list-acquisitions-request')],
+      ['@peartube/cancel-acquisition', getEncoding('@peartube/cancel-acquisition-request')],
+      ['@peartube/get-provider-publication', getEncoding('@peartube/get-provider-publication-request')],
+      ['@peartube/open-provider-stream', getEncoding('@peartube/open-provider-stream-request')],
+      ['@peartube/get-provider-status', getEncoding('@peartube/get-provider-status-request')],
+      ['@peartube/get-provider-policy', getEncoding('@peartube/get-provider-policy-request')],
+      ['@peartube/set-provider-policy', getEncoding('@peartube/set-provider-policy-request')],
+      ['@peartube/get-acquisition-policy', getEncoding('@peartube/get-acquisition-policy-request')],
+      ['@peartube/set-acquisition-policy', getEncoding('@peartube/set-acquisition-policy-request')],
+      ['@peartube/event-acquisition-lifecycle', getEncoding('@peartube/acquisition-lifecycle-event-v1')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -623,7 +668,21 @@ class HRPC {
       ['@peartube/set-device-conditions', getEncoding('@peartube/set-device-conditions-response')],
       ['@peartube/suspend-network', getEncoding('@peartube/suspend-network-response')],
       ['@peartube/resume-network', getEncoding('@peartube/resume-network-response')],
-      ['@peartube/set-playback-active', getEncoding('@peartube/set-playback-active-response')]
+      ['@peartube/set-playback-active', getEncoding('@peartube/set-playback-active-response')],
+      ['@peartube/provider-search', getEncoding('@peartube/provider-search-response')],
+      ['@peartube/resolve-provider-ref', getEncoding('@peartube/resolve-provider-ref-response')],
+      ['@peartube/request-acquisition', getEncoding('@peartube/request-acquisition-response')],
+      ['@peartube/attach-source-grant', getEncoding('@peartube/attach-source-grant-response')],
+      ['@peartube/get-acquisition', getEncoding('@peartube/get-acquisition-response')],
+      ['@peartube/list-acquisitions', getEncoding('@peartube/list-acquisitions-response')],
+      ['@peartube/cancel-acquisition', getEncoding('@peartube/cancel-acquisition-response')],
+      ['@peartube/get-provider-publication', getEncoding('@peartube/get-provider-publication-response')],
+      ['@peartube/open-provider-stream', getEncoding('@peartube/open-provider-stream-response')],
+      ['@peartube/get-provider-status', getEncoding('@peartube/get-provider-status-response')],
+      ['@peartube/get-provider-policy', getEncoding('@peartube/get-provider-policy-response')],
+      ['@peartube/set-provider-policy', getEncoding('@peartube/set-provider-policy-response')],
+      ['@peartube/get-acquisition-policy', getEncoding('@peartube/get-acquisition-policy-response')],
+      ['@peartube/set-acquisition-policy', getEncoding('@peartube/set-acquisition-policy-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -1342,6 +1401,66 @@ class HRPC {
     return this._call('@peartube/set-playback-active', args)
   }
 
+  async providerSearch(args) {
+    return this._call('@peartube/provider-search', args)
+  }
+
+  async resolveProviderRef(args) {
+    return this._call('@peartube/resolve-provider-ref', args)
+  }
+
+  async requestAcquisition(args) {
+    return this._call('@peartube/request-acquisition', args)
+  }
+
+  async attachSourceGrant(args) {
+    return this._call('@peartube/attach-source-grant', args)
+  }
+
+  async getAcquisition(args) {
+    return this._call('@peartube/get-acquisition', args)
+  }
+
+  async listAcquisitions(args) {
+    return this._call('@peartube/list-acquisitions', args)
+  }
+
+  async cancelAcquisition(args) {
+    return this._call('@peartube/cancel-acquisition', args)
+  }
+
+  async getProviderPublication(args) {
+    return this._call('@peartube/get-provider-publication', args)
+  }
+
+  async openProviderStream(args) {
+    return this._call('@peartube/open-provider-stream', args)
+  }
+
+  async getProviderStatus(args) {
+    return this._call('@peartube/get-provider-status', args)
+  }
+
+  async getProviderPolicy(args) {
+    return this._call('@peartube/get-provider-policy', args)
+  }
+
+  async setProviderPolicy(args) {
+    return this._call('@peartube/set-provider-policy', args)
+  }
+
+  async getAcquisitionPolicy(args) {
+    return this._call('@peartube/get-acquisition-policy', args)
+  }
+
+  async setAcquisitionPolicy(args) {
+    return this._call('@peartube/set-acquisition-policy', args)
+  }
+
+  eventAcquisitionLifecycle(args) {
+    return this._callSync('@peartube/event-acquisition-lifecycle', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -1962,6 +2081,66 @@ class HRPC {
     this._handlers['@peartube/set-playback-active'] = responseFn
   }
 
+  onProviderSearch(responseFn) {
+    this._handlers['@peartube/provider-search'] = responseFn
+  }
+
+  onResolveProviderRef(responseFn) {
+    this._handlers['@peartube/resolve-provider-ref'] = responseFn
+  }
+
+  onRequestAcquisition(responseFn) {
+    this._handlers['@peartube/request-acquisition'] = responseFn
+  }
+
+  onAttachSourceGrant(responseFn) {
+    this._handlers['@peartube/attach-source-grant'] = responseFn
+  }
+
+  onGetAcquisition(responseFn) {
+    this._handlers['@peartube/get-acquisition'] = responseFn
+  }
+
+  onListAcquisitions(responseFn) {
+    this._handlers['@peartube/list-acquisitions'] = responseFn
+  }
+
+  onCancelAcquisition(responseFn) {
+    this._handlers['@peartube/cancel-acquisition'] = responseFn
+  }
+
+  onGetProviderPublication(responseFn) {
+    this._handlers['@peartube/get-provider-publication'] = responseFn
+  }
+
+  onOpenProviderStream(responseFn) {
+    this._handlers['@peartube/open-provider-stream'] = responseFn
+  }
+
+  onGetProviderStatus(responseFn) {
+    this._handlers['@peartube/get-provider-status'] = responseFn
+  }
+
+  onGetProviderPolicy(responseFn) {
+    this._handlers['@peartube/get-provider-policy'] = responseFn
+  }
+
+  onSetProviderPolicy(responseFn) {
+    this._handlers['@peartube/set-provider-policy'] = responseFn
+  }
+
+  onGetAcquisitionPolicy(responseFn) {
+    this._handlers['@peartube/get-acquisition-policy'] = responseFn
+  }
+
+  onSetAcquisitionPolicy(responseFn) {
+    this._handlers['@peartube/set-acquisition-policy'] = responseFn
+  }
+
+  onEventAcquisitionLifecycle(responseFn) {
+    this._handlers['@peartube/event-acquisition-lifecycle'] = responseFn
+  }
+
   _requestIsStream(command) {
     return [
     ].includes(command)
@@ -1987,7 +2166,8 @@ class HRPC {
       '@peartube/event-cast-device-lost',
       '@peartube/event-cast-playback-state',
       '@peartube/event-cast-time-update',
-      '@peartube/event-transcode-progress'
+      '@peartube/event-transcode-progress',
+      '@peartube/event-acquisition-lifecycle'
     ].includes(command)
   }
 }

@@ -212,7 +212,7 @@ test('status recursively excludes protected configuration and runtime material',
         mode: 'public',
         storage: { path: '/secret/storage', maxBytes: 1 },
         callbackOrigin: 'https://callback.example',
-        sourceCapability: 'opaque-capability'
+        credential: 'opaque-credential'
       },
       catalog,
       runtimeStats: {
@@ -226,13 +226,13 @@ test('status recursively excludes protected configuration and runtime material',
           permissions: { contribute: false, archive: false }
         }
       },
-      ingestStatus: { lastErrors: ['SAFE_CODE'], sourceCapability: 'hidden' }
+      acquisitionStatus: { lastErrors: ['SAFE_CODE'], credential: 'hidden' }
     })
     const serialized = JSON.stringify(status)
     for (const protectedValue of [
       '/secret/storage',
       'https://callback.example',
-      'opaque-capability',
+      'opaque-credential',
       'https://source.example/video',
       'deadbeef',
       '/secret/file',

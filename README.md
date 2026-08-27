@@ -1,6 +1,6 @@
 # PearTube
 
-PearTube is a pre-alpha, permissionless media CDN and consumer streaming client built on the Hypercore stack. Mobile, Electrobun desktop, relay, and third-party client surfaces use one universal backend contract. Any application can use the authenticated machine API for exact catalog search, deferred source selection, ingest, and route-scoped playback.
+PearTube is a pre-alpha, permissionless media CDN, decentralized acquisition provider, and consumer streaming client built on the Hypercore stack. Mobile, Electrobun desktop, relay, and third-party clients use one universal backend contract. The authenticated machine API exposes the same `search -> resolve -> acquire -> verify -> stream -> retain` flow without naming or privileging a client or source adapter.
 
 ![PearTube architecture](docs/architecture.png)
 
@@ -13,7 +13,7 @@ PearTube is a pre-alpha, permissionless media CDN and consumer streaming client 
 | iOS | Active development, Expo + BareKit | `npm run ios` |
 | Android | Active development, Expo + BareKit | `npm run android` |
 | Electrobun desktop | Main desktop shell, Expo web export + embedded `pear-runtime` worker | `npm run desktop` |
-| Relay | CLI/container for discovery, seeding, archive UI, and local mirror workflows | `docker compose -f docker-compose.relay.yml up -d` |
+| Relay | CLI/container for provider search, acquisition, seeding, archive UI, and local mirror workflows | `docker compose -f docker-compose.relay.yml up -d` |
 
 Pear OTA desktop release automation is not wired yet. Use the Electrobun build/release workflows in this repo; do not reintroduce `pear run` or claim OTA support without a dedicated release-flow change.
 
@@ -21,11 +21,12 @@ Pear OTA desktop release automation is not wired yet. Use the Electrobun build/r
 
 - One moderated consumer catalog assembled from signed publisher records and bounded index feeds.
 - Immutable rendition cores transferred and verified over purpose-scoped P2P sessions; no HTTP media-origin fallback.
-- Client applications own their ranking and acquisition policy. PearTube owns verified publication, P2P delivery, local retention, and archival evidence.
-- Relays are voluntary discovery, ingest, seed, and archive peers. They gain no global catalog, moderation, or publisher authority.
+- Client applications own ranking and source choice. PearTube owns bounded provider resolution, acquisition consent, exact verification, publisher-authorized publication, P2P delivery, retention, and archival evidence.
+- Relays are voluntary discovery, acquisition, seed, and archive peers. They gain no global catalog, moderation, source credential, or publisher authority.
+- Acquisition follows explicit local policy and uses separate `acquisition-discovery` and per-assignment `acquisition` scopes. Archive custody remains a later, separate action.
 - Participation is explicit policy: watch-only, balanced contribution, or archive-enabled, with metered, battery, thermal, storage, and upload limits.
 - Watch history, library state, and recommendations remain local. PearTube sends no viewer analytics.
-- Cloud block offload has one supported path: S3-compatible object storage. Google Drive and Mega providers are not supported.
+- Cloud block offload has one supported path: S3-compatible object storage. No second cloud offload provider is part of the contract.
 
 ## Architecture
 
@@ -53,9 +54,9 @@ Client shell
 | `packages/core` | Shared app components, hooks, stores, and types |
 | `packages/platform` | App-side runner selection and RPC facade |
 | `packages/host` | Backend lifecycle wrapper, host errors, shared `PROTOCOL_VERSION`, and the universal protocol client (readiness normalization, event map, grouped namespaces) |
-| `packages/backend` | Signed publisher catalogs, local/federated indexes, immutable assets, scoped networking, playback, participation policy, S3 block offload, and diagnostics |
+| `packages/backend` | Provider service, acquisition state and policy, signed publisher catalogs, local/federated indexes, immutable assets, scoped networking, playback, S3 block offload, and diagnostics |
 | `packages/spec` | HRPC schema source and JS code generation |
-| `packages/cli` | Relay CLI/container, authenticated machine API, archive UI, ingest jobs, and local mirror support |
+| `packages/cli` | Relay CLI/container, authenticated provider machine API, archive UI, acquisition jobs, and local mirror support |
 | `packages/bare-*` | Vendored/native Bare runtime support, including `bare-ffmpeg` |
 
 ## Prerequisites

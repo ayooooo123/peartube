@@ -135,6 +135,25 @@ function createMethodCaller(rpc, ready, methodName) {
     }
   }
 }
+function createProviderNamespace(provider = {}) {
+  return {
+    search: provider.providerSearch,
+    resolveProviderRef: provider.resolveProviderRef,
+    requestAcquisition: provider.requestAcquisition,
+    attachSourceGrant: provider.attachSourceGrant,
+    getAcquisition: provider.getAcquisition,
+    listAcquisitions: provider.listAcquisitions,
+    cancelAcquisition: provider.cancelAcquisition,
+    getPublication: provider.getProviderPublication,
+    openStream: provider.openProviderStream,
+    getStatus: provider.getProviderStatus,
+    getPolicy: provider.getProviderPolicy,
+    setPolicy: provider.setProviderPolicy,
+    getAcquisitionPolicy: provider.getAcquisitionPolicy,
+    setAcquisitionPolicy: provider.setAcquisitionPolicy
+  }
+}
+
 
 function createNetworkStatusCaller(rpc, ready, events) {
   return async (request = {}) => {
@@ -352,6 +371,7 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
     personal: appRpc.personal,
     transfer: appRpc.transfer,
     search: appRpc.search,
+    provider: createProviderNamespace(appRpc.provider),
     shell: appRpc.shell
   }
 }

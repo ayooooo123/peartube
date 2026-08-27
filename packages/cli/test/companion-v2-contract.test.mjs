@@ -3,366 +3,259 @@ import b4a from 'b4a'
 
 import {
   CompanionContractError,
-  decodeIngestJobBody,
-  decodeJsonBody,
-  decodeOpenStreamBody,
-  decodePolicyControlBody,
-  decodeSearchQuery,
-  errorBody
+  decodeAcquisitionBody,
+  decodeAcquisitionPolicyBody,
+  decodeAcquisitionListQuery,
+  decodeSourceGrantBody
 } from '../src/companion/contracts.js'
-import { createCompanionRouter } from '../src/companion/routes.js'
-import { createStreamCapabilityStore } from '../src/companion/stream-capabilities.js'
+import { COMPANION_ROUTE_SCOPES, createCompanionRouter } from '../src/companion/routes.js'
 
-const CLIENT = 'client-test'
-const NOW = 1_786_406_400_000
-const REF = 'A'.repeat(43)
+const ALL_SCOPES = new Set(Object.values(COMPANION_ROUTE_SCOPES))
 
-function candidate (overrides = {}) {
+function principal (scopes = ALL_SCOPES, publisherId = 'publisher-1') {
+  return { id: 'machine-1', publisherId, scopes }
+}
+
+function request (method, url, body = null, overrides = {}) {
   return {
-    candidateRef: REF,
-    work: { title: 'The Matrix', releaseYear: 1999 },
-    publication: { publicationId: 'publication-1', publisherId: 'publisher-1' },
-    rendition: { renditionId: 'rendition-1', container: 'mkv' },
-    asset: { assetId: 'asset-1' },
-    sourceIndexers: [{ indexerId: 'indexer-1', playbackUrl: 'https://forbidden.invalid/play' }],
-    streamUrl: 'https://forbidden.invalid/stream',
-    downloadLink: 'magnet:?xt=urn:btih:forbidden',
+    method,
+    url,
+    body: body == null ? b4a.alloc(0) : b4a.from(typeof body === 'string' ? body : JSON.stringify(body)),
+    principal: principal(),
+    serverState: { transport: 'unix', socketPath: '/tmp/peartube.sock' },
     ...overrides
   }
 }
 
-function request (method, path, body = '') {
+function acquisition (overrides = {}) {
   return {
-    method,
-    url: path,
-    body: b4a.from(body),
-    headers: {},
-    clientIdentity: CLIENT,
-    serverState: { enabled: true, transport: 'unix', socketPath: '/tmp/companion.sock' }
+    schemaVersion: 1,
+    acquisitionId: 'acq-1',
+    state: 'queued',
+    retentionClass: 'archive-pin',
+    bytesAcquired: 0,
+    expectedBytes: 1024,
+    publicationId: null,
+    manifestId: null,
+    renditionId: null,
+    assetId: null,
+    errorCode: null,
+    recoverable: false,
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides
   }
 }
 
-function hasUrlField (value) {
-  if (Array.isArray(value)) return value.some(hasUrlField)
-  if (!value || typeof value !== 'object') return false
-  return Object.entries(value).some(([key, child]) => /url/i.test(key) || hasUrlField(child))
+function acquisitionBody (overrides = {}) {
+  return {
+    idempotencyKey: 'idem-1',
+    request: {
+      schemaVersion: 1,
+      resolutionRef: 'resolution-1',
+      publisherId: 'publisher-1',
+      retentionClass: 'archive-pin',
+      ...overrides
+    }
+  }
 }
 
-test('search decoder accepts exact movie and exact episode selectors', (t) => {
-  t.alike(
-    decodeSearchQuery(new URLSearchParams('namespace=tmdb&identifier=348&kind=movie&limit=64')),
-    { selector: { namespace: 'tmdb', identifier: '348', kind: 'movie' }, limit: 64, cursor: null }
-  )
-  t.alike(
-    decodeSearchQuery(new URLSearchParams('namespace=tmdb&identifier=1399&kind=episode&season=1&episode=2')),
-    { selector: { namespace: 'tmdb', identifier: '1399', kind: 'episode', season: 1, episode: 2 }, limit: 20, cursor: null }
-  )
-})
-
-test('search decoder accepts bounded title/year fallback and pagination', (t) => {
-  t.alike(
-    decodeSearchQuery(new URLSearchParams('title=Arrival&year=2016&kind=movie&limit=7&cursor=next_1')),
-    { selector: { title: 'Arrival', year: 2016, kind: 'movie' }, limit: 7, cursor: 'next_1' }
-  )
-  t.alike(
-    decodeSearchQuery(new URLSearchParams('title=Pilot&kind=episode&season=1&episode=1')),
-    { selector: { title: 'Pilot', kind: 'episode', season: 1, episode: 1 }, limit: 20, cursor: null }
-  )
-})
-
-test('search decoder rejects partial, duplicate, unknown, and unbounded fields', (t) => {
-  for (const query of [
-    'season=1&kind=episode',
-    'namespace=tmdb&kind=movie',
-    'title=Arrival&namespace=tmdb&identifier=348&kind=movie',
-    'namespace=tmdb&identifier=348&kind=movie&season=1',
-    'namespace=tmdb&identifier=1399&kind=episode&season=0&episode=2',
-    'namespace=tmdb&identifier=1399&kind=episode&season=1&episode=-2',
-    'title=Arrival&year=10000&kind=movie',
-    'title=Arrival&kind=series',
-    'title=Arrival&kind=movie&limit=65',
-    'title=Arrival&kind=movie&limit=1&limit=2',
-    'title=Arrival&kind=movie&unknown=1'
-  ]) t.exception(() => decodeSearchQuery(new URLSearchParams(query)))
-  t.exception(() => decodeSearchQuery(new URLSearchParams(`title=${'x'.repeat(257)}&kind=movie`)))
-  t.exception(() => decodeSearchQuery(new URLSearchParams('namespace=TMDB&identifier=348&kind=movie')))
-  t.exception(() => decodeSearchQuery(new URLSearchParams('namespace=tmdb&identifier=e%CC%81&kind=movie')))
-  t.exception(() => decodeSearchQuery(new URLSearchParams('namespace=tmdb&identifier=a%C2%85b&kind=movie')))
-})
-
-test('JSON body decoders reject malformed JSON, unknown fields, and invalid IDs', (t) => {
-  t.exception(() => decodeJsonBody(b4a.from('{')))
-  t.exception(() => decodeOpenStreamBody(b4a.from('{}')))
-  t.exception(() => decodeOpenStreamBody(b4a.from('{"candidateRef":"short"}')))
-  t.exception(() => decodeOpenStreamBody(b4a.from(`{"candidateRef":"${REF}","url":"https://forbidden.invalid"}`)))
-  t.exception(() => decodeOpenStreamBody(b4a.from(`{"candidateRef":"${REF}","candidateRef":"${REF}"}`)))
-  t.alike(decodeOpenStreamBody(b4a.from(`{"candidateRef":"${REF}"}`)), { candidateRef: REF })
-
-  const job = decodeIngestJobBody(b4a.from('{"idempotencyKey":"watch-1","request":{"workId":"work-1"}}'))
-  t.alike(job, { idempotencyKey: 'watch-1', request: { workId: 'work-1' } })
-  t.exception(() => decodeIngestJobBody(b4a.from('{"idempotencyKey":"watch-1","unknown":true}')))
-  t.exception(() => decodeIngestJobBody(b4a.from('{"idempotencyKey":"watch-1","request":{"sourceUrl":"https://forbidden.invalid"}}')))
-  t.exception(() => decodeIngestJobBody(b4a.from('{"idempotencyKey":"watch-1","request":{"source":"magnet:?xt=urn:btih:forbidden"}}')))
-  t.exception(() => decodeIngestJobBody(b4a.from('{"idempotencyKey":"watch-1","request":{"downloadLink":"opaque"}}')))
-})
-
-test('structured contract errors are bounded and include an optional field', (t) => {
-  const error = new CompanionContractError(400, 'INVALID_FIELD', 'Invalid search field', 'season')
-  t.alike(errorBody(error), { error: { code: 'INVALID_FIELD', message: 'Invalid search field', field: 'season' } })
-  const fallback = errorBody(Object.assign(new Error('secret '.repeat(200)), { code: 'not valid!' }))
-  t.is(fallback.error.code, 'INTERNAL_ERROR')
-  t.ok(b4a.byteLength(JSON.stringify(fallback)) <= 512)
-})
-
-test('router dispatches search with bounded work and strips embedded locators recursively', async (t) => {
-  let selector = null
-  let options = null
-  const router = createCompanionRouter({
-    service: {
-      async searchIndexCandidates (input, searchOptions) {
-        selector = input
-        options = searchOptions
-        return [candidate({
-          work: { title: 'Watch _magnet:?q=forbidden', releaseYear: 1999, externalRefs: [{ namespace: 'tmdb', identifier: 'show:95350:s1:e2' }] },
-          publication: { publicationId: 'publication-1', publisherId: 'publisher-1', title: 'x:opaque' }
-        })]
-      }
-    },
-    config: { client: { id: CLIENT } },
-    clock: () => NOW
+test('acquisition contracts accept only the bounded public request and private grant envelope', (t) => {
+  t.alike(decodeAcquisitionBody(b4a.from(JSON.stringify(acquisitionBody()))), acquisitionBody())
+  t.exception(() => decodeAcquisitionBody(b4a.from(JSON.stringify(acquisitionBody({ sourceDescriptor: { url: 'https://forbidden.invalid' } })))), CompanionContractError)
+  t.exception(() => decodeAcquisitionBody(b4a.from(JSON.stringify(acquisitionBody({ sourceCapability: 'forbidden' })))), CompanionContractError)
+  t.exception(() => decodeAcquisitionBody(b4a.from(JSON.stringify(acquisitionBody({ resolutionRef: 'https://forbidden.invalid' })))), CompanionContractError)
+  t.alike(decodeSourceGrantBody(b4a.from('{"grant":{"token":"private","url":"https://private.invalid"}}')), {
+    grant: { token: 'private', url: 'https://private.invalid' }
   })
-  const result = await router.dispatch(request('GET', '/api/v2/search?namespace=tmdb&identifier=348&kind=movie&limit=1'))
-  t.is(result.statusCode, 200)
-  t.alike(selector, { namespace: 'tmdb', identifier: '348', kind: 'movie' })
-  t.is(options.limit, 1)
-  t.is(result.body.candidates.length, 1)
-  t.not(hasUrlField(result.body), true)
-  const serialized = JSON.stringify(result.body)
-  t.not(serialized.includes('forbidden.invalid'), true)
-  t.not(serialized.includes('magnet:'), true)
-  t.is(result.body.candidates[0].work.externalRefs[0].identifier, 'show:95350:s1:e2')
+
+  const query = new URLSearchParams('cursor=next-1&limit=2&states=queued,failed')
+  t.alike(decodeAcquisitionListQuery(query), { cursor: 'next-1', limit: 2, states: ['queued', 'failed'] })
+  t.exception(() => decodeAcquisitionListQuery(new URLSearchParams('states=queued,queued')), CompanionContractError)
 })
 
-test('episode search delegates the show coordinates and its ordinals', async (t) => {
-  let selector = null
-  let options = null
-  const router = createCompanionRouter({
-    service: {
-      async searchIndexCandidates (input, searchOptions) {
-        selector = input
-        options = searchOptions
-        return [candidate({ work: { title: 'Winter Is Coming', releaseYear: 2011 } })]
-      }
-    },
-    clock: () => NOW
-  })
-  const result = await router.dispatch(request('GET', '/api/v2/search?namespace=tmdb&identifier=1399&kind=episode&season=1&episode=2&limit=3&cursor=page_2'))
-  t.is(result.statusCode, 200)
-  t.alike(selector, { namespace: 'tmdb', identifier: '1399', kind: 'episode', season: 1, episode: 2 })
-  t.is(options.limit, 3)
-  t.is(options.cursor, 'page_2')
-  t.is(result.body.candidates.length, 1)
-  t.not(hasUrlField(result.body), true)
-})
-
-test('an episode the relay does not hold answers 200 with no candidates', async (t) => {
-  const router = createCompanionRouter({
-    service: {
-      async searchIndexCandidates () {
-        return []
-      }
-    },
-    clock: () => NOW
-  })
-  const result = await router.dispatch(request('GET', '/api/v2/search?namespace=tmdb&identifier=1399&kind=episode&season=9&episode=9'))
-  t.is(result.statusCode, 200)
-  t.alike(result.body, { candidates: [], cursor: null })
-})
-
-test('open verifies a candidate, resolves its asset, and returns a scoped reusable capability', async (t) => {
-  let verifiedRef = null
-  const asset = {
-    assetId: 'asset-1',
-    byteLength: 8,
-    async requestRange () {},
-    async release () {}
-  }
-  const capabilities = createStreamCapabilityStore({
-    now: () => NOW,
-    randomBytes: () => b4a.alloc(32, 7),
-    ttlMs: 1_000,
-    maxEntries: 2
-  })
-  const router = createCompanionRouter({
-    service: {
-      async verifyIndexCandidate (candidateRef) {
-        verifiedRef = candidateRef
-        return candidate({ streamUrl: 'https://forbidden.invalid' })
-      },
-      async openStreamAsset () {
-        return asset
-      }
-    },
-    config: { client: { id: CLIENT } },
-    clock: () => NOW,
-    capabilities
-  })
-  const opened = await router.dispatch(request('POST', '/api/v2/streams/open', `{"candidateRef":"${REF}"}`))
-  t.is(opened.statusCode, 200)
-  t.is(verifiedRef, REF)
-  t.is(opened.body.expiresAt, NOW + 1_000)
-  t.is(opened.body.publicationId, 'publication-1')
-  t.is(opened.body.renditionId, 'rendition-1')
-  const token = new URL(opened.body.url, 'http://companion.invalid').searchParams.get('cap')
-  t.ok(token)
-
-  const publicRequest = capabilities.consume(token, {
-    publicationId: 'publication-1',
-    renditionId: 'rendition-1',
-    method: 'GET'
-  })
-  t.is(publicRequest.asset, asset)
-  publicRequest.release()
-})
-
-test('stream capability rejects wrong client, path scope, token, and expiry before acquisition', (t) => {
-  let now = NOW
-  const capabilities = createStreamCapabilityStore({ now: () => now, randomBytes: () => b4a.alloc(32, 8), ttlMs: 100, maxEntries: 4 })
-  const granted = capabilities.issue({ clientIdentity: CLIENT, publicationId: 'pub-1', renditionId: 'rend-1', assetId: 'asset-1' })
-  const exact = { publicationId: 'pub-1', renditionId: 'rend-1', method: 'GET' }
-
-  t.exception(() => capabilities.consume(granted.token, { ...exact, clientIdentity: 'other-client' }))
-  t.exception(() => capabilities.consume(granted.token, { ...exact, publicationId: 'pub-2' }))
-  t.exception(() => capabilities.consume('bad', exact))
-  const publicRequest = capabilities.consume(granted.token, exact)
-  publicRequest.release()
-  now += 101
-  t.exception(() => capabilities.consume(granted.token, exact))
-})
-
-test('capability capacity fails closed without evicting live grants', (t) => {
-  let byte = 1
-  const capabilities = createStreamCapabilityStore({ now: () => NOW, randomBytes: () => b4a.alloc(32, byte++), ttlMs: 1_000, maxEntries: 2 })
-  const first = capabilities.issue({ clientIdentity: CLIENT, publicationId: 'p1', renditionId: 'r1', assetId: 'a1' })
-  capabilities.issue({ clientIdentity: CLIENT, publicationId: 'p2', renditionId: 'r2', assetId: 'a2' })
-  let error = null
-  try {
-    capabilities.issue({ clientIdentity: CLIENT, publicationId: 'p3', renditionId: 'r3', assetId: 'a3' })
-  } catch (caught) {
-    error = caught
-  }
-  t.is(error?.code, 'CAPABILITY_CAPACITY_EXHAUSTED')
-  t.is(capabilities.size, 2)
-  const consumption = capabilities.consume(first.token, { clientIdentity: CLIENT, publicationId: 'p1', renditionId: 'r1', method: 'GET' })
-  t.is(consumption.assetId, 'a1')
-  consumption.release()
-})
-
-test('publication, job, status, method, and path routes dispatch deterministically', async (t) => {
+test('acquisition routes request, replay, get, list and cancel through ProviderService', async (t) => {
+  const records = new Map()
+  const idempotency = new Map()
   const calls = []
+  const service = {
+    async requestAcquisition ({ idempotencyKey, request, principal }) {
+      calls.push(['request', principal.id, request.publisherId])
+      const prior = idempotency.get(`${principal.id}\0${request.publisherId}\0${idempotencyKey}`)
+      if (prior) return { acquisition: prior, replayed: true }
+      const value = acquisition()
+      records.set(value.acquisitionId, value)
+      idempotency.set(`${principal.id}\0${request.publisherId}\0${idempotencyKey}`, value)
+      return { acquisition: value, replayed: false }
+    },
+    async getAcquisition ({ acquisitionId, principal }) {
+      calls.push(['get', principal.id, acquisitionId])
+      return records.get(acquisitionId) || null
+    },
+    async listAcquisitions ({ cursor, limit, states, principal }) {
+      calls.push(['list', principal.id, cursor, limit, states])
+      return { items: [...records.values()], nextCursor: null }
+    },
+    async cancelAcquisition ({ acquisitionId, principal }) {
+      calls.push(['cancel', principal.id, acquisitionId])
+      const value = acquisition({ ...(records.get(acquisitionId) || {}), state: 'cancelled', updatedAt: 2 })
+      records.set(acquisitionId, value)
+      return value
+    }
+  }
+  const router = createCompanionRouter({ service })
+  const created = await router.dispatch(request('POST', '/api/v2/acquisitions', acquisitionBody()))
+  const replay = await router.dispatch(request('POST', '/api/v2/acquisitions', acquisitionBody()))
+  const got = await router.dispatch(request('GET', '/api/v2/acquisitions/acq-1'))
+  const listed = await router.dispatch(request('GET', '/api/v2/acquisitions?limit=2&states=queued'))
+  const cancelled = await router.dispatch(request('DELETE', '/api/v2/acquisitions/acq-1'))
+
+  t.is(created.statusCode, 202)
+  t.alike(replay.body.acquisition, created.body.acquisition, 'idempotent replay returns the same public acquisition')
+  t.alike(got.body.acquisition, created.body.acquisition)
+  t.is(listed.body.items.length, 1)
+  t.is(listed.body.nextCursor, null)
+  t.is(cancelled.body.acquisition.state, 'cancelled')
+  t.alike(calls.map(call => call[0]), ['request', 'request', 'get', 'list', 'cancel'])
+  t.is(JSON.stringify(created.body).includes('sourceDescriptor'), false)
+  t.is(JSON.stringify(created.body).includes('sourceCapability'), false)
+})
+
+test('route scopes separate acquisition request, read, cancel and private grant authority', async (t) => {
+  const service = {
+    requestAcquisition: async () => acquisition(),
+    getAcquisition: async () => acquisition(),
+    cancelAcquisition: async () => acquisition({ state: 'cancelled', updatedAt: 2 }),
+    attachSourceGrant: async () => acquisition()
+  }
+  const router = createCompanionRouter({ service })
+  const onlyRead = principal(new Set([COMPANION_ROUTE_SCOPES.acquisitionRead]))
+
+  t.is((await router.dispatch(request('GET', '/api/v2/acquisitions/acq-1', null, { principal: onlyRead }))).statusCode, 200)
+  t.is((await router.dispatch(request('POST', '/api/v2/acquisitions', acquisitionBody(), { principal: onlyRead }))).statusCode, 403)
+  t.is((await router.dispatch(request('DELETE', '/api/v2/acquisitions/acq-1', null, { principal: onlyRead }))).statusCode, 403)
+  t.is((await router.dispatch(request('POST', '/api/v2/acquisitions/acq-1/source-grants', { grant: { token: 'private' } }, { principal: onlyRead }))).statusCode, 403)
+})
+
+test('private source grants are accepted only on Unix or in-process and never echoed', async (t) => {
+  let attached = null
   const router = createCompanionRouter({
     service: {
-      async getPublication (publicationId) { calls.push(['publication', publicationId]); return { publicationId } },
-      async submitIngestJob (input) { calls.push(['submit', input.idempotencyKey]); return { jobId: 'job-1', state: 'queued' } },
-      async getIngestJob (jobId) { calls.push(['get', jobId]); return { jobId, state: 'queued' } },
-      async cancelIngestJob (jobId) { calls.push(['cancel', jobId]); return { jobId, state: 'cancelled' } },
+      async attachSourceGrant (input) {
+        attached = input
+        return acquisition()
+      }
+    }
+  })
+  const body = { grant: { token: 'private-token', url: 'https://private.invalid/media' } }
+  const local = await router.dispatch(request('POST', '/api/v2/acquisitions/acq-1/source-grants', body))
+  t.is(local.statusCode, 200)
+  t.is(attached.grant.token, 'private-token')
+  t.is(JSON.stringify(local.body).includes('private-token'), false)
+  t.is(JSON.stringify(local.body).includes('private.invalid'), false)
+
+  attached = null
+  const tcp = await router.dispatch(request('POST', '/api/v2/acquisitions/acq-1/source-grants', body, {
+    serverState: { transport: 'tcp', host: '127.0.0.1', port: 8175 }
+  }))
+  t.is(tcp.statusCode, 403)
+  t.is(attached, null)
+
+  const inProcess = await router.dispatch(request('POST', '/api/v2/acquisitions/acq-1/source-grants', body, {
+    inProcess: true,
+    serverState: { transport: 'tcp' }
+  }))
+  t.is(inProcess.statusCode, 200)
+})
+
+test('wrong principal or publisher errors remain forbidden and bounded', async (t) => {
+  const service = {
+    async getAcquisition ({ principal }) {
+      const error = new Error(principal.id === 'wrong-machine' ? 'principal mismatch' : 'publisher mismatch')
+      error.code = principal.id === 'wrong-machine' ? 'PRINCIPAL_MISMATCH' : 'PUBLISHER_MISMATCH'
+      throw error
+    }
+  }
+  const router = createCompanionRouter({ service })
+  const wrongPrincipal = await router.dispatch(request('GET', '/api/v2/acquisitions/acq-1', null, {
+    principal: { id: 'wrong-machine', publisherId: 'publisher-1', scopes: ALL_SCOPES }
+  }))
+  const wrongPublisher = await router.dispatch(request('GET', '/api/v2/acquisitions/acq-1', null, {
+    principal: principal(ALL_SCOPES, 'publisher-2')
+  }))
+  t.is(wrongPrincipal.statusCode, 403)
+  t.is(wrongPublisher.statusCode, 403)
+  t.is(b4a.byteLength(JSON.stringify(wrongPublisher.body)) <= 512, true)
+})
+
+test('status strips private source, capability, locator and authentication material', async (t) => {
+  const router = createCompanionRouter({
+    service: {
       getStatus () {
         return {
-          runtime: { network: { peers: 2 }, sharedSecret: 'forbidden', nested: { playbackUrl: 'https://forbidden.invalid' } },
-          config: { password: 'forbidden' }
+          acquisitionsByState: { queued: 1 },
+          sourceGrant: 'forbidden',
+          adapter: 'private-adapter',
+          token: 'forbidden-token',
+          nested: { sourceUrl: 'https://forbidden.invalid/media', safe: 1 }
         }
       }
-    },
-    config: { transport: 'unix', client: { id: CLIENT, key: 'forbidden' }, sharedSecret: 'forbidden' },
-    clock: () => NOW
+    }
   })
-
-  t.is((await router.dispatch(request('GET', '/api/v2/publications/pub-1'))).statusCode, 200)
-  t.is((await router.dispatch(request('POST', '/api/v2/ingest/jobs', '{"idempotencyKey":"watch-1","request":{}}'))).statusCode, 202)
-  t.is((await router.dispatch(request('GET', '/api/v2/ingest/jobs/job-1'))).statusCode, 200)
-  t.is((await router.dispatch(request('DELETE', '/api/v2/ingest/jobs/job-1'))).statusCode, 200)
-  t.alike(calls.map(call => call[0]), ['publication', 'submit', 'get', 'cancel'])
-
-  const status = await router.dispatch(request('GET', '/api/v2/status'))
-  t.is(status.statusCode, 200)
-  t.is(status.body.transport.mode, 'unix')
-  t.is(status.body.auth.mode, 'mac')
-  const serialized = JSON.stringify(status.body)
-  t.not(serialized.includes('forbidden'), true)
-  t.not(/secret|password|playbackUrl/.test(serialized), true)
-
-  const wrongMethod = await router.dispatch(request('POST', '/api/v2/status', '{}'))
-  t.is(wrongMethod.statusCode, 405)
-  t.is(wrongMethod.headers.allow, 'GET')
-  t.is((await router.dispatch(request('GET', '/api/v2/missing'))).statusCode, 404)
-  t.is((await router.dispatch(request('GET', '/api/v2/publications/bad%2Fid'))).statusCode, 400)
+  const response = await router.dispatch(request('GET', '/api/v2/status'))
+  const serialized = JSON.stringify(response.body)
+  t.is(response.statusCode, 200)
+  t.is(serialized.includes('forbidden'), false)
+  t.is(serialized.includes('private-adapter'), false)
+  t.is(response.body.diagnostics.nested.safe, 1)
 })
 
-test('policy control requires a complete current snapshot and dispatches it once', async (t) => {
+test('acquisition policy updates require consent and revision and forward both', async t => {
   const policy = {
-    policyVersion: 2,
+    policyVersion: 1,
     consentVersion: 1,
     migrationRequired: false,
-    contributeWatchedMedia: true,
-    archiveEnabled: false,
-    contributionBudgetBytes: 4096,
-    archiveBudgetBytes: 8192,
-    uploadPermission: 'enabled',
-    uploadCeilingBytes: 4096
+    enabled: true,
+    acceptPublicRequests: false,
+    requesterMode: 'local-only',
+    allowedPublisherIds: ['publisher-1'],
+    allowedAdapterIds: ['local-file'],
+    maxQueuedJobs: 4,
+    maxConcurrentJobs: 1,
+    maxConcurrentPerRequester: 1,
+    maxRequestBytes: 4096,
+    maxAcquireBytesPer24h: 4096,
+    maxAcquireBytesPerSecond: 4096,
+    maxStagingBytes: 4096,
+    minFreeDiskBytes: 1,
+    maxJobRuntimeMs: 60_000,
+    sourceGrantTtlMs: 30_000,
+    publicRequestsPerMinute: 1,
+    maxAttempts: 2,
+    retryBaseMs: 1,
+    retryMaxMs: 10
   }
-  t.alike(decodePolicyControlBody(b4a.from(JSON.stringify(policy))), policy)
+  const body = { policy, expectedRevision: 2, consent: { version: 1, granted: true } }
+  t.alike(decodeAcquisitionPolicyBody(b4a.from(JSON.stringify(body))), body)
+  t.exception(() => decodeAcquisitionPolicyBody(b4a.from(JSON.stringify({ policy }))), /Missing expectedRevision|Missing consent/)
 
-  const calls = []
+  let received = null
   const router = createCompanionRouter({
     service: {
-      async applyNetworkPolicy (value) {
-        calls.push(value)
-        return { ...value, effectiveRole: 'contributor', permissions: { contribute: true, archive: false }, ingestReady: true }
+      async setAcquisitionPolicy(input) {
+        received = input
+        return input.policy
       }
-    },
-    clock: () => NOW
+    }
   })
-  const applied = await router.dispatch(request('PUT', '/api/v2/policy', JSON.stringify(policy)))
-  t.is(applied.statusCode, 200)
-  t.is(applied.body.policy.ingestReady, true)
-  t.is(calls.length, 1)
-
-  const missing = { ...policy }
-  delete missing.consentVersion
-  const rejected = await router.dispatch(request('PUT', '/api/v2/policy', JSON.stringify(missing)))
-  t.is(rejected.statusCode, 400)
-  t.is(rejected.body.error.code, 'MISSING_FIELD')
-  t.is(calls.length, 1)
-
-  const mismatched = { ...policy, uploadCeilingBytes: 8192 }
-  t.is((await router.dispatch(request('PUT', '/api/v2/policy', JSON.stringify(mismatched)))).statusCode, 400)
-  t.is(calls.length, 1)
+  const response = await router.dispatch(request('PUT', '/api/v2/acquisition-policy', body))
+  t.is(response.statusCode, 200)
+  t.is(received.expectedRevision, 2)
+  t.alike(received.consent, { version: 1, granted: true })
 })
 
-test('router rejects malformed search candidates and mismatched verification results', async (t) => {
-  const searchRouter = createCompanionRouter({
-    service: { searchIndexCandidates: async () => ['malformed'] },
-    clock: () => NOW
-  })
-  const search = await searchRouter.dispatch(request('GET', '/api/v2/search?namespace=tmdb&identifier=348&kind=movie'))
-  t.is(search.statusCode, 502)
-  t.is(search.body.error.code, 'BACKEND_CONTRACT_INVALID')
-
-  const openRouter = createCompanionRouter({
-    service: { verifyIndexCandidate: async () => candidate({ candidateRef: 'B'.repeat(43) }) },
-    clock: () => NOW
-  })
-  const opened = await openRouter.dispatch(request('POST', '/api/v2/streams/open', `{"candidateRef":"${REF}"}`))
-  t.is(opened.statusCode, 502)
-  t.is(opened.body.error.code, 'BACKEND_CONTRACT_INVALID')
-})
-
-test('missing backend capabilities return explicit bounded unavailable errors', async (t) => {
-  const router = createCompanionRouter({ service: { getStatus: () => ({}) }, config: { client: { id: CLIENT } }, clock: () => NOW })
-  const search = await router.dispatch(request('GET', '/api/v2/search?namespace=tmdb&identifier=348&kind=movie'))
-  const job = await router.dispatch(request('POST', '/api/v2/ingest/jobs', '{"idempotencyKey":"watch-1","request":{}}'))
-  t.is(search.statusCode, 501)
-  t.is(search.body.error.code, 'CAPABILITY_UNAVAILABLE')
-  t.is(job.statusCode, 501)
-  t.ok(b4a.byteLength(JSON.stringify(job.body)) <= 512)
+test('legacy ingest routes are absent', async (t) => {
+  const router = createCompanionRouter({ service: {} })
+  t.is((await router.dispatch(request('POST', '/api/v2/ingest/jobs', {}))).statusCode, 404)
+  t.is((await router.dispatch(request('GET', '/api/v2/ingest/jobs/old-job'))).statusCode, 404)
 })

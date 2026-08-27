@@ -7,9 +7,12 @@ export { createCompanionServer } from './companion/server.js'
 export { createCompanionRouter } from './companion/routes.js'
 export {
   CompanionContractError,
-  decodeIngestJobBody,
+  decodeAcquisitionBody,
+  decodeAcquisitionListQuery,
+  decodeAcquisitionPolicyBody,
   decodeOpenStreamBody,
-  decodeSearchQuery
+  decodeSearchQuery,
+  decodeSourceGrantBody
 } from './companion/contracts.js'
 
 export async function startRelay({ config, logger = null } = {}) {

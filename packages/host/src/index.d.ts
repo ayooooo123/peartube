@@ -694,6 +694,148 @@ export type EntityArtworkResponse = {
   error?: string | null
 }
 
+export type AcquisitionState =
+  | 'queued'
+  | 'acquiring'
+  | 'verifying'
+  | 'publishing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export type AcquisitionRetentionClass = 'contribution-cache' | 'archive-pin'
+
+export type ProviderError = {
+  code: string
+  message: string
+  field?: string | null
+  retryable: boolean
+}
+
+export type ProviderSearchHit = {
+  schemaVersion: 1
+  resolutionRef: string
+  title: string
+  mediaKind: string
+  subtitle?: string | null
+  published: boolean
+  acquirable: boolean
+  entityId?: string | null
+  publicationId?: string | null
+  expectedBytes?: number | null
+}
+
+export type ProviderResolution = ProviderSearchHit & {
+  publisherId: string
+}
+
+export type AcquisitionRequest = {
+  schemaVersion: 1
+  resolutionRef: string
+  publisherId: string
+  retentionClass: AcquisitionRetentionClass
+  retentionUntil?: number | null
+}
+
+export type Acquisition = {
+  schemaVersion: 1
+  acquisitionId: string
+  state: AcquisitionState
+  retentionClass: AcquisitionRetentionClass
+  bytesAcquired: number
+  expectedBytes?: number | null
+  publicationId?: string | null
+  manifestId?: string | null
+  renditionId?: string | null
+  assetId?: string | null
+  errorCode?: string | null
+  recoverable: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export type ProviderPublication = {
+  schemaVersion: 1
+  publicationId: string
+  entityId: string
+  manifestId: string
+  renditionId: string
+  assetId: string
+  title: string
+}
+
+export type ProviderStream = {
+  schemaVersion: 1
+  publicationId: string
+  renditionId: string
+  assetId: string
+  url: string
+  mimeType: string
+  byteLength: number
+  etag?: string | null
+}
+
+export type ProviderStatus = {
+  schemaVersion: 1
+  ready: boolean
+  searchEnabled: boolean
+  acquisitionEnabled: boolean
+  queuedAcquisitions: number
+  activeAcquisitions: number
+}
+
+export type ProviderPolicy = {
+  schemaVersion: 1
+  revision: number
+  searchEnabled: boolean
+  resolveEnabled: boolean
+  acquisitionEnabled: boolean
+}
+
+export type AcquisitionPolicy = {
+  policyVersion: 1
+  revision: number
+  consentVersion: number
+  migrationRequired: boolean
+  enabled: boolean
+  acceptPublicRequests: boolean
+  requesterMode: 'local-only' | 'allowlisted' | 'public'
+  allowedPublisherIds: string[]
+  allowedAdapterIds: string[]
+  maxQueuedJobs: number
+  maxConcurrentJobs: number
+  maxConcurrentPerRequester: number
+  maxRequestBytes: number
+  maxAcquireBytesPer24h: number
+  maxAcquireBytesPerSecond: number
+  maxStagingBytes: number
+  minFreeDiskBytes: number
+  maxJobRuntimeMs: number
+  sourceGrantTtlMs: number
+  publicRequestsPerMinute: number
+  maxAttempts: number
+  retryBaseMs: number
+  retryMaxMs: number
+}
+
+export type AcquisitionLifecycleEvent = {
+  schemaVersion: 1
+  eventId: string
+  acquisitionId: string
+  type: string
+  state: AcquisitionState
+  sequence: number
+  at: number
+  bytesAcquired: number
+  expectedBytes?: number | null
+  errorCode?: string | null
+  publicationId?: string | null
+}
+
+type ProviderResult<T extends object> =
+  | ({ success: true; error?: null } & T)
+  | ({ success: false; error: ProviderError } & Partial<T>)
+
 export type SystemProtocolNamespace = ProtocolNamespace & {
   getStatus(request?: Record<string, never>): Promise<any>
   getSwarmStatus(request?: Record<string, never>): Promise<ProtocolNetworkStatus>
@@ -765,6 +907,55 @@ export type MediaGraphProtocolNamespace = ProtocolNamespace & {
   }): Promise<EntityArtworkResponse>
 }
 
+export type ProviderProtocolNamespace = ProtocolNamespace & {
+  search(request: {
+    query: string
+    cursor?: string
+    limit?: number
+  }): Promise<ProviderResult<{ hits: ProviderSearchHit[]; nextCursor?: string | null }>>
+  resolveProviderRef(request: {
+    resolutionRef: string
+  }): Promise<ProviderResult<{ resolution: ProviderResolution }>>
+  requestAcquisition(request: {
+    idempotencyKey: string
+    request: AcquisitionRequest
+  }): Promise<ProviderResult<{ acquisition: Acquisition }>>
+  attachSourceGrant(request: {
+    acquisitionId: string
+    grant: Uint8Array
+  }): Promise<ProviderResult<{ acquisition: Acquisition }>>
+  getAcquisition(request: {
+    acquisitionId: string
+  }): Promise<ProviderResult<{ acquisition: Acquisition }>>
+  listAcquisitions(request?: {
+    cursor?: string
+    limit?: number
+    states?: AcquisitionState[]
+  }): Promise<ProviderResult<{ acquisitions: Acquisition[]; nextCursor?: string | null }>>
+  cancelAcquisition(request: {
+    acquisitionId: string
+  }): Promise<ProviderResult<{ acquisition: Acquisition }>>
+  getPublication(request: {
+    publicationId: string
+  }): Promise<ProviderResult<{ publication: ProviderPublication }>>
+  openStream(request: {
+    publicationId: string
+    renditionId?: string
+  }): Promise<ProviderResult<{ stream: ProviderStream }>>
+  getStatus(request?: Record<string, never>): Promise<ProviderResult<{ status: ProviderStatus }>>
+  getPolicy(request?: Record<string, never>): Promise<ProviderResult<{ policy: ProviderPolicy }>>
+  setPolicy(request: {
+    policy: ProviderPolicy
+    expectedRevision: number
+  }): Promise<ProviderResult<{ policy: ProviderPolicy }>>
+  getAcquisitionPolicy(request?: Record<string, never>): Promise<ProviderResult<{ policy: AcquisitionPolicy }>>
+  setAcquisitionPolicy(request: {
+    policy: AcquisitionPolicy
+    expectedRevision: number
+    consent: { version: 1; granted: boolean }
+  }): Promise<ProviderResult<{ policy: AcquisitionPolicy }>>
+}
+
 export type VideoProtocolNamespace = ProtocolNamespace & {
   uploadVideo(request: UploadVideoRequest): Promise<any>
 }
@@ -809,5 +1000,6 @@ export function createProtocolClient(options: {
   video: VideoProtocolNamespace
   transfer: TransferProtocolNamespace
   search: ProtocolNamespace
+  provider: ProviderProtocolNamespace
   shell: ProtocolNamespace
 }

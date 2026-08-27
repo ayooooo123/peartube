@@ -39,7 +39,7 @@ packages/
 
 ## Package Responsibilities
 
-`@peartube/backend` owns signed publisher catalogs, local and federated indexes, immutable static assets, exact-range verification, purpose-scoped Hyperswarm networking, participation policy, archival evidence, S3-compatible block offload, playback, and diagnostics.
+`@peartube/backend` owns the client-neutral provider service, durable acquisition state and consent policy, signed publisher catalogs, local and federated indexes, immutable static assets, exact-range verification, purpose-scoped Hyperswarm networking, archival evidence, S3-compatible block offload, playback, and diagnostics.
 
 `@peartube/host` owns backend lifecycle and the universal client contract. It validates startup options, starts the backend runtime, reports host readiness/errors, defines the shared `PROTOCOL_VERSION`, and (via `create-client.js`) wraps generated HRPC, normalizes host readiness, surfaces protocol events, and exposes grouped namespaces.
 
@@ -48,7 +48,7 @@ packages/
 
 `@peartube/spec` is the schema source of truth. Update `packages/spec/schema.cjs`, then regenerate schema outputs before relying on new fields.
 
-`packages/cli` owns the relay process, authenticated generic machine API, ingest jobs, archive UI, and operator configuration. The machine API must remain client-neutral; no external application is privileged or named in the PearTube contract.
+`packages/cli` owns the relay process, authenticated generic provider machine API, acquisition jobs, archive UI, and operator configuration. The machine API must remain client-neutral; no external application or source adapter is privileged or named in the PearTube contract.
 
 ## Important Files
 
@@ -57,10 +57,12 @@ packages/
 | `packages/host/src/contracts.js` | Shared protocol version and host error codes |
 | `packages/host/src/create-client.js` | Universal protocol client |
 | `packages/host/src/event-map.js` | Shared protocol event names |
-| `packages/backend/src/runtime.js` | Universal backend runtime used by apps and relays |
+| `packages/backend/src/orchestrator.js` | Universal backend and provider-subsystem composition used by apps and relays |
 | `packages/backend/src/indexer/local-catalog-index.js` | Durable local projection of verified publisher catalogs |
+| `packages/backend/src/provider/service.js` | Public search, resolution, acquisition, publication, stream, status, and policy contract |
+| `packages/backend/src/acquisition/manager.js` | Bounded durable acquisition state machine and publication gate |
 | `packages/cli/src/companion/server.js` | Authenticated generic machine API transport |
-| `packages/cli/src/companion/routes.js` | Bounded search, open, status, policy, and ingest routes |
+| `packages/cli/src/companion/routes.js` | Bounded search, stream, status, policy, acquisition, and private source-grant routes |
 
 ## Development Commands
 

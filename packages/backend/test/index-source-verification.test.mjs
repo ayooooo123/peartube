@@ -1181,9 +1181,14 @@ test('companion episode search opens a locally indexed candidate and reads a ran
     clock: () => NOW,
     config: { client: { id: 'client' } },
     service: {
-      searchIndexCandidates: (selector, options) => runtime.searchIndexCandidates({ selector, ...options }),
-      verifyIndexCandidate: (candidateRef, options) => runtime.verifyIndexCandidate({ candidateRef, ...options }),
-      openStreamAsset: candidate => streamApi.openVerifiedCandidateStream(candidate),
+      async search({ selector, limit, signal }) {
+        return { candidates: await runtime.searchIndexCandidates({ selector, limit, signal }), nextCursor: null }
+      },
+      async openStream({ candidateRef, signal }) {
+        const candidate = await runtime.verifyIndexCandidate({ candidateRef, signal })
+        const asset = await streamApi.openVerifiedCandidateStream(candidate)
+        return { candidate, asset }
+      },
     },
   })
   t.teardown(async () => {
@@ -1191,10 +1196,11 @@ test('companion episode search opens a locally indexed candidate and reads a ran
     await router.capabilities.drain()
   })
 
+  const principal = { id: 'client', publisherId: fixture.publisherId, scopes: new Set(['*']) }
   const search = await router.dispatch({
     method: 'GET',
     url: '/api/v2/search?episode=2&identifier=95350&kind=episode&namespace=tmdb&season=1',
-    clientIdentity: 'client',
+    principal,
   })
   t.is(search.statusCode, 200)
   t.is(search.body.candidates.length, 1)
@@ -1206,7 +1212,7 @@ test('companion episode search opens a locally indexed candidate and reads a ran
     method: 'POST',
     url: '/api/v2/streams/open',
     body: b4a.from(JSON.stringify({ candidateRef: candidate.candidateRef })),
-    clientIdentity: 'client',
+    principal,
   })
   t.is(opened.statusCode, 200)
   const streamUrl = new URL(opened.body.url, 'http://relay.local')

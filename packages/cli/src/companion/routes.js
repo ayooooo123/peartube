@@ -3,19 +3,38 @@ import b4a from 'b4a'
 import {
   CompanionContractError,
   COMPANION_CONTRACT_LIMITS,
+  decodeAcquisitionBody,
+  decodeAcquisitionListQuery,
+  decodeAcquisitionPolicyBody,
   decodeId,
-  decodeIngestJobBody,
   decodeOpenStreamBody,
   decodePolicyControlBody,
   decodeSearchQuery,
+  decodeSourceGrantBody,
   errorBody
 } from './contracts.js'
 import { createStreamCapabilityStore } from './stream-capabilities.js'
 
 const CANDIDATE_REF_PATTERN = /^[A-Za-z0-9_-]{43}$/
-const SENSITIVE_STATUS_FIELD = /(?:secret|password|credential|authorization|cookie|token|capability|privatekey|signingkey|clientkey|mac|nonce)/i
+const ACQUISITION_STATES = new Set(['queued', 'acquiring', 'verifying', 'publishing', 'completed', 'failed', 'cancelled'])
+const SENSITIVE_STATUS_FIELD = /(?:secret|password|credential|authorization|cookie|token|capability|privatekey|signingkey|clientkey|mac|nonce|source(?:grant|descriptor)|adapter|(?:local|file)path)/i
 const LOCATOR_FIELD = /(?:urls?|uris?|links?|href|magnet|torrent)$/i
 const LOCATOR_VALUE = /(?:(?:https?|magnet|ipfs|pear|blob|data|file|ftp|rtsp):(?:\/\/)?[^\s]|\/\/[^\s])/i
+
+export const COMPANION_ROUTE_SCOPES = Object.freeze({
+  search: 'search.read',
+  stream: 'stream.open',
+  status: 'status.read',
+  publication: 'publication.read',
+  policyRead: 'policy.read',
+  policyWrite: 'policy.write',
+  acquisitionRequest: 'acquisition.request',
+  acquisitionRead: 'acquisition.read',
+  acquisitionCancel: 'acquisition.cancel',
+  acquisitionGrant: 'acquisition.grant',
+  acquisitionPolicyRead: 'acquisition-policy.read',
+  acquisitionPolicyWrite: 'acquisition-policy.write'
+})
 
 function contractError (statusCode, code, message, field = null) {
   return new CompanionContractError(statusCode, code, message, field)
@@ -81,23 +100,19 @@ function translateBackendFailure (error) {
     return contractError(502, raw, 'Immutable publication stream is invalid')
   }
   if (raw === 'IDEMPOTENCY_CONFLICT') return contractError(409, raw, 'Idempotency key is already bound to another request')
-  if (raw === 'INGEST_JOB_TERMINAL' || raw === 'INGEST_VERSION_CONFLICT') return contractError(409, raw, 'Ingest job state conflict')
-  if (raw === 'STORAGE_ADMISSION_DENIED') return contractError(507, raw, 'Insufficient storage for ingest')
-  // Retention admission is a policy state, not a backend fault. It falls out of
-  // the relay having no control policy yet - which is the normal condition for
-  // the seconds between a restart and the operator's next policy push - and
-  // reporting it as BACKEND_ERROR made a transient startup window look like the
-  // relay had crashed. 503 says "not yet", which is what a caller can act on.
-  if (raw === 'RETENTION_ADMISSION_DENIED') {
-    return contractError(503, raw, 'Retention policy is not ready')
+  if (raw === 'ACQUISITION_TERMINAL' || raw === 'ACQUISITION_VERSION_CONFLICT') return contractError(409, raw, 'Acquisition state conflict')
+  if (raw === 'ACQUISITION_NOT_FOUND') return contractError(404, raw, 'Acquisition not found')
+  if (raw === 'PRINCIPAL_MISMATCH' || raw === 'PUBLISHER_MISMATCH' || raw === 'FORBIDDEN') {
+    return contractError(403, 'FORBIDDEN', 'Principal is not authorized for this acquisition')
   }
-  if (raw === 'INGEST_MANAGER_CLOSED' || raw === 'INGEST_PERSISTENCE_FAILED' || raw === 'INGEST_PERSISTENCE_CORRUPT') {
-    return contractError(503, raw, 'Ingest service is unavailable')
+  if (raw === 'STORAGE_ADMISSION_DENIED') return contractError(507, raw, 'Insufficient storage for acquisition')
+  if (raw === 'RETENTION_ADMISSION_DENIED') return contractError(503, raw, 'Retention policy is not ready')
+  if (raw === 'ACQUISITION_MANAGER_CLOSED' || raw === 'ACQUISITION_PERSISTENCE_FAILED' || raw === 'ACQUISITION_PERSISTENCE_CORRUPT') {
+    return contractError(503, raw, 'Acquisition service is unavailable')
   }
-  if (raw === 'INGEST_REQUEST_INVALID' || raw === 'SOURCE_CAPABILITY_INVALID' ||
-      raw === 'SPOOL_INCOMPLETE' || raw === 'SPOOL_PATH_INVALID' || raw === 'SPOOL_TYPE_INVALID' ||
-      raw === 'SPOOL_LENGTH_MISMATCH' || raw === 'HASH_MISMATCH' || raw === 'ETAG_MISMATCH') {
-    return contractError(400, raw, 'Invalid ingest request')
+  if (raw === 'ACQUISITION_REQUEST_INVALID' || raw === 'SOURCE_GRANT_INVALID' ||
+      raw === 'HASH_MISMATCH' || raw === 'ETAG_MISMATCH') {
+    return contractError(400, raw, 'Invalid acquisition request')
   }
   if (raw === 'UNAVAILABLE' || raw.endsWith('_UNAVAILABLE')) return contractError(503, 'BACKEND_UNAVAILABLE', 'Companion backend is unavailable')
   if (raw === 'UNSUPPORTED' || raw.endsWith('_UNSUPPORTED')) return contractError(501, 'CAPABILITY_UNAVAILABLE', 'Companion capability is unavailable')
@@ -164,39 +179,118 @@ function candidateList (value) {
   return candidates
 }
 
-function verifiedCandidate (value) {
-  if (value?.success === false) {
-    const error = new Error('Candidate verification failed')
-    error.code = value.errorCode
-    throw backendFailure(error)
+function backendCandidate (candidate) {
+  const candidateRef = candidate?.candidateRef || candidate?.ref
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate) || !CANDIDATE_REF_PATTERN.test(candidateRef || '')) {
+    throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Candidate backend returned an invalid response')
   }
-  const candidate = value?.candidate || value
-  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
-    throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Verification backend returned an invalid response')
-  }
-  return candidate
+  const projected = { ...candidate, candidateRef }
+  delete projected.ref
+  return boundedPublicValue(projected, { stripUrls: true, stripSecrets: true })
 }
 
-function exactCandidateScope (candidate) {
+function requirePrincipal (input, scope) {
+  const value = input?.principal
+  if (!value || typeof value !== 'object') throw contractError(401, 'AUTH_REQUIRED', 'Companion authentication is required')
+  const scopes = value.scopes instanceof Set
+    ? value.scopes
+    : new Set(Array.isArray(value.scopes) ? value.scopes : [])
+  if (!scopes.has('*') && !scopes.has(scope)) {
+    throw contractError(403, 'SCOPE_REQUIRED', 'Principal is not authorized for this route')
+  }
+  const publisherId = value.publisherId == null ? null : decodeId(value.publisherId, 'publisherId')
+  return Object.freeze({
+    id: decodeId(value.id, 'principalId'),
+    publisherId,
+    publisherIds: publisherId === null ? [] : [publisherId],
+    scopes
+  })
+}
+
+function safeInteger (value, field, { nullable = false } = {}) {
+  if (nullable && value == null) return null
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw contractError(502, 'BACKEND_CONTRACT_INVALID', `Backend returned an invalid ${field}`)
+  }
+  return value
+}
+
+function publicAcquisition (value) {
+  const acquisition = value?.acquisition || value
+  if (!acquisition || typeof acquisition !== 'object' || Array.isArray(acquisition) ||
+      acquisition.schemaVersion !== 1 || !ACQUISITION_STATES.has(acquisition.state) ||
+      typeof acquisition.recoverable !== 'boolean') {
+    throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Backend returned an invalid acquisition')
+  }
+  const nullableId = (field) => acquisition[field] == null ? null : decodeId(acquisition[field], field)
+  const errorCode = acquisition.errorCode == null
+    ? null
+    : (/^[A-Z][A-Z0-9_]{0,63}$/.test(acquisition.errorCode) ? acquisition.errorCode : null)
+  if (acquisition.errorCode != null && errorCode == null) {
+    throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Backend returned an invalid acquisition error')
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    acquisitionId: decodeId(acquisition.acquisitionId, 'acquisitionId'),
+    state: acquisition.state,
+    retentionClass: decodeId(acquisition.retentionClass, 'retentionClass'),
+    bytesAcquired: safeInteger(acquisition.bytesAcquired, 'bytesAcquired'),
+    expectedBytes: safeInteger(acquisition.expectedBytes, 'expectedBytes', { nullable: true }),
+    publicationId: nullableId('publicationId'),
+    manifestId: nullableId('manifestId'),
+    renditionId: nullableId('renditionId'),
+    assetId: nullableId('assetId'),
+    errorCode,
+    recoverable: acquisition.recoverable,
+    createdAt: safeInteger(acquisition.createdAt, 'createdAt'),
+    updatedAt: safeInteger(acquisition.updatedAt, 'updatedAt')
+  })
+}
+
+function acquisitionList (value) {
+  const items = Array.isArray(value) ? value : value?.items || value?.acquisitions
+  if (!Array.isArray(items) || items.length > COMPANION_CONTRACT_LIMITS.maxAcquisitions) {
+    throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Backend returned an invalid acquisition list')
+  }
+  const next = Array.isArray(value) ? null : value?.nextCursor ?? value?.cursor ?? null
+  const nextCursor = next == null
+    ? null
+    : (typeof next === 'string' && /^[A-Za-z0-9._~-]+$/.test(next) && b4a.byteLength(next) <= COMPANION_CONTRACT_LIMITS.maxCursorBytes
+        ? next
+        : (() => { throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Backend returned an invalid acquisition cursor') })())
+  return { items: items.map(publicAcquisition), nextCursor }
+}
+
+function streamLease (value) {
+  const candidate = value?.candidate || null
+  const asset = value?.asset || value?.lease || value
+  const publicationId = value?.publicationId || candidate?.publication?.publicationId
+  const renditionId = value?.renditionId || candidate?.rendition?.renditionId
+  const assetId = value?.assetId || asset?.assetId || candidate?.asset?.assetId
+  if (!asset || typeof asset !== 'object') {
+    throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Stream backend returned an invalid lease')
+  }
   return {
-    publicationId: decodeId(candidate.publication?.publicationId, 'publicationId'),
-    renditionId: decodeId(candidate.rendition?.renditionId, 'renditionId'),
-    assetId: decodeId(candidate.asset?.assetId, 'assetId')
+    asset,
+    publicationId: decodeId(publicationId, 'publicationId'),
+    renditionId: decodeId(renditionId, 'renditionId'),
+    assetId: decodeId(assetId, 'assetId')
   }
 }
-
-function backendCandidate (candidate, expectedRef = null) {
-  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate) || !CANDIDATE_REF_PATTERN.test(candidate.candidateRef || '')) {
-    throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Candidate backend returned an invalid response')
-  }
-  if (expectedRef !== null && candidate.candidateRef !== expectedRef) {
-    throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Verification backend returned a mismatched candidate')
-  }
-  try {
-    return { candidate, scope: exactCandidateScope(candidate) }
-  } catch {
-    throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Candidate backend returned an invalid response')
-  }
+function publicStreamDescriptor (value) {
+  if (value?.schemaVersion !== 1) return null
+  return Object.freeze({
+    schemaVersion: 1,
+    streamId: decodeId(value.streamId, 'streamId'),
+    publicationId: decodeId(value.publicationId, 'publicationId'),
+    renditionId: decodeId(value.renditionId, 'renditionId'),
+    assetId: decodeId(value.assetId, 'assetId'),
+    byteLength: safeInteger(value.byteLength, 'byteLength'),
+    mimeType: typeof value.mimeType === 'string' && b4a.byteLength(value.mimeType) <= 128 ? value.mimeType : 'application/octet-stream',
+    capability: value.capability == null ? null : decodeId(value.capability, 'capability'),
+    expiresAt: safeInteger(value.expiresAt, 'expiresAt', { nullable: true }),
+    etag: value.etag == null || (typeof value.etag === 'string' && b4a.byteLength(value.etag) <= 256) ? value.etag ?? null : null
+  })
 }
 
 
@@ -214,121 +308,177 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
   if (!service) throw new TypeError('service is required')
   if (typeof clock !== 'function') throw new TypeError('clock is required')
   const capabilityStore = capabilities || createStreamCapabilityStore({ now: clock })
+
   async function search (input, url) {
+    const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.search)
     const query = decodeSearchQuery(url.searchParams)
-    if (typeof service.searchIndexCandidates !== 'function') unavailable('Index search')
-    // An exact selector is rebuilt field by field so a title selector's own
-    // fields can never reach the backend as an exact one. An episode carries
-    // its place in the show alongside the show's coordinates: without the
-    // ordinals the backend can only find the series, which is not what was
-    // asked for.
-    const delegatedSelector = query.selector.namespace
-      ? {
-          namespace: query.selector.namespace,
-          identifier: query.selector.identifier,
-          kind: query.selector.kind,
-          ...(query.selector.kind === 'episode'
-            ? { season: query.selector.season, episode: query.selector.episode }
-            : {})
-        }
-      : query.selector
-    const options = { limit: query.limit, cursor: query.cursor, signal: input.signal }
-    const raw = await callBackend(service.searchIndexCandidates.bind(service), [delegatedSelector, options], input.signal)
-    const values = candidateList(raw)
-    const candidates = values.slice(0, query.limit).map(value => {
-      const { candidate } = backendCandidate(value)
-      return boundedPublicValue(candidate, { stripUrls: true })
-    })
+    if (typeof service.search !== 'function') unavailable('Index search')
+    const raw = await callBackend(service.search.bind(service), [{ ...query, principal, signal: input.signal }], input.signal)
+    const candidates = candidateList(raw).slice(0, query.limit).map(backendCandidate)
     const returnedCursor = raw && !Array.isArray(raw) ? (raw.nextCursor ?? raw.cursor) : null
-    const cursor = typeof returnedCursor === 'string' && /^[A-Za-z0-9._~-]+$/.test(returnedCursor) && b4a.byteLength(returnedCursor) <= COMPANION_CONTRACT_LIMITS.maxCursorBytes
-      ? returnedCursor
-      : null
+    const cursor = returnedCursor == null
+      ? null
+      : (typeof returnedCursor === 'string' && /^[A-Za-z0-9._~-]+$/.test(returnedCursor) &&
+          b4a.byteLength(returnedCursor) <= COMPANION_CONTRACT_LIMITS.maxCursorBytes
+          ? returnedCursor
+          : null)
     return routeResponse(200, { candidates, cursor })
   }
 
   async function openStream (input) {
+    const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.stream)
     const { candidateRef } = decodeOpenStreamBody(input.body)
-    if (typeof service.verifyIndexCandidate !== 'function') unavailable('Index verification')
-    const raw = await callBackend(service.verifyIndexCandidate.bind(service), [candidateRef, { signal: input.signal }], input.signal)
-    const candidate = verifiedCandidate(raw)
-    const { scope } = backendCandidate(candidate, candidateRef)
-    if (typeof service.openStreamAsset !== 'function') unavailable('Asset streaming')
-    const asset = await callBackend(service.openStreamAsset.bind(service), [candidate, { signal: input.signal }], input.signal)
-    if (!asset || typeof asset !== 'object' || Array.isArray(asset) || asset.assetId !== scope.assetId) {
-      await Promise.resolve(asset?.release?.()).catch(() => {})
-      throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Stream backend returned a mismatched asset')
-    }
+    if (typeof service.openStream !== 'function') unavailable('Asset streaming')
+    const opened = await callBackend(
+      service.openStream.bind(service),
+      [{ candidateRef, principal, signal: input.signal }],
+      input.signal
+    )
+    const descriptor = publicStreamDescriptor(opened)
+    if (descriptor) return routeResponse(200, descriptor)
+    const lease = streamLease(opened)
     let grant
     try {
       grant = capabilityStore.issue({
-        clientIdentity: input.clientIdentity,
-        ...scope,
-        asset,
+        clientIdentity: principal.id,
+        publicationId: lease.publicationId,
+        renditionId: lease.renditionId,
+        assetId: lease.assetId,
+        asset: lease.asset,
         methods: ['GET', 'HEAD']
       })
     } catch (error) {
-      await Promise.resolve(asset.release?.()).catch(() => {})
+      await Promise.resolve(lease.asset.release?.()).catch(() => {})
       throw error
     }
     return routeResponse(200, {
-      url: `/api/v2/stream/${encodeURIComponent(scope.publicationId)}/${encodeURIComponent(scope.renditionId)}?cap=${grant.token}`,
+      url: `/api/v2/stream/${encodeURIComponent(lease.publicationId)}/${encodeURIComponent(lease.renditionId)}?cap=${grant.token}`,
       expiresAt: grant.expiresAt,
-      publicationId: scope.publicationId,
-      renditionId: scope.renditionId
+      publicationId: lease.publicationId,
+      renditionId: lease.renditionId
     })
   }
 
-
   async function publication (input, publicationPart) {
+    const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.publication)
     const publicationId = decodedSegment(publicationPart, 'publicationId')
     if (typeof service.getPublication !== 'function') unavailable('Publication lookup')
-    const value = await callBackend(service.getPublication.bind(service), [publicationId, { signal: input.signal }], input.signal)
-    if (value === null || value === undefined) throw contractError(404, 'PUBLICATION_NOT_FOUND', 'Publication not found')
-    return routeResponse(200, { publication: boundedPublicValue(value, { stripUrls: true }) })
-  }
-
-  async function submitJob (input) {
-    const value = decodeIngestJobBody(input.body)
-    if (typeof service.submitIngestJob !== 'function') unavailable('Ingest jobs')
-    const job = await callBackend(service.submitIngestJob.bind(service), [
-      value,
-      { signal: input.signal, ingestSpoolLease: input.ingestSpoolLease || null }
-    ], input.signal)
-    return routeResponse(202, { job: boundedPublicValue(job, { stripUrls: true, stripSecrets: true }) })
-  }
-
-  async function getJob (input, jobPart) {
-    const jobId = decodedSegment(jobPart, 'jobId')
-    if (typeof service.getIngestJob !== 'function') unavailable('Ingest jobs')
-    const job = await callBackend(service.getIngestJob.bind(service), [jobId, { signal: input.signal }], input.signal)
-    if (job === null || job === undefined) throw contractError(404, 'JOB_NOT_FOUND', 'Ingest job not found')
-    return routeResponse(200, { job: boundedPublicValue(job, { stripUrls: true, stripSecrets: true }) })
-  }
-
-  async function cancelJob (input, jobPart) {
-    const jobId = decodedSegment(jobPart, 'jobId')
-    if (typeof service.cancelIngestJob !== 'function') unavailable('Ingest jobs')
-    const job = await callBackend(service.cancelIngestJob.bind(service), [jobId, { signal: input.signal }], input.signal)
-    if (job === null || job === undefined) throw contractError(404, 'JOB_NOT_FOUND', 'Ingest job not found')
-    return routeResponse(200, { job: boundedPublicValue(job, { stripUrls: true, stripSecrets: true }) })
-  }
-
-  async function applyNetworkPolicy (input) {
-    const policy = decodePolicyControlBody(input.body)
-    if (typeof service.applyNetworkPolicy !== 'function') unavailable('Network policy control')
-    const applied = await callBackend(
-      service.applyNetworkPolicy.bind(service),
-      [policy, { signal: input.signal }],
+    const value = await callBackend(
+      service.getPublication.bind(service),
+      [{ publicationId, principal, signal: input.signal }],
       input.signal
     )
+    const publication = value?.publication ?? value
+    if (publication === null || publication === undefined) {
+      throw contractError(404, 'PUBLICATION_NOT_FOUND', 'Publication not found')
+    }
     return routeResponse(200, {
-      policy: boundedPublicValue(applied, { stripUrls: true, stripSecrets: true })
+      publication: boundedPublicValue(publication, { stripUrls: true, stripSecrets: true })
+    })
+  }
+
+  async function requestAcquisition (input) {
+    const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.acquisitionRequest)
+    const value = decodeAcquisitionBody(input.body)
+    if (typeof service.requestAcquisition !== 'function') unavailable('Acquisitions')
+    const result = await callBackend(
+      service.requestAcquisition.bind(service),
+      [{ ...value, principal, signal: input.signal }],
+      input.signal
+    )
+    return routeResponse(202, { acquisition: publicAcquisition(result) })
+  }
+
+  async function listAcquisitions (input, url) {
+    const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.acquisitionRead)
+    const query = decodeAcquisitionListQuery(url.searchParams)
+    if (typeof service.listAcquisitions !== 'function') unavailable('Acquisitions')
+    const result = await callBackend(
+      service.listAcquisitions.bind(service),
+      [{ ...query, principal, signal: input.signal }],
+      input.signal
+    )
+    return routeResponse(200, acquisitionList(result))
+  }
+
+  async function getAcquisition (input, acquisitionPart) {
+    const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.acquisitionRead)
+    const acquisitionId = decodedSegment(acquisitionPart, 'acquisitionId')
+    if (typeof service.getAcquisition !== 'function') unavailable('Acquisitions')
+    const result = await callBackend(
+      service.getAcquisition.bind(service),
+      [{ acquisitionId, principal, signal: input.signal }],
+      input.signal
+    )
+    if (result == null) throw contractError(404, 'ACQUISITION_NOT_FOUND', 'Acquisition not found')
+    return routeResponse(200, { acquisition: publicAcquisition(result) })
+  }
+
+  async function cancelAcquisition (input, acquisitionPart) {
+    const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.acquisitionCancel)
+    const acquisitionId = decodedSegment(acquisitionPart, 'acquisitionId')
+    if (typeof service.cancelAcquisition !== 'function') unavailable('Acquisitions')
+    const result = await callBackend(
+      service.cancelAcquisition.bind(service),
+      [{ acquisitionId, principal, signal: input.signal }],
+      input.signal
+    )
+    if (result == null) throw contractError(404, 'ACQUISITION_NOT_FOUND', 'Acquisition not found')
+    return routeResponse(200, { acquisition: publicAcquisition(result) })
+  }
+
+  async function attachSourceGrant (input, acquisitionPart) {
+    const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.acquisitionGrant)
+    const transport = input.inProcess === true ? 'in-process' : input.serverState?.transport || config.transport
+    if (transport !== 'unix' && transport !== 'in-process') {
+      throw contractError(403, 'PRIVATE_ROUTE_REQUIRES_LOCAL_TRANSPORT', 'Source grants require a local protected transport')
+    }
+    const acquisitionId = decodedSegment(acquisitionPart, 'acquisitionId')
+    const { grant } = decodeSourceGrantBody(input.body)
+    if (typeof service.attachSourceGrant !== 'function') unavailable('Source grants')
+    const result = await callBackend(
+      service.attachSourceGrant.bind(service),
+      [{ acquisitionId, grant, principal, signal: input.signal }],
+      input.signal
+    )
+    return routeResponse(200, { acquisition: publicAcquisition(result) })
+  }
+
+  async function networkPolicy (input, method) {
+    const write = method === 'PUT'
+    const principal = requirePrincipal(input, write ? COMPANION_ROUTE_SCOPES.policyWrite : COMPANION_ROUTE_SCOPES.policyRead)
+    const name = write ? 'setPolicy' : 'getPolicy'
+    if (typeof service[name] !== 'function') unavailable('Network policy control')
+    const args = write
+      ? { policy: decodePolicyControlBody(input.body), principal, signal: input.signal }
+      : { principal, signal: input.signal }
+    const result = await callBackend(service[name].bind(service), [args], input.signal)
+    return routeResponse(200, {
+      policy: boundedPublicValue(result?.policy ?? result, { stripUrls: true, stripSecrets: true })
+    })
+  }
+
+  async function acquisitionPolicy (input, method) {
+    const write = method === 'PUT'
+    const principal = requirePrincipal(
+      input,
+      write ? COMPANION_ROUTE_SCOPES.acquisitionPolicyWrite : COMPANION_ROUTE_SCOPES.acquisitionPolicyRead
+    )
+    const name = write ? 'setAcquisitionPolicy' : 'getAcquisitionPolicy'
+    if (typeof service[name] !== 'function') unavailable('Acquisition policy control')
+    const args = write
+      ? { ...decodeAcquisitionPolicyBody(input.body), principal, signal: input.signal }
+      : { principal, signal: input.signal }
+    const result = await callBackend(service[name].bind(service), [args], input.signal)
+    return routeResponse(200, {
+      policy: boundedPublicValue(result?.policy ?? result, { stripUrls: true, stripSecrets: true })
     })
   }
 
   async function status (input) {
+    const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.status)
     const raw = typeof service.getStatus === 'function'
-      ? await callBackend(service.getStatus.bind(service), [{ signal: input.signal }], input.signal)
+      ? await callBackend(service.getStatus.bind(service), [{ principal, signal: input.signal }], input.signal)
       : {}
     const state = input.serverState || {}
     const transport = { mode: state.transport || config.transport || 'unix', enabled: state.enabled !== false }
@@ -341,7 +491,7 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
       apiVersion: 2,
       status: 'available',
       transport,
-      auth: { mode: 'mac', clientId: config.client?.id || input.clientIdentity || null },
+      auth: { mode: 'mac', clientId: principal.id },
       diagnostics: boundedPublicValue(raw?.runtime || raw, { stripUrls: true, stripSecrets: true })
     })
   }
@@ -358,22 +508,30 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
       if (path === '/api/v2/streams/open') {
         if (method !== 'POST') allow(['POST'])
         rejectQuery(url.searchParams)
-        return await openStream({ ...input, method })
+        return await openStream(input)
       }
       if (path === '/api/v2/status') {
         if (method !== 'GET') allow(['GET'])
         rejectQuery(url.searchParams)
-        return await status({ ...input, method })
+        return await status(input)
       }
       if (path === '/api/v2/policy') {
-        if (method !== 'PUT') allow(['PUT'])
+        if (method !== 'GET' && method !== 'PUT') allow(['GET', 'PUT'])
         rejectQuery(url.searchParams)
-        return await applyNetworkPolicy({ ...input, method })
+        return await networkPolicy(input, method)
       }
-      if (path === '/api/v2/ingest/jobs') {
-        if (method !== 'POST') allow(['POST'])
+      if (path === '/api/v2/acquisition-policy') {
+        if (method !== 'GET' && method !== 'PUT') allow(['GET', 'PUT'])
         rejectQuery(url.searchParams)
-        return await submitJob({ ...input, method })
+        return await acquisitionPolicy(input, method)
+      }
+      if (path === '/api/v2/acquisitions') {
+        if (method === 'POST') {
+          rejectQuery(url.searchParams)
+          return await requestAcquisition(input)
+        }
+        if (method === 'GET') return await listAcquisitions(input, url)
+        allow(['GET', 'POST'])
       }
 
       let match = path.match(/^\/api\/v2\/publications\/([^/]+)$/)
@@ -382,18 +540,22 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
         rejectQuery(url.searchParams)
         return await publication(input, match[1])
       }
-      match = path.match(/^\/api\/v2\/ingest\/jobs\/([^/]+)$/)
+      match = path.match(/^\/api\/v2\/acquisitions\/([^/]+)\/source-grants$/)
+      if (match) {
+        if (method !== 'POST') allow(['POST'])
+        rejectQuery(url.searchParams)
+        return await attachSourceGrant(input, match[1])
+      }
+      match = path.match(/^\/api\/v2\/acquisitions\/([^/]+)$/)
       if (match) {
         rejectQuery(url.searchParams)
-        if (method === 'GET') return await getJob(input, match[1])
-        if (method === 'DELETE') return await cancelJob(input, match[1])
+        if (method === 'GET') return await getAcquisition(input, match[1])
+        if (method === 'DELETE') return await cancelAcquisition(input, match[1])
         allow(['GET', 'DELETE'])
       }
       throw contractError(404, 'NOT_FOUND', 'Companion route not found')
     } catch (error) {
       const known = error instanceof CompanionContractError ? error : backendFailure(error)
-      // The caller gets a deliberately generic body; the operator gets the real
-      // reason in their own logs.
       if (known.backendDetail) logger?.archive?.warn?.('Companion request refused', known.backendDetail)
       const headers = error?.allow ? { allow: error.allow } : {}
       return routeResponse(known.statusCode, errorBody(known), headers)

@@ -10,6 +10,8 @@ Client shell
   -> Corestore / Autobase / Hyperbee / Hyperblobs / Hyperswarm
 ```
 
+Visual complexity map and smaller target: [`docs/p2p-simplification.html`](./docs/p2p-simplification.html).
+
 ## Runtime Surfaces
 
 | Surface | UI / process | Backend runtime | Transport |

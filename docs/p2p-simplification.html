@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PearTube P2P backend simplification</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box} body{margin:0;background:#f5f5f5;color:#2d3142;font-family:'Geist',system-ui,sans-serif;padding:48px 32px} main{max-width:1120px;margin:auto}.eyebrow{font:500 11px 'Geist Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:#4f5d75}h1,h2{font-family:'Instrument Serif',serif;font-weight:400}h1{font-size:40px;margin:8px 0 12px}h2{font-size:28px;margin:48px 0 8px}.lead{max-width:760px;color:#4f5d75;line-height:1.55}.note{font:12px 'Geist Mono',monospace;color:#4f5d75;margin:8px 0 16px}figure{margin:0;padding:20px;background:#fff;border:1px solid rgba(45,49,66,.12);border-radius:8px;overflow:auto}svg{display:block;width:100%;min-width:900px}.summary{display:grid;grid-template-columns:1.1fr .9fr;gap:20px;margin-top:20px}.card{background:#fff;border:1px solid rgba(45,49,66,.12);border-radius:6px;padding:20px}.card h3{font-size:15px;margin:0 0 8px}.card ul{margin:0;padding-left:18px;color:#4f5d75;line-height:1.55}@media(max-width:760px){body{padding:28px 16px}.summary{grid-template-columns:1fr}}
+  </style>
+</head>
+<body><main>
+  <p class="eyebrow">PearTube · P2P backend</p>
+  <h1>Current complexity and a smaller target</h1>
+  <p class="lead">The security rules are not the problem. The weight comes from parallel data planes, repeated projections, two block-transfer paths, three client boundaries, and migration logic inside the permanent boot graph.</p>
+
+  <h2>1. Current state</h2>
+  <p class="note">Nine major subsystems · three projections · two transfer paths</p>
+  <figure>
+  <svg viewBox="0 0 960 620" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="current-title current-desc">
+    <title id="current-title">Current PearTube backend complexity</title>
+    <desc id="current-desc">Current-state architecture showing client interfaces feeding a large orchestrator, three catalog projections, legacy and static asset paths, separate asset and archive transfer systems, policy, storage, and S3.</desc>
+    <defs>
+      <marker id="c-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#4f5d75"/></marker>
+      <marker id="c-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#eb6c36"/></marker>
+    </defs>
+    <rect width="960" height="620" fill="#fff"/>
+    <rect x="40" y="40" width="880" height="88" rx="8" fill="rgba(45,49,66,.02)" stroke="rgba(45,49,66,.12)"/>
+    <text x="64" y="60" fill="#4f5d75" font-size="8" font-family="'Geist Mono',monospace" letter-spacing=".14em">CLIENT BOUNDARIES</text>
+    <rect x="40" y="152" width="880" height="228" rx="8" fill="rgba(45,49,66,.02)" stroke="rgba(45,49,66,.12)"/>
+    <text x="64" y="172" fill="#4f5d75" font-size="8" font-family="'Geist Mono',monospace" letter-spacing=".14em">BACKEND CONTROL + DATA MODELS</text>
+    <rect x="40" y="404" width="880" height="148" rx="8" fill="rgba(45,49,66,.02)" stroke="rgba(45,49,66,.12)"/>
+    <text x="64" y="424" fill="#4f5d75" font-size="8" font-family="'Geist Mono',monospace" letter-spacing=".14em">TRANSFER + STORAGE</text>
+
+    <!-- connectors -->
+    <path d="M176 108 V144 Q176 152 184 152 H256 Q264 152 264 160 V188" fill="none" stroke="#4f5d75" marker-end="url(#c-arrow)"/>
+    <line x1="480" y1="108" x2="480" y2="188" stroke="#4f5d75" marker-end="url(#c-arrow)"/>
+    <line x1="784" y1="108" x2="784" y2="188" stroke="#4f5d75" marker-end="url(#c-arrow)"/>
+    <line x1="280" y1="220" x2="376" y2="220" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#c-accent)"/>
+    <line x1="584" y1="220" x2="680" y2="220" stroke="#4f5d75" marker-end="url(#c-arrow)"/>
+    <path d="M480 252 V276 Q480 284 472 284 H176 Q168 284 168 292 V316" fill="none" stroke="#4f5d75" marker-end="url(#c-arrow)"/>
+    <line x1="480" y1="252" x2="480" y2="316" stroke="#4f5d75" marker-end="url(#c-arrow)"/>
+    <path d="M512 252 V276 Q512 284 520 284 H784 Q792 284 792 292 V316" fill="none" stroke="#4f5d75" marker-end="url(#c-arrow)"/>
+    <path d="M168 364 V392 Q168 400 176 400 H272 Q280 400 280 428 V452" fill="none" stroke="#4f5d75" marker-end="url(#c-arrow)"/>
+    <line x1="480" y1="364" x2="480" y2="452" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#c-accent)"/>
+    <path d="M792 364 V392 Q792 400 784 400 H688 Q680 400 680 428 V452" fill="none" stroke="#4f5d75" marker-end="url(#c-arrow)"/>
+    <line x1="760" y1="484" x2="824" y2="484" stroke="#4f5d75" stroke-dasharray="4,3" marker-end="url(#c-arrow)"/>
+
+    <!-- nodes -->
+    <g font-family="'Geist',sans-serif" text-anchor="middle">
+      <rect x="88" y="72" width="176" height="36" rx="6" fill="#fff" stroke="#4f5d75"/><text x="176" y="94" font-size="11" font-weight="600">App HRPC</text>
+      <rect x="392" y="72" width="176" height="36" rx="6" fill="#fff" stroke="#4f5d75"/><text x="480" y="94" font-size="11" font-weight="600">Machine API v2</text>
+      <rect x="696" y="72" width="176" height="36" rx="6" fill="#fff" stroke="#4f5d75"/><text x="784" y="94" font-size="11" font-weight="600">Legacy relay API</text>
+
+      <rect x="72" y="188" width="208" height="64" rx="8" fill="rgba(45,49,66,.05)" stroke="#4f5d75"/><text x="176" y="214" font-size="11" font-weight="600">Legacy channels + blobs</text><text x="176" y="234" font-size="8" fill="#4f5d75" font-family="'Geist Mono',monospace">feed · Hyperblobs · seed-pin</text>
+      <rect x="376" y="188" width="208" height="64" rx="8" fill="rgba(235,108,54,.08)" stroke="#eb6c36"/><text x="480" y="214" font-size="11" font-weight="600">Orchestrator + API</text><text x="480" y="234" font-size="8" fill="#eb6c36" font-family="'Geist Mono',monospace">1,304 + 4,222 lines</text>
+      <rect x="680" y="188" width="208" height="64" rx="8" fill="rgba(45,49,66,.05)" stroke="#4f5d75"/><text x="784" y="214" font-size="11" font-weight="600">Migration + compatibility</text><text x="784" y="234" font-size="8" fill="#4f5d75" font-family="'Geist Mono',monospace">startup gates · old state</text>
+
+      <rect x="72" y="316" width="192" height="48" rx="6" fill="#fff" stroke="#4f5d75"/><text x="168" y="338" font-size="10" font-weight="600">Media graph projection</text><text x="168" y="354" font-size="8" fill="#4f5d75">signed catalog view</text>
+      <rect x="384" y="316" width="192" height="48" rx="6" fill="#fff" stroke="#4f5d75"/><text x="480" y="338" font-size="10" font-weight="600">Local catalog index</text><text x="480" y="354" font-size="8" fill="#4f5d75">query projection</text>
+      <rect x="696" y="316" width="192" height="48" rx="6" fill="#fff" stroke="#4f5d75"/><text x="792" y="338" font-size="10" font-weight="600">Consumer projection</text><text x="792" y="354" font-size="8" fill="#4f5d75">moderated display view</text>
+
+      <rect x="200" y="452" width="160" height="64" rx="8" fill="rgba(45,49,66,.05)" stroke="#4f5d75"/><text x="280" y="478" font-size="11" font-weight="600">Legacy transfer</text><text x="280" y="498" font-size="8" fill="#4f5d75">blob + seed-pin paths</text>
+      <rect x="400" y="452" width="160" height="64" rx="8" fill="rgba(235,108,54,.08)" stroke="#eb6c36"/><text x="480" y="478" font-size="11" font-weight="600">Scoped network</text><text x="480" y="498" font-size="8" fill="#eb6c36">7 purposes · 5,000 lines</text>
+      <rect x="600" y="452" width="160" height="64" rx="8" fill="rgba(45,49,66,.05)" stroke="#4f5d75"/><text x="680" y="478" font-size="11" font-weight="600">Archive transfer</text><text x="680" y="498" font-size="8" fill="#4f5d75">pledges · challenges</text>
+      <rect x="824" y="452" width="80" height="64" rx="8" fill="rgba(45,49,66,.03)" stroke="#4f5d75" stroke-dasharray="4,3"/><text x="864" y="478" font-size="11" font-weight="600">S3</text><text x="864" y="498" font-size="8" fill="#4f5d75">blocks</text>
+    </g>
+    <line x1="40" y1="580" x2="920" y2="580" stroke="rgba(45,49,66,.12)"/><text x="40" y="604" fill="#4f5d75" font-size="9" font-family="'Geist Mono',monospace">WEIGHT</text><text x="112" y="604" fill="#4f5d75" font-size="9">Parallel generations remain live in the same boot and request graph.</text>
+  </svg>
+  </figure>
+
+  <h2>2. Smaller target</h2>
+  <p class="note">One signed log · one query view · one block engine · retention as policy</p>
+  <figure>
+  <svg viewBox="0 0 960 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="target-title target-desc">
+    <title id="target-title">Simplified PearTube P2P backend target</title>
+    <desc id="target-desc">Target architecture where all clients use one boundary, verified publisher records feed one local query view, immutable assets use one scoped block engine, and cache, seeding, archive, and S3 differ only by retention policy.</desc>
+    <defs><marker id="t-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#4f5d75"/></marker><marker id="t-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#eb6c36"/></marker></defs>
+    <rect width="960" height="500" fill="#fff"/>
+    <!-- arrows -->
+    <line x1="176" y1="96" x2="304" y2="96" stroke="#4f5d75" marker-end="url(#t-arrow)"/>
+    <line x1="512" y1="96" x2="640" y2="96" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#t-accent)"/>
+    <path d="M744 128 V168 Q744 176 736 176 H184 Q176 176 176 184 V224" fill="none" stroke="#4f5d75" marker-end="url(#t-arrow)"/>
+    <line x1="176" y1="288" x2="304" y2="288" stroke="#4f5d75" marker-end="url(#t-arrow)"/>
+    <line x1="512" y1="288" x2="640" y2="288" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#t-accent)"/>
+    <path d="M744 320 V352 Q744 360 736 360 H176 Q168 360 168 368 V400" fill="none" stroke="#4f5d75" marker-end="url(#t-arrow)"/>
+    <line x1="280" y1="432" x2="344" y2="432" stroke="#4f5d75" marker-end="url(#t-arrow)"/>
+    <line x1="504" y1="432" x2="568" y2="432" stroke="#4f5d75" marker-end="url(#t-arrow)"/>
+    <line x1="728" y1="432" x2="792" y2="432" stroke="#4f5d75" stroke-dasharray="4,3" marker-end="url(#t-arrow)"/>
+
+    <g text-anchor="middle" font-family="'Geist',sans-serif">
+      <rect x="64" y="64" width="224" height="64" rx="8" fill="#fff" stroke="#4f5d75"/><text x="176" y="90" font-size="12" font-weight="600">Any client</text><text x="176" y="110" font-size="8" fill="#4f5d75" font-family="'Geist Mono',monospace">app RPC or machine API</text>
+      <rect x="304" y="64" width="208" height="64" rx="8" fill="rgba(235,108,54,.08)" stroke="#eb6c36"/><text x="408" y="90" font-size="12" font-weight="600">Universal backend</text><text x="408" y="110" font-size="8" fill="#eb6c36" font-family="'Geist Mono',monospace">lifecycle · auth · policy</text>
+      <rect x="640" y="64" width="208" height="64" rx="8" fill="#fff" stroke="#4f5d75"/><text x="744" y="90" font-size="12" font-weight="600">Signed publisher log</text><text x="744" y="110" font-size="8" fill="#4f5d75">one publication truth</text>
+
+      <rect x="64" y="224" width="224" height="64" rx="8" fill="#fff" stroke="#4f5d75"/><text x="176" y="250" font-size="12" font-weight="600">Local query view</text><text x="176" y="270" font-size="8" fill="#4f5d75">search + moderation filter</text>
+      <rect x="304" y="256" width="208" height="64" rx="8" fill="#fff" stroke="#4f5d75"/><text x="408" y="282" font-size="12" font-weight="600">Immutable asset</text><text x="408" y="302" font-size="8" fill="#4f5d75">one core per rendition</text>
+      <rect x="640" y="256" width="208" height="64" rx="8" fill="rgba(235,108,54,.08)" stroke="#eb6c36"/><text x="744" y="282" font-size="12" font-weight="600">Scoped block engine</text><text x="744" y="302" font-size="8" fill="#eb6c36">request · proof · chunk</text>
+
+      <rect x="56" y="400" width="224" height="64" rx="8" fill="#fff" stroke="#4f5d75"/><text x="168" y="426" font-size="12" font-weight="600">Cache policy</text><text x="168" y="446" font-size="8" fill="#4f5d75">evictable local blocks</text>
+      <rect x="344" y="400" width="160" height="64" rx="8" fill="#fff" stroke="#4f5d75"/><text x="424" y="426" font-size="12" font-weight="600">Seed policy</text><text x="424" y="446" font-size="8" fill="#4f5d75">serve within budget</text>
+      <rect x="568" y="400" width="160" height="64" rx="8" fill="#fff" stroke="#4f5d75"/><text x="648" y="426" font-size="12" font-weight="600">Archive policy</text><text x="648" y="446" font-size="8" fill="#4f5d75">retain until expiry</text>
+      <rect x="792" y="400" width="112" height="64" rx="8" fill="rgba(45,49,66,.03)" stroke="#4f5d75" stroke-dasharray="4,3"/><text x="848" y="426" font-size="12" font-weight="600">S3</text><text x="848" y="446" font-size="8" fill="#4f5d75">same blocks</text>
+    </g>
+  </svg>
+  </figure>
+
+  <h2>3. Deletion map</h2>
+  <p class="note">Remove duplicates in dependency order. Keep trust and verification rules.</p>
+  <figure>
+  <svg viewBox="0 0 960 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="delete-title delete-desc">
+    <title id="delete-title">PearTube backend deletion sequence</title>
+    <desc id="delete-desc">Four-step deletion sequence: move callers to one API and asset model, collapse projections, merge block transfer engines, then remove legacy data planes and permanent migration branches.</desc>
+    <defs><marker id="d-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#4f5d75"/></marker></defs>
+    <rect width="960" height="360" fill="#fff"/>
+    <line x1="224" y1="136" x2="272" y2="136" stroke="#4f5d75" marker-end="url(#d-arrow)"/>
+    <line x1="448" y1="136" x2="496" y2="136" stroke="#4f5d75" marker-end="url(#d-arrow)"/>
+    <line x1="672" y1="136" x2="720" y2="136" stroke="#4f5d75" marker-end="url(#d-arrow)"/>
+    <g text-anchor="middle" font-family="'Geist',sans-serif">
+      <rect x="48" y="80" width="176" height="112" rx="8" fill="#fff" stroke="#4f5d75"/><rect x="64" y="92" width="32" height="20" rx="4" fill="rgba(45,49,66,.10)"/><text x="80" y="106" font-size="8" font-family="'Geist Mono',monospace">01</text><text x="136" y="132" font-size="11" font-weight="600">Move callers</text><text x="136" y="152" font-size="8" fill="#4f5d75">v2 API · static assets</text><text x="136" y="168" font-size="8" fill="#4f5d75">no compatibility writes</text>
+      <rect x="272" y="80" width="176" height="112" rx="8" fill="#fff" stroke="#4f5d75"/><rect x="288" y="92" width="32" height="20" rx="4" fill="rgba(45,49,66,.10)"/><text x="304" y="106" font-size="8" font-family="'Geist Mono',monospace">02</text><text x="360" y="132" font-size="11" font-weight="600">Collapse views</text><text x="360" y="152" font-size="8" fill="#4f5d75">one verified query view</text><text x="360" y="168" font-size="8" fill="#4f5d75">moderation at query time</text>
+      <rect x="496" y="80" width="176" height="112" rx="8" fill="rgba(235,108,54,.08)" stroke="#eb6c36"/><rect x="512" y="92" width="32" height="20" rx="4" fill="rgba(235,108,54,.18)"/><text x="528" y="106" font-size="8" fill="#eb6c36" font-family="'Geist Mono',monospace">03</text><text x="584" y="132" font-size="11" font-weight="600">Merge transfer</text><text x="584" y="152" font-size="8" fill="#4f5d75">one verified block engine</text><text x="584" y="168" font-size="8" fill="#4f5d75">retention selects behavior</text>
+      <rect x="720" y="80" width="192" height="112" rx="8" fill="#fff" stroke="#4f5d75"/><rect x="736" y="92" width="32" height="20" rx="4" fill="rgba(45,49,66,.10)"/><text x="752" y="106" font-size="8" font-family="'Geist Mono',monospace">04</text><text x="816" y="132" font-size="11" font-weight="600">Delete old planes</text><text x="816" y="152" font-size="8" fill="#4f5d75">feeds · shared blobs · v1</text><text x="816" y="168" font-size="8" fill="#4f5d75">permanent migration branches</text>
+    </g>
+    <line x1="48" y1="232" x2="912" y2="232" stroke="rgba(45,49,66,.12)"/>
+    <text x="48" y="260" fill="#4f5d75" font-size="9" font-family="'Geist Mono',monospace">KEEP THROUGH EVERY STEP</text>
+    <text x="48" y="288" fill="#2d3142" font-size="10">Signed authority · exact asset identity · proof-checked blocks · bounded input · explicit consent · local moderation</text>
+    <text x="48" y="320" fill="#4f5d75" font-size="9">Deletion is safe only after every caller has moved and the old path has no writes, reads, tests, or generated contract entries.</text>
+  </svg>
+  </figure>
+
+  <div class="summary">
+    <section class="card"><h3>Delete weight</h3><ul><li>Legacy channel and public-feed data plane</li><li>Repeated media, index, and consumer projections</li><li>Separate asset and archive block engines</li><li>Old machine API and permanent migration branches</li></ul></section>
+    <section class="card"><h3>Keep invariants</h3><ul><li>Publisher and writer signatures</li><li>Immutable rendition cores</li><li>Merkle proof verification</li><li>Purpose-scoped sessions and limits</li><li>Consent, moderation, and privacy</li></ul></section>
+  </div>
+</main></body></html>

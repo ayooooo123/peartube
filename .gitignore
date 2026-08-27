@@ -68,10 +68,6 @@ packages/desktop/(tabs)/
 packages/desktop/video/
 *.tgz
 
-# OpenProse state/workflows
-.prose/
-*.prose
-
 # Build caches
 **/.cache/
 .gradle-user-home/

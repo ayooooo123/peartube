@@ -16,6 +16,7 @@ import {
   verifyStaticAssetDescriptor,
   writeStaticAsset,
 } from '../src/assets/static-core.js'
+import { createOneShotSourceReader, createSourceReader } from '../src/assets/source-reader.js'
 
 // What this file measures, and why it exists.
 //
@@ -334,7 +335,11 @@ test('pass 1 overlaps its uploads with the download instead of idling the connec
   const startedAt = clock()
   const written = await writeStaticAsset({
     store,
-    source,
+    reader: createOneShotSourceReader({
+      source,
+      identity: { kind: 'etag', value: 'timed-source-overlap' },
+      byteLength: BYTE_LENGTH,
+    }),
     offload: {
       createStagingStore({ core }) {
         stagingCore = core
@@ -451,7 +456,11 @@ test('an upload that never lands fails the ingest rather than losing the block',
   await t.exception(
     writeStaticAsset({
       store,
-      source,
+      reader: createOneShotSourceReader({
+        source,
+        identity: { kind: 'etag', value: 'timed-source-failure' },
+        byteLength: BYTE_LENGTH,
+      }),
       offload: {
         createStagingStore({ core }) {
           timing.state.stagingKeyHex = b4a.toString(core.key, 'hex')
@@ -509,16 +518,30 @@ test('a resume finds the block that overlapped uploads left behind, not just the
   const resumeId = 'ing_resume_0000000000000000000042'
   const etag = '"remote-sha256-0123456789abcdef"'
   const opens = []
-  const open = ({ byteOffset, blockIndex }) => {
-    opens.push({ byteOffset, blockIndex })
-    return (async function *() {
-      for (let offset = byteOffset; offset < bytes.byteLength; offset += CHUNK_BYTES) {
-        yield bytes.subarray(offset, Math.min(offset + CHUNK_BYTES, bytes.byteLength))
+  const reader = () => createSourceReader({
+    resumable: true,
+    maxReadBytes: BYTE_LENGTH,
+    async describe() {
+      return {
+        identity: { kind: 'etag', value: etag },
+        byteLength: BYTE_LENGTH,
+        mimeType: 'application/octet-stream',
       }
-    })()
-  }
+    },
+    open({ offset, length }) {
+      const blockIndex = Math.floor(offset / ASSET_BLOCK_SIZE)
+      opens.push({ byteOffset: offset, blockIndex })
+      return (async function *() {
+        const end = offset + length
+        for (let cursor = offset; cursor < end; cursor += CHUNK_BYTES) {
+          yield bytes.subarray(cursor, Math.min(cursor + CHUNK_BYTES, end))
+        }
+      })()
+    },
+    async close() {},
+  })
 
-  const interrupted = await writeStaticAsset({ store, offload, resume: { id: resumeId, etag, open } })
+  const interrupted = await writeStaticAsset({ store, offload, reader: reader(), resume: { id: resumeId } })
     .then(() => null, (error) => error)
 
   t.is(interrupted?.message, 'the bucket refused the upload', 'the interruption is the upload that would not land')
@@ -532,7 +555,7 @@ test('a resume finds the block that overlapped uploads left behind, not just the
   )
 
   breakOnHole = false
-  const resumed = await writeStaticAsset({ store, offload, resume: { id: resumeId, etag, open } })
+  const resumed = await writeStaticAsset({ store, offload, reader: reader(), resume: { id: resumeId } })
 
   t.ok(resumePuts.includes(holeAt), `the resume went back for block ${holeAt} rather than trusting the end of the run`)
   for (const index of confirmedAfterBreak) {

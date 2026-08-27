@@ -1,6 +1,6 @@
 import test from 'brittle'
 import { createServer } from 'node:http'
-import { createArchiveManager, createArchivePublisher, enqueueArchiveJob, fetchPosterBytes } from '../src/archive-manager.js'
+import { fetchPosterBytes } from '../src/archive-manager.js'
 import { openResponse, readBody } from '../src/media/http-get.js'
 
 // The relay runs on Bare. Bare has no global `fetch` and no global
@@ -42,46 +42,6 @@ function withoutBareMissingGlobals (fn) {
   )
 }
 
-function memStore () {
-  const jobs = []
-  const inputs = {}
-  return {
-    async listJobs () { return jobs },
-    async getPrivateInput (id) { return inputs[id] || null },
-    async addJob (job, privateInput) { jobs.unshift(job); inputs[job.id] = privateInput; return job },
-    async updateJob (id, patch) {
-      const index = jobs.findIndex((job) => job.id === id)
-      if (index >= 0) jobs[index] = { ...jobs[index], ...patch }
-      return jobs[index] || null
-    }
-  }
-}
-
-function harness () {
-  const store = memStore()
-  const calls = { upload: [] }
-  const downloader = {
-    async download () {
-      return { filePath: '/tmp/clip.mp4', title: 'Downloaded Title', duration: 10, size: 100, mimeType: 'video/mp4', cleanup () {} }
-    }
-  }
-  const channelStub = { blobs: {}, publicBeeKey: 'pb1', getMetadata: async () => ({}) }
-  const publisher = createArchivePublisher({
-    identityManager: {
-      getActiveIdentity: () => ({ publicKey: 'publisher-1', driveKey: 'ck1', channelKey: 'ck1' }),
-      getActiveChannel: async () => channelStub
-    },
-    uploadManager: {
-      async uploadFromPath (channel, filePath, options) { calls.upload.push(options); return { success: true, videoId: 'v1', metadata: {} } },
-      async setThumbnailFromBuffer () { return { success: false } }
-    },
-    api: {},
-    runtime: { publishPublisherCatalog: async () => ({ status: 'published' }) },
-    fs: {}
-  })
-  return { store, manager: createArchiveManager({ store, downloader, publisher }), calls }
-}
-
 // The exact production failure, at its smallest. The old signature was
 // `{ fetchImpl = fetch }`, and a default parameter is evaluated on entry — so
 // this threw ReferenceError before the body could even decide there was no
@@ -91,28 +51,6 @@ test('the poster fetch does not reach for a global the relay does not have', asy
     t.is(await fetchPosterBytes(''), null, 'a job with no poster path resolves instead of throwing')
     t.is(await fetchPosterBytes(null), null, 'and so does one with none at all')
   })
-})
-
-// The end-to-end shape: a URL-ingest job, run the way the relay runs it, in a
-// process with no fetch and no AbortController. This is what returned 202 and
-// then failed with "fetch is not defined" on a live relay.
-test('a url-ingest job completes on a runtime with no fetch and no AbortController', async (t) => {
-  const { store, manager, calls } = harness()
-  const job = await enqueueArchiveJob(store, {
-    url: 'https://cdn.example/movie.mp4',
-    tmdbType: 'movie',
-    tmdbId: '603',
-    tmdbTitle: 'The Matrix',
-    tmdbYear: '1999',
-    requirePublicSource: true
-  })
-
-  const completed = await withoutBareMissingGlobals(() => manager.runJob(job.id))
-
-  t.is(completed.status, 'completed', 'the job publishes rather than failing on a missing global')
-  t.absent(completed.error, 'and carries no error')
-  t.is(calls.upload.length, 1, 'the video reached the upload manager')
-  t.is(calls.upload[0].mediaId, '603', 'with its coordinates intact')
 })
 
 // The replacement client itself, proven against a real socket with the globals

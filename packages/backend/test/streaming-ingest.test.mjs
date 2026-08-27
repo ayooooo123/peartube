@@ -16,6 +16,7 @@ import {
   verifyStaticAssetDescriptor,
   writeStaticAsset,
 } from '../src/assets/static-core.js'
+import { createSourceReader } from '../src/assets/source-reader.js'
 
 // A network download is a ONE-SHOT source: there is no second fetch, and the
 // relay cannot stage the title on its volume first, because the title is the
@@ -77,23 +78,45 @@ async function *replay(chunks) {
   yield* chunks
 }
 
-/**
- * The source under test: an async iterator that throws if anybody iterates it
- * twice, which is what a fetch body or a decode pipe is. A test that let this
- * be iterated again would prove nothing about a real download.
- */
+function reopenableReader(byteLength, open) {
+  return createSourceReader({
+    resumable: true,
+    maxReadBytes: Math.max(1, byteLength),
+    async describe() {
+      return {
+        identity: { kind: 'etag', value: `streaming-reopenable:${byteLength}` },
+        byteLength,
+        mimeType: 'application/octet-stream',
+      }
+    },
+    open,
+    async close() {},
+  })
+}
+
 function oneShotSource(chunks) {
   let iterations = 0
-  return {
-    get iterations() {
-      return iterations
+  const byteLength = chunks.reduce((total, chunk) => total + chunk.byteLength, 0)
+  const reader = createSourceReader({
+    resumable: false,
+    maxReadBytes: Math.max(1, byteLength),
+    async describe() {
+      return {
+        identity: { kind: 'etag', value: `streaming-one-shot:${byteLength}` },
+        byteLength,
+        mimeType: 'application/octet-stream',
+      }
     },
-    async *[Symbol.asyncIterator]() {
-      iterations++
-      if (iterations > 1) throw new Error('source iterated more than once')
-      yield* chunks
+    open() {
+      return (async function * () {
+        iterations++
+        if (iterations > 1) throw new Error('source iterated more than once')
+        yield* chunks
+      })()
     },
-  }
+    async close() {},
+  })
+  return { reader, get iterations() { return iterations } }
 }
 
 async function fixture(t) {
@@ -223,7 +246,7 @@ test('streaming ingest archives a title larger than its local footprint from a s
 
   const written = await writeStaticAsset({
     store,
-    source,
+    reader: source.reader,
     offload: {
       createStagingStore({ core }) {
         t.ok(core.writable, 'the staging store is bound to the staging core, before a byte has been read')
@@ -339,7 +362,7 @@ test('streaming ingest refuses a tampered staging object instead of writing unpr
   let stagingKeyHex = null
   const error = await writeStaticAsset({
     store,
-    source,
+    reader: source.reader,
     offload: {
       createStagingStore({ core }) {
         stagingKeyHex = b4a.toString(core.key, 'hex')
@@ -378,7 +401,7 @@ test('a tampered object is refused rather than served to a peer', async (t) => {
   let stagingKeyHex = null
   const written = await writeStaticAsset({
     store,
-    source: oneShotSource(chunksOf(bytes)),
+    reader: oneShotSource(chunksOf(bytes)).reader,
     offload: {
       createStagingStore({ core }) {
         stagingKeyHex = b4a.toString(core.key, 'hex')
@@ -419,7 +442,7 @@ test('with offload unconfigured the plain path is unchanged: one read of the sou
   const blocks = canonicalBlocks(bytes)
   const source = oneShotSource(chunksOf(bytes))
 
-  const written = await writeStaticAsset({ store, source })
+  const written = await writeStaticAsset({ store, reader: source.reader })
 
   t.is(source.iterations, 1, 'the plain path still reads the source exactly once')
   t.is(written.ingest, undefined, 'and reports no ingest accounting, exactly as before')
@@ -451,10 +474,10 @@ test('a re-openable source is still read twice and never touches the staging sto
   let stagingCalls = 0
   const written = await writeStaticAsset({
     store,
-    createSource: () => {
+    reader: reopenableReader(BYTE_LENGTH, () => {
       opens++
       return replay(chunks)
-    },
+    }),
     offload: {
       createStagingStore({ core }) {
         stagingCalls++
@@ -481,12 +504,12 @@ test('a one-shot source with no staging store is still refused instead of buffer
 
   const error = await writeStaticAsset({
     store,
-    source,
+    reader: source.reader,
     offload: { createOffloader: ({ core }) => offloaderFor(core) },
   }).then(() => null, (err) => err)
 
   t.is(error?.code, 'ASSET_SOURCE_NOT_REOPENABLE', 'a one-shot source with nowhere to stage it is refused')
-  t.ok(/createStagingStore/.test(error?.message || ''), 'and the refusal names the option that would make it work')
+  t.ok(/durable staging/.test(error?.message || ''), 'and the refusal names the option that would make it work')
   t.is(source.iterations, 0, 'the source was never read, so nothing was buffered')
   t.is(objects.size, 0, 'and nothing was uploaded')
 })
@@ -511,7 +534,7 @@ test('a staging object that will not delete is named rather than silently left i
 
   const written = await writeStaticAsset({
     store,
-    source: oneShotSource(chunksOf(bytes)),
+    reader: oneShotSource(chunksOf(bytes)).reader,
     offload: {
       createStagingStore({ core }) {
         stagingKeyHex = b4a.toString(core.key, 'hex')

@@ -20,6 +20,7 @@ import {
   deriveStaticAssetTopic,
   writeStaticAsset,
 } from '../src/assets/index.js'
+import { createBufferSourceReader } from '../src/assets/source-reader.js'
 import { createPermissionlessArchiveNetwork } from '../src/archive/permissionless-network.js'
 import { createIndexFeedPage } from '../src/indexing/feed-contract.js'
 import { createLocalMediaIndex } from '../src/indexing/local-index.js'
@@ -1140,7 +1141,7 @@ test('fresh Corestore retains and replicates a canonical static asset using its 
   await readerStore.ready()
   const asset = await writeStaticAsset({
     store: sourceStore,
-    source: [b4a.from('fresh static replication')],
+    reader: createBufferSourceReader(b4a.from('fresh static replication')),
   })
   const sourceReplication = sourceStore.replicate(true)
   const readerReplication = readerStore.replicate(false)
@@ -1301,7 +1302,7 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
     sourceBytes.fill(index + 1, index * ASSET_BLOCK_SIZE, (index + 1) * ASSET_BLOCK_SIZE)
   }
   sourceBytes.fill(6, 5 * ASSET_BLOCK_SIZE)
-  const asset = await writeStaticAsset({ store: sourceStore, source: [sourceBytes] })
+  const asset = await writeStaticAsset({ store: sourceStore, reader: createBufferSourceReader(sourceBytes) })
   const staticCore = asset.descriptor
   const publisher = crypto.keyPair(bytes(32, 61))
   const manifest = createPublicationManifest({
@@ -1632,7 +1633,7 @@ test('three real scoped runtimes keep disjoint peer inventory, transfers, loss, 
     sourceBytes.fill(index + 1, index * ASSET_BLOCK_SIZE, (index + 1) * ASSET_BLOCK_SIZE)
   }
   sourceBytes.fill(6, 5 * ASSET_BLOCK_SIZE)
-  const asset = await writeStaticAsset({ store: writerStore, source: [sourceBytes] })
+  const asset = await writeStaticAsset({ store: writerStore, reader: createBufferSourceReader(sourceBytes) })
   const descriptor = asset.descriptor
   const firstCore = firstStore.get({ key: descriptor.key, manifest: descriptor.hypercoreManifest, writable: false })
   const secondCore = secondStore.get({ key: descriptor.key, manifest: descriptor.hypercoreManifest, writable: false })

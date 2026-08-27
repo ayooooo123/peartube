@@ -13,6 +13,7 @@ import { createBlockOffloader } from '../src/archive/block-offloader.js'
 import { createOffloadStorage } from '../src/archive/offload-storage.js'
 import { createRemoteBlockStore } from '../src/archive/remote-block-store.js'
 import { ASSET_BLOCK_SIZE } from '../src/assets/static-core.js'
+import { createSourceReader } from '../src/assets/source-reader.js'
 import {
   encodePublisherCatalogFrame,
   encodePublisherOperationBody,
@@ -78,18 +79,28 @@ function chunksOf(bytes) {
  * which is what a fetch body is. A test that allowed a second read would prove
  * nothing about a real download.
  */
-function oneShotSource(chunks) {
+function oneShotSource(chunks, byteLength = chunks.reduce((total, chunk) => total + chunk.byteLength, 0)) {
   let reads = 0
-  return {
-    get reads() {
-      return reads
+  const reader = createSourceReader({
+    resumable: false,
+    maxReadBytes: Math.max(1, byteLength),
+    async describe() {
+      return {
+        identity: { kind: 'etag', value: `stream-upload:${byteLength}` },
+        byteLength,
+        mimeType: 'video/mp4',
+      }
     },
-    async *[Symbol.asyncIterator]() {
-      reads++
-      if (reads > 1) throw new Error('source read more than once')
-      yield* chunks
+    open() {
+      return (async function * () {
+        reads++
+        if (reads > 1) throw new Error('source read more than once')
+        yield* chunks
+      })()
     },
-  }
+    async close() {},
+  })
+  return { reader, get reads() { return reads } }
 }
 
 function makeChannel() {
@@ -313,7 +324,7 @@ test('a streaming archive publishes a multi-block title from one read, with no t
     if (resident > peak) peak = resident
   }
 
-  const result = await manager.uploadFromStream(channel, source, uploadOptions({ byteLength: BYTE_LENGTH }))
+  const result = await manager.uploadFromStream(channel, source.reader, uploadOptions())
 
   t.is(result.success, true, 'streaming upload succeeded')
   t.is(source.reads, 1, 'the one-shot source was read exactly once')
@@ -361,7 +372,8 @@ test('a streaming archive rolls back and keeps no partial publication when the s
     throw new Error('direct download exceeded available storage headroom of 0 bytes')
   }
 
-  const result = await manager.uploadFromStream(channel, severed(), uploadOptions())
+  const source = oneShotSource(severed(), BYTE_LENGTH)
+  const result = await manager.uploadFromStream(channel, source.reader, uploadOptions())
 
   t.is(result.success, false, 'the upload failed rather than publishing a truncated title')
   t.ok(/storage headroom/.test(result.error), 'the guard error is reported verbatim')
@@ -377,7 +389,7 @@ test('with offload unconfigured a streamed title still takes the single-pass loc
   const source = oneShotSource(chunksOf(bytes))
   const channel = makeChannel()
 
-  const result = await manager.uploadFromStream(channel, source, uploadOptions())
+  const result = await manager.uploadFromStream(channel, source.reader, uploadOptions())
 
   t.is(result.success, true, 'the upload succeeded with no object store configured')
   t.is(source.reads, 1, 'the one-shot source was still read exactly once')

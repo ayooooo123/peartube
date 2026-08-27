@@ -20,6 +20,9 @@ import { MEDIA_COORDINATE_SHAPES, episodeWorkIdentifier, normalizeContentDetails
 import {
   ARTWORK_RENDITION_PURPOSES,
   createImmutableRenditionWriter,
+  createBufferSourceReader,
+  createFileSourceReader,
+  createSourceReader,
   createPublicationManifest,
   createRenditionDescriptor,
   encodePublicationManifest,
@@ -736,7 +739,9 @@ async function collectArtworkSources(channel, metadata) {
       role: String(entry.role),
       mimeType: entry.mimeType,
       blobId: String(entry.blobId),
-      source: [bytes]
+      reader: createBufferSourceReader(bytes, {
+        mimeType: String(entry.mimeType || 'image/jpeg')
+      })
     });
   }
   return sources;
@@ -765,16 +770,9 @@ async function prepareImmutablePublication(metadata, runtime = {}) {
   assertUploadNotCancelled(runtime.signal);
   const renditionWriter = createImmutableRenditionWriter({
     store: runtime.store,
-    source: runtime.createSource?.(),
-    // Set instead of `source` when the caller's origin can be re-opened at a
-    // byte offset, which is what lets an interrupted media ingest pick up from
-    // its staged prefix. Artwork renditions carry their own bytes and never
-    // inherit it.
-    resume: runtime.resume || null,
+    reader: runtime.reader,
+    resume: runtime.resume || false,
     signal: runtime.signal,
-    // Optional: set only when the relay is configured to offload block data to
-    // an object store (see archive/block-offloader.js). Absent everywhere else,
-    // which leaves the asset write path exactly as it was.
     offload: runtime.offload || null
   });
   await renditionWriter.initialize();
@@ -799,7 +797,7 @@ async function prepareImmutablePublication(metadata, runtime = {}) {
       write: await renditionWriter.writeRendition({
         purpose: artwork.role,
         format: String(artwork.mimeType || 'image/jpeg'),
-        source: artwork.source,
+        reader: artwork.reader,
         durationMs: 1
       })
     });
@@ -855,54 +853,17 @@ function staticPlaybackBlobRef(prepared) {
   };
 }
 
-// A RANGED upload source: a source that can be re-opened at a byte offset
-// rather than only from the start. It is what makes an interrupted archive
-// resumable — a second attempt asks the origin for the bytes it still needs
-// instead of the whole title again — and the only shape that can express that
-// is an opener, because the offset it must start at is not known until the
-// staging core left behind by the previous attempt has been read.
-//
-//   id     stable across attempts; it is what names the staging core, so two
-//          different assets must never share one.
-//   open   `(byteOffset)` returning a ONE-SHOT iterable of the source bytes
-//          from there on. Called at most once per attempt, always on a
-//          canonical block boundary, and an offset equal to the whole length
-//          is legal and must yield nothing.
-//   etag   the origin's own statement of which bytes it is serving, compared
-//          on every later attempt so two different sources can never be
-//          spliced into one content-addressed core.
-//
-// An ITERABLE is never treated as a ranged source, whatever else it carries: a
-// stream object may well have an `open` method of its own, and the iterable
-// form is the one every caller without a ranged origin passes. So the
-// discriminator is "not iterable, but openable", and returning null here is
-// what keeps that caller's behaviour exactly as it was.
-function rangedUploadSource(source) {
-  if (!source || typeof source.open !== 'function') return null;
-  if (typeof source[Symbol.asyncIterator] === 'function' ||
-      typeof source[Symbol.iterator] === 'function') {
-    return null;
+
+async function *readWholeSource(reader, description, signal) {
+  let offset = 0;
+  while (offset < description.byteLength) {
+    const length = Math.min(reader.maxReadBytes, description.byteLength - offset);
+    yield* reader.open({ offset, length, signal });
+    offset += length;
   }
-  const id = typeof source.id === 'string' ? source.id.trim() : '';
-  if (id.length === 0 || id.length > 128) {
-    throw new Error('Ranged upload source requires an id of 1 to 128 characters');
+  if (description.byteLength === 0) {
+    yield* reader.open({ offset: 0, length: 0, signal });
   }
-  const etag = source.etag === null || source.etag === undefined ? null : source.etag;
-  if (etag !== null && (typeof etag !== 'string' || etag.length === 0 || etag.length > 256)) {
-    throw new Error('Ranged upload source etag must be an identity token of 1 to 256 characters');
-  }
-  return {
-    id,
-    etag,
-    open(byteOffset) {
-      const opened = source.open(byteOffset);
-      if (!opened || (typeof opened[Symbol.asyncIterator] !== 'function' &&
-          typeof opened[Symbol.iterator] !== 'function')) {
-        throw new Error('Ranged upload source open() must return an iterable of byte chunks');
-      }
-      return opened;
-    }
-  };
 }
 
 // The fallback for a one-shot stream with no immutable publication behind it:
@@ -1345,6 +1306,7 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
  * @property {string} [importIdentityKey] - Normalized import identity
  * @property {string} [importClaimantId] - Import claim contender ID
  * @property {string} [publisherId] - Publisher catalog identity
+ * @property {string} [resumeId] - Stable durable ingest job identifier
  * @property {AbortSignal} [signal] - Upload cancellation signal
  */
 
@@ -1479,11 +1441,18 @@ export function createUploadManager({
         let fileSize = stat.size;
         let mimeType;
         const startTime = Date.now();
+        const publicationReader = catalogRegistry && deviceKeyPair
+          ? createFileSourceReader({
+              fs,
+              path: filePath,
+              mimeType: String(metadata.mimeType || 'application/octet-stream')
+            })
+          : null;
 
         prepared = await prepareImmutablePublication(metadata, {
           ...publicationRuntime,
           ...uploadControl,
-          createSource: () => fs.createReadStream(filePath),
+          reader: publicationReader,
           createArtworkSources: () => collectArtworkSources(channel, metadata)
         });
         if (prepared) {
@@ -1661,10 +1630,15 @@ export function createUploadManager({
           signal: options.signal
         };
         assertUploadNotCancelled(uploadControl.signal);
+        const publicationReader = catalogRegistry && deviceKeyPair
+          ? createBufferSourceReader(buffer, {
+              mimeType: String(metadata.mimeType || 'application/octet-stream')
+            })
+          : null;
         prepared = await prepareImmutablePublication(metadata, {
           ...publicationRuntime,
           ...uploadControl,
-          createSource: () => [buffer],
+          reader: publicationReader,
           createArtworkSources: () => collectArtworkSources(channel, metadata)
         });
         let fileSize;
@@ -1756,60 +1730,28 @@ export function createUploadManager({
     },
 
     /**
-     * Upload video from a ONE-SHOT stream (an HTTP download, a pipe).
+     * Upload video from a SourceReader.
      *
-     * What this entry point does NOT do is the point of it: the title is never
-     * staged as a file first, so a relay can archive one larger than its own
-     * volume. `source` is an async iterable of byte chunks readable exactly
-     * once, which is what makes writeStaticAsset choose streaming ingest —
-     * every canonical block is uploaded to the object store as it is appended
-     * and dropped locally, and the second pass restores from there. Peak local
-     * block data is the offload window plus the block in flight, whatever the
-     * title's size.
-     *
-     * Chunk boundaries here are irrelevant and deliberately not handled: only
-     * eachCanonicalBlock() in assets/static-core.js decides where a block ends,
-     * which is what keeps the asset key a function of the bytes alone.
-     *
-     * With offload unconfigured the writer takes its single-pass shape instead:
-     * the source is still read exactly once and there is still no file, but the
-     * whole title comes to rest in the rendition core on this volume. Nothing
-     * is buffered in memory either way. An offload that supplies
-     * `createOffloader` without `createStagingStore` is the one refused case —
-     * ASSET_SOURCE_NOT_REOPENABLE — because its second pass would have nowhere
-     * to read from; callers keep `uploadFromPath` for that.
-     *
-     * `source` may instead be a RANGED source — `{ id, etag, open(byteOffset) }`
-     * — for an origin that serves byte ranges. Then the write becomes
-     * RESUMABLE: the staged prefix is keyed by `id` and survives the process,
-     * so a second attempt calls `open()` at the first byte it does not already
-     * hold rather than pulling the title again from zero. `etag` is the
-     * origin's identity for those bytes and is what stops two different sources
-     * being spliced into one content-addressed core. Resumption needs somewhere
-     * durable to keep the prefix, so with offload unconfigured a ranged source
-     * is simply opened once at zero and takes the plain path above.
+     * The reader owns source identity, exact length, range semantics,
+     * cancellation, and cleanup. Resumable readers use durable staging when
+     * block offload provides it; one-shot readers are consumed exactly once.
      *
      * @param {MultiWriterChannel} channel - Target channel
-     * @param {AsyncIterable<Buffer>|Iterable<Buffer>|{id: string, etag?: string|null, open: (byteOffset: number) => AsyncIterable<Buffer>|Iterable<Buffer>}} source
-     *   One-shot chunks, or a ranged source that can be re-opened at an offset
-     * @param {UploadOptions} options - Upload options; `byteLength` is an
-     *   optional content-length hint used only for progress percentages
+     * @param {Object} reader - Strict SourceReader contract
+     * @param {UploadOptions} options - Upload options
      * @param {ProgressCallback} [onProgress] - Progress callback
      * @returns {Promise<UploadResult>}
      */
-    async uploadFromStream(channel, source, options, onProgress) {
+    async uploadFromStream(channel, reader, options, onProgress) {
       let blobResult = null;
       let immutableCommitConfirmed = false;
       let prepared = null;
+      let sourceReader = null;
       try {
         if (!channel.blobs) {
           throw new Error('Channel blobs not initialized');
         }
-        const ranged = rangedUploadSource(source);
-        if (!ranged && (!source || (typeof source[Symbol.asyncIterator] !== 'function' &&
-            typeof source[Symbol.iterator] !== 'function'))) {
-          throw new Error('Upload stream source must be an iterable of byte chunks');
-        }
+        if (!reader) throw new Error('Upload stream SourceReader is required');
 
         const providedVideoId = typeof options.videoId === 'string' && /^[0-9a-f]{1,64}$/i.test(options.videoId)
           ? options.videoId
@@ -1839,24 +1781,15 @@ export function createUploadManager({
           signal: options.signal
         };
         assertUploadNotCancelled(uploadControl.signal);
-        // A ranged origin becomes a resumable write only when there is an
-        // object store to keep its staged prefix in; otherwise it degrades to
-        // one read from byte zero and is indistinguishable from a plain stream.
-        // Either way the bytes reach the writer exactly once — `resolveSource`
-        // in static-core.js treats anything that is not an array as
-        // unrepeatable, so this is the seam that selects streaming ingest and
-        // nothing here re-opens, buffers or tees it.
-        const resume = ranged && resumableIngest
-          ? { id: ranged.id, etag: ranged.etag, open: ({ byteOffset }) => ranged.open(byteOffset) }
-          : null;
-        // Called at most once: prepareImmutablePublication opens the source
-        // only when it has a catalog to publish against, and the fallback below
-        // runs only when it did not.
-        const openStream = () => (ranged ? ranged.open(0) : source);
+        sourceReader = createSourceReader(reader);
+        const description = await sourceReader.describe({ signal: uploadControl.signal });
+        const resume = sourceReader.resumable && resumableIngest && options.resumeId
+          ? { id: options.resumeId }
+          : false;
         prepared = await prepareImmutablePublication(metadata, {
           ...publicationRuntime,
           ...uploadControl,
-          createSource: resume ? null : openStream,
+          reader: sourceReader,
           resume,
           createArtworkSources: () => collectArtworkSources(channel, metadata)
         });
@@ -1872,16 +1805,18 @@ export function createUploadManager({
           blobResult = staticPlaybackBlobRef(prepared);
           await prepared.renditionWrite.core.close();
         } else {
+          const opened = readWholeSource(sourceReader, description, uploadControl.signal);
           const streamed = await writeStreamedPlaybackBlob(
             channel,
-            openStream(),
+            opened,
             uploadControl.signal,
             onProgress,
-            Number(options.byteLength)
+            description.byteLength
           );
+          await sourceReader.close();
           blobResult = streamed.blobResult;
           fileSize = streamed.byteLength;
-          mimeType = detectMimeType(streamed.header) || metadata.mimeType || 'video/mp4';
+          mimeType = detectMimeType(streamed.header) || description.mimeType || metadata.mimeType || 'video/mp4';
         }
         onProgress?.(100, fileSize, fileSize, { speed: 0, eta: 0 });
 
@@ -1925,6 +1860,7 @@ export function createUploadManager({
         return completedUploadResult(videoId, metadata);
       } catch (err) {
         let failure = err;
+        if (sourceReader) await sourceReader.close(err).catch(() => {});
         if (prepared?.renditionWrite?.core && !prepared.renditionWrite.core.closed) {
           try {
             await prepared.renditionWrite.core.close();

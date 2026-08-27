@@ -3,8 +3,7 @@ import { RelayCatalog } from './catalog.js'
 import { buildRelayStatus, writeRelayStatus } from './status.js'
 import { createArchiveConsole, createArchiveHttpSurface } from './archive-console.js'
 import { createRelayPublisherShell } from './publisher-shell.js'
-import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createDeferredPublisher, createYtDlpDownloader, createRoutingDownloader } from './archive-manager.js'
-import { createDirectDownloader } from './media/direct-download.js'
+import { createArchivePublisher, createYtDlpDownloader } from './archive-manager.js'
 import { createLocalDriveMirrorState, mirrorLocalDriveToRelayChannel } from './local-drive-mirror.js'
 import { RelayCreators, creatorIdFromClassifiedSource } from './creators.js'
 import { RelayClassificationStore } from './classification/store.js'
@@ -126,7 +125,6 @@ async function buildRelayService({
     storagePath: config.storage.path,
     creatorsPath: config.paths.creators
   })
-  const archiveRunQueue = { tail: Promise.resolve() }
   const relaySettings = await RelaySettings.open({ storagePath: config.storage.path })
 
   // Storage threshold gate: refuse new ingestion (discovery mirroring, archive
@@ -775,10 +773,9 @@ async function buildRelayService({
     getCreatorTargets({ limit = 0 } = {}) {
       return relayCreators.getTargets({ limit })
     },
-    // Register a creator (by their channel/source URL) in the creators DB and
-    // enqueue an archive job for that URL, attributed to the creator. The
-    // creators DB then tracks how many of their videos remain unseeded.
-    async addCreatorSource({ url, label = null, publish = true, runNow = true } = {}) {
+    // Creator sources remain catalogue inputs in this cutover. Their old
+    // archive-job executor is gone; a concrete title must enter through v2.
+    async addCreatorSource({ url, label = null } = {}) {
       const classified = classifySourceUrl(url)
       if (!classified.type) throw new Error(`Unsupported creator/source URL: ${url}`)
       const creatorId = creatorIdFromClassifiedSource(classified)
@@ -794,17 +791,7 @@ async function buildRelayService({
         sourceUrls: [classified.normalizedUrl]
       })
       await syncCreators()
-      const job = await service.enqueueArchiveJob({
-        url: classified.normalizedUrl,
-        channelName: name,
-        creatorSourceId: creatorId,
-        creatorName: name,
-        creatorHandle: handle,
-        sourceType: classified.type,
-        sourceUrl: classified.normalizedUrl,
-        publish
-      }, { runNow })
-      return { creator, job }
+      return { creator, job: null }
     },
     async start() {
       if (closed) throw new Error('relay service is closed')
@@ -828,40 +815,65 @@ async function buildRelayService({
         ...candidate
       }))
 
-      // The socket is already bound and answering as a warming relay (see
-      // createRelayService). This is where the console takes it over: the job
-      // store needs metaDb, which only exists once the runtime factory has
-      // returned. The archive *publisher* needs managers created during
-      // runtime.start(), so it is bound lazily: an archive submitted in the
-      // brief pre-ready window waits for the publisher (see below) rather than
-      // failing and discarding the upload.
-      const deferredPublisher = createDeferredPublisher()
-      if (runtime.ctx?.metaDb && config.archive?.tmpPath) {
-        const store = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
-        const recoveryManager = createArchiveManager({
-          store,
-          logger,
-          runQueue: archiveRunQueue,
-          downloader: {},
-          publisher: {},
-          stagingRoot: config.archive.tmpPath
+      const companionFsModule = fsModule || await import('#fs')
+      const companionPathModule = pathModule || await import('#path')
+      const ingestSpoolRoot = companionPathModule.join(config.storage.path, 'companion', 'ingest-spool')
+      const sourceClient = config.companion.sourceOrigin
+        ? createSourceCallbackClient({
+            origin: config.companion.sourceOrigin,
+            client: config.companion.sourceClient,
+            sharedSecret: config.companion.sourceSharedSecret,
+            chunkBytes: config.companion.sourceChunkBytes,
+            requestTimeoutMs: config.companion.sourceRequestTimeoutMs,
+            clock: nowFn
+          })
+        : null
+      const sourceRegistry = createSourceProviderRegistry({
+        config: config.archive || {},
+        fs: companionFsModule,
+        legacySourceClient: sourceClient
+      })
+      const publisherShell = createRelayPublisherShell({
+        api: runtime.api,
+        storagePath: config.storage?.path,
+        fs: companionFsModule,
+        logger
+      })
+      const ingestPublisher = createArchivePublisher({
+        identityManager: runtime.identityManager,
+        storagePath: config.storage?.path,
+        uploadManager: runtime.uploadManager,
+        api: runtime.api,
+        runtime,
+        fs: companionFsModule,
+        publisherShell,
+        canPublish: retentionPermission
+      })
+      if (runtime.ctx?.metaDb) {
+        ingestManager = createIngestManager({
+          store: createIngestJobStore({ bee: runtime.ctx.metaDb, now: nowFn }),
+          publisher: ingestPublisher,
+          spoolRoot: ingestSpoolRoot,
+          fs: companionFsModule,
+          path: companionPathModule,
+          sourceClient,
+          sourceRegistry,
+          assetStore: blockOffload?.createStagingStore ? runtime.ctx.store : null,
+          createStagingStore: blockOffload?.createStagingStore
+            ? (input) => blockOffload.createStagingStore(input)
+            : null,
+          canIngest: request => canRetain(request),
+          now: nowFn,
+          logger
         })
-        const recovered = await recoveryManager.recoverInterruptedJobs().catch((err) => {
-          logger.archive.warn('Interrupted archive recovery failed', { error: err?.message || String(err) })
-          return { recovered: 0 }
-        })
-        if (recovered.recovered > 0) {
-          logger.archive.warn('Recovered interrupted archive jobs during relay startup', { recovered: recovered.recovered })
-        }
       }
-
       if (config.archive?.uiEnabled) {
-        const runtimeFsModule = fsModule || await import('#fs')
-        const runtimePathModule = pathModule || await import('#path')
-        try { runtimeFsModule?.mkdirSync?.(config.archive.tmpPath, { recursive: true }) } catch {}
+        const runtimeFsModule = companionFsModule
+        const runtimePathModule = companionPathModule
+        try { runtimeFsModule?.mkdirSync?.(ingestSpoolRoot, { recursive: true }) } catch { /* Admission reports missing storage later. */ }
         const tmpHeadroom = liveFreeDiskHeadroom({
           fsModule: runtimeFsModule,
-          path: config.archive.tmpPath,
+          path: ingestSpoolRoot,
           minFreeBytes: config.storage.minFreeBytes || 0,
           log: (...args) => logger.status?.debug?.(args.map(String).join(' '))
         })
@@ -872,7 +884,7 @@ async function buildRelayService({
         const archiveHeadroom = archiveWriteHeadroom({
           tmpHeadroom,
           storageHeadroom: persistedHeadroom,
-          sharedVolume: maybeSameVolume(runtimeFsModule, config.archive.tmpPath, config.storage.path)
+          sharedVolume: true
         })
         const archiveStorageReservations = {
           bytes: 0,
@@ -884,46 +896,26 @@ async function buildRelayService({
           host: archiveUiHost(config),
           port: archiveUiPort(config),
           apiOpen: Boolean(config.archive.apiOpen),
-          uploadDir: config.archive.tmpPath,
+          uploadDir: ingestSpoolRoot,
           uploadStorageHeadroom: archiveHeadroom,
           storageReservations: archiveStorageReservations,
-          runQueue: archiveRunQueue,
-          downloader: createRoutingDownloader({
-            directDownloader: createDirectDownloader({
-              outputDir: config.archive.tmpPath,
-              fs: runtimeFsModule,
-              path: runtimePathModule,
-              // No per-file media cap: live temp, aggregate storage budget, and
-              // persisted-volume headroom are the byte bounds.
-              storageHeadroom: archiveHeadroom,
-              storageReservations: archiveStorageReservations,
-              // With block offload configured the ingest behind this download
-              // keeps one window of blocks on the volume and puts the rest in
-              // the bucket, so the title stops being the requirement and the
-              // window becomes it. Without offload this is null and the guard
-              // is unchanged. The free-disk floor is not part of this: it is
-              // already subtracted from every number `archiveHeadroom` reports,
-              // and the guard still re-reads that live on every chunk.
-              boundedLocalBytes: blockOffload ? blockOffload.localWorkingBytes : null
-            }),
-            ytDlpDownloader: createYtDlpDownloader({
-              bin: config.archive.ytDlpPath,
-              outputDir: config.archive.tmpPath,
-              format: config.archive.format,
-              ffmpegPath: config.archive.ffmpegPath,
-              cookiesPath: config.archive.cookiesPath,
-              jsRuntime: config.archive.jsRuntime,
-              storageHeadroom: archiveHeadroom,
-              storageReservations: archiveStorageReservations,
-              onStorageChanged: () => storageGuard.invalidate(),
-              ytDlpExtraArgs: config.archive.ytDlpExtraArgs,
-              ytDlpRetryExtraArgs: config.archive.ytDlpRetryExtraArgs,
-              spawnFn: spawnFn || undefined,
-              fs: runtimeFsModule,
-              path: runtimePathModule
-            })
+          publisher: ingestPublisher,
+          downloader: createYtDlpDownloader({
+            bin: config.archive.ytDlpPath,
+            outputDir: companionPathModule.join(ingestSpoolRoot, 'uploads'),
+            format: config.archive.format,
+            ffmpegPath: config.archive.ffmpegPath,
+            cookiesPath: config.archive.cookiesPath,
+            jsRuntime: config.archive.jsRuntime,
+            storageHeadroom: archiveHeadroom,
+            storageReservations: archiveStorageReservations,
+            onStorageChanged: () => storageGuard.invalidate(),
+            ytDlpExtraArgs: config.archive.ytDlpExtraArgs,
+            ytDlpRetryExtraArgs: config.archive.ytDlpRetryExtraArgs,
+            spawnFn: spawnFn || undefined,
+            fs: runtimeFsModule,
+            path: runtimePathModule
           }),
-          publisher: deferredPublisher.publisher,
           httpSurface: archiveHttp
         })
         await archiveConsole.start()
@@ -936,52 +928,6 @@ async function buildRelayService({
         })
       }
       if (config.companion?.enabled !== false) {
-        const companionFsModule = fsModule || await import('#fs')
-        const companionPathModule = pathModule || await import('#path')
-        const ingestSpoolRoot = companionPathModule.join(config.storage.path, 'companion', 'ingest-spool')
-        const sourceClient = config.companion.sourceOrigin
-          ? createSourceCallbackClient({
-              origin: config.companion.sourceOrigin,
-              client: config.companion.sourceClient,
-              sharedSecret: config.companion.sourceSharedSecret,
-              chunkBytes: config.companion.sourceChunkBytes,
-              requestTimeoutMs: config.companion.sourceRequestTimeoutMs,
-              clock: nowFn
-            })
-          : null
-        const sourceRegistry = createSourceProviderRegistry({
-          config: config.archive || {},
-          fs: companionFsModule,
-          legacySourceClient: sourceClient
-        })
-        if (runtime.ctx?.metaDb) {
-          ingestManager = createIngestManager({
-            store: createIngestJobStore({ bee: runtime.ctx.metaDb, now: nowFn }),
-            publisher: createArchivePublisher({
-              identityManager: runtime.identityManager,
-              uploadManager: runtime.uploadManager,
-              api: runtime.api,
-              runtime,
-              fs: companionFsModule,
-              canPublish: retentionPermission
-            }),
-            spoolRoot: ingestSpoolRoot,
-            fs: companionFsModule,
-            path: companionPathModule,
-            sourceClient,
-            sourceRegistry,
-            // Where a resumable ingest's staged prefix lives. Both are absent
-            // unless block offload is configured, and then no staging state can
-            // exist for a job to hand back.
-            assetStore: blockOffload?.createStagingStore ? runtime.ctx.store : null,
-            createStagingStore: blockOffload?.createStagingStore
-              ? (input) => blockOffload.createStagingStore(input)
-              : null,
-            canIngest: request => canRetain(request),
-            now: nowFn,
-            logger
-          })
-        }
         // One listener for both API versions whenever both are HTTP. The only
         // consumer of this relay builds its /api/v1 and /api/v2 URLs from a
         // single configured base URL and signs nothing on the v1 half, so two
@@ -1061,13 +1007,7 @@ async function buildRelayService({
       //
       // One shell instance is shared with the archive publisher; two would race
       // over the same publisher-root file.
-      const runtimeFsModule = fsModule || await import('#fs')
-      const publisherShell = createRelayPublisherShell({
-        api: runtime.api,
-        storagePath: config.storage?.path,
-        fs: runtimeFsModule,
-        logger
-      })
+
       try {
         const local = await publisherShell.ensureLocalPublisher()
         const published = await runtime.publishPublisherCatalog({ publisherId: local.publisherId })
@@ -1087,19 +1027,6 @@ async function buildRelayService({
         }
       }
 
-      // Managers exist now — bind the real archive publisher behind the lazy proxy.
-      if (config.archive?.uiEnabled) {
-        deferredPublisher.bind(createArchivePublisher({
-          identityManager: runtime.identityManager,
-          storagePath: config.storage?.path,
-          uploadManager: runtime.uploadManager,
-          api: runtime.api,
-          runtime,
-          publisherShell,
-          fs: runtimeFsModule,
-          canPublish: retentionPermission
-        }))
-      }
 
       // Hand the archive network this relay's real headroom before it can be
       // offered any pledge. Restored pledges are already in place by now, so
@@ -1119,25 +1046,6 @@ async function buildRelayService({
         archivedChannels: status.summary?.totalChannels || 0
       })
 
-      // Reconcile completed archives against authenticated publisher catalogs
-      // and authorized asset retention without blocking operator startup.
-      if (runtime.ctx?.metaDb) {
-        void (async () => {
-          const store = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
-          const jobs = await store.listJobs().catch(() => [])
-          for (const job of jobs) {
-            if (closed) break
-            if (job?.status !== 'completed' || job?.publish === false) continue
-            await publishArchiveJob(job).catch((err) => {
-              logger.archive.warn('Completed archive reconciliation failed', {
-                id: job.id || null,
-                videoId: job.videoId || null,
-                error: err?.message || String(err)
-              })
-            })
-          }
-        })().catch(() => {})
-      }
 
       // Populate the persisted creators DB from the restored catalog so the
       // console/CLI creator views are accurate on boot (then refreshed on the
@@ -1298,6 +1206,17 @@ async function buildRelayService({
       }
       return ingestManager.submitJob({ ...input, ingestSpoolLease, signal })
     },
+    async submitArchiveIngestJob(input, { ingestSpoolLease = null, signal = null } = {}) {
+      if (!ingestManager) {
+        const error = new Error('Ingest jobs are unavailable')
+        error.code = 'INGEST_UNAVAILABLE'
+        throw error
+      }
+      return ingestManager.submitJob({ ...input, ingestSpoolLease, signal })
+    },
+    async listIngestJobs(limit = 64) {
+      return ingestManager?.listJobs(limit) || []
+    },
     async getIngestJob(jobId) {
       if (!ingestManager) return null
       return ingestManager.getJob(jobId)
@@ -1307,61 +1226,20 @@ async function buildRelayService({
       return ingestManager.cancelJob(jobId)
     },
     async enqueueArchiveJob(input, { runNow = false } = {}) {
-      if (!retentionPermission('archive-pin')) {
-        throw new Error('explicit archive consent is required')
+      if (!archiveConsole?.manager?.enqueue) {
+        const error = new Error('Archive submission is unavailable')
+        error.code = 'INGEST_UNAVAILABLE'
+        throw error
       }
-      if (!runtime.ctx?.metaDb) throw new Error('archive jobs require relay runtime metadata storage')
-      // Protected archives are not evicted, but they still share the operator's
-      // hard aggregate budget with cache data. Refuse before scheduling when
-      // either storage.maxBytes or the free-disk floor is exhausted.
-      if (!storageGuard.canIngest()) {
-        const snap = storageGuard.snapshot()
-        logger.status?.warn?.('Storage limit reached; refusing archive ingestion', {
-          usedBytes: snap.usedBytes,
-          maxBytes: snap.maxBytes,
-          freeBytes: snap.freeBytes,
-          minFreeBytes: snap.minFreeBytes
-        })
-        throw new Error(`relay storage limit reached (used ${snap.usedBytes ?? 'unknown'} of ${snap.maxBytes || 'unbounded'}, free ${snap.freeBytes ?? 'unknown'} with floor ${snap.minFreeBytes}); free space or raise storage.maxBytes before archiving`)
+      const queued = await archiveConsole.manager.enqueue(input)
+      if (!runNow) return queued
+      const jobId = queued.jobId || queued.id
+      let job = await ingestManager?.getJob(jobId)
+      while (job && !['completed', 'failed', 'cancelled'].includes(job.state)) {
+        await new Promise(resolve => setTimeout(resolve, 100))
+        job = await ingestManager?.getJob(jobId)
       }
-      const runtimeFsModule = fsModule || await import('#fs')
-      const runtimePathModule = pathModule || await import('#path')
-      const store = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
-      const manager = createArchiveManager({
-        store,
-        logger,
-        runQueue: archiveRunQueue,
-        canIngest: () => canRetain({ retentionClass: 'archive-pin' }),
-        downloader: createYtDlpDownloader({
-          bin: config.archive?.ytDlpPath,
-          outputDir: config.archive?.tmpPath || './peartube-relay/archive-tmp',
-          format: config.archive?.format,
-          ffmpegPath: config.archive?.ffmpegPath,
-          cookiesPath: config.archive?.cookiesPath,
-          jsRuntime: config.archive?.jsRuntime,
-          ytDlpExtraArgs: config.archive?.ytDlpExtraArgs,
-          ytDlpRetryExtraArgs: config.archive?.ytDlpRetryExtraArgs,
-          storageHeadroom: () => storageGuard.headroomBytes(),
-          onStorageChanged: () => storageGuard.invalidate(),
-          spawnFn: spawnFn || undefined,
-          fs: runtimeFsModule,
-          path: runtimePathModule
-        }),
-        publisher: createArchivePublisher({
-          identityManager: runtime.identityManager,
-          storagePath: config.storage?.path,
-          uploadManager: runtime.uploadManager,
-          api: runtime.api,
-          runtime,
-          fs: runtimeFsModule,
-          canPublish: retentionPermission
-        }),
-        onCompleted: (job) => service.publishArchiveJob(job),
-        stagingRoot: config.archive?.tmpPath || './peartube-relay/archive-tmp'
-      })
-      const job = await manager.enqueue(input)
-      if (runNow) return manager.runJob(job.id)
-      return job
+      return job || queued
     },
     async mirrorLocalDrive(input = {}) {
       return runLocalMirrorOnce({

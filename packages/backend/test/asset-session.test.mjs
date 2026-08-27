@@ -14,6 +14,7 @@ import {
   createStaticAssetManifest,
   writeStaticAsset,
 } from '../src/assets/static-core.js'
+import { createBufferSourceReader } from '../src/assets/source-reader.js'
 import { createPublicationManifest } from '../src/assets/manifest.js'
 import { createRenditionDescriptor } from '../src/assets/rendition.js'
 import { createScopedNetworkApi, createScopedNetworkRuntime } from '../src/network/scoped-runtime.js'
@@ -42,7 +43,7 @@ async function assetFixture(t) {
   await source.store.ready()
   await reader.store.ready()
   const value = b4a.alloc(ASSET_BLOCK_SIZE, 31)
-  const asset = await writeStaticAsset({ store: source.store, source: [value] })
+  const asset = await writeStaticAsset({ store: source.store, reader: createBufferSourceReader(value) })
   const opened = []
   const store = {
     get(options) {

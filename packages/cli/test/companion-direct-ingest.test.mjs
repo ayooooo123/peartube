@@ -251,6 +251,26 @@ test('direct local file ingest job completes, streams bytes and publishes', asyn
 
   await manager.start()
 
+  await t.exception(manager.submitJob({
+    idempotencyKey: 'file-direct-wrong-length',
+    request: validMovieRequest(fileBytes, {
+      mediaContext: { kind: 'movie', namespace: 'tmdb', identifier: '1184918' },
+      measuredFacts: { title: 'The Wild Robot', byteLength: fileBytes.byteLength + 1, durationMs: 6_000_000, container: 'mkv', videoCodec: 'hevc', width: 3840, height: 2160 },
+      expected: { byteLength: fileBytes.byteLength + 1, etag: headProbe.etag }
+    }),
+    sourceDescriptor: { provider: 'file', filePath }
+  }), /length does not match/, 'a direct provider cannot replace the requested byte identity')
+
+  await t.exception(manager.submitJob({
+    idempotencyKey: 'file-direct-wrong-etag',
+    request: validMovieRequest(fileBytes, {
+      mediaContext: { kind: 'movie', namespace: 'tmdb', identifier: '1184918' },
+      measuredFacts: { title: 'The Wild Robot', byteLength: fileBytes.byteLength, durationMs: 6_000_000, container: 'mkv', videoCodec: 'hevc', width: 3840, height: 2160 },
+      expected: { byteLength: fileBytes.byteLength, etag: '"wrong-source"' }
+    }),
+    sourceDescriptor: { provider: 'file', filePath }
+  }), /ETag does not match/, 'a direct provider cannot replace the requested ETag identity')
+
   const submitRes = await manager.submitJob({
     idempotencyKey: 'file-direct-001',
     request: validMovieRequest(fileBytes, {

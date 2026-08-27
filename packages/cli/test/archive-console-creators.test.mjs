@@ -1,6 +1,5 @@
 import test from 'brittle'
 import { annotateTmdbDiscoverItems, buildTmdbNetworkIndex, createArchiveConsole } from '../src/archive-console.js'
-import { createArchiveJobStore } from '../src/archive-manager.js'
 import { mkdtempSync, mkdirSync, rmSync, readdirSync, statSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -31,6 +30,7 @@ function fakeService(overrides = {}) {
   ]
   const trustedClients = []
   const calls = { addCreator: [], setTmdb: [], authorize: [], revoke: [] }
+  const jobs = []
   return {
     calls,
     getTrustedClients() { return trustedClients },
@@ -83,6 +83,20 @@ function fakeService(overrides = {}) {
     },
     async setTmdbSettings(form) { calls.setTmdb.push(form); tmdb.apiKey = form.apiKey; tmdb.enabled = form.enabled; return { enabled: form.enabled } },
     async addCreatorSource(form) { calls.addCreator.push(form); return { creator: {}, job: {} } },
+    async submitArchiveIngestJob(input) {
+      const job = {
+        jobId: `ing_ui_${jobs.length + 1}`,
+        state: 'queued',
+        title: input.request.measuredFacts.title,
+        mediaContext: input.request.mediaContext,
+        errorCode: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      }
+      jobs.push(job)
+      return job
+    },
+    async listIngestJobs() { return jobs },
     ...overrides
   }
 }
@@ -300,40 +314,6 @@ test('TMDB network status distinguishes TV episodes from show-level matches', fu
   t.is(annotated[3].networkStatus, 'missing', 'show-level item does not inherit episode availability')
 })
 
-test('POST /discover/archive builds episode-aware TMDB source ids when no hidden source id is supplied', async function (t) {
-  const downloads = []
-  const service = fakeService({
-    async publishArchiveJob() {}
-  })
-  await withConsole(service, async (base) => {
-    const res = await fetch(`${base}/discover/archive`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        url: 'https://source.example/severance-s2e4.mp4',
-        channelName: 'Severance',
-        title: 'Severance S2E4',
-        tmdbType: 'tv',
-        tmdbId: '95396',
-        tmdbSeason: '2',
-        tmdbEpisode: '4',
-        tmdbTitle: 'Severance'
-      }).toString(),
-      redirect: 'manual'
-    })
-    t.is(res.status, 303)
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  }, {
-    downloader: {
-      async download(input) {
-        downloads.push(input)
-        return { filePath: '/tmp/severance.mp4', title: input.title, description: '', mimeType: 'video/mp4' }
-      }
-    }
-  })
-
-  t.is(downloads[0].sourceVideoId, 'tmdb:tv:95396:s2:e4')
-})
 
 test('POST /archive accepts a multipart file upload and enqueues an upload job', async function (t) {
   const uploadDir = mkdtempSync(join(tmpdir(), 'pt-console-upload-'))
@@ -358,136 +338,6 @@ test('POST /archive accepts a multipart file upload and enqueues an upload job',
   }
 })
 
-test('POST /archive reserves staged uploads against later multipart requests', async function (t) {
-  const uploadDir = mkdtempSync(join(tmpdir(), 'pt-console-upload-reserve-'))
-  let firstImportStartedResolve
-  let releaseFirstImport
-  const firstImportStarted = new Promise((resolve) => { firstImportStartedResolve = resolve })
-  const releaseFirst = new Promise((resolve) => { releaseFirstImport = resolve })
-  const publisher = {
-    async ensureAnonymousChannel() {
-      firstImportStartedResolve()
-      await releaseFirst
-      throw new Error('stop-after-reservation-check')
-    }
-  }
-  const headroom = () => {
-    const free = Math.max(0, 1000 - directoryBytes(uploadDir))
-    return { tmp: free, storage: free, sharedVolume: true }
-  }
-  try {
-    await withConsole(fakeService(), async (base) => {
-      const first = new FormData()
-      first.set('channelName', 'Reservation')
-      first.set('title', 'Large staged upload')
-      first.set('publish', 'false')
-      first.set('file', new Blob([Buffer.alloc(400, 0x61)], { type: 'video/mp4' }), 'large.mp4')
-      const firstRes = await fetch(`${base}/archive`, { method: 'POST', body: first, redirect: 'manual' })
-      t.is(firstRes.status, 303, 'the first upload stages and enqueues')
-      await firstImportStarted
-
-      const second = new FormData()
-      second.set('channelName', 'Reservation')
-      second.set('title', 'Second staged upload')
-      second.set('publish', 'false')
-      second.set('file', new Blob([Buffer.alloc(300, 0x62)], { type: 'video/mp4' }), 'second.mp4')
-      const secondRes = await fetch(`${base}/archive`, { method: 'POST', body: second, redirect: 'manual' })
-      t.is(secondRes.status, 500, 'the second upload is refused before overbooking the shared-volume peak')
-      t.ok(/storage headroom/.test(await secondRes.text()), 'the refusal names storage headroom')
-
-      releaseFirstImport()
-      for (let i = 0; i < 50 && directoryBytes(uploadDir) !== 0; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 10))
-      }
-      t.is(directoryBytes(uploadDir), 0, 'completed job cleanup releases the staged upload reservation')
-
-      const third = new FormData()
-      third.set('channelName', 'Reservation')
-      third.set('title', 'Upload after cleanup')
-      third.set('publish', 'false')
-      third.set('file', new Blob([Buffer.alloc(400, 0x63)], { type: 'video/mp4' }), 'after-cleanup.mp4')
-      const thirdRes = await fetch(`${base}/archive`, { method: 'POST', body: third, redirect: 'manual' })
-      t.is(thirdRes.status, 303, 'a new upload succeeds after the prior reservation is released')
-      for (let i = 0; i < 50 && directoryBytes(uploadDir) !== 0; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 10))
-      }
-      t.is(directoryBytes(uploadDir), 0, 'third upload cleanup also releases before the mixed reservation check')
-
-      const directReservations = { bytes: 400 }
-      await withConsole(fakeService(), async (secondBase) => {
-        const mixed = new FormData()
-        mixed.set('channelName', 'Reservation')
-        mixed.set('title', 'Upload beside direct')
-        mixed.set('publish', 'false')
-        mixed.set('file', new Blob([Buffer.alloc(250, 0x64)], { type: 'video/mp4' }), 'beside-direct.mp4')
-        const mixedRes = await fetch(`${secondBase}/archive`, { method: 'POST', body: mixed, redirect: 'manual' })
-        t.is(mixedRes.status, 500, 'multipart staging subtracts active direct download reservations')
-        t.ok(/storage headroom/.test(await mixedRes.text()), 'mixed direct/upload overbooking is refused by headroom')
-        directReservations.bytes = 0
-        const afterDirect = new FormData()
-        afterDirect.set('channelName', 'Reservation')
-        afterDirect.set('title', 'Upload after direct')
-        afterDirect.set('publish', 'false')
-        afterDirect.set('file', new Blob([Buffer.alloc(250, 0x65)], { type: 'video/mp4' }), 'after-direct.mp4')
-        const afterRes = await fetch(`${secondBase}/archive`, { method: 'POST', body: afterDirect, redirect: 'manual' })
-        t.is(afterRes.status, 303, 'multipart staging succeeds once the direct reservation is gone')
-      }, {
-        uploadDir,
-        uploadStorageHeadroom: () => {
-          const free = Math.max(0, 600 - directoryBytes(uploadDir))
-          return { tmp: free, storage: free, sharedVolume: true }
-        },
-        storageReservations: directReservations,
-        publisher
-      })
-    }, { uploadDir, uploadStorageHeadroom: headroom, publisher })
-  } finally {
-    releaseFirstImport?.()
-    rmSync(uploadDir, { recursive: true, force: true })
-  }
-})
-
-test('archive console restores durable upload reservations before listening', async function (t) {
-  const uploadDir = mkdtempSync(join(tmpdir(), 'pt-console-upload-restart-'))
-  const service = fakeService()
-  const store = createArchiveJobStore({ metaDb: service.runtime.ctx.metaDb })
-  const stagedDir = join(uploadDir, 'arch_queued')
-  const stagedPath = join(stagedDir, 'queued.mp4')
-  mkdirSync(stagedDir, { recursive: true })
-  writeFileSync(stagedPath, Buffer.alloc(400, 0x61))
-  await store.addJob({
-    id: 'arch_queued',
-    status: 'queued',
-    title: 'Queued upload',
-    createdAt: Date.now(),
-    updatedAt: Date.now()
-  }, {
-    uploadPath: stagedPath,
-    uploadSize: 999
-  })
-  await store.addJob({
-    id: 'arch_failed_missing',
-    status: 'failed',
-    title: 'Missing failed upload',
-    createdAt: Date.now(),
-    updatedAt: Date.now()
-  }, {
-    uploadPath: join(uploadDir, 'arch_failed_missing', 'missing.mp4'),
-    uploadSize: 500
-  })
-  const reservations = { bytes: 0 }
-
-  try {
-    await withConsole(service, async () => {
-      t.is(reservations.bytes, 400, 'only extant staged bytes are measured and reserved before listening')
-    }, {
-      uploadDir,
-      storageReservations: reservations
-    })
-  } finally {
-    rmSync(uploadDir, { recursive: true, force: true })
-  }
-})
 
 test('GET /discover/seasons.json returns TMDB seasons for a show', async function (t) {
   await withConsole(fakeService(), async (base) => {
@@ -513,35 +363,4 @@ test('GET /discover/episodes.json returns TMDB episodes for a season', async fun
     t.is(body.episodes[0].title, 'Pilot')
   })
   t.is(service.calls.episodes.season, '1', 'season passed through from the query string')
-})
-
-test('archive console startup recovers interrupted jobs before listening', async function (t) {
-  const uploadDir = mkdtempSync(join(tmpdir(), 'pt-console-recovery-'))
-  const service = fakeService()
-  const store = createArchiveJobStore({ metaDb: service.runtime.ctx.metaDb })
-  await store.addJob({ id: 'arch_stale', status: 'queued', title: 'stale' }, { url: 'https://example.com/video.mkv' })
-  await store.updateJob('arch_stale', { status: 'running', error: null })
-  const directDir = join(uploadDir, 'arch_stale')
-  mkdirSync(directDir, { recursive: true })
-  writeFileSync(join(directDir, 'partial.mkv'), 'partial')
-
-  const archiveConsole = await createArchiveConsole({
-    service,
-    downloader: { async download() { throw new Error('not used') } },
-    publisher: {},
-    uploadDir,
-    host: '127.0.0.1',
-    port: 0
-  })
-
-  try {
-    await archiveConsole.start()
-    const jobs = await store.listJobs()
-    t.is(jobs.find((job) => job.id === 'arch_stale').status, 'failed')
-    t.ok(/interrupted by relay restart/.test(jobs.find((job) => job.id === 'arch_stale').error))
-    t.absent(existsSync(directDir), 'startup removed stale direct staging before serving requests')
-  } finally {
-    await archiveConsole.close().catch(() => {})
-    rmSync(uploadDir, { recursive: true, force: true })
-  }
 })

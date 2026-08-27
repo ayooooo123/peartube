@@ -147,6 +147,10 @@ async function uiCommand(flags) {
 async function archiveCommand(flags) {
   if (!flags.url) throw new Error('--url is required')
   const config = await loadRelayConfig(flags)
+  config.archive ||= {}
+  config.archive.uiEnabled = true
+  config.archive.uiHost = '127.0.0.1'
+  config.archive.uiPort = 0
   const { startRelay } = await import('./src/index.js')
   const relay = await startRelay({ config })
   try {

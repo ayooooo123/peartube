@@ -50,7 +50,7 @@ import { createAvailabilityEvidenceStore } from './assets/availability-evidence.
 import { createLocalMediaIndex } from './indexing/local-index.js'
 import { createIndexFeedManager } from './indexing/feed-manager.js'
 import { createIndexPublisherFollowReconciler } from './indexing/publisher-follow-reconciler.js'
-import { createLocalCatalogIndex } from './indexer/local-catalog-index.js'
+import { createVerifiedQueryView } from './indexer/local-catalog-index.js'
 import { createLocalAssetAvailabilityProbe } from './search/source-verifier.js'
 import {
   CONSUMER_MODERATION_PROFILE_SETTING_KEY,
@@ -554,15 +554,29 @@ export async function createBackendContext(config) {
     deviceSigner
   })
   lifecycle.ownResource('publisher catalog registry', catalogRegistry, 'close', 5000)
-  const localCatalogIndex = await createLocalCatalogIndex({
+  let consumerModerationManager = null
+  let consumerModerationPolicy = null
+  const verifiedQueryView = await createVerifiedQueryView({
     store: ctx.store,
     catalogRegistry,
+    moderationPolicy: {
+      evaluate(record) {
+        return consumerModerationPolicy?.evaluate(record) || { action: 'visible' }
+      },
+      revision() {
+        const state = {
+          profile: consumerModerationProfile.getProfile(),
+          records: consumerModerationManager?.getRecords?.() || [],
+        }
+        return b4a.toString(crypto.hash(b4a.from(JSON.stringify(state))), 'hex')
+      },
+    },
     onError: (error, { publisherId } = {}) => {
-      console.log('[Orchestrator] local catalog indexing failed:', publisherId || 'unknown', error?.message || error)
+      console.log('[Orchestrator] verified query refresh failed:', publisherId || 'unknown', error?.message || error)
     },
   })
-  ctx.localCatalogIndex = localCatalogIndex
-  lifecycle.ownResource('local publisher catalog index', localCatalogIndex, 'close', 5000)
+  ctx.verifiedQueryView = verifiedQueryView
+  lifecycle.ownResource('verified query view', verifiedQueryView, 'close', 5000)
   let scopedNetwork = null
   const protectedArchiveCores = new Map()
   const retainArchiveCore = ({ coreKey }) => {
@@ -580,7 +594,7 @@ export async function createBackendContext(config) {
     catalogRegistry,
     now: () => Date.now(),
     onUpdate: async event => {
-      await localCatalogIndex.refresh()
+      await verifiedQueryView.refresh()
       return typeof onMediaGraphUpdate === 'function'
         ? onMediaGraphUpdate(event)
         : undefined
@@ -603,7 +617,7 @@ export async function createBackendContext(config) {
     try {
       await core.ready()
     } catch (error) {
-      try { await core.close() } catch {}
+      try { await core.close() } catch { /* Preserve the original open failure. */ }
       throw error
     }
     return core
@@ -631,7 +645,7 @@ export async function createBackendContext(config) {
     },
   })
   let onConsumerModerationRecordsChanged = async () => {}
-  const consumerModerationManager = createModerationManager({
+  consumerModerationManager = createModerationManager({
     now: () => Date.now(),
     onRecordsChanged: event => onConsumerModerationRecordsChanged(event),
     stateRepository: {
@@ -702,7 +716,7 @@ export async function createBackendContext(config) {
   lifecycle.ownResource('scoped network runtime', scopedNetwork, 'close', 5000)
   // Consumer projection is a local view over the authenticated publisher graph
   // plus optional bounded index records. It owns neither a feed nor authority.
-  const consumerModerationPolicy = createConsumerModerationPolicy({
+  consumerModerationPolicy = createConsumerModerationPolicy({
     profileController: consumerModerationProfile,
     moderationManager: consumerModerationManager,
   })
@@ -730,10 +744,10 @@ export async function createBackendContext(config) {
     console.log('[Orchestrator] media catalog projection rebuild failed at startup:', error?.message || error)
   })
   try {
-    const backfill = await localCatalogIndex.refresh()
-    console.log('[Orchestrator] local catalog index backfill:', backfill)
+    const backfill = await verifiedQueryView.refresh()
+    console.log('[Orchestrator] verified query view backfill:', backfill)
   } catch (error) {
-    console.log('[Orchestrator] local catalog index backfill failed at startup:', error?.message || error)
+    console.log('[Orchestrator] verified query view backfill failed at startup:', error?.message || error)
   }
   try {
     consumerCatalogProjection.rebuild()
@@ -744,13 +758,32 @@ export async function createBackendContext(config) {
     openAssetCore: ctx.openAssetCore,
     now: () => Date.now(),
   })
+  const localIndexServiceId = 'local-relay-index'
+  const localIndexService = Object.freeze({
+    indexerId: localIndexServiceId,
+    async queryIndexService({ query, signal } = {}) {
+      const page = await verifiedQueryView.query({
+        selectors: query?.selectors,
+        limit: query?.limit,
+        cursor: query?.cursor ?? null,
+        sourceRevision: query?.sourceRevision ?? null,
+        signal,
+      })
+      return {
+        queryId: query?.queryId,
+        results: page.results,
+        nextCursor: page.nextCursor,
+        sourceRevision: page.sourceRevision,
+      }
+    },
+  })
   const indexVerificationRuntime = createIndexVerificationRuntime({
     services: maximum => [
-      localCatalogIndex.service,
+      localIndexService,
       ...scopedNetwork.listRetainedIndexServiceAdapters(Math.max(0, maximum - 1)),
     ],
     catalogRegistry,
-    localIndexServiceId: localCatalogIndex.service.indexerId,
+    localIndexServiceId,
     localAvailabilityProbe: localAssetAvailabilityProbe,
     scopedNetwork,
     lifecycle,

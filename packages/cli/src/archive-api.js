@@ -1,6 +1,5 @@
-import { rmSync } from '#fs'
 import { isArtworkRendition } from '@peartube/backend/assets'
-import { assertPublicHttpUrl, parsePublicHttpUrl, PublicUrlError, URL_INVALID } from './media/public-url-guard.js'
+import { parsePublicHttpUrl, PublicUrlError } from './media/public-url-guard.js'
 
 // Machine-facing relay API, mounted beside the browser console.
 //
@@ -115,12 +114,6 @@ const MAX_RELEASE_YEAR = 2200
 const MAX_RUNTIME_MINUTES = 6000
 const MAX_OVERVIEW_BYTES = 4096
 const MAX_GENRES_BYTES = 512
-const MAX_JOB_ID_LENGTH = 128
-const MAX_IDEMPOTENCY_KEY_BYTES = 128
-const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/
-// A JSON submission carries coordinates, not media, so a body past this is a
-// caller doing something other than describing one title.
-export const MAX_JSON_BODY_BYTES = 64 * 1024
 // The media graph's own ceiling for a source page (MAX_PAGE_LIMIT), asked for
 // explicitly so an entity with many publishers is not silently truncated to the
 // default 50.
@@ -184,14 +177,6 @@ function uint(value) {
   return Number.isSafeInteger(number) && number >= 0 ? number : null
 }
 
-function requestIdempotencyKey(req) {
-  const value = req?.headers?.['idempotency-key']
-  if (value == null || value === '') return null
-  if (typeof value !== 'string' || Buffer.byteLength(value) > MAX_IDEMPOTENCY_KEY_BYTES || !IDEMPOTENCY_KEY.test(value)) {
-    throw new Error(`Idempotency-Key must be 1-${MAX_IDEMPOTENCY_KEY_BYTES} bytes of letters, digits, '.', '_', ':', or '-'`)
-  }
-  return value
-}
 
 function invalid(code, message, field = null, status = 400) {
   return { status, error: { code, message, field } }
@@ -560,58 +545,12 @@ export function parseByteRange(header, byteLength) {
   return { start, end }
 }
 
-// Map a submission-parsing failure onto a status a client can act on. The
-// multipart receiver and the JSON reader report these as plain errors; without
-// the mapping every one of them would read as a generic 500 that the caller
-// cannot distinguish from a relay bug.
-function submissionFailure(err) {
-  const message = err?.message || String(err)
-  // JSON is checked first: its own oversize message would otherwise be read as
-  // an oversize upload and blamed on a file part the caller never sent.
-  if (/json body exceeds/i.test(message)) {
-    return invalid('PAYLOAD_TOO_LARGE', message, null, 413)
-  }
-  if (/json body/i.test(message)) {
-    return invalid('INVALID_JSON', message, null, 400)
-  }
-  if (/exceeds max size|field too large/i.test(message)) {
-    return invalid('PAYLOAD_TOO_LARGE', message, 'file', 413)
-  }
-  if (/upload directory is not configured/i.test(message)) {
-    return invalid('UPLOAD_DIR_UNAVAILABLE', message, null, 503)
-  }
-  if (/boundary|malformed multipart/i.test(message)) {
-    return invalid('MALFORMED_MULTIPART', message, null, 400)
-  }
-  return invalid('INVALID_MULTIPART', message, null, 400)
-}
 
-export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog, publicationSources = null, assetManifest = null, openRendition = null, bindHost = null, apiOpen = false, lookup = null, logger = null }) {
-  if (typeof readSubmission !== 'function') throw new Error('readSubmission is required')
-  if (typeof enqueue !== 'function') throw new Error('enqueue is required')
-  if (!store) throw new Error('store is required')
-
+export function createArchiveApi({ mediaCatalog, publicationSources = null, assetManifest = null, openRendition = null, bindHost = null, apiOpen = false, logger = null }) {
   // Decided once, at construction: the bind cannot change while the server is
   // listening, and a per-request re-check would only invite a way to skip it.
   const openAccess = createOpenAccessGate({ bindHost, apiOpen })
   const openAccessRefusal = openAccess.refusal
-  const idempotencyTails = new Map()
-
-  async function withIdempotencyLock(key, fn) {
-    if (!key) return fn()
-    let unlock
-    const gate = new Promise((resolve) => { unlock = resolve })
-    const previous = idempotencyTails.get(key) || Promise.resolve()
-    const tail = previous.catch(() => {}).then(() => gate)
-    idempotencyTails.set(key, tail)
-    await previous.catch(() => {})
-    try {
-      return await fn()
-    } finally {
-      unlock()
-      if (idempotencyTails.get(key) === tail) idempotencyTails.delete(key)
-    }
-  }
 
   function send(res, status, body, headers = {}) {
     // No CORS headers: this is a server-to-server API on an unauthenticated
@@ -625,105 +564,6 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
     send(res, status, { error }, headers)
   }
 
-  // A submission refused after its bytes were staged must not leave them
-  // behind: an unauthenticated caller could otherwise fill the relay's disk
-  // with rejected uploads.
-  function discardStagedUpload(file) {
-    if (!file?.dir) return
-    try {
-      rmSync(file.dir, { recursive: true, force: true })
-    } catch (err) {
-      logger?.archive?.warn?.('Discarding a rejected upload failed', { error: err?.message || String(err) })
-    } finally {
-      if (typeof file.releaseStorageReservation === 'function') {
-        try { file.releaseStorageReservation() } catch {}
-      }
-    }
-  }
-
-  async function postArchive(req, res) {
-    let submission = null
-    let idempotencyKey = null
-    try {
-      idempotencyKey = requestIdempotencyKey(req)
-    } catch (err) {
-      sendError(res, invalid('INVALID_IDEMPOTENCY_KEY', err.message, 'Idempotency-Key'))
-      return
-    }
-    try {
-      submission = await readSubmission(req)
-    } catch (err) {
-      sendError(res, submissionFailure(err))
-      return
-    }
-
-    const normalized = normalizeArchiveSubmission(submission.fields, submission.file)
-    if (normalized.error) {
-      discardStagedUpload(submission.file)
-      sendError(res, normalized)
-      return
-    }
-
-    // Resolving the host is the half of the guard that needs the network, and
-    // it runs before the enqueue: a job that exists is a job that will be
-    // fetched, so a url pointed at the operator's LAN must never become one.
-    if (normalized.remoteSource) {
-      try {
-        await assertPublicHttpUrl(normalized.remoteSource, lookup ? { lookup } : {})
-      } catch (err) {
-        if (!(err instanceof PublicUrlError)) throw err
-        sendError(res, invalid(err.code || URL_INVALID, err.message, 'url'))
-        return
-      }
-    }
-
-    const job = await withIdempotencyLock(idempotencyKey, async () => {
-      if (idempotencyKey) {
-        const existing = (await store.listJobs()).find((candidate) => candidate.idempotencyKey === idempotencyKey)
-        if (existing && ['queued', 'running', 'completed'].includes(existing.status)) {
-          discardStagedUpload(submission.file)
-          return existing
-        }
-        if (existing) {
-          return enqueue({
-            ...submission.form,
-            ...normalized.form,
-            idempotencyKey,
-            entityHint: normalized.entityHint,
-            retentionClass: normalized.retentionClass,
-            reuseJobId: existing.id
-          }, submission.file)
-        }
-      }
-      return enqueue({
-        ...submission.form,
-        ...normalized.form,
-        idempotencyKey,
-        entityHint: normalized.entityHint,
-        retentionClass: normalized.retentionClass
-      }, submission.file)
-    })
-    send(res, 202, { jobId: job.id, status: job.status, entityHint: job.entityHint || normalized.entityHint })
-  }
-
-  async function getJob(res, jobId) {
-    if (!jobId || jobId.length > MAX_JOB_ID_LENGTH) {
-      sendError(res, invalid('JOB_NOT_FOUND', `no archive job with id ${JSON.stringify(jobId)}`, 'jobId', 404))
-      return
-    }
-    const job = (await store.listJobs()).find((candidate) => candidate.id === jobId)
-    if (!job) {
-      sendError(res, invalid('JOB_NOT_FOUND', `no archive job with id ${JSON.stringify(jobId)}`, 'jobId', 404))
-      return
-    }
-    send(res, 200, {
-      jobId: job.id,
-      status: job.status,
-      title: job.title || null,
-      error: job.error || null,
-      source: jobSourceReference(job)
-    })
-  }
 
   // The last page the media graph actually produced, per page key.
   //
@@ -921,14 +761,6 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
     }
   }
 
-  function jobIdFrom(path) {
-    const raw = path.slice('/archive/'.length)
-    try {
-      return decodeURIComponent(raw)
-    } catch {
-      return raw
-    }
-  }
 
   // /stream/<publicationId>/<renditionId> — both coordinates, exactly as the
   // catalog reported them.
@@ -960,23 +792,6 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
     async handle(req, res) {
       const path = archiveApiRoute(req.url)
       try {
-        if (path === '/archive') {
-          if (req.method !== 'POST') {
-            sendError(res, invalid('METHOD_NOT_ALLOWED', `${req.method} is not allowed on ${ARCHIVE_API_PREFIX}/archive`, null, 405), { allow: 'POST' })
-            return
-          }
-          await postArchive(req, res)
-          return
-        }
-
-        if (path.startsWith('/archive/')) {
-          if (req.method !== 'GET') {
-            sendError(res, invalid('METHOD_NOT_ALLOWED', `${req.method} is not allowed on ${ARCHIVE_API_PREFIX}/archive/:jobId`, null, 405), { allow: 'GET' })
-            return
-          }
-          await getJob(res, jobIdFrom(path))
-          return
-        }
 
         if (path === '/catalog') {
           if (req.method !== 'GET') {

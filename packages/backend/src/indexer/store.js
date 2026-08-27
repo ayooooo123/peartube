@@ -48,6 +48,10 @@ const EVICTION_FIELDS = new Set(['publisherId', 'reason'])
 const PUBLISHER_FIELDS = new Set(['publisherId'])
 const SOURCE_CURSOR_FIELDS = new Set(['publisherId', 'catalogEpoch'])
 const PUBLISHER_CURSOR_FIELDS = new Set(['publisherId'])
+const ENTITY_LOOKUP_FIELDS = new Set(['entityKind', 'entityId'])
+const PUBLICATION_LOOKUP_FIELDS = new Set(['publicationId'])
+const RENDITION_LOOKUP_FIELDS = new Set(['renditionId'])
+const SOURCE_RECORD_LOOKUP_FIELDS = new Set(['publisherId', 'sourceRecordRef'])
 const QUERY_PAGE_FIELDS = new Set(['selectors', 'limit', 'continuation', 'sourceRevision', 'signal'])
 const QUERY_CONTINUATION_FIELDS = new Set(['selectorIndex', 'after'])
 const EXACT_CONTINUATION_FIELDS = new Set(['namespace', 'normalizedIdentifier', 'publisherId', 'sourceRecordRef', 'entityKind', 'entityId'])
@@ -85,6 +89,32 @@ function assertOnlyFields(value, allowed, label) {
       requested: name,
     })
   }
+}
+
+function prepareEntityLookup(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw invalidOperation('entity lookup must be an object', { scope: 'query' })
+  assertOnlyFields(input, ENTITY_LOOKUP_FIELDS, 'entity lookup')
+  return {
+    entityKind: validateBoundedText('entityKind', input.entityKind, INDEX_SCHEMA_LIMITS.maxEntityKindBytes),
+    entityId: validateBoundedText('entityId', input.entityId, INDEX_SCHEMA_LIMITS.maxEntityIdBytes),
+  }
+}
+
+function prepareProtocolLookup(input, fields, name, field, maximum) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw invalidOperation(`${name} lookup must be an object`, { scope: 'query' })
+  assertOnlyFields(input, fields, `${name} lookup`)
+  const value = validateBoundedText(field, input[field], maximum)
+  if (!/^[0-9a-f]{64}$/.test(value)) throw invalidOperation(`${field} must be a lowercase 32-byte hexadecimal identifier`, { scope: 'query' })
+  return value
+}
+
+function prepareSourceRecordLookup(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw invalidOperation('source record lookup must be an object', { scope: 'query' })
+  assertOnlyFields(input, SOURCE_RECORD_LOOKUP_FIELDS, 'source record lookup')
+  const publisherId = validatePublisherId(input.publisherId)
+  const sourceRecordRef = validateBoundedText('sourceRecordRef', input.sourceRecordRef, INDEX_SCHEMA_LIMITS.maxSourceRecordRefBytes)
+  if (!/^[0-9a-f]{64}$/.test(sourceRecordRef)) throw invalidOperation('sourceRecordRef must be a lowercase 32-byte hexadecimal identifier', { scope: 'query' })
+  return { publisherId, sourceRecordRef }
 }
 
 function safeLimit(value) {
@@ -1017,6 +1047,45 @@ export async function createIndexerStore(options) {
     },
     queryIndexPage(input) {
       return accept(() => prepareQueryPage(input, limits), (tx, prepared) => queryIndexPage(tx, prepared))
+    },
+    findEntityRows(input) {
+      return accept(() => prepareEntityLookup(input), async (tx, selector) => {
+        const records = await tx.find(INDEXES.entityExact, selector, { limit: safeLimit(MAX_INDEX_QUERY_RESULTS) }).toArray()
+        if (records.length > MAX_INDEX_QUERY_RESULTS) throw invalidOperation('entity lookup exceeds its bounded result limit', { scope: 'query' })
+        return records.map(record => snapshotRecord(COLLECTIONS.externalReferenceProjections, record))
+      })
+    },
+    findPublicationRows(input) {
+      return accept(
+        () => prepareProtocolLookup(input, PUBLICATION_LOOKUP_FIELDS, 'publication', 'publicationId', INDEX_SCHEMA_LIMITS.maxPublicationIdBytes),
+        async (tx, publicationId) => {
+          const records = await tx.find(INDEXES.publicationExact, { publicationId }, { limit: safeLimit(MAX_INDEX_QUERY_RESULTS) }).toArray()
+          if (records.length > MAX_INDEX_QUERY_RESULTS) throw invalidOperation('publication lookup exceeds its bounded result limit', { scope: 'query' })
+          return records.map(record => snapshotRecord(COLLECTIONS.publicationProjections, record))
+        },
+      )
+    },
+    findRenditionRows(input) {
+      return accept(
+        () => prepareProtocolLookup(input, RENDITION_LOOKUP_FIELDS, 'rendition', 'renditionId', INDEX_SCHEMA_LIMITS.maxRenditionIdBytes),
+        async (tx, renditionId) => {
+          const records = await tx.find(INDEXES.renditionExact, { renditionId }, { limit: safeLimit(MAX_INDEX_QUERY_RESULTS) }).toArray()
+          if (records.length > MAX_INDEX_QUERY_RESULTS) throw invalidOperation('rendition lookup exceeds its bounded result limit', { scope: 'query' })
+          return records.map(record => snapshotRecord(COLLECTIONS.renditionProjections, record))
+        },
+      )
+    },
+    getSourceRecord(input) {
+      return accept(() => prepareSourceRecordLookup(input), async (tx, selector) => {
+        const cursor = await getPublisherCursor(tx, selector.publisherId)
+        if (!cursor) return null
+        const record = await tx.get(COLLECTIONS.sourceRecords, {
+          publisherId: selector.publisherId,
+          catalogEpoch: cursor.catalogEpoch,
+          recordId: selector.sourceRecordRef,
+        })
+        return record ? snapshotRecord(COLLECTIONS.sourceRecords, record) : null
+      })
     },
     snapshotUsage() {
       return accept(() => null, tx => buildSnapshot(tx))

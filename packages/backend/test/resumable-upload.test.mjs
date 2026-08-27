@@ -13,6 +13,7 @@ import { createBlockOffloader } from '../src/archive/block-offloader.js'
 import { createOffloadStorage } from '../src/archive/offload-storage.js'
 import { createRemoteBlockStore } from '../src/archive/remote-block-store.js'
 import { ASSET_BLOCK_SIZE, sweepStagingState } from '../src/assets/static-core.js'
+import { createSourceReader } from '../src/assets/source-reader.js'
 import {
   encodePublisherOperationBody,
 } from '../src/publisher/index.js'
@@ -84,16 +85,27 @@ function chunksOf(bytes) {
  */
 function oneShotSource(chunks) {
   let reads = 0
-  return {
-    get reads() {
-      return reads
+  const byteLength = chunks.reduce((total, chunk) => total + chunk.byteLength, 0)
+  const source = createSourceReader({
+    resumable: false,
+    maxReadBytes: Math.max(1, byteLength),
+    async describe() {
+      return {
+        identity: { kind: 'etag', value: `plain-upload:${byteLength}` },
+        byteLength,
+        mimeType: 'video/mp4',
+      }
     },
-    async *[Symbol.asyncIterator]() {
-      reads++
-      if (reads > 1) throw new Error('source read more than once')
-      yield* chunks
+    open() {
+      return (async function * () {
+        reads++
+        if (reads > 1) throw new Error('source read more than once')
+        yield* chunks
+      })()
     },
-  }
+    async close() {},
+  })
+  return { source, get reads() { return reads } }
 }
 
 /**
@@ -107,18 +119,25 @@ function oneShotSource(chunks) {
 function rangedOrigin(bytes, { failAfterBytes = null, etag = ETAG, id = RESUME_ID } = {}) {
   const attempts = []
   let armed = failAfterBytes !== null
-  return {
-    attempts,
-    source: {
-      id,
-      etag,
-      open(byteOffset) {
-        const attempt = { byteOffset, ranges: [] }
+  function openReader() {
+    return createSourceReader({
+      resumable: true,
+      maxReadBytes: Math.max(1, bytes.byteLength),
+      async describe() {
+        return {
+          identity: { kind: 'etag', value: etag },
+          byteLength: bytes.byteLength,
+          mimeType: 'video/mp4',
+        }
+      },
+      open({ offset, length }) {
+        const attempt = { byteOffset: offset, ranges: [] }
         attempts.push(attempt)
         return (async function *ranges() {
-          let position = byteOffset
-          while (position < bytes.byteLength) {
-            const end = Math.min(position + RANGE_BYTES, bytes.byteLength)
+          let position = offset
+          const limit = offset + length
+          while (position < limit) {
+            const end = Math.min(position + RANGE_BYTES, limit)
             if (armed && end > failAfterBytes) {
               armed = false
               throw new Error('granted source range failed: connection reset')
@@ -129,8 +148,10 @@ function rangedOrigin(bytes, { failAfterBytes = null, etag = ETAG, id = RESUME_I
           }
         })()
       },
-    },
+      async close() {},
+    })
   }
+  return { attempts, get source() { return openReader() }, id }
 }
 
 function makeChannel() {
@@ -331,6 +352,7 @@ function uploadOptions(overrides = {}) {
     duration: 120,
     retentionClass: 'archive-pin',
     byteLength: BYTE_LENGTH,
+    resumeId: RESUME_ID,
     ...overrides,
   }
 }
@@ -447,7 +469,7 @@ test('a plain one-shot stream with no ranged opener is unchanged', async (t) => 
   const source = oneShotSource(chunksOf(bytes))
   const channel = makeChannel()
 
-  const result = await manager.uploadFromStream(channel, source, uploadOptions())
+  const result = await manager.uploadFromStream(channel, source.source, uploadOptions())
 
   t.is(result.success, true, 'the plain streaming upload succeeded')
   t.is(source.reads, 1, 'the one-shot source was read exactly once')
@@ -495,7 +517,7 @@ test('the startup sweep reclaims an abandoned ingest\'s staged prefix and leaves
   // bucket under its own resume id.
   for (const [id, bytes] of [[abandonedId, abandonedBytes], [liveId, liveBytes]]) {
     const origin = rangedOrigin(bytes, { id, failAfterBytes: FAIL_AFTER_BYTES })
-    const interrupted = await manager.uploadFromStream(makeChannel(), origin.source, uploadOptions())
+    const interrupted = await manager.uploadFromStream(makeChannel(), origin.source, uploadOptions({ resumeId: id }))
     t.is(interrupted.success, false, `the ${id} attempt was severed`)
   }
   const staged = objects.size
@@ -518,7 +540,7 @@ test('the startup sweep reclaims an abandoned ingest\'s staged prefix and leaves
   // What retention and reclamation actually mean, rather than what the return
   // value says: the kept job resumes, the reclaimed one starts over.
   const resumed = rangedOrigin(liveBytes, { id: liveId })
-  const finished = await manager.uploadFromStream(makeChannel(), resumed.source, uploadOptions())
+  const finished = await manager.uploadFromStream(makeChannel(), resumed.source, uploadOptions({ resumeId: liveId }))
   t.is(finished.success, true, 'the retained job finished')
   t.ok(resumed.attempts[0].byteOffset > 0, 'by picking up the prefix the sweep kept')
   t.alike(
@@ -528,7 +550,7 @@ test('the startup sweep reclaims an abandoned ingest\'s staged prefix and leaves
   )
 
   const restarted = rangedOrigin(abandonedBytes, { id: abandonedId })
-  const republished = await manager.uploadFromStream(makeChannel(), restarted.source, uploadOptions())
+  const republished = await manager.uploadFromStream(makeChannel(), restarted.source, uploadOptions({ resumeId: abandonedId }))
   t.is(republished.success, true, 'the reclaimed job can still be archived')
   t.is(restarted.attempts[0].byteOffset, 0, 'but starts from byte zero, having nothing left to resume')
 })

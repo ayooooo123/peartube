@@ -7,6 +7,7 @@ import b4a from 'b4a'
 import Corestore from 'corestore'
 
 import { createImmutableRenditionWriter } from '../src/assets/rendition-writer.js'
+import { createBufferSourceReader, createOneShotSourceReader } from '../src/assets/source-reader.js'
 
 function bytes(value, length) {
   return b4a.alloc(length, value)
@@ -22,7 +23,7 @@ function liveSessionCount(store) {
   return store.sessions.list().filter((session) => !session.closed).length
 }
 
-test('rendition writer requires a store and source and embeds the real static descriptor', async (t) => {
+test('rendition writer requires a store and reader and embeds the real static descriptor', async (t) => {
   const leftDirectory = mkdtempSync(join(tmpdir(), 'peartube-rendition-left-'))
   const rightDirectory = mkdtempSync(join(tmpdir(), 'peartube-rendition-right-'))
   const storeA = new Corestore(leftDirectory)
@@ -38,13 +39,13 @@ test('rendition writer requires a store and source and embeds the real static de
 
   await t.exception(() => writer.writeRendition({
     store: storeA,
-    source: chunks,
+    reader: createBufferSourceReader(b4a.concat(chunks)),
     purpose: 'original',
     format: 'video/mp4',
   }), /initialize/)
   await writer.initialize()
   await t.exception(() => writer.writeRendition({
-    source: chunks,
+    reader: createBufferSourceReader(b4a.concat(chunks)),
     purpose: 'original',
     format: 'video/mp4',
   }), /store/)
@@ -52,11 +53,11 @@ test('rendition writer requires a store and source and embeds the real static de
     store: storeA,
     purpose: 'original',
     format: 'video/mp4',
-  }), /source/)
+  }), /reader/)
 
   const first = await writer.writeRendition({
     store: storeA,
-    source: chunks,
+    reader: createBufferSourceReader(b4a.concat(chunks)),
     purpose: 'original',
     format: 'video/mp4',
     segments: [
@@ -66,7 +67,7 @@ test('rendition writer requires a store and source and embeds the real static de
   })
   const second = await writer.writeRendition({
     store: storeB,
-    source: chunks,
+    reader: createBufferSourceReader(b4a.concat(chunks)),
     purpose: 'original',
     format: 'video/mp4',
     segments: first.segmentIndex.entries,
@@ -98,7 +99,7 @@ test('rendition writer accepts explicit multi-segment bounds against realized by
 
   const result = await writer.writeRendition({
     store,
-    source: [bytes(3, 6), bytes(4, 6)],
+    reader: createBufferSourceReader(b4a.concat([bytes(3, 6), bytes(4, 6)])),
     purpose: 'original',
     format: 'video/mp4',
     segments: [
@@ -135,7 +136,11 @@ test('rendition writer releases write state and staging storage after cancellati
 
   await t.exception(() => writer.writeRendition({
     store,
-    source: source(),
+    reader: createOneShotSourceReader({
+      source: source(),
+      identity: { kind: 'etag', value: 'cancelled-rendition' },
+      byteLength: 32,
+    }),
     purpose: 'original',
     format: 'video/mp4',
     signal: controller.signal,
@@ -155,6 +160,11 @@ test('rendition writer validates metadata before materialization and closes core
       yield bytes(9, 16)
     },
   }
+  const reader = createOneShotSourceReader({
+    source,
+    identity: { kind: 'etag', value: 'validation-rendition' },
+    byteLength: 16,
+  })
 
   await writer.initialize()
   t.teardown(async () => {
@@ -164,19 +174,19 @@ test('rendition writer validates metadata before materialization and closes core
 
   await t.exception(writer.writeRendition({
     store,
-    source,
+    reader,
     purpose: '',
     format: 'video/mp4',
   }), /purpose/)
   await t.exception(writer.writeRendition({
     store,
-    source,
+    reader,
     purpose: 'original',
     format: '',
   }), /format/)
   await t.exception(writer.writeRendition({
     store,
-    source,
+    reader,
     purpose: 'original',
     format: 'video/mp4',
     segments: [
@@ -191,7 +201,7 @@ test('rendition writer validates metadata before materialization and closes core
 
   await t.exception(writer.writeRendition({
     store,
-    source,
+    reader,
     purpose: 'original',
     format: 'video/mp4',
     segments: [

@@ -24,6 +24,17 @@ import {
   PROTOCOL_MAJOR,
 } from './frame.js'
 import {
+  MAX_VERIFIED_BLOCK_BYTES,
+  MAX_VERIFIED_PROOF_BYTES,
+  VERIFIED_BLOCK_CHUNK_BYTES,
+  createVerifiedBlockProof,
+  decodeVerifiedBlockChunk,
+  decodeVerifiedBlockProof,
+  encodeVerifiedBlockChunk,
+  encodeVerifiedBlockProof,
+} from './block-protocol.js'
+import { createVerifiedBlockEngine } from './verified-block-engine.js'
+import {
   ARCHIVE_DISCOVERY_CAPABILITY,
   ARCHIVE_RANGE_CAPABILITY,
   ASSET_RENDITION_CAPABILITY,
@@ -91,8 +102,8 @@ import {
 export const MODERATION_FEED_CAPABILITY = 'moderation-feed:v1'
 
 const GENERIC_PURPOSES = Object.freeze(['bootstrap', 'publisher', 'asset', 'archive', 'archive-discovery'])
-const MAX_ASSET_BLOCK_BYTES = 256 * 1024
-const MAX_ASSET_PROOF_BYTES = 32 * 1024
+const MAX_ASSET_BLOCK_BYTES = MAX_VERIFIED_BLOCK_BYTES
+const MAX_ASSET_PROOF_BYTES = MAX_VERIFIED_PROOF_BYTES
 const MAX_ARCHIVE_CHALLENGE_PROOF_BYTES = 320 * 1024
 const MAX_CATALOG_PAGE_RECORDS = 64
 const MAX_CATALOG_SESSION_PAGES = 128
@@ -102,7 +113,7 @@ const MAX_CATALOG_HEAD_DISTANCE = 4096
 const MAX_CATALOG_VERIFICATION_WORK = 8192
 const DEFAULT_CATALOG_BUDGET_WINDOW_MS = 60_000
 const CATALOG_PAGE_TIMEOUT_MS = 10_000
-const ASSET_CHUNK_BYTES = 48 * 1024
+const ASSET_CHUNK_BYTES = VERIFIED_BLOCK_CHUNK_BYTES
 const ASSET_TRANSFER_TIMEOUT_MS = 10_000
 // A rate-limited send waits for tokens rather than answering "unavailable":
 // refusing marks the peer as failed for that block until the next policy
@@ -469,6 +480,7 @@ export function createScopedNetworkRuntime (options = {}) {
   const publisherRotationDrainTimers = new Set()
   const renditions = new Map()
   const archives = new Map()
+  const blockEngine = createVerifiedBlockEngine()
   const activeConnections = new Map()
   const indexServices = new Map()
   const indexSequenceFloors = new Map()
@@ -1588,6 +1600,7 @@ export function createScopedNetworkRuntime (options = {}) {
     clearTimeout(request.timer)
     request.timer = null
     request.signal?.removeEventListener?.('abort', request.onAbort)
+    for (const transfer of request.transfers.values()) transfer.close?.('request-closed')
     request.transfers.clear()
     scope.assetRequests.delete(request.key)
     return true
@@ -1672,7 +1685,9 @@ export function createScopedNetworkRuntime (options = {}) {
         ))
       }
       for (const [index, transfer] of request.transfers) {
-        if (transfer.peerId === peerId) request.transfers.delete(index)
+        if (transfer.peerId !== peerId) continue
+        transfer.close?.('peer-failed')
+        request.transfers.delete(index)
       }
       if ([...request.requestedPeers].every(id => request.failedPeers.has(id))) {
         closeAssetRequest(scope, request, requestPeerFailure(request))
@@ -1685,69 +1700,30 @@ export function createScopedNetworkRuntime (options = {}) {
     if (!b4a.equals(assetId, b4a.from(scope.assetId, 'hex'))) fail('asset frame assetId mismatch')
   }
 
-  // A peer that opened a core from its key alone has no manifest, so it cannot
-  // check the signature over the tree and rejects every proof as unsigned. The
-  // manifest is self-authenticating - the core key is its hash - so it rides
-  // along with the proof, exactly as hypercore's own replicator sends it.
   async function authorizedBlockProof (core, index) {
-    const proof = await core.proof({
-      block: { index, nodes: 0 },
-      upgrade: { start: 0, length: core.length },
-    })
-    if (proof && !proof.manifest && core.manifest) proof.manifest = core.manifest
-    return proof
+    return createVerifiedBlockProof({
+      manifest: core.manifest,
+      proof: blockIndex => core.proof({
+        block: { index: blockIndex, nodes: 0 },
+        upgrade: { start: 0, length: core.length },
+      }),
+    }, index)
   }
 
   function encodeAssetProof (index, proof, value) {
-    const metadata = {
-      index,
-      byteLength: value.byteLength,
-      proof: {
-        ...proof,
-        block: { ...proof.block, value: null },
-      },
-    }
-    const payload = c.encode(c.any, metadata)
-    if (payload.byteLength > MAX_ASSET_PROOF_BYTES) fail('asset proof exceeds bounded limit')
-    return payload
+    return encodeVerifiedBlockProof({ index, proof, value })
   }
 
   function decodeAssetProof (payload, expectedIndex) {
-    if (!b4a.isBuffer(payload) || payload.byteLength > MAX_ASSET_PROOF_BYTES) fail('asset proof exceeds bounded limit')
-    const metadata = c.decode(c.any, payload)
-    if (!metadata || typeof metadata !== 'object' ||
-        !Number.isSafeInteger(metadata.index) || metadata.index !== expectedIndex ||
-        !Number.isSafeInteger(metadata.byteLength) || metadata.byteLength < 0 || metadata.byteLength > MAX_ASSET_BLOCK_BYTES ||
-        !metadata.proof || typeof metadata.proof !== 'object' ||
-        !metadata.proof.block || metadata.proof.block.index !== expectedIndex ||
-        metadata.proof.block.value !== null) {
-      fail('asset proof metadata is invalid')
-    }
-    return metadata
+    return decodeVerifiedBlockProof(payload, { index: expectedIndex })
   }
 
   function encodeAssetChunk (index, offset, value) {
-    const payload = b4a.allocUnsafe(8 + value.byteLength)
-    payload.writeUInt32BE(index, 0)
-    payload.writeUInt32BE(offset, 4)
-    b4a.copy(value, payload, 8)
-    return payload
+    return encodeVerifiedBlockChunk({ index, offset, value })
   }
 
-  function decodeAssetChunk (payload) {
-    if (!b4a.isBuffer(payload) || payload.byteLength < 8 || payload.byteLength > 8 + ASSET_CHUNK_BYTES) fail('asset block chunk is invalid')
-    return {
-      index: payload.readUInt32BE(0),
-      offset: payload.readUInt32BE(4),
-      value: payload.subarray(8),
-    }
-  }
+  const decodeAssetChunk = decodeVerifiedBlockChunk
 
-  function expectedAssetValueBytes (scope, index) {
-    const coreRef = scope.assetSession.coreRef
-    if (index < coreRef.length - 1) return coreRef.blockSize
-    return coreRef.byteLength - ((coreRef.length - 1) * coreRef.blockSize)
-  }
 
   function sendAssetError (scope, tracked, range, code) {
     return sendScopedFrame(tracked, 'asset', 'asset-block-error', encodeAssetBlockError({
@@ -1759,25 +1735,6 @@ export function createScopedNetworkRuntime (options = {}) {
     }))
   }
 
-  function sendAssetResponseBytes (scope, tracked, responseState, range, blockIndex, kind, bytes) {
-    for (let offset = 0; offset < bytes.byteLength; offset += ASSET_CHUNK_BYTES) {
-      if (responseState.cancelled || scope.closed || tracked.closed ||
-          !networkEnabled || responseState.policyEpoch !== networkPolicyEpoch) return false
-      const chunk = bytes.subarray(offset, Math.min(bytes.byteLength, offset + ASSET_CHUNK_BYTES))
-      if (!sendScopedFrame(tracked, 'asset', 'asset-block-response', encodeAssetBlockResponse({
-        assetId: scope.assetId,
-        transferId: range.transferId,
-        startBlock: range.startBlock,
-        endBlock: range.endBlock,
-        blockIndex,
-        kind,
-        offset,
-        totalBytes: bytes.byteLength,
-        chunk,
-      }))) return false
-    }
-    return true
-  }
 
   async function sendAssetBlocks (scope, tracked, range) {
     if (range.startBlock < scope.range.start || range.endBlock > scope.range.end) {
@@ -1796,51 +1753,62 @@ export function createScopedNetworkRuntime (options = {}) {
         sendAssetError(scope, tracked, range, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
         return
       }
-      const core = await scope.assetSession.ready()
-      // Abandoning a transfer without a terminal frame leaves the requester
-      // waiting on a response that will never come. A policy change mid-range
-      // is exactly that case, so every give-up path answers UNAVAILABLE while
-      // the session is still there to answer on.
+      await scope.assetSession.ready()
       const abandon = () => {
         const current = !responseState.cancelled && !scope.closed && !tracked.closed &&
           scope.sessions.get(tracked.peerId) === tracked
         if (current) sendAssetError(scope, tracked, range, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
       }
       for (let index = range.startBlock; index < range.endBlock; index++) {
-        if (!scopeUploadRetentionClass(scope) || responseState.cancelled || scope.closed || tracked.closed ||
-            responseState.policyEpoch !== networkPolicyEpoch) return abandon()
-        const present = await core.has(index)
-        if (!scopeUploadRetentionClass(scope) || responseState.cancelled || scope.closed || tracked.closed ||
-            responseState.policyEpoch !== networkPolicyEpoch) return abandon()
-        if (!present) continue
-        const proof = await core.proof({
-          block: { index, nodes: 0 },
-          upgrade: { start: 0, length: scope.assetSession.coreRef.length },
+        const result = await scope.assetSession.blockEngine.serve({
+          handle: scope.blockHandle,
+          peerId: tracked.peerId,
+          request: {
+            resourceId: scope.assetId,
+            start: range.startBlock,
+            end: range.endBlock,
+            index,
+            retentionClass,
+          },
+          isActive: () => !responseState.cancelled && !scope.closed && !tracked.closed &&
+            networkEnabled && responseState.policyEpoch === networkPolicyEpoch,
+          encodeProof: ({ index, proof, value }) => encodeAssetProof(index, proof, value),
+          reserve: ({ bytes }) => reservePolicyUpload(retentionClass, bytes),
+          sendProofPart: ({ offset, totalBytes, chunk }) => sendScopedFrame(
+            tracked,
+            'asset',
+            'asset-block-response',
+            encodeAssetBlockResponse({
+              assetId: scope.assetId,
+              transferId: range.transferId,
+              startBlock: range.startBlock,
+              endBlock: range.endBlock,
+              blockIndex: index,
+              kind: 'proof',
+              offset,
+              totalBytes,
+              chunk,
+            }),
+          ),
+          sendBlockPart: ({ offset, totalBytes, chunk }) => sendScopedFrame(
+            tracked,
+            'asset',
+            'asset-block-response',
+            encodeAssetBlockResponse({
+              assetId: scope.assetId,
+              transferId: range.transferId,
+              startBlock: range.startBlock,
+              endBlock: range.endBlock,
+              blockIndex: index,
+              kind: 'block',
+              offset,
+              totalBytes,
+              chunk,
+            }),
+          ),
         })
-        if (!scopeUploadRetentionClass(scope) || responseState.cancelled || scope.closed || tracked.closed ||
-            responseState.policyEpoch !== networkPolicyEpoch) return abandon()
-        const value = proof?.block?.value
-        if (!b4a.isBuffer(value) || proof.block.index !== index ||
-            value.byteLength !== expectedAssetValueBytes(scope, index)) {
-          fail('local asset block does not match the verified descriptor')
-        }
-        const proofBytes = encodeAssetProof(index, proof, value)
-        const reservation = responseState.policyEpoch === networkPolicyEpoch
-          ? await reservePolicyUpload(retentionClass, value.byteLength)
-          : null
-        if (!reservation) return abandon()
-        const canBatch = typeof tracked.channel?.cork === 'function' && typeof tracked.channel?.uncork === 'function'
-        if (canBatch) tracked.channel.cork()
-        try {
-          const proofSent = sendAssetResponseBytes(scope, tracked, responseState, range, index, 'proof', proofBytes)
-          const blockSent = proofSent && sendAssetResponseBytes(scope, tracked, responseState, range, index, 'block', value)
-          if (!blockSent) return abandon()
-          reservation.commit()
-          served++
-        } finally {
-          reservation.release()
-          if (canBatch) tracked.channel.uncork()
-        }
+        if (result.status === 'sent') served++
+        else if (result.status === 'cancelled') return abandon()
       }
       if (served === 0 && !responseState.cancelled && !tracked.closed) {
         sendAssetError(scope, tracked, range, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
@@ -1850,29 +1818,27 @@ export function createScopedNetworkRuntime (options = {}) {
     }
   }
 
+  function blockResponsePart (scope, response) {
+    return {
+      resourceId: scope.assetId,
+      start: response.startBlock,
+      end: response.endBlock,
+      index: response.blockIndex,
+      offset: response.offset,
+      totalBytes: response.totalBytes,
+      chunk: response.chunk,
+    }
+  }
+
   function receiveAssetProofPart (scope, transfer, response) {
     if (transfer.proofMetadata) fail('asset proof was already completed')
-    let part = transfer.proof
-    if (!part) {
-      if (response.offset !== 0) fail('asset proof response is not contiguous')
-      part = {
-        buffer: b4a.allocUnsafe(response.totalBytes),
-        receivedBytes: 0,
-        totalBytes: response.totalBytes,
-      }
-      transfer.proof = part
-    }
-    if (part.totalBytes !== response.totalBytes || part.receivedBytes !== response.offset) {
-      fail('asset proof response is not contiguous')
-    }
-    b4a.copy(response.chunk, part.buffer, response.offset)
-    part.receivedBytes += response.chunk.byteLength
-    if (part.receivedBytes !== part.totalBytes) return
-
-    const metadata = decodeAssetProof(part.buffer, transfer.index)
-    if (!b4a.equals(c.encode(c.any, metadata), part.buffer)) {
-      fail('asset proof encoding is noncanonical')
-    }
+    const received = scope.assetSession.blockEngine.receiveProofPart({
+      handle: scope.blockHandle,
+      transfer,
+      part: blockResponsePart(scope, response),
+    })
+    if (received.status !== 'complete') return
+    const metadata = decodeAssetProof(received.assembly.buffer, transfer.index)
     const validation = scope.assetSession.validateProofMetadata({
       index: transfer.index,
       proof: metadata.proof,
@@ -1881,35 +1847,25 @@ export function createScopedNetworkRuntime (options = {}) {
       transferId: transfer.transferId,
     })
     if (validation && typeof validation.then === 'function') {
-      part.buffer = null
+      received.assembly.buffer = null
       transfer.preflight = validation
       return validation
     }
     transfer.expectedBlockBytes = validation
     transfer.proofMetadata = metadata
-    part.buffer = null
+    received.assembly.buffer = null
   }
 
-  function receiveAssetBlockPart (transfer, response) {
+  function receiveAssetBlockPart (scope, transfer, response) {
     if (!transfer.proofMetadata) fail('asset block bytes arrived before a complete canonical proof')
     if (response.totalBytes !== transfer.expectedBlockBytes) {
       fail('asset block response length does not match the verified descriptor')
     }
-    let part = transfer.block
-    if (!part) {
-      if (response.offset !== 0) fail('asset block response is not contiguous')
-      part = {
-        buffer: b4a.allocUnsafe(transfer.expectedBlockBytes),
-        receivedBytes: 0,
-        totalBytes: transfer.expectedBlockBytes,
-      }
-      transfer.block = part
-    }
-    if (part.totalBytes !== response.totalBytes || part.receivedBytes !== response.offset) {
-      fail('asset block response is not contiguous')
-    }
-    b4a.copy(response.chunk, part.buffer, response.offset)
-    part.receivedBytes += response.chunk.byteLength
+    return scope.assetSession.blockEngine.receiveBlockPart({
+      handle: scope.blockHandle,
+      transfer,
+      part: blockResponsePart(scope, response),
+    })
   }
 
   async function finishAssetResponse (scope, request, transfer) {
@@ -1918,17 +1874,13 @@ export function createScopedNetworkRuntime (options = {}) {
     transfer.applying = true
     try {
       if (request.closed || scope.assetRequests.get(request.key) !== request) return
-      await scope.assetSession.verifyBlock({
-        index: transfer.index,
+      const result = await scope.assetSession.blockEngine.finish({
+        handle: scope.blockHandle,
+        request,
+        transfer,
         proof: transfer.proofMetadata.proof,
-        value: transfer.block.buffer,
-        peerId: transfer.peerId,
-        transferId: transfer.transferId,
-        isActive: () => !request.closed &&
-          scope.assetRequests.get(request.key) === request &&
-          request.transfers.get(transfer.index) === transfer,
       })
-      if (request.closed || scope.assetRequests.get(request.key) !== request) return
+      if (result.status === 'ignored' || request.closed || scope.assetRequests.get(request.key) !== request) return 'ignored'
       request.transfers.delete(transfer.index)
       request.remaining.delete(transfer.index)
       request.verified.add(transfer.index)
@@ -1940,9 +1892,8 @@ export function createScopedNetworkRuntime (options = {}) {
         (request.closed ||
           scope.assetRequests.get(request.key) !== request ||
           request.transfers.get(transfer.index) !== transfer)
-      if (request.transfers.get(transfer.index) === transfer) {
-        request.transfers.delete(transfer.index)
-      }
+      transfer.close?.('failed')
+      if (request.transfers.get(transfer.index) === transfer) request.transfers.delete(transfer.index)
       if (closedDuringVerification) return 'ignored'
       throw error
     }
@@ -1962,17 +1913,19 @@ export function createScopedNetworkRuntime (options = {}) {
       if (response.kind !== 'proof' || response.offset !== 0) {
         fail('asset block bytes arrived before a complete canonical proof')
       }
-      transfer = {
-        transferId: response.transferId,
+      transfer = scope.assetSession.blockEngine.createTransfer({
+        handle: scope.blockHandle,
+        resourceId: scope.assetId,
+        start: response.startBlock,
+        end: response.endBlock,
         index: response.blockIndex,
         peerId: tracked.peerId,
-        proof: null,
-        proofMetadata: null,
-        preflight: null,
-        expectedBlockBytes: null,
-        block: null,
-        applying: false,
-      }
+        transferId: response.transferId,
+      })
+      transfer.proofMetadata = null
+      transfer.preflight = null
+      transfer.expectedBlockBytes = null
+      transfer.applying = false
       request.transfers.set(response.blockIndex, transfer)
     }
     if (transfer.transferId !== response.transferId) fail('asset block response transferId changed')
@@ -1982,7 +1935,7 @@ export function createScopedNetworkRuntime (options = {}) {
       const preflight = receiveAssetProofPart(scope, transfer, response)
       if (preflight) await preflight
     } else {
-      receiveAssetBlockPart(transfer, response)
+      receiveAssetBlockPart(scope, transfer, response)
     }
     const completion = await finishAssetResponse(scope, request, transfer)
     if (completion === 'ignored') return { status: 'ignored' }
@@ -2077,6 +2030,7 @@ export function createScopedNetworkRuntime (options = {}) {
 
   function archiveResourceFor (scope, coreKey, index) {
     return [...(scope.archiveResources?.values() || [])].find(resource =>
+      resource.quarantined !== true &&
       resource.coreKey === coreKey &&
       Number.isSafeInteger(index) &&
       index >= resource.range.start &&
@@ -2123,13 +2077,17 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   function queueArchiveRetry (scope, tracked, request) {
-    if (!request || !archiveResourceFor(scope, request.coreKey, request.index)) return
+    if (!request) return
+    const resource = archiveResourceFor(scope, request.coreKey, request.index)
     const key = archiveBlockKey(request.coreKey, request.index)
     scope.archivePending.delete(key)
-    const failures = scope.archiveFailures.get(key) || new Set()
-    failures.add(tracked.peerId)
-    scope.archiveFailures.set(key, failures)
-    scope.archiveRetries.set(key, request)
+    if (resource) {
+      const failures = scope.archiveFailures.get(key) || new Set()
+      failures.add(tracked.peerId)
+      scope.archiveFailures.set(key, failures)
+      scope.archiveRetries.set(key, request)
+    }
+    tracked.archiveTransfer?.close?.('archive-retry')
     tracked.archiveRequest = null
     tracked.archiveTransfer = null
     clearArchiveTimer(tracked)
@@ -2267,15 +2225,23 @@ export function createScopedNetworkRuntime (options = {}) {
     const request = tracked.archiveRequest
     const transfer = tracked.archiveTransfer
     const resource = request && archiveResourceFor(scope, request.coreKey, request.index)
-    if (!resource || !transfer || transfer.nextOffset !== transfer.value.byteLength) fail('archive block transfer is incomplete')
-    transfer.proof.block.value = transfer.value
-    await resource.core.applyProof(transfer.proof)
+    if (!resource || !transfer) fail('archive block transfer is incomplete')
+    const result = await blockEngine.finish({
+      handle: resource.blockHandle,
+      request,
+      transfer,
+      proof: transfer.proofMetadata.proof,
+    })
+    if (result.status === 'ignored') {
+      queueArchiveRetry(scope, tracked, request)
+      await pumpArchiveSessions(scope)
+      return
+    }
     const key = archiveBlockKey(request.coreKey, request.index)
     scope.archivePending.delete(key)
     scope.archiveRetries.delete(key)
     scope.archiveFailures.delete(key)
     tracked.archiveRequest = null
-
     tracked.archiveTransfer = null
     clearArchiveTimer(tracked)
     await pumpArchiveSession(scope, tracked)
@@ -2359,24 +2325,59 @@ export function createScopedNetworkRuntime (options = {}) {
         return { status: 'sent' }
       case 'archive-block-proof': {
         const request = tracked.archiveRequest
-        if (!request || tracked.archiveTransfer || !archiveResourceFor(scope, request.coreKey, request.index)) fail('unexpected archive proof')
+        const resource = request && archiveResourceFor(scope, request.coreKey, request.index)
+        if (!resource || tracked.archiveTransfer) fail('unexpected archive proof')
         const metadata = decodeArchiveProof(frame.payload, request)
-        tracked.archiveTransfer = { proof: metadata.proof, value: b4a.allocUnsafe(metadata.byteLength), nextOffset: 0 }
+        const transfer = blockEngine.createTransfer({
+          handle: resource.blockHandle,
+          resourceId: request.coreKey,
+          start: resource.range.start,
+          end: resource.range.end,
+          index: request.index,
+          peerId: tracked.peerId,
+          transferId: archiveBlockKey(request.coreKey, request.index),
+        })
+        const received = blockEngine.receiveProofPart({
+          handle: resource.blockHandle,
+          transfer,
+          part: {
+            resourceId: request.coreKey,
+            start: resource.range.start,
+            end: resource.range.end,
+            index: request.index,
+            offset: 0,
+            totalBytes: frame.payload.byteLength,
+            chunk: frame.payload,
+          },
+        })
+        if (received.status !== 'complete') fail('archive proof transfer is incomplete')
+        transfer.proofMetadata = metadata
+        transfer.expectedBlockBytes = metadata.byteLength
+        tracked.archiveTransfer = transfer
         if (metadata.byteLength === 0) await finishArchiveTransfer(scope, tracked)
         return { status: 'accepted' }
       }
       case 'archive-block-chunk': {
         const request = tracked.archiveRequest
         const transfer = tracked.archiveTransfer
-        if (!request || !transfer || !archiveResourceFor(scope, request.coreKey, request.index)) fail('unexpected archive block chunk')
+        const resource = request && archiveResourceFor(scope, request.coreKey, request.index)
+        if (!resource || !transfer) fail('unexpected archive block chunk')
         const chunk = decodeAssetChunk(frame.payload)
-        if (chunk.index !== request.index || chunk.offset !== transfer.nextOffset ||
-            chunk.value.byteLength === 0 || chunk.offset + chunk.value.byteLength > transfer.value.byteLength) {
-          fail('archive block chunk is out of sequence')
-        }
-        b4a.copy(chunk.value, transfer.value, chunk.offset)
-        transfer.nextOffset += chunk.value.byteLength
-        if (transfer.nextOffset === transfer.value.byteLength) await finishArchiveTransfer(scope, tracked)
+        if (chunk.index !== request.index) fail('archive block chunk is out of sequence')
+        const received = blockEngine.receiveBlockPart({
+          handle: resource.blockHandle,
+          transfer,
+          part: {
+            resourceId: request.coreKey,
+            start: resource.range.start,
+            end: resource.range.end,
+            index: request.index,
+            offset: chunk.offset,
+            totalBytes: transfer.expectedBlockBytes,
+            chunk: chunk.value,
+          },
+        })
+        if (received.status === 'complete') await finishArchiveTransfer(scope, tracked)
         return { status: 'accepted' }
       }
       case 'archive-block-unavailable': {
@@ -2431,6 +2432,7 @@ export function createScopedNetworkRuntime (options = {}) {
     scope.archiveChallengeProofTransfers?.clear()
     for (const peerId of [...scope.sessions.keys()]) closeSession(scope, peerId, 'scope-released')
     for (const resource of scope.archiveResources?.values() || []) {
+      blockEngine.detach(resource.blockHandle)
       try { resource.releaseArchiveProtection?.() } catch { /* best-effort protection release */ }
       resource.releaseArchiveProtection = null
     }
@@ -4053,6 +4055,13 @@ export function createScopedNetworkRuntime (options = {}) {
             { manifest, renditionId: id, range: { ...range } },
           ]]),
         }))
+        scope.blockHandle = assetSession.blockEngine.attach({
+          scope,
+          source: assetSession.blockSource,
+          allowedRange: range,
+          policyEpoch: () => networkPolicyEpoch,
+          mayServe: () => Boolean(scopeUploadRetentionClass(scope)) && networkEnabled,
+        })
       } catch (error) {
         try { await assetSession?.close?.() } catch { /* best-effort failed-session close */ }
         throw error
@@ -4645,6 +4654,29 @@ export function createScopedNetworkRuntime (options = {}) {
         nextIndex: shouldDownload === false ? range.end : range.start,
         releaseArchiveProtection,
       }
+      resource.blockSource = {
+        resourceId: coreKey,
+        length: range.end,
+        async apply({ index, proof, value, isActive }) {
+          if (!isActive()) throw new Error('archive block request is closed')
+          try {
+            const applied = await core.applyProof({ ...proof, block: { ...proof.block, value } })
+            if (applied !== true) throw new Error('core.applyProof rejected the archive block')
+            if (!await core.has(index)) throw new Error('verified archive block was not committed')
+          } catch (cause) {
+            resource.quarantined = true
+            await core.close?.()
+            throw new Error('archive block proof verification failed', { cause })
+          }
+        },
+      }
+      resource.blockHandle = blockEngine.attach({
+        scope,
+        source: resource.blockSource,
+        allowedRange: range,
+        policyEpoch: () => networkPolicyEpoch,
+        mayServe: () => archiveAllowed && networkEnabled,
+      })
       scope.archiveResources.set(resourceId, resource)
       void pumpArchiveSessions(scope)
       const result = { status: 'retained', archiveId, coreKey, range: { ...range }, topic: stableScopeDiagnostic(scope) }
@@ -4663,7 +4695,7 @@ export function createScopedNetworkRuntime (options = {}) {
     if (!Number.isSafeInteger(index) || index < 0) fail('archive challenge index is invalid')
     for (const retained of archives.values()) {
       const resource = retained.resource
-      if (resource.archiveId === id && resource.coreKey === key &&
+      if (resource.quarantined !== true && resource.archiveId === id && resource.coreKey === key &&
           index >= resource.range.start && index < resource.range.end) return resource
     }
     fail('archive challenge is outside the retained pledge range')
@@ -4703,6 +4735,7 @@ export function createScopedNetworkRuntime (options = {}) {
     let released = false
     for (const [resourceId, value] of retained) {
       archives.delete(resourceId)
+      blockEngine.detach(value.resource.blockHandle)
       value.scope.archiveResources?.delete(resourceId)
       try { value.resource.releaseArchiveProtection?.() } catch { /* best-effort protection release */ }
       value.resource.releaseArchiveProtection = null
@@ -4883,6 +4916,7 @@ export function createScopedNetworkRuntime (options = {}) {
       closing.push(leaveScope(scope))
     }
     await Promise.allSettled(closing)
+    await blockEngine.close()
     await leaveAllDirectPeers()
     directPeerRefs.clear()
     activeConnections.clear()

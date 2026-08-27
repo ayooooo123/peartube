@@ -541,8 +541,10 @@ function sourceIdentityFor (job) {
   const title = job.request.measuredFacts.title || (context.kind === 'movie'
     ? context.identifier
     : `${context.seriesIdentifier} S${context.seasonNumber}E${context.episodeNumber}`)
+  const namespace = context.kind === 'movie' ? context.namespace : context.seriesNamespace
+  const identifier = context.kind === 'movie' ? context.identifier : context.seriesIdentifier
   return {
-    sourceId: `companion-${hashHex('peartube.companion.ingest.work.v1', canonicalize(context)).slice(0, 32)}`,
+    sourceId: `${namespace}:${context.kind === 'movie' ? 'movie' : 'show'}:${identifier}`,
     creatorName: title
   }
 }
@@ -825,7 +827,7 @@ export function createIngestManager ({
       length: isDirect ? undefined : job.expectedBytes,
       signal
     })
-    const authoritativeEtag = isDirect ? metadata.etag : etag
+    const authoritativeEtag = isDirect ? (job.request.expected.etag ?? metadata.etag) : etag
     return {
       client,
       capability: resolved.type === 'legacy' ? params.capability : params,
@@ -1184,7 +1186,6 @@ export function createIngestManager ({
       if (ingestSpoolLease != null && spool == null) fail('SPOOL_OWNERSHIP_INVALID', 'ingest spool ownership handoff failed', 500)
       const key = text(idempotencyKey, 'idempotencyKey', 128, { pattern: ID })
 
-      let preppedRequest = request
       if (sourceDescriptor) {
         const resolved = registry.resolveSourceClient({ sourceDescriptor })
         if (!resolved) fail('SOURCE_UNAVAILABLE', 'No usable source provider configured for this descriptor', 503)
@@ -1192,19 +1193,16 @@ export function createIngestManager ({
         if (!Number.isSafeInteger(directProbed?.length) || directProbed.length <= 0) {
           fail('SOURCE_LENGTH_INVALID', 'Direct source provider returned invalid length', 502)
         }
-        preppedRequest = {
-          ...request,
-          expected: {
-            ...(request?.expected || {}),
-            byteLength: directProbed.length,
-            etag: directProbed.etag || request?.expected?.etag
-          },
-          measuredFacts: {
-            ...(request?.measuredFacts || {}),
-            byteLength: directProbed.length
-          }
+        if (directProbed.length !== request?.expected?.byteLength ||
+            directProbed.length !== request?.measuredFacts?.byteLength) {
+          fail('SOURCE_LENGTH_MISMATCH', 'Direct source length does not match the requested asset', 409)
+        }
+        if (request?.expected?.etag != null && directProbed.etag !== request.expected.etag) {
+          fail('SOURCE_ETAG_MISMATCH', 'Direct source ETag does not match the requested asset', 409)
         }
       }
+
+      const preppedRequest = request
 
       const normalized = normalizeIngestRequest(preppedRequest)
       const fingerprint = normalizedFingerprint(normalized)
@@ -1379,6 +1377,17 @@ export function createIngestManager ({
         job = await store.getJob(jobId)
       }
       return publicJob(job)
+    },
+
+    async listJobs (limit = 64) {
+      const jobs = typeof store.listRecent === 'function'
+        ? await store.listRecent(limit)
+        : await store.listActive()
+      return jobs.map(job => ({
+        ...publicJob(job),
+        title: job.request?.measuredFacts?.title || null,
+        mediaContext: job.request?.mediaContext || null
+      }))
     },
 
     async getStatus () {

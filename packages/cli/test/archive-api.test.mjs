@@ -8,10 +8,8 @@ import { isLoopbackHost } from '../src/archive-api.js'
 import { createRelayService } from '../src/service.js'
 import { resolveRelayConfig } from '../src/config.js'
 
-// A relay's own console answers submissions with 303 redirects, which a program
-// cannot read. These cover the machine-facing surface a client application backend
-// drives: enqueue by upload, poll by job id, and read the published catalog as
-// references that mean something on another machine.
+// The authenticated v2 companion surface owns ingest. This file keeps the
+// temporarily-live v1 catalog/stream surface and the browser UI boundary.
 
 function fakeMetaDb() {
   const map = new Map()
@@ -48,6 +46,7 @@ function catalogPage() {
 }
 
 function fakeService(overrides = {}) {
+  const jobs = []
   return {
     runtime: {
       ctx: { metaDb: fakeMetaDb() },
@@ -58,7 +57,20 @@ function fakeService(overrides = {}) {
     creators: { getCreators() { return [] } },
     getCreatorTargets() { return [] },
     getTrustedClients() { return [] },
-    async publishArchiveJob() {},
+    async submitArchiveIngestJob(input) {
+      const job = {
+        jobId: `ing_ui_${jobs.length + 1}`,
+        state: 'queued',
+        title: input.request.measuredFacts.title,
+        mediaContext: input.request.mediaContext,
+        errorCode: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      }
+      jobs.push(job)
+      return job
+    },
+    async listIngestJobs() { return jobs },
     ...overrides.service
   }
 }
@@ -86,482 +98,6 @@ async function withRelay(fn, { service = fakeService(), consoleOptions = {}, hos
   }
 }
 
-async function settledJob(base, jobId) {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const job = await (await fetch(`${base}/api/v1/archive/${jobId}`)).json()
-    if (job.status === 'completed' || job.status === 'failed') return job
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  }
-  throw new Error(`archive job ${jobId} never settled`)
-}
-
-function upload(fields) {
-  const body = new FormData()
-  for (const [key, value] of Object.entries(fields)) body.set(key, value)
-  body.set('file', new Blob([Buffer.from('FAKE-MP4-BYTES')], { type: 'video/mp4' }), 'clip.mp4')
-  return { method: 'POST', body }
-}
-
-test('POST /api/v1/archive accepts a movie upload and answers a job id', async function (t) {
-  await withRelay(async ({ base }) => {
-    const res = await fetch(`${base}/api/v1/archive`, upload({
-      contentKind: 'movie',
-      tmdbId: '9367',
-      tmdbTitle: 'Wedding Crashers',
-      tmdbYear: '2005'
-    }))
-
-    t.is(res.status, 202)
-    t.is(res.headers.get('content-type'), 'application/json; charset=utf-8')
-    const body = await res.json()
-    t.ok(/^arch_[0-9a-f]{16}$/.test(body.jobId), 'the caller is handed a job id it can poll')
-    t.is(body.status, 'queued')
-    t.is(body.entityHint, 'movie:9367', 'the canonical work key lets the caller correlate the publication')
-
-    const job = await (await fetch(`${base}/api/v1/archive/${body.jobId}`)).json()
-    t.is(job.jobId, body.jobId)
-    t.is(job.title, 'Wedding Crashers', 'the job is named after the catalogue title')
-  })
-})
-
-test('POST /api/v1/archive derives the show:season:episode hint for an episode', async function (t) {
-  // Refusing to ingest settles the job immediately, so the status/error contract
-  // a caller polls is observed rather than raced.
-  const service = fakeService({ service: { canArchive: () => false } })
-  await withRelay(async ({ base }) => {
-    const res = await fetch(`${base}/api/v1/archive`, upload({
-      contentKind: 'episode',
-      tmdbId: '95396',
-      tmdbTitle: 'Severance',
-      tmdbSeason: '2',
-      tmdbEpisode: '4',
-      title: 'Severance S2E4'
-    }))
-
-    t.is(res.status, 202)
-    const body = await res.json()
-    t.is(body.entityHint, 'show:95396:s2:e4')
-
-    const job = await settledJob(base, body.jobId)
-    t.is(job.jobId, body.jobId)
-    t.is(job.status, 'failed')
-    t.ok(job.error.includes('storage threshold'), 'a failure reaches the caller as text, not as a redirect')
-    t.is(job.title, 'Severance S2E4', 'an episode keeps its own title over the series name')
-    t.is(job.source, null, 'nothing was published, so no source is offered')
-  }, { service })
-})
-
-test('a malformed episode is refused with the field that is wrong, before anything is enqueued', async function (t) {
-  await withRelay(async ({ base, uploadDir }) => {
-    const res = await fetch(`${base}/api/v1/archive`, upload({
-      contentKind: 'episode',
-      tmdbId: '95396',
-      tmdbTitle: 'Severance',
-      tmdbEpisode: '4'
-    }))
-
-    t.is(res.status, 400)
-    t.is(res.headers.get('content-type'), 'application/json; charset=utf-8')
-    const body = await res.json()
-    t.is(body.error.code, 'INVALID_SEASON')
-    t.is(body.error.field, 'tmdbSeason', 'the caller is told which field to fix')
-    t.ok(body.error.message.length > 0)
-
-    const jobs = await (await fetch(`${base}/jobs`)).json()
-    t.is(jobs.jobs.length, 0, 'a half-specified episode never reaches the pipeline')
-    // A rejected upload must not leave its bytes on an unauthenticated relay.
-    t.absent(readdirSync(join(uploadDir, 'uploads'), { withFileTypes: true }).length > 0, 'the staged upload is discarded')
-  })
-})
-
-test('a movie upload cannot smuggle episode coordinates', async function (t) {
-  await withRelay(async ({ base }) => {
-    const res = await fetch(`${base}/api/v1/archive`, upload({
-      contentKind: 'movie',
-      tmdbId: '9367',
-      tmdbTitle: 'Wedding Crashers',
-      tmdbSeason: '1'
-    }))
-
-    t.is(res.status, 400)
-    const body = await res.json()
-    t.is(body.error.code, 'UNEXPECTED_FIELD')
-    t.is(body.error.field, 'tmdbSeason')
-  })
-})
-
-// A url seed hands the relay a source to fetch instead of bytes to receive.
-// Resolution is stubbed to a public address only where the test's host has to
-// be reachable in principle; every refusal below runs the real resolver.
-const PUBLIC_LOOKUP = (host, opts, cb) => cb(null, [{ address: '93.184.216.34', family: 4 }])
-
-function seed(body) {
-  return {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body)
-  }
-}
-
-// Records what the pipeline was actually asked to fetch, then fails the job so
-// nothing tries to publish it.
-function recordingDownloader(seen) {
-  return {
-    async download(input) {
-      seen.push(input)
-      throw new Error('download not attempted in this test')
-    }
-  }
-}
-
-test('POST /api/v1/archive accepts a movie url seed and enqueues the fetch', async function (t) {
-  const seen = []
-  await withRelay(async ({ base, uploadDir }) => {
-    const res = await fetch(`${base}/api/v1/archive`, seed({
-      url: 'https://cdn.example.com/wedding-crashers.mp4',
-      contentKind: 'movie',
-      // A typed client sends this as a number; the contract accepts both.
-      tmdbId: 9367,
-      tmdbTitle: 'Wedding Crashers',
-      tmdbYear: '2005',
-      tmdbGenres: ['Comedy', 'Romance']
-    }))
-
-    t.is(res.status, 202)
-    const body = await res.json()
-    t.ok(/^arch_[0-9a-f]{16}$/.test(body.jobId), 'a url seed is polled by job id like any other')
-    t.is(body.status, 'queued')
-    t.is(body.entityHint, 'movie:9367', 'a url seed collapses onto the same work key an upload would')
-
-    await settledJob(base, body.jobId)
-    t.is(seen.length, 1, 'the relay fetches the source itself')
-    t.is(seen[0].url, 'https://cdn.example.com/wedding-crashers.mp4')
-    t.ok(seen[0].requirePublicSource, 'the job is marked so the downloader re-checks every redirect hop')
-    t.absent(seen[0].uploadPath, 'no bytes were staged for a url seed')
-    t.is(readdirSync(uploadDir).length, 0, 'a url seed writes nothing to the upload directory')
-  }, { consoleOptions: { sourceLookup: PUBLIC_LOOKUP, downloader: recordingDownloader(seen) } })
-})
-
-test('POST /api/v1/archive deduplicates concurrent submissions with one idempotency key', async function (t) {
-  let markStarted
-  let releaseDownload
-  const started = new Promise((resolve) => { markStarted = resolve })
-  const blocked = new Promise((resolve) => { releaseDownload = resolve })
-  const seen = []
-  const downloader = {
-    async download(input) {
-      seen.push(input)
-      markStarted()
-      await blocked
-      throw new Error('end idempotency test')
-    }
-  }
-
-  await withRelay(async ({ base }) => {
-    const body = {
-      url: 'https://cdn.example.com/wedding-crashers.mp4',
-      contentKind: 'movie',
-      tmdbId: '9367',
-      tmdbTitle: 'Wedding Crashers'
-    }
-    const submit = () => fetch(`${base}/api/v1/archive`, {
-      ...seed(body),
-      headers: { 'content-type': 'application/json', 'idempotency-key': 'client-v1:movie-9367-source-a' }
-    })
-
-    const first = await submit()
-    t.is(first.status, 202)
-    const firstJob = await first.json()
-    await started
-
-    const second = await submit()
-    t.is(second.status, 202)
-    const secondJob = await second.json()
-    t.is(secondJob.jobId, firstJob.jobId, 'the retry observes the original job instead of fetching the movie twice')
-    t.is(seen.length, 1, 'only one downloader owns the source')
-
-    const jobs = await (await fetch(`${base}/jobs`)).json()
-    t.is(jobs.jobs.length, 1, 'only one durable archive job exists for the key')
-    releaseDownload()
-    await settledJob(base, firstJob.jobId)
-  }, { consoleOptions: { sourceLookup: PUBLIC_LOOKUP, downloader } })
-})
-
-test('POST /api/v1/archive requeues the same durable job after failure', async function (t) {
-  let attempts = 0
-  const downloader = {
-    async download() {
-      attempts += 1
-      throw new Error(`retryable failure ${attempts}`)
-    }
-  }
-
-  await withRelay(async ({ base }) => {
-    const body = {
-      url: 'https://cdn.example.com/retryable.mp4',
-      contentKind: 'movie',
-      tmdbId: '9367',
-      tmdbTitle: 'Wedding Crashers'
-    }
-    const submit = () => fetch(`${base}/api/v1/archive`, {
-      ...seed(body),
-      headers: { 'content-type': 'application/json', 'idempotency-key': 'client-v1:movie-9367-retryable' }
-    })
-
-    const first = await (await submit()).json()
-    t.is((await settledJob(base, first.jobId)).status, 'failed')
-
-    const retry = await (await submit()).json()
-    t.is(retry.jobId, first.jobId, 'the retry requeues the original durable identity')
-    t.is((await settledJob(base, retry.jobId)).status, 'failed')
-    t.is(attempts, 2, 'the same job gets one fresh execution')
-
-    const jobs = await (await fetch(`${base}/jobs`)).json()
-    t.is(jobs.jobs.length, 1, 'a retry cannot leave a second publishable job behind')
-  }, { consoleOptions: { sourceLookup: PUBLIC_LOOKUP, downloader } })
-})
-
-test('idempotent upload retry replaces failed staged bytes without leaking them', async function (t) {
-  let canArchive = false
-  const service = fakeService({ service: { canArchive: () => canArchive } })
-  const stagedFileCount = (uploadDir) => readdirSync(uploadDir, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile()).length
-
-  await withRelay(async ({ base, uploadDir }) => {
-    const submit = () => {
-      const request = upload({
-        contentKind: 'movie',
-        tmdbId: '9367',
-        tmdbTitle: 'Wedding Crashers'
-      })
-      request.headers = { 'idempotency-key': 'client-v1:movie-9367-upload-retry' }
-      return fetch(`${base}/api/v1/archive`, request)
-    }
-
-    const first = await (await submit()).json()
-    t.is((await settledJob(base, first.jobId)).status, 'failed')
-    t.ok(stagedFileCount(uploadDir) > 0, 'the retryable failure retains its staged upload')
-
-    canArchive = true
-    const retry = await (await submit()).json()
-    t.is(retry.jobId, first.jobId, 'replacement bytes reuse the original durable job')
-    t.is((await settledJob(base, retry.jobId)).status, 'failed')
-    t.is(stagedFileCount(uploadDir), 0, 'old and replacement staging are both released')
-  }, { service })
-})
-
-test('POST /api/v1/archive derives the show:season:episode hint for a url seed', async function (t) {
-  const seen = []
-  await withRelay(async ({ base }) => {
-    const res = await fetch(`${base}/api/v1/archive`, seed({
-      url: 'https://cdn.example.com/severance-s02e04.mkv',
-      contentKind: 'episode',
-      tmdbId: '95396',
-      tmdbTitle: 'Severance',
-      tmdbSeason: 2,
-      tmdbEpisode: 4
-    }))
-
-    t.is(res.status, 202)
-    t.is((await res.json()).entityHint, 'show:95396:s2:e4')
-  }, { consoleOptions: { sourceLookup: PUBLIC_LOOKUP, downloader: recordingDownloader(seen) } })
-})
-
-test('a url seed is validated against the same coordinates an upload is', async function (t) {
-  await withRelay(async ({ base }) => {
-    const missingSeason = await fetch(`${base}/api/v1/archive`, seed({
-      url: 'https://cdn.example.com/severance.mkv',
-      contentKind: 'episode',
-      tmdbId: '95396',
-      tmdbTitle: 'Severance',
-      tmdbEpisode: '4'
-    }))
-    t.is(missingSeason.status, 400)
-    t.is((await missingSeason.json()).error.code, 'INVALID_SEASON')
-
-    const badKind = await fetch(`${base}/api/v1/archive`, seed({
-      url: 'https://cdn.example.com/x.mp4',
-      contentKind: 'trailer',
-      tmdbId: '9367',
-      tmdbTitle: 'Wedding Crashers'
-    }))
-    t.is(badKind.status, 400)
-    t.is((await badKind.json()).error.code, 'INVALID_CONTENT_KIND')
-  }, { consoleOptions: { sourceLookup: PUBLIC_LOOKUP } })
-})
-
-// A watched-media contribution and a deliberate archive pin draw on different
-// budgets and are evicted by different rules, so the caller says which one it
-// is asking for. An older caller that says nothing still gets an archive pin.
-test('a url seed carries the retention class it is asking for', async function (t) {
-  const seen = []
-  await withRelay(async ({ base }) => {
-    const contribution = await fetch(`${base}/api/v1/archive`, seed({
-      url: 'https://cdn.example.com/watched.mkv',
-      contentKind: 'movie',
-      tmdbId: '603',
-      tmdbTitle: 'The Matrix',
-      retentionClass: 'contribution-cache'
-    }))
-    t.is(contribution.status, 202)
-    await settledJob(base, (await contribution.json()).jobId)
-
-    const unspecified = await fetch(`${base}/api/v1/archive`, seed({
-      url: 'https://cdn.example.com/archived.mkv',
-      contentKind: 'movie',
-      tmdbId: '604',
-      tmdbTitle: 'The Matrix Reloaded'
-    }))
-    t.is(unspecified.status, 202)
-    await settledJob(base, (await unspecified.json()).jobId)
-
-    t.is(seen.length, 2)
-    t.is(seen[0].retentionClass, 'contribution-cache',
-      'a contribution is charged against the contribution budget')
-    t.is(seen[1].retentionClass, 'archive-pin',
-      'a caller that names no class still means an archive pin')
-
-    const bogus = await fetch(`${base}/api/v1/archive`, seed({
-      url: 'https://cdn.example.com/x.mkv',
-      contentKind: 'movie',
-      tmdbId: '605',
-      tmdbTitle: 'The Matrix Revolutions',
-      retentionClass: 'whatever-i-like'
-    }))
-    t.is(bogus.status, 400)
-    t.is((await bogus.json()).error.code, 'INVALID_RETENTION_CLASS')
-    t.is(seen.length, 2, 'a refused class never became a job')
-  }, { consoleOptions: { sourceLookup: PUBLIC_LOOKUP, downloader: recordingDownloader(seen) } })
-})
-
-test('a submission carries either a file or a url, never both and never neither', async function (t) {
-  await withRelay(async ({ base, uploadDir }) => {
-    const neither = new FormData()
-    neither.set('contentKind', 'movie')
-    neither.set('tmdbId', '9367')
-    neither.set('tmdbTitle', 'Wedding Crashers')
-    const noSource = await fetch(`${base}/api/v1/archive`, { method: 'POST', body: neither })
-    t.is(noSource.status, 400)
-    t.is((await noSource.json()).error.code, 'SOURCE_REQUIRED')
-
-    const asJson = await fetch(`${base}/api/v1/archive`, seed({
-      contentKind: 'movie',
-      tmdbId: '9367',
-      tmdbTitle: 'Wedding Crashers',
-      // A caller still cannot name a path on the relay's disk: only `url` is
-      // read, and a path is not a url.
-      filePath: '/etc/passwd'
-    }))
-    t.is(asJson.status, 400)
-    t.is((await asJson.json()).error.code, 'SOURCE_REQUIRED')
-
-    const both = new FormData()
-    both.set('contentKind', 'movie')
-    both.set('tmdbId', '9367')
-    both.set('tmdbTitle', 'Wedding Crashers')
-    both.set('url', 'https://cdn.example.com/wedding-crashers.mp4')
-    both.set('file', new Blob([Buffer.from('FAKE-MP4-BYTES')], { type: 'video/mp4' }), 'clip.mp4')
-    const ambiguous = await fetch(`${base}/api/v1/archive`, { method: 'POST', body: both })
-    t.is(ambiguous.status, 400)
-    const body = await ambiguous.json()
-    t.is(body.error.code, 'AMBIGUOUS_SOURCE')
-    t.is(body.error.field, 'url', 'the caller is told which of the two to drop')
-    t.absent(readdirSync(join(uploadDir, 'uploads'), { withFileTypes: true }).length > 0, 'the staged upload is discarded')
-  })
-})
-
-test('the relay refuses to fetch a url that is not public http(s)', async function (t) {
-  // No stubbed resolver here: these run the guard the relay actually ships.
-  await withRelay(async ({ base }) => {
-    const coordinates = { contentKind: 'movie', tmdbId: '9367', tmdbTitle: 'Wedding Crashers' }
-    const refusals = [
-      ['file:///etc/shadow', 'SOURCE_SCHEME_NOT_ALLOWED'],
-      ['gopher://example.com/1', 'SOURCE_SCHEME_NOT_ALLOWED'],
-      ['https://someone:secret@cdn.example.com/x.mp4', 'SOURCE_CREDENTIALS_NOT_ALLOWED'],
-      // A literal in private space, and the same address written to look like
-      // it is not one.
-      ['http://10.0.0.5/x.mp4', 'SOURCE_HOST_NOT_PUBLIC'],
-      ['http://192.168.1.1/x.mp4', 'SOURCE_HOST_NOT_PUBLIC'],
-      ['http://169.254.169.254/latest/meta-data/', 'SOURCE_HOST_NOT_PUBLIC'],
-      ['http://2130706433/x.mp4', 'SOURCE_HOST_NOT_PUBLIC'],
-      ['http://[::1]/x.mp4', 'SOURCE_HOST_NOT_PUBLIC'],
-      // Resolved, not pattern-matched: `localhost` is a name, and it is
-      // refused because of what it points at.
-      ['http://localhost:9/x.mp4', 'SOURCE_HOST_NOT_PUBLIC'],
-      ['http://not-a-url', 'SOURCE_HOST_UNRESOLVABLE']
-    ]
-
-    for (const [url, code] of refusals) {
-      const res = await fetch(`${base}/api/v1/archive`, seed({ ...coordinates, url }))
-      t.is(res.status, 400, `${url} is refused`)
-      const body = await res.json()
-      t.is(body.error.code, code, `${url} names why`)
-      t.is(body.error.field, 'url')
-    }
-
-    const jobs = await (await fetch(`${base}/jobs`)).json()
-    t.is(jobs.jobs.length, 0, 'nothing the guard refused ever became a job')
-  })
-})
-
-test('a malformed JSON submission is named as JSON rather than as a bad upload', async function (t) {
-  await withRelay(async ({ base }) => {
-    const res = await fetch(`${base}/api/v1/archive`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{"url": '
-    })
-    t.is(res.status, 400)
-    t.is((await res.json()).error.code, 'INVALID_JSON')
-  })
-})
-
-test('an unknown job id answers 404 as JSON', async function (t) {
-  await withRelay(async ({ base }) => {
-    const res = await fetch(`${base}/api/v1/archive/arch_0000000000000000`)
-
-    t.is(res.status, 404)
-    t.is(res.headers.get('content-type'), 'application/json; charset=utf-8')
-    const body = await res.json()
-    t.is(body.error.code, 'JOB_NOT_FOUND')
-    t.is(body.error.field, 'jobId')
-  })
-})
-
-test('GET /api/v1/archive/:jobId reports portable references once a job has published', async function (t) {
-  await withRelay(async ({ base, relay }) => {
-    const jobId = 'arch_00000000000000ff'
-    await relay.store.addJob({
-      id: jobId,
-      status: 'completed',
-      title: 'Wedding Crashers',
-      error: null,
-      previewVideo: {
-        id: 'video-1',
-        immutablePublication: {
-          publicationId: 'pub-1',
-          manifestId: 'manifest-1',
-          renditionId: 'rend-1',
-          publisherId: 'cd'.repeat(32),
-          entityRef: 'peartube:media-entity:v1:work:0123',
-          manifest: { body: { renditions: [{ renditionId: 'rend-1', core: { key: CORE_KEY, length: 42, byteLength: 1024 } }] } }
-        }
-      }
-    }, {})
-
-    const res = await fetch(`${base}/api/v1/archive/${jobId}`)
-    t.is(res.status, 200)
-    const body = await res.json()
-    t.is(body.status, 'completed')
-    t.is(body.error, null)
-    t.is(body.source.entityId, 'peartube:media-entity:v1:work:0123')
-    t.is(body.source.publicationId, 'pub-1')
-    t.is(body.source.renditionId, 'rend-1')
-    t.is(body.source.coreKey, CORE_KEY, 'a remote node is told which core holds the bytes')
-    t.is(body.source.byteLength, 1024)
-    t.absent(JSON.stringify(body).includes('127.0.0.1'), 'no loopback URL is offered as a source')
-  })
-})
 
 test('GET /api/v1/catalog publishes portable references and never a loopback URL', async function (t) {
   await withRelay(async ({ base }) => {
@@ -756,25 +292,15 @@ test('a media graph that never answers becomes a retryable 503, not a held conne
   }, { service })
 })
 
-test('unknown /api/v1 paths and wrong methods answer JSON, never the HTML console', async function (t) {
+test('v1 ingest submit and status routes are retired', async function (t) {
   await withRelay(async ({ base }) => {
-    const unknown = await fetch(`${base}/api/v1/nope`)
-    t.is(unknown.status, 404)
-    t.is(unknown.headers.get('content-type'), 'application/json; charset=utf-8')
-    t.is((await unknown.json()).error.code, 'NOT_FOUND')
-
-    const wrongMethod = await fetch(`${base}/api/v1/archive`)
-    t.is(wrongMethod.status, 405)
-    t.is(wrongMethod.headers.get('allow'), 'POST')
-    t.is((await wrongMethod.json()).error.code, 'METHOD_NOT_ALLOWED')
-
-    const wrongCatalogMethod = await fetch(`${base}/api/v1/catalog`, { method: 'POST' })
-    t.is(wrongCatalogMethod.status, 405)
-    t.is(wrongCatalogMethod.headers.get('allow'), 'GET')
-
-    const root = await fetch(`${base}/api/v1`)
-    t.is(root.status, 404)
-    t.is((await root.json()).error.code, 'NOT_FOUND')
+    const retired = `${base}/api/v1/${'archive'}`
+    const submit = await fetch(retired, { method: 'POST' })
+    t.is(submit.status, 404)
+    t.is((await submit.json()).error.code, 'NOT_FOUND')
+    const status = await fetch(`${retired}/ing_old`)
+    t.is(status.status, 404)
+    t.is((await status.json()).error.code, 'NOT_FOUND')
   })
 })
 
@@ -950,14 +476,7 @@ async function driveApi(base) {
   const streamBody = /json/.test(stream.headers.get('content-type') || '')
     ? await stream.json()
     : Buffer.from(await stream.arrayBuffer())
-  const posted = await fetch(`${base}/api/v1/archive`, upload({
-    contentKind: 'movie',
-    tmdbId: '9367',
-    tmdbTitle: 'Wedding Crashers'
-  }))
-  const postedBody = await posted.json()
-  const job = await fetch(`${base}/api/v1/archive/${postedBody.jobId}`)
-  return { catalog, catalogBody, stream, streamBody, posted, postedBody, job, jobBody: await job.json() }
+  return { catalog, catalogBody, stream, streamBody }
 }
 
 test('a relay bound to loopback serves catalog and stream with no configuration at all', async function (t) {
@@ -970,8 +489,6 @@ test('a relay bound to loopback serves catalog and stream with no configuration 
     t.is(api.stream.status, 200)
     t.alike(api.streamBody, RENDITION_BYTES, 'bytes are served on the interface only this machine can reach')
     t.is(opens.length, 1)
-    t.is(api.posted.status, 202)
-    t.is(api.job.status, 200)
   }, { service })
 })
 
@@ -991,11 +508,6 @@ test('a relay bound to 0.0.0.0 refuses catalog and stream until the operator opt
     t.is(api.streamBody.error.code, 'OPEN_ACCESS_NOT_ENABLED')
     t.is(opens.length, 0, 'a refused stream never asks the media graph to open anything')
 
-    // Submission was already reachable through the console form on this same
-    // interface, so gating it would break the archive flow and close nothing.
-    t.is(api.posted.status, 202)
-    t.is(api.job.status, 200)
-    t.is(api.jobBody.jobId, api.postedBody.jobId)
   }, { service, host: '0.0.0.0' })
 })
 
@@ -1009,8 +521,6 @@ test('the same relay serves catalog and stream once the operator sets the switch
     t.is(api.stream.status, 200)
     t.alike(api.streamBody, RENDITION_BYTES, 'and read the bytes over HTTP')
     t.is(opens.length, 1)
-    t.is(api.posted.status, 202)
-    t.is(api.job.status, 200)
   }, { service, host: '0.0.0.0', consoleOptions: { apiOpen: true } })
 })
 
@@ -1165,9 +675,6 @@ test('the access gate holds while the relay is still warming', async function (t
   t.is(warming.status, 503, 'with the switch set, the answer is the retryable one')
   t.is((await warming.json()).error.code, 'CATALOG_UNAVAILABLE')
 
-  const submit = await fetch(`http://127.0.0.1:${exposed.port}/api/v1/archive`, { method: 'POST' })
-  t.is(submit.status, 503, 'submission was never gated, so it degrades rather than refusing')
-  t.is((await submit.json()).error.code, 'MEDIA_GRAPH_UNAVAILABLE')
 })
 
 test('a media graph that stalls after answering once serves its last catalog rather than 503 forever', async function (t) {

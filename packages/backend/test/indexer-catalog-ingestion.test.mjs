@@ -13,10 +13,9 @@ import {
   INDEXES,
   createCatalogIngestor,
   createIndexerStore,
-  createLocalCatalogIndex,
+  createVerifiedQueryView,
   openIndexerDatabase,
 } from '../src/indexer/index.js'
-import { createIndexFederation } from '../src/search/index-federation.js'
 import {
   PUBLISHER_RECORD_TYPES,
   createPublisherAuthorizationState,
@@ -1174,7 +1173,7 @@ test('every exact pinned checkout closes after both successful and rejected inge
   t.alike(await f.index.getSourceCursor({ publisherId: f.publisherId, catalogEpoch: 0 }), cursor)
 })
 
-test('local catalog index backfills an existing episode for companion federation search', async t => {
+test('verified query view backfills an existing episode and resolves its accepted publication manifest and rendition', async t => {
   const f = await fixture(t)
   const subject = createEntityReference({
     entityKind: 'work',
@@ -1211,7 +1210,7 @@ test('local catalog index backfills an existing episode for companion federation
   await putProjection(f, 'claim', claimProjectionId(claim), claim)
 
   const indexingErrors = []
-  const local = await createLocalCatalogIndex({
+  const view = await createVerifiedQueryView({
     store: f.catalogStore,
     catalogRegistry: {
       async listBindings() {
@@ -1224,23 +1223,149 @@ test('local catalog index backfills an existing episode for companion federation
     },
     onError: error => indexingErrors.push(error),
   })
-  t.teardown(() => local.close())
-  const refreshed = await local.refresh()
+  t.teardown(() => view.close())
+  t.alike(await view.refresh(), { indexed: 1, failed: 0 })
   if (indexingErrors.length > 0) throw indexingErrors[0]
-  t.alike(refreshed, { indexed: 1, failed: 0 })
 
-  let randomValue = 0
-  const federation = createIndexFederation({
-    services: [local.service],
-    now: () => 1_700_000_000_000,
-    limits: { randomBytes: size => b4a.alloc(size, ++randomValue) },
-  })
-  t.teardown(() => federation.close())
-  const candidates = await federation.search({
-    selector: { namespace: 'tmdb', identifier: '95350', kind: 'episode', season: 1, episode: 2 },
+  const page = await view.query({
+    selectors: [{
+      type: 'exact-external-ref',
+      namespace: 'tmdb',
+      identifier: 'show:95350:s1:e2',
+    }],
     limit: 64,
   })
-  t.ok(candidates.length > 0, 'the existing local episode is searchable without a remote indexer')
-  t.ok(candidates.some(candidate => candidate.rendition.container === 'video/mp4'))
-  t.alike(candidates[0].sourceIndexers, [{ indexerId: local.service.indexerId, observedAtMs: 1_700_000_000_000 }])
+  t.is(page.results.length, 1)
+  t.is(page.results[0].entityId, subject.entityId)
+  t.is((await view.getPublication({ publicationId: manifest.publicationId })).manifestId, manifest.body.manifestId)
+  t.is((await view.getManifest({ publicationId: manifest.publicationId })).publicationId, manifest.publicationId)
+  t.ok(await view.authorizeRendition({
+    publicationId: manifest.publicationId,
+    renditionId: manifest.body.renditions[0].renditionId,
+    start: 0,
+    end: 1,
+    operation: 'stream',
+  }))
+})
+
+test('verified query pagination is deterministic, revision-bound, and fills pages after moderation', async t => {
+  const f = await fixture(t)
+  for (const sequence of [2, 3, 4]) {
+    const claim = externalClaimOperation(f, sequence)
+    await putProjection(f, 'claim', claimProjectionId(claim), claim)
+  }
+  const hidden = new Set()
+  let moderationRevision = 0
+  let entropy = 0
+  const view = await createVerifiedQueryView({
+    store: f.catalogStore,
+    catalogRegistry: {
+      async listBindings() {
+        return [{ publisherId: bytes(f.publisherId), namespaceDescriptor: f.descriptor, catalog: f.catalog }]
+      },
+    },
+    moderationPolicy: {
+      revision: () => moderationRevision,
+      isVisible: record => !hidden.has(record.sourceRecordRef),
+    },
+    randomBytes: size => b4a.alloc(size, ++entropy),
+  })
+  t.teardown(() => view.close())
+  await view.refresh()
+  const selectors = [{ type: 'exact-external-ref', namespace: 'imdb-title', identifier: 'tt0903747' }]
+  const complete = await view.query({ selectors, limit: 64 })
+  t.is(complete.results.length, 3)
+
+  const first = await view.query({ selectors, limit: 1 })
+  const wrongRevision = `${first.sourceRevision.slice(0, -1)}${first.sourceRevision.endsWith('0') ? '1' : '0'}`
+  const pinned = await view.query({ selectors, limit: 1, sourceRevision: first.sourceRevision })
+  t.alike(pinned.results, first.results)
+  await t.exception(view.query({ selectors, limit: 1, sourceRevision: wrongRevision }), { code: 'STALE_CURSOR' })
+  const second = await view.query({ selectors, limit: 1, cursor: first.nextCursor })
+  await t.exception(view.query({
+    selectors,
+    limit: 1,
+    cursor: first.nextCursor,
+    sourceRevision: wrongRevision,
+  }), { code: 'STALE_CURSOR' })
+  t.alike([first.results[0], second.results[0]], complete.results.slice(0, 2))
+  await t.exception(view.query({ selectors, limit: 1, cursor: 'x'.repeat(43) }), { code: 'INVALID_CURSOR' })
+
+  hidden.add(first.results[0].sourceRecordRef)
+  moderationRevision++
+  await t.exception(view.query({ selectors, limit: 1, cursor: second.nextCursor }), { code: 'STALE_CURSOR' })
+  const filled = await view.query({ selectors, limit: 1 })
+  t.alike(filled.results, [complete.results[1]])
+
+  const changed = externalClaimOperation(f, 5)
+  await putProjection(f, 'claim', claimProjectionId(changed), changed)
+  await view.refresh()
+  await t.exception(view.query({ selectors, limit: 1, cursor: filled.nextCursor }), { code: 'STALE_CURSOR' })
+})
+
+test('verified query rows and exact source heads persist across restart', async t => {
+  const f = await fixture(t)
+  const manifest = publicationManifest(f)
+  await putProjection(f, 'publication', manifest.publicationId, publicationOperation(f, manifest, 1))
+  const registry = {
+    async listBindings() {
+      return [{ publisherId: bytes(f.publisherId), namespaceDescriptor: f.descriptor, catalog: f.catalog }]
+    },
+  }
+  const first = await createVerifiedQueryView({ store: f.catalogStore, catalogRegistry: registry })
+  await first.refresh()
+  const source = await first.sourceState({ publisherId: f.publisherId })
+  await first.close()
+
+  const restarted = await createVerifiedQueryView({ store: f.catalogStore, catalogRegistry: registry })
+  t.teardown(() => restarted.close())
+  t.alike(await restarted.sourceState({ publisherId: f.publisherId }), source)
+  t.is((await restarted.getManifest({ publicationId: manifest.publicationId })).publicationId, manifest.publicationId)
+})
+
+test('one rejected publisher binding does not block another publisher refresh', async t => {
+  const accepted = await fixture(t)
+  const rejected = await fixture(t)
+  const manifest = publicationManifest(accepted)
+  await putProjection(accepted, 'publication', manifest.publicationId, publicationOperation(accepted, manifest, 1))
+  const errors = []
+  const view = await createVerifiedQueryView({
+    store: accepted.catalogStore,
+    catalogRegistry: {
+      async listBindings() {
+        return [
+          { publisherId: bytes(rejected.publisherId), namespaceDescriptor: accepted.descriptor, catalog: rejected.catalog },
+          { publisherId: bytes(accepted.publisherId), namespaceDescriptor: accepted.descriptor, catalog: accepted.catalog },
+        ]
+      },
+    },
+    onError: (error, context) => errors.push({ error, context }),
+  })
+  t.teardown(() => view.close())
+  t.alike(await view.refresh(), { indexed: 1, failed: 1 })
+  t.is(errors.length, 1)
+  t.is((await view.getPublication({ publicationId: manifest.publicationId })).publisherId, accepted.publisherId)
+})
+
+test('verified query refresh rejects a forged accepted-row writer signature', async t => {
+  const f = await fixture(t)
+  const manifest = publicationManifest(f)
+  const signed = publicationOperation(f, manifest, 1)
+  const forged = { ...signed, signature: b4a.from(signed.signature) }
+  forged.signature[0] ^= 1
+  await putProjection(f, 'publication', manifest.publicationId, forged)
+  const errors = []
+  const view = await createVerifiedQueryView({
+    store: f.catalogStore,
+    catalogRegistry: {
+      async listBindings() {
+        return [{ publisherId: bytes(f.publisherId), namespaceDescriptor: f.descriptor, catalog: f.catalog }]
+      },
+    },
+    onError: error => errors.push(error),
+  })
+  t.teardown(() => view.close())
+  t.alike(await view.refresh(), { indexed: 0, failed: 1 })
+  t.is(errors.length, 1)
+  t.absent(await view.sourceState({ publisherId: f.publisherId }))
 })

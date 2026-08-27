@@ -12,6 +12,7 @@ import { createBlockOffloader } from '../src/archive/block-offloader.js'
 import { createOffloadStorage } from '../src/archive/offload-storage.js'
 import { createRemoteBlockStore } from '../src/archive/remote-block-store.js'
 import { ASSET_BLOCK_SIZE, writeStaticAsset } from '../src/assets/static-core.js'
+import { createSourceReader } from '../src/assets/source-reader.js'
 import { createIngestJobStore } from '../../cli/src/companion/ingest-job-store.js'
 import { createIngestManager, ingestJobIdForRequest } from '../../cli/src/companion/ingest-manager.js'
 import { SourceCallbackError } from '../../cli/src/companion/source-client.js'
@@ -205,19 +206,29 @@ async function stageInterrupted (assetStore, createStagingStore, id, bytes) {
         windowBytes: WINDOW_BYTES
       })
     },
-    resume: {
-      id,
-      etag: ETAG,
-      open ({ byteOffset }) {
+    reader: createSourceReader({
+      resumable: true,
+      maxReadBytes: bytes.byteLength,
+      async describe() {
+        return {
+          identity: { kind: 'etag', value: ETAG },
+          byteLength: bytes.byteLength,
+          mimeType: 'application/octet-stream',
+        }
+      },
+      open({ offset, length }) {
         return (async function * () {
-          const limit = BREAK_AT_BLOCK * ASSET_BLOCK_SIZE
-          for (let offset = byteOffset; offset < limit; offset += ASSET_BLOCK_SIZE) {
-            yield bytes.subarray(offset, offset + ASSET_BLOCK_SIZE)
+          const end = offset + length
+          const limit = Math.min(end, BREAK_AT_BLOCK * ASSET_BLOCK_SIZE)
+          for (let cursor = offset; cursor < limit; cursor += ASSET_BLOCK_SIZE) {
+            yield bytes.subarray(cursor, Math.min(cursor + ASSET_BLOCK_SIZE, limit))
           }
-          throw Object.assign(new Error('source connection reset'), { code: 'SOURCE_RANGE_SHORT' })
+          if (limit < end) throw Object.assign(new Error('source connection reset'), { code: 'SOURCE_RANGE_SHORT' })
         })()
-      }
-    }
+      },
+      async close() {},
+    }),
+    resume: { id }
   }).then(() => null, (value) => value)
   if (error?.staging?.retained !== true) throw new Error('the fixture failed to leave staging state behind')
   return error

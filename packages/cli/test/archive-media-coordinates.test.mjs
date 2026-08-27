@@ -1,48 +1,6 @@
 import test from 'brittle'
-import { createArchiveManager, createArchivePublisher, deriveMediaCoordinates, enqueueArchiveJob, fetchPosterBytes, publishPosterArtwork } from '../src/archive-manager.js'
+import { deriveMediaCoordinates, fetchPosterBytes, publishPosterArtwork } from '../src/archive-manager.js'
 import { normalizeArchiveSubmission } from '../src/archive-api.js'
-
-function memStore () {
-  const jobs = []
-  const inputs = {}
-  return {
-    async listJobs () { return jobs },
-    async getPrivateInput (id) { return inputs[id] || null },
-    async addJob (job, privateInput) { jobs.unshift(job); inputs[job.id] = privateInput; return job },
-    async updateJob (id, patch) {
-      const index = jobs.findIndex((job) => job.id === id)
-      if (index >= 0) jobs[index] = { ...jobs[index], ...patch }
-      return jobs[index] || null
-    }
-  }
-}
-
-function harness () {
-  const store = memStore()
-  const calls = { upload: [], seedChannel: [] }
-  const downloader = {
-    async download () {
-      return { filePath: '/tmp/clip.mp4', title: 'Downloaded Title', duration: 10, size: 100, mimeType: 'video/mp4', cleanup () {} }
-    }
-  }
-  const channelStub = { blobs: {}, publicBeeKey: 'pb1', getMetadata: async () => ({}) }
-  const publisher = createArchivePublisher({
-    identityManager: {
-      getActiveIdentity: () => ({ publicKey: 'publisher-1', driveKey: 'ck1', channelKey: 'ck1' }),
-      getActiveChannel: async () => channelStub
-    },
-    uploadManager: {
-      async uploadFromPath (channel, filePath, options) { calls.upload.push(options); return { success: true, videoId: 'v1', metadata: {} } },
-      async setThumbnailFromBuffer () { return { success: false } }
-    },
-    api: {},
-    runtime: { publishPublisherCatalog: async () => ({ status: 'published' }) },
-    fs: {},
-    canPublish: retentionClass => retentionClass === 'archive-pin',
-  })
-  const manager = createArchiveManager({ store, downloader, publisher })
-  return { store, manager, calls }
-}
 
 test('deriveMediaCoordinates maps movie/tv and rejects partial episode coords', (t) => {
   t.alike(deriveMediaCoordinates({ tmdbType: 'movie', tmdbId: '603' }),
@@ -52,68 +10,6 @@ test('deriveMediaCoordinates maps movie/tv and rejects partial episode coords', 
   t.alike(deriveMediaCoordinates({ tmdbType: 'tv', tmdbId: 1396, tmdbSeason: '1' }), {}, 'tv without episode stays plain')
   t.alike(deriveMediaCoordinates({ tmdbType: 'movie' }), {}, 'no tmdbId stays plain')
   t.alike(deriveMediaCoordinates({}), {})
-})
-
-test('discover-initiated episode archive persists coordinates on record and feed preview', async (t) => {
-  const { store, manager, calls } = harness()
-  const job = await enqueueArchiveJob(store, {
-    url: 'https://cdn.example/ep.mp4',
-    title: 'Pilot',
-    tmdbType: 'tv',
-    tmdbId: '1396',
-    tmdbSeason: '1',
-    tmdbEpisode: '1',
-    tmdbTitle: 'Breaking Bad',
-    tmdbYear: '2008'
-  })
-
-  const completed = await manager.runJob(job.id)
-
-  t.is(completed.status, 'completed')
-  const upload = calls.upload[0]
-  t.is(upload.contentKind, 'episode', 'canonical record gets contentKind')
-  t.is(upload.mediaProvider, 'tmdb')
-  t.is(upload.mediaId, '1396')
-  t.is(upload.seasonNumber, 1)
-  t.is(upload.episodeNumber, 1)
-
-  const preview = completed.previewVideo
-  t.is(preview.contentKind, 'episode', 'feed preview carries contentKind')
-  t.is(preview.seasonNumber, 1)
-  t.is(preview.episodeNumber, 1)
-  t.is(preview.classification.type, 'tv')
-  t.is(preview.classification.year, 2008)
-})
-
-test('movie archive persists movie coordinates without season/episode', async (t) => {
-  const { store, manager, calls } = harness()
-  const job = await enqueueArchiveJob(store, {
-    url: 'https://cdn.example/movie.mp4',
-    tmdbType: 'movie',
-    tmdbId: '603',
-    tmdbTitle: 'The Matrix',
-    tmdbYear: '1999'
-  })
-
-  const completed = await manager.runJob(job.id)
-
-  const upload = calls.upload[0]
-  t.is(upload.contentKind, 'movie')
-  t.is(upload.mediaId, '603')
-  t.absent('seasonNumber' in upload && upload.seasonNumber != null, 'no season on a movie')
-  t.is(completed.previewVideo.contentKind, 'movie')
-})
-
-test('plain URL archive (no tmdb fields) is unchanged', async (t) => {
-  const { store, manager, calls } = harness()
-  const job = await enqueueArchiveJob(store, { url: 'https://cdn.example/plain.mp4' })
-  const completed = await manager.runJob(job.id)
-
-  const upload = calls.upload[0]
-  t.absent(upload.contentKind, 'no contentKind injected')
-  t.absent(upload.mediaProvider)
-  t.absent(completed.previewVideo.contentKind)
-  t.absent(completed.previewVideo.classification)
 })
 
 // A consumer has no metadata-provider credentials, so cover art only reaches it
@@ -186,35 +82,6 @@ test('a published cover names the blob a peer can replicate', async (t) => {
   t.alike(await publishPosterArtwork(channel, null), {}, 'no cover claims nothing')
   t.alike(await publishPosterArtwork({ blobsKeyHex: null, putBlob: channel.putBlob }, { bytes: Buffer.from([1]), mimeType: 'image/jpeg' }), {},
     'a channel with no blob core claims nothing rather than an unreachable ref')
-})
-
-test('an upload picked from the catalogue is named after the film, not the file', async (t) => {
-  const store = memStore()
-  const job = await enqueueArchiveJob(store, {
-    uploadPath: '/tmp/WeddingCrashers2005REPACK1080pBluRay51YTSMX-xpost.mp4',
-    uploadFilename: 'WeddingCrashers2005REPACK1080pBluRay51YTSMX-xpost.mp4',
-    channelName: 'Archive',
-    tmdbType: 'movie',
-    tmdbId: '9522',
-    tmdbTitle: 'Wedding Crashers',
-    tmdbOverview: 'Two divorce mediators crash weddings to meet women.',
-    tmdbYear: '2005'
-  })
-
-  t.is(job.title, 'Wedding Crashers', 'the catalogue name wins over the release filename')
-  t.is(job.description, 'Two divorce mediators crash weddings to meet women.')
-
-  const explicit = await enqueueArchiveJob(store, {
-    uploadPath: '/tmp/clip.mp4',
-    uploadFilename: 'clip.mp4',
-    channelName: 'Archive',
-    title: 'A name someone typed',
-    tmdbType: 'movie',
-    tmdbId: '9522',
-    tmdbTitle: 'Wedding Crashers'
-  })
-
-  t.is(explicit.title, 'A name someone typed', 'an explicit title still outranks the catalogue')
 })
 
 test('the machine API carries discovered cover art, and refuses anything that is not a TMDB path', (t) => {

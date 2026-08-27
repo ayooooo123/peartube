@@ -1,8 +1,9 @@
 import { createServer } from '#http'
-import { existsSync, rmSync, statSync } from '#fs'
-import { dirname, relative, resolve, sep } from '#path'
+import { createReadStream, rmSync, statSync } from '#fs'
+import { basename, dirname, relative, resolve } from '#path'
+import b4a from 'b4a'
+import sodium from 'sodium-universal'
 import { isArtworkRendition } from '@peartube/backend/assets'
-import { createArchiveJobStore, createArchiveManager } from './archive-manager.js'
 import { renderArchiveTui, renderArchiveWebHome } from './archive-ui.js'
 import { resolveTmdbOptions } from './settings.js'
 import { parseBoundary, receiveMultipartUpload } from './multipart.js'
@@ -11,7 +12,6 @@ import { parseBoundary, receiveMultipartUpload } from './multipart.js'
 import { openResponse, readBody } from './media/http-get.js'
 import {
   ARCHIVE_API_PREFIX,
-  MAX_JSON_BODY_BYTES,
   archiveApiRoute,
   createArchiveApi,
   createOpenAccessGate,
@@ -50,56 +50,13 @@ function buildArchiveForm(get) {
   }
 }
 
-// The machine API validates raw submitted fields (contentKind and friends) that
-// the archive form does not carry, so both entry points read one parse.
+// Preserve raw form fields for the browser submission parser.
 function formFields(params) {
   const fields = {}
   for (const [key, value] of params) fields[key] = value
   return fields
 }
 
-// A JSON submission speaks the same field names as the form, so the machine
-// API's JSON body and the console's form bodies land in one parse. Scalars are
-// stringified because every downstream check reads text, and a number is what a
-// typed client naturally sends for tmdbId. Every message here starts with
-// "json body" so the API can name the failure as JSON rather than multipart.
-function jsonFields(body) {
-  let parsed = null
-  try {
-    parsed = JSON.parse(body)
-  } catch {
-    throw new Error('json body is not valid JSON')
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('json body must be a JSON object')
-  }
-  const fields = {}
-  for (const [key, value] of Object.entries(parsed)) {
-    if (value === null || value === undefined) continue
-    if (Array.isArray(value)) {
-      // tmdbGenres is the list case, and the pipeline reads it as comma-joined
-      // text; accepting the array spares every client the join.
-      if (value.some((entry) => entry !== null && typeof entry === 'object')) {
-        throw new Error(`json body field ${key} must be a scalar or a list of scalars`)
-      }
-      fields[key] = value.filter((entry) => entry !== null && entry !== undefined).map(String).join(',')
-      continue
-    }
-    if (typeof value === 'object') throw new Error(`json body field ${key} must be a scalar or a list of scalars`)
-    fields[key] = String(value)
-  }
-  return fields
-}
-
-function uploadFields(file) {
-  if (!file) return {}
-  return {
-    uploadPath: file.path,
-    uploadFilename: file.filename,
-    uploadMimeType: file.mimeType,
-    uploadSize: file.size
-  }
-}
 
 function parseCreatorForm(body) {
   const params = new URLSearchParams(body)
@@ -154,6 +111,24 @@ async function collectBody(req, { maxBytes = 0, kind = 'request' } = {}) {
 
 function createDefaultServer(handler) {
   return createServer(handler)
+}
+
+async function sha256File(filePath) {
+  const state = b4a.alloc(sodium.crypto_hash_sha256_STATEBYTES)
+  sodium.crypto_hash_sha256_init(state)
+  for await (const chunk of createReadStream(filePath)) sodium.crypto_hash_sha256_update(state, chunk)
+  const digest = b4a.alloc(32)
+  sodium.crypto_hash_sha256_final(state, digest)
+  return b4a.toString(digest, 'hex')
+}
+
+function ingestContainer(filePath, mimeType) {
+  const byMime = String(mimeType || '').toLowerCase()
+  if (byMime.includes('matroska')) return 'mkv'
+  if (byMime.includes('webm')) return 'webm'
+  if (byMime.includes('mp4')) return 'mp4'
+  const extension = basename(filePath).split('.').pop()?.toLowerCase()
+  return /^[a-z0-9][a-z0-9._+-]{0,63}$/.test(extension || '') ? extension : 'binary'
 }
 
 // What the relay answers with before its store is open.
@@ -296,6 +271,16 @@ export function createArchiveHttpSurface({
       // still starting must not answer what a started one refuses.
       if (gate.refusal && isGatedArchiveApiRoute(apiPath)) {
         sendJson(res, gate.refusal.status, { error: gate.refusal.error })
+        return
+      }
+      if (apiPath !== '/catalog' && !apiPath.startsWith('/stream/')) {
+        sendJson(res, 404, {
+          error: {
+            code: 'NOT_FOUND',
+            message: `no such endpoint: ${ARCHIVE_API_PREFIX}${apiPath}`,
+            field: null
+          }
+        })
         return
       }
       // The same retryable codes the live API answers with while the media graph
@@ -486,10 +471,6 @@ function tmdbKeyFromDiscoverItem(item = {}) {
   return tmdbKey(item.type, item.tmdbId, item.season, item.episode)
 }
 
-function tmdbSourceVideoId(type, id, season = null, episode = null) {
-  const key = tmdbKey(type, id, season, episode)
-  return key ? `tmdb:${key}` : ''
-}
 
 export function buildTmdbNetworkIndex(catalogChannels = []) {
   const index = new Map()
@@ -723,29 +704,20 @@ function libraryStatus({ job, freshArchivists, sizeBytes }) {
 export async function createArchiveConsole({
   service,
   downloader,
-  publisher,
   host = '127.0.0.1',
   port = 8174,
   logger = null,
   uploadDir = null,
   uploadStorageHeadroom = null,
-  // Opens the machine API's enumeration and byte-serving routes on a
-  // non-loopback bind. Off unless the operator asked for it.
   apiOpen = false,
-  // How the machine API resolves a submitted source host before it will fetch
-  // it. Injectable so a test can stand in for the system resolver; the guard
-  // itself is never optional.
-  sourceLookup = null,
-  // A socket already bound and answering as a warming relay. The console adopts
-  // it rather than opening its own, so nothing rebinds and no request between
-  // bind and readiness is refused.
   httpSurface = null,
   serverFactory = createDefaultServer,
-  runQueue = null,
   storageReservations = null
 }) {
   if (!service?.runtime?.ctx?.metaDb) throw new Error('archive console requires a relay service runtime')
-  const store = createArchiveJobStore({ metaDb: service.runtime.ctx.metaDb })
+  if (typeof service.submitArchiveIngestJob !== 'function' || typeof service.listIngestJobs !== 'function') {
+    throw new Error('archive console requires the v2 ingest service')
+  }
   const copyReservations = storageReservations || { bytes: 0 }
   const uploadReservations = new Map()
   const releaseUploadReservation = (reservation) => {
@@ -773,29 +745,24 @@ export async function createArchiveConsole({
     reservation.bytes -= size
     copyReservations.bytes = Math.max(0, Math.floor(Number(copyReservations.bytes) || 0) - size)
   }
-  // Multipart bytes survive a restart with their queued/failed durable jobs.
-  // Restore the eventual persisted-copy reservations before this console can
-  // accept another byte, or the process would spend the same aggregate room
-  // twice.
-  for (const job of await store.listJobs()) {
-    if (job.status !== 'queued' && job.status !== 'failed') continue
-    const privateInput = await store.getPrivateInput(job.id)
-    const uploadPath = privateInput?.uploadPath
-    if (!uploadPath || uploadReservations.has(uploadPath) || !existsSync(uploadPath)) continue
-    let uploadSize = 0
-    try {
-      const staged = statSync(uploadPath)
-      if (typeof staged?.isFile === 'function' && !staged.isFile()) continue
-      uploadSize = Math.max(0, Math.floor(Number(staged?.size) || 0))
-    } catch {
-      continue
-    }
-    if (uploadSize <= 0) continue
-    const reservation = { bytes: 0, released: false }
-    reserveUploadBytes(reservation, uploadSize)
-    uploadReservations.set(uploadPath, () => releaseUploadReservation(reservation))
-  }
-  const manager = createArchiveManager({ store, downloader, publisher, logger, canIngest: service.canArchive, onCompleted: (job) => service.publishArchiveJob?.(job), runQueue, onUploadReleased: releaseUploadReservationByPath, stagingRoot: uploadDir })
+  const stateForUi = state => ['acquiring', 'verifying', 'publishing'].includes(state) ? 'running' : state
+  const entityHintFor = context => context?.kind === 'episode'
+    ? `show:${context.seriesIdentifier}:s${context.seasonNumber}:e${context.episodeNumber}`
+    : context?.kind === 'movie' ? `movie:${context.identifier}` : null
+  const listJobs = async () => (await service.listIngestJobs()).map(job => ({
+    id: job.jobId,
+    jobId: job.jobId,
+    status: stateForUi(job.state),
+    state: job.state,
+    title: job.title,
+    error: job.errorCode,
+    errorCode: job.errorCode,
+    entityHint: entityHintFor(job.mediaContext),
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    completedAt: job.state === 'completed' ? job.updatedAt : null
+  }))
+  const store = { listJobs }
 
   // Read an archive submission as a browser file upload (multipart/form-data,
   // streamed to disk), a machine API JSON body, or a URL-encoded form. Returns
@@ -827,28 +794,10 @@ export async function createArchiveConsole({
       }
       return { form: buildArchiveForm((key) => fields[key] ?? ''), file, fields }
     }
-    if (/application\/json/i.test(contentType)) {
-      const fields = jsonFields(await collectBody(req, { maxBytes: MAX_JSON_BODY_BYTES, kind: 'json' }))
-      return { form: buildArchiveForm((key) => fields[key] ?? ''), file: null, fields }
-    }
     const params = new URLSearchParams(await collectBody(req))
     return { form: buildArchiveForm((key) => params.get(key) || ''), file: null, fields: formFields(params) }
   }
 
-  function discardUploadPath(uploadPath) {
-    if (!uploadPath || !uploadDir) return
-    const root = resolve(uploadDir)
-    const targetDir = dirname(resolve(uploadPath))
-    const targetRelative = relative(root, targetDir)
-    if (!targetRelative || targetRelative === '..' || targetRelative.startsWith(`..${sep}`)) {
-      throw new Error('refusing to discard an upload outside the archive staging root')
-    }
-    try {
-      rmSync(targetDir, { recursive: true, force: true })
-    } finally {
-      releaseUploadReservationByPath(uploadPath)
-    }
-  }
 
   function discardUploadFile(file) {
     if (!file) return
@@ -865,36 +814,91 @@ export async function createArchiveConsole({
     }
   }
 
-  // One enqueue path for a catalogue-identified submission, shared by the
-  // browser Discover form and the machine API: they differ in how they answer,
-  // never in what they enqueue.
   async function enqueueCatalogSubmission(form, file) {
-    if (form.reuseJobId) {
-      const previousInput = await store.getPrivateInput(form.reuseJobId)
-      if (previousInput?.uploadPath && previousInput.uploadPath !== file?.path) {
-        discardUploadPath(previousInput.uploadPath)
-      }
-    }
-    let job
+    let staged = file
+    let accepted = false
     try {
-      job = await manager.enqueue({
-        ...form,
-        ...uploadFields(file),
-        sourceType: form.sourceType || 'tmdb',
-        sourceVideoId: form.sourceVideoId || tmdbSourceVideoId(form.tmdbType, form.tmdbId, form.tmdbSeason, form.tmdbEpisode)
-      })
+      if (!staged) {
+        const downloaded = await downloader.download(form)
+        staged = {
+          path: downloaded.filePath,
+          relativePath: relative(resolve(uploadDir), resolve(downloaded.filePath)).replaceAll('\\', '/'),
+          filename: basename(downloaded.filePath),
+          mimeType: downloaded.mimeType || 'application/octet-stream',
+          size: statSync(downloaded.filePath).size,
+          dir: dirname(downloaded.filePath),
+          releaseStorageReservation: downloaded.releaseStorageReservation
+        }
+      }
+      const relativePath = staged.relativePath || relative(resolve(uploadDir), resolve(staged.path)).replaceAll('\\', '/')
+      if (!relativePath || relativePath === '..' || relativePath.startsWith('../') || relativePath.startsWith('/')) {
+        throw new Error('archive upload is outside the ingest spool root')
+      }
+      const byteLength = Number(staged.size || statSync(staged.path).size)
+      const sha256 = await sha256File(staged.path)
+      const tmdbId = String(form.tmdbId || '').trim()
+      const episode = form.tmdbType === 'tv' && tmdbId && Number(form.tmdbSeason) > 0 && Number(form.tmdbEpisode) > 0
+      const mediaContext = episode
+        ? {
+            kind: 'episode',
+            seriesNamespace: 'tmdb',
+            seriesIdentifier: tmdbId,
+            seasonNumber: Number(form.tmdbSeason),
+            episodeNumber: Number(form.tmdbEpisode)
+          }
+        : {
+            kind: 'movie',
+            namespace: tmdbId ? 'tmdb' : 'peartube-ui',
+            identifier: tmdbId || sha256
+          }
+      const mimeType = staged.mimeType || 'application/octet-stream'
+      const lease = {
+        accept(spool) {
+          if (spool.filePath !== staged.path ||
+              spool.relativePath !== relativePath ||
+              spool.byteLength !== byteLength) return false
+          accepted = true
+          if (typeof staged.releaseStorageReservation === 'function') staged.releaseStorageReservation()
+          else releaseUploadReservationByPath(staged.path)
+          return true
+        }
+      }
+      const job = await service.submitArchiveIngestJob({
+        idempotencyKey: `ui:${tmdbId || 'media'}:${sha256.slice(0, 32)}`,
+        request: {
+          retentionClass: 'archive-pin',
+          mediaContext,
+          measuredFacts: {
+            byteLength,
+            container: ingestContainer(staged.path, mimeType),
+            title: form.title || form.tmdbTitle || staged.filename || 'Uploaded video'
+          },
+          expected: { byteLength, sha256 }
+        },
+        spool: {
+          path: relativePath,
+          complete: true,
+          mimeType,
+          byteLength,
+          sha256
+        }
+      }, { ingestSpoolLease: lease })
+      if (!accepted) discardUploadFile(staged)
+      return {
+        id: job.jobId,
+        jobId: job.jobId,
+        status: stateForUi(job.state),
+        title: form.title || form.tmdbTitle || staged.filename || null,
+        entityHint: entityHintFor(mediaContext)
+      }
     } catch (err) {
-      discardUploadFile(file)
+      if (!accepted) discardUploadFile(staged)
       throw err
     }
-    manager.runNext().catch((err) => logger?.archive?.error?.('Archive run failed', { error: err?.message || String(err) }))
-    return job
   }
+  const manager = { enqueue: enqueueCatalogSubmission }
 
   const archiveApi = createArchiveApi({
-    readSubmission: readArchiveSubmission,
-    enqueue: enqueueCatalogSubmission,
-    store,
     // Resolved per request: the console starts before the network-bound runtime,
     // so the media graph it reads from is not bound yet at construction time.
     mediaCatalog: (request) => service.runtime?.api?.getMediaCatalog?.(request),
@@ -908,7 +912,6 @@ export async function createArchiveConsole({
     // interface only with the operator's switch.
     bindHost: host,
     apiOpen,
-    lookup: sourceLookup,
     logger
   })
 
@@ -1390,13 +1393,8 @@ export async function createArchiveConsole({
     manager,
     server,
     async start() {
-      const recovered = await manager.recoverInterruptedJobs()
-      if (recovered?.recovered > 0) {
-        logger?.archive?.warn?.('Recovered interrupted archive jobs before opening archive console', { recovered: recovered.recovered })
-      }
       // Idempotent on an adopted surface: it is already listening as a warming
-      // relay; only adopt the live handler after interrupted-job recovery, so a
-      // pre-ready request cannot be mistaken for stale work.
+      // relay; only adopt the live handler once the v2 ingest service exists.
       if (httpSurface) {
         await httpSurface.listen()
         httpSurface.adopt(handleRequest)

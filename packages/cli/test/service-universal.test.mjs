@@ -7,7 +7,6 @@ import b4a from 'b4a'
 
 import { resolveRelayConfig } from '../src/config.js'
 import { createRelayService } from '../src/service.js'
-import { createArchiveJobStore } from '../src/archive-manager.js'
 
 const noop = () => {}
 const logger = Object.fromEntries(
@@ -333,35 +332,37 @@ test('completed archive publishes an authenticated catalog and retains bounded a
   await service.close()
 })
 
-test('relay service recovers interrupted archive jobs when WebUI is disabled', async (t) => {
-  const storagePath = mkdtempSync(join(tmpdir(), 'peartube-cli-service-recovery-'))
+test('relay archive command delegates to the v2 console ingest adapter', async (t) => {
+  const storagePath = mkdtempSync(join(tmpdir(), 'peartube-cli-archive-command-'))
   t.teardown(() => rmSync(storagePath, { recursive: true, force: true }))
   const calls = []
-  const runtime = fakeRuntime(calls)
-  runtime.ctx.metaDb = fakeMetaDb()
   const config = configFor(storagePath)
-  config.archive.tmpPath = join(storagePath, 'archive-tmp')
-  config.archive.uiEnabled = false
-  mkdirSync(join(config.archive.tmpPath, 'arch_stale'), { recursive: true })
-  writeFileSync(join(config.archive.tmpPath, 'arch_stale', 'partial.mkv'), 'partial')
-  const store = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
-  await store.addJob({ id: 'arch_stale', status: 'queued', title: 'stale' }, { url: 'https://example.com/video.mkv' })
-  await store.updateJob('arch_stale', { status: 'running', error: null })
-
+  config.archive.uiEnabled = true
+  config.archive.uiHost = '127.0.0.1'
+  config.archive.uiPort = 0
   const service = await createRelayService({
     config,
     logger,
-    runtimeFactory: async () => runtime,
+    runtimeFactory: async () => fakeRuntime(calls),
+    archiveConsoleFactory: async () => ({
+      manager: {
+        async enqueue(input) {
+          calls.push(['archive-submit', input])
+          return { id: 'ing_cli_1', jobId: 'ing_cli_1', status: 'queued' }
+        }
+      },
+      async start() {},
+      async close() {}
+    }),
     writeStatusFile: async () => {},
     setIntervalFn: () => ({ unref: noop }),
     clearIntervalFn: noop
   })
-
   await service.start()
-  const jobs = await store.listJobs()
-  t.is(jobs.find((job) => job.id === 'arch_stale').status, 'failed')
-  t.ok(/interrupted by relay restart/.test(jobs.find((job) => job.id === 'arch_stale').error))
-  t.absent(existsSync(join(config.archive.tmpPath, 'arch_stale')), 'stale direct staging is removed during service startup')
-
+  const queued = await service.enqueueArchiveJob({ url: 'https://example.com/video.mp4' })
+  t.is(queued.jobId, 'ing_cli_1')
+  t.alike(calls.find(([name]) => name === 'archive-submit')?.[1], {
+    url: 'https://example.com/video.mp4'
+  })
   await service.close()
 })

@@ -6,6 +6,7 @@ import b4a from 'b4a'
 import test from 'brittle'
 import Corestore from 'corestore'
 import Hypercore from 'hypercore'
+import crypto from 'hypercore-crypto'
 
 import { createBlockOffloader } from '../src/archive/block-offloader.js'
 import { createOffloadStorage } from '../src/archive/offload-storage.js'
@@ -19,6 +20,7 @@ import {
   verifyStaticAssetDescriptor,
   writeStaticAsset,
 } from '../src/assets/static-core.js'
+import { createBufferSourceReader, createSourceReader } from '../src/assets/source-reader.js'
 
 // An interruption forty-two minutes into a 4K download used to throw away every
 // byte. These tests are about the bytes surviving it.
@@ -40,6 +42,25 @@ const RESUME_ID = 'ing_resume_0000000000000000000001'
 // Source chunks are deliberately not block-aligned, so a resumed read has to
 // re-chunk into canonical blocks from an offset exactly as the first read did.
 const CHUNK_BYTES = 100000
+
+async function rewriteStagingIdentityAsV1 (store, id) {
+  const digest = crypto.hash(b4a.from(`peartube.asset.staging.id.v1\u0000${id}`))
+  const keyPair = await store.createKeyPair(`asset-staging-${b4a.toString(digest, 'hex')}`)
+  const core = store.get({ keyPair })
+  await core.ready()
+  try {
+    const raw = await core.getUserData('peartube.asset.staging.v1')
+    const current = JSON.parse(b4a.toString(raw, 'utf8'))
+    await core.setUserData('peartube.asset.staging.v1', b4a.from(JSON.stringify({
+      version: 1,
+      etag: current.identity.value,
+      createdAt: current.createdAt,
+      touchedAt: current.touchedAt,
+    })))
+  } finally {
+    await core.close()
+  }
+}
 
 function assetBytes () {
   const bytes = b4a.alloc(BYTE_LENGTH)
@@ -77,26 +98,26 @@ async function * chunksFrom (bytes, byteOffset) {
 function rangedSource (bytes, { breakAfterBytes = null, etag = ETAG } = {}) {
   const ranges = []
   let opens = 0
-  return {
-    ranges,
-    etag,
-    get opens () {
-      return opens
+  const reader = createSourceReader({
+    resumable: true,
+    maxReadBytes: Math.max(1, bytes.byteLength),
+    async describe () {
+      return {
+        identity: { kind: 'etag', value: etag },
+        byteLength: bytes.byteLength,
+        mimeType: 'application/octet-stream',
+      }
     },
-    open ({ byteOffset, blockIndex }) {
+    open ({ offset, length }) {
       opens++
-      ranges.push({ byteOffset, blockIndex, end: bytes.byteLength - 1 })
-      const limit = breakAfterBytes === null ? null : byteOffset + breakAfterBytes
+      const blockIndex = offset / ASSET_BLOCK_SIZE
+      ranges.push({ byteOffset: offset, blockIndex, end: offset + length - 1 })
+      const limit = breakAfterBytes === null ? offset + length : Math.min(offset + length, offset + breakAfterBytes)
       return (async function * () {
-        let delivered = byteOffset
-        for await (const chunk of chunksFrom(bytes, byteOffset)) {
-          // Deliver up to the break exactly, so the interruption lands on a
-          // known byte rather than on a chunk boundary the test would have to
-          // do arithmetic about.
-          if (limit !== null && delivered + chunk.byteLength >= limit) {
+        let delivered = offset
+        for await (const chunk of chunksFrom(bytes.subarray(0, offset + length), offset)) {
+          if (delivered + chunk.byteLength >= limit && limit < offset + length) {
             if (delivered < limit) yield chunk.subarray(0, limit - delivered)
-            // A mid-body transport break: the connection dies with bytes
-            // outstanding, which is the resumable case.
             const error = new Error('source connection reset')
             error.code = 'SOURCE_RANGE_SHORT'
             throw error
@@ -105,6 +126,15 @@ function rangedSource (bytes, { breakAfterBytes = null, etag = ETAG } = {}) {
           yield chunk
         }
       })()
+    },
+    async close () {},
+  })
+  return {
+    reader,
+    ranges,
+    etag,
+    get opens () {
+      return opens
     },
   }
 }
@@ -231,7 +261,7 @@ test('an ingest interrupted mid-stream resumes to exactly the core an uninterrup
   const control = await fixture(t)
   const straight = await writeStaticAsset({
     store: control.store,
-    source: (async function * () { yield * chunksFrom(bytes, 0) })(),
+    reader: createBufferSourceReader(bytes),
     offload: control.offloadFor(),
   })
   const expected = {
@@ -248,7 +278,8 @@ test('an ingest interrupted mid-stream resumes to exactly the core an uninterrup
   const interrupted = await writeStaticAsset({
     store,
     offload: offloadFor(),
-    resume: { id: RESUME_ID, etag: ETAG, open: broken.open },
+    reader: broken.reader,
+    resume: { id: RESUME_ID },
   }).then(() => null, (error) => error)
 
   t.is(interrupted?.code, 'SOURCE_RANGE_SHORT', 'the interruption surfaces as itself, not as a cleanup failure')
@@ -269,7 +300,8 @@ test('an ingest interrupted mid-stream resumes to exactly the core an uninterrup
   const resumed = await writeStaticAsset({
     store,
     offload: offloadFor(),
-    resume: { id: RESUME_ID, etag: ETAG, open: rest.open },
+    reader: rest.reader,
+    resume: { id: RESUME_ID },
   })
 
   t.alike(
@@ -305,6 +337,37 @@ test('an ingest interrupted mid-stream resumes to exactly the core an uninterrup
   await resumed.core.close()
 })
 
+test('a version 1 staging identity migrates without discarding its confirmed prefix', async (t) => {
+  const bytes = assetBytes()
+  const { store, objects, offloadFor } = await fixture(t)
+  const broken = rangedSource(bytes, { breakAfterBytes: BREAK_AT_BLOCK * ASSET_BLOCK_SIZE })
+  await writeStaticAsset({
+    store,
+    offload: offloadFor(),
+    reader: broken.reader,
+    resume: { id: RESUME_ID },
+  }).then(() => null, (error) => error)
+  t.is(objects.size, BREAK_AT_BLOCK, 'the legacy fixture starts with a confirmed staged prefix')
+  await rewriteStagingIdentityAsV1(store, RESUME_ID)
+
+  const source = rangedSource(bytes)
+  const resumed = await writeStaticAsset({
+    store,
+    offload: offloadFor(),
+    reader: source.reader,
+    resume: { id: RESUME_ID },
+  })
+
+  t.alike(
+    source.ranges,
+    [{ byteOffset: BREAK_AT_BLOCK * ASSET_BLOCK_SIZE, blockIndex: BREAK_AT_BLOCK, end: BYTE_LENGTH - 1 }],
+    'migration resumes after the confirmed prefix instead of downloading from zero'
+  )
+  t.is(resumed.core.byteLength, BYTE_LENGTH, 'the migrated staging state completes the title')
+  t.ok(await verifyStaticAssetDescriptor(resumed.core, resumed.descriptor), 'the migrated result verifies')
+  await resumed.core.close()
+})
+
 test('a resume whose source reports a different identity refuses to splice and keeps the staged prefix intact', async (t) => {
   const bytes = assetBytes()
   const { store, objects, deleted, offloadFor } = await fixture(t)
@@ -313,7 +376,8 @@ test('a resume whose source reports a different identity refuses to splice and k
   await writeStaticAsset({
     store,
     offload: offloadFor(),
-    resume: { id: RESUME_ID, etag: ETAG, open: broken.open },
+    reader: broken.reader,
+    resume: { id: RESUME_ID },
   }).then(() => null, (error) => error)
   const stagedObjects = [...objects.keys()].sort()
   t.is(stagedObjects.length, BREAK_AT_BLOCK, 'the interrupted attempt staged three blocks')
@@ -325,12 +389,13 @@ test('a resume whose source reports a different identity refuses to splice and k
   const error = await writeStaticAsset({
     store,
     offload: offloadFor(),
-    resume: { id: RESUME_ID, etag: drifted.etag, open: drifted.open },
+    reader: drifted.reader,
+    resume: { id: RESUME_ID },
   }).then(() => null, (value) => value)
 
   t.is(error?.code, 'ASSET_SOURCE_IDENTITY_CHANGED', 'the resume fails with its own distinct code')
-  t.is(error.stagedIdentity, ETAG, 'naming the identity the staged blocks were read under')
-  t.is(error.sourceIdentity, drifted.etag, 'and the one the source now claims')
+  t.alike(error.stagedIdentity, { kind: 'etag', value: ETAG }, 'naming the identity the staged blocks were read under')
+  t.alike(error.sourceIdentity, { kind: 'etag', value: drifted.etag }, 'and the one the source now claims')
   t.is(classifyIngestFailure(error), 'permanent', 'a changed identity is never something to retry into')
   t.is(drifted.opens, 0, 'the second source was never read, so nothing could be spliced')
   t.alike([...objects.keys()].sort(), stagedObjects, 'the staged prefix is byte-for-byte the one it was')
@@ -342,7 +407,8 @@ test('a resume whose source reports a different identity refuses to splice and k
   const resumed = await writeStaticAsset({
     store,
     offload: offloadFor(),
-    resume: { id: RESUME_ID, etag: ETAG, open: original.open },
+    reader: original.reader,
+    resume: { id: RESUME_ID },
   })
   t.is(resumed.core.byteLength, BYTE_LENGTH, 'the staging core resumed cleanly after the refusal')
   t.alike(
@@ -362,7 +428,8 @@ test('a staged block that is on neither disk nor in the bucket fails loudly inst
   await writeStaticAsset({
     store,
     offload: offloadFor(),
-    resume: { id: RESUME_ID, etag: ETAG, open: broken.open },
+    reader: broken.reader,
+    resume: { id: RESUME_ID },
   }).then(() => null, (error) => error)
 
   // Delete the middle staging object behind the store's back. The bisection then
@@ -375,7 +442,8 @@ test('a staged block that is on neither disk nor in the bucket fails loudly inst
   const error = await writeStaticAsset({
     store,
     offload: offloadFor(),
-    resume: { id: RESUME_ID, etag: ETAG, open: rest.open },
+    reader: rest.reader,
+    resume: { id: RESUME_ID },
   }).then(() => null, (value) => value)
 
   t.is(error?.code, 'ASSET_STAGED_BLOCK_MISSING', 'a hole in the confirmed prefix is named, not papered over')
@@ -395,7 +463,8 @@ test('staging state past its lifetime is reclaimed rather than resumed', async (
   await writeStaticAsset({
     store,
     offload: offloadFor(),
-    resume: { id: RESUME_ID, etag: ETAG, open: broken.open, ttlMs, now: () => clock },
+    reader: broken.reader,
+    resume: { id: RESUME_ID, ttlMs, now: () => clock },
   }).then(() => null, (error) => error)
   t.is(objects.size, BREAK_AT_BLOCK, 'the interruption left three staging objects')
 
@@ -404,7 +473,8 @@ test('staging state past its lifetime is reclaimed rather than resumed', async (
   const error = await writeStaticAsset({
     store,
     offload: offloadFor(),
-    resume: { id: RESUME_ID, etag: ETAG, open: stale.open, ttlMs, now: () => clock },
+    reader: stale.reader,
+    resume: { id: RESUME_ID, ttlMs, now: () => clock },
   }).then(() => null, (value) => value)
 
   t.is(error?.code, 'ASSET_STAGING_EXPIRED', 'stale staging state is never resumed')
@@ -417,7 +487,8 @@ test('staging state past its lifetime is reclaimed rather than resumed', async (
   const written = await writeStaticAsset({
     store,
     offload: offloadFor(),
-    resume: { id: RESUME_ID, etag: ETAG, open: fresh.open, ttlMs, now: () => clock },
+    reader: fresh.reader,
+    resume: { id: RESUME_ID, ttlMs, now: () => clock },
   })
   t.alike(
     fresh.ranges,
@@ -441,7 +512,8 @@ test('the sweep reclaims staging state for a job nobody ever retried, and leaves
     await writeStaticAsset({
       store,
       offload: offloadFor(),
-      resume: { id, etag: ETAG, open: broken.open, now: () => clock },
+      reader: broken.reader,
+      resume: { id, now: () => clock },
     }).then(() => null, (error) => error)
   }
   t.is(objects.size, 2 * BREAK_AT_BLOCK, 'two interrupted jobs left two staged prefixes in the bucket')
@@ -481,7 +553,8 @@ test('reclaiming keeps the staging core when the bucket will not delete, so the 
   await writeStaticAsset({
     store,
     offload: offloadFor(),
-    resume: { id: RESUME_ID, etag: ETAG, open: broken.open },
+    reader: broken.reader,
+    resume: { id: RESUME_ID },
   }).then(() => null, (error) => error)
 
   const stubborn = [...objects.keys()].sort()[2]
@@ -509,7 +582,8 @@ test('a resume is refused outright when there is nowhere durable to keep the sta
   const error = await writeStaticAsset({
     store,
     offload: offloadFor({ createStagingStore: undefined }),
-    resume: { id: RESUME_ID, etag: ETAG, open: source.open },
+    reader: source.reader,
+    resume: { id: RESUME_ID },
   }).then(() => null, (value) => value)
 
   t.is(error?.code, 'ASSET_RESUME_UNSUPPORTED', 'a resumable write with no staging store is refused')
@@ -517,11 +591,6 @@ test('a resume is refused outright when there is nowhere durable to keep the sta
   t.is(source.opens, 0, 'nothing was read')
   t.is(objects.size, 0, 'and nothing was uploaded')
 
-  await t.exception(
-    writeStaticAsset({ store, source: [bytes], offload: offloadFor(), resume: { id: RESUME_ID, open: source.open } }),
-    /resume\.open/,
-    'and a write cannot pass both a source and a resume, because only one of them can decide the offset'
-  )
 })
 
 test('resume state survives the relay process dying: a fresh corestore over the same volume picks it up', async (t) => {
@@ -532,7 +601,8 @@ test('resume state survives the relay process dying: a fresh corestore over the 
   const interrupted = await writeStaticAsset({
     store: relay.store,
     offload: relay.offloadFor(),
-    resume: { id: RESUME_ID, etag: ETAG, open: broken.open },
+    reader: broken.reader,
+    resume: { id: RESUME_ID },
   }).then(() => null, (error) => error)
   t.is(interrupted?.staging?.retained, true, 'the interrupted attempt kept its staging state')
   t.is(relay.objects.size, BREAK_AT_BLOCK, 'with three blocks confirmed in the bucket')
@@ -545,7 +615,8 @@ test('resume state survives the relay process dying: a fresh corestore over the 
   const resumed = await writeStaticAsset({
     store: relay.store,
     offload: relay.offloadFor(),
-    resume: { id: RESUME_ID, etag: ETAG, open: rest.open },
+    reader: rest.reader,
+    resume: { id: RESUME_ID },
   })
 
   t.alike(
@@ -565,13 +636,15 @@ test('resume state survives the relay process dying: a fresh corestore over the 
   await writeStaticAsset({
     store: second.store,
     offload: second.offloadFor(),
-    resume: { id: RESUME_ID, etag: ETAG, open: drifted.open },
+    reader: drifted.reader,
+    resume: { id: RESUME_ID },
   }).then(() => null, (error) => error)
   await second.restart()
   const error = await writeStaticAsset({
     store: second.store,
     offload: second.offloadFor(),
-    resume: { id: RESUME_ID, etag: '"remote-sha256-rotated"', open: rangedSource(bytes).open },
+    reader: rangedSource(bytes, { etag: '"remote-sha256-rotated"' }).reader,
+    resume: { id: RESUME_ID },
   }).then(() => null, (value) => value)
   t.is(error?.code, 'ASSET_SOURCE_IDENTITY_CHANGED', 'a restarted relay still refuses to splice a different source')
 
@@ -592,7 +665,8 @@ test('an ingest interrupted after the whole source was read resumes without aski
   const interrupted = await writeStaticAsset({
     store,
     offload: offloadFor(),
-    resume: { id: RESUME_ID, etag: ETAG, open: source.open },
+    reader: source.reader,
+    resume: { id: RESUME_ID },
   }).then(() => null, (error) => error)
 
   t.is(interrupted?.code, 'PROVIDER_UNAVAILABLE', 'a bucket that will not answer interrupts pass 2')
@@ -606,7 +680,8 @@ test('an ingest interrupted after the whole source was read resumes without aski
   const resumed = await writeStaticAsset({
     store,
     offload: offloadFor(),
-    resume: { id: RESUME_ID, etag: ETAG, open: again.open },
+    reader: again.reader,
+    resume: { id: RESUME_ID },
   })
 
   t.is(again.opens, 0, 'the resumed run never opened the source at all: there was nothing left to fetch')

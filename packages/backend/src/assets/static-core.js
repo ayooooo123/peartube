@@ -6,6 +6,7 @@ import {
   normalizeBytes,
   normalizeNonNegativeInteger,
 } from '../publisher/canonical.js'
+import { createSourceReader } from './source-reader.js'
 
 export const ASSET_BLOCK_SIZE = 256 * 1024
 
@@ -47,7 +48,7 @@ const STATIC_ASSET_KIND = 'static-prologue-v1'
 // nothing whatsoever held in memory.
 const STAGING_NAME_PREFIX = 'asset-staging-'
 const STAGING_IDENTITY_KEY = 'peartube.asset.staging.v1'
-const STAGING_IDENTITY_VERSION = 1
+const STAGING_IDENTITY_VERSION = 2
 
 // A day. Long enough that a multi-hour title interrupted overnight is still
 // resumable in the morning; short enough that a job nobody ever retries stops
@@ -74,6 +75,8 @@ const PERMANENT_INGEST_FAILURES = new Set([
   'ASSET_SOURCE_CHANGED',
   'ASSET_SOURCE_IDENTITY_CHANGED',
   'ASSET_SOURCE_NOT_REOPENABLE',
+  'ASSET_SOURCE_LONG_READ',
+  'ASSET_SOURCE_SHORT_READ',
   'ASSET_STAGED_BLOCK_MISSING',
   'ASSET_STAGED_BLOCK_UNVERIFIABLE',
   'ASSET_STAGING_EXPIRED',
@@ -130,67 +133,24 @@ function createHypercoreManifest(treeHash, blockLength) {
   }
 }
 
-function isIterable(source) {
-  return !!source && (
-    typeof source[Symbol.asyncIterator] === 'function' ||
-    typeof source[Symbol.iterator] === 'function'
-  )
+function assertWriteInput (store, reader) {
+  if (!store || typeof store.get !== 'function') throw new Error('store is required')
+  if (reader === null || reader === undefined) throw new Error('reader is required')
 }
 
-function assertWriteInput(store, source, createSource, resume = null) {
-  if (!store || typeof store.get !== 'function') throw new Error('store is required')
-  if (resume !== null) {
-    if (source !== null || createSource !== null) {
-      throw new Error('a resumable write opens its own source: pass resume.open(), not source or createSource')
-    }
+async function * openReaderBytes (reader, { offset, length, signal }) {
+  let cursor = offset
+  let remaining = length
+  if (remaining === 0) {
+    yield * await reader.open({ offset: cursor, length: 0, signal })
     return
   }
-  if (createSource !== null && typeof createSource !== 'function') {
-    throw new Error('createSource must be a function')
+  while (remaining > 0) {
+    const readLength = Math.min(remaining, reader.maxReadBytes)
+    yield * await reader.open({ offset: cursor, length: readLength, signal })
+    cursor += readLength
+    remaining -= readLength
   }
-  if (createSource === null && !isIterable(source)) {
-    throw new Error('source is required')
-  }
-}
-
-/**
- * How this write gets at the source bytes.
- *
- * `reopenable` is the whole point: bounded ingest reads the source TWICE (once
- * to derive the content-addressed key, once to write the blocks), so it can
- * only run when the source can be opened again. A factory can always be called
- * again; an array is the one iterable that is provably re-iterable; anything
- * else — a generator, a stream — is one-shot and is refused rather than
- * buffered.
- */
-function resolveSource({ source, createSource, resume = null }) {
-  // A resumable write opens its source AT AN OFFSET, and that offset is only
-  // known once the staging core on disk has been read, so the source cannot
-  // exist before the write starts. That makes `resume.open` the one source
-  // shape that is one-shot by construction and still restartable — and it is
-  // never re-openable, because pass 2 must read the staged blocks back from the
-  // object store rather than fetch the title a second time.
-  if (resume !== null) {
-    return {
-      reopenable: false,
-      open(at) {
-        const opened = resume.open({ byteOffset: at.byteOffset, blockIndex: at.blockIndex })
-        if (!isIterable(opened)) throw new Error('resume.open() must return an iterable of byte chunks')
-        return opened
-      },
-    }
-  }
-  if (typeof createSource === 'function') {
-    return {
-      reopenable: true,
-      open() {
-        const opened = createSource()
-        if (!isIterable(opened)) throw new Error('createSource() must return an iterable of byte chunks')
-        return opened
-      },
-    }
-  }
-  return { reopenable: Array.isArray(source), open: () => source }
 }
 
 /**
@@ -233,9 +193,9 @@ function assertStagingStore(store) {
   return store
 }
 
-function sourceNotReopenableError() {
+function sourceNotReopenableError () {
   const error = new Error(
-    'bounded offload ingest needs the title twice and this source can only be read once: pass createSource(), a function returning a fresh iterable, or offload.createStagingStore() so the second pass can read the staged blocks back from the object store'
+    'bounded offload ingest needs the title twice and this SourceReader is one-shot: configure durable staging for the second pass'
   )
   error.code = 'ASSET_SOURCE_NOT_REOPENABLE'
   return error
@@ -262,7 +222,9 @@ function stagingStateError(message, code) {
 }
 
 function describeIdentity(value) {
-  return value === null || value === undefined ? 'no source identity' : `identity ${value}`
+  return value === null || value === undefined
+    ? 'no source identity'
+    : `identity ${value.kind}:${value.value}`
 }
 
 function sourceIdentityChangedError(staged, offered) {
@@ -302,50 +264,24 @@ function stagingCoreName(id) {
   return `${STAGING_NAME_PREFIX}${b4a.toString(digest, 'hex')}`
 }
 
-/**
- * `resume` turns a one-shot streaming ingest into one that survives being
- * interrupted:
- *
- *   id        a stable identifier for this ingest — the relay's job id. It is
- *             the only thing that has to survive a restart, and everything else
- *             is read back off disk from the staging core it names.
- *   open      `({ byteOffset, blockIndex })` returning a ONE-SHOT iterable of
- *             the source bytes from `byteOffset` on. It is called exactly once
- *             per attempt, and never with an offset that is not a canonical
- *             block boundary. An offset equal to the whole length is legal and
- *             must yield nothing.
- *   etag      the source's own statement of which bytes it is serving. Recorded
- *             on the first attempt and compared on every later one.
- *   ttlMs     how long staging state may go untouched before it is reclaimed
- *             rather than resumed.
- *   now       clock, for tests.
- *   classify  `(error) => 'resumable' | 'permanent'`; defaults to
- *             classifyIngestFailure.
- */
-function normalizeResume(resume) {
-  if (resume === null || resume === undefined) return null
-  if (typeof resume !== 'object' || Array.isArray(resume)) throw new Error('resume must be an object')
-  const id = normalizeResumeId(resume.id)
-  if (typeof resume.open !== 'function') {
-    throw new Error('resume.open({ byteOffset, blockIndex }) must return an iterable of the source bytes from byteOffset on')
+function normalizeResume (resume, description) {
+  if (resume === null || resume === undefined || resume === false) return null
+  if (!resume || typeof resume !== 'object' || Array.isArray(resume)) {
+    throw new Error('resume must be an object with a stable id')
   }
-  const etag = resume.etag === null || resume.etag === undefined ? null : resume.etag
-  if (etag !== null && (typeof etag !== 'string' || etag.length === 0 || etag.length > 256)) {
-    throw new Error('resume.etag must be a source identity token of 1 to 256 characters')
-  }
-  const ttlMs = resume.ttlMs === null || resume.ttlMs === undefined ? DEFAULT_STAGING_TTL_MS : resume.ttlMs
+  const ttlMs = resume.ttlMs ?? DEFAULT_STAGING_TTL_MS
   if (!Number.isSafeInteger(ttlMs) || ttlMs < 1) throw new Error('resume.ttlMs must be a positive safe integer')
-  const now = resume.now === null || resume.now === undefined ? () => Date.now() : resume.now
+  const now = resume.now ?? (() => Date.now())
   if (typeof now !== 'function') throw new Error('resume.now must be a function')
-  const classify = resume.classify === null || resume.classify === undefined ? classifyIngestFailure : resume.classify
+  const classify = resume.classify ?? classifyIngestFailure
   if (typeof classify !== 'function') throw new Error('resume.classify must be a function')
   return {
-    id,
-    etag,
+    id: normalizeResumeId(resume.id),
+    identity: description.identity,
+    byteLength: description.byteLength,
     ttlMs,
     now,
-    classify: (error) => (classify(error) === 'permanent' ? 'permanent' : 'resumable'),
-    open: (at) => resume.open(at),
+    classify: (error) => classify(error) === 'permanent' ? 'permanent' : 'resumable',
   }
 }
 
@@ -926,11 +862,18 @@ async function readStagingIdentity(staging) {
   } catch {
     throw stagingStateError('the staging identity record is unreadable', 'ASSET_STAGING_IDENTITY_CORRUPT')
   }
-  if (!value || typeof value !== 'object' || Array.isArray(value) ||
-      value.version !== STAGING_IDENTITY_VERSION ||
-      (value.etag !== null && typeof value.etag !== 'string') ||
-      !Number.isSafeInteger(value.createdAt) ||
-      !Number.isSafeInteger(value.touchedAt)) {
+  const validTimes = Number.isSafeInteger(value?.createdAt) &&
+    Number.isSafeInteger(value?.touchedAt)
+  const legacy = value?.version === 1 &&
+    (value.etag === null || typeof value.etag === 'string') &&
+    validTimes
+  const current = value?.version === STAGING_IDENTITY_VERSION &&
+    value.identity && typeof value.identity === 'object' &&
+    ['sha256', 'etag'].includes(value.identity.kind) &&
+    typeof value.identity.value === 'string' &&
+    Number.isSafeInteger(value.byteLength) && value.byteLength >= 0 &&
+    validTimes
+  if (!legacy && !current) {
     throw stagingStateError(
       'the staging identity record is not the shape this version writes',
       'ASSET_STAGING_IDENTITY_CORRUPT'
@@ -1022,10 +965,10 @@ async function confirmStagedTail({ staging, stagingStore, staged, confirmed, sig
  * getting to write one down.
  */
 async function prepareResume({ staging, stagingStore, staged, resume, signal }) {
-  const identity = await readStagingIdentity(staging)
+  let record = await readStagingIdentity(staging)
   const timestamp = resume.now()
 
-  if (identity === null) {
+  if (record === null) {
     if (staging.length > 0) {
       throw stagingStateError(
         'the staging core holds blocks but no identity record, so nothing can say which source they came from',
@@ -1034,50 +977,67 @@ async function prepareResume({ staging, stagingStore, staged, resume, signal }) 
     }
     await writeStagingIdentity(staging, {
       version: STAGING_IDENTITY_VERSION,
-      etag: resume.etag,
+      identity: resume.identity,
+      byteLength: resume.byteLength,
       createdAt: timestamp,
       touchedAt: timestamp,
     })
-    return { byteOffset: 0, blockIndex: 0, complete: false, resumed: false }
+    return { byteOffset: 0, blockIndex: 0, complete: resume.byteLength === 0, resumed: false }
+  }
+  // Version 1 stored only an ETag. Migrate it in place after proving that the
+  // current source reports the same ETag; a null legacy ETag cannot prove
+  // continuity and remains a hard failure.
+  if (record.version === 1) {
+    const stagedIdentity = typeof record.etag === 'string' && record.etag.length > 0
+      ? { kind: 'etag', value: record.etag }
+      : null
+    if (stagedIdentity === null ||
+        resume.identity.kind !== stagedIdentity.kind ||
+        resume.identity.value !== stagedIdentity.value) {
+      throw sourceIdentityChangedError(stagedIdentity, resume.identity)
+    }
+    record = {
+      version: STAGING_IDENTITY_VERSION,
+      identity: stagedIdentity,
+      byteLength: resume.byteLength,
+      createdAt: record.createdAt,
+      touchedAt: record.touchedAt,
+    }
+    await writeStagingIdentity(staging, record)
   }
 
-  // The consistency guard. `etag` is the source's own statement of which bytes
-  // it is serving; if it differs from the one the staged prefix was read under,
-  // appending to that prefix would splice two different titles into a core whose
-  // key claims to be the hash of neither. So it stops here, loudly — and the
-  // staged prefix is left exactly as it is, because it is still a truthful
-  // prefix of the ORIGINAL source and destroying a long download on the strength
-  // of one unexpected header is the wrong trade. The TTL is what stops it
-  // leaking.
-  if (identity.etag !== resume.etag) throw sourceIdentityChangedError(identity.etag, resume.etag)
+  if (record.identity.kind !== resume.identity.kind ||
+      record.identity.value !== resume.identity.value ||
+      record.byteLength !== resume.byteLength) {
+    throw sourceIdentityChangedError(record.identity, resume.identity)
+  }
 
-  const idle = timestamp - identity.touchedAt
+  const idle = timestamp - record.touchedAt
   if (idle > resume.ttlMs) {
     throw stagingStateError(
       `the staging state was last touched ${idle}ms ago, past its ${resume.ttlMs}ms lifetime, so it is reclaimed rather than resumed`,
       'ASSET_STAGING_EXPIRED'
     )
   }
+  if (staging.byteLength > resume.byteLength ||
+      staging.length !== Math.ceil(staging.byteLength / ASSET_BLOCK_SIZE) ||
+      (staging.byteLength < resume.byteLength && staging.byteLength % ASSET_BLOCK_SIZE !== 0)) {
+    throw stagingStateError(
+      'the staged prefix is not a verified canonical block boundary within the described source',
+      'ASSET_STAGING_IDENTITY_CORRUPT'
+    )
+  }
 
   const confirmed = await confirmedStagingBlocks({ stagingStore, length: staging.length, signal })
-  // Anything the earlier attempt uploaded is this attempt's to account for: a
-  // permanent failure now has to purge the whole prefix, not just its own share.
   staged.uploaded = confirmed
   await confirmStagedTail({ staging, stagingStore, staged, confirmed, signal })
   assertNotCancelled(signal)
-  await writeStagingIdentity(staging, { ...identity, touchedAt: timestamp })
+  await writeStagingIdentity(staging, { ...record, touchedAt: timestamp })
 
-  // A short block is only ever the LAST canonical block, so a staged prefix
-  // whose tail is short IS the whole title: the earlier attempt finished reading
-  // the source and died in pass 2. There is nothing left to fetch, and asking
-  // for more could only append past the end. A title that happens to be an
-  // exact multiple of the block size instead opens the source at its own length
-  // and is handed nothing, which costs one empty request and no bytes.
-  const complete = staging.byteLength % ASSET_BLOCK_SIZE !== 0
   return {
     byteOffset: staging.byteLength,
     blockIndex: staging.length,
-    complete,
+    complete: staging.byteLength === resume.byteLength,
     resumed: staging.length > 0,
   }
 }
@@ -1230,9 +1190,9 @@ export function createStaticAssetManifest(input = {}) {
  *
  * Where pass 2 gets the title decides the mode, and `ingest.mode` reports it:
  *
- *   'reopen'     a re-openable source (`createSource()`, or an array) is read a
- *                second time. Cheapest when the source is a local file: nothing
- *                is uploaded except through the offloader's window.
+ *   'reopen'     a resumable SourceReader is opened twice. This is cheapest
+ *                for a local file: nothing is uploaded except through the
+ *                offloader's window.
  *   'streaming'  the source is ONE-SHOT — a network download, a pipe — and
  *                `offload.createStagingStore({ core, signal })` supplied an
  *                object store for the staging core. Pass 1 then uploads each
@@ -1254,45 +1214,53 @@ export function createStaticAssetManifest(input = {}) {
  * A one-shot source with no staging store is refused with
  * `ASSET_SOURCE_NOT_REOPENABLE` rather than buffered.
  *
- * RESUME. `resume` (see normalizeResume) makes the streaming mode survive being
- * interrupted. Instead of `source`, the caller supplies `resume.open`, which
- * opens the download AT A BYTE OFFSET, and `resume.id`, a stable name for the
- * staging core. An interruption that leaves the staged prefix truthful — a reset
- * connection, a timeout, an abort, the process dying — keeps that core and every
- * block the object store has confirmed, so the next attempt re-reads only the
- * bytes after the last confirmed block. The finished core's key is a hash of the
- * whole content, and a resume always restarts on a canonical block boundary, so
- * a resumed ingest produces exactly the key an uninterrupted one would.
+ * RESUME. `resume.id` gives durable streaming staging a stable name. The
+ * SourceReader is opened at the verified canonical block boundary recorded by
+ * that staging core. Its described identity and exact byte length are persisted
+ * with the prefix and compared before another byte is accepted. Transport
+ * failures keep a truthful prefix; identity, hash, Merkle, and staged-leaf
+ * failures reclaim or quarantine it according to classifyIngestFailure.
  */
 export async function writeStaticAsset({
   store,
-  source = null,
-  createSource = null,
+  reader = null,
   signal,
   offload = null,
-  resume = null,
+  resume = false,
 } = {}) {
-  const resumeState = normalizeResume(resume)
-  assertWriteInput(store, source, createSource, resumeState)
-  const { createOffloader, createStagingStore } = normalizeOffload(offload)
-  // Resume state IS the staging core plus its objects. Without both there is
-  // nowhere for an interrupted attempt's bytes to wait.
-  if (resumeState !== null && (createOffloader === null || createStagingStore === null)) {
-    throw resumeUnsupportedError()
+  assertWriteInput(store, reader)
+  const sourceReader = createSourceReader(reader)
+  let description
+  try {
+    description = await sourceReader.describe({ signal })
+  } catch (error) {
+    await sourceReader.close(error).catch(() => {})
+    throw error
   }
-  const resolved = resolveSource({ source, createSource, resume: resumeState })
-  // A source that can be re-opened is re-opened: a caller with a local file
-  // should not be pushed through a bucket for pass 2. Streaming is what the
-  // one-shot sources get, and only if they brought a staging store.
-  const streaming = createOffloader !== null && !resolved.reopenable
-  if (streaming && createStagingStore === null) throw sourceNotReopenableError()
-  assertNotCancelled(signal)
-
-  const stagingName = resumeState === null
-    ? `${STAGING_NAME_PREFIX}${b4a.toString(crypto.randomBytes(16), 'hex')}`
-    : stagingCoreName(resumeState.id)
-  const stagingKeyPair = await store.createKeyPair(stagingName)
-  const staging = store.get({ keyPair: stagingKeyPair })
+  let resumeState
+  let createOffloader
+  let createStagingStore
+  let streaming
+  let staging
+  try {
+    resumeState = normalizeResume(resume, description)
+    ;({ createOffloader, createStagingStore } = normalizeOffload(offload))
+    if (resumeState !== null && !sourceReader.resumable) throw resumeUnsupportedError()
+    if (resumeState !== null && (createOffloader === null || createStagingStore === null)) {
+      throw resumeUnsupportedError()
+    }
+    streaming = createOffloader !== null && (resumeState !== null || !sourceReader.resumable)
+    if (streaming && createStagingStore === null) throw sourceNotReopenableError()
+    assertNotCancelled(signal)
+    const stagingName = resumeState === null
+      ? `${STAGING_NAME_PREFIX}${b4a.toString(crypto.randomBytes(16), 'hex')}`
+      : stagingCoreName(resumeState.id)
+    const stagingKeyPair = await store.createKeyPair(stagingName)
+    staging = store.get({ keyPair: stagingKeyPair })
+  } catch (error) {
+    await sourceReader.close(error).catch(() => {})
+    throw error
+  }
 
   let finalCore = null
   let descriptor = null
@@ -1329,18 +1297,17 @@ export async function writeStaticAsset({
       assertNotCancelled(signal)
 
       if (!resumeAt.complete) {
-        await appendCanonicalSource(staging, resolved.open(resumeAt), {
+        await appendCanonicalSource(staging, openReaderBytes(sourceReader, {
+          offset: resumeAt.byteOffset,
+          length: description.byteLength - resumeAt.byteOffset,
+          signal,
+        }), {
           blockSize: ASSET_BLOCK_SIZE,
           signal,
           startIndex: resumeAt.blockIndex,
           onAppended: createOffloader === null
             ? null
             : (streaming
-                // The block is a view into the chunk the source just handed
-                // over, and the read resumes the instant this is scheduled, so
-                // the upload gets its own copy rather than a window onto a
-                // buffer the source is free to fill again. One memcpy per block
-                // against a round trip, bounded by the pipeline's depth.
                 ? (index, block) => uploads.start(() => offloadStagedBlock({
                   staging,
                   stagingStore,
@@ -1355,6 +1322,12 @@ export async function writeStaticAsset({
       // Pass 2 reads what pass 1 uploaded, so every upload has to have landed
       // before the tree is closed off and handed to it.
       await uploads.settle()
+      if (staging.byteLength !== description.byteLength) {
+        throw sourceChangedError(
+          `it ended at ${staging.byteLength} byte(s), but describe() declared ${description.byteLength}`,
+          staging.length
+        )
+      }
 
       assertNotCancelled(signal)
       const treeHash = await staging.treeHash()
@@ -1403,7 +1376,11 @@ export async function writeStaticAsset({
             staging,
             finalCore,
             descriptor,
-            source: resolved.open(),
+            source: openReaderBytes(sourceReader, {
+              offset: 0,
+              length: description.byteLength,
+              signal,
+            }),
             offloader,
             signal,
           })
@@ -1450,8 +1427,10 @@ export async function writeStaticAsset({
     }
 
     assertNotCancelled(signal)
+    await sourceReader.close()
     return ingest === null ? { core: finalCore, descriptor } : { core: finalCore, descriptor, ingest }
   } catch (error) {
+    await sourceReader.close(error).catch(() => {})
     await closeUnreturnedCore(finalCore, error)
     // A failed write must not leave the bucket paying for a staging copy of a
     // title nobody will ever finish. What cannot be deleted is named on the

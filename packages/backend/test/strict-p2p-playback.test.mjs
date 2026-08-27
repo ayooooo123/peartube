@@ -8,6 +8,7 @@ import path from 'node:path'
 
 import { createAssetSession } from '../src/assets/asset-session.js'
 import { ASSET_BLOCK_SIZE, createStaticAssetManifest, writeStaticAsset } from '../src/assets/static-core.js'
+import { createBufferSourceReader } from '../src/assets/source-reader.js'
 import { createMultiPeerScheduler } from '../src/playback/multi-peer-scheduler.js'
 import {
   PLAYBACK_ERRORS,
@@ -224,7 +225,7 @@ async function proofFixture(t, blockCount = 2) {
   await reader.store.ready()
   const sourceBytes = b4a.alloc(blockCount * ASSET_BLOCK_SIZE)
   for (let index = 0; index < blockCount; index++) sourceBytes.fill(index + 1, index * ASSET_BLOCK_SIZE, (index + 1) * ASSET_BLOCK_SIZE)
-  const asset = await writeStaticAsset({ store: source.store, source: [sourceBytes] })
+  const asset = await writeStaticAsset({ store: source.store, reader: createBufferSourceReader(sourceBytes) })
   const session = createAssetSession({ coreRef: asset.descriptor, store: reader.store })
   await session.ready()
 

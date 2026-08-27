@@ -14,6 +14,7 @@ import {
 import { openResponse, readBody } from './media/http-get.js'
 import { buildWriterKeyName } from './archive/source-id.js'
 import { createRelayPublisherShell } from './publisher-shell.js'
+import { createOneShotSourceReader, createSourceReader } from '@peartube/backend/assets'
 
 // A publisher proxy that WAITS for the real publisher to be bound instead of
 // failing when called early. The relay web console starts before the
@@ -79,8 +80,6 @@ async function resolvePublicBeeKey (channel) {
   }
   return typeof publicBeeKey === 'string' && publicBeeKey.length > 0 ? publicBeeKey : null
 }
-const JOBS_KEY = 'relay-archive-jobs'
-const PRIVATE_INPUTS_KEY = 'relay-archive-job-inputs'
 
 function now() {
   return Date.now()
@@ -99,10 +98,6 @@ function parseArchiveUrl(value) {
   if (!url) throw new Error('archive url is required')
   if (!/^https?:\/\//i.test(url)) throw new Error('archive url must be http(s)')
   return new URL(url)
-}
-
-function sanitizeUrl(value) {
-  return parseArchiveUrl(value).toString()
 }
 
 function normalizeInvidiousInstance(value) {
@@ -138,16 +133,6 @@ function buildInvidiousFallbackUrls(sourceUrl, instance) {
     `${normalizedInstance}/latest_version?id=${encoded}&itag=18&local=true`,
     `${normalizedInstance}/watch?v=${encoded}`
   ]
-}
-
-function sanitizeName(value) {
-  const name = String(value || '').trim()
-  return name || 'Anonymous Archive'
-}
-
-function publicJob(job) {
-  const { url, ...safe } = job || {}
-  return safe
 }
 
 function makeJobId(url) {
@@ -206,7 +191,7 @@ export async function fetchPosterBytes(tmdbPosterPath, { http = posterHttp, time
     // caller's, which is why this uses the plain client and not the guarded
     // downloader — but the redirect budget is still bounded, where the global
     // fetch this replaced would have followed twenty of them anywhere.
-    ;({ res } = await posterRequest(http, url, timeoutMs))
+    ({ res } = await posterRequest(http, url, timeoutMs))
     const status = res.statusCode || 0
     if (status < 200 || status >= 300) return null
     const mimeType = String(res.headers?.['content-type'] || '').split(';')[0].trim().toLowerCase()
@@ -271,163 +256,6 @@ export async function publishPosterArtwork(channel, poster) {
   }
 }
 
-async function readValue(metaDb, key, fallback) {
-  const entry = await metaDb.get(key).catch(() => null)
-  return entry?.value ?? fallback
-}
-
-export function createArchiveJobStore({ metaDb }) {
-  if (!metaDb) throw new Error('metaDb is required')
-
-  async function readJobsRaw() {
-    return safeArray(await readValue(metaDb, JOBS_KEY, []))
-  }
-
-  async function writeJobsRaw(jobs) {
-    await metaDb.put(JOBS_KEY, safeArray(jobs).map(publicJob))
-  }
-
-  async function readPrivateInputs() {
-    const raw = await readValue(metaDb, PRIVATE_INPUTS_KEY, {})
-    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
-  }
-
-  async function writePrivateInputs(inputs) {
-    await metaDb.put(PRIVATE_INPUTS_KEY, inputs || {})
-  }
-
-  return {
-    async listJobs() {
-      return (await readJobsRaw()).map(publicJob)
-    },
-    async getPrivateInput(id) {
-      const inputs = await readPrivateInputs()
-      return inputs[id] || null
-    },
-    async addJob(job, privateInput) {
-      const jobs = await readJobsRaw()
-      jobs.unshift(publicJob(job))
-      await writeJobsRaw(jobs)
-      const inputs = await readPrivateInputs()
-      inputs[job.id] = privateInput
-      await writePrivateInputs(inputs)
-      return publicJob(job)
-    },
-    async replaceJob(id, job, privateInput) {
-      const jobs = await readJobsRaw()
-      const existing = jobs.find((candidate) => candidate.id === id)
-      if (!existing) throw new Error(`archive job ${id} does not exist`)
-      const replacement = publicJob({
-        ...existing,
-        ...job,
-        id,
-        createdAt: existing.createdAt,
-        updatedAt: now()
-      })
-      await writeJobsRaw(jobs.map((candidate) => candidate.id === id ? replacement : candidate))
-      const inputs = await readPrivateInputs()
-      inputs[id] = privateInput
-      await writePrivateInputs(inputs)
-      return replacement
-    },
-    async updateJob(id, patch) {
-      const jobs = await readJobsRaw()
-      const updated = jobs.map((job) => job.id === id ? publicJob({ ...job, ...patch, updatedAt: now() }) : job)
-      await writeJobsRaw(updated)
-      return updated.find((job) => job.id === id) || null
-    },
-    async getCompletedVideoPreviewsByChannel() {
-      const jobs = await readJobsRaw()
-      const byChannel = new Map()
-      for (const job of jobs) {
-        if (job?.status !== 'completed') continue
-        if (job?.publish === false) continue
-        if (!job?.channelKey || !job?.previewVideo?.id) continue
-        const list = byChannel.get(job.channelKey) || []
-        list.push({
-          ...job.previewVideo,
-          publicBeeKey: job.publicBeeKey || job.previewVideo.publicBeeKey || null,
-          channelKey: job.channelKey,
-          driveKey: job.channelKey,
-        })
-        byChannel.set(job.channelKey, list)
-      }
-      return byChannel
-    }
-  }
-}
-
-export async function enqueueArchiveJob(store, input = {}) {
-  const uploadPath = input.uploadPath ? String(input.uploadPath) : null
-  const url = uploadPath ? null : sanitizeUrl(input.url)
-  const createdAt = now()
-  const job = {
-    id: input.reuseJobId ? String(input.reuseJobId) : makeJobId(url || uploadPath),
-    status: 'queued',
-    channelName: sanitizeName(input.channelName),
-    // Someone who picked this title out of a catalogue told us its name. Only
-    // falling back to the filename stem meant every card read
-    // "WeddingCrashers2005REPACK1080pBluRay51YTSMX-xpost" - the release
-    // scene's name for a file, not the film's name.
-    title: input.title ? String(input.title) : (input.tmdbTitle ? String(input.tmdbTitle) : null),
-    description: input.description
-      ? String(input.description)
-      : (input.tmdbOverview ? String(input.tmdbOverview) : ''),
-    publish: input.publish !== false,
-    anonymous: input.anonymous !== false,
-    createdAt,
-    updatedAt: createdAt,
-    idempotencyKey: input.idempotencyKey ? String(input.idempotencyKey) : null,
-    entityHint: input.entityHint ? String(input.entityHint) : null,
-    error: null
-  }
-
-  const privateInput = {
-    url,
-    uploadPath,
-    uploadFilename: input.uploadFilename ? String(input.uploadFilename) : null,
-    uploadMimeType: input.uploadMimeType ? String(input.uploadMimeType) : null,
-    uploadSize: Number(input.uploadSize) || null,
-    invidiousInstance: input.invidiousInstance ? String(input.invidiousInstance).trim() : '',
-    title: job.title,
-    description: job.description,
-    channelName: job.channelName,
-    publish: job.publish,
-    anonymous: job.anonymous,
-    creatorSourceId: input.creatorSourceId ? String(input.creatorSourceId) : null,
-    creatorName: input.creatorName ? String(input.creatorName) : null,
-    creatorHandle: input.creatorHandle ? String(input.creatorHandle) : null,
-    sourceType: input.sourceType ? String(input.sourceType) : null,
-    sourceUrl: input.sourceUrl ? String(input.sourceUrl) : (url || null),
-    sourceVideoId: input.sourceVideoId ? String(input.sourceVideoId) : null,
-    // Set only by the machine API's url ingest: this job fetches a url a
-    // stranger supplied, so the downloader re-checks every redirect hop and
-    // caps what it will pull. A console submission never sets it, and the
-    // console's downloads are unchanged.
-    requirePublicSource: input.requirePublicSource === true,
-    tmdbType: input.tmdbType ? String(input.tmdbType) : null,
-    tmdbId: input.tmdbId ? String(input.tmdbId) : null,
-    tmdbSeason: input.tmdbSeason ? String(input.tmdbSeason) : null,
-    tmdbEpisode: input.tmdbEpisode ? String(input.tmdbEpisode) : null,
-    tmdbPosterPath: input.tmdbPosterPath ? String(input.tmdbPosterPath) : null,
-    tmdbTitle: input.tmdbTitle ? String(input.tmdbTitle) : null,
-    tmdbYear: input.tmdbYear ? String(input.tmdbYear) : null,
-    // Carried so the publisher can put them on the claim: a consumer holds no
-    // provider credentials, so anything the relay knows and does not publish is
-    // lost to every viewer downstream.
-    tmdbOverview: input.tmdbOverview ? String(input.tmdbOverview) : null,
-    tmdbRuntime: input.tmdbRuntime ? String(input.tmdbRuntime) : null,
-    tmdbGenres: input.tmdbGenres ? String(input.tmdbGenres) : null,
-    // Which promise this job is: a watched-media contribution or a deliberate
-    // archive pin. It decides the budget the bytes are charged against and the
-    // eviction rules that apply, so it travels with the job rather than being
-    // assumed at publish time.
-    retentionClass: input.retentionClass === 'contribution-cache' ? 'contribution-cache' : 'archive-pin'
-  }
-  return input.reuseJobId
-    ? store.replaceJob(job.id, job, privateInput)
-    : store.addJob(job, privateInput)
-}
 function reserveAdjustedArchiveHeadroom(snapshot, reservedBytes = 0) {
   const reserved = Math.max(0, Math.floor(Number(reservedBytes) || 0))
   if (Number.isFinite(snapshot)) return Math.max(0, snapshot - reserved)
@@ -609,6 +437,7 @@ export function createYtDlpDownloader({
         thumbnailFile,
         creatorName,
         mimeType: getVideoMimeType(filePath),
+        releaseStorageReservation: releaseReservation,
         cleanup() {
           try {
             fs.rmSync(targetDir, { recursive: true, force: true })
@@ -623,7 +452,7 @@ export function createYtDlpDownloader({
       } catch (err) {
         releaseReservation()
         if (targetDir) {
-          try { fs.rmSync(targetDir, { recursive: true, force: true }) } catch {}
+          try { fs.rmSync(targetDir, { recursive: true, force: true }) } catch { /* Preserve the download failure. */ }
         }
         throw storageExceeded
           ? new Error('relay archive storage headroom exhausted during yt-dlp download')
@@ -733,9 +562,8 @@ export function createGrantedRangedSource ({
   // completed range is held unconsumed. So an ingest's resident cost is two
   // ranges and still does not grow with the title. Reading further ahead would
   // put the title back in memory, which is the one thing this path exists to
-  // avoid.
-  function fetchRange (start, readSignal) {
-    const end = Math.min(start + chunkBytes, length) - 1
+  function fetchRange (start, stop, readSignal) {
+    const end = Math.min(start + chunkBytes, stop) - 1
     const parts = []
     const pending = client.getRange({
       capability,
@@ -747,31 +575,24 @@ export function createGrantedRangedSource ({
       signal: readSignal,
       onChunk: (chunk) => { parts.push(chunk) }
     }).then(() => ({ parts, end }))
-    // A read-ahead can fail while its predecessor is still being consumed, with
-    // nothing awaiting it yet. It is re-raised at the await below; this keeps it
-    // from being an unhandled rejection until then, and from becoming one at all
-    // if the consumer stops before it gets there.
     pending.catch(() => {})
     return pending
   }
-
-  async function *readFrom (byteOffset) {
-    // Scoped to this read, and following the caller's signal rather than
-    // replacing it: a consumer that stops mid-title leaves no read-ahead
-    // transferring bytes nobody will ask for.
+  async function *readFrom (byteOffset, requestedLength = length - byteOffset) {
     const reads = new AbortController()
     const abortReads = () => reads.abort()
     signal?.addEventListener?.('abort', abortReads, { once: true })
     if (signal?.aborted === true) reads.abort()
     try {
-      // An offset equal to the length is the attempt whose download finished and
-      // then died before the core was sealed: there is nothing left to ask for,
-      // and asking would be a 416 against a grant that is behaving correctly.
       if (!Number.isSafeInteger(byteOffset) || byteOffset < 0 || byteOffset > length) {
         throw new Error(`granted source cannot open at byte ${byteOffset} of ${length}`)
       }
+      if (!Number.isSafeInteger(requestedLength) || requestedLength < 0 || byteOffset + requestedLength > length) {
+        throw new Error(`granted source cannot read ${requestedLength} bytes at ${byteOffset} of ${length}`)
+      }
+      const readEnd = byteOffset + requestedLength
       const hasher = digest === null ? null : sha256Hasher()
-      let pending = byteOffset < length ? fetchRange(byteOffset, reads.signal) : null
+      let pending = byteOffset < readEnd ? fetchRange(byteOffset, readEnd, reads.signal) : null
       while (pending !== null) {
         // Where an archive's time actually goes. The read-ahead means awaiting
         // the upstream should cost nothing once the first range has landed, so a
@@ -783,7 +604,7 @@ export function createGrantedRangedSource ({
         const { parts, end } = await pending
         const fetchMs = Date.now() - fetchStartedAt
         const position = end + 1
-        pending = position < length ? fetchRange(position, reads.signal) : null
+        pending = position < readEnd ? fetchRange(position, readEnd, reads.signal) : null
         const consumeStartedAt = Date.now()
         let rangeBytes = 0
         for (const part of parts) {
@@ -816,16 +637,18 @@ export function createGrantedRangedSource ({
   return {
     id: jobId,
     etag,
+    sha256: digest,
     length,
     // A whole-file digest can only be checked by an attempt that reads the
     // whole file, so a request that states one is ingested in a single pass
     // from byte zero rather than resumed from a staged prefix — the digest
     // stays exactly as verifiable as it was when the title was spooled and
-    // re-read. client application cannot state one for a debrid-backed title without
-    // pulling it through itself first, so every grant production issues carries
-    // an ETag and no digest, and takes the resumable shape.
+    // re-read. A remote range source normally cannot state one without pulling
+    // the whole file first, so production grants carry an ETag and no digest,
+    // and take the resumable shape.
     resumable: digest === null,
-    open: (byteOffset) => readFrom(byteOffset)
+    open: (byteOffset) => readFrom(byteOffset),
+    openRange: ({ offset, length: rangeLength }) => readFrom(offset, rangeLength)
   }
 }
 
@@ -1102,19 +925,37 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         ...mediaCoordinates,
         ...poster
       }
-      // One-shot body, read exactly once, never staged as a file. A granted
-      // source is the same read, except it can be re-opened at an offset, which
-      // is what lets an interrupted archive resume from its staged prefix
-      // instead of starting the download again — so it is handed over whole,
-      // opener and identity together, rather than as a bare iterable. The
-      // temp-file path below is unchanged and is what every unbounded
-      // downloader still takes.
       let result
       if (granted) {
-        const uploadSource = granted.resumable ? granted : granted.open(0)
-        result = await uploadManager.uploadFromStream(channel, uploadSource, { ...uploadOptions, byteLength: requestedBytes })
+        const reader = createSourceReader({
+          resumable: granted.resumable,
+          maxReadBytes: requestedBytes,
+          async describe() {
+            return {
+              identity: granted.sha256
+                ? { kind: 'sha256', value: granted.sha256 }
+                : { kind: 'etag', value: granted.etag },
+              byteLength: requestedBytes,
+              mimeType: mimeType || 'application/octet-stream',
+            }
+          },
+          open({ offset, length }) {
+            return granted.openRange({ offset, length })
+          },
+          async close() {},
+        })
+        result = await uploadManager.uploadFromStream(channel, reader, {
+          ...uploadOptions,
+          resumeId: granted.resumable ? granted.id : undefined,
+        })
       } else if (stream) {
-        result = await uploadManager.uploadFromStream(channel, stream, { ...uploadOptions, byteLength: requestedBytes })
+        const reader = createOneShotSourceReader({
+          source: stream,
+          identity: { kind: 'etag', value: `one-shot:${videoId}:${requestedBytes}` },
+          byteLength: requestedBytes,
+          mimeType: mimeType || 'application/octet-stream',
+        })
+        result = await uploadManager.uploadFromStream(channel, reader, uploadOptions)
       } else {
         result = await uploadManager.uploadFromPath(channel, filePath, uploadOptions, fs)
       }
@@ -1210,254 +1051,6 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         }
       }
       return results
-    }
-  }
-}
-
-// Adapt a browser-uploaded file into the same shape `downloader.download`
-// returns, so an upload job flows through the identical import/publish/seed
-// path as a URL archive — no yt-dlp involved. TMDB coordinates and the title
-// ride in from the private input just like the URL case.
-function loadUploadedFile (privateInput) {
-  const filePath = String(privateInput.uploadPath || '')
-  if (!filePath || !existsSync(filePath)) {
-    throw new Error(`Uploaded file is missing: ${filePath || '(none)'}`)
-  }
-  const separator = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
-  const dir = separator > 0 ? filePath.slice(0, separator) : null
-  const baseName = (privateInput.uploadFilename || filePath.slice(separator + 1) || 'Uploaded video')
-  const stem = baseName.replace(/\.[^.]+$/, '') || 'Uploaded video'
-  return {
-    filePath,
-    title: privateInput.title || stem,
-    description: privateInput.description || '',
-    duration: undefined,
-    thumbnailUrl: null,
-    thumbnailFile: null,
-    creatorName: privateInput.creatorName || null,
-    mimeType: privateInput.uploadMimeType || getVideoMimeType(filePath),
-    cleanup () {
-      try { if (dir) rmSync(dir, { recursive: true, force: true }) } catch { /* best effort */ }
-    }
-  }
-}
-
-
-function normalizeStagingPath(value) {
-  const raw = String(value || '').replace(/\\/g, '/')
-  const absolute = raw.startsWith('/')
-  const parts = []
-  for (const part of raw.split('/')) {
-    if (!part || part === '.') continue
-    if (part === '..') {
-      if (parts.length > 0 && parts[parts.length - 1] !== '..') parts.pop()
-      else if (!absolute) parts.push('..')
-      continue
-    }
-    parts.push(part)
-  }
-  return `${absolute ? '/' : ''}${parts.join('/')}` || (absolute ? '/' : '.')
-}
-
-export function createArchiveManager({ store, downloader, publisher, logger = null, onCompleted = null, canIngest = null, runQueue = null, onUploadReleased = null, stagingRoot = null }) {
-  if (!store) throw new Error('store is required')
-  if (!downloader) throw new Error('downloader is required')
-  if (!publisher) throw new Error('publisher is required')
-
-  const queue = runQueue || { tail: Promise.resolve() }
-  if (!queue.tail || typeof queue.tail.then !== 'function') queue.tail = Promise.resolve()
-  const runExclusive = (fn) => {
-    const next = queue.tail.then(fn, fn)
-    queue.tail = next.catch(() => {})
-    return next
-  }
-
-
-  function safeRemoveStagingTarget(target) {
-    const root = normalizeStagingPath(stagingRoot)
-    const candidate = normalizeStagingPath(target)
-    if (!stagingRoot || !target) return false
-    if (candidate === root) return false
-    const inside = candidate.startsWith(`${root}/`)
-    if (!inside) return false
-    try {
-      rmSync(candidate, { recursive: true, force: true })
-      return true
-    } catch (err) {
-      logger?.archive?.warn?.('Interrupted archive staging cleanup failed', { path: candidate, error: err?.message || String(err) })
-      return false
-    }
-  }
-
-  function uploadStagingDir(privateInput) {
-    const filePath = String(privateInput?.uploadPath || '')
-    if (!filePath) return null
-    const separator = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
-    return separator > 0 ? filePath.slice(0, separator) : null
-  }
-
-  function directStagingDir(job) {
-    const id = String(job?.id || '')
-    if (!id || id.includes('..') || /[\\/]/.test(id)) return null
-    return join(String(stagingRoot || ''), id)
-  }
-
-  async function recoverInterruptedJobsUnlocked() {
-    const jobs = await store.listJobs()
-    const running = jobs.filter((job) => job?.status === 'running')
-    let recovered = 0
-    for (const job of running) {
-      const privateInput = await store.getPrivateInput(job.id).catch(() => null)
-      const isUpload = Boolean(privateInput?.uploadPath)
-      const cleanupTarget = isUpload ? uploadStagingDir(privateInput) : directStagingDir(job)
-      const cleaned = cleanupTarget ? safeRemoveStagingTarget(cleanupTarget) : false
-      const status = isUpload ? 'skipped' : 'failed'
-      const error = isUpload
-        ? 'archive upload interrupted by relay restart; staged upload was discarded and cannot be retried'
-        : 'archive job interrupted by relay restart; staged bytes were discarded'
-      await store.updateJob(job.id, {
-        status,
-        error,
-        recoveredAt: now()
-      })
-      logger?.archive?.warn?.('[archive-stage] recovered interrupted job', { id: job.id, isUpload, cleaned })
-      recovered += 1
-    }
-    return { recovered }
-  }
-
-  async function runJobUnlocked(id) {
-    const privateInput = await store.getPrivateInput(id)
-    const isUpload = Boolean(privateInput?.uploadPath)
-    if (!isUpload && !privateInput?.url) throw new Error(`Archive job ${id} has no private URL input`)
-    // Refuse to download/import when the relay is over its storage threshold
-    // or low on free disk, so archive imports (incl. web-console uploads) can't
-    // fill the disk and crash the relay. Mark failed WITHOUT touching the
-    // staged upload temp so runNext() retries cleanly once space is reclaimed
-    // (a URL job re-downloads; an upload re-reads its still-present temp).
-    if (typeof canIngest === 'function' && !canIngest()) {
-      logger?.archive?.warn?.('[archive-stage] refused: storage threshold reached', { id })
-      return store.updateJob(id, { status: 'failed', error: 'relay storage threshold reached; free space or raise storage.maxBytes' })
-    }
-    await store.updateJob(id, { status: 'running', error: null })
-    logger?.archive?.info?.('[archive-stage] running', { id, isUpload })
-    let downloaded = null
-
-    try {
-      downloaded = isUpload
-        ? loadUploadedFile(privateInput)
-        : await downloader.download({ id, ...privateInput })
-      const sourceIdentity = privateInput.sourceIdentity || deriveArchiveSourceIdentity(privateInput)
-      // The job said which promise it is when it was enqueued. Older jobs
-      // persisted before that field existed carry none, and an archive pin is
-      // what this path has always meant, so that stays the default.
-      const retentionClass = privateInput.retentionClass === 'contribution-cache'
-        ? 'contribution-cache'
-        : 'archive-pin'
-      logger?.archive?.info?.('[archive-stage] ensuring-channel', { id, sourceId: sourceIdentity?.sourceId || null, retentionClass })
-      const channelInfo = await publisher.ensureAnonymousChannel({ ...privateInput, sourceIdentity, retentionClass })
-      logger?.archive?.info?.('[archive-stage] channel-ready', { id, channelKey: channelInfo?.channelKey || null, publicBeeKey: channelInfo?.publicBeeKey || null })
-      const sourceTitle = downloaded.title || privateInput.title
-      const sourceDescription = downloaded.description || privateInput.description
-      const imported = await publisher.importVideo({
-        retentionClass,
-        ...privateInput,
-        ...downloaded,
-        channel: channelInfo.channel,
-        title: sourceTitle,
-        description: sourceDescription
-      })
-      logger?.archive?.info?.('[archive-stage] imported', { id, videoId: imported?.videoId || null })
-      const importedMetadata = imported?.metadata || imported
-
-      const previewVideo = imported?.videoId ? {
-        id: imported.videoId,
-        title: sourceTitle || imported.videoId,
-        description: sourceDescription || '',
-        path: importedMetadata.path || `/videos/${imported.videoId}.mp4`,
-        uploadedAt: importedMetadata.uploadedAt || now(),
-        duration: Number(importedMetadata.duration || downloaded.duration || 0) || 0,
-        size: Number(importedMetadata.size || downloaded.size || 0) || 0,
-        mimeType: importedMetadata.mimeType || downloaded.mimeType || 'video/mp4',
-        sourceVideoId: privateInput.sourceVideoId || downloaded.sourceVideoId || null,
-        creatorSourceId: privateInput.creatorSourceId || downloaded.creatorSourceId || null,
-        creatorName: privateInput.creatorName || downloaded.creatorName || null,
-        creatorHandle: privateInput.creatorHandle || downloaded.creatorHandle || null,
-        availability: 'playable',
-        blobId: importedMetadata.blobId || null,
-        blobsCoreKey: importedMetadata.blobsCoreKey || null,
-        thumbnailBlobId: importedMetadata.thumbnailBlobId || null,
-        thumbnailBlobsCoreKey: importedMetadata.thumbnailBlobsCoreKey || null,
-        thumbnailMimeType: importedMetadata.thumbnailMimeType || null,
-        thumbnailUrl: importedMetadata.thumbnailUrl || downloaded.thumbnailUrl || null,
-        immutablePublication: importedMetadata.immutablePublication || null,
-        ...deriveMediaCoordinates(privateInput),
-        classification: privateInput.tmdbId ? {
-          type: privateInput.tmdbType || 'movie',
-          tmdbId: Number(privateInput.tmdbId) || privateInput.tmdbId,
-          title: privateInput.tmdbTitle || sourceTitle || null,
-          year: Number(privateInput.tmdbYear || 0) || null,
-          posterPath: privateInput.tmdbPosterPath || null,
-          season: Number(privateInput.tmdbSeason || 0) || null,
-          episode: Number(privateInput.tmdbEpisode || 0) || null,
-          classifiedAt: now()
-        } : undefined
-      } : null
-      logger?.archive?.info?.('[archive-stage] publishing', { id, publish: privateInput.publish !== false })
-      if (privateInput.publish !== false) {
-        await publisher.publishCatalog({ ...channelInfo, retentionClass })
-        await publisher.retainAssets({ ...channelInfo, retentionClass, previewVideos: previewVideo ? [previewVideo] : [] })
-      }
-      logger?.archive?.info?.('[archive-stage] published', { id })
-
-      const completed = await store.updateJob(id, {
-        status: 'completed',
-        title: sourceTitle || downloaded.title,
-        videoId: imported.videoId,
-        channelKey: channelInfo.channelKey,
-        publicBeeKey: channelInfo.publicBeeKey || null,
-        publisherId: channelInfo.publisherId || null,
-        previewVideo,
-        completedAt: now(),
-        error: null
-      })
-      if (typeof onCompleted === 'function') {
-        await onCompleted({ ...completed, archivePath: downloaded.filePath })
-      }
-      return completed
-    } catch (err) {
-      logger?.archive?.error?.('Archive job failed', { id, error: err?.message || String(err) })
-      const failed = await store.updateJob(id, { status: 'failed', error: err?.message || String(err) })
-      return failed
-    } finally {
-      try {
-        downloaded?.cleanup?.()
-      } catch (err) {
-        // Best effort: import result is already persisted before cleanup runs.
-      }
-      if (isUpload && typeof onUploadReleased === 'function') {
-        try { onUploadReleased(privateInput.uploadPath) } catch {}
-      }
-    }
-  }
-
-  return {
-    enqueue(input) {
-      return enqueueArchiveJob(store, input)
-    },
-    runNext() {
-      return runExclusive(async () => {
-        const jobs = await store.listJobs()
-        const job = jobs.find((item) => item.status === 'queued')
-        if (!job) return null
-        return runJobUnlocked(job.id)
-      })
-    },
-    runJob(id) {
-      return runExclusive(() => runJobUnlocked(id))
-    },
-    recoverInterruptedJobs() {
-      return runExclusive(recoverInterruptedJobsUnlocked)
     }
   }
 }

@@ -10,7 +10,7 @@ import Hypercore from 'hypercore'
 import HypercoreID from 'hypercore-id-encoding'
 import z32 from 'z32'
 
-import { ASSET_BLOCK_SIZE, verifyStaticAssetDescriptor, writeStaticAsset } from '@peartube/backend/assets'
+import { ASSET_BLOCK_SIZE, createBufferSourceReader, createOneShotSourceReader, verifyStaticAssetDescriptor, writeStaticAsset } from '@peartube/backend/assets'
 import {
   prioritizeBlobServerRangeRequest,
   releaseAllPrioritizedBlobRanges
@@ -215,7 +215,7 @@ test('a title written through the relay capability leaves the volume for the buc
   // whose createOffloader is what turns this into a bounded ingest.
   const written = await writeStaticAsset({
     store,
-    createSource: () => replay(chunksOf(bytes)),
+    reader: createBufferSourceReader(bytes),
     offload
   })
 
@@ -271,7 +271,11 @@ test('a one-shot download archives through the capability staging store and leav
   // cannot be re-read, so pass 2 has to get it back from the bucket.
   const written = await writeStaticAsset({
     store,
-    source: oneShotSource(chunksOf(bytes)),
+    reader: createOneShotSourceReader({
+      source: oneShotSource(chunksOf(bytes)),
+      identity: { kind: 'etag', value: 'relay-offload-one-shot' },
+      byteLength: bytes.byteLength,
+    }),
     offload
   })
 

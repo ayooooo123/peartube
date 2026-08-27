@@ -15,6 +15,7 @@ import {
   verifyStaticAssetDescriptor,
   writeStaticAsset,
 } from '../src/assets/static-core.js'
+import { createSourceReader } from '../src/assets/source-reader.js'
 
 // Nine canonical blocks over a three-block window: three windows of title, with
 // the last block a 1000-byte tail so the partial block is ingested on the same
@@ -66,23 +67,45 @@ async function *replay(chunks) {
   yield* chunks
 }
 
-/**
- * A one-shot source: a generator object that refuses to be iterated twice,
- * which is what a pipe or a decode stream is. Bounded ingest has to refuse it,
- * not buffer the title to work around it.
- */
+function reopenableReader(byteLength, open) {
+  return createSourceReader({
+    resumable: true,
+    maxReadBytes: Math.max(1, byteLength),
+    async describe() {
+      return {
+        identity: { kind: 'etag', value: `bounded-fixture:${byteLength}` },
+        byteLength,
+        mimeType: 'application/octet-stream',
+      }
+    },
+    open,
+    async close() {},
+  })
+}
+
 function oneShotSource(chunks) {
   let iterations = 0
-  return {
-    get iterations() {
-      return iterations
+  const byteLength = chunks.reduce((total, chunk) => total + chunk.byteLength, 0)
+  const reader = createSourceReader({
+    resumable: false,
+    maxReadBytes: Math.max(1, byteLength),
+    async describe() {
+      return {
+        identity: { kind: 'etag', value: `one-shot-fixture:${byteLength}` },
+        byteLength,
+        mimeType: 'application/octet-stream',
+      }
     },
-    async *[Symbol.asyncIterator]() {
-      iterations++
-      if (iterations > 1) throw new Error('source iterated more than once')
-      yield* chunks
+    open() {
+      return (async function * () {
+        iterations++
+        if (iterations > 1) throw new Error('source iterated more than once')
+        yield* chunks
+      })()
     },
-  }
+    async close() {},
+  })
+  return { reader, get iterations() { return iterations } }
 }
 
 /**
@@ -201,10 +224,10 @@ test('bounded ingest bounds local block data by the window, confirms every uploa
   let sourceOpens = 0
   const written = await writeStaticAsset({
     store,
-    createSource: () => {
+    reader: reopenableReader(BYTE_LENGTH, () => {
       sourceOpens++
       return replay(chunks)
-    },
+    }),
     offload: {
       createOffloader({ core, descriptor }) {
         t.is(descriptor.length, BLOCK_COUNT, 'the offloader is handed the finished descriptor before a block is written')
@@ -316,10 +339,10 @@ test('bounded ingest derives the identical descriptor to the unbounded path', as
 
   // Today's path: no offload configured at all, one pass, whole title resident.
   const plainSource = oneShotSource(chunks)
-  const plain = await writeStaticAsset({ store: plainStore, source: plainSource })
+  const plain = await writeStaticAsset({ store: plainStore, reader: plainSource.reader })
   const bounded = await writeStaticAsset({
     store,
-    createSource: () => replay(chunks),
+    reader: reopenableReader(BYTE_LENGTH, () => replay(chunks)),
     offload: boundedOffload(),
   })
 
@@ -341,12 +364,12 @@ test('bounded ingest refuses a one-shot source instead of buffering the title', 
 
   const error = await writeStaticAsset({
     store,
-    source,
+    reader: source.reader,
     offload: boundedOffload(),
   }).then(() => null, (err) => err)
 
   t.is(error?.code, 'ASSET_SOURCE_NOT_REOPENABLE', 'a source that can only be read once is refused')
-  t.ok(/createSource/.test(error?.message || ''), 'and the refusal names what to pass instead')
+  t.ok(/SourceReader/.test(error?.message || ''), 'and the refusal names the required source contract')
   t.is(source.iterations, 0, 'the source was never read, so nothing was buffered')
   t.is(objects.size, 0, 'and nothing was uploaded')
 
@@ -362,14 +385,13 @@ test('bounded ingest refuses bytes that changed between the two passes', async (
   let opens = 0
   const error = await writeStaticAsset({
     store,
-    createSource: () => {
+    reader: reopenableReader(BYTE_LENGTH, () => {
       opens++
       if (opens === 1) return replay(chunksOf(bytes))
-      // The second read of the source hands back one flipped bit in block 1.
       const changed = b4a.from(bytes)
       changed[ASSET_BLOCK_SIZE + 7] ^= 1
       return replay(chunksOf(changed))
-    },
+    }),
     offload: boundedOffload(),
   }).then(() => null, (err) => err)
 

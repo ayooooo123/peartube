@@ -12,6 +12,9 @@ import * as assets from '../src/assets/index.js'
 const {
   ASSET_BLOCK_SIZE,
   createStaticAssetManifest,
+  createBufferSourceReader,
+  createOneShotSourceReader,
+  createSourceReader,
   deriveStaticAssetId,
   deriveStaticAssetTopic,
   verifyStaticAssetDescriptor,
@@ -115,16 +118,27 @@ function abortDuringStagingCleanup(store, controller) {
 
 function oneShotSource(chunks) {
   let iterations = 0
-  return {
-    get iterations() {
-      return iterations
+  const byteLength = chunks.reduce((total, chunk) => total + chunk.byteLength, 0)
+  const reader = createSourceReader({
+    resumable: false,
+    maxReadBytes: Math.max(1, byteLength),
+    async describe () {
+      return {
+        identity: { kind: 'etag', value: `fixture:${byteLength}` },
+        byteLength,
+        mimeType: 'application/octet-stream',
+      }
     },
-    async *[Symbol.asyncIterator]() {
-      iterations++
-      if (iterations > 1) throw new Error('source iterated more than once')
-      yield* chunks
+    open () {
+      return (async function * () {
+        iterations++
+        if (iterations > 1) throw new Error('source iterated more than once')
+        yield* chunks
+      })()
     },
-  }
+    async close () {},
+  })
+  return { reader, get iterations () { return iterations } }
 }
 
 test('static asset materialization converges across stores and preserves canonical blocks', async (t) => {
@@ -147,9 +161,9 @@ test('static asset materialization converges across stores and preserves canonic
     rmSync(rightDirectory, { recursive: true, force: true })
   })
 
-  const left = await writeStaticAsset({ store: storeA, source })
-  const right = await writeStaticAsset({ store: storeB, source: [bytes] })
-  const mutation = await writeStaticAsset({ store: storeB, source: [changed] })
+  const left = await writeStaticAsset({ store: storeA, reader: source.reader })
+  const right = await writeStaticAsset({ store: storeB, reader: createBufferSourceReader(bytes) })
+  const mutation = await writeStaticAsset({ store: storeB, reader: createBufferSourceReader(changed) })
 
   t.is(source.iterations, 1)
   t.is(left.descriptor.kind, 'static-prologue-v1')
@@ -199,12 +213,27 @@ test('static asset materialization purges staging cores after cancellation and s
   }
 
   await t.exception(
-    writeStaticAsset({ store, source: cancelledSource(), signal: controller.signal }),
+    writeStaticAsset({
+      store,
+      reader: createOneShotSourceReader({
+        source: cancelledSource(),
+        identity: { kind: 'etag', value: 'cancelled-fixture' },
+        byteLength: ASSET_BLOCK_SIZE + 11,
+      }),
+      signal: controller.signal,
+    }),
     /cancel/
   )
   t.is((await storedCoreKeys(store)).length, 0)
   t.is((await storedAliases(store)).length, 0)
-  await t.exception(writeStaticAsset({ store, source: failedSource() }), /source failed/)
+  await t.exception(writeStaticAsset({
+    store,
+    reader: createOneShotSourceReader({
+      source: failedSource(),
+      identity: { kind: 'etag', value: 'failed-fixture' },
+      byteLength: ASSET_BLOCK_SIZE,
+    }),
+  }), /source failed/)
   t.is((await storedCoreKeys(store)).length, 0)
   t.is((await storedAliases(store)).length, 0)
 })
@@ -239,7 +268,7 @@ test('static asset materialization closes the final session when aborting during
     await t.exception(
       writeStaticAsset({
         store,
-        source: [b4a.alloc(ASSET_BLOCK_SIZE + 11, 41)],
+        reader: createBufferSourceReader(b4a.alloc(ASSET_BLOCK_SIZE + 11, 41)),
         signal: controller.signal,
       }),
       /cancel/
@@ -267,7 +296,7 @@ test('static asset materialization closes the final session when cleanup trigger
   await t.exception(
     writeStaticAsset({
       store,
-      source: [b4a.alloc(ASSET_BLOCK_SIZE + 13, 42)],
+      reader: createBufferSourceReader(b4a.alloc(ASSET_BLOCK_SIZE + 13, 42)),
       signal: controller.signal,
     }),
     /cancel/
@@ -297,15 +326,22 @@ test('static asset materialization uses zero-copy source views and rejects non-b
   }
 
   try {
-    const written = await writeStaticAsset({ store, source: [chunk] })
+    const written = await writeStaticAsset({ store, reader: createBufferSourceReader(chunk) })
     t.ok(b4a.equals(await written.core.get(0), chunk))
   } finally {
     b4a.from = from
   }
 
   await t.exception(
-    writeStaticAsset({ store, source: ['not a byte chunk'] }),
-    /Buffer or Uint8Array/
+    writeStaticAsset({
+      store,
+      reader: createOneShotSourceReader({
+        source: ['not a byte chunk'],
+        identity: { kind: 'etag', value: 'invalid-chunk' },
+        byteLength: 1,
+      }),
+    }),
+    /Uint8Array/
   )
 })
 
@@ -397,4 +433,53 @@ test('static asset topics are stable 32-byte derivations of validated asset ids'
   t.is(topic.byteLength, 32)
   t.alike(topic, deriveStaticAssetTopic(b4a.from(assetId, 'hex')))
   t.exception(() => deriveStaticAssetTopic('abcd'), /assetId/)
+})
+
+test('SourceReader enforces exact ranges, stable identity, and cancellation', async (t) => {
+  function readerFor(chunks, overrides = {}) {
+    let describes = 0
+    let closed = 0
+    const reader = createSourceReader({
+      resumable: true,
+      maxReadBytes: 8,
+      async describe() {
+        describes++
+        return {
+          identity: { kind: 'etag', value: describes > 1 && overrides.changed ? 'changed' : 'stable' },
+          byteLength: 4,
+          mimeType: 'video/mp4',
+        }
+      },
+      open() {
+        return (async function * () { yield * chunks })()
+      },
+      async close() { closed++ },
+    })
+    return { reader, get closed() { return closed } }
+  }
+
+  const short = readerFor([b4a.from('abc')])
+  await t.exception(async () => {
+    for await (const _ of short.reader.open({ offset: 0, length: 4 })) void _
+  }, /ended after 3 of 4/)
+  await short.reader.close()
+  t.is(short.closed, 1)
+
+  const long = readerFor([b4a.from('abcde')])
+  await t.exception(async () => {
+    for await (const _ of long.reader.open({ offset: 0, length: 4 })) void _
+  }, /overran/)
+
+  const changed = readerFor([b4a.from('abcd')], { changed: true })
+  await changed.reader.describe()
+  await t.exception(async () => {
+    for await (const _ of changed.reader.open({ offset: 0, length: 4 })) void _
+  }, /identity or byte length changed/)
+
+  const controller = new AbortController()
+  const cancelled = readerFor([b4a.from('abcd')])
+  controller.abort()
+  await t.exception(async () => {
+    for await (const _ of cancelled.reader.open({ offset: 0, length: 4, signal: controller.signal })) void _
+  }, /cancel/)
 })

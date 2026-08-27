@@ -44,18 +44,11 @@ export function createImmutableRenditionWriter(defaults = {}) {
       let staticAsset = null
       try {
         validateRenditionMetadata(input)
-        // A resumable opener REPLACES the source rather than joining it: the
-        // offset it has to start at is only known once the staging core on disk
-        // has been read, so bytes handed in up front could not have started in
-        // the right place. Only the rendition that brought no source of its own
-        // inherits the writer's opener — artwork writes carry their own bytes
-        // and stay ordinary one-shot writes. Passing both on one write is left
-        // to writeStaticAsset to refuse rather than silently resolved here.
-        const source = input.source || defaults.source
-        const resume = input.resume || (input.source ? null : defaults.resume) || null
+        const reader = input.reader || defaults.reader
+        const resume = input.resume ?? (input.reader ? false : defaults.resume) ?? false
         staticAsset = await writeStaticAsset({
           store: input.store || defaults.store,
-          source,
+          reader,
           signal: input.signal || defaults.signal,
           offload: input.offload || defaults.offload || null,
           resume,

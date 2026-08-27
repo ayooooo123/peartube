@@ -6,9 +6,6 @@ import { createBootstrapLocator } from '../src/discovery/bootstrap-protocol.js'
 import { createBootstrapManager } from '../src/discovery/bootstrap-manager.js'
 import { createIndexFeedPage } from '../src/indexing/feed-contract.js'
 import { createIndexFeedManager } from '../src/indexing/feed-manager.js'
-import { createLocalMediaIndex } from '../src/indexing/local-index.js'
-import { createEntityReference, createMediaClaim } from '../src/media-graph/index.js'
-import { createMediaGraphStore } from '../src/media-graph/store.js'
 import { createModerationFeedPage } from '../src/moderation/feed-contract.js'
 import { createModerationManager } from '../src/moderation/manager.js'
 
@@ -63,17 +60,6 @@ function bootstrapLocator(keyPair, overrides = {}) {
   })
 }
 
-function workRef(id = 'episode-1') {
-  return createEntityReference({ entityKind: 'work', namespace: 'spam-test', normalizedIdentifier: id })
-}
-
-function collectionRef(id = 'season-1') {
-  return createEntityReference({ entityKind: 'collection', namespace: 'issuer-native', issuerRootKey: publisherA.publicKey, issuerLocalId: id })
-}
-
-function agentRef(id = 'alice') {
-  return createEntityReference({ entityKind: 'agent', namespace: 'issuer-native', issuerRootKey: publisherA.publicKey, issuerLocalId: id })
-}
 
 test('index feed budgets are cumulative across pages, fair across indexes, and recover after reset', async (t) => {
   let time = 10
@@ -157,72 +143,6 @@ test('signed index feeds remain subject to local policy and publisher, agent, an
   }
 })
 
-test('local projection bounds duplicate, fork, collection, and metadata storms without starving independent sources', (t) => {
-  let time = 0
-  const index = createLocalMediaIndex({
-    now: () => time,
-    budgetWindowMs: 100,
-    maxRecords: 8,
-    maxRecordsPerIndexPerWindow: 2,
-    maxRecordsPerPublisherPerWindow: 2,
-    maxRecordsPerAgentPerWindow: 2,
-    maxRecordsPerCollectionPerWindow: 2,
-    maxRecordsPerCollection: 2,
-    maxMetadataChangesPerEntityPerWindow: 1,
-    maxPublicationsPerEntity: 2,
-    maxTagsPerEntity: 2,
-    maxProvenancePerEntity: 2,
-  })
-  const poisonIndex = createLocalMediaIndex()
-  const cyclicTags = []
-  cyclicTags.push(cyclicTags)
-  const poisoned = poisonIndex.ingestRecords([{ ...indexRecord('14'), tags: cyclicTags }])
-  t.is(poisoned.status, 'rejected')
-  t.is(poisoned.errorCode, 'INVALID_INDEX_RECORD')
-  t.is(poisonIndex.records().length, 0)
-
-  const first = { ...indexRecord('8'), indexId: 'index:a', sourceId: 'page:1' }
-  t.is(index.ingestRecords([first]).status, 'accepted')
-  for (let i = 0; i < 20; i++) t.is(index.ingestRecords([first]).status, 'duplicate')
-  t.is(index.records().length, 1)
-
-  const fork = index.ingestRecords([{ ...first, sourceId: 'page:2', entityRef: 'work:fork' }])
-  t.is(fork.status, 'rejected')
-  t.is(fork.errorCode, 'INDEX_RECORD_FORK')
-  t.is(index.records().length, 1)
-
-  const rename = index.ingestRecords([{ ...first, sourceId: 'page:3', title: 'Renamed once' }])
-  t.is(rename.status, 'accepted')
-  const renameStorm = index.ingestRecords([{ ...first, sourceId: 'page:4', title: 'Renamed twice' }])
-  t.is(renameStorm.status, 'rejected')
-  t.is(renameStorm.errorCode, 'METADATA_WINDOW_BUDGET_EXCEEDED')
-  t.is(index.records().length, 1)
-
-  const collectionMember = { ...indexRecord('9'), indexId: 'index:a', sourceId: 'page:5' }
-  t.is(index.ingestRecords([collectionMember]).status, 'rejected')
-  time = 100
-  t.is(index.ingestRecords([collectionMember]).status, 'accepted')
-  const hugeCollection = index.ingestRecords([{ ...indexRecord('10'), indexId: 'index:a', sourceId: 'page:6' }])
-  t.is(hugeCollection.status, 'rejected')
-  t.is(hugeCollection.errorCode, 'COLLECTION_PROJECTION_BUDGET_EXCEEDED')
-
-  const fair = index.ingestRecords([{
-    ...indexRecord('11'),
-    indexId: 'index:b',
-    sourceId: 'page:7',
-    publisherId: publisherBId,
-    creator: 'agent:bob',
-    collectionId: 'collection:two',
-  }])
-  t.is(fair.status, 'accepted')
-  t.ok(index.records().length <= 8)
-  const projection = index.search('')
-  for (const row of projection) {
-    t.ok(row.publications.length <= 2)
-    t.ok(row.tags.length <= 2)
-    t.ok(row.provenance.length <= 2)
-  }
-})
 
 test('moderation feed budget cannot be bypassed with repeated page syncs and resets cleanly', async (t) => {
   let time = 10
@@ -294,105 +214,4 @@ test('bootstrap local policy rejects signed-but-unwanted locators without creati
   t.is(result.status, 'rejected')
   t.is(result.errorCode, 'LOCAL_POLICY_REJECTED')
   t.alike(manager.listLocators(), [])
-})
-
-test('media graph bounds publisher, agent, collection, metadata, fork, and duplicate projection pressure', async (t) => {
-  let time = 0
-  const store = createMediaGraphStore({
-    now: () => time,
-    trustedSigners: [publisherA.publicKey, publisherB.publicKey],
-    budgetWindowMs: 100,
-    maxClaims: 8,
-    maxClaimsPerPublisherPerWindow: 3,
-    maxClaimsPerAgentPerWindow: 1,
-    maxClaimsPerCollectionPerWindow: 2,
-    maxClaimsPerCollection: 2,
-    maxMetadataClaimsPerSubjectPerWindow: 1,
-  })
-  const metadata = createMediaClaim({ claimType: 'EntityMetadataClaim', subjectRefs: [workRef('m1')], payload: { title: 'One' }, keyPair: publisherA, issuerSequence: 1 })
-  t.is((await store.ingestClaim(metadata.envelope)).status, 'accepted')
-  for (let i = 0; i < 20; i++) t.is((await store.ingestClaim(metadata.envelope)).status, 'duplicate')
-  t.is(store.getClaims().length, 1)
-
-  const sequenceFork = createMediaClaim({ claimType: 'EntityMetadataClaim', subjectRefs: [workRef('m2')], payload: { title: 'Fork' }, keyPair: publisherA, issuerSequence: 1 })
-  const forkResult = await store.ingestClaim(sequenceFork.envelope)
-  t.is(forkResult.status, 'rejected')
-  t.is(forkResult.errorCode, 'ISSUER_SEQUENCE_FORK')
-
-  const rename = createMediaClaim({ claimType: 'EntityMetadataClaim', subjectRefs: [workRef('m1')], payload: { title: 'Two' }, keyPair: publisherA, issuerSequence: 2 })
-  const renameResult = await store.ingestClaim(rename.envelope)
-  t.is(renameResult.status, 'rejected')
-  t.is(renameResult.errorCode, 'METADATA_WINDOW_BUDGET_EXCEEDED')
-
-  const collection = collectionRef()
-  for (let i = 0; i < 2; i++) {
-    const membership = createMediaClaim({
-      claimType: 'CollectionMembershipClaim',
-      subjectRefs: [collection],
-      payload: { collectionRef: collection, memberRef: workRef(`member-${i}`), memberRole: 'episode', position: { episode: i }, insertionId: `member-${i}` },
-      keyPair: publisherA,
-      issuerSequence: i + 3,
-    })
-    t.is((await store.ingestClaim(membership.envelope)).status, 'accepted')
-  }
-  time = 100
-  const collectionPoison = createMediaClaim({
-    claimType: 'CollectionMembershipClaim',
-    subjectRefs: [collection],
-    payload: { collectionRef: collection, memberRef: workRef('member-3'), memberRole: 'episode', position: { episode: 3 }, insertionId: 'member-3' },
-    keyPair: publisherA,
-    issuerSequence: 5,
-  })
-  const collectionResult = await store.ingestClaim(collectionPoison.envelope)
-  t.is(collectionResult.status, 'rejected')
-  t.is(collectionResult.errorCode, 'COLLECTION_PROJECTION_BUDGET_EXCEEDED')
-  t.is(store.getClaimsByCollection(collection.entityId).length, 2)
-
-  const agent = agentRef()
-  const contribution = i => createMediaClaim({
-    claimType: 'ContributionClaim',
-    subjectRefs: [workRef(`credit-${i}`)],
-    payload: { agentRef: agent, subjectRef: workRef(`credit-${i}`), role: 'actor' },
-    keyPair: publisherB,
-    issuerSequence: i + 1,
-  })
-  t.is((await store.ingestClaim(contribution(0).envelope)).status, 'accepted')
-  const agentStorm = await store.ingestClaim(contribution(1).envelope)
-  t.is(agentStorm.status, 'rejected')
-  t.is(agentStorm.errorCode, 'AGENT_WINDOW_BUDGET_EXCEEDED')
-  t.ok(store.getClaims().length <= 8)
-})
-
-test('media graph bounds metadata bytes and retraction storms while allowing progress after reset', async (t) => {
-  let time = 0
-  const metadataStore = createMediaGraphStore({ trustedSigners: [publisherA.publicKey], maxMetadataBytes: 32 })
-  const oversized = createMediaClaim({ claimType: 'EntityMetadataClaim', subjectRefs: [workRef('large')], payload: { title: 'x'.repeat(64) }, keyPair: publisherA, issuerSequence: 1 })
-  const oversizedResult = await metadataStore.ingestClaim(oversized.envelope)
-  t.is(oversizedResult.status, 'rejected')
-  t.is(oversizedResult.errorCode, 'METADATA_TOO_LARGE')
-  t.is(metadataStore.getClaims().length, 0)
-
-  const store = createMediaGraphStore({
-    now: () => time,
-    trustedSigners: [publisherA.publicKey],
-    budgetWindowMs: 100,
-    maxRetractionsPerPublisherPerWindow: 1,
-  })
-  const original = createMediaClaim({ claimType: 'EntityMetadataClaim', subjectRefs: [workRef('retract')], payload: { title: 'Original' }, keyPair: publisherA, issuerSequence: 1 })
-  await store.ingestClaim(original.envelope)
-  const retract = sequence => createMediaClaim({
-    claimType: 'RetractionClaim',
-    subjectRefs: [workRef('retract')],
-    payload: { targetClaimIds: [original.claimId], reason: `reason-${sequence}` },
-    keyPair: publisherA,
-    issuerSequence: sequence,
-  })
-  t.is((await store.ingestClaim(retract(2).envelope)).status, 'accepted')
-  const storm = await store.ingestClaim(retract(3).envelope)
-  t.is(storm.status, 'rejected')
-  t.is(storm.errorCode, 'RETRACTION_WINDOW_BUDGET_EXCEEDED')
-  t.is(store.getClaims().length, 2)
-  time = 100
-  t.is((await store.ingestClaim(retract(3).envelope)).status, 'accepted')
-  t.is(store.getClaims().length, 3)
 })

@@ -1,23 +1,23 @@
 export function createConsumerWorkRevalidator({
-  mediaCatalogProjection,
-  getConsumerCatalogProjection,
+  verifiedQueryView,
   scopedNetwork,
   getArchiveNetwork,
 } = {}) {
-  if (typeof getConsumerCatalogProjection !== 'function' ||
+  if (typeof verifiedQueryView?.getPublication !== 'function' ||
+      typeof verifiedQueryView?.isVisible !== 'function' ||
       typeof scopedNetwork?.revalidateRetainedRenditions !== 'function') {
     throw new TypeError('consumer work revalidation dependencies are required')
   }
 
   return async function revalidateConsumerWork() {
-    await mediaCatalogProjection?.rebuild?.()
-    const projection = getConsumerCatalogProjection()
-    projection?.rebuild?.()
     const assets = await scopedNetwork.revalidateRetainedRenditions()
     const archiveNetwork = getArchiveNetwork?.()
-    const archive = await archiveNetwork?.revalidateConsumerRequests?.(
-      request => projection?.isPublicationVisible?.(request.body.publicationId) === true
-    )
+    const archive = await archiveNetwork?.revalidateConsumerRequests?.(async request => {
+      const publication = await verifiedQueryView.getPublication({
+        publicationId: request.body.publicationId,
+      })
+      return Boolean(publication && await verifiedQueryView.isVisible(publication))
+    })
     return { assets, archive }
   }
 }

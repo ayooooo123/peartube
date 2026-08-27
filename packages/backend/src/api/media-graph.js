@@ -1,9 +1,6 @@
-import { AVAILABILITY_STATES, assessAvailability, isPlayableAvailability } from '../assets/availability.js'
+import { AVAILABILITY_STATES, assessAvailability, requiredRangesForRendition } from '../assets/availability.js'
 import { createAssetSession } from '../assets/asset-session.js'
-import { resolveMediaEntity } from '../media-graph/resolver.js'
-import { artworkEntry } from '../media-graph/catalog-projection.js'
-import { describeMedia } from '../media-graph/described-media.js'
-import { MEDIA_COORDINATE_SHAPES } from '../channel/structured-content.js'
+import { artworkEntry, describeMedia } from '../media-graph/described-media.js'
 import { selectPlaybackSource, sourceAvailabilityScore } from '../media-graph/source-selector.js'
 import { projectSourceSelectionDiagnostics } from '../media-graph/selection-diagnostics.js'
 import { preparePlaybackSource } from '../playback/source-preparation.js'
@@ -25,20 +22,6 @@ const MAX_CATALOG_PAGE_LIMIT = 50
 // the entry, because there is nowhere else for a consumer to get it. It is
 // bounded on the way out by the same normalizer the publisher's own ingest
 // used, because a claim signed by somebody else never went through that one.
-function mediaCoordinatesResponse(item) {
-  const contentKind = typeof item?.contentKind === 'string' ? item.contentKind : null
-  const shape = contentKind ? MEDIA_COORDINATE_SHAPES[contentKind] : null
-  const mediaProvider = typeof item?.mediaProvider === 'string' && item.mediaProvider ? item.mediaProvider : null
-  const mediaId = typeof item?.mediaId === 'string' && item.mediaId ? item.mediaId : null
-  if (!shape || !mediaProvider || !shape.providers.includes(mediaProvider) || !mediaId) return {}
-  const out = { contentKind, mediaProvider, mediaId }
-  // An ordinal a kind does not have is not reported as absent, it is not
-  // reported at all: a recording has no season and a film has no episode.
-  for (const ordinal of shape.ordinals) {
-    if (Number.isSafeInteger(item[ordinal]) && item[ordinal] > 0) out[ordinal] = item[ordinal]
-  }
-  return out
-}
 
 function posterResponse(item) {
   const locator = typeof item?.artwork === 'string' ? item.artwork.trim() : ''
@@ -55,10 +38,8 @@ function posterResponse(item) {
   return { posterUrl: locator }
 }
 
-// The consumer projection hands its items one resolved display locator; the graph
-// resolver hands back the publisher's raw metadata claim. Normalizing here is
-// what keeps every media-entity-summary path carrying the same cover and the same
-// synopsis, so a title cannot show art on a shelf and none on its own page.
+// The verified view hands back resolved metadata and manifests. Normalizing
+// here keeps catalog cards and entity details on the same cover and synopsis.
 function summaryMediaFields(metadata) {
   const entry = artworkEntry(metadata?.artwork)
   return {
@@ -293,8 +274,7 @@ function normalizePreferenceStore(store) {
 }
 
 // `availabilityState`/`stale` remain the selection-diagnostics vocabulary and
-// are derived from the assessment, never from the publisher's claimed status.
-// Task 4 collapses that legacy gate onto the four-state contract directly.
+// are derived from local expiring evidence, never from publisher claims.
 const LEGACY_AVAILABILITY_STATE = Object.freeze({
   [AVAILABILITY_STATES.healthy]: 'available',
   [AVAILABILITY_STATES.limited]: 'available',
@@ -430,11 +410,9 @@ function renditionResponse(rendition) {
 }
 
 export function createMediaGraphApi(options = {}) {
-  const mediaGraphStore = options.mediaGraphStore || options.ctx?.mediaGraphStore || null
-  const assetManifestStore = options.assetManifestStore || options.ctx?.assetManifestStore || null
+  const verifiedQueryView = options.verifiedQueryView || options.ctx?.verifiedQueryView || null
   const sourcePreferenceStore = normalizePreferenceStore(options.sourcePreferenceStore || options.ctx?.sourcePreferenceStore || options.ctx?.metaSubspaces?.mediaSourcePreferences || options.ctx?.metaDb?.sub?.('media-source-preferences'))
   const trust = options.trust || options.ctx?.mediaGraphTrust || {}
-  const consumerCatalogProjection = options.consumerCatalogProjection || options.ctx?.consumerCatalogProjection || null
   const availabilityEvidenceStore = options.availabilityEvidenceStore || options.ctx?.availabilityEvidenceStore || null
   // Taking custody of a rendition is how this device becomes a holder of it, so
   // the runtime that owns that is needed across this whole surface, not just in
@@ -454,12 +432,31 @@ export function createMediaGraphApi(options = {}) {
   const openPlaybackSession = typeof options.openPlaybackSession === 'function'
     ? options.openPlaybackSession
     : async ({ source }) => {
-      const manifest = assetManifestStore?.getManifest?.(source.publicationId) || null
+      const projected = await verifiedQueryView?.getRendition?.({
+        publicationId: source.publicationId,
+        renditionId: source.renditionId,
+      })
+      const manifest = projected?.manifest || null
+      const requirement = projected?.requirement || null
       const openCore = options.openCore || options.ctx?.openAssetCore || null
-      if (!manifest || typeof openCore !== 'function') {
+      if (!manifest || !requirement || typeof openCore !== 'function') {
         return { success: false, errorCode: 'NO_COMPATIBLE_SOURCE' }
       }
-      const requirement = assetManifestStore?.getRenditionRequirement?.(source.publicationId, source.renditionId)
+      const provenance = (manifest.body?.provenance || []).filter(candidate =>
+        (candidate?.type === 'upload' || candidate?.type === 'artwork') &&
+        candidate.renditionId === source.renditionId &&
+        Number.isSafeInteger(candidate.start) &&
+        Number.isSafeInteger(candidate.end)
+      )
+      const range = provenance.length === 1
+        ? { start: provenance[0].start, end: provenance[0].end }
+        : { start: 0, end: requirement.coreLength }
+      if (!await verifiedQueryView.authorizeRendition({
+        publicationId: source.publicationId,
+        renditionId: source.renditionId,
+        ...range,
+        operation: 'playback',
+      })) return { success: false, errorCode: 'NO_COMPATIBLE_SOURCE' }
       const session = createAssetSession({ manifest, openCore })
       let authorized = false
       try {
@@ -501,25 +498,38 @@ export function createMediaGraphApi(options = {}) {
    * it. Best effort: a title that cannot be retained yet surfaces as a playback
    * error, never as a hang.
    */
+  function manifestRequirement(manifest, renditionId = null) {
+    const rendition = (manifest?.body?.renditions || []).find(candidate => (
+      candidate &&
+      candidate.blocked !== true &&
+      candidate.superseded !== true &&
+      (renditionId == null ? !isArtworkRendition(candidate) : candidate.renditionId === renditionId)
+    ))
+    if (!rendition) return null
+    let core
+    try { core = normalizeAssetCoreRefV2(rendition.core) } catch { return null }
+    return {
+      publicationId: manifest.publicationId,
+      renditionId: rendition.renditionId,
+      coreKey: core.key,
+      coreLength: core.length,
+      requiredRanges: requiredRangesForRendition(rendition),
+    }
+  }
+
   async function retainEntitySources(entityId, publicationId = null) {
     if (typeof scopedNetwork?.retainAuthorizedRendition !== 'function') return
-    const rows = mediaGraphStore?.getClaimsBySubject?.(entityId) || []
+    const entity = publicationId ? null : await verifiedQueryView?.getEntity?.({ entityId })
     const publicationIds = publicationId
       ? [publicationId]
-      : rows
-        .filter(row => !row.revoked && row.body.claimType === 'AvailabilityObservation' && row.body.payload?.publicationId)
-        .map(row => row.body.payload.publicationId)
-
+      : (entity?.publications || []).map(publication => publication.publicationId)
     for (const candidate of new Set(publicationIds)) {
-      if (typeof consumerCatalogProjection?.isPublicationVisible === 'function' &&
-          consumerCatalogProjection.isPublicationVisible(candidate) !== true) continue
-      const manifest = assetManifestStore?.getManifest?.(candidate) || null
-      const requirement = assetManifestStore?.getRenditionRequirement?.(candidate) || null
-      if (!manifest || !requirement?.renditionId) continue
+      const projected = await verifiedQueryView?.getRendition?.({ publicationId: candidate })
+      if (!projected) continue
       try {
         await scopedNetwork.retainAuthorizedRendition({
-          manifest,
-          renditionId: requirement.renditionId,
+          manifest: projected.manifest,
+          renditionId: projected.rendition.renditionId,
           entityRef: entityId,
           publicationId: candidate,
         })
@@ -534,11 +544,10 @@ export function createMediaGraphApi(options = {}) {
     const cache = new Map()
     return {
       observedAt,
-      assess(publicationId, renditionId = null) {
+      assess(publicationId, renditionId = null, requirement = null) {
         const key = `${publicationId}\n${renditionId || ''}`
         const cached = cache.get(key)
         if (cached) return cached
-        const requirement = assetManifestStore?.getRenditionRequirement?.(publicationId, renditionId) || null
         const evidence = availabilityEvidenceStore?.getCachedEvidence?.(
           publicationId,
           requirement?.renditionId || renditionId || null,
@@ -555,8 +564,8 @@ export function createMediaGraphApi(options = {}) {
     }
   }
 
-  function requireGraphStore() {
-    if (!mediaGraphStore) return error('MEDIA_GRAPH_NOT_READY', 'Media graph projection storage is not wired yet')
+  function requireQueryView() {
+    if (!verifiedQueryView) return error('MEDIA_GRAPH_NOT_READY', 'Verified media query view is not wired yet')
     return null
   }
 
@@ -565,30 +574,34 @@ export function createMediaGraphApi(options = {}) {
     return row?.value?.preferred === true || row?.preferred === true
   }
 
-  async function buildSources(entityId, scope) {
-    const rows = mediaGraphStore.getClaimsBySubject(entityId)
-      .filter(row => !row.revoked && row.body.claimType === 'AvailabilityObservation' && row.body.payload?.publicationId)
+  async function buildSources(entityId, scope, entityView = null) {
+    const entity = entityView || await verifiedQueryView.getEntity({ entityId })
     const sources = []
-    for (const row of rows) {
-      const publicationId = row.body.payload.publicationId
-      if (
-        typeof consumerCatalogProjection?.isPublicationVisible === 'function' &&
-        consumerCatalogProjection.isPublicationVisible(publicationId) !== true
-      ) {
-        continue
+    for (const publication of entity?.publications || []) {
+      const manifest = publication.manifest
+      const requirement = manifestRequirement(manifest)
+      if (!requirement) continue
+      const row = {
+        claimId: publication.sourceRecordRef,
+        issuer: publication.publisherId,
+        publisherId: publication.publisherId,
+        body: {
+          confidence: 0,
+          subjectRefs: [{ entityId, entityKind: entity.entityKind }],
+          payload: { publicationId: publication.publicationId },
+        },
       }
-      const manifest = assetManifestStore?.getManifest?.(publicationId) || null
-      sources.push(manifestSource(
+      const source = manifestSource(
         manifest,
         row,
-        await isPreferred(entityId, publicationId),
+        await isPreferred(entityId, publication.publicationId),
         trust,
-        scope.assess(publicationId),
+        scope.assess(publication.publicationId, requirement.renditionId, requirement),
         entityId,
-      ))
+      )
+      source.manifest = manifest
+      sources.push(source)
     }
-    // One decision, one order: the selector ranks what can actually play and
-    // pushes everything it rejected to the tail. Nothing downstream re-ranks.
     const selection = selectPlaybackSource(sources, {
       capabilities: deviceCapabilities,
       now: scope.observedAt,
@@ -596,57 +609,6 @@ export function createMediaGraphApi(options = {}) {
     return {
       selection,
       sources: selection.candidates.map(candidate => ({ ...candidate.source, score: candidate.score })),
-    }
-  }
-
-  function isPublicationVisible(publicationId) {
-    if (typeof consumerCatalogProjection?.isPublicationVisible !== 'function') return true
-    return consumerCatalogProjection.isPublicationVisible(publicationId) === true
-  }
-
-  function isEntityVisible(entityId) {
-    if (typeof consumerCatalogProjection?.isVisible !== 'function') return true
-    return consumerCatalogProjection.isVisible(entityId) === true
-  }
-
-  function hasVisibleLinkedPublication(entityId) {
-    const publications = mediaGraphStore.getClaimsBySubject(entityId)
-      .filter(row => (
-        !row.revoked &&
-        row.body.claimType === 'AvailabilityObservation' &&
-        row.body.payload?.publicationId
-      ))
-      .map(row => row.body.payload.publicationId)
-    return publications.length === 0 || publications.some(isPublicationVisible)
-  }
-
-  function isConsumerClaimVisible(row) {
-    if (!consumerCatalogProjection) return true
-    if (
-      typeof consumerCatalogProjection.isClaimVisible === 'function' &&
-      consumerCatalogProjection.isClaimVisible(row.claimId) !== true
-    ) return false
-    const publicationId = row.body?.payload?.publicationId
-    if (publicationId && !isPublicationVisible(publicationId)) return false
-    if (row.body?.claimType === 'CollectionMembershipClaim') {
-      const memberId = row.body.payload?.memberRef?.entityId
-      return Boolean(memberId && isEntityVisible(memberId) && hasVisibleLinkedPublication(memberId))
-    }
-    const workSubjects = (row.body?.subjectRefs || []).filter(ref => ref.entityKind === 'work')
-    if (workSubjects.length > 0 && !workSubjects.some(ref => (
-      isEntityVisible(ref.entityId) && hasVisibleLinkedPublication(ref.entityId)
-    ))) return false
-    return true
-  }
-
-  function consumerStoreView() {
-    return {
-      getClaims() {
-        return mediaGraphStore.getClaims().filter(isConsumerClaimVisible)
-      },
-      getClaimsBySubject(entityId) {
-        return mediaGraphStore.getClaimsBySubject(entityId).filter(isConsumerClaimVisible)
-      },
     }
   }
 
@@ -680,8 +642,7 @@ export function createMediaGraphApi(options = {}) {
   function mediaRenditionDescriptors(built) {
     const renditions = new Map()
     for (const source of built.sources) {
-      const manifest = assetManifestStore?.getManifest?.(source.publicationId)
-      for (const rendition of manifest?.body?.renditions || []) {
+      for (const rendition of source.manifest?.body?.renditions || []) {
         if (isArtworkRendition(rendition)) continue
         if (!rendition.blocked && !rendition.superseded) renditions.set(rendition.renditionId, renditionResponse(rendition))
       }
@@ -689,30 +650,20 @@ export function createMediaGraphApi(options = {}) {
     return [...renditions.values()].sort((left, right) => left.renditionId.localeCompare(right.renditionId))
   }
 
-  function resolveOrMissing(entityId, consumerVisible = false) {
-    const store = consumerVisible && consumerCatalogProjection ? consumerStoreView() : mediaGraphStore
-    const claims = store.getClaimsBySubject(entityId)
-    if (claims.length === 0) return null
-    return resolveMediaEntity(store, entityId, { trust })
-  }
-
   async function entityResult(entityId, request = {}, agent = false) {
-    const missingStore = requireGraphStore()
-    if (missingStore) return missingStore
-    if (!agent && consumerCatalogProjection) {
-      await options.ctx?.mediaCatalogProjection?.update?.()
-      await consumerCatalogProjection.update?.()
-      if (!consumerCatalogProjection.isVisible?.(entityId)) {
-        return error('MEDIA_ENTITY_NOT_VISIBLE', 'Media entity is not visible under this device policy')
-      }
-    }
-    const resolved = resolveOrMissing(entityId, !agent)
-    if (!resolved) return error('MEDIA_ENTITY_NOT_FOUND', 'Media entity not found')
+    const missingView = requireQueryView()
+    if (missingView) return missingView
+    const projected = await verifiedQueryView.getEntity({
+      entityId,
+      ...(agent ? { entityKind: 'agent' } : {}),
+    })
+    if (!projected) return error('MEDIA_ENTITY_NOT_FOUND', 'Media entity not found')
+    const resolved = projected.resolved
     const scope = createAvailabilityScope()
-    const built = await buildSources(entityId, scope)
+    const built = await buildSources(entityId, scope, projected)
     const entity = {
       entityId,
-      entityKind: agent ? 'agent' : entityKindFromRow(resolved.claims[0]) || entityKindFromId(entityId),
+      entityKind: agent ? 'agent' : projected.entityKind || entityKindFromRow(resolved.claims[0]) || entityKindFromId(entityId),
       localClusterId: resolved.localClusterId,
       title: resolved.metadata.title || resolved.metadata.displayName || null,
       subtitle: resolved.metadata.subtitle || null,
@@ -721,10 +672,6 @@ export function createMediaGraphApi(options = {}) {
       conflictCount: resolved.conflicts.length,
       availability: availabilityResponse(entityAvailability(built, scope)),
       sources: decorateSources(built),
-      // A viewer reads the size before pressing play, and the player states it
-      // while playing. The signed manifest is the only place that byte length
-      // exists on a consumer, so an entity that answers with no renditions is
-      // why the detail screen had nothing but zero to show.
       renditions: mediaRenditionDescriptors(built),
       ...summaryMediaFields(resolved.metadata),
     }
@@ -831,17 +778,15 @@ export function createMediaGraphApi(options = {}) {
    * the publication's asset scope and started the core replicating, so the blob
    * server streams ranges as they land rather than waiting for a whole film.
    */
-  function resolveRenditionUrl(publicationId, renditionId) {
+  async function resolveRenditionUrl(publicationId, renditionId) {
     const blobServer = options.blobServer || options.ctx?.blobServer || null
     if (typeof blobServer?.getLink !== 'function') return null
-    const manifest = assetManifestStore?.getManifest?.(publicationId)
-    const rendition = (manifest?.body?.renditions || []).find(candidate => candidate.renditionId === renditionId)
-    if (!rendition) return null
+    const projected = await verifiedQueryView?.getRendition?.({ publicationId, renditionId })
+    const manifest = projected?.manifest
+    const rendition = projected?.rendition
+    if (!manifest || !rendition) return null
     const ref = renditionBlobRef(manifest, rendition)
     if (!ref) return null
-    // Not the artwork link: that one is rewritten to the thumbnail path, which
-    // answers from a fixed-length buffer. A player wants the streaming pipe,
-    // which serves ranges as replication delivers them.
     return String(blobServer.getLink(b4a.from(ref.blobsCoreKey, 'hex'), {
       blob: ref.blob,
       type: typeof rendition.format === 'string' ? rendition.format : 'video/mp4',
@@ -857,25 +802,13 @@ export function createMediaGraphApi(options = {}) {
   // retain that has not settled must not hold the caller.
   async function retainRenditionForRead(manifest, renditionId, publicationId) {
     if (typeof scopedNetwork?.retainAuthorizedRendition !== 'function') return
+    const publication = await verifiedQueryView?.getPublication?.({ publicationId })
     await boundedAttempt(scopedNetwork.retainAuthorizedRendition({
       manifest,
       renditionId,
-      entityRef: entityRefForPublication(publicationId),
+      entityRef: publication?.workEntityId || null,
       publicationId,
     }), RENDITION_RETAIN_TIMEOUT_MS)
-  }
-
-  // Retention scopes itself to an entity when it can name one. The graph knows
-  // which entity a publication was claimed against; without it the retain still
-  // works, just unscoped.
-  function entityRefForPublication(publicationId) {
-    const rows = mediaGraphStore?.getClaims?.() || []
-    const row = rows.find(candidate => (
-      !candidate.revoked &&
-      candidate.body?.payload?.publicationId === publicationId &&
-      typeof candidate.body?.subjectRefs?.[0]?.entityId === 'string'
-    ))
-    return row?.body?.subjectRefs?.[0]?.entityId || null
   }
 
   /**
@@ -911,91 +844,34 @@ export function createMediaGraphApi(options = {}) {
 
   return {
     async getMediaCatalog(request = {}) {
+      const missingView = requireQueryView()
+      if (missingView) return { ...missingView, items: [], nextCursor: null }
       const scope = createAvailabilityScope()
-      if (consumerCatalogProjection) {
-        try {
-          await options.ctx?.mediaCatalogProjection?.update?.()
-          await consumerCatalogProjection.update?.()
-          const page = consumerCatalogProjection.getCatalog(request)
-          if (!page?.success) return page
-          return {
-            success: true,
-            items: page.items.map(item => {
-              const sources = (item.publications || []).map(publication => ({
-                publicationId: publication.publicationId,
-                publisherId: publication.publisherId,
-                availability: scope.assess(publication.publicationId),
-                ...mediaCoordinatesResponse(publication),
-              }))
-              return {
-                entityId: item.entityRef,
-                entityKind: item.entityKind || 'unknown',
-                title: item.title || null,
-                subtitle: item.creator || null,
-                claimCount: item.publications?.length || 0,
-                conflictCount: 0,
-                availability: availabilityResponse(
-                  sources.find(source => isPlayableAvailability(source.availability))?.availability ||
-                  sources[0]?.availability ||
-                  scope.assess('', null)
-                ),
-                sources: sources.map(source => {
-                  const mediaCoordinates = mediaCoordinatesResponse(source)
-                  return {
-                    publicationId: source.publicationId,
-                    publisherId: source.publisherId,
-                    ...(Object.keys(mediaCoordinates).length > 0 ? { mediaCoordinates } : {}),
-                    availability: availabilityResponse(source.availability),
-                  }
-                }),
-                renditions: [],
-                // Cover art is published on the metadata claim; passing it on
-                // is what stops a fully synced catalog rendering blank.
-                ...posterResponse(item),
-                ...describeMedia(item),
-              }
-            }),
-            nextCursor: page.nextCursor,
-          }
-        } catch {
-          return error('CONSUMER_CATALOG_UPDATE_FAILED', 'Consumer catalog projection update failed', { items: [], nextCursor: null })
-        }
-      }
-      const missingStore = requireGraphStore()
-      if (missingStore) return { ...missingStore, items: [], nextCursor: null }
       try {
-        await options.ctx?.mediaCatalogProjection?.update?.()
+        const summaries = []
+        for (const projected of await verifiedQueryView.listEntities()) {
+          const resolved = projected.resolved
+          const built = await buildSources(projected.entityId, scope, projected)
+          summaries.push({
+            entityId: projected.entityId,
+            entityKind: projected.entityKind,
+            localClusterId: resolved.localClusterId,
+            title: resolved.metadata.title || resolved.metadata.displayName || null,
+            subtitle: resolved.metadata.subtitle || null,
+            claimCount: resolved.claims.length,
+            conflictCount: resolved.conflicts.length,
+            availability: availabilityResponse(entityAvailability(built, scope)),
+            sources: built.sources.map(sourceResponse),
+            renditions: mediaRenditionDescriptors(built),
+            ...summaryMediaFields(resolved.metadata),
+          })
+        }
+        const result = pageCatalogRows(summaries, request)
+        if (result.error) return result.error
+        return okPage(result.page, result.nextCursor)
       } catch {
-        return error('MEDIA_GRAPH_UPDATE_FAILED', 'Media graph projection update failed', { items: [], nextCursor: null })
+        return error('CONSUMER_CATALOG_UPDATE_FAILED', 'Verified media catalog query failed', { items: [], nextCursor: null })
       }
-      const entityIds = new Set()
-      for (const claim of mediaGraphStore.getClaims()) {
-        if (claim.revoked) continue
-        for (const subject of claim.subjects || []) entityIds.add(subject)
-      }
-      const summaries = []
-      for (const entityId of [...entityIds].sort()) {
-        const resolved = resolveOrMissing(entityId)
-        if (!resolved) continue
-        const built = await buildSources(entityId, scope)
-        const renditions = mediaRenditionDescriptors(built)
-        summaries.push({
-          entityId,
-          entityKind: entityKindFromRow(resolved.claims[0]) || entityKindFromId(entityId),
-          localClusterId: resolved.localClusterId,
-          title: resolved.metadata.title || resolved.metadata.displayName || null,
-          subtitle: resolved.metadata.subtitle || null,
-          claimCount: resolved.claims.length,
-          conflictCount: resolved.conflicts.length,
-          availability: availabilityResponse(entityAvailability(built, scope)),
-          sources: built.sources.map(sourceResponse),
-          renditions,
-          ...summaryMediaFields(resolved.metadata),
-        })
-      }
-      const result = pageCatalogRows(summaries, request)
-      if (result.error) return result.error
-      return okPage(result.page, result.nextCursor)
     },
 
     async getMediaEntity(request = {}) {
@@ -1007,24 +883,12 @@ export function createMediaGraphApi(options = {}) {
     },
 
     async getMediaCollectionItems(request = {}) {
-      const missingStore = requireGraphStore()
-      if (missingStore) return { ...missingStore, items: [], nextCursor: null }
-      if (consumerCatalogProjection) {
-        await options.ctx?.mediaCatalogProjection?.update?.()
-        await consumerCatalogProjection.update?.()
-        if (!isEntityVisible(request.collectionEntityId)) {
-          return error(
-            'MEDIA_ENTITY_NOT_VISIBLE',
-            'Media collection is not visible under this device policy',
-            { items: [], nextCursor: null },
-          )
-        }
-      }
-      const rows = mediaGraphStore.getClaimsByCollection(request.collectionEntityId)
+      const missingView = requireQueryView()
+      if (missingView) return { ...missingView, items: [], nextCursor: null }
+      const rows = (await verifiedQueryView.getClaims())
         .filter(row => (
-          !row.revoked &&
           row.body.claimType === 'CollectionMembershipClaim' &&
-          isConsumerClaimVisible(row)
+          row.body.payload?.collectionRef?.entityId === request.collectionEntityId
         ))
         .sort((a, b) => {
           const ap = a.body.payload?.position?.episode || a.body.payload?.position?.index || 0
@@ -1049,10 +913,10 @@ export function createMediaGraphApi(options = {}) {
     },
 
     async getAgentContributions(request = {}) {
-      const missingStore = requireGraphStore()
-      if (missingStore) return { ...missingStore, items: [], nextCursor: null }
-      const rows = mediaGraphStore.getClaims()
-        .filter(row => !row.revoked && row.body.claimType === 'ContributionClaim' && row.body.payload?.agentRef?.entityId === request.agentEntityId)
+      const missingView = requireQueryView()
+      if (missingView) return { ...missingView, items: [], nextCursor: null }
+      const rows = (await verifiedQueryView.getClaims())
+        .filter(row => row.body.claimType === 'ContributionClaim' && row.body.payload?.agentRef?.entityId === request.agentEntityId)
         .sort((a, b) => a.claimId.localeCompare(b.claimId))
       const result = pageRows(rows, request)
       if (result.error) return result.error
@@ -1060,21 +924,14 @@ export function createMediaGraphApi(options = {}) {
     },
 
     async getPublicationSources(request = {}) {
-      const missingStore = requireGraphStore()
-      if (missingStore) return { ...missingStore, items: [], nextCursor: null }
-      if (consumerCatalogProjection) {
-        await options.ctx?.mediaCatalogProjection?.update?.()
-        await consumerCatalogProjection.update?.()
-        if (!consumerCatalogProjection.isVisible?.(request.entityId)) {
-          return error(
-            'MEDIA_ENTITY_NOT_VISIBLE',
-            'Media entity is not visible under this device policy',
-            { items: [], nextCursor: null },
-          )
-        }
+      const missingView = requireQueryView()
+      if (missingView) return { ...missingView, items: [], nextCursor: null }
+      const projected = await verifiedQueryView.getEntity({ entityId: request.entityId })
+      if (!projected) {
+        return error('MEDIA_ENTITY_NOT_VISIBLE', 'Media entity is not visible under this device policy', { items: [], nextCursor: null })
       }
       const scope = createAvailabilityScope()
-      const decorated = decorateSources(await buildSources(request.entityId, scope))
+      const decorated = decorateSources(await buildSources(request.entityId, scope, projected))
       const result = pageRows(decorated, request, source => source.publicationId)
       if (result.error) return result.error
       return okPage(result.page, result.nextCursor)
@@ -1098,44 +955,35 @@ export function createMediaGraphApi(options = {}) {
       if (!entityId && !requestedPublicationId) {
         return error('INVALID_ARTWORK_REQUEST', 'entityId or publicationId is required', { exists: false })
       }
-
-      let publicationIds = []
+      const missingView = requireQueryView()
+      if (missingView) return { ...missingView, exists: false }
+      const publications = []
       if (requestedPublicationId) {
-        if (!isPublicationVisible(requestedPublicationId)) {
+        const manifest = await verifiedQueryView.getManifest({ publicationId: requestedPublicationId })
+        if (!manifest) {
           return error('MEDIA_ENTITY_NOT_VISIBLE', 'Publication is not visible under this device policy', { exists: false })
         }
-        publicationIds = [requestedPublicationId]
+        publications.push({ publicationId: requestedPublicationId, manifest })
       } else {
-        const missingStore = requireGraphStore()
-        if (missingStore) return { ...missingStore, exists: false }
-        if (consumerCatalogProjection) {
-          // A stale projection still resolves covers this device already holds,
-          // so a refresh failure must not blank the artwork.
-          try {
-            await options.ctx?.mediaCatalogProjection?.update?.()
-            await consumerCatalogProjection.update?.()
-          } catch { /* best effort */ }
-          if (!isEntityVisible(entityId)) {
-            return error('MEDIA_ENTITY_NOT_VISIBLE', 'Media entity is not visible under this device policy', { exists: false })
-          }
+        const entity = await verifiedQueryView.getEntity({ entityId })
+        if (!entity) {
+          return error('MEDIA_ENTITY_NOT_VISIBLE', 'Media entity is not visible under this device policy', { exists: false })
         }
-        publicationIds = mediaGraphStore.getClaimsBySubject(entityId)
-          .filter(row => (
-            !row.revoked &&
-            row.body.claimType === 'AvailabilityObservation' &&
-            row.body.payload?.publicationId
-          ))
-          .map(row => row.body.payload.publicationId)
-          .filter(isPublicationVisible)
+        publications.push(...entity.publications)
       }
-
-      for (const publicationId of new Set(publicationIds)) {
-        const manifest = assetManifestStore?.getManifest?.(publicationId) || null
+      for (const publication of publications) {
+        const manifest = publication.manifest
         const rendition = findPosterRendition(manifest)
         if (!rendition) continue
         const ref = renditionBlobRef(manifest, rendition)
         if (!ref) continue
-        const url = await resolveArtworkUrl({ manifest, publicationId, rendition, ref, entityId })
+        const url = await resolveArtworkUrl({
+          manifest,
+          publicationId: publication.publicationId,
+          rendition,
+          ref,
+          entityId,
+        })
         if (url) return { success: true, exists: true, url }
       }
       return { success: true, exists: false }
@@ -1146,27 +994,21 @@ export function createMediaGraphApi(options = {}) {
      * between equivalent sources inside one deadline; the client never picks.
      */
     async prepareMediaPlayback(request = {}) {
-      const missingStore = requireGraphStore()
-      if (missingStore) return { ...missingStore, attempts: [], sources: [] }
-      if (consumerCatalogProjection) {
-        await options.ctx?.mediaCatalogProjection?.update?.()
-        await consumerCatalogProjection.update?.()
-        if (!consumerCatalogProjection.isVisible?.(request.entityId)) {
-          return error(
-            'MEDIA_ENTITY_NOT_VISIBLE',
-            'Media entity is not visible under this device policy',
-            { attempts: [], sources: [] },
-          )
-        }
+      const missingView = requireQueryView()
+      if (missingView) return { ...missingView, attempts: [], sources: [] }
+      const projected = await verifiedQueryView.getEntity({ entityId: request.entityId })
+      if (!projected) {
+        return error(
+          'MEDIA_ENTITY_NOT_VISIBLE',
+          'Media entity is not visible under this device policy',
+          { attempts: [], sources: [] },
+        )
       }
       // Pressing play is the request to fetch. Taking custody first is what
-      // makes this device a holder of the title, and holding is the only thing
-      // that turns "nobody has checked" into evidence it can serve back.
-      // Judging availability before ever asking is how a title that exists on
-      // the network stays permanently unplayable.
+      // makes this device a holder of the title.
       await retainEntitySources(request.entityId, request.publicationId)
       const scope = createAvailabilityScope()
-      const built = await buildSources(request.entityId, scope)
+      const built = await buildSources(request.entityId, scope, projected)
       const prepared = await preparePlaybackSource({
         sources: built.sources,
         capabilities: deviceCapabilities,
@@ -1221,7 +1063,7 @@ export function createMediaGraphApi(options = {}) {
         // process serves the rendition's byte ranges over loopback and pulls
         // blocks from the swarm as the player asks for them, so preparation
         // ends where playback can actually begin.
-        url: resolveRenditionUrl(prepared.publicationId, prepared.renditionId),
+        url: await resolveRenditionUrl(prepared.publicationId, prepared.renditionId),
         attempts: prepared.attempts,
         sources,
       }
@@ -1242,17 +1084,23 @@ export function createMediaGraphApi(options = {}) {
       const renditionId = typeof request.renditionId === 'string' ? request.renditionId.trim() : ''
       if (!publicationId || !renditionId) return error('INVALID_RENDITION_REQUEST', 'publicationId and renditionId are required')
       const corestore = options.store || options.ctx?.store || null
-      if (typeof assetManifestStore?.getManifest !== 'function' || typeof corestore?.get !== 'function') {
+      if (!verifiedQueryView || typeof corestore?.get !== 'function') {
         return error('MEDIA_GRAPH_UNAVAILABLE', 'Media graph is not bound yet')
       }
-      const manifest = assetManifestStore.getManifest(publicationId)
-      if (!manifest) return error('MEDIA_PUBLICATION_NOT_FOUND', 'Media publication not found')
-      const rendition = (manifest.body?.renditions || []).find(candidate => candidate.renditionId === renditionId)
-      if (!rendition) return error('MEDIA_RENDITION_NOT_FOUND', 'Media rendition not found')
+      const projected = await verifiedQueryView.getRendition({ publicationId, renditionId })
+      if (!projected) return error('MEDIA_PUBLICATION_NOT_FOUND', 'Media publication not found')
+      const { manifest, rendition } = projected
       const ref = renditionBlobRef(manifest, rendition)
       // A signed rendition whose provenance names no blob span cannot be read at
       // all: that is a publisher that has not finished, not a missing rendition.
       if (!ref) return error('MEDIA_RENDITION_UNRESOLVED', 'Media rendition has no readable blob reference yet')
+      if (!await verifiedQueryView.authorizeRendition({
+        publicationId,
+        renditionId,
+        start: ref.blob.blockOffset,
+        end: ref.blob.blockOffset + ref.blob.blockLength,
+        operation: 'relay-read',
+      })) return error('MEDIA_RENDITION_NOT_FOUND', 'Media rendition not found')
 
       // Asking for the bytes is what fetches them.
       await retainRenditionForRead(manifest, renditionId, publicationId)
@@ -1283,16 +1131,16 @@ export function createMediaGraphApi(options = {}) {
     },
 
     async getClaimProvenance(request = {}) {
-      const missingStore = requireGraphStore()
-      if (missingStore) return missingStore
-      const claim = mediaGraphStore.getClaim(request.claimId)
+      const missingView = requireQueryView()
+      if (missingView) return missingView
+      const claim = (await verifiedQueryView.getClaims()).find(candidate => candidate.claimId === request.claimId)
       if (!claim) return error('MEDIA_CLAIM_NOT_FOUND', 'Media claim not found')
       return { success: true, claim: claimSummary(claim) }
     },
 
     async setSourcePreference(request = {}) {
-      const missingStore = requireGraphStore()
-      if (missingStore) return missingStore
+      const missingView = requireQueryView()
+      if (missingView) return missingView
       if (!request.entityId || !request.publicationId) return error('INVALID_SOURCE_PREFERENCE', 'entityId and publicationId are required')
       const key = sourcePreferenceKey(request.entityId, request.publicationId)
       if (request.preferred) {

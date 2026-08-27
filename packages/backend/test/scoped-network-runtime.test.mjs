@@ -23,8 +23,6 @@ import {
 import { createBufferSourceReader } from '../src/assets/source-reader.js'
 import { createPermissionlessArchiveNetwork } from '../src/archive/permissionless-network.js'
 import { createIndexFeedPage } from '../src/indexing/feed-contract.js'
-import { createLocalMediaIndex } from '../src/indexing/local-index.js'
-import { createConsumerCatalogProjection } from '../src/media-graph/catalog-projection.js'
 import { createModerationFeedPage } from '../src/moderation/feed-contract.js'
 import { createModerationManager } from '../src/moderation/manager.js'
 import {
@@ -2022,14 +2020,19 @@ test('scoped index and moderation feeds transfer only signed bounded pages', asy
       await runModerationRevalidation()
     },
   })
-  const projection = createConsumerCatalogProjection({
-    localIndex: createLocalMediaIndex(),
-    publisherRecords: () => [candidate],
-    moderationPolicy: createConsumerModerationPolicy({
-      profileController,
-      moderationManager: consumerModerationManager,
-    }),
+  const moderationPolicy = createConsumerModerationPolicy({
+    profileController,
+    moderationManager: consumerModerationManager,
   })
+  const isPublicationVisible = () => moderationPolicy.evaluate(candidate).action === 'visible'
+  const verifiedQueryView = {
+    async getPublication({ publicationId: requested }) {
+      return requested === publicationId && isPublicationVisible() ? candidate : null
+    },
+    async isVisible(record) {
+      return record.publicationId === publicationId && isPublicationVisible()
+    },
+  }
   const consumer = createScopedNetworkRuntime({
     swarm: swarmB,
     store: {
@@ -2045,7 +2048,7 @@ test('scoped index and moderation feeds transfer only signed bounded pages', asy
     now: () => 20,
     moderationManager: consumerModerationManager,
     authorizePublication: async ({ manifest: proposed }) => proposed === manifest,
-    authorizeConsumerWork: async ({ publicationId: proposed }) => projection.isPublicationVisible(proposed),
+    authorizeConsumerWork: async ({ publicationId: proposed }) => proposed === publicationId && isPublicationVisible(),
     initialNetworkPolicy: archivePolicy(),
   })
   const archiveNetwork = createPermissionlessArchiveNetwork({
@@ -2054,14 +2057,13 @@ test('scoped index and moderation feeds transfer only signed bounded pages', asy
     scopedNetwork: consumer,
   })
   runModerationRevalidation = createConsumerWorkRevalidator({
-    getConsumerCatalogProjection: () => projection,
+    verifiedQueryView,
     scopedNetwork: consumer,
     getArchiveNetwork: () => archiveNetwork,
   })
   await source.start()
   await consumer.start()
-  projection.rebuild()
-  t.is(projection.isPublicationVisible(publicationId), true)
+  t.is(isPublicationVisible(), true)
   t.is((await consumer.retainAuthorizedRendition({
     manifest,
     renditionId: rendition.renditionId,
@@ -2091,13 +2093,13 @@ test('scoped index and moderation feeds transfer only signed bounded pages', asy
   for (let attempt = 0; attempt < 20 && (
     consumer.getIndexFeedRecords().length === 0 ||
     consumer.getModerationFeedRecords().length === 0 ||
-    projection.isPublicationVisible(publicationId) ||
+    isPublicationVisible() ||
     archiveNetwork.getStatus().knownRequests > 0
   ); attempt++) await settle()
   t.is(consumer.getIndexFeedRecords().length, 1)
   t.is(consumer.getModerationFeedRecords().length, 1)
   t.is(moderationChanges.length, 1, 'accepted remote moderation decisions notify the consumer immediately')
-  t.is(projection.isPublicationVisible(publicationId), false, 'the remote block immediately hides the publisher item')
+  t.is(isPublicationVisible(), false, 'the remote block immediately hides the publisher item')
   t.is(consumer.getDiagnostics().topics.filter(topic => topic.purpose === 'asset').length, 0,
     'the active asset is cancelled and its topic is left')
   t.is(archiveNetwork.getStatus().knownRequests, 0, 'the active archive request is cancelled')
@@ -2105,7 +2107,7 @@ test('scoped index and moderation feeds transfer only signed bounded pages', asy
   t.is(consumer.getDiagnostics().topics.filter(topic => topic.purpose === 'moderation').length, 1)
 
   await consumer.unfollowModerationFeed({ moderatorId })
-  t.is(projection.isPublicationVisible(publicationId), true,
+  t.is(isPublicationVisible(), true,
     'removing the local moderation subscription permits retained publisher truth')
   t.is(candidate.publicationId, publicationId, 'local moderation never mutates publisher network truth')
   t.is(moderationChanges.length, 2, 'record removal also rebuilds the consumer projection immediately')
@@ -2160,15 +2162,19 @@ test('signed remote moderation cancels an archivist pledge and permits only futu
     now: () => 20,
     onRecordsChanged: () => revalidateArchivistWork(),
   })
-  const projection = createConsumerCatalogProjection({
-    localIndex: createLocalMediaIndex(),
-    publisherRecords: () => [candidate],
-    moderationPolicy: createConsumerModerationPolicy({
-      profileController,
-      moderationManager,
-    }),
+  const moderationPolicy = createConsumerModerationPolicy({
+    profileController,
+    moderationManager,
   })
-  projection.rebuild()
+  const isPublicationVisible = () => moderationPolicy.evaluate(candidate).action === 'visible'
+  const verifiedQueryView = {
+    async getPublication({ publicationId: requested }) {
+      return requested === publicationId && isPublicationVisible() ? candidate : null
+    },
+    async isVisible(record) {
+      return record.publicationId === publicationId && isPublicationVisible()
+    },
+  }
 
   const sourceSwarm = fakeSwarm()
   const archivistSwarm = fakeSwarm()
@@ -2220,7 +2226,7 @@ test('signed remote moderation cancels an archivist pledge and permits only futu
       ranges: request.body.ranges,
     }),
     authorizeConsumerVisibility: async request =>
-      projection.isPublicationVisible(request.body.publicationId),
+      request.body.publicationId === publicationId && isPublicationVisible(),
   })
   const requesterNetwork = createPermissionlessArchiveNetwork({
     keyPair: requesterKeyPair,
@@ -2230,7 +2236,7 @@ test('signed remote moderation cancels an archivist pledge and permits only futu
     now: () => 20,
   })
   revalidateArchivistWork = createConsumerWorkRevalidator({
-    getConsumerCatalogProjection: () => projection,
+    verifiedQueryView,
     scopedNetwork: archivistRuntime,
     getArchiveNetwork: () => archivistNetwork,
   })
@@ -2292,10 +2298,10 @@ test('signed remote moderation cancels an archivist pledge and permits only futu
   await settle()
   await archivistRuntime.subscribeModerationFeed({ moderatorId })
   for (let attempt = 0; attempt < 20 && (
-    projection.isPublicationVisible(publicationId) ||
+    isPublicationVisible() ||
     archivistNetwork.getStatus().acceptedRequests > 0
   ); attempt++) await settle()
-  t.is(projection.isPublicationVisible(publicationId), false,
+  t.is(isPublicationVisible(), false,
     'the archivist applies the authenticated remote decision only to its local projection')
   t.is(archivistNetwork.getStatus().acceptedRequests, 0,
     'the remote hide immediately cancels the existing local archivist pledge')
@@ -2306,8 +2312,8 @@ test('signed remote moderation cancels an archivist pledge and permits only futu
   t.is(candidate.publicationId, publicationId, 'local moderation does not alter network truth')
 
   await archivistRuntime.unfollowModerationFeed({ moderatorId })
-  for (let attempt = 0; attempt < 20 && !projection.isPublicationVisible(publicationId); attempt++) await settle()
-  t.is(projection.isPublicationVisible(publicationId), true,
+  for (let attempt = 0; attempt < 20 && !isPublicationVisible(); attempt++) await settle()
+  t.is(isPublicationVisible(), true,
     'removing the local decision permits a future request')
   await requesterNetwork.requestArchive({
     publicationId,

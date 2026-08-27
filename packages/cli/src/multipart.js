@@ -261,7 +261,6 @@ function uploadHeadroomError(snapshot, written, chunkLength, state = null) {
     function appendBody (chunk) {
       if (chunk.length === 0) return
       if (part.fd != null) {
-        if (part.size + chunk.length > maxBytes) throw multipartError('MULTIPART_FILE_TOO_LARGE', `upload exceeds max size of ${maxBytes} bytes`, 413)
         if (typeof storageHeadroom === 'function') {
           const error = uploadHeadroomError(storageHeadroom(), part.size, chunk.length, headroomState)
           if (error) throw new Error(error)

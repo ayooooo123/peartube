@@ -13,13 +13,29 @@ import { TrustedClients, mergeTrustedClientKeys } from './trusted-clients.js'
 import { classifySourceUrl } from './archive/source-id.js'
 import { createRelayBlockOffload } from './archive/block-offload.js'
 import { createStorageGuard } from './storage-guard.js'
-import { COMPANION_API_PREFIX, createCompanionServer } from './companion/server.js'
+import { createCompanionServer } from './companion/server.js'
 import { createIngestJobStore } from './companion/ingest-job-store.js'
 import { createIngestManager } from './companion/ingest-manager.js'
 import { createSourceCallbackClient } from './companion/source-client.js'
 import { createSourceProviderRegistry } from './companion/sources/index.js'
 import tmdbFetch from '#fetch'
 import { sweepStagingState } from '@peartube/backend/assets'
+
+const CANDIDATE_REF_PATTERN = /^[A-Za-z0-9_-]{43}$/
+function selectorForMediaCoordinates(source = {}) {
+  const coordinates = source.mediaCoordinates || source
+  const namespace = String(coordinates.mediaProvider || coordinates.namespace || '').trim()
+  const identifier = String(coordinates.mediaId || coordinates.identifier || '').trim()
+  if (!namespace || !identifier) return null
+  if (coordinates.contentKind === 'episode') {
+    const season = Number(coordinates.seasonNumber)
+    const episode = Number(coordinates.episodeNumber)
+    if (!Number.isSafeInteger(season) || season < 1 || !Number.isSafeInteger(episode) || episode < 1) return null
+    return { namespace, identifier, kind: 'episode', season, episode }
+  }
+  return { namespace, identifier, kind: coordinates.contentKind || 'movie' }
+}
+
 
 
 // 0 means "any free port", so the default must not swallow it.
@@ -84,7 +100,6 @@ export async function createRelayService(options = {}) {
     ? createArchiveHttpSurface({
       host: archiveUiHost(options.config),
       port: archiveUiPort(options.config),
-      apiOpen: Boolean(options.config?.archive?.apiOpen),
       logger: options.logger
     })
     : null)
@@ -895,7 +910,6 @@ async function buildRelayService({
           logger,
           host: archiveUiHost(config),
           port: archiveUiPort(config),
-          apiOpen: Boolean(config.archive.apiOpen),
           uploadDir: ingestSpoolRoot,
           uploadStorageHeadroom: archiveHeadroom,
           storageReservations: archiveStorageReservations,
@@ -928,44 +942,15 @@ async function buildRelayService({
         })
       }
       if (config.companion?.enabled !== false) {
-        // One listener for both API versions whenever both are HTTP. The only
-        // consumer of this relay builds its /api/v1 and /api/v2 URLs from a
-        // single configured base URL and signs nothing on the v1 half, so two
-        // ports meant half of its calls always landed on the wrong surface. The
-        // archive surface owns the listener — it is bound before the store opens
-        // and answers from the first moment — and the companion mounts on it
-        // under its own prefix, unchanged in every other respect: it still
-        // verifies every request it is handed, and the v1 API keeps its own
-        // loopback/apiOpen gate.
-        //
-        // Nothing else moves. With no archive surface, or on the Unix transport,
-        // the companion binds its own transport exactly as before, so a
-        // configuration that asked for a companion port still gets one. In the
-        // shared shape the configured companion port is never bound at all,
-        // which is what stops it from colliding with the archive port.
-        const sharedListener = config.companion.transport === 'tcp' && typeof archiveHttp?.mount === 'function'
-          ? archiveHttp.mount(COMPANION_API_PREFIX)
-          : null
         companionServer = await companionServerFactory({
           service,
           config: config.companion,
           clock: nowFn,
           logger,
           fs: companionFsModule,
-          ingestSpoolRoot,
-          createServer: sharedListener
+          ingestSpoolRoot
         })
-        const companionState = await companionServer.start()
-        if (sharedListener && companionState?.enabled !== false) {
-          logger.relay.info('Companion API mounted on the archive HTTP listener', {
-            host: companionState.host,
-            port: companionState.port,
-            prefix: COMPANION_API_PREFIX,
-            // The port the configuration asked for and did not get, so an
-            // operator reading this never goes looking for it.
-            configuredPort: config.companion.port
-          })
-        }
+        await companionServer.start()
       }
 
       const runtimeStartedAt = Date.now()
@@ -1190,8 +1175,79 @@ async function buildRelayService({
       }
       return runtime.api.openVerifiedCandidateStream(candidate, { signal })
     },
+    async getVerifiedMediaCatalog(request = {}) {
+      if (typeof runtime.api?.getMediaCatalog !== 'function') {
+        return { success: false, errorCode: 'VERIFIED_QUERY_UNAVAILABLE', items: [], nextCursor: null }
+      }
+      const page = await runtime.api.getMediaCatalog(request)
+      if (page?.success !== true || !Array.isArray(page.items) ||
+          typeof runtime.api?.searchIndexCandidates !== 'function') return page
+      const searches = new Map()
+      const items = []
+      for (const item of page.items) {
+        const sources = []
+        for (const source of item?.sources || []) {
+          const selector = selectorForMediaCoordinates(source)
+          let candidateRef = null
+          if (selector) {
+            const key = JSON.stringify(selector)
+            let candidates = searches.get(key)
+            if (!candidates) {
+              candidates = Promise.resolve(runtime.api.searchIndexCandidates(selector, { limit: 64 }))
+                .catch(() => [])
+              searches.set(key, candidates)
+            }
+            const match = (await candidates).find(candidate =>
+              candidate?.publication?.publicationId === source.publicationId &&
+              (!source.renditionId || candidate?.rendition?.renditionId === source.renditionId))
+            if (CANDIDATE_REF_PATTERN.test(match?.candidateRef || '')) candidateRef = match.candidateRef
+          }
+          sources.push(candidateRef ? { ...source, candidateRef } : source)
+        }
+        const candidateRef = sources.find(source => CANDIDATE_REF_PATTERN.test(source?.candidateRef || ''))?.candidateRef || null
+        items.push({ ...item, sources, ...(candidateRef ? { candidateRef } : {}) })
+      }
+      return { ...page, items }
+    },
+    async getVerifiedManifest(publicationId) {
+      if (typeof publicationId !== 'string' || !publicationId) return null
+      if (typeof runtime.ctx?.verifiedQueryView?.getManifest === 'function') {
+        return runtime.ctx.verifiedQueryView.getManifest({ publicationId })
+      }
+      if (typeof runtime.api?.getPublicationManifest === 'function') {
+        const result = await runtime.api.getPublicationManifest({ publicationId })
+        return result?.manifest || result || null
+      }
+      return null
+    },
+    getArchiveMirrorRequests() {
+      return runtime.getArchiveMirrorRequests?.() || []
+    },
+    async getVerifiedEntityArtwork(request = {}) {
+      if (typeof runtime.api?.getEntityArtwork !== 'function') return null
+      return runtime.api.getEntityArtwork(request)
+    },
+    async openVerifiedPlayback(candidateRef, { signal = null } = {}) {
+      if (!CANDIDATE_REF_PATTERN.test(candidateRef || '')) return null
+      const state = companionServer?.state?.()
+      if (state?.enabled !== true || state.transport !== 'tcp' ||
+          typeof companionServer.dispatchInProcess !== 'function') return null
+      const opened = await companionServer.dispatchInProcess({
+        method: 'POST',
+        url: '/api/v2/streams/open',
+        body: { candidateRef },
+        signal
+      })
+      if (opened?.statusCode !== 200 || typeof opened.body?.url !== 'string') return null
+      return {
+        ...opened.body,
+        transport: state.transport,
+        host: state.host,
+        port: state.port
+      }
+    },
     async getPublication(publicationId) {
-      return runtime.ctx?.assetManifestStore?.getManifest?.(publicationId) || null
+      return service.getVerifiedManifest(publicationId)
     },
     async submitIngestJob(input, { ingestSpoolLease = null, signal = null } = {}) {
       if (!ingestReady) {

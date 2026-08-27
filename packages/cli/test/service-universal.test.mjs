@@ -111,6 +111,7 @@ function configFor (storagePath) {
     archive: { enabled: false, uiEnabled: false, localMirror: { enabled: false } },
     classification: { tmdb: { enabled: false } },
     discovery: { enabled: false, seedDiscovered: false },
+    companion: { enabled: false },
     seedPin: { enabled: true, trustedClients: [] }
   }, { env: {} })
 }
@@ -205,7 +206,7 @@ test('archive WebUI publisher follows current explicit archive consent', async (
   const calls = []
   const runtime = fakeRuntime(calls)
   const config = configFor(storagePath)
-  config.archive = { ...config.archive, uiEnabled: true }
+  config.archive = { ...config.archive, uiEnabled: true, uiPort: 0 }
   let uiPublisher = null
   const service = await createRelayService({
     config,
@@ -363,6 +364,51 @@ test('relay archive command delegates to the v2 console ingest adapter', async (
   t.is(queued.jobId, 'ing_cli_1')
   t.alike(calls.find(([name]) => name === 'archive-submit')?.[1], {
     url: 'https://example.com/video.mp4'
+  })
+  await service.close()
+})
+
+test('verified catalog rows receive playable candidate references from exact search', async (t) => {
+  const storagePath = mkdtempSync(join(tmpdir(), 'peartube-cli-verified-shelf-'))
+  t.teardown(() => rmSync(storagePath, { recursive: true, force: true }))
+  const calls = []
+  const runtime = fakeRuntime(calls)
+  runtime.api.getMediaCatalog = async () => ({
+    success: true,
+    items: [{
+      entityId: 'work-1',
+      sources: [{
+        publicationId: 'publication-1',
+        renditionId: 'rendition-1',
+        mediaCoordinates: { contentKind: 'movie', mediaProvider: 'tmdb', mediaId: '603' }
+      }]
+    }],
+    nextCursor: null
+  })
+  runtime.api.searchIndexCandidates = async selector => {
+    calls.push(['candidate-search', selector])
+    return [{
+      candidateRef: 'A'.repeat(43),
+      publication: { publicationId: 'publication-1' },
+      rendition: { renditionId: 'rendition-1' }
+    }]
+  }
+  const service = await createRelayService({
+    config: configFor(storagePath),
+    logger,
+    runtimeFactory: async () => runtime,
+    writeStatusFile: async () => {},
+    setIntervalFn: () => ({ unref: noop }),
+    clearIntervalFn: noop
+  })
+  await service.start()
+  const page = await service.getVerifiedMediaCatalog({ limit: 20 })
+  t.is(page.items[0].candidateRef, 'A'.repeat(43))
+  t.is(page.items[0].sources[0].candidateRef, 'A'.repeat(43))
+  t.alike(calls.find(([name]) => name === 'candidate-search')?.[1], {
+    namespace: 'tmdb',
+    identifier: '603',
+    kind: 'movie'
   })
   await service.close()
 })

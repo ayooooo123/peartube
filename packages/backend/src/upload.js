@@ -605,7 +605,9 @@ async function resolvePersistedPublisherCatalog(catalogRegistry, publisherId) {
 async function finalizeAcceptedPublication(metadata, runtime = {}) {
   const publication = metadata?.immutablePublication;
   immutablePublicationOperations(publication);
-  await runtime.mediaCatalogProjection?.rebuild?.();
+  await runtime.verifiedQueryView?.refresh?.({
+    publisherIds: [publication.manifest.body.publisherId],
+  });
   const rendition = publication.manifest?.body?.renditions?.find(
     candidate => candidate.renditionId === publication.renditionId,
   );
@@ -931,7 +933,7 @@ async function writeStreamedPlaybackBlob(channel, source, signal, onProgress, ex
 
 async function maybeAttachImmutablePublication(metadata, prepared, runtime = {}) {
   if (!prepared) return metadata;
-  const { mediaCatalogProjection, scopedNetwork, deviceKeyPair } = runtime;
+  const { scopedNetwork, deviceKeyPair } = runtime;
   const { catalog, publisherId } = prepared;
   const rendition = prepared.renditionWrite.descriptor;
 
@@ -1344,7 +1346,7 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
 export function createUploadManager({
   ctx,
   catalogRegistry = null,
-  mediaCatalogProjection = null,
+  verifiedQueryView = null,
   scopedNetwork = null,
   deviceKeyPair = null,
   now = () => Date.now()
@@ -1355,7 +1357,7 @@ export function createUploadManager({
   // Resumable ingest needs both a bounded offloader and durable staging.
   const resumableIngest = typeof blockOffload?.createOffloader === 'function' &&
     typeof blockOffload?.createStagingStore === 'function';
-  const publicationRuntime = { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair, store: ctx?.store, offload: blockOffload, now };
+  const publicationRuntime = { catalogRegistry, verifiedQueryView, scopedNetwork, deviceKeyPair, store: ctx?.store, offload: blockOffload, now };
   /**
    * Probe the uploaded MP4 for its playback profile (moov position +
    * keyframe index) and persist it for range prioritization at playback

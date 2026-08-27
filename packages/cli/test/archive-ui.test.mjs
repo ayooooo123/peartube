@@ -14,6 +14,7 @@ test('archive UI commands and flags are exposed by the relay CLI', async (t) => 
 
   t.is(parseArgv(['ui', '--host', '0.0.0.0', '--port', '8174']).command, 'ui')
   t.alike(parseArgv(['ui', '--host', '0.0.0.0', '--port', '8174']).flags, { host: '0.0.0.0', port: '8174' })
+  t.exception(() => parseArgv(['ui', '--api-open']), /Unknown argument --api-open/, 'the retired open-access switch is rejected')
   t.is(parseArgv(['archive', '--url', 'https://www.youtube.com/watch?v=abc', '--channel-name', 'Anon']).command, 'archive')
   t.ok(bin.includes('ui       Run the relay archive WebUI'), 'help exposes the container WebUI')
   t.ok(bin.includes('archive  Queue or run anonymous YouTube archive jobs'), 'help exposes archive job management')
@@ -45,6 +46,19 @@ test('archive TUI and WebUI render queue, archive form, and publish actions', as
   t.ok(web.includes('type="file"') && web.includes('name="file"'), 'WebUI accepts a video file upload')
   t.ok(web.includes('name="channelName"'), 'WebUI accepts anonymous channel name')
   t.ok(web.includes('Queued video'), 'WebUI renders archive queue')
+})
+
+test('archive WebUI only links playback for a verified v2 candidate reference', (t) => {
+  const verified = 'V'.repeat(43)
+  const web = renderArchiveWebHome({
+    library: [
+      { title: 'Verified title', candidateRef: verified, status: { label: 'Saved' } },
+      { title: 'Metadata only', candidateRef: 'publication-id-is-not-a-capability', status: { label: 'Listed' } }
+    ]
+  })
+  t.ok(web.includes(`href="/play/${verified}"`))
+  t.absent(web.includes('/play/publication-id-is-not-a-capability'), 'publication ids never regain direct stream access')
+  t.absent(web.includes('Simple relay catalog'), 'the duplicate JSON projection is not advertised')
 })
 
 

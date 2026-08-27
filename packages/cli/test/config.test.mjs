@@ -123,6 +123,12 @@ test('direct downloads have no file-size ceiling config surface', async (t) => {
   )
 })
 
+test('retired archive open-access settings are ignored and not rendered', (t) => {
+  const config = resolveRelayConfig({}, { env: { PEARTUBE_ARCHIVE_API_OPEN: 'true' } })
+  t.is(config.archive.apiOpen, undefined)
+  t.absent(renderExampleConfig(config).includes('apiOpen'))
+})
+
 test('loadRelayConfig supports env-only relay configuration', async (t) => {
   const config = await loadRelayConfig({}, {
     env: {

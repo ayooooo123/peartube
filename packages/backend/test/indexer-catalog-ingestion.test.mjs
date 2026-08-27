@@ -1239,6 +1239,14 @@ test('verified query view backfills an existing episode and resolves its accepte
   t.is(page.results[0].entityId, subject.entityId)
   t.is((await view.getPublication({ publicationId: manifest.publicationId })).manifestId, manifest.body.manifestId)
   t.is((await view.getManifest({ publicationId: manifest.publicationId })).publicationId, manifest.publicationId)
+  const entity = await view.getEntity({ entityKind: 'work', entityId: subject.entityId })
+  t.is(entity.publications.length, 1)
+  t.is(entity.publications[0].manifest.publicationId, manifest.publicationId)
+  t.alike((await view.listEntities()).map(item => item.entityId), [subject.entityId])
+  t.is((await view.getRendition({
+    publicationId: manifest.publicationId,
+    renditionId: manifest.body.renditions[0].renditionId,
+  })).requirement.coreKey, manifest.body.renditions[0].core.key)
   t.ok(await view.authorizeRendition({
     publicationId: manifest.publicationId,
     renditionId: manifest.body.renditions[0].renditionId,

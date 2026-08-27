@@ -8,7 +8,6 @@ import {
   signedRecordSignaturePreimage,
 } from '@peartube/backend/records'
 import { MultiWriterChannel } from '../src/channel/multi-writer-channel.js'
-import { createPublisherCatalogProjection } from '../src/media-graph/catalog-projection.js'
 import {
   createLegacyCatalogResolver,
   createPublicationV1CheckpointRepository,
@@ -85,7 +84,7 @@ test('startup migration checkpoints byte-less legacy ranges for re-ingest withou
     checkpointRepository: createPublicationV1CheckpointRepository(metaDb),
     resolveCatalog: async () => { catalogResolutions++; return null },
     deviceKeyPair: crypto.keyPair(b4a.alloc(32, 8)),
-    mediaCatalogProjection: { async rebuild() {} },
+    verifiedQueryView: { async refresh() {} },
     now: () => 100,
   })
 
@@ -113,7 +112,7 @@ test('startup migration quarantines malformed legacy storage and fails closed wi
       checkpointRepository: createPublicationV1CheckpointRepository(metaDb),
       resolveCatalog: async () => { writes++; return null },
       deviceKeyPair: crypto.keyPair(b4a.alloc(32, 9)),
-      mediaCatalogProjection: { async rebuild() {} },
+      verifiedQueryView: { async refresh() {} },
       now: () => 100,
     })
     t.fail('malformed migration must fail')

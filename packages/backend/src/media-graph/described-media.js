@@ -25,6 +25,27 @@ const MIN_RELEASE_YEAR = 1870
 const MAX_RELEASE_YEAR = 2200
 const MAX_RUNTIME_MINUTES = 100000
 
+export function artworkEntry(artwork) {
+  if (typeof artwork === 'string') return artwork ? { locator: artwork, mimeType: null } : null
+  if (!Array.isArray(artwork)) return null
+  const roles = ['poster', 'thumbnail', 'still', 'backdrop']
+  for (const preferBlob of [true, false]) {
+    for (const role of roles) {
+      for (const entry of artwork) {
+        if (entry?.role !== role) continue
+        const mimeType = typeof entry.mimeType === 'string' && entry.mimeType ? entry.mimeType : null
+        const blobId = typeof entry.blobId === 'string' ? entry.blobId.trim() : ''
+        const blobsCoreKey = typeof entry.blobsCoreKey === 'string' ? entry.blobsCoreKey.trim() : ''
+        if (blobId && blobsCoreKey) return { locator: `blob:${blobsCoreKey}@${blobId}`, mimeType }
+        if (preferBlob) continue
+        const remoteUrl = typeof entry.remoteUrl === 'string' ? entry.remoteUrl.trim() : ''
+        if (remoteUrl) return { locator: remoteUrl, mimeType }
+      }
+    }
+  }
+  return null
+}
+
 export function describeMedia(input) {
   if (!input || typeof input !== 'object') return {}
   const out = {}

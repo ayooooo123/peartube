@@ -295,32 +295,43 @@ function graphFixture(overrides = {}) {
     ['pub-a', { publicationId: 'pub-a', body: { publisherId: 'pub', manifestId: 'm-a', renditions: [{ renditionId: 'rendition-pub-a', core: coreA }] } }],
     ['pub-b', { publicationId: 'pub-b', body: { publisherId: 'pub', manifestId: 'm-b', renditions: [{ renditionId: 'rendition-pub-b', core: coreB }] } }],
   ])
-  const claim = publicationId => ({
-    claimId: `claim-${publicationId}`,
-    issuer: 'pub',
-    revoked: false,
-    body: {
-      claimType: 'AvailabilityObservation',
-      confidence: 10,
-      subjectRefs: [{ entityId: 'work:movie-1', entityKind: 'work' }],
-      payload: { publicationId },
-    },
-  })
   return {
-    mediaGraphStore: { getClaimsBySubject: () => [claim('pub-a'), claim('pub-b')] },
-    assetManifestStore: {
-      getManifest: publicationId => manifests.get(publicationId) || null,
-      getRenditionRequirement: publicationId => {
-        const rendition = manifests.get(publicationId)?.body.renditions[0]
-        if (!rendition) return null
-        const coreRef = normalizeAssetCoreRefV2(rendition.core)
+    verifiedQueryView: {
+      async getEntity({ entityId }) {
+        if (entityId !== 'work:movie-1') return null
         return {
-          publicationId,
-          renditionId: rendition.renditionId,
-          coreKey: coreRef.key,
-          coreLength: coreRef.length,
-          requiredRanges: [{ start: 0, end: coreRef.length }],
+          entityId,
+          entityKind: 'work',
+          publications: [...manifests.values()].map(manifest => ({
+            publicationId: manifest.publicationId,
+            publisherId: manifest.body.publisherId,
+            sourceRecordRef: `claim-${manifest.publicationId}`,
+            manifest,
+          })),
         }
+      },
+      async getManifest({ publicationId }) {
+        return manifests.get(publicationId) || null
+      },
+      async getRendition({ publicationId, renditionId }) {
+        const manifest = manifests.get(publicationId)
+        const rendition = manifest?.body.renditions.find(candidate => candidate.renditionId === renditionId)
+        if (!rendition) return null
+        const core = normalizeAssetCoreRefV2(rendition.core)
+        return {
+          manifest,
+          rendition,
+          requirement: {
+            publicationId,
+            renditionId,
+            coreKey: core.key,
+            coreLength: core.length,
+            requiredRanges: [{ start: 0, end: core.length }],
+          },
+        }
+      },
+      async authorizeRendition() {
+        return true
       },
     },
     availabilityEvidenceStore: {

@@ -911,18 +911,15 @@ test('relay startup failure closes an already-started companion', async (t) => {
   t.is(existsSync(config.companion.socketPath), false)
 })
 
-test('a TCP companion shares the archive listener so one port serves both API versions', async (t) => {
-  const storagePath = tempDir(t, 'peartube-companion-shared-')
+test('TCP companion and archive UI use separate listeners and only v2 is machine-addressable', async (t) => {
+  const storagePath = tempDir(t, 'peartube-companion-separate-')
   const surface = createArchiveHttpSurface({ host: '127.0.0.1', port: 0, logger })
   t.teardown(() => surface.close().catch(noop))
-  // Bound before the relay is built, exactly as a warming relay binds it. So
-  // this is also the collision the two-listener shape could not survive: a
-  // companion that bound a socket of its own here would fail with EADDRINUSE.
-  const port = await surface.listen()
+  const uiPort = await surface.listen()
   const config = resolveRelayConfig({
     storage: { path: storagePath, maxBytes: 4096, minFreeBytes: 0 },
-    companion: { enabled: true, transport: 'tcp', host: '127.0.0.1', port, client: CLIENT, sharedSecret: SECRET },
-    archive: { enabled: false, uiEnabled: true, uiHost: '127.0.0.1', uiPort: port, localMirror: { enabled: false } },
+    companion: { enabled: true, transport: 'tcp', host: '127.0.0.1', port: 0, client: CLIENT, sharedSecret: SECRET },
+    archive: { enabled: false, uiEnabled: true, uiHost: '127.0.0.1', uiPort, localMirror: { enabled: false } },
     classification: { tmdb: { enabled: false } },
     discovery: { enabled: false, seedDiscovered: false },
     seedPin: { enabled: true, trustedClients: [] }
@@ -945,65 +942,23 @@ test('a TCP companion shares the archive listener so one port serves both API ve
 
   const state = service.getCompanionState()
   t.is(state.transport, 'tcp')
-  t.is(state.port, port, 'the companion reports the listener it shares rather than a port of its own')
-  t.alike(surface.mounted, ['/api/v2'], 'and only the v2 prefix is routed away from the archive surface')
+  t.not(state.port, uiPort, 'the authenticated machine API binds its configured listener')
 
   const signed = await request({
     host: '127.0.0.1',
-    port,
-    headers: signedHeaders({ timestamp: Date.now(), nonce: 'shared-listener-0001' })
+    port: state.port,
+    headers: signedHeaders({ timestamp: Date.now(), nonce: 'separate-listener-0001' })
   })
-  t.is(signed.statusCode, 200, 'a signed /api/v2 request is served on the archive port')
-  t.is(JSON.parse(signed.body).transport.port, port, 'and reports where it is really listening')
+  t.is(signed.statusCode, 200)
 
-  const unsigned = await request({ host: '127.0.0.1', port })
-  t.is(unsigned.statusCode, 401, 'sharing a port authenticates nothing for free')
+  const unsigned = await request({ host: '127.0.0.1', port: state.port })
+  t.is(unsigned.statusCode, 401, 'v2 control routes remain MAC-authenticated')
   t.is(JSON.parse(unsigned.body).error.code, 'AUTH_REQUIRED')
 
-  // The MAC covers the method, the canonical path and query, and a hash of the
-  // body. A target or body that arrived re-encoded, normalized or re-read would
-  // read as unsigned, so these two are the proof that the shared listener hands
-  // the companion the request exactly as the client signed it.
-  const searchPath = '/api/v2/search?namespace=tmdb&identifier=348&kind=movie&limit=1'
-  const search = await request({
-    host: '127.0.0.1',
-    port,
-    path: searchPath,
-    headers: signedHeaders({ path: searchPath, timestamp: Date.now(), nonce: 'shared-listener-0002' })
-  })
-  t.is(search.statusCode, 200, 'a signed query string arrives exactly as it was signed')
-
-  const openBody = JSON.stringify({ candidateRef: 'A'.repeat(43) })
-  const opened = await request({
-    host: '127.0.0.1',
-    port,
-    method: 'POST',
-    path: '/api/v2/streams/open',
-    body: openBody,
-    headers: {
-      'content-type': 'application/json',
-      'content-length': Buffer.byteLength(openBody),
-      ...signedHeaders({
-        method: 'POST',
-        path: '/api/v2/streams/open',
-        body: openBody,
-        timestamp: Date.now(),
-        nonce: 'shared-listener-0003'
-      })
-    }
-  })
-  t.is(opened.statusCode, 501, 'and a signed body hashes to the same digest on the far side')
-  t.is(
-    JSON.parse(opened.body).error.code,
-    'CAPABILITY_UNAVAILABLE',
-    'refused by the route it authenticated into rather than by authentication'
-  )
-
-  const catalog = await request({ host: '127.0.0.1', port, path: '/api/v1/catalog' })
-  t.is(catalog.statusCode, 200, 'a non-v2 path still reaches the archive surface')
-  t.alike(JSON.parse(catalog.body).entities, [], 'answered by the unsigned v1 API, not by the companion')
-  const health = await request({ host: '127.0.0.1', port, path: '/health' })
-  t.alike(JSON.parse(health.body), { ok: true, ready: true }, 'on the one socket the console adopted')
+  const legacy = await request({ host: '127.0.0.1', port: uiPort, path: '/api/v1/catalog' })
+  t.is(legacy.statusCode, 404, 'the archive UI listener exposes no legacy machine API')
+  const health = await request({ host: '127.0.0.1', port: uiPort, path: '/health' })
+  t.alike(JSON.parse(health.body), { ok: true, ready: true })
 })
 
 test('Bare serves authenticated companion HTTP over a Unix socket', (t) => {

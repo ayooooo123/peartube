@@ -1,7 +1,12 @@
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 
-import { decodePublicationManifest } from '../assets/index.js'
+import { decodePublicationManifest, encodePublicationManifest } from '../assets/index.js'
+import { requiredRangesForRendition } from '../assets/availability.js'
+import { isArtworkRendition, normalizeAssetCoreRefV2 } from '../assets/rendition.js'
+import { decodeClaimBody } from '../media-graph/claims.js'
+import { resolveMediaEntity } from '../media-graph/resolver.js'
+import { decodeApplicationEnvelope } from '../records/application-envelope.js'
 import { PUBLISHER_LIMITS, PUBLISHER_RECORD_TYPES, decodePublisherCatalogFrame, decodePublisherOperationBody } from '../publisher/index.js'
 import { createCatalogIngestor } from './catalog-ingestor.js'
 import { mapIndexQueryResult } from './query-dispatcher.js'
@@ -18,9 +23,10 @@ const CURSOR_BYTES = 32
 const CURSOR_PATTERN = /^[A-Za-z0-9_-]{43}$/
 const HEX_32 = /^[0-9a-f]{64}$/
 
+const MAX_VERIFIED_PUBLISHERS = 256
 const AGGREGATE_LIMIT = Object.freeze({
-  maxRetainedBytes: Number.MAX_SAFE_INTEGER - 1,
-  maxRows: Number.MAX_SAFE_INTEGER - 1,
+  maxRetainedBytes: PUBLISHER_LIMITS.maxSnapshotBytes * MAX_VERIFIED_PUBLISHERS,
+  maxRows: PUBLISHER_LIMITS.maxJournalOperations * MAX_VERIFIED_PUBLISHERS,
 })
 const PUBLISHER_LIMIT = Object.freeze({
   maxRetainedBytes: PUBLISHER_LIMITS.maxSnapshotBytes,
@@ -64,8 +70,211 @@ function isVisibleDecision(decision) {
   return decision.action === 'visible' || decision.action === 'allow'
 }
 
-function findManifestRendition(manifest, renditionId) {
-  return manifest?.body?.renditions?.find(candidate => candidate?.renditionId === renditionId) || null
+function findManifestRendition(manifest, renditionId = null) {
+  return manifest?.body?.renditions?.find(candidate => (
+    candidate &&
+    candidate.blocked !== true &&
+    candidate.superseded !== true &&
+    typeof candidate.renditionId === 'string' &&
+    candidate.renditionId.length > 0 &&
+    (renditionId === null ? !isArtworkRendition(candidate) : candidate.renditionId === renditionId)
+  )) || null
+}
+
+function renditionRequirement(manifest, renditionId = null) {
+  const rendition = findManifestRendition(manifest, renditionId)
+  if (!rendition) return null
+  let core
+  try { core = normalizeAssetCoreRefV2(rendition.core) } catch { return null }
+  return Object.freeze({
+    publicationId: manifest.publicationId,
+    renditionId: rendition.renditionId,
+    coreKey: core.key,
+    coreLength: core.length,
+    requiredRanges: Object.freeze(requiredRangesForRendition(rendition)),
+  })
+}
+
+function claimModerationEntity(row, publicationId = null) {
+  const subjectRefs = row?.body?.subjectRefs || []
+  const payload = row?.body?.payload || {}
+  const relatedRefs = [
+    ...subjectRefs,
+    payload.collectionRef,
+    payload.memberRef,
+    payload.subjectRef,
+  ].filter(ref => ref?.entityId)
+  const workIds = [...new Set(relatedRefs.filter(ref => ref.entityKind === 'work').map(ref => ref.entityId))]
+  const collectionIds = [...new Set(relatedRefs.filter(ref => ref.entityKind === 'collection').map(ref => ref.entityId))]
+  const entityRef = subjectRefs[0]?.entityId || workIds[0] || collectionIds[0] || null
+  return {
+    entityRef,
+    entityId: entityRef,
+    workId: workIds[0] || null,
+    workIds,
+    collectionId: collectionIds[0] || null,
+    collectionIds,
+    publisherId: row?.publisherId || row?.issuer || null,
+    publisherRootKey: row?.publisherId || row?.issuer || null,
+    publicationId: publicationId || payload.publicationId || null,
+  }
+}
+
+function publicationModerationEntity(publication) {
+  return {
+    entityRef: publication.workEntityId,
+    entityId: publication.workEntityId,
+    workId: publication.workEntityId,
+    workIds: [publication.workEntityId],
+    publisherId: publication.publisherId,
+    publisherRootKey: publication.publisherId,
+    publicationId: publication.publicationId,
+  }
+}
+
+function queryModerationEntity(result) {
+  if (result?.type === 'publication') return { ...result, ...publicationModerationEntity(result) }
+  if (result?.type === 'rendition') {
+    return {
+      ...result,
+      publisherRootKey: result.publisherId,
+      renditionId: result.renditionId,
+      publicationId: result.publicationId,
+    }
+  }
+  if (result?.type === 'title-token') {
+    return { ...result, entityRef: result.targetId, entityId: result.targetId, workId: result.targetId, workIds: [result.targetId] }
+  }
+  return { ...result, publisherRootKey: result?.publisherId || null, entityRef: result?.entityId || null }
+}
+
+function claimRelatedEntityIds(row) {
+  const payload = row?.body?.payload || {}
+  return [...new Set([
+    ...(row?.body?.subjectRefs || []).map(ref => ref?.entityId),
+    payload.collectionRef?.entityId,
+    payload.memberRef?.entityId,
+    payload.subjectRef?.entityId,
+  ].filter(Boolean))]
+}
+
+function publicationLinksByClaim(topologyClaims, availabilityClaims = topologyClaims) {
+  const parents = new Map()
+  function root(entityId) {
+    if (!parents.has(entityId)) parents.set(entityId, entityId)
+    let value = entityId
+    while (parents.get(value) !== value) value = parents.get(value)
+    let current = entityId
+    while (parents.get(current) !== current) {
+      const next = parents.get(current)
+      parents.set(current, value)
+      current = next
+    }
+    return value
+  }
+  function union(entityIds) {
+    if (entityIds.length < 2) return
+    const first = root(entityIds[0])
+    for (const entityId of entityIds.slice(1)) {
+      const next = root(entityId)
+      if (next !== first) parents.set(next, first)
+    }
+  }
+  for (const row of topologyClaims) {
+    const related = claimRelatedEntityIds(row)
+    for (const entityId of related) root(entityId)
+    if (row.body?.claimType === 'EquivalentEntityClaim' ||
+        row.body?.claimType === 'CollectionMembershipClaim') union(related)
+  }
+  const byIssuerAndCluster = new Map()
+  for (const row of availabilityClaims) {
+    if (row.body?.claimType !== 'AvailabilityObservation') continue
+    const publicationId = row.body?.payload?.publicationId
+    if (!publicationId) continue
+    const publisher = row.publisherId || row.issuer
+    for (const entityId of claimRelatedEntityIds(row)) {
+      const key = `${publisher}\0${root(entityId)}`
+      const linked = byIssuerAndCluster.get(key) || new Set()
+      linked.add(publicationId)
+      byIssuerAndCluster.set(key, linked)
+    }
+  }
+  return row => {
+    if (row.body?.payload?.publicationId) return new Set([row.body.payload.publicationId])
+    const publicationIds = new Set()
+    const publisher = row.publisherId || row.issuer
+    for (const entityId of claimRelatedEntityIds(row)) {
+      for (const linked of byIssuerAndCluster.get(`${publisher}\0${root(entityId)}`) || []) publicationIds.add(linked)
+    }
+    return publicationIds
+  }
+}
+
+function decodeVerifiedClaims(sourceRecords) {
+  const claims = []
+  for (const source of sourceRecords) {
+    if (source.recordType !== PUBLISHER_RECORD_TYPES.CLAIM) continue
+    const frame = decodePublisherCatalogFrame(source.canonicalEnvelope)
+    const operation = decodePublisherOperationBody(frame.recordType, frame.canonicalBody)
+    const envelope = decodeApplicationEnvelope(operation.payload)
+    const body = decodeClaimBody(envelope.body)
+    const claimId = publisherId(envelope.recordId, 'claimId')
+    const issuer = publisherId(envelope.signer, 'claim issuer')
+    claims.push({
+      claimId,
+      envelope,
+      body,
+      issuer,
+      publisherId: publisherId(source.publisherId),
+      subjects: body.subjectRefs.map(ref => ref.entityId).sort(),
+      revoked: false,
+    })
+  }
+  claims.sort((left, right) => (
+    left.issuer.localeCompare(right.issuer) ||
+    left.body.issuerSequence - right.body.issuerSequence ||
+    left.claimId.localeCompare(right.claimId)
+  ))
+  const byId = new Map(claims.map(row => [row.claimId, row]))
+  for (const row of claims) {
+    if (row.body.claimType !== 'RetractionClaim') continue
+    for (const targetClaimId of row.body.payload.targetClaimIds) {
+      const target = byId.get(targetClaimId)
+      if (target?.issuer === row.issuer) target.revoked = true
+    }
+  }
+  claims.sort((left, right) => left.claimId.localeCompare(right.claimId))
+  return claims
+}
+
+function claimStore(claims) {
+  return {
+    getClaims() {
+      return claims.slice()
+    },
+    getClaimsBySubject(entityId) {
+      return claims.filter(row => row.subjects.includes(entityId))
+    },
+  }
+}
+
+function sourceRecordByReference(snapshot, publication) {
+  return snapshot.sourceRecords.find(source =>
+    source.publisherId === publication.publisherId &&
+    source.recordId === publication.sourceRecordRef
+  ) || null
+}
+
+function manifestFromSnapshot(snapshot, publication) {
+  const source = sourceRecordByReference(snapshot, publication)
+  if (!source || source.recordType !== PUBLISHER_RECORD_TYPES.PUBLICATION) return null
+  const frame = decodePublisherCatalogFrame(source.canonicalEnvelope)
+  const body = decodePublisherOperationBody(frame.recordType, frame.canonicalBody)
+  const manifest = decodePublicationManifest(body.payload)
+  if (manifest.publicationId !== publication.publicationId || manifest.body?.manifestId !== publication.manifestId) {
+    fail('verified publication projection does not match its canonical manifest')
+  }
+  return manifest
 }
 
 export async function createVerifiedQueryView({
@@ -128,13 +337,61 @@ export async function createVerifiedQueryView({
     return revision
   }
 
-  async function visible(record, moderation = 'effective') {
+  function visibilityEvaluator(moderation = 'effective') {
     boundedText(moderation, 'moderation mode', 64)
-    const hook = typeof moderationPolicy === 'function'
-      ? moderationPolicy
-      : moderationPolicy?.isVisible || moderationPolicy?.evaluate
-    if (typeof hook !== 'function') return true
-    return isVisibleDecision(await hook.call(moderationPolicy, record, { moderation }))
+    const evaluation = typeof moderationPolicy?.beginEvaluation === 'function'
+      ? moderationPolicy.beginEvaluation({ moderation })
+      : moderationPolicy
+    const hook = typeof evaluation === 'function'
+      ? evaluation
+      : evaluation?.isVisible || evaluation?.evaluate
+    if (typeof hook !== 'function') return async () => true
+    return async record => isVisibleDecision(await hook.call(evaluation, record, { moderation }))
+  }
+
+  async function visible(record, moderation = 'effective') {
+    return visibilityEvaluator(moderation)(record)
+  }
+
+  async function catalogSnapshot() {
+    return index.snapshotCatalogRows({
+      maxSourceRecords: AGGREGATE_LIMIT.maxRows,
+      maxPublicationRows: AGGREGATE_LIMIT.maxRows,
+    })
+  }
+
+  async function visibleClaims(snapshot, evaluator) {
+    const claims = decodeVerifiedClaims(snapshot.sourceRecords).filter(row => !row.revoked)
+    const baseVisible = []
+    for (const row of claims) {
+      if (await evaluator(claimModerationEntity(row))) baseVisible.push(row)
+    }
+    const linkedPublications = publicationLinksByClaim(baseVisible, claims)
+    const output = []
+    for (const row of baseVisible) {
+      if (row.body?.payload?.publicationId) {
+        output.push(row)
+        continue
+      }
+      let allowed = true
+      for (const publicationId of linkedPublications(row)) {
+        if (!await evaluator(claimModerationEntity(row, publicationId))) {
+          allowed = false
+          break
+        }
+      }
+      if (allowed) output.push(row)
+    }
+    return output
+  }
+
+  async function visiblePublications(snapshot, evaluator) {
+    const publications = []
+    for (const row of snapshot.publicationRows) {
+      const publication = mapIndexQueryResult(row)
+      if (await evaluator(publicationModerationEntity(publication))) publications.push(publication)
+    }
+    return publications
   }
 
   function queryFingerprint(selectors, moderation) {
@@ -179,7 +436,7 @@ export async function createVerifiedQueryView({
   async function bindingsByPublisher(requested = null) {
     const bindings = await catalogRegistry.listBindings()
     if (!Array.isArray(bindings)) throw new TypeError('catalogRegistry.listBindings() must return an array')
-    if (bindings.length > PUBLISHER_LIMITS.maxJournalOperations) fail('publisher binding list exceeds its bound')
+    if (bindings.length > MAX_VERIFIED_PUBLISHERS) fail('publisher binding list exceeds its bound')
     const normalized = []
     for (const binding of bindings) {
       let id
@@ -226,18 +483,18 @@ export async function createVerifiedQueryView({
     return Object.freeze({ indexed, failed })
   }
 
-  async function publicationRow(publicationIdValue, moderation = 'effective') {
+  async function publicationRow(publicationIdValue, moderation = 'effective', evaluator = visibilityEvaluator(moderation)) {
     const id = publisherId(publicationIdValue, 'publicationId')
     const rows = await index.findPublicationRows({ publicationId: id })
     for (const row of rows) {
       const result = mapIndexQueryResult(row)
-      if (await visible(result, moderation)) return Object.freeze(result)
+      if (await evaluator(publicationModerationEntity(result))) return Object.freeze(result)
     }
     return null
   }
 
-  async function manifestForPublication(publication, moderation = 'effective') {
-    if (!publication || !await visible(publication, moderation)) return null
+  async function manifestForPublication(publication, moderation = 'effective', evaluator = visibilityEvaluator(moderation)) {
+    if (!publication || !await evaluator(publicationModerationEntity(publication))) return null
     const source = await index.getSourceRecord({
       publisherId: publication.publisherId,
       sourceRecordRef: publication.sourceRecordRef,
@@ -250,6 +507,45 @@ export async function createVerifiedQueryView({
       fail('verified publication projection does not match its canonical manifest')
     }
     return manifest
+  }
+
+  async function entityFromSnapshot(snapshot, claims, publications, entityId, entityKind = null) {
+    const store = claimStore(claims)
+    const directClaims = store.getClaimsBySubject(entityId)
+    const entityPublications = publications
+      .filter(publication => publication.workEntityId === entityId)
+      .sort((left, right) => left.publicationId.localeCompare(right.publicationId))
+    if (directClaims.length === 0 && entityPublications.length === 0) return null
+    const resolved = directClaims.length > 0
+      ? resolveMediaEntity(store, entityId)
+      : {
+          localClusterId: null,
+          globalClusterId: null,
+          members: [entityId],
+          metadata: {},
+          claims: [],
+          conflicts: [],
+        }
+    const projectedPublications = entityPublications.map(publication => {
+      const manifest = manifestFromSnapshot(snapshot, publication)
+      if (!manifest) fail('verified publication source record is missing')
+      return Object.freeze({ ...publication, manifest })
+    })
+    const firstManifest = projectedPublications[0]?.manifest
+    const metadata = {
+      ...resolved.metadata,
+      ...(resolved.metadata?.title ? {} : { title: firstManifest?.body?.title || null }),
+      ...(resolved.metadata?.overview ? {} : { overview: firstManifest?.body?.description || null }),
+    }
+    const inferredKind = entityKind ||
+      directClaims.flatMap(row => row.body?.subjectRefs || []).find(ref => ref.entityId === entityId)?.entityKind ||
+      (entityPublications.length > 0 ? 'work' : 'unknown')
+    return Object.freeze({
+      entityKind: inferredKind,
+      entityId,
+      resolved: Object.freeze({ ...resolved, metadata: Object.freeze(metadata) }),
+      publications: Object.freeze(projectedPublications),
+    })
   }
 
   const resource = {
@@ -281,6 +577,7 @@ export async function createVerifiedQueryView({
       }
       let continuation = stored?.continuation
       let sourceRevision = stored?.sourceRevision ?? requestedSourceRevision ?? undefined
+      const evaluator = visibilityEvaluator(moderation)
       const results = []
       while (results.length < limit) {
         let page
@@ -300,7 +597,7 @@ export async function createVerifiedQueryView({
         continuation = page.continuation
         if (page.results.length === 1) {
           const result = mapIndexQueryResult(page.results[0])
-          if (await visible(result, moderation)) results.push(Object.freeze(result))
+          if (await evaluator(queryModerationEntity(result))) results.push(Object.freeze(result))
         }
         if (continuation === null) break
       }
@@ -310,17 +607,55 @@ export async function createVerifiedQueryView({
         sourceRevision,
       })
     },
-    async getEntity({ entityKind, entityId, moderation = 'effective' } = {}) {
+    async getEntity({ entityKind = null, entityId, moderation = 'effective' } = {}) {
       assertOpen()
-      const rows = await index.findEntityRows({ entityKind, entityId })
+      boundedText(entityId, 'entityId', 512)
+      if (entityKind !== null) boundedText(entityKind, 'entityKind', 64)
+      const evaluator = visibilityEvaluator(moderation)
+      const snapshot = await catalogSnapshot()
+      const claims = await visibleClaims(snapshot, evaluator)
+      const publications = await visiblePublications(snapshot, evaluator)
+      const entity = await entityFromSnapshot(snapshot, claims, publications, entityId, entityKind)
+      if (!entity) return null
       const sources = []
-      for (const row of rows) {
-        const result = mapIndexQueryResult(row)
-        if (await visible(result, moderation)) sources.push(Object.freeze(result))
+      if (entityKind !== null) {
+        for (const row of await index.findEntityRows({ entityKind, entityId })) {
+          const result = mapIndexQueryResult(row)
+          if (await evaluator(queryModerationEntity(result))) sources.push(Object.freeze(result))
+        }
       }
-      return sources.length === 0
-        ? null
-        : Object.freeze({ entityKind, entityId, sources: Object.freeze(sources) })
+      return Object.freeze({ ...entity, sources: Object.freeze(sources) })
+    },
+    async listEntities({ moderation = 'effective' } = {}) {
+      assertOpen()
+      const evaluator = visibilityEvaluator(moderation)
+      const snapshot = await catalogSnapshot()
+      const claims = await visibleClaims(snapshot, evaluator)
+      const publications = await visiblePublications(snapshot, evaluator)
+      const entityIds = [...new Set(publications.map(publication => publication.workEntityId))].sort()
+      const entities = []
+      for (const entityId of entityIds) {
+        const entity = await entityFromSnapshot(snapshot, claims, publications, entityId, 'work')
+        if (entity) entities.push(entity)
+      }
+      return Object.freeze(entities)
+    },
+    async getClaims({ moderation = 'effective' } = {}) {
+      assertOpen()
+      const snapshot = await catalogSnapshot()
+      return Object.freeze(await visibleClaims(snapshot, visibilityEvaluator(moderation)))
+    },
+    async getRendition({ publicationId, renditionId = null, moderation = 'effective' } = {}) {
+      assertOpen()
+      const evaluator = visibilityEvaluator(moderation)
+      const publication = await publicationRow(publicationId, moderation, evaluator)
+      const manifest = await manifestForPublication(publication, moderation, evaluator)
+      if (!manifest) return null
+      const rendition = findManifestRendition(manifest, renditionId)
+      const requirement = renditionRequirement(manifest, renditionId)
+      return rendition && requirement
+        ? Object.freeze({ publication, manifest, rendition, requirement })
+        : null
     },
     async getPublication({ publicationId, moderation = 'effective' } = {}) {
       assertOpen()
@@ -328,22 +663,40 @@ export async function createVerifiedQueryView({
     },
     async getManifest({ publicationId, moderation = 'effective' } = {}) {
       assertOpen()
-      const publication = await publicationRow(publicationId, moderation)
-      return manifestForPublication(publication, moderation)
+      const evaluator = visibilityEvaluator(moderation)
+      const publication = await publicationRow(publicationId, moderation, evaluator)
+      return manifestForPublication(publication, moderation, evaluator)
     },
     async authorizeRendition({
-      publicationId,
+      publicationId: publicationIdValue = null,
+      manifest: suppliedManifest = null,
       renditionId,
       start = 0,
       end = null,
       operation = 'read',
     } = {}) {
       assertOpen()
-      const publication = await publicationRow(publicationId)
+      let publication
+      try {
+        publication = await publicationRow(publicationIdValue || suppliedManifest?.publicationId)
+      } catch {
+        return false
+      }
       const manifest = await manifestForPublication(publication)
       if (!manifest) return false
+      if (suppliedManifest) {
+        let supplied
+        let canonical
+        try {
+          supplied = encodePublicationManifest(suppliedManifest)
+          canonical = encodePublicationManifest(manifest)
+        } catch {
+          return false
+        }
+        if (!b4a.equals(supplied, canonical)) return false
+      }
       const rendition = findManifestRendition(manifest, renditionId)
-      if (!rendition || rendition.blocked || rendition.superseded) return false
+      if (!rendition) return false
       const length = Number(rendition.core?.length)
       if (!Number.isSafeInteger(length) || length < 1 || !Number.isSafeInteger(start) || start < 0 || start >= length) return false
       if (end !== null && (!Number.isSafeInteger(end) || end <= start || end > length)) return false
@@ -354,8 +707,8 @@ export async function createVerifiedQueryView({
         row.sourceRecordRef === publication.sourceRecordRef &&
         row.assetId === rendition.core?.assetId
       )) return false
-      const uploadRanges = (manifest.body?.provenance || []).filter(candidate =>
-        candidate?.type === 'upload' &&
+      const authorizedRanges = (manifest.body?.provenance || []).filter(candidate =>
+        (candidate?.type === 'upload' || candidate?.type === 'artwork') &&
         candidate.renditionId === renditionId &&
         candidate.coreKey === rendition.core?.key &&
         Number.isSafeInteger(candidate.start) &&
@@ -363,12 +716,11 @@ export async function createVerifiedQueryView({
         candidate.start >= 0 &&
         candidate.end > candidate.start
       )
-      if (uploadRanges.length > 0 && !uploadRanges.some(candidate =>
+      if (authorizedRanges.length > 0 && !authorizedRanges.some(candidate =>
         start >= candidate.start && end !== null && end <= candidate.end
       )) return false
       const record = {
-        publisherId: publication.publisherId,
-        publicationId,
+        ...publicationModerationEntity(publication),
         renditionId,
         assetId: rendition.core?.assetId,
         operation,

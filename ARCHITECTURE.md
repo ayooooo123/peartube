@@ -7,10 +7,10 @@ Client shell
   -> platform runner
   -> @peartube/host
   -> @peartube/backend
-  -> Corestore / Autobase / Hyperbee / Hyperblobs / Hyperswarm
+  -> Corestore / Autobase / Hyperbee / Hyperswarm
 ```
 
-Visual complexity map and smaller target: [`docs/p2p-simplification.html`](./docs/p2p-simplification.html).
+Visual decision record and deletion map: [`docs/p2p-simplification.html`](./docs/p2p-simplification.html).
 
 ## Runtime Surfaces
 
@@ -33,6 +33,17 @@ packages/
   cli/              Relay, authenticated machine API, ingest jobs, archive UI, Docker support
   bare-*/           Native Bare support packages
 ```
+
+## Simplified Backend Cutover
+
+- `PublisherCatalog` is the signed source of publication truth.
+- `createVerifiedQueryView` is the only production catalog, entity, manifest, visibility, and rendition-authorization projection.
+- Static `SourceReader` ingest produces one immutable Hypercore per rendition with truthful block-boundary resume and S3-backed staging.
+- `verified-block-engine` owns shared proof, chunk, transfer, timeout, and quarantine behavior for asset and archive paths.
+- The scoped network is split into bootstrap, publisher-catalog, feed, content-transfer, and session-lifecycle modules behind the stable facade.
+- `/api/v2` is the only machine API. The archive UI calls the same verified service in process and can mint playback capabilities only on a loopback bind.
+
+Legacy channel, PublicBee, Hyperblobs, seed-pin, and publication-v1 code remains only where active clients or deployed stores still require it. Removing that boundary requires a protocol-major migration and a confirmed upgrade window.
 
 ## Startup Flow
 

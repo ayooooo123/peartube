@@ -11,7 +11,6 @@
 
 import crypto from 'hypercore-crypto'
 import b4a from 'b4a'
-import { isArtworkRendition } from './assets/rendition.js'
 import {
   DEFAULT_STORED_PROTOCOL_MIGRATIONS,
   initializeStorage,
@@ -41,13 +40,7 @@ import { createUploadManager } from './upload.js';
 import { createPublisherCatalogRegistry } from './api/publisher.js'
 import { createScopedNetworkRuntime } from './network/scoped-runtime.js'
 import { createIndexVerificationRuntime } from './runtime.js'
-import {
-  createConsumerCatalogProjection,
-  createPublisherCatalogProjection,
-  projectAuthenticatedPublisherMediaRecords,
-} from './media-graph/catalog-projection.js'
 import { createAvailabilityEvidenceStore } from './assets/availability-evidence.js'
-import { createLocalMediaIndex } from './indexing/local-index.js'
 import { createIndexFeedManager } from './indexing/feed-manager.js'
 import { createIndexPublisherFollowReconciler } from './indexing/publisher-follow-reconciler.js'
 import { createVerifiedQueryView } from './indexer/local-catalog-index.js'
@@ -274,10 +267,10 @@ export async function startBackendSeedPin({
 // catalog must not spend its startup taking custody of all of it at once.
 const MAX_SERVED_LOCAL_PUBLICATIONS = 256
 
-async function serveLocalPublications(ctx, { catalogRegistry, assetManifestStore, scopedNetwork } = {}) {
+async function serveLocalPublications(ctx, { catalogRegistry, verifiedQueryView, scopedNetwork } = {}) {
   if (typeof catalogRegistry?.getWritableBindings !== 'function') return
   if (typeof scopedNetwork?.retainAuthorizedRendition !== 'function') return
-  if (typeof assetManifestStore?.getManifest !== 'function') return
+  if (typeof verifiedQueryView?.getRendition !== 'function') return
 
   let served = 0
   const bindings = await catalogRegistry.getWritableBindings()
@@ -295,16 +288,13 @@ async function serveLocalPublications(ctx, { catalogRegistry, assetManifestStore
           ? publicationId
           : (publicationId ? b4a.toString(publicationId, 'hex') : null)
         if (!publicationIdHex) continue
-        const manifest = assetManifestStore.getManifest(publicationIdHex)
-        const rendition = (manifest?.body?.renditions || []).find(candidate => (
-          candidate && !candidate.blocked && !candidate.superseded && !isArtworkRendition(candidate)
-        ))
-        if (!rendition) continue
+        const projected = await verifiedQueryView.getRendition({ publicationId: publicationIdHex })
+        if (!projected) continue
         try {
           // Artwork published with the title is taken along by the runtime.
           await scopedNetwork.retainAuthorizedRendition({
-            manifest,
-            renditionId: rendition.renditionId,
+            manifest: projected.manifest,
+            renditionId: projected.rendition.renditionId,
             publicationId: publicationIdHex,
           })
           served++
@@ -563,6 +553,12 @@ export async function createBackendContext(config) {
       evaluate(record) {
         return consumerModerationPolicy?.evaluate(record) || { action: 'visible' }
       },
+      beginEvaluation() {
+        return consumerModerationPolicy?.beginEvaluation?.() || {
+          enabled: true,
+          evaluate: () => ({ action: 'visible' }),
+        }
+      },
       revision() {
         const state = {
           profile: consumerModerationProfile.getProfile(),
@@ -590,19 +586,6 @@ export async function createBackendContext(config) {
       else protectedArchiveCores.delete(coreKey)
     }
   }
-  const mediaCatalogProjection = createPublisherCatalogProjection({
-    catalogRegistry,
-    now: () => Date.now(),
-    onUpdate: async event => {
-      await verifiedQueryView.refresh()
-      return typeof onMediaGraphUpdate === 'function'
-        ? onMediaGraphUpdate(event)
-        : undefined
-    }
-  })
-  ctx.mediaCatalogProjection = mediaCatalogProjection
-  ctx.mediaGraphStore = mediaCatalogProjection.mediaGraphStore
-  ctx.assetManifestStore = mediaCatalogProjection.assetManifestStore
   // Availability evidence is collected lazily by the asset/playback layer and
   // read passively by the media graph API. An empty store honestly reports
   // "awaiting replication" rather than inventing reachability.
@@ -622,10 +605,8 @@ export async function createBackendContext(config) {
     }
     return core
   }
-  lifecycle.ownResource('publisher media catalog projection', mediaCatalogProjection, 'close', 5000)
-  // These managers are deliberately shared by the scoped transport and local
-  // consumer projection. Signed page ingestion happens once; catalog reads only
-  // project the resulting local state and never initiate transport work.
+  // Signed curator pages remain bounded discovery hints. They never populate
+  // the verified publisher query view or become display authority.
   let consumerIndexFeedManager = null
   const indexPublisherFollowReconciler = createIndexPublisherFollowReconciler({
     getScopedNetwork: () => scopedNetwork,
@@ -657,7 +638,6 @@ export async function createBackendContext(config) {
       },
     },
   })
-  let consumerCatalogProjection = null
   scopedNetwork = createScopedNetworkRuntime({
     swarm: ctx.swarm,
     store: ctx.store,
@@ -666,23 +646,30 @@ export async function createBackendContext(config) {
     bootstrapEnabled: network.bootstrapEnabled,
     trustedBootstrapSigners: network.trustedBootstrapSigners,
     trustedBootstrapRootIds: network.trustedBootstrapRootIds,
-    authorizePublication: request => mediaCatalogProjection.authorizeRendition(request),
+    authorizePublication: request => verifiedQueryView.authorizeRendition(request),
     authorizeConsumerWork: async ({ entityRef, publicationId }) => {
-      if (!consumerCatalogProjection) return false
-      await mediaCatalogProjection.rebuild()
-      consumerCatalogProjection.rebuild()
-      if (entityRef != null) return consumerCatalogProjection.isVisible(entityRef)
-      if (publicationId != null) return consumerCatalogProjection.isPublicationVisible(publicationId)
+      if (publicationId != null) {
+        const publication = await verifiedQueryView.getPublication({ publicationId })
+        return Boolean(publication && await verifiedQueryView.isVisible(publication))
+      }
+      if (entityRef != null) {
+        const entity = await verifiedQueryView.getEntity({ entityId: entityRef })
+        return Boolean(entity && await verifiedQueryView.isVisible(entity))
+      }
       return false
     },
-    onCatalogUpdate: async () => {
+    onCatalogUpdate: async (event = {}) => {
+      const publisherId = event.publisherId
       try {
-        await mediaCatalogProjection.rebuild()
-        // The consumer projection is what every catalog surface reads through.
-        // Rebuilding only the media graph leaves it holding the state from
-        // before the sync, so freshly ingested publications stay invisible and
-        // the app shows an empty catalog despite a clean ingest.
-        consumerCatalogProjection?.rebuild()
+        const refreshed = await verifiedQueryView.refresh(publisherId ? { publisherIds: [publisherId] } : {})
+        if (refreshed.failed > 0) throw new Error('verified query refresh failed after catalog update')
+        const source = publisherId ? await verifiedQueryView.sourceState({ publisherId }) : null
+        await onMediaGraphUpdate?.({
+          revision: publisherId && source
+            ? `${publisherId}:${source.viewFork}:${source.viewVersion}`
+            : `catalog:${refreshed.indexed}`,
+          changedCount: refreshed.indexed,
+        })
       } finally {
         await scopedNetwork?.revalidateRetainedRenditions?.()
       }
@@ -714,45 +701,17 @@ export async function createBackendContext(config) {
   await consumerIndexFeedManager.ready
   await indexPublisherFollowReconciler.reconcile()
   lifecycle.ownResource('scoped network runtime', scopedNetwork, 'close', 5000)
-  // Consumer projection is a local view over the authenticated publisher graph
-  // plus optional bounded index records. It owns neither a feed nor authority.
   consumerModerationPolicy = createConsumerModerationPolicy({
     profileController: consumerModerationProfile,
     moderationManager: consumerModerationManager,
   })
-  consumerCatalogProjection = createConsumerCatalogProjection({
-    localIndex: createLocalMediaIndex(),
-    indexFeedManager: consumerIndexFeedManager,
-    bootstrapManager: { listLocators: () => scopedNetwork.listBootstrapLocators() },
-    mediaGraphStore: mediaCatalogProjection.mediaGraphStore,
-    moderationPolicy: consumerModerationPolicy,
-    publisherRecords: ({ moderationPolicy, visibleClaims } = {}) => projectAuthenticatedPublisherMediaRecords({
-      mediaGraphStore: mediaCatalogProjection.mediaGraphStore,
-      assetManifestStore: mediaCatalogProjection.assetManifestStore,
-      moderationPolicy,
-      consumerClaims: visibleClaims,
-    }),
-  })
   ctx.consumerIndexFeedManager = consumerIndexFeedManager
   ctx.consumerModerationManager = consumerModerationManager
-  ctx.consumerCatalogProjection = consumerCatalogProjection
-  // A device that already holds a synced catalog receives no further pages, so
-  // onCatalogUpdate never fires and nothing else populates these projections
-  // from what is already on disk. Without this, every catalog surface is empty
-  // after a restart until some publisher happens to append.
-  await mediaCatalogProjection.rebuild().catch(error => {
-    console.log('[Orchestrator] media catalog projection rebuild failed at startup:', error?.message || error)
-  })
   try {
     const backfill = await verifiedQueryView.refresh()
     console.log('[Orchestrator] verified query view backfill:', backfill)
   } catch (error) {
     console.log('[Orchestrator] verified query view backfill failed at startup:', error?.message || error)
-  }
-  try {
-    consumerCatalogProjection.rebuild()
-  } catch (error) {
-    console.log('[Orchestrator] consumer catalog projection rebuild failed at startup:', error?.message || error)
   }
   const localAssetAvailabilityProbe = createLocalAssetAvailabilityProbe({
     openAssetCore: ctx.openAssetCore,
@@ -851,24 +810,23 @@ export async function createBackendContext(config) {
         acceptanceProbability: archive.acceptanceProbability,
         random: archive.random,
         now: archive.now,
-        authorizeRequest: request => authorizeArchiveRequestFromManifestStore(request, {
-          manifestStore: mediaCatalogProjection.assetManifestStore,
-          authorizeRendition: input => mediaCatalogProjection.authorizeRendition(input),
-          resolveManifest: async publicationId => {
-            await mediaCatalogProjection.update()
-            return mediaCatalogProjection.assetManifestStore.getManifest(publicationId)
-          },
-        }),
+        authorizeRequest: async request => {
+          const manifest = await verifiedQueryView.getManifest({ publicationId: request?.body?.publicationId })
+          return authorizeArchiveRequestFromManifestStore(request, {
+            manifestStore: { getManifest: () => manifest },
+            authorizeRendition: input => verifiedQueryView.authorizeRendition(input),
+          })
+        },
         authorizeConsumerVisibility: async request => {
-          await mediaCatalogProjection.rebuild()
-          consumerCatalogProjection.rebuild()
-          return consumerCatalogProjection.isPublicationVisible(request.body.publicationId)
+          const publication = await verifiedQueryView.getPublication({
+            publicationId: request.body.publicationId,
+          })
+          return Boolean(publication && await verifiedQueryView.isVisible(publication))
         },
       })
     : null
   const revalidateConsumerWork = createConsumerWorkRevalidator({
-    mediaCatalogProjection,
-    getConsumerCatalogProjection: () => consumerCatalogProjection,
+    verifiedQueryView,
     scopedNetwork,
     getArchiveNetwork: () => permissionlessArchiveNetwork,
   })
@@ -990,7 +948,7 @@ export async function createBackendContext(config) {
   const uploadManager = createUploadManager({
     ctx,
     catalogRegistry,
-    mediaCatalogProjection,
+    verifiedQueryView,
     scopedNetwork,
     deviceKeyPair
   });
@@ -1058,7 +1016,7 @@ export async function createBackendContext(config) {
       checkpointRepository: publicationV1CheckpointRepository,
       resolveCatalog: createLegacyCatalogResolver({ catalogRegistry, derivePublisherId }),
       deviceKeyPair,
-      mediaCatalogProjection,
+      verifiedQueryView,
     }),
     startDiscovery: async () => {
       await scopedNetwork.start()
@@ -1230,7 +1188,7 @@ export async function createBackendContext(config) {
     identityManager,
     personalManager,
     uploadManager,
-    mediaCatalogProjection,
+    verifiedQueryView,
     archiveStore,
     permissionlessArchiveNetwork,
     seedPin: seedPinRegistration,
@@ -1313,7 +1271,7 @@ export async function createBackendContext(config) {
       try {
         await serveLocalPublications(ctx, {
           catalogRegistry,
-          assetManifestStore: ctx.assetManifestStore,
+          verifiedQueryView,
           scopedNetwork,
         })
       } catch (e) {

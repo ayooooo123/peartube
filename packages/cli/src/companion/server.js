@@ -27,11 +27,9 @@ const MAX_ERROR_BYTES = 512
 const SOCKET_PROBE_TIMEOUT_MS = 500
 const DEFAULT_MAX_INGEST_BYTES = 500 * 1024 * 1024 * 1024
 const MULTIPART_OVERHEAD_BYTES = 1024 * 1024
-// The one path prefix every companion route lives under. Exported because
-// whoever wires the companion up has to know which prefix belongs to it — a
-// shared HTTP listener routes on exactly this.
-export const COMPANION_API_PREFIX = '/api/v2'
+const COMPANION_API_PREFIX = '/api/v2'
 const INGEST_JOBS_PATH = `${COMPANION_API_PREFIX}/ingest/jobs`
+const LOCAL_OPERATOR_CLIENT = 'local-archive-operator'
 
 class CompanionRequestError extends Error {
   constructor (statusCode, code, message, closeConnection = false) {
@@ -574,6 +572,45 @@ export function createCompanionServer ({
     return pending
   }
 
+  async function dispatchInProcess ({
+    method = 'GET',
+    url = '/',
+    headers = {},
+    body = null,
+    signal = null
+  } = {}) {
+    if (!started || closing) throw new Error('companion server is not available')
+    const encodedBody = body == null
+      ? b4a.alloc(0)
+      : b4a.isBuffer(body) || body instanceof Uint8Array
+        ? b4a.from(body)
+        : b4a.from(typeof body === 'string' ? body : JSON.stringify(body))
+    if (encodedBody.byteLength > config.maxBodyBytes) {
+      throw new CompanionRequestError(413, 'BODY_TOO_LARGE', 'Request body exceeds configured maximum')
+    }
+
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    signal?.addEventListener?.('abort', abort, { once: true })
+    if (signal?.aborted) controller.abort()
+    const deadline = setTimeout(abort, requestDeadlineMs)
+    deadline.unref?.()
+    try {
+      return await router.dispatch({
+        method,
+        url,
+        headers,
+        body: encodedBody,
+        clientIdentity: LOCAL_OPERATOR_CLIENT,
+        serverState: publicState,
+        signal: controller.signal
+      })
+    } finally {
+      clearTimeout(deadline)
+      signal?.removeEventListener?.('abort', abort)
+    }
+  }
+
   function finishStartFailure (pending) {
     if (startPromise === pending) startPromise = null
   }
@@ -589,6 +626,7 @@ export function createCompanionServer ({
     state () {
       return { ...publicState }
     },
+    dispatchInProcess,
     start () {
       if (closing) return Promise.reject(new Error('Companion server is closing'))
       if (startPromise) return startPromise

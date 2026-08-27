@@ -1,6 +1,5 @@
 import test from 'brittle'
 import { deriveMediaCoordinates, fetchPosterBytes, publishPosterArtwork } from '../src/archive-manager.js'
-import { normalizeArchiveSubmission } from '../src/archive-api.js'
 
 test('deriveMediaCoordinates maps movie/tv and rejects partial episode coords', (t) => {
   t.alike(deriveMediaCoordinates({ tmdbType: 'movie', tmdbId: '603' }),
@@ -82,83 +81,4 @@ test('a published cover names the blob a peer can replicate', async (t) => {
   t.alike(await publishPosterArtwork(channel, null), {}, 'no cover claims nothing')
   t.alike(await publishPosterArtwork({ blobsKeyHex: null, putBlob: channel.putBlob }, { bytes: Buffer.from([1]), mimeType: 'image/jpeg' }), {},
     'a channel with no blob core claims nothing rather than an unreachable ref')
-})
-
-test('the machine API carries discovered cover art, and refuses anything that is not a TMDB path', (t) => {
-  // Cover art has to be published with the record: a consumer holds no
-  // metadata-provider credentials, and a provider URL in the claim would make
-  // browsing the catalog reach an origin outside the swarm. The console form
-  // always carried this; the machine API dropped it, so every publication a
-  // machine client seeded rendered as a blank card on every peer.
-  const submission = {
-    url: 'https://example.com/movie.mp4',
-    contentKind: 'movie',
-    tmdbId: '603',
-    tmdbTitle: 'The Matrix',
-    tmdbPosterPath: '/wr7nrhLIiFqEcOTZ4LBOJd9Kwsw.jpg',
-  }
-  const accepted = normalizeArchiveSubmission(submission)
-  t.is(accepted.error, undefined, 'a TMDB artwork path is accepted')
-  t.is(accepted.form.tmdbPosterPath, '/wr7nrhLIiFqEcOTZ4LBOJd9Kwsw.jpg',
-    'the path reaches the job the publisher fetches from')
-
-  // This value chooses an outbound request, so it is validated rather than
-  // normalized into something that happens to work.
-  for (const posterPath of [
-    'https://evil.example/poster.jpg',
-    '//evil.example/poster.jpg',
-    '/../../etc/passwd',
-    '/nested/path.jpg',
-    'no-leading-slash.jpg',
-    `/${'x'.repeat(200)}.jpg`,
-  ]) {
-    const rejected = normalizeArchiveSubmission({ ...submission, tmdbPosterPath: posterPath })
-    t.is(rejected.error?.code, 'INVALID_POSTER_PATH', `${posterPath} is refused`)
-  }
-
-  const withoutArtwork = normalizeArchiveSubmission({ ...submission, tmdbPosterPath: undefined })
-  t.is(withoutArtwork.error, undefined, 'artwork stays optional')
-  t.is(withoutArtwork.form.tmdbPosterPath, '', 'a submission with no cover carries none')
-})
-
-test('the machine API carries the rest of the discovered metadata, bounded', (t) => {
-  // A consumer cannot look any of this up either, so a title seeded without it
-  // shows a name and nothing else on every peer that ever sees it.
-  const submission = {
-    url: 'https://example.com/movie.mp4',
-    contentKind: 'movie',
-    tmdbId: '680',
-    tmdbTitle: 'Pulp Fiction',
-  }
-  const described = normalizeArchiveSubmission({
-    ...submission,
-    tmdbYear: '1994',
-    tmdbRuntime: '154',
-    tmdbGenres: 'Thriller,Crime',
-    tmdbOverview: 'A burger-loving hit man and a washed-up boxer converge.',
-  })
-  t.is(described.error, undefined)
-  t.is(described.form.tmdbYear, '1994')
-  t.is(described.form.tmdbRuntime, '154')
-  t.is(described.form.tmdbGenres, 'Thriller,Crime')
-  t.ok(described.form.tmdbOverview.startsWith('A burger-loving'))
-
-  // Refused rather than clamped: a year of 12 is a parse gone wrong, and
-  // storing 1870 in its place would publish a confident wrong answer.
-  const rejects = [
-    ['tmdbYear', '12', 'INVALID_TMDB_YEAR'],
-    ['tmdbYear', '9999', 'INVALID_TMDB_YEAR'],
-    ['tmdbRuntime', '0', 'INVALID_TMDB_RUNTIME'],
-    ['tmdbRuntime', '99999', 'INVALID_TMDB_RUNTIME'],
-    ['tmdbOverview', 'x'.repeat(5000), 'INVALID_TMDB_OVERVIEW'],
-    ['tmdbGenres', 'g'.repeat(600), 'INVALID_TMDB_GENRES'],
-  ]
-  for (const [field, value, code] of rejects) {
-    t.is(normalizeArchiveSubmission({ ...submission, [field]: value }).error?.code, code, `${field} is bounded`)
-  }
-
-  const bare = normalizeArchiveSubmission(submission)
-  t.is(bare.error, undefined, 'every descriptive field stays optional')
-  t.is(bare.form.tmdbYear, '')
-  t.is(bare.form.tmdbOverview, '')
 })

@@ -10,13 +10,6 @@ import { parseBoundary, receiveMultipartUpload } from './multipart.js'
 // The relay's own HTTP client rather than fetch(): Bare ships no global fetch,
 // so a fetch() here would be a ReferenceError the moment the relay runs.
 import { openResponse, readBody } from './media/http-get.js'
-import {
-  ARCHIVE_API_PREFIX,
-  archiveApiRoute,
-  createArchiveApi,
-  createOpenAccessGate,
-  isGatedArchiveApiRoute
-} from './archive-api.js'
 
 
 // Rendered as a banner after a submission that carried neither a file nor a
@@ -87,23 +80,10 @@ function parseClientForm(body) {
   }
 }
 
-// `maxBytes` is opt-in: the console's own form posts are read exactly as they
-// always were, and only the machine API's JSON body is bounded.
-async function collectBody(req, { maxBytes = 0, kind = 'request' } = {}) {
+async function collectBody(req) {
   return new Promise((resolve, reject) => {
     let body = ''
-    let bytes = 0
-    req.on('data', (chunk) => {
-      if (maxBytes > 0) {
-        bytes += chunk?.length ?? 0
-        if (bytes > maxBytes) {
-          req.destroy?.()
-          reject(new Error(`${kind} body exceeds max size of ${maxBytes} bytes`))
-          return
-        }
-      }
-      body += String(chunk)
-    })
+    req.on('data', chunk => { body += String(chunk) })
     req.on('end', () => resolve(body))
     req.on('error', reject)
   })
@@ -142,9 +122,14 @@ function ingestContainer(filePath, mimeType) {
 // no way to tell a warming relay from a wedged one — observed on a 46 GB relay
 // whose P2P side was up with three peers while its console port never opened.
 //
+
+function isLoopbackHost(value) {
+  const host = String(value || '').trim().toLowerCase().replace(/^\[|\]$/g, '')
+  return host === 'localhost' || host === '::1' || /^127(?:\.\d{1,3}){3}$/.test(host)
+}
 // So the socket is bound first and answers from the start, and the console
 // adopts it once the store-dependent side exists.
-const WARMING_NOTICE = 'The relay is starting. Its storage and media graph are still opening, so the console and the machine API are not answering yet.'
+const WARMING_NOTICE = 'The relay is starting. Its storage and verified media view are still opening, so the console is not answering yet.'
 
 function warmingPage() {
   return `<!doctype html>
@@ -159,101 +144,14 @@ function warmingPage() {
 `
 }
 
-// Which mounted prefix a request target belongs to, read off the request's own
-// pathname so this dispatch and the mounted server's own routing agree on what
-// the path is. Percent-encodings are left exactly as they arrived — URL#pathname
-// decodes none of them, and neither does the companion router — so no request
-// can be dispatched to one owner while being routed as if it belonged to the
-// other. Only an origin-form target can belong to a mount: absolute-form and
-// protocol-relative targets stay with whoever answered them before anything was
-// mounted.
-function mountedPrefix(mounts, url) {
-  const raw = String(url == null ? '/' : url)
-  if (!raw.startsWith('/') || raw.startsWith('//')) return null
-  let pathname = null
-  try {
-    pathname = new URL(raw, 'http://relay.local').pathname
-  } catch {
-    return null
-  }
-  for (const prefix of mounts.keys()) {
-    if (pathname === prefix || pathname.startsWith(`${prefix}/`)) return prefix
-  }
-  return null
-}
-
-// The listener a mounted server drives in place of one of its own. Only what a
-// mounted server actually calls is here: once/removeListener for the promise it
-// wraps around its bind, listen/address for the state it publishes, and
-// listening/close for its teardown. Binding, for a mounted server, is taking
-// its prefix on the surface's listener and giving it back.
-//
-// Deliberately no 'connection' event. A server's per-socket timers (a
-// first-request deadline, an idle destroy) fire on every socket it is told
-// about, and on a shared listener nearly every socket carries requests it never
-// sees — the v1 API streams whole videos on one — so a forwarded connection
-// would be destroyed mid-response by a deadline meant for a request that never
-// arrived. Socket-level exposure does not change by mounting: these are the
-// archive listener's sockets, which never had such timers, and the runtime's own
-// header and request timeouts still bound an incomplete request.
-function createMountedListener({ prefix, requestListener, mounts, address }) {
-  const listeners = new Map()
-  let mounted = false
-
-  function emit(event, ...args) {
-    const handlers = listeners.get(event)
-    if (!handlers) return
-    listeners.delete(event)
-    for (const handler of handlers) handler(...args)
-  }
-
-  return {
-    get listening() { return mounted },
-    address,
-    once(event, handler) {
-      const handlers = listeners.get(event) || new Set()
-      handlers.add(handler)
-      listeners.set(event, handlers)
-      return this
-    },
-    removeListener(event, handler) {
-      listeners.get(event)?.delete(handler)
-      return this
-    },
-    listen() {
-      if (mounted) {
-        // Already bound. Answer it anyway: a caller awaiting the event would
-        // otherwise wait for one that never comes.
-        emit('listening')
-        return this
-      }
-      if (mounts.has(prefix)) {
-        emit('error', new Error(`${prefix} is already mounted on the archive HTTP listener`))
-        return this
-      }
-      mounts.set(prefix, requestListener)
-      mounted = true
-      emit('listening')
-      return this
-    },
-    close(callback) {
-      if (mounted && mounts.get(prefix) === requestListener) mounts.delete(prefix)
-      mounted = false
-      if (typeof callback === 'function') callback()
-      return this
-    }
-  }
-}
 
 export function createArchiveHttpSurface({
   host = '127.0.0.1',
   port = 8174,
-  apiOpen = false,
   logger = null,
   serverFactory = createDefaultServer,
   now = Date.now
 } = {}) {
-  const gate = createOpenAccessGate({ bindHost: host, apiOpen })
   const createdAt = now()
   let listening = null
   let closed = false
@@ -264,39 +162,8 @@ export function createArchiveHttpSurface({
     res.end(JSON.stringify(body, null, 2))
   }
 
-  function warmingHandler(req, res) {
-    const apiPath = archiveApiRoute(req.url)
-    if (apiPath !== null) {
-      // The gate is decided by the bind, never by readiness: a relay that is
-      // still starting must not answer what a started one refuses.
-      if (gate.refusal && isGatedArchiveApiRoute(apiPath)) {
-        sendJson(res, gate.refusal.status, { error: gate.refusal.error })
-        return
-      }
-      if (apiPath !== '/catalog' && !apiPath.startsWith('/stream/')) {
-        sendJson(res, 404, {
-          error: {
-            code: 'NOT_FOUND',
-            message: `no such endpoint: ${ARCHIVE_API_PREFIX}${apiPath}`,
-            field: null
-          }
-        })
-        return
-      }
-      // The same retryable codes the live API answers with while the media graph
-      // is unbound, so a client polling the catalog reads 503 and then 200
-      // instead of a refused connection.
-      const code = apiPath === '/catalog' ? 'CATALOG_UNAVAILABLE' : 'MEDIA_GRAPH_UNAVAILABLE'
-      sendJson(res, 503, {
-        error: {
-          code,
-          message: `relay storage is still opening; retry ${ARCHIVE_API_PREFIX}${apiPath === '/' ? '' : apiPath}`,
-          field: null
-        }
-      })
-      return
-    }
 
+  function warmingHandler(req, res) {
     if (req.method === 'GET' && req.url === '/health') {
       sendJson(res, 200, { ok: true, ready: false, waitingFor: 'relay-storage' })
       return
@@ -312,64 +179,20 @@ export function createArchiveHttpSurface({
     res.end(`${WARMING_NOTICE}\n`)
   }
 
-  // Request handlers that own a path prefix on this listener, consulted before
-  // this surface's own router. See mount() below.
-  const mounts = new Map()
-
   let handler = warmingHandler
-  const server = serverFactory((req, res) => {
-    const prefix = mounts.size ? mountedPrefix(mounts, req.url) : null
-    if (prefix !== null) return mounts.get(prefix)(req, res)
-    return handler(req, res)
-  })
+  const server = serverFactory((req, res) => handler(req, res))
 
   return {
     server,
     host,
     get port() { return boundPort },
     get adopted() { return handler !== warmingHandler },
-    get mounted() { return [...mounts.keys()] },
     // How long the surface answered as a warming relay, which is what tells an
     // operator "still opening the store" from "stuck".
     warmupMs() { return now() - createdAt },
     adopt(next) {
       if (typeof next !== 'function') throw new Error('archive http surface requires a request handler')
       handler = next
-    },
-    // Hands another HTTP server this listener instead of a port of its own.
-    //
-    // The signed companion API (/api/v2) and this surface's v1 API have to
-    // answer on one origin: its only real consumer builds both from a single
-    // configured relay base URL and sends no auth headers on the v1 half, so a
-    // v1/v2 split across two ports leaves half of those calls unroutable
-    // whichever port is configured.
-    //
-    // This surface owns the listener because it binds before the store opens and
-    // answers as a warming relay from the first moment; a companion is created
-    // minutes later, once the store is up. So rather than re-implementing that
-    // server behind this router, mount() returns a factory shaped exactly like
-    // the `createServer` injection point such a server already has: it builds
-    // itself as always and is handed this listener's requests — the same
-    // req/res objects, so method, target, headers and body arrive precisely as
-    // they were signed, and its authentication, replay protection, body limits,
-    // request deadline and streaming routes all run on their usual code path.
-    mount(prefix) {
-      if (typeof prefix !== 'string' || !prefix.startsWith('/') || prefix.endsWith('/') || prefix.includes('?')) {
-        throw new Error('archive http surface mounts need an absolute path prefix')
-      }
-      return (requestListener) => {
-        if (typeof requestListener !== 'function') {
-          throw new Error('archive http surface mounts need a request handler')
-        }
-        return createMountedListener({
-          prefix,
-          requestListener,
-          mounts,
-          // The bind as it really happened, so a mounted server publishes where
-          // it is actually reachable rather than what it was configured with.
-          address: () => server.address?.() || { address: host, port: boundPort }
-        })
-      }
     },
     // Memoized rather than flagged: whoever calls this second — the service, a
     // console adopting the surface, a test — must get the bound port, not an
@@ -395,57 +218,7 @@ export function createArchiveHttpSurface({
   }
 }
 
-function normalizeCatalogPreviewVideos(channel, previewVideos = []) {
-  const hasLocalBlobEvidence = channel.source === 'local' || channel.localPublished === true
-  return (Array.isArray(previewVideos) ? previewVideos : []).map((video) => {
-    if (!hasLocalBlobEvidence || !video?.blobId || !video?.blobsCoreKey) return video
-    return {
-      ...video,
-      availability: video.availability === 'playable' ? video.availability : 'playable',
-      byteAvailability: video.byteAvailability === 'playable' ? video.byteAvailability : 'playable'
-    }
-  })
-}
-
-function isPlayableCatalogPreview(video) {
-  if (!video?.blobId || !video?.blobsCoreKey) return false
-  return video.availability === 'playable' || video.byteAvailability === 'playable'
-}
-
-function playableCatalogPreviews(channel, previewVideos = []) {
-  return normalizeCatalogPreviewVideos(channel, previewVideos).filter(isPlayableCatalogPreview)
-}
-
-function normalizeCatalogChannel(channel, previewVideos = []) {
-  const channelKey = channel.channelKey || channel.driveKey
-  const publicBeeKey = channel.publicBeeKey || null
-  const normalizedPreviewVideos = playableCatalogPreviews(channel, previewVideos)
-  if (normalizedPreviewVideos.length === 0) return null
-  return {
-    ...channel,
-    channelKey,
-    driveKey: channel.driveKey || channelKey,
-    publicBeeKey,
-    source: channel.source || 'relay-cache',
-    relayRole: channel.relayRole || 'cache',
-    relayServing: channel.relayServing !== false,
-    videoCount: Number(channel.videoCount || normalizedPreviewVideos.length || channel.videosDownloaded || channel.videosFound || 0) || 0,
-    manifestUpdatedAt: Number(channel.manifestUpdatedAt || channel.mirroredAt || channel.lastSeenAt || Date.now()) || Date.now(),
-    previewVideos: normalizedPreviewVideos
-  }
-}
-
-// Union preview lists by video id. A channel's stored previews can be a stale
-// mirror/seed snapshot; the completed-archive previews are the live source of
-// truth. Merging (rather than preferring one) ensures a newly archived video —
-// e.g. another episode dropped into the same channel — is never shadowed.
-function mergePreviewsById(base = [], extra = []) {
-  const byId = new Map()
-  for (const video of (Array.isArray(base) ? base : [])) { if (video?.id) byId.set(video.id, video) }
-  for (const video of (Array.isArray(extra) ? extra : [])) { if (video?.id) byId.set(video.id, video) }
-  return Array.from(byId.values())
-}
-
+const CANDIDATE_REF_PATTERN = /^[A-Za-z0-9_-]{43}$/
 
 function normalizeTmdbEpisodePart(value) {
   const n = Number(value || 0)
@@ -463,35 +236,39 @@ function tmdbKey(type, id, season = null, episode = null) {
     : base
 }
 
-function tmdbKeyFromClassification(classification = {}) {
-  return tmdbKey(classification.type, classification.tmdbId, classification.season, classification.episode)
-}
-
 function tmdbKeyFromDiscoverItem(item = {}) {
   return tmdbKey(item.type, item.tmdbId, item.season, item.episode)
 }
 
+function tmdbKeyFromVerifiedSource(source = {}) {
+  const coordinates = source.mediaCoordinates || source
+  return tmdbKey(
+    coordinates.contentKind === 'episode' ? 'tv' : coordinates.contentKind,
+    coordinates.mediaId,
+    coordinates.seasonNumber,
+    coordinates.episodeNumber
+  )
+}
 
-export function buildTmdbNetworkIndex(catalogChannels = []) {
+export function buildTmdbNetworkIndex(catalogItems = []) {
   const index = new Map()
-  for (const channel of catalogChannels || []) {
-    for (const video of [...(channel.previewVideos || []), ...(channel.unavailableVideos || [])]) {
-      const c = video?.classification || {}
-      const key = tmdbKeyFromClassification(c)
+  for (const item of catalogItems || []) {
+    for (const source of item?.sources || []) {
+      const key = tmdbKeyFromVerifiedSource(source)
       if (!key) continue
       const existing = index.get(key) || { status: 'missing', count: 0, seeded: 0, videos: [], seen: new Set() }
-      const videoKey = `${channel.channelKey || channel.driveKey || ''}:${video.id || ''}:${key}`
-      if (existing.seen.has(videoKey)) continue
-      existing.seen.add(videoKey)
-      const playable = video.availability === 'playable' || video.byteAvailability === 'playable' || Boolean(video.blobId && video.blobsCoreKey)
+      const sourceKey = `${source.publicationId || ''}:${source.renditionId || ''}:${key}`
+      if (existing.seen.has(sourceKey)) continue
+      existing.seen.add(sourceKey)
+      const candidateRef = CANDIDATE_REF_PATTERN.test(source.candidateRef || '') ? source.candidateRef : null
+      const playable = candidateRef !== null || source.availability === 'playable' || source.byteAvailability === 'playable'
       existing.count += 1
       if (playable) existing.seeded += 1
-      existing.status = (playable || existing.seeded > 0) ? 'seeding' : 'in-network'
+      existing.status = playable || existing.seeded > 0 ? 'seeding' : 'in-network'
       existing.videos.push({
-        id: video.id,
-        title: video.title,
-        channelKey: channel.channelKey || channel.driveKey,
-        publicBeeKey: channel.publicBeeKey || video.publicBeeKey || null,
+        id: source.publicationId || null,
+        title: item.title || null,
+        candidateRef,
         playable
       })
       index.set(key, existing)
@@ -511,23 +288,6 @@ export function annotateTmdbDiscoverItems(items = [], networkIndex = new Map()) 
       networkVideos: found?.videos || []
     }
   })
-}
-
-
-export async function buildCatalogChannels({ channels = [], store = null } = {}) {
-  const previewsByChannel = await store?.getCompletedVideoPreviewsByChannel?.()
-  const byKey = new Map()
-
-  for (const channel of channels || []) {
-    const channelKey = channel.channelKey || channel.driveKey
-    if (!channelKey) continue
-    const previewVideos = mergePreviewsById(channel.previewVideos, previewsByChannel?.get?.(channelKey) || [])
-    const normalized = normalizeCatalogChannel(channel, previewVideos)
-    if (normalized) byKey.set(channelKey, normalized)
-  }
-
-
-  return Array.from(byKey.values())
 }
 
 function reserveAdjustedHeadroom(snapshot, reservedBytes) {
@@ -552,10 +312,8 @@ function reserveAdjustedHeadroom(snapshot, reservedBytes) {
 // zero.
 const LIBRARY_LIMIT = 60
 
-// The consumer catalog refuses a page larger than 50 outright (it throws, and
-// the media graph reports that as CONSUMER_CATALOG_UPDATE_FAILED — an empty
-// shelf, not an error the console could explain), so the shelf's own cap is
-// filled by paging rather than by asking for all of it at once.
+// The verified query contract caps one page at 50, so the shelf fills its own
+// bounded limit by paging rather than asking for unbounded inventory.
 const CATALOG_PAGE_LIMIT = 50
 
 // An entityId is a media-graph digest. The poster route takes one straight off
@@ -709,15 +467,17 @@ export async function createArchiveConsole({
   logger = null,
   uploadDir = null,
   uploadStorageHeadroom = null,
-  apiOpen = false,
   httpSurface = null,
   serverFactory = createDefaultServer,
   storageReservations = null
 }) {
   if (!service?.runtime?.ctx?.metaDb) throw new Error('archive console requires a relay service runtime')
-  if (typeof service.submitArchiveIngestJob !== 'function' || typeof service.listIngestJobs !== 'function') {
-    throw new Error('archive console requires the v2 ingest service')
+  if (typeof service.submitArchiveIngestJob !== 'function' ||
+      typeof service.listIngestJobs !== 'function' ||
+      typeof service.getVerifiedMediaCatalog !== 'function') {
+    throw new Error('archive console requires the verified v2 service')
   }
+  const localPlaybackAllowed = isLoopbackHost(host)
   const copyReservations = storageReservations || { bytes: 0 }
   const uploadReservations = new Map()
   const releaseUploadReservation = (reservation) => {
@@ -898,22 +658,6 @@ export async function createArchiveConsole({
   }
   const manager = { enqueue: enqueueCatalogSubmission }
 
-  const archiveApi = createArchiveApi({
-    // Resolved per request: the console starts before the network-bound runtime,
-    // so the media graph it reads from is not bound yet at construction time.
-    mediaCatalog: (request) => service.runtime?.api?.getMediaCatalog?.(request),
-    publicationSources: (request) => service.runtime?.api?.getPublicationSources?.(request),
-    assetManifest: (publicationId) => service.runtime?.ctx?.assetManifestStore?.getManifest?.(publicationId),
-    // Serving a rendition's bytes is the only way an off-box consumer can play
-    // what this relay published: a core key needs a PearTube node, and the blob
-    // server's link is loopback.
-    openRendition: (request) => service.runtime?.api?.openMediaRendition?.(request),
-    // The gate: catalog and stream answer freely on loopback, and on any other
-    // interface only with the operator's switch.
-    bindHost: host,
-    apiOpen,
-    logger
-  })
 
   function creatorsView() {
     const creators = service.creators?.getCreators?.() || []
@@ -927,64 +671,60 @@ export async function createArchiveConsole({
     return { enabled: Boolean(opts.enabled), hasKey: Boolean(opts.apiKey) }
   }
 
-  async function getCatalogChannels() {
-    return buildCatalogChannels({
-      channels: service.catalog?.getChannels?.() || [],
-      store
-    })
+  async function readVerifiedCatalog() {
+    const items = []
+    let cursor = null
+    while (items.length < LIBRARY_LIMIT) {
+      const request = { limit: Math.min(CATALOG_PAGE_LIMIT, LIBRARY_LIMIT - items.length), limitProvided: true }
+      if (cursor) request.cursor = cursor
+      const page = await service.getVerifiedMediaCatalog(request)
+      if (page?.success !== true || !Array.isArray(page.items) || page.items.length === 0) break
+      items.push(...page.items)
+      cursor = page.nextCursor || null
+      if (!cursor) break
+    }
+    return items
   }
 
-  async function discoverView({ query = '', type = 'movie', page = 1 } = {}) {
-    const rawCatalogChannels = service.catalog?.getChannels?.() || []
-    const catalogChannels = [...rawCatalogChannels, ...await getCatalogChannels()]
+  async function discoverView({ query = '', type = 'movie', page = 1 } = {}, catalogItems = []) {
     const items = typeof service.discoverTmdb === 'function'
       ? await service.discoverTmdb({ query, type, page }).catch(() => [])
       : []
     return {
       query,
       type: type === 'tv' ? 'tv' : 'movie',
-      items: annotateTmdbDiscoverItems(items, buildTmdbNetworkIndex(catalogChannels))
+      items: annotateTmdbDiscoverItems(items, buildTmdbNetworkIndex(catalogItems))
     }
   }
 
-  // The viewer-facing shelf, assembled from four sources that each may not
-  // exist yet: the media catalogue, the signed asset manifests, the mirror
-  // requests this relay has raised, and its own archive jobs.
-  //
-  // Every read is optional-chained and the whole thing degrades to an empty
-  // shelf, for the same reason the machine API's catalog resolver is resolved
-  // per request: the console answers from the moment the socket is bound, and a
-  // home page that 500s because the media graph is still opening is strictly
-  // worse than one that shows no titles yet.
-  async function libraryView(jobs = []) {
+  // The viewer-facing shelf is built only from the service's verified query
+  // view. Jobs and mirror proofs add local status, but never invent a title or
+  // a playback target.
+  async function libraryView(items, jobs = []) {
     try {
-      const items = []
-      let cursor = null
-      while (items.length < LIBRARY_LIMIT) {
-        const request = { limit: Math.min(CATALOG_PAGE_LIMIT, LIBRARY_LIMIT - items.length), limitProvided: true }
-        if (cursor) request.cursor = cursor
-        const page = await service.runtime?.api?.getMediaCatalog?.(request)
-        if (page?.success !== true || !Array.isArray(page.items) || page.items.length === 0) break
-        items.push(...page.items)
-        cursor = page.nextCursor || null
-        if (!cursor) break
-      }
-      if (items.length === 0) return []
+      if (!Array.isArray(items) || items.length === 0) return []
 
       const mirrors = new Map()
-      for (const request of service.runtime?.getArchiveMirrorRequests?.() || []) {
+      for (const request of service.getArchiveMirrorRequests?.() || []) {
         if (!request?.publicationId) continue
         mirrors.set(String(request.publicationId), request)
       }
       const jobIndex = indexJobsForLibrary(jobs)
-      const getManifest = (publicationId) => service.runtime?.ctx?.assetManifestStore?.getManifest?.(publicationId)
+      const manifests = new Map()
+      const publicationIds = new Set()
+      for (const item of items) {
+        for (const source of item?.sources || []) {
+          if (source?.publicationId) publicationIds.add(String(source.publicationId))
+        }
+      }
+      await Promise.all([...publicationIds].map(async publicationId => {
+        const manifest = await service.getVerifiedManifest?.(publicationId)
+        if (manifest) manifests.set(publicationId, manifest)
+      }))
 
-      // The catalogue is a projection keyed by content, so it carries no
-      // timestamps at all — it is ordered by kind and then by digest. The only
-      // local evidence of "when" is the work this relay did around a title: the
-      // job that brought it in, or the mirror request it raised for one of its
-      // publications. Titles with neither keep the catalogue's own order,
-      // behind everything that has one.
+      // The verified view is ordered by its durable query key and carries no
+      // display timestamp. Local jobs and mirror proofs provide recency when
+      // available; titles without either retain verified query order.
       const ranked = items.map((item, order) => {
         const job = libraryJobFor(item, jobIndex)
         let sizeBytes = 0
@@ -999,7 +739,7 @@ export async function createArchiveConsole({
         let looseEpisodes = 0
         for (const source of item?.sources || []) {
           if (!source?.publicationId) continue
-          sizeBytes += publicationBytes(getManifest(source.publicationId))
+          sizeBytes += publicationBytes(manifests.get(String(source.publicationId)))
           const coordinates = source.mediaCoordinates || {}
           if (coordinates.contentKind === 'episode') {
             const season = Number(coordinates.seasonNumber)
@@ -1043,6 +783,11 @@ export async function createArchiveConsole({
             // here knows that, and implying it would be a guess.
             seasonNumbers: [...seasons.keys()].sort((left, right) => left - right),
             episodeCount,
+            candidateRef: localPlaybackAllowed
+              ? (CANDIDATE_REF_PATTERN.test(item?.candidateRef || '')
+                  ? item.candidateRef
+                  : (item?.sources || []).find(source => CANDIDATE_REF_PATTERN.test(source?.candidateRef || ''))?.candidateRef || null)
+              : null,
             status: libraryStatus({ job, freshArchivists, sizeBytes })
           }
         }
@@ -1061,7 +806,7 @@ export async function createArchiveConsole({
   // command and no origin this relay did not pick.
   async function readEntityPoster(entityId) {
     try {
-      const artwork = await service.runtime?.api?.getEntityArtwork?.({ entityId })
+      const artwork = await service.getVerifiedEntityArtwork?.({ entityId })
       if (artwork?.success !== true || artwork.exists !== true || typeof artwork.url !== 'string') return null
       const { res } = await openResponse(artwork.url, {
         timeoutMs: POSTER_READ_TIMEOUT_MS,
@@ -1084,16 +829,15 @@ export async function createArchiveConsole({
 
   async function model(discoverParams = {}) {
     const status = service.getStatus?.() || {}
-    // One job read, shared: the operator table below the shelf and the shelf's
-    // own "adding"/"could not be added" states are the same records.
     const jobs = await store.listJobs()
+    const catalogItems = await readVerifiedCatalog().catch((err) => {
+      logger?.archive?.warn?.('Reading the verified media catalog failed', { error: err?.message || String(err) })
+      return []
+    })
     return {
-      // The relay status is a flat, bounded contract now: network, budgets and
-      // publicWork live at the top level, so the console hands over the whole
-      // record instead of digging for a `runtime` blob that no longer exists.
       status,
       jobs,
-      library: await libraryView(jobs),
+      library: await libraryView(catalogItems, jobs),
       creators: creatorsView(),
       unseededTargets: service.getCreatorTargets?.({ limit: 25 }) || status.creators?.unseededTargets || [],
       tmdb: tmdbView(),
@@ -1105,21 +849,49 @@ export async function createArchiveConsole({
         prefix: '',
         offload: { enabled: false, windowBytes: 0, restored: 0, residentBytes: 0 }
       },
-      discover: await discoverView(discoverParams),
+      discover: await discoverView(discoverParams, catalogItems),
       trustedClients: service.getTrustedClients?.() || [],
       link: service.getLinkDescriptor?.() || null
     }
   }
 
+  function playbackLocation(req, opened) {
+    if (opened?.transport !== 'tcp' ||
+        !Number.isSafeInteger(opened.port) ||
+        opened.port < 1 ||
+        typeof opened.url !== 'string' ||
+        !opened.url.startsWith('/api/v2/stream/')) return null
+    let host = opened.host
+    if (host === '0.0.0.0' || host === '::' || !host) {
+      try {
+        host = new URL(`http://${req.headers?.host || ''}`).hostname
+      } catch {
+        return null
+      }
+    }
+    const authority = host.includes(':') ? `[${host}]:${opened.port}` : `${host}:${opened.port}`
+    return new URL(opened.url, `http://${authority}`).href
+  }
+
+  function playbackCandidateRef(url) {
+    let pathname
+    try {
+      pathname = new URL(url, 'http://relay.local').pathname
+    } catch {
+      return null
+    }
+    if (!pathname.startsWith('/play/')) return null
+    try {
+      const candidateRef = decodeURIComponent(pathname.slice('/play/'.length))
+      return CANDIDATE_REF_PATTERN.test(candidateRef) ? candidateRef : null
+    } catch {
+      return null
+    }
+  }
+
+
   const handleRequest = async (req, res) => {
     try {
-      // Machine-facing routes answer JSON for every outcome, including unknown
-      // paths and wrong methods, so a program never receives the HTML console.
-      if (archiveApi.owns(req.url)) {
-        await archiveApi.handle(req, res)
-        return
-      }
-
       if (req.method === 'GET' && req.url === '/health') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ ok: true, ready: true }))
@@ -1139,12 +911,31 @@ export async function createArchiveConsole({
           res.end(renderArchiveWebHome(home))
           return
         }
+
+        if (parsed.pathname.startsWith('/play/')) {
+          if (!localPlaybackAllowed) {
+            res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+            res.end('playback requires a loopback archive console')
+            return
+          }
+          const candidateRef = playbackCandidateRef(req.url)
+          const opened = candidateRef
+            ? await service.openVerifiedPlayback?.(candidateRef).catch(() => null)
+            : null
+          const location = playbackLocation(req, opened)
+          if (!location) {
+            res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+            res.end('playback unavailable')
+            return
+          }
+          res.writeHead(303, { location, 'cache-control': 'no-store' })
+          res.end()
+          return
+        }
       }
 
-      // A cover for one shelf entry. This belongs to the browser console, not
-      // to the machine API — archiveApi.owns() only ever claims /api/v1 — so a
-      // consumer's view of the relay is unchanged by it.
-      //
+      // A cover for one verified shelf entry. Every way of not having one
+      // answers 404 so a missing thumbnail cannot make the library look broken.
       // Every way of not having a cover answers 404: an id that is not one, no
       // artwork on the claim, bytes that have not replicated yet, a blob server
       // that is not up. A 500 would paint the whole library as broken because
@@ -1238,11 +1029,12 @@ export async function createArchiveConsole({
 
       if (req.method === 'GET' && req.url.startsWith('/discover.json')) {
         const parsed = new URL(req.url, 'http://relay.local')
+        const catalogItems = await readVerifiedCatalog()
         const discover = await discoverView({
           query: parsed.searchParams.get('q') || '',
           type: parsed.searchParams.get('type') || 'movie',
           page: parsed.searchParams.get('page') || '1'
-        })
+        }, catalogItems)
         res.writeHead(200, {
           'content-type': 'application/json; charset=utf-8',
           'access-control-allow-origin': '*',
@@ -1288,21 +1080,6 @@ export async function createArchiveConsole({
         return
       }
 
-      if (req.method === 'GET' && req.url === '/catalog.json') {
-        const catalogChannels = await getCatalogChannels()
-        res.writeHead(200, {
-          'content-type': 'application/json; charset=utf-8',
-          'access-control-allow-origin': '*',
-          'cache-control': 'no-store'
-        })
-        res.end(JSON.stringify({
-          schema: 'peartube.simpleRelayCatalog',
-          version: 1,
-          updatedAt: Date.now(),
-          channels: catalogChannels
-        }, null, 2))
-        return
-      }
 
       if (req.method === 'POST' && req.url === '/discover/archive') {
         const { form, file } = await readArchiveSubmission(req)
@@ -1404,20 +1181,6 @@ export async function createArchiveConsole({
       logger?.archive?.info?.('Archive WebUI started', httpSurface
         ? { host, port: boundPort(), storeWarmupMs: httpSurface.warmupMs() }
         : { host, port: boundPort() })
-      // Which mode the machine API is in, said once and out loud: an operator
-      // should learn it here, not from a 403 or from reading archive-api.js.
-      const { openAccess } = archiveApi
-      if (openAccess.exposed && !openAccess.enabled) {
-        logger?.archive?.warn?.(
-          `Relay API is bound to ${openAccess.boundTo}, so ${archiveApi.prefix}/catalog and ${archiveApi.prefix}/stream refuse with OPEN_ACCESS_NOT_ENABLED; pass ${openAccess.flag} (or ${openAccess.env}=1) to open them`,
-          { host, port: boundPort(), apiOpen: false }
-        )
-      } else if (openAccess.enabled) {
-        logger?.archive?.warn?.(
-          `Relay API is open on ${openAccess.boundTo}: ${archiveApi.prefix}/catalog enumerates every publication and ${archiveApi.prefix}/stream serves media bytes, unauthenticated, to this whole network`,
-          { host, port: boundPort(), apiOpen: true }
-        )
-      }
       return this
     },
     async close() {

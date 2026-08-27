@@ -455,7 +455,7 @@ export async function runPublicationV1StartupMigration(options = {}) {
     checkpointRepository,
     resolveCatalog,
     deviceKeyPair,
-    mediaCatalogProjection,
+    verifiedQueryView,
     afterCatalogCommit,
   } = options
   if (!sourceRepository || typeof sourceRepository.list !== 'function') throw new TypeError('publication v1 migration requires sourceRepository.list')
@@ -471,7 +471,6 @@ export async function runPublicationV1StartupMigration(options = {}) {
   const completed = new Map(checkpoint.completed.map(entry => [entry.sourceKey, entry]))
   if (sources.length === 0) {
     checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'complete', pending: null })
-    await mediaCatalogProjection?.rebuild?.()
     return summary(checkpoint)
   }
 
@@ -577,6 +576,17 @@ export async function runPublicationV1StartupMigration(options = {}) {
       }
       await afterCatalogCommit?.({ sourceKey, publicationId: plan.publicationId, claimIds: plan.claimIds.slice() })
     }
+    if (verifiedQueryView?.refresh) {
+      const refreshed = await verifiedQueryView.refresh({
+        publisherIds: [b4a.toString(binding.publisherId, 'hex')],
+      })
+      if (refreshed?.failed !== 0 || refreshed?.indexed !== 1) {
+        throw new PublicationV1MigrationError(
+          'PUBLICATION_V1_QUERY_REFRESH_FAILED',
+          'verified query view rejected the migrated publication'
+        )
+      }
+    }
     const entry = { sourceKey, publicationId: plan.publicationId, claimIds: plan.claimIds.slice() }
     checkpoint = await checkpointRepository.save({
       ...checkpoint,
@@ -589,6 +599,5 @@ export async function runPublicationV1StartupMigration(options = {}) {
   }
 
   checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'complete', pending: null })
-  await mediaCatalogProjection?.rebuild?.()
   return summary(checkpoint)
 }

@@ -71,8 +71,10 @@ function createHarness(options = {}) {
           async * createReadStream() {},
         },
       },
-      assetManifestStore: {
-        getManifest(id) { return id === publicationId ? storedManifest : null },
+      verifiedQueryView: {
+        async getManifest({ publicationId: requested }) {
+          return requested === publicationId ? storedManifest : null
+        },
       },
     },
     catalogRegistry: { async resolve(id) { return id === publisherId ? { catalog: { writable: true } } : null } },

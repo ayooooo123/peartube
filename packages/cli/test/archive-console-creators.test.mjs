@@ -1,5 +1,5 @@
 import test from 'brittle'
-import { annotateTmdbDiscoverItems, buildTmdbNetworkIndex, createArchiveConsole } from '../src/archive-console.js'
+import { annotateTmdbDiscoverItems, buildTmdbNetworkIndex, createArchiveConsole, createArchiveHttpSurface } from '../src/archive-console.js'
 import { mkdtempSync, mkdirSync, rmSync, readdirSync, statSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -46,23 +46,28 @@ function fakeService(overrides = {}) {
       }
     },
     runtime: { ctx: { metaDb: fakeMetaDb() } },
-    catalog: {
-      getChannels() {
-        return [{
-          channelKey: 'drive-matrix',
-          publicBeeKey: 'bee-matrix',
-          source: 'archive-job',
-          previewVideos: [{
-            id: 'video-matrix',
-            title: 'The Matrix',
-            blobId: '0:4:0:99',
-            blobsCoreKey: 'aa'.repeat(32),
+    async getVerifiedMediaCatalog() {
+      return {
+        success: true,
+        nextCursor: null,
+        items: [{
+          entityId: '1'.repeat(64),
+          entityKind: 'movie',
+          title: 'The Matrix',
+          releaseYear: 1999,
+          sources: [{
+            publicationId: 'pub-matrix',
+            renditionId: 'rend-matrix',
+            candidateRef: 'M'.repeat(43),
             availability: 'playable',
-            classification: { type: 'movie', tmdbId: 603, title: 'The Matrix', year: 1999 }
+            mediaCoordinates: { contentKind: 'movie', mediaProvider: 'tmdb', mediaId: '603' }
           }]
         }]
       }
     },
+    async getVerifiedManifest() { return null },
+    async getVerifiedEntityArtwork() { return null },
+    getArchiveMirrorRequests() { return [] },
     getStatus() { return { runtime: { peers: 0, seeding: {} }, creators: { unseededTargets: [] } } },
     creators: { getCreators() { return creators } },
     getCreatorTargets() { return [{ creatorId: 'youtube:channel:UC1', name: 'One', videosArchived: 3, videosUnseeded: 2 }] },
@@ -107,8 +112,8 @@ async function withConsole(service, fn, consoleOptions = {}) {
     downloader: { async download() { throw new Error('not used') } },
     publisher: {},
     ...consoleOptions,
-    host: '127.0.0.1',
-    port: 0
+    host: consoleOptions.host || '127.0.0.1',
+    port: consoleOptions.port ?? 0
   })
   await console.start()
   const { port } = console.server.address()
@@ -281,24 +286,102 @@ test('POST /clients/revoke forwards to revokeClient', async function (t) {
   t.is(service.calls.revoke[0], deviceKey)
 })
 
+test('archive UI binds while storage warms and adopts the same listener when verified service facts arrive', async function (t) {
+  const surface = createArchiveHttpSurface({ host: '127.0.0.1', port: 0 })
+  t.teardown(() => surface.close().catch(() => {}))
+  const port = await surface.listen()
+  const base = `http://127.0.0.1:${port}`
+  const warming = await (await fetch(`${base}/health`)).json()
+  t.alike(warming, { ok: true, ready: false, waitingFor: 'relay-storage' })
+
+  const console = await createArchiveConsole({
+    service: fakeService(),
+    downloader: { async download() { throw new Error('not used') } },
+    host: '127.0.0.1',
+    port,
+    httpSurface: surface
+  })
+  await console.start()
+  t.alike(await (await fetch(`${base}/health`)).json(), { ok: true, ready: true })
+  await console.close()
+})
+
+test('archive UI playback opens the existing v2 capability in-process and legacy machine routes stay absent', async function (t) {
+  const opened = []
+  const service = fakeService({
+    async openVerifiedPlayback(candidateRef) {
+      opened.push(candidateRef)
+      return {
+        transport: 'tcp',
+        host: '127.0.0.1',
+        port: 8175,
+        url: `/api/v2/stream/pub/rend?cap=${'C'.repeat(43)}`
+      }
+    }
+  })
+  await withConsole(service, async (base) => {
+    const home = await (await fetch(base)).text()
+    t.ok(home.includes(`/play/${'M'.repeat(43)}`), 'verified candidate facts render a play link')
+
+    const play = await fetch(`${base}/play/${'M'.repeat(43)}`, { redirect: 'manual' })
+    t.is(play.status, 303)
+    t.is(play.headers.get('location'), `http://127.0.0.1:8175/api/v2/stream/pub/rend?cap=${'C'.repeat(43)}`)
+    t.alike(opened, ['M'.repeat(43)])
+
+    const legacy = await fetch(`${base}/api/v1/catalog`)
+    t.is(legacy.status, 404)
+    t.ok((legacy.headers.get('content-type') || '').startsWith('text/plain'), 'retired machine paths do not fall through to JSON')
+
+    const duplicateCatalog = await fetch(`${base}/catalog.json`)
+    t.is(duplicateCatalog.status, 404, 'the duplicate unauthenticated catalog projection is gone')
+  })
+})
+
+test('externally bound archive UI cannot mint local operator playback capabilities', async function (t) {
+  const opened = []
+  const service = fakeService({
+    async openVerifiedPlayback(candidateRef) {
+      opened.push(candidateRef)
+      return { transport: 'tcp', host: '127.0.0.1', port: 8175, url: '/api/v2/stream/forbidden' }
+    }
+  })
+  await withConsole(service, async (base) => {
+    const home = await (await fetch(base)).text()
+    t.absent(home.includes('/play/'), 'an external console renders metadata without privileged play links')
+    const play = await fetch(`${base}/play/${'M'.repeat(43)}`, { redirect: 'manual' })
+    t.is(play.status, 403)
+    t.alike(opened, [], 'the unauthenticated request never reaches the in-process companion identity')
+  }, { host: '0.0.0.0' })
+})
+
 
 test('TMDB network status distinguishes TV episodes from show-level matches', function (t) {
   const index = buildTmdbNetworkIndex([{
-    channelKey: 'drive-tv',
-    publicBeeKey: 'bee-tv',
-    previewVideos: [{
-      id: 'severance-s2e4',
-      title: 'Severance S2E4',
-      blobId: '0:4:0:99',
-      blobsCoreKey: 'aa'.repeat(32),
-      availability: 'playable',
-      classification: { type: 'tv', tmdbId: 95396, title: 'Severance', season: 2, episode: 4 }
-    }],
-    unavailableVideos: [{
-      id: 'severance-s2e5',
-      title: 'Severance S2E5',
+    entityId: '2'.repeat(64),
+    entityKind: 'series',
+    title: 'Severance',
+    sources: [{
+      publicationId: 'severance-s2e4',
+      renditionId: 'video',
+      candidateRef: 'S'.repeat(43),
+      mediaCoordinates: {
+        contentKind: 'episode',
+        mediaProvider: 'tmdb',
+        mediaId: '95396',
+        seasonNumber: 2,
+        episodeNumber: 4
+      }
+    }, {
+      publicationId: 'severance-s2e5',
+      renditionId: 'video',
       availability: 'unavailable',
-      classification: { type: 'tv', tmdbId: 95396, title: 'Severance', season: 2, episode: 5 }
+      mediaCoordinates: {
+        contentKind: 'episode',
+        mediaProvider: 'tmdb',
+        mediaId: '95396',
+        seasonNumber: 2,
+        episodeNumber: 5
+      }
     }]
   }])
   const annotated = annotateTmdbDiscoverItems([

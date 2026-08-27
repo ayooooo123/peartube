@@ -798,7 +798,9 @@ export function createApi({
   const scopedNetworkApi = scopedNetwork ? createScopedNetworkApi(scopedNetwork) : {}
   const archiveParticipationApi = createArchiveParticipationApi({
     archiveNetwork: permissionlessArchiveNetwork,
-    manifestStore: ctx.assetManifestStore,
+    manifestStore: {
+      getManifest: publicationId => ctx.verifiedQueryView?.getManifest({ publicationId })
+    },
   })
   const operabilityApi = createOperabilityApi({
     ctx,
@@ -2191,7 +2193,7 @@ export function createApi({
   }
 
   async function resolveOwnedPublication(publicationId) {
-    const manifest = await ctx?.assetManifestStore?.getManifest?.(publicationId)
+    const manifest = await ctx?.verifiedQueryView?.getManifest?.({ publicationId })
     if (!manifest || manifest.publicationId !== publicationId) throw new Error('publication manifest not found')
     let owned = false
     if (typeof sourceOffload.authorizePublication === 'function') {

@@ -103,7 +103,7 @@ export function createArchiveParticipationApi(options = {}) {
       }
       if (!archiveNetwork?.requestArchive) return requestFailure('ARCHIVE_NETWORK_UNAVAILABLE')
       try {
-        const manifest = manifestStore?.getManifest?.(request.publicationId)
+        const manifest = await manifestStore?.getManifest?.(request.publicationId)
         if (!manifest) return requestFailure('ARCHIVE_PUBLICATION_NOT_FOUND')
         const rendition = manifest.body?.renditions?.find(candidate => candidate.renditionId === request.renditionId)
         let core

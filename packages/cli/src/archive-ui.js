@@ -265,6 +265,9 @@ function libraryCard(item = {}) {
   const poster = item.hasPoster && item.entityId
     ? `<img class="lib-poster" src="/poster/${encodeURIComponent(item.entityId)}" alt="" loading="lazy">`
     : ''
+  const playback = /^[A-Za-z0-9_-]{43}$/.test(item.candidateRef || '')
+    ? `<a class="play-link" href="/play/${encodeURIComponent(item.candidateRef)}">Play</a>`
+    : ''
 
   return `<article class="title-card">
       <div class="poster-wrap">
@@ -279,6 +282,7 @@ function libraryCard(item = {}) {
         ${genres.length ? `<p class="genres">${genres.map(genre => `<span class="chip">${escapeHtml(genre)}</span>`).join('')}</p>` : ''}
         ${item.overview ? `<p class="overview">${escapeHtml(item.overview)}</p>` : ''}
         ${status.detail ? `<p class="seed-detail">${escapeHtml(status.detail)}</p>` : ''}
+        ${playback}
       </div>
     </article>`
 }
@@ -379,8 +383,6 @@ export function renderArchiveWebHome(model = {}) {
   const discoverItems = Array.isArray(discover.items) ? discover.items : []
   const trustedClients = Array.isArray(model.trustedClients) ? model.trustedClients : []
   const link = model.link || {}
-  const publicBaseUrl = typeof model.publicBaseUrl === 'string' ? model.publicBaseUrl : ''
-  const catalogUrl = publicBaseUrl ? `${publicBaseUrl.replace(/\/$/, '')}/catalog.json` : '/catalog.json'
 
   const totalUnseeded = creators.reduce((sum, c) => sum + (Number(c.videosUnseeded) || 0), 0)
   const totalArchived = creators.reduce((sum, c) => sum + (Number(c.videosArchived) || 0), 0)
@@ -509,6 +511,8 @@ export function renderArchiveWebHome(model = {}) {
     .title-body .overview { margin: 7px 0 0; font-size: 12px; line-height: 1.5; color: #b9c3d6;
       display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
     .title-body .seed-detail { margin: 7px 0 0; font-size: 11px; color: var(--muted); }
+    .play-link { display: inline-flex; margin-top: 9px; min-height: 36px; align-items: center; justify-content: center;
+      padding: 0 12px; border-radius: 9px; background: var(--mint); color: #04130c; font-size: 13px; font-weight: 800; }
     /* creators */
     .creator { display: flex; gap: 13px; padding: 14px 0; border-top: 1px solid var(--line); }
     .creator:first-child { border-top: 0; padding-top: 2px; }
@@ -689,11 +693,6 @@ export function renderArchiveWebHome(model = {}) {
           ${offload.enabled ? `<p class="note">Resident window: ${escapeHtml(formatSize(offload.windowBytes) || '0 KB')}<br>Restored on read: ${escapeHtml(String(offload.restored))} block(s)<br>Held on this volume: ${escapeHtml(formatSize(offload.residentBytes) || '0 KB')}<br>Room left: ${escapeHtml(formatSize(capacity.effectiveCapacityBytes) || 'unmeasured')} of archive budget, not of this disk</p>` : '<p class="note">Media block data stays on this relay\'s volume.</p>'}
         </section>
 
-        <section class="card">
-          <h2>Simple relay catalog</h2>
-          <p class="sub">Fallback JSON catalog for clients that can't reach live P2P gossip.</p>
-          <code class="mono-key"><a href="${escapeHtml(catalogUrl)}">${escapeHtml(catalogUrl)}</a></code>
-        </section>
       </div>
     </div>
   </main>

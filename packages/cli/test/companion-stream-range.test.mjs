@@ -93,7 +93,8 @@ function streamAsset (bytes = BODY, overrides = {}) {
 async function startHarness (t, asset, {
   capabilities = null,
   streamChunkBytes = 4,
-  requestDeadlineMs = 5_000
+  requestDeadlineMs = 5_000,
+  inProcess = false
 } = {}) {
   const service = {
     async verifyIndexCandidate () {
@@ -120,15 +121,21 @@ async function startHarness (t, asset, {
   const state = await server.start()
   const openPath = '/api/v2/streams/open'
   const openBody = JSON.stringify({ candidateRef: REF })
-  const opened = await request({
-    host: state.host,
-    port: state.port,
-    method: 'POST',
-    path: openPath,
-    body: openBody,
-    headers: signedHeaders(openPath, openBody, `stream-open-${++nonceSequence}`)
-  })
-  const payload = JSON.parse(b4a.toString(opened.body))
+  const opened = inProcess
+    ? await server.dispatchInProcess({
+        method: 'POST',
+        url: openPath,
+        body: { candidateRef: REF }
+      })
+    : await request({
+        host: state.host,
+        port: state.port,
+        method: 'POST',
+        path: openPath,
+        body: openBody,
+        headers: signedHeaders(openPath, openBody, `stream-open-${++nonceSequence}`)
+      })
+  const payload = inProcess ? opened.body : JSON.parse(b4a.toString(opened.body))
   return { state, server, opened: payload }
 }
 function rangeCalls (calls) {
@@ -137,7 +144,7 @@ function rangeCalls (calls) {
 
 test('capability-only full GET and HEAD stream verified bounded chunks while control routes remain MAC-gated', async (t) => {
   const { asset, calls } = streamAsset()
-  const { state, opened } = await startHarness(t, asset)
+  const { state, opened } = await startHarness(t, asset, { inProcess: true })
 
   const head = await request({ host: state.host, port: state.port, method: 'HEAD', path: opened.url })
   t.is(head.statusCode, 200)

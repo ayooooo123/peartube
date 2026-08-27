@@ -128,7 +128,7 @@ function makeCatalog(deviceKeyPair, appended, counters = {}) {
   }
 }
 
-function makePublishingManager({ store, deviceKeyPair, catalog, scopedNetwork = null, mediaCatalogProjection = null }) {
+function makePublishingManager({ store, deviceKeyPair, catalog, scopedNetwork = null, verifiedQueryView = null }) {
   return createUploadManager({
     ctx: { store },
     deviceKeyPair,
@@ -143,7 +143,7 @@ function makePublishingManager({ store, deviceKeyPair, catalog, scopedNetwork = 
         return { publisherId: deviceKeyPair.publicKey, catalog }
       },
     },
-    mediaCatalogProjection,
+    verifiedQueryView,
     scopedNetwork: scopedNetwork || {
       async retainAuthorizedRendition() { return { status: 'retained' } },
       async publishLocalPublisherCatalog() { return { status: 'published' } },
@@ -381,9 +381,9 @@ test('accepted normal append stays private until every post-commit side effect s
     store,
     deviceKeyPair,
     catalog,
-    mediaCatalogProjection: {
-      async rebuild() {
-        lifecycle.push('projection')
+    verifiedQueryView: {
+      async refresh() {
+        lifecycle.push('query-view')
       },
     },
     scopedNetwork: {
@@ -405,7 +405,7 @@ test('accepted normal append stays private until every post-commit side effect s
   assert.equal(failed.success, false)
   assert.equal(failed.commitUncertain, true)
   assert.equal(channel.videos[0].publicationState, 'commitUncertain')
-  assert.deepEqual(lifecycle, ['projection', 'retention', 'announcement'])
+  assert.deepEqual(lifecycle, ['query-view', 'retention', 'announcement'])
 
   const retried = await manager.uploadFromBuffer(channel, Buffer.from('must not append twice'), options)
   assert.equal(retried.success, true)
@@ -415,10 +415,10 @@ test('accepted normal append stays private until every post-commit side effect s
   assert.equal(counters.created, 3)
   assert.equal(channel.blobWrites.length, 0, 'no publication attempt copies the media into the blob core')
   assert.deepEqual(lifecycle, [
-    'projection',
+    'query-view',
     'retention',
     'announcement',
-    'projection',
+    'query-view',
     'retention',
     'announcement',
     'public-sync',

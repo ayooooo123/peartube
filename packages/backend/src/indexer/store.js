@@ -53,6 +53,7 @@ const PUBLICATION_LOOKUP_FIELDS = new Set(['publicationId'])
 const RENDITION_LOOKUP_FIELDS = new Set(['renditionId'])
 const SOURCE_RECORD_LOOKUP_FIELDS = new Set(['publisherId', 'sourceRecordRef'])
 const QUERY_PAGE_FIELDS = new Set(['selectors', 'limit', 'continuation', 'sourceRevision', 'signal'])
+const CATALOG_SNAPSHOT_FIELDS = new Set(['maxSourceRecords', 'maxPublicationRows'])
 const QUERY_CONTINUATION_FIELDS = new Set(['selectorIndex', 'after'])
 const EXACT_CONTINUATION_FIELDS = new Set(['namespace', 'normalizedIdentifier', 'publisherId', 'sourceRecordRef', 'entityKind', 'entityId'])
 const PUBLICATION_CONTINUATION_FIELDS = new Set(['workEntityId', 'publisherId', 'sourceRecordRef', 'publicationId'])
@@ -115,6 +116,36 @@ function prepareSourceRecordLookup(input) {
   const sourceRecordRef = validateBoundedText('sourceRecordRef', input.sourceRecordRef, INDEX_SCHEMA_LIMITS.maxSourceRecordRefBytes)
   if (!/^[0-9a-f]{64}$/.test(sourceRecordRef)) throw invalidOperation('sourceRecordRef must be a lowercase 32-byte hexadecimal identifier', { scope: 'query' })
   return { publisherId, sourceRecordRef }
+}
+
+function prepareCatalogSnapshot(input, limits) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw invalidOperation('catalog snapshot input must be an object', { scope: 'query' })
+  }
+  assertOnlyFields(input, CATALOG_SNAPSHOT_FIELDS, 'catalog snapshot')
+  const maximum = Math.min(limits.global.maxRows, limits.shard.maxRows)
+  const maxSourceRecords = Number(input.maxSourceRecords)
+  const maxPublicationRows = Number(input.maxPublicationRows)
+  if (!Number.isSafeInteger(maxSourceRecords) || maxSourceRecords < 1 || maxSourceRecords > maximum ||
+      !Number.isSafeInteger(maxPublicationRows) || maxPublicationRows < 1 || maxPublicationRows > maximum) {
+    throw invalidOperation('catalog snapshot limits are outside their bound', { scope: 'query' })
+  }
+  return { maxSourceRecords, maxPublicationRows }
+}
+
+async function boundedCatalogRows(tx, collection, maximum) {
+  const rows = await tx.find(collection, {
+    gte: { publisherId: '0'.repeat(64) },
+    lte: { publisherId: 'f'.repeat(64) },
+  }, { limit: safeLimit(maximum) }).toArray()
+  if (rows.length > maximum) {
+    throw invalidOperation('verified catalog snapshot exceeds its bounded row limit', {
+      scope: 'query',
+      requested: rows.length,
+      limit: maximum,
+    })
+  }
+  return rows.map(record => snapshotRecord(collection, record))
 }
 
 function safeLimit(value) {
@@ -1047,6 +1078,13 @@ export async function createIndexerStore(options) {
     },
     queryIndexPage(input) {
       return accept(() => prepareQueryPage(input, limits), (tx, prepared) => queryIndexPage(tx, prepared))
+    },
+    snapshotCatalogRows(input) {
+      return accept(() => prepareCatalogSnapshot(input, limits), async (tx, prepared) => ({
+        sourceRecords: await boundedCatalogRows(tx, COLLECTIONS.sourceRecords, prepared.maxSourceRecords),
+        publicationRows: await boundedCatalogRows(tx, COLLECTIONS.publicationProjections, prepared.maxPublicationRows),
+        sourceRevision: tx.sourceRevision,
+      }))
     },
     findEntityRows(input) {
       return accept(() => prepareEntityLookup(input), async (tx, selector) => {

@@ -105,7 +105,7 @@ const COLUMN_SPAN = COLUMNS.length + 1
 // predates that field the row says so with its id: borrowing the work's title
 // would make two releases of one work read as the same file.
 function releaseName(row) {
-  return row.file || (row.work ? row.work : `Release ${shortIdentifier(row.id || '', 10)}`)
+  return row.file || `Release ${shortIdentifier(row.id || '', 10)}`
 }
 
 // Progress is this relay's own accepted bytes against the length the manifest

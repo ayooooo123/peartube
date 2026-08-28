@@ -44,14 +44,15 @@ function durableSourceIdentity (identity) {
 }
 
 
-function publicationMetadata(value) {
+function publicationMetadata(value, request = null) {
   const output = { title: null, sourceFileName: null, mediaContext: null }
   if (typeof value?.title === 'string' && value.title && b4a.byteLength(value.title) <= 512) output.title = value.title
   // The name the source gave the file. Two versions of one work are told apart
   // by this and by their byte length, so it is kept verbatim rather than
   // regenerated from a title.
-  if (typeof value?.sourceFileName === 'string' && /^[^/\\]{1,255}$/.test(value.sourceFileName)) {
-    output.sourceFileName = value.sourceFileName
+  const rawFileName = value?.sourceFileName || request?.sourceFileName || null
+  if (typeof rawFileName === 'string' && /^[^/\\]{1,255}$/.test(rawFileName)) {
+    output.sourceFileName = rawFileName
   }
   if (value?.mediaContext && typeof value.mediaContext === 'object' && !Array.isArray(value.mediaContext)) {
     const context = {}
@@ -320,7 +321,7 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       const resolution = await provider.resolve({ ref: request.resolutionRef, request, principalId })
       const expected = expectedFacts(resolution); const admission = await policy.admit({ request, principal, adapterId: resolution.adapterId, freeDiskBytes: freeDiskBytes(), isRemote })
       const acquisitionId = acquisitionIdForRequest({ principal: principalId, idempotencyKey, request }); const createdAt = at(now)
-      const job = { schemaVersion: 1, acquisitionId, state: 'queued', version: 0, principalId, publisherId: request.publisherId, requesterPublisherIds: publisherIdsForPrincipal(principal), isRemote: isRemote === true, idempotencyDigest: digest, requestFingerprint: fingerprint, request, retentionClass: request.retentionClass, publicationMetadata: publicationMetadata(resolution), expectedBytes: expected.byteLength, expectedIdentity: expected.identity, sourceBytesRead: 0, sourceBytesAccepted: 0, bytesAcquired: 0, verifiedBytes: 0, committedBytes: 0, retainedBytes: 0, stagingBytes: 0, stagingPeakBytes: 0, attempts: 0, startedAt: null, finishedAt: null, verifiedPrefix: null, verifiedAsset: null, publication: null, errorCode: null, recoverable: false, createdAt, updatedAt: createdAt }
+      const job = { schemaVersion: 1, acquisitionId, state: 'queued', version: 0, principalId, publisherId: request.publisherId, requesterPublisherIds: publisherIdsForPrincipal(principal), isRemote: isRemote === true, idempotencyDigest: digest, requestFingerprint: fingerprint, request, retentionClass: request.retentionClass, publicationMetadata: publicationMetadata(resolution, request), expectedBytes: expected.byteLength, expectedIdentity: expected.identity, sourceBytesRead: 0, sourceBytesAccepted: 0, bytesAcquired: 0, verifiedBytes: 0, committedBytes: 0, retainedBytes: 0, stagingBytes: 0, stagingPeakBytes: 0, attempts: 0, startedAt: null, finishedAt: null, verifiedPrefix: null, verifiedAsset: null, publication: null, errorCode: null, recoverable: false, createdAt, updatedAt: createdAt }
       ledger.reserve({ acquisitionId, principalId, expectedBytes: expected.byteLength, policy: admission.policy, isRemote })
       const outcome = await store.createOrReplay({ idempotencyDigest: digest, requestFingerprint: fingerprint, job }); await notify(outcome.event)
       if (outcome.created) { await network?.publishRequest?.({ acquisitionId, request }); await dispatchQueued() }

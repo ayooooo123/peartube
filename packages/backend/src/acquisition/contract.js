@@ -26,7 +26,7 @@ export const ACQUISITION_EVENT_TYPES = Object.freeze([
   'acquisition.source-grant-attached'
 ])
 
-const REQUEST_FIELDS = new Set(['schemaVersion', 'resolutionRef', 'publisherId', 'retentionClass', 'retentionUntil'])
+const REQUEST_FIELDS = new Set(['schemaVersion', 'resolutionRef', 'publisherId', 'retentionClass', 'retentionUntil', 'sourceFileName'])
 // What the durable job knows about the work it is fetching. It is publisher
 // metadata, never source material: an operator surface has to be able to name
 // a transfer, and `acquisitionId` names a machine.
@@ -180,6 +180,9 @@ export function normalizeAcquisitionRequest (input) {
     retentionClass: input.retentionClass
   }
   if (input.retentionUntil !== undefined) result.retentionUntil = uint(input.retentionUntil, 'retentionUntil')
+  if (input.sourceFileName !== undefined && input.sourceFileName !== null) {
+    result.sourceFileName = text(input.sourceFileName, 'sourceFileName', 255, { pattern: SOURCE_FILE_NAME, code: 'ACQUISITION_REQUEST_INVALID' })
+  }
   return Object.freeze(result)
 }
 

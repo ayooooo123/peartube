@@ -735,6 +735,7 @@ export type AcquisitionRequest = {
   publisherId: string
   retentionClass: AcquisitionRetentionClass
   retentionUntil?: number | null
+  sourceFileName?: string | null
 }
 
 export type Acquisition = {
@@ -742,6 +743,9 @@ export type Acquisition = {
   acquisitionId: string
   state: AcquisitionState
   retentionClass: AcquisitionRetentionClass
+  title?: string | null
+  sourceFileName?: string | null
+  mediaContext?: ProviderMediaContext | null
   bytesAcquired: number
   expectedBytes?: number | null
   publicationId?: string | null

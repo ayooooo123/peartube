@@ -62,6 +62,11 @@ function acquisitionBody (overrides = {}) {
 
 test('acquisition contracts accept only the bounded public request and private grant envelope', (t) => {
   t.alike(decodeAcquisitionBody(b4a.from(JSON.stringify(acquisitionBody()))), acquisitionBody())
+  t.alike(
+    decodeAcquisitionBody(b4a.from(JSON.stringify(acquisitionBody({ sourceFileName: 'Dune.Part.Two.2024.2160p.UHD.BluRay.x265.mkv' })))),
+    acquisitionBody({ sourceFileName: 'Dune.Part.Two.2024.2160p.UHD.BluRay.x265.mkv' })
+  )
+  t.exception(() => decodeAcquisitionBody(b4a.from(JSON.stringify(acquisitionBody({ sourceFileName: '../escape/dune.mkv' })))), CompanionContractError)
   t.exception(() => decodeAcquisitionBody(b4a.from(JSON.stringify(acquisitionBody({ sourceDescriptor: { url: 'https://forbidden.invalid' } })))), CompanionContractError)
   t.exception(() => decodeAcquisitionBody(b4a.from(JSON.stringify(acquisitionBody({ sourceCapability: 'forbidden' })))), CompanionContractError)
   t.exception(() => decodeAcquisitionBody(b4a.from(JSON.stringify(acquisitionBody({ resolutionRef: 'https://forbidden.invalid' })))), CompanionContractError)

@@ -185,7 +185,7 @@ function normalizeAcquisitionRequest(value) {
   exactFields(
     value,
     ['schemaVersion', 'resolutionRef', 'publisherId', 'retentionClass'],
-    ['retentionUntil'],
+    ['retentionUntil', 'sourceFileName'],
     'request',
   )
   if (value.schemaVersion !== 1) fail(PROVIDER_ERROR_CODES.INVALID_FIELD, 'request.schemaVersion is invalid', { field: 'schemaVersion' })
@@ -199,6 +199,7 @@ function normalizeAcquisitionRequest(value) {
     publisherId,
     retentionClass,
     ...(Object.hasOwn(value, 'retentionUntil') ? { retentionUntil: uint(value.retentionUntil, 'request.retentionUntil') } : {}),
+    ...(Object.hasOwn(value, 'sourceFileName') && value.sourceFileName != null ? { sourceFileName: text(value.sourceFileName, 'request.sourceFileName', 255) } : {}),
   })
 }
 

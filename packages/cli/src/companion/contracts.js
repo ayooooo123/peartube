@@ -29,7 +29,7 @@ const OPEN_FIELDS = new Set(['candidateRef'])
 const ACQUISITION_FIELDS = new Set(['idempotencyKey', 'request'])
 const SOURCE_GRANT_FIELDS = new Set(['grant'])
 const ACQUISITION_LIST_FIELDS = new Set(['cursor', 'limit', 'states'])
-const ACQUISITION_REQUEST_FIELDS = new Set(['schemaVersion', 'resolutionRef', 'publisherId', 'retentionClass', 'retentionUntil'])
+const ACQUISITION_REQUEST_FIELDS = new Set(['schemaVersion', 'resolutionRef', 'publisherId', 'retentionClass', 'retentionUntil', 'sourceFileName'])
 const POLICY_FIELDS = new Set([
   'policyVersion',
   'consentVersion',
@@ -387,6 +387,9 @@ export function decodeAcquisitionBody (body) {
       throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid retentionUntil', 'retentionUntil')
     }
     result.retentionUntil = request.retentionUntil
+  }
+  if (request.sourceFileName !== undefined && request.sourceFileName !== null) {
+    result.sourceFileName = boundedString(request.sourceFileName, 'sourceFileName', 255, { pattern: /^[^/\\]{1,255}$/ })
   }
   return { idempotencyKey, request: result }
 }

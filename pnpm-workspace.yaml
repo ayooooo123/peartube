@@ -1,6 +1,0 @@
-packages:
-  - 'packages/*'
-nodeLinker: hoisted
-shamefullyHoist: true
-publicHoistPattern:
-  - '*'

@@ -80,8 +80,6 @@ const ALLOWED_EGRESS = {
     'user-initiated download streams bytes from the local blob-server URL the backend just issued for a P2P source',
   'lib/maintenance-file-transfer.mjs':
     'user-triggered diagnostics/backup import-export reads the file URI the user picked',
-  'lib/simple-relay-catalog.ts':
-    'operator-configured relay catalog endpoint used for P2P discovery; carries no viewer state',
   'components/video-player/WebMseVideoBackend.web.tsx':
     'web MSE playback pulls playlist and fMP4 fragments from the backend transcoder on this device',
 }

@@ -59,21 +59,26 @@ flowchart LR
 | 01 | [Deterministic static asset core](2026-08-09-01-static-asset-core.md) | Two stores derive one read-only core identity from identical bytes | — |
 | 02 | [Asset manifest and ingestion cutover](2026-08-09-02-asset-manifest-ingestion.md) | Uploads publish v2 descriptors and quarantine ambiguous legacy assets | 01 |
 | 03 | [Verified multi-peer range playback](2026-08-09-03-multi-peer-range-playback.md) | Sparse ranges are fetched and verified across peer churn | 02 |
-| 04 | [Durable index schema](2026-08-09-04-index-schema.md) | HyperDB persists normalized source and projection rows within budgets | 02 |
-| 05 | [Incremental publisher ingestion](2026-08-09-05-catalog-ingestion.md) | Pinned Hyperbee checkout diffs update one publisher transactionally | 04 |
-| 06 | [Index service protocol](2026-08-09-06-index-service-protocol.md) | Signed service discovery and bounded Protomux queries work directly | 05 |
+| 04 | Durable index schema (plan removed) | HyperDB persists normalized source and projection rows within budgets | 02 |
+| 05 | Incremental publisher ingestion (plan removed) | Pinned Hyperbee checkout diffs update one publisher transactionally | 04 |
+| 06 | Index service protocol (plan removed) | Signed service discovery and bounded Protomux queries work directly | 05 |
 | 07 | [Multi-index union and verification](2026-08-09-07-index-union-verification.md) | URL-less candidates are deduplicated and current-source verified | 06 |
-| 08 | [Companion v2 API](2026-08-09-08-companion-v2-api.md) | Authenticated search/open/status/job routes expose the universal backend | 03, 07 |
-| 09 | [client application candidate resolver](2026-08-09-09-client-candidate-resolver.md) | client application ranks `ServiceTypePearTube` before deferred resolution | 08 |
+| 08 | Companion v2 API (plan removed) | Authenticated search/open/status/job routes expose the universal backend | 03, 07 |
+| 09 | client application candidate resolver (plan removed) | client application ranks `ServiceTypePearTube` before deferred resolution | 08 |
 | 10 | [Route-scoped streaming](2026-08-09-10-route-scoped-streaming.md) | GET/HEAD ranges require short-lived route capabilities | 09 |
-| 11 | [Durable ingest jobs](2026-08-09-11-ingest-jobs.md) | Completed spool and resumable source-capability ingest are idempotent | 10 |
+| 11 | Durable ingest jobs (plan removed) | Completed spool and resumable source-capability ingest are idempotent | 10 |
 | 12 | [Consent, retention, and status](2026-08-09-12-consent-retention-status.md) | Legacy installs fail to watch-only and contribution stays explicitly gated | 11 |
 | 13 | [Catalog epoch schemas](2026-08-09-13-catalog-epoch-schemas.md) | Root-authorized seals/checkpoints encode complete replay state | 05 |
 | 14 | [Publisher catalog rollover](2026-08-09-14-publisher-rollover.md) | A publisher crosses the 4,096-operation bound without identity change | 13 |
-| 15 | [Indexer restart and repair](2026-08-09-15-indexer-recovery.md) | Cold/warm indexers converge from durable cursors and bounded checkpoints | 14 |
+| 15 | Indexer restart and repair (plan removed) | Cold/warm indexers converge from durable cursors and bounded checkpoints | 14 |
 | 16 | [Locator anti-entropy](2026-08-09-16-locator-anti-entropy.md) | Signed locator/index announcements converge with expiry and equivocation rules | 06 |
 | 17 | [Registration and discovery](2026-08-09-17-registration-discovery.md) | New publishers register with multiple indexers and new companions find them | 15, 16 |
 | 18 | [Operational proof](2026-08-09-18-operational-proof.md) | Multi-process tests prove discovery, churn, partition healing, limits, and client application fallback | 12, 17 |
+
+Rows marked "plan removed" had their plan document deleted: each described code that does not
+exist, scoring under 25% on the path audit in `INDEX.md`. The phase itself is still on the
+roadmap; only the stale plan text is gone. Recover it from git history if a design decision
+needs revisiting.
 
 ## Execution contract
 

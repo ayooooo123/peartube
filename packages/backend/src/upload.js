@@ -176,6 +176,7 @@ function getExtensionForMime(mimeType) {
 
 function normalizeVideoMetadata(options, videoId) {
   const title = options.title;
+  const sourceFileName = options.sourceFileName;
   const description = options.description;
   const providedMimeType = options.mimeType;
   const duration = options.duration;
@@ -241,6 +242,12 @@ function normalizeVideoMetadata(options, videoId) {
     width: width === undefined ? 0 : width,
     height: height === undefined ? 0 : height
   });
+  if (sourceFileName !== undefined && sourceFileName !== null) {
+    if (typeof sourceFileName !== 'string' || !/^[^/\\]{1,255}$/.test(sourceFileName)) {
+      throw new Error('sourceFileName must be a bounded non-empty string');
+    }
+    metadata.sourceFileName = sourceFileName;
+  }
   if (thumbnailBlobId !== undefined) metadata.thumbnailBlobId = thumbnailBlobId;
   if (thumbnailBlobsCoreKey !== undefined) metadata.thumbnailBlobsCoreKey = thumbnailBlobsCoreKey;
   if (thumbnailMimeType !== undefined) metadata.thumbnailMimeType = thumbnailMimeType;
@@ -1055,9 +1062,9 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
       subjectRefs: [subjectRef],
       payload: {
         title: metadata.title || metadata.id,
+        ...(metadata.sourceFileName ? { sourceFileName: metadata.sourceFileName } : {}),
         description: metadata.description || null,
         publicationId: manifest.publicationId,
-        // A recording is not a film. Where the coordinate table names the kind,
         // say it; 'movie' stays the fallback for uploads no table describes.
         presentationKind: coordinateShape ? metadata.contentKind : 'movie',
         // Artwork travels with the metadata claim: a consumer has no metadata
@@ -1483,8 +1490,8 @@ export function createUploadManager({
     const metadata = {
       id: acquisitionId,
       title: typeof resolution?.title === 'string' && resolution.title ? resolution.title : acquisitionId,
+      sourceFileName: typeof resolution?.sourceFileName === 'string' && resolution.sourceFileName ? resolution.sourceFileName : null,
       description: null,
-      mimeType,
       duration: durationMs / 1000,
       contentKind: typeof media.kind === 'string' && media.kind ? media.kind : 'movie',
       mediaProvider: typeof media.namespace === 'string' ? media.namespace : null,

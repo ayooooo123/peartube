@@ -14,10 +14,11 @@ scrubber, cast).
 | `android-launch-only.yaml` | No | Cold launch only. Used as the first leg of the PiP repro harness. |
 | `android-pip-*.yaml` | **Yes** | Five Android PiP paths: fullscreen-to-home, mini-to-home, deeplink-mini-to-home, open-from-feed-then-home, and wait-then-home. They catch PiP failing to enter, failing on repeated cycles, and losing state on return. |
 
-The `android-pip-*` and `android-launch-only` flows moved here from
-`packages/app/maestro/` so there is one maestro root. `packages/app` still owns
-the driver: `npm run test:android:pip:repro` in that package runs
-`scripts/maestro-android-pip-repro.sh`, which reads these flows.
+Every flow lives here, so this is the one maestro root; the `android-pip-*` and
+`android-launch-only` flows used to sit under `packages/app`. The driver still
+belongs to that package: `npm run test:android:pip:repro --prefix packages/app`
+runs `packages/app/scripts/maestro-android-pip-repro.sh`, which reads the flows
+from here.
 
 ## Run locally
 

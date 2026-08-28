@@ -25,21 +25,18 @@ services:
       PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION: Local videos mirrored from desktop ~/peartube-local-videos
       PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE: "true"
       PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES: "10000"
-      # Optional S3-compatible relay archive settings:
-      # PEARTUBE_ARCHIVE_S3_ENDPOINT: https://s3.example.com
-      # PEARTUBE_ARCHIVE_S3_BUCKET: peartube-relay
-      # PEARTUBE_ARCHIVE_S3_REGION: us-east-1
-      # PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID: your-access-key
-      # PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY: your-secret-key
-      # PEARTUBE_ARCHIVE_S3_PREFIX: peartube/
-      # PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE: "false"
-      # Block offload: move media block DATA to the bucket above and keep only
-      # the merkle tree and bitfield on disk, so this relay can archive titles
-      # larger than its volume. Off by default; a half-configured bucket refuses
-      # to start rather than quietly filling the volume.
-      # PEARTUBE_ARCHIVE_S3_OFFLOAD: "true"
-      # Un-offloaded block data kept on local disk. Default 2 GiB.
-      # PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES: "2147483648"
+      # S3-compatible relay archive and block offload settings (passed through from env):
+      PEARTUBE_ARCHIVE_S3_ENABLED:
+      PEARTUBE_ARCHIVE_S3_OFFLOAD:
+      PEARTUBE_ARCHIVE_S3_ENDPOINT:
+      PEARTUBE_ARCHIVE_S3_BUCKET:
+      PEARTUBE_ARCHIVE_S3_REGION:
+      PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID:
+      PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY:
+      PEARTUBE_ARCHIVE_S3_PREFIX:
+      PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE:
+      PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES:
+      PEARTUBE_ARCHIVE_UPLOAD_CONCURRENCY:
       PEARTUBE_LOG_LEVEL: info
     volumes:
       - peartube-relay-data:/var/lib/peartube-relay

@@ -399,6 +399,11 @@ export function renderArchiveWebHome(model = {}, options = {}) {
     .notice { margin: 0 0 16px; padding: 12px 16px; border-radius: 8px; border: 1px solid #b45309; background: #78350f; color: #fef3c7; font-size: 14px; }
     .status-line { font-weight: 700; }
     .status-line.on { color: var(--ok); }
+    .card-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; gap: 10px; flex-wrap: wrap; }
+    .status-badge { font-size: 11px; font-weight: 750; padding: 3px 10px; border-radius: 999px; background: rgba(255,255,255,0.08); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .status-badge.ok { background: rgba(93,255,176,0.15); color: var(--ok); border: 1px solid rgba(93,255,176,0.3); }
+    .meta-block { display: grid; gap: 10px; background: rgba(0,0,0,0.25); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-top: 10px; }
+    .meta-block .note { margin: 0; line-height: 1.6; }
     /* discover */
     .discover-toolbar { display: grid; gap: 10px; grid-template-columns: 1fr; margin-bottom: 16px; }
     @media (min-width: 720px) { .discover-toolbar { grid-template-columns: 1fr 140px auto; align-items: end; } }
@@ -467,8 +472,33 @@ export function renderArchiveWebHome(model = {}, options = {}) {
           <p class="sub">Creators with the most under-replicated content — seed these first to maximise availability.</p>
           <ul>${targetRows}</ul>
         </section>` : ''}
+        ${shows('settings') ? `
+        <section class="card" id="s3-store">
+          <div class="card-head">
+            <h2>S3 block store</h2>
+            <span class="status-badge ${s3.configured ? 'ok' : ''}">${s3.configured ? 'Configured' : 'Not configured'}</span>
+          </div>
+          <p class="sub">Read-only status. Configure S3 with Docker environment variables, then restart the relay.</p>
+          <div class="meta-block">
+            <p class="note">Status: <span class="status-line ${s3.configured ? 'on' : ''}">${s3.configured ? 'configured' : 'not configured'}</span></p>
+            ${s3.configured ? `<p class="note">Endpoint: ${escapeHtml(s3.endpoint)}<br>Bucket: ${escapeHtml(s3.bucket)}<br>Region: ${escapeHtml(s3.region)}<br>Prefix: ${escapeHtml(s3.prefix || '(none)')}</p>` : ''}
+            <p class="note">Block offload: <span class="status-line ${offload.enabled ? 'on' : ''}">${offload.enabled ? 'enabled' : 'disabled'}</span></p>
+            ${offload.enabled ? `<p class="note">Resident window: ${escapeHtml(formatSize(offload.windowBytes) || '0 KB')}<br>Restored on read: ${escapeHtml(String(offload.restored))} block(s)<br>Held on this volume: ${escapeHtml(formatSize(offload.residentBytes) || '0 KB')}<br>Room left: ${escapeHtml(formatSize(capacity.effectiveCapacityBytes) || 'unmeasured')} of archive budget, not of this disk</p>` : `<p class="note">Media block data stays on this relay's volume.</p>`}
+          </div>
+        </section>
 
-
+        <section class="card" id="classification">
+          <div class="card-head">
+            <h2>Content classification (TMDB)</h2>
+            <span class="status-badge ${tmdb.enabled ? 'ok' : ''}">${escapeHtml(tmdbState)}</span>
+          </div>
+          <p class="sub">Add a <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noreferrer">TMDB API key</a> to automatically identify archived movies and TV shows. Status: <span class="status-line ${tmdb.enabled ? 'on' : ''}">${escapeHtml(tmdbState)}</span>.</p>
+          <form method="post" action="/settings/tmdb">
+            <label>TMDB API key<input name="apiKey" type="password" placeholder="${tmdb.hasKey ? '•••••••• (set)' : 'Paste TMDB v3 API key'}"></label>
+            <label class="check"><input type="checkbox" name="enabled" value="true" ${tmdb.enabled ? 'checked' : ''}> Enable classification</label>
+            <button type="submit">Save TMDB settings</button>
+          </form>
+        </section>` : ''}
       </div>
 
       <div class="col">
@@ -496,9 +526,12 @@ export function renderArchiveWebHome(model = {}, options = {}) {
             <button type="submit">Archive and publish</button>
           </form>
         </section>` : ''}
-
-        ${shows('settings') ? `<section class="card" id="devices">
-          <h2>Authorized creator devices</h2>
+        ${shows('settings') ? `
+        <section class="card" id="devices">
+          <div class="card-head">
+            <h2>Authorized creator devices</h2>
+            <span class="status-badge ${link.seedPin?.enabled ? 'ok' : ''}">${link.seedPin?.enabled ? 'Pin enabled' : 'Pin disabled'}</span>
+          </div>
           <p class="sub">Authorize a creator's public device key for bounded catalog publication and seed retention. Secret keys and transport identifiers are never accepted.</p>
           <p class="note">Seed retention is ${link.seedPin?.enabled ? 'enabled' : 'disabled'}; ${Number(link.seedPin?.authorizedClients || 0)} client(s) authorized.</p>
           <form method="post" action="/clients" style="margin-top:14px">
@@ -508,26 +541,7 @@ export function renderArchiveWebHome(model = {}, options = {}) {
           </form>
           <ul style="margin-top:14px">${deviceRows}</ul>
           <p class="note">New authorizations take effect when the relay next starts.</p>
-        </section>
-
-        <section class="card">
-          <h2>Content classification (TMDB)</h2>
-          <p class="sub">Add a <a href="https://www.themoviedb.org/settings/api">TMDB API key</a> to automatically identify archived movies and TV shows. Status: <span class="status-line ${tmdb.enabled ? 'on' : ''}">${escapeHtml(tmdbState)}</span>.</p>
-          <form method="post" action="/settings/tmdb">
-            <label>TMDB API key<input name="apiKey" type="password" placeholder="${tmdb.hasKey ? '•••••••• (set)' : 'Paste TMDB v3 API key'}"></label>
-            <label class="check"><input type="checkbox" name="enabled" value="true" ${tmdb.enabled ? 'checked' : ''}> Enable classification</label>
-            <button type="submit">Save TMDB settings</button>
-          </form>
-        </section>
-        <section class="card">
-          <h2>S3 block store</h2>
-          <p class="sub">Read-only status. Configure S3 with Docker environment variables, then restart the relay.</p>
-          <p class="note">Status: <span class="status-line ${s3.configured ? 'on' : ''}">${s3.configured ? 'configured' : 'not configured'}</span></p>
-          ${s3.configured ? `<p class="note">Endpoint: ${escapeHtml(s3.endpoint)}<br>Bucket: ${escapeHtml(s3.bucket)}<br>Region: ${escapeHtml(s3.region)}<br>Prefix: ${escapeHtml(s3.prefix || '(none)')}</p>` : ''}
-          <p class="note">Block offload: <span class="status-line ${offload.enabled ? 'on' : ''}">${offload.enabled ? 'enabled' : 'disabled'}</span></p>
-          ${offload.enabled ? `<p class="note">Resident window: ${escapeHtml(formatSize(offload.windowBytes) || '0 KB')}<br>Restored on read: ${escapeHtml(String(offload.restored))} block(s)<br>Held on this volume: ${escapeHtml(formatSize(offload.residentBytes) || '0 KB')}<br>Room left: ${escapeHtml(formatSize(capacity.effectiveCapacityBytes) || 'unmeasured')} of archive budget, not of this disk</p>` : '<p class="note">Media block data stays on this relay\'s volume.</p>'}
         </section>` : ''}
-
       </div>
     </div>
   </main>

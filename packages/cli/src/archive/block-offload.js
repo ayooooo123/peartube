@@ -11,7 +11,8 @@ import { ASSET_BLOCK_SIZE } from '@peartube/backend/assets'
 import { isBlockPlaybackPinned } from '@peartube/backend/blob-range-priority'
 
 import { boundedIngestBytes } from '../storage-guard.js'
-
+import runtimeFetch from '#fetch'
+import process from '#process'
 // Relay-side wiring for block offload. The mechanism lives in the backend:
 //   * archive/block-offloader.js  puts a block in the bucket and drops the
 //     local copy once the bucket confirms it holds it,
@@ -71,7 +72,7 @@ function resolveWindowBytes (value) {
 export async function createRelayBlockOffload ({
   config,
   logger = null,
-  fetchImpl = globalThis.fetch,
+  fetchImpl = runtimeFetch || globalThis.fetch,
   createSigner = null
 } = {}) {
   const settings = config?.archive?.s3 || {}
@@ -127,7 +128,7 @@ export async function createRelayBlockOffload ({
   let openEviction = null
   const storeFor = (coreKey) => createRemoteBlockStore({ provider: objectStore, prefix, coreKey })
 
-  const rawConcurrency = Number(settings.uploadConcurrency || process.env.PEARTUBE_ARCHIVE_UPLOAD_CONCURRENCY || 16)
+  const rawConcurrency = Number(settings.uploadConcurrency || process?.env?.PEARTUBE_ARCHIVE_UPLOAD_CONCURRENCY || 16)
   const uploadConcurrency = Number.isSafeInteger(rawConcurrency) && rawConcurrency > 0 ? rawConcurrency : 16
 
   return {

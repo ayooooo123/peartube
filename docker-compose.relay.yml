@@ -34,23 +34,18 @@ services:
       # Optional but often required by YouTube bot checks. Mount a Netscape-format
       # cookies.txt file at this path before enabling the variable.
       # PEARTUBE_ARCHIVE_COOKIES_PATH: /var/lib/peartube-relay/youtube-cookies.txt
-      # Optional S3-compatible relay archive settings:
-      # PEARTUBE_ARCHIVE_S3_ENDPOINT: https://s3.example.com
-      # PEARTUBE_ARCHIVE_S3_BUCKET: peartube-relay
-      # PEARTUBE_ARCHIVE_S3_REGION: us-east-1
-      # PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID: your-access-key
-      # PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY: your-secret-key
-      # PEARTUBE_ARCHIVE_S3_PREFIX: peartube/
-      # PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE: "false"
-      # Block offload: move media block DATA to the bucket above and keep only
-      # the merkle tree and bitfield on disk, so this relay can archive titles
-      # larger than its volume. It keeps serving every block it advertises, but
-      # the bucket becomes load bearing for playback, so it is off by default.
-      # Requires endpoint, bucket and both credentials; a half-configured
-      # bucket refuses to start rather than quietly filling the volume.
-      # PEARTUBE_ARCHIVE_S3_OFFLOAD: "true"
-      # Un-offloaded block data kept on local disk. Default 2 GiB.
-      # PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES: "2147483648"
+      # S3-compatible relay archive and block offload settings (passed through from env):
+      PEARTUBE_ARCHIVE_S3_ENABLED:
+      PEARTUBE_ARCHIVE_S3_OFFLOAD:
+      PEARTUBE_ARCHIVE_S3_ENDPOINT:
+      PEARTUBE_ARCHIVE_S3_BUCKET:
+      PEARTUBE_ARCHIVE_S3_REGION:
+      PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID:
+      PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY:
+      PEARTUBE_ARCHIVE_S3_PREFIX:
+      PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE:
+      PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES:
+      PEARTUBE_ARCHIVE_UPLOAD_CONCURRENCY:
     volumes:
       - peartube-relay-data:/var/lib/peartube-relay
     command: ["ui", "--host", "0.0.0.0", "--port", "8174"]

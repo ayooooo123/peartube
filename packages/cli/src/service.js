@@ -222,7 +222,7 @@ async function buildRelayService({
   // in the bucket is still restored, verified and served. Off by default, and
   // when it is off nothing is wrapped and nothing is injected. Enabled with a
   // half-configured bucket throws here rather than downgrading to local-only.
-  const blockOffload = await createRelayBlockOffload({ config, logger })
+  const blockOffload = await createRelayBlockOffload({ config, logger, fetchImpl: tmdbFetch })
   if (blockOffload) {
     logger.relay?.info?.('S3 block offload enabled', {
       windowBytes: blockOffload.windowBytes,

@@ -948,11 +948,19 @@ export async function createArchiveConsole({
           itemPublicationIds.add(publicationId)
           const releaseJob = jobIndex.byPublicationId.get(publicationId) || null
           const releaseMirror = mirrors.get(publicationId)
+          const manifest = manifests.get(publicationId) || null
+          const sourceFileName = releaseJob?.sourceFileName ||
+            source?.sourceFileName ||
+            source?.fileName ||
+            source?.filename ||
+            (manifest?.body?.title && manifest.body.title !== item?.title ? manifest.body.title : null) ||
+            (releaseJob?.title && !releaseJob.title.startsWith('Acquisition ') && releaseJob.title !== item?.title ? releaseJob.title : null) ||
+            null
           releases.push({
             publicationId,
             renditionId: source.renditionId || null,
             sizeBytes: releaseBytes > 0 ? releaseBytes : null,
-            sourceFileName: releaseJob?.sourceFileName || null,
+            sourceFileName,
             acquisitionId: releaseJob?.id || null,
             availability: source.availability || null,
             mediaCoordinates: source.mediaCoordinates || null,
@@ -1067,13 +1075,17 @@ export async function createArchiveConsole({
     // catalog names. The acquisition's own context is the fallback for a
     // release published before coordinates rode along.
     const coordinates = release.mediaCoordinates || acquisition?.mediaContext || {}
+    const file = release.sourceFileName ||
+      acquisition?.sourceFileName ||
+      (acquisition?.title && !acquisition.title.startsWith('Acquisition ') && acquisition.title !== work.title ? acquisition.title : null) ||
+      null
     return {
       // A publication can carry more than one rendition, and each is its own
       // core with its own bytes. The row id has to tell them apart or the
       // drawer, the selection and the poll's row index would collapse them.
       id: release.renditionId ? `${release.publicationId}:${release.renditionId}` : release.publicationId,
       kind: 'release',
-      file: release.sourceFileName || null,
+      file,
       work: work.title || null,
       workEntityId: work.entityId || null,
       catalogued: true,
@@ -1101,7 +1113,7 @@ export async function createArchiveConsole({
     return {
       id: job.id,
       kind: 'acquisition',
-      file: job.sourceFileName || null,
+      file: job.sourceFileName || (job.title && !job.title.startsWith('Acquisition ') ? job.title : null),
       work: job.title && !job.title.startsWith('Acquisition ') ? job.title : null,
       workEntityId: null,
       coordinates: releaseCoordinateLabel(job.mediaContext || {}),

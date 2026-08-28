@@ -105,7 +105,7 @@ const COLUMN_SPAN = COLUMNS.length + 1
 // predates that field the row says so with its id: borrowing the work's title
 // would make two releases of one work read as the same file.
 function releaseName(row) {
-  return row.file || `Release ${shortIdentifier(row.id || '', 10)}`
+  return row.file || (row.work ? row.work : `Release ${shortIdentifier(row.id || '', 10)}`)
 }
 
 // Progress is this relay's own accepted bytes against the length the manifest
@@ -162,7 +162,7 @@ export function renderReleaseRow(row = {}) {
     : ''
   return `<tr data-id="${escapeHtml(row.id || '')}" data-acquisition="${escapeHtml(row.acquisitionId || '')}" data-name="${escapeHtml(name)}" data-backups="${escapeHtml(String(Math.max(0, Number(row.backups) || 0)))}">
   <td class="pick"><input type="checkbox" class="js-pick" aria-label="Select ${escapeHtml(name)}"></td>
-  <td class="file">${play}<button type="button" class="js-open link">${escapeHtml(name)}</button>${row.work || !row.coordinates ? '' : `<span class="coords">${escapeHtml(row.coordinates)}</span>`}</td>
+  <td class="file" title="${escapeHtml(name)}">${play}<button type="button" class="js-open link" title="${escapeHtml(name)}">${escapeHtml(name)}</button>${row.work || !row.coordinates ? '' : `<span class="coords">${escapeHtml(row.coordinates)}</span>`}</td>
   <td class="work">${row.work
     ? `${escapeHtml(row.work)}${row.workLabel ? `<span class="coords">${escapeHtml(row.workLabel)}</span>` : ''}`
     : '<span class="none" title="No publisher metadata named this work">—</span>'}</td>
@@ -306,14 +306,14 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
     tbody tr.sel { background: rgba(158,255,208,0.07); }
     td.pick, th.pick { width: 28px; }
     td.num, th.num { text-align: right; white-space: nowrap; }
-    td.file { max-width: 420px; }
+    td.file { max-width: 520px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; }
     .tag.res-local { color: var(--mint); border-color: rgba(158,255,208,0.3); }
     .tag.res-unproven, .tag.res-none { color: var(--muted); border-style: dashed; }
     .tag.res-partial, .tag.res-transferring { color: var(--amber); border-color: rgba(255,202,122,0.3); }
     .reach { font-variant-numeric: tabular-nums; }
     .uncatalogued { color: var(--amber); margin-left: 2px; }
     .coords { display: block; color: var(--muted); font-size: 11px; }
-    td.file .link { background: none; border: 0; color: var(--ink); font: inherit; cursor: pointer; padding: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; display: block; }
+    td.file .link { background: none; border: 0; color: var(--ink); font: inherit; cursor: pointer; padding: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; display: block; font-family: inherit; }
     td.file .link:hover { color: var(--mint); }
     td.file .play { float: right; margin-left: 8px; }
     td.work { color: var(--ink); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -473,6 +473,7 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
       drawer.innerHTML = '<button type="button" class="act" id="drawer-close">Close</button>' +
         '<h2>' + esc(name) + '</h2>' +
         '<dl>' +
+        fact('Release file', row.file) +
         fact('Work', row.work) +
         fact('Coordinates', row.coordinates) +
         fact('State', row.state) +

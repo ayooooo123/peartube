@@ -1,9 +1,8 @@
 import b4a from 'b4a'
 
-// Minimal GET-only fetch() for the Bare relay runtime, which has no global
-// fetch (so the TMDB classifier/discover client would otherwise silently
-// disable themselves and never classify anything). Returns just enough of the
-// WHATWG Response surface the callers touch — { ok, status, json(), text() }.
+// Minimal fetch() for the Bare relay runtime, which has no global fetch.
+// Supports GET, PUT, POST, DELETE, HEAD with headers, request bodies,
+// and WHATWG Response surface — { ok, status, headers, json(), text(), arrayBuffer() }.
 //
 // bare-https (and its bare-tls addon) is loaded LAZILY on first use, inside a
 // guard, and never at module-eval time. This is deliberate: this module is in
@@ -15,19 +14,30 @@ import b4a from 'b4a'
 const DEFAULT_TIMEOUT_MS = 8000
 
 let httpsPromise = null
-function loadHttps () {
-  if (!httpsPromise) {
-    httpsPromise = import('bare-https')
+let httpPromise = null
+
+function loadClient (isHttps) {
+  if (isHttps) {
+    if (!httpsPromise) {
+      httpsPromise = import('bare-https')
+        .then((mod) => mod?.default ?? mod)
+        .catch(() => null)
+    }
+    return httpsPromise
+  }
+  if (!httpPromise) {
+    httpPromise = import('bare-http1')
       .then((mod) => mod?.default ?? mod)
       .catch(() => null)
   }
-  return httpsPromise
+  return httpPromise
 }
-
-export default async function fetch (url, { signal, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
-  const https = await loadHttps()
-  if (!https || typeof https.request !== 'function') {
-    throw new Error('bare-https is unavailable in this runtime')
+export default async function fetch (url, { method = 'GET', headers = {}, body = null, signal, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  const targetUrl = typeof url === 'string' ? new URL(url) : url
+  const isHttps = targetUrl.protocol === 'https:'
+  const client = await loadClient(isHttps)
+  if (!client || typeof client.request !== 'function') {
+    throw new Error(`${isHttps ? 'bare-https' : 'bare-http1'} is unavailable in this runtime`)
   }
 
   return new Promise((resolve, reject) => {
@@ -54,17 +64,22 @@ export default async function fetch (url, { signal, timeoutMs = DEFAULT_TIMEOUT_
 
     let req
     try {
-      req = https.request(url, { method: 'GET' }, (res) => {
+      req = client.request(targetUrl, { method, headers }, (res) => {
         const chunks = []
         res.on('data', (chunk) => chunks.push(chunk))
         res.on('end', () => {
-          const text = b4a.toString(chunks.length === 1 ? chunks[0] : b4a.concat(chunks), 'utf8')
+          const raw = chunks.length === 1 ? chunks[0] : b4a.concat(chunks)
           const status = res.statusCode || 0
           finish(resolve, {
             ok: status >= 200 && status < 300,
             status,
-            async json () { return JSON.parse(text) },
-            async text () { return text }
+            headers: res.headers || {},
+            async arrayBuffer () {
+              const buf = b4a.isBuffer(raw) ? raw : b4a.from(raw)
+              return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+            },
+            async text () { return b4a.toString(raw, 'utf8') },
+            async json () { return JSON.parse(b4a.toString(raw, 'utf8')) }
           })
         })
         res.on('error', fail)
@@ -78,6 +93,12 @@ export default async function fetch (url, { signal, timeoutMs = DEFAULT_TIMEOUT_
     if (signal) {
       if (signal.aborted) return onAbort()
       signal.addEventListener?.('abort', onAbort, { once: true })
+    }
+
+    if (body) {
+      if (b4a.isBuffer(body) || typeof body === 'string' || body instanceof Uint8Array) {
+        req.write(body)
+      }
     }
     req.end()
   })

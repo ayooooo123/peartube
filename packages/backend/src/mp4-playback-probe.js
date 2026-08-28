@@ -15,7 +15,6 @@
  * read, never media payload. All probing is best-effort — any structural
  * surprise returns null rather than throwing.
  *
- * Spec: docs/superpowers/specs/2026-06-11-livestreaming-design.md (KeyframeIndexV1)
  */
 
 const MAX_TOP_LEVEL_BOXES = 256

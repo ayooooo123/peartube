@@ -1,8 +1,5 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 
 import {
   MEDIABUNNY_MOBILE_BRIDGE_PHASES,
@@ -10,8 +7,6 @@ import {
   selectPreferredMobileEncodingPlan,
 } from '../lib/mobile-media/native-codec-capabilities.mjs'
 
-const testDir = path.dirname(fileURLToPath(import.meta.url))
-const appDir = path.resolve(testDir, '..')
 
 test('normalizeNativeCodecCapabilities maps platform MIME names to Mediabunny codec ids', () => {
   const normalized = normalizeNativeCodecCapabilities({
@@ -55,19 +50,6 @@ test('selectPreferredMobileEncodingPlan falls back to remux-only when AAC or AVC
 
   assert.equal(plan.kind, 'mediabunny-remux-only')
   assert.equal(plan.usesNativeCodecBridge, false)
-})
-
-test('mobile media bridge plan keeps JSI zero-copy constraints explicit', async () => {
-  const planPath = path.join(appDir, 'docs/mobile-mediabunny-jsi-bridge.md')
-  const plan = await readFile(planPath, 'utf8')
-
-  assert.match(plan, /Software Mansion React Native Best Practices JSI skill/)
-  assert.match(plan, /zero-copy ArrayBuffer/i)
-  assert.match(plan, /jsi::MutableBuffer/)
-  assert.match(plan, /CallInvoker/)
-  assert.match(plan, /MediaCodec/)
-  assert.match(plan, /VideoToolbox|AVFoundation/)
-  assert.match(plan, /Mediabunny custom coders/)
 })
 
 test('bridge phases start with capability probe before native encode implementation', () => {

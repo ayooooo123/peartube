@@ -91,5 +91,5 @@ npm run desktop
 
 - [SETUP.md](./SETUP.md) for platform-specific setup.
 - [DEVELOPMENT.md](./DEVELOPMENT.md) for daily commands.
-- [DEV_STATUS.md](./DEV_STATUS.md) for current progress and known constraints.
+- [ARCHITECTURE.md](./ARCHITECTURE.md) for the live architecture overview.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) for the live architecture map.

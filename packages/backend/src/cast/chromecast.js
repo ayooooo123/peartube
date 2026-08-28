@@ -459,6 +459,9 @@ export class ChromecastDevice extends EventEmitter {
         images: options.thumbnail ? [{ url: options.thumbnail }] : []
       }
 
+      // HLS must cast as LIVE, and a LIVE payload must carry no `duration`:
+      // Chromecast treats "unbounded + fixed length" as contradictory and
+      // stalls at 56.48s. Level 4.2 and baseline profile are the hard ceilings.
       const isHlsContent = /mpegurl/i.test(contentType) || /\.m3u8(?:$|\?)/i.test(mediaUrl)
       const streamType = isHlsContent ? 'LIVE' : (options.streamType || 'BUFFERED')
 

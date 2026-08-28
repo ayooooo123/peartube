@@ -2,12 +2,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 APP_ID="${APP_ID:-com.peartube.app}"
 MAESTRO_BIN="${MAESTRO_BIN:-$HOME/.maestro/bin/maestro}"
 ADB_BIN="${ADB_BIN:-$(command -v adb)}"
 DEVICE_SERIAL="${DEVICE_SERIAL:-}"
-LAUNCH_FLOW_PATH="${LAUNCH_FLOW_PATH:-$ROOT_DIR/maestro/android-launch-only.yaml}"
-WAIT_HOME_FLOW_PATH="${WAIT_HOME_FLOW_PATH:-$ROOT_DIR/maestro/android-pip-open-from-feed-and-home.yaml}"
+LAUNCH_FLOW_PATH="${LAUNCH_FLOW_PATH:-$REPO_ROOT/.maestro/android-launch-only.yaml}"
+WAIT_HOME_FLOW_PATH="${WAIT_HOME_FLOW_PATH:-$REPO_ROOT/.maestro/android-pip-open-from-feed-and-home.yaml}"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/.artifacts/maestro-pip/$TIMESTAMP}"
 

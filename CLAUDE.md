@@ -112,7 +112,7 @@ This project uses the Holepunch stack:
 - **hyperswarm** - P2P networking and discovery
 - **corestore** - Storage management
 
-Mobile uses **react-native-bare-kit** for running native P2P code. Main desktop uses **Electrobun + embedded `pear-runtime`**. Do not add new `pear run` / `global.Pear.run` paths — upstream Pear CLI is removing `pear run`; see `docs/pear-runtime-evolution-readiness.md` for the current boundary.
+Mobile uses **react-native-bare-kit** for running native P2P code. Main desktop uses **Electrobun + embedded `pear-runtime`**. Do not add new `pear run` / `global.Pear.run` paths — upstream Pear CLI is removing `pear run`. Pear OTA/release automation is deliberately not wired.
 
 Native addon submodules:
 - **bare-ffmpeg** - FFmpeg decode engine (fork at `ayooooo123/bare-ffmpeg`, git submodule)

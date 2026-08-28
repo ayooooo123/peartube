@@ -12,7 +12,6 @@
  * unit-testable with a mock. The per-player policy itself lives in
  * playback-compat.mjs and is applied inside startCompatTranscode.
  *
- * See: docs/superpowers/plans/2026-06-11-retire-libmpv-cross-platform.md
  */
 
 const DEFAULT_READY_TIMEOUT_MS = 8000

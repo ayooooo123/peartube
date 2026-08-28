@@ -80,7 +80,7 @@ npm run desktop:start
 
 The desktop worker source is `packages/app/workers/desktop/index.ts`. `npm run desktop:build` compiles it, then packs it into `packages/app/desktop-build/build/workers/core/index.bundle` with native Bare addons offloaded beside the bundle. `npm run desktop:smoke --prefix packages/app` boots that packed worker through `pear-runtime` long enough to catch native addon load regressions.
 
-Do not use `pear run` for local desktop work. Pear OTA/release automation is not wired; see [docs/pear-runtime-evolution-readiness.md](./docs/pear-runtime-evolution-readiness.md).
+Do not use `pear run` for local desktop work. Pear OTA/release automation is not wired.
 
 ## Relay Setup
 

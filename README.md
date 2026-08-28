@@ -146,9 +146,11 @@ CI has separate workflows for fast tests, Android/mobile builds, Electrobun desk
 - [QUICKSTART.md](./QUICKSTART.md) - shortest fresh-clone runbook.
 - [SETUP.md](./SETUP.md) - platform-specific setup and troubleshooting.
 - [DEVELOPMENT.md](./DEVELOPMENT.md) - daily commands and generated-artifact workflow.
-- [DEV_STATUS.md](./DEV_STATUS.md) - current progress, CI coverage, and known constraints.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - live architecture overview.
-- [docs/pear-runtime-evolution-readiness.md](./docs/pear-runtime-evolution-readiness.md) - desktop runtime/OTA boundary.
+- [docs/diagrams/](./docs/diagrams/) - code-traced backend diagrams.
+
+Project history, design decisions, open correctness findings, and platform
+knowledge live on the PearTube page in the Obsidian vault, not in this tree.
 
 ## Storage
 

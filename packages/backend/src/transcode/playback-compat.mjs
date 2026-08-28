@@ -14,7 +14,6 @@
  * Codec/container lists are deliberately conservative (better to transcode than
  * to fail playback) and are intended to be tuned with on-device validation.
  *
- * See: docs/superpowers/plans/2026-06-11-retire-libmpv-cross-platform.md
  */
 
 // ─── Codec name normalization ───────────────────────────────────────────────

@@ -5,8 +5,7 @@ emulator, Electrobun desktop). Captures the running app as periodic screenshots,
 them to cheap vision "eyes" that return text; the reasoning agent fixes UI code without ever
 ingesting pixels. Maestro drives + gates mobile deterministically. **No CI is involved.**
 
-Spec: `docs/superpowers/specs/2026-08-04-app-visual-testing-cheap-eyes-design.md`
-Plan: `docs/superpowers/plans/2026-08-04-app-visual-testing-cheap-eyes.md`
+Design notes live on the PearTube page in the Obsidian vault.
 
 ## Prerequisites
 

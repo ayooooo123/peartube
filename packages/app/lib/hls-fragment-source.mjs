@@ -10,7 +10,6 @@
  * bookkeeping. These parsing helpers are dependency-free so they can be
  * unit-tested with node:test.
  *
- * See docs/superpowers/plans/2026-06-11-desktop-mse-audio-transcode-fallback.md
  */
 
 /** Resolve a (possibly relative) playlist/segment URI against a playlist URL. */

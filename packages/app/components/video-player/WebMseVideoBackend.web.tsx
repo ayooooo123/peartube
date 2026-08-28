@@ -18,7 +18,6 @@
  *    fMP4 fragments from the local HTTP server (an fMP4 HLS playlist on
  *    127.0.0.1). Selection is driven by MediaSource.isTypeSupported, not a
  *    hardcoded codec matrix.
- *    See docs/superpowers/plans/2026-06-11-desktop-mse-audio-transcode-fallback.md
  *
  * Only a sliding window is kept buffered (~60s ahead / ~30s behind) to stay
  * within WebKit's SourceBuffer memory quota.

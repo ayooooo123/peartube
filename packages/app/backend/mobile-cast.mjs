@@ -939,6 +939,9 @@ async function loadCastContext() {
       const requestedStartTime = Number.isFinite(r?.time) ? Math.max(0, Number(r.time)) : 0
       const isHlsCast = contentType === 'application/x-mpegURL' || contentType === 'application/vnd.apple.mpegurl'
       const hasKnownDuration = castDuration > 0
+      // A LIVE payload must never carry a positive `duration`. Chromecast reads
+      // "unbounded, but 82s long" as contradictory and stalls at 56.48s. HLS
+      // always casts LIVE, so it never gets one. See the PearTube vault page.
       const streamType = isHlsCast
         ? 'LIVE'
         : (hasKnownDuration ? 'BUFFERED' : 'LIVE')

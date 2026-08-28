@@ -13,7 +13,6 @@
  * JSON control blocks start with '{' (0x7b); media blocks start with a box
  * header whose bytes 4-8 are 'moof'/'ftyp', so the two are unambiguous.
  *
- * Spec: docs/superpowers/specs/2026-06-11-livestreaming-design.md
  */
 
 import b4a from 'b4a'

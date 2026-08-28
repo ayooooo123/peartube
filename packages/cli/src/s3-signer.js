@@ -1,7 +1,40 @@
-import { createHash, createHmac } from 'node:crypto'
+import b4a from 'b4a'
+import sodium from 'sodium-universal'
 
-function hash(value) { return createHash('sha256').update(value).digest('hex') }
-function hmac(key, value) { return createHmac('sha256', key).update(value).digest() }
+function sha256Bytes(value) {
+  const bytes = b4a.isBuffer(value) ? value : b4a.from(value)
+  const digest = b4a.allocUnsafe(sodium.crypto_hash_sha256_BYTES)
+  sodium.crypto_hash_sha256(digest, bytes)
+  return digest
+}
+
+function hash(value) {
+  return b4a.toString(sha256Bytes(value), 'hex')
+}
+
+function hmac(key, value) {
+  let k = b4a.isBuffer(key) ? key : b4a.from(key)
+  const msg = b4a.isBuffer(value) ? value : b4a.from(value)
+  const blockSize = 64
+  if (k.byteLength > blockSize) {
+    k = sha256Bytes(k)
+  }
+  const paddedKey = b4a.alloc(blockSize)
+  b4a.copy(k, paddedKey, 0)
+
+  const innerPad = b4a.alloc(blockSize)
+  const outerPad = b4a.alloc(blockSize)
+  for (let i = 0; i < blockSize; i++) {
+    innerPad[i] = paddedKey[i] ^ 0x36
+    outerPad[i] = paddedKey[i] ^ 0x5c
+  }
+
+  const innerMsg = b4a.concat([innerPad, msg])
+  const innerHash = sha256Bytes(innerMsg)
+  const outerMsg = b4a.concat([outerPad, innerHash])
+  return sha256Bytes(outerMsg)
+}
+
 function encode(value) { return encodeURIComponent(value).replace(/%2F/g, '/') }
 
 export function createS3Signer({ endpoint, bucket, forcePathStyle = false, region = 'us-east-1', accessKeyId, secretAccessKey, service = 's3', now = () => new Date() } = {}) {
@@ -27,7 +60,7 @@ export function createS3Signer({ endpoint, bucket, forcePathStyle = false, regio
     const credential = `${accessKeyId}/${scope}`
     const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${hash(canonical)}`
     const signingKey = hmac(hmac(hmac(hmac(`AWS4${secretAccessKey}`, shortDate), region), service), 'aws4_request')
-    const authorization = `AWS4-HMAC-SHA256 Credential=${credential}, SignedHeaders=${names}, Signature=${createHmac('sha256', signingKey).update(stringToSign).digest('hex')}`
+    const authorization = `AWS4-HMAC-SHA256 Credential=${credential}, SignedHeaders=${names}, Signature=${b4a.toString(hmac(signingKey, stringToSign), 'hex')}`
     return { url: url.toString(), headers: { ...signedHeaders, Authorization: authorization } }
   }
 }

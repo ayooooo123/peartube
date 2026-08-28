@@ -49,6 +49,7 @@ const TEST_FILES = [
   'service-universal.test.mjs',
   'trusted-clients.test.mjs',
   'relay-reseeding.test.mjs',
+  's3-signer.test.mjs',
   'network-cli.test.mjs',
   // Interactive `peartube add` CLI suites.
   'add-relay-client.test.mjs',

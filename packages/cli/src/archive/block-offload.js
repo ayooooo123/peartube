@@ -103,11 +103,6 @@ export async function createRelayBlockOffload ({
 
   let sign = createSigner
   if (typeof sign !== 'function') {
-    // The SigV4 signer is Node-only (node:crypto). Say so rather than letting a
-    // module resolution failure be the operator's first clue.
-    if (!globalThis.process?.versions?.node) {
-      throw new Error('archive.s3.offload is enabled but S3 request signing needs the Node runtime')
-    }
     const { createS3Signer } = await import('../s3-signer.js')
     sign = createS3Signer(settings)
   }

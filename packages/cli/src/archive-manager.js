@@ -3,7 +3,7 @@ import crypto from 'hypercore-crypto'
 import b4a from 'b4a'
 import sodium from 'sodium-universal'
 import { mkdirSync, rmSync, existsSync, readFileSync } from '#fs'
-import { join } from '#path'
+import { join, basename } from '#path'
 import {
   runYtDlp,
   parseReportedFilePath,
@@ -834,6 +834,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       videoId,
       signal,
       title,
+      sourceFileName,
       description,
       mimeType,
       category,
@@ -897,6 +898,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       const uploadOptions = {
         mediaMetadata: describeTmdbMedia({ tmdbYear, tmdbOverview, tmdbRuntime, tmdbGenres }),
         title,
+        sourceFileName: typeof sourceFileName === 'string' && sourceFileName ? sourceFileName : (filePath ? basename(filePath) : null),
         videoId,
         signal,
         retentionClass,

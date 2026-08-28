@@ -379,11 +379,14 @@ export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lo
 
   function describe (input, fileName) {
     return {
-      title: input.title || fileName.replace(/\.[^.]+$/, '') || 'Archived video',
+      title: input.title || fileName || 'Archived video',
+      sourceFileName: fileName,
+      fileName,
       description: input.description || '',
       duration: undefined,
       thumbnailUrl: null,
-      thumbnailFile: null,
+      tags: [],
+      creatorSourceId: input.creatorSourceId || null,
       creatorName: input.creatorName || null
     }
   }
@@ -416,6 +419,7 @@ export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lo
 
       return {
         filePath,
+        sourceFileName: opened.fileName,
         ...describe(input, opened.fileName),
         mimeType: mimeTypeFor(opened.contentType, filePath),
         releaseStorageReservation: opened.releaseReservation,
@@ -474,6 +478,7 @@ export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lo
         stream: chunks(),
         byteLength: Number.isFinite(declared) && declared > 0 ? Math.floor(declared) : 0,
         bytesStreamed: () => streamed,
+        sourceFileName: opened.fileName,
         ...describe(input, opened.fileName),
         mimeType: mimeTypeFor(opened.contentType, opened.fileName),
         releaseStorageReservation: opened.releaseReservation,

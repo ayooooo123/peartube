@@ -139,9 +139,12 @@ function localThumbnailPathForVideo(filePath, fs) {
 function metadataForLocalVideo(video, fs) {
   const info = readYtDlpInfo(video.filePath, fs)
   const thumbnailFile = localThumbnailPathForVideo(video.filePath, fs)
+  const rawFileName = basename(String(video.filePath || ''))
   if (!info) {
     return {
-      title: video.title,
+      title: video.title || rawFileName,
+      fileName: rawFileName,
+      sourceFileName: rawFileName,
       description: '',
       category: 'Local',
       tags: ['local'],
@@ -162,7 +165,9 @@ function metadataForLocalVideo(video, fs) {
   const category = normalizeText(categories[0] || info.category || 'YouTube', 80)
   const sourceIdentity = creatorSourceIdentityForInfo(info)
   return {
-    title: normalizeText(info.title, 200) || video.title,
+    title: normalizeText(info.title, 200) || video.title || rawFileName,
+    fileName: rawFileName,
+    sourceFileName: rawFileName,
     description: normalizeText(info.description || info.fulltitle || '', 5000),
     category,
     tags: uniqueTags(['youtube', 'yt-dlp', category, ...(info.uploader ? [info.uploader] : []), ...(info.channel ? [info.channel] : []), ...ytDlpTags]),
@@ -296,6 +301,7 @@ export async function mirrorLocalDriveToRelayChannel({
         channel: channelInfo.channel,
         filePath: video.filePath,
         title: localMetadata.title,
+        sourceFileName: localMetadata.sourceFileName || basename(video.filePath),
         description: localMetadata.description || description,
         mimeType: video.mimeType,
         category: localMetadata.category,

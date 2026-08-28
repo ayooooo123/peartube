@@ -1,6 +1,7 @@
 # PearTube Setup Guide
 
-This guide documents the current reproducible local setup. Start with [QUICKSTART.md](./QUICKSTART.md) if you only need the shortest path.
+This guide gets a machine from nothing to a running surface. For daily commands
+once you are set up, see [DEVELOPMENT.md](./DEVELOPMENT.md).
 
 ## Supported Toolchain
 
@@ -27,7 +28,8 @@ npm run install:all
 npm run schema:full
 ```
 
-`schema:full` regenerates JS HRPC/schema output under `packages/spec/spec/`.
+`schema:full` regenerates JS HRPC/schema output under `packages/spec/spec/`. See
+DEVELOPMENT.md for the full schema workflow and when to rerun it.
 
 ## Mobile Setup
 
@@ -97,6 +99,9 @@ Open the archive UI:
 open http://127.0.0.1:8174
 ```
 
+The compose file exposes the archive UI on that port and persists relay storage
+in the `peartube-relay-data` volume.
+
 Archive a source URL:
 
 ```bash
@@ -160,4 +165,4 @@ The app prebuild writes `android/local.properties` automatically. If you need to
 - `.github/workflows/build-relay.yml`: relay build coverage.
 - `.github/workflows/release-*.yml`: manually triggered or tag-based release artifact workflows.
 
-Last updated: 2026-06-26.
+Verify a change with `npm run lint:changed`, `npm run typecheck`, and `npm test`.

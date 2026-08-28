@@ -10,14 +10,16 @@ Keep backend-facing changes in that shared path unless a limitation is truly run
 
 ## Daily Setup
 
+First-time setup, platform toolchains, and troubleshooting live in
+[SETUP.md](./SETUP.md). Day to day you need:
+
 ```bash
 nvm use
-git submodule update --init --recursive
 npm run install:all
-npm run schema:full
 ```
 
-Run `npm run bundle:backend` after backend, schema, or mobile runtime changes that affect the BareKit bundle.
+Run `npm run bundle:backend` after backend, schema, or mobile runtime changes
+that affect the BareKit bundle.
 
 ## Root Commands
 
@@ -126,4 +128,4 @@ npm run desktop:smoke --prefix packages/app
 npm run build:android:apk
 ```
 
-Last updated: 2026-08-27.
+

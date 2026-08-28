@@ -59,91 +59,24 @@ Client shell
 | `packages/cli` | Relay CLI/container, authenticated provider machine API, archive UI, acquisition jobs, and local mirror support |
 | `packages/bare-*` | Vendored/native Bare runtime support, including `bare-ffmpeg` |
 
-## Prerequisites
-
-- Node.js from `.nvmrc` (`20.18.0`) or another supported version from `package.json` (`>=18 <23`).
-- Git submodules, currently `packages/bare-ffmpeg`.
-- iOS: Xcode, CocoaPods, and the iOS simulator/toolchain.
-- Android: Android Studio, Android SDK, and JDK 17.
-- Electrobun desktop: Bun and the Electrobun toolchain.
-- Relay/container workflows: Docker with Compose.
-
-## Fresh Clone
+## Getting Started
 
 ```bash
-git clone <repo-url>
-cd peartube
+git clone <repo-url> && cd peartube
 nvm use
 git submodule update --init --recursive
 npm run install:all
-npm run schema:full
-npm run bundle:backend
 ```
 
-`npm run install:all` is the repository install contract and is what CI uses. The repo currently uses plain npm installs across packages; the root `package-lock.json` is local/ignored, while `packages/app/package-lock.json` is tracked. Treat fully locked dependency installs as a separate policy decision.
+`npm run install:all` is the repository install contract and is what CI uses.
 
-## Run Locally
-
-```bash
-npm start                  # Expo dev server
-npm run ios                # iOS simulator
-npm run android            # Android emulator/device
-npm run desktop            # Build and launch Electrobun desktop
-npm run desktop:build      # Build Electrobun web/worker assets only
-npm run desktop:start      # Launch the built Electrobun app
-```
-
-## Relay
-
-Run the packaged relay container:
-
-```bash
-docker compose -f docker-compose.relay.yml up -d
-docker compose -f docker-compose.relay.yml exec relay /peartube-relay status --json
-```
-
-The default compose file exposes the archive UI at `http://127.0.0.1:8174` and persists relay storage in the `peartube-relay-data` volume.
-
-Archive a video from the container:
-
-```bash
-docker compose -f docker-compose.relay.yml exec relay \
-  /peartube-relay archive --url https://youtu.be/... --channel-name "Anonymous Archive" --run-now
-```
-
-Use `docker-compose.local-relay.yml` when you want the relay to mirror a local host directory into PearTube.
-
-## Generated Code
-
-`packages/spec/schema.cjs` is the HRPC schema source of truth. After changing the schema, run:
-
-```bash
-npm run schema:full
-npm test --prefix packages/spec
-```
-
-`schema:full` regenerates JS schema/HRPC output. Generated app-facing metadata lives at `packages/spec/spec/hrpc/app-rpc-adapter.mjs`.
-
-## Verification
-
-Use the narrowest command that covers the change:
-
-```bash
-npm run typecheck
-npm test
-npm run lint:changed
-npm test --prefix packages/backend
-npm test --prefix packages/host
-npm test --prefix packages/spec
-npm run desktop:build
-npm run desktop:smoke --prefix packages/app
-```
-
-CI has separate workflows for fast tests, Android/mobile builds, Electrobun desktop, relay builds, and release artifacts.
+From there, [SETUP.md](./SETUP.md) covers the iOS, Android, Electrobun desktop
+and relay toolchains plus troubleshooting, and [DEVELOPMENT.md](./DEVELOPMENT.md)
+covers the day-to-day commands, the schema workflow, and what to verify before
+handing off a change. Those two are the only places those instructions live.
 
 ## Development Docs
 
-- [QUICKSTART.md](./QUICKSTART.md) - shortest fresh-clone runbook.
 - [SETUP.md](./SETUP.md) - platform-specific setup and troubleshooting.
 - [DEVELOPMENT.md](./DEVELOPMENT.md) - daily commands and generated-artifact workflow.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - live architecture overview.

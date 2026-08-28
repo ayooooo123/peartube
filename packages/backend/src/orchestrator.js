@@ -183,6 +183,42 @@ function createStorageUsageMeasurer(storagePath) {
 }
 
 
+
+// The provider's policy seam speaks `getPolicy`/`setPolicy(next, {expectedRevision})`;
+// the node's own policy surface speaks `getNetworkPolicy`/`setNetworkPolicy`.
+// This adapter is the translation, and nothing more: it invents no policy of its
+// own and refuses a write whose expected revision does not match the one it
+// handed out. The revision counts writes since boot, because the network policy
+// store keeps no revision of its own - a caller that reads, then writes, is
+// still protected against a racing write it never saw.
+export function createProviderPolicyAdapter(policyApi) {
+  if (typeof policyApi?.getNetworkPolicy !== 'function' || typeof policyApi?.setNetworkPolicy !== 'function') return null
+  let revision = 0
+  function unwrap(result, fallback) {
+    if (result?.success === true) return result.policy
+    const error = new Error(result?.error || fallback)
+    error.code = result?.errorCode || 'INVALID_POLICY'
+    if (result?.unsupportedField) error.field = result.unsupportedField
+    throw error
+  }
+  return Object.freeze({
+    getRevision: () => revision,
+    async getPolicy() {
+      return unwrap(await policyApi.getNetworkPolicy(), 'Network policy is unavailable')
+    },
+    async setPolicy(next, { expectedRevision } = {}) {
+      if (expectedRevision !== revision) {
+        const error = new Error('Network policy revision changed')
+        error.code = 'POLICY_REVISION_CONFLICT'
+        throw error
+      }
+      const policy = unwrap(await policyApi.setNetworkPolicy(next), 'Network policy was rejected')
+      revision++
+      return policy
+    },
+  })
+}
+
 function isContextShuttingDown(ctx) {
   return Boolean(ctx && (ctx.isShuttingDown || ctx._isShutdown))
 }
@@ -1151,7 +1187,11 @@ export async function createBackendContext(config) {
     indexVerificationRuntime,
     uploadManager,
     mediaApi: baseApi,
-    policy: config.provider?.policy || null,
+    // `/api/v2/policy` answers the network participation policy, which the node
+    // already owns through `policyApi`. Without this seam the provider had no
+    // policy adapter at all and every read or write failed `POLICY_UNAVAILABLE`,
+    // so an operator could see the relay's transfers but never its posture.
+    policy: config.provider?.policy || createProviderPolicyAdapter(policyApi),
     config: config.provider || {},
   })
   ctx.providerService = providerSubsystem.service

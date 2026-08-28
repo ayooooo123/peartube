@@ -461,3 +461,66 @@ test('with no window configured the wrapper evicts nothing and asks nothing', as
 
   await core.close()
 })
+
+// Offload exists so a title larger than the volume can still be served. It is
+// not for the cores a node keeps its own bookkeeping in: those are small, they
+// are read constantly, and putting their blocks in a bucket makes every read of
+// the node's own state depend on someone else's uptime. A core the operator
+// keeps local is never swept - and, because it still resolves a store, whatever
+// was already evicted stays readable and comes home.
+test('a core held back from eviction keeps its blocks and still restores the ones already gone', async (t) => {
+  const bucket = createBucket()
+  const directory = mkdtempSync(join(tmpdir(), 'peartube-keep-local-'))
+  t.teardown(() => rmSync(directory, { recursive: true, force: true }))
+
+  const keepLocal = new Set()
+  const raw = Hypercore.defaultStorage(directory)
+  const storage = createOffloadStorage({
+    storage: raw,
+    resolveStore: (identity) => (typeof identity.keyHex === 'string' ? storeFor(bucket, identity.keyHex) : null),
+    eviction: {
+      windowBytes: WINDOW_BYTES,
+      sweepEveryReads: 1,
+      isEvictable: ({ keyHex }) => !keepLocal.has(keyHex),
+    },
+  })
+  const store = new Corestore(storage)
+  await store.ready()
+  t.teardown(() => store.close().catch(() => {}))
+
+  // The node's own bookkeeping core. It is registered by the core's own key,
+  // which a name-derived keypair does not match, and evictability is read per
+  // sweep so registering after open still holds every sweep back.
+  const meta = store.get({ name: 'peartube-meta' })
+  await meta.ready()
+  keepLocal.add(b4a.toString(meta.key, 'hex'))
+  const media = store.get({ name: 'media' })
+  await media.ready()
+  for (const block of blocksOf(BLOCK_COUNT)) {
+    await meta.append(block)
+    await media.append(block)
+  }
+
+  async function residency (core) {
+    const view = await raw.resumeCore(b4a.from(core.discoveryKey))
+    let bytes = 0
+    for await (const block of view.createBlockStream()) bytes += block.value.byteLength
+    return bytes
+  }
+
+  await storage.offloadSweep()
+
+  t.is(await residency(meta), BLOCK_COUNT * BLOCK_SIZE, 'every block of the bookkeeping core is still on disk')
+  t.is(await residency(media), WINDOW_BYTES, 'while the media core is trimmed to its window')
+  t.is(bucket.objects.size, BLOCK_COUNT - WINDOW_BLOCKS, 'and only the media blocks were uploaded')
+
+  // Holding a core local never strands what the bucket already took: the media
+  // core's evicted blocks are still served, because a keep-local core is held
+  // back from eviction rather than refused a store.
+  t.alike(await readAll(media, BLOCK_COUNT), blocksOf(BLOCK_COUNT), 'the offloaded media blocks are still restored on read')
+  t.alike(await readAll(meta, BLOCK_COUNT), blocksOf(BLOCK_COUNT), 'and the bookkeeping core reads straight off the volume')
+
+  // A second sweep changes nothing for the held-back core.
+  await storage.offloadSweep()
+  t.is(await residency(meta), BLOCK_COUNT * BLOCK_SIZE, 'a later sweep still leaves it whole')
+})

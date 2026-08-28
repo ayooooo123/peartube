@@ -129,6 +129,7 @@ export function createProviderApi({
     'getAcquisition',
     'listAcquisitions',
     'cancelAcquisition',
+    'forgetAcquisition',
     'getPublication',
     'openStream',
     'getStatus',
@@ -233,6 +234,13 @@ export function createProviderApi({
       : { success: false, acquisitions: [], error: response.error }),
     cancelAcquisition: request => wrap(
       () => providerService.cancelAcquisition({
+        acquisitionId: request?.acquisitionId,
+        principal: principal(principalId, ZERO_PUBLISHER_ID),
+      }),
+      'acquisition',
+    ),
+    forgetAcquisition: request => wrap(
+      () => providerService.forgetAcquisition({
         acquisitionId: request?.acquisitionId,
         principal: principal(principalId, ZERO_PUBLISHER_ID),
       }),

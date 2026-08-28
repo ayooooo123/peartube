@@ -33,7 +33,16 @@ test('acquisition request and job contracts are exact and reject source secrets'
   t.exception(() => normalizeAcquisitionRequest(request({ resolutionRef: 'https://private.invalid' })), /ACQUISITION_SECRET_REJECTED/)
   t.exception(() => normalizeAcquisitionRequest({ ...request(), expected: { byteLength: 8, sha256: '0'.repeat(64) } }), /unknown field expected/)
   const job = normalizeAcquisitionJob({ schemaVersion: 1, acquisitionId: 'acq_test', state: 'queued', retentionClass: 'archive-pin', bytesAcquired: 0, expectedBytes: 8, publicationId: null, manifestId: null, renditionId: null, assetId: null, errorCode: null, recoverable: false, createdAt: NOW, updatedAt: NOW })
-  t.alike(Object.keys(job), ['schemaVersion', 'acquisitionId', 'state', 'retentionClass', 'bytesAcquired', 'expectedBytes', 'publicationId', 'manifestId', 'renditionId', 'assetId', 'errorCode', 'recoverable', 'createdAt', 'updatedAt'])
+  t.alike(Object.keys(job), ['schemaVersion', 'acquisitionId', 'state', 'retentionClass', 'title', 'sourceFileName', 'mediaContext', 'bytesAcquired', 'expectedBytes', 'publicationId', 'manifestId', 'renditionId', 'assetId', 'errorCode', 'recoverable', 'createdAt', 'updatedAt'])
+  t.is(job.title, null, 'a job with no publisher metadata names no work')
+  t.is(job.mediaContext, null)
+  const release = normalizeAcquisitionJob({ ...job, title: 'FUBAR', sourceFileName: 'Fubar.S02E07.2160p.mkv' })
+  t.is(release.sourceFileName, 'Fubar.S02E07.2160p.mkv', 'the name the source gave the file survives projection')
+  t.exception(() => normalizeAcquisitionJob({ ...job, sourceFileName: '/private/spool/Fubar.mkv' }), /sourceFileName is invalid/)
+  const named = normalizeAcquisitionJob({ ...job, title: 'Eagle Eye', mediaContext: { kind: 'movie', identifier: '13027', releaseYear: 2008 } })
+  t.alike(named.mediaContext, { kind: 'movie', identifier: '13027', releaseYear: 2008 }, 'whitelisted coordinates survive projection')
+  t.exception(() => normalizeAcquisitionJob({ ...job, mediaContext: { sourceUrl: 'https://private.invalid/title' } }), /prohibited field|not permitted/)
+  t.exception(() => normalizeAcquisitionJob({ ...job, mediaContext: { kind: -1 } }), /mediaContext.kind is invalid/)
   t.exception(() => normalizeAcquisitionJob({ ...job, sourceToken: 'secret-secret-secret' }), /prohibited field|unknown field/)
 })
 
@@ -195,4 +204,108 @@ test('legacy migration copies only public state and is atomic and idempotent', a
   t.alike(await migrateLegacyIngest({ legacyStore: legacy, acquisitionStore: store, legacyPrincipalId: 'local-user', legacyPublisherId: 'publisher-1', now: () => NOW }), { migrated: 1, skipped: 0 })
   const migrated = await store.get('ing_legacy'); t.is(migrated.state, 'failed'); t.is(migrated.errorCode, 'LEGACY_SOURCE_GRANT_REQUIRED'); t.absent(JSON.stringify(migrated).includes('must-not-migrate'))
   t.alike(await migrateLegacyIngest({ legacyStore: legacy, acquisitionStore: store, legacyPrincipalId: 'local-user', legacyPublisherId: 'publisher-1', now: () => NOW }), { migrated: 0, skipped: 1 })
+})
+
+test('legacy migration carries the work identity and backfills a relay that already migrated', async t => {
+  const store = createAcquisitionStore({ bee: fakeBee(), now: () => NOW })
+  const bare = { jobId: 'ing_episode', state: 'completed', retentionClass: 'contribution-cache', bytesReceived: 8, expectedBytes: 8, createdAt: NOW - 10, updatedAt: NOW, publicationId: 'pub-1', manifestId: 'man-1', renditionId: 'ren-1', assetId: 'asset-1' }
+  // The retired ingest wrote coordinates under archive-manager names and kept
+  // the spool path, so the migration must map one and basename the other.
+  const named = { ...bare, title: 'FUBAR', fileName: '/spool/uploads/Fubar.S02E07.2160p.mkv', mediaContext: { contentKind: 'episode', mediaProvider: 'tmdb', mediaId: '221300', seasonNumber: 2, episodeNumber: 7, sourceUrl: 'https://private.invalid/e7' } }
+
+  t.alike(await migrateLegacyIngest({ legacyStore: { async listJobs () { return [bare] } }, acquisitionStore: store, legacyPrincipalId: 'local-user', legacyPublisherId: 'publisher-1', now: () => NOW }), { migrated: 1, skipped: 0 })
+  t.is((await store.get('ing_episode')).publicationMetadata, null, 'a legacy record with no metadata names no work')
+
+  t.alike(await migrateLegacyIngest({ legacyStore: { async listJobs () { return [named] } }, acquisitionStore: store, legacyPrincipalId: 'local-user', legacyPublisherId: 'publisher-1', now: () => NOW }), { migrated: 0, skipped: 1 })
+  const backfilled = await store.get('ing_episode')
+  t.is(backfilled.publicationMetadata.title, 'FUBAR', 'an already-migrated job gains the name of its work')
+  t.is(backfilled.publicationMetadata.sourceFileName, 'Fubar.S02E07.2160p.mkv', 'the source file name is kept, its spool path is not')
+  t.alike(backfilled.publicationMetadata.mediaContext, { kind: 'episode', namespace: 'tmdb', identifier: '221300', season: 2, episode: 7 })
+  t.absent(JSON.stringify(backfilled).includes('private.invalid'), 'source material never rides in on the backfill')
+  t.is(backfilled.state, 'completed', 'the backfill changes nothing but the work identity')
+})
+
+// Clearing a dead attempt is a durable delete an operator asked for. It has to
+// take the whole record with it: a surviving idempotency index would point at a
+// job that no longer exists, and the next replay of that request would read the
+// store as corrupt.
+test('forget removes a finished record, its events and its idempotency index', async t => {
+  const store = createAcquisitionStore({ bee: fakeBee(), now: () => NOW })
+  const initial = durableJob()
+  await store.createOrReplay({ idempotencyDigest: initial.idempotencyDigest, requestFingerprint: initial.requestFingerprint, job: initial })
+  const running = (await store.transition(initial.acquisitionId, { expectedVersion: 0, from: 'queued', to: 'acquiring' })).job
+
+  await t.exception(store.forget(running.acquisitionId), /ACQUISITION_JOB_ACTIVE/)
+  t.ok(await store.get(running.acquisitionId), 'a job still running is never deleted')
+
+  const failed = (await store.transition(running.acquisitionId, { expectedVersion: running.version, from: 'acquiring', to: 'failed', patch: { errorCode: 'SOURCE_TIMEOUT', recoverable: true } })).job
+  t.alike(await store.forget(failed.acquisitionId), { forgotten: true, state: 'failed' })
+  t.is(await store.get(failed.acquisitionId), null, 'the record is gone')
+  t.alike(await store.listEvents(failed.acquisitionId), [], 'and so is its history')
+  t.is((await store.countByState()).failed, 0, 'the state counters follow the delete')
+  t.is(await store.findByIdempotency(initial.idempotencyDigest), null, 'the idempotency index no longer names a missing job')
+
+  t.alike(await store.forget(failed.acquisitionId), { forgotten: false, state: null }, 'clearing twice is not an error')
+
+  // The same request may be submitted again once its record is cleared.
+  t.ok((await store.createOrReplay({ idempotencyDigest: initial.idempotencyDigest, requestFingerprint: initial.requestFingerprint, job: initial })).created)
+})
+
+// Adapter gating is a two-step flow, and it is easy to misread. A request names
+// a resolution, not an adapter, so admission at request time carries none. The
+// adapter identity exists only once a source grant is attached or a resolution
+// is dispatched, and both of those re-admit with it. What keeps the gate honest
+// is that an open policy with no allowlisted adapter admits nothing at all.
+test('an acquisition adapter is allowlisted where the adapter is actually known', async t => {
+  const runtime = createAcquisitionPolicyRuntime({ now: () => NOW })
+  await runtime.setPolicy(openPolicy({ allowedAdapterIds: ['granted-source'] }), { consent: true })
+  const admission = { request: request(), principal: PRINCIPAL }
+
+  t.ok(await runtime.admit({ ...admission, adapterId: null }), 'a request that has not chosen an adapter is admitted')
+  t.ok(await runtime.admit({ ...admission, adapterId: 'granted-source' }), 'and the grant that names an allowlisted adapter is admitted')
+  await t.exception(
+    runtime.admit({ ...admission, adapterId: 'somebody-elses-adapter' }),
+    /ACQUISITION_ADAPTER_DENIED/,
+    'a grant naming an adapter the operator never allowlisted is refused'
+  )
+
+  const closed = createAcquisitionPolicyRuntime({ now: () => NOW })
+  await closed.setPolicy(openPolicy({ allowedAdapterIds: [] }), { consent: true })
+  await t.exception(
+    closed.admit({ ...admission, adapterId: null }),
+    /ACQUISITION_ADAPTER_DENIED/,
+    'an open policy that allowlists no adapter admits nothing, so an unnamed adapter is never a way in'
+  )
+})
+
+// Clearing one finished record must not touch its neighbours. The keys share a
+// prefix and the event rows are deleted by range, so a scoping mistake here
+// would quietly empty an operator's whole job history.
+test('forget removes exactly one record and leaves every other job intact', async t => {
+  const bee = fakeBee()
+  const store = createAcquisitionStore({ bee, now: () => NOW })
+  const ids = ['ing_a', 'ing_b', 'ing_c', 'ing_d']
+  for (const acquisitionId of ids) {
+    const job = durableJob({ acquisitionId, idempotencyDigest: acquisitionId.padEnd(64, '0'), requestFingerprint: acquisitionId.padEnd(64, 'f') })
+    await store.createOrReplay({ idempotencyDigest: job.idempotencyDigest, requestFingerprint: job.requestFingerprint, job })
+    const running = (await store.transition(acquisitionId, { expectedVersion: 0, from: 'queued', to: 'acquiring' })).job
+    await store.transition(acquisitionId, { expectedVersion: running.version, from: 'acquiring', to: 'failed', patch: { errorCode: 'SOURCE_TIMEOUT', recoverable: true } })
+  }
+  t.is((await store.countByState()).failed, 4)
+
+  t.alike(await store.forget('ing_b'), { forgotten: true, state: 'failed' })
+
+  t.is(await store.get('ing_b'), null)
+  for (const survivor of ['ing_a', 'ing_c', 'ing_d']) {
+    t.ok(await store.get(survivor), `${survivor} survives its neighbour being cleared`)
+    t.ok((await store.listEvents(survivor)).length > 0, `${survivor} keeps its history`)
+  }
+  t.is((await store.countByState()).failed, 3, 'the counter drops by exactly one')
+
+  // A fresh store over the same storage sees the same thing, so the delete was
+  // scoped on disk and not just in the counters this process happened to hold.
+  const reopened = createAcquisitionStore({ bee, now: () => NOW })
+  t.is((await reopened.countByState()).failed, 3)
+  t.is(await reopened.get('ing_b'), null)
+  t.ok(await reopened.get('ing_c'))
 })

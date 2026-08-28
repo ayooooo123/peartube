@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "allow"
+  },
+  "plugins": [],
+  "rules": {
+    "complexity": [
+      "warn",
+      {
+        "max": 20,
+        "variant": "classic"
+      }
+    ]
+  },
+  "ignorePatterns": [
+    "build/**",
+    "node_modules/**",
+    "packages/spec/spec/**",
+    "packages/backend/src/**/hyperschema/**",
+    "packages/backend/src/**/hyperdb/**",
+    "packages/bare-ffmpeg/examples/**",
+    "packages/app/workers/desktop/index.ts"
+  ]
+}

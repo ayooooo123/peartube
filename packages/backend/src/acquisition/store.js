@@ -10,6 +10,7 @@ import {
   assertNoPrivateSourceMaterial,
   normalizeAcquisitionRequest,
   normalizePrincipalId,
+  PUBLICATION_MEDIA_FIELDS,
   projectAcquisitionJob
 } from './contract.js'
 
@@ -83,7 +84,6 @@ function normalizePublication (input) {
   assertNoPrivateSourceMaterial(result, 'publication result')
   return result
 }
-const PUBLICATION_MEDIA_FIELDS = new Set(['kind', 'namespace', 'identifier', 'title', 'season', 'episode', 'releaseYear', 'workEntityId'])
 function plainObject (value) { return Boolean(value) && typeof value === 'object' && !Array.isArray(value) }
 function boundedMetadataValue (value) {
   if (typeof value === 'string') return Boolean(value) && b4a.byteLength(value) <= 512
@@ -93,11 +93,15 @@ function boundedMetadataValue (value) {
 
 function normalizePublicationMetadata (input) {
   if (input == null) return null
-  if (!plainObject(input) || Object.keys(input).some(key => key !== 'title' && key !== 'mediaContext')) {
+  if (!plainObject(input) || Object.keys(input).some(key => key !== 'title' && key !== 'sourceFileName' && key !== 'mediaContext')) {
     fail('ACQUISITION_PERSISTENCE_INVALID', 'publication metadata is invalid', 500)
   }
-  if (input.title !== null && !boundedMetadataValue(input.title)) {
+  if (input.title !== null && input.title !== undefined && !boundedMetadataValue(input.title)) {
     fail('ACQUISITION_PERSISTENCE_INVALID', 'publication title is invalid', 500)
+  }
+  if (input.sourceFileName !== null && input.sourceFileName !== undefined &&
+      (typeof input.sourceFileName !== 'string' || !/^[^/\\]{1,255}$/.test(input.sourceFileName))) {
+    fail('ACQUISITION_PERSISTENCE_INVALID', 'publication source file name is invalid', 500)
   }
   if (input.mediaContext !== null) {
     if (!plainObject(input.mediaContext) || Object.keys(input.mediaContext).some(key => !PUBLICATION_MEDIA_FIELDS.has(key))) {
@@ -117,6 +121,22 @@ function normalizeRequesterPublisherIds (input) {
     fail('ACQUISITION_PERSISTENCE_INVALID', 'requester publisher scope is not canonical', 500)
   }
   return values
+}
+
+// A backfill fills gaps and overwrites nothing: a job that already names its
+// work keeps that name, and only the fields it is missing are added. Returns
+// null when there is nothing to add, so the caller writes no operation.
+function mergedPublicationMetadata (existing, incoming) {
+  if (incoming == null) return null
+  if (existing == null) return incoming
+  const merged = { ...existing }
+  let changed = false
+  for (const field of ['title', 'sourceFileName', 'mediaContext']) {
+    if (merged[field] != null || incoming[field] == null) continue
+    merged[field] = incoming[field]
+    changed = true
+  }
+  return changed ? merged : null
 }
 function normalizePatch (patch, current) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) fail('ACQUISITION_PERSISTENCE_INVALID', 'job patch is invalid', 500)
@@ -337,16 +357,52 @@ export function createAcquisitionStore ({ bee, now = () => Date.now() } = {}) {
       for await (const entry of bee.createReadStream({ gte: ACTIVE_PREFIX, lt: `${ACTIVE_PREFIX}\uffff` })) { const pointer = decode(entry.value); const job = await readUnserialized(jobKey(pointer?.acquisitionId)); if (!job || TERMINAL.has(job.state)) fail('ACQUISITION_PERSISTENCE_CORRUPT', 'active index is corrupt', 500); jobs.push(clone(validateDurableJob(job))) }
       return jobs
     },
+    // Remove a finished acquisition and everything keyed to it. An operator
+    // clearing a dead attempt means the row, its event log and its idempotency
+    // index: leaving the index behind would make `findByIdempotency` read a
+    // record whose job is gone and fail the whole store as corrupt. A job that
+    // has not finished is refused rather than silently deleted out from under
+    // the worker still writing to it.
+    forget (acquisitionId) {
+      return serialized(async () => {
+        await ensureStateCounts()
+        const key = jobKey(id(acquisitionId, 'acquisitionId'))
+        const current = await readUnserialized(key)
+        if (!current) return { forgotten: false, state: null }
+        if (!TERMINAL.has(current.state)) fail('ACQUISITION_JOB_ACTIVE', 'only a finished acquisition can be forgotten', 409)
+        const operations = [['del', key], ['del', activeKey(current.acquisitionId)]]
+        if (current.idempotencyDigest) operations.push(['del', idempotencyKey(current.idempotencyDigest)])
+        const prefix = `${EVENT_PREFIX}${current.acquisitionId}/`
+        for await (const entry of bee.createReadStream({ gte: prefix, lt: `${prefix}\uffff` })) operations.push(['del', entry.key])
+        await atomic(operations)
+        stateCounts[current.state]--
+        return { forgotten: true, state: current.state }
+      })
+    },
     async listEvents (acquisitionId) { await writes; const prefix = `${EVENT_PREFIX}${id(acquisitionId, 'acquisitionId')}/`; const events = []; for await (const entry of bee.createReadStream({ gte: prefix, lt: `${prefix}\uffff` })) events.push(decode(entry.value)); return events },
     importLegacyPublicJobs (jobs, markerId) {
       return serialized(async () => {
         await ensureStateCounts()
         if (typeof markerId !== 'string' || !MIGRATION_MARKER.test(markerId)) fail('ACQUISITION_PERSISTENCE_INVALID', 'migration marker is invalid', 500)
         const markerKey = `${LEGACY_MARKER_PREFIX}${markerId}`
-        if (await readUnserialized(markerKey)) return { migrated: 0, skipped: jobs.length }
+        // A relay that already migrated still gets the work identity written
+        // onto its imported jobs. The alternative is an inventory that can only
+        // ever name the machine ids of everything it holds.
+        const alreadyMigrated = Boolean(await readUnserialized(markerKey))
         const operations = []; const insertedStates = []; let migrated = 0; let skipped = 0
         for (const input of jobs) {
-          if (await readUnserialized(jobKey(input.acquisitionId))) {
+          const existing = await readUnserialized(jobKey(input.acquisitionId))
+          if (existing) {
+            skipped++
+            const merged = mergedPublicationMetadata(existing.publicationMetadata, input.publicationMetadata)
+            if (merged) {
+              const named = { ...existing, publicationMetadata: merged }
+              validateDurableJob(named)
+              operations.push(['put', jobKey(input.acquisitionId), named])
+            }
+            continue
+          }
+          if (alreadyMigrated) {
             skipped++
             continue
           }
@@ -357,7 +413,10 @@ export function createAcquisitionStore ({ bee, now = () => Date.now() } = {}) {
           insertedStates.push(input.state)
           migrated++
         }
-        operations.push(['put', markerKey, { schemaVersion: 1, migrated, skipped, migratedAt: timestamp() }]); await atomic(operations); for (const state of insertedStates) moveStateCount(null, state); return { migrated, skipped }
+        if (!alreadyMigrated) operations.push(['put', markerKey, { schemaVersion: 1, migrated, skipped, migratedAt: timestamp() }])
+        if (operations.length > 0) await atomic(operations)
+        for (const state of insertedStates) moveStateCount(null, state)
+        return { migrated, skipped }
       })
     },
     async close () { await writes }
@@ -386,6 +445,59 @@ function legacyPublication (job) {
   if (![source.publicationId, source.manifestId, source.renditionId, source.assetId].every(value => typeof value === 'string' && ID.test(value))) return null
   return { publicationId: source.publicationId, manifestId: source.manifestId, renditionId: source.renditionId, assetId: source.assetId }
 }
+// A migrated job keeps the name of the work it was fetching and the name the
+// source gave its file. Dropping them made every imported row read
+// `Acquisition <id>`, which is the one thing an inventory surface must never
+// do. The retired ingest wrote these under two shapes — the request's selector
+// and the archive manager's coordinates — so both are mapped onto the one
+// whitelist rather than guessed at read time.
+const LEGACY_MEDIA_ALIASES = new Map([
+  ['kind', 'kind'],
+  ['contentKind', 'kind'],
+  ['namespace', 'namespace'],
+  ['mediaProvider', 'namespace'],
+  ['identifier', 'identifier'],
+  ['seriesIdentifier', 'identifier'],
+  ['mediaId', 'identifier'],
+  ['title', 'title'],
+  ['season', 'season'],
+  ['seasonNumber', 'season'],
+  ['episode', 'episode'],
+  ['episodeNumber', 'episode'],
+  ['releaseYear', 'releaseYear'],
+  ['workEntityId', 'workEntityId']
+])
+
+function legacyFileName (value) {
+  if (typeof value !== 'string') return null
+  const name = value.split(/[/\\]/).pop().trim()
+  return name && name.length <= 255 ? name : null
+}
+
+function legacyMediaContext (job, request) {
+  const context = {}
+  for (const candidate of [request.mediaContext, job?.mediaContext, job?.mediaCoordinates]) {
+    if (!plainObject(candidate)) continue
+    for (const [key, value] of Object.entries(candidate)) {
+      const field = LEGACY_MEDIA_ALIASES.get(key)
+      if (!field || context[field] !== undefined || !boundedMetadataValue(value)) continue
+      context[field] = value
+    }
+  }
+  return Object.keys(context).length > 0 ? context : null
+}
+
+function legacyPublicationMetadata (job) {
+  const request = plainObject(job?.request) ? job.request : {}
+  const title = [job?.title, request.title].find(value => boundedMetadataValue(value) && typeof value === 'string') ?? null
+  const sourceFileName = [job?.sourceFileName, job?.fileName, job?.filename, request.sourceFileName, request.fileName]
+    .map(legacyFileName)
+    .find(Boolean) ?? null
+  const mediaContext = legacyMediaContext(job, request)
+  return title === null && sourceFileName === null && mediaContext === null
+    ? null
+    : { title, sourceFileName, mediaContext }
+}
 export async function migrateLegacyIngest ({ legacyStore, acquisitionStore, legacyPrincipalId = 'local', legacyPublisherId = 'local', now = () => Date.now() } = {}) {
   if (!acquisitionStore || typeof acquisitionStore.importLegacyPublicJobs !== 'function') throw new TypeError('acquisitionStore is required')
   if (typeof now !== 'function') throw new TypeError('now must be a function')
@@ -398,7 +510,7 @@ export async function migrateLegacyIngest ({ legacyStore, acquisitionStore, lega
     const at = Number.isSafeInteger(legacy.updatedAt) && legacy.updatedAt >= 0 ? legacy.updatedAt : now(); const bytesAcquired = Math.min(expectedBytes, Number.isSafeInteger(legacy.bytesReceived) && legacy.bytesReceived >= 0 ? legacy.bytesReceived : 0)
     const request = normalizeAcquisitionRequest({ schemaVersion: 1, resolutionRef: legacyResolutionRef(acquisitionId), publisherId, retentionClass: legacy.retentionClass === 'archive-pin' ? 'archive-pin' : 'contribution-cache' })
     const verifiedAsset = completed ? { assetId: publication.assetId, key: publication.assetId, treeHash: publication.assetId, length: 1, byteLength: expectedBytes, blockSize: expectedBytes } : null
-    imported.push({ schemaVersion: 1, acquisitionId, state, version: 0, principalId, publisherId, requesterPublisherIds: [publisherId], isRemote: false, idempotencyDigest: null, requestFingerprint: null, request, retentionClass: request.retentionClass, expectedBytes, sourceBytesRead: bytesAcquired, sourceBytesAccepted: bytesAcquired, bytesAcquired, verifiedBytes: completed ? expectedBytes : 0, committedBytes: completed ? expectedBytes : 0, retainedBytes: completed ? expectedBytes : 0, stagingBytes: 0, stagingPeakBytes: 0, attempts: 0, startedAt: null, finishedAt: TERMINAL.has(state) ? at : null, verifiedPrefix: null, verifiedAsset, publication: completed ? publication : null, errorCode: state === 'failed' ? (interrupted ? 'LEGACY_SOURCE_GRANT_REQUIRED' : (ERROR_CODE.test(legacy.errorCode || '') ? legacy.errorCode : 'LEGACY_INGEST_FAILED')) : (state === 'cancelled' ? 'CANCELLED' : null), recoverable: state === 'failed' && (interrupted || legacy.recoverable === true), createdAt: Number.isSafeInteger(legacy.createdAt) && legacy.createdAt >= 0 ? legacy.createdAt : at, updatedAt: at })
+    imported.push({ schemaVersion: 1, acquisitionId, state, version: 0, principalId, publisherId, requesterPublisherIds: [publisherId], isRemote: false, idempotencyDigest: null, requestFingerprint: null, request, retentionClass: request.retentionClass, publicationMetadata: legacyPublicationMetadata(legacy), expectedBytes, sourceBytesRead: bytesAcquired, sourceBytesAccepted: bytesAcquired, bytesAcquired, verifiedBytes: completed ? expectedBytes : 0, committedBytes: completed ? expectedBytes : 0, retainedBytes: completed ? expectedBytes : 0, stagingBytes: 0, stagingPeakBytes: 0, attempts: 0, startedAt: null, finishedAt: TERMINAL.has(state) ? at : null, verifiedPrefix: null, verifiedAsset, publication: completed ? publication : null, errorCode: state === 'failed' ? (interrupted ? 'LEGACY_SOURCE_GRANT_REQUIRED' : (ERROR_CODE.test(legacy.errorCode || '') ? legacy.errorCode : 'LEGACY_INGEST_FAILED')) : (state === 'cancelled' ? 'CANCELLED' : null), recoverable: state === 'failed' && (interrupted || legacy.recoverable === true), createdAt: Number.isSafeInteger(legacy.createdAt) && legacy.createdAt >= 0 ? legacy.createdAt : at, updatedAt: at })
   }
   const marker = base64url(crypto.hash(b4a.from(`${principalId}\u0000${publisherId}`))).slice(0, 32)
   return acquisitionStore.importLegacyPublicJobs(imported, marker)

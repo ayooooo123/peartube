@@ -1771,12 +1771,27 @@ export async function initializeStorage(config) {
   // Initialize metadata database
   await appendDebugLine('[storage] metaCore get start')
   console.log('[Storage] metaCore get start')
+  // Sweeps are held from here until the keep-local list below is registered:
+  // opening a core arms its residency ledger, and a sweep that ran in between
+  // would evict the very blocks the registration protects. The hold is opt-in
+  // and paired with the release on every path out of this block.
+  blockOffload?.holdEviction?.()
   try {
+    // Block offload moves block DATA to an object store and keeps only the
+    // merkle tree and bitfield on disk. That is the right trade for a title
+    // larger than the volume and the wrong one for this core: it carries the
+    // acquisition ledger, byte accounting and operator settings, it is small
+    // beside any media core, and offloading it makes every read of a node's own
+    // bookkeeping depend on a reachable bucket. Registered below, once the core
+    // is open, because only then is its key known.
     metaCore = await openDeterministicNamedCore(store, 'peartube-meta');
     metaCoreOwnership = lifecycle.ownResource('metadata core', metaCore, 'close', 2000)
   } catch (error) {
     await appendDebugLine(`[storage] metaCore get failed ${describeDebugError(error)}`)
     console.error('[Storage] metaCore get failed:', describeDebugError(error))
+    // Released before the cleanup, which throws: a hold that outlives this
+    // block would stop every sweep for the life of the process.
+    blockOffload?.startEviction?.()
     await cleanupFailedMetadataStartup('metaCore.get', error)
   }
   await appendDebugLine('[storage] metaCore get returned')
@@ -1787,10 +1802,21 @@ export async function initializeStorage(config) {
     await metaCore.ready()
     await appendDebugLine('[storage] metaCore ready ok')
     console.log('[Storage] metaCore ready ok')
+    // Keep-local is registered by the core's own key: a name-derived keypair is
+    // a different key entirely, so registering that would silently match
+    // nothing. Evictability is read per sweep, so registering here holds back
+    // every sweep from now on, and any block already in the bucket stays
+    // restorable and comes home as it is read.
+    blockOffload?.excludeCore?.(b4a.toString(metaCore.key, 'hex'))
   } catch (error) {
     await appendDebugLine(`[storage] metaCore ready failed ${describeDebugError(error)}`)
     console.error('[Storage] metaCore ready failed:', describeDebugError(error))
     await cleanupFailedMetadataStartup('metaCore.ready', error)
+  } finally {
+    // Every path out of the open releases the hold: the cleanup above throws,
+    // so a release placed after it would never run and sweeps would wait for
+    // the life of the process.
+    blockOffload?.startEviction?.()
   }
 
   await appendDebugLine('[storage] metaDb construct start')

@@ -5,6 +5,7 @@ import b4a from 'b4a'
 import sodium from 'sodium-universal'
 import { isArtworkRendition } from '@peartube/backend/assets'
 import { renderArchiveTui, renderArchiveWebHome } from './archive-ui.js'
+import { renderReleaseConsole, renderReleaseRows } from './release-console-ui.js'
 import { resolveTmdbOptions } from './settings.js'
 import { parseBoundary, receiveMultipartUpload } from './multipart.js'
 // The relay's own HTTP client rather than fetch(): Bare ships no global fetch,
@@ -16,6 +17,206 @@ import { openResponse, readBody } from './media/http-get.js'
 // source URL, so an ignored form is visibly ignored.
 const EMPTY_SUBMISSION_NOTICE = 'Nothing was archived: attach a video file or paste a source URL first.'
 const EMPTY_SUBMISSION_QUERY = 'notice=empty-submission'
+
+// One row of the operator console: a release is a file this relay archived or
+// is archiving, not a title. A work groups releases; it is a column, never the
+// row. States are the acquisition's own vocabulary plus `seeding`, which is a
+// published release with verified local bytes and no job left to run.
+const RELEASE_STATES = new Set(['queued', 'acquiring', 'verifying', 'publishing', 'seeding', 'completed', 'failed', 'cancelled'])
+const RELEASE_SORTS = new Set(['attention', 'file', 'work', 'size', 'progress', 'state', 'reach', 'backups', 'residency', 'age'])
+const ATTENTION_RANK = { acquiring: 0, verifying: 0, publishing: 0, queued: 1, failed: 2, cancelled: 4, seeding: 3, completed: 3 }
+const MAX_RELEASE_PAGE = 200
+const TERMINAL_RELEASE_STATES = new Set(['completed', 'failed', 'cancelled'])
+
+// An operator reads "why did nothing happen", not a stack. The provider's own
+// error code is kept because it is the one thing that names the refusal.
+function friendlyVerbError(error) {
+  const code = error?.code || error?.errorCode
+  if (code === 'ACQUISITION_JOB_ACTIVE') return 'still running: cancel it first'
+  return code ? String(code) : (error?.message || 'the relay refused it')
+}
+
+// Coordinates arrive in two shapes: the acquisition's own media context
+// (`season`/`episode`/`namespace`), and the catalog source's signed
+// `mediaCoordinates` (`seasonNumber`/`episodeNumber`/`mediaProvider`). One
+// normalizer so a catalogued episode reads the same as one this relay fetched.
+function normalizeCoordinates(context = {}) {
+  if (!context || typeof context !== 'object') return {}
+  const season = Number(context.season ?? context.seasonNumber)
+  const episode = Number(context.episode ?? context.episodeNumber)
+  return {
+    kind: context.kind || context.contentKind || null,
+    season: Number.isSafeInteger(season) && season > 0 ? season : null,
+    episode: Number.isSafeInteger(episode) && episode > 0 ? episode : null,
+    year: Number(context.releaseYear) > 0 ? Number(context.releaseYear) : null,
+    namespace: context.namespace || context.mediaProvider || null,
+    identifier: context.identifier || context.mediaId || null
+  }
+}
+
+// What an episode is called on the shelf. A show's row is its season and
+// episode number; a film's is its year. Nothing is guessed: a work with neither
+// renders neither.
+export function releaseWorkLabel(context = {}) {
+  const { season, episode, year } = normalizeCoordinates(context)
+  if (season !== null && episode !== null) return `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`
+  if (season !== null) return `Season ${season}`
+  return year !== null ? String(year) : ''
+}
+
+// The full coordinate, for search and for the drawer: what it is, then who
+// named it.
+function releaseCoordinateLabel(context = {}) {
+  const { namespace, identifier } = normalizeCoordinates(context)
+  const parts = []
+  const label = releaseWorkLabel(context)
+  if (label) parts.push(label)
+  if (namespace && identifier) parts.push(`${namespace}:${identifier}`)
+  return parts.join(' · ')
+}
+
+// Three facts an operator must never see merged, per the relay contract:
+// catalog presence (a signed manifest says this file exists and is this big),
+// current reachability (someone observed peers that could serve it), and local
+// residency (the bytes are on this disk).
+//
+// Local residency is proven only by this relay's own acquisition record, or by
+// the local range probe the console runs over the visible page. Catalog
+// availability is playback and network evidence about peers, and `candidateRef`
+// comes from an index search, so neither is proof that these bytes are on this
+// disk. `offlinePlayable` would be the right signal, but nothing in the backend
+// ever calls `recordLocalRanges`, so it can never be true - reading it would be
+// reading a field that is structurally always false.
+function releaseResidency(job) {
+  if (!job) {
+    return { residency: 'unproven', residencyDetail: 'Catalogued here, but no acquisition record on this relay proves the bytes.' }
+  }
+  const accepted = Number(job.bytesAcquired) || 0
+  if (job.state === 'seeding' || job.state === 'completed' || job.status === 'completed') {
+    return accepted > 0
+      ? { residency: 'local', residencyDetail: `This relay accepted ${accepted} bytes for this release.` }
+      : { residency: 'unproven', residencyDetail: 'The acquisition completed without recording accepted bytes.' }
+  }
+  if (job.state === 'failed' || job.state === 'cancelled') {
+    return accepted > 0
+      ? { residency: 'partial', residencyDetail: `${accepted} bytes were accepted before the attempt ended; the relay does not report how many it still holds.` }
+      : { residency: 'none', residencyDetail: 'No bytes were accepted on this relay.' }
+  }
+  return { residency: 'transferring', residencyDetail: `${accepted} bytes accepted so far.` }
+}
+
+// Reachability, read from the media catalog's own availability response
+// (`packages/backend/src/api/media-graph.js` → `availabilityResponse`): the
+// peers an assessment reached, when it looked, and when that evidence expires.
+// Absent when nothing assessed this release - unknown reach is not zero reach,
+// and none of it says whether the bytes are on this disk.
+function releaseReach(availability) {
+  // Older console fixtures carried a bare state string rather than an
+  // assessment; it is a state, so it is reported as one.
+  if (typeof availability === 'string') {
+    return availability
+      ? { reach: availability, reachDetail: `Availability state: ${availability}.` }
+      : { reach: null, reachDetail: null }
+  }
+  if (!availability || typeof availability !== 'object') return { reach: null, reachDetail: null }
+  const complete = Number(availability.completePeerCount) || 0
+  const independent = Number(availability.independentPeerCount) || 0
+  const observedAt = Number(availability.observedAt) || 0
+  const expiresAt = Number(availability.expiresAt) || 0
+  const notes = [`${complete} complete peer(s) of ${independent} independent peer(s)`]
+  if (availability.state) notes.push(`state ${availability.state}`)
+  if (observedAt > 0) notes.push(`observed ${new Date(observedAt).toISOString()}`)
+  if (expiresAt > 0) notes.push(`evidence expires ${new Date(expiresAt).toISOString()}`)
+  if (availability.archivePledged === true) notes.push('archive pledged')
+  if ((availability.reasonCodes || []).length > 0) notes.push(availability.reasonCodes.join(', '))
+  return { reach: `${complete}/${independent}`, reachDetail: `${notes.join('; ')}.` }
+}
+
+function releaseSearchText(row) {
+  return [row.file, row.work, row.coordinates, row.state, row.id].filter(Boolean).join(' ').toLowerCase()
+}
+
+// Attention order is the console's default: what is moving, then what broke and
+// can be retried, then the shelf. Every other column is a plain key.
+const RESIDENCY_RANK = { local: 0, partial: 1, transferring: 2, unproven: 3, none: 4 }
+const NUMERIC_SORTS = {
+  size: row => Number(row.sizeBytes) || 0,
+  progress: row => Number(row.progressPercent) || 0,
+  backups: row => Number(row.backups) || 0,
+  age: row => Number(row.updatedAt) || 0,
+  // Reach sorts by complete seeders first: an observation of five peers and no
+  // complete copy is worth less than one complete seeder.
+  reach: row => {
+    const [complete, peers] = String(row.reach || '').split('/')
+    return (Number(complete) || 0) * 1000 + (Number(peers) || 0)
+  },
+  residency: row => -(RESIDENCY_RANK[row.residency] ?? 5)
+}
+const TEXT_SORTS = { file: 'file', work: 'work', state: 'state' }
+
+function compareAttention(left, right) {
+  const rank = (ATTENTION_RANK[left.state] ?? 5) - (ATTENTION_RANK[right.state] ?? 5)
+  return rank === 0 ? (right.updatedAt || 0) - (left.updatedAt || 0) : rank
+}
+
+function compareReleases(sort, direction) {
+  if (sort === 'attention') return compareAttention
+  const order = direction === 'asc' ? 1 : -1
+  const numeric = NUMERIC_SORTS[sort]
+  if (numeric) return (left, right) => (numeric(left) - numeric(right)) * order
+  const field = TEXT_SORTS[sort] || 'file'
+  return (left, right) => String(left[field] || '').localeCompare(String(right[field] || '')) * order
+}
+
+// Server-side because a node that auto-seeds continuously holds hundreds of
+// releases, and the browser should never receive the whole table to filter it.
+export function queryReleases(rows, params = {}) {
+  const text = String(params.query || '').trim().toLowerCase()
+  const states = new Set((Array.isArray(params.states) ? params.states : []).filter(state => RELEASE_STATES.has(state)))
+  const retention = typeof params.retention === 'string' && params.retention ? params.retention : ''
+  const sort = RELEASE_SORTS.has(params.sort) ? params.sort : 'attention'
+  const direction = params.direction === 'asc' ? 'asc' : 'desc'
+  const limit = Math.min(MAX_RELEASE_PAGE, Math.max(1, Number(params.limit) || 50))
+  const offset = Math.max(0, Number(params.offset) || 0)
+  const matched = rows.filter(row => {
+    if (states.size > 0 && !states.has(row.state)) return false
+    if (retention && row.retentionClass !== retention) return false
+    if (text && !releaseSearchText(row).includes(text)) return false
+    return true
+  })
+  const group = params.group === 'work' ? 'work' : ''
+  const compare = compareReleases(sort, direction)
+  // Grouping is a second key, never a replacement: within a work the operator
+  // still sees the order they asked for.
+  matched.sort(group
+    ? (left, right) => String(left.work || '~').localeCompare(String(right.work || '~')) || compare(left, right)
+    : compare)
+  return {
+    total: rows.length,
+    matched: matched.length,
+    offset,
+    limit,
+    sort,
+    direction,
+    group,
+    rows: matched.slice(offset, offset + limit)
+  }
+}
+
+// One reading of the console's URL, shared by the page, the row fragment and
+// the JSON, so the three can never disagree about what the operator asked for.
+export function releaseQuery(searchParams) {
+  return {
+    query: searchParams.get('q') || '',
+    states: searchParams.getAll('state'),
+    retention: searchParams.get('retention') || '',
+    sort: searchParams.get('sort') || 'attention',
+    direction: searchParams.get('dir') || 'desc',
+    group: searchParams.get('group') || '',
+    limit: searchParams.get('limit'),
+    offset: searchParams.get('offset')
+  }
+}
 
 function buildArchiveForm(get) {
   return {
@@ -385,22 +586,30 @@ function preferJob(current, candidate) {
 }
 
 function indexJobsForLibrary(jobs = []) {
+  const byPublicationId = new Map()
   const byMediaId = new Map()
   const byTitle = new Map()
   for (const job of jobs) {
+    if (job?.publicationId) {
+      const publicationId = String(job.publicationId)
+      byPublicationId.set(publicationId, preferJob(byPublicationId.get(publicationId), job))
+    }
     const mediaId = entityHintMediaId(job?.entityHint)
     if (mediaId) byMediaId.set(mediaId, preferJob(byMediaId.get(mediaId), job))
     const title = libraryTitleKey(job?.title)
     if (title) byTitle.set(title, preferJob(byTitle.get(title), job))
   }
-  return { byMediaId, byTitle }
+  return { byPublicationId, byMediaId, byTitle }
 }
 
-function libraryJobFor(item, { byMediaId, byTitle }) {
+function libraryJobFor(item, { byPublicationId, byMediaId, byTitle }) {
   for (const source of item?.sources || []) {
+    const publicationId = source?.publicationId == null ? null : String(source.publicationId)
+    const publicationJob = publicationId == null ? null : byPublicationId.get(publicationId)
+    if (publicationJob) return publicationJob
     const mediaId = source?.mediaCoordinates?.mediaId
-    const job = mediaId == null ? null : byMediaId.get(String(mediaId))
-    if (job) return job
+    const mediaJob = mediaId == null ? null : byMediaId.get(String(mediaId))
+    if (mediaJob) return mediaJob
   }
   return byTitle.get(libraryTitleKey(item?.title)) || null
 }
@@ -501,19 +710,34 @@ export async function createArchiveConsole({
   const entityHintFor = context => context?.kind === 'episode'
     ? `show:${context.identifier}:s${context.season}:e${context.episode}`
     : context?.kind === 'movie' ? `movie:${context.identifier}` : null
-  const listJobs = async () => (await service.listAcquisitions()).map(job => ({
-    id: job.acquisitionId,
-    jobId: job.acquisitionId,
-    status: stateForUi(job.state),
-    state: job.state,
-    title: job.title || `Acquisition ${job.acquisitionId.slice(0, 12)}`,
-    error: job.errorCode,
-    errorCode: job.errorCode,
-    entityHint: null,
-    createdAt: job.createdAt,
-    updatedAt: job.updatedAt,
-    completedAt: job.state === 'completed' ? job.updatedAt : null
-  }))
+  const listJobs = async () => (await service.listAcquisitions()).map(job => {
+    const expectedBytes = Math.max(0, Number(job.expectedBytes) || 0)
+    const bytesAcquired = Math.max(0, Math.min(expectedBytes || Number.MAX_SAFE_INTEGER, Number(job.bytesAcquired) || 0))
+    return {
+      id: job.acquisitionId,
+      jobId: job.acquisitionId,
+      status: stateForUi(job.state),
+      state: job.state,
+      title: job.title || `Acquisition ${job.acquisitionId.slice(0, 12)}`,
+      sourceFileName: job.sourceFileName || null,
+      error: job.errorCode,
+      errorCode: job.errorCode,
+      entityHint: entityHintFor(job.mediaContext),
+      mediaContext: job.mediaContext || null,
+      retentionClass: job.retentionClass || null,
+      bytesAcquired,
+      expectedBytes,
+      progressPercent: expectedBytes > 0 ? Math.min(100, Math.floor((bytesAcquired / expectedBytes) * 1000) / 10) : 0,
+      publicationId: job.publicationId || null,
+      manifestId: job.manifestId || null,
+      renditionId: job.renditionId || null,
+      assetId: job.assetId || null,
+      recoverable: job.recoverable === true,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      completedAt: job.state === 'completed' ? job.updatedAt : null
+    }
+  })
   const store = { listJobs }
 
   // Read an archive submission as a browser file upload (multipart/form-data,
@@ -613,6 +837,7 @@ export async function createArchiveConsole({
         retentionClass: 'archive-pin',
         path: staged.path,
         mimeType,
+        sourceFileName: staged.filename || basename(staged.path),
         dispose: () => discardUploadFile(staged)
       })
       accepted = job.sourceAccepted === true
@@ -703,6 +928,7 @@ export async function createArchiveConsole({
         let sizeBytes = 0
         let freshArchivists = 0
         let recency = jobRecency(job)
+        const itemPublicationIds = new Set()
         // A series entity collapses every episode this relay holds, so the
         // seasons and episodes are counted from the coordinates the publisher
         // signed rather than from how many publications happen to be here. Two
@@ -710,9 +936,32 @@ export async function createArchiveConsole({
         // ordinals is still held, so it is counted without a season.
         const seasons = new Map()
         let looseEpisodes = 0
+        // Each publication under a work is one release: its own file, its own
+        // bytes, its own archivists. A decentralized debrid lists releases, so
+        // the shelf carries them rather than collapsing them into one row.
+        const releases = []
         for (const source of item?.sources || []) {
           if (!source?.publicationId) continue
-          sizeBytes += publicationBytes(manifests.get(String(source.publicationId)))
+          const publicationId = String(source.publicationId)
+          const releaseBytes = publicationBytes(manifests.get(publicationId))
+          sizeBytes += releaseBytes
+          itemPublicationIds.add(publicationId)
+          const releaseJob = jobIndex.byPublicationId.get(publicationId) || null
+          const releaseMirror = mirrors.get(publicationId)
+          releases.push({
+            publicationId,
+            renditionId: source.renditionId || null,
+            sizeBytes: releaseBytes > 0 ? releaseBytes : null,
+            sourceFileName: releaseJob?.sourceFileName || null,
+            acquisitionId: releaseJob?.id || null,
+            availability: source.availability || null,
+            mediaCoordinates: source.mediaCoordinates || null,
+            freshArchivists: Math.max(0, Number(releaseMirror?.freshArchivists) || 0),
+            acquiredAt: releaseJob?.completedAt || releaseJob?.updatedAt || null,
+            candidateRef: localPlaybackAllowed && CANDIDATE_REF_PATTERN.test(source?.candidateRef || '')
+              ? source.candidateRef
+              : null
+          })
           const coordinates = source.mediaCoordinates || {}
           if (coordinates.contentKind === 'episode') {
             const season = Number(coordinates.seasonNumber)
@@ -750,6 +999,24 @@ export async function createArchiveConsole({
             // while a page render waits on it.
             hasPoster: Boolean(item?.posterBlobId || item?.posterUrl),
             sizeBytes: sizeBytes > 0 ? sizeBytes : null,
+            publicationCount: itemPublicationIds.size,
+            publicationIds: [...itemPublicationIds],
+            releases,
+            freshArchivists,
+            acquisition: job
+              ? {
+                  id: job.id,
+                  status: job.status,
+                  progressPercent: job.progressPercent,
+                  sourceFileName: job.sourceFileName,
+                  bytesAcquired: job.bytesAcquired,
+                  expectedBytes: job.expectedBytes,
+                  retentionClass: job.retentionClass,
+                  publicationId: job.publicationId,
+                  recoverable: job.recoverable,
+                  updatedAt: job.updatedAt
+                }
+              : null,
             // What this relay actually holds of a show, counted from signed
             // coordinates: which seasons, and how many distinct episodes. It
             // is deliberately not "how many episodes the show has" - nothing
@@ -771,6 +1038,224 @@ export async function createArchiveConsole({
       logger?.archive?.warn?.('Building the relay library view failed', { error: err?.message || String(err) })
       return []
     }
+  }
+
+  // One published release. Three independent facts ride on it: the signed
+  // manifest length (presence), the published availability observation (reach),
+  // and this relay's own acquisition record (residency). `bytesAcquired` is the
+  // relay's own count, never the manifest length, so a catalogued file this
+  // relay never fetched cannot read as bytes held.
+  // What this relay's own record adds to a catalogued release. Split out so the
+  // row builder reads as one shape rather than a chain of optional lookups.
+  function acquisitionFacts(acquisition) {
+    if (!acquisition) {
+      return { state: 'seeding', bytesAcquired: 0, progressPercent: 0, coordinates: '', retentionClass: null, acquisitionId: null }
+    }
+    return {
+      state: acquisition.status === 'completed' ? 'seeding' : acquisition.state,
+      bytesAcquired: Number(acquisition.bytesAcquired) || 0,
+      progressPercent: Number(acquisition.progressPercent) || 0,
+      coordinates: releaseCoordinateLabel(acquisition.mediaContext || {}),
+      retentionClass: acquisition.retentionClass || null,
+      acquisitionId: acquisition.id || null
+    }
+  }
+
+  function publicationReleaseRow(work, release, acquisition) {
+    const facts = acquisitionFacts(acquisition)
+    // The publisher's signed coordinates lead: they describe the work the
+    // catalog names. The acquisition's own context is the fallback for a
+    // release published before coordinates rode along.
+    const coordinates = release.mediaCoordinates || acquisition?.mediaContext || {}
+    return {
+      // A publication can carry more than one rendition, and each is its own
+      // core with its own bytes. The row id has to tell them apart or the
+      // drawer, the selection and the poll's row index would collapse them.
+      id: release.renditionId ? `${release.publicationId}:${release.renditionId}` : release.publicationId,
+      kind: 'release',
+      file: release.sourceFileName || null,
+      work: work.title || null,
+      workEntityId: work.entityId || null,
+      catalogued: true,
+      sizeBytes: Number(release.sizeBytes) || 0,
+      backups: Math.max(0, Number(release.freshArchivists) || 0),
+      ...facts,
+      coordinates: releaseCoordinateLabel(coordinates),
+      workLabel: releaseWorkLabel(coordinates),
+      ...releaseReach(release.availability),
+      ...releaseResidency(acquisition),
+      updatedAt: Number(release.acquiredAt) || 0,
+      candidateRef: release.candidateRef || null,
+      publicationId: release.publicationId,
+      renditionId: release.renditionId || null,
+      errorCode: null,
+      recoverable: false
+    }
+  }
+
+  // An acquisition that produced no publication yet. Its title is only a title
+  // when a publisher named the work; the generated `Acquisition <id>` label is
+  // the absence of a name, and the table renders absence as absence.
+  function acquisitionReleaseRow(job) {
+    const bytesAcquired = Number(job.bytesAcquired) || 0
+    return {
+      id: job.id,
+      kind: 'acquisition',
+      file: job.sourceFileName || null,
+      work: job.title && !job.title.startsWith('Acquisition ') ? job.title : null,
+      workEntityId: null,
+      coordinates: releaseCoordinateLabel(job.mediaContext || {}),
+      workLabel: releaseWorkLabel(job.mediaContext || {}),
+      // An acquisition names a publication only once it published one; until
+      // then this relay holds bytes for a work no catalog lists.
+      catalogued: Boolean(job.publicationId),
+      sizeBytes: Number(job.expectedBytes) || 0,
+      bytesAcquired,
+      progressPercent: Number(job.progressPercent) || 0,
+      state: job.state,
+      backups: 0,
+      reach: null,
+      reachDetail: 'No availability observation names this acquisition.',
+      ...releaseResidency(job),
+      retentionClass: job.retentionClass || null,
+      updatedAt: Number(job.updatedAt) || 0,
+      candidateRef: null,
+      publicationId: job.publicationId || null,
+      renditionId: job.renditionId || null,
+      acquisitionId: job.id,
+      errorCode: job.errorCode || null,
+      recoverable: job.recoverable === true
+    }
+  }
+
+  // The operator table. Every archived file this relay holds becomes a row, and
+  // so does every acquisition that has not produced one yet — a failure with no
+  // publication is exactly the row an operator came here to act on.
+  function releasesView(library = [], jobs = []) {
+    const rows = []
+    const claimed = new Set()
+    const published = new Set()
+    for (const work of library) {
+      for (const release of work.releases || []) {
+        const acquisition = release.acquisitionId ? jobs.find(job => job.id === release.acquisitionId) : null
+        if (acquisition) claimed.add(acquisition.id)
+        published.add(String(release.publicationId))
+        rows.push(publicationReleaseRow(work, release, acquisition))
+      }
+    }
+    for (const job of jobs) {
+      if (claimed.has(job.id) || published.has(String(job.publicationId))) continue
+      rows.push(acquisitionReleaseRow(job))
+    }
+    return rows
+  }
+
+  // A local-bitfield probe per catalogued release. It runs over the whole shelf
+  // before the query, not over the page after it: residency is a sortable column
+  // and a header counter, so proving it after filtering and paging would sort
+  // stale values and report a total that mixed probed rows with unprobed ones.
+  // Nothing here pulls a block: an unproven row stays unproven until the relay
+  // really holds the ranges.
+  const residencyProbes = new Map()
+  const RESIDENCY_PROBE_TTL_MS = 30_000
+  // A bound on work per request, not on truth: rows past it stay unproven and
+  // say so, rather than silently reading as absent.
+  const RESIDENCY_PROBE_BUDGET = 256
+  const RESIDENCY_PROBE_CONCURRENCY = 8
+
+  // Keyed by publication *and* rendition: one publication can carry more than
+  // one rendition, and they are different cores with different local ranges.
+  async function probeLocalResidency(publicationId, renditionId) {
+    if (typeof service.getLocalResidency !== 'function') return null
+    const key = `${publicationId}\n${renditionId || ''}`
+    const cached = residencyProbes.get(key)
+    if (cached && (Date.now() - cached.at) < RESIDENCY_PROBE_TTL_MS) return cached.result
+    const result = await service.getLocalResidency({ publicationId, renditionId }).catch(() => null)
+    residencyProbes.set(key, { at: Date.now(), result })
+    if (residencyProbes.size > 512) residencyProbes.delete(residencyProbes.keys().next().value)
+    return result
+  }
+
+  function applyResidencyProbe(row, probe) {
+    if (probe.complete === true) {
+      row.residency = 'local'
+      row.residencyDetail = `A local range probe found all ${probe.requiredRangeCount} required range(s) on this relay.`
+      return
+    }
+    // `core.has()` reads the local bitfield. On a relay with block offload on,
+    // an evicted block is restored from the bucket on read, so a local miss is
+    // not proof the relay cannot serve it - and this pass cannot prove it can.
+    const offloaded = service.getStatus?.()?.blockOffload?.enabled === true
+    row.residencyDetail = `A local range probe found ${probe.localRangeCount} of ${probe.requiredRangeCount} required range(s) on this volume.` +
+      (offloaded
+        ? ' Block offload is enabled, so blocks may live in the configured bucket; per-release offload residency is not measured yet.'
+        : '')
+  }
+
+  // A verb answers for one release. Both refuse rather than report success they
+  // cannot back: a relay whose provider is not up returns null, and a relay too
+  // old to clear records has no method at all. Neither is "done".
+  async function cancelRelease(acquisitionId) {
+    if (typeof service.cancelAcquisition !== 'function') {
+      return { acquisitionId, done: false, reason: 'this relay cannot cancel acquisitions' }
+    }
+    try {
+      const job = await service.cancelAcquisition(acquisitionId)
+      if (!job || typeof job.state !== 'string') {
+        return { acquisitionId, done: false, reason: 'the relay reported no job to cancel' }
+      }
+      if (job.state === 'cancelled') return { acquisitionId, done: true, state: job.state }
+      if (TERMINAL_RELEASE_STATES.has(job.state)) {
+        return { acquisitionId, done: false, state: job.state, reason: `already ${job.state}` }
+      }
+      // The manager aborts in flight and re-reads the record; a job still in a
+      // running state has not been cancelled yet, whatever the call returned.
+      return { acquisitionId, done: false, state: job.state, reason: `still ${job.state}` }
+    } catch (error) {
+      return { acquisitionId, done: false, reason: friendlyVerbError(error) }
+    }
+  }
+
+  async function clearRelease(acquisitionId) {
+    if (typeof service.forgetAcquisition !== 'function') {
+      return { acquisitionId, done: false, reason: 'this relay cannot clear finished records' }
+    }
+    try {
+      const result = await service.forgetAcquisition(acquisitionId)
+      return result?.forgotten === true
+        ? { acquisitionId, done: true, state: 'forgotten' }
+        : { acquisitionId, done: false, reason: 'nothing to clear' }
+    } catch (error) {
+      return { acquisitionId, done: false, reason: friendlyVerbError(error) }
+    }
+  }
+
+  async function proveResidency(rows) {
+    const pending = rows.filter(row => row.catalogued && row.residency === 'unproven' && row.publicationId)
+    for (const row of pending.slice(RESIDENCY_PROBE_BUDGET)) {
+      row.residencyDetail = 'Not probed in this pass: the relay reached its per-request local probe budget.'
+    }
+    const queue = pending.slice(0, RESIDENCY_PROBE_BUDGET)
+    let next = 0
+    const workers = Array.from({ length: Math.min(RESIDENCY_PROBE_CONCURRENCY, queue.length) }, async () => {
+      while (next < queue.length) {
+        const row = queue[next++]
+        const probe = await probeLocalResidency(row.publicationId, row.renditionId)
+        if (probe) applyResidencyProbe(row, probe)
+      }
+    })
+    await Promise.all(workers)
+    return rows
+  }
+
+  // One read of the shelf, shared by the page, the poll fragment and the JSON.
+  // Residency is proven first, so the query sorts and filters the same values
+  // the header counts.
+  async function releasePage(searchParams) {
+    const jobs = await store.listJobs()
+    const catalogItems = await readVerifiedCatalog().catch(() => [])
+    const releases = await proveResidency(releasesView(await libraryView(catalogItems, jobs), jobs))
+    return { releases, page: queryReleases(releases, releaseQuery(searchParams)) }
   }
 
   // Cover bytes for one shelf entry, read back off the relay's own loopback
@@ -807,10 +1292,12 @@ export async function createArchiveConsole({
       logger?.archive?.warn?.('Reading the verified media catalog failed', { error: err?.message || String(err) })
       return []
     })
+    const library = await libraryView(catalogItems, jobs)
     return {
       status,
       jobs,
-      library: await libraryView(catalogItems, jobs),
+      library,
+      releases: releasesView(library, jobs),
       creators: creatorsView(),
       unseededTargets: service.getCreatorTargets?.({ limit: 25 }) || status.creators?.unseededTargets || [],
       tmdb: tmdbView(),
@@ -873,15 +1360,36 @@ export async function createArchiveConsole({
 
       if (req.method === 'GET') {
         const parsed = new URL(req.url, 'http://relay.local')
-        if (parsed.pathname === '/' || parsed.pathname === '/ui') {
-          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+        // `/` is the operator's release table. The catalog-browsing sections
+        // moved to their own routes so a page is one job, not five.
+        if (parsed.pathname === '/' || parsed.pathname === '/ui' || parsed.pathname === '/releases') {
+          const { releases, page } = await releasePage(parsed.searchParams)
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+          res.end(renderReleaseConsole({
+            status: service.getStatus?.() || {},
+            releases,
+            localPlayback: localPlaybackAllowed === true,
+            page
+          }, parsed.searchParams))
+          return
+        }
+
+        if (parsed.pathname === '/releases.html') {
+          const { page } = await releasePage(parsed.searchParams)
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+          res.end(renderReleaseRows(page))
+          return
+        }
+
+        if (parsed.pathname === '/discover' || parsed.pathname === '/creators' || parsed.pathname === '/settings') {
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
           const home = await model({
             query: parsed.searchParams.get('q') || '',
             type: parsed.searchParams.get('type') || 'movie',
             page: parsed.searchParams.get('page') || '1'
           })
           if (parsed.searchParams.get('notice') === 'empty-submission') home.notice = EMPTY_SUBMISSION_NOTICE
-          res.end(renderArchiveWebHome(home))
+          res.end(renderArchiveWebHome(home, { view: parsed.pathname.slice(1) }))
           return
         }
 
@@ -942,6 +1450,34 @@ export async function createArchiveConsole({
       if (req.method === 'GET' && req.url === '/jobs') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ jobs: await store.listJobs() }, null, 2))
+        return
+      }
+
+      if (req.method === 'GET' && req.url.startsWith('/releases.json')) {
+        const parsed = new URL(req.url, 'http://relay.local')
+        const { page } = await releasePage(parsed.searchParams)
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ schema: 'peartube.relayReleases', version: 1, updatedAt: Date.now(), ...page }, null, 2))
+        return
+      }
+
+      // Both verbs answer per id. A cancel that lands on a finished job changes
+      // nothing, and the console has to say so rather than refresh and look
+      // broken.
+      if (req.method === 'POST' && (req.url === '/releases/cancel' || req.url === '/releases/clear')) {
+        const clearing = req.url === '/releases/clear'
+        const params = new URLSearchParams(await collectBody(req))
+        const ids = String(params.get('ids') || '').split(',').map(value => value.trim()).filter(Boolean).slice(0, 64)
+        const results = []
+        for (const acquisitionId of ids) {
+          results.push(await (clearing ? clearRelease(acquisitionId) : cancelRelease(acquisitionId)))
+        }
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({
+          verb: clearing ? 'clear' : 'cancel',
+          done: results.filter(result => result.done).map(result => result.acquisitionId),
+          refused: results.filter(result => !result.done),
+        }, null, 2))
         return
       }
 

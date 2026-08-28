@@ -767,6 +767,39 @@ test('authenticated search reaches the backend and returns URL-free candidates',
   await server.close()
 })
 
+test('authenticated search sends the provider only the fields its contract accepts', async (t) => {
+  const storagePath = tempDir(t)
+  let received = null
+  const service = {
+    // The provider service validates search with a closed field list. Anything
+    // extra is refused as INVALID_FIELD, which the companion maps to a 502 - so
+    // a fake that shrugs at unknown fields hides a broken route.
+    async search (request) {
+      received = Object.keys(request).sort()
+      for (const field of received) {
+        if (!['selector', 'limit', 'cursor', 'signal'].includes(field)) {
+          const error = new Error(`request.${field} is unsupported`)
+          error.code = 'INVALID_FIELD'
+          throw error
+        }
+      }
+      return { candidates: [] }
+    }
+  }
+  const server = createCompanionServer({ service, config: udsConfig(storagePath), clock: () => NOW, logger })
+  const state = await server.start()
+  const path = '/api/v2/search?namespace=tmdb&identifier=348&kind=movie'
+  const response = await request({
+    socketPath: state.socketPath,
+    path,
+    headers: signedHeaders({ path, nonce: 'search-nonce-0002' })
+  })
+
+  t.is(response.statusCode, 200, 'the search reaches the provider instead of failing as a backend error')
+  t.absent(received.includes('principal'), 'the principal authorizes the call and never rides in the query')
+  await server.close()
+})
+
 test('real relay companion forwards movie limits and episode coordinates alike', async (t) => {
   const storagePath = tempDir(t, 'peartube-companion-search-service-')
   const config = resolveRelayConfig({

@@ -136,6 +136,113 @@ test('GET /creators.json returns tracked creators', async function (t) {
   })
 })
 
+test('GET /jobs exposes bounded acquisition progress and durable result ids', async function (t) {
+  const service = fakeService({
+    async listAcquisitions() {
+      return [{
+        acquisitionId: 'acq-progress',
+        state: 'acquiring',
+        title: 'Eagle Eye',
+        mediaContext: { kind: 'movie', identifier: '13027' },
+        retentionClass: 'contribution-cache',
+        bytesAcquired: 425,
+        expectedBytes: 1000,
+        publicationId: 'pub-eagle',
+        manifestId: 'manifest-eagle',
+        renditionId: 'rendition-eagle',
+        assetId: 'asset-eagle',
+        recoverable: true,
+        errorCode: null,
+        createdAt: 100,
+        updatedAt: 200
+      }]
+    }
+  })
+
+  await withConsole(service, async (base) => {
+    const res = await fetch(`${base}/jobs`)
+    t.is(res.status, 200)
+    const body = await res.json()
+    const job = body.jobs[0]
+    t.is(job.status, 'running')
+    t.is(job.progressPercent, 42.5)
+    t.is(job.bytesAcquired, 425)
+    t.is(job.expectedBytes, 1000)
+    t.is(job.retentionClass, 'contribution-cache')
+    t.is(job.entityHint, 'movie:13027')
+    t.is(job.publicationId, 'pub-eagle')
+    t.is(job.assetId, 'asset-eagle')
+    t.ok(job.recoverable)
+  })
+})
+
+test('GET /jobs names the work an acquisition is fetching from signed publisher metadata', async function (t) {
+  const service = fakeService({
+    async listAcquisitions() {
+      return [{
+        acquisitionId: 'acq-episode',
+        state: 'publishing',
+        title: 'FUBAR',
+        mediaContext: { kind: 'episode', namespace: 'tmdb', identifier: '221300', season: 2, episode: 7 },
+        retentionClass: 'contribution-cache',
+        bytesAcquired: 10,
+        expectedBytes: 10,
+        errorCode: null,
+        recoverable: false,
+        createdAt: 1,
+        updatedAt: 2
+      }]
+    }
+  })
+
+  await withConsole(service, async (base) => {
+    const job = (await (await fetch(`${base}/jobs`)).json()).jobs[0]
+    t.is(job.title, 'FUBAR', 'the transfer is named by its work, not by its acquisition id')
+    t.is(job.entityHint, 'show:221300:s2:e7')
+    t.alike(job.mediaContext, { kind: 'episode', namespace: 'tmdb', identifier: '221300', season: 2, episode: 7 })
+
+    const home = await (await fetch(`${base}/`)).text()
+    t.ok(home.includes('FUBAR'), 'the console renders the work title')
+    t.ok(home.includes('S02E07'), 'episode coordinates reach the transfer row')
+  })
+})
+
+test('the shelf lists one release per publication and keeps each source file name', async function (t) {
+  const service = fakeService({
+    async getVerifiedMediaCatalog() {
+      return {
+        success: true,
+        nextCursor: null,
+        items: [{
+          entityId: '2'.repeat(64),
+          entityKind: 'movie',
+          title: 'FUBAR',
+          sources: [
+            { publicationId: 'pub-2160p', renditionId: 'rend-a', mediaCoordinates: { contentKind: 'movie', mediaProvider: 'tmdb', mediaId: '221300' } },
+            { publicationId: 'pub-1080p', renditionId: 'rend-b', mediaCoordinates: { contentKind: 'movie', mediaProvider: 'tmdb', mediaId: '221300' } }
+          ]
+        }]
+      }
+    },
+    async listAcquisitions() {
+      return [
+        { acquisitionId: 'acq-2160p', state: 'completed', title: 'FUBAR', sourceFileName: 'Fubar.S02E07.2160p.mkv', retentionClass: 'archive-pin', bytesAcquired: 6, expectedBytes: 6, publicationId: 'pub-2160p', recoverable: false, errorCode: null, createdAt: 1, updatedAt: 2 },
+        { acquisitionId: 'acq-1080p', state: 'completed', title: 'FUBAR', sourceFileName: 'FUBAR.S02E07.1080p.mkv', retentionClass: 'archive-pin', bytesAcquired: 3, expectedBytes: 3, publicationId: 'pub-1080p', recoverable: false, errorCode: null, createdAt: 3, updatedAt: 4 }
+      ]
+    }
+  })
+
+  await withConsole(service, async (base) => {
+    const home = await (await fetch(`${base}/`)).text()
+    t.ok(home.includes('Fubar.S02E07.2160p.mkv'), 'the console lists each release by the file its source named')
+    t.ok(home.includes('FUBAR.S02E07.1080p.mkv'))
+    t.ok(home.includes('>FUBAR<'), 'both releases name the work they belong to')
+
+    const jobs = (await (await fetch(`${base}/jobs`)).json()).jobs
+    t.alike(jobs.map(job => job.sourceFileName).sort(), ['FUBAR.S02E07.1080p.mkv', 'Fubar.S02E07.2160p.mkv'])
+  })
+})
+
 test('GET /unseeded.json returns ranked targets', async function (t) {
   await withConsole(fakeService(), async (base) => {
     const res = await fetch(`${base}/unseeded.json`)
@@ -164,9 +271,9 @@ test('GET /discover.json annotates TMDB items with relay network status', async 
   })
 })
 
-test('GET / renders Discover section and TMDB archive forms', async function (t) {
+test('GET /discover renders the Discover section and TMDB archive forms', async function (t) {
   await withConsole(fakeService(), async (base) => {
-    const res = await fetch(`${base}/?type=movie&q=matrix`)
+    const res = await fetch(`${base}/discover?type=movie&q=matrix`)
     t.is(res.status, 200)
     const html = await res.text()
     t.ok(html.includes('Discover missing movies &amp; shows'))
@@ -226,15 +333,19 @@ test('POST /settings/tmdb with a blank key toggles enabled without wiping the st
   t.is(service.calls.setTmdb[0].enabled, true)
 })
 
-test('GET / renders the creators and TMDB sections', async function (t) {
+test('the creators and settings routes carry their own sections', async function (t) {
   await withConsole(fakeService(), async (base) => {
-    const res = await fetch(`${base}/`)
-    const html = await res.text()
-    t.ok(html.includes('Tracked creators'))
-    t.ok(html.includes('Unseeded targets'))
-    t.ok(html.includes('Contribute a creator'))
-    t.ok(html.includes('Content classification (TMDB)'))
-    t.ok(html.includes('Authorized creator devices'))
+    const creators = await (await fetch(`${base}/creators`)).text()
+    t.ok(creators.includes('Tracked creators'))
+    t.ok(creators.includes('Unseeded targets'))
+    t.ok(creators.includes('Contribute a creator'))
+    t.absent(creators.includes('Content classification (TMDB)'), 'settings stay on the settings route')
+
+    const settings = await (await fetch(`${base}/settings`)).text()
+    t.ok(settings.includes('Content classification (TMDB)'))
+    t.ok(settings.includes('Authorized creator devices'))
+    t.ok(settings.includes('S3 block store'))
+    t.absent(settings.includes('Tracked creators'), 'creators stay on the creators route')
   })
 })
 

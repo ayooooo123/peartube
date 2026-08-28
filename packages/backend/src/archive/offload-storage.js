@@ -93,6 +93,12 @@ function normalizeEviction (eviction) {
     // player is reading through it and taking it back off disk now would stall
     // playback for a bucket round trip.
     isPinned: typeof eviction.isPinned === 'function' ? eviction.isPinned : null,
+    // `({ keyHex }) => boolean`, may be async. False keeps every block of that
+    // core on this volume. Restore still answers for it, so blocks already in
+    // the bucket stay readable and come home as they are read - excluding a
+    // core by refusing it a store would instead strand whatever was already
+    // evicted.
+    isEvictable: typeof eviction.isEvictable === 'function' ? eviction.isEvictable : null,
   }
 }
 
@@ -547,10 +553,27 @@ export function createOffloadStorage ({ storage, resolveStore, log, eviction = n
     ledger.residentBytes = retained
   }
 
+  // Asked per sweep rather than cached on the ledger: the storage layer can
+  // only register a core as keep-local once it knows that core's real key,
+  // which is after the core is open - by which time this ledger already exists.
+  // A cached answer would be the answer from before the operator's list was
+  // known.
+  async function evictable (ledger) {
+    if (bound.isEvictable === null) return true
+    try {
+      return await bound.isEvictable({ keyHex: ledger.keyHex }) !== false
+    } catch (error) {
+      // A list that cannot be read is not permission to evict.
+      emit(`evictability check failed for ${ledger.keyHex}: ${errorText(error)}`)
+      return false
+    }
+  }
+
   async function drainSweeps (ledger) {
     do {
       ledger.again = false
       try {
+        if (!(await evictable(ledger))) return
         await runSweep(ledger)
       } catch (error) {
         // Housekeeping never surfaces into a read.

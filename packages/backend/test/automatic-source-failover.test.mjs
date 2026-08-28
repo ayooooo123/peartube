@@ -1,6 +1,6 @@
 import test from 'brittle'
 
-import { createMediaGraphApi } from '../src/api/media-graph.js'
+import { createMediaGraphApi, mediaCoordinatesResponse } from '../src/api/media-graph.js'
 import { createStaticAssetManifest } from '../src/assets/static-core.js'
 import { normalizeAssetCoreRefV2 } from '../src/assets/rendition.js'
 import { createPlaybackError } from '../src/playback/errors.js'
@@ -452,4 +452,88 @@ test('a session limit reaches Play as itself, not as a peer timeout', async (t) 
     'the scoped session reports its own bounded code'
   )
   t.is(result.retry, 'manual', 'every equivalent source was already tried')
+})
+
+// Catalog presence and peer availability are claims about a work and about
+// other devices. "Local" is a claim about this disk, so the only thing allowed
+// to answer it is the local bitfield.
+test('local range residency reads the local bitfield and nothing else', async (t) => {
+  const asked = []
+  const store = (held) => ({
+    get({ key }) {
+      return {
+        async ready() {},
+        async has(start, end) {
+          asked.push([start, end])
+          return held
+        },
+        async close() {},
+      }
+    },
+  })
+
+  const complete = createMediaGraphApi(graphFixture({ store: store(true) }))
+  const result = await complete.getLocalRangeResidency({ publicationId: 'pub-a' })
+  t.is(result.success, true)
+  t.is(result.renditionId, 'rendition-pub-a')
+  t.is(result.requiredRangeCount, 1)
+  t.is(result.localRangeCount, 1)
+  t.is(result.complete, true, 'every required range is held here')
+  t.alike(asked, [[0, coreRefA.length]], 'the probe asks the core for exactly the required range')
+
+  const absent = createMediaGraphApi(graphFixture({ store: store(false) }))
+  const missing = await absent.getLocalRangeResidency({ publicationId: 'pub-a' })
+  t.is(missing.complete, false, 'a core holding none of it is not local')
+  t.is(missing.localRangeCount, 0)
+
+  const unknown = await complete.getLocalRangeResidency({ publicationId: 'pub-missing' })
+  t.is(unknown.success, false, 'an unknown publication has no residency to report')
+  t.is(unknown.errorCode, 'MEDIA_RENDITION_UNAVAILABLE')
+})
+
+// A show release has to say which episode it is. The publisher signs that into
+// the work's external reference (`channel/structured-content.js` writes
+// `show:<mediaId>:s<season>:e<episode>`), so the catalog projects the ordinals
+// rather than letting every reader guess them from a title.
+test('catalog coordinates name the episode, the film and the unknown alike', (t) => {
+  t.alike(
+    mediaCoordinatesResponse([{ namespace: 'tmdb', identifier: 'show:95396:s2:e4' }], 'work'),
+    { contentKind: 'episode', mediaProvider: 'tmdb', mediaId: '95396', seasonNumber: 2, episodeNumber: 4 },
+    'an episode reference carries its season and episode'
+  )
+  t.alike(
+    mediaCoordinatesResponse([{ namespace: 'tmdb', identifier: '603' }], 'work', 1999),
+    { contentKind: 'movie', mediaProvider: 'tmdb', mediaId: '603', releaseYear: 1999 },
+    'a film reference carries its year instead'
+  )
+  t.alike(
+    mediaCoordinatesResponse([{ namespace: 'tmdb', identifier: '95396' }], 'series'),
+    { contentKind: 'series', mediaProvider: 'tmdb', mediaId: '95396' },
+    'a show-level reference is a series coordinate with no ordinals invented'
+  )
+  t.is(mediaCoordinatesResponse([], 'work'), null, 'a work nobody cross-referenced has no coordinate')
+  t.is(mediaCoordinatesResponse([{ namespace: 'tmdb' }], 'work'), null, 'and half a reference is not one')
+})
+
+test('the media catalog keeps its metadata fields while carrying coordinates', async (t) => {
+  const base = graphFixture()
+  const api = createMediaGraphApi({
+    ...base,
+    verifiedQueryView: {
+      ...base.verifiedQueryView,
+      async listEntities () {
+        return [{
+          entityId: 'work:show-1',
+          entityKind: 'work',
+          externalRefs: [{ namespace: 'tmdb', identifier: 'show:95396:s2:e4' }],
+          resolved: { localClusterId: 'cluster-1', metadata: { title: 'Severance', releaseYear: 2022 }, claims: [], conflicts: [] },
+          publications: [],
+        }]
+      },
+    },
+  })
+  const page = await api.getMediaCatalog({})
+  t.is(page.success, true)
+  t.is(page.items[0].title, 'Severance')
+  t.is(page.items[0].releaseYear, 2022, 'the summary media fields still ride along')
 })

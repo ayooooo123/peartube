@@ -32,6 +32,13 @@ function selectorForMediaCoordinates(source = {}) {
   return { namespace, identifier, kind: coordinates.contentKind || 'movie' }
 }
 
+// The last path segment, and only that: a relay records what the source called
+// the file, never where it lived on the machine that submitted it.
+function sourceFileNameOf(value) {
+  const name = String(value || '').split(/[/\\]/).pop().trim()
+  return name && name.length <= 255 ? name : null
+}
+
 function createProviderMachineService(runtime) {
   const provider = runtime?.provider
   if (!provider) return null
@@ -725,7 +732,10 @@ async function buildRelayService({
         selector: input.selector,
         publisherId,
         idempotencyKey: requestKey,
-        expectedBytes: input.expectedBytes
+        expectedBytes: input.expectedBytes,
+        // The archival source named this file; the relay keeps that name so two
+        // versions of one work stay distinguishable after publication.
+        sourceFileName: sourceFileNameOf(input.sourceFileName)
       })
       acquisition = await runtime.provider.requestAcquisition({
         idempotencyKey: requestKey,
@@ -804,6 +814,14 @@ async function buildRelayService({
       if (!publisherShell) return null
       const local = await publisherShell.ensureLocalPublisher()
       return runtime.provider.cancelAcquisition({
+        acquisitionId,
+        principal: providerPrincipal(local.publisherId)
+      })
+    },
+    async forgetAcquisition(acquisitionId) {
+      if (!publisherShell) return null
+      const local = await publisherShell.ensureLocalPublisher()
+      return runtime.provider.forgetAcquisition({
         acquisitionId,
         principal: providerPrincipal(local.publisherId)
       })
@@ -1330,6 +1348,14 @@ async function buildRelayService({
         return result?.manifest || result || null
       }
       return null
+    },
+    // Whether this relay itself holds every block of a publication's rendition.
+    // Read-only: it inspects the local bitfield and pulls nothing, so an
+    // operator console can ask on every refresh without changing the answer.
+    async getLocalResidency({ publicationId, renditionId = null } = {}) {
+      if (typeof runtime.api?.getLocalRangeResidency !== 'function') return null
+      const result = await runtime.api.getLocalRangeResidency({ publicationId, renditionId }).catch(() => null)
+      return result?.success === true ? result : null
     },
     getArchiveMirrorRequests() {
       return runtime.getArchiveMirrorRequests?.() || []

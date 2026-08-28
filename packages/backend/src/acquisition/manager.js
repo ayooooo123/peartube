@@ -11,6 +11,7 @@ import {
   idempotencyDigestFor,
   normalizeAcquisitionRequest,
   normalizePrincipalId,
+  PUBLICATION_MEDIA_FIELDS,
   projectAcquisitionJob
 } from './contract.js'
 import { createAcquisitionAdmissionLedger } from './accounting.js'
@@ -41,11 +42,17 @@ function durableSourceIdentity (identity) {
   const digest = crypto.hash(b4a.from(`peartube.acquisition.source-identity.v1\u0000${identity.kind}\u0000${identity.value}`))
   return { kind: 'etag', value: `etag-${b4a.toString(digest, 'hex')}` }
 }
-const PUBLICATION_MEDIA_FIELDS = new Set(['kind', 'namespace', 'identifier', 'title', 'season', 'episode', 'releaseYear', 'workEntityId'])
+
 
 function publicationMetadata(value) {
-  const output = { title: null, mediaContext: null }
+  const output = { title: null, sourceFileName: null, mediaContext: null }
   if (typeof value?.title === 'string' && value.title && b4a.byteLength(value.title) <= 512) output.title = value.title
+  // The name the source gave the file. Two versions of one work are told apart
+  // by this and by their byte length, so it is kept verbatim rather than
+  // regenerated from a title.
+  if (typeof value?.sourceFileName === 'string' && /^[^/\\]{1,255}$/.test(value.sourceFileName)) {
+    output.sourceFileName = value.sourceFileName
+  }
   if (value?.mediaContext && typeof value.mediaContext === 'object' && !Array.isArray(value.mediaContext)) {
     const context = {}
     for (const [key, entry] of Object.entries(value.mediaContext)) {
@@ -164,10 +171,18 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       const policyValue = await currentPolicy()
       const grant = sourceGrants.inspect({ acquisitionId: job.acquisitionId, principal: job.principalId })
       const resolution = grant || await provider.resolve({ ref: job.request.resolutionRef, request: job.request, principalId: job.principalId })
+      // Bytes start moving on the next line but one. `allowedAdapterIds` can
+      // only gate a source that says which adapter it is, and admission skips
+      // the allowlist for an unnamed one - which is right at request time,
+      // where no adapter has been chosen yet, and wrong here. A resolution that
+      // reaches the fetch without naming its adapter is refused rather than
+      // admitted past the operator's allowlist.
+      const adapterId = resolution?.adapterId ?? null
+      if (adapterId === null) fail('ACQUISITION_ADAPTER_DENIED', 'the resolved source names no adapter, so no allowlist can admit it', 403)
       await policy.admit({
         request: job.request,
         principal: principalForJob(job),
-        adapterId: resolution?.adapterId ?? null,
+        adapterId,
         freeDiskBytes: freeDiskBytes(),
         isRemote: job.isRemote === true
       })
@@ -328,6 +343,14 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       const running = active.get(acquisitionId)
       if (running) { running.cancelled = true; running.controller.abort(); await running.promise.catch(() => {}) } else { await terminal(job, 'cancelled', 'CANCELLED', false); await discard(job, acquisitionError('CANCELLED')); ledger.release(acquisitionId); await sourceGrants.revoke({ acquisitionId, principal, reason: acquisitionError('CANCELLED') }).catch(() => {}) }
       return publicJob(await store.get(acquisitionId))
+    },
+    // Clearing a finished attempt is the operator's call, so it is owner-checked
+    // like every other mutation and refuses anything still running.
+    async forget ({ acquisitionId, principal } = {}) {
+      assertOpen(); const job = await owned(acquisitionId, principal)
+      if (!job) return { forgotten: false, acquisitionId, state: null }
+      const result = await store.forget(acquisitionId)
+      return { forgotten: result.forgotten === true, acquisitionId, state: result.state }
     },
     acceptRemoteRequest (input = {}) { return this.request({ ...input, isRemote: true }) },
     async acceptOffer ({ acquisitionId, offer, principal } = {}) { const job = await owned(acquisitionId, principal); if (!job || TERMINAL.has(job.state)) return publicJob(job); await network?.assign?.({ acquisitionId, offer }); await dispatchQueued(); return publicJob(job) },

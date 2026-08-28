@@ -29,36 +29,40 @@ test('archive UI commands and flags are exposed by the relay CLI', async (t) => 
   t.ok(compose.includes('PEARTUBE_ARCHIVE_COOKIES_PATH'), 'compose documents optional YouTube cookies path for bot checks')
 })
 
-test('archive TUI and WebUI render queue, archive form, and publish actions', async (t) => {
+test('archive TUI renders the queue and the Discover route carries the archive form', async (t) => {
   const model = {
     status: { peers: 3, feedEntries: 7, seeding: { videos: 11 } },
     jobs: [{ id: 'arch_1', status: 'queued', channelName: 'Anon', title: 'Queued video' }]
   }
 
   const tui = renderArchiveTui(model)
-  const web = renderArchiveWebHome(model)
+  const web = renderArchiveWebHome(model, { view: 'discover' })
 
   t.ok(tui.includes('PearTube Relay Archive Console'), 'TUI has relay archive heading')
   t.ok(tui.includes('Anonymous channel'), 'TUI calls out anonymous channels')
   t.ok(tui.includes('Publish to network'), 'TUI shows publish action')
-  t.ok(web.includes('action="/archive"') && web.includes('enctype="multipart/form-data"'), 'WebUI exposes archive job form that accepts uploads')
-  t.ok(web.includes('name="url"'), 'WebUI accepts video or channel URL')
-  t.ok(web.includes('type="file"') && web.includes('name="file"'), 'WebUI accepts a video file upload')
-  t.ok(web.includes('name="channelName"'), 'WebUI accepts anonymous channel name')
-  t.ok(web.includes('Queued video'), 'WebUI renders archive queue')
+  t.ok(tui.includes('Queued video'), 'TUI renders the archive queue')
+  t.ok(web.includes('action="/archive"') && web.includes('enctype="multipart/form-data"'), 'the Discover route exposes the archive form')
+  t.ok(web.includes('name="url"'), 'the form accepts a video or channel URL')
+  t.ok(web.includes('type="file"') && web.includes('name="file"'), 'the form accepts a video file upload')
+  t.ok(web.includes('name="channelName"'), 'the form accepts an anonymous channel name')
+  t.absent(web.includes('Queued video'), 'transfers live on the operator console, not on a catalog page')
 })
 
-test('archive WebUI only links playback for a verified v2 candidate reference', (t) => {
-  const verified = 'V'.repeat(43)
-  const web = renderArchiveWebHome({
-    library: [
-      { title: 'Verified title', candidateRef: verified, status: { label: 'Saved' } },
-      { title: 'Metadata only', candidateRef: 'publication-id-is-not-a-capability', status: { label: 'Listed' } }
-    ]
-  })
-  t.ok(web.includes(`href="/play/${verified}"`))
-  t.absent(web.includes('/play/publication-id-is-not-a-capability'), 'publication ids never regain direct stream access')
-  t.absent(web.includes('Simple relay catalog'), 'the duplicate JSON projection is not advertised')
+test('catalog routes render one section group and never the release table', (t) => {
+  const model = {
+    status: { network: { peers: 2 } },
+    creators: [{ creatorId: 'youtube:channel:UC1', name: 'One', videosArchived: 3, videosUnseeded: 2 }],
+    unseededTargets: [{ creatorId: 'youtube:channel:UC1', name: 'One', videosArchived: 3, videosUnseeded: 2 }]
+  }
+  const creators = renderArchiveWebHome(model, { view: 'creators' })
+  t.ok(creators.includes('Tracked creators') && creators.includes('Unseeded targets'))
+  t.ok(creators.includes('<b>2</b><span>Unseeded</span>'), 'the header counts videos with no copy here')
+  t.absent(creators.includes('Archive inventory'), 'the shelf moved to the release console')
+  t.absent(creators.includes('Transfers &amp; acquisition history'))
+
+  const unknown = renderArchiveWebHome(model, { view: 'nope' })
+  t.ok(unknown.includes('Discover missing movies'), 'an unknown view falls back to Discover, never to an all-in-one page')
 })
 
 
@@ -649,7 +653,7 @@ test('the read-only S3 panel reports block offload state without inventing bucke
         residentBytes: 64 * 1024 ** 2
       }
     }
-  })
+  }, { view: 'settings' })
 
   t.ok(enabled.includes('S3 block store'), 'the panel names the storage used by the seed path')
   t.ok(enabled.includes('Block offload: <span class="status-line on">enabled</span>'), 'the panel calls out that offload is on')
@@ -659,7 +663,7 @@ test('the read-only S3 panel reports block offload state without inventing bucke
   t.absent(enabled.includes('Written to the store'), 'temporary writes are not presented as durable inventory')
   t.absent(enabled.includes('Offloaded:'), 'restart-scoped counters are not presented as durable inventory')
 
-  const disabled = renderArchiveWebHome({ s3: { configured: true, endpoint: 'https://s3.example.com', bucket: 'b', region: 'r', prefix: '' } })
+  const disabled = renderArchiveWebHome({ s3: { configured: true, endpoint: 'https://s3.example.com', bucket: 'b', region: 'r', prefix: '' } }, { view: 'settings' })
   t.ok(disabled.includes('Block offload: <span class="status-line ">disabled</span>'), 'a relay with no offload says so')
   t.ok(disabled.includes("Media block data stays on this relay's volume."), 'and says where the block data is instead')
   t.absent(disabled.includes('Resident window'), 'no window is reported when nothing is offloaded')

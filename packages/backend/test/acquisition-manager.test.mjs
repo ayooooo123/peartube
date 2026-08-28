@@ -107,6 +107,7 @@ test('manager binds an unknown source identity before bytes and keeps public pub
   t.is(completed.state, 'completed')
   t.alike(fixtureValue.publishedInput().resolution, {
     title: 'Durable title',
+    sourceFileName: null,
     mediaContext: { kind: 'movie', namespace: 'catalog', identifier: 'title-1' }
   })
   await fixtureValue.manager.close()
@@ -197,5 +198,34 @@ test('explicit cancellation is terminal while shutdown leaves interrupted work r
   }), /ACQUISITION_NOT_QUEUED/)
   const cancelled = await fixtureValue.manager.cancel({ acquisitionId: queued.acquisitionId, principal: PRINCIPAL })
   t.is(cancelled.state, 'cancelled'); t.is(cancelled.recoverable, false)
+  await fixtureValue.manager.close()
+})
+
+// `allowedAdapterIds` is the operator saying which sources this node may fetch
+// through. Admission skips that list when a resolution names no adapter, which
+// is correct at request time - nothing has been chosen yet - and would be a way
+// past the allowlist at the moment bytes start moving.
+test('a source that reaches the fetch without naming its adapter is refused, and nothing is read', async t => {
+  let opened = 0
+  const anonymous = provider()
+  const fixtureValue = fixture({
+    acquisitionProvider: {
+      ...anonymous,
+      async resolve () { const resolved = await anonymous.resolve(); return { ...resolved, adapterId: null } },
+      async open (input) { opened++; return anonymous.open(input) }
+    }
+  })
+  await fixtureValue.manager.start()
+
+  const queued = await fixtureValue.manager.request({ idempotencyKey: 'request-anonymous-adapter', request: REQUEST, principal: PRINCIPAL })
+  t.is(queued.state, 'queued', 'the request is admitted, because a request names a resolution and not an adapter')
+
+  const failed = await eventually(
+    () => fixtureValue.manager.get({ acquisitionId: queued.acquisitionId, principal: PRINCIPAL }),
+    job => job.state === 'failed'
+  )
+  t.is(failed.errorCode, 'ACQUISITION_ADAPTER_DENIED', 'the fetch is refused by the allowlist it could not be checked against')
+  t.is(opened, 0, 'and the source was never opened')
+  t.is(fixtureValue.publishes(), 0)
   await fixtureValue.manager.close()
 })

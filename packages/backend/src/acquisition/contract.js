@@ -27,11 +27,27 @@ export const ACQUISITION_EVENT_TYPES = Object.freeze([
 ])
 
 const REQUEST_FIELDS = new Set(['schemaVersion', 'resolutionRef', 'publisherId', 'retentionClass', 'retentionUntil'])
+// What the durable job knows about the work it is fetching. It is publisher
+// metadata, never source material: an operator surface has to be able to name
+// a transfer, and `acquisitionId` names a machine.
+export const PUBLICATION_MEDIA_FIELDS = new Set([
+  'kind',
+  'namespace',
+  'identifier',
+  'title',
+  'season',
+  'episode',
+  'releaseYear',
+  'workEntityId'
+])
 const PUBLIC_JOB_FIELDS = new Set([
   'schemaVersion',
   'acquisitionId',
   'state',
   'retentionClass',
+  'title',
+  'sourceFileName',
+  'mediaContext',
   'bytesAcquired',
   'expectedBytes',
   'publicationId',
@@ -64,6 +80,10 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const RESOLUTION_REF = /^[A-Za-z0-9_-]{43}$/
 const LOCATOR = /^(?:[a-z][a-z0-9+.-]*:(?:\/\/)?|\/\/)/i
 const SENSITIVE_FIELD = /(?:url|uri|href|link|magnet|torrent|cookie|authorization|credential|secret|password|passkey|debrid|headers?|adapter|source(?:capability|descriptor|grant|token|url|path)|grant|token|localpath|filepath|privateinfohash|tracker(?:url|id|announce)?)/i
+// The name the source called the file. It is a label, never a locator: no
+// separator, no scheme, no control characters. Keeping it is what lets an
+// operator tell two versions of one work apart.
+const SOURCE_FILE_NAME = /^[^/\\]{1,255}$/
 const SENSITIVE_VALUE = /(?:[a-z][a-z0-9+.-]*:\/\/|\bmagnet:|\b(?:passkey|authkey|torrent[_-]?pass|private[_-]?infohash|tracker(?:url|id)|authorization|cookie)\s*[:=])/i
 
 export class AcquisitionContractError extends Error {
@@ -204,6 +224,22 @@ function nullableIdentifier (value, name) {
   return value == null ? null : text(value, name, 128, { pattern: ID, code: 'ACQUISITION_JOB_INVALID' })
 }
 
+// A media coordinate is either a bounded label or a non-negative ordinal, and
+// nothing else may ride along. The whitelist is the same one the durable store
+// enforces, so a projection can never widen what persistence accepted.
+export function normalizePublicMediaContext (input, code = 'ACQUISITION_JOB_INVALID') {
+  if (input == null) return null
+  if (typeof input !== 'object' || Array.isArray(input)) fail(code, 'mediaContext is invalid')
+  const result = {}
+  for (const [key, value] of Object.entries(input)) {
+    if (!PUBLICATION_MEDIA_FIELDS.has(key)) fail(code, `mediaContext field ${key} is not permitted`)
+    result[key] = typeof value === 'string'
+      ? text(value, `mediaContext.${key}`, 512, { code })
+      : uint(value, `mediaContext.${key}`, { code })
+  }
+  return Object.keys(result).length === 0 ? null : Object.freeze(result)
+}
+
 export function normalizeAcquisitionJob (input) {
   onlyFields(input, PUBLIC_JOB_FIELDS, 'acquisition job', 'ACQUISITION_JOB_INVALID')
   if (input.schemaVersion !== ACQUISITION_SCHEMA_VERSION) fail('ACQUISITION_JOB_INVALID', 'schemaVersion must be 1')
@@ -214,6 +250,11 @@ export function normalizeAcquisitionJob (input) {
     acquisitionId: text(input.acquisitionId, 'acquisitionId', 128, { pattern: ID, code: 'ACQUISITION_JOB_INVALID' }),
     state: input.state,
     retentionClass: input.retentionClass,
+    title: input.title == null ? null : text(input.title, 'title', 512, { code: 'ACQUISITION_JOB_INVALID' }),
+    sourceFileName: input.sourceFileName == null
+      ? null
+      : text(input.sourceFileName, 'sourceFileName', 255, { pattern: SOURCE_FILE_NAME, code: 'ACQUISITION_JOB_INVALID' }),
+    mediaContext: normalizePublicMediaContext(input.mediaContext),
     bytesAcquired: uint(input.bytesAcquired, 'bytesAcquired', { maximum: MAX_ACQUISITION_BYTES, code: 'ACQUISITION_JOB_INVALID' }),
     expectedBytes: uint(input.expectedBytes, 'expectedBytes', { minimum: 1, maximum: MAX_ACQUISITION_BYTES, code: 'ACQUISITION_JOB_INVALID' }),
     publicationId: nullableIdentifier(input.publicationId, 'publicationId'),
@@ -237,19 +278,35 @@ export function normalizeAcquisitionJob (input) {
   return Object.freeze(result)
 }
 
-export function projectAcquisitionJob (job) {
+function publicMetadataOf (job) {
+  const metadata = job?.publicationMetadata || {}
+  return {
+    title: metadata.title ?? null,
+    sourceFileName: metadata.sourceFileName ?? null,
+    mediaContext: metadata.mediaContext ?? null
+  }
+}
+
+function publicPublicationOf (job) {
   const publication = job?.publication || {}
+  return {
+    publicationId: publication.publicationId ?? null,
+    manifestId: publication.manifestId ?? null,
+    renditionId: publication.renditionId ?? null,
+    assetId: publication.assetId ?? null
+  }
+}
+
+export function projectAcquisitionJob (job) {
   return normalizeAcquisitionJob({
     schemaVersion: ACQUISITION_SCHEMA_VERSION,
     acquisitionId: job?.acquisitionId,
     state: job?.state,
     retentionClass: job?.retentionClass,
+    ...publicMetadataOf(job),
     bytesAcquired: job?.bytesAcquired,
     expectedBytes: job?.expectedBytes,
-    publicationId: publication.publicationId ?? null,
-    manifestId: publication.manifestId ?? null,
-    renditionId: publication.renditionId ?? null,
-    assetId: publication.assetId ?? null,
+    ...publicPublicationOf(job),
     errorCode: job?.errorCode ?? null,
     recoverable: job?.recoverable === true,
     createdAt: job?.createdAt,

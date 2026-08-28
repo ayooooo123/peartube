@@ -31,7 +31,8 @@
     "typecheck": "npm run typecheck --prefix packages/platform",
     "test": "npm test --prefix packages/spec && npm test --prefix packages/backend && npm test --prefix packages/host",
     "test:watch": "npm run test:watch --prefix packages/backend",
-    "lint": "eslint . --ext .js,.jsx,.ts,.tsx --quiet",
+    "lint": "npm run lint:complexity && eslint . --ext .js,.jsx,.ts,.tsx --quiet",
+    "lint:complexity": "oxlint -c .oxlintrc.json packages/backend/src packages/cli/src packages/cli/bin.js packages/app/app packages/app/components packages/app/lib packages/app/backend packages/host/src packages/platform/src scripts packages/spec/schema.cjs --max-warnings 369",
     "lint:changed": "node scripts/lint-changed.mjs",
     "lint:fix": "npm run lint -- --fix",
     "install:all": "npm install && npm install --prefix packages/spec && npm install --prefix packages/backend && npm install --prefix packages/host && npm install --prefix packages/platform && npm install --prefix packages/app --legacy-peer-deps"
@@ -44,6 +45,7 @@
     "eslint-plugin-react": "^7.37.0",
     "eslint-plugin-react-hooks": "^4.6.2",
     "hypercore-blob-server": "^1.12.0",
+    "oxlint": "^1.80.0",
     "typescript": "~6.0.3"
   },
   "overrides": {

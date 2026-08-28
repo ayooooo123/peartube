@@ -182,3 +182,48 @@ test('a window of zero keeps no block data local, and offload off keeps all of i
     'with offload off there is no wrapper, so there is nothing to evict from'
   )
 })
+
+// The storage layer learns a core's key only after that core is open, and
+// opening it already arms its residency ledger. The hold is what keeps a sweep
+// out of that window, so a core registered as keep-local a moment later still
+// has all its blocks.
+test('a sweep asked for while eviction is held runs only after the keep-local list is registered', async (t) => {
+  const { offload, storage, core, discoveryKey, raw } = await fixture(t, { window: WINDOW_BYTES })
+
+  offload.holdEviction()
+
+  let swept = false
+  const sweeping = storage.offloadSweep().then((stats) => { swept = true; return stats })
+  await new Promise(resolve => setTimeout(resolve, 50))
+
+  t.is(swept, false, 'the sweep is still waiting on the hold')
+  t.is((await residency(raw, discoveryKey)).bytes, BLOCK_COUNT * BLOCK_SIZE, 'and nothing has left the volume')
+
+  // Registered inside the hold: this is the ordering the storage layer relies on.
+  offload.excludeCore(b4a.toString(core.key, 'hex'))
+  offload.startEviction()
+  await sweeping
+
+  t.is(swept, true, 'the sweep completes once the hold is released')
+  t.is((await residency(raw, discoveryKey)).bytes, BLOCK_COUNT * BLOCK_SIZE, 'and the core registered during the hold kept every block')
+})
+
+// A hold that outlives the open would stop every sweep for the life of the
+// process, and offload would look configured while quietly doing nothing. The
+// release therefore has to survive a failing open, which is why the storage
+// layer releases in a `finally`.
+test('a hold released after a failed open still lets sweeps run', async (t) => {
+  const { offload, storage, discoveryKey, raw } = await fixture(t, { window: WINDOW_BYTES })
+
+  offload.holdEviction()
+  // The storage layer's failure path: cleanup throws, the release still runs.
+  try {
+    await Promise.reject(new Error('metaCore.ready failed'))
+  } catch {
+    offload.startEviction()
+  }
+
+  await storage.offloadSweep()
+
+  t.is((await residency(raw, discoveryKey)).bytes, WINDOW_BYTES, 'the sweep ran and trimmed to the window')
+})

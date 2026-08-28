@@ -116,6 +116,20 @@ export async function createRelayBlockOffload ({
   const log = (message) => logger?.archive?.debug?.(message)
 
   let offloadStats = () => ({ restored: 0, eviction: null })
+  // Cores the operator's data lives in rather than media blocks. Offload moves
+  // block DATA to the bucket and keeps only the merkle tree and bitfield on
+  // disk, which is right for a 50 GB title and wrong for the metadata core: it
+  // holds the acquisition ledger, accounting and settings, it is small, and
+  // every read of it would otherwise depend on a remote bucket. A core is
+  // excluded by key once the storage layer knows it.
+  const excluded = new Set()
+  // Sweeps run unless a caller explicitly holds them. The storage layer holds
+  // while it opens the cores that stay on this volume, because opening a core
+  // arms its residency ledger and a sweep in that window would evict exactly
+  // the blocks the registration protects. Open by default so a consumer that
+  // never registers anything can never hang waiting for a release.
+  let evictionReady = null
+  let openEviction = null
   const storeFor = (coreKey) => createRemoteBlockStore({ provider: objectStore, prefix, coreKey })
 
   const rawConcurrency = Number(settings.uploadConcurrency || process.env.PEARTUBE_ARCHIVE_UPLOAD_CONCURRENCY || 16)
@@ -128,6 +142,35 @@ export async function createRelayBlockOffload ({
     prefix,
     bucket,
 
+    /**
+     * Keep a core's blocks on this volume. The storage layer calls this for the
+     * cores that hold operational state rather than media, before any of their
+     * blocks can be evicted.
+     */
+    excludeCore (coreKey) {
+      if (typeof coreKey === 'string' && coreKey.length === 64) excluded.add(coreKey.toLowerCase())
+    },
+    isExcluded (coreKey) {
+      return typeof coreKey === 'string' && excluded.has(coreKey.toLowerCase())
+    },
+    /**
+     * Hold every sweep until `startEviction` releases it. Called by the storage
+     * layer before it opens the cores it will register as keep-local, so no
+     * sweep can run against a list that is not complete yet. Re-entrant calls
+     * keep the existing hold rather than opening a second one.
+     */
+    holdEviction () {
+      if (evictionReady !== null) return
+      evictionReady = new Promise(resolve => { openEviction = resolve })
+    },
+    /**
+     * Every keep-local core is registered; sweeps may run.
+     */
+    startEviction () {
+      openEviction?.()
+      openEviction = null
+      evictionReady = null
+    },
     /**
      * Local working space a bounded ingest of `streamBytes` needs on this
      * volume: the window it keeps resident plus the two blocks in flight plus
@@ -156,6 +199,9 @@ export async function createRelayBlockOffload ({
     wrapStorage (storage) {
       const wrapped = createOffloadStorage({
         storage,
+        // Every core still resolves a store, so a block already in the bucket
+        // is always restorable. Excluded cores are held back from eviction
+        // instead, which lets their blocks come home and stay home.
         resolveStore: ({ keyHex }) => (
           typeof keyHex === 'string' && keyHex.length === 64 ? storeFor(keyHex) : null
         ),
@@ -165,7 +211,14 @@ export async function createRelayBlockOffload ({
           // exact block range each active player is blocking on, and the
           // backend runs in this process, so this reads the same registry the
           // blob server writes into — no second model of the playhead.
-          isPinned: ({ keyHex, index }) => isBlockPlaybackPinned(keyHex, index)
+          isPinned: ({ keyHex, index }) => isBlockPlaybackPinned(keyHex, index),
+          // The operator's keep-local list, read per sweep and only once any
+          // hold has been released. Restore still answers for these cores;
+          // nothing sweeps them.
+          isEvictable: async ({ keyHex }) => {
+            if (evictionReady !== null) await evictionReady
+            return !excluded.has(String(keyHex).toLowerCase())
+          }
         },
         log
       })

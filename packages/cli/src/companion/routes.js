@@ -310,10 +310,13 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
   const capabilityStore = capabilities || createStreamCapabilityStore({ now: clock })
 
   async function search (input, url) {
-    const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.search)
+    // The principal authorizes the call; it is not part of the query. The
+    // provider's search contract is a closed field list and refuses `principal`
+    // outright, which turned every authenticated search into a 502.
+    requirePrincipal(input, COMPANION_ROUTE_SCOPES.search)
     const query = decodeSearchQuery(url.searchParams)
     if (typeof service.search !== 'function') unavailable('Index search')
-    const raw = await callBackend(service.search.bind(service), [{ ...query, principal, signal: input.signal }], input.signal)
+    const raw = await callBackend(service.search.bind(service), [{ ...query, signal: input.signal }], input.signal)
     const candidates = candidateList(raw).slice(0, query.limit).map(backendCandidate)
     const returnedCursor = raw && !Array.isArray(raw) ? (raw.nextCursor ?? raw.cursor) : null
     const cursor = returnedCursor == null

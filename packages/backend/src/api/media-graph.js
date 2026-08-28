@@ -376,7 +376,34 @@ function availabilityResponse(availability) {
   }
 }
 
-function sourceResponse(source) {
+// An episode's identity is signed into its external reference as
+// `show:<mediaId>:s<season>:e<episode>` (`channel/structured-content.js`), so a
+// catalog reader can name the episode without inferring it from a title. A
+// reference that does not carry ordinals is a work-level coordinate and says so.
+const EPISODE_REFERENCE = /^show:([^:]+):s(\d+):e(\d+)$/i
+
+export function mediaCoordinatesResponse(externalRefs, entityKind, releaseYear) {
+  const ref = (externalRefs || []).find(candidate => candidate?.namespace && candidate?.identifier)
+  if (!ref) return null
+  const episode = EPISODE_REFERENCE.exec(String(ref.identifier))
+  if (episode) {
+    return {
+      contentKind: 'episode',
+      mediaProvider: ref.namespace,
+      mediaId: episode[1],
+      seasonNumber: schemaUint(episode[2]),
+      episodeNumber: schemaUint(episode[3]),
+    }
+  }
+  return {
+    contentKind: entityKind === 'series' || entityKind === 'show' ? 'series' : 'movie',
+    mediaProvider: ref.namespace,
+    mediaId: String(ref.identifier),
+    ...(releaseYear ? { releaseYear: schemaUint(releaseYear) } : {}),
+  }
+}
+
+function sourceResponse(source, mediaCoordinates = null) {
   return {
     publicationId: source.publicationId,
     publisherId: source.publisherId,
@@ -388,6 +415,9 @@ function sourceResponse(source) {
     moderationPenalty: schemaUint(source.moderationPenalty),
     preferred: source.preferred === true,
     availability: availabilityResponse(source.availability),
+    // The work coordinate the publisher signed, carried per source because a
+    // reader decides per release which episode or film it is looking at.
+    ...(mediaCoordinates ? { mediaCoordinates } : {}),
   }
 }
 
@@ -515,6 +545,23 @@ export function createMediaGraphApi(options = {}) {
       coreLength: core.length,
       requiredRanges: requiredRangesForRendition(rendition),
     }
+  }
+
+  // Publication-shaped: `getManifest` needs no rendition id, and the rendition
+  // projection is only a fallback for views that do not expose it.
+  async function residencyManifest(publicationId) {
+    const manifest = await verifiedQueryView.getManifest?.({ publicationId })
+    if (manifest) return manifest
+    const projected = await verifiedQueryView.getRendition?.({ publicationId })
+    return projected?.manifest || null
+  }
+
+  async function countLocalRanges(core, ranges) {
+    let held = 0
+    for (const range of ranges) {
+      if (await core.has(range.start, range.end) === true) held++
+    }
+    return held
   }
 
   async function retainEntitySources(entityId, publicationId = null) {
@@ -852,6 +899,7 @@ export function createMediaGraphApi(options = {}) {
         for (const projected of await verifiedQueryView.listEntities()) {
           const resolved = projected.resolved
           const built = await buildSources(projected.entityId, scope, projected)
+          const coordinates = mediaCoordinatesResponse(projected.externalRefs, projected.entityKind, resolved.metadata?.releaseYear)
           summaries.push({
             entityId: projected.entityId,
             entityKind: projected.entityKind,
@@ -861,7 +909,7 @@ export function createMediaGraphApi(options = {}) {
             claimCount: resolved.claims.length,
             conflictCount: resolved.conflicts.length,
             availability: availabilityResponse(entityAvailability(built, scope)),
-            sources: built.sources.map(sourceResponse),
+            sources: built.sources.map(source => sourceResponse(source, coordinates)),
             renditions: mediaRenditionDescriptors(built),
             ...summaryMediaFields(resolved.metadata),
           })
@@ -1159,6 +1207,49 @@ export function createMediaGraphApi(options = {}) {
         async close() {
           try { await core.close?.() } catch { /* best effort */ }
         },
+      }
+    },
+
+    /**
+     * Does this device hold every block of a publication's rendition, right now?
+     *
+     * Catalog presence and peer availability answer different questions: a
+     * signed manifest says the file exists, and an availability observation says
+     * somebody could serve it. Neither says the bytes are on this disk, and an
+     * operator surface that says "Local" has to mean it. This reads the local
+     * bitfield only - it opens no connection, retains nothing, and pulls no
+     * block, so asking never changes the answer.
+     */
+    async getLocalRangeResidency(request = {}) {
+      const missingView = requireQueryView()
+      if (missingView) return missingView
+      const publicationId = request.publicationId
+      if (!publicationId) return error('INVALID_RESIDENCY_REQUEST', 'publicationId is required')
+      const requirement = manifestRequirement(
+        await residencyManifest(publicationId),
+        request.renditionId || null,
+      )
+      if (!requirement) return error('MEDIA_RENDITION_UNAVAILABLE', 'No unblocked rendition names ranges for this publication')
+      const corestore = options.store || options.ctx?.store || null
+      if (typeof corestore?.get !== 'function') return error('MEDIA_RENDITION_UNAVAILABLE', 'No local corestore is available')
+      let core = null
+      try {
+        core = corestore.get({ key: b4a.from(requirement.coreKey, 'hex') })
+        await core.ready?.()
+        const localRangeCount = await countLocalRanges(core, requirement.requiredRanges)
+        return {
+          success: true,
+          publicationId,
+          renditionId: requirement.renditionId,
+          requiredRangeCount: requirement.requiredRanges.length,
+          localRangeCount,
+          complete: requirement.requiredRanges.length > 0 && localRangeCount === requirement.requiredRanges.length,
+          observedAt: clock(),
+        }
+      } catch (err) {
+        return error('MEDIA_RENDITION_UNAVAILABLE', err?.message || 'Local residency could not be read')
+      } finally {
+        try { await core?.close?.() } catch { /* best effort */ }
       }
     },
 

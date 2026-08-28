@@ -1,6 +1,7 @@
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 
+import { normalizePublicMediaContext } from '../acquisition/contract.js'
 import { episodeWorkIdentifier } from '../channel/structured-content.js'
 import {
   PROVIDER_ERROR_CODES,
@@ -213,6 +214,12 @@ function publicAcquisition(value) {
     acquisitionId: text(value.acquisitionId, 'acquisition.acquisitionId', 128),
     state,
     retentionClass,
+    // An operator console names a transfer by its work, not by its job id. The
+    // durable record already carries publisher metadata; refusing to project it
+    // is what left every row reading `Acquisition ing_…`.
+    title: nullableText(value.title, 'acquisition.title'),
+    sourceFileName: nullableText(value.sourceFileName, 'acquisition.sourceFileName', 255),
+    mediaContext: normalizePublicMediaContext(value.mediaContext),
     bytesAcquired: uint(value.bytesAcquired, 'acquisition.bytesAcquired'),
     expectedBytes: uint(value.expectedBytes, 'acquisition.expectedBytes'),
     publicationId: nullableText(value.publicationId, 'acquisition.publicationId', 128),
@@ -454,7 +461,7 @@ export function createProviderService({
   }
 
   function issueLocalResolution(input = {}) {
-    exactFields(input, ['title', 'selector', 'publisherId', 'expectedBytes'], ['idempotencyKey'], 'local resolution')
+    exactFields(input, ['title', 'selector', 'publisherId', 'expectedBytes'], ['idempotencyKey', 'sourceFileName'], 'local resolution')
     const selector = normalizeSelector(input.selector)
     const publisherId = text(input.publisherId, 'local resolution.publisherId', 64)
     if (!PUBLISHER_ID.test(publisherId)) fail(PROVIDER_ERROR_CODES.INVALID_FIELD, 'local resolution publisherId is invalid', { field: 'publisherId' })
@@ -463,6 +470,9 @@ export function createProviderService({
     const record = {
       kind: 'acquirable',
       title: text(input.title, 'local resolution.title'),
+      sourceFileName: input.sourceFileName == null
+        ? null
+        : text(input.sourceFileName, 'local resolution.sourceFileName', 255),
       mediaContext: mediaContext(selector),
       publisherId,
       publicationId: null,
@@ -654,6 +664,15 @@ export function createProviderService({
     })
   }
 
+
+// Labels a resolution carries when the record has them: what the work is
+// called, and what the source called its file.
+function resolutionLabels(record) {
+  const labels = {}
+  if (record.sourceFileName) labels.sourceFileName = record.sourceFileName
+  if (record.title) labels.title = record.title
+  return labels
+}
   function resolution(record, ref, overrides = {}) {
     const kind = overrides.kind || record.kind
     const expectedBytes = overrides.expectedBytes ?? record.expectedBytes
@@ -663,7 +682,7 @@ export function createProviderService({
       expiresAt: record.expiresAt,
       kind,
       mediaContext: record.mediaContext,
-      ...(record.title ? { title: record.title } : {}),
+      ...resolutionLabels(record),
       ...(overrides.publisherId || record.publisherId ? { publisherId: overrides.publisherId || record.publisherId } : {}),
       ...(overrides.publicationId || record.publicationId ? { publicationId: overrides.publicationId || record.publicationId } : {}),
       ...(overrides.renditionId || record.renditionId ? { renditionId: overrides.renditionId || record.renditionId } : {}),
@@ -815,6 +834,20 @@ export function createProviderService({
     return value === null ? null : publicAcquisition(value)
   }
 
+  // Clearing a finished acquisition is a durable delete, so it says what it did
+  // rather than returning a job projection that no longer exists.
+  async function forgetAcquisition({ acquisitionId, principal } = {}) {
+    const result = await acquisitionManager.forget({
+      acquisitionId: text(acquisitionId, 'acquisitionId', 128),
+      principal: normalizePrincipal(principal),
+    })
+    return Object.freeze({
+      acquisitionId: result?.acquisitionId || null,
+      forgotten: result?.forgotten === true,
+      state: result?.state || null,
+    })
+  }
+
   async function getPublication({ publicationId } = {}) {
     const record = await verifiedPublication(text(publicationId, 'publicationId', 128))
     return record === null ? null : publicPublicationRecord(record)
@@ -948,6 +981,7 @@ export function createProviderService({
     getAcquisition,
     listAcquisitions,
     cancelAcquisition,
+    forgetAcquisition,
     getPublication,
     openStream,
     getStatus,

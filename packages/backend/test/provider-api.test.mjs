@@ -14,6 +14,7 @@ function service(overrides = {}) {
     async getAcquisition() { return null },
     async listAcquisitions() { return { items: [], cursor: null } },
     async cancelAcquisition() { return null },
+    async forgetAcquisition() { return { acquisitionId: 'acquisition-1', forgotten: false, state: null } },
     async getPublication() { return null },
     async openStream() { return { schemaVersion: 1, publicationId: 'publication-1', renditionId: 'rendition-1', assetId: 'asset-1', url: 'http://127.0.0.1:8080/media', byteLength: 8, mimeType: 'video/mp4' } },
     async getStatus() { return { ready: true, searchAvailable: true, acquisitionAvailable: false, queuedAcquisitions: 0, activeAcquisitions: 0 } },

@@ -636,7 +636,21 @@ export async function createVerifiedQueryView({
       const entities = []
       for (const entityId of entityIds) {
         const entity = await entityFromSnapshot(snapshot, claims, publications, entityId, 'work')
-        if (entity) entities.push(entity)
+        if (!entity) continue
+        // The signed external references a work carries. They are what names an
+        // episode - `tmdb` plus `show:<id>:s<season>:e<episode>` - so a catalog
+        // reader can say which episode a release is without guessing from a
+        // title. Read here rather than left to the caller: the index is the only
+        // place that holds them, and a consumer of `listEntities` has no way to
+        // reach it.
+        const externalRefs = []
+        for (const row of await index.findEntityRows({ entityKind: 'work', entityId })) {
+          const result = mapIndexQueryResult(row)
+          if (result?.type !== 'external-ref') continue
+          if (!(await evaluator(queryModerationEntity(result)))) continue
+          externalRefs.push(Object.freeze({ namespace: result.namespace, identifier: result.identifier }))
+        }
+        entities.push(Object.freeze({ ...entity, externalRefs: Object.freeze(externalRefs) }))
       }
       return Object.freeze(entities)
     },

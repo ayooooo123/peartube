@@ -3,7 +3,7 @@
 Use this checklist after any Android playback, mini-player, or PiP changes.
 
 ## Important
-- Native changes under `packages/app/modules/expo-media-session/android/` require a full Android rebuild/reinstall.
+- Native changes under `packages/app/android/app/src/main/` (`PlayerActivity.kt`, `AndroidManifest.xml`) require a full Android rebuild/reinstall. The `expo-media-session` module this line used to name was removed in `5b7673098`.
 - Android playback uses `react-native-video` / Media3.
 - Do not reintroduce old-player-specific PiP bridge assumptions.
 

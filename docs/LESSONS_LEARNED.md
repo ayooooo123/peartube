@@ -67,7 +67,7 @@ Desktop worker output is now under `packages/app/desktop-build/build/workers/cor
 - the field in `packages/spec/schema.cjs`;
 - the generated `packages/spec/spec/hrpc/messages.js`;
 - app RPC metadata in `packages/spec/spec/hrpc/app-rpc-adapter.mjs`;
-- protocol readiness/version handling in `packages/protocol/src/create-client.js`;
+- protocol readiness/version handling in `packages/host/src/create-client.js`;
 - native bridge generated Swift support if the field crosses into Swift.
 
 ### Debugging Tips

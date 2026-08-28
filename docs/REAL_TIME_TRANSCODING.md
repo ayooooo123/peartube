@@ -166,7 +166,7 @@ const probeResult = await transcoder.probeMedia(url, title)
 
 ## 4. Real-Time Transcoding Pipeline
 
-### Architecture (`packages/app/backend/hls-transcoder.mjs`)
+### Architecture (`packages/backend/src/transcode/cast-transcoder.mjs`)
 
 The transcoding system uses FFmpeg for real-time conversion to HLS (HTTP Live Streaming) format:
 

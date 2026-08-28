@@ -142,24 +142,21 @@ a workaround for not using `flush()`. Fix the code before claiming it.
 
 ### 5. `federated-search.js` joins before wiring the handler, then hides the failure
 
-`packages/backend/src/search/federated-search.js:57-67`
+**Resolved by deletion.** `packages/backend/src/search/federated-search.js` no longer exists. The
+architecture cutover replaced it with `packages/backend/src/search/index-federation.js`, which
+contains no `swarm.join`, no `swarm.on('connection')`, no bare `catch {}`, and no `json` encoding,
+so none of the three findings below survive. The current `packages/backend/src/search/` is
+`candidate-contract.js`, `index-federation.js`, `metadata-envelope.js`, `semantic-finder.js`,
+`source-verifier.js`, `vector-index.js`.
 
-```js
-try { this.discovery = this.swarm.join(this.searchTopic, …) } catch {}   // 58
-if (!this._connectionHandler) { … this.swarm.on('connection', …) }       // 62-67
-```
+Original finding, kept for the audit trail — do not action it against the new file without
+re-verifying:
 
-Three things:
-- `join` before `on('connection')`. Currently survives only because lines 58-67 are synchronous, so
-  the event loop cannot deliver a connection in between. Add one `await` in that window and pairing
-  breaks silently. Wire the handler first.
-- `catch {}` on line 59 — if `join` throws, `this.discovery` is undefined and federated search never
-  works, with no error anywhere.
-- The channel uses **`json` encoding** (line ~135-145) on a stack that ships `compact-encoding`, in a
-  repo that already generates hyperschema codecs. Move it to `compact-encoding` with a versioned
-  codec and a frame bound, matching the other five protocols.
+- `join` before `on('connection')`, surviving only because the calls were synchronous.
+- `catch {}` swallowing a failed `join`, leaving `discovery` undefined and search silently dead.
+- `json` encoding on a stack that ships `compact-encoding` and generates hyperschema codecs.
 
-**Size:** S.
+**Size:** none. **Buys:** one fewer phantom task in this list.
 
 ---
 

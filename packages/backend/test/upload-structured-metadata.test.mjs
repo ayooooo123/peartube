@@ -534,3 +534,18 @@ test('malformed cover art is rejected before anything is persisted', async (t) =
     t.is(channel.addVideoCalls.length, 0, 'nothing is persisted when cover art does not validate')
   }
 })
+test('uploads persist and preserve raw release sourceFileName', async (t) => {
+  const manager = createUploadManager({ ctx: {} })
+  const channel = makeChannel()
+  const rawReleaseName = 'Lanterns.US.S01-E01.WEB-DL.1080p.ENG.mkv'
+
+  const result = await manager.uploadFromBuffer(channel, FIXTURE_BYTES, {
+    title: 'Lanterns S01E01',
+    sourceFileName: rawReleaseName,
+    mimeType: 'video/webm'
+  })
+
+  t.is(result.success, true)
+  t.is(channel.addVideoCalls[0].metadata.sourceFileName, rawReleaseName, 'the persisted record preserves exact sourceFileName')
+})
+

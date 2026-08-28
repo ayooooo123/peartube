@@ -298,8 +298,9 @@ function manifestSource(manifest, row, preferred, trust = {}, availability = nul
     publisherId,
     manifestId: manifest?.body?.manifestId || null,
     renditionId: rendition?.renditionId || null,
+    sourceFileName: manifest?.body?.sourceFileName || null,
+    title: manifest?.body?.title || null,
     // Failover identity. `entityId` anchors the work being played, and the
-    // edition and collection position distinguish cuts and episodes. Missing
     // anchors fail closed in `sourceEquivalenceKey`, which is why they are
     // read, not defaulted.
     entityId: entityId || row.body?.subjectRefs?.[0]?.entityId || null,
@@ -409,8 +410,9 @@ function sourceResponse(source, mediaCoordinates = null) {
     publisherId: source.publisherId,
     manifestId: source.manifestId,
     renditionId: source.renditionId,
+    sourceFileName: source.sourceFileName || source.manifest?.body?.sourceFileName || null,
+    title: source.title || source.manifest?.body?.title || null,
     score: schemaUint(source.score),
-    availabilityScore: schemaUint(source.availabilityScore),
     formatSupport: schemaUint(source.formatSupport),
     moderationPenalty: schemaUint(source.moderationPenalty),
     preferred: source.preferred === true,

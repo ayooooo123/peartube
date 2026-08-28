@@ -1340,8 +1340,9 @@ async function buildRelayService({
     },
     async getVerifiedManifest(publicationId) {
       if (typeof publicationId !== 'string' || !publicationId) return null
-      if (typeof runtime.ctx?.verifiedQueryView?.getManifest === 'function') {
-        return runtime.ctx.verifiedQueryView.getManifest({ publicationId })
+      const view = runtime.verifiedQueryView || runtime.backend?.verifiedQueryView || runtime.ctx?.verifiedQueryView
+      if (typeof view?.getManifest === 'function') {
+        return view.getManifest({ publicationId })
       }
       if (typeof runtime.api?.getPublicationManifest === 'function') {
         const result = await runtime.api.getPublicationManifest({ publicationId })

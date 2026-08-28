@@ -954,13 +954,17 @@ export async function createArchiveConsole({
             source?.fileName ||
             source?.filename ||
             (manifest?.body?.title && manifest.body.title !== item?.title ? manifest.body.title : null) ||
-            (releaseJob?.title && !releaseJob.title.startsWith('Acquisition ') && releaseJob.title !== item?.title ? releaseJob.title : null) ||
+            (source?.title && source.title !== item?.title ? source.title : null) ||
+            manifest?.body?.title ||
+            source?.title ||
+            (releaseJob?.title && !releaseJob.title.startsWith('Acquisition ') ? releaseJob.title : null) ||
             null
           releases.push({
             publicationId,
             renditionId: source.renditionId || null,
             sizeBytes: releaseBytes > 0 ? releaseBytes : null,
             sourceFileName,
+            title: manifest?.body?.title || source?.title || releaseJob?.title || null,
             acquisitionId: releaseJob?.id || null,
             availability: source.availability || null,
             mediaCoordinates: source.mediaCoordinates || null,
@@ -1077,7 +1081,9 @@ export async function createArchiveConsole({
     const coordinates = release.mediaCoordinates || acquisition?.mediaContext || {}
     const file = release.sourceFileName ||
       acquisition?.sourceFileName ||
+      (release.title && release.title !== work.title ? release.title : null) ||
       (acquisition?.title && !acquisition.title.startsWith('Acquisition ') && acquisition.title !== work.title ? acquisition.title : null) ||
+      release.title ||
       null
     return {
       // A publication can carry more than one rendition, and each is its own

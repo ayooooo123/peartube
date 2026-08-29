@@ -81,11 +81,16 @@ jobs:
           script: |
             APK=packages/app/android/app/build/outputs/apk/debug/app-debug.apk
             adb install -r "$APK"
+            # Both flows run through app-test.mjs rather than bare `maestro test`:
+            # it reuses this already-booted emulator, drives the flow, turns the
+            # JUnit result into a pass/fail exit code, and captures frames.
             # Hard gate — must pass.
-            maestro test .maestro/smoke.yaml --format junit --output maestro-smoke.xml
-            # Player flow needs seeded content (see .maestro/README.md); keep it
-            # non-blocking until a fixture video is wired, then drop the `|| true`.
-            maestro test .maestro/player.yaml --format junit --output maestro-player.xml || true
+            node packages/app/scripts/app-test.mjs --platform android --flow smoke
+            # Advisory. player.yaml needs content on the emulator, and seeding a
+            # relay on the host does not fix it: Hyperswarm has no local-network
+            # discovery without internet (holepunchto/hyperswarm#194), so the
+            # emulator cannot find a host-side peer. Blocked on that, not on wiring.
+            node packages/app/scripts/app-test.mjs --platform android --flow player || true
 
       - name: Upload Maestro results
         if: always()
@@ -93,6 +98,5 @@ jobs:
         with:
           name: maestro-results
           path: |
-            maestro-*.xml
-            ${{ github.workspace }}/.maestro/tests/**
+            packages/app/.artifacts/app-test/**
           retention-days: 7

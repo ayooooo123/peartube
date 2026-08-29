@@ -55,9 +55,7 @@ node scripts/app-test.mjs --platform all --record-only             # capture cur
 | `--platform android\|ios\|desktop\|all` | required target(s) |
 | `--attach <serial\|udid>` | use an already-booted device instead of booting one (Android: must be an `emulator-*` serial) |
 | `--seed` | bring up the local relay seeded with the fixture video |
-| `--no-build` | skip build/launch (device/app already running) |
 | `--record-only` | capture the current screen without driving a flow |
-| `--require-content` | fail (not skip) if the feed has no content |
 | `--eyes omp\|look` | `omp` (default): prepare frames for the agent's OMP vision; `look`: autonomous `look.py` |
 | `--flow <name>` | Maestro flow under `.maestro/<name>.yaml` (default `smoke`) |
 

@@ -41,27 +41,32 @@ finding the right selectors.
 
 `.github/workflows/e2e-mobile.yml` builds the debug APK (same recipe as
 `build-mobile.yml`), boots an Android emulator (`reactivecircus/android-emulator-runner`),
-installs the APK, and runs the flows. It is **opt-in** (heavy: ~20–40 min):
+installs the APK, and runs each flow through
+`packages/app/scripts/app-test.mjs --platform android --flow <name>` rather than
+bare `maestro test`. The harness reuses the already-booted emulator, turns the
+JUnit result into the step's exit code, and captures frames alongside it. It is
+**opt-in** (heavy: ~20-40 min):
 
 - triggers on `workflow_dispatch`, or
 - on PRs labeled **`e2e-mobile`**.
 
-Screenshots + JUnit results upload as the `maestro-results` artifact.
+Frames + JUnit upload as the `maestro-results` artifact, from
+`packages/app/.artifacts/app-test/`.
 
-## Seeding content for `player.yaml`
+## Why `player.yaml` is still advisory
 
-A fresh CI emulator has no P2P peers, so the feed is empty and `player.yaml`
-no-ops. To make it meaningful, do one of:
+A fresh emulator has no P2P peers, so the feed is empty and the flow no-ops.
+`app-test.mjs --seed` exists and brings up `docker-compose.local-relay.yml` with
+a fixture video, but that does **not** fix CI: Hyperswarm has no local-network
+discovery without internet (`holepunchto/hyperswarm#194`), and an emulator plus a
+host-side relay container is exactly that case. The emulator cannot find the
+seeded peer.
 
-1. **Upload a local test video** through Studio at the start of the flow (add an
-   `upload.yaml` flow that drives the Studio upload UI against a bundled asset), or
-2. **Point at a known test channel** by deep-linking the app to a seeded
-   `peartube://` route for a channel/video that a CI relay serves, or
-3. **Run a local relay** seeded with one fixture video and join it from the
-   emulator (mirrors `docker-compose.local-relay.yml`).
-
-Once content is reliably present, remove the `|| true` guard on the `player.yaml`
-step in `e2e-mobile.yml` so player regressions fail the build.
+So the `|| true` stays until content arrives by a route that does not depend on
+local discovery — a flow that uploads a bundled asset through the app itself, or a
+deep link to a publicly reachable seeded channel. Adding `--seed` to the CI step
+would not be enough, and would make the gate look wired while still proving
+nothing.
 
 ## testIDs to add (player.yaml depends on these)
 

@@ -578,6 +578,11 @@ function appendBounded(target, entries, budget) {
   budget.bytes = nextBytes
   target.push(...entries)
 }
+
+function rowKeyToken(collection, record) {
+  const fields = INDEX_KEY_FIELDS[collection] || []
+  return JSON.stringify([collection, ...fields.map(name => record[name])])
+}
 async function collectCurrentRows(context, pinnedView, budget) {
   const rows = []
   let count = 0
@@ -598,7 +603,7 @@ async function collectCurrentRows(context, pinnedView, budget) {
 }
 
 async function collectChanges(context, pinnedView, previousVersion, budget) {
-  const operations = []
+  const operationsMap = new Map()
   let count = 0
   throwIfAborted(context.signal)
   for await (const difference of pinnedView.createDiffStream(previousVersion, {
@@ -611,15 +616,25 @@ async function collectChanges(context, pinnedView, previousVersion, budget) {
     if (difference.right) {
       const previousRows = await normalizeProjection(context, difference.right, false)
       throwIfAborted(context.signal)
-      appendBounded(operations, previousRows.map(entry => ({ type: 'delete', ...entry })), budget)
+      for (const entry of previousRows) {
+        const op = { type: 'delete', ...entry }
+        const key = rowKeyToken(entry.collection, entry.record)
+        operationsMap.set(key, op)
+      }
     }
     if (difference.left) {
       const currentRows = await normalizeProjection(context, difference.left, true)
       throwIfAborted(context.signal)
-      appendBounded(operations, currentRows.map(entry => ({ type: 'put', ...entry })), budget)
+      for (const entry of currentRows) {
+        const op = { type: 'put', ...entry }
+        const key = rowKeyToken(entry.collection, entry.record)
+        operationsMap.set(key, op)
+      }
     }
   }
   throwIfAborted(context.signal)
+  const operations = []
+  appendBounded(operations, [...operationsMap.values()], budget)
   return operations
 }
 

@@ -1,8 +1,8 @@
 import b4a from 'b4a'
+import AbortController from 'abort-controller'
 
 import { createSourceReader, isSourceReader } from '../assets/source-reader.js'
 import { acquisitionError, normalizePrincipalId } from './contract.js'
-
 const GRANT_FIELDS = new Set(['token', 'adapterId', 'audience', 'expiresAt'])
 const AUDIENCE_FIELDS = new Set(['principalId', 'acquisitionId'])
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/

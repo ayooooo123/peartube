@@ -1,6 +1,6 @@
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
-
+import AbortController from 'abort-controller'
 import {
   MAX_ACQUISITION_BYTES,
   TERMINAL_ACQUISITION_STATES,

@@ -680,13 +680,14 @@ async function buildRelayService({
 
   async function ensureLocalAcquisitionPolicy(publisherId) {
     const current = await runtime.provider.getAcquisitionPolicy()
-    if (current.migrationRequired !== true) return current
-    const capacity = Number(config.storage?.maxBytes)
-    if (!Number.isSafeInteger(capacity) || capacity < 1) {
-      const error = new Error('storage.maxBytes is required before local acquisitions can be enabled')
-      error.code = 'ACQUISITION_STORAGE_POLICY_REQUIRED'
-      throw error
-    }
+    const allowedPublisherIds = [...new Set([...(current.allowedPublisherIds || []), publisherId])].sort()
+    const allowedAdapterIds = [...new Set([...(current.allowedAdapterIds || []), 'local-file'])].sort()
+    const needsUpdate = current.migrationRequired === true ||
+      current.enabled !== true ||
+      allowedPublisherIds.length !== (current.allowedPublisherIds || []).length ||
+      allowedAdapterIds.length !== (current.allowedAdapterIds || []).length
+    if (!needsUpdate) return current
+    const capacity = Number(config.storage?.maxBytes) || 107374182400
     return runtime.provider.setAcquisitionPolicy({
       policy: {
         policyVersion: 1,
@@ -695,8 +696,8 @@ async function buildRelayService({
         enabled: true,
         acceptPublicRequests: false,
         requesterMode: 'local-only',
-        allowedPublisherIds: [publisherId],
-        allowedAdapterIds: ['local-file'],
+        allowedPublisherIds,
+        allowedAdapterIds,
         maxQueuedJobs: 64,
         maxConcurrentJobs: 1,
         maxConcurrentPerRequester: 1,
@@ -743,7 +744,8 @@ async function buildRelayService({
           schemaVersion: 1,
           resolutionRef: resolution.resolutionRef,
           publisherId,
-          retentionClass: input.retentionClass || 'archive-pin'
+          retentionClass: input.retentionClass || 'archive-pin',
+          sourceFileName: sourceFileNameOf(input.sourceFileName)
         },
         principal
       })
@@ -825,6 +827,91 @@ async function buildRelayService({
         acquisitionId,
         principal: providerPrincipal(local.publisherId)
       })
+    },
+    async retractPublication(publicationId) {
+      if (!runtime.retractPublication) throw new Error('Publication retraction is not supported by this runtime')
+      const local = publisherShell ? await publisherShell.ensureLocalPublisher() : null
+      return runtime.retractPublication({
+        publicationId,
+        ...(local?.publisherId ? { publisherId: local.publisherId } : {})
+      })
+    },
+    async deleteRelease(target) {
+      const raw = typeof target === 'object' && target !== null ? (target.id || target.publicationId || target.acquisitionId) : String(target || '')
+      const id = String(raw || '').trim()
+      if (!id) return { id: '', done: false, reason: 'invalid release target' }
+      let publicationId = null
+      let renditionId = null
+      let acquisitionId = null
+      if (id.startsWith('acq_')) {
+        acquisitionId = id
+      } else if (id.includes(':')) {
+        const parts = id.split(':')
+        publicationId = parts[0]
+        renditionId = parts[1] || null
+      } else if (/^[0-9a-f]{64}$/i.test(id)) {
+        publicationId = id
+      } else {
+        acquisitionId = id
+      }
+      let localRetracted = false
+      let remoteBlocked = false
+      let failureReason = null
+      if (publicationId) {
+        const local = publisherShell ? await publisherShell.ensureLocalPublisher().catch(() => null) : null
+        const localPublisherId = local?.publisherId || null
+        let isLocalPublication = false
+        if (localPublisherId) {
+          try {
+            const pub = await (runtime.api?.getPublication?.(publicationId) ||
+              runtime.verifiedQueryView?.getPublication?.({ publicationId }))
+            const pubPublisherId = pub?.publisherId || pub?.body?.publisherId || null
+            if (pubPublisherId && pubPublisherId === localPublisherId) isLocalPublication = true
+          } catch {}
+        }
+        if (isLocalPublication && runtime.retractPublication) {
+          try {
+            const outcome = await runtime.retractPublication({
+              publicationId,
+              publisherId: localPublisherId
+            })
+            if (outcome?.done === true) localRetracted = true
+          } catch (err) {
+            logger?.archive?.warn?.('Retracting local publication failed', { publicationId, error: err?.message || String(err) })
+          }
+        }
+        if (renditionId && typeof runtime.scopedNetwork?.releaseAuthorizedRendition === 'function') {
+          await runtime.scopedNetwork.releaseAuthorizedRendition({
+            renditionId,
+            ownerId: publicationId || id
+          }).catch(() => {})
+        }
+        if (!localRetracted) {
+          const currentBlocked = relaySettings.get('blockedReleases', [])
+          const toAdd = [id, publicationId, ...(renditionId ? [renditionId] : [])]
+          const updatedBlocked = Array.from(new Set([...currentBlocked, ...toAdd]))
+          await relaySettings.set('blockedReleases', updatedBlocked)
+          remoteBlocked = true
+        }
+      }
+      if (acquisitionId && runtime.provider?.forgetAcquisition) {
+        try {
+          const local = publisherShell ? await publisherShell.ensureLocalPublisher().catch(() => null) : null
+          const result = await runtime.provider.forgetAcquisition({
+            acquisitionId,
+            principal: providerPrincipal(local?.publisherId || 'local-provider')
+          })
+          if (result?.forgotten === true) localRetracted = true
+          else if (!localRetracted && !remoteBlocked) failureReason = result?.reason || 'acquisition record could not be forgotten'
+        } catch (err) {
+          if (!localRetracted && !remoteBlocked) failureReason = err?.message || String(err)
+        }
+      }
+      const done = localRetracted || remoteBlocked
+      if (!done) {
+        return { id, done: false, reason: failureReason || 'nothing was deleted' }
+      }
+      return { id, done: true, state: 'deleted', ...(remoteBlocked ? { scope: 'local-block' } : { scope: 'retracted' }) }
     },
     // A getter because residency and restore activity change while the relay
     // runs. Durable bucket inventory is not guessed from process-local totals.
@@ -1309,8 +1396,31 @@ async function buildRelayService({
         return { success: false, errorCode: 'VERIFIED_QUERY_UNAVAILABLE', items: [], nextCursor: null }
       }
       const page = await runtime.api.getMediaCatalog(request)
-      if (page?.success !== true || !Array.isArray(page.items) ||
-          typeof runtime.api?.searchIndexCandidates !== 'function') return page
+      if (page?.success !== true || !Array.isArray(page.items)) return page
+      const blocked = new Set(relaySettings.get('blockedReleases', []))
+      if (blocked.size > 0) {
+        page.items = page.items.filter(item => {
+          if (blocked.has(item.publicationId) || blocked.has(item.id)) return false
+          if (Array.isArray(item.sources)) {
+            item.sources = item.sources.filter(src =>
+              !blocked.has(src.publicationId) &&
+              !blocked.has(src.renditionId) &&
+              !blocked.has(`${src.publicationId}:${src.renditionId}`)
+            )
+            if (item.sources.length === 0) return false
+          }
+          if (Array.isArray(item.publications)) {
+            item.publications = item.publications.filter(pub =>
+              !blocked.has(pub.publicationId) &&
+              !blocked.has(pub.renditionId) &&
+              !blocked.has(`${pub.publicationId}:${pub.renditionId}`)
+            )
+            if (item.publications.length === 0 && !Array.isArray(item.sources)) return false
+          }
+          return true
+        })
+      }
+      if (typeof runtime.api?.searchIndexCandidates !== 'function') return page
       const searches = new Map()
       const items = []
       for (const item of page.items) {

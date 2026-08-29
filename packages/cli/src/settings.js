@@ -13,7 +13,14 @@ function ensureParentDir(path) {
 
 function readStore(path) {
   if (!existsSync(path)) return { version: 1, updatedAt: Date.now(), values: {} }
-  return JSON.parse(readFileSync(path, 'utf8'))
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8'))
+    if (parsed && typeof parsed === 'object') {
+      if (!parsed.values || typeof parsed.values !== 'object') parsed.values = {}
+      return parsed
+    }
+  } catch {}
+  return { version: 1, updatedAt: Date.now(), values: {} }
 }
 
 /**
@@ -35,11 +42,25 @@ export class RelaySettings {
   }
 
   get(key, fallback = null) {
+    try {
+      if (existsSync(this.settingsPath)) {
+        this.data = readStore(this.settingsPath)
+      }
+    } catch {}
+    if (!this.data || typeof this.data !== 'object') this.data = { version: 1, updatedAt: Date.now(), values: {} }
+    if (!this.data.values || typeof this.data.values !== 'object') this.data.values = {}
     const value = this.data.values[key]
     return value === undefined ? fallback : value
   }
 
   async set(key, value) {
+    try {
+      if (existsSync(this.settingsPath)) {
+        this.data = readStore(this.settingsPath)
+      }
+    } catch {}
+    if (!this.data || typeof this.data !== 'object') this.data = { version: 1, updatedAt: Date.now(), values: {} }
+    if (!this.data.values || typeof this.data.values !== 'object') this.data.values = {}
     this.data.values[key] = value
     this.data.updatedAt = Date.now()
     ensureParentDir(this.settingsPath)
@@ -47,7 +68,6 @@ export class RelaySettings {
     return value
   }
 }
-
 /**
  * Resolve effective TMDB classifier options from config plus any runtime
  * settings overrides. Settings win so a console-entered key takes effect

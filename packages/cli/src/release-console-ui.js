@@ -398,6 +398,7 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
     <span id="bulk-count">0 selected</span>
     <button type="button" class="act danger" id="bulk-cancel">Cancel transfers</button>
     <button type="button" class="act danger" id="bulk-forget">Clear finished</button>
+    <button type="button" class="act danger" id="bulk-delete">Delete selected</button>
     <button type="button" class="act" id="bulk-deselect">Deselect</button>
   </div>
   <p class="verb-result" id="verb-result" role="status" aria-live="polite"></p>
@@ -470,6 +471,7 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
       if (row.acquisitionId && ['completed', 'failed', 'cancelled'].indexOf(row.state) >= 0) {
         verbs.push('<button type="button" class="act danger" data-forget="' + esc(row.acquisitionId) + '">Clear record</button>')
       }
+      verbs.push('<button type="button" class="act danger" data-delete="' + esc(row.id) + '">Delete release</button>')
       drawer.innerHTML = '<button type="button" class="act" id="drawer-close">Close</button>' +
         '<h2>' + esc(name) + '</h2>' +
         '<dl>' +
@@ -504,12 +506,13 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
       if (!ids.length) {
         result.textContent = verb === 'clear'
           ? 'Nothing to clear: select a finished release first.'
-          : 'Nothing to cancel: select a transfer that is still running.'
+          : (verb === 'delete' ? 'Nothing to delete: select a release first.' : 'Nothing to cancel: select a transfer that is still running.')
         return
       }
       if (!window.confirm(prompt)) return
       try {
-        var res = await fetch('/releases/' + (verb === 'clear' ? 'clear' : 'cancel'), {
+        var endpoint = '/releases/' + (verb === 'clear' ? 'clear' : (verb === 'delete' ? 'delete' : 'cancel'))
+        var res = await fetch(endpoint, {
           method: 'POST',
           headers: { 'content-type': 'application/x-www-form-urlencoded' },
           body: 'ids=' + encodeURIComponent(ids.join(','))
@@ -517,9 +520,9 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
         var body = await res.json()
         var done = (body.done || []).length
         var refused = body.refused || []
-        result.textContent = done + ' ' + (verb === 'clear' ? 'cleared' : 'cancelled') +
+        result.textContent = done + ' ' + (verb === 'clear' ? 'cleared' : (verb === 'delete' ? 'deleted' : 'cancelled')) +
           (refused.length
-            ? '; ' + refused.length + ' refused: ' + refused.map(function (row) { return row.acquisitionId.slice(0, 10) + ' ' + (row.reason || 'no reason given') }).join(', ')
+            ? '; ' + refused.length + ' refused: ' + refused.map(function (row) { return (row.id || row.acquisitionId || '').slice(0, 10) + ' ' + (row.reason || 'no reason given') }).join(', ')
             : '')
       } catch (err) {
         result.textContent = 'The relay did not answer that request.'
@@ -568,6 +571,14 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
           backups + ' other device(s) proved a copy. The record and its history are deleted; archived bytes are not.')
         return
       }
+      var deleteOne = ev.target.closest && ev.target.closest('[data-delete]')
+      if (deleteOne) {
+        var delId = deleteOne.getAttribute('data-delete')
+        var delRow = index[delId]
+        var delName = delRow ? (delRow.file || delRow.work || delId) : 'this release'
+        runVerb('delete', [delId], 'Delete ' + delName + '? This will retract and remove it from the relay catalog.')
+        return
+      }
       // Only running work can be cancelled, and only finished work can be
       // cleared, so each verb sends exactly the rows it can act on.
       if (ev.target.id === 'bulk-cancel') {
@@ -586,6 +597,11 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
         })
         runVerb('clear', finished.map(function (tr) { return tr.getAttribute('data-acquisition') }),
           'Clear ' + finished.length + ' finished record(s) from the job list? Their history is deleted; archived bytes are not.')
+        return
+      }
+      if (ev.target.id === 'bulk-delete') {
+        var targets = selected().map(function (tr) { return tr.getAttribute('data-id') }).filter(Boolean)
+        runVerb('delete', targets, 'Delete ' + targets.length + ' selected release(s)? This will retract and remove them from the relay catalog.')
         return
       }
       if (ev.target.id === 'bulk-deselect') {

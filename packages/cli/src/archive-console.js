@@ -830,7 +830,7 @@ export async function createArchiveConsole({
       const mimeType = staged.mimeType || 'application/octet-stream'
       const title = form.title || form.tmdbTitle || staged.filename || 'Uploaded video'
       const job = await service.requestLocalFileAcquisition({
-        idempotencyKey: `ui:${tmdbId || 'media'}:${sha256.slice(0, 32)}`,
+        idempotencyKey: `archive-${Date.now()}-${sha256.slice(0, 24)}`,
         title,
         selector,
         expectedBytes: byteLength,
@@ -881,6 +881,26 @@ export async function createArchiveConsole({
       cursor = page.nextCursor || null
       if (!cursor) break
     }
+    const rawBlocked = service.settings?.get?.('blockedReleases', []) || []
+    const blocked = new Set((Array.isArray(rawBlocked) ? rawBlocked : []).filter(Boolean).map(String))
+    if (blocked.size > 0) {
+      return items.filter(item => {
+        if (item.entityId && blocked.has(String(item.entityId))) return false
+        if (item.publicationId && blocked.has(String(item.publicationId))) return false
+        if (Array.isArray(item.sources)) {
+          item.sources = item.sources.filter(src => {
+            const pubId = src?.publicationId ? String(src.publicationId) : null
+            const rendId = src?.renditionId ? String(src.renditionId) : null
+            if (pubId && blocked.has(pubId)) return false
+            if (rendId && blocked.has(rendId)) return false
+            if (pubId && rendId && blocked.has(`${pubId}:${rendId}`)) return false
+            return true
+          })
+          if (item.sources.length === 0) return false
+        }
+        return true
+      })
+    }
     return items
   }
 
@@ -902,6 +922,8 @@ export async function createArchiveConsole({
     try {
       if (!Array.isArray(items) || items.length === 0) return []
 
+      const rawBlocked = service.settings?.get?.('blockedReleases', []) || []
+      const blocked = new Set((Array.isArray(rawBlocked) ? rawBlocked : []).filter(Boolean).map(String))
       const mirrors = new Map()
       for (const request of service.getArchiveMirrorRequests?.() || []) {
         if (!request?.publicationId) continue
@@ -936,13 +958,12 @@ export async function createArchiveConsole({
         // ordinals is still held, so it is counted without a season.
         const seasons = new Map()
         let looseEpisodes = 0
-        // Each publication under a work is one release: its own file, its own
-        // bytes, its own archivists. A decentralized debrid lists releases, so
-        // the shelf carries them rather than collapsing them into one row.
         const releases = []
         for (const source of item?.sources || []) {
           if (!source?.publicationId) continue
           const publicationId = String(source.publicationId)
+          const renditionId = source?.renditionId ? String(source.renditionId) : null
+          if (blocked.has(publicationId) || (renditionId && blocked.has(renditionId)) || (renditionId && blocked.has(`${publicationId}:${renditionId}`))) continue
           const releaseBytes = publicationBytes(manifests.get(publicationId))
           sizeBytes += releaseBytes
           itemPublicationIds.add(publicationId)
@@ -1153,30 +1174,36 @@ export async function createArchiveConsole({
     const rows = []
     const claimed = new Set()
     const published = new Set()
+    const rawBlocked = service.settings?.get?.('blockedReleases', []) || []
+    const blocked = new Set((Array.isArray(rawBlocked) ? rawBlocked : []).filter(Boolean).map(String))
     for (const work of library) {
       for (const release of work.releases || []) {
+        const pubId = release.publicationId ? String(release.publicationId) : null
+        const rendId = release.renditionId ? String(release.renditionId) : null
+        const releaseKey = rendId ? `${pubId}:${rendId}` : pubId
+        if (pubId && blocked.has(pubId)) continue
+        if (rendId && blocked.has(rendId)) continue
+        if (releaseKey && blocked.has(releaseKey)) continue
         const acquisition = release.acquisitionId ? jobs.find(job => job.id === release.acquisitionId) : null
         if (acquisition) claimed.add(acquisition.id)
-        published.add(String(release.publicationId))
+        if (pubId) published.add(pubId)
         rows.push(publicationReleaseRow(work, release, acquisition))
       }
     }
     for (const job of jobs) {
-      if (claimed.has(job.id) || published.has(String(job.publicationId))) continue
+      const jobId = job.id ? String(job.id) : null
+      const acqId = job.acquisitionId ? String(job.acquisitionId) : null
+      const pubId = job.publicationId ? String(job.publicationId) : null
+      if (jobId && blocked.has(jobId)) continue
+      if (acqId && blocked.has(acqId)) continue
+      if (pubId && blocked.has(pubId)) continue
+      if (claimed.has(job.id) || (pubId && published.has(pubId))) continue
       rows.push(acquisitionReleaseRow(job))
     }
     return rows
   }
-
-  // A local-bitfield probe per catalogued release. It runs over the whole shelf
-  // before the query, not over the page after it: residency is a sortable column
-  // and a header counter, so proving it after filtering and paging would sort
-  // stale values and report a total that mixed probed rows with unprobed ones.
-  // Nothing here pulls a block: an unproven row stays unproven until the relay
-  // really holds the ranges.
   const residencyProbes = new Map()
   const RESIDENCY_PROBE_TTL_MS = 30_000
-  // A bound on work per request, not on truth: rows past it stay unproven and
   // say so, rather than silently reading as absent.
   const RESIDENCY_PROBE_BUDGET = 256
   const RESIDENCY_PROBE_CONCURRENCY = 8
@@ -1246,6 +1273,26 @@ export async function createArchiveConsole({
     } catch (error) {
       return { acquisitionId, done: false, reason: friendlyVerbError(error) }
     }
+  }
+
+  async function deleteRelease(id) {
+    if (typeof service.deleteRelease === 'function') {
+      try {
+        const result = await service.deleteRelease(id)
+        if (result?.done) return { id, done: true, state: 'deleted' }
+      } catch (error) {
+        return { id, done: false, reason: friendlyVerbError(error) }
+      }
+    }
+    if (typeof service.forgetAcquisition === 'function') {
+      try {
+        const result = await service.forgetAcquisition(id)
+        if (result?.forgotten === true) return { id, done: true, state: 'forgotten' }
+      } catch (error) {
+        return { id, done: false, reason: friendlyVerbError(error) }
+      }
+    }
+    return { id, done: false, reason: 'this relay cannot delete records' }
   }
 
   async function proveResidency(rows) {
@@ -1482,18 +1529,20 @@ export async function createArchiveConsole({
       // Both verbs answer per id. A cancel that lands on a finished job changes
       // nothing, and the console has to say so rather than refresh and look
       // broken.
-      if (req.method === 'POST' && (req.url === '/releases/cancel' || req.url === '/releases/clear')) {
-        const clearing = req.url === '/releases/clear'
+      if (req.method === 'POST' && (req.url === '/releases/cancel' || req.url === '/releases/clear' || req.url === '/releases/delete')) {
+        const verb = req.url === '/releases/cancel' ? 'cancel' : (req.url === '/releases/delete' ? 'delete' : 'clear')
         const params = new URLSearchParams(await collectBody(req))
         const ids = String(params.get('ids') || '').split(',').map(value => value.trim()).filter(Boolean).slice(0, 64)
         const results = []
-        for (const acquisitionId of ids) {
-          results.push(await (clearing ? clearRelease(acquisitionId) : cancelRelease(acquisitionId)))
+        for (const id of ids) {
+          if (verb === 'cancel') results.push(await cancelRelease(id))
+          else if (verb === 'delete') results.push(await deleteRelease(id))
+          else results.push(await clearRelease(id))
         }
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify({
-          verb: clearing ? 'clear' : 'cancel',
-          done: results.filter(result => result.done).map(result => result.acquisitionId),
+          verb,
+          done: results.filter(result => result.done).map(result => result.id || result.acquisitionId),
           refused: results.filter(result => !result.done),
         }, null, 2))
         return

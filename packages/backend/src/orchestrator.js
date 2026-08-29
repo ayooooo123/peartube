@@ -1249,6 +1249,7 @@ export async function createBackendContext(config) {
     provider: providerSubsystem.service,
     acquisitionManager: providerSubsystem.manager,
     issueLocalProviderResolution: input => providerSubsystem.issueLocalResolution(input),
+    retractPublication: input => providerSubsystem.retractPublication(input),
     seedPin: seedPinRegistration,
     seedPinClients: seedPinRegistration?.clients || null,
     async destroy() {

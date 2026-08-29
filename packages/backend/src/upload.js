@@ -1369,7 +1369,16 @@ export function createUploadManager({
 
   async function resolveAuthorizedPublisher(publisherId) {
     if (!catalogRegistry || !deviceKeyPair?.publicKey || !deviceKeyPair?.secretKey) return null;
-    const binding = await catalogRegistry.resolve(publisherId);
+    const publisherBuffer = typeof publisherId === 'string'
+      ? (/^[0-9a-f]{64}$/i.test(publisherId) ? b4a.from(publisherId, 'hex') : null)
+      : (b4a.isBuffer(publisherId) || (publisherId instanceof Uint8Array)) && publisherId.byteLength === 32 ? b4a.from(publisherId) : null;
+    if (!publisherBuffer) return null;
+    let binding = null;
+    try {
+      binding = await catalogRegistry.resolve(publisherBuffer);
+    } catch {
+      return null;
+    }
     const catalog = binding?.catalog;
     if (!catalog?.writable || typeof catalog.getAuthorizationState !== 'function' ||
         typeof catalog.createLocalOperation !== 'function' || typeof catalog.appendBatchAndConfirm !== 'function') {
@@ -1526,6 +1535,63 @@ export function createUploadManager({
     });
     return result;
   }
+
+  async function retractAcquiredPublication({ publicationId, publisherId = null } = {}) {
+    if (!publicationId) throw new Error('publicationId is required');
+    let authorized = null;
+    if (publisherId) {
+      authorized = await resolveAuthorizedPublisher(publisherId);
+    } else {
+      const authorizedIds = await getAuthorizedPublisherIds();
+      for (const id of authorizedIds) {
+        const candidate = await resolveAuthorizedPublisher(id);
+        if (candidate) {
+          authorized = candidate;
+          break;
+        }
+      }
+    }
+    if (!authorized) throw new Error('Local device is not currently authorized to publish and claim');
+    const { catalog } = authorized;
+    const authorization = await catalog.getAuthorizationState();
+    const signerKey = b4a.toString(deviceKeyPair.publicKey, 'hex');
+    const writer = authorization?.writers?.find(candidate => candidate.signerKey === signerKey);
+    if (!writer || writer.revocation || writer.expiresAt < now() ||
+        !writer.capabilities?.includes('publish') || !writer.capabilities?.includes('claim') ||
+        !catalog.localSignerKey || !b4a.equals(catalog.localSignerKey, deviceKeyPair.publicKey)) {
+      throw new Error('Local device is not currently authorized to publish and claim');
+    }
+    const firstSequence = writer.lastAcceptedSequence + 1;
+    if (!Number.isSafeInteger(firstSequence) || firstSequence < writer.firstAcceptedSequence) {
+      throw new Error('Publisher writer sequence is unavailable');
+    }
+    const targetId = typeof publicationId === 'string'
+      ? (/^[0-9a-f]{64}$/i.test(publicationId) ? b4a.from(publicationId, 'hex') : b4a.from(publicationId))
+      : b4a.from(publicationId);
+    const operation = {
+      recordType: PUBLISHER_RECORD_TYPES.RETRACTION,
+      sequence: firstSequence,
+      body: {
+        targetType: 'publication',
+        targetId,
+        reason: b4a.from('deleted by operator')
+      }
+    };
+    const signed = await catalog.createLocalOperation({
+      ...operation,
+      policyEpoch: writer.admissionPolicyEpoch,
+      signedAt: now()
+    });
+    const receipts = await catalog.appendBatchAndConfirm([signed]);
+    if (!Array.isArray(receipts) || receipts.length !== 1 || receipts[0]?.accepted !== true) {
+      throw new Error(`Publisher catalog did not accept retraction: ${receipts?.[0]?.code || 'rejected'}`);
+    }
+    const publisherHex = b4a.toString(authorized.binding.publisherId, 'hex');
+    await verifiedQueryView?.refresh?.({
+      publisherIds: [publisherHex],
+    });
+    return { done: true, publicationId: b4a.toString(targetId, 'hex') };
+  }
   /**
    * Probe the uploaded MP4 for its playback profile (moov position +
    * keyframe index) and persist it for range prioritization at playback
@@ -1561,9 +1627,9 @@ export function createUploadManager({
     },
 
     publishAcquiredAsset,
+    retractAcquiredPublication,
     getAuthorizedPublisherIds,
     getAcquiredPublication,
-
     /**
      * Upload video from a file path (desktop)
      * Requires fs module to be passed in for platform compatibility

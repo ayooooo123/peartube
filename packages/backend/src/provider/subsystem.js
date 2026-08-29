@@ -352,6 +352,9 @@ export async function createProviderSubsystem({
     issueLocalResolution(input) {
       return issueLocalProviderResolution(service, input)
     },
+    retractPublication(input) {
+      return uploadManager.retractAcquiredPublication?.(input)
+    },
     store,
     acquisitionPolicy,
     sourceGrants,

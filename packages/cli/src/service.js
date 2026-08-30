@@ -44,6 +44,36 @@ function createProviderMachineService(runtime) {
   if (!provider) return null
   return Object.freeze({
     ...provider,
+    async getPolicy(input) {
+      if (typeof provider.getPolicy === 'function') return provider.getPolicy(input)
+      if (typeof runtime.api?.getNetworkPolicy === 'function') {
+        const result = await runtime.api.getNetworkPolicy()
+        if (result?.success === true) return result.policy
+      }
+      return null
+    },
+    async setPolicy(input = {}) {
+      const nextPolicy = input?.policy || input
+      const expectedRevision = typeof input?.expectedRevision === 'number' ? input.expectedRevision : (typeof input?.revision === 'number' ? input.revision : undefined)
+      if (typeof provider.setPolicy === 'function' && expectedRevision !== undefined) {
+        try {
+          return await provider.setPolicy({ policy: nextPolicy, expectedRevision })
+        } catch {
+          // fallback to api
+        }
+      }
+      if (typeof runtime.api?.setNetworkPolicy === 'function') {
+        const result = await runtime.api.setNetworkPolicy(nextPolicy)
+        if (result?.success === true) return result.policy
+        const error = new Error(result?.error || 'Network policy rejected')
+        error.code = result?.errorCode || 'POLICY_REJECTED'
+        throw error
+      }
+      if (typeof provider.setPolicy === 'function') {
+        return provider.setPolicy(input)
+      }
+      throw new Error('Policy service is unavailable')
+    },
     async openStream({ candidateRef, signal } = {}) {
       const resolved = await provider.resolve({ ref: candidateRef, signal })
       if (resolved.kind !== 'published' || !resolved.publicationId || !resolved.renditionId) {

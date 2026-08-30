@@ -457,9 +457,18 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
     const principal = requirePrincipal(input, write ? COMPANION_ROUTE_SCOPES.policyWrite : COMPANION_ROUTE_SCOPES.policyRead)
     const name = write ? 'setPolicy' : 'getPolicy'
     if (typeof service[name] !== 'function') unavailable('Network policy control')
-    const args = write
-      ? { policy: decodePolicyControlBody(input.body), principal, signal: input.signal }
-      : { principal, signal: input.signal }
+    let args
+    if (write) {
+      const policy = decodePolicyControlBody(input.body)
+      let expectedRevision = typeof input.body?.expectedRevision === 'number' ? input.body.expectedRevision : null
+      if (expectedRevision === null && typeof service.getPolicy === 'function') {
+        const current = await callBackend(service.getPolicy.bind(service), [{ principal, signal: input.signal }], input.signal)
+        if (typeof current?.revision === 'number') expectedRevision = current.revision
+      }
+      args = { policy, expectedRevision: expectedRevision ?? 0, principal, signal: input.signal }
+    } else {
+      args = { principal, signal: input.signal }
+    }
     const result = await callBackend(service[name].bind(service), [args], input.signal)
     return routeResponse(200, {
       policy: boundedPublicValue(result?.policy ?? result, { stripUrls: true, stripSecrets: true })

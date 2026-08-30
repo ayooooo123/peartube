@@ -102,7 +102,8 @@ function publicationResult (value, assetId) {
   return { publicationId: value.publicationId, manifestId: value.manifestId, renditionId: value.renditionId, assetId: value.assetId }
 }
 function publisherIdsForPrincipal (principal) {
-  const values = principal?.publisherIds ?? principal?.allowedPublisherIds ?? []
+  const raw = principal?.publisherIds ?? principal?.allowedPublisherIds
+  const values = Array.isArray(raw) ? raw : (typeof principal?.publisherId === 'string' && principal.publisherId ? [principal.publisherId] : [])
   if (!Array.isArray(values) || values.length > 64) fail('ACQUISITION_PRINCIPAL_INVALID', 'principal publisher scope is invalid', 403)
   const normalized = values.map(value => {
     if (typeof value !== 'string' || !ID.test(value)) fail('ACQUISITION_PRINCIPAL_INVALID', 'principal publisher scope is invalid', 403)

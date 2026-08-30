@@ -143,7 +143,8 @@ function principalIsLocal (principal) {
 }
 
 function principalPublisherIds (principal) {
-  const values = principal?.publisherIds ?? principal?.allowedPublisherIds ?? []
+  const raw = principal?.publisherIds ?? principal?.allowedPublisherIds
+  const values = Array.isArray(raw) ? raw : (typeof principal?.publisherId === 'string' && principal.publisherId ? [principal.publisherId] : [])
   return Array.isArray(values) ? values : []
 }
 

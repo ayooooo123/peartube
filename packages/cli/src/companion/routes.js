@@ -199,10 +199,15 @@ function requirePrincipal (input, scope) {
     throw contractError(403, 'SCOPE_REQUIRED', 'Principal is not authorized for this route')
   }
   const publisherId = value.publisherId == null ? null : decodeId(value.publisherId, 'publisherId')
+  const publisherIds = Array.isArray(value.publisherIds)
+    ? value.publisherIds.map((id, index) => decodeId(id, `publisherIds.${index}`))
+    : (publisherId === null ? [] : [publisherId])
   return Object.freeze({
     id: decodeId(value.id, 'principalId'),
     publisherId,
-    publisherIds: publisherId === null ? [] : [publisherId],
+    publisherIds: Object.freeze(publisherIds),
+    allowedPublisherIds: Object.freeze(publisherIds),
+    isLocal: value.isLocal === true,
     scopes
   })
 }

@@ -306,9 +306,13 @@ export function createCompanionServer ({
   if (!Number.isSafeInteger(requestDeadlineMs) || requestDeadlineMs <= 0) {
     throw new Error('companion request deadline must be a positive integer')
   }
+  const publisherId = config.publisherId || config.client
   const principal = Object.freeze({
     id: config.client,
-    publisherId: config.publisherId || config.client,
+    publisherId,
+    publisherIds: Object.freeze([publisherId]),
+    allowedPublisherIds: Object.freeze([publisherId]),
+    isLocal: config.transport === 'unix' || config.transport === 'in-process' || config.host === '127.0.0.1' || config.host === 'localhost',
     scopes: new Set(config.scopes || ['*'])
   })
 

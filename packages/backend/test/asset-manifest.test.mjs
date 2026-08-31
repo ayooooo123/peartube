@@ -64,6 +64,7 @@ function createRawPublicationManifest(core) {
     publisherId,
     sequence: 1,
     title: 'Tampered',
+    sourceFileName: null,
     description: null,
     previousManifestId: null,
     renditions: [fullRendition],
@@ -137,6 +138,7 @@ test('publication manifests derive non-circular manifest and publication ids the
     publisherId: publisher.publicKey,
     sequence: 7,
     title: 'Pilot',
+    sourceFileName: 'Pilot.2026.1080p.WEB-DL.mkv',
     renditions: [rendition()],
     claims: [{ claimId: hex(9), role: 'work' }],
     provenance: [{ type: 'upload', source: 'camera-roll' }],
@@ -149,6 +151,8 @@ test('publication manifests derive non-circular manifest and publication ids the
   t.absent(JSON.stringify(manifest.body.unsignedBody).includes(Buffer.from(manifest.envelope.signature).toString('hex')))
   t.ok(await verifyPublicationManifest(manifest, { allowedSigners: [publisher.publicKey], now: 101 }))
   t.is(manifest.body.version, 2)
+  t.is(manifest.body.sourceFileName, 'Pilot.2026.1080p.WEB-DL.mkv')
+  t.exception(() => createPublicationManifest({ ...body, sourceFileName: '/private/Pilot.mkv', keyPair: publisher }), /sourceFileName/)
   t.is(manifest.body.renditions[0].version, 2)
 })
 

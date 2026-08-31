@@ -19,6 +19,11 @@ function boundedString(value, name, max = 4096, required = false) {
   if (typeof value !== 'string' || value.length === 0 || value.length > max) throw new Error(`${name} must be bounded string`)
   return value
 }
+function boundedFileName(value) {
+  const name = boundedString(value, 'sourceFileName', 255)
+  if (name !== null && /[/\\]/.test(name)) throw new Error('sourceFileName must be a bounded file label')
+  return name
+}
 
 function normalizeClaimRef(ref = {}) {
   return sortPlain({ ...ref, claimId: toHex(ref.claimId, 32, 'claimId') })
@@ -38,6 +43,7 @@ function unsignedManifestBody(input = {}) {
     publisherId,
     sequence: normalizeNonNegativeInteger(input.sequence, 'sequence', 0),
     title: boundedString(input.title, 'title', 512, true),
+    sourceFileName: boundedFileName(input.sourceFileName),
     description: boundedString(input.description, 'description', 4096),
     previousManifestId,
     renditions: renditions.map(createRenditionDescriptor).sort((a, b) => a.renditionId.localeCompare(b.renditionId)),

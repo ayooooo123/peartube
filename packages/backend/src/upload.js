@@ -988,6 +988,7 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
     publisherId,
     sequence: firstSequence,
     title: metadata.title || metadata.id,
+    sourceFileName: metadata.sourceFileName || null,
     description: metadata.description || null,
     renditions: [rendition, ...posterRenditions],
     provenance: [{

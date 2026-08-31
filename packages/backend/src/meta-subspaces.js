@@ -105,7 +105,7 @@ export async function migrateMetaSubspaces(metaDb, subspaces, { logger = console
       // Collect first, then copy+delete, so we never mutate a range we're still
       // streaming.
       const legacy = []
-      for await (const node of metaDb.createReadStream({ gte: c.legacyPrefix, lt, wait: false })) {
+      for await (const node of metaDb.createReadStream({ gte: c.legacyPrefix, lt })) {
         if (typeof node.key === 'string' && node.key.startsWith(c.legacyPrefix)) legacy.push(node)
       }
       for (const node of legacy) {

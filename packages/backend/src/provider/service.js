@@ -610,10 +610,28 @@ export function createProviderService({
   async function publishedSearch(selector) {
     const page = await verifiedQueryView.query({ selectors: [localSelector(selector)], limit: MAX_SEARCH_RESULTS })
     const entityIds = [...new Set((page?.results ?? []).map(row => row?.entityId).filter(Boolean))]
+    let entities
+    if (entityIds.length > 0) {
+      entities = await Promise.all(entityIds.map(entityId => verifiedQueryView.getEntity({ entityKind: 'work', entityId })))
+    } else if (selector.title && typeof verifiedQueryView.listEntities === 'function') {
+      const expectedTitle = selector.title.normalize('NFKC').trim().toLowerCase().replace(/\s+/gu, ' ')
+      const listed = await verifiedQueryView.listEntities()
+      entities = listed.filter(entity => {
+        const manifest = entity.publications?.[0]?.manifest
+        const title = firstPresent([entity.resolved?.metadata?.title, manifest?.body?.title])
+        if (typeof title !== 'string' || title.normalize('NFKC').trim().toLowerCase().replace(/\s+/gu, ' ') !== expectedTitle) {
+          return false
+        }
+        const releaseYear = firstPresent([entity.resolved?.metadata?.releaseYear, manifest?.body?.releaseYear])
+        return selector.year == null || releaseYear == null || releaseYear === selector.year
+      })
+    } else {
+      entities = []
+    }
     const output = []
-    for (const entityId of entityIds) {
-      const entity = await verifiedQueryView.getEntity({ entityKind: 'work', entityId })
-      for (const publication of entity?.publications || []) {
+    for (const entity of entities) {
+      if (!entity) continue
+      for (const publication of entity.publications || []) {
         const manifest = publication.manifest || await verifiedQueryView.getManifest({ publicationId: publication.publicationId })
         if (!manifest) continue
         const renditions = Array.isArray(manifest.body?.renditions) ? manifest.body.renditions : []

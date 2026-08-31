@@ -129,7 +129,7 @@ function request(resolutionRef, publisherId = PUBLISHER) {
   }
 }
 
-function fixture({ published = false, visible = true } = {}) {
+function fixture({ published = false, visible = true, titleIndexed = true } = {}) {
   let time = NOW
   let entropy = 0
   let moderationVisible = visible
@@ -151,7 +151,7 @@ function fixture({ published = false, visible = true } = {}) {
   const verifiedQueryView = {
     async query() {
       return {
-        results: published ? [{ entityId: WORK }] : [],
+        results: published && titleIndexed ? [{ entityId: WORK }] : [],
         nextCursor: null,
         sourceRevision: '0:1',
       }
@@ -160,6 +160,11 @@ function fixture({ published = false, visible = true } = {}) {
       return published
         ? { entityId: WORK, publications: [{ ...localPublication, manifest: localManifest }] }
         : null
+    },
+    async listEntities() {
+      return published
+        ? [{ entityId: WORK, resolved: { metadata: { title: 'Title' } }, publications: [{ ...localPublication, manifest: localManifest }] }]
+        : []
     },
     async getPublication({ publicationId }) {
       return published && moderationVisible && publicationId === PUBLICATION ? localPublication : null
@@ -300,6 +305,15 @@ test('published search opens verified playback without acquisition', async t => 
   t.is(opened.renditionId, RENDITION)
   t.is(f.calls.request.length, 0)
   t.is(f.calls.stream.length, 1)
+})
+
+test('published title search falls back to verified entities when a legacy title edge is absent', async t => {
+  const f = fixture({ published: true, titleIndexed: false })
+  const page = await f.service.search({ selector: { kind: 'movie', title: 'Title', year: 2026 } })
+
+  t.is(page.candidates.length, 1)
+  t.is(page.candidates[0].kind, 'published')
+  t.is(page.candidates[0].publicationId, PUBLICATION)
 })
 
 test('a local miss resolves a source-verified candidate as acquirable', async t => {

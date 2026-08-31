@@ -737,7 +737,7 @@ async function buildRelayService({
         migrationRequired: false,
         enabled: true,
         acceptPublicRequests: false,
-        requesterMode: 'local-only',
+        requesterMode: 'allowlisted',
         allowedPublisherIds,
         allowedAdapterIds,
         maxQueuedJobs: 64,

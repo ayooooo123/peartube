@@ -593,9 +593,9 @@ async function getExistingReceipt(catalog, candidateRecordId) {
   return receipt.accepted === true || typeof receipt.rejectionCode === 'string' ? receipt : null
 }
 
-async function appendAndConfirm(catalog, envelope, candidateRecordId) {
+async function appendAndConfirm(catalog, envelope, candidateRecordId, options = {}) {
   if (typeof catalog?.appendAndConfirm !== 'function') fail('PUBLISHER_CATALOG_RECEIPT_UNAVAILABLE')
-  const receipt = await catalog.appendAndConfirm(envelope)
+  const receipt = await catalog.appendAndConfirm(envelope, options)
   validateReceipt(receipt, candidateRecordId)
 }
 
@@ -993,9 +993,8 @@ export function createPublisherApi(options = {}) {
           }
           const envelope = attachSignedEnvelopeSignature({ ...decoded, recordId: candidateRecordId }, signature)
           try {
-            await appendAndConfirm(binding.catalog, envelope, candidateRecordId)
+            await appendAndConfirm(binding.catalog, envelope, candidateRecordId, { allowAuthorityBootstrap: true })
           } catch (error) {
-            if (error instanceof PublisherApiError) throw error
             fail('PUBLISHER_CATALOG_APPEND_FAILED')
           }
           if (intent.recordType === PUBLISHER_RECORD_TYPES.WRITER_ADMISSION) {
@@ -1080,9 +1079,8 @@ export function createPublisherApi(options = {}) {
           }
         })
         try {
-          await appendAndConfirm(binding.catalog, envelope, candidateRecordId)
+          await appendAndConfirm(binding.catalog, envelope, candidateRecordId, { allowAuthorityBootstrap: true })
         } catch (error) {
-          if (error instanceof PublisherApiError) throw error
           fail('PUBLISHER_CATALOG_APPEND_FAILED')
         }
         await registry.deletePendingTransition(intent.publisherIdBytes, candidateRecordId)

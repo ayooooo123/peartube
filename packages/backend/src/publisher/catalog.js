@@ -258,9 +258,11 @@ export class PublisherCatalog extends ReadyResource {
     return this.writable
   }
 
-  async append (value) {
+  async append (value, { allowAuthorityBootstrap = false } = {}) {
     await this.ready()
-    if (!this.writable) invalid('local device is not an admitted Autobase writer')
+    if (!this.writable && (!allowAuthorityBootstrap || !this.base?.local?.writable)) {
+      invalid('local device is not an admitted Autobase writer')
+    }
     const frame = isBytes(value) ? value : encodePublisherCatalogFrame(value)
     if (frame.byteLength > PUBLISHER_LIMITS.maxOperationBytes) invalid('operation frame exceeds its byte limit')
     const decoded = decodePublisherCatalogFrame(frame)
@@ -271,8 +273,8 @@ export class PublisherCatalog extends ReadyResource {
     return decoded.recordId || decoded.transitionId
   }
 
-  async appendAndConfirm (value) {
-    const operationId = await this.append(value)
+  async appendAndConfirm (value, options = {}) {
+    const operationId = await this.append(value, options)
     const receipt = await getPublisherOperationReceipt(this.view, operationId)
     return { operationId: b4a.from(operationId), ...receipt }
   }

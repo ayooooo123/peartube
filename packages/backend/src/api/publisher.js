@@ -283,7 +283,7 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
   let closed = false
   let pendingMutation = Promise.resolve()
 
-  async function openCatalog(publisherId, { genesisRootKey = null, create = false, catalogBootstrapKey = null, namespaceDescriptor = null } = {}) {
+  async function openCatalog(publisherId, { genesisRootKey = null, create = false, catalogBootstrapKey = null, namespaceDescriptor = null, mapping: providedMapping = null } = {}) {
     if (closed) fail('PUBLISHER_CATALOG_REGISTRY_CLOSED')
     const id = publisherHex(publisherId)
     const requestedKey = catalogBootstrapKey ? exactBytes(catalogBootstrapKey, 32, 'PUBLISHER_CATALOG_MISMATCH') : null
@@ -302,8 +302,12 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
     if (opened.size + opening.size >= maxOpenCatalogs) fail('PUBLISHER_CATALOG_CAPACITY')
 
     const task = (async () => {
-      const mappingEntry = await ctx.metaDb.get(catalogMappingKey(publisherId))
-      let mapping = mappingEntry?.value ? decodeCatalogMapping(mappingEntry.value, publisherId) : null
+      let mapping = providedMapping
+      let mappingEntry = null
+      if (!mapping) {
+        mappingEntry = await ctx.metaDb.get(catalogMappingKey(publisherId))
+        mapping = mappingEntry?.value ? decodeCatalogMapping(mappingEntry.value, publisherId) : null
+      }
       if (!mapping && !create) fail('PUBLISHER_CATALOG_UNAVAILABLE')
       if (mapping && genesisRootKey && !equalBytes(mapping.genesisRootKey, genesisRootKey)) fail('PUBLISHER_CATALOG_MISMATCH')
       if (mapping && requestedKey && !equalBytes(mapping.catalogBootstrapKey, requestedKey)) fail('PUBLISHER_CATALOG_MISMATCH')
@@ -503,22 +507,26 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
     async listBindings() {
       if (closed) fail('PUBLISHER_CATALOG_REGISTRY_CLOSED')
       if (typeof ctx.metaDb.createReadStream === 'function') {
-        const tasks = []
+        const entries = []
         for await (const entry of ctx.metaDb.createReadStream({
           gte: CATALOG_MAPPING_PREFIX,
           lt: `${CATALOG_MAPPING_PREFIX}\xff`,
           limit: maxOpenCatalogs + 1
         })) {
-          if (tasks.length >= maxOpenCatalogs) fail('PUBLISHER_CATALOG_CAPACITY')
+          if (entries.length >= maxOpenCatalogs) fail('PUBLISHER_CATALOG_CAPACITY')
           const id = String(entry.key).slice(CATALOG_MAPPING_PREFIX.length)
           if (!/^[0-9a-f]{64}$/.test(id)) fail('PUBLISHER_CATALOG_MAPPING_INVALID')
           const publisherId = b4a.from(id, 'hex')
           const mapping = decodeCatalogMapping(entry.value, publisherId)
-          tasks.push(openCatalog(publisherId, {
-            genesisRootKey: mapping.genesisRootKey,
-            catalogBootstrapKey: mapping.catalogBootstrapKey
-          }).catch(() => null))
+          entries.push({ publisherId, mapping })
         }
+        const tasks = entries.map(({ publisherId, mapping }) =>
+          openCatalog(publisherId, {
+            genesisRootKey: mapping.genesisRootKey,
+            catalogBootstrapKey: mapping.catalogBootstrapKey,
+            mapping
+          }).catch(() => null)
+        )
         await Promise.all(tasks)
       }
       return [...opened.values()]

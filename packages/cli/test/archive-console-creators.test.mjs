@@ -277,6 +277,45 @@ test('a published release uses the manifest source filename when no acquisition 
   })
 })
 
+test('a local release filename override labels publications created before filename manifests', async function (t) {
+  const service = fakeService({
+    settings: {
+      get(key, fallback) {
+        if (key === 'releaseFileNames') return { 'pub-legacy': 'Justice.League.Dark.2017.1080p.BluRay.x265-RARBG.mp4' }
+        return fallback
+      }
+    },
+    async getVerifiedMediaCatalog() {
+      return {
+        success: true,
+        nextCursor: null,
+        items: [{
+          entityId: '4'.repeat(64),
+          entityKind: 'movie',
+          title: 'Justice League Dark',
+          sources: [{ publicationId: 'pub-legacy', renditionId: 'rend-legacy' }]
+        }]
+      }
+    },
+    async getVerifiedManifest() {
+      return {
+        body: {
+          title: 'Justice League Dark',
+          renditions: [{ renditionId: 'rend-legacy', core: { byteLength: 12 } }]
+        }
+      }
+    },
+    async listAcquisitions() {
+      return []
+    }
+  })
+
+  await withConsole(service, async (base) => {
+    const home = await (await fetch(`${base}/`)).text()
+    t.ok(home.includes('Justice.League.Dark.2017.1080p.BluRay.x265-RARBG.mp4'))
+  })
+})
+
 test('GET /unseeded.json returns ranked targets', async function (t) {
   await withConsole(fakeService(), async (base) => {
     const res = await fetch(`${base}/unseeded.json`)

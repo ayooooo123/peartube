@@ -274,6 +274,9 @@ function publicPublicationRecord(record) {
     manifestId: text(publication.manifestId ?? manifest.body?.manifestId, 'publication.manifestId', 128),
     workEntityId: nullableText(publication.workEntityId, 'publication.workEntityId', 128),
     title: nullableText(manifest.body?.title ?? publication.normalizedTitle ?? publication.title, 'publication.title'),
+    sourceFileName: manifest.body?.sourceFileName == null
+      ? null
+      : text(manifest.body.sourceFileName, 'publication.sourceFileName', 255, { allowLocator: true }),
     renditions: Object.freeze(renditions.map(publicRendition)),
   })
 }

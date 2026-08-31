@@ -924,6 +924,7 @@ export async function createArchiveConsole({
 
       const rawBlocked = service.settings?.get?.('blockedReleases', []) || []
       const blocked = new Set((Array.isArray(rawBlocked) ? rawBlocked : []).filter(Boolean).map(String))
+      const releaseFileNames = service.settings?.get?.('releaseFileNames', {}) || {}
       const mirrors = new Map()
       for (const request of service.getArchiveMirrorRequests?.() || []) {
         if (!request?.publicationId) continue
@@ -970,7 +971,9 @@ export async function createArchiveConsole({
           const releaseJob = jobIndex.byPublicationId.get(publicationId) || null
           const releaseMirror = mirrors.get(publicationId)
           const manifest = manifests.get(publicationId) || null
-          const sourceFileName = releaseJob?.sourceFileName ||
+          const sourceFileName = releaseFileNames[`${publicationId}:${renditionId || ''}`] ||
+            releaseFileNames[publicationId] ||
+            releaseJob?.sourceFileName ||
             source?.sourceFileName ||
             manifest?.body?.sourceFileName ||
             source?.fileName ||

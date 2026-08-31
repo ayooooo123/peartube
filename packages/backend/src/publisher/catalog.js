@@ -244,7 +244,7 @@ export class PublisherCatalog extends ReadyResource {
       }
       return
     }
-    await this.base.update()
+    await raceOpenBudget(this.base.update(), 1000).catch(() => {})
   }
 
   async waitForWritable (timeout = 20_000) {

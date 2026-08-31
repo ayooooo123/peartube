@@ -86,6 +86,7 @@ export function createCliLogger(debugOrLevel) {
     cache: createLogger('Cache'),
     feed: createLogger('Feed'),
     download: createLogger('Download'),
-    archive: createLogger('Archive')
+    archive: createLogger('Archive'),
+    companion: createLogger('Companion')
   }
 }

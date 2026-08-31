@@ -1234,7 +1234,10 @@ async function buildRelayService({
       }
       if (config.companion?.enabled !== false) {
         if (!runtime.provider) throw new Error('Relay runtime did not expose ProviderService')
-        const localPub = publisherShell ? await publisherShell.ensureLocalPublisher().catch(() => null) : null
+        const localPub = publisherShell ? await publisherShell.ensureLocalPublisher().catch((err) => {
+          logger.relay?.warn?.('Relay local publisher setup failed', { error: err?.message || String(err) })
+          return null
+        }) : null
         if (localPub?.publisherId && (!config.companion.publisherId || !/^[0-9a-f]{64}$/.test(config.companion.publisherId))) {
           config.companion.publisherId = localPub.publisherId
         }

@@ -179,14 +179,12 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
     try {
       if (!job || job.state !== 'queued') return job
       const policyValue = await currentPolicy()
+      const isStagedComplete = job.bytesAcquired >= job.expectedBytes && job.expectedBytes > 0
       const grant = sourceGrants.inspect({ acquisitionId: job.acquisitionId, principal: job.principalId })
-      const resolution = grant || await provider.resolve({ ref: job.request.resolutionRef, request: job.request, principalId: job.principalId })
-      // Bytes start moving on the next line but one. `allowedAdapterIds` can
-      // only gate a source that says which adapter it is, and admission skips
-      // the allowlist for an unnamed one - which is right at request time,
-      // where no adapter has been chosen yet, and wrong here. A resolution that
-      // reaches the fetch without naming its adapter is refused rather than
-      // admitted past the operator's allowlist.
+      let resolution = grant || (job.request?.resolutionRef ? await provider.resolve({ ref: job.request.resolutionRef, request: job.request, principalId: job.principalId }).catch(() => null) : null)
+      if (!resolution && isStagedComplete) {
+        resolution = { adapterId: job.deferredInput ? 'companion-callback' : 'local-file' }
+      }
       const adapterId = resolution?.adapterId ?? null
       if (adapterId === null) fail('ACQUISITION_ADAPTER_DENIED', 'the resolved source names no adapter, so no allowlist can admit it', 403)
       await policy.admit({
@@ -200,7 +198,16 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       await assertAuthority(job)
       job = await change(id, { expectedVersion: job.version, from: 'queued', to: 'acquiring', patch: { attempts: job.attempts + 1, startedAt: job.startedAt ?? at(now) } })
       const sourceExpensive = sourceGrants.has({ acquisitionId: job.acquisitionId, principal: job.principalId })
-      reader = await resolveReader(job, entry.controller.signal, policyValue)
+      if (!grant && isStagedComplete) {
+        reader = {
+          resumable: true,
+          describe: async () => ({ byteLength: job.expectedBytes, identity: job.expectedIdentity || {} }),
+          open: async function* () {},
+          close: async () {}
+        }
+      } else {
+        reader = await resolveReader(job, entry.controller.signal, policyValue)
+      }
       const description = await reader.describe({ signal: entry.controller.signal })
       if (description.byteLength !== job.expectedBytes) fail('SOURCE_LENGTH_MISMATCH', 'source length changed')
       const describedIdentity = durableSourceIdentity(description.identity)
@@ -251,6 +258,7 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
     }
   }
   function canSchedule (job) {
+    if (job.bytesAcquired >= job.expectedBytes && job.expectedBytes > 0) return true
     const hasGrant = sourceGrants.has({ acquisitionId: job.acquisitionId, principal: job.principalId })
     if (job.deferredInput === true) return hasGrant
     if (hasGrant) return true

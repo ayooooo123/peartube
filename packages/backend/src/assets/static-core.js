@@ -517,16 +517,14 @@ async function transplantStagedBlock({ staging, finalCore, offloader, signal, pr
  */
 async function finishIngest({ mode, finalCore, descriptor, offloader, progress }) {
   if (typeof offloader?.drain === 'function') {
-    await offloader.drain()
+    await offloader.drain({ all: mode === 'streaming' })
   }
-
   if (progress.blocks !== descriptor.length || progress.bytes !== descriptor.byteLength) {
     throw sourceChangedError(
       `it ended at ${progress.blocks} block(s) and ${progress.bytes} byte(s), but the asset key was derived from ${descriptor.length} block(s) and ${descriptor.byteLength} byte(s)`,
       progress.blocks
     )
   }
-
   if (progress.blocks > 0) {
     // `copyPrologue` sets the contiguous-length hint from the run of blocks one
     // call saw, and here every call sees exactly one, so the finished core is

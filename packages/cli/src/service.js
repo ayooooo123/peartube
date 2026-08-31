@@ -729,6 +729,7 @@ async function buildRelayService({
       current.requesterMode !== 'allowlisted' ||
       !allowedPublisherIds.every(id => (current.allowedPublisherIds || []).includes(id)) ||
       !allowedAdapterIds.every(id => (current.allowedAdapterIds || []).includes(id))
+    if (!needsUpdate) return current
     const capacity = Number(config.storage?.maxBytes) || 107374182400
     return runtime.provider.setAcquisitionPolicy({
       policy: {

@@ -320,31 +320,26 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
         }
       }
 
-      if (!requestedKey && create && mapping.catalogBootstrapKey && typeof ctx.store?.get === 'function') {
-        try {
-          const testCore = ctx.store.get({ key: mapping.catalogBootstrapKey })
-          await testCore.ready?.()
-          if (!testCore.writable) {
-            mapping.catalogBootstrapKey = null
-          }
-        } catch {
-          mapping.catalogBootstrapKey = null
-        }
-      }
-
       const catalogOptions = { publisherId: b4a.from(publisherId) }
       if (deviceSigner) catalogOptions.deviceSigner = deviceSigner
       if (mapping.catalogBootstrapKey) catalogOptions.key = b4a.from(mapping.catalogBootstrapKey)
-      const catalog = catalogFactory(ctx.store, catalogOptions)
+      let catalog = catalogFactory(ctx.store, catalogOptions)
       try {
         if (!catalog || typeof catalog.ready !== 'function') fail('PUBLISHER_CATALOG_UNAVAILABLE')
         await catalog.ready()
+        if (create && !requestedKey && mapping.catalogBootstrapKey && !catalog.localWriterKey) {
+          try { await catalog.close?.() } catch {}
+          delete catalogOptions.key
+          catalog = catalogFactory(ctx.store, catalogOptions)
+          await catalog.ready()
+          mapping.catalogBootstrapKey = null
+        }
         const openedKey = exactBytes(catalog.key, 32, 'PUBLISHER_CATALOG_UNAVAILABLE')
         if (mapping.catalogBootstrapKey && !equalBytes(mapping.catalogBootstrapKey, openedKey)) {
           fail('PUBLISHER_CATALOG_MISMATCH')
         }
-        if (!mapping.catalogBootstrapKey) mapping.catalogBootstrapKey = b4a.from(openedKey)
-        if (!mappingEntry?.value) {
+        if (!mapping.catalogBootstrapKey) {
+          mapping.catalogBootstrapKey = b4a.from(openedKey)
           await ctx.metaDb.put(catalogMappingKey(publisherId), {
             version: 1,
             publisherId: id,

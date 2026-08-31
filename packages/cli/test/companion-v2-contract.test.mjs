@@ -126,6 +126,44 @@ test('acquisition routes request, replay, get, list and cancel through ProviderS
   t.is(JSON.stringify(created.body).includes('sourceCapability'), false)
 })
 
+test('POST /api/v2/acquisitions/contribute issues local resolution and requests acquisition', async (t) => {
+  const calls = []
+  const service = {
+    issueLocalResolution (input) {
+      calls.push(['issueLocalResolution', input])
+      return { resolutionRef: 'A'.repeat(43) }
+    },
+    async requestAcquisition ({ idempotencyKey, request, principal }) {
+      calls.push(['requestAcquisition', idempotencyKey, request])
+      return {
+        acquisition: acquisition({
+          acquisitionId: 'acq-contribute-1',
+          title: 'The Matrix',
+          retentionClass: request.retentionClass,
+          state: 'queued'
+        })
+      }
+    }
+  }
+  const router = createCompanionRouter({ service })
+  const body = {
+    idempotencyKey: 'contrib-1',
+    title: 'The Matrix',
+    selector: { kind: 'movie', namespace: 'tmdb', identifier: '603' },
+    expectedBytes: 2048,
+    retentionClass: 'contribution-cache',
+    sourceFileName: 'matrix.mkv'
+  }
+  const res = await router.dispatch(request('POST', '/api/v2/acquisitions/contribute', body))
+  t.is(res.statusCode, 202)
+  t.is(res.body.acquisition.acquisitionId, 'acq-contribute-1')
+  t.is(res.body.acquisition.state, 'queued')
+  t.alike(calls.map(call => call[0]), ['issueLocalResolution', 'requestAcquisition'])
+  t.is(calls[0][1].title, 'The Matrix')
+  t.is(calls[1][1], 'contrib-1')
+  t.is(calls[1][2].resolutionRef, 'A'.repeat(43))
+})
+
 test('route scopes separate acquisition request, read, cancel and private grant authority', async (t) => {
   const service = {
     requestAcquisition: async () => acquisition(),

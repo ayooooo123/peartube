@@ -30,6 +30,7 @@ const ACQUISITION_FIELDS = new Set(['idempotencyKey', 'request'])
 const SOURCE_GRANT_FIELDS = new Set(['grant'])
 const ACQUISITION_LIST_FIELDS = new Set(['cursor', 'limit', 'states'])
 const ACQUISITION_REQUEST_FIELDS = new Set(['schemaVersion', 'resolutionRef', 'publisherId', 'retentionClass', 'retentionUntil', 'sourceFileName'])
+const CONTRIBUTE_ACQUISITION_FIELDS = new Set(['idempotencyKey', 'title', 'selector', 'expectedBytes', 'publisherId', 'retentionClass', 'sourceFileName'])
 const POLICY_FIELDS = new Set([
   'policyVersion',
   'consentVersion',
@@ -392,6 +393,30 @@ export function decodeAcquisitionBody (body) {
     result.sourceFileName = boundedString(request.sourceFileName, 'sourceFileName', 255, { pattern: /^[^/\\]{1,255}$/ })
   }
   return { idempotencyKey, request: result }
+}
+
+export function decodeContributeAcquisitionBody (body) {
+  const value = onlyFields(decodeJsonBody(body), CONTRIBUTE_ACQUISITION_FIELDS, 'contribute acquisition body')
+  const idempotencyKey = boundedString(value.idempotencyKey, 'idempotencyKey', 128, { pattern: ID })
+  const title = boundedString(value.title, 'title', 512)
+  if (!value.selector || typeof value.selector !== 'object' || Array.isArray(value.selector)) {
+    throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid selector', 'selector')
+  }
+  const rawSel = value.selector
+  const kind = boundedString(rawSel.kind, 'selector.kind', 16)
+  if (!KIND.has(kind)) throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid kind', 'selector.kind')
+  const namespace = canonicalString(rawSel.namespace || 'tmdb', 'selector.namespace', COMPANION_CONTRACT_LIMITS.maxNamespaceBytes, CANONICAL_NAMESPACE)
+  const identifier = canonicalString(String(rawSel.identifier || ''), 'selector.identifier', COMPANION_CONTRACT_LIMITS.maxIdentifierBytes)
+  const selector = { kind, namespace, identifier }
+  if (kind === 'episode') {
+    selector.season = positiveIntegerText(String(rawSel.season || ''), 'selector.season')
+    selector.episode = positiveIntegerText(String(rawSel.episode || ''), 'selector.episode')
+  }
+  const publisherId = value.publisherId ? boundedString(value.publisherId, 'publisherId', COMPANION_CONTRACT_LIMITS.maxIdBytes, { pattern: ID }) : null
+  const retentionClass = value.retentionClass ? boundedString(value.retentionClass, 'retentionClass', 64, { pattern: ID }) : 'contribution-cache'
+  const sourceFileName = value.sourceFileName ? boundedString(value.sourceFileName, 'sourceFileName', 255, { pattern: /^[^/\\]{1,255}$/ }) : null
+  const expectedBytes = Number.isSafeInteger(value.expectedBytes) && value.expectedBytes >= 0 ? value.expectedBytes : 0
+  return { idempotencyKey, title, selector, publisherId, retentionClass, sourceFileName, expectedBytes }
 }
 
 export function decodeSourceGrantBody (body) {

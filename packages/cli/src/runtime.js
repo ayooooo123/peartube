@@ -1,7 +1,9 @@
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
+import nodeCrypto from 'node:crypto'
 import * as runtimeFs from '#fs'
-import { createFileSourceReader } from '@peartube/backend/assets'
+import { createFileSourceReader, createSourceReader } from '@peartube/backend/assets'
+import fetch from '#fetch'
 
 import { createBackendContext } from '@peartube/backend'
 import { PROTOCOL_VERSION } from '@peartube/host/contracts'
@@ -70,6 +72,126 @@ function createLocalFileSourceGrantRegistry ({ fs = runtimeFs, now = Date.now } 
     async close () {
       await Promise.all([...grants.keys()].map(revokeToken))
     }
+  })
+}
+
+function createCompanionCallbackSourceReader ({ origin, client, secret, token, jobId = '', etag = null, length = null, sha256 = null, contentType = 'application/octet-stream', logger = null }) {
+  const EMPTY_BODY_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+  const path = `/internal/peartube/v2/sources/${encodeURIComponent(token)}`
+  let currentEtag = etag
+
+  function authHeaders (method, query = '') {
+    const timestamp = String(Date.now())
+    const nonce = b4a.toString(crypto.randomBytes(16), 'hex')
+    const target = query ? `${path}?${query}` : path
+    const canonical = `${method}\n${target}\n${timestamp}\n${nonce}\n${EMPTY_BODY_HASH}`
+    const keyBytes = typeof secret === 'string' ? Buffer.from(secret, 'hex') : secret
+    const hmac = nodeCrypto.createHmac('sha512', keyBytes).update(canonical).digest()
+    const mac = hmac.subarray(0, 32).toString('hex')
+    const headers = {
+      'x-peartube-client': client,
+      'x-peartube-timestamp': timestamp,
+      'x-peartube-nonce': nonce,
+      'x-peartube-mac': mac,
+      'x-peartube-job-id': jobId,
+      accept: '*/*'
+    }
+    headers['if-match'] = currentEtag || '*'
+    return headers
+  }
+
+  let descriptionCache = length !== null && length > 0
+    ? {
+        identity: sha256 ? { kind: 'sha256', value: sha256 } : { kind: 'etag', value: currentEtag || `grant:${token}` },
+        byteLength: length,
+        mimeType: contentType || 'application/octet-stream'
+      }
+    : null
+
+  return createSourceReader({
+    resumable: true,
+    maxReadBytes: 16 * 1024 * 1024,
+    async describe ({ signal } = {}) {
+      if (descriptionCache) return descriptionCache
+      const url = `${origin}${path}`
+      const headers = authHeaders('HEAD')
+      const response = await fetch(url, { method: 'HEAD', headers, signal })
+      if (!response.ok) {
+        const error = new Error(`Companion callback HEAD failed with HTTP ${response.status}`)
+        error.code = response.status === 410 ? 'SOURCE_GRANT_REVOKED' : 'SOURCE_GRANT_UNAVAILABLE'
+        throw error
+      }
+      const lengthHeader = response.headers.get('content-length')
+      const byteLength = lengthHeader ? parseInt(lengthHeader, 10) : 0
+      const headerEtag = response.headers.get('etag') || `grant:${token}`
+      currentEtag = headerEtag
+      const headerSha256 = response.headers.get('x-source-sha256') || null
+      const headerContentType = response.headers.get('content-type') || contentType
+      descriptionCache = {
+        identity: headerSha256 ? { kind: 'sha256', value: headerSha256 } : { kind: 'etag', value: headerEtag },
+        byteLength,
+        mimeType: headerContentType
+      }
+      return descriptionCache
+    },
+    open ({ offset, length: readLength, signal } = {}) {
+      return (async function * () {
+        const CHUNK_SIZE = 4 * 1024 * 1024
+        let current = offset
+        const end = offset + readLength
+        while (current < end) {
+          if (signal?.aborted) throw new Error('source read aborted')
+          const chunkEnd = Math.min(current + CHUNK_SIZE - 1, end - 1)
+          const expectedChunkBytes = chunkEnd - current + 1
+          const rangeHeader = `bytes=${current}-${chunkEnd}`
+          const headers = {
+            ...authHeaders('GET'),
+            range: rangeHeader
+          }
+          const response = await fetch(`${origin}${path}`, { method: 'GET', headers, signal })
+          if (response.status !== 206) {
+            const error = new Error(`Companion callback GET range ${rangeHeader} failed with HTTP ${response.status}`)
+            error.code = response.status === 410 ? 'SOURCE_GRANT_REVOKED' : 'SOURCE_GRANT_UNAVAILABLE'
+            throw error
+          }
+          let chunkBytesRead = 0
+          if (response.body && typeof response.body.getReader === 'function') {
+            const reader = response.body.getReader()
+            try {
+              while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+                if (value && value.byteLength > 0) {
+                  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value)
+                  if (chunkBytesRead + bytes.byteLength > expectedChunkBytes) {
+                    throw new Error(`Companion callback GET range ${rangeHeader} exceeded expected length of ${expectedChunkBytes} bytes`)
+                  }
+                  chunkBytesRead += bytes.byteLength
+                  yield bytes
+                }
+              }
+            } finally {
+              reader.releaseLock?.()
+            }
+          } else if (response.arrayBuffer) {
+            const buffer = await response.arrayBuffer()
+            const bytes = new Uint8Array(buffer)
+            if (bytes.byteLength !== expectedChunkBytes) {
+              throw new Error(`Companion callback GET range ${rangeHeader} returned ${bytes.byteLength} bytes, expected ${expectedChunkBytes}`)
+            }
+            yield bytes
+            chunkBytesRead = bytes.byteLength
+          } else {
+            throw new Error('Unsupported response body stream')
+          }
+          if (chunkBytesRead !== expectedChunkBytes) {
+            throw new Error(`Companion callback GET range ${rangeHeader} returned ${chunkBytesRead} bytes, expected ${expectedChunkBytes}`)
+          }
+          current += expectedChunkBytes
+        }
+      })()
+    },
+    async close () {}
   })
 }
 
@@ -212,7 +334,30 @@ export async function createRelayRuntime ({ config, logger, dependencies = null,
     },
     provider: {
       ...(config.provider || {}),
-      sourceGrantResolver: localFileSourceGrants.resolver,
+      sourceGrantResolver: Object.freeze({
+        async resolve ({ token, adapterId, acquisitionId, principalId, expiresAt, etag, length, sha256, contentType }) {
+          if (adapterId === 'local-file') {
+            return localFileSourceGrants.resolver.resolve({ token, adapterId, acquisitionId, principalId, expiresAt })
+          }
+          if (adapterId === 'companion-callback') {
+            const origin = config.companion?.sourceOrigin
+            const client = config.companion?.sourceClient || 'peartube-companion'
+            const secret = config.companion?.sourceSharedSecret || config.companion?.sharedSecret
+            if (!origin || !secret) {
+              const error = new Error('Companion callback source origin/secret is not configured')
+              error.code = 'SOURCE_GRANT_UNAVAILABLE'
+              throw error
+            }
+            return createCompanionCallbackSourceReader({ origin, client, secret, token, jobId: acquisitionId, etag, length, sha256, contentType, logger })
+          }
+          const error = new Error(`Unsupported source grant adapter: ${adapterId}`)
+          error.code = 'SOURCE_GRANT_UNAVAILABLE'
+          throw error
+        },
+        async revoke ({ token }) {
+          return localFileSourceGrants.revoke(token)
+        }
+      }),
       principalId: config.companion?.client || 'local-provider',
       freeDiskBytes: () => measureVolumeBytes({
         storagePath: config.storage.path,

@@ -4,6 +4,7 @@ import {
   CompanionContractError,
   COMPANION_CONTRACT_LIMITS,
   decodeAcquisitionBody,
+  decodeContributeAcquisitionBody,
   decodeAcquisitionListQuery,
   decodeAcquisitionPolicyBody,
   decodeId,
@@ -397,6 +398,38 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
     return routeResponse(202, { acquisition: publicAcquisition(result) })
   }
 
+  async function contributeAcquisition (input) {
+    const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.acquisitionRequest)
+    const value = decodeContributeAcquisitionBody(input.body)
+    if (typeof service.issueLocalResolution !== 'function') unavailable('Local resolution')
+    if (typeof service.requestAcquisition !== 'function') unavailable('Acquisitions')
+
+    const publisherId = value.publisherId || principal.publisherId
+    const resolution = service.issueLocalResolution({
+      title: value.title,
+      selector: value.selector,
+      publisherId,
+      idempotencyKey: value.idempotencyKey,
+      expectedBytes: value.expectedBytes || 0,
+      sourceFileName: value.sourceFileName || null
+    })
+
+    const request = {
+      schemaVersion: 1,
+      resolutionRef: resolution.resolutionRef,
+      publisherId,
+      retentionClass: value.retentionClass || 'contribution-cache',
+      sourceFileName: value.sourceFileName || null
+    }
+
+    const result = await callBackend(
+      service.requestAcquisition.bind(service),
+      [{ idempotencyKey: value.idempotencyKey, request, principal, signal: input.signal }],
+      input.signal
+    )
+    return routeResponse(202, { acquisition: publicAcquisition(result) })
+  }
+
   async function listAcquisitions (input, url) {
     const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.acquisitionRead)
     const query = decodeAcquisitionListQuery(url.searchParams)
@@ -549,6 +582,11 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
         }
         if (method === 'GET') return await listAcquisitions(input, url)
         allow(['GET', 'POST'])
+      }
+      if (path === '/api/v2/acquisitions/contribute') {
+        if (method !== 'POST') allow(['POST'])
+        rejectQuery(url.searchParams)
+        return await contributeAcquisition(input)
       }
 
       let match = path.match(/^\/api\/v2\/publications\/([^/]+)$/)

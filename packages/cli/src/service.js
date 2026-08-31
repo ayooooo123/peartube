@@ -44,6 +44,12 @@ function createProviderMachineService(runtime) {
   if (!provider) return null
   return Object.freeze({
     ...provider,
+    issueLocalResolution(input) {
+      if (typeof runtime?.issueLocalProviderResolution === 'function') {
+        return runtime.issueLocalProviderResolution(input)
+      }
+      throw new Error('Local resolution is unsupported')
+    },
     async getPolicy(input) {
       if (typeof provider.getPolicy === 'function') return provider.getPolicy(input)
       if (typeof runtime.api?.getNetworkPolicy === 'function') {

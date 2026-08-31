@@ -49,6 +49,9 @@ export function companionConfigFromEnv (env = {}) {
   if (has(env, 'PEARTUBE_COMPANION_PUBLISHER_ID')) config.publisherId = env.PEARTUBE_COMPANION_PUBLISHER_ID
   if (has(env, 'PEARTUBE_COMPANION_SCOPES')) config.scopes = env.PEARTUBE_COMPANION_SCOPES
   if (has(env, 'PEARTUBE_COMPANION_SHARED_SECRET')) config.sharedSecret = env.PEARTUBE_COMPANION_SHARED_SECRET
+  if (has(env, 'PEARTUBE_COMPANION_SOURCE_ORIGIN')) config.sourceOrigin = env.PEARTUBE_COMPANION_SOURCE_ORIGIN
+  if (has(env, 'PEARTUBE_COMPANION_SOURCE_CLIENT')) config.sourceClient = env.PEARTUBE_COMPANION_SOURCE_CLIENT
+  if (has(env, 'PEARTUBE_COMPANION_SOURCE_SHARED_SECRET')) config.sourceSharedSecret = env.PEARTUBE_COMPANION_SOURCE_SHARED_SECRET
   if (has(env, 'PEARTUBE_COMPANION_MAX_BODY_BYTES')) config.maxBodyBytes = env.PEARTUBE_COMPANION_MAX_BODY_BYTES
   if (has(env, 'PEARTUBE_COMPANION_MAX_CLOCK_SKEW_MS')) config.maxClockSkewMs = env.PEARTUBE_COMPANION_MAX_CLOCK_SKEW_MS
   if (has(env, 'PEARTUBE_COMPANION_MAX_NONCES')) config.maxNonces = env.PEARTUBE_COMPANION_MAX_NONCES
@@ -69,6 +72,9 @@ export function companionConfigFromCli (cli = {}) {
     companionPublisherId: 'publisherId',
     companionScopes: 'scopes',
     companionSharedSecret: 'sharedSecret',
+    companionSourceOrigin: 'sourceOrigin',
+    companionSourceClient: 'sourceClient',
+    companionSourceSharedSecret: 'sourceSharedSecret',
     companionMaxBodyBytes: 'maxBodyBytes',
     companionMaxClockSkewMs: 'maxClockSkewMs',
     companionMaxNonces: 'maxNonces'
@@ -123,6 +129,15 @@ export function resolveCompanionConfig (raw = {}, { storagePath } = {}) {
   if (config.enabled && !config.sharedSecret) {
     throw new Error('companion.sharedSecret is required when the companion is enabled')
   }
+  config.sourceOrigin = typeof config.sourceOrigin === 'string' && config.sourceOrigin.trim()
+    ? config.sourceOrigin.trim().replace(/\/+$/, '')
+    : ''
+  config.sourceClient = typeof config.sourceClient === 'string' && config.sourceClient.trim()
+    ? config.sourceClient.trim()
+    : 'peartube-companion'
+  config.sourceSharedSecret = typeof config.sourceSharedSecret === 'string' && config.sourceSharedSecret.trim()
+    ? config.sourceSharedSecret.trim()
+    : config.sharedSecret
   config.maxBodyBytes = positiveInteger(config.maxBodyBytes, undefined, 'companion.maxBodyBytes')
   config.maxClockSkewMs = positiveInteger(config.maxClockSkewMs, undefined, 'companion.maxClockSkewMs')
   config.maxNonces = positiveInteger(config.maxNonces, undefined, 'companion.maxNonces')

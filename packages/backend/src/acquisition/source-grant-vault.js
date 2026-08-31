@@ -1,9 +1,12 @@
 import b4a from 'b4a'
-import AbortController from 'abort-controller'
+import FallbackAbortController from 'abort-controller'
+
+const Controller = typeof globalThis.AbortController === 'function' ? globalThis.AbortController : FallbackAbortController
 
 import { createSourceReader, isSourceReader } from '../assets/source-reader.js'
 import { acquisitionError, normalizePrincipalId } from './contract.js'
-const GRANT_FIELDS = new Set(['token', 'adapterId', 'audience', 'expiresAt'])
+const REQUIRED_GRANT_FIELDS = new Set(['token', 'adapterId', 'audience', 'expiresAt'])
+const OPTIONAL_GRANT_FIELDS = new Set(['etag', 'length', 'sha256', 'contentType'])
 const AUDIENCE_FIELDS = new Set(['principalId', 'acquisitionId'])
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const TOKEN = /^[A-Za-z0-9._~-]{16,256}$/
@@ -25,7 +28,15 @@ function boundedId (value, name) {
 }
 
 function normalizeGrant (grant, acquisitionId, principalId, at, maxTtlMs) {
-  strictObject(grant, GRANT_FIELDS, 'source grant')
+  if (!grant || typeof grant !== 'object' || Array.isArray(grant)) fail('SOURCE_GRANT_INVALID', 'source grant must be an object')
+  for (const key of Object.keys(grant)) {
+    if (!REQUIRED_GRANT_FIELDS.has(key) && !OPTIONAL_GRANT_FIELDS.has(key)) {
+      fail('SOURCE_GRANT_INVALID', `source grant contains unknown field ${key}`)
+    }
+  }
+  for (const key of REQUIRED_GRANT_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(grant, key)) fail('SOURCE_GRANT_INVALID', `source grant is missing ${key}`)
+  }
   strictObject(grant.audience, AUDIENCE_FIELDS, 'source grant audience')
   const audiencePrincipal = normalizePrincipalId(grant.audience.principalId, 'source grant audience principal')
   const audienceAcquisition = boundedId(grant.audience.acquisitionId, 'source grant audience acquisition')
@@ -40,15 +51,42 @@ function normalizeGrant (grant, acquisitionId, principalId, at, maxTtlMs) {
   if (!Number.isSafeInteger(maxTtlMs) || maxTtlMs < 1 || grant.expiresAt - at > maxTtlMs) {
     fail('SOURCE_GRANT_TTL_EXCEEDED', 'source grant exceeds the configured TTL', 403)
   }
-  return { token: grant.token, adapterId, principalId, acquisitionId, expiresAt: grant.expiresAt }
+  const result = { token: grant.token, adapterId, principalId, acquisitionId, expiresAt: grant.expiresAt }
+  if (grant.etag !== undefined && grant.etag !== null) {
+    if (typeof grant.etag !== 'string' || grant.etag.length === 0 || b4a.byteLength(grant.etag) > 128 || grant.etag.includes('\0')) {
+      fail('SOURCE_GRANT_INVALID', 'source grant etag is invalid')
+    }
+    result.etag = grant.etag
+  }
+  if (grant.length !== undefined && grant.length !== null) {
+    if (!Number.isSafeInteger(grant.length) || grant.length < 1) {
+      fail('SOURCE_GRANT_INVALID', 'source grant length must be a positive integer')
+    }
+    result.length = grant.length
+  }
+  if (grant.sha256 !== undefined && grant.sha256 !== null) {
+    if (typeof grant.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(grant.sha256)) {
+      fail('SOURCE_GRANT_INVALID', 'source grant sha256 must be 64 lowercase hexadecimal characters')
+    }
+    result.sha256 = grant.sha256
+  }
+  if (grant.contentType !== undefined && grant.contentType !== null) {
+    if (typeof grant.contentType !== 'string' || grant.contentType.length === 0 || b4a.byteLength(grant.contentType) > 128 || grant.contentType.includes('\0')) {
+      fail('SOURCE_GRANT_INVALID', 'source grant contentType is invalid')
+    }
+    result.contentType = grant.contentType
+  }
+  return result
 }
 
 function linkedAbortSignal(...signals) {
-  const controller = new AbortController()
+  const controller = new Controller()
   const listeners = []
   for (const signal of signals.filter(Boolean)) {
     const abort = () => {
-      if (!controller.signal.aborted) controller.abort(signal.reason)
+      if (!controller.signal.aborted) {
+        controller.abort(signal.reason || acquisitionError('SOURCE_GRANT_EXPIRED', 'source grant has expired', 403))
+      }
     }
     if (signal.aborted) abort()
     else {
@@ -139,7 +177,7 @@ export function createSourceGrantVault ({ resolver, now = () => Date.now() } = {
       const normalized = normalizeGrant(grant, normalizedAcquisitionId, principalId, currentTime(), maxTtlMs)
       const previous = entries.get(normalizedAcquisitionId)
       if (previous) await revokeEntry(previous, acquisitionError('SOURCE_GRANT_REPLACED', 'source grant was replaced', 409))
-      const entry = { ...normalized, generation: ++generation, revoked: false, readers: new Set(), controller: new AbortController(), timer: null }
+      const entry = { ...normalized, generation: ++generation, revoked: false, readers: new Set(), controller: new Controller(), timer: null }
       entries.set(normalizedAcquisitionId, entry)
       scheduleExpiry(entry)
       return Object.freeze({ adapterId: entry.adapterId, expiresAt: entry.expiresAt })
@@ -175,6 +213,10 @@ export function createSourceGrantVault ({ resolver, now = () => Date.now() } = {
           acquisitionId: entry.acquisitionId,
           principalId: entry.principalId,
           expiresAt: entry.expiresAt,
+          etag: entry.etag || null,
+          length: entry.length || null,
+          sha256: entry.sha256 || null,
+          contentType: entry.contentType || null,
           signal: linked.signal,
           budget
         })

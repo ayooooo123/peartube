@@ -176,7 +176,11 @@ export function normalizePublicTitle (value, code = 'ACQUISITION_JOB_INVALID') {
 }
 
 export function normalizeAcquisitionRequest (input) {
-  assertNoPrivateSourceMaterial(input, 'acquisition request')
+  const privateChecked = input && typeof input === 'object'
+    ? { ...input }
+    : input
+  if (privateChecked && typeof privateChecked === 'object') delete privateChecked.sourceFileName
+  assertNoPrivateSourceMaterial(privateChecked, 'acquisition request')
   onlyFields(input, REQUEST_FIELDS, 'request', 'ACQUISITION_REQUEST_INVALID')
   if (input.schemaVersion !== ACQUISITION_SCHEMA_VERSION) fail('ACQUISITION_REQUEST_INVALID', 'schemaVersion must be 1')
   if (!RETENTION_CLASSES.has(input.retentionClass)) fail('ACQUISITION_REQUEST_INVALID', 'retentionClass is invalid')
@@ -188,7 +192,11 @@ export function normalizeAcquisitionRequest (input) {
   }
   if (input.retentionUntil !== undefined) result.retentionUntil = uint(input.retentionUntil, 'retentionUntil')
   if (input.sourceFileName !== undefined && input.sourceFileName !== null) {
-    result.sourceFileName = text(input.sourceFileName, 'sourceFileName', 255, { pattern: SOURCE_FILE_NAME, code: 'ACQUISITION_REQUEST_INVALID' })
+    result.sourceFileName = text(input.sourceFileName, 'sourceFileName', 255, {
+      pattern: SOURCE_FILE_NAME,
+      code: 'ACQUISITION_REQUEST_INVALID',
+      allowLocator: true
+    })
   }
   return Object.freeze(result)
 }

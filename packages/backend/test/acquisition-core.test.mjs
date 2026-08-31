@@ -38,6 +38,8 @@ test('acquisition request and job contracts are exact and reject source secrets'
   t.is(job.mediaContext, null)
   const release = normalizeAcquisitionJob({ ...job, title: 'FUBAR', sourceFileName: 'Fubar.S02E07.2160p.mkv' })
   t.is(release.sourceFileName, 'Fubar.S02E07.2160p.mkv', 'the name the source gave the file survives projection')
+  const punctuatedFile = normalizeAcquisitionRequest(request({ sourceFileName: 'Constantine: City of Demons.2018.1080p.mkv' }))
+  t.is(punctuatedFile.sourceFileName, 'Constantine: City of Demons.2018.1080p.mkv', 'filename punctuation is a label, not a source locator')
   const punctuated = normalizeAcquisitionJob({ ...job, title: 'Spider-Man: Into the Spider-Verse' })
   t.is(punctuated.title, 'Spider-Man: Into the Spider-Verse', 'ordinary title punctuation is not treated as a source locator')
   t.exception(() => normalizeAcquisitionJob({ ...job, title: 'https://private.invalid/title' }), /title is invalid/)

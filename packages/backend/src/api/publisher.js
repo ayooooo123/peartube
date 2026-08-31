@@ -731,9 +731,9 @@ export function createPublisherApi(options = {}) {
   async function assertOnlyWritableBinding(registry, publisherId) {
     if (typeof registry.getWritableBindings !== 'function') fail('PUBLISHER_CATALOG_UNAVAILABLE')
     const bindings = await registry.getWritableBindings()
-    if (!Array.isArray(bindings) || bindings.length !== 1 ||
-        !equalBytes(bindings[0]?.publisherId, publisherId)) {
-      fail(bindings?.length > 1 ? 'PUBLISHER_CATALOG_AMBIGUOUS' : 'PUBLISHER_CATALOG_NOT_WRITABLE')
+    const matching = Array.isArray(bindings) ? bindings.find(candidate => equalBytes(candidate?.publisherId, publisherId)) : null
+    if (!matching) {
+      fail('PUBLISHER_CATALOG_NOT_WRITABLE')
     }
   }
 
@@ -761,7 +761,8 @@ export function createPublisherApi(options = {}) {
         const genesisRootKey = exactBytes(request.genesisRootKey, 32)
         if (!equalBytes(derivePublisherId(genesisRootKey), publisherId)) fail('PUBLISHER_ID_MISMATCH')
         const existingWritable = await registry.getWritableBindings()
-        if (!Array.isArray(existingWritable) ||
+        const matching = Array.isArray(existingWritable) ? existingWritable.find(candidate => equalBytes(candidate?.publisherId, publisherId)) : null
+        if (!matching && Array.isArray(existingWritable) && existingWritable.length > 0 &&
             existingWritable.some(candidate => !equalBytes(candidate?.publisherId, publisherId))) {
           fail('PUBLISHER_CATALOG_AMBIGUOUS')
         }

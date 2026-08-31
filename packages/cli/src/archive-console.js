@@ -1731,8 +1731,12 @@ export async function createArchiveConsole({
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
       res.end('not found')
     } catch (err) {
-      res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
-      res.end(err?.message || String(err))
+      if (!res.headersSent && !res.writableEnded && !res.destroyed) {
+        try {
+          res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+          res.end(err?.message || String(err))
+        } catch { /* ignored */ }
+      }
     }
   }
 

@@ -760,30 +760,34 @@ export function createPublisherApi(options = {}) {
   return {
     async provisionPublisherCatalog(request = {}) {
       try {
+        console.log('[PublisherApi] provisionPublisherCatalog start', request.publisherId)
         const registry = activeCatalogRegistry()
+        console.log('[PublisherApi] activeCatalogRegistry ok')
         if (typeof registry.provision !== 'function' || typeof registry.getWritableBindings !== 'function') {
           fail('PUBLISHER_CATALOG_UNAVAILABLE')
         }
         const publisherId = parsePublisherId(request.publisherId)
         const genesisRootKey = exactBytes(request.genesisRootKey, 32)
         if (!equalBytes(derivePublisherId(genesisRootKey), publisherId)) fail('PUBLISHER_ID_MISMATCH')
-        options.ctx?.logger?.relay?.info?.('provisionPublisherCatalog: step A: getWritableBindings')
+        console.log('[PublisherApi] getWritableBindings start')
         const existingWritable = await registry.getWritableBindings()
-        options.ctx?.logger?.relay?.info?.('provisionPublisherCatalog: step B: check ambiguous')
+        console.log('[PublisherApi] getWritableBindings ok, count:', existingWritable?.length)
         if (Array.isArray(existingWritable) && existingWritable.length > 0 &&
             !existingWritable.some(candidate => equalBytes(candidate?.publisherId, publisherId))) {
           const hasAdmittedOther = existingWritable.some(candidate => candidate?.namespaceDescriptor != null || candidate?.admitted === true)
           if (hasAdmittedOther) fail('PUBLISHER_CATALOG_AMBIGUOUS')
         }
-        options.ctx?.logger?.relay?.info?.('provisionPublisherCatalog: step C: registry.provision')
+        console.log('[PublisherApi] registry.provision start')
         const binding = cloneBinding(await registry.provision(publisherId, genesisRootKey), publisherId)
         if (!equalBytes(binding.genesisRootKey, genesisRootKey)) fail('PUBLISHER_CATALOG_MISMATCH')
-        options.ctx?.logger?.relay?.info?.('provisionPublisherCatalog: step D: localCatalogState')
+        console.log('[PublisherApi] localCatalogState start')
         const state = await localCatalogState(binding, publisherId)
-        options.ctx?.logger?.relay?.info?.('provisionPublisherCatalog: step E: assertOnlyWritableBinding')
+        console.log('[PublisherApi] localCatalogState ok, admitted:', state.admitted)
+        console.log('[PublisherApi] assertOnlyWritableBinding start')
         await assertOnlyWritableBinding(registry, publisherId)
-        options.ctx?.logger?.relay?.info?.('provisionPublisherCatalog: step F: complete')
+        console.log('[PublisherApi] assertOnlyWritableBinding ok')
         if (state.admitted) await completeAdmissionLifecycle(binding)
+        console.log('[PublisherApi] provisionPublisherCatalog returning success!')
         return {
           success: true,
           publisherId: publisherHex(publisherId),
@@ -796,6 +800,7 @@ export function createPublisherApi(options = {}) {
           errorCode: null
         }
       } catch (error) {
+        console.error('[PublisherApi] provisionPublisherCatalog error:', error?.message || error)
         return {
           success: false,
           publisherId: typeof request.publisherId === 'string' ? request.publisherId : '',

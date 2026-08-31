@@ -90,6 +90,7 @@ export function createRelayPublisherShell ({ api, storagePath, fs, logger = null
   // the intent: a backend that prepared a different record than the one built
   // here must not get the root key's signature on it.
   async function authorizeRootOperation ({ root, publisherId, recordType, body, summary }) {
+    logger?.relay?.info?.('authorizeRootOperation step 1: prepare', { recordType })
     const issuedAt = now()
     const intentExpiresAt = issuedAt + INTENT_TTL_MS
     const intentId = hex(crypto.randomBytes(16))
@@ -135,7 +136,9 @@ export function createRelayPublisherShell ({ api, storagePath, fs, logger = null
       throw new Error(`publisher root body mismatch for ${recordType}`)
     }
 
+    logger?.relay?.info?.('authorizeRootOperation step 2: prepared ok', { intentId })
     const signature = crypto.sign(signedRecordSignaturePreimage({ recordType, recordId: candidateRecordId }), root.secretKey)
+    logger?.relay?.info?.('authorizeRootOperation step 3: submit', { recordType })
     const submitted = await api.submitPublisherRootOperation({
       intentId,
       publisherId,
@@ -147,7 +150,7 @@ export function createRelayPublisherShell ({ api, storagePath, fs, logger = null
       signerPublicKey: root.publicKey,
       signature
     })
-
+    logger?.relay?.info?.('authorizeRootOperation step 4: submitted ok', { recordType })
     if (submitted?.success !== true || submitted.complete !== true ||
         submitted.intentId !== intentId || submitted.publisherId !== publisherId ||
         submitted.recordType !== recordType ||

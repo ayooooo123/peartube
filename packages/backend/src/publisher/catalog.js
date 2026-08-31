@@ -261,7 +261,7 @@ export class PublisherCatalog extends ReadyResource {
 
   async append (value, { allowAuthorityBootstrap = false } = {}) {
     await this.ready()
-    if (!this.writable && (!allowAuthorityBootstrap || !this.base?.local?.writable)) {
+    if (!this.writable && !allowAuthorityBootstrap) {
       invalid('local device is not an admitted Autobase writer')
     }
     const frame = isBytes(value) ? value : encodePublisherCatalogFrame(value)

@@ -1022,8 +1022,9 @@ function resolutionLabels(record) {
       }
       publicationId = acquisition.publicationId
       renditionId = acquisition.renditionId
-    } else if (input.ref !== undefined) {
-      const resolved = await resolve({ ref: input.ref })
+    } else if (input.ref !== undefined || input.candidateRef !== undefined) {
+      const ref = input.candidateRef || input.ref
+      const resolved = await resolve({ ref })
       if (resolved.kind !== 'published' || !resolved.publicationId) {
         fail(PROVIDER_ERROR_CODES.ACQUISITION_REQUIRED, 'A completed publication is required before streaming')
       }

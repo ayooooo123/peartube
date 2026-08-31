@@ -260,7 +260,9 @@ export class PublisherCatalog extends ReadyResource {
   }
 
   async append (value, { allowAuthorityBootstrap = false } = {}) {
+    console.log('[Catalog] append step 1: ready start')
     await this.ready()
+    console.log('[Catalog] append step 2: ready ok')
     const frame = isBytes(value) ? value : encodePublisherCatalogFrame(value)
     if (frame.byteLength > PUBLISHER_LIMITS.maxOperationBytes) invalid('operation frame exceeds its byte limit')
     const decoded = decodePublisherCatalogFrame(frame)
@@ -271,14 +273,20 @@ export class PublisherCatalog extends ReadyResource {
     if (!this.writable && (!allowAuthorityBootstrap || !isRootRecord)) {
       invalid('local device is not an admitted Autobase writer')
     }
+    console.log('[Catalog] append step 3: this.base.append start')
     await this.base.append(frame)
+    console.log('[Catalog] append step 4: this.base.update start')
     await this.base.update()
+    console.log('[Catalog] append step 5: append done')
     return decoded.recordId || decoded.transitionId
   }
 
   async appendAndConfirm (value, options = {}) {
+    console.log('[Catalog] appendAndConfirm step 1: append start')
     const operationId = await this.append(value, options)
+    console.log('[Catalog] appendAndConfirm step 2: getPublisherOperationReceipt start')
     const receipt = await getPublisherOperationReceipt(this.view, operationId)
+    console.log('[Catalog] appendAndConfirm step 3: receipt:', receipt?.accepted)
     return { operationId: b4a.from(operationId), ...receipt }
   }
 

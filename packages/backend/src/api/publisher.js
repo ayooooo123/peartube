@@ -346,7 +346,7 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
           fail('PUBLISHER_CATALOG_MISMATCH')
         }
         if (!mapping.catalogBootstrapKey) mapping.catalogBootstrapKey = b4a.from(openedKey)
-        if (!mappingEntry?.value) {
+        if (!mappingEntry?.value || mappingEntry.value.catalogBootstrapKey !== publisherHex(mapping.catalogBootstrapKey)) {
           await ctx.metaDb.put(catalogMappingKey(publisherId), {
             version: 1,
             publisherId: id,

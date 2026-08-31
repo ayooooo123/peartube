@@ -736,10 +736,11 @@ export function createPublisherApi(options = {}) {
     }
   }
 
-  async function assertOnlyWritableBinding(registry, publisherId) {
+  async function assertOnlyWritableBinding(registry, publisherId, currentBinding = null) {
     if (typeof registry.getWritableBindings !== 'function') fail('PUBLISHER_CATALOG_UNAVAILABLE')
     const bindings = await registry.getWritableBindings()
-    if (!Array.isArray(bindings) || !bindings.some(candidate => equalBytes(candidate?.publisherId, publisherId))) {
+    const matchesCurrent = currentBinding && equalBytes(currentBinding.publisherId, publisherId)
+    if (!Array.isArray(bindings) || (!bindings.some(candidate => equalBytes(candidate?.publisherId, publisherId)) && !matchesCurrent)) {
       fail('PUBLISHER_CATALOG_NOT_WRITABLE')
     }
   }
@@ -784,7 +785,7 @@ export function createPublisherApi(options = {}) {
         const state = await localCatalogState(binding, publisherId)
         console.log('[PublisherApi] localCatalogState ok, admitted:', state.admitted)
         console.log('[PublisherApi] assertOnlyWritableBinding start')
-        await assertOnlyWritableBinding(registry, publisherId)
+        await assertOnlyWritableBinding(registry, publisherId, binding)
         console.log('[PublisherApi] assertOnlyWritableBinding ok')
         if (state.admitted) await completeAdmissionLifecycle(binding)
         console.log('[PublisherApi] provisionPublisherCatalog returning success!')

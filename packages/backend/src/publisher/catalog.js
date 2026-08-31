@@ -234,7 +234,7 @@ export class PublisherCatalog extends ReadyResource {
     // sync, and every projection scan afterwards - wait on a remote core that
     // owes this catalog nothing. Advance the base in the background instead and
     // answer from the view that is already local and already verified.
-    if (this.verifiedPageView) {
+    if (this.verifiedPageView || !this.baseReady) {
       if (!this.baseUpdating) {
         this.baseUpdating = Promise.resolve()
           .then(() => this.base?.update())

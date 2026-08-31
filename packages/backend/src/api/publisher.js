@@ -327,7 +327,8 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
           try {
             const testCore = namespacedStore.get({ key: mapping.catalogBootstrapKey })
             await testCore.ready?.()
-            if (testCore.writable === false && testCore.length === 0) {
+            console.log('[PublisherApi] testCore writable:', testCore.writable, 'length:', testCore.length)
+            if (testCore.writable === false) {
               mapping.catalogBootstrapKey = null
             }
           } catch {}

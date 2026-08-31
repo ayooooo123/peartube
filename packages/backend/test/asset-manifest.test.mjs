@@ -64,7 +64,6 @@ function createRawPublicationManifest(core) {
     publisherId,
     sequence: 1,
     title: 'Tampered',
-    sourceFileName: null,
     description: null,
     previousManifestId: null,
     renditions: [fullRendition],

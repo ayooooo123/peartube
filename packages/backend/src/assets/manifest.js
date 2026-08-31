@@ -43,7 +43,7 @@ function unsignedManifestBody(input = {}) {
     publisherId,
     sequence: normalizeNonNegativeInteger(input.sequence, 'sequence', 0),
     title: boundedString(input.title, 'title', 512, true),
-    sourceFileName: boundedFileName(input.sourceFileName),
+    ...(input.sourceFileName == null ? {} : { sourceFileName: boundedFileName(input.sourceFileName) }),
     description: boundedString(input.description, 'description', 4096),
     previousManifestId,
     renditions: renditions.map(createRenditionDescriptor).sort((a, b) => a.renditionId.localeCompare(b.renditionId)),

@@ -170,14 +170,15 @@ export class PublisherCatalog extends ReadyResource {
       : (await this.base.ready(), true)
     this.baseReady = readyWithinBudget
 
-    if (readyWithinBudget) {
-      const descriptorEntry = await this.base.view.get('state/descriptor')
-      const journalCountEntry = await this.base.view.get('meta/journal-count')
+    if (readyWithinBudget && this.base?.view) {
+      await raceOpenBudget(this.base.view.ready?.() || Promise.resolve(), 1000).catch(() => {})
+      const descriptorEntry = await raceOpenBudget(this.base.view.get('state/descriptor'), 1000).catch(() => null)
+      const journalCountEntry = await raceOpenBudget(this.base.view.get('meta/journal-count'), 1000).catch(() => null)
       let pinError = null
-      if (descriptorEntry) {
+      if (descriptorEntry?.value) {
         const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value, { legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY })
         if (!equalBytes(descriptor.publisherId, this.options.publisherId)) pinError = 'persisted descriptor publisherId does not match expected publisherId'
-      } else if (journalCountEntry && b4a.toString(journalCountEntry.value) !== '0') {
+      } else if (journalCountEntry?.value && b4a.toString(journalCountEntry.value) !== '0') {
         pinError = 'persisted catalog history has no descriptor matching expected publisherId'
       }
       if (pinError) {

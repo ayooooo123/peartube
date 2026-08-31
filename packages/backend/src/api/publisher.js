@@ -996,6 +996,7 @@ export function createPublisherApi(options = {}) {
           try {
             await appendAndConfirm(binding.catalog, envelope, candidateRecordId, { allowAuthorityBootstrap: true })
           } catch (error) {
+            if (error instanceof PublisherApiError) throw error
             fail('PUBLISHER_CATALOG_APPEND_FAILED')
           }
           if (intent.recordType === PUBLISHER_RECORD_TYPES.WRITER_ADMISSION) {
@@ -1082,6 +1083,7 @@ export function createPublisherApi(options = {}) {
         try {
           await appendAndConfirm(binding.catalog, envelope, candidateRecordId, { allowAuthorityBootstrap: true })
         } catch (error) {
+          if (error instanceof PublisherApiError) throw error
           fail('PUBLISHER_CATALOG_APPEND_FAILED')
         }
         await registry.deletePendingTransition(intent.publisherIdBytes, candidateRecordId)

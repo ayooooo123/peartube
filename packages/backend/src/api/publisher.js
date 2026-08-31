@@ -320,6 +320,18 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
         }
       }
 
+      if (!requestedKey && create && mapping.catalogBootstrapKey && typeof ctx.store?.get === 'function') {
+        try {
+          const testCore = ctx.store.get({ key: mapping.catalogBootstrapKey })
+          await testCore.ready?.()
+          if (!testCore.writable) {
+            mapping.catalogBootstrapKey = null
+          }
+        } catch {
+          mapping.catalogBootstrapKey = null
+        }
+      }
+
       const catalogOptions = { publisherId: b4a.from(publisherId) }
       if (deviceSigner) catalogOptions.deviceSigner = deviceSigner
       if (mapping.catalogBootstrapKey) catalogOptions.key = b4a.from(mapping.catalogBootstrapKey)

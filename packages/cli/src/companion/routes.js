@@ -403,8 +403,10 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
     const value = decodeContributeAcquisitionBody(input.body)
     if (typeof service.issueLocalResolution !== 'function') unavailable('Local resolution')
     if (typeof service.requestAcquisition !== 'function') unavailable('Acquisitions')
-
     const publisherId = value.publisherId || principal.publisherId
+    if (typeof service.ensureAcquisitionPolicy === 'function') {
+      await service.ensureAcquisitionPolicy(publisherId)
+    }
     const resolution = service.issueLocalResolution({
       title: value.title,
       selector: value.selector,

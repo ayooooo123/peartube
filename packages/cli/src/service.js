@@ -39,7 +39,7 @@ function sourceFileNameOf(value) {
   return name && name.length <= 255 ? name : null
 }
 
-function createProviderMachineService(runtime) {
+function createProviderMachineService(runtime, options = {}) {
   const provider = runtime?.provider
   if (!provider) return null
   return Object.freeze({
@@ -49,6 +49,12 @@ function createProviderMachineService(runtime) {
         return runtime.issueLocalProviderResolution(input)
       }
       throw new Error('Local resolution is unsupported')
+    },
+    async ensureAcquisitionPolicy(publisherId) {
+      if (typeof options.ensureAcquisitionPolicy === 'function') {
+        return options.ensureAcquisitionPolicy(publisherId)
+      }
+      return null
     },
     async getPolicy(input) {
       if (typeof provider.getPolicy === 'function') return provider.getPolicy(input)
@@ -1228,7 +1234,7 @@ async function buildRelayService({
       if (config.companion?.enabled !== false) {
         if (!runtime.provider) throw new Error('Relay runtime did not expose ProviderService')
         companionServer = await companionServerFactory({
-          service: createProviderMachineService(runtime),
+          service: createProviderMachineService(runtime, { ensureAcquisitionPolicy: ensureLocalAcquisitionPolicy }),
           config: config.companion,
           clock: nowFn,
           logger,

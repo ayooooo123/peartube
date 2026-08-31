@@ -33,6 +33,22 @@ function sha256Base64 (data) {
 // auditable with nothing but the object store's own list operation.
 const INDEX_DIGITS = 12
 
+export function contentBlockKey(hashOrOptions, maybeHash) {
+  let prefix = ''
+  let hash = hashOrOptions
+  if (hashOrOptions && typeof hashOrOptions === 'object' && !b4a.isBuffer(hashOrOptions)) {
+    prefix = hashOrOptions.prefix || ''
+    hash = hashOrOptions.hash
+  } else if (typeof hashOrOptions === 'string' && maybeHash !== undefined) {
+    prefix = hashOrOptions
+    hash = maybeHash
+  }
+  const hex = b4a.isBuffer(hash) ? b4a.toString(hash, 'hex') : String(hash || '')
+  if (!/^[0-9a-f]{64}$/i.test(hex)) throw new Error('hash must be a 32-byte hex hash')
+  const head = prefix ? `${prefix.replace(/\/+$/, '')}/` : ''
+  return `${head}blocks/v2/${hex.toLowerCase()}`
+}
+
 export function remoteBlockKey({ prefix = '', coreKey, blockIndex }) {
   const core = normalizeCoreKey(coreKey)
   if (!Number.isSafeInteger(blockIndex) || blockIndex < 0) {
@@ -61,59 +77,115 @@ export function createRemoteBlockStore({ provider, prefix = '', coreKey } = {}) 
   if (!provider || typeof provider.getBlock !== 'function' || typeof provider.putBlock !== 'function') {
     throw new Error('a block provider with getBlock and putBlock is required')
   }
-  const core = normalizeCoreKey(coreKey)
-  const keyFor = (blockIndex) => remoteBlockKey({ prefix, coreKey: core, blockIndex })
+  const core = coreKey ? normalizeCoreKey(coreKey) : null
+  const keyFor = (blockIndex) => {
+    if (!core) throw new Error('coreKey is required for legacy block index key')
+    return remoteBlockKey({ prefix, coreKey: core, blockIndex })
+  }
+  const contentKeyFor = (hash) => contentBlockKey({ prefix, hash })
+  const knownKeys = new Set()
 
   return {
     coreKey: core,
 
-    // The object key for a block, so a caller that has to report an object it
-    // could not delete can name it.
-    key (blockIndex) {
-      return keyFor(blockIndex)
+    // The object key for a block, or content-addressed key for a leaf hash.
+    key (blockIndexOrHash) {
+      if (b4a.isBuffer(blockIndexOrHash) || (typeof blockIndexOrHash === 'string' && /^[0-9a-f]{64}$/i.test(blockIndexOrHash))) {
+        return contentKeyFor(blockIndexOrHash)
+      }
+      return keyFor(blockIndexOrHash)
     },
 
-    async put(blockIndex, data) {
-      if (!b4a.isBuffer(data) || data.byteLength === 0) {
+    contentKey (hash) {
+      return contentKeyFor(hash)
+    },
+    async put(blockIndexOrHash, data, options = {}) {
+      let blockData = data
+      let hash = options?.hash || null
+      let key = null
+
+      if (b4a.isBuffer(blockIndexOrHash) && (data === undefined || !b4a.isBuffer(data))) {
+        blockData = blockIndexOrHash
+        hash = crypto.data(blockData)
+        key = contentKeyFor(hash)
+      } else if ((b4a.isBuffer(blockIndexOrHash) && blockIndexOrHash.byteLength === 32) || (typeof blockIndexOrHash === 'string' && /^[0-9a-f]{64}$/i.test(blockIndexOrHash))) {
+        hash = blockIndexOrHash
+        blockData = data
+        key = contentKeyFor(hash)
+      } else if (Number.isSafeInteger(blockIndexOrHash)) {
+        blockData = data
+        if (options?.hash) {
+          hash = options.hash
+          key = contentKeyFor(hash)
+        } else if (core) {
+          key = keyFor(blockIndexOrHash)
+        } else {
+          hash = hash || crypto.data(blockData)
+          key = contentKeyFor(hash)
+        }
+      } else if (b4a.isBuffer(data)) {
+        blockData = data
+        hash = hash || crypto.data(data)
+        key = contentKeyFor(hash)
+      }
+
+      if (!b4a.isBuffer(blockData) || blockData.byteLength === 0) {
         throw new Error('a block must be a non-empty buffer')
       }
+
+      const checksumSha256Base64 = sha256Base64(blockData)
+      knownKeys.add(key)
       return provider.putBlock({
-        key: keyFor(blockIndex),
-        data,
+        key,
+        data: blockData,
         // Vendor-side integrity, in the one format S3 accepts: the BASE64 of a
-        // raw SHA-256 digest. This used to hand over a hex Hypercore leaf hash,
-        // which is neither base64 nor SHA-256, so every upload to Backblaze
-        // failed with `400 InvalidDigest` and the whole feature was dead.
-        //
-        // It is not what we verify against on read - that is the tree, which
-        // the provider never sees - so it stays a belt to the tree's braces.
-        checksumSha256Base64: sha256Base64(data)
+        // raw SHA-256 digest.
+        checksumSha256Base64
       })
     },
 
-    async has(blockIndex) {
+    async has(blockIndexOrHash, { expectedHash } = {}) {
       if (typeof provider.hasBlock !== 'function') return false
-      return provider.hasBlock({ key: keyFor(blockIndex) })
+
+      if ((b4a.isBuffer(blockIndexOrHash) && blockIndexOrHash.byteLength === 32) || (typeof blockIndexOrHash === 'string' && /^[0-9a-f]{64}$/i.test(blockIndexOrHash))) {
+        return provider.hasBlock({ key: contentKeyFor(blockIndexOrHash) })
+      }
+
+      if (expectedHash) {
+        const exists = await provider.hasBlock({ key: contentKeyFor(expectedHash) })
+        if (exists) return true
+      }
+
+      if (Number.isSafeInteger(blockIndexOrHash) && core) {
+        return provider.hasBlock({ key: keyFor(blockIndexOrHash) })
+      }
+
+      return false
     },
 
-    async delete(blockIndex) {
+    async delete(blockIndexOrHash, { hash } = {}) {
       if (typeof provider.deleteBlock !== 'function') return { success: false }
-      return provider.deleteBlock({ key: keyFor(blockIndex) })
+
+      if (b4a.isBuffer(blockIndexOrHash) || (typeof blockIndexOrHash === 'string' && /^[0-9a-f]{64}$/i.test(blockIndexOrHash))) {
+        const k = contentKeyFor(blockIndexOrHash)
+        knownKeys.delete(k)
+        return provider.deleteBlock({ key: k })
+      }
+      if (hash) {
+        const k = contentKeyFor(hash)
+        knownKeys.delete(k)
+        return provider.deleteBlock({ key: k })
+      }
+      if (Number.isSafeInteger(blockIndexOrHash) && core) {
+        const k = keyFor(blockIndexOrHash)
+        knownKeys.delete(k)
+        return provider.deleteBlock({ key: k })
+      }
+      return { success: false }
     },
 
     /**
      * Delete every object this store holds for blocks [0, length).
-     *
-     * Staging objects exist only to carry a title between the two passes of a
-     * bounded ingest, so once the finished core is verified they are garbage
-     * that still costs the operator money. A delete that does not stick is
-     * REPORTED rather than assumed: the keys come back so an orphan is
-     * something an operator can go and find, not something the bucket keeps
-     * forever in silence.
-     *
-     * Deletes run a few at a time because a title is blocks by the hundred
-     * thousand and a round trip each way, sequentially, is a cleanup nobody
-     * waits for.
      */
     async purge ({ length, concurrency = 8 } = {}) {
       if (!Number.isSafeInteger(length) || length < 0) {
@@ -127,8 +199,9 @@ export function createRemoteBlockStore({ provider, prefix = '', coreKey } = {}) 
       await Promise.all(Array.from({ length: lanes }, async () => {
         while (next < length) {
           const blockIndex = next++
-          const key = keyFor(blockIndex)
+          let key = null
           try {
+            key = keyFor(blockIndex)
             const result = typeof provider.deleteBlock === 'function'
               ? await provider.deleteBlock({ key })
               : { success: false }
@@ -138,7 +211,7 @@ export function createRemoteBlockStore({ provider, prefix = '', coreKey } = {}) 
               deleted++
             }
           } catch (error) {
-            orphaned.push({ blockIndex, key, error })
+            orphaned.push({ blockIndex, key: key || String(blockIndex), error })
           }
         }
       }))
@@ -150,19 +223,45 @@ export function createRemoteBlockStore({ provider, prefix = '', coreKey } = {}) 
     /**
      * Fetch one block and prove it is the block the tree committed to.
      *
-     * expectedHash is the leaf hash read from the core's own merkle tree. A
-     * caller that cannot supply it gets nothing: serving a block nobody can
-     * check is the failure this store exists to prevent.
+     * expectedHash is the leaf hash read from the core's own merkle tree.
      */
-    async get(blockIndex, { expectedHash } = {}) {
-      if (!b4a.isBuffer(expectedHash) || expectedHash.byteLength !== 32) {
+    async get(blockIndexOrHash, { expectedHash } = {}) {
+      let hash = expectedHash
+      let blockIndex = null
+      if (b4a.isBuffer(blockIndexOrHash) && blockIndexOrHash.byteLength === 32) {
+        hash = blockIndexOrHash
+      } else if (typeof blockIndexOrHash === 'string' && /^[0-9a-f]{64}$/i.test(blockIndexOrHash)) {
+        hash = b4a.from(blockIndexOrHash, 'hex')
+      } else if (Number.isSafeInteger(blockIndexOrHash)) {
+        blockIndex = blockIndexOrHash
+      }
+
+      if (!b4a.isBuffer(hash) || hash.byteLength !== 32) {
         throw new Error('a 32-byte expected leaf hash is required to restore a block')
       }
-      const raw = await provider.getBlock({ key: keyFor(blockIndex) })
+
+      const contentKey = contentKeyFor(hash)
+      const legacyKey = core && blockIndex !== null ? keyFor(blockIndex) : null
+
+      let raw = null
+      if (knownKeys.has(contentKey)) {
+        raw = await provider.getBlock({ key: contentKey })
+      } else if (legacyKey !== null && knownKeys.has(legacyKey)) {
+        raw = await provider.getBlock({ key: legacyKey })
+      } else {
+        raw = await provider.getBlock({ key: contentKey })
+        if ((raw === null || raw === undefined) && legacyKey !== null) {
+          try {
+            raw = await provider.getBlock({ key: legacyKey })
+          } catch {
+            // ignore fallback error
+          }
+        }
+      }
       if (raw === null || raw === undefined) return null
       const data = b4a.isBuffer(raw) ? raw : b4a.from(raw)
       if (data.byteLength === 0) return null
-      if (!b4a.equals(crypto.data(data), expectedHash)) {
+      if (!b4a.equals(crypto.data(data), hash)) {
         const error = new Error('restored block does not match the tree')
         error.code = 'REMOTE_BLOCK_CORRUPT'
         throw error

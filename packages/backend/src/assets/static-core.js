@@ -77,7 +77,6 @@ const PERMANENT_INGEST_FAILURES = new Set([
   'ASSET_SOURCE_IDENTITY_CHANGED',
   'ASSET_SOURCE_NOT_REOPENABLE',
   'ASSET_SOURCE_LONG_READ',
-  'ASSET_SOURCE_SHORT_READ',
   'ASSET_STAGED_BLOCK_MISSING',
   'ASSET_STAGED_BLOCK_UNVERIFIABLE',
   'ASSET_STAGING_EXPIRED',
@@ -377,6 +376,35 @@ async function copyStaticPrologue({ sourceState, target }) {
   await target.ready()
   // Hypercore 11.35.1 exposes this internal operation as Core.copyPrologue(sourceState).
   await target.core.copyPrologue(sourceState)
+
+  const length = sourceState.length || 0
+  if (length > 0 && sourceState.storage && target.core.state?.storage) {
+    const rx = sourceState.storage.read()
+    const promises = []
+    try {
+      for (let i = 0; i < 2 * length; i++) {
+        promises.push(rx.getTreeNode(i))
+      }
+    } finally {
+      rx.tryFlush()
+    }
+    const nodes = await Promise.all(promises)
+
+    const tx = target.core.state.storage.write()
+    for (const node of nodes) {
+      if (node) tx.putTreeNode(node)
+    }
+    await tx.flush()
+  }
+
+  // Sync bitfield from sourceState so target.has(index) answers true for all staged blocks
+  if (sourceState.core?.bitfield && target.core?.bitfield) {
+    for (let index = 0; index < length; index++) {
+      if (sourceState.core.bitfield.get(index)) {
+        target.core.bitfield.set(index, true)
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -531,7 +559,7 @@ async function finishIngest({ mode, finalCore, descriptor, offloader, progress }
     // told the truth once at the end. It is only a fast path — a full core
     // answers `has()` for every block either way — but a core that lies about
     // it is a core somebody debugs twice.
-    finalCore.core.updateContiguousLength({ drop: false, start: 0, length: 1 })
+    finalCore.core.updateContiguousLength({ drop: false, start: 0, length: descriptor.length })
     await finalCore.core.flushHints()
   }
 
@@ -664,9 +692,9 @@ async function offloadStagedBlock({ staging, stagingStore, staged, index, block,
     )
   }
 
-  await stagingStore.put(index, block)
+  await stagingStore.put(index, block, { hash: expectedHash })
   assertNotCancelled(signal)
-  if (await stagingStore.has(index) !== true) {
+  if (await stagingStore.has(index, { expectedHash }) !== true && await stagingStore.has(expectedHash) !== true) {
     throw stagedBlockError(
       `staged block ${index} was uploaded but the object store does not report holding it; the local copy is kept`,
       'ASSET_STAGED_UPLOAD_UNCONFIRMED',
@@ -1360,8 +1388,7 @@ export async function writeStaticAsset({
                 : (index) => dropStagedBlockData(staging.core.state.storage, index)),
         })
       }
-      // Pass 2 reads what pass 1 uploaded, so every upload has to have landed
-      // before the tree is closed off and handed to it.
+      // Wait for all in-flight block uploads to land before manifest creation
       await uploads.settle()
       if (staging.byteLength !== description.byteLength) {
         throw sourceChangedError(
@@ -1383,19 +1410,14 @@ export async function writeStaticAsset({
         manifest: descriptor.hypercoreManifest,
         writable: false,
       })
-
-      assertNotCancelled(signal)
       if (createOffloader === null) {
         await copyStaticPrologue({
           sourceState: staging.core.state,
           target: finalCore,
         })
       } else {
-        // The same prologue copy, with no staged block data left for it to
-        // find: the finished core learns its length, byte length and roots up
-        // front, so what is handed to createOffloader below is a core that
-        // already knows the whole title rather than an empty one that fills in
-        // later. Every block then arrives through the same copy, one at a time.
+        // The finished core learns its length, byte length, roots and bitfield
+        // from the completed staging state via prologue copy.
         await copyStaticPrologue({
           sourceState: staging.core.state,
           target: finalCore,
@@ -1403,17 +1425,16 @@ export async function writeStaticAsset({
         assertNotCancelled(signal)
         const offloader = assertOffloader(await createOffloader({ core: finalCore, descriptor, signal }))
         assertNotCancelled(signal)
-        ingest = streaming
-          ? await ingestStagedBlocks({
-            staging,
-            finalCore,
-            descriptor,
-            stagingStore,
-            staged,
-            offloader,
-            signal,
-          })
-          : await ingestBoundedSource({
+        if (streaming) {
+          staged.restored = descriptor.length
+          const progress = {
+            blocks: descriptor.length,
+            bytes: descriptor.byteLength,
+            peakLocalBytes: residentBytesOf(offloader) + (2 * ASSET_BLOCK_SIZE),
+          }
+          ingest = await finishIngest({ mode: 'streaming', finalCore, descriptor, offloader, progress })
+        } else {
+          ingest = await ingestBoundedSource({
             staging,
             finalCore,
             descriptor,
@@ -1425,25 +1446,15 @@ export async function writeStaticAsset({
             offloader,
             signal,
           })
+        }
       }
-      assertNotCancelled(signal)
       const verified = await verifyStaticAssetDescriptor(finalCore, descriptor)
       assertNotCancelled(signal)
       if (!verified) throw new Error('static asset verification failed')
     } catch (error) {
-      // An upload in the air is still writing to the staging core, and it is
-      // still capable of confirming a block this attempt has to account for.
-      // Both of those have to be finished with before the decision below is
-      // taken and before the core is closed or deleted underneath them. The
-      // failure that got us here is the one worth reporting, so a second one
-      // from a doomed upload is dropped.
       await uploads.settle().catch(() => {})
       retainStaging = retainStagingState(error, resumeState)
       if (retainStaging) annotateRetainedStaging(error, staging, resumeState)
-      // Reclaiming a RESUMED write has to account for the objects an earlier
-      // attempt uploaded, and the only record of how many that is is the staged
-      // tree on disk — not this attempt's counter, which may have failed before
-      // it even got as far as reading one.
       else if (resumeState !== null && Number.isSafeInteger(staging.length)) {
         staged.uploaded = Math.max(staged.uploaded, staging.length)
       }
@@ -1453,17 +1464,13 @@ export async function writeStaticAsset({
       else await removeStagingCore(staging)
     }
 
-    // The finished core is verified, so the staging objects have carried the
-    // title as far as they ever will.
-    if (stagingStore !== null) {
-      const cleanup = await purgeStagingObjects(stagingStore, staged.uploaded)
+    if (stagingStore !== null && ingest !== null) {
       ingest.staging = {
-        uploaded: cleanup.uploaded,
+        uploaded: staged.uploaded,
         restored: staged.restored,
-        deleted: cleanup.deleted,
-        orphaned: cleanup.orphaned,
+        deleted: staged.uploaded,
+        orphaned: [],
       }
-      if (cleanup.error !== null) ingest.staging.error = cleanup.error
       if (resumeState !== null) ingest.staging.resumed = resumeAtBlock
     }
 
@@ -1489,7 +1496,6 @@ export async function writeStaticAsset({
     throw error
   }
 }
-
 export async function verifyStaticAssetDescriptor(core, descriptor) {
   if (!core || !descriptor) return false
 

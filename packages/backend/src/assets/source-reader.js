@@ -159,7 +159,7 @@ export function createSourceReader (implementation = {}) {
           assertActive(signal)
           if (read !== range.length) {
             const error = new Error(`source range ended after ${read} of ${range.length} requested bytes`)
-            error.code = 'ASSET_SOURCE_SHORT_READ'
+            error.code = 'SOURCE_RANGE_SHORT'
             throw error
           }
         } finally {

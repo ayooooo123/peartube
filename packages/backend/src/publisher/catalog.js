@@ -261,14 +261,16 @@ export class PublisherCatalog extends ReadyResource {
 
   async append (value, { allowAuthorityBootstrap = false } = {}) {
     await this.ready()
-    if (!this.writable && !allowAuthorityBootstrap) {
-      invalid('local device is not an admitted Autobase writer')
-    }
     const frame = isBytes(value) ? value : encodePublisherCatalogFrame(value)
     if (frame.byteLength > PUBLISHER_LIMITS.maxOperationBytes) invalid('operation frame exceeds its byte limit')
     const decoded = decodePublisherCatalogFrame(frame)
     const canonical = encodePublisherCatalogFrame(decoded)
     if (!b4a.equals(canonical, frame)) invalid('operation frame is noncanonical')
+    const recordType = decoded.recordType || decoded.operation?.recordType
+    const isRootRecord = REPLAY_ROOT_TYPES.has(recordType)
+    if (!this.writable && (!allowAuthorityBootstrap || !isRootRecord)) {
+      invalid('local device is not an admitted Autobase writer')
+    }
     await this.base.append(frame)
     await this.base.update()
     return decoded.recordId || decoded.transitionId

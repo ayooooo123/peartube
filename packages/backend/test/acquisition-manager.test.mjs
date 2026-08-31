@@ -282,3 +282,85 @@ test('a source that reaches the fetch without naming its adapter is refused, and
   t.is(fixtureValue.publishes(), 0)
   await fixtureValue.manager.close()
 })
+
+test('a 100% staged complete acquisition completes and publishes without re-attached grant', async t => {
+  const bee = fakeBee()
+  const store = createAcquisitionStore({ bee, now: () => NOW })
+  const policyRuntime = createAcquisitionPolicyRuntime({ policy: openPolicy(), now: () => NOW })
+
+  const job = {
+    schemaVersion: 1,
+    acquisitionId: 'acq_staged_complete',
+    state: 'queued',
+    version: 0,
+    principalId: 'local-user',
+    publisherId: 'publisher-1',
+    requesterPublisherIds: ['publisher-1'],
+    isRemote: false,
+    deferredInput: true,
+    idempotencyDigest: 'd'.repeat(64),
+    requestFingerprint: 'f'.repeat(64),
+    request: REQUEST,
+    retentionClass: 'archive-pin',
+    publicationMetadata: { title: 'Staged Movie', sourceFileName: 'staged.mkv', mediaContext: null },
+    expectedBytes: BYTES.byteLength,
+    expectedIdentity: { kind: 'etag', value: 'etag-asset-v1' },
+    sourceBytesRead: BYTES.byteLength,
+    sourceBytesAccepted: BYTES.byteLength,
+    bytesAcquired: BYTES.byteLength,
+    verifiedBytes: 0,
+    committedBytes: 0,
+    retainedBytes: 0,
+    stagingBytes: BYTES.byteLength,
+    stagingPeakBytes: BYTES.byteLength,
+    attempts: 0,
+    startedAt: NOW,
+    finishedAt: null,
+    verifiedPrefix: { byteLength: BYTES.byteLength, identity: { kind: 'etag', value: 'etag-asset-v1' } },
+    verifiedAsset: null,
+    publication: null,
+    errorCode: null,
+    recoverable: false,
+    createdAt: NOW,
+    updatedAt: NOW
+  }
+  await store.createOrReplay({
+    idempotencyDigest: job.idempotencyDigest,
+    requestFingerprint: job.requestFingerprint,
+    job
+  })
+
+  let publishes = 0
+  const manager = createAcquisitionManager({
+    store,
+    policy: policyRuntime,
+    provider: {
+      ...provider({ expectedIdentity: true }),
+      async acquire ({ resume, signal, onProgress }) {
+        const bytes = BYTES.byteLength
+        await onProgress({ sourceBytesRead: bytes, sourceBytesAccepted: bytes, bytesAcquired: bytes, stagingBytes: bytes })
+        return {
+          descriptor: { assetId: 'asset-1', key: 'a'.repeat(64), treeHash: 'b'.repeat(64), length: 1, byteLength: bytes, blockSize: bytes },
+          stagingBytes: bytes
+        }
+      }
+    },
+    sourceGrants: vault(),
+    publisher: {
+      hasAuthority: () => true,
+      async publish () { publishes++; return { assetId: 'asset-1', manifestId: 'm'.repeat(64), renditionId: 'r'.repeat(64), publicationId: 'p'.repeat(64) } }
+    },
+    now: () => NOW
+  })
+
+  await manager.start()
+
+  const completed = await eventually(
+    () => manager.get({ acquisitionId: job.acquisitionId, principal: PRINCIPAL }),
+    j => j?.state === 'completed'
+  )
+  t.is(completed.state, 'completed')
+  t.is(completed.bytesAcquired, BYTES.byteLength)
+  t.is(publishes, 1, 'published successfully from staged bytes with no active source grant')
+  await manager.close()
+})

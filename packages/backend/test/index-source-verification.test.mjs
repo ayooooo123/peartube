@@ -258,6 +258,7 @@ async function sourceFixture(options = {}) {
         presentationKind: selector.kind,
         publicationId: manifest.publicationId,
         title: 'Current signed source',
+        sourceFileName: 'Current.signed.source.1080p.WEB-DL.mkv',
       },
       confidence: 900,
       issuerSequence: 1,

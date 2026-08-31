@@ -529,7 +529,17 @@ export async function createVerifiedQueryView({
     const projectedPublications = entityPublications.map(publication => {
       const manifest = manifestFromSnapshot(snapshot, publication)
       if (!manifest) fail('verified publication source record is missing')
-      return Object.freeze({ ...publication, manifest })
+      const metadataClaim = directClaims.find(row => (
+        row.issuer === publication.publisherId &&
+        row.body?.claimType === 'EntityMetadataClaim' &&
+        row.body?.payload?.publicationId === publication.publicationId &&
+        typeof row.body.payload.sourceFileName === 'string'
+      ))
+      return Object.freeze({
+        ...publication,
+        manifest,
+        sourceFileName: metadataClaim?.body?.payload?.sourceFileName || null
+      })
     })
     const firstManifest = projectedPublications[0]?.manifest
     const metadata = {

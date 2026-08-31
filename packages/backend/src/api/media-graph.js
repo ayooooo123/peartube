@@ -648,6 +648,7 @@ export function createMediaGraphApi(options = {}) {
         scope.assess(publication.publicationId, requirement.renditionId, requirement),
         entityId,
       )
+      source.sourceFileName = publication.sourceFileName || source.sourceFileName || null
       source.manifest = manifest
       sources.push(source)
     }

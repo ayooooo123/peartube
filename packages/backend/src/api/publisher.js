@@ -759,16 +759,22 @@ export function createPublisherApi(options = {}) {
         const publisherId = parsePublisherId(request.publisherId)
         const genesisRootKey = exactBytes(request.genesisRootKey, 32)
         if (!equalBytes(derivePublisherId(genesisRootKey), publisherId)) fail('PUBLISHER_ID_MISMATCH')
+        options.ctx?.logger?.relay?.info?.('provisionPublisherCatalog: step A: getWritableBindings')
         const existingWritable = await registry.getWritableBindings()
+        options.ctx?.logger?.relay?.info?.('provisionPublisherCatalog: step B: check ambiguous')
         if (Array.isArray(existingWritable) && existingWritable.length > 0 &&
             !existingWritable.some(candidate => equalBytes(candidate?.publisherId, publisherId))) {
           const hasAdmittedOther = existingWritable.some(candidate => candidate?.namespaceDescriptor != null || candidate?.admitted === true)
           if (hasAdmittedOther) fail('PUBLISHER_CATALOG_AMBIGUOUS')
         }
+        options.ctx?.logger?.relay?.info?.('provisionPublisherCatalog: step C: registry.provision')
         const binding = cloneBinding(await registry.provision(publisherId, genesisRootKey), publisherId)
         if (!equalBytes(binding.genesisRootKey, genesisRootKey)) fail('PUBLISHER_CATALOG_MISMATCH')
+        options.ctx?.logger?.relay?.info?.('provisionPublisherCatalog: step D: localCatalogState')
         const state = await localCatalogState(binding, publisherId)
+        options.ctx?.logger?.relay?.info?.('provisionPublisherCatalog: step E: assertOnlyWritableBinding')
         await assertOnlyWritableBinding(registry, publisherId)
+        options.ctx?.logger?.relay?.info?.('provisionPublisherCatalog: step F: complete')
         if (state.admitted) await completeAdmissionLifecycle(binding)
         return {
           success: true,

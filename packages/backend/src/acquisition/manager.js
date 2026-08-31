@@ -201,7 +201,7 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       if (!grant && isStagedComplete) {
         reader = {
           resumable: true,
-          async describe () { return { byteLength: job.expectedBytes, identity: job.expectedIdentity || {} } },
+          async describe () { return { byteLength: job.expectedBytes, identity: job.expectedIdentity || { kind: 'etag', value: 'staged-complete' } } },
           async * open () {},
           async close () {}
         }
@@ -210,10 +210,12 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       }
       const description = await reader.describe({ signal: entry.controller.signal })
       if (description.byteLength !== job.expectedBytes) fail('SOURCE_LENGTH_MISMATCH', 'source length changed')
-      const describedIdentity = durableSourceIdentity(description.identity)
+      const describedIdentity = (!grant && isStagedComplete && job.expectedIdentity)
+        ? job.expectedIdentity
+        : durableSourceIdentity(description.identity)
       if (job.expectedIdentity !== null && !sameIdentity(describedIdentity, job.expectedIdentity)) fail('SOURCE_IDENTITY_CHANGED', 'source identity changed')
       if (job.expectedIdentity === null) job = await progress(job, { expectedIdentity: describedIdentity })
-      const resume = job.verifiedPrefix && reader.resumable && sameIdentity(job.verifiedPrefix.identity, describedIdentity)
+      const resume = job.verifiedPrefix && reader.resumable && (sameIdentity(job.verifiedPrefix.identity, describedIdentity) || isStagedComplete)
         ? { ...job.verifiedPrefix, identity: description.identity }
         : null
       const acquired = await provider.acquire({ acquisitionId: id, request: job.request, reader, resume, budget: policyValue, sourceExpensive, priorBytes: Math.max(job.sourceBytesRead, job.sourceBytesAccepted, job.bytesAcquired, job.stagingBytes), signal: entry.controller.signal, onProgress: async counters => {

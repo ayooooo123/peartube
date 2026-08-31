@@ -339,6 +339,7 @@ export class PublisherCatalog extends ReadyResource {
 
   async getAuthorizationState () {
     await this.update()
+    if (!this.view) return null
     return getPublisherAuthorizationState(this.view)
   }
   async getNamespaceDescriptor () {

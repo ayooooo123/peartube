@@ -857,7 +857,8 @@ export async function getPublisherProjection (view, kind, identifier) {
 }
 
 export async function getPublisherAuthorizationState (view) {
-  const entry = await view.get(STATE_AUTHORIZATION_KEY)
+  if (!view) return null
+  const entry = typeof view.get === 'function' ? await view.get(STATE_AUTHORIZATION_KEY).catch(() => null) : null
   if (!entry) return null
   const metadata = decodeAuthorizationMetadata(entry.value)
   if (!Number.isSafeInteger(metadata.policySequence) || metadata.policySequence < 0 ||

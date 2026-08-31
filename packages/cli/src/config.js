@@ -340,7 +340,9 @@ function configFromEnv(env = {}) {
     env.PEARTUBE_ARCHIVE_S3_PREFIX ||
     env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE ||
     env.PEARTUBE_ARCHIVE_S3_OFFLOAD ||
-    env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES
+    env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES ||
+    env.PEARTUBE_TORBOX_API_KEY ||
+    env.PEARTUBE_TORBOX_CHUNK_BYTES
   ) {
     config.archive = {}
     if (env.PEARTUBE_ARCHIVE_UI_ENABLED) config.archive.uiEnabled = parseBoolean(env.PEARTUBE_ARCHIVE_UI_ENABLED)
@@ -406,6 +408,14 @@ function configFromEnv(env = {}) {
       if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION) config.archive.localMirror.description = env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION
       if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE) config.archive.localMirror.recursive = parseBoolean(env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE)
       if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES) config.archive.localMirror.maxFiles = Number(env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES)
+    }
+    if (
+      env.PEARTUBE_TORBOX_API_KEY ||
+      env.PEARTUBE_TORBOX_CHUNK_BYTES
+    ) {
+      config.archive.torbox = {}
+      if (env.PEARTUBE_TORBOX_API_KEY) config.archive.torbox.apiKey = env.PEARTUBE_TORBOX_API_KEY
+      if (env.PEARTUBE_TORBOX_CHUNK_BYTES) config.archive.torbox.chunkBytes = Number(env.PEARTUBE_TORBOX_CHUNK_BYTES)
     }
   }
 

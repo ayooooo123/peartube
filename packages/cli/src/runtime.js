@@ -9,6 +9,7 @@ import { createBackendContext } from '@peartube/backend'
 import { PROTOCOL_VERSION } from '@peartube/host/contracts'
 
 import { measureVolumeBytes } from './storage-guard.js'
+import { createTorBoxSourceGrants } from './companion/sources/torbox.js'
 
 const HEX_32 = /^[0-9a-f]{64}$/
 
@@ -240,6 +241,16 @@ export async function createRelayRuntime ({ config, logger, dependencies = null,
   const localFileSourceGrants = createLocalFileSourceGrantRegistry({
     fs: dependencies?.fs || runtimeFs
   })
+  // TorBox source grants (usenet and torrent). The archival client attaches
+  // one to an acquisition; the resolver turns its token into a CDN-backed
+  // SourceReader. Disabled - but constructible - when no API key is set, so a
+  // grant with adapterId 'torbox' fails with a clear reason rather than
+  // "unsupported adapter".
+  const torBoxSourceGrants = createTorBoxSourceGrants({
+    apiKey: config.archive?.torbox?.apiKey || '',
+    chunkBytes: config.archive?.torbox?.chunkBytes,
+    fetchImpl: fetch,
+  })
   const backend = await backendFactory({
     storagePath: config.storage.path,
     // Optional. When the operator enabled block offload the backend opens its
@@ -338,6 +349,9 @@ export async function createRelayRuntime ({ config, logger, dependencies = null,
         async resolve ({ token, adapterId, acquisitionId, principalId, expiresAt, etag, length, sha256, contentType }) {
           if (adapterId === 'local-file') {
             return localFileSourceGrants.resolver.resolve({ token, adapterId, acquisitionId, principalId, expiresAt })
+          }
+          if (adapterId === 'torbox') {
+            return torBoxSourceGrants.resolve({ token, etag, length, sha256, contentType })
           }
           if (adapterId === 'companion-callback') {
             const origin = config.companion?.sourceOrigin

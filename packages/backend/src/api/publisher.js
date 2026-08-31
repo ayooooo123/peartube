@@ -527,7 +527,7 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
 
     async getWritableBindings() {
       const bindings = await this.listBindings()
-      return bindings.filter(binding => binding.catalog?.writable)
+      return bindings.filter(binding => binding.catalog?.writable || binding.catalog?.localWriterKey != null)
     },
 
     async close() {
@@ -693,12 +693,11 @@ export function createPublisherApi(options = {}) {
 
   async function localCatalogState(binding, publisherId) {
     const catalog = binding?.catalog
-    if (!catalog || typeof catalog.waitForWritable !== 'function' ||
-        typeof catalog.getAuthorizationState !== 'function') {
+    if (!catalog || typeof catalog.getAuthorizationState !== 'function') {
       fail('PUBLISHER_CATALOG_UNAVAILABLE')
     }
-    if (await catalog.waitForWritable() !== true || catalog.writable !== true) {
-      fail('PUBLISHER_CATALOG_NOT_WRITABLE')
+    if (typeof catalog.waitForWritable === 'function') {
+      await catalog.waitForWritable(1000).catch(() => {})
     }
     const localWriterKey = exactBytes(catalog.localWriterKey, 32, 'PUBLISHER_LOCAL_WRITER_UNAVAILABLE')
     const localSignerKey = exactBytes(catalog.localSignerKey, 32, 'PUBLISHER_LOCAL_SIGNER_UNAVAILABLE')

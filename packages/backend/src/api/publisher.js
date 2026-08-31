@@ -1016,6 +1016,7 @@ export function createPublisherApi(options = {}) {
           try {
             await appendAndConfirm(binding.catalog, envelope, candidateRecordId, { allowAuthorityBootstrap: true })
           } catch (error) {
+            console.error('[PublisherApi] appendAndConfirm error for', intent.recordType, ':', error?.message || error)
             if (error instanceof PublisherApiError) throw error
             fail('PUBLISHER_CATALOG_APPEND_FAILED')
           }

@@ -517,7 +517,7 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
           tasks.push(openCatalog(publisherId, {
             genesisRootKey: mapping.genesisRootKey,
             catalogBootstrapKey: mapping.catalogBootstrapKey
-          }))
+          }).catch(() => null))
         }
         await Promise.all(tasks)
       }

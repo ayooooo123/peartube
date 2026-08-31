@@ -283,6 +283,28 @@ test('a source that reaches the fetch without naming its adapter is refused, and
   await fixtureValue.manager.close()
 })
 
+test('deferred replay accepts a source filename refinement but rejects semantic changes', async t => {
+  const fixtureValue = fixture({ acquisitionProvider: provider({ waitForGrant: true }) })
+  await fixtureValue.manager.start()
+  const first = await fixtureValue.manager.request({
+    idempotencyKey: 'request-filename-refinement',
+    request: { ...REQUEST, sourceFileName: 'opaque.mkv' },
+    principal: PRINCIPAL
+  })
+  const replay = await fixtureValue.manager.request({
+    idempotencyKey: 'request-filename-refinement',
+    request: { ...REQUEST, sourceFileName: 'Movie.2026.1080p.WEB-DL.mkv' },
+    principal: PRINCIPAL
+  })
+  t.is(replay.acquisitionId, first.acquisitionId)
+  await t.exception(fixtureValue.manager.request({
+    idempotencyKey: 'request-filename-refinement',
+    request: { ...REQUEST, retentionClass: 'contribution-cache' },
+    principal: PRINCIPAL
+  }), /IDEMPOTENCY_CONFLICT/)
+  await fixtureValue.manager.close()
+})
+
 test('a 100% staged complete acquisition completes and publishes without re-attached grant', async t => {
   const bee = fakeBee()
   const store = createAcquisitionStore({ bee, now: () => NOW })

@@ -93,6 +93,16 @@ function expectedFacts (value) {
   }
 }
 function sameIdentity (left, right) { return left?.kind === right?.kind && left?.value === right?.value }
+function replayFingerprintMatches (existing, request) {
+  const fingerprint = fingerprintAcquisitionRequest(request)
+  if (existing?.requestFingerprint === fingerprint) return true
+  if (existing?.deferredInput !== true || !existing.request) return false
+  const prior = { ...existing.request }
+  const next = { ...request }
+  delete prior.sourceFileName
+  delete next.sourceFileName
+  return fingerprintAcquisitionRequest(prior) === fingerprintAcquisitionRequest(next)
+}
 function assetDescriptor (value, expectedBytes) {
   const source = value?.descriptor ?? value?.asset ?? value
   const fields = ['assetId', 'key', 'treeHash']
@@ -320,7 +330,7 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       const digest = idempotencyDigestFor({ principal: principalId, publisherId: request.publisherId, idempotencyKey })
       const existing = await store.findByIdempotency(digest)
       if (!existing) return null
-      if (existing.requestFingerprint !== fingerprintAcquisitionRequest(request)) {
+      if (!replayFingerprintMatches(existing, request)) {
         fail('IDEMPOTENCY_CONFLICT', 'idempotency key is bound to another request')
       }
       return publicJob(existing)
@@ -329,7 +339,7 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       assertOpen(); const request = normalizeAcquisitionRequest(input); const principalId = normalizePrincipalId(principal)
       const digest = idempotencyDigestFor({ principal: principalId, publisherId: request.publisherId, idempotencyKey }); const fingerprint = fingerprintAcquisitionRequest(request)
       let existing = await store.findByIdempotency(digest)
-      if (existing && existing.requestFingerprint !== fingerprint) {
+      if (existing && !replayFingerprintMatches(existing, request)) {
         fail('IDEMPOTENCY_CONFLICT', 'idempotency key is bound to another request')
       }
       if ((existing?.state === 'failed' || existing?.state === 'cancelled') && existing.deferredInput !== true) {

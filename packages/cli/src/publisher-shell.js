@@ -165,11 +165,19 @@ export function createRelayPublisherShell ({ api, storagePath, fs, logger = null
   }
 
   async function ensureLocalPublisher () {
+    logger?.relay?.info?.('ensureLocalPublisher step 1: getOrCreateRoot')
     const root = await getOrCreateRoot()
     const publisherId = hex(derivePublisherId(root.publicKey))
+    logger?.relay?.info?.('ensureLocalPublisher step 2: provision', { publisherId })
     let catalog = await provision(publisherId, root.publicKey)
+    logger?.relay?.info?.('ensureLocalPublisher step 3: provision result', {
+      namespaceInitialized: catalog.namespaceInitialized,
+      admitted: catalog.admitted,
+      writable: catalog.writable
+    })
 
     if (!catalog.namespaceInitialized) {
+      logger?.relay?.info?.('ensureLocalPublisher step 4: authorize namespace')
       const body = encodePublisherNamespaceDescriptor(createPublisherNamespaceDescriptor({
         genesisRootKey: root.publicKey,
         catalogBootstrapKey: catalog.catalogBootstrapKey
@@ -192,6 +200,7 @@ export function createRelayPublisherShell ({ api, storagePath, fs, logger = null
     }
 
     if (!catalog.admitted) {
+      logger?.relay?.info?.('ensureLocalPublisher step 5: authorize admission')
       const body = encodePublisherOperationBody('publisher.writer-admission', {
         writerKey: catalog.localWriterKey,
         signerKey: catalog.localSignerKey,

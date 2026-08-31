@@ -306,7 +306,7 @@ export function createCompanionServer ({
   if (!Number.isSafeInteger(requestDeadlineMs) || requestDeadlineMs <= 0) {
     throw new Error('companion request deadline must be a positive integer')
   }
-  const publisherId = config.publisherId || config.client
+  const publisherId = config.publisherId && /^[0-9a-f]{64}$/.test(config.publisherId) ? config.publisherId : config.client
   const principal = Object.freeze({
     id: config.client,
     publisherId,

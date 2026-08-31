@@ -726,9 +726,9 @@ async function buildRelayService({
     const allowedAdapterIds = [...new Set([...(current.allowedAdapterIds || []), 'local-file', 'companion-callback'])].sort()
     const needsUpdate = current.migrationRequired === true ||
       current.enabled !== true ||
-      allowedPublisherIds.length !== (current.allowedPublisherIds || []).length ||
-      allowedAdapterIds.length !== (current.allowedAdapterIds || []).length
-    if (!needsUpdate) return current
+      current.requesterMode !== 'allowlisted' ||
+      !allowedPublisherIds.every(id => (current.allowedPublisherIds || []).includes(id)) ||
+      !allowedAdapterIds.every(id => (current.allowedAdapterIds || []).includes(id))
     const capacity = Number(config.storage?.maxBytes) || 107374182400
     return runtime.provider.setAcquisitionPolicy({
       policy: {
@@ -1233,6 +1233,13 @@ async function buildRelayService({
       }
       if (config.companion?.enabled !== false) {
         if (!runtime.provider) throw new Error('Relay runtime did not expose ProviderService')
+        const localPub = publisherShell ? await publisherShell.ensureLocalPublisher().catch(() => null) : null
+        if (localPub?.publisherId && (!config.companion.publisherId || !/^[0-9a-f]{64}$/.test(config.companion.publisherId))) {
+          config.companion.publisherId = localPub.publisherId
+        }
+        if (localPub?.publisherId) {
+          await ensureLocalAcquisitionPolicy(localPub.publisherId).catch(() => {})
+        }
         companionServer = await companionServerFactory({
           service: createProviderMachineService(runtime, { ensureAcquisitionPolicy: ensureLocalAcquisitionPolicy }),
           config: config.companion,

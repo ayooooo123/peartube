@@ -556,3 +556,39 @@ test('a staging object that will not delete is named rather than silently left i
 
   await written.core.close()
 })
+
+// An expensive source - a remote title where a pass-2 re-read is a second
+// full download through the source - asks for staging instead. Pass 1 then
+// uploads every staged block, pass 2 restores them from the object store, and
+// the source is read exactly ONCE. A local caller that leaves preferStaging
+// unset keeps the cheap re-read (the test above pins that).
+test('preferStaging reads an expensive source once and restores pass 2 from the object store', async (t) => {
+  const { store, objects, storeFor, offloaderFor } = await fixture(t)
+  const bytes = assetBytes()
+  const chunks = chunksOf(bytes)
+
+  let opens = 0
+  let stagingCalls = 0
+  const written = await writeStaticAsset({
+    store,
+    reader: reopenableReader(BYTE_LENGTH, () => {
+      opens++
+      return replay(chunks)
+    }),
+    offload: {
+      createStagingStore({ core }) {
+        stagingCalls++
+        return storeFor(core)
+      },
+      createOffloader: ({ core }) => offloaderFor(core),
+    },
+    preferStaging: true,
+  })
+
+  t.is(opens, 1, 'the expensive source was read exactly once')
+  t.ok(stagingCalls > 0, 'the staging store was used')
+  t.is(written.ingest.mode, 'streaming', 'and the write reports the streaming path')
+  t.ok(await verifyStaticAssetDescriptor(written.core, written.descriptor), 'the finished core verifies')
+
+  await written.core.close()
+})

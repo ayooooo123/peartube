@@ -1227,6 +1227,13 @@ export async function writeStaticAsset({
   signal,
   offload = null,
   resume = false,
+  // `preferStaging: true` says re-reading this source is expensive (a remote
+  // title: every pass-2 byte would be a full re-download through the source
+  // again). When the staging store is configured the write then uploads every
+  // staged block in pass 1 and restores them in pass 2 instead of re-reading.
+  // A caller with a cheap local source leaves this unset and keeps the
+  // re-read, which is cheaper than object-store round trips.
+  preferStaging = false,
 } = {}) {
   assertWriteInput(store, reader)
   const sourceReader = createSourceReader(reader)
@@ -1249,7 +1256,12 @@ export async function writeStaticAsset({
     if (resumeState !== null && (createOffloader === null || createStagingStore === null)) {
       throw resumeUnsupportedError()
     }
-    streaming = createOffloader !== null && (resumeState !== null || !sourceReader.resumable)
+    // An expensive source asked for staging: upload staged blocks in pass 1
+    // and restore them in pass 2, instead of re-reading the whole title from
+    // the source a second time. Local sources keep the re-read - it is
+    // cheaper than object-store round trips.
+    streaming = createOffloader !== null && (resumeState !== null || !sourceReader.resumable ||
+      (preferStaging === true && createStagingStore !== null))
     if (streaming && createStagingStore === null) throw sourceNotReopenableError()
     assertNotCancelled(signal)
     const stagingName = resumeState === null

@@ -255,6 +255,10 @@ export async function createProviderSubsystem({
           signal: input.signal,
           offload: ctx.blockOffload || null,
           resume,
+          // A grant-backed source is remote: re-reading it for pass 2 is a
+          // second full download through the (possibly throttled) source.
+          // Stage through the object store instead when it is configured.
+          preferStaging: input.sourceExpensive === true,
         })
         return { descriptor: descriptorFromWrite(written), stagingBytes: 0 }
       } finally {

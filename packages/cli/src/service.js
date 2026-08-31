@@ -724,9 +724,18 @@ async function buildRelayService({
     const current = await runtime.provider.getAcquisitionPolicy()
     const allowedPublisherIds = [...new Set([...(current.allowedPublisherIds || []), publisherId])].sort()
     const allowedAdapterIds = [...new Set([...(current.allowedAdapterIds || []), 'local-file', 'companion-callback'])].sort()
+    // Archives run in parallel: a relay serializing to one job at a time makes
+    // every watched title wait behind the one in front, and a feature-length
+    // remux ahead of a 20-minute episode blocks it for hours. The shared byte
+    // rate below still bounds total throughput, so parallelism costs bandwidth
+    // only when there is bandwidth to spend.
+    const maxConcurrentJobs = 4
+    const maxConcurrentPerRequester = 4
     const needsUpdate = current.migrationRequired === true ||
       current.enabled !== true ||
       current.requesterMode !== 'allowlisted' ||
+      current.maxConcurrentJobs !== maxConcurrentJobs ||
+      current.maxConcurrentPerRequester !== maxConcurrentPerRequester ||
       !allowedPublisherIds.every(id => (current.allowedPublisherIds || []).includes(id)) ||
       !allowedAdapterIds.every(id => (current.allowedAdapterIds || []).includes(id))
     if (!needsUpdate) return current
@@ -742,8 +751,8 @@ async function buildRelayService({
         allowedPublisherIds,
         allowedAdapterIds,
         maxQueuedJobs: 64,
-        maxConcurrentJobs: 1,
-        maxConcurrentPerRequester: 1,
+        maxConcurrentJobs,
+        maxConcurrentPerRequester,
         maxRequestBytes: 64 * 1024,
         maxAcquireBytesPer24h: capacity,
         maxAcquireBytesPerSecond: 64 * 1024 * 1024,

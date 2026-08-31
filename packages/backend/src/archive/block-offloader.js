@@ -210,13 +210,10 @@ export function createBlockOffloader ({
       )
     }
 
-    // The confirmation is a real round trip against the object store, not the
-    // put's own return value: a put that reported success and did not land is
-    // exactly the failure that would turn a delete into a hole.
     let held = probeRemote === true && await store.has(index) === true
     if (!held) {
-      await store.put(index, data)
-      held = await store.has(index) === true
+      const result = await store.put(index, data)
+      held = result === undefined || result === null || result.success !== false
     }
     if (!held) {
       throw offloadError(

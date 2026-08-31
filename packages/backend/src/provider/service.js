@@ -22,6 +22,12 @@ const PUBLIC_ACQUISITION_STATES = new Set([
   'failed',
   'cancelled',
 ])
+const ACTIVE_ACQUISITION_STATES = Object.freeze([
+  'queued',
+  'acquiring',
+  'verifying',
+  'publishing',
+])
 const RETENTION_CLASSES = new Set(['contribution-cache', 'archive-pin'])
 const SENSITIVE_POLICY_FIELD = /(?:authorization|cookie|credential|header|locator|password|path|secret|source(?:ref(?:erence)?|url)|token|url|uri)/i
 const PROVIDER_INTERNALS = new WeakMap()
@@ -355,6 +361,53 @@ function candidateFacts(candidate, selector) {
 function queryFingerprint(selector) {
   return b4a.toString(crypto.hash(b4a.from(JSON.stringify(selector))), 'hex')
 }
+function textMatchesTokens(str, queryTokens) {
+  if (!str || typeof str !== 'string') return false
+  const targetTokens = str.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu) || []
+  if (targetTokens.length === 0) return false
+  return queryTokens.every(qToken => targetTokens.some(tToken => tToken.startsWith(qToken)))
+}
+
+function matchExternalReference(job, selector) {
+  const ctx = job.publicationMetadata?.mediaContext || job.mediaContext || null
+  if (!ctx || ctx.namespace !== selector.namespace || ctx.identifier !== selector.identifier) {
+    return false
+  }
+  if (selector.kind && ctx.kind && selector.kind !== ctx.kind) {
+    return false
+  }
+  if (selector.season !== undefined && selector.season !== null) {
+    if (ctx.season !== selector.season) return false
+  } else if (ctx.season !== undefined && ctx.season !== null) {
+    return false
+  }
+  if (selector.episode !== undefined && selector.episode !== null) {
+    if (ctx.episode !== selector.episode) return false
+  } else if (ctx.episode !== undefined && ctx.episode !== null) {
+    return false
+  }
+  return true
+}
+
+function matchTitleSelector(job, selector) {
+  const queryTokens = selector.title ? selector.title.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu) || [] : []
+  if (queryTokens.length === 0) return false
+  const title = job.publicationMetadata?.title || job.title || null
+  const sourceFileName = job.request?.sourceFileName || job.publicationMetadata?.sourceFileName || job.sourceFileName || null
+  const matched = textMatchesTokens(title, queryTokens) || textMatchesTokens(sourceFileName, queryTokens)
+  if (!matched) return false
+  const ctx = job.publicationMetadata?.mediaContext || job.mediaContext || null
+  if (selector.kind && ctx?.kind && selector.kind !== ctx.kind) {
+    return false
+  }
+  if (selector.season !== undefined && selector.season !== null) {
+    if (ctx?.season !== undefined && ctx?.season !== null && ctx.season !== selector.season) return false
+  }
+  if (selector.episode !== undefined && selector.episode !== null) {
+    if (ctx?.episode !== undefined && ctx?.episode !== null && ctx.episode !== selector.episode) return false
+  }
+  return true
+}
 
 function requireAdapter(adapter, method, name) {
   if (!adapter || typeof adapter[method] !== 'function') throw new TypeError(`${name}.${method} is required`)
@@ -598,6 +651,72 @@ export function createProviderService({
     }
     return output
   }
+  async function inFlightAcquisitionSearch(selector) {
+    if (!acquisitionManager) return []
+    let rawJobs
+    try {
+      if (typeof acquisitionManager.listActive === 'function') {
+        rawJobs = await acquisitionManager.listActive()
+      } else if (typeof acquisitionManager.list === 'function') {
+        const page = await acquisitionManager.list({ states: ACTIVE_ACQUISITION_STATES, limit: MAX_SEARCH_RESULTS })
+        rawJobs = page?.items || page || []
+      } else {
+        return []
+      }
+    } catch {
+      return []
+    }
+    const jobs = Array.isArray(rawJobs) ? rawJobs : []
+    const output = []
+    for (const job of jobs) {
+      if (!job || !job.acquisitionId) continue
+      if (job.state && !ACTIVE_ACQUISITION_STATES.includes(job.state)) continue
+      const matched = selector.title
+        ? matchTitleSelector(job, selector)
+        : matchExternalReference(job, selector)
+      if (!matched) continue
+
+      const title = firstPresent([
+        job.publicationMetadata?.title,
+        job.title,
+        job.request?.sourceFileName,
+        job.publicationMetadata?.sourceFileName,
+        job.sourceFileName,
+      ])
+      const publisherId = firstPresent([
+        job.publisherId,
+        job.request?.publisherId,
+        job.publicationMetadata?.publisherId,
+      ])
+      const pubId = job.publication?.publicationId || job.publicationId || null
+      const rendId = job.publication?.renditionId || job.renditionId || null
+      const sourceFileName = firstPresent([
+        job.publicationMetadata?.sourceFileName,
+        job.request?.sourceFileName,
+        job.sourceFileName,
+      ])
+
+      output.push({
+        key: pubId && rendId ? `${pubId}:${rendId}` : `acquisition:${job.acquisitionId}`,
+        kind: 'acquirable',
+        title,
+        expectedBytes: job.expectedBytes ?? null,
+        mediaContext: mediaContext(selector),
+        publisherId: publisherId || null,
+        ...(pubId ? { publicationId: pubId } : {}),
+        ...(rendId ? { renditionId: rendId } : {}),
+        availability: null,
+        ...(sourceFileName ? { sourceFileName } : {}),
+        private: Object.freeze({
+          acquisitionId: job.acquisitionId,
+          inFlight: true,
+        }),
+      })
+      if (output.length >= MAX_SEARCH_RESULTS) break
+    }
+    return output
+  }
+
 
   function publicHit(record) {
     const lease = issueReference({
@@ -638,20 +757,22 @@ export function createProviderService({
       })
     }
 
-    const [publishedResult, remoteResult] = await Promise.allSettled([
+    const [publishedResult, remoteResult, inFlightResult] = await Promise.allSettled([
       publishedSearch(selector),
       selector.title
         ? Promise.resolve([])
         : indexVerificationRuntime.searchIndexCandidates({ selector, limit: MAX_SEARCH_RESULTS, signal: request.signal }),
+      inFlightAcquisitionSearch(selector),
     ])
-    if (publishedResult.status === 'rejected' && remoteResult.status === 'rejected') {
-      throw mapProviderError(remoteResult.reason, PROVIDER_ERROR_CODES.SOURCE_UNAVAILABLE, 'No verified search source is available', { retryable: true })
+    if (publishedResult.status === 'rejected' && remoteResult.status === 'rejected' && inFlightResult.status === 'rejected') {
+      throw mapProviderError(remoteResult.reason || inFlightResult.reason || publishedResult.reason, PROVIDER_ERROR_CODES.SOURCE_UNAVAILABLE, 'No verified search source is available', { retryable: true })
     }
     const published = publishedResult.status === 'fulfilled' ? publishedResult.value : []
+    const inFlight = inFlightResult.status === 'fulfilled' ? inFlightResult.value : []
     const acquirable = remoteResult.status === 'fulfilled' ? acquirableSearch(selector, remoteResult.value) : []
     const records = []
     const seen = new Set()
-    for (const record of [...published, ...acquirable]) {
+    for (const record of [...published, ...inFlight, ...acquirable]) {
       if (seen.has(record.key)) continue
       seen.add(record.key)
       records.push(record)
@@ -664,7 +785,6 @@ export function createProviderService({
       nextCursor: issueCursor(fingerprint, boundedRecords, end),
     })
   }
-
 
 // Labels a resolution carries when the record has them: what the work is
 // called, and what the source called its file.
@@ -703,6 +823,40 @@ function resolutionLabels(record) {
       const published = await verifiedPublication(record.publicationId, record.renditionId)
       if (!published) return resolution(record, ref, { kind: 'unavailable', denialCode: 'PUBLICATION_UNAVAILABLE' })
       return resolution(record, ref, { kind: 'published' })
+    }
+    if (record.private?.inFlight === true) {
+      const visible = await verifiedQueryView.isVisible({
+        kind: 'acquisition-candidate',
+        publisherId: record.publisherId,
+        externalRefs: record.mediaContext?.namespace
+          ? [{ namespace: record.mediaContext.namespace, identifier: record.mediaContext.identifier }]
+          : [],
+      })
+      if (!visible) return resolution(record, ref, { kind: 'unavailable', denialCode: PROVIDER_ERROR_CODES.MODERATION_BLOCKED })
+      let job = null
+      try {
+        if (record.private.acquisitionId && typeof acquisitionManager?.get === 'function') {
+          job = await acquisitionManager.get({ acquisitionId: record.private.acquisitionId })
+        }
+      } catch {
+        // ignore get error, fallback to record
+      }
+      if (job?.state === 'completed' && job?.publicationId) {
+        const published = await verifiedPublication(job.publicationId, job.renditionId)
+        if (published) {
+          return resolution(record, ref, {
+            kind: 'published',
+            publisherId: job.publisherId || record.publisherId,
+            publicationId: job.publicationId,
+            renditionId: job.renditionId,
+          })
+        }
+      }
+      return resolution(record, ref, {
+        kind: 'acquirable',
+        publisherId: record.publisherId || job?.publisherId || null,
+        expectedBytes: record.expectedBytes ?? job?.expectedBytes ?? null,
+      })
     }
     if (record.private?.local === true) {
       const visible = await verifiedQueryView.isVisible({

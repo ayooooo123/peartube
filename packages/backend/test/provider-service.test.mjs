@@ -184,7 +184,8 @@ function fixture({ published = false, visible = true } = {}) {
   }
 
   const indexVerificationRuntime = {
-    async searchIndexCandidates() {
+    async searchIndexCandidates(input) {
+      if (input?.selector?.identifier && input.selector.identifier !== '348') return []
       return published ? [] : [candidate()]
     },
     async verifyIndexCandidate({ candidateRef }) {
@@ -215,10 +216,18 @@ function fixture({ published = false, visible = true } = {}) {
       calls.get.push(input)
       return jobs.get(input.acquisitionId) || null
     },
-    async list(input) {
+    async list(input = {}) {
       calls.list.push(input)
-      const values = [...jobs.values()]
-      return { items: values.slice(0, input.limit), cursor: values.length > input.limit ? values[input.limit - 1].acquisitionId : null }
+      let values = [...jobs.values()]
+      if (Array.isArray(input.states)) {
+        const stateSet = new Set(input.states)
+        values = values.filter(job => stateSet.has(job.state))
+      }
+      const limit = input.limit || 64
+      return { items: values.slice(0, limit), cursor: values.length > limit ? values[limit - 1].acquisitionId : null }
+    },
+    async listActive() {
+      return [...jobs.values()].filter(job => ['queued', 'acquiring', 'verifying', 'publishing'].includes(job.state))
     },
     async cancel(input) {
       calls.cancel.push(input)
@@ -428,4 +437,145 @@ test('legacy ingest migration stays behind the provider service seam', async t =
   t.is(f.calls.migrate.length, 1)
   t.is(f.calls.migrate[0].legacyStore, legacyStore)
   t.is(f.service.acquisitionStore, undefined)
+})
+
+test('in-flight active acquisition search immediately returns matching candidates by external reference', async t => {
+  const f = fixture()
+  f.jobs.set('acq-active-1', acquisition({
+    acquisitionId: 'acq-active-1',
+    state: 'acquiring',
+    expectedBytes: 4096,
+    publisherId: PUBLISHER,
+    publicationMetadata: {
+      title: 'Active Movie Title',
+      mediaContext: { namespace: 'tmdb', identifier: '348', kind: 'movie' },
+    },
+  }))
+
+  const page = await f.service.search({ selector: SELECTOR })
+  t.ok(page.candidates.length >= 1)
+  const inFlightHit = page.candidates.find(c => c.title === 'Active Movie Title')
+  t.ok(inFlightHit)
+  t.is(inFlightHit.kind, 'acquirable')
+  t.is(inFlightHit.expectedBytes, 4096)
+
+  const resolved = await f.service.resolve({ ref: inFlightHit.ref })
+  t.is(resolved.kind, 'acquirable')
+  t.is(resolved.acquisitionAvailable, true)
+  t.is(resolved.expected?.byteLength, 4096)
+  t.is(resolved.publisherId, PUBLISHER)
+})
+
+test('in-flight active acquisition search matches by title token prefix and sourceFileName', async t => {
+  const f = fixture()
+  f.jobs.set('acq-title-1', acquisition({
+    acquisitionId: 'acq-title-1',
+    state: 'queued',
+    expectedBytes: 8192,
+    publisherId: PUBLISHER,
+    publicationMetadata: {
+      title: 'Alien: Covenant',
+      mediaContext: { kind: 'movie' },
+    },
+  }))
+  f.jobs.set('acq-filename-1', acquisition({
+    acquisitionId: 'acq-filename-1',
+    state: 'verifying',
+    expectedBytes: 16384,
+    publisherId: PUBLISHER,
+    request: {
+      sourceFileName: 'Matrix.Reloaded.1999.1080p.mkv',
+    },
+    publicationMetadata: {
+      mediaContext: { kind: 'movie' },
+    },
+  }))
+
+  const alienPage = await f.service.search({ selector: { title: 'Alien', kind: 'movie' } })
+  t.is(alienPage.candidates.length, 1)
+  t.is(alienPage.candidates[0].title, 'Alien: Covenant')
+  t.is(alienPage.candidates[0].kind, 'acquirable')
+
+  const matrixPage = await f.service.search({ selector: { title: 'mat', kind: 'movie' } })
+  t.is(matrixPage.candidates.length, 1)
+  t.is(matrixPage.candidates[0].title, 'Matrix.Reloaded.1999.1080p.mkv')
+  t.is(matrixPage.candidates[0].kind, 'acquirable')
+
+  const unknownPage = await f.service.search({ selector: { title: 'Nonexistent', kind: 'movie' } })
+  t.is(unknownPage.candidates.length, 0)
+})
+
+test('in-flight search filters non-active states and handles episodic matching', async t => {
+  const f = fixture()
+  f.jobs.set('acq-failed', acquisition({
+    acquisitionId: 'acq-failed',
+    state: 'failed',
+    publicationMetadata: {
+      title: 'Failed Movie',
+      mediaContext: { namespace: 'tmdb', identifier: '348', kind: 'movie' },
+    },
+  }))
+  f.jobs.set('acq-cancelled', acquisition({
+    acquisitionId: 'acq-cancelled',
+    state: 'cancelled',
+    publicationMetadata: {
+      title: 'Cancelled Movie',
+      mediaContext: { namespace: 'tmdb', identifier: '348', kind: 'movie' },
+    },
+  }))
+  f.jobs.set('acq-ep-1', acquisition({
+    acquisitionId: 'acq-ep-1',
+    state: 'publishing',
+    expectedBytes: 2048,
+    publisherId: PUBLISHER,
+    publicationMetadata: {
+      title: 'Episode 1',
+      mediaContext: { namespace: 'tmdb', identifier: '1399', kind: 'episode', season: 1, episode: 1 },
+    },
+  }))
+
+  const moviePage = await f.service.search({ selector: SELECTOR })
+  t.absent(moviePage.candidates.some(c => c.title === 'Failed Movie' || c.title === 'Cancelled Movie'))
+
+  const ep1Page = await f.service.search({
+    selector: { namespace: 'tmdb', identifier: '1399', kind: 'episode', season: 1, episode: 1 },
+  })
+  t.is(ep1Page.candidates.length, 1)
+  t.is(ep1Page.candidates[0].title, 'Episode 1')
+
+  const ep2Page = await f.service.search({
+    selector: { namespace: 'tmdb', identifier: '1399', kind: 'episode', season: 1, episode: 2 },
+  })
+  t.is(ep2Page.candidates.length, 0)
+})
+
+test('in-flight resolution reflects published status once completed and verified', async t => {
+  const f = fixture({ published: true })
+  f.jobs.set('acq-completing', acquisition({
+    acquisitionId: 'acq-completing',
+    state: 'publishing',
+    publisherId: PUBLISHER,
+    publicationMetadata: {
+      title: 'Published Title',
+      mediaContext: { namespace: 'tmdb', identifier: '348', kind: 'movie' },
+    },
+  }))
+
+  const page = await f.service.search({ selector: SELECTOR })
+  const candidate = page.candidates[0]
+  t.ok(candidate)
+
+  // Simulate job completing with publication
+  f.jobs.set('acq-completing', acquisition({
+    acquisitionId: 'acq-completing',
+    state: 'completed',
+    publisherId: PUBLISHER,
+    publicationId: PUBLICATION,
+    renditionId: RENDITION,
+  }))
+
+  const resolved = await f.service.resolve({ ref: candidate.ref })
+  t.is(resolved.kind, 'published')
+  t.is(resolved.publicationId, PUBLICATION)
+  t.is(resolved.renditionId, RENDITION)
 })

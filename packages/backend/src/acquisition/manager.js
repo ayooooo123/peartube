@@ -360,6 +360,7 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
     },
     async get ({ acquisitionId, principal } = {}) { return publicJob(await owned(acquisitionId, principal)) },
     async list ({ cursor = null, limit = 64, states = null, principal } = {}) { const page = await store.list({ cursor, limit, states, principalId: normalizePrincipalId(principal) }); return { items: page.items.map(publicJob), cursor: page.cursor } },
+    async listActive () { return (await store.listActive()).map(publicJob) },
     async cancel ({ acquisitionId, principal } = {}) {
       assertOpen(); const job = await owned(acquisitionId, principal); if (!job || TERMINAL.has(job.state)) return publicJob(job)
       const running = active.get(acquisitionId)

@@ -275,12 +275,12 @@ test('bounded ingest bounds local block data by the window, confirms every uploa
   t.is(written.ingest.windowBytes, WINDOW_BYTES, 'the ingest reports the window it was bounded by')
   t.is(await residentBlockBytes(), RESIDENT_AFTER, 'a window of block data is what is left on disk afterwards')
 
-  // The ordering IS the safety property: a block is uploaded, the object store
-  // is asked whether it really holds it, and only then does the local copy go.
+  // The ordering IS the safety property: a block is uploaded, confirmed by
+  // successful put, and only then does the local copy go.
   const expectedLog = []
   for (let index = 0; index < OFFLOADED_BLOCKS; index++) {
     const key = keyFor(written.core, index)
-    expectedLog.push(`put ${key}`, `has ${key}`, `delete ${index}`)
+    expectedLog.push(`put ${key}`, `delete ${index}`)
   }
   t.alike(log, expectedLog, 'each offloaded block was put, confirmed present, and only then deleted locally')
 

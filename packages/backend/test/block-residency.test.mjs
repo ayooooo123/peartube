@@ -55,8 +55,8 @@ function createBucket () {
   const provider = {
     async putBlock ({ key, data }) {
       log.push(`put ${key}`)
-      objects.set(key, b4a.from(data))
-      return { success: true }
+      if (state.confirm === true) objects.set(key, b4a.from(data))
+      return { success: state.confirm === true }
     },
     async hasBlock ({ key }) {
       log.push(`has ${key}`)

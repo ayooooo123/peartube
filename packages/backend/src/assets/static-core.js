@@ -29,6 +29,7 @@ export const ASSET_BLOCK_SIZE = 256 * 1024
 // 67ms — about fifteen in flight — and the last few of those buy progressively
 // less while asking progressively more of the provider and of the operator's
 export const STAGING_UPLOAD_CONCURRENCY = 8
+export const STAGING_RESTORE_CONCURRENCY = 16
 
 const STATIC_ASSET_KIND = 'static-prologue-v1'
 
@@ -502,9 +503,11 @@ async function transplantStagedBlock({ staging, finalCore, offloader, signal, pr
   assertNotCancelled(signal)
 
   offloader.track(index, block.byteLength)
-  await offloader.drain()
-  assertNotCancelled(signal)
-
+  const windowBytes = Number.isSafeInteger(offloader.windowBytes) ? offloader.windowBytes : null
+  if (windowBytes !== null && residentBytesOf(offloader) > windowBytes) {
+    await offloader.drain()
+    assertNotCancelled(signal)
+  }
   progress.blocks++
   progress.bytes += block.byteLength
 }
@@ -513,6 +516,10 @@ async function transplantStagedBlock({ staging, finalCore, offloader, signal, pr
  * Close the finished core's accounting and describe what the pass cost.
  */
 async function finishIngest({ mode, finalCore, descriptor, offloader, progress }) {
+  if (typeof offloader?.drain === 'function') {
+    await offloader.drain()
+  }
+
   if (progress.blocks !== descriptor.length || progress.bytes !== descriptor.byteLength) {
     throw sourceChangedError(
       `it ended at ${progress.blocks} block(s) and ${progress.bytes} byte(s), but the asset key was derived from ${descriptor.length} block(s) and ${descriptor.byteLength} byte(s)`,
@@ -706,12 +713,36 @@ async function restoreStagedBlock({ storage, stagingStore, index, expectedHash }
 async function ingestStagedBlocks({ staging, finalCore, descriptor, stagingStore, staged, offloader, signal }) {
   const stagingStorage = staging.core.state.storage
   const progress = { blocks: 0, bytes: 0, peakLocalBytes: 0 }
+  const total = descriptor.length
 
-  for (let index = 0; index < descriptor.length; index++) {
+  if (total === 0) {
+    return finishIngest({ mode: 'streaming', finalCore, descriptor, offloader, progress })
+  }
+
+  const inFlight = new Map()
+  let nextFetchIndex = 0
+
+  function refill () {
+    while (inFlight.size < STAGING_RESTORE_CONCURRENCY && nextFetchIndex < total) {
+      const idx = nextFetchIndex++
+      const promise = (async () => {
+        assertNotCancelled(signal)
+        const expectedHash = await stagedLeafFor(stagingStorage, idx, descriptor)
+        const block = await restoreStagedBlock({ storage: stagingStorage, stagingStore, index: idx, expectedHash })
+        return { block, expectedHash }
+      })()
+      promise.catch(() => {})
+      inFlight.set(idx, promise)
+    }
+  }
+
+  for (let index = 0; index < total; index++) {
     assertNotCancelled(signal)
-    const expectedHash = await stagedLeafFor(stagingStorage, index, descriptor)
+    refill()
+    const { block, expectedHash } = await inFlight.get(index)
+    inFlight.delete(index)
+    refill()
 
-    const block = await restoreStagedBlock({ storage: stagingStorage, stagingStore, index, expectedHash })
     staged.restored++
     assertNotCancelled(signal)
     assertMatchesStagedLeaf(block, index, expectedHash)

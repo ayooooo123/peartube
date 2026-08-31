@@ -57,18 +57,23 @@ async function eventually (read, predicate) {
   }
   throw new Error('condition was not reached')
 }
-function fixture ({ acquisitionProvider = provider(), authority = () => true } = {}) {
+function fixture ({ acquisitionProvider = provider(), authority = () => true, publisher: publisherOverride = null } = {}) {
   let publishes = 0
   let publishedInput = null
+  const defaultPublisher = {
+    async hasAuthority () { return authority() },
+    async publish (input) {
+      publishedInput = input
+      publishes++
+      return { publicationId: 'publication-1', manifestId: 'manifest-1', renditionId: 'rendition-1', assetId: input.asset.assetId }
+    }
+  }
   const manager = createAcquisitionManager({
     store: createAcquisitionStore({ bee: fakeBee(), now: () => NOW }),
     policy: createAcquisitionPolicyRuntime({ policy: openPolicy(), now: () => NOW }),
     provider: acquisitionProvider,
     sourceGrants: vault(),
-    publisher: {
-      async hasAuthority () { return authority() },
-      async publish (input) { publishedInput = input; publishes++; return { publicationId: 'publication-1', manifestId: 'manifest-1', renditionId: 'rendition-1', assetId: input.asset.assetId } }
-    },
+    publisher: publisherOverride || defaultPublisher,
     freeDiskBytes: () => 1024,
     now: () => NOW
   })
@@ -80,6 +85,38 @@ test('manager publishes only after exact verification and records every transiti
   const queued = await fixtureValue.manager.request({ idempotencyKey: 'request-1', request: REQUEST, principal: PRINCIPAL })
   const completed = await eventually(() => fixtureValue.manager.get({ acquisitionId: queued.acquisitionId, principal: PRINCIPAL }), job => job.state === 'completed')
   t.is(completed.bytesAcquired, BYTES.byteLength); t.is(completed.assetId, 'asset-1'); t.is(fixtureValue.publishes(), 1)
+  await fixtureValue.manager.close()
+})
+
+test('publication repository recovery completes a job after the catalog commit succeeds', async t => {
+  let committed = null
+  const publisher = {
+    async hasAuthority () { return true },
+    async publish (input) {
+      committed = {
+        publicationId: 'publication-recovered',
+        manifestId: 'manifest-recovered',
+        renditionId: 'rendition-recovered',
+        assetId: input.asset.assetId
+      }
+      throw new Error('repository write failed after publication commit')
+    },
+    async getPublication () {
+      return committed
+    }
+  }
+  const fixtureValue = fixture({ publisher })
+  await fixtureValue.manager.start()
+  const queued = await fixtureValue.manager.request({
+    idempotencyKey: 'request-publication-recovery',
+    request: REQUEST,
+    principal: PRINCIPAL
+  })
+  const completed = await eventually(
+    () => fixtureValue.manager.get({ acquisitionId: queued.acquisitionId, principal: PRINCIPAL }),
+    job => job.state === 'completed'
+  )
+  t.is(completed.publicationId, 'publication-recovered')
   await fixtureValue.manager.close()
 })
 

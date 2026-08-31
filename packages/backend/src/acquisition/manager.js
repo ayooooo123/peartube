@@ -251,6 +251,33 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
     } catch (error) {
       if (closing || entry.closing) return store.get(id)
       const latest = await store.get(id) || job
+      if (latest?.state === 'publishing' && latest.verifiedAsset && typeof publisher.getPublication === 'function') {
+        try {
+          const existing = await publisher.getPublication({
+            acquisitionId: latest.acquisitionId,
+            publisherId: latest.publisherId,
+            asset: latest.verifiedAsset,
+            resolution: latest.publicationMetadata
+          })
+          if (existing) {
+            const publication = publicationResult(existing, latest.verifiedAsset.assetId)
+            const completed = await store.complete(latest.acquisitionId, {
+              expectedVersion: latest.version,
+              publication
+            })
+            await notify(completed.event)
+            ledger.release(id)
+            await sourceGrants.revoke({
+              acquisitionId: id,
+              principal: latest.principalId,
+              reason: acquisitionError('SOURCE_GRANT_CONSUMED', 'source grant consumed')
+            }).catch(() => {})
+            return completed.job
+          }
+        } catch {
+          // Preserve the original publication failure below.
+        }
+      }
       if (entry.cancelled) {
         const cancelled = await terminal(latest, 'cancelled', 'CANCELLED', false); await discard(cancelled, error); ledger.release(id); await sourceGrants.revoke({ acquisitionId: id, principal: latest.principalId, reason: error }).catch(() => {}); return cancelled
       }

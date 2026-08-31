@@ -243,6 +243,40 @@ test('the shelf lists one release per publication and keeps each source file nam
   })
 })
 
+test('a published release uses the manifest source filename when no acquisition row remains', async function (t) {
+  const service = fakeService({
+    async getVerifiedMediaCatalog() {
+      return {
+        success: true,
+        nextCursor: null,
+        items: [{
+          entityId: '3'.repeat(64),
+          entityKind: 'movie',
+          title: 'Wrath of Man',
+          sources: [{ publicationId: 'pub-wrath', renditionId: 'rend-wrath' }]
+        }]
+      }
+    },
+    async getVerifiedManifest() {
+      return {
+        body: {
+          title: 'Wrath of Man',
+          sourceFileName: 'Wrath.of.Man.2021.1080p.BluRay.H264.AAC.mp4',
+          renditions: [{ renditionId: 'rend-wrath', core: { byteLength: 12 } }]
+        }
+      }
+    },
+    async listAcquisitions() {
+      return []
+    }
+  })
+
+  await withConsole(service, async (base) => {
+    const home = await (await fetch(`${base}/`)).text()
+    t.ok(home.includes('Wrath.of.Man.2021.1080p.BluRay.H264.AAC.mp4'))
+  })
+})
+
 test('GET /unseeded.json returns ranked targets', async function (t) {
   await withConsole(fakeService(), async (base) => {
     const res = await fetch(`${base}/unseeded.json`)

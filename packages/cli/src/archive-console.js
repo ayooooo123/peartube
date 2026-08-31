@@ -972,6 +972,7 @@ export async function createArchiveConsole({
           const manifest = manifests.get(publicationId) || null
           const sourceFileName = releaseJob?.sourceFileName ||
             source?.sourceFileName ||
+            manifest?.body?.sourceFileName ||
             source?.fileName ||
             source?.filename ||
             (manifest?.body?.title && manifest.body.title !== item?.title ? manifest.body.title : null) ||

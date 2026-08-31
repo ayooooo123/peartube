@@ -910,18 +910,22 @@ export async function listPublisherProjections (view, kind, { cursor = null, lim
 }
 
 export async function getPublisherOperationReceipt (view, operationId) {
+  if (!view) return { accepted: false }
   assertBytes(operationId, 32, 'operationId')
   const operationIdHex = b4a.toString(operationId, 'hex')
-  const rejected = await view.get(`${PREFIX.REJECTED}${operationIdHex}`)
+  const rejected = typeof view.get === 'function' ? await view.get(`${PREFIX.REJECTED}${operationIdHex}`).catch(() => null) : null
   if (rejected) {
     const diagnostic = JSON.parse(b4a.toString(rejected.value))
     return { accepted: false, rejectionCode: diagnostic.code }
   }
-  if (await view.get(`${PREFIX.ACCEPTED}${operationIdHex}`)) return { accepted: true }
-  for await (const entry of view.createReadStream({ gte: PREFIX.OVERFLOW, lt: PREFIX.OVERFLOW + '\xff' })) {
-    const diagnostic = JSON.parse(b4a.toString(entry.value))
-    if (diagnostic.lastOperationId === operationIdHex) {
-      return { accepted: false, rejectionCode: 'JOURNAL_OVERFLOW' }
+  const accepted = typeof view.get === 'function' ? await view.get(`${PREFIX.ACCEPTED}${operationIdHex}`).catch(() => null) : null
+  if (accepted) return { accepted: true }
+  if (typeof view.createReadStream === 'function') {
+    for await (const entry of view.createReadStream({ gte: PREFIX.OVERFLOW, lt: PREFIX.OVERFLOW + '\xff' })) {
+      const diagnostic = JSON.parse(b4a.toString(entry.value))
+      if (diagnostic.lastOperationId === operationIdHex) {
+        return { accepted: false, rejectionCode: 'JOURNAL_OVERFLOW' }
+      }
     }
   }
   return { accepted: false }

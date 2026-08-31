@@ -319,6 +319,20 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
           catalogBootstrapKey: requestedKey ? b4a.from(requestedKey) : null
         }
       }
+      if (create && !requestedKey && mapping?.catalogBootstrapKey && ctx.store) {
+        const namespacedStore = typeof ctx.store.namespace === 'function'
+          ? ctx.store.namespace('peartube-publisher')
+          : ctx.store
+        if (typeof namespacedStore?.get === 'function') {
+          try {
+            const testCore = namespacedStore.get({ key: mapping.catalogBootstrapKey })
+            await testCore.ready?.()
+            if (testCore.writable === false && testCore.length === 0) {
+              mapping.catalogBootstrapKey = null
+            }
+          } catch {}
+        }
+      }
 
       const catalogOptions = { publisherId: b4a.from(publisherId) }
       if (deviceSigner) catalogOptions.deviceSigner = deviceSigner

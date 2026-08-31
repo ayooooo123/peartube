@@ -1007,8 +1007,9 @@ export function createPublisherApi(options = {}) {
         if (activeSubmissions.has(submissionKey)) fail('PUBLISHER_RECORD_REPLAY')
         if (activeSubmissions.size >= maxIntents) fail('PUBLISHER_INTENT_CAPACITY')
         activeSubmissions.add(submissionKey)
-
+        console.log('[PublisherApi] submit step 1: resolveBinding')
         const binding = await resolveBinding(intent.publisherIdBytes)
+        console.log('[PublisherApi] submit step 2: getExistingReceipt')
         if (!equalBytes(binding.catalogBootstrapKey, intent.catalogBootstrapKey)) fail('PUBLISHER_CATALOG_MISMATCH')
         let existingReceipt
         try {
@@ -1018,6 +1019,7 @@ export function createPublisherApi(options = {}) {
           fail('PUBLISHER_CATALOG_RECEIPT_FAILED')
         }
         if (existingReceipt) fail(existingReceipt.accepted === true ? 'PUBLISHER_RECORD_REPLAY' : 'PUBLISHER_RECORD_REJECTED')
+        console.log('[PublisherApi] submit step 3: checking authorization')
 
         if (!isTransition) {
           if (intent.recordType !== PUBLISHER_RECORD_TYPES.NAMESPACE) {
@@ -1026,7 +1028,9 @@ export function createPublisherApi(options = {}) {
             if (!equalRootAuthorization(authorization, intent.rootAuthorization)) fail('PUBLISHER_ROOT_AUTHORIZATION_STALE')
             if (!policySignerKind(authorization.signerPolicy, signer)) fail('PUBLISHER_SIGNER_UNAUTHORIZED')
           }
+          console.log('[PublisherApi] submit step 4: attachSignedEnvelopeSignature')
           const envelope = attachSignedEnvelopeSignature({ ...decoded, recordId: candidateRecordId }, signature)
+          console.log('[PublisherApi] submit step 5: appendAndConfirm start')
           try {
             await appendAndConfirm(binding.catalog, envelope, candidateRecordId, { allowAuthorityBootstrap: true })
           } catch (error) {
@@ -1034,6 +1038,7 @@ export function createPublisherApi(options = {}) {
             if (error instanceof PublisherApiError) throw error
             fail('PUBLISHER_CATALOG_APPEND_FAILED')
           }
+          console.log('[PublisherApi] submit step 6: appendAndConfirm finished')
           if (intent.recordType === PUBLISHER_RECORD_TYPES.WRITER_ADMISSION) {
             await completeAdmissionLifecycle(binding)
           }

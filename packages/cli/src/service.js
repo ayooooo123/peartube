@@ -717,7 +717,7 @@ async function buildRelayService({
   async function ensureLocalAcquisitionPolicy(publisherId) {
     const current = await runtime.provider.getAcquisitionPolicy()
     const allowedPublisherIds = [...new Set([...(current.allowedPublisherIds || []), publisherId])].sort()
-    const allowedAdapterIds = [...new Set([...(current.allowedAdapterIds || []), 'local-file'])].sort()
+    const allowedAdapterIds = [...new Set([...(current.allowedAdapterIds || []), 'local-file', 'companion-callback'])].sort()
     const needsUpdate = current.migrationRequired === true ||
       current.enabled !== true ||
       allowedPublisherIds.length !== (current.allowedPublisherIds || []).length ||

@@ -353,7 +353,7 @@ export function createLegacyIngestMigrationStore ({ bee, now = () => Date.now() 
       await writes
       const jobs = []
       try {
-        for await (const entry of bee.createReadStream({ gte: ACTIVE_PREFIX, lt: `${ACTIVE_PREFIX}\uffff`, wait: false })) {
+        for await (const entry of bee.createReadStream({ gte: ACTIVE_PREFIX, lt: `${ACTIVE_PREFIX}\uffff` })) {
           const pointer = decode(entry.value)
           if (!pointer?.jobId) throw storeError('INGEST_PERSISTENCE_CORRUPT', 'Ingest active index is corrupt')
           const job = await readNodeUnserialized(jobKey(pointer.jobId))
@@ -373,7 +373,7 @@ export function createLegacyIngestMigrationStore ({ bee, now = () => Date.now() 
       }
       const jobs = []
       try {
-        for await (const entry of bee.createReadStream({ gte: JOB_PREFIX, lt: `${JOB_PREFIX}\uffff`, wait: false })) {
+        for await (const entry of bee.createReadStream({ gte: JOB_PREFIX, lt: `${JOB_PREFIX}\uffff` })) {
           const job = decode(entry.value)
           if (!job?.jobId || !INGEST_JOB_STATES.includes(job.state)) {
             throw storeError('INGEST_PERSISTENCE_CORRUPT', 'Ingest job record is corrupt')
@@ -395,7 +395,7 @@ export function createLegacyIngestMigrationStore ({ bee, now = () => Date.now() 
       await writes
       const ids = []
       try {
-        for await (const entry of bee.createReadStream({ gte: JOB_PREFIX, lt: `${JOB_PREFIX}\uffff`, wait: false })) {
+        for await (const entry of bee.createReadStream({ gte: JOB_PREFIX, lt: `${JOB_PREFIX}\uffff` })) {
           const job = decode(entry.value)
           if (!job?.jobId || !INGEST_JOB_STATES.includes(job.state)) {
             throw storeError('INGEST_PERSISTENCE_CORRUPT', 'Ingest job record is corrupt')

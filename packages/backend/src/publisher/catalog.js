@@ -252,7 +252,7 @@ export class PublisherCatalog extends ReadyResource {
     if (this.writable) return true
     const started = Date.now()
     while (Date.now() - started < timeout) {
-      await this.base.update().catch(() => {})
+      await this.update().catch(() => {})
       if (this.writable) return true
       await new Promise(resolve => setTimeout(resolve, 25))
     }

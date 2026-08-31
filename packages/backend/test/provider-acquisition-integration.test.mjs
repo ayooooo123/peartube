@@ -173,3 +173,148 @@ test('provider subsystem acquires, verifies, and publishes one private-grant sou
   t.ok(core.length > 0)
   await core.close()
 })
+
+// A retried acquisition whose prior attempt died before it could set a
+// verified prefix still carries durable progress counters. The writer's
+// attempt-local counter restarts at zero, so without a floor seeded from the
+// durable job the first progress patch regresses the durable counter and the
+// job dies as ACQUISITION_ACCOUNTING_REGRESSION - discarding every byte the
+// prior attempt already landed. The retry must keep reporting monotonic
+// counters instead.
+test('a retried acquisition with durable progress does not regress its counters', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'peartube-provider-retry-'))
+  const store = new Corestore(directory)
+  await store.ready()
+  t.teardown(async () => {
+    await store.close().catch(() => {})
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  // Fail the FIRST acquire attempt mid-stream, then succeed on the retry.
+  let attempts = 0
+  const subsystem = await createProviderSubsystem({
+    ctx: { metaDb: fakeBee(), store },
+    verifiedQueryView: queryView(),
+    indexVerificationRuntime: {
+      async searchIndexCandidates() { return [] },
+      async verifyIndexCandidate() { throw new Error('not found') },
+    },
+    uploadManager: {
+      async hasPublisherAuthority() { return true },
+      async getAuthorizedPublisherIds() { return [PUBLISHER_ID] },
+      async getAcquiredPublication() { return null },
+      async publishAcquiredAsset({ asset }) {
+        return {
+          publicationId: 'publication-1',
+          manifestId: 'manifest-1',
+          renditionId: 'rendition-1',
+          assetId: asset.assetId,
+        }
+      },
+    },
+    mediaApi: { async openMediaRenditionUrl() { return { success: false } } },
+    config: {
+      acquisitionPolicy: { ...policy(), maxAttempts: 3, maxAcquireBytesPer24h: 65536, maxAcquireBytesPerSecond: 1024, sourceGrantTtlMs: 120_000 },
+      freeDiskBytes: () => 4096,
+      sourceGrantResolver: {
+        async resolve() {
+          attempts++
+          const reader = createBufferSourceReader(SOURCE, { mimeType: 'video/mp4' })
+          if (attempts === 1) {
+            // Abort mid-stream on the first attempt only, after delivering
+            // some bytes, exactly like a grant expiry cancelling a write.
+            return {
+              resumable: true,
+              maxReadBytes: SOURCE.byteLength,
+              describe: input => reader.describe(input),
+              open(input) {
+                return (async function * () {
+                  // Deliver a strict PREFIX of the first chunk, then abort -
+                  // a buffer reader may yield the whole payload as one chunk,
+                  // so splitting on chunk boundaries never aborts mid-stream.
+                  for await (const chunk of reader.open(input)) {
+                    const prefixBytes = Math.max(1, chunk.byteLength >> 1)
+                    yield chunk.subarray(0, prefixBytes)
+                    const error = new Error('first attempt aborted')
+                    error.code = 'ASSET_WRITE_CANCELLED'
+                    error.recoverable = true
+                    throw error
+                  }
+                })()
+              },
+              close: reason => reader.close(reason),
+            }
+          }
+          return reader
+        },
+      },
+    },
+    now: Date.now,
+  })
+  t.teardown(() => subsystem.close())
+
+  const resolution = subsystem.issueLocalResolution({
+    title: 'Retry title',
+    selector: { namespace: 'catalog', identifier: 'retry-1', kind: 'movie' },
+    publisherId: PUBLISHER_ID,
+    expectedBytes: SOURCE.byteLength,
+  })
+  const principal = { principalId: 'local-user', publisherId: PUBLISHER_ID, isLocal: true, publisherIds: [PUBLISHER_ID] }
+  const queued = await subsystem.service.requestAcquisition({
+    idempotencyKey: 'retry-request-1',
+    request: {
+      schemaVersion: 1,
+      resolutionRef: resolution.resolutionRef,
+      publisherId: PUBLISHER_ID,
+      retentionClass: 'archive-pin',
+    },
+    principal,
+  })
+  await subsystem.service.attachSourceGrant({
+    acquisitionId: queued.acquisitionId,
+    principal,
+    grant: {
+      token: 'retry-source-grant-0001',
+      adapterId: 'memory-source',
+      audience: { principalId: principal.principalId, acquisitionId: queued.acquisitionId },
+      expiresAt: Date.now() + 60_000,
+    },
+  })
+
+  // The manager does not auto-retry: a recoverable failure waits for the
+  // client to re-request, which is exactly MediaStorm's re-drive.
+  const first = await eventually(
+    () => subsystem.service.getAcquisition({ acquisitionId: queued.acquisitionId, principal }),
+    acquisition => acquisition.state === 'failed',
+  )
+  t.ok(first.errorCode === 'ASSET_WRITE_CANCELLED', 'the first attempt aborted mid-write')
+
+  const requeued = await subsystem.service.requestAcquisition({
+    idempotencyKey: 'retry-request-1',
+    request: {
+      schemaVersion: 1,
+      resolutionRef: resolution.resolutionRef,
+      publisherId: PUBLISHER_ID,
+      retentionClass: 'archive-pin',
+    },
+    principal,
+  })
+  await subsystem.service.attachSourceGrant({
+    acquisitionId: requeued.acquisitionId,
+    principal,
+    grant: {
+      token: 'retry-source-grant-0002',
+      adapterId: 'memory-source',
+      audience: { principalId: principal.principalId, acquisitionId: requeued.acquisitionId },
+      expiresAt: Date.now() + 60_000,
+    },
+  })
+
+  const settled = await eventually(
+    () => subsystem.service.getAcquisition({ acquisitionId: requeued.acquisitionId, principal }),
+    acquisition => ['completed', 'failed', 'cancelled'].includes(acquisition.state),
+  )
+  t.is(settled.state, 'completed', settled.errorCode || 'completed')
+  t.is(settled.bytesAcquired, SOURCE.byteLength, 'the retry completed the full acquisition')
+  t.ok(attempts >= 2, 'the first attempt actually aborted and a retry ran')
+})

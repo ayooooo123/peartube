@@ -72,9 +72,9 @@ function delayUntilNextRateWindow(milliseconds, signal) {
   })
 }
 
-function createBudgetedSourceReader({ reader, resume, maxBytesPerSecond, signal, onProgress }) {
+function createBudgetedSourceReader({ reader, resume, priorBytes = 0, maxBytesPerSecond, signal, onProgress }) {
   const source = createSourceReader(reader)
-  const initialBytes = resume?.byteLength || 0
+  const initialBytes = Math.max(resume?.byteLength || 0, priorBytes || 0)
   let sourceBytesRead = initialBytes
   let sourceBytesAccepted = initialBytes
   let windowStartedAt = 0
@@ -241,6 +241,13 @@ export async function createProviderSubsystem({
           reader: createBudgetedSourceReader({
             reader: input.reader,
             resume: input.resume,
+            // A retried acquisition may already carry durable progress from a
+            // prior attempt that died before it could set a verified prefix:
+            // without this floor the writer's attempt-local counter restarts
+            // at zero and the first progress patch regresses the durable
+            // counter, failing the job as ACQUISITION_ACCOUNTING_REGRESSION
+            // and discarding every byte the prior attempt already landed.
+            priorBytes: input.priorBytes || 0,
             maxBytesPerSecond,
             signal: input.signal,
             onProgress: input.onProgress,

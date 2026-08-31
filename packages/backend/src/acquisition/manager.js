@@ -208,7 +208,7 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       const resume = job.verifiedPrefix && reader.resumable && sameIdentity(job.verifiedPrefix.identity, describedIdentity)
         ? { ...job.verifiedPrefix, identity: description.identity }
         : null
-      const acquired = await provider.acquire({ acquisitionId: id, request: job.request, reader, resume, budget: policyValue, signal: entry.controller.signal, onProgress: async counters => {
+      const acquired = await provider.acquire({ acquisitionId: id, request: job.request, reader, resume, budget: policyValue, priorBytes: Math.max(job.sourceBytesRead, job.sourceBytesAccepted, job.bytesAcquired, job.stagingBytes), signal: entry.controller.signal, onProgress: async counters => {
         const latest = await store.get(id); if (!latest || latest.state !== 'acquiring') return
         const patch = { sourceBytesRead: counters.sourceBytesRead ?? counters.bytesAcquired, sourceBytesAccepted: counters.sourceBytesAccepted ?? counters.bytesAcquired, bytesAcquired: counters.bytesAcquired, stagingBytes: counters.stagingBytes ?? latest.stagingBytes }
         ledger.record(id, { sourceBytesRead: patch.sourceBytesRead, sourceBytesAccepted: patch.sourceBytesAccepted, stagingBytes: patch.stagingBytes }, { policy: policyValue }); job = await progress(latest, patch)

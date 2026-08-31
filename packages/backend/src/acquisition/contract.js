@@ -275,7 +275,7 @@ export function normalizeAcquisitionJob (input) {
     title: normalizePublicTitle(input.title),
     sourceFileName: input.sourceFileName == null
       ? null
-      : text(input.sourceFileName, 'sourceFileName', 255, { pattern: SOURCE_FILE_NAME, code: 'ACQUISITION_JOB_INVALID' }),
+      : text(input.sourceFileName, 'sourceFileName', 255, { pattern: SOURCE_FILE_NAME, code: 'ACQUISITION_JOB_INVALID', allowLocator: true }),
     mediaContext: normalizePublicMediaContext(input.mediaContext),
     bytesAcquired: uint(input.bytesAcquired, 'bytesAcquired', { maximum: MAX_ACQUISITION_BYTES, code: 'ACQUISITION_JOB_INVALID' }),
     expectedBytes: uint(input.expectedBytes, 'expectedBytes', { minimum: 1, maximum: MAX_ACQUISITION_BYTES, code: 'ACQUISITION_JOB_INVALID' }),
@@ -296,7 +296,7 @@ export function normalizeAcquisitionJob (input) {
   if (result.state !== 'failed' && result.state !== 'cancelled' && result.errorCode !== null) {
     fail('ACQUISITION_JOB_INVALID', 'only failed or cancelled acquisitions may expose an errorCode')
   }
-  assertNoPrivateSourceMaterial({ ...result, title: null, mediaContext: null }, 'public acquisition job')
+  assertNoPrivateSourceMaterial({ ...result, title: null, sourceFileName: null, mediaContext: null }, 'public acquisition job')
   return Object.freeze(result)
 }
 

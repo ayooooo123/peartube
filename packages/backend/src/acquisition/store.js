@@ -112,9 +112,6 @@ function normalizePublicationMetadata (input) {
       fail('ACQUISITION_PERSISTENCE_INVALID', 'publication media context value is invalid', 500)
     }
   }
-  assertNoPrivateSourceMaterial({
-    sourceFileName: input.sourceFileName ?? null
-  }, 'publication metadata')
   return input
 }
 function normalizeRequesterPublisherIds (input) {
@@ -187,7 +184,11 @@ function validateDurableJob (job) {
   if (typeof job.isRemote !== 'boolean') fail('ACQUISITION_PERSISTENCE_INVALID', 'job remote-origin flag is invalid', 500)
   if (job.deferredInput !== undefined && typeof job.deferredInput !== 'boolean') fail('ACQUISITION_PERSISTENCE_INVALID', 'job deferred-input flag is invalid', 500)
   normalizeRequesterPublisherIds(job.requesterPublisherIds); normalizePublicationMetadata(job.publicationMetadata); normalizeIdentity(job.expectedIdentity); normalizeVerifiedPrefix(job.verifiedPrefix, job.expectedBytes); normalizeVerifiedAsset(job.verifiedAsset, job.expectedBytes); normalizePublication(job.publication)
-  assertNoPrivateSourceMaterial({ ...job, publicationMetadata: null }, 'durable acquisition job'); projectAcquisitionJob(job)
+  assertNoPrivateSourceMaterial({
+    ...job,
+    request: { ...job.request, sourceFileName: null },
+    publicationMetadata: null
+  }, 'durable acquisition job'); projectAcquisitionJob(job)
   return job
 }
 function stateEventType (state) { return `acquisition.${state}` }

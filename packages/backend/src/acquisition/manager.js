@@ -69,9 +69,6 @@ function publicationMetadata(value, request = null) {
       output.mediaContext = normalizePublicMediaContext(context, 'ACQUISITION_SECRET_REJECTED')
     }
   }
-  assertNoPrivateSourceMaterial({
-    sourceFileName: output.sourceFileName
-  }, 'acquisition publication metadata')
   return output
 }
 function expectedFacts (value) {

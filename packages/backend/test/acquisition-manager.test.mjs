@@ -288,7 +288,7 @@ test('deferred replay accepts a source filename refinement but rejects semantic 
   await fixtureValue.manager.start()
   const first = await fixtureValue.manager.request({
     idempotencyKey: 'request-filename-refinement',
-    request: { ...REQUEST, sourceFileName: 'opaque.mkv' },
+    request: { ...REQUEST, sourceFileName: 'Constantine: City of Demons.2018.1080p.mkv' },
     principal: PRINCIPAL
   })
   const replay = await fixtureValue.manager.request({

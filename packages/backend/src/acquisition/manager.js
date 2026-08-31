@@ -201,9 +201,9 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       if (!grant && isStagedComplete) {
         reader = {
           resumable: true,
-          describe: async () => ({ byteLength: job.expectedBytes, identity: job.expectedIdentity || {} }),
-          open: async function* () {},
-          close: async () {}
+          async describe () { return { byteLength: job.expectedBytes, identity: job.expectedIdentity || {} } },
+          async * open () {},
+          async close () {}
         }
       } else {
         reader = await resolveReader(job, entry.controller.signal, policyValue)

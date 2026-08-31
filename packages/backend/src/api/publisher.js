@@ -762,7 +762,8 @@ export function createPublisherApi(options = {}) {
         const existingWritable = await registry.getWritableBindings()
         if (Array.isArray(existingWritable) && existingWritable.length > 0 &&
             !existingWritable.some(candidate => equalBytes(candidate?.publisherId, publisherId))) {
-          fail('PUBLISHER_CATALOG_AMBIGUOUS')
+          const hasAdmittedOther = existingWritable.some(candidate => candidate?.namespaceDescriptor != null || candidate?.admitted === true)
+          if (hasAdmittedOther) fail('PUBLISHER_CATALOG_AMBIGUOUS')
         }
         const binding = cloneBinding(await registry.provision(publisherId, genesisRootKey), publisherId)
         if (!equalBytes(binding.genesisRootKey, genesisRootKey)) fail('PUBLISHER_CATALOG_MISMATCH')

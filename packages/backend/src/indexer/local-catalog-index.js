@@ -530,7 +530,6 @@ export async function createVerifiedQueryView({
       const manifest = manifestFromSnapshot(snapshot, publication)
       if (!manifest) fail('verified publication source record is missing')
       const metadataClaim = directClaims.find(row => (
-        row.issuer === publication.publisherId &&
         row.body?.claimType === 'EntityMetadataClaim' &&
         row.body?.payload?.publicationId === publication.publicationId &&
         typeof row.body.payload.sourceFileName === 'string'

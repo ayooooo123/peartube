@@ -503,22 +503,23 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
     async listBindings() {
       if (closed) fail('PUBLISHER_CATALOG_REGISTRY_CLOSED')
       if (typeof ctx.metaDb.createReadStream === 'function') {
-        const mappings = []
+        const tasks = []
         for await (const entry of ctx.metaDb.createReadStream({
           gte: CATALOG_MAPPING_PREFIX,
           lt: `${CATALOG_MAPPING_PREFIX}\xff`,
           limit: maxOpenCatalogs + 1
         })) {
-          if (mappings.length >= maxOpenCatalogs) fail('PUBLISHER_CATALOG_CAPACITY')
+          if (tasks.length >= maxOpenCatalogs) fail('PUBLISHER_CATALOG_CAPACITY')
           const id = String(entry.key).slice(CATALOG_MAPPING_PREFIX.length)
           if (!/^[0-9a-f]{64}$/.test(id)) fail('PUBLISHER_CATALOG_MAPPING_INVALID')
           const publisherId = b4a.from(id, 'hex')
           const mapping = decodeCatalogMapping(entry.value, publisherId)
-          mappings.push(await openCatalog(publisherId, {
+          tasks.push(openCatalog(publisherId, {
             genesisRootKey: mapping.genesisRootKey,
             catalogBootstrapKey: mapping.catalogBootstrapKey
           }))
         }
+        await Promise.all(tasks)
       }
       return [...opened.values()]
         .sort((left, right) => b4a.compare(left.publisherId, right.publisherId))

@@ -1233,17 +1233,22 @@ async function buildRelayService({
         })
       }
       if (config.companion?.enabled !== false) {
+        logger.relay.info('Starting companion server setup...')
         if (!runtime.provider) throw new Error('Relay runtime did not expose ProviderService')
         const localPub = publisherShell ? await publisherShell.ensureLocalPublisher().catch((err) => {
           logger.relay?.warn?.('Relay local publisher setup failed', { error: err?.message || String(err) })
           return null
         }) : null
+        logger.relay.info('Local publisher resolved', { publisherId: localPub?.publisherId })
         if (localPub?.publisherId && (!config.companion.publisherId || !/^[0-9a-f]{64}$/.test(config.companion.publisherId))) {
           config.companion.publisherId = localPub.publisherId
         }
         if (localPub?.publisherId) {
-          await ensureLocalAcquisitionPolicy(localPub.publisherId).catch(() => {})
+          await ensureLocalAcquisitionPolicy(localPub.publisherId).catch((err) => {
+            logger.relay?.warn?.('Ensure acquisition policy failed', { error: err?.message || String(err) })
+          })
         }
+        logger.relay.info('Starting companion server factory...', { transport: config.companion.transport, socketPath: config.companion.socketPath })
         companionServer = await companionServerFactory({
           service: createProviderMachineService(runtime, { ensureAcquisitionPolicy: ensureLocalAcquisitionPolicy }),
           config: config.companion,
@@ -1251,7 +1256,9 @@ async function buildRelayService({
           logger,
           fs: companionFsModule
         })
+        logger.relay.info('Starting companion server listener...')
         await companionServer.start()
+        logger.relay.info('Companion server started!')
       }
 
       const runtimeStartedAt = Date.now()

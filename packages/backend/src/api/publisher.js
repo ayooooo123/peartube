@@ -323,23 +323,16 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
       const catalogOptions = { publisherId: b4a.from(publisherId) }
       if (deviceSigner) catalogOptions.deviceSigner = deviceSigner
       if (mapping.catalogBootstrapKey) catalogOptions.key = b4a.from(mapping.catalogBootstrapKey)
-      let catalog = catalogFactory(ctx.store, catalogOptions)
+      const catalog = catalogFactory(ctx.store, catalogOptions)
       try {
         if (!catalog || typeof catalog.ready !== 'function') fail('PUBLISHER_CATALOG_UNAVAILABLE')
         await catalog.ready()
-        if (create && !requestedKey && mapping.catalogBootstrapKey && !catalog.localWriterKey) {
-          try { await catalog.close?.() } catch {}
-          delete catalogOptions.key
-          catalog = catalogFactory(ctx.store, catalogOptions)
-          await catalog.ready()
-          mapping.catalogBootstrapKey = null
-        }
         const openedKey = exactBytes(catalog.key, 32, 'PUBLISHER_CATALOG_UNAVAILABLE')
         if (mapping.catalogBootstrapKey && !equalBytes(mapping.catalogBootstrapKey, openedKey)) {
           fail('PUBLISHER_CATALOG_MISMATCH')
         }
-        if (!mapping.catalogBootstrapKey) {
-          mapping.catalogBootstrapKey = b4a.from(openedKey)
+        if (!mapping.catalogBootstrapKey) mapping.catalogBootstrapKey = b4a.from(openedKey)
+        if (!mappingEntry?.value) {
           await ctx.metaDb.put(catalogMappingKey(publisherId), {
             version: 1,
             publisherId: id,
@@ -715,8 +708,8 @@ export function createPublisherApi(options = {}) {
     if (typeof catalog.waitForWritable === 'function') {
       await catalog.waitForWritable(1000).catch(() => {})
     }
-    const localWriterKey = exactBytes(catalog.localWriterKey, 32, 'PUBLISHER_LOCAL_WRITER_UNAVAILABLE')
-    const localSignerKey = exactBytes(catalog.localSignerKey, 32, 'PUBLISHER_LOCAL_SIGNER_UNAVAILABLE')
+    const localWriterKey = exactBytes(catalog.localWriterKey || catalog.key, 32, 'PUBLISHER_LOCAL_WRITER_UNAVAILABLE')
+    const localSignerKey = exactBytes(catalog.localSignerKey || catalog.localWriterKey || catalog.key, 32, 'PUBLISHER_LOCAL_SIGNER_UNAVAILABLE')
     const authorization = await catalog.getAuthorizationState()
     const writerKeyHex = publisherHex(localWriterKey)
     const signerKeyHex = publisherHex(localSignerKey)

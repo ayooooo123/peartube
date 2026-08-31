@@ -117,6 +117,7 @@ function compareReplayOrder (left, right) {
 // A follower's catalog is rebuilt from verified accepted pages, so it must not
 // be held hostage by an Autobase that can only open once a peer replicates.
 const REMOTE_CATALOG_OPEN_TIMEOUT_MS = 5000
+const PUBLISHER_ID_USER_DATA_KEY = 'peartube/publisher-id'
 
 async function raceOpenBudget (promise, timeoutMs) {
   let timer = null
@@ -152,10 +153,22 @@ export class PublisherCatalog extends ReadyResource {
     this.base = new Autobase(this.store, this.options.key, {
       valueEncoding: 'binary',
       ackInterval: this.options.ackInterval,
+      optimistic: true,
       open: openPublisherCatalogView,
       apply: (nodes, view, host) => applyPublisherCatalogNodes(nodes, view, host, { keyProvider, publisherId: this.options.publisherId, journalLimit: this.options.journalLimit })
     })
 
+
+    const pinnedPublisherId = await this.base.getUserData(PUBLISHER_ID_USER_DATA_KEY).catch(() => null)
+    if (pinnedPublisherId && !equalBytes(pinnedPublisherId, this.options.publisherId)) {
+      const base = this.base
+      this.base = null
+      try {
+        await base.close()
+      } finally {
+        invalid('persisted publisherId does not match expected publisherId')
+      }
+    }
     // A follower opens this from a publisher's bootstrap key with no local
     // history, so the Autobase cannot become ready until that core's first
     // block replicates - and the scope that would replicate it is only joined
@@ -171,6 +184,7 @@ export class PublisherCatalog extends ReadyResource {
     this.baseReady = readyWithinBudget
 
     if (readyWithinBudget && this.base?.view) {
+      await raceOpenBudget(this.base.update(), 1_000).catch(() => {})
       await raceOpenBudget(this.base.view.ready?.() || Promise.resolve(), 1000).catch(() => {})
       const descriptorEntry = await raceOpenBudget(this.base.view.get('state/descriptor'), 1000).catch(() => null)
       const journalCountEntry = await raceOpenBudget(this.base.view.get('meta/journal-count'), 1000).catch(() => null)
@@ -191,9 +205,15 @@ export class PublisherCatalog extends ReadyResource {
         }
       }
     }
-    // Nothing is pinned against yet when the base never opened: there is no
-    // persisted history to contradict the expected publisher, and every page
-    // ingested later is verified against it regardless.
+    // Pin writable local catalogs outside the derived view. A wrong expected
+    // publisher can otherwise rebuild that view first and erase the descriptor
+    // needed to detect the mismatch.
+    if (!pinnedPublisherId) {
+      await this.base.setUserData(PUBLISHER_ID_USER_DATA_KEY, this.options.publisherId).catch(() => {})
+    }
+    // Nothing is pinned against yet when a remote base never opened: there is
+    // no persisted history to contradict the expected publisher, and every
+    // accepted page ingested later is verified against it.
     this.publisherPinned = true
   }
 
@@ -260,10 +280,7 @@ export class PublisherCatalog extends ReadyResource {
   }
 
   async append (value, { allowAuthorityBootstrap = false } = {}) {
-    console.log('[Catalog] append step 1: ready start')
     await this.ready()
-    console.log('[Catalog] append step 2: ready ok')
-    console.log('[Catalog] base key:', this.base?.key?.toString('hex'), 'local key:', this.base?.local?.key?.toString('hex'), 'bootstrapKey:', this.options.key?.toString('hex'))
     const frame = isBytes(value) ? value : encodePublisherCatalogFrame(value)
     if (frame.byteLength > PUBLISHER_LIMITS.maxOperationBytes) invalid('operation frame exceeds its byte limit')
     const decoded = decodePublisherCatalogFrame(frame)
@@ -274,20 +291,15 @@ export class PublisherCatalog extends ReadyResource {
     if (!this.writable && (!allowAuthorityBootstrap || !isRootRecord)) {
       invalid('local device is not an admitted Autobase writer')
     }
-    console.log('[Catalog] append step 3: this.base.append start')
-    await this.base.append(frame)
-    console.log('[Catalog] append step 4: this.base.update start')
+    const optimistic = allowAuthorityBootstrap && isRootRecord && !this.writable
+    await this.base.append(frame, optimistic ? { optimistic: true } : undefined)
     await this.base.update()
-    console.log('[Catalog] append step 5: append done')
     return decoded.recordId || decoded.transitionId
   }
 
   async appendAndConfirm (value, options = {}) {
-    console.log('[Catalog] appendAndConfirm step 1: append start')
     const operationId = await this.append(value, options)
-    console.log('[Catalog] appendAndConfirm step 2: getPublisherOperationReceipt start')
     const receipt = await getPublisherOperationReceipt(this.view, operationId)
-    console.log('[Catalog] appendAndConfirm step 3: receipt:', receipt?.accepted)
     return { operationId: b4a.from(operationId), ...receipt }
   }
 

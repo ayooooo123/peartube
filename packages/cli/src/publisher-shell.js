@@ -90,7 +90,6 @@ export function createRelayPublisherShell ({ api, storagePath, fs, logger = null
   // the intent: a backend that prepared a different record than the one built
   // here must not get the root key's signature on it.
   async function authorizeRootOperation ({ root, publisherId, recordType, body, summary }) {
-    logger?.relay?.info?.('authorizeRootOperation step 1: prepare', { recordType })
     const issuedAt = now()
     const intentExpiresAt = issuedAt + INTENT_TTL_MS
     const intentId = hex(crypto.randomBytes(16))
@@ -136,9 +135,7 @@ export function createRelayPublisherShell ({ api, storagePath, fs, logger = null
       throw new Error(`publisher root body mismatch for ${recordType}`)
     }
 
-    logger?.relay?.info?.('authorizeRootOperation step 2: prepared ok', { intentId })
     const signature = crypto.sign(signedRecordSignaturePreimage({ recordType, recordId: candidateRecordId }), root.secretKey)
-    logger?.relay?.info?.('authorizeRootOperation step 3: submit', { recordType })
     const submitted = await api.submitPublisherRootOperation({
       intentId,
       publisherId,
@@ -150,7 +147,6 @@ export function createRelayPublisherShell ({ api, storagePath, fs, logger = null
       signerPublicKey: root.publicKey,
       signature
     })
-    logger?.relay?.info?.('authorizeRootOperation step 4: submitted ok', { recordType })
     if (submitted?.success !== true || submitted.complete !== true ||
         submitted.intentId !== intentId || submitted.publisherId !== publisherId ||
         submitted.recordType !== recordType ||
@@ -168,19 +164,11 @@ export function createRelayPublisherShell ({ api, storagePath, fs, logger = null
   }
 
   async function ensureLocalPublisher () {
-    logger?.relay?.info?.('ensureLocalPublisher step 1: getOrCreateRoot')
     const root = await getOrCreateRoot()
     const publisherId = hex(derivePublisherId(root.publicKey))
-    logger?.relay?.info?.('ensureLocalPublisher step 2: provision', { publisherId })
     let catalog = await provision(publisherId, root.publicKey)
-    logger?.relay?.info?.('ensureLocalPublisher step 3: provision result', {
-      namespaceInitialized: catalog.namespaceInitialized,
-      admitted: catalog.admitted,
-      writable: catalog.writable
-    })
 
     if (!catalog.namespaceInitialized) {
-      logger?.relay?.info?.('ensureLocalPublisher step 4: authorize namespace')
       const body = encodePublisherNamespaceDescriptor(createPublisherNamespaceDescriptor({
         genesisRootKey: root.publicKey,
         catalogBootstrapKey: catalog.catalogBootstrapKey
@@ -203,7 +191,6 @@ export function createRelayPublisherShell ({ api, storagePath, fs, logger = null
     }
 
     if (!catalog.admitted) {
-      logger?.relay?.info?.('ensureLocalPublisher step 5: authorize admission')
       const body = encodePublisherOperationBody('publisher.writer-admission', {
         writerKey: catalog.localWriterKey,
         signerKey: catalog.localSignerKey,

@@ -11,6 +11,8 @@ import {
   idempotencyDigestFor,
   normalizeAcquisitionRequest,
   normalizePrincipalId,
+  normalizePublicMediaContext,
+  normalizePublicTitle,
   PUBLICATION_MEDIA_FIELDS,
   projectAcquisitionJob
 } from './contract.js'
@@ -46,7 +48,9 @@ function durableSourceIdentity (identity) {
 
 function publicationMetadata(value, request = null) {
   const output = { title: null, sourceFileName: null, mediaContext: null }
-  if (typeof value?.title === 'string' && value.title && b4a.byteLength(value.title) <= 512) output.title = value.title
+  if (typeof value?.title === 'string' && value.title && b4a.byteLength(value.title) <= 512) {
+    output.title = normalizePublicTitle(value.title, 'ACQUISITION_SECRET_REJECTED')
+  }
   // The name the source gave the file. Two versions of one work are told apart
   // by this and by their byte length, so it is kept verbatim rather than
   // regenerated from a title.
@@ -61,9 +65,13 @@ function publicationMetadata(value, request = null) {
       if (typeof entry === 'string' && entry && b4a.byteLength(entry) <= 512) context[key] = entry
       else if (Number.isSafeInteger(entry) && entry >= 0) context[key] = entry
     }
-    if (Object.keys(context).length > 0) output.mediaContext = context
+    if (Object.keys(context).length > 0) {
+      output.mediaContext = normalizePublicMediaContext(context, 'ACQUISITION_SECRET_REJECTED')
+    }
   }
-  assertNoPrivateSourceMaterial(output, 'acquisition publication metadata')
+  assertNoPrivateSourceMaterial({
+    sourceFileName: output.sourceFileName
+  }, 'acquisition publication metadata')
   return output
 }
 function expectedFacts (value) {
@@ -242,7 +250,9 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
     }
   }
   function canSchedule (job) {
-    if (sourceGrants.has({ acquisitionId: job.acquisitionId, principal: job.principalId })) return true
+    const hasGrant = sourceGrants.has({ acquisitionId: job.acquisitionId, principal: job.principalId })
+    if (job.deferredInput === true) return hasGrant
+    if (hasGrant) return true
     return provider.canOpen?.({ ref: job.request.resolutionRef, principalId: job.principalId }) === true
   }
   function schedule (job) {
@@ -308,8 +318,17 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       assertOpen(); const request = normalizeAcquisitionRequest(input); const principalId = normalizePrincipalId(principal)
       const digest = idempotencyDigestFor({ principal: principalId, publisherId: request.publisherId, idempotencyKey }); const fingerprint = fingerprintAcquisitionRequest(request)
       let existing = await store.findByIdempotency(digest)
+      if (existing && existing.requestFingerprint !== fingerprint) {
+        fail('IDEMPOTENCY_CONFLICT', 'idempotency key is bound to another request')
+      }
+      if ((existing?.state === 'failed' || existing?.state === 'cancelled') && existing.deferredInput !== true) {
+        const refreshed = await provider.resolve({ ref: request.resolutionRef, request, principalId })
+        if (refreshed.deferredInput === true) {
+          await store.forget(existing.acquisitionId)
+          existing = null
+        }
+      }
       if (existing) {
-        if (existing.requestFingerprint !== fingerprint) fail('IDEMPOTENCY_CONFLICT', 'idempotency key is bound to another request')
         const policyValue = await currentPolicy()
         if (existing.state === 'failed' && existing.recoverable && existing.attempts < policyValue.maxAttempts) {
           const outcome = await store.retry(existing.acquisitionId, { expectedVersion: existing.version, resetVerifiedPrefix: RESET_PREFIX_ERRORS.has(existing.errorCode) }); await notify(outcome.event); existing = outcome.job
@@ -322,7 +341,7 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       const resolution = await provider.resolve({ ref: request.resolutionRef, request, principalId })
       const expected = expectedFacts(resolution); const admission = await policy.admit({ request, principal, adapterId: resolution.adapterId, freeDiskBytes: freeDiskBytes(), isRemote })
       const acquisitionId = acquisitionIdForRequest({ principal: principalId, idempotencyKey, request }); const createdAt = at(now)
-      const job = { schemaVersion: 1, acquisitionId, state: 'queued', version: 0, principalId, publisherId: request.publisherId, requesterPublisherIds: publisherIdsForPrincipal(principal), isRemote: isRemote === true, idempotencyDigest: digest, requestFingerprint: fingerprint, request, retentionClass: request.retentionClass, publicationMetadata: publicationMetadata(resolution, request), expectedBytes: expected.byteLength, expectedIdentity: expected.identity, sourceBytesRead: 0, sourceBytesAccepted: 0, bytesAcquired: 0, verifiedBytes: 0, committedBytes: 0, retainedBytes: 0, stagingBytes: 0, stagingPeakBytes: 0, attempts: 0, startedAt: null, finishedAt: null, verifiedPrefix: null, verifiedAsset: null, publication: null, errorCode: null, recoverable: false, createdAt, updatedAt: createdAt }
+      const job = { schemaVersion: 1, acquisitionId, state: 'queued', version: 0, principalId, publisherId: request.publisherId, requesterPublisherIds: publisherIdsForPrincipal(principal), isRemote: isRemote === true, deferredInput: resolution.deferredInput === true, idempotencyDigest: digest, requestFingerprint: fingerprint, request, retentionClass: request.retentionClass, publicationMetadata: publicationMetadata(resolution, request), expectedBytes: expected.byteLength, expectedIdentity: expected.identity, sourceBytesRead: 0, sourceBytesAccepted: 0, bytesAcquired: 0, verifiedBytes: 0, committedBytes: 0, retainedBytes: 0, stagingBytes: 0, stagingPeakBytes: 0, attempts: 0, startedAt: null, finishedAt: null, verifiedPrefix: null, verifiedAsset: null, publication: null, errorCode: null, recoverable: false, createdAt, updatedAt: createdAt }
       ledger.reserve({ acquisitionId, principalId, expectedBytes: expected.byteLength, policy: admission.policy, isRemote })
       const outcome = await store.createOrReplay({ idempotencyDigest: digest, requestFingerprint: fingerprint, job }); await notify(outcome.event)
       if (outcome.created) { await network?.publishRequest?.({ acquisitionId, request }); await dispatchQueued() }

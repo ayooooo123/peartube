@@ -79,6 +79,7 @@ const ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const RESOLUTION_REF = /^[A-Za-z0-9_-]{43}$/
 const LOCATOR = /^(?:[a-z][a-z0-9+.-]*:(?:\/\/)?|\/\/)/i
+const TITLE_LOCATOR = /(?:[a-z][a-z0-9+.-]*:\/\/|\/\/|\bmagnet:)/i
 const SENSITIVE_FIELD = /(?:url|uri|href|link|magnet|torrent|cookie|authorization|credential|secret|password|passkey|debrid|headers?|adapter|source(?:capability|descriptor|grant|token|url|path)|grant|token|localpath|filepath|privateinfohash|tracker(?:url|id|announce)?)/i
 // The name the source called the file. It is a label, never a locator: no
 // separator, no scheme, no control characters. Keeping it is what lets an
@@ -122,10 +123,12 @@ function containsControlCharacter (value) {
   return false
 }
 
-function text (value, name, maxBytes, { pattern = null, code = 'ACQUISITION_REQUEST_INVALID', nullable = false } = {}) {
+function text (value, name, maxBytes, { pattern = null, code = 'ACQUISITION_REQUEST_INVALID', nullable = false, allowLocator = false, title = false } = {}) {
   if (value == null && nullable) return null
+  const containsLocator = title ? TITLE_LOCATOR.test(value) : LOCATOR.test(value)
   if (typeof value !== 'string' || value !== value.normalize('NFC') || value !== value.trim() || !value ||
-      b4a.byteLength(value) > maxBytes || containsControlCharacter(value) || LOCATOR.test(value) || (pattern && !pattern.test(value))) {
+      b4a.byteLength(value) > maxBytes || containsControlCharacter(value) ||
+      (!allowLocator && containsLocator) || (pattern && !pattern.test(value))) {
     fail(code, `${name} is invalid`)
   }
   return value
@@ -166,6 +169,10 @@ export function assertNoPrivateSourceMaterial (value, name = 'public acquisition
     state.seen.delete(value)
   }
   return value
+}
+
+export function normalizePublicTitle (value, code = 'ACQUISITION_JOB_INVALID') {
+  return value == null ? null : text(value, 'title', 512, { code, title: true })
 }
 
 export function normalizeAcquisitionRequest (input) {
@@ -236,8 +243,12 @@ export function normalizePublicMediaContext (input, code = 'ACQUISITION_JOB_INVA
   const result = {}
   for (const [key, value] of Object.entries(input)) {
     if (!PUBLICATION_MEDIA_FIELDS.has(key)) fail(code, `mediaContext field ${key} is not permitted`)
+    const entityIdentifier = key === 'identifier' || key === 'workEntityId'
     result[key] = typeof value === 'string'
-      ? text(value, `mediaContext.${key}`, 512, { code })
+      ? text(value, `mediaContext.${key}`, entityIdentifier ? 128 : 512, {
+          code,
+          ...(entityIdentifier ? { pattern: ID, allowLocator: true } : {})
+        })
       : uint(value, `mediaContext.${key}`, { code })
   }
   return Object.keys(result).length === 0 ? null : Object.freeze(result)
@@ -253,7 +264,7 @@ export function normalizeAcquisitionJob (input) {
     acquisitionId: text(input.acquisitionId, 'acquisitionId', 128, { pattern: ID, code: 'ACQUISITION_JOB_INVALID' }),
     state: input.state,
     retentionClass: input.retentionClass,
-    title: input.title == null ? null : text(input.title, 'title', 512, { code: 'ACQUISITION_JOB_INVALID' }),
+    title: normalizePublicTitle(input.title),
     sourceFileName: input.sourceFileName == null
       ? null
       : text(input.sourceFileName, 'sourceFileName', 255, { pattern: SOURCE_FILE_NAME, code: 'ACQUISITION_JOB_INVALID' }),
@@ -277,7 +288,7 @@ export function normalizeAcquisitionJob (input) {
   if (result.state !== 'failed' && result.state !== 'cancelled' && result.errorCode !== null) {
     fail('ACQUISITION_JOB_INVALID', 'only failed or cancelled acquisitions may expose an errorCode')
   }
-  assertNoPrivateSourceMaterial(result, 'public acquisition job')
+  assertNoPrivateSourceMaterial({ ...result, title: null, mediaContext: null }, 'public acquisition job')
   return Object.freeze(result)
 }
 

@@ -10,6 +10,7 @@ import {
   assertNoPrivateSourceMaterial,
   normalizeAcquisitionRequest,
   normalizePrincipalId,
+  normalizePublicTitle,
   PUBLICATION_MEDIA_FIELDS,
   projectAcquisitionJob
 } from './contract.js'
@@ -96,8 +97,8 @@ function normalizePublicationMetadata (input) {
   if (!plainObject(input) || Object.keys(input).some(key => key !== 'title' && key !== 'sourceFileName' && key !== 'mediaContext')) {
     fail('ACQUISITION_PERSISTENCE_INVALID', 'publication metadata is invalid', 500)
   }
-  if (input.title !== null && input.title !== undefined && !boundedMetadataValue(input.title)) {
-    fail('ACQUISITION_PERSISTENCE_INVALID', 'publication title is invalid', 500)
+  if (input.title !== null && input.title !== undefined) {
+    normalizePublicTitle(input.title, 'ACQUISITION_PERSISTENCE_INVALID')
   }
   if (input.sourceFileName !== null && input.sourceFileName !== undefined &&
       (typeof input.sourceFileName !== 'string' || !/^[^/\\]{1,255}$/.test(input.sourceFileName))) {
@@ -111,7 +112,9 @@ function normalizePublicationMetadata (input) {
       fail('ACQUISITION_PERSISTENCE_INVALID', 'publication media context value is invalid', 500)
     }
   }
-  assertNoPrivateSourceMaterial(input, 'publication metadata')
+  assertNoPrivateSourceMaterial({
+    sourceFileName: input.sourceFileName ?? null
+  }, 'publication metadata')
   return input
 }
 function normalizeRequesterPublisherIds (input) {
@@ -182,8 +185,9 @@ function validateDurableJob (job) {
   if (job.errorCode != null && !ERROR_CODE.test(job.errorCode)) fail('ACQUISITION_PERSISTENCE_INVALID', 'job errorCode is invalid', 500)
   if (typeof job.recoverable !== 'boolean') fail('ACQUISITION_PERSISTENCE_INVALID', 'job recoverable is invalid', 500)
   if (typeof job.isRemote !== 'boolean') fail('ACQUISITION_PERSISTENCE_INVALID', 'job remote-origin flag is invalid', 500)
+  if (job.deferredInput !== undefined && typeof job.deferredInput !== 'boolean') fail('ACQUISITION_PERSISTENCE_INVALID', 'job deferred-input flag is invalid', 500)
   normalizeRequesterPublisherIds(job.requesterPublisherIds); normalizePublicationMetadata(job.publicationMetadata); normalizeIdentity(job.expectedIdentity); normalizeVerifiedPrefix(job.verifiedPrefix, job.expectedBytes); normalizeVerifiedAsset(job.verifiedAsset, job.expectedBytes); normalizePublication(job.publication)
-  assertNoPrivateSourceMaterial(job, 'durable acquisition job'); projectAcquisitionJob(job)
+  assertNoPrivateSourceMaterial({ ...job, publicationMetadata: null }, 'durable acquisition job'); projectAcquisitionJob(job)
   return job
 }
 function stateEventType (state) { return `acquisition.${state}` }

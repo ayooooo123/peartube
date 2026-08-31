@@ -746,6 +746,9 @@ export async function applyPublisherCatalogNodes (nodes, view, host, options = {
       rebuilt ||= await rebuildPublisherCatalogView(view, host, options)
       usage = await readJournalUsage(view, rebuilt)
       trustedAuthority = authorityCandidateAccepted(rebuilt, value, writerKey, keyProvider, host, options.publisherId)
+      if (node.optimistic && trustedAuthority && value.recordType === PUBLISHER_RECORD_TYPES.NAMESPACE) {
+        await host.ackWriter(writerKey)
+      }
     }
     const atCapacity = () => usage.total >= journalLimit ||
       (!authority && usage.data >= dataLimit) ||

@@ -25,17 +25,18 @@ function openPolicy () {
 function reader () {
   return createSourceReader({ resumable: true, maxReadBytes: 1024, async describe () { return { identity: { kind: 'etag', value: 'asset-v1' }, byteLength: BYTES.byteLength, mimeType: 'video/mp4' } }, open ({ offset, length }) { return (async function * () { yield BYTES.subarray(offset, offset + length) })() }, async close () {} })
 }
-function provider ({ verified = true, block = null, expectedIdentity = true, metadata = false } = {}) {
+function provider ({ verified = true, block = null, expectedIdentity = true, metadata = false, waitForGrant = false, onOpen = null } = {}) {
   return {
     async resolve () {
       return {
         adapterId: 'local-adapter',
         expected: { byteLength: BYTES.byteLength, ...(expectedIdentity ? { identity: { kind: 'etag', value: 'asset-v1' } } : {}) },
-        ...(metadata ? { title: 'Durable title', mediaContext: { kind: 'movie', namespace: 'catalog', identifier: 'title-1' } } : {})
+        ...(metadata ? { title: 'Durable title', mediaContext: { kind: 'movie', namespace: 'catalog', identifier: 'title-1' } } : {}),
+        ...((typeof waitForGrant === 'function' ? waitForGrant() : waitForGrant) ? { deferredInput: true } : {})
       }
     },
     canOpen () { return true },
-    async open () { return reader() },
+    async open () { onOpen?.(); return reader() },
     async acquire ({ reader: source, signal, onProgress }) {
       if (block) await block(signal)
       let bytes = 0
@@ -79,6 +80,58 @@ test('manager publishes only after exact verification and records every transiti
   const queued = await fixtureValue.manager.request({ idempotencyKey: 'request-1', request: REQUEST, principal: PRINCIPAL })
   const completed = await eventually(() => fixtureValue.manager.get({ acquisitionId: queued.acquisitionId, principal: PRINCIPAL }), job => job.state === 'completed')
   t.is(completed.bytesAcquired, BYTES.byteLength); t.is(completed.assetId, 'asset-1'); t.is(fixtureValue.publishes(), 1)
+  await fixtureValue.manager.close()
+})
+
+test('a private local resolution stays queued until its source grant is attached', async t => {
+  let opens = 0
+  const fixtureValue = fixture({
+    acquisitionProvider: provider({ waitForGrant: true, onOpen: () => { opens++ } })
+  })
+  await fixtureValue.manager.start()
+  const queued = await fixtureValue.manager.request({
+    idempotencyKey: 'request-awaiting-grant',
+    request: REQUEST,
+    principal: PRINCIPAL
+  })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const waiting = await fixtureValue.manager.get({ acquisitionId: queued.acquisitionId, principal: PRINCIPAL })
+  t.is(waiting.state, 'queued')
+  t.is(opens, 0, 'the source is not opened before a grant exists')
+  await fixtureValue.manager.close()
+})
+
+test('a stale failed acquisition is replaced when its resolution now waits for a grant', async t => {
+  let deferred = false
+  let opens = 0
+  const fixtureValue = fixture({
+    acquisitionProvider: provider({
+      waitForGrant: () => deferred,
+      onOpen: () => {
+        opens++
+        throw Object.assign(new Error('source grant missing'), { code: 'SOURCE_UNAVAILABLE' })
+      }
+    })
+  })
+  await fixtureValue.manager.start()
+  const failedRequest = await fixtureValue.manager.request({
+    idempotencyKey: 'request-migrated-to-grant',
+    request: REQUEST,
+    principal: PRINCIPAL
+  })
+  await eventually(
+    () => fixtureValue.manager.get({ acquisitionId: failedRequest.acquisitionId, principal: PRINCIPAL }),
+    job => job.state === 'failed'
+  )
+
+  deferred = true
+  const replacement = await fixtureValue.manager.request({
+    idempotencyKey: 'request-migrated-to-grant',
+    request: REQUEST,
+    principal: PRINCIPAL
+  })
+  t.is(replacement.state, 'queued')
+  t.is(opens, 1, 'replacement waits for the source grant instead of reopening the source')
   await fixtureValue.manager.close()
 })
 

@@ -617,7 +617,10 @@ test('catalog registry binds only the catalog key named by a verified namespace 
     const binding = await registry.bindNamespace(descriptor)
     t.alike(binding.publisherId, publisherId)
     t.alike(binding.catalogBootstrapKey, catalogBootstrapKey)
-    t.alike(opened, [{ publisherId, key: catalogBootstrapKey }])
+    t.is(opened.length, 1)
+    t.alike(opened[0].publisherId, publisherId)
+    t.alike(opened[0].key, catalogBootstrapKey)
+    t.ok(/^peartube-publisher-[0-9a-f]{32}$/.test(opened[0].namespace))
     const resolved = await registry.resolve(publisherId)
     t.is(resolved, binding, 'verified descriptor binding is durable in the registry')
     t.is(await registry.release(publisherId), true)
@@ -915,6 +918,7 @@ test('context catalog registry provision is idempotent, publisher-pinned, and re
     opens.push(options.key ? b4a.from(options.key) : null)
     return {
       key: options.key ? b4a.from(options.key) : b4a.from(generatedKey),
+      localWriterKey: options.key ? b4a.from(options.key) : b4a.from(generatedKey),
       async ready() {},
       async close() { closes.push(true) }
     }
@@ -955,6 +959,71 @@ test('context catalog registry provision is idempotent, publisher-pinned, and re
   t.is(await restarted.loadPendingTransition(publisherId, transitionId), null, 'expired durable contribution is purged')
   t.is(resolved, reopened)
   await restarted.close()
+})
+
+test('provision skips and replaces a mapped catalog whose persisted local writer is not writable', async (t) => {
+  const values = new Map()
+  const metaDb = {
+    async get(key) { return values.has(key) ? { value: values.get(key) } : null },
+    async put(key, value) { values.set(key, value) },
+    async * createReadStream() {
+      for (const [key, value] of values) yield { key, value }
+    }
+  }
+  const genesisRootKey = crypto.keyPair(bytes(32, 21)).publicKey
+  const publisherId = derivePublisherId(genesisRootKey)
+  const publisherIdHex = b4a.toString(publisherId, 'hex')
+  const mappedKey = bytes(32, 201)
+  const staleWriterKey = bytes(32, 203)
+  const replacementKey = bytes(32, 202)
+  const mappingKey = `publisher-catalog:v1:${publisherIdHex}`
+  values.set(mappingKey, {
+    version: 1,
+    publisherId: publisherIdHex,
+    genesisRootKey: b4a.toString(genesisRootKey, 'hex'),
+    catalogBootstrapKey: b4a.toString(mappedKey, 'hex')
+  })
+
+  const opens = []
+  const catalogFactory = (_store, options) => {
+    opens.push(options.key ? b4a.from(options.key) : null)
+    return {
+      key: options.key ? b4a.from(options.key) : b4a.from(replacementKey),
+      localWriterKey: b4a.from(replacementKey),
+      writable: true,
+      async ready() {},
+      async close() {}
+    }
+  }
+  const store = {
+    namespace() {
+      return {
+        get({ key }) {
+          const bootstrap = b4a.equals(key, mappedKey)
+          return {
+            writable: bootstrap,
+            async ready() {},
+            async getUserData(name) {
+              return bootstrap && name === 'autobase/local' ? staleWriterKey : null
+            }
+          }
+        }
+      }
+    }
+  }
+  const registry = publisherApiModule.createPublisherCatalogRegistry(
+    { store, metaDb },
+    { catalogFactory, maxOpenCatalogs: 2 }
+  )
+
+  t.alike(await registry.getWritableBindings({ skipPublisherId: publisherId }), [])
+  t.alike(opens, [], 'the target mapping is not opened as a follower before provision')
+  const provisioned = await registry.provision(publisherId, genesisRootKey)
+
+  t.alike(opens, [null], 'provision creates a new local genesis catalog')
+  t.alike(provisioned.catalogBootstrapKey, replacementKey)
+  t.is(values.get(mappingKey).catalogBootstrapKey, b4a.toString(replacementKey, 'hex'))
+  await registry.close()
 })
 
 test('publisher catalog provision is registered on shared and mobile handler surfaces', async (t) => {

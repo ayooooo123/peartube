@@ -692,6 +692,7 @@ function resolutionLabels(record) {
         ? { expected: Object.freeze({ byteLength: expectedBytes }) }
         : {}),
       acquisitionAvailable: kind === 'acquirable',
+      ...(record.private?.local === true ? { deferredInput: true } : {}),
       ...(overrides.denialCode ? { denialCode: overrides.denialCode } : {}),
     })
   }

@@ -37,6 +37,8 @@ const PENDING_TRANSITION_TTL_MS = 10 * 60_000
 const MAX_DISPLAY_SUMMARY_BYTES = 4_096
 const CATALOG_MAPPING_PREFIX = 'publisher-catalog:v1:'
 const PENDING_TRANSITIONS_KEY = 'publisher-root-transitions:v1'
+const LEGACY_CATALOG_NAMESPACE = 'peartube-publisher'
+const CATALOG_NAMESPACE_PATTERN = /^peartube-publisher(?:-[0-9a-f]{32})?$/
 
 class PublisherApiError extends Error {
   constructor(code) {
@@ -180,9 +182,12 @@ function catalogMappingKey(publisherId) {
 }
 
 function decodeCatalogMapping(value, expectedPublisherId) {
-  if (!value || value.version !== 1 || value.publisherId !== publisherHex(expectedPublisherId) ||
+  if (!value || (value.version !== 1 && value.version !== 2) ||
+      value.publisherId !== publisherHex(expectedPublisherId) ||
       typeof value.genesisRootKey !== 'string' || !/^[0-9a-f]{64}$/.test(value.genesisRootKey) ||
-      typeof value.catalogBootstrapKey !== 'string' || !/^[0-9a-f]{64}$/.test(value.catalogBootstrapKey)) {
+      typeof value.catalogBootstrapKey !== 'string' || !/^[0-9a-f]{64}$/.test(value.catalogBootstrapKey) ||
+      (value.version === 2 && (typeof value.catalogNamespace !== 'string' ||
+        !CATALOG_NAMESPACE_PATTERN.test(value.catalogNamespace)))) {
     fail('PUBLISHER_CATALOG_MAPPING_INVALID')
   }
   const genesisRootKey = b4a.from(value.genesisRootKey, 'hex')
@@ -190,7 +195,8 @@ function decodeCatalogMapping(value, expectedPublisherId) {
   return {
     publisherId: b4a.from(expectedPublisherId),
     genesisRootKey,
-    catalogBootstrapKey: b4a.from(value.catalogBootstrapKey, 'hex')
+    catalogBootstrapKey: b4a.from(value.catalogBootstrapKey, 'hex'),
+    catalogNamespace: value.version === 2 ? value.catalogNamespace : LEGACY_CATALOG_NAMESPACE
   }
 }
 
@@ -283,7 +289,7 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
   let closed = false
   let pendingMutation = Promise.resolve()
 
-  async function openCatalog(publisherId, { genesisRootKey = null, create = false, catalogBootstrapKey = null, namespaceDescriptor = null, mapping: providedMapping = null } = {}) {
+  async function openCatalog(publisherId, { genesisRootKey = null, create = false, catalogBootstrapKey = null, namespaceDescriptor = null, mapping: providedMapping = null, replaceLocalGenesis = false } = {}) {
     if (closed) fail('PUBLISHER_CATALOG_REGISTRY_CLOSED')
     const id = publisherHex(publisherId)
     const requestedKey = catalogBootstrapKey ? exactBytes(catalogBootstrapKey, 32, 'PUBLISHER_CATALOG_MISMATCH') : null
@@ -291,13 +297,19 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
     if (cached) {
       if (genesisRootKey && !equalBytes(cached.genesisRootKey, genesisRootKey)) fail('PUBLISHER_CATALOG_MISMATCH')
       if (requestedKey && !equalBytes(cached.catalogBootstrapKey, requestedKey)) fail('PUBLISHER_CATALOG_MISMATCH')
-      return cached
+      if (!create || requestedKey || cached.catalog?.localWriterKey != null) return cached
+      opened.delete(id)
+      replaceLocalGenesis = true
+      Promise.resolve(cached.catalog?.close?.()).catch(() => {})
     }
     if (opening.has(id)) {
       const binding = await opening.get(id)
       if (genesisRootKey && !equalBytes(binding.genesisRootKey, genesisRootKey)) fail('PUBLISHER_CATALOG_MISMATCH')
       if (requestedKey && !equalBytes(binding.catalogBootstrapKey, requestedKey)) fail('PUBLISHER_CATALOG_MISMATCH')
-      return binding
+      if (!create || requestedKey || binding.catalog?.localWriterKey != null) return binding
+      if (opened.get(id) === binding) opened.delete(id)
+      Promise.resolve(binding.catalog?.close?.()).catch(() => {})
+      return openCatalog(publisherId, { genesisRootKey, create, catalogBootstrapKey, namespaceDescriptor, mapping: providedMapping, replaceLocalGenesis: true })
     }
     if (opened.size + opening.size >= maxOpenCatalogs) fail('PUBLISHER_CATALOG_CAPACITY')
 
@@ -316,26 +328,43 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
         mapping = {
           publisherId: b4a.from(publisherId),
           genesisRootKey: b4a.from(genesisRootKey),
-          catalogBootstrapKey: requestedKey ? b4a.from(requestedKey) : null
+          catalogBootstrapKey: requestedKey ? b4a.from(requestedKey) : null,
+          catalogNamespace: `${LEGACY_CATALOG_NAMESPACE}-${publisherHex(crypto.randomBytes(16))}`
         }
       }
-      if (create && !requestedKey && mapping?.catalogBootstrapKey && ctx.store) {
+      if (replaceLocalGenesis) {
+        mapping.catalogBootstrapKey = null
+        mapping.catalogNamespace = `${LEGACY_CATALOG_NAMESPACE}-${publisherHex(crypto.randomBytes(16))}`
+      }
+      if (create && !requestedKey && mapping.catalogBootstrapKey && ctx.store) {
         const namespacedStore = typeof ctx.store.namespace === 'function'
-          ? ctx.store.namespace('peartube-publisher')
+          ? ctx.store.namespace(mapping.catalogNamespace)
           : ctx.store
         if (typeof namespacedStore?.get === 'function') {
           try {
-            const testCore = namespacedStore.get({ key: mapping.catalogBootstrapKey })
-            await testCore.ready?.()
-            console.log('[PublisherApi] testCore writable:', testCore.writable, 'length:', testCore.length)
-            if (testCore.writable === false) {
-              mapping.catalogBootstrapKey = null
+            const bootstrapCore = namespacedStore.get({ key: mapping.catalogBootstrapKey })
+            await bootstrapCore.ready?.()
+            let writable = bootstrapCore.writable === true
+            const localWriterKey = await bootstrapCore.getUserData?.('autobase/local')
+            if (writable && localWriterKey) {
+              const localWriterCore = namespacedStore.get({ key: localWriterKey })
+              await localWriterCore.ready?.()
+              writable = localWriterCore.writable === true
             }
-          } catch {}
+            if (!writable) {
+              mapping.catalogBootstrapKey = null
+              mapping.catalogNamespace = `${LEGACY_CATALOG_NAMESPACE}-${publisherHex(crypto.randomBytes(16))}`
+            }
+          } catch {
+            // Opening the mapped catalog reports the stable failure.
+          }
         }
       }
 
-      const catalogOptions = { publisherId: b4a.from(publisherId) }
+      const catalogOptions = {
+        publisherId: b4a.from(publisherId),
+        namespace: mapping.catalogNamespace
+      }
       if (deviceSigner) catalogOptions.deviceSigner = deviceSigner
       if (mapping.catalogBootstrapKey) catalogOptions.key = b4a.from(mapping.catalogBootstrapKey)
       const catalog = catalogFactory(ctx.store, catalogOptions)
@@ -347,12 +376,18 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
           fail('PUBLISHER_CATALOG_MISMATCH')
         }
         if (!mapping.catalogBootstrapKey) mapping.catalogBootstrapKey = b4a.from(openedKey)
-        if (!mappingEntry?.value || mappingEntry.value.catalogBootstrapKey !== publisherHex(mapping.catalogBootstrapKey)) {
+        const storedNamespace = mappingEntry?.value?.version === 2
+          ? mappingEntry.value.catalogNamespace
+          : LEGACY_CATALOG_NAMESPACE
+        if (!mappingEntry?.value ||
+            mappingEntry.value.catalogBootstrapKey !== publisherHex(mapping.catalogBootstrapKey) ||
+            storedNamespace !== mapping.catalogNamespace) {
           await ctx.metaDb.put(catalogMappingKey(publisherId), {
-            version: 1,
+            version: 2,
             publisherId: id,
             genesisRootKey: publisherHex(mapping.genesisRootKey),
-            catalogBootstrapKey: publisherHex(mapping.catalogBootstrapKey)
+            catalogBootstrapKey: publisherHex(mapping.catalogBootstrapKey),
+            catalogNamespace: mapping.catalogNamespace
           })
         }
         const binding = {
@@ -519,8 +554,11 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
       })
     },
 
-    async listBindings() {
+    async listBindings({ skipPublisherId: skipPublisherIdValue = null } = {}) {
       if (closed) fail('PUBLISHER_CATALOG_REGISTRY_CLOSED')
+      const skipPublisherId = skipPublisherIdValue
+        ? exactBytes(skipPublisherIdValue, 32, 'PUBLISHER_REQUEST_INVALID')
+        : null
       if (typeof ctx.metaDb.createReadStream === 'function') {
         const entries = []
         for await (const entry of ctx.metaDb.createReadStream({
@@ -528,10 +566,11 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
           lt: `${CATALOG_MAPPING_PREFIX}\xff`,
           limit: maxOpenCatalogs + 1
         })) {
-          if (entries.length >= maxOpenCatalogs) fail('PUBLISHER_CATALOG_CAPACITY')
           const id = String(entry.key).slice(CATALOG_MAPPING_PREFIX.length)
           if (!/^[0-9a-f]{64}$/.test(id)) fail('PUBLISHER_CATALOG_MAPPING_INVALID')
           const publisherId = b4a.from(id, 'hex')
+          if (skipPublisherId && equalBytes(publisherId, skipPublisherId)) continue
+          if (entries.length >= maxOpenCatalogs) fail('PUBLISHER_CATALOG_CAPACITY')
           const mapping = decodeCatalogMapping(entry.value, publisherId)
           entries.push({ publisherId, mapping })
         }
@@ -545,12 +584,13 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
         await Promise.all(tasks)
       }
       return [...opened.values()]
+        .filter(binding => !skipPublisherId || !equalBytes(binding.publisherId, skipPublisherId))
         .sort((left, right) => b4a.compare(left.publisherId, right.publisherId))
         .map(binding => ({ ...binding }))
     },
 
-    async getWritableBindings() {
-      const bindings = await this.listBindings()
+    async getWritableBindings(options = {}) {
+      const bindings = await this.listBindings(options)
       return bindings.filter(binding => binding.catalog?.writable || binding.catalog?.localWriterKey != null)
     },
 
@@ -776,34 +816,24 @@ export function createPublisherApi(options = {}) {
   return {
     async provisionPublisherCatalog(request = {}) {
       try {
-        console.log('[PublisherApi] provisionPublisherCatalog start', request.publisherId)
         const registry = activeCatalogRegistry()
-        console.log('[PublisherApi] activeCatalogRegistry ok')
         if (typeof registry.provision !== 'function' || typeof registry.getWritableBindings !== 'function') {
           fail('PUBLISHER_CATALOG_UNAVAILABLE')
         }
         const publisherId = parsePublisherId(request.publisherId)
         const genesisRootKey = exactBytes(request.genesisRootKey, 32)
         if (!equalBytes(derivePublisherId(genesisRootKey), publisherId)) fail('PUBLISHER_ID_MISMATCH')
-        console.log('[PublisherApi] getWritableBindings start')
-        const existingWritable = await registry.getWritableBindings()
-        console.log('[PublisherApi] getWritableBindings ok, count:', existingWritable?.length)
+        const existingWritable = await registry.getWritableBindings({ skipPublisherId: publisherId })
         if (Array.isArray(existingWritable) && existingWritable.length > 0 &&
             !existingWritable.some(candidate => equalBytes(candidate?.publisherId, publisherId))) {
           const hasAdmittedOther = existingWritable.some(candidate => candidate?.namespaceDescriptor != null || candidate?.admitted === true)
           if (hasAdmittedOther) fail('PUBLISHER_CATALOG_AMBIGUOUS')
         }
-        console.log('[PublisherApi] registry.provision start')
         const binding = cloneBinding(await registry.provision(publisherId, genesisRootKey), publisherId)
         if (!equalBytes(binding.genesisRootKey, genesisRootKey)) fail('PUBLISHER_CATALOG_MISMATCH')
-        console.log('[PublisherApi] localCatalogState start')
         const state = await localCatalogState(binding, publisherId)
-        console.log('[PublisherApi] localCatalogState ok, admitted:', state.admitted)
-        console.log('[PublisherApi] assertOnlyWritableBinding start')
         await assertOnlyWritableBinding(registry, publisherId, binding)
-        console.log('[PublisherApi] assertOnlyWritableBinding ok')
         if (state.admitted) await completeAdmissionLifecycle(binding)
-        console.log('[PublisherApi] provisionPublisherCatalog returning success!')
         return {
           success: true,
           publisherId: publisherHex(publisherId),
@@ -816,7 +846,6 @@ export function createPublisherApi(options = {}) {
           errorCode: null
         }
       } catch (error) {
-        console.error('[PublisherApi] provisionPublisherCatalog error:', error?.message || error)
         return {
           success: false,
           publisherId: typeof request.publisherId === 'string' ? request.publisherId : '',
@@ -1008,9 +1037,7 @@ export function createPublisherApi(options = {}) {
         if (activeSubmissions.has(submissionKey)) fail('PUBLISHER_RECORD_REPLAY')
         if (activeSubmissions.size >= maxIntents) fail('PUBLISHER_INTENT_CAPACITY')
         activeSubmissions.add(submissionKey)
-        console.log('[PublisherApi] submit step 1: resolveBinding')
         const binding = await resolveBinding(intent.publisherIdBytes)
-        console.log('[PublisherApi] submit step 2: getExistingReceipt')
         if (!equalBytes(binding.catalogBootstrapKey, intent.catalogBootstrapKey)) fail('PUBLISHER_CATALOG_MISMATCH')
         let existingReceipt
         try {
@@ -1020,7 +1047,6 @@ export function createPublisherApi(options = {}) {
           fail('PUBLISHER_CATALOG_RECEIPT_FAILED')
         }
         if (existingReceipt) fail(existingReceipt.accepted === true ? 'PUBLISHER_RECORD_REPLAY' : 'PUBLISHER_RECORD_REJECTED')
-        console.log('[PublisherApi] submit step 3: checking authorization')
 
         if (!isTransition) {
           if (intent.recordType !== PUBLISHER_RECORD_TYPES.NAMESPACE) {
@@ -1029,17 +1055,13 @@ export function createPublisherApi(options = {}) {
             if (!equalRootAuthorization(authorization, intent.rootAuthorization)) fail('PUBLISHER_ROOT_AUTHORIZATION_STALE')
             if (!policySignerKind(authorization.signerPolicy, signer)) fail('PUBLISHER_SIGNER_UNAUTHORIZED')
           }
-          console.log('[PublisherApi] submit step 4: attachSignedEnvelopeSignature')
           const envelope = attachSignedEnvelopeSignature({ ...decoded, recordId: candidateRecordId }, signature)
-          console.log('[PublisherApi] submit step 5: appendAndConfirm start')
           try {
             await appendAndConfirm(binding.catalog, envelope, candidateRecordId, { allowAuthorityBootstrap: true })
           } catch (error) {
-            console.error('[PublisherApi] appendAndConfirm error for', intent.recordType, ':', error?.message || error)
             if (error instanceof PublisherApiError) throw error
             fail('PUBLISHER_CATALOG_APPEND_FAILED')
           }
-          console.log('[PublisherApi] submit step 6: appendAndConfirm finished')
           if (intent.recordType === PUBLISHER_RECORD_TYPES.WRITER_ADMISSION) {
             await completeAdmissionLifecycle(binding)
           }

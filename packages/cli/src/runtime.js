@@ -76,7 +76,7 @@ function createLocalFileSourceGrantRegistry ({ fs = runtimeFs, now = Date.now } 
 }
 
 function createCompanionCallbackSourceReader ({ origin, client, secret, token, jobId = '', etag = null, length = null, sha256 = null, contentType = 'application/octet-stream', logger = null }) {
-  const EMPTY_BODY_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+  const EMPTY_BODY_HASH = b4a.toString(crypto.hash(b4a.alloc(0)), 'hex')
   const path = `/internal/peartube/v2/sources/${encodeURIComponent(token)}`
   let currentEtag = etag
 

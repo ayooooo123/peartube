@@ -168,6 +168,48 @@ test('accepted page ingest rebuilds an isolated catalog view with exact source p
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
+test('namespace genesis bootstraps a mapped catalog with a stale local writer reference', async (t) => {
+  const dir = tempDir('peartube-publisher-stale-local-')
+  const store = new Corestore(dir)
+  await store.ready()
+  const namespace = 'peartube-publisher-00112233445566778899aabbccddeeff'
+  const scopedStore = store.namespace(namespace)
+  const bootstrap = scopedStore.get({ name: 'bootstrap' })
+  const staleLocal = scopedStore.get({ name: 'stale-local' })
+  await Promise.all([bootstrap.ready(), staleLocal.ready()])
+  await bootstrap.setUserData('autobase/local', staleLocal.key)
+
+  const root = crypto.keyPair(bytes(32, 245))
+  const publisherId = derivePublisherId(root.publicKey)
+  const catalog = new PublisherCatalog(store, {
+    key: bootstrap.key,
+    publisherId,
+    namespace,
+  })
+  await catalog.ready()
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bootstrap.key
+  })
+  const genesis = signed({
+    descriptor,
+    signer: root,
+    recordType: PUBLISHER_RECORD_TYPES.NAMESPACE,
+    policyEpoch: 0,
+    sequence: 0,
+    body: descriptor
+  })
+
+  t.is(catalog.writable, false, 'the stale local writer is not admitted before genesis')
+  const receipt = await catalog.appendAndConfirm(genesis, { allowAuthorityBootstrap: true })
+  t.is(receipt.accepted, true, 'verified namespace genesis is accepted optimistically')
+  t.ok(equal(catalog.localWriterKey, staleLocal.key))
+
+  await catalog.close()
+  await store.close()
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
 test('two real device writers converge on canonical conflict winners, signed heads, and restart state', async (t) => {
   const dirA = tempDir('peartube-publisher-a-')
   const dirB = tempDir('peartube-publisher-b-')

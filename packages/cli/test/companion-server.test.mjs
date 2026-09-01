@@ -16,6 +16,7 @@ import { createServer as createHttpServer, request as httpRequest } from 'node:h
 import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { loadRelayConfig, renderExampleConfig, resolveRelayConfig } from '../src/config.js'
 import { resolveCompanionConfig } from '../src/companion/config.js'
@@ -24,6 +25,8 @@ import { createCompanionServer } from '../src/companion/server.js'
 import { createRelayService } from '../src/service.js'
 import { createArchiveHttpSurface } from '../src/archive-console.js'
 
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const packageRoot = join(__dirname, '..')
 const SECRET = 'cd'.repeat(32)
 const CLIENT = 'client-test'
 const NOW = 1_786_406_400_000
@@ -1025,10 +1028,15 @@ test('TCP companion and archive UI use separate listeners and only v2 is machine
 })
 
 test('Bare serves authenticated companion HTTP over a Unix socket', (t) => {
-  const bare = join(process.cwd(), '..', '..', 'node_modules', '.bin', process.platform === 'win32' ? 'bare.cmd' : 'bare')
-  const fixture = join(process.cwd(), 'test', 'fixtures', 'companion-bare-uds.mjs')
+  const bareName = process.platform === 'win32' ? 'bare.cmd' : 'bare'
+  const bareCandidates = [
+    join(packageRoot, 'node_modules', '.bin', bareName),
+    join(packageRoot, '..', '..', 'node_modules', '.bin', bareName)
+  ]
+  const bare = bareCandidates.find((candidate) => existsSync(candidate)) || bareCandidates[0]
+  const fixture = join(__dirname, 'fixtures', 'companion-bare-uds.mjs')
   const result = spawnSync(bare, [fixture], {
-    cwd: process.cwd(),
+    cwd: packageRoot,
     encoding: 'utf8',
     timeout: 10_000
   })

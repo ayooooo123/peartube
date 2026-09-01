@@ -1,5 +1,5 @@
 import test from 'brittle'
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -258,7 +258,12 @@ test('legacy Node and Bare entry graphs remain isolated', (t) => {
     t.absent(graph.toLowerCase().includes(forbidden.toLowerCase()), `Node graph does not resolve ${forbidden}`)
   }
 
-  const bareLauncher = join(packageRoot, '..', '..', 'node_modules', '.bin', 'bare')
+  const bareName = process.platform === 'win32' ? 'bare.cmd' : 'bare'
+  const bareCandidates = [
+    join(packageRoot, 'node_modules', '.bin', bareName),
+    join(packageRoot, '..', '..', 'node_modules', '.bin', bareName)
+  ]
+  const bareLauncher = bareCandidates.find((candidate) => existsSync(candidate)) || bareCandidates[0]
   const bareResult = spawnSync(bareLauncher, [join(packageRoot, 'bare-bin.js'), '--help'], {
     cwd: packageRoot,
     encoding: 'utf8',

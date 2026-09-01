@@ -71,6 +71,7 @@
   },
   "devDependencies": {
     "bare-build": "^0.5.3",
+    "bare-runtime": "^1.28.4",
     "brittle": "^3.19.1",
     "node-pty": "^1.0.0"
   }

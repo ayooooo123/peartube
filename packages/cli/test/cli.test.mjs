@@ -233,3 +233,11 @@ test('Dockerfile packages the yt-dlp POT provider plugin for noninteractive YouT
   t.ok(dockerfile.includes('COPY --from=runtime-libs /usr/local/bin/bgutil-pot /usr/local/bin/bgutil-pot'), 'final image includes the bgutil POT CLI binary')
   t.ok(dockerfile.includes('COPY --from=runtime-libs /usr/local/share/yt-dlp-plugins /usr/local/share/yt-dlp-plugins'), 'final image includes yt-dlp plugins')
 })
+
+test('runtime module uses Bare-compatible crypto and does not import node:crypto', async (t) => {
+  const runtimePath = join(__dirname, '..', 'src', 'runtime.js')
+  const content = readFileSync(runtimePath, 'utf8')
+
+  t.absent(content.includes('node:crypto'), 'runtime.js does not import node:crypto')
+  t.ok(content.includes("from 'sodium-universal'"), 'runtime.js imports sodium-universal for Bare-compatible MAC signing')
+})

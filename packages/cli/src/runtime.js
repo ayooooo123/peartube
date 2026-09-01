@@ -1,6 +1,6 @@
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
-import nodeCrypto from 'node:crypto'
+import sodium from 'sodium-universal'
 import * as runtimeFs from '#fs'
 import { createFileSourceReader, createSourceReader } from '@peartube/backend/assets'
 import fetch from '#fetch'
@@ -85,15 +85,15 @@ function createCompanionCallbackSourceReader ({ origin, client, secret, token, j
     const timestamp = String(Date.now())
     const nonce = b4a.toString(crypto.randomBytes(16), 'hex')
     const target = query ? `${path}?${query}` : path
-    const canonical = `${method}\n${target}\n${timestamp}\n${nonce}\n${EMPTY_BODY_HASH}`
-    const keyBytes = typeof secret === 'string' ? Buffer.from(secret, 'hex') : secret
-    const hmac = nodeCrypto.createHmac('sha512', keyBytes).update(canonical).digest()
-    const mac = hmac.subarray(0, 32).toString('hex')
+    const canonical = b4a.from(`${method}\n${target}\n${timestamp}\n${nonce}\n${EMPTY_BODY_HASH}`)
+    const keyBytes = typeof secret === 'string' ? b4a.from(secret, 'hex') : secret
+    const mac = b4a.alloc(sodium.crypto_auth_BYTES)
+    sodium.crypto_auth(mac, canonical, keyBytes)
     const headers = {
       'x-peartube-client': client,
       'x-peartube-timestamp': timestamp,
       'x-peartube-nonce': nonce,
-      'x-peartube-mac': mac,
+      'x-peartube-mac': b4a.toString(mac, 'hex'),
       'x-peartube-job-id': jobId,
       accept: '*/*'
     }

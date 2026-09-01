@@ -43,8 +43,48 @@ function sourceFileNameOf(value) {
 function createProviderMachineService(runtime, options = {}) {
   const provider = runtime?.provider
   if (!provider) return null
+  const warming = new Set()
+  async function warmPublishedCandidate(candidate) {
+    const key = `${candidate.publicationId}:${candidate.renditionId}`
+    if (warming.has(key) || typeof runtime.api?.openMediaRendition !== 'function') return
+    warming.add(key)
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10_000)
+    timeout.unref?.()
+    let opened = null
+    try {
+      opened = await runtime.api.openMediaRendition({
+        publicationId: candidate.publicationId,
+        renditionId: candidate.renditionId,
+        signal: controller.signal
+      })
+      if (!opened?.success || typeof opened.read !== 'function') return
+      const headLength = Math.min(opened.byteLength, 16 * 1024 * 1024)
+      const tailLength = Math.min(opened.byteLength - headLength, 4 * 1024 * 1024)
+      const ranges = [{ start: 0, length: headLength }]
+      if (tailLength > 0) ranges.push({ start: opened.byteLength - tailLength, length: tailLength })
+      await Promise.all(ranges.map(async range => {
+        for await (const _chunk of opened.read({ ...range, signal: controller.signal })) {
+          if (controller.signal.aborted) break
+        }
+      }))
+    } catch {
+      // Warming is opportunistic. Playback still owns the authoritative read.
+    } finally {
+      clearTimeout(timeout)
+      await opened?.close?.().catch(() => {})
+      warming.delete(key)
+    }
+  }
   return Object.freeze({
     ...provider,
+    async search(input = {}) {
+      const result = await provider.search(input)
+      const published = (result?.candidates || []).find(candidate =>
+        candidate?.kind === 'published' && candidate.publicationId && candidate.renditionId)
+      if (published) warmPublishedCandidate(published)
+      return result
+    },
     issueLocalResolution(input) {
       if (typeof runtime?.issueLocalProviderResolution === 'function') {
         return runtime.issueLocalProviderResolution(input)

@@ -112,7 +112,7 @@ export async function createRelayBlockOffload ({
   const objectStore = createS3ArchiveProvider({ fetch: fetchImpl, sign })
   const bucket = settings.bucket
   const log = (message) => {
-    if (String(message).includes('MISSING')) logger?.archive?.warn?.(message)
+    if (/MISSING|unreachable/.test(String(message))) logger?.archive?.warn?.(message)
     else logger?.archive?.debug?.(message)
   }
 

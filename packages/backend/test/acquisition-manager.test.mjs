@@ -271,6 +271,38 @@ test('retry exhaustion clears recoverable so a new idempotency key can be used',
   await fixtureValue.manager.close()
 })
 
+test('manager.retry restarts a recoverable failed acquisition and rejects non-failed/exhausted jobs', async t => {
+  let failFirst = true
+  const failOnceProvider = provider({ block: async () => {
+    if (failFirst) {
+      failFirst = false
+      const error = new Error('temporary network failure')
+      error.code = 'SOURCE_TEMPORARY'
+      throw error
+    }
+  } })
+  const events = []
+  const fixtureValue = fixture({ acquisitionProvider: failOnceProvider })
+  fixtureValue.manager.subscribe(event => events.push(event))
+  await fixtureValue.manager.start()
+  const input = { idempotencyKey: 'retry-direct-1', request: REQUEST, principal: PRINCIPAL }
+  let job = await fixtureValue.manager.request(input)
+  job = await eventually(() => fixtureValue.manager.get({ acquisitionId: job.acquisitionId, principal: PRINCIPAL }), value => value.state === 'failed')
+  t.is(job.recoverable, true)
+
+  const retried = await fixtureValue.manager.retry({ acquisitionId: job.acquisitionId, principal: PRINCIPAL })
+  t.is(retried.state, 'queued')
+  t.ok(events.some(event => event.type === 'acquisition.restarted'), 'acquisition.restarted event emitted')
+  const completed = await eventually(() => fixtureValue.manager.get({ acquisitionId: job.acquisitionId, principal: PRINCIPAL }), value => value.state === 'completed')
+  t.is(completed.state, 'completed')
+
+  await t.exception(
+    () => fixtureValue.manager.retry({ acquisitionId: job.acquisitionId, principal: PRINCIPAL }),
+    /only failed acquisitions can be retried/
+  )
+  await fixtureValue.manager.close()
+})
+
 test('explicit cancellation is terminal while shutdown leaves interrupted work restartable', async t => {
   const blockedProvider = provider({ block: signal => new Promise((resolve, reject) => { const abort = () => reject(Object.assign(new Error('aborted'), { code: 'ASSET_WRITE_CANCELLED' })); signal.addEventListener('abort', abort, { once: true }) }) })
   const fixtureValue = fixture({ acquisitionProvider: blockedProvider }); await fixtureValue.manager.start()

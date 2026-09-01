@@ -144,6 +144,7 @@ function createProviderNamespace(provider = {}) {
     getAcquisition: provider.getAcquisition,
     listAcquisitions: provider.listAcquisitions,
     cancelAcquisition: provider.cancelAcquisition,
+    retryAcquisition: provider.retryAcquisition,
     getPublication: provider.getProviderPublication,
     openStream: provider.openProviderStream,
     getStatus: provider.getProviderStatus,

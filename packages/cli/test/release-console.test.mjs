@@ -494,6 +494,44 @@ test('clear forgets a finished record and says when there was nothing to forget'
   t.alike(forgotten, ['acq-dead', 'acq-ghost'])
 })
 
+test('retry restarts a failed acquisition and refuses non-failed or unretryable jobs', async function (t) {
+  const retried = []
+  const service = consoleService([
+    { acquisitionId: 'acq-failed', state: 'failed', title: 'Dead', bytesAcquired: 0, expectedBytes: 2, updatedAt: 2 },
+    { acquisitionId: 'acq-exhausted', state: 'failed', title: 'Exhausted', bytesAcquired: 0, expectedBytes: 2, updatedAt: 3 }
+  ], {
+    async retryAcquisition(acquisitionId) {
+      retried.push(acquisitionId)
+      if (acquisitionId === 'acq-failed') {
+        return { acquisitionId, state: 'queued' }
+      }
+      if (acquisitionId === 'acq-exhausted') {
+        return { acquisitionId, state: 'failed', errorCode: 'ACQUISITION_RETRY_LIMIT_EXCEEDED' }
+      }
+      return null
+    }
+  })
+  await withConsole(service, async (base) => {
+    const res = await fetch(`${base}/releases/retry`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'ids=acq-failed,acq-exhausted,acq-ghost'
+    })
+    t.is(res.status, 200)
+    const body = await res.json()
+    t.is(body.verb, 'retry')
+    t.alike(body.done, ['acq-failed'])
+    t.alike(body.refused, [
+      { acquisitionId: 'acq-exhausted', done: false, state: 'failed', reason: 'ACQUISITION_RETRY_LIMIT_EXCEEDED (retry limit reached)' },
+      { acquisitionId: 'acq-ghost', done: false, reason: 'the relay reported no job to retry' }
+    ])
+    const html = await (await fetch(`${base}/`)).text()
+    t.ok(html.includes('id="bulk-retry"'))
+    t.ok(html.includes('Retry failed'))
+  })
+  t.alike(retried, ['acq-failed', 'acq-exhausted', 'acq-ghost'])
+})
+
 test('a verb never reports success the relay did not give it', async function (t) {
   // A relay whose publisher shell is not up answers null, and a relay too old
   // to clear records has no method at all. Neither may read as done, and

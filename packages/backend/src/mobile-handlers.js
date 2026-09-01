@@ -413,6 +413,7 @@ export function attachMobileHandlers(B, deps) {
   B.getAcquisition = r => api.getAcquisition(r)
   B.listAcquisitions = r => api.listAcquisitions(r)
   B.cancelAcquisition = r => api.cancelAcquisition(r)
+  B.retryAcquisition = r => api.retryAcquisition(r)
   B.getProviderPublication = r => api.getProviderPublication(r)
   B.openProviderStream = r => api.openProviderStream(r)
   B.getProviderStatus = r => api.getProviderStatus(r)

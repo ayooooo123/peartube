@@ -2164,6 +2164,19 @@
     },
     {
       "id": 169,
+      "name": "@peartube/retry-acquisition",
+      "request": {
+        "name": "@peartube/retry-acquisition-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/retry-acquisition-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 170,
       "name": "@peartube/event-acquisition-lifecycle",
       "request": {
         "name": "@peartube/acquisition-lifecycle-event-v1",

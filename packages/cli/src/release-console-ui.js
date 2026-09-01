@@ -396,6 +396,7 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
   </main>
   <div class="bulk" id="bulk">
     <span id="bulk-count">0 selected</span>
+    <button type="button" class="act" id="bulk-retry">Retry failed</button>
     <button type="button" class="act danger" id="bulk-cancel">Cancel transfers</button>
     <button type="button" class="act danger" id="bulk-forget">Clear finished</button>
     <button type="button" class="act danger" id="bulk-delete">Delete selected</button>
@@ -468,6 +469,9 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
       if (row.acquisitionId && ['queued', 'acquiring', 'verifying', 'publishing'].indexOf(row.state) >= 0) {
         verbs.push('<button type="button" class="act danger" data-cancel="' + esc(row.acquisitionId) + '">Cancel transfer</button>')
       }
+      if (row.acquisitionId && row.state === 'failed' && row.recoverable !== false) {
+        verbs.push('<button type="button" class="act" data-retry="' + esc(row.acquisitionId) + '">Retry transfer</button>')
+      }
       if (row.acquisitionId && ['completed', 'failed', 'cancelled'].indexOf(row.state) >= 0) {
         verbs.push('<button type="button" class="act danger" data-forget="' + esc(row.acquisitionId) + '">Clear record</button>')
       }
@@ -506,12 +510,12 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
       if (!ids.length) {
         result.textContent = verb === 'clear'
           ? 'Nothing to clear: select a finished release first.'
-          : (verb === 'delete' ? 'Nothing to delete: select a release first.' : 'Nothing to cancel: select a transfer that is still running.')
+          : (verb === 'delete' ? 'Nothing to delete: select a release first.' : (verb === 'retry' ? 'Nothing to retry: select a failed release first.' : 'Nothing to cancel: select a transfer that is still running.'))
         return
       }
       if (!window.confirm(prompt)) return
       try {
-        var endpoint = '/releases/' + (verb === 'clear' ? 'clear' : (verb === 'delete' ? 'delete' : 'cancel'))
+        var endpoint = '/releases/' + (verb === 'clear' ? 'clear' : (verb === 'delete' ? 'delete' : (verb === 'retry' ? 'retry' : 'cancel')))
         var res = await fetch(endpoint, {
           method: 'POST',
           headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -520,7 +524,7 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
         var body = await res.json()
         var done = (body.done || []).length
         var refused = body.refused || []
-        result.textContent = done + ' ' + (verb === 'clear' ? 'cleared' : (verb === 'delete' ? 'deleted' : 'cancelled')) +
+        result.textContent = done + ' ' + (verb === 'clear' ? 'cleared' : (verb === 'delete' ? 'deleted' : (verb === 'retry' ? 'retried' : 'cancelled'))) +
           (refused.length
             ? '; ' + refused.length + ' refused: ' + refused.map(function (row) { return (row.id || row.acquisitionId || '').slice(0, 10) + ' ' + (row.reason || 'no reason given') }).join(', ')
             : '')
@@ -562,6 +566,12 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
         runVerb('cancel', [one.getAttribute('data-cancel')], 'Cancel ' + (tr ? tr.getAttribute('data-name') : 'this transfer') + '? Bytes already accepted stay on this relay.')
         return
       }
+      var retryOne = ev.target.closest && ev.target.closest('[data-retry]')
+      if (retryOne) {
+        var retryTr = rows.querySelector('tr[data-acquisition="' + retryOne.getAttribute('data-retry') + '"]')
+        runVerb('retry', [retryOne.getAttribute('data-retry')], 'Retry ' + (retryTr ? retryTr.getAttribute('data-name') : 'this transfer') + '?')
+        return
+      }
       var forgetOne = ev.target.closest && ev.target.closest('[data-forget]')
       if (forgetOne) {
         var forgetRow = rows.querySelector('tr[data-acquisition="' + forgetOne.getAttribute('data-forget') + '"]')
@@ -581,6 +591,15 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
       }
       // Only running work can be cancelled, and only finished work can be
       // cleared, so each verb sends exactly the rows it can act on.
+      if (ev.target.id === 'bulk-retry') {
+        var failed = selected().filter(function (tr) {
+          var row = index[tr.getAttribute('data-id')]
+          return tr.getAttribute('data-acquisition') && row && row.state === 'failed' && row.recoverable !== false
+        })
+        runVerb('retry', failed.map(function (tr) { return tr.getAttribute('data-acquisition') }),
+          'Retry ' + failed.length + ' failed transfer(s)?')
+        return
+      }
       if (ev.target.id === 'bulk-cancel') {
         var running = selected().filter(function (tr) {
           var row = index[tr.getAttribute('data-id')]

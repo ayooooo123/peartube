@@ -1931,6 +1931,17 @@ export const APP_RPC_METADATA = Object.freeze({
     },
     {
       "id": 169,
+      "command": "retry-acquisition",
+      "method": "retryAcquisition",
+      "handler": "RetryAcquisition",
+      "request": "@peartube/retry-acquisition-request",
+      "response": "@peartube/retry-acquisition-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 170,
       "command": "event-acquisition-lifecycle",
       "method": "eventAcquisitionLifecycle",
       "handler": "EventAcquisitionLifecycle",
@@ -3383,6 +3394,17 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
+        "id": 169,
+        "command": "retry-acquisition",
+        "method": "retryAcquisition",
+        "handler": "RetryAcquisition",
+        "request": "@peartube/retry-acquisition-request",
+        "response": "@peartube/retry-acquisition-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
         "id": 162,
         "command": "get-provider-publication",
         "method": "getProviderPublication",
@@ -3834,6 +3856,7 @@ export const APP_RPC_METADATA = Object.freeze({
     "resolve-provider-ref",
     "restore-portable-state",
     "resume-network",
+    "retry-acquisition",
     "retry-migration",
     "revoke-personal-device",
     "search-index-candidates",
@@ -4049,7 +4072,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 169,
+      "id": 170,
       "command": "event-acquisition-lifecycle",
       "method": "eventAcquisitionLifecycle",
       "handler": "EventAcquisitionLifecycle",

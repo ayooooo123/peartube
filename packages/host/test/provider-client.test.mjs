@@ -35,6 +35,10 @@ class ProviderHRPC {
     return Promise.resolve({ success: true, acquisition: { acquisitionId: request.acquisitionId, state: 'cancelled' } })
   }
 
+  retryAcquisition(request) {
+    return Promise.resolve({ success: true, acquisition: { acquisitionId: request.acquisitionId, state: 'queued' } })
+  }
+
   getAcquisitionPolicy() {
     return Promise.resolve({ success: true, policy: { policyVersion: 1 } })
   }
@@ -57,6 +61,7 @@ test('host exposes provider methods and acquisition lifecycle events', async (t)
   t.is((await client.provider.requestAcquisition({ idempotencyKey: 'key-1', request: {} })).acquisition.state, 'queued')
   t.alike((await client.provider.listAcquisitions()).acquisitions, [])
   t.is((await client.provider.cancelAcquisition({ acquisitionId: 'a-1' })).acquisition.state, 'cancelled')
+  t.is((await client.provider.retryAcquisition({ acquisitionId: 'a-1' })).acquisition.state, 'queued')
 
   const events = []
   client.events.on(PROTOCOL_EVENTS.ACQUISITION_LIFECYCLE, (event) => events.push(event))

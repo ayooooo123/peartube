@@ -411,6 +411,33 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       if (running) { running.cancelled = true; running.controller.abort(); await running.promise.catch(() => {}) } else { await terminal(job, 'cancelled', 'CANCELLED', false); await discard(job, acquisitionError('CANCELLED')); ledger.release(acquisitionId); await sourceGrants.revoke({ acquisitionId, principal, reason: acquisitionError('CANCELLED') }).catch(() => {}) }
       return publicJob(await store.get(acquisitionId))
     },
+    async retry ({ acquisitionId, principal } = {}) {
+      assertOpen()
+      const job = await owned(acquisitionId, principal)
+      if (!job) fail('ACQUISITION_NOT_FOUND', 'acquisition not found', 404)
+      if (job.state !== 'failed') fail('ACQUISITION_NOT_FAILED', 'only failed acquisitions can be retried', 409)
+      if (!job.recoverable) fail('ACQUISITION_NOT_RECOVERABLE', 'acquisition failure is not recoverable', 409)
+      const policyValue = await currentPolicy()
+      if (job.attempts >= policyValue.maxAttempts) {
+        const outcome = await store.exhaust(job.acquisitionId, { expectedVersion: job.version })
+        await notify(outcome.event)
+        fail('ACQUISITION_RETRY_LIMIT_EXCEEDED', 'acquisition retry limit reached', 409)
+      }
+      const outcome = await store.retry(job.acquisitionId, {
+        expectedVersion: job.version,
+        resetVerifiedPrefix: RESET_PREFIX_ERRORS.has(job.errorCode)
+      })
+      await notify(outcome.event)
+      ledger.reserve({
+        acquisitionId: job.acquisitionId,
+        principalId: job.principalId,
+        expectedBytes: job.expectedBytes,
+        policy: policyValue,
+        isRemote: job.isRemote === true
+      })
+      await dispatchQueued()
+      return publicJob(outcome.job)
+    },
     // Clearing a finished attempt is the operator's call, so it is owner-checked
     // like every other mutation and refuses anything still running.
     async forget ({ acquisitionId, principal } = {}) {

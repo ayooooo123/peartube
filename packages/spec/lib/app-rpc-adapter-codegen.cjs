@@ -149,6 +149,7 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'get-acquisition',
     'list-acquisitions',
     'cancel-acquisition',
+    'retry-acquisition',
     'get-provider-publication',
     'open-provider-stream',
     'get-provider-status',

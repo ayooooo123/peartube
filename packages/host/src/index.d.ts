@@ -939,6 +939,9 @@ export type ProviderProtocolNamespace = ProtocolNamespace & {
   cancelAcquisition(request: {
     acquisitionId: string
   }): Promise<ProviderResult<{ acquisition: Acquisition }>>
+  retryAcquisition(request: {
+    acquisitionId: string
+  }): Promise<ProviderResult<{ acquisition: Acquisition }>>
   getPublication(request: {
     publicationId: string
   }): Promise<ProviderResult<{ publication: ProviderPublication }>>

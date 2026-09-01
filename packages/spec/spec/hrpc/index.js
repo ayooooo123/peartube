@@ -345,8 +345,10 @@ const methods = new Map([
   [167, '@peartube/get-acquisition-policy'],
   ['@peartube/set-acquisition-policy', 168],
   [168, '@peartube/set-acquisition-policy'],
-  ['@peartube/event-acquisition-lifecycle', 169],
-  [169, '@peartube/event-acquisition-lifecycle']
+  ['@peartube/retry-acquisition', 169],
+  [169, '@peartube/retry-acquisition'],
+  ['@peartube/event-acquisition-lifecycle', 170],
+  [170, '@peartube/event-acquisition-lifecycle']
 ])
 
 class HRPC {
@@ -523,6 +525,7 @@ class HRPC {
       ['@peartube/set-provider-policy', getEncoding('@peartube/set-provider-policy-request')],
       ['@peartube/get-acquisition-policy', getEncoding('@peartube/get-acquisition-policy-request')],
       ['@peartube/set-acquisition-policy', getEncoding('@peartube/set-acquisition-policy-request')],
+      ['@peartube/retry-acquisition', getEncoding('@peartube/retry-acquisition-request')],
       ['@peartube/event-acquisition-lifecycle', getEncoding('@peartube/acquisition-lifecycle-event-v1')]
     ])
     this._responseEncodings = new Map([
@@ -682,7 +685,8 @@ class HRPC {
       ['@peartube/get-provider-policy', getEncoding('@peartube/get-provider-policy-response')],
       ['@peartube/set-provider-policy', getEncoding('@peartube/set-provider-policy-response')],
       ['@peartube/get-acquisition-policy', getEncoding('@peartube/get-acquisition-policy-response')],
-      ['@peartube/set-acquisition-policy', getEncoding('@peartube/set-acquisition-policy-response')]
+      ['@peartube/set-acquisition-policy', getEncoding('@peartube/set-acquisition-policy-response')],
+      ['@peartube/retry-acquisition', getEncoding('@peartube/retry-acquisition-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -690,17 +694,17 @@ class HRPC {
       const responseEncoding = this._responseEncodings.get(command)
       const requestEncoding = this._requestEncodings.get(command)
       if (this._requestIsSend(command)) {
-        const request = req.data ? c.decode(requestEncoding, req.data) : null
+        const request = req.data && req.data.byteLength > 0 ? c.decode(requestEncoding, req.data) : null
         await this._handlers[command](request)
         return
       }
       if (!this._requestIsStream(command) && !this._responseIsStream(command)) {
-        const request = req.data ? c.decode(requestEncoding, req.data) : null
+        const request = req.data && req.data.byteLength > 0 ? c.decode(requestEncoding, req.data) : null
         const response = await this._handlers[command](request)
         req.reply(c.encode(responseEncoding, response))
       }
       if (!this._requestIsStream(command) && this._responseIsStream(command)) {
-        const request = req.data ? c.decode(requestEncoding, req.data) : null
+        const request = req.data && req.data.byteLength > 0 ? c.decode(requestEncoding, req.data) : null
         const responseStream = new RPCStream(
           null,
           null,
@@ -1457,6 +1461,10 @@ class HRPC {
     return this._call('@peartube/set-acquisition-policy', args)
   }
 
+  async retryAcquisition(args) {
+    return this._call('@peartube/retry-acquisition', args)
+  }
+
   eventAcquisitionLifecycle(args) {
     return this._callSync('@peartube/event-acquisition-lifecycle', args)
   }
@@ -2135,6 +2143,10 @@ class HRPC {
 
   onSetAcquisitionPolicy(responseFn) {
     this._handlers['@peartube/set-acquisition-policy'] = responseFn
+  }
+
+  onRetryAcquisition(responseFn) {
+    this._handlers['@peartube/retry-acquisition'] = responseFn
   }
 
   onEventAcquisitionLifecycle(responseFn) {

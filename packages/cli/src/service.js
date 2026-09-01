@@ -989,6 +989,14 @@ async function buildRelayService({
         principal: providerPrincipal(local.publisherId)
       })
     },
+    async retryAcquisition(acquisitionId) {
+      if (!publisherShell) return null
+      const local = await publisherShell.ensureLocalPublisher()
+      return runtime.provider.retryAcquisition({
+        acquisitionId,
+        principal: providerPrincipal(local.publisherId)
+      })
+    },
     async forgetAcquisition(acquisitionId) {
       if (!publisherShell) return null
       const local = await publisherShell.ensureLocalPublisher()

@@ -893,6 +893,9 @@ export function createProviderRpc(ensureClient: () => ProtocolClientLike) {
     async cancelAcquisition(request: { acquisitionId: string }) {
       return (await provider()).cancelAcquisition(request)
     },
+    async retryAcquisition(request: { acquisitionId: string }) {
+      return (await provider()).retryAcquisition(request)
+    },
     async getPublication(request: { publicationId: string }) {
       return (await provider()).getPublication(request)
     },

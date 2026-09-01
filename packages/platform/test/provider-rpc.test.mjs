@@ -38,7 +38,7 @@ test('mobile and desktop export the same shared provider facade', async () => {
   const calls = []
   const provider = Object.fromEntries([
     'search', 'resolveProviderRef', 'requestAcquisition', 'attachSourceGrant',
-    'getAcquisition', 'listAcquisitions', 'cancelAcquisition', 'getPublication',
+    'getAcquisition', 'listAcquisitions', 'cancelAcquisition', 'retryAcquisition', 'getPublication',
     'openStream', 'getStatus', 'getPolicy', 'setPolicy', 'getAcquisitionPolicy',
     'setAcquisitionPolicy',
   ].map((name) => [name, async (request) => { calls.push([name, request]); return { success: true } }]))
@@ -46,7 +46,8 @@ test('mobile and desktop export the same shared provider facade', async () => {
 
   await facade.resolveProviderRef({ resolutionRef: 'ref-1' })
   await facade.cancelAcquisition({ acquisitionId: 'a-1' })
+  await facade.retryAcquisition({ acquisitionId: 'a-1' })
   await facade.setAcquisitionPolicy({ policy: { policyVersion: 1 }, expectedRevision: 0, consent: { version: 1, granted: true } })
 
-  assert.deepEqual(calls.map(([name]) => name), ['resolveProviderRef', 'cancelAcquisition', 'setAcquisitionPolicy'])
+  assert.deepEqual(calls.map(([name]) => name), ['resolveProviderRef', 'cancelAcquisition', 'retryAcquisition', 'setAcquisitionPolicy'])
 })

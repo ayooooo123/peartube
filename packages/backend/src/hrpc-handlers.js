@@ -110,6 +110,7 @@ export const SHARED_HANDLER_NAMES = [
   'GetAcquisition',
   'ListAcquisitions',
   'CancelAcquisition',
+  'RetryAcquisition',
   'GetProviderPublication',
   'OpenProviderStream',
   'GetProviderStatus',

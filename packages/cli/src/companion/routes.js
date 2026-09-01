@@ -32,6 +32,7 @@ export const COMPANION_ROUTE_SCOPES = Object.freeze({
   acquisitionRequest: 'acquisition.request',
   acquisitionRead: 'acquisition.read',
   acquisitionCancel: 'acquisition.cancel',
+  acquisitionRetry: 'acquisition.retry',
   acquisitionGrant: 'acquisition.grant',
   acquisitionPolicyRead: 'acquisition-policy.read',
   acquisitionPolicyWrite: 'acquisition-policy.write'
@@ -101,7 +102,7 @@ function translateBackendFailure (error) {
     return contractError(502, raw, 'Immutable publication stream is invalid')
   }
   if (raw === 'IDEMPOTENCY_CONFLICT') return contractError(409, raw, 'Idempotency key is already bound to another request')
-  if (raw === 'ACQUISITION_TERMINAL' || raw === 'ACQUISITION_VERSION_CONFLICT') return contractError(409, raw, 'Acquisition state conflict')
+  if (raw === 'ACQUISITION_TERMINAL' || raw === 'ACQUISITION_VERSION_CONFLICT' || raw === 'ACQUISITION_NOT_FAILED' || raw === 'ACQUISITION_NOT_RECOVERABLE' || raw === 'ACQUISITION_RETRY_LIMIT_EXCEEDED') return contractError(409, raw, 'Acquisition state conflict')
   if (raw === 'ACQUISITION_NOT_FOUND') return contractError(404, raw, 'Acquisition not found')
   if (raw === 'PRINCIPAL_MISMATCH' || raw === 'PUBLISHER_MISMATCH' || raw === 'FORBIDDEN') {
     return contractError(403, 'FORBIDDEN', 'Principal is not authorized for this acquisition')
@@ -196,7 +197,8 @@ function requirePrincipal (input, scope) {
   const scopes = value.scopes instanceof Set
     ? value.scopes
     : new Set(Array.isArray(value.scopes) ? value.scopes : [])
-  if (!scopes.has('*') && !scopes.has(scope)) {
+  const hasScope = Array.isArray(scope) ? scope.some(s => scopes.has(s)) : scopes.has(scope)
+  if (!scopes.has('*') && !hasScope) {
     throw contractError(403, 'SCOPE_REQUIRED', 'Principal is not authorized for this route')
   }
   const publisherId = value.publisherId == null ? null : decodeId(value.publisherId, 'publisherId')
@@ -491,6 +493,19 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
     return routeResponse(200, { acquisition: publicAcquisition(result) })
   }
 
+  async function retryAcquisition (input, acquisitionPart) {
+    const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.acquisitionRetry)
+    const acquisitionId = decodedSegment(acquisitionPart, 'acquisitionId')
+    if (typeof service.retryAcquisition !== 'function') unavailable('Acquisitions')
+    const result = await callBackend(
+      service.retryAcquisition.bind(service),
+      [{ acquisitionId, principal, signal: input.signal }],
+      input.signal
+    )
+    if (result == null) throw contractError(404, 'ACQUISITION_NOT_FOUND', 'Acquisition not found')
+    return routeResponse(200, { acquisition: publicAcquisition(result) })
+  }
+
   async function attachSourceGrant (input, acquisitionPart) {
     const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.acquisitionGrant)
     const transport = input.inProcess === true ? 'in-process' : input.serverState?.transport || config.transport
@@ -623,6 +638,12 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
         if (method !== 'POST') allow(['POST'])
         rejectQuery(url.searchParams)
         return await attachSourceGrant(input, match[1])
+      }
+      match = path.match(/^\/api\/v2\/acquisitions\/([^/]+)\/retry$/)
+      if (match) {
+        if (method !== 'POST') allow(['POST'])
+        rejectQuery(url.searchParams)
+        return await retryAcquisition(input, match[1])
       }
       match = path.match(/^\/api\/v2\/acquisitions\/([^/]+)$/)
       if (match) {

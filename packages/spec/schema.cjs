@@ -4092,6 +4092,22 @@ ns.register({
 })
 
 ns.register({
+  name: 'retry-acquisition-request',
+  fields: [
+    { name: 'acquisitionId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'retry-acquisition-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'acquisition', type: '@peartube/acquisition-v1', required: false },
+    { name: 'error', type: '@peartube/provider-error', required: false }
+  ]
+})
+
+ns.register({
   name: 'provider-publication-v1',
   fields: [
     { name: 'schemaVersion', type: 'uint', required: true },
@@ -5275,9 +5291,16 @@ rpcNs.register({
 })
 
 rpcNs.register({
+  name: 'retry-acquisition',
+  request: { name: '@peartube/retry-acquisition-request', stream: false },
+  response: { name: '@peartube/retry-acquisition-response', stream: false }
+})
+
+rpcNs.register({
   name: 'event-acquisition-lifecycle',
   request: { name: '@peartube/acquisition-lifecycle-event-v1', stream: false, send: true }
 })
+
 
 // Save HRPC interface to disk
 HRPCBuilder.toDisk(builder)

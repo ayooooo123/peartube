@@ -12545,6 +12545,46 @@
       ]
     },
     {
+      "name": "retry-acquisition-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "acquisitionId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "retry-acquisition-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "acquisition",
+          "required": false,
+          "type": "@peartube/acquisition-v1",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "@peartube/provider-error",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "provider-publication-v1",
       "namespace": "peartube",
       "compact": false,

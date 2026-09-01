@@ -106,7 +106,13 @@ test('acquisition routes request, replay, get, list and cancel through ProviderS
       const value = acquisition({ ...(records.get(acquisitionId) || {}), state: 'cancelled', updatedAt: 2 })
       records.set(acquisitionId, value)
       return value
-    }
+    },
+    async retryAcquisition ({ acquisitionId, principal }) {
+      calls.push(['retry', principal.id, acquisitionId])
+      const value = acquisition({ ...(records.get(acquisitionId) || {}), state: 'queued', attempts: 1, updatedAt: 3 })
+      records.set(acquisitionId, value)
+      return value
+    },
   }
   const router = createCompanionRouter({ service })
   const created = await router.dispatch(request('POST', '/api/v2/acquisitions', acquisitionBody()))
@@ -114,14 +120,17 @@ test('acquisition routes request, replay, get, list and cancel through ProviderS
   const got = await router.dispatch(request('GET', '/api/v2/acquisitions/acq-1'))
   const listed = await router.dispatch(request('GET', '/api/v2/acquisitions?limit=2&states=queued'))
   const cancelled = await router.dispatch(request('DELETE', '/api/v2/acquisitions/acq-1'))
+  const retried = await router.dispatch(request('POST', '/api/v2/acquisitions/acq-1/retry'))
 
   t.is(created.statusCode, 202)
   t.alike(replay.body.acquisition, created.body.acquisition, 'idempotent replay returns the same public acquisition')
   t.alike(got.body.acquisition, created.body.acquisition)
+  t.is(retried.statusCode, 200)
+  t.is(retried.body.acquisition.state, 'queued')
   t.is(listed.body.items.length, 1)
   t.is(listed.body.nextCursor, null)
   t.is(cancelled.body.acquisition.state, 'cancelled')
-  t.alike(calls.map(call => call[0]), ['request', 'request', 'get', 'list', 'cancel'])
+  t.alike(calls.map(call => call[0]), ['request', 'request', 'get', 'list', 'cancel', 'retry'])
   t.is(JSON.stringify(created.body).includes('sourceDescriptor'), false)
   t.is(JSON.stringify(created.body).includes('sourceCapability'), false)
 })
@@ -169,7 +178,8 @@ test('route scopes separate acquisition request, read, cancel and private grant 
     requestAcquisition: async () => acquisition(),
     getAcquisition: async () => acquisition(),
     cancelAcquisition: async () => acquisition({ state: 'cancelled', updatedAt: 2 }),
-    attachSourceGrant: async () => acquisition()
+    attachSourceGrant: async () => acquisition(),
+    retryAcquisition: async () => acquisition({ state: 'queued', updatedAt: 3 }),
   }
   const router = createCompanionRouter({ service })
   const onlyRead = principal(new Set([COMPANION_ROUTE_SCOPES.acquisitionRead]))
@@ -178,6 +188,11 @@ test('route scopes separate acquisition request, read, cancel and private grant 
   t.is((await router.dispatch(request('POST', '/api/v2/acquisitions', acquisitionBody(), { principal: onlyRead }))).statusCode, 403)
   t.is((await router.dispatch(request('DELETE', '/api/v2/acquisitions/acq-1', null, { principal: onlyRead }))).statusCode, 403)
   t.is((await router.dispatch(request('POST', '/api/v2/acquisitions/acq-1/source-grants', { grant: { token: 'private' } }, { principal: onlyRead }))).statusCode, 403)
+  t.is((await router.dispatch(request('POST', '/api/v2/acquisitions/acq-1/retry', null, { principal: onlyRead }))).statusCode, 403)
+  const onlyRequest = principal(new Set([COMPANION_ROUTE_SCOPES.acquisitionRequest]))
+  t.is((await router.dispatch(request('POST', '/api/v2/acquisitions/acq-1/retry', null, { principal: onlyRequest }))).statusCode, 403)
+  const onlyRetry = principal(new Set([COMPANION_ROUTE_SCOPES.acquisitionRetry]))
+  t.is((await router.dispatch(request('POST', '/api/v2/acquisitions/acq-1/retry', null, { principal: onlyRetry }))).statusCode, 200)
 })
 
 test('private source grants are accepted only on Unix or in-process and never echoed', async (t) => {

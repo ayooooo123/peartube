@@ -1013,6 +1013,14 @@ function resolutionLabels(record) {
     })
     return value === null ? null : publicAcquisition(value)
   }
+  async function retryAcquisition({ acquisitionId, principal } = {}) {
+    const value = await acquisitionManager.retry({
+      acquisitionId: text(acquisitionId, 'acquisitionId', 128),
+      principal: normalizePrincipal(principal),
+    })
+    return value === null ? null : publicAcquisition(value)
+  }
+
 
   // Clearing a finished acquisition is a durable delete, so it says what it did
   // rather than returning a job projection that no longer exists.
@@ -1162,6 +1170,7 @@ function resolutionLabels(record) {
     getAcquisition,
     listAcquisitions,
     cancelAcquisition,
+    retryAcquisition,
     forgetAcquisition,
     getPublication,
     openStream,

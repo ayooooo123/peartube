@@ -11405,8 +11405,43 @@ const encoding401 = {
   }
 }
 
+// @peartube/retry-acquisition-request
+const encoding402 = encoding396
+
+// @peartube/retry-acquisition-response.acquisition
+const encoding403_1 = encoding393_1
+// @peartube/retry-acquisition-response.error
+const encoding403_2 = encoding386_3
+
+// @peartube/retry-acquisition-response
+const encoding403 = {
+  preencode(state, m) {
+    state.end++ // max flag is 4 so always one byte
+
+    if (m.acquisition) encoding403_1.preencode(state, m.acquisition)
+    if (m.error) encoding403_2.preencode(state, m.error)
+  },
+  encode(state, m) {
+    const flags = (m.success ? 1 : 0) | (m.acquisition ? 2 : 0) | (m.error ? 4 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.acquisition) encoding403_1.encode(state, m.acquisition)
+    if (m.error) encoding403_2.encode(state, m.error)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      success: (flags & 1) !== 0,
+      acquisition: (flags & 2) !== 0 ? encoding403_1.decode(state) : null,
+      error: (flags & 4) !== 0 ? encoding403_2.decode(state) : null
+    }
+  }
+}
+
 // @peartube/provider-publication-v1
-const encoding402 = {
+const encoding404 = {
   preencode(state, m) {
     c.uint.preencode(state, m.schemaVersion)
     c.string.preencode(state, m.publicationId)
@@ -11447,42 +11482,42 @@ const encoding402 = {
 }
 
 // @peartube/get-provider-publication-request
-const encoding403 = encoding217
+const encoding405 = encoding217
 
 // @peartube/get-provider-publication-response.publication
-const encoding404_1 = c.frame(encoding402)
+const encoding406_1 = c.frame(encoding404)
 // @peartube/get-provider-publication-response.error
-const encoding404_2 = encoding386_3
+const encoding406_2 = encoding386_3
 
 // @peartube/get-provider-publication-response
-const encoding404 = {
+const encoding406 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
-    if (m.publication) encoding404_1.preencode(state, m.publication)
-    if (m.error) encoding404_2.preencode(state, m.error)
+    if (m.publication) encoding406_1.preencode(state, m.publication)
+    if (m.error) encoding406_2.preencode(state, m.error)
   },
   encode(state, m) {
     const flags = (m.success ? 1 : 0) | (m.publication ? 2 : 0) | (m.error ? 4 : 0)
 
     c.uint.encode(state, flags)
 
-    if (m.publication) encoding404_1.encode(state, m.publication)
-    if (m.error) encoding404_2.encode(state, m.error)
+    if (m.publication) encoding406_1.encode(state, m.publication)
+    if (m.error) encoding406_2.encode(state, m.error)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
       success: (flags & 1) !== 0,
-      publication: (flags & 2) !== 0 ? encoding404_1.decode(state) : null,
-      error: (flags & 4) !== 0 ? encoding404_2.decode(state) : null
+      publication: (flags & 2) !== 0 ? encoding406_1.decode(state) : null,
+      error: (flags & 4) !== 0 ? encoding406_2.decode(state) : null
     }
   }
 }
 
 // @peartube/provider-stream-v1
-const encoding405 = {
+const encoding407 = {
   preencode(state, m) {
     c.uint.preencode(state, m.schemaVersion)
     c.string.preencode(state, m.publicationId)
@@ -11533,7 +11568,7 @@ const encoding405 = {
 }
 
 // @peartube/open-provider-stream-request
-const encoding406 = {
+const encoding408 = {
   preencode(state, m) {
     c.string.preencode(state, m.publicationId)
     state.end++ // max flag is 1 so always one byte
@@ -11560,39 +11595,39 @@ const encoding406 = {
 }
 
 // @peartube/open-provider-stream-response.stream
-const encoding407_1 = c.frame(encoding405)
+const encoding409_1 = c.frame(encoding407)
 // @peartube/open-provider-stream-response.error
-const encoding407_2 = encoding386_3
+const encoding409_2 = encoding386_3
 
 // @peartube/open-provider-stream-response
-const encoding407 = {
+const encoding409 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
-    if (m.stream) encoding407_1.preencode(state, m.stream)
-    if (m.error) encoding407_2.preencode(state, m.error)
+    if (m.stream) encoding409_1.preencode(state, m.stream)
+    if (m.error) encoding409_2.preencode(state, m.error)
   },
   encode(state, m) {
     const flags = (m.success ? 1 : 0) | (m.stream ? 2 : 0) | (m.error ? 4 : 0)
 
     c.uint.encode(state, flags)
 
-    if (m.stream) encoding407_1.encode(state, m.stream)
-    if (m.error) encoding407_2.encode(state, m.error)
+    if (m.stream) encoding409_1.encode(state, m.stream)
+    if (m.error) encoding409_2.encode(state, m.error)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
       success: (flags & 1) !== 0,
-      stream: (flags & 2) !== 0 ? encoding407_1.decode(state) : null,
-      error: (flags & 4) !== 0 ? encoding407_2.decode(state) : null
+      stream: (flags & 2) !== 0 ? encoding409_1.decode(state) : null,
+      error: (flags & 4) !== 0 ? encoding409_2.decode(state) : null
     }
   }
 }
 
 // @peartube/provider-status-v1
-const encoding408 = {
+const encoding410 = {
   preencode(state, m) {
     c.uint.preencode(state, m.schemaVersion)
     state.end++ // max flag is 4 so always one byte
@@ -11623,42 +11658,42 @@ const encoding408 = {
 }
 
 // @peartube/get-provider-status-request
-const encoding409 = encoding0
+const encoding411 = encoding0
 
 // @peartube/get-provider-status-response.status
-const encoding410_1 = c.frame(encoding408)
+const encoding412_1 = c.frame(encoding410)
 // @peartube/get-provider-status-response.error
-const encoding410_2 = encoding386_3
+const encoding412_2 = encoding386_3
 
 // @peartube/get-provider-status-response
-const encoding410 = {
+const encoding412 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
-    if (m.status) encoding410_1.preencode(state, m.status)
-    if (m.error) encoding410_2.preencode(state, m.error)
+    if (m.status) encoding412_1.preencode(state, m.status)
+    if (m.error) encoding412_2.preencode(state, m.error)
   },
   encode(state, m) {
     const flags = (m.success ? 1 : 0) | (m.status ? 2 : 0) | (m.error ? 4 : 0)
 
     c.uint.encode(state, flags)
 
-    if (m.status) encoding410_1.encode(state, m.status)
-    if (m.error) encoding410_2.encode(state, m.error)
+    if (m.status) encoding412_1.encode(state, m.status)
+    if (m.error) encoding412_2.encode(state, m.error)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
       success: (flags & 1) !== 0,
-      status: (flags & 2) !== 0 ? encoding410_1.decode(state) : null,
-      error: (flags & 4) !== 0 ? encoding410_2.decode(state) : null
+      status: (flags & 2) !== 0 ? encoding412_1.decode(state) : null,
+      error: (flags & 4) !== 0 ? encoding412_2.decode(state) : null
     }
   }
 }
 
 // @peartube/provider-policy-v1
-const encoding411 = {
+const encoding413 = {
   preencode(state, m) {
     c.uint.preencode(state, m.schemaVersion)
     c.uint.preencode(state, m.revision)
@@ -11688,70 +11723,14 @@ const encoding411 = {
 }
 
 // @peartube/get-provider-policy-request
-const encoding412 = encoding0
+const encoding414 = encoding0
 
 // @peartube/get-provider-policy-response.policy
-const encoding413_1 = c.frame(encoding411)
+const encoding415_1 = c.frame(encoding413)
 // @peartube/get-provider-policy-response.error
-const encoding413_2 = encoding386_3
-
-// @peartube/get-provider-policy-response
-const encoding413 = {
-  preencode(state, m) {
-    state.end++ // max flag is 4 so always one byte
-
-    if (m.policy) encoding413_1.preencode(state, m.policy)
-    if (m.error) encoding413_2.preencode(state, m.error)
-  },
-  encode(state, m) {
-    const flags = (m.success ? 1 : 0) | (m.policy ? 2 : 0) | (m.error ? 4 : 0)
-
-    c.uint.encode(state, flags)
-
-    if (m.policy) encoding413_1.encode(state, m.policy)
-    if (m.error) encoding413_2.encode(state, m.error)
-  },
-  decode(state) {
-    const flags = c.uint.decode(state)
-
-    return {
-      success: (flags & 1) !== 0,
-      policy: (flags & 2) !== 0 ? encoding413_1.decode(state) : null,
-      error: (flags & 4) !== 0 ? encoding413_2.decode(state) : null
-    }
-  }
-}
-
-// @peartube/set-provider-policy-request.policy
-const encoding414_0 = encoding413_1
-
-// @peartube/set-provider-policy-request
-const encoding414 = {
-  preencode(state, m) {
-    encoding414_0.preencode(state, m.policy)
-    c.uint.preencode(state, m.expectedRevision)
-  },
-  encode(state, m) {
-    encoding414_0.encode(state, m.policy)
-    c.uint.encode(state, m.expectedRevision)
-  },
-  decode(state) {
-    const r0 = encoding414_0.decode(state)
-    const r1 = c.uint.decode(state)
-
-    return {
-      policy: r0,
-      expectedRevision: r1
-    }
-  }
-}
-
-// @peartube/set-provider-policy-response.policy
-const encoding415_1 = encoding413_1
-// @peartube/set-provider-policy-response.error
 const encoding415_2 = encoding386_3
 
-// @peartube/set-provider-policy-response
+// @peartube/get-provider-policy-response
 const encoding415 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
@@ -11778,21 +11757,77 @@ const encoding415 = {
   }
 }
 
+// @peartube/set-provider-policy-request.policy
+const encoding416_0 = encoding415_1
+
+// @peartube/set-provider-policy-request
+const encoding416 = {
+  preencode(state, m) {
+    encoding416_0.preencode(state, m.policy)
+    c.uint.preencode(state, m.expectedRevision)
+  },
+  encode(state, m) {
+    encoding416_0.encode(state, m.policy)
+    c.uint.encode(state, m.expectedRevision)
+  },
+  decode(state) {
+    const r0 = encoding416_0.decode(state)
+    const r1 = c.uint.decode(state)
+
+    return {
+      policy: r0,
+      expectedRevision: r1
+    }
+  }
+}
+
+// @peartube/set-provider-policy-response.policy
+const encoding417_1 = encoding415_1
+// @peartube/set-provider-policy-response.error
+const encoding417_2 = encoding386_3
+
+// @peartube/set-provider-policy-response
+const encoding417 = {
+  preencode(state, m) {
+    state.end++ // max flag is 4 so always one byte
+
+    if (m.policy) encoding417_1.preencode(state, m.policy)
+    if (m.error) encoding417_2.preencode(state, m.error)
+  },
+  encode(state, m) {
+    const flags = (m.success ? 1 : 0) | (m.policy ? 2 : 0) | (m.error ? 4 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.policy) encoding417_1.encode(state, m.policy)
+    if (m.error) encoding417_2.encode(state, m.error)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      success: (flags & 1) !== 0,
+      policy: (flags & 2) !== 0 ? encoding417_1.decode(state) : null,
+      error: (flags & 4) !== 0 ? encoding417_2.decode(state) : null
+    }
+  }
+}
+
 // @peartube/acquisition-policy-v1.allowedPublisherIds
-const encoding416_7 = encoding44_11
+const encoding418_7 = encoding44_11
 // @peartube/acquisition-policy-v1.allowedAdapterIds
-const encoding416_8 = encoding44_11
+const encoding418_8 = encoding44_11
 
 // @peartube/acquisition-policy-v1
-const encoding416 = {
+const encoding418 = {
   preencode(state, m) {
     c.uint.preencode(state, m.policyVersion)
     c.uint.preencode(state, m.revision)
     c.uint.preencode(state, m.consentVersion)
     state.end++ // max flag is 4 so always one byte
     c.string.preencode(state, m.requesterMode)
-    encoding416_7.preencode(state, m.allowedPublisherIds)
-    encoding416_8.preencode(state, m.allowedAdapterIds)
+    encoding418_7.preencode(state, m.allowedPublisherIds)
+    encoding418_8.preencode(state, m.allowedAdapterIds)
     c.uint.preencode(state, m.maxQueuedJobs)
     c.uint.preencode(state, m.maxConcurrentJobs)
     c.uint.preencode(state, m.maxConcurrentPerRequester)
@@ -11817,8 +11852,8 @@ const encoding416 = {
     c.uint.encode(state, m.consentVersion)
     c.uint.encode(state, flags)
     c.string.encode(state, m.requesterMode)
-    encoding416_7.encode(state, m.allowedPublisherIds)
-    encoding416_8.encode(state, m.allowedAdapterIds)
+    encoding418_7.encode(state, m.allowedPublisherIds)
+    encoding418_8.encode(state, m.allowedAdapterIds)
     c.uint.encode(state, m.maxQueuedJobs)
     c.uint.encode(state, m.maxConcurrentJobs)
     c.uint.encode(state, m.maxConcurrentPerRequester)
@@ -11848,8 +11883,8 @@ const encoding416 = {
       enabled: (flags & 2) !== 0,
       acceptPublicRequests: (flags & 4) !== 0,
       requesterMode: c.string.decode(state),
-      allowedPublisherIds: encoding416_7.decode(state),
-      allowedAdapterIds: encoding416_8.decode(state),
+      allowedPublisherIds: encoding418_7.decode(state),
+      allowedAdapterIds: encoding418_8.decode(state),
       maxQueuedJobs: c.uint.decode(state),
       maxConcurrentJobs: c.uint.decode(state),
       maxConcurrentPerRequester: c.uint.decode(state),
@@ -11869,42 +11904,42 @@ const encoding416 = {
 }
 
 // @peartube/get-acquisition-policy-request
-const encoding417 = encoding0
+const encoding419 = encoding0
 
 // @peartube/get-acquisition-policy-response.policy
-const encoding418_1 = c.frame(encoding416)
+const encoding420_1 = c.frame(encoding418)
 // @peartube/get-acquisition-policy-response.error
-const encoding418_2 = encoding386_3
+const encoding420_2 = encoding386_3
 
 // @peartube/get-acquisition-policy-response
-const encoding418 = {
+const encoding420 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
-    if (m.policy) encoding418_1.preencode(state, m.policy)
-    if (m.error) encoding418_2.preencode(state, m.error)
+    if (m.policy) encoding420_1.preencode(state, m.policy)
+    if (m.error) encoding420_2.preencode(state, m.error)
   },
   encode(state, m) {
     const flags = (m.success ? 1 : 0) | (m.policy ? 2 : 0) | (m.error ? 4 : 0)
 
     c.uint.encode(state, flags)
 
-    if (m.policy) encoding418_1.encode(state, m.policy)
-    if (m.error) encoding418_2.encode(state, m.error)
+    if (m.policy) encoding420_1.encode(state, m.policy)
+    if (m.error) encoding420_2.encode(state, m.error)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
       success: (flags & 1) !== 0,
-      policy: (flags & 2) !== 0 ? encoding418_1.decode(state) : null,
-      error: (flags & 4) !== 0 ? encoding418_2.decode(state) : null
+      policy: (flags & 2) !== 0 ? encoding420_1.decode(state) : null,
+      error: (flags & 4) !== 0 ? encoding420_2.decode(state) : null
     }
   }
 }
 
 // @peartube/acquisition-consent-v1
-const encoding419 = {
+const encoding421 = {
   preencode(state, m) {
     c.uint.preencode(state, m.version)
     state.end++ // max flag is 1 so always one byte
@@ -11927,26 +11962,26 @@ const encoding419 = {
 }
 
 // @peartube/set-acquisition-policy-request.policy
-const encoding420_0 = encoding418_1
+const encoding422_0 = encoding420_1
 // @peartube/set-acquisition-policy-request.consent
-const encoding420_2 = c.frame(encoding419)
+const encoding422_2 = c.frame(encoding421)
 
 // @peartube/set-acquisition-policy-request
-const encoding420 = {
+const encoding422 = {
   preencode(state, m) {
-    encoding420_0.preencode(state, m.policy)
+    encoding422_0.preencode(state, m.policy)
     c.uint.preencode(state, m.expectedRevision)
-    encoding420_2.preencode(state, m.consent)
+    encoding422_2.preencode(state, m.consent)
   },
   encode(state, m) {
-    encoding420_0.encode(state, m.policy)
+    encoding422_0.encode(state, m.policy)
     c.uint.encode(state, m.expectedRevision)
-    encoding420_2.encode(state, m.consent)
+    encoding422_2.encode(state, m.consent)
   },
   decode(state) {
-    const r0 = encoding420_0.decode(state)
+    const r0 = encoding422_0.decode(state)
     const r1 = c.uint.decode(state)
-    const r2 = encoding420_2.decode(state)
+    const r2 = encoding422_2.decode(state)
 
     return {
       policy: r0,
@@ -11957,39 +11992,39 @@ const encoding420 = {
 }
 
 // @peartube/set-acquisition-policy-response.policy
-const encoding421_1 = encoding418_1
+const encoding423_1 = encoding420_1
 // @peartube/set-acquisition-policy-response.error
-const encoding421_2 = encoding386_3
+const encoding423_2 = encoding386_3
 
 // @peartube/set-acquisition-policy-response
-const encoding421 = {
+const encoding423 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
-    if (m.policy) encoding421_1.preencode(state, m.policy)
-    if (m.error) encoding421_2.preencode(state, m.error)
+    if (m.policy) encoding423_1.preencode(state, m.policy)
+    if (m.error) encoding423_2.preencode(state, m.error)
   },
   encode(state, m) {
     const flags = (m.success ? 1 : 0) | (m.policy ? 2 : 0) | (m.error ? 4 : 0)
 
     c.uint.encode(state, flags)
 
-    if (m.policy) encoding421_1.encode(state, m.policy)
-    if (m.error) encoding421_2.encode(state, m.error)
+    if (m.policy) encoding423_1.encode(state, m.policy)
+    if (m.error) encoding423_2.encode(state, m.error)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
       success: (flags & 1) !== 0,
-      policy: (flags & 2) !== 0 ? encoding421_1.decode(state) : null,
-      error: (flags & 4) !== 0 ? encoding421_2.decode(state) : null
+      policy: (flags & 2) !== 0 ? encoding423_1.decode(state) : null,
+      error: (flags & 4) !== 0 ? encoding423_2.decode(state) : null
     }
   }
 }
 
 // @peartube/acquisition-lifecycle-event-v1
-const encoding422 = {
+const encoding424 = {
   preencode(state, m) {
     c.uint.preencode(state, m.schemaVersion)
     c.string.preencode(state, m.eventId)
@@ -12895,48 +12930,52 @@ function getEncoding(name) {
       return encoding400
     case '@peartube/cancel-acquisition-response':
       return encoding401
-    case '@peartube/provider-publication-v1':
+    case '@peartube/retry-acquisition-request':
       return encoding402
-    case '@peartube/get-provider-publication-request':
+    case '@peartube/retry-acquisition-response':
       return encoding403
-    case '@peartube/get-provider-publication-response':
+    case '@peartube/provider-publication-v1':
       return encoding404
-    case '@peartube/provider-stream-v1':
+    case '@peartube/get-provider-publication-request':
       return encoding405
-    case '@peartube/open-provider-stream-request':
+    case '@peartube/get-provider-publication-response':
       return encoding406
-    case '@peartube/open-provider-stream-response':
+    case '@peartube/provider-stream-v1':
       return encoding407
-    case '@peartube/provider-status-v1':
+    case '@peartube/open-provider-stream-request':
       return encoding408
-    case '@peartube/get-provider-status-request':
+    case '@peartube/open-provider-stream-response':
       return encoding409
-    case '@peartube/get-provider-status-response':
+    case '@peartube/provider-status-v1':
       return encoding410
-    case '@peartube/provider-policy-v1':
+    case '@peartube/get-provider-status-request':
       return encoding411
-    case '@peartube/get-provider-policy-request':
+    case '@peartube/get-provider-status-response':
       return encoding412
-    case '@peartube/get-provider-policy-response':
+    case '@peartube/provider-policy-v1':
       return encoding413
-    case '@peartube/set-provider-policy-request':
+    case '@peartube/get-provider-policy-request':
       return encoding414
-    case '@peartube/set-provider-policy-response':
+    case '@peartube/get-provider-policy-response':
       return encoding415
-    case '@peartube/acquisition-policy-v1':
+    case '@peartube/set-provider-policy-request':
       return encoding416
-    case '@peartube/get-acquisition-policy-request':
+    case '@peartube/set-provider-policy-response':
       return encoding417
-    case '@peartube/get-acquisition-policy-response':
+    case '@peartube/acquisition-policy-v1':
       return encoding418
-    case '@peartube/acquisition-consent-v1':
+    case '@peartube/get-acquisition-policy-request':
       return encoding419
-    case '@peartube/set-acquisition-policy-request':
+    case '@peartube/get-acquisition-policy-response':
       return encoding420
-    case '@peartube/set-acquisition-policy-response':
+    case '@peartube/acquisition-consent-v1':
       return encoding421
-    case '@peartube/acquisition-lifecycle-event-v1':
+    case '@peartube/set-acquisition-policy-request':
       return encoding422
+    case '@peartube/set-acquisition-policy-response':
+      return encoding423
+    case '@peartube/acquisition-lifecycle-event-v1':
+      return encoding424
     default:
       throw new Error('Encoder not found ' + name)
   }

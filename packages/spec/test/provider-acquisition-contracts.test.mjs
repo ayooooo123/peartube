@@ -11,6 +11,7 @@ const METHODS = [
   'get-acquisition',
   'list-acquisitions',
   'cancel-acquisition',
+  'retry-acquisition',
   'get-acquisition-policy',
   'set-acquisition-policy',
 ]

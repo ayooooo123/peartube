@@ -99,6 +99,7 @@ type Props = {
     }): Promise<unknown>
     getAcquisition(request: { acquisitionId: string }): Promise<unknown>
     cancelAcquisition(request: { acquisitionId: string }): Promise<unknown>
+    retryAcquisition?(request: { acquisitionId: string }): Promise<unknown>
     getPublication(request: { publicationId: string }): Promise<unknown>
   } | null
   providerEvents?: {

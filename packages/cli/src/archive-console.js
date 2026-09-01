@@ -1264,6 +1264,27 @@ export async function createArchiveConsole({
       return { acquisitionId, done: false, reason: friendlyVerbError(error) }
     }
   }
+  async function retryRelease(acquisitionId) {
+    if (typeof service.retryAcquisition !== 'function') {
+      return { acquisitionId, done: false, reason: 'this relay cannot retry acquisitions' }
+    }
+    try {
+      const job = await service.retryAcquisition(acquisitionId)
+      if (!job || typeof job.state !== 'string') {
+        return { acquisitionId, done: false, reason: 'the relay reported no job to retry' }
+      }
+      if (job.state === 'queued' || job.state === 'acquiring' || job.state === 'verifying' || job.state === 'publishing' || job.state === 'completed') {
+        return { acquisitionId, done: true, state: job.state }
+      }
+      if (job.state === 'failed') {
+        return { acquisitionId, done: false, state: job.state, reason: job.errorCode ? `${job.errorCode} (retry limit reached)` : 'retry failed' }
+      }
+      return { acquisitionId, done: false, state: job.state, reason: `unexpected state: ${job.state}` }
+    } catch (error) {
+      return { acquisitionId, done: false, reason: friendlyVerbError(error) }
+    }
+  }
+
 
   async function clearRelease(acquisitionId) {
     if (typeof service.forgetAcquisition !== 'function') {
@@ -1533,14 +1554,15 @@ export async function createArchiveConsole({
       // Both verbs answer per id. A cancel that lands on a finished job changes
       // nothing, and the console has to say so rather than refresh and look
       // broken.
-      if (req.method === 'POST' && (req.url === '/releases/cancel' || req.url === '/releases/clear' || req.url === '/releases/delete')) {
-        const verb = req.url === '/releases/cancel' ? 'cancel' : (req.url === '/releases/delete' ? 'delete' : 'clear')
+      if (req.method === 'POST' && (req.url === '/releases/cancel' || req.url === '/releases/clear' || req.url === '/releases/delete' || req.url === '/releases/retry')) {
+        const verb = req.url === '/releases/cancel' ? 'cancel' : (req.url === '/releases/delete' ? 'delete' : (req.url === '/releases/retry' ? 'retry' : 'clear'))
         const params = new URLSearchParams(await collectBody(req))
         const ids = String(params.get('ids') || '').split(',').map(value => value.trim()).filter(Boolean).slice(0, 64)
         const results = []
         for (const id of ids) {
           if (verb === 'cancel') results.push(await cancelRelease(id))
           else if (verb === 'delete') results.push(await deleteRelease(id))
+          else if (verb === 'retry') results.push(await retryRelease(id))
           else results.push(await clearRelease(id))
         }
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })

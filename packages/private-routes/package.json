@@ -1,0 +1,52 @@
+{
+  "name": "hyperdht-private-routes",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Experimental private-route overlay for the Holepunch stack",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "imports": {
+    "#private-route-process": {
+      "bare": "./test/process/runtime-bare.js",
+      "default": "./test/process/runtime-node.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "docs",
+    "README.md"
+  ],
+  "scripts": {
+    "check:dependencies": "node scripts/check-dependencies.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "brittle test/*.test.js",
+    "test:node": "brittle-node test/*.test.js",
+    "test:one": "brittle-node",
+    "test:bare": "node node_modules/bare-runtime/bin/bare node_modules/brittle/cmd.js test/*.test.js",
+    "test:portable:node": "brittle-node test/integration/live-udx-node.test.js",
+    "test:portable:bare": "brittle-node test/integration/live-udx-bare.test.js",
+    "test:namespace:unit": "brittle-node test/namespace/*.test.js",
+    "test:namespace": "node test/namespace/run.js",
+    "test:m2": "npm run test:node && npm run test:bare && npm run test:portable:node && npm run test:portable:bare",
+    "fuzz:cell": "node fuzz/cell.js"
+  },
+  "dependencies": {
+    "b4a": "^1.8.0",
+    "compact-encoding": "^2.19.2",
+    "hypercore-crypto": "^3.6.1",
+    "sodium-universal": "^5.0.0",
+    "udx-native": "1.20.7"
+  },
+  "devDependencies": {
+    "bare-process": "4.5.1",
+    "bare-runtime": "1.30.3",
+    "brittle": "^3.19.1",
+    "prettier": "^3.6.2",
+    "prettier-config-holepunch": "^2.0.0"
+  }
+}

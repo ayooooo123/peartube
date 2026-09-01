@@ -111,7 +111,10 @@ export async function createRelayBlockOffload ({
   }
   const objectStore = createS3ArchiveProvider({ fetch: fetchImpl, sign })
   const bucket = settings.bucket
-  const log = (message) => logger?.archive?.debug?.(message)
+  const log = (message) => {
+    if (String(message).includes('MISSING')) logger?.archive?.warn?.(message)
+    else logger?.archive?.debug?.(message)
+  }
 
   let offloadStats = () => ({ restored: 0, eviction: null })
   // Cores the operator's data lives in rather than media blocks. Offload moves

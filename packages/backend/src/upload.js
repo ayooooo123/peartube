@@ -997,7 +997,8 @@ async function maybeAttachImmutablePublication(metadata, prepared, runtime = {})
       blobId: metadata.blobId || null,
       assetId: rendition.core.assetId,
       coreKey,
-      renditionId: rendition.renditionId
+      renditionId: rendition.renditionId,
+      ...(metadata.blobId ? {} : { start: 0, end: rendition.core.length })
     }, ...posterProvenance],
     keyPair: deviceKeyPair,
     signedAt: currentTime
@@ -1518,7 +1519,11 @@ export function createUploadManager({
       ...publicationRuntime,
       publisherId,
       retentionClass,
-      signal
+      signal,
+      // Acquired assets have no legacy channel metadata row to finalize. Their
+      // durable publication mapping is written below after the signed catalog
+      // commit succeeds.
+      finalizeMetadata: async () => {}
     });
     const publication = published?.immutablePublication;
     if (!publication) throw new Error('Acquired asset publication did not commit');

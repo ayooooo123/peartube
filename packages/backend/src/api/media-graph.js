@@ -108,6 +108,17 @@ function renditionBlobRef(manifest, rendition) {
     candidate.renditionId === rendition.renditionId &&
     candidate.coreKey === coreKey
   ))
+  if (!entry && core.kind === 'static-prologue-v1') {
+    return parseBlobRef({
+      blobsCoreKey: coreKey,
+      blobId: {
+        blockOffset: 0,
+        blockLength: core.length,
+        byteOffset: 0,
+        byteLength: core.byteLength,
+      },
+    })
+  }
   if (!entry) return null
   const direct = parseBlobRef({ blobsCoreKey: coreKey, blobId: entry.blobId })
   if (direct) return direct

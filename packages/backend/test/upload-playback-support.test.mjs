@@ -9,7 +9,7 @@ import Corestore from 'corestore'
 import crypto from 'hypercore-crypto'
 import Hyperblobs from 'hyperblobs'
 
-import { decodePublicationManifest } from '../src/assets/index.js'
+import { createStaticAssetManifest, decodePublicationManifest } from '../src/assets/index.js'
 import { createUploadManager } from '../src/upload.js'
 import { normalizeBlobRefInput } from '../src/blob-utils.js'
 import {
@@ -128,9 +128,9 @@ function makeCatalog(deviceKeyPair, appended, counters = {}) {
   }
 }
 
-function makePublishingManager({ store, deviceKeyPair, catalog, scopedNetwork = null, verifiedQueryView = null }) {
+function makePublishingManager({ store, deviceKeyPair, catalog, scopedNetwork = null, verifiedQueryView = null, metaDb = null }) {
   return createUploadManager({
-    ctx: { store },
+    ctx: { store, ...(metaDb ? { metaDb } : {}) },
     deviceKeyPair,
     catalogRegistry: {
       async getWritableBindings() {
@@ -218,6 +218,48 @@ test('published uploads use one verified static descriptor and converge across p
   assert.equal(results[0].coreKey, results[1].coreKey)
   assert.notEqual(results[0].publicationId, results[1].publicationId)
   assert.notEqual(results[0].manifest.body.publisherId, results[1].manifest.body.publisherId)
+})
+
+test('acquired static publications sign the complete readable core range', async t => {
+  const store = makeStore(t, 'acquired-static-publication')
+  const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 9))
+  const appended = []
+  const rows = new Map()
+  const manager = makePublishingManager({
+    store,
+    deviceKeyPair,
+    catalog: makeCatalog(deviceKeyPair, appended),
+    metaDb: {
+      async get(key) { return rows.get(key) || null },
+      async put(key, value) { rows.set(key, { value }) },
+    },
+  })
+  const descriptor = createStaticAssetManifest({
+    treeHash: 'ab'.repeat(32),
+    blockLength: 1,
+    byteLength: 1024,
+  })
+
+  await manager.publishAcquiredAsset({
+    acquisitionId: 'acq_static_range',
+    publisherId: Buffer.from(deviceKeyPair.publicKey).toString('hex'),
+    asset: {
+      assetId: descriptor.assetId,
+      key: Buffer.from(descriptor.key).toString('hex'),
+      treeHash: Buffer.from(descriptor.treeHash).toString('hex'),
+      length: descriptor.length,
+      byteLength: descriptor.byteLength,
+      blockSize: descriptor.blockSize,
+    },
+    source: { mimeType: 'video/mp4', durationMs: 1000 },
+    resolution: { title: 'Acquired fixture', mediaContext: { kind: 'movie' } },
+  })
+
+  const manifest = decodePublicationManifest(appended[0][0].body.payload)
+  const provenance = manifest.body.provenance[0]
+  assert.equal(provenance.blobId, null)
+  assert.equal(provenance.start, 0)
+  assert.equal(provenance.end, descriptor.length)
 })
 
 test('archive publication carries its explicit retention class to asset and catalog serving', async (t) => {

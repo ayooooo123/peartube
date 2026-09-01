@@ -389,6 +389,36 @@ test('verified rendition URL opener returns a playable loopback URL', async t =>
   t.is(opened.url, 'http://127.0.0.1:8080/verified-rendition')
 })
 
+test('verified rendition URL opener reads legacy static publications without provenance ranges', async t => {
+  const fixture = graphFixture({
+    blobServer: {
+      port: 8080,
+      getLink() { return 'http://127.0.0.1:8080/legacy-static-rendition' }
+    },
+    ctx: { blobServerHost: '127.0.0.1', blobServerPort: 8080 }
+  })
+  const getRendition = fixture.verifiedQueryView.getRendition.bind(fixture.verifiedQueryView)
+  fixture.verifiedQueryView.getRendition = async input => {
+    const projected = await getRendition(input)
+    return {
+      ...projected,
+      manifest: {
+        ...projected.manifest,
+        body: { ...projected.manifest.body, provenance: [] }
+      }
+    }
+  }
+  const api = createMediaGraphApi(fixture)
+  const opened = await api.openMediaRenditionUrl({
+    publicationId: 'pub-a',
+    renditionId: 'rendition-pub-a'
+  })
+
+  t.is(opened.success, true, opened.errorCode || opened.error || 'opened')
+  t.is(opened.assetId, coreA.assetId)
+  t.is(opened.url, 'http://127.0.0.1:8080/legacy-static-rendition')
+})
+
 test('Play falls over to the equivalent source and reports every attempt', async (t) => {
   const api = createMediaGraphApi(graphFixture({
     openPlaybackSession: async ({ publicationId }) => (

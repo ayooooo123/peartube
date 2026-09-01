@@ -301,7 +301,7 @@ test('local stream open returns the loopback Hypercore blob URL without a media 
           mimeType: 'video/mp4',
           capability: null,
           expiresAt: NOW + 60_000,
-          etag: '\"asset-asset-1\"',
+          etag: '"asset-asset-1"',
           url: blobUrl
         }
       }
@@ -312,13 +312,16 @@ test('local stream open returns the loopback Hypercore blob URL without a media 
   })
 
   const opened = await router.dispatch(request('POST', '/api/v2/streams/open', {
-    body: b4a.from('{"publicationId":"pub-1","renditionId":"rend-1"}'),
+    body: b4a.from('{"publicationId":"pub-1","renditionId":"rend-1","startOffsetSeconds":968.4,"durationSeconds":1320}'),
     serverState: { transport: 'unix' }
   }))
 
   t.is(opened.statusCode, 200)
   t.is(opened.body.url, blobUrl)
-  t.alike([openedInput.publicationId, openedInput.renditionId, openedInput.localTransport], ['pub-1', 'rend-1', true])
+  t.alike(
+    [openedInput.publicationId, openedInput.renditionId, openedInput.startOffsetSeconds, openedInput.durationSeconds, openedInput.localTransport],
+    ['pub-1', 'rend-1', 968.4, 1320, true]
+  )
   t.is(capabilities.size, 0, 'blob playback does not retain a companion media capability')
 })
 

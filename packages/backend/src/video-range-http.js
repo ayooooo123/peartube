@@ -17,6 +17,7 @@ import {
   prioritizeBlobServerRangeRequest,
   publishBlobPlayheadProgress,
 } from './blob-range-priority.js'
+import { ASSET_BLOCK_SIZE } from './assets/static-core.js'
 import { markPlaybackTiming } from './playback-timing.js'
 
 // A player that issues one open-ended `bytes=N-` request streams the whole
@@ -140,9 +141,26 @@ async function writeResponseChunk(res, chunk, signal) {
   if (ok === false) await waitForResponseDrain(res, signal)
 }
 
+function isCanonicalStaticBlob(blob) {
+  return blob?.blockOffset === 0 &&
+    blob?.byteOffset === 0 &&
+    blob?.blockLength === Math.ceil(blob.byteLength / ASSET_BLOCK_SIZE)
+}
+
 async function resolveStartPosition(core, blob, start) {
   if (start === 0) {
     return { index: blob.blockOffset, offset: 0 }
+  }
+
+  // Static publication assets use canonical 256 KiB blocks. Their data can be
+  // restored from object storage while inner Merkle tree nodes are absent.
+  // Hypercore.seek() waits for a peer in that state even though the exact data
+  // block is locally restorable. Map this committed canonical layout directly.
+  if (isCanonicalStaticBlob(blob)) {
+    return {
+      index: blob.blockOffset + Math.floor(start / ASSET_BLOCK_SIZE),
+      offset: start % ASSET_BLOCK_SIZE,
+    }
   }
 
   const absoluteByteOffset = Number(blob.byteOffset || 0) + start
@@ -326,7 +344,7 @@ async function serveStaticAssetRangeHttpRequest(deps, req, res, marker) {
   } catch (error) {
     if (controller.signal.aborted || error?.name === 'AbortError' || res.writableEnded || res.destroyed) return true
     if (res.headersSent) {
-      try { res.destroy?.(error) } catch {}
+      try { res.destroy?.(error) } catch { /* response is already closed */ }
       return true
     }
     return endBoundedStaticResponse(req, res, 503, entry.coreRef.byteLength, 'verified static source unavailable')
@@ -363,11 +381,6 @@ export async function serveVideoRangeHttpRequest(deps, req, res) {
   let cancelled = false
 
   try {
-    try {
-      await prioritizeBlobServerRangeRequest(blobServer, req)
-    } catch (err) {
-      console.log('[Storage] Video range priority failed:', err?.message || err)
-    }
 
     core = await blobServer._getCore(ref.key, {
       key: ref.key,
@@ -410,8 +423,27 @@ export async function serveVideoRangeHttpRequest(deps, req, res) {
     }
 
     const syncRange = getPrioritizedBlobDownloadRange(ref.blob, byteRange, { readAheadBytes: 0 })
-    await syncVideoRangeRemoteLength(core, syncRange?.start ?? ref.blob.blockOffset)
+    const startBlock = syncRange?.start ?? ref.blob.blockOffset
+    let startBlockAvailable = false
+    try {
+      startBlockAvailable = Boolean(await core.get(startBlock, { wait: false }))
+    } catch { /* remote acquisition below can still satisfy the request */ }
 
+    if (startBlockAvailable) {
+      console.log('[Storage] Video range HTTP start block: local or restored', JSON.stringify(summarizeVideoRangePeerSync(core)))
+      publishBlobPlayheadProgress({
+        keyHex: ref.key?.toString('hex'),
+        blob: ref.blob,
+        blockIndex: startBlock,
+      })
+    } else {
+      try {
+        await prioritizeBlobServerRangeRequest(blobServer, req)
+      } catch (err) {
+        console.log('[Storage] Video range priority failed:', err?.message || err)
+      }
+      await syncVideoRangeRemoteLength(core, startBlock)
+    }
     const wroteAll = await writeBlobRange({
       core,
       blob: ref.blob,

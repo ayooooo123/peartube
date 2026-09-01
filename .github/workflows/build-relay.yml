@@ -44,14 +44,7 @@ jobs:
       - uses: ./.github/actions/setup-node-workspace
         with:
           node-version: 22.x
-          install: 'false'
-
-      - name: Install backend dependencies
-        run: npm install --prefix packages/backend --ignore-scripts
-
-      - name: Install relay dependencies
-        run: npm install --prefix packages/cli --ignore-scripts
-
+          install: 'true'
       - name: Run relay CLI tests
         run: npm test --prefix packages/cli
 

@@ -35,7 +35,7 @@
     "lint:complexity": "oxlint -c .oxlintrc.json packages/backend/src packages/cli/src packages/cli/bin.js packages/app/app packages/app/components packages/app/lib packages/app/backend packages/host/src packages/platform/src scripts packages/spec/schema.cjs --max-warnings 369",
     "lint:changed": "node scripts/lint-changed.mjs",
     "lint:fix": "npm run lint -- --fix",
-    "install:all": "npm install && npm install --prefix packages/spec && npm install --prefix packages/backend && npm install --prefix packages/host && npm install --prefix packages/platform && npm install --prefix packages/app --legacy-peer-deps"
+    "install:all": "npm install && npm install --prefix packages/spec && npm install --prefix packages/backend && npm install --prefix packages/cli && npm install --prefix packages/host && npm install --prefix packages/platform && npm install --prefix packages/app --legacy-peer-deps"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.41.0",

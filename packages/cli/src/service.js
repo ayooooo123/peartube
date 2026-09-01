@@ -44,8 +44,11 @@ function createProviderMachineService(runtime, options = {}) {
   const provider = runtime?.provider
   if (!provider) return null
   const warming = new Set()
-  async function warmPublishedCandidate(candidate) {
-    const key = `${candidate.publicationId}:${candidate.renditionId}`
+  async function warmPublishedCandidate(candidate, options = {}) {
+    const requestedStart = Number.isSafeInteger(options.byteStart) && options.byteStart >= 0
+      ? options.byteStart
+      : null
+    const key = `${candidate.publicationId}:${candidate.renditionId}:${requestedStart ?? 'startup'}`
     if (warming.has(key) || typeof runtime.api?.openMediaRendition !== 'function') return
     warming.add(key)
     const controller = new AbortController()
@@ -59,10 +62,16 @@ function createProviderMachineService(runtime, options = {}) {
         signal: controller.signal
       })
       if (!opened?.success || typeof opened.read !== 'function') return
-      const headLength = Math.min(opened.byteLength, 16 * 1024 * 1024)
-      const tailLength = Math.min(opened.byteLength - headLength, 4 * 1024 * 1024)
-      const ranges = [{ start: 0, length: headLength }]
-      if (tailLength > 0) ranges.push({ start: opened.byteLength - tailLength, length: tailLength })
+      let ranges
+      if (requestedStart !== null && requestedStart < opened.byteLength) {
+        const length = Math.min(opened.byteLength - requestedStart, 4 * 1024 * 1024)
+        ranges = [{ start: requestedStart, length }]
+      } else {
+        const headLength = Math.min(opened.byteLength, 16 * 1024 * 1024)
+        const tailLength = Math.min(opened.byteLength - headLength, 4 * 1024 * 1024)
+        ranges = [{ start: 0, length: headLength }]
+        if (tailLength > 0) ranges.push({ start: opened.byteLength - tailLength, length: tailLength })
+      }
       await Promise.all(ranges.map(async range => {
         for await (const _chunk of opened.read({ ...range, signal: controller.signal })) {
           if (controller.signal.aborted) break
@@ -205,13 +214,27 @@ function createProviderMachineService(runtime, options = {}) {
         asset
       }
     },
-    async openPublication({ publicationId, renditionId, signal, localTransport = false } = {}) {
+    async openPublication({
+      publicationId,
+      renditionId,
+      startOffsetSeconds = 0,
+      durationSeconds = 0,
+      signal,
+      localTransport = false
+    } = {}) {
       if (!localTransport || typeof runtime.api?.openMediaRenditionUrl !== 'function') {
         const error = new Error('Deterministic publication playback requires a local protected transport')
         error.code = 'LOCAL_TRANSPORT_REQUIRED'
         throw error
       }
       const opened = await runtime.api.openMediaRenditionUrl({ publicationId, renditionId, signal })
+      if (opened?.success && Number.isFinite(startOffsetSeconds) && startOffsetSeconds > 0 &&
+          Number.isFinite(durationSeconds) && durationSeconds > 0 && Number.isSafeInteger(opened.byteLength) &&
+          opened.byteLength > 0) {
+        const fraction = Math.min(1, startOffsetSeconds / durationSeconds)
+        const byteStart = Math.min(opened.byteLength - 1, Math.floor(opened.byteLength * fraction))
+        await warmPublishedCandidate({ publicationId, renditionId }, { byteStart })
+      }
       if (!opened?.success) {
         const error = new Error(opened?.error || 'Verified rendition is unavailable')
         error.code = opened?.errorCode || 'PROVIDER_STREAM_UNAVAILABLE'

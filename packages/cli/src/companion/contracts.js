@@ -25,7 +25,7 @@ const CANDIDATE_REF = /^[A-Za-z0-9_-]{43}$/
 const KIND = new Set(['movie', 'episode'])
 const CANONICAL_NAMESPACE = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/
 const SEARCH_FIELDS = new Set(['namespace', 'identifier', 'kind', 'season', 'episode', 'title', 'year', 'limit', 'cursor'])
-const OPEN_FIELDS = new Set(['candidateRef', 'publicationId', 'renditionId'])
+const OPEN_FIELDS = new Set(['candidateRef', 'publicationId', 'renditionId', 'startOffsetSeconds', 'durationSeconds'])
 const ACQUISITION_FIELDS = new Set(['idempotencyKey', 'request'])
 const SOURCE_GRANT_FIELDS = new Set(['grant'])
 const ACQUISITION_LIST_FIELDS = new Set(['cursor', 'limit', 'states'])
@@ -104,6 +104,13 @@ function positiveIntegerText (value, field, maximum = Number.MAX_SAFE_INTEGER) {
   const number = Number(value)
   if (!Number.isSafeInteger(number) || number > maximum) throw new CompanionContractError(400, 'INVALID_FIELD', `Invalid ${field}`, field)
   return number
+}
+function boundedSeconds (value, field, { positive = false } = {}) {
+  if (typeof value !== 'number' || !Number.isFinite(value) ||
+      (positive ? value <= 0 : value < 0) || value > 7 * 24 * 60 * 60) {
+    throw new CompanionContractError(400, 'INVALID_FIELD', `Invalid ${field}`, field)
+  }
+  return value
 }
 
 function optionalQueryValue (values, field) {
@@ -338,10 +345,17 @@ export function decodeOpenStreamBody (body) {
   if (hasCandidate) {
     return { candidateRef: boundedString(value.candidateRef, 'candidateRef', 64, { pattern: CANDIDATE_REF }) }
   }
-  return {
+  const result = {
     publicationId: boundedString(value.publicationId, 'publicationId', 128, { pattern: ID }),
     renditionId: boundedString(value.renditionId, 'renditionId', 128, { pattern: ID })
   }
+  if (value.startOffsetSeconds !== undefined) {
+    result.startOffsetSeconds = boundedSeconds(value.startOffsetSeconds, 'startOffsetSeconds')
+  }
+  if (value.durationSeconds !== undefined) {
+    result.durationSeconds = boundedSeconds(value.durationSeconds, 'durationSeconds', { positive: true })
+  }
+  return result
 }
 
 function inspectBoundedValue (value, {

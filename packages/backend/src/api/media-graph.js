@@ -7,7 +7,6 @@ import { preparePlaybackSource } from '../playback/source-preparation.js'
 import { isPlaybackErrorCode, playbackErrorMessage, playbackErrorRetry } from '../playback/errors.js'
 import { parseBlobRef } from '../blob-utils.js'
 import { isArtworkRendition, normalizeAssetCoreRefV2 } from '../assets/rendition.js'
-import { ASSET_BLOCK_SIZE } from '../assets/static-core.js'
 import b4a from 'b4a'
 
 const DEFAULT_PAGE_LIMIT = 50
@@ -888,18 +887,10 @@ export function createMediaGraphApi(options = {}) {
     let index = blob.blockOffset
     let offset = 0
     if (start > 0) {
-      const canonicalStaticBlob = blob.blockOffset === 0 &&
-        blob.byteOffset === 0 &&
-        blob.blockLength === Math.ceil(blob.byteLength / ASSET_BLOCK_SIZE)
-      if (canonicalStaticBlob) {
-        index = Math.floor(start / ASSET_BLOCK_SIZE)
-        offset = start % ASSET_BLOCK_SIZE
-      } else {
-        const seek = await core.seek(Number(blob.byteOffset || 0) + start)
-        if (!seek) throw new Error('rendition start byte is unavailable')
-        index = seek[0]
-        offset = seek[1] || 0
-      }
+      const seek = await core.seek(Number(blob.byteOffset || 0) + start)
+      if (!seek) throw new Error('rendition start byte is unavailable')
+      index = seek[0]
+      offset = seek[1] || 0
     }
     const blockEnd = blob.blockOffset + blob.blockLength
     while (remaining > 0 && index < blockEnd) {

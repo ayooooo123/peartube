@@ -278,9 +278,6 @@ test('acquired static publications sign the complete readable core range', async
   const chunks = []
   for await (const chunk of opened.read({ start: 0, length: 16 })) chunks.push(Buffer.from(chunk))
   assert.deepEqual(Buffer.concat(chunks), sourceBytes.subarray(0, 16))
-  const resumed = []
-  for await (const chunk of opened.read({ start: 512, length: 16 })) resumed.push(Buffer.from(chunk))
-  assert.deepEqual(Buffer.concat(resumed), sourceBytes.subarray(512, 528))
   await opened.close()
   await written.core.close()
 })

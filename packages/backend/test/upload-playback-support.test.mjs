@@ -9,9 +9,11 @@ import Corestore from 'corestore'
 import crypto from 'hypercore-crypto'
 import Hyperblobs from 'hyperblobs'
 
-import { createStaticAssetManifest, decodePublicationManifest } from '../src/assets/index.js'
+import { createStaticAssetManifest, decodePublicationManifest, writeStaticAsset } from '../src/assets/index.js'
 import { createUploadManager } from '../src/upload.js'
 import { normalizeBlobRefInput } from '../src/blob-utils.js'
+import { createBufferSourceReader } from '../src/assets/source-reader.js'
+import { createMediaGraphApi } from '../src/api/media-graph.js'
 import {
   encodePublisherCatalogFrame,
   encodePublisherOperationBody,
@@ -234,11 +236,9 @@ test('acquired static publications sign the complete readable core range', async
       async put(key, value) { rows.set(key, { value }) },
     },
   })
-  const descriptor = createStaticAssetManifest({
-    treeHash: 'ab'.repeat(32),
-    blockLength: 1,
-    byteLength: 1024,
-  })
+  const sourceBytes = Buffer.alloc(1024, 7)
+  const written = await writeStaticAsset({ store, reader: createBufferSourceReader(sourceBytes) })
+  const descriptor = written.descriptor
 
   await manager.publishAcquiredAsset({
     acquisitionId: 'acq_static_range',
@@ -257,9 +257,29 @@ test('acquired static publications sign the complete readable core range', async
 
   const manifest = decodePublicationManifest(appended[0][0].body.payload)
   const provenance = manifest.body.provenance[0]
-  assert.equal(provenance.blobId, null)
-  assert.equal(provenance.start, 0)
-  assert.equal(provenance.end, descriptor.length)
+
+  assert.equal(provenance.blobId, `0:${descriptor.length}:0:${descriptor.byteLength}`)
+  assert.equal('start' in provenance, false)
+  assert.equal('end' in provenance, false)
+
+  const rendition = manifest.body.renditions[0]
+  const api = createMediaGraphApi({
+    store,
+    verifiedQueryView: {
+      async getRendition() { return { manifest, rendition } },
+      async authorizeRendition() { return true },
+    },
+  })
+  const opened = await api.openMediaRendition({
+    publicationId: manifest.publicationId,
+    renditionId: rendition.renditionId,
+  })
+  assert.equal(opened.success, true)
+  const chunks = []
+  for await (const chunk of opened.read({ start: 0, length: 16 })) chunks.push(Buffer.from(chunk))
+  assert.deepEqual(Buffer.concat(chunks), sourceBytes.subarray(0, 16))
+  await opened.close()
+  await written.core.close()
 })
 
 test('archive publication carries its explicit retention class to asset and catalog serving', async (t) => {

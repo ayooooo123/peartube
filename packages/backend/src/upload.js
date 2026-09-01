@@ -1501,6 +1501,8 @@ export function createUploadManager({
     const metadata = {
       id: acquisitionId,
       title: typeof resolution?.title === 'string' && resolution.title ? resolution.title : acquisitionId,
+      blobId: `0:${core.length}:0:${core.byteLength}`,
+      blobsCoreKey: b4a.toString(core.key, 'hex'),
       sourceFileName: typeof resolution?.sourceFileName === 'string' && resolution.sourceFileName ? resolution.sourceFileName : null,
       description: null,
       duration: durationMs / 1000,

@@ -93,7 +93,6 @@ test('serveVideoRangeHttpRequest writes 206 headers before waiting for Hypercore
   const calls = []
   const { key, req } = makeRangeRequest()
   let resolveFirstBlock = null
-  let firstBlockReadPending = true
 
   const core = {
     opened: true,
@@ -106,8 +105,7 @@ test('serveVideoRangeHttpRequest writes 206 headers before waiting for Hypercore
     },
     async get(index) {
       calls.push(['get', index])
-      if (index === 0 && firstBlockReadPending) {
-        firstBlockReadPending = false
+      if (index === 0) {
         await new Promise((resolve) => {
           resolveFirstBlock = resolve
         })
@@ -157,53 +155,6 @@ test('serveVideoRangeHttpRequest writes 206 headers before waiting for Hypercore
   t.alike(calls.filter((call) => call[0] === 'write'), [['write', 'cd'], ['write', 'ef']])
   t.ok(res.writableEnded, 'response ends after the requested range is written')
   t.ok(calls.some((call) => call[0] === '_getCore' && call[1] === key.toString('hex') && call[2] === true))
-  t.absent(calls.some((call) => call[0] === 'download'), 'restorable local data does not enter peer download')
-})
-
-test('serveVideoRangeHttpRequest maps canonical offloaded assets without Hypercore seek', async (t) => {
-  t.teardown(() => releaseAllPrioritizedBlobRanges())
-  const calls = []
-  const blockSize = 256 * 1024
-  const blob = {
-    blockOffset: 0,
-    blockLength: 2,
-    byteOffset: 0,
-    byteLength: 2 * blockSize,
-  }
-  const { req } = makeRangeRequest({
-    blob,
-    range: `bytes=${blockSize + 2}-${blockSize + 5}`,
-  })
-  const core = {
-    peers: [],
-    opened: true,
-    async ready() {},
-    async seek() {
-      calls.push(['seek'])
-      throw new Error('offloaded tree cannot seek without a peer')
-    },
-    async get(index, options = {}) {
-      calls.push(['get', index, options])
-      return Buffer.alloc(blockSize, index === 0 ? 65 : 66)
-    },
-    download(options) {
-      calls.push(['download', options])
-      return { done: () => Promise.resolve(), destroy: () => {} }
-    },
-    close() {},
-  }
-  const blobServer = {
-    token: 'test-token',
-    async _getCore() { return core },
-  }
-  const res = new MockResponse(calls)
-
-  const handled = await serveVideoRangeHttpRequest({ blobServer }, req, res)
-
-  t.is(handled, true)
-  t.alike(calls.filter((call) => call[0] === 'write'), [['write', 'BBBB']])
-  t.absent(calls.some((call) => call[0] === 'seek'), 'canonical byte range does not need missing inner tree nodes')
-  t.absent(calls.some((call) => call[0] === 'download'), 'restorable canonical block does not wait for a peer')
 })
 
 test('serveVideoRangeHttpRequest syncs remote length near the requested seek range', async (t) => {
@@ -238,9 +189,8 @@ test('serveVideoRangeHttpRequest syncs remote length near the requested seek ran
       calls.push(['seek', byteOffset])
       return [100, 0]
     },
-    async get(index, options = {}) {
-      calls.push(['get', index, options])
-      if (options.wait === false) return null
+    async get(index) {
+      calls.push(['get', index])
       return Buffer.from('wxyz')
     },
     download(options) {

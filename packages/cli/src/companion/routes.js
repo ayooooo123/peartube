@@ -359,8 +359,7 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
     const value = decodeOpenStreamBody(input.body)
     const operation = value.candidateRef ? service.openStream : service.openPublication
     if (typeof operation !== 'function') unavailable('Asset streaming')
-    const transport = input.inProcess === true ? 'in-process' : input.serverState?.transport || config.transport
-    const localTransport = transport === 'unix' || transport === 'in-process'
+    const localTransport = input.inProcess === true || principal.isLocal === true
     const opened = await callBackend(
       operation.bind(service),
       [{ ...value, principal, signal: input.signal, localTransport }],
@@ -508,8 +507,7 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
 
   async function attachSourceGrant (input, acquisitionPart) {
     const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.acquisitionGrant)
-    const transport = input.inProcess === true ? 'in-process' : input.serverState?.transport || config.transport
-    if (transport !== 'unix' && transport !== 'in-process') {
+    if (input.inProcess !== true && principal.isLocal !== true) {
       throw contractError(403, 'PRIVATE_ROUTE_REQUIRES_LOCAL_TRANSPORT', 'Source grants require a local protected transport')
     }
     const acquisitionId = decodedSegment(acquisitionPart, 'acquisitionId')
@@ -569,8 +567,7 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
       ? await callBackend(service.getStatus.bind(service), [{ principal, signal: input.signal }], input.signal)
       : {}
     const state = input.serverState || {}
-    const transport = { mode: state.transport || config.transport || 'unix', enabled: state.enabled !== false }
-    if (transport.mode === 'unix' && typeof state.socketPath === 'string') transport.socketPath = state.socketPath
+    const transport = { mode: state.transport || config.transport || 'tcp', enabled: state.enabled !== false }
     if (transport.mode === 'tcp') {
       if (typeof state.host === 'string') transport.host = state.host
       if (Number.isSafeInteger(state.port)) transport.port = state.port

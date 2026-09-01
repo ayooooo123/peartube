@@ -1,4 +1,3 @@
-import { join } from '#path'
 import { DEFAULT_COMPANION_CONFIG } from '../constants.js'
 
 function has (object, key) {
@@ -41,8 +40,6 @@ function routeScopes (value) {
 export function companionConfigFromEnv (env = {}) {
   const config = {}
   if (has(env, 'PEARTUBE_COMPANION_ENABLED')) config.enabled = env.PEARTUBE_COMPANION_ENABLED
-  if (has(env, 'PEARTUBE_COMPANION_TRANSPORT')) config.transport = env.PEARTUBE_COMPANION_TRANSPORT
-  if (has(env, 'PEARTUBE_COMPANION_SOCKET_PATH')) config.socketPath = env.PEARTUBE_COMPANION_SOCKET_PATH
   if (has(env, 'PEARTUBE_COMPANION_HOST')) config.host = env.PEARTUBE_COMPANION_HOST
   if (has(env, 'PEARTUBE_COMPANION_PORT')) config.port = env.PEARTUBE_COMPANION_PORT
   if (has(env, 'PEARTUBE_COMPANION_CLIENT')) config.client = env.PEARTUBE_COMPANION_CLIENT
@@ -64,8 +61,6 @@ export function companionConfigFromCli (cli = {}) {
     : {}
   const fields = {
     companionEnabled: 'enabled',
-    companionTransport: 'transport',
-    companionSocketPath: 'socketPath',
     companionHost: 'host',
     companionPort: 'port',
     companionClient: 'client',
@@ -85,26 +80,18 @@ export function companionConfigFromCli (cli = {}) {
   return Object.keys(config).length ? { companion: config } : {}
 }
 
-export function resolveCompanionConfig (raw = {}, { storagePath } = {}) {
-  if (typeof storagePath !== 'string' || !storagePath.trim()) {
-    throw new Error('storage.path is required to resolve companion configuration')
-  }
-
+export function resolveCompanionConfig (raw = {}) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
   const config = { ...DEFAULT_COMPANION_CONFIG, ...source }
   config.enabled = parseBoolean(config.enabled, DEFAULT_COMPANION_CONFIG.enabled)
-  config.transport = typeof config.transport === 'string' ? config.transport.trim().toLowerCase() : ''
-  if (config.transport !== 'unix' && config.transport !== 'tcp') {
-    throw new Error('companion.transport must be "unix" or "tcp"')
-  }
-
-  config.socketPath = typeof config.socketPath === 'string' && config.socketPath.trim()
-    ? config.socketPath.trim()
-    : join(storagePath, '.pt', 's')
+  // The machine API is HTTP-only. Keep transport in the resolved state as a
+  // protocol fact for status responses, not as an operator-selectable branch.
+  config.transport = 'tcp'
+  delete config.socketPath
   config.host = typeof config.host === 'string' && config.host.trim()
     ? config.host.trim()
     : DEFAULT_COMPANION_CONFIG.host
-  if (config.transport === 'tcp' && !['127.0.0.1', '::1', '[::1]', 'localhost'].includes(config.host.toLowerCase())) {
+  if (!['127.0.0.1', '::1', '[::1]', 'localhost'].includes(config.host.toLowerCase())) {
     throw new Error('companion TCP transport must bind to loopback because it does not provide TLS')
   }
   config.port = Number(config.port)

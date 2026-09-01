@@ -927,8 +927,6 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
   lines.push(
     'companion:',
     `  enabled: ${companion.enabled !== false}`,
-    `  transport: ${companion.transport || 'unix'}`,
-    `  socketPath: ${companion.socketPath || ''}`,
     `  host: ${companion.host || '127.0.0.1'}`,
     `  port: ${companion.port ?? 8175}`,
     `  client: ${companion.client || 'client'}`,

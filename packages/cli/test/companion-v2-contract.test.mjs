@@ -13,7 +13,7 @@ import { COMPANION_ROUTE_SCOPES, createCompanionRouter } from '../src/companion/
 const ALL_SCOPES = new Set(Object.values(COMPANION_ROUTE_SCOPES))
 
 function principal (scopes = ALL_SCOPES, publisherId = 'publisher-1') {
-  return { id: 'machine-1', publisherId, scopes }
+  return { id: 'machine-1', publisherId, scopes, isLocal: true }
 }
 
 function request (method, url, body = null, overrides = {}) {
@@ -22,7 +22,7 @@ function request (method, url, body = null, overrides = {}) {
     url,
     body: body == null ? b4a.alloc(0) : b4a.from(typeof body === 'string' ? body : JSON.stringify(body)),
     principal: principal(),
-    serverState: { transport: 'unix', socketPath: '/tmp/peartube.sock' },
+    serverState: { transport: 'tcp', host: '127.0.0.1', port: 8175 },
     ...overrides
   }
 }
@@ -195,7 +195,7 @@ test('route scopes separate acquisition request, read, cancel and private grant 
   t.is((await router.dispatch(request('POST', '/api/v2/acquisitions/acq-1/retry', null, { principal: onlyRetry }))).statusCode, 200)
 })
 
-test('private source grants are accepted only on Unix or in-process and never echoed', async (t) => {
+test('private source grants are accepted only from loopback or in-process and never echoed', async (t) => {
   let attached = null
   const router = createCompanionRouter({
     service: {
@@ -213,10 +213,10 @@ test('private source grants are accepted only on Unix or in-process and never ec
   t.is(JSON.stringify(local.body).includes('private.invalid'), false)
 
   attached = null
-  const tcp = await router.dispatch(request('POST', '/api/v2/acquisitions/acq-1/source-grants', body, {
-    serverState: { transport: 'tcp', host: '127.0.0.1', port: 8175 }
+  const remote = await router.dispatch(request('POST', '/api/v2/acquisitions/acq-1/source-grants', body, {
+    principal: { ...principal(), isLocal: false }
   }))
-  t.is(tcp.statusCode, 403)
+  t.is(remote.statusCode, 403)
   t.is(attached, null)
 
   const inProcess = await router.dispatch(request('POST', '/api/v2/acquisitions/acq-1/source-grants', body, {

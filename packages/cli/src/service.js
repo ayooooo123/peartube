@@ -1411,8 +1411,7 @@ async function buildRelayService({
           }),
           config: config.companion,
           clock: nowFn,
-          logger,
-          fs: companionFsModule
+          logger
         })
         logger.relay.info('Starting companion server listener...')
         await companionServer.start()
@@ -1750,7 +1749,7 @@ async function buildRelayService({
     getCompanionState() {
       return companionServer?.state?.() || {
         enabled: false,
-        transport: config.companion?.transport || 'unix'
+        transport: 'tcp'
       }
     },
     getStatus() {

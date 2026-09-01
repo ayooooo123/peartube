@@ -26,7 +26,7 @@ function request (method, url, overrides = {}) {
     url,
     headers: {},
     body: b4a.alloc(0),
-    principal: { id: CLIENT, publisherId: 'publisher-1', scopes: new Set(['*']) },
+    principal: { id: CLIENT, publisherId: 'publisher-1', scopes: new Set(['*']), isLocal: true },
     ...overrides
   }
 }
@@ -306,14 +306,14 @@ test('local stream open returns the loopback Hypercore blob URL without a media 
         }
       }
     },
-    config: { client: { id: CLIENT }, transport: 'unix' },
+    config: { client: { id: CLIENT }, transport: 'tcp' },
     clock: () => NOW,
     capabilities
   })
 
   const opened = await router.dispatch(request('POST', '/api/v2/streams/open', {
     body: b4a.from('{"publicationId":"pub-1","renditionId":"rend-1","startOffsetSeconds":968.4,"durationSeconds":1320}'),
-    serverState: { transport: 'unix' }
+    serverState: { transport: 'tcp', host: '127.0.0.1', port: 8175 }
   }))
 
   t.is(opened.statusCode, 200)
@@ -360,7 +360,7 @@ test('server shutdown clears capabilities and duplicate close is safe', async (t
   const grant = capabilities.issue(scope())
   const server = createCompanionServer({
     service: {},
-    config: { enabled: false, transport: 'unix' },
+    config: { enabled: false, transport: 'tcp' },
     clock: () => NOW,
     capabilities
   })

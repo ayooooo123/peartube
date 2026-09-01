@@ -1030,17 +1030,21 @@ test('TCP companion and archive UI use separate listeners and only v2 is machine
 test('Bare serves authenticated companion HTTP over a Unix socket', (t) => {
   const bareName = process.platform === 'win32' ? 'bare.cmd' : 'bare'
   const bareCandidates = [
-    join(packageRoot, '..', '..', 'node_modules', '.bin', bareName),
-    join(packageRoot, 'node_modules', '.bin', bareName)
+    join(packageRoot, 'node_modules', 'bare-runtime', 'bin', 'bare'),
+    join(packageRoot, '..', '..', 'node_modules', 'bare-runtime', 'bin', 'bare'),
+    join(packageRoot, 'node_modules', '.bin', bareName),
+    join(packageRoot, '..', '..', 'node_modules', '.bin', bareName)
   ]
   const bare = bareCandidates.find((candidate) => existsSync(candidate)) || bareCandidates[0]
   const fixture = join(__dirname, 'fixtures', 'companion-bare-uds.mjs')
-  const spawnTarget = existsSync(bare) ? process.execPath : bare
-  const spawnArgs = spawnTarget === process.execPath ? [bare, fixture] : [fixture]
-  const result = spawnSync(spawnTarget, spawnArgs, {
+  const result = spawnSync(process.execPath, [bare, fixture], {
     cwd: packageRoot,
     encoding: 'utf8',
-    timeout: 10_000
+    timeout: 10_000,
+    env: {
+      ...process.env,
+      PATH: `${dirname(process.execPath)}:${process.env.PATH || ''}`
+    }
   })
   const bareStdout = String(result.stdout || '')
   const bareStderr = String(result.stderr || '')

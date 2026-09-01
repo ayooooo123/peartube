@@ -264,7 +264,7 @@ test('an absent, unreachable or tampered object never yields bytes and is counte
   t.absent(b4a.isBuffer(absent.block.value), 'an absent object yields no block value')
   t.is(storage.stats().missing, 1, 'an absent object counts as missing')
   t.is(storage.stats().failed, 0, 'an absent object is not a failure')
-  t.is(messages.length, 0, 'an absent object is not worth logging')
+  t.is(messages.length, 1, 'an absent remote block is logged with its content key')
 
   // --- unreachable: the provider throws -------------------------------------
   provider.unreachable = new Error('connect ECONNREFUSED')
@@ -272,9 +272,9 @@ test('an absent, unreachable or tampered object never yields bytes and is counte
   t.absent(b4a.isBuffer(unreachable.block.value), 'an unreachable store yields no block value')
   t.is(storage.stats().failed, 1, 'an unreachable store counts as failed')
   t.is(storage.stats().corrupt, 0, 'a transport outage is never reported as corruption')
-  t.is(messages.length, 1, 'an unreachable store logs once')
-  t.ok(messages[0].includes('unreachable'), 'the log says the store was unreachable')
-  t.ok(messages[0].includes('ECONNREFUSED'), 'the log carries the transport error')
+  t.is(messages.length, 2, 'an unreachable store logs once after the missing object')
+  t.ok(messages[1].includes('unreachable'), 'the log says the store was unreachable')
+  t.ok(messages[1].includes('ECONNREFUSED'), 'the log carries the transport error')
   provider.unreachable = null
 
   // --- corrupt: the object store hands back the wrong bytes -----------------
@@ -286,13 +286,13 @@ test('an absent, unreachable or tampered object never yields bytes and is counte
   const corrupt = await proofFor(core, 2)
   t.absent(b4a.isBuffer(corrupt.block.value), 'tampered bytes are never returned')
   t.is(storage.stats().corrupt, 1, 'tampered bytes count as corrupt')
-  t.is(messages.length, 2, 'tampered bytes are logged')
-  t.ok(messages[1].includes('CORRUPT'), 'the corruption log is loud')
-  t.ok(messages[1].includes('refusing to serve'), 'the corruption log says the bytes were dropped')
+  t.is(messages.length, 3, 'tampered bytes are logged')
+  t.ok(messages[2].includes('CORRUPT'), 'the corruption log is loud')
+  t.ok(messages[2].includes('refusing to serve'), 'the corruption log says the bytes were dropped')
 
   t.is(await readBlockDirect(core, 2), null, 'the storage layer resolves null rather than the tampered bytes')
   t.is(storage.stats().corrupt, 2, 'every tampered fetch is counted')
-  t.is(messages.length, 3, 'every tampered fetch is logged')
+  t.is(messages.length, 4, 'every tampered fetch is logged')
 
   // --- and the honest object still restores ---------------------------------
   objects.set(key, blocks[2])

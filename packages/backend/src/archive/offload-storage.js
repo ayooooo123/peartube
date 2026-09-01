@@ -352,6 +352,8 @@ export function createOffloadStorage ({
       const block = await store.get(index, { expectedHash })
       if (block === null || block === undefined) {
         counters.missing++
+        const contentKey = typeof store.contentKey === 'function' ? store.contentKey(expectedHash) : 'unknown'
+        emit(`MISSING ${label}: object ${contentKey} is absent`)
         return null
       }
 

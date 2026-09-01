@@ -12,6 +12,7 @@ on:
       - '.dockerignore'
       - '.github/actions/**'
       - '.github/workflows/build-relay.yml'
+      - '.github/workflows/release-relay.yml'
   push:
     branches: [main]
     paths:
@@ -23,6 +24,7 @@ on:
       - '.dockerignore'
       - '.github/actions/**'
       - '.github/workflows/build-relay.yml'
+      - '.github/workflows/release-relay.yml'
   schedule:
     - cron: '47 6 * * *'
   workflow_dispatch:
@@ -72,6 +74,9 @@ jobs:
       - name: Build relay standalone executable (x64)
         run: npm run build:standalone:linux-x64 --prefix packages/cli
 
+      - name: Build relay standalone executable (arm64)
+        run: npm run build:standalone:linux-arm64 --prefix packages/cli
+
       - name: Prepare relay docker artifacts
         run: npm run prepare:docker-artifacts --prefix packages/cli
 
@@ -86,7 +91,7 @@ jobs:
         with:
           context: .
           file: packages/cli/Dockerfile
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: false
 
   relay-standalone:

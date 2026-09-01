@@ -155,12 +155,22 @@ test('Dockerfile final stage copies the prepared relay artifact', async (t) => {
   t.ok(content.includes('COPY --from=artifact /peartube-relay /peartube-relay'), 'final image copies the packaged relay executable from the artifact stage')
 })
 
-test('relay workflow prepares standalone artifacts before docker image build', async (t) => {
+test('relay workflows build the same multi-platform image inputs', async (t) => {
   const workflowPath = join(__dirname, '..', '..', '..', '.github', 'workflows', 'build-relay.yml')
+  const releaseWorkflowPath = join(__dirname, '..', '..', '..', '.github', 'workflows', 'release-relay.yml')
   const content = readFileSync(workflowPath, 'utf8')
+  const releaseContent = readFileSync(releaseWorkflowPath, 'utf8')
 
   t.ok(content.includes('npm run build:standalone:linux-x64 --prefix packages/cli'), 'workflow builds linux x64 standalone artifacts before docker packaging')
+  t.ok(content.includes('npm run build:standalone:linux-arm64 --prefix packages/cli'), 'workflow builds linux arm64 standalone artifacts before docker packaging')
   t.ok(content.includes('npm run prepare:docker-artifacts --prefix packages/cli'), 'workflow stages prepared docker artifacts before docker packaging')
+  t.ok(content.includes('platforms: linux/amd64,linux/arm64'), 'validation builds every platform published by the relay release workflow')
+  t.ok(releaseContent.includes('platforms: linux/amd64,linux/arm64'), 'release workflow publishes the validated platform set')
+  t.is(
+    content.split("- '.github/workflows/release-relay.yml'").length - 1,
+    2,
+    'release workflow changes trigger relay image validation for pull requests and pushes',
+  )
 })
 
 test('Dockerfile packages executable standalone yt-dlp in the distroless relay image', async (t) => {

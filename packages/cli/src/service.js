@@ -87,14 +87,17 @@ function createProviderMachineService(runtime, options = {}) {
       }
       throw new Error('Policy service is unavailable')
     },
-    async openStream({ candidateRef, signal } = {}) {
+    async openStream({ candidateRef, signal, localTransport = false } = {}) {
       const resolved = await provider.resolve({ ref: candidateRef, signal })
       if (resolved.kind !== 'published' || !resolved.publicationId || !resolved.renditionId) {
         const error = new Error('A verified publication is required before streaming')
         error.code = 'ACQUISITION_REQUIRED'
         throw error
       }
-      const opened = await runtime.api.openMediaRendition({
+      const openMethod = localTransport && typeof runtime.api.openMediaRenditionUrl === 'function'
+        ? 'openMediaRenditionUrl'
+        : 'openMediaRendition'
+      const opened = await runtime.api[openMethod]({
         publicationId: resolved.publicationId,
         renditionId: resolved.renditionId,
         signal
@@ -103,6 +106,21 @@ function createProviderMachineService(runtime, options = {}) {
         const error = new Error(opened?.error || 'Verified rendition is unavailable')
         error.code = opened?.errorCode || 'PROVIDER_STREAM_UNAVAILABLE'
         throw error
+      }
+      if (openMethod === 'openMediaRenditionUrl') {
+        return {
+          schemaVersion: 1,
+          streamId: `${opened.publicationId}:${opened.renditionId}`,
+          publicationId: opened.publicationId,
+          renditionId: opened.renditionId,
+          assetId: opened.assetId,
+          byteLength: opened.byteLength,
+          mimeType: opened.contentType,
+          capability: null,
+          expiresAt: Date.now() + 5 * 60 * 1000,
+          etag: `"asset-${opened.assetId}"`,
+          url: opened.url
+        }
       }
       const asset = Object.freeze({
         assetId: opened.assetId,

@@ -283,6 +283,45 @@ test('open preserves its response shape and embeds the resolved asset only in th
   replay.release()
 })
 
+test('local stream open returns the loopback Hypercore blob URL without a media capability hop', async t => {
+  const blobUrl = `http://127.0.0.1:49731/?key=${'a'.repeat(64)}&blob=0%3A1%3A0%3A8&type=video%2Fmp4&token=${'b'.repeat(64)}`
+  let localTransport = null
+  const capabilities = createStreamCapabilityStore({ now: () => NOW })
+  const router = createCompanionRouter({
+    service: {
+      async openStream (input) {
+        localTransport = input.localTransport
+        return {
+          schemaVersion: 1,
+          streamId: 'stream-1',
+          publicationId: 'pub-1',
+          renditionId: 'rend-1',
+          assetId: 'asset-1',
+          byteLength: 8,
+          mimeType: 'video/mp4',
+          capability: null,
+          expiresAt: NOW + 60_000,
+          etag: '\"asset-asset-1\"',
+          url: blobUrl
+        }
+      }
+    },
+    config: { client: { id: CLIENT }, transport: 'unix' },
+    clock: () => NOW,
+    capabilities
+  })
+
+  const opened = await router.dispatch(request('POST', '/api/v2/streams/open', {
+    body: b4a.from(`{\"candidateRef\":\"${REF}\"}`),
+    serverState: { transport: 'unix' }
+  }))
+
+  t.is(opened.statusCode, 200)
+  t.is(opened.body.url, blobUrl)
+  t.is(localTransport, true)
+  t.is(capabilities.size, 0, 'blob playback does not retain a companion media capability')
+})
+
 test('retiring an active capability releases its asset exactly once after acquisition cleanup', async (t) => {
   let releases = 0
   const asset = {

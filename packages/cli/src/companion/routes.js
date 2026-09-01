@@ -283,6 +283,23 @@ function streamLease (value) {
     assetId: decodeId(assetId, 'assetId')
   }
 }
+function localBlobUrl (value) {
+  if (typeof value !== 'string' || b4a.byteLength(value) > 4096) {
+    throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Stream backend returned an invalid local blob URL')
+  }
+  let parsed
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Stream backend returned an invalid local blob URL')
+  }
+  if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1' ||
+      parsed.username || parsed.password || parsed.hash) {
+    throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Stream backend returned a non-loopback blob URL')
+  }
+  return parsed.toString()
+}
+
 function publicStreamDescriptor (value) {
   if (value?.schemaVersion !== 1) return null
   return Object.freeze({
@@ -295,7 +312,8 @@ function publicStreamDescriptor (value) {
     mimeType: typeof value.mimeType === 'string' && b4a.byteLength(value.mimeType) <= 128 ? value.mimeType : 'application/octet-stream',
     capability: value.capability == null ? null : decodeId(value.capability, 'capability'),
     expiresAt: safeInteger(value.expiresAt, 'expiresAt', { nullable: true }),
-    etag: value.etag == null || (typeof value.etag === 'string' && b4a.byteLength(value.etag) <= 256) ? value.etag ?? null : null
+    etag: value.etag == null || (typeof value.etag === 'string' && b4a.byteLength(value.etag) <= 256) ? value.etag ?? null : null,
+    ...(value.url == null ? {} : { url: localBlobUrl(value.url) }),
   })
 }
 
@@ -338,9 +356,11 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
     const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.stream)
     const { candidateRef } = decodeOpenStreamBody(input.body)
     if (typeof service.openStream !== 'function') unavailable('Asset streaming')
+    const transport = input.inProcess === true ? 'in-process' : input.serverState?.transport || config.transport
+    const localTransport = transport === 'unix' || transport === 'in-process'
     const opened = await callBackend(
       service.openStream.bind(service),
-      [{ candidateRef, principal, signal: input.signal }],
+      [{ candidateRef, principal, signal: input.signal, localTransport }],
       input.signal
     )
     const descriptor = publicStreamDescriptor(opened)

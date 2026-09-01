@@ -335,6 +335,14 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
     if (job.principalId !== normalizePrincipalId(principal)) fail('ACQUISITION_NOT_FOUND', 'acquisition not found', 404)
     return job
   }
+  async function retireDeferredReplayGrant (job) {
+    if (job.deferredInput !== true) return
+    await sourceGrants.revoke({
+      acquisitionId: job.acquisitionId,
+      principal: job.principalId,
+      reason: acquisitionError('SOURCE_GRANT_REPLACED', 'source grant replaced for acquisition replay', 409)
+    }).catch(() => {})
+  }
   async function enforcePolicy () {
     for (const job of await store.listActive()) {
       try {
@@ -376,6 +384,13 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       if (existing) {
         const policyValue = await currentPolicy()
         if (existing.state === 'failed' && existing.recoverable && existing.attempts < policyValue.maxAttempts) {
+          // Replaying a deferred acquisition means its source client is about
+          // to attach a fresh capability. Retaining the old in-memory grant
+          // lets dispatchQueued start the retry before that attach arrives;
+          // the attach then loses with ACQUISITION_NOT_QUEUED and revokes the
+          // capability underneath the newly running attempt. Retire the stale
+          // grant first so this job remains queued for its replacement.
+          await retireDeferredReplayGrant(existing)
           const outcome = await store.retry(existing.acquisitionId, { expectedVersion: existing.version, resetVerifiedPrefix: RESET_PREFIX_ERRORS.has(existing.errorCode) }); await notify(outcome.event); existing = outcome.job
           ledger.reserve({ acquisitionId: existing.acquisitionId, principalId, expectedBytes: existing.expectedBytes, policy: policyValue, isRemote }); await dispatchQueued()
         } else if (existing.state === 'failed' && existing.recoverable) {

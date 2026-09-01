@@ -138,6 +138,65 @@ test('a private local resolution stays queued until its source grant is attached
   await fixtureValue.manager.close()
 })
 
+test('replaying a failed deferred acquisition waits for its replacement source grant', async t => {
+  let failFirstAttempt = true
+  const fixtureValue = fixture({
+    acquisitionProvider: provider({
+      waitForGrant: true,
+      block: async () => {
+        if (!failFirstAttempt) return
+        failFirstAttempt = false
+        throw Object.assign(new Error('temporary S3 timeout'), { code: 'S3_REQUEST_TIMEOUT' })
+      }
+    })
+  })
+  await fixtureValue.manager.start()
+  const input = { idempotencyKey: 'request-replacement-grant', request: REQUEST, principal: PRINCIPAL }
+  const queued = await fixtureValue.manager.request(input)
+  await fixtureValue.manager.attachGrant({
+    acquisitionId: queued.acquisitionId,
+    principal: PRINCIPAL,
+    grant: {
+      token: 'initial-source-grant-0001',
+      adapterId: 'local-adapter',
+      audience: { principalId: PRINCIPAL.principalId, acquisitionId: queued.acquisitionId },
+      expiresAt: NOW + 1000
+    }
+  })
+  const failed = await eventually(
+    () => fixtureValue.manager.get({ acquisitionId: queued.acquisitionId, principal: PRINCIPAL }),
+    job => job.state === 'failed'
+  )
+  t.is(failed.errorCode, 'S3_REQUEST_TIMEOUT')
+  t.is(failed.recoverable, true)
+
+  const replayed = await fixtureValue.manager.request(input)
+  t.is(replayed.state, 'queued')
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(
+    (await fixtureValue.manager.get({ acquisitionId: queued.acquisitionId, principal: PRINCIPAL })).state,
+    'queued',
+    'the stale grant cannot start the retry before the replacement is attached'
+  )
+
+  await fixtureValue.manager.attachGrant({
+    acquisitionId: queued.acquisitionId,
+    principal: PRINCIPAL,
+    grant: {
+      token: 'replacement-source-grant-0002',
+      adapterId: 'local-adapter',
+      audience: { principalId: PRINCIPAL.principalId, acquisitionId: queued.acquisitionId },
+      expiresAt: NOW + 1000
+    }
+  })
+  const completed = await eventually(
+    () => fixtureValue.manager.get({ acquisitionId: queued.acquisitionId, principal: PRINCIPAL }),
+    job => job.state === 'completed'
+  )
+  t.is(completed.bytesAcquired, BYTES.byteLength)
+  await fixtureValue.manager.close()
+})
+
 test('a stale failed acquisition is replaced when its resolution now waits for a grant', async t => {
   let deferred = false
   let opens = 0

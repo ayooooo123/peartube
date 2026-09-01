@@ -1035,7 +1035,9 @@ test('Bare serves authenticated companion HTTP over a Unix socket', (t) => {
   ]
   const bare = bareCandidates.find((candidate) => existsSync(candidate)) || bareCandidates[0]
   const fixture = join(__dirname, 'fixtures', 'companion-bare-uds.mjs')
-  const result = spawnSync(bare, [fixture], {
+  const spawnTarget = existsSync(bare) ? process.execPath : bare
+  const spawnArgs = spawnTarget === process.execPath ? [bare, fixture] : [fixture]
+  const result = spawnSync(spawnTarget, spawnArgs, {
     cwd: packageRoot,
     encoding: 'utf8',
     timeout: 10_000

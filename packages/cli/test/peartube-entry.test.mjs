@@ -264,7 +264,11 @@ test('legacy Node and Bare entry graphs remain isolated', (t) => {
     join(packageRoot, 'node_modules', '.bin', bareName)
   ]
   const bareLauncher = bareCandidates.find((candidate) => existsSync(candidate)) || bareCandidates[0]
-  const bareResult = spawnSync(bareLauncher, [join(packageRoot, 'bare-bin.js'), '--help'], {
+  const spawnTarget = existsSync(bareLauncher) ? process.execPath : bareLauncher
+  const spawnArgs = spawnTarget === process.execPath
+    ? [bareLauncher, join(packageRoot, 'bare-bin.js'), '--help']
+    : [join(packageRoot, 'bare-bin.js'), '--help']
+  const bareResult = spawnSync(spawnTarget, spawnArgs, {
     cwd: packageRoot,
     encoding: 'utf8',
     env: {

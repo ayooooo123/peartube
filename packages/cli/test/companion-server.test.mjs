@@ -325,7 +325,7 @@ test('companion close terminates an in-flight request before removing its socket
   const socket = createConnection(state.socketPath)
   socket.on('error', noop)
   await once(socket, 'connect')
-  const socketClosed = once(socket, 'close')
+  const socketClosed = new Promise((resolve) => socket.once('close', resolve))
   socket.write(partialSignedRequest('close-nonce-0001'))
 
   await server.close()
@@ -350,7 +350,7 @@ test('companion enforces an absolute in-flight request deadline', async (t) => {
   await once(socket, 'connect')
   socket.write(partialSignedRequest('deadline-nonce-01'))
   await Promise.race([
-    once(socket, 'close'),
+    new Promise((resolve) => socket.once('close', resolve)),
     new Promise((resolve, reject) => setTimeout(() => reject(new Error('request deadline did not close the socket')), 250))
   ])
   t.pass('deadline closes the in-flight request')
@@ -371,7 +371,7 @@ test('companion closes a connection that never completes its first request heade
   t.teardown(() => socket.destroy())
   await once(socket, 'connect')
   await Promise.race([
-    once(socket, 'close'),
+    new Promise((resolve) => socket.once('close', resolve)),
     new Promise((resolve, reject) => setTimeout(() => reject(new Error('first request deadline did not close the socket')), 250))
   ])
   t.pass('deadline closes a pre-request connection')

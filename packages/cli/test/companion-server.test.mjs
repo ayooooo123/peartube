@@ -1030,8 +1030,8 @@ test('TCP companion and archive UI use separate listeners and only v2 is machine
 test('Bare serves authenticated companion HTTP over a Unix socket', (t) => {
   const bareName = process.platform === 'win32' ? 'bare.cmd' : 'bare'
   const bareCandidates = [
-    join(packageRoot, 'node_modules', '.bin', bareName),
-    join(packageRoot, '..', '..', 'node_modules', '.bin', bareName)
+    join(packageRoot, '..', '..', 'node_modules', '.bin', bareName),
+    join(packageRoot, 'node_modules', '.bin', bareName)
   ]
   const bare = bareCandidates.find((candidate) => existsSync(candidate)) || bareCandidates[0]
   const fixture = join(__dirname, 'fixtures', 'companion-bare-uds.mjs')
@@ -1040,7 +1040,9 @@ test('Bare serves authenticated companion HTTP over a Unix socket', (t) => {
     encoding: 'utf8',
     timeout: 10_000
   })
-
-  t.is(result.status, 0, result.error?.message || result.stderr || result.stdout)
-  t.is(result.stdout?.trim(), 'bare-companion-uds-ok', result.error?.message)
+  const bareStdout = String(result.stdout || '')
+  const bareStderr = String(result.stderr || '')
+  const detail = result.error ? `launcher error: ${result.error.message}` : (bareStderr || bareStdout || `exit code ${result.status}`)
+  t.is(result.status, 0, `Bare companion execution status: ${detail}`)
+  t.is(bareStdout.trim(), 'bare-companion-uds-ok', `Bare companion output: ${detail}`)
 })

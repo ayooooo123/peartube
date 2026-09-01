@@ -260,8 +260,8 @@ test('legacy Node and Bare entry graphs remain isolated', (t) => {
 
   const bareName = process.platform === 'win32' ? 'bare.cmd' : 'bare'
   const bareCandidates = [
-    join(packageRoot, 'node_modules', '.bin', bareName),
-    join(packageRoot, '..', '..', 'node_modules', '.bin', bareName)
+    join(packageRoot, '..', '..', 'node_modules', '.bin', bareName),
+    join(packageRoot, 'node_modules', '.bin', bareName)
   ]
   const bareLauncher = bareCandidates.find((candidate) => existsSync(candidate)) || bareCandidates[0]
   const bareResult = spawnSync(bareLauncher, [join(packageRoot, 'bare-bin.js'), '--help'], {
@@ -273,9 +273,12 @@ test('legacy Node and Bare entry graphs remain isolated', (t) => {
     }
   })
 
-  t.is(bareResult.status, 0, 'bare-bin executes under the actual Bare runtime conditions')
-  t.ok(bareResult.stdout.includes('peartube-relay'), 'Bare graph keeps relay help')
-  t.is(bareResult.stderr, '', 'Bare graph resolves without Node-only dependency errors')
+  const bareStdout = String(bareResult.stdout || '')
+  const bareStderr = String(bareResult.stderr || '')
+  const failureDetail = bareResult.error ? `launcher error: ${bareResult.error.message}` : (bareStderr || bareStdout || `exit code ${bareResult.status}`)
+  t.is(bareResult.status, 0, `bare-bin executes under the actual Bare runtime conditions: ${failureDetail}`)
+  t.ok(bareStdout.includes('peartube-relay'), `Bare graph keeps relay help: ${failureDetail}`)
+  t.is(bareStderr, '', `Bare graph resolves without Node-only dependency errors: ${failureDetail}`)
   t.is(readFileSync(join(packageRoot, 'bare-bin.js'), 'utf8').trim(), [
     '#!/usr/bin/env bare',
     '',

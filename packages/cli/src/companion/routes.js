@@ -354,13 +354,14 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
 
   async function openStream (input) {
     const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.stream)
-    const { candidateRef } = decodeOpenStreamBody(input.body)
-    if (typeof service.openStream !== 'function') unavailable('Asset streaming')
+    const value = decodeOpenStreamBody(input.body)
+    const operation = value.candidateRef ? service.openStream : service.openPublication
+    if (typeof operation !== 'function') unavailable('Asset streaming')
     const transport = input.inProcess === true ? 'in-process' : input.serverState?.transport || config.transport
     const localTransport = transport === 'unix' || transport === 'in-process'
     const opened = await callBackend(
-      service.openStream.bind(service),
-      [{ candidateRef, principal, signal: input.signal, localTransport }],
+      operation.bind(service),
+      [{ ...value, principal, signal: input.signal, localTransport }],
       input.signal
     )
     const descriptor = publicStreamDescriptor(opened)

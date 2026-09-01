@@ -25,7 +25,7 @@ const CANDIDATE_REF = /^[A-Za-z0-9_-]{43}$/
 const KIND = new Set(['movie', 'episode'])
 const CANONICAL_NAMESPACE = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/
 const SEARCH_FIELDS = new Set(['namespace', 'identifier', 'kind', 'season', 'episode', 'title', 'year', 'limit', 'cursor'])
-const OPEN_FIELDS = new Set(['candidateRef'])
+const OPEN_FIELDS = new Set(['candidateRef', 'publicationId', 'renditionId'])
 const ACQUISITION_FIELDS = new Set(['idempotencyKey', 'request'])
 const SOURCE_GRANT_FIELDS = new Set(['grant'])
 const ACQUISITION_LIST_FIELDS = new Set(['cursor', 'limit', 'states'])
@@ -330,7 +330,18 @@ export function decodeSearchQuery (values) {
 
 export function decodeOpenStreamBody (body) {
   const value = onlyFields(decodeJsonBody(body), OPEN_FIELDS, 'stream-open body')
-  return { candidateRef: boundedString(value.candidateRef, 'candidateRef', 64, { pattern: CANDIDATE_REF }) }
+  const hasCandidate = value.candidateRef !== undefined
+  const hasPublication = value.publicationId !== undefined || value.renditionId !== undefined
+  if (hasCandidate === hasPublication) {
+    throw new CompanionContractError(400, 'INVALID_BODY', 'Provide exactly one candidate or publication rendition')
+  }
+  if (hasCandidate) {
+    return { candidateRef: boundedString(value.candidateRef, 'candidateRef', 64, { pattern: CANDIDATE_REF }) }
+  }
+  return {
+    publicationId: boundedString(value.publicationId, 'publicationId', 128, { pattern: ID }),
+    renditionId: boundedString(value.renditionId, 'renditionId', 128, { pattern: ID })
+  }
 }
 
 function inspectBoundedValue (value, {

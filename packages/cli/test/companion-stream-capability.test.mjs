@@ -285,12 +285,12 @@ test('open preserves its response shape and embeds the resolved asset only in th
 
 test('local stream open returns the loopback Hypercore blob URL without a media capability hop', async t => {
   const blobUrl = `http://127.0.0.1:49731/?key=${'a'.repeat(64)}&blob=0%3A1%3A0%3A8&type=video%2Fmp4&token=${'b'.repeat(64)}`
-  let localTransport = null
+  let openedInput = null
   const capabilities = createStreamCapabilityStore({ now: () => NOW })
   const router = createCompanionRouter({
     service: {
-      async openStream (input) {
-        localTransport = input.localTransport
+      async openPublication (input) {
+        openedInput = input
         return {
           schemaVersion: 1,
           streamId: 'stream-1',
@@ -312,13 +312,13 @@ test('local stream open returns the loopback Hypercore blob URL without a media 
   })
 
   const opened = await router.dispatch(request('POST', '/api/v2/streams/open', {
-    body: b4a.from(`{\"candidateRef\":\"${REF}\"}`),
+    body: b4a.from('{"publicationId":"pub-1","renditionId":"rend-1"}'),
     serverState: { transport: 'unix' }
   }))
 
   t.is(opened.statusCode, 200)
   t.is(opened.body.url, blobUrl)
-  t.is(localTransport, true)
+  t.alike([openedInput.publicationId, openedInput.renditionId, openedInput.localTransport], ['pub-1', 'rend-1', true])
   t.is(capabilities.size, 0, 'blob playback does not retain a companion media capability')
 })
 

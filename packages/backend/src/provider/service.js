@@ -640,6 +640,7 @@ export function createProviderService({
             key: `${publication.publicationId}:${rendition.renditionId}`,
             kind: 'published',
             title: firstPresent([manifest.body?.title, publication.normalizedTitle]),
+            sourceFileName: firstPresent([manifest.body?.sourceFileName, publication.sourceFileName]),
             mediaContext: mediaContext(selector),
             publisherId: firstPresent([publication.publisherId, manifest.body?.publisherId]),
             publicationId: publication.publicationId,
@@ -743,6 +744,7 @@ export function createProviderService({
     const lease = issueReference({
       kind: record.kind,
       title: record.title,
+      sourceFileName: record.sourceFileName || null,
       mediaContext: record.mediaContext,
       publisherId: record.publisherId || null,
       publicationId: record.publicationId || null,
@@ -755,6 +757,7 @@ export function createProviderService({
       schemaVersion: 1,
       ref: lease.ref,
       title: record.title,
+      ...(record.sourceFileName ? { sourceFileName: record.sourceFileName } : {}),
       mediaContext: record.mediaContext,
       kind: record.kind,
       ...(record.publicationId ? { publicationId: record.publicationId } : {}),

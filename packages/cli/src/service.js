@@ -80,10 +80,17 @@ function createProviderMachineService(runtime, options = {}) {
     ...provider,
     async search(input = {}) {
       const result = await provider.search(input)
-      const published = (result?.candidates || []).find(candidate =>
+      const releaseFileNames = options.releaseFileNames?.() || {}
+      const candidates = (result?.candidates || []).map(candidate => {
+        const override = releaseFileNames[`${candidate.publicationId}:${candidate.renditionId}`] ||
+          releaseFileNames[candidate.publicationId]
+        return override ? { ...candidate, sourceFileName: override } : candidate
+      })
+      const projected = Array.isArray(result) ? candidates : { ...result, candidates }
+      const published = candidates.find(candidate =>
         candidate?.kind === 'published' && candidate.publicationId && candidate.renditionId)
       if (published) warmPublishedCandidate(published)
-      return result
+      return projected
     },
     issueLocalResolution(input) {
       if (typeof runtime?.issueLocalProviderResolution === 'function') {
@@ -197,7 +204,33 @@ function createProviderMachineService(runtime, options = {}) {
         assetId: opened.assetId,
         asset
       }
-    }
+    },
+    async openPublication({ publicationId, renditionId, signal, localTransport = false } = {}) {
+      if (!localTransport || typeof runtime.api?.openMediaRenditionUrl !== 'function') {
+        const error = new Error('Deterministic publication playback requires a local protected transport')
+        error.code = 'LOCAL_TRANSPORT_REQUIRED'
+        throw error
+      }
+      const opened = await runtime.api.openMediaRenditionUrl({ publicationId, renditionId, signal })
+      if (!opened?.success) {
+        const error = new Error(opened?.error || 'Verified rendition is unavailable')
+        error.code = opened?.errorCode || 'PROVIDER_STREAM_UNAVAILABLE'
+        throw error
+      }
+      return {
+        schemaVersion: 1,
+        streamId: opened.assetId,
+        publicationId: opened.publicationId,
+        renditionId: opened.renditionId,
+        assetId: opened.assetId,
+        byteLength: opened.byteLength,
+        mimeType: opened.contentType,
+        capability: null,
+        expiresAt: Date.now() + 5 * 60 * 1000,
+        etag: `"asset-${opened.assetId}"`,
+        url: opened.url
+      }
+    },
   })
 }
 
@@ -1314,7 +1347,7 @@ async function buildRelayService({
             fs: runtimeFsModule,
             path: runtimePathModule
           }),
-          httpSurface: archiveHttp
+          httpSurface: archiveHttp,
         })
         await archiveConsole.start()
         // The one line that separates "still opening the store" from "stuck":
@@ -1341,7 +1374,10 @@ async function buildRelayService({
           })
         }
         companionServer = await companionServerFactory({
-          service: createProviderMachineService(runtime, { ensureAcquisitionPolicy: ensureLocalAcquisitionPolicy }),
+          service: createProviderMachineService(runtime, {
+            ensureAcquisitionPolicy: ensureLocalAcquisitionPolicy,
+            releaseFileNames: () => relaySettings.get('releaseFileNames', {})
+          }),
           config: config.companion,
           clock: nowFn,
           logger,

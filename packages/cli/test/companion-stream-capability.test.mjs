@@ -301,7 +301,7 @@ test('local stream open returns the loopback Hypercore blob URL without a media 
           mimeType: 'video/mp4',
           capability: null,
           expiresAt: NOW + 60_000,
-          etag: '\"asset-asset-1\"',
+          etag: '"asset-asset-1"',
           url: blobUrl
         }
       }

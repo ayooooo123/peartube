@@ -344,7 +344,7 @@ async function serveStaticAssetRangeHttpRequest(deps, req, res, marker) {
   } catch (error) {
     if (controller.signal.aborted || error?.name === 'AbortError' || res.writableEnded || res.destroyed) return true
     if (res.headersSent) {
-      try { res.destroy?.(error) } catch {}
+      try { res.destroy?.(error) } catch { /* response is already closed */ }
       return true
     }
     return endBoundedStaticResponse(req, res, 503, entry.coreRef.byteLength, 'verified static source unavailable')

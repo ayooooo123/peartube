@@ -1067,7 +1067,7 @@ async function buildRelayService({
               runtime.verifiedQueryView?.getPublication?.({ publicationId }))
             const pubPublisherId = pub?.publisherId || pub?.body?.publisherId || null
             if (pubPublisherId && pubPublisherId === localPublisherId) isLocalPublication = true
-          } catch {}
+          } catch { /* absent publication remains non-local */ }
         }
         if (isLocalPublication && runtime.retractPublication) {
           try {

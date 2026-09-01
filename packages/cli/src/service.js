@@ -1,3 +1,4 @@
+import b4a from 'b4a'
 import { createCliLogger } from './cli-logger.js'
 import { RelayCatalog } from './catalog.js'
 import { buildRelayStatus, writeRelayStatus } from './status.js'
@@ -104,7 +105,27 @@ function createProviderMachineService(runtime, options = {}) {
         throw error
       }
       const asset = Object.freeze({
-        ...opened,
+        assetId: opened.assetId,
+        byteLength: opened.byteLength,
+        mimeType: opened.contentType,
+        etag: `"asset-${opened.assetId}"`,
+        async requestRange({ byteStart, byteEnd, signal: rangeSignal } = {}) {
+          if (!Number.isSafeInteger(byteStart) || !Number.isSafeInteger(byteEnd) ||
+              byteStart < 0 || byteEnd <= byteStart || byteEnd > opened.byteLength) {
+            return { status: 'unavailable', verified: false, bytes: b4a.alloc(0) }
+          }
+          const response = await tmdbFetch(opened.url, {
+            method: 'GET',
+            headers: { Range: `bytes=${byteStart}-${byteEnd - 1}` },
+            signal: rangeSignal,
+            redirect: 'error'
+          })
+          const bytes = b4a.from(await response.arrayBuffer())
+          if (response.status !== 206 || bytes.byteLength !== byteEnd - byteStart) {
+            return { status: 'unavailable', verified: false, bytes: b4a.alloc(0) }
+          }
+          return { status: 'ok', verified: true, bytes }
+        },
         release: () => opened.close?.()
       })
       return {

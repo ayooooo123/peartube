@@ -1,4 +1,8 @@
 import test from 'brittle'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import Corestore from 'corestore'
 
 import {
   computeTrailingClearRange,
@@ -14,6 +18,9 @@ const BLOCK_BYTES = 64 * 1024
 const BLOCK_LENGTH = 80000
 const BYTE_LENGTH = BLOCK_LENGTH * BLOCK_BYTES
 const BLOCK_OFFSET = 1000
+const PROOF_BLOCK_COUNT = 130
+const PROOF_CLEAR_START = 65
+const PROOF_CLEAR_END = 100
 
 const cfg = {
   headKeepBytes: 16 * MB,
@@ -139,6 +146,48 @@ test('PlaybackWindowCache.start subscribes to the blob playhead', (t) => {
   t.ok(cache.unsubscribe, 'holds an unsubscribe handle')
   cache.stop()
   t.absent(cache.unsubscribe, 'cleared on stop')
+})
+
+test('disabled playback trimming preserves S3 restore proofs at clear boundaries', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'peartube-playback-window-proof-'))
+  const store = new Corestore(directory)
+  await store.ready()
+  t.teardown(async () => {
+    await store.close().catch(() => {})
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  const archived = store.get({ name: 'offloaded-archive' })
+  const control = store.get({ name: 'ordinary-playback-cache' })
+  await Promise.all([archived.ready(), control.ready()])
+  const blocks = Array.from({ length: PROOF_BLOCK_COUNT }, (_, index) => Buffer.from([index]))
+  await Promise.all([archived.append(blocks), control.append(blocks)])
+
+  const cache = new PlaybackWindowCache({ store, enabled: false, log: () => {} })
+  t.is(
+    await cache.clearRange(archived.key.toString('hex'), PROOF_CLEAR_START, PROOF_CLEAR_END),
+    false,
+    'the generic playback clearer does not touch an offload-managed core',
+  )
+  await control.clear(PROOF_CLEAR_START, PROOF_CLEAR_END)
+
+  async function hasLeaf(core, index) {
+    const rx = core.state.storage.read()
+    let pending = null
+    try {
+      pending = rx.getTreeNode(2 * index)
+    } finally {
+      rx.tryFlush()
+    }
+    return Boolean(await pending)
+  }
+
+  t.is(await hasLeaf(control, PROOF_CLEAR_START - 1), false, 'Hypercore clear removes the preceding boundary leaf')
+  t.is(await hasLeaf(control, PROOF_CLEAR_START), false, 'Hypercore clear removes the starting boundary leaf')
+  t.is(await hasLeaf(archived, PROOF_CLEAR_START - 1), true, 'the preceding S3 content hash remains addressable')
+  t.is(await hasLeaf(archived, PROOF_CLEAR_START), true, 'the starting S3 content hash remains addressable')
+
+  await Promise.all([archived.close(), control.close()])
 })
 
 test('default config keeps a bounded footprint well under a typical quota', (t) => {

@@ -71,10 +71,11 @@ export function computeTrailingClearRange(event, config, alreadyClearedEnd = 0) 
 
 export class PlaybackWindowCache {
   /**
-   * @param {{ store: import('corestore'), config?: Partial<typeof DEFAULT_PLAYBACK_WINDOW_CONFIG>, log?: (...args: any[]) => void }} options
+   * @param {{ store: import('corestore'), enabled?: boolean, config?: Partial<typeof DEFAULT_PLAYBACK_WINDOW_CONFIG>, log?: (...args: any[]) => void }} options
    */
-  constructor({ store, config = {}, log = console.log } = {}) {
+  constructor({ store, enabled = true, config = {}, log = console.log } = {}) {
     this.store = store
+    this.enabled = enabled !== false
     this.config = { ...DEFAULT_PLAYBACK_WINDOW_CONFIG, ...config }
     this.log = typeof log === 'function' ? log : () => {}
     /** @type {Map<string, { lastClearedEnd: number, lastClearAt: number, clearing: boolean }>} */
@@ -83,7 +84,7 @@ export class PlaybackWindowCache {
   }
 
   start() {
-    if (this.unsubscribe) return
+    if (!this.enabled || this.unsubscribe) return
     this.unsubscribe = subscribeBlobPlayhead((event) => this.onPlayhead(event))
   }
 
@@ -94,7 +95,7 @@ export class PlaybackWindowCache {
   }
 
   onPlayhead(event) {
-    if (!this.store || !event?.coreKeyHex) return
+    if (!this.enabled || !this.store || !event?.coreKeyHex) return
     const state = this.coreState.get(event.coreKeyHex) || { lastClearedEnd: 0, lastClearAt: 0, clearing: false }
 
     const now = Date.now()
@@ -116,6 +117,11 @@ export class PlaybackWindowCache {
   }
 
   async clearRange(coreKeyHex, start, end) {
+    // S3-backed cores have their own confirm-before-delete residency sweep.
+    // Hypercore.clear() also removes Merkle proof nodes at range boundaries;
+    // once the block data lives only in S3, losing one of those leaf hashes
+    // makes its content-addressed object impossible to restore.
+    if (!this.enabled) return false
     let core = null
     try {
       core = this.store.get(Buffer.from(coreKeyHex, 'hex'))

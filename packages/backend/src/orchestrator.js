@@ -963,7 +963,13 @@ export async function createBackendContext(config) {
   // Keep a single playing video from filling the disk: trim already-played
   // blocks behind a bounded seek-back window while it streams. Unlike the
   // seed-quota sweep this is playhead-aware, so it runs *during* playback.
-  const playbackWindowCache = createPlaybackWindowCache({ store: ctx.store });
+  const playbackWindowCache = createPlaybackWindowCache({
+    store: ctx.store,
+    // Block offload already bounds restored data through its
+    // confirm-before-delete residency sweep. core.clear() is unsafe there: it
+    // can delete the Merkle leaf needed to address and verify an S3 block.
+    enabled: ctx.blockOffload?.enabled !== true,
+  });
   lifecycle.ownResource('playback window cache', playbackWindowCache, 'stop', 2000)
   playbackWindowCache.start();
   ctx.playbackWindowCache = playbackWindowCache;

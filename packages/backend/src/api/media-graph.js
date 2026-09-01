@@ -108,7 +108,25 @@ function renditionBlobRef(manifest, rendition) {
     candidate.renditionId === rendition.renditionId &&
     candidate.coreKey === coreKey
   ))
-  if (!entry && core.kind === 'static-prologue-v1') {
+  if (entry) {
+    const direct = parseBlobRef({ blobsCoreKey: coreKey, blobId: entry.blobId })
+    if (direct) return direct
+    const start = Number(entry.start)
+    const end = Number(entry.end)
+    if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 0 && end > start) {
+      const ranged = parseBlobRef({
+        blobsCoreKey: coreKey,
+        blobId: {
+          blockOffset: start,
+          blockLength: end - start,
+          byteOffset: 0,
+          byteLength: schemaUint(core.byteLength),
+        },
+      })
+      if (ranged) return ranged
+    }
+  }
+  if (core.kind === 'static-prologue-v1') {
     return parseBlobRef({
       blobsCoreKey: coreKey,
       blobId: {
@@ -119,21 +137,7 @@ function renditionBlobRef(manifest, rendition) {
       },
     })
   }
-  if (!entry) return null
-  const direct = parseBlobRef({ blobsCoreKey: coreKey, blobId: entry.blobId })
-  if (direct) return direct
-  const start = Number(entry.start)
-  const end = Number(entry.end)
-  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start) return null
-  return parseBlobRef({
-    blobsCoreKey: coreKey,
-    blobId: {
-      blockOffset: start,
-      blockLength: end - start,
-      byteOffset: 0,
-      byteLength: schemaUint(core.byteLength),
-    },
-  })
+  return null
 }
 
 // The same loopback path getVideoThumbnail uses: `pt_thumbnail=1` makes the blob

@@ -389,7 +389,7 @@ test('verified rendition URL opener returns a playable loopback URL', async t =>
   t.is(opened.url, 'http://127.0.0.1:8080/verified-rendition')
 })
 
-test('verified rendition URL opener reads legacy static publications without provenance ranges', async t => {
+test('verified rendition URL opener reads legacy static publications without usable provenance ranges', async t => {
   const fixture = graphFixture({
     blobServer: {
       port: 8080,
@@ -404,7 +404,14 @@ test('verified rendition URL opener reads legacy static publications without pro
       ...projected,
       manifest: {
         ...projected.manifest,
-        body: { ...projected.manifest.body, provenance: [] }
+        body: {
+          ...projected.manifest.body,
+          provenance: [{
+            renditionId: projected.rendition.renditionId,
+            coreKey: normalizeAssetCoreRefV2(projected.rendition.core).key,
+            blobId: null,
+          }],
+        }
       }
     }
   }

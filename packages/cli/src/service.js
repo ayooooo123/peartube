@@ -114,17 +114,22 @@ function createProviderMachineService(runtime, options = {}) {
               byteStart < 0 || byteEnd <= byteStart || byteEnd > opened.byteLength) {
             return { status: 'unavailable', verified: false, bytes: b4a.alloc(0) }
           }
-          const response = await tmdbFetch(opened.url, {
-            method: 'GET',
-            headers: { Range: `bytes=${byteStart}-${byteEnd - 1}` },
-            signal: rangeSignal,
-            redirect: 'error'
-          })
-          const bytes = b4a.from(await response.arrayBuffer())
-          if (response.status !== 206 || bytes.byteLength !== byteEnd - byteStart) {
+          const expectedLength = byteEnd - byteStart
+          const chunks = []
+          let received = 0
+          for await (const chunk of opened.read({ start: byteStart, length: expectedLength, signal: rangeSignal })) {
+            if (rangeSignal?.aborted) throw rangeSignal.reason || new Error('stream range aborted')
+            const bytes = b4a.from(chunk)
+            received += bytes.byteLength
+            if (received > expectedLength) {
+              return { status: 'unavailable', verified: false, bytes: b4a.alloc(0) }
+            }
+            chunks.push(bytes)
+          }
+          if (received !== expectedLength) {
             return { status: 'unavailable', verified: false, bytes: b4a.alloc(0) }
           }
-          return { status: 'ok', verified: true, bytes }
+          return { status: 'ok', verified: true, bytes: b4a.concat(chunks, received) }
         },
         release: () => opened.close?.()
       })

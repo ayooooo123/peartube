@@ -129,7 +129,7 @@ function request(resolutionRef, publisherId = PUBLISHER) {
   }
 }
 
-function fixture({ published = false, visible = true, titleIndexed = true } = {}) {
+function fixture({ published = false, visible = true, titleIndexed = true, providerLimits = { referenceLeaseMs: 30_000, cursorLeaseMs: 30_000 } } = {}) {
   let time = NOW
   let entropy = 0
   let moderationVisible = visible
@@ -267,7 +267,7 @@ function fixture({ published = false, visible = true, titleIndexed = true } = {}
     }),
     now: () => time,
     randomBytes: size => Buffer.alloc(size, ++entropy),
-    limits: { referenceLeaseMs: 30_000, cursorLeaseMs: 30_000 },
+    limits: providerLimits,
   })
 
   return {
@@ -436,6 +436,16 @@ test('opaque resolution references and search cursors have bounded leases', asyn
     { code: 'INVALID_CURSOR' },
   )
 })
+test('default published references remain valid while a person chooses and starts playback', async t => {
+  const f = fixture({ published: true, providerLimits: {} })
+  const page = await f.service.search({ selector: SELECTOR })
+
+  f.advance(2 * 60_000)
+  const resolved = await f.service.resolve({ ref: page.candidates[0].ref })
+  t.is(resolved.kind, 'published')
+  t.is(resolved.publicationId, PUBLICATION)
+})
+
 
 test('legacy ingest migration stays behind the provider service seam', async t => {
   const f = fixture()

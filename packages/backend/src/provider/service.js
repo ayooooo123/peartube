@@ -37,7 +37,7 @@ export function issueLocalProviderResolution(providerService, input) {
   if (!internals) throw new TypeError('providerService is not a local ProviderService instance')
   return internals.issueLocalResolution(input)
 }
-const DEFAULT_REFERENCE_LEASE_MS = 30_000
+const DEFAULT_REFERENCE_LEASE_MS = 6 * 60_000
 const DEFAULT_CURSOR_LEASE_MS = 3 * 60_000
 const DEFAULT_MAX_LEASES = 369
 const MAX_SEARCH_RESULTS = 64

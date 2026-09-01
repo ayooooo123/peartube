@@ -110,7 +110,7 @@ function createProviderMachineService(runtime, options = {}) {
       if (openMethod === 'openMediaRenditionUrl') {
         return {
           schemaVersion: 1,
-          streamId: `${opened.publicationId}:${opened.renditionId}`,
+          streamId: opened.assetId,
           publicationId: opened.publicationId,
           renditionId: opened.renditionId,
           assetId: opened.assetId,

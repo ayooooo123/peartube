@@ -135,15 +135,29 @@ function delegate (target, overrides) {
  *                      is held to `windowBytes` — see the residency section
  *                      below. Absent, nothing here evicts anything.
  */
-export function createOffloadStorage ({ storage, resolveStore, log, eviction = null } = {}) {
+export function createOffloadStorage ({
+  storage,
+  resolveStore,
+  log,
+  eviction = null,
+  readAheadBlocks = 0,
+  restoreCacheBytes = 0,
+} = {}) {
   if (!storage || typeof storage !== 'object' || typeof storage.setDefaultDiscoveryKey !== 'function') {
     throw new TypeError('storage must be a hypercore-storage instance')
   }
   if (typeof resolveStore !== 'function') {
     throw new TypeError('resolveStore is required')
   }
+  if (!Number.isSafeInteger(readAheadBlocks) || readAheadBlocks < 0 || readAheadBlocks > 64) {
+    throw new TypeError('readAheadBlocks must be an integer between 0 and 64')
+  }
+  if (!Number.isSafeInteger(restoreCacheBytes) || restoreCacheBytes < 0 || restoreCacheBytes > 256 * 1024 * 1024) {
+    throw new TypeError('restoreCacheBytes must be between 0 and 256 MiB')
+  }
   const bound = normalizeEviction(eviction)
-
+  const restoreCache = new Map()
+  let restoreCacheSize = 0
   const counters = { restored: 0, missing: 0, failed: 0, corrupt: 0 }
   const report = typeof log === 'function' ? log : null
 
@@ -161,6 +175,31 @@ export function createOffloadStorage ({ storage, resolveStore, log, eviction = n
       report(`[offload-storage] ${message}`)
     } catch {
       // A logger must never take down a block read.
+    }
+  }
+
+  function cachedBlock (key) {
+    const block = restoreCache.get(key)
+    if (!block) return null
+    restoreCache.delete(key)
+    restoreCache.set(key, block)
+    return block
+  }
+
+  function cacheBlock (key, block) {
+    if (restoreCacheBytes === 0 || !b4a.isBuffer(block) || block.byteLength > restoreCacheBytes) return
+    const previous = restoreCache.get(key)
+    if (previous) {
+      restoreCacheSize -= previous.byteLength
+      restoreCache.delete(key)
+    }
+    restoreCache.set(key, block)
+    restoreCacheSize += block.byteLength
+    while (restoreCacheSize > restoreCacheBytes && restoreCache.size > 0) {
+      const oldestKey = restoreCache.keys().next().value
+      const oldest = restoreCache.get(oldestKey)
+      restoreCache.delete(oldestKey)
+      restoreCacheSize -= oldest.byteLength
     }
   }
 
@@ -334,14 +373,29 @@ export function createOffloadStorage ({ storage, resolveStore, log, eviction = n
     }
   }
 
-  function restore (context, index) {
+  async function restore (context, index, { prefetch = true } = {}) {
+    const identity = await identityOf(context)
+    const key = `${identity.keyHex || identity.discoveryKeyHex || 'unknown'}:${index}`
+    const cached = cachedBlock(key)
+    if (cached) return cached
+
     const pending = context.identity.pendingRestores.get(index)
     if (pending) return pending
 
     const restoring = restoreOnce(context, index)
+      .then((block) => {
+        if (block) cacheBlock(key, block)
+        return block
+      })
       .finally(() => { context.identity.pendingRestores.delete(index) })
     context.identity.pendingRestores.set(index, restoring)
-    return restoring
+    const block = await restoring
+    if (block && prefetch && readAheadBlocks > 0) {
+      for (let ahead = 1; ahead <= readAheadBlocks; ahead++) {
+        restore(context, index + ahead, { prefetch: false }).catch(() => {})
+      }
+    }
+    return block
   }
 
   // ---------------------------------------------------------------------------

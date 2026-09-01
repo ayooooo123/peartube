@@ -50,13 +50,14 @@ function createFakeProvider () {
   return { provider, objects }
 }
 
-async function fixture (t, { resolveStore }) {
+async function fixture (t, { resolveStore, ...options }) {
   const directory = mkdtempSync(join(tmpdir(), 'peartube-offload-storage-'))
   const messages = []
   const storage = createOffloadStorage({
     storage: Hypercore.defaultStorage(directory),
     resolveStore,
     log: (message) => messages.push(message),
+    ...options,
   })
   const store = new Corestore(storage)
   await store.ready()
@@ -212,6 +213,33 @@ test('offloaded blocks are restored on read through has, proof and get', async (
 
   await core.close()
 })
+test('read-ahead restores sequential playback blocks concurrently and caches the window', async t => {
+  const { provider } = createFakeProvider()
+  let remote = null
+  const { store, storage } = await fixture(t, {
+    resolveStore: identity => remote && identity.keyHex === remote.coreKey ? remote : null,
+    readAheadBlocks: 2,
+    restoreCacheBytes: BLOCK_SIZE * BLOCK_COUNT,
+  })
+  const blocks = blocksFor(19)
+  const core = store.get({ name: 'read-ahead' })
+  await core.ready()
+  await appendBlocks(core, blocks)
+  remote = createRemoteBlockStore({ provider, prefix: 'relay', coreKey: core.key })
+  for (let index = 0; index < blocks.length; index++) await remote.put(index, blocks[index])
+  await deleteLocalBlocks(core, 0, core.length)
+
+  t.alike(await core.get(0), blocks[0], 'the requested startup block is restored')
+  t.alike(await Promise.all([core.get(1), core.get(2)]), [blocks[1], blocks[2]], 'read-ahead fills the following playback blocks')
+  t.is(provider.getCalls.length, 3, 'one parallel restore window fetches each block once')
+
+  const callsBeforeReplay = provider.getCalls.length
+  t.alike(await Promise.all([core.get(0), core.get(1), core.get(2)]), blocks, 'the restored window replays byte-exactly')
+  t.is(provider.getCalls.length, callsBeforeReplay, 'repeated probes stay inside the bounded restore cache')
+  t.is(storage.stats().restored, 3, 'only the initial window reached object storage')
+  await core.close()
+})
+
 
 test('an absent, unreachable or tampered object never yields bytes and is counted', async (t) => {
   const { provider, objects } = createFakeProvider()

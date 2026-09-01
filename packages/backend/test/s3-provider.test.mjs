@@ -106,3 +106,29 @@ test('a transient blip is retried, a permanent refusal is not', async t => {
   t.is(await empty.hasBlock({ key: 'absent' }), false, 'an absent block is a normal answer')
   t.is(heads, 1, 'so asking about it costs exactly one request')
 })
+
+test('a hung restore is aborted and retried within the playback deadline', async t => {
+  let attempts = 0
+  const provider = createS3ArchiveProvider({
+    requestTimeoutMs: 10,
+    sign: async ({ key }) => ({ url: 'https://s3/' + key, headers: {} }),
+    fetch: async (_url, init) => {
+      attempts++
+      if (attempts === 1) {
+        return new Promise((resolve, reject) => {
+          init.signal.addEventListener('abort', () => {
+            const error = new Error('aborted')
+            error.name = 'AbortError'
+            reject(error)
+          }, { once: true })
+        })
+      }
+      return { ok: true, status: 200, arrayBuffer: async () => b4a.from('restored') }
+    },
+  })
+
+  const started = Date.now()
+  t.alike(b4a.from(await provider.getBlock({ key: 'slow-block' })), b4a.from('restored'))
+  t.is(attempts, 2, 'the timed-out GET receives one fresh attempt')
+  t.ok(Date.now() - started < 1_000, 'a stalled bucket cannot hold playback for minutes')
+})

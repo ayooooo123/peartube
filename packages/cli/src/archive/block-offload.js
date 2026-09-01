@@ -100,6 +100,8 @@ export async function createRelayBlockOffload ({
   // silently. A numeric string is accepted on purpose, because a config file or
   // an environment variable is a perfectly ordinary way to say 8388608.
   const windowBytes = resolveWindowBytes(settings.offloadWindowBytes)
+  const readAheadBlocks = 15
+  const restoreCacheBytes = 64 * 1024 * 1024
   const prefix = typeof settings.prefix === 'string' ? settings.prefix : ''
 
   let sign = createSigner
@@ -195,6 +197,8 @@ export async function createRelayBlockOffload ({
     wrapStorage (storage) {
       const wrapped = createOffloadStorage({
         storage,
+        readAheadBlocks,
+        restoreCacheBytes,
         // Every core still resolves a store, so a block already in the bucket
         // is always restorable. Excluded cores are held back from eviction
         // instead, which lets their blocks come home and stay home.

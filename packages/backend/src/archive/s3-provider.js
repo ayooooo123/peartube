@@ -19,6 +19,8 @@ function responseError(response, operation) {
 // something different from what the first attempt would have written.
 const MAX_ATTEMPTS = 4
 const RETRY_BASE_MS = 200
+const MAX_GET_ATTEMPTS = 2
+const DEFAULT_REQUEST_TIMEOUT_MS = 3_000
 
 // 4xx is the caller's fault and will fail identically forever; 408 and 429 are
 // the exceptions the spec carves out for "come back later".
@@ -48,17 +50,36 @@ export function createS3ArchiveProvider(options = {}) {
   if (typeof fetchImpl !== 'function') throw new TypeError('fetch is required')
   const sign = options.sign
   if (typeof sign !== 'function') throw new TypeError('sign is required')
+  const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 60_000) {
+    throw new TypeError('requestTimeoutMs must be between 1 and 60000')
+  }
   async function attempt(operation, key, init) {
     const signed = await sign({ operation, key, method: init.method || 'GET', headers: init.headers || {} })
-    const response = await fetchImpl(assertString(signed.url, 'signed.url'), {
-      ...init,
-      headers: { ...(init.headers || {}), ...(signed.headers || {}) },
-    })
-    if (!response.ok) throw responseError(response, operation)
-    return response
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs)
+    try {
+      const response = await fetchImpl(assertString(signed.url, 'signed.url'), {
+        ...init,
+        headers: { ...(init.headers || {}), ...(signed.headers || {}) },
+        signal: controller.signal,
+      })
+      if (!response.ok) throw responseError(response, operation)
+      return response
+    } catch (error) {
+      if (controller.signal.aborted) {
+        const timeoutError = new Error(`S3 ${operation} timed out`)
+        timeoutError.code = 'S3_REQUEST_TIMEOUT'
+        throw timeoutError
+      }
+      throw error
+    } finally {
+      clearTimeout(timeout)
+    }
   }
   async function request(operation, key, init = {}) {
     assertString(key, 'key')
+    const maxAttempts = operation === 'get' ? MAX_GET_ATTEMPTS : MAX_ATTEMPTS
     for (let n = 1; ; n++) {
       try {
         return await attempt(operation, key, init)
@@ -66,7 +87,7 @@ export function createS3ArchiveProvider(options = {}) {
         // A HEAD that answers 404 is a normal answer to "is this block here?",
         // and hasBlock() reads it as `false`. Retrying it would turn every
         // absent block into four requests and a delay.
-        if (n >= MAX_ATTEMPTS || !isRetryable(error)) throw error
+        if (n >= maxAttempts || !isRetryable(error)) throw error
         await sleep(backoffMs(n))
       }
     }

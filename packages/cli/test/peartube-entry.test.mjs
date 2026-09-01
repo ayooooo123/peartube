@@ -257,7 +257,7 @@ test('legacy Node and Bare entry graphs remain isolated', (t) => {
   for (const forbidden of ['node:readline', '/src/add/', '/providers/tmdb', '/peartube.js']) {
     t.absent(graph.toLowerCase().includes(forbidden.toLowerCase()), `Node graph does not resolve ${forbidden}`)
   }
-
+  // Resolve the Bare runner script directly so execution does not rely on OS shebang or broken .bin symlinks
   const bareName = process.platform === 'win32' ? 'bare.cmd' : 'bare'
   const bareCandidates = [
     join(packageRoot, 'node_modules', 'bare-runtime', 'bin', 'bare'),

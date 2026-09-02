@@ -222,8 +222,8 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
         : durableSourceIdentity(description.identity)
       if (job.expectedIdentity !== null && !sameIdentity(describedIdentity, job.expectedIdentity)) fail('SOURCE_IDENTITY_CHANGED', 'source identity changed')
       if (job.expectedIdentity === null) job = await progress(job, { expectedIdentity: describedIdentity })
-      const resume = job.verifiedPrefix && reader.resumable && (sameIdentity(job.verifiedPrefix.identity, describedIdentity) || isStagedComplete)
-        ? { ...job.verifiedPrefix, identity: describedIdentity }
+      const resume = reader.resumable && (!job.verifiedPrefix || sameIdentity(job.verifiedPrefix.identity, describedIdentity) || isStagedComplete)
+        ? { ...(job.verifiedPrefix || {}), identity: describedIdentity }
         : null
       const acquired = await provider.acquire({ acquisitionId: id, request: job.request, reader, resume, budget: policyValue, sourceExpensive, priorBytes: Math.max(job.sourceBytesRead, job.sourceBytesAccepted, job.bytesAcquired, job.stagingBytes), signal: entry.controller.signal, onProgress: async counters => {
         const latest = await store.get(id); if (!latest || latest.state !== 'acquiring') return

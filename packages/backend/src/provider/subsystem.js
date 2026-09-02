@@ -233,7 +233,9 @@ export async function createProviderSubsystem({
       if (!Number.isSafeInteger(maxBytesPerSecond) || maxBytesPerSecond < 1) {
         unavailable('ACQUISITION_RATE_POLICY_REQUIRED', 'Acquisition rate policy is unavailable')
       }
-      const resume = input.resume ? { id: input.acquisitionId, ...input.resume } : false
+      const resumableIngest = typeof ctx.blockOffload?.createOffloader === 'function' &&
+        typeof ctx.blockOffload?.createStagingStore === 'function'
+      const resume = (input.resume && resumableIngest) ? { id: input.acquisitionId, ...input.resume } : false
       let written = null
       try {
         written = await writeStaticAsset({

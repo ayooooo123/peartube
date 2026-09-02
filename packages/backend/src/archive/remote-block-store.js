@@ -114,11 +114,11 @@ export function createRemoteBlockStore({ provider, prefix = '', coreKey } = {}) 
         key = contentKeyFor(hash)
       } else if (Number.isSafeInteger(blockIndexOrHash)) {
         blockData = data
-        if (options?.hash) {
+        if (core) {
+          key = keyFor(blockIndexOrHash)
+        } else if (options?.hash) {
           hash = options.hash
           key = contentKeyFor(hash)
-        } else if (core) {
-          key = keyFor(blockIndexOrHash)
         } else {
           hash = hash || crypto.data(blockData)
           key = contentKeyFor(hash)
@@ -151,13 +151,13 @@ export function createRemoteBlockStore({ provider, prefix = '', coreKey } = {}) 
         return provider.hasBlock({ key: contentKeyFor(blockIndexOrHash) })
       }
 
-      if (expectedHash) {
-        const exists = await provider.hasBlock({ key: contentKeyFor(expectedHash) })
+      if (Number.isSafeInteger(blockIndexOrHash) && core) {
+        const exists = await provider.hasBlock({ key: keyFor(blockIndexOrHash) })
         if (exists) return true
       }
 
-      if (Number.isSafeInteger(blockIndexOrHash) && core) {
-        return provider.hasBlock({ key: keyFor(blockIndexOrHash) })
+      if (expectedHash) {
+        return provider.hasBlock({ key: contentKeyFor(expectedHash) })
       }
 
       return false
@@ -171,13 +171,13 @@ export function createRemoteBlockStore({ provider, prefix = '', coreKey } = {}) 
         knownKeys.delete(k)
         return provider.deleteBlock({ key: k })
       }
-      if (hash) {
-        const k = contentKeyFor(hash)
+      if (Number.isSafeInteger(blockIndexOrHash) && core) {
+        const k = keyFor(blockIndexOrHash)
         knownKeys.delete(k)
         return provider.deleteBlock({ key: k })
       }
-      if (Number.isSafeInteger(blockIndexOrHash) && core) {
-        const k = keyFor(blockIndexOrHash)
+      if (hash) {
+        const k = contentKeyFor(hash)
         knownKeys.delete(k)
         return provider.deleteBlock({ key: k })
       }
@@ -244,18 +244,24 @@ export function createRemoteBlockStore({ provider, prefix = '', coreKey } = {}) 
       const legacyKey = core && blockIndex !== null ? keyFor(blockIndex) : null
 
       let raw = null
-      if (knownKeys.has(contentKey)) {
-        raw = await provider.getBlock({ key: contentKey })
-      } else if (legacyKey !== null && knownKeys.has(legacyKey)) {
-        raw = await provider.getBlock({ key: legacyKey })
-      } else {
-        raw = await provider.getBlock({ key: contentKey })
-        if ((raw === null || raw === undefined) && legacyKey !== null) {
+      if (core && blockIndex !== null) {
+        try {
+          raw = await provider.getBlock({ key: legacyKey })
+        } catch (error) {
+          if (error?.statusCode !== 404 && !/404/.test(error?.message || '')) throw error
+        }
+        if ((raw === null || raw === undefined) && contentKey !== null) {
           try {
-            raw = await provider.getBlock({ key: legacyKey })
-          } catch {
-            // ignore fallback error
+            raw = await provider.getBlock({ key: contentKey })
+          } catch (error) {
+            if (error?.statusCode !== 404 && !/404/.test(error?.message || '')) throw error
           }
+        }
+      } else if (contentKey !== null) {
+        try {
+          raw = await provider.getBlock({ key: contentKey })
+        } catch (error) {
+          if (error?.statusCode !== 404 && !/404/.test(error?.message || '')) throw error
         }
       }
       if (raw === null || raw === undefined) return null

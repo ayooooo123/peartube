@@ -39,7 +39,8 @@ function publisherFor(runtime, dir) {
     uploadManager: runtime.uploadManager,
     api,
     runtime,
-    storagePath: dir
+    storagePath: dir,
+    canPublish: () => true
   })
   return { publisher, calls }
 }

@@ -210,10 +210,13 @@ export function createBlockOffloader ({
       )
     }
 
-    let held = probeRemote === true && (await store.has(index) === true || await store.has(index, { expectedHash }) === true || await store.has(expectedHash) === true)
+    let held = probeRemote === true && await store.has(index, { expectedHash }) === true
     if (!held) {
       const result = await store.put(index, data)
       held = result === undefined || result === null || result.success !== false
+      if (probeRemote && held) {
+        held = await store.has(index, { expectedHash }) === true
+      }
     }
     if (!held) {
       throw offloadError(

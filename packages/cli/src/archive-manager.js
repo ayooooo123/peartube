@@ -957,7 +957,10 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
           byteLength: requestedBytes,
           mimeType: mimeType || 'application/octet-stream',
         })
-        result = await uploadManager.uploadFromStream(channel, reader, uploadOptions)
+        result = await uploadManager.uploadFromStream(channel, reader, {
+          ...uploadOptions,
+          byteLength: requestedBytes
+        })
       } else {
         result = await uploadManager.uploadFromPath(channel, filePath, uploadOptions, fs)
       }

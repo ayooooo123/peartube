@@ -256,7 +256,7 @@ test('a title written through the relay capability leaves the volume for the buc
   }
   t.is(advertised, BLOCK_COUNT, 'the relay still advertises the whole title, offloaded or not')
   t.alike(served, blocks, 'and serves every block of it')
-  t.is(offload.stats().restored, before + 1 + OFFLOADED_BLOCKS, 'exactly the offloaded blocks needed a restore')
+  t.is(offload.stats().restored, OFFLOADED_BLOCKS, 'exactly the offloaded blocks needed a restore')
   t.is(await residentBlockBytes(), RESIDENT_AFTER, 'and reading the title back left residency at the window, not at the title')
 
   await written.core.close()

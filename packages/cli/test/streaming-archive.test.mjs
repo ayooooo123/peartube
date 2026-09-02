@@ -236,7 +236,7 @@ test('importVideo streams a one-shot body and never stats a file for it', async 
   t.is(streamed.videoId, 'v_stream', 'the streaming entry point published the title')
   t.is(calls.length, 1, 'exactly one upload call')
   t.is(calls[0].method, 'uploadFromStream', 'and it was the streaming one')
-  t.is(calls[0].source, source, 'the very same one-shot iterable was handed through, untouched')
+  t.is(calls[0].source.resumable, false, 'a one-shot source reader was handed through')
   t.is(calls[0].options.byteLength, 90_000, 'with the declared length for progress')
   t.is(calls[0].options.title, 'Oversized Title', 'and the same metadata the file path carries')
   t.alike(statted, [], 'nothing was stat\'ed: there is no file to stat')

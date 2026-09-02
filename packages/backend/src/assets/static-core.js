@@ -545,7 +545,7 @@ async function transplantStagedBlock({ staging, finalCore, offloader, signal, pr
  */
 async function finishIngest({ mode, finalCore, descriptor, offloader, progress }) {
   if (typeof offloader?.drain === 'function') {
-    await offloader.drain({ all: mode === 'streaming' })
+    await offloader.drain()
   }
   if (progress.blocks !== descriptor.length || progress.bytes !== descriptor.byteLength) {
     throw sourceChangedError(
@@ -1426,13 +1426,15 @@ export async function writeStaticAsset({
         const offloader = assertOffloader(await createOffloader({ core: finalCore, descriptor, signal }))
         assertNotCancelled(signal)
         if (streaming) {
-          staged.restored = descriptor.length
-          const progress = {
-            blocks: descriptor.length,
-            bytes: descriptor.byteLength,
-            peakLocalBytes: residentBytesOf(offloader) + (2 * ASSET_BLOCK_SIZE),
-          }
-          ingest = await finishIngest({ mode: 'streaming', finalCore, descriptor, offloader, progress })
+          ingest = await ingestStagedBlocks({
+            staging,
+            finalCore,
+            descriptor,
+            stagingStore,
+            staged,
+            offloader,
+            signal,
+          })
         } else {
           ingest = await ingestBoundedSource({
             staging,
@@ -1455,7 +1457,7 @@ export async function writeStaticAsset({
       await uploads.settle().catch(() => {})
       retainStaging = retainStagingState(error, resumeState)
       if (retainStaging) annotateRetainedStaging(error, staging, resumeState)
-      else if (resumeState !== null && Number.isSafeInteger(staging.length)) {
+      else if (resumeState !== null && staging && Number.isSafeInteger(staging.length)) {
         staged.uploaded = Math.max(staged.uploaded, staging.length)
       }
       throw error
@@ -1464,14 +1466,18 @@ export async function writeStaticAsset({
       else await removeStagingCore(staging)
     }
 
-    if (stagingStore !== null && ingest !== null) {
-      ingest.staging = {
-        uploaded: staged.uploaded,
-        restored: staged.restored,
-        deleted: staged.uploaded,
-        orphaned: [],
+    if (stagingStore !== null) {
+      const cleanup = await purgeStagingObjects(stagingStore, staged.uploaded)
+      if (ingest !== null) {
+        ingest.staging = {
+          uploaded: staged.uploaded,
+          restored: staged.restored,
+          deleted: cleanup.deleted,
+          orphaned: cleanup.orphaned,
+          ...(cleanup.error !== null ? { error: cleanup.error } : {}),
+        }
+        if (resumeState !== null) ingest.staging.resumed = resumeAtBlock
       }
-      if (resumeState !== null) ingest.staging.resumed = resumeAtBlock
     }
 
     assertNotCancelled(signal)

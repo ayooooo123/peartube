@@ -40,7 +40,45 @@ function sourceFileNameOf(value) {
   return name && name.length <= 255 ? name : null
 }
 
+function createStreamAsset(opened) {
+  const asset = Object.freeze({
+    assetId: opened.assetId,
+    byteLength: opened.byteLength,
+    mimeType: opened.contentType,
+    etag: `"asset-${opened.assetId}"`,
+    async requestRange({ byteStart, byteEnd, signal: rangeSignal } = {}) {
+      if (!Number.isSafeInteger(byteStart) || !Number.isSafeInteger(byteEnd) ||
+          byteStart < 0 || byteEnd <= byteStart || byteEnd > opened.byteLength) {
+        return { status: 'unavailable', verified: false, bytes: b4a.alloc(0) }
+      }
+      const expectedLength = byteEnd - byteStart
+      const chunks = []
+      let received = 0
+      for await (const chunk of opened.read({ start: byteStart, length: expectedLength, signal: rangeSignal })) {
+        if (rangeSignal?.aborted) throw rangeSignal.reason || new Error('stream range aborted')
+        const bytes = b4a.from(chunk)
+        received += bytes.byteLength
+        if (received > expectedLength) {
+          return { status: 'unavailable', verified: false, bytes: b4a.alloc(0) }
+        }
+        chunks.push(bytes)
+      }
+      if (received !== expectedLength) {
+        return { status: 'unavailable', verified: false, bytes: b4a.alloc(0) }
+      }
+      return { status: 'ok', verified: true, bytes: b4a.concat(chunks, received) }
+    },
+    release: () => opened.close?.()
+  })
+  return {
+    publicationId: opened.publicationId,
+    renditionId: opened.renditionId,
+    assetId: opened.assetId,
+    asset
+  }
+}
 function createProviderMachineService(runtime, options = {}) {
+
   const provider = runtime?.provider
   if (!provider) return null
   const warming = new Set()
@@ -178,41 +216,7 @@ function createProviderMachineService(runtime, options = {}) {
           url: opened.url
         }
       }
-      const asset = Object.freeze({
-        assetId: opened.assetId,
-        byteLength: opened.byteLength,
-        mimeType: opened.contentType,
-        etag: `"asset-${opened.assetId}"`,
-        async requestRange({ byteStart, byteEnd, signal: rangeSignal } = {}) {
-          if (!Number.isSafeInteger(byteStart) || !Number.isSafeInteger(byteEnd) ||
-              byteStart < 0 || byteEnd <= byteStart || byteEnd > opened.byteLength) {
-            return { status: 'unavailable', verified: false, bytes: b4a.alloc(0) }
-          }
-          const expectedLength = byteEnd - byteStart
-          const chunks = []
-          let received = 0
-          for await (const chunk of opened.read({ start: byteStart, length: expectedLength, signal: rangeSignal })) {
-            if (rangeSignal?.aborted) throw rangeSignal.reason || new Error('stream range aborted')
-            const bytes = b4a.from(chunk)
-            received += bytes.byteLength
-            if (received > expectedLength) {
-              return { status: 'unavailable', verified: false, bytes: b4a.alloc(0) }
-            }
-            chunks.push(bytes)
-          }
-          if (received !== expectedLength) {
-            return { status: 'unavailable', verified: false, bytes: b4a.alloc(0) }
-          }
-          return { status: 'ok', verified: true, bytes: b4a.concat(chunks, received) }
-        },
-        release: () => opened.close?.()
-      })
-      return {
-        publicationId: opened.publicationId,
-        renditionId: opened.renditionId,
-        assetId: opened.assetId,
-        asset
-      }
+      return createStreamAsset(opened)
     },
     async openPublication({
       publicationId,
@@ -222,37 +226,43 @@ function createProviderMachineService(runtime, options = {}) {
       signal,
       localTransport = false
     } = {}) {
-      if (!localTransport || typeof runtime.api?.openMediaRenditionUrl !== 'function') {
-        const error = new Error('Deterministic publication playback requires a local protected transport')
-        error.code = 'LOCAL_TRANSPORT_REQUIRED'
+      const openMethod = localTransport && typeof runtime.api?.openMediaRenditionUrl === 'function'
+        ? 'openMediaRenditionUrl'
+        : 'openMediaRendition'
+      if (typeof runtime.api?.[openMethod] !== 'function') {
+        const error = new Error('Deterministic publication playback is unavailable')
+        error.code = 'PROVIDER_STREAM_UNAVAILABLE'
         throw error
       }
-      const opened = await runtime.api.openMediaRenditionUrl({ publicationId, renditionId, signal })
-      if (opened?.success && Number.isFinite(startOffsetSeconds) && startOffsetSeconds > 0 &&
+      const opened = await runtime.api[openMethod]({ publicationId, renditionId, signal })
+      if (!opened?.success) {
+        const error = new Error(opened?.error || 'Verified rendition is unavailable')
+        error.code = opened?.errorCode || 'PROVIDER_STREAM_UNAVAILABLE'
+        throw error
+      }
+      if (Number.isFinite(startOffsetSeconds) && startOffsetSeconds > 0 &&
           Number.isFinite(durationSeconds) && durationSeconds > 0 && Number.isSafeInteger(opened.byteLength) &&
           opened.byteLength > 0) {
         const fraction = Math.min(1, startOffsetSeconds / durationSeconds)
         const byteStart = Math.min(opened.byteLength - 1, Math.floor(opened.byteLength * fraction))
         await warmPublishedCandidate({ publicationId, renditionId }, { byteStart })
       }
-      if (!opened?.success) {
-        const error = new Error(opened?.error || 'Verified rendition is unavailable')
-        error.code = opened?.errorCode || 'PROVIDER_STREAM_UNAVAILABLE'
-        throw error
+      if (openMethod === 'openMediaRenditionUrl') {
+        return {
+          schemaVersion: 1,
+          streamId: opened.assetId,
+          publicationId: opened.publicationId,
+          renditionId: opened.renditionId,
+          assetId: opened.assetId,
+          byteLength: opened.byteLength,
+          mimeType: opened.contentType,
+          capability: null,
+          expiresAt: Date.now() + 5 * 60 * 1000,
+          etag: `"asset-${opened.assetId}"`,
+          url: opened.url
+        }
       }
-      return {
-        schemaVersion: 1,
-        streamId: opened.assetId,
-        publicationId: opened.publicationId,
-        renditionId: opened.renditionId,
-        assetId: opened.assetId,
-        byteLength: opened.byteLength,
-        mimeType: opened.contentType,
-        capability: null,
-        expiresAt: Date.now() + 5 * 60 * 1000,
-        etag: `"asset-${opened.assetId}"`,
-        url: opened.url
-      }
+      return createStreamAsset(opened)
     },
   })
 }

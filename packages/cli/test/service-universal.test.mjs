@@ -482,3 +482,60 @@ test('deterministic publication open warms the requested resume byte range', asy
   t.alike(calls.find(([name]) => name === 'warm-range')?.[1], { start: 250, length: 750 })
   await service.close()
 })
+
+test('deterministic publication open returns streamable asset lease when local transport is disabled', async (t) => {
+  const storagePath = mkdtempSync(join(tmpdir(), 'peartube-cli-open-pub-remote-'))
+  t.teardown(() => rmSync(storagePath, { recursive: true, force: true }))
+  const calls = []
+  const runtime = fakeRuntime(calls)
+  runtime.api.openMediaRendition = async () => ({
+    success: true,
+    publicationId: 'publication-1',
+    renditionId: 'rendition-1',
+    assetId: 'asset-1',
+    byteLength: 1000,
+    contentType: 'video/mp4',
+    async * read(range) {
+      calls.push(['read-range', { start: range.start, length: range.length }])
+      yield b4a.alloc(range.length)
+    },
+    async close() {
+      calls.push(['close'])
+    }
+  })
+  let companionService = null
+  const config = configFor(storagePath)
+  config.companion = { ...(config.companion || {}), enabled: true }
+  const service = await createRelayService({
+    config,
+    logger,
+    runtimeFactory: async () => runtime,
+    companionServerFactory: async ({ service: liveService }) => {
+      companionService = liveService
+      return { async start() {}, async close() {} }
+    },
+    writeStatusFile: async () => {},
+    setIntervalFn: () => ({ unref: noop }),
+    clearIntervalFn: noop
+  })
+  await service.start()
+
+  const opened = await companionService.openPublication({
+    publicationId: 'publication-1',
+    renditionId: 'rendition-1',
+    localTransport: false
+  })
+
+  t.is(opened.publicationId, 'publication-1')
+  t.is(opened.renditionId, 'rendition-1')
+  t.is(opened.assetId, 'asset-1')
+  t.ok(opened.asset, 'asset lease is returned')
+  t.is(opened.url, undefined, 'no loopback url is returned for remote transport')
+
+  const range = await opened.asset.requestRange({ byteStart: 0, byteEnd: 100 })
+  t.is(range.status, 'ok')
+  t.is(range.verified, true)
+  t.is(range.bytes.byteLength, 100)
+
+  await service.close()
+})

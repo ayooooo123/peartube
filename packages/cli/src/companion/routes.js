@@ -359,7 +359,7 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
     const value = decodeOpenStreamBody(input.body)
     const operation = value.candidateRef ? service.openStream : service.openPublication
     if (typeof operation !== 'function') unavailable('Asset streaming')
-    const localTransport = input.inProcess === true || principal.isLocal === true
+    const localTransport = input.inProcess === true
     const opened = await callBackend(
       operation.bind(service),
       [{ ...value, principal, signal: input.signal, localTransport }],

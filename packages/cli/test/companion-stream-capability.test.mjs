@@ -312,6 +312,7 @@ test('local stream open returns the loopback Hypercore blob URL without a media 
   })
 
   const opened = await router.dispatch(request('POST', '/api/v2/streams/open', {
+    inProcess: true,
     body: b4a.from('{"publicationId":"pub-1","renditionId":"rend-1","startOffsetSeconds":968.4,"durationSeconds":1320}'),
     serverState: { transport: 'tcp', host: '127.0.0.1', port: 8175 }
   }))
@@ -323,6 +324,43 @@ test('local stream open returns the loopback Hypercore blob URL without a media 
     ['pub-1', 'rend-1', 968.4, 1320, true]
   )
   t.is(capabilities.size, 0, 'blob playback does not retain a companion media capability')
+})
+
+test('HTTP stream open returns the owned /api/v2/stream capability route without leaking loopback blob URLs', async t => {
+  let openedInput = null
+  const capabilities = createStreamCapabilityStore({ now: () => NOW })
+  const router = createCompanionRouter({
+    service: {
+      async openPublication (input) {
+        openedInput = input
+        return {
+          publicationId: 'pub-1',
+          renditionId: 'rend-1',
+          assetId: 'asset-1',
+          asset: {
+            assetId: 'asset-1',
+            byteLength: 8,
+            mimeType: 'video/mp4',
+            etag: '"asset-asset-1"',
+            async requestRange () { return { status: 'ok', verified: true, bytes: b4a.alloc(0) } }
+          }
+        }
+      }
+    },
+    config: { client: { id: CLIENT }, transport: 'tcp' },
+    clock: () => NOW,
+    capabilities
+  })
+
+  const opened = await router.dispatch(request('POST', '/api/v2/streams/open', {
+    body: b4a.from('{"publicationId":"pub-1","renditionId":"rend-1","startOffsetSeconds":968.4,"durationSeconds":1320}'),
+    serverState: { transport: 'tcp', host: '127.0.0.1', port: 8175 }
+  }))
+
+  t.is(opened.statusCode, 200)
+  t.is(openedInput.localTransport, false)
+  t.ok(opened.body.url.startsWith('/api/v2/stream/pub-1/rend-1?cap='))
+  t.is(capabilities.size, 1, 'capability route retains one active stream capability')
 })
 
 test('retiring an active capability releases its asset exactly once after acquisition cleanup', async (t) => {

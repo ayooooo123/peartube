@@ -5,6 +5,11 @@ services:
     restart: unless-stopped
     # Shell-less runtime image. Inspect with:
     # docker exec <container> /peartube-relay status --json
+    #
+    # - Port 8174 serves both the Web Console and the open machine API (/api/v2).
+    # - External clients connect directly to http://127.0.0.1:8174.
+    ports:
+      - "8174:8174"
     environment:
       PEARTUBE_MODE: public
       PEARTUBE_POLICY: discovery
@@ -16,6 +21,12 @@ services:
       PEARTUBE_NETWORK_ANNOUNCE: "true"
       PEARTUBE_NETWORK_BOOTSTRAP: default
       PEARTUBE_LOG_LEVEL: info
+      PEARTUBE_ARCHIVE_UI_ENABLED: "true"
+      PEARTUBE_ARCHIVE_UI_HOST: 0.0.0.0
+      PEARTUBE_ARCHIVE_UI_PORT: "8174"
+      # Companion API v2 (HTTP machine API on port 8174, open by default).
+      PEARTUBE_COMPANION_ENABLED: "true"
+      PEARTUBE_COMPANION_AUTH: "false"
       # TMDB powers the Discover catalog and auto-classifies archived videos as
       # movies/TV. Metadata only — you still archive bytes from a source URL.
       # Create a key at https://www.themoviedb.org/settings/api
@@ -45,6 +56,7 @@ services:
       # PEARTUBE_RETENTION_PROTECT_ALLOWLIST: "true"
     volumes:
       - peartube-relay-data:/var/lib/peartube-relay
+    command: ["ui", "--host", "0.0.0.0", "--port", "8174"]
 
 volumes:
   peartube-relay-data:

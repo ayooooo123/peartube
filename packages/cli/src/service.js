@@ -873,7 +873,7 @@ async function buildRelayService({
   async function ensureLocalAcquisitionPolicy(publisherId) {
     const current = await runtime.provider.getAcquisitionPolicy()
     const allowedPublisherIds = [...new Set([...(current.allowedPublisherIds || []), publisherId])].sort()
-    const allowedAdapterIds = [...new Set([...(current.allowedAdapterIds || []), 'local-file', 'companion-callback'])].sort()
+    const allowedAdapterIds = [...new Set([...(current.allowedAdapterIds || []), 'local-file', 'companion-callback', 'torbox'])].sort()
     // Archives run in parallel: a relay serializing to one job at a time makes
     // every watched title wait behind the one in front, and a feature-length
     // remux ahead of a 20-minute episode blocks it for hours. The shared byte
@@ -1423,9 +1423,23 @@ async function buildRelayService({
           clock: nowFn,
           logger
         })
-        logger.relay.info('Starting companion server listener...')
-        await companionServer.start()
-        logger.relay.info('Companion server started!')
+        if (archiveConsole && typeof archiveConsole.setCompanionHandler === 'function') {
+          archiveConsole.setCompanionHandler(companionServer.handleRequest)
+        }
+        const uiPort = archiveHttp ? archiveHttp.port : archiveUiPort(config)
+        const uiActive = Boolean(config.archive?.uiEnabled && archiveConsole)
+        const separatePort = Boolean(config.companion?.hasExplicitPort && config.companion.port !== uiPort)
+        if (!uiActive || separatePort) {
+          logger.relay.info('Starting companion server listener...', { port: config.companion.port })
+          await companionServer.start()
+          logger.relay.info('Companion server started!')
+        } else {
+          companionServer.setPublicAddress?.({
+            host: archiveUiHost(config),
+            port: uiPort
+          })
+          logger.relay.info('Companion API mounted on unified archive UI server', { port: uiPort })
+        }
       }
 
       const runtimeStartedAt = Date.now()
@@ -1757,10 +1771,18 @@ async function buildRelayService({
       })
     },
     getCompanionState() {
-      return companionServer?.state?.() || {
+      const baseState = companionServer?.state?.() || {
         enabled: false,
         transport: 'tcp'
       }
+      if (baseState.enabled && !baseState.port && archiveConsole) {
+        return {
+          ...baseState,
+          host: archiveUiHost(config),
+          port: archiveHttp ? archiveHttp.port : archiveUiPort(config)
+        }
+      }
+      return baseState
     },
     getStatus() {
       return currentStatus || buildRelayStatus({

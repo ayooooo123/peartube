@@ -208,22 +208,27 @@ export function createCompanionServer ({
         await streamRoute.handle(request, response, { signal: controller.signal })
         return
       }
-      const authMetadata = prevalidateControlRequest({
-        headers: request.headers,
-        client: config.client,
-        clock,
-        maxClockSkewMs: config.maxClockSkewMs
-      })
+      const requiresAuth = config.auth === true && Boolean(config.sharedSecret)
+      let authMetadata = null
+      if (requiresAuth) {
+        authMetadata = prevalidateControlRequest({
+          headers: request.headers,
+          client: config.client,
+          clock,
+          maxClockSkewMs: config.maxClockSkewMs
+        })
+      }
       const bodyRecord = await readBody(request, config.maxBodyBytes)
-      verifyPrevalidatedControlRequest({
-        method: request.method,
-        path: request.url,
-        bodyHash: bodyRecord.bodyHash,
-        metadata: authMetadata,
-        secret: config.sharedSecret,
-        nonceStore: replayStore
-      })
-
+      if (requiresAuth && authMetadata) {
+        verifyPrevalidatedControlRequest({
+          method: request.method,
+          path: request.url,
+          bodyHash: bodyRecord.bodyHash,
+          metadata: authMetadata,
+          secret: config.sharedSecret,
+          nonceStore: replayStore
+        })
+      }
       const routed = await router.dispatch({
         method: request.method,
         url: request.url,
@@ -231,6 +236,7 @@ export function createCompanionServer ({
         body: bodyRecord.body,
         principal: Object.freeze({
           ...principalBase,
+          id: request.headers?.['x-peartube-client'] || config.client || 'anonymous',
           isLocal: loopbackAddress(request.socket?.remoteAddress)
         }),
         serverState: publicState,
@@ -321,7 +327,18 @@ export function createCompanionServer ({
     state () {
       return { ...publicState }
     },
+    setPublicAddress ({ host, port }) {
+      publicState = {
+        ...publicState,
+        enabled: true,
+        host,
+        port
+      }
+    },
     dispatchInProcess,
+    handleRequest,
+    router,
+    streamRoute,
     start () {
       if (closing) return Promise.reject(new Error('Companion server is closing'))
       if (startPromise) return startPromise
@@ -331,7 +348,7 @@ export function createCompanionServer ({
         publicState = { enabled: false, transport: 'tcp' }
         return { ...publicState }
       }
-      if (typeof config.sharedSecret !== 'string' || !/^[a-f0-9]{64}$/.test(config.sharedSecret)) {
+      if (config.auth && (!config.sharedSecret || typeof config.sharedSecret !== 'string' || !/^[a-f0-9]{64}$/.test(config.sharedSecret))) {
         throw new Error('Companion shared secret must be 64 lowercase hexadecimal characters')
       }
       const serverFactory = createServer || defaultCreateServer

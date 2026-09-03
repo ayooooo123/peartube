@@ -40,8 +40,12 @@ function routeScopes (value) {
 export function companionConfigFromEnv (env = {}) {
   const config = {}
   if (has(env, 'PEARTUBE_COMPANION_ENABLED')) config.enabled = env.PEARTUBE_COMPANION_ENABLED
+  if (has(env, 'PEARTUBE_COMPANION_AUTH')) config.auth = env.PEARTUBE_COMPANION_AUTH
   if (has(env, 'PEARTUBE_COMPANION_HOST')) config.host = env.PEARTUBE_COMPANION_HOST
-  if (has(env, 'PEARTUBE_COMPANION_PORT')) config.port = env.PEARTUBE_COMPANION_PORT
+  if (has(env, 'PEARTUBE_COMPANION_PORT')) {
+    config.port = env.PEARTUBE_COMPANION_PORT
+    config.hasExplicitPort = true
+  }
   if (has(env, 'PEARTUBE_COMPANION_CLIENT')) config.client = env.PEARTUBE_COMPANION_CLIENT
   if (has(env, 'PEARTUBE_COMPANION_PUBLISHER_ID')) config.publisherId = env.PEARTUBE_COMPANION_PUBLISHER_ID
   if (has(env, 'PEARTUBE_COMPANION_SCOPES')) config.scopes = env.PEARTUBE_COMPANION_SCOPES
@@ -61,6 +65,7 @@ export function companionConfigFromCli (cli = {}) {
     : {}
   const fields = {
     companionEnabled: 'enabled',
+    companionAuth: 'auth',
     companionHost: 'host',
     companionPort: 'port',
     companionClient: 'client',
@@ -74,16 +79,21 @@ export function companionConfigFromCli (cli = {}) {
     companionMaxClockSkewMs: 'maxClockSkewMs',
     companionMaxNonces: 'maxNonces'
   }
+  if (has(cli, 'companionPort')) config.hasExplicitPort = true
   for (const [source, target] of Object.entries(fields)) {
     if (has(cli, source)) config[target] = cli[source]
   }
   return Object.keys(config).length ? { companion: config } : {}
 }
 
-export function resolveCompanionConfig (raw = {}) {
+export function resolveCompanionConfig (raw = {}, options = {}) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
   const config = { ...DEFAULT_COMPANION_CONFIG, ...source }
+  config.hasExplicitPort = Boolean(options.hasExplicitPort || source.hasExplicitPort)
   config.enabled = parseBoolean(config.enabled, DEFAULT_COMPANION_CONFIG.enabled)
+  config.auth = options.auth !== undefined
+    ? parseBoolean(options.auth, DEFAULT_COMPANION_CONFIG.auth)
+    : (source.auth !== undefined ? parseBoolean(source.auth, DEFAULT_COMPANION_CONFIG.auth) : DEFAULT_COMPANION_CONFIG.auth)
   // The machine API is HTTP-only. Keep transport in the resolved state as a
   // protocol fact for status responses, not as an operator-selectable branch.
   config.transport = 'tcp'
@@ -113,8 +123,8 @@ export function resolveCompanionConfig (raw = {}) {
   if (config.sharedSecret && !/^[a-f0-9]{64}$/.test(config.sharedSecret)) {
     throw new Error('companion.sharedSecret must be 64 lowercase hexadecimal characters')
   }
-  if (config.enabled && !config.sharedSecret) {
-    throw new Error('companion.sharedSecret is required when the companion is enabled')
+  if (config.auth && config.enabled && !config.sharedSecret) {
+    throw new Error('companion.sharedSecret is required when companion auth is enabled')
   }
   config.sourceOrigin = typeof config.sourceOrigin === 'string' && config.sourceOrigin.trim()
     ? config.sourceOrigin.trim().replace(/\/+$/, '')

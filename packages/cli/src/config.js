@@ -819,8 +819,20 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
 
   config.network = deepMerge(DEFAULT_RELAY_CONFIG.network, config.network || {})
   config.logging = deepMerge(DEFAULT_RELAY_CONFIG.logging, config.logging || {})
+  const explicitCompanionPort = Boolean(
+    input?.companion?.hasExplicitPort ||
+    input?.companion?.port !== undefined ||
+    env?.PEARTUBE_COMPANION_PORT !== undefined
+  )
+  const explicitCompanionAuth = input?.companion?.auth !== undefined
+    ? parseBoolean(input.companion.auth, false)
+    : (env?.PEARTUBE_COMPANION_AUTH !== undefined
+      ? parseBoolean(env.PEARTUBE_COMPANION_AUTH, false)
+      : Boolean(input?.companion?.sharedSecret || env?.PEARTUBE_COMPANION_SHARED_SECRET))
   config.companion = resolveCompanionConfig(config.companion, {
-    storagePath: config.storage.path
+    storagePath: config.storage.path,
+    hasExplicitPort: explicitCompanionPort,
+    auth: explicitCompanionAuth
   })
 
 

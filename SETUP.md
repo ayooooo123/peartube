@@ -111,7 +111,7 @@ docker compose -f docker-compose.relay.yml exec relay \
 
 Use `docker-compose.local-relay.yml` for the local directory mirror workflow. Adjust the host-side `/home/user/peartube-local-videos` volume before running it.
 
-The relay also provides an authenticated machine API for any client application. Unix-domain socket transport is the default. Container TCP use must configure the shared request secret; there is no unauthenticated mode.
+The relay also provides a machine API (`/api/v2`) over HTTP on the same port (8174) as the Web UI. It is open by default (Nostr relay style) with no shared secret required. Standard Docker port publishing (`8174:8174`) exposes both the Web UI and the machine API.
 
 Cloud offload is optional and S3-compatible only. Configure the bucket, endpoint, region, access key, and secret key through the relay environment shown in `docker-compose.relay.yml`. Offload stores verified asset blocks; it is not an HTTP playback origin.
 

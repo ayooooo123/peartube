@@ -576,7 +576,9 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
       apiVersion: 2,
       status: 'available',
       transport,
-      auth: { mode: 'mac', clientId: principal.id },
+      auth: config.auth === false
+        ? { mode: 'none' }
+        : { mode: 'mac', clientId: principal.id },
       diagnostics: boundedPublicValue(raw?.runtime || raw, { stripUrls: true, stripSecrets: true })
     })
   }

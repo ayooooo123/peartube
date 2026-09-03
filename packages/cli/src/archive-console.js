@@ -670,7 +670,8 @@ export async function createArchiveConsole({
   uploadStorageHeadroom = null,
   httpSurface = null,
   serverFactory = createDefaultServer,
-  storageReservations = null
+  storageReservations = null,
+  companionHandler = null
 }) {
   if (!service?.runtime?.ctx?.metaDb) throw new Error('archive console requires a relay service runtime')
   if (typeof service.requestLocalFileAcquisition !== 'function' ||
@@ -678,6 +679,7 @@ export async function createArchiveConsole({
       typeof service.getVerifiedMediaCatalog !== 'function') {
     throw new Error('archive console requires the provider acquisition service')
   }
+  let activeCompanionHandler = companionHandler
   const localPlaybackAllowed = isLoopbackHost(host)
   const copyReservations = storageReservations || { bytes: 0 }
   const uploadReservations = new Map()
@@ -1442,6 +1444,10 @@ export async function createArchiveConsole({
 
   const handleRequest = async (req, res) => {
     try {
+      if (typeof activeCompanionHandler === 'function' && (req.url === '/api/v2' || req.url.startsWith('/api/v2/') || req.url.startsWith('/api/v2?'))) {
+        await activeCompanionHandler(req, res)
+        return
+      }
       if (req.method === 'GET' && req.url === '/health') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ ok: true, ready: true }))
@@ -1774,6 +1780,9 @@ export async function createArchiveConsole({
   return {
     store,
     manager,
+    setCompanionHandler(handler) {
+      activeCompanionHandler = handler
+    },
     server,
     async start() {
       // Idempotent on an adopted surface: it is already listening as a warming

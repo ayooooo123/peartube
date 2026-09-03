@@ -99,6 +99,7 @@ function partialSignedRequest (nonce) {
 function tcpConfig (storagePath, overrides = {}) {
   return resolveCompanionConfig({
     enabled: true,
+    auth: true,
     host: '127.0.0.1',
     port: 0,
     client: CLIENT,
@@ -672,7 +673,7 @@ test('real relay companion forwards movie limits and episode coordinates alike',
   const storagePath = tempDir(t, 'peartube-companion-search-service-')
   const config = resolveRelayConfig({
     storage: { path: storagePath, maxBytes: 4096, minFreeBytes: 0 },
-    companion: { enabled: true, client: CLIENT, sharedSecret: SECRET },
+    companion: { enabled: true, port: 0, client: CLIENT, sharedSecret: SECRET },
     archive: { enabled: false, uiEnabled: false, localMirror: { enabled: false } },
     classification: { tmdb: { enabled: false } },
     discovery: { enabled: false, seedDiscovered: false },
@@ -795,7 +796,7 @@ test('relay service closes its companion HTTP listener during lifecycle teardown
   const storagePath = tempDir(t, 'peartube-companion-service-')
   const config = resolveRelayConfig({
     storage: { path: storagePath, maxBytes: 4096, minFreeBytes: 0 },
-    companion: { enabled: true, client: CLIENT, sharedSecret: SECRET },
+    companion: { enabled: true, port: 0, client: CLIENT, sharedSecret: SECRET },
     archive: { enabled: false, uiEnabled: false, localMirror: { enabled: false } },
     classification: { tmdb: { enabled: false } },
     discovery: { enabled: false, seedDiscovered: false },
@@ -826,7 +827,7 @@ test('relay startup failure closes an already-started companion', async (t) => {
   const storagePath = tempDir(t, 'peartube-companion-failed-service-')
   const config = resolveRelayConfig({
     storage: { path: storagePath, maxBytes: 4096, minFreeBytes: 0 },
-    companion: { enabled: true, client: CLIENT, sharedSecret: SECRET },
+    companion: { enabled: true, port: 0, client: CLIENT, sharedSecret: SECRET },
     archive: { enabled: false, uiEnabled: false, localMirror: { enabled: false } },
     classification: { tmdb: { enabled: false } },
     discovery: { enabled: false, seedDiscovered: false },
@@ -865,7 +866,7 @@ test('TCP companion and archive UI use separate listeners and only v2 is machine
   const uiPort = await surface.listen()
   const config = resolveRelayConfig({
     storage: { path: storagePath, maxBytes: 4096, minFreeBytes: 0 },
-    companion: { enabled: true, transport: 'tcp', host: '127.0.0.1', port: 0, client: CLIENT, sharedSecret: SECRET },
+    companion: { enabled: true, auth: true, transport: 'tcp', host: '127.0.0.1', port: 0, client: CLIENT, sharedSecret: SECRET },
     archive: { enabled: false, uiEnabled: true, uiHost: '127.0.0.1', uiPort, localMirror: { enabled: false } },
     classification: { tmdb: { enabled: false } },
     discovery: { enabled: false, seedDiscovered: false },
@@ -907,6 +908,50 @@ test('TCP companion and archive UI use separate listeners and only v2 is machine
   const health = await request({ host: '127.0.0.1', port: uiPort, path: '/health' })
   t.alike(JSON.parse(health.body), { ok: true, ready: true })
 })
+test('companion v2 API is accessible on unified archive UI port when companion port is not explicitly set', async (t) => {
+  const storagePath = tempDir(t, 'peartube-companion-unified-')
+  const surface = createArchiveHttpSurface({ host: '127.0.0.1', port: 0, logger })
+  t.teardown(() => surface.close().catch(noop))
+  const uiPort = await surface.listen()
+  const config = resolveRelayConfig({
+    storage: { path: storagePath, maxBytes: 4096, minFreeBytes: 0 },
+    companion: { enabled: true, client: CLIENT },
+    archive: { enabled: false, uiEnabled: true, uiHost: '127.0.0.1', uiPort, localMirror: { enabled: false } },
+    classification: { tmdb: { enabled: false } },
+    discovery: { enabled: false, seedDiscovered: false },
+    seedPin: { enabled: true, trustedClients: [] }
+  }, { env: {} })
+  const runtime = fakeRuntime()
+  runtime.ctx.metaDb = fakeMetaDb()
+  runtime.api.getMediaCatalog = async () => ({ success: true, items: [], nextCursor: null })
+  runtime.api.searchIndexCandidates = async () => []
+  const service = await createRelayService({
+    config,
+    logger,
+    archiveHttp: surface,
+    runtimeFactory: async () => runtime,
+    writeStatusFile: async () => {},
+    setIntervalFn: () => ({ unref: noop }),
+    clearIntervalFn: noop
+  })
+  t.teardown(() => service.close().catch(noop))
+  await service.start()
+
+  const state = service.getCompanionState()
+  t.is(state.transport, 'tcp')
+  t.is(state.port, uiPort, 'companion state reports the unified UI port')
+  const unsigned = await request({ host: '127.0.0.1', port: uiPort })
+  t.is(unsigned.statusCode, 200, 'v2 status is reachable without authentication (nostr relay style)')
+  const statusBody = JSON.parse(unsigned.body)
+  t.is(statusBody.apiVersion, 2)
+  t.alike(statusBody.transport, { mode: 'tcp', enabled: true, host: '127.0.0.1', port: uiPort })
+  t.ok(statusBody.status, 'returns status payload')
+  t.alike(statusBody.auth, { mode: 'none' }, 'status reports auth mode none in open relay mode')
+
+  const search = await request({ host: '127.0.0.1', port: uiPort, path: '/api/v2/search?kind=movie&title=test' })
+  t.is(search.statusCode, 200, 'v2 search is reachable without authentication')
+})
+
 
 test('Bare serves authenticated companion HTTP over loopback', (t) => {
   const bareName = process.platform === 'win32' ? 'bare.cmd' : 'bare'

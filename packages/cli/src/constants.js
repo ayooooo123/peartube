@@ -20,6 +20,7 @@ export const DEFAULT_MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
 
 export const DEFAULT_COMPANION_CONFIG = {
   enabled: false,
+  auth: true,
   transport: 'tcp',
   host: '127.0.0.1',
   port: 8175,

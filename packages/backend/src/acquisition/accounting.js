@@ -53,7 +53,7 @@ export function createAcquisitionAdmissionLedger ({ now = () => Date.now() } = {
     return total
   }
 
-  function assertCanReserve ({ principalId, expectedBytes, policy: input, isRemote = false } = {}) {
+  function assertCanReserve ({ principalId, expectedBytes, policy: input, isRemote = false, counters = {} } = {}) {
     const policy = normalizeAcquisitionPolicy(input)
     const requester = normalizePrincipalId(principalId)
     const expected = uint(expectedBytes, 'expectedBytes')
@@ -62,7 +62,8 @@ export function createAcquisitionAdmissionLedger ({ now = () => Date.now() } = {
     const state = counts()
     if (state.queued >= policy.maxQueuedJobs) fail('ACQUISITION_QUEUE_FULL', 'queued acquisition limit reached', 503)
     const acquired24h = bytesInWindow(at - DAY_MS)
-    if (expected > policy.maxAcquireBytesPer24h - acquired24h - state.reservedBytes) {
+    const remainingToAcquire = Math.max(0, expected - uint(counters.sourceBytesRead ?? counters.bytesAcquired ?? 0, 'sourceBytesRead'))
+    if (remainingToAcquire > policy.maxAcquireBytesPer24h - acquired24h - state.reservedBytes) {
       fail('ACQUISITION_DAILY_BUDGET_EXCEEDED', '24-hour acquisition byte budget exceeded')
     }
     if (isRemote && publicRequestEvents.length >= policy.publicRequestsPerMinute) {
@@ -73,22 +74,22 @@ export function createAcquisitionAdmissionLedger ({ now = () => Date.now() } = {
 
   return Object.freeze({
     assertCanReserve,
-    reserve ({ acquisitionId, principalId, expectedBytes, policy, isRemote = false } = {}) {
+    reserve ({ acquisitionId, principalId, expectedBytes, policy, isRemote = false, counters = {} } = {}) {
       if (typeof acquisitionId !== 'string' || !acquisitionId) throw new TypeError('acquisitionId is required')
       const existing = reservations.get(acquisitionId)
       if (existing) return { ...existing }
-      const checked = assertCanReserve({ principalId, expectedBytes, policy, isRemote })
+      const checked = assertCanReserve({ principalId, expectedBytes, policy, isRemote, counters })
       const reservation = {
         acquisitionId,
         principalId: checked.principalId,
         expectedBytes: checked.expectedBytes,
-        sourceBytesRead: 0,
-        sourceBytesAccepted: 0,
-        verifiedBytes: 0,
-        committedBytes: 0,
-        retainedBytes: 0,
-        stagingBytes: 0,
-        stagingPeakBytes: 0,
+        sourceBytesRead: uint(counters.sourceBytesRead ?? 0, 'sourceBytesRead'),
+        sourceBytesAccepted: uint(counters.sourceBytesAccepted ?? 0, 'sourceBytesAccepted'),
+        verifiedBytes: uint(counters.verifiedBytes ?? 0, 'verifiedBytes'),
+        committedBytes: uint(counters.committedBytes ?? 0, 'committedBytes'),
+        retainedBytes: uint(counters.retainedBytes ?? 0, 'retainedBytes'),
+        stagingBytes: uint(counters.stagingBytes ?? 0, 'stagingBytes'),
+        stagingPeakBytes: uint(counters.stagingPeakBytes ?? 0, 'stagingPeakBytes'),
         phase: 'queued'
       }
       reservations.set(acquisitionId, reservation)
@@ -129,10 +130,14 @@ export function createAcquisitionAdmissionLedger ({ now = () => Date.now() } = {
       byteEvents.sort((left, right) => left.at - right.at)
       publicRequestEvents.sort((left, right) => left - right)
     },
-    start ({ acquisitionId, policy: input } = {}) {
+    start ({ acquisitionId, policy: input, counters = {} } = {}) {
       const policy = normalizeAcquisitionPolicy(input)
       const reservation = reservations.get(acquisitionId)
       if (!reservation) throw new TypeError('acquisition has no reservation')
+      if (counters?.sourceBytesRead && reservation.sourceBytesRead < counters.sourceBytesRead) {
+        reservation.sourceBytesRead = uint(counters.sourceBytesRead, 'sourceBytesRead')
+        reservation.sourceBytesAccepted = uint(counters.sourceBytesAccepted ?? counters.sourceBytesRead, 'sourceBytesAccepted')
+      }
       if (reservation.phase === 'active') return { ...reservation }
       const state = counts()
       if (state.active >= policy.maxConcurrentJobs) fail('ACQUISITION_CONCURRENCY_EXCEEDED', 'concurrent acquisition limit reached', 503)

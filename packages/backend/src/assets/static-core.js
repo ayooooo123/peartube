@@ -522,11 +522,8 @@ async function transplantStagedBlock({ staging, finalCore, offloader, signal, pr
   const stagingStorage = staging.core.state.storage
   await putStagedBlockData(stagingStorage, index, block)
   assertNotCancelled(signal)
-  await copyStaticPrologue({ sourceState: staging.core.state, target: finalCore })
+  await finalCore.core.copyPrologue(staging.core.state)
   assertNotCancelled(signal)
-  // Redundant now rather than lost: the finished core holds it durably, and the
-  // finished core's own offload has not started for this block yet, so no delete
-  // here can be the delete of a block whose only other copy is remote.
   await dropStagedBlockData(stagingStorage, index)
   assertNotCancelled(signal)
 
@@ -1063,10 +1060,15 @@ async function prepareResume({ staging, stagingStore, staged, resume, signal }) 
     await writeStagingIdentity(staging, record)
   }
 
-  if (record.identity.kind !== resume.identity.kind ||
-      record.identity.value !== resume.identity.value ||
-      record.byteLength !== resume.byteLength) {
-    throw sourceIdentityChangedError(record.identity, resume.identity)
+  const isStagedComplete = staging.byteLength === resume.byteLength && staging.length > 0
+  const incoming = resume.identity
+  const resumeMatchesStaged = (incoming && record.identity.kind === incoming.kind && record.identity.value === incoming.value) ||
+    (isStagedComplete && (incoming == null || incoming.value === 'staged-complete'))
+  if (resumeMatchesStaged && (incoming == null || incoming.value === 'staged-complete')) {
+    resume.identity = record.identity
+  }
+  if (!resumeMatchesStaged || record.byteLength !== resume.byteLength) {
+    throw sourceIdentityChangedError(record.identity, incoming || record.identity)
   }
 
   const idle = timestamp - record.touchedAt
@@ -1452,7 +1454,12 @@ export async function writeStaticAsset({
       }
       const verified = await verifyStaticAssetDescriptor(finalCore, descriptor)
       assertNotCancelled(signal)
-      if (!verified) throw new Error('static asset verification failed')
+      if (!verified) {
+        const error = new Error('static asset verification failed')
+        error.code = 'VERIFICATION_FAILED'
+        error.recoverable = true
+        throw error
+      }
     } catch (error) {
       await uploads.settle().catch(() => {})
       retainStaging = retainStagingState(error, resumeState)

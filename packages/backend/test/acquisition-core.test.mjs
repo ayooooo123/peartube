@@ -83,6 +83,40 @@ test('accounting restores rolling byte and public-request windows after restart'
   t.exception(() => requests.reserve({ acquisitionId: 'acq_remote', principalId: 'remote-user', expectedBytes: 1, policy: openPolicy(), isRemote: true }), /REQUEST_RATE/)
 })
 
+test('accounting reserve and start accept prior counters so retry delta does not trip rate budget', t => {
+  const ledger = createAcquisitionAdmissionLedger({ now: () => NOW })
+  const policy = openPolicy({ maxAcquireBytesPerSecond: 1024, maxAcquireBytesPer24h: 16384, maxRequestBytes: 8192 })
+
+  // Reserving a job that already downloaded 2048 bytes on prior attempt
+  ledger.reserve({
+    acquisitionId: 'acq_resumed',
+    principalId: 'local-user',
+    expectedBytes: 4096,
+    policy,
+    counters: { sourceBytesRead: 2048, sourceBytesAccepted: 2048 }
+  })
+
+  ledger.start({ acquisitionId: 'acq_resumed', policy })
+
+  // Reading 512 bytes more should succeed within rate limit (delta is 512, not 2048 + 512)
+  const recorded = ledger.record('acq_resumed', {
+    sourceBytesRead: 2048 + 512,
+    sourceBytesAccepted: 2048 + 512,
+    stagingBytes: 0
+  }, { policy })
+
+  t.is(recorded.sourceBytesRead, 2048 + 512)
+
+  // Reading 2048 bytes in the same second trips the 1024 B/s limit
+  t.exception(() => ledger.record('acq_resumed', {
+    sourceBytesRead: 2048 + 512 + 2048,
+    sourceBytesAccepted: 2048 + 512 + 2048,
+    stagingBytes: 0
+  }, { policy }), /ACQUISITION_RATE_BUDGET_EXCEEDED/)
+
+  ledger.release('acq_resumed')
+})
+
 test('SourceGrantVault binds audience and TTL, resolves SourceReader, and revokes', async t => {
   let revoked = 0
   const vault = createSourceGrantVault({ now: () => NOW, resolver: { async resolve () { return createBufferSourceReader(new Uint8Array([1, 2, 3])) }, async revoke () { revoked++ } } })

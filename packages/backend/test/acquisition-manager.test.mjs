@@ -514,3 +514,169 @@ test('a 100% staged complete acquisition completes and publishes without re-atta
   t.is(publishes, 1, 'published successfully from staged bytes with no active source grant')
   await manager.close()
 })
+
+
+test('manager.start transitions unschedulable in-flight and queued jobs with deferredInput to failed/recoverable', async t => {
+  const bee = fakeBee()
+  const store = createAcquisitionStore({ bee })
+  const sourceGrants = vault()
+  const policyRuntime = createAcquisitionPolicyRuntime({ policy: openPolicy(), now: () => NOW })
+
+  // Seed an in-flight job that was interrupted mid-stream and cannot be scheduled without grant
+  const inFlightJob = {
+    schemaVersion: 1,
+    acquisitionId: 'acq_interrupted_1',
+    state: 'acquiring',
+    version: 1,
+    principalId: 'local-user',
+    publisherId: 'publisher-1',
+    requesterPublisherIds: ['publisher-1'],
+    isRemote: false,
+    deferredInput: true,
+    idempotencyDigest: 'd'.repeat(64),
+    requestFingerprint: 'f'.repeat(64),
+    request: REQUEST,
+    retentionClass: 'archive-pin',
+    publicationMetadata: null,
+    expectedBytes: 1000,
+    expectedIdentity: null,
+    sourceBytesRead: 500,
+    sourceBytesAccepted: 500,
+    bytesAcquired: 500,
+    verifiedBytes: 0,
+    committedBytes: 0,
+    retainedBytes: 0,
+    stagingBytes: 0,
+    stagingPeakBytes: 0,
+    attempts: 1,
+    startedAt: NOW - 5000,
+    finishedAt: null,
+    errorCode: null,
+    recoverable: false,
+    verifiedPrefix: null,
+    verifiedAsset: null,
+    publication: null,
+    createdAt: NOW - 10000,
+    updatedAt: NOW - 5000
+  }
+
+  // Seed a queued job with deferredInput that has no grant
+  const queuedJob = {
+    ...inFlightJob,
+    acquisitionId: 'acq_queued_stuck_1',
+    idempotencyDigest: 'e'.repeat(64),
+    requestFingerprint: 'g'.repeat(64),
+    state: 'queued'
+  }
+
+  const batch = bee.batch()
+  await batch.put('acquisition/v1/job/acq_interrupted_1', inFlightJob)
+  await batch.put('acquisition/v1/active/acq_interrupted_1', { acquisitionId: 'acq_interrupted_1' })
+  await batch.put('acquisition/v1/job/acq_queued_stuck_1', queuedJob)
+  await batch.put('acquisition/v1/active/acq_queued_stuck_1', { acquisitionId: 'acq_queued_stuck_1' })
+  await batch.flush()
+
+  const manager = createAcquisitionManager({
+    store,
+    policy: policyRuntime,
+    provider: provider(),
+    sourceGrants,
+    publisher: { hasAuthority: () => true, async publish () {} },
+    now: () => NOW
+  })
+
+  await manager.start()
+
+  const recoveredInFlight = await manager.get({ acquisitionId: 'acq_interrupted_1', principal: PRINCIPAL })
+  t.is(recoveredInFlight.state, 'failed')
+  t.is(recoveredInFlight.errorCode, 'RESTART_INTERRUPTED')
+  t.is(recoveredInFlight.recoverable, true)
+  t.is(recoveredInFlight.bytesAcquired, 500, 'preserves confirmed byte progress')
+
+  const recoveredQueued = await manager.get({ acquisitionId: 'acq_queued_stuck_1', principal: PRINCIPAL })
+  t.is(recoveredQueued.state, 'failed')
+  t.is(recoveredQueued.errorCode, 'SOURCE_GRANT_REQUIRED')
+  t.is(recoveredQueued.recoverable, true)
+
+  await manager.close()
+})
+
+test('manager.start repairs falsely exhausted rate budget and prefix mismatch jobs', async t => {
+  const bee = fakeBee()
+  const store = createAcquisitionStore({ bee })
+  const policyRuntime = createAcquisitionPolicyRuntime({ policy: openPolicy(), now: () => NOW })
+
+  // Seed an exhausted rate-budget failure
+  const rateExhausted = {
+    schemaVersion: 1,
+    acquisitionId: 'acq_rate_exhausted_1',
+    state: 'failed',
+    version: 3,
+    principalId: 'local-user',
+    publisherId: 'publisher-1',
+    requesterPublisherIds: ['publisher-1'],
+    isRemote: false,
+    deferredInput: true,
+    idempotencyDigest: 'a'.repeat(64),
+    requestFingerprint: 'b'.repeat(64),
+    request: REQUEST,
+    retentionClass: 'archive-pin',
+    publicationMetadata: null,
+    expectedBytes: 10000,
+    expectedIdentity: null,
+    sourceBytesRead: 5000,
+    sourceBytesAccepted: 5000,
+    bytesAcquired: 5000,
+    verifiedBytes: 0,
+    committedBytes: 0,
+    retainedBytes: 0,
+    stagingBytes: 0,
+    stagingPeakBytes: 0,
+    attempts: 2,
+    startedAt: NOW - 5000,
+    finishedAt: NOW - 1000,
+    errorCode: 'ACQUISITION_RATE_BUDGET_EXCEEDED',
+    recoverable: false,
+    verifiedPrefix: null,
+    verifiedAsset: null,
+    publication: null,
+    createdAt: NOW - 10000,
+    updatedAt: NOW - 1000
+  }
+
+  // Seed an exhausted prefix-mismatch failure
+  const prefixExhausted = {
+    ...rateExhausted,
+    acquisitionId: 'acq_prefix_exhausted_1',
+    idempotencyDigest: 'c'.repeat(64),
+    requestFingerprint: 'd'.repeat(64),
+    errorCode: 'ASSET_SOURCE_IDENTITY_CHANGED',
+    recoverable: false
+  }
+
+  const batch = bee.batch()
+  await batch.put('acquisition/v1/job/acq_rate_exhausted_1', rateExhausted)
+  await batch.put('acquisition/v1/job/acq_prefix_exhausted_1', prefixExhausted)
+  await batch.flush()
+
+  const manager = createAcquisitionManager({
+    store,
+    policy: policyRuntime,
+    provider: provider(),
+    sourceGrants: vault(),
+    publisher: { hasAuthority: () => true, async publish () {} },
+    now: () => NOW
+  })
+
+  await manager.start()
+
+  const repairedRate = await manager.get({ acquisitionId: 'acq_rate_exhausted_1', principal: PRINCIPAL })
+  t.is(repairedRate.state, 'failed')
+  t.is(repairedRate.recoverable, true, 'repaired rate exhausted job to recoverable')
+
+  const repairedPrefix = await manager.get({ acquisitionId: 'acq_prefix_exhausted_1', principal: PRINCIPAL })
+  t.is(repairedPrefix.state, 'failed')
+  t.is(repairedPrefix.recoverable, true, 'repaired prefix mismatch job to recoverable')
+
+  await manager.close()
+})

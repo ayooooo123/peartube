@@ -20,8 +20,8 @@ import { createAcquisitionAdmissionLedger } from './accounting.js'
 import { migrateLegacyIngest as migrateLegacy } from './store.js'
 
 const TERMINAL = new Set(TERMINAL_ACQUISITION_STATES)
-const RESET_PREFIX_ERRORS = new Set(['SOURCE_IDENTITY_CHANGED', 'SOURCE_LENGTH_MISMATCH', 'HASH_MISMATCH', 'VERIFICATION_FAILED'])
-const PERMANENT_ERRORS = new Set([...RESET_PREFIX_ERRORS, 'PUBLISHER_AUTHORITY_LOST', 'ASSET_INVALID'])
+const RESET_PREFIX_ERRORS = new Set(['SOURCE_IDENTITY_CHANGED', 'ASSET_SOURCE_IDENTITY_CHANGED', 'ASSET_SOURCE_CHANGED', 'SOURCE_LENGTH_MISMATCH', 'HASH_MISMATCH', 'VERIFICATION_FAILED'])
+const PERMANENT_ERRORS = new Set(['PUBLISHER_AUTHORITY_LOST', 'ASSET_INVALID'])
 const IDENTITY_KINDS = new Set(['sha256', 'etag'])
 const DAY_MS = 24 * 60 * 60 * 1000
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
@@ -189,11 +189,11 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       const isStagedComplete = job.bytesAcquired >= job.expectedBytes && job.expectedBytes > 0
       const grant = sourceGrants.inspect({ acquisitionId: job.acquisitionId, principal: job.principalId })
       let resolution = grant || (job.request?.resolutionRef ? await provider.resolve({ ref: job.request.resolutionRef, request: job.request, principalId: job.principalId }).catch(() => null) : null)
-      if (!resolution && isStagedComplete) {
-        resolution = { adapterId: job.deferredInput ? 'companion-callback' : 'local-file' }
+      let adapterId = null
+      if (!isStagedComplete) {
+        adapterId = resolution?.adapterId ?? null
+        if (adapterId === null) fail('ACQUISITION_ADAPTER_DENIED', 'the resolved source names no adapter, so no allowlist can admit it', 403)
       }
-      const adapterId = resolution?.adapterId ?? null
-      if (adapterId === null) fail('ACQUISITION_ADAPTER_DENIED', 'the resolved source names no adapter, so no allowlist can admit it', 403)
       await policy.admit({
         request: job.request,
         principal: principalForJob(job),
@@ -201,14 +201,19 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
         freeDiskBytes: freeDiskBytes(),
         isRemote: job.isRemote === true
       })
-      ledger.start({ acquisitionId: id, policy: policyValue })
+      ledger.start({ acquisitionId: id, policy: policyValue, counters: job })
       await assertAuthority(job)
       job = await change(id, { expectedVersion: job.version, from: 'queued', to: 'acquiring', patch: { attempts: job.attempts + 1, startedAt: job.startedAt ?? at(now) } })
       const sourceExpensive = sourceGrants.has({ acquisitionId: job.acquisitionId, principal: job.principalId })
+      const stagedIdentity = (!grant && isStagedComplete && (job.verifiedPrefix?.identity || job.expectedIdentity))
+        ? (job.verifiedPrefix?.identity || job.expectedIdentity)
+        : null
       if (!grant && isStagedComplete) {
+        const fallbackIdentity = stagedIdentity || { kind: 'etag', value: 'staged-complete' }
         reader = {
           resumable: true,
-          async describe () { return { byteLength: job.expectedBytes, identity: job.expectedIdentity || { kind: 'etag', value: 'staged-complete' } } },
+          maxReadBytes: 16 * 1024 * 1024,
+          async describe () { return { byteLength: job.expectedBytes, identity: fallbackIdentity, mimeType: 'video/mp4' } },
           async * open () {},
           async close () {}
         }
@@ -217,10 +222,10 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       }
       const description = await reader.describe({ signal: entry.controller.signal })
       if (description.byteLength !== job.expectedBytes) fail('SOURCE_LENGTH_MISMATCH', 'source length changed')
-      const describedIdentity = (!grant && isStagedComplete && job.expectedIdentity)
-        ? job.expectedIdentity
+      const describedIdentity = stagedIdentity
+        ? stagedIdentity
         : durableSourceIdentity(description.identity)
-      if (job.expectedIdentity !== null && !sameIdentity(describedIdentity, job.expectedIdentity)) fail('SOURCE_IDENTITY_CHANGED', 'source identity changed')
+      if (job.expectedIdentity !== null && !stagedIdentity && !sameIdentity(describedIdentity, job.expectedIdentity)) fail('SOURCE_IDENTITY_CHANGED', 'source identity changed')
       if (job.expectedIdentity === null) job = await progress(job, { expectedIdentity: describedIdentity })
       const resume = reader.resumable && (!job.verifiedPrefix || sameIdentity(job.verifiedPrefix.identity, describedIdentity) || isStagedComplete)
         ? { ...(job.verifiedPrefix || {}), identity: describedIdentity }
@@ -392,7 +397,7 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
           // grant first so this job remains queued for its replacement.
           await retireDeferredReplayGrant(existing)
           const outcome = await store.retry(existing.acquisitionId, { expectedVersion: existing.version, resetVerifiedPrefix: RESET_PREFIX_ERRORS.has(existing.errorCode) }); await notify(outcome.event); existing = outcome.job
-          ledger.reserve({ acquisitionId: existing.acquisitionId, principalId, expectedBytes: existing.expectedBytes, policy: policyValue, isRemote }); await dispatchQueued()
+          ledger.reserve({ acquisitionId: existing.acquisitionId, principalId, expectedBytes: existing.expectedBytes, policy: policyValue, isRemote, counters: RESET_PREFIX_ERRORS.has(existing.errorCode) ? {} : outcome.job }); await dispatchQueued()
         } else if (existing.state === 'failed' && existing.recoverable) {
           const outcome = await store.exhaust(existing.acquisitionId, { expectedVersion: existing.version }); await notify(outcome.event); existing = outcome.job
         }
@@ -428,9 +433,15 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
     },
     async retry ({ acquisitionId, principal } = {}) {
       assertOpen()
-      const job = await owned(acquisitionId, principal)
+      let job = await owned(acquisitionId, principal)
       if (!job) fail('ACQUISITION_NOT_FOUND', 'acquisition not found', 404)
       if (job.state !== 'failed') fail('ACQUISITION_NOT_FAILED', 'only failed acquisitions can be retried', 409)
+      const isRateBug = job.errorCode === 'ACQUISITION_RATE_BUDGET_EXCEEDED'
+      const isPrefixMismatch = RESET_PREFIX_ERRORS.has(job.errorCode)
+      if (!job.recoverable && (isRateBug || isPrefixMismatch) && typeof store.repairExhausted === 'function') {
+        const repaired = await store.repairExhausted(job.acquisitionId, { expectedVersion: job.version })
+        job = repaired.job
+      }
       if (!job.recoverable) fail('ACQUISITION_NOT_RECOVERABLE', 'acquisition failure is not recoverable', 409)
       const policyValue = await currentPolicy()
       if (job.attempts >= policyValue.maxAttempts) {
@@ -448,7 +459,8 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
         principalId: job.principalId,
         expectedBytes: job.expectedBytes,
         policy: policyValue,
-        isRemote: job.isRemote === true
+        isRemote: job.isRemote === true,
+        counters: RESET_PREFIX_ERRORS.has(job.errorCode) ? {} : outcome.job
       })
       await dispatchQueued()
       return publicJob(outcome.job)
@@ -485,7 +497,36 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       }
       started = true
       for (let job of await store.listActive()) {
-        if (job.state === 'acquiring' || job.state === 'verifying') { const outcome = await store.recover(job.acquisitionId, { expectedVersion: job.version }); await notify(outcome.event); job = outcome.job }
+        if (job.state === 'acquiring' || job.state === 'verifying') {
+          if (canSchedule(job)) {
+            const outcome = await store.recover(job.acquisitionId, { expectedVersion: job.version })
+            await notify(outcome.event)
+            job = outcome.job
+          } else {
+            const outcome = await store.transition(job.acquisitionId, {
+              expectedVersion: job.version,
+              from: job.state,
+              to: 'failed',
+              patch: { errorCode: 'RESTART_INTERRUPTED', recoverable: true, finishedAt: current }
+            })
+            await notify(outcome.event)
+            ledger.release(job.acquisitionId)
+            continue
+          }
+        } else if (job.state === 'queued' && job.deferredInput === true && !canSchedule(job)) {
+          const hadStarted = (job.attempts || 0) > 0 || (job.bytesAcquired || 0) > 0 || (job.sourceBytesRead || 0) > 0 || (job.stagingBytes || 0) > 0
+          if (hadStarted) {
+            const outcome = await store.transition(job.acquisitionId, {
+              expectedVersion: job.version,
+              from: 'queued',
+              to: 'failed',
+              patch: { errorCode: 'SOURCE_GRANT_REQUIRED', recoverable: true, finishedAt: current }
+            })
+            await notify(outcome.event)
+            ledger.release(job.acquisitionId)
+            continue
+          }
+        }
         ledger.restore({ acquisitionId: job.acquisitionId, principalId: job.principalId, expectedBytes: job.expectedBytes, counters: job, phase: job.state === 'publishing' ? 'active' : 'queued' })
         if (job.state === 'publishing') {
           const existing = await publisher.getPublication?.({ acquisitionId: job.acquisitionId, publisherId: job.publisherId, asset: job.verifiedAsset, resolution: job.publicationMetadata })
@@ -495,6 +536,27 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
             await terminal(job, 'failed', 'PUBLICATION_RECOVERY_REQUIRED', true)
             ledger.release(job.acquisitionId)
           }
+        }
+      }
+      if (typeof store.list === 'function' && typeof store.repairExhausted === 'function') {
+        const toRepair = []
+        let cursor = null
+        do {
+          const failedPage = await store.list({ states: ['failed'], limit: 64, cursor })
+          for (const failedJob of failedPage.items) {
+            const isRateBug = failedJob.errorCode === 'ACQUISITION_RATE_BUDGET_EXCEEDED'
+            const isPrefixMismatch = RESET_PREFIX_ERRORS.has(failedJob.errorCode)
+            if ((isRateBug || isPrefixMismatch) && !failedJob.recoverable) {
+              toRepair.push({ id: failedJob.acquisitionId, version: failedJob.version })
+            }
+          }
+          cursor = failedPage.cursor
+        } while (cursor !== null)
+        for (const target of toRepair) {
+          const outcome = await store.repairExhausted(target.id, {
+            expectedVersion: target.version
+          })
+          if (outcome.event) await notify(outcome.event)
         }
       }
       await dispatchQueued()

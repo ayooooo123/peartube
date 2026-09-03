@@ -303,6 +303,18 @@ export function createAcquisitionStore ({ bee, now = () => Date.now() } = {}) {
         return { job: clone(next), event }
       })
     },
+    repairExhausted (acquisitionId, { expectedVersion } = {}) {
+      return serialized(async () => {
+        const current = await readUnserialized(jobKey(acquisitionId)); checkedCurrent(current, acquisitionId, expectedVersion, 'failed')
+        if (current.recoverable) return { job: clone(validateDurableJob(current)), event: null }
+        const next = { ...current, version: current.version + 1, recoverable: true, attempts: Math.max(0, (current.attempts || 1) - 1), updatedAt: timestamp() }
+        validateDurableJob(next)
+        const operations = [['put', jobKey(acquisitionId), next]]
+        const event = withEventOperations(next, 'acquisition.failed', operations)
+        await atomic(operations)
+        return { job: clone(next), event }
+      })
+    },
     recover (acquisitionId, { expectedVersion } = {}) {
       return serialized(async () => {
         await ensureStateCounts()

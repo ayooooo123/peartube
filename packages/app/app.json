@@ -86,6 +86,7 @@
       "./plugins/withNextLib.js",
       "./plugins/withExoplayerKeepResources.js",
       "./plugins/withAndroidAbiSplits.js",
+      "./plugins/withAndroidNodeResolver.js",
       "./plugins/withVectorIconFonts.js",
       "expo-font"
     ]

@@ -3,15 +3,61 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createRequire } from 'node:module'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const appRoot = path.resolve(__dirname, '..')
 const repoRoot = path.resolve(appRoot, '..', '..')
+const require = createRequire(import.meta.url)
 
 function readFile(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8')
 }
+
+test('Android Gradle files use the generated Node resolver instead of assuming node is on PATH', () => {
+  const settingsGradle = readFile('packages/app/android/settings.gradle')
+  const appBuildGradle = readFile('packages/app/android/app/build.gradle')
+  const appConfig = readFile('packages/app/app.json')
+
+  for (const [name, source] of [
+    ['settings.gradle', settingsGradle],
+    ['app build.gradle', appBuildGradle],
+  ]) {
+    assert.match(source, /resolveNodeExecutable/, `${name} should define a Node executable resolver`)
+    assert.doesNotMatch(source, /commandLine\("node"/, `${name} should not hard-code node for Gradle exec providers`)
+    assert.doesNotMatch(source, /commandLine "node"/, `${name} should not hard-code node for Gradle Exec tasks`)
+    assert.doesNotMatch(source, /\[["']node["']/, `${name} should not hard-code node for Gradle execute calls`)
+  }
+
+  assert.match(appConfig, /withAndroidAbiSplits\.js"[\s\S]*withAndroidNodeResolver\.js"/, 'prebuild should run the Node resolver after ABI split tasks are injected')
+})
+
+test('Android Node resolver config plugin rewrites generated Gradle', () => {
+  const { _patchSettingsGradle, _patchAppBuildGradle } = require('../plugins/withAndroidNodeResolver.js')
+  const patchedSettings = _patchSettingsGradle(`pluginManagement {
+  providers.exec {
+    commandLine("node", "--print", "require.resolve('react-native/package.json')")
+  }
+}
+`)
+  assert.match(patchedSettings, /resolveNodeExecutable/, 'settings plugin transform should inject the Node resolver')
+  assert.doesNotMatch(patchedSettings, /commandLine\("node"/, 'settings plugin transform should rewrite provider exec calls')
+
+  const patchedAppBuild = _patchAppBuildGradle(`def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
+react {
+    entryFile = file(["node", "-e", "require('expo/scripts/resolveAppEntry')", projectRoot, "android", "absolute"].execute(null, rootDir).text.trim())
+    cliFile = new File(["node", "--print", "require.resolve('@expo/cli', { paths: [require.resolve('expo/package.json')] })"].execute(null, rootDir).text.trim())
+    bundleCommand = "export:embed"
+}
+tasks.register("ensureBackendBundles", Exec) {
+    commandLine "node", "scripts/ensure-backend-bundles.js"
+}
+`)
+  assert.match(patchedAppBuild, /resolveNodeExecutable/, 'app build plugin transform should inject the Node resolver')
+  assert.doesNotMatch(patchedAppBuild, /commandLine "node"/, 'app build plugin transform should rewrite Exec task calls')
+  assert.doesNotMatch(patchedAppBuild, /\[["']node["']/, 'app build plugin transform should rewrite execute calls')
+})
 
 test('Android GitHub workflows regenerate HRPC spec and backend bundles before APK builds', () => {
   const buildWorkflow = readFile('.github/workflows/build-mobile.yml')

@@ -158,7 +158,7 @@ function reachCell(row) {
 export function renderReleaseRow(row = {}) {
   const name = releaseName(row)
   const play = row.candidateRef
-    ? `<a class="play" href="/play/${encodeURIComponent(row.candidateRef)}" title="Play this release">▶</a>`
+    ? `<a class="play js-play" href="/play/${encodeURIComponent(row.candidateRef)}" title="Play this release">▶</a>`
     : ''
   return `<tr data-id="${escapeHtml(row.id || '')}" data-acquisition="${escapeHtml(row.acquisitionId || '')}" data-name="${escapeHtml(name)}" data-backups="${escapeHtml(String(Math.max(0, Number(row.backups) || 0)))}">
   <td class="pick"><input type="checkbox" class="js-pick" aria-label="Select ${escapeHtml(name)}"></td>
@@ -345,6 +345,12 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
     aside.drawer dt { color: var(--muted); font-size: 12px; }
     aside.drawer dd { margin: 0; font-size: 12px; word-break: break-all; }
     aside.drawer .verbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+    dialog#player { width: min(920px, 94vw); padding: 14px; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; }
+    dialog#player::backdrop { background: rgba(0,0,0,0.72); }
+    dialog#player .player-head { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    dialog#player .player-head strong { font-size: 14px; word-break: break-all; }
+    dialog#player video { width: 100%; max-height: 72vh; background: #000; border-radius: 8px; display: block; }
+    dialog#player .player-note { margin: 10px 2px 0; color: var(--muted); font-size: 12px; min-height: 1em; }
     .foot { color: var(--muted); padding: 12px 2px; display: flex; gap: 12px; align-items: center; }
   </style>
 </head>
@@ -404,6 +410,14 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
   </div>
   <p class="verb-result" id="verb-result" role="status" aria-live="polite"></p>
   <aside class="drawer" id="drawer" aria-hidden="true"></aside>
+  ${model.localPlayback === true ? `<dialog id="player" aria-label="Release player">
+    <div class="player-head">
+      <strong id="player-title"></strong>
+      <button type="button" class="act" id="player-close">Close</button>
+    </div>
+    <video id="player-video" controls preload="metadata" playsinline></video>
+    <p class="player-note" id="player-note" role="status" aria-live="polite"></p>
+  </dialog>` : ''}
   <script>
   (function () {
     var params = new URLSearchParams(window.location.search)
@@ -417,6 +431,38 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
     // Every less-than is escaped in the bootstrap so no title can close this
     // script tag, and esc() runs over anything the drawer writes as HTML.
     var index = ${JSON.stringify(Object.fromEntries((page.rows || []).map(row => [row.id, row]))).replaceAll('<', '\\u003c')}
+    ${model.localPlayback === true ? `
+    var playerDialog = document.getElementById('player')
+    var playerVideo = document.getElementById('player-video')
+    var playerTitle = document.getElementById('player-title')
+    var playerNote = document.getElementById('player-note')
+
+    // Playback mounts the release link straight on the <video> element: the
+    // media element follows the redirect to the backend blob server's loopback
+    // link, then issues its own Range requests, so seeking pulls only the
+    // blocks the playhead needs and the swarm delivers them as they land.
+    function detachPlayerSource () {
+      playerVideo.pause()
+      playerVideo.removeAttribute('src')
+      playerVideo.load()
+    }
+
+    function openPlayer (anchor) {
+      var row = index[openId] || (function () { var tr = anchor.closest('tr[data-id]'); return tr ? index[tr.getAttribute('data-id')] : null })()
+      playerTitle.textContent = row ? (row.file || row.work || 'Release') : 'Release'
+      playerNote.textContent = 'Opening this release…'
+      detachPlayerSource()
+      playerVideo.src = anchor.getAttribute('href')
+      playerDialog.showModal()
+      playerVideo.play().catch(function () { /* autoplay refusal still shows controls */ })
+    }
+
+    document.getElementById('player-close').addEventListener('click', function () {
+      detachPlayerSource()
+      if (playerDialog.open) playerDialog.close()
+    })
+    playerDialog.addEventListener('close', detachPlayerSource)
+    ` : ''}
 
     function esc (value) {
       return String(value === null || value === undefined ? '' : value)
@@ -464,7 +510,7 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
       var backups = Number(row.backups) || 0
       var verbs = []
       ${model.localPlayback === true
-        ? `if (row.candidateRef) verbs.push('<a class="act" href="/play/' + encodeURIComponent(row.candidateRef) + '">Play</a>')`
+        ? `if (row.candidateRef) verbs.push('<a class="act js-play" href="/play/' + encodeURIComponent(row.candidateRef) + '">Play</a>')`
         : '// an externally bound console mints no operator playback capability'}
       if (row.acquisitionId && ['queued', 'acquiring', 'verifying', 'publishing'].indexOf(row.state) >= 0) {
         verbs.push('<button type="button" class="act danger" data-cancel="' + esc(row.acquisitionId) + '">Cancel transfer</button>')
@@ -557,6 +603,10 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
     }
 
     document.addEventListener('click', function (ev) {
+      ${model.localPlayback === true ? `
+      var play = ev.target.closest && ev.target.closest('.js-play')
+      if (play) { ev.preventDefault(); openPlayer(play); return }
+      ` : ''}
       var open = ev.target.closest && ev.target.closest('.js-open')
       if (open) { renderDrawer(index[open.closest('tr').getAttribute('data-id')]); return }
       if (ev.target.id === 'drawer-close') { renderDrawer(null); return }

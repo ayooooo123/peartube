@@ -1407,24 +1407,28 @@ export async function createArchiveConsole({
     }
   }
 
-  function playbackLocation(req, opened) {
-    if (opened?.transport !== 'tcp' ||
-        !Number.isSafeInteger(opened.port) ||
-        opened.port < 1 ||
-        typeof opened.url !== 'string' ||
-        !opened.url.startsWith('/api/v2/stream/')) return null
-    let host = opened.host
-    if (host === '0.0.0.0' || host === '::' || !host) {
-      try {
-        host = new URL(`http://${req.headers?.host || ''}`).hostname
-      } catch {
-        return null
-      }
+  // A play link answers with the backend blob server's own loopback link: the
+  // browser follows the 303 itself, and that server speaks HTTP Range with the
+  // CORS headers a `<video>` element needs. Only that link's exact shape may
+  // leave this route, so a compromised open cannot aim the operator's browser
+  // at some other service on localhost.
+  function playbackLocation(opened) {
+    if (opened?.transport !== 'tcp' || typeof opened.url !== 'string') return null
+    let url
+    try {
+      url = new URL(opened.url)
+    } catch {
+      return null
     }
-    const authority = host.includes(':') ? `[${host}]:${opened.port}` : `${host}:${opened.port}`
-    return new URL(opened.url, `http://${authority}`).href
+    // Only the backend blob server's own link shape may leave this route: a
+    // loopback http origin with the key/blob query `getLink` emits. Anything
+    // else - a different path or service on localhost, credentials, a hash -
+    // would let a bad descriptor aim the operator's browser somewhere else.
+    if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1') return null
+    if (url.pathname !== '/' || !url.searchParams.get('key') || !url.searchParams.get('blob')) return null
+    if (url.username || url.password || url.hash) return null
+    return url.toString()
   }
-
   function playbackCandidateRef(url) {
     let pathname
     try {
@@ -1499,7 +1503,7 @@ export async function createArchiveConsole({
           const opened = candidateRef
             ? await service.openVerifiedPlayback?.(candidateRef).catch(() => null)
             : null
-          const location = playbackLocation(req, opened)
+          const location = playbackLocation(opened)
           if (!location) {
             res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
             res.end('playback unavailable')

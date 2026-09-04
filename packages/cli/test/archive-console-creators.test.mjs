@@ -490,7 +490,7 @@ test('archive UI binds while storage warms and adopts the same listener when ver
   await console.close()
 })
 
-test('archive UI playback opens the existing v2 capability in-process and legacy machine routes stay absent', async function (t) {
+test('archive UI playback redirects to the backend blob server link and legacy machine routes stay absent', async function (t) {
   const opened = []
   const service = fakeService({
     async openVerifiedPlayback(candidateRef) {
@@ -499,7 +499,7 @@ test('archive UI playback opens the existing v2 capability in-process and legacy
         transport: 'tcp',
         host: '127.0.0.1',
         port: 8175,
-        url: `/api/v2/stream/pub/rend?cap=${'C'.repeat(43)}`
+        url: `http://127.0.0.1:8175/?key=${'K'.repeat(52)}&blob=${'B'.repeat(10)}&type=video%2Fmp4&token=${'C'.repeat(43)}`
       }
     }
   })
@@ -509,7 +509,7 @@ test('archive UI playback opens the existing v2 capability in-process and legacy
 
     const play = await fetch(`${base}/play/${'M'.repeat(43)}`, { redirect: 'manual' })
     t.is(play.status, 303)
-    t.is(play.headers.get('location'), `http://127.0.0.1:8175/api/v2/stream/pub/rend?cap=${'C'.repeat(43)}`)
+    t.is(play.headers.get('location'), `http://127.0.0.1:8175/?key=${'K'.repeat(52)}&blob=${'B'.repeat(10)}&type=video%2Fmp4&token=${'C'.repeat(43)}`)
     t.alike(opened, ['M'.repeat(43)])
 
     const legacy = await fetch(`${base}/api/v1/catalog`)
@@ -519,6 +519,27 @@ test('archive UI playback opens the existing v2 capability in-process and legacy
     const duplicateCatalog = await fetch(`${base}/catalog.json`)
     t.is(duplicateCatalog.status, 404, 'the duplicate unauthenticated catalog projection is gone')
   })
+})
+
+test('playback refuses any open that is not the blob server link shape', async function (t) {
+  for (const url of [
+    'https://127.0.0.1:8175/?key=K&blob=B',
+    'http://10.0.0.5:8175/?key=K&blob=B',
+    'http://127.0.0.1:8175/api/v2/stream/pub/rend?cap=C',
+    'http://127.0.0.1:8175/other?key=K&blob=B',
+    'http://127.0.0.1:8175/?type=video%2Fmp4',
+    'http://127.0.0.1:8175/?key=K&blob=B#frag'
+  ]) {
+    const service = fakeService({
+      async openVerifiedPlayback() {
+        return { transport: 'tcp', host: '127.0.0.1', port: 8175, url }
+      }
+    })
+    await withConsole(service, async (base) => {
+      const play = await fetch(`${base}/play/${'M'.repeat(43)}`, { redirect: 'manual' })
+      t.is(play.status, 404, `${url} must not become a redirect target`)
+    })
+  }
 })
 
 test('externally bound archive UI cannot mint local operator playback capabilities', async function (t) {

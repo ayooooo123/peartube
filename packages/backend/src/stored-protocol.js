@@ -35,11 +35,19 @@ function validateProtocol8To9Transition(_context, step = {}) {
   }
 }
 
+// Protocol 10 adds causal catalog sync v2 over the existing journal.
+function validateProtocol9To10Transition(_context, step = {}) {
+  if (step.fromVersion !== 9 || step.toVersion !== 10 || step.expectedVersion < 10) {
+    throw new Error('invalid stored protocol 9 to 10 transition')
+  }
+}
+
 export const DEFAULT_STORED_PROTOCOL_MIGRATIONS = Object.freeze({
   4: validateProtocol4To5Transition,
   5: validateProtocol5To6Transition,
   7: validateProtocol7To8Transition,
   8: validateProtocol8To9Transition,
+  9: validateProtocol9To10Transition,
 })
 
 const MAX_MARKER_BYTES = 128

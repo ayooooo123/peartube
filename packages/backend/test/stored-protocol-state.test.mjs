@@ -3,7 +3,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-
 import {
   STORED_PROTOCOL_ERROR_CODE,
   DEFAULT_STORED_PROTOCOL_MIGRATIONS,
@@ -90,6 +89,17 @@ test('protocol 9 accepts protocol 8 storage without rewriting user data', async 
   assert.deepEqual(JSON.parse(fs.readFileSync(markerPath(storagePath), 'utf8')), { protocolVersion: 8 })
   state.commit()
   assert.deepEqual(JSON.parse(fs.readFileSync(markerPath(storagePath), 'utf8')), { protocolVersion: 9 })
+})
+test('protocol 10 advances stored protocol marker from 9 to 10 and validates transition', async (t) => {
+  const storagePath = makeStorage(t)
+  writeMarker(storagePath, { protocolVersion: 9 })
+  const state = prepareStoredProtocolState({ storagePath, expectedVersion: 10, migrations: DEFAULT_STORED_PROTOCOL_MIGRATIONS, fs, path })
+
+  assert.equal(state.status, 'migration-required')
+  await state.migrate({})
+  assert.deepEqual(JSON.parse(fs.readFileSync(markerPath(storagePath), 'utf8')), { protocolVersion: 9 })
+  state.commit()
+  assert.deepEqual(JSON.parse(fs.readFileSync(markerPath(storagePath), 'utf8')), { protocolVersion: 10 })
 })
 
 test('newer or unregistered older state fails closed with stable version details and no write', (t) => {

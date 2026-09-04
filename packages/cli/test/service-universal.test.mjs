@@ -397,14 +397,23 @@ test('verified catalog rows receive playable resolution refs from provider searc
       sources: [{
         publicationId: 'publication-1',
         renditionId: 'rendition-1',
+        // A raw index candidate token rides the source from the backend. It
+        // is NOT playable: provider.resolve refuses anything not minted by
+        // its own lease store, so the enrichment must replace it.
+        candidateRef: 'C'.repeat(43),
         mediaCoordinates: { contentKind: 'movie', mediaProvider: 'tmdb', mediaId: '603' }
       }]
     }],
     nextCursor: null
   })
+  runtime.api.searchIndexCandidates = async () => {
+    calls.push(['candidate-search'])
+    return [{ candidateRef: 'C'.repeat(43), publication: { publicationId: 'publication-1' }, rendition: { renditionId: 'rendition-1' } }]
+  }
   // The provider's own search mints resolution leases (`ref`). The raw index
   // candidate token is never playable - provider.resolve refuses it - so the
-  // catalog enrichment must come from the provider search results.
+  // catalog enrichment must come from the provider search results, not the
+  // index candidates the backend already attached.
   runtime.provider.search = async input => {
     calls.push(['provider-search', input.selector])
     return {
@@ -429,8 +438,9 @@ test('verified catalog rows receive playable resolution refs from provider searc
   })
   await service.start()
   const page = await service.getVerifiedMediaCatalog({ limit: 20 })
-  t.is(page.items[0].candidateRef, 'A'.repeat(43))
-  t.is(page.items[0].sources[0].candidateRef, 'A'.repeat(43))
+  t.is(page.items[0].candidateRef, 'A'.repeat(43), 'the provider lease reaches the row')
+  t.is(page.items[0].sources[0].candidateRef, 'A'.repeat(43), 'the provider lease replaces the raw index token')
+  t.is(calls.filter(([name]) => name === 'candidate-search').length, 0, 'the old index-token path stays dormant')
   t.alike(calls.find(([name]) => name === 'provider-search')?.[1], {
     namespace: 'tmdb',
     identifier: '603',

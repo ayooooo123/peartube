@@ -65,7 +65,8 @@ test('peer frame codec skips optional length-delimited minor extensions and pres
     payload: b4a.from('payload'),
     tags: [{ code: 5000 | FRAME_FLAG_OPTIONAL_TAG, value: b4a.from('future') }],
   })
-  t.alike(b4a.toString(frame.subarray(0, 8), 'hex'), '0000002d02000201')
+  // Frame header embeds protocolMajor: 03 since the catalog-sync v3 bump.
+  t.alike(b4a.toString(frame.subarray(0, 8), 'hex'), '0000002d03000201')
   const decoded = decodePeerFrame(frame)
   t.is(decoded.purpose, 'publisher')
   t.is(decoded.type, 'catalog-page')

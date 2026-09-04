@@ -625,10 +625,12 @@ test('a show release carries its season and episode, a film carries its year', a
   })
 })
 
-test('an externally bound console renders no playback path at all', async function (t) {
+test('a LAN client of an externally bound console renders no playback path at all', async function (t) {
   const jobs = [{ acquisitionId: 'acq-1', state: 'acquiring', title: 'One', sourceFileName: 'one.mkv', bytesAcquired: 1, expectedBytes: 2, updatedAt: 1 }]
+  // The console is bound wide, but this client arrives from off-machine, so
+  // the loopback-only playback capability must be absent from every byte.
   await withConsole(consoleService(jobs), async (base) => {
     const home = await (await fetch(`${base}/`)).text()
-    t.absent(home.includes('/play/'), 'no play link and no play verb reach an externally bound console')
-  }, { host: '0.0.0.0' })
+    t.absent(home.includes('/play/'), 'no play link and no play verb reach an off-machine console')
+  }, { host: '0.0.0.0', allowsPlaybackRequest: () => false })
 })

@@ -117,14 +117,29 @@ export function createBootstrapLocatorRuntime (context) {
     const result = await bootstrapManager.ingestLocator(context.peerId, envelope)
     console.log('[ScopedNetwork] bootstrap locator received from', String(context.peerId).slice(0, 16),
       '- status:', result?.status, 'errorCode:', result?.errorCode || result?.reason || 'none')
-    if (result.status === 'accepted' && result.publisherId && isPeerConnected(context.peerId)) {
-      // Candidate promotion is bounded and best-effort. The locator itself is
-      // never authority; followBootstrapLocator still requires the scoped
-      // publisher-root proof before it can bind a catalog.
+    // Only real scoped sessions promote and gossip. The inspect path (tracked
+    // absent) must stay inert: it feeds fixtures and diagnostics, never live
+    // discovery. Promotion runs after ingestLocator has retained the locator,
+    // so the scheduled follow can find it. The announcing peer need not host
+    // the catalog — on a relay mesh the locator arrives through an
+    // intermediate hop, and the publisher topic is dialed directly once named.
+    // Only real scoped sessions promote and gossip. The inspect path (tracked
+    // absent) must stay inert: it feeds fixtures and diagnostics, never live
+    // discovery. Promotion runs after ingestLocator has retained the locator,
+    // so the scheduled follow can find it — and fires for replays too, since
+    // a replay still names a verified retained locator. Gossip is gated to
+    // first-accept only: forwarding an identical locator again is what a
+    // gossip cycle needs suppressed.
+    if ((result.status === 'accepted' || result.status === 'replay') && result.publisherId && context.tracked && !localPublishers.has(result.publisherId)) {
       void addPublisherFollowReason({
         publisherId: result.publisherId,
         reason: 'bootstrap:auto',
       }).catch(error => console.log('[ScopedNetwork] follow-reason FAILED:', error?.message || error))
+    }
+    if (result.status === 'accepted' && context.tracked) {
+      // Transitive discovery: re-gossip the origin-signed envelope to every
+      // other live bootstrap session, excluding the one it arrived on.
+      try { gossipLocator(envelope, context.tracked) } catch { /* best-effort gossip */ }
     }
     counters.acceptedFrames++
     return result
@@ -148,8 +163,28 @@ export function createBootstrapLocatorRuntime (context) {
   function listBootstrapLocators () {
     return bootstrapManager.listLocators()
   }
+  // Session activation is also the moment a relay re-gossips every locator it
+  // has verified but does not publish itself. The origin-signed envelope is
+  // forwarded verbatim, so each hop re-verifies signature, TTL, and replay
+  // before accepting - gossip carries candidates, never authority.
   function sendLocatorsToSession (tracked) {
     for (const { locator } of localBootstrapLocators.values()) sendBootstrapLocatorToSession(tracked, locator)
+    for (const locator of bootstrapManager.listLocators()) {
+      if (localBootstrapLocators.has(locator.publisherId)) continue
+      sendBootstrapLocatorToSession(tracked, locator)
+    }
+  }
+  // Forward a freshly ingested locator envelope to every other live bootstrap
+  // session.
+  function gossipLocator (envelope, excludeSession = null) {
+    const scope = findScope('bootstrap', deriveBootstrapTopic({ protocolMajor, networkId }))
+    if (!scope) return 0
+    let delivered = 0
+    for (const session of scope.sessions.values()) {
+      if (session === excludeSession || session.closed || session.state !== 'active') continue
+      if (sendBootstrapLocatorToSession(session, { envelope })) delivered++
+    }
+    return delivered
   }
 
   function removeLocalLocator (publisherId) {
@@ -166,7 +201,7 @@ export function createBootstrapLocatorRuntime (context) {
   }
 
   return {
-    bootstrapManager, handleBootstrapFrame, refreshLocalBootstrapLocator, sendLocatorsToSession,
+    bootstrapManager, handleBootstrapFrame, refreshLocalBootstrapLocator, sendLocatorsToSession, gossipLocator,
     removeLocalLocator, publishBootstrapLocator, listBootstrapLocators, close,
   }
 }

@@ -74,5 +74,8 @@ export function verifyPublisherNamespaceProof(input = {}) {
       Number(locator.catalogEpoch) !== descriptor.catalogEpoch) {
     throw new Error('namespace proof does not match locator publisher/bootstrap/epoch tuple')
   }
-  return { valid: true, descriptor, state }
+  // The verified operations are returned with the descriptor so a mirroring
+  // relay can re-serve the same proof to downstream peers without the origin
+  // publisher being reachable.
+  return { valid: true, descriptor, state, genesis, transitions }
 }

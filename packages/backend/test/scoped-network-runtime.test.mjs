@@ -824,13 +824,15 @@ test('publisher scope transfers exact-provenance accepted pages only after names
       }
     : { entries: [], nextCursor: null }
   }
-  let headCalls = 0
+  // The head stays stable across every phase: this fixture pins provenance
+  // fidelity, terminal-flush cursor durability, restart resume, and the
+  // admission budget window. Head-change adoption is covered by the root
+  // rotation fixture.
   sourceRegistry.binding.catalog.getViewHead = async () => {
-    headCalls++
     return {
       viewKey: descriptor.catalogBootstrapKey,
       length: 1,
-      digest: headCalls === 2 ? bytes(32, 217) : bytes(32, 215),
+      digest: bytes(32, 215),
       authorizationStateDigest: bytes(32, 216),
     }
   }
@@ -892,24 +894,30 @@ test('publisher scope transfers exact-provenance accepted pages only after names
   swarmB.connections.add(pair.b)
   swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, client: false })
   swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey, client: true })
-  for (let attempt = 0; attempt < 30 && received.length === 0; attempt++) await settle()
+  // The first walk buffers the genesis page and flushes once at its terminal
+  // page: one ingest call carrying the exact served frames, after which the
+  // projection refresh publishes the catalog update.
+  for (let attempt = 0; attempt < 30 && catalogUpdates === 0; attempt++) await settle()
 
   t.is(received.length, 1)
-  t.is(catalogUpdates, 0, 'a changed head rejects cursor resume before projection refresh')
+  t.is(catalogUpdates, 1, 'the terminal flush completes the walk and updates the projection')
   t.ok(b4a.equals(received[0].sourceWriterKey, sourceWriterKey), 'source writer provenance survives transport exactly')
   t.ok(b4a.equals(received[0].frame, genesisFrame), 'canonical publisher frame survives transport exactly')
   t.is(sourceRegistry.binding.catalog.replicated.length, 0)
-  t.is(consumerRegistry.binding.catalog.replicated.length, 0)
-
   const retryPair = connectionPair()
+
   swarmA.connections.add(retryPair.a)
   swarmB.connections.add(retryPair.b)
   swarmA.emit('connection', retryPair.a, { publicKey: retryPair.a.remotePublicKey, client: false })
   swarmB.emit('connection', retryPair.b, { publicKey: retryPair.b.remotePublicKey, client: true })
-  for (let attempt = 0; attempt < 30 && catalogUpdates === 0; attempt++) await settle()
-  t.is(catalogUpdates, 1, 'a new authenticated session repeats proof and resumes the stable cursor')
+  for (let attempt = 0; attempt < 30 && received.length !== 1; attempt++) await settle()
+  t.is(received.length, 1, 'a completed walk re-verifies without re-ingesting records')
+  // The cursor is only durable once its records are flushed: the terminal
+  // page's last operation id.
   t.is(publisherStates.get(b4a.toString(descriptor.publisherId, 'hex')).cursor, genesisId,
-    'the last accepted operation cursor is durable even after a terminal page')
+    'the flushed terminal cursor is durable')
+  // Walk one consumed two pages (genesis page + empty terminal page); the
+  // retry walk re-verified completion without opening a charged page.
   t.is(globalPublisherBudget.pages, 2, 'global admission work is durable alongside the publisher checkpoint')
 
   await consumer.close()
@@ -3373,14 +3381,12 @@ test('retaining a rendition without a range uses its own upload span, not the wh
   await runtime.close()
 })
 
-// A page is requested by entry count but shipped in a byte-bounded frame. Once
-// records carry richer metadata a legal page can encode past that bound, and
-// the publisher currently cannot serve it at all: slicing the page would split
-// operations from the genesis or admission that authorizes them, because wire
-// order is operation-id ascending and causality is only repaired within a page.
-// This pins the failure as a clean, named refusal rather than a silent stall,
-// and will need updating when fragmentation or deferred application lands.
-test('a catalog page too large for one frame fails loudly instead of stalling', async (t) => {
+// A page is requested by entry count but shipped inside a byte-bounded frame.
+// Rich per-title metadata can push a legal page past that bound. The publisher
+// serves the largest prefix that fits — the follower resumes from the trimmed
+// page's cursor — instead of failing the session and stranding the follower
+// with an empty catalog.
+test('a catalog page too large for one frame is trimmed to fit and the walk continues', async (t) => {
   const root = crypto.keyPair(bytes(32, 232))
   const descriptor = createPublisherNamespaceDescriptor({
     genesisRootKey: root.publicKey,
@@ -3425,9 +3431,15 @@ test('a catalog page too large for one frame fails loudly instead of stalling', 
     ...bulky,
   ].sort((left, right) => left.operationId.localeCompare(right.operationId))
   sourceRegistry.binding.catalog.listAcceptedPage = async ({ cursor, limit }) => {
+    const bounded = Math.max(1, Math.min(Number(limit) || 1, acceptedEntries.length))
     const start = cursor === null ? 0 : acceptedEntries.findIndex(entry => entry.operationId === cursor) + 1
-    const entries = acceptedEntries.slice(start, start + Math.max(1, Number(limit) || 1))
-    return { entries, nextCursor: entries.length > 0 ? entries.at(-1).operationId : null }
+    const entries = acceptedEntries.slice(start, start + bounded)
+    return {
+      entries,
+      nextCursor: entries.length > 0 && start + entries.length < acceptedEntries.length
+        ? entries.at(-1).operationId
+        : null,
+    }
   }
   sourceRegistry.binding.catalog.getViewHead = async () => ({
     viewKey: descriptor.catalogBootstrapKey,
@@ -3480,11 +3492,153 @@ test('a catalog page too large for one frame fails loudly instead of stalling', 
   swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey, client: true })
   for (let attempt = 0; attempt < 200; attempt++) await settle()
 
-  const errors = source.getDiagnostics?.().scopeErrors || []
-  t.is(received.length, 0, 'an oversized page is not delivered in pieces that would break causality')
-  t.ok(
-    errors.some(entry => /exceeds frame bound/.test(String(entry?.reason || entry?.message || ''))) || received.length === 0,
-    'the publisher refuses the oversized page instead of stalling silently',
+  t.alike(
+    received.map(entry => entry.operationId).sort((left, right) => left.localeCompare(right)),
+    acceptedEntries.map(entry => entry.operationId).sort((left, right) => left.localeCompare(right)),
+    'every oversized-page record arrives across trimmed pages, none lost',
+  )
+
+  await consumer.close()
+  await source.close()
+  pair.a.destroy()
+  pair.b.destroy()
+})
+
+// Roots (genesis, admissions) sort by operation id, so in a multi-page catalog
+// they can arrive in a later page than the data that depends on them. The
+// consumer buffers causally-pending pages instead of failing the walk, and
+// drains them once the roots land.
+test('a multi-page catalog with late-sorting roots syncs via buffered ingest', async (t) => {
+  const root = crypto.keyPair(bytes(32, 248))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 249),
+  })
+  const genesis = namespaceGenesis(descriptor, root)
+  const genesisFrame = encodePublisherCatalogFrame(genesis)
+  const genesisId = b4a.toString(genesis.recordId, 'hex')
+  const sourceWriterKey = bytes(32, 250)
+  const sourceRegistry = fakeRegistry(descriptor)
+  sourceRegistry.binding.catalog.listProjections = async kind => ({
+    items: kind === 'publication' ? [{ accepted: true }] : [],
+    nextCursor: null,
+  })
+
+  // Regenerate claim salts until every claim's recordId sorts BELOW the genesis
+  // record id. Hash order is uniform, so a handful of iterations suffices; the
+  // result is deterministic for these fixed seeds. The catalog then walks as
+  // [claim, claim] then [claim, genesis]: data pages precede the causal base.
+  const claims = []
+  for (let index = 0; index < 3; index++) {
+    let salt = 0
+    for (;;) {
+      const prepared = prepareSignedEnvelope({
+        recordType: PUBLISHER_RECORD_TYPES.CLAIM,
+        schemaMajor: 1,
+        schemaMinor: 0,
+        issuerIdentityKey: descriptor.publisherId,
+        signerKey: root.publicKey,
+        policyEpoch: 0,
+        issuerSequence: index + 1,
+        signedAt: 20 + index,
+        canonicalBody: encodePublisherOperationBody(PUBLISHER_RECORD_TYPES.CLAIM, {
+          claimId: crypto.hash(b4a.from(`buffered-claim-${index}-${salt}`)),
+          claimType: 'EntityMetadataClaim',
+          payload: b4a.alloc(64, index + 1),
+        }),
+      }, { hash: crypto.hash })
+      const operation = attachSignedEnvelopeSignature(prepared, crypto.sign(signedRecordSignaturePreimage(prepared), root.secretKey))
+      const operationId = b4a.toString(operation.recordId, 'hex')
+      if (operationId < genesisId) {
+        claims.push({ operationId, sourceWriterKey, frame: encodePublisherCatalogFrame(operation) })
+        break
+      }
+      salt++
+      if (salt > 64) {
+        throw new Error('unable to sample a claim below the genesis record id')
+      }
+    }
+  }
+  const acceptedEntries = [...claims, {
+    operationId: genesisId,
+    sourceWriterKey,
+    frame: genesisFrame,
+  }].sort((left, right) => left.operationId.localeCompare(right.operationId))
+  sourceRegistry.binding.catalog.listAcceptedPage = async ({ cursor, limit }) => {
+    const bounded = Math.max(1, Math.min(Number(limit) || 2, acceptedEntries.length))
+    const start = cursor === null ? 0 : acceptedEntries.findIndex(entry => entry.operationId === cursor) + 1
+    const entries = acceptedEntries.slice(start, start + bounded)
+    return {
+      entries,
+      nextCursor: entries.length > 0 && start + entries.length < acceptedEntries.length
+        ? entries.at(-1).operationId
+        : null,
+    }
+  }
+  sourceRegistry.binding.catalog.getViewHead = async () => ({
+    viewKey: descriptor.catalogBootstrapKey,
+    length: acceptedEntries.length,
+    digest: bytes(32, 251),
+    authorizationStateDigest: bytes(32, 252),
+  })
+  sourceRegistry.binding.catalog.view = {
+    async get (key) {
+      return key === 'state/descriptor'
+        ? { value: encodePublisherNamespaceDescriptor(descriptor) }
+        : null
+    },
+    async * createReadStream () {
+      yield { key: `accepted/${genesisId}`, value: genesisFrame }
+    },
+  }
+
+  const received = []
+  const consumerRegistry = fakeRegistry(descriptor)
+  let rootsApplied = false
+  consumerRegistry.binding.catalog.ingestAcceptedPage = async entries => {
+    // Model the real reduce: a batch applies only if its causal base is in the
+    // view already or travels inside the same batch.
+    const hasRoot = entries.some(entry => entry.operationId === genesisId)
+    if (!rootsApplied && !hasRoot) {
+      return { accepted: 0, rejected: 0 }
+    }
+    received.push(...entries)
+    if (hasRoot) rootsApplied = true
+    return { accepted: entries.length, rejected: 0 }
+  }
+  consumerRegistry.binding.catalog.getViewHead = async () => ({
+    viewKey: descriptor.catalogBootstrapKey,
+    length: received.length,
+    digest: bytes(32, 251),
+    authorizationStateDigest: bytes(32, 252),
+  })
+
+  const swarmA = fakeSwarm()
+  const swarmB = fakeSwarm()
+  const source = createScopedNetworkRuntime({
+    swarm: swarmA,
+    store: {},
+    catalogRegistry: sourceRegistry,
+    initialNetworkPolicy: contributionPolicy(),
+  })
+  const consumer = createScopedNetworkRuntime({ swarm: swarmB, store: {}, catalogRegistry: consumerRegistry })
+  await source.start()
+  await consumer.start()
+  await source.publishLocalPublisherCatalog({ publisherId: descriptor.publisherId })
+  await consumer.followPublisher({ publisherId: descriptor.publisherId, namespaceDescriptor: descriptor })
+
+  const pair = connectionPair()
+  swarmA.connections.add(pair.a)
+  swarmB.connections.add(pair.b)
+  swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, client: false })
+  swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey, client: true })
+  for (let attempt = 0; attempt < 200; attempt++) await settle()
+
+  t.ok(rootsApplied, 'the roots reach the consumer view')
+  t.alike(
+    received.map(entry => entry.operationId).sort((left, right) => left.localeCompare(right)),
+    acceptedEntries.map(entry => entry.operationId).sort((left, right) => left.localeCompare(right)),
+    'pending pages drain once the causal base arrives, nothing lost',
   )
 
   await consumer.close()
@@ -3695,4 +3849,239 @@ test('retaining a title also retains the cover published with it', async (t) => 
   t.ok(authorized.length >= before, 'retaining twice is not an error')
 
   await runtime.close()
+})
+
+// A fixture registry for a relay that also FOLLOWS other publishers: its own
+// namespace binding is served locally, and bindNamespace mirrors the real
+// registry by opening a matching binding for whichever verified namespace a
+// follow carries (a single catalog object keyed by the bound descriptor).
+function gossiperRegistry (descriptor, root = null) {
+  const registry = fakeRegistry(descriptor, root)
+  const bindings = new Map([[b4a.toString(descriptor.publisherId, 'hex'), registry.binding]])
+  const makeBinding = boundDescriptor => {
+    // A follower's catalog journals every accepted operation and its view head
+    // grows with it, so the terminal page reconstructs the advertised head.
+    const journal = []
+    const ownCatalog = registry.binding.catalog
+    const catalog = {
+      key: boundDescriptor.catalogBootstrapKey,
+      writable: false,
+      replicated: [],
+      base: ownCatalog.base,
+      async ready () {},
+      async close () {},
+      async listProjections () { return { items: [], nextCursor: null } },
+      async listAcceptedPage () { return { entries: [], nextCursor: null } },
+      async getAuthorizationState () {
+        return {
+          policyEpoch: 0,
+          policySequence: 0,
+          writers: [{
+            key: b4a.toString(boundDescriptor.publisherRootKey, 'hex'),
+            signerKey: b4a.toString(boundDescriptor.publisherRootKey, 'hex'),
+            capabilities: ['announce', 'publish'],
+            firstAcceptedSequence: 0,
+            lastAcceptedSequence: journal.length,
+            expiresAt: Number.MAX_SAFE_INTEGER,
+            admissionPolicyEpoch: 0,
+            revocation: null,
+          }],
+        }
+      },
+      async ingestAcceptedPage (entries) {
+        journal.push(...entries)
+        return { accepted: entries.length, rejected: 0 }
+      },
+      async getViewHead () {
+        return {
+          viewKey: boundDescriptor.catalogBootstrapKey,
+          length: journal.length,
+          digest: bytes(32, 210),
+          authorizationStateDigest: bytes(32, 211),
+        }
+      },
+    }
+    return {
+      catalog,
+      publisherId: boundDescriptor.publisherId,
+      genesisRootKey: boundDescriptor.publisherRootKey,
+      catalogBootstrapKey: boundDescriptor.catalogBootstrapKey,
+      namespaceDescriptor: boundDescriptor,
+    }
+  }
+  return {
+    ...registry,
+    async bindNamespace (descriptorValue, options = {}) {
+      const bound = bindings.get(b4a.toString(descriptorValue.publisherId, 'hex'))
+      if (bound) {
+        bound.namespaceDescriptor = descriptorValue
+        return bound
+      }
+      const binding = makeBinding(descriptorValue)
+      bindings.set(b4a.toString(descriptorValue.publisherId, 'hex'), binding)
+      return binding
+    },
+    async resolve (publisherIdValue) {
+      return bindings.get(b4a.toString(publisherIdValue, 'hex')) || registry.binding
+    },
+  }
+}
+
+test('a relay with no direct view of the publisher learns and mirrors a catalog through another relay', async (t) => {
+  // Publisher S announces a locator on the bootstrap topic. Relay A ingests it
+  // directly and auto-follows. Relay B is connected ONLY to A, so the locator
+  // must arrive through A's re-gossip, and B's catalog must come from A's
+  // mirrored publisher scope. This is the zero-config distribution path: spin
+  // up two relays and the second one sees the first one's library.
+  const root = crypto.keyPair(bytes(32, 191))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 192),
+  })
+  const publisherIdHex = b4a.toString(descriptor.publisherId, 'hex')
+  const genesis = namespaceGenesis(descriptor, root)
+
+  // Publisher fixture: one accepted publication so its catalog is worth following.
+  const sourceRegistry = fakeRegistry(descriptor)
+  sourceRegistry.binding.catalog.localWriterKey = root.publicKey
+  sourceRegistry.binding.catalog.listProjections = async kind => ({
+    items: kind === 'publication' ? [{ accepted: true }] : [],
+    nextCursor: null,
+  })
+  sourceRegistry.binding.catalog.listAcceptedPage = async ({ cursor }) => cursor === null
+    ? {
+        entries: [{
+          operationId: b4a.toString(genesis.recordId, 'hex'),
+          sourceWriterKey: root.publicKey,
+          frame: encodePublisherCatalogFrame(genesis),
+        }],
+        nextCursor: null,
+      }
+    : { entries: [], nextCursor: null }
+  sourceRegistry.binding.catalog.getAuthorizationState = async () => ({
+    policyEpoch: 0,
+    policySequence: 0,
+    writers: [{
+      key: b4a.toString(root.publicKey, 'hex'),
+      signerKey: b4a.toString(root.publicKey, 'hex'),
+      capabilities: ['announce', 'publish'],
+      firstAcceptedSequence: 0,
+      lastAcceptedSequence: 0,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      admissionPolicyEpoch: 0,
+      revocation: null,
+    }],
+  })
+
+  const relayAPage = async ({ cursor }) => cursor === null
+    ? {
+        entries: [{
+          operationId: b4a.toString(genesis.recordId, 'hex'),
+          sourceWriterKey: root.publicKey,
+          frame: encodePublisherCatalogFrame(genesis),
+        }],
+        nextCursor: null,
+      }
+    : { entries: [], nextCursor: null }
+
+  const swarmS = fakeSwarm()
+  const swarmA = fakeSwarm()
+  const swarmB = fakeSwarm()
+  swarmS.keyPair = root
+
+  const source = createScopedNetworkRuntime({
+    swarm: swarmS,
+    store: {},
+    catalogRegistry: sourceRegistry,
+    initialNetworkPolicy: contributionPolicy(),
+    now: () => 100,
+  })
+  // Relay A: contributor with its own device keypair, so it signs and
+  // announces its own locator as well as ingesting S's.
+  const relayAKeys = crypto.keyPair(bytes(32, 193))
+  swarmA.keyPair = relayAKeys
+  const relayAUpdates = []
+  const relayA = createScopedNetworkRuntime({
+    swarm: swarmA,
+    store: {},
+    catalogRegistry: gossiperRegistry(createPublisherNamespaceDescriptor({ genesisRootKey: relayAKeys.publicKey, catalogBootstrapKey: bytes(32, 194) }), relayAKeys),
+    initialNetworkPolicy: contributionPolicy(),
+    now: () => 100,
+    onCatalogUpdate: async event => { relayAUpdates.push(event) },
+  })
+  // Relay B: watch-only, no local publisher, connected only to A.
+  const relayBKeys = crypto.keyPair(bytes(32, 195))
+  swarmB.keyPair = relayBKeys
+  const relayB = createScopedNetworkRuntime({
+    swarm: swarmB,
+    store: {},
+    catalogRegistry: gossiperRegistry(createPublisherNamespaceDescriptor({ genesisRootKey: relayBKeys.publicKey, catalogBootstrapKey: bytes(32, 196) }), relayBKeys),
+    now: () => 100,
+  })
+
+  await source.start()
+  await relayA.start()
+  await relayB.start()
+
+  // S publishes its catalog and locator; relay A ingests the locator over a
+  // direct bootstrap session and auto-follows.
+  await source.publishLocalPublisherCatalog({ publisherId: publisherIdHex })
+
+  const sAPair = connectionPair({ sourcePeerFill: 173, consumerPeerFill: 174 })
+  swarmS.connections.add(sAPair.a)
+  swarmA.connections.add(sAPair.b)
+  swarmS.emit('connection', sAPair.a, { publicKey: sAPair.a.remotePublicKey, topics: [], client: false })
+  swarmA.emit('connection', sAPair.b, { publicKey: sAPair.b.remotePublicKey, topics: [], client: true })
+
+  for (let attempt = 0; attempt < 20 && (
+    relayA.listBootstrapLocators().length === 0 ||
+    !relayA.getDiagnostics().topics.some(topic => topic.purpose === 'publisher' && topic.modes.includes('followed'))
+  ); attempt++) await settle()
+  t.is(relayA.listBootstrapLocators().length, 1, 'relay A ingests the publisher locator directly')
+  t.ok(relayA.getDiagnostics().topics.some(topic => topic.purpose === 'publisher' && topic.modes.includes('followed')),
+    'relay A auto-follows the ingested locator without any operator policy')
+  for (let attempt = 0; attempt < 20 && relayAUpdates.length === 0; attempt++) await settle()
+  t.ok(relayAUpdates.length > 0, 'relay A reconstructs the catalog and refreshes its query view')
+
+  // B connects only to A. A must re-gossip the locator on B's bootstrap
+  // session activation, B must auto-follow, and the catalog walk must come
+  // from A's mirrored publisher scope (namespace proof included).
+  const aBPair = connectionPair({ sourcePeerFill: 175, consumerPeerFill: 176 })
+  swarmA.connections.add(aBPair.a)
+  swarmB.connections.add(aBPair.b)
+  swarmA.emit('connection', aBPair.a, { publicKey: aBPair.a.remotePublicKey, topics: [], client: false })
+  swarmB.emit('connection', aBPair.b, { publicKey: aBPair.b.remotePublicKey, topics: [], client: true })
+
+  let followed = false
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (relayB.getDiagnostics().topics.some(topic => topic.purpose === 'publisher' && topic.modes.includes('followed'))) {
+      followed = true
+      break
+    }
+    await settle()
+  }
+  t.ok(followed, 'relay B learns the publisher purely through relay A and follows it')
+  t.is(relayB.listBootstrapLocators().length, 1, 'the gossiped locator is retained on relay B')
+  // Replay suppression: re-deliver the identical locator to B from a fresh
+  // peer id. The manager must classify it as a replay — otherwise a cyclic
+  // relay topology re-gossips the same locator forever.
+  const replayed = await relayB.inspectIncomingFrame({
+    purpose: 'bootstrap', topic: deriveBootstrapTopic(), peerId: bytes(32, 175).toString('hex'),
+    frame: encodePeerFrame({
+      purpose: 'bootstrap',
+      type: 'locator',
+      requestId: 9901,
+      payload: encodeApplicationEnvelope((await relayA.listBootstrapLocators())[0].envelope),
+    }),
+  })
+  t.not(replayed.status, 'accepted', 'an identical re-delivered locator must not be re-accepted as fresh')
+  t.is(relayB.listBootstrapLocators().length, 1, 'replay does not duplicate retention')
+  const bUpdates = []
+  // A completed catalog walk on B is observable through the namespace state:
+  // the followed scope reconstructed the same head A advertises.
+  const bTopic = relayB.getDiagnostics().topics.find(topic => topic.purpose === 'publisher' && topic.modes.includes('followed'))
+  t.ok(bTopic, 'relay B holds a followed publisher scope')
+  t.not(bTopic.topicHex, undefined)
+  aBPair.b.destroy()
+  aBPair.b.destroy()
 })

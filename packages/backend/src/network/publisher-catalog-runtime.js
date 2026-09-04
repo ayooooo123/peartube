@@ -242,30 +242,80 @@ export function createPublisherCatalogRuntime (context) {
     const head = await provider.catalog.getViewHead()
     const headDigest = hex32(head?.digest, 'headDigest')
     if (request.expectedHeadDigest !== null && request.expectedHeadDigest !== headDigest) fail('catalog head changed before cursor resume')
-    const page = await provider.catalog.listAcceptedPage({ cursor: request.cursor, limit: request.limit })
+    const buildResponse = (list, nextCursor) => {
+      const unsigned = {
+        version: 1,
+        requestedCursor: request.cursor,
+        nextCursor,
+        previousPageDigest: request.previousPageDigest,
+        expectedHeadDigest: request.expectedHeadDigest,
+        catalogEpoch: provider.catalogEpoch,
+        headLength: Number(head?.length),
+        headDigest,
+        authorizationStateDigest: hex32(head?.authorizationStateDigest, 'authorizationStateDigest'),
+        entries: list,
+      }
+      // Hash the unsigned body directly: canonicalCatalogPayload would throw
+      // the frame-bound failure while probing an oversized page, and a digest
+      // of a page that will be trimmed is never sent anyway.
+      const pageDigestHex = b4a.toString(crypto.hash(c.encode(c.any, unsigned)), 'hex')
+      return { response: { ...unsigned, pageDigest: pageDigestHex }, payload: c.encode(c.any, { ...unsigned, pageDigest: pageDigestHex }) }
+    }
+    // The fit probe encodes the complete response the session would send,
+    // digest included. Only a genuine frame-bound overflow routes here as
+    // null; every other build error keeps its own failure.
+    const FRAME_BOUND_BYTES = MAX_PEER_FRAME_BYTES - 1024
+    const encodePageFits = (list, nextCursor) => {
+      const built = buildResponse(list, nextCursor)
+      return built.payload.byteLength > FRAME_BOUND_BYTES ? null : built
+    }
+    // A page is requested by entry count but shipped inside a byte-bounded
+    // frame; rich per-title metadata can push a legal page past the bound.
+    // Failing the session strands the follower with an empty catalog, so serve
+    // the largest prefix that fits. The trimmed page's cursor is the
+    // provider's own cursor for that fetch, so the follower resumes from the
+    // last record it actually received.
+    let page = await provider.catalog.listAcceptedPage({ cursor: request.cursor, limit: request.limit })
     if (!page || !Array.isArray(page.entries) || page.entries.length > request.limit) fail('catalog provider returned an invalid page')
-    const entries = page.entries.map(entry => ({
+    let entries = page.entries.map(entry => ({
       operationId: normalizeCatalogCursor(entry?.operationId, 'operationId'),
       sourceWriterKey: exactBuffer(entry?.sourceWriterKey, 32, 'sourceWriterKey'),
       frame: b4a.from(entry?.frame || []),
     }))
-    // Never split a page across authorization dependencies; the full logical page is atomic.
-    const nextCursor = normalizeCatalogCursor(page.nextCursor)
-    const unsigned = {
-      version: 1,
-      requestedCursor: request.cursor,
-      nextCursor,
-      previousPageDigest: request.previousPageDigest,
-      expectedHeadDigest: request.expectedHeadDigest,
-      catalogEpoch: provider.catalogEpoch,
-      headLength: Number(head?.length),
-      headDigest,
-      authorizationStateDigest: hex32(head?.authorizationStateDigest, 'authorizationStateDigest'),
-      entries,
+    let built = encodePageFits(entries, page.nextCursor)
+    // Binary search the largest prefix that fits one frame. listAcceptedPage
+    // is a bounded Hyperbee range scan, so refetching at smaller limits is
+    // cheap; the halving loop below converges in O(log page) fetches.
+    let low = 1
+    let high = entries.length
+    let trimmed = null
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2)
+      const candidate = await provider.catalog.listAcceptedPage({ cursor: request.cursor, limit: mid })
+      if (!candidate || !Array.isArray(candidate.entries) || candidate.entries.length > mid) fail('catalog provider returned an invalid page')
+      const candidateEntries = candidate.entries.map(entry => ({
+        operationId: normalizeCatalogCursor(entry?.operationId, 'operationId'),
+        sourceWriterKey: exactBuffer(entry?.sourceWriterKey, 32, 'sourceWriterKey'),
+        frame: b4a.from(entry?.frame || []),
+      }))
+      const candidateBuilt = encodePageFits(candidateEntries, candidate.nextCursor)
+      if (candidateBuilt !== null) {
+        built = candidateBuilt
+        trimmed = candidate
+        low = mid + 1
+      } else {
+        high = mid - 1
+      }
     }
-    const response = { ...unsigned, pageDigest: b4a.toString(pageDigest(unsigned), 'hex') }
-    const payload = canonicalCatalogPayload(response, 'catalog page response')
-    const entriesServed = entries
+    if (built === null) fail('catalog page exceeds frame bound')
+    // When the walk trimmed, the served prefix comes from the trimmed fetch
+    // and its cursor is normalized before the response digest covers it.
+    const entriesServed = built.response.entries
+    const trimmedCursor = trimmed === null
+      ? page.nextCursor
+      : normalizeCatalogCursor(trimmed.nextCursor)
+    const payload = built.payload
+    const response = built.response
     const nextPages = tracked.catalogServePages + 1
     const nextRecords = tracked.catalogServeRecords + entriesServed.length
     const nextBytes = tracked.catalogServeBytes + payload.byteLength
@@ -278,7 +328,7 @@ export function createPublisherCatalogRuntime (context) {
     tracked.catalogServeRecords = nextRecords
     tracked.catalogServeBytes = nextBytes
     tracked.catalogServeDigest = response.pageDigest
-    return { status: 'sent', records: entriesServed.length, nextCursor }
+    return { status: 'sent', records: entriesServed.length, nextCursor: trimmedCursor }
   }
 
   async function acceptCatalogPage(scope, tracked, frame) {
@@ -295,6 +345,9 @@ export function createPublisherCatalogRuntime (context) {
           scope.catalogCursor = null
           scope.catalogResumeCursor = null
           scope.catalogPreviousPageDigest = null
+          // Buffered entries were fetched under the superseded head; they are
+          // no longer valid against the new one.
+          scope.catalogPendingEntries = []
           scope.catalogComplete = false
         } else {
           fail('catalog head equivocation detected')
@@ -320,11 +373,41 @@ export function createPublisherCatalogRuntime (context) {
       }
       scope.catalogComplete = false
       await reserveCatalogBudget(scope, tracked.peerId, additions)
-      let ingestResult = { accepted: 0, rejected: 0 }
+      // The consumer view journals entries in arrival order and its rebuild
+      // replays the journal positionally. A claim journaled before the writer
+      // admission that authorizes it is reduced first and rejected
+      // WRITER_NOT_ADMITTED, and no later page can repair an already-written
+      // journal position — root records land where their operation-id hash
+      // puts them, often in a later page than the data that depends on them.
+      // Progressive per-page ingest therefore poisons the view for any
+      // multi-page catalog. Buffer pages untouched and ingest once at the
+      // terminal page: the batch then holds a complete causal range, and
+      // ingestAcceptedPage replays it in the producer's causal order. Ingest
+      // errors propagate — only a fully applied flush counts as success.
       if (response.entries.length > 0) {
-        ingestResult = await scope.binding.catalog.ingestAcceptedPage(response.entries)
-        if (ingestResult?.accepted !== response.entries.length || Number(ingestResult?.rejected || 0) !== 0) {
-          fail('catalog page contained an inadmissible operation', 'PUBLISHER_CATALOG_PAGE_INGEST_REJECTED')
+        scope.catalogPendingEntries ||= []
+        if (scope.catalogPendingEntries.length + response.entries.length > MAX_CATALOG_SESSION_RECORDS) {
+          fail('catalog consumer pending buffer exceeded', 'PUBLISHER_CATALOG_PAGE_INGEST_REJECTED')
+        }
+        for (const entry of response.entries) scope.catalogPendingEntries.push(entry)
+      }
+      // A mid-walk cursor names a journal the consumer never ingested: if the
+      // session dies before the terminal page, a resume from it would skip the
+      // buffered prefix and strand the walk. The cursor only becomes durable
+      // at the terminal flush, and it names the last op the flush actually
+      // applied — which on an empty terminal page is the last buffered entry.
+      let flushedLastOperationId = null
+      if (response.nextCursor === null) {
+        const buffered = scope.catalogPendingEntries
+        scope.catalogPendingEntries = []
+        if (buffered.length > 0) {
+          const ingestResult = await scope.binding.catalog.ingestAcceptedPage(buffered)
+          const applied = Number(ingestResult?.accepted || 0)
+          const rejected = Number(ingestResult?.rejected || 0)
+          if (rejected !== 0 || applied !== buffered.length) {
+            fail('catalog page contained an inadmissible operation', 'PUBLISHER_CATALOG_PAGE_INGEST_REJECTED')
+          }
+          flushedLastOperationId = buffered.at(-1)?.operationId || null
         }
       }
       tracked.catalogAcceptPages = nextPages
@@ -338,7 +421,13 @@ export function createPublisherCatalogRuntime (context) {
       scope.catalogHeadDigest ||= response.headDigest
       scope.catalogAuthorizationStateDigest ||= response.authorizationStateDigest
       scope.catalogCursor = response.nextCursor
-      scope.catalogResumeCursor = response.entries.at(-1)?.operationId || scope.catalogResumeCursor
+      // A mid-walk cursor names a journal the consumer never ingested. If the
+      // session dies here, a resume from it would skip the buffered prefix and
+      // strand the walk before its terminal page. Resume only from a flushed
+      // catalog: an interrupted walk restarts from the null cursor instead.
+      scope.catalogResumeCursor = response.nextCursor === null
+        ? (response.entries.at(-1)?.operationId || flushedLastOperationId || scope.catalogResumeCursor)
+        : null
       scope.catalogPreviousPageDigest = response.pageDigest
       await persistPublisherSyncState(scope)
       clearTimeout(pending.timer)
@@ -480,6 +569,27 @@ export function createPublisherCatalogRuntime (context) {
       }
     }
     scope.catalogComplete = true
+    // A completed mirror can now serve discovery to downstream peers without
+    // the origin being reachable: its proof (verified genesis and transitions
+    // reconstructed during the walk) and its accepted pages are exactly the
+    // authority the origin would serve. Registered only after the head,
+    // advertised head, and locator signer all verify, so an incomplete mirror
+    // never presents itself as a source.
+    if (scope.namespaceProofVerified && typeof catalog.listAcceptedPage === 'function') {
+      const existingPageProvider = publisherPageProviders.get(scope.publisherId)
+      // A completed walk at a newer epoch replaces the mirrored provider; a
+      // same-or-older epoch leaves the standing provider in place.
+      if (!existingPageProvider || existingPageProvider.catalogEpoch <= scope.descriptor.catalogEpoch) {
+        publisherProofProviders.set(scope.publisherId, {
+          genesis: scope.namespaceProofVerified.genesis,
+          transitions: scope.namespaceProofVerified.transitions,
+        })
+        publisherPageProviders.set(scope.publisherId, {
+          catalog,
+          catalogEpoch: scope.descriptor.catalogEpoch,
+        })
+      }
+    }
     await persistPublisherSyncState(scope)
     return head
   }
@@ -683,6 +793,8 @@ export function createPublisherCatalogRuntime (context) {
             existing.scope.catalogCursor = null
             existing.scope.catalogResumeCursor = null
             existing.scope.catalogPreviousPageDigest = null
+            // Pending entries were fetched under the superseded head.
+            existing.scope.catalogPendingEntries = []
           }
           existing.scope.catalogComplete = false
           void syncPublisherCatalog(existing.scope).catch(error => {
@@ -734,6 +846,7 @@ export function createPublisherCatalogRuntime (context) {
       catalogVerifiedRecords: 0,
       catalogVerifiedBytes: 0,
       catalogVerificationWork: 0,
+      catalogPendingEntries: [],
     })
     scope.publisherId = id
     scope.descriptor = descriptor
@@ -759,6 +872,7 @@ export function createPublisherCatalogRuntime (context) {
       catalogVerifiedRecords: 0,
       catalogVerifiedBytes: 0,
       catalogVerificationWork: 0,
+      catalogPendingEntries: [],
     })
     const result = { status: 'following', publisherId: id, catalogBootstrapKey: hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey'), topic: stableScopeDiagnostic(scope) }
     followedPublishers.set(id, { scope, result })

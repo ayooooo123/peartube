@@ -404,7 +404,55 @@ export class PublisherCatalog extends ReadyResource {
 
   async ingestAcceptedPage (entries) {
     await this.ready()
-    if (!Array.isArray(entries) || entries.length < 1 || entries.length > 128) {
+    if (!Array.isArray(entries) || entries.length < 1 || entries.length > PUBLISHER_LIMITS.maxJournalOperations) {
+      invalid('accepted page batch is out of bounds')
+    }
+    const isRoot = value => value.recordType === PUBLISHER_RECORD_TYPES.NAMESPACE ||
+      value.recordType === PUBLISHER_RECORD_TYPES.WRITER_ADMISSION ||
+      value.recordType === PUBLISHER_RECORD_TYPES.WRITER_REVOCATION ||
+      value.recordType === PUBLISHER_RECORD_TYPES.ROOT_TRANSITION
+    // The runtime flushes an entire buffered walk at once and a full walk can
+    // exceed one batch. Chunks must partition the producer's CAUSAL order, not
+    // the wire's hash order: the rebuild journals each chunk causally sorted
+    // and advances a writer's sequence high-water as it replays, so a later
+    // chunk carrying an earlier sequence would reject
+    // WRITER_SEQUENCE_NOT_MONOTONIC. Sort once with the batch's causal
+    // comparator, cut the sorted array into batch-sized slices (each slice
+    // spans a strictly advancing sequence range), and re-order each slice
+    // id-ascending for the wire - _ingestBatch re-sorts it causally on apply.
+    // Each chunk is journal-idempotent against the persisted view, so a
+    // resumed walk that re-covers accepted ground replays without side
+    // effects.
+    const causal = [...entries].sort((left, right) => {
+      const a = decodePublisherCatalogFrame(left.frame)
+      const b = decodePublisherCatalogFrame(right.frame)
+      if (isRoot(a) !== isRoot(b)) return isRoot(a) ? -1 : 1
+      if (a.policyEpoch !== b.policyEpoch) return a.policyEpoch - b.policyEpoch
+      if (a.issuerSequence !== b.issuerSequence) return a.issuerSequence - b.issuerSequence
+      return b4a.compare(a.recordId || a.transitionId, b.recordId || b.transitionId)
+    })
+    let accepted = 0
+    let rejected = 0
+    // Chunk commits are per-batch, not all-or-nothing across the flush: chunk
+    // N+1 rejecting leaves chunks 1..N journaled. That is safe — every
+    // journaled entry verified cryptographically, the journal replay is
+    // idempotent (DUPLICATE), and the walk's cursor only becomes durable at a
+    // successful terminal flush, so a failed flush restarts the walk from the
+    // null cursor and re-covers journaled ground as duplicates.
+    for (let start = 0; start < causal.length; start += PUBLISHER_LIMITS.maxApplyBatch) {
+      const chunk = causal
+        .slice(start, start + PUBLISHER_LIMITS.maxApplyBatch)
+        .sort((left, right) => left.operationId.localeCompare(right.operationId))
+      const result = await this._ingestBatch(chunk)
+      accepted += result.accepted
+      rejected += result.rejected
+      if (rejected !== 0) break
+    }
+    return { accepted, rejected }
+  }
+
+  async _ingestBatch (entries) {
+    if (entries.length < 1 || entries.length > 128) {
       invalid('accepted page batch is out of bounds')
     }
     let prior = null
@@ -433,11 +481,11 @@ export class PublisherCatalog extends ReadyResource {
     // The wire order is operation-id ascending, which is a hash order and says
     // nothing about causality. applyPublisherCatalogNodes replays nodes exactly
     // as given, so a claim whose id sorts below the writer-admission that
-    // authorizes it gets reduced first and rejected WRITER_NOT_ADMITTED, which
-    // then voids the entire page. Replay in the same causal order the producer
-    // reduced them in: root records first, then by policy epoch and issuer
-    // sequence. The transmitted order is untouched, so page verification and
-    // deduplication are unaffected.
+    // authorizes it gets reduced first and rejected WRITER_NOT_ADMITTED. That
+    // rejection would void the batch. Replay in the same causal order the
+    // producer reduced them in: root records first, then by policy epoch and
+    // issuer sequence. The transmitted order is untouched, so page
+    // verification and deduplication are unaffected.
     const ordered = [...nodes].sort(compareReplayOrder).map(entry => entry.node)
     const rebuilt = await applyPublisherCatalogNodes(ordered, this.verifiedPageView, {
       key: this.base?.key || this.options.key,

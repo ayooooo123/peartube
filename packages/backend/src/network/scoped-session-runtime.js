@@ -859,6 +859,7 @@ export function createScopedNetworkRuntime (options = {}) {
       requiredCapability: capabilityForPurpose(scope.purpose, { indexService: !scope.feedKind }),
       admission,
       isAdmissionExempt: frame =>
+        (scope.purpose === 'bootstrap' && frame.type === 'locator') ||
         (scope.purpose === 'asset' && ASSET_TRANSFER_TYPES.has(frame.type)) ||
         (scope.purpose === 'archive' && ARCHIVE_TRANSFER_TYPES.has(frame.type)),
       onActivate: async () => {
@@ -909,7 +910,7 @@ export function createScopedNetworkRuntime (options = {}) {
       },
       onFrame: frame => {
         if (!isCurrentSession()) fail('scoped session is no longer current')
-        if (scope.purpose === 'bootstrap') return handleBootstrapFrame(frame, { peerId: remoteKey })
+        if (scope.purpose === 'bootstrap') return handleBootstrapFrame(frame, { peerId: remoteKey, tracked })
         if (scope.purpose === 'publisher') return handlePublisherProofFrame(scope, scope.sessions.get(remoteKey), frame)
         if (scope.purpose === 'index' || scope.purpose === 'moderation') return handleFeedFrame(scope, scope.sessions.get(remoteKey), frame)
         if (scope.purpose === 'asset') return handleAssetFrame(scope, ownedSession, frame)
@@ -1719,7 +1720,7 @@ export function createScopedNetworkRuntime (options = {}) {
       requiredCapability: capabilityForPurpose(purpose, { indexService: !scope.feedKind }),
       admission,
       onFrame: value => purpose === 'bootstrap'
-        ? handleBootstrapFrame(value, { peerId })
+        ? handleBootstrapFrame(value, { peerId, tracked: null })
         : (value.type === 'probe' ? { status: 'ok' } : { status: 'rejected', reason: 'frame-type-not-allowed' }),
     })
     await session.acceptHello(encodeScopedHello({ purpose, topic: scope.topic, protocolMajor, capabilities: [capabilityForPurpose(purpose, { indexService: !scope.feedKind })] }))

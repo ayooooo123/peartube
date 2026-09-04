@@ -1,6 +1,7 @@
 import { createWindowedIngestBudget, normalizeBudgetLimit } from '../bounded-ingest-budget.js'
 
 import { verifyBootstrapLocator } from './bootstrap-protocol.js'
+import b4a from 'b4a'
 
 export function createBootstrapManager(options = {}) {
   const now = typeof options.now === 'function' ? options.now : () => Date.now()
@@ -99,6 +100,13 @@ export function createBootstrapManager(options = {}) {
       if (current && (body.issuedAt < current.issuedAt || (body.issuedAt === current.issuedAt && body.catalogEpoch < current.catalogEpoch))) {
         return { status: 'rejected', errorCode: 'STALE_LOCATOR' }
       }
+      // Identical re-delivery (a gossip cycle re-forwarding the same signed
+      // locator) must not re-announce as fresh: the accepted status is what
+      // triggers re-gossip, so classifying it as a replay is what terminates
+      // the flood in a cyclic topology.
+      if (current && current.envelope && b4a.isBuffer(current.envelope) && b4a.isBuffer(envelope) && b4a.equals(current.envelope, envelope)) {
+        return { status: 'replay', errorCode: 'DUPLICATE_LOCATOR', publisherId: body.publisherId }
+      }
       if (!current && locatorsByPublisher.size >= maxPublishers) {
         return { status: 'rejected', errorCode: 'PUBLISHER_PROJECTION_BUDGET_EXCEEDED' }
       }
@@ -108,6 +116,10 @@ export function createBootstrapManager(options = {}) {
           signerId: verified.signerId,
           trusted: verified.trusted,
           catalogChainVerified: verified.catalogChainVerified,
+          // The origin-signed envelope is retained so a gossiper can forward
+          // the locator verbatim on later session activations without
+          // re-signing it; every hop re-verifies signature and TTL.
+          envelope,
         }
         if (!await onAcceptedLocator(locator, { peerId: String(peerId) })) {
           return { status: 'rejected', errorCode: 'LOCAL_PROJECTION_REJECTED' }

@@ -118,7 +118,7 @@ export function createPublisherCatalogRuntime (context) {
   async function persistPublisherSyncState(scope) {
     if (!publisherSyncStateRepository?.save) return
     await publisherSyncStateRepository.save(scope.publisherId, {
-      version: 1,
+      version: 2,
       publisherId: scope.publisherId,
       catalogEpoch: scope.descriptor.catalogEpoch,
       cursor: scope.catalogResumeCursor,
@@ -169,7 +169,7 @@ export function createPublisherCatalogRuntime (context) {
 
   function normalizeCatalogRequest(payload) {
     const value = decodeCanonicalCatalogPayload(payload, 'catalog page request')
-    if (value.version !== 1) fail('catalog page request version is unsupported')
+    if (value.version !== 2) fail('catalog page request version is unsupported', 'PUBLISHER_CATALOG_SYNC_V2_REQUIRED')
     const cursor = normalizeCatalogCursor(value.cursor)
     const previousPageDigest = value.previousPageDigest == null
       ? null
@@ -183,12 +183,12 @@ export function createPublisherCatalogRuntime (context) {
         !Number.isSafeInteger(limit) || limit < 1 || limit > MAX_CATALOG_PAGE_RECORDS) {
       fail('catalog page request bounds are invalid')
     }
-    return { version: 1, cursor, previousPageDigest, expectedHeadDigest, catalogEpoch, limit }
+    return { version: 2, cursor, previousPageDigest, expectedHeadDigest, catalogEpoch, limit }
   }
 
   function normalizeCatalogResponse(payload, request) {
     const value = decodeCanonicalCatalogPayload(payload, 'catalog page response')
-    if (value.version !== 1 || value.catalogEpoch !== request.catalogEpoch ||
+    if (value.version !== 2 || value.catalogEpoch !== request.catalogEpoch ||
         normalizeCatalogCursor(value.requestedCursor, 'requestedCursor') !== request.cursor ||
         (value.previousPageDigest == null ? null : hex32(value.previousPageDigest, 'previousPageDigest')) !== request.previousPageDigest ||
         (value.expectedHeadDigest == null ? null : hex32(value.expectedHeadDigest, 'expectedHeadDigest')) !== request.expectedHeadDigest) {
@@ -202,20 +202,22 @@ export function createPublisherCatalogRuntime (context) {
     if (!Number.isSafeInteger(headLength) || headLength < 0 || headLength > MAX_CATALOG_HEAD_DISTANCE) fail('catalog head distance exceeds bounded limit')
     if (!Array.isArray(value.entries) || value.entries.length > request.limit) fail('catalog page record bound exceeded')
     let prior = request.cursor
+    const seen = new Set()
     const entries = value.entries.map(entry => {
       const operationId = normalizeCatalogCursor(entry?.operationId, 'operationId')
       const sourceWriterKey = exactBuffer(entry?.sourceWriterKey, 32, 'sourceWriterKey')
       const frame = b4a.from(entry?.frame || [])
       const operation = decodePublisherCatalogFrame(frame)
       const derivedId = b4a.toString(operation.recordId || operation.transitionId, 'hex')
-      if (derivedId !== operationId || (prior !== null && operationId <= prior)) fail('catalog page ordering or provenance is invalid')
+      if (derivedId !== operationId || operationId === prior || seen.has(operationId)) fail('catalog page ordering or provenance is invalid')
+      seen.add(operationId)
       prior = operationId
       return { operationId, sourceWriterKey, frame }
     })
     if (entries.length === 0 && nextCursor !== null) fail('empty catalog page cannot advance')
     if (nextCursor !== null && nextCursor !== entries.at(-1)?.operationId) fail('catalog page cursor linkage is invalid')
     const unsigned = {
-      version: 1,
+      version: 2,
       requestedCursor: request.cursor,
       nextCursor,
       previousPageDigest: request.previousPageDigest,
@@ -241,10 +243,11 @@ export function createPublisherCatalogRuntime (context) {
     else if (request.previousPageDigest !== tracked.catalogServeDigest) fail('catalog page linkage mismatch')
     const head = await provider.catalog.getViewHead()
     const headDigest = hex32(head?.digest, 'headDigest')
-    if (request.expectedHeadDigest !== null && request.expectedHeadDigest !== headDigest) fail('catalog head changed before cursor resume')
+    // The causal journal is append-only. A cursor remains valid when the head
+    // advances, so growth is a suffix sync rather than a forced full walk.
     const buildResponse = (list, nextCursor) => {
       const unsigned = {
-        version: 1,
+        version: 2,
         requestedCursor: request.cursor,
         nextCursor,
         previousPageDigest: request.previousPageDigest,
@@ -275,7 +278,12 @@ export function createPublisherCatalogRuntime (context) {
     // the largest prefix that fits. The trimmed page's cursor is the
     // provider's own cursor for that fetch, so the follower resumes from the
     // last record it actually received.
-    let page = await provider.catalog.listAcceptedPage({ cursor: request.cursor, limit: request.limit })
+    // Test/adapter catalogs predating the concrete PublisherCatalog class can
+    // expose only the stable listAcceptedPage surface. Protocol major 3 keeps
+    // such adapters inside a v3 session; real mixed-version peers never pair.
+    const listPage = (provider.catalog.listCausalPage || provider.catalog.listAcceptedPage)?.bind(provider.catalog)
+    if (!listPage) fail('catalog causal sync is unsupported', 'PUBLISHER_CATALOG_SYNC_V2_REQUIRED')
+    let page = await listPage({ cursor: request.cursor, limit: request.limit })
     if (!page || !Array.isArray(page.entries) || page.entries.length > request.limit) fail('catalog provider returned an invalid page')
     let entries = page.entries.map(entry => ({
       operationId: normalizeCatalogCursor(entry?.operationId, 'operationId'),
@@ -291,7 +299,7 @@ export function createPublisherCatalogRuntime (context) {
     let trimmed = null
     while (low <= high) {
       const mid = Math.floor((low + high) / 2)
-      const candidate = await provider.catalog.listAcceptedPage({ cursor: request.cursor, limit: mid })
+      const candidate = await listPage({ cursor: request.cursor, limit: mid })
       if (!candidate || !Array.isArray(candidate.entries) || candidate.entries.length > mid) fail('catalog provider returned an invalid page')
       const candidateEntries = candidate.entries.map(entry => ({
         operationId: normalizeCatalogCursor(entry?.operationId, 'operationId'),
@@ -342,12 +350,9 @@ export function createPublisherCatalogRuntime (context) {
           // Adopt only the signed locator head.
           scope.catalogHeadDigest = scope.advertisedCatalogHead
           scope.catalogAuthorizationStateDigest = null
-          scope.catalogCursor = null
-          scope.catalogResumeCursor = null
+          // Keep the durable causal cursor: the new head extends its prefix.
+          scope.catalogCursor = scope.catalogResumeCursor
           scope.catalogPreviousPageDigest = null
-          // Buffered entries were fetched under the superseded head; they are
-          // no longer valid against the new one.
-          scope.catalogPendingEntries = []
           scope.catalogComplete = false
         } else {
           fail('catalog head equivocation detected')
@@ -373,42 +378,17 @@ export function createPublisherCatalogRuntime (context) {
       }
       scope.catalogComplete = false
       await reserveCatalogBudget(scope, tracked.peerId, additions)
-      // The consumer view journals entries in arrival order and its rebuild
-      // replays the journal positionally. A claim journaled before the writer
-      // admission that authorizes it is reduced first and rejected
-      // WRITER_NOT_ADMITTED, and no later page can repair an already-written
-      // journal position — root records land where their operation-id hash
-      // puts them, often in a later page than the data that depends on them.
-      // Progressive per-page ingest therefore poisons the view for any
-      // multi-page catalog. Buffer pages untouched and ingest once at the
-      // terminal page: the batch then holds a complete causal range, and
-      // ingestAcceptedPage replays it in the producer's causal order. Ingest
-      // errors propagate — only a fully applied flush counts as success.
+      // V2 pages arrive in the producer's causal journal order. Apply and
+      // checkpoint each bounded page before requesting the next one.
       if (response.entries.length > 0) {
-        scope.catalogPendingEntries ||= []
-        if (scope.catalogPendingEntries.length + response.entries.length > MAX_CATALOG_SESSION_RECORDS) {
-          fail('catalog consumer pending buffer exceeded', 'PUBLISHER_CATALOG_PAGE_INGEST_REJECTED')
+        const ingestResult = await scope.binding.catalog.ingestAcceptedPage(response.entries, {
+          deferRebuild: response.nextCursor !== null,
+        })
+        if (Number(ingestResult?.rejected || 0) !== 0 || Number(ingestResult?.accepted || 0) !== response.entries.length) {
+          fail('catalog page contained an inadmissible operation', 'PUBLISHER_CATALOG_PAGE_INGEST_REJECTED')
         }
-        for (const entry of response.entries) scope.catalogPendingEntries.push(entry)
-      }
-      // A mid-walk cursor names a journal the consumer never ingested: if the
-      // session dies before the terminal page, a resume from it would skip the
-      // buffered prefix and strand the walk. The cursor only becomes durable
-      // at the terminal flush, and it names the last op the flush actually
-      // applied — which on an empty terminal page is the last buffered entry.
-      let flushedLastOperationId = null
-      if (response.nextCursor === null) {
-        const buffered = scope.catalogPendingEntries
-        scope.catalogPendingEntries = []
-        if (buffered.length > 0) {
-          const ingestResult = await scope.binding.catalog.ingestAcceptedPage(buffered)
-          const applied = Number(ingestResult?.accepted || 0)
-          const rejected = Number(ingestResult?.rejected || 0)
-          if (rejected !== 0 || applied !== buffered.length) {
-            fail('catalog page contained an inadmissible operation', 'PUBLISHER_CATALOG_PAGE_INGEST_REJECTED')
-          }
-          flushedLastOperationId = buffered.at(-1)?.operationId || null
-        }
+      } else if (response.nextCursor === null) {
+        await scope.binding.catalog.finalizeAcceptedPages?.()
       }
       tracked.catalogAcceptPages = nextPages
       tracked.catalogAcceptRecords = nextRecords
@@ -421,13 +401,8 @@ export function createPublisherCatalogRuntime (context) {
       scope.catalogHeadDigest ||= response.headDigest
       scope.catalogAuthorizationStateDigest ||= response.authorizationStateDigest
       scope.catalogCursor = response.nextCursor
-      // A mid-walk cursor names a journal the consumer never ingested. If the
-      // session dies here, a resume from it would skip the buffered prefix and
-      // strand the walk before its terminal page. Resume only from a flushed
-      // catalog: an interrupted walk restarts from the null cursor instead.
-      scope.catalogResumeCursor = response.nextCursor === null
-        ? (response.entries.at(-1)?.operationId || flushedLastOperationId || scope.catalogResumeCursor)
-        : null
+      // The page is durably journaled before this cursor is persisted.
+      scope.catalogResumeCursor = response.entries.at(-1)?.operationId || scope.catalogResumeCursor
       scope.catalogPreviousPageDigest = response.pageDigest
       await persistPublisherSyncState(scope)
       clearTimeout(pending.timer)
@@ -608,7 +583,7 @@ export function createPublisherCatalogRuntime (context) {
       let pages = 0
       do {
         const response = await requestCatalogPage(scope, {
-          version: 1,
+          version: 2,
           cursor,
           previousPageDigest,
           expectedHeadDigest: scope.advertisedCatalogHead || (cursor === null ? null : scope.catalogHeadDigest),
@@ -810,13 +785,15 @@ export function createPublisherCatalogRuntime (context) {
     await publisherManager.followPublisher(id)
     await binding.catalog?.openVerifiedPageView?.()
     const saved = await publisherSyncStateRepository?.load?.(id)
-    const restored = saved?.version === 1 && saved.publisherId === id &&
+    const restored = saved?.version === 2 && saved.publisherId === id &&
       saved.catalogEpoch === descriptor.catalogEpoch
       ? saved
       : null
-    // A fresher signed head invalidates a persisted cursor for the superseded head.
+    // A signed head in the same epoch may extend the persisted causal prefix.
     const advertisedHead = authoritativeLocator?.catalogHead || null
-    const resumable = !advertisedHead || !restored?.headDigest || restored.headDigest === advertisedHead
+    // V2 cursors name an append-only causal prefix and survive ordinary head
+    // growth. Epoch rotation still creates a different scope and resets it.
+    const resumable = restored !== null
     const topic = derivePublisherTopic({ publisherId: id, catalogEpoch: descriptor.catalogEpoch })
     const { scope } = joinScope({
       purpose: 'publisher',
@@ -856,7 +833,7 @@ export function createPublisherCatalogRuntime (context) {
       catalogPagePending: null,
       catalogSyncing: null,
       catalogCursor: null,
-      catalogResumeCursor: restored?.cursor || null,
+      catalogResumeCursor: resumable ? (restored?.cursor || null) : null,
       catalogPreviousPageDigest: null,
       catalogHeadDigest: restored?.headDigest || authoritativeLocator?.catalogHead || null,
       catalogAuthorizationStateDigest: restored?.authorizationStateDigest || null,

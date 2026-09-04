@@ -24,6 +24,7 @@ import {
 
 const bytes = (length, seed = 0) => b4a.from(Array.from({ length }, (_, index) => (seed + index) & 255))
 const id = seed => bytes(32, seed)
+const numberedId = value => { const out = b4a.alloc(32); out.writeUInt32BE(value, 28); return out }
 const equal = (left, right) => b4a.equals(left, right)
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 
@@ -189,10 +190,10 @@ test('a claims-first page walk reproduces the live WRITER_NOT_ADMITTED rejection
   for (const dir of [producerDir, consumerDirA, consumerDirB]) fs.rmSync(dir, { recursive: true, force: true })
 })
 
-// A catalog bigger than one ingest batch (128 entries) must still flush: the
-// runtime buffers up to 4096 records, so ingestAcceptedPage chunks the flush
-// without ever splitting an authority record from the data it authorizes.
-test('a terminal flush larger than one batch chunks without losing causal order', async (t) => {
+// A large catalog is staged one causal page at a time and reduced once at the
+// terminal page; no catalog-sized in-memory buffer survives between pages.
+test('a 1000-title causal walk is page-bounded, resumable, and accepts a one-title suffix', async (t) => {
+  t.timeout(120_000)
   const producerDir = tempDir('peartube-publisher-admission-replay-large-producer-')
   const consumerDir = tempDir('peartube-publisher-admission-replay-large-consumer-')
   const producerStore = new Corestore(producerDir)
@@ -223,35 +224,63 @@ test('a terminal flush larger than one batch chunks without losing causal order'
       admissionNonce: bytes(16, 72),
     }
   }))
-  for (let sequence = 1; sequence <= 150; sequence++) {
-    await producer.append(await producer.createLocalOperation({
+  const publicationFrames = []
+  for (let sequence = 1; sequence <= 1000; sequence++) {
+    publicationFrames.push(await producer.createLocalOperation({
       recordType: PUBLISHER_RECORD_TYPES.PUBLICATION,
       policyEpoch: 0,
       sequence,
       signedAt: 1_700_000_000_000,
-      body: { publicationId: id(200 + sequence), manifestId: id(400 + sequence), payload: b4a.from(`pub-${sequence}`) }
+      body: { publicationId: numberedId(sequence), manifestId: numberedId(10_000 + sequence), payload: b4a.from(`pub-${sequence}`) }
     }))
+  }
+  for (let start = 0; start < publicationFrames.length; start += 128) {
+    await producer.appendBatchAndConfirm(publicationFrames.slice(start, start + 128))
   }
   await producer.update()
 
-  const fullPage = await producer.listAcceptedPage({ limit: 128 })
+  const fullPage = await producer.listCausalPage({ limit: 64 })
   const collected = [...fullPage.entries]
   let cursor = fullPage.nextCursor
   while (cursor !== null) {
-    const next = await producer.listAcceptedPage({ cursor, limit: 128 })
+    const next = await producer.listCausalPage({ cursor, limit: 64 })
     collected.push(...next.entries)
     cursor = next.nextCursor
   }
-  t.is(collected.length, 152, 'the producer page walk collects the whole catalog')
+  t.is(collected.length, 1002, 'the producer causal walk collects the whole catalog')
 
   const producerHead = await producer.getViewHead()
-  const consumer = new PublisherCatalog(consumerStore, { publisherId, key: producer.key, deviceSigner: deviceSigner(crypto.keyPair(bytes(32, 247))) })
+  let consumer = new PublisherCatalog(consumerStore, { publisherId, key: producer.key, deviceSigner: deviceSigner(crypto.keyPair(bytes(32, 247))) })
   await consumer.ready()
-  const flushed = await consumer.ingestAcceptedPage(collected)
-  t.is(flushed.rejected, 0, 'the chunked flush rejects nothing')
-  t.is(flushed.accepted, collected.length, 'every operation across every chunk lands')
+  let peakPageRecords = 0
+  for (let start = 0; start < collected.length; start += 64) {
+    const page = collected.slice(start, start + 64)
+    peakPageRecords = Math.max(peakPageRecords, page.length)
+    const flushed = await consumer.ingestAcceptedPage(page, { deferRebuild: start + page.length < collected.length })
+    t.is(flushed.rejected, 0, 'each causal page journals without rejection')
+    if (start === 448) {
+      await consumer.close()
+      consumer = new PublisherCatalog(consumerStore, { publisherId, key: producer.key, deviceSigner: deviceSigner(crypto.keyPair(bytes(32, 247))) })
+      await consumer.ready()
+      t.pass('mid-walk restart reopens the durable staged journal')
+    }
+  }
+  t.is(peakPageRecords, 64, 'follower memory never exceeds one 64-record page')
   const head = await consumer.getViewHead()
   t.ok(equal(head.digest, producerHead.digest), 'the chunked flush reconstructs the advertised head')
+
+  const resumeCursor = collected.at(-1).operationId
+  const extra = await producer.createLocalOperation({
+    recordType: PUBLISHER_RECORD_TYPES.PUBLICATION, policyEpoch: 0, sequence: 1001,
+    signedAt: 1_700_000_000_000,
+    body: { publicationId: id(77), manifestId: id(78), payload: b4a.from('suffix-title') }
+  })
+  await producer.append(extra)
+  const suffix = await producer.listCausalPage({ cursor: resumeCursor, limit: 64 })
+  t.is(suffix.entries.length, 1, 'a new title is served as a one-record suffix')
+  t.is(suffix.nextCursor, null, 'the suffix completes without a full re-walk')
+  const suffixResult = await consumer.ingestAcceptedPage(suffix.entries)
+  t.is(suffixResult.accepted, 1, 'the follower applies only the new title')
 
   await producer.close()
   await consumer.close()

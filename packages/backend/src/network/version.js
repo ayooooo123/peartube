@@ -1,6 +1,6 @@
 import b4a from 'b4a'
 
-export const PROTOCOL_MAJOR = 2
+export const PROTOCOL_MAJOR = 3
 export const PROTOCOL_MINOR = 0
 
 export const MAX_PROTOCOL_CAPABILITIES = 32

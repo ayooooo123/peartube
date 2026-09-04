@@ -38,7 +38,8 @@ const PREFIX = Object.freeze({
   DRAINED: 'checkpoint/drained/',
   PROJECTION: 'projection/',
   ROSTER: 'roster/',
-  STATE: 'state/'
+  STATE: 'state/',
+  SYNC: 'sync/cursor/'
 })
 const JOURNAL_COUNT_KEY = 'meta/journal-count'
 const STATE_DESCRIPTOR_KEY = 'state/descriptor'
@@ -212,7 +213,7 @@ async function getPersistedLegacyGenesisId (view, bootstrapKey, publisherId) {
 }
 
 async function clearDerived (view) {
-  for (const prefix of [PREFIX.ACCEPTED, PREFIX.REJECTED, PREFIX.PROJECTION, PREFIX.ROSTER, PREFIX.STATE]) {
+  for (const prefix of [PREFIX.ACCEPTED, PREFIX.REJECTED, PREFIX.PROJECTION, PREFIX.ROSTER, PREFIX.STATE, PREFIX.SYNC]) {
     for await (const entry of view.createReadStream({ gte: prefix, lt: prefix + '\xff' })) await view.del(entry.key)
   }
 }
@@ -540,6 +541,11 @@ export async function rebuildPublisherCatalogView (view, host, { keyProvider = c
   await view.put(STATE_AUTHORIZATION_KEY, encodePublisherAuthorizationState(state))
   for (const [writerId, writerKey] of persistedRoster) await view.put(`${PREFIX.ROSTER}${writerId}`, writerKey)
   for (const entry of accepted) await view.put(`${PREFIX.ACCEPTED}${idHex(entry.value)}`, encodeAcceptedEntry(entry))
+  const journalOrdinals = new Map(parsed.map((entry, ordinal) => [idHex(entry.value), ordinal]))
+  for (const entry of accepted) {
+    const ordinal = journalOrdinals.get(idHex(entry.value))
+    if (ordinal !== undefined) await view.put(`${PREFIX.SYNC}${idHex(entry.value)}`, b4a.from(String(ordinal)))
+  }
   for (const entry of canonicalRejected) await view.put(`${PREFIX.REJECTED}${idHex(entry.value)}`, rejectionValue(entry.value, entry.code, entry.error))
   for (const [key, entry] of projections) await view.put(key, entry.frame)
   return { descriptor: state.descriptor, state, accepted, rejected: canonicalRejected, projections }
@@ -782,6 +788,9 @@ export async function applyPublisherCatalogNodes (nodes, view, host, options = {
     }
   }
   await view.put(JOURNAL_COUNT_KEY, b4a.from(String(usage.total)))
+  if (options.deferRebuild === true) {
+    return { deferred: true, accepted: [], rejected: [], projections: new Map() }
+  }
   let rebuilt = await rebuildPublisherCatalogView(view, host, options)
   if (usage.total >= journalLimit) {
     const compacted = await compactRejectedJournal(view, rebuilt, journalLimit)
@@ -840,6 +849,34 @@ export async function listPublisherAcceptedPage (view, { cursor = null, limit = 
     if (!decoded) continue
     const operationId = idHex(decoded.value)
     if (entry.key !== `${PREFIX.ACCEPTED}${operationId}`) continue
+    entries.push({ operationId, sourceWriterKey: b4a.from(decoded.sourceWriterKey), frame: b4a.from(decoded.frame) })
+    if (entries.length > limit) break
+  }
+  const page = entries.slice(0, limit)
+  return { entries: page, nextCursor: entries.length > limit ? page.at(-1).operationId : null }
+}
+
+// Sync pages follow the append-only causal journal, not the accepted-operation
+// hash index. The operation id remains the opaque wire cursor; locating it is
+// a bounded Hyperbee scan and every later record is a causal successor.
+export async function listPublisherCausalPage (view, { cursor = null, limit = 64 } = {}) {
+  if (cursor !== null && (typeof cursor !== 'string' || !/^[0-9a-f]{64}$/.test(cursor))) invalid('causal page cursor is invalid')
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 128) invalid('causal page limit is invalid')
+  const entries = []
+  let startKey = PREFIX.JOURNAL
+  if (cursor !== null) {
+    const checkpoint = await view.get(`${PREFIX.SYNC}${cursor}`)
+    if (!checkpoint || !/^\d+$/.test(b4a.toString(checkpoint.value))) invalid('causal page cursor is not retained')
+    const ordinal = Number(b4a.toString(checkpoint.value))
+    if (!Number.isSafeInteger(ordinal) || ordinal < 0) invalid('causal page cursor is corrupt')
+    startKey = `${journalKey(ordinal)}\u0000`
+  }
+  for await (const item of view.createReadStream({ gte: startKey, lt: PREFIX.JOURNAL + '\xff' })) {
+    const decoded = decodeJournalValue(item.value)
+    const value = decodePublisherCatalogFrame(decoded.frame)
+    const operationId = idHex(value)
+    const accepted = await view.get(`${PREFIX.ACCEPTED}${operationId}`)
+    if (!accepted) continue
     entries.push({ operationId, sourceWriterKey: b4a.from(decoded.sourceWriterKey), frame: b4a.from(decoded.frame) })
     if (entries.length > limit) break
   }

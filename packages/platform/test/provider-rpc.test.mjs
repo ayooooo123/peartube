@@ -12,7 +12,7 @@ async function loadSharedRpc() {
   const sourcePath = path.join(root, 'src/rpc.shared.ts')
   const source = fs.readFileSync(sourcePath, 'utf8')
     .replace(/^import type[\s\S]*?from '@peartube\/host'\n/gm, '')
-    .replace("import { PROTOCOL_VERSION } from '@peartube/host/contracts'", 'const PROTOCOL_VERSION = 9')
+    .replace("import { PROTOCOL_VERSION } from '@peartube/host/contracts'", 'const PROTOCOL_VERSION = 10')
     .replace("import { PROTOCOL_EVENTS } from '@peartube/host/events'", "const PROTOCOL_EVENTS = { ACQUISITION_LIFECYCLE: 'acquisition.lifecycle' }")
   const output = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },

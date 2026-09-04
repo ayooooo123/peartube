@@ -19,11 +19,11 @@ const device = crypto.keyPair(Buffer.alloc(32, 2))
 const publisherId = Buffer.from(publisher.publicKey).toString('hex')
 const deviceId = Buffer.from(device.publicKey).toString('hex')
 
-test('protocol major and asset capability make the scoped asset surface a clean v2 cutover', (t) => {
-  t.is(PROTOCOL_MAJOR, 2)
+test('protocol major 3 isolates causal catalog sync while retaining the v2 asset capability', (t) => {
+  t.is(PROTOCOL_MAJOR, 3)
   t.is(ASSET_RENDITION_CAPABILITY, 'asset-rendition:v2')
   const advertisement = createProtocolAdvertisement({ requiredCapabilities: [ASSET_RENDITION_CAPABILITY] })
-  t.is(advertisement.minimumProtocolMajor, 2)
+  t.is(advertisement.minimumProtocolMajor, 3)
   t.alike(advertisement.requiredCapabilities, ['asset-rendition:v2'])
   t.alike(assertProtocolCompatibility(advertisement, {
     mandatoryCapabilities: [ASSET_RENDITION_CAPABILITY],
@@ -114,12 +114,12 @@ test('protocol compatibility fails closed with stable major, capability, and omi
   }
   const acceptedLegacy = assertProtocolCompatibility({}, {
     legacyCompatibility: {
-      minimumProtocolMajor: 2,
+      minimumProtocolMajor: 3,
       protocolMinor: 0,
       requiredCapabilities: [],
     },
   })
-  t.is(acceptedLegacy.minimumProtocolMajor, 2)
+  t.is(acceptedLegacy.minimumProtocolMajor, 3)
   try {
     assertProtocolCompatibility({}, {
       legacyCompatibility: {

@@ -36,6 +36,7 @@ import {
   listPublisherProjections,
   listPublisherRejections,
   listPublisherAcceptedPage,
+  listPublisherCausalPage,
   openPublisherCatalogView
 } from './catalog-view.js'
 
@@ -390,6 +391,11 @@ export class PublisherCatalog extends ReadyResource {
     return listPublisherAcceptedPage(this.view, options)
   }
 
+  async listCausalPage (options) {
+    await this.update()
+    return listPublisherCausalPage(this.view, options)
+  }
+
   async openVerifiedPageView () {
     await this.ready()
     if (!this.verifiedPageView) {
@@ -402,7 +408,7 @@ export class PublisherCatalog extends ReadyResource {
     return this.verifiedPageView
   }
 
-  async ingestAcceptedPage (entries) {
+  async ingestAcceptedPage (entries, options = {}) {
     await this.ready()
     if (!Array.isArray(entries) || entries.length < 1 || entries.length > PUBLISHER_LIMITS.maxJournalOperations) {
       invalid('accepted page batch is out of bounds')
@@ -443,7 +449,7 @@ export class PublisherCatalog extends ReadyResource {
       const chunk = causal
         .slice(start, start + PUBLISHER_LIMITS.maxApplyBatch)
         .sort((left, right) => left.operationId.localeCompare(right.operationId))
-      const result = await this._ingestBatch(chunk)
+      const result = await this._ingestBatch(chunk, options)
       accepted += result.accepted
       rejected += result.rejected
       if (rejected !== 0) break
@@ -451,7 +457,20 @@ export class PublisherCatalog extends ReadyResource {
     return { accepted, rejected }
   }
 
-  async _ingestBatch (entries) {
+  async finalizeAcceptedPages () {
+    await this.ready()
+    await this.openVerifiedPageView()
+    return applyPublisherCatalogNodes([], this.verifiedPageView, {
+      key: this.base?.key || this.options.key,
+      async addWriter () {}, removeable () { return false }, async removeWriter () {},
+    }, {
+      keyProvider: this.options.keyProvider,
+      publisherId: this.options.publisherId,
+      journalLimit: this.options.journalLimit,
+    })
+  }
+
+  async _ingestBatch (entries, options = {}) {
     if (entries.length < 1 || entries.length > 128) {
       invalid('accepted page batch is out of bounds')
     }
@@ -496,7 +515,9 @@ export class PublisherCatalog extends ReadyResource {
       keyProvider: this.options.keyProvider,
       publisherId: this.options.publisherId,
       journalLimit: this.options.journalLimit,
+      deferRebuild: options.deferRebuild === true,
     })
+    if (rebuilt.deferred) return { accepted: entries.length, rejected: 0 }
     if (rebuilt.rejected.length > 0) {
       // The consumer aborts the whole page on any rejection, so without the
       // per-operation code an empty catalog is indistinguishable from a

@@ -320,6 +320,18 @@ function isLoopbackHost(value) {
   const host = String(value || '').trim().toLowerCase().replace(/^\[|\]$/g, '')
   return host === 'localhost' || host === '::1' || /^127(?:\.\d{1,3}){3}$/.test(host)
 }
+
+// Playback is a same-machine capability: the blob-server link a play click
+// hands the browser only answers on the relay's own loopback. Ask the socket
+// who is calling, not a header a client can write - a LAN request to a
+// 0.0.0.0-bound relay gets the table but never the playback route.
+function requestAllowsPlayback(req) {
+  const remote = String(req?.socket?.remoteAddress || req?.connection?.remoteAddress || '')
+  if (!remote) return false
+  if (remote.startsWith('::ffff:')) return isLoopbackHost(remote.slice('::ffff:'.length))
+  return remote === '::1' || isLoopbackHost(remote)
+}
+
 // So the socket is bound first and answers from the start, and the console
 // adopts it once the store-dependent side exists.
 const WARMING_NOTICE = 'The relay is starting. Its storage and verified media view are still opening, so the console is not answering yet.'
@@ -671,7 +683,11 @@ export async function createArchiveConsole({
   httpSurface = null,
   serverFactory = createDefaultServer,
   storageReservations = null,
-  companionHandler = null
+  companionHandler = null,
+  // Test seam: a console created without one asks the socket. Production code
+  // never passes this; tests use it to simulate a LAN peer without needing a
+  // second network interface.
+  allowsPlaybackRequest = requestAllowsPlayback
 }) {
   if (!service?.runtime?.ctx?.metaDb) throw new Error('archive console requires a relay service runtime')
   if (typeof service.requestLocalFileAcquisition !== 'function' ||
@@ -680,7 +696,6 @@ export async function createArchiveConsole({
     throw new Error('archive console requires the provider acquisition service')
   }
   let activeCompanionHandler = companionHandler
-  const localPlaybackAllowed = isLoopbackHost(host)
   const copyReservations = storageReservations || { bytes: 0 }
   const uploadReservations = new Map()
   const releaseUploadReservation = (reservation) => {
@@ -920,7 +935,7 @@ export async function createArchiveConsole({
   // The viewer-facing shelf is built only from the service's verified query
   // view. Jobs and mirror proofs add local status, but never invent a title or
   // a playback target.
-  async function libraryView(items, jobs = []) {
+  async function libraryView(items, jobs = [], { playbackAllowed = false } = {}) {
     try {
       if (!Array.isArray(items) || items.length === 0) return []
 
@@ -997,7 +1012,7 @@ export async function createArchiveConsole({
             mediaCoordinates: source.mediaCoordinates || null,
             freshArchivists: Math.max(0, Number(releaseMirror?.freshArchivists) || 0),
             acquiredAt: releaseJob?.completedAt || releaseJob?.updatedAt || null,
-            candidateRef: localPlaybackAllowed && CANDIDATE_REF_PATTERN.test(source?.candidateRef || '')
+            candidateRef: playbackAllowed && CANDIDATE_REF_PATTERN.test(source?.candidateRef || '')
               ? source.candidateRef
               : null
           })
@@ -1062,7 +1077,7 @@ export async function createArchiveConsole({
             // here knows that, and implying it would be a guess.
             seasonNumbers: [...seasons.keys()].sort((left, right) => left - right),
             episodeCount,
-            candidateRef: localPlaybackAllowed
+            candidateRef: playbackAllowed
               ? (CANDIDATE_REF_PATTERN.test(item?.candidateRef || '')
                   ? item.candidateRef
                   : (item?.sources || []).find(source => CANDIDATE_REF_PATTERN.test(source?.candidateRef || ''))?.candidateRef || null)
@@ -1343,10 +1358,10 @@ export async function createArchiveConsole({
   // One read of the shelf, shared by the page, the poll fragment and the JSON.
   // Residency is proven first, so the query sorts and filters the same values
   // the header counts.
-  async function releasePage(searchParams) {
+  async function releasePage(searchParams, { playbackAllowed = false } = {}) {
     const jobs = await store.listJobs()
     const catalogItems = await readVerifiedCatalog().catch(() => [])
-    const releases = await proveResidency(releasesView(await libraryView(catalogItems, jobs), jobs))
+    const releases = await proveResidency(releasesView(await libraryView(catalogItems, jobs, { playbackAllowed }), jobs))
     return { releases, page: queryReleases(releases, releaseQuery(searchParams)) }
   }
 
@@ -1377,14 +1392,14 @@ export async function createArchiveConsole({
     }
   }
 
-  async function model(discoverParams = {}) {
+  async function model(discoverParams = {}, { playbackAllowed = false } = {}) {
     const status = service.getStatus?.() || {}
     const jobs = await store.listJobs()
     const catalogItems = await readVerifiedCatalog().catch((err) => {
       logger?.archive?.warn?.('Reading the verified media catalog failed', { error: err?.message || String(err) })
       return []
     })
-    const library = await libraryView(catalogItems, jobs)
+    const library = await libraryView(catalogItems, jobs, { playbackAllowed })
     return {
       status,
       jobs,
@@ -1460,22 +1475,25 @@ export async function createArchiveConsole({
 
       if (req.method === 'GET') {
         const parsed = new URL(req.url, 'http://relay.local')
+        const playbackAllowed = allowsPlaybackRequest(req)
+        // Playback is gated per request: the socket decides whether this
+        // browser is on the relay's own machine.
         // `/` is the operator's release table. The catalog-browsing sections
         // moved to their own routes so a page is one job, not five.
         if (parsed.pathname === '/' || parsed.pathname === '/ui' || parsed.pathname === '/releases') {
-          const { releases, page } = await releasePage(parsed.searchParams)
+          const { releases, page } = await releasePage(parsed.searchParams, { playbackAllowed })
           res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
           res.end(renderReleaseConsole({
             status: service.getStatus?.() || {},
             releases,
-            localPlayback: localPlaybackAllowed === true,
+            localPlayback: playbackAllowed === true,
             page
           }, parsed.searchParams))
           return
         }
 
         if (parsed.pathname === '/releases.html') {
-          const { page } = await releasePage(parsed.searchParams)
+          const { page } = await releasePage(parsed.searchParams, { playbackAllowed })
           res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
           res.end(renderReleaseRows(page))
           return
@@ -1487,14 +1505,14 @@ export async function createArchiveConsole({
             query: parsed.searchParams.get('q') || '',
             type: parsed.searchParams.get('type') || 'movie',
             page: parsed.searchParams.get('page') || '1'
-          })
+          }, { playbackAllowed })
           if (parsed.searchParams.get('notice') === 'empty-submission') home.notice = EMPTY_SUBMISSION_NOTICE
           res.end(renderArchiveWebHome(home, { view: parsed.pathname.slice(1) }))
           return
         }
 
         if (parsed.pathname.startsWith('/play/')) {
-          if (!localPlaybackAllowed) {
+          if (!playbackAllowed) {
             res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
             res.end('playback requires a loopback archive console')
             return

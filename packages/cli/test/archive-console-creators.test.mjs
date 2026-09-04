@@ -542,7 +542,7 @@ test('playback refuses any open that is not the blob server link shape', async f
   }
 })
 
-test('externally bound archive UI cannot mint local operator playback capabilities', async function (t) {
+test('a non-local client to an externally bound relay gets no playback capability', async function (t) {
   const opened = []
   const service = fakeService({
     async openVerifiedPlayback(candidateRef) {
@@ -550,12 +550,40 @@ test('externally bound archive UI cannot mint local operator playback capabiliti
       return { transport: 'tcp', host: '127.0.0.1', port: 8175, url: '/api/v2/stream/forbidden' }
     }
   })
+  // The socket peer says LAN, no matter which interface the console bound.
   await withConsole(service, async (base) => {
-    const home = await (await fetch(base)).text()
-    t.absent(home.includes('/play/'), 'an external console renders metadata without privileged play links')
+    const home = await fetch(base).then(r => r.text())
+    t.absent(home.includes('/play/'), 'a LAN client renders no play links')
     const play = await fetch(`${base}/play/${'M'.repeat(43)}`, { redirect: 'manual' })
     t.is(play.status, 403)
-    t.alike(opened, [], 'the unauthenticated request never reaches the in-process companion identity')
+    t.alike(opened, [], 'a LAN client never reaches the in-process companion identity')
+  }, {
+    host: '0.0.0.0',
+    allowsPlaybackRequest: () => false
+  })
+})
+
+test('a local browser on an externally bound relay still gets playback', async function (t) {
+  const opened = []
+  const service = fakeService({
+    async openVerifiedPlayback(candidateRef) {
+      opened.push(candidateRef)
+      return {
+        transport: 'tcp',
+        host: '127.0.0.1',
+        port: 8175,
+        url: `http://127.0.0.1:8175/?key=${'K'.repeat(52)}&blob=${'B'.repeat(10)}&type=video%2Fmp4&token=${'C'.repeat(43)}`
+      }
+    }
+  })
+  // Bound wide, called from this machine: the socket peer is loopback, so the
+  // play link renders and the redirect mints.
+  await withConsole(service, async (base) => {
+    const home = await fetch(base).then(r => r.text())
+    t.ok(home.includes(`/play/${'M'.repeat(43)}`), 'a loopback client of a 0.0.0.0 relay sees play links')
+    const play = await fetch(`${base}/play/${'M'.repeat(43)}`, { redirect: 'manual' })
+    t.is(play.status, 303)
+    t.alike(opened, ['M'.repeat(43)])
   }, { host: '0.0.0.0' })
 })
 

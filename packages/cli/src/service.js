@@ -1661,28 +1661,35 @@ async function buildRelayService({
           return true
         })
       }
-      if (typeof runtime.api?.searchIndexCandidates !== 'function') return page
+      const provider = runtime.provider
+      if (typeof provider?.search !== 'function') return page
       const searches = new Map()
+      // A playable reference is the provider's own lease, minted by a search
+      // through `publicHit` - not the raw index candidate token, which
+      // `provider.resolve` refuses. One provider search per selector, then
+      // match the lease to the catalog row by publication and rendition.
       const items = []
       for (const item of page.items) {
         const sources = []
         for (const source of item?.sources || []) {
           const selector = selectorForMediaCoordinates(source)
-          let candidateRef = null
+          let ref = null
           if (selector) {
             const key = JSON.stringify(selector)
-            let candidates = searches.get(key)
-            if (!candidates) {
-              candidates = Promise.resolve(runtime.api.searchIndexCandidates(selector, { limit: 64 }))
-                .catch(() => [])
-              searches.set(key, candidates)
+            let hits = searches.get(key)
+            if (!hits) {
+              hits = provider.search({ selector, limit: 64 }).then(result =>
+                (result?.candidates || []).filter(candidate =>
+                  candidate?.kind === 'published' && candidate.publicationId && candidate.renditionId)
+              ).catch(() => [])
+              searches.set(key, hits)
             }
-            const match = (await candidates).find(candidate =>
-              candidate?.publication?.publicationId === source.publicationId &&
-              (!source.renditionId || candidate?.rendition?.renditionId === source.renditionId))
-            if (CANDIDATE_REF_PATTERN.test(match?.candidateRef || '')) candidateRef = match.candidateRef
+            const match = (await hits).find(candidate =>
+              candidate.publicationId === source.publicationId &&
+              (!source.renditionId || candidate.renditionId === source.renditionId))
+            if (match?.ref) ref = match.ref
           }
-          sources.push(candidateRef ? { ...source, candidateRef } : source)
+          sources.push(ref ? { ...source, candidateRef: ref } : source)
         }
         const candidateRef = sources.find(source => CANDIDATE_REF_PATTERN.test(source?.candidateRef || ''))?.candidateRef || null
         items.push({ ...item, sources, ...(candidateRef ? { candidateRef } : {}) })

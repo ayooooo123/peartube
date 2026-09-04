@@ -385,7 +385,7 @@ test('relay archive command delegates to the v2 console ingest adapter', async (
   await service.close()
 })
 
-test('verified catalog rows receive playable candidate references from exact search', async (t) => {
+test('verified catalog rows receive playable resolution refs from provider search', async (t) => {
   const storagePath = mkdtempSync(join(tmpdir(), 'peartube-cli-verified-shelf-'))
   t.teardown(() => rmSync(storagePath, { recursive: true, force: true }))
   const calls = []
@@ -402,13 +402,22 @@ test('verified catalog rows receive playable candidate references from exact sea
     }],
     nextCursor: null
   })
-  runtime.api.searchIndexCandidates = async selector => {
-    calls.push(['candidate-search', selector])
-    return [{
-      candidateRef: 'A'.repeat(43),
-      publication: { publicationId: 'publication-1' },
-      rendition: { renditionId: 'rendition-1' }
-    }]
+  // The provider's own search mints resolution leases (`ref`). The raw index
+  // candidate token is never playable - provider.resolve refuses it - so the
+  // catalog enrichment must come from the provider search results.
+  runtime.provider.search = async input => {
+    calls.push(['provider-search', input.selector])
+    return {
+      candidates: [{
+        schemaVersion: 1,
+        kind: 'published',
+        ref: 'A'.repeat(43),
+        title: 'The Matrix',
+        publicationId: 'publication-1',
+        renditionId: 'rendition-1'
+      }],
+      nextCursor: null
+    }
   }
   const service = await createRelayService({
     config: configFor(storagePath),
@@ -422,7 +431,7 @@ test('verified catalog rows receive playable candidate references from exact sea
   const page = await service.getVerifiedMediaCatalog({ limit: 20 })
   t.is(page.items[0].candidateRef, 'A'.repeat(43))
   t.is(page.items[0].sources[0].candidateRef, 'A'.repeat(43))
-  t.alike(calls.find(([name]) => name === 'candidate-search')?.[1], {
+  t.alike(calls.find(([name]) => name === 'provider-search')?.[1], {
     namespace: 'tmdb',
     identifier: '603',
     kind: 'movie'

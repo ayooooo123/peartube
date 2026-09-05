@@ -207,8 +207,10 @@ export function createTorBoxSourceGrants ({
         },
         open ({ offset, length: readLength, signal: openSignal } = {}) {
           return (async function * () {
+            if (!readLength || readLength <= 0) return
             const signal = openSignal || grantSignal
             const end = offset + readLength
+            let streamed = 0
             let lastError = null
             for (let attempt = 1; attempt <= RANGE_ATTEMPTS; attempt++) {
               if (signal?.aborted) throw signal.reason || new Error('aborted')
@@ -222,12 +224,13 @@ export function createTorBoxSourceGrants ({
                 await sleep(attempt * 1000, signal)
                 continue
               }
-              let streamed = 0
+              const rangeStart = offset + streamed
+              if (rangeStart >= end) return
               try {
                 const response = await fetchFn(downloadUrl, {
                   method: 'GET',
                   headers: {
-                    Range: `bytes=${offset}-${end - 1}`,
+                    Range: `bytes=${rangeStart}-${end - 1}`,
                     'User-Agent': 'peartube-relay/1.0'
                   },
                   signal
@@ -265,10 +268,8 @@ export function createTorBoxSourceGrants ({
                 } else {
                   throw new Error('Unsupported TorBox CDN response body')
                 }
-                if (streamed !== readLength) {
-                  throw new Error(`Streamed ${streamed} bytes, expected ${readLength}`)
-                }
-                return
+                if (streamed === readLength) return
+                throw new Error(`Streamed ${streamed} bytes, expected ${readLength}`)
               } catch (error) {
                 lastError = error
                 if (signal?.aborted) throw error

@@ -439,6 +439,8 @@ async function buildRelayService({
   let companionServer = null
   let publisherShell = null
   const localMirrorState = createLocalDriveMirrorState()
+  const catalogEnrichmentCache = new Map()
+  const ENRICHMENT_CACHE_TTL_MS = 6 * 60 * 1000
 
   function completePolicyControl(policy) {
     return policy?.policyVersion === 2 &&
@@ -1664,6 +1666,12 @@ async function buildRelayService({
       const provider = runtime.provider
       if (typeof provider?.search !== 'function') return page
       const searches = new Map()
+      const nowMs = nowFn()
+      if (catalogEnrichmentCache.size > 256) {
+        for (const [k, v] of catalogEnrichmentCache) {
+          if (v.expiresAt <= nowMs) catalogEnrichmentCache.delete(k)
+        }
+      }
       // A playable reference is the provider's own lease, minted by a search
       // through `publicHit` - not the raw index candidate token, which
       // `provider.resolve` refuses. One provider search per selector, then
@@ -1672,28 +1680,39 @@ async function buildRelayService({
       for (const item of page.items) {
         const sources = []
         for (const source of item?.sources || []) {
-          const selector = selectorForMediaCoordinates(source)
+          const cacheKey = source.publicationId && source.renditionId ? `${source.publicationId}:${source.renditionId}` : null
+          const cached = cacheKey ? catalogEnrichmentCache.get(cacheKey) : null
           let ref = null
-          if (selector) {
-            const key = JSON.stringify(selector)
-            let hits = searches.get(key)
-            if (!hits) {
-              hits = provider.search({ selector, limit: 64 }).then(result =>
-                (result?.candidates || []).filter(candidate =>
-                  candidate?.kind === 'published' && candidate.publicationId && candidate.renditionId)
-              ).catch(err => {
-                logger?.archive?.warn?.('Catalog playback enrichment search failed', {
-                  error: err?.code || err?.message || String(err),
-                  selector
+          if (cached && cached.expiresAt > nowMs) {
+            ref = cached.ref
+          } else {
+            const selector = selectorForMediaCoordinates(source)
+            if (selector) {
+              const key = JSON.stringify(selector)
+              let hits = searches.get(key)
+              if (!hits) {
+                hits = provider.search({ selector, limit: 16 }).then(result =>
+                  (result?.candidates || []).filter(candidate =>
+                    candidate?.kind === 'published' && candidate.publicationId && candidate.renditionId)
+                ).catch(err => {
+                  logger?.archive?.warn?.('Catalog playback enrichment search failed', {
+                    error: err?.code || err?.message || String(err),
+                    selector
+                  })
+                  return []
                 })
-                return []
-              })
-              searches.set(key, hits)
+                searches.set(key, hits)
+              }
+              const match = (await hits).find(candidate =>
+                candidate.publicationId === source.publicationId &&
+                (!source.renditionId || candidate.renditionId === source.renditionId))
+              if (match?.ref) {
+                ref = match.ref
+                if (cacheKey) {
+                  catalogEnrichmentCache.set(cacheKey, { ref, expiresAt: nowMs + ENRICHMENT_CACHE_TTL_MS })
+                }
+              }
             }
-            const match = (await hits).find(candidate =>
-              candidate.publicationId === source.publicationId &&
-              (!source.renditionId || candidate.renditionId === source.renditionId))
-            if (match?.ref) ref = match.ref
           }
           sources.push(ref ? { ...source, candidateRef: ref } : source)
         }

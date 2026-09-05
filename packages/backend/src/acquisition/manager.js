@@ -438,7 +438,8 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       if (job.state !== 'failed') fail('ACQUISITION_NOT_FAILED', 'only failed acquisitions can be retried', 409)
       const isRateBug = job.errorCode === 'ACQUISITION_RATE_BUDGET_EXCEEDED'
       const isPrefixMismatch = RESET_PREFIX_ERRORS.has(job.errorCode)
-      if (!job.recoverable && (isRateBug || isPrefixMismatch) && typeof store.repairExhausted === 'function') {
+      const isStagedComplete = job.bytesAcquired >= job.expectedBytes && job.expectedBytes > 0 && !PERMANENT_ERRORS.has(job.errorCode)
+      if (!job.recoverable && (isRateBug || isPrefixMismatch || isStagedComplete) && typeof store.repairExhausted === 'function') {
         const repaired = await store.repairExhausted(job.acquisitionId, { expectedVersion: job.version })
         job = repaired.job
       }
@@ -546,7 +547,8 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
           for (const failedJob of failedPage.items) {
             const isRateBug = failedJob.errorCode === 'ACQUISITION_RATE_BUDGET_EXCEEDED'
             const isPrefixMismatch = RESET_PREFIX_ERRORS.has(failedJob.errorCode)
-            if ((isRateBug || isPrefixMismatch) && !failedJob.recoverable) {
+            const isStagedComplete = failedJob.bytesAcquired >= failedJob.expectedBytes && failedJob.expectedBytes > 0 && !PERMANENT_ERRORS.has(failedJob.errorCode)
+            if ((isRateBug || isPrefixMismatch || isStagedComplete) && !failedJob.recoverable) {
               toRepair.push({ id: failedJob.acquisitionId, version: failedJob.version })
             }
           }

@@ -160,6 +160,7 @@ export function createSourceReader (implementation = {}) {
           if (read !== range.length) {
             const error = new Error(`source range ended after ${read} of ${range.length} requested bytes`)
             error.code = 'SOURCE_RANGE_SHORT'
+            error.recoverable = true
             throw error
           }
         } finally {

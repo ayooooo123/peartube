@@ -157,12 +157,22 @@ function reachCell(row) {
 // operator's most common read of a row is "is this actually playable".
 export function renderReleaseRow(row = {}) {
   const name = releaseName(row)
-  const play = row.candidateRef
-    ? `<a class="play js-play" href="/play/${encodeURIComponent(row.candidateRef)}" title="Play this release">▶</a>`
+  // A catalogued row opens deterministically by publication and rendition -
+  // stable ids, unlike a provider lease which expires and takes the button
+  // with it. Only rows without both ids fall back to a candidate reference.
+  // Every variant is gated on the relay's own per-request playback gate: an
+  // off-machine client renders the table with no play control at all.
+  const playPath = !row.playable
+    ? null
+    : (row.publicationId && row.renditionId
+        ? `/play/pub/${encodeURIComponent(row.publicationId)}/${encodeURIComponent(row.renditionId)}`
+        : (row.candidateRef ? `/play/${encodeURIComponent(row.candidateRef)}` : null))
+  const play = playPath
+    ? `<a class="play js-play" href="${playPath}" title="Play this release">▶ Play</a>`
     : ''
   return `<tr data-id="${escapeHtml(row.id || '')}" data-acquisition="${escapeHtml(row.acquisitionId || '')}" data-name="${escapeHtml(name)}" data-backups="${escapeHtml(String(Math.max(0, Number(row.backups) || 0)))}">
   <td class="pick"><input type="checkbox" class="js-pick" aria-label="Select ${escapeHtml(name)}"></td>
-  <td class="file" title="${escapeHtml(name)}">${play}<button type="button" class="js-open link" title="${escapeHtml(name)}">${escapeHtml(name)}</button>${row.work || !row.coordinates ? '' : `<span class="coords">${escapeHtml(row.coordinates)}</span>`}</td>
+  <td class="file" title="${escapeHtml(name)}"><div class="file-row">${play}<span class="file-name"><button type="button" class="js-open link" title="${escapeHtml(name)}">${escapeHtml(name)}</button>${row.work || !row.coordinates ? '' : ` <span class="coords">${escapeHtml(row.coordinates)}</span>`}</span></div></td>
   <td class="work">${row.work
     ? `${escapeHtml(row.work)}${row.workLabel ? `<span class="coords">${escapeHtml(row.workLabel)}</span>` : ''}`
     : '<span class="none" title="No publisher metadata named this work">—</span>'}</td>
@@ -312,10 +322,13 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
     .tag.res-partial, .tag.res-transferring { color: var(--amber); border-color: rgba(255,202,122,0.3); }
     .reach { font-variant-numeric: tabular-nums; }
     .uncatalogued { color: var(--amber); margin-left: 2px; }
-    .coords { display: block; color: var(--muted); font-size: 11px; }
-    td.file .link { background: none; border: 0; color: var(--ink); font: inherit; cursor: pointer; padding: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; display: block; font-family: inherit; }
-    td.file .link:hover { color: var(--mint); }
-    td.file .play { float: right; margin-left: 8px; }
+    .coords { color: var(--muted); font-size: 11px; }
+    td.file .file-row { display: flex; align-items: center; gap: 10px; }
+    td.file .file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    td.file .file-name .link { background: none; border: 0; color: var(--ink); font: inherit; cursor: pointer; padding: 0; text-align: left; font-family: inherit; }
+    td.file .file-name .link:hover { color: var(--mint); }
+    a.play { flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 4px 12px; border: 1px solid rgba(158,255,208,0.35); border-radius: 999px; color: var(--mint); font-size: 12px; font-weight: 700; letter-spacing: 0.02em; background: rgba(158,255,208,0.08); white-space: nowrap; }
+    a.play:hover { background: rgba(158,255,208,0.22); border-color: var(--mint); }
     td.work { color: var(--ink); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .none { color: rgba(139,147,167,0.6); }
     .tag { padding: 2px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); }
@@ -410,7 +423,7 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
   </div>
   <p class="verb-result" id="verb-result" role="status" aria-live="polite"></p>
   <aside class="drawer" id="drawer" aria-hidden="true"></aside>
-  ${model.localPlayback === true ? `<dialog id="player" aria-label="Release player">
+  ${model.playbackUi === true ? `<dialog id="player" aria-label="Release player">
     <div class="player-head">
       <strong id="player-title"></strong>
       <button type="button" class="act" id="player-close">Close</button>
@@ -431,7 +444,7 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
     // Every less-than is escaped in the bootstrap so no title can close this
     // script tag, and esc() runs over anything the drawer writes as HTML.
     var index = ${JSON.stringify(Object.fromEntries((page.rows || []).map(row => [row.id, row]))).replaceAll('<', '\\u003c')}
-    ${model.localPlayback === true ? `
+    ${model.playbackUi === true ? `
     var playerDialog = document.getElementById('player')
     var playerVideo = document.getElementById('player-video')
     var playerTitle = document.getElementById('player-title')
@@ -456,6 +469,17 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
       playerDialog.showModal()
       playerVideo.play().catch(function () { /* autoplay refusal still shows controls */ })
     }
+
+    // The first frames arriving mean the open worked; the loading note must
+    // yield, and a stalled read-ahead is what the note is for after that.
+    playerVideo.addEventListener('canplay', function () {
+      playerNote.textContent = ''
+    })
+    playerVideo.addEventListener('waiting', function () {
+      if (playerVideo.currentTime > 0) {
+        playerNote.textContent = 'Buffering — the swarm is delivering the next blocks…'
+      }
+    })
 
     document.getElementById('player-close').addEventListener('click', function () {
       detachPlayerSource()
@@ -508,9 +532,9 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
       openId = row.id
       var name = row.file || row.id
       var backups = Number(row.backups) || 0
-      var verbs = []
-      ${model.localPlayback === true
-        ? `if (row.candidateRef) verbs.push('<a class="act js-play" href="/play/' + encodeURIComponent(row.candidateRef) + '">Play</a>')`
+      ${model.playbackUi === true
+        ? `var playPath = (row.playable === true && row.publicationId && row.renditionId) ? ('/play' + '/pub/' + encodeURIComponent(row.publicationId) + '/' + encodeURIComponent(row.renditionId)) : (row.playable === true && row.candidateRef ? '/play' + '/' + encodeURIComponent(row.candidateRef) : null)
+      if (playPath) verbs.push('<a class="act js-play" href="' + playPath + '">▶ Play</a>')`
         : '// an externally bound console mints no operator playback capability'}
       if (row.acquisitionId && ['queued', 'acquiring', 'verifying', 'publishing'].indexOf(row.state) >= 0) {
         verbs.push('<button type="button" class="act danger" data-cancel="' + esc(row.acquisitionId) + '">Cancel transfer</button>')
@@ -603,7 +627,7 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
     }
 
     document.addEventListener('click', function (ev) {
-      ${model.localPlayback === true ? `
+      ${model.playbackUi === true ? `
       var play = ev.target.closest && ev.target.closest('.js-play')
       if (play) { ev.preventDefault(); openPlayer(play); return }
       ` : ''}

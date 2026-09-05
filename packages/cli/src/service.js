@@ -1681,7 +1681,13 @@ async function buildRelayService({
               hits = provider.search({ selector, limit: 64 }).then(result =>
                 (result?.candidates || []).filter(candidate =>
                   candidate?.kind === 'published' && candidate.publicationId && candidate.renditionId)
-              ).catch(() => [])
+              ).catch(err => {
+                logger?.archive?.warn?.('Catalog playback enrichment search failed', {
+                  error: err?.code || err?.message || String(err),
+                  selector
+                })
+                return []
+              })
               searches.set(key, hits)
             }
             const match = (await hits).find(candidate =>
@@ -1725,13 +1731,43 @@ async function buildRelayService({
     },
     async openVerifiedPlayback(candidateRef, { signal = null } = {}) {
       if (!CANDIDATE_REF_PATTERN.test(candidateRef || '')) return null
+      const opened = await this.openPlayback({ candidateRef }, { signal })
+      return opened
+    },
+    // Catalogued rows open deterministically by publication and rendition: a
+    // provider search lease expires in minutes, so a row keyed on one goes
+    // dark whenever the lease lapses. Stable ids never do.
+    // LAN playback: a loopback blob-server link is meaningless to another
+    // machine, so this yields a range reader instead. The console's HTTP
+    // surface streams the bytes through itself; no redirect is involved.
+    async openPublicationReader(publicationId, renditionId, { signal = null } = {}) {
+      if (typeof publicationId !== 'string' || typeof renditionId !== 'string' ||
+          !publicationId || !renditionId) return null
+      const opened = await runtime.api?.openMediaRendition?.({ publicationId, renditionId, signal })
+      if (!opened?.success) return null
+      return {
+        publicationId: opened.publicationId || publicationId,
+        renditionId: opened.renditionId || renditionId,
+        assetId: opened.assetId,
+        byteLength: opened.byteLength,
+        mimeType: opened.contentType || 'video/mp4',
+        read: opened.read,
+        close: opened.close
+      }
+    },
+    async openPublicationPlayback(publicationId, renditionId, { signal = null } = {}) {
+      if (typeof publicationId !== 'string' || typeof renditionId !== 'string' ||
+          !publicationId || !renditionId) return null
+      return this.openPlayback({ publicationId, renditionId }, { signal })
+    },
+    async openPlayback(body, { signal = null } = {}) {
       const state = companionServer?.state?.()
       if (state?.enabled !== true || state.transport !== 'tcp' ||
           typeof companionServer.dispatchInProcess !== 'function') return null
       const opened = await companionServer.dispatchInProcess({
         method: 'POST',
         url: '/api/v2/streams/open',
-        body: { candidateRef },
+        body,
         signal
       })
       if (opened?.statusCode !== 200 || typeof opened.body?.url !== 'string') return null

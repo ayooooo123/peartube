@@ -1012,6 +1012,10 @@ export async function createArchiveConsole({
             mediaCoordinates: source.mediaCoordinates || null,
             freshArchivists: Math.max(0, Number(releaseMirror?.freshArchivists) || 0),
             acquiredAt: releaseJob?.completedAt || releaseJob?.updatedAt || null,
+            // Stable-id opens stream through the relay for every client, so
+            // any catalogued row with both ids is playable from anywhere.
+            // The candidateRef redirect stays loopback-only.
+            playable: Boolean(publicationId) || playbackAllowed,
             candidateRef: playbackAllowed && CANDIDATE_REF_PATTERN.test(source?.candidateRef || '')
               ? source.candidateRef
               : null
@@ -1077,6 +1081,7 @@ export async function createArchiveConsole({
             // here knows that, and implying it would be a guess.
             seasonNumbers: [...seasons.keys()].sort((left, right) => left - right),
             episodeCount,
+            playable: playbackAllowed,
             candidateRef: playbackAllowed
               ? (CANDIDATE_REF_PATTERN.test(item?.candidateRef || '')
                   ? item.candidateRef
@@ -1146,6 +1151,7 @@ export async function createArchiveConsole({
       ...releaseResidency(acquisition),
       updatedAt: Number(release.acquiredAt) || 0,
       candidateRef: release.candidateRef || null,
+      playable: release.playable === true,
       publicationId: release.publicationId,
       renditionId: release.renditionId || null,
       errorCode: null,
@@ -1422,6 +1428,96 @@ export async function createArchiveConsole({
     }
   }
 
+  // LAN playback streams through this relay. The reader is the backend's
+  // openMediaRendition: read({start, length}) walks the blob's blocks and
+  // waits on replication, so a player's Range requests pull what they need
+  // as it lands. Chunked 4 MiB reads keep one seek from demanding a whole
+  // film into memory; the request close aborts the in-flight read.
+  const RENDITION_CHUNK_BYTES = 4 * 1024 * 1024
+  async function streamRenditionResponse(req, res, reader) {
+    const total = Number(reader.byteLength) || 0
+    const contentType = typeof reader.mimeType === 'string' && reader.mimeType ? reader.mimeType : 'video/mp4'
+    const rangeHeader = req.headers?.range
+    let start = 0
+    let end = Math.max(0, total - 1)
+    let statusCode = 200
+    if (rangeHeader && total > 0) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(String(rangeHeader))
+      if (match) {
+        const [, rawStart, rawEnd] = match
+        if (!rawStart && rawEnd) {
+          start = Math.max(0, total - Number(rawEnd))
+        } else if (rawStart) {
+          start = Math.min(Number(rawStart), Math.max(0, total - 1))
+        }
+        end = total - 1
+        if (rawEnd && rawStart) end = Math.min(Number(rawEnd), total - 1)
+        statusCode = 206
+      }
+    }
+    if (statusCode === 200 && total > 0) end = total - 1
+    if (total > 0 && start >= total) {
+      res.writeHead(416, { 'content-range': `bytes */${total}` })
+      res.end()
+      return
+    }
+    const headers = {
+      'content-type': contentType,
+      'accept-ranges': 'bytes',
+      'cache-control': 'no-store'
+    }
+    if (total > 0) {
+      headers['content-length'] = String(statusCode === 206 ? end - start + 1 : total)
+      if (statusCode === 206) headers['content-range'] = `bytes ${start}-${end}/${total}`
+    }
+    res.writeHead(statusCode, headers)
+    if (req.method === 'HEAD' || total <= 0 || end < start) {
+      res.end()
+      return
+    }
+    let closed = false
+    const onClose = () => { closed = true }
+    res.on?.('close', onClose)
+    try {
+      let offset = start
+      while (offset <= end && !closed) {
+        const length = Math.min(RENDITION_CHUNK_BYTES, end - offset + 1)
+        let delivered = 0
+        for await (const chunk of reader.read({ start: offset, length })) {
+          if (closed) break
+          const bytes = b4a.from(chunk ?? b4a.alloc(0))
+          if (bytes.byteLength === 0) continue
+          if (!res.write(bytes)) {
+            await new Promise((resolve, reject) => {
+              const drain = () => { cleanup(); resolve() }
+              const fail = (err) => { cleanup(); reject(err) }
+              const cleanup = () => { res.off?.('drain', drain); res.off?.('error', fail) }
+              res.once?.('drain', drain)
+              res.once?.('error', fail)
+            })
+            if (closed) break
+          }
+          offset += bytes.byteLength
+          delivered += bytes.byteLength
+          if (offset > end) break
+        }
+        // A reader that yields nothing is a block that never arrived; ending
+        // the response tells the player to re-request, not hang forever.
+        if (delivered === 0) break
+      }
+      if (!closed) res.end()
+    } catch (err) {
+      logger?.archive?.warn?.('LAN rendition stream failed', {
+        error: err?.message || String(err),
+        publicationId: reader.publicationId
+      })
+      try { res.destroy?.() } catch { /* the failed response may be gone */ }
+    } finally {
+      res.off?.('close', onClose)
+      try { await reader.close?.() } catch { /* best effort */ }
+    }
+  }
+
   // A play link answers with the backend blob server's own loopback link: the
   // browser follows the 303 itself, and that server speaks HTTP Range with the
   // CORS headers a `<video>` element needs. Only that link's exact shape may
@@ -1487,6 +1583,10 @@ export async function createArchiveConsole({
             status: service.getStatus?.() || {},
             releases,
             localPlayback: playbackAllowed === true,
+            // Stable-id opens stream through this relay for every client, so
+            // the player UI mounts for LAN browsers too. The candidate-ref
+            // redirect route stays loopback-gated in the play route itself.
+            playbackUi: true,
             page
           }, parsed.searchParams))
           return
@@ -1508,6 +1608,47 @@ export async function createArchiveConsole({
           }, { playbackAllowed })
           if (parsed.searchParams.get('notice') === 'empty-submission') home.notice = EMPTY_SUBMISSION_NOTICE
           res.end(renderArchiveWebHome(home, { view: parsed.pathname.slice(1) }))
+          return
+        }
+
+        if (parsed.pathname.startsWith('/play/pub/')) {
+          const pubMatch = parsed.pathname.match(/^\/play\/pub\/([^/]+)\/([^/]+)$/)
+          let publicationId = null
+          let renditionId = null
+          if (pubMatch) {
+            try {
+              publicationId = decodeURIComponent(pubMatch[1])
+              renditionId = decodeURIComponent(pubMatch[2])
+            } catch { publicationId = null }
+          }
+          if (!publicationId) {
+            res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+            res.end('playback unavailable')
+            return
+          }
+          // Two shapes, one route. A same-machine client follows a 303 to the
+          // blob server, which serves ranges on its own loopback link. A LAN
+          // client cannot follow that link, so the relay streams the bytes
+          // through itself - same file, same byte ranges, no capability leak.
+          if (playbackAllowed) {
+            const opened = await service.openPublicationPlayback?.(publicationId, renditionId).catch(() => null)
+            const location = playbackLocation(opened)
+            if (!location) {
+              res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+              res.end('playback unavailable')
+              return
+            }
+            res.writeHead(303, { location, 'cache-control': 'no-store' })
+            res.end()
+            return
+          }
+          const reader = await service.openPublicationReader?.(publicationId, renditionId).catch(() => null)
+          if (!reader || !reader.read) {
+            res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+            res.end('playback unavailable')
+            return
+          }
+          await streamRenditionResponse(req, res, reader)
           return
         }
 
@@ -1572,8 +1713,12 @@ export async function createArchiveConsole({
       }
 
       if (req.method === 'GET' && req.url.startsWith('/releases.json')) {
+        // The poll drives the table refresh in the browser. Gate it the same
+        // way the page render is gated, or the first refresh would replace
+        // enriched rows with rows the player cannot use.
+        const playbackAllowed = allowsPlaybackRequest(req)
         const parsed = new URL(req.url, 'http://relay.local')
-        const { page } = await releasePage(parsed.searchParams)
+        const { page } = await releasePage(parsed.searchParams, { playbackAllowed })
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify({ schema: 'peartube.relayReleases', version: 1, updatedAt: Date.now(), ...page }, null, 2))
         return

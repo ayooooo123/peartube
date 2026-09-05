@@ -157,8 +157,18 @@ function reachCell(row) {
 // operator's most common read of a row is "is this actually playable".
 export function renderReleaseRow(row = {}) {
   const name = releaseName(row)
-  const play = row.candidateRef
-    ? `<a class="play js-play" href="/play/${encodeURIComponent(row.candidateRef)}" title="Play this release">▶ Play</a>`
+  // A catalogued row opens deterministically by publication and rendition -
+  // stable ids, unlike a provider lease which expires and takes the button
+  // with it. Only rows without both ids fall back to a candidate reference.
+  // Every variant is gated on the relay's own per-request playback gate: an
+  // off-machine client renders the table with no play control at all.
+  const playPath = !row.playable
+    ? null
+    : (row.publicationId && row.renditionId
+        ? `/play/pub/${encodeURIComponent(row.publicationId)}/${encodeURIComponent(row.renditionId)}`
+        : (row.candidateRef ? `/play/${encodeURIComponent(row.candidateRef)}` : null))
+  const play = playPath
+    ? `<a class="play js-play" href="${playPath}" title="Play this release">▶ Play</a>`
     : ''
   return `<tr data-id="${escapeHtml(row.id || '')}" data-acquisition="${escapeHtml(row.acquisitionId || '')}" data-name="${escapeHtml(name)}" data-backups="${escapeHtml(String(Math.max(0, Number(row.backups) || 0)))}">
   <td class="pick"><input type="checkbox" class="js-pick" aria-label="Select ${escapeHtml(name)}"></td>
@@ -521,9 +531,9 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
       openId = row.id
       var name = row.file || row.id
       var backups = Number(row.backups) || 0
-      var verbs = []
       ${model.localPlayback === true
-        ? `if (row.candidateRef) verbs.push('<a class="act js-play" href="/play/' + encodeURIComponent(row.candidateRef) + '">▶ Play</a>')`
+        ? `var playPath = (row.playable === true && row.publicationId && row.renditionId) ? ('/play/pub/' + encodeURIComponent(row.publicationId) + '/' + encodeURIComponent(row.renditionId)) : (row.playable === true && row.candidateRef ? '/play/' + encodeURIComponent(row.candidateRef) : null)
+      if (playPath) verbs.push('<a class="act js-play" href="' + playPath + '">▶ Play</a>')`
         : '// an externally bound console mints no operator playback capability'}
       if (row.acquisitionId && ['queued', 'acquiring', 'verifying', 'publishing'].indexOf(row.state) >= 0) {
         verbs.push('<button type="button" class="act danger" data-cancel="' + esc(row.acquisitionId) + '">Cancel transfer</button>')

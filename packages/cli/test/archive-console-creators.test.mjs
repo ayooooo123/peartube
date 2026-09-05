@@ -490,7 +490,38 @@ test('archive UI binds while storage warms and adopts the same listener when ver
   await console.close()
 })
 
-test('archive UI playback redirects to the backend blob server link and legacy machine routes stay absent', async function (t) {
+test('archive UI playback opens catalogued rows by stable ids and legacy machine routes stay absent', async function (t) {
+  const opened = []
+  const service = fakeService({
+    async openPublicationPlayback(publicationId, renditionId) {
+      opened.push([publicationId, renditionId])
+      return {
+        transport: 'tcp',
+        host: '127.0.0.1',
+        port: 8175,
+        url: `http://127.0.0.1:8175/?key=${'K'.repeat(52)}&blob=${'B'.repeat(10)}&type=video%2Fmp4&token=${'C'.repeat(43)}`
+      }
+    }
+  })
+  await withConsole(service, async (base) => {
+    const home = await (await fetch(base)).text()
+    t.ok(home.includes('/play/pub/pub-matrix/rend-matrix'), 'a catalogued row links playback by stable ids')
+
+    const play = await fetch(`${base}/play/pub/pub-matrix/rend-matrix`, { redirect: 'manual' })
+    t.is(play.status, 303)
+    t.is(play.headers.get('location'), `http://127.0.0.1:8175/?key=${'K'.repeat(52)}&blob=${'B'.repeat(10)}&type=video%2Fmp4&token=${'C'.repeat(43)}`)
+    t.alike(opened, [['pub-matrix', 'rend-matrix']])
+
+    const legacy = await fetch(`${base}/api/v1/catalog`)
+    t.is(legacy.status, 404)
+    t.ok((legacy.headers.get('content-type') || '').startsWith('text/plain'), 'retired machine paths do not fall through to JSON')
+
+    const duplicateCatalog = await fetch(`${base}/catalog.json`)
+    t.is(duplicateCatalog.status, 404, 'the duplicate unauthenticated catalog projection is gone')
+  })
+})
+
+test('archive UI playback still redirects a candidate reference open', async function (t) {
   const opened = []
   const service = fakeService({
     async openVerifiedPlayback(candidateRef) {
@@ -504,20 +535,11 @@ test('archive UI playback redirects to the backend blob server link and legacy m
     }
   })
   await withConsole(service, async (base) => {
-    const home = await (await fetch(base)).text()
-    t.ok(home.includes(`/play/${'M'.repeat(43)}`), 'verified candidate facts render a play link')
 
     const play = await fetch(`${base}/play/${'M'.repeat(43)}`, { redirect: 'manual' })
     t.is(play.status, 303)
     t.is(play.headers.get('location'), `http://127.0.0.1:8175/?key=${'K'.repeat(52)}&blob=${'B'.repeat(10)}&type=video%2Fmp4&token=${'C'.repeat(43)}`)
     t.alike(opened, ['M'.repeat(43)])
-
-    const legacy = await fetch(`${base}/api/v1/catalog`)
-    t.is(legacy.status, 404)
-    t.ok((legacy.headers.get('content-type') || '').startsWith('text/plain'), 'retired machine paths do not fall through to JSON')
-
-    const duplicateCatalog = await fetch(`${base}/catalog.json`)
-    t.is(duplicateCatalog.status, 404, 'the duplicate unauthenticated catalog projection is gone')
   })
 })
 
@@ -566,8 +588,8 @@ test('a non-local client to an externally bound relay gets no playback capabilit
 test('a local browser on an externally bound relay still gets playback', async function (t) {
   const opened = []
   const service = fakeService({
-    async openVerifiedPlayback(candidateRef) {
-      opened.push(candidateRef)
+    async openPublicationPlayback(publicationId, renditionId) {
+      opened.push([publicationId, renditionId])
       return {
         transport: 'tcp',
         host: '127.0.0.1',
@@ -577,13 +599,13 @@ test('a local browser on an externally bound relay still gets playback', async f
     }
   })
   // Bound wide, called from this machine: the socket peer is loopback, so the
-  // play link renders and the redirect mints.
+  // stable-id play link renders and the redirect mints.
   await withConsole(service, async (base) => {
     const home = await fetch(base).then(r => r.text())
-    t.ok(home.includes(`/play/${'M'.repeat(43)}`), 'a loopback client of a 0.0.0.0 relay sees play links')
-    const play = await fetch(`${base}/play/${'M'.repeat(43)}`, { redirect: 'manual' })
+    t.ok(home.includes('/play/pub/pub-matrix/rend-matrix'), 'a loopback client of a 0.0.0.0 relay sees play links')
+    const play = await fetch(`${base}/play/pub/pub-matrix/rend-matrix`, { redirect: 'manual' })
     t.is(play.status, 303)
-    t.alike(opened, ['M'.repeat(43)])
+    t.alike(opened, [['pub-matrix', 'rend-matrix']])
   }, { host: '0.0.0.0' })
 })
 

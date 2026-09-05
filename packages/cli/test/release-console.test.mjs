@@ -115,14 +115,20 @@ test('an unbacked seeding release is marked, an unnamed work renders as absent',
   t.ok(html.includes('No publisher metadata named this work'))
 })
 
-test('a row links playback only when the release carries a verified candidate reference', function (t) {
+test('a row links playback by stable publication ids first, candidate ref as fallback', function (t) {
   const verified = 'V'.repeat(43)
   const html = renderReleaseRows({
-    rows: [row({ id: 'playable', candidateRef: verified }), row({ id: 'metadata-only', candidateRef: null })],
-    total: 2
+    rows: [
+      row({ id: 'playable', playable: true }),
+      row({ id: 'ref-only', publicationId: null, renditionId: null, candidateRef: verified, playable: true }),
+      row({ id: 'metadata-only', publicationId: null, renditionId: null, candidateRef: null, playable: true }),
+      row({ id: 'lan-client', publicationId: 'pub-1', renditionId: 'rend-1', playable: false })
+    ],
+    total: 4
   })
-  t.is(html.split('/play/').length - 1, 1, 'exactly the release with a candidate reference links playback')
-  t.ok(html.includes(`/play/${verified}`))
+  t.ok(html.includes('/play/pub/pub-1/rend-1'), 'a catalogued row links by stable ids')
+  t.ok(html.includes(`/play/${verified}`), 'a row without ids falls back to its candidate reference')
+  t.is(html.split('/play/').length - 1, 2, 'a LAN client row stays unlinked alongside the unlinked row')
 })
 
 test('a hostile file name cannot close the bootstrap script or reach the DOM as markup', function (t) {

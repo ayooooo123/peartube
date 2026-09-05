@@ -1681,7 +1681,13 @@ async function buildRelayService({
               hits = provider.search({ selector, limit: 64 }).then(result =>
                 (result?.candidates || []).filter(candidate =>
                   candidate?.kind === 'published' && candidate.publicationId && candidate.renditionId)
-              ).catch(() => [])
+              ).catch(err => {
+                logger?.archive?.warn?.('Catalog playback enrichment search failed', {
+                  error: err?.code || err?.message || String(err),
+                  selector
+                })
+                return []
+              })
               searches.set(key, hits)
             }
             const match = (await hits).find(candidate =>

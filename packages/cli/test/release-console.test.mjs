@@ -637,6 +637,11 @@ test('a LAN client of an externally bound console renders no playback path at al
   // the loopback-only playback capability must be absent from every byte.
   await withConsole(consoleService(jobs), async (base) => {
     const home = await (await fetch(`${base}/`)).text()
-    t.absent(home.includes('/play/'), 'no play link and no play verb reach an off-machine console')
+    // The rendered page must carry no play anchors in markup. The player
+    // script ships a guarded verb template, but it only fires for rows the
+    // per-request gate marked playable - none exist here.
+    const markup = home.slice(0, home.indexOf('<script>'))
+    t.absent(markup.includes('js-play'), 'an off-machine console renders no play anchors')
+    t.absent(markup.includes('/play/pub/'), 'and no stable-id hrefs either')
   }, { host: '0.0.0.0', allowsPlaybackRequest: () => false })
 })

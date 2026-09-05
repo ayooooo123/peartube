@@ -1706,12 +1706,13 @@ export async function createArchiveConsole({
       }
       if (req.method === 'GET' && req.url === '/health') {
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ ok: true, ready: true }))
+        res.end(JSON.stringify({ ok: true, ready: true, dbg: globalThis.__ptDebug || [] }))
         return
       }
 
       if (req.method === 'GET') {
         const parsed = new URL(req.url, 'http://relay.local')
+        try { (globalThis.__ptDebug = globalThis.__ptDebug || []).push('GET ' + req.url.slice(0, 60)) } catch {}
         const playbackAllowed = allowsPlaybackRequest(req)
         // Playback is gated per request: the socket decides whether this
         // browser is on the relay's own machine.
@@ -1810,6 +1811,7 @@ export async function createArchiveConsole({
         // Internal raw-bytes source for the compat transcoder. Loopback
         // callers only: a reader handed across the network would be an
         // unauthenticated byte faucet for the whole catalog.
+          try { (globalThis.__ptDebug = globalThis.__ptDebug || []).push('source matched') } catch {}
         if (parsed.pathname.startsWith('/play/source/')) {
           const srcMatch = parsed.pathname.match(/^\/play\/source\/([^/]+)\/([^/]+)$/)
           let publicationId = null
@@ -1826,6 +1828,7 @@ export async function createArchiveConsole({
             return
           }
           const reader = await service.openPublicationReader?.(publicationId, renditionId).catch(() => null)
+          try { (globalThis.__ptDebug = globalThis.__ptDebug || []).push('reader null at source') } catch {}
           if (!reader || !reader.read) {
             res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
             res.end('playback unavailable')
@@ -1868,6 +1871,7 @@ export async function createArchiveConsole({
             return
           }
           const reader = await service.openPublicationReader?.(publicationId, renditionId).catch(() => null)
+          try { (globalThis.__ptDebug = globalThis.__ptDebug || []).push('reader null at pub') } catch {}
           if (!reader || !reader.read) {
             res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
             res.end('playback unavailable')

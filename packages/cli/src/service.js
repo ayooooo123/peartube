@@ -1763,7 +1763,10 @@ async function buildRelayService({
       if (typeof publicationId !== 'string' || typeof renditionId !== 'string' ||
           !publicationId || !renditionId) return null
       const opened = await runtime.api?.openMediaRendition?.({ publicationId, renditionId, signal })
-      if (!opened?.success) return null
+      if (!opened?.success) {
+        ;(globalThis.__ptDebug = globalThis.__ptDebug || []).push('reader refused: ' + (opened?.errorCode || opened?.error || 'unknown') + ' pub=' + publicationId.slice(0, 10))
+        return null
+      }
       return {
         publicationId: opened.publicationId || publicationId,
         renditionId: opened.renditionId || renditionId,

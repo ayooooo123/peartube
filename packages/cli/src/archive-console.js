@@ -1187,6 +1187,7 @@ export async function createArchiveConsole({
       ...releaseResidency(job),
       retentionClass: job.retentionClass || null,
       updatedAt: Number(job.updatedAt) || 0,
+      playable: Boolean(job.publicationId && job.renditionId),
       candidateRef: null,
       publicationId: job.publicationId || null,
       renditionId: job.renditionId || null,

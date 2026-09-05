@@ -1572,8 +1572,12 @@ export async function createArchiveConsole({
       }
 
       if (req.method === 'GET' && req.url.startsWith('/releases.json')) {
+        // The poll drives the table refresh in the browser. Gate it the same
+        // way the page render is gated, or the first refresh would replace
+        // enriched rows with rows the player cannot use.
+        const playbackAllowed = allowsPlaybackRequest(req)
         const parsed = new URL(req.url, 'http://relay.local')
-        const { page } = await releasePage(parsed.searchParams)
+        const { page } = await releasePage(parsed.searchParams, { playbackAllowed })
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify({ schema: 'peartube.relayReleases', version: 1, updatedAt: Date.now(), ...page }, null, 2))
         return

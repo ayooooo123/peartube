@@ -158,7 +158,7 @@ function reachCell(row) {
 export function renderReleaseRow(row = {}) {
   const name = releaseName(row)
   const play = row.candidateRef
-    ? `<a class="play js-play" href="/play/${encodeURIComponent(row.candidateRef)}" title="Play this release">▶</a>`
+    ? `<a class="play js-play" href="/play/${encodeURIComponent(row.candidateRef)}" title="Play this release">▶ Play</a>`
     : ''
   return `<tr data-id="${escapeHtml(row.id || '')}" data-acquisition="${escapeHtml(row.acquisitionId || '')}" data-name="${escapeHtml(name)}" data-backups="${escapeHtml(String(Math.max(0, Number(row.backups) || 0)))}">
   <td class="pick"><input type="checkbox" class="js-pick" aria-label="Select ${escapeHtml(name)}"></td>
@@ -316,6 +316,8 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
     td.file .link { background: none; border: 0; color: var(--ink); font: inherit; cursor: pointer; padding: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; display: block; font-family: inherit; }
     td.file .link:hover { color: var(--mint); }
     td.file .play { float: right; margin-left: 8px; }
+    a.play { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border: 1px solid rgba(158,255,208,0.35); border-radius: 999px; color: var(--mint); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; background: rgba(158,255,208,0.08); }
+    a.play:hover { background: rgba(158,255,208,0.18); border-color: var(--mint); }
     td.work { color: var(--ink); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .none { color: rgba(139,147,167,0.6); }
     .tag { padding: 2px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); }
@@ -457,6 +459,17 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
       playerVideo.play().catch(function () { /* autoplay refusal still shows controls */ })
     }
 
+    // The first frames arriving mean the open worked; the loading note must
+    // yield, and a stalled read-ahead is what the note is for after that.
+    playerVideo.addEventListener('canplay', function () {
+      playerNote.textContent = ''
+    })
+    playerVideo.addEventListener('waiting', function () {
+      if (playerVideo.currentTime > 0) {
+        playerNote.textContent = 'Buffering — the swarm is delivering the next blocks…'
+      }
+    })
+
     document.getElementById('player-close').addEventListener('click', function () {
       detachPlayerSource()
       if (playerDialog.open) playerDialog.close()
@@ -510,7 +523,7 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
       var backups = Number(row.backups) || 0
       var verbs = []
       ${model.localPlayback === true
-        ? `if (row.candidateRef) verbs.push('<a class="act js-play" href="/play/' + encodeURIComponent(row.candidateRef) + '">Play</a>')`
+        ? `if (row.candidateRef) verbs.push('<a class="act js-play" href="/play/' + encodeURIComponent(row.candidateRef) + '">▶ Play</a>')`
         : '// an externally bound console mints no operator playback capability'}
       if (row.acquisitionId && ['queued', 'acquiring', 'verifying', 'publishing'].indexOf(row.state) >= 0) {
         verbs.push('<button type="button" class="act danger" data-cancel="' + esc(row.acquisitionId) + '">Cancel transfer</button>')

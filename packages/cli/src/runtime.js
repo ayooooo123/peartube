@@ -76,7 +76,7 @@ function createLocalFileSourceGrantRegistry ({ fs = runtimeFs, now = Date.now } 
   })
 }
 
-function createCompanionCallbackSourceReader ({ origin, client, secret, token, jobId = '', etag = null, length = null, sha256 = null, contentType = 'application/octet-stream', logger = null }) {
+export function createCompanionCallbackSourceReader ({ origin, client, secret, token, jobId = '', etag = null, length = null, sha256 = null, contentType = 'application/octet-stream', logger = null, fetch: fetchFn = fetch }) {
   const EMPTY_BODY_HASH = b4a.toString(crypto.hash(b4a.alloc(0)), 'hex')
   const path = `/internal/peartube/v2/sources/${encodeURIComponent(token)}`
   let currentEtag = etag
@@ -116,7 +116,7 @@ function createCompanionCallbackSourceReader ({ origin, client, secret, token, j
       if (descriptionCache) return descriptionCache
       const url = `${origin}${path}`
       const headers = authHeaders('HEAD')
-      const response = await fetch(url, { method: 'HEAD', headers, signal })
+      const response = await fetchFn(url, { method: 'HEAD', headers, signal })
       if (!response.ok) {
         const error = new Error(`Companion callback HEAD failed with HTTP ${response.status}`)
         error.code = response.status === 410 ? 'SOURCE_GRANT_REVOKED' : 'SOURCE_GRANT_UNAVAILABLE'
@@ -137,56 +137,132 @@ function createCompanionCallbackSourceReader ({ origin, client, secret, token, j
     },
     open ({ offset, length: readLength, signal } = {}) {
       return (async function * () {
+        if (!readLength || readLength <= 0) return
         const CHUNK_SIZE = 4 * 1024 * 1024
+        const RANGE_ATTEMPTS = 4
         let current = offset
         const end = offset + readLength
         while (current < end) {
           if (signal?.aborted) throw new Error('source read aborted')
           const chunkEnd = Math.min(current + CHUNK_SIZE - 1, end - 1)
           const expectedChunkBytes = chunkEnd - current + 1
-          const rangeHeader = `bytes=${current}-${chunkEnd}`
-          const headers = {
-            ...authHeaders('GET'),
-            range: rangeHeader
-          }
-          const response = await fetch(`${origin}${path}`, { method: 'GET', headers, signal })
-          if (response.status !== 206) {
-            const error = new Error(`Companion callback GET range ${rangeHeader} failed with HTTP ${response.status}`)
-            error.code = response.status === 410 ? 'SOURCE_GRANT_REVOKED' : 'SOURCE_GRANT_UNAVAILABLE'
-            throw error
-          }
+          const chunkBuffers = []
           let chunkBytesRead = 0
-          if (response.body && typeof response.body.getReader === 'function') {
-            const reader = response.body.getReader()
+          let chunkSucceeded = false
+          for (let attempt = 1; attempt <= RANGE_ATTEMPTS; attempt++) {
+            if (signal?.aborted) throw new Error('source read aborted')
+            const rangeStart = current + chunkBytesRead
+            if (rangeStart > chunkEnd) break
+            const expectedAttemptBytes = chunkEnd - rangeStart + 1
+            const rangeHeader = `bytes=${rangeStart}-${chunkEnd}`
+            const headers = {
+              ...authHeaders('GET'),
+              range: rangeHeader
+            }
+            let response
             try {
-              while (true) {
-                const { done, value } = await reader.read()
-                if (done) break
-                if (value && value.byteLength > 0) {
-                  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value)
-                  if (chunkBytesRead + bytes.byteLength > expectedChunkBytes) {
-                    throw new Error(`Companion callback GET range ${rangeHeader} exceeded expected length of ${expectedChunkBytes} bytes`)
-                  }
-                  chunkBytesRead += bytes.byteLength
-                  yield bytes
-                }
+              response = await fetchFn(`${origin}${path}`, { method: 'GET', headers, signal })
+            } catch (err) {
+              if (signal?.aborted || attempt === RANGE_ATTEMPTS) {
+                const error = new Error(`Companion callback GET range ${rangeHeader} network failed: ${err?.message || err}`)
+                error.code = 'SOURCE_RANGE_SHORT'
+                error.recoverable = true
+                throw error
               }
-            } finally {
-              reader.releaseLock?.()
+              await new Promise(resolve => setTimeout(resolve, attempt * 500))
+              continue
             }
-          } else if (response.arrayBuffer) {
-            const buffer = await response.arrayBuffer()
-            const bytes = new Uint8Array(buffer)
-            if (bytes.byteLength !== expectedChunkBytes) {
-              throw new Error(`Companion callback GET range ${rangeHeader} returned ${bytes.byteLength} bytes, expected ${expectedChunkBytes}`)
+            if (response.status !== 206) {
+              const retryableStatus = response.status === 503 || response.status === 429 || response.status === 502 || response.status === 504
+              if (retryableStatus && attempt < RANGE_ATTEMPTS) {
+                const retryAfter = Number(response.headers?.get?.('retry-after')) || 0
+                const delayMs = retryAfter > 0 ? Math.min(retryAfter * 1000, 2000) : attempt * 500
+                await new Promise(resolve => setTimeout(resolve, delayMs))
+                continue
+              }
+              const error = new Error(`Companion callback GET range ${rangeHeader} failed with HTTP ${response.status}`)
+              error.code = response.status === 410 ? 'SOURCE_GRANT_REVOKED' : (retryableStatus ? 'SOURCE_RANGE_SHORT' : 'SOURCE_GRANT_UNAVAILABLE')
+              error.recoverable = retryableStatus
+              throw error
             }
-            yield bytes
-            chunkBytesRead = bytes.byteLength
-          } else {
-            throw new Error('Unsupported response body stream')
+            const attemptBuffers = []
+            let attemptBytesRead = 0
+            try {
+              if (response.body && typeof response.body.getReader === 'function') {
+                const reader = response.body.getReader()
+                try {
+                  while (true) {
+                    if (signal?.aborted) {
+                      await reader.cancel().catch(() => {})
+                      throw signal.reason || new Error('aborted')
+                    }
+                    const { done, value } = await reader.read()
+                    if (done) break
+                    if (value && value.byteLength > 0) {
+                      const bytes = value instanceof Uint8Array ? value : new Uint8Array(value)
+                      if (attemptBytesRead + bytes.byteLength > expectedAttemptBytes) {
+                        const error = new Error(`Companion callback GET range ${rangeHeader} exceeded expected length`)
+                        error.code = 'SOURCE_RANGE_SHORT'
+                        error.isOverrun = true
+                        error.recoverable = true
+                        throw error
+                      }
+                      attemptBytesRead += bytes.byteLength
+                      attemptBuffers.push(bytes)
+                    }
+                  }
+                } finally {
+                  reader.releaseLock?.()
+                }
+              } else if (response.arrayBuffer) {
+                const buffer = await response.arrayBuffer()
+                const bytes = new Uint8Array(buffer)
+                if (bytes.byteLength > expectedAttemptBytes) {
+                  const error = new Error(`Companion callback GET range ${rangeHeader} exceeded expected length`)
+                  error.code = 'SOURCE_RANGE_SHORT'
+                  error.isOverrun = true
+                  error.recoverable = true
+                  throw error
+                }
+                attemptBytesRead = bytes.byteLength
+                attemptBuffers.push(bytes)
+              }
+            } catch (streamErr) {
+              if (signal?.aborted || streamErr?.isOverrun || attempt === RANGE_ATTEMPTS) {
+                const error = streamErr?.isOverrun
+                  ? streamErr
+                  : new Error(`Companion callback GET range ${rangeHeader} stream failed: ${streamErr?.message || streamErr}`)
+                error.code = 'SOURCE_RANGE_SHORT'
+                error.recoverable = true
+                throw error
+              }
+              await new Promise(resolve => setTimeout(resolve, attempt * 500))
+              continue
+            }
+            for (const buf of attemptBuffers) {
+              chunkBuffers.push(buf)
+            }
+            chunkBytesRead += attemptBytesRead
+            if (chunkBytesRead === expectedChunkBytes) {
+              for (const buf of chunkBuffers) {
+                yield buf
+              }
+              chunkSucceeded = true
+              break
+            }
+            if (attempt === RANGE_ATTEMPTS) {
+              const error = new Error(`Companion callback GET range ${rangeHeader} returned short body: ${chunkBytesRead}/${expectedChunkBytes}`)
+              error.code = 'SOURCE_RANGE_SHORT'
+              error.recoverable = true
+              throw error
+            }
+            await new Promise(resolve => setTimeout(resolve, attempt * 500))
           }
-          if (chunkBytesRead !== expectedChunkBytes) {
-            throw new Error(`Companion callback GET range ${rangeHeader} returned ${chunkBytesRead} bytes, expected ${expectedChunkBytes}`)
+          if (!chunkSucceeded) {
+            const error = new Error(`Companion callback GET range bytes=${current}-${chunkEnd} failed after ${RANGE_ATTEMPTS} attempts`)
+            error.code = 'SOURCE_RANGE_SHORT'
+            error.recoverable = true
+            throw error
           }
           current += expectedChunkBytes
         }

@@ -42,6 +42,7 @@ const TEST_FILES = [
   'companion-stream-capability.test.mjs',
   'companion-stream-range.test.mjs',
   'torbox-source-grants.test.mjs',
+  'companion-callback-source.test.mjs',
   'creators.test.mjs',
   'local-drive-mirror.test.mjs',
   'tmdb-fetch-injection.test.mjs',

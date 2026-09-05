@@ -1021,7 +1021,13 @@ export function createPublisherCatalogRuntime (context) {
       topic: stableScopeDiagnostic(scope),
     }
     localPublishers.set(id, { scope, result })
-    if (hasBootstrapLocatorKeyPair) await bootstrapRuntime.refreshLocalBootstrapLocator(id)
+    if (hasBootstrapLocatorKeyPair) {
+      try {
+        await bootstrapRuntime.refreshLocalBootstrapLocator(id)
+      } catch (error) {
+        console.log('[ScopedNetwork] local bootstrap locator refresh deferred:', error?.code || error?.message || error)
+      }
+    }
     return result
   }
 
@@ -1045,7 +1051,13 @@ export function createPublisherCatalogRuntime (context) {
       existing.scope.descriptor = descriptor
       existing.scope.binding = binding
       await provideLocalPublisherNamespaceProof({ publisherId: id, descriptor, catalog: binding.catalog })
-      if (hasBootstrapLocatorKeyPair) await bootstrapRuntime.refreshLocalBootstrapLocator(id)
+      if (hasBootstrapLocatorKeyPair) {
+        try {
+          await bootstrapRuntime.refreshLocalBootstrapLocator(id)
+        } catch (error) {
+          console.log('[ScopedNetwork] local bootstrap locator refresh deferred:', error?.code || error?.message || error)
+        }
+      }
       existing.result = {
         ...existing.result,
         catalogEpoch: descriptor.catalogEpoch,

@@ -78,7 +78,9 @@ export function createBootstrapLocatorRuntime (context) {
     )
     if (!writer || writer.revocation || writer.expiresAt < issuedAt ||
         !writer.capabilities?.includes('announce')) {
-      fail('local locator signer is not an admitted announce writer', 'BOOTSTRAP_LOCATOR_SIGNER_UNAUTHORIZED')
+      const reason = !writer ? 'writer-not-found' : (writer.revocation ? 'writer-revoked' : (writer.expiresAt < issuedAt ? 'writer-expired' : 'announce-capability-missing'))
+      console.log('[ScopedNetwork] bootstrap locator unavailable:', reason, publisherId.slice(0, 16))
+      return { status: 'unavailable', reason: 'signer-unauthorized', detail: reason }
     }
     const descriptor = local.scope.descriptor
     const locator = createBootstrapLocator({

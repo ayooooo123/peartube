@@ -1,4 +1,5 @@
 import test from 'brittle'
+import b4a from 'b4a'
 import { annotateTmdbDiscoverItems, buildTmdbNetworkIndex, createArchiveConsole, createArchiveHttpSurface } from '../src/archive-console.js'
 import { mkdtempSync, mkdirSync, rmSync, readdirSync, statSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -564,21 +565,44 @@ test('playback refuses any open that is not the blob server link shape', async f
   }
 })
 
-test('a non-local client to an externally bound relay gets no playback capability', async function (t) {
+test('a LAN client of an externally bound relay gets stable-id links but no loopback redirect', async function (t) {
   const opened = []
   const service = fakeService({
+    async openPublicationReader(publicationId, renditionId) {
+      opened.push(['reader', publicationId, renditionId])
+      return {
+        publicationId,
+        renditionId,
+        byteLength: 64,
+        mimeType: 'video/mp4',
+        async * read({ length }) {
+          for (let i = 0; i < length; i += 16) yield b4a.alloc(Math.min(16, length - i), 0x41)
+        },
+        async close() {}
+      }
+    },
     async openVerifiedPlayback(candidateRef) {
-      opened.push(candidateRef)
+      opened.push(['ref', candidateRef])
       return { transport: 'tcp', host: '127.0.0.1', port: 8175, url: '/api/v2/stream/forbidden' }
     }
   })
   // The socket peer says LAN, no matter which interface the console bound.
+  // Stable-id rows render play links and stream through the relay; the
+  // candidate-ref route stays loopback-only.
   await withConsole(service, async (base) => {
     const home = await fetch(base).then(r => r.text())
-    t.absent(home.includes('/play/'), 'a LAN client renders no play links')
-    const play = await fetch(`${base}/play/${'M'.repeat(43)}`, { redirect: 'manual' })
-    t.is(play.status, 403)
-    t.alike(opened, [], 'a LAN client never reaches the in-process companion identity')
+    t.ok(home.includes('/play/pub/pub-matrix/rend-matrix'), 'a LAN client sees stable-id play links')
+
+    const res = await fetch(`${base}/play/pub/pub-matrix/rend-matrix`, { headers: { range: 'bytes=0-63' } })
+    t.is(res.status, 206)
+    t.is(res.headers.get('content-type'), 'video/mp4')
+    t.is(res.headers.get('content-range'), 'bytes 0-63/64')
+    const body = b4a.from(await res.arrayBuffer())
+    t.is(body.byteLength, 64)
+
+    const refPlay = await fetch(`${base}/play/${'M'.repeat(43)}`, { redirect: 'manual' })
+    t.is(refPlay.status, 403, 'the loopback-only redirect route refuses a LAN client')
+    t.is(opened.filter(([kind]) => kind === 'ref').length, 0, 'the ref route never opened for a LAN client')
   }, {
     host: '0.0.0.0',
     allowsPlaybackRequest: () => false

@@ -423,7 +423,7 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
   </div>
   <p class="verb-result" id="verb-result" role="status" aria-live="polite"></p>
   <aside class="drawer" id="drawer" aria-hidden="true"></aside>
-  ${model.localPlayback === true ? `<dialog id="player" aria-label="Release player">
+  ${model.playbackUi === true ? `<dialog id="player" aria-label="Release player">
     <div class="player-head">
       <strong id="player-title"></strong>
       <button type="button" class="act" id="player-close">Close</button>
@@ -444,7 +444,7 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
     // Every less-than is escaped in the bootstrap so no title can close this
     // script tag, and esc() runs over anything the drawer writes as HTML.
     var index = ${JSON.stringify(Object.fromEntries((page.rows || []).map(row => [row.id, row]))).replaceAll('<', '\\u003c')}
-    ${model.localPlayback === true ? `
+    ${model.playbackUi === true ? `
     var playerDialog = document.getElementById('player')
     var playerVideo = document.getElementById('player-video')
     var playerTitle = document.getElementById('player-title')
@@ -532,8 +532,8 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
       openId = row.id
       var name = row.file || row.id
       var backups = Number(row.backups) || 0
-      ${model.localPlayback === true
-        ? `var playPath = (row.playable === true && row.publicationId && row.renditionId) ? ('/play/pub/' + encodeURIComponent(row.publicationId) + '/' + encodeURIComponent(row.renditionId)) : (row.playable === true && row.candidateRef ? '/play/' + encodeURIComponent(row.candidateRef) : null)
+      ${model.playbackUi === true
+        ? `var playPath = (row.playable === true && row.publicationId && row.renditionId) ? ('/play' + '/pub/' + encodeURIComponent(row.publicationId) + '/' + encodeURIComponent(row.renditionId)) : (row.playable === true && row.candidateRef ? '/play' + '/' + encodeURIComponent(row.candidateRef) : null)
       if (playPath) verbs.push('<a class="act js-play" href="' + playPath + '">▶ Play</a>')`
         : '// an externally bound console mints no operator playback capability'}
       if (row.acquisitionId && ['queued', 'acquiring', 'verifying', 'publishing'].indexOf(row.state) >= 0) {
@@ -627,7 +627,7 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
     }
 
     document.addEventListener('click', function (ev) {
-      ${model.localPlayback === true ? `
+      ${model.playbackUi === true ? `
       var play = ev.target.closest && ev.target.closest('.js-play')
       if (play) { ev.preventDefault(); openPlayer(play); return }
       ` : ''}

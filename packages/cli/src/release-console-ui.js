@@ -450,25 +450,85 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
     var playerTitle = document.getElementById('player-title')
     var playerNote = document.getElementById('player-note')
 
-    // Playback mounts the release link straight on the <video> element: the
-    // media element follows the redirect to the backend blob server's loopback
-    // link, then issues its own Range requests, so seeking pulls only the
-    // blocks the playhead needs and the swarm delivers them as they land.
+    // Two playback routes: the raw stream (fast, but the browser must decode
+    // the file's own audio codec) and the compat transcode (ffmpeg on the
+    // relay copies video and converts audio to AAC into an HLS playlist, so
+    // DTS/E-AC-3 REMUXes play everywhere). MKV rows and rows whose direct
+    // playback errors go compat; everything else stays direct. Compat
+    // seeking restarts the transcode at the target second.
+    var nativeHls = !!playerVideo.canPlayType('application/vnd.apple.mpegurl')
+    var compatSession = null
+
     function detachPlayerSource () {
+      if (compatSession) { compatSession = null }
       playerVideo.pause()
       playerVideo.removeAttribute('src')
       playerVideo.load()
     }
 
-    function openPlayer (anchor) {
-      var row = index[openId] || (function () { var tr = anchor.closest('tr[data-id]'); return tr ? index[tr.getAttribute('data-id')] : null })()
-      playerTitle.textContent = row ? (row.file || row.work || 'Release') : 'Release'
+    function compatUrl (href, seconds) {
+      // href looks like /play/pub/<pub>/<rend>; string surgery instead of a
+      // regex so the template literal needs no escaping gymnastics.
+      var marker = '/play/pub/'
+      if (href.indexOf(marker) !== 0) return null
+      var rest = href.slice(marker.length)
+      var slash = rest.indexOf('/')
+      if (slash < 0) return null
+      var publication = rest.slice(0, slash)
+      var rendition = rest.slice(slash + 1)
+      if (!publication || !rendition) return null
+      return '/play/compat/' + publication + '/' + rendition + '/index.m3u8' + (seconds ? '?t=' + Math.floor(seconds) : '')
+    }
+
+    function mountSource (href, seekTo) {
       playerNote.textContent = 'Opening this release…'
       detachPlayerSource()
-      playerVideo.src = anchor.getAttribute('href')
+      playerVideo.src = href
+      if (seekTo) playerVideo.currentTime = seekTo
       playerDialog.showModal()
       playerVideo.play().catch(function () { /* autoplay refusal still shows controls */ })
     }
+
+    function openPlayer (anchor) {
+      var href = anchor.getAttribute('href')
+      var row = index[openId] || (function () { var tr = anchor.closest('tr[data-id]'); return tr ? index[tr.getAttribute('data-id')] : null })()
+      playerTitle.textContent = row ? (row.file || row.work || 'Release') : 'Release'
+      // Compat is only offered where the browser can actually play HLS
+      // (Safari and WebKit views). Chrome/Firefox get the direct stream;
+      // its audio limitation is a codec fact the compat route would solve,
+      // but it needs an MSE client (hls.js) this console does not ship.
+      var useCompat = ${JSON.stringify(model.compatPlayback === true)} && nativeHls
+      if (useCompat) {
+        var curl = compatUrl(href, 0)
+        if (curl) {
+          detachPlayerSource()
+          compatSession = { active: true }
+          playerNote.textContent = 'Transcoding audio to AAC on the relay…'
+          playerVideo.src = curl
+          playerDialog.showModal()
+          playerVideo.play().catch(function () { /* autoplay refusal still shows controls */ })
+          return
+        }
+      }
+      mountSource(href, 0)
+    }
+
+    // Compat seeking: a live transcode cannot serve arbitrary ranges, so a
+    // seek restarts ffmpeg at the target second. canplay clears the pending
+    // flag so the next seek can restart again.
+    playerVideo.addEventListener('seeking', function () {
+      if (!compatSession || !compatSession.active) return
+      var href = playerVideo.getAttribute('src') || ''
+      if (href.indexOf('/play/compat/') !== 0) return
+      var base = href.split('?')[0]
+      compatSession.active = false
+      playerNote.textContent = 'Restarting the transcode at the new position…'
+      playerVideo.src = base + '?t=' + Math.max(0, Math.floor(playerVideo.currentTime))
+      playerVideo.play().catch(function () {})
+    })
+    playerVideo.addEventListener('canplay', function () {
+      if (compatSession) compatSession.active = true
+    })
 
     // The first frames arriving mean the open worked; the loading note must
     // yield, and a stalled read-ahead is what the note is for after that.

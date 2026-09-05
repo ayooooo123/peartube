@@ -1,5 +1,5 @@
 import { createServer } from '#http'
-import { createReadStream, rmSync, statSync } from '#fs'
+import { createReadStream, mkdirSync, readFileSync, rmSync, statSync } from '#fs'
 import { basename, dirname, relative, resolve } from '#path'
 import b4a from 'b4a'
 import sodium from 'sodium-universal'
@@ -7,6 +7,8 @@ import { isArtworkRendition } from '@peartube/backend/assets'
 import { renderArchiveTui, renderArchiveWebHome } from './archive-ui.js'
 import { renderReleaseConsole, renderReleaseRows } from './release-console-ui.js'
 import { resolveTmdbOptions } from './settings.js'
+import { spawn } from '#subprocess'
+import { tmpdir } from 'os'
 import { parseBoundary, receiveMultipartUpload } from './multipart.js'
 // The relay's own HTTP client rather than fetch(): Bare ships no global fetch,
 // so a fetch() here would be a ReferenceError the moment the relay runs.
@@ -1476,15 +1478,32 @@ export async function createArchiveConsole({
       return
     }
     let closed = false
-    const onClose = () => { closed = true }
+    let stalled = false
+    // A read that produces nothing for this long is a block the swarm cannot
+    // deliver right now. Closing the reader aborts the pending core.get, the
+    // response ends, and the player re-requests - by then replication has had
+    // time to land the block. Waiting forever is what made buffering never
+    // recover.
+    const READ_STALL_TIMEOUT_MS = 15_000
+    const closeReader = () => { try { reader.close?.() } catch { /* already closed */ } }
+    const onClose = () => {
+      closed = true
+      // A seek aborts the request; close the reader at once so the pending
+      // core.get cannot hold an open core past the response's life.
+      closeReader()
+    }
     res.on?.('close', onClose)
+    const stallTimer = setTimeout(() => { stalled = true; closeReader() }, READ_STALL_TIMEOUT_MS)
+    if (typeof stallTimer.unref === 'function') stallTimer.unref()
     try {
       let offset = start
-      while (offset <= end && !closed) {
+      while (offset <= end && !closed && !stalled) {
         const length = Math.min(RENDITION_CHUNK_BYTES, end - offset + 1)
         let delivered = 0
         for await (const chunk of reader.read({ start: offset, length })) {
-          if (closed) break
+          if (closed || stalled) break
+          // Any byte resets the stall clock: the swarm is delivering.
+          stallTimer.refresh?.()
           const bytes = b4a.from(chunk ?? b4a.alloc(0))
           if (bytes.byteLength === 0) continue
           if (!res.write(bytes)) {
@@ -1495,18 +1514,26 @@ export async function createArchiveConsole({
               res.once?.('drain', drain)
               res.once?.('error', fail)
             })
-            if (closed) break
+            if (closed || stalled) break
           }
           offset += bytes.byteLength
           delivered += bytes.byteLength
           if (offset > end) break
         }
-        // A reader that yields nothing is a block that never arrived; ending
-        // the response tells the player to re-request, not hang forever.
         if (delivered === 0) break
+      }
+      clearTimeout(stallTimer)
+      if (stalled) {
+        logger?.archive?.warn?.('LAN rendition stream stalled; ending response for retry', {
+          publicationId: reader.publicationId,
+          servedBytes: offset - start
+        })
+        try { res.destroy?.() } catch { /* the stalled response may be gone */ }
+        return
       }
       if (!closed) res.end()
     } catch (err) {
+      clearTimeout(stallTimer)
       logger?.archive?.warn?.('LAN rendition stream failed', {
         error: err?.message || String(err),
         publicationId: reader.publicationId
@@ -1514,8 +1541,121 @@ export async function createArchiveConsole({
       try { res.destroy?.() } catch { /* the failed response may be gone */ }
     } finally {
       res.off?.('close', onClose)
-      try { await reader.close?.() } catch { /* best effort */ }
+      closeReader()
     }
+  }
+
+  // ---- Compat transcode playback (HLS) -------------------------------------
+  // Browsers decode H.264/AAC, not the DTS/E-AC-3 audio a BluRay REMUX
+  // carries, and MKV containers themselves are shaky outside Chrome. For any
+  // rendition the direct path cannot serve well, ffmpeg runs on the relay:
+  // video stream-copied, audio transcoded to AAC, packaged as an HLS
+  // playlist of MPEG-TS segments in a temp dir. Seeking works by restarting
+  // the transcode at the requested offset (index.m3u8?t=<seconds>) - each
+  // seek is a fresh, cheap, keyframe-aligned ffmpeg run.
+
+  const compatSessions = new Map()
+  const COMPAT_SESSION_TTL_MS = 10 * 60_000
+
+  function compatKey (publicationId, renditionId) {
+    return `${publicationId}:${renditionId}`
+  }
+
+  function compatSessionDir (publicationId, renditionId, offsetSec) {
+    return resolve(tmpdir(), `peartube-compat-${publicationId.slice(0, 12)}-${renditionId.slice(0, 12)}-${Math.floor(offsetSec)}`)
+  }
+
+  function stopCompatSession (key) {
+    const session = compatSessions.get(key)
+    if (!session) return
+    compatSessions.delete(key)
+    try { session.ffmpeg.kill('SIGKILL') } catch { /* may be gone */ }
+    try { rmSync(session.dir, { recursive: true, force: true }) } catch { /* best effort */ }
+  }
+
+  function stopCompatSessionsFor (publicationId, renditionId) {
+    stopCompatSession(compatKey(publicationId, renditionId))
+  }
+
+  setInterval(() => {
+    const now = Date.now()
+    for (const [key, session] of compatSessions) {
+      if (now - session.lastTouch > COMPAT_SESSION_TTL_MS) stopCompatSession(key)
+    }
+  }, 60_000).unref?.()
+
+  function ffmpegBinary () {
+    return process.env.PEARTUBE_FFMPEG_PATH || 'ffmpeg'
+  }
+
+  // A compat session is keyed by publication, rendition AND offset: seeking
+  // replaces the session. The source is the relay's own loopback /play/pub
+  // link - ffmpeg reads it with plain HTTP range requests, so the swarm
+  // delivers exactly what the transcode consumes.
+  function ensureCompatSession (publicationId, renditionId, offsetSec, sourceUrl) {
+    const key = compatKey(publicationId, renditionId)
+    const existing = compatSessions.get(key)
+    if (existing && existing.offsetSec === offsetSec) {
+      existing.lastTouch = Date.now()
+      return existing
+    }
+    stopCompatSession(key)
+    const dir = compatSessionDir(publicationId, renditionId, offsetSec)
+    try { rmSync(dir, { recursive: true, force: true }) } catch { /* best effort */ }
+    mkdirSync(dir, { recursive: true })
+    const args = [
+      '-hide_banner', '-loglevel', 'error',
+      '-ss', String(offsetSec),
+      '-i', sourceUrl,
+      '-c:v', 'copy',
+      '-c:a', 'aac', '-b:a', '256k', '-ac', '2',
+      '-f', 'hls', '-hls_time', '4', '-hls_list_size', '0',
+      '-hls_segment_filename', resolve(dir, 'seg%d.ts'),
+      '-master_pl_name', 'index.m3u8',
+      resolve(dir, 'prog.m3u8')
+    ]
+    const ffmpeg = spawn(ffmpegBinary(), args, { stdio: ['ignore', 'ignore', 'pipe'] })
+    let stderr = ''
+    ffmpeg.stderr?.on?.('data', (d) => { stderr = (stderr + String(d)).slice(-4000) })
+    const session = {
+      ffmpeg, dir, offsetSec, lastTouch: Date.now(), ready: false, stderr: () => stderr
+    }
+    ffmpeg.on?.('exit', (code) => {
+      if (compatSessions.get(key) === session) {
+        session.exited = true
+        session.exitCode = code
+      }
+    })
+    compatSessions.set(key, session)
+    return session
+  }
+
+  function waitForPlaylist (session, timeoutMs = 12_000) {
+    const playlist = resolve(session.dir, 'prog.m3u8')
+    const began = Date.now()
+    return new Promise((resolve) => {
+      const poll = () => {
+        try {
+          const body = readFileSyncSafe(playlist)
+          if (body && body.includes('#EXTINF')) {
+            session.ready = true
+            resolve(true)
+            return
+          }
+        } catch { /* not written yet */ }
+        if (session.exited || Date.now() - began > timeoutMs) { resolve(false); return }
+        setTimeout(poll, 250)
+      }
+      poll()
+    })
+  }
+
+  function readFileSyncSafe (path) {
+    try { return statSync(path) && readTextFile(path) } catch { return null }
+  }
+  function readTextFile (path) {
+    // Playlists are tiny; sync read keeps the HLS route free of stream plumbing.
+    return readFileSync(path, 'utf8')
   }
 
   // A play link answers with the backend blob server's own loopback link: the
@@ -1587,6 +1727,9 @@ export async function createArchiveConsole({
             // the player UI mounts for LAN browsers too. The candidate-ref
             // redirect route stays loopback-gated in the play route itself.
             playbackUi: true,
+            // Compat (HLS transcode) availability is probed once, cheaply:
+            // the binary is only spawned when a player actually opens it.
+            compatPlayback: Boolean(ffmpegBinary()),
             page
           }, parsed.searchParams))
           return
@@ -1608,6 +1751,60 @@ export async function createArchiveConsole({
           }, { playbackAllowed })
           if (parsed.searchParams.get('notice') === 'empty-submission') home.notice = EMPTY_SUBMISSION_NOTICE
           res.end(renderArchiveWebHome(home, { view: parsed.pathname.slice(1) }))
+          return
+        }
+
+        // Compat playback: on-the-fly HLS transcode. Works for every client
+        // (loopback or LAN) because ffmpeg reads the source via the relay's
+        // own loopback /play/pub link and the console serves the segments.
+        const compatMatch = parsed.pathname.match(/^\/play\/compat\/([^/]+)\/([^/]+)\/(index\.m3u8|seg(\d+)\.ts)$/)
+        if (compatMatch) {
+          let publicationId = null
+          let renditionId = null
+          try {
+            publicationId = decodeURIComponent(compatMatch[1])
+            renditionId = decodeURIComponent(compatMatch[2])
+          } catch { publicationId = null }
+          if (!publicationId || !renditionId) {
+            res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+            res.end('playback unavailable')
+            return
+          }
+          // The transcode reads the source over the relay's own loopback
+          // /play/pub link (ffmpeg speaks HTTP ranges, the swarm delivers
+          // what it asks for). Requires ffmpeg on PATH or PEARTUBE_FFMPEG_PATH.
+          const sourceUrl = `http://127.0.0.1:${server.address().port}/play/pub/${encodeURIComponent(publicationId)}/${encodeURIComponent(renditionId)}`
+          const offsetSec = Math.max(0, Math.floor(Number(parsed.searchParams.get('t')) || 0))
+          const session = ensureCompatSession(publicationId, renditionId, offsetSec, sourceUrl)
+          if (compatMatch[3] === 'index.m3u8') {
+            const ok = await waitForPlaylist(session)
+            if (!ok) {
+              logger?.archive?.warn?.('Compat transcode produced no playlist', {
+                publicationId,
+                stderr: session.stderr?.().slice(0, 300)
+              })
+              res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+              res.end('transcode unavailable')
+              return
+            }
+            const body = readTextFile(resolve(session.dir, 'prog.m3u8'))
+            res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl', 'cache-control': 'no-store' })
+            res.end(body)
+            return
+          }
+          const segPath = resolve(session.dir, `seg${compatMatch[4]}.ts`)
+          try {
+            const stat = statSync(segPath)
+            res.writeHead(200, { 'content-type': 'video/mp2t', 'content-length': String(stat.size), 'cache-control': 'no-store' })
+            const stream = createReadStream(segPath)
+            stream.on?.('error', () => { try { res.destroy?.() } catch { /* gone */ } })
+            stream.pipe(res)
+          } catch {
+            // A segment ffmpeg has not written yet: tell the player to come
+            // back rather than poison the pipeline with a truncated body.
+            res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+            res.end('segment not ready')
+          }
           return
         }
 

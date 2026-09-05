@@ -1764,7 +1764,11 @@ async function buildRelayService({
           !publicationId || !renditionId) return null
       const opened = await runtime.api?.openMediaRendition?.({ publicationId, renditionId, signal })
       if (!opened?.success) {
-        ;(globalThis.__ptDebug = globalThis.__ptDebug || []).push('reader refused: ' + (opened?.errorCode || opened?.error || 'unknown') + ' pub=' + publicationId.slice(0, 10))
+        logger?.archive?.warn?.('openPublicationReader: openMediaRendition refused', {
+          errorCode: opened?.errorCode || null,
+          error: opened?.error || null,
+          publicationId: publicationId.slice(0, 12)
+        })
         return null
       }
       return {

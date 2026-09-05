@@ -1737,6 +1737,24 @@ async function buildRelayService({
     // Catalogued rows open deterministically by publication and rendition: a
     // provider search lease expires in minutes, so a row keyed on one goes
     // dark whenever the lease lapses. Stable ids never do.
+    // LAN playback: a loopback blob-server link is meaningless to another
+    // machine, so this yields a range reader instead. The console's HTTP
+    // surface streams the bytes through itself; no redirect is involved.
+    async openPublicationReader(publicationId, renditionId, { signal = null } = {}) {
+      if (typeof publicationId !== 'string' || typeof renditionId !== 'string' ||
+          !publicationId || !renditionId) return null
+      const opened = await runtime.api?.openMediaRendition?.({ publicationId, renditionId, signal })
+      if (!opened?.success) return null
+      return {
+        publicationId: opened.publicationId || publicationId,
+        renditionId: opened.renditionId || renditionId,
+        assetId: opened.assetId,
+        byteLength: opened.byteLength,
+        mimeType: opened.contentType || 'video/mp4',
+        read: opened.read,
+        close: opened.close
+      }
+    },
     async openPublicationPlayback(publicationId, renditionId, { signal = null } = {}) {
       if (typeof publicationId !== 'string' || typeof renditionId !== 'string' ||
           !publicationId || !renditionId) return null

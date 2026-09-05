@@ -1808,6 +1808,34 @@ export async function createArchiveConsole({
           }
           return
         }
+        // Internal raw-bytes source for the compat transcoder. Loopback
+        // callers only: a reader handed across the network would be an
+        // unauthenticated byte faucet for the whole catalog.
+        if (parsed.pathname.startsWith('/play/source/')) {
+          const srcMatch = parsed.pathname.match(/^\/play\/source\/([^/]+)\/([^/]+)$/)
+          let publicationId = null
+          let renditionId = null
+          if (srcMatch) {
+            try {
+              publicationId = decodeURIComponent(srcMatch[1])
+              renditionId = decodeURIComponent(srcMatch[2])
+            } catch { publicationId = null }
+          }
+          if (!publicationId || !playbackAllowed) {
+            res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+            res.end('playback unavailable')
+            return
+          }
+          const reader = await service.openPublicationReader?.(publicationId, renditionId).catch(() => null)
+          if (!reader || !reader.read) {
+            res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+            res.end('playback unavailable')
+            return
+          }
+          await streamRenditionResponse(req, res, reader)
+          return
+        }
+
 
         if (parsed.pathname.startsWith('/play/pub/')) {
           const pubMatch = parsed.pathname.match(/^\/play\/pub\/([^/]+)\/([^/]+)$/)

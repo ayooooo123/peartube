@@ -1772,9 +1772,8 @@ export async function createArchiveConsole({
             return
           }
           // The transcode reads the source over the relay's own loopback
-          // /play/pub link (ffmpeg speaks HTTP ranges, the swarm delivers
-          // what it asks for). Requires ffmpeg on PATH or PEARTUBE_FFMPEG_PATH.
-          const sourceUrl = `http://127.0.0.1:${server.address().port}/play/pub/${encodeURIComponent(publicationId)}/${encodeURIComponent(renditionId)}`
+          // /play/source endpoint: direct raw bytes without 303 redirects.
+          const sourceUrl = `http://127.0.0.1:${server.address().port}/play/source/${encodeURIComponent(publicationId)}/${encodeURIComponent(renditionId)}`
           const offsetSec = Math.max(0, Math.floor(Number(parsed.searchParams.get('t')) || 0))
           const session = ensureCompatSession(publicationId, renditionId, offsetSec, sourceUrl)
           if (compatMatch[3] === 'index.m3u8') {

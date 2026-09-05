@@ -172,7 +172,7 @@ export function renderReleaseRow(row = {}) {
     : ''
   return `<tr data-id="${escapeHtml(row.id || '')}" data-acquisition="${escapeHtml(row.acquisitionId || '')}" data-name="${escapeHtml(name)}" data-backups="${escapeHtml(String(Math.max(0, Number(row.backups) || 0)))}">
   <td class="pick"><input type="checkbox" class="js-pick" aria-label="Select ${escapeHtml(name)}"></td>
-  <td class="file" title="${escapeHtml(name)}">${play}<button type="button" class="js-open link" title="${escapeHtml(name)}">${escapeHtml(name)}</button>${row.work || !row.coordinates ? '' : `<span class="coords">${escapeHtml(row.coordinates)}</span>`}</td>
+  <td class="file" title="${escapeHtml(name)}"><div class="file-row">${play}<span class="file-name"><button type="button" class="js-open link" title="${escapeHtml(name)}">${escapeHtml(name)}</button>${row.work || !row.coordinates ? '' : ` <span class="coords">${escapeHtml(row.coordinates)}</span>`}</span></div></td>
   <td class="work">${row.work
     ? `${escapeHtml(row.work)}${row.workLabel ? `<span class="coords">${escapeHtml(row.workLabel)}</span>` : ''}`
     : '<span class="none" title="No publisher metadata named this work">—</span>'}</td>
@@ -322,12 +322,13 @@ export function renderReleaseConsole(model = {}, params = new URLSearchParams())
     .tag.res-partial, .tag.res-transferring { color: var(--amber); border-color: rgba(255,202,122,0.3); }
     .reach { font-variant-numeric: tabular-nums; }
     .uncatalogued { color: var(--amber); margin-left: 2px; }
-    .coords { display: block; color: var(--muted); font-size: 11px; }
-    td.file .link { background: none; border: 0; color: var(--ink); font: inherit; cursor: pointer; padding: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; display: block; font-family: inherit; }
-    td.file .link:hover { color: var(--mint); }
-    td.file .play { float: right; margin-left: 8px; }
-    a.play { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border: 1px solid rgba(158,255,208,0.35); border-radius: 999px; color: var(--mint); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; background: rgba(158,255,208,0.08); }
-    a.play:hover { background: rgba(158,255,208,0.18); border-color: var(--mint); }
+    .coords { color: var(--muted); font-size: 11px; }
+    td.file .file-row { display: flex; align-items: center; gap: 10px; }
+    td.file .file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    td.file .file-name .link { background: none; border: 0; color: var(--ink); font: inherit; cursor: pointer; padding: 0; text-align: left; font-family: inherit; }
+    td.file .file-name .link:hover { color: var(--mint); }
+    a.play { flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 4px 12px; border: 1px solid rgba(158,255,208,0.35); border-radius: 999px; color: var(--mint); font-size: 12px; font-weight: 700; letter-spacing: 0.02em; background: rgba(158,255,208,0.08); white-space: nowrap; }
+    a.play:hover { background: rgba(158,255,208,0.22); border-color: var(--mint); }
     td.work { color: var(--ink); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .none { color: rgba(139,147,167,0.6); }
     .tag { padding: 2px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); }

@@ -1731,13 +1731,25 @@ async function buildRelayService({
     },
     async openVerifiedPlayback(candidateRef, { signal = null } = {}) {
       if (!CANDIDATE_REF_PATTERN.test(candidateRef || '')) return null
+      const opened = await this.openPlayback({ candidateRef }, { signal })
+      return opened
+    },
+    // Catalogued rows open deterministically by publication and rendition: a
+    // provider search lease expires in minutes, so a row keyed on one goes
+    // dark whenever the lease lapses. Stable ids never do.
+    async openPublicationPlayback(publicationId, renditionId, { signal = null } = {}) {
+      if (typeof publicationId !== 'string' || typeof renditionId !== 'string' ||
+          !publicationId || !renditionId) return null
+      return this.openPlayback({ publicationId, renditionId }, { signal })
+    },
+    async openPlayback(body, { signal = null } = {}) {
       const state = companionServer?.state?.()
       if (state?.enabled !== true || state.transport !== 'tcp' ||
           typeof companionServer.dispatchInProcess !== 'function') return null
       const opened = await companionServer.dispatchInProcess({
         method: 'POST',
         url: '/api/v2/streams/open',
-        body: { candidateRef },
+        body,
         signal
       })
       if (opened?.statusCode !== 200 || typeof opened.body?.url !== 'string') return null

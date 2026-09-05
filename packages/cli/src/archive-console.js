@@ -1012,6 +1012,7 @@ export async function createArchiveConsole({
             mediaCoordinates: source.mediaCoordinates || null,
             freshArchivists: Math.max(0, Number(releaseMirror?.freshArchivists) || 0),
             acquiredAt: releaseJob?.completedAt || releaseJob?.updatedAt || null,
+            playable: playbackAllowed,
             candidateRef: playbackAllowed && CANDIDATE_REF_PATTERN.test(source?.candidateRef || '')
               ? source.candidateRef
               : null
@@ -1077,6 +1078,7 @@ export async function createArchiveConsole({
             // here knows that, and implying it would be a guess.
             seasonNumbers: [...seasons.keys()].sort((left, right) => left - right),
             episodeCount,
+            playable: playbackAllowed,
             candidateRef: playbackAllowed
               ? (CANDIDATE_REF_PATTERN.test(item?.candidateRef || '')
                   ? item.candidateRef
@@ -1146,6 +1148,7 @@ export async function createArchiveConsole({
       ...releaseResidency(acquisition),
       updatedAt: Number(release.acquiredAt) || 0,
       candidateRef: release.candidateRef || null,
+      playable: release.playable === true,
       publicationId: release.publicationId,
       renditionId: release.renditionId || null,
       errorCode: null,
@@ -1517,10 +1520,22 @@ export async function createArchiveConsole({
             res.end('playback requires a loopback archive console')
             return
           }
+          const pubMatch = parsed.pathname.match(/^\/play\/pub\/([^/]+)\/([^/]+)$/)
           const candidateRef = playbackCandidateRef(req.url)
-          const opened = candidateRef
-            ? await service.openVerifiedPlayback?.(candidateRef).catch(() => null)
-            : null
+          let opened = null
+          if (pubMatch) {
+            let publicationId = null
+            let renditionId = null
+            try {
+              publicationId = decodeURIComponent(pubMatch[1])
+              renditionId = decodeURIComponent(pubMatch[2])
+            } catch { publicationId = null }
+            opened = publicationId
+              ? await service.openPublicationPlayback?.(publicationId, renditionId).catch(() => null)
+              : null
+          } else if (candidateRef) {
+            opened = await service.openVerifiedPlayback?.(candidateRef).catch(() => null)
+          }
           const location = playbackLocation(opened)
           if (!location) {
             res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })

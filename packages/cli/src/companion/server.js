@@ -208,7 +208,14 @@ export function createCompanionServer ({
         await streamRoute.handle(request, response, { signal: controller.signal })
         return
       }
-      const requiresAuth = config.auth === true && Boolean(config.sharedSecret)
+      const isLocal = loopbackAddress(request.socket?.remoteAddress)
+      const sourceGrantRequest = /^\/api\/v2\/acquisitions\/[^/?]+\/source-grants(?:\?|$)/.test(request.url || '')
+      // Docker bridge callers are not loopback. Private grants on the shared
+      // public listener must prove their identity even when public API auth is off.
+      const requiresAuth = config.auth === true || (sourceGrantRequest && !isLocal)
+      if (requiresAuth && !config.sharedSecret) {
+        throw new CompanionRequestError(401, 'AUTH_REQUIRED', 'Companion authentication is required')
+      }
       let authMetadata = null
       if (requiresAuth) {
         authMetadata = prevalidateControlRequest({
@@ -237,7 +244,8 @@ export function createCompanionServer ({
         principal: Object.freeze({
           ...principalBase,
           id: request.headers?.['x-peartube-client'] || config.client || 'anonymous',
-          isLocal: loopbackAddress(request.socket?.remoteAddress)
+          isLocal,
+          isAuthenticated: requiresAuth && authMetadata !== null
         }),
         serverState: publicState,
         signal: controller.signal

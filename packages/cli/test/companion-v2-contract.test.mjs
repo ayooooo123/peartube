@@ -195,7 +195,7 @@ test('route scopes separate acquisition request, read, cancel and private grant 
   t.is((await router.dispatch(request('POST', '/api/v2/acquisitions/acq-1/retry', null, { principal: onlyRetry }))).statusCode, 200)
 })
 
-test('private source grants are accepted only from loopback or in-process and never echoed', async (t) => {
+test('unverified remote source grants are refused and local grants are never echoed', async (t) => {
   let attached = null
   const router = createCompanionRouter({
     service: {

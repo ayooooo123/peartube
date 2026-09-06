@@ -111,7 +111,11 @@ docker compose -f docker-compose.relay.yml exec relay \
 
 Use `docker-compose.local-relay.yml` for the local directory mirror workflow. Adjust the host-side `/home/user/peartube-local-videos` volume before running it.
 
-The relay also provides a machine API (`/api/v2`) over HTTP on the same port (8174) as the Web UI. It is open by default (Nostr relay style) with no shared secret required. Standard Docker port publishing (`8174:8174`) exposes both the Web UI and the machine API.
+The relay also provides a machine API (`/api/v2`) over HTTP on the same port (8174) as the Web UI. Public routes are open by default (Nostr relay style). Standard Docker port publishing (`8174:8174`) exposes both the Web UI and the machine API; no second API port is needed.
+
+Private source grants from non-loopback callers, including a client on the Docker host, require the existing signed-request authentication. Set matching `PEARTUBE_COMPANION_CLIENT` and `PEARTUBE_COMPANION_SHARED_SECRET` values on the relay and client. Public routes can remain open with `PEARTUBE_COMPANION_AUTH=false`; unsigned, modified, and replayed source grants are rejected. HTTP is not encrypted: use a trusted network or TLS termination for private grants.
+
+For callback-backed acquisitions, also set `PEARTUBE_COMPANION_SOURCE_ORIGIN` to the client address reachable from inside the container, plus its matching `PEARTUBE_COMPANION_SOURCE_CLIENT` and `PEARTUBE_COMPANION_SOURCE_SHARED_SECRET`. These credentials authenticate the reverse direction and do not replace the control-request credentials. Store secrets in a mode-0600 environment file, not in source control. After a relay data reset, update any client-pinned publisher ID to the relay's new local publisher ID.
 
 Cloud offload is optional and S3-compatible only. Configure the bucket, endpoint, region, access key, and secret key through the relay environment shown in `docker-compose.relay.yml`. Offload stores verified asset blocks; it is not an HTTP playback origin.
 

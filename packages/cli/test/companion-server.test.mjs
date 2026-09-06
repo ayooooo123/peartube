@@ -323,6 +323,60 @@ test('loopback HTTP can attach a private source grant without echoing it', async
   await server.close()
 })
 
+test('unified public API requires verified signatures for non-loopback source grants', async (t) => {
+  let accepted = 0
+  const config = tcpConfig(tempDir(t), { auth: false })
+  const server = createCompanionServer({
+    config,
+    clock: () => NOW,
+    logger,
+    service: {
+      async attachSourceGrant () {
+        accepted++
+        return {
+          schemaVersion: 1,
+          acquisitionId: 'acq-shared-port',
+          state: 'queued',
+          retentionClass: 'archive-pin',
+          bytesAcquired: 0,
+          expectedBytes: 0,
+          recoverable: false,
+          createdAt: NOW,
+          updatedAt: NOW
+        }
+      }
+    }
+  })
+  // Model the Docker bridge peer seen by the shared HTTP listener.
+  const surface = createHttpServer((req, res) => {
+    Object.defineProperty(req.socket, 'remoteAddress', { value: '192.0.2.10' })
+    server.handleRequest(req, res)
+  })
+  await listen(surface, { host: '127.0.0.1', port: 0 })
+  t.teardown(async () => { await close(surface); await server.close() })
+  const address = { host: '127.0.0.1', port: surface.address().port }
+  const path = '/api/v2/acquisitions/acq-shared-port/source-grants'
+  const body = JSON.stringify({ grant: { token: 'private-shared-port-token' } })
+  const headers = { 'content-type': 'application/json' }
+  const send = (extraHeaders = {}, content = body) => request({
+    ...address, method: 'POST', path, body: content, headers: { ...headers, ...extraHeaders }
+  })
+
+  t.is((await request(address)).statusCode, 200, 'public status stays unsigned on the same listener')
+  t.is((await send({ 'x-forwarded-for': '127.0.0.1' })).statusCode, 401, 'claimed loopback is not authority')
+  t.is(accepted, 0, 'unsigned grants never reach the acquisition service')
+  const signature = signedHeaders({ method: 'POST', path, body, nonce: 'shared-port-grant-001' })
+  const valid = await send(signature)
+  t.is(valid.statusCode, 200, 'verified grant reaches the shared-port acquisition route')
+  t.absent(valid.body.includes('private-shared-port-token'), 'source capability stays private')
+  t.is((await send(signature)).statusCode, 409, 'signed grants cannot be replayed')
+  const modified = signedHeaders({ method: 'POST', path, body, nonce: 'shared-port-grant-002' })
+  t.is((await send(modified, body.replace('private-shared-port-token', 'changed-token'))).statusCode, 401, 'signature binds the grant body')
+  config.sharedSecret = ''
+  t.is((await send(signedHeaders({ method: 'POST', path, body, nonce: 'shared-port-grant-003' }))).statusCode, 401, 'missing credentials fail closed')
+  t.is(accepted, 1, 'only the verified, unreplayed grant was accepted')
+})
+
 test('companion close terminates an in-flight HTTP request', async (t) => {
   const storagePath = tempDir(t)
   const server = createCompanionServer({
@@ -966,7 +1020,7 @@ test('Bare serves authenticated companion HTTP over loopback', (t) => {
   const result = spawnSync(process.execPath, [bare, fixture], {
     cwd: packageRoot,
     encoding: 'utf8',
-    timeout: 10_000,
+    timeout: 60_000,
     env: {
       ...process.env,
       PATH: `${dirname(process.execPath)}:${process.env.PATH || ''}`

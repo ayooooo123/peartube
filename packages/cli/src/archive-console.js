@@ -1,3 +1,4 @@
+import process from '#process'
 import { createServer } from '#http'
 import { createReadStream, mkdirSync, readFileSync, rmSync, statSync } from '#fs'
 import { basename, dirname, relative, resolve } from '#path'
@@ -8,7 +9,7 @@ import { renderArchiveTui, renderArchiveWebHome } from './archive-ui.js'
 import { renderReleaseConsole, renderReleaseRows } from './release-console-ui.js'
 import { resolveTmdbOptions } from './settings.js'
 import { spawn } from '#subprocess'
-import { tmpdir } from 'os'
+import { tmpdir } from '#os'
 import { parseBoundary, receiveMultipartUpload } from './multipart.js'
 // The relay's own HTTP client rather than fetch(): Bare ships no global fetch,
 // so a fetch() here would be a ReferenceError the moment the relay runs.

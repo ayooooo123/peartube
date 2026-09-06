@@ -19,6 +19,10 @@
     "prepare:docker-artifacts": "node ./scripts/prepare-docker-artifacts.mjs"
   },
   "imports": {
+    "#os": {
+      "bare": "./src/shims/os.bare.js",
+      "default": "./src/shims/os.node.js"
+    },
     "#fs": {
       "bare": "./src/shims/fs.bare.js",
       "default": "./src/shims/fs.node.js"
@@ -59,6 +63,7 @@
     "b4a": "^1.8.0",
     "bare-dns": "^2.1.4",
     "bare-http1": "^4.5.6",
+    "bare-os": "^3.9.3",
     "bare-net": "^2.3.3",
     "bare-https": "^3.0.0",
     "bare-process": "^4.4.1",

@@ -211,6 +211,7 @@ function requirePrincipal (input, scope) {
     publisherIds: Object.freeze(publisherIds),
     allowedPublisherIds: Object.freeze(publisherIds),
     isLocal: value.isLocal === true,
+    isAuthenticated: value.isAuthenticated === true,
     scopes
   })
 }
@@ -507,8 +508,8 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
 
   async function attachSourceGrant (input, acquisitionPart) {
     const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.acquisitionGrant)
-    if (input.inProcess !== true && principal.isLocal !== true) {
-      throw contractError(403, 'PRIVATE_ROUTE_REQUIRES_LOCAL_TRANSPORT', 'Source grants require a local protected transport')
+    if (input.inProcess !== true && principal.isLocal !== true && principal.isAuthenticated !== true) {
+      throw contractError(403, 'PRIVATE_ROUTE_REQUIRES_AUTHENTICATION', 'Source grants require authenticated or local protected transport')
     }
     const acquisitionId = decodedSegment(acquisitionPart, 'acquisitionId')
     const { grant } = decodeSourceGrantBody(input.body)

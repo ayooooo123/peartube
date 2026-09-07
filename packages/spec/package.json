@@ -17,6 +17,6 @@
     "hyperschema": "^1.20.1"
   },
   "devDependencies": {
-    "brittle": "^3.19.1"
+    "brittle": "^4.1.1"
   }
 }

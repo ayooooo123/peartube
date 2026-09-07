@@ -57,7 +57,7 @@
     "node": ">=18.0.0 <23"
   },
   "dependencies": {
-    "bare-build": "^0.5.3",
+    "bare-build": "^1.0.4",
     "bare-ffmpeg": "file:packages/bare-ffmpeg",
     "bare-runtime": "^1.28.4",
     "bare-worker": "^4.1.6",

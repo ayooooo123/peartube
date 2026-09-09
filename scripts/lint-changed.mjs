@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 
 const EXTENSION_RE = /\.(js|jsx|mjs|cjs|ts|tsx)$/
+const PACKAGE_LOCAL_LINT_PREFIXES = ['packages/private-routes/']
 
 function runGit(args) {
   return execFileSync('git', args, { encoding: 'utf8' }).trim()
@@ -29,7 +30,13 @@ function getChangedFiles() {
   const mergeBase = runGit(['merge-base', baseRef, 'HEAD'])
   const output = runGit(['diff', '--name-only', '--diff-filter=ACMR', mergeBase, 'HEAD'])
   if (!output) return []
-  return output.split('\n').filter((file) => EXTENSION_RE.test(file))
+  return output
+    .split('\n')
+    .filter(
+      (file) =>
+        EXTENSION_RE.test(file) &&
+        !PACKAGE_LOCAL_LINT_PREFIXES.some((prefix) => file.startsWith(prefix)),
+    )
 }
 
 const changedFiles = getChangedFiles()

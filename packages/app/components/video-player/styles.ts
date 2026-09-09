@@ -5,39 +5,40 @@
  */
 
 import { StyleSheet } from 'react-native'
+import { ABSOLUTE_FILL } from '@/lib/absolute-fill'
 import { colors } from '@peartube/core'
 import { MINI_PIP_WIDTH, MINI_PIP_HEIGHT } from './constants'
 
 const PLAYER_COLORS = {
   brandPurple: colors.primary,
-  brandPurpleAlpha35: 'rgba(94, 106, 210, 0.35)',
-  whiteAlpha15: 'rgba(255, 255, 255, 0.15)',
-  black: '#000',
-  blackShadow: '#000000',
-} as const;
+  brandPurpleAlpha35: colors.primaryLight,
+  whiteAlpha15: colors.borderSubtle,
+  black: colors.contrast,
+  blackShadow: colors.contrast
+  } as const;
 
 const PLAYER_Z_INDEX = {
   overlay: 9999,
   controls: 15,
-  base: 10,
-} as const;
+  base: 10
+  } as const;
 
 export const styles = StyleSheet.create({
   container: {
     // Use black background to ensure PiP shows black (not grey) for any offset areas
     // This makes the video look properly letterboxed rather than broken
     backgroundColor: PLAYER_COLORS.black,
-    overflow: 'hidden',
+    overflow: 'hidden'
   },
   // Landscape fullscreen styles
   landscapeContainer: {
-    ...StyleSheet.absoluteFillObject,
+    ...ABSOLUTE_FILL,
     backgroundColor: PLAYER_COLORS.black,
-    zIndex: PLAYER_Z_INDEX.overlay,
+    zIndex: PLAYER_Z_INDEX.overlay
   },
   landscapeAnimatedContainer: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: PLAYER_COLORS.black,
+    ...ABSOLUTE_FILL,
+    backgroundColor: PLAYER_COLORS.black
   },
   landscapeExitButton: {
     position: 'absolute',
@@ -45,21 +46,21 @@ export const styles = StyleSheet.create({
     right: 16,
     width: 44,
     height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 4,
+    backgroundColor: colors.overlayButton,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 20,
+    zIndex: 20
   },
   landscapeTimeDisplay: {
     position: 'absolute',
     bottom: 40,
     left: 16,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: colors.overlayButton,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 4,
-    zIndex: 20,
+    zIndex: 20
   },
   landscapeProgressContainer: {
     position: 'absolute',
@@ -68,35 +69,35 @@ export const styles = StyleSheet.create({
     right: 16,
     height: 24,
     justifyContent: 'center',
-    zIndex: 20,
+    zIndex: 20
   },
   landscapeVideoWrapper: {
-    ...StyleSheet.absoluteFillObject,
+    ...ABSOLUTE_FILL,
     flex: 1,
-    backgroundColor: PLAYER_COLORS.black,
+    backgroundColor: PLAYER_COLORS.black
   },
   videoWrapper: {
     backgroundColor: PLAYER_COLORS.black,
-    overflow: 'hidden',
+    overflow: 'hidden'
   },
   videoBackground: {
     flex: 1,
-    backgroundColor: PLAYER_COLORS.black,
+    backgroundColor: PLAYER_COLORS.black
   },
   landscapeVideoBackground: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: PLAYER_COLORS.black,
+    ...ABSOLUTE_FILL,
+    backgroundColor: PLAYER_COLORS.black
   },
   videoPlaceholder: {
     flex: 1,
     backgroundColor: colors.bgHover,
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: 'center'
   },
   placeholderText: {
     color: colors.primary,
     fontSize: 32,
-    fontWeight: '600',
+    fontWeight: '600'
   },
   castPlaceholder: {
     flex: 1,
@@ -104,16 +105,16 @@ export const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     gap: 8,
-    paddingHorizontal: 24,
+    paddingHorizontal: 24
   },
   castPlaceholderTitle: {
     color: colors.text,
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '600'
   },
   castPlaceholderSubtitle: {
     color: colors.textMuted,
-    fontSize: 12,
+    fontSize: 12
   },
   castBanner: {
     marginTop: 8,
@@ -122,36 +123,36 @@ export const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 999,
+    borderRadius: 4,
     backgroundColor: colors.bgCard,
-    alignSelf: 'flex-start',
+    alignSelf: 'flex-start'
   },
   castBannerText: {
     color: colors.text,
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '600'
   },
   castBannerAction: {
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: colors.bgSecondary,
+    borderRadius: 4,
+    backgroundColor: colors.bgSecondary
   },
   castBannerActionText: {
     color: colors.text,
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: '600'
   },
   loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    ...ABSOLUTE_FILL,
+    backgroundColor: colors.scrim,
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: 'center'
   },
   loadingText: {
-    color: '#fff',
+    color: colors.text,
     marginTop: 12,
-    fontSize: 14,
+    fontSize: 14
   },
   // Custom controls overlay - positioning handled by controlsOverlayStyle animated style
   controlsOverlayBase: {
@@ -160,29 +161,34 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 36,
+    gap: 36
   },
   controlButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    width: 56,
+    height: 56,
+    borderRadius: 4,
+    backgroundColor: colors.overlayButton,
+    borderWidth: 2,
+    borderColor: colors.border,
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'center'
   },
   controlButtonLarge: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    width: 56,
+    height: 56,
+    borderRadius: 4,
+    backgroundColor: colors.overlayButton,
+    borderWidth: 2,
+    borderColor: colors.border,
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'center'
   },
   controlButtonText: {
-    color: '#fff',
+    color: colors.primary,
     fontSize: 11,
+    fontFamily: 'JetBrainsMono-Medium',
     fontWeight: '700',
-    marginTop: 2,
+    marginTop: 2
   },
   seekFeedback: {
     position: 'absolute',
@@ -190,117 +196,116 @@ export const styles = StyleSheet.create({
     marginTop: -40,
     width: 80,
     height: 80,
-    borderRadius: 40,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: 4,
+    backgroundColor: colors.overlayButton,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: PLAYER_Z_INDEX.base,
+    zIndex: PLAYER_Z_INDEX.base
   },
   seekFeedbackLeft: {
-    left: '15%',
+    left: '15%'
   },
   seekFeedbackRight: {
-    right: '15%',
+    right: '15%'
   },
   seekFeedbackText: {
-    color: '#fff',
+    color: colors.primary,
     fontSize: 14,
+    fontFamily: 'JetBrainsMono-Medium',
     fontWeight: '600',
-    marginTop: 4,
+    marginTop: 4
   },
   minimizeButton: {
     position: 'absolute',
     left: 12,
-    zIndex: PLAYER_Z_INDEX.base,
+    zIndex: PLAYER_Z_INDEX.base
   },
   minimizeButtonInner: {
     width: 40,
     height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    borderRadius: 4,
+    backgroundColor: colors.overlayMedium,
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: 'center'
   },
   speedButton: {
     position: 'absolute',
     right: 12,
-    zIndex: PLAYER_Z_INDEX.base,
+    zIndex: PLAYER_Z_INDEX.base
   },
   speedButtonInner: {
     minWidth: 50,
     height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 4,
+    backgroundColor: colors.overlayButton,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 10,
+    paddingHorizontal: 10
   },
   speedButtonText: {
-    color: '#fff',
+    color: colors.text,
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '600'
   },
   castButton: {
     position: 'absolute',
     right: 60,
-    zIndex: PLAYER_Z_INDEX.base,
-    elevation: 10,
+    zIndex: PLAYER_Z_INDEX.base
   },
   castButtonInner: {
     width: 40,
     height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 4,
+    backgroundColor: colors.overlayButton,
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: 'center'
   },
   fullscreenButton: {
     position: 'absolute',
     right: 12,
-    zIndex: PLAYER_Z_INDEX.base,
-    elevation: 10,
+    zIndex: PLAYER_Z_INDEX.base
   },
   fullscreenButtonLandscape: {
     bottom: 16,
-    right: 16,
+    right: 16
   },
   fullscreenButtonInner: {
     width: 40,
     height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 4,
+    backgroundColor: colors.overlayButton,
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: 'center'
   },
   // ── Scrubber: Track layers (spec §1, §9) ──────────────────────────────
   scrubberTrackWrapper: {
     position: 'relative',
-    height: 8,
+    height: 8
   },
   scrubberTrackBg: {
     position: 'absolute',
     left: 0,
     right: 0,
     top: 0,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: PLAYER_COLORS.whiteAlpha15,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: colors.borderLight
   },
   scrubberBufferFill: {
     position: 'absolute',
     left: 0,
     top: 0,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: PLAYER_COLORS.brandPurpleAlpha35,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: colors.textDisabled
   },
   scrubberPlayedFill: {
     position: 'absolute',
     left: 0,
     top: 0,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: PLAYER_COLORS.brandPurple,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: colors.primary
   },
   // ── Scrubber: Handle (spec §3) ───────────────────────────────────────
   scrubberHandleNew: {
@@ -308,41 +313,30 @@ export const styles = StyleSheet.create({
     left: 0,
     width: 12,
     height: 12,
-    borderRadius: 6,
-    backgroundColor: '#FFFFFF',
-    shadowColor: PLAYER_COLORS.blackShadow,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.40,
-    shadowRadius: 3,
-    elevation: 4,
+    borderRadius: 2,
+    backgroundColor: colors.primary
   },
   // ── Scrubber: Tooltip (spec §4) ──────────────────────────────────────
   scrubberTooltip: {
     position: 'absolute',
     left: 0,
-    alignItems: 'center',
+    alignItems: 'center'
   },
   scrubberTooltipBubble: {
-    backgroundColor: '#1f1f23',
-    borderRadius: 8,
+    backgroundColor: colors.surface,
+    borderRadius: 2,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: 'rgba(48, 48, 53, 0.8)',
-    shadowColor: PLAYER_COLORS.blackShadow,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.50,
-    shadowRadius: 6,
-    elevation: 8,
+    borderWidth: 2,
+    borderColor: colors.border
   } as any,
   scrubberTooltipText: {
-    color: '#efeff1',
-    fontSize: 13,
-    fontWeight: '600',
-    letterSpacing: 0.3,
-    fontVariant: ['tabular-nums'] as any,
+    color: colors.text,
+    fontSize: 12,
+    fontFamily: 'JetBrainsMono-Regular',
+    fontWeight: '400',
     textAlign: 'center',
-    minWidth: 40,
+    minWidth: 40
   } as any,
   scrubberTooltipArrow: {
     width: 0,
@@ -352,35 +346,35 @@ export const styles = StyleSheet.create({
     borderRightWidth: 6,
     borderRightColor: 'transparent',
     borderTopWidth: 6,
-    borderTopColor: '#1f1f23',
+    borderTopColor: colors.surface,
     marginTop: -1,
-    alignSelf: 'center',
+    alignSelf: 'center'
   } as any,
   // Legacy thin progress bar styles kept for web fallback
   thinProgressBg: {
     height: 3,
-    backgroundColor: 'rgba(255,255,255,0.3)',
+    backgroundColor: colors.borderLight
   },
   thinProgressFill: {
     height: '100%',
-    backgroundColor: colors.primary,
+    backgroundColor: colors.primary
   },
   timeDisplayRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'center'
   },
   timeTextCurrent: {
-    color: '#efeff1',
+    color: colors.text,
     fontSize: 12,
     fontWeight: '500',
-    fontVariant: ['tabular-nums'] as any,
+    fontVariant: ['tabular-nums'] as any
   } as any,
   timeTextMuted: {
-    color: '#7a7a85',
+    color: colors.textMuted,
     fontSize: 12,
     fontWeight: '500',
-    fontVariant: ['tabular-nums'] as any,
+    fontVariant: ['tabular-nums'] as any
   } as any,
   timeDisplayAction: {
     minWidth: 36,
@@ -388,7 +382,7 @@ export const styles = StyleSheet.create({
     padding: 8,
     justifyContent: 'center',
     alignItems: 'center',
-    opacity: 0.8,
+    opacity: 0.8
   },
   // Fullscreen progress bar (shown with controls)
   fullscreenProgressContainer: {
@@ -399,35 +393,38 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    zIndex: PLAYER_Z_INDEX.base,
+    zIndex: PLAYER_Z_INDEX.base
   },
   fullscreenProgressBar: {
     flex: 1,
     height: 24,
-    justifyContent: 'center',
+    justifyContent: 'center'
   },
   fullscreenProgressBg: {
     height: 4,
     backgroundColor: 'transparent',
     borderRadius: 2,
-    overflow: 'hidden',
+    overflow: 'hidden'
   },
   fullscreenProgressFill: {
     height: '100%',
     backgroundColor: colors.primary,
-    borderRadius: 2,
+    borderRadius: 2
   },
   seekHandle: {
     position: 'absolute',
     top: -5,
-    width: 14,
-    height: 14,
-    borderRadius: 7,
+    width: 12,
+    height: 12,
+    borderRadius: 2,
     backgroundColor: colors.primary,
-    marginLeft: -7,
+    marginLeft: -6
   },
   timeText: {
     minWidth: 40,
+    fontFamily: 'JetBrainsMono-Regular',
+    fontSize: 12,
+    color: colors.text
   },
   // Mini player styles
   miniInfo: {
@@ -437,21 +434,21 @@ export const styles = StyleSheet.create({
     top: 0,
     height: MINI_PIP_HEIGHT,
     justifyContent: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: 12
   },
   miniInfoText: {
     flex: 1,
-    justifyContent: 'center',
+    justifyContent: 'center'
   },
   miniTitle: {
     color: colors.text,
     fontSize: 14,
-    fontWeight: '500',
+    fontWeight: '500'
   },
   miniChannel: {
     color: colors.textMuted,
     fontSize: 12,
-    marginTop: 2,
+    marginTop: 2
   },
   miniControls: {
     position: 'absolute',
@@ -459,13 +456,13 @@ export const styles = StyleSheet.create({
     top: 0,
     height: MINI_PIP_HEIGHT,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'center'
   },
   miniControlButton: {
     width: 44,
     height: 44,
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: 'center'
   },
   miniProgressBar: {
     position: 'absolute',
@@ -473,17 +470,17 @@ export const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 2,
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: colors.borderSubtle
   },
   miniProgressFill: {
     height: '100%',
-    backgroundColor: colors.primary,
+    backgroundColor: colors.primary
   },
   miniPipOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    ...ABSOLUTE_FILL,
+    backgroundColor: colors.overlayMedium,
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: 'center'
   },
   miniPipTopRow: {
     position: 'absolute',
@@ -491,15 +488,15 @@ export const styles = StyleSheet.create({
     left: 8,
     right: 8,
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'space-between'
   },
   miniPipSmallButton: {
     width: 32,
     height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: 4,
+    backgroundColor: colors.scrim,
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: 'center'
   },
   miniPipPlayPauseButton: {
     position: 'absolute',
@@ -509,32 +506,32 @@ export const styles = StyleSheet.create({
     height: 40,
     marginTop: -20,
     marginLeft: -20,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: 4,
+    backgroundColor: colors.scrim,
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: 'center'
   } as any,
   miniPipControlsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 16,
+    gap: 16
   },
   miniPipSkipButton: {
     width: 32,
     height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    borderRadius: 4,
+    backgroundColor: colors.overlayButton,
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: 'center'
   },
   miniPipPlayButton: {
     width: 44,
     height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    borderRadius: 4,
+    backgroundColor: colors.overlayButton,
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: 'center'
   },
   miniPipProgressBar: {
     position: 'absolute',
@@ -542,11 +539,11 @@ export const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 3,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    backgroundColor: colors.borderLight
   },
   miniPipProgressFill: {
     height: '100%',
-    backgroundColor: colors.primary,
+    backgroundColor: colors.primary
   },
   // Fullscreen content styles
   // Black background ensures PiP shows video + black (not video + colored content)
@@ -554,26 +551,26 @@ export const styles = StyleSheet.create({
   fullscreenContent: {
     // Position is set by animated style (absolute with top: videoHeight)
     // No flex needed since we use explicit positioning
-    backgroundColor: PLAYER_COLORS.black,
+    backgroundColor: PLAYER_COLORS.black
   },
   scrollContent: {
     flex: 1,
-    backgroundColor: PLAYER_COLORS.black,
+    backgroundColor: PLAYER_COLORS.black
   },
   videoInfo: {
     padding: 16,
-    backgroundColor: PLAYER_COLORS.black,
+    backgroundColor: PLAYER_COLORS.black
   },
   videoTitle: {
     color: colors.text,
     fontSize: 18,
     fontWeight: '600',
-    lineHeight: 24,
+    lineHeight: 24
   },
   videoMeta: {
     color: colors.textMuted,
     fontSize: 13,
-    marginTop: 6,
+    marginTop: 6
   },
   actions: {
     flexDirection: 'row',
@@ -584,7 +581,7 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 8,
     borderTopWidth: 1,
     borderBottomWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.border
   },
   actionButton: {
     width: '16.66%',
@@ -592,111 +589,120 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 4,
     paddingVertical: 8,
+    borderWidth: 2,
+    borderColor: colors.border,
+    borderRadius: 4,
   },
   actionLabel: {
     color: colors.text,
-    fontSize: 10,
+    fontSize: 11,
     marginTop: 4,
     maxWidth: '100%',
     textAlign: 'center',
+    fontFamily: 'JetBrainsMono-Medium',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
   },
   actionLabelActive: {
-    color: colors.primary,
+    color: colors.primary
+  },
+  actionButtonActive: {
+    borderColor: colors.primary,
   },
   toast: {
     position: 'absolute',
     left: 16,
     right: 16,
     padding: 12,
-    borderRadius: 12,
-    backgroundColor: 'rgba(0,0,0,0.85)',
+    borderRadius: 4,
+    backgroundColor: colors.scrim,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.border
   },
   toastTitle: {
     color: colors.text,
     fontSize: 13,
     fontWeight: '700',
-    marginBottom: 2,
+    marginBottom: 2
   },
   toastText: {
     color: colors.textMuted,
     fontSize: 12,
-    lineHeight: 16,
+    lineHeight: 16
   },
   channelRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
+    padding: 16
   },
   channelAvatar: {
     width: 44,
     height: 44,
-    borderRadius: 22,
+    borderRadius: 4,
     backgroundColor: colors.primary,
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: 'center'
   },
   channelAvatarText: {
-    color: '#fff',
+    color: colors.text,
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: '600'
   },
   channelInfo: {
     flex: 1,
-    marginLeft: 12,
+    marginLeft: 12
   },
   channelName: {
     color: colors.text,
     fontSize: 15,
-    fontWeight: '500',
+    fontWeight: '500'
   },
   channelSubs: {
     color: colors.textMuted,
     fontSize: 12,
-    marginTop: 2,
+    marginTop: 2
   },
   subscribeButton: {
     backgroundColor: colors.primary,
     paddingHorizontal: 16,
     paddingVertical: 8,
-    borderRadius: 20,
+    borderRadius: 4
   },
   subscribeText: {
-    color: '#fff',
+    color: colors.text,
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '600'
   },
   divider: {
     height: 8,
     backgroundColor: colors.bgSecondary,
-    marginVertical: 8,
+    marginVertical: 8
   },
   description: {
-    padding: 16,
+    padding: 16
   },
   descriptionText: {
     color: colors.textSecondary,
     fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 20
   },
   // Comments styles
   commentsSection: {
     paddingHorizontal: 16,
     paddingTop: 8,
-    paddingBottom: 16,
+    paddingBottom: 16
   },
   commentsTitle: {
     color: colors.text,
     fontSize: 16,
     fontWeight: '600',
-    marginBottom: 10,
+    marginBottom: 10
   },
   commentsHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 10,
+    marginBottom: 10
   },
   refreshButton: {
     flexDirection: 'row',
@@ -704,46 +710,50 @@ export const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 999,
+    borderRadius: 4,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.bgSecondary,
+    backgroundColor: colors.bgSecondary
   },
   refreshButtonText: {
     color: colors.primary,
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '600'
   },
   replyIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: colors.primary + '20',
+    backgroundColor: colors.primaryLight,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 8,
+    borderRadius: 4,
     marginBottom: 8,
+    borderWidth: 2,
+    borderColor: colors.primary
   },
   replyIndicatorText: {
-    color: colors.primary,
-    fontSize: 13,
+    color: colors.onPrimary,
+    fontSize: 12,
+    fontFamily: 'JetBrainsMono-Medium',
+    fontWeight: '500'
   },
   cancelReplyButton: {
-    padding: 4,
+    padding: 4
   },
   commentComposer: {
-    backgroundColor: colors.bgSecondary,
-    borderWidth: 1,
+    backgroundColor: colors.surfaceHover,
+    borderWidth: 2,
     borderColor: colors.border,
-    borderRadius: 12,
+    borderRadius: 4,
     padding: 10,
-    marginBottom: 12,
+    marginBottom: 12
   },
   commentInput: {
     color: colors.text,
     minHeight: 44,
     fontSize: 14,
-    padding: 0,
+    padding: 0
   },
   commentButton: {
     alignSelf: 'flex-end',
@@ -751,177 +761,216 @@ export const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: 10,
+    borderRadius: 4
   },
   commentButtonText: {
-    color: '#fff',
+    color: colors.onPrimary,
+    fontFamily: 'Syne-Bold',
     fontWeight: '600',
-    fontSize: 13,
+    fontSize: 12,
+    textTransform: 'uppercase'
   },
   commentsEmpty: {
     color: colors.textMuted,
     fontSize: 13,
-    paddingVertical: 8,
+    paddingVertical: 8
   },
   commentItem: {
-    backgroundColor: colors.bgSecondary,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 12,
-    padding: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle
+  },
+  commentRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  commentAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 4,
+    backgroundColor: colors.surfaceHover,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  commentAvatarText: {
+    fontSize: 14,
+    fontFamily: 'Syne-Bold',
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  commentContent: {
+    flex: 1,
+  },
+  commentDivider: {
+    height: 1,
+    backgroundColor: colors.borderSubtle,
   },
   commentHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginBottom: 6,
+    marginBottom: 6
   },
   commentAuthor: {
-    color: colors.textMuted,
-    fontSize: 12,
-    flex: 1,
+    color: colors.text,
+    fontSize: 13,
+    fontFamily: 'Syne-Bold',
+    fontWeight: '600',
+    flex: 1
   },
   adminBadge: {
-    borderWidth: 1,
+    borderWidth: 2,
     borderColor: colors.primary,
-    borderRadius: 999,
+    borderRadius: 2,
     paddingHorizontal: 6,
     paddingVertical: 2,
-    fontSize: 11,
+    fontSize: 10,
     color: colors.primary,
-    fontWeight: '600',
+    fontFamily: 'JetBrainsMono-Medium',
+    fontWeight: '500'
   },
   pendingBadge: {
-    borderWidth: 1,
+    borderWidth: 2,
     borderColor: colors.border,
-    borderRadius: 999,
+    borderRadius: 2,
     paddingHorizontal: 6,
     paddingVertical: 2,
-    fontSize: 11,
+    fontSize: 10,
     color: colors.textMuted,
+    fontFamily: 'JetBrainsMono-Medium'
   },
   commentActions: {
     flexDirection: 'row',
     gap: 8,
-    marginLeft: 'auto',
+    marginLeft: 'auto'
   },
   commentActionButton: {
-    padding: 4,
+    padding: 4
   },
   commentText: {
     color: colors.text,
     fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 20
   },
   commentTextPending: {
     color: colors.textMuted,
     fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 20
   },
   repliesContainer: {
     marginLeft: 20,
     marginTop: 8,
-    gap: 8,
+    gap: 0,
     borderLeftWidth: 2,
     borderLeftColor: colors.border,
-    paddingLeft: 12,
+    paddingLeft: 12
   },
   replyItem: {
-    backgroundColor: colors.bgSecondary,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 10,
-    padding: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle
   },
   loadMoreButton: {
     alignItems: 'center',
     paddingVertical: 12,
-    backgroundColor: colors.bgSecondary,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: colors.border,
+    backgroundColor: colors.bg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle
   },
   loadMoreText: {
     color: colors.primary,
-    fontSize: 14,
-    fontWeight: '500',
+    fontSize: 13,
+    fontFamily: 'JetBrainsMono-Medium',
+    fontWeight: '500'
   },
   // P2P Stats Bar styles - Clean with all stats
   statsBar: {
     paddingHorizontal: 14,
     paddingVertical: 10,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    borderRadius: 10,
+    backgroundColor: colors.overlayButton,
+    borderRadius: 4,
     marginHorizontal: 12,
     marginTop: 8,
+    borderWidth: 2,
+    borderColor: colors.border
   },
   statsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'space-between'
   },
   statsRowSecondary: {
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 8,
-    justifyContent: 'space-between',
+    justifyContent: 'space-between'
   },
   statItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 6
   },
   statsDivider: {
     width: 1,
     height: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    marginHorizontal: 10,
+    backgroundColor: colors.borderLight,
+    marginHorizontal: 10
   },
   statLabel: {
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 10,
+    fontWeight: '500',
+    fontFamily: 'JetBrainsMono-Medium',
+    color: colors.textMuted,
+    textTransform: 'uppercase'
   },
   statText: {
-    color: 'rgba(255, 255, 255, 0.7)',
-    fontSize: 13,
+    color: colors.text,
+    fontSize: 12,
+    fontFamily: 'JetBrainsMono-Regular'
   },
   statSpeed: {
-    color: '#60a5fa',
-    fontSize: 13,
-    fontWeight: '500',
+    color: colors.primary,
+    fontSize: 12,
+    fontFamily: 'JetBrainsMono-Medium',
+    fontWeight: '500'
   },
   statSpeedUp: {
-    color: '#4ade80',
-    fontSize: 13,
-    fontWeight: '500',
+    color: colors.success,
+    fontSize: 12,
+    fontFamily: 'JetBrainsMono-Medium',
+    fontWeight: '500'
   },
   statDetail: {
-    color: 'rgba(255, 255, 255, 0.5)',
-    fontSize: 11,
+    color: colors.textMuted,
+    fontSize: 10,
+    fontFamily: 'JetBrainsMono-Regular'
   },
   statProgress: {
-    color: 'rgba(255, 255, 255, 0.7)',
-    fontSize: 12,
-    fontWeight: '600',
+    color: colors.text,
+    fontSize: 11,
+    fontFamily: 'JetBrainsMono-Regular',
+    fontWeight: '500'
   },
   statProgressComplete: {
-    color: '#4ade80',
+    color: colors.success
   },
   statusDot: {
     width: 8,
     height: 8,
-    borderRadius: 4,
+    borderRadius: 4
   },
   progressBarBg: {
     marginTop: 10,
     height: 4,
-    backgroundColor: PLAYER_COLORS.whiteAlpha15,
+    backgroundColor: colors.borderLight,
     borderRadius: 2,
-    overflow: 'hidden',
+    overflow: 'hidden'
   },
   progressBarFill: {
     height: '100%',
-    backgroundColor: '#fbbf24',
-    borderRadius: 2,
-  },
-})
+    backgroundColor: colors.warning,
+    borderRadius: 2
+  }
+  })

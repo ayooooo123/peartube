@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator } from 'react-native'
-import { useApp, colors } from '../_layout'
+import { useApp } from '../_layout'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 import { formatTimeAgo, formatContentBadge } from '@/lib/formatters'
 import { withChannelPageTimeout } from '@/lib/channel-page'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
@@ -486,7 +488,7 @@ export default function ChannelPageWeb(props: ChannelPageProps) {
       <div style={styles.page}>
         <style>{pageCss}</style>
         <div style={styles.stateBox}>
-          <p style={{ ...styles.stateTitle, color: '#eb0400' }}>{catalogState.catalogError}</p>
+          <p style={{ ...styles.stateTitle, color: colors.error }}>{catalogState.catalogError}</p>
           <button className="ptButton" type="button" onClick={loadChannelData}>Retry</button>
       </div>
       </div>
@@ -536,11 +538,13 @@ export default function ChannelPageWeb(props: ChannelPageProps) {
               <div style={styles.avatarFallback}>{channelName.charAt(0).toUpperCase()}</div>
             )}
             <div style={styles.profileText}>
+              <p style={styles.channelEyebrow}>CHANNEL · {(resolvedChannelKey || '').slice(0, 12) || 'UNKNOWN'}</p>
               <div style={styles.profileTitleRow}>
                 <h1 style={styles.channelName}>{channelName}</h1>
                 {catalogView?.badge ? <span style={styles.profileBadge}>{catalogView.badge}</span> : null}
               </div>
               <p style={styles.channelDescription}>{channelDescription}</p>
+              <p style={styles.metaLine}>{(selectedTab?.itemCount ?? selectedPage.cards.length)} VIDEOS{catalogView?.badge ? ` · ${String(catalogView.badge).toUpperCase()}` : ''}</p>
               <p style={styles.channelKey}>{resolvedChannelKey}</p>
             </div>
           </div>
@@ -722,90 +726,97 @@ export default function ChannelPageWeb(props: ChannelPageProps) {
 const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: '100vh',
-    backgroundColor: '#0e0e10',
-    color: '#efeff1',
-    padding: '24px',
+    backgroundColor: colors.bg,
+    color: colors.text,
+    padding: spacing.xl,
+    fontFamily: 'system-ui, -apple-system, sans-serif',
   },
   container: {
     maxWidth: 1100,
     margin: '0 auto',
     display: 'flex',
     flexDirection: 'column',
-    gap: 20,
+    gap: spacing.xl,
   },
   header: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    gap: 16,
-    backgroundColor: '#1f1f23',
-    border: '1px solid #2f2f35',
-    borderRadius: 14,
-    padding: 18,
+    gap: spacing.lg,
+    backgroundColor: colors.bg,
+    borderBottom: `${borderWidth.rule}px solid ${colors.primary}`,
+    paddingBottom: spacing.lg,
   },
   profileRow: {
     display: 'flex',
     alignItems: 'flex-start',
-    gap: 14,
+    gap: spacing.md,
   },
   profileText: {
     display: 'flex',
     flexDirection: 'column',
-    gap: 6,
+    gap: spacing.sm,
   },
   avatarImage: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 72,
+    height: 72,
+    borderRadius: radius.card,
     objectFit: 'cover',
-    backgroundColor: '#0e0e10',
+    backgroundColor: colors.surface,
+    border: `${borderWidth.rule}px solid ${colors.border}`,
   },
   avatarFallback: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: '#9147ff',
+    width: 72,
+    height: 72,
+    borderRadius: radius.card,
+    backgroundColor: colors.surface,
+    border: `${borderWidth.rule}px solid ${colors.border}`,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontWeight: 700,
+    fontFamily: fonts.display,
     fontSize: 24,
-    color: '#fff',
+    color: colors.primary,
+  },
+  channelEyebrow: {
+    margin: 0,
+    ...fonts.caption.sm,
+    color: colors.textMuted,
   },
   channelName: {
     margin: 0,
-    fontSize: 28,
-    lineHeight: 1.2,
-    color: '#efeff1',
+    ...fonts.title.xl,
+    color: colors.text,
   },
   channelDescription: {
     margin: 0,
-    color: '#adadb8',
-    fontSize: 14,
+    ...fonts.body.sm,
+    color: colors.textSecondary,
   },
   channelKey: {
     margin: 0,
-    color: '#53535f',
-    fontSize: 12,
+    ...fonts.meta.sm,
+    color: colors.textMuted,
     wordBreak: 'break-all',
   },
   seasonHeader: {
-    margin: '18px 0 10px',
-    fontSize: 17,
-    fontWeight: 700,
+    margin: `${spacing.lg}px 0 ${spacing.md}px`,
+    ...fonts.title.md,
+    textTransform: 'uppercase',
     color: colors.text,
   },
   grid: {
     display: 'grid',
-    gap: 16,
+    gap: spacing.lg,
     gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
   },
   thumbWrap: {
     width: '100%',
     aspectRatio: '16 / 9',
-    borderRadius: 10,
+    borderRadius: radius.card,
     overflow: 'hidden',
-    backgroundColor: '#0e0e10',
+    backgroundColor: colors.surface,
+    border: `${borderWidth.hairline}px solid ${colors.borderSubtle}`,
   },
   thumbnail: {
     width: '100%',
@@ -818,106 +829,109 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    color: '#53535f',
-    fontSize: 13,
+    color: colors.textMuted,
+    ...fonts.meta.sm,
   },
   videoMeta: {
-    padding: '10px 2px 0',
+    padding: `${spacing.md}px 2px 0`,
     display: 'flex',
     flexDirection: 'column',
-    gap: 4,
+    gap: spacing.xs,
   },
   videoTitle: {
     margin: 0,
-    color: '#efeff1',
-    fontSize: 14,
-    lineHeight: 1.3,
+    ...fonts.title.md,
+    fontSize: 15,
+    lineHeight: '20px',
+    color: colors.text,
   },
   videoTime: {
     margin: 0,
-    color: '#adadb8',
-    fontSize: 12,
+    ...fonts.meta.sm,
+    color: colors.textMuted,
   },
   stateBox: {
-    backgroundColor: '#1f1f23',
-    border: '1px solid #2f2f35',
-    borderRadius: 14,
-    padding: 24,
+    backgroundColor: colors.surface,
+    border: `${borderWidth.rule}px solid ${colors.border}`,
+    borderRadius: radius.card,
+    padding: spacing.xl,
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    gap: 12,
+    gap: spacing.md,
   },
   stateTitle: {
     margin: 0,
-    color: '#efeff1',
-    fontSize: 16,
-    fontWeight: 600,
+    ...fonts.title.md,
+    color: colors.text,
+    textTransform: 'uppercase',
   },
   stateText: {
     margin: 0,
-    color: '#adadb8',
-    fontSize: 14,
+    ...fonts.body.sm,
+    color: colors.textSecondary,
   },
   inlineError: {
-    backgroundColor: 'rgba(235, 4, 0, 0.12)',
-    border: '1px solid rgba(235, 4, 0, 0.35)',
-    color: '#efeff1',
-    borderRadius: 10,
-    padding: '10px 12px',
+    backgroundColor: colors.errorLight,
+    border: `${borderWidth.rule}px solid ${colors.error}`,
+    color: colors.text,
+    borderRadius: radius.card,
+    padding: `${spacing.sm}px ${spacing.md}px`,
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 12,
+    gap: spacing.md,
   },
   modalOverlay: {
     position: 'fixed',
     inset: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    backgroundColor: colors.scrim,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 16,
+    padding: spacing.lg,
     zIndex: 40,
   },
   modal: {
     width: '100%',
     maxWidth: 520,
-    borderRadius: 14,
-    backgroundColor: '#1f1f23',
-    border: '1px solid #2f2f35',
-    padding: 18,
+    borderRadius: radius.card,
+    backgroundColor: colors.surface,
+    border: `${borderWidth.rule}px solid ${colors.border}`,
+    padding: spacing.lg,
     display: 'flex',
     flexDirection: 'column',
-    gap: 12,
+    gap: spacing.md,
   },
   modalTitle: {
     margin: 0,
-    color: '#efeff1',
-    fontSize: 20,
+    ...fonts.title.md,
+    color: colors.text,
+    textTransform: 'uppercase',
   },
   fieldLabel: {
     display: 'flex',
     flexDirection: 'column',
-    gap: 6,
-    color: '#adadb8',
-    fontSize: 13,
+    gap: spacing.sm,
+    ...fonts.caption.sm,
+    color: colors.textMuted,
   },
   input: {
-    borderRadius: 10,
-    border: '1px solid #2f2f35',
-    backgroundColor: '#0e0e10',
-    color: '#efeff1',
-    padding: '10px 12px',
+    borderRadius: radius.card,
+    border: `${borderWidth.rule}px solid ${colors.border}`,
+    backgroundColor: colors.surfaceHover,
+    color: colors.text,
+    padding: `${spacing.sm}px ${spacing.md}px`,
     fontSize: 14,
     outline: 'none',
+    fontFamily: 'inherit',
   },
   textarea: {
-    borderRadius: 10,
-    border: '1px solid #2f2f35',
-    backgroundColor: '#0e0e10',
-    color: '#efeff1',
-    padding: '10px 12px',
+    borderRadius: radius.card,
+    border: `${borderWidth.rule}px solid ${colors.border}`,
+    backgroundColor: colors.surfaceHover,
+    color: colors.text,
+    padding: `${spacing.sm}px ${spacing.md}px`,
     fontSize: 14,
     outline: 'none',
     resize: 'vertical',
@@ -928,145 +942,162 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
+    gap: spacing.md,
   },
   modalAvatarPreview: {
     width: 42,
     height: 42,
-    borderRadius: 21,
+    borderRadius: radius.card,
     objectFit: 'cover',
-    border: '1px solid #2f2f35',
+    border: `${borderWidth.hairline}px solid ${colors.border}`,
   },
   modalActions: {
     display: 'flex',
     justifyContent: 'flex-end',
-    gap: 10,
+    gap: spacing.sm,
   },
   bannerImage: {
     width: '100%',
     maxHeight: 260,
     aspectRatio: '16 / 5',
     objectFit: 'cover',
-    borderRadius: 14,
-    border: '1px solid #2f2f35',
-    backgroundColor: '#1f1f23',
+    borderRadius: radius.card,
+    border: `${borderWidth.hairline}px solid ${colors.borderSubtle}`,
+    backgroundColor: colors.surface,
   },
   profileTitleRow: {
     display: 'flex',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 10,
+    gap: spacing.sm,
   },
   profileBadge: {
-    borderRadius: 999,
+    borderRadius: radius.md,
     padding: '4px 9px',
-    backgroundColor: '#9147ff',
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: 700,
+    backgroundColor: colors.primary,
+    color: colors.onPrimary,
+    ...fonts.caption.sm,
+    fontSize: 10,
   },
   tabRow: {
     display: 'flex',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: spacing.md,
+    borderBottom: `${borderWidth.rule}px solid ${colors.border}`,
   },
   tabButton: {
     display: 'flex',
     alignItems: 'center',
-    gap: 7,
-    borderRadius: 999,
-    border: '1px solid #2f2f35',
-    backgroundColor: '#1f1f23',
-    color: '#adadb8',
-    padding: '8px 12px',
+    gap: spacing.sm,
+    borderRadius: 0,
+    border: 'none',
+    borderBottom: `${borderWidth.rule}px solid transparent`,
+    marginBottom: -borderWidth.rule,
+    backgroundColor: 'transparent',
+    color: colors.textMuted,
+    padding: `${spacing.md}px ${spacing.xs}px`,
     cursor: 'pointer',
+    ...fonts.caption.sm,
   },
   tabButtonActive: {
-    borderColor: '#9147ff',
-    backgroundColor: '#9147ff',
-    color: '#fff',
+    borderBottomColor: colors.primary,
+    color: colors.primary,
+    backgroundColor: 'transparent',
   },
   tabCount: {
-    fontSize: 11,
-    opacity: 0.75,
+    ...fonts.meta.xs,
+    opacity: 0.85,
   },
   sectionTitle: {
-    margin: '0 0 14px',
-    color: '#efeff1',
-    fontSize: 20,
+    margin: `0 0 ${spacing.md}px`,
+    ...fonts.title.md,
+    color: colors.text,
+    textTransform: 'uppercase',
+    borderLeft: `${borderWidth.rule}px solid ${colors.primary}`,
+    paddingLeft: spacing.md,
   },
   loadMoreButton: {
     alignSelf: 'center',
     minWidth: 140,
   },
+  metaLine: {
+    margin: 0,
+    ...fonts.meta.sm,
+    color: colors.textMuted,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
 }
 
 const pageCss = `
   .ptButton {
-    border: none;
-    border-radius: 10px;
-    background: #9147ff;
-    color: #fff;
+    border: ${borderWidth.rule}px solid ${colors.primary};
+    border-radius: ${radius.card}px;
+    background: ${colors.primary};
+    color: ${colors.onPrimary};
+    font-family: ${fonts.heading};
     font-size: 13px;
-    font-weight: 600;
-    padding: 9px 14px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    padding: 10px 14px;
     cursor: pointer;
-    transition: background-color 0.16s ease, transform 0.16s ease;
   }
 
   .ptButton:hover {
-    background: #7f37e8;
-    transform: translateY(-1px);
+    background: ${colors.primaryHover};
+    border-color: ${colors.primaryHover};
   }
 
   .ptButton:disabled {
     opacity: 0.6;
     cursor: not-allowed;
-    transform: none;
   }
 
   .ptButtonSecondary {
-    background: #2a2a31;
-    color: #efeff1;
-    border: 1px solid #3b3b43;
+    background: ${colors.bg};
+    border: ${borderWidth.rule}px solid ${colors.border};
+    color: ${colors.text};
   }
 
   .ptButtonSecondary:hover {
-    background: #35353d;
+    background: ${colors.surfaceHover};
+    border-color: ${colors.borderLight};
   }
 
   .ptLinkButton {
     background: transparent;
     border: none;
-    color: #9147ff;
+    color: ${colors.primary};
     cursor: pointer;
     padding: 0;
-    font-size: 13px;
+    font-family: ${fonts.monoMedium};
+    font-size: 12px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
   }
 
   .ptLinkButton:hover {
-    color: #aa77ff;
+    color: ${colors.primaryHover};
   }
 
   .ptVideoCard {
-    background: #1f1f23;
-    border: 1px solid #2f2f35;
-    border-radius: 12px;
-    padding: 10px;
+    background: ${colors.bg};
+    border: none;
+    border-radius: 0;
+    padding: 0;
     cursor: pointer;
-    transition: transform 0.16s ease, border-color 0.16s ease, background-color 0.16s ease;
     outline: none;
     width: 100%;
     text-align: left;
   }
 
-  .ptVideoCard:hover {
-    transform: translateY(-2px);
-    border-color: #45454f;
-    background: #25252c;
+  .ptVideoCard:hover .ptThumbFrame {
+    border-color: ${colors.borderLight};
   }
 
   .ptVideoCard:focus-visible {
-    box-shadow: 0 0 0 2px #9147ff;
+    outline: ${borderWidth.rule}px solid ${colors.borderFocus};
+    outline-offset: 2px;
   }
 `

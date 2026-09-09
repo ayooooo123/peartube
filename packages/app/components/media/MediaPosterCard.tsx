@@ -1,11 +1,10 @@
 import { memo } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
-import { Ionicons } from '@expo/vector-icons'
-import { LinearGradient } from 'expo-linear-gradient'
-import { colors, radius, spacing } from '@/lib/colors'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
 import { usePosterArtwork } from '@/hooks/usePosterArtwork'
+import { Tag, SwarmIndicator } from '@/components/primitives'
 import type { MediaCockpitItem } from './HeroFeatureCard'
 
 /**
@@ -34,22 +33,6 @@ export interface MediaPosterCardProps {
   /** Column width; defaults to {@link MEDIA_POSTER_CARD_WIDTH}. */
   width?: number
 }
-
-/**
- * The scrim under the overlaid title, as a true vertical ramp from fully
- * transparent to near-opaque. It is built off the black token rather than
- * written as literal rgba so the alpha ladder stays in one place: a flat
- * rectangle reads as a hard-edged band across the artwork, which is the whole
- * reason this is a gradient.
- */
-const OVERLAY_GRADIENT = [
-  `${colors.contrast}00`,
-  `${colors.contrast}b3`,
-  `${colors.contrast}f2`,
-] as const
-// A caption needs the ramp to bite sooner than a title alone does.
-const OVERLAY_STOPS_WITH_META = [0, 0.4, 1] as const
-const OVERLAY_STOPS_TITLE_ONLY = [0, 0.6, 1] as const
 
 // Below this the badge tells a viewer nothing they did not already know.
 const MIN_PROGRESS_PERCENT = 5
@@ -86,6 +69,14 @@ function progressPercent(item: MediaPosterCardItem): number | null {
   return rounded >= MIN_PROGRESS_PERCENT ? rounded : null
 }
 
+function formatDuration(seconds?: number): string | null {
+  if (typeof seconds !== 'number' || seconds <= 0) return null
+  const hours = Math.floor(seconds / 3600)
+  const mins = Math.floor((seconds % 3600) / 60)
+  if (hours > 0) return `${hours}:${mins.toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`
+  return `${mins}:${(seconds % 60).toString().padStart(2, '0')}`
+}
+
 function MediaPosterCardComponent({ item, onPress, width = MEDIA_POSTER_CARD_WIDTH }: MediaPosterCardProps) {
   const title = pickString(item.title) || 'Untitled media'
   // A publisher-claimed year, sanity-bounded so a stray 0 or a millisecond
@@ -103,6 +94,13 @@ function MediaPosterCardComponent({ item, onPress, width = MEDIA_POSTER_CARD_WID
   // "not out yet". There is no theatrical/home split to draw here.
   const unreleased = releaseYear !== null && releaseYear > new Date().getFullYear()
 
+  const duration = typeof item.duration === 'number' && item.duration > 0
+    ? item.duration
+    : typeof item.durationSec === 'number' && item.durationSec > 0
+      ? item.durationSec
+      : undefined
+  const durationLabel = formatDuration(duration)
+
   const accessibilityLabel = [
     title,
     meta,
@@ -117,40 +115,36 @@ function MediaPosterCardComponent({ item, onPress, width = MEDIA_POSTER_CARD_WID
       accessibilityLabel={accessibilityLabel}
       style={({ pressed }) => [styles.card, { width }, pressed && styles.cardPressed]}
     >
-      <View style={styles.frame}>
+      <View style={styles.imageContainer}>
         <ThumbnailImage
           thumbnailUrl={artwork}
           channelInitial={title.charAt(0).toUpperCase()}
-          style={styles.poster}
+          style={styles.image}
         />
-        {/* An unreleased title is dimmed so it reads as a placeholder on the shelf. */}
+        {/* Unreleased titles are dimmed */}
         {unreleased ? <View pointerEvents="none" style={styles.unreleasedDim} /> : null}
-        {unreleased ? (
-          <View pointerEvents="none" style={styles.statusChip}>
-            <Ionicons name="time-outline" size={13} color={colors.textMuted} />
-            <Text style={styles.statusChipText}>Soon</Text>
+        {/* Duration badge in bottom-right */}
+        {durationLabel ? (
+          <View pointerEvents="none" style={styles.durationBadge}>
+            <Tag label={durationLabel} tone="inverse" />
           </View>
         ) : null}
-        {percent === null ? null : (
-          <View pointerEvents="none" style={styles.progressBadge}>
-            <Text style={styles.progressBadgeText}>{percent}%</Text>
+        {/* Progress bar along bottom edge */}
+        {percent !== null && !unreleased ? (
+          <View pointerEvents="none" style={styles.progressBar}>
+            <View style={[styles.progressFill, { width: `${percent}%` }]} />
           </View>
-        )}
-        {/*
-          Title and metadata sit on the artwork rather than under it, so the
-          card is the poster. The gradient exists only because this text does:
-          it is rendered inside the same block and leaves with it.
-        */}
-        <View pointerEvents="none" style={styles.overlay}>
-          <LinearGradient
-            pointerEvents="none"
-            colors={OVERLAY_GRADIENT}
-            locations={meta ? OVERLAY_STOPS_WITH_META : OVERLAY_STOPS_TITLE_ONLY}
-            style={StyleSheet.absoluteFill}
-          />
-          <Text style={styles.title} numberOfLines={2}>{title}</Text>
-          {meta ? <Text style={styles.meta} numberOfLines={1}>{meta}</Text> : null}
-        </View>
+        ) : null}
+      </View>
+
+      <View style={styles.textContainer}>
+        <Text style={styles.title} numberOfLines={2}>{title}</Text>
+        {meta ? <Text style={styles.meta} numberOfLines={1}>{meta}</Text> : null}
+      </View>
+
+      {/* Peer presence indicator */}
+      <View style={styles.peerIndicator}>
+        <SwarmIndicator peers={0} label="count" size={6} />
       </View>
     </Pressable>
   )
@@ -165,14 +159,16 @@ const styles = StyleSheet.create({
   cardPressed: {
     opacity: 0.82,
   },
-  frame: {
+  imageContainer: {
     width: '100%',
     aspectRatio: 2 / 3,
     borderRadius: radius.card,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
     overflow: 'hidden',
-    backgroundColor: colors.bgHover,
+    backgroundColor: colors.surface,
   },
-  poster: {
+  image: {
     width: '100%',
     height: '100%',
     aspectRatio: undefined,
@@ -181,69 +177,43 @@ const styles = StyleSheet.create({
   unreleasedDim: {
     position: 'absolute',
     top: 0,
+    left: 0,
     right: 0,
     bottom: 0,
-    left: 0,
-    backgroundColor: `${colors.contrast}8c`,
+    backgroundColor: colors.scrim,
+    zIndex: 1,
+  },
+  durationBadge: {
+    position: 'absolute',
+    bottom: spacing.xs,
+    right: spacing.xs,
     zIndex: 2,
   },
-  overlay: {
+  progressBar: {
     position: 'absolute',
+    bottom: 0,
     left: 0,
     right: 0,
-    bottom: 0,
-    minHeight: '40%',
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
+    height: borderWidth.rule,
+    backgroundColor: colors.bgActive,
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: colors.primary,
+  },
+  textContainer: {
+    paddingVertical: spacing.sm,
     gap: spacing.xs,
-    zIndex: 3,
   },
   title: {
-    ...fonts.body.sm,
-    fontWeight: '600',
+    ...fonts.title.md,
     color: colors.text,
-    textAlign: 'center',
   },
   meta: {
-    ...fonts.caption.sm,
-    color: colors.textSecondary,
-    textAlign: 'center',
+    ...fonts.meta.sm,
+    color: colors.textMuted,
   },
-  statusChip: {
-    position: 'absolute',
-    top: spacing.sm,
-    left: spacing.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-    borderRadius: radius.pill,
-    backgroundColor: colors.scrim,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.glassBorder,
-    zIndex: 4,
-  },
-  statusChipText: {
-    ...fonts.caption.sm,
-    fontWeight: '600',
-    color: colors.text,
-  },
-  progressBadge: {
-    position: 'absolute',
-    top: spacing.sm,
-    right: spacing.sm,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-    borderRadius: radius.sm,
-    backgroundColor: colors.scrim,
-    zIndex: 4,
-  },
-  progressBadgeText: {
-    ...fonts.caption.sm,
-    fontWeight: '600',
-    color: colors.text,
+  peerIndicator: {
+    marginTop: spacing.xs,
   },
 })

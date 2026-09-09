@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { GlassCard, SectionHeader } from '@/components/primitives'
-import { colors } from '@/app/_layout'
+import { IconButton, Panel, ScreenHeader, SectionHeader } from '@/components/primitives'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 import {
   boundedError,
@@ -153,6 +153,11 @@ export function MigrationBackupPanel({ rpc, files, onBack }: Props) {
   }
 
   const presentation = migrationPresentation(status?.state)
+  const processed = Math.max(0, Number(status?.processedCount) || 0)
+  const remaining = Math.max(0, Number(status?.remainingCount) || 0)
+  const progressTotal = processed + remaining
+  const progressRatio = progressTotal > 0 ? Math.min(1, processed / progressTotal) : 0
+  const progressPercent = Math.round(progressRatio * 100)
   const retryEnabled = capabilities.retry.available && canRetryMigration(status) && busy === null
   const anyBusy = busy !== null
   const refreshDisabled = anyBusy || !capabilities.status.available
@@ -160,25 +165,33 @@ export function MigrationBackupPanel({ rpc, files, onBack }: Props) {
   const exportDisabled = anyBusy || !capabilities.export.available
   const selectDisabled = anyBusy || !capabilities.select.available
   const restoreDisabled = busy === 'restore' || !capabilities.restore.available
-
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <Pressable onPress={onBack} hitSlop={10} style={styles.headerButton} accessibilityRole="button" accessibilityLabel="Back">
-          <Feather name="chevron-left" size={22} color={colors.text} />
-        </Pressable>
-        <View style={styles.headerCopy}>
-          <Text style={styles.headerTitle}>Maintenance & backup</Text>
-          <Text style={styles.headerSubtitle}>Migration history and portable state</Text>
-        </View>
-        <Pressable onPress={() => { void refreshStatus() }} disabled={refreshDisabled} hitSlop={10} style={[styles.headerButton, refreshDisabled && styles.disabledButton]} accessibilityRole="button" accessibilityLabel="Refresh migration status" accessibilityHint={capabilities.status.reason || undefined} accessibilityState={{ disabled: refreshDisabled }}>
-          {busy === 'status' ? <ActivityIndicator size="small" color={colors.primary} /> : <Feather name="refresh-cw" size={18} color={colors.text} />}
-        </Pressable>
+      <View style={{ paddingTop: insets.top }}>
+        <ScreenHeader
+          title="Maintenance & backup"
+          eyebrow="01 / ARCHIVE"
+          onBack={onBack}
+          right={
+            busy === 'status' ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : (
+              <IconButton
+                icon="refresh-cw"
+                accessibilityLabel="Refresh migration status"
+                onPress={() => { void refreshStatus() }}
+                disabled={refreshDisabled}
+                variant="plain"
+                size={36}
+              />
+            )
+          }
+        />
       </View>
 
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 32, gap: 4 }}
+        contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: insets.bottom + spacing.xxl, gap: spacing.xs }}
         showsVerticalScrollIndicator={false}
       >
         {error ? (
@@ -194,13 +207,23 @@ export function MigrationBackupPanel({ rpc, files, onBack }: Props) {
           </View>
         ) : null}
 
-        <SectionHeader title="Legacy migration" subtitle="Publication v1 import lifecycle" />
-        <GlassCard style={styles.card}>
+        <SectionHeader title="Legacy migration" eyebrow="01 / 03" subtitle="Publication v1 import lifecycle" flush />
+        <Panel style={styles.card}>
           <View style={styles.statusHeader}>
             <View style={[styles.statusDot, { backgroundColor: statusColor(presentation.tone) }]} />
             <View style={styles.statusCopy}>
               <Text selectable style={styles.cardTitle}>{presentation.label}</Text>
               <Text selectable style={styles.cardMeta}>{status ? formatUpdatedAt(status.updatedAt) : busy === 'status' ? 'Loading migration status…' : 'No migration status available'}</Text>
+            </View>
+          </View>
+
+          <View style={styles.progressBlock}>
+            <View style={styles.progressMeta}>
+              <Text style={styles.progressLabel}>Progress</Text>
+              <Text selectable style={styles.progressPercent}>{progressPercent}%</Text>
+            </View>
+            <View style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${progressPercent}%` as `${number}%` }]} />
             </View>
           </View>
 
@@ -230,7 +253,7 @@ export function MigrationBackupPanel({ rpc, files, onBack }: Props) {
               accessibilityRole="button"
               accessibilityHint={capabilities.retry.reason || undefined}
               accessibilityState={{ disabled: !retryEnabled }}
-              style={[styles.primaryButton, !retryEnabled && styles.disabledButton]}
+              style={[styles.primaryButton, styles.actionFlex, !retryEnabled && styles.disabledButton]}
             >
               {busy === 'retry' ? <ActivityIndicator size="small" color={colors.onPrimary} /> : <Feather name="rotate-cw" size={15} color={colors.onPrimary} />}
               <Text style={styles.primaryLabel}>{busy === 'retry' ? 'Retrying…' : 'Retry migration'}</Text>
@@ -241,7 +264,7 @@ export function MigrationBackupPanel({ rpc, files, onBack }: Props) {
               accessibilityRole="button"
               accessibilityHint={capabilities.report.reason || undefined}
               accessibilityState={{ disabled: reportDisabled }}
-              style={[styles.secondaryButton, reportDisabled && styles.disabledButton]}
+              style={[styles.secondaryButton, styles.actionFlex, reportDisabled && styles.disabledButton]}
             >
               {busy === 'report' ? <ActivityIndicator size="small" color={colors.text} /> : <Feather name="download" size={15} color={colors.text} />}
               <Text style={styles.secondaryLabel}>Save report</Text>
@@ -249,10 +272,10 @@ export function MigrationBackupPanel({ rpc, files, onBack }: Props) {
           </View>
           <CapabilityReason capability={capabilities.retry} />
           <CapabilityReason capability={capabilities.report} />
-        </GlassCard>
+        </Panel>
 
-        <SectionHeader title="Portable state" subtitle="Move transferable settings without moving authority" />
-        <GlassCard style={styles.card}>
+        <SectionHeader title="Portable state" eyebrow="02 / 03" subtitle="Move transferable settings without moving authority" flush />
+        <Panel style={styles.card}>
           <View style={styles.explainRow}>
             <View style={styles.explainIcon}><Feather name="package" size={18} color={colors.primary} /></View>
             <View style={styles.explainCopy}>
@@ -280,10 +303,10 @@ export function MigrationBackupPanel({ rpc, files, onBack }: Props) {
             <Text style={styles.primaryLabel}>{busy === 'export' ? 'Preparing backup…' : 'Export portable state'}</Text>
           </Pressable>
           <CapabilityReason capability={capabilities.export} />
-        </GlassCard>
+        </Panel>
 
-        <SectionHeader title="Restore portable state" subtitle="Select a PearTube portable-state JSON file" />
-        <GlassCard style={styles.card}>
+        <SectionHeader title="Restore portable state" eyebrow="03 / 03" subtitle="Select a PearTube portable-state JSON file" flush />
+        <Panel style={styles.card}>
           <Text style={styles.bodyText}>Selection reads only the bounded backup file. Nothing is changed until you review the checksum and confirm below.</Text>
           <Pressable
             onPress={() => { void selectPortableState() }}
@@ -308,18 +331,30 @@ export function MigrationBackupPanel({ rpc, files, onBack }: Props) {
               <Text selectable numberOfLines={2} style={styles.digest}>Checksum: {selection.manifestDigest}</Text>
               <Text style={styles.failureMessage}>This can replace conflicting portable settings. It cannot restore or replace your private publisher root or device keys.</Text>
               <View style={styles.actionRow}>
-                <Pressable onPress={() => setSelection(null)} disabled={busy === 'restore'} style={styles.secondaryButton} accessibilityRole="button">
+                <Pressable
+                  onPress={() => setSelection(null)}
+                  disabled={busy === 'restore'}
+                  style={[styles.secondaryButton, styles.actionFlex]}
+                  accessibilityRole="button"
+                >
                   <Text style={styles.secondaryLabel}>Cancel</Text>
                 </Pressable>
-                <Pressable onPress={() => { void restorePortableState() }} disabled={restoreDisabled} style={[styles.destructiveButton, restoreDisabled && styles.disabledButton]} accessibilityRole="button" accessibilityHint={capabilities.restore.reason || undefined} accessibilityState={{ disabled: restoreDisabled }}>
-                  {busy === 'restore' ? <ActivityIndicator size="small" color="#fff" /> : <Feather name="shield" size={15} color="#fff" />}
+                <Pressable
+                  onPress={() => { void restorePortableState() }}
+                  disabled={restoreDisabled}
+                  style={[styles.destructiveButton, styles.actionFlex, restoreDisabled && styles.disabledButton]}
+                  accessibilityRole="button"
+                  accessibilityHint={capabilities.restore.reason || undefined}
+                  accessibilityState={{ disabled: restoreDisabled }}
+                >
+                  {busy === 'restore' ? <ActivityIndicator size="small" color={colors.text} /> : <Feather name="shield" size={15} color={colors.text} />}
                   <Text style={styles.destructiveLabel}>{busy === 'restore' ? 'Verifying…' : 'Verify & restore'}</Text>
                 </Pressable>
               </View>
               <CapabilityReason capability={capabilities.restore} />
             </View>
           ) : null}
-        </GlassCard>
+        </Panel>
       </ScrollView>
     </View>
   )
@@ -327,47 +362,133 @@ export function MigrationBackupPanel({ rpc, files, onBack }: Props) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
-  header: { minHeight: 72, paddingHorizontal: 12, paddingBottom: 10, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  headerButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 20 },
-  headerCopy: { flex: 1, paddingHorizontal: 8 },
-  headerTitle: { color: colors.text, fontFamily: fonts.heading, fontSize: 18 },
-  headerSubtitle: { color: colors.textMuted, fontSize: 12, paddingTop: 2 },
-  message: { marginTop: 12, borderWidth: 1, borderRadius: 12, padding: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 9 },
-  errorMessage: { borderColor: `${colors.error}55`, backgroundColor: `${colors.error}10` },
-  noticeMessage: { borderColor: `${colors.success}55`, backgroundColor: `${colors.success}10` },
-  capabilityReason: { color: colors.textMuted, fontSize: 11, lineHeight: 16 },
-  messageText: { color: colors.text, flex: 1, fontFamily: fonts.headingMedium, fontSize: 13, lineHeight: 18 },
-  card: { gap: 14 },
-  statusHeader: { flexDirection: 'row', alignItems: 'center', gap: 11 },
-  statusDot: { width: 11, height: 11, borderRadius: 6 },
-  statusCopy: { flex: 1, gap: 3 },
-  cardTitle: { color: colors.text, fontFamily: fonts.headingMedium, fontSize: 15 },
-  cardMeta: { color: colors.textMuted, fontSize: 12 },
-  counterGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  counterCell: { width: '31%', minWidth: 88, flexGrow: 1, padding: 10, borderRadius: 10, backgroundColor: colors.bgElevated, gap: 3 },
-  counterValue: { color: colors.text, fontFamily: fonts.heading, fontSize: 17, fontVariant: ['tabular-nums'] },
-  counterLabel: { color: colors.textMuted, fontFamily: fonts.headingMedium, fontSize: 11 },
-  failureBox: { borderLeftWidth: 3, borderLeftColor: colors.error, backgroundColor: `${colors.error}0D`, padding: 12, gap: 5 },
-  failureTitle: { color: colors.error, fontFamily: fonts.headingMedium, fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.5 },
-  failureCode: { color: colors.text, fontFamily: 'monospace', fontSize: 12 },
-  failureMessage: { color: colors.textSecondary, fontSize: 12, lineHeight: 17 },
-  actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  primaryButton: { minHeight: 44, flexGrow: 1, paddingHorizontal: 15, borderRadius: 12, backgroundColor: colors.primary, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  primaryLabel: { color: colors.onPrimary, fontFamily: fonts.headingMedium, fontSize: 13 },
-  secondaryButton: { minHeight: 44, flexGrow: 1, paddingHorizontal: 15, borderRadius: 12, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgElevated, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  secondaryLabel: { color: colors.text, fontFamily: fonts.headingMedium, fontSize: 13 },
+  message: {
+    marginTop: spacing.md,
+    borderWidth: borderWidth.rule,
+    borderRadius: radius.card,
+    padding: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  errorMessage: { borderColor: colors.error, backgroundColor: colors.surface },
+  noticeMessage: { borderColor: colors.success, backgroundColor: colors.surface },
+  capabilityReason: { ...fonts.meta.xs, color: colors.textMuted, lineHeight: 16 },
+  messageText: { color: colors.text, flex: 1, ...fonts.body.sm, lineHeight: 18 },
+  card: { gap: spacing.md },
+  statusHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  statusDot: { width: 10, height: 10, borderRadius: radius.sm },
+  statusCopy: { flex: 1, gap: spacing.xs },
+  cardTitle: { color: colors.text, ...fonts.title.md, fontSize: 15, lineHeight: 20 },
+  cardMeta: { color: colors.textMuted, ...fonts.meta.sm },
+  progressBlock: { gap: spacing.sm },
+  progressMeta: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
+  progressLabel: { color: colors.textMuted, ...fonts.caption.sm },
+  progressPercent: { color: colors.text, ...fonts.meta.md },
+  progressTrack: {
+    height: 2,
+    borderRadius: 0,
+    backgroundColor: colors.bgActive,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: 2,
+    backgroundColor: colors.primary,
+  },
+  counterGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  counterCell: {
+    width: '31%',
+    minWidth: 88,
+    flexGrow: 1,
+    padding: spacing.md,
+    borderRadius: radius.card,
+    backgroundColor: colors.surfaceHover,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
+    gap: spacing.xs,
+  },
+  counterValue: { color: colors.text, ...fonts.meta.md, fontSize: 17, lineHeight: 22 },
+  counterLabel: { color: colors.textMuted, ...fonts.caption.sm },
+  failureBox: {
+    borderLeftWidth: borderWidth.rule,
+    borderLeftColor: colors.error,
+    backgroundColor: colors.surfaceHover,
+    padding: spacing.md,
+    gap: spacing.xs,
+  },
+  failureTitle: { color: colors.error, ...fonts.caption.sm },
+  failureCode: { color: colors.text, ...fonts.meta.sm },
+  failureMessage: { color: colors.textSecondary, ...fonts.body.sm, fontSize: 12, lineHeight: 17 },
+  actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  actionFlex: { flexGrow: 1, minWidth: 140 },
+  primaryButton: {
+    minHeight: 44,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.card,
+    backgroundColor: colors.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  primaryLabel: { color: colors.onPrimary, ...fonts.label.md },
+  secondaryButton: {
+    minHeight: 44,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.card,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceHover,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  secondaryLabel: { color: colors.text, ...fonts.label.md },
   disabledButton: { opacity: 0.4 },
-  explainRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
-  explainIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: `${colors.primary}16`, alignItems: 'center', justifyContent: 'center' },
-  explainCopy: { flex: 1, gap: 5 },
-  bodyText: { color: colors.textSecondary, fontSize: 13, lineHeight: 19 },
-  boundaryBox: { padding: 12, borderRadius: 10, backgroundColor: colors.bgElevated, gap: 4 },
-  boundaryTitle: { color: colors.text, fontFamily: fonts.headingMedium, fontSize: 12 },
-  confirmBox: { borderWidth: 1, borderColor: `${colors.error}66`, borderRadius: 12, padding: 13, gap: 9, backgroundColor: `${colors.error}0A` },
-  confirmTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  confirmTitle: { color: colors.error, fontFamily: fonts.heading, fontSize: 14 },
-  selectedName: { color: colors.text, fontFamily: fonts.headingMedium, fontSize: 13 },
-  digest: { color: colors.textMuted, fontFamily: 'monospace', fontSize: 11 },
-  destructiveButton: { minHeight: 44, flexGrow: 1, paddingHorizontal: 15, borderRadius: 12, backgroundColor: colors.error, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  destructiveLabel: { color: '#fff', fontFamily: fonts.headingMedium, fontSize: 13 },
+  explainRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
+  explainIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.card,
+    backgroundColor: colors.primaryLight,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  explainCopy: { flex: 1, gap: spacing.xs },
+  bodyText: { color: colors.textSecondary, ...fonts.body.sm, lineHeight: 19 },
+  boundaryBox: {
+    padding: spacing.md,
+    borderRadius: radius.card,
+    backgroundColor: colors.surfaceHover,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
+    gap: spacing.xs,
+  },
+  boundaryTitle: { color: colors.text, ...fonts.caption.sm },
+  confirmBox: {
+    borderWidth: borderWidth.rule,
+    borderColor: colors.error,
+    borderRadius: radius.card,
+    padding: spacing.md,
+    gap: spacing.sm,
+    backgroundColor: colors.surface,
+  },
+  confirmTitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  confirmTitle: { color: colors.error, ...fonts.title.md, fontSize: 14, lineHeight: 18 },
+  selectedName: { color: colors.text, ...fonts.meta.sm },
+  digest: { color: colors.textMuted, ...fonts.meta.xs },
+  destructiveButton: {
+    minHeight: 44,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.card,
+    backgroundColor: colors.error,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  destructiveLabel: { color: colors.text, ...fonts.label.md },
 })

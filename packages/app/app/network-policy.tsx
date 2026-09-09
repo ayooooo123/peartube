@@ -11,6 +11,8 @@ import {
 import { RetentionPolicyEditor } from '@/components/library/RetentionPolicyEditor'
 import { PARTICIPATION_MODE_LABELS, type NetworkPolicy, type NetworkPolicyRpc } from '@/lib/network-policy'
 import { DeveloperModeGate } from '@/lib/developer-mode'
+import { colors } from '@/lib/colors'
+
 
 const UPLOAD_OPTIONS = [
   { value: 'disabled', label: 'Do not upload', detail: 'This device will not serve media blocks to peers.' },
@@ -114,26 +116,26 @@ function NetworkPolicyContent({
               description="Trust, moderation, and retention are local-only decisions on this device. They are not announced as global truth."
             />
             <View style={{ gap: 7 }}>
-              <Text style={{ color: '#d0d6e0', lineHeight: 20 }}>
+              <Text style={{ color: colors.textSecondary, lineHeight: 20 }}>
                 • Following publishers and indexes reveals your interests to peers in those namespaces.
               </Text>
-              <Text style={{ color: '#d0d6e0', lineHeight: 20 }}>
+              <Text style={{ color: colors.textSecondary, lineHeight: 20 }}>
                 • Catalog and asset requests disclose what this device is looking up.
               </Text>
-              <Text style={{ color: '#d0d6e0', lineHeight: 20 }}>
+              <Text style={{ color: colors.textSecondary, lineHeight: 20 }}>
                 • Archive challenges and pledges are signed, network-visible custody records.
               </Text>
-              <Text style={{ color: '#d0d6e0', lineHeight: 20 }}>
+              <Text style={{ color: colors.textSecondary, lineHeight: 20 }}>
                 • Seeding advertises which blocks this device can serve.
               </Text>
-              <Text style={{ color: '#d0d6e0', lineHeight: 20 }}>
+              <Text style={{ color: colors.textSecondary, lineHeight: 20 }}>
                 • mDNS local discovery broadcasts presence to nearby devices.
               </Text>
-              <Text style={{ color: '#d0d6e0', lineHeight: 20 }}>
+              <Text style={{ color: colors.textSecondary, lineHeight: 20 }}>
                 • Every peer connection exposes an IP address that observers may correlate over time.
               </Text>
             </View>
-            <Text style={{ color: '#d6a243', lineHeight: 20 }}>
+            <Text style={{ color: colors.warning, lineHeight: 20 }}>
               PearTube does not provide anonymity. These controls limit this device; they do not make a privacy promise.
             </Text>
           </PolicyCard>

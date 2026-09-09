@@ -1,5 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native'
-import { colors } from '@/lib/colors'
+import { colors, spacing, radius, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 import type { MediaCockpitItem } from './HeroFeatureCard'
 
@@ -86,31 +86,26 @@ export function ProvenancePanel({ provenance, item = null }: ProvenancePanelProp
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    backgroundColor: colors.bgElevated,
-    padding: 16,
+    borderRadius: radius.card,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
+    gap: spacing.md,
   },
-  title: { color: colors.text, fontFamily: fonts.headingMedium, fontSize: 16 },
-  count: {
-    color: colors.primary,
-    fontSize: 11,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-  },
-  summary: { color: colors.textMuted, fontSize: 12, marginTop: 8 },
-  list: { gap: 10, marginTop: 14 },
-  row: { flexDirection: 'row', gap: 10 },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary, marginTop: 5 },
+  title: { ...fonts.title.md, color: colors.text },
+  count: { ...fonts.caption.sm, color: colors.primary },
+  summary: { ...fonts.meta.sm, color: colors.textMuted, marginTop: spacing.sm },
+  list: { gap: spacing.md, marginTop: spacing.md },
+  row: { flexDirection: 'row', gap: spacing.md },
+  dot: { width: 8, height: 8, backgroundColor: colors.primary, marginTop: 4 },
   rowCopy: { flex: 1 },
-  rowTitle: { color: colors.text, fontSize: 13, fontWeight: '800', textTransform: 'uppercase' },
-  rowDetail: { color: colors.textMuted, fontSize: 12, lineHeight: 17, marginTop: 2 },
-  empty: { color: colors.textMuted, fontSize: 13, lineHeight: 18 },
+  rowTitle: { ...fonts.caption.sm, color: colors.text },
+  rowDetail: { ...fonts.meta.sm, color: colors.textMuted, marginTop: 2 },
+  empty: { ...fonts.body.sm, color: colors.textMuted },
 })

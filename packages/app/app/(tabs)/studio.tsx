@@ -2,7 +2,25 @@
  * Studio Tab - Upload and manage videos
  */
 import { useRef, useState, useCallback, useEffect } from 'react'
-import { View, Text, FlatList, Alert, Pressable, Share, TextInput, ActivityIndicator, Platform, Image, AppState, InteractionManager } from 'react-native'
+import {
+  View,
+  Text,
+  FlatList,
+  Alert,
+  Pressable,
+  Share,
+  TextInput,
+  ActivityIndicator,
+  Platform,
+  Image,
+  AppState,
+  InteractionManager,
+  StyleSheet,
+  type StyleProp,
+  type TextStyle,
+  type TextInputProps,
+} from 'react-native'
+import { ABSOLUTE_FILL } from '@/lib/absolute-fill'
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather, Ionicons } from '@expo/vector-icons'
@@ -10,13 +28,26 @@ import * as DocumentPicker from 'expo-document-picker'
 import * as ImagePicker from 'expo-image-picker'
 import * as VideoThumbnails from 'expo-video-thumbnails'
 import * as Clipboard from 'expo-clipboard'
-import { useApp, colors } from '../_layout'
+import { useApp } from '../_layout'
+import { colors, spacing, radius, borderWidth } from '@/lib/colors'
 import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerActions } from '@/lib/VideoPlayerContext'
 import { VideoEditModal } from '@/components/VideoEditModal'
 import { formatBytes } from '@/lib/formatters'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
-import { Chip, EmptyState } from '@/components/primitives'
+import {
+  Body,
+  Button,
+  Chip,
+  EmptyState,
+  Eyebrow,
+  IconButton,
+  Meta,
+  Panel,
+  ScreenHeader,
+  SectionHeader,
+  Tag,
+} from '@/components/primitives'
 import { fonts } from '@/lib/typography'
 import * as haptics from '@/lib/haptics'
 import { makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
@@ -26,7 +57,6 @@ import {
   type StudioEpisodeMediaInput,
   uploadStudioVideo,
 } from '@/lib/studio-upload-controller'
-
 // Detect Pear desktop (must match index.web.tsx detection)
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
 
@@ -45,6 +75,38 @@ function formatEta(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
+}
+
+function shortenKey(key: string | null | undefined): string {
+  if (!key) return '—'
+  const clean = key.replace(/[^a-fA-F0-9]/g, '')
+  if (clean.length <= 12) return clean.toLowerCase() || key
+  return `${clean.slice(0, 6).toLowerCase()}…${clean.slice(-4).toLowerCase()}`
+}
+
+function formatPublisherDeviceState(identity: { driveKey?: string | null; name?: string | null } | null | undefined): string {
+  if (!identity) return 'NO CHANNEL'
+  if (!identity.driveKey) return 'NO KEY'
+  return 'READY'
+}
+
+function publisherSignerFact(identity: { driveKey?: string | null } | null | undefined): string {
+  if (!identity?.driveKey) return 'NONE'
+  return shortenKey(identity.driveKey)
+}
+
+function publisherCustodyFact(identity: { driveKey?: string | null } | null | undefined): string {
+  if (!identity?.driveKey) return 'UNBOUND'
+  return 'DEVICE-LOCAL'
+}
+
+function publisherPairingFact(
+  devices: Array<{ keyHex?: string; deviceName?: string }>,
+  loading: boolean,
+): string {
+  if (loading) return 'LOOKING…'
+  if (!devices.length) return 'THIS DEVICE ONLY'
+  return `${devices.length} LINKED`
 }
 
 function normalizeFsModule(mod: any): any {
@@ -652,360 +714,334 @@ function StudioScreen() {
 
   const myVideos = videos.filter((v) => v.channelKey === identity?.driveKey)
 
+
   const listHeaderComponent = (
-    <View>
-        {/* Upload Section */}
-        <View className="py-5 border-b border-pear-border">
-          {selectedVideo ? (
-            <View className="gap-4">
-              {/* Thumbnail preview */}
-              <View className="rounded-xl overflow-hidden bg-pear-bg-card">
-                <View style={{ aspectRatio: 16 / 9 }}>
-                  {thumbnailUri ? (
-                    <View style={{ width: '100%', height: '100%' }}>
-                      <Image
-                        source={{ uri: thumbnailUri }}
-                        style={{ width: '100%', height: '100%' }}
-                        resizeMode="cover"
-                      />
-                      {thumbnailGenerating ? (
-                        <View
-                          style={{
-                            position: 'absolute',
-                            left: 0,
-                            right: 0,
-                            top: 0,
-                            bottom: 0,
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            backgroundColor: 'rgba(0,0,0,0.25)',
-                          }}
-                        >
-                          <ActivityIndicator color={colors.text} />
-                        </View>
-                      ) : null}
-                    </View>
-                  ) : (
-                    <View className="flex-1 items-center justify-center bg-pear-bg-elevated">
-                      <Feather name="film" color={colors.textMuted} size={48} />
-                      <Text className="text-caption text-pear-text-muted mt-2">
-                        {isPear
-                          ? 'Click below to add thumbnail'
-                          : (thumbnailGenerating
-                            ? 'Generating thumbnail...'
-                            : (thumbnailError ? thumbnailError : 'Thumbnail not available'))}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-                {/* Change thumbnail button */}
-                <Pressable
-                  onPress={pickThumbnail}
-                  className="flex-row items-center justify-center gap-2 py-3 bg-pear-bg-elevated active:opacity-80"
-                >
-                  <Feather name="image" color={colors.textMuted} size={16} />
-                  <Text className="text-caption text-pear-text-muted">
-                    {thumbnailUri ? 'Change Thumbnail' : 'Add Thumbnail'}
-                  </Text>
-                </Pressable>
-              </View>
+    <View style={styles.headerBlock}>
+      <Panel tone="muted" style={styles.statusStrip} testID="studio-publisher-status">
+        <View style={styles.statusRow}>
+          <Meta tone="muted" style={styles.statusKey}>SIGNER</Meta>
+          <Meta tone="default" style={styles.statusVal}>{publisherSignerFact(identity)}</Meta>
+        </View>
+        <View style={styles.statusRow}>
+          <Meta tone="muted" style={styles.statusKey}>CUSTODY</Meta>
+          <Meta tone="default" style={styles.statusVal}>{publisherCustodyFact(identity)}</Meta>
+        </View>
+        <View style={styles.statusRow}>
+          <Meta tone="muted" style={styles.statusKey}>DEVICE PAIRING</Meta>
+          <Meta tone="default" style={styles.statusVal}>
+            {publisherPairingFact(channelDevices, channelDevicesLoading)}
+          </Meta>
+        </View>
+      </Panel>
 
-              {/* Selected video indicator */}
-              <View className="flex-row items-center bg-pear-bg-card rounded-lg p-4">
-                <View className="w-10 h-10 rounded-lg bg-pear-primary-muted items-center justify-center">
-                  <Feather name="film" color={colors.primary} size={20} />
-                </View>
-                <Text className="flex-1 text-label text-pear-text ml-3" numberOfLines={1}>
-                  Video selected
-                </Text>
-                <Pressable
-                  onPress={() => { setSelectedVideo(null); setFilePath(null); setFileSize(0); setThumbnailUri(null); setThumbnailFilePath(null); setVideoDuration(null); setThumbnailError(null); void cleanupTempVideo(); }}
-                  className="w-8 h-8 items-center justify-center"
-                >
-                  <Feather name="trash-2" color={colors.error} size={18} />
-                </Pressable>
+      {/* Upload Section */}
+      <View style={styles.section}>
+        {selectedVideo ? (
+          <View style={styles.uploadForm}>
+            <Panel padded={false} style={styles.thumbPanel}>
+              <View style={styles.thumbAspect}>
+                {thumbnailUri ? (
+                  <View style={styles.thumbFill}>
+                    <Image
+                      source={{ uri: thumbnailUri }}
+                      style={styles.thumbFill}
+                      resizeMode="cover"
+                    />
+                    {thumbnailGenerating ? (
+                      <View style={styles.thumbScrim}>
+                        <ActivityIndicator color={colors.text} />
+                      </View>
+                    ) : null}
+                  </View>
+                ) : (
+                  <View style={styles.thumbPlaceholder}>
+                    <Feather name="film" color={colors.textMuted} size={48} />
+                    <Meta tone="muted" style={styles.thumbPlaceholderMeta}>
+                      {isPear
+                        ? 'Click below to add thumbnail'
+                        : (thumbnailGenerating
+                          ? 'Generating thumbnail...'
+                          : (thumbnailError ? thumbnailError : 'Thumbnail not available'))}
+                    </Meta>
+                  </View>
+                )}
               </View>
+              <Pressable onPress={pickThumbnail} style={styles.thumbAction}>
+                <Feather name="image" color={colors.textMuted} size={16} />
+                <Meta tone="muted">
+                  {thumbnailUri ? 'Change Thumbnail' : 'Add Thumbnail'}
+                </Meta>
+              </Pressable>
+            </Panel>
 
-              {!isPear && thumbnailError ? (
-                <View className="bg-pear-bg-elevated border border-pear-border rounded-lg p-4">
-                  <Text className="text-caption text-pear-text-muted">
-                    Thumbnail generation failed. Tap Add Thumbnail to pick an image.
-                  </Text>
+            <Panel style={styles.selectedRow}>
+              <View style={styles.selectedIcon}>
+                <Feather name="film" color={colors.primary} size={20} />
+              </View>
+              <Text style={styles.selectedLabel} numberOfLines={1}>
+                Video selected
+              </Text>
+              <IconButton
+                icon="trash-2"
+                accessibilityLabel="Clear selected video"
+                variant="plain"
+                size={32}
+                onPress={() => { setSelectedVideo(null); setFilePath(null); setFileSize(0); setThumbnailUri(null); setThumbnailFilePath(null); setVideoDuration(null); setThumbnailError(null); void cleanupTempVideo(); }}
+              />
+            </Panel>
+
+            {!isPear && thumbnailError ? (
+              <Panel tone="muted">
+                <Meta tone="muted">
+                  Thumbnail generation failed. Tap Add Thumbnail to pick an image.
+                </Meta>
+              </Panel>
+            ) : null}
+
+            <StudioInput
+              placeholder="Video title"
+              value={title}
+              onChangeText={setTitle}
+            />
+
+            <View style={styles.fieldBlock}>
+              <Eyebrow>CATEGORY</Eyebrow>
+              <View style={styles.chipWrap}>
+                {categoryOptions.map((cat) => (
+                  <Chip
+                    key={cat}
+                    label={cat}
+                    selected={selectedCategory === cat}
+                    onPress={() => setSelectedCategory(cat)}
+                  />
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.fieldBlock}>
+              <Eyebrow>COLLECTION METADATA (OPTIONAL)</Eyebrow>
+              <View style={styles.chipWrap}>
+                <Chip
+                  label="Standalone"
+                  selected={!episodeMetadataEnabled}
+                  onPress={() => setEpisodeMetadataEnabled(false)}
+                />
+                <Chip
+                  label="Series episode"
+                  selected={episodeMetadataEnabled}
+                  onPress={() => setEpisodeMetadataEnabled(true)}
+                />
+              </View>
+              {episodeMetadataEnabled ? (
+                <View style={styles.episodeFields}>
+                  <StudioInput
+                    accessibilityLabel="Series ID"
+                    placeholder="Series ID (lowercase, stable)"
+                    value={seriesId}
+                    onChangeText={setSeriesId}
+                    maxLength={128}
+                    autoCapitalize="none"
+                  />
+                  <StudioInput
+                    accessibilityLabel="Series title"
+                    placeholder="Series title"
+                    value={seriesTitle}
+                    onChangeText={setSeriesTitle}
+                    maxLength={512}
+                  />
+                  <StudioInput
+                    accessibilityLabel="TMDB series ID"
+                    placeholder="TMDB series ID"
+                    value={tmdbSeriesId}
+                    onChangeText={setTmdbSeriesId}
+                    maxLength={20}
+                    keyboardType="number-pad"
+                  />
+                  <View style={styles.episodeRow}>
+                    <StudioInput
+                      accessibilityLabel="Season number"
+                      placeholder="Season"
+                      value={seasonNumber}
+                      onChangeText={setSeasonNumber}
+                      maxLength={6}
+                      keyboardType="number-pad"
+                      style={styles.episodeInput}
+                    />
+                    <StudioInput
+                      accessibilityLabel="Episode number"
+                      placeholder="Episode"
+                      value={episodeNumber}
+                      onChangeText={setEpisodeNumber}
+                      maxLength={6}
+                      keyboardType="number-pad"
+                      style={styles.episodeInput}
+                    />
+                    <StudioInput
+                      accessibilityLabel="Expected episode count"
+                      placeholder="Expected"
+                      value={expectedEpisodeCount}
+                      onChangeText={setExpectedEpisodeCount}
+                      maxLength={6}
+                      keyboardType="number-pad"
+                      style={styles.episodeInput}
+                    />
+                  </View>
                 </View>
               ) : null}
-
-              {/* Title input */}
-              <TextInput
-                placeholder="Video title"
-                value={title}
-                onChangeText={setTitle}
-                placeholderTextColor={colors.textMuted}
-                className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
-              />
-
-              {/* Category picker */}
-              <View className="gap-2">
-                <Text className="text-caption text-pear-text-muted">Category</Text>
-                <View className="flex-row flex-wrap gap-2">
-                  {categoryOptions.map((cat) => (
-                    <Chip
-                      key={cat}
-                      label={cat}
-                      selected={selectedCategory === cat}
-                      onPress={() => setSelectedCategory(cat)}
-                    />
-                  ))}
-                </View>
-              </View>
-
-              <View className="gap-3">
-                <Text className="text-caption text-pear-text-muted">Collection metadata (optional)</Text>
-                <View className="flex-row flex-wrap gap-2">
-                  <Chip
-                    label="Standalone"
-                    selected={!episodeMetadataEnabled}
-                    onPress={() => setEpisodeMetadataEnabled(false)}
-                  />
-                  <Chip
-                    label="Series episode"
-                    selected={episodeMetadataEnabled}
-                    onPress={() => setEpisodeMetadataEnabled(true)}
-                  />
-                </View>
-                {episodeMetadataEnabled ? (
-                  <View className="gap-3">
-                    <TextInput
-                      accessibilityLabel="Series ID"
-                      placeholder="Series ID (lowercase, stable)"
-                      value={seriesId}
-                      onChangeText={setSeriesId}
-                      maxLength={128}
-                      autoCapitalize="none"
-                      placeholderTextColor={colors.textMuted}
-                      className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
-                    />
-                    <TextInput
-                      accessibilityLabel="Series title"
-                      placeholder="Series title"
-                      value={seriesTitle}
-                      onChangeText={setSeriesTitle}
-                      maxLength={512}
-                      placeholderTextColor={colors.textMuted}
-                      className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
-                    />
-                    <TextInput
-                      accessibilityLabel="TMDB series ID"
-                      placeholder="TMDB series ID"
-                      value={tmdbSeriesId}
-                      onChangeText={setTmdbSeriesId}
-                      maxLength={20}
-                      keyboardType="number-pad"
-                      placeholderTextColor={colors.textMuted}
-                      className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
-                    />
-                    <View className="flex-row gap-2">
-                      <TextInput
-                        accessibilityLabel="Season number"
-                        placeholder="Season"
-                        value={seasonNumber}
-                        onChangeText={setSeasonNumber}
-                        maxLength={6}
-                        keyboardType="number-pad"
-                        placeholderTextColor={colors.textMuted}
-                        className="flex-1 bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
-                      />
-                      <TextInput
-                        accessibilityLabel="Episode number"
-                        placeholder="Episode"
-                        value={episodeNumber}
-                        onChangeText={setEpisodeNumber}
-                        maxLength={6}
-                        keyboardType="number-pad"
-                        placeholderTextColor={colors.textMuted}
-                        className="flex-1 bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
-                      />
-                      <TextInput
-                        accessibilityLabel="Expected episode count"
-                        placeholder="Expected"
-                        value={expectedEpisodeCount}
-                        onChangeText={setExpectedEpisodeCount}
-                        maxLength={6}
-                        keyboardType="number-pad"
-                        placeholderTextColor={colors.textMuted}
-                        className="flex-1 bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
-                      />
-                    </View>
-                  </View>
-                ) : null}
-              </View>
-
-              {/* Upload button or progress bar */}
-              {uploading ? (
-                <View className="gap-2">
-                  {/* Progress bar */}
-                  <View className="h-3 bg-pear-bg-input rounded-full overflow-hidden">
-                    <View
-                      className="h-full bg-pear-primary rounded-full"
-                      style={{ width: `${uploadProgress}%` }}
-                    />
-                  </View>
-                  <View className="flex-row items-center justify-center gap-2">
-                    <ActivityIndicator color={colors.primary} size="small" />
-                    <Text className="text-pear-text-muted text-caption">
-                      {isTranscoding ? (
-                        `Optimizing for streaming… ${uploadProgress}%`
-                      ) : (
-                        <>
-                          Adding to your channel… {uploadProgress}%
-                          {uploadSpeed > 0 && ` · ${formatSpeed(uploadSpeed)}`}
-                          {uploadEta > 0 && ` · ${formatEta(uploadEta)} left`}
-                        </>
-                      )}
-                    </Text>
-                  </View>
-                </View>
-              ) : (
-                <Pressable
-                  onPress={handleUpload}
-                  disabled={
-                    !title.trim() ||
-                    (!isPear && (thumbnailGenerating || !thumbnailFilePath))
-                  }
-                  className={`flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-3.5 ${(!title.trim() || (!isPear && (thumbnailGenerating || !thumbnailFilePath))) ? 'opacity-50' : ''}`}
-                >
-                  <Feather name="upload" color={colors.onPrimary} size={18} />
-                  <Text className="text-label" style={{ color: colors.onPrimary }}>
-                    {!isPear && thumbnailGenerating
-                      ? 'Preparing thumbnail…'
-                      : (!isPear && !thumbnailFilePath)
-                        ? 'Add a thumbnail to publish'
-                        : 'Publish'}
-                  </Text>
-                </Pressable>
-              )}
             </View>
-          ) : (
-            <Pressable
+
+            {uploading ? (
+              <View style={styles.progressBlock}>
+                <View style={styles.progressTrack}>
+                  <View style={[styles.progressFill, { width: `${uploadProgress}%` }]} />
+                </View>
+                <View style={styles.progressMetaRow}>
+                  <ActivityIndicator color={colors.primary} size="small" />
+                  <Meta tone="muted" style={styles.progressMeta}>
+                    {isTranscoding ? (
+                      `Optimizing for streaming… ${uploadProgress}%`
+                    ) : (
+                      `Adding to your channel… ${uploadProgress}%` +
+                      (uploadSpeed > 0 ? ` · ${formatSpeed(uploadSpeed)}` : '') +
+                      (uploadEta > 0 ? ` · ${formatEta(uploadEta)} left` : '')
+                    )}
+                  </Meta>
+                </View>
+                <Tag
+                  label={isTranscoding ? 'ENCODING' : 'PUBLISHING'}
+                  tone={isTranscoding ? 'warning' : 'accent'}
+                />
+              </View>
+            ) : (
+              <Button
+                label={
+                  !isPear && thumbnailGenerating
+                    ? 'PREPARING THUMBNAIL…'
+                    : (!isPear && !thumbnailFilePath)
+                      ? 'ADD A THUMBNAIL TO PUBLISH'
+                      : 'PUBLISH'
+                }
+                icon="upload"
+                onPress={handleUpload}
+                disabled={
+                  !title.trim() ||
+                  (!isPear && (thumbnailGenerating || !thumbnailFilePath))
+                }
+                block
+              />
+            )}
+          </View>
+        ) : (
+          <Panel style={styles.dropZone}>
+            <Eyebrow tone="accent">DROP / SELECT MEDIA</Eyebrow>
+            <Meta tone="muted" style={styles.dropHint}>
+              {preparingVideo ? 'Preparing video…' : (pickingVideo ? 'Opening picker…' : 'Choose a video to share')}
+            </Meta>
+            <Button
+              label="SELECT FILE"
+              icon="upload"
               onPress={pickVideo}
               disabled={pickingVideo || preparingVideo}
-              className="flex-row items-center justify-center gap-3 bg-pear-bg-card border-2 border-dashed border-pear-border rounded-xl py-8 active:opacity-80"
-            >
-              {preparingVideo ? (
-                <ActivityIndicator color={colors.textMuted} size="small" />
-              ) : (
-                <Feather name="upload" color={colors.textMuted} size={24} />
-              )}
-              <Text className="text-body text-pear-text-muted">
-                {preparingVideo ? 'Preparing video…' : (pickingVideo ? 'Opening picker…' : 'Choose a video to share')}
-              </Text>
-            </Pressable>
-          )}
-        </View>
+              loading={preparingVideo || pickingVideo}
+              block
+            />
+          </Panel>
+        )}
+      </View>
 
-        {/* Channel devices — publisher-channel pairing only. A viewer's watch
-            state and library pair separately in Profile and never travel here. */}
-        <View className="py-5 border-b border-pear-border gap-3">
-          <View>
-            <Text style={{ color: colors.text, fontSize: 18, fontFamily: fonts.heading }}>Channel devices</Text>
-            <Text className="text-caption text-pear-text-muted mt-1">
-              Link another device so it can publish to this channel. This shares publishing
-              authority for the channel — not your viewing state.
-            </Text>
-          </View>
+      {/* Channel devices — publisher-channel pairing only. A viewer's watch
+          state and library pair separately in Profile and never travel here. */}
+      <View style={styles.section}>
+        <SectionHeader title="CHANNEL DEVICES" flush />
+        <Body tone="muted" size="sm" style={styles.devicesBlurb}>
+          Link another device so it can publish to this channel. This shares publishing
+          authority for the channel — not your viewing state.
+        </Body>
 
+        <Panel tone="muted" style={styles.devicesPanel}>
           {channelDevices.length ? (
-            <View className="gap-2">
+            <View style={styles.deviceList}>
               {channelDevices.map((device, idx) => (
-                <View key={device?.keyHex || idx} className="flex-row items-center bg-pear-bg-card rounded-lg p-3">
+                <View key={device?.keyHex || idx} style={styles.deviceRow}>
                   <Feather name="smartphone" color={colors.textSecondary} size={16} />
-                  <View className="flex-1 ml-3">
-                    <Text className="text-label text-pear-text">{device?.deviceName || `Device ${idx + 1}`}</Text>
-                    <Text className="text-caption text-pear-text-muted" numberOfLines={1}>{device?.keyHex || ''}</Text>
+                  <View style={styles.deviceCopy}>
+                    <Text style={styles.deviceName}>{device?.deviceName || `Device ${idx + 1}`}</Text>
+                    <Meta tone="muted" numberOfLines={1}>{device?.keyHex || ''}</Meta>
                   </View>
                 </View>
               ))}
             </View>
           ) : (
-            <Text className="text-caption text-pear-text-muted">
+            <Meta tone="muted">
               {channelDevicesLoading ? 'Looking for linked devices…' : 'Just this device so far.'}
-            </Text>
+            </Meta>
           )}
 
           {channelInviteCode ? (
-            <View className="bg-pear-bg-card border border-pear-border rounded-lg p-4 gap-2">
-              <Text className="text-caption text-pear-text-muted">Invite code — enter it on your other device</Text>
-              <Text selectable className="text-label text-pear-text">{channelInviteCode}</Text>
-              <View className="flex-row gap-2">
-                <Pressable
+            <Panel style={styles.inviteBox}>
+              <Eyebrow>INVITE CODE — ENTER IT ON YOUR OTHER DEVICE</Eyebrow>
+              <Text selectable style={styles.inviteCode}>{channelInviteCode}</Text>
+              <View style={styles.inviteActions}>
+                <Button
+                  label="COPY"
+                  variant="secondary"
+                  icon="copy"
+                  size="sm"
                   onPress={async () => {
                     await Clipboard.setStringAsync(channelInviteCode)
                     Alert.alert('Copied', 'Invite code copied to clipboard')
                   }}
-                  className="flex-1 flex-row items-center justify-center gap-2 bg-pear-bg-elevated rounded-lg py-3 active:opacity-80"
-                >
-                  <Feather name="copy" color={colors.text} size={14} />
-                  <Text className="text-caption text-pear-text">Copy</Text>
-                </Pressable>
-                <Pressable
+                  style={styles.inviteBtn}
+                />
+                <Button
+                  label="SHARE"
+                  variant="secondary"
+                  icon="share-2"
+                  size="sm"
                   onPress={() => shareChannelInvite(channelInviteCode)}
-                  className="flex-1 flex-row items-center justify-center gap-2 bg-pear-bg-elevated rounded-lg py-3 active:opacity-80"
-                >
-                  <Feather name="share-2" color={colors.text} size={14} />
-                  <Text className="text-caption text-pear-text">Share</Text>
-                </Pressable>
+                  style={styles.inviteBtn}
+                />
               </View>
-            </View>
+            </Panel>
           ) : null}
 
-          <Pressable
+          <Button
+            label="LINK A DEVICE"
+            icon="plus"
             onPress={createChannelInvite}
             disabled={channelInviteLoading || !identity?.driveKey}
-            className={`flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-3.5 ${(channelInviteLoading || !identity?.driveKey) ? 'opacity-50' : ''}`}
-          >
-            {channelInviteLoading ? <ActivityIndicator size="small" color={colors.onPrimary} /> : (
-              <>
-                <Feather name="plus" color={colors.onPrimary} size={16} />
-                <Text className="text-label" style={{ color: colors.onPrimary }}>Link a device</Text>
-              </>
-            )}
-          </Pressable>
+            loading={channelInviteLoading}
+            block
+          />
 
-          <TextInput
+          <StudioInput
             placeholder="Paste invite code"
             value={channelPairCode}
             onChangeText={setChannelPairCode}
-            placeholderTextColor={colors.textMuted}
             autoCapitalize="none"
-            className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
           />
-          <TextInput
+          <StudioInput
             placeholder="Device name (optional)"
             value={channelPairName}
             onChangeText={setChannelPairName}
-            placeholderTextColor={colors.textMuted}
             autoCapitalize="none"
-            className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
           />
-          <Pressable
+          <Button
+            label="LINK WITH THIS CODE"
+            variant="secondary"
+            icon="link"
             onPress={pairChannelDevice}
             disabled={channelPairing || !channelPairCode.trim()}
-            className={`flex-row items-center justify-center gap-2 bg-pear-bg-elevated rounded-lg py-3.5 ${(channelPairing || !channelPairCode.trim()) ? 'opacity-50' : ''}`}
-          >
-            {channelPairing ? <ActivityIndicator size="small" color={colors.text} /> : (
-              <>
-                <Feather name="link" color={colors.text} size={15} />
-                <Text className="text-label text-pear-text">Link with this code</Text>
-              </>
-            )}
-          </Pressable>
-        </View>
+            loading={channelPairing}
+            block
+          />
+        </Panel>
+      </View>
 
-        {/* Videos List title */}
-        <View className="py-4">
-          <Text style={{ color: colors.text, fontSize: 18, fontFamily: fonts.heading }}>
-            Published ({myVideos.length})
-          </Text>
-        </View>
+      <SectionHeader
+        title={`PUBLISHED (${myVideos.length})`}
+        flush
+      />
     </View>
   )
 
@@ -1214,34 +1250,33 @@ function StudioScreen() {
     }
   }, [identity?.driveKey, loadAndPlayVideo, rpc])
 
+
+  const publisherEyebrow = `PUBLISHER / ${formatPublisherDeviceState(identity)}`
+
+
   return (
-    <View className="flex-1 bg-pear-bg">
-      {/* Header with safe area */}
-      <View
-        className="bg-pear-bg border-b border-pear-border"
-        style={{ paddingTop: insets.top }}
-      >
-        <View className="px-5 py-4">
-          <View className="flex-row items-center justify-between">
-            <Text style={{ color: colors.text, fontSize: 24, fontFamily: fonts.heading }}>Studio</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <CastHeaderButton size={18} />
-              <Pressable onPress={() => router.push('/search')} className="p-2">
-                <Feather name="search" color={colors.text} size={18} />
-              </Pressable>
-            </View>
-          </View>
-          {identity ? (
-            <Text className="text-caption text-pear-text-muted mt-1">{identity.name}</Text>
-          ) : (
-            <Pressable onPress={() => router.push('/profile')}>
-              <Text className="text-caption mt-1" style={{ color: colors.primary }}>
-                Set up your channel to start publishing →
-              </Text>
-            </Pressable>
-          )}
-        </View>
-      </View>
+    <View style={[styles.screen, { paddingTop: insets.top }]}>
+      <ScreenHeader
+        title="STUDIO"
+        eyebrow={publisherEyebrow}
+        right={
+          <>
+            <CastHeaderButton size={18} />
+            <IconButton
+              icon="search"
+              accessibilityLabel="Search"
+              variant="plain"
+              size={36}
+              onPress={() => router.push('/search')}
+            />
+          </>
+        }
+      />
+      {!identity ? (
+        <Pressable onPress={() => router.push('/profile')} style={styles.setupBanner}>
+          <Meta tone="accent">Set up your channel to start publishing →</Meta>
+        </Pressable>
+      ) : null}
 
       <FlatList
         data={myVideos}
@@ -1249,7 +1284,7 @@ function StudioScreen() {
         keyboardShouldPersistTaps="handled"
         ListHeaderComponent={listHeaderComponent}
         contentContainerStyle={{
-          paddingHorizontal: 20,
+          paddingHorizontal: spacing.lg,
           paddingBottom: bottomPadding,
         }}
         ListEmptyComponent={
@@ -1259,46 +1294,45 @@ function StudioScreen() {
             body="Pick a video above — it streams directly from your devices, no servers involved."
           />
         }
-        ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+        ItemSeparatorComponent={() => <View style={styles.rowGap} />}
         renderItem={({ item }) => (
-          <View className="flex-row bg-pear-bg-elevated rounded-xl overflow-hidden" style={{ minHeight: 72 }}>
+          <Panel padded={false} style={styles.publishedRow}>
             <Pressable
               onPress={() => playPublishedVideo(item)}
-              className="flex-1 flex-row active:opacity-80"
+              style={styles.publishedHit}
               accessibilityRole="button"
               accessibilityLabel={`Play ${item.title}`}
             >
-              <View className="w-28 bg-pear-bg-card justify-center items-center">
-                <Ionicons name="play" color={colors.text} size={16} />
+              <View style={styles.publishedThumb}>
+                {item.thumbnail ? (
+                  <Image source={{ uri: item.thumbnail }} style={styles.publishedThumbImg} resizeMode="cover" />
+                ) : (
+                  <Ionicons name="play" color={colors.text} size={16} />
+                )}
               </View>
-              <View className="flex-1 p-4 justify-center">
-                <Text className="text-label text-pear-text" numberOfLines={1}>{item.title}</Text>
-                <Text className="text-caption text-pear-text-muted mt-1">
+              <View style={styles.publishedCopy}>
+                <Text style={styles.publishedTitle} numberOfLines={2}>{item.title}</Text>
+                <Meta tone="muted">
                   {formatBytes(item.size)} · {formatDate(item.uploadedAt)}
-                </Text>
+                </Meta>
               </View>
             </Pressable>
-            <Pressable
+            <IconButton
+              icon="edit-2"
+              accessibilityLabel="Edit video"
+              variant="plain"
+              size={40}
               onPress={() => setEditingVideo(item)}
-              style={({ pressed }) => ({
-                width: 44,
-                justifyContent: 'center',
-                alignItems: 'center',
-                opacity: pressed ? 0.6 : 1,
-                transform: [{ scale: pressed ? 0.85 : 1 }],
-              })}
-            >
-              <Feather name="edit-2" color={colors.text} size={18} />
-            </Pressable>
+            />
             {offloadInfo[item.id]?.offloaded ? (
-              <View className="w-12 justify-center items-center">
+              <View style={styles.publishedActionSlot}>
                 <Feather name="cloud" color={colors.text} size={16} />
               </View>
             ) : offloadInfo[item.id]?.eligible ? (
               <Pressable
                 onPress={() => handleOffloadVideo(item)}
                 disabled={offloadInfo[item.id]?.busy}
-                className="w-12 justify-center items-center active:opacity-60"
+                style={styles.publishedActionSlot}
                 accessibilityLabel="Free up local space"
               >
                 {offloadInfo[item.id]?.busy
@@ -1306,13 +1340,14 @@ function StudioScreen() {
                   : <Feather name="download-cloud" color={colors.primary} size={18} />}
               </Pressable>
             ) : null}
-            <Pressable
+            <IconButton
+              icon="trash-2"
+              accessibilityLabel="Delete video"
+              variant="plain"
+              size={40}
               onPress={() => handleDeleteVideo(item.id, item.title)}
-              className="w-12 justify-center items-center active:opacity-60"
-            >
-              <Feather name="trash-2" color={colors.error} size={18} />
-            </Pressable>
-          </View>
+            />
+          </Panel>
         )}
       />
 
@@ -1331,6 +1366,268 @@ function StudioScreen() {
     </View>
   )
 }
+
+function StudioInput({ style, ...props }: TextInputProps & { style?: StyleProp<TextStyle> }) {
+  return (
+    <TextInput
+      placeholderTextColor={colors.textMuted}
+      {...props}
+      style={[styles.input, style]}
+    />
+  )
+}
+
+const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: colors.bg,
+  },
+  setupBanner: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: borderWidth.rule,
+    borderBottomColor: colors.border,
+  },
+  headerBlock: {
+    paddingTop: spacing.lg,
+  },
+  statusStrip: {
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  statusKey: {
+    ...fonts.caption.sm,
+    color: colors.textMuted,
+  },
+  statusVal: {
+    ...fonts.meta.sm,
+    color: colors.text,
+    textAlign: 'right',
+    flexShrink: 1,
+  },
+  section: {
+    paddingBottom: spacing.xl,
+    borderBottomWidth: borderWidth.hairline,
+    borderBottomColor: colors.borderSubtle,
+    marginBottom: spacing.md,
+  },
+  uploadForm: {
+    gap: spacing.lg,
+  },
+  thumbPanel: {
+    overflow: 'hidden',
+  },
+  thumbAspect: {
+    aspectRatio: 16 / 9,
+    backgroundColor: colors.surface,
+  },
+  thumbFill: {
+    width: '100%',
+    height: '100%',
+  },
+  thumbScrim: {
+    ...ABSOLUTE_FILL,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.overlayMedium,
+  },
+  thumbPlaceholder: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceHover,
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+  },
+  thumbPlaceholderMeta: {
+    textAlign: 'center',
+  },
+  thumbAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
+    backgroundColor: colors.surfaceHover,
+    borderTopWidth: borderWidth.hairline,
+    borderTopColor: colors.borderSubtle,
+  },
+  selectedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  selectedIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.md,
+    backgroundColor: colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectedLabel: {
+    flex: 1,
+    ...fonts.title.md,
+    fontSize: 15,
+    lineHeight: 20,
+    color: colors.text,
+  },
+  fieldBlock: {
+    gap: spacing.sm,
+  },
+  chipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  episodeFields: {
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  episodeRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  episodeInput: {
+    flex: 1,
+  },
+  progressBlock: {
+    gap: spacing.sm,
+  },
+  progressTrack: {
+    height: 2,
+    backgroundColor: colors.surfaceHover,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: colors.primary,
+  },
+  progressMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  progressMeta: {
+    flex: 1,
+  },
+  dropZone: {
+    borderStyle: 'dashed',
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    alignItems: 'stretch',
+    gap: spacing.md,
+    paddingVertical: spacing.xl,
+  },
+  dropHint: {
+    marginBottom: spacing.xs,
+  },
+  devicesPanel: {
+    gap: spacing.md,
+  },
+  devicesBlurb: {
+    marginBottom: spacing.md,
+  },
+  deviceList: {
+    gap: spacing.sm,
+  },
+  deviceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: borderWidth.hairline,
+    borderBottomColor: colors.borderSubtle,
+  },
+  deviceCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  deviceName: {
+    ...fonts.title.md,
+    fontSize: 15,
+    lineHeight: 20,
+    color: colors.text,
+  },
+  inviteBox: {
+    gap: spacing.sm,
+  },
+  inviteCode: {
+    ...fonts.meta.md,
+    color: colors.text,
+  },
+  inviteActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  inviteBtn: {
+    flex: 1,
+  },
+  input: {
+    backgroundColor: colors.surfaceHover,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    color: colors.text,
+    ...fonts.body.md,
+  },
+  rowGap: {
+    height: spacing.md,
+  },
+  publishedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 72,
+  },
+  publishedHit: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  publishedThumb: {
+    width: 96,
+    height: 54,
+    backgroundColor: colors.surfaceHover,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
+    borderRadius: radius.card,
+    marginLeft: spacing.sm,
+    marginVertical: spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  publishedThumbImg: {
+    width: '100%',
+    height: '100%',
+  },
+  publishedCopy: {
+    flex: 1,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: 4,
+  },
+  publishedTitle: {
+    ...fonts.title.md,
+    fontSize: 15,
+    lineHeight: 20,
+    color: colors.text,
+  },
+  publishedActionSlot: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+})
 
 export default function DeveloperStudioScreen() {
   return <DeveloperModeGate><StudioScreen /></DeveloperModeGate>

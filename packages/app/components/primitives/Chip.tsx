@@ -2,7 +2,8 @@ import { useCallback } from 'react'
 import { Pressable, StyleSheet, Text } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
-import { colors } from '@/lib/colors'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 import { springs } from '@/lib/motion'
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable)
@@ -12,14 +13,17 @@ interface ChipProps {
   selected?: boolean
   onPress: () => void
   icon?: keyof typeof Feather.glyphMap
+  /** Optional mono count rendered after the label, e.g. `12`. */
+  count?: number | string
+  testID?: string
 }
 
-/** Filter / segment pill with the shared press spring. */
-export function Chip({ label, selected = false, onPress, icon }: ChipProps) {
+/** Filter / segment control. Rectangular, 2px rule, mono uppercase label. */
+export function Chip({ label, selected = false, onPress, icon, count, testID }: ChipProps) {
   const scale = useSharedValue(1)
 
   const handlePressIn = useCallback(() => {
-    scale.value = withSpring(0.94, springs.press)
+    scale.value = withSpring(0.96, springs.press)
   }, [scale])
 
   const handlePressOut = useCallback(() => {
@@ -30,6 +34,8 @@ export function Chip({ label, selected = false, onPress, icon }: ChipProps) {
     transform: [{ scale: scale.value }],
   }))
 
+  const fg = selected ? colors.onPrimary : colors.textSecondary
+
   return (
     <AnimatedPressable
       onPress={onPress}
@@ -37,17 +43,16 @@ export function Chip({ label, selected = false, onPress, icon }: ChipProps) {
       onPressOut={handlePressOut}
       accessibilityRole="button"
       accessibilityState={{ selected }}
+      testID={testID}
       style={[styles.chip, selected && styles.chipSelected, animatedStyle]}
     >
       {icon ? (
-        <Feather
-          name={icon}
-          size={13}
-          color={selected ? colors.onPrimary : colors.textSecondary}
-          style={{ marginRight: 5 }}
-        />
+        <Feather name={icon} size={12} color={fg} style={styles.icon} />
       ) : null}
-      <Text style={[styles.label, selected && styles.labelSelected]}>{label}</Text>
+      <Text style={[styles.label, { color: fg }]}>{label}</Text>
+      {count !== undefined ? (
+        <Text style={[styles.count, { color: selected ? colors.onPrimary : colors.textMuted }]}>{count}</Text>
+      ) : null}
     </AnimatedPressable>
   )
 }
@@ -56,23 +61,25 @@ const styles = StyleSheet.create({
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 18,
-    backgroundColor: colors.glass,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
+    paddingHorizontal: spacing.md,
+    height: 32,
+    borderRadius: radius.md,
+    backgroundColor: colors.bg,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
   },
   chipSelected: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
-  label: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '600',
+  icon: {
+    marginRight: spacing.sm - 2,
   },
-  labelSelected: {
-    color: colors.onPrimary,
+  label: {
+    ...fonts.caption.sm,
+  },
+  count: {
+    ...fonts.meta.sm,
+    marginLeft: spacing.sm,
   },
 })

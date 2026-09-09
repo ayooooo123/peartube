@@ -8,6 +8,7 @@
  */
 import React from 'react'
 import { VideoCardDesktop, VideoCardProps } from './VideoCard.web'
+import { spacing } from '@/lib/colors'
 
 interface VideoGridProps {
   videos: VideoCardProps[]
@@ -31,7 +32,7 @@ export function VideoGrid({ videos, onVideoPress, onChannelPress }: VideoGridPro
       <style>{`
         .desktop-video-grid {
           display: grid;
-          gap: 24px;
+          gap: ${spacing.lg}px;
           grid-template-columns: repeat(2, 1fr);
         }
         @media (min-width: 992px) {
@@ -51,7 +52,7 @@ export function VideoGrid({ videos, onVideoPress, onChannelPress }: VideoGridPro
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
-    padding: '24px',
+    padding: spacing.xl,
     width: '100%',
   },
   grid: {

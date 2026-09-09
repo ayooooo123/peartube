@@ -1,11 +1,11 @@
 /**
- * Desktop Layout - Main layout wrapper for Pear desktop
+ * Desktop Layout - Main layout wrapper for the Electrobun desktop shell.
  *
  * Layout structure:
- * - Pear Bar (52px) - handled by inject-pear-bar.js
- * - Header (56px) - search, logo, upload
- * - Sidebar (240px/72px) - collapsible navigation
- * - Content - main content area
+ * - Title-bar inset (macOS traffic-light clearance)
+ * - Header (56px) - wordmark, search, cast, profile; 2px rule underneath
+ * - Sidebar (240px/72px) - collapsible navigation; 2px rule on its right edge
+ * - Content - main content area on the black base
  */
 import React, { useState, useCallback, useMemo } from 'react'
 import { DesktopHeader } from './DesktopHeader.web'
@@ -49,15 +49,11 @@ export function DesktopLayout({ children }: DesktopLayoutProps) {
   return (
     <SidebarContext.Provider value={sidebarContextValue}>
       <div style={styles.container}>
-        {/* Header - below pear bar */}
         <DesktopHeader />
 
-        {/* Main content area */}
         <div style={styles.mainArea}>
-          {/* Sidebar */}
           <DesktopSidebar />
 
-          {/* Content */}
           <main
             style={{
               ...styles.content,
@@ -91,7 +87,7 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     overflow: 'auto',
     backgroundColor: colors.bg,
-    transition: 'margin-left 0.2s ease',
+    transition: 'margin-left 0.15s ease',
   },
 }
 

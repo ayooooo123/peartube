@@ -1,9 +1,9 @@
 import { memo, RefObject, useCallback, useEffect, useMemo, useState } from 'react'
 import { ActivityIndicator, ImageBackground, LayoutChangeEvent, Pressable, StyleSheet, View } from 'react-native'
+import { ABSOLUTE_FILL } from '@/lib/absolute-fill'
 import { Feather } from '@expo/vector-icons'
-import { LinearGradient } from 'expo-linear-gradient'
 import type { VideoData } from '@peartube/core'
-import { colors } from '@/lib/colors'
+import { colors, radius, borderWidth } from '@/lib/colors'
 import { PearInlineVideoView } from '@/components/video-player/PearInlineVideoView'
 import type { PlayerPort } from '@/lib/video-player'
 
@@ -204,13 +204,6 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
         />
       ) : null}
 
-      <LinearGradient
-        pointerEvents="none"
-        colors={['rgba(0,0,0,0.32)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0.64)']}
-        locations={[0, 0.46, 1]}
-        style={StyleSheet.absoluteFill}
-      />
-
       {showPlayer && isLandscape ? (
         <View pointerEvents="none" style={styles.landscapeMatte} />
       ) : null}
@@ -218,14 +211,14 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
       {isLoading ? (
         <View style={styles.centerOverlay}>
           <View style={styles.loadingOrb}>
-            <ActivityIndicator color="#fff" size="small" />
+            <ActivityIndicator color={colors.text} size="small" />
           </View>
         </View>
       ) : null}
 
       {!showPlayer && !isLoading ? (
         <Pressable onPress={onReplay} style={styles.playButtonShell} accessibilityLabel="Play vertical video">
-          <Feather name={hasPlaybackError ? 'rotate-cw' : 'play'} color="#fff" size={42} />
+          <Feather name={hasPlaybackError ? 'rotate-cw' : 'play'} color={colors.primary} size={28} />
         </Pressable>
       ) : null}
 
@@ -236,7 +229,7 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
             style={styles.centerControlButton}
             accessibilityLabel={isPaused ? 'Play Shorts video' : 'Pause Shorts video'}
           >
-            <Feather name={isPaused ? 'play' : 'pause'} color="#fff" size={30} />
+            <Feather name={isPaused ? 'play' : 'pause'} color={colors.primary} size={22} />
           </Pressable>
         </View>
       ) : null}
@@ -251,7 +244,6 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
             accessibilityLabel="Shorts progress bar"
           >
             <View style={styles.progressRail}>
-              <View style={[styles.progressFillGlow, { width: `${effectiveProgress * 100}%` }]} />
               <View style={[styles.progressFill, { width: `${effectiveProgress * 100}%` }]} />
             </View>
           </Pressable>
@@ -263,18 +255,18 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
 
 const styles = StyleSheet.create({
   container: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#000',
+    ...ABSOLUTE_FILL,
+    backgroundColor: colors.contrast,
     overflow: 'hidden',
   },
   posterImage: {
     resizeMode: 'cover',
   },
   videoSurface: {
-    backgroundColor: '#000',
+    backgroundColor: colors.contrast,
   },
   verticalVideoSurface: {
-    ...StyleSheet.absoluteFillObject,
+    ...ABSOLUTE_FILL,
   },
   landscapeVideoSurface: {
     position: 'absolute',
@@ -284,32 +276,32 @@ const styles = StyleSheet.create({
     height: '50%',
   },
   landscapeMatte: {
-    ...StyleSheet.absoluteFillObject,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    ...ABSOLUTE_FILL,
+    borderTopWidth: borderWidth.hairline,
+    borderBottomWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
   },
   centerOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...ABSOLUTE_FILL,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.12)',
+    backgroundColor: colors.overlayMedium,
   },
   loadingOrb: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
+    width: 44,
+    height: 44,
+    borderRadius: radius.card,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(8,10,14,0.42)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: colors.overlayButton,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
   },
   progressDock: {
     position: 'absolute',
     left: 0,
     right: 0,
-    paddingHorizontal: 24,
+    paddingHorizontal: 0,
     paddingBottom: 0,
   },
   centerPlaybackControls: {
@@ -321,51 +313,41 @@ const styles = StyleSheet.create({
     pointerEvents: 'box-none',
   },
   centerControlButton: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 44,
+    height: 44,
+    borderRadius: radius.card,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.34)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
+    backgroundColor: colors.overlayButton,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
   },
   progressTrack: {
     height: 18,
-    justifyContent: 'center',
+    justifyContent: 'flex-end',
   },
   progressRail: {
-    height: 4,
-    borderRadius: 999,
+    height: borderWidth.rule,
     overflow: 'hidden',
-    backgroundColor: 'rgba(255,255,255,0.26)',
-  },
-  progressFillGlow: {
-    position: 'absolute',
-    left: 0,
-    top: -3,
-    bottom: -3,
-    borderRadius: 999,
-    backgroundColor: 'rgba(79,156,255,0.22)',
+    backgroundColor: colors.border,
   },
   progressFill: {
     height: '100%',
-    borderRadius: 999,
-    backgroundColor: '#f7fbff',
+    backgroundColor: colors.primary,
   },
   playButtonShell: {
     position: 'absolute',
     left: '50%',
     top: '50%',
-    width: 82,
-    height: 82,
-    marginLeft: -41,
-    marginTop: -41,
-    borderRadius: 41,
+    width: 44,
+    height: 44,
+    marginLeft: -22,
+    marginTop: -22,
+    borderRadius: radius.card,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(8,10,14,0.34)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.16)',
+    backgroundColor: colors.overlayButton,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
   },
 })

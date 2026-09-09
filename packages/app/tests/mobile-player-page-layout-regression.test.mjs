@@ -205,48 +205,48 @@ test('mobile mini-player drag snaps to safe-area corners', () => {
   )
 })
 
-test('mobile pill tab bar owns its own route matching and stays disabled on desktop', () => {
+test('mobile tab bar owns its own route matching and stays disabled on desktop', () => {
   const layoutSource = readAppFile('app/(tabs)/_layout.tsx')
-  const tabBarSource = readAppFile('components/PillTabBar.tsx')
+  const tabBarSource = readAppFile('components/TabBar.tsx')
 
   assert.match(
     layoutSource,
-    /tabBar=\{\(\) => <PillTabBar \/>\}/,
-    'tabs layout should mount the pill tab bar through its self-contained router-aware API',
+    /tabBar=\{\(\) => <TabBar \/>\}/,
+    'tabs layout should mount the tab bar through its self-contained router-aware API',
   )
   assert.match(
     tabBarSource,
-    /import \{ usePathname, useRouter \} from 'expo-router'/,
-    'pill tab bar should derive active state and navigation from expo-router paths',
+    /import \{ usePathname, useRouter, type Href \} from 'expo-router'/,
+    'tab bar should derive active state and navigation from expo-router paths',
   )
   assert.match(
     tabBarSource,
     /const \{ isDesktop \} = usePlatform\(\)/,
-    'pill tab bar should check desktop mode directly instead of rendering a mobile control there',
+    'tab bar should check desktop mode directly instead of rendering a mobile control there',
   )
   assert.match(
     tabBarSource,
     /if \(isDesktop\) \{\s+return null\s+\}/,
-    'pill tab bar should not render on desktop layouts',
+    'tab bar should not render on desktop layouts',
   )
   assert.match(
     tabBarSource,
-    /router\.replace\(tab\.path as any\)/,
-    'pill tab bar should navigate by explicit route path so custom route layouts stay in sync',
+    /router\.replace\(tab\.path as Href\)/,
+    'tab bar should navigate by explicit route path so custom route layouts stay in sync',
   )
   assert.doesNotMatch(
     tabBarSource,
-    /interface PillTabBarProps/,
-    'pill tab bar should no longer depend on TabNavigator state props',
+    /interface TabBarProps/,
+    'tab bar should no longer depend on TabNavigator state props',
   )
 })
 
-test('mobile pill tab bar renders vector icons on Android instead of text fallbacks', () => {
-  const tabBarSource = readAppFile('components/PillTabBar.tsx')
+test('mobile tab bar renders vector icons on Android instead of text fallbacks', () => {
+  const tabBarSource = readAppFile('components/TabBar.tsx')
   const appJson = JSON.parse(readAppFile('app.json'))
 
-  assert.match(tabBarSource, /<Feather name=\{tab\.icon\} size=\{iconSize\} color=\{iconColor\}/, 'pill tab bar should render Feather glyphs for every tab')
-  assert.doesNotMatch(tabBarSource, /function TextIcon/, 'pill tab bar should not render H\/D\/S text placeholders on Android')
+  assert.match(tabBarSource, /<Feather name=\{tab\.icon\} size=\{ICON_SIZE\} color=\{iconColor\}/, 'tab bar should render Feather glyphs for every tab')
+  assert.doesNotMatch(tabBarSource, /function TextIcon/, 'tab bar should not render H\/D\/S text placeholders on Android')
   assert.doesNotMatch(tabBarSource, /Platform\.OS === 'android' \? \(/, 'Android should use the same vector icon component as iOS')
   assert.ok(
     appJson.expo.plugins.includes('./plugins/withVectorIconFonts.js'),

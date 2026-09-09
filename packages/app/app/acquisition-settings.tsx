@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Pressable, ScrollView, Switch, Text, TextInput, View } from 'react-native'
+import { ScrollView, Switch, Text, TextInput, View, StyleSheet } from 'react-native'
 import { useRouter } from 'expo-router'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { DeveloperModeGate } from '@/lib/developer-mode'
-import { colors } from '@/lib/colors'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
+import { Button, Chip, Panel, ScreenHeader, SectionHeader } from '@/components/primitives'
 import { useApp } from './_layout'
 
 type AcquisitionPolicy = {
@@ -77,6 +80,7 @@ const CLOSED_POLICY: AcquisitionPolicy = {
 
 function AcquisitionSettingsScreen() {
   const router = useRouter()
+  const insets = useSafeAreaInsets()
   const { rpc } = useApp()
   const provider = rpc?.provider
   const [policy, setPolicy] = useState<AcquisitionPolicy>(CLOSED_POLICY)
@@ -134,100 +138,109 @@ function AcquisitionSettingsScreen() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.bg }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: colors.border }}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={() => router.back()}>
-          <Text style={{ color: colors.primary, fontWeight: '700' }}>Back</Text>
-        </Pressable>
-        <Text style={{ color: colors.text, fontSize: 20, fontWeight: '700', marginLeft: 18 }}>Acquisition policy</Text>
+    <View style={styles.screen}>
+      <View style={{ paddingTop: insets.top }}>
+        <ScreenHeader title="Acquisition policy" eyebrow="OPERATOR / LIMITS" onBack={() => router.back()} />
       </View>
-      <ScrollView contentContainerStyle={{ padding: 16, gap: 16 }}>
-        <Text style={{ color: colors.textMuted }}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + spacing.xxl }]}>
+        <Text style={styles.intro}>
           Local operator limits for requesting, verifying, publishing, and retaining media. Source credentials never appear here.
         </Text>
 
-        <View style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 14, gap: 14 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.text, fontWeight: '700' }}>Enable acquisitions</Text>
-              <Text style={{ color: colors.textMuted }}>Closed until explicit consent and non-zero limits are saved.</Text>
+        <Panel style={styles.panel}>
+          <View style={styles.switchRow}>
+            <View style={styles.switchCopy}>
+              <Text style={styles.rowTitle}>Enable acquisitions</Text>
+              <Text style={styles.rowDetail}>Closed until explicit consent and non-zero limits are saved.</Text>
             </View>
-            <Switch value={policy.enabled} onValueChange={(enabled) => setPolicy(current => ({ ...current, enabled }))} />
+            <Switch
+              value={policy.enabled}
+              onValueChange={(enabled) => setPolicy(current => ({ ...current, enabled }))}
+              trackColor={{ false: colors.bgActive, true: colors.primary }}
+              thumbColor={colors.text}
+            />
           </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.text, fontWeight: '700' }}>Accept public requests</Text>
-              <Text style={{ color: colors.textMuted }}>Allow requests outside this local device only when policy limits admit them.</Text>
+          <View style={styles.switchRow}>
+            <View style={styles.switchCopy}>
+              <Text style={styles.rowTitle}>Accept public requests</Text>
+              <Text style={styles.rowDetail}>Allow requests outside this local device only when policy limits admit them.</Text>
             </View>
-            <Switch value={policy.acceptPublicRequests} onValueChange={(acceptPublicRequests) => setPolicy(current => ({ ...current, acceptPublicRequests }))} />
+            <Switch
+              value={policy.acceptPublicRequests}
+              onValueChange={(acceptPublicRequests) => setPolicy(current => ({ ...current, acceptPublicRequests }))}
+              trackColor={{ false: colors.bgActive, true: colors.primary }}
+              thumbColor={colors.text}
+            />
           </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.text, fontWeight: '700' }}>I consent to bounded media acquisition</Text>
-              <Text style={{ color: colors.textMuted }}>Required before enabling downloads or retention.</Text>
+          <View style={styles.switchRow}>
+            <View style={styles.switchCopy}>
+              <Text style={styles.rowTitle}>I consent to bounded media acquisition</Text>
+              <Text style={styles.rowDetail}>Required before enabling downloads or retention.</Text>
             </View>
-            <Switch value={consent} onValueChange={setConsent} />
+            <Switch
+              value={consent}
+              onValueChange={setConsent}
+              trackColor={{ false: colors.bgActive, true: colors.primary }}
+              thumbColor={colors.text}
+            />
           </View>
-        </View>
+        </Panel>
 
-        <Text style={{ color: colors.text, fontWeight: '700' }}>Requester mode</Text>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
+        <SectionHeader title="Requester mode" flush />
+        <View style={styles.chipRow}>
           {(['local-only', 'allowlisted', 'public'] as const).map((requesterMode) => (
-            <Pressable
+            <Chip
               key={requesterMode}
-              accessibilityRole="button"
-              accessibilityState={{ selected: policy.requesterMode === requesterMode }}
+              label={requesterMode}
+              selected={policy.requesterMode === requesterMode}
               onPress={() => setPolicy(current => ({ ...current, requesterMode }))}
-              style={{ borderWidth: 1, borderColor: policy.requesterMode === requesterMode ? colors.primary : colors.border, borderRadius: 10, padding: 10 }}
-            >
-              <Text style={{ color: colors.text }}>{requesterMode}</Text>
-            </Pressable>
+            />
           ))}
         </View>
 
+        <Text style={styles.fieldLabel}>Allowed publisher IDs</Text>
         <TextInput
           accessibilityLabel="Allowed publisher IDs"
           value={policy.allowedPublisherIds.join(', ')}
           onChangeText={(value) => setPolicy(current => ({ ...current, allowedPublisherIds: value.split(',').map(entry => entry.trim()).filter(Boolean) }))}
           placeholder="Allowed publisher IDs"
           placeholderTextColor={colors.textMuted}
-          style={{ color: colors.text, borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 12 }}
+          style={styles.input}
         />
+        <Text style={styles.fieldLabel}>Allowed adapter IDs</Text>
         <TextInput
           accessibilityLabel="Allowed adapter IDs"
           value={policy.allowedAdapterIds.join(', ')}
           onChangeText={(value) => setPolicy(current => ({ ...current, allowedAdapterIds: value.split(',').map(entry => entry.trim()).filter(Boolean) }))}
           placeholder="Allowed adapter IDs"
           placeholderTextColor={colors.textMuted}
-          style={{ color: colors.text, borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 12 }}
+          style={styles.input}
         />
 
+        <SectionHeader title="Limits" eyebrow="BYTES / COUNTS" flush />
         {LIMIT_FIELDS.map((field) => (
-          <View key={field} style={{ gap: 5 }}>
-            <Text style={{ color: colors.textMuted }}>{field}</Text>
+          <View key={field} style={styles.fieldBlock}>
+            <Text style={styles.fieldLabel}>{field}</Text>
             <TextInput
               accessibilityLabel={field}
               keyboardType="numeric"
               value={String(policy[field])}
               onChangeText={(value) => setPolicy(current => ({ ...current, [field]: Math.max(0, Number.parseInt(value, 10) || 0) }))}
-              style={{ color: colors.text, borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 12 }}
+              style={styles.input}
             />
           </View>
         ))}
 
-        {!consent && policy.enabled ? <Text accessibilityRole="alert" style={{ color: colors.error }}>Consent is required before acquisitions can be enabled.</Text> : null}
-        {status === 'error' ? <Text accessibilityRole="alert" style={{ color: colors.error }}>Unable to update acquisition policy.</Text> : null}
-        <Pressable
-          accessibilityRole="button"
+        {!consent && policy.enabled ? <Text accessibilityRole="alert" style={styles.error}>Consent is required before acquisitions can be enabled.</Text> : null}
+        {status === 'error' ? <Text accessibilityRole="alert" style={styles.error}>Unable to update acquisition policy.</Text> : null}
+        <Button
+          label={status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved' : 'Save policy'}
           accessibilityLabel="Save acquisition policy"
           disabled={!canSave}
+          loading={status === 'saving'}
           onPress={() => { void save() }}
-          style={{ backgroundColor: colors.primary, borderRadius: 12, padding: 14, opacity: canSave ? 1 : 0.5 }}
-        >
-          <Text style={{ color: colors.onPrimary, fontWeight: '700', textAlign: 'center' }}>
-            {status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved' : 'Save policy'}
-          </Text>
-        </Pressable>
+          block
+        />
       </ScrollView>
     </View>
   )
@@ -236,3 +249,28 @@ function AcquisitionSettingsScreen() {
 export default function DeveloperAcquisitionSettingsScreen() {
   return <DeveloperModeGate><AcquisitionSettingsScreen /></DeveloperModeGate>
 }
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.bg },
+  content: { padding: spacing.lg, gap: spacing.md },
+  intro: { ...fonts.body.sm, color: colors.textMuted, lineHeight: 20 },
+  panel: { gap: spacing.lg },
+  switchRow: { flexDirection: 'row', alignItems: 'center', minHeight: 52, gap: spacing.md },
+  switchCopy: { flex: 1 },
+  rowTitle: { ...fonts.title.md, fontSize: 14, lineHeight: 18, color: colors.text },
+  rowDetail: { ...fonts.body.sm, fontSize: 12, lineHeight: 17, color: colors.textMuted, marginTop: 2 },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  fieldBlock: { gap: spacing.xs },
+  fieldLabel: { ...fonts.caption.sm, color: colors.textMuted },
+  input: {
+    color: colors.text,
+    ...fonts.meta.sm,
+    backgroundColor: colors.surfaceHover,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    borderRadius: radius.card,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+  },
+  error: { ...fonts.meta.sm, color: colors.error },
+})

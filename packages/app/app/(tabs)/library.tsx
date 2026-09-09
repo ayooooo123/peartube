@@ -9,11 +9,12 @@ import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { CastHeaderButton } from '@/components/cast'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
-import { useDownloads } from '@/lib/DownloadsContext'
+import { useDownloads, type DownloadItem } from '@/lib/DownloadsContext'
 import { useVideoPlayerActions } from '@/lib/VideoPlayerContext'
-import { Chip, EmptyState } from '@/components/primitives'
+import { Chip, Divider, EmptyState, IconButton, Panel, ScreenHeader } from '@/components/primitives'
 import { ChannelRow, DownloadRow, HistoryRow, SubscribeSheet, type SubscriptionItem } from '@/components/library'
 import { fonts } from '@/lib/typography'
+import { spacing, radius, borderWidth } from '@/lib/colors'
 import * as watchHistory from '@/lib/watch-history'
 import * as haptics from '@/lib/haptics'
 import { resumeWatchEntry } from '@/lib/playback-resume'
@@ -150,43 +151,55 @@ export default function LibraryScreen() {
     })
   }, [loadHistory])
 
-  const hasFinishedDownloads = downloads.some((d) => d.status === 'complete' || d.status === 'cancelled' || d.status === 'error')
-  const activeDownloads = downloads.filter((d) => d.status === 'downloading' || d.status === 'queued')
-  const completedDownloads = downloads.filter((d) => d.status === 'complete')
-  const failedDownloads = downloads.filter((d) => d.status === 'error' || d.status === 'cancelled')
+  const tabCount = (id: LibraryTab): number | undefined => {
+    if (id === 'channels') return subscriptions.length
+    if (id === 'downloads') return activeCount > 0 ? activeCount : (downloads.length || undefined)
+    if (id === 'history') return history.length || undefined
+    return undefined
+  }
 
   return (
-    <View style={styles.screen}>
-      {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top ? 8 : 16 }]}>
-        <Text style={styles.headerTitle}>Library</Text>
-        <View style={styles.headerActions}>
-          <CastHeaderButton size={18} />
-          <Pressable onPress={() => router.push('/search')} hitSlop={8} style={styles.headerButton}>
-            <Feather name="search" color={colors.text} size={18} />
-          </Pressable>
-          <Pressable onPress={() => router.push('/playlists')} hitSlop={8} style={styles.headerButton} accessibilityLabel="Playlists">
-            <Feather name="list" color={colors.text} size={18} />
-          </Pressable>
-          <Pressable
-            onPress={() => router.push('/profile')}
-            hitSlop={8}
-            style={styles.avatarButton}
-            accessibilityRole="button"
-            accessibilityLabel="Profile"
-          >
-            <Text style={styles.avatarLetter}>{identity?.name?.charAt(0)?.toUpperCase() || '•'}</Text>
-          </Pressable>
-        </View>
-      </View>
+    <View style={[styles.screen, { paddingTop: insets.top }]}>
+      <ScreenHeader
+        title="Library"
+        eyebrow="LOCAL / PERSONAL"
+        right={
+          <>
+            <CastHeaderButton size={18} />
+            <IconButton
+              icon="search"
+              onPress={() => router.push('/search')}
+              accessibilityLabel="Search"
+              variant="plain"
+              size={36}
+            />
+            <IconButton
+              icon="list"
+              onPress={() => router.push('/playlists')}
+              accessibilityLabel="Playlists"
+              variant="plain"
+              size={36}
+            />
+            <Pressable
+              onPress={() => router.push('/profile')}
+              hitSlop={8}
+              style={styles.avatarButton}
+              accessibilityRole="button"
+              accessibilityLabel="Profile"
+            >
+              <Text style={styles.avatarLetter}>{identity?.name?.charAt(0)?.toUpperCase() || '•'}</Text>
+            </Pressable>
+          </>
+        }
+      />
 
-      {/* Segments */}
       <View style={styles.chips}>
         {TAB_LABELS.map((t) => (
           <Chip
             key={t.id}
-            label={t.id === 'downloads' && activeCount > 0 ? `${t.label} · ${activeCount}` : t.label}
+            label={t.label}
             icon={t.icon}
+            count={tabCount(t.id)}
             selected={tab === t.id}
             onPress={() => {
               if (tab !== t.id) haptics.tabSwitch()
@@ -197,103 +210,153 @@ export default function LibraryScreen() {
       </View>
 
       {tab === 'channels' && (
-        <FlatList
-          data={subscriptions}
-          keyExtractor={(item) => item.channelKey}
-          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomPadding, flexGrow: 1 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
-          ListHeaderComponent={
-            <View style={{ marginHorizontal: -16, marginTop: 4 }}>
-              <SubscribeSheet rpc={rpc} onSubscribed={loadSubscriptions} />
-            </View>
-          }
-          ListEmptyComponent={
-            <EmptyState
-              icon="users"
-              title="No channels yet"
-              body="Paste a channel key above, or find creators on the Discover tab."
-            />
-          }
-          renderItem={({ item }) => (
-            <ChannelRow
-              item={item}
-              pinned={pinnedKeys.has(item.channelKey)}
-              onOpen={() =>
-                router.push({
-                  pathname: '/channel/[key]',
-                  params: { key: item.channelKey, publicBeeKey: item.publicBeeKey || undefined },
-                })
+        <View style={styles.tabBody}>
+          <SubscribeSheet rpc={rpc} onSubscribed={loadSubscriptions} />
+          <Panel padded={false} style={[styles.listPanel, { marginBottom: bottomPadding }]}>
+            <FlatList
+              data={subscriptions}
+              keyExtractor={(item) => item.channelKey}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+              contentContainerStyle={subscriptions.length === 0 ? styles.emptyGrow : undefined}
+              ListEmptyComponent={
+                <EmptyState
+                  icon="users"
+                  title="No channels yet"
+                  body="Paste a channel key above, or find creators on the Discover tab."
+                />
               }
-              onUnsubscribe={() => unsubscribe(item.channelKey)}
-              onTogglePin={() => togglePin(item.channelKey)}
-              onRetrySync={() => retrySync(item.channelKey)}
+              ItemSeparatorComponent={() => <Divider />}
+              renderItem={({ item }) => (
+                <ChannelRow
+                  item={item}
+                  pinned={pinnedKeys.has(item.channelKey)}
+                  onOpen={() =>
+                    router.push({
+                      pathname: '/channel/[key]',
+                      params: { key: item.channelKey, publicBeeKey: item.publicBeeKey || undefined },
+                    })
+                  }
+                  onUnsubscribe={() => unsubscribe(item.channelKey)}
+                  onTogglePin={() => togglePin(item.channelKey)}
+                  onRetrySync={() => retrySync(item.channelKey)}
+                />
+              )}
             />
-          )}
-        />
+          </Panel>
+        </View>
       )}
 
       {tab === 'downloads' && (
-        <ScrollView
-          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomPadding, flexGrow: 1 }}
-        >
-          {downloads.length === 0 ? (
-            <EmptyState
-              icon="download"
-              title="No downloads yet"
-              body="Videos you save for offline viewing will appear here."
-            />
-          ) : (
-            <>
-              {hasFinishedDownloads && (
-                <Pressable onPress={clearCompleted} style={({ pressed }) => [styles.clearRow, pressed && { opacity: 0.6 }]}>
-                  <Feather name="trash-2" size={13} color={colors.textMuted} />
-                  <Text style={styles.clearLabel}>Clear finished</Text>
-                </Pressable>
-              )}
-              {activeDownloads.length > 0 && <Text style={styles.sectionLabel}>Active</Text>}
-              {activeDownloads.map((item) => (
-                <DownloadRow key={item.id} item={item} onCancel={() => cancelDownload(item.id)} onRemove={() => removeDownload(item.id)} onRetry={() => {}} />
-              ))}
-              {completedDownloads.length > 0 && <Text style={styles.sectionLabel}>Saved</Text>}
-              {completedDownloads.map((item) => (
-                <DownloadRow key={item.id} item={item} onCancel={() => cancelDownload(item.id)} onRemove={() => removeDownload(item.id)} onRetry={() => {}} />
-              ))}
-              {failedDownloads.length > 0 && <Text style={styles.sectionLabel}>Didn't finish</Text>}
-              {failedDownloads.map((item) => (
-                <DownloadRow key={item.id} item={item} onCancel={() => cancelDownload(item.id)} onRemove={() => removeDownload(item.id)} onRetry={() => removeDownload(item.id)} />
-              ))}
-            </>
-          )}
-        </ScrollView>
+        <DownloadsTab
+          downloads={downloads}
+          bottomPadding={bottomPadding}
+          onCancel={cancelDownload}
+          onRemove={removeDownload}
+          onClearCompleted={clearCompleted}
+        />
       )}
 
       {tab === 'history' && (
-        <FlatList
-          data={history}
-          keyExtractor={(item) => `${item.channelKey}:${item.videoId}`}
-          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: bottomPadding, flexGrow: 1 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
-          ListHeaderComponent={
-            history.length > 0 ? (
-              <Pressable onPress={clearAllHistory} style={({ pressed }) => [styles.clearRow, pressed && { opacity: 0.6 }]}>
-                <Feather name="trash-2" size={13} color={colors.textMuted} />
-                <Text style={styles.clearLabel}>Clear history</Text>
-              </Pressable>
-            ) : null
-          }
-          ListEmptyComponent={
-            <EmptyState
-              icon="clock"
-              title="Nothing watched yet"
-              body="Videos you watch show up here so you can pick up where you left off."
+        <View style={[styles.tabBody, { paddingHorizontal: spacing.lg }]}>
+          {history.length > 0 ? (
+            <Pressable onPress={clearAllHistory} style={({ pressed }) => [styles.clearRow, pressed && { opacity: 0.6 }]}>
+              <Feather name="trash-2" size={13} color={colors.textMuted} />
+              <Text style={styles.clearLabel}>Clear history</Text>
+            </Pressable>
+          ) : null}
+          <Panel padded={false} style={[styles.listPanelFlush, { marginBottom: bottomPadding }]}>
+            <FlatList
+              data={history}
+              keyExtractor={(item) => `${item.channelKey}:${item.videoId}`}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+              contentContainerStyle={history.length === 0 ? styles.emptyGrow : undefined}
+              ListEmptyComponent={
+                <EmptyState
+                  icon="clock"
+                  title="Nothing watched yet"
+                  body="Videos you watch show up here so you can pick up where you left off."
+                />
+              }
+              ItemSeparatorComponent={() => <Divider />}
+              renderItem={({ item }) => (
+                <HistoryRow entry={item} onOpen={() => resumeFromHistory(item)} onRemove={() => removeHistoryEntry(item)} />
+              )}
             />
-          }
-          renderItem={({ item }) => (
-            <HistoryRow entry={item} onOpen={() => resumeFromHistory(item)} onRemove={() => removeHistoryEntry(item)} />
-          )}
-        />
+          </Panel>
+        </View>
       )}
     </View>
+  )
+}
+
+interface DownloadsTabProps {
+  downloads: DownloadItem[]
+  bottomPadding: number
+  onCancel: (id: string) => void
+  onRemove: (id: string) => void
+  onClearCompleted: () => void
+}
+
+function DownloadsTab({ downloads, bottomPadding, onCancel, onRemove, onClearCompleted }: DownloadsTabProps) {
+  const hasFinishedDownloads = downloads.some((d) => d.status === 'complete' || d.status === 'cancelled' || d.status === 'error')
+  const activeDownloads = downloads.filter((d) => d.status === 'downloading' || d.status === 'queued')
+  const completedDownloads = downloads.filter((d) => d.status === 'complete')
+  const failedDownloads = downloads.filter((d) => d.status === 'error' || d.status === 'cancelled')
+
+  return (
+    <ScrollView
+      contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: bottomPadding, flexGrow: 1 }}
+    >
+      {downloads.length === 0 ? (
+        <EmptyState
+          icon="download"
+          title="No downloads yet"
+          body="Videos you save for offline viewing will appear here."
+        />
+      ) : (
+        <>
+          {hasFinishedDownloads && (
+            <Pressable onPress={onClearCompleted} style={({ pressed }) => [styles.clearRow, pressed && { opacity: 0.6 }]}>
+              <Feather name="trash-2" size={13} color={colors.textMuted} />
+              <Text style={styles.clearLabel}>Clear finished</Text>
+            </Pressable>
+          )}
+          <Panel padded={false}>
+            {activeDownloads.length > 0 && <Text style={styles.sectionLabel}>Active</Text>}
+            {activeDownloads.map((item, index) => (
+              <View key={item.id}>
+                {index > 0 ? <Divider /> : null}
+                <DownloadRow item={item} onCancel={() => onCancel(item.id)} onRemove={() => onRemove(item.id)} onRetry={() => {}} />
+              </View>
+            ))}
+            {completedDownloads.length > 0 && (
+              <>
+                {activeDownloads.length > 0 ? <Divider weight="rule" /> : null}
+                <Text style={styles.sectionLabel}>Saved</Text>
+              </>
+            )}
+            {completedDownloads.map((item, index) => (
+              <View key={item.id}>
+                {index > 0 ? <Divider /> : null}
+                <DownloadRow item={item} onCancel={() => onCancel(item.id)} onRemove={() => onRemove(item.id)} onRetry={() => {}} />
+              </View>
+            ))}
+            {failedDownloads.length > 0 && (
+              <>
+                {(activeDownloads.length > 0 || completedDownloads.length > 0) ? <Divider weight="rule" /> : null}
+                <Text style={styles.sectionLabel}>Didn't finish</Text>
+              </>
+            )}
+            {failedDownloads.map((item, index) => (
+              <View key={item.id}>
+                {index > 0 ? <Divider /> : null}
+                <DownloadRow item={item} onCancel={() => onCancel(item.id)} onRemove={() => onRemove(item.id)} onRetry={() => onRemove(item.id)} />
+              </View>
+            ))}
+          </Panel>
+        </>
+      )}
+    </ScrollView>
   )
 }
 
@@ -302,33 +365,19 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingBottom: 12,
+  tabBody: {
+    flex: 1,
   },
-  headerTitle: {
-    color: colors.text,
-    fontSize: 26,
-    fontFamily: fonts.heading,
-  },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  headerButton: {
-    padding: 8,
+  emptyGrow: {
+    flexGrow: 1,
   },
   avatarButton: {
     width: 32,
     height: 32,
-    borderRadius: 16,
+    borderRadius: radius.md,
     backgroundColor: colors.bgActive,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -339,30 +388,35 @@ const styles = StyleSheet.create({
   },
   chips: {
     flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: 16,
-    marginBottom: 14,
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    marginBottom: spacing.md,
+  },
+  listPanel: {
+    flex: 1,
+    marginHorizontal: spacing.lg,
+  },
+  listPanelFlush: {
+    flex: 1,
   },
   sectionLabel: {
+    ...fonts.caption.sm,
     color: colors.textMuted,
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    marginTop: 8,
-    marginBottom: 8,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
   },
   clearRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: spacing.sm - 2,
     alignSelf: 'flex-end',
-    paddingVertical: 6,
-    marginBottom: 4,
+    paddingVertical: spacing.sm - 2,
+    marginBottom: spacing.xs,
   },
   clearLabel: {
+    ...fonts.caption.sm,
     color: colors.textMuted,
-    fontSize: 12,
-    fontWeight: '600',
   },
 })

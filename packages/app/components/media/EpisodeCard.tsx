@@ -1,9 +1,10 @@
 import { memo } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
-import { colors } from '@/lib/colors'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 import { formatContentBadge } from '@/lib/formatters'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
+import { Meta, Eyebrow } from '@/components/primitives'
 import type { MediaCockpitItem } from './HeroFeatureCard'
 
 export const EPISODE_CARD_WIDTH = 236
@@ -72,19 +73,19 @@ function EpisodeCardComponent({ item, onPress, progress }: EpisodeCardProps) {
     >
       <View style={styles.thumbnailFrame}>
         <ThumbnailImage thumbnailUrl={thumbnailUrl} duration={duration} channelInitial={title.charAt(0).toUpperCase()} style={styles.thumbnail} />
-        <View pointerEvents="none" style={styles.thumbnailScrim} />
-        {badge ? <Text style={styles.frameBadge} numberOfLines={1}>{badge}</Text> : null}
+        {/* Progress bar at bottom: 2px lime line */}
         {normalizedProgress > 0 ? (
           <View style={styles.progressTrack} pointerEvents="none">
             <View style={[styles.progressFill, { width: `${Math.round(normalizedProgress * 100)}%` }]} />
           </View>
         ) : null}
       </View>
+      
       <View style={styles.copy}>
         <View style={styles.metaRow}>
-          {badge ? <Text style={styles.badge} numberOfLines={1}>{badge}</Text> : null}
-          {signal ? <Text style={styles.meta} numberOfLines={1}>{signal}</Text> : null}
-          {conflictCount > 0 ? <Text style={styles.metaWarn} numberOfLines={1}>conflict</Text> : null}
+          {badge ? <Eyebrow tone="accent">{badge}</Eyebrow> : null}
+          {signal ? <Meta tone="muted">{signal}</Meta> : null}
+          {conflictCount > 0 ? <Meta tone="warning">CONFLICT</Meta> : null}
         </View>
         <Text style={styles.title} numberOfLines={2}>{title}</Text>
         {subtitle ? <Text style={styles.subtitle} numberOfLines={1}>{subtitle}</Text> : null}
@@ -98,11 +99,11 @@ export const EpisodeCard = memo(EpisodeCardComponent)
 const styles = StyleSheet.create({
   card: {
     width: EPISODE_CARD_WIDTH,
-    borderRadius: 18,
+    borderRadius: radius.card,
     overflow: 'hidden',
-    backgroundColor: colors.glass,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
+    backgroundColor: colors.surface,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
   },
   thumbnailFrame: {
     width: '100%',
@@ -113,81 +114,38 @@ const styles = StyleSheet.create({
   thumbnail: {
     borderRadius: 0,
   },
-  thumbnailScrim: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 58,
-    backgroundColor: 'rgba(0,0,0,0.32)',
-  },
-  frameBadge: {
-    position: 'absolute',
-    left: 9,
-    bottom: 8,
-    maxWidth: '70%',
-    color: colors.onPrimary,
-    backgroundColor: colors.primary,
-    borderRadius: 999,
-    overflow: 'hidden',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    fontSize: 10,
-    fontWeight: '800',
-  },
   progressTrack: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    height: 4,
-    backgroundColor: 'rgba(0,0,0,0.56)',
+    height: borderWidth.rule,
+    backgroundColor: colors.bgActive,
   },
   progressFill: {
     height: '100%',
     backgroundColor: colors.primary,
   },
   copy: {
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    paddingBottom: 12,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
   },
   metaRow: {
     minHeight: 17,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 7,
-    marginBottom: 4,
-  },
-  badge: {
-    color: colors.primary,
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.3,
-  },
-  meta: {
-    color: colors.textMuted,
-    fontSize: 10,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  metaWarn: {
-    color: '#fde68a',
-    fontSize: 10,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+    flexWrap: 'wrap',
   },
   title: {
+    ...fonts.title.md,
     color: colors.text,
-    fontFamily: fonts.headingMedium,
-    fontSize: 14,
-    lineHeight: 18,
   },
   subtitle: {
+    ...fonts.body.sm,
     color: colors.textMuted,
-    fontSize: 12,
-    marginTop: 4,
+    marginTop: spacing.xs,
   },
 })

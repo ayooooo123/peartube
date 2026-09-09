@@ -7,6 +7,8 @@ import sodium from 'sodium-universal'
 import { isArtworkRendition } from '@peartube/backend/assets'
 import { renderArchiveTui, renderArchiveWebHome } from './archive-ui.js'
 import { renderReleaseConsole, renderReleaseRows } from './release-console-ui.js'
+import { UI_FONT_ROUTE } from './ui-theme.js'
+import { SYNE_EXTRABOLD_TTF_BASE64 } from './ui-font-syne.js'
 import { resolveTmdbOptions } from './settings.js'
 import { spawn } from '#subprocess'
 import { tmpdir } from '#os'
@@ -14,6 +16,9 @@ import { parseBoundary, receiveMultipartUpload } from './multipart.js'
 // The relay's own HTTP client rather than fetch(): Bare ships no global fetch,
 // so a fetch() here would be a ReferenceError the moment the relay runs.
 import { openResponse, readBody } from './media/http-get.js'
+
+// Decoded once; the console serves it with an immutable cache header.
+const SYNE_EXTRABOLD_TTF = b4a.from(SYNE_EXTRABOLD_TTF_BASE64, 'base64')
 
 
 // Rendered as a banner after a submission that carried neither a file nor a
@@ -1708,6 +1713,14 @@ export async function createArchiveConsole({
       if (req.method === 'GET' && req.url === '/health') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ ok: true, ready: true }))
+        return
+      }
+      if (req.method === 'GET' && req.url === UI_FONT_ROUTE) {
+        res.writeHead(200, {
+          'content-type': 'font/ttf',
+          'cache-control': 'public, max-age=31536000, immutable'
+        })
+        res.end(SYNE_EXTRABOLD_TTF)
         return
       }
 

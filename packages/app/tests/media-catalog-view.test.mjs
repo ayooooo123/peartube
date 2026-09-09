@@ -11,6 +11,43 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 const appRoot = path.resolve(import.meta.dirname, '..')
 
+// Icon glyphs and press springs are irrelevant to what this test renders.
+// Stub the font-backed icon package and reanimated (which resolves its native
+// module at import time) so esbuild can bundle the view for a server render.
+const REANIMATED_STUB = [
+  'import React from "react"',
+  'export const useSharedValue = (value) => ({ value })',
+  'export const useAnimatedStyle = () => ({})',
+  'export const withTiming = (value) => value',
+  'export const withSpring = (value) => value',
+  'export const withRepeat = (value) => value',
+  'export const cancelAnimation = () => {}',
+  'export const interpolate = () => 0',
+  'export const Extrapolation = { CLAMP: "clamp" }',
+  'export const Easing = new Proxy({}, { get: () => () => null })',
+  'const View = (props) => React.createElement("div", null, props.children)',
+  'export default { View, Text: View, createAnimatedComponent: (c) => c }',
+  '',
+].join('\n')
+
+const nativeStubs = {
+  name: 'native-stubs',
+  setup(context) {
+    context.onResolve({ filter: /^@expo\/vector-icons$/ }, () => ({ path: 'vector-icons', namespace: 'test-stub' }))
+    context.onResolve({ filter: /^react-native-reanimated/ }, () => ({ path: 'reanimated', namespace: 'test-stub' }))
+    context.onLoad({ filter: /^vector-icons$/, namespace: 'test-stub' }, () => ({
+      contents: "import React from 'react'; export const Ionicons = (props) => React.createElement('span', props); export const Feather = Ionicons;",
+      loader: 'js',
+      resolveDir: appRoot,
+    }))
+    context.onLoad({ filter: /^reanimated$/, namespace: 'test-stub' }, () => ({
+      contents: REANIMATED_STUB,
+      loader: 'js',
+      resolveDir: appRoot,
+    }))
+  },
+}
+
 async function loadView(platform) {
   const result = await build({
     entryPoints: [path.join(appRoot, 'components/media/MediaCatalogView.tsx')],
@@ -22,7 +59,8 @@ async function loadView(platform) {
       ? ['.web.tsx', '.web.ts', '.tsx', '.ts', '.web.jsx', '.web.js', '.jsx', '.js', '.json']
       : ['.tsx', '.ts', '.jsx', '.js', '.json'],
     alias: { 'react-native': 'react-native-web' },
-    tsconfigRaw: { compilerOptions: { jsx: 'react', baseUrl: appRoot, paths: { '@/*': ['./*'] } } },
+    plugins: [nativeStubs],
+    tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', baseUrl: appRoot, paths: { '@/*': ['./*'] } } },
     write: false,
   })
   const directory = fs.mkdtempSync(path.join(appRoot, `.media-catalog-${platform}-`))
@@ -88,7 +126,7 @@ test('native and web media catalog views server-render source, archive, and trus
       }))
       assert.match(html, /Alpha/)
       assert.match(html, /publisher:trusted/)
-      assert.match(html, /Archive: pledged/)
+      assert.match(html, /Archive[\s\S]{0,400}?pledged/, 'the card labels the archive state')
       assert.match(html, /Available now/, 'the card quotes the assessed availability state')
       assert.doesNotMatch(html, /awaiting-replication|healthy<|limited</, 'raw state ids never reach the card')
       assert.match(html, /3 verified claims/)

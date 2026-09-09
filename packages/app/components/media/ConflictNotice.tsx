@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { colors } from '@/lib/colors'
+import { colors, spacing, radius, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 import type { MediaCockpitItem } from './HeroFeatureCard'
 
@@ -58,7 +58,7 @@ export function ConflictNotice({ conflicts, item = null }: ConflictNoticeProps) 
     >
       <View style={styles.header}>
         <View style={styles.icon}>
-          <Ionicons name="warning" color="#fde68a" size={18} />
+          <Ionicons name="warning" color={colors.warning} size={18} />
         </View>
         <View style={styles.copy}>
           <Text style={styles.kicker}>Conflict notice</Text>
@@ -79,39 +79,28 @@ export function ConflictNotice({ conflicts, item = null }: ConflictNoticeProps) 
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(251,191,36,0.30)',
-    backgroundColor: 'rgba(251,191,36,0.08)',
-    padding: 16,
+    borderRadius: radius.card,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.warning,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
   },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   icon: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 36,
+    height: 36,
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(251,191,36,0.34)',
-    backgroundColor: 'rgba(251,191,36,0.10)',
+    borderWidth: borderWidth.rule,
+    borderColor: colors.warning,
+    backgroundColor: colors.warningLight,
   },
   copy: { flex: 1 },
-  kicker: {
-    color: '#fde68a',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-  },
-  title: {
-    color: colors.text,
-    fontFamily: fonts.headingMedium,
-    fontSize: 16,
-    marginTop: 2,
-  },
-  list: { gap: 8, marginTop: 12 },
-  row: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  bullet: { color: '#fde68a', fontWeight: '900', lineHeight: 18 },
-  rowText: { flex: 1, color: colors.textMuted, fontSize: 13, lineHeight: 18 },
+  kicker: { ...fonts.caption.sm, color: colors.warning },
+  title: { ...fonts.title.md, color: colors.text, marginTop: 2 },
+  list: { gap: spacing.sm, marginTop: spacing.md },
+  row: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+  bullet: { ...fonts.meta.md, color: colors.warning, lineHeight: 18 },
+  rowText: { flex: 1, ...fonts.body.sm, color: colors.textMuted },
 })

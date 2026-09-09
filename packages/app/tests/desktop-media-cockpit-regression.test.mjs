@@ -34,7 +34,7 @@ test('desktop Home renders consumer rails from the resolved media entity catalog
 test('desktop catalog cards expose unified source, archive, and trust signals', () => {
   const source = readApp('components/media/MediaCatalogView.tsx')
   assert.match(source, /sourceForDisplay/)
-  assert.match(source, /Archive: \{archiveState\}/)
+  assert.match(source, /Archive<\/Text>[\s\S]{0,200}?\{archiveState\}/)
   assert.match(source, /verified \{claimCount === 1 \? 'claim' : 'claims'\}/)
   assert.match(source, /conflictCount/)
   assert.match(source, /onEntityPress\(item\.entityId, item\)/)

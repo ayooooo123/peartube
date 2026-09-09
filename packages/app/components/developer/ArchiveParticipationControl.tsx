@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, Platform, StyleSheet, Text, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { NativeSwitch } from '@/components/native-ui'
-import { colors } from '@/lib/colors'
+import { colors, spacing } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 import * as haptics from '@/lib/haptics'
 import { archiveCapacityForStorageMax, GIB } from './archive-participation-model'
 
@@ -136,7 +137,7 @@ export function ArchiveParticipationControl({ rpc }: { rpc: ArchiveParticipation
         value={status?.enabled === true}
         onValueChange={(enabled) => { void setArchiveParticipation(enabled) }}
         disabled={!status?.success || saving}
-        trackColor={{ false: colors.border, true: colors.primary }}
+        trackColor={{ false: colors.bgActive, true: colors.primary }}
         thumbColor={colors.text}
       />
     </View>
@@ -144,10 +145,10 @@ export function ArchiveParticipationControl({ rpc }: { rpc: ArchiveParticipation
 }
 
 const styles = StyleSheet.create({
-  container: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 16 },
+  container: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.lg },
   copy: { flex: 1 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  title: { color: colors.text, fontSize: 13, fontWeight: '700' },
-  description: { color: colors.textMuted, fontSize: 11, lineHeight: 16, marginTop: 5 },
-  status: { color: colors.textSecondary, fontSize: 11, fontWeight: '600', marginTop: 7 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm - 1 },
+  title: { ...fonts.title.md, fontSize: 14, lineHeight: 18, color: colors.text },
+  description: { ...fonts.body.sm, fontSize: 11, lineHeight: 16, color: colors.textMuted, marginTop: spacing.xs },
+  status: { ...fonts.meta.sm, color: colors.textSecondary, marginTop: spacing.sm - 1 },
 })

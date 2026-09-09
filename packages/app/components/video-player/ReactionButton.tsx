@@ -89,7 +89,7 @@ export const ReactionButton = memo(function ReactionButton({
       )}
 
       <Pressable
-        style={playerStyles.actionButton}
+        style={[playerStyles.actionButton, current && playerStyles.actionButtonActive]}
         onPress={handlePress}
         onLongPress={handleLongPress}
         delayLongPress={250}
@@ -125,24 +125,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 2,
-    backgroundColor: 'rgba(20, 24, 20, 0.97)',
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    borderRadius: 24,
+    backgroundColor: colors.overlayButton,
+    borderWidth: 2,
+    borderColor: colors.border,
+    borderRadius: 4,
     paddingHorizontal: 8,
     paddingVertical: 6,
     zIndex: 50,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    elevation: 12,
   },
   pickerItem: {
     alignItems: 'center',
     paddingHorizontal: 7,
     paddingVertical: 2,
-    borderRadius: 16,
+    borderRadius: 4,
   },
   pickerItemSelected: {
     backgroundColor: colors.primaryLight,

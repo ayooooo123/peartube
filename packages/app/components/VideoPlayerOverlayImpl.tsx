@@ -1,5 +1,6 @@
 import { useCallback, useContext, useEffect, useState, useRef, useMemo } from 'react'
 import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator, Alert, StatusBar, Dimensions, TextInput, AppState } from 'react-native'
+import { ABSOLUTE_FILL } from '@/lib/absolute-fill'
 import { usePathname, useSegments } from 'expo-router'
 import { rpc } from '@peartube/platform/rpc'
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context'
@@ -58,8 +59,6 @@ import {
   SPRING_CONFIG_TIGHT,
   SPRING_CONFIG_MINI_SNAP,
   MINI_DRAG_SCALE,
-  MINI_SHADOW_DOCKED,
-  MINI_SHADOW_DRAGGING,
   MINI_DRAG_OVERSHOOT_X,
   MINI_DRAG_OVERSHOOT_TOP,
   MINI_DRAG_OVERSHOOT_BOTTOM,
@@ -1165,7 +1164,7 @@ export function VideoPlayerOverlay() {
         width: landscapeWidth.value,
         height: landscapeHeight.value,
         zIndex: 9999,
-        backgroundColor: '#000',
+        backgroundColor: colors.contrast,
         borderRadius: 0,
       }
     }
@@ -1189,8 +1188,7 @@ export function VideoPlayerOverlay() {
           zIndex: 9999,
           borderRadius: 0,
           overflow: 'hidden',
-          backgroundColor: '#000',
-          elevation: 0,
+          backgroundColor: colors.contrast,
           opacity: 1,
         }
       }
@@ -1206,7 +1204,7 @@ export function VideoPlayerOverlay() {
         height: screenHeightShared.value + insetBottomShared.value,
         zIndex: 9999,
         borderRadius: 0,
-        backgroundColor: '#000',
+        backgroundColor: colors.contrast,
       }
     }
 
@@ -1255,20 +1253,6 @@ export function VideoPlayerOverlay() {
     const isMini = animProgress.value < 0.5
     const isDragging = isMiniPlayerDraggingShared.value
 
-    // Shadow tuning: stronger when dragging, softer when docked, zero in fullscreen
-    const shadowOp = isMini
-      ? (isDragging ? MINI_SHADOW_DRAGGING.opacity : MINI_SHADOW_DOCKED.opacity)
-      : 0
-    const shadowRad = isMini
-      ? (isDragging ? MINI_SHADOW_DRAGGING.radius : MINI_SHADOW_DOCKED.radius)
-      : 0
-    const shadowOY = isMini
-      ? (isDragging ? MINI_SHADOW_DRAGGING.offsetY : MINI_SHADOW_DOCKED.offsetY)
-      : 0
-    const elev = isMini
-      ? (isDragging ? MINI_SHADOW_DRAGGING.elevation : MINI_SHADOW_DOCKED.elevation)
-      : 0
-
     // Subtle scale-down while dragging
     const scale = isMini && isDragging ? MINI_DRAG_SCALE : 1
 
@@ -1281,11 +1265,6 @@ export function VideoPlayerOverlay() {
       zIndex: 9999,
       borderRadius,
       overflow: 'hidden',
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: shadowOY },
-      shadowOpacity: shadowOp,
-      shadowRadius: shadowRad,
-      elevation: Platform.OS === 'android' ? elev : 0,
       transform: [{ scale }],
     }
   }, [])
@@ -1936,11 +1915,10 @@ export function VideoPlayerOverlay() {
           top: miniPos.y,
           width: DESKTOP_MINI_WIDTH,
           zIndex: 9999,
-          borderRadius: 12,
+          borderRadius: 4,
           overflow: 'hidden',
           backgroundColor: colors.bg,
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3)',
-          border: `1px solid ${colors.border}`,
+          border: `2px solid ${colors.border}`,
           cursor: isDraggingDesktopMiniPlayer ? 'grabbing' : 'default',
           userSelect: 'none',
           transition: isDraggingDesktopMiniPlayer ? 'none' : 'left 0.2s ease, top 0.2s ease',
@@ -1973,7 +1951,7 @@ export function VideoPlayerOverlay() {
           style={{
             width: DESKTOP_MINI_WIDTH,
             height: DESKTOP_MINI_HEIGHT,
-            backgroundColor: '#000',
+            backgroundColor: colors.contrast,
             position: 'relative',
           }}
         >
@@ -2026,7 +2004,7 @@ export function VideoPlayerOverlay() {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: 'rgba(0, 0, 0, 0.3)',
+              backgroundColor: colors.overlayMedium,
               opacity: 0,
               transition: 'opacity 0.15s ease',
             }}
@@ -2043,8 +2021,8 @@ export function VideoPlayerOverlay() {
               style={{
                 width: 48,
                 height: 48,
-                borderRadius: 24,
-                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                borderRadius: 4,
+                backgroundColor: colors.scrim,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -2052,9 +2030,9 @@ export function VideoPlayerOverlay() {
               }}
             >
               {effectiveIsPlaying ? (
-                <Ionicons name="pause" color="#fff" size={24} />
+                <Ionicons name="pause" color={colors.text} size={24} />
               ) : (
-                <Ionicons name="play" color="#fff" size={24} />
+                <Ionicons name="play" color={colors.text} size={24} />
               )}
             </div>
           </div>
@@ -2067,7 +2045,7 @@ export function VideoPlayerOverlay() {
               left: 0,
               right: 0,
               height: 3,
-              backgroundColor: 'rgba(255, 255, 255, 0.2)',
+              backgroundColor: colors.borderLight,
             }}
           >
             <div
@@ -2136,8 +2114,8 @@ export function VideoPlayerOverlay() {
             style={{
               width: 32,
               height: 32,
-              borderRadius: 16,
-              border: 'none',
+              borderRadius: 4,
+              border: `2px solid ${colors.border}`,
               backgroundColor: 'transparent',
               display: 'flex',
               alignItems: 'center',
@@ -2160,8 +2138,8 @@ export function VideoPlayerOverlay() {
             style={{
               width: 32,
               height: 32,
-              borderRadius: 16,
-              border: 'none',
+              borderRadius: 4,
+              border: `2px solid ${colors.border}`,
               backgroundColor: 'transparent',
               display: 'flex',
               alignItems: 'center',
@@ -2181,8 +2159,8 @@ export function VideoPlayerOverlay() {
             style={{
               width: 32,
               height: 32,
-              borderRadius: 16,
-              border: 'none',
+              borderRadius: 4,
+              border: `2px solid ${colors.border}`,
               backgroundColor: 'transparent',
               display: 'flex',
               alignItems: 'center',
@@ -2227,7 +2205,7 @@ export function VideoPlayerOverlay() {
                 </div>
               ) : videoUrl ? (
                 <PearInlineVideoView
-                  style={{ ...StyleSheet.absoluteFillObject, borderRadius: 12 }}
+                  style={{ ...ABSOLUTE_FILL, borderRadius: 4 }}
                   playerRef={playerRef}
                   videoUrl={videoUrl}
                   playbackSession={playbackSession}
@@ -2255,7 +2233,7 @@ export function VideoPlayerOverlay() {
               {showLoadingOverlay && (
                 <div style={desktopStyles.loadingOverlay}>
                   {!terminalPlaybackError && <ActivityIndicator color="white" size="large" />}
-                  <Text style={{ color: '#fff', marginTop: 12 }}>{loadingLabel}</Text>
+                  <Text style={{ color: colors.text, marginTop: 12 }}>{loadingLabel}</Text>
                 </div>
               )}
             </div>
@@ -2310,11 +2288,11 @@ export function VideoPlayerOverlay() {
                   <div style={desktopStyles.p2pStatItem}>
                     <div style={{
                       ...desktopStyles.statusDot,
-                      backgroundColor: videoStats?.isComplete ? '#4ade80' : videoStats?.status === 'downloading' ? '#fbbf24' : '#6b7280'
+                      backgroundColor: colors.swarm
                     }} />
                     <span style={{
                       ...desktopStyles.statusLabel,
-                      color: videoStats?.isComplete ? '#4ade80' : videoStats?.status === 'downloading' ? '#fbbf24' : '#6b7280'
+                      color: colors.text
                     }}>
                       {videoStats?.isComplete ? 'Cached' : videoStats?.status === 'downloading' ? 'Downloading' : 'Connecting'}
                     </span>
@@ -2333,7 +2311,7 @@ export function VideoPlayerOverlay() {
                   </span>
                   <span style={{
                     ...desktopStyles.p2pStatProgress,
-                    color: videoStats?.isComplete ? '#4ade80' : colors.text
+                    color: colors.text
                   }}>
                     {videoStats?.progress ?? 0}%
                   </span>
@@ -2366,7 +2344,7 @@ export function VideoPlayerOverlay() {
                     backgroundColor: userReaction === 'like' ? colors.primary : colors.bgSecondary,
                   }}
                 >
-                  <span style={{ color: userReaction === 'like' ? '#fff' : colors.text }}>
+                  <span style={{ color: userReaction === 'like' ? colors.text : colors.text }}>
                     Like ({reactionCounts.like || 0})
                   </span>
                 </button>
@@ -2377,7 +2355,7 @@ export function VideoPlayerOverlay() {
                     backgroundColor: userReaction === 'dislike' ? colors.textSecondary : colors.bgSecondary,
                   }}
                 >
-                  <span style={{ color: userReaction === 'dislike' ? '#fff' : colors.text }}>
+                  <span style={{ color: userReaction === 'dislike' ? colors.text : colors.text }}>
                     Dislike ({reactionCounts.dislike || 0})
                   </span>
                 </button>
@@ -2500,19 +2478,19 @@ export function VideoPlayerOverlay() {
       {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && !isInPipMode && (
         <Animated.View pointerEvents="box-none" style={[styles.controlsOverlayBase, controlsOverlayStyle]}>
           <Pressable style={styles.controlButton} onPress={() => handleDoubleTapSeek('left')}>
-            <Feather name="rotate-ccw" color="#fff" size={22} />
+            <Feather name="rotate-ccw" color={colors.text} size={22} />
           </Pressable>
 
           <Pressable style={styles.controlButtonLarge} onPress={handlePlayPause}>
             {effectiveIsPlaying ? (
-              <Ionicons name="pause" color="#fff" size={32} />
+              <Ionicons name="pause" color={colors.text} size={32} />
             ) : (
-              <Ionicons name="play" color="#fff" size={32} />
+              <Ionicons name="play" color={colors.text} size={32} />
             )}
           </Pressable>
 
           <Pressable style={styles.controlButton} onPress={() => handleDoubleTapSeek('right')}>
-            <Feather name="rotate-cw" color="#fff" size={22} />
+            <Feather name="rotate-cw" color={colors.text} size={22} />
           </Pressable>
         </Animated.View>
       )}
@@ -2523,18 +2501,18 @@ export function VideoPlayerOverlay() {
           seekFeedback === 'left' ? styles.seekFeedbackLeft : styles.seekFeedbackRight
         ]}>
           {seekFeedback === 'left' ? (
-            <Feather name="rotate-ccw" color="#fff" size={32} />
+            <Feather name="rotate-ccw" color={colors.primary} size={32} />
           ) : (
-            <Feather name="rotate-cw" color="#fff" size={32} />
+            <Feather name="rotate-cw" color={colors.primary} size={32} />
           )}
-          <Text style={styles.seekFeedbackText}>{`${SEEK_STEP_SECONDS}s`}</Text>
+          <Text style={styles.seekFeedbackText}>{seekFeedback === 'left' ? `-${SEEK_STEP_SECONDS}S` : `+${SEEK_STEP_SECONDS}S`}</Text>
         </View>
       )}
 
       {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && !isInPipMode && (
         <Animated.View style={[styles.minimizeButton, fullscreenButtonsOpacityStyle, minimizeButtonStyle]}>
           <Pressable testID="player-minimize-button" onPress={minimizePlayer} style={styles.minimizeButtonInner}>
-            <Feather name="chevron-down" color="#fff" size={28} />
+            <Feather name="chevron-down" color={colors.text} size={28} />
           </Pressable>
         </Animated.View>
       )}
@@ -2586,12 +2564,12 @@ export function VideoPlayerOverlay() {
             </Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
               <Pressable onPress={handleCastPress} style={styles.timeDisplayAction}>
-                <Feather name="cast" color={cast.isConnected ? colors.primary : '#efeff1'} size={18} />
+                <Feather name="cast" color={cast.isConnected ? colors.primary : colors.text} size={18} />
               </Pressable>
               <Pressable onPress={toggleLandscapeFullscreen} style={styles.timeDisplayAction}>
                 <Feather
                   name={isLandscapeFullscreen ? 'minimize' : 'maximize'}
-                  color="#efeff1"
+                  color={colors.text}
                   size={20}
                 />
               </Pressable>
@@ -2718,14 +2696,14 @@ export function VideoPlayerOverlay() {
               onPress={closeFromMini}
               testID="mini-player-close"
             >
-              <Feather name="x" size={18} color="#fff" />
+              <Feather name="x" size={18} color={colors.text} />
             </Pressable>
             <Pressable
               style={styles.miniPipSmallButton}
               onPress={() => setTimeout(maximizeFromMini, 0)}
               testID="mini-player-maximize"
             >
-              <Feather name="chevron-up" size={18} color="#fff" />
+              <Feather name="chevron-up" size={18} color={colors.text} />
             </Pressable>
           </View>
           <Pressable
@@ -2733,7 +2711,7 @@ export function VideoPlayerOverlay() {
             onPress={handlePlayPause}
             testID="mini-player-play-pause"
           >
-            <Feather name={isPlaying ? 'pause' : 'play'} size={22} color="#fff" />
+            <Feather name={isPlaying ? 'pause' : 'play'} size={22} color={colors.text} />
           </Pressable>
         </>
       )}
@@ -2915,7 +2893,7 @@ export function VideoPlayerOverlay() {
                                 {deletingCommentId === c.commentId ? (
                                   <ActivityIndicator size="small" color={colors.textMuted} />
                                 ) : (
-                                  <Feather name="trash-2" color="#f87171" size={14} />
+                                  <Feather name="trash-2" color={colors.error} size={14} />
                                 )}
                               </Pressable>
                             )}
@@ -2963,7 +2941,7 @@ export function VideoPlayerOverlay() {
                                     {deletingCommentId === reply.commentId ? (
                                       <ActivityIndicator size="small" color={colors.textMuted} />
                                     ) : (
-                                      <Feather name="trash-2" color="#f87171" size={14} />
+                                      <Feather name="trash-2" color={colors.error} size={14} />
                                     )}
                                   </Pressable>
                                 )}

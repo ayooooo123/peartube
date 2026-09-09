@@ -1,22 +1,20 @@
 /**
- * Desktop Sidebar - Collapsible navigation for Pear desktop
+ * Desktop Sidebar - Collapsible navigation for the desktop shell
  *
- * Features:
- * - Collapsible: 240px expanded, 72px collapsed
- * - Navigation sections: Main, Your content
- * - Active state highlighting
- * - Smooth width transition
- * - Icon-only mode when collapsed with tooltips
+ * - 240px expanded, 72px collapsed, 2px rule on the right edge
+ * - Mono uppercase labels; active row = lime text + 2px lime rule on the left
+ * - Icon-only mode when collapsed, with native tooltips
  */
 import React, { useCallback } from 'react'
 import { useRouter, usePathname } from 'expo-router'
-import { colors } from '@/lib/colors'
+import { colors, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 import {
   useSidebar,
   SIDEBAR_WIDTH,
   SIDEBAR_COLLAPSED_WIDTH,
   HEADER_HEIGHT,
-  PEAR_BAR_HEIGHT,
+  TITLEBAR_INSET,
 } from './constants'
 
 // Icon components
@@ -48,16 +46,6 @@ function UsersIcon() {
       <circle cx="9" cy="7" r="4" />
       <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
       <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-    </svg>
-  )
-}
-
-function PlaySquareIcon() {
-  return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <title>Play</title>
-      <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18" />
-      <polygon points="10 8 16 12 10 16 10 8" />
     </svg>
   )
 }
@@ -105,12 +93,16 @@ function NavButton({ item, isActive, isCollapsed, onClick }: NavButtonProps) {
       onClick={onClick}
       style={{
         ...styles.navButton,
-        backgroundColor: isActive ? colors.bgHover : 'transparent',
+        color: isActive ? colors.primary : colors.textSecondary,
+        borderLeftColor: isActive ? colors.primary : 'transparent',
         justifyContent: isCollapsed ? 'center' : 'flex-start',
-        padding: isCollapsed ? '12px' : '12px 16px',
+        padding: isCollapsed ? 0 : `0 ${spacing.lg}px`,
       }}
+      onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = colors.surfaceHover }}
+      onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent' }}
       title={isCollapsed ? item.label : undefined}
       aria-label={item.label}
+      aria-current={isActive ? 'page' : undefined}
     >
       <span style={styles.navIcon}>
         <Icon />
@@ -187,11 +179,11 @@ const styles: Record<string, React.CSSProperties> = {
   sidebar: {
     position: 'fixed',
     left: 0,
-    top: PEAR_BAR_HEIGHT + HEADER_HEIGHT, // Account for pear bar + header
+    top: TITLEBAR_INSET + HEADER_HEIGHT,
     bottom: 0,
     backgroundColor: colors.bg,
-    borderRight: `1px solid ${colors.border}`,
-    transition: 'width 0.2s ease',
+    borderRight: `${borderWidth.rule}px solid ${colors.border}`,
+    transition: 'width 0.15s ease',
     overflowX: 'hidden',
     overflowY: 'auto',
     zIndex: 50,
@@ -200,25 +192,11 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     height: '100%',
-    padding: '12px 0',
+    padding: `${spacing.md}px 0`,
   },
   section: {
     display: 'flex',
     flexDirection: 'column',
-    padding: '0 8px',
-  },
-  sectionLabel: {
-    fontSize: 12,
-    fontWeight: 600,
-    color: colors.textSecondary,
-    padding: '8px 16px 4px',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: colors.border,
-    margin: '12px 16px',
   },
   spacer: {
     flex: 1,
@@ -226,15 +204,15 @@ const styles: Record<string, React.CSSProperties> = {
   navButton: {
     display: 'flex',
     alignItems: 'center',
-    gap: 16,
+    gap: spacing.md,
     width: '100%',
-    height: 48,
+    height: 44,
     border: 'none',
-    borderRadius: 8,
+    borderLeft: `${borderWidth.rule}px solid transparent`,
+    borderRadius: 0,
     backgroundColor: 'transparent',
-    color: colors.text,
     cursor: 'pointer',
-    transition: 'background-color 0.15s ease',
+    transition: 'background-color 0.15s ease, color 0.15s ease',
     textAlign: 'left',
   },
   navIcon: {
@@ -246,8 +224,10 @@ const styles: Record<string, React.CSSProperties> = {
     height: 24,
   },
   navLabel: {
-    fontSize: 14,
-    fontWeight: 500,
+    fontFamily: fonts.monoMedium,
+    fontSize: 11,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
     whiteSpace: 'nowrap',
   },
 }

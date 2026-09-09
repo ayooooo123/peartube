@@ -1,19 +1,15 @@
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
-import { GlassCard } from '@/components/primitives'
-import { colors } from '@/lib/colors'
+import { IconButton } from '@/components/primitives'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 import type { WatchHistoryEntry } from '@/lib/watch-history'
 
-function timeAgo(ts: number): string {
-  const diff = Date.now() - ts
-  const mins = Math.floor(diff / 60000)
-  if (mins < 1) return 'Just now'
-  if (mins < 60) return `${mins}m ago`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days < 30) return `${days}d ago`
-  return new Date(ts).toLocaleDateString()
+function formatClock(sec: number): string {
+  const s = Math.max(0, Math.floor(sec))
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return `${m}:${r.toString().padStart(2, '0')}`
 }
 
 interface HistoryRowProps {
@@ -24,69 +20,73 @@ interface HistoryRowProps {
 
 export function HistoryRow({ entry, onOpen, onRemove }: HistoryRowProps) {
   const ratio = entry.durationSec > 0 ? Math.min(1, entry.positionSec / entry.durationSec) : 0
+  const meta = entry.completed
+    ? 'WATCHED'
+    : `RESUME ${formatClock(entry.positionSec)}`
 
   return (
-    <GlassCard padded={false} style={styles.card} onPress={onOpen} accessibilityLabel={`Resume ${entry.title}`}>
-      <View style={styles.row}>
-        <View style={styles.thumb}>
-          {entry.thumbnailUrl ? (
-            <Image source={{ uri: entry.thumbnailUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" />
-          ) : (
-            <Feather name="play" size={18} color={colors.textMuted} />
-          )}
-          {ratio > 0 && !entry.completed && (
-            <View style={styles.progressTrack}>
-              <View style={[styles.progressFill, { width: `${ratio * 100}%` }]} />
-            </View>
-          )}
-        </View>
-        <View style={styles.info}>
-          <Text style={styles.title} numberOfLines={2}>{entry.title}</Text>
-          <Text style={styles.meta} numberOfLines={1}>
-            {entry.channelName ? `${entry.channelName} · ` : ''}
-            {entry.completed ? 'Watched' : `${Math.round(ratio * 100)}% watched`} · {timeAgo(entry.updatedAt)}
-          </Text>
-        </View>
-        <Pressable
-          onPress={onRemove}
-          hitSlop={8}
-          style={styles.action}
-          accessibilityRole="button"
-          accessibilityLabel="Remove from history"
-        >
-          <Feather name="x" size={16} color={colors.textMuted} />
-        </Pressable>
+    <Pressable
+      onPress={onOpen}
+      accessibilityRole="button"
+      accessibilityLabel={`Resume ${entry.title}`}
+      style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}
+    >
+      <View style={styles.thumb}>
+        {entry.thumbnailUrl ? (
+          <Image source={{ uri: entry.thumbnailUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+        ) : (
+          <Feather name="play" size={18} color={colors.textMuted} />
+        )}
+        {ratio > 0 && !entry.completed && (
+          <View style={styles.progressTrack}>
+            <View style={[styles.progressFill, { width: `${ratio * 100}%` }]} />
+          </View>
+        )}
       </View>
-    </GlassCard>
+      <View style={styles.info}>
+        <Text style={styles.title} numberOfLines={2}>{entry.title}</Text>
+        <Text style={styles.meta} numberOfLines={1}>
+          {entry.channelName ? `${entry.channelName} · ` : ''}{meta}
+        </Text>
+      </View>
+      <IconButton
+        icon="x"
+        onPress={onRemove}
+        accessibilityLabel="Remove from history"
+        variant="plain"
+        size={36}
+      />
+    </Pressable>
   )
 }
 
 const styles = StyleSheet.create({
-  card: {
-    marginBottom: 10,
-  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
+    minHeight: 72,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
   },
   thumb: {
     width: 96,
     height: 54,
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.bgActive,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
+    marginRight: spacing.md,
   },
   progressTrack: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    height: 3,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    height: borderWidth.rule,
+    backgroundColor: colors.scrim,
   },
   progressFill: {
     height: '100%',
@@ -96,21 +96,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   title: {
+    ...fonts.title.md,
+    fontSize: 15,
+    lineHeight: 20,
     color: colors.text,
-    fontSize: 14,
-    fontWeight: '600',
-    lineHeight: 19,
   },
   meta: {
+    ...fonts.meta.sm,
     color: colors.textMuted,
-    fontSize: 12,
     marginTop: 3,
-  },
-  action: {
-    width: 32,
-    height: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 4,
   },
 })

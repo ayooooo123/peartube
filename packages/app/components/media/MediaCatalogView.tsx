@@ -12,8 +12,9 @@ import {
 import type { MediaCatalogState, MediaEntitySummary, MediaPublicationSource } from '@peartube/core'
 import type { MediaCatalogDiagnostic } from '@/lib/media-catalog-controller.mjs'
 import { describeAvailability } from '@/lib/media-availability'
-import { colors } from '@/lib/colors'
+import { colors, spacing, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
+import { ScreenHeader, Button, EmptyState } from '@/components/primitives'
 
 interface Props {
   title?: string
@@ -68,7 +69,7 @@ function MediaCatalogEntityCard({ item, onPress }: { item: MediaEntitySummary; o
       </View>
       <View style={styles.factRow}>
         <Text style={styles.factLabel}>Archive</Text>
-        <Text style={styles.factValue}>Archive: {archiveState}</Text>
+        <Text style={styles.factValue}>{archiveState}</Text>
       </View>
       <View style={styles.trustRow}>
         <Text style={styles.trustText}>{claimCount} verified {claimCount === 1 ? 'claim' : 'claims'}</Text>
@@ -98,22 +99,23 @@ export function MediaCatalogView({
   ), [onEntityPress])
 
   const header = (
-    <View style={styles.header}>
-      <View style={styles.headerCopy}>
-        <Text style={styles.title}>{title}</Text>
-        <Text style={styles.headerSubtitle}>{subtitle}</Text>
-      </View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Refresh media catalog"
-        accessibilityState={{ busy: state.refreshing }}
-        disabled={state.refreshing}
-        onPress={onRefresh}
-        style={styles.refreshButton}
-      >
-        {state.refreshing ? <ActivityIndicator color={colors.primary} /> : <Text style={styles.refreshText}>Refresh</Text>}
-      </Pressable>
-    </View>
+    <>
+      <ScreenHeader title={title} eyebrow="VERIFIED CATALOG" />
+      {subtitle && (
+        <View style={styles.headerCopy}>
+          <Text style={styles.headerSubtitle}>{subtitle}</Text>
+          <Button
+            label="Refresh"
+            variant="secondary"
+            size="sm"
+            loading={state.refreshing}
+            disabled={state.refreshing}
+            onPress={onRefresh}
+            accessibilityLabel="Refresh media catalog"
+          />
+        </View>
+      )}
+    </>
   )
 
   const empty = state.status === 'loading' ? (
@@ -123,14 +125,13 @@ export function MediaCatalogView({
       <Text style={styles.messageDetail}>Verifying accepted claims and publication sources…</Text>
     </View>
   ) : diagnostic ? (
-    <View style={styles.message}>
-      <Text style={styles.messageTitle}>{diagnostic.title}</Text>
-      <Text style={styles.messageDetail}>{diagnostic.detail}</Text>
-      {diagnostic.errorCode ? <Text style={styles.errorCode}>{diagnostic.errorCode}</Text> : null}
-      <Pressable accessibilityRole="button" onPress={onRefresh} style={styles.actionButton}>
-        <Text style={styles.actionText}>{diagnostic.actionLabel}</Text>
-      </Pressable>
-    </View>
+    <EmptyState
+      icon="wifi-off"
+      status={diagnostic.errorCode ?? undefined}
+      title={diagnostic.title}
+      body={diagnostic.detail}
+      action={{ label: diagnostic.actionLabel, onPress: onRefresh }}
+    />
   ) : null
 
   const footer = state.nextCursor ? (
@@ -163,32 +164,26 @@ export function MediaCatalogView({
 }
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: 20, gap: 12 },
-  header: { paddingTop: 24, paddingBottom: 8, flexDirection: 'row', alignItems: 'flex-start', gap: 16 },
-  headerCopy: { flex: 1 },
-  title: { color: colors.text, fontFamily: fonts.heading, fontSize: 28 },
-  headerSubtitle: { color: colors.textMuted, fontSize: 13, lineHeight: 19, marginTop: 4 },
-  refreshButton: { minHeight: 40, minWidth: 72, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border, borderRadius: 999, paddingHorizontal: 14 },
-  refreshText: { color: colors.primary, fontWeight: '700' },
-  card: { backgroundColor: colors.bgCard, borderWidth: 1, borderColor: colors.border, borderRadius: 16, padding: 16, gap: 8 },
+  content: { paddingHorizontal: 0, gap: 0 },
+  headerCopy: { paddingHorizontal: spacing.lg, paddingVertical: spacing.lg, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.lg },
+  headerSubtitle: { color: colors.textMuted, fontSize: 13, lineHeight: 19 },
+  refreshText: { color: colors.primary, fontWeight: '700', fontSize: 12, letterSpacing: 0.8, textTransform: 'uppercase' },
+  card: { backgroundColor: colors.surface, borderWidth: borderWidth.hairline, borderColor: colors.border, borderRadius: 4, marginHorizontal: spacing.lg, marginVertical: spacing.sm, padding: spacing.lg, gap: spacing.md },
   cardPressed: { opacity: 0.72 },
-  cardHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  kindPill: { backgroundColor: colors.bgSecondary, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4 },
-  kindText: { color: colors.primary, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
-  sourceCount: { color: colors.textMuted, fontSize: 12 },
-  cardTitle: { color: colors.text, fontFamily: fonts.heading, fontSize: 19, lineHeight: 24 },
+  cardHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md },
+  kindPill: { backgroundColor: colors.bgActive, borderRadius: 4, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+  kindText: { color: colors.primary, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8 },
+  sourceCount: { color: colors.textMuted, fontSize: 12, letterSpacing: 0.8, textTransform: 'uppercase' },
+  cardTitle: { color: colors.text, fontFamily: fonts.heading, fontSize: 16, lineHeight: 20 },
   subtitle: { color: colors.textMuted, fontSize: 13, lineHeight: 18 },
-  factRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  factLabel: { color: colors.textMuted, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', width: 54 },
-  factValue: { color: colors.text, fontSize: 12, flex: 1 },
-  trustRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingTop: 4 },
-  trustText: { color: colors.textMuted, backgroundColor: colors.bgSecondary, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, fontSize: 11 },
+  factRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  factLabel: { color: colors.textMuted, fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, width: 60 },
+  factValue: { color: colors.text, fontSize: 12, flex: 1, fontFamily: fonts.mono },
+  trustRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingTop: spacing.sm },
+  trustText: { color: colors.textMuted, backgroundColor: colors.bgActive, borderRadius: 4, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase' },
   conflictText: { color: colors.warning },
-  message: { minHeight: 260, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24, gap: 10 },
-  messageTitle: { color: colors.text, fontFamily: fonts.heading, fontSize: 19, textAlign: 'center' },
-  messageDetail: { color: colors.textMuted, fontSize: 13, lineHeight: 19, textAlign: 'center' },
-  errorCode: { color: colors.textMuted, fontFamily: 'monospace', fontSize: 11 },
-  actionButton: { marginTop: 6, backgroundColor: colors.primary, borderRadius: 999, paddingHorizontal: 16, paddingVertical: 10 },
-  actionText: { color: colors.onPrimary, fontWeight: '700' },
-  loadMore: { minHeight: 48, alignItems: 'center', justifyContent: 'center', marginVertical: 8, borderWidth: 1, borderColor: colors.border, borderRadius: 12 },
+  message: { minHeight: 260, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xl, gap: spacing.md },
+  messageTitle: { color: colors.text, fontFamily: fonts.heading, fontSize: 18, textAlign: 'center', letterSpacing: -0.2 },
+  messageDetail: { color: colors.textMuted, fontSize: 14, lineHeight: 20, textAlign: 'center' },
+  loadMore: { minHeight: 48, alignItems: 'center', justifyContent: 'center', marginVertical: spacing.lg, borderWidth: borderWidth.hairline, borderColor: colors.border, borderRadius: 4, marginHorizontal: spacing.lg },
 })

@@ -1,8 +1,10 @@
 /**
  * PearTube shared design tokens (colors, spacing, type, theme), used across
- * all platforms. (The legacy numeric bare-rpc CMD/RPC_METHODS registry that
- * used to live here was unused — superseded by the HRPC schema's
- * APP_RPC_METHODS in @peartube/spec — and has been removed.)
+ * all platforms.
+ *
+ * "Grid" design language: OLED black base, lime accent, high-contrast
+ * greys, hard 4px corners, 2px structural borders, monospace metadata.
+ * Surfaces are always opaque — there is no glass, blur, or shadow lift.
  */
 
 // ============================================
@@ -10,81 +12,78 @@
 // ============================================
 
 export const colors = {
-  // Brand — client application accent blue, the primary call-to-action fill
-  primary: '#3f66ff',
-  primaryHover: '#6b88ff',
-  primaryLight: 'rgba(63, 102, 255, 0.18)',
-  primaryDeep: '#2f4fd6',
+  // Brand — lime accent, the single call-to-action fill
+  primary: '#d4ff3f',
+  primaryHover: '#e2ff70',
+  primaryLight: 'rgba(212, 255, 63, 0.14)',
+  primaryDeep: '#a9d41c',
   // Readable text/icon color on top of primary fills
-  onPrimary: '#ffffff',
+  onPrimary: '#000000',
 
-  // Network/peer presence — teal, used only for swarm/peer ambient UI.
-  // Deliberately outside the client application palette: it signals P2P state, not brand.
-  swarm: '#2dd4bf',
-  swarmGlow: 'rgba(45, 212, 191, 0.35)',
-  swarmDim: 'rgba(45, 212, 191, 0.12)',
+  // Network/peer presence — electric cyan, used only for swarm/peer ambient UI.
+  // Deliberately distinct from the accent: it signals P2P state, not a CTA.
+  swarm: '#39d5ff',
+  swarmGlow: 'rgba(57, 213, 255, 0.35)',
+  swarmDim: 'rgba(57, 213, 255, 0.12)',
 
-  // Accent — client application has a single accent pair; `accent` mirrors `primary`
-  // so legacy call sites that used it for emphasis stay on-brand.
-  accent: '#3f66ff',
-  accentHover: '#6b88ff',
-  accentSecondary: '#ff9f1a',
-  accentSecondaryLight: 'rgba(255, 159, 26, 0.18)',
+  // Accent mirrors primary; legacy call sites that used it for emphasis stay on-brand.
+  accent: '#d4ff3f',
+  accentHover: '#e2ff70',
+  accentSecondary: '#39d5ff',
+  accentSecondaryLight: 'rgba(57, 213, 255, 0.14)',
 
   // Status
-  success: '#2ecc71',
-  successLight: 'rgba(46, 204, 113, 0.18)',
-  warning: '#f1c40f',
-  warningLight: 'rgba(241, 196, 15, 0.15)',
-  error: '#e74c3c',
-  errorLight: 'rgba(231, 76, 60, 0.18)',
-  red: '#e74c3c',
+  success: '#7dff8a',
+  successLight: 'rgba(125, 255, 138, 0.14)',
+  warning: '#ffc53f',
+  warningLight: 'rgba(255, 197, 63, 0.14)',
+  error: '#ff4d4d',
+  errorLight: 'rgba(255, 77, 77, 0.14)',
+  red: '#ff4d4d',
 
-  // Backgrounds — client application's near-black base with two lift steps
-  bg: '#0b0b0f',
-  base: '#0b0b0f', // Alias for bg, matching client application's `background.base`
-  bgElevated: '#16161f',
-  bgSecondary: '#16161f', // Alias for bgElevated
-  bgHover: '#1f1f2a',
-  bgActive: '#2b2f3c',
-  bgOverlay: 'rgba(11, 11, 15, 0.85)',
-  // Cards sit on the surface step. Solid, not translucent white: client application
-  // poster cards are opaque panels, so stacking this over art no longer bleeds.
-  bgCard: '#16161f',
+  // Backgrounds — true black base with two opaque lift steps
+  bg: '#000000',
+  base: '#000000', // Alias for bg
+  bgElevated: '#0f0f0f',
+  bgSecondary: '#0f0f0f', // Alias for bgElevated
+  bgHover: '#1a1a1a',
+  bgActive: '#262626',
+  bgOverlay: 'rgba(0, 0, 0, 0.88)',
+  // Cards are opaque panels one step above the base.
+  bgCard: '#0f0f0f',
   contrast: '#000000',
 
   // Surfaces
-  surface: '#16161f',
-  surfaceHover: '#1f1f2a',
-  surfaceElevated: '#1f1f2a',
-  surfaceModal: '#1f1f2a',
-  surfaceBorder: '#2b2f3c',
+  surface: '#0f0f0f',
+  surfaceHover: '#1a1a1a',
+  surfaceElevated: '#1a1a1a',
+  surfaceModal: '#0f0f0f',
+  surfaceBorder: '#262626',
 
-  // Glass surfaces — translucent white washes for blurred/overlaid chrome
-  glass: 'rgba(255, 255, 255, 0.08)',
-  glassBorder: 'rgba(255, 255, 255, 0.12)',
-  glassHighlight: 'rgba(63, 102, 255, 0.12)',
-  // Fill for secondary action buttons laid over artwork or blur
-  overlayButton: 'rgba(255, 255, 255, 0.12)',
-  overlayMedium: 'rgba(255, 255, 255, 0.08)',
+  // Overlay chrome laid over artwork or video. Opaque black, never translucent white.
+  glass: '#0f0f0f',
+  glassBorder: '#262626',
+  glassHighlight: '#d4ff3f',
+  overlayButton: 'rgba(0, 0, 0, 0.72)',
+  overlayMedium: 'rgba(0, 0, 0, 0.55)',
   // Base-tinted scrim for backdrops and sheets
-  scrim: 'rgba(11, 11, 15, 0.72)',
+  scrim: 'rgba(0, 0, 0, 0.8)',
 
   // Text
-  text: '#ffffff', // Alias for textPrimary
-  textPrimary: '#ffffff',
-  textSecondary: '#c7cad6',
-  textMuted: '#8c90a6',
-  textDisabled: '#555866',
-  // Dark theme only, so "inverse" is still white; kept for API parity.
-  textInverse: '#ffffff',
+  text: '#f2f2f2', // Alias for textPrimary
+  textPrimary: '#f2f2f2',
+  textSecondary: '#a3a3a3',
+  textMuted: '#6b6b6b',
+  textDisabled: '#3d3d3d',
+  // Dark theme only, so "inverse" is still light; kept for API parity.
+  textInverse: '#f2f2f2',
 
-  // Borders
-  border: '#2b2f3c',
-  borderSubtle: '#2b2f3c', // Alias for border
-  borderLight: '#4a4f5e',
-  borderEmphasis: '#4a4f5e', // Alias for borderLight
-  borderFocus: '#3f66ff',
+  // Borders — structural 2px lines use `border`; emphasis/hover use `borderLight`
+  border: '#262626',
+  borderSubtle: '#1a1a1a',
+  borderLight: '#3d3d3d',
+  borderEmphasis: '#3d3d3d', // Alias for borderLight
+  borderFocus: '#d4ff3f',
 } as const;
 
 export const spacing = {
@@ -108,20 +107,28 @@ export const fontSize = {
   xxxl: 32,
 } as const;
 
+// Hard corners everywhere. `pill` is intentionally square: chips and
+// buttons are rectangles in this language. `full` remains for avatars/dots.
 export const borderRadius = {
   none: 0,
-  xs: 2,
-  sm: 4,
-  md: 8,
-  lg: 12,
-  card: 12, // Poster/card radius, named so call sites read intent
-  xl: 16,
-  pill: 999,
+  xs: 0,
+  sm: 2,
+  md: 4,
+  lg: 4,
+  card: 4, // Poster/card radius, named so call sites read intent
+  xl: 6,
+  pill: 4,
   full: 9999,
 } as const;
 
 // Alias for radius
 export const radius = borderRadius;
+
+// Structural line weights
+export const borderWidth = {
+  hairline: 1,
+  rule: 2,
+} as const;
 
 export const fontWeight = {
   normal: '400',
@@ -130,11 +137,13 @@ export const fontWeight = {
   bold: '700',
 } as const;
 
+// No elevation in this language. Kept as a typed surface so call sites that
+// still read `shadows.*` resolve to a flat, shadowless value.
 export const shadows = {
-  sm: '0 1px 2px rgba(0, 0, 0, 0.3)',
-  md: '0 4px 8px rgba(0, 0, 0, 0.4)',
-  lg: '0 8px 16px rgba(0, 0, 0, 0.5)',
-  xl: '0 16px 32px rgba(0, 0, 0, 0.6)',
+  sm: 'none',
+  md: 'none',
+  lg: 'none',
+  xl: 'none',
 } as const;
 
 export const transitions = {
@@ -167,6 +176,7 @@ export const theme = {
   colors,
   spacing,
   radius,
+  borderWidth,
   fontSize,
   fontWeight,
   shadows,

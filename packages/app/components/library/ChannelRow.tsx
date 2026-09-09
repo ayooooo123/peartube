@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
-import { GlassCard } from '@/components/primitives'
-import { colors } from '@/lib/colors'
+import { Divider, IconButton } from '@/components/primitives'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 
 export interface SubscriptionItem {
@@ -30,7 +30,7 @@ export function ChannelRow({ item, pinned, onOpen, onUnsubscribe, onTogglePin, o
   const [expanded, setExpanded] = useState(false)
 
   return (
-    <GlassCard padded={false} style={styles.card}>
+    <View>
       <View style={styles.row}>
         <Pressable onPress={onOpen} style={({ pressed }) => [styles.main, pressed && { opacity: 0.7 }]}>
           <View style={styles.avatar}>
@@ -48,19 +48,18 @@ export function ChannelRow({ item, pinned, onOpen, onUnsubscribe, onTogglePin, o
             </Text>
           </View>
         </Pressable>
-        <Pressable
+        <IconButton
+          icon={expanded ? 'chevron-up' : 'more-horizontal'}
           onPress={() => setExpanded((v) => !v)}
-          hitSlop={8}
-          accessibilityRole="button"
           accessibilityLabel="Channel options"
-          style={styles.moreButton}
-        >
-          <Feather name={expanded ? 'chevron-up' : 'more-horizontal'} size={18} color={colors.textMuted} />
-        </Pressable>
+          variant="plain"
+          size={36}
+        />
       </View>
 
       {expanded && (
         <View style={styles.tray}>
+          <Divider />
           <TrayAction
             icon="anchor"
             label={pinned ? 'Stop keeping online' : 'Keep available offline'}
@@ -79,7 +78,7 @@ export function ChannelRow({ item, pinned, onOpen, onUnsubscribe, onTogglePin, o
           />
         </View>
       )}
-    </GlassCard>
+    </View>
   )
 }
 
@@ -104,13 +103,12 @@ function TrayAction({
 }
 
 const styles = StyleSheet.create({
-  card: {
-    marginBottom: 10,
-  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
+    minHeight: 64,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
   },
   main: {
     flex: 1,
@@ -118,10 +116,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 48,
+    height: 48,
+    borderRadius: radius.md,
     backgroundColor: colors.bgActive,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -136,47 +136,40 @@ const styles = StyleSheet.create({
     right: -2,
     width: 16,
     height: 16,
-    borderRadius: 8,
+    borderRadius: radius.sm,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 2,
+    borderWidth: borderWidth.rule,
     borderColor: colors.bg,
   },
   info: {
     flex: 1,
-    marginLeft: 12,
+    marginLeft: spacing.md,
   },
   name: {
-    color: colors.text,
+    ...fonts.title.md,
     fontSize: 15,
-    fontWeight: '600',
+    lineHeight: 20,
+    color: colors.text,
   },
   key: {
+    ...fonts.meta.xs,
     color: colors.textMuted,
-    fontSize: 11,
     marginTop: 2,
   },
-  moreButton: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   tray: {
-    borderTopWidth: 1,
-    borderTopColor: colors.glassBorder,
-    paddingVertical: 4,
+    paddingBottom: spacing.sm,
   },
   trayAction: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 11,
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
   },
   trayLabel: {
-    fontSize: 13,
+    ...fonts.body.sm,
     fontWeight: '500',
   },
 })

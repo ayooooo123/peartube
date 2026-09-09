@@ -24,7 +24,7 @@ test('VideoPlayerContext exposes focused session, progress, and action hooks', (
 })
 
 test('low-frequency UI consumers avoid the combined high-frequency player context', () => {
-  for (const relativePath of ['lib/SocialContext.tsx', 'components/PillTabBar.tsx']) {
+  for (const relativePath of ['lib/SocialContext.tsx', 'components/TabBar.tsx']) {
     const source = readAppFile(relativePath)
 
     assert.match(source, /useVideoPlayerSession/)

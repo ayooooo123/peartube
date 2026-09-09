@@ -17,31 +17,32 @@ function readRepo(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8')
 }
 
-test('mobile design tokens use the client application dark catalog system', () => {
+test('mobile design tokens use the Grid OLED-black system', () => {
   const source = readRepo('packages/core/src/utils/index.ts')
 
-  // Supersedes the earlier violet-on-navy system. The product now adopts
-  // client application's dark theme wholesale — an accent blue on a neutral near-black
-  // with two solid lift steps — so these assertions pin the new palette rather
-  // than the violet one they replace.
-  assert.match(source, /primary:\s*'#3f66ff'/, 'primary accent should use the client application accent blue')
-  assert.match(source, /accentSecondary:\s*'#ff9f1a'/, 'the amber secondary accent has to stay available for badges and warnings')
-  assert.match(source, /onPrimary:\s*'#ffffff'/, 'text on accent fills has to be white to stay legible')
-  assert.match(source, /bg:\s*'#0b0b0f'/, 'the base surface should be the neutral near-black')
-  assert.match(source, /surface:\s*'#16161f'/, 'cards and panels sit one solid step above the base')
-  assert.match(source, /surfaceBorder:\s*'#2b2f3c'/, 'separators are a solid subtle border, not a translucent white wash')
-  assert.match(source, /overlayButton:\s*'rgba\(255, 255, 255, 0\.12\)'/, 'secondary actions over artwork need the button overlay fill')
-  assert.doesNotMatch(source, /#a3e635|#bef264|#65a30d/, 'no lime tokens should survive the recolor')
-  assert.doesNotMatch(source, /primary:\s*'#7b5bf5'/, 'the violet brand accent is fully replaced by the client application blue')
+  // Supersedes the earlier accent-blue-on-near-black system. The product now
+  // uses a true-black base with opaque lift steps, a lime accent, and a
+  // cyan reserved for peer presence. These assertions pin the invariants the
+  // rest of the UI depends on rather than every hex value.
+  assert.match(source, /primary:\s*'#d4ff3f'/, 'primary accent should be the lime')
+  assert.match(source, /onPrimary:\s*'#000000'/, 'text on lime fills has to be black to stay legible')
+  assert.match(source, /swarm:\s*'#39d5ff'/, 'peer presence keeps its own cyan so it never reads as a CTA')
+  assert.match(source, /bg:\s*'#000000'/, 'the base surface should be true black for OLED')
+  assert.match(source, /surface:\s*'#0f0f0f'/, 'cards and panels sit one opaque step above the base')
+  assert.match(source, /glass:\s*'#0f0f0f'/, 'the legacy glass token resolves to an opaque surface, not a translucent wash')
+  assert.doesNotMatch(source, /rgba\(255,\s*255,\s*255/, 'no translucent white washes survive in the token set')
+  assert.doesNotMatch(source, /#3f66ff|#7b5bf5/, 'the blue and violet accents are fully replaced by the lime')
+  assert.match(source, /pill:\s*4/, 'pill radius is square: chips and buttons are rectangles in this language')
 })
 
-test('native video cards use premium app-native surfaces and cover thumbnails', () => {
+test('native video cards use opaque framed surfaces and cover thumbnails', () => {
   const cardSource = readApp('components/video/VideoCard.tsx')
   const thumbnailSource = readApp('components/video/ThumbnailImage.tsx')
 
   assert.match(cardSource, /styles\.surface/, 'native VideoCard should wrap content in a deliberate surface')
   assert.match(cardSource, /styles\.thumbnailFrame/, 'native VideoCard should give thumbnails a controlled framed media area')
-  assert.match(cardSource, /borderColor:\s*colors\.glassBorder/, 'VideoCard surface should use the shared subtle glass-border token')
+  assert.match(cardSource, /borderColor:\s*colors\.borderSubtle/, 'VideoCard surface should use the shared hairline border token')
+  assert.doesNotMatch(cardSource, /rgba\(255,\s*255,\s*255|LinearGradient|shadow(Color|Opacity)|elevation:/, 'VideoCard is an opaque panel: no washes, gradients, or elevation')
   assert.doesNotMatch(cardSource, /textDecorationLine:\s*'underline'/, 'channel labels should not look like cheap underlined web links on mobile')
   assert.match(thumbnailSource, /resizeMode="cover"/, 'mobile thumbnails should fill their media frame instead of letterboxing with contain')
 })

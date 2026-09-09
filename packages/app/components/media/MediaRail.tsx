@@ -2,6 +2,7 @@ import type { ReactElement } from 'react'
 import type { ListRenderItem } from 'react-native'
 import { StyleSheet, View } from 'react-native'
 import { Rail, SectionHeader } from '@/components/primitives'
+import { spacing } from '@/lib/colors'
 
 export interface MediaRailProps<T> {
   title: string
@@ -44,6 +45,6 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   header: {
-    marginBottom: 12,
+    marginBottom: spacing.md,
   },
 })

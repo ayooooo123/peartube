@@ -1,5 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native'
-import { colors } from '@/lib/colors'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
+import { Tag } from '@/components/primitives'
 import {
   buildStorageCategoryRows,
   buildStoragePreviewView,
@@ -38,9 +40,10 @@ export default function StorageOperabilityDetails({ stats, preview }: StorageOpe
           <View style={styles.categoryCopy}>
             <View style={styles.categoryTitleRow}>
               <Text style={styles.categoryLabel}>{row.label}</Text>
-              <Text style={[styles.badge, row.protection === 'protected' ? styles.protectedBadge : styles.evictableBadge]}>
-                {row.protection === 'protected' ? 'Protected' : 'Evictable'}
-              </Text>
+              <Tag
+                label={row.protection === 'protected' ? 'Protected' : 'Evictable'}
+                tone={row.protection === 'protected' ? 'default' : 'accent'}
+              />
             </View>
             <Text style={styles.categoryDetail}>{row.detail}</Text>
           </View>
@@ -80,28 +83,51 @@ export default function StorageOperabilityDetails({ stats, preview }: StorageOpe
 }
 
 const styles = StyleSheet.create({
-  root: { marginTop: 14, gap: 10 },
-  summaryRow: { flexDirection: 'row', gap: 10 },
-  summaryCell: { flex: 1, padding: 10, borderRadius: 10, backgroundColor: colors.glass },
-  summaryLabel: { fontSize: 11, color: colors.textMuted },
-  summaryValue: { marginTop: 2, fontSize: 15, fontWeight: '700', color: colors.text },
-  heading: { marginTop: 4, fontSize: 12, fontWeight: '700', color: colors.textSecondary },
-  categoryRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.glassBorder },
+  root: { marginTop: spacing.md, gap: spacing.sm },
+  summaryRow: { flexDirection: 'row', gap: spacing.sm },
+  summaryCell: {
+    flex: 1,
+    padding: spacing.md,
+    borderRadius: radius.card,
+    backgroundColor: colors.surfaceHover,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
+  },
+  summaryLabel: { ...fonts.caption.sm, color: colors.textMuted },
+  summaryValue: { marginTop: spacing.xs, ...fonts.meta.md, color: colors.text },
+  heading: { marginTop: spacing.xs, ...fonts.caption.sm, color: colors.textSecondary },
+  categoryRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: borderWidth.hairline,
+    borderBottomColor: colors.borderSubtle,
+  },
   categoryCopy: { flex: 1, minWidth: 0 },
-  categoryTitleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
-  categoryLabel: { fontSize: 12, fontWeight: '600', color: colors.text },
-  categoryDetail: { marginTop: 3, fontSize: 11, lineHeight: 16, color: colors.textMuted },
-  categoryBytes: { fontSize: 12, fontWeight: '700', color: colors.textSecondary },
-  badge: { overflow: 'hidden', borderRadius: 999, paddingHorizontal: 6, paddingVertical: 2, fontSize: 9, fontWeight: '700' },
-  protectedBadge: { color: colors.textSecondary, backgroundColor: colors.glass },
-  evictableBadge: { color: colors.primary, backgroundColor: colors.glass },
-  pledgeNote: { borderRadius: 10, borderWidth: 1, borderColor: colors.glassBorder, padding: 10 },
-  pledgeTitle: { fontSize: 12, fontWeight: '700', color: colors.text },
-  pledgeCopy: { marginTop: 3, fontSize: 11, lineHeight: 16, color: colors.textMuted },
-  preview: { borderRadius: 10, borderWidth: 1, padding: 10, gap: 4 },
-  feasiblePreview: { borderColor: colors.swarm, backgroundColor: colors.glass },
-  blockedPreview: { borderColor: colors.error, backgroundColor: colors.glass },
-  previewTitle: { fontSize: 12, fontWeight: '700', color: colors.text },
-  previewText: { fontSize: 11, lineHeight: 16, color: colors.textSecondary },
-  consequence: { fontSize: 11, lineHeight: 16, color: colors.textMuted },
+  categoryTitleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.sm - 2 },
+  categoryLabel: { ...fonts.meta.sm, color: colors.text, fontFamily: fonts.monoMedium },
+  categoryDetail: { marginTop: spacing.xs, ...fonts.body.sm, fontSize: 11, lineHeight: 16, color: colors.textMuted },
+  categoryBytes: { ...fonts.meta.sm, color: colors.textSecondary },
+  pledgeNote: {
+    borderRadius: radius.card,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    padding: spacing.md,
+    backgroundColor: colors.surface,
+  },
+  pledgeTitle: { ...fonts.caption.sm, color: colors.text },
+  pledgeCopy: { marginTop: spacing.xs, ...fonts.body.sm, fontSize: 11, lineHeight: 16, color: colors.textMuted },
+  preview: {
+    borderRadius: radius.card,
+    borderWidth: borderWidth.rule,
+    padding: spacing.md,
+    gap: spacing.xs,
+    backgroundColor: colors.surface,
+  },
+  feasiblePreview: { borderColor: colors.primary },
+  blockedPreview: { borderColor: colors.error },
+  previewTitle: { ...fonts.caption.sm, color: colors.text },
+  previewText: { ...fonts.meta.xs, lineHeight: 16, color: colors.textSecondary },
+  consequence: { ...fonts.meta.xs, lineHeight: 16, color: colors.textMuted },
 })

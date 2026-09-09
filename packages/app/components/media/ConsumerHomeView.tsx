@@ -1,21 +1,19 @@
 import React, { memo, useCallback, useMemo } from 'react'
 import {
   ActivityIndicator,
-  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
-  Text,
   View,
   useWindowDimensions,
 } from 'react-native'
 import type { MediaEntitySummary } from '@peartube/core'
 import { MediaPosterCard, MEDIA_POSTER_CARD_WIDTH } from './MediaPosterCard'
 import { HomeHeroCarousel, type HomeHeroItem } from './HomeHeroCarousel'
+import { SectionHeader, SwarmIndicator, Eyebrow, EmptyState } from '@/components/primitives'
 import { projectHomeRails } from '@/lib/home-rails.js'
 import type { LocalWatchStateRow } from '@/lib/watch-history'
-import { colors, radius, spacing } from '@/lib/colors'
-import { fonts } from '@/lib/typography'
+import { colors, spacing, borderWidth } from '@/lib/colors'
 
 export type ConsumerHomeState = {
   status?: string
@@ -51,20 +49,11 @@ type GridItem = MediaEntitySummary & {
 const PAGE_PADDING = spacing.lg
 const COLUMN_GUTTER = spacing.md
 const ROW_GUTTER = spacing.lg
-// The column count is whatever lands closest to the poster card's own width at
-// the current window width - two on a phone, more as the window grows. The
-// clamp keeps a narrow phone from dropping to a single oversized column and a
-// desktop from shrinking posters into thumbnails.
 const TARGET_CARD_WIDTH = MEDIA_POSTER_CARD_WIDTH
 const MIN_COLUMNS = 2
 const MAX_COLUMNS = 5
 const HERO_ITEM_LIMIT = 5
 
-/**
- * One grid cell. The stable `onPress` is the point: an inline closure at the
- * call site would hand every card a new function on each render and defeat the
- * memo inside the poster card.
- */
 function GridCard({
   item,
   width,
@@ -97,23 +86,14 @@ export function ConsumerHomeView({
     [items, watchState, firstSeen, now],
   )
 
-  // Cards are sized to fill the row edge to edge: the leftover after the page
-  // padding and the gutters between columns, split evenly. One title no longer
-  // leaves the rest of the row empty.
   const cardWidth = useMemo(() => {
     const available = windowWidth - PAGE_PADDING * 2
-    // Only before layout has reported a width, which is also what a static
-    // render sees. The card's own baseline width is the honest stand-in.
     if (available <= 0) return MEDIA_POSTER_CARD_WIDTH
     const fit = Math.round((available + COLUMN_GUTTER) / (TARGET_CARD_WIDTH + COLUMN_GUTTER))
     const columns = Math.min(MAX_COLUMNS, Math.max(MIN_COLUMNS, fit))
     return Math.max(1, Math.floor((available - COLUMN_GUTTER * (columns - 1)) / columns))
   }, [windowWidth])
 
-  // The hero features the top shelf, the way client application's does. Artwork is not
-  // a condition of appearing there: a title with none draws the same placeholder
-  // the grid draws, and a hero that comes and goes with replication state would
-  // move the whole screen under the viewer.
   const featured = useMemo(
     () => ((rails[0]?.items ?? []) as HomeHeroItem[]).slice(0, HERO_ITEM_LIMIT),
     [rails],
@@ -121,70 +101,78 @@ export function ConsumerHomeView({
 
   if (rails.length === 0) {
     return (
-      <ScrollView
-        contentContainerStyle={[styles.emptyContent, { paddingBottom: contentBottomInset }]}
-        refreshControl={<RefreshControl refreshing={state.refreshing === true} onRefresh={onRefresh} />}
-      >
-        {state.status === 'loading' ? <ActivityIndicator color={colors.primary} /> : null}
-        <Text style={styles.emptyTitle}>{diagnostic?.title || 'Nothing to watch yet'}</Text>
-        <Text style={styles.emptyDetail}>
-          {diagnostic?.detail || 'Nothing is available yet. Pull down to refresh.'}
-        </Text>
-        {diagnostic?.errorCode ? <Text style={styles.emptyCode}>{diagnostic.errorCode}</Text> : null}
-        <Pressable accessibilityRole="button" onPress={onRefresh} style={styles.emptyAction}>
-          <Text style={styles.emptyActionLabel}>{diagnostic?.actionLabel || 'Check again'}</Text>
-        </Pressable>
-      </ScrollView>
+      <View style={{ flex: 1, backgroundColor: colors.bg }}>
+        <View style={styles.header}>
+          <Eyebrow>PEARTUBE / HOME</Eyebrow>
+          <SwarmIndicator peers={0} label="auto" />
+        </View>
+        <ScrollView
+          contentContainerStyle={[styles.emptyContent, { paddingBottom: contentBottomInset }]}
+          refreshControl={<RefreshControl refreshing={state.refreshing === true} onRefresh={onRefresh} />}
+        >
+          {state.status === 'loading' ? <ActivityIndicator color={colors.primary} /> : null}
+          <EmptyState
+            icon="film"
+            status={diagnostic?.errorCode ?? undefined}
+            title={diagnostic?.title || 'Nothing to watch yet'}
+            body={diagnostic?.detail || 'Nothing is available yet. Pull down to refresh.'}
+            action={{ label: diagnostic?.actionLabel || 'Check again', onPress: onRefresh }}
+          />
+        </ScrollView>
+      </View>
     )
   }
 
   return (
-    <ScrollView
-      testID="consumer-home"
-      contentContainerStyle={{ paddingBottom: contentBottomInset }}
-      refreshControl={<RefreshControl refreshing={state.refreshing === true} onRefresh={onRefresh} />}
-      showsVerticalScrollIndicator={false}
-    >
-      <HomeHeroCarousel items={featured} windowWidth={windowWidth} onOpenEntity={onOpenEntity} />
-      {rails.map(rail => (
-        <View key={rail.id} testID={`home-section-${rail.id}`} style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>{rail.title}</Text>
-            {rail.subtitle ? <Text style={styles.sectionSubtitle}>{rail.subtitle}</Text> : null}
+    <View testID="consumer-home" style={{ flex: 1, backgroundColor: colors.bg }}>
+      <View style={styles.header}>
+        <Eyebrow>PEARTUBE / HOME</Eyebrow>
+        <SwarmIndicator peers={0} label="auto" />
+      </View>
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: contentBottomInset }}
+        refreshControl={<RefreshControl refreshing={state.refreshing === true} onRefresh={onRefresh} />}
+        showsVerticalScrollIndicator={false}
+      >
+        <HomeHeroCarousel items={featured} windowWidth={windowWidth} onOpenEntity={onOpenEntity} />
+        {rails.map((rail, index) => (
+          <View key={rail.id} testID={`home-section-${rail.id}`} style={styles.section}>
+            <SectionHeader 
+              title={rail.title} 
+              eyebrow={String(index + 1).padStart(2, '0')}
+              subtitle={rail.subtitle}
+              flush={false}
+            />
+            <View style={styles.grid}>
+              {(rail.items as GridItem[]).map(item => (
+                <MemoizedGridCard
+                  key={item.entityId}
+                  item={item}
+                  width={cardWidth}
+                  onOpenEntity={onOpenEntity}
+                />
+              ))}
+            </View>
           </View>
-          <View style={styles.grid}>
-            {(rail.items as GridItem[]).map(item => (
-              <MemoizedGridCard
-                key={item.entityId}
-                item={item}
-                width={cardWidth}
-                onOpenEntity={onOpenEntity}
-              />
-            ))}
-          </View>
-        </View>
-      ))}
-    </ScrollView>
+        ))}
+      </ScrollView>
+    </View>
   )
 }
 
 const styles = StyleSheet.create({
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderBottomWidth: borderWidth.rule,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.bg,
+  },
   section: {
     marginTop: spacing.xl,
-  },
-  sectionHeader: {
-    paddingHorizontal: PAGE_PADDING,
-    marginBottom: spacing.md,
-  },
-  sectionTitle: {
-    ...fonts.title.md,
-    fontFamily: fonts.heading,
-    color: colors.text,
-  },
-  sectionSubtitle: {
-    ...fonts.body.sm,
-    color: colors.textMuted,
-    marginTop: spacing.xs,
   },
   grid: {
     flexDirection: 'row',
@@ -195,35 +183,6 @@ const styles = StyleSheet.create({
   },
   emptyContent: {
     flexGrow: 1,
-    alignItems: 'center',
     justifyContent: 'center',
-    padding: spacing.xxl,
-    gap: spacing.sm,
-  },
-  emptyTitle: {
-    ...fonts.title.md,
-    fontFamily: fonts.heading,
-    color: colors.text,
-    textAlign: 'center',
-  },
-  emptyDetail: {
-    ...fonts.body.sm,
-    color: colors.textMuted,
-    textAlign: 'center',
-  },
-  emptyCode: {
-    ...fonts.caption.sm,
-    color: colors.textDisabled,
-  },
-  emptyAction: {
-    marginTop: spacing.md,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.pill,
-    backgroundColor: colors.bgHover,
-  },
-  emptyActionLabel: {
-    ...fonts.label.md,
-    color: colors.text,
   },
 })

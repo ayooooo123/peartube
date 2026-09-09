@@ -8,7 +8,8 @@ import Animated, {
   withRepeat,
   withTiming,
 } from 'react-native-reanimated'
-import { colors } from '@/lib/colors'
+import { colors, spacing } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 
 type SwarmLevel = 'offline' | 'connected' | 'strong'
 
@@ -16,10 +17,10 @@ interface SwarmIndicatorProps {
   /** Number of connected peers; drives pulse intensity and the auto label. */
   peers: number
   /**
-   * 'auto' renders human copy for the current level, a string renders as-is,
-   * and omitting it renders the dot alone.
+   * 'auto' renders the level label, 'count' renders `N PEERS`, a string
+   * renders as-is, and omitting it renders the square alone.
    */
-  label?: 'auto' | string
+  label?: 'auto' | 'count' | string
   size?: number
   style?: StyleProp<ViewStyle>
 }
@@ -31,18 +32,17 @@ function levelFor(peers: number): SwarmLevel {
 }
 
 const AUTO_LABELS: Record<SwarmLevel, string> = {
-  offline: 'Connecting…',
-  connected: 'Connected to the swarm',
-  strong: 'Strong swarm',
+  offline: 'CONNECTING',
+  connected: 'SWARM OK',
+  strong: 'SWARM STRONG',
 }
 
 /**
  * Ambient peer-presence indicator — PearTube's signature element.
  *
- * A small teal dot with a looping pulse whose intensity follows the swarm:
+ * A small cyan square with a looping pulse whose intensity follows the swarm:
  * grey and still while connecting, a slow pulse with a few peers, and a
- * brighter, faster glow on a strong swarm. Use this everywhere instead of
- * raw peer counts or technical status strings.
+ * brighter, faster pulse on a strong swarm. Labels are mono uppercase.
  */
 export function SwarmIndicator({ peers, label, size = 8, style }: SwarmIndicatorProps) {
   const level = levelFor(peers)
@@ -73,8 +73,9 @@ export function SwarmIndicator({ peers, label, size = 8, style }: SwarmIndicator
   const dotColor = level === 'offline' ? colors.textDisabled : colors.swarm
   const resolvedLabel = useMemo(() => {
     if (label === 'auto') return AUTO_LABELS[level]
+    if (label === 'count') return `${peers} ${peers === 1 ? 'PEER' : 'PEERS'}`
     return label
-  }, [label, level])
+  }, [label, level, peers])
 
   return (
     <View style={[styles.row, style]} accessibilityLabel={resolvedLabel ?? AUTO_LABELS[level]}>
@@ -87,23 +88,17 @@ export function SwarmIndicator({ peers, label, size = 8, style }: SwarmIndicator
                 position: 'absolute',
                 width: size,
                 height: size,
-                borderRadius: size / 2,
                 backgroundColor: level === 'strong' ? colors.swarmGlow : colors.swarmDim,
               },
               ringStyle,
             ]}
           />
         )}
-        <View
-          style={{
-            width: size,
-            height: size,
-            borderRadius: size / 2,
-            backgroundColor: dotColor,
-          }}
-        />
+        <View style={{ width: size, height: size, backgroundColor: dotColor }} />
       </View>
-      {resolvedLabel ? <Text style={styles.label}>{resolvedLabel}</Text> : null}
+      {resolvedLabel ? (
+        <Text style={[styles.label, level !== 'offline' && { color: colors.swarm }]}>{resolvedLabel}</Text>
+      ) : null}
     </View>
   )
 }
@@ -114,8 +109,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   label: {
+    ...fonts.caption.sm,
     color: colors.textMuted,
-    fontSize: 12,
-    marginLeft: 2,
+    marginLeft: spacing.xs,
   },
 })

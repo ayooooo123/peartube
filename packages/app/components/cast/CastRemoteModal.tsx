@@ -13,9 +13,10 @@ import {
   StyleSheet,
   ActivityIndicator,
 } from 'react-native'
-import { Feather, Ionicons } from '@expo/vector-icons'
-import { colors } from '@/lib/colors'
+import { Feather } from '@expo/vector-icons'
+import { colors, spacing, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
+import { Button, IconButton, Meta, Body } from '@/components/primitives'
 import { useCast } from '@/lib/cast'
 import { Scrubber, formatDuration } from '@/components/video-player'
 
@@ -116,66 +117,63 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
         <View style={styles.sheet}>
           <View style={styles.header}>
             <View style={styles.headerText}>
-              <Text style={styles.title}>Casting</Text>
-              <Text style={styles.subtitle} numberOfLines={1}>
+              <Text style={styles.title}>CAST TO</Text>
+              <Meta tone="muted" size="sm">
                 {deviceName} · {statusLabel}
-              </Text>
+              </Meta>
             </View>
 
-            <Pressable style={styles.closeButton} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close cast remote">
-              <Feather name="x" size={22} color={colors.text} />
-            </Pressable>
+            <IconButton 
+              icon="x" 
+              onPress={onClose} 
+              accessibilityLabel="Close cast remote"
+              variant="plain"
+              size={32}
+            />
           </View>
 
           {videoTitle ? (
             <View style={styles.nowPlaying}>
-              <Text style={styles.nowPlayingLabel}>Now playing</Text>
-              <Text style={styles.nowPlayingTitle} numberOfLines={2}>{videoTitle}</Text>
+              <Meta tone="muted">NOW PLAYING</Meta>
+              <Body size="lg" tone="default" numberOfLines={2}>{videoTitle}</Body>
             </View>
           ) : null}
 
           {transcodeLabel ? (
             <View style={styles.transcodeRow}>
               <ActivityIndicator size="small" color={colors.primary} />
-              <Text style={styles.transcodeText}>{transcodeLabel}</Text>
+              <Meta tone="muted" size="sm">{transcodeLabel}</Meta>
             </View>
           ) : null}
 
           <View style={styles.controlsRow}>
-            <Pressable
-              style={[styles.primaryButton, !isConnected && styles.disabled]}
+            <Button
+              label={playback.state === 'playing' || playback.state === 'buffering' ? 'Pause' : 'Play'}
+              variant="primary"
+              size="md"
+              block
+              icon={playback.state === 'playing' || playback.state === 'buffering' ? 'pause' : 'play'}
               onPress={handlePlayPause}
               disabled={!isConnected}
-              accessibilityRole="button"
               accessibilityLabel={playback.state === 'playing' ? 'Pause' : 'Play'}
-            >
-              <Ionicons
-                name={(playback.state === 'playing' || playback.state === 'buffering') ? 'pause' : 'play'}
-                size={22}
-                color={colors.onPrimary}
-              />
-              <Text style={styles.primaryButtonText}>
-                {(playback.state === 'playing' || playback.state === 'buffering') ? 'Pause' : 'Play'}
-              </Text>
-            </Pressable>
+            />
 
-            <Pressable
-              style={styles.secondaryButton}
+            <Button
+              label="Switch"
+              variant="secondary"
+              size="md"
+              icon="tv"
               onPress={onSwitchDevice}
-              accessibilityRole="button"
               accessibilityLabel="Switch cast device"
-            >
-              <Feather name="tv" size={18} color={colors.text} />
-              <Text style={styles.secondaryButtonText}>Switch</Text>
-            </Pressable>
+            />
           </View>
 
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Playback</Text>
-              <Text style={styles.sectionMeta}>
+              <Text style={styles.sectionTitle}>PLAYBACK</Text>
+              <Meta tone="muted" size="sm">
                 {formatDuration(currentTime)} / {formatDuration(duration)}
-              </Text>
+              </Meta>
             </View>
             <Scrubber
               duration={duration}
@@ -187,62 +185,59 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
               onSeekCommit={handleSeekCommit}
             />
             {duration <= 0 ? (
-              <Text style={styles.hintText}>Seeking is unavailable for this stream.</Text>
+              <Meta tone="muted" size="sm" style={styles.hintText}>Seeking is unavailable for this stream.</Meta>
             ) : null}
           </View>
 
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Volume</Text>
-              <Text style={styles.sectionMeta}>{Math.round(playback.volume || 0)}%</Text>
+              <Text style={styles.sectionTitle}>VOLUME</Text>
+              <Meta tone="muted" size="sm">{Math.round(playback.volume || 0)}%</Meta>
             </View>
             <View style={styles.volumeRow}>
-              <Pressable
-                style={[styles.volumeStep, !isConnected && styles.disabled]}
+              <IconButton
+                icon="minus"
                 onPress={() => handleVolStep(-5)}
                 disabled={!isConnected}
-                accessibilityRole="button"
+                variant="outline"
+                size={40}
                 accessibilityLabel="Volume down"
-              >
-                <Feather name="minus" size={18} color={colors.text} />
-              </Pressable>
+              />
               <View style={styles.volumeBarOuter}>
                 <View style={[styles.volumeBarInner, { width: `${Math.max(0, Math.min(100, playback.volume || 0))}%` }]} />
               </View>
-              <Pressable
-                style={[styles.volumeStep, !isConnected && styles.disabled]}
+              <IconButton
+                icon="plus"
                 onPress={() => handleVolStep(5)}
                 disabled={!isConnected}
-                accessibilityRole="button"
+                variant="outline"
+                size={40}
                 accessibilityLabel="Volume up"
-              >
-                <Feather name="plus" size={18} color={colors.text} />
-              </Pressable>
+              />
             </View>
           </View>
 
           <View style={styles.footerRow}>
-            <Pressable
-              style={[styles.dangerButton, !isConnected && styles.disabled]}
+            <Button
+              label="Disconnect"
+              variant="danger"
+              size="md"
+              block
+              icon="x-circle"
               onPress={() => cast.disconnect()}
               disabled={!isConnected}
-              accessibilityRole="button"
               accessibilityLabel="Disconnect casting"
-            >
-              <Feather name="x-circle" size={18} color="#fff" />
-              <Text style={styles.dangerButtonText}>Disconnect</Text>
-            </Pressable>
+            />
 
-            <Pressable
-              style={[styles.secondaryButton, !isConnected && styles.disabled]}
+            <Button
+              label="Stop"
+              variant="secondary"
+              size="md"
+              icon="square"
               onPress={() => cast.stop()}
               disabled={!isConnected}
-              accessibilityRole="button"
               accessibilityLabel="Stop playback"
-            >
-              <Feather name="square" size={18} color={colors.text} />
-              <Text style={styles.secondaryButtonText}>Stop</Text>
-            </Pressable>
+            />
           </View>
         </View>
       </View>
@@ -253,162 +248,83 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    backgroundColor: colors.scrim,
     justifyContent: 'flex-end',
   },
   sheet: {
-    backgroundColor: colors.bgElevated,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    borderWidth: 1,
-    borderBottomWidth: 0,
-    borderColor: colors.glassBorder,
-    paddingBottom: 24,
+    backgroundColor: colors.surface,
+    borderTopWidth: borderWidth.rule,
+    borderTopColor: colors.primary,
+    paddingBottom: spacing.lg,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    gap: 12,
+    padding: spacing.lg,
+    borderBottomWidth: borderWidth.hairline,
+    borderBottomColor: colors.borderSubtle,
+    gap: spacing.md,
   },
   headerText: {
     flex: 1,
   },
   title: {
-    fontSize: 18,
-    fontFamily: fonts.heading,
+    ...fonts.title.md,
     color: colors.text,
-  },
-  subtitle: {
-    marginTop: 2,
-    fontSize: 13,
-    color: colors.textMuted,
-  },
-  closeButton: {
-    padding: 6,
+    textTransform: 'uppercase',
   },
   nowPlaying: {
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 6,
-  },
-  nowPlayingLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  nowPlayingTitle: {
-    marginTop: 6,
-    fontSize: 15,
-    fontWeight: '600',
-    color: colors.text,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
   },
   transcodeRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    marginTop: 6,
-    marginBottom: 4,
-    paddingHorizontal: 16,
-  },
-  transcodeText: {
-    flex: 1,
-    fontSize: 13,
-    color: colors.textMuted,
+    gap: spacing.md,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+    paddingHorizontal: spacing.lg,
   },
   controlsRow: {
     flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    gap: 12,
-  },
-  primaryButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: colors.primary,
-    paddingVertical: 12,
-    borderRadius: 12,
-  },
-  primaryButtonText: {
-    color: colors.onPrimary,
-    fontWeight: '700',
-    fontSize: 14,
-  },
-  secondaryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 12,
-    backgroundColor: colors.bg,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  secondaryButtonText: {
-    color: colors.text,
-    fontWeight: '700',
-    fontSize: 14,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    gap: spacing.md,
   },
   section: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
   },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'baseline',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: spacing.md,
   },
   sectionTitle: {
-    fontSize: 14,
-    fontWeight: '700',
+    ...fonts.caption.sm,
     color: colors.text,
   },
-  sectionMeta: {
-    fontSize: 13,
-    color: colors.textMuted,
-  },
   scrubberContainer: {
-    paddingVertical: 8,
+    paddingVertical: spacing.md,
   },
   hintText: {
-    marginTop: 8,
-    fontSize: 13,
-    color: colors.textMuted,
-    opacity: 0.9,
+    marginTop: spacing.md,
   },
   volumeRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingVertical: 6,
-  },
-  volumeStep: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    backgroundColor: colors.bg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
   },
   volumeBarOuter: {
     flex: 1,
-    height: 10,
-    borderRadius: 999,
+    height: 6,
+    borderRadius: 3,
     backgroundColor: colors.bg,
-    borderWidth: 1,
+    borderWidth: borderWidth.hairline,
     borderColor: colors.border,
     overflow: 'hidden',
   },
@@ -420,27 +336,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingTop: 18,
-  },
-  dangerButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    borderRadius: 12,
-    backgroundColor: '#ef4444',
-  },
-  dangerButtonText: {
-    color: '#fff',
-    fontWeight: '800',
-    fontSize: 14,
-  },
-  disabled: {
-    opacity: 0.5,
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.xl,
   },
 })
 

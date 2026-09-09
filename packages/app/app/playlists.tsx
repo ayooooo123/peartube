@@ -7,12 +7,12 @@ import { useCallback, useState } from 'react'
 import { Alert, FlatList, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from './_layout'
-import { EmptyState } from '@/components/primitives'
+import { Button, Divider, EmptyState, IconButton, Panel, ScreenHeader, SectionHeader } from '@/components/primitives'
 import { fonts } from '@/lib/typography'
+import { radius, spacing, borderWidth } from '@/lib/colors'
 
-type Playlist = { id: string; name?: string; description?: string; createdAt?: number; updatedAt?: number }
+type Playlist = { id: string; name?: string; description?: string; createdAt?: number; updatedAt?: number; itemCount: number }
 type ResumeEntry = { videoKey: string; channelKey?: string; videoId?: string; position?: number; duration?: number }
 
 export default function PlaylistsScreen() {
@@ -24,12 +24,25 @@ export default function PlaylistsScreen() {
   const [resume, setResume] = useState<ResumeEntry[]>([])
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
+  const [nameFocused, setNameFocused] = useState(false)
 
   const load = useCallback(async () => {
     if (!rpc) return
     try {
       const res = await rpc.getPlaylists()
-      setPlaylists(res?.playlists || [])
+      const base = (res?.playlists || []) as Array<Omit<Playlist, 'itemCount'> & { itemCount?: number }>
+      const withCounts = await Promise.all(
+        base.map(async (pl) => {
+          try {
+            const itemsRes = await rpc.getPlaylistItems({ playlistId: pl.id })
+            const count = Array.isArray(itemsRes?.items) ? itemsRes.items.length : 0
+            return { ...pl, itemCount: count }
+          } catch {
+            return { ...pl, itemCount: 0 }
+          }
+        }),
+      )
+      setPlaylists(withCounts)
     } catch (err) {
       console.error('[Playlists] load failed:', err)
     }
@@ -76,16 +89,21 @@ export default function PlaylistsScreen() {
   }, [rpc, load])
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top ? insets.top + 8 : 16 }]}>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={8} style={styles.headerButton} accessibilityLabel="Back">
-          <Feather name="chevron-left" color={colors.text} size={22} />
-        </Pressable>
-        <Text style={styles.headerTitle}>Playlists</Text>
-        <Pressable onPress={() => setCreating((v) => !v)} hitSlop={8} style={styles.headerButton} accessibilityLabel="New playlist">
-          <Feather name={creating ? 'x' : 'plus'} color={colors.text} size={22} />
-        </Pressable>
-      </View>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <ScreenHeader
+        title="Playlists"
+        eyebrow="PERSONAL / SYNCED"
+        onBack={() => router.back()}
+        right={
+          <IconButton
+            icon={creating ? 'x' : 'plus'}
+            onPress={() => setCreating((v) => !v)}
+            accessibilityLabel="New playlist"
+            variant="plain"
+            size={36}
+          />
+        }
+      />
 
       {creating && (
         <View style={styles.createRow}>
@@ -94,73 +112,138 @@ export default function PlaylistsScreen() {
             onChangeText={setNewName}
             placeholder="Playlist name"
             placeholderTextColor={colors.textMuted}
-            style={styles.input}
+            style={[styles.input, nameFocused && styles.inputFocused]}
             autoFocus
             returnKeyType="done"
             onSubmitEditing={createPlaylist}
+            onFocus={() => setNameFocused(true)}
+            onBlur={() => setNameFocused(false)}
           />
-          <Pressable onPress={createPlaylist} style={styles.createButton} accessibilityLabel="Create">
-            <Text style={styles.createButtonText}>Create</Text>
-          </Pressable>
+          <Button label="Create" onPress={createPlaylist} size="md" accessibilityLabel="Create" />
         </View>
       )}
 
-      <FlatList
-        data={playlists}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 24, flexGrow: 1 }}
-        ListHeaderComponent={
-          resume.length > 0 ? (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Continue watching</Text>
-              <Text style={styles.sectionHint}>{resume.length} in progress · synced across your devices</Text>
-            </View>
-          ) : null
-        }
-        ListEmptyComponent={
+      <View style={styles.body}>
+        {resume.length > 0 ? (
+          <SectionHeader
+            title="Continue watching"
+            subtitle={`${resume.length} in progress · synced across your devices`}
+          />
+        ) : null}
+
+        {playlists.length === 0 ? (
           <EmptyState
             icon="list"
             title="No playlists yet"
             body="Tap + to create your first playlist. Playlists sync privately across your devices."
           />
-        }
-        renderItem={({ item }) => (
-          <Pressable
-            style={styles.row}
-            onPress={() => router.push({ pathname: '/playlist/[id]', params: { id: item.id, name: item.name || 'Playlist' } })}
-          >
-            <View style={styles.rowIcon}>
-              <Feather name="list" color={colors.primary} size={18} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle} numberOfLines={1}>{item.name || 'Untitled playlist'}</Text>
-              {!!item.description && <Text style={styles.rowSubtitle} numberOfLines={1}>{item.description}</Text>}
-            </View>
-            <Pressable onPress={() => deletePlaylist(item)} hitSlop={8} style={styles.rowAction} accessibilityLabel="Delete playlist">
-              <Feather name="trash-2" color={colors.textMuted} size={18} />
-            </Pressable>
-          </Pressable>
+        ) : (
+          <Panel padded={false} style={[styles.listPanel, { marginBottom: insets.bottom + 24 }]}>
+            <FlatList
+              data={playlists}
+              keyExtractor={(item) => item.id}
+              ItemSeparatorComponent={() => <Divider />}
+              renderItem={({ item }) => (
+                <Pressable
+                  style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}
+                  onPress={() => router.push({ pathname: '/playlist/[id]', params: { id: item.id, name: item.name || 'Playlist' } })}
+                >
+                  <View style={styles.stackGlyph}>
+                    <View style={[styles.stackSquare, styles.stackBack]} />
+                    <View style={[styles.stackSquare, styles.stackFront]} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.rowTitle} numberOfLines={1}>{item.name || 'Untitled playlist'}</Text>
+                    <Text style={styles.rowSubtitle} numberOfLines={1}>
+                      {`${item.itemCount} ITEMS`}
+                    </Text>
+                  </View>
+                  <IconButton
+                    icon="trash-2"
+                    onPress={() => deletePlaylist(item)}
+                    accessibilityLabel="Delete playlist"
+                    variant="plain"
+                    size={36}
+                  />
+                </Pressable>
+              )}
+            />
+          </Panel>
         )}
-      />
+      </View>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingBottom: 12 },
-  headerButton: { padding: 6, borderRadius: 999 },
-  headerTitle: { color: colors.text, fontSize: 20, fontFamily: fonts.heading },
-  createRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingBottom: 12 },
-  input: { flex: 1, backgroundColor: colors.surface, color: colors.text, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
-  createButton: { backgroundColor: colors.primary, borderRadius: 12, paddingHorizontal: 16, justifyContent: 'center' },
-  createButtonText: { color: colors.bg, fontFamily: fonts.heading },
-  section: { paddingVertical: 12 },
-  sectionTitle: { color: colors.text, fontSize: 16, fontFamily: fonts.heading },
-  sectionHint: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  rowIcon: { width: 40, height: 40, borderRadius: 10, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
-  rowTitle: { color: colors.text, fontSize: 15, fontFamily: fonts.headingMedium },
-  rowSubtitle: { color: colors.textMuted, fontSize: 13, marginTop: 2 },
-  rowAction: { padding: 6 },
+  body: { flex: 1 },
+  createRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.md,
+  },
+  input: {
+    flex: 1,
+    backgroundColor: colors.surfaceHover,
+    color: colors.text,
+    borderRadius: radius.md,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    ...fonts.meta.sm,
+  },
+  inputFocused: {
+    borderColor: colors.borderFocus,
+  },
+  listPanel: {
+    flex: 1,
+    marginHorizontal: spacing.lg,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    minHeight: 64,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  stackGlyph: {
+    width: 40,
+    height: 40,
+    position: 'relative',
+  },
+  stackSquare: {
+    position: 'absolute',
+    width: 28,
+    height: 28,
+    borderRadius: radius.sm,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    backgroundColor: colors.bgActive,
+  },
+  stackBack: {
+    top: 2,
+    left: 8,
+    borderColor: colors.borderLight,
+  },
+  stackFront: {
+    top: 10,
+    left: 2,
+    backgroundColor: colors.surface,
+    borderColor: colors.primary,
+  },
+  rowTitle: {
+    ...fonts.title.md,
+    fontSize: 15,
+    lineHeight: 20,
+    color: colors.text,
+  },
+  rowSubtitle: {
+    ...fonts.meta.sm,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
 })

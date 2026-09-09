@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Text, View } from 'react-native'
+import { Text, View, StyleSheet } from 'react-native'
 import { useApp } from '../lib/AppContext'
 import {
   loadPublisherDeviceStatus,
@@ -11,6 +11,8 @@ import {
   type PublisherDeviceStatusInput,
 } from '../components/publisher/PublisherDeviceStatus'
 import { DeveloperModeGate } from '../lib/developer-mode'
+import { colors, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 
 export type PublisherSecurityRouteProps = {
   rpc: PublisherStatusRpc | null | undefined
@@ -30,11 +32,13 @@ export function PublisherSecurityRoute({ rpc, initialStatus, actionHandlers }: P
   }, [rpc, initialStatus])
 
   return (
-    <View accessibilityLabel="Publisher security" style={{ flex: 1, padding: 20 }}>
-      <Text style={{ color: '#f8fafc', fontSize: 20, fontWeight: '700', marginBottom: 12 }}>Publishing security</Text>
+    <View accessibilityLabel="Publisher security" style={styles.screen}>
+      <Text style={styles.eyebrow}>DEVICE / SECURITY</Text>
+      <Text style={styles.title}>Publishing security</Text>
+      <View style={styles.rule} />
       {status
         ? <PublisherDeviceStatus status={status} actionHandlers={actionHandlers} />
-        : <Text accessibilityRole="progressbar" style={{ color: '#94a3b8' }}>Loading publisher security status from this device…</Text>}
+        : <Text accessibilityRole="progressbar" style={styles.loading}>Loading publisher security status from this device…</Text>}
     </View>
   )
 }
@@ -47,3 +51,29 @@ function ConnectedPublisherSecurityRoute() {
 export default function DeveloperPublisherSecurityRoute() {
   return <DeveloperModeGate><ConnectedPublisherSecurityRoute /></DeveloperModeGate>
 }
+
+const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: colors.bg,
+    padding: spacing.xl,
+    gap: spacing.md,
+  },
+  eyebrow: {
+    ...fonts.caption.sm,
+    color: colors.textMuted,
+  },
+  title: {
+    ...fonts.title.lg,
+    color: colors.text,
+  },
+  rule: {
+    height: borderWidth.rule,
+    backgroundColor: colors.primary,
+    marginBottom: spacing.sm,
+  },
+  loading: {
+    ...fonts.meta.sm,
+    color: colors.textSecondary,
+  },
+})

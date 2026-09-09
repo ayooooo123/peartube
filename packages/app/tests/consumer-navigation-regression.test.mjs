@@ -8,14 +8,14 @@ const app = (...parts) => fs.readFileSync(path.join(__dirname, '..', ...parts), 
 
 test('consumer navigation contains only Home, Discover, and Library tabs', () => {
   const tabs = app('app', '(tabs)', '_layout.tsx')
-  const pill = app('components', 'PillTabBar.tsx')
+  const tabBar = app('components', 'TabBar.tsx')
 
   assert.match(tabs, /<Tabs\.Screen name="index"/)
   assert.match(tabs, /<Tabs\.Screen name="discover"/)
   assert.match(tabs, /<Tabs\.Screen name="library"/)
   assert.match(tabs, /<Tabs\.Screen name="studio" options=\{\{ href: null \}\}/)
-  assert.doesNotMatch(pill, /label: 'Studio'/)
-  assert.equal((pill.match(/label: '(?:Home|Discover|Library)'/g) || []).length, 3)
+  assert.doesNotMatch(tabBar, /label: 'Studio'/)
+  assert.equal((tabBar.match(/label: '(?:Home|Discover|Library)'/g) || []).length, 3)
 })
 
 test('desktop consumer navigation has no Studio entry or upload affordance', () => {

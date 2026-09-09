@@ -2,9 +2,10 @@
  * VideoFeed - YouTube-style vertical scrolling video feed
  * Uses FlatList for performance with pull-to-refresh and empty state
  */
-import { FlatList, View, Text, RefreshControl, StyleSheet, ActivityIndicator } from 'react-native'
+import { FlatList, View, RefreshControl, StyleSheet, ActivityIndicator } from 'react-native'
 import { VideoCard, VideoData } from './VideoCard'
-import { colors } from '@/lib/colors'
+import { EmptyState as EmptyPlaceholder } from '@/components/primitives'
+import { colors, spacing, radius, borderWidth } from '@/lib/colors'
 
 interface VideoFeedProps {
   videos: VideoData[]
@@ -40,11 +41,7 @@ function VideoCardSkeleton() {
 // Empty state component
 function EmptyState({ message }: { message: string }) {
   return (
-    <View style={emptyStyles.container}>
-      <Text style={emptyStyles.emoji}>📺</Text>
-      <Text style={emptyStyles.title}>No videos yet</Text>
-      <Text style={emptyStyles.message}>{message}</Text>
-    </View>
+    <EmptyPlaceholder icon="tv" status="0 VIDEOS" title="No videos yet" body={message} />
   )
 }
 
@@ -136,85 +133,60 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
   },
   contentContainer: {
-    paddingBottom: 20,
+    paddingBottom: spacing.xl,
   },
   footer: {
-    paddingVertical: 20,
+    paddingVertical: spacing.xl,
     alignItems: 'center',
   },
 })
 
 const skeletonStyles = StyleSheet.create({
   container: {
-    marginBottom: 24,
+    marginBottom: spacing.xl,
   },
   thumbnail: {
     width: '100%',
     aspectRatio: 16 / 9,
-    backgroundColor: colors.bgElevated,
-    borderRadius: 12,
+    backgroundColor: colors.surface,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
+    borderRadius: radius.card,
   },
   infoRow: {
     flexDirection: 'row',
-    marginTop: 12,
-    paddingHorizontal: 12,
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.md,
   },
   avatar: {
     width: 40,
     height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.bgElevated,
-    marginRight: 12,
+    borderRadius: radius.card,
+    backgroundColor: colors.surface,
+    marginRight: spacing.md,
   },
   textContainer: {
     flex: 1,
   },
   titleLine1: {
     height: 14,
-    backgroundColor: colors.bgElevated,
-    borderRadius: 4,
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm,
     marginBottom: 6,
     width: '90%',
   },
   titleLine2: {
     height: 14,
-    backgroundColor: colors.bgElevated,
-    borderRadius: 4,
-    marginBottom: 8,
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm,
+    marginBottom: spacing.sm,
     width: '60%',
   },
   metaLine: {
     height: 12,
-    backgroundColor: colors.bgElevated,
-    borderRadius: 4,
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm,
     width: '40%',
-  },
-})
-
-const emptyStyles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 40,
-    paddingTop: 60,
-  },
-  emoji: {
-    fontSize: 48,
-    marginBottom: 16,
-  },
-  title: {
-    color: '#efeff1',
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  message: {
-    color: '#adadb8',
-    fontSize: 14,
-    textAlign: 'center',
-    lineHeight: 20,
   },
 })
 

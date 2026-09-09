@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react'
+import { Text, View, StyleSheet } from 'react-native'
 import {
   PublisherDeviceStatus,
   type PublisherCapabilityAction,
   type PublisherDeviceStatusInput,
 } from './PublisherDeviceStatus'
+import { colors, spacing } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 
 export type PublisherStatusRpc = {
   getPublisherDeviceStatus(request: { publisherId?: unknown, devicePublicKey?: unknown }): Promise<PublisherDeviceStatusInput>
@@ -88,6 +91,22 @@ export function PublisherSecurityStatus({ rpc, initialStatus = null, actionHandl
 
   const status = currentSnapshot.status
 
-  if (!status) return <section role="status">Loading publisher security status from this device…</section>
+  if (!status) {
+    return (
+      <View accessibilityRole="summary" style={styles.loading}>
+        <Text style={styles.loadingText}>Loading publisher security status from this device…</Text>
+      </View>
+    )
+  }
   return <PublisherDeviceStatus status={status} actionHandlers={actionHandlers} />
 }
+
+const styles = StyleSheet.create({
+  loading: {
+    paddingVertical: spacing.md,
+  },
+  loadingText: {
+    ...fonts.meta.sm,
+    color: colors.textSecondary,
+  },
+})

@@ -1,5 +1,7 @@
 import React from 'react'
 import { View, Text, StyleSheet } from 'react-native'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 import type { ArchiveOperatorStatus } from '@/lib/storage-operability.js'
 import ArchiveOperatorDiagnostics from './ArchiveOperatorDiagnostics'
 import type { SeedingStatus, StorageStats, SwarmStatus } from './types'
@@ -36,19 +38,25 @@ export default function DiagnosticsPanel({
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: '#111827',
-    borderRadius: 18,
-    padding: 16,
-    marginBottom: 16,
+    backgroundColor: colors.surface,
+    borderRadius: radius.card,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
+    gap: spacing.xs,
   },
   title: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#f8fafc',
-    marginBottom: 8,
+    ...fonts.title.md,
+    fontSize: 14,
+    lineHeight: 18,
+    color: colors.text,
+    textTransform: 'uppercase',
+    marginBottom: spacing.sm,
   },
   text: {
-    color: '#cbd5e1',
-    marginBottom: 4,
+    ...fonts.meta.sm,
+    color: colors.textSecondary,
+    marginBottom: spacing.xs,
   },
 })

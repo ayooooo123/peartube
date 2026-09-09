@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { ABSOLUTE_FILL } from '@/lib/absolute-fill'
 import { Ionicons } from '@expo/vector-icons'
-import { LinearGradient } from 'expo-linear-gradient'
 import { useLocalSearchParams, useRouter } from 'expo-router'
-import { colors, radius, spacing } from '@/lib/colors'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 import { describeAvailability } from '@/lib/media-availability'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
@@ -401,9 +401,9 @@ export function MediaEntityDetailScreen({
 
   return (
     <View style={styles.root}>
-      {/* The artwork sits full-bleed behind everything at a third of its
-          strength, and a gradient carries it down into the base colour over
-          the lower two thirds of the screen. */}
+      {/* The artwork sits full-bleed behind the hero at a third of its
+          strength. Everything below the hero spacer is an opaque slab with a
+          lime rule on top, so there is no gradient carrying it down. */}
       <View style={styles.backdrop}>
         {artwork ? (
           <View style={styles.backdropArtwork}>
@@ -414,20 +414,6 @@ export function MediaEntityDetailScreen({
             />
           </View>
         ) : null}
-        <LinearGradient
-          colors={['transparent', colors.scrim, colors.bg]}
-          locations={[0, 0.7, 1]}
-          start={{ x: 0.5, y: 0 }}
-          end={{ x: 0.5, y: 1 }}
-          style={styles.heroFade}
-        />
-        <LinearGradient
-          colors={['transparent', colors.scrim, colors.bg]}
-          locations={[0, 0.7, 1]}
-          start={{ x: 0.5, y: 0 }}
-          end={{ x: 0.5, y: 1 }}
-          style={styles.screenFade}
-        />
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -609,10 +595,6 @@ export function MediaEntityDetailScreen({
   )
 }
 
-// React Native 0.85 dropped `StyleSheet.absoluteFillObject`, and its
-// `absoluteFill` is a compiled handle on web rather than a plain object, so
-// the overlay geometry is spelled out once here and spread where needed.
-const ABSOLUTE_FILL = { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 } as const
 
 const styles = StyleSheet.create({
   root: {
@@ -635,16 +617,6 @@ const styles = StyleSheet.create({
     aspectRatio: undefined,
     borderRadius: radius.none,
   },
-  heroFade: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: '65%',
-  },
-  screenFade: {
-    ...ABSOLUTE_FILL,
-  },
   content: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.lg,
@@ -659,10 +631,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.glassBorder,
-    backgroundColor: colors.overlayButton,
-    borderRadius: radius.pill,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    backgroundColor: colors.bg,
+    borderRadius: radius.md,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
@@ -670,27 +642,27 @@ const styles = StyleSheet.create({
     ...fonts.label.md,
     color: colors.text,
   },
+  // Opaque slab with the lime rule along its top edge: the hero caption.
   panel: {
-    backgroundColor: colors.scrim,
-    borderRadius: radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.overlayMedium,
-    padding: spacing.lg,
+    backgroundColor: colors.bg,
+    borderTopWidth: borderWidth.rule,
+    borderTopColor: colors.primary,
+    borderRadius: radius.none,
+    marginHorizontal: -spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
     gap: spacing.md,
   },
   kicker: {
     ...fonts.caption.sm,
     color: colors.primary,
-    fontWeight: '700',
-    textTransform: 'uppercase',
   },
   title: {
-    ...fonts.title.lg,
-    fontFamily: fonts.heading,
+    ...fonts.title.xl,
     color: colors.text,
   },
   byline: {
-    ...fonts.body.sm,
+    ...fonts.meta.md,
     color: colors.textSecondary,
   },
   badgeRow: {
@@ -703,28 +675,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
-    backgroundColor: colors.overlayMedium,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.glassBorder,
-    borderRadius: radius.md,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
   ratingValue: {
-    ...fonts.body.sm,
-    fontWeight: '700',
+    ...fonts.meta.sm,
     color: colors.text,
   },
   ratingLabel: {
     ...fonts.caption.sm,
-    color: colors.textSecondary,
+    color: colors.textMuted,
   },
   badge: {
-    backgroundColor: colors.overlayMedium,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.glassBorder,
-    borderRadius: radius.xl,
-    paddingHorizontal: spacing.md,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
   badgeText: {
@@ -732,9 +701,8 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   badgeSeparator: {
-    ...fonts.body.sm,
-    fontWeight: '900',
-    color: colors.textSecondary,
+    ...fonts.meta.sm,
+    color: colors.textMuted,
   },
   releaseRow: {
     flexDirection: 'row',
@@ -750,7 +718,7 @@ const styles = StyleSheet.create({
     marginRight: spacing.xs,
   },
   releaseValue: {
-    ...fonts.body.sm,
+    ...fonts.meta.sm,
     color: colors.textSecondary,
   },
   overview: {
@@ -764,12 +732,12 @@ const styles = StyleSheet.create({
     zIndex: -1,
   },
   overviewToggle: {
-    ...fonts.body.sm,
+    ...fonts.caption.sm,
     color: colors.textMuted,
     marginTop: spacing.xs,
   },
   availability: {
-    ...fonts.label.md,
+    ...fonts.caption.sm,
     color: colors.primary,
   },
   availabilityMuted: {
@@ -787,12 +755,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.borderSubtle,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
   },
   retentionChoiceSelected: {
     borderColor: colors.primary,
-    backgroundColor: colors.overlayButton,
+    backgroundColor: colors.primaryLight,
   },
   actionRow: {
     flexDirection: 'row',
@@ -800,7 +768,7 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     paddingRight: spacing.xs,
   },
-  // Accent blue, taller and wider than anything beside it: the one thing on
+  // Lime slab, taller and wider than anything beside it: the one thing on
   // this screen a viewer is meant to press.
   actionContent: {
     flexDirection: 'row',
@@ -821,7 +789,8 @@ const styles = StyleSheet.create({
   },
   primaryActionLabel: {
     ...fonts.label.md,
-    fontFamily: fonts.headingMedium,
+    fontSize: 15,
+    lineHeight: 18,
     color: colors.onPrimary,
   },
   secondaryAction: {
@@ -832,12 +801,12 @@ const styles = StyleSheet.create({
     minHeight: 44,
     paddingHorizontal: spacing.lg,
     borderRadius: radius.md,
-    backgroundColor: colors.overlayButton,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.borderSubtle,
+    backgroundColor: colors.bg,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.borderLight,
   },
   secondaryActionLabel: {
-    ...fonts.body.sm,
+    ...fonts.label.md,
     color: colors.text,
   },
   actionDisabled: {
@@ -850,26 +819,26 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
-    borderRadius: radius.pill,
-    backgroundColor: colors.overlayMedium,
+    borderRadius: radius.sm,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.primary,
   },
   progressText: {
-    ...fonts.caption.sm,
-    color: colors.textSecondary,
+    ...fonts.meta.sm,
+    color: colors.primary,
   },
   panels: {
     gap: spacing.md,
   },
   detailCard: {
-    borderRadius: radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.borderSubtle,
-    backgroundColor: colors.bgElevated,
+    borderRadius: radius.card,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     padding: spacing.lg,
   },
   detailTitle: {
     ...fonts.title.md,
-    fontFamily: fonts.headingMedium,
     color: colors.text,
     marginTop: spacing.xs,
   },
@@ -883,26 +852,22 @@ const styles = StyleSheet.create({
   summaryPill: {
     ...fonts.caption.sm,
     color: colors.primary,
-    borderRadius: radius.pill,
+    borderRadius: radius.sm,
     overflow: 'hidden',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.borderSubtle,
-    backgroundColor: colors.primaryLight,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.primary,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
-    textTransform: 'uppercase',
   },
   mutedPill: {
     ...fonts.caption.sm,
     color: colors.textMuted,
-    borderRadius: radius.pill,
+    borderRadius: radius.sm,
     overflow: 'hidden',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.borderSubtle,
-    backgroundColor: colors.overlayMedium,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.border,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
-    textTransform: 'uppercase',
   },
   subsection: {
     marginTop: spacing.md,
@@ -911,8 +876,6 @@ const styles = StyleSheet.create({
   detailLabel: {
     ...fonts.caption.sm,
     color: colors.text,
-    fontWeight: '700',
-    textTransform: 'uppercase',
   },
   detailLine: {
     ...fonts.body.sm,

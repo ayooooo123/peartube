@@ -6,10 +6,12 @@
  */
 import { memo, useMemo, useCallback } from 'react'
 import { View, Text, Pressable, StyleSheet } from 'react-native'
-import { colors } from '@/lib/colors'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 import Animated, { useSharedValue, useAnimatedStyle, withSpring, withTiming } from 'react-native-reanimated'
 import { ThumbnailImage } from './ThumbnailImage'
 import { formatTimeAgo, formatContentBadge } from '@/lib/formatters'
+import { Tag, Meta, Eyebrow } from '@/components/primitives'
 import type { ContentCoordinates } from '@/lib/formatters'
 
 export interface VideoData {
@@ -52,11 +54,18 @@ interface VideoCardProps {
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable)
 
-// Get channel initial for avatar placeholder
 function getChannelInitial(name?: string, key?: string): string {
   if (name) return name.charAt(0).toUpperCase()
   if (key) return key.charAt(0).toUpperCase()
   return 'P'
+}
+
+function formatDuration(seconds?: number): string | null {
+  if (typeof seconds !== 'number' || seconds <= 0) return null
+  const hours = Math.floor(seconds / 3600)
+  const mins = Math.floor((seconds % 3600) / 60)
+  if (hours > 0) return `${hours}:${mins.toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`
+  return `${mins}:${(seconds % 60).toString().padStart(2, '0')}`
 }
 
 function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = true, testID }: VideoCardProps) {
@@ -81,6 +90,11 @@ function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = 
   const contentBadge = useMemo(
     () => formatContentBadge(video),
     [video.contentKind, video.seasonNumber, video.episodeNumber, video.classification]
+  )
+
+  const durationLabel = useMemo(
+    () => formatDuration(video.duration),
+    [video.duration]
   )
 
   // Memoize press handler to maintain referential equality
@@ -128,6 +142,11 @@ function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = 
             duration={video.duration}
             channelInitial={channelInitial}
           />
+          {durationLabel && (
+            <View pointerEvents="none" style={styles.durationBadge}>
+              <Tag label={durationLabel} tone="inverse" />
+            </View>
+          )}
         </View>
 
         <View style={styles.infoRow}>
@@ -169,25 +188,21 @@ function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = 
                     accessibilityRole="button"
                     accessibilityLabel={`Open ${channelName}`}
                   >
-                    <Text style={styles.channelNameLink} numberOfLines={1}>
-                      {channelName}
-                    </Text>
+                    <Meta tone="secondary" numberOfLines={1}>{channelName}</Meta>
                   </AnimatedPressable>
-                  <Text style={styles.dot}>·</Text>
+                  <Meta tone="secondary">·</Meta>
                 </>
               ) : showChannelInfo ? (
                 <>
-                  <Text style={styles.channelName} numberOfLines={1}>
-                    {channelName}
-                  </Text>
-                  <Text style={styles.dot}>·</Text>
+                  <Meta tone="secondary" numberOfLines={1}>{channelName}</Meta>
+                  <Meta tone="secondary">·</Meta>
                 </>
               ) : null}
-              <Text style={styles.timeAgo}>{timeAgo}</Text>
+              <Meta tone="muted">{timeAgo}</Meta>
               {contentBadge ? (
                 <>
-                  <Text style={styles.dot}>·</Text>
-                  <Text style={styles.contentBadge}>{contentBadge}</Text>
+                  <Meta tone="secondary">·</Meta>
+                  <Meta tone="secondary">{contentBadge}</Meta>
                 </>
               ) : null}
             </View>
@@ -238,46 +253,53 @@ export const VideoCard = memo(VideoCardComponent, arePropsEqual)
 const styles = StyleSheet.create({
   container: {
     width: '100%',
-    marginBottom: 18,
-    paddingHorizontal: 14,
+    marginBottom: spacing.lg,
+    paddingHorizontal: spacing.lg,
   },
   surface: {
     overflow: 'hidden',
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    backgroundColor: colors.glass,
+    borderRadius: radius.card,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surface,
   },
   thumbnailFrame: {
+    position: 'relative',
     overflow: 'hidden',
-    borderTopLeftRadius: 17,
-    borderTopRightRadius: 17,
+    borderTopLeftRadius: radius.card,
+    borderTopRightRadius: radius.card,
     backgroundColor: colors.bg,
   },
   pressed: {
     opacity: 0.78,
     transform: [{ scale: 0.99 }],
   },
+  durationBadge: {
+    position: 'absolute',
+    bottom: spacing.sm,
+    right: spacing.sm,
+    zIndex: 2,
+  },
   infoRow: {
     flexDirection: 'row',
-    paddingHorizontal: 14,
-    paddingTop: 12,
-    paddingBottom: 14,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
   },
   avatarContainer: {
-    marginRight: 12,
+    marginRight: spacing.md,
   },
   avatar: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: radius.card,
     backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
   avatarText: {
     color: colors.onPrimary,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
   },
   textContainer: {
@@ -286,41 +308,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   title: {
+    ...fonts.title.md,
     color: colors.text,
-    fontSize: 15,
-    fontWeight: '590' as any,
-    lineHeight: 21,
-    marginBottom: 5,
-    letterSpacing: -0.18,
+    marginBottom: spacing.xs,
   },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  channelName: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    maxWidth: 150,
-  },
-  channelNameLink: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    maxWidth: 150,
-    fontWeight: '500',
-  },
-  dot: {
-    color: colors.textMuted,
-    fontSize: 12,
-    marginHorizontal: 5,
-  },
-  timeAgo: {
-    color: colors.textMuted,
-    fontSize: 12,
-  },
-  contentBadge: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '600',
+    flexWrap: 'wrap',
   },
 })
 

@@ -8,7 +8,7 @@ test('tab bar metrics hook re-reads the store snapshot when subscribing', async 
   const src = await readFile(tabBarHeightPath, 'utf8')
 
   // The video overlay mounts after the tab navigator in the root layout, so
-  // PillTabBar publishes its measured metrics BEFORE the overlay's
+  // TabBar publishes its measured metrics BEFORE the overlay's
   // subscription effect attaches. A useState+useEffect subscription misses
   // that update and keeps the 42px default all session — docking the mini
   // player on top of the pill tab bar. useSyncExternalStore re-reads the

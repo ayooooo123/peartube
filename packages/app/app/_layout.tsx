@@ -7,7 +7,7 @@
 import '../global.css'
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { Stack } from 'expo-router'
-import { StatusBar, View, Platform, AppState, AppStateStatus, PermissionsAndroid, NativeModules } from 'react-native'
+import { StatusBar, View, Text, Platform, AppState, AppStateStatus, PermissionsAndroid, NativeModules, StyleSheet } from 'react-native'
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider'
 import { PlatformProvider } from '@/lib/PlatformProvider'
 import { VideoPlayerProvider, videoStatsEventEmitter, videoLoadEventEmitter, VideoData, playbackActiveEmitter } from '@/lib/VideoPlayerContext'
@@ -21,7 +21,11 @@ import { SafeAreaProvider } from 'react-native-safe-area-context'
 import * as ScreenOrientation from 'expo-screen-orientation'
 import Constants from 'expo-constants'
 import { useFonts } from 'expo-font'
-import { colors } from '@/lib/colors'
+import { colors, spacing, radius, borderWidth } from '@/lib/colors'
+import { fontAssets } from '@/lib/fonts'
+import { fonts } from '@/lib/typography'
+import { Panel, Button, Eyebrow, Body } from '@/components/primitives'
+import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated'
 import { AppContext, type AppContextType } from '@/lib/AppContext'
 import { buildBundleVersionKey } from '@peartube/platform/native-bundle-cache'
 import { getNativePublisherKeyVault, getNativePublisherSigner } from '@/lib/publisher-shell-signer'
@@ -72,6 +76,105 @@ function friendlyStartupStatus(raw: string): string | null {
   if (s.includes('lock retry')) return 'Waiting for storage lock…'
   return null
 }
+
+const DEFAULT_CONNECTING_STATUS = 'Connecting to P2P network'
+
+function BootConnectingScreen({ status }: { status?: string | null }) {
+  const cursorOpacity = useSharedValue(1)
+
+  useEffect(() => {
+    cursorOpacity.value = withRepeat(withTiming(0, { duration: 480 }), -1, true)
+  }, [cursorOpacity])
+
+  const cursorStyle = useAnimatedStyle(() => ({
+    opacity: cursorOpacity.value,
+  }))
+
+  return (
+    <View style={bootStyles.root} accessibilityLabel={status || DEFAULT_CONNECTING_STATUS}>
+      <View style={bootStyles.frame}>
+        <Animated.View style={[bootStyles.cursor, cursorStyle]} />
+        <Text style={bootStyles.wordmark}>PEARTUBE</Text>
+        <Text style={bootStyles.status}>{status || DEFAULT_CONNECTING_STATUS}</Text>
+      </View>
+    </View>
+  )
+}
+
+function BackendUnavailableScreen({
+  error,
+  onRetry,
+}: {
+  error: string
+  onRetry?: () => void
+}) {
+  return (
+    <View style={bootStyles.root}>
+      <Panel tone="danger" style={bootStyles.errorPanel}>
+        <Eyebrow tone="danger">ERROR</Eyebrow>
+        <Text style={bootStyles.errorTitle}>Backend unavailable</Text>
+        <Body size="sm" tone="secondary" style={bootStyles.errorBody}>
+          {error}
+        </Body>
+        {onRetry ? (
+          <Button label="RETRY" variant="secondary" onPress={onRetry} style={bootStyles.retryButton} />
+        ) : null}
+      </Panel>
+    </View>
+  )
+}
+
+const bootStyles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: colors.bg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.xl,
+  },
+  frame: {
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    borderRadius: radius.card,
+    paddingVertical: spacing.xxl,
+    paddingHorizontal: spacing.xl,
+    alignItems: 'center',
+    minWidth: 240,
+  },
+  cursor: {
+    width: 8,
+    height: 8,
+    backgroundColor: colors.primary,
+    marginBottom: spacing.lg,
+  },
+  wordmark: {
+    ...fonts.title.lg,
+    color: colors.text,
+    marginBottom: spacing.md,
+  },
+  status: {
+    ...fonts.meta.sm,
+    color: colors.textMuted,
+    textAlign: 'center',
+  },
+  errorPanel: {
+    width: '100%',
+    maxWidth: 420,
+  },
+  errorTitle: {
+    ...fonts.title.md,
+    color: colors.text,
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  errorBody: {
+    marginBottom: spacing.lg,
+  },
+  retryButton: {
+    alignSelf: 'flex-start',
+  },
+})
+
 
 // Platform RPC - conditionally imported
 let platformRPC: any = null
@@ -190,14 +293,11 @@ let cachedAppState: {
 // AppContext / useApp live in '@/lib/AppContext' to avoid require cycles with VideoPlayerOverlay.
 
 export default function RootLayout() {
-  // Brand fonts (headings only — body text stays on the system font).
+  // Brand fonts (display, heading, mono — body text stays on the system font).
   // The first frame is held until these resolve (see the gate before the
   // main return): Android measures Text with the fallback font otherwise
   // and keeps the stale width after the swap, clipping the last glyphs.
-  const [fontsLoaded, fontsError] = useFonts({
-    'SpaceGrotesk-Medium': require('../assets/fonts/SpaceGrotesk-Medium.ttf'),
-    'SpaceGrotesk-Bold': require('../assets/fonts/SpaceGrotesk-Bold.ttf'),
-  })
+  const [fontsLoaded, fontsError] = useFonts(fontAssets)
 
   // Initialize state from cache if available (for soft navigation)
   const [ready, setReady] = useState(() => cachedAppState !== null)
@@ -1173,6 +1273,9 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
     return <View style={{ flex: 1, backgroundColor: colors.bg }} />
   }
 
+  const showConnecting = !ready && loading
+  const showUnavailable = !ready && !loading && Boolean(backendError)
+
   return (
     <ErrorBoundary onRetry={retryBackend}>
       <GestureHandlerRootView style={{ flex: 1 }}>
@@ -1185,19 +1288,25 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
                   <VideoPlayerProvider>
                     <SocialProvider>
                       <View style={{ flex: 1 }}>
-                        <Stack
-                          screenOptions={{
-                            headerShown: false,
-                            contentStyle: { backgroundColor: colors.bg },
-                          }}
-                        >
-                          <Stack.Screen
-                            name="profile"
-                            options={{ presentation: 'modal' }}
-                          />
-                        </Stack>
+                        {showConnecting ? (
+                          <BootConnectingScreen status={startupStatus} />
+                        ) : showUnavailable && backendError ? (
+                          <BackendUnavailableScreen error={backendError} onRetry={retryBackend} />
+                        ) : (
+                          <Stack
+                            screenOptions={{
+                              headerShown: false,
+                              contentStyle: { backgroundColor: colors.bg },
+                            }}
+                          >
+                            <Stack.Screen
+                              name="profile"
+                              options={{ presentation: 'modal' }}
+                            />
+                          </Stack>
+                        )}
                       </View>
-                      <VideoPlayerOverlay />
+                      {showConnecting || showUnavailable ? null : <VideoPlayerOverlay />}
                     </SocialProvider>
                   </VideoPlayerProvider>
                 </DownloadsProvider>

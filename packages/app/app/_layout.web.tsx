@@ -6,9 +6,10 @@
  * Uses @peartube/platform/rpc for unified backend communication.
  */
 import '../global.css'
-import { useEffect, useState, useCallback, useRef } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { Stack } from 'expo-router'
 import { useFonts } from 'expo-font'
+import { fontAssets } from '@/lib/fonts'
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider'
 import { PlatformProvider } from '@/lib/PlatformProvider'
 import { VideoPlayerProvider, videoStatsEventEmitter, videoLoadEventEmitter, VideoData, playbackActiveEmitter } from '@/lib/VideoPlayerContext'
@@ -17,7 +18,8 @@ import { DownloadsProvider } from '@/lib/DownloadsContext'
 import { VideoPlayerOverlay } from '@/components/VideoPlayerOverlay'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
-import { colors } from '@/lib/colors'
+import { colors, spacing, radius } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 import { AppContext, type AppContextType } from '@/lib/AppContext'
 import { ensureDesktopBackendReadiness } from '@/lib/desktop-backend-readiness'
 export { useApp } from '@/lib/AppContext'
@@ -66,13 +68,152 @@ let cachedAppState: {
 
 // AppContext / useApp live in '@/lib/AppContext' to avoid require cycles with VideoPlayerOverlay.
 
+const DEFAULT_CONNECTING_STATUS = 'Connecting to P2P network'
+
+function BootConnectingScreen({ status }: { status?: string | null }) {
+  return (
+    <div style={bootStyles.root} aria-label={status || DEFAULT_CONNECTING_STATUS}>
+      <style>{`
+        @keyframes peartube-boot-cursor {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0; }
+        }
+      `}</style>
+      <div style={bootStyles.frame}>
+        <div style={bootStyles.cursor} />
+        <div style={bootStyles.wordmark}>PEARTUBE</div>
+        <div style={bootStyles.status}>{status || DEFAULT_CONNECTING_STATUS}</div>
+      </div>
+    </div>
+  )
+}
+
+function BackendUnavailableScreen({
+  error,
+  onRetry,
+}: {
+  error: string
+  onRetry?: () => void
+}) {
+  return (
+    <div style={bootStyles.root}>
+      <div style={bootStyles.errorPanel}>
+        <div style={bootStyles.eyebrow}>ERROR</div>
+        <div style={bootStyles.errorTitle}>Backend unavailable</div>
+        <div style={bootStyles.errorBody}>{error}</div>
+        {onRetry ? (
+          <button type="button" style={bootStyles.retryButton} onClick={onRetry}>
+            <span style={bootStyles.retryLabel}>RETRY</span>
+          </button>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+const bootStyles: Record<string, React.CSSProperties> = {
+  root: {
+    flex: 1,
+    minHeight: '100vh',
+    width: '100%',
+    backgroundColor: colors.bg,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.xl,
+    boxSizing: 'border-box',
+  },
+  frame: {
+    border: `2px solid ${colors.border}`,
+    borderRadius: radius.card,
+    paddingTop: spacing.xxl,
+    paddingBottom: spacing.xxl,
+    paddingLeft: spacing.xl,
+    paddingRight: spacing.xl,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    minWidth: 240,
+  },
+  cursor: {
+    width: 8,
+    height: 8,
+    backgroundColor: colors.primary,
+    marginBottom: spacing.lg,
+    animation: 'peartube-boot-cursor 1s steps(1, end) infinite',
+  },
+  wordmark: {
+    fontFamily: fonts.display,
+    fontSize: 24,
+    lineHeight: '26px',
+    letterSpacing: -0.5,
+    textTransform: 'uppercase',
+    color: colors.text,
+    marginBottom: spacing.md,
+  },
+  status: {
+    fontFamily: fonts.mono,
+    fontSize: 12,
+    lineHeight: '16px',
+    color: colors.textMuted,
+    textAlign: 'center',
+  },
+  errorPanel: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: colors.surface,
+    border: `2px solid ${colors.error}`,
+    borderRadius: radius.card,
+    padding: spacing.lg,
+    boxSizing: 'border-box',
+  },
+  eyebrow: {
+    fontFamily: fonts.monoMedium,
+    fontSize: 11,
+    lineHeight: '14px',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    color: colors.error,
+  },
+  errorTitle: {
+    fontFamily: fonts.heading,
+    fontSize: 18,
+    lineHeight: '22px',
+    color: colors.text,
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  errorBody: {
+    fontSize: 14,
+    lineHeight: '20px',
+    color: colors.textSecondary,
+    marginBottom: spacing.lg,
+  },
+  retryButton: {
+    backgroundColor: 'transparent',
+    border: `2px solid ${colors.border}`,
+    borderRadius: radius.card,
+    paddingLeft: spacing.xl,
+    paddingRight: spacing.xl,
+    paddingTop: 12,
+    paddingBottom: 12,
+    cursor: 'pointer',
+  },
+  retryLabel: {
+    fontFamily: fonts.heading,
+    fontSize: 13,
+    lineHeight: '16px',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    color: colors.text,
+  },
+}
+
+
 export default function RootLayout() {
-  // Brand heading fonts. Non-blocking on web: the DOM re-measures on font
+  // Brand fonts. Non-blocking on web: the DOM re-measures on font
   // swap, so late application reflows instead of clipping.
-  useFonts({
-    'SpaceGrotesk-Medium': require('../assets/fonts/SpaceGrotesk-Medium.ttf'),
-    'SpaceGrotesk-Bold': require('../assets/fonts/SpaceGrotesk-Bold.ttf'),
-  })
+  useFonts(fontAssets)
 
   // Initialize state from cache if available (for soft navigation)
   const [ready, setReady] = useState(() => !isPear && cachedAppState !== null)
@@ -502,6 +643,9 @@ export default function RootLayout() {
     removeVideo: (videoId: string) => setVideos(prev => prev.filter(v => v.id !== videoId)),
   }
 
+  const showConnecting = !ready && loading
+  const showUnavailable = !ready && !loading && Boolean(backendError)
+
   return (
     <ErrorBoundary onRetry={retryBackend}>
       <SafeAreaProvider>
@@ -512,14 +656,20 @@ export default function RootLayout() {
                 <VideoPlayerProvider>
                   <SocialProvider>
                     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, height: '100vh', width: '100%' }}>
-                      <Stack
-                        screenOptions={{
-                          headerShown: false,
-                          contentStyle: { backgroundColor: colors.bg },
-                        }}
-                      />
+                      {showConnecting ? (
+                        <BootConnectingScreen status={null} />
+                      ) : showUnavailable && backendError ? (
+                        <BackendUnavailableScreen error={backendError} onRetry={retryBackend} />
+                      ) : (
+                        <Stack
+                          screenOptions={{
+                            headerShown: false,
+                            contentStyle: { backgroundColor: colors.bg },
+                          }}
+                        />
+                      )}
                     </div>
-                    <VideoPlayerOverlay />
+                    {showConnecting || showUnavailable ? null : <VideoPlayerOverlay />}
                   </SocialProvider>
                 </VideoPlayerProvider>
               </DownloadsProvider>

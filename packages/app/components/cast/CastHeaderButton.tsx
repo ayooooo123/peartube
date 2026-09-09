@@ -29,43 +29,34 @@ export function CastHeaderButton({
   const [recentDeviceId, setRecentDeviceId] = useState<string | null>(null)
 
   const openPicker = useCallback(() => {
-    if (!cast.available) {
-      Alert.alert('Chromecast', 'Cast is still initializing. If this persists, reopen the app.')
-      return
-    }
-    if (cast.isConnected) {
-      setShowCastRemote(true)
-      return
-    }
-    setShowCastPicker(true)
     cast.startDiscovery()
+    setShowCastPicker(true)
   }, [cast])
 
   const closePicker = useCallback(() => {
-    setShowCastPicker(false)
     cast.stopDiscovery()
+    setShowCastPicker(false)
+    setConnectingDeviceId(null)
   }, [cast])
 
   const handleSwitchDevice = useCallback(() => {
     setShowCastRemote(false)
-    setShowCastPicker(true)
     cast.startDiscovery()
+    setShowCastPicker(true)
   }, [cast])
 
   const handleDeviceSelect = useCallback(async (deviceId: string) => {
-    setIsConnecting(true)
     setConnectingDeviceId(deviceId)
     try {
       const success = await cast.connect(deviceId)
       if (!success) {
-        Alert.alert('Chromecast', cast.lastError || 'Failed to connect to Chromecast device.')
+        Alert.alert('Cast Error', cast.lastError || 'Failed to connect to Chromecast device.')
         return
       }
       setRecentDeviceId(deviceId)
       setShowCastPicker(false)
       setShowCastRemote(true)
     } finally {
-      setIsConnecting(false)
       setConnectingDeviceId(null)
     }
   }, [cast])

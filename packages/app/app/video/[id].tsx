@@ -1,8 +1,6 @@
 /**
  * Video Player Screen - YouTube-style dedicated video playback page
- * Shows: video player, title, channel info, P2P stats, action buttons
- * Supports swipe-down to minimize to mini player
- * Uses SHARED player from VideoPlayerContext for continuous playback
+ * Restyled to Grid design language: OLED-black brutalist, lime accent, hard corners.
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { View, Text, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, StyleSheet, Alert } from 'react-native'
@@ -11,7 +9,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { usePlatform } from '@/lib/PlatformProvider'
-import { SwarmIndicator } from '@/components/primitives'
+import { SwarmIndicator, Panel, Button, Eyebrow, Meta, Body, Tag, Divider, EmptyState, IconButton, Display } from '@/components/primitives'
 import { formatSizeLabel, formatTimeAgo, formatViews } from '@/lib/formatters'
 import { getPlayerPageVideoHeight } from '@/lib/video-layout'
 import { useVideoPlayerActions, useVideoPlayerSession, VideoStats } from '@/lib/VideoPlayerContext'
@@ -19,7 +17,8 @@ import { useCast } from '@/lib/cast'
 import { DevicePickerModal, CastRemoteModal } from '@/components/cast'
 import { VideoEditModal } from '@/components/VideoEditModal'
 import { makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
-
+import { spacing, radius, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 // HRPC methods used: preparePlayback, getVideoUrl, getVideoStats, getChannelMeta
 
 function formatDate(timestamp: number | string): string {
@@ -73,7 +72,7 @@ function P2PStatsOverlay({ stats, showDetails, onPress }: {
       <View style={styles.statsRow}>
         <View style={[
           styles.statusDot,
-          { backgroundColor: stats.status === 'downloading' ? '#4ade80' : stats.status === 'error' ? '#f87171' : '#fbbf24' }
+          { backgroundColor: stats.status === 'downloading' ? colors.success : stats.status === 'error' ? colors.error : colors.warning }
         ]} />
         <Text style={styles.statsProgress}>{stats.progress}%</Text>
         {stats.peerCount > 0 && (
@@ -147,15 +146,15 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
   // Status color and label
   const getStatusInfo = () => {
     if (!stats) {
-      return { color: '#6b7280', label: 'Waiting for video peers' }
+      return { color: colors.textMuted, label: 'Waiting for video peers' }
     }
-    if (stats.isComplete) return { color: '#4ade80', label: 'Cached' }
-    if (stats.status === 'downloading') return { color: '#fbbf24', label: 'Downloading' }
-    if (hasPlayableProgress) return { color: '#60a5fa', label: 'Streaming' }
-    if (stats.status === 'connecting') return { color: '#60a5fa', label: 'Connecting...' }
-    if (stats.status === 'resolving') return { color: '#a78bfa', label: 'Resolving...' }
-    if (stats.status === 'error') return { color: '#f87171', label: 'Error' }
-    return { color: '#6b7280', label: 'Waiting' }
+    if (stats.isComplete) return { color: colors.success, label: 'Cached' }
+    if (stats.status === 'downloading') return { color: colors.warning, label: 'Downloading' }
+    if (hasPlayableProgress) return { color: colors.primary, label: 'Streaming' }
+    if (stats.status === 'connecting') return { color: colors.primary, label: 'Connecting...' }
+    if (stats.status === 'resolving') return { color: colors.swarm, label: 'Resolving...' }
+    if (stats.status === 'error') return { color: colors.error, label: 'Error' }
+    return { color: colors.textMuted, label: 'Waiting' }
   }
 
   const statusInfo = getStatusInfo()
@@ -600,10 +599,10 @@ function MobileVideoPlayerScreen() {
       <View style={styles.playerContainer}>
         {/* Minimize button overlay (chevron down) */}
         <Pressable testID="player-minimize-button" style={styles.backButton} onPress={goBack}>
-          <Feather name="chevron-down" color="#fff" size={28} />
+          <Feather name="chevron-down" color={colors.text} size={28} />
         </Pressable>
         <Pressable style={styles.searchButton} onPress={goSearch}>
-          <Feather name="search" color="#fff" size={22} />
+          <Feather name="search" color={colors.text} size={22} />
         </Pressable>
 
         {/* Cast button */}
@@ -615,7 +614,7 @@ function MobileVideoPlayerScreen() {
           cast.startDiscovery()
           setShowCastPicker(true)
         }}>
-          <Feather name="cast" color={cast.isConnected ? colors.primary : "#fff"} size={22} />
+          <Feather name="cast" color={cast.isConnected ? colors.primary : colors.text} size={22} />
         </Pressable>
 
         <View style={[styles.player, { height: videoHeight }]}>
@@ -652,48 +651,44 @@ function MobileVideoPlayerScreen() {
 
       {/* Video Info & Actions */}
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* P2P Stats Bar */}
-        {(Platform.OS !== 'web' || isPear) && <P2PStatsBar stats={displayedStats} />}
+        {/* WATCHING eyebrow + Stats */}
+        <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.lg, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Eyebrow>WATCHING</Eyebrow>
+          {displayedStats && <SwarmIndicator peers={displayedStats.peerCount ?? 0} label="count" size={8} />}
+        </View>
 
-        {/* Video Title & Meta */}
-        <View style={styles.videoInfo}>
+        {/* Title Block */}
+        <View style={{ paddingHorizontal: spacing.lg, paddingVertical: spacing.md }}>
           <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-            <Text style={[styles.videoTitle, { flex: 1 }]}>{videoData?.title || 'Untitled'}</Text>
+            <Display size="lg" tone="default" style={{ flex: 1 }}>{videoData?.title || 'Untitled'}</Display>
             {identity?.driveKey && identity.driveKey === videoData?.channelKey && (
               <Pressable
                 onPress={() => setEditingVideo(videoData)}
-                style={{ padding: 8, marginLeft: 8 }}
+                style={{ padding: spacing.sm, marginLeft: spacing.md }}
               >
                 <Feather name="edit-2" color={colors.textMuted} size={20} />
               </Pressable>
             )}
           </View>
-          {cast.isConnected && (
-            <View style={styles.castBanner}>
-              <Feather name="cast" color={colors.primary} size={14} />
-              <Text style={styles.castBannerText} numberOfLines={1}>
-                Casting to {cast.connectedDevice?.name || 'Cast device'}
-              </Text>
-              <Pressable onPress={() => setShowCastRemote(true)} style={styles.castBannerAction}>
-                <Text style={styles.castBannerActionText}>Remote</Text>
-              </Pressable>
-              <Pressable
-                onPress={async () => {
-                  await cast.disconnect()
-                  setShowCastRemote(false)
-                }}
-                style={styles.castBannerAction}
-              >
-                <Text style={styles.castBannerActionText}>Disconnect</Text>
-              </Pressable>
-            </View>
-          )}
-          <Text style={styles.videoMeta}>
+          <Meta tone="secondary" style={{ marginTop: spacing.sm }}>
             {[formatTimeAgo(videoData?.uploadedAt || Date.now()), formatSizeLabel(videoData?.size)]
               .filter(Boolean)
               .join(' · ')}
-          </Text>
+          </Meta>
         </View>
+
+        {/* Cast Banner */}
+        {cast.isConnected && (
+          <View style={{ paddingHorizontal: spacing.lg, paddingVertical: spacing.md, flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
+            <Feather name="cast" color={colors.primary} size={14} />
+            <Meta tone="secondary" style={{ flex: 1 }}>Casting to {cast.connectedDevice?.name || 'Cast device'}</Meta>
+            <Button label="Remote" variant="secondary" size="sm" onPress={() => setShowCastRemote(true)} />
+            <Button label="Stop" variant="secondary" size="sm" onPress={async () => { await cast.disconnect(); setShowCastRemote(false); }} />
+          </View>
+        )}
+
+        {/* P2P Stats Bar */}
+        {(Platform.OS !== 'web' || isPear) && <P2PStatsBar stats={displayedStats} />}
 
         {/* Action Buttons */}
         <View style={styles.actions}>
@@ -711,14 +706,12 @@ function MobileVideoPlayerScreen() {
           onChannelPress={videoData?.channelKey ? () => router.push({ pathname: '/channel/[key]', params: { key: videoData.channelKey, publicBeeKey: videoData.publicBeeKey || undefined } }) : undefined}
         />
 
-        {/* Divider */}
-        <View style={styles.divider} />
-
-        {/* Description */}
+        {/* Description Panel */}
         {videoData?.description && (
-          <View style={styles.description}>
-            <Text style={styles.descriptionText}>{videoData.description}</Text>
-          </View>
+          <Panel padded style={{ marginHorizontal: spacing.lg, marginVertical: spacing.lg }}>
+            <Eyebrow>DESCRIPTION</Eyebrow>
+            <Body size="md" tone="secondary" style={{ marginTop: spacing.md }}>{videoData.description}</Body>
+          </Panel>
         )}
       </ScrollView>
 
@@ -828,7 +821,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
   },
   playerContainer: {
-    backgroundColor: '#000',
+    backgroundColor: colors.bg,
   },
   backButton: {
     position: 'absolute',
@@ -837,8 +830,8 @@ const styles = StyleSheet.create({
     zIndex: 10,
     width: 40,
     height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: radius.md,
+    backgroundColor: colors.overlayButton,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -849,8 +842,8 @@ const styles = StyleSheet.create({
     zIndex: 10,
     width: 40,
     height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: radius.md,
+    backgroundColor: colors.overlayButton,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -861,14 +854,14 @@ const styles = StyleSheet.create({
     zIndex: 10,
     width: 40,
     height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: radius.md,
+    backgroundColor: colors.overlayButton,
     justifyContent: 'center',
     alignItems: 'center',
   },
   player: {
     width: '100%',
-    backgroundColor: '#000',
+    backgroundColor: colors.bg,
   },
   loadingContainer: {
     flex: 1,
@@ -877,7 +870,7 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   loadingText: {
-    color: '#fff',
+    color: colors.text,
     marginTop: 12,
     fontSize: 14,
   },
@@ -887,7 +880,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   errorText: {
-    color: '#fff',
+    color: colors.text,
     fontSize: 14,
   },
   retryButton: {
@@ -895,10 +888,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 8,
     backgroundColor: colors.primary,
-    borderRadius: 20,
+    borderRadius: radius.md,
   },
   retryText: {
-    color: '#fff',
+    color: colors.text,
     fontWeight: '600',
   },
   content: {
@@ -925,9 +918,9 @@ const styles = StyleSheet.create({
     marginTop: 10,
     paddingVertical: 8,
     paddingHorizontal: 10,
-    borderRadius: 12,
+    borderRadius: radius.md,
     backgroundColor: colors.bgSecondary,
-    borderWidth: 1,
+    borderWidth: borderWidth.rule,
     borderColor: colors.border,
   },
   castBannerText: {
@@ -939,9 +932,9 @@ const styles = StyleSheet.create({
   castBannerAction: {
     paddingHorizontal: 8,
     paddingVertical: 6,
-    borderRadius: 10,
+    borderRadius: radius.md,
     backgroundColor: colors.bg,
-    borderWidth: 1,
+    borderWidth: borderWidth.rule,
     borderColor: colors.border,
   },
   castBannerActionText: {
@@ -984,13 +977,13 @@ const styles = StyleSheet.create({
   channelAvatar: {
     width: 44,
     height: 44,
-    borderRadius: 22,
+    borderRadius: radius.md,
     backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
   channelAvatarText: {
-    color: '#fff',
+    color: colors.onPrimary,
     fontSize: 18,
     fontWeight: '600',
   },
@@ -1016,10 +1009,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     paddingHorizontal: 16,
     paddingVertical: 8,
-    borderRadius: 20,
+    borderRadius: radius.md,
   },
   subscribeText: {
-    color: '#fff',
+    color: colors.onPrimary,
     fontSize: 13,
     fontWeight: '600',
   },
@@ -1041,10 +1034,10 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 8,
     left: 8,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: colors.scrim,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 6,
+    borderRadius: radius.md,
   },
   statsRow: {
     flexDirection: 'row',
@@ -1057,32 +1050,32 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   statsProgress: {
-    color: '#fff',
+    color: colors.text,
     fontSize: 11,
     fontWeight: '600',
   },
   statsPeers: {
-    color: 'rgba(255,255,255,0.7)',
+    color: colors.text,
     fontSize: 10,
   },
   statsDetails: {
     marginTop: 6,
   },
   statsDetailText: {
-    color: 'rgba(255,255,255,0.8)',
+    color: colors.text,
     fontSize: 10,
   },
   cachedBadge: {
     position: 'absolute',
     top: 8,
     left: 8,
-    backgroundColor: 'rgba(74, 222, 128, 0.9)',
+    backgroundColor: colors.successLight,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 4,
   },
   cachedText: {
-    color: '#000',
+    color: colors.onPrimary,
     fontSize: 10,
     fontWeight: '600',
   },
@@ -1124,7 +1117,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   statsBarUploadSpeed: {
-    color: '#4ade80',
+    color: colors.success,
     fontSize: 12,
     fontWeight: '600',
   },
@@ -1144,12 +1137,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   statsBarProgressComplete: {
-    color: '#4ade80',
+    color: colors.success,
   },
   progressBarBg: {
     marginTop: 8,
     height: 3,
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: colors.borderSubtle,
     borderRadius: 2,
     overflow: 'hidden',
   },

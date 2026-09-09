@@ -8,11 +8,11 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native'
-import { LinearGradient } from 'expo-linear-gradient'
+import { Button } from '@/components/primitives'
 import type { MediaEntitySummary } from '@peartube/core'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
 import { usePosterArtwork } from '@/hooks/usePosterArtwork'
-import { colors, radius, spacing } from '@/lib/colors'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 
 export type HomeHeroItem = MediaEntitySummary & Record<string, unknown>
@@ -45,8 +45,10 @@ function heroCaption(item: HomeHeroItem): string | null {
   return year || subtitle
 }
 
-const OVERLAY_GRADIENT = ['rgba(0,0,0,0)', 'rgba(0,0,0,0.6)', 'rgba(0,0,0,0.95)'] as const
-const OVERLAY_LOCATIONS = [0, 0.6, 1] as const
+function slideEyebrow(position: number, count: number): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return count > 1 ? `FEATURED / ${pad(position)} OF ${pad(count)}` : 'FEATURED'
+}
 
 /**
  * One slide.
@@ -65,10 +67,14 @@ const OVERLAY_LOCATIONS = [0, 0.6, 1] as const
 function HeroSlide({
   item,
   width,
+  position,
+  count,
   onOpenEntity,
 }: {
   item: HomeHeroItem
   width: number
+  position: number
+  count: number
   onOpenEntity(entityId: string, item: HomeHeroItem): void
 }) {
   // Stable across renders, so the memo around this slide is worth having.
@@ -103,6 +109,7 @@ function HeroSlide({
             <ThumbnailImage thumbnailUrl={artwork} channelInitial={initial} style={styles.fill} />
           </View>
           <View style={styles.posterText}>
+            <Text style={styles.eyebrow}>{slideEyebrow(position, count)}</Text>
             <Text style={styles.title} numberOfLines={2}>{title}</Text>
             {caption ? <Text style={styles.caption} numberOfLines={2}>{caption}</Text> : null}
           </View>
@@ -119,16 +126,14 @@ function HeroSlide({
       style={({ pressed }) => [styles.slide, { width }, pressed && styles.slidePressed]}
     >
       <ThumbnailImage thumbnailUrl={artwork} channelInitial={initial} style={styles.fill} />
-      <LinearGradient
-        colors={OVERLAY_GRADIENT}
-        locations={OVERLAY_LOCATIONS}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0, y: 1 }}
-        style={styles.overlayGradient}
-      />
-      <View style={styles.overlayText}>
-        <Text style={styles.title} numberOfLines={1}>{title}</Text>
-        {caption ? <Text style={styles.caption} numberOfLines={2}>{caption}</Text> : null}
+      <View style={styles.captionSlab}>
+        <Text style={styles.eyebrow}>{slideEyebrow(position, count)}</Text>
+        <Text style={styles.captionTitle} numberOfLines={1}>{title}</Text>
+        {caption ? <Text style={styles.captionMeta} numberOfLines={1}>{caption}</Text> : null}
+        <View style={styles.buttonRow}>
+          <Button label="Play" variant="primary" size="sm" onPress={onPress} />
+          <Button label="Details" variant="secondary" size="sm" onPress={onPress} />
+        </View>
       </View>
     </Pressable>
   )
@@ -191,11 +196,13 @@ export function HomeHeroCarousel({ items, windowWidth, onOpenEntity }: HomeHeroC
         onMomentumScrollEnd={onMomentumScrollEnd}
         contentContainerStyle={contentStyle}
       >
-        {items.map(item => (
+        {items.map((item, slideIndex) => (
           <MemoizedHeroSlide
             key={item.entityId}
             item={item}
             width={slideWidth}
+            position={slideIndex + 1}
+            count={items.length}
             onOpenEntity={onOpenEntity}
           />
         ))}
@@ -225,34 +232,47 @@ const styles = StyleSheet.create({
   slide: {
     aspectRatio: 16 / 9,
     borderRadius: radius.card,
-    backgroundColor: colors.bgElevated,
+    backgroundColor: colors.surface,
     overflow: 'hidden',
   },
   slidePressed: {
     opacity: 0.85,
   },
-  // ThumbnailImage imposes a 16:9 video still by default, which is what the
-  // landscape slide wants and what the poster frame below has to override.
   fill: {
     width: '100%',
     height: '100%',
     aspectRatio: undefined,
     borderRadius: 0,
   },
-  overlayGradient: {
+  captionSlab: {
     position: 'absolute',
-    top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-    pointerEvents: 'none',
-  },
-  overlayText: {
-    position: 'absolute',
-    left: spacing.lg,
-    right: spacing.lg,
-    bottom: spacing.lg,
+    backgroundColor: colors.bg,
+    borderTopWidth: borderWidth.rule,
+    borderTopColor: colors.primary,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
     gap: spacing.xs,
+  },
+  eyebrow: {
+    ...fonts.caption.sm,
+    color: colors.primary,
+  },
+  captionTitle: {
+    ...fonts.title.lg,
+    color: colors.text,
+  },
+  captionMeta: {
+    ...fonts.meta.sm,
+    color: colors.textSecondary,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
   },
   posterPanel: {
     flex: 1,
@@ -264,9 +284,11 @@ const styles = StyleSheet.create({
   posterFrame: {
     height: '100%',
     aspectRatio: 2 / 3,
-    borderRadius: radius.md,
-    backgroundColor: colors.bgHover,
+    borderRadius: radius.card,
+    backgroundColor: colors.surface,
     overflow: 'hidden',
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
   },
   posterText: {
     flex: 1,
@@ -275,7 +297,6 @@ const styles = StyleSheet.create({
   },
   title: {
     ...fonts.title.md,
-    fontFamily: fonts.heading,
     color: colors.text,
   },
   caption: {
@@ -292,7 +313,7 @@ const styles = StyleSheet.create({
   dot: {
     width: 7,
     height: 7,
-    borderRadius: radius.pill,
+    borderRadius: radius.card,
     backgroundColor: colors.overlayButton,
   },
   dotActive: {

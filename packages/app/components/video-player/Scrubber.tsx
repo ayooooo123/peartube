@@ -16,14 +16,15 @@ import Animated, {
 } from 'react-native-reanimated'
 import { styles } from './styles'
 import { formatDuration } from './formatters'
+import { colors } from '@/lib/colors'
 
 // ── Dimensions (spec §1, §3) ────────────────────────────────────────────
 const TRACK_PADDING = 16
 const TRACK_HEIGHT_REST = 4
 const TRACK_HEIGHT_TOUCH = 6
 const TRACK_HEIGHT_SCRUB = 8
-const HANDLE_SIZE_REST = 14
-const HANDLE_SIZE_ACTIVE = 18
+const HANDLE_SIZE_REST = 12
+const HANDLE_SIZE_ACTIVE = 12
 const TRACK_WRAPPER_HEIGHT = TRACK_HEIGHT_SCRUB
 const TOUCH_TARGET_HEIGHT = 48
 
@@ -397,7 +398,7 @@ export const Scrubber = memo(function Scrubber({
       borderRadius: geometry.borderRadius,
       width: shimmerWidth,
       left: Math.max(0, bufW - shimmerWidth),
-      backgroundColor: '#7b5bf5',
+      backgroundColor: colors.primary,
       opacity: bufferShimmerOpacity.value,
     }
   }, [])
@@ -428,15 +429,10 @@ export const Scrubber = memo(function Scrubber({
     return {
       width: size,
       height: size,
-      borderRadius: size / 2,
+      borderRadius: 2,
       top: TRACK_WRAPPER_HEIGHT / 2 - size / 2,
       transform: [{ translateX: tx }],
-      // Glow ring on scrub
-      borderWidth: interpolate(isScrubbingSV.value, [0, 1], [0, 2]),
-      borderColor: 'rgba(94, 106, 210, 0.50)',
-      shadowOpacity: interpolate(isScrubbingSV.value, [0, 1], [0.4, 0.5]),
-      shadowRadius: interpolate(isScrubbingSV.value, [0, 1], [3, 5]),
-      elevation: interpolate(isScrubbingSV.value, [0, 1], [4, 6]),
+      borderWidth: 0,
     }
   }, [])
 

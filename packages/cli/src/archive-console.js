@@ -1602,7 +1602,7 @@ export async function createArchiveConsole({
   function ensureCompatSession (publicationId, renditionId, offsetSec, sourceUrl) {
     const key = compatKey(publicationId, renditionId)
     const existing = compatSessions.get(key)
-    if (existing && existing.offsetSec === offsetSec) {
+    if (existing && existing.offsetSec === offsetSec && (!existing.exited || existing.exitCode === 0)) {
       existing.lastTouch = Date.now()
       return existing
     }

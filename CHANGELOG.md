@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Discard failed compatibility-transcode sessions when playback is requested again. A temporarily unavailable peer no longer poisons the cached player session after connectivity returns; running and successfully completed transcodes remain reusable.
 - Allow operator-configured peer UDP endpoints through `network.peerAddresses` / `PEARTUBE_NETWORK_PEER_ADDRESSES`. Relays behind different VPN exits can connect directly over a reachable LAN without disabling the VPN. Hints remain bound to the peer's Noise public key and follow network pause/resume; they grant no publisher or catalog authority.
 - Fetch missing relay playback blocks through the existing multi-peer asset scheduler on the video’s swarm topic. Cold reads wait for an authorized peer, respect upload and range checks, and cancel on reader close. Remove the unused raw replication hook, which bypassed upload controls when enabled.
 - Move acquisitions into verification once source bytes are complete, before the final static-core copy. Keep publication blocked until copy and verification succeed. Treat storage failures during that copy as acquisition errors, not bad proofs that discard a resumable source.

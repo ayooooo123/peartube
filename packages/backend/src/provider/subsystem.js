@@ -255,6 +255,7 @@ export async function createProviderSubsystem({
             onProgress: input.onProgress,
           }),
           signal: input.signal,
+          onSourceComplete: input.onSourceComplete,
           offload: ctx.blockOffload || null,
           resume,
           // A grant-backed source is remote: re-reading it for pass 2 is a

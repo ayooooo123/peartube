@@ -22,6 +22,7 @@ services:
       PEARTUBE_POLICY: discovery
       PEARTUBE_DISCOVERY_ENABLED: "true"
       PEARTUBE_NETWORK_ANNOUNCE: "true"
+      PEARTUBE_NETWORK_PEER_ADDRESSES:
       # TMDB powers the Discover catalog and auto-classifies archived videos as
       # movies/TV (metadata only). Create a key at
       # https://www.themoviedb.org/settings/api

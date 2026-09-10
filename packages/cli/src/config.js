@@ -279,6 +279,10 @@ function configFromEnv(env = {}) {
     if (env.PEARTUBE_NETWORK_ANNOUNCE) config.network.announce = parseBoolean(env.PEARTUBE_NETWORK_ANNOUNCE)
     if (env.PEARTUBE_NETWORK_BOOTSTRAP) config.network.bootstrap = env.PEARTUBE_NETWORK_BOOTSTRAP
   }
+  if (env.PEARTUBE_NETWORK_PEER_ADDRESSES) {
+    config.network ||= {}
+    config.network.peerAddresses = JSON.parse(env.PEARTUBE_NETWORK_PEER_ADDRESSES)
+  }
   if (env.PEARTUBE_RETENTION_PROTECT_PRIVATE || env.PEARTUBE_RETENTION_PROTECT_ALLOWLIST) {
     config.retention = {}
     if (env.PEARTUBE_RETENTION_PROTECT_PRIVATE) {

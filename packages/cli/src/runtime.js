@@ -339,6 +339,7 @@ export async function createRelayRuntime ({ config, logger, dependencies = null,
     expectedProtocolVersion: PROTOCOL_VERSION,
     network: {
       networkId: networkConfig.networkId || 'peartube-main',
+      peerAddresses: networkConfig.peerAddresses,
       trustedBootstrapSigners,
       trustedBootstrapRootIds,
       bootstrapEnabled

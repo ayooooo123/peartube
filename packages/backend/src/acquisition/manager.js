@@ -183,6 +183,7 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
   async function runJob (id, entry) {
     let job = await store.get(id)
     let reader = null
+    let assetReadyForVerification = false
     try {
       if (!job || job.state !== 'queued') return job
       const policyValue = await currentPolicy()
@@ -230,7 +231,12 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       const resume = reader.resumable && (!job.verifiedPrefix || sameIdentity(job.verifiedPrefix.identity, describedIdentity) || isStagedComplete)
         ? { ...(job.verifiedPrefix || {}), identity: describedIdentity }
         : null
-      const acquired = await provider.acquire({ acquisitionId: id, request: job.request, reader, resume, budget: policyValue, sourceExpensive, priorBytes: Math.max(job.sourceBytesRead, job.sourceBytesAccepted, job.bytesAcquired, job.stagingBytes), signal: entry.controller.signal, onProgress: async counters => {
+      const onSourceComplete = async () => {
+        const latest = await store.get(id)
+        if (latest?.state !== 'acquiring') return
+        job = await change(id, { expectedVersion: latest.version, from: 'acquiring', to: 'verifying' })
+      }
+      const acquired = await provider.acquire({ acquisitionId: id, request: job.request, reader, resume, budget: policyValue, sourceExpensive, priorBytes: Math.max(job.sourceBytesRead, job.sourceBytesAccepted, job.bytesAcquired, job.stagingBytes), signal: entry.controller.signal, onSourceComplete, onProgress: async counters => {
         const latest = await store.get(id); if (!latest || latest.state !== 'acquiring') return
         const patch = { sourceBytesRead: counters.sourceBytesRead ?? counters.bytesAcquired, sourceBytesAccepted: counters.sourceBytesAccepted ?? counters.bytesAcquired, bytesAcquired: counters.bytesAcquired, stagingBytes: counters.stagingBytes ?? latest.stagingBytes }
         ledger.record(id, { sourceBytesRead: patch.sourceBytesRead, sourceBytesAccepted: patch.sourceBytesAccepted, stagingBytes: patch.stagingBytes }, { policy: policyValue }); job = await progress(latest, patch)
@@ -240,7 +246,8 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       const acquisitionPatch = { sourceBytesRead: bytes, sourceBytesAccepted: bytes, bytesAcquired: bytes, stagingBytes: acquired?.stagingBytes ?? job.stagingBytes, verifiedPrefix: { byteLength: bytes, identity: describedIdentity } }
       ledger.record(id, { sourceBytesRead: bytes, sourceBytesAccepted: bytes, stagingBytes: acquisitionPatch.stagingBytes }, { policy: policyValue })
       job = await progress(await store.get(id), acquisitionPatch)
-      job = await change(id, { expectedVersion: job.version, from: 'acquiring', to: 'verifying' })
+      if (job.state === 'acquiring') await onSourceComplete()
+      assetReadyForVerification = true
       const verification = await provider.verify({ acquisitionId: id, request: job.request, asset, expected: { byteLength: job.expectedBytes, identity: job.expectedIdentity }, signal: entry.controller.signal })
       const verified = verification === true || (verification?.verified === true && verification.byteLength === job.expectedBytes)
       if (!verified) fail('VERIFICATION_FAILED', 'static asset failed exact verification', 502)
@@ -286,7 +293,9 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       if (entry.cancelled) {
         const cancelled = await terminal(latest, 'cancelled', 'CANCELLED', false); await discard(cancelled, error); ledger.release(id); await sourceGrants.revoke({ acquisitionId: id, principal: latest.principalId, reason: error }).catch(() => {}); return cancelled
       }
-      const code = errorCode(error, latest?.state)
+      // Copying the downloaded bytes is shown as verification, but a storage
+      // failure there is not a failed proof and must not discard a resumable source.
+      const code = errorCode(error, assetReadyForVerification ? latest?.state : 'acquiring')
       const recoverable = error?.recoverable !== false && !PERMANENT_ERRORS.has(code)
       const failed = await terminal(latest, 'failed', code, recoverable)
       if (!recoverable || RESET_PREFIX_ERRORS.has(code)) { await discard(failed, error); await sourceGrants.revoke({ acquisitionId: id, principal: latest.principalId, reason: error }).catch(() => {}) }

@@ -8,6 +8,9 @@ import { isPlaybackErrorCode, playbackErrorMessage, playbackErrorRetry } from '.
 import { parseBlobRef } from '../blob-utils.js'
 import { isArtworkRendition, normalizeAssetCoreRefV2 } from '../assets/rendition.js'
 import { ASSET_BLOCK_SIZE } from '../assets/static-core.js'
+import { createMultiPeerScheduler } from '../playback/multi-peer-scheduler.js'
+import { MAX_ASSET_BLOCKS_PER_REQUEST } from '../network/frame.js'
+import { createAbortController } from '../abort-controller.js'
 import b4a from 'b4a'
 
 const DEFAULT_PAGE_LIMIT = 50
@@ -877,13 +880,8 @@ export function createMediaGraphApi(options = {}) {
     }), RENDITION_RETAIN_TIMEOUT_MS)
   }
 
-  /**
-   * Walk a blob's blocks and yield exactly the requested byte window. `core.get`
-   * waits on replication, which is what lets a caller range-request a rendition
-   * this device has not finished pulling: the bytes arrive as they land instead
-   * of the request failing because they are not local yet.
-   */
-  async function* readBlobRange(core, blob, start, length) {
+  // Missing blocks use the shared asset-topic scheduler. Local blocks need no peer.
+  async function* readBlobRange(core, blob, start, length, fetchBlocks, signal) {
     let remaining = length
     let index = blob.blockOffset
     let offset = 0
@@ -903,7 +901,12 @@ export function createMediaGraphApi(options = {}) {
     }
     const blockEnd = blob.blockOffset + blob.blockLength
     while (remaining > 0 && index < blockEnd) {
-      let block = await core.get(index)
+      if (signal.aborted) throw signal.reason
+      if (!await core.has(index)) {
+        await fetchBlocks(index, Math.min(blockEnd, index + MAX_ASSET_BLOCKS_PER_REQUEST,
+          index + Math.ceil((offset + remaining) / ASSET_BLOCK_SIZE)))
+      }
+      let block = await core.get(index, { wait: false })
       if (!block || block.byteLength === 0) throw new Error(`rendition block ${index} is unavailable`)
       if (offset > 0) {
         block = block.subarray(offset)
@@ -1221,17 +1224,45 @@ export function createMediaGraphApi(options = {}) {
       }
 
       const byteLength = ref.blob.byteLength || schemaUint(rendition.core?.byteLength) || 0
+      const assetId = rendition.core?.assetId || ref.assetId
+      const controller = createAbortController()
+      const abort = () => controller.abort()
+      if (request.signal?.aborted) abort()
+      else request.signal?.addEventListener?.('abort', abort, { once: true })
+      let scheduler = null
+      const fetchBlocks = async (start, end) => {
+        scheduler ||= createMultiPeerScheduler({
+          coreRef: rendition.core,
+          session: scopedNetwork.getActiveAssetSession({ assetId }),
+          transport: scopedNetwork,
+        })
+        const result = await scheduler.requestRange({
+          assetId,
+          byteStart: start * ASSET_BLOCK_SIZE,
+          byteEnd: Math.min(end * ASSET_BLOCK_SIZE, rendition.core.byteLength),
+          deadlineMs: 10_000,
+          materialize: false,
+          signal: controller.signal,
+        })
+        if (result.status !== 'ok') {
+          const failure = new Error('verified rendition bytes are unavailable')
+          failure.code = result.errorCode
+          throw failure
+        }
+      }
       return {
         success: true,
         publicationId,
         renditionId,
-        assetId: rendition.core?.assetId || ref.assetId,
+        assetId,
         contentType: typeof rendition.format === 'string' && rendition.format ? rendition.format : 'video/mp4',
         byteLength,
         read({ start = 0, length = byteLength - start } = {}) {
-          return readBlobRange(core, ref.blob, start, length)
+          return readBlobRange(core, ref.blob, start, length, fetchBlocks, controller.signal)
         },
         async close() {
+          abort()
+          request.signal?.removeEventListener?.('abort', abort)
           try { await core.close?.() } catch { /* best effort */ }
         },
       }

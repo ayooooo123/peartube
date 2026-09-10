@@ -1214,9 +1214,35 @@ export function createScopedContentRuntime (context) {
     return session
   }
 
-  function getActiveAssetPeerIds ({ assetId } = {}) {
+  function notifyAssetPeerWaiters (scope, error = null) {
+    const peerIds = activeAssetPeers(scope).map(peer => peer.peerId).sort()
+    if (!error && peerIds.length === 0) return
+    for (const finish of [...(scope.assetPeerWaiters || [])]) finish(error, peerIds)
+  }
+
+  function getActiveAssetPeerIds ({ assetId, waitForPeers = false, signal } = {}) {
     if (policy.status !== 'active' || !policy.networkEnabled) fail('runtime is not active')
-    return activeAssetPeers(activeAssetScope(assetId)).map(peer => peer.peerId).sort()
+    const scope = activeAssetScope(assetId)
+    const peers = activeAssetPeers(scope).map(peer => peer.peerId).sort()
+    if (!waitForPeers || peers.length > 0) return peers
+    if (signal?.aborted) return Promise.reject(assetAbortError())
+    const waiters = scope.assetPeerWaiters ||= new Set()
+    if (waiters.size >= MAX_ASSET_BLOCKS_PER_REQUEST) fail('active asset peer wait limit exceeded')
+    return new Promise((resolve, reject) => {
+      const finish = (error, peerIds) => {
+        if (!waiters.delete(finish)) return
+        clearTimeout(timer)
+        signal?.removeEventListener?.('abort', onAbort)
+        if (error) reject(error)
+        else resolve(peerIds)
+      }
+      const onAbort = () => finish(assetAbortError())
+      const timer = setTimeout(() => finish(null, []), assetTransferTimeoutMs)
+      waiters.add(finish)
+      signal?.addEventListener?.('abort', onAbort, { once: true })
+      if (signal?.aborted) onAbort()
+      else notifyAssetPeerWaiters(scope)
+    })
   }
 
   async function listAssetRanges ({ assetId, cursor = null, limit } = {}) {
@@ -1758,6 +1784,7 @@ export function createScopedContentRuntime (context) {
   }
 
   async function prepareScopeClose (scope) {
+    notifyAssetPeerWaiters(scope, new Error('asset scope was released'))
     for (const session of scope.sessions.values()) cancelAssetSummaryScan(session)
     for (const request of [...(scope.assetRequests?.values() || [])]) {
       closeAssetRequest(scope, request, new Error('asset scope was released'))
@@ -1788,6 +1815,7 @@ export function createScopedContentRuntime (context) {
 
   return {
     assetTransportError, closeAssetInventoryRequest, cancelAssetSummaryScan, failAssetRequestPeer,
+    notifyAssetPeerWaiters,
     queueArchiveRetry, clearArchiveTimer, startArchivePumpWhenOpen, sendAssetError,
     handleAssetFrame, handleArchiveFrame, pumpArchiveSessions, prepareScopeClose, finalizeScopeClose,
     retainAuthorizedRendition, releaseAuthorizedRendition, listAssetRanges, getActiveAssetSession,

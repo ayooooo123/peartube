@@ -680,6 +680,7 @@ export async function createBackendContext(config) {
     store: ctx.store,
     catalogRegistry,
     networkId: network.networkId,
+    peerAddresses: network.peerAddresses,
     bootstrapEnabled: network.bootstrapEnabled,
     trustedBootstrapSigners: network.trustedBootstrapSigners,
     trustedBootstrapRootIds: network.trustedBootstrapRootIds,

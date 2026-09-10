@@ -88,6 +88,55 @@ test('manager publishes only after exact verification and records every transiti
   await fixtureValue.manager.close()
 })
 
+test('download completion advances the state before the final asset is ready', async t => {
+  let release
+  const blocked = new Promise(resolve => { release = resolve })
+  const source = provider()
+  const acquire = source.acquire
+  source.acquire = async input => {
+    const asset = await acquire(input)
+    await input.onSourceComplete()
+    await blocked
+    return asset
+  }
+  const f = fixture({ acquisitionProvider: source })
+  t.teardown(async () => { release(); await f.manager.close() })
+  await f.manager.start()
+  const queued = await f.manager.request({ idempotencyKey: 'copy-pending', request: REQUEST, principal: PRINCIPAL })
+  const read = () => f.manager.get({ acquisitionId: queued.acquisitionId, principal: PRINCIPAL })
+  const copying = await eventually(read, job => job.state === 'verifying')
+  t.is(copying.bytesAcquired, BYTES.byteLength)
+  t.is(copying.publicationId, null, 'the unfinished asset is not playable')
+  t.is(f.publishes(), 0, 'no publication is made while the copy is pending')
+  release()
+  const completed = await eventually(read, job => job.state === 'completed')
+  t.is(completed.publicationId, 'publication-1')
+})
+
+test('a storage failure after download does not discard bytes as a bad proof', async t => {
+  let discarded = 0
+  const source = provider()
+  const acquire = source.acquire
+  source.acquire = async input => {
+    await acquire(input)
+    await input.onSourceComplete()
+    throw new Error('temporary disk write failure')
+  }
+  source.discard = async () => { discarded++ }
+  const f = fixture({ acquisitionProvider: source })
+  t.teardown(() => f.manager.close())
+  await f.manager.start()
+  const queued = await f.manager.request({ idempotencyKey: 'copy-failed', request: REQUEST, principal: PRINCIPAL })
+  const failed = await eventually(
+    () => f.manager.get({ acquisitionId: queued.acquisitionId, principal: PRINCIPAL }),
+    job => job.state === 'failed',
+  )
+  t.is(failed.errorCode, 'ACQUISITION_FAILED')
+  t.is(failed.recoverable, true)
+  t.is(discarded, 0, 'a transient storage error preserves the source')
+  t.is(f.publishes(), 0)
+})
+
 test('publication repository recovery completes a job after the catalog commit succeeds', async t => {
   let committed = null
   const publisher = {

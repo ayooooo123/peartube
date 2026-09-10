@@ -1,4 +1,5 @@
 import b4a from 'b4a'
+import { createAbortController } from '../abort-controller.js'
 
 import { normalizeAssetCoreRefV2 } from '../assets/rendition.js'
 import {
@@ -332,7 +333,7 @@ export function createMultiPeerScheduler(options = {}) {
 
     const start = (peerId, reservations, inheritedRunSlot = null) => {
       attempted.add(peerId)
-      const controller = new AbortController()
+      const controller = createAbortController()
       let promise
       promise = executeAttempt(
         run,
@@ -407,7 +408,7 @@ export function createMultiPeerScheduler(options = {}) {
   }
 
   async function executeRuns(runs, context) {
-    const wave = new AbortController()
+    const wave = createAbortController()
     const forwardAbort = () => wave.abort(context.rootSignal.reason || abortError())
     if (context.rootSignal.aborted) forwardAbort()
     else context.rootSignal.addEventListener('abort', forwardAbort, { once: true })
@@ -480,7 +481,7 @@ export function createMultiPeerScheduler(options = {}) {
 
     const startedAt = now()
     const requestDeadline = startedAt + request.deadlineMs
-    const root = new AbortController()
+    const root = createAbortController()
     let abortKind = null
     const callerAbort = () => { abortKind = 'caller'; root.abort(abortError()) }
     input.signal?.addEventListener?.('abort', callerAbort, { once: true })
@@ -522,6 +523,7 @@ export function createMultiPeerScheduler(options = {}) {
       while (remaining.length > 0) {
         const activePeerIds = normalizePeerIds(await transport.getActiveAssetPeerIds({
           assetId: coreRef.assetId,
+          waitForPeers: true,
           signal: root.signal,
         }))
         pruneInactivePeers(activePeerIds)

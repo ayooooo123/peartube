@@ -95,18 +95,28 @@ function renditionRequirement(manifest, renditionId = null) {
   })
 }
 
-function claimModerationEntity(row, publicationId = null) {
+function extractRelatedRefs(row) {
   const subjectRefs = row?.body?.subjectRefs || []
   const payload = row?.body?.payload || {}
-  const relatedRefs = [
+  const related = [
     ...subjectRefs,
     payload.collectionRef,
     payload.memberRef,
     payload.subjectRef,
   ].filter(ref => ref?.entityId)
-  const workIds = [...new Set(relatedRefs.filter(ref => ref.entityKind === 'work').map(ref => ref.entityId))]
-  const collectionIds = [...new Set(relatedRefs.filter(ref => ref.entityKind === 'collection').map(ref => ref.entityId))]
+  return { subjectRefs, payload, related }
+}
+
+function entityIdsByKind(refs, kind) {
+  return [...new Set(refs.filter(ref => ref.entityKind === kind).map(ref => ref.entityId))]
+}
+
+function claimModerationEntity(row, publicationId = null) {
+  const { subjectRefs, payload, related } = extractRelatedRefs(row)
+  const workIds = entityIdsByKind(related, 'work')
+  const collectionIds = entityIdsByKind(related, 'collection')
   const entityRef = subjectRefs[0]?.entityId || workIds[0] || collectionIds[0] || null
+  const publisher = row?.publisherId || row?.issuer || null
   return {
     entityRef,
     entityId: entityRef,
@@ -114,8 +124,8 @@ function claimModerationEntity(row, publicationId = null) {
     workIds,
     collectionId: collectionIds[0] || null,
     collectionIds,
-    publisherId: row?.publisherId || row?.issuer || null,
-    publisherRootKey: row?.publisherId || row?.issuer || null,
+    publisherId: publisher,
+    publisherRootKey: publisher,
     publicationId: publicationId || payload.publicationId || null,
   }
 }
@@ -277,6 +287,37 @@ function manifestFromSnapshot(snapshot, publication) {
   return manifest
 }
 
+function assertVerifiedQueryViewLimits(maxCursors, cursorLifetimeMs) {
+  if (!Number.isSafeInteger(maxCursors) || maxCursors < 1 || maxCursors > MAX_INDEX_QUERY_RESULTS) {
+    throw new TypeError('verified query cursor limit is invalid')
+  }
+  if (!Number.isSafeInteger(cursorLifetimeMs) || cursorLifetimeMs < 1 || cursorLifetimeMs > MAX_INDEX_QUERY_DEADLINE_MS) {
+    throw new TypeError('verified query cursor lifetime is invalid')
+  }
+}
+
+function assertVerifiedQueryViewOptions({
+  store,
+  catalogRegistry,
+  moderationPolicy,
+  onError,
+  now,
+  randomBytes,
+  maxCursors,
+  cursorLifetimeMs,
+}) {
+  if (!store || typeof store.get !== 'function') throw new TypeError('verified query view requires Corestore')
+  if (!catalogRegistry || typeof catalogRegistry.listBindingPage !== 'function') {
+    throw new TypeError('verified query view requires catalogRegistry.listBindingPage')
+  }
+  if (moderationPolicy !== null && typeof moderationPolicy !== 'object' && typeof moderationPolicy !== 'function') {
+    throw new TypeError('verified query view moderationPolicy must be an object or function')
+  }
+  if (onError !== null && typeof onError !== 'function') throw new TypeError('verified query view onError must be a function')
+  if (typeof now !== 'function' || typeof randomBytes !== 'function') throw new TypeError('verified query view adapters are invalid')
+  assertVerifiedQueryViewLimits(maxCursors, cursorLifetimeMs)
+}
+
 export async function createVerifiedQueryView({
   store,
   catalogRegistry,
@@ -287,22 +328,16 @@ export async function createVerifiedQueryView({
   maxCursors = MAX_INDEX_QUERY_RESULTS,
   cursorLifetimeMs = MAX_INDEX_QUERY_DEADLINE_MS,
 } = {}) {
-  if (!store || typeof store.get !== 'function') throw new TypeError('verified query view requires Corestore')
-  if (!catalogRegistry || typeof catalogRegistry.listBindings !== 'function') {
-    throw new TypeError('verified query view requires catalogRegistry.listBindings')
-  }
-  if (moderationPolicy !== null && typeof moderationPolicy !== 'object' && typeof moderationPolicy !== 'function') {
-    throw new TypeError('verified query view moderationPolicy must be an object or function')
-  }
-  if (onError !== null && typeof onError !== 'function') throw new TypeError('verified query view onError must be a function')
-  if (typeof now !== 'function' || typeof randomBytes !== 'function') throw new TypeError('verified query view adapters are invalid')
-  if (!Number.isSafeInteger(maxCursors) || maxCursors < 1 || maxCursors > MAX_INDEX_QUERY_RESULTS) {
-    throw new TypeError('verified query cursor limit is invalid')
-  }
-  if (!Number.isSafeInteger(cursorLifetimeMs) || cursorLifetimeMs < 1 || cursorLifetimeMs > MAX_INDEX_QUERY_DEADLINE_MS) {
-    throw new TypeError('verified query cursor lifetime is invalid')
-  }
-
+  assertVerifiedQueryViewOptions({
+    store,
+    catalogRegistry,
+    moderationPolicy,
+    onError,
+    now,
+    randomBytes,
+    maxCursors,
+    cursorLifetimeMs,
+  })
   const index = await createIndexerStore({
     store,
     limits: VERIFIED_QUERY_LIMITS,
@@ -433,20 +468,6 @@ export async function createVerifiedQueryView({
     return record
   }
 
-  async function bindingsByPublisher(requested = null) {
-    const bindings = await catalogRegistry.listBindings()
-    if (!Array.isArray(bindings)) throw new TypeError('catalogRegistry.listBindings() must return an array')
-    if (bindings.length > MAX_VERIFIED_PUBLISHERS) fail('publisher binding list exceeds its bound')
-    const normalized = []
-    for (const binding of bindings) {
-      let id
-      try { id = publisherId(binding?.publisherId) } catch { continue }
-      if (requested && !requested.has(id)) continue
-      normalized.push({ binding, publisherId: id })
-    }
-    normalized.sort((left, right) => left.publisherId.localeCompare(right.publisherId))
-    return normalized
-  }
 
   async function ingestBinding(binding, id, signal, repairReason = null) {
     const descriptor = await binding?.catalog?.getNamespaceDescriptor?.() || binding?.namespaceDescriptor
@@ -457,29 +478,80 @@ export async function createVerifiedQueryView({
       : ingestor.repairPublisher({ ...input, reason: repairReason })
   }
 
-  async function performRefresh({ publisherIds = undefined, signal = undefined } = {}) {
-    if (signal?.aborted) throw signal.reason || new Error('verified query refresh aborted')
-    let requested = null
-    if (publisherIds !== undefined) {
-      if (!Array.isArray(publisherIds) || publisherIds.length > PUBLISHER_LIMITS.maxJournalOperations) {
-        throw new TypeError('publisherIds must be a bounded array')
-      }
-      requested = new Set(publisherIds.map(value => publisherId(value)))
+  function assertSignalNotAborted(signal, defaultMessage = 'verified query refresh aborted') {
+    if (signal?.aborted) throw signal.reason || new Error(defaultMessage)
+  }
+
+  function normalizeRefreshRequested(publisherIds) {
+    if (publisherIds === undefined) return null
+    if (!Array.isArray(publisherIds) || publisherIds.length > PUBLISHER_LIMITS.maxJournalOperations) {
+      throw new TypeError('publisherIds must be a bounded array')
     }
-    const bindings = await bindingsByPublisher(requested)
+    return new Set(publisherIds.map(value => publisherId(value)))
+  }
+
+  function processRefreshPageErrors(errors, requested, onError) {
+    let failed = 0
+    for (const failure of errors || []) {
+      const pubHex = failure?.key || (failure?.publisherId ? publisherId(failure.publisherId) : null)
+      if (requested && pubHex && !requested.has(pubHex)) continue
+      failed++
+      try {
+        onError?.(new Error(failure?.error || 'PUBLISHER_CATALOG_UNAVAILABLE'), { publisherId: pubHex })
+      } catch {
+        /* Error reporting must not stop other publishers. */
+      }
+    }
+    return failed
+  }
+
+  async function ingestRefreshPageBindings(items, requested, signal, ingestBinding, onError) {
     let indexed = 0
     let failed = 0
-    for (const item of bindings) {
+    for (const binding of items || []) {
+      let id
+      try {
+        id = publisherId(binding?.publisherId)
+      } catch {
+        continue
+      }
+      if (requested && !requested.has(id)) continue
       if (signal?.aborted) throw signal.reason || new Error('verified query refresh aborted')
       try {
-        await ingestBinding(item.binding, item.publisherId, signal)
+        await ingestBinding(binding, id, signal)
         indexed++
       } catch (error) {
         if (signal?.aborted) throw signal.reason || error
         failed++
-        try { onError?.(error, { publisherId: item.publisherId }) } catch { /* Error reporting must not stop other publishers. */ }
+        try {
+          onError?.(error, { publisherId: id })
+        } catch {
+          /* Error reporting must not stop other publishers. */
+        }
       }
     }
+    return { indexed, failed }
+  }
+
+  async function performRefresh({ publisherIds = undefined, signal = undefined } = {}) {
+    assertSignalNotAborted(signal)
+    const requested = normalizeRefreshRequested(publisherIds)
+    let indexed = 0
+    let failed = 0
+    let cursor = null
+    do {
+      assertSignalNotAborted(signal)
+      const page = await catalogRegistry.listBindingPage({ cursor, signal })
+      try {
+        failed += processRefreshPageErrors(page?.errors, requested, onError)
+        const counts = await ingestRefreshPageBindings(page?.items, requested, signal, ingestBinding, onError)
+        indexed += counts.indexed
+        failed += counts.failed
+      } finally {
+        await page?.release?.()
+      }
+      cursor = page?.nextCursor || null
+    } while (cursor)
     return Object.freeze({ indexed, failed })
   }
 
@@ -557,6 +629,104 @@ export async function createVerifiedQueryView({
     })
   }
 
+  function validateQueryLimit(limit) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_INDEX_QUERY_RESULTS) {
+      throw new TypeError('verified query limit is outside its bound')
+    }
+  }
+
+  function resolveInitialQueryState(stored, requestedSourceRevision) {
+    if (stored && requestedSourceRevision !== null && requestedSourceRevision !== stored.sourceRevision) {
+      fail('verified query cursor is stale', 'STALE_CURSOR')
+    }
+    return {
+      continuation: stored?.continuation,
+      sourceRevision: stored?.sourceRevision ?? requestedSourceRevision ?? undefined,
+    }
+  }
+
+  async function fetchQueryPage(options) {
+    try {
+      return await index.queryIndexPage(options)
+    } catch (error) {
+      if (error?.code === 'INDEX_QUERY_STALE_REVISION') fail('verified query cursor is stale', 'STALE_CURSOR')
+      throw error
+    }
+  }
+
+  function matchesSuppliedManifest(suppliedManifest, canonicalManifest) {
+    if (!suppliedManifest) return true
+    try {
+      const supplied = encodePublicationManifest(suppliedManifest)
+      const canonical = encodePublicationManifest(canonicalManifest)
+      return b4a.equals(supplied, canonical)
+    } catch {
+      return false
+    }
+  }
+
+  function isRenditionRangeValid(rendition, start, end) {
+    const length = Number(rendition?.core?.length)
+    if (!Number.isSafeInteger(length) || length < 1) return false
+    if (!Number.isSafeInteger(start) || start < 0 || start >= length) return false
+    if (end !== null && (!Number.isSafeInteger(end) || end <= start || end > length)) return false
+    return true
+  }
+
+  function isProvenanceRangeAuthorized(manifest, renditionId, coreKey, start, end) {
+    const authorizedRanges = (manifest.body?.provenance || []).filter(candidate =>
+      (candidate?.type === 'upload' || candidate?.type === 'artwork') &&
+      candidate.renditionId === renditionId &&
+      candidate.coreKey === coreKey &&
+      Number.isSafeInteger(candidate.start) &&
+      Number.isSafeInteger(candidate.end) &&
+      candidate.start >= 0 &&
+      candidate.end > candidate.start
+    )
+    if (authorizedRanges.length === 0) return true
+    return authorizedRanges.some(candidate =>
+      start >= candidate.start && end !== null && end <= candidate.end
+    )
+  }
+
+  function isRenditionIndexed(indexed, publication, assetId) {
+    return indexed.some(row =>
+      row.publisherId === publication.publisherId &&
+      row.sourceRecordRef === publication.sourceRecordRef &&
+      row.assetId === assetId
+    )
+  }
+
+  async function authorizeIndexedVisibleRendition({
+    publication,
+    manifest,
+    rendition,
+    renditionId,
+    start,
+    end,
+    operation,
+  }) {
+    boundedText(operation, 'rendition operation', 64)
+    const indexed = await index.findRenditionRows({ renditionId })
+    if (!isRenditionIndexed(indexed, publication, rendition.core?.assetId)) return false
+    if (!isProvenanceRangeAuthorized(manifest, renditionId, rendition.core?.key, start, end)) {
+      return false
+    }
+
+    const record = {
+      ...publicationModerationEntity(publication),
+      renditionId,
+      assetId: rendition.core?.assetId,
+      operation,
+      start,
+      end,
+    }
+    if (!await visible(record)) return false
+    const authorize = moderationPolicy?.authorizeRendition
+    return typeof authorize !== 'function' || isVisibleDecision(await authorize.call(moderationPolicy, record))
+  }
+
+
   const resource = {
     refresh(input = {}) {
       assertOpen()
@@ -567,41 +737,54 @@ export async function createVerifiedQueryView({
     async repairPublisher({ publisherId: publisherIdValue, reason, signal = undefined } = {}) {
       assertOpen()
       const id = publisherId(publisherIdValue)
-      const bindings = await bindingsByPublisher(new Set([id]))
-      if (bindings.length !== 1) fail(`publisher ${id} has no unique verified catalog binding`)
-      return ingestBinding(bindings[0].binding, id, signal, reason)
+      let targetBinding = null
+      let heldPage = null
+      try {
+        if (typeof catalogRegistry.resolve === 'function') {
+          try {
+            const binding = await catalogRegistry.resolve(b4a.from(id, 'hex'))
+            if (binding) targetBinding = binding
+          } catch { /* fall through to bounded page walk */ }
+        }
+        if (!targetBinding) {
+          let cursor = null
+          do {
+            const page = await catalogRegistry.listBindingPage({ cursor, signal })
+            const match = page?.items?.find(b => publisherId(b?.publisherId) === id) || null
+            if (match) {
+              targetBinding = match
+              heldPage = page
+              break
+            }
+            await page?.release?.()
+            cursor = page?.nextCursor || null
+          } while (cursor)
+        }
+        if (!targetBinding) fail(`publisher ${id} has no unique verified catalog binding`)
+        return await ingestBinding(targetBinding, id, signal, reason)
+      } finally {
+        await heldPage?.release?.()
+      }
     },
     async query({ selectors, limit = 20, cursor = null, sourceRevision: requestedSourceRevision = null, moderation = 'effective', signal = undefined } = {}) {
       assertOpen()
       const normalizedSelectors = normalizeIndexQuerySelectors(selectors)
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_INDEX_QUERY_RESULTS) {
-        throw new TypeError('verified query limit is outside its bound')
-      }
+      validateQueryLimit(limit)
       boundedText(moderation, 'moderation mode', 64)
       const revision = await moderationRevision(moderation)
       const fingerprint = queryFingerprint(normalizedSelectors, moderation)
       const stored = resolveCursor(cursor, fingerprint, revision)
-      if (stored && requestedSourceRevision !== null && requestedSourceRevision !== stored.sourceRevision) {
-        fail('verified query cursor is stale', 'STALE_CURSOR')
-      }
-      let continuation = stored?.continuation
-      let sourceRevision = stored?.sourceRevision ?? requestedSourceRevision ?? undefined
+      let { continuation, sourceRevision } = resolveInitialQueryState(stored, requestedSourceRevision)
       const evaluator = visibilityEvaluator(moderation)
       const results = []
       while (results.length < limit) {
-        let page
-        try {
-          page = await index.queryIndexPage({
-            selectors: normalizedSelectors,
-            limit: 1,
-            continuation,
-            sourceRevision,
-            signal,
-          })
-        } catch (error) {
-          if (error?.code === 'INDEX_QUERY_STALE_REVISION') fail('verified query cursor is stale', 'STALE_CURSOR')
-          throw error
-        }
+        const page = await fetchQueryPage({
+          selectors: normalizedSelectors,
+          limit: 1,
+          continuation,
+          sourceRevision,
+          signal,
+        })
         sourceRevision = page.sourceRevision
         continuation = page.continuation
         if (page.results.length === 1) {
@@ -706,54 +889,22 @@ export async function createVerifiedQueryView({
         return false
       }
       const manifest = await manifestForPublication(publication)
-      if (!manifest) return false
-      if (suppliedManifest) {
-        let supplied
-        let canonical
-        try {
-          supplied = encodePublicationManifest(suppliedManifest)
-          canonical = encodePublicationManifest(manifest)
-        } catch {
-          return false
-        }
-        if (!b4a.equals(supplied, canonical)) return false
-      }
+      if (!manifest || !matchesSuppliedManifest(suppliedManifest, manifest)) return false
+
       const rendition = findManifestRendition(manifest, renditionId)
-      if (!rendition) return false
-      const length = Number(rendition.core?.length)
-      if (!Number.isSafeInteger(length) || length < 1 || !Number.isSafeInteger(start) || start < 0 || start >= length) return false
-      if (end !== null && (!Number.isSafeInteger(end) || end <= start || end > length)) return false
-      boundedText(operation, 'rendition operation', 64)
-      const indexed = await index.findRenditionRows({ renditionId })
-      if (!indexed.some(row =>
-        row.publisherId === publication.publisherId &&
-        row.sourceRecordRef === publication.sourceRecordRef &&
-        row.assetId === rendition.core?.assetId
-      )) return false
-      const authorizedRanges = (manifest.body?.provenance || []).filter(candidate =>
-        (candidate?.type === 'upload' || candidate?.type === 'artwork') &&
-        candidate.renditionId === renditionId &&
-        candidate.coreKey === rendition.core?.key &&
-        Number.isSafeInteger(candidate.start) &&
-        Number.isSafeInteger(candidate.end) &&
-        candidate.start >= 0 &&
-        candidate.end > candidate.start
-      )
-      if (authorizedRanges.length > 0 && !authorizedRanges.some(candidate =>
-        start >= candidate.start && end !== null && end <= candidate.end
-      )) return false
-      const record = {
-        ...publicationModerationEntity(publication),
+      if (!rendition || !isRenditionRangeValid(rendition, start, end)) return false
+
+      return authorizeIndexedVisibleRendition({
+        publication,
+        manifest,
+        rendition,
         renditionId,
-        assetId: rendition.core?.assetId,
-        operation,
         start,
         end,
-      }
-      if (!await visible(record)) return false
-      const authorize = moderationPolicy?.authorizeRendition
-      return typeof authorize !== 'function' || isVisibleDecision(await authorize.call(moderationPolicy, record))
+        operation,
+      })
     },
+
     async isVisible(input = {}) {
       assertOpen()
       return visible(input)

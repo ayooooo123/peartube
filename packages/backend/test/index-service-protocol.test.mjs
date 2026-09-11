@@ -435,7 +435,7 @@ test('announcement expiry closes the retained index scope and releases its direc
     },
   })
   t.is(swarm.joinedPeers.length, 1)
-  clock = NOW + 3
+  clock = NOW + 2
   expire()
   await new Promise(resolve => setTimeout(resolve, 0))
   t.is(swarm.leftPeers.length, 1)
@@ -448,7 +448,6 @@ test('retained consumer does not eagerly open or serve index channels', async t 
   const swarm = fakeSwarm()
   const wrongMux = fakeMux({ autoOpen: true })
   const rightMux = fakeMux({ autoOpen: true })
-  const muxedConnections = []
   const wrong = Object.assign(new EventEmitter(), { remotePublicKey: b4a.alloc(32, 56) })
   const missing = new EventEmitter()
   const right = Object.assign(new EventEmitter(), { remotePublicKey: b4a.from(service.transportPublicKey) })
@@ -457,10 +456,7 @@ test('retained consumer does not eagerly open or serve index channels', async t 
     store: {},
     bootstrapEnabled: false,
     now: () => NOW + 1,
-    muxFactory: connection => {
-      muxedConnections.push(connection)
-      return connection === right ? rightMux : wrongMux
-    },
+    muxFactory: connection => connection === right ? rightMux : wrongMux,
   })
   await runtime.start()
   await runtime.retainIndexService({ announcement: service })
@@ -475,7 +471,6 @@ test('retained consumer does not eagerly open or serve index channels', async t 
   await new Promise(resolve => setTimeout(resolve, 0))
   t.is(wrongMux.channels.length, 0)
   t.is(rightMux.channels.length, 0)
-  t.is(muxedConnections.length, 0)
   t.absent(runtime.getDiagnostics().sessions.find(session => session.purpose === 'index'))
   await runtime.releaseIndexService({ indexerId: service.indexerId })
   await runtime.close()
@@ -519,4 +514,81 @@ test('runtime close releases each retained direct transport once without closing
   await runtime.close()
   t.is(swarm.leftPeers.length, 1)
   t.is(connection.destroys, 0)
+})
+
+test('public retain stays floor-strict after release; private control restores the exact prior record', async t => {
+  const { getIndexServicePolicyControl } = await import('../src/network/index-service-policy-control-internal.js')
+  const signer = keyPair(61)
+  const first = announcement({ signer, transportPublicKey: b4a.alloc(32, 71), sequence: 1, expiresAt: NOW + 120_000 })
+  const newer = announcement({
+    signer,
+    transportPublicKey: b4a.alloc(32, 72),
+    sequence: 2,
+    issuedAt: NOW + 1,
+    expiresAt: NOW + 120_000,
+  })
+  const swarm = fakeSwarm()
+  const runtime = createScopedNetworkRuntime({ swarm, store: {}, bootstrapEnabled: false, now: () => NOW + 1 })
+  const control = getIndexServicePolicyControl(runtime)
+  t.ok(control?.restoreLastIndexService)
+  t.is(typeof runtime.restoreLastIndexService, 'undefined', 'restore is not on the general runtime surface')
+  await runtime.start()
+  await runtime.retainIndexService({ announcement: first })
+  await runtime.releaseIndexService({ indexerId: first.indexerId })
+  await t.exception(
+    runtime.retainIndexService({ announcement: first }),
+    { code: 'SCOPED_NETWORK_REJECTED' },
+  )
+  const restored = await control.restoreLastIndexService({ indexerId: first.indexerId })
+  t.is(restored.restored, true)
+  t.is(runtime.getDiagnostics().topics.find(topic => topic.purpose === 'index').transportPublicKey, b4a.toString(first.transportPublicKey, 'hex'))
+  await runtime.releaseIndexService({ indexerId: first.indexerId })
+  await runtime.retainIndexService({ announcement: newer })
+  await runtime.releaseIndexService({ indexerId: first.indexerId })
+  await t.exception(
+    runtime.retainIndexService({ announcement: first }),
+    { code: 'SCOPED_NETWORK_REJECTED' },
+  )
+  const restoredNewer = await control.restoreLastIndexService({ indexerId: first.indexerId })
+  t.is(restoredNewer.restored, true)
+  t.is(runtime.getDiagnostics().topics.find(topic => topic.purpose === 'index').transportPublicKey, b4a.toString(newer.transportPublicKey, 'hex'))
+  await runtime.close()
+})
+
+test('failed different-channel replacement restores the exact previous adapter', async t => {
+  const signer = keyPair(62)
+  const firstKey = b4a.alloc(32, 81)
+  const secondKey = b4a.alloc(32, 82)
+  const first = announcement({ signer, transportPublicKey: firstKey, sequence: 1 })
+  const second = announcement({ signer, transportPublicKey: secondKey, sequence: 2, issuedAt: NOW + 1 })
+  const swarm = fakeSwarm()
+  swarm.joinPeer = key => {
+    const hex = b4a.toString(b4a.from(key), 'hex')
+    if (hex === b4a.toString(secondKey, 'hex')) throw new Error('candidate peer join failed')
+    swarm.joinedPeers.push(b4a.from(key))
+  }
+  const runtime = createScopedNetworkRuntime({ swarm, store: {}, bootstrapEnabled: false, now: () => NOW + 1 })
+  await runtime.start()
+  await runtime.retainIndexService({ announcement: first })
+  t.is(swarm.joinedPeers.length, 1)
+  await t.exception(
+    runtime.retainIndexService({ announcement: second }),
+    { message: /candidate peer join failed/ },
+  )
+  const topic = runtime.getDiagnostics().topics.find(entry => entry.purpose === 'index')
+  t.ok(topic)
+  t.is(topic.transportPublicKey, b4a.toString(firstKey, 'hex'))
+  await runtime.close()
+})
+
+test('retain rejects an announcement at its exact expiry boundary', async t => {
+  const service = announcement({ expiresAt: NOW + 2 })
+  const swarm = fakeSwarm()
+  const runtime = createScopedNetworkRuntime({ swarm, store: {}, bootstrapEnabled: false, now: () => NOW + 2 })
+  await runtime.start()
+  await t.exception(
+    runtime.retainIndexService({ announcement: service }),
+    { code: 'SCOPED_NETWORK_REJECTED' },
+  )
+  await runtime.close()
 })

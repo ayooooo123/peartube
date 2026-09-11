@@ -56,8 +56,7 @@ export function normalizeArchiveEvidence(input = {}) {
   }
 }
 
-export function assessArchiveConfidence(input = {}) {
-  const evidence = normalizeArchiveEvidence(input)
+function collectDurableDevices(evidence) {
   const localPhysicalDeviceId = evidence.localPhysicalDeviceId
   const seenPhysicalDevices = new Set(localPhysicalDeviceId ? [localPhysicalDeviceId] : [])
   const durablePublisherDevices = []
@@ -75,8 +74,10 @@ export function assessArchiveConfidence(input = {}) {
     seenPhysicalDevices.add(challenge.physicalDeviceId)
     durableArchivists.push(challenge.archivistId)
   }
+  return { durablePublisherDevices, durableArchivists }
+}
 
-  const eligible = !evidence.activePlayback && (durablePublisherDevices.length > 0 || durableArchivists.length > 0)
+function buildConfidenceAssessmentNotes(evidence, durablePublisherDevices, durableArchivists, eligible) {
   const reasons = []
   if (durablePublisherDevices.length > 0) reasons.push('publisher-device-confirmed')
   if (durableArchivists.length > 0) reasons.push('intentional-archivist-challenge-confirmed')
@@ -85,6 +86,14 @@ export function assessArchiveConfidence(input = {}) {
   if (!eligible && durablePublisherDevices.length === 0) limitations.push('no-distinct-publisher-device-copy')
   if (!eligible && durableArchivists.length === 0) limitations.push('no-recent-intentional-archivist-proof')
   if (evidence.viewerFullCopies > 0) limitations.push('viewer-copies-are-transient-and-excluded')
+  return { reasons, limitations }
+}
+
+export function assessArchiveConfidence(input = {}) {
+  const evidence = normalizeArchiveEvidence(input)
+  const { durablePublisherDevices, durableArchivists } = collectDurableDevices(evidence)
+  const eligible = !evidence.activePlayback && (durablePublisherDevices.length > 0 || durableArchivists.length > 0)
+  const { reasons, limitations } = buildConfidenceAssessmentNotes(evidence, durablePublisherDevices, durableArchivists, eligible)
 
   return {
     eligible,

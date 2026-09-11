@@ -27,36 +27,16 @@ function boundedId (value, name) {
   return value
 }
 
-function normalizeGrant (grant, acquisitionId, principalId, at, maxTtlMs) {
-  if (!grant || typeof grant !== 'object' || Array.isArray(grant)) fail('SOURCE_GRANT_INVALID', 'source grant must be an object')
-  for (const key of Object.keys(grant)) {
-    if (!REQUIRED_GRANT_FIELDS.has(key) && !OPTIONAL_GRANT_FIELDS.has(key)) {
-      fail('SOURCE_GRANT_INVALID', `source grant contains unknown field ${key}`)
-    }
+function normalizeOptionalStringField (value, name) {
+  if (typeof value !== 'string' || value.length === 0 || b4a.byteLength(value) > 128 || value.includes('\0')) {
+    fail('SOURCE_GRANT_INVALID', `source grant ${name} is invalid`)
   }
-  for (const key of REQUIRED_GRANT_FIELDS) {
-    if (!Object.prototype.hasOwnProperty.call(grant, key)) fail('SOURCE_GRANT_INVALID', `source grant is missing ${key}`)
-  }
-  strictObject(grant.audience, AUDIENCE_FIELDS, 'source grant audience')
-  const audiencePrincipal = normalizePrincipalId(grant.audience.principalId, 'source grant audience principal')
-  const audienceAcquisition = boundedId(grant.audience.acquisitionId, 'source grant audience acquisition')
-  if (audiencePrincipal !== principalId || audienceAcquisition !== acquisitionId) {
-    fail('SOURCE_GRANT_AUDIENCE_MISMATCH', 'source grant audience does not match this acquisition', 403)
-  }
-  if (typeof grant.token !== 'string' || !TOKEN.test(grant.token) || b4a.byteLength(grant.token) > 256) {
-    fail('SOURCE_GRANT_INVALID', 'source grant token is invalid')
-  }
-  const adapterId = boundedId(grant.adapterId, 'source grant adapterId')
-  if (!Number.isSafeInteger(grant.expiresAt) || grant.expiresAt <= at) fail('SOURCE_GRANT_EXPIRED', 'source grant has expired', 403)
-  if (!Number.isSafeInteger(maxTtlMs) || maxTtlMs < 1 || grant.expiresAt - at > maxTtlMs) {
-    fail('SOURCE_GRANT_TTL_EXCEEDED', 'source grant exceeds the configured TTL', 403)
-  }
-  const result = { token: grant.token, adapterId, principalId, acquisitionId, expiresAt: grant.expiresAt }
+  return value
+}
+
+function applyOptionalGrantFields (result, grant) {
   if (grant.etag !== undefined && grant.etag !== null) {
-    if (typeof grant.etag !== 'string' || grant.etag.length === 0 || b4a.byteLength(grant.etag) > 128 || grant.etag.includes('\0')) {
-      fail('SOURCE_GRANT_INVALID', 'source grant etag is invalid')
-    }
-    result.etag = grant.etag
+    result.etag = normalizeOptionalStringField(grant.etag, 'etag')
   }
   if (grant.length !== undefined && grant.length !== null) {
     if (!Number.isSafeInteger(grant.length) || grant.length < 1) {
@@ -71,11 +51,44 @@ function normalizeGrant (grant, acquisitionId, principalId, at, maxTtlMs) {
     result.sha256 = grant.sha256
   }
   if (grant.contentType !== undefined && grant.contentType !== null) {
-    if (typeof grant.contentType !== 'string' || grant.contentType.length === 0 || b4a.byteLength(grant.contentType) > 128 || grant.contentType.includes('\0')) {
-      fail('SOURCE_GRANT_INVALID', 'source grant contentType is invalid')
-    }
-    result.contentType = grant.contentType
+    result.contentType = normalizeOptionalStringField(grant.contentType, 'contentType')
   }
+}
+
+function validateGrantAudience (audience, acquisitionId, principalId) {
+  strictObject(audience, AUDIENCE_FIELDS, 'source grant audience')
+  const audiencePrincipal = normalizePrincipalId(audience.principalId, 'source grant audience principal')
+  const audienceAcquisition = boundedId(audience.acquisitionId, 'source grant audience acquisition')
+  if (audiencePrincipal !== principalId || audienceAcquisition !== acquisitionId) {
+    fail('SOURCE_GRANT_AUDIENCE_MISMATCH', 'source grant audience does not match this acquisition', 403)
+  }
+}
+
+function validateGrantExpiration (expiresAt, at, maxTtlMs) {
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= at) fail('SOURCE_GRANT_EXPIRED', 'source grant has expired', 403)
+  if (!Number.isSafeInteger(maxTtlMs) || maxTtlMs < 1 || expiresAt - at > maxTtlMs) {
+    fail('SOURCE_GRANT_TTL_EXCEEDED', 'source grant exceeds the configured TTL', 403)
+  }
+}
+
+function normalizeGrant (grant, acquisitionId, principalId, at, maxTtlMs) {
+  if (!grant || typeof grant !== 'object' || Array.isArray(grant)) fail('SOURCE_GRANT_INVALID', 'source grant must be an object')
+  for (const key of Object.keys(grant)) {
+    if (!REQUIRED_GRANT_FIELDS.has(key) && !OPTIONAL_GRANT_FIELDS.has(key)) {
+      fail('SOURCE_GRANT_INVALID', `source grant contains unknown field ${key}`)
+    }
+  }
+  for (const key of REQUIRED_GRANT_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(grant, key)) fail('SOURCE_GRANT_INVALID', `source grant is missing ${key}`)
+  }
+  validateGrantAudience(grant.audience, acquisitionId, principalId)
+  if (typeof grant.token !== 'string' || !TOKEN.test(grant.token) || b4a.byteLength(grant.token) > 256) {
+    fail('SOURCE_GRANT_INVALID', 'source grant token is invalid')
+  }
+  const adapterId = boundedId(grant.adapterId, 'source grant adapterId')
+  validateGrantExpiration(grant.expiresAt, at, maxTtlMs)
+  const result = { token: grant.token, adapterId, principalId, acquisitionId, expiresAt: grant.expiresAt }
+  applyOptionalGrantFields(result, grant)
   return result
 }
 
@@ -110,6 +123,20 @@ function bindReaderToGrant(reader, grantSignal) {
       const linked = linkedAbortSignal(grantSignal, signal)
       try { return await reader.describe({ signal: linked.signal }) } finally { linked.cleanup() }
     },
+    ...(typeof reader.openArtwork === 'function' ? {
+      async openArtwork ({ signal } = {}) {
+        const linked = linkedAbortSignal(grantSignal, signal)
+        try {
+          const sources = await reader.openArtwork({ signal: linked.signal })
+          return sources.map(source => ({
+            ...source,
+            reader: bindReaderToGrant(source.reader, grantSignal)
+          }))
+        } finally {
+          linked.cleanup()
+        }
+      }
+    } : {}),
     open(input = {}) {
       return (async function * () {
         const linked = linkedAbortSignal(grantSignal, input.signal)

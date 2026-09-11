@@ -24,13 +24,6 @@ export function createMediaCatalogController(options: {
   pageSize?: number
 }): MediaCatalogController
 
-export function searchMediaCatalog(options: {
-  getMediaCatalog(request: { cursor?: string; limit: number }): Promise<MediaCatalogResult>
-  query: string
-  cursor?: string
-  limit?: number
-}): Promise<MediaCatalogResult>
-
 export function describeMediaCatalogState(
   state: MediaCatalogState,
   diagnostics?: { backendError?: string | null; startupStatus?: string | null; networkReason?: string | null },

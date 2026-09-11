@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { randomUUID } from 'node:crypto'
 import test from 'brittle'
 
 import { createUniversalCore } from '../src/universal-core.js'
@@ -72,17 +73,43 @@ test('universal core shutdown delegates backend teardown once before native hand
   t.is(core.state, 'shutdown')
 })
 
-test('orchestrator deferred warmup uses context shutdown state, not a reusable global flag', (t) => {
-  assert.match(orchestratorSource, /function isContextShuttingDown\(ctx\)/)
-  assert.match(orchestratorSource, /ctx\.isShuttingDown\s*\|\|\s*ctx\._isShutdown/)
+test('orchestrator deferred warmup uses context shutdown state, not a reusable global flag', async (t) => {
+  const modulePath = path.join(__dirname, '..', 'src', `.orchestrator-warmup-${randomUUID()}.mjs`)
+  fs.writeFileSync(modulePath, `${orchestratorSource}\nexport { runDeferredBackendWarmup }\n`, { flag: 'wx' })
+  let runWarmup
+  try {
+    runWarmup = (await import(pathToFileURL(modulePath).href)).runDeferredBackendWarmup
+  } finally {
+    fs.unlinkSync(modulePath)
+  }
+  const signal = new AbortController().signal
+  let gates = 0
+  let identityLoads = 0
+  const gate = { async waitUntilOpen() { gates++; return {} } }
+  const closed = { isShuttingDown: true }
+  await runWarmup(closed, signal, gate, {
+    async loadChannelDrives() { identityLoads++ },
+  }, {})
+  t.is(gates, 0, 'a closed context never enters startup warmup')
 
-  const deferredBody = orchestratorSource.match(
-    /lifecycle\.defer\('backend warm-up', async \(signal\) => \{([\s\S]*?)\n\s*\}\)/,
-  )?.[1] ?? ''
-  assert.ok(deferredBody, 'orchestrator should have a lifecycle-owned deferred warmup block')
-  assert.doesNotMatch(deferredBody, /if \(isShuttingDown\)/)
-  assert.match(deferredBody, /signal\.aborted\s*\|\|\s*isContextShuttingDown\(ctx\)/)
-  t.pass('deferred warmup is bound to the backend context lifecycle')
+  const active = { isShuttingDown: false }
+  await runWarmup(active, signal, gate, {
+    async loadChannelDrives() {
+      identityLoads++
+      active.isShuttingDown = true
+    },
+  }, {})
+  t.is(identityLoads, 1, 'a different live context can warm despite the earlier shutdown')
+
+  let openGate
+  const duringGate = {}
+  const pending = runWarmup(duringGate, signal, {
+    waitUntilOpen() { return new Promise(resolve => { openGate = resolve }) },
+  }, { async loadChannelDrives() { identityLoads++ } }, {})
+  duringGate._isShutdown = true
+  openGate({})
+  await pending
+  t.is(identityLoads, 1, 'shutdown while awaiting readiness prevents late identity work')
 })
 
 function createManualScheduler() {

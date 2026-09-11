@@ -13,7 +13,7 @@ import type { VideoData, VideoStats } from '@peartube/core'
 import type { PlayerMode, PlayerPort } from './video-player'
 import { resolvePlayerPort } from './video-player'
 import { usePlayerStateMachine } from './playerStateMachine'
-import type { ModeBeforePip, PlayerState } from './playerStateMachine'
+import type { ModeBeforePip, PlayerState, PlayerStateMode } from './playerStateMachine'
 import * as watchHistory from './watch-history'
 import type { WatchIdentity } from './watch-history'
 import { hasPersonalStore } from './personal-encryption'
@@ -71,6 +71,350 @@ function recordWatchProgressSafe(video: VideoData | null, positionSec: number, d
     positionSec,
     durationSec,
   }).catch(() => {})
+}
+function extractVideoId(idOrPath?: string | null): string | null {
+  if (!idOrPath) return null
+  const cleaned = idOrPath.split('?')[0]?.split('#')[0] || idOrPath
+  const m = cleaned.match(/(?:^|\/)videos\/([^.\/]+)(?:\.[^\/]+)?$/)
+  if (m?.[1]) return m[1]
+  const base = cleaned.split('/').pop() || cleaned
+  return base.replace(/\.[^./]+$/, '')
+}
+
+function isVideoStatsMatch(
+  video: VideoData | null | undefined,
+  driveKey?: string | null,
+  videoPath?: string | null
+): boolean {
+  if (!video) return false
+  const loose = video as unknown as { channelKey?: string; driveKey?: string }
+  const currentKeyRaw = loose.channelKey || loose.driveKey || null
+  const currentKey =
+    typeof currentKeyRaw === 'string' && currentKeyRaw.trim().length > 0 && currentKeyRaw !== 'unknown'
+      ? currentKeyRaw
+      : null
+  const looseId = (video as unknown as { id?: string }).id
+  const currentId = extractVideoId(looseId) ?? extractVideoId(video.path)
+  const incomingId = extractVideoId(videoPath)
+
+  const keysCompatible = !currentKey || !driveKey || currentKey === driveKey
+  const samePath = video.path === videoPath
+  const sameId = Boolean(currentId && incomingId && currentId === incomingId)
+  return (samePath || sameId) && (keysCompatible || sameId)
+}
+
+function maybeResolvePendingSeek(
+  pending: { targetSeconds: number; startedAt: number } | null,
+  timeS: number,
+  now: number,
+  seekClearTimeoutRef: { current: ReturnType<typeof setTimeout> | null },
+  setSeekPosition: (pos: number | undefined) => void
+): boolean {
+  if (!pending) return false
+  const closeEnough = Math.abs(timeS - pending.targetSeconds) < 0.75
+  const tooOld = now - pending.startedAt > 1500
+  if (closeEnough || tooOld) {
+    if (seekClearTimeoutRef.current) {
+      clearTimeout(seekClearTimeoutRef.current)
+      seekClearTimeoutRef.current = null
+    }
+    setSeekPosition(undefined)
+    return true
+  }
+  return false
+}
+
+function shouldInterceptStartupPause(
+  startupGuard: { until: number; key: string } | null,
+  lastPlaybackStartKey: string | null,
+  clearStartupAutoplayGuard: () => void,
+  setDesiredPlaying: (playing: boolean) => void,
+  getPlayerPort: () => PlayerPort | null
+): boolean {
+  if (
+    Platform.OS === 'android' &&
+    startupGuard &&
+    Date.now() <= startupGuard.until &&
+    lastPlaybackStartKey === startupGuard.key
+  ) {
+    setDesiredPlaying(true)
+    try {
+      getPlayerPort()?.play?.()
+    } catch {}
+    return true
+  }
+  if (startupGuard && Date.now() > startupGuard.until) {
+    clearStartupAutoplayGuard()
+  }
+  return false
+}
+
+function handlePipExitPaused(
+  pipExitExpectedPlayingRef: { current: boolean },
+  isInPipModeRef: { current: boolean },
+  pipExitShouldResumeRef: { current: boolean },
+  pipExitResumeUntilRef: { current: number },
+  reassertNativePlayAfterPipExit: (reason: string) => void
+): boolean {
+  if (!pipExitExpectedPlayingRef.current || isInPipModeRef.current) return false
+  reassertNativePlayAfterPipExit('player-paused-during-pip-exit')
+  if (Date.now() <= pipExitResumeUntilRef.current) {
+    return true
+  }
+  pipExitShouldResumeRef.current = false
+  pipExitExpectedPlayingRef.current = false
+  return false
+}
+
+function handleAppStateBackgroundTransition(opts: {
+  nextState: AppStateStatus
+  isBackgroundedRef: { current: boolean }
+  isPlayingRef: { current: boolean }
+  stateMode: PlayerStateMode
+  isInPipModeRef: { current: boolean }
+  pipTransitionInFlightRef: { current: boolean }
+  dispatch: (action: any) => void
+  playerModeRef: { current: PlayerMode }
+}) {
+  const {
+    nextState,
+    isBackgroundedRef,
+    isPlayingRef,
+    stateMode,
+    isInPipModeRef,
+    pipTransitionInFlightRef,
+    dispatch,
+    playerModeRef,
+  } = opts
+
+  isBackgroundedRef.current = true
+  const wasPlaying = isPlayingRef.current
+  const modeBeforeBackground = stateMode
+  const skipAppBackgroundDispatchForPip =
+    Platform.OS === 'android' && (isInPipModeRef.current || pipTransitionInFlightRef.current)
+
+  if (!skipAppBackgroundDispatchForPip) {
+    dispatch({
+      type: 'APP_BACKGROUND',
+      source: 'appStateBackgroundMiniAutoMaximizeForPip',
+      appState: nextState,
+      isPlaying: wasPlaying,
+    })
+  }
+  if (__DEV__) {
+    console.log(
+      '[VideoPlayerContext] Going to background, wasPlaying:',
+      wasPlaying,
+      'playerMode:',
+      playerModeRef.current,
+      'rawMode:',
+      modeBeforeBackground
+    )
+  }
+}
+
+function nudgeForegroundPlayer(opts: {
+  wasInPip: boolean
+  wasPlayingWhenBackgrounded: boolean
+  isPlaying: boolean
+  duration: number
+  currentTime: number
+  setSeekPosition: (pos: number | undefined) => void
+}) {
+  const { wasInPip, wasPlayingWhenBackgrounded, isPlaying, duration, currentTime, setSeekPosition } = opts
+  if (!wasInPip && wasPlayingWhenBackgrounded && !isPlaying && duration > 0) {
+    const seekValue = currentTime / duration
+    setSeekPosition(seekValue)
+    setTimeout(() => setSeekPosition(undefined), 100)
+  }
+}
+
+function clearPipStateOnForeground(opts: {
+  wasInPip: boolean
+  isInPipModeRef: { current: boolean }
+  setPipWindowSize: (size: { width: number; height: number } | null) => void
+  pipTransitionTimeoutRef: { current: ReturnType<typeof setTimeout> | null }
+}) {
+  const { wasInPip, isInPipModeRef, setPipWindowSize, pipTransitionTimeoutRef } = opts
+  if (wasInPip) return
+  if (__DEV__) console.log('[VideoPlayerContext] Clearing PiP state on foreground')
+  isInPipModeRef.current = false
+  setPipWindowSize(null)
+  if (pipTransitionTimeoutRef.current) {
+    clearTimeout(pipTransitionTimeoutRef.current)
+    pipTransitionTimeoutRef.current = null
+  }
+}
+
+function computeForegroundRestoreDecision(opts: {
+  wasInPip: boolean
+  suppressForegroundRestoreRef: { current: boolean }
+  suppressForegroundRestoreUntilRef: { current: number }
+  currentVideoRef: { current: VideoData | null }
+  wasPlayingWhenBackgroundedRef: { current: boolean }
+  stateMode: PlayerStateMode
+}): {
+  shouldSuppressRestore: boolean
+  resumedWithBackgroundPlayback: boolean
+  skipAppForegroundDispatchForPip: boolean
+  skipForActivePlayback: boolean
+} {
+  const {
+    wasInPip,
+    suppressForegroundRestoreRef,
+    suppressForegroundRestoreUntilRef,
+    currentVideoRef,
+    wasPlayingWhenBackgroundedRef,
+    stateMode,
+  } = opts
+
+  const now = Date.now()
+  const suppressOnce = suppressForegroundRestoreRef.current
+  suppressForegroundRestoreRef.current = false
+  const suppressWindow = suppressForegroundRestoreUntilRef.current > now
+  const shouldSuppressRestore = suppressOnce || suppressWindow || wasInPip
+  const hasCurrentVideo = Boolean(currentVideoRef.current)
+  const wasPlaying = wasPlayingWhenBackgroundedRef.current
+
+  return {
+    shouldSuppressRestore,
+    resumedWithBackgroundPlayback: !wasInPip && hasCurrentVideo && wasPlaying,
+    skipAppForegroundDispatchForPip: Platform.OS === 'android' && wasInPip,
+    skipForActivePlayback:
+      Platform.OS === 'android' &&
+      stateMode === 'fullscreen' &&
+      !wasInPip &&
+      hasCurrentVideo &&
+      wasPlaying,
+  }
+}
+
+function handleRemotePlayWhileBackgrounded(opts: {
+  remotePlayWhileBackgroundedRef: { current: boolean }
+  forceReloadPlayback: (source: string) => boolean
+  restoreLastClosedVideo: (source: string) => void
+}) {
+  const { remotePlayWhileBackgroundedRef, forceReloadPlayback, restoreLastClosedVideo } = opts
+  if (!remotePlayWhileBackgroundedRef.current) return
+  remotePlayWhileBackgroundedRef.current = false
+  if (!forceReloadPlayback('foreground-remote-play')) {
+    restoreLastClosedVideo('foreground-remote-play')
+  }
+}
+
+function handleAppStateForegroundTransition(opts: {
+  isBackgroundedRef: { current: boolean }
+  maximizedForPipRef: { current: boolean }
+  isInPipModeRef: { current: boolean }
+  pipTransitionInFlightRef: { current: boolean }
+  suppressTransientBufferingRef: { current: boolean }
+  setIsLoading: (loading: boolean) => void
+  wasPlayingWhenBackgroundedRef: { current: boolean }
+  setPipWindowSize: (size: { width: number; height: number } | null) => void
+  pipTransitionTimeoutRef: { current: ReturnType<typeof setTimeout> | null }
+  suppressForegroundRestoreRef: { current: boolean }
+  suppressForegroundRestoreUntilRef: { current: number }
+  currentVideoRef: { current: VideoData | null }
+  stateMode: PlayerStateMode
+  dispatch: (action: any) => void
+  restoreLastClosedVideo: (source: string) => void
+  remotePlayWhileBackgroundedRef: { current: boolean }
+  forceReloadPlayback: (source: string) => boolean
+  isPlayingRef: { current: boolean }
+  durationRef: { current: number }
+  currentTimeRef: { current: number }
+  setSeekPosition: (pos: number | undefined) => void
+}) {
+  const {
+    isBackgroundedRef,
+    maximizedForPipRef,
+    isInPipModeRef,
+    pipTransitionInFlightRef,
+    suppressTransientBufferingRef,
+    setIsLoading,
+    wasPlayingWhenBackgroundedRef,
+    setPipWindowSize,
+    pipTransitionTimeoutRef,
+    suppressForegroundRestoreRef,
+    suppressForegroundRestoreUntilRef,
+    currentVideoRef,
+    stateMode,
+    dispatch,
+    restoreLastClosedVideo,
+    remotePlayWhileBackgroundedRef,
+    forceReloadPlayback,
+    isPlayingRef,
+    durationRef,
+    currentTimeRef,
+    setSeekPosition,
+  } = opts
+
+  isBackgroundedRef.current = false
+  maximizedForPipRef.current = false
+  const wasInPip = isInPipModeRef.current || pipTransitionInFlightRef.current
+  suppressTransientBufferingRef.current = true
+  setIsLoading(false)
+  if (__DEV__) {
+    console.log(
+      '[VideoPlayerContext] Coming to foreground, wasPlaying:',
+      wasPlayingWhenBackgroundedRef.current,
+      'wasInPiP:',
+      wasInPip,
+      'pipInFlight:',
+      pipTransitionInFlightRef.current
+    )
+  }
+
+  clearPipStateOnForeground({
+    wasInPip,
+    isInPipModeRef,
+    setPipWindowSize,
+    pipTransitionTimeoutRef,
+  })
+
+  const {
+    shouldSuppressRestore,
+    resumedWithBackgroundPlayback,
+    skipAppForegroundDispatchForPip,
+    skipForActivePlayback,
+  } = computeForegroundRestoreDecision({
+    wasInPip,
+    suppressForegroundRestoreRef,
+    suppressForegroundRestoreUntilRef,
+    currentVideoRef,
+    wasPlayingWhenBackgroundedRef,
+    stateMode,
+  })
+
+  if (!skipAppForegroundDispatchForPip && !skipForActivePlayback) {
+    dispatch({
+      type: 'APP_FOREGROUND',
+      source: 'appStateForegroundHiddenRestore',
+      appState: 'active',
+      wasInPip,
+      suppressRestore: shouldSuppressRestore,
+      resumedWithBackgroundPlayback,
+    })
+  }
+
+  if (!shouldSuppressRestore && !currentVideoRef.current) {
+    restoreLastClosedVideo('foreground')
+  }
+
+  handleRemotePlayWhileBackgrounded({
+    remotePlayWhileBackgroundedRef,
+    forceReloadPlayback,
+    restoreLastClosedVideo,
+  })
+
+  nudgeForegroundPlayer({
+    wasInPip,
+    wasPlayingWhenBackgrounded: wasPlayingWhenBackgroundedRef.current,
+    isPlaying: isPlayingRef.current,
+    duration: durationRef.current,
+    currentTime: currentTimeRef.current,
+    setSeekPosition,
+  })
 }
 
 let ACTIVE_VIDEO_PLAYER_CONTROLLER_ID: number | null = null
@@ -719,120 +1063,45 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
      if (Platform.OS === 'web') return
      if (!isPrimaryController) return
 
-        const handleAppStateChange = (nextState: AppStateStatus) => {
+      const handleAppStateChange = (nextState: AppStateStatus) => {
         const goingToBackground = nextState === 'background' || nextState === 'inactive'
         const comingToForeground = nextState === 'active'
 
-      if (goingToBackground && !isBackgroundedRef.current) {
-        isBackgroundedRef.current = true
-        const wasPlaying = isPlayingRef.current
-        const modeBeforeBackground = state.mode
-        const skipAppBackgroundDispatchForPip =
-          Platform.OS === 'android' && (isInPipModeRef.current || pipTransitionInFlightRef.current)
-
-        if (!skipAppBackgroundDispatchForPip) {
-          dispatch({
-            type: 'APP_BACKGROUND',
-            source: 'appStateBackgroundMiniAutoMaximizeForPip',
-            appState: nextState,
-            isPlaying: wasPlaying,
+        if (goingToBackground && !isBackgroundedRef.current) {
+          handleAppStateBackgroundTransition({
+            nextState,
+            isBackgroundedRef,
+            isPlayingRef,
+            stateMode: state.mode,
+            isInPipModeRef,
+            pipTransitionInFlightRef,
+            dispatch,
+            playerModeRef,
           })
-        }
-        if (__DEV__) {
-          console.log(
-            '[VideoPlayerContext] Going to background, wasPlaying:',
-            wasPlaying,
-            'playerMode:',
-            playerModeRef.current,
-            'rawMode:',
-            modeBeforeBackground,
-          )
-        }
-       } else if (comingToForeground && isBackgroundedRef.current) {
-         isBackgroundedRef.current = false
-         maximizedForPipRef.current = false
-          const wasInPip = isInPipModeRef.current || pipTransitionInFlightRef.current
-          // Suppress transient buffering overlay when returning from background.
-          // The player was already running — any buffering is surface reattach, not a real stall.
-          suppressTransientBufferingRef.current = true
-          setIsLoading(false)
-          if (__DEV__) {
-            console.log('[VideoPlayerContext] Coming to foreground, wasPlaying:', wasPlayingWhenBackgroundedRef.current, 'wasInPiP:', wasInPip, 'pipInFlight:', pipTransitionInFlightRef.current)
-          }
-
-         // IMPORTANT: Don't clear PiP state on foreground if we were in PiP.
-         // When returning from PiP, Android can deliver the AppState "active" event
-         // before the native PiP exit callback reaches JS. Clearing the ref here
-         // makes the PiP exit handler think we were never in PiP, so it won't
-         // restore playback state (leading to unintended pauses).
-          if (!wasInPip) {
-            if (__DEV__) console.log('[VideoPlayerContext] Clearing PiP state on foreground')
-            isInPipModeRef.current = false
-            setPipWindowSize(null)
-            if (pipTransitionTimeoutRef.current) {
-              clearTimeout(pipTransitionTimeoutRef.current)
-             pipTransitionTimeoutRef.current = null
-           }
-         }
-
-        const now = Date.now()
-        const suppressOnce = suppressForegroundRestoreRef.current
-        suppressForegroundRestoreRef.current = false
-        const suppressWindow = suppressForegroundRestoreUntilRef.current > now
-        const shouldSuppressRestore = suppressOnce || suppressWindow || wasInPip
-
-        // The native player kept playing through the background period
-        // (staysActiveInBackground + media notification). Reopening the app —
-        // most commonly by tapping the playback notification — should surface
-        // the player page rather than leave the session in the mini player.
-        const resumedWithBackgroundPlayback =
-          !wasInPip && Boolean(currentVideoRef.current) && wasPlayingWhenBackgroundedRef.current
-
-        const skipAppForegroundDispatchForPip = Platform.OS === 'android' && wasInPip
-        // Also skip the foreground dispatch if we have an active video still playing.
-        // When PiP silently fails (wasInPip=false but video is still playing),
-        // dispatching APP_FOREGROUND can transition playerMode to 'hidden' which
-        // tears down the video unnecessarily.
-        const skipForActivePlayback =
-          Platform.OS === 'android' &&
-          state.mode === 'fullscreen' &&
-          !wasInPip &&
-          currentVideoRef.current &&
-          wasPlayingWhenBackgroundedRef.current
-        if (!skipAppForegroundDispatchForPip && !skipForActivePlayback) {
-          dispatch({
-            type: 'APP_FOREGROUND',
-            source: 'appStateForegroundHiddenRestore',
-            appState: 'active',
-            wasInPip,
-            suppressRestore: shouldSuppressRestore,
-            resumedWithBackgroundPlayback,
+        } else if (comingToForeground && isBackgroundedRef.current) {
+          handleAppStateForegroundTransition({
+            isBackgroundedRef,
+            maximizedForPipRef,
+            isInPipModeRef,
+            pipTransitionInFlightRef,
+            suppressTransientBufferingRef,
+            setIsLoading,
+            wasPlayingWhenBackgroundedRef,
+            setPipWindowSize,
+            pipTransitionTimeoutRef,
+            suppressForegroundRestoreRef,
+            suppressForegroundRestoreUntilRef,
+            currentVideoRef,
+            stateMode: state.mode,
+            dispatch,
+            restoreLastClosedVideo,
+            remotePlayWhileBackgroundedRef,
+            forceReloadPlayback,
+            isPlayingRef,
+            durationRef,
+            currentTimeRef,
+            setSeekPosition,
           })
-        }
-
-        if (!shouldSuppressRestore) {
-          if (!currentVideoRef.current) {
-            restoreLastClosedVideo('foreground')
-          }
-        }
-
-        if (remotePlayWhileBackgroundedRef.current) {
-          remotePlayWhileBackgroundedRef.current = false
-          if (!forceReloadPlayback('foreground-remote-play')) {
-            restoreLastClosedVideo('foreground-remote-play')
-          }
-        }
-
-         // Foreground seek "nudge" re-syncs the native player after backgrounding,
-         // but only when background playback actually stopped. If the player kept
-         // playing the whole time (background audio via the media notification),
-         // seeking forces ExoPlayer to rebuffer the P2P stream — an audible gap on
-         // resume — and can jump backwards when the JS-side position is stale.
-         if (!wasInPip && wasPlayingWhenBackgroundedRef.current && !isPlayingRef.current && durationRef.current > 0) {
-           const seekValue = currentTimeRef.current / durationRef.current
-           setSeekPosition(seekValue)
-           setTimeout(() => setSeekPosition(undefined), 100)
-         }
         }
       }
 
@@ -856,7 +1125,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   useEffect(() => {
      if (!isPrimaryController) return
      const unsubscribe = _videoStatsEventEmitter.subscribe((driveKey, videoPath, stats) => {
-       // Use ref for synchronous access (state may not be updated yet)
        const video = currentVideoRef.current
        if (__DEV__) {
          console.log('[VideoPlayerContext] Stats event received, checking match:', {
@@ -866,44 +1134,14 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
            currentKey: video?.channelKey
          })
        }
-       // Only update if this is for the current video.
-       // Some layers identify a video by id while others may still use legacy path formats.
-       // Normalize both before comparison so mobile/desktop stay consistent.
-       const extractVideoId = (idOrPath?: string | null) => {
-         if (!idOrPath) return null
-         const cleaned = idOrPath.split('?')[0]?.split('#')[0] || idOrPath
-         // Path case: /videos/<id>.<ext> or videos/<id>.<ext>
-         const m = cleaned.match(/(?:^|\/)videos\/([^.\/]+)(?:\.[^\/]+)?$/)
-         if (m?.[1]) return m[1]
-         // Fallback: take basename then strip extension if present (e.g. abc.mp4)
-         const base = cleaned.split('/').pop() || cleaned
-         return base.replace(/\.[^./]+$/, '')
-       }
-
-      const currentKeyRaw = (video as any)?.channelKey || (video as any)?.driveKey || null
-      const currentKey =
-        typeof currentKeyRaw === 'string' && currentKeyRaw.trim().length > 0 && currentKeyRaw !== 'unknown'
-          ? currentKeyRaw
-          : null
-       const currentId = extractVideoId((video as any)?.id) ?? extractVideoId(video?.path)
-       const incomingId = extractVideoId(videoPath)
-
-      const keysCompatible = !currentKey || !driveKey || currentKey === driveKey
-      const samePath = video?.path === videoPath
-      const sameId = Boolean(currentId && incomingId && currentId === incomingId)
-      const sameVideo = Boolean(video) && (samePath || sameId) && (keysCompatible || sameId)
-
-       if (sameVideo) {
+       if (isVideoStatsMatch(video, driveKey, videoPath)) {
          if (__DEV__) console.log('[VideoPlayerContext] Received stats event:', stats.progress + '%')
-        setVideoStats(stats)
-        if (typeof stats.progress === 'number' && stats.progress > 0) {
-          // Once the backend is serving bytes, stop showing the generic
-          // "Connecting to P2P network" gate even if the native player has not
-          // emitted onLoad/onReadyForDisplay yet.
-          setIsLoading(false)
-          isBufferingRef.current = false
-        }
-      }
+         setVideoStats(stats)
+         if (typeof stats.progress === 'number' && stats.progress > 0) {
+           setIsLoading(false)
+           isBufferingRef.current = false
+         }
+       }
      })
      return () => { unsubscribe() }
    }, [isPrimaryController])
@@ -1287,17 +1525,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     }
 
     // Confirm any pending seek once progress is close to the target.
-    if (pending) {
-      const closeEnough = Math.abs(timeS - pending.targetSeconds) < 0.75
-      const tooOld = now - pending.startedAt > 1500
-      if (closeEnough || tooOld) {
-        seekConfirmRef.current = null
-        if (seekClearTimeoutRef.current) {
-          clearTimeout(seekClearTimeoutRef.current)
-          seekClearTimeoutRef.current = null
-        }
-        setSeekPosition(undefined)
-      }
+    if (maybeResolvePendingSeek(pending, timeS, now, seekClearTimeoutRef, setSeekPosition)) {
+      seekConfirmRef.current = null
     }
     const shouldUpdateUI = now - lastUIUpdateRef.current >= UI_UPDATE_INTERVAL
     if (shouldUpdateUI) {
@@ -1336,30 +1565,27 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       if (__DEV__) console.log('[VideoPlayerContext] Ignoring transient iOS paused event during source swap')
       return
     }
-    const startupGuard = startupAutoplayGuardRef.current
     if (
-      Platform.OS === 'android' &&
-      startupGuard &&
-      Date.now() <= startupGuard.until &&
-      lastPlaybackStartKeyRef.current === startupGuard.key
+      shouldInterceptStartupPause(
+        startupAutoplayGuardRef.current,
+        lastPlaybackStartKeyRef.current,
+        clearStartupAutoplayGuard,
+        setDesiredPlaying,
+        getPlayerPort
+      )
     ) {
-      setDesiredPlaying(true)
-      try {
-        getPlayerPort()?.play?.()
-      } catch {}
       return
     }
-    if (startupGuard && Date.now() > startupGuard.until) {
-      clearStartupAutoplayGuard()
-    }
-    if (pipExitExpectedPlayingRef.current && !isInPipModeRef.current) {
-      reassertNativePlayAfterPipExit('player-paused-during-pip-exit')
-
-      if (Date.now() <= pipExitResumeUntilRef.current) {
-        return
-      }
-      pipExitShouldResumeRef.current = false
-      pipExitExpectedPlayingRef.current = false
+    if (
+      handlePipExitPaused(
+        pipExitExpectedPlayingRef,
+        isInPipModeRef,
+        pipExitShouldResumeRef,
+        pipExitResumeUntilRef,
+        reassertNativePlayAfterPipExit
+      )
+    ) {
+      return
     }
     if (seekConfirmRef.current && isPlayingRef.current) {
       if (__DEV__) console.log('[VideoPlayerContext] Ignoring transient paused event during seek')
@@ -1370,15 +1596,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       return
     }
     if (__DEV__) console.log('[VideoPlayerContext] Player paused')
-    // Sync JS state for deliberate external pauses (PiP button, notification
-    // pause, audio focus loss). Skip if the player is buffering — that's a
-    // transient pause (e.g. after notification seek on uncached content) and
-    // the player will auto-resume when data arrives. Setting isPlaying=false
-    // during buffering would send paused={true} to the component, preventing
-    // ExoPlayer from resuming.
     if (!isBufferingRef.current) {
       setIsPlaying(false)
-      // A deliberate pause is a good resume point — persist it immediately.
       recordWatchProgressSafe(currentVideoRef.current, currentTimeRef.current, durationRef.current)
     }
   }, [clearStartupAutoplayGuard, getPlayerPort, reassertNativePlayAfterPipExit, setDesiredPlaying])

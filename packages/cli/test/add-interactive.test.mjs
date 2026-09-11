@@ -105,7 +105,7 @@ test('interactive movie: search selects a movie, accepts a URL source, and publi
       executed = plan
       emit('Downloading https://x')
       emit('Uploading 50%')
-      return { status: 'replicationPending', videoId: 'v1', jobId: 'add_1' }
+      return { status: 'published', channelKey: 'chan-1', videoId: 'pub-1', url: 'peartube://channel/chan-1/video/pub-1' }
     }
   })
 
@@ -120,7 +120,7 @@ test('interactive movie: search selects a movie, accepts a URL source, and publi
 
   const finalState = await term.done
   t.is(finalState.result.status, 'completed')
-  t.is(finalState.result.value.status, 'replicationPending')
+  t.is(finalState.result.value.status, 'published')
   t.ok(executed, 'execute was invoked')
   t.is(executed.fetchUrl, 'https://example.com/clip.mp4')
   t.is(executed.itemDraft.contentKind, 'movie')
@@ -141,7 +141,7 @@ test('interactive movie: the browsed authority owns the coordinates it produces'
     },
     execute: async (plan) => {
       executed = plan
-      return { status: 'replicationPending', videoId: 'v3', jobId: 'add_3' }
+      return { status: 'published', channelKey: 'chan-1', videoId: 'pub-3', url: 'peartube://channel/chan-1/video/pub-3' }
     }
   })
 
@@ -168,7 +168,7 @@ test('interactive tv: drills show -> season -> episode, then publishes a local s
     tmdb: fakeTmdb(),
     execute: async (plan) => {
       executed = plan
-      return { status: 'replicationPending', videoId: 'v2', jobId: 'add_2' }
+      return { status: 'published', channelKey: 'chan-1', videoId: 'pub-2', url: 'peartube://channel/chan-1/video/pub-2' }
     }
   })
 
@@ -187,7 +187,7 @@ test('interactive tv: drills show -> season -> episode, then publishes a local s
   term.input.write(Buffer.from(KEY.enter)) // publish
 
   const finalState = await term.done
-  t.is(finalState.result.value.status, 'replicationPending')
+  t.is(finalState.result.value.status, 'published')
   t.is(executed.itemDraft.contentKind, 'episode')
   t.is(executed.itemDraft.episodeNumber, 1)
   t.is(executed.channelDraft.profileKind, 'tvShow')
@@ -202,7 +202,7 @@ test('interactive creator: a channel URL lists recent videos and publishes the p
     ytDlp: fakeYtDlp(),
     execute: async (plan) => {
       executed = plan
-      return { status: 'replicationPending', videoId: 'v3', jobId: 'add_3' }
+      return { status: 'published', channelKey: 'chan-1', videoId: 'pub-3', url: 'peartube://channel/chan-1/video/pub-3' }
     }
   })
 
@@ -214,7 +214,7 @@ test('interactive creator: a channel URL lists recent videos and publishes the p
   term.input.write(Buffer.from(KEY.enter)) // review -> publish
 
   const finalState = await term.done
-  t.is(finalState.result.value.status, 'replicationPending')
+  t.is(finalState.result.value.status, 'published')
   t.ok(executed, 'execute invoked for creator flow')
   t.is(executed.fetchUrl, 'https://youtu.be/aaa')
   t.is(executed.itemDraft.contentKind, 'video')
@@ -228,7 +228,7 @@ test('interactive cancel: Ctrl-C on search resolves without executing', async (t
     tmdb: fakeTmdb(),
     execute: async () => {
       executed = true
-      return { status: 'replicationPending' }
+      return { status: 'published', channelKey: 'chan-1', videoId: 'pub-cancel', url: 'peartube://channel/chan-1/video/pub-cancel' }
     }
   })
 
@@ -247,7 +247,7 @@ test('interactive movie: a multi-line URL paste at the source uses only the firs
     tmdb: fakeTmdb(),
     execute: async (plan) => {
       executed = plan
-      return { status: 'replicationPending', videoId: 'v9', jobId: 'add_9' }
+      return { status: 'published', channelKey: 'chan-1', videoId: 'pub-9', url: 'peartube://channel/chan-1/video/pub-9' }
     }
   })
 
@@ -261,7 +261,7 @@ test('interactive movie: a multi-line URL paste at the source uses only the firs
   term.input.write(Buffer.from(KEY.enter)) // publish
 
   const finalState = await term.done
-  t.is(finalState.result.value.status, 'replicationPending')
+  t.is(finalState.result.value.status, 'published')
   t.is(executed.fetchUrl, 'https://cdn/a.mp4', 'only the first pasted URL is used')
 })
 
@@ -272,7 +272,7 @@ test('interactive source: empty source never advances and a URL commits promptly
     tmdb: fakeTmdb(),
     execute: async (plan) => {
       executed = plan
-      return { status: 'replicationPending', videoId: 'v10', jobId: 'add_10' }
+      return { status: 'published', channelKey: 'chan-1', videoId: 'pub-10', url: 'peartube://channel/chan-1/video/pub-10' }
     }
   })
 
@@ -288,6 +288,6 @@ test('interactive source: empty source never advances and a URL commits promptly
   term.input.write(Buffer.from(KEY.enter)) // publish
 
   const finalState = await term.done
-  t.is(finalState.result.value.status, 'replicationPending')
+  t.is(finalState.result.value.status, 'published')
   t.is(executed.fetchUrl, 'https://example.com/x.mp4', 'URL used; empty Enter was a no-op')
 })

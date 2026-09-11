@@ -10,14 +10,7 @@
  * read `__fbBatchedBridgeConfig`.
  */
 
-let UIManager = null
-try {
-  // Prefer react-native-web's UIManager implementation.
-  const mod = require('react-native-web/dist/exports/UIManager')
-  UIManager = mod?.default ?? mod
-} catch {
-  UIManager = null
-}
+import UIManager from 'react-native-web/dist/exports/UIManager'
 
 function getWindowDimensions() {
   const scale = typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1
@@ -45,20 +38,13 @@ const SourceCode = {
   },
 }
 
-const UIManagerModule = UIManager
-  ? {
-      ...UIManager,
-      getConstants: UIManager.getConstants ?? (() => ({ ViewManagerNames: [] })),
-      getViewManagerConfig: UIManager.getViewManagerConfig ?? (() => null),
-      getConstantsForViewManager: UIManager.getConstantsForViewManager ?? (() => null),
-      getDefaultEventTypes: UIManager.getDefaultEventTypes ?? (() => ({})),
-    }
-  : {
-      getConstants: () => ({ ViewManagerNames: [] }),
-      getViewManagerConfig: () => null,
-      getConstantsForViewManager: () => null,
-      getDefaultEventTypes: () => ({}),
-    }
+const UIManagerModule = {
+  ...UIManager,
+  getConstants: UIManager.getConstants ?? (() => ({ ViewManagerNames: [] })),
+  getViewManagerConfig: UIManager.getViewManagerConfig ?? (() => null),
+  getConstantsForViewManager: UIManager.getConstantsForViewManager ?? (() => null),
+  getDefaultEventTypes: UIManager.getDefaultEventTypes ?? (() => ({})),
+}
 
 globalThis.nativeModuleProxy = {
   DeviceInfo,

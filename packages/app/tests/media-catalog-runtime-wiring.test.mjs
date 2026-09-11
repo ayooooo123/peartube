@@ -9,8 +9,19 @@ const stale = /onFeedUpdate|eventFeedUpdate|publicFeedDiscoveryJoined|refreshPub
 
 test('mobile backend forwards graph revisions without global refresh timers or caches', () => {
   const source = read('backend/index.mjs')
-  assert.match(source, /onMediaGraphUpdate:\s*\(update\) => \{/)
-  assert.match(source, /rpc\?\.eventMediaGraphUpdate\?\.\(\{[\s\S]*revision: update\.revision,[\s\S]*changedCount: update\.changedCount/)
+  const start = source.indexOf('function createMobileRpcEventBridges')
+  const end = source.indexOf('function buildMobileHandlerDepsBundle', start)
+  assert.ok(start >= 0 && end > start, 'mobile graph bridge helper should exist')
+  const createMobileRpcEventBridges = Function(
+    `${source.slice(start, end)}; return createMobileRpcEventBridges`,
+  )()
+
+  const updates = []
+  const bridges = createMobileRpcEventBridges(() => ({
+    eventMediaGraphUpdate: (update) => updates.push(update),
+  }))
+  bridges.onMediaGraphUpdate({ revision: 'revision-1', changedCount: 3 })
+  assert.deepEqual(updates, [{ revision: 'revision-1', changedCount: 3 }])
   assert.doesNotMatch(source, stale)
   assert.doesNotMatch(source, /feedRefreshInterval|persistFeedCache|requestFeedsFromPeers|setInterval/)
 })

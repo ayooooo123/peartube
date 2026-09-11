@@ -35,20 +35,8 @@ export function parseBlobId(value) {
   return { blockOffset, blockLength, byteOffset, byteLength }
 }
 
-export function normalizeBlobRefInput(value) {
-  if (typeof value === 'string') {
-    const direct = parseBlobId(value)
-    if (direct) return direct
-    const parsed = parseBlobRefString(value)
-    return parsed?.blob || null
-  }
-  if (!value || typeof value !== 'object') return null
-  const nested = value.blobId ?? value.blob ?? value.blobRef ?? value.ref ?? value.id ?? value.range
-  if (nested && nested !== value) {
-    const normalized = normalizeBlobRefInput(nested)
-    if (normalized) return normalized
-  }
-  const source = value.blob && typeof value.blob === 'object' ? value.blob : value
+function extractBlobRange(source) {
+  if (!source || typeof source !== 'object') return null
   const blockOffset = normalizeNumber(source.blockOffset)
   const blockLength = normalizeNumber(source.blockLength)
   const byteOffset = normalizeNumber(source.byteOffset)
@@ -58,6 +46,32 @@ export function normalizeBlobRefInput(value) {
   if (!finiteNonNegativeInteger(byteOffset)) return null
   if (!Number.isInteger(byteLength) || byteLength < 0) return null
   return { blockOffset, blockLength, byteOffset, byteLength }
+}
+
+function normalizeBlobRefFromString(value) {
+  const direct = parseBlobId(value)
+  if (direct) return direct
+  const parsed = parseBlobRefString(value)
+  return parsed?.blob || null
+}
+
+function resolveNestedBlobTarget(value) {
+  const nested = value.blobId ?? value.blob ?? value.blobRef ?? value.ref ?? value.id ?? value.range
+  if (nested && nested !== value) {
+    return normalizeBlobRefInput(nested)
+  }
+  return null
+}
+
+export function normalizeBlobRefInput(value) {
+  if (typeof value === 'string') {
+    return normalizeBlobRefFromString(value)
+  }
+  if (!value || typeof value !== 'object') return null
+  const nested = resolveNestedBlobTarget(value)
+  if (nested) return nested
+  const source = value.blob && typeof value.blob === 'object' ? value.blob : value
+  return extractBlobRange(source)
 }
 
 export function stringifyBlobId(value) {
@@ -92,50 +106,64 @@ function parseBlobRefString(value) {
   return null
 }
 
-export function parseBlobRef(value = {}) {
-  if (typeof value === 'string') {
-    const parsed = parseBlobRefString(value)
-    if (!parsed?.blobsCoreKey || !parsed?.blob) return null
-    return parsed
-  }
+function parseBlobRefFromStringInput(value) {
+  const parsed = parseBlobRefString(value)
+  if (!parsed?.blobsCoreKey || !parsed?.blob) return null
+  return parsed
+}
 
-  if (!value || typeof value !== 'object') return null
-
+function parseBlobRefFromRawRef(value) {
   const rawRef = value.ref || value.blobRef || value.url || value.href || null
-  if (typeof rawRef === 'string') {
-    const parsed = parseBlobRefString(rawRef)
-    if (parsed?.blobsCoreKey && parsed?.blob) {
-      return {
-        ...parsed,
-        mimeType: typeof value.mimeType === 'string' && value.mimeType.trim() ? value.mimeType.trim() : undefined,
-        byteLength: Number.isFinite(Number(value.byteLength)) ? Number(value.byteLength) : undefined,
-      }
-    }
+  if (typeof rawRef !== 'string') return null
+  const parsed = parseBlobRefString(rawRef)
+  if (!parsed?.blobsCoreKey || !parsed?.blob) return null
+  return {
+    ...parsed,
+    mimeType: typeof value.mimeType === 'string' && value.mimeType.trim() ? value.mimeType.trim() : undefined,
+    byteLength: Number.isFinite(Number(value.byteLength)) ? Number(value.byteLength) : undefined,
   }
+}
 
-  const blobsCoreKey = normalizeBlobsCoreKey(value.blobsCoreKey || value.blobsKey || value.coreKey)
-  const blobSource = value.blobId && typeof value.blobId === 'object'
-    ? value.blobId
-    : value.blobId || value.blob || value.blobRef || value.range || value.id
-  const blob = normalizeBlobRefInput(blobSource)
+function extractBlobSource(value) {
+  if (value.blobId && typeof value.blobId === 'object') {
+    return value.blobId
+  }
+  return value.blobId || value.blob || value.blobRef || value.range || value.id
+}
 
-  if (!blobsCoreKey || !blob) return null
-
+function attachBlobRefMetadata(normalized, value, blob) {
   const byteLength = normalizeNumber(value.byteLength ?? blob.byteLength ?? value.length)
-  const normalized = {
-    blobsCoreKey,
-    blobId: stringifyBlobId(blob),
-    blob,
-  }
-
   if (typeof value.mimeType === 'string' && value.mimeType.trim()) {
     normalized.mimeType = value.mimeType.trim()
   }
   if (Number.isFinite(byteLength) && byteLength >= 0) {
     normalized.byteLength = byteLength
   }
-
   return normalized
+}
+
+export function parseBlobRef(value = {}) {
+  if (typeof value === 'string') {
+    return parseBlobRefFromStringInput(value)
+  }
+
+  if (!value || typeof value !== 'object') return null
+
+  const fromRef = parseBlobRefFromRawRef(value)
+  if (fromRef) return fromRef
+
+  const blobsCoreKey = normalizeBlobsCoreKey(value.blobsCoreKey || value.blobsKey || value.coreKey)
+  const blob = normalizeBlobRefInput(extractBlobSource(value))
+
+  if (!blobsCoreKey || !blob) return null
+
+  const normalized = {
+    blobsCoreKey,
+    blobId: stringifyBlobId(blob),
+    blob,
+  }
+
+  return attachBlobRefMetadata(normalized, value, blob)
 }
 
 export function buildBlobRefCacheKey({ driveKey = 'unknown', id = 'unknown', blobsCoreKey, blobId, blob } = {}) {
@@ -159,16 +187,29 @@ function writeScoreRecord(store, key, value) {
   store[key] = value
 }
 
-export function updateBlobScore(store, blobRef, delta = 1, options = {}) {
-  const ref = parseBlobRef(blobRef) || (blobRef && typeof blobRef === 'object' ? parseBlobRef({ ...blobRef, blobsCoreKey: blobRef.blobsCoreKey || blobRef.coreKey }) : null)
-  if (!ref) return null
+function resolveScoreRef(blobRef) {
+  const direct = parseBlobRef(blobRef)
+  if (direct) return direct
+  if (blobRef && typeof blobRef === 'object') {
+    return parseBlobRef({ ...blobRef, blobsCoreKey: blobRef.blobsCoreKey || blobRef.coreKey })
+  }
+  return null
+}
 
-  const key = buildBlobRefCacheKey({
+function getScoreCacheKey(ref, blobRef, options) {
+  return buildBlobRefCacheKey({
     driveKey: options.driveKey || blobRef?.driveKey || 'unknown',
     id: options.id || blobRef?.id || 'unknown',
     blobsCoreKey: ref.blobsCoreKey,
     blobId: ref.blobId,
   })
+}
+
+export function updateBlobScore(store, blobRef, delta = 1, options = {}) {
+  const ref = resolveScoreRef(blobRef)
+  if (!ref) return null
+
+  const key = getScoreCacheKey(ref, blobRef, options)
   const now = Number(options.now || Date.now()) || Date.now()
   const timeoutMs = Number.isFinite(Number(options.timeoutMs)) ? Number(options.timeoutMs) : DEFAULT_BLOB_SCORE_TIMEOUT_MS
   const current = readScoreRecord(store, key) || {}

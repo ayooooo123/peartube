@@ -162,34 +162,69 @@ test('legacy sources fall back to the sole local writable catalog', async (t) =>
   const ownerPublisherId = b4a.toString(b4a.alloc(32, 71), 'hex')
   const localBinding = { publisherId: b4a.alloc(32, 72), catalog: { writable: true } }
   const asked = []
+  let soleAcquires = 0
+  let pageReleased = false
 
   const resolve = createLegacyCatalogResolver({
     catalogRegistry: {
-      async resolve(publisherId) {
-        asked.push(b4a.toString(publisherId, 'hex'))
-        const error = new Error('PUBLISHER_CATALOG_UNAVAILABLE')
-        error.code = 'PUBLISHER_CATALOG_UNAVAILABLE'
-        throw error
+      async acquireWritableBinding(publisherId) {
+        const hexId = b4a.toString(publisherId, 'hex')
+        asked.push(hexId)
+        if (asked.length === 1) {
+          const error = new Error('PUBLISHER_CATALOG_UNAVAILABLE')
+          error.code = 'PUBLISHER_CATALOG_UNAVAILABLE'
+          throw error
+        }
+        soleAcquires++
+        t.alike(publisherId, localBinding.publisherId, 'sole-writer acquire uses the paged id')
+        return {
+          binding: localBinding,
+          release: async () => {},
+        }
+      },
+      async listBindingPage() {
+        return {
+          items: [localBinding],
+          nextCursor: null,
+          errors: [],
+          release: async () => { pageReleased = true },
+        }
       },
       async getWritableBindings() {
-        return [localBinding]
+        t.fail('sole-writer fallback must not use warm getWritableBindings')
+        return []
       },
     },
     derivePublisherId: key => crypto.hash(key),
   })
 
   const resolved = await resolve({ ownerPublisherId })
-  t.is(resolved, localBinding, 'the local writable catalog adopts the legacy source')
-  t.is(asked.length, 1, 'the owner-derived catalog is still tried first')
+  t.ok(resolved?.binding, 'resolver returns a lease')
+  t.is(resolved.binding, localBinding, 'the local writable catalog adopts the legacy source')
+  t.is(typeof resolved.release, 'function', 'lease exposes release')
+  t.is(asked.length, 2, 'owner-derived acquire is tried first, then sole id')
+  t.is(soleAcquires, 1, 'sole writable is acquired once after the page walk')
+  t.is(pageReleased, true, 'sole-writer page walk releases before acquire')
+  await resolved.release()
 })
 
 test('a catalog owned by the source key wins over the local fallback', async (t) => {
   const ownerPublisherId = b4a.toString(b4a.alloc(32, 73), 'hex')
   const ownedBinding = { publisherId: b4a.alloc(32, 74), catalog: { writable: true } }
+  let released = false
 
   const resolve = createLegacyCatalogResolver({
     catalogRegistry: {
-      async resolve() { return ownedBinding },
+      async acquireWritableBinding() {
+        return {
+          binding: ownedBinding,
+          release: async () => { released = true },
+        }
+      },
+      async listBindingPage() {
+        t.fail('the fallback must not run when the source owns a catalog')
+        return { items: [], nextCursor: null, errors: [], release: async () => {} }
+      },
       async getWritableBindings() {
         t.fail('the fallback must not run when the source owns a catalog')
         return []
@@ -198,21 +233,134 @@ test('a catalog owned by the source key wins over the local fallback', async (t)
     derivePublisherId: key => crypto.hash(key),
   })
 
-  t.is(await resolve({ ownerPublisherId }), ownedBinding, 'the owned catalog is used')
+  const lease = await resolve({ ownerPublisherId })
+  t.is(lease.binding, ownedBinding, 'the owned catalog is used')
+  await lease.release()
+  t.is(released, true, 'owned lease release is callable')
 })
 
 // Guessing which of several publishers owns the history would attribute a
 // device's videos to the wrong catalog.
 test('ambiguous local catalogs resolve nothing rather than guessing', async (t) => {
+  let pages = 0
   const resolve = createLegacyCatalogResolver({
     catalogRegistry: {
-      async resolve() { return null },
-      async getWritableBindings() {
-        return [{ publisherId: b4a.alloc(32, 75) }, { publisherId: b4a.alloc(32, 76) }]
+      async acquireWritableBinding() {
+        t.fail('ambiguous sole-writer walk must not acquire')
+        return null
+      },
+      async listBindingPage() {
+        pages++
+        return {
+          items: [
+            { publisherId: b4a.alloc(32, 75), catalog: { writable: true } },
+            { publisherId: b4a.alloc(32, 76), catalog: { writable: true } },
+          ],
+          nextCursor: null,
+          errors: [],
+          release: async () => {},
+        }
       },
     },
     derivePublisherId: key => crypto.hash(key),
   })
 
-  t.is(await resolve({ ownerPublisherId: b4a.toString(b4a.alloc(32, 77), 'hex') }), null, 'no catalog is chosen')
+  t.is(await resolve({}), null, 'no catalog is chosen')
+  t.ok(pages >= 1, 'ambiguity is detected from the cold page walk')
+})
+
+test('cold sole-writer pages every writable and rejects page errors fail-closed', async (t) => {
+  const soleId = b4a.alloc(32, 80)
+  const soleBinding = { publisherId: soleId, catalog: { writable: true } }
+  let cursorWalks = 0
+  let acquires = 0
+  const resolveOk = createLegacyCatalogResolver({
+    catalogRegistry: {
+      async acquireWritableBinding(publisherId) {
+        // First call is owner path (no owner in this source) — only sole path runs.
+        acquires++
+        t.alike(publisherId, soleId)
+        return { binding: soleBinding, release: async () => {} }
+      },
+      async listBindingPage({ cursor = null } = {}) {
+        cursorWalks++
+        if (!cursor) {
+          return {
+            items: [{ publisherId: soleId, catalog: { writable: true, transient: true } }],
+            nextCursor: 'next',
+            errors: [],
+            release: async () => {},
+          }
+        }
+        return {
+          items: [],
+          nextCursor: null,
+          errors: [],
+          release: async () => {},
+        }
+      },
+    },
+    derivePublisherId: key => crypto.hash(key),
+  })
+  const ok = await resolveOk({ ownerPublisherId: 'not-a-hex-owner' })
+  t.is(ok.binding, soleBinding)
+  t.ok(cursorWalks >= 2, 'sole-writer walks every page cursor')
+  t.is(acquires, 1)
+
+  const resolveErr = createLegacyCatalogResolver({
+    catalogRegistry: {
+      async acquireWritableBinding() {
+        t.fail('page errors must fail closed before acquire')
+        return null
+      },
+      async listBindingPage() {
+        return {
+          items: [],
+          nextCursor: null,
+          errors: [{ key: 'x', error: 'PUBLISHER_CATALOG_UNAVAILABLE' }],
+          release: async () => {},
+        }
+      },
+    },
+    derivePublisherId: key => crypto.hash(key),
+  })
+  // catalogUnavailable swallows UNAVAILABLE into null (fail closed discovery → no sole writer)
+  t.is(await resolveErr({}), null, 'page errors do not yield a sole writer')
+})
+
+test('>64 cold writables do not false-unique via warm snapshot', async (t) => {
+  const ids = Array.from({ length: 65 }, (_, i) => b4a.alloc(32, (i + 1) & 255))
+  // Ensure uniqueness for seeds that collide on low byte
+  for (let i = 0; i < ids.length; i++) ids[i] = crypto.hash(b4a.from(`pub-${i}`))
+
+  let scanned = 0
+  const resolve = createLegacyCatalogResolver({
+    catalogRegistry: {
+      async acquireWritableBinding() {
+        t.fail('many cold writables must not acquire a false sole writer')
+        return null
+      },
+      async getWritableBindings() {
+        t.fail('must not consult warm getWritableBindings for uniqueness')
+        // Warm cache would lie with a single retained entry.
+        return [{ publisherId: ids[0], catalog: { writable: true } }]
+      },
+      async listBindingPage({ cursor = null, limit = 16 } = {}) {
+        const start = cursor ? Number(cursor) : 0
+        const slice = ids.slice(start, start + limit)
+        scanned += slice.length
+        const next = start + limit < ids.length ? String(start + limit) : null
+        return {
+          items: slice.map(publisherId => ({ publisherId, catalog: { writable: true } })),
+          nextCursor: next,
+          errors: [],
+          release: async () => {},
+        }
+      },
+    },
+    derivePublisherId: key => crypto.hash(key),
+  })
+
+  t.is(await resolve({}), null, '65 cold writables are ambiguous, not a warm sole writer')
+  t.ok(scanned >= 2, 'walk inspected more than one cold writable before rejecting')
 })

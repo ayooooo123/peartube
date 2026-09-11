@@ -39,26 +39,41 @@ function bytes (size, fill) {
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
 
 function connectionPair () {
-  const aToB = new PassThrough()
-  const bToA = new PassThrough()
+  // Protomux channels are framed messages. Keep each frame as one stream
+  // value so a same-tick channel open cannot be coalesced into a byte buffer.
+  const streamOptions = { objectMode: true }
+  const aToB = new PassThrough(streamOptions)
+  const bToA = new PassThrough(streamOptions)
   const a = Duplex.from({ readable: bToA, writable: aToB })
   const b = Duplex.from({ readable: aToB, writable: bToA })
   a.userData = null
   b.userData = null
   a.remotePublicKey = bytes(32, 181)
   b.remotePublicKey = bytes(32, 182)
+  a.once('close', () => { if (!b.destroyed) b.destroy() })
+  b.once('close', () => { if (!a.destroyed) a.destroy() })
   return { a, b }
 }
 
 function fakeSwarm () {
   const swarm = new EventEmitter()
   swarm.connections = new Set()
-  swarm.join = () => ({
-    flushed: async () => {},
-    destroy () {},
-    async suspend () {},
-    async resume () {},
-  })
+  swarm.joins = []
+  swarm.join = (topic, options) => {
+    const handle = {
+      topic: b4a.from(topic),
+      options,
+      destroyed: 0,
+      flushed: async () => {},
+      destroy () { this.destroyed++ },
+      suspended: 0,
+      resumed: 0,
+      async suspend () { this.suspended++ },
+      async resume () { this.resumed++ },
+    }
+    swarm.joins.push(handle)
+    return handle
+  }
   return swarm
 }
 
@@ -80,11 +95,20 @@ function namespaceGenesis (descriptor, root) {
 // The registry the runtime reads its own catalog through, matching the double
 // the rest of the scoped-network suite uses. `head` overrides the view head so
 // a consumer's walk can be made to never reconstruct it.
-function fakeRegistry (descriptor, { head = null } = {}) {
+function fakeRegistry (descriptor, {
+  head = null,
+  writable = true,
+  writerKey = descriptor.publisherRootKey,
+  signerKey = descriptor.publisherRootKey,
+  localWriterKey = writable ? writerKey : null,
+  localSignerKey = writable ? signerKey : null,
+} = {}) {
   const catalogEvents = new EventEmitter()
   const catalog = {
     key: descriptor.catalogBootstrapKey,
-    writable: true,
+    writable,
+    localWriterKey,
+    localSignerKey,
     replicated: [],
     async ready () {},
     async close () {},
@@ -103,8 +127,8 @@ function fakeRegistry (descriptor, { head = null } = {}) {
         policyEpoch: 0,
         policySequence: 0,
         writers: [{
-          key: b4a.toString(descriptor.publisherRootKey, 'hex'),
-          signerKey: b4a.toString(descriptor.publisherRootKey, 'hex'),
+          key: b4a.toString(writerKey, 'hex'),
+          signerKey: b4a.toString(signerKey, 'hex'),
           capabilities: ['announce', 'publish'],
           firstAcceptedSequence: 0,
           lastAcceptedSequence: 0,
@@ -139,6 +163,10 @@ function fakeRegistry (descriptor, { head = null } = {}) {
   }
   return {
     binding,
+    async acquireWritableBinding () {
+      if (!writable) throw new Error('catalog is read-only')
+      return { binding, async release () { return true } }
+    },
     async bindNamespace () { return binding },
     async resolve () { return binding },
     async release () { return true },
@@ -147,15 +175,18 @@ function fakeRegistry (descriptor, { head = null } = {}) {
 
 test('a publisher scope that loses its catalog peer recovers on the next republished locator', async (t) => {
   const root = crypto.keyPair(bytes(32, 183))
+  const proposedWriter = crypto.keyPair(bytes(32, 185))
+  const locatorSigner = crypto.keyPair(bytes(32, 186))
   const descriptor = createPublisherNamespaceDescriptor({
     genesisRootKey: root.publicKey,
     catalogBootstrapKey: bytes(32, 184),
   })
   const genesis = namespaceGenesis(descriptor, root)
 
-  const sourceRegistry = fakeRegistry(descriptor)
-  sourceRegistry.binding.catalog.localWriterKey = root.publicKey
-  sourceRegistry.binding.catalog.localSignerKey = root.publicKey
+  const sourceRegistry = fakeRegistry(descriptor, {
+    writerKey: proposedWriter.publicKey,
+    signerKey: locatorSigner.publicKey,
+  })
   sourceRegistry.binding.catalog.listProjections = async kind => ({
     items: kind === 'publication' ? [{ accepted: true }] : [],
     nextCursor: null,
@@ -164,7 +195,7 @@ test('a publisher scope that loses its catalog peer recovers on the next republi
     ? {
         entries: [{
           operationId: b4a.toString(genesis.recordId, 'hex'),
-          sourceWriterKey: root.publicKey,
+          sourceWriterKey: proposedWriter.publicKey,
           frame: encodePublisherCatalogFrame(genesis),
         }],
         nextCursor: null,
@@ -174,8 +205,8 @@ test('a publisher scope that loses its catalog peer recovers on the next republi
     policyEpoch: 0,
     policySequence: 0,
     writers: [{
-      key: b4a.toString(root.publicKey, 'hex'),
-      signerKey: b4a.toString(root.publicKey, 'hex'),
+      key: b4a.toString(proposedWriter.publicKey, 'hex'),
+      signerKey: b4a.toString(locatorSigner.publicKey, 'hex'),
       capabilities: ['announce', 'publish'],
       firstAcceptedSequence: 0,
       lastAcceptedSequence: 0,
@@ -187,14 +218,18 @@ test('a publisher scope that loses its catalog peer recovers on the next republi
 
   // A consumer that reads the publisher's catalog successfully, so the session
   // it loses later is a healthy one rather than one already failing.
-  const consumerRegistry = fakeRegistry(descriptor)
+  const consumerRegistry = fakeRegistry(descriptor, {
+    writable: false,
+    writerKey: proposedWriter.publicKey,
+    signerKey: locatorSigner.publicKey,
+  })
   consumerRegistry.binding.catalog.ingestAcceptedPage = async entries => ({
     accepted: entries.length,
     rejected: 0,
   })
 
   const sourceSwarm = fakeSwarm()
-  sourceSwarm.keyPair = root
+  sourceSwarm.keyPair = locatorSigner
   const consumerSwarm = fakeSwarm()
 
   // One mux per connection, with every channel each runtime opens recorded, so

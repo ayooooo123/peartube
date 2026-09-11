@@ -170,6 +170,87 @@ test('playhead sends exactly one delayed hedge to a different peer and aborts th
   t.is(primaryAborted, 1)
 })
 
+test('hedge winner aborts a stalled loser possession check and frees its transport run slot', async (t) => {
+  const fixture = await proofFixture(t, 1)
+  const ownership = new Map([['peer-a', [0]], ['peer-b', [0]]])
+  const possessionGate = deferred()
+  const loserPossessionStarted = deferred()
+  let loserPossession = null
+  let possessionChecks = 0
+  const transport = verifiedTransport({
+    assetId: fixture.asset.descriptor.assetId, session: fixture.session, ownership, applyBlock: fixture.applyBlock,
+    async onRequest(request, { applyBlock }) {
+      if (request.peerIds[0] === 'peer-a') {
+        // the loser reports block ids without ever producing the verified bytes
+        return { verifiedBlockIndexes: [0], peerIds: ['peer-a'] }
+      }
+      await loserPossessionStarted.promise
+      await applyBlock(0)
+      return { verifiedBlockIndexes: [0], peerIds: ['peer-b'] }
+    },
+  })
+  const sessionHasVerifiedBlock = transport.hasVerifiedAssetBlock
+  transport.hasVerifiedAssetBlock = (request) => {
+    possessionChecks++
+    if (possessionChecks !== 2) return sessionHasVerifiedBlock(request)
+    // the loser's post-transfer possession check waits only on its received signal;
+    // the manual possession gate below is never released by this test
+    loserPossession = Promise.race([
+      possessionGate.promise,
+      new Promise((resolve, reject) => {
+        request.signal.addEventListener('abort', () => reject(request.signal.reason), { once: true })
+      }),
+    ])
+    loserPossessionStarted.resolve()
+    return loserPossession
+  }
+  const scheduler = createMultiPeerScheduler({ coreRef: fixture.asset.descriptor, session: fixture.session, transport })
+  const result = await scheduler.requestRange({ assetId: fixture.asset.descriptor.assetId, byteStart: 0, byteEnd: ASSET_BLOCK_SIZE, deadlineMs: 150 })
+  t.is(result.status, 'ok')
+  t.alike(result.peerIds, ['peer-b'])
+  t.alike(result.bytes, fixture.sourceBytes)
+  const loserError = await Promise.race([
+    loserPossession.then(() => null, error => error),
+    new Promise(resolve => setTimeout(() => resolve('stalled'), 50)),
+  ])
+  t.is(loserError?.name, 'AbortError', 'loser possession check must abort with its attempt')
+  await new Promise(resolve => setImmediate(resolve))
+  t.is(scheduler.metrics().activeTransportRuns, 0, 'loser must return its run slot without releasing the possession gate')
+  t.is(scheduler.metrics().waitingTransportRuns, 0)
+  t.is(scheduler.metrics().inFlightBytes, 0)
+})
+
+test('caller abort during byte materialization rejects and stops further verified reads', async (t) => {
+  const fixture = await proofFixture(t, 2)
+  const ownership = new Map([['peer-a', [0, 1]]])
+  const readGate = deferred()
+  const firstReadStarted = deferred()
+  let reads = 0
+  const transport = verifiedTransport({ assetId: fixture.asset.descriptor.assetId, session: fixture.session, ownership, applyBlock: fixture.applyBlock })
+  const sessionReadVerifiedBlock = transport.readVerifiedAssetBlock
+  transport.readVerifiedAssetBlock = async (request) => {
+    reads++
+    if (reads === 1) firstReadStarted.resolve()
+    await readGate.promise
+    return sessionReadVerifiedBlock(request)
+  }
+  const scheduler = createMultiPeerScheduler({ coreRef: fixture.asset.descriptor, session: fixture.session, transport })
+  const controller = new AbortController()
+  const pending = scheduler.requestRange({
+    assetId: fixture.asset.descriptor.assetId, byteStart: 0, byteEnd: 2 * ASSET_BLOCK_SIZE,
+    deadlineMs: 1000, signal: controller.signal,
+  })
+  const observed = pending.then(() => null, error => error)
+  await firstReadStarted.promise
+  controller.abort()
+  readGate.resolve()
+  const error = await Promise.race([observed, new Promise(resolve => setTimeout(() => resolve('stalled'), 50))])
+  t.is(error?.name, 'AbortError', 'caller abort during materialization must reject through the terminal error path')
+  t.is(reads, 1, 'materialization must not read further blocks after the caller aborts')
+  t.is(scheduler.metrics().inFlightBytes, 0)
+  t.is(scheduler.metrics().activeTransportRuns, 0)
+})
+
 test('invalid proof is classified, cooled down, and retried from another verified peer', async (t) => {
   const fixture = await proofFixture(t, 1)
   const ownership = new Map([['peer-a', [0]], ['peer-b', [0]]])

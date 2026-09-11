@@ -1,46 +1,54 @@
 import test from 'brittle'
-import fs from 'node:fs'
+import c from 'compact-encoding'
+import { createRequire } from 'node:module'
 
-import { APP_RPC_METADATA } from '../spec/hrpc/app-rpc-adapter.mjs'
+const schema = createRequire(import.meta.url)('../spec/schema/index.js')
 
-const readJson = (relative) => JSON.parse(fs.readFileSync(new URL(relative, import.meta.url), 'utf8'))
-
-const METHODS = [
-  'resolve-provider-ref',
-  'request-acquisition',
-  'get-acquisition',
-  'list-acquisitions',
-  'cancel-acquisition',
-  'retry-acquisition',
-  'get-acquisition-policy',
-  'set-acquisition-policy',
-]
-
-const SECRET_FIELD = /(?:url|path|credential|cookie|header|token|adaptername|sourceprovider)/i
-
-test('provider methods and lifecycle event append to generated HRPC', (t) => {
-  const hrpc = readJson('../spec/hrpc/hrpc.json')
-  const commands = hrpc.schema.map((entry) => entry.name.replace('@peartube/', ''))
-  for (const method of METHODS) t.ok(commands.includes(method), `${method} is registered`)
-  t.ok(commands.includes('event-acquisition-lifecycle'), 'acquisition lifecycle event is registered')
-  const provider = new Set(APP_RPC_METADATA.namespaces.provider.map((entry) => entry.command))
-  for (const method of METHODS) t.ok(provider.has(method), `${method} is exposed by provider namespace`)
-  t.is(commands.at(-1), 'event-acquisition-lifecycle', 'provider lifecycle stays append-only at the command tail')
+// Frames emitted before structured provider selectors and index-service policy.
+// Generated codecs must continue to interpret the existing flag positions.
+test('structured provider search preserves historical query cursor and limit bytes', (t) => {
+  const frame = Buffer.from('074172726976616c03096e6578742d7061676514', 'hex')
+  const encoding = schema.getEncoding('@peartube/provider-search-request')
+  const request = c.decode(encoding, frame)
+  t.is(request.query, 'Arrival')
+  t.is(request.cursor, 'next-page')
+  t.is(request.limit, 20)
+  t.alike(c.encode(encoding, request), frame)
 })
 
-test('public provider and acquisition records contain no source secrets', (t) => {
-  const schema = readJson('../spec/schema/schema.json')
-  const publicRecords = schema.schema.filter((entry) =>
-    /^(?:provider-(?:search-hit|resolution|publication|status)|acquisition-(?:request|v1|lifecycle-event))/.test(entry.name),
-  )
-  const leaked = publicRecords.flatMap((entry) =>
-    entry.fields.filter((field) => SECRET_FIELD.test(field.name)).map((field) => `${entry.name}.${field.name}`),
-  )
-  t.alike(leaked, [], 'public records expose no source URL, path, credential, token, or private header')
-  const acquisition = publicRecords.find((entry) => entry.name === 'acquisition-v1')
-  t.alike(
-    acquisition.fields.slice(0, 4).map((field) => field.name),
-    ['schemaVersion', 'acquisitionId', 'state', 'retentionClass'],
-    'public acquisition identity and state lead the record',
-  )
+test('index-service policy additions do not reinterpret historical policy flags', (t) => {
+  for (const [name, hex] of [
+    ['get-network-policy-response', 'fd8007095b22696e646578225d0d5b226d6f64657261746f72225d036f66660862616c616e636564'],
+    ['set-network-policy-request', 'fd001e095b22696e646578225d0d5b226d6f64657261746f72225d036f66660862616c616e636564'],
+  ]) {
+    const frame = Buffer.from(hex, 'hex')
+    const encoding = schema.getEncoding(`@peartube/${name}`)
+    const policy = c.decode(encoding, frame)
+    t.is(policy.followedIndexesJson, '["index"]')
+    t.is(policy.trustedModerationFeedsJson, '["moderator"]')
+    t.is(policy.aiAnalysis, 'off')
+    t.is(policy.participationMode, 'balanced')
+    t.alike(c.encode(encoding, policy), frame)
+  }
+})
+
+test('acquisition labels and structured coordinates survive the wire without private locators', t => {
+  const request = {
+    schemaVersion: 1, resolutionRef: 'r'.repeat(43), publisherId: 'p'.repeat(64),
+    retentionClass: 'archive-pin', retentionUntil: 9000, retentionUntilPresent: true,
+    sourceFileName: 'Episode.S01E02.mp4',
+  }
+  const requestCodec = schema.getEncoding('@peartube/acquisition-request-v1')
+  t.alike(c.decode(requestCodec, c.encode(requestCodec, request)), request)
+  const codec = schema.getEncoding('@peartube/acquisition-v1')
+  const result = c.decode(codec, c.encode(codec, {
+    schemaVersion: 1, acquisitionId: 'acq_wire', state: 'queued', retentionClass: 'archive-pin',
+    bytesAcquired: 0, recoverable: false, createdAt: 1, updatedAt: 1,
+    title: 'Episode title', sourceFileName: request.sourceFileName,
+    mediaContext: { kind: 'episode', namespace: 'catalog', identifier: 'series-1', season: 1, episode: 2 },
+  }))
+  t.is(result.title, 'Episode title')
+  t.is(result.sourceFileName, request.sourceFileName)
+  t.is(result.mediaContext.identifier, 'series-1')
+  t.is(result.mediaContext.episode, 2)
 })

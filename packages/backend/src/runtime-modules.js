@@ -1,4 +1,5 @@
-/* eslint-disable no-empty, @typescript-eslint/no-require-imports */
+import { requireOptionalModule } from './runtime-require.cjs'
+
 function unwrapModule(mod) {
   return mod?.default || mod
 }
@@ -10,29 +11,30 @@ export function setHyperswarmModuleForRuntime(mod) {
 }
 
 function tryRequire(specifier) {
+  // Bare exposes require globally; Node ESM must use the async loaders below.
   if (typeof require !== 'function') return null
-
-  try {
-    return unwrapModule(require(specifier))
-  } catch {
-    return null
-  }
+  return requireOptionalModule(specifier)
 }
 
 export function resolveBareFsModuleSync() {
-  return tryRequire('bare-fs')
+  return unwrapModule(tryRequire('bare-fs'))
 }
 
 export function resolveBarePathModuleSync() {
-  return tryRequire('bare-path')
+  return unwrapModule(tryRequire('bare-path'))
+}
+
+export function resolveBareFfmpegModuleSync() {
+  // FFmpeg callers normalize default exports with ?? rather than the shared ||.
+  return tryRequire('bare-ffmpeg')
 }
 
 export function resolveBareOrNodeFsModuleSync() {
-  return resolveBareFsModuleSync() || tryRequire('node:fs')
+  return resolveBareFsModuleSync() || unwrapModule(tryRequire('node:fs'))
 }
 
 export function resolveBareOrNodePathModuleSync() {
-  return resolveBarePathModuleSync() || tryRequire('node:path')
+  return resolveBarePathModuleSync() || unwrapModule(tryRequire('node:path'))
 }
 
 export async function loadBareFsModule() {
@@ -55,7 +57,9 @@ export async function loadBareOrNodeFsModule() {
 
   try {
     return await loadBareFsModule()
-  } catch {}
+  } catch {
+    // Bare's optional filesystem addon is unavailable; try the Node runtime.
+  }
 
   const nodeFsName = 'node:' + 'fs'
   return unwrapModule(await import(nodeFsName))
@@ -67,7 +71,9 @@ export async function loadBareOrNodePathModule() {
 
   try {
     return await loadBarePathModule()
-  } catch {}
+  } catch {
+    // Bare's optional path addon is unavailable; try the Node runtime.
+  }
 
   const nodePathName = 'node:' + 'path'
   return unwrapModule(await import(nodePathName))
@@ -76,19 +82,21 @@ export async function loadBareOrNodePathModule() {
 export async function loadHyperswarmModule() {
   if (preloadedHyperswarmModule) return preloadedHyperswarmModule
 
-  const required = tryRequire('hyperswarm')
+  const required = unwrapModule(tryRequire('hyperswarm'))
   if (required) return required
 
   return unwrapModule(await import('hyperswarm'))
 }
 
 export async function loadBareOrNodeHttpModule() {
-  const required = tryRequire('bare-http1')
+  const required = unwrapModule(tryRequire('bare-http1'))
   if (required) return required
 
   try {
     return unwrapModule(await import('bare-http1'))
-  } catch {}
+  } catch {
+    // Bare's optional HTTP addon is unavailable; try the Node runtime.
+  }
 
   const nodeHttpName = 'node:' + 'http'
   return unwrapModule(await import(nodeHttpName))

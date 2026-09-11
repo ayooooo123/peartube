@@ -43,40 +43,153 @@ export type MediaEntityView = {
   publisherDeviceStatus: PublisherDeviceStatusInput | null
 }
 
-export function normalizeMediaEntityView(entity: MediaEntityInput | null | undefined, fallbackId = ''): MediaEntityView {
-  const provenanceCount = Array.isArray(entity?.provenance) ? Math.min(entity.provenance.length, 64) : 0
-  const conflictCount = Array.isArray(entity?.conflicts) ? Math.min(entity.conflicts.length, 64) : 0
-  const rawPledgeCount = entity?.archiveStatus?.pledgeCount
-  const pledgeCount = Number.isSafeInteger(rawPledgeCount) && Number(rawPledgeCount) >= 0
-    ? Math.min(Number(rawPledgeCount), 1_000_000)
-    : 0
-  const sources = Array.isArray(entity?.sources) ? entity.sources : []
-  const requestedPublicationId = typeof entity?.selectedPublicationId === 'string'
-    ? entity.selectedPublicationId
-    : null
-  let selectedPublicationId: string | null = null
+function findSelectedPublicationId(sources: PublicationSource[], requestedPublicationId: string | null): string | null {
   for (const source of sources) {
     const requested = requestedPublicationId
       ? source?.publicationId === requestedPublicationId
       : source?.selected === true
     if (requested && isPublicationSourceSelectable(source)) {
-      selectedPublicationId = source.publicationId
-      break
+      return source.publicationId
+    }
+  }
+  return null
+}
+
+function parsePledgeCount(rawPledgeCount: unknown): number {
+  if (Number.isSafeInteger(rawPledgeCount) && Number(rawPledgeCount) >= 0) {
+    return Math.min(Number(rawPledgeCount), 1_000_000)
+  }
+  return 0
+}
+
+function formatProvenanceSummary(provenance: unknown): string[] {
+  const count = Array.isArray(provenance) ? Math.min(provenance.length, 64) : 0
+  if (count <= 0) return []
+  return [`${count} provenance record${count === 1 ? '' : 's'} available.`]
+}
+
+function formatConflictSummary(conflicts: unknown): Array<{ field: string }> {
+  const count = Array.isArray(conflicts) ? Math.min(conflicts.length, 64) : 0
+  if (count <= 0) return []
+  return [{ field: `${count} source claim${count === 1 ? '' : 's'}` }]
+}
+
+export function normalizeMediaEntityView(entity: MediaEntityInput | null | undefined, fallbackId = ''): MediaEntityView {
+  const sources = Array.isArray(entity?.sources) ? entity.sources : []
+  const requestedPublicationId = typeof entity?.selectedPublicationId === 'string'
+    ? entity.selectedPublicationId
+    : null
+  const selectedPublicationId = findSelectedPublicationId(sources, requestedPublicationId)
+  const pledgeCount = parsePledgeCount(entity?.archiveStatus?.pledgeCount)
+
+  const entityTitle = typeof entity?.title === 'string' && entity.title.trim() ? entity.title : 'Media details'
+  const entityId = typeof entity?.entityId === 'string' ? entity.entityId : fallbackId
+  const contributions = Array.isArray(entity?.contributions)
+    ? entity.contributions
+    : [{ role: 'uploader' }, { role: 'performer' }, { role: 'director' }]
+
+  return {
+    entityId,
+    title: entityTitle,
+    sources,
+    selectedPublicationId,
+    provenance: formatProvenanceSummary(entity?.provenance),
+    conflicts: formatConflictSummary(entity?.conflicts),
+    archiveStatus: { pledgeCount },
+    contributions,
+    publisherDeviceStatus: entity?.publisherDeviceStatus || null,
+  }
+}
+
+function buildRouteSourceEntity(loaded: { item: MediaEntityInput | null; error: unknown }, entityId: string) {
+  if (loaded.item) return loaded.item
+  if (loaded.error) {
+    return {
+      entityId,
+      title: entityId ? `Media ${entityId}` : 'Media details',
+      subtitle: `Media graph request failed: ${loaded.error}`,
+      loadError: loaded.error,
+      sources: [],
+    }
+  }
+  return null
+}
+
+function buildMediaEntityItemParam(
+  sourceEntity: MediaEntityInput | null,
+  resolved: MediaEntityView,
+  securityStatus: PublisherDeviceStatusInput | null
+) {
+  if (!sourceEntity) return undefined
+  return encodeMediaEntityRouteParam({
+    ...sourceEntity,
+    id: resolved.entityId,
+    entityId: resolved.entityId,
+    localEntityId: resolved.entityId,
+    entityKind: 'work',
+    title: resolved.title,
+    sources: resolved.sources,
+    provenance: resolved.provenance,
+    conflicts: resolved.conflicts,
+    archiveStatus: resolved.archiveStatus,
+    contributions: resolved.contributions,
+    publisherDeviceStatus: securityStatus,
+  } as unknown as Parameters<typeof encodeMediaEntityRouteParam>[0])
+}
+
+function playbackFailureFromError(error: unknown) {
+  const failure = error instanceof Error ? error : null
+  const code = failure && 'code' in failure && typeof failure.code === 'string'
+    ? failure.code
+    : 'PLAYBACK_PREPARATION_FAILED'
+  return {
+    errorCode: code,
+    message: failure?.message || 'Playback could not start',
+  }
+}
+
+function resolvePrimaryAction({
+  providerResolution,
+  acquiredEntity,
+  acquisition,
+  acquisitionError,
+  onCancel,
+  onRequest,
+}: {
+  providerResolution: ProviderResolution | null
+  acquiredEntity: MediaEntityInput | null
+  acquisition: Acquisition | null
+  acquisitionError: string | null
+  onCancel: () => void
+  onRequest: () => void
+}) {
+  if (!providerResolution || acquiredEntity) return undefined
+
+  const isActive = Boolean(acquisition && ['queued', 'acquiring', 'verifying', 'publishing'].includes(acquisition.state))
+  if (isActive) {
+    return {
+      label: 'Cancel request',
+      status: acquisitionProgressLabel(acquisition!),
+      onPress: onCancel,
     }
   }
 
+  if (acquisition?.state === 'completed') {
+    return {
+      label: 'Preparing playback…',
+      disabled: true,
+      status: acquisitionError,
+      onPress: () => {},
+    }
+  }
+
+  const isRetry = acquisition?.state === 'failed' || acquisition?.state === 'cancelled'
+  const progressStatus = acquisition ? acquisitionProgressLabel(acquisition) : null
   return {
-    entityId: typeof entity?.entityId === 'string' ? entity.entityId : fallbackId,
-    title: typeof entity?.title === 'string' && entity.title.trim() ? entity.title : 'Media details',
-    sources,
-    selectedPublicationId,
-    provenance: provenanceCount > 0 ? [`${provenanceCount} provenance record${provenanceCount === 1 ? '' : 's'} available.`] : [],
-    conflicts: conflictCount > 0 ? [{ field: `${conflictCount} source claim${conflictCount === 1 ? '' : 's'}` }] : [],
-    archiveStatus: { pledgeCount },
-    contributions: Array.isArray(entity?.contributions)
-      ? entity.contributions
-      : [{ role: 'uploader' }, { role: 'performer' }, { role: 'director' }],
-    publisherDeviceStatus: entity?.publisherDeviceStatus || null,
+    label: isRetry ? 'Request again' : 'Request this title',
+    disabled: !providerResolution.acquirable,
+    status: acquisitionError || progressStatus,
+    onPress: onRequest,
   }
 }
 
@@ -188,35 +301,12 @@ export default function MediaEntityPage({
     rpc: mediaGraph,
     loader: loadMediaEntity,
   })
-  const routeSourceEntity = loaded.item || (loaded.error
-    ? {
-        entityId,
-        title: entityId ? `Media ${entityId}` : 'Media details',
-        subtitle: `Media graph request failed: ${loaded.error}`,
-        loadError: loaded.error,
-        sources: [],
-      }
-    : null)
+  const routeSourceEntity = buildRouteSourceEntity(loaded, entityId ?? '')
   const sourceEntity = acquiredEntity || routeSourceEntity
   const providerResolution = providerResolutionFrom(sourceEntity)
   const resolved = normalizeMediaEntityView(sourceEntity, entityId)
   const securityStatus = publisherDeviceStatus || resolved.publisherDeviceStatus
-  const itemParam = sourceEntity
-    ? encodeMediaEntityRouteParam({
-        ...sourceEntity,
-        id: resolved.entityId,
-        entityId: resolved.entityId,
-        localEntityId: resolved.entityId,
-        entityKind: 'work',
-        title: resolved.title,
-        sources: resolved.sources,
-        provenance: resolved.provenance,
-        conflicts: resolved.conflicts,
-        archiveStatus: resolved.archiveStatus,
-        contributions: resolved.contributions,
-        publisherDeviceStatus: securityStatus,
-      } as any)
-    : undefined
+  const itemParam = buildMediaEntityItemParam(sourceEntity, resolved, securityStatus)
   // Choosing a source in Other Sources is a Play with an explicit override, not
   // a local re-rank: it goes back through the backend selector, which still
   // refuses the choice if it fails a hard gate and still fails over between
@@ -257,14 +347,11 @@ export default function MediaEntityPage({
         byteLength: renditionByteLength(sourceEntity, prepared.renditionId),
       })
     } catch (error: unknown) {
-      const failure = error instanceof Error ? error : null
-      const code = failure && 'code' in failure && typeof failure.code === 'string'
-        ? failure.code
-        : 'PLAYBACK_PREPARATION_FAILED'
+      const failure = playbackFailureFromError(error)
       onPlaybackFailed?.({
         entityId,
-        errorCode: code,
-        message: failure?.message || 'Playback could not start',
+        errorCode: failure.errorCode,
+        message: failure.message,
       })
     }
   }, [mediaGraph, entityId, resolved.title, sourceEntity, onPlaybackPrepared, onPlaybackFailed])
@@ -315,9 +402,10 @@ export default function MediaEntityPage({
   }, [acquisition?.acquisitionId, provider, providerEvents])
 
   React.useEffect(() => {
-    if (!provider || !mediaGraph || !acquisitionCanPlay(acquisition) || acquiredEntity) return
+    const publicationId = acquisitionCanPlay(acquisition) ? acquisition?.publicationId : null
+    if (!provider || !mediaGraph || !publicationId || acquiredEntity) return
     let active = true
-    void provider.getPublication({ publicationId: acquisition.publicationId as string }).then(async (response) => {
+    void provider.getPublication({ publicationId }).then(async (response) => {
       if (!response || typeof response !== 'object' || !('publication' in response)) {
         throw new Error('Publication reload failed')
       }
@@ -344,30 +432,14 @@ export default function MediaEntityPage({
     void play(params.publicationId || null)
   }, [params.autoplay, params.publicationId, play, providerResolution, sourceEntity])
 
-  const activeAcquisition = acquisition && ['queued', 'acquiring', 'verifying', 'publishing'].includes(acquisition.state)
-  const primaryAction = providerResolution && !acquiredEntity
-    ? activeAcquisition
-      ? {
-          label: 'Cancel request',
-          status: acquisitionProgressLabel(acquisition),
-          onPress: () => { void cancelAcquisition() },
-        }
-      : acquisition?.state === 'completed'
-        ? {
-            label: 'Preparing playback…',
-            disabled: true,
-            status: acquisitionError,
-            onPress: () => {},
-          }
-        : {
-            label: acquisition?.state === 'failed' || acquisition?.state === 'cancelled'
-              ? 'Request again'
-              : 'Request this title',
-            disabled: !providerResolution.acquirable,
-            status: acquisitionError || (acquisition ? acquisitionProgressLabel(acquisition) : null),
-            onPress: () => { void requestAcquisition() },
-          }
-    : undefined
+  const primaryAction = resolvePrimaryAction({
+    providerResolution,
+    acquiredEntity,
+    acquisition,
+    acquisitionError,
+    onCancel: () => { void cancelAcquisition() },
+    onRequest: () => { void requestAcquisition() },
+  })
 
 
   return (

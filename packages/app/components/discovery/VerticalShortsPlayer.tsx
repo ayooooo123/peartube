@@ -1,5 +1,5 @@
 import { memo, RefObject, useCallback, useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, ImageBackground, LayoutChangeEvent, Pressable, StyleSheet, View } from 'react-native'
+import { ActivityIndicator, GestureResponderEvent, ImageBackground, LayoutChangeEvent, Pressable, StyleSheet, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
 import type { VideoData } from '@peartube/core'
@@ -29,6 +29,155 @@ function getShortsVideoKey(video: VideoData, fallbackUrl?: string | null) {
 function clampProgress(value: number) {
   if (!Number.isFinite(value)) return 0
   return Math.max(0, Math.min(1, value))
+}
+function teardownPlayer(player: PlayerPort | null) {
+  if (!player) return
+  try {
+    void player.exitPictureInPicture?.()
+  } catch { /* player may already be gone */ }
+  try {
+    void player.stop?.()
+  } catch { /* player may already be gone */ }
+  try {
+    void player.destroy?.()
+  } catch { /* player may already be gone */ }
+}
+
+function extractVideoSize(event: unknown): { width: number; height: number } | null {
+  if (!event || typeof event !== 'object' || !('type' in event)) return null
+  const e = event as Record<string, unknown>
+  if (e.type !== 'video-size') return null
+  const width = Number(e.mVideoWidth || e.width)
+  const height = Number(e.mVideoHeight || e.height)
+  if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+    return { width, height }
+  }
+  return null
+}
+
+type CenterPlaybackControlsProps = {
+  isPaused: boolean
+  onPlay: () => void
+  onPause: () => void
+}
+
+function CenterPlaybackControls({ isPaused, onPlay, onPause }: CenterPlaybackControlsProps) {
+  return (
+    <View style={styles.centerPlaybackControls} pointerEvents="box-none">
+      <Pressable
+        onPress={isPaused ? onPlay : onPause}
+        style={styles.centerControlButton}
+        accessibilityLabel={isPaused ? 'Play Shorts video' : 'Pause Shorts video'}
+      >
+        <Feather name={isPaused ? 'play' : 'pause'} color="#fff" size={30} />
+      </Pressable>
+    </View>
+  )
+}
+
+type PlaybackOverlayButtonProps = {
+  hasPlaybackError: boolean
+  onReplay?: () => void
+}
+
+function PlaybackOverlayButton({ hasPlaybackError, onReplay }: PlaybackOverlayButtonProps) {
+  return (
+    <Pressable onPress={onReplay} style={styles.playButtonShell} accessibilityLabel="Play vertical video">
+      <Feather name={hasPlaybackError ? 'rotate-cw' : 'play'} color="#fff" size={42} />
+    </Pressable>
+  )
+}
+
+type ShortsProgressBarProps = {
+  effectiveProgress: number
+  bottomOffset: number
+  onPress: (event: GestureResponderEvent) => void
+  onLayout: (event: LayoutChangeEvent) => void
+}
+
+function ShortsProgressBar({ effectiveProgress, bottomOffset, onPress, onLayout }: ShortsProgressBarProps) {
+  return (
+    <View style={[styles.progressDock, { bottom: bottomOffset }]} pointerEvents="box-none">
+      <Pressable
+        onPress={onPress}
+        onLayout={onLayout}
+        style={styles.progressTrack}
+        accessibilityRole="adjustable"
+        accessibilityLabel="Shorts progress bar"
+      >
+        <View style={styles.progressRail}>
+          <View style={[styles.progressFillGlow, { width: `${effectiveProgress * 100}%` }]} />
+          <View style={[styles.progressFill, { width: `${effectiveProgress * 100}%` }]} />
+        </View>
+      </Pressable>
+    </View>
+  )
+}
+
+
+function ShortsOverlays({
+  showPlayer,
+  isActive,
+  isLoading,
+  controlsVisible,
+  isLandscape,
+  hasPlaybackError,
+  isPaused,
+  effectiveProgress,
+  progressBottomOffset,
+  onReplay,
+  onPlay,
+  onPause,
+  onProgressPress,
+  onProgressLayout,
+}: {
+  showPlayer: boolean
+  isActive: boolean
+  isLoading: boolean
+  controlsVisible: boolean
+  isLandscape: boolean
+  hasPlaybackError: boolean
+  isPaused: boolean
+  effectiveProgress: number
+  progressBottomOffset: number
+  onReplay?: () => void
+  onPlay: () => void
+  onPause: () => void
+  onProgressPress: (event: GestureResponderEvent) => void
+  onProgressLayout: (event: LayoutChangeEvent) => void
+}) {
+  return (
+    <>
+      {showPlayer && isLandscape ? (
+        <View pointerEvents="none" style={styles.landscapeMatte} />
+      ) : null}
+
+      {isLoading ? (
+        <View style={styles.centerOverlay}>
+          <View style={styles.loadingOrb}>
+            <ActivityIndicator color="#fff" size="small" />
+          </View>
+        </View>
+      ) : null}
+
+      {!showPlayer && !isLoading ? (
+        <PlaybackOverlayButton hasPlaybackError={hasPlaybackError} onReplay={onReplay} />
+      ) : null}
+
+      {showPlayer && controlsVisible ? (
+        <CenterPlaybackControls isPaused={isPaused} onPlay={onPlay} onPause={onPause} />
+      ) : null}
+
+      {(showPlayer || isActive) && controlsVisible ? (
+        <ShortsProgressBar
+          effectiveProgress={effectiveProgress}
+          bottomOffset={progressBottomOffset}
+          onPress={onProgressPress}
+          onLayout={onProgressLayout}
+        />
+      ) : null}
+    </>
+  )
 }
 
 export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
@@ -65,26 +214,7 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
 
   useEffect(() => {
     return () => {
-      const player = playerRef.current
-      if (!player) return
-
-      try {
-        void player.exitPictureInPicture?.()
-      } catch {
-        // Best effort teardown; individual native calls may already be disposed.
-      }
-
-      try {
-        void player.stop?.()
-      } catch {
-        // Best effort teardown; individual native calls may already be disposed.
-      }
-
-      try {
-        void player.destroy?.()
-      } catch {
-        // Best effort teardown; individual native calls may already be disposed.
-      }
+      teardownPlayer(playerRef.current)
     }
   }, [playerRef])
 
@@ -93,13 +223,9 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
     return videoSize.width > videoSize.height * 1.12
   }, [videoSize])
 
-  const handleVideoStateChange = useCallback((event: any) => {
-    if (event?.type !== 'video-size') return
-    const width = Number(event.mVideoWidth || event.width)
-    const height = Number(event.mVideoHeight || event.height)
-    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
-      setVideoSize({ width, height })
-    }
+  const handleVideoStateChange = useCallback((event: unknown) => {
+    const size = extractVideoSize(event)
+    if (size) setVideoSize(size)
   }, [])
 
   const handleProgress = useCallback((event: any) => {
@@ -144,7 +270,7 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
     setProgressBarWidth(event.nativeEvent.layout.width)
   }, [])
 
-  const handleProgressBarPress = useCallback((event: any) => {
+  const handleProgressBarPress = useCallback((event: GestureResponderEvent) => {
     if (progressBarWidth <= 0 || playbackProgress.duration <= 0) return
     const locationX = Number(event?.nativeEvent?.locationX || 0)
     const progress = clampProgress(locationX / progressBarWidth)
@@ -211,59 +337,29 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
         style={StyleSheet.absoluteFill}
       />
 
-      {showPlayer && isLandscape ? (
-        <View pointerEvents="none" style={styles.landscapeMatte} />
-      ) : null}
-
-      {isLoading ? (
-        <View style={styles.centerOverlay}>
-          <View style={styles.loadingOrb}>
-            <ActivityIndicator color="#fff" size="small" />
-          </View>
-        </View>
-      ) : null}
-
-      {!showPlayer && !isLoading ? (
-        <Pressable onPress={onReplay} style={styles.playButtonShell} accessibilityLabel="Play vertical video">
-          <Feather name={hasPlaybackError ? 'rotate-cw' : 'play'} color="#fff" size={42} />
-        </Pressable>
-      ) : null}
-
-      {showPlayer && controlsVisible ? (
-        <View style={styles.centerPlaybackControls} pointerEvents="box-none">
-          <Pressable
-            onPress={isPaused ? playShorts : pauseShorts}
-            style={styles.centerControlButton}
-            accessibilityLabel={isPaused ? 'Play Shorts video' : 'Pause Shorts video'}
-          >
-            <Feather name={isPaused ? 'play' : 'pause'} color="#fff" size={30} />
-          </Pressable>
-        </View>
-      ) : null}
-
-      {(showPlayer || isActive) && controlsVisible ? (
-        <View style={[styles.progressDock, { bottom: progressBottomOffset }]} pointerEvents="box-none">
-          <Pressable
-            onPress={handleProgressBarPress}
-            onLayout={handleProgressBarLayout}
-            style={styles.progressTrack}
-            accessibilityRole="adjustable"
-            accessibilityLabel="Shorts progress bar"
-          >
-            <View style={styles.progressRail}>
-              <View style={[styles.progressFillGlow, { width: `${effectiveProgress * 100}%` }]} />
-              <View style={[styles.progressFill, { width: `${effectiveProgress * 100}%` }]} />
-            </View>
-          </Pressable>
-        </View>
-      ) : null}
+      <ShortsOverlays
+        showPlayer={showPlayer}
+        isActive={isActive}
+        isLoading={isLoading}
+        controlsVisible={controlsVisible}
+        isLandscape={isLandscape}
+        hasPlaybackError={hasPlaybackError}
+        isPaused={isPaused}
+        effectiveProgress={effectiveProgress}
+        progressBottomOffset={progressBottomOffset}
+        onReplay={onReplay}
+        onPlay={playShorts}
+        onPause={pauseShorts}
+        onProgressPress={handleProgressBarPress}
+        onProgressLayout={handleProgressBarLayout}
+      />
     </Pressable>
   )
 })
 
 const styles = StyleSheet.create({
   container: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: '#000',
     overflow: 'hidden',
   },
@@ -274,7 +370,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   verticalVideoSurface: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   landscapeVideoSurface: {
     position: 'absolute',
@@ -284,13 +380,13 @@ const styles = StyleSheet.create({
     height: '50%',
   },
   landscapeMatte: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     borderTopWidth: 1,
     borderBottomWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
   },
   centerOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(0,0,0,0.12)',

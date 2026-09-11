@@ -46,6 +46,7 @@ import {
   verifyIndexCandidateForTransport,
 } from '../src/search/candidate-contract.js'
 import { COLLECTIONS, createIndexerStore } from '../src/indexer/index.js'
+import { createIndexServiceAnnouncement, deriveIndexerId } from '../src/indexer/service-announcement.js'
 import { createIndexVerificationRuntime } from '../src/runtime.js'
 
 const NOW = 1_800_000_000_000
@@ -53,6 +54,22 @@ const EPISODE_SELECTOR = Object.freeze({ namespace: 'tmdb', identifier: '95350',
 const SELECTOR = Object.freeze({ namespace: 'tmdb', identifier: '348', kind: 'movie' })
 const require = createRequire(import.meta.url)
 const schemaCodecs = require('../../spec/spec/schema/index.js')
+const ANNOUNCEMENT_SIGNER = crypto.keyPair(b4a.alloc(32, 9))
+
+function signedAnnouncement(overrides = {}) {
+  return createIndexServiceAnnouncement({
+    indexerId: deriveIndexerId(ANNOUNCEMENT_SIGNER.publicKey),
+    transportPublicKey: b4a.alloc(32, 8),
+    dimensions: ['external-ref'],
+    shardRanges: [{ dimension: 'external-ref', start: null, end: null }],
+    queryCapabilities: ['exact-external-ref', 'publication-by-work', 'rendition-by-publication'],
+    policyDigest: b4a.alloc(32, 7),
+    sequence: 1,
+    issuedAt: NOW - 1_000,
+    expiresAt: NOW + 60_000,
+    ...overrides,
+  }, ANNOUNCEMENT_SIGNER)
+}
 
 function hex(value) {
   return b4a.toString(value, 'hex')
@@ -77,8 +94,11 @@ function exactResult(fixture) {
 }
 
 function serviceFor(fixture, state = {}) {
+  const announcement = signedAnnouncement()
   return {
-    indexerId: '91'.repeat(32),
+    indexerId: hex(announcement.indexerId),
+    isLocal: false,
+    announcement,
     async queryIndexService({ query }) {
       state.searchCalls = (state.searchCalls || 0) + 1
       let results
@@ -182,7 +202,7 @@ function signPublisherOperation({ descriptor, signer, recordType = PUBLISHER_REC
 }
 
 async function sourceFixture(options = {}) {
-  const selector = options.selector || SELECTOR
+  const selector = { ...SELECTOR, ...options.selector }
   const workIdentifier = selector.kind === 'episode'
     ? episodeWorkIdentifier(selector.identifier, selector.season, selector.episode)
     : selector.identifier
@@ -338,6 +358,7 @@ async function sourceFixture(options = {}) {
     },
   }
   fixture = {
+    authorization,
     view,
     root,
     device,
@@ -380,7 +401,7 @@ async function candidateHarness(options = {}) {
       deadlineMs: 1_000,
     },
   })
-  const [candidate] = await federation.search({ selector: fixture.selector, limit: 1 })
+  const { candidates: [candidate] } = await federation.search({ selector: fixture.selector, limit: 1 })
   const probeState = { calls: 0 }
   const availabilityProbe = options.availabilityProbe || (async () => {
     probeState.calls++
@@ -398,6 +419,106 @@ async function candidateHarness(options = {}) {
     },
   })
   return { fixture, cache, state, federation, candidate, verifier, probeState }
+}
+
+function titleServiceFor(fixture, token, state = {}) {
+  const announcement = signedAnnouncement({
+    dimensions: ['text'],
+    shardRanges: [{ dimension: 'text', start: null, end: null }],
+    queryCapabilities: ['text-prefix', 'publication-by-work', 'rendition-by-publication'],
+  })
+  return {
+    indexerId: hex(announcement.indexerId),
+    isLocal: false,
+    announcement,
+    async queryIndexService({ query }) {
+      state.searchCalls = (state.searchCalls || 0) + 1
+      let results
+      if (query.selectors[0].type === 'title-token-prefix') {
+        results = [{
+          type: 'title-token',
+          publisherId: fixture.publisherId,
+          sourceRecordRef: state.titleSourceRecordRef || fixture.publicationSourceRecordRef,
+          token,
+          targetId: fixture.workEntityId,
+          ...(state.indexOverrides?.titleToken || {}),
+        }]
+      } else if (query.selectors[0].type === 'publication-by-work') {
+        results = [{
+          type: 'publication',
+          publisherId: fixture.publisherId,
+          sourceRecordRef: fixture.publicationSourceRecordRef,
+          publicationId: fixture.manifest.publicationId,
+          workEntityId: fixture.workEntityId,
+          normalizedTitle: fixture.manifest.body.unsignedBody.title,
+          releaseYear: null,
+          manifestId: fixture.manifest.body.manifestId,
+          provenanceSummary: null,
+        }]
+      } else {
+        results = fixture.renditions.map(({ descriptor: rendition, asset }) => ({
+          type: 'rendition',
+          publisherId: fixture.publisherId,
+          sourceRecordRef: fixture.publicationSourceRecordRef,
+          publicationId: fixture.manifest.publicationId,
+          renditionId: rendition.renditionId,
+          assetId: asset.assetId,
+          format: rendition.format,
+          codec: null,
+          dimensions: null,
+          mediaFeatures: rendition.purpose,
+          byteLength: asset.byteLength,
+        }))
+      }
+      return {
+        queryId: query.queryId,
+        results,
+        nextCursor: null,
+        sourceRevision: '0:1',
+      }
+    },
+  }
+}
+
+async function titleCandidateHarness(options = {}) {
+  const fixture = options.fixture || await sourceFixture(options)
+  const cache = options.cache || new Map()
+  const state = {
+    indexOverrides: options.indexOverrides || null,
+    titleSourceRecordRef: options.titleSourceRecordRef || null,
+  }
+  const token = options.token || 'current'
+  const federation = createIndexFederation({
+    services: [titleServiceFor(fixture, token, state)],
+    cache,
+    now: options.now || (() => NOW),
+    limits: {
+      randomBytes: options.randomBytes || randomSource(options.randomStart),
+      candidateTtlMs: options.candidateTtlMs || 30_000,
+      deadlineMs: 1_000,
+      maxPagesPerService: options.maxPagesPerService || 4,
+    },
+  })
+  const selector = Object.freeze(options.selector || { title: 'Current Signed Source', kind: 'movie' })
+  const { candidates } = await federation.search({ selector, limit: 1 })
+  const candidate = candidates[0]
+  const probeState = { calls: 0 }
+  const availabilityProbe = options.availabilityProbe || (async () => {
+    probeState.calls++
+    return { peers: 2, completeSeeders: 1, observedAtMs: NOW, expiresAtMs: NOW + 5_000 }
+  })
+  const verifier = createSourceVerifier({
+    federation,
+    catalogRegistry: fixture.registry,
+    availabilityProbe,
+    now: options.now || (() => NOW),
+    limits: {
+      verificationDeadlineMs: 1_000,
+      availabilityDeadlineMs: 500,
+      ...(options.limits || {}),
+    },
+  })
+  return { fixture, cache, state, federation, candidate, verifier, probeState, selector }
 }
 
 async function expectCode(t, promise, code) {
@@ -620,6 +741,14 @@ test('accepted but retracted, superseded, or non-current source records are reje
     neverAccepted.verifier.verifySelectedCandidate({ candidateRef: neverAccepted.candidate.candidateRef }),
     SOURCE_VERIFICATION_ERROR_CODES.SOURCE_NOT_CURRENT,
   )
+})
+
+test('accepted source records survive a later policy epoch', async t => {
+  const { fixture, candidate, verifier } = await candidateHarness()
+  fixture.authorization.policyEpoch = 1
+  await fixture.view.put('state/authorization', encodePublisherAuthorizationState(fixture.authorization))
+  const result = await verifier.verifySelectedCandidate({ candidateRef: candidate.candidateRef })
+  t.is(result.publication.publicationId, fixture.manifest.publicationId)
 })
 
 test('catalog head or epoch changes during the live probe invalidate the selected source', async t => {
@@ -964,6 +1093,7 @@ test('real index store traversal emits two rendition candidates and verifies onl
   })
   const service = {
     indexerId: '92'.repeat(32),
+    isLocal: true,
     async queryIndexService({ query, signal }) {
       const pageResult = await index.queryIndexPage({
         selectors: query.selectors,
@@ -1005,7 +1135,7 @@ test('real index store traversal emits two rendition candidates and verifies onl
     now: () => NOW,
     limits: { randomBytes: randomSource(), maxCandidates: 2 },
   })
-  const candidates = await federation.search({ selector: SELECTOR, limit: 2 })
+  const { candidates } = await federation.search({ selector: SELECTOR, limit: 2 })
   t.is(candidates.length, 2)
   const selected = candidates.find(candidate => candidate.rendition.renditionId === fixture.secondRendition.renditionId)
   t.ok(selected)
@@ -1068,7 +1198,7 @@ test('root API and runtime defer source resolution until client application sele
   })
   const api = createApi({ ctx: { lifecycle }, indexVerificationRuntime: runtime })
 
-  const [candidate] = await api.searchIndexCandidates(SELECTOR)
+  const { candidates: [candidate] } = await api.searchIndexCandidates(SELECTOR)
   t.is(state.searchCalls, 3)
   t.is(fixture.registry.resolveCalls, 0)
   t.is(state.probeCalls, 0)
@@ -1094,6 +1224,7 @@ test('local index candidates use verified local custody before remote peer probi
   const fixture = await sourceFixture()
   const state = { localCalls: 0, networkCalls: 0 }
   const localService = serviceFor(fixture)
+  localService.isLocal = true
   localService.indexerId = 'local-relay-index'
   const runtime = createIndexVerificationRuntime({
     services: [localService],
@@ -1112,7 +1243,7 @@ test('local index candidates use verified local custody before remote peer probi
   })
   t.teardown(() => runtime.close())
 
-  const [candidate] = await runtime.searchIndexCandidates({ selector: SELECTOR, limit: 1 })
+  const { candidates: [candidate] } = await runtime.searchIndexCandidates({ selector: SELECTOR, limit: 1 })
   const verified = await runtime.verifyIndexCandidate({ candidateRef: candidate.candidateRef })
   t.is(verified.verification.state, 'source-verified')
   t.is(state.localCalls, 1, 'the relay proved the candidate from its own custody')
@@ -1154,6 +1285,7 @@ test('companion episode search opens a locally indexed candidate and reads a ran
     publicationBoundClaim: true,
   })
   const localService = serviceFor(fixture)
+  localService.isLocal = true
   localService.indexerId = 'local-relay-index'
   const runtime = createIndexVerificationRuntime({
     services: [localService],
@@ -1183,7 +1315,7 @@ test('companion episode search opens a locally indexed candidate and reads a ran
     config: { client: { id: 'client' } },
     service: {
       async search({ selector, limit, signal }) {
-        return { candidates: await runtime.searchIndexCandidates({ selector, limit, signal }), nextCursor: null }
+        return runtime.searchIndexCandidates({ selector, limit, signal })
       },
       async openStream({ candidateRef, signal }) {
         const candidate = await runtime.verifyIndexCandidate({ candidateRef, signal })
@@ -1251,4 +1383,112 @@ test('root search API forwards caller limits and abort signals to federation', a
   await api.searchIndexCandidates(SELECTOR, { limit: 1, signal: caller.signal })
   t.is(received.limit, 1)
   t.is(received.signal, caller.signal)
+})
+
+test('title-token candidates verify signed publication title evidence and resolve without an external reference', async t => {
+  const harness = await titleCandidateHarness()
+  t.ok(harness.candidate)
+  t.is(harness.candidate.work.externalRefs.length, 0)
+  t.is(harness.candidate.work.title, 'Current signed source')
+  t.alike(harness.cache.get(harness.candidate.candidateRef).locator.discovery, {
+    type: 'title-token',
+    token: 'current',
+    targetId: harness.fixture.workEntityId,
+    queryTokens: ['current', 'signed', 'source'],
+  })
+
+  const verified = await harness.verifier.verifySelectedCandidate({ candidateRef: harness.candidate.candidateRef })
+
+  t.is(verified.verification.state, 'source-verified')
+  t.is(verified.work.entityId, harness.fixture.workEntityId)
+  t.is(verified.work.title, harness.fixture.manifest.body.title)
+  t.alike(verified.work.externalRefs, [])
+  t.is(verified.publication.publicationId, harness.fixture.manifest.publicationId)
+  t.is(verified.publication.manifestId, harness.fixture.manifest.body.manifestId)
+  t.is(verified.rendition.renditionId, harness.fixture.rendition.renditionId)
+  t.is(verified.asset.assetId, harness.fixture.staticAsset.assetId)
+  t.is(harness.probeState.calls, 1)
+  const transported = normalizeIndexCandidateForTransport(verified)
+  t.alike(transported.work.externalRefs, [])
+  t.is(transported.verification.state, 'source-verified')
+  t.alike(unsafeKeys(verified), [])
+  await harness.verifier.close()
+  await harness.federation.close()
+})
+
+test('title-token evidence is rejected when the signed publication title lacks the observed token', async t => {
+  const harness = await titleCandidateHarness({ token: 'currentx' })
+  t.ok(harness.candidate, 'prefix-matching but unattested token still issues a candidate')
+  await expectCode(
+    t,
+    harness.verifier.verifySelectedCandidate({ candidateRef: harness.candidate.candidateRef }),
+    SOURCE_VERIFICATION_ERROR_CODES.SOURCE_MISMATCH,
+  )
+  t.is(harness.probeState.calls, 0)
+  await harness.verifier.close()
+  await harness.federation.close()
+})
+
+test('title verification rejects when any requested query token is absent from the signed title', async t => {
+  const harness = await titleCandidateHarness({
+    selector: { title: 'Current Foo', kind: 'movie' },
+    token: 'current',
+  })
+  t.ok(harness.candidate)
+  t.alike(harness.cache.get(harness.candidate.candidateRef).locator.discovery.queryTokens, ['current', 'foo'])
+  await expectCode(
+    t,
+    harness.verifier.verifySelectedCandidate({ candidateRef: harness.candidate.candidateRef }),
+    SOURCE_VERIFICATION_ERROR_CODES.SOURCE_MISMATCH,
+  )
+  t.is(harness.probeState.calls, 0)
+  await harness.verifier.close()
+  await harness.federation.close()
+})
+
+test('title verification rejects a tampered locator work target', async t => {
+  const harness = await titleCandidateHarness()
+  const record = harness.cache.get(harness.candidate.candidateRef)
+  harness.cache.set(harness.candidate.candidateRef, {
+    ...record,
+    locator: Object.freeze({
+      ...record.locator,
+      discovery: Object.freeze({
+        ...record.locator.discovery,
+        targetId: 'ff'.repeat(32),
+      }),
+    }),
+  })
+  await expectCode(
+    t,
+    harness.verifier.verifySelectedCandidate({ candidateRef: harness.candidate.candidateRef }),
+    SOURCE_VERIFICATION_ERROR_CODES.SOURCE_MISMATCH,
+  )
+  t.is(harness.probeState.calls, 0)
+  await harness.verifier.close()
+  await harness.federation.close()
+})
+
+test('title-token results outside the requested prefix never issue candidates', async t => {
+  const harness = await titleCandidateHarness({ token: 'zeta', maxPagesPerService: 1 })
+  t.absent(harness.candidate)
+  await harness.verifier.close()
+  await harness.federation.close()
+})
+
+test('title-token evidence pointing at a non-publication record is rejected', async t => {
+  const fixture = await sourceFixture()
+  const harness = await titleCandidateHarness({
+    fixture,
+    titleSourceRecordRef: fixture.sourceRecordRef,
+  })
+  t.ok(harness.candidate)
+  await expectCode(
+    t,
+    harness.verifier.verifySelectedCandidate({ candidateRef: harness.candidate.candidateRef }),
+    SOURCE_VERIFICATION_ERROR_CODES.SOURCE_MISMATCH,
+  )
+  t.is(harness.probeState.calls, 0)
+  await harness.verifier.close()
+  await harness.federation.close()
 })

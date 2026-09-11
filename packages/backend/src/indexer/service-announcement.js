@@ -339,7 +339,10 @@ export function verifyIndexServiceAnnouncement(input, options = {}) {
     const announcement = decodeIndexServiceAnnouncement(canonical)
     const envelope = announcement.envelope
     const now = safeInteger(typeof options.now === 'function' ? options.now() : (options.now ?? Date.now()), 'now')
-    if (announcement.issuedAt > now || announcement.expiresAt < now) return false
+    // Validity is half-open: issuedAt <= now < expiresAt. The boundary instant
+    // is expired everywhere — verification, the retention expiry timer, and
+    // policy reconciliation all agree.
+    if (announcement.issuedAt > now || announcement.expiresAt <= now) return false
     if (!b4a.equals(deriveIndexerId(envelope.signer), announcement.indexerId)) return false
     if (options.expectedIndexerId && !b4a.equals(normalizeFixed(options.expectedIndexerId, 32, 'expectedIndexerId'), announcement.indexerId)) return false
     if (options.remotePublicKey && !b4a.equals(normalizeFixed(options.remotePublicKey, 32, 'remotePublicKey'), announcement.transportPublicKey)) return false

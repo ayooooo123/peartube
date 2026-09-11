@@ -33,6 +33,59 @@ function staticAssetCapacityError() {
   error.code = 'STATIC_ASSET_CAPACITY_EXHAUSTED'
   return error
 }
+function validateStaticAssetEntry(entry, normalized, scheduler) {
+  if (entry) {
+    if (entry.coreRef.kind !== normalized.kind ||
+        entry.coreRef.key !== normalized.key ||
+        entry.coreRef.treeHash !== normalized.treeHash ||
+        entry.coreRef.length !== normalized.length ||
+        entry.coreRef.byteLength !== normalized.byteLength ||
+        entry.coreRef.blockSize !== normalized.blockSize) {
+      throw new Error('static playback asset identity collision')
+    }
+  } else if (typeof scheduler?.requestRange !== 'function' || typeof scheduler?.seek !== 'function') {
+    throw new Error('verified static playback scheduler is required')
+  }
+}
+
+function resolveAuthorizationFlags(entry, authorizationKey, streamCapabilityPin, release) {
+  const authorizations = entry?.authorizations instanceof Map
+    ? entry.authorizations
+    : new Map()
+  const streamCapabilityPins = entry?.streamCapabilityPins instanceof Set
+    ? entry.streamCapabilityPins
+    : new Set()
+  let addAuthorization = false
+  let addStreamCapabilityPin = false
+  if (authorizationKey != null) {
+    if (typeof authorizationKey !== 'string' || authorizationKey.length === 0) {
+      throw new Error('static playback authorization key is invalid')
+    }
+    addAuthorization = !authorizations.has(authorizationKey)
+    addStreamCapabilityPin = streamCapabilityPin && !streamCapabilityPins.has(authorizationKey)
+    if (addAuthorization && typeof release !== 'function') {
+      throw new Error('static playback authorization release is required')
+    }
+  }
+  if (streamCapabilityPin && authorizationKey == null) {
+    throw new Error('stream capability pin requires an authorization key')
+  }
+  return { authorizations, streamCapabilityPins, addAuthorization, addStreamCapabilityPin }
+}
+
+function collectStaticAssetEvictions(entries, maxEntries) {
+  const evictions = []
+  let required = entries.size - maxEntries + 1
+  for (const [assetId, candidate] of entries) {
+    if (required <= 0) break
+    if (hasLiveStreamCapabilityPin(candidate)) continue
+    evictions.push([assetId, candidate])
+    required--
+  }
+  if (required > 0) throw staticAssetCapacityError()
+  return evictions
+}
+
 
 function getCorePeerList(core) {
   const peers = core?.peers
@@ -151,40 +204,15 @@ export class BlobPlaybackService {
     const entries = existingEntries || new Map()
     let entry = entries.get(normalized.assetId)
     const reused = Boolean(entry)
-    if (entry) {
-      if (entry.coreRef.kind !== normalized.kind ||
-          entry.coreRef.key !== normalized.key ||
-          entry.coreRef.treeHash !== normalized.treeHash ||
-          entry.coreRef.length !== normalized.length ||
-          entry.coreRef.byteLength !== normalized.byteLength ||
-          entry.coreRef.blockSize !== normalized.blockSize) {
-        throw new Error('static playback asset identity collision')
-      }
-    } else if (typeof scheduler?.requestRange !== 'function' || typeof scheduler?.seek !== 'function') {
-      throw new Error('verified static playback scheduler is required')
-    }
+    validateStaticAssetEntry(entry, normalized, scheduler)
 
-    const authorizations = entry?.authorizations instanceof Map
-      ? entry.authorizations
-      : new Map()
-    const streamCapabilityPins = entry?.streamCapabilityPins instanceof Set
-      ? entry.streamCapabilityPins
-      : new Set()
-    let addAuthorization = false
-    let addStreamCapabilityPin = false
-    if (authorizationKey != null) {
-      if (typeof authorizationKey !== 'string' || authorizationKey.length === 0) {
-        throw new Error('static playback authorization key is invalid')
-      }
-      addAuthorization = !authorizations.has(authorizationKey)
-      addStreamCapabilityPin = streamCapabilityPin && !streamCapabilityPins.has(authorizationKey)
-      if (addAuthorization && typeof release !== 'function') {
-        throw new Error('static playback authorization release is required')
-      }
-    }
-    if (streamCapabilityPin && authorizationKey == null) {
-      throw new Error('stream capability pin requires an authorization key')
-    }
+    const {
+      authorizations,
+      streamCapabilityPins,
+      addAuthorization,
+      addStreamCapabilityPin,
+    } = resolveAuthorizationFlags(entry, authorizationKey, streamCapabilityPin, release)
+
     const effectiveMimeType = entry?.mimeType || safeMediaType(mimeType)
     if (!entry) {
       entry = {
@@ -200,17 +228,7 @@ export class BlobPlaybackService {
       if (entry.streamCapabilityPins !== streamCapabilityPins) entry.streamCapabilityPins = streamCapabilityPins
     }
 
-    const evictions = []
-    if (!reused) {
-      let required = entries.size - this.maxStaticAssetEntries + 1
-      for (const [assetId, candidate] of entries) {
-        if (required <= 0) break
-        if (hasLiveStreamCapabilityPin(candidate)) continue
-        evictions.push([assetId, candidate])
-        required--
-      }
-      if (required > 0) throw staticAssetCapacityError()
-    }
+    const evictions = reused ? [] : collectStaticAssetEvictions(entries, this.maxStaticAssetEntries)
 
     const commit = () => {
       if (addAuthorization) authorizations.set(authorizationKey, release)

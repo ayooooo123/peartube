@@ -1,6 +1,6 @@
 import test from 'brittle'
 
-import { createProviderService } from '../src/provider/service.js'
+import { createProviderService, issueLocalProviderResolution } from '../src/provider/service.js'
 
 const NOW = 1_800_000_000_000
 const PUBLISHER = '11'.repeat(32)
@@ -14,6 +14,10 @@ const WORK = '88'.repeat(32)
 const RAW_CANDIDATE_REF = 'C'.repeat(43)
 const SELECTOR = Object.freeze({ namespace: 'tmdb', identifier: '348', kind: 'movie' })
 const PRINCIPAL = Object.freeze({ principalId: 'machine-a', publisherId: PUBLISHER })
+
+function immediate() {
+  return new Promise(resolve => setImmediate(resolve))
+}
 
 function manifest(publicationId = PUBLICATION) {
   return {
@@ -51,24 +55,24 @@ function publication(publicationId = PUBLICATION) {
   }
 }
 
-function candidate() {
+function candidate({ title = 'Acquirable title', publicationId = ACQUIRABLE_PUBLICATION, renditionId = RENDITION } = {}) {
   return {
     schemaVersion: 2,
     candidateRef: RAW_CANDIDATE_REF,
     work: {
       entityId: WORK,
-      title: 'Acquirable title',
+      title,
       releaseYear: 1999,
       externalRefs: [{ namespace: 'tmdb', identifier: '348' }],
     },
     publication: {
-      publicationId: ACQUIRABLE_PUBLICATION,
+      publicationId,
       publisherId: PUBLISHER,
       manifestId: MANIFEST,
-      title: 'Acquirable title',
+      title,
     },
     rendition: {
-      renditionId: RENDITION,
+      renditionId,
       purpose: 'main',
       byteLength: 12,
     },
@@ -221,6 +225,20 @@ function fixture({ published = false, visible = true, titleIndexed = true, provi
       calls.get.push(input)
       return jobs.get(input.acquisitionId) || null
     },
+    async getPublicProjection(input) {
+      calls.getPublicProjection = calls.getPublicProjection || []
+      calls.getPublicProjection.push(input)
+      const job = jobs.get(input.acquisitionId)
+      if (!job) return null
+      return {
+        acquisitionId: job.acquisitionId,
+        state: job.state,
+        publisherId: job.publisherId,
+        publicationId: job.publicationId || null,
+        renditionId: job.renditionId || null,
+        expectedBytes: job.expectedBytes || null,
+      }
+    },
     async list(input = {}) {
       calls.list.push(input)
       let values = [...jobs.values()]
@@ -274,6 +292,8 @@ function fixture({ published = false, visible = true, titleIndexed = true, provi
     service,
     calls,
     jobs,
+    verifiedQueryView,
+    indexVerificationRuntime,
     setVisible(value) { moderationVisible = value },
     advance(milliseconds) { time += milliseconds },
   }
@@ -602,4 +622,309 @@ test('in-flight resolution reflects published status once completed and verified
   t.is(resolved.kind, 'published')
   t.is(resolved.publicationId, PUBLICATION)
   t.is(resolved.renditionId, RENDITION)
+})
+
+test('in-flight resolution calls getPublicProjection and reflects published status once completed', async t => {
+  const f = fixture({ published: true })
+  f.jobs.set('acq-projection-1', acquisition({
+    acquisitionId: 'acq-projection-1',
+    state: 'publishing',
+    publisherId: PUBLISHER,
+    publicationMetadata: {
+      title: 'Projection Movie',
+      mediaContext: { namespace: 'tmdb', identifier: '348', kind: 'movie' },
+    },
+  }))
+
+  const page = await f.service.search({ selector: SELECTOR })
+  const candidate = page.candidates.find(c => c.title === 'Projection Movie')
+  t.ok(candidate)
+
+  // Simulate completion
+  f.jobs.set('acq-projection-1', acquisition({
+    acquisitionId: 'acq-projection-1',
+    state: 'completed',
+    publisherId: PUBLISHER,
+    publicationId: PUBLICATION,
+    renditionId: RENDITION,
+  }))
+
+  const resolved = await f.service.resolve({ ref: candidate.ref })
+  t.is(resolved.kind, 'published')
+  t.is(resolved.publicationId, PUBLICATION)
+  t.is(f.calls.getPublicProjection.length, 1)
+  t.is(f.calls.getPublicProjection[0].acquisitionId, 'acq-projection-1')
+})
+
+test('unrestricted text search finds collections and creators and resolves them to published', async t => {
+  const f = fixture()
+  f.verifiedQueryView.listEntities = async () => [
+    {
+      entityId: 'peartube:media-entity:v1:collection:sci-fi-classics',
+      entityKind: 'collection',
+      resolved: {
+        metadata: { title: 'Sci-Fi Classics Collection', subtitle: 'Curated sci-fi films' },
+        claims: [],
+        conflicts: [],
+      },
+      publications: [],
+    },
+    {
+      entityId: 'peartube:media-entity:v1:agent:ridley-scott',
+      entityKind: 'creator',
+      resolved: {
+        metadata: { title: 'Ridley Scott', displayName: 'Ridley Scott' },
+        claims: [],
+        conflicts: [],
+      },
+      publications: [],
+    },
+  ]
+
+  const page = await f.service.search({ selector: { title: 'sci-fi', kind: 'all' } })
+  t.ok(page.candidates.length >= 1)
+  const collectionHit = page.candidates.find(c => c.title === 'Sci-Fi Classics Collection')
+  t.ok(collectionHit)
+  t.is(collectionHit.kind, 'local-entity')
+  t.is(collectionHit.localEntity, true)
+  t.is(collectionHit.published, false)
+  t.is(collectionHit.acquirable, false)
+
+  const resolved = await f.service.resolve({ ref: collectionHit.ref })
+  t.is(resolved.kind, 'local')
+  t.is(resolved.acquisitionAvailable, false)
+  t.is(resolved.title, 'Sci-Fi Classics Collection')
+
+  const creatorPage = await f.service.search({ selector: { title: 'Ridley', kind: 'all' } })
+  const creatorHit = creatorPage.candidates.find(c => c.title === 'Ridley Scott')
+  t.ok(creatorHit)
+  t.is(creatorHit.kind, 'local-entity')
+  t.is(creatorHit.localEntity, true)
+  t.is(creatorHit.published, false)
+  t.is(creatorHit.acquirable, false)
+  const resolvedCreator = await f.service.resolve({ ref: creatorHit.ref })
+  t.is(resolvedCreator.kind, 'local')
+  t.is(resolvedCreator.acquisitionAvailable, false)
+})
+
+test('service search returns partial and stale diagnostics from index candidate runtime', async t => {
+  const f = fixture()
+  f.indexVerificationRuntime.searchIndexCandidates = async () => ({
+    candidates: [],
+    nextCursor: null,
+    diagnostics: { partial: true, stale: true },
+  })
+
+  const page = await f.service.search({ selector: SELECTOR })
+  t.is(page.diagnostics.partial, true)
+  t.is(page.diagnostics.stale, true)
+  t.is(page.partial, true)
+  t.is(page.stale, true)
+})
+
+test('provider search carries branch state and resumes remote federation after local records exhaust', async t => {
+  const f = fixture({ published: true })
+  const remoteCalls = []
+
+  f.indexVerificationRuntime.searchIndexCandidates = async (req) => {
+    remoteCalls.push(req)
+    if (!req.cursor) {
+      return {
+        candidates: [candidate()],
+        nextCursor: 'fed-cursor-2',
+        diagnostics: { partial: false, stale: false },
+      }
+    }
+    if (req.cursor === 'fed-cursor-2') {
+      return {
+        candidates: [candidate({
+          publicationId: '99'.repeat(32),
+          renditionId: 'aa'.repeat(32),
+          title: 'Federation Page 2',
+        })],
+        nextCursor: null,
+        diagnostics: { partial: false, stale: false },
+      }
+    }
+    return { candidates: [], nextCursor: null, diagnostics: { partial: false, stale: false } }
+  }
+
+  // First query with limit: 1 returns the published item
+  const page1 = await f.service.search({ selector: SELECTOR, limit: 1 })
+  t.is(page1.candidates.length, 1)
+  t.is(page1.candidates[0].kind, 'published')
+  t.ok(page1.nextCursor, 'cursor issued for remaining local/initial records')
+  t.is(remoteCalls.length, 1)
+  t.is(remoteCalls[0].cursor, undefined)
+
+  // Second query with limit: 1 returns the first remote candidate from initial fetch
+  const page2 = await f.service.search({ selector: SELECTOR, limit: 1, cursor: page1.nextCursor })
+  t.is(page2.candidates.length, 1)
+  t.is(page2.candidates[0].kind, 'acquirable')
+  t.ok(page2.nextCursor, 'cursor issued with federation continuation state')
+  t.is(remoteCalls.length, 1, 'did not call federation again while local buffer had records')
+
+  // Third query with limit: 1: local buffer exhausted, resumes federation with fed-cursor-2
+  const page3 = await f.service.search({ selector: SELECTOR, limit: 1, cursor: page2.nextCursor })
+  t.is(remoteCalls.length, 2, 'federation resumed after local records exhausted')
+  t.is(remoteCalls[1].cursor, 'fed-cursor-2')
+  t.is(page3.candidates.length, 1)
+  t.is(page3.candidates[0].title, 'Federation Page 2')
+  t.is(page3.nextCursor, null, 'nextCursor is null when both local and remote are exhausted')
+})
+
+test('provider search invokes federation for title queries and returns matching remote candidates', async t => {
+  const f = fixture()
+  const remoteCalls = []
+  f.indexVerificationRuntime.searchIndexCandidates = async (req) => {
+    remoteCalls.push(req)
+    return {
+      candidates: [candidate({
+        title: 'Alien: Romulus',
+        renditionId: 'bb'.repeat(32),
+      })],
+      nextCursor: null,
+      diagnostics: { partial: false, stale: false },
+    }
+  }
+
+  const page = await f.service.search({ selector: { title: 'Alien', kind: 'all' } })
+  t.is(remoteCalls.length, 1)
+  t.alike(remoteCalls[0].selector, { title: 'Alien', kind: 'all' })
+  const alienHit = page.candidates.find(c => c.title === 'Alien: Romulus')
+  t.ok(alienHit)
+  t.is(alienHit.kind, 'acquirable')
+})
+
+test('issueLocalResolution admits safe enrichment and rejects source locators', async t => {
+  const f = fixture()
+  const base = {
+    title: 'Local enrichment title',
+    selector: { namespace: 'tmdb', identifier: '603', kind: 'movie' },
+    publisherId: PUBLISHER,
+    expectedBytes: 4096,
+    idempotencyKey: 'enrich-smoke-1',
+    sourceFileName: 'matrix.mp4',
+  }
+
+  const resolution = issueLocalProviderResolution(f.service, {
+    ...base,
+    description: 'A computer hacker learns about the true nature of his reality.',
+    tags: ['scifi', 'action', 'scifi'],
+    creatorName: 'Wachowski',
+    creatorHandle: 'wachowski',
+    duration: 136,
+    artworkRoles: ['poster'],
+  })
+
+  t.is(resolution.kind, 'acquirable')
+  t.is(resolution.publisherId, PUBLISHER)
+  t.is(resolution.expected.byteLength, 4096)
+  t.is(resolution.title, base.title)
+  t.is(resolution.sourceFileName, 'matrix.mp4')
+  t.is(resolution.description, 'A computer hacker learns about the true nature of his reality.')
+  t.alike(resolution.tags, ['scifi', 'action'])
+  t.is(resolution.creatorName, 'Wachowski')
+  t.is(resolution.creatorHandle, 'wachowski')
+  t.is(resolution.duration, 136)
+  t.alike(resolution.artworkRoles, ['poster'])
+  t.absent(JSON.stringify(resolution).includes('https://'))
+  t.absent(JSON.stringify(resolution).includes('image.tmdb.org'))
+
+  // Identity-only replay: enrichment may differ; first-bound wins.
+  const replay = issueLocalProviderResolution(f.service, {
+    ...base,
+    description: 'Different overview that must not replace the first binding.',
+    tags: ['noir'],
+    creatorName: 'Other',
+    duration: 200,
+  })
+  t.is(replay.resolutionRef, resolution.resolutionRef)
+  t.is(replay.description, resolution.description)
+  t.alike(replay.tags, resolution.tags)
+  t.is(replay.creatorName, resolution.creatorName)
+  t.is(replay.duration, resolution.duration)
+
+  t.exception(() => issueLocalProviderResolution(f.service, {
+    ...base,
+    idempotencyKey: 'enrich-reject-source-url',
+    sourceUrl: 'https://private.invalid/source',
+  }), { code: 'INVALID_FIELD' })
+
+  t.exception(() => issueLocalProviderResolution(f.service, {
+    ...base,
+    idempotencyKey: 'enrich-reject-path',
+    path: '/secret/local/file.mp4',
+  }), { code: 'INVALID_FIELD' })
+
+  t.exception(() => issueLocalProviderResolution(f.service, {
+    ...base,
+    idempotencyKey: 'enrich-reject-identity-url',
+    identityUrl: 'https://youtube.com/watch?v=v123',
+  }), { code: 'INVALID_FIELD' })
+})
+
+test('consumed cursor capacity is reused and transient federation failure remains resumable', async t => {
+  const f = fixture({ providerLimits: { maxCursors: 1 } })
+  let failOnce = true
+  f.indexVerificationRuntime.searchIndexCandidates = async ({ cursor }) => {
+    if (!cursor) return { candidates: [candidate()], nextCursor: 'remote-one' }
+    if (cursor === 'remote-one' && failOnce) {
+      failOnce = false
+      throw new Error('temporary index outage')
+    }
+    if (cursor === 'remote-one') return {
+      candidates: [candidate({ title: 'Second publication', publicationId: 'ab'.repeat(32) })],
+      nextCursor: 'remote-two',
+    }
+    return {
+      candidates: [candidate({ title: 'Third publication', publicationId: 'cd'.repeat(32) })],
+      nextCursor: null,
+    }
+  }
+  const first = await f.service.search({ selector: SELECTOR, limit: 1 })
+  const failed = await f.service.search({ selector: SELECTOR, limit: 1, cursor: first.nextCursor })
+  t.is(failed.candidates.length, 0)
+  t.is(failed.partial, true)
+  t.ok(failed.nextCursor, 'failure preserves the unvisited remote branch')
+  const second = await f.service.search({ selector: SELECTOR, limit: 1, cursor: failed.nextCursor })
+  const third = await f.service.search({ selector: SELECTOR, limit: 1, cursor: second.nextCursor })
+  t.alike([...first.candidates, ...second.candidates, ...third.candidates].map(hit => hit.title),
+    ['Acquirable title', 'Second publication', 'Third publication'])
+  t.is(third.nextCursor, null)
+})
+
+test('provider cursor reservation survives a delayed failure and competing fresh search at maxCursors one', async t => {
+  const f = fixture({ providerLimits: { maxCursors: 1 } })
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  let delayedFailure = true
+  f.indexVerificationRuntime.searchIndexCandidates = async ({ cursor }) => {
+    if (!cursor) return { candidates: [candidate()], nextCursor: 'remote-one' }
+    if (delayedFailure) {
+      delayedFailure = false
+      await gate
+      throw new Error('temporary delayed index outage')
+    }
+    return {
+      candidates: [candidate({ title: 'Retry publication', publicationId: 'ab'.repeat(32) })],
+      nextCursor: null,
+    }
+  }
+
+  const first = await f.service.search({ selector: SELECTOR, limit: 1 })
+  t.ok(first.nextCursor)
+  const delayed = f.service.search({ selector: SELECTOR, limit: 1, cursor: first.nextCursor })
+  await immediate()
+
+  const competing = f.service.search({ selector: SELECTOR, limit: 1 })
+  release()
+  await t.exception(competing, { code: 'PROVIDER_OVERLOADED' })
+
+  const failed = await delayed
+  t.is(failed.partial, true)
+  t.ok(failed.nextCursor, 'the failed upstream cursor receives the reserved replacement slot')
+  const retry = await f.service.search({ selector: SELECTOR, limit: 1, cursor: failed.nextCursor })
+  t.is(retry.candidates[0].title, 'Retry publication')
+  t.is(retry.nextCursor, null)
 })

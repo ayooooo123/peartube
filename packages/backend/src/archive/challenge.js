@@ -169,6 +169,33 @@ export function createArchiveChallengeResponse(input = {}) {
   return { responseId: envelope.recordId, body, envelope }
 }
 
+function matchesChallengeAndPledge(body, challenge, pledge, envelope, options) {
+  if (!challenge) return false
+  if (challenge.pledgeId !== pledge.pledgeId) return false
+  if (body.pledgeId !== pledge.pledgeId) return false
+  if (body.challengeNonce !== challenge.challengeNonce || body.coreKey !== challenge.coreKey) return false
+  if (body.range.start !== challenge.range.start || body.range.end !== challenge.range.end) return false
+  if (body.deadline !== challenge.deadline || (options.now != null && options.now > challenge.deadline)) return false
+  if (body.transportPeerId !== hex32(options.transportPeerId, 'transportPeerId')) return false
+  if (!pledgeAuthorizesChallenge(pledge.body, challenge)) return false
+  const signer = envelope.signer ? hex32(envelope.signer, 'signer') : null
+  if (signer !== pledge.body.archivistId) return false
+  if (!b4a.equals(b4a.from(envelope.nonce || []), b4a.from(body.challengeNonce, 'hex'))) return false
+  return true
+}
+
+async function verifyResponseProof(body, challenge, options) {
+  try {
+    const proofBytes = b4a.from(options.proofBytes || [])
+    const expectedProof = createArchivePossessionProof({ challenge, proofBytes })
+    if (!b4a.equals(b4a.from(body.proof, 'hex'), b4a.from(expectedProof, 'hex'))) return false
+    if (!await options.verifyProof(proofBytes, challenge)) return false
+  } catch {
+    return false
+  }
+  return true
+}
+
 export async function verifyArchiveChallengeResponse(envelope, options = {}) {
   let body
   let pledge
@@ -187,29 +214,12 @@ export async function verifyArchiveChallengeResponse(envelope, options = {}) {
     allowedSigners: [b4a.from(pledgeBody.archivistId, 'hex')],
   })
   if (!verified) return false
-  const challenge = options.challenge
-  if (!challenge) return false
-  if (challenge.pledgeId !== pledge.pledgeId) return false
-  if (body.pledgeId !== pledge.pledgeId) return false
-  if (body.challengeNonce !== challenge.challengeNonce || body.coreKey !== challenge.coreKey) return false
-  if (body.range.start !== challenge.range.start || body.range.end !== challenge.range.end) return false
-  if (body.deadline !== challenge.deadline || (options.now != null && options.now > challenge.deadline)) return false
-  if (body.transportPeerId !== hex32(options.transportPeerId, 'transportPeerId')) return false
-  if (!pledgeAuthorizesChallenge(pledgeBody, challenge)) return false
-  const signer = envelope.signer ? hex32(envelope.signer, 'signer') : null
-  if (signer !== pledgeBody.archivistId) return false
-  if (!b4a.equals(b4a.from(envelope.nonce || []), b4a.from(body.challengeNonce, 'hex'))) return false
+  if (!matchesChallengeAndPledge(body, options.challenge, pledge, envelope, options)) return false
   if (!(options.replayCache instanceof Set) || typeof options.verifyProof !== 'function') return false
+  const signer = pledgeBody.archivistId
   const replayKey = `${signer}:${body.challengeNonce}`
   if (options.replayCache.has(replayKey)) return false
-  try {
-    const proofBytes = b4a.from(options.proofBytes || [])
-    const expectedProof = createArchivePossessionProof({ challenge, proofBytes })
-    if (!b4a.equals(b4a.from(body.proof, 'hex'), b4a.from(expectedProof, 'hex'))) return false
-    if (!await options.verifyProof(proofBytes, challenge)) return false
-  } catch {
-    return false
-  }
+  if (!await verifyResponseProof(body, options.challenge, options)) return false
   options.replayCache.add(replayKey)
   return { responseId: envelope.recordId, body, envelope }
 }

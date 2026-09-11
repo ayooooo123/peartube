@@ -1,0 +1,31 @@
+id: clock-random-in-replicated-apply
+message: "Replicated apply reducers must be deterministic across all peers. Do not use Date.now(), Math.random(), randomId(), or clock/random sources inside apply methods."
+severity: error
+language: Tsx
+files:
+  - "packages/backend/src/personal/**"
+  - "packages/backend/src/personal-store.js"
+  - "packages/backend/src/publisher/**"
+ignores:
+  - "**/test/**"
+  - "**/tests/**"
+  - "**/__tests__/**"
+rule:
+  any:
+    - pattern: Date.now()
+    - pattern: Math.random()
+    - pattern: randomId($$$ARGS)
+    - pattern: crypto.randomUUID($$$ARGS)
+    - pattern: crypto.randomBytes($$$ARGS)
+    - pattern: new Date()
+  inside:
+    stopBy: end
+    any:
+      - kind: method_definition
+        has:
+          field: name
+          regex: "^_?apply.*$"
+      - kind: function_declaration
+        has:
+          field: name
+          regex: "^_?apply.*$"

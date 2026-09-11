@@ -159,29 +159,25 @@ test('bulk mapping renderer snapshot is a compact source-to-target table', (t) =
   ])
 })
 
-test('progress renderer redraw snapshot remains a stable frame rather than an appended log', (t) => {
+test('progress renderer redraw snapshot remains a stable canonical acquisition frame', (t) => {
   const initial = createPickerState({
     screen: 'progress',
     progress: {
-      phase: 'replicationPending',
-      checkpoint: { jobId: 'job-7' },
-      localBytes: { path: '/tmp/pilot.mkv' },
+      phase: 'acquiring',
       title: 'Pilot',
       completed: 2,
       total: 5,
-      message: 'Waiting for trusted relay'
+      message: 'Acquiring source'
     }
   })
   const updated = reducePicker(initial, {
     type: 'progress.update',
     progress: {
-      phase: 'replicationPending',
-      checkpoint: { jobId: 'job-7' },
-      localBytes: { path: '/tmp/pilot.mkv' },
+      phase: 'verifying',
       title: 'Pilot',
       completed: 3,
       total: 5,
-      message: 'Verifying durable ranges'
+      message: 'Verifying source'
     }
   })
 
@@ -189,41 +185,20 @@ test('progress renderer redraw snapshot remains a stable frame rather than an ap
     'PearTube Add',
     'Publishing',
     '',
-    'Phase: Replication pending',
+    'Phase: Acquiring',
     'Item: Pilot',
     'Progress: 2/5 [████████░░░░░░░░░░░░] 40%',
-    'Waiting for trusted relay',
+    'Acquiring source',
     '',
-    'Ctrl-C Exit safely',
+    'Ctrl-C Cancel',
     'peartube add · interactive'
   ])
   const updatedLines = plain(renderPickerLines(updated, terminal))
   t.is(updatedLines.length, 10)
   t.ok(updatedLines.includes('Progress: 3/5 [████████████░░░░░░░░] 60%'))
-  t.ok(updatedLines.includes('Verifying durable ranges'))
-  t.absent(updatedLines.includes('Waiting for trusted relay'))
-})
-
-test('publishing exit confirmation snapshot explains durable behavior', (t) => {
-  const progress = {
-    phase: 'projecting',
-    checkpoint: { jobId: 'job-7' },
-    localBytes: { path: '/tmp/pilot.mkv' }
-  }
-  const publishing = createPickerState({ screen: 'progress', progress })
-  const state = reducePicker(publishing, { type: 'interrupt' })
-
-  assertFrame(t, state, [
-    'PearTube Add',
-    'Publication in progress',
-    '',
-    'Publishing is past the durable checkpoint.',
-    'Exit without rolling back published work?',
-    'Checkpoint: job-7',
-    '',
-    'Enter Exit safely  Esc Keep waiting',
-    'peartube add · interactive'
-  ])
+  t.ok(updatedLines.includes('Phase: Verifying'))
+  t.ok(updatedLines.includes('Verifying source'))
+  t.absent(updatedLines.includes('Acquiring source'))
 })
 
 test('completed result and error renderer snapshots are deterministic', (t) => {
@@ -233,7 +208,7 @@ test('completed result and error renderer snapshots are deterministic', (t) => {
     result: {
       status: 'completed',
       value: { title: 'The Matrix', message: 'Published The Matrix' },
-      progress: { phase: 'published' }
+      progress: { phase: 'completed' }
     }
   }
   assertFrame(t, completed, [

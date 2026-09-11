@@ -1,0 +1,12 @@
+ruleDirs:
+  - rules
+testConfigs:
+  - testDir: rule-tests
+languageGlobs:
+  Tsx:
+    - "*.js"
+    - "*.mjs"
+    - "*.cjs"
+    - "*.jsx"
+    - "*.ts"
+    - "*.tsx"

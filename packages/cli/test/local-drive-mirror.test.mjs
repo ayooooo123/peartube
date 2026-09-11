@@ -2,6 +2,12 @@ import test from 'brittle'
 
 import { createLocalDriveMirrorState, listLocalDriveVideos, mirrorLocalDriveToRelayChannel } from '../src/local-drive-mirror.js'
 
+const PUBLISHER_ID = 'cc'.repeat(32)
+
+function channelInfo(channelKey = 'aa'.repeat(32), publicBeeKey = 'bb'.repeat(32)) {
+  return { publisherId: PUBLISHER_ID, channelKey, publicBeeKey }
+}
+
 function dirent(name, type) {
   return {
     name,
@@ -19,6 +25,9 @@ function makeFs(tree, sizes = {}) {
     },
     statSync(path) {
       return { size: sizes[path] ?? 1024, mtimeMs: 1 }
+    },
+    createReadStream(path) {
+      return [Buffer.from(`fixture:${path}`)]
     }
   }
 }
@@ -46,7 +55,15 @@ test('listLocalDriveVideos recursively finds supported video files', (t) => {
   ])
 })
 
-test('mirrorLocalDriveToRelayChannel imports, publishes, and seeds preview refs', async (t) => {
+test('mirrorLocalDriveToRelayChannel requires requestLocalFileAcquisition', async (t) => {
+  const fs = makeFs({ '/drive': [dirent('one.mp4', 'file')] }, { '/drive/one.mp4': 100 })
+  await t.exception(
+    mirrorLocalDriveToRelayChannel({ rootPath: '/drive', fs, path: pathShim }),
+    /requestLocalFileAcquisition is required/
+  )
+})
+
+test('mirrorLocalDriveToRelayChannel imports through ProviderService acquisition and never leaks raw paths', async (t) => {
   const fs = makeFs({
     '/drive': [dirent('one.mp4', 'file'), dirent('two.webm', 'file')]
   }, {
@@ -57,44 +74,55 @@ test('mirrorLocalDriveToRelayChannel imports, publishes, and seeds preview refs'
   const publisher = {
     async ensureAnonymousChannel({ channelName }) {
       calls.push(['ensure', channelName])
-      return { channel: { id: 'channel' }, channelKey: 'aa'.repeat(32), publicBeeKey: 'bb'.repeat(32) }
-    },
-    async importVideo({ filePath, title, mimeType }) {
-      calls.push(['import', filePath, title, mimeType])
-      return {
-        videoId: title,
-        metadata: {
-          uploadedAt: 123,
-          size: filePath.endsWith('one.mp4') ? 100 : 200,
-          mimeType,
-          blobId: `blob:${title}`,
-          blobsCoreKey: title === 'one' ? 'cc'.repeat(32) : 'dd'.repeat(32)
-        }
-      }
-    },
-    async publishCatalog(channelInfo) {
-      calls.push(['publish', channelInfo.channelKey, channelInfo.previewVideos.map((video) => video.blobId)])
-    },
-    async retainAssets(channelInfo) {
-      calls.push(['seed', channelInfo.previewVideos.map((video) => video.blobsCoreKey)])
+      return channelInfo()
     }
   }
 
-  const result = await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim, channelName: 'Mirror' })
+  const result = await mirrorLocalDriveToRelayChannel({
+    rootPath: '/drive',
+    publisher,
+    fs,
+    path: pathShim,
+    channelName: 'Mirror',
+    requestLocalFileAcquisition: async (input) => {
+      calls.push(['acquire', input.title, input.selector, input.expectedBytes, input.idempotencyKey])
+      return {
+        acquisitionId: `acq-${input.title}`,
+        state: 'completed',
+        publicationId: `pub-${input.title}`,
+        manifestId: 'manifest-1',
+        renditionId: 'rendition-1',
+        assetId: 'asset-1'
+      }
+    },
+    service: {
+      async getPublication(publicationId) {
+        calls.push(['publication', publicationId])
+        return {
+          publicationId,
+          publisherId: PUBLISHER_ID,
+          manifestId: 'manifest-1',
+          renditions: [{ renditionId: 'rendition-1', assetId: 'asset-1', mimeType: 'video/mp4', byteLength: 100 }]
+        }
+      }
+    }
+  })
 
   t.is(result.scanned, 2)
   t.is(result.imported, 2)
   t.is(result.failed, 0)
   t.is(result.skipped, 0)
-  t.alike(calls, [
-    ['ensure', 'Mirror'],
-    ['import', '/drive/one.mp4', 'one', 'video/mp4'],
-    ['import', '/drive/two.webm', 'two', 'video/webm'],
-    ['publish', 'aa'.repeat(32), ['blob:one', 'blob:two']],
-    ['seed', ['cc'.repeat(32), 'dd'.repeat(32)]]
-  ])
-})
+  t.is(result.channels[0].publisherId, PUBLISHER_ID)
+  t.alike(calls.filter((call) => call[0] === 'publication').map((call) => call[1]), ['pub-one', 'pub-two'])
+  t.absent(JSON.stringify(result).includes('/drive'), 'public mirror result must not contain raw file paths')
 
+  // Verify that selector and idempotencyKey never contain the raw filePath
+  for (const call of calls.filter(c => c[0] === 'acquire')) {
+    const [, title, selector, expectedBytes, idempotencyKey] = call
+    t.absent(idempotencyKey.includes('/drive'), 'idempotencyKey must not contain raw file path')
+    t.absent(selector.identifier.includes('/drive'), 'selector identifier must not contain raw file path')
+  }
+})
 
 test('mirrorLocalDriveToRelayChannel marks local containers playable with unverified playback support', async (t) => {
   const fs = makeFs({
@@ -102,38 +130,35 @@ test('mirrorLocalDriveToRelayChannel marks local containers playable with unveri
   }, {
     '/drive/movie.mkv': 100
   })
-  let publishedPreview = null
   const publisher = {
     async ensureAnonymousChannel() {
-      return { channel: { id: 'channel' }, channelKey: 'aa'.repeat(32), publicBeeKey: 'bb'.repeat(32) }
-    },
-    async importVideo({ title, mimeType }) {
-      return {
-        videoId: title,
-        metadata: {
-          uploadedAt: 123,
-          size: 100,
-          mimeType,
-          blobId: `blob:${title}`,
-          blobsCoreKey: 'cc'.repeat(32)
-        }
-      }
-    },
-    async publishCatalog(channelInfo) {
-      publishedPreview = channelInfo.previewVideos[0]
-    },
-    async retainAssets() {}
+      return channelInfo()
+    }
   }
 
-  await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim })
+  const result = await mirrorLocalDriveToRelayChannel({
+    rootPath: '/drive',
+    publisher,
+    fs,
+    path: pathShim,
+    requestLocalFileAcquisition: async (input) => ({
+      acquisitionId: 'acq-movie',
+      state: 'completed',
+      publicationId: 'pub-movie',
+      manifestId: 'manifest-1',
+      renditionId: 'rendition-1',
+      assetId: 'asset-1'
+    })
+  })
 
-  t.is(publishedPreview.mimeType, 'video/x-matroska')
-  t.is(publishedPreview.availability, 'playable')
-  t.is(publishedPreview.playbackSupport, 'unverified-container')
+  const preview = result.channels[0].videos[0]
+  t.is(preview.mimeType, 'video/x-matroska')
+  t.is(preview.availability, 'playable')
+  t.is(preview.playbackSupport, 'unverified-container')
+  t.is(preview.publicationId, 'pub-movie')
 })
 
-
-test('mirrorLocalDriveToRelayChannel republishes and reseeds cached local previews on unchanged scans', async (t) => {
+test('mirrorLocalDriveToRelayChannel re-acquires only changed files on subsequent scans', async (t) => {
   const sizes = { '/drive/one.mp4': 100 }
   const fs = {
     readdirSync() {
@@ -141,42 +166,41 @@ test('mirrorLocalDriveToRelayChannel republishes and reseeds cached local previe
     },
     statSync(path) {
       return { size: sizes[path], mtimeMs: sizes[path] }
+    },
+    createReadStream(path) {
+      return [Buffer.from(`fixture:${path}`)]
     }
   }
   const state = createLocalDriveMirrorState()
-  const imports = []
-  const published = []
-  const seeded = []
+  const acquisitions = []
   const publisher = {
     async ensureAnonymousChannel() {
-      return { channel: { id: 'channel' }, channelKey: 'aa'.repeat(32), publicBeeKey: 'bb'.repeat(32) }
-    },
-    async importVideo({ filePath }) {
-      imports.push(filePath)
-      return { videoId: `video-${imports.length}`, metadata: { size: sizes[filePath], blobId: `blob-${imports.length}`, blobsCoreKey: 'cc'.repeat(32) } }
-    },
-    async publishCatalog(channelInfo) {
-      published.push(channelInfo.previewVideos.map((video) => video.blobId))
-    },
-    async retainAssets(channelInfo) {
-      seeded.push(channelInfo.previewVideos.map((video) => video.blobsCoreKey))
+      return channelInfo()
+    }
+  }
+  const requestLocalFileAcquisition = async (input) => {
+    acquisitions.push(input.path)
+    return {
+      acquisitionId: `acq-${acquisitions.length}`,
+      state: 'completed',
+      publicationId: `pub-${acquisitions.length}`,
+      manifestId: 'manifest-1',
+      renditionId: 'rendition-1',
+      assetId: 'asset-1'
     }
   }
 
-  const first = await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim, state })
-  const second = await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim, state })
+  const first = await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim, state, requestLocalFileAcquisition })
+  const second = await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim, state, requestLocalFileAcquisition })
   sizes['/drive/one.mp4'] = 101
-  const third = await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim, state })
+  const third = await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim, state, requestLocalFileAcquisition })
 
   t.is(first.imported, 1)
   t.is(second.imported, 0)
   t.is(second.skipped, 1)
   t.is(third.imported, 1)
-  t.alike(imports, ['/drive/one.mp4', '/drive/one.mp4'])
-  t.alike(published, [['blob-1'], ['blob-1'], ['blob-2']])
-  t.alike(seeded, [['cc'.repeat(32)], ['cc'.repeat(32)], ['cc'.repeat(32)]])
+  t.alike(acquisitions, ['/drive/one.mp4', '/drive/one.mp4'])
 })
-
 
 test('mirrorLocalDriveToRelayChannel derives safe metadata and tags from mixed local and yt-dlp files', async (t) => {
   const fs = makeFs({
@@ -187,8 +211,7 @@ test('mirrorLocalDriveToRelayChannel derives safe metadata and tags from mixed l
     '/drive/abc123.info.json': 50
   })
   fs.existsSync = (filePath) => filePath === '/drive/abc123.info.json'
-  fs.readFileSync = (filePath, encoding) => {
-    t.is(encoding, 'utf8')
+  fs.readFileSync = (filePath) => {
     if (filePath !== '/drive/abc123.info.json') throw new Error(`ENOENT: ${filePath}`)
     return JSON.stringify({
       title: 'YT Title',
@@ -199,60 +222,54 @@ test('mirrorLocalDriveToRelayChannel derives safe metadata and tags from mixed l
       categories: ['Education'],
       tags: ['demo', 'Demo', '  ', 'very-long-tag-name-that-should-be-clipped-to-a-sed-to-a-safe-length'],
       duration: 42,
-      thumbnail: 'https://i.ytimg.com/vi/abc123/hqdefault.jpg'
+      thumbnail: 'https://private-artwork.example/poster.png?token=grant-only'
     })
   }
 
-  const imports = []
-  const publishedPreviews = []
+  const acquired = []
   const publisher = {
     async ensureAnonymousChannel() {
-      return { channel: { id: 'channel' }, channelKey: 'aa'.repeat(32), publicBeeKey: 'bb'.repeat(32) }
-    },
-    async importVideo(input) {
-      imports.push(input)
-      return {
-        videoId: input.title.replace(/\s+/g, '-').toLowerCase(),
-        metadata: {
-          uploadedAt: 123,
-          size: input.filePath.endsWith('.webm') ? 200 : 100,
-          mimeType: input.mimeType,
-          duration: input.duration || 0,
-          category: input.category || '',
-          blobId: `blob:${input.title}`,
-          blobsCoreKey: input.filePath.endsWith('.webm') ? 'dd'.repeat(32) : 'cc'.repeat(32)
-        }
-      }
-    },
-    async publishCatalog(channelInfo) {
-      publishedPreviews.push(...channelInfo.previewVideos)
-    },
-    async retainAssets() {}
+      return channelInfo()
+    }
   }
 
-  const result = await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim })
+  const state = createLocalDriveMirrorState()
+  const options = {
+    rootPath: '/drive',
+    publisher,
+    fs,
+    path: pathShim,
+    state,
+    requestLocalFileAcquisition: async (input) => {
+      acquired.push(input)
+      return {
+        acquisitionId: `acq-${input.title}`,
+        state: 'completed',
+        publicationId: `pub-${input.title}`,
+        manifestId: 'manifest-1',
+        renditionId: 'rendition-1',
+        assetId: 'asset-1'
+      }
+    }
+  }
+  const result = await mirrorLocalDriveToRelayChannel(options)
 
   t.is(result.scanned, 2)
-  t.is(imports[0].title, 'YT Title')
-  t.is(imports[0].description, 'Original YouTube description')
-  t.is(imports[0].category, 'Education')
-  t.alike(imports[0].tags, ['youtube', 'yt-dlp', 'education', 'uploader-name', 'channel-name', 'demo', 'very-long-tag-name-that-should-be-clipped-to-a-s'])
-  t.is(imports[0].sourceUrl, 'https://www.youtube.com/watch?v=abc123')
-  t.is(imports[0].sourceType, 'yt-dlp')
-  t.is(imports[0].duration, 42)
+  t.is(acquired[0].title, 'YT Title')
+  t.is(acquired[1].title, 'random clip 01')
+  t.absent(JSON.stringify(result).includes('private-artwork.example'), 'fresh public previews omit the private artwork locator')
+  t.absent(JSON.stringify(result).includes('youtube.com/watch'), 'source URLs do not escape through public previews')
 
-  t.is(imports[1].title, 'random clip 01')
-  t.is(imports[1].description, '')
-  t.is(imports[1].category, 'Local')
-  t.alike(imports[1].tags, ['local'])
-  t.is(imports[1].sourceType, 'local')
-
-  t.is(publishedPreviews[0].sourceType, 'yt-dlp')
-  t.alike(publishedPreviews[0].tags, ['youtube', 'yt-dlp', 'education', 'uploader-name', 'channel-name', 'demo', 'very-long-tag-name-that-should-be-clipped-to-a-s'])
-  t.is(publishedPreviews[1].sourceType, 'local')
-  t.alike(publishedPreviews[1].tags, ['local'])
+  for (const record of state.seen.values()) {
+    record.previewVideo.thumbnailUrl = 'https://private-artwork.example/legacy.png?token=old'
+    record.previewVideo.sourceUrl = 'https://private-source.example/watch?token=old'
+  }
+  const replay = await mirrorLocalDriveToRelayChannel(options)
+  t.is(replay.imported, 0, 'cached previews do not reacquire unchanged files')
+  t.alike(replay.channels.flatMap(channel => channel.videos.map(video => video.id)).sort(), ['pub-YT Title', 'pub-random clip 01'], 'safe cached publication previews remain available')
+  t.absent(JSON.stringify(replay).includes('private-artwork.example'), 'legacy cached previews omit artwork locators')
+  t.absent(JSON.stringify(replay).includes('private-source.example'), 'legacy cached previews omit source locators')
 })
-
 
 test('mirrorLocalDriveToRelayChannel groups yt-dlp imports by creator channel identity', async (t) => {
   const fs = makeFs({
@@ -283,36 +300,33 @@ test('mirrorLocalDriveToRelayChannel groups yt-dlp imports by creator channel id
       })
 
   const ensured = []
-  const imports = []
-  const published = []
-  const seeded = []
+  const acquired = []
   const publisher = {
     async ensureAnonymousChannel({ channelName, sourceIdentity }) {
       ensured.push({ channelName, sourceIdentity })
       const suffix = sourceIdentity.sourceId.endsWith('UCcreatorone') ? '11' : '22'
-      return { channel: { id: sourceIdentity.sourceId }, channelKey: suffix.repeat(32), publicBeeKey: suffix.repeat(32) }
-    },
-    async importVideo(input) {
-      imports.push(input)
-      return {
-        videoId: input.sourceVideoId,
-        metadata: {
-          size: input.filePath.endsWith('alpha.mp4') ? 100 : 200,
-          mimeType: input.mimeType,
-          blobId: `blob:${input.sourceVideoId}`,
-          blobsCoreKey: input.sourceVideoId === 'alpha' ? 'aa'.repeat(32) : 'bb'.repeat(32)
-        }
-      }
-    },
-    async publishCatalog(channelInfo) {
-      published.push({ channelKey: channelInfo.channelKey, titles: channelInfo.previewVideos.map((video) => video.title) })
-    },
-    async retainAssets(channelInfo) {
-      seeded.push({ channelKey: channelInfo.channelKey, refs: channelInfo.previewVideos.map((video) => video.blobsCoreKey) })
+      return channelInfo(suffix.repeat(32), suffix.repeat(32))
     }
   }
 
-  const result = await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim, channelName: 'Fallback Mirror' })
+  const result = await mirrorLocalDriveToRelayChannel({
+    rootPath: '/drive',
+    publisher,
+    fs,
+    path: pathShim,
+    channelName: 'Fallback Mirror',
+    requestLocalFileAcquisition: async (input) => {
+      acquired.push(input)
+      return {
+        acquisitionId: `acq-${input.title}`,
+        state: 'completed',
+        publicationId: `pub-${input.title}`,
+        manifestId: 'manifest-1',
+        renditionId: 'rendition-1',
+        assetId: 'asset-1'
+      }
+    }
+  })
 
   t.is(result.scanned, 2)
   t.is(result.imported, 2)
@@ -322,20 +336,5 @@ test('mirrorLocalDriveToRelayChannel groups yt-dlp imports by creator channel id
     { platform: 'youtube', sourceId: 'youtube:channel:UCcreatorone', creatorName: 'Creator One', creatorHandle: null },
     { platform: 'youtube', sourceId: 'youtube:channel:UCcreatortwo', creatorName: 'Creator Two', creatorHandle: null }
   ])
-  t.alike(imports.map((entry) => [entry.title, entry.creatorName, entry.creatorSourceId, entry.sourceVideoId]), [
-    ['Alpha', 'Creator One', 'youtube:channel:UCcreatorone', 'alpha'],
-    ['Beta', 'Creator Two', 'youtube:channel:UCcreatortwo', 'beta']
-  ])
-  t.alike(published, [
-    { channelKey: '11'.repeat(32), titles: ['Alpha'] },
-    { channelKey: '22'.repeat(32), titles: ['Beta'] }
-  ])
-  t.alike(seeded, [
-    { channelKey: '11'.repeat(32), refs: ['aa'.repeat(32)] },
-    { channelKey: '22'.repeat(32), refs: ['bb'.repeat(32)] }
-  ])
-  t.alike(result.channels.map((channel) => ({ channelName: channel.channelName, imported: channel.imported })), [
-    { channelName: 'Creator One', imported: 1 },
-    { channelName: 'Creator Two', imported: 1 }
-  ])
+  t.alike(acquired.map((entry) => entry.title), ['Alpha', 'Beta'])
 })

@@ -3,6 +3,36 @@ import crypto from 'hypercore-crypto'
 
 export const MAX_SOURCE_BYTE_LENGTH = 256 * 1024 * 1024 * 1024
 
+function isPng (bytes) {
+  return bytes.length >= 8 &&
+    bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71 &&
+    bytes[4] === 13 && bytes[5] === 10 && bytes[6] === 26 && bytes[7] === 10
+}
+
+function isJpeg (bytes) {
+  return bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255
+}
+
+function isGif (bytes) {
+  return bytes.length >= 6 &&
+    bytes[0] === 71 && bytes[1] === 73 && bytes[2] === 70 &&
+    bytes[3] === 56 && (bytes[4] === 55 || bytes[4] === 57) && bytes[5] === 97
+}
+
+function isWebp (bytes) {
+  return bytes.length >= 12 &&
+    bytes[0] === 82 && bytes[1] === 73 && bytes[2] === 70 && bytes[3] === 70 &&
+    bytes[8] === 87 && bytes[9] === 69 && bytes[10] === 66 && bytes[11] === 80
+}
+
+export function imageMimeType (bytes) {
+  if (isPng(bytes)) return 'image/png'
+  if (isJpeg(bytes)) return 'image/jpeg'
+  if (isGif(bytes)) return 'image/gif'
+  if (isWebp(bytes)) return 'image/webp'
+  throw new Error('artwork bytes are not a supported image')
+}
+
 const SOURCE_READER = Symbol('peartube.source-reader')
 const IDENTITY_KINDS = new Set(['sha256', 'etag'])
 
@@ -104,6 +134,9 @@ export function createSourceReader (implementation = {}) {
     throw new Error('SourceReader requires describe(), open(), and close()')
   }
   if (typeof implementation.resumable !== 'boolean') throw new Error('SourceReader resumable must be a boolean')
+  if (implementation.openArtwork != null && typeof implementation.openArtwork !== 'function') {
+    throw new Error('SourceReader openArtwork must be a function')
+  }
   const maxReadBytes = implementation.maxReadBytes
   if (!Number.isSafeInteger(maxReadBytes) || maxReadBytes < 1 || maxReadBytes > MAX_SOURCE_BYTE_LENGTH) {
     throw new Error('SourceReader maxReadBytes must be a positive safe integer within the hostile-input ceiling')
@@ -131,6 +164,21 @@ export function createSourceReader (implementation = {}) {
     resumable: implementation.resumable,
     maxReadBytes,
     describe,
+    ...(implementation.openArtwork ? {
+      async openArtwork ({ signal } = {}) {
+        if (closed) throw new Error('SourceReader is closed')
+        assertActive(signal)
+        const sources = await implementation.openArtwork({ signal })
+        if (closed || signal?.aborted) {
+          const reason = signal?.reason || new Error('SourceReader is closed')
+          for (const source of Array.isArray(sources) ? sources : []) {
+            await source?.reader?.close?.(reason).catch(() => {})
+          }
+          throw reason
+        }
+        return sources
+      },
+    } : {}),
     open (input = {}) {
       return (async function * () {
         const signal = input.signal
@@ -202,7 +250,7 @@ export function createBufferSourceReader (value, { mimeType = 'application/octet
   })
 }
 
-export function createFileSourceReader ({ fs, path, mimeType = 'application/octet-stream' } = {}) {
+export function createFileSourceReader ({ fs, path, mimeType = 'application/octet-stream', openArtwork = null } = {}) {
   if (!fs || typeof fs.statSync !== 'function' || typeof fs.createReadStream !== 'function') {
     throw new Error('file SourceReader requires statSync() and createReadStream()')
   }
@@ -215,6 +263,7 @@ export function createFileSourceReader ({ fs, path, mimeType = 'application/octe
   return createSourceReader({
     resumable: true,
     maxReadBytes: MAX_SOURCE_BYTE_LENGTH,
+    openArtwork,
     async describe () {
       const stat = fs.statSync(path)
       const current = ['file', stat.dev ?? '', stat.ino ?? '', stat.size, stat.mtimeMs ?? stat.mtime?.getTime?.() ?? ''].join(':')

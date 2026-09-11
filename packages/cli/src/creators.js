@@ -72,25 +72,35 @@ export function creatorIdFromClassifiedSource(classified) {
  * channel that hosts it). Always returns an id so every archived video maps to
  * exactly one creator bucket, even when the source did not carry a creatorId.
  */
-export function deriveCreatorFromVideo(video = {}, channel = {}) {
-  const name = (typeof video.creatorName === 'string' && video.creatorName.trim())
-    || (typeof channel.creatorName === 'string' && channel.creatorName.trim())
-    || (typeof channel.channelName === 'string' && channel.channelName.trim())
-    || null
-  const handle = (typeof video.creatorHandle === 'string' && video.creatorHandle.trim()) || null
+function cleanString(val) {
+  return typeof val === 'string' && val.trim() ? val.trim() : null
+}
 
-  let creatorId = null
-  if (video.creatorSourceId) creatorId = normalizeCreatorId(video.creatorSourceId)
-  else if (handle) creatorId = `youtube:handle:${handle}`
-  else if (name) creatorId = `youtube:creator:${slugifyCreator(name)}`
-  else if (channel.ownerKey) creatorId = `owner:${channel.ownerKey}`
-  else if (channel.channelKey || channel.driveKey) creatorId = `channel:${channel.channelKey || channel.driveKey}`
+function resolveCreatorName(video, channel) {
+  return cleanString(video.creatorName) || cleanString(channel.creatorName) || cleanString(channel.channelName) || null
+}
+
+function resolveCreatorId(video, channel, name, handle) {
+  if (video.creatorSourceId) return normalizeCreatorId(video.creatorSourceId)
+  if (handle) return `youtube:handle:${handle}`
+  if (name) return `youtube:creator:${slugifyCreator(name)}`
+  if (channel.ownerKey) return `owner:${channel.ownerKey}`
+  const key = channel.channelKey || channel.driveKey
+  if (key) return `channel:${key}`
+  return null
+}
+
+export function deriveCreatorFromVideo(video = {}, channel = {}) {
+  const name = resolveCreatorName(video, channel)
+  const handle = cleanString(video.creatorHandle)
+  const creatorId = resolveCreatorId(video, channel, name, handle)
+  const defaultSourceType = creatorId ? creatorId.split(':')[0] : null
 
   return {
     creatorId,
     name: name || handle || creatorId,
     handle,
-    sourceType: video.sourceType || channel.sourceType || (creatorId ? creatorId.split(':')[0] : null)
+    sourceType: video.sourceType || channel.sourceType || defaultSourceType
   }
 }
 
@@ -119,11 +129,43 @@ function emptyCreator(creatorId) {
  * carries `previewVideos` and `unavailableVideos`; we de-duplicate videos by id
  * so a creator spread across several relay channels is counted once.
  */
+function updateCreatorClassification(record, video) {
+  record.videosArchived += 1
+  if (videoIsUnseeded(video)) record.videosUnseeded += 1
+  const type = video.classification?.type
+  if (type === 'movie') record.classification.movie += 1
+  else if (type === 'tv') record.classification.tv += 1
+  else record.classification.unknown += 1
+}
+
+function updateCreatorRecord(record, video, channelKey, seenVideos, derived) {
+  const { creatorId, name, handle, sourceType } = derived
+  if (!record.name && name) record.name = name
+  if (!record.handle && handle) record.handle = handle
+  if (!record.sourceType && sourceType) record.sourceType = sourceType
+  if (channelKey && !record.channelKeys.includes(channelKey)) record.channelKeys.push(channelKey)
+
+  const videoId = video.id || `${channelKey}:${video.blobId || video.path || ''}`
+  let seen = seenVideos.get(creatorId)
+  if (!seen) {
+    seen = new Set()
+    seenVideos.set(creatorId, seen)
+  }
+  if (!seen.has(videoId)) {
+    seen.add(videoId)
+    updateCreatorClassification(record, video)
+  }
+
+  const uploadedAt = Number(video.uploadedAt || 0) || 0
+  if (uploadedAt > record.lastArchivedAt) record.lastArchivedAt = uploadedAt
+}
+
 export function summarizeCreatorsFromCatalog(channels = []) {
   const byCreator = new Map()
   const seenVideos = new Map() // creatorId -> Set(videoId)
+  const channelList = Array.isArray(channels) ? channels : []
 
-  for (const channel of Array.isArray(channels) ? channels : []) {
+  for (const channel of channelList) {
     const channelKey = channel?.channelKey || channel?.driveKey || null
     const videos = [
       ...(Array.isArray(channel?.previewVideos) ? channel.previewVideos : []),
@@ -132,32 +174,12 @@ export function summarizeCreatorsFromCatalog(channels = []) {
 
     for (const video of videos) {
       if (!video) continue
-      const { creatorId, name, handle, sourceType } = deriveCreatorFromVideo(video, channel)
-      if (!creatorId) continue
+      const derived = deriveCreatorFromVideo(video, channel)
+      if (!derived.creatorId) continue
 
-      const record = byCreator.get(creatorId) || emptyCreator(creatorId)
-      if (!record.name && name) record.name = name
-      if (!record.handle && handle) record.handle = handle
-      if (!record.sourceType && sourceType) record.sourceType = sourceType
-      if (channelKey && !record.channelKeys.includes(channelKey)) record.channelKeys.push(channelKey)
-
-      const videoId = video.id || `${channelKey}:${video.blobId || video.path || ''}`
-      let seen = seenVideos.get(creatorId)
-      if (!seen) { seen = new Set(); seenVideos.set(creatorId, seen) }
-      if (!seen.has(videoId)) {
-        seen.add(videoId)
-        record.videosArchived += 1
-        if (videoIsUnseeded(video)) record.videosUnseeded += 1
-        const type = video.classification?.type
-        if (type === 'movie') record.classification.movie += 1
-        else if (type === 'tv') record.classification.tv += 1
-        else record.classification.unknown += 1
-      }
-
-      const uploadedAt = Number(video.uploadedAt || 0) || 0
-      if (uploadedAt > record.lastArchivedAt) record.lastArchivedAt = uploadedAt
-
-      byCreator.set(creatorId, record)
+      const record = byCreator.get(derived.creatorId) || emptyCreator(derived.creatorId)
+      updateCreatorRecord(record, video, channelKey, seenVideos, derived)
+      byCreator.set(derived.creatorId, record)
     }
   }
 

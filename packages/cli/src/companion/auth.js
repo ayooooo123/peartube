@@ -69,6 +69,26 @@ function header (headers, name) {
   return ''
 }
 
+function headerPresent (headers, name) {
+  if (!headers) return false
+  if (typeof headers.get === 'function') return headers.get(name) !== null
+  const lower = name.toLowerCase()
+  if (headers[lower] !== undefined) return true
+  if (headers[name] !== undefined) return true
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === lower) return true
+  }
+  return false
+}
+
+export function hasControlAuthHeaders (headers) {
+  if (!headers) return false
+  for (const name of Object.values(CONTROL_AUTH_HEADERS)) {
+    if (headerPresent(headers, name)) return true
+  }
+  return false
+}
+
 function keyFromSecret (secret) {
   if (typeof secret !== 'string' || !/^[a-f0-9]{64}$/.test(secret)) {
     throw authError(

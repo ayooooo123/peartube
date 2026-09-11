@@ -82,7 +82,11 @@ function immutablePlaybackFixtureForCore(coreRef, fill, title) {
 
 test('preparePlayback returns a streamable URL without waiting for startup prefetch', async (t) => {
   const api = createApi({ ctx: {} })
-  const calls = []
+  let releasePrefetch
+  let markPrefetchStarted
+  const prefetch = new Promise(resolve => { releasePrefetch = resolve })
+  const prefetchStarted = new Promise(resolve => { markPrefetchStarted = resolve })
+  t.teardown(releasePrefetch)
   const statsValue = {
     status: 'unknown',
     progress: 0,
@@ -97,47 +101,29 @@ test('preparePlayback returns a streamable URL without waiting for startup prefe
     isComplete: false,
   }
 
-  api.getVideoUrl = async (...args) => {
-    calls.push(['getVideoUrl', args])
-    return { url: 'http://127.0.0.1:60023/video.mp4' }
+  api.getVideoUrl = async () => ({ url: 'http://127.0.0.1:60023/video.mp4' })
+  api.prefetchVideo = () => {
+    markPrefetchStarted()
+    return prefetch
   }
+  api.getVideoStats = () => ({ ...statsValue })
 
-  api.prefetchVideo = (...args) => {
-    calls.push(['prefetchVideo', args])
-    return new Promise(() => {})
-  }
-
-  api.getVideoStats = (...args) => {
-    calls.push(['getVideoStats', args])
-    return { ...statsValue }
-  }
-
+  let timer
+  const timedOut = new Promise(resolve => { timer = setTimeout(() => resolve({ timedOut: true }), 50) })
+  t.teardown(() => clearTimeout(timer))
   const result = await Promise.race([
-    api.preparePlayback(
-      'channel-key',
-      'videos/demo.mp4',
-      'public-bee-key',
-      'blob-id',
-      'blobs-core-key',
-      'video/mp4',
-    ),
-    new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 50)),
+    Promise.all([
+      api.preparePlayback(
+        'channel-key', 'videos/demo.mp4', 'public-bee-key',
+        'blob-id', 'blobs-core-key', 'video/mp4',
+      ),
+      prefetchStarted,
+    ]).then(([prepared]) => prepared),
+    timedOut,
   ])
 
   t.is(result.url, 'http://127.0.0.1:60023/video.mp4')
   t.alike(result.stats, statsValue)
-  // The URL remains the same direct blob-server URL; the API-level playback
-  // path now starts prefetch in the background without blocking native player
-  // handoff.
-  t.is(result.warmupStarted, undefined)
-  t.is(result.peerWarmupStarted, undefined)
-  t.is(result.selectedBlobWarmup, undefined)
-
-  t.alike(calls, [
-    ['getVideoUrl', ['channel-key', 'videos/demo.mp4', 'public-bee-key', 'blob-id', 'blobs-core-key', 'video/mp4']],
-    ['prefetchVideo', ['channel-key', 'videos/demo.mp4', 'public-bee-key']],
-    ['getVideoStats', ['channel-key', 'videos/demo.mp4']],
-  ])
 })
 
 

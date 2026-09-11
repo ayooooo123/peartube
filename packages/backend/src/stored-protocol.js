@@ -2,6 +2,7 @@ import b4a from 'b4a'
 
 export const STORED_PROTOCOL_ERROR_CODE = 'STORED_PROTOCOL_VERSION_UNSUPPORTED'
 export const STORED_PROTOCOL_MARKER_FILENAME = 'stored-protocol.json'
+export const STORAGE_FORMAT_VERSION = 10
 
 // Protocols 5 and 6 add transport methods only; persisted storage remains
 // byte-for-byte compatible. Explicit validators preserve the fail-closed
@@ -142,7 +143,9 @@ function writeMarkerAtomically(markerPath, expectedVersion, fs) {
     fs.writeFileSync(temporaryPath, serialized, { encoding: 'utf8', mode: 0o600 })
     fs.renameSync(temporaryPath, markerPath)
   } catch (error) {
-    try { fs.unlinkSync(temporaryPath) } catch {}
+    try { fs.unlinkSync(temporaryPath) } catch {
+      // best-effort cleanup: the write failure is the error to surface
+    }
     throw error
   }
 }
@@ -155,7 +158,7 @@ function writeMarkerAtomically(markerPath, expectedVersion, fs) {
  */
 export function prepareStoredProtocolState({
   storagePath,
-  expectedVersion,
+  expectedVersion = STORAGE_FORMAT_VERSION,
   migrations = null,
   fs,
   path,

@@ -37,7 +37,7 @@ function normalizeLegacyImportState (legacyImport) {
   return legacyImport.state
 }
 
-export function projectPublisherDeviceStatus ({ authorizationState, localDevice, legacyImport } = {}) {
+function validatePublisherDeviceInputs (authorizationState, localDevice) {
   if (!authorizationState || typeof authorizationState !== 'object') invalid('authorizationState is required')
   if (!localDevice || typeof localDevice !== 'object') invalid('localDevice is required')
 
@@ -56,15 +56,59 @@ export function projectPublisherDeviceStatus ({ authorizationState, localDevice,
   const localPolicyEpoch = uint(localDevice.policyEpoch, 'localDevice.policyEpoch')
   if (localCatalogEpoch > catalogEpoch) invalid('localDevice.catalogEpoch is ahead of the catalog')
   if (localPolicyEpoch > policyEpoch) invalid('localDevice.policyEpoch is ahead of the catalog')
-  const legacyImportState = normalizeLegacyImportState(legacyImport)
 
+  return {
+    publisherId,
+    devicePublicKey,
+    writerKey,
+    catalogEpoch,
+    policyEpoch,
+    activeRootKey,
+    localCatalogEpoch,
+    localPolicyEpoch
+  }
+}
+
+function evaluateWriterStatus (writerKey, writer, devicePublicKey) {
+  if (!writerKey) {
+    return { status: 'unable-to-publish', reasonCode: 'LOCAL_WRITER_UNAVAILABLE' }
+  }
+  if (!writer) {
+    return { status: 'unable-to-publish', reasonCode: 'DEVICE_NOT_ADMITTED' }
+  }
+  if (!devicePublicKey) {
+    return { status: 'unable-to-publish', reasonCode: 'LOCAL_SIGNER_UNAVAILABLE' }
+  }
+  if (!b4a.equals(bytes32(writer.signerKey, 'writer.signerKey'), devicePublicKey)) {
+    return { status: 'unable-to-publish', reasonCode: 'DEVICE_SIGNER_MISMATCH' }
+  }
+  if (writer.revocation) {
+    return { status: 'revoked', reasonCode: 'DEVICE_REVOKED' }
+  }
+  return { status: 'authorized', reasonCode: null }
+}
+
+function determineDeviceStatusAndReason ({
+  localDevice,
+  activeRootKey,
+  catalogEpoch,
+  policyEpoch,
+  localCatalogEpoch,
+  localPolicyEpoch,
+  writerKey,
+  writer,
+  devicePublicKey,
+  legacyImportState
+}) {
   let status = 'authority-lost'
   let reasonCode = 'ROOT_AUTHORITY_LOST'
   let rootAuthorityCurrent = false
+
   if (localDevice.hasRootAuthority) {
     const rootPublicKey = bytes32(localDevice.rootPublicKey, 'localDevice.rootPublicKey')
-    if (!b4a.equals(rootPublicKey, activeRootKey)) reasonCode = 'ROOT_AUTHORITY_ROTATED'
-    else {
+    if (!b4a.equals(rootPublicKey, activeRootKey)) {
+      reasonCode = 'ROOT_AUTHORITY_ROTATED'
+    } else {
       rootAuthorityCurrent = true
       if (localCatalogEpoch < catalogEpoch) {
         status = 'stale'
@@ -75,45 +119,51 @@ export function projectPublisherDeviceStatus ({ authorizationState, localDevice,
       }
     }
   }
-  const writer = writerForDevice(authorizationState, writerKey)
+
   if (rootAuthorityCurrent && localCatalogEpoch === catalogEpoch && localPolicyEpoch === policyEpoch) {
-    if (!writerKey) {
-      status = 'unable-to-publish'
-      reasonCode = 'LOCAL_WRITER_UNAVAILABLE'
-    } else if (!writer) {
-      status = 'unable-to-publish'
-      reasonCode = 'DEVICE_NOT_ADMITTED'
-    } else if (!devicePublicKey) {
-      status = 'unable-to-publish'
-      reasonCode = 'LOCAL_SIGNER_UNAVAILABLE'
-    } else if (!b4a.equals(bytes32(writer.signerKey, 'writer.signerKey'), devicePublicKey)) {
-      status = 'unable-to-publish'
-      reasonCode = 'DEVICE_SIGNER_MISMATCH'
-    } else if (writer.revocation) {
-      status = 'revoked'
-      reasonCode = 'DEVICE_REVOKED'
-    } else {
-      status = 'authorized'
-      reasonCode = null
-    }
+    const writerEval = evaluateWriterStatus(writerKey, writer, devicePublicKey)
+    status = writerEval.status
+    reasonCode = writerEval.reasonCode
   }
+
   if (legacyImportState === 'failed') {
     status = 'unable-to-publish'
     reasonCode = 'LEGACY_IMPORT_FAILED'
   }
+
+  return { status, reasonCode, rootAuthorityCurrent }
+}
+
+export function projectPublisherDeviceStatus ({ authorizationState, localDevice, legacyImport } = {}) {
+  const inputs = validatePublisherDeviceInputs(authorizationState, localDevice)
+  const legacyImportState = normalizeLegacyImportState(legacyImport)
+  const writer = writerForDevice(authorizationState, inputs.writerKey)
+  const { status, reasonCode, rootAuthorityCurrent } = determineDeviceStatusAndReason({
+    localDevice,
+    activeRootKey: inputs.activeRootKey,
+    catalogEpoch: inputs.catalogEpoch,
+    policyEpoch: inputs.policyEpoch,
+    localCatalogEpoch: inputs.localCatalogEpoch,
+    localPolicyEpoch: inputs.localPolicyEpoch,
+    writerKey: inputs.writerKey,
+    writer,
+    devicePublicKey: inputs.devicePublicKey,
+    legacyImportState
+  })
+
   const projected = {
-    publisherId,
+    publisherId: inputs.publisherId,
     status,
     canPublish: status === 'authorized',
     canPlayLocal: true,
     canExportLocal: true,
     canDeleteLocal: true,
     canRootTransition: rootAuthorityCurrent && status !== 'stale' && legacyImportState !== 'failed',
-    catalogEpoch,
-    policyEpoch
+    catalogEpoch: inputs.catalogEpoch,
+    policyEpoch: inputs.policyEpoch
   }
   if (reasonCode) projected.reasonCode = reasonCode
-  if (devicePublicKey) projected.devicePublicKey = devicePublicKey
+  if (inputs.devicePublicKey) projected.devicePublicKey = inputs.devicePublicKey
   if (writer) projected.admissionExpiresAt = uint(writer.expiresAt, 'writer.expiresAt')
   if (writer?.revocation) projected.revocationCutoff = uint(writer.revocation.acceptedThroughSequence, 'writer.revocation.acceptedThroughSequence')
   if (legacyImportState) projected.legacyImportState = legacyImportState

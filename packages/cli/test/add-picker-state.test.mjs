@@ -30,8 +30,7 @@ test('initial state is data-only and unknown actions are exact no-ops', (t) => {
     choices: {},
     latestRequestId: 0,
     progress: null,
-    result: null,
-    exitConfirm: null
+    result: null
   })
   t.is(reducePicker(state, { type: 'future.action', payload: {} }), state)
   t.is(JSON.stringify(JSON.parse(JSON.stringify(state))), JSON.stringify(state))
@@ -432,9 +431,7 @@ test('bulk path preserves stable mapping selection through review, progress, and
   t.is(state.screen, 'progress')
 
   const progress = {
-    phase: 'published',
-    checkpoint: { jobId: 'bulk-1', completed: ['map-a', 'map-c'] },
-    localBytes: { retained: true, paths: ['/media/a', '/media/c'] }
+    phase: 'completed'
   }
   state = reducePicker(state, { type: 'progress.update', progress })
   state = reducePicker(state, { type: 'progress.complete', value: { imported: 2 } })
@@ -442,7 +439,7 @@ test('bulk path preserves stable mapping selection through review, progress, and
   t.alike(state.result, { status: 'completed', value: { imported: 2 }, progress })
 })
 
-test('Esc before a durable job produces a normal cancelled result', (t) => {
+test('interrupt before acquisition produces a normal cancelled result', (t) => {
   const state = createPickerState({ query: 'cancel me' })
   const cancelled = reducePicker(state, { type: 'interrupt' })
 
@@ -451,11 +448,10 @@ test('Esc before a durable job produces a normal cancelled result', (t) => {
   t.is(state.screen, 'search')
 })
 
-test('malformed progress updates cannot erase a guarded durable checkpoint', (t) => {
+test('malformed or retired progress updates cannot erase canonical acquisition progress', (t) => {
   const progress = {
-    phase: 'projecting',
-    checkpoint: { jobId: 'guarded-job', cursor: 7 },
-    localBytes: { retained: true, path: '/media/guarded.mp4' }
+    phase: 'publishing',
+    message: 'Publishing publication'
   }
   const state = createPickerState({ screen: 'progress', progress })
   const stateBytes = JSON.stringify(state)
@@ -465,85 +461,30 @@ test('malformed progress updates cannot erase a guarded durable checkpoint', (t)
     null,
     {},
     { phase: 'unknown' },
-    { phase: 'projecting' },
-    { phase: 'projecting', checkpoint: {}, localBytes: null },
-    { phase: 'projecting', checkpoint: {}, localBytes: {} }
+    { phase: 'legacy-pipeline' },
+    { phase: 'unknown-acquisition-state' }
   ]) {
     const next = reducePicker(state, { type: 'progress.update', progress: malformed })
     t.is(next, state)
     t.is(JSON.stringify(next), stateBytes)
   }
 
-  const confirming = reducePicker(state, { type: 'interrupt' })
-  t.is(confirming.screen, 'exitConfirm')
-  t.alike(confirming.exitConfirm.resume.progress, progress)
+  const cancelled = reducePicker(state, { type: 'interrupt' })
+  t.is(cancelled.screen, 'result')
+  t.alike(cancelled.result, { status: 'cancelled', progress })
 })
 
-for (const phase of ['replicationPending', 'projecting', 'announcing']) {
-  test(`interrupt during ${phase} requires confirmation and preserves exact resumable data`, (t) => {
-    const checkpoint = {
-      jobId: `job-${phase}`,
-      phase,
-      requiredRanges: [{ start: 0, end: 42 }]
-    }
-    const localBytes = {
-      retained: true,
-      path: `/media/${phase}.mp4`,
-      length: 42
-    }
-    const progress = { phase, checkpoint, localBytes, completed: 3, total: 5 }
-    const state = createPickerState({ screen: 'progress', progress })
-    const stateBytes = JSON.stringify(state)
+test('interrupt during canonical provider acquisition cancels without a resumability handoff', (t) => {
+  const progress = { phase: 'acquiring', message: 'Acquiring source' }
+  const state = createPickerState({ screen: 'progress', progress })
+  const stateBytes = JSON.stringify(state)
 
-    const confirming = reducePicker(state, { type: 'interrupt' })
-    t.is(confirming.screen, 'exitConfirm')
-    t.alike(confirming.exitConfirm.resume.progress, progress)
-    t.is(JSON.stringify(state), stateBytes)
-
-    const repeated = reducePicker(confirming, { type: 'interrupt' })
-    t.is(repeated, confirming)
-
-    const resumed = reducePicker(confirming, { type: 'exit.dismiss' })
-    t.is(resumed, state)
-    t.is(JSON.stringify(resumed), stateBytes)
-
-    const confirmedAgain = reducePicker(resumed, { type: 'interrupt' })
-    const exited = reducePicker(confirmedAgain, { type: 'exit.confirm' })
-    t.is(exited.screen, 'result')
-    t.alike(exited.result, {
-      status: 'exited',
-      checkpoint,
-      localBytes,
-      progress
-    })
-    t.is(JSON.stringify(exited.result.checkpoint), JSON.stringify(checkpoint))
-    t.is(JSON.stringify(exited.result.localBytes), JSON.stringify(localBytes))
-
-    let backState = createPickerState({ screen: 'review' })
-    backState = reducePicker(backState, { type: 'step.confirm' })
-    backState = reducePicker(backState, { type: 'progress.update', progress })
-    const backStateBytes = JSON.stringify(backState)
-
-    const backConfirming = reducePicker(backState, { type: 'step.back' })
-    t.is(backConfirming.screen, 'exitConfirm')
-    t.alike(backConfirming.exitConfirm.resume.progress, progress)
-    const backResumed = reducePicker(backConfirming, { type: 'exit.dismiss' })
-    t.is(backResumed, backState)
-    t.is(JSON.stringify(backResumed), backStateBytes)
-
-    const backConfirmedAgain = reducePicker(backResumed, { type: 'step.back' })
-    const backExited = reducePicker(backConfirmedAgain, { type: 'exit.confirm' })
-    t.is(backExited.screen, 'result')
-    t.alike(backExited.result, {
-      status: 'exited',
-      checkpoint,
-      localBytes,
-      progress
-    })
-    t.is(JSON.stringify(backExited.result.checkpoint), JSON.stringify(checkpoint))
-    t.is(JSON.stringify(backExited.result.localBytes), JSON.stringify(localBytes))
-  })
-}
+  const cancelled = reducePicker(state, { type: 'interrupt' })
+  t.is(cancelled.screen, 'result')
+  t.alike(cancelled.result, { status: 'cancelled', progress })
+  t.is(JSON.stringify(state), stateBytes)
+  t.is(reducePicker(cancelled, { type: 'interrupt' }), cancelled)
+})
 
 test('actions and candidate inputs are not mutated or retained as mutable state aliases', (t) => {
   const items = [{ id: 'one', value: 'One', metadata: { nested: ['original'] } }]
@@ -578,9 +519,7 @@ test('cyclic action payloads are rejected without changing serializable state or
   }
 
   const progress = {
-    phase: 'projecting',
-    checkpoint: { jobId: 'cycle-job' },
-    localBytes: { retained: true }
+    phase: 'verifying'
   }
   const cyclicProgress = { ...progress }
   cyclicProgress.self = cyclicProgress
@@ -615,18 +554,15 @@ test('cloning preserves prototype-like keys as own data without inherited routin
   t.is(reducePicker(roundTripped, { type: 'step.confirm' }), roundTripped)
 
   const progress = JSON.parse(
-    '{\"phase\":\"projecting\",' +
-    '\"checkpoint\":{\"jobId\":\"safe\",\"__proto__\":{\"polluted\":true},' +
-    '\"constructor\":\"c\",\"prototype\":\"p\"},' +
-    '\"localBytes\":{\"retained\":true,\"__proto__\":{\"polluted\":true},' +
-    '\"constructor\":\"c\",\"prototype\":\"p\"}}'
+    '{\"phase\":\"publishing\",' +
+    '\"__proto__\":{\"polluted\":true},\"constructor\":\"c\",\"prototype\":\"p\"}'
   )
   state = createPickerState({ screen: 'progress', progress })
   t.is(JSON.stringify(state.progress), JSON.stringify(progress))
-  t.is(Object.getPrototypeOf(state.progress.checkpoint), Object.prototype)
-  t.is(Object.prototype.hasOwnProperty.call(state.progress.checkpoint, '__proto__'), true)
-  t.is(state.progress.checkpoint.polluted, undefined)
-  t.is(reducePicker(state, { type: 'interrupt' }).screen, 'exitConfirm')
+  t.is(Object.getPrototypeOf(state.progress), Object.prototype)
+  t.is(Object.prototype.hasOwnProperty.call(state.progress, '__proto__'), true)
+  t.is(state.progress.polluted, undefined)
+  t.is(reducePicker(state, { type: 'interrupt' }).screen, 'result')
   t.is(JSON.stringify(JSON.parse(JSON.stringify(state))), JSON.stringify(state))
 })
 
@@ -649,9 +585,7 @@ test('known actions are exact no-ops after the terminal result screen', (t) => {
     { type: 'step.confirm' },
     { type: 'step.back' },
     { type: 'progress.update', progress: { phase: 'ignored' } },
-    { type: 'progress.complete', value: 'ignored' },
-    { type: 'exit.dismiss' },
-    { type: 'exit.confirm' }
+    { type: 'progress.complete', value: 'ignored' }
   ]
 
   for (const action of actions) t.is(reducePicker(result, action), result)

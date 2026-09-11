@@ -81,6 +81,104 @@ function getExtension(mimeType?: string): string {
   if (mimeType?.includes('matroska') || mimeType?.includes('mkv')) return 'mkv'
   return 'mp4'
 }
+function createQueuedDownloadItem(id: string, video: VideoData): DownloadItem {
+  return {
+    id,
+    videoId: video.id || video.path || '',
+    channelKey: video.channelKey,
+    title: video.title,
+    thumbnail: video.thumbnail,
+    status: 'queued',
+    progress: 0,
+    bytesDownloaded: 0,
+    totalBytes: video.size || 0,
+    speed: '0 B/s',
+    startedAt: Date.now(),
+  }
+}
+
+async function executeWebDownload(opts: {
+  id: string
+  video: VideoData
+  rpc: any
+  signal: AbortSignal
+  downloadForWeb: (id: string, url: string, filename: string, signal: AbortSignal) => Promise<void>
+  setDownloads: React.Dispatch<React.SetStateAction<DownloadItem[]>>
+}) {
+  const { id, video, rpc, signal, downloadForWeb, setDownloads } = opts
+  const result = await rpc.downloadVideo({
+    channelKey: video.channelKey,
+    videoId: video.id || video.path,
+    destPath: '',
+    publicBeeKey: (video as any).publicBeeKey || undefined,
+  })
+
+  if (!result?.filePath) {
+    throw new Error('Failed to get video URL')
+  }
+
+  const blobUrl = result.filePath
+  const totalBytes = result.size || video.size || 0
+  const ext = getExtension((video as any).mimeType)
+  const filename = `${sanitizeFilename(video.title)}_${video.id || 'video'}.${ext}`
+
+  console.log('[Downloads] Blob URL ready')
+  setDownloads(prev => prev.map(d => d.id === id ? { ...d, totalBytes } : d))
+
+  await downloadForWeb(id, blobUrl, filename, signal)
+}
+
+async function executeNativeDownload(opts: {
+  id: string
+  video: VideoData
+  rpc: any
+  setDownloads: React.Dispatch<React.SetStateAction<DownloadItem[]>>
+}) {
+  const { id, video, rpc, setDownloads } = opts
+  const result = await rpc.downloadVideo({
+    channelKey: video.channelKey,
+    videoId: video.id || video.path,
+    destPath: '',
+    publicBeeKey: (video as any).publicBeeKey || undefined,
+  })
+
+  if (!result?.success) {
+    throw new Error(result?.error || 'Download failed')
+  }
+
+  console.log('[Downloads] Backend saved to:', result.filePath)
+
+  setDownloads(prev => prev.map(d => d.id === id ? {
+    ...d,
+    filePath: result.filePath,
+    totalBytes: result.size || video.size || 0,
+  } : d))
+
+  Alert.alert(
+    'Download Complete',
+    `"${video.title}" saved to Downloads folder.`
+  )
+}
+
+function handleDownloadError(
+  id: string,
+  video: VideoData,
+  err: any,
+  signal: AbortSignal,
+  setDownloads: React.Dispatch<React.SetStateAction<DownloadItem[]>>
+) {
+  if (err.name === 'AbortError' || signal.aborted) {
+    console.log('[Downloads] Cancelled:', video.title)
+    setDownloads(prev => prev.map(d => d.id === id ? { ...d, status: 'cancelled' } : d))
+  } else {
+    console.error('[Downloads] Error:', err)
+    setDownloads(prev => prev.map(d => d.id === id ? {
+      ...d,
+      status: 'error',
+      error: err.message || 'Download failed',
+    } : d))
+  }
+}
 
 interface DownloadsProviderProps {
   children: ReactNode
@@ -189,7 +287,7 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
     const chunks: ArrayBuffer[] = []
     let bytesReceived = 0
 
-    while (true) {
+    for (;;) {
       const { done, value } = await reader.read()
       if (done) break
       if (!value) continue
@@ -237,19 +335,7 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
      }
 
     // Create download item
-    const downloadItem: DownloadItem = {
-      id,
-      videoId: video.id || video.path || '',
-      channelKey: video.channelKey,
-      title: video.title,
-      thumbnail: video.thumbnail,
-      status: 'queued',
-      progress: 0,
-      bytesDownloaded: 0,
-      totalBytes: video.size || 0,
-      speed: '0 B/s',
-      startedAt: Date.now()
-    }
+    const downloadItem = createQueuedDownloadItem(id, video)
 
     // Add to list (or update existing)
     setDownloads(prev => {
@@ -266,51 +352,21 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
       setDownloads(prev => prev.map(d => d.id === id ? { ...d, status: 'downloading' } : d))
 
       if (Platform.OS === 'web') {
-        // Web/Desktop: Get blob URL and download via browser
-        const result = await rpc.downloadVideo({
-          channelKey: video.channelKey,
-          videoId: video.id || video.path,
-          destPath: '',
-          publicBeeKey: (video as any).publicBeeKey || undefined
+        await executeWebDownload({
+          id,
+          video,
+          rpc,
+          signal: abortController.signal,
+          downloadForWeb,
+          setDownloads,
         })
-
-        if (!result?.filePath) {
-          throw new Error('Failed to get video URL')
-        }
-
-        const blobUrl = result.filePath
-         const totalBytes = result.size || video.size || 0
-         const ext = getExtension((video as any).mimeType)
-         const filename = `${sanitizeFilename(video.title)}_${video.id || 'video'}.${ext}`
-
-        console.log('[Downloads] Blob URL ready')
-        setDownloads(prev => prev.map(d => d.id === id ? { ...d, totalBytes } : d))
-
-        await downloadForWeb(id, blobUrl, filename, abortController.signal)
       } else {
-        const result = await rpc.downloadVideo({
-          channelKey: video.channelKey,
-          videoId: video.id || video.path,
-          destPath: '', // Backend will choose the path
-          publicBeeKey: (video as any).publicBeeKey || undefined
+        await executeNativeDownload({
+          id,
+          video,
+          rpc,
+          setDownloads,
         })
-
-        if (!result?.success) {
-          throw new Error(result?.error || 'Download failed')
-        }
-
-        console.log('[Downloads] Backend saved to:', result.filePath)
-
-        setDownloads(prev => prev.map(d => d.id === id ? {
-          ...d,
-          filePath: result.filePath,
-          totalBytes: result.size || video.size || 0
-        } : d))
-
-        Alert.alert(
-          'Download Complete',
-          `"${video.title}" saved to Downloads folder.`
-        )
       }
 
       // Mark as complete
@@ -318,27 +374,16 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
         ...d,
         status: 'complete',
         progress: 100,
-        completedAt: Date.now()
+        completedAt: Date.now(),
       } : d))
 
       console.log('[Downloads] Complete:', video.title)
-
-       } catch (err: any) {
-         if (err.name === 'AbortError' || abortController.signal.aborted) {
-           console.log('[Downloads] Cancelled:', video.title)
-           setDownloads(prev => prev.map(d => d.id === id ? { ...d, status: 'cancelled' } : d))
-         } else {
-           console.error('[Downloads] Error:', err)
-           setDownloads(prev => prev.map(d => d.id === id ? {
-             ...d,
-             status: 'error',
-             error: err.message || 'Download failed'
-           } : d))
-         }
-       } finally {
-       abortControllers.current.delete(id)
-       speedTrackers.current.delete(id)
-     }
+    } catch (err: any) {
+      handleDownloadError(id, video, err, abortController.signal, setDownloads)
+    } finally {
+      abortControllers.current.delete(id)
+      speedTrackers.current.delete(id)
+    }
    }, [downloadForWeb])
 
   // Cancel a download

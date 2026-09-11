@@ -64,6 +64,48 @@ function normalizeCoreKey(coreKey) {
   if (!/^[0-9a-f]{64}$/i.test(hex)) throw new Error('coreKey must be a 32-byte hex key')
   return hex.toLowerCase()
 }
+function isNotFoundError (error) {
+  if (!error) return false
+  return error.statusCode === 404 || /404/.test(error.message || '')
+}
+
+async function fetchBlockKey (provider, key) {
+  if (key === null || key === undefined) return null
+  try {
+    return await provider.getBlock({ key })
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error
+    return null
+  }
+}
+
+function resolveBlockQuery (blockIndexOrHash, expectedHash) {
+  let hash = expectedHash
+  let blockIndex = null
+  if (b4a.isBuffer(blockIndexOrHash) && blockIndexOrHash.byteLength === 32) {
+    hash = blockIndexOrHash
+  } else if (typeof blockIndexOrHash === 'string' && /^[0-9a-f]{64}$/i.test(blockIndexOrHash)) {
+    hash = b4a.from(blockIndexOrHash, 'hex')
+  } else if (Number.isSafeInteger(blockIndexOrHash)) {
+    blockIndex = blockIndexOrHash
+  }
+  if (!b4a.isBuffer(hash) || hash.byteLength !== 32) {
+    throw new Error('a 32-byte expected leaf hash is required to restore a block')
+  }
+  return { hash, blockIndex }
+}
+
+function verifyRestoredBlockData (raw, hash) {
+  if (raw === null || raw === undefined) return null
+  const data = b4a.isBuffer(raw) ? raw : b4a.from(raw)
+  if (data.byteLength === 0) return null
+  if (!b4a.equals(crypto.data(data), hash)) {
+    const error = new Error('restored block does not match the tree')
+    error.code = 'REMOTE_BLOCK_CORRUPT'
+    throw error
+  }
+  return data
+}
 
 /**
  * A verifying block store over an object provider.
@@ -226,53 +268,32 @@ export function createRemoteBlockStore({ provider, prefix = '', coreKey } = {}) 
      * expectedHash is the leaf hash read from the core's own merkle tree.
      */
     async get(blockIndexOrHash, { expectedHash } = {}) {
-      let hash = expectedHash
-      let blockIndex = null
-      if (b4a.isBuffer(blockIndexOrHash) && blockIndexOrHash.byteLength === 32) {
-        hash = blockIndexOrHash
-      } else if (typeof blockIndexOrHash === 'string' && /^[0-9a-f]{64}$/i.test(blockIndexOrHash)) {
-        hash = b4a.from(blockIndexOrHash, 'hex')
-      } else if (Number.isSafeInteger(blockIndexOrHash)) {
-        blockIndex = blockIndexOrHash
-      }
-
-      if (!b4a.isBuffer(hash) || hash.byteLength !== 32) {
-        throw new Error('a 32-byte expected leaf hash is required to restore a block')
-      }
-
+      const { hash, blockIndex } = resolveBlockQuery(blockIndexOrHash, expectedHash)
       const contentKey = contentKeyFor(hash)
       const legacyKey = core && blockIndex !== null ? keyFor(blockIndex) : null
 
       let raw = null
-      if (core && blockIndex !== null) {
-        try {
-          raw = await provider.getBlock({ key: legacyKey })
-        } catch (error) {
-          if (error?.statusCode !== 404 && !/404/.test(error?.message || '')) throw error
-        }
-        if ((raw === null || raw === undefined) && contentKey !== null) {
-          try {
-            raw = await provider.getBlock({ key: contentKey })
-          } catch (error) {
-            if (error?.statusCode !== 404 && !/404/.test(error?.message || '')) throw error
-          }
-        }
-      } else if (contentKey !== null) {
-        try {
-          raw = await provider.getBlock({ key: contentKey })
-        } catch (error) {
-          if (error?.statusCode !== 404 && !/404/.test(error?.message || '')) throw error
-        }
+      if (legacyKey !== null) {
+        raw = await fetchBlockKey(provider, legacyKey)
       }
-      if (raw === null || raw === undefined) return null
-      const data = b4a.isBuffer(raw) ? raw : b4a.from(raw)
-      if (data.byteLength === 0) return null
-      if (!b4a.equals(crypto.data(data), hash)) {
-        const error = new Error('restored block does not match the tree')
-        error.code = 'REMOTE_BLOCK_CORRUPT'
-        throw error
+      if ((raw === null || raw === undefined) && contentKey !== null) {
+        raw = await fetchBlockKey(provider, contentKey)
       }
-      return data
-    }
+      return verifyRestoredBlockData(raw, hash)
+    },
+    async verify(blockIndexOrHash, { expectedHash } = {}) {
+      try {
+        const data = await this.get(blockIndexOrHash, { expectedHash })
+        if (data === null || data === undefined) {
+          return { verified: false, reason: 'missing' }
+        }
+        return { verified: true, byteLength: data.byteLength }
+      } catch (error) {
+        if (error?.code === 'REMOTE_BLOCK_CORRUPT') {
+          return { verified: false, reason: 'corrupt', error }
+        }
+        return { verified: false, reason: 'unreachable', error }
+      }
+    },
   }
 }

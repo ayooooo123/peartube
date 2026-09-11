@@ -3,17 +3,14 @@
  * End-to-end smoke for the real `peartube add` binary.
  *
  * It launches the actual executable (argv parser, command dispatch, diagnostic
- * scope, job store, executor, and result writer) as a separate process for each
- * scenario. Network durability, the metadata authorities, and yt-dlp are
- * supplied through the injected deterministic deps module so the run needs no
- * live key, internet, or relay. Live P2P full-range durability and interactive
- * PTY keystrokes are covered by the backend seed-pin integration suites and the
- * terminal unit suites respectively; this harness proves the real command
- * wiring end to end.
+ * scope, provider acquisition, and result writer) as a separate process for
+ * each scenario. The metadata authorities and source are supplied through the
+ * injected deterministic deps module so the run needs no live key, internet,
+ * or relay. Live P2P full-range durability and interactive PTY keystrokes are
+ * covered by the backend seed-pin integration suites and terminal unit suites;
+ * this harness proves the real command wiring end to end.
  */
 import { spawn } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -21,13 +18,19 @@ const here = dirname(fileURLToPath(import.meta.url))
 const cliRoot = join(here, '..')
 const entry = join(cliRoot, 'peartube.js')
 const depsModule = join(cliRoot, 'test', 'fixtures', 'add-deps-fake.mjs')
-const workDir = mkdtempSync(join(tmpdir(), 'peartube-add-smoke-'))
 
 function run (args, env = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [entry, ...args], {
       cwd: cliRoot,
-      env: { PATH: process.env.PATH, PEARTUBE_ADD_DEPS_MODULE: depsModule, TMDB_API_KEY: 'smoke-token', ...env }
+      env: {
+        PATH: process.env.PATH,
+        PEARTUBE_ADD_DEPS_MODULE: depsModule,
+        TMDB_API_KEY: 'smoke-token',
+        ...env,
+        // Keep the child hermetic while carrying the selected parent loader.
+        ...(process.env.NODE_OPTIONS ? { NODE_OPTIONS: process.env.NODE_OPTIONS } : {})
+      }
     })
     let stdout = ''
     let stderr = ''
@@ -49,7 +52,7 @@ const TVDB_ENV = { TMDB_API_KEY: '', PEARTUBE_TVDB_API_KEY: 'smoke-tvdb-token' }
 
 const scenarios = [
   {
-    name: 'scripted movie publishes after verified durability',
+    name: 'scripted movie publishes after canonical acquisition completion',
     async check () { const r = await run(MOVIE); return json(r).status === 'published' && !r.stdout.includes('smoke-token') }
   },
   {
@@ -59,24 +62,6 @@ const scenarios = [
   {
     name: 'target-authority duplicate is a successful no-op',
     async check () { const r = await run(MOVIE, { PEARTUBE_FAKE_DUPLICATE: '1' }); const j = json(r); return j.status === 'already-exists' && j.videoId === 'existing-9' }
-  },
-  {
-    name: 'no eligible peer stays replicationPending and retains bytes',
-    async check () {
-      const bee = join(workDir, 'pending.json')
-      const r = await run(MOVIE, { PEARTUBE_FAKE_PENDING: '1', PEARTUBE_FAKE_BEE_FILE: bee })
-      return json(r).status === 'replicationPending' && r.stderr.includes('retained')
-    }
-  },
-  {
-    name: 'resume after durability succeeds without repeated upload',
-    async check () {
-      const bee = join(workDir, 'resume.json')
-      const first = await run(MOVIE, { PEARTUBE_FAKE_PENDING: '1', PEARTUBE_FAKE_BEE_FILE: bee })
-      if (json(first).status !== 'replicationPending') return false
-      const second = await run(MOVIE, { PEARTUBE_FAKE_BEE_FILE: bee })
-      return json(second).status === 'published'
-    }
   },
   {
     name: 'diagnostics route to stderr, never stdout',
@@ -144,11 +129,11 @@ const scenarios = [
   {
     name: '--title wins over the catalogue when both name the work',
     async check () {
-      const bee = join(workDir, 'retitled.json')
-      const r = await run([...TVDB_MOVIE, '--title', 'The Matrix (remaster)'], { ...TVDB_ENV, PEARTUBE_FAKE_BEE_FILE: bee })
-      if (json(r).status !== 'published') return false
-      const stored = readFileSync(bee, 'utf8')
-      return stored.includes('The Matrix (remaster)') && !/"title":\s*"The Matrix"/.test(stored)
+      const r = await run([...TVDB_MOVIE, '--title', 'The Matrix (remaster)'], {
+        ...TVDB_ENV,
+        PEARTUBE_FAKE_EXPECT_TITLE: 'The Matrix (remaster)'
+      })
+      return json(r).status === 'published'
     }
   }
 ]
@@ -176,7 +161,6 @@ async function main () {
     console.log(`${ok ? '✓' : '✗'} ${scenario.name}${error ? ` — ${error.message}` : ''}`)
   }
   console.log(`• interactive PTY: ${await checkInteractivePty()}`)
-  rmSync(workDir, { recursive: true, force: true })
 
   const failed = results.filter((r) => !r.ok)
   if (failed.length > 0) {

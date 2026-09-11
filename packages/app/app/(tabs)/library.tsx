@@ -258,7 +258,7 @@ export default function LibraryScreen() {
               {completedDownloads.map((item) => (
                 <DownloadRow key={item.id} item={item} onCancel={() => cancelDownload(item.id)} onRemove={() => removeDownload(item.id)} onRetry={() => {}} />
               ))}
-              {failedDownloads.length > 0 && <Text style={styles.sectionLabel}>Didn't finish</Text>}
+              {failedDownloads.length > 0 && <Text style={styles.sectionLabel}>Didn&apos;t finish</Text>}
               {failedDownloads.map((item) => (
                 <DownloadRow key={item.id} item={item} onCancel={() => cancelDownload(item.id)} onRemove={() => removeDownload(item.id)} onRetry={() => removeDownload(item.id)} />
               ))}

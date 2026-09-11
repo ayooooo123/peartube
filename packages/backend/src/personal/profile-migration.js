@@ -40,6 +40,58 @@ function migrationState({ sourceId, targetId, record, phase }) {
  * verify, and compare-and-delete prevents a concurrent newer source write from
  * being removed.
  */
+async function tryMigrateAttempt({ source, target, sourceId, targetId, journalKey, markerKey }) {
+  const record = await source.getSettingRecord(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
+  if (!record) {
+    const marker = await target.getSetting(markerKey)
+    await source.deleteSetting(journalKey)
+    return { done: true, result: marker || null }
+  }
+
+  const prepared = migrationState({ sourceId, targetId, record, phase: 'prepared' })
+  await source.setSetting(journalKey, prepared)
+  await target.setSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY, record.value)
+
+  const copiedRecord = await target.getSettingRecord(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
+  if (!copiedRecord || copiedRecord.digest !== record.digest) {
+    throw new Error('PersonalStore profile migration target verification failed')
+  }
+  await source.setSetting(journalKey, { ...prepared, phase: 'copied' })
+
+  const committed = { ...prepared, phase: 'committed' }
+  await target.setSetting(markerKey, committed)
+  const durableMarker = await target.getSetting(markerKey)
+  if (
+    !durableMarker ||
+    durableMarker.sourceDigest !== record.digest ||
+    durableMarker.sourceVersion !== record.revision ||
+    durableMarker.phase !== 'committed'
+  ) {
+    throw new Error('PersonalStore profile migration marker verification failed')
+  }
+  await source.setSetting(journalKey, committed)
+
+  const latest = await source.getSettingRecord(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
+  if (
+    !latest ||
+    latest.revision !== record.revision ||
+    latest.digest !== record.digest
+  ) {
+    return { done: false }
+  }
+  await source.deleteSettingIfVersionAndDigest(
+    CONSUMER_MODERATION_PROFILE_SETTING_KEY,
+    record.revision,
+    record.digest,
+  )
+
+  const remaining = await source.getSettingRecord(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
+  if (remaining) return { done: false }
+  await source.setSetting(journalKey, { ...committed, phase: 'source-deleted' })
+  await source.deleteSetting(journalKey)
+  return { done: true, result: committed }
+}
+
 export async function migrateDeviceLocalProfile({
   source,
   target,
@@ -51,52 +103,15 @@ export async function migrateDeviceLocalProfile({
   const markerKey = profileMigrationMarkerKey(targetId)
 
   for (let attempt = 0; attempt < MAX_SOURCE_REVISIONS; attempt++) {
-    const record = await source.getSettingRecord(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
-    if (!record) {
-      const marker = await target.getSetting(markerKey)
-      await source.deleteSetting(journalKey)
-      return marker || null
-    }
-
-    const prepared = migrationState({ sourceId, targetId, record, phase: 'prepared' })
-    await source.setSetting(journalKey, prepared)
-    await target.setSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY, record.value)
-
-    const copiedRecord = await target.getSettingRecord(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
-    if (!copiedRecord || copiedRecord.digest !== record.digest) {
-      throw new Error('PersonalStore profile migration target verification failed')
-    }
-    await source.setSetting(journalKey, { ...prepared, phase: 'copied' })
-
-    const committed = { ...prepared, phase: 'committed' }
-    await target.setSetting(markerKey, committed)
-    const durableMarker = await target.getSetting(markerKey)
-    if (
-      durableMarker?.sourceDigest !== record.digest ||
-      durableMarker?.sourceVersion !== record.revision ||
-      durableMarker?.phase !== 'committed'
-    ) {
-      throw new Error('PersonalStore profile migration marker verification failed')
-    }
-    await source.setSetting(journalKey, committed)
-
-    const latest = await source.getSettingRecord(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
-    if (
-      !latest ||
-      latest.revision !== record.revision ||
-      latest.digest !== record.digest
-    ) continue
-    await source.deleteSettingIfVersionAndDigest(
-      CONSUMER_MODERATION_PROFILE_SETTING_KEY,
-      record.revision,
-      record.digest,
-    )
-
-    const remaining = await source.getSettingRecord(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
-    if (remaining) continue
-    await source.setSetting(journalKey, { ...committed, phase: 'source-deleted' })
-    await source.deleteSetting(journalKey)
-    return committed
+    const outcome = await tryMigrateAttempt({
+      source,
+      target,
+      sourceId,
+      targetId,
+      journalKey,
+      markerKey,
+    })
+    if (outcome.done) return outcome.result
   }
 
   throw new Error('PersonalStore profile migration source changed too frequently')

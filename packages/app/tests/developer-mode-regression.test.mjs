@@ -186,10 +186,15 @@ test('DeveloperModeGate redirects while disabled, renders while enabled, and red
   assert.match(component, /developerModeGateState\(\{ enabled, isLoading \}\)/)
 })
 
-test('normal Profile hides identity tools and redirects a disabled diagnostics deep link', () => {
+test('normal Profile hides identity tools and redirects a disabled diagnostics deep link', async () => {
   const profile = app('app', 'profile.tsx')
-  assert.match(profile, /developerModeDestination\(developerMode\.enabled, '\/profile\?developer=diagnostics'\)/)
-  assert.match(profile, /developerMode\.enabled && \(/)
+  const routeSource = ts.transpileModule(app('lib', 'developer-mode-routes.ts'), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  }).outputText
+  const routePolicy = await import(`data:text/javascript;base64,${Buffer.from(routeSource).toString('base64')}`)
+  assert.equal(routePolicy.canShowIdentityTools(false), false)
+  assert.equal(routePolicy.canShowIdentityTools(true), true)
+  assert.equal(routePolicy.developerModeDestination(false, '/profile?developer=diagnostics'), '/developer-settings')
   assert.match(profile, /title="Developer Mode"/)
 })
 

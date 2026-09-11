@@ -108,6 +108,22 @@ function setFlag(flags, name, key, value) {
   flags[key] = value
 }
 
+function readFlagValue(name, inlineValue, args, index) {
+  let value = inlineValue
+  let nextIndex = index
+  if (value === undefined) {
+    value = args[index + 1]
+    if (value === undefined || value.startsWith('-')) {
+      throw new PeartubeUsageError(`Missing value for ${name}`)
+    }
+    nextIndex += 1
+  }
+  if (value.length === 0) {
+    throw new PeartubeUsageError(`Missing value for ${name}`)
+  }
+  return { value, nextIndex }
+}
+
 function parseFlagsAndPositionals(args) {
   const flags = {}
   const positionals = []
@@ -145,17 +161,8 @@ function parseFlagsAndPositionals(args) {
 
     const repeatableKey = REPEATABLE_FLAGS.get(name)
     if (repeatableKey) {
-      let value = inlineValue
-      if (value === undefined) {
-        value = args[index + 1]
-        if (value === undefined || value.startsWith('-')) {
-          throw new PeartubeUsageError(`Missing value for ${name}`)
-        }
-        index += 1
-      }
-      if (value.length === 0) {
-        throw new PeartubeUsageError(`Missing value for ${name}`)
-      }
+      const { value, nextIndex } = readFlagValue(name, inlineValue, args, index)
+      index = nextIndex
       if (!Array.isArray(flags[repeatableKey])) flags[repeatableKey] = []
       flags[repeatableKey].push(value)
       continue
@@ -166,18 +173,8 @@ function parseFlagsAndPositionals(args) {
       throw new PeartubeUsageError(`Unknown argument ${token}`)
     }
 
-    let value = inlineValue
-    if (value === undefined) {
-      value = args[index + 1]
-      if (value === undefined || value.startsWith('-')) {
-        throw new PeartubeUsageError(`Missing value for ${name}`)
-      }
-      index += 1
-    }
-    if (value.length === 0) {
-      throw new PeartubeUsageError(`Missing value for ${name}`)
-    }
-
+    const { value, nextIndex } = readFlagValue(name, inlineValue, args, index)
+    index = nextIndex
     setFlag(flags, name, valueKey, value)
   }
 
@@ -200,6 +197,42 @@ function validateScriptedSource(query, positionalCount) {
   }
 }
 
+function parseDirectVideoAdd({ flags, query, fetchUrl, positionals, interactive }) {
+  const stray = [['provider', '--provider'], ...ALL_COORDINATE_FLAGS].find(([key]) => Object.hasOwn(flags, key))
+  if (stray) {
+    throw new PeartubeUsageError(`Direct video mode does not accept ${stray[1]}`)
+  }
+  if (flags.yes) {
+    validateScriptedSource(query, positionals.length)
+    return result('add', query, fetchUrl, flags, 'scripted')
+  }
+  if (!interactive) {
+    throw new PeartubeUsageError('Direct video mode requires --yes for non-interactive add')
+  }
+  return result('add', query, fetchUrl, flags, 'interactive')
+}
+
+function parseMediaShapeAdd({ flags, query, fetchUrl, positionals, interactive }) {
+  refuse(coordinateRefusal(flags.type, flags))
+
+  const complete = coordinatesComplete(flags.type, flags)
+  if (complete && flags.yes) {
+    validateScriptedSource(query, positionals.length)
+    return result('add', query, fetchUrl, flags, 'scripted')
+  }
+  if (complete && !interactive) {
+    throw new PeartubeUsageError('Complete scripted coordinates require --yes')
+  }
+  // Incomplete coordinates are finished in the picker, which browses one
+  // authority at a time and only where it has screens. Anything it cannot
+  // browse must arrive complete rather than be resolved against the wrong
+  // catalogue.
+  if (!interactive || !canBrowse(flags.type, flags.provider)) {
+    throw new PeartubeUsageError(`${modeLabel(flags.type)} mode requires ${coordinateRequirement(flags.type)}`)
+  }
+  return result('add', query, fetchUrl, flags, 'interactive')
+}
+
 function parseAdd(flags, positionals, options) {
   const query = positionals.length > 0 ? positionals.join(' ') : null
   const fetchUrl = runtimeUrl(query)
@@ -213,41 +246,11 @@ function parseAdd(flags, positionals, options) {
   if (flags.type === undefined) refuse(coordinateCollision(flags))
 
   if (flags.type === 'video') {
-    // No authority categorizes a direct video, so every media coordinate —
-    // including the authority itself — is a contradiction rather than a hint.
-    const stray = [['provider', '--provider'], ...ALL_COORDINATE_FLAGS].find(([key]) => Object.hasOwn(flags, key))
-    if (stray) {
-      throw new PeartubeUsageError(`Direct video mode does not accept ${stray[1]}`)
-    }
-    if (flags.yes) {
-      validateScriptedSource(query, positionals.length)
-      return result('add', query, fetchUrl, flags, 'scripted')
-    }
-    if (!interactive) {
-      throw new PeartubeUsageError('Direct video mode requires --yes for non-interactive add')
-    }
-    return result('add', query, fetchUrl, flags, 'interactive')
+    return parseDirectVideoAdd({ flags, query, fetchUrl, positionals, interactive })
   }
 
   if (mediaShape(flags.type)) {
-    refuse(coordinateRefusal(flags.type, flags))
-
-    const complete = coordinatesComplete(flags.type, flags)
-    if (complete && flags.yes) {
-      validateScriptedSource(query, positionals.length)
-      return result('add', query, fetchUrl, flags, 'scripted')
-    }
-    if (complete && !interactive) {
-      throw new PeartubeUsageError('Complete scripted coordinates require --yes')
-    }
-    // Incomplete coordinates are finished in the picker, which browses one
-    // authority at a time and only where it has screens. Anything it cannot
-    // browse must arrive complete rather than be resolved against the wrong
-    // catalogue.
-    if (!interactive || !canBrowse(flags.type, flags.provider)) {
-      throw new PeartubeUsageError(`${modeLabel(flags.type)} mode requires ${coordinateRequirement(flags.type)}`)
-    }
-    return result('add', query, fetchUrl, flags, 'interactive')
+    return parseMediaShapeAdd({ flags, query, fetchUrl, positionals, interactive })
   }
 
   // A bare source URL is a complete add on its own: the relay classifies it,

@@ -111,6 +111,26 @@ async function readWebAsset(asset) {
   throw new Error('Selected file could not be read')
 }
 
+function resolveAssetDeclaredSize(asset) {
+  if (Number.isFinite(asset.size)) return asset.size
+  if (Number.isFinite(asset.file?.size)) return asset.file.size
+  return null
+}
+
+async function readNativeAsset(native, asset, maxBytes) {
+  if (!native || typeof native.readBase64File !== 'function' || typeof asset.uri !== 'string') {
+    throw new Error('Native file import is unavailable')
+  }
+  return base64ToBytes(await native.readBase64File(asset.uri, maxBytes), maxBytes)
+}
+
+function extractPickedAsset(result) {
+  if (result?.canceled === true || result?.cancelled === true) return null
+  const asset = result?.assets?.[0] || result
+  if (!asset || typeof asset !== 'object') throw new Error('No file was selected')
+  return asset
+}
+
 export async function selectBytesFromFile({
   platform,
   pickDocument,
@@ -119,26 +139,20 @@ export async function selectBytesFromFile({
 }) {
   if (typeof pickDocument !== 'function') throw new Error('Document selection is unavailable')
   const result = await pickDocument()
-  if (result?.canceled === true || result?.cancelled === true) return null
-  const asset = result?.assets?.[0] || result
-  if (!asset || typeof asset !== 'object') throw new Error('No file was selected')
-  const declaredSize = Number.isFinite(asset.size)
-    ? asset.size
-    : Number.isFinite(asset.file?.size)
-      ? asset.file.size
-      : null
+  const asset = extractPickedAsset(result)
+  if (!asset) return null
+
+  const declaredSize = resolveAssetDeclaredSize(asset)
   if (declaredSize !== null && declaredSize > maxBytes) {
     throw new Error(`File is too large (maximum ${maxBytes} bytes)`)
   }
 
-  let bytes
-  if (platform === 'web') {
-    bytes = await readWebAsset(asset)
-  } else {
-    if (!native || typeof native.readBase64File !== 'function' || typeof asset.uri !== 'string') {
-      throw new Error('Native file import is unavailable')
-    }
-    bytes = base64ToBytes(await native.readBase64File(asset.uri, maxBytes), maxBytes)
+  const bytes = platform === 'web'
+    ? await readWebAsset(asset)
+    : await readNativeAsset(native, asset, maxBytes)
+
+  return {
+    fileName: safeFileName(asset.name || 'peartube-portable-state.json'),
+    bytes: requireBytes(bytes, maxBytes),
   }
-  return { fileName: safeFileName(asset.name || 'peartube-portable-state.json'), bytes: requireBytes(bytes, maxBytes) }
 }

@@ -19,8 +19,26 @@ function readStore(path) {
       if (!parsed.values || typeof parsed.values !== 'object') parsed.values = {}
       return parsed
     }
-  } catch {}
+  } catch {
+    /* malformed settings file — fall through to empty store */
+  }
   return { version: 1, updatedAt: Date.now(), values: {} }
+}
+
+function emptyStore() {
+  return { version: 1, updatedAt: Date.now(), values: {} }
+}
+
+function refreshStoreData(settings) {
+  try {
+    if (existsSync(settings.settingsPath)) {
+      settings.data = readStore(settings.settingsPath)
+    }
+  } catch {
+    /* keep the in-memory snapshot when the on-disk refresh fails */
+  }
+  if (!settings.data || typeof settings.data !== 'object') settings.data = emptyStore()
+  if (!settings.data.values || typeof settings.data.values !== 'object') settings.data.values = {}
 }
 
 /**
@@ -42,25 +60,13 @@ export class RelaySettings {
   }
 
   get(key, fallback = null) {
-    try {
-      if (existsSync(this.settingsPath)) {
-        this.data = readStore(this.settingsPath)
-      }
-    } catch {}
-    if (!this.data || typeof this.data !== 'object') this.data = { version: 1, updatedAt: Date.now(), values: {} }
-    if (!this.data.values || typeof this.data.values !== 'object') this.data.values = {}
+    refreshStoreData(this)
     const value = this.data.values[key]
     return value === undefined ? fallback : value
   }
 
   async set(key, value) {
-    try {
-      if (existsSync(this.settingsPath)) {
-        this.data = readStore(this.settingsPath)
-      }
-    } catch {}
-    if (!this.data || typeof this.data !== 'object') this.data = { version: 1, updatedAt: Date.now(), values: {} }
-    if (!this.data.values || typeof this.data.values !== 'object') this.data.values = {}
+    refreshStoreData(this)
     this.data.values[key] = value
     this.data.updatedAt = Date.now()
     ensureParentDir(this.settingsPath)

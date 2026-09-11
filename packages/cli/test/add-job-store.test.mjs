@@ -1,153 +1,186 @@
 import test from 'brittle'
-import { createJobStore, deriveIntentIds, sanitize } from '../src/add/job-store.js'
+import { buildMovieItemDraft } from '../src/add/content-model.js'
+import {
+  canonicalLocalFileSelector,
+  canonicalLocalResolutionRecord,
+  executeLocalFileAcquisition,
+  normalizeLocalDurationSeconds
+} from '../src/local-file-acquisition.js'
+import { createLocalFileSourceGrantRegistry } from '../src/runtime.js'
 
-function fakeBee () {
-  const map = new Map()
-  const api = {
-    map,
-    async get (key) { return map.has(key) ? { value: map.get(key) } : null },
-    async put (key, value) { map.set(key, JSON.parse(JSON.stringify(value))) },
-    async del (key) { map.delete(key) },
-    batch () {
-      const staged = []
-      return {
-        async put (key, value) { staged.push([key, value]) },
-        async flush () { for (const [key, value] of staged) map.set(key, JSON.parse(JSON.stringify(value))) }
-      }
-    },
-    async * createReadStream ({ gte, lt } = {}) {
-      for (const key of [...map.keys()].sort()) {
-        if (gte !== undefined && key < gte) continue
-        if (lt !== undefined && key >= lt) continue
-        yield { key, value: map.get(key) }
+test('canonical local identity is content SHA-256 only', (t) => {
+  const sha256 = 'a'.repeat(64)
+  const canon = canonicalLocalResolutionRecord({
+    sha256,
+    byteLength: 1024,
+    title: 'The Matrix',
+    fileName: 'matrix.mp4',
+    kind: 'movie',
+    namespace: 'tmdb',
+    identifier: '603',
+  })
+  t.is(canon.idempotencyKey, `local_${sha256.slice(0, 32)}`)
+  t.alike(canon.selector, { kind: 'movie', namespace: 'tmdb', identifier: '603' })
+  t.is(canon.expectedBytes, 1024)
+  t.is(canon.sourceFileName, 'matrix.mp4')
+  t.absent(String(canon.idempotencyKey).includes('/'))
+  t.absent(String(JSON.stringify(canon)).includes('http'))
+
+  t.exception(() => canonicalLocalResolutionRecord({
+    sha256: 'v1',
+    byteLength: 1,
+    title: 'bad',
+    fileName: 'bad.mp4',
+  }), /64-hex/)
+})
+
+test('local selectors require real external strings or a valid digest', (t) => {
+  t.alike(canonicalLocalFileSelector({ namespace: ' tmdb ', identifier: ' 603 ' }), {
+    kind: 'movie', namespace: 'tmdb', identifier: '603',
+  })
+  t.alike(canonicalLocalFileSelector({
+    kind: 'episode', namespace: ' tmdb ', identifier: ' 1396 ', season: 1, episode: 2,
+  }), { kind: 'episode', namespace: 'tmdb', identifier: '1396', season: 1, episode: 2 })
+
+  for (const external of [
+    { namespace: {}, identifier: '603' },
+    { namespace: 'tmdb', identifier: 603 },
+    { namespace: '  ', identifier: '603' },
+    { namespace: 'tmdb', identifier: '  ' },
+    { namespace: ['tmdb'], identifier: { id: '603' } },
+  ]) {
+    t.exception(() => canonicalLocalFileSelector(external), /64-hex/)
+    t.exception(() => canonicalLocalFileSelector({ ...external, sha256: 'not-a-digest' }), /64-hex/)
+    t.alike(canonicalLocalFileSelector({ ...external, sha256: `sha256:${'AB'.repeat(32)}` }), {
+      kind: 'movie', namespace: 'peartube', identifier: 'ab'.repeat(16),
+    })
+  }
+})
+
+test('duration normalizer rounds finite seconds', (t) => {
+  t.is(normalizeLocalDurationSeconds(42.4), 42)
+  t.is(normalizeLocalDurationSeconds('90'), 90)
+  t.is(normalizeLocalDurationSeconds(0), null)
+  t.is(normalizeLocalDurationSeconds(Number.NaN), null)
+  t.is(normalizeLocalDurationSeconds(null), null)
+})
+
+test('aborting a local acquisition waits for reader cancellation and private grant disposal', async (t) => {
+  const events = []
+  const controller = new AbortController()
+  const grants = createLocalFileSourceGrantRegistry({ now: () => 1_000 })
+  const publisherId = 'c'.repeat(64)
+  const acquisitionId = 'acq-local-abort'
+  let job = { acquisitionId, state: 'queued' }
+  let grantToken = null
+  let cancelCalls = 0
+  let readerStarted
+  let startReader
+  let readerFinished
+  let finishReader
+
+  readerStarted = new Promise(resolve => { startReader = resolve })
+  readerFinished = new Promise(resolve => { finishReader = resolve })
+
+  const runtime = {
+    issueLocalProviderResolution: () => ({ resolutionRef: 'local-resolution' }),
+    localFileSourceGrants: grants,
+    provider: {
+      async requestAcquisition () {
+        return { ...job }
+      },
+      async attachSourceGrant ({ grant }) {
+        grantToken = grant.token
+        job = { ...job, state: 'acquiring' }
+        events.push('reader-started')
+        startReader()
+        void (async () => {
+          await readerFinished
+          events.push('reader-finished')
+        })()
+        return { ...job }
+      },
+      async getAcquisition () {
+        return { ...job }
+      },
+      async cancelAcquisition ({ acquisitionId: requestedId }) {
+        cancelCalls += 1
+        t.is(requestedId, acquisitionId)
+        events.push('cancel-start')
+        job = { ...job, state: 'cancelled' }
+        finishReader()
+        await new Promise(resolve => setImmediate(resolve))
+        events.push('reader-closed')
+        await grants.revoke(grantToken)
+        events.push('cancel-done')
+        return { ...job }
       }
     }
   }
-  return api
-}
 
-async function seedJob (bee, { now = () => 1000 } = {}) {
-  const store = createJobStore({ bee, now })
-  await store.createJob({
-    jobId: 'job-1',
-    manifestChecksum: 'sha256:manifest',
-    rows: [
-      { rowId: 'r1', data: { title: 'Pilot' } },
-      { rowId: 'r2', data: { title: 'Cat' } }
-    ]
+  const running = executeLocalFileAcquisition({
+    runtime,
+    publisherId,
+    now: () => 1_000,
+    input: {
+      idempotencyKey: 'local_abort_test',
+      path: '/private/staged/video.mp4',
+      expectedBytes: 1,
+      signal: controller.signal,
+      dispose: () => events.push('dispose'),
+      awaitCompletion: true
+    }
   })
-  return store
-}
 
-test('createJob persists rows, deterministic intents, and an active pointer', async (t) => {
-  const bee = fakeBee()
-  const store = await seedJob(bee)
-  const job = await store.getJob('job-1')
-  t.is(job.rows.length, 2)
-  t.is(job.rows[0].state, 'pending')
-  t.alike(job.rows[0].intent, deriveIntentIds('job-1', 'r1'))
-  t.is(job.manifestChecksum, 'sha256:manifest')
-  const active = await store.listActive()
-  t.is(active.length, 1)
-  t.is(active[0].jobId, 'job-1')
+  await readerStarted
+  controller.abort()
+  const result = await running
 
-  // createJob is idempotent: re-creating returns the existing job unchanged.
-  const again = await store.createJob({ jobId: 'job-1', rows: [{ rowId: 'r1' }] })
-  t.is(again.rows.length, 2)
+  t.is(result.state, 'cancelled')
+  t.is(result.sourceAccepted, true)
+  t.is(cancelCalls, 1)
+  t.alike(events, ['reader-started', 'cancel-start', 'reader-finished', 'reader-closed', 'dispose', 'cancel-done'])
 })
 
-test('the full lifecycle advances one state at a time with version checkpoints', async (t) => {
-  const bee = fakeBee()
-  const store = await seedJob(bee)
-  const sequence = ['resolving', 'downloading', 'uploading', 'uploaded', 'replicationPending', 'durabilityVerified', 'projecting', 'projected', 'announcing', 'announced', 'finalizing', 'published']
-  let version = 0
-  for (const to of sequence) {
-    const row = await store.transitionRow('job-1', 'r1', { to, expectedVersion: version })
-    t.is(row.state, to)
-    version = row.version
+test('CLI discovery may carry URL artwork and identityUrl without putting them in canonical identity', (t) => {
+  const movieDetails = {
+    title: 'The Matrix',
+    mediaId: '603',
+    artwork: [
+      { url: 'https://image.tmdb.org/t/p/w500/matrix.jpg', role: 'poster' },
+      { url: 'https://image.tmdb.org/t/p/original/backdrop.jpg', role: 'backdrop' },
+    ],
   }
-  t.is(version, sequence.length)
-  const done = await store.getRow('job-1', 'r1')
-  t.is(done.state, 'published')
-})
-
-test('entering uploading persists deterministic upload intent before upload', async (t) => {
-  const bee = fakeBee()
-  const store = await seedJob(bee)
-  await store.transitionRow('job-1', 'r1', { to: 'resolving' })
-  await store.transitionRow('job-1', 'r1', { to: 'downloading', patch: { data: { verifiedArtifact: '/tmp/pilot.mkv', checksum: 'sha256:v' } } })
-  const uploading = await store.transitionRow('job-1', 'r1', { to: 'uploading' })
-  t.is(uploading.data.verifiedArtifact, '/tmp/pilot.mkv')
-  t.is(uploading.intent.videoId, deriveIntentIds('job-1', 'r1').videoId)
-})
-
-test('stale versions and illegal transitions are rejected', async (t) => {
-  const bee = fakeBee()
-  const store = await seedJob(bee)
-  await store.transitionRow('job-1', 'r1', { to: 'resolving', expectedVersion: 0 })
-  await t.exception(store.transitionRow('job-1', 'r1', { to: 'downloading', expectedVersion: 0 }), /stale row version/)
-  await t.exception(store.transitionRow('job-1', 'r1', { to: 'uploaded' }), /illegal transition/)
-})
-
-test('a failed row retries its failed step, counts attempts, and never corrupts siblings', async (t) => {
-  const bee = fakeBee()
-  const store = await seedJob(bee)
-  await store.transitionRow('job-1', 'r1', { to: 'resolving' })
-  await store.transitionRow('job-1', 'r1', { to: 'downloading' })
-  const failed = await store.transitionRow('job-1', 'r1', { to: 'failed', error: Object.assign(new Error('network'), { code: 'NET' }) })
-  t.is(failed.state, 'failed')
-  t.is(failed.failedFrom, 'downloading')
-  t.alike(failed.error, { message: 'network', code: 'NET' })
-
-  await t.exception(store.transitionRow('job-1', 'r1', { to: 'uploading' }), /retry must resume/)
-  const retried = await store.transitionRow('job-1', 'r1', { to: 'downloading' })
-  t.is(retried.state, 'downloading')
-  t.is(retried.attempts, 1)
-  t.is(retried.error, null)
-
-  const sibling = await store.getRow('job-1', 'r2')
-  t.is(sibling.state, 'pending', 'sibling row unaffected by failure')
-})
-
-test('resume returns the first incomplete row across a process restart', async (t) => {
-  const bee = fakeBee()
-  await seedJob(bee)
-  // r1 completes, r2 partially advances, then a fresh store instance reopens the bee.
-  const store1 = createJobStore({ bee, now: () => 2000 })
-  for (const to of ['resolving', 'downloading', 'uploading', 'uploaded', 'replicationPending', 'durabilityVerified', 'projecting', 'projected', 'announcing', 'announced', 'finalizing', 'published']) {
-    await store1.transitionRow('job-1', 'r1', { to })
+  const source = {
+    provider: 'youtube',
+    sourceVideoId: 'v123',
+    identityUrl: 'https://youtube.com/watch?v=v123',
+    displayUrl: 'https://youtube.com/watch?v=v123',
   }
-  await store1.transitionRow('job-1', 'r2', { to: 'resolving' })
-
-  const store2 = createJobStore({ bee, now: () => 3000 })
-  const resume = await store2.firstIncompleteRow('job-1')
-  t.is(resume.rowId, 'r2')
-  t.is(resume.state, 'resolving', 'persisted mid-flight state survives restart')
-
-  await store2.transitionRow('job-1', 'r1', { to: 'resolving' }).then(() => t.fail('completed row must not transition'), (error) => t.is(error.code, 'ERR_ROW_TERMINAL'))
-})
-
-test('manifest checksum mismatch is rejected', async (t) => {
-  const bee = fakeBee()
-  const store = await seedJob(bee)
-  t.is(await store.validateManifestChecksum('job-1', 'sha256:manifest'), true)
-  await t.exception(store.validateManifestChecksum('job-1', 'sha256:other'), /checksum mismatch/)
-})
-
-test('serialization strips fetchUrl, displayUrl, and secret-bearing keys', async (t) => {
-  const bee = fakeBee()
-  const store = createJobStore({ bee, now: () => 1000 })
-  await store.createJob({
-    jobId: 'job-2',
-    rows: [{ rowId: 'r1', data: { identityUrl: 'https://x/y', fetchUrl: 'https://secret/y', displayUrl: 'https://x/y', tmdbApiKey: 'k', authorization: 'Bearer z' } }]
+  const draft = buildMovieItemDraft(movieDetails, source, {
+    mediaProvider: 'tmdb',
+    mediaId: '603',
   })
-  const row = await store.getRow('job-2', 'r1')
-  t.is(row.data.identityUrl, 'https://x/y')
-  t.absent('fetchUrl' in row.data)
-  t.absent('displayUrl' in row.data)
-  t.absent('tmdbApiKey' in row.data)
-  t.absent('authorization' in row.data)
 
-  const cleaned = sanitize({ keep: 1, fetchUrl: 'x', nested: { cookie: 'c', ok: 2 } })
-  t.alike(cleaned, { keep: 1, nested: { ok: 2 } })
+  t.is(draft.title, 'The Matrix')
+  t.is(draft.mediaProvider, 'tmdb')
+  t.is(draft.mediaId, '603')
+  t.is(draft.sourceProvider, 'youtube')
+  t.is(draft.identityUrl, source.identityUrl)
+  t.is(draft.artwork.length, 2)
+  t.ok(draft.artwork.every((entry) => entry.url), 'discovery artwork remains URL-bearing')
+
+  // Canonical acquisition identity never absorbs discovery locators.
+  const canon = canonicalLocalResolutionRecord({
+    sha256: 'b'.repeat(64),
+    byteLength: 2048,
+    title: draft.title,
+    fileName: 'matrix.mp4',
+    kind: 'movie',
+    namespace: draft.mediaProvider,
+    identifier: draft.mediaId,
+  })
+  t.absent(String(JSON.stringify(canon)).includes('youtube.com'))
+  t.absent(String(JSON.stringify(canon)).includes('tmdb.org'))
+  t.absent(String(JSON.stringify(canon)).includes(source.identityUrl))
 })

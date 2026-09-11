@@ -1,5 +1,14 @@
 import type { HostLifecycleEvent, HostReadyData } from './index.js'
 
+export interface HostInstance {
+  stream: unknown
+  entrypoint: string
+  args: string[]
+  waitUntilReady(): Promise<HostReadyData>
+  terminate(): Promise<void>
+  onLifecycle(cb: (event: HostLifecycleEvent) => void): () => void
+}
+
 export function startHost(options: {
   platform: 'mobile' | 'desktop'
   storagePath: string
@@ -11,11 +20,4 @@ export function startHost(options: {
   onVideoStats?: (...args: any[]) => void
   network?: Record<string, any>
   swarmOptions?: Record<string, any>
-}): Promise<{
-  stream: any
-  entrypoint: string
-  args: string[]
-  waitUntilReady(): Promise<HostReadyData>
-  terminate(): Promise<void>
-  onLifecycle(cb: (event: HostLifecycleEvent) => void): () => void
-}>
+}): Promise<HostInstance>

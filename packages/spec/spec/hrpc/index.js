@@ -694,17 +694,17 @@ class HRPC {
       const responseEncoding = this._responseEncodings.get(command)
       const requestEncoding = this._requestEncodings.get(command)
       if (this._requestIsSend(command)) {
-        const request = req.data && req.data.byteLength > 0 ? c.decode(requestEncoding, req.data) : null
+        const request = req.data ? c.decode(requestEncoding, req.data) : null
         await this._handlers[command](request)
         return
       }
       if (!this._requestIsStream(command) && !this._responseIsStream(command)) {
-        const request = req.data && req.data.byteLength > 0 ? c.decode(requestEncoding, req.data) : null
+        const request = req.data ? c.decode(requestEncoding, req.data) : null
         const response = await this._handlers[command](request)
         req.reply(c.encode(responseEncoding, response))
       }
       if (!this._requestIsStream(command) && this._responseIsStream(command)) {
-        const request = req.data && req.data.byteLength > 0 ? c.decode(requestEncoding, req.data) : null
+        const request = req.data ? c.decode(requestEncoding, req.data) : null
         const responseStream = new RPCStream(
           null,
           null,

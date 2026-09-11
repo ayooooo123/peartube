@@ -178,7 +178,7 @@ export function attachIndexServiceProtocol({ connection, announcement, indexStor
     context.mux.unpair?.({ protocol: INDEX_SERVICE_PROTOCOL, id: context.topic })
     dispatcher.close(reason)
     protocolSession.close(reason)
-    try { channel?.close?.() } catch {}
+    try { channel?.close?.() } catch { /* channel may already be destroyed by remote teardown */ }
     limits.onClose?.(reason)
     return true
   }
@@ -236,7 +236,7 @@ export function attachIndexServiceProtocol({ connection, announcement, indexStor
       dispatcher.refreshAnnouncement(nextAnnouncement)
     } catch (error) {
       if (expiryTimer !== null) {
-        try { (limits.clearTimeout || clearTimeout)(expiryTimer) } catch {}
+        try { (limits.clearTimeout || clearTimeout)(expiryTimer) } catch { /* cleanup must not mask the refresh failure being restored */ }
       }
       configuredAnnouncement = previousAnnouncement
       expiryTimer = previousTimer
@@ -244,7 +244,7 @@ export function attachIndexServiceProtocol({ connection, announcement, indexStor
       throw error
     }
     if (previousTimer !== null) {
-      try { (limits.clearTimeout || clearTimeout)(previousTimer) } catch {}
+      try { (limits.clearTimeout || clearTimeout)(previousTimer) } catch { /* cleanup must not mask the refresh result */ }
     }
     return true
   }
@@ -317,7 +317,7 @@ function createClientSession(connection, announcement, limits, onClosed) {
     readyReject(new IndexQueryRemoteError('', INDEX_QUERY_ERROR_CODES.CLOSED, 'query channel closed'))
     requester.close(reason)
     protocolSession.close(reason)
-    try { channel?.close?.() } catch {}
+    try { channel?.close?.() } catch { /* channel may already be destroyed by remote teardown */ }
     onClosed(connection)
     return true
   }
@@ -386,7 +386,7 @@ export function createIndexQueryClient({ announcement, limits = {} } = {}) {
     if (closed) return false
     closed = true
     if (expiryTimer !== null) {
-      ;(configuredLimits.clearTimeout || clearTimeout)(expiryTimer)
+      (configuredLimits.clearTimeout || clearTimeout)(expiryTimer)
       expiryTimer = null
     }
     for (const session of [...sessions.values()]) session.close(reason)
@@ -426,7 +426,7 @@ export function createIndexQueryClient({ announcement, limits = {} } = {}) {
       scheduleExpiry()
     } catch (error) {
       if (expiryTimer !== null) {
-        try { (configuredLimits.clearTimeout || clearTimeout)(expiryTimer) } catch {}
+        try { (configuredLimits.clearTimeout || clearTimeout)(expiryTimer) } catch { /* cleanup must not mask the refresh failure being restored */ }
       }
       configuredAnnouncement = previousAnnouncement
       configuredLimits = previousLimits
@@ -435,7 +435,7 @@ export function createIndexQueryClient({ announcement, limits = {} } = {}) {
       throw error
     }
     if (previousTimer !== null) {
-      try { (previousLimits.clearTimeout || clearTimeout)(previousTimer) } catch {}
+      try { (previousLimits.clearTimeout || clearTimeout)(previousTimer) } catch { /* cleanup must not mask the refresh result */ }
     }
     return true
   }

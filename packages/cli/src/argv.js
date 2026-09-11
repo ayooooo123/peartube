@@ -34,6 +34,126 @@ function pushFlag(target, key, value) {
   target[key] = [target[key], value]
 }
 
+function applyBooleanFlag(flags, arg) {
+  if (arg === '--help' || arg === '-h') {
+    flags.help = true
+    return true
+  }
+  if (arg === '--debug' || arg === '-d') {
+    flags.debug = true
+    return true
+  }
+  if (arg === '--json') {
+    flags.json = true
+    return true
+  }
+  if (arg === '--run-now') {
+    flags.runNow = true
+    return true
+  }
+  if (arg === '--no-reseed') {
+    flags.noReseed = true
+    return true
+  }
+  return false
+}
+
+function applyStorageOrHostFlag(flags, arg, consumeValue) {
+  if (arg === '--config' || arg === '-c') {
+    flags.config = consumeValue()
+    return true
+  }
+  if (arg === '--mode') {
+    flags.mode = consumeValue()
+    return true
+  }
+  if (arg === '--policy') {
+    flags.policy = consumeValue()
+    return true
+  }
+  if (arg === '--storage' || arg === '-s') {
+    flags.storage = consumeValue()
+    return true
+  }
+  if (arg === '--max-bytes') {
+    flags.maxBytes = consumeValue()
+    return true
+  }
+  if (arg === '--max-storage' || arg === '-m') {
+    flags.maxStorage = consumeValue()
+    return true
+  }
+  if (arg === '--min-free-bytes') {
+    flags.minFreeBytes = consumeValue()
+    return true
+  }
+  if (arg === '--host') {
+    flags.host = consumeValue()
+    return true
+  }
+  if (arg === '--port') {
+    flags.port = consumeValue()
+    return true
+  }
+  return false
+}
+
+function applyMetadataOrMirrorFlag(flags, arg, consumeValue) {
+  if (arg === '--key') {
+    flags.key = consumeValue()
+    return true
+  }
+  if (arg === '--label') {
+    flags.label = consumeValue()
+    return true
+  }
+  if (arg === '--channel') {
+    pushFlag(flags, 'channel', consumeValue())
+    return true
+  }
+  if (arg === '--owner') {
+    pushFlag(flags, 'owner', consumeValue())
+    return true
+  }
+  if (arg === '--url') {
+    flags.url = consumeValue()
+    return true
+  }
+  if (arg === '--path') {
+    flags.path = consumeValue()
+    return true
+  }
+  if (arg === '--max-files') {
+    flags.maxFiles = consumeValue()
+    return true
+  }
+  if (arg === '--local-mirror-path') {
+    flags.localMirrorPath = consumeValue()
+    return true
+  }
+  if (arg === '--local-mirror-poll') {
+    flags.localMirrorPoll = consumeValue()
+    return true
+  }
+  if (arg === '--local-mirror-channel-name') {
+    flags.localMirrorChannelName = consumeValue()
+    return true
+  }
+  if (arg === '--channel-name') {
+    flags.channelName = consumeValue()
+    return true
+  }
+  if (arg === '--title') {
+    flags.title = consumeValue()
+    return true
+  }
+  if (arg === '--description') {
+    flags.description = consumeValue()
+    return true
+  }
+  return false
+}
+
 export function parseArgv(argv = []) {
   const args = [...argv]
   let command = 'run'
@@ -47,37 +167,12 @@ export function parseArgv(argv = []) {
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]
 
-    if (arg === '--help' || arg === '-h') {
-      flags.help = true
+    if (applyBooleanFlag(flags, arg)) {
       continue
     }
 
-    if (arg === '--debug' || arg === '-d') {
-      flags.debug = true
-      continue
-    }
-
-    if (arg === '--json') {
-      flags.json = true
-      continue
-    }
-
-
-    if (arg === '--run-now') {
-      flags.runNow = true
-      continue
-    }
-
-    // Stops this relay taking on NEW archive pledges for peer relays and stops
-    // it asking the network to mirror what it publishes. A bare flag, so it
-    // cannot be set by a stray value; pledges already held are untouched.
-    if (arg === '--no-reseed') {
-      flags.noReseed = true
-      continue
-    }
-
-    const next = args[i + 1]
     const consumeValue = () => {
+      const next = args[i + 1]
       if (next === undefined) {
         throw new Error(`Missing value for ${arg}`)
       }
@@ -85,114 +180,7 @@ export function parseArgv(argv = []) {
       return next
     }
 
-    if (arg === '--config' || arg === '-c') {
-      flags.config = consumeValue()
-      continue
-    }
-
-    if (arg === '--mode') {
-      flags.mode = consumeValue()
-      continue
-    }
-
-    if (arg === '--policy') {
-      flags.policy = consumeValue()
-      continue
-    }
-
-    if (arg === '--storage' || arg === '-s') {
-      flags.storage = consumeValue()
-      continue
-    }
-
-    if (arg === '--max-bytes') {
-      flags.maxBytes = consumeValue()
-      continue
-    }
-
-    if (arg === '--max-storage' || arg === '-m') {
-      flags.maxStorage = consumeValue()
-      continue
-    }
-
-    if (arg === '--min-free-bytes') {
-      flags.minFreeBytes = consumeValue()
-      continue
-    }
-
-
-    if (arg === '--key') {
-      flags.key = consumeValue()
-      continue
-    }
-
-    if (arg === '--label') {
-      flags.label = consumeValue()
-      continue
-    }
-
-    if (arg === '--channel') {
-      pushFlag(flags, 'channel', consumeValue())
-      continue
-    }
-
-    if (arg === '--owner') {
-      pushFlag(flags, 'owner', consumeValue())
-      continue
-    }
-
-    if (arg === '--url') {
-      flags.url = consumeValue()
-      continue
-    }
-
-    if (arg === '--path') {
-      flags.path = consumeValue()
-      continue
-    }
-
-    if (arg === '--max-files') {
-      flags.maxFiles = consumeValue()
-      continue
-    }
-
-    if (arg === '--local-mirror-path') {
-      flags.localMirrorPath = consumeValue()
-      continue
-    }
-
-    if (arg === '--local-mirror-poll') {
-      flags.localMirrorPoll = consumeValue()
-      continue
-    }
-
-    if (arg === '--local-mirror-channel-name') {
-      flags.localMirrorChannelName = consumeValue()
-      continue
-    }
-
-    if (arg === '--channel-name') {
-      flags.channelName = consumeValue()
-      continue
-    }
-
-    if (arg === '--title') {
-      flags.title = consumeValue()
-      continue
-    }
-
-    if (arg === '--description') {
-      flags.description = consumeValue()
-      continue
-    }
-
-    if (arg === '--host') {
-      flags.host = consumeValue()
-      continue
-    }
-
-    if (arg === '--port') {
-      flags.port = consumeValue()
+    if (applyStorageOrHostFlag(flags, arg, consumeValue) || applyMetadataOrMirrorFlag(flags, arg, consumeValue)) {
       continue
     }
 

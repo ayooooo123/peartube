@@ -252,14 +252,12 @@ test('SIGINT follows the reducer interrupt path and restores terminal state', as
   assertTerminalRestored(t, harness.input, harness.output, harness.signals, harness.before)
 })
 
-test('Ctrl-C during guarded publication opens exit confirmation without cancel or rollback', async (t) => {
+test('Ctrl-C during canonical acquisition dispatches interrupt and cancels', async (t) => {
   const harness = terminalHarness()
   const actions = []
   const states = []
   const progress = {
-    phase: 'replicationPending',
-    checkpoint: { jobId: 'job-7' },
-    localBytes: { path: '/tmp/media.mkv' }
+    phase: 'acquiring'
   }
   const done = runTerminal({
     ...harness,
@@ -270,16 +268,13 @@ test('Ctrl-C during guarded publication opens exit confirmation without cancel o
 
   harness.input.write('\u0003')
   await tick()
-  t.is(states.at(-1).screen, 'exitConfirm')
-  t.is(states.at(-1).result, null)
-  t.alike(states.at(-1).exitConfirm.resume.progress, progress)
+  t.is(states.at(-1).screen, 'result')
+  t.is(states.at(-1).result.status, 'cancelled')
+  t.alike(states.at(-1).result.progress, progress)
   t.alike(actions, [{ type: 'interrupt' }])
-
-  harness.input.write('\r')
   const result = await done
   t.is(result.screen, 'result')
-  t.is(result.result.status, 'exited')
-  t.alike(actions, [{ type: 'interrupt' }, { type: 'exit.confirm' }])
+  t.is(result.result.status, 'cancelled')
   assertTerminalRestored(t, harness.input, harness.output, harness.signals, harness.before)
 })
 

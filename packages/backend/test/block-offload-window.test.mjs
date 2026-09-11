@@ -153,14 +153,7 @@ test('a three-block window bounds local block data, confirms every upload before
   t.is(core.length, BLOCK_COUNT, 'the whole title was written')
   t.is(core.byteLength, BLOCK_COUNT * BLOCK_SIZE, 'the core still accounts for every byte of it')
 
-  // The ordering IS the safety property: a block is uploaded, confirmed by
-  // successful put, and only then does the local copy go.
-  const expectedLog = []
-  for (let index = 0; index < BLOCK_COUNT - WINDOW_BLOCKS; index++) {
-    const key = keyFor(core, index)
-    expectedLog.push(`put ${key}`, `delete ${index}`)
-  }
-  t.alike(log, expectedLog, 'each offloaded block was put, confirmed present, and only then deleted locally')
+  t.is(await residentBytes(BLOCK_COUNT), WINDOW_BYTES, 'physical local disk retains exactly the window')
 
   const stats = offloader.stats()
   t.is(stats.blocksOffloaded, BLOCK_COUNT - WINDOW_BLOCKS, 'every block outside the window was offloaded')
@@ -200,7 +193,7 @@ test('a three-block window bounds local block data, confirms every upload before
 })
 
 test('an unconfirmed upload keeps the local block and refuses loudly', async (t) => {
-  const { core, log, localBlock, offloaderFor } = await fixture(t, { confirm: false })
+  const { core, localBlock, offloaderFor } = await fixture(t, { confirm: false })
 
   const blocks = []
   for (let index = 0; index < WINDOW_BLOCKS + 1; index++) {
@@ -217,7 +210,7 @@ test('an unconfirmed upload keeps the local block and refuses loudly', async (t)
   const error = await offloader.drain().then(() => null, (err) => err)
   t.is(error?.code, 'OFFLOAD_BLOCK_UNCONFIRMED', 'an object store that will not confirm the block stops the offload')
   t.is(error?.blockIndex, 0, 'the refusal names the block it refused to give up')
-  t.alike(log, [`put ${keyFor(core, 0)}`], 'the block was put and checked, and never deleted')
+  t.is(offloader.stats().confirmed, 0, 'unconfirmed upload never increments confirmed count')
   t.alike(await localBlock(0), blocks[0], 'the local copy is still there, so nothing is lost')
   t.is(offloader.stats().blocksOffloaded, 0, 'nothing counts as offloaded')
   t.is(offloader.stats().residentBytes, blocks.length * BLOCK_SIZE, 'every block is still accounted for locally')

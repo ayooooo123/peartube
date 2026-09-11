@@ -145,14 +145,7 @@ function deepFreeze (value, seen = new Set()) {
   return Object.freeze(value)
 }
 
-function snapshotData (
-  value,
-  name = 'value',
-  seen = new Set(),
-  state = { nodes: 0, fields: 0, arrayItems: 0, stringBytes: 0, bytes: 0 },
-  depth = 0,
-) {
-  if (depth > MAX_INPUT_DEPTH) throw new RangeError(`${name} exceeds maximum depth`)
+function snapshotPrimitive (value, name, state) {
   if (value === null || typeof value === 'boolean') return value
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) throw new TypeError(`${name} numbers must be finite`)
@@ -163,35 +156,35 @@ function snapshotData (
     if (state.stringBytes > MAX_INPUT_STRING_BYTES) throw new RangeError(`${name} strings are too large`)
     return value
   }
-  if (typeof value !== 'object') throw new TypeError(`${name} contains an unsupported value`)
-  if (++state.nodes > MAX_INPUT_NODES) throw new RangeError(`${name} has too many values`)
-  if (value instanceof Uint8Array || b4a.isBuffer(value)) {
-    const length = value.byteLength
-    state.bytes += length
-    if (!Number.isSafeInteger(length) || length < 0 || state.bytes > MAX_INPUT_BYTES) {
-      throw new RangeError(`${name} byte arrays are too large`)
-    }
-    const keys = Reflect.ownKeys(value)
-    if (!BYTE_VIEW_PROTOTYPES.has(Object.getPrototypeOf(value)) || keys.length !== length) {
-      throw new TypeError(`${name} must be an unextended byte view`)
-    }
-    const copy = b4a.alloc(length)
-    for (let index = 0; index < length; index++) {
-      const key = String(index)
-      if (keys[index] !== key) throw new TypeError(`${name} must be an unextended byte view`)
-      const descriptor = Object.getOwnPropertyDescriptor(value, key)
-      if (!descriptor || descriptor.enumerable !== true ||
-          !Object.prototype.hasOwnProperty.call(descriptor, 'value') ||
-          !Number.isSafeInteger(descriptor.value) || descriptor.value < 0 || descriptor.value > 255) {
-        throw new TypeError(`${name} byte values must be enumerable own data properties`)
-      }
-      copy[index] = descriptor.value
-    }
-    return copy
-  }
-  if (seen.has(value)) throw new TypeError(`${name} must not contain cyclic values`)
+  return undefined
+}
 
-  const array = Array.isArray(value)
+function snapshotByteView (value, name, state) {
+  const length = value.byteLength
+  state.bytes += length
+  if (!Number.isSafeInteger(length) || length < 0 || state.bytes > MAX_INPUT_BYTES) {
+    throw new RangeError(`${name} byte arrays are too large`)
+  }
+  const keys = Reflect.ownKeys(value)
+  if (!BYTE_VIEW_PROTOTYPES.has(Object.getPrototypeOf(value)) || keys.length !== length) {
+    throw new TypeError(`${name} must be an unextended byte view`)
+  }
+  const copy = b4a.alloc(length)
+  for (let index = 0; index < length; index++) {
+    const key = String(index)
+    if (keys[index] !== key) throw new TypeError(`${name} must be an unextended byte view`)
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (!descriptor || descriptor.enumerable !== true ||
+        !Object.prototype.hasOwnProperty.call(descriptor, 'value') ||
+        !Number.isSafeInteger(descriptor.value) || descriptor.value < 0 || descriptor.value > 255) {
+      throw new TypeError(`${name} byte values must be enumerable own data properties`)
+    }
+    copy[index] = descriptor.value
+  }
+  return copy
+}
+
+function validateContainerAndGetKeys (value, name, array) {
   if (!array && !isPlainObject(value)) {
     throw new TypeError(`${name} values must be plain objects, arrays, byte arrays, or primitives`)
   }
@@ -206,40 +199,41 @@ function snapshotData (
       throw new TypeError(`${name} contains an unsupported key`)
     }
   }
+  return keys
+}
 
-  seen.add(value)
-  if (array) {
-    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
-    if (!lengthDescriptor || !Object.prototype.hasOwnProperty.call(lengthDescriptor, 'value') ||
-        !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 ||
-        lengthDescriptor.value > MAX_INPUT_ARRAY_ITEMS || keys.length !== lengthDescriptor.value + 1) {
-      throw new TypeError(`${name} must be a dense bounded array`)
-    }
-    const length = lengthDescriptor.value
-    const copy = new Array(length)
-    state.arrayItems += length
-    if (state.arrayItems > MAX_INPUT_TOTAL_ARRAY_ITEMS) {
-      throw new RangeError(`${name} arrays contain too many items`)
-    }
-    for (let index = 0; index < length; index++) {
-      const key = String(index)
-      if (!keys.includes(key)) throw new TypeError(`${name} must be a dense bounded array`)
-      const descriptor = Object.getOwnPropertyDescriptor(value, key)
-      if (!descriptor || descriptor.enumerable !== true ||
-          !Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
-        throw new TypeError(`${name} array values must be enumerable own data properties`)
-      }
-      Object.defineProperty(copy, key, {
-        value: snapshotData(descriptor.value, `${name}[${index}]`, seen, state, depth + 1),
-        enumerable: true,
-        writable: false,
-        configurable: false,
-      })
-    }
-    seen.delete(value)
-    return Object.freeze(copy)
+function snapshotArray (value, name, seen, state, depth, keys) {
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+  if (!lengthDescriptor || !Object.prototype.hasOwnProperty.call(lengthDescriptor, 'value') ||
+      !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 ||
+      lengthDescriptor.value > MAX_INPUT_ARRAY_ITEMS || keys.length !== lengthDescriptor.value + 1) {
+    throw new TypeError(`${name} must be a dense bounded array`)
   }
+  const length = lengthDescriptor.value
+  const copy = new Array(length)
+  state.arrayItems += length
+  if (state.arrayItems > MAX_INPUT_TOTAL_ARRAY_ITEMS) {
+    throw new RangeError(`${name} arrays contain too many items`)
+  }
+  for (let index = 0; index < length; index++) {
+    const key = String(index)
+    if (!keys.includes(key)) throw new TypeError(`${name} must be a dense bounded array`)
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (!descriptor || descriptor.enumerable !== true ||
+        !Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
+      throw new TypeError(`${name} array values must be enumerable own data properties`)
+    }
+    Object.defineProperty(copy, key, {
+      value: snapshotData(descriptor.value, `${name}[${index}]`, seen, state, depth + 1),
+      enumerable: true,
+      writable: false,
+      configurable: false,
+    })
+  }
+  return Object.freeze(copy)
+}
 
+function snapshotPlainObject (value, name, seen, state, depth, keys) {
   state.fields += keys.length
   if (state.fields > MAX_INPUT_NODES) throw new RangeError(`${name} objects contain too many fields`)
   const copy = Object.create(null)
@@ -256,8 +250,39 @@ function snapshotData (
       configurable: false,
     })
   }
-  seen.delete(value)
   return Object.freeze(copy)
+}
+
+function snapshotData (
+  value,
+  name = 'value',
+  seen = new Set(),
+  state = { nodes: 0, fields: 0, arrayItems: 0, stringBytes: 0, bytes: 0 },
+  depth = 0,
+) {
+  if (depth > MAX_INPUT_DEPTH) throw new RangeError(`${name} exceeds maximum depth`)
+  const primitive = snapshotPrimitive(value, name, state)
+  if (primitive !== undefined) return primitive
+
+  if (typeof value !== 'object') throw new TypeError(`${name} contains an unsupported value`)
+  if (++state.nodes > MAX_INPUT_NODES) throw new RangeError(`${name} has too many values`)
+  if (value instanceof Uint8Array || b4a.isBuffer(value)) {
+    return snapshotByteView(value, name, state)
+  }
+  if (seen.has(value)) throw new TypeError(`${name} must not contain cyclic values`)
+
+  const array = Array.isArray(value)
+  const keys = validateContainerAndGetKeys(value, name, array)
+
+  seen.add(value)
+  try {
+    if (array) {
+      return snapshotArray(value, name, seen, state, depth, keys)
+    }
+    return snapshotPlainObject(value, name, seen, state, depth, keys)
+  } finally {
+    seen.delete(value)
+  }
 }
 
 function manifestIdentity (manifest) {
@@ -497,8 +522,7 @@ function normalizeAnnounceError (value, phase) {
   return Object.freeze({ code: 'ANNOUNCE_FAILED', attempts: value.attempts })
 }
 
-function normalizeCheckpoint (value, operation, maxClients) {
-  assertExactFields(value, CHECKPOINT_FIELDS, 'checkpoint')
+function validateCheckpointIdentity (value, operation) {
   if (value.version !== CONTENT_REPLICATION_CHECKPOINT_VERSION) {
     throw new ContentReplicationCheckpointError('checkpoint version mismatch')
   }
@@ -533,13 +557,15 @@ function normalizeCheckpoint (value, operation, maxClients) {
   if (manifestIdentity(rebuilt) !== manifestIdentity(operation.manifest)) {
     throw new ContentReplicationCheckpointError('checkpoint manifest identity mismatch')
   }
+}
 
-  if (!Array.isArray(value.acceptedPeerKeys) || value.acceptedPeerKeys.length > maxClients) {
+function normalizeAcceptedPeerKeys (candidates, maxClients) {
+  if (!Array.isArray(candidates) || candidates.length > maxClients) {
     throw new ContentReplicationCheckpointError('checkpoint acceptedPeerKeys are out of bounds')
   }
   const acceptedPeerKeys = []
   let previous = null
-  for (const candidate of value.acceptedPeerKeys) {
+  for (const candidate of candidates) {
     const peerKey = normalizeRemoteKey(candidate, 'checkpoint accepted peer key')
     if (peerKey === previous || (previous !== null && previous > peerKey)) {
       throw new ContentReplicationCheckpointError('checkpoint acceptedPeerKeys are not canonical')
@@ -547,7 +573,13 @@ function normalizeCheckpoint (value, operation, maxClients) {
     previous = peerKey
     acceptedPeerKeys.push(peerKey)
   }
-  Object.freeze(acceptedPeerKeys)
+  return Object.freeze(acceptedPeerKeys)
+}
+
+function normalizeCheckpoint (value, operation, maxClients) {
+  assertExactFields(value, CHECKPOINT_FIELDS, 'checkpoint')
+  validateCheckpointIdentity(value, operation)
+  const acceptedPeerKeys = normalizeAcceptedPeerKeys(value.acceptedPeerKeys, maxClients)
   const peerResults = normalizePeerResults(value.peerResults, acceptedPeerKeys, maxClients, value.revision)
 
   const needsProjection = PHASE_RANK[value.phase] >= PHASE_RANK.projected
@@ -776,7 +808,7 @@ async function mapLimit (entries, concurrency, operation) {
   const results = new Array(entries.length)
   let nextIndex = 0
   const workers = new Array(Math.min(concurrency, entries.length)).fill(null).map(async () => {
-    while (true) {
+    for (;;) {
       const index = nextIndex++
       if (index >= entries.length) return
       results[index] = await operation(entries[index], index)
@@ -837,34 +869,18 @@ function retryableAnnounceResult (requestId) {
 function publishedResult (requestId) {
   return Object.freeze({ status: 'published', phase: 'published', requestId })
 }
-
-/**
- * Compose authenticated seed-pin clients, live remote-range assessment, durable
- * checkpoints, and the existing idempotent publication boundary.
- */
-export function createContentReplication ({
+function validateReplicationDependencies ({
   publication,
   clients,
-  createManifest = createDurableManifest,
-  createPinRequest = createSeedPinRequest,
-  assessDurability = assessDurableManifest,
-  assessmentDeps = {},
-  getTrustedRelayKeys = () => [],
-  getPairedDeviceKeys = () => [],
+  createManifest,
+  createPinRequest,
+  assessDurability,
+  getTrustedRelayKeys,
+  getPairedDeviceKeys,
   readCheckpoint,
   writeCheckpoint,
-  onProgress = null,
-  logger = null,
-  ordinaryRequired = 2,
-  maxClients = 16,
-  maxStatusAttempts = 3,
-  maxPeerConcurrency = 4,
-  maxConcurrentRows = 4,
-  pollIntervalMs = 100,
-  requestTimeoutMs = 5_000,
-  operationTimeoutMs = 30_000,
-  now = Date.now,
-} = {}) {
+  now,
+}) {
   if (!publication || typeof publication.markDurabilityVerified !== 'function' ||
       typeof publication.project !== 'function' || typeof publication.announce !== 'function' ||
       typeof publication.finalize !== 'function') {
@@ -880,29 +896,11 @@ export function createContentReplication ({
     throw new TypeError('checkpoint callbacks are required')
   }
   if (typeof now !== 'function') throw new TypeError('now must be a function')
-  ordinaryRequired = normalizeNonnegativeInteger(ordinaryRequired, 'ordinaryRequired')
-  maxClients = normalizePositiveInteger(maxClients, 'maxClients', 256)
-  maxStatusAttempts = normalizePositiveInteger(maxStatusAttempts, 'maxStatusAttempts', 256)
-  maxPeerConcurrency = normalizePositiveInteger(maxPeerConcurrency, 'maxPeerConcurrency', 256)
-  maxConcurrentRows = normalizePositiveInteger(maxConcurrentRows, 'maxConcurrentRows', 256)
-  pollIntervalMs = normalizeNonnegativeInteger(pollIntervalMs, 'pollIntervalMs', MAX_TIMER_DELAY_MS)
-  requestTimeoutMs = normalizePositiveInteger(requestTimeoutMs, 'requestTimeoutMs', MAX_TIMER_DELAY_MS)
-  operationTimeoutMs = normalizePositiveInteger(operationTimeoutMs, 'operationTimeoutMs', MAX_TIMER_DELAY_MS)
+}
 
-  const acquireRowSlot = createSemaphore(maxConcurrentRows, now)
+function createKeyedLockManager (now) {
   const keyedQueues = new Map()
-
-  const emitProgress = event => {
-    const stable = Object.freeze(event)
-    if (typeof onProgress !== 'function') return
-    try {
-      onProgress(stable)
-    } catch {
-      try { logger?.warn?.('Content replication progress callback failed', { phase: stable.phase }) } catch {}
-    }
-  }
-
-  const acquireKey = (key, signal, deadlineAt) => {
+  return function acquireKey (key, signal, deadlineAt) {
     if (signal?.aborted) return Promise.reject(new ContentReplicationAbortError())
     const remaining = deadlineAt - now()
     if (!Number.isFinite(remaining) || remaining <= 0) {
@@ -963,6 +961,267 @@ export function createContentReplication ({
       dispatch()
     })
   }
+}
+
+async function executePinWave ({
+  selectedClients,
+  acceptedPeerKeys,
+  peerResults,
+  currentRunPeerKeys,
+  operation,
+  signal,
+  clients,
+  createPinRequest,
+  external,
+  maxPeerConcurrency,
+  requestTimeoutMs,
+  checkpointRevision,
+  observeStatus,
+}) {
+  const pinTargets = selectedClients.filter(entry => !acceptedPeerKeys.has(entry.peerKey))
+  if (pinTargets.length === 0) return { aborted: false, usefulPinHint: false }
+
+  let pinRequest = await external(() => createPinRequest({
+    manifest: operation.manifest,
+    expiresAt: operation.expiresAt,
+    deviceKeyPair: operation.deviceKeyPair,
+    deviceProof: operation.deviceProof,
+    signedDescriptor: operation.signedDescriptor,
+    signal,
+  }))
+  pinRequest = snapshotData(pinRequest, 'PIN request builder result')
+  if (!isPlainObject(pinRequest) || pinRequest.requestId !== operation.manifest.requestId ||
+      pinRequest.manifest?.requestId !== operation.manifest.requestId) {
+    throw new Error('PIN_REQUEST does not match the canonical manifest')
+  }
+
+  let usefulPinHint = false
+  const pinInteractionRevision = checkpointRevision + 1
+  const pinResults = await mapLimit(pinTargets, maxPeerConcurrency, async ({ peerKey, client }) => {
+    if (signal?.aborted || clients.get(peerKey) !== client) {
+      return { peerKey, outcome: null, submitted: false, aborted: signal?.aborted === true }
+    }
+    let submitted = false
+    try {
+      const rawStatus = await external(
+        () => {
+          submitted = true
+          return client.pin(pinRequest, { timeout: requestTimeoutMs, signal })
+        },
+        requestTimeoutMs,
+      )
+      const status = snapshotData(rawStatus, 'PIN response')
+      const outcome = pinOutcome(status, operation.manifest.requestId)
+      if (outcome === 'accepted') {
+        acceptedPeerKeys.add(peerKey)
+        usefulPinHint = observeStatus(peerKey, status) || usefulPinHint
+      }
+      return { peerKey, outcome, submitted, aborted: false }
+    } catch (error) {
+      return {
+        peerKey,
+        outcome: protocolRejection(error),
+        submitted,
+        aborted: error instanceof ContentReplicationAbortError,
+      }
+    }
+  })
+
+  let aborted = false
+  for (const result of pinResults) {
+    if (result.aborted) aborted = true
+    if (result.submitted) {
+      currentRunPeerKeys.add(result.peerKey)
+      peerResults.set(result.peerKey, Object.freeze({
+        peerKey: result.peerKey,
+        outcome: result.outcome,
+        lastInteractionRevision: pinInteractionRevision,
+      }))
+      if (result.outcome !== 'accepted') acceptedPeerKeys.delete(result.peerKey)
+    }
+  }
+  return { aborted, usefulPinHint }
+}
+
+async function pollStatusAttempt ({
+  statusCandidates,
+  signal,
+  clients,
+  external,
+  operation,
+  requestTimeoutMs,
+  maxPeerConcurrency,
+  checkpointRevision,
+  observeStatus,
+  peerResults,
+  currentRunPeerKeys,
+  acceptedPeerKeys,
+}) {
+  let usefulStatusHint = false
+  let historyChanged = false
+  let aborted = false
+  const continuing = []
+  const statusInteractionRevision = checkpointRevision + 1
+
+  const statusResults = await mapLimit(statusCandidates, maxPeerConcurrency, async ({ peerKey, client }) => {
+    if (signal?.aborted || clients.get(peerKey) !== client || client.closed === true) {
+      return {
+        peerKey,
+        client,
+        status: null,
+        keep: false,
+        terminal: false,
+        interacted: false,
+        aborted: signal?.aborted === true,
+      }
+    }
+    let interacted = false
+    try {
+      const rawStatus = await external(
+        () => {
+          interacted = true
+          return client.status(operation.manifest.requestId, { timeout: requestTimeoutMs, signal })
+        },
+        requestTimeoutMs,
+      )
+      const status = snapshotData(rawStatus, 'PIN status response')
+      if (!isPlainObject(status) || status.requestId !== operation.manifest.requestId) {
+        return {
+          peerKey,
+          client,
+          status: null,
+          keep: false,
+          terminal: false,
+          interacted,
+          aborted: false,
+        }
+      }
+      const terminal = TERMINAL_STATUS_STATES.has(status.state) && status.state !== 'complete'
+      return {
+        peerKey,
+        client,
+        status,
+        keep: !TERMINAL_STATUS_STATES.has(status.state),
+        terminal,
+        terminalOutcome: terminal ? 'rejected' : null,
+        interacted,
+        aborted: false,
+      }
+    } catch (error) {
+      const terminalOutcome = error?.name === 'SeedPinProtocolError'
+        ? error.code === 'NOT_FOUND'
+          ? 'notFound'
+          : error.code === 'FORBIDDEN'
+            ? 'forbidden'
+            : null
+        : null
+      return {
+        peerKey,
+        client,
+        status: null,
+        keep: false,
+        terminal: terminalOutcome !== null,
+        terminalOutcome,
+        interacted,
+        aborted: error instanceof ContentReplicationAbortError,
+      }
+    }
+  })
+
+  for (const result of statusResults) {
+    if (result.aborted) aborted = true
+    if (result.status !== null) usefulStatusHint = observeStatus(result.peerKey, result.status) || usefulStatusHint
+    if (result.interacted) {
+      const previousResult = peerResults.get(result.peerKey)
+      peerResults.set(result.peerKey, Object.freeze({
+        ...previousResult,
+        lastInteractionRevision: statusInteractionRevision,
+      }))
+      currentRunPeerKeys.add(result.peerKey)
+      historyChanged = true
+    }
+    if (result.terminal) {
+      acceptedPeerKeys.delete(result.peerKey)
+      const previousResult = peerResults.get(result.peerKey)
+      peerResults.set(result.peerKey, Object.freeze({
+        ...previousResult,
+        outcome: result.terminalOutcome,
+      }))
+      currentRunPeerKeys.add(result.peerKey)
+      historyChanged = true
+    }
+    if (result.keep && clients.get(result.peerKey) === result.client) {
+      continuing.push({ peerKey: result.peerKey, client: result.client })
+    }
+  }
+
+  return { continuing, usefulStatusHint, historyChanged, aborted }
+}
+
+/**
+ * Compose authenticated seed-pin clients, live remote-range assessment, durable
+ * checkpoints, and the existing idempotent publication boundary.
+ */
+export function createContentReplication ({
+  publication,
+  clients,
+  createManifest = createDurableManifest,
+  createPinRequest = createSeedPinRequest,
+  assessDurability = assessDurableManifest,
+  assessmentDeps = {},
+  getTrustedRelayKeys = () => [],
+  getPairedDeviceKeys = () => [],
+  readCheckpoint,
+  writeCheckpoint,
+  onProgress = null,
+  logger = null,
+  ordinaryRequired = 2,
+  maxClients = 16,
+  maxStatusAttempts = 3,
+  maxPeerConcurrency = 4,
+  maxConcurrentRows = 4,
+  pollIntervalMs = 100,
+  requestTimeoutMs = 5_000,
+  operationTimeoutMs = 30_000,
+  now = Date.now,
+} = {}) {
+  validateReplicationDependencies({
+    publication,
+    clients,
+    createManifest,
+    createPinRequest,
+    assessDurability,
+    getTrustedRelayKeys,
+    getPairedDeviceKeys,
+    readCheckpoint,
+    writeCheckpoint,
+    now,
+  })
+  ordinaryRequired = normalizeNonnegativeInteger(ordinaryRequired, 'ordinaryRequired')
+  maxClients = normalizePositiveInteger(maxClients, 'maxClients', 256)
+  maxStatusAttempts = normalizePositiveInteger(maxStatusAttempts, 'maxStatusAttempts', 256)
+  maxPeerConcurrency = normalizePositiveInteger(maxPeerConcurrency, 'maxPeerConcurrency', 256)
+  maxConcurrentRows = normalizePositiveInteger(maxConcurrentRows, 'maxConcurrentRows', 256)
+  pollIntervalMs = normalizeNonnegativeInteger(pollIntervalMs, 'pollIntervalMs', MAX_TIMER_DELAY_MS)
+  requestTimeoutMs = normalizePositiveInteger(requestTimeoutMs, 'requestTimeoutMs', MAX_TIMER_DELAY_MS)
+  operationTimeoutMs = normalizePositiveInteger(operationTimeoutMs, 'operationTimeoutMs', MAX_TIMER_DELAY_MS)
+
+  const acquireRowSlot = createSemaphore(maxConcurrentRows, now)
+  const acquireKey = createKeyedLockManager(now)
+
+  const emitProgress = event => {
+    const stable = Object.freeze(event)
+    if (typeof onProgress !== 'function') return
+    try {
+      onProgress(stable)
+    } catch {
+      try {
+        logger?.warn?.('Content replication progress callback failed', { phase: stable.phase })
+      } catch {
+        // best-effort: a failing progress callback must never surface as an error
+      }
+    }
+  }
 
   const withKeyLock = async (key, signal, deadlineAt, operation) => {
     const releaseKey = await acquireKey(key, signal, deadlineAt)
@@ -992,20 +1251,22 @@ export function createContentReplication ({
       { signal, deadlineAt, timeout, now },
     )
 
-    let loaded
-    try {
-      loaded = await external(() => readCheckpoint(identity, { signal, deadlineAt }))
-      if (loaded !== null && loaded !== undefined) {
-        loaded = snapshotData(loaded, 'checkpoint read result')
+    const loadCheckpoint = async () => {
+      let loaded
+      try {
+        loaded = await external(() => readCheckpoint(identity, { signal, deadlineAt }))
+        if (loaded !== null && loaded !== undefined) {
+          loaded = snapshotData(loaded, 'checkpoint read result')
+        }
+      } catch (error) {
+        if (error instanceof ContentReplicationAbortError ||
+            error instanceof ContentReplicationTimeoutError) throw error
+        throw new ContentReplicationCheckpointError('checkpoint read callback failed')
       }
-    } catch (error) {
-      if (error instanceof ContentReplicationAbortError ||
-          error instanceof ContentReplicationTimeoutError) throw error
-      throw new ContentReplicationCheckpointError('checkpoint read callback failed')
+      if (loaded === null || loaded === undefined) return null
+      return normalizeCheckpoint(loaded, operation, MAX_CHECKPOINT_PEERS)
     }
-    if (loaded !== null && loaded !== undefined) {
-      checkpoint = normalizeCheckpoint(loaded, operation, MAX_CHECKPOINT_PEERS)
-    }
+    checkpoint = await loadCheckpoint()
 
     const persist = async (phase, updates = {}) => {
       const current = checkpoint || deepFreeze(checkpointBase(operation))
@@ -1080,7 +1341,7 @@ export function createContentReplication ({
     })
 
     const advancePublication = async () => {
-      while (true) {
+      for (;;) {
         if (checkpoint.phase === 'durabilityVerified') {
           const markResult = await external(() => publication.markDurabilityVerified(
             operation.manifest.rowId,
@@ -1246,192 +1507,75 @@ export function createContentReplication ({
       return authoritativeChanges !== before
     }
 
-    const pinTargets = selectedClients.filter(entry => !acceptedPeerKeys.has(entry.peerKey))
-    let pinRequest = null
-    if (pinTargets.length > 0) {
-      pinRequest = await external(() => createPinRequest({
-        manifest: operation.manifest,
-        expiresAt: operation.expiresAt,
-        deviceKeyPair: operation.deviceKeyPair,
-        deviceProof: operation.deviceProof,
-        signedDescriptor: operation.signedDescriptor,
-        signal,
-      }))
-      pinRequest = snapshotData(pinRequest, 'PIN request builder result')
-      if (!isPlainObject(pinRequest) || pinRequest.requestId !== operation.manifest.requestId ||
-          pinRequest.manifest?.requestId !== operation.manifest.requestId) {
-        throw new Error('PIN_REQUEST does not match the canonical manifest')
-      }
-    }
-
-    const pinInteractionRevision = checkpoint.revision + 1
-    const pinResults = await mapLimit(pinTargets, maxPeerConcurrency, async ({ peerKey, client }) => {
-      if (signal?.aborted || clients.get(peerKey) !== client) {
-        return { peerKey, outcome: null, submitted: false, aborted: signal?.aborted === true }
-      }
-      let submitted = false
-      try {
-        const rawStatus = await external(
-          () => {
-            submitted = true
-            return client.pin(pinRequest, { timeout: requestTimeoutMs, signal })
-          },
-          requestTimeoutMs,
-        )
-        const status = snapshotData(rawStatus, 'PIN response')
-        const outcome = pinOutcome(status, operation.manifest.requestId)
-        if (outcome === 'accepted') {
-          acceptedPeerKeys.add(peerKey)
-          usefulPinHint = observeStatus(peerKey, status) || usefulPinHint
-        }
-        return { peerKey, outcome, submitted, aborted: false }
-      } catch (error) {
-        return {
-          peerKey,
-          outcome: protocolRejection(error),
-          submitted,
-          aborted: error instanceof ContentReplicationAbortError,
-        }
-      }
+    const pinWave = await executePinWave({
+      selectedClients,
+      acceptedPeerKeys,
+      peerResults,
+      currentRunPeerKeys,
+      operation,
+      signal,
+      clients,
+      createPinRequest,
+      external,
+      maxPeerConcurrency,
+      requestTimeoutMs,
+      checkpointRevision: checkpoint.revision,
+      observeStatus,
     })
-
-    for (const result of pinResults) {
-      if (result.aborted) aborted = true
-      if (result.submitted) {
-        currentRunPeerKeys.add(result.peerKey)
-        peerResults.set(result.peerKey, Object.freeze({
-          peerKey: result.peerKey,
-          outcome: result.outcome,
-          lastInteractionRevision: pinInteractionRevision,
-        }))
-        if (result.outcome !== 'accepted') acceptedPeerKeys.delete(result.peerKey)
-      }
-    }
-    if (await persistPeerHistory()) return run(operation, signal, deadlineAt)
-
-    if (PHASE_RANK[checkpoint.phase] >= PHASE_RANK.durabilityVerified) return advancePublication()
-    if (usefulPinHint && await assess()) {
-      await persist('durabilityVerified')
-      return advancePublication()
-    }
-    if (aborted || signal?.aborted || deadlineAt - now() <= 0) return pendingResult(operation.manifest.requestId)
-
-    let statusCandidates = selectedClients.filter(({ peerKey, client }) =>
-      acceptedPeerKeys.has(peerKey) && clients.get(peerKey) === client)
-
-    for (let attempt = 0; attempt < maxStatusAttempts && statusCandidates.length > 0; attempt++) {
-      if (attempt > 0) {
-        try {
-          await boundedDelay(pollIntervalMs, { signal, deadlineAt, now })
-        } catch {
-          return pendingResult(operation.manifest.requestId)
-        }
-      }
-      let usefulStatusHint = false
-      let historyChanged = false
-      const continuing = []
-      const statusInteractionRevision = checkpoint.revision + 1
-      const statusResults = await mapLimit(statusCandidates, maxPeerConcurrency, async ({ peerKey, client }) => {
-        if (signal?.aborted || clients.get(peerKey) !== client || client.closed === true) {
-          return {
-            peerKey,
-            client,
-            status: null,
-            keep: false,
-            terminal: false,
-            interacted: false,
-            aborted: signal?.aborted === true,
-          }
-        }
-        let interacted = false
-        try {
-          const rawStatus = await external(
-            () => {
-              interacted = true
-              return client.status(operation.manifest.requestId, { timeout: requestTimeoutMs, signal })
-            },
-            requestTimeoutMs,
-          )
-          const status = snapshotData(rawStatus, 'PIN status response')
-          if (!isPlainObject(status) || status.requestId !== operation.manifest.requestId) {
-            return {
-              peerKey,
-              client,
-              status: null,
-              keep: false,
-              terminal: false,
-              interacted,
-              aborted: false,
-            }
-          }
-          const terminal = TERMINAL_STATUS_STATES.has(status.state) && status.state !== 'complete'
-          return {
-            peerKey,
-            client,
-            status,
-            keep: !TERMINAL_STATUS_STATES.has(status.state),
-            terminal,
-            terminalOutcome: terminal ? 'rejected' : null,
-            interacted,
-            aborted: false,
-          }
-        } catch (error) {
-          const terminalOutcome = error?.name === 'SeedPinProtocolError'
-            ? error.code === 'NOT_FOUND'
-              ? 'notFound'
-              : error.code === 'FORBIDDEN'
-                ? 'forbidden'
-                : null
-            : null
-          return {
-            peerKey,
-            client,
-            status: null,
-            keep: false,
-            terminal: terminalOutcome !== null,
-            terminalOutcome,
-            interacted,
-            aborted: error instanceof ContentReplicationAbortError,
-          }
-        }
-      })
-
-      for (const result of statusResults) {
-        if (result.aborted) aborted = true
-        if (result.status !== null) usefulStatusHint = observeStatus(result.peerKey, result.status) || usefulStatusHint
-        if (result.interacted) {
-          const previousResult = peerResults.get(result.peerKey)
-          peerResults.set(result.peerKey, Object.freeze({
-            ...previousResult,
-            lastInteractionRevision: statusInteractionRevision,
-          }))
-          currentRunPeerKeys.add(result.peerKey)
-          historyChanged = true
-        }
-        if (result.terminal) {
-          acceptedPeerKeys.delete(result.peerKey)
-          const previousResult = peerResults.get(result.peerKey)
-          peerResults.set(result.peerKey, Object.freeze({
-            ...previousResult,
-            outcome: result.terminalOutcome,
-          }))
-          currentRunPeerKeys.add(result.peerKey)
-          historyChanged = true
-        }
-        if (result.keep && clients.get(result.peerKey) === result.client) {
-          continuing.push({ peerKey: result.peerKey, client: result.client })
-        }
-      }
-      if (historyChanged && await persistPeerHistory()) return run(operation, signal, deadlineAt)
-      if (usefulStatusHint && await assess()) {
+    const applyPinWaveResult = async wave => {
+      if (wave.aborted) aborted = true
+      if (await persistPeerHistory()) return run(operation, signal, deadlineAt)
+      if (PHASE_RANK[checkpoint.phase] >= PHASE_RANK.durabilityVerified) return advancePublication()
+      if (wave.usefulPinHint && await assess()) {
         await persist('durabilityVerified')
         return advancePublication()
       }
       if (aborted || signal?.aborted || deadlineAt - now() <= 0) return pendingResult(operation.manifest.requestId)
-      statusCandidates = continuing
+      return null
     }
 
-    return pendingResult(operation.manifest.requestId)
+    const waveResult = await applyPinWaveResult(pinWave)
+    if (waveResult !== null) return waveResult
+
+    let statusCandidates = selectedClients.filter(({ peerKey, client }) =>
+      acceptedPeerKeys.has(peerKey) && clients.get(peerKey) === client)
+
+    const pollStatuses = async () => {
+      for (let attempt = 0; attempt < maxStatusAttempts && statusCandidates.length > 0; attempt++) {
+        if (attempt > 0) {
+          try {
+            await boundedDelay(pollIntervalMs, { signal, deadlineAt, now })
+          } catch {
+            return pendingResult(operation.manifest.requestId)
+          }
+        }
+        const attemptResult = await pollStatusAttempt({
+          statusCandidates,
+          signal,
+          clients,
+          external,
+          operation,
+          requestTimeoutMs,
+          maxPeerConcurrency,
+          checkpointRevision: checkpoint.revision,
+          observeStatus,
+          peerResults,
+          currentRunPeerKeys,
+          acceptedPeerKeys,
+        })
+        if (attemptResult.aborted) aborted = true
+        if (attemptResult.historyChanged && await persistPeerHistory()) return run(operation, signal, deadlineAt)
+        if (attemptResult.usefulStatusHint && await assess()) {
+          await persist('durabilityVerified')
+          return advancePublication()
+        }
+        if (aborted || signal?.aborted || deadlineAt - now() <= 0) return pendingResult(operation.manifest.requestId)
+        statusCandidates = attemptResult.continuing
+      }
+    }
+
+    const pollResult = await pollStatuses()
+    return pollResult || pendingResult(operation.manifest.requestId)
   }
 
   return Object.freeze({

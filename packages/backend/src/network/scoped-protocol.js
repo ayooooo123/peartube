@@ -12,8 +12,8 @@ export const ASSET_RENDITION_CAPABILITY = 'asset-rendition:v2'
 export const ARCHIVE_RANGE_CAPABILITY = 'archive-range:v1'
 export const ARCHIVE_DISCOVERY_CAPABILITY = 'archive-discovery:v1'
 export const INDEX_QUERY_CAPABILITY = 'index-query:v1'
-export const ACQUISITION_DISCOVERY_CAPABILITY = 'acquisition-discovery:v1'
-export const ACQUISITION_WORK_CAPABILITY = 'acquisition-work:v1'
+export const ACQUISITION_DISCOVERY_CAPABILITY = 'acquisition-discovery:v2'
+export const ACQUISITION_WORK_CAPABILITY = 'acquisition-work:v2'
 export const SCOPED_NETWORK_PROTOCOL = 'peartube/scoped-network'
 
 const PURPOSE_CODES = Object.freeze({

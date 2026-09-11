@@ -39,6 +39,7 @@ import {
   listPublisherCausalPage,
   openPublisherCatalogView
 } from './catalog-view.js'
+import { DEFAULT_CLOCK_DRIFT_MS } from '../validators.js'
 
 function invalid (message) {
   throw new Error(`Invalid publisher catalog: ${message}`)
@@ -68,24 +69,96 @@ function normalizeDeviceSigner (value) {
     }
   })
 }
+function normalizeSyncState (state) {
+  if (state === undefined || state === null) return null
+  if (typeof state !== 'object' || Array.isArray(state)) invalid('syncState must be an object')
+  if (state.version !== 2) return null
+  if (typeof state.complete !== 'boolean') invalid('syncState complete must be a boolean')
+  if (!Number.isSafeInteger(state.catalogEpoch) || state.catalogEpoch < 0) invalid('syncState catalogEpoch must be an unsigned integer')
+  if (typeof state.headDigest !== 'string' || !/^[0-9a-f]{64}$/.test(state.headDigest)) invalid('syncState headDigest is invalid')
+  if (typeof state.authorizationStateDigest !== 'string' || !/^[0-9a-f]{64}$/.test(state.authorizationStateDigest)) invalid('syncState authorizationStateDigest is invalid')
+  return Object.freeze({
+    version: 2,
+    complete: state.complete,
+    catalogEpoch: state.catalogEpoch,
+    headDigest: state.headDigest,
+    authorizationStateDigest: state.authorizationStateDigest,
+    cursor: typeof state.cursor === 'string' ? state.cursor : null,
+  })
+}
+
+const ALLOWED_PUBLISHER_OPTIONS = [
+  'key', 'publisherId', 'namespace', 'ownsStore', 'keyProvider',
+  'deviceSigner', 'ackInterval', 'journalLimit', 'syncState', 'now', 'maxClockSkewMs'
+]
+
+function validateAllowedOptions (options, allowed) {
+  for (const field of Object.keys(options)) {
+    if (!allowed.includes(field)) invalid(`unknown option ${field}`)
+  }
+}
+
+function validatePublisherNamespace (namespace) {
+  const ns = namespace ?? 'peartube-publisher'
+  if (typeof ns !== 'string' || ns.length === 0 || b4a.byteLength(ns) > 128) {
+    invalid('namespace is out of bounds')
+  }
+  return ns
+}
+
+function validatePublisherLimits (ackInterval, journalLimit) {
+  const ack = ackInterval ?? 1_000
+  if (!Number.isSafeInteger(ack) || ack < 0 || ack > 60_000) {
+    invalid('ackInterval is out of bounds')
+  }
+  const journal = journalLimit ?? PUBLISHER_LIMITS.maxJournalOperations
+  if (!Number.isSafeInteger(journal) || journal < 1 || journal > PUBLISHER_LIMITS.maxJournalOperations) {
+    invalid('journalLimit is out of bounds')
+  }
+  return { ackInterval: ack, journalLimit: journal }
+}
+
+function validatePublisherKeyProvider (keyProvider) {
+  if (keyProvider === undefined) return createPublisherKeyProvider()
+  if (!keyProvider || typeof keyProvider.verifySignature !== 'function' || typeof keyProvider.verifySignedEnvelope !== 'function' || typeof keyProvider.verifyMultiSignedEnvelope !== 'function') {
+    invalid('keyProvider must expose verifySignature and publisher verification methods')
+  }
+  return keyProvider
+}
 
 function validateOptions (store, options) {
   if (!store || typeof store !== 'object') invalid('Corestore is required')
-  const allowed = ['key', 'publisherId', 'namespace', 'ownsStore', 'keyProvider', 'deviceSigner', 'ackInterval', 'journalLimit']
-  for (const field of Object.keys(options)) if (!allowed.includes(field)) invalid(`unknown option ${field}`)
+  validateAllowedOptions(options, ALLOWED_PUBLISHER_OPTIONS)
   const key = normalizeBootstrapKey(options.key)
-  if (!isBytes(options.publisherId) || options.publisherId.byteLength !== 32) invalid('publisherId must be exactly 32 bytes')
+  if (!isBytes(options.publisherId) || options.publisherId.byteLength !== 32) {
+    invalid('publisherId must be exactly 32 bytes')
+  }
   const publisherId = b4a.from(options.publisherId)
   const deviceSigner = normalizeDeviceSigner(options.deviceSigner)
-  const namespace = options.namespace ?? 'peartube-publisher'
-  if (typeof namespace !== 'string' || namespace.length === 0 || b4a.byteLength(namespace) > 128) invalid('namespace is out of bounds')
-  if (options.ownsStore !== undefined && typeof options.ownsStore !== 'boolean') invalid('ownsStore must be boolean')
-  const ackInterval = options.ackInterval ?? 1_000
-  if (!Number.isSafeInteger(ackInterval) || ackInterval < 0 || ackInterval > 60_000) invalid('ackInterval is out of bounds')
-  const journalLimit = options.journalLimit ?? PUBLISHER_LIMITS.maxJournalOperations
-  if (!Number.isSafeInteger(journalLimit) || journalLimit < 1 || journalLimit > PUBLISHER_LIMITS.maxJournalOperations) invalid('journalLimit is out of bounds')
-  if (options.keyProvider !== undefined && (!options.keyProvider || typeof options.keyProvider.verifySignature !== 'function' || typeof options.keyProvider.verifySignedEnvelope !== 'function' || typeof options.keyProvider.verifyMultiSignedEnvelope !== 'function')) invalid('keyProvider must expose verifySignature and publisher verification methods')
-  return { key, publisherId, namespace, ownsStore: options.ownsStore === true, ackInterval, journalLimit, keyProvider: options.keyProvider || createPublisherKeyProvider(), deviceSigner }
+  const namespace = validatePublisherNamespace(options.namespace)
+  if (options.ownsStore !== undefined && typeof options.ownsStore !== 'boolean') {
+    invalid('ownsStore must be boolean')
+  }
+  const { ackInterval, journalLimit } = validatePublisherLimits(options.ackInterval, options.journalLimit)
+  const keyProvider = validatePublisherKeyProvider(options.keyProvider)
+  const syncState = normalizeSyncState(options.syncState)
+  const now = typeof options.now === 'function' ? options.now : () => Date.now()
+  const maxClockSkewMs = Number.isSafeInteger(options.maxClockSkewMs) && options.maxClockSkewMs >= 0
+    ? options.maxClockSkewMs
+    : DEFAULT_CLOCK_DRIFT_MS
+  return {
+    key,
+    publisherId,
+    namespace,
+    ownsStore: options.ownsStore === true,
+    ackInterval,
+    journalLimit,
+    keyProvider,
+    deviceSigner,
+    syncState,
+    now,
+    maxClockSkewMs
+  }
 }
 
 // Replay order for a rebuilt catalog. The producer appended its namespace, then
@@ -124,13 +197,109 @@ async function raceOpenBudget (promise, timeoutMs) {
   let timer = null
   try {
     return await Promise.race([
-      promise.then(() => true),
+      promise,
       new Promise(resolve => { timer = setTimeout(() => resolve(false), timeoutMs) })
     ])
   } finally {
     if (timer) clearTimeout(timer)
   }
 }
+async function tryMountVerifiedPageView (catalog) {
+  const publisherHex = b4a.toString(catalog.options.publisherId, 'hex')
+  const pageView = openPublisherCatalogView({
+    get: () => catalog.store.get({ name: `verified-page-view-${publisherHex}` })
+  })
+  await pageView.ready()
+  const descriptorEntry = await pageView.get('state/descriptor').catch(() => null)
+  if (!descriptorEntry?.value) {
+    await pageView.close().catch(() => {})
+    catalog.verifiedPageView = null
+    return false
+  }
+
+  const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value, {
+    legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY
+  })
+  if (!equalBytes(descriptor.publisherId, catalog.options.publisherId)) {
+    await pageView.close().catch(() => {})
+    invalid('persisted descriptor publisherId does not match expected publisherId')
+  }
+
+  const syncState = catalog.options.syncState || null
+  let isComplete = false
+  if (syncState && syncState.version === 2 && syncState.complete === true &&
+      syncState.catalogEpoch === descriptor.catalogEpoch) {
+    const head = await getPublisherViewHead(pageView, {
+      hash: catalog.options.keyProvider.hash || crypto.hash
+    })
+    const localDigest = b4a.toString(head.digest, 'hex')
+    const localAuthDigest = b4a.toString(head.authorizationStateDigest, 'hex')
+    if (localDigest === syncState.headDigest &&
+        localAuthDigest === syncState.authorizationStateDigest) {
+      isComplete = true
+    }
+  }
+
+  if (isComplete) {
+    catalog.verifiedPageView = pageView
+    catalog.publisherPinned = true
+    catalog.mirrorComplete = true
+    catalog.base.ready().then(async () => {
+      catalog.baseReady = true
+      if (catalog.base?.view) {
+        await raceOpenBudget(catalog.base.update(), 1_000).catch(() => {})
+      }
+    }).catch(() => {})
+    return true
+  }
+
+  await pageView.close().catch(() => {})
+  catalog.verifiedPageView = null
+  return false
+}
+
+async function validateBaseViewDescriptor (base, expectedPublisherId) {
+  if (!base?.view) return
+  await raceOpenBudget(base.update(), 1_000).catch(() => {})
+  await raceOpenBudget(base.view.ready?.() || Promise.resolve(), 1000).catch(() => {})
+  const descriptorEntry = await raceOpenBudget(base.view.get('state/descriptor'), 1000).catch(() => null)
+  const journalCountEntry = await raceOpenBudget(base.view.get('meta/journal-count'), 1000).catch(() => null)
+  let pinError = null
+  if (descriptorEntry?.value) {
+    const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value, { legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY })
+    if (!equalBytes(descriptor.publisherId, expectedPublisherId)) pinError = 'persisted descriptor publisherId does not match expected publisherId'
+  } else if (journalCountEntry?.value && b4a.toString(journalCountEntry.value) !== '0') {
+    pinError = 'persisted catalog history has no descriptor matching expected publisherId'
+  }
+  if (pinError) {
+    try {
+      await base.close()
+    } finally {
+      invalid(pinError)
+    }
+  }
+}
+
+function encodeAndValidateCatalogFrame (value) {
+  const frame = isBytes(value) ? value : encodePublisherCatalogFrame(value)
+  if (frame.byteLength > PUBLISHER_LIMITS.maxOperationBytes) invalid('operation frame exceeds its byte limit')
+  const decoded = decodePublisherCatalogFrame(frame)
+  const canonical = encodePublisherCatalogFrame(decoded)
+  if (!b4a.equals(canonical, frame)) invalid('operation frame is noncanonical')
+  return { frame, decoded }
+}
+
+function validateOperationTimestamps (decoded, now, maxClockSkewMs) {
+  const currentTime = typeof now === 'function' ? now() : (Number.isSafeInteger(now) ? now : Date.now())
+  const skew = Number.isSafeInteger(maxClockSkewMs) && maxClockSkewMs >= 0 ? maxClockSkewMs : DEFAULT_CLOCK_DRIFT_MS
+  if (Number.isSafeInteger(decoded.signedAt) && decoded.signedAt > currentTime + skew) {
+    invalid('operation is future-issued')
+  }
+  if (Number.isSafeInteger(decoded.expiresAt) && decoded.expiresAt > 0 && decoded.expiresAt + skew <= currentTime) {
+    invalid('operation is expired')
+  }
+}
+
 
 export class PublisherCatalog extends ReadyResource {
   constructor (store, options = {}) {
@@ -146,6 +315,7 @@ export class PublisherCatalog extends ReadyResource {
     this.baseUpdating = null
     this.baseReady = false
     this.publisherPinned = false
+    this.mirrorComplete = false
     this.ready().catch(() => {})
   }
 
@@ -159,17 +329,10 @@ export class PublisherCatalog extends ReadyResource {
       apply: (nodes, view, host) => applyPublisherCatalogNodes(nodes, view, host, { keyProvider, publisherId: this.options.publisherId, journalLimit: this.options.journalLimit })
     })
 
-
-    const pinnedPublisherId = await this.base.getUserData(PUBLISHER_ID_USER_DATA_KEY).catch(() => null)
-    if (pinnedPublisherId && !equalBytes(pinnedPublisherId, this.options.publisherId)) {
-      const base = this.base
-      this.base = null
-      try {
-        await base.close()
-      } finally {
-        invalid('persisted publisherId does not match expected publisherId')
-      }
+    if (this.options.key && await tryMountVerifiedPageView(this)) {
+      return
     }
+
     // A follower opens this from a publisher's bootstrap key with no local
     // history, so the Autobase cannot become ready until that core's first
     // block replicates - and the scope that would replicate it is only joined
@@ -180,36 +343,34 @@ export class PublisherCatalog extends ReadyResource {
     // verified accepted pages. So bound the wait, and when it lapses continue
     // with the page path while the base catches up on its own.
     const readyWithinBudget = this.options.key
-      ? await raceOpenBudget(this.base.ready(), REMOTE_CATALOG_OPEN_TIMEOUT_MS)
+      ? await raceOpenBudget(this.base.ready().then(() => true), REMOTE_CATALOG_OPEN_TIMEOUT_MS)
       : (await this.base.ready(), true)
     this.baseReady = readyWithinBudget
-
-    if (readyWithinBudget && this.base?.view) {
-      await raceOpenBudget(this.base.update(), 1_000).catch(() => {})
-      await raceOpenBudget(this.base.view.ready?.() || Promise.resolve(), 1000).catch(() => {})
-      const descriptorEntry = await raceOpenBudget(this.base.view.get('state/descriptor'), 1000).catch(() => null)
-      const journalCountEntry = await raceOpenBudget(this.base.view.get('meta/journal-count'), 1000).catch(() => null)
-      let pinError = null
-      if (descriptorEntry?.value) {
-        const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value, { legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY })
-        if (!equalBytes(descriptor.publisherId, this.options.publisherId)) pinError = 'persisted descriptor publisherId does not match expected publisherId'
-      } else if (journalCountEntry?.value && b4a.toString(journalCountEntry.value) !== '0') {
-        pinError = 'persisted catalog history has no descriptor matching expected publisherId'
+    const pinnedPublisherId = readyWithinBudget
+      ? await this.base.getUserData(PUBLISHER_ID_USER_DATA_KEY).catch(() => null)
+      : null
+    if (pinnedPublisherId && !equalBytes(pinnedPublisherId, this.options.publisherId)) {
+      const base = this.base
+      this.base = null
+      try {
+        await base.close()
+      } finally {
+        invalid('persisted publisherId does not match expected publisherId')
       }
-      if (pinError) {
-        const base = this.base
+    }
+    if (readyWithinBudget && this.base?.view) {
+      const base = this.base
+      try {
+        await validateBaseViewDescriptor(base, this.options.publisherId)
+      } catch (err) {
         this.base = null
-        try {
-          await base.close()
-        } finally {
-          invalid(pinError)
-        }
+        throw err
       }
     }
     // Pin writable local catalogs outside the derived view. A wrong expected
     // publisher can otherwise rebuild that view first and erase the descriptor
     // needed to detect the mismatch.
-    if (!pinnedPublisherId) {
+    if (!pinnedPublisherId && readyWithinBudget && this.base.writable) {
       await this.base.setUserData(PUBLISHER_ID_USER_DATA_KEY, this.options.publisherId).catch(() => {})
     }
     // Nothing is pinned against yet when a remote base never opened: there is
@@ -280,18 +441,16 @@ export class PublisherCatalog extends ReadyResource {
     return this.writable
   }
 
-  async append (value, { allowAuthorityBootstrap = false } = {}) {
+  async append (value, appendOptions = {}) {
+    const { allowAuthorityBootstrap = false, now = this.options.now, maxClockSkewMs = this.options.maxClockSkewMs } = appendOptions
     await this.ready()
-    const frame = isBytes(value) ? value : encodePublisherCatalogFrame(value)
-    if (frame.byteLength > PUBLISHER_LIMITS.maxOperationBytes) invalid('operation frame exceeds its byte limit')
-    const decoded = decodePublisherCatalogFrame(frame)
-    const canonical = encodePublisherCatalogFrame(decoded)
-    if (!b4a.equals(canonical, frame)) invalid('operation frame is noncanonical')
+    const { frame, decoded } = encodeAndValidateCatalogFrame(value)
     const recordType = decoded.recordType || decoded.operation?.recordType
     const isRootRecord = REPLAY_ROOT_TYPES.has(recordType)
     if (!this.writable && (!allowAuthorityBootstrap || !isRootRecord)) {
       invalid('local device is not an admitted Autobase writer')
     }
+    validateOperationTimestamps(decoded, now, maxClockSkewMs)
     const optimistic = allowAuthorityBootstrap && isRootRecord && !this.writable
     await this.base.append(frame, optimistic ? { optimistic: true } : undefined)
     await this.base.update()

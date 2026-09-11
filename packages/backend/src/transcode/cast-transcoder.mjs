@@ -1,4 +1,4 @@
-/* eslint-disable no-empty, @typescript-eslint/no-require-imports */
+/* eslint-disable no-empty */
 import http from 'bare-http1'
 
 import { probeMedia, loadBareFfmpeg, getBareFfmpeg } from './transcoder.mjs'
@@ -9,6 +9,7 @@ import { getHttpFileSize } from './http-file-size.mjs'
 import { MemorySegmentStore } from './segment-store.mjs'
 import { FMP4Segmenter } from './fmp4-segmenter.mjs'
 import { getVideoToolboxDecodeSettings } from './videotoolbox-settings.mjs'
+import { resolveBareFfmpegModuleSync } from '../runtime-modules.js'
 
 const sessions = new Map()
 let castServer = null
@@ -26,6 +27,29 @@ function setCorsHeaders(res) {
   res.setHeader('Access-Control-Expose-Headers', 'Content-Length,Content-Range,Accept-Ranges')
 }
 
+function parseExplicitByteRange(rawStart, rawEnd, fileSize) {
+  const start = parseInt(rawStart, 10)
+  const end = parseInt(rawEnd, 10)
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start) return null
+  if (start >= fileSize) return null
+  const boundedEnd = Math.min(end, fileSize - 1)
+  if (boundedEnd < start) return null
+  return { start, end: boundedEnd }
+}
+
+function parsePrefixByteRange(rawStart, fileSize) {
+  const start = parseInt(rawStart, 10)
+  if (!Number.isFinite(start) || start < 0 || start >= fileSize) return null
+  return { start, end: fileSize - 1 }
+}
+
+function parseSuffixByteRange(rawEnd, fileSize) {
+  const suffixLength = parseInt(rawEnd, 10)
+  if (!Number.isFinite(suffixLength) || suffixLength <= 0) return null
+  const start = Math.max(0, fileSize - suffixLength)
+  return { start, end: fileSize - 1 }
+}
+
 function parseByteRange(rangeHeader, fileSize) {
   if (!rangeHeader) return null
   if (!Number.isFinite(fileSize) || fileSize <= 0) return null
@@ -35,28 +59,14 @@ function parseByteRange(rangeHeader, fileSize) {
   const rawEnd = match[2]
 
   if (rawStart && rawEnd) {
-    const start = parseInt(rawStart, 10)
-    const end = parseInt(rawEnd, 10)
-    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start) return null
-    if (start >= fileSize) return null
-    const boundedEnd = Math.min(end, fileSize - 1)
-    if (boundedEnd < start) return null
-    return { start, end: boundedEnd }
+    return parseExplicitByteRange(rawStart, rawEnd, fileSize)
   }
-
-  if (rawStart && !rawEnd) {
-    const start = parseInt(rawStart, 10)
-    if (!Number.isFinite(start) || start < 0 || start >= fileSize) return null
-    return { start, end: fileSize - 1 }
+  if (rawStart) {
+    return parsePrefixByteRange(rawStart, fileSize)
   }
-
-  if (!rawStart && rawEnd) {
-    const suffixLength = parseInt(rawEnd, 10)
-    if (!Number.isFinite(suffixLength) || suffixLength <= 0) return null
-    const start = Math.max(0, fileSize - suffixLength)
-    return { start, end: fileSize - 1 }
+  if (rawEnd) {
+    return parseSuffixByteRange(rawEnd, fileSize)
   }
-
   return null
 }
 
@@ -118,12 +128,7 @@ function ensureFfmpegLoaded() {
     ffmpeg = getBareFfmpeg()
     if (ffmpeg) return ffmpeg
 
-    let mod = null
-    if (typeof require === 'function') {
-      try {
-        mod = require('bare-ffmpeg')
-      } catch {}
-    }
+    let mod = resolveBareFfmpegModuleSync()
     if (!mod) {
       mod = await import('bare-ffmpeg')
     }
@@ -392,177 +397,171 @@ function sendPlaylistResponse(res, session, fileName, method, rangeHeader, playl
   else res.end(payload)
 }
 
+function sendStaticBinaryResponse(res, session, fileName, method, rangeHeader, data, contentType) {
+  res.statusCode = 200
+  session.requestStats.lastStatus = 200
+  session.requestStats.lastError = null
+  res.setHeader('Content-Type', contentType)
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+  res.setHeader('Accept-Ranges', 'bytes')
+  const range = parseByteRange(rangeHeader, data.length)
+  if (rangeHeader && !range) {
+    res.statusCode = 416
+    session.requestStats.lastStatus = 416
+    session.requestStats.lastError = 'Range not satisfiable'
+    res.setHeader('Content-Range', `bytes */${data.length}`)
+    logHttpResponse(session, fileName, method, rangeHeader, 416, 0)
+    res.end()
+    return
+  }
+  if (range) {
+    const length = range.end - range.start + 1
+    res.statusCode = 206
+    session.requestStats.lastStatus = 206
+    session.requestStats.lastError = null
+    res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${data.length}`)
+    res.setHeader('Content-Length', length)
+    logHttpResponse(session, fileName, method, rangeHeader, 206, length)
+    if (method === 'HEAD') res.end()
+    else res.end(data.subarray(range.start, range.end + 1))
+    return
+  }
+  res.setHeader('Content-Length', data.length)
+  logHttpResponse(session, fileName, method, rangeHeader, 200, data.length)
+  if (method === 'HEAD') res.end()
+  else res.end(data)
+}
+
+function validateCastServerMethod(req, res) {
+  const method = (req.method || 'GET').toUpperCase()
+  if (method === 'OPTIONS') {
+    res.statusCode = 204
+    res.end()
+    return null
+  }
+  if (method !== 'GET' && method !== 'HEAD') {
+    res.statusCode = 405
+    res.setHeader('Allow', 'GET,HEAD,OPTIONS')
+    res.setHeader('Content-Type', 'text/plain')
+    res.end('Method not allowed')
+    return null
+  }
+  return method
+}
+
+function handleMasterPlaylistRequest(res, session, fileName, method, rangeHeader) {
+  session.requestStats.playlistRequests += 1
+  session.requestStats.lastPath = fileName
+  const playlist = generateMasterPlaylist()
+  sendPlaylistResponse(res, session, fileName, method, rangeHeader, playlist)
+}
+
+function handleMediaPlaylistRequest(res, session, fileName, method, rangeHeader, sessionId) {
+  session.requestStats.playlistRequests += 1
+  session.requestStats.lastPath = fileName
+  const playlist = generatePlaylist(session)
+  if (shouldLogPlaylistRequest(session)) {
+    console.log('[cast-transcoder] playlist request', sessionId, 'segments=', session.segmentStore?.getSegmentCount?.() || 0)
+  }
+  if (!playlist) {
+    res.statusCode = 503
+    session.requestStats.lastStatus = 503
+    session.requestStats.lastError = 'Manifest not ready'
+    res.setHeader('Retry-After', '1')
+    res.setHeader('Content-Type', 'text/plain')
+    logHttpResponse(session, fileName, method, rangeHeader, 503, 0)
+    res.end('Manifest not ready')
+    return
+  }
+  sendPlaylistResponse(res, session, fileName, method, rangeHeader, playlist)
+}
+
+function handleInitMp4Request(res, session, fileName, method, rangeHeader) {
+  session.requestStats.initRequests += 1
+  session.requestStats.lastPath = fileName
+  const initData = session.segmentStore?.getInit?.()
+  if (!initData) {
+    res.statusCode = 404
+    session.requestStats.notFoundResponses += 1
+    session.requestStats.lastStatus = 404
+    session.requestStats.lastError = 'Init not ready'
+    res.setHeader('Content-Type', 'text/plain')
+    logHttpResponse(session, fileName, method, rangeHeader, 404, 0)
+    res.end('Init not ready')
+    return
+  }
+  sendStaticBinaryResponse(res, session, fileName, method, rangeHeader, initData, 'video/mp4')
+}
+
+function handleSegmentRequest(res, session, fileName, method, rangeHeader) {
+  session.requestStats.segmentRequests += 1
+  session.requestStats.lastPath = fileName
+  const segmentData = session.segmentStore?.getSegment?.(fileName)
+  if (!segmentData) {
+    res.statusCode = 404
+    session.requestStats.notFoundResponses += 1
+    session.requestStats.lastStatus = 404
+    session.requestStats.lastError = 'Segment not found'
+    res.setHeader('Content-Type', 'text/plain')
+    logHttpResponse(session, fileName, method, rangeHeader, 404, 0)
+    res.end('Segment not found')
+    return
+  }
+  const isFmp4 = fileName.endsWith('.m4s')
+  sendStaticBinaryResponse(res, session, fileName, method, rangeHeader, segmentData, isFmp4 ? 'video/mp4' : 'video/mp2t')
+}
+
+function handleCastHttpRequest(req, res) {
+  setCorsHeaders(res)
+  const method = validateCastServerMethod(req, res)
+  if (!method) return
+
+  const parsed = new URL(req.url || '/', 'http://localhost')
+  const match = parsed.pathname.match(/^\/cast\/([^/]+)\/(master\.m3u8|playlist\.m3u8|init\.mp4|seg-\d+\.(?:m4s|ts))$/)
+  if (!match) {
+    res.statusCode = 404
+    res.setHeader('Content-Type', 'text/plain')
+    res.end('Not found')
+    return
+  }
+
+  const sessionId = match[1]
+  const fileName = match[2]
+  const session = sessions.get(sessionId)
+  if (!session) {
+    res.statusCode = 404
+    res.setHeader('Content-Type', 'text/plain')
+    res.end('Session not found')
+    return
+  }
+
+  const isPlaylistRequest = fileName === 'master.m3u8' || fileName === 'playlist.m3u8'
+  if (!isPlaylistRequest || shouldLogPlaylistRequest(session)) {
+    console.log('[CastDiag] HTTP', method, fileName, 'session:', sessionId.slice(0, 8))
+  }
+
+  const rangeHeader = req.headers?.range
+  if (fileName === 'master.m3u8') {
+    handleMasterPlaylistRequest(res, session, fileName, method, rangeHeader)
+    return
+  }
+  if (fileName === 'playlist.m3u8') {
+    handleMediaPlaylistRequest(res, session, fileName, method, rangeHeader, sessionId)
+    return
+  }
+  if (fileName === 'init.mp4') {
+    handleInitMp4Request(res, session, fileName, method, rangeHeader)
+    return
+  }
+  handleSegmentRequest(res, session, fileName, method, rangeHeader)
+}
+
 function startCastFileServer() {
   if (castServerPort) return Promise.resolve(castServerPort)
   if (castServerReady) return castServerReady
 
   castServerReady = new Promise((resolve, reject) => {
-    castServer = http.createServer((req, res) => {
-      setCorsHeaders(res)
-      const method = (req.method || 'GET').toUpperCase()
-      if (method === 'OPTIONS') {
-        res.statusCode = 204
-        res.end()
-        return
-      }
-      if (method !== 'GET' && method !== 'HEAD') {
-        res.statusCode = 405
-        res.setHeader('Allow', 'GET,HEAD,OPTIONS')
-        res.setHeader('Content-Type', 'text/plain')
-        res.end('Method not allowed')
-        return
-      }
-
-      const parsed = new URL(req.url || '/', 'http://localhost')
-      const match = parsed.pathname.match(/^\/cast\/([^/]+)\/(master\.m3u8|playlist\.m3u8|init\.mp4|seg-\d+\.(?:m4s|ts))$/)
-      if (!match) {
-        res.statusCode = 404
-        res.setHeader('Content-Type', 'text/plain')
-        res.end('Not found')
-        return
-      }
-
-      const sessionId = match[1]
-      const fileName = match[2]
-      const session = sessions.get(sessionId)
-      if (!session) {
-        res.statusCode = 404
-        res.setHeader('Content-Type', 'text/plain')
-        res.end('Session not found')
-        return
-      }
-      const isPlaylistRequest = fileName === 'master.m3u8' || fileName === 'playlist.m3u8'
-      if (!isPlaylistRequest || shouldLogPlaylistRequest(session)) {
-        console.log('[CastDiag] HTTP', method, fileName, 'session:', sessionId.slice(0, 8))
-      }
-
-      if (fileName === 'master.m3u8') {
-        session.requestStats.playlistRequests += 1
-        session.requestStats.lastPath = fileName
-        const playlist = generateMasterPlaylist()
-        sendPlaylistResponse(res, session, fileName, method, req.headers?.range, playlist)
-        return
-      }
-
-      if (fileName === 'playlist.m3u8') {
-        session.requestStats.playlistRequests += 1
-        session.requestStats.lastPath = fileName
-        const playlist = generatePlaylist(session)
-        if (shouldLogPlaylistRequest(session)) {
-          console.log('[cast-transcoder] playlist request', sessionId, 'segments=', session.segmentStore?.getSegmentCount?.() || 0)
-        }
-        if (!playlist) {
-          res.statusCode = 503
-          session.requestStats.lastStatus = 503
-          session.requestStats.lastError = 'Manifest not ready'
-          res.setHeader('Retry-After', '1')
-          res.setHeader('Content-Type', 'text/plain')
-          logHttpResponse(session, fileName, method, req.headers?.range, 503, 0)
-          res.end('Manifest not ready')
-          return
-        }
-        sendPlaylistResponse(res, session, fileName, method, req.headers?.range, playlist)
-        return
-      }
-
-      if (fileName === 'init.mp4') {
-        session.requestStats.initRequests += 1
-        session.requestStats.lastPath = fileName
-        const initData = session.segmentStore?.getInit?.()
-        if (!initData) {
-          res.statusCode = 404
-          session.requestStats.notFoundResponses += 1
-          session.requestStats.lastStatus = 404
-          session.requestStats.lastError = 'Init not ready'
-          res.setHeader('Content-Type', 'text/plain')
-          logHttpResponse(session, fileName, method, req.headers?.range, 404, 0)
-          res.end('Init not ready')
-          return
-        }
-        res.statusCode = 200
-        session.requestStats.lastStatus = 200
-        session.requestStats.lastError = null
-        res.setHeader('Content-Type', 'video/mp4')
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
-        res.setHeader('Accept-Ranges', 'bytes')
-        const range = parseByteRange(req.headers?.range, initData.length)
-        if (req.headers?.range && !range) {
-          res.statusCode = 416
-          session.requestStats.lastStatus = 416
-          session.requestStats.lastError = 'Range not satisfiable'
-          res.setHeader('Content-Range', `bytes */${initData.length}`)
-          logHttpResponse(session, fileName, method, req.headers?.range, 416, 0)
-          res.end()
-          return
-        }
-        if (range) {
-          const length = range.end - range.start + 1
-          res.statusCode = 206
-          session.requestStats.lastStatus = 206
-          session.requestStats.lastError = null
-          res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${initData.length}`)
-          res.setHeader('Content-Length', length)
-          logHttpResponse(session, fileName, method, req.headers?.range, 206, length)
-          if (method === 'HEAD') res.end()
-          else res.end(initData.subarray(range.start, range.end + 1))
-          return
-        }
-        res.setHeader('Content-Length', initData.length)
-        logHttpResponse(session, fileName, method, req.headers?.range, 200, initData.length)
-        if (method === 'HEAD') res.end()
-        else res.end(initData)
-        return
-      }
-
-      session.requestStats.segmentRequests += 1
-      session.requestStats.lastPath = fileName
-      const segmentData = session.segmentStore?.getSegment?.(fileName)
-      if (!segmentData) {
-        res.statusCode = 404
-        session.requestStats.notFoundResponses += 1
-        session.requestStats.lastStatus = 404
-        session.requestStats.lastError = 'Segment not found'
-        res.setHeader('Content-Type', 'text/plain')
-        logHttpResponse(session, fileName, method, req.headers?.range, 404, 0)
-        res.end('Segment not found')
-        return
-      }
-
-      const isFmp4 = fileName.endsWith('.m4s')
-      res.statusCode = 200
-      session.requestStats.lastStatus = 200
-      session.requestStats.lastError = null
-      res.setHeader('Content-Type', isFmp4 ? 'video/mp4' : 'video/mp2t')
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
-      res.setHeader('Accept-Ranges', 'bytes')
-      const range = parseByteRange(req.headers?.range, segmentData.length)
-      if (req.headers?.range && !range) {
-        res.statusCode = 416
-        session.requestStats.lastStatus = 416
-        session.requestStats.lastError = 'Range not satisfiable'
-        res.setHeader('Content-Range', `bytes */${segmentData.length}`)
-        logHttpResponse(session, fileName, method, req.headers?.range, 416, 0)
-        res.end()
-        return
-      }
-      if (range) {
-        const length = range.end - range.start + 1
-        res.statusCode = 206
-        session.requestStats.lastStatus = 206
-        session.requestStats.lastError = null
-        res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${segmentData.length}`)
-        res.setHeader('Content-Length', length)
-        logHttpResponse(session, fileName, method, req.headers?.range, 206, length)
-        if (method === 'HEAD') res.end()
-        else res.end(segmentData.subarray(range.start, range.end + 1))
-        return
-      }
-      res.setHeader('Content-Length', segmentData.length)
-      logHttpResponse(session, fileName, method, req.headers?.range, 200, segmentData.length)
-      if (method === 'HEAD') res.end()
-      else res.end(segmentData)
-    })
-
+    castServer = http.createServer(handleCastHttpRequest)
     castServer.on('error', (err) => {
       castServerPort = 0
       castServerReady = null
@@ -722,6 +721,304 @@ async function runRemuxCast(session, sourceUrl, onProgress, { isVideoComplete = 
   }
 }
 
+async function initCastInputContext(sourceUrl, isVideoComplete, errorMessage = 'Could not determine source file size') {
+  const fileSize = await getHttpFileSize(sourceUrl)
+  if (!fileSize) throw new Error(errorMessage)
+
+  const reader = new TempFileReader(sourceUrl, fileSize, {
+    waitForComplete: isVideoComplete,
+    ...(isVideoComplete ? {} : { initialBufferBytes: CAST_PROGRESSIVE_STARTUP_BUFFER_BYTES }),
+  })
+  await reader.startDownload()
+
+  const inputIO = reader.createIOContext(ffmpeg)
+  const inputFormat = new ffmpeg.InputFormatContext(inputIO)
+  const videoStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.VIDEO)
+  const audioStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.AUDIO)
+  if (!videoStream) throw new Error('No video stream found')
+
+  return { reader, inputIO, inputFormat, videoStream, audioStream }
+}
+
+function createFmp4OutputContext(session) {
+  let writePos = 0
+  const segmenter = new FMP4Segmenter(session.segmentStore, { targetDuration: 6 })
+  session.segmenter = segmenter
+
+  const outputIO = new ffmpeg.IOContext(1024 * 1024, {
+    onwrite: (buf) => {
+      segmenter.write(Buffer.from(buf))
+      writePos += buf.length
+      return buf.length
+    },
+    onseek: (offset, whence) => {
+      const AVSEEK_SIZE = 0x10000
+      if (whence === AVSEEK_SIZE) return writePos
+      const safeOffset = Number.isFinite(offset) ? offset : 0
+      if (whence === 0) writePos = safeOffset
+      else if (whence === 1) writePos += safeOffset
+      else if (whence === 2) writePos += safeOffset
+      writePos = Math.max(0, writePos)
+      return writePos
+    },
+  })
+  const outputFormat = new ffmpeg.OutputFormatContext('mp4', outputIO)
+  return { segmenter, outputIO, outputFormat }
+}
+
+function initTranscodeAudioPipeline(outputFormat, audioStream) {
+  if (!audioStream) return { outAudioStream: null, audioDecoder: null, audioEncoder: null, resampler: null, audioFifo: null }
+  const outAudioStream = outputFormat.createStream()
+  outAudioStream.codecParameters.type = ffmpeg.constants.mediaTypes.AUDIO
+  outAudioStream.codecParameters.id = ffmpeg.constants.codecs.AAC
+  outAudioStream.timeBase = { numerator: 1, denominator: 48000 }
+
+  const audioDecoderSelection = selectDecoderForId(audioStream.codecParameters.id)
+  if (!audioDecoderSelection) {
+    return { outAudioStream: null, audioDecoder: null, audioEncoder: null, resampler: null, audioFifo: null }
+  }
+
+  const audioDecoder = new ffmpeg.CodecContext(audioDecoderSelection.decoder)
+  audioStream.codecParameters.toContext(audioDecoder)
+  audioDecoder.timeBase = audioStream.timeBase
+  audioDecoder.open()
+
+  const aacSelection = selectAacEncoder()
+  if (!aacSelection) throw new Error('AAC encoder not available')
+  const audioEncoder = new ffmpeg.CodecContext(aacSelection.encoder)
+  audioEncoder.sampleRate = 48000
+  audioEncoder.channelLayout = ffmpeg.constants.channelLayouts.STEREO
+  audioEncoder.sampleFormat = ffmpeg.constants.sampleFormats.FLTP
+  audioEncoder.timeBase = outAudioStream.timeBase
+  audioEncoder.bitRate = 128000
+  audioEncoder.open()
+
+  const resampler = new ffmpeg.Resampler(
+    audioDecoder.sampleRate,
+    audioDecoder.channelLayout,
+    audioDecoder.sampleFormat,
+    audioEncoder.sampleRate,
+    audioEncoder.channelLayout,
+    audioEncoder.sampleFormat,
+  )
+
+  const audioFifo = new ffmpeg.AudioFIFO(
+    ffmpeg.constants.sampleFormats.FLTP,
+    2,
+    1024,
+  )
+
+  return { outAudioStream, audioDecoder, audioEncoder, resampler, audioFifo }
+}
+
+function initFullTranscodeVideoPipeline(outputFormat, videoStream) {
+  const outVideoStream = outputFormat.createStream()
+  outVideoStream.codecParameters.type = ffmpeg.constants.mediaTypes.VIDEO
+  outVideoStream.codecParameters.id = ffmpeg.constants.codecs.H264
+  outVideoStream.codecParameters.width = videoStream.codecParameters.width
+  outVideoStream.codecParameters.height = videoStream.codecParameters.height
+  outVideoStream.timeBase = videoStream.timeBase
+
+  const decoderSelection = selectDecoderForId(videoStream.codecParameters.id)
+  if (!decoderSelection) throw new Error('Video decoder not available')
+  const videoDecoder = new ffmpeg.CodecContext(decoderSelection.decoder)
+  videoStream.codecParameters.toContext(videoDecoder)
+  videoDecoder.timeBase = videoStream.timeBase
+  videoDecoder.open()
+
+  const h264Selection = selectH264Encoder()
+  if (!h264Selection) throw new Error('H.264 encoder not available')
+
+  const videoEncoder = new ffmpeg.CodecContext(h264Selection.encoder)
+  videoEncoder.width = videoStream.codecParameters.width
+  videoEncoder.height = videoStream.codecParameters.height
+  videoEncoder.pixelFormat = ffmpeg.constants.pixelFormats.YUV420P
+  videoEncoder.timeBase = videoStream.timeBase
+  videoEncoder.gopSize = 48
+  videoEncoder.maxBFrames = 0
+  videoEncoder.bitRate = 4000000
+  try { videoEncoder.setOption('preset', 'ultrafast') } catch {}
+  try { videoEncoder.setOption('profile', 'high') } catch {}
+  try { videoEncoder.setOption('level', '41') } catch {}
+  try { videoEncoder.setOption('bf', '0') } catch {}
+  videoEncoder.open()
+
+  const decoderPixelFormat = videoDecoder.pixelFormat
+  const yuv420 = ffmpeg.constants.pixelFormats.YUV420P
+  const needsScale = decoderPixelFormat && decoderPixelFormat > 0 && decoderPixelFormat !== yuv420
+  let scaler = null
+  if (needsScale) {
+    scaler = new ffmpeg.Scaler(
+      decoderPixelFormat,
+      videoStream.codecParameters.width,
+      videoStream.codecParameters.height,
+      yuv420,
+      videoStream.codecParameters.width,
+      videoStream.codecParameters.height,
+    )
+  }
+
+  return { outVideoStream, videoDecoder, videoEncoder, scaler, yuv420 }
+}
+
+async function transcodeVideoPacket({
+  packet,
+  videoStream,
+  videoDecoder,
+  videoEncoder,
+  scaler,
+  scaledFrame,
+  videoFrame,
+  outputPacket,
+  outVideoStream,
+  outputFormat,
+  transcodeThrottle,
+  yuv420,
+}) {
+  packet.timeBase = videoStream.timeBase
+  if (!videoDecoder.sendPacket(packet)) return
+  while (videoDecoder.receiveFrame(videoFrame)) {
+    let frameToEncode = videoFrame
+    if (scaler) {
+      safeUnref(scaledFrame)
+      scaledFrame.width = videoStream.codecParameters.width
+      scaledFrame.height = videoStream.codecParameters.height
+      scaledFrame.format = yuv420
+      scaledFrame.alloc()
+      scaler.scale(videoFrame, scaledFrame)
+      scaledFrame.pts = videoFrame.pts
+      scaledFrame.timeBase = videoFrame.timeBase
+      frameToEncode = scaledFrame
+    }
+    if (videoEncoder.sendFrame(frameToEncode)) {
+      while (videoEncoder.receivePacket(outputPacket)) {
+        await throttleTranscodeToSourcePace(transcodeThrottle, outputPacket.pts, outVideoStream.timeBase)
+        outputPacket.streamIndex = outVideoStream.index
+        outputFormat.writeFrame(outputPacket)
+        safeUnref(outputPacket)
+      }
+    }
+    safeUnref(videoFrame)
+    if (scaler) safeUnref(scaledFrame)
+  }
+}
+
+function transcodeAudioPacketFull({
+  packet,
+  audioStream,
+  audioDecoder,
+  audioEncoder,
+  resampler,
+  audioFifo,
+  audioFrame,
+  resampledFrame,
+  outputPacket,
+  outAudioStream,
+  outputFormat,
+}) {
+  packet.timeBase = audioStream.timeBase
+  if (!audioDecoder.sendPacket(packet)) return
+  while (audioDecoder.receiveFrame(audioFrame)) {
+    const inputSamples = Math.max(1, audioFrame.nbSamples || 0)
+    const inputRate = Math.max(1, audioDecoder.sampleRate || audioEncoder.sampleRate || 48000)
+    const outputRate = Math.max(1, audioEncoder.sampleRate || 48000)
+    const targetSamples = Math.max(1024, Math.ceil((inputSamples * outputRate) / inputRate) + 32)
+
+    safeUnref(resampledFrame)
+    resampledFrame.format = ffmpeg.constants.sampleFormats.FLTP
+    resampledFrame.channelLayout = ffmpeg.constants.channelLayouts.STEREO
+    resampledFrame.sampleRate = outputRate
+    resampledFrame.nbSamples = targetSamples
+    resampledFrame.alloc()
+
+    const samplesConverted = resampler.convert(audioFrame, resampledFrame)
+    resampledFrame.nbSamples = samplesConverted
+    resampledFrame.pts = audioFrame.pts
+    resampledFrame.timeBase = audioFrame.timeBase
+
+    audioFifo.write(resampledFrame)
+    while (audioFifo.size >= 1024) {
+      let encoderFrame = new ffmpeg.Frame()
+      encoderFrame.format = ffmpeg.constants.sampleFormats.FLTP
+      encoderFrame.channelLayout = ffmpeg.constants.channelLayouts.STEREO
+      encoderFrame.sampleRate = outputRate
+      encoderFrame.nbSamples = 1024
+      encoderFrame.alloc()
+      audioFifo.read(encoderFrame, 1024)
+      encoderFrame.pts = audioFrame.pts
+      encoderFrame.timeBase = audioFrame.timeBase
+      if (audioEncoder.sendFrame(encoderFrame)) {
+        while (audioEncoder.receivePacket(outputPacket)) {
+          outputPacket.streamIndex = outAudioStream.index
+          outputFormat.writeFrame(outputPacket)
+          safeUnref(outputPacket)
+        }
+      }
+      safeDestroy(encoderFrame)
+    }
+    safeUnref(audioFrame)
+  }
+}
+
+function transcodeAudioPacketCopy({
+  packet,
+  audioStream,
+  audioDecoder,
+  resampler,
+  resampledFrame,
+  audioFifo,
+  audioEncoder,
+  outputPacket,
+  outAudio,
+  outputFormat,
+  audioFrame,
+}) {
+  audioDecoder.sendPacket(packet)
+  while (audioDecoder.receiveFrame(audioFrame)) {
+    resampler.convert(audioFrame, resampledFrame)
+    audioFifo.write(resampledFrame)
+    while (audioFifo.read(resampledFrame, 1024)) {
+      audioEncoder.sendFrame(resampledFrame)
+      while (audioEncoder.receivePacket(outputPacket)) {
+        outputPacket.streamIndex = outAudio.index
+        outputFormat.writeFrame(outputPacket)
+        safeUnref(outputPacket)
+      }
+    }
+    safeUnref(audioFrame)
+  }
+}
+
+function flushTranscodeEncoders({ videoEncoder, audioEncoder, outputPacket, outVideoStream, outAudioStream, outputFormat }) {
+  if (videoEncoder) {
+    videoEncoder.sendFrame(null)
+    while (videoEncoder.receivePacket(outputPacket)) {
+      outputPacket.streamIndex = outVideoStream.index
+      outputFormat.writeFrame(outputPacket)
+      safeUnref(outputPacket)
+    }
+  }
+  if (audioEncoder && outAudioStream) {
+    audioEncoder.sendFrame(null)
+    while (audioEncoder.receivePacket(outputPacket)) {
+      outputPacket.streamIndex = outAudioStream.index
+      outputFormat.writeFrame(outputPacket)
+      safeUnref(outputPacket)
+    }
+  }
+}
+
+function flushAudioEncoder(audioEncoder, outAudio, outputPacket, outputFormat) {
+  if (audioEncoder) {
+    audioEncoder.sendFrame(null)
+    while (audioEncoder.receivePacket(outputPacket)) {
+      if (outAudio) outputPacket.streamIndex = outAudio.index
+      outputFormat.writeFrame(outputPacket)
+      safeUnref(outputPacket)
+    }
+  }
+}
+
 async function runFullTranscodeCast(session, sourceUrl, { isVideoComplete = true } = {}) {
   let inputFormat = null
   let outputIO = null
@@ -745,133 +1042,30 @@ async function runFullTranscodeCast(session, sourceUrl, { isVideoComplete = true
   let outputPacket = null
   let reader = null
   let segmenter = null
-  let writePos = 0
 
   try {
-    const fileSize = await getHttpFileSize(sourceUrl)
-    if (!fileSize) throw new Error('Could not determine source file size for cast')
-    reader = new TempFileReader(sourceUrl, fileSize, {
-      waitForComplete: isVideoComplete,
-      ...(isVideoComplete ? {} : { initialBufferBytes: CAST_PROGRESSIVE_STARTUP_BUFFER_BYTES }),
-    })
-    await reader.startDownload()
-    const inputIO = reader.createIOContext(ffmpeg)
-    inputFormat = new ffmpeg.InputFormatContext(inputIO)
-    const videoStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.VIDEO)
-    const audioStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.AUDIO)
-    if (!videoStream) throw new Error('No video stream found')
+    const inputCtx = await initCastInputContext(sourceUrl, isVideoComplete, 'Could not determine source file size for cast')
+    reader = inputCtx.reader
+    inputFormat = inputCtx.inputFormat
+    const { videoStream, audioStream } = inputCtx
 
-    // Create segmenter — bytes from IOContext onwrite flow directly into MemorySegmentStore
-    segmenter = new FMP4Segmenter(session.segmentStore, { targetDuration: 6 })
-    session.segmenter = segmenter
+    const outCtx = createFmp4OutputContext(session)
+    segmenter = outCtx.segmenter
+    outputIO = outCtx.outputIO
+    outputFormat = outCtx.outputFormat
 
-    outputIO = new ffmpeg.IOContext(1024 * 1024, {
-      onwrite: (buf) => {
-        segmenter.write(Buffer.from(buf))
-        writePos += buf.length
-        return buf.length
-      },
-      onseek: (offset, whence) => {
-        const AVSEEK_SIZE = 0x10000
-        if (whence === AVSEEK_SIZE) return writePos
-        const safeOffset = Number.isFinite(offset) ? offset : 0
-        if (whence === 0) writePos = safeOffset
-        else if (whence === 1) writePos += safeOffset
-        else if (whence === 2) writePos += safeOffset
-        writePos = Math.max(0, writePos)
-        return writePos
-      },
-    })
-    outputFormat = new ffmpeg.OutputFormatContext('mp4', outputIO)
+    const videoPipeline = initFullTranscodeVideoPipeline(outputFormat, videoStream)
+    const { outVideoStream, yuv420 } = videoPipeline
+    videoDecoder = videoPipeline.videoDecoder
+    videoEncoder = videoPipeline.videoEncoder
+    scaler = videoPipeline.scaler
 
-    const outVideoStream = outputFormat.createStream()
-    outVideoStream.codecParameters.type = ffmpeg.constants.mediaTypes.VIDEO
-    outVideoStream.codecParameters.id = ffmpeg.constants.codecs.H264
-    outVideoStream.codecParameters.width = videoStream.codecParameters.width
-    outVideoStream.codecParameters.height = videoStream.codecParameters.height
-    outVideoStream.timeBase = videoStream.timeBase
-
-    const decoderSelection = selectDecoderForId(videoStream.codecParameters.id)
-    if (!decoderSelection) throw new Error('Video decoder not available')
-    videoDecoder = new ffmpeg.CodecContext(decoderSelection.decoder)
-    videoStream.codecParameters.toContext(videoDecoder)
-    videoDecoder.timeBase = videoStream.timeBase
-    videoDecoder.open()
-
-    const h264Selection = selectH264Encoder()
-    if (!h264Selection) throw new Error('H.264 encoder not available')
-
-    videoEncoder = new ffmpeg.CodecContext(h264Selection.encoder)
-    videoEncoder.width = videoStream.codecParameters.width
-    videoEncoder.height = videoStream.codecParameters.height
-    videoEncoder.pixelFormat = ffmpeg.constants.pixelFormats.YUV420P
-    videoEncoder.timeBase = videoStream.timeBase
-    videoEncoder.gopSize = 48
-    videoEncoder.maxBFrames = 0
-    videoEncoder.bitRate = 4000000
-    try { videoEncoder.setOption('preset', 'ultrafast') } catch {}
-    try { videoEncoder.setOption('profile', 'high') } catch {}
-    try { videoEncoder.setOption('level', '41') } catch {}
-    try { videoEncoder.setOption('bf', '0') } catch {}
-    videoEncoder.open()
-
-    const decoderPixelFormat = videoDecoder.pixelFormat
-    const yuv420 = ffmpeg.constants.pixelFormats.YUV420P
-    const needsScale = decoderPixelFormat && decoderPixelFormat > 0 && decoderPixelFormat !== yuv420
-    if (needsScale) {
-      scaler = new ffmpeg.Scaler(
-        decoderPixelFormat,
-        videoStream.codecParameters.width,
-        videoStream.codecParameters.height,
-        yuv420,
-        videoStream.codecParameters.width,
-        videoStream.codecParameters.height,
-      )
-    }
-
-    let outAudioStream = null
-    if (audioStream) {
-      outAudioStream = outputFormat.createStream()
-      outAudioStream.codecParameters.type = ffmpeg.constants.mediaTypes.AUDIO
-      outAudioStream.codecParameters.id = ffmpeg.constants.codecs.AAC
-      outAudioStream.timeBase = { numerator: 1, denominator: 48000 }
-
-      const audioDecoderSelection = selectDecoderForId(audioStream.codecParameters.id)
-      if (audioDecoderSelection) {
-        audioDecoder = new ffmpeg.CodecContext(audioDecoderSelection.decoder)
-        audioStream.codecParameters.toContext(audioDecoder)
-        audioDecoder.timeBase = audioStream.timeBase
-        audioDecoder.open()
-
-        const aacSelection = selectAacEncoder()
-        if (!aacSelection) throw new Error('AAC encoder not available')
-        audioEncoder = new ffmpeg.CodecContext(aacSelection.encoder)
-        audioEncoder.sampleRate = 48000
-        audioEncoder.channelLayout = ffmpeg.constants.channelLayouts.STEREO
-        audioEncoder.sampleFormat = ffmpeg.constants.sampleFormats.FLTP
-        audioEncoder.timeBase = outAudioStream.timeBase
-        audioEncoder.bitRate = 128000
-        audioEncoder.open()
-
-        resampler = new ffmpeg.Resampler(
-          audioDecoder.sampleRate,
-          audioDecoder.channelLayout,
-          audioDecoder.sampleFormat,
-          audioEncoder.sampleRate,
-          audioEncoder.channelLayout,
-          audioEncoder.sampleFormat,
-        )
-
-        // AudioFIFO buffers resampled audio so the AAC encoder always receives
-        // exactly 1024-sample frames, regardless of input frame size (e.g. E-AC3
-        // produces 1536-sample frames which AAC-LC cannot accept directly).
-        audioFifo = new ffmpeg.AudioFIFO(
-          ffmpeg.constants.sampleFormats.FLTP,
-          2, // stereo
-          1024,
-        )
-      }
-    }
+    const audioPipeline = initTranscodeAudioPipeline(outputFormat, audioStream)
+    const { outAudioStream } = audioPipeline
+    audioDecoder = audioPipeline.audioDecoder
+    audioEncoder = audioPipeline.audioEncoder
+    resampler = audioPipeline.resampler
+    audioFifo = audioPipeline.audioFifo
 
     dict = ffmpeg.Dictionary.from({ movflags: 'frag_keyframe+empty_moov+default_base_moof' })
     outputFormat.writeHeader(dict)
@@ -906,79 +1100,34 @@ async function runFullTranscodeCast(session, sourceUrl, { isVideoComplete = true
       if (session.cancelled) break
 
       if (packet.streamIndex === videoStream.index) {
-        packet.timeBase = videoStream.timeBase
-        if (videoDecoder.sendPacket(packet)) {
-          while (videoDecoder.receiveFrame(videoFrame)) {
-            let frameToEncode = videoFrame
-            if (scaler) {
-              // Re-allocate scaledFrame each iteration to prevent use-after-free
-              safeUnref(scaledFrame)
-              scaledFrame.width = videoStream.codecParameters.width
-              scaledFrame.height = videoStream.codecParameters.height
-              scaledFrame.format = yuv420
-              scaledFrame.alloc()
-              scaler.scale(videoFrame, scaledFrame)
-              scaledFrame.pts = videoFrame.pts
-              scaledFrame.timeBase = videoFrame.timeBase
-              frameToEncode = scaledFrame
-            }
-            if (videoEncoder.sendFrame(frameToEncode)) {
-              while (videoEncoder.receivePacket(outputPacket)) {
-                await throttleTranscodeToSourcePace(transcodeThrottle, outputPacket.pts, outVideoStream.timeBase)
-                outputPacket.streamIndex = outVideoStream.index
-                outputFormat.writeFrame(outputPacket)
-                safeUnref(outputPacket)
-              }
-            }
-            safeUnref(videoFrame)
-            if (scaler) safeUnref(scaledFrame)
-          }
-        }
+        await transcodeVideoPacket({
+          packet,
+          videoStream,
+          videoDecoder,
+          videoEncoder,
+          scaler,
+          scaledFrame,
+          videoFrame,
+          outputPacket,
+          outVideoStream,
+          outputFormat,
+          transcodeThrottle,
+          yuv420,
+        })
       } else if (audioStream && audioDecoder && audioEncoder && packet.streamIndex === audioStream.index) {
-        packet.timeBase = audioStream.timeBase
-        if (audioDecoder.sendPacket(packet)) {
-          while (audioDecoder.receiveFrame(audioFrame)) {
-            const inputSamples = Math.max(1, audioFrame.nbSamples || 0)
-            const inputRate = Math.max(1, audioDecoder.sampleRate || audioEncoder.sampleRate || 48000)
-            const outputRate = Math.max(1, audioEncoder.sampleRate || 48000)
-            const targetSamples = Math.max(1024, Math.ceil((inputSamples * outputRate) / inputRate) + 32)
-
-            safeUnref(resampledFrame)
-            resampledFrame.format = ffmpeg.constants.sampleFormats.FLTP
-            resampledFrame.channelLayout = ffmpeg.constants.channelLayouts.STEREO
-            resampledFrame.sampleRate = outputRate
-            resampledFrame.nbSamples = targetSamples
-            resampledFrame.alloc()
-
-            const samplesConverted = resampler.convert(audioFrame, resampledFrame)
-            resampledFrame.nbSamples = samplesConverted
-            resampledFrame.pts = audioFrame.pts
-            resampledFrame.timeBase = audioFrame.timeBase
-
-            // Write resampled audio into FIFO, then drain in 1024-sample chunks
-            audioFifo.write(resampledFrame)
-            while (audioFifo.size >= 1024) {
-              safeUnref(encoderFrame)
-              encoderFrame = new ffmpeg.Frame()
-              encoderFrame.format = ffmpeg.constants.sampleFormats.FLTP
-              encoderFrame.channelLayout = ffmpeg.constants.channelLayouts.STEREO
-              encoderFrame.sampleRate = outputRate
-              encoderFrame.nbSamples = 1024
-              encoderFrame.alloc()
-              audioFifo.read(encoderFrame, 1024)
-              encoderFrame.pts = audioFrame.pts
-              encoderFrame.timeBase = audioFrame.timeBase
-              if (audioEncoder.sendFrame(encoderFrame)) {
-                while (audioEncoder.receivePacket(outputPacket)) {
-                  outputPacket.streamIndex = outAudioStream.index
-                  outputFormat.writeFrame(outputPacket)
-                  safeUnref(outputPacket)
-                }
-              }
-            }
-            safeUnref(audioFrame)
-          }
-        }
+        transcodeAudioPacketFull({
+          packet,
+          audioStream,
+          audioDecoder,
+          audioEncoder,
+          resampler,
+          audioFifo,
+          audioFrame,
+          resampledFrame,
+          outputPacket,
+          outAudioStream,
+          outputFormat,
+        })
       }
 
       safeUnref(packet)
@@ -992,22 +1141,7 @@ async function runFullTranscodeCast(session, sourceUrl, { isVideoComplete = true
       if (reader?.downloadUnderflow) {
         throw new Error('Cast transcode source underflowed before completion')
       }
-      videoEncoder.sendFrame(null)
-      while (videoEncoder.receivePacket(outputPacket)) {
-        outputPacket.streamIndex = outVideoStream.index
-        outputFormat.writeFrame(outputPacket)
-        safeUnref(outputPacket)
-      }
-
-      if (audioEncoder) {
-        audioEncoder.sendFrame(null)
-        while (audioEncoder.receivePacket(outputPacket)) {
-          outputPacket.streamIndex = outAudioStream.index
-          outputFormat.writeFrame(outputPacket)
-          safeUnref(outputPacket)
-        }
-      }
-
+      flushTranscodeEncoders({ videoEncoder, audioEncoder, outputPacket, outVideoStream, outAudioStream, outputFormat })
       outputFormat.writeTrailer()
       segmenter.finish()
       session.isComplete = true
@@ -1043,11 +1177,17 @@ async function runFullTranscodeCast(session, sourceUrl, { isVideoComplete = true
   }
 }
 
-/**
- * Copy video stream + transcode audio to AAC.
- * Much faster than full transcode — only audio is decoded/re-encoded.
- * Used for desktop playback when audio codec (AC3/EAC3/DTS) isn't web-compatible.
- */
+function completeVideoCopyTranscode(session, reader, outputFormat, segmenter) {
+  if (session.cancelled) return
+  if (reader?.downloadUnderflow) {
+    throw new Error('Web transcode source underflowed before completion')
+  }
+  outputFormat.writeTrailer()
+  segmenter.finish()
+  session.isComplete = true
+  session.status = 'complete'
+}
+
 async function runVideoCopyAudioTranscode(session, sourceUrl, onProgress, { isVideoComplete = true } = {}) {
   let inputFormat = null
   let outputIO = null
@@ -1063,96 +1203,31 @@ async function runVideoCopyAudioTranscode(session, sourceUrl, onProgress, { isVi
   let outputPacket = null
   let reader = null
   let segmenter = null
-  let writePos = 0
 
   try {
-    const fileSize = await getHttpFileSize(sourceUrl)
-    if (!fileSize) throw new Error('Could not determine source file size')
+    const inputCtx = await initCastInputContext(sourceUrl, isVideoComplete, 'Could not determine source file size')
+    reader = inputCtx.reader
+    inputFormat = inputCtx.inputFormat
+    const { videoStream, audioStream } = inputCtx
 
-    reader = new TempFileReader(sourceUrl, fileSize, {
-      waitForComplete: isVideoComplete,
-      ...(isVideoComplete ? {} : { initialBufferBytes: CAST_PROGRESSIVE_STARTUP_BUFFER_BYTES }),
-    })
-    await reader.startDownload()
+    const outCtx = createFmp4OutputContext(session)
+    segmenter = outCtx.segmenter
+    outputIO = outCtx.outputIO
+    outputFormat = outCtx.outputFormat
 
-    const inputIO = reader.createIOContext(ffmpeg)
-    inputFormat = new ffmpeg.InputFormatContext(inputIO)
-    const videoStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.VIDEO)
-    const audioStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.AUDIO)
-    if (!videoStream) throw new Error('No video stream found')
-
-    segmenter = new FMP4Segmenter(session.segmentStore, { targetDuration: 6 })
-    session.segmenter = segmenter
-
-    outputIO = new ffmpeg.IOContext(1024 * 1024, {
-      onwrite: (buf) => {
-        segmenter.write(Buffer.from(buf))
-        writePos += buf.length
-        return buf.length
-      },
-      onseek: (offset, whence) => {
-        const AVSEEK_SIZE = 0x10000
-        if (whence === AVSEEK_SIZE) return writePos
-        const safeOffset = Number.isFinite(offset) ? offset : 0
-        if (whence === 0) writePos = safeOffset
-        else if (whence === 1) writePos += safeOffset
-        else if (whence === 2) writePos += safeOffset
-        writePos = Math.max(0, writePos)
-        return writePos
-      },
-    })
-
-    outputFormat = new ffmpeg.OutputFormatContext('mp4', outputIO)
-
-    // Video: stream copy (no decode/encode)
     const outVideo = outputFormat.createStream()
     copyCodecParameters(outVideo.codecParameters, videoStream.codecParameters)
     outVideo.timeBase = videoStream.timeBase
 
-    // Audio: decode + re-encode to AAC stereo
-    let outAudio = null
-    if (audioStream) {
-      outAudio = outputFormat.createStream()
-      outAudio.codecParameters.type = ffmpeg.constants.mediaTypes.AUDIO
-      outAudio.codecParameters.id = ffmpeg.constants.codecs.AAC
-      outAudio.timeBase = { numerator: 1, denominator: 48000 }
-
-      const audioDecoderSelection = selectDecoderForId(audioStream.codecParameters.id)
-      if (audioDecoderSelection) {
-        audioDecoder = new ffmpeg.CodecContext(audioDecoderSelection.decoder)
-        audioStream.codecParameters.toContext(audioDecoder)
-        audioDecoder.timeBase = audioStream.timeBase
-        audioDecoder.open()
-
-        const aacSelection = selectAacEncoder()
-        if (!aacSelection) throw new Error('AAC encoder not available')
-        audioEncoder = new ffmpeg.CodecContext(aacSelection.encoder)
-        audioEncoder.sampleRate = 48000
-        audioEncoder.channelLayout = ffmpeg.constants.channelLayouts.STEREO
-        audioEncoder.sampleFormat = ffmpeg.constants.sampleFormats.FLTP
-        audioEncoder.timeBase = outAudio.timeBase
-        audioEncoder.bitRate = 128000
-        audioEncoder.open()
-
-        resampler = new ffmpeg.Resampler(
-          audioDecoder.sampleRate,
-          audioDecoder.channelLayout,
-          audioDecoder.sampleFormat,
-          audioEncoder.sampleRate,
-          audioEncoder.channelLayout,
-          audioEncoder.sampleFormat,
-        )
-
-        audioFifo = new ffmpeg.AudioFIFO(
-          ffmpeg.constants.sampleFormats.FLTP,
-          2,
-          1024,
-        )
-      } else {
-        // Can't decode this audio — drop it, at least video will play
-        console.warn('[WebTranscode] No decoder for audio codec, dropping audio track')
-        outAudio = null
-      }
+    const audioPipeline = initTranscodeAudioPipeline(outputFormat, audioStream)
+    let outAudio = audioPipeline.outAudioStream
+    audioDecoder = audioPipeline.audioDecoder
+    audioEncoder = audioPipeline.audioEncoder
+    resampler = audioPipeline.resampler
+    audioFifo = audioPipeline.audioFifo
+    if (audioStream && !audioDecoder) {
+      console.warn('[WebTranscode] No decoder for audio codec, dropping audio track')
+      outAudio = null
     }
 
     dict = ffmpeg.Dictionary.from({ movflags: 'frag_keyframe+empty_moov+default_base_moof' })
@@ -1179,26 +1254,23 @@ async function runVideoCopyAudioTranscode(session, sourceUrl, onProgress, { isVi
       if (session.cancelled) break
 
       if (packet.streamIndex === videoStream.index) {
-        // Video: stream copy — just write the packet directly
         await throttleTranscodeToSourcePace(transcodeThrottle, packet.pts, videoStream.timeBase)
         packet.streamIndex = outVideo.index
         outputFormat.writeFrame(packet)
       } else if (audioStream && outAudio && audioDecoder && packet.streamIndex === audioStream.index) {
-        // Audio: decode → resample → FIFO → encode to AAC
-        audioDecoder.sendPacket(packet)
-        while (audioDecoder.receiveFrame(audioFrame)) {
-          resampler.convert(audioFrame, resampledFrame)
-          audioFifo.write(resampledFrame)
-          while (audioFifo.read(resampledFrame, 1024)) {
-            audioEncoder.sendFrame(resampledFrame)
-            while (audioEncoder.receivePacket(outputPacket)) {
-              outputPacket.streamIndex = outAudio.index
-              outputFormat.writeFrame(outputPacket)
-              safeUnref(outputPacket)
-            }
-          }
-          safeUnref(audioFrame)
-        }
+        transcodeAudioPacketCopy({
+          packet,
+          audioStream,
+          audioDecoder,
+          resampler,
+          resampledFrame,
+          audioFifo,
+          audioEncoder,
+          outputPacket,
+          outAudio,
+          outputFormat,
+          audioFrame,
+        })
       }
 
       safeUnref(packet)
@@ -1213,25 +1285,11 @@ async function runVideoCopyAudioTranscode(session, sourceUrl, onProgress, { isVi
       }
     }
 
-    // Flush audio encoder
     if (audioEncoder && !session.cancelled) {
-      audioEncoder.sendFrame(null)
-      while (audioEncoder.receivePacket(outputPacket)) {
-        if (outAudio) outputPacket.streamIndex = outAudio.index
-        outputFormat.writeFrame(outputPacket)
-        safeUnref(outputPacket)
-      }
+      flushAudioEncoder(audioEncoder, outAudio, outputPacket, outputFormat)
     }
 
-    if (!session.cancelled) {
-      if (reader?.downloadUnderflow) {
-        throw new Error('Web transcode source underflowed before completion')
-      }
-      outputFormat.writeTrailer()
-      segmenter.finish()
-      session.isComplete = true
-      session.status = 'complete'
-    }
+    completeVideoCopyTranscode(session, reader, outputFormat, segmenter)
   } finally {
     const cleanup = () => {
       safeDestroy(dict)
@@ -1278,18 +1336,44 @@ async function runVideoCopyAudioTranscode(session, sourceUrl, onProgress, { isVi
  * @param {'remux'|'audio-only'|'full'} [options.forceMode]
  * @returns {Promise<{success:boolean, sessionId:string, mode?:string, reused?:boolean, reason?:string, error?:string}>}
  */
+function checkReusableCompatSession(sourceKey) {
+  if (!sourceKey) return null
+  const existing = findSessionBySourceKey(sourceKey)
+  if (existing && existing.status !== 'error' && existing.status !== 'cancelled' && existing.status !== 'complete') {
+    return { success: true, sessionId: existing.id, reused: true }
+  }
+  if (existing && existing.status === 'complete') {
+    stopCastTranscode(existing.id, 'replaced')
+  }
+  return null
+}
+
+function applyForcedPlaybackMode(decision, forceMode, player) {
+  const requestedForceMode = forceMode === 'remux' || forceMode === 'audio-only' || forceMode === 'full'
+    ? forceMode
+    : 'audio-only'
+  decision.mode = requestedForceMode
+  decision.needsRemux = requestedForceMode === 'remux'
+  decision.needsAudioTranscode = requestedForceMode === 'audio-only' || requestedForceMode === 'full'
+  decision.needsVideoTranscode = requestedForceMode === 'full'
+  decision.reason = `forced by ${player}: player reported source unplayable`
+}
+
+async function executeTranscodeMode(mode, session, sourceUrl, onProgress, isVideoComplete) {
+  if (mode === 'full') {
+    await runFullTranscodeCast(session, sourceUrl, { isVideoComplete })
+  } else if (mode === 'audio-only') {
+    await runVideoCopyAudioTranscode(session, sourceUrl, onProgress, { isVideoComplete })
+  } else {
+    await runRemuxCast(session, sourceUrl, onProgress, { isVideoComplete })
+  }
+}
+
 async function startCompatTranscode(sourceUrl, options = {}) {
   const { player = 'webkit', sourceKey = null, onProgress, isVideoComplete = true, force = false, forceMode = null } = options
 
-  if (sourceKey) {
-    const existing = findSessionBySourceKey(sourceKey)
-    if (existing && existing.status !== 'error' && existing.status !== 'cancelled' && existing.status !== 'complete') {
-      return { success: true, sessionId: existing.id, reused: true }
-    }
-    if (existing && existing.status === 'complete') {
-      stopCastTranscode(existing.id, 'replaced')
-    }
-  }
+  const existingResult = checkReusableCompatSession(sourceKey)
+  if (existingResult) return existingResult
 
   const session = createCastSession(sourceUrl, sourceKey)
 
@@ -1314,28 +1398,14 @@ async function startCompatTranscode(sourceUrl, options = {}) {
       return { success: false, sessionId: session.id, reason: 'no-transcode-needed' }
     }
     if (decision.mode === 'direct') {
-      const requestedForceMode = forceMode === 'remux' || forceMode === 'audio-only' || forceMode === 'full'
-        ? forceMode
-        : 'audio-only'
-      decision.mode = requestedForceMode
-      decision.needsRemux = requestedForceMode === 'remux'
-      decision.needsAudioTranscode = requestedForceMode === 'audio-only' || requestedForceMode === 'full'
-      decision.needsVideoTranscode = requestedForceMode === 'full'
-      decision.reason = `forced by ${player}: player reported source unplayable`
+      applyForcedPlaybackMode(decision, forceMode, player)
     }
 
     console.log('[CompatTranscode] Starting:', decision.mode, 'for', player, '|', decision.reason)
 
     ;(async () => {
       try {
-        if (decision.mode === 'full') {
-          await runFullTranscodeCast(session, sourceUrl, { isVideoComplete })
-        } else if (decision.mode === 'audio-only') {
-          await runVideoCopyAudioTranscode(session, sourceUrl, onProgress, { isVideoComplete })
-        } else {
-          // Remux only (e.g. MKV → fMP4, no re-encoding)
-          await runRemuxCast(session, sourceUrl, onProgress, { isVideoComplete })
-        }
+        await executeTranscodeMode(decision.mode, session, sourceUrl, onProgress, isVideoComplete)
       } catch (err) {
         if (session.cancelled) {
           session.status = 'cancelled'

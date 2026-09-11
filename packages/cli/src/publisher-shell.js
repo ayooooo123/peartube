@@ -85,6 +85,27 @@ export function createRelayPublisherShell ({ api, storagePath, fs, logger = null
     return { publicKey: keyPair.publicKey, secretKey: keyPair.secretKey }
   }
 
+  function assertPreparedOperation (prepared, { intentId, publisherId, recordType, displaySummaryJson, intentExpiresAt, rootPublicKey }) {
+    if (prepared?.success !== true ||
+        prepared.intentId !== intentId ||
+        prepared.publisherId !== publisherId ||
+        prepared.recordType !== recordType ||
+        prepared.displaySummaryJson !== displaySummaryJson ||
+        Number(prepared.intentExpiresAt) !== intentExpiresAt ||
+        !equalBytes(prepared.signerPublicKey, rootPublicKey)) {
+      throw new Error(`publisher root prepare mismatch for ${recordType}`)
+    }
+  }
+
+  function assertSubmittedOperation (submitted, { intentId, publisherId, recordType, candidateRecordId }) {
+    if (submitted?.success !== true || submitted.complete !== true ||
+        submitted.intentId !== intentId || submitted.publisherId !== publisherId ||
+        submitted.recordType !== recordType ||
+        !equalBytes(submitted.recordId, candidateRecordId)) {
+      throw new Error(`publisher root submit failed for ${recordType}: ${JSON.stringify(submitted, (k, v) => (v && v.type === 'Buffer') ? '<bytes>' : v)}`)
+    }
+  }
+
   // The relay signs its own root operations, so the usual human confirmation
   // step is gone. The prepared record is still checked field by field against
   // the intent: a backend that prepared a different record than the one built
@@ -107,15 +128,14 @@ export function createRelayPublisherShell ({ api, storagePath, fs, logger = null
       signerPublicKey: root.publicKey
     })
 
-    if (prepared?.success !== true ||
-        prepared.intentId !== intentId ||
-        prepared.publisherId !== publisherId ||
-        prepared.recordType !== recordType ||
-        prepared.displaySummaryJson !== displaySummaryJson ||
-        Number(prepared.intentExpiresAt) !== intentExpiresAt ||
-        !equalBytes(prepared.signerPublicKey, root.publicKey)) {
-      throw new Error(`publisher root prepare mismatch for ${recordType}`)
-    }
+    assertPreparedOperation(prepared, {
+      intentId,
+      publisherId,
+      recordType,
+      displaySummaryJson,
+      intentExpiresAt,
+      rootPublicKey: root.publicKey
+    })
 
     const unsignedBytes = b4a.from(prepared.unsignedBytes)
     const candidateRecordId = b4a.from(prepared.candidateRecordId)
@@ -147,12 +167,7 @@ export function createRelayPublisherShell ({ api, storagePath, fs, logger = null
       signerPublicKey: root.publicKey,
       signature
     })
-    if (submitted?.success !== true || submitted.complete !== true ||
-        submitted.intentId !== intentId || submitted.publisherId !== publisherId ||
-        submitted.recordType !== recordType ||
-        !equalBytes(submitted.recordId, candidateRecordId)) {
-      throw new Error(`publisher root submit failed for ${recordType}: ${JSON.stringify(submitted, (k,v) => (v && v.type === 'Buffer') ? '<bytes>' : v)}`)
-    }
+    assertSubmittedOperation(submitted, { intentId, publisherId, recordType, candidateRecordId })
   }
 
   async function provision (publisherId, genesisRootKey) {

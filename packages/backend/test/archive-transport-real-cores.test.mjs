@@ -22,9 +22,12 @@ import { join } from 'node:path'
 
 import { createArchivePledge } from '../src/archive/pledge.js'
 import { createScopedNetworkRuntime } from '../src/network/scoped-runtime.js'
+import { writeStaticAsset, ASSET_BLOCK_SIZE } from '../src/assets/static-core.js'
+import { createBufferSourceReader } from '../src/assets/source-reader.js'
+import { normalizeAssetCoreRefV2 } from '../src/assets/rendition.js'
 
 const BLOCK_COUNT = 4
-const BLOCK_BYTES = 512
+const BLOCK_BYTES = ASSET_BLOCK_SIZE
 
 function bytes (size, fill) {
   return b4a.alloc(size, fill)
@@ -37,8 +40,9 @@ function blockAt (index) {
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
 
 function connectionPair () {
-  const aToB = new PassThrough()
-  const bToA = new PassThrough()
+  // Noise transports preserve messages; a byte stream can coalesce channel opens.
+  const aToB = new PassThrough({ objectMode: true })
+  const bToA = new PassThrough({ objectMode: true })
   const a = Duplex.from({ readable: bToA, writable: aToB })
   const b = Duplex.from({ readable: aToB, writable: bToA })
   a.userData = null
@@ -81,11 +85,15 @@ async function createFixture (t) {
   await holderStore.ready()
   await archivistStore.ready()
 
-  const source = holderStore.get({ name: 'rendition' })
-  await source.ready()
-  await source.append(Array.from({ length: BLOCK_COUNT }, (_, index) => blockAt(index)))
+  const sourceBytes = b4a.alloc(BLOCK_COUNT * ASSET_BLOCK_SIZE)
+  for (let index = 0; index < BLOCK_COUNT; index++) {
+    sourceBytes.fill(index + 1, index * ASSET_BLOCK_SIZE, (index + 1) * ASSET_BLOCK_SIZE)
+  }
+  const asset = await writeStaticAsset({ store: holderStore, reader: createBufferSourceReader(sourceBytes) })
+  const source = asset.core
+  const coreRef = normalizeAssetCoreRefV2(asset.descriptor)
 
-  const archivistCore = archivistStore.get({ key: source.key })
+  const archivistCore = archivistStore.get({ key: b4a.from(coreRef.key, 'hex'), manifest: coreRef.hypercoreManifest })
   await archivistCore.ready()
 
   const swarmHolder = fakeSwarm()
@@ -121,7 +129,7 @@ async function createFixture (t) {
     rmSync(archivistDir, { recursive: true, force: true })
   })
 
-  return { source, archivistCore, holder, archivist, coreKey: b4a.toString(source.key, 'hex') }
+  return { source, archivistCore, holder, archivist, coreRef, coreKey: coreRef.key }
 }
 
 function pledgeFor (coreKey) {
@@ -132,7 +140,7 @@ function pledgeFor (coreKey) {
     renditionId: 'b'.repeat(64),
     ranges: [{ coreKey, start: 0, end: BLOCK_COUNT }],
     retentionUntil: Date.now() + 3_600_000,
-    uploadCeilingBytes: 1024 * 1024,
+    uploadCeilingBytes: 16 * 1024 * 1024,
     issuedAt: Date.now(),
     nonce: 'f'.repeat(64),
     keyPair,
@@ -154,6 +162,7 @@ test('archive blocks served over the transport verify on a peer that only knows 
   await fixture.holder.retainAuthorizedArchive({
     pledge,
     coreKey: fixture.coreKey,
+    coreRef: fixture.coreRef,
     start: 0,
     end: BLOCK_COUNT,
     download: false,
@@ -161,6 +170,7 @@ test('archive blocks served over the transport verify on a peer that only knows 
   await fixture.archivist.retainAuthorizedArchive({
     pledge,
     coreKey: fixture.coreKey,
+    coreRef: fixture.coreRef,
     start: 0,
     end: BLOCK_COUNT,
   })
@@ -186,6 +196,7 @@ test('the archivist can prove possession of a transported block to an auditor ho
   await fixture.holder.retainAuthorizedArchive({
     pledge,
     coreKey: fixture.coreKey,
+    coreRef: fixture.coreRef,
     start: 0,
     end: BLOCK_COUNT,
     download: false,
@@ -193,6 +204,7 @@ test('the archivist can prove possession of a transported block to an auditor ho
   await fixture.archivist.retainAuthorizedArchive({
     pledge,
     coreKey: fixture.coreKey,
+    coreRef: fixture.coreRef,
     start: 0,
     end: BLOCK_COUNT,
   })

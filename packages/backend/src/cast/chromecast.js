@@ -204,6 +204,67 @@ function rewriteUrlHost(url, host) {
   }
 }
 
+function buildCastMediaPayload(mediaUrl, options) {
+  const contentType = options?.contentType || 'video/mp4'
+  const metadata = {
+    metadataType: 1, // MovieMediaMetadata (0=Generic, 1=Movie, 2=TvShow, 3=MusicTrack, 4=Photo)
+    title: options?.title || '',
+    images: options?.thumbnail ? [{ url: options.thumbnail }] : []
+  }
+  const isHlsContent = /mpegurl/i.test(contentType) || /\.m3u8(?:$|\?)/i.test(mediaUrl)
+  const streamType = isHlsContent ? 'LIVE' : (options?.streamType || 'BUFFERED')
+
+  const mediaPayload = {
+    contentId: mediaUrl,
+    contentUrl: mediaUrl,
+    streamType,
+    contentType,
+    metadata,
+    ...(isHlsContent ? {
+      hlsSegmentFormat: 'fmp4',
+      hlsVideoSegmentFormat: 'fmp4',
+    } : {}),
+    ...(!isHlsContent && options?.duration ? { duration: options.duration } : {})
+  }
+
+  return { mediaPayload, contentType, streamType }
+}
+
+function resolveMediaStatusObject(status) {
+  if (Array.isArray(status)) return status[0] || null
+  return status && typeof status === 'object' ? status : null
+}
+
+function logMediaStatus(status) {
+  try {
+    const s = status || {}
+    const timeStr = (typeof s.currentTime === 'number') ? s.currentTime.toFixed(1) : '0'
+    console.log('[Chromecast] MEDIA_STATUS playerState:', s.playerState,
+      'idleReason:', s.idleReason || 'none',
+      'time:', timeStr,
+      'buffering:', s.playerState === 'BUFFERING' ? 'YES' : 'no')
+  } catch (e) {
+    // Logging must never break media status processing
+  }
+}
+
+function extractMediaErrorDetails(status) {
+  try {
+    const extended = status?.extendedStatus
+    const err = status?.error
+    const errType = extended?.playerState
+      || err?.type
+      || (status?.media?.contentId ? 'LOAD_FAILED' : 'unknown')
+    const detailedCode = extended?.media?.customData?.errorCode
+      || err?.detailedErrorCode
+      || err?.reason
+      || null
+    return { errType, detailedCode }
+  } catch {
+    return { errType: 'unknown', detailedCode: null }
+  }
+}
+
 /**
  * ChromecastDevice - Handles communication with a Chromecast receiver
  */
@@ -269,7 +330,11 @@ export class ChromecastDevice extends EventEmitter {
 
   _schedulePendingLoad(delayMs) {
     if (this._pendingLoadTimer) {
-      try { clearTimeout(this._pendingLoadTimer) } catch (e) {}
+      try {
+        clearTimeout(this._pendingLoadTimer)
+      } catch (e) {
+        // Timer may already have fired; clearing is best-effort
+      }
       this._pendingLoadTimer = null
     }
 
@@ -294,7 +359,9 @@ export class ChromecastDevice extends EventEmitter {
     if (this._cleanupPromise) {
       try {
         await this._cleanupPromise
-      } catch {}
+      } catch {
+        // Proceed with the connection even if prior cleanup failed
+      }
     }
 
     this.emit('connectionStateChanged', 'connecting')
@@ -374,7 +441,9 @@ export class ChromecastDevice extends EventEmitter {
     this.emit('connectionStateChanged', 'disconnected')
     try {
       console.log('[Chromecast] disconnect requested, graceful:', wasConnected)
-    } catch {}
+    } catch {
+      // Logging must never block disconnect
+    }
     return this._scheduleCleanup(null, { graceful: wasConnected })
   }
 
@@ -383,6 +452,42 @@ export class ChromecastDevice extends EventEmitter {
    */
   isConnected() {
     return this._connected
+  }
+
+  _checkLoadDebounce(options) {
+    const now = Date.now()
+    if (this._loadInProgress) {
+      console.warn('[Chromecast] LOAD already in progress, queueing latest play()')
+      this._pendingLoadOptions = options
+      this._schedulePendingLoad(250)
+      return false
+    }
+    if (now - this._lastLoadTime < this._loadDebounceMs) {
+      console.warn('[Chromecast] play() called too soon after previous LOAD, queueing latest')
+      this._pendingLoadOptions = options
+      this._schedulePendingLoad(this._loadDebounceMs - (now - this._lastLoadTime) + 50)
+      return false
+    }
+    this._loadInProgress = true
+    this._lastLoadTime = now
+    return true
+  }
+
+  async _resolveMediaUrl(rawUrl) {
+    let mediaUrl = rawUrl
+    try {
+      const parsed = new URL(mediaUrl)
+      if (LOCALHOST_HOSTS.has(parsed.hostname)) {
+        const localIp = await getLocalIPv4(this.deviceInfo?.host)
+        if (localIp) {
+          mediaUrl = rewriteUrlHost(mediaUrl, localIp)
+          console.log('[Chromecast] Rewriting media URL host to', localIp)
+        }
+      }
+    } catch {
+      // Unparseable URLs pass through unchanged
+    }
+    return mediaUrl
   }
 
   /**
@@ -402,22 +507,7 @@ export class ChromecastDevice extends EventEmitter {
       ...(typeof currentTime === 'number' ? { time: currentTime } : {})
     }
 
-    // Debounce: prevent rapid consecutive LOAD calls that cause native crashes
-    const now = Date.now()
-    if (this._loadInProgress) {
-      console.warn('[Chromecast] LOAD already in progress, queueing latest play()')
-      this._pendingLoadOptions = options
-      this._schedulePendingLoad(250)
-      return
-    }
-    if (now - this._lastLoadTime < this._loadDebounceMs) {
-      console.warn('[Chromecast] play() called too soon after previous LOAD, queueing latest')
-      this._pendingLoadOptions = options
-      this._schedulePendingLoad(this._loadDebounceMs - (now - this._lastLoadTime) + 50)
-      return
-    }
-    this._loadInProgress = true
-    this._lastLoadTime = now
+    if (!this._checkLoadDebounce(options)) return
 
     try {
       await this._ensureTransport()
@@ -425,19 +515,8 @@ export class ChromecastDevice extends EventEmitter {
         throw new Error('Chromecast transport not ready')
       }
 
-      let mediaUrl = options.url
-      try {
-        const parsed = new URL(mediaUrl)
-        if (LOCALHOST_HOSTS.has(parsed.hostname)) {
-          const localIp = await getLocalIPv4(this.deviceInfo.host)
-          if (localIp) {
-            mediaUrl = rewriteUrlHost(mediaUrl, localIp)
-            console.log('[Chromecast] Rewriting media URL host to', localIp)
-          }
-        }
-      } catch {}
-
-      const contentType = options.contentType || 'video/mp4'
+      const mediaUrl = await this._resolveMediaUrl(options.url)
+      const { mediaPayload, contentType, streamType } = buildCastMediaPayload(mediaUrl, options)
       const requestedStartTime = Number.isFinite(options?.time)
         ? Math.max(0, Number(options.time))
         : 0
@@ -450,32 +529,8 @@ export class ChromecastDevice extends EventEmitter {
           streamType: options.streamType,
           duration: options.duration,
         })
-      } catch (e) {}
-      // Use MovieMediaMetadata (type 1) for video content
-      // This provides proper movie-style UI with auto-hiding title overlay
-      const metadata = {
-        metadataType: 1,  // MovieMediaMetadata (0=Generic, 1=Movie, 2=TvShow, 3=MusicTrack, 4=Photo)
-        title: options.title || '',
-        images: options.thumbnail ? [{ url: options.thumbnail }] : []
-      }
-
-      // HLS must cast as LIVE, and a LIVE payload must carry no `duration`:
-      // Chromecast treats "unbounded + fixed length" as contradictory and
-      // stalls at 56.48s. Level 4.2 and baseline profile are the hard ceilings.
-      const isHlsContent = /mpegurl/i.test(contentType) || /\.m3u8(?:$|\?)/i.test(mediaUrl)
-      const streamType = isHlsContent ? 'LIVE' : (options.streamType || 'BUFFERED')
-
-      const mediaPayload = {
-        contentId: mediaUrl,
-        contentUrl: mediaUrl,
-        streamType,
-        contentType,
-        metadata,
-        ...(isHlsContent ? {
-          hlsSegmentFormat: 'fmp4',
-          hlsVideoSegmentFormat: 'fmp4',
-        } : {}),
-        ...(!isHlsContent && options.duration ? { duration: options.duration } : {})
+      } catch (e) {
+        // Malformed URLs or log failures must not abort LOAD
       }
 
       const payload = {
@@ -496,7 +551,9 @@ export class ChromecastDevice extends EventEmitter {
           hlsSegmentFormat: mediaPayload.hlsSegmentFormat,
           hlsVideoSegmentFormat: mediaPayload.hlsVideoSegmentFormat,
         })
-      } catch {}
+      } catch {
+        // Logging must never abort LOAD dispatch
+      }
 
       console.log('[Chromecast] sending LOAD to transport', this._transportId)
       this._lastEmittedError = null
@@ -515,7 +572,9 @@ export class ChromecastDevice extends EventEmitter {
       this._sendMediaMessage(payload)
       try {
         this._sendMediaMessage({ type: 'GET_STATUS', requestId: this._nextRequestId() })
-      } catch {}
+      } catch {
+        // Probe failure must not abort LOAD tracking
+      }
       this._loadStartedAt = Date.now()
       this._state.state = 'loading'
       this.emit('playbackStateChanged', 'loading')
@@ -528,6 +587,74 @@ export class ChromecastDevice extends EventEmitter {
           this._schedulePendingLoad(150)
         }
       }, 500)
+    }
+  }
+  _retryLastLoadRequest() {
+    try {
+      const retry = this._lastLoadRequest
+      if (retry?.contentId) {
+        this._sendMediaMessage({
+          type: 'LOAD',
+          requestId: this._nextRequestId(),
+          autoplay: true,
+          currentTime: Number.isFinite(retry.time) ? Math.max(0, Number(retry.time)) : 0,
+          media: retry.media || {
+            contentId: retry.contentId,
+            streamType: retry.streamType || 'BUFFERED',
+            contentType: retry.contentType || 'application/vnd.apple.mpegurl',
+            metadata: {
+              metadataType: 0,
+              title: 'PearTube',
+            },
+          },
+        })
+        this._loadStartedAt = Date.now()
+        return true
+      }
+    } catch {
+      // A failed resend falls through to the caller's next recovery step
+    }
+    return false
+  }
+
+  _handleIdlePlaybackStart(status, loadAgeMs, hasSession, finishReject) {
+    if (hasSession && loadAgeMs > 2500 && !this._loadPlayNudged) {
+      this._loadPlayNudged = true
+      try {
+        this._sendMediaMessage({
+          type: 'PLAY',
+          requestId: this._nextRequestId(),
+          mediaSessionId: status.mediaSessionId,
+        })
+        this._sendMediaMessage({
+          type: 'GET_STATUS',
+          requestId: this._nextRequestId(),
+        })
+      } catch {
+        // Nudge failure leaves playback to the timeout path
+      }
+      return
+    }
+    if (loadAgeMs > 3000 && !hasSession && !this._loadRetrySent) {
+      if (!this._loadStatusProbeSent) {
+        this._loadStatusProbeSent = true
+        try {
+          this._sendMediaMessage({
+            type: 'GET_STATUS',
+            requestId: this._nextRequestId(),
+          })
+        } catch {
+          // Probe failure falls through to retry/timeout handling
+        }
+        return
+      }
+    }
+    if (loadAgeMs > 9000 && !hasSession && !this._loadRetrySent) {
+      this._loadRetrySent = true
+      if (this._retryLastLoadRequest()) return
+    }
+    if (loadAgeMs > 15000 && !hasSession) {
+      finishReject(new Error('Chromecast stayed IDLE without media session after LOAD'))
     }
   }
 
@@ -574,28 +701,7 @@ export class ChromecastDevice extends EventEmitter {
         if (state === 'error') {
           if (!this._loadErrorRetrySent) {
             this._loadErrorRetrySent = true
-            try {
-              const retry = this._lastLoadRequest
-              if (retry?.contentId) {
-                this._sendMediaMessage({
-                  type: 'LOAD',
-                  requestId: this._nextRequestId(),
-                  autoplay: true,
-                  currentTime: Number.isFinite(retry.time) ? Math.max(0, Number(retry.time)) : 0,
-                  media: retry.media || {
-                    contentId: retry.contentId,
-                    streamType: retry.streamType || 'BUFFERED',
-                    contentType: retry.contentType || 'application/vnd.apple.mpegurl',
-                    metadata: {
-                      metadataType: 0,
-                      title: 'PearTube',
-                    },
-                  },
-                })
-                this._loadStartedAt = Date.now()
-                return
-              }
-            } catch {}
+            if (this._retryLastLoadRequest()) return
           }
           finishReject(new Error('Chromecast reported a media error while starting playback'))
         }
@@ -608,28 +714,7 @@ export class ChromecastDevice extends EventEmitter {
         if (playerState === 'IDLE' && status.idleReason === 'ERROR') {
           if (!this._loadErrorRetrySent) {
             this._loadErrorRetrySent = true
-            try {
-              const retry = this._lastLoadRequest
-              if (retry?.contentId) {
-                this._sendMediaMessage({
-                  type: 'LOAD',
-                  requestId: this._nextRequestId(),
-                  autoplay: true,
-                  currentTime: Number.isFinite(retry.time) ? Math.max(0, Number(retry.time)) : 0,
-                  media: retry.media || {
-                    contentId: retry.contentId,
-                    streamType: retry.streamType || 'BUFFERED',
-                    contentType: retry.contentType || 'application/vnd.apple.mpegurl',
-                    metadata: {
-                      metadataType: 0,
-                      title: 'PearTube',
-                    },
-                  },
-                })
-                this._loadStartedAt = Date.now()
-                return
-              }
-            } catch {}
+            if (this._retryLastLoadRequest()) return
           }
           finishReject(new Error('Chromecast reported IDLE:ERROR while starting playback'))
           return
@@ -637,61 +722,7 @@ export class ChromecastDevice extends EventEmitter {
         if (playerState === 'IDLE' && !status.idleReason) {
           const loadAgeMs = this._loadStartedAt > 0 ? (Date.now() - this._loadStartedAt) : 0
           const hasSession = typeof status.mediaSessionId === 'number'
-          if (hasSession && loadAgeMs > 2500 && !this._loadPlayNudged) {
-            this._loadPlayNudged = true
-            try {
-              this._sendMediaMessage({
-                type: 'PLAY',
-                requestId: this._nextRequestId(),
-                mediaSessionId: status.mediaSessionId,
-              })
-              this._sendMediaMessage({
-                type: 'GET_STATUS',
-                requestId: this._nextRequestId(),
-              })
-            } catch {}
-            return
-          }
-          if (loadAgeMs > 3000 && !hasSession && !this._loadRetrySent) {
-            if (!this._loadStatusProbeSent) {
-              this._loadStatusProbeSent = true
-              try {
-                this._sendMediaMessage({
-                  type: 'GET_STATUS',
-                  requestId: this._nextRequestId(),
-                })
-              } catch {}
-              return
-            }
-          }
-          if (loadAgeMs > 9000 && !hasSession && !this._loadRetrySent) {
-            this._loadRetrySent = true
-            try {
-              const retry = this._lastLoadRequest
-              if (retry?.contentId) {
-                this._sendMediaMessage({
-                  type: 'LOAD',
-                  requestId: this._nextRequestId(),
-                  autoplay: true,
-                  currentTime: Number.isFinite(retry.time) ? Math.max(0, Number(retry.time)) : 0,
-                  media: retry.media || {
-                    contentId: retry.contentId,
-                    streamType: retry.streamType || 'BUFFERED',
-                    contentType: retry.contentType || 'application/vnd.apple.mpegurl',
-                    metadata: {
-                      metadataType: 0,
-                      title: 'PearTube',
-                    },
-                  },
-                })
-                this._loadStartedAt = Date.now()
-                return
-              }
-            } catch {}
-          }
-          if (loadAgeMs > 15000 && !hasSession) {
-            finishReject(new Error('Chromecast stayed IDLE without media session after LOAD'))
-          }
+          this._handleIdlePlaybackStart(status, loadAgeMs, hasSession, finishReject)
         }
       }
 
@@ -1057,7 +1088,9 @@ export class ChromecastDevice extends EventEmitter {
         console.log('[Chromecast] RECEIVER_STATUS apps:', apps.map(function(app) {
           return { appId: app.appId, transportId: app.transportId }
         }))
-      } catch (e) {}
+      } catch (e) {
+        // Malformed app entries must not break receiver status handling
+      }
       const status = payload.status
       if (status.volume && typeof status.volume.level === 'number') {
         if (this._state.volume !== status.volume.level) {
@@ -1091,6 +1124,96 @@ export class ChromecastDevice extends EventEmitter {
     }
   }
 
+  _handleMediaStatusError(status) {
+    const sinceStopped = this._intentionalStopAt > 0 ? (Date.now() - this._intentionalStopAt) : Infinity
+    const now = Date.now()
+    const loadingForMs = this._loadStartedAt > 0 ? (now - this._loadStartedAt) : 0
+    const suppressLoadingError = this._loadStartedAt > 0 && loadingForMs < 1500
+    if (sinceStopped < 8000 || suppressLoadingError) {
+      console.log('[Chromecast] Suppressing stale IDLE:ERROR (stop ' + Math.round(sinceStopped) + 'ms ago, loadingForMs:', loadingForMs + ')')
+      return
+    }
+
+    this._loadStartedAt = 0
+
+    const { errType, detailedCode } = extractMediaErrorDetails(status)
+    const errMsg = detailedCode
+      ? 'Chromecast media error: ' + errType + ' (' + detailedCode + ')'
+      : 'Chromecast media error: ' + errType
+
+    if (this._lastEmittedError !== errMsg) {
+      this._lastEmittedError = errMsg
+      try {
+        console.warn('[Chromecast] Full MEDIA_STATUS on ERROR:', JSON.stringify(status))
+      } catch (e) {
+        console.warn('[Chromecast] Full MEDIA_STATUS keys:', Object.keys(status))
+      }
+      console.warn('[Chromecast] Media error type:', errType)
+      if (detailedCode) {
+        console.warn('[Chromecast] Media error detailedCode:', detailedCode)
+      }
+      try {
+        if (status.error) {
+          console.warn('[Chromecast] Media error details:', JSON.stringify(status.error))
+        }
+        if (status.extendedStatus) {
+          console.warn('[Chromecast] Media extendedStatus:', JSON.stringify(status.extendedStatus))
+        }
+      } catch (e) {
+        // Status payloads may contain circular references
+      }
+      this.emit('error', new Error(errMsg))
+    }
+  }
+
+  _handleMediaStatus(status) {
+    this._lastMediaStatus = {
+      playerState: status.playerState || null,
+      idleReason: status.idleReason || null,
+      mediaSessionId: typeof status.mediaSessionId === 'number' ? status.mediaSessionId : null,
+      currentTime: typeof status.currentTime === 'number' ? status.currentTime : null,
+    }
+    this.emit('mediaStatus', this._lastMediaStatus)
+
+    if (typeof status.mediaSessionId === 'number') {
+      this._mediaSessionId = status.mediaSessionId
+    }
+
+    if (typeof status.currentTime === 'number') {
+      this._state.currentTime = status.currentTime
+      if (this._lastPlayOptions) {
+        this._lastPlayOptions = {
+          ...this._lastPlayOptions,
+          time: status.currentTime
+        }
+      }
+      this.emit('timeChanged', status.currentTime)
+    }
+
+    if (status.media && typeof status.media.duration === 'number') {
+      this._state.duration = status.media.duration
+      this.emit('durationChanged', status.media.duration)
+    }
+
+    if (status.playerState) {
+      const nextState = mapPlayerState(status.playerState, status.idleReason)
+      if (this._state.state !== nextState) {
+        this._state.state = nextState
+        this.emit('playbackStateChanged', nextState)
+        if (nextState === 'playing' || nextState === 'paused' || nextState === 'buffering') {
+          this._loadStartedAt = 0
+          this._intentionalStopAt = 0
+        }
+      }
+      if (status.playerState === 'IDLE' && status.idleReason) {
+        console.warn('[Chromecast] Media idle reason:', status.idleReason)
+        if (status.idleReason === 'ERROR') {
+          this._handleMediaStatusError(status)
+        }
+      }
+    }
+  }
+
   _handleMedia(payload) {
     // Log ALL media namespace messages for debugging
     if (payload.type && payload.type !== 'MEDIA_STATUS') {
@@ -1107,7 +1230,9 @@ export class ChromecastDevice extends EventEmitter {
       console.error('[Chromecast] LOAD_FAILED received!')
       try {
         console.error('[Chromecast] LOAD_FAILED details:', JSON.stringify(payload))
-      } catch (e) {}
+      } catch (e) {
+        // Payload may not be JSON-serializable
+      }
       this._loadStartedAt = 0
       this._state.state = 'error'
       this.emit('playbackStateChanged', 'error')
@@ -1137,123 +1262,18 @@ export class ChromecastDevice extends EventEmitter {
       console.error('[Chromecast] INVALID_REQUEST received!')
       try {
         console.error('[Chromecast] INVALID_REQUEST details:', JSON.stringify(payload))
-      } catch (e) {}
+      } catch (e) {
+        // Payload may not be JSON-serializable
+      }
       this.emit('error', new Error('Chromecast INVALID_REQUEST: ' + (payload.reason || 'unknown')))
       return
     }
 
     if (payload.type === 'MEDIA_STATUS') {
-      // Handle status as array or object (Chromecast can send either)
-      const status = Array.isArray(payload.status)
-        ? payload.status[0]
-        : (payload.status && typeof payload.status === 'object' ? payload.status : null)
-
-      // Log key fields for debugging - use status if available
-      try {
-        const s = status || {}
-        const timeStr = (typeof s.currentTime === 'number') ? s.currentTime.toFixed(1) : '0'
-        console.log('[Chromecast] MEDIA_STATUS playerState:', s.playerState,
-          'idleReason:', s.idleReason || 'none',
-          'time:', timeStr,
-          'buffering:', s.playerState === 'BUFFERING' ? 'YES' : 'no')
-      } catch (e) {}
-
-      if (!status) return
-
-      this._lastMediaStatus = {
-        playerState: status.playerState || null,
-        idleReason: status.idleReason || null,
-        mediaSessionId: typeof status.mediaSessionId === 'number' ? status.mediaSessionId : null,
-        currentTime: typeof status.currentTime === 'number' ? status.currentTime : null,
-      }
-      this.emit('mediaStatus', this._lastMediaStatus)
-
-      if (typeof status.mediaSessionId === 'number') {
-        this._mediaSessionId = status.mediaSessionId
-      }
-
-      if (typeof status.currentTime === 'number') {
-        this._state.currentTime = status.currentTime
-        if (this._lastPlayOptions) {
-          this._lastPlayOptions = {
-            ...this._lastPlayOptions,
-            time: status.currentTime
-          }
-        }
-        this.emit('timeChanged', status.currentTime)
-      }
-
-      if (status.media && typeof status.media.duration === 'number') {
-        this._state.duration = status.media.duration
-        this.emit('durationChanged', status.media.duration)
-      }
-
-      if (status.playerState) {
-        const nextState = mapPlayerState(status.playerState, status.idleReason)
-        if (this._state.state !== nextState) {
-          this._state.state = nextState
-          this.emit('playbackStateChanged', nextState)
-          if (nextState === 'playing' || nextState === 'paused' || nextState === 'buffering') {
-            this._loadStartedAt = 0
-            this._intentionalStopAt = 0
-          }
-        }
-        if (status.playerState === 'IDLE' && status.idleReason) {
-          console.warn('[Chromecast] Media idle reason:', status.idleReason)
-          if (status.idleReason === 'ERROR') {
-            // Suppress stale IDLE:ERROR that arrives after intentional stop() (pre-LOAD cleanup)
-            // or while a new LOAD is in flight. These belong to the OLD media session.
-            const sinceStopped = this._intentionalStopAt > 0 ? (Date.now() - this._intentionalStopAt) : Infinity
-            const now = Date.now()
-            const loadingForMs = this._loadStartedAt > 0 ? (now - this._loadStartedAt) : 0
-            const suppressLoadingError = this._loadStartedAt > 0 && loadingForMs < 1500
-            if (sinceStopped < 8000 || suppressLoadingError) {
-              console.log('[Chromecast] Suppressing stale IDLE:ERROR (stop ' + Math.round(sinceStopped) + 'ms ago, loadingForMs:', loadingForMs + ')')
-              return
-            }
-
-            this._loadStartedAt = 0
-
-            let errType = 'unknown'
-            let detailedCode = null
-            try {
-              errType = (status.extendedStatus && status.extendedStatus.playerState)
-                || (status.error && status.error.type)
-                || (status.media && status.media.contentId ? 'LOAD_FAILED' : 'unknown')
-              detailedCode = (status.extendedStatus && status.extendedStatus.media && status.extendedStatus.media.customData && status.extendedStatus.media.customData.errorCode)
-                || (status.error && status.error.detailedErrorCode)
-                || (status.error && status.error.reason)
-                || null
-            } catch (e) {}
-            const errMsg = detailedCode
-              ? 'Chromecast media error: ' + errType + ' (' + detailedCode + ')'
-              : 'Chromecast media error: ' + errType
-
-            // Only emit once per unique error — status polling re-sends the same
-            // IDLE:ERROR every 5s which causes an alert storm in the UI.
-            if (this._lastEmittedError !== errMsg) {
-              this._lastEmittedError = errMsg
-              try {
-                console.warn('[Chromecast] Full MEDIA_STATUS on ERROR:', JSON.stringify(status))
-              } catch (e) {
-                console.warn('[Chromecast] Full MEDIA_STATUS keys:', Object.keys(status))
-              }
-              console.warn('[Chromecast] Media error type:', errType)
-              if (detailedCode) {
-                console.warn('[Chromecast] Media error detailedCode:', detailedCode)
-              }
-              try {
-                if (status.error) {
-                  console.warn('[Chromecast] Media error details:', JSON.stringify(status.error))
-                }
-                if (status.extendedStatus) {
-                  console.warn('[Chromecast] Media extendedStatus:', JSON.stringify(status.extendedStatus))
-                }
-              } catch (e) {}
-              this.emit('error', new Error(errMsg))
-            }
-          }
-        }
+      const status = resolveMediaStatusObject(payload.status)
+      logMediaStatus(status)
+      if (status) {
+        this._handleMediaStatus(status)
       }
     }
   }
@@ -1267,7 +1287,9 @@ export class ChromecastDevice extends EventEmitter {
     this.emit('error', err)
     try {
       console.warn('[Chromecast] socket error, graceful:', wasConnected, (err && err.message) ? err.message : err)
-    } catch {}
+    } catch {
+      // Logging must never break error handling
+    }
     this._scheduleCleanup(err, { graceful: wasConnected })
     if (shouldReconnect) {
       this._attemptReconnect().catch(() => {})
@@ -1283,7 +1305,9 @@ export class ChromecastDevice extends EventEmitter {
     this.emit('connectionStateChanged', 'disconnected')
     try {
       console.warn('[Chromecast] socket closed, graceful:', wasConnected)
-    } catch {}
+    } catch {
+      // Logging must never break disconnect handling
+    }
     this._scheduleCleanup(err || new Error('Connection closed'), { graceful: wasConnected })
     if (shouldReconnect) {
       this._attemptReconnect().catch(() => {})
@@ -1357,7 +1381,9 @@ export class ChromecastDevice extends EventEmitter {
     this._cleanupScheduled = true
     try {
       console.log('[Chromecast] cleanup scheduled, graceful:', graceful)
-    } catch {}
+    } catch {
+      // Logging must never block cleanup scheduling
+    }
     setTimeout(() => {
       this._cleanupScheduled = false
       Promise.resolve(this._cleanupConnection(err)).catch(() => {})
@@ -1376,7 +1402,9 @@ export class ChromecastDevice extends EventEmitter {
       socket.off('data', handlers.onData)
       socket.off('error', handlers.onError)
       socket.off('close', handlers.onClose)
-    } catch {}
+    } catch {
+      // Detach must complete even if the socket misbehaves
+    }
     this._socketHandlers = null
   }
 
@@ -1389,7 +1417,9 @@ export class ChromecastDevice extends EventEmitter {
     if (socket.destroyed || !socket._handle) {
       try {
         console.log('[Chromecast] socket already destroyed, skipping close')
-      } catch {}
+      } catch {
+        // Logging must never block socket teardown
+      }
       return Promise.resolve()
     }
 
@@ -1405,7 +1435,9 @@ export class ChromecastDevice extends EventEmitter {
         }
         try {
           console.log('[Chromecast] socket cleanup finished')
-        } catch {}
+        } catch {
+          // Logging must never block socket cleanup resolution
+        }
         resolve()
       }
 
@@ -1413,22 +1445,32 @@ export class ChromecastDevice extends EventEmitter {
       if (shouldEnd) {
         try {
           console.log('[Chromecast] socket end requested')
-        } catch {}
+        } catch {
+          // Logging must never block graceful close
+        }
         try {
           if (socket.once) socket.once('close', finish)
-        } catch (e) {}
+        } catch (e) {
+          // Socket may already be destroyed; the timeout still resolves
+        }
 
         try {
           if (socket.end) socket.end()
-        } catch (e) {}
+        } catch (e) {
+          // end() throws on destroyed sockets; the timer still forces destroy
+        }
 
         closeTimer = setTimeout(function() {
           try {
             console.warn('[Chromecast] socket end timeout, forcing destroy')
-          } catch (e) {}
+          } catch (e) {
+            // Logging must never break the destroy fallback
+          }
           try {
             if (socket.destroy) socket.destroy()
-          } catch (e) {}
+          } catch (e) {
+            // destroy() may throw if the socket already closed
+          }
           finish()
         }, 1500)
         return
@@ -1436,10 +1478,14 @@ export class ChromecastDevice extends EventEmitter {
 
       try {
         console.log('[Chromecast] socket destroy requested (non-graceful)')
-      } catch (e) {}
+      } catch (e) {
+        // Logging must never break socket teardown
+      }
       try {
         if (socket.destroy) socket.destroy()
-      } catch (e) {}
+      } catch (e) {
+        // destroy() may throw if the socket already closed
+      }
       finish()
     })
   }
@@ -1472,7 +1518,9 @@ export class ChromecastDevice extends EventEmitter {
 
       try {
         console.log('[Chromecast] cleanup start, graceful:', this._gracefulClose, (err && err.message) ? err.message : err)
-      } catch (e) {}
+      } catch (e) {
+        // Logging must never break cleanup
+      }
       await this._closeSocket()
 
       this._buffer = Buffer.alloc(0)
@@ -1487,7 +1535,9 @@ export class ChromecastDevice extends EventEmitter {
       this._gracefulClose = false
       try {
         console.log('[Chromecast] cleanup done')
-      } catch {}
+      } catch {
+        // Logging must never break cleanup completion
+      }
       const resolve = this._cleanupResolve
       this._cleanupResolve = null
       this._cleanupPromise = null

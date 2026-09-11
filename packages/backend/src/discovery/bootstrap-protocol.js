@@ -147,22 +147,45 @@ export function createBootstrapLocator(input = {}) {
   return { locatorId: toHex(hashCanonical('peartube.bootstrap-locator.id.v1', body)), body, envelope }
 }
 
-export async function verifyBootstrapLocator(envelope, options = {}) {
-  if (!envelope?.body || envelope.body.byteLength > MAX_BOOTSTRAP_LOCATOR_BODY_BYTES) return false
-  const decoded = decodeBody(envelope.body)
-  if (!decoded) return false
-  let body
+function decodeAndNormalizeBootstrapBody(envelopeBody) {
+  if (!envelopeBody || envelopeBody.byteLength > MAX_BOOTSTRAP_LOCATOR_BODY_BYTES) return null
+  const decoded = decodeBody(envelopeBody)
+  if (!decoded) return null
   try {
-    body = normalizeBody(decoded, { preserveCompatibility: true })
-    if (!b4a.equals(encodeCanonical(body), envelope.body)) return false
+    const body = normalizeBody(decoded, { preserveCompatibility: true })
+    if (!b4a.equals(encodeCanonical(body), envelopeBody)) return null
+    return body
   } catch {
-    return false
+    return null
   }
+}
+
+function isTimestampWindowValid(body, options) {
   const now = Number(options.now ?? Date.now())
   const skew = Number(options.maxClockSkewMs || 0)
-  if (!Number.isSafeInteger(now) || !Number.isSafeInteger(skew) || skew < 0) return false
-  if (body.expiresAt + skew < now) return false
-  if (body.issuedAt - skew > now) return false
+  if (!Number.isSafeInteger(now) || !Number.isSafeInteger(skew) || skew < 0) return null
+  if (body.expiresAt + skew < now) return null
+  if (body.issuedAt - skew > now) return null
+  return { now, skew }
+}
+
+async function resolveCatalogChainVerification(body, options) {
+  if (
+    body.rootSignerId &&
+    (options.trustedRootIds || []).includes(body.rootSignerId) &&
+    typeof options.verifyCatalogChain === 'function'
+  ) {
+    return Boolean(await options.verifyCatalogChain(body))
+  }
+  return false
+}
+
+export async function verifyBootstrapLocator(envelope, options = {}) {
+  const body = decodeAndNormalizeBootstrapBody(envelope?.body)
+  if (!body) return false
+  const timing = isTimestampWindowValid(body, options)
+  if (!timing) return false
+  const { now, skew } = timing
   // A locator is self-authenticating metadata. Unknown signers are retained as
   // *unverified candidates* for namespace proof, never treated as trust roots.
   // The optional allowlist is diagnostic/operational policy only.
@@ -180,9 +203,6 @@ export async function verifyBootstrapLocator(envelope, options = {}) {
   if (!signed) return false
   const signerId = envelope.signer ? toHex(envelope.signer) : null
   const isDesignatedSigner = (options.trustedSigners || []).some(candidate => toHex(candidate) === signerId)
-  let catalogChainVerified = false
-  if (body.rootSignerId && (options.trustedRootIds || []).includes(body.rootSignerId) && typeof options.verifyCatalogChain === 'function') {
-    catalogChainVerified = Boolean(await options.verifyCatalogChain(body))
-  }
+  const catalogChainVerified = await resolveCatalogChainVerification(body, options)
   return { trusted: isDesignatedSigner, catalogChainVerified, acceptedHead: body.catalogHead, signerId, body }
 }

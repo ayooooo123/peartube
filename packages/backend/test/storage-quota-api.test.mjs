@@ -9,7 +9,7 @@ process.env.PEARTUBE_QUOTA_SWEEP_DELAY_MS = '20'
 
 import { createApi } from '../src/api.js'
 import { SeedingManager } from '../src/seeding.js'
-import { isPlaybackActive } from '../src/storage.js'
+import { createBackendLifecycle, isPlaybackActive } from '../src/storage.js'
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -430,6 +430,41 @@ test('lowering the storage limit cancels active prefetches before clearing their
   t.is(lowered.success, true)
   t.ok(store.cores.get(coreA).destroyedRanges >= 1)
   t.alike(store.cores.get(coreA).clearCalls, [{ start: 0, end: 8 }])
+})
+
+test('clearCache cancels live prefetches and releases their guards before clearing blocks', async (t) => {
+  const timers = []
+  const metaDb = createMetaDb()
+  const store = createStore()
+  const lifecycle = createBackendLifecycle()
+  t.teardown(() => lifecycle.shutdown())
+  const seedingManager = new SeedingManager(store, metaDb, {
+    ...createTimerOptions(timers), metaSubspaces: metaDb.subspaces,
+  })
+  await seedingManager.init()
+  await seedingManager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
+  const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces, lifecycle, swarm: null }, seedingManager })
+  api.getVideoData = async () => ({
+    id: 'active', path: 'videos/active.mp4', blobId: '0:8:0:524288',
+    blobsCoreKey: coreA, byteLength: 524288, mimeType: 'video/mp4',
+  })
+  const core = store.get(b4a.from(coreA, 'hex'))
+  const activeRanges = new Set()
+  const storedBlocks = new Set([0, 1, 2, 3, 4, 5, 6, 7])
+  core.download = range => {
+    activeRanges.add(range)
+    return { done: () => new Promise(() => {}), destroy: () => activeRanges.delete(range) }
+  }
+  core.clear = async (start, end) => {
+    t.is(activeRanges.size, 0, 'no active download can refill blocks during clear')
+    t.is(core.listenerCount('download'), 0, 'the cancelled prefetch cannot restart through download events')
+    for (let block = start; block < end; block++) storedBlocks.delete(block)
+  }
+  t.is((await api.prefetchVideo('drive-a', 'videos/active.mp4')).success, true)
+  const cleared = await api.clearCache()
+  t.is(cleared.success, true)
+  t.alike([...storedBlocks], [], 'released blob guards permit the actual block clear')
+  t.is((await api.prefetchVideo('drive-a', 'videos/active.mp4')).success, true, 'released quota permits another acquisition')
 })
 
 test('prefetchVideo corrects stale full-size watched seed accounting downward', async (t) => {

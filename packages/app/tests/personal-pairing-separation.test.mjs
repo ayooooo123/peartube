@@ -17,7 +17,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { build } from 'esbuild'
+import { build, transform } from 'esbuild'
 
 const appRoot = path.resolve(import.meta.dirname, '..')
 const read = (relativePath) => fs.readFileSync(path.join(appRoot, relativePath), 'utf8')
@@ -48,6 +48,32 @@ function sliceBetween(source, startMarker, endMarker) {
   return source.slice(start, end)
 }
 
+async function loadStudioPairingFunctions() {
+  const createStart = studio.indexOf('async function createStudioChannelInvite')
+  const pairStart = studio.indexOf('async function pairStudioChannelDevice')
+  const end = studio.indexOf('function StudioScreenHeader', pairStart)
+  assert.ok(createStart >= 0 && pairStart > createStart && end > pairStart)
+  const result = await transform([
+    'const haptics = globalThis.__pairingHaptics',
+    'const Alert = globalThis.__pairingAlert',
+    studio.slice(createStart, pairStart),
+    studio.slice(pairStart, end),
+  ].join('\n'), { loader: 'tsx', target: 'node22' })
+  return new Function(`${result.code}\nreturn { createStudioChannelInvite, pairStudioChannelDevice }`)()
+}
+
+
+async function loadPersonalDeviceUnlink(dependencies) {
+  const start = profile.indexOf('async function runPersonalDeviceUnlink')
+  const end = profile.indexOf('export default function ProfileScreen', start)
+  assert.ok(start >= 0 && end > start)
+  const result = await transform([
+    'const { readPersonalSecretRecord, generatePersonalSecretHex, persistPersonalSecret, ensurePersonalEncryption, notify, haptics } = dependencies',
+    profile.match(/^const ROTATION_ALREADY_RECORDED = .+$/m)[0],
+    profile.slice(start, end),
+  ].join('\n'), { loader: 'tsx', target: 'node22' })
+  return new Function('dependencies', `${result.code}\nreturn runPersonalDeviceUnlink`)(dependencies)
+}
 const pairingHandlers = sliceBetween(profile, 'const createPersonalInvite', 'const applyStorageLimit')
 
 async function loadPersonalEncryption(instance) {
@@ -195,15 +221,44 @@ test('Profile never reaches publisher-channel pairing, with or without a channel
   assert.doesNotMatch(pairingHandlers, /channelKey/, 'no channel key may enter a pairing request')
 })
 
-test('Studio keeps publisher-channel pairing, gated by Developer Mode', () => {
-  assert.match(studio, /rpc\.createDeviceInvite\(identity\.driveKey\)/, 'channel invites are minted from the channel key in Studio')
-  assert.match(studio, /rpc\.pairDevice\(\{[\s\S]*?inviteCode: code/, 'Studio redeems channel invites')
-  assert.match(studio, /rpc\.listDevices\(identity\.driveKey\)/, 'Studio lists the channel devices')
-  assert.match(
-    studio,
-    /<DeveloperModeGate>\s*<StudioScreen \/>\s*<\/DeveloperModeGate>/,
-    'publisher pairing stays behind the existing Developer Mode gate',
-  )
+test('Studio keeps publisher-channel pairing, gated by Developer Mode', async () => {
+  globalThis.__pairingHaptics = { success() {} }
+  globalThis.__pairingAlert = { alert() {} }
+  const { createStudioChannelInvite, pairStudioChannelDevice } = await loadStudioPairingFunctions()
+  const calls = []
+  const rpc = {
+    async createDeviceInvite(channelKey) {
+      calls.push(['createDeviceInvite', channelKey])
+      return { inviteCode: 'invite-code' }
+    },
+    async pairDevice(request) {
+      calls.push(['pairDevice', request])
+      return { success: true }
+    },
+  }
+  let inviteCode = null
+  let loading = null
+  await createStudioChannelInvite(rpc, 'channel-key', (value) => { inviteCode = value }, (value) => { loading = value })
+  assert.equal(inviteCode, 'invite-code')
+  assert.deepEqual(calls[0], ['createDeviceInvite', 'channel-key'])
+  assert.equal(loading, false)
+
+  let pairing = null
+  let cleared = 0
+  let reloaded = 0
+  await pairStudioChannelDevice({
+    rpc,
+    code: ' invite-code ',
+    deviceName: ' Studio device ',
+    setPairing: (value) => { pairing = value },
+    clearPairFields: () => { cleared += 1 },
+    reloadDevices: async () => { reloaded += 1 },
+  })
+  assert.deepEqual(calls[1], ['pairDevice', { inviteCode: 'invite-code', deviceName: 'Studio device' }])
+  assert.equal(pairing, false)
+  assert.equal(cleared, 1)
+  assert.equal(reloaded, 1)
+  assert.match(studio, /<DeveloperModeGate>\s*<StudioScreen \/>\s*<\/DeveloperModeGate>/)
 })
 
 test('Studio never touches the viewer personal-store pairing', () => {
@@ -231,47 +286,104 @@ test('a redeemed secret is persisted before sync and never rendered, logged, or 
   assert.doesNotMatch(profile, /useState[^\n]*[Ss]ecret/, 'the secret must never enter component state')
 })
 
-test('revocation mints a fresh platform secret and admits it is forward-only', () => {
-  const revoke = sliceBetween(profile, 'const unlinkDevice', 'const applyStorageLimit')
+test('revocation mints a fresh platform secret and admits it is forward-only', async () => {
+  const events = []
+  const dependencies = {
+    async readPersonalSecretRecord(owner) {
+      events.push({ type: 'read', owner })
+      return { secret: 'old-secret', bootstrapKey: 'old-bootstrap' }
+    },
+    generatePersonalSecretHex() {
+      events.push({ type: 'generate' })
+      return 'new-secret'
+    },
+    async persistPersonalSecret(secret, options) {
+      events.push({ type: 'persist', secret, options })
+    },
+    async ensurePersonalEncryption() {
+      events.push({ type: 'ensure' })
+    },
+    notify(...args) {
+      events.push({ type: 'notify', args })
+    },
+    haptics: { success() { events.push({ type: 'success' }) } },
+  }
+  const runPersonalDeviceUnlink = await loadPersonalDeviceUnlink(dependencies)
+  const rpc = {
+    async revokePersonalDevice(request) {
+      events.push({ type: 'revoke', request })
+      return { success: true, bootstrapKey: 'new-bootstrap' }
+    },
+  }
+  await runPersonalDeviceUnlink({
+    rpc,
+    keyHex: 'revoked-device',
+    deviceName: 'Kitchen',
+    personalOwner: 'owner-key',
+    loadPersonalDevices: async () => { events.push({ type: 'reload' }) },
+  })
 
-  assert.match(revoke, /const secret = generatePersonalSecretHex\(\)/, 'the platform generates the next epoch secret')
-  const generateAt = revoke.indexOf('generatePersonalSecretHex()')
-  const persistAt = revoke.indexOf('await persistPersonalSecret(secret')
-  const requestAt = revoke.indexOf('rpc.revokePersonalDevice(')
-  assert.ok(generateAt < persistAt, 'the fresh secret is minted before it is stored')
-  assert.ok(
-    persistAt < requestAt,
-    'the rotation key must be durable before the backend rotates onto it: the old key dies the moment it does',
-  )
-  assert.match(revoke, /rpc\.revokePersonalDevice\(\{[\s\S]*?keyHex,[\s\S]*?secret,/, 'revocation sends the new secret with the revoked key')
-  assert.match(
-    revoke,
-    /previousSecret: previous\?\.secret/,
-    'the pre-rotation key rides along as the one startup fallback',
-  )
-  assert.match(
-    revoke,
-    /if \(previous\) await persistPersonalSecret\(previous\.secret/,
-    'a refusal raised before anything was written puts the still-live key back',
-  )
-  const ambiguousAt = revoke.indexOf('res?.error === ROTATION_ALREADY_RECORDED')
-  const restoreAt = revoke.indexOf('if (previous) await persistPersonalSecret(previous.secret')
-  assert.ok(ambiguousAt !== -1 && ambiguousAt < restoreAt, 'the recorded-epoch outcome is handled before the rollback path')
-  assert.match(
-    profile,
-    /const ROTATION_ALREADY_RECORDED = 'personal-revoke-incomplete'/,
-    'only the code that means the epoch is already durable skips the rollback',
-  )
-  assert.doesNotMatch(
-    profile,
-    /'personal-revoke-failed'|'personal-epoch-unavailable'/,
-    'refusals raised with nothing written must take the ordinary restore path, not the keep-new-key path',
-  )
-  assert.match(
-    profile,
-    /cannot take that back|cannot erase what that device already read/,
-    'the confirmation and privacy copy must not promise retroactive erasure',
-  )
+  assert.deepEqual(events.map((event) => event.type), [
+    'read',
+    'generate',
+    'persist',
+    'revoke',
+    'persist',
+    'ensure',
+    'success',
+    'notify',
+    'reload',
+  ])
+  assert.deepEqual(events[2].options, { publicKey: 'owner-key', previousSecret: 'old-secret' })
+  assert.deepEqual(events[3].request, {
+    keyHex: 'revoked-device',
+    secret: 'new-secret',
+    deviceName: 'Kitchen',
+  })
+  assert.deepEqual(events[4].options, { publicKey: 'owner-key', bootstrapKey: 'new-bootstrap' })
+  assert.match(profile, /cannot take that back|cannot erase what that device already read/)
+})
+
+test('revocation preserves the key for the durable epoch on refused and ambiguous outcomes', async () => {
+  for (const error of ['personal-revoke-failed', 'personal-revoke-incomplete']) {
+    let stored = { secret: 'old-secret', bootstrapKey: 'old-bootstrap' }
+    let refreshed = 0
+    const unlink = await loadPersonalDeviceUnlink({
+      readPersonalSecretRecord: async () => stored,
+      generatePersonalSecretHex: () => 'new-secret',
+      persistPersonalSecret: async (secret, options) => { stored = { secret, ...options } },
+      ensurePersonalEncryption: async () => { refreshed += 1 },
+      notify() {},
+      haptics: { success() {} },
+    })
+    const operation = unlink({
+      rpc: {
+        async revokePersonalDevice() {
+          assert.equal(stored.secret, 'new-secret', 'next key must be durable before rotation')
+          return { success: false, error }
+        },
+      },
+      keyHex: 'revoked-device',
+      personalOwner: 'owner-key',
+      loadPersonalDevices: async () => { refreshed += 1 },
+    })
+    if (error === 'personal-revoke-failed') {
+      await assert.rejects(operation, { message: error })
+      assert.deepEqual(stored, {
+        secret: 'old-secret',
+        publicKey: 'owner-key',
+        bootstrapKey: 'old-bootstrap',
+      })
+    } else {
+      await operation
+      assert.deepEqual(stored, {
+        secret: 'new-secret',
+        publicKey: 'owner-key',
+        previousSecret: 'old-secret',
+      }, 'recorded epoch must not be rolled back onto the dead key')
+    }
+    assert.equal(refreshed, 0, 'neither failed outcome refreshes a successful pairing')
+  }
 })
 
 test('a device without a secure vault stays device-local instead of degrading', () => {

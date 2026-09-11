@@ -41,26 +41,39 @@ export function normalizeTitle (value) {
     .trim()
 }
 
+function matchesStableId (source, target) {
+  return Boolean(
+    source.sourceVideoId &&
+    target.sourceVideoId &&
+    source.sourceProvider === target.sourceProvider &&
+    source.sourceVideoId === target.sourceVideoId
+  )
+}
+
+function matchesCoords (coords, target) {
+  return Boolean(coords && coords.seasonNumber === target.seasonNumber && coords.episodeNumber === target.episodeNumber)
+}
+
+function evaluateEpisodeCoordinates (source, target) {
+  if (target.seasonNumber == null || target.episodeNumber == null) return null
+  if (source.providerCoords && matchesCoords(source, target)) {
+    return 'providerCoords'
+  }
+  const embedded = source.embedded || parseSeasonEpisode(source.filename || source.path || source.title)
+  if (matchesCoords(embedded, target)) {
+    return 'embedded'
+  }
+  return null
+}
+
 export function evaluatePair (source, target) {
-  if (source.sourceVideoId && target.sourceVideoId &&
-      source.sourceProvider === target.sourceProvider &&
-      source.sourceVideoId === target.sourceVideoId) {
+  if (matchesStableId(source, target)) {
     return 'stableId'
   }
 
-  const targetHasCoords = target.seasonNumber != null && target.episodeNumber != null
-
-  if (targetHasCoords && source.providerCoords &&
-      source.seasonNumber === target.seasonNumber &&
-      source.episodeNumber === target.episodeNumber) {
-    return 'providerCoords'
-  }
-
-  if (targetHasCoords) {
-    const embedded = source.embedded || parseSeasonEpisode(source.filename || source.path || source.title)
-    if (embedded && embedded.seasonNumber === target.seasonNumber && embedded.episodeNumber === target.episodeNumber) {
-      return 'embedded'
-    }
+  const coordEvidence = evaluateEpisodeCoordinates(source, target)
+  if (coordEvidence) {
+    return coordEvidence
   }
 
   if (target.title && source.title && normalizeTitle(source.title) === normalizeTitle(target.title)) {

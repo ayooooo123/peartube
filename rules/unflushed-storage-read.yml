@@ -1,0 +1,20 @@
+id: unflushed-storage-read
+message: "Flush Hypercore-storage read transactions before awaiting their getters; flushing in finally deadlocks the read."
+severity: error
+language: Tsx
+files:
+  - "packages/backend/src/**"
+rule:
+  kind: try_statement
+  all:
+    - has:
+        stopBy: end
+        pattern: await $RX.$GETTER($$$ARGS)
+    - has:
+        kind: finally_clause
+        has:
+          stopBy: end
+          pattern: $RX.tryFlush()
+constraints:
+  GETTER:
+    regex: "^get[A-Z]"

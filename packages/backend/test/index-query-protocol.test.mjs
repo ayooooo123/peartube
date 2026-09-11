@@ -166,6 +166,7 @@ class MemoryDuplex extends Duplex {
   constructor() {
     super()
     this.other = null
+    this.userData = null
   }
 
   _read() {}
@@ -648,7 +649,7 @@ test('failed retained-runtime refresh preserves the old client channel sequence 
   t.is(server.state, 'active')
   t.is(pair.client.destroyCount, 0)
 
-  await timers.advance(NOW + 30_001)
+  await timers.advance(NOW + 30_000)
   t.is(server.state, 'closed')
   await t.exception(
     runtime.queryIndexService({

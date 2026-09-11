@@ -45,6 +45,24 @@ function isEnqueueOk (res) {
   return res.ok || res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400) || res.status === 0
 }
 
+async function pollRelayJob ({ listJobs, before, initialJob, clock, emit, timeoutMs, pollMs }) {
+  const findOurs = (jobs) => jobs.find((job) => job.id && !before.has(job.id)) || null
+  const deadline = clock.now() + timeoutMs
+  let job = initialJob
+  let lastStatus = null
+  while (clock.now() < deadline) {
+    const jobs = await listJobs()
+    job = findOurs(jobs) || job
+    const status = job?.status || 'queued'
+    if (status !== lastStatus) {
+      emit(`Relay job ${status}${job?.title ? `: ${job.title}` : ''}`)
+      lastStatus = status
+    }
+    if (job && TERMINAL_STATUSES.has(status)) return { job, status }
+    await clock.sleep(pollMs)
+  }
+  return { job, status: job?.status || 'queued', timedOut: true }
+}
 export function createRelayClient (baseUrl, { fetch: fetchImpl, clock = { now: () => Date.now(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) } } = {}) {
   const base = normalizeRelayUi(baseUrl)
   if (!base) throw new RelayClientError('A relay UI address is required', { code: 'ERR_PEARTUBE_RELAY_UI' })
@@ -119,23 +137,10 @@ export function createRelayClient (baseUrl, { fetch: fetchImpl, clock = { now: (
       })
 
       const findOurs = (jobs) => jobs.find((job) => job.id && !before.has(job.id)) || null
-      let job = findOurs(await listJobs())
+      const job = findOurs(await listJobs())
       if (!wait) return { job, status: job?.status || 'queued' }
 
-      const deadline = clock.now() + timeoutMs
-      let lastStatus = null
-      while (clock.now() < deadline) {
-        const jobs = await listJobs()
-        job = findOurs(jobs) || job
-        const status = job?.status || 'queued'
-        if (status !== lastStatus) {
-          emit(`Relay job ${status}${job?.title ? `: ${job.title}` : ''}`)
-          lastStatus = status
-        }
-        if (job && TERMINAL_STATUSES.has(status)) return { job, status }
-        await clock.sleep(pollMs)
-      }
-      return { job, status: job?.status || 'queued', timedOut: true }
+      return pollRelayJob({ listJobs, before, initialJob: job, clock, emit, timeoutMs, pollMs })
     }
   }
 }

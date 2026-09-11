@@ -1,0 +1,40 @@
+id: duplicate-protocol-literals
+valid:
+  - |
+    const options = {
+      expectedStorageFormatVersion: STORAGE_FORMAT_VERSION,
+      network: 'peartube-main'
+    }
+  - |
+    const status = {
+      ready: true,
+      protocolVersion: PROTOCOL_VERSION
+    }
+  - |
+    export { PROTOCOL_VERSION }
+  - |
+    const payload = {
+      expectedVersion: 9
+    }
+  - |
+    interface Ready { protocolVersion: typeof PROTOCOL_VERSION }
+  - |
+    interface Update { expectedVersion: 1 }
+invalid:
+  - |
+    const options = {
+      expectedStorageFormatVersion: 10,
+      network: 'peartube-main'
+    }
+  - |
+    const config = {
+      protocolVersion: 11
+    }
+  - |
+    export const PROTOCOL_VERSION = 42
+  - |
+    const STORAGE_FORMAT_VERSION = 10
+  - |
+    export declare const PROTOCOL_VERSION: 11
+  - |
+    interface Ready { protocolVersion: 11 }

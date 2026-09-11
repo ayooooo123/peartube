@@ -274,38 +274,52 @@ export class SeedPinClient {
   }
 }
 
-function normalizeClientAuth (auth) {
-  if (auth === null) return null
-  if (!auth || typeof auth !== 'object') throw new TypeError('client auth must be an object')
-  const identityPublicKey = typeof auth.identityPublicKey === 'string'
-    ? auth.identityPublicKey
-    : ((b4a.isBuffer(auth.identityPublicKey) || auth.identityPublicKey instanceof Uint8Array) &&
-        auth.identityPublicKey.byteLength === 32
-        ? b4a.toString(auth.identityPublicKey, 'hex')
+function normalizeClientIdentityKey (rawKey) {
+  const identityPublicKey = typeof rawKey === 'string'
+    ? rawKey
+    : ((b4a.isBuffer(rawKey) || rawKey instanceof Uint8Array) && rawKey.byteLength === 32
+        ? b4a.toString(rawKey, 'hex')
         : '')
   if (!/^[0-9a-f]{64}$/.test(identityPublicKey)) {
     throw new TypeError('client identityPublicKey must be a lowercase 32-byte key')
   }
-  const publicKey = auth.deviceKeyPair?.publicKey
-  const secretKey = auth.deviceKeyPair?.secretKey
-  if (!(b4a.isBuffer(publicKey) || publicKey instanceof Uint8Array) || publicKey.byteLength !== 32 ||
-      !(b4a.isBuffer(secretKey) || secretKey instanceof Uint8Array) || secretKey.byteLength !== 64) {
+  return identityPublicKey
+}
+
+function normalizeClientDeviceKeyPair (keyPair) {
+  const publicKey = keyPair?.publicKey
+  const secretKey = keyPair?.secretKey
+  const validPublic = (b4a.isBuffer(publicKey) || publicKey instanceof Uint8Array) && publicKey.byteLength === 32
+  const validSecret = (b4a.isBuffer(secretKey) || secretKey instanceof Uint8Array) && secretKey.byteLength === 64
+  if (!validPublic || !validSecret) {
     throw new TypeError('client deviceKeyPair must contain a 32-byte public and 64-byte secret key')
   }
-  if (!(b4a.isBuffer(auth.deviceProof) || auth.deviceProof instanceof Uint8Array) ||
-      auth.deviceProof.byteLength === 0) {
+  return {
+    publicKey: b4a.from(publicKey),
+    secretKey: b4a.from(secretKey)
+  }
+}
+
+function normalizeClientDeviceProof (proof) {
+  if (!(b4a.isBuffer(proof) || proof instanceof Uint8Array) || proof.byteLength === 0) {
     throw new TypeError('client deviceProof must be bytes')
   }
+  return b4a.from(proof)
+}
+
+function normalizeClientAuth (auth) {
+  if (auth === null) return null
+  if (!auth || typeof auth !== 'object') throw new TypeError('client auth must be an object')
+  const identityPublicKey = normalizeClientIdentityKey(auth.identityPublicKey)
+  const deviceKeyPair = normalizeClientDeviceKeyPair(auth.deviceKeyPair)
+  const deviceProof = normalizeClientDeviceProof(auth.deviceProof)
   const signedDescriptor = auth.signedDescriptor && typeof auth.signedDescriptor === 'object'
     ? JSON.parse(JSON.stringify(auth.signedDescriptor))
     : null
   return {
     identityPublicKey,
-    deviceKeyPair: {
-      publicKey: b4a.from(publicKey),
-      secretKey: b4a.from(secretKey),
-    },
-    deviceProof: b4a.from(auth.deviceProof),
+    deviceKeyPair,
+    deviceProof,
     signedDescriptor,
   }
 }

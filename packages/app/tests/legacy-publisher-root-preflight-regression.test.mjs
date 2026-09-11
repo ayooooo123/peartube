@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { transform } from 'esbuild'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -15,6 +16,32 @@ function readApp(relativePath) {
 
 function readRepo(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8')
+}
+
+async function loadInitPlatformRPC(events) {
+  const source = readRepo('packages/platform/src/rpc.native.ts')
+  const start = source.indexOf('async function runLegacyPublisherRootMigration')
+  const end = source.indexOf('export function terminatePlatformRPC', start)
+  assert.ok(start >= 0 && end > start, 'native RPC init should be available for runtime instrumentation')
+  const result = await transform([
+    'let _publisherSignerBridge = null',
+    'let _initPromise = null',
+    'let _isInitialized = false',
+    "let _startupState = 'idle'",
+    'let _blobServerPort = null',
+    'const nativeRuntimeConfig = {}',
+    'const canReuseMainBridge = async () => false',
+    'const normalizeFsModule = value => value',
+    'const resolveStorageUri = () => "file:///peartube"',
+    'const cleanupHeadlessCastIfActive = async () => {}',
+    'const resolveBundleLaunchFiles = async () => { events.push("resolve"); return { backendPath: "/bundle", backendSource: "", downloaderWorkerPath: "" } }',
+    'const buildNativeWorkerArgs = () => []',
+    'const runNativeLegacyPublisherRootPreflight = async options => { events.push("preflight"); await options.migrateLegacyPublisherRoot({ status: "complete", migrated: 0 }); return { status: "complete", migrated: 0 } }',
+    'const mainBridge = { init: async () => events.push("init"), getBlobServerPort: () => 4321, terminate: async () => {}, isInitialized: () => false }',
+    'const require = moduleName => moduleName === "react-native-bare-kit" ? { Worklet: class Worklet {} } : { EncodingType: { UTF8: "utf8" } }',
+    source.slice(start, end).replace('export async function initPlatformRPC', 'async function initPlatformRPC'),
+  ].join('\n'), { loader: 'ts', target: 'node22' })
+  return new Function('events', `${result.code}\nreturn initPlatformRPC`)(events)
 }
 
 test('mobile bundle statically includes a migration-only preflight entrypoint while normal backend boot has no migration callback', () => {
@@ -34,18 +61,22 @@ test('mobile bundle statically includes a migration-only preflight entrypoint wh
   assert.doesNotMatch(normalContextCall, /migrateLegacyPublisherRoot|secretKey|challengeSignature/)
 })
 
-test('native platform runs the short-lived preflight after bundle resolution and before mainBridge.init, and skips it without a callback', () => {
-  const source = readRepo('packages/platform/src/rpc.native.ts')
-  const resolvedIndex = source.indexOf('await resolveBundleLaunchFiles')
-  const preflightIndex = source.indexOf('await runNativeLegacyPublisherRootPreflight')
-  const initIndex = source.indexOf('await mainBridge.init()')
+test('native platform runs the short-lived preflight after bundle resolution and before mainBridge.init, and skips it without a callback', async () => {
+  const events = []
+  let callbackCalled = 0
+  const initPlatformRPC = await loadInitPlatformRPC(events)
+  await initPlatformRPC({
+    backendSource: 'backend-source',
+    storagePath: '/storage',
+    migrateLegacyPublisherRoot: async () => { callbackCalled += 1 },
+  })
+  assert.deepEqual(events, ['resolve', 'preflight', 'init'])
+  assert.equal(callbackCalled, 1)
 
-  assert.notEqual(resolvedIndex, -1)
-  assert.notEqual(preflightIndex, -1)
-  assert.notEqual(initIndex, -1)
-  assert.ok(resolvedIndex < preflightIndex, 'bundle must be persisted/resolved before launching preflight')
-  assert.ok(preflightIndex < initIndex, 'preflight worklet must settle before normal backend acquires Corestore')
-  assert.match(source, /if \(typeof config\.migrateLegacyPublisherRoot === 'function'\)/)
+  const skippedEvents = []
+  const skippedInit = await loadInitPlatformRPC(skippedEvents)
+  await skippedInit({ backendSource: 'backend-source', storagePath: '/storage' })
+  assert.deepEqual(skippedEvents, ['resolve', 'init'])
 })
 
 test('native layout supplies the privileged migration callback directly from the SecureStore vault', () => {

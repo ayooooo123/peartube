@@ -218,19 +218,7 @@ function invalid(name, reason) {
   throw new TypeError(`${name} ${reason}`)
 }
 
-function validateField(name, value, spec) {
-  if (value === undefined || value === null) {
-    if (spec.required) invalid(name, 'is required')
-    return
-  }
-  if (spec.kind === 'identity') {
-    if (typeof value !== 'string' || !HEX_32.test(value)) invalid(name, 'must be canonical lowercase 64-hex')
-    return
-  }
-  if (spec.kind === 'protocolId') {
-    if (typeof value !== 'string' || !HEX_32.test(value)) invalid(name, 'must be a canonical lowercase 32-byte protocol ID')
-    return
-  }
+function validateContentField(name, value, spec) {
   if (spec.kind === 'string') {
     if (typeof value !== 'string' || value.length === 0) invalid(name, 'must be a non-empty string')
     if (Buffer.byteLength(value, 'utf8') > spec.limit) invalid(name, 'exceeds its UTF-8 byte limit')
@@ -247,6 +235,22 @@ function validateField(name, value, spec) {
     return
   }
   if (spec.kind === 'enum' && !spec.values.has(value)) invalid(name, 'has an invalid state')
+}
+
+function validateField(name, value, spec) {
+  if (value === undefined || value === null) {
+    if (spec.required) invalid(name, 'is required')
+    return
+  }
+  if (spec.kind === 'identity') {
+    if (typeof value !== 'string' || !HEX_32.test(value)) invalid(name, 'must be canonical lowercase 64-hex')
+    return
+  }
+  if (spec.kind === 'protocolId') {
+    if (typeof value !== 'string' || !HEX_32.test(value)) invalid(name, 'must be a canonical lowercase 32-byte protocol ID')
+    return
+  }
+  validateContentField(name, value, spec)
 }
 
 export function validateIndexerRecord(collection, record) {

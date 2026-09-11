@@ -335,9 +335,13 @@ test('a block a player is reading through is not evicted until the window moves 
   // Two blocks inside the prioritized playback window. Taking them back off
   // disk now would cost the player a bucket round trip mid-stream.
   const playing = new Set([0, 1])
+  let pinCheckFails = false
   const relay = await openRelay(t, directory, {
     bucket,
-    isPinned: ({ index }) => playing.has(index),
+    isPinned: ({ index }) => {
+      if (pinCheckFails) throw new Error('playback pin state is unavailable')
+      return playing.has(index) ? true : undefined
+    },
   })
   const core = relay.store.get({ name: 'media' })
   await core.ready()
@@ -360,12 +364,23 @@ test('a block a player is reading through is not evicted until the window moves 
 
   // Pinning delays an eviction, it does not cancel one.
   playing.clear()
+  pinCheckFails = true
+  await relay.storage.offloadSweep()
+  t.alike(
+    await relay.residency(discoveryKey),
+    { bytes: WINDOW_BYTES + 2 * BLOCK_SIZE, indices: [0, 1, ...WINDOW_INDICES] },
+    'a failed pin lookup preserves the local bytes until the decision recovers'
+  )
+  pinCheckFails = false
   await relay.storage.offloadSweep()
   t.alike(
     await relay.residency(discoveryKey),
     { bytes: WINDOW_BYTES, indices: WINDOW_INDICES },
     'the first sweep past the playhead takes them'
   )
+  const settled = await relay.storage.offloadSweep()
+  t.is(settled.eviction.pinnedBytes, 0, 'a sweep inside the window clears the old pinned gauge')
+  t.is(settled.eviction.overageBytes, 0, 'the recovered relay has no stale overage')
   t.is(await advertised(core, BLOCK_COUNT), BLOCK_COUNT, 'and every block is still advertised')
 
   await core.close()
@@ -523,4 +538,242 @@ test('a core held back from eviction keeps its blocks and still restores the one
   // A second sweep changes nothing for the held-back core.
   await storage.offloadSweep()
   t.is(await residency(meta), BLOCK_COUNT * BLOCK_SIZE, 'a later sweep still leaves it whole')
+})
+
+test('relay-wide media residency budget: multiple offload-backed cores converge within one global windowBytes', async (t) => {
+  const bucket = createBucket()
+  const directory = mkdtempSync(join(tmpdir(), 'peartube-multi-core-residency-'))
+  t.teardown(() => rmSync(directory, { recursive: true, force: true }))
+
+  const relay = await openRelay(t, directory, { bucket, window: WINDOW_BYTES })
+  const media1 = relay.store.get({ name: 'media-1' })
+  const media2 = relay.store.get({ name: 'media-2' })
+  await Promise.all([media1.ready(), media2.ready()])
+
+  const blocks1 = blocksOf(BLOCK_COUNT)
+  const blocks2 = blocksOf(BLOCK_COUNT)
+  for (const block of blocks1) await media1.append(block)
+  for (const block of blocks2) await media2.append(block)
+
+  const dKey1 = b4a.from(media1.discoveryKey)
+  const dKey2 = b4a.from(media2.discoveryKey)
+
+  const stats = await relay.storage.offloadSweep()
+
+  const after1 = await relay.residency(dKey1)
+  const after2 = await relay.residency(dKey2)
+  const totalResident = after1.bytes + after2.bytes
+
+  t.ok(
+    totalResident <= WINDOW_BYTES,
+    `total resident media bytes across all cores (${totalResident}) converges within the relay-wide window (${WINDOW_BYTES})`
+  )
+  t.is(stats.eviction.residentBytes, totalResident, 'reported residentBytes matches the physical sum across cores')
+  t.is(stats.eviction.cores, 2, 'two offload-backed cores participated in the sweep')
+
+  // Both titles still read back whole, byte-for-byte, through the wrapper.
+  t.alike(await readAll(media1, BLOCK_COUNT), blocks1, 'media 1 reads back whole')
+  t.alike(await readAll(media2, BLOCK_COUNT), blocks2, 'media 2 reads back whole')
+
+  await Promise.all([media1.close(), media2.close()])
+})
+
+test('multi-core residency overage: pinned blocks in multiple cores stay resident and report as visible overage', async (t) => {
+  const bucket = createBucket()
+  const directory = mkdtempSync(join(tmpdir(), 'peartube-multi-core-pinned-'))
+  t.teardown(() => rmSync(directory, { recursive: true, force: true }))
+
+  const pinnedMap = new Map()
+  const relay = await openRelay(t, directory, {
+    bucket,
+    window: WINDOW_BYTES,
+    isPinned: ({ keyHex, index }) => {
+      const set = pinnedMap.get(keyHex)
+      return set ? set.has(index) : false
+    }
+  })
+
+  const media1 = relay.store.get({ name: 'media-pinned-1' })
+  const media2 = relay.store.get({ name: 'media-pinned-2' })
+  await Promise.all([media1.ready(), media2.ready()])
+
+  const hex1 = b4a.toString(media1.key, 'hex')
+  const hex2 = b4a.toString(media2.key, 'hex')
+  pinnedMap.set(hex1, new Set([0])) // Pin block 0 in core 1
+  pinnedMap.set(hex2, new Set([1])) // Pin block 1 in core 2
+
+  for (const block of blocksOf(BLOCK_COUNT)) await media1.append(block)
+  for (const block of blocksOf(BLOCK_COUNT)) await media2.append(block)
+
+  const stats = await relay.storage.offloadSweep()
+
+  const dKey1 = b4a.from(media1.discoveryKey)
+  const dKey2 = b4a.from(media2.discoveryKey)
+  const after1 = await relay.residency(dKey1)
+  const after2 = await relay.residency(dKey2)
+  const totalResident = after1.bytes + after2.bytes
+
+  t.ok(after1.indices.includes(0), 'pinned block 0 stayed on disk in core 1')
+  t.ok(after2.indices.includes(1), 'pinned block 1 stayed on disk in core 2')
+  t.is(stats.eviction.pinned, 2, 'sweep explicitly reported 2 pinned blocks')
+  t.is(stats.eviction.pinnedBytes, 2 * BLOCK_SIZE, 'pinnedBytes reflects the exact pinned overage')
+  t.is(stats.eviction.overageBytes, Math.max(0, totalResident - WINDOW_BYTES), 'overageBytes matches excess over window')
+
+  await Promise.all([media1.close(), media2.close()])
+})
+
+test('bounded retrievability assessment distinguishes physical local DATA, verified S3, and corrupt/missing blocks', async (t) => {
+  const bucket = createBucket()
+  const directory = mkdtempSync(join(tmpdir(), 'peartube-assessment-test-'))
+  t.teardown(() => rmSync(directory, { recursive: true, force: true }))
+
+  const relay = await openRelay(t, directory, { bucket, window: WINDOW_BYTES })
+  const core = relay.store.get({ name: 'media-assess' })
+  await core.ready()
+
+  const blocks = blocksOf(BLOCK_COUNT)
+  for (const block of blocks) await core.append(block)
+
+  // Sweep offloads blocks outside the window
+  await relay.storage.offloadSweep()
+
+  // Full assessment: blocks within window are resident; blocks outside are retrievable from S3
+  const assessment = await relay.storage.assessRetrievability({ core })
+  t.is(assessment.success, true)
+  t.is(assessment.requestedBlocks, BLOCK_COUNT)
+  t.is(assessment.assessedBlocks, BLOCK_COUNT)
+  t.ok(assessment.residentBlocks > 0, 'some blocks are resident on local disk')
+  t.ok(assessment.remoteRetrievableBlocks > 0, 'offloaded blocks are verified in S3')
+  t.is(assessment.residentBlocks + assessment.remoteRetrievableBlocks, BLOCK_COUNT)
+  t.is(assessment.isRetrievable, true, 'title is 100% retrievable')
+  t.is(assessment.isLocallyResident, false, 'title is not 100% locally resident (some are in S3)')
+  t.is(assessment.logicalBitfieldBlocks, BLOCK_COUNT, 'bitfield claims all blocks')
+
+  // Corrupt an object in the bucket
+  const offloadedKey = bucket.objects.keys().next().value
+  if (offloadedKey) {
+    bucket.objects.set(offloadedKey, b4a.alloc(BLOCK_SIZE, 0xff)) // corrupt bytes!
+    const corruptAssessment = await relay.storage.assessRetrievability({ core })
+    t.ok(corruptAssessment.corruptBlocks > 0, 'corrupt S3 block is honestly reported as corrupt')
+    t.is(corruptAssessment.isRetrievable, false, 'corrupt object prevents isRetrievable from claiming true')
+    t.is(corruptAssessment.hasUnretrievable, true, 'hasUnretrievable is true')
+  }
+
+  // Bounded probe with maxBlocks: does not promote partial probe to whole-range custody
+  const bounded = await relay.storage.assessRetrievability({ core, maxBlocks: 2 })
+  t.is(bounded.truncated, true, 'probe bounded by maxBlocks is marked truncated')
+  t.is(bounded.assessedBlocks, 2)
+  t.is(bounded.requestedBlocks, BLOCK_COUNT)
+  t.is(bounded.isLocallyResident, false, 'truncated probe never claims isLocallyResident')
+  t.is(bounded.isRetrievable, false, 'truncated probe never claims isRetrievable')
+  t.ok(bounded.nextCursor !== null, 'truncated probe provides nextCursor for continuation')
+
+  // Resuming with nextCursor works cleanly
+  const continued = await relay.storage.assessRetrievability({ core, cursor: bounded.nextCursor, maxBlocks: 2 })
+  t.is(continued.assessedBlocks, 2, 'resumed probe checks next chunk of blocks')
+
+  // A full drain that starts from a caller continuation must not silently
+  // restart at block zero. The corrupt object keeps the final verdict false,
+  // but the assessed count still proves the starting cursor was honored.
+  const drained = await relay.storage.assessRetrievability({
+    core,
+    cursor: bounded.nextCursor,
+    maxBlocks: 2,
+    followContinuations: true,
+  })
+  t.is(drained.assessedBlocks, BLOCK_COUNT - bounded.assessedBlocks,
+    'followContinuations drains only the suffix named by the supplied cursor')
+
+  await core.close()
+})
+
+test('scalability contract: writes trigger eviction convergence, and small reads incur zero disk rescans', async (t) => {
+  const bucket = createBucket()
+  const directory = mkdtempSync(join(tmpdir(), 'peartube-scalability-'))
+  t.teardown(() => rmSync(directory, { recursive: true, force: true }))
+
+  let rawBlockStreams = 0
+  const rawStorage = Hypercore.defaultStorage(directory)
+  const origResumeCore = rawStorage.resumeCore.bind(rawStorage)
+  const origCreateCore = rawStorage.createCore.bind(rawStorage)
+
+  function instrumentCore (coreStorage) {
+    if (!coreStorage || typeof coreStorage.createBlockStream !== 'function') return coreStorage
+    const origStream = coreStorage.createBlockStream.bind(coreStorage)
+    coreStorage.createBlockStream = function (...args) {
+      rawBlockStreams++
+      return origStream(...args)
+    }
+    return coreStorage
+  }
+
+  rawStorage.resumeCore = async (...args) => instrumentCore(await origResumeCore(...args))
+  rawStorage.createCore = async (...args) => instrumentCore(await origCreateCore(...args))
+
+  const storage = createOffloadStorage({
+    storage: rawStorage,
+    resolveStore: (identity) => (typeof identity.keyHex === 'string' ? storeFor(bucket, identity.keyHex) : null),
+    eviction: { windowBytes: WINDOW_BYTES, sweepEveryReads: 10 }
+  })
+  const store = new Corestore(storage)
+  await store.ready()
+  t.teardown(() => store.close().catch(() => {}))
+
+  let onFirstPut = null
+  const autoSweepTriggered = new Promise((resolve) => { onFirstPut = resolve })
+  const origPut = bucket.provider.putBlock.bind(bucket.provider)
+  bucket.provider.putBlock = async (args) => {
+    onFirstPut?.()
+    return origPut(args)
+  }
+
+  const media1 = store.get({ name: 'scale-media-1' })
+  const media2 = store.get({ name: 'scale-media-2' })
+  await Promise.all([media1.ready(), media2.ready()])
+
+  const blocks1 = blocksOf(BLOCK_COUNT)
+  const blocks2 = blocksOf(BLOCK_COUNT)
+  for (const b of blocks1) await media1.append(b)
+  for (const b of blocks2) await media2.append(b)
+
+  // Proves writes automatically triggered the sweep:
+  await autoSweepTriggered
+
+  // Settle any remaining queued sweep work:
+  await storage.offloadSweep()
+
+  const dKey1 = b4a.from(media1.discoveryKey)
+  const dKey2 = b4a.from(media2.discoveryKey)
+  const after1 = await (async () => {
+    const v = await rawStorage.resumeCore(dKey1)
+    let bytes = 0
+    for await (const b of v.createBlockStream()) bytes += b.value.byteLength
+    return bytes
+  })()
+  const after2 = await (async () => {
+    const v = await rawStorage.resumeCore(dKey2)
+    let bytes = 0
+    for await (const b of v.createBlockStream()) bytes += b.value.byteLength
+    return bytes
+  })()
+  const total = after1 + after2
+  t.ok(total <= WINDOW_BYTES, 'writes triggered relay-wide convergence within the aggregate window')
+
+  // Capture stream count after convergence:
+  const streamsAfterWrites = rawBlockStreams
+
+  // Perform many small reads across both cores:
+  for (let i = 0; i < 50; i++) {
+    await media1.get(i % BLOCK_COUNT)
+    await media2.get(i % BLOCK_COUNT)
+  }
+
+  // Assert no additional raw createBlockStream calls were triggered by small reads!
+  t.is(
+    rawBlockStreams,
+    streamsAfterWrites,
+    'small reads perform zero disk rescans / reconciliation streams'
+  )
+
+  await Promise.all([media1.close(), media2.close()])
 })

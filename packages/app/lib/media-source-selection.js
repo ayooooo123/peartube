@@ -160,23 +160,31 @@ function backendScore(source) {
  * backend, and this heuristic must never be allowed to disagree with it.
  * ---------------------------------------------------------------------- */
 
-function legacyAvailabilityScore(source) {
-  const assessed = assessedAvailability(source)
-  if (assessed) {
-    if (assessed.offlinePlayable === true) return 260
-    const state = effectiveAvailabilityState(assessed)
-    if (state === 'healthy') return 140
-    if (state === 'limited') return 90
-    return -160
-  }
-  const status = legacyAvailabilityStatus(source) || source?.archiveStatus
-  if (truthy(source?.localComplete) || truthy(source?.isLocal) || status === 'local' || status === 'complete-local') return 260
-  if (truthy(source?.cached) || truthy(source?.retained) || status === 'cached' || status === 'retained') return 220
-  if (truthy(source?.archived) || status === 'archived' || status === 'pledged') return 170
-  if (truthy(source?.available) || status === 'available' || status === 'online' || status === 'seeded') return 140
+function assessedAvailabilityScore(assessed) {
+  if (assessed.offlinePlayable === true) return 260
+  const state = effectiveAvailabilityState(assessed)
+  if (state === 'healthy') return 140
+  if (state === 'limited') return 90
+  return -160
+}
+
+// Tier order is the policy: the first tier that matches on either a legacy
+// residency flag or the resolved status string wins, strongest residency
+// first. A flag in a higher tier always beats a status string in a lower one.
+function legacyStatusScore(source, status) {
+  if (truthy(source.localComplete) || truthy(source.isLocal) || status === 'local' || status === 'complete-local') return 260
+  if (truthy(source.cached) || truthy(source.retained) || status === 'cached' || status === 'retained') return 220
+  if (truthy(source.archived) || status === 'archived' || status === 'pledged') return 170
+  if (truthy(source.available) || status === 'available' || status === 'online' || status === 'seeded') return 140
   if (status === 'partial') return 90
   if (status === 'unavailable' || status === 'missing' || status === 'blocked') return -160
   return 0
+}
+
+function legacyAvailabilityScore(source) {
+  const assessed = assessedAvailability(source)
+  if (assessed) return assessedAvailabilityScore(assessed)
+  return legacyStatusScore(source, legacyAvailabilityStatus(source) || source.archiveStatus)
 }
 
 function legacyFormatScore(source) {
@@ -201,27 +209,7 @@ function legacyPolicyBonus(source, policy) {
   return bonus
 }
 
-export function normalizeMediaSource(source = {}, entity = {}) {
-  if (!nonArrayObject(source)) return null
-
-  const publicationId = firstNonEmptyString([
-    source.publicationId,
-    source.id,
-    source.manifest?.publicationId,
-    source.publication?.id,
-    source.publication?.publicationId,
-  ], null)
-  const rendition = nonArrayObject(source.rendition) ? source.rendition : nonArrayObject(source.selectedRendition) ? source.selectedRendition : null
-  const renditionId = firstNonEmptyString([
-    source.renditionId,
-    rendition?.renditionId,
-    rendition?.id,
-    source.playbackRenditionId,
-  ], null)
-  const videoId = firstNonEmptyString([source.videoId, source.video?.id, source.item?.videoId], null)
-  const id = firstNonEmptyString([source.id, videoId, publicationId, renditionId, source.path], null)
-  if (!nonEmptyString(id)) return null
-
+function createMediaSourceIdentity(source, entity, publicationId, renditionId, videoId, id) {
   const publisherId = sourcePublisherId(source)
   const publisherName = sourcePublisherName(source)
   const channelKey = firstNonEmptyString([source.channelKey, source.driveKey, source.channel?.key, publisherId], null)
@@ -245,36 +233,75 @@ export function normalizeMediaSource(source = {}, entity = {}) {
     path: firstNonEmptyString([source.path, source.filePath, source.video?.path], null),
     publicBeeKey: firstNonEmptyString([source.publicBeeKey, source.video?.publicBeeKey], null),
     playbackKey,
-    availability: nonArrayObject(source.availability) ? source.availability : null,
-    availabilityStatus: legacyAvailabilityStatus(source),
-    availabilityState: source.availabilityState || null,
-    archiveStatus: source.archiveStatus || source.retentionStatus || null,
-    localComplete: !!source.localComplete,
-    cached: !!source.cached,
-    retained: !!source.retained,
-    available: source.available !== false,
-    verified: !!source.verified || source.verificationStatus === 'verified',
-    formatSupported: source.formatSupported !== false,
-    playbackSupported: source.playbackSupported !== false,
-    stale: source.stale === true,
-    incomplete: source.incomplete === true,
-    // Backend selection verdict, carried through untouched. `eligible` stays
-    // null when the source never reached the selector so the legacy heuristic
-    // can still be told apart from a genuine backend "no".
-    selected: source.selected === true,
-    eligible: typeof source.eligible === 'boolean' ? source.eligible : null,
-    selectionReasonCodes: asArray(source.selectionReasonCodes),
-    rejectionReasonCodes: asArray(source.rejectionReasonCodes),
-    score: backendScore(source),
-    playable: isMediaSourcePlayable({ ...source, publicationId, renditionId }),
-    playbackRef: publicationId && renditionId ? { publicationId, renditionId } : null,
-    height: finiteNumber(source.height) ? source.height : finiteNumber(rendition?.height) ? rendition.height : null,
-    bitrate: finiteNumber(source.bitrate) ? source.bitrate : finiteNumber(rendition?.bitrate) ? rendition.bitrate : null,
-    publishedAt: source.publishedAt || source.uploadedAt || source.createdAt || null,
-    provenance: asArray(source.provenance),
-    moderation: source.moderation || source.policyDecision || null,
-    raw: source,
   }
+}
+
+function assignMediaSourceResidency(target, source) {
+  // Residency facts: the assessed object wins when present; the legacy
+  // strings and flags below only ever describe pre-contract sources.
+  target.availability = assessedAvailability(source)
+  target.availabilityStatus = legacyAvailabilityStatus(source)
+  target.availabilityState = source.availabilityState || null
+  target.archiveStatus = source.archiveStatus || source.retentionStatus || null
+  target.localComplete = !!source.localComplete
+  target.cached = !!source.cached
+  target.retained = !!source.retained
+  target.available = source.available !== false
+  target.verified = !!source.verified || source.verificationStatus === 'verified'
+  target.formatSupported = source.formatSupported !== false
+  target.playbackSupported = source.playbackSupported !== false
+  target.stale = source.stale === true
+  target.incomplete = source.incomplete === true
+}
+
+function assignMediaSourceSelection(target, source, publicationId, renditionId) {
+  // Backend selection verdict, carried through untouched. `eligible` stays
+  // null when the source never reached the selector so the legacy heuristic
+  // can still be told apart from a genuine backend "no".
+  target.selected = source.selected === true
+  target.eligible = typeof source.eligible === 'boolean' ? source.eligible : null
+  target.selectionReasonCodes = asArray(source.selectionReasonCodes)
+  target.rejectionReasonCodes = asArray(source.rejectionReasonCodes)
+  target.score = backendScore(source)
+  target.playable = isMediaSourcePlayable({ ...source, publicationId, renditionId })
+  target.playbackRef = publicationId && renditionId ? { publicationId, renditionId } : null
+}
+
+function assignMediaSourceMetadata(target, source, rendition) {
+  target.height = finiteNumber(source.height) ? source.height : finiteNumber(rendition?.height) ? rendition.height : null
+  target.bitrate = finiteNumber(source.bitrate) ? source.bitrate : finiteNumber(rendition?.bitrate) ? rendition.bitrate : null
+  target.publishedAt = source.publishedAt || source.uploadedAt || source.createdAt || null
+  target.provenance = asArray(source.provenance)
+  target.moderation = source.moderation || source.policyDecision || null
+  target.raw = source
+}
+
+export function normalizeMediaSource(source = {}, entity = {}) {
+  if (!nonArrayObject(source)) return null
+
+  const publicationId = firstNonEmptyString([
+    source.publicationId,
+    source.id,
+    source.manifest?.publicationId,
+    source.publication?.id,
+    source.publication?.publicationId,
+  ], null)
+  const rendition = nonArrayObject(source.rendition) ? source.rendition : nonArrayObject(source.selectedRendition) ? source.selectedRendition : null
+  const renditionId = firstNonEmptyString([
+    source.renditionId,
+    rendition?.renditionId,
+    rendition?.id,
+    source.playbackRenditionId,
+  ], null)
+  const videoId = firstNonEmptyString([source.videoId, source.video?.id, source.item?.videoId], null)
+  const id = firstNonEmptyString([source.id, videoId, publicationId, renditionId, source.path], null)
+  if (!nonEmptyString(id)) return null
+
+  const normalized = createMediaSourceIdentity(source, entity, publicationId, renditionId, videoId, id)
+  assignMediaSourceResidency(normalized, source)
+  assignMediaSourceSelection(normalized, source, publicationId, renditionId)
+  assignMediaSourceMetadata(normalized, source, rendition)
+  return normalized
 }
 
 function collectCandidateSources(entity = {}) {

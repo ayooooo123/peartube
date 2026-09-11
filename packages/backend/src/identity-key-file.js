@@ -145,7 +145,7 @@ export async function readIdentityKeyFile(storagePath) {
       if (!primaryKey || !identityPublicKey) continue;
 
       return { primaryKey, identityPublicKey };
-    } catch {}
+    } catch { /* unreadable or malformed candidate; try the next one */ }
   }
 
   debugIdentityKeyFile('readIdentityKeyFile miss')
@@ -167,7 +167,7 @@ export async function readPrimaryKeyFile(storagePath) {
 
     const primaryKey = parseHexKey(parsed.primaryKey);
     return primaryKey || null;
-  } catch {}
+  } catch { /* unreadable or malformed key file is treated as a miss */ }
 
   debugIdentityKeyFile('readPrimaryKeyFile miss')
   return null;
@@ -280,7 +280,7 @@ export async function writeIdentityKeyFile(storagePath, { primaryKey, identityPu
   } catch (error) {
     try {
       if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-    } catch {}
+    } catch { /* tmp cleanup is best-effort; the write error is rethrown */ }
     throw error;
   }
 }
@@ -315,7 +315,7 @@ export async function writePrimaryKeyFile(storagePath, primaryKey) {
   } catch (error) {
     try {
       if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-    } catch {}
+    } catch { /* tmp cleanup is best-effort; the write error is rethrown */ }
     throw error;
   }
 }

@@ -52,7 +52,9 @@ import type {
   ProviderProtocolNamespace,
   ProviderPublication,
   ProviderResolution,
+  ProviderSearchDiagnostics,
   ProviderSearchHit,
+  ProviderSearchSelector,
   ProviderStatus,
   ProviderStream,
 } from '@peartube/host'
@@ -107,9 +109,10 @@ export type {
   ProviderPolicy,
   ProviderPublication,
   ProviderResolution,
+  ProviderSearchDiagnostics,
   ProviderSearchHit,
+  ProviderSearchSelector,
   ProviderStatus,
-  ProviderStream,
 }
 
 export type HostProtocolVersion = typeof PROTOCOL_VERSION
@@ -872,7 +875,7 @@ export function createProviderRpc(ensureClient: () => ProtocolClientLike) {
   }
 
   return {
-    async search(request: { query: string; cursor?: string; limit?: number }) {
+    async search(request: Parameters<ProviderProtocolNamespace['search']>[0]) {
       return (await provider()).search(request)
     },
     async resolveProviderRef(request: { resolutionRef: string }) {

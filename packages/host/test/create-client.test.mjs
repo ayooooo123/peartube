@@ -81,6 +81,27 @@ class FakeHRPC {
   }
 }
 
+const READINESS_SETTLE_TIMEOUT_MS = 100
+
+async function observeReady(client) {
+  let timer
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ timedOut: true }), READINESS_SETTLE_TIMEOUT_MS)
+  })
+
+  try {
+    return await Promise.race([
+      client.ready().then(
+        value => ({ value }),
+        error => ({ error })
+      ),
+      timeout
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 test('createProtocolClient remaps media graph update events', async (t) => {
   FakeHRPC.instances.length = 0
   const events = []
@@ -385,6 +406,124 @@ test('createProtocolClient fails fast on protocol version mismatch', async (t) =
   t.is(error.message, 'PROTOCOL_VERSION_MISMATCH')
 })
 
+test('createProtocolClient caches readiness emitted before ready()', async (t) => {
+  FakeHRPC.instances.length = 0
+
+  class EventReadyHRPC extends FakeHRPC {
+    constructor() {
+      super()
+      this.statusCalls = 0
+    }
+
+    getStatus() {
+      this.statusCalls++
+      return Promise.reject(new Error('status probe must not run after readiness event'))
+    }
+
+    onEventReady(handler) {
+      this.handlers.ready = handler
+    }
+  }
+
+  const client = createProtocolClient({
+    stream: {},
+    HRPCImpl: EventReadyHRPC
+  })
+  const rpc = FakeHRPC.instances[0]
+  const expected = {
+    blobServerPort: 4242,
+    blobServerReady: true,
+    blobServerError: null,
+    protocolVersion: PROTOCOL_VERSION
+  }
+
+  rpc.handlers.ready(expected)
+
+  t.alike(await client.ready(), expected)
+  t.alike(await client.ready(), expected)
+  t.is(rpc.statusCalls, 0)
+})
+
+test('createProtocolClient caches a terminal host error emitted before ready()', async (t) => {
+  FakeHRPC.instances.length = 0
+
+  class FailingHRPC extends FakeHRPC {
+    constructor() {
+      super()
+      this.statusCalls = 0
+    }
+
+    getStatus() {
+      this.statusCalls++
+      return Promise.reject(new Error('status probe failed'))
+    }
+  }
+
+  const client = createProtocolClient({
+    stream: {},
+    HRPCImpl: FailingHRPC
+  })
+  const rpc = FakeHRPC.instances[0]
+  rpc.handlers.error({
+    code: HOST_ERROR_CODES.HOST_START_FAILED,
+    message: 'boom',
+    retryable: false
+  })
+
+  const first = await observeReady(client)
+  t.ok(first.error)
+  if (!first.error) return
+  t.is(first.error.code, HOST_ERROR_CODES.HOST_START_FAILED)
+  t.is(first.error.message, 'boom')
+
+  const second = await observeReady(client)
+  t.ok(second.error)
+  if (!second.error) return
+  t.is(second.error.code, HOST_ERROR_CODES.HOST_START_FAILED)
+  t.is(rpc.statusCalls, 0)
+})
+
+test('createProtocolClient caches a protocol mismatch emitted before ready()', async (t) => {
+  FakeHRPC.instances.length = 0
+
+  class MismatchedEventHRPC extends FakeHRPC {
+    constructor() {
+      super()
+      this.statusCalls = 0
+    }
+
+    getStatus() {
+      this.statusCalls++
+      return Promise.reject(new Error('status probe failed'))
+    }
+
+    onEventReady(handler) {
+      this.handlers.ready = handler
+    }
+  }
+
+  const client = createProtocolClient({
+    stream: {},
+    HRPCImpl: MismatchedEventHRPC
+  })
+  const rpc = FakeHRPC.instances[0]
+  rpc.handlers.ready({
+    blobServerPort: 4242,
+    protocolVersion: PROTOCOL_VERSION + 1
+  })
+
+  const first = await observeReady(client)
+  t.ok(first.error)
+  if (!first.error) return
+  t.is(first.error.code, HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH)
+
+  const second = await observeReady(client)
+  t.ok(second.error)
+  if (!second.error) return
+  t.is(second.error.code, HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH)
+  t.is(rpc.statusCalls, 0)
+})
+
 test('createProtocolClient rejects ready once when host error event arrives', async (t) => {
   FakeHRPC.instances.length = 0
   const hostErrors = []
@@ -559,6 +698,43 @@ test('createProtocolClient rejects ready when the transport closes before host r
   t.is(error.code, HOST_ERROR_CODES.TRANSPORT_DISCONNECTED)
   t.is(error.retryable, true)
   t.is(error.message, 'Transport closed before host became ready: close')
+})
+
+test('createProtocolClient rejects late ready calls after transport close', async (t) => {
+  FakeHRPC.instances.length = 0
+
+  class ClosedHRPC extends FakeHRPC {
+    constructor() {
+      super()
+      this.statusCalls = 0
+    }
+
+    getStatus() {
+      this.statusCalls++
+      return Promise.reject(new Error('status probe failed'))
+    }
+  }
+
+  const stream = new EventEmitter()
+  const client = createProtocolClient({
+    stream,
+    HRPCImpl: ClosedHRPC
+  })
+  const rpc = FakeHRPC.instances[0]
+  stream.emit('close')
+
+  const first = await observeReady(client)
+  t.ok(first.error)
+  if (!first.error) return
+  t.is(first.error.code, HOST_ERROR_CODES.TRANSPORT_DISCONNECTED)
+  t.is(first.error.message, 'Transport closed before host became ready: close')
+
+  const second = await observeReady(client)
+  t.ok(second.error)
+  if (!second.error) return
+  t.is(second.error.code, HOST_ERROR_CODES.TRANSPORT_DISCONNECTED)
+  t.is(second.error.message, 'Transport closed before host became ready: close')
+  t.is(rpc.statusCalls, 0)
 })
 
 test('createProtocolClient exposes typed publisher catalog provision, root prepare, and submit methods', async (t) => {

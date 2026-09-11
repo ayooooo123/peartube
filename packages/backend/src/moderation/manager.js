@@ -7,6 +7,26 @@ export function enforceModerationDecision(decision = {}, operation = '') {
   if (operation === 'seed' && (decision.action === 'not-seeded' || decision.action === 'not-downloaded')) return { allowed: false, reason: decision.action, evidence: decision.evidence || [] }
   return { allowed: true, reason: null, evidence: decision.evidence || [] }
 }
+function summarizeSyncResult({ ingested, rejected, duplicates, firstRejectionCode, nextCursor }) {
+  if (ingested === 0 && rejected > 0) {
+    return { status: 'rejected', errorCode: firstRejectionCode, nextCursor, ingested, rejected, duplicates }
+  }
+  if (ingested === 0 && duplicates > 0) {
+    return { status: 'rejected', errorCode: 'DUPLICATE_RECORD', nextCursor, ingested, rejected, duplicates }
+  }
+  if (rejected === 0 && duplicates === 0) {
+    return { status: nextCursor == null ? 'complete' : 'partial', nextCursor }
+  }
+  return {
+    status: nextCursor == null ? 'complete' : 'partial',
+    errorCode: firstRejectionCode,
+    nextCursor,
+    ingested,
+    rejected,
+    duplicates,
+  }
+}
+
 
 export function createModerationManager(options = {}) {
   const now = typeof options.now === 'function' ? options.now : () => Date.now()
@@ -141,117 +161,134 @@ export function createModerationManager(options = {}) {
       if (!subscribed.has(moderatorId)) return { status: 'not-subscribed' }
       let cursor = startCursor ?? checkpoints.get(moderatorId)?.cursor ?? '0'
       if (cursor == null) return { status: 'complete', nextCursor: null, ingested: 0 }
-      let ingested = 0
-      let rejected = 0
-      let duplicates = 0
-      let processed = 0
-      let firstRejectionCode = null
-      let changed = 0
+      const counts = {
+        ingested: 0,
+        rejected: 0,
+        duplicates: 0,
+        processed: 0,
+        firstRejectionCode: null,
+        changed: 0,
+      }
       async function persistAndNotify() {
         await persistState()
-        if (changed === 0) return
-        const accepted = changed
+        if (counts.changed === 0) return
+        const accepted = counts.changed
         await onRecordsChanged({ reason: 'records-accepted', moderatorId, accepted, removed: 0 })
-        changed = 0
+        counts.changed = 0
+      }
+      async function validateFeedPage(pageCursor, page) {
+        let verified
+        try {
+          verified = await verifyModerationFeedPage(page?.envelope, {
+            moderatorId,
+            now: now(),
+            supportedCapabilities: options.supportedCapabilities,
+          })
+        } catch (error) {
+          if (typeof error?.code === 'string' && error.code.startsWith('PROTOCOL_')) {
+            return { errorResult: { status: 'quarantined', errorCode: error.code } }
+          }
+          throw error
+        }
+        if (!verified) return { errorResult: { status: 'quarantined', errorCode: 'INVALID_PAGE' } }
+        if (verified.body.pageCursor !== pageCursor) return { errorResult: { status: 'quarantined', errorCode: 'STALE_OR_FORKED_CURSOR' } }
+
+        const pageKey = `${moderatorId}\0${pageCursor}`
+        const existing = pageStates.get(pageKey)
+        if (existing?.pageId !== undefined && existing.pageId !== verified.pageId) {
+          return { errorResult: { status: 'quarantined', errorCode: 'STALE_OR_FORKED_CURSOR' } }
+        }
+        return { verified, pageKey }
+      }
+      async function ingestRecord(record, pageId) {
+        if (!await acceptRecord(record, { moderatorId, pageId })) {
+          return 'rejected'
+        }
+        const key = recordKey(moderatorId, record)
+        const previous = records.get(key)
+        const next = { ...record, sourceId: `${moderatorId}:${pageId}` }
+        if (previous && previous.action === next.action && previous.label === next.label && previous.reason === next.reason) {
+          return 'duplicate'
+        }
+        if (!previous && records.size >= maxRecords) records.delete(records.keys().next().value)
+        records.set(key, next)
+        return 'accepted'
+      }
+      async function processPageRecords(verified, state) {
+        for (let index = state.nextIndex; index < verified.body.records.length; index++) {
+          if (counts.processed >= maxRecordsPerSync) {
+            return { budgetExceeded: true }
+          }
+          const record = verified.body.records[index]
+          const reservation = reserveRecord(moderatorId, record)
+          if (!reservation.accepted) {
+            return { reservationError: reservation }
+          }
+          state.nextIndex = index + 1
+          counts.processed++
+          const outcome = await ingestRecord(record, verified.pageId)
+          if (outcome === 'rejected') {
+            counts.rejected++
+            counts.firstRejectionCode ||= 'LOCAL_POLICY_REJECTED'
+          } else if (outcome === 'duplicate') {
+            counts.duplicates++
+          } else {
+            counts.ingested++
+            counts.changed++
+          }
+        }
+        return null
       }
       for (;;) {
-      const page = await fetchPage(cursor)
-      let verified
-      try {
-        verified = await verifyModerationFeedPage(page?.envelope, {
-          moderatorId,
-          now: now(),
-          supportedCapabilities: options.supportedCapabilities,
-        })
-      } catch (error) {
-        if (typeof error?.code === 'string' && error.code.startsWith('PROTOCOL_')) {
-          return { status: 'quarantined', errorCode: error.code }
-        }
-        throw error
-      }
-      if (!verified) return { status: 'quarantined', errorCode: 'INVALID_PAGE' }
-      if (verified.body.pageCursor !== cursor) return { status: 'quarantined', errorCode: 'STALE_OR_FORKED_CURSOR' }
+        const page = await fetchPage(cursor)
+        const validated = await validateFeedPage(cursor, page)
+        if (validated.errorResult) return validated.errorResult
+        const { verified, pageKey } = validated
 
-      const pageKey = `${moderatorId}\0${cursor}`
-      const existing = pageStates.get(pageKey)
-      if (existing?.pageId !== undefined && existing.pageId !== verified.pageId) {
-        return { status: 'quarantined', errorCode: 'STALE_OR_FORKED_CURSOR' }
-      }
-      const state = rememberPage(pageKey, verified.pageId)
-      if (state.complete) {
-        cursor = state.nextCursor
-        checkpoints.set(moderatorId, { cursor, updatedAt: now() })
-        if (cursor == null) {
-          await persistAndNotify()
-          return { status: 'complete', nextCursor: null, ingested, rejected, duplicates }
+        const state = rememberPage(pageKey, verified.pageId)
+        if (state.complete) {
+          cursor = state.nextCursor
+          checkpoints.set(moderatorId, { cursor, updatedAt: now() })
+          if (cursor == null) {
+            await persistAndNotify()
+            return { status: 'complete', nextCursor: null, ingested: counts.ingested, rejected: counts.rejected, duplicates: counts.duplicates }
+          }
+          continue
         }
-        continue
-      }
 
-      for (let index = state.nextIndex; index < verified.body.records.length; index++) {
-        if (processed >= maxRecordsPerSync) {
+        const stop = await processPageRecords(verified, state)
+        if (stop?.budgetExceeded) {
           checkpoints.set(moderatorId, { cursor, updatedAt: now() })
           await persistAndNotify()
-          return { status: 'partial', errorCode: 'SYNC_RECORD_BUDGET_EXCEEDED', nextCursor: cursor, ingested, rejected, duplicates }
+          return { status: 'partial', errorCode: 'SYNC_RECORD_BUDGET_EXCEEDED', nextCursor: cursor, ingested: counts.ingested, rejected: counts.rejected, duplicates: counts.duplicates }
         }
-        const record = verified.body.records[index]
-        const reservation = reserveRecord(moderatorId, record)
-        if (!reservation.accepted) {
+        if (stop?.reservationError) {
           checkpoints.set(moderatorId, { cursor, updatedAt: now() })
           await persistAndNotify()
           return {
             status: 'partial',
-            errorCode: reservation.errorCode,
+            errorCode: stop.reservationError.errorCode,
             nextCursor: cursor,
-            resetAt: reservation.resetAt,
-            ingested,
-            rejected,
-            duplicates,
+            resetAt: stop.reservationError.resetAt,
+            ingested: counts.ingested,
+            rejected: counts.rejected,
+            duplicates: counts.duplicates,
           }
         }
-        state.nextIndex = index + 1
-        processed++
-        if (!await acceptRecord(record, { moderatorId, pageId: verified.pageId })) {
-          rejected++
-          firstRejectionCode ||= 'LOCAL_POLICY_REJECTED'
-          continue
-        }
-        const key = recordKey(moderatorId, record)
-        const previous = records.get(key)
-        const next = { ...record, sourceId: `${moderatorId}:${verified.pageId}` }
-        if (previous && previous.action === next.action && previous.label === next.label && previous.reason === next.reason) {
-          duplicates++
-          continue
-        }
-        if (!previous && records.size >= maxRecords) records.delete(records.keys().next().value)
-        records.set(key, next)
-        ingested++
-        changed++
-      }
 
-      state.complete = true
-      state.nextCursor = verified.body.nextCursor
-      checkpoints.set(moderatorId, { cursor: state.nextCursor, updatedAt: now() })
-      cursor = state.nextCursor
-      if (cursor != null) continue
-      await persistAndNotify()
-      if (ingested === 0 && rejected > 0) {
-        return { status: 'rejected', errorCode: firstRejectionCode, nextCursor: state.nextCursor, ingested, rejected, duplicates }
-      }
-      if (ingested === 0 && duplicates > 0) {
-        return { status: 'rejected', errorCode: 'DUPLICATE_RECORD', nextCursor: state.nextCursor, ingested, rejected, duplicates }
-      }
-      if (rejected === 0 && duplicates === 0) {
-        return { status: state.nextCursor == null ? 'complete' : 'partial', nextCursor: state.nextCursor }
-      }
-      return {
-        status: state.nextCursor == null ? 'complete' : 'partial',
-        errorCode: firstRejectionCode,
-        nextCursor: state.nextCursor,
-        ingested,
-        rejected,
-        duplicates,
-      }
+        state.complete = true
+        state.nextCursor = verified.body.nextCursor
+        checkpoints.set(moderatorId, { cursor: state.nextCursor, updatedAt: now() })
+        cursor = state.nextCursor
+        if (cursor != null) continue
+        await persistAndNotify()
+        return summarizeSyncResult({
+          ingested: counts.ingested,
+          rejected: counts.rejected,
+          duplicates: counts.duplicates,
+          firstRejectionCode: counts.firstRejectionCode,
+          nextCursor: state.nextCursor,
+        })
       }
     },
   }

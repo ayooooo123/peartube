@@ -2,9 +2,10 @@ import test from 'brittle'
 import c from 'compact-encoding'
 import HypercoreID from 'hypercore-id-encoding'
 import z32 from 'z32'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, unlinkSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
 
 import {
   getPrioritizedBlobDownloadRange,
@@ -40,6 +41,16 @@ const blobIdEncoding = {
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const storageSource = readFileSync(resolve(__dirname, '../src/storage.js'), 'utf8')
+
+async function loadStorageRequestHandler() {
+  const url = new URL(`../src/.storage-range-${randomUUID()}.mjs`, import.meta.url)
+  writeFileSync(url, `${storageSource}\nexport { createBlobServerRequestHandler }\n`, { flag: 'wx' })
+  try {
+    return (await import(url.href)).createBlobServerRequestHandler
+  } finally {
+    unlinkSync(url)
+  }
+}
 
 test('parseHttpByteRange normalizes closed and open HTTP byte ranges', (t) => {
   t.alike(parseHttpByteRange('bytes=65536-131071', 1048576), { start: 65536, end: 131071, openEnded: false })
@@ -295,33 +306,36 @@ test('prioritizeBlobServerRangeRequest ignores HEAD range probes', async (t) => 
   t.alike(calls, [])
 })
 
-test('storage wires blob range prioritization before delegating blob-server requests', (t) => {
-  const importIndex = storageSource.indexOf("import { prioritizeBlobServerRangeRequest, releaseAllPrioritizedBlobRanges } from './blob-range-priority.js'")
-  const wrapperIndex = storageSource.indexOf('blobServer._onrequest = async function (req, res)')
-  const priorityIndex = storageSource.indexOf('await prioritizeBlobServerRangeRequest(blobServer, req)')
-  const delegateIndex = storageSource.indexOf('return origOnRequest(req, res)')
-
-  t.ok(importIndex >= 0, 'storage imports range priority helpers')
-  t.ok(wrapperIndex >= 0, 'storage wraps blob-server requests')
-  t.ok(priorityIndex > wrapperIndex, 'range priority runs inside the request wrapper')
-  t.ok(priorityIndex < delegateIndex, 'range priority runs before blob-server serves the range')
-})
-
-test('storage installs blob request cancellation handling before blob-server listens', (t) => {
-  const importIndex = storageSource.indexOf("import { installExpectedBlobRequestCancellationHandler } from './blob-request-cancellation.js'")
-  const installIndex = storageSource.indexOf('installExpectedBlobRequestCancellationHandler()')
-  const listenIndex = storageSource.indexOf('const blobServerListenPromise = blobServer.listen()')
-
-  t.ok(importIndex >= 0, 'storage imports the blob cancellation helper')
-  t.ok(installIndex >= 0, 'storage installs the blob cancellation helper')
-  t.ok(installIndex < listenIndex, 'cancellation handling is installed before blob-server listens')
-})
-
-test('storage releases pooled priority ranges during backend shutdown', (t) => {
-  const releaseIndex = storageSource.indexOf('releaseAllPrioritizedBlobRanges()')
-  const blobServerCloseIndex = storageSource.indexOf('await blobServer?.close?.()')
-
-  t.ok(releaseIndex >= 0, 'shutdown releases pooled priority ranges')
-  t.ok(blobServerCloseIndex >= 0, 'shutdown closes the blob server')
-  t.ok(releaseIndex < blobServerCloseIndex, 'priority ranges are released before the blob server closes')
+test('storage waits for range prioritization before serving the response', async (t) => {
+  const createHandler = await loadStorageRequestHandler()
+  const calls = []
+  const blobServer = createMockBlobServer(calls, { resolveDone: false })
+  const getCore = blobServer._getCore.bind(blobServer)
+  let releasePriority
+  let markPriorityStarted
+  const priorityGate = new Promise(resolve => { releasePriority = resolve })
+  const priorityStarted = new Promise(resolve => { markPriorityStarted = resolve })
+  blobServer._getCore = async (...args) => {
+    markPriorityStarted()
+    await priorityGate
+    return getCore(...args)
+  }
+  t.teardown(() => {
+    releasePriority()
+    releaseAllPrioritizedBlobRanges()
+  })
+  const handler = createHandler({
+    store: {}, blobServer, getStorageContext: () => null,
+    origOnRequest() { calls.push(['serve']); return 'served' },
+  })
+  const { req } = createRangeRequest()
+  const url = new URL(req.url, 'http://localhost')
+  url.searchParams.set('type', 'audio/mpeg')
+  req.url = `${url.pathname}${url.search}`
+  const pending = handler(req, { setHeader() {} })
+  await priorityStarted
+  t.alike(calls, [], 'a response cannot overtake its pending range reservation')
+  releasePriority()
+  t.is(await pending, 'served')
+  t.alike(calls.map(call => call[0]), ['_getCore', 'download', 'serve'])
 })

@@ -2,7 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { randomUUID } from 'node:crypto'
+import ts from 'typescript'
 
 
 const __filename = fileURLToPath(import.meta.url)
@@ -15,6 +17,14 @@ function readAppFile(relativePath) {
 
 function readWorkspaceFile(relativePath) {
   return fs.readFileSync(path.resolve(appRoot, '..', relativePath), 'utf8')
+}
+
+function loadBuildRuntimeDiagnostics() {
+  const source = readWorkspaceFile('backend/src/network/scoped-session-runtime.js')
+  const start = source.indexOf('function buildRuntimeDiagnostics')
+  const end = source.indexOf('function normalizeOutboundRate', start)
+  assert.ok(start >= 0 && end > start, 'scoped runtime diagnostics helper should exist')
+  return Function(`${source.slice(start, end)}; return buildRuntimeDiagnostics`)()
 }
 
 function loadParseMobileLaunchArgsForTest() {
@@ -32,6 +42,95 @@ function loadBuildMobileBackendContextOptions() {
   return Function(`return function buildMobileBackendContextOptions(options = {}) {${match[1]}
 }`)()
 }
+
+async function loadUnhandledHookFactory(relativePath, select, parameters, returnName = '') {
+  const filename = path.join(appRoot, relativePath)
+  const source = readAppFile(relativePath)
+  const parsed = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true)
+  const nodes = parsed.statements.filter(select)
+  assert.ok(nodes.length, 'runtime rejection boundary must exist')
+  const used = new Set()
+  const visit = node => {
+    if (ts.isIdentifier(node)) used.add(node.text)
+    ts.forEachChild(node, visit)
+  }
+  nodes.forEach(visit)
+  // Preserve real imported dependencies used by these functions. Omitting one
+  // could make a caught ReferenceError falsely look like fail-closed behavior.
+  const imports = parsed.statements.filter(node => {
+    if (!ts.isImportDeclaration(node) || !node.importClause) return false
+    const clause = node.importClause
+    const names = clause.name ? [clause.name.text] : []
+    const bindings = clause.namedBindings
+    if (bindings && ts.isNamedImports(bindings)) names.push(...bindings.elements.map(entry => entry.name.text))
+    else if (bindings && ts.isNamespaceImport(bindings)) names.push(bindings.name.text)
+    return names.some(name => used.has(name))
+  })
+  const isolated = `${imports.map(node => node.getText(parsed)).join('\n')}
+    export default function (${parameters.join(', ')}) {
+      ${nodes.map(node => node.getText(parsed)).join('\n')}
+      ${returnName ? `return ${returnName}` : ''}
+    }`
+  const compiled = ts.transpileModule(isolated, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+  }).outputText
+  const url = pathToFileURL(path.join(path.dirname(filename), `.unhandled-hooks-${randomUUID()}.mjs`))
+  fs.writeFileSync(url, compiled, { flag: 'wx' })
+  try {
+    return (await import(url.href)).default
+  } finally {
+    fs.unlinkSync(url)
+  }
+}
+
+function nonblobCancellations() {
+  return [
+    Object.assign(new Error('Request was cancelled: nonblob-message'), { code: 'REQUEST_CANCELLED' }),
+    { code: 'REQUEST_CANCELLED', origin: 'nonblob-code-only', toString() { return this.origin } },
+  ]
+}
+
+test('mobile rejection hooks report same-shaped nonblob cancellations on every runtime surface', async () => {
+  const factory = await loadUnhandledHookFactory('backend/index.mjs',
+    node => ts.isFunctionDeclaration(node) && ['formatError', 'attachUnhandledHandlers'].includes(node.name?.text),
+    ['Bare', 'process', 'globalThis', 'console'], 'attachUnhandledHandlers')
+  const bare = new Map()
+  const processEvents = new Map()
+  const web = new Map()
+  const logs = []
+  const reports = []
+  const attach = factory(
+    { on: (name, listener) => bare.set(name, listener) },
+    { on: (name, listener) => processEvents.set(name, listener) },
+    { addEventListener: (name, listener) => web.set(name, listener) },
+    { error: (...args) => logs.push(args.join(' ')) },
+  )
+  attach((label, reason) => reports.push(reason))
+  const reasons = nonblobCancellations()
+  for (const reason of reasons) {
+    bare.get('unhandledRejection')(reason)
+    processEvents.get('unhandledRejection')(reason)
+    web.get('unhandledrejection')({ reason, preventDefault() {} })
+  }
+  assert.deepEqual(reports, [reasons[0], reasons[0], reasons[1], reasons[1]])
+  assert.ok(logs.some(line => line.includes('nonblob-message')))
+  assert.ok(logs.some(line => line.includes('nonblob-code-only')))
+})
+
+test('desktop rejection hooks do not silently classify nonblob cancellations as blob teardown', async () => {
+  const factory = await loadUnhandledHookFactory('workers/desktop/index.ts',
+    node => ts.isIfStatement(node) && node.expression.getText().includes('typeof Bare'),
+    ['Bare', 'console'])
+  const callbacks = new Map()
+  const logs = []
+  factory(
+    { on: (name, listener) => callbacks.set(name, listener) },
+    { error: (...args) => logs.push(args.join(' ')) },
+  )
+  for (const reason of nonblobCancellations()) callbacks.get('unhandledRejection')(reason)
+  assert.ok(logs.some(line => line.includes('nonblob-message')))
+  assert.ok(logs.some(line => line.includes('nonblob-code-only')))
+})
 
 
 
@@ -65,7 +164,7 @@ test('native hosts explicitly select their backend platform policy', () => {
   const contextOptions = buildMobileBackendContextOptions({ platform: 'mobile', network })
   assert.equal(contextOptions.platform, 'mobile')
   assert.equal(contextOptions.network, network)
-  assert.equal(contextOptions.expectedProtocolVersion, undefined)
+  assert.equal(contextOptions.expectedStorageFormatVersion, undefined)
   assert.match(
     mobileRuntimeSource,
     /createBackendContext\(buildMobileBackendContextOptions\(\{/,
@@ -146,7 +245,6 @@ test('mobile backend entry avoids runtime imports for startup-critical QJS modul
   assert.ok(loadBackendModulesBody, 'loadBackendModules should exist')
   assert.match(source, /import HyperswarmModule from 'hyperswarm'/, 'mobile backend should statically import Hyperswarm for QJS')
   assert.equal(backendPackage.exports['./runtime-modules'], './src/runtime-modules.js')
-  assert.equal(backendPackage.exports['./blob-request-cancellation'], './src/blob-request-cancellation.js')
   assert.match(source, /setHyperswarmModuleForRuntime\(HyperswarmModule\)/, 'mobile backend should preload Hyperswarm before storage startup')
   assert.match(runtimeModulesSource, /export function setHyperswarmModuleForRuntime\(mod\)/)
   assert.match(runtimeModulesSource, /if \(preloadedHyperswarmModule\) return preloadedHyperswarmModule/)
@@ -161,8 +259,6 @@ test('mobile backend entry avoids runtime imports for startup-critical QJS modul
   assert.match(source, /attachLazyCastHandlers/)
   assert.match(source, /attachCastHandlers/)
   assert.match(source, /import \{ attachCastHandlers as importedAttachCastHandlers \} from '\.\/mobile-cast\.mjs'/, 'mobile cast handlers should be statically bundled for QJS')
-  assert.match(source, /import \{ isExpectedBlobRequestCancellation \} from '@peartube\/backend\/blob-request-cancellation'/)
-  assert.match(source, /if \(consumeExpectedCancellation\(reason\)\) return true/, 'BareKit should consume expected Hypercore range cancellations')
   assert.doesNotMatch(source, /require\('\.\/mobile-cast\.mjs'\)/, 'libqjs ESM worklets do not expose CommonJS require')
   assert.doesNotMatch(source, /import\('\.\/mobile-cast\.mjs'\)/, 'libqjs does not support dynamically importing mobile cast handlers')
   assert.match(source, /ensureBackendThumbnailModule/)
@@ -226,10 +322,15 @@ test('mobile backend consumes launch options before downloader worker args', () 
     /swarmOptions: launchOptions\?\.swarmOptions/,
     'createBackendContext should receive launchOptions.swarmOptions',
   )
-  assert.match(
+  assert.doesNotMatch(
     source,
-    /expectedProtocolVersion: protocolVersion/,
-    'createBackendContext should receive the protocol version validated by the host',
+    /expectedStorageFormatVersion:\s*protocolVersion/,
+    'storage initialization must not use the live host protocol version',
+  )
+  assert.doesNotMatch(
+    source,
+    /expectedVersion:\s*protocolVersion/,
+    'stored-format preflight must use its independent default',
   )
   assert.match(
     source,
@@ -308,7 +409,6 @@ test('native root layout does not expose RPC context before the platform bridge 
   const contextBlock = contextStart >= 0 && contextEnd > contextStart
     ? source.slice(contextStart, contextEnd)
     : ''
-
   assert.ok(contextBlock, 'contextValue should exist')
   assert.match(
     contextBlock,
@@ -325,9 +425,42 @@ test('backend orchestrator starts scoped discovery and accounts for scoped peer 
   assert.match(orchestrator, /await scopedNetwork\.start\(\)/)
   assert.match(runtime, /activeConnections\.set\(connection, info\)/)
   assert.match(runtime, /scope\.sessions\.set\(remoteKey,\s*tracked\)/)
-  assert.match(runtime, /for\s*\(const session of scope\.sessions\.values\(\)\)\s*sessions\.push\(\{/)
+
+  const buildRuntimeDiagnostics = loadBuildRuntimeDiagnostics()
+  const session = {
+    peerId: 'peer-b',
+    state: 'active',
+    assetResponses: new Map([['request-1', {}]]),
+    archiveServing: true,
+  }
+  const diagnostics = buildRuntimeDiagnostics({
+    scopes: new Map([['asset:topic', {
+      purpose: 'asset',
+      topicHex: 'topic',
+      sessions: new Map([['peer-b', session]]),
+      serverAnnounced: true,
+    }]]),
+    status: 'active',
+    uploadedBytes: 12,
+    indexServices: new Map(),
+    protocolMajor: 1,
+    networkId: 'network',
+    topicList: [],
+    policy: {},
+    counters: {},
+    recentErrors: [],
+  })
+  assert.deepEqual(diagnostics.sessions, [{
+    peerId: 'peer-b',
+    purpose: 'asset',
+    topicHex: 'topic',
+    state: 'active',
+    assetResponseCount: 1,
+    archiveServing: true,
+  }])
   assert.doesNotMatch(orchestrator, /publicFeed\.handleDiscoveredPeer/)
 })
+
 
 test('mobile getSwarmStatus forwards low-level network diagnostics', () => {
   const source = readWorkspaceFile('backend/src/mobile-handlers.js')

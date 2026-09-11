@@ -220,7 +220,7 @@ function sourceProvenance(source, parsedBlob) {
   return provenance
 }
 
-function normalizeSource(source) {
+function validateLegacySource(source) {
   if (!source || source.source !== 'legacy-owner-channel' ||
       typeof source.sourceKey !== 'string' || !/^[0-9a-f]{64}$/i.test(source.sourceKey) ||
       typeof source.ownerPublisherId !== 'string' || !/^[0-9a-f]{64}$/i.test(source.ownerPublisherId) ||
@@ -233,9 +233,11 @@ function normalizeSource(source) {
   if (video.description != null && (typeof video.description !== 'string' || video.description.length > 4096)) {
     malformed('legacy publication description is malformed')
   }
-  const parsedBlob = parseBlobRef(video)
-  if (!parsedBlob) malformed('legacy publication blob reference is malformed')
-  const fingerprint = typeof video.contentFingerprint === 'string' && /^sha256:[0-9a-f]{64}$/.test(video.contentFingerprint)
+  return video
+}
+
+function resolveLegacyFingerprint(video, source, parsedBlob) {
+  return typeof video.contentFingerprint === 'string' && /^sha256:[0-9a-f]{64}$/.test(video.contentFingerprint)
     ? video.contentFingerprint.slice(7)
     : hexDigest('peartube.publication-v1.legacy-rendition.v1', {
         sourceKey: source.sourceKey.toLowerCase(),
@@ -244,6 +246,13 @@ function normalizeSource(source) {
         blobId: parsedBlob.blobId,
         byteLength: parsedBlob.blob.byteLength,
       })
+}
+
+function normalizeSource(source) {
+  const video = validateLegacySource(source)
+  const parsedBlob = parseBlobRef(video)
+  if (!parsedBlob) malformed('legacy publication blob reference is malformed')
+  const fingerprint = resolveLegacyFingerprint(video, source, parsedBlob)
   return {
     source: {
       source: 'legacy-owner-channel',
@@ -372,20 +381,44 @@ function catalogUnavailable(error) {
     /PUBLISHER_CATALOG_UNAVAILABLE/.test(error?.message || '')
 }
 
+function publisherIdHex(value) {
+  if (!value) return null
+  if (typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value)) return value.toLowerCase()
+  if (b4a.isBuffer(value) || value instanceof Uint8Array) {
+    if (value.byteLength !== 32) return null
+    return b4a.toString(value, 'hex')
+  }
+  return null
+}
+function processBindingPage(page, selectedId) {
+  const pageErrors = page?.errors || []
+  if (Array.isArray(pageErrors) && pageErrors.length > 0) {
+    const first = pageErrors[0]
+    const err = new Error(first?.error || 'PUBLISHER_WRITABLE_DISCOVERY_INCOMPLETE')
+    err.code = first?.error || 'PUBLISHER_WRITABLE_DISCOVERY_INCOMPLETE'
+    err.errors = pageErrors
+    throw err
+  }
+  let currentId = selectedId
+  for (const item of page?.items || []) {
+    const idHex = publisherIdHex(item?.publisherId)
+    if (!idHex) {
+      throw new PublicationV1MigrationError('PUBLISHER_WRITABLE_DISCOVERY_INCOMPLETE', 'writable mapping has an invalid publisher id')
+    }
+    if (currentId !== null && currentId !== idHex) return { ambiguous: true, selectedId: null }
+    currentId = idHex
+  }
+  return { ambiguous: false, selectedId: currentId }
+}
+
+
 /**
- * Find the catalog a legacy local source should migrate into.
+ * Resolve a legacy source onto a local writable catalog as a canonical lease.
  *
- * Legacy sources are this device's own channels, and their owner id is the
- * channel identity key. A catalog is not required to be keyed by that: a relay
- * provisions one from a publisher root instead. When nothing resolves from the
- * owner key the migration can never complete, and because
- * completeAdmissionLifecycle runs on every provisionPublisherCatalog, the
- * device stops being able to publish at all.
- *
- * Falling back to the sole local writable catalog is what the migration plan
- * already assumes, since it builds its operations against binding.publisherId.
- * More than one writable catalog is ambiguous, so it resolves nothing rather
- * than guessing which publisher owns the history.
+ * Returns `{ binding, release }` or `null`. Callers must release on every path.
+ * Known owner keys use acquireWritableBinding. Sole-writer fallback pages every
+ * persisted writable mapping (not the warm getWritableBindings snapshot) and
+ * acquires at most one ID; page errors fail closed; >1 ID is ambiguous null.
  *
  * derivePublisherId is injected: importing it here would run back through the
  * publisher barrel, which re-exports this module.
@@ -395,23 +428,52 @@ export function createLegacyCatalogResolver({ catalogRegistry, derivePublisherId
   if (typeof derivePublisherId !== 'function') {
     throw new TypeError('legacy catalog resolver requires derivePublisherId')
   }
+  if (typeof catalogRegistry.acquireWritableBinding !== 'function') {
+    throw new TypeError('legacy catalog resolver requires catalogRegistry.acquireWritableBinding')
+  }
+
+  async function findSoleWritablePublisherId() {
+    if (typeof catalogRegistry.listBindingPage !== 'function') {
+      throw new TypeError('legacy catalog resolver requires catalogRegistry.listBindingPage')
+    }
+    let selectedId = null
+    let cursor = null
+    do {
+      const page = await catalogRegistry.listBindingPage({
+        cursor,
+        limit: 16,
+        writableOnly: true,
+      })
+      try {
+        const result = processBindingPage(page, selectedId)
+        if (result.ambiguous) return null
+        selectedId = result.selectedId
+      } finally {
+        await page?.release?.()
+      }
+      cursor = page?.nextCursor || null
+    } while (cursor)
+    return selectedId === null ? null : b4a.from(selectedId, 'hex')
+  }
 
   return async function resolveCatalog(source) {
     const ownerPublisherId = String(source?.ownerPublisherId || '')
-    if (/^[0-9a-f]{64}$/.test(ownerPublisherId)) {
+    if (/^[0-9a-f]{64}$/i.test(ownerPublisherId)) {
       try {
-        const owned = await catalogRegistry.resolve(derivePublisherId(b4a.from(ownerPublisherId, 'hex')))
-        if (owned) return owned
+        const publisherId = derivePublisherId(b4a.from(ownerPublisherId.toLowerCase(), 'hex'))
+        return await catalogRegistry.acquireWritableBinding(publisherId)
       } catch (error) {
+        if (error?.code === 'PUBLISHER_CATALOG_NOT_WRITABLE') return null
         if (!catalogUnavailable(error)) throw error
       }
     }
 
     try {
-      const writable = await catalogRegistry.getWritableBindings()
-      return writable?.length === 1 ? writable[0] : null
+      const soleId = await findSoleWritablePublisherId()
+      if (!soleId) return null
+      return await catalogRegistry.acquireWritableBinding(soleId)
     } catch (error) {
-      if (catalogUnavailable(error)) return null
+      if (catalogUnavailable(error) || error?.code === 'PUBLISHER_CATALOG_NOT_WRITABLE') return null
       throw error
     }
   }
@@ -449,7 +511,122 @@ export function createPublicationV1StartupLifecycle({ migrate, startDiscovery } 
   })
 }
 
+function validateStartupMigrationOptions(options) {
+  const {
+    sourceRepository,
+    checkpointRepository,
+    resolveCatalog,
+    deviceKeyPair,
+  } = options
+  if (!sourceRepository || typeof sourceRepository.list !== 'function') throw new TypeError('publication v1 migration requires sourceRepository.list')
+  if (!checkpointRepository || typeof checkpointRepository.load !== 'function' || typeof checkpointRepository.save !== 'function') {
+    throw new TypeError('publication v1 migration requires checkpointRepository load/save')
+  }
+  if (typeof resolveCatalog !== 'function') throw new TypeError('publication v1 migration requires resolveCatalog')
+  if (!deviceKeyPair?.publicKey || !deviceKeyPair?.secretKey) throw new TypeError('publication v1 migration requires deviceKeyPair')
+}
+
+async function prepareMigrationSource(source, checkpoint, checkpointRepository) {
+  const sourceKey = sourceIdentity(source)
+  let normalized
+  try {
+    normalized = normalizeSource(source)
+  } catch (error) {
+    const quarantine = {
+      sourceKey,
+      code: error?.code || 'PUBLICATION_V1_SOURCE_MALFORMED',
+      message: error?.message || 'legacy publication is malformed',
+    }
+    const quarantined = checkpoint.quarantined.filter(entry => entry.sourceKey !== sourceKey)
+    quarantined.push(quarantine)
+    await checkpointRepository.save({ ...checkpoint, status: 'failed', quarantined })
+    throw error
+  }
+  if (normalized.disposition) {
+    const quarantine = {
+      sourceKey,
+      code: normalized.disposition === 'reingest-required'
+        ? 'PUBLICATION_V1_REINGEST_REQUIRED'
+        : 'PUBLICATION_V1_QUARANTINED',
+      disposition: normalized.disposition,
+      message: normalized.disposition === 'reingest-required'
+        ? 'legacy publication source bytes must be re-ingested'
+        : 'legacy publication cannot be verified as a static asset',
+    }
+    const quarantined = checkpoint.quarantined.filter(entry => entry.sourceKey !== sourceKey)
+    quarantined.push(quarantine)
+    const updated = await checkpointRepository.save({
+      ...checkpoint,
+      status: 'running',
+      pending: null,
+      quarantined,
+    })
+    return { quarantined: true, checkpoint: updated }
+  }
+  return { quarantined: false, normalized, sourceKey }
+}
+
+function validateCatalogWriter(catalog, writer, deviceKeyPair) {
+  if (!catalog?.writable || typeof catalog.getAuthorizationState !== 'function' ||
+      typeof catalog.createLocalOperation !== 'function' ||
+      typeof catalog.appendBatchAndConfirm !== 'function') {
+    return false
+  }
+  if (!writer || !catalog.localSignerKey || !b4a.equals(catalog.localSignerKey, deviceKeyPair.publicKey)) {
+    return false
+  }
+  return true
+}
+
+function resolveWriterSequence(checkpoint, sourceKey, writer, currentTime) {
+  const pending = checkpoint.pending?.sourceKey === sourceKey ? checkpoint.pending : null
+  const sequence = pending?.sequence ?? writer.lastAcceptedSequence + 1
+  const signedAt = pending?.signedAt ?? currentTime
+  if (!Number.isSafeInteger(sequence) || sequence < writer.firstAcceptedSequence ||
+      !Number.isSafeInteger(signedAt) || signedAt < 0) {
+    throw new PublicationV1MigrationError('PUBLICATION_V1_WRITER_UNAVAILABLE', 'publisher writer sequence is unavailable')
+  }
+  return { pending, sequence, signedAt }
+}
+
+async function commitMigrationPlan(catalog, plan, writer, signedAt, afterCatalogCommit, sourceKey, verifiedQueryView, binding) {
+  let committed = await projectionsExist(catalog, plan)
+  if (!committed) {
+    const operations = []
+    for (const candidate of plan.candidates) {
+      operations.push(await catalog.createLocalOperation({
+        ...candidate,
+        policyEpoch: writer.admissionPolicyEpoch,
+        signedAt,
+      }))
+    }
+    const receipts = await catalog.appendBatchAndConfirm(operations)
+    committed = Array.isArray(receipts) && receipts.length === operations.length &&
+      receipts.every(receipt => receipt?.accepted === true)
+    if (!committed) {
+      await catalog.update?.()
+      committed = await projectionsExist(catalog, plan)
+    }
+    if (!committed) {
+      throw new PublicationV1MigrationError('PUBLICATION_V1_CATALOG_REJECTED', 'publisher catalog rejected legacy publication migration')
+    }
+    await afterCatalogCommit?.({ sourceKey, publicationId: plan.publicationId, claimIds: plan.claimIds.slice() })
+  }
+  if (verifiedQueryView?.refresh) {
+    const refreshed = await verifiedQueryView.refresh({
+      publisherIds: [b4a.toString(binding.publisherId, 'hex')],
+    })
+    if (refreshed?.failed !== 0 || refreshed?.indexed !== 1) {
+      throw new PublicationV1MigrationError(
+        'PUBLICATION_V1_QUERY_REFRESH_FAILED',
+        'verified query view rejected the migrated publication'
+      )
+    }
+  }
+}
+
 export async function runPublicationV1StartupMigration(options = {}) {
+  validateStartupMigrationOptions(options)
   const {
     sourceRepository,
     checkpointRepository,
@@ -458,12 +635,6 @@ export async function runPublicationV1StartupMigration(options = {}) {
     verifiedQueryView,
     afterCatalogCommit,
   } = options
-  if (!sourceRepository || typeof sourceRepository.list !== 'function') throw new TypeError('publication v1 migration requires sourceRepository.list')
-  if (!checkpointRepository || typeof checkpointRepository.load !== 'function' || typeof checkpointRepository.save !== 'function') {
-    throw new TypeError('publication v1 migration requires checkpointRepository load/save')
-  }
-  if (typeof resolveCatalog !== 'function') throw new TypeError('publication v1 migration requires resolveCatalog')
-  if (!deviceKeyPair?.publicKey || !deviceKeyPair?.secretKey) throw new TypeError('publication v1 migration requires deviceKeyPair')
   const now = typeof options.now === 'function' ? options.now : () => Date.now()
 
   let checkpoint = await checkpointRepository.load()
@@ -478,124 +649,64 @@ export async function runPublicationV1StartupMigration(options = {}) {
   for (const source of sources) {
     const sourceKey = sourceIdentity(source)
     if (completed.has(sourceKey)) continue
-    let normalized
-    try {
-      normalized = normalizeSource(source)
-    } catch (error) {
-      const quarantine = {
-        sourceKey,
-        code: error?.code || 'PUBLICATION_V1_SOURCE_MALFORMED',
-        message: error?.message || 'legacy publication is malformed',
-      }
-      const quarantined = checkpoint.quarantined.filter(entry => entry.sourceKey !== sourceKey)
-      quarantined.push(quarantine)
-      checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'failed', quarantined })
-      throw error
+
+    const prep = await prepareMigrationSource(source, checkpoint, checkpointRepository)
+    if (prep.quarantined) {
+      checkpoint = prep.checkpoint
+      continue
     }
-    if (normalized.disposition) {
-      const quarantine = {
-        sourceKey,
-        code: normalized.disposition === 'reingest-required'
-          ? 'PUBLICATION_V1_REINGEST_REQUIRED'
-          : 'PUBLICATION_V1_QUARANTINED',
-        disposition: normalized.disposition,
-        message: normalized.disposition === 'reingest-required'
-          ? 'legacy publication source bytes must be re-ingested'
-          : 'legacy publication cannot be verified as a static asset',
+    const { normalized } = prep
+
+    const lease = await resolveCatalog(normalized.source)
+    if (!lease?.binding) {
+      await lease?.release?.()
+      checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'pending' })
+      return summary(checkpoint)
+    }
+    try {
+      const binding = lease.binding
+      const catalog = binding.catalog
+      const currentTime = now()
+      const authorization = await catalog.getAuthorizationState()
+      const writer = writerFor(authorization, deviceKeyPair, currentTime)
+      if (!validateCatalogWriter(catalog, writer, deviceKeyPair)) {
+        checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'pending' })
+        return summary(checkpoint)
       }
-      const quarantined = checkpoint.quarantined.filter(entry => entry.sourceKey !== sourceKey)
-      quarantined.push(quarantine)
+
+      const { pending, sequence, signedAt } = resolveWriterSequence(checkpoint, sourceKey, writer, currentTime)
+      if (!pending) {
+        checkpoint = await checkpointRepository.save({
+          ...checkpoint,
+          pending: {
+            sourceKey,
+            publisherId: b4a.toString(binding.publisherId, 'hex'),
+            sequence,
+            signedAt,
+          },
+        })
+      }
+      const plan = createMigrationPlan({ normalized, binding, writer, sequence, signedAt, deviceKeyPair })
+      try {
+        await commitMigrationPlan(catalog, plan, writer, signedAt, afterCatalogCommit, sourceKey, verifiedQueryView, binding)
+      } catch (err) {
+        if (err?.code === 'PUBLICATION_V1_CATALOG_REJECTED') {
+          checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'failed' })
+        }
+        throw err
+      }
+      const entry = { sourceKey, publicationId: plan.publicationId, claimIds: plan.claimIds.slice() }
       checkpoint = await checkpointRepository.save({
         ...checkpoint,
         status: 'running',
         pending: null,
-        quarantined,
+        completed: [...checkpoint.completed.filter(value => value.sourceKey !== sourceKey), entry]
+          .sort((left, right) => left.sourceKey.localeCompare(right.sourceKey)),
       })
-      continue
+      completed.set(sourceKey, entry)
+    } finally {
+      await lease.release?.()
     }
-
-    const binding = await resolveCatalog(normalized.source)
-    if (!binding) {
-      checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'pending' })
-      return summary(checkpoint)
-    }
-    const catalog = binding.catalog
-    if (!catalog?.writable || typeof catalog.getAuthorizationState !== 'function' ||
-        typeof catalog.createLocalOperation !== 'function' ||
-        typeof catalog.appendBatchAndConfirm !== 'function') {
-      checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'pending' })
-      return summary(checkpoint)
-    }
-    const currentTime = now()
-    const authorization = await catalog.getAuthorizationState()
-    const writer = writerFor(authorization, deviceKeyPair, currentTime)
-    if (!writer || !catalog.localSignerKey || !b4a.equals(catalog.localSignerKey, deviceKeyPair.publicKey)) {
-      checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'pending' })
-      return summary(checkpoint)
-    }
-
-    const pending = checkpoint.pending?.sourceKey === sourceKey ? checkpoint.pending : null
-    const sequence = pending?.sequence ?? writer.lastAcceptedSequence + 1
-    const signedAt = pending?.signedAt ?? currentTime
-    if (!Number.isSafeInteger(sequence) || sequence < writer.firstAcceptedSequence ||
-        !Number.isSafeInteger(signedAt) || signedAt < 0) {
-      throw new PublicationV1MigrationError('PUBLICATION_V1_WRITER_UNAVAILABLE', 'publisher writer sequence is unavailable')
-    }
-    if (!pending) {
-      checkpoint = await checkpointRepository.save({
-        ...checkpoint,
-        pending: {
-          sourceKey,
-          publisherId: b4a.toString(binding.publisherId, 'hex'),
-          sequence,
-          signedAt,
-        },
-      })
-    }
-    const plan = createMigrationPlan({ normalized, binding, writer, sequence, signedAt, deviceKeyPair })
-    let committed = await projectionsExist(catalog, plan)
-    if (!committed) {
-      const operations = []
-      for (const candidate of plan.candidates) {
-        operations.push(await catalog.createLocalOperation({
-          ...candidate,
-          policyEpoch: writer.admissionPolicyEpoch,
-          signedAt,
-        }))
-      }
-      const receipts = await catalog.appendBatchAndConfirm(operations)
-      committed = Array.isArray(receipts) && receipts.length === operations.length &&
-        receipts.every(receipt => receipt?.accepted === true)
-      if (!committed) {
-        await catalog.update?.()
-        committed = await projectionsExist(catalog, plan)
-      }
-      if (!committed) {
-        checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'failed' })
-        throw new PublicationV1MigrationError('PUBLICATION_V1_CATALOG_REJECTED', 'publisher catalog rejected legacy publication migration')
-      }
-      await afterCatalogCommit?.({ sourceKey, publicationId: plan.publicationId, claimIds: plan.claimIds.slice() })
-    }
-    if (verifiedQueryView?.refresh) {
-      const refreshed = await verifiedQueryView.refresh({
-        publisherIds: [b4a.toString(binding.publisherId, 'hex')],
-      })
-      if (refreshed?.failed !== 0 || refreshed?.indexed !== 1) {
-        throw new PublicationV1MigrationError(
-          'PUBLICATION_V1_QUERY_REFRESH_FAILED',
-          'verified query view rejected the migrated publication'
-        )
-      }
-    }
-    const entry = { sourceKey, publicationId: plan.publicationId, claimIds: plan.claimIds.slice() }
-    checkpoint = await checkpointRepository.save({
-      ...checkpoint,
-      status: 'running',
-      pending: null,
-      completed: [...checkpoint.completed.filter(value => value.sourceKey !== sourceKey), entry]
-        .sort((left, right) => left.sourceKey.localeCompare(right.sourceKey)),
-    })
-    completed.set(sourceKey, entry)
   }
 
   checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'complete', pending: null })

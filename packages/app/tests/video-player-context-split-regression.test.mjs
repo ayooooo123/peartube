@@ -43,12 +43,6 @@ test('command-only screens use the action context instead of progress-carrying c
   }
 })
 
-test('consumer Search opens media detail without subscribing to player state', () => {
-  const source = readAppFile('app/search.tsx')
-
-  assert.match(source, /MediaCatalogView/)
-  assert.doesNotMatch(source, /useVideoPlayer(?:Context|Session|Progress|Actions)\(/)
-})
 
 test('watch page composes focused player hooks without subscribing to progress ticks', () => {
   const source = readAppFile('app/video/[id].tsx')

@@ -24,12 +24,7 @@ function equal(left, right) {
  * locator is only a tuple to match after cryptographic proof succeeds; it never
  * authorizes a catalog or acts as a publisher trust root.
  */
-export function verifyPublisherNamespaceProof(input = {}) {
-  const locator = input.locator || {}
-  const genesis = input.genesis
-  const transitions = Array.isArray(input.transitions) ? input.transitions : null
-  if (!genesis || !transitions) throw new Error('namespace proof is incomplete')
-  const keyProvider = input.keyProvider || createPublisherKeyProvider()
+function verifyGenesisRecord(genesis, keyProvider) {
   if (genesis.recordType !== PUBLISHER_RECORD_TYPES.NAMESPACE || genesis.transitionId) {
     throw new Error('namespace proof genesis is not a single-signed namespace record')
   }
@@ -51,8 +46,10 @@ export function verifyPublisherNamespaceProof(input = {}) {
     now: genesis.signedAt,
     maxClockSkew: 0,
   })
+  return genesisDescriptor
+}
 
-  const state = createPublisherAuthorizationState(genesisDescriptor)
+function applyTransitions(state, transitions, keyProvider) {
   for (const transition of transitions) {
     if (transition?.recordType !== PUBLISHER_RECORD_TYPES.ROOT_TRANSITION || !transition?.transitionId) {
       throw new Error('namespace proof contains a non-transition operation')
@@ -62,6 +59,31 @@ export function verifyPublisherNamespaceProof(input = {}) {
       throw new Error(`namespace proof transition rejected: ${result.code}`)
     }
   }
+}
+
+function assertLocatorMatches(descriptor, locator) {
+  if (hex32(locator.publisherId, 'locator publisherId') !== b4a.toString(descriptor.publisherId, 'hex') ||
+      hex32(locator.catalogBootstrapKey, 'locator catalogBootstrapKey') !== b4a.toString(descriptor.catalogBootstrapKey, 'hex') ||
+      Number(locator.catalogEpoch) !== descriptor.catalogEpoch) {
+    throw new Error('namespace proof does not match locator publisher/bootstrap/epoch tuple')
+  }
+}
+
+/**
+ * Verifies the proof received on an untrusted candidate publisher topic. The
+ * locator is only a tuple to match after cryptographic proof succeeds; it never
+ * authorizes a catalog or acts as a publisher trust root.
+ */
+export function verifyPublisherNamespaceProof(input = {}) {
+  const locator = input.locator || {}
+  const genesis = input.genesis
+  const transitions = Array.isArray(input.transitions) ? input.transitions : null
+  if (!genesis || !transitions) throw new Error('namespace proof is incomplete')
+  const keyProvider = input.keyProvider || createPublisherKeyProvider()
+
+  const genesisDescriptor = verifyGenesisRecord(genesis, keyProvider)
+  const state = createPublisherAuthorizationState(genesisDescriptor)
+  applyTransitions(state, transitions, keyProvider)
 
   const descriptor = input.descriptor
     ? verifyPublisherNamespaceDescriptor(input.descriptor, { genesisRootKey: genesisDescriptor.publisherRootKey }).descriptor
@@ -69,11 +91,7 @@ export function verifyPublisherNamespaceProof(input = {}) {
   if (!equal(encodePublisherNamespaceDescriptor(descriptor), encodePublisherNamespaceDescriptor(state.descriptor))) {
     throw new Error('namespace proof current descriptor does not match authenticated transitions')
   }
-  if (hex32(locator.publisherId, 'locator publisherId') !== b4a.toString(descriptor.publisherId, 'hex') ||
-      hex32(locator.catalogBootstrapKey, 'locator catalogBootstrapKey') !== b4a.toString(descriptor.catalogBootstrapKey, 'hex') ||
-      Number(locator.catalogEpoch) !== descriptor.catalogEpoch) {
-    throw new Error('namespace proof does not match locator publisher/bootstrap/epoch tuple')
-  }
+  assertLocatorMatches(descriptor, locator)
   // The verified operations are returned with the descriptor so a mirroring
   // relay can re-serve the same proof to downstream peers without the origin
   // publisher being reachable.

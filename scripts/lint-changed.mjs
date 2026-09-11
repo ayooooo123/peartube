@@ -39,9 +39,11 @@ if (changedFiles.length === 0) {
 }
 
 console.log(`[lint:changed] Linting ${changedFiles.length} changed JS/TS file(s)`)
-const eslintCommand = existsSync('./node_modules/.bin/eslint') ? './node_modules/.bin/eslint' : 'npx'
-const eslintArgs = eslintCommand === 'npx'
-  ? ['--no-install', 'eslint', '--quiet', ...changedFiles]
-  : ['--quiet', ...changedFiles]
-
-execFileSync(eslintCommand, eslintArgs, { stdio: 'inherit' })
+for (const [command, args] of [
+  ['oxlint', ['-c', '.oxlintrc.json', ...changedFiles]],
+  ['eslint', ['--quiet', ...changedFiles]],
+]) {
+  const executable = `./node_modules/.bin/${command}`
+  const installed = existsSync(executable)
+  execFileSync(installed ? executable : 'npx', installed ? args : ['--no-install', command, ...args], { stdio: 'inherit' })
+}

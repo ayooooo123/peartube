@@ -57,6 +57,120 @@ interface UseCommentsPollingProps {
   enabled: boolean
 }
 
+function parseReactionCounts(countsData: unknown): Record<string, number> {
+  const counts: Record<string, number> = {}
+  if (Array.isArray(countsData)) {
+    for (const c of countsData) {
+      if (c && typeof c === 'object' && 'reactionType' in c && typeof c.reactionType === 'string') {
+        const count = 'count' in c && typeof c.count === 'number' ? c.count : 0
+        counts[c.reactionType] = count
+      }
+    }
+  } else if (countsData && typeof countsData === 'object') {
+    for (const [k, v] of Object.entries(countsData)) {
+      counts[k] = typeof v === 'number' ? v : 0
+    }
+  }
+  return counts
+}
+
+function filterPendingComments(pending: Comment[], incoming: Comment[]): Comment[] {
+  const newIds = new Set(incoming.map((c: Comment) => c.commentId))
+  return pending.filter(p => !p.commentId || !newIds.has(p.commentId))
+}
+
+function extractPrimaryComments(commentsRes: { success?: boolean; comments?: Comment[] } | null | undefined): Comment[] {
+  if (!commentsRes?.success || !Array.isArray(commentsRes.comments)) return []
+  return commentsRes.comments
+}
+
+function applyFetchedComments(opts: {
+  append: boolean
+  isInitialLoad: boolean
+  page: number
+  primaryComments: Comment[]
+  setComments: React.Dispatch<React.SetStateAction<Comment[]>>
+  setHasMoreComments: React.Dispatch<React.SetStateAction<boolean>>
+  setCommentsPage: React.Dispatch<React.SetStateAction<number>>
+  setPendingComments: React.Dispatch<React.SetStateAction<Comment[]>>
+}) {
+  const {
+    append,
+    isInitialLoad,
+    page,
+    primaryComments,
+    setComments,
+    setHasMoreComments,
+    setCommentsPage,
+    setPendingComments,
+  } = opts
+
+  if (append) {
+    if (primaryComments.length > 0) {
+      setComments(prev => [...prev, ...primaryComments])
+      setPendingComments(prev => filterPendingComments(prev, primaryComments))
+    }
+    setHasMoreComments(primaryComments.length >= COMMENTS_PER_PAGE)
+    setCommentsPage(page)
+    return
+  }
+
+  if (primaryComments.length > 0) {
+    setComments(primaryComments)
+    setHasMoreComments(primaryComments.length >= COMMENTS_PER_PAGE)
+    setCommentsPage(page)
+    setPendingComments(prev => filterPendingComments(prev, primaryComments))
+    return
+  }
+
+  if (isInitialLoad) {
+    setComments([])
+    setHasMoreComments(false)
+  }
+}
+
+function applyFetchedReactions(
+  reactionsRes: { success?: boolean; counts?: unknown; userReaction?: string | null } | null | undefined,
+  setReactionCounts: React.Dispatch<React.SetStateAction<Record<string, number>>>,
+  setUserReaction: React.Dispatch<React.SetStateAction<string | null>>,
+) {
+  if (!reactionsRes?.success) return
+  setReactionCounts(parseReactionCounts(reactionsRes.counts || {}))
+  setUserReaction(reactionsRes.userReaction || null)
+}
+
+async function fetchCommentsAndReactions(
+  rpcClient: typeof rpc,
+  channelKey: string,
+  videoId: string,
+  publicBeeKey: string | undefined,
+  page: number,
+  append: boolean,
+) {
+  return Promise.all([
+    rpcClient.listComments?.({
+      channelKey,
+      videoId,
+      publicBeeKey,
+      page,
+      limit: COMMENTS_PER_PAGE,
+    }).catch(() => null),
+    !append
+      ? rpcClient.getReactions?.({ channelKey, videoId, publicBeeKey }).catch(() => null)
+      : Promise.resolve(null),
+  ])
+}
+
+function finishCommentsLoad(
+  setCommentsLoading: React.Dispatch<React.SetStateAction<boolean>>,
+  setLoadingMoreComments: React.Dispatch<React.SetStateAction<boolean>>,
+  setRefreshingComments: React.Dispatch<React.SetStateAction<boolean>>,
+) {
+  setCommentsLoading(false)
+  setLoadingMoreComments(false)
+  setRefreshingComments(false)
+}
+
 export function useCommentsPolling({
   channelKey,
   videoId,
@@ -149,64 +263,29 @@ export function useCommentsPolling({
     }
 
     try {
-      const [commentsRes, reactionsRes] = await Promise.all([
-        rpc.listComments?.({
-          channelKey,
-          videoId,
-          publicBeeKey,
-          page,
-          limit: COMMENTS_PER_PAGE,
-        }).catch(() => null),
-        !append
-          ? rpc.getReactions?.({ channelKey, videoId, publicBeeKey }).catch(() => null)
-          : Promise.resolve(null),
-      ])
+      const [commentsRes, reactionsRes] = await fetchCommentsAndReactions(
+        rpc,
+        channelKey,
+        videoId,
+        publicBeeKey,
+        page,
+        append,
+      )
 
-      const primaryOk = Boolean(commentsRes?.success && Array.isArray(commentsRes.comments))
-      const primaryComments = primaryOk ? commentsRes.comments : []
+      applyFetchedComments({
+        append,
+        isInitialLoad,
+        page,
+        primaryComments: extractPrimaryComments(commentsRes),
+        setComments,
+        setHasMoreComments,
+        setCommentsPage,
+        setPendingComments,
+      })
 
-      if (append) {
-        if (primaryComments.length > 0) setComments(prev => [...prev, ...primaryComments])
-        setHasMoreComments(primaryComments.length >= COMMENTS_PER_PAGE)
-        setCommentsPage(page)
-        if (primaryComments.length > 0) {
-          const newIds = new Set(primaryComments.map((c: Comment) => c.commentId))
-          setPendingComments(prev => prev.filter(p => !p.commentId || !newIds.has(p.commentId)))
-        }
-      } else {
-        if (primaryComments.length > 0) {
-          setComments(primaryComments)
-          setHasMoreComments(primaryComments.length >= COMMENTS_PER_PAGE)
-          setCommentsPage(page)
-          const knownIds = new Set(primaryComments.map((c: Comment) => c.commentId))
-          setPendingComments(prev => prev.filter(p => !p.commentId || !knownIds.has(p.commentId)))
-        } else if (isInitialLoad) {
-          setComments([])
-          setHasMoreComments(false)
-        }
-      }
-
-      if (reactionsRes?.success) {
-        const toCountMap = (countsData: any): Record<string, number> => {
-          const counts: Record<string, number> = {}
-          if (Array.isArray(countsData)) {
-            for (const c of countsData) {
-              if (c?.reactionType) counts[c.reactionType] = c.count || 0
-            }
-          } else if (countsData && typeof countsData === 'object') {
-            for (const [k, v] of Object.entries(countsData)) {
-              counts[k] = typeof v === 'number' ? v : 0
-            }
-          }
-          return counts
-        }
-        setReactionCounts(toCountMap(reactionsRes.counts || {}))
-        setUserReaction(reactionsRes.userReaction || null)
-      }
+      applyFetchedReactions(reactionsRes, setReactionCounts, setUserReaction)
     } finally {
-      setCommentsLoading(false)
-      setLoadingMoreComments(false)
-      setRefreshingComments(false)
+      finishCommentsLoad(setCommentsLoading, setLoadingMoreComments, setRefreshingComments)
     }
   }, [channelKey, videoId, publicBeeKey, comments.length])
 

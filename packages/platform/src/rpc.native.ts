@@ -301,6 +301,94 @@ async function writeOptionalTextAsync(FSLegacy: any, uri: string, contents: stri
   }
 }
 
+async function inspectPersistedBundleCache(
+  FSLegacy: unknown,
+  backendBundleUri: string,
+  downloaderWorkerUri: string,
+  versionMarkerUri: string,
+  encoding: string,
+): Promise<{
+  backendBundleExists: boolean;
+  downloaderWorkerExists: boolean;
+  cachedVersionKey: string | null;
+}> {
+  const legacy = FSLegacy as {
+    getInfoAsync?: (uri: string) => Promise<{ exists?: boolean } | null | undefined>;
+  } | null | undefined;
+  const getInfoAsync = legacy?.getInfoAsync;
+  if (typeof getInfoAsync !== 'function') {
+    return {
+      backendBundleExists: false,
+      downloaderWorkerExists: false,
+      cachedVersionKey: null,
+    };
+  }
+
+  const [backendResult, downloaderResult] = await Promise.all([
+    getInfoAsync(backendBundleUri),
+    getInfoAsync(downloaderWorkerUri),
+  ]);
+
+  const cachedVersionKey = await readOptionalTextAsync(FSLegacy, versionMarkerUri, encoding);
+  return {
+    backendBundleExists: backendResult?.exists === true,
+    downloaderWorkerExists: downloaderResult?.exists === true,
+    cachedVersionKey,
+  };
+}
+
+async function resolveConfiguredBackendSource(config: {
+  backendSource?: string;
+  loadBackendSource?: () => Promise<string>;
+}): Promise<string> {
+  let backendSource = typeof config.backendSource === 'string' ? config.backendSource : '';
+  if (!backendSource && typeof config.loadBackendSource === 'function') {
+    const loaded = await config.loadBackendSource();
+    backendSource = typeof loaded === 'string' ? loaded : '';
+  }
+
+  if (!backendSource) {
+    throw new Error('Native backend source is not configured');
+  }
+
+  return backendSource;
+}
+
+async function resolveDownloaderWorkerPath(
+  FSLegacy: unknown,
+  downloaderWorkerUri: string,
+  encoding: string,
+  config: {
+    downloaderWorkerSource?: string;
+    loadDownloaderWorkerSource?: () => Promise<string | null | undefined>;
+  },
+): Promise<string> {
+  let downloaderWorkerSource =
+    typeof config.downloaderWorkerSource === 'string'
+      ? config.downloaderWorkerSource
+      : '';
+
+  if (!downloaderWorkerSource && typeof config.loadDownloaderWorkerSource === 'function') {
+    const loaded = await config.loadDownloaderWorkerSource();
+    downloaderWorkerSource = typeof loaded === 'string' ? loaded : '';
+  }
+
+  if (downloaderWorkerSource) {
+    const wroteWorker = await writeOptionalTextAsync(
+      FSLegacy,
+      downloaderWorkerUri,
+      downloaderWorkerSource,
+      encoding,
+    );
+
+    if (wroteWorker) {
+      return normalizeBundleFilePath(downloaderWorkerUri);
+    }
+  }
+
+  return '';
+}
+
 async function resolveBundleLaunchFiles(
   FSLegacy: any,
   storageUri: string,
@@ -311,7 +399,7 @@ async function resolveBundleLaunchFiles(
     backendVersionKey?: string;
     loadBackendSource?: () => Promise<string>;
     loadDownloaderWorkerSource?: () => Promise<string | null | undefined>;
-  }
+  },
 ): Promise<{
   backendPath: string;
   backendSource: string;
@@ -323,32 +411,24 @@ async function resolveBundleLaunchFiles(
     versionMarkerUri,
   } = createBundleCachePaths(storageUri);
 
-  const getInfoAsync = FSLegacy?.getInfoAsync;
   const needsDownloaderWorker = Boolean(
-    config.downloaderWorkerSource || config.loadDownloaderWorkerSource
+    config.downloaderWorkerSource || config.loadDownloaderWorkerSource,
   );
 
-  let backendInfo = { exists: false };
-  let downloaderInfo = { exists: false };
-  let cachedVersionKey: string | null = null;
-
-  if (typeof getInfoAsync === 'function') {
-    const [backendResult, downloaderResult] = await Promise.all([
-      getInfoAsync(backendBundleUri),
-      getInfoAsync(downloaderWorkerUri),
-    ]);
-
-    backendInfo = backendResult ?? backendInfo;
-    downloaderInfo = downloaderResult ?? downloaderInfo;
-    cachedVersionKey = await readOptionalTextAsync(FSLegacy, versionMarkerUri, encoding);
-  }
+  const cacheState = await inspectPersistedBundleCache(
+    FSLegacy,
+    backendBundleUri,
+    downloaderWorkerUri,
+    versionMarkerUri,
+    encoding,
+  );
 
   const expectedVersionKey = config.backendVersionKey ?? '';
   if (shouldReusePersistedBundleCache({
     expectedVersionKey,
-    cachedVersionKey,
-    backendBundleExists: backendInfo.exists === true,
-    downloaderWorkerExists: downloaderInfo.exists === true,
+    cachedVersionKey: cacheState.cachedVersionKey,
+    backendBundleExists: cacheState.backendBundleExists,
+    downloaderWorkerExists: cacheState.downloaderWorkerExists,
     needsDownloaderWorker,
   })) {
     return {
@@ -360,45 +440,15 @@ async function resolveBundleLaunchFiles(
     };
   }
 
-  let backendSource = typeof config.backendSource === 'string' ? config.backendSource : '';
-  if (!backendSource && typeof config.loadBackendSource === 'function') {
-    const loaded = await config.loadBackendSource();
-    backendSource = typeof loaded === 'string' ? loaded : '';
-  }
-
-  if (!backendSource) {
-    throw new Error('Native backend source is not configured');
-  }
+  const backendSource = await resolveConfiguredBackendSource(config);
 
   const backendPath = await writeOptionalTextAsync(FSLegacy, backendBundleUri, backendSource, encoding)
     ? normalizeBundleFilePath(backendBundleUri)
     : '';
 
-  let downloaderWorkerPath = '';
-  if (needsDownloaderWorker) {
-    let downloaderWorkerSource =
-      typeof config.downloaderWorkerSource === 'string'
-        ? config.downloaderWorkerSource
-        : '';
-
-    if (!downloaderWorkerSource && typeof config.loadDownloaderWorkerSource === 'function') {
-      const loaded = await config.loadDownloaderWorkerSource();
-      downloaderWorkerSource = typeof loaded === 'string' ? loaded : '';
-    }
-
-    if (downloaderWorkerSource) {
-      const wroteWorker = await writeOptionalTextAsync(
-        FSLegacy,
-        downloaderWorkerUri,
-        downloaderWorkerSource,
-        encoding
-      );
-
-      if (wroteWorker) {
-        downloaderWorkerPath = normalizeBundleFilePath(downloaderWorkerUri);
-      }
-    }
-  }
+  const downloaderWorkerPath = needsDownloaderWorker
+    ? await resolveDownloaderWorkerPath(FSLegacy, downloaderWorkerUri, encoding, config)
+    : '';
 
   if (backendPath && expectedVersionKey) {
     await writeOptionalTextAsync(FSLegacy, versionMarkerUri, expectedVersionKey, encoding);
@@ -509,6 +559,116 @@ async function canReuseMainBridge(reason: string): Promise<boolean> {
   await resetStaleMainBridge(reason);
   return false;
 }
+async function cleanupHeadlessCastIfActive(
+  WorkletClass: BareWorkletCtor,
+  FSLegacy: { deleteAsync?: (uri: string, options?: { idempotent?: boolean }) => Promise<void> } | null | undefined,
+  storageUri: string,
+): Promise<void> {
+  const headlessCastActive = await isHeadlessCastActive();
+  console.log('[CastDiag] initPlatformRPC: isHeadlessCastActive =', headlessCastActive);
+  if (!headlessCastActive) return;
+
+  console.log('[CastDiag] Headless cast was active, sending shutdown to old worklet');
+
+  const cleanupWorklet = new WorkletClass(BACKEND_WORKLET_ID);
+  try {
+    await sendShutdownSignalViaIpc(cleanupWorklet);
+    console.log('[CastDiag] Shutdown signal sent to old worklet');
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn('[CastDiag] Shutdown signal failed:', message);
+  }
+
+  const lockUri = `${storageUri.endsWith('/') ? storageUri : storageUri + '/'}corestore/primary/LOCK`;
+  const flagUri = `${storageUri.endsWith('/') ? storageUri : storageUri + '/'}${'.peartube-cast-headless'}`;
+
+  try {
+    await FSLegacy?.deleteAsync?.(lockUri, { idempotent: true });
+    console.log('[CastDiag] Deleted stale Corestore LOCK file');
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn('[CastDiag] Could not delete LOCK file:', message);
+  }
+
+  try {
+    await FSLegacy?.deleteAsync?.(flagUri, { idempotent: true });
+    console.log('[CastDiag] Cleared stale headless cast flag file');
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn('[CastDiag] Could not delete headless cast flag file:', message);
+  }
+
+  console.log('[CastDiag] Waiting 2s for old headless worklet cleanup');
+  await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+}
+
+function resolveNativePlayer(configuredPlayer?: string | null): string | null {
+  if (configuredPlayer) return configuredPlayer;
+  try {
+    const os = require('react-native')?.Platform?.OS;
+    if (os === 'ios') return 'avplayer';
+    if (os === 'android') return 'exoplayer';
+  } catch {
+    /* Platform unavailable — leave player unset */
+  }
+  return null;
+}
+
+function buildNativeWorkerArgs(
+  config: {
+    launchOptions?: {
+      network?: Record<string, unknown>;
+      swarmOptions?: Record<string, unknown>;
+      player?: string;
+    };
+  },
+  downloaderWorkerPath: string,
+): string[] {
+  const derivedPlayer = resolveNativePlayer(config.launchOptions?.player);
+  if (derivedPlayer && !config.launchOptions) {
+    config.launchOptions = {};
+  }
+  const launchOptionsArg = config.launchOptions
+    ? JSON.stringify({
+      __peartubeLaunchOptions: true,
+      network: config.launchOptions.network,
+      swarmOptions: config.launchOptions.swarmOptions,
+      player: derivedPlayer ?? undefined,
+      protocolVersion: PROTOCOL_VERSION,
+    })
+    : null;
+
+  return [
+    ...(launchOptionsArg ? [launchOptionsArg] : []),
+    ...(downloaderWorkerPath ? [downloaderWorkerPath] : []),
+  ];
+}
+
+async function runLegacyPublisherRootMigration(
+  WorkletClass: BareWorkletCtor,
+  backendPath: string,
+  backendSource: string,
+  storagePath: string,
+  migrateLegacyPublisherRoot?: LegacyPublisherRootMigrationCallback,
+): Promise<void> {
+  if (typeof migrateLegacyPublisherRoot !== 'function') return;
+
+  try {
+    const summary = await runNativeLegacyPublisherRootPreflight({
+      WorkletCtor: WorkletClass,
+      backendPath,
+      backendSource: backendPath ? '' : backendSource,
+      storagePath,
+      migrateLegacyPublisherRoot,
+    });
+    if (summary.status === 'complete' && summary.migrated > 0) {
+      console.log('[Platform RPC] Legacy publisher-root migration completed:', summary.migrated);
+    }
+  } catch {
+    console.warn('[Platform RPC] Legacy publisher-root preflight unavailable');
+  }
+}
+
 
 /**
  * Initialize platform RPC for mobile
@@ -574,39 +734,7 @@ export async function initPlatformRPC(config: {
 
     console.log('[Platform RPC] Initializing with storage:', storagePath);
 
-    const headlessCastActive = await isHeadlessCastActive()
-    console.log('[CastDiag] initPlatformRPC: isHeadlessCastActive =', headlessCastActive)
-    if (headlessCastActive) {
-      console.log('[CastDiag] Headless cast was active, sending shutdown to old worklet');
-
-      const cleanupWorklet = new WorkletClass(BACKEND_WORKLET_ID);
-      try {
-        await sendShutdownSignalViaIpc(cleanupWorklet);
-        console.log('[CastDiag] Shutdown signal sent to old worklet');
-      } catch (err: any) {
-        console.warn('[CastDiag] Shutdown signal failed:', err?.message || err);
-      }
-
-      const lockUri = `${storageUri.endsWith('/') ? storageUri : storageUri + '/'}corestore/primary/LOCK`;
-      const flagUri = `${storageUri.endsWith('/') ? storageUri : storageUri + '/'}${'.peartube-cast-headless'}`;
-
-      try {
-        await FSLegacy.deleteAsync(lockUri, { idempotent: true });
-        console.log('[CastDiag] Deleted stale Corestore LOCK file');
-      } catch (e: any) {
-        console.warn('[CastDiag] Could not delete LOCK file:', e?.message);
-      }
-
-      try {
-        await FSLegacy.deleteAsync(flagUri, { idempotent: true });
-        console.log('[CastDiag] Cleared stale headless cast flag file');
-      } catch (e: any) {
-        console.warn('[CastDiag] Could not delete headless cast flag file:', e?.message);
-      }
-
-      console.log('[CastDiag] Waiting 2s for old headless worklet cleanup');
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-    }
+    await cleanupHeadlessCastIfActive(WorkletClass, FSLegacy, storageUri);
 
     const {
       backendPath,
@@ -616,30 +744,7 @@ export async function initPlatformRPC(config: {
 
     nativeRuntimeConfig.backendPath = backendPath;
     nativeRuntimeConfig.backendSource = backendPath ? '' : backendSource;
-    // OS-native player id for the playback compatibility layer (consumed by the
-    // worklet only when PEARTUBE_AVPLAYER_COMPAT is enabled; harmless otherwise).
-    let derivedPlayer: string | null = config.launchOptions?.player ?? null;
-    if (!derivedPlayer) {
-      try {
-        const os = require('react-native')?.Platform?.OS;
-        if (os === 'ios') derivedPlayer = 'avplayer';
-        else if (os === 'android') derivedPlayer = 'exoplayer';
-      } catch { /* Platform unavailable — leave player unset */ }
-    }
-    if (derivedPlayer && !config.launchOptions) config.launchOptions = {};
-    const launchOptionsArg = config.launchOptions
-      ? JSON.stringify({
-        __peartubeLaunchOptions: true,
-        network: config.launchOptions.network,
-        swarmOptions: config.launchOptions.swarmOptions,
-        player: derivedPlayer ?? undefined,
-        protocolVersion: PROTOCOL_VERSION,
-      })
-      : null;
-    nativeRuntimeConfig.workerArgs = [
-      ...(launchOptionsArg ? [launchOptionsArg] : []),
-      ...(downloaderWorkerPath ? [downloaderWorkerPath] : []),
-    ];
+    nativeRuntimeConfig.workerArgs = buildNativeWorkerArgs(config, downloaderWorkerPath);
 
     if (backendPath) {
       console.log('[Platform RPC] Backend worklet will launch from file:', backendPath);
@@ -651,22 +756,13 @@ export async function initPlatformRPC(config: {
       console.log('[Platform RPC] Downloader worker ready:', downloaderWorkerPath);
     }
 
-    if (typeof config.migrateLegacyPublisherRoot === 'function') {
-      try {
-        const summary = await runNativeLegacyPublisherRootPreflight({
-          WorkletCtor: WorkletClass,
-          backendPath,
-          backendSource: backendPath ? '' : backendSource,
-          storagePath,
-          migrateLegacyPublisherRoot: config.migrateLegacyPublisherRoot,
-        });
-        if (summary.status === 'complete' && summary.migrated > 0) {
-          console.log('[Platform RPC] Legacy publisher-root migration completed:', summary.migrated);
-        }
-      } catch {
-        console.warn('[Platform RPC] Legacy publisher-root preflight unavailable');
-      }
-    }
+    await runLegacyPublisherRootMigration(
+      WorkletClass,
+      backendPath,
+      backendSource,
+      storagePath,
+      config.migrateLegacyPublisherRoot,
+    );
 
     _startupState = 'starting-worklet';
     await mainBridge.init();

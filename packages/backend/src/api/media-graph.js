@@ -298,59 +298,115 @@ const LEGACY_AVAILABILITY_STATE = Object.freeze({
   [AVAILABILITY_STATES.awaitingReplication]: 'unknown',
 })
 
-function manifestSource(manifest, row, preferred, trust = {}, availability = null, entityId = null) {
-  const publisherId = manifest?.body?.publisherId || row.issuer
-  // Cover art now rides the manifest as a rendition so it seeds with the
-  // publication. It is not something to play: without this filter a source
-  // resolves to the poster and a viewer presses Play on a JPEG.
-  const rendition = manifest?.body?.renditions?.find(candidate => (
+function findPlayableRendition(manifest) {
+  return manifest?.body?.renditions?.find(candidate => (
     candidate && candidate.blocked !== true && candidate.superseded !== true &&
     !isArtworkRendition(candidate) &&
     typeof candidate.renditionId === 'string' && candidate.renditionId.length > 0
   )) || null
-  const publicationId = manifest?.publicationId || row.body.payload?.publicationId
+}
+
+function resolveSourceCoordinates(row, entityId) {
+  const payload = row?.body?.payload
   return {
-    publicationId,
-    publisherId,
+    entityId: entityId || row?.body?.subjectRefs?.[0]?.entityId || null,
+    editionId: payload?.editionRef?.entityId || payload?.editionId || null,
+    collectionMemberId: payload?.memberRef?.entityId || null,
+  }
+}
+
+function resolveSourceProvenance(row) {
+  const payload = row?.body?.payload
+  return {
+    archiveState: payload?.archiveState,
+    cacheState: payload?.cacheState,
+    introductionPublisherIds: payload?.introductionPublisherIds || [row.issuer],
+    introductionIndexIds: payload?.introductionIndexIds || [],
+    moderationFeedIds: payload?.moderationFeedIds || [],
+    claimConflictIds: payload?.claimConflictIds || [],
+    provenanceClaimIds: payload?.provenanceClaimIds || [row.claimId],
+    incomplete: payload?.incomplete === true,
+    moderationPenalty: payload?.moderationPenalty || 0,
+  }
+}
+
+function resolveSourceAvailability(availability) {
+  const isStale = availability?.state === AVAILABILITY_STATES.unavailable &&
+    (availability?.reasonCodes || []).includes('EVIDENCE_EXPIRED')
+  return {
+    availability,
+    expectedStartupLatencyMs: availability?.measuredLatencyMs || 0,
+    availabilityScore: sourceAvailabilityScore({ availability }),
+    availabilityState: LEGACY_AVAILABILITY_STATE[availability?.state] || 'unknown',
+    availabilityExpiresAt: availability?.expiresAt ?? 0,
+    stale: isStale,
+  }
+}
+
+function isPublicationAuthorized(manifest, rendition, publicationId, publisherId) {
+  return Boolean(
+    manifest &&
+    rendition &&
+    manifest.publicationId === publicationId &&
+    manifest.body?.publisherId === publisherId
+  )
+}
+
+// The manifest's own scalars, resolved once so the source projection reads
+// them without re-walking the same optional chains.
+function resolveManifestScalars(manifest, rendition) {
+  return {
     manifestId: manifest?.body?.manifestId || null,
     renditionId: rendition?.renditionId || null,
     sourceFileName: manifest?.body?.sourceFileName || null,
     title: manifest?.body?.title || null,
-    // Failover identity. `entityId` anchors the work being played, and the
-    // anchors fail closed in `sourceEquivalenceKey`, which is why they are
-    // read, not defaulted.
-    entityId: entityId || row.body?.subjectRefs?.[0]?.entityId || null,
-    editionId: row.body.payload?.editionRef?.entityId || row.body.payload?.editionId || null,
-    collectionMemberId: row.body.payload?.memberRef?.entityId || null,
     container: rendition?.format || null,
     codecs: rendition?.codecs || null,
     manifestStale: manifest?.body?.superseded === true,
-    // Measured against a contributing peer, never claimed by the publisher.
-    expectedStartupLatencyMs: availability?.measuredLatencyMs || 0,
-    publicationAuthorized: Boolean(
-      manifest &&
-      rendition &&
-      manifest.publicationId === publicationId &&
-      manifest.body?.publisherId === publisherId
-    ),
-    metadataConfidence: row.body.confidence || 0,
+  }
+}
+
+function manifestSource(manifest, row, preferred, trust = {}, availability = null, entityId = null) {
+  const publisherId = manifest?.body?.publisherId || row.issuer
+  const rendition = findPlayableRendition(manifest)
+  const publicationId = manifest?.publicationId || row.body?.payload?.publicationId
+  const coordinates = resolveSourceCoordinates(row, entityId)
+  const provenance = resolveSourceProvenance(row)
+  const avail = resolveSourceAvailability(availability)
+  const scalars = resolveManifestScalars(manifest, rendition)
+
+  return {
+    publicationId,
+    publisherId,
+    manifestId: scalars.manifestId,
+    renditionId: scalars.renditionId,
+    sourceFileName: scalars.sourceFileName,
+    title: scalars.title,
+    entityId: coordinates.entityId,
+    editionId: coordinates.editionId,
+    collectionMemberId: coordinates.collectionMemberId,
+    container: scalars.container,
+    codecs: scalars.codecs,
+    manifestStale: scalars.manifestStale,
+    expectedStartupLatencyMs: avail.expectedStartupLatencyMs,
+    publicationAuthorized: isPublicationAuthorized(manifest, rendition, publicationId, publisherId),
+    metadataConfidence: row.body?.confidence || 0,
     publisherTrust: trust[publisherId] || 0,
-    availabilityScore: sourceAvailabilityScore({ availability }),
+    availabilityScore: avail.availabilityScore,
     formatSupport: 100,
-    moderationPenalty: row.body.payload?.moderationPenalty || 0,
-    availability,
-    availabilityState: LEGACY_AVAILABILITY_STATE[availability?.state] || 'unknown',
-    availabilityExpiresAt: availability?.expiresAt ?? 0,
-    archiveState: row.body.payload?.archiveState,
-    cacheState: row.body.payload?.cacheState,
-    introductionPublisherIds: row.body.payload?.introductionPublisherIds || [row.issuer],
-    introductionIndexIds: row.body.payload?.introductionIndexIds || [],
-    moderationFeedIds: row.body.payload?.moderationFeedIds || [],
-    claimConflictIds: row.body.payload?.claimConflictIds || [],
-    provenanceClaimIds: row.body.payload?.provenanceClaimIds || [row.claimId],
-    stale: availability?.state === AVAILABILITY_STATES.unavailable &&
-      (availability?.reasonCodes || []).includes('EVIDENCE_EXPIRED'),
-    incomplete: row.body.payload?.incomplete === true,
+    moderationPenalty: provenance.moderationPenalty,
+    availability: avail.availability,
+    availabilityState: avail.availabilityState,
+    availabilityExpiresAt: avail.availabilityExpiresAt,
+    archiveState: provenance.archiveState,
+    cacheState: provenance.cacheState,
+    introductionPublisherIds: provenance.introductionPublisherIds,
+    introductionIndexIds: provenance.introductionIndexIds,
+    moderationFeedIds: provenance.moderationFeedIds,
+    claimConflictIds: provenance.claimConflictIds,
+    provenanceClaimIds: provenance.provenanceClaimIds,
+    stale: avail.stale,
+    incomplete: provenance.incomplete,
     preferred,
   }
 }
@@ -457,19 +513,371 @@ function renditionResponse(rendition) {
   }
 }
 
+// Graph wiring prefers an explicit option over the context fallback, keeping
+// the original `||` semantics (falsy options still fall through to context).
+function resolveGraphPreferenceStore(options, ctx) {
+  return normalizePreferenceStore(
+    options.sourcePreferenceStore ||
+    ctx?.sourcePreferenceStore ||
+    ctx?.metaSubspaces?.mediaSourcePreferences ||
+    ctx?.metaDb?.sub?.('media-source-preferences')
+  )
+}
+
+function assignGraphResidencyOptions(resolved, options, ctx) {
+  resolved.availabilityEvidenceStore = options.availabilityEvidenceStore || ctx?.availabilityEvidenceStore || null
+  resolved.blockOffload = options.blockOffload || ctx?.blockOffload || null
+  resolved.scopedNetwork = options.scopedNetwork || ctx?.scopedNetwork || null
+}
+
+function assignGraphExecutionOptions(resolved, options, ctx) {
+  resolved.deviceCapabilities = options.capabilities || ctx?.deviceCapabilities || {}
+  resolved.clock = typeof options.now === 'function' ? options.now : () => Date.now()
+  resolved.openCore = options.openCore || ctx?.openAssetCore || null
+  resolved.store = options.store || ctx?.store || null
+}
+
+function resolveMediaGraphOptions(options = {}) {
+  const ctx = options.ctx
+  const resolved = {
+    verifiedQueryView: options.verifiedQueryView || ctx?.verifiedQueryView || null,
+    sourcePreferenceStore: resolveGraphPreferenceStore(options, ctx),
+    trust: options.trust || ctx?.mediaGraphTrust || {},
+  }
+  assignGraphResidencyOptions(resolved, options, ctx)
+  assignGraphExecutionOptions(resolved, options, ctx)
+  return resolved
+}
+
+function resolveProvenanceRange(manifest, renditionId, coreLength) {
+  const provenance = (manifest.body?.provenance || []).filter(candidate =>
+    (candidate?.type === 'upload' || candidate?.type === 'artwork') &&
+    candidate.renditionId === renditionId &&
+    Number.isSafeInteger(candidate.start) &&
+    Number.isSafeInteger(candidate.end)
+  )
+  return provenance.length === 1
+    ? { start: provenance[0].start, end: provenance[0].end }
+    : { start: 0, end: coreLength }
+}
+
+async function assessWarmAvailability(scopedNetwork, publicationId, renditionId, requiredRanges) {
+  if (typeof scopedNetwork?.assessAvailability === 'function') {
+    try {
+      await scopedNetwork.assessAvailability({
+        publicationId,
+        renditionId,
+        requiredRanges,
+        followContinuations: false,
+      })
+    } catch {
+      // The probe is best-effort warming: an assessment that rejects must not
+      // fail the playback setup that asked for it.
+    }
+  }
+}
+
+async function authorizeSessionCore(session, renditionId, coreKey) {
+  try {
+    const authorized = await session.authorizeCore({ renditionId, coreKey })
+    if (!authorized) {
+      session.close()
+      return { success: false, errorCode: 'RANGE_MISMATCH' }
+    }
+    return { success: true, coreKey: coreKey || null, close: () => session.close() }
+  } catch (thrown) {
+    session.close()
+    const errorCode = isPlaybackErrorCode(thrown?.errorCode) ? thrown.errorCode : 'PEER_TIMEOUT'
+    return { success: false, errorCode }
+  }
+}
+
+function createDefaultPlaybackSessionOpener({ verifiedQueryView, openCore, scopedNetwork }) {
+  return async ({ source }) => {
+    const projected = await verifiedQueryView?.getRendition?.({
+      publicationId: source.publicationId,
+      renditionId: source.renditionId,
+    })
+    const manifest = projected?.manifest || null
+    const requirement = projected?.requirement || null
+    if (!manifest || !requirement || typeof openCore !== 'function') {
+      return { success: false, errorCode: 'NO_COMPATIBLE_SOURCE' }
+    }
+    const range = resolveProvenanceRange(manifest, source.renditionId, requirement.coreLength)
+    const authorized = await verifiedQueryView.authorizeRendition({
+      publicationId: source.publicationId,
+      renditionId: source.renditionId,
+      ...range,
+      operation: 'playback',
+    })
+    if (!authorized) return { success: false, errorCode: 'NO_COMPATIBLE_SOURCE' }
+
+    await assessWarmAvailability(scopedNetwork, source.publicationId, source.renditionId, requirement.requiredRanges || [range])
+
+    const session = createAssetSession({ manifest, openCore })
+    return authorizeSessionCore(session, source.renditionId, requirement.coreKey)
+  }
+}
+
+function parseRenditionRequestIds(request) {
+  const publicationId = typeof request.publicationId === 'string' ? request.publicationId.trim() : ''
+  const renditionId = typeof request.renditionId === 'string' ? request.renditionId.trim() : ''
+  return { publicationId, renditionId }
+}
+
+async function openRenditionCore(corestore, blobsCoreKey) {
+  let core = null
+  try {
+    core = corestore.get({ key: b4a.from(blobsCoreKey, 'hex') })
+    await core.ready?.()
+    return { core }
+  } catch (err) {
+    try { await core?.close?.() } catch { /* best effort */ }
+    return { error: err?.message || 'Media rendition core could not be opened' }
+  }
+}
+/**
+ * Walk a blob's blocks and yield exactly the requested byte window. `core.get`
+ * waits on replication, which is what lets a caller range-request a rendition
+ * this device has not finished pulling: the bytes arrive as they land instead
+ * of the request failing because they are not local yet.
+ */
+async function* readBlobRange(core, blob, start, length) {
+  let remaining = length
+  let index = blob.blockOffset
+  let offset = 0
+  if (start > 0) {
+    const canonicalStaticBlob = blob.blockOffset === 0 &&
+      blob.byteOffset === 0 &&
+      blob.blockLength === Math.ceil(blob.byteLength / ASSET_BLOCK_SIZE)
+    if (canonicalStaticBlob) {
+      index = Math.floor(start / ASSET_BLOCK_SIZE)
+      offset = start % ASSET_BLOCK_SIZE
+    } else {
+      const seek = await core.seek(Number(blob.byteOffset || 0) + start)
+      if (!seek) throw new Error('rendition start byte is unavailable')
+      index = seek[0]
+      offset = seek[1] || 0
+    }
+  }
+  const blockEnd = blob.blockOffset + blob.blockLength
+  while (remaining > 0 && index < blockEnd) {
+    let block = await core.get(index)
+    if (!block || block.byteLength === 0) throw new Error(`rendition block ${index} is unavailable`)
+    if (offset > 0) {
+      block = block.subarray(offset)
+      offset = 0
+    }
+    if (block.byteLength > remaining) block = block.subarray(0, remaining)
+    yield block
+    remaining -= block.byteLength
+    index++
+  }
+}
+
+function buildMediaRenditionReader({ publicationId, renditionId, rendition, ref, core }) {
+  const byteLength = ref.blob.byteLength || schemaUint(rendition.core?.byteLength) || 0
+  const assetId = rendition.core?.assetId || ref.assetId
+  const contentType = typeof rendition.format === 'string' && rendition.format ? rendition.format : 'video/mp4'
+  return {
+    success: true,
+    publicationId,
+    renditionId,
+    assetId,
+    contentType,
+    byteLength,
+    read({ start = 0, length = byteLength - start } = {}) {
+      return readBlobRange(core, ref.blob, start, length)
+    },
+    async close() {
+      try { await core.close?.() } catch { /* best effort */ }
+    },
+  }
+}
+
+function resolveOffloadCapability(blockOffload, corestore, core) {
+  const isOffloaded = Boolean(
+    blockOffload ||
+    corestore.storage?._isOffloadWrapped ||
+    corestore.storage?.assessRetrievability ||
+    core.state?.storage?._isOffloadWrapped
+  )
+  const offload = blockOffload || (corestore.storage?.assessRetrievability ? corestore.storage : null)
+  return { isOffloaded, offload }
+}
+
+// Folds one retrieval page into the running totals, concatenating ranges only
+// when the page actually carries them (same shape the drain loop accumulated).
+function accumulateRetrievabilityPage(acc, page) {
+  acc.assessedBlocks += Number(page.assessedBlocks) || 0
+  acc.residentBlocks += Number(page.residentBlocks) || 0
+  acc.remoteRetrievableBlocks += Number(page.remoteRetrievableBlocks) || 0
+  if (Array.isArray(page.residentRanges)) {
+    acc.residentRanges = acc.residentRanges.concat(page.residentRanges)
+  }
+  if (Array.isArray(page.remoteRetrievableRanges)) {
+    acc.remoteRetrievableRanges = acc.remoteRetrievableRanges.concat(page.remoteRetrievableRanges)
+  }
+  if (Array.isArray(page.unavailableRanges)) {
+    acc.unavailableRanges = acc.unavailableRanges.concat(page.unavailableRanges)
+  }
+  return acc
+}
+
+async function drainOffloadRetrievabilityPages(offload, core, requiredRanges, request) {
+  const followContinuations = request.followContinuations !== false
+  let cursor = request.cursor || null
+  const accumulated = {
+    assessedBlocks: 0,
+    residentBlocks: 0,
+    remoteRetrievableBlocks: 0,
+    residentRanges: [],
+    remoteRetrievableRanges: [],
+    unavailableRanges: [],
+  }
+  let truncated = false
+  let aborted = false
+  let nextCursor = null
+  const signal = request.signal || null
+  const maxBlocks = Number.isSafeInteger(request.maxBlocks) && request.maxBlocks > 0
+    ? request.maxBlocks
+    : 2048
+
+  for (;;) {
+    if (signal?.aborted) {
+      aborted = true
+      truncated = true
+      break
+    }
+    let page = null
+    try {
+      page = await offload.assessRetrievability({
+        core,
+        ranges: requiredRanges,
+        cursor,
+        signal,
+        maxBlocks,
+        followContinuations: false,
+      })
+    } catch {
+      page = null
+    }
+    if (!page) {
+      aborted = true
+      break
+    }
+    accumulateRetrievabilityPage(accumulated, page)
+    if (page.aborted === true) {
+      aborted = true
+      truncated = true
+      nextCursor = page.nextCursor || null
+      break
+    }
+    if (page.truncated === true && page.nextCursor) {
+      cursor = page.nextCursor
+      nextCursor = page.nextCursor
+      truncated = true
+      if (followContinuations !== true) break
+      continue
+    }
+    truncated = false
+    nextCursor = null
+    break
+  }
+
+  return {
+    assessedBlocks: accumulated.assessedBlocks,
+    residentBlocks: accumulated.residentBlocks,
+    remoteRetrievableBlocks: accumulated.remoteRetrievableBlocks,
+    residentRanges: accumulated.residentRanges,
+    remoteRetrievableRanges: accumulated.remoteRetrievableRanges,
+    unavailableRanges: accumulated.unavailableRanges,
+    truncated,
+    aborted,
+    nextCursor,
+  }
+}
+
+function buildOffloadedResidencyResponse({ drained, requirement, publicationId, clock }) {
+  const requestedBlocks = requirement.requiredRanges.reduce(
+    (sum, r) => sum + Math.max(0, (Number(r?.end) || 0) - (Number(r?.start) || 0)),
+    0,
+  )
+  const pending = drained.truncated === true || drained.aborted === true ||
+    (requestedBlocks > 0 && drained.assessedBlocks < requestedBlocks)
+  const fullyCovered = pending !== true && drained.assessedBlocks === requestedBlocks && requestedBlocks > 0
+  return {
+    success: true,
+    publicationId,
+    renditionId: requirement.renditionId,
+    requiredRangeCount: requirement.requiredRanges.length,
+    localRangeCount: drained.residentBlocks,
+    remoteRangeCount: drained.remoteRetrievableBlocks,
+    assessedBlocks: drained.assessedBlocks,
+    requestedBlocks,
+    complete: fullyCovered && drained.residentBlocks === requestedBlocks,
+    retrievable: fullyCovered && (drained.residentBlocks + drained.remoteRetrievableBlocks) === requestedBlocks,
+    assessmentPending: pending,
+    nextCursor: pending ? drained.nextCursor : null,
+    localRanges: drained.residentRanges,
+    s3Ranges: drained.remoteRetrievableRanges,
+    unavailableRanges: drained.unavailableRanges,
+    observedAt: clock(),
+  }
+}
+
+// An offload-wrapped core either answers retrieval assessment or reports the
+// empty residency shape; the drain loop is only reached when it can assess.
+async function resolveOffloadedResidency({ offload, core, requirement, publicationId, clock, request }) {
+  if (typeof offload?.assessRetrievability !== 'function') {
+    return {
+      success: true,
+      publicationId,
+      renditionId: requirement.renditionId,
+      requiredRangeCount: requirement.requiredRanges.length,
+      localRangeCount: 0,
+      complete: false,
+      retrievable: false,
+      assessmentPending: false,
+      observedAt: clock(),
+    }
+  }
+  const drained = await drainOffloadRetrievabilityPages(offload, core, requirement.requiredRanges, request)
+  return buildOffloadedResidencyResponse({ drained, requirement, publicationId, clock })
+}
+
+async function checkDirectCoreResidency(core, requirement, publicationId, clock) {
+  let localRangeCount = 0
+  for (const range of requirement.requiredRanges) {
+    if (await core.has(range.start, range.end) === true) localRangeCount++
+  }
+  const isComplete = requirement.requiredRanges.length > 0 && localRangeCount === requirement.requiredRanges.length
+  return {
+    success: true,
+    publicationId,
+    renditionId: requirement.renditionId,
+    requiredRangeCount: requirement.requiredRanges.length,
+    localRangeCount,
+    complete: isComplete,
+    retrievable: isComplete,
+    assessmentPending: false,
+    observedAt: clock(),
+  }
+}
+
 export function createMediaGraphApi(options = {}) {
-  const verifiedQueryView = options.verifiedQueryView || options.ctx?.verifiedQueryView || null
-  const sourcePreferenceStore = normalizePreferenceStore(options.sourcePreferenceStore || options.ctx?.sourcePreferenceStore || options.ctx?.metaSubspaces?.mediaSourcePreferences || options.ctx?.metaDb?.sub?.('media-source-preferences'))
-  const trust = options.trust || options.ctx?.mediaGraphTrust || {}
-  const availabilityEvidenceStore = options.availabilityEvidenceStore || options.ctx?.availabilityEvidenceStore || null
-  // Taking custody of a rendition is how this device becomes a holder of it, so
-  // the runtime that owns that is needed across this whole surface, not just in
-  // the artwork path that first reached for it.
-  const scopedNetwork = options.scopedNetwork || options.ctx?.scopedNetwork || null
-  // What this device can actually decode. An absent list leaves that dimension
-  // unconstrained rather than silently rejecting every source.
-  const deviceCapabilities = options.capabilities || options.ctx?.deviceCapabilities || {}
-  const clock = typeof options.now === 'function' ? options.now : () => Date.now()
+  const resolved = resolveMediaGraphOptions(options)
+  const verifiedQueryView = resolved.verifiedQueryView
+  const sourcePreferenceStore = resolved.sourcePreferenceStore
+  const trust = resolved.trust
+  const availabilityEvidenceStore = resolved.availabilityEvidenceStore
+  const blockOffload = resolved.blockOffload
+  const scopedNetwork = resolved.scopedNetwork
+  const deviceCapabilities = resolved.deviceCapabilities
+  const clock = resolved.clock
+  const openCore = resolved.openCore
+  const graphStore = resolved.store
+
 
   /**
    * Open one authorized scoped asset session for a selected source. It proves
@@ -479,57 +887,7 @@ export function createMediaGraphApi(options = {}) {
    */
   const openPlaybackSession = typeof options.openPlaybackSession === 'function'
     ? options.openPlaybackSession
-    : async ({ source }) => {
-      const projected = await verifiedQueryView?.getRendition?.({
-        publicationId: source.publicationId,
-        renditionId: source.renditionId,
-      })
-      const manifest = projected?.manifest || null
-      const requirement = projected?.requirement || null
-      const openCore = options.openCore || options.ctx?.openAssetCore || null
-      if (!manifest || !requirement || typeof openCore !== 'function') {
-        return { success: false, errorCode: 'NO_COMPATIBLE_SOURCE' }
-      }
-      const provenance = (manifest.body?.provenance || []).filter(candidate =>
-        (candidate?.type === 'upload' || candidate?.type === 'artwork') &&
-        candidate.renditionId === source.renditionId &&
-        Number.isSafeInteger(candidate.start) &&
-        Number.isSafeInteger(candidate.end)
-      )
-      const range = provenance.length === 1
-        ? { start: provenance[0].start, end: provenance[0].end }
-        : { start: 0, end: requirement.coreLength }
-      if (!await verifiedQueryView.authorizeRendition({
-        publicationId: source.publicationId,
-        renditionId: source.renditionId,
-        ...range,
-        operation: 'playback',
-      })) return { success: false, errorCode: 'NO_COMPATIBLE_SOURCE' }
-      const session = createAssetSession({ manifest, openCore })
-      let authorized = false
-      try {
-        authorized = await session.authorizeCore({
-          renditionId: source.renditionId,
-          coreKey: requirement?.coreKey,
-        })
-      } catch (thrown) {
-        session.close()
-        // A scoped session reports its own bounded code (SESSION_LIMIT, and
-        // later DRM codes). Only an unrecognised failure degrades to a peer
-        // timeout, so a real reason is never flattened into the wrong policy.
-        const errorCode = isPlaybackErrorCode(thrown?.errorCode) ? thrown.errorCode : 'PEER_TIMEOUT'
-        return { success: false, errorCode }
-      }
-      if (!authorized) {
-        session.close()
-        return { success: false, errorCode: 'RANGE_MISMATCH' }
-      }
-      return {
-        success: true,
-        coreKey: requirement?.coreKey || null,
-        close: () => session.close(),
-      }
-    }
+    : createDefaultPlaybackSessionOpener({ verifiedQueryView, openCore, scopedNetwork })
 
   /**
    * One assessment per rendition per operation. Cards, entity details, Other
@@ -572,14 +930,6 @@ export function createMediaGraphApi(options = {}) {
     if (manifest) return manifest
     const projected = await verifiedQueryView.getRendition?.({ publicationId })
     return projected?.manifest || null
-  }
-
-  async function countLocalRanges(core, ranges) {
-    let held = 0
-    for (const range of ranges) {
-      if (await core.has(range.start, range.end) === true) held++
-    }
-    return held
   }
 
   async function retainEntitySources(entityId, publicationId = null) {
@@ -877,44 +1227,6 @@ export function createMediaGraphApi(options = {}) {
     }), RENDITION_RETAIN_TIMEOUT_MS)
   }
 
-  /**
-   * Walk a blob's blocks and yield exactly the requested byte window. `core.get`
-   * waits on replication, which is what lets a caller range-request a rendition
-   * this device has not finished pulling: the bytes arrive as they land instead
-   * of the request failing because they are not local yet.
-   */
-  async function* readBlobRange(core, blob, start, length) {
-    let remaining = length
-    let index = blob.blockOffset
-    let offset = 0
-    if (start > 0) {
-      const canonicalStaticBlob = blob.blockOffset === 0 &&
-        blob.byteOffset === 0 &&
-        blob.blockLength === Math.ceil(blob.byteLength / ASSET_BLOCK_SIZE)
-      if (canonicalStaticBlob) {
-        index = Math.floor(start / ASSET_BLOCK_SIZE)
-        offset = start % ASSET_BLOCK_SIZE
-      } else {
-        const seek = await core.seek(Number(blob.byteOffset || 0) + start)
-        if (!seek) throw new Error('rendition start byte is unavailable')
-        index = seek[0]
-        offset = seek[1] || 0
-      }
-    }
-    const blockEnd = blob.blockOffset + blob.blockLength
-    while (remaining > 0 && index < blockEnd) {
-      let block = await core.get(index)
-      if (!block || block.byteLength === 0) throw new Error(`rendition block ${index} is unavailable`)
-      if (offset > 0) {
-        block = block.subarray(offset)
-        offset = 0
-      }
-      if (block.byteLength > remaining) block = block.subarray(0, remaining)
-      yield block
-      remaining -= block.byteLength
-      index++
-    }
-  }
 
   return {
     async getMediaCatalog(request = {}) {
@@ -1186,8 +1498,7 @@ export function createMediaGraphApi(options = {}) {
      */
 
     async openMediaRendition(request = {}) {
-      const publicationId = typeof request.publicationId === 'string' ? request.publicationId.trim() : ''
-      const renditionId = typeof request.renditionId === 'string' ? request.renditionId.trim() : ''
+      const { publicationId, renditionId } = parseRenditionRequestIds(request)
       if (!publicationId || !renditionId) return error('INVALID_RENDITION_REQUEST', 'publicationId and renditionId are required')
       const corestore = options.store || options.ctx?.store || null
       if (!verifiedQueryView || typeof corestore?.get !== 'function') {
@@ -1211,30 +1522,12 @@ export function createMediaGraphApi(options = {}) {
       // Asking for the bytes is what fetches them.
       await retainRenditionForRead(manifest, renditionId, publicationId)
 
-      let core = null
-      try {
-        core = corestore.get({ key: b4a.from(ref.blobsCoreKey, 'hex') })
-        await core.ready?.()
-      } catch (err) {
-        try { await core?.close?.() } catch { /* best effort */ }
-        return error('MEDIA_RENDITION_UNAVAILABLE', err?.message || 'Media rendition core could not be opened')
+      const coreResult = await openRenditionCore(corestore, ref.blobsCoreKey)
+      if (coreResult.error) {
+        return error('MEDIA_RENDITION_UNAVAILABLE', coreResult.error)
       }
 
-      const byteLength = ref.blob.byteLength || schemaUint(rendition.core?.byteLength) || 0
-      return {
-        success: true,
-        publicationId,
-        renditionId,
-        assetId: rendition.core?.assetId || ref.assetId,
-        contentType: typeof rendition.format === 'string' && rendition.format ? rendition.format : 'video/mp4',
-        byteLength,
-        read({ start = 0, length = byteLength - start } = {}) {
-          return readBlobRange(core, ref.blob, start, length)
-        },
-        async close() {
-          try { await core.close?.() } catch { /* best effort */ }
-        },
-      }
+      return buildMediaRenditionReader({ publicationId, renditionId, rendition, ref, core: coreResult.core })
     },
 
     /**
@@ -1257,22 +1550,18 @@ export function createMediaGraphApi(options = {}) {
         request.renditionId || null,
       )
       if (!requirement) return error('MEDIA_RENDITION_UNAVAILABLE', 'No unblocked rendition names ranges for this publication')
-      const corestore = options.store || options.ctx?.store || null
+      const corestore = graphStore
+
       if (typeof corestore?.get !== 'function') return error('MEDIA_RENDITION_UNAVAILABLE', 'No local corestore is available')
       let core = null
       try {
         core = corestore.get({ key: b4a.from(requirement.coreKey, 'hex') })
         await core.ready?.()
-        const localRangeCount = await countLocalRanges(core, requirement.requiredRanges)
-        return {
-          success: true,
-          publicationId,
-          renditionId: requirement.renditionId,
-          requiredRangeCount: requirement.requiredRanges.length,
-          localRangeCount,
-          complete: requirement.requiredRanges.length > 0 && localRangeCount === requirement.requiredRanges.length,
-          observedAt: clock(),
+        const { isOffloaded, offload } = resolveOffloadCapability(blockOffload, corestore, core)
+        if (isOffloaded) {
+          return await resolveOffloadedResidency({ offload, core, requirement, publicationId, clock, request })
         }
+        return await checkDirectCoreResidency(core, requirement, publicationId, clock)
       } catch (err) {
         return error('MEDIA_RENDITION_UNAVAILABLE', err?.message || 'Local residency could not be read')
       } finally {

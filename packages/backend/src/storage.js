@@ -34,10 +34,10 @@ import { createMetaSubspaces, migrateMetaSubspaces } from './meta-subspaces.js'
 import { prioritizeBlobServerRangeRequest, releaseAllPrioritizedBlobRanges } from './blob-range-priority.js'
 import { serveThumbnailHttpRequest } from './thumbnail-http.js'
 import { serveVideoRangeHttpRequest } from './video-range-http.js'
-import { installExpectedBlobRequestCancellationHandler } from './blob-request-cancellation.js'
+import { createBlobRequestHandler } from './blob-request-stream.js'
 import { appendDebugLine } from './debug-log.js'
-import { DEFAULT_STORED_PROTOCOL_MIGRATIONS, prepareStoredProtocolState } from './stored-protocol.js'
-export { DEFAULT_STORED_PROTOCOL_MIGRATIONS, prepareStoredProtocolState }
+import { DEFAULT_STORED_PROTOCOL_MIGRATIONS, STORAGE_FORMAT_VERSION, prepareStoredProtocolState } from './stored-protocol.js'
+export { DEFAULT_STORED_PROTOCOL_MIGRATIONS, STORAGE_FORMAT_VERSION, prepareStoredProtocolState }
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000
 
@@ -185,21 +185,7 @@ function isEmbeddedBareKitStoragePath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_EMBEDDED_BAREKIT === '1'
 }
 
-function describeDebugError(error) {
-  if (!error) return 'unknown'
-  if (typeof error === 'string') return error
-  if (typeof error === 'number') return `number:${error}`
-
-  const details = {
-    type: typeof error,
-    constructor: error?.constructor?.name ?? null,
-    code: error?.code ?? null,
-    errno: error?.errno ?? null,
-    message: error?.message ?? null
-  }
-
-  if (error?.stack) details.stack = error.stack
-
+function collectExtraErrorProperties(error, details) {
   try {
     const extra = {}
     for (const key of Object.getOwnPropertyNames(error)) {
@@ -208,7 +194,27 @@ function describeDebugError(error) {
     }
     if (Object.keys(extra).length > 0) details.extra = extra
   } catch { /* best effort */ }
+}
 
+function collectErrorDetails(error) {
+  const details = {
+    type: typeof error,
+    constructor: error?.constructor?.name ?? null,
+    code: error?.code ?? null,
+    errno: error?.errno ?? null,
+    message: error?.message ?? null
+  }
+  if (error?.stack) details.stack = error.stack
+  collectExtraErrorProperties(error, details)
+  return details
+}
+
+function describeDebugError(error) {
+  if (!error) return 'unknown'
+  if (typeof error === 'string') return error
+  if (typeof error === 'number') return `number:${error}`
+
+  const details = collectErrorDetails(error)
   try {
     return JSON.stringify(details)
   } catch {
@@ -465,20 +471,27 @@ export function installBackendCleanupStack(ctx, options = {}) {
 
 const PLAYBACK_ACTIVITY_TTL_MS = 60 * 60 * 1000
 
-function peerKeyHex(value) {
-  if (!value) return null
-  if (typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value)) return value.toLowerCase()
-  if (b4a.isBuffer(value) || value instanceof Uint8Array) {
-    if (value.length !== 32) return null
-    return b4a.toString(value, 'hex')
-  }
-  const publicKey = value?.publicKey || value?.remotePublicKey || value?.key || value?.value?.publicKey || value?.value?.remotePublicKey || value?.value?.key
-  if (typeof publicKey === 'string' && /^[a-f0-9]{64}$/i.test(publicKey)) return publicKey.toLowerCase()
-  if (publicKey && (b4a.isBuffer(publicKey) || publicKey instanceof Uint8Array)) {
-    if (publicKey.length !== 32) return null
-    return b4a.toString(publicKey, 'hex')
+function rawKeyToHex(key) {
+  if (!key) return null
+  if (typeof key === 'string' && /^[a-f0-9]{64}$/i.test(key)) return key.toLowerCase()
+  if (b4a.isBuffer(key) || key instanceof Uint8Array) {
+    if (key.length !== 32) return null
+    return b4a.toString(key, 'hex')
   }
   return null
+}
+
+function extractPeerPublicKey(value) {
+  if (!value || typeof value !== 'object') return null
+  return value.publicKey || value.remotePublicKey || value.key ||
+    value.value?.publicKey || value.value?.remotePublicKey || value.value?.key || null
+}
+
+function peerKeyHex(value) {
+  const directHex = rawKeyToHex(value)
+  if (directHex) return directHex
+  const publicKey = extractPeerPublicKey(value)
+  return rawKeyToHex(publicKey)
 }
 
 const DHT_ROUTING_TABLE_KEY = 'dht-routing-table-v1'
@@ -579,6 +592,33 @@ async function persistDhtRoutingTable(swarm, metaDb, { reason = 'unknown' } = {}
   return { saved: entries.length }
 }
 
+function parseDhtRoutingEntries(persisted) {
+  if (Array.isArray(persisted)) return persisted
+  if (Array.isArray(persisted?.entries)) return persisted.entries
+  return []
+}
+
+function restoreDhtRoutingEntry(router, entry) {
+  const targetHex = typeof entry?.target === 'string' ? entry.target.toLowerCase() : null
+  const recordHex = typeof entry?.record === 'string' ? entry.record : null
+  if (!targetHex || !recordHex) return false
+  try {
+    const target = b4a.from(targetHex, 'hex')
+    const record = b4a.from(recordHex, 'base64')
+    if (target.length !== 32 || record.length === 0) return false
+    router.set(targetHex, {
+      relay: decodePersistedValue(entry?.relay ?? null),
+      record,
+      onconnect: null,
+      onholepunch: null
+    })
+    return true
+  } catch (err) {
+    console.log('[Storage] Skipping persisted DHT route restore entry:', err?.message)
+    return false
+  }
+}
+
 async function restorePersistedDhtRoutingTable(swarm, metaDb, { reason = 'startup' } = {}) {
   if (!swarm?.dht || !metaDb) return { restored: 0, skipped: true }
 
@@ -591,32 +631,13 @@ async function restorePersistedDhtRoutingTable(swarm, metaDb, { reason = 'startu
     return { restored: 0, error: err?.message || String(err) }
   }
 
-  const entries = Array.isArray(persisted)
-    ? persisted
-    : Array.isArray(persisted?.entries)
-      ? persisted.entries
-      : []
-
+  const entries = parseDhtRoutingEntries(persisted)
   if (!entries.length) return { restored: 0 }
 
   let restored = 0
   for (const entry of entries) {
-    const targetHex = typeof entry?.target === 'string' ? entry.target.toLowerCase() : null
-    const recordHex = typeof entry?.record === 'string' ? entry.record : null
-    if (!targetHex || !recordHex) continue
-    try {
-      const target = b4a.from(targetHex, 'hex')
-      const record = b4a.from(recordHex, 'base64')
-      if (target.length !== 32 || record.length === 0) continue
-      swarm.dht._router.set(targetHex, {
-        relay: decodePersistedValue(entry?.relay ?? null),
-        record,
-        onconnect: null,
-        onholepunch: null
-      })
+    if (restoreDhtRoutingEntry(swarm.dht._router, entry)) {
       restored++
-    } catch (err) {
-      console.log('[Storage] Skipping persisted DHT route restore entry:', err?.message)
     }
   }
 
@@ -709,11 +730,39 @@ function describeAddress(address) {
   }
 }
 
+function describeRawStream(rawStream, socket, remoteAddress) {
+  if (!rawStream) return null
+  return {
+    constructor: rawStream.constructor?.name || null,
+    connected: Boolean(rawStream.connected),
+    destroyed: Boolean(rawStream.destroyed),
+    errored: describeStreamError(rawStream),
+    id: rawStream.id ? shortKeyHex(rawStream.id) : null,
+    remoteHost: rawStream.remoteHost || null,
+    remotePort: Number(rawStream.remotePort || 0) || null,
+    remoteAddress: describeAddress(remoteAddress),
+    socketLocal: describeSocketAddress(socket)
+  }
+}
+
+function resolveConnectionEndpoints(conn, rawStream) {
+  const socket = rawStream?.socket || rawStream?._socket || conn.socket || null
+  const remoteAddress = rawStream?.remoteAddress || rawStream?.remote || conn.remoteAddress || null
+  return { socket, remoteAddress }
+}
+
+function resolveConnectionBytes(conn, rawStream) {
+  return {
+    bytesRead: Number(conn.bytesRead || rawStream?.bytesRead || 0),
+    bytesWritten: Number(conn.bytesWritten || rawStream?.bytesWritten || 0)
+  }
+}
+
 function describeTrackedConnection(conn) {
   if (!conn || typeof conn !== 'object') return null
   const rawStream = conn.rawStream || conn._rawStream || null
-  const socket = rawStream?.socket || rawStream?._socket || conn.socket || null
-  const remoteAddress = rawStream?.remoteAddress || rawStream?.remote || conn.remoteAddress || null
+  const { socket, remoteAddress } = resolveConnectionEndpoints(conn, rawStream)
+  const bytes = resolveConnectionBytes(conn, rawStream)
   return {
     constructor: conn.constructor?.name || null,
     destroyed: Boolean(conn.destroyed),
@@ -724,19 +773,9 @@ function describeTrackedConnection(conn) {
     writable: Boolean(conn.writable),
     connecting: Boolean(conn.connecting),
     error: describeStreamError(conn),
-    rawStream: rawStream ? {
-      constructor: rawStream.constructor?.name || null,
-      connected: Boolean(rawStream.connected),
-      destroyed: Boolean(rawStream.destroyed),
-      errored: describeStreamError(rawStream),
-      id: rawStream.id ? shortKeyHex(rawStream.id) : null,
-      remoteHost: rawStream.remoteHost || null,
-      remotePort: Number(rawStream.remotePort || 0) || null,
-      remoteAddress: describeAddress(remoteAddress),
-      socketLocal: describeSocketAddress(socket)
-    } : null,
-    bytesRead: Number(conn.bytesRead || rawStream?.bytesRead || 0),
-    bytesWritten: Number(conn.bytesWritten || rawStream?.bytesWritten || 0)
+    rawStream: describeRawStream(rawStream, socket, remoteAddress),
+    bytesRead: bytes.bytesRead,
+    bytesWritten: bytes.bytesWritten
   }
 }
 
@@ -779,8 +818,7 @@ function attachConnectionDiagnostics(conn, entry) {
   try { rawStream?.once?.('error', (err) => recordEvent('raw-error', { error: describeStreamError({ errored: err }) })) } catch { /* diagnostics only */ }
 }
 
-function describeDhtState(dht) {
-  if (!dht) return null
+function resolveDhtAddresses(dht) {
   let socketAddress = null
   let localAddress = null
   let remoteAddress = null
@@ -790,6 +828,12 @@ function describeDhtState(dht) {
   } catch { socketAddress = null }
   try { localAddress = dht.localAddress?.() || null } catch { localAddress = null }
   try { remoteAddress = dht.remoteAddress?.() || null } catch { remoteAddress = null }
+  return { socketAddress, localAddress, remoteAddress }
+}
+
+function describeDhtState(dht) {
+  if (!dht) return null
+  const { socketAddress, localAddress, remoteAddress } = resolveDhtAddresses(dht)
   return {
     bootstrapped: dht.bootstrapped ?? null,
     firewalled: dht.firewalled ?? null,
@@ -812,7 +856,8 @@ function createSwarmDiagnostics(swarm) {
   const maxRecent = 20
 
   const record = (items, entry) => {
-    items.push({ at: Date.now(), ...entry })
+    entry.at = Date.now()
+    items.push(entry)
     while (items.length > maxRecent) items.shift()
   }
 
@@ -1350,6 +1395,70 @@ function isValidCoreKeyHex(value) {
  * @param {{ label?: string, maxVideos?: number, loadPublicBee?: Function }} [options]
  * @returns {Promise<{publicBeeKey: string, videos: number, blobCores: number, thumbnailBlobCores: number, discoveryHandles: number, retained: number, errors: number, lastError: string | null}>}
  */
+function collectPublicBeeVideoCoreKeys(videos, maxVideosOption, stats) {
+  const maxVideos = Number.isFinite(maxVideosOption) && maxVideosOption > 0
+    ? Math.floor(maxVideosOption)
+    : 200
+  const coreKeys = new Map()
+  const list = Array.isArray(videos) ? videos.slice(0, maxVideos) : []
+  for (const video of list) {
+    stats.videos += 1
+    if (isValidCoreKeyHex(video?.blobsCoreKey)) coreKeys.set(video.blobsCoreKey.toLowerCase(), 'blob')
+    if (isValidCoreKeyHex(video?.thumbnailBlobsCoreKey)) coreKeys.set(video.thumbnailBlobsCoreKey.toLowerCase(), 'thumbnail')
+  }
+  return coreKeys
+}
+
+async function loadPublicBeeVideos(ctx, publicBeeKeyHex, loadPublicBeeImpl, stats) {
+  let publicBee = null
+  try {
+    publicBee = await loadPublicBeeImpl(ctx, publicBeeKeyHex)
+    if (ctx?.lifecycle?.signal?.aborted) return null
+  } catch (err) {
+    stats.errors += 1
+    stats.lastError = err?.message || String(err)
+    return null
+  }
+
+  try {
+    const videos = await publicBee?.listVideos?.().catch(() => [])
+    if (ctx?.lifecycle?.signal?.aborted) return null
+    return videos
+  } catch (err) {
+    stats.errors += 1
+    stats.lastError = err?.message || String(err)
+    return []
+  }
+}
+
+async function retainDiscoveredCore(ctx, coreKeyHex, kind, options, stats) {
+  try {
+    const core = ctx.store?.get?.(b4a.from(coreKeyHex, 'hex'))
+    if (core) {
+      const resourceLabel = `retained ${kind} core ${coreKeyHex.slice(0, 16)}`
+      if (typeof ctx.ownResource === 'function') {
+        ctx.ownResource(resourceLabel, core, 'close')
+      } else {
+        ownContextResource(ctx, resourceLabel, core, 'close')
+      }
+    }
+    await core?.ready?.()
+    if (ctx?.lifecycle?.signal?.aborted) return false
+    if (core?.discoveryKey && retainSwarmDiscovery(ctx, core.discoveryKey, {
+      label: `${options.label || 'publicBee'}:${kind}:${coreKeyHex.slice(0, 16)}`
+    })) {
+      stats.retained += 1
+      if (kind === 'thumbnail') stats.thumbnailBlobCores += 1
+      else stats.blobCores += 1
+    }
+    return true
+  } catch (err) {
+    stats.errors += 1
+    stats.lastError = err?.message || String(err)
+    return true
+  }
+}
+
 export async function retainPublicBeeContentDiscovery(ctx, publicBeeKeyHex, options = {}) {
   const stats = {
     publicBeeKey: publicBeeKeyHex,
@@ -1373,69 +1482,615 @@ export async function retainPublicBeeContentDiscovery(ctx, publicBeeKeyHex, opti
     return stats
   }
 
-  let publicBee = null
-  try {
-    publicBee = await loadPublicBeeImpl(ctx, publicBeeKeyHex)
-    if (signal?.aborted) return stats
-  } catch (err) {
-    stats.errors += 1
-    stats.lastError = err?.message || String(err)
-    return stats
-  }
+  const videos = await loadPublicBeeVideos(ctx, publicBeeKeyHex, loadPublicBeeImpl, stats)
+  if (signal?.aborted || videos === null) return stats
 
-  let videos = []
-  try {
-    videos = await publicBee?.listVideos?.().catch(() => [])
-    if (signal?.aborted) return stats
-  } catch (err) {
-    stats.errors += 1
-    stats.lastError = err?.message || String(err)
-    videos = []
-  }
-
-  const maxVideos = Number.isFinite(options.maxVideos) && options.maxVideos > 0
-    ? Math.floor(options.maxVideos)
-    : 200
-  const coreKeys = new Map()
-  for (const video of (Array.isArray(videos) ? videos.slice(0, maxVideos) : [])) {
-    stats.videos += 1
-    if (isValidCoreKeyHex(video?.blobsCoreKey)) coreKeys.set(video.blobsCoreKey.toLowerCase(), 'blob')
-    if (isValidCoreKeyHex(video?.thumbnailBlobsCoreKey)) coreKeys.set(video.thumbnailBlobsCoreKey.toLowerCase(), 'thumbnail')
-  }
-
+  const coreKeys = collectPublicBeeVideoCoreKeys(videos, options.maxVideos, stats)
   for (const [coreKeyHex, kind] of coreKeys) {
     if (signal?.aborted) return stats
-    try {
-      const core = ctx.store?.get?.(b4a.from(coreKeyHex, 'hex'))
-      if (core) {
-        if (typeof ctx.ownResource === 'function') {
-          ctx.ownResource(`retained ${kind} core ${coreKeyHex.slice(0, 16)}`, core, 'close')
-        } else {
-          ownContextResource(ctx, `retained ${kind} core ${coreKeyHex.slice(0, 16)}`, core, 'close')
-        }
-      }
-      await core?.ready?.()
-      if (signal?.aborted) return stats
-      if (core?.discoveryKey && retainSwarmDiscovery(ctx, core.discoveryKey, {
-        label: `${options.label || 'publicBee'}:${kind}:${coreKeyHex.slice(0, 16)}`
-      })) {
-        stats.retained += 1
-        if (kind === 'thumbnail') stats.thumbnailBlobCores += 1
-        else stats.blobCores += 1
-      }
-    } catch (err) {
-      stats.errors += 1
-      stats.lastError = err?.message || String(err)
-    }
+    const ok = await retainDiscoveredCore(ctx, coreKeyHex, kind, options, stats)
+    if (!ok && signal?.aborted) return stats
   }
 
   stats.discoveryHandles = getSwarmDiscoveryHandles(ctx).size
   return stats
 }
+function resolveSwarmKeyCandidates(storagePath, swarmKeyPath) {
+  const resolvedSwarmKeyPath = swarmKeyPath || (path && storagePath ? path.join(storagePath, 'swarm-key.json') : null)
+  const candidates = resolvedSwarmKeyPath
+    ? [...(path && storagePath && !swarmKeyPath
+        ? [path.join(storagePath, 'db', 'swarm-key.json')]
+        : []), resolvedSwarmKeyPath]
+    : []
+  return { resolvedSwarmKeyPath, candidates }
+}
 
+function loadPersistedSwarmKeyPair(candidates) {
+  if (!fs) return null
+  for (const candidate of candidates) {
+    try {
+      const raw = fs.readFileSync(candidate, 'utf-8')
+      const parsed = JSON.parse(typeof raw === 'string' ? raw : b4a.toString(raw, 'utf8'))
+      if (parsed?.publicKey && parsed?.secretKey) {
+        console.log('[Storage] Loaded persisted swarm key:', parsed.publicKey.slice(0, 16), 'from', candidate)
+        return {
+          publicKey: b4a.from(parsed.publicKey, 'hex'),
+          secretKey: b4a.from(parsed.secretKey, 'hex')
+        }
+      }
+    } catch {
+      // Missing or invalid at this location; try next
+    }
+  }
+  return null
+}
 
+function persistSwarmKeyPair(keyPair, resolvedSwarmKeyPath, isNew) {
+  if (!resolvedSwarmKeyPath || !fs) return
+  try {
+    if (isNew) {
+      fs.mkdirSync(path.dirname(resolvedSwarmKeyPath), { recursive: true })
+    }
+    fs.writeFileSync(resolvedSwarmKeyPath, JSON.stringify({
+      publicKey: b4a.toString(keyPair.publicKey, 'hex'),
+      secretKey: b4a.toString(keyPair.secretKey, 'hex')
+    }))
+    if (isNew) {
+      console.log('[Storage] Persisted new swarm key to', resolvedSwarmKeyPath)
+    }
+  } catch (e) {
+    const action = isNew ? 'persist swarm key' : 'canonicalize swarm key'
+    console.log(`[Storage] Could not ${action}:`, e.message)
+  }
+}
 
+function resolveStorageSwarmKeyPair({ storagePath, swarmKeyPath }) {
+  const { resolvedSwarmKeyPath, candidates } = resolveSwarmKeyCandidates(storagePath, swarmKeyPath)
+  let keyPair = loadPersistedSwarmKeyPair(candidates)
+  if (keyPair) {
+    persistSwarmKeyPair(keyPair, resolvedSwarmKeyPath, false)
+  } else {
+    keyPair = crypto.keyPair()
+    persistSwarmKeyPair(keyPair, resolvedSwarmKeyPath, true)
+  }
+  return keyPair
+}
 
+async function createInitialHyperswarm({ keyPair, platform, network, swarmOptions, lifecycle }) {
+  console.log('[Storage] Creating Hyperswarm (early, before storage warmup)...')
+  await appendDebugLine('[storage] creating hyperswarm early')
+  const LoadedHyperswarm = await waitForHyperswarmModule()
+  const hyperswarmOptions = resolveHyperswarmOptions({
+    keyPair,
+    platform,
+    network,
+    swarmOptions
+  })
+  let swarm
+  if (typeof LoadedHyperswarm !== 'function') {
+    console.warn('[Storage] Hyperswarm unavailable; continuing with offline P2P networking')
+    await appendDebugLine('[storage] hyperswarm unavailable; using offline swarm')
+    swarm = createOfflineSwarm(keyPair, 'module-unavailable')
+  } else {
+    try {
+      swarm = new LoadedHyperswarm(hyperswarmOptions)
+    } catch (err) {
+      console.warn('[Storage] Hyperswarm creation failed; continuing with offline P2P networking:', err?.message)
+      await appendDebugLine(`[storage] hyperswarm create failed; using offline swarm ${err?.message || String(err)}`)
+      swarm = createOfflineSwarm(keyPair, err?.message || 'create-failed')
+    }
+  }
+  const swarmOwnership = lifecycle.ownResource('Hyperswarm', swarm, 'destroy', 2000)
+  swarm._peartubeSwarmOptions = summarizeSwarmOptions(hyperswarmOptions)
+  console.log('[Storage] Swarm created, publicKey:', b4a.toString(swarm.keyPair.publicKey, 'hex').slice(0, 16))
+  globalNetworkStartupTiming?.record('swarm-created', {
+    offline: Boolean(swarm._peartubeOffline),
+    options: swarm._peartubeSwarmOptions
+  })
+  const initialDhtState = describeDhtState(swarm.dht)
+  if (initialDhtState) {
+    console.log('[Storage] Initial DHT bind state:', JSON.stringify(initialDhtState))
+  }
+  await appendDebugLine(`[storage] hyperswarm created offline=${Boolean(swarm._peartubeOffline)}`)
+  globalSwarmDiagnostics = createSwarmDiagnostics(swarm)
+  installSwarmConnectDiagnostics(swarm, globalSwarmDiagnostics)
+  globalSwarm = swarm
+
+  if (!swarm._peartubeOffline && typeof swarm.dht?.ready === 'function') {
+    swarm.dht.ready()
+      .then(() => {
+        globalNetworkStartupTiming?.record('dht-early-bootstrap', { bootstrapped: swarm.dht?.bootstrapped, firewalled: swarm.dht?.firewalled })
+        console.log('[Storage] Early DHT bootstrap done, bootstrapped:', swarm.dht?.bootstrapped, 'firewalled:', swarm.dht?.firewalled)
+        void appendDebugLine(`[storage] early dht bootstrap done bootstrapped=${swarm.dht?.bootstrapped} firewalled=${swarm.dht?.firewalled}`)
+      })
+      .catch((err) => {
+        console.log('[Storage] Early DHT bootstrap failed (non-fatal):', err?.message)
+        void appendDebugLine(`[storage] early dht bootstrap failed ${err?.message || String(err)}`)
+      })
+  }
+  return { swarm, swarmOwnership }
+}
+
+async function relocateLegacyStorageDirectories(storagePath) {
+  if (isEmbeddedBareKitStoragePath()) {
+    await appendDebugLine('[storage] relocateLegacyLogsDir skipped for embedded BareKit storage')
+    return
+  }
+  try {
+    await appendDebugLine('[storage] relocateLegacyCorestoreDir start')
+    const relocatedCorestoreDir = relocateLegacyCorestoreDir(storagePath, fs, path)
+    await appendDebugLine(`[storage] relocateLegacyCorestoreDir done moved=${relocatedCorestoreDir || 'none'}`)
+    if (relocatedCorestoreDir) {
+      console.log('[Storage] Relocated legacy corestore dir to avoid Corestore migration conflict:', relocatedCorestoreDir)
+    }
+  } catch (error) {
+    await appendDebugLine(`[storage] relocateLegacyCorestoreDir failed ${describeDebugError(error)}`)
+    console.warn('[Storage] Failed to relocate legacy corestore dir before Corestore init:', error?.message)
+  }
+
+  try {
+    await appendDebugLine('[storage] relocateLegacyBlindPeerDir start')
+    const relocatedBlindPeerDir = relocateLegacyBlindPeerDir(storagePath, fs, path)
+    await appendDebugLine(`[storage] relocateLegacyBlindPeerDir done moved=${relocatedBlindPeerDir || 'none'}`)
+    if (relocatedBlindPeerDir) {
+      console.log('[Storage] Relocated legacy blind-peer dir to avoid Corestore migration conflict:', relocatedBlindPeerDir)
+    }
+  } catch (error) {
+    await appendDebugLine(`[storage] relocateLegacyBlindPeerDir failed ${describeDebugError(error)}`)
+    console.warn('[Storage] Failed to relocate legacy blind-peer dir before Corestore init:', error?.message)
+  }
+
+  try {
+    await appendDebugLine('[storage] relocateLegacyLogsDir start')
+    const relocatedLogsDir = relocateLegacyLogsDir(storagePath, fs, path)
+    await appendDebugLine(`[storage] relocateLegacyLogsDir done moved=${relocatedLogsDir || 'none'}`)
+    if (relocatedLogsDir) {
+      console.log('[Storage] Relocated legacy logs dir to avoid Corestore migration conflict:', relocatedLogsDir)
+    }
+  } catch (error) {
+    await appendDebugLine(`[storage] relocateLegacyLogsDir failed ${describeDebugError(error)}`)
+    console.warn('[Storage] Failed to relocate legacy logs dir before Corestore init:', error?.message)
+  }
+}
+
+async function setupStorageCorestore({
+  storagePath,
+  primaryKey,
+  corestoreWaitForLock,
+  corestoreAllowBackup,
+  blockOffload,
+  defaultTimeout,
+  lifecycle,
+  destroySwarmAfterInitFailure
+}) {
+  console.log('[Storage] Creating Corestore...')
+  await appendDebugLine('[storage] creating corestore')
+  console.log('[Storage] Corestore primaryKey:', primaryKey ? 'provided (deterministic)' : 'not provided (random)')
+  console.log('[Storage] Corestore lock wait:', corestoreWaitForLock ? 'enabled' : 'disabled')
+  const offloadWrapStorage = typeof blockOffload?.wrapStorage === 'function' ? blockOffload.wrapStorage : null
+  if (offloadWrapStorage !== null) {
+    console.log('[Storage] Corestore block offload: enabled (block data may live in an object store)')
+    await appendDebugLine('[storage] corestore block offload enabled')
+  }
+  const corestoreOptions = primaryKey
+    ? { primaryKey, unsafe: true, wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup, wrapStorage: offloadWrapStorage }
+    : { wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup, wrapStorage: offloadWrapStorage }
+  let store
+  let storeOwnership = null
+  try {
+    store = await createCorestoreInstance(storagePath, corestoreOptions)
+    storeOwnership = lifecycle.ownResource('Corestore', store, 'close', 5000)
+  } catch (error) {
+    await appendDebugLine(`[storage] corestore create failed ${describeDebugError(error)}`)
+    await destroySwarmAfterInitFailure('corestore create')
+    throw error
+  }
+
+  console.log('[Storage] Waiting for Corestore ready...')
+  await appendDebugLine('[storage] awaiting corestore ready')
+  try {
+    await store.ready()
+  } catch (error) {
+    await appendDebugLine(`[storage] corestore ready failed ${describeDebugError(error)}`)
+    await cleanupFailedCorestoreOpen(store, 'corestore ready cleanup', {
+      appendDebugLine,
+      describeError: describeDebugError
+    })
+    storeOwnership?.release()
+    await destroySwarmAfterInitFailure('corestore ready')
+    throw error
+  }
+  console.log('[Storage] Corestore ready, opened:', store.opened, 'closed:', store.closed)
+  await appendDebugLine(`[storage] corestore ready opened=${store.opened} closed=${store.closed}`)
+  if (b4a.isBuffer(store.primaryKey)) {
+    const primaryKeyHex = b4a.toString(store.primaryKey, 'hex')
+    console.log('[Storage] Corestore primaryKey after ready:', `${primaryKeyHex.slice(0, 16)}...`)
+    await appendDebugLine(`[storage] corestore primaryKey after ready ${primaryKeyHex}`)
+  }
+
+  wrapStoreWithTimeout(store, defaultTimeout)
+  const blobStore = wrapStoreForBlobServerStreaming(store)
+  return { store, storeOwnership, blobStore }
+}
+
+async function setupStorageMetadata({
+  store,
+  storagePath,
+  platform,
+  storedProtocol,
+  blockOffload,
+  lifecycle,
+  cleanupFailedMetadataStartup
+}) {
+  let metaCore = null
+  let metaDb = null
+  let metaCoreOwnership = null
+  let metaDbOwnership = null
+
+  await appendDebugLine('[storage] metaCore get start')
+  console.log('[Storage] metaCore get start')
+  blockOffload?.holdEviction?.()
+  try {
+    metaCore = await openDeterministicNamedCore(store, 'peartube-meta')
+    metaCoreOwnership = lifecycle.ownResource('metadata core', metaCore, 'close', 2000)
+  } catch (error) {
+    await appendDebugLine(`[storage] metaCore get failed ${describeDebugError(error)}`)
+    console.error('[Storage] metaCore get failed:', describeDebugError(error))
+    blockOffload?.startEviction?.()
+    await cleanupFailedMetadataStartup('metaCore.get', error)
+  }
+  await appendDebugLine('[storage] metaCore get returned')
+  console.log('[Storage] metaCore get returned')
+  try {
+    await appendDebugLine('[storage] metaCore ready start')
+    console.log('[Storage] metaCore ready start')
+    await metaCore.ready()
+    await appendDebugLine('[storage] metaCore ready ok')
+    console.log('[Storage] metaCore ready ok')
+    blockOffload?.excludeCore?.(b4a.toString(metaCore.key, 'hex'))
+  } catch (error) {
+    await appendDebugLine(`[storage] metaCore ready failed ${describeDebugError(error)}`)
+    console.error('[Storage] metaCore ready failed:', describeDebugError(error))
+    await cleanupFailedMetadataStartup('metaCore.ready', error)
+  } finally {
+    blockOffload?.startEviction?.()
+  }
+
+  await appendDebugLine('[storage] metaDb construct start')
+  console.log('[Storage] metaDb construct start')
+  metaDb = new Hyperbee(metaCore, {
+    keyEncoding: 'utf-8',
+    valueEncoding: 'json'
+  })
+  metaDbOwnership = lifecycle.ownResource('metadata database', metaDb, 'close', 2000)
+  await appendDebugLine('[storage] metaDb construct ok')
+  console.log('[Storage] metaDb construct ok')
+  try {
+    await appendDebugLine('[storage] metaDb ready start')
+    console.log('[Storage] metaDb ready start')
+    await metaDb.ready()
+    await appendDebugLine('[storage] metaDb ready')
+    console.log('[Storage] metaDb ready')
+    globalMetaDb = metaDb
+  } catch (error) {
+    await appendDebugLine(`[storage] metaDb ready failed ${describeDebugError(error)}`)
+    console.error('[Storage] metaDb ready failed:', describeDebugError(error))
+    await cleanupFailedMetadataStartup('metaDb.ready', error)
+  }
+
+  if (storedProtocol) {
+    try {
+      await storedProtocol.migrate({ store, metaCore, metaDb, storagePath, platform })
+    } catch (error) {
+      await cleanupFailedMetadataStartup('stored protocol migration', error)
+    }
+  }
+
+  const metaSubspaces = createMetaSubspaces(metaDb)
+  try {
+    const migration = await migrateMetaSubspaces(metaDb, metaSubspaces)
+    if (migration.migrated > 0 || migration.incomplete) {
+      console.log('[Storage] meta-subspaces migration:', JSON.stringify(migration))
+    }
+  } catch (error) {
+    console.warn('[Storage] meta-subspaces migration skipped (non-fatal):', error?.message)
+  }
+
+  return { metaCore, metaDb, metaSubspaces, metaCoreOwnership, metaDbOwnership }
+}
+
+function createBlobServerRequestHandler({
+  store,
+  blobServer,
+  origOnRequest,
+  getStorageContext,
+  swarm,
+  staticAssetPlaybackEntries
+}) {
+  return async function (req, res) {
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
+    res.setHeader('Access-Control-Allow-Headers', 'Range')
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
+    if (String(req.url || '').includes('pt_health=1')) {
+      res.writeHead(204)
+      res.end()
+      return
+    }
+
+    try {
+      const handled = await serveThumbnailHttpRequest({
+        store,
+        blobServer,
+        retainDiscovery: (discoveryKey, options) => retainSwarmDiscovery(getStorageContext() || { swarm }, discoveryKey, options)
+      }, req, res)
+      if (handled) return
+    } catch (err) {
+      console.log('[Storage] Thumbnail serve failed:', err?.message || err)
+    }
+
+    try {
+      const handled = await serveVideoRangeHttpRequest({
+        blobServer,
+        staticAssetEntries: staticAssetPlaybackEntries,
+        onStaticPlayhead: event => getStorageContext()?.playbackForwardFill?.onPlayhead?.(event),
+      }, req, res)
+      if (handled) return
+    } catch (err) {
+      console.log('[Storage] Video range serve failed:', err?.message || err)
+      if (String(req.url || '').includes('pt_static_asset=')) {
+        if (!res.headersSent && !res.writableEnded) {
+          const body = b4a.from('verified static source unavailable')
+          res.statusCode = 503
+          res.setHeader('Content-Type', 'text/plain')
+          res.setHeader('Content-Length', String(body.byteLength))
+          res.writeHead(503)
+          res.end(req.method === 'HEAD' ? undefined : body)
+        }
+        return
+      }
+    }
+
+    try {
+      await prioritizeBlobServerRangeRequest(blobServer, req)
+    } catch (err) {
+      console.log('[Storage] Blob range priority failed:', err?.message || err)
+    }
+    return origOnRequest(req, res)
+  }
+}
+
+function startBlobServerListening(blobServer, resolveBlobServerReady) {
+  let blobServerPort = 0
+  let blobServerError = null
+
+  const markBlobServerReady = (port, error = null) => {
+    blobServerPort = Number(port || 0) || 0
+    blobServerError = error || null
+    blobServer._peartubeListenResolved = true
+    blobServer._peartubeReady = blobServerPort > 0 && !blobServerError
+    blobServer._peartubeListenError = blobServerError
+    if (!blobServerError) {
+      console.log('[Storage] Blob server listening on port:', blobServerPort)
+      void appendDebugLine(`[storage] blob server listening port=${blobServerPort}`)
+    }
+    resolveBlobServerReady?.({ port: blobServerPort, error: blobServerError })
+  }
+
+  blobServer._peartubeListenResolved = false
+  blobServer._peartubeReady = false
+  blobServer._peartubeListenError = null
+  const blobServerListenPromise = blobServer.listen()
+
+  if (blobServerListenPromise && typeof blobServerListenPromise.then === 'function') {
+    blobServerListenPromise
+      .then(() => {
+        const resolvedPort = Number(blobServer.port || 0) || 0
+        if (!resolvedPort) {
+          markBlobServerReady(0, new Error('Blob server listen resolved without an assigned port'))
+          return
+        }
+        markBlobServerReady(resolvedPort)
+      })
+      .catch((err) => {
+        markBlobServerReady(0, err)
+      })
+  } else {
+    const resolvedPort = Number(blobServer.port || 0) || 0
+    markBlobServerReady(
+      resolvedPort,
+      resolvedPort ? null : new Error('Blob server listen returned before an assigned port was available')
+    )
+  }
+}
+
+async function setupStorageBlobServer({
+  store,
+  blobStore,
+  blobServerPortOverride,
+  blobServerBindHost,
+  lifecycle,
+  getStorageContext,
+  swarm,
+  staticAssetPlaybackEntries
+}) {
+  let blobServer = null
+  let blobServerError = null
+  let resolveBlobServerReady
+  const blobServerReady = new Promise((resolve) => {
+    resolveBlobServerReady = resolve
+  })
+  let blobServerOwnership = null
+
+  try {
+    const desiredPort = blobServerPortOverride || 0
+    blobServer = new BlobServer(blobStore, {
+      port: desiredPort || 0,
+      host: blobServerBindHost
+    })
+    blobServer._onblob = createBlobRequestHandler(blobServer)
+    blobServerOwnership = lifecycle.own('blob server', async () => {
+      releaseAllPrioritizedBlobRanges()
+      await blobServer?.close?.()
+    }, 2000)
+    blobServer._peartubeLifecycle = lifecycle
+    const origOnRequest = blobServer._onrequest.bind(blobServer)
+    blobServer._onrequest = createBlobServerRequestHandler({
+      store,
+      blobServer,
+      origOnRequest,
+      getStorageContext,
+      swarm,
+      staticAssetPlaybackEntries
+    })
+
+    console.log('[Storage] Starting blob server listen...')
+    await appendDebugLine('[storage] blob server listen start')
+    globalBlobServer = blobServer
+    startBlobServerListening(blobServer, resolveBlobServerReady)
+  } catch (err) {
+    blobServerError = err
+    resolveBlobServerReady?.({ port: 0, error: err })
+    console.error('[Storage] Failed to initialize blob server:', err.message)
+    await appendDebugLine(`[storage] blob server init failed ${err?.message || String(err)}`)
+  }
+
+  return { blobServer, blobServerError, blobServerReady, blobServerOwnership }
+}
+
+function initOptionalNetworkStats(swarm, lifecycle) {
+  if (HyperswarmStats) {
+    try {
+      networkStats = new HyperswarmStats(swarm)
+      lifecycle.ownResource('network statistics', networkStats, ['destroy', 'close', 'stop'], 2000)
+      console.log('[Storage] Network stats initialized')
+    } catch (e) {
+      console.log('[Storage] Network stats init failed:', e?.message)
+    }
+  }
+}
+
+function initWakeupProtocol(lifecycle) {
+  if (!Wakeup) return null
+  try {
+    const wakeup = new Wakeup()
+    lifecycle.ownResource('wakeup protocol', wakeup, ['destroy', 'close', 'stop'], 2000)
+    console.log('[Storage] Wakeup protocol initialized')
+    return wakeup
+  } catch (err) {
+    console.log('[Storage] Wakeup init failed (non-fatal):', err?.message)
+    return null
+  }
+}
+
+function initKnownPeerCache(swarm, metaDb, lifecycle) {
+  const selfKeyHex = swarm.keyPair?.publicKey ? b4a.toString(swarm.keyPair.publicKey, 'hex') : null
+  const knownPeerCache = createKnownPeerCache(metaDb, { selfKeyHex })
+  lifecycle.ownResource('known-peer cache', knownPeerCache, 'close', 2000)
+  globalKnownPeerCache = knownPeerCache
+  return knownPeerCache
+}
+
+function registerWakeupStream(wakeup, conn) {
+  if (!wakeup) return
+  try {
+    wakeup.addStream(conn)
+  } catch (err) {
+    console.log('[Storage] Wakeup addStream error (non-fatal):', err?.message)
+  }
+}
+
+function handleSwarmConnection(conn, info, { swarm, knownPeerCache, wakeup }) {
+  try {
+    if (!conn || conn.destroyed) return
+    try { conn.setKeepAlive?.(4000) } catch { /* best effort */ }
+    const remoteKey = info?.publicKey ? b4a.toString(info.publicKey, 'hex').slice(0, 16) : 'unknown'
+    const connections = swarm.connections?.size || 0
+    const connecting = swarm.connecting || 0
+    globalNetworkStartupTiming?.record('socket-connected', { key: remoteKey, connections, connecting })
+    globalSwarmDiagnostics?.recordConnection?.(conn, info)
+    console.log('[Storage] Peer connected:', remoteKey, 'connections:', connections, 'connecting:', connecting)
+    void appendDebugLine(`[storage] peer connected ${remoteKey} connections=${connections} connecting=${connecting}`)
+    if (info?.publicKey) knownPeerCache.record(info.publicKey)
+    registerWakeupStream(wakeup, conn)
+  } catch (err) {
+    console.log('[Storage] connection handler error (non-fatal):', err?.message)
+  }
+}
+
+function wireSwarmEventListeners({ swarm, knownPeerCache, wakeup }) {
+  swarm.on('connection', (conn, info) => handleSwarmConnection(conn, info, { swarm, knownPeerCache, wakeup }))
+  swarm.on('update', () => {
+    globalSwarmDiagnostics?.recordUpdate?.()
+    log.debug('Swarm update event', { connections: swarm.connections?.size || 0, peers: swarm.peers?.size || 0 })
+  })
+}
+
+function scheduleWarmReconnect(swarm, metaDb, lifecycle) {
+  if (!swarm._peartubeOffline && typeof swarm.joinPeer === 'function') {
+    lifecycle.defer('known peer warm reconnect', async (signal) => {
+      try {
+        const known = await loadKnownPeers(metaDb)
+        let dialed = 0
+        for (const { key } of known.slice(0, KNOWN_PEER_REDIAL_LIMIT)) {
+          if (signal.aborted) return
+          try { swarm.joinPeer(b4a.from(key, 'hex')); dialed++ } catch { /* best effort */ }
+        }
+        if (dialed > 0) {
+          console.log('[Storage] Warm reconnect: re-dialing', dialed, 'known peer(s) from prior sessions')
+          void appendDebugLine(`[storage] warm reconnect re-dialing ${dialed} known peers`)
+        }
+      } catch (err) {
+        if (!signal.aborted) console.log('[Storage] Warm reconnect skipped:', err?.message || err)
+      }
+    })
+  }
+}
+
+function startSwarmListening(swarm) {
+  console.log('[Storage] Starting swarm.listen() (non-blocking)...')
+  void appendDebugLine('[storage] swarm.listen start')
+  const listenPromise = swarm.listen()
+  swarm._peartubeListenPromise = listenPromise
+  globalNetworkStartupTiming?.record('swarm-listen-called')
+
+  swarm._peartubeListenResolved = false
+  if (!listenPromise || typeof listenPromise.then !== 'function') {
+    swarm._peartubeListenResolved = true
+  } else {
+    listenPromise
+      .then(() => {
+        swarm._peartubeListenResolved = true
+        globalNetworkStartupTiming?.record('swarm-listen-resolved', { firewalled: swarm.dht?.firewalled, bootstrapped: swarm.dht?.bootstrapped })
+        console.log('[Storage] listen() resolved, dht.firewalled:', swarm.dht?.firewalled, 'dht.bootstrapped:', swarm.dht?.bootstrapped)
+        void appendDebugLine(
+          `[storage] swarm.listen resolved firewalled=${swarm.dht?.firewalled} bootstrapped=${swarm.dht?.bootstrapped}`
+        )
+      })
+      .catch((e) => {
+        globalNetworkStartupTiming?.record('swarm-listen-failed', { error: e?.message || String(e) })
+        console.log('[Storage] listen() failed:', e?.message)
+        void appendDebugLine(`[storage] swarm.listen failed ${e?.message || String(e)}`)
+      })
+  }
+}
+
+function scheduleDhtStateLogging(swarm, lifecycle) {
+  const logDhtState = () => {
+    const dht = swarm.dht
+    if (dht) {
+      const state = describeDhtState(dht)
+      console.log('[Storage] DHT state: bootstrapped=', dht.bootstrapped, 'firewalled=', dht.firewalled, 'ephemeral=', dht.ephemeral, 'online=', dht.online, 'address=', state?.socketAddress, 'remoteAddress=', state?.remoteAddress)
+      void appendDebugLine(
+        `[storage] dht state bootstrapped=${dht.bootstrapped} firewalled=${dht.firewalled} ephemeral=${dht.ephemeral} online=${dht.online} address=${JSON.stringify(state?.socketAddress || null)} remoteAddress=${JSON.stringify(state?.remoteAddress || null)}`
+      )
+    }
+  }
+
+  lifecycle.ownTimer('DHT state log timer (2s)', setTimeout(logDhtState, 2000))
+  lifecycle.ownTimer('DHT state log timer (5s)', setTimeout(logDhtState, 5000))
+}
 /**
  * Initialize core storage components.
  *
@@ -1446,6 +2101,7 @@ export async function retainPublicBeeContentDiscovery(ctx, publicBeeKeyHex, opti
  * @param {number} [config.blobServerPort] - Optional fixed blob server port
  * @param {string} [config.blobServerHost] - Optional blob server host (defaults to 127.0.0.1)
  * @param {string} [config.blobServerBindHost] - Optional blob server bind host (defaults to blobServerHost)
+ * @param {number} [config.expectedStorageFormatVersion=STORAGE_FORMAT_VERSION] - Expected persisted storage format
  * @returns {Promise<import('./types.js').StorageContext>}
  */
 export async function initializeStorage(config) {
@@ -1470,7 +2126,7 @@ export async function initializeStorage(config) {
     platform = 'desktop',
     network = {},
     swarmOptions = {},
-    expectedProtocolVersion,
+    expectedStorageFormatVersion = STORAGE_FORMAT_VERSION,
     storedProtocolMigrations = DEFAULT_STORED_PROTOCOL_MIGRATIONS,
     // Optional block offload. `wrapStorage` restores a block from S3 on a local
     // miss; the same capability reaches the write path for bounded ingest.
@@ -1483,7 +2139,7 @@ export async function initializeStorage(config) {
   // fail closed without giving startup code a chance to mutate or expose it.
   const storedProtocol = prepareStoredProtocolState({
     storagePath,
-    expectedVersion: expectedProtocolVersion,
+    expectedVersion: expectedStorageFormatVersion,
     migrations: storedProtocolMigrations,
     fs,
     path,
@@ -1497,139 +2153,15 @@ export async function initializeStorage(config) {
     console.warn('[Storage] Consider using --store flag for persistent storage.');
   }
 
-  // Create the Hyperswarm instance and kick off DHT bootstrap BEFORE the
-  // Corestore/Hyperbee/blob-server warmup below. On mobile the DHT bootstrap
-  // is the long pole for topic discovery, so it should overlap local disk I/O
-  // instead of starting after it. We intentionally do NOT join() or listen()
-  // here — the network topic join happens after metadata storage is ready, so
-  // peer discovery still flows exclusively through the Hyperswarm topic.
-  let keyPair = null;
-  const resolvedSwarmKeyPath = swarmKeyPath || (path && storagePath ? path.join(storagePath, 'swarm-key.json') : null);
-  // hypercore-storage sweeps every unrecognized entry at the storage root into
-  // db/ when it opens. This key is written at the root and is not on its
-  // allowlist, so from the second startup onward the original only exists in
-  // db/. Reading just the root path made every restart mint a new device
-  // keypair, which silently invalidated the publisher writer admission bound to
-  // the old one.
-  //
-  // db/ is checked first on purpose: a relay that already suffered the rotation
-  // has the swept original in db/ and a newer replacement at the root, and the
-  // original is the identity peers and prior admissions know.
-  const swarmKeyCandidates = resolvedSwarmKeyPath
-    ? [...(path && storagePath && !swarmKeyPath
-        ? [path.join(storagePath, 'db', 'swarm-key.json')]
-        : []), resolvedSwarmKeyPath]
-    : [];
-
-  for (const candidate of swarmKeyCandidates) {
-    if (keyPair || !fs) break;
-    try {
-      const raw = fs.readFileSync(candidate, 'utf-8');
-      const parsed = JSON.parse(typeof raw === 'string' ? raw : b4a.toString(raw, 'utf8'));
-      if (parsed?.publicKey && parsed?.secretKey) {
-        keyPair = {
-          publicKey: b4a.from(parsed.publicKey, 'hex'),
-          secretKey: b4a.from(parsed.secretKey, 'hex')
-        };
-        console.log('[Storage] Loaded persisted swarm key:', parsed.publicKey.slice(0, 16), 'from', candidate);
-      }
-    } catch (e) {
-      // Missing or invalid at this location; try the next one, then generate.
-    }
-  }
-
-  // The sweep renames the root file over db/, so a stale root copy left behind
-  // by an earlier rotation would overwrite the key just chosen and poison the
-  // next startup. Writing the chosen key back to the root makes that rename a
-  // no-op whichever copy the sweep moves.
-  if (keyPair && resolvedSwarmKeyPath && fs) {
-    try {
-      fs.writeFileSync(resolvedSwarmKeyPath, JSON.stringify({
-        publicKey: b4a.toString(keyPair.publicKey, 'hex'),
-        secretKey: b4a.toString(keyPair.secretKey, 'hex')
-      }));
-    } catch (e) {
-      console.log('[Storage] Could not canonicalize swarm key:', e.message);
-    }
-  }
-
-  if (!keyPair) {
-    keyPair = crypto.keyPair();
-    if (resolvedSwarmKeyPath && fs) {
-      try {
-        fs.mkdirSync(path.dirname(resolvedSwarmKeyPath), { recursive: true });
-        fs.writeFileSync(resolvedSwarmKeyPath, JSON.stringify({
-          publicKey: b4a.toString(keyPair.publicKey, 'hex'),
-          secretKey: b4a.toString(keyPair.secretKey, 'hex')
-        }));
-        console.log('[Storage] Persisted new swarm key to', resolvedSwarmKeyPath);
-      } catch (e) {
-        console.log('[Storage] Could not persist swarm key:', e.message);
-      }
-    }
-  }
-
-  console.log('[Storage] Creating Hyperswarm (early, before storage warmup)...');
-  await appendDebugLine('[storage] creating hyperswarm early')
-  const LoadedHyperswarm = await waitForHyperswarmModule()
-  const hyperswarmOptions = resolveHyperswarmOptions({
+  const keyPair = resolveStorageSwarmKeyPair({ storagePath, swarmKeyPath })
+  const { swarm, swarmOwnership } = await createInitialHyperswarm({
     keyPair,
     platform,
     network,
-    swarmOptions
+    swarmOptions,
+    lifecycle
   })
-  let swarmOwnership = null
-  let swarm
-  if (typeof LoadedHyperswarm !== 'function') {
-    console.warn('[Storage] Hyperswarm unavailable; continuing with offline P2P networking')
-    await appendDebugLine('[storage] hyperswarm unavailable; using offline swarm')
-    swarm = createOfflineSwarm(keyPair, 'module-unavailable')
-  } else {
-    try {
-      swarm = new LoadedHyperswarm(hyperswarmOptions);
-    } catch (err) {
-      console.warn('[Storage] Hyperswarm creation failed; continuing with offline P2P networking:', err?.message)
-      await appendDebugLine(`[storage] hyperswarm create failed; using offline swarm ${err?.message || String(err)}`)
-      swarm = createOfflineSwarm(keyPair, err?.message || 'create-failed')
-    }
-  }
-  swarmOwnership = lifecycle.ownResource('Hyperswarm', swarm, 'destroy', 2000)
-  swarm._peartubeSwarmOptions = summarizeSwarmOptions(hyperswarmOptions)
-  console.log('[Storage] Swarm created, publicKey:', b4a.toString(swarm.keyPair.publicKey, 'hex').slice(0, 16));
-  globalNetworkStartupTiming?.record('swarm-created', {
-    offline: Boolean(swarm._peartubeOffline),
-    options: swarm._peartubeSwarmOptions
-  })
-  const initialDhtState = describeDhtState(swarm.dht)
-  if (initialDhtState) {
-    console.log('[Storage] Initial DHT bind state:', JSON.stringify(initialDhtState))
-  }
-  await appendDebugLine(`[storage] hyperswarm created offline=${Boolean(swarm._peartubeOffline)}`)
-  globalSwarmDiagnostics = createSwarmDiagnostics(swarm)
-  installSwarmConnectDiagnostics(swarm, globalSwarmDiagnostics)
 
-  // Set global references for suspend/resume and stats
-  globalSwarm = swarm;
-
-  // Start DHT bind + bootstrap in the background while storage initializes.
-  // listen()/join() later reuse the same bootstrap, so this only moves the
-  // network wait earlier — it does not add work or connect to any peer.
-  if (!swarm._peartubeOffline && typeof swarm.dht?.ready === 'function') {
-    swarm.dht.ready()
-      .then(() => {
-        globalNetworkStartupTiming?.record('dht-early-bootstrap', { bootstrapped: swarm.dht?.bootstrapped, firewalled: swarm.dht?.firewalled })
-        console.log('[Storage] Early DHT bootstrap done, bootstrapped:', swarm.dht?.bootstrapped, 'firewalled:', swarm.dht?.firewalled)
-        void appendDebugLine(`[storage] early dht bootstrap done bootstrapped=${swarm.dht?.bootstrapped} firewalled=${swarm.dht?.firewalled}`)
-      })
-      .catch((err) => {
-        console.log('[Storage] Early DHT bootstrap failed (non-fatal):', err?.message)
-        void appendDebugLine(`[storage] early dht bootstrap failed ${err?.message || String(err)}`)
-      })
-  }
-
-  // The swarm now exists before storage init, so every storage failure path
-  // below must tear it down or a failed attempt leaks the DHT socket (and the
-  // orchestrator's retry would stack a second swarm on top).
   const destroySwarmAfterInitFailure = async (label) => {
     try {
       if (globalSwarm === swarm) globalSwarm = null
@@ -1641,506 +2173,85 @@ export async function initializeStorage(config) {
     }
   }
 
-  if (isEmbeddedBareKitStoragePath()) {
-    await appendDebugLine('[storage] relocateLegacyLogsDir skipped for embedded BareKit storage')
-  } else {
-    try {
-      await appendDebugLine('[storage] relocateLegacyCorestoreDir start')
-      const relocatedCorestoreDir = relocateLegacyCorestoreDir(storagePath, fs, path)
-      await appendDebugLine(`[storage] relocateLegacyCorestoreDir done moved=${relocatedCorestoreDir || 'none'}`)
-      if (relocatedCorestoreDir) {
-        console.log('[Storage] Relocated legacy corestore dir to avoid Corestore migration conflict:', relocatedCorestoreDir)
-      }
-    } catch (error) {
-      await appendDebugLine(`[storage] relocateLegacyCorestoreDir failed ${describeDebugError(error)}`)
-      console.warn('[Storage] Failed to relocate legacy corestore dir before Corestore init:', error?.message)
-    }
+  await relocateLegacyStorageDirectories(storagePath)
 
-    try {
-      await appendDebugLine('[storage] relocateLegacyBlindPeerDir start')
-      const relocatedBlindPeerDir = relocateLegacyBlindPeerDir(storagePath, fs, path)
-      await appendDebugLine(`[storage] relocateLegacyBlindPeerDir done moved=${relocatedBlindPeerDir || 'none'}`)
-      if (relocatedBlindPeerDir) {
-        console.log('[Storage] Relocated legacy blind-peer dir to avoid Corestore migration conflict:', relocatedBlindPeerDir)
-      }
-    } catch (error) {
-      await appendDebugLine(`[storage] relocateLegacyBlindPeerDir failed ${describeDebugError(error)}`)
-      console.warn('[Storage] Failed to relocate legacy blind-peer dir before Corestore init:', error?.message)
-    }
-
-    try {
-      await appendDebugLine('[storage] relocateLegacyLogsDir start')
-      const relocatedLogsDir = relocateLegacyLogsDir(storagePath, fs, path)
-      await appendDebugLine(`[storage] relocateLegacyLogsDir done moved=${relocatedLogsDir || 'none'}`)
-      if (relocatedLogsDir) {
-        console.log('[Storage] Relocated legacy logs dir to avoid Corestore migration conflict:', relocatedLogsDir)
-      }
-    } catch (error) {
-      await appendDebugLine(`[storage] relocateLegacyLogsDir failed ${describeDebugError(error)}`)
-      console.warn('[Storage] Failed to relocate legacy logs dir before Corestore init:', error?.message)
-    }
-  }
-
-  // Initialize Corestore
-  console.log('[Storage] Creating Corestore...');
-  await appendDebugLine('[storage] creating corestore')
-  console.log('[Storage] Corestore primaryKey:', primaryKey ? 'provided (deterministic)' : 'not provided (random)');
-  console.log('[Storage] Corestore lock wait:', corestoreWaitForLock ? 'enabled' : 'disabled');
-  const offloadWrapStorage = typeof blockOffload?.wrapStorage === 'function' ? blockOffload.wrapStorage : null
-  if (offloadWrapStorage !== null) {
-    console.log('[Storage] Corestore block offload: enabled (block data may live in an object store)');
-    await appendDebugLine('[storage] corestore block offload enabled')
-  }
-  const corestoreOptions = primaryKey
-    ? { primaryKey, unsafe: true, wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup, wrapStorage: offloadWrapStorage }
-    : { wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup, wrapStorage: offloadWrapStorage }
-  let store
-  let storeOwnership = null
-  try {
-    store = await createCorestoreInstance(storagePath, corestoreOptions)
-    storeOwnership = lifecycle.ownResource('Corestore', store, 'close', 5000)
-  } catch (error) {
-    await appendDebugLine(`[storage] corestore create failed ${describeDebugError(error)}`)
-    await destroySwarmAfterInitFailure('corestore create')
-    throw error
-  }
-
-  console.log('[Storage] Waiting for Corestore ready...');
-  await appendDebugLine('[storage] awaiting corestore ready')
-  try {
-    await store.ready();
-  } catch (error) {
-    await appendDebugLine(`[storage] corestore ready failed ${describeDebugError(error)}`)
-    await cleanupFailedCorestoreOpen(store, 'corestore ready cleanup', {
-      appendDebugLine,
-      describeError: describeDebugError
-    })
-    storeOwnership?.release()
-    await destroySwarmAfterInitFailure('corestore ready')
-    throw error
-  }
-  console.log('[Storage] Corestore ready, opened:', store.opened, 'closed:', store.closed);
-  await appendDebugLine(`[storage] corestore ready opened=${store.opened} closed=${store.closed}`)
-  if (b4a.isBuffer(store.primaryKey)) {
-    const primaryKeyHex = b4a.toString(store.primaryKey, 'hex')
-    console.log('[Storage] Corestore primaryKey after ready:', `${primaryKeyHex.slice(0, 16)}...`)
-    await appendDebugLine(`[storage] corestore primaryKey after ready ${primaryKeyHex}`)
-  }
-
-  // Wrap the shared store with finite timeouts for backend control-plane work,
-  // but give BlobServer a no-timeout facade so media reads don't abort while
-  // waiting for slow P2P blocks.
-  wrapStoreWithTimeout(store, defaultTimeout);
-  const blobStore = wrapStoreForBlobServerStreaming(store);
-
-  // Initialize blob server for video streaming only after metadata cores are open.
-  let blobServer = null;
-  let blobServerPort = 0;
-  let blobServerError = null;
-  let resolveBlobServerReady;
-  const blobServerReady = new Promise((resolve) => {
-    resolveBlobServerReady = resolve
+  const { store, storeOwnership, blobStore } = await setupStorageCorestore({
+    storagePath,
+    primaryKey,
+    corestoreWaitForLock,
+    corestoreAllowBackup,
+    blockOffload,
+    defaultTimeout,
+    lifecycle,
+    destroySwarmAfterInitFailure
   })
+
   let storageContext = null
   const staticAssetPlaybackEntries = new Map()
-  let blobServerHost = blobServerHostOverride || '127.0.0.1';
-  let blobServerBindHost = blobServerBindHostOverride || blobServerHost;
+  const blobServerHost = blobServerHostOverride || '127.0.0.1'
+  const blobServerBindHost = blobServerBindHostOverride || blobServerHost
 
   let metaCore = null
   let metaDb = null
   let metaCoreOwnership = null
   let metaDbOwnership = null
-  let blobServerOwnership = null
 
   async function cleanupFailedMetadataStartup(label, originalError) {
     await appendDebugLine(`[storage] metadata init cleanup start ${label}`)
-
-    await blobServerOwnership?.cleanup()
-    if (globalBlobServer === blobServer) globalBlobServer = null
-
     await metaDbOwnership?.cleanup()
     if (globalMetaDb === metaDb) globalMetaDb = null
-
     await metaCoreOwnership?.cleanup()
     await storeOwnership?.cleanup()
     await destroySwarmAfterInitFailure(label)
-
     throw originalError
   }
 
-  // Initialize metadata database
-  await appendDebugLine('[storage] metaCore get start')
-  console.log('[Storage] metaCore get start')
-  // Sweeps are held from here until the keep-local list below is registered:
-  // opening a core arms its residency ledger, and a sweep that ran in between
-  // would evict the very blocks the registration protects. The hold is opt-in
-  // and paired with the release on every path out of this block.
-  blockOffload?.holdEviction?.()
-  try {
-    // Block offload moves block DATA to an object store and keeps only the
-    // merkle tree and bitfield on disk. That is the right trade for a title
-    // larger than the volume and the wrong one for this core: it carries the
-    // acquisition ledger, byte accounting and operator settings, it is small
-    // beside any media core, and offloading it makes every read of a node's own
-    // bookkeeping depend on a reachable bucket. Registered below, once the core
-    // is open, because only then is its key known.
-    metaCore = await openDeterministicNamedCore(store, 'peartube-meta');
-    metaCoreOwnership = lifecycle.ownResource('metadata core', metaCore, 'close', 2000)
-  } catch (error) {
-    await appendDebugLine(`[storage] metaCore get failed ${describeDebugError(error)}`)
-    console.error('[Storage] metaCore get failed:', describeDebugError(error))
-    // Released before the cleanup, which throws: a hold that outlives this
-    // block would stop every sweep for the life of the process.
-    blockOffload?.startEviction?.()
-    await cleanupFailedMetadataStartup('metaCore.get', error)
-  }
-  await appendDebugLine('[storage] metaCore get returned')
-  console.log('[Storage] metaCore get returned')
-  try {
-    await appendDebugLine('[storage] metaCore ready start')
-    console.log('[Storage] metaCore ready start')
-    await metaCore.ready()
-    await appendDebugLine('[storage] metaCore ready ok')
-    console.log('[Storage] metaCore ready ok')
-    // Keep-local is registered by the core's own key: a name-derived keypair is
-    // a different key entirely, so registering that would silently match
-    // nothing. Evictability is read per sweep, so registering here holds back
-    // every sweep from now on, and any block already in the bucket stays
-    // restorable and comes home as it is read.
-    blockOffload?.excludeCore?.(b4a.toString(metaCore.key, 'hex'))
-  } catch (error) {
-    await appendDebugLine(`[storage] metaCore ready failed ${describeDebugError(error)}`)
-    console.error('[Storage] metaCore ready failed:', describeDebugError(error))
-    await cleanupFailedMetadataStartup('metaCore.ready', error)
-  } finally {
-    // Every path out of the open releases the hold: the cleanup above throws,
-    // so a release placed after it would never run and sweeps would wait for
-    // the life of the process.
-    blockOffload?.startEviction?.()
-  }
+  const metaSetup = await setupStorageMetadata({
+    store,
+    storagePath,
+    platform,
+    storedProtocol,
+    blockOffload,
+    lifecycle,
+    cleanupFailedMetadataStartup
+  })
+  metaCore = metaSetup.metaCore
+  metaDb = metaSetup.metaDb
+  metaCoreOwnership = metaSetup.metaCoreOwnership
+  metaDbOwnership = metaSetup.metaDbOwnership
+  const metaSubspaces = metaSetup.metaSubspaces
 
-  await appendDebugLine('[storage] metaDb construct start')
-  console.log('[Storage] metaDb construct start')
-  metaDb = new Hyperbee(metaCore, {
-    keyEncoding: 'utf-8',
-    valueEncoding: 'json'
-  });
-  metaDbOwnership = lifecycle.ownResource('metadata database', metaDb, 'close', 2000)
-  await appendDebugLine('[storage] metaDb construct ok')
-  console.log('[Storage] metaDb construct ok')
-  try {
-    await appendDebugLine('[storage] metaDb ready start')
-    console.log('[Storage] metaDb ready start')
-    await metaDb.ready();
-    await appendDebugLine('[storage] metaDb ready')
-    console.log('[Storage] metaDb ready')
-    globalMetaDb = metaDb
-  } catch (error) {
-    await appendDebugLine(`[storage] metaDb ready failed ${describeDebugError(error)}`)
-    console.error('[Storage] metaDb ready failed:', describeDebugError(error))
-    await cleanupFailedMetadataStartup('metaDb.ready', error)
-  }
+  const {
+    blobServer,
+    blobServerPort,
+    blobServerError,
+    blobServerReady
+  } = await setupStorageBlobServer({
+    store,
+    blobStore,
+    blobServerPortOverride,
+    blobServerBindHost,
+    lifecycle,
+    getStorageContext: () => storageContext,
+    swarm,
+    staticAssetPlaybackEntries
+  })
 
-  if (storedProtocol) {
-    try {
-      await storedProtocol.migrate({ store, metaCore, metaDb, storagePath, platform })
-    } catch (error) {
-      await cleanupFailedMetadataStartup('stored protocol migration', error)
-    }
-  }
-
-  // Sub-encoded metaDb keyspaces (download intents, channel kinds, playback
-  // profiles) + one-time migration of any legacy flat-prefixed keys. Best-effort:
-  // a migration failure must not block startup (it retries next launch).
-  const metaSubspaces = createMetaSubspaces(metaDb)
-  try {
-    const migration = await migrateMetaSubspaces(metaDb, metaSubspaces)
-    if (migration.migrated > 0 || migration.incomplete) {
-      console.log('[Storage] meta-subspaces migration:', JSON.stringify(migration))
-    }
-  } catch (error) {
-    console.warn('[Storage] meta-subspaces migration skipped (non-fatal):', error?.message)
-  }
-
-  try {
-    const desiredPort = blobServerPortOverride || 0;
-
-    installExpectedBlobRequestCancellationHandler()
-
-    blobServer = new BlobServer(blobStore, {
-      port: desiredPort || 0,
-      host: blobServerBindHost
-    });
-    blobServerOwnership = lifecycle.own('blob server', async () => {
-      releaseAllPrioritizedBlobRanges()
-      await blobServer?.close?.()
-    }, 2000)
-    blobServer._peartubeLifecycle = lifecycle
-    // Patch _onrequest to add CORS headers for mediabunny's UrlSource (fetch)
-    const origOnRequest = blobServer._onrequest.bind(blobServer)
-    blobServer._onrequest = async function (req, res) {
-      res.setHeader('Access-Control-Allow-Origin', '*')
-      res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
-      res.setHeader('Access-Control-Allow-Headers', 'Range')
-      res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
-      if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
-      if (String(req.url || '').includes('pt_health=1')) {
-        res.writeHead(204)
-        res.end()
-        return
-      }
-
-      // Thumbnails tag their blob URL with pt_thumbnail=1 (see api.getVideoThumbnail).
-      // Serve those as a buffered, fixed-length response Android image loaders
-      // accept, instead of hypercore-blob-server's plain-GET streaming pipe (which
-      // never ends deterministically — Fresco errors, expo-image/Glide hangs then
-      // errors). Only tagged requests are intercepted; video Range reads and every
-      // other request fall through to the upstream handler unchanged.
-      try {
-        const handled = await serveThumbnailHttpRequest({
-          store,
-          blobServer,
-          retainDiscovery: (discoveryKey, options) => retainSwarmDiscovery(storageContext || { swarm }, discoveryKey, options)
-        }, req, res)
-        if (handled) return
-      } catch (err) {
-        console.log('[Storage] Thumbnail serve failed:', err?.message || err)
-      }
-
-      try {
-        const handled = await serveVideoRangeHttpRequest({
-          blobServer,
-          staticAssetEntries: staticAssetPlaybackEntries,
-          onStaticPlayhead: event => storageContext?.playbackForwardFill?.onPlayhead?.(event),
-        }, req, res)
-        if (handled) return
-      } catch (err) {
-        console.log('[Storage] Video range serve failed:', err?.message || err)
-        if (String(req.url || '').includes('pt_static_asset=')) {
-          if (!res.headersSent && !res.writableEnded) {
-            const body = b4a.from('verified static source unavailable')
-            res.statusCode = 503
-            res.setHeader('Content-Type', 'text/plain')
-            res.setHeader('Content-Length', String(body.byteLength))
-            res.writeHead(503)
-            res.end(req.method === 'HEAD' ? undefined : body)
-          }
-          return
-        }
-      }
-
-      try {
-        await prioritizeBlobServerRangeRequest(blobServer, req)
-      } catch (err) {
-        console.log('[Storage] Blob range priority failed:', err?.message || err)
-      }
-      return origOnRequest(req, res)
-    }
-
-    console.log('[Storage] Starting blob server listen...');
-    await appendDebugLine('[storage] blob server listen start')
-    globalBlobServer = blobServer;
-    const markBlobServerReady = (port, error = null) => {
-      blobServerPort = Number(port || 0) || 0
-      blobServerError = error || null
-      blobServer._peartubeListenResolved = true
-      blobServer._peartubeReady = blobServerPort > 0 && !blobServerError
-      blobServer._peartubeListenError = blobServerError
-      if (!blobServerError) {
-        console.log('[Storage] Blob server listening on port:', blobServerPort)
-        void appendDebugLine(`[storage] blob server listening port=${blobServerPort}`)
-      }
-      resolveBlobServerReady?.({ port: blobServerPort, error: blobServerError })
-    }
-
-    blobServer._peartubeListenResolved = false
-    blobServer._peartubeReady = false
-    blobServer._peartubeListenError = null
-    const blobServerListenPromise = blobServer.listen()
-
-    if (blobServerListenPromise && typeof blobServerListenPromise.then === 'function') {
-      blobServerListenPromise
-        .then(() => {
-          const resolvedPort = Number(blobServer.port || 0) || 0
-          if (!resolvedPort) {
-            markBlobServerReady(0, new Error('Blob server listen resolved without an assigned port'))
-            return
-          }
-          markBlobServerReady(resolvedPort)
-        })
-        .catch((err) => {
-          markBlobServerReady(0, err)
-        })
-    } else {
-      const resolvedPort = Number(blobServer.port || 0) || 0
-      markBlobServerReady(
-        resolvedPort,
-        resolvedPort ? null : new Error('Blob server listen returned before an assigned port was available')
-      )
-    }
-  } catch (err) {
-    blobServerError = err
-    resolveBlobServerReady?.({ port: 0, error: err })
-    console.error('[Storage] Failed to initialize blob server:', err.message);
-    await appendDebugLine(`[storage] blob server init failed ${err?.message || String(err)}`)
-    // Continue without blob server - will need alternative video streaming
-  }
-
-  // Hyperswarm was created (and DHT bootstrap kicked off) before storage init
-  // above so the network warmup overlaps disk I/O. From here on we only wire
-  // handlers and join the discovery topic.
-  console.log('[Storage] Wiring early-created Hyperswarm, DHT bootstrapped:', swarm.dht?.bootstrapped ?? null);
+  console.log('[Storage] Wiring early-created Hyperswarm, DHT bootstrapped:', swarm.dht?.bootstrapped ?? null)
   await appendDebugLine(`[storage] wiring early hyperswarm bootstrapped=${swarm.dht?.bootstrapped ?? null}`)
 
-  // Initialize network stats for debugging
-  if (HyperswarmStats) {
-    try {
-      networkStats = new HyperswarmStats(swarm);
-      lifecycle.ownResource('network statistics', networkStats, ['destroy', 'close', 'stop'], 2000)
-      console.log('[Storage] Network stats initialized');
-    } catch (e) {
-      console.log('[Storage] Network stats init failed:', e?.message);
-    }
-  }
+  initOptionalNetworkStats(swarm, lifecycle)
+  const channels = new Map()
+  const wakeup = initWakeupProtocol(lifecycle)
+  const knownPeerCache = initKnownPeerCache(swarm, metaDb, lifecycle)
 
-  const channels = new Map();
-
-  // Initialize protomux-wakeup for content announcements
-  let wakeup = null;
-  if (Wakeup) {
-    try {
-      wakeup = new Wakeup();
-      lifecycle.ownResource('wakeup protocol', wakeup, ['destroy', 'close', 'stop'], 2000)
-      console.log('[Storage] Wakeup protocol initialized');
-    } catch (err) {
-      console.log('[Storage] Wakeup init failed (non-fatal):', err?.message);
-    }
-  }
-
-  // Known-peer cache records remote pubkeys for diagnostics and future peer tracking.
-  const selfKeyHex = swarm.keyPair?.publicKey ? b4a.toString(swarm.keyPair.publicKey, 'hex') : null
-  const knownPeerCache = createKnownPeerCache(metaDb, { selfKeyHex })
-  lifecycle.ownResource('known-peer cache', knownPeerCache, 'close', 2000)
-  globalKnownPeerCache = knownPeerCache
-
-  // Register handlers BEFORE swarm.join so any incoming connection is replicated
-  // immediately (canonical Hyperswarm/Hyperdrive pattern).
-  swarm.on('connection', (conn, info) => {
-    try {
-      if (!conn || conn.destroyed) return
-      // Send liveness keepalives more frequently so a half-open connection (one
-      // that handshakes and syncs but then moves no data) is detected and torn
-      // down sooner — the default lets a dead link linger tens of seconds, which
-      // stalls playback until hyperswarm finally redials. Best-effort: not every
-      // stream implementation exposes setKeepAlive.
-      try { conn.setKeepAlive?.(4000) } catch { /* best effort */ }
-      const remoteKey = info?.publicKey ? b4a.toString(info.publicKey, 'hex').slice(0, 16) : 'unknown';
-      globalNetworkStartupTiming?.record('socket-connected', { key: remoteKey, connections: swarm.connections?.size || 0, connecting: swarm.connecting || 0 })
-      globalSwarmDiagnostics?.recordConnection?.(conn, info)
-      console.log('[Storage] Peer connected:', remoteKey, 'connections:', swarm.connections?.size || 0, 'connecting:', swarm.connecting || 0);
-      void appendDebugLine(`[storage] peer connected ${remoteKey} connections=${swarm.connections?.size || 0} connecting=${swarm.connecting || 0}`)
-      if (info?.publicKey) knownPeerCache.record(info.publicKey)
-
-      // Register stream with wakeup protocol for content announcements
-      if (wakeup) {
-        try {
-          wakeup.addStream(conn);
-        } catch (err) {
-          console.log('[Storage] Wakeup addStream error (non-fatal):', err?.message);
-        }
-      }
-
-
-    } catch (err) {
-      console.log('[Storage] connection handler error (non-fatal):', err?.message)
-    }
-  });
-
-  // Log swarm events for debugging mobile connectivity
-  swarm.on('update', () => {
-    globalSwarmDiagnostics?.recordUpdate?.()
-    log.debug('Swarm update event', { connections: swarm.connections?.size || 0, peers: swarm.peers?.size || 0 })
-  });
-
+  wireSwarmEventListeners({ swarm, knownPeerCache, wakeup })
   await restorePersistedDhtRoutingTable(swarm, metaDb, { reason: 'startup' })
+  scheduleWarmReconnect(swarm, metaDb, lifecycle)
+  startSwarmListening(swarm)
+  scheduleDhtStateLogging(swarm, lifecycle)
 
-
-  // Warm reconnect: proactively re-dial peers we have actually connected to in
-  // prior sessions (persisted by the known-peer cache — learned dynamically from
-  // real connections, NOT a hardcoded relay list). Cold DHT discovery can take
-  // many seconds for a firewalled client with no warm routing table, leaving
-  // playback stuck at "0 peers"; re-dialing known-good peers (seeders/relays we
-  // have reached before) gives an immediate path while DHT discovery catches up.
-  // Bounded and best-effort; joinPeer is idempotent so this never duplicates an
-
-
-  // existing connection.
-  if (!swarm._peartubeOffline && typeof swarm.joinPeer === 'function') {
-    lifecycle.defer('known peer warm reconnect', async (signal) => {
-      try {
-        const known = await loadKnownPeers(metaDb)
-        let dialed = 0
-        for (const { key } of known.slice(0, KNOWN_PEER_REDIAL_LIMIT)) {
-          if (signal.aborted) return
-          try { swarm.joinPeer(b4a.from(key, 'hex')); dialed++ } catch { /* best effort */ }
-        }
-        if (dialed > 0) {
-          console.log('[Storage] Warm reconnect: re-dialing', dialed, 'known peer(s) from prior sessions')
-          void appendDebugLine(`[storage] warm reconnect re-dialing ${dialed} known peers`)
-        }
-      } catch (err) {
-        if (!signal.aborted) console.log('[Storage] Warm reconnect skipped:', err?.message || err)
-      }
-    })
-  }
-
-  // Start listening - DON'T block on it since it may hang on mobile
-  // The listen() call starts the server but we don't need to wait for it
-  console.log('[Storage] Starting swarm.listen() (non-blocking)...');
-  await appendDebugLine('[storage] swarm.listen start')
-  const listenPromise = swarm.listen()
-  swarm._peartubeListenPromise = listenPromise
-  globalNetworkStartupTiming?.record('swarm-listen-called')
-
-  // Track listen state for debugging
-  swarm._peartubeListenResolved = false
-  if (!listenPromise || typeof listenPromise.then !== 'function') {
-    swarm._peartubeListenResolved = true
-  } else {
-    listenPromise
-      .then(() => {
-        swarm._peartubeListenResolved = true
-        globalNetworkStartupTiming?.record('swarm-listen-resolved', { firewalled: swarm.dht?.firewalled, bootstrapped: swarm.dht?.bootstrapped })
-        console.log('[Storage] listen() resolved, dht.firewalled:', swarm.dht?.firewalled, 'dht.bootstrapped:', swarm.dht?.bootstrapped)
-        void appendDebugLine(
-          `[storage] swarm.listen resolved firewalled=${swarm.dht?.firewalled} bootstrapped=${swarm.dht?.bootstrapped}`
-        )
-      })
-      .catch((e) => {
-        globalNetworkStartupTiming?.record('swarm-listen-failed', { error: e?.message || String(e) })
-        console.log('[Storage] listen() failed:', e?.message)
-        void appendDebugLine(`[storage] swarm.listen failed ${e?.message || String(e)}`)
-      })
-  }
-
-  // Log DHT state for debugging
-  const logDhtState = () => {
-    const dht = swarm.dht
-    if (dht) {
-      const state = describeDhtState(dht)
-      console.log('[Storage] DHT state: bootstrapped=', dht.bootstrapped, 'firewalled=', dht.firewalled, 'ephemeral=', dht.ephemeral, 'online=', dht.online, 'address=', state?.socketAddress, 'remoteAddress=', state?.remoteAddress)
-      void appendDebugLine(
-        `[storage] dht state bootstrapped=${dht.bootstrapped} firewalled=${dht.firewalled} ephemeral=${dht.ephemeral} online=${dht.online} address=${JSON.stringify(state?.socketAddress || null)} remoteAddress=${JSON.stringify(state?.remoteAddress || null)}`
-      )
-    }
-  }
-
-  // Check DHT state after a delay; lifecycle shutdown clears both timers.
-  lifecycle.ownTimer('DHT state log timer (2s)', setTimeout(logDhtState, 2000))
-  lifecycle.ownTimer('DHT state log timer (5s)', setTimeout(logDhtState, 5000))
-
-  // Set global reference for suspend/resume lifecycle management
-  globalChannels = channels;
+  globalChannels = channels
   lifecycle.own('storage shutdown preparation', async () => {
     await persistDhtRoutingTable(swarm, metaDb, { reason: 'shutdown' })
     if (globalSwarm === swarm) globalSwarm = null
@@ -2173,7 +2284,6 @@ export async function initializeStorage(config) {
 
     platform,
     storedProtocol,
-    // null unless the operator configured block offload.
     blockOffload,
     lifecycle,
     ownResource(label, resource, methods, timeoutMs) {
@@ -2187,8 +2297,7 @@ export async function initializeStorage(config) {
       const registration = lifecycle.ownTimer(label, timer, clear)
       return { cancel: () => registration.release() }
     },
-  };
-
+  }
 
   return storageContext
 }
@@ -2537,6 +2646,23 @@ export async function loadPublicBee(ctx, publicBeeKeyHex) {
  * @param {Object} [options]
  * @returns {Promise<{channel: import('./channel/multi-writer-channel.js').MultiWriterChannel, channelKeyHex: string, encryptionKeyHex: string|null}>}
  */
+async function setupChannelPairing(ctx, ch, channelKeyHex) {
+  if (ctx.swarm) {
+    try {
+      if (ch.discoveryKey) retainSwarmDiscovery(ctx, ch.discoveryKey, { label: `channel:${channelKeyHex.slice(0, 16)}` })
+      await ch.setupPairing(ctx.swarm)
+    } catch (err) {
+      console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
+    }
+  }
+}
+
+async function persistChannelKind(metaSubspaces, channelKeyHex) {
+  try {
+    await metaSubspaces?.channelKinds?.put?.(channelKeyHex, { kind: 'hyperdb', createdAt: Date.now() })
+  } catch { /* best effort */ }
+}
+
 export async function createChannel(ctx, options = {}) {
   assertContextRunning(ctx)
   if (!ctx.channels) ctx.channels = new Map()
@@ -2595,21 +2721,8 @@ export async function createChannel(ctx, options = {}) {
   }
 
   ctx.channels.set(channelKeyHex, ch)
-
-  // Persist a marker so we can reliably distinguish multi-writer channels.
-  try {
-    await ctx.metaSubspaces.channelKinds.put(channelKeyHex, { kind: 'hyperdb', createdAt: Date.now() })
-  } catch { /* best effort */ }
-
-  // Set up pairing and replication - AWAIT to ensure handlers are registered
-  if (ctx.swarm) {
-    try {
-      if (ch.discoveryKey) retainSwarmDiscovery(ctx, ch.discoveryKey, { label: `channel:${channelKeyHex.slice(0, 16)}` })
-      await ch.setupPairing(ctx.swarm)
-    } catch (err) {
-      console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
-    }
-  }
+  await persistChannelKind(ctx.metaSubspaces, channelKeyHex)
+  await setupChannelPairing(ctx, ch, channelKeyHex)
 
   return { channel: ch, channelKeyHex, encryptionKeyHex, writerKeyName }
 }
@@ -2650,8 +2763,7 @@ export async function deriveDeterministicChannelSeed(store, { writerKeyName, enc
  * @param {string} [options.deviceName]
  * @returns {Promise<{channel: import('./channel/multi-writer-channel.js').MultiWriterChannel, channelKeyHex: string}>}
  */
-export async function pairDevice(ctx, inviteCode, options = {}) {
-  assertContextRunning(ctx)
+async function executeChannelPairing(ctx, inviteCode, options) {
   const channelOwnerships = new Map()
   const pairer = new ChannelPairer(ctx.store, inviteCode, {
     swarm: ctx.swarm,
@@ -2684,14 +2796,18 @@ export async function pairDevice(ctx, inviteCode, options = {}) {
     await channelOwnership?.cleanup()
     throw error
   }
+  return { channel, channelOwnership }
+}
+
+export async function pairDevice(ctx, inviteCode, options = {}) {
+  assertContextRunning(ctx)
+  const { channel, channelOwnership } = await executeChannelPairing(ctx, inviteCode, options)
   const channelKeyHex = channel.keyHex
   if (!ctx.channels) ctx.channels = new Map()
   ctx.channels.set(channelKeyHex, channel)
 
   // Persist marker for multi-writer channel
-  try {
-    await ctx.metaSubspaces.channelKinds.put(channelKeyHex, { kind: 'hyperdb', createdAt: Date.now() })
-  } catch { /* best effort */ }
+  await persistChannelKind(ctx.metaSubspaces, channelKeyHex)
   if (ctx.lifecycle?.signal?.aborted) {
     ctx.channels.delete(channelKeyHex)
     await channelOwnership?.cleanup()
@@ -2787,45 +2903,7 @@ export function getVideoUrlInstant(ctx, blobsCoreKeyHex, blobId, options = {}) {
  * @param {boolean} [options.instant] - If true, return URL immediately without waiting
  * @returns {Promise<{url: string}>}
  */
-export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options = {}) {
-  // Fast path: instant URL generation
-  if (options.instant) {
-    return getVideoUrlInstant(ctx, blobsCoreKeyHex, blobId, options)
-  }
-  assertContextRunning(ctx)
-
-  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB:', blobsCoreKeyHex?.slice(0, 16), 'blobId:', JSON.stringify(blobId), 'keyLength:', blobsCoreKeyHex?.length);
-
-  if (!blobsCoreKeyHex) {
-    throw new Error('Missing blobsCoreKeyHex')
-  }
-
-  // Validate key length - should be 64 hex chars (32 bytes)
-  if (blobsCoreKeyHex.length !== 64) {
-    throw new Error(`Invalid blobsCoreKey length: ${blobsCoreKeyHex.length} (expected 64). Key is truncated or corrupted. Full key: ${blobsCoreKeyHex}`)
-  }
-
-  // Load the blobs core
-  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: converting hex to buffer...');
-  const keyBuffer = b4a.from(blobsCoreKeyHex, 'hex')
-  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: keyBuffer length:', keyBuffer.length, 'bytes');
-
-  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: calling store.get...');
-  const blobsCore = ctx.store.get(keyBuffer)
-  ownContextResource(ctx, `blob core ${blobsCoreKeyHex.slice(0, 16)}`, blobsCore, 'close')
-  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: store.get returned, calling ready...');
-
-  await blobsCore.ready()
-  assertContextRunning(ctx)
-  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: ready() complete');
-
-  if (!blobsCore.key) {
-    throw new Error('Blobs core key not available after ready')
-  }
-
-  console.log('[Storage] Blobs core ready, key:', b4a.toString(blobsCore.key, 'hex').slice(0, 16));
-
-  // Join swarm for the blobs core discovery key
+async function warmBlobsCore(ctx, blobsCore, blobsCoreKeyHex) {
   if (ctx.swarm && blobsCore.discoveryKey) {
     try {
       retainSwarmDiscovery(ctx, blobsCore.discoveryKey, {
@@ -2835,53 +2913,83 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
       console.log('[Storage] Swarm join error (non-fatal):', err?.message)
     }
   }
-
-  // Wait briefly for peers if needed (reduced from 15s to 5s for faster startup)
   try {
     await Promise.race([
       blobsCore.update({ wait: true }),
       new Promise((_, reject) => setTimeout(() => reject(new Error('blobs core update timeout')), 10000))
     ])
   } catch { /* best effort */ }
+}
+
+async function openReadyBlobsCore(ctx, blobsCoreKeyHex) {
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: converting hex to buffer...')
+  const keyBuffer = b4a.from(blobsCoreKeyHex, 'hex')
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: keyBuffer length:', keyBuffer.length, 'bytes')
+
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: calling store.get...')
+  const blobsCore = ctx.store.get(keyBuffer)
+  ownContextResource(ctx, `blob core ${blobsCoreKeyHex.slice(0, 16)}`, blobsCore, 'close')
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: store.get returned, calling ready...')
+
+  await blobsCore.ready()
+  assertContextRunning(ctx)
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: ready() complete')
+
+  if (!blobsCore.key) {
+    throw new Error('Blobs core key not available after ready')
+  }
+
+  console.log('[Storage] Blobs core ready, key:', b4a.toString(blobsCore.key, 'hex').slice(0, 16))
+  return blobsCore
+}
+
+export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options = {}) {
+  if (options.instant) {
+    return getVideoUrlInstant(ctx, blobsCoreKeyHex, blobId, options)
+  }
+  assertContextRunning(ctx)
+
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB:', blobsCoreKeyHex?.slice(0, 16), 'blobId:', JSON.stringify(blobId), 'keyLength:', blobsCoreKeyHex?.length)
+
+  if (!blobsCoreKeyHex) {
+    throw new Error('Missing blobsCoreKeyHex')
+  }
+
+  if (blobsCoreKeyHex.length !== 64) {
+    throw new Error(`Invalid blobsCoreKey length: ${blobsCoreKeyHex.length} (expected 64). Key is truncated or corrupted. Full key: ${blobsCoreKeyHex}`)
+  }
+
+  const blobsCore = await openReadyBlobsCore(ctx, blobsCoreKeyHex)
+  await warmBlobsCore(ctx, blobsCore, blobsCoreKeyHex)
 
   const mimeType = options.mimeType || 'video/mp4'
-
-  // Parse blobId string to object if needed
-  // blobId can be a string like "0:28174:0:1846355808" or an object
   const blob = normalizeBlobRefInput(blobId)
   if (!blob) {
     throw new Error('Invalid blob ID format')
   }
 
-  // Generate direct blob URL
-  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: blobsCore.key type:', typeof blobsCore.key, 'isBuffer:', Buffer.isBuffer(blobsCore.key), 'length:', blobsCore.key?.length);
-  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: blobsCore.key hex:', blobsCore.key ? b4a.toString(blobsCore.key, 'hex') : 'NULL');
-  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: blob:', JSON.stringify(blob));
-  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: ctx.blobServer exists:', !!ctx.blobServer, 'port:', ctx.blobServer?.port);
-  
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: blobsCore.key type:', typeof blobsCore.key, 'isBuffer:', Buffer.isBuffer(blobsCore.key), 'length:', blobsCore.key?.length)
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: blobsCore.key hex:', blobsCore.key ? b4a.toString(blobsCore.key, 'hex') : 'NULL')
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: blob:', JSON.stringify(blob))
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: ctx.blobServer exists:', !!ctx.blobServer, 'port:', ctx.blobServer?.port)
+
   if (!ctx.blobServer) {
     throw new Error('BlobServer not initialized')
   }
-  
+
   try {
-    // NOTE: hypercore-blob-server.getLink() already includes a token parameter for access control
-    // Do NOT append additional tokens - it causes malformed URLs with duplicate token params
     const url = ctx.blobServer.getLink(blobsCore.key, {
       blob,
       type: mimeType,
       host: ctx.blobServerHost || '127.0.0.1',
       port: ctx.blobServer?.port || ctx.blobServerPort
-    });
-    // Strict P2P: the only URL a player may ever receive is the local blob
-    // server. A non-loopback link here would mean media bytes could come from
-    // an origin, so refuse to hand it out at all.
+    })
     assertLoopbackPlaybackUrl(url, 'direct blob playback url')
-
-    console.log('[Storage] Direct blob URL (hyperblobs):', redactCapabilityUrl(url));
-    return { url };
+    console.log('[Storage] Direct blob URL (hyperblobs):', redactCapabilityUrl(url))
+    return { url }
   } catch (err) {
-    console.error('[Storage] GET_VIDEO_URL_FROM_BLOB: blobServer.getLink FAILED:', err.message, err.stack);
-    throw err;
+    console.error('[Storage] GET_VIDEO_URL_FROM_BLOB: blobServer.getLink FAILED:', err.message, err.stack)
+    throw err
   }
 }
 
@@ -3099,6 +3207,50 @@ export function startBlobServerWatchdog() {
   globalBlobServer?._peartubeLifecycle?.ownTimer('blob server watchdog', watchdogTimer, clearInterval)
 }
 
+async function resolveDriveEntryTotalBytes(drive, filePath) {
+  try {
+    const entry = await drive.entry(filePath)
+    const val = entry?.value
+    const size = val?.blob?.byteLength ?? val?.byteLength ?? val?.size ?? entry?.size ?? 0
+    return Number(size) || 0
+  } catch {
+    return 0
+  }
+}
+
+function streamVideoDataWithProgress({ stream, totalBytes, logKey, resolve, reject }) {
+  let bytesRead = 0
+  let chunkCount = 0
+  let nextPercentLog = 10
+  const chunkLogInterval = 256
+
+  stream.on('data', (chunk) => {
+    const chunkLen = chunk?.byteLength || chunk?.length || 0
+    bytesRead += chunkLen
+    chunkCount++
+
+    if (totalBytes > 0) {
+      const percent = Math.max(0, Math.min(100, Math.floor((bytesRead / totalBytes) * 100)))
+      if (percent >= nextPercentLog) {
+        console.log(`[CastDiag] Pre-buffering video for cast: ${logKey} — ${percent}%`)
+        nextPercentLog += 10
+      }
+    } else if (chunkCount % chunkLogInterval === 0) {
+      console.log(`[CastDiag] Pre-buffering video for cast: ${logKey} — ${chunkCount} chunks`)
+    }
+  })
+
+  stream.once('end', () => {
+    if (totalBytes > 0) {
+      console.log(`[CastDiag] Pre-buffering video for cast: ${logKey} — 100%`)
+    }
+    resolve()
+  })
+  stream.once('error', (err) => {
+    reject(err)
+  })
+}
+
 export async function prefetchVideoForCast(drive, filePath, signal) {
   if (!drive || typeof drive.createReadStream !== 'function') {
     throw new Error('Invalid drive passed to prefetchVideoForCast')
@@ -3115,26 +3267,9 @@ export async function prefetchVideoForCast(drive, filePath, signal) {
 
   if (signal?.aborted) throw abortError()
 
-  let totalBytes = 0
-  try {
-    const entry = await drive.entry(filePath)
-    totalBytes = Number(
-      entry?.value?.blob?.byteLength ??
-      entry?.value?.byteLength ??
-      entry?.value?.size ??
-      entry?.size ??
-      0
-    ) || 0
-  } catch {
-    totalBytes = 0
-  }
-
+  const totalBytes = await resolveDriveEntryTotalBytes(drive, filePath)
   const driveKeyHex = drive?.key ? b4a.toString(drive.key, 'hex') : 'unknown'
   const logKey = driveKeyHex === 'unknown' ? 'unknown' : driveKeyHex.slice(0, 16)
-  let bytesRead = 0
-  let chunkCount = 0
-  let nextPercentLog = 10
-  const chunkLogInterval = 256
 
   const stream = drive.createReadStream(filePath)
   let settled = false
@@ -3148,32 +3283,12 @@ export async function prefetchVideoForCast(drive, filePath, signal) {
 
   try {
     await new Promise((resolve, reject) => {
-      stream.on('data', (chunk) => {
-        const chunkLen = chunk?.byteLength || chunk?.length || 0
-        bytesRead += chunkLen
-        chunkCount++
-
-        if (totalBytes > 0) {
-          const percent = Math.max(0, Math.min(100, Math.floor((bytesRead / totalBytes) * 100)))
-          if (percent >= nextPercentLog) {
-            console.log(`[CastDiag] Pre-buffering video for cast: ${logKey} — ${percent}%`)
-            nextPercentLog += 10
-          }
-        } else if (chunkCount % chunkLogInterval === 0) {
-          console.log(`[CastDiag] Pre-buffering video for cast: ${logKey} — ${chunkCount} chunks`)
-        }
-      })
-
-      stream.once('end', () => {
-        settled = true
-        if (totalBytes > 0) {
-          console.log(`[CastDiag] Pre-buffering video for cast: ${logKey} — 100%`)
-        }
-        resolve()
-      })
-      stream.once('error', (err) => {
-        settled = true
-        reject(err)
+      streamVideoDataWithProgress({
+        stream,
+        totalBytes,
+        logKey,
+        resolve: () => { settled = true; resolve() },
+        reject: (err) => { settled = true; reject(err) }
       })
     })
   } finally {
@@ -3233,39 +3348,39 @@ export async function resumeNetworking() {
  *
  * @returns {Object|null} Stats object or null if stats not available
  */
+function buildFallbackSwarmStats(swarm, diagnostics, startupTiming) {
+  if (!swarm) return null
+  return {
+    connections: swarm.connections?.size || 0,
+    peers: swarm.peers?.size || 0,
+    swarmOptions: swarm._peartubeSwarmOptions || null,
+    offline: Boolean(swarm._peartubeOffline),
+    offlineReason: swarm._peartubeOfflineReason || null,
+    listenResolved: Boolean(swarm._peartubeListenResolved),
+    dht: {
+      firewalled: swarm.dht?.firewalled ?? null,
+      bootstrapped: swarm.dht?.bootstrapped ?? null,
+      ephemeral: swarm.dht?.ephemeral ?? null,
+      online: swarm.dht?.online ?? null
+    },
+    hyperswarm: diagnostics,
+    startupTiming
+  }
+}
+
 export function getNetworkStats() {
   const diagnostics = globalSwarmDiagnostics?.snapshot?.() || null
   const startupTiming = globalNetworkStartupTiming?.snapshot?.() || null
   if (!networkStats) {
-    // Fallback: return basic stats from swarm
-    if (globalSwarm) {
-      return {
-        connections: globalSwarm.connections?.size || 0,
-        peers: globalSwarm.peers?.size || 0,
-        swarmOptions: globalSwarm._peartubeSwarmOptions || null,
-        offline: Boolean(globalSwarm._peartubeOffline),
-        offlineReason: globalSwarm._peartubeOfflineReason || null,
-        listenResolved: Boolean(globalSwarm._peartubeListenResolved),
-
-        dht: {
-          firewalled: globalSwarm.dht?.firewalled ?? null,
-          bootstrapped: globalSwarm.dht?.bootstrapped ?? null,
-          ephemeral: globalSwarm.dht?.ephemeral ?? null,
-          online: globalSwarm.dht?.online ?? null
-        },
-        hyperswarm: diagnostics,
-        startupTiming
-      };
-    }
-    return null;
+    return buildFallbackSwarmStats(globalSwarm, diagnostics, startupTiming)
   }
 
   try {
-    const stats = networkStats.toJson();
+    const stats = networkStats.toJson()
     return { ...stats, hyperswarm: diagnostics, startupTiming }
   } catch (err) {
-    console.log('[Network] Stats toJson error:', err?.message);
-    return diagnostics || startupTiming ? { hyperswarm: diagnostics, startupTiming } : null;
+    console.log('[Network] Stats toJson error:', err?.message)
+    return diagnostics || startupTiming ? { hyperswarm: diagnostics, startupTiming } : null
   }
 }
 

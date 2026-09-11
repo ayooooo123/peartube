@@ -23,6 +23,34 @@ function assertActive (isActive, message) {
   if (typeof isActive === 'function' && !isActive()) throw new Error(message)
 }
 
+function validateProofBlockMetadata (coreRef, index, byteLength, proof) {
+  if (!Number.isSafeInteger(index) || index < 0 || index >= coreRef.length) {
+    throw new Error('asset block index exceeds the verified descriptor length')
+  }
+  const expectedBytes = expectedBlockBytes(coreRef, index)
+  if (byteLength !== expectedBytes) throw new Error('asset block value length does not match the verified descriptor')
+  if (!proof || typeof proof !== 'object' || !proof.block || proof.block.index !== index || proof.block.value !== null) {
+    throw new Error('asset block proof metadata is invalid')
+  }
+  return expectedBytes
+}
+
+function validateProofUpgradeState (proof, handle, coreRef, { peerId, transferId }, quarantine) {
+  if (emptyCoreState(handle)) {
+    if (!proof.upgrade || proof.upgrade.start !== 0 || proof.upgrade.length !== coreRef.length) {
+      throw new Error('fresh asset core requires an exact descriptor-length upgrade proof')
+    }
+  } else if (!exactCoreState(handle, coreRef)) {
+    const cause = new Error('asset core state conflicts with the verified descriptor')
+    return quarantine(cause, { peerId, transferId }, handle).then(
+      () => { throw cause },
+      error => { throw error },
+    )
+  } else if (proof.upgrade && (proof.upgrade.length !== coreRef.length || proof.upgrade.start !== 0)) {
+    throw new Error('asset block proof length does not match the verified descriptor')
+  }
+}
+
 function assertIdentity ({ handle, resourceId, start, end, index }) {
   if (!handle || handle.closed) throw new Error('verified block handle is closed')
   if (String(resourceId) !== handle.source.resourceId) throw new Error('verified block resource does not match its transfer')
@@ -140,29 +168,11 @@ function createExactCoreSource (options) {
   }
 
   function validateProofMetadata ({ index, proof, byteLength, peerId = null, transferId = null } = {}) {
-    if (!Number.isSafeInteger(index) || index < 0 || index >= coreRef.length) {
-      throw new Error('asset block index exceeds the verified descriptor length')
-    }
-    const expectedBytes = expectedBlockBytes(coreRef, index)
-    if (byteLength !== expectedBytes) throw new Error('asset block value length does not match the verified descriptor')
-    if (!proof || typeof proof !== 'object' || !proof.block || proof.block.index !== index || proof.block.value !== null) {
-      throw new Error('asset block proof metadata is invalid')
-    }
+    const expectedBytes = validateProofBlockMetadata(coreRef, index, byteLength, proof)
     const handle = core
     if (!handle || readyHandle !== handle) throw new Error('asset session core is not ready')
-    if (emptyCoreState(handle)) {
-      if (!proof.upgrade || proof.upgrade.start !== 0 || proof.upgrade.length !== coreRef.length) {
-        throw new Error('fresh asset core requires an exact descriptor-length upgrade proof')
-      }
-    } else if (!exactCoreState(handle, coreRef)) {
-      const cause = new Error('asset core state conflicts with the verified descriptor')
-      return quarantine(cause, { peerId, transferId }, handle).then(
-        () => { throw cause },
-        error => { throw error },
-      )
-    } else if (proof.upgrade && (proof.upgrade.length !== coreRef.length || proof.upgrade.start !== 0)) {
-      throw new Error('asset block proof length does not match the verified descriptor')
-    }
+    const upgradeResult = validateProofUpgradeState(proof, handle, coreRef, { peerId, transferId }, quarantine)
+    if (upgradeResult) return upgradeResult
     return expectedBytes
   }
 
@@ -320,6 +330,48 @@ function createExactCoreSource (options) {
   }
 }
 
+function assertRequestIdentity (handle, request) {
+  assertIdentity({ handle, resourceId: request?.resourceId, start: request?.start, end: request?.end, index: request?.index })
+}
+
+function createActivePredicate (closedCheck, handle, isActive) {
+  const epoch = typeof handle.policyEpoch === 'function' ? handle.policyEpoch() : handle.policyEpoch
+  return () => !closedCheck() && !handle.closed && isActive() && handle.mayServe() &&
+    (typeof handle.policyEpoch === 'function' ? handle.policyEpoch() : handle.policyEpoch) === epoch
+}
+
+async function prepareVerifiedBlockProof (handle, requestIndex, active) {
+  const proof = await createVerifiedBlockProof(handle.source, requestIndex)
+  const value = b4a.from(proof?.block?.value || [])
+  if (!active()) {
+    return { unavailable: true }
+  }
+  if (proof?.block?.index !== requestIndex || value.byteLength !== expectedBlockBytes(handle.source.coreRef, requestIndex)) {
+    throw new Error('local asset block does not match the verified descriptor')
+  }
+  return { proof, value }
+}
+
+async function sendChunkedPayload (bytes, sendPart, active) {
+  for (let offset = 0; offset < bytes.byteLength; offset += VERIFIED_BLOCK_CHUNK_BYTES) {
+    if (!active()) return false
+    const chunk = bytes.subarray(offset, Math.min(bytes.byteLength, offset + VERIFIED_BLOCK_CHUNK_BYTES))
+    if (!await sendPart({ offset, totalBytes: bytes.byteLength, chunk })) return false
+  }
+  return true
+}
+
+async function transmitVerifiedBlock ({ proofBytes, value, sendProofPart, sendBlockPart, active, reservation }) {
+  try {
+    if (!await sendChunkedPayload(proofBytes, sendProofPart, active)) return { status: 'cancelled' }
+    if (!await sendChunkedPayload(value, sendBlockPart, active)) return { status: 'cancelled' }
+    reservation?.commit?.()
+    return { status: 'sent', bytes: value.byteLength }
+  } finally {
+    reservation?.release?.()
+  }
+}
+
 export function createVerifiedBlockEngine (options = {}) {
   const handles = new Set()
   const schedule = options.setTimeout || setTimeout
@@ -423,45 +475,25 @@ export function createVerifiedBlockEngine (options = {}) {
   }
 
   async function serve ({ handle, peerId = null, request, sendProofPart, sendBlockPart, sendError = null, isActive = () => true, encodeProof, reserve = options.admission } = {}) {
-    assertIdentity({ handle, resourceId: request?.resourceId, start: request?.start, end: request?.end, index: request?.index })
-    const epoch = typeof handle.policyEpoch === 'function' ? handle.policyEpoch() : handle.policyEpoch
-    const active = () => !closed && !handle.closed && isActive() && handle.mayServe() &&
-      (typeof handle.policyEpoch === 'function' ? handle.policyEpoch() : handle.policyEpoch) === epoch
+    assertRequestIdentity(handle, request)
+    const active = createActivePredicate(() => closed, handle, isActive)
     if (!active() || !await handle.source.has(request.index, { isActive: active })) {
       await sendError?.()
       return { status: 'unavailable' }
     }
-    const proof = await createVerifiedBlockProof(handle.source, request.index)
-    const value = b4a.from(proof?.block?.value || [])
-    if (!active()) {
+    const prepared = await prepareVerifiedBlockProof(handle, request.index, active)
+    if (prepared.unavailable) {
       await sendError?.()
       return { status: 'unavailable' }
     }
-    if (proof?.block?.index !== request.index || value.byteLength !== expectedBlockBytes(handle.source.coreRef, request.index)) {
-      throw new Error('local asset block does not match the verified descriptor')
-    }
+    const { proof, value } = prepared
     const proofBytes = encodeProof({ index: request.index, proof, value })
     const reservation = reserve ? await reserve({ handle, peerId, request, bytes: value.byteLength }) : null
     if (reserve && !reservation) {
       await sendError?.()
       return { status: 'unavailable' }
     }
-    try {
-      for (let offset = 0; offset < proofBytes.byteLength; offset += VERIFIED_BLOCK_CHUNK_BYTES) {
-        if (!active()) return { status: 'cancelled' }
-        const chunk = proofBytes.subarray(offset, Math.min(proofBytes.byteLength, offset + VERIFIED_BLOCK_CHUNK_BYTES))
-        if (!await sendProofPart({ offset, totalBytes: proofBytes.byteLength, chunk })) return { status: 'cancelled' }
-      }
-      for (let offset = 0; offset < value.byteLength; offset += VERIFIED_BLOCK_CHUNK_BYTES) {
-        if (!active()) return { status: 'cancelled' }
-        const chunk = value.subarray(offset, Math.min(value.byteLength, offset + VERIFIED_BLOCK_CHUNK_BYTES))
-        if (!await sendBlockPart({ offset, totalBytes: value.byteLength, chunk })) return { status: 'cancelled' }
-      }
-      reservation?.commit?.()
-      return { status: 'sent', bytes: value.byteLength }
-    } finally {
-      reservation?.release?.()
-    }
+    return transmitVerifiedBlock({ proofBytes, value, sendProofPart, sendBlockPart, active, reservation })
   }
 
   function detach (handle) {

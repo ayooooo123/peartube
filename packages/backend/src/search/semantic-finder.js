@@ -18,6 +18,67 @@ import { buildMetadataEnvelope, buildSearchText } from './metadata-envelope.js'
 const DEFAULT_EMBEDDING_MODEL = 'Xenova/all-MiniLM-L6-v2'
 const DEFAULT_DIMENSION = 384
 const INDEX_STORAGE_KEY = 'semantic-vector-index'
+function parseRowMetadata(metadata) {
+  if (typeof metadata === 'string') {
+    try {
+      return JSON.parse(metadata)
+    } catch {
+      // Ignore malformed optional metadata during indexing.
+    }
+  }
+  return {}
+}
+
+function normalizeIndexEnvelope(envelope, metadata = {}) {
+  const videoId = envelope?.videoId || envelope?.id
+  const channelKey = metadata?.channelKey || envelope?.channelKey || null
+  const publicBeeKey = metadata?.publicBeeKey || envelope?.publicBeeKey || null
+  return buildMetadataEnvelope({ id: videoId }, {
+    ...metadata,
+    ...envelope,
+    videoId,
+    channelKey,
+    publicBeeKey,
+  })
+}
+
+function buildStoredMetadata(normalized, channelKey, metadata) {
+  return {
+    videoId: normalized.videoId,
+    channelKey,
+    publicBeeKey: normalized.publicBeeKey || null,
+    title: normalized.title,
+    creatorName: normalized.creatorName || null,
+    channelName: normalized.channelName || null,
+    description: normalized.description,
+    subtitles: normalized.subtitles,
+    comments: normalized.comments,
+    tags: normalized.tags,
+    searchText: normalized.searchText,
+    sourceFields: normalized.sourceFields,
+    ...metadata,
+  }
+}
+
+function extractSearchCreatorName(video) {
+  return String(
+    video.creatorName ||
+      video.sourceCreatorName ||
+      video.originalCreatorName ||
+      video.sourceAuthor ||
+      video.author ||
+      ''
+  ).trim()
+}
+
+function extractSearchChannelName(video) {
+  return String(video.channelName || video.channel?.name || '').trim()
+}
+
+function getIndexedMetadata(globalIndex, index, videoId) {
+  return globalIndex.vectors.get(videoId)?.metadata || index.vectors.get(videoId)?.metadata || {}
+}
+
 
 /**
  * Semantic Finder for video search
@@ -243,6 +304,24 @@ export class SemanticFinder {
    * @param {string} channelKey
    * @param {import('../channel/multi-writer-channel.js').MultiWriterChannel} channel
    */
+  _importGlobalRow(value, idx, channelKey) {
+    if (!value?.videoId) return false
+    if (this._indexedVideoIds.has(value.videoId)) return false
+
+    const vec = value.vector ? this._decodeVector(value.vector) : null
+    if (!vec || vec.length !== idx.dimension) return false
+
+    const meta = parseRowMetadata(value.metadata)
+
+    idx.add(value.videoId, vec, {
+      channelKey,
+      text: value.text || '',
+      ...meta
+    })
+    this._indexedVideoIds.add(value.videoId)
+    return true
+  }
+
   async ensureGlobalIndexedFromChannelView(channelKey, channel) {
     if (!channelKey || !channel?.db) return
 
@@ -264,29 +343,9 @@ export class SemanticFinder {
     let indexed = 0
 
     for (const value of rows) {
-      if (!value?.videoId) continue
-      if (this._indexedVideoIds.has(value.videoId)) continue
-
-      const vec = value.vector ? this._decodeVector(value.vector) : null
-      if (!vec) continue
-      if (vec.length !== idx.dimension) continue
-
-      let meta = {}
-      if (typeof value.metadata === 'string') {
-        try {
-          meta = JSON.parse(value.metadata)
-        } catch {
-          // Ignore malformed optional metadata during indexing.
-        }
+      if (this._importGlobalRow(value, idx, channelKey)) {
+        indexed++
       }
-
-      idx.add(value.videoId, vec, {
-        channelKey,
-        text: value.text || '',
-        ...meta
-      })
-      this._indexedVideoIds.add(value.videoId)
-      indexed++
     }
 
     if (indexed > 0) {
@@ -295,6 +354,7 @@ export class SemanticFinder {
     }
     this._globalVectorCounts.set(channelKey, rows.length)
   }
+
 
   /**
    * Index a video
@@ -314,13 +374,7 @@ export class SemanticFinder {
    * @param {Object} [metadata]
    */
   async indexEnvelope(envelope, metadata = {}) {
-    const normalized = buildMetadataEnvelope({ id: envelope?.videoId || envelope?.id }, {
-      ...metadata,
-      ...envelope,
-      videoId: envelope?.videoId || envelope?.id,
-      channelKey: metadata?.channelKey || envelope?.channelKey || null,
-      publicBeeKey: metadata?.publicBeeKey || envelope?.publicBeeKey || null,
-    })
+    const normalized = normalizeIndexEnvelope(envelope, metadata)
     const text = buildSearchText(normalized)
     if (!normalized.videoId || !text) return
 
@@ -328,21 +382,7 @@ export class SemanticFinder {
     const channelKey = normalized.channelKey || metadata?.channelKey || null
     const idx = channelKey ? this._getChannelIndex(channelKey) : this.index
     idx.dimension = this.index.dimension || DEFAULT_DIMENSION
-    const storedMetadata = {
-      videoId: normalized.videoId,
-      channelKey,
-      publicBeeKey: normalized.publicBeeKey || null,
-      title: normalized.title,
-      creatorName: normalized.creatorName || null,
-      channelName: normalized.channelName || null,
-      description: normalized.description,
-      subtitles: normalized.subtitles,
-      comments: normalized.comments,
-      tags: normalized.tags,
-      searchText: normalized.searchText,
-      sourceFields: normalized.sourceFields,
-      ...metadata,
-    }
+    const storedMetadata = buildStoredMetadata(normalized, channelKey, metadata)
     idx.add(normalized.videoId, embedding, storedMetadata)
     if (this.globalIndex !== idx) {
       this.globalIndex.add(normalized.videoId, embedding, storedMetadata)
@@ -351,6 +391,7 @@ export class SemanticFinder {
     this._dirty = true
     this._scheduleSave()
   }
+
 
   /**
    * Index a video directly from metadata (proactive indexing)
@@ -468,22 +509,16 @@ export class SemanticFinder {
     const videoId = video.videoId || video.id
     if (!videoId || !this._indexedVideoIds.has(videoId)) return false
 
-    const existing = this.globalIndex.vectors.get(videoId)?.metadata || this.index.vectors.get(videoId)?.metadata || {}
-    const nextCreatorName = String(
-      video.creatorName ||
-        video.sourceCreatorName ||
-        video.originalCreatorName ||
-        video.sourceAuthor ||
-        video.author ||
-        ''
-    ).trim()
+    const existing = getIndexedMetadata(this.globalIndex, this.index, videoId)
+    const nextCreatorName = extractSearchCreatorName(video)
     if (nextCreatorName && existing.creatorName !== nextCreatorName) return true
 
-    const nextChannelName = String(video.channelName || video.channel?.name || '').trim()
+    const nextChannelName = extractSearchChannelName(video)
     if (nextChannelName && existing.channelName !== nextChannelName) return true
 
     return false
   }
+
 
   /**
    * Search the global index (fast O(1) search)

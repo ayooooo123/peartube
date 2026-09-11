@@ -317,3 +317,125 @@ test('legacy ingest routes are absent', async (t) => {
   t.is((await router.dispatch(request('POST', '/api/v2/ingest/jobs', {}))).statusCode, 404)
   t.is((await router.dispatch(request('GET', '/api/v2/ingest/jobs/old-job'))).statusCode, 404)
 })
+
+test('privileged route scopes reject remote unverified principals and admit verified, local, and in-process callers', async (t) => {
+  const touched = []
+  const service = {
+    async setPolicy () { touched.push('policy'); return { policy: {} } },
+    async setAcquisitionPolicy () { touched.push('acquisition-policy'); return { policy: {} } },
+    async requestAcquisition () { touched.push('acquire'); return acquisition() },
+    async cancelAcquisition () { touched.push('cancel'); return acquisition({ state: 'cancelled', updatedAt: 2 }) },
+    async retryAcquisition () { touched.push('retry'); return acquisition({ state: 'queued', updatedAt: 3 }) },
+    async attachSourceGrant () { touched.push('grant'); return acquisition() },
+    async listAcquisitions () { touched.push('list'); return { items: [], nextCursor: null } }
+  }
+  const router = createCompanionRouter({ service })
+  const remote = { id: 'machine-1', publisherId: 'publisher-1', scopes: ALL_SCOPES, isLocal: false, isAuthenticated: false }
+  const denied = [
+    ['PUT', '/api/v2/policy', {}],
+    ['PUT', '/api/v2/acquisition-policy', {}],
+    ['POST', '/api/v2/acquisitions', acquisitionBody()],
+    ['POST', '/api/v2/acquisitions/contribute', {
+      idempotencyKey: 'contrib-1',
+      title: 'The Matrix',
+      selector: { kind: 'movie', namespace: 'tmdb', identifier: '603' }
+    }],
+    ['DELETE', '/api/v2/acquisitions/acq-1', null],
+    ['POST', '/api/v2/acquisitions/acq-1/retry', null],
+    ['POST', '/api/v2/acquisitions/acq-1/source-grants', { grant: { token: 'private' } }]
+  ]
+  for (const [method, url, body] of denied) {
+    const refused = await router.dispatch(request(method, url, body, { principal: remote }))
+    t.is(refused.statusCode, 403, `${method} ${url}`)
+    t.is(refused.body.error.code, 'PRIVATE_ROUTE_REQUIRES_AUTHENTICATION', `${method} ${url} is denied after routing`)
+  }
+  t.alike(touched, [], 'no privileged mutation reached the service while unverified')
+
+  const listed = await router.dispatch(request('GET', '/api/v2/acquisitions?limit=2', null, { principal: remote }))
+  t.is(listed.statusCode, 200, 'remote unverified acquisition reads stay open on an auth-off relay')
+  t.is(touched.at(-1), 'list')
+  const verified = await router.dispatch(request('POST', '/api/v2/acquisitions', acquisitionBody(), {
+    principal: { ...remote, isAuthenticated: true }
+  }))
+  t.is(verified.statusCode, 202, 'a verified remote principal gets the privileged write')
+  const inProcess = await router.dispatch(request('POST', '/api/v2/acquisitions', acquisitionBody(), {
+    principal: remote,
+    inProcess: true
+  }))
+  t.is(inProcess.statusCode, 202, 'the trusted in-process contract is preserved')
+  const local = await router.dispatch(request('POST', '/api/v2/acquisitions', acquisitionBody()))
+  t.is(local.statusCode, 202, 'trusted local callers are preserved')
+})
+
+async function diagnosticsCase (raw) {
+  const router = createCompanionRouter({ service: { async search () { return { candidates: [], ...raw } } } })
+  return await router.dispatch(request('GET', '/api/v2/search?kind=movie&title=matrix'))
+}
+
+test('search refuses backend diagnostics that are not real booleans or consistent bounded counts', async (t) => {
+  const invalid = [
+    { diagnostics: { partial: 'true', stale: false } },
+    { diagnostics: { partial: false, stale: 1 } },
+    { partial: 'yes' },
+    { stale: 2n },
+    { diagnostics: { partial: false, stale: false, queriedServices: 1.5 } },
+    { diagnostics: { partial: false, stale: false, queriedServices: -1 } },
+    { diagnostics: { partial: false, stale: false, queriedServices: 3n } },
+    { diagnostics: { partial: false, stale: false, queriedServices: null } },
+    { diagnostics: { partial: false, stale: false, queriedServices: 2, respondingServices: 3 } }
+  ]
+  for (const [index, raw] of invalid.entries()) {
+    const response = await diagnosticsCase(raw)
+    const bounded = response.statusCode === 502 ? JSON.stringify(response.body) : ''
+    t.is(response.statusCode, 502, `case ${index} is a contract violation`)
+    t.is(response.body?.error?.code, 'BACKEND_CONTRACT_INVALID', `case ${index}`)
+    t.ok(bounded.length <= 512, `case ${index} stays bounded`)
+  }
+})
+
+test('search preserves valid diagnostics: false flags, zero counts, equal counts, and top-level fallbacks', async (t) => {
+  const zeros = await diagnosticsCase({
+    diagnostics: { partial: false, stale: false, queriedServices: 0, respondingServices: 0 }
+  })
+  t.is(zeros.statusCode, 200)
+  t.alike(zeros.body.diagnostics, { partial: false, stale: false, queriedServices: 0, respondingServices: 0 })
+  t.absent(zeros.body.partial)
+  t.absent(zeros.body.stale)
+
+  const truthy = await diagnosticsCase({
+    diagnostics: { partial: true, stale: true, queriedServices: 2, respondingServices: 2 }
+  })
+  t.is(truthy.statusCode, 200)
+  t.alike(truthy.body.diagnostics, { partial: true, stale: true, queriedServices: 2, respondingServices: 2 })
+  t.is(truthy.body.partial, true)
+  t.is(truthy.body.stale, true)
+
+  const fallback = await diagnosticsCase({ partial: false, stale: true })
+  t.is(fallback.statusCode, 200)
+  t.absent(fallback.body.diagnostics, 'flag fallbacks keep the existing response shape')
+  t.absent(fallback.body.partial)
+  t.is(fallback.body.stale, true)
+
+  const nullContainer = await diagnosticsCase({ diagnostics: null, partial: false, stale: true })
+  t.is(nullContainer.statusCode, 200, 'a null diagnostics container stays optional')
+  t.absent(nullContainer.body.diagnostics)
+  t.is(nullContainer.body.stale, true)
+})
+
+test('search refuses null flags and malformed diagnostics containers instead of masking them', async (t) => {
+  const invalid = [
+    { diagnostics: { partial: null, stale: false } },
+    { diagnostics: { partial: false, stale: null } },
+    { partial: null },
+    { stale: null },
+    { diagnostics: null, partial: 'nope' },
+    { diagnostics: 'partial' },
+    { diagnostics: ['partial'] },
+    { diagnostics: 7 }
+  ]
+  for (const [index, raw] of invalid.entries()) {
+    const response = await diagnosticsCase(raw)
+    t.is(response.statusCode, 502, `case ${index} must not be masked by a fallback`)
+    t.is(response.body?.error?.code, 'BACKEND_CONTRACT_INVALID', `case ${index}`)
+  }
+})

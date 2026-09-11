@@ -24,7 +24,7 @@ import { useFonts } from 'expo-font'
 import { colors } from '@/lib/colors'
 import { AppContext, type AppContextType } from '@/lib/AppContext'
 import { buildBundleVersionKey } from '@peartube/platform/native-bundle-cache'
-import { getNativePublisherKeyVault, getNativePublisherSigner } from '@/lib/publisher-shell-signer'
+import { getNativePublisherKeyVault, getNativePublisherSigner } from '@/lib/publisher-shell-signer.native'
 import { useDeviceConditionsReporter } from '@/hooks/useNetworkPolicy'
 export { useApp } from '@/lib/AppContext'
 

@@ -154,6 +154,58 @@ function isValidVideoItem(item) {
   return nonArrayObject(item) && stableItemKey(item) !== null && nonEmptyString(item.title)
 }
 
+function assignVideoItemMedia(target, item) {
+  target.subtitle = firstNonEmptyString([item.subtitle, item.channelName, item.channel?.name, item.creatorName], null)
+  target.channelName = nonEmptyString(item.channelName) ? item.channelName : null
+  target.channel = nonArrayObject(item.channel) ? item.channel : null
+  target.creatorName = nonEmptyString(item.creatorName) ? item.creatorName : null
+  target.thumbnailUrl = firstNonEmptyString([item.thumbnailUrl, item.thumbnail, item.stillUrl, item.posterUrl, item.backdropUrl], null)
+  target.thumbnail = nonEmptyString(item.thumbnail) ? item.thumbnail : null
+  target.posterUrl = firstNonEmptyString([item.posterUrl, item.thumbnailUrl, item.thumbnail], null)
+  target.backdropUrl = firstNonEmptyString([item.backdropUrl, item.stillUrl, item.posterUrl, item.thumbnailUrl, item.thumbnail], null)
+  target.stillUrl = firstNonEmptyString([item.stillUrl, item.thumbnailUrl, item.thumbnail, item.posterUrl], null)
+  target.artwork = Array.isArray(item.artwork) ? item.artwork.slice() : []
+}
+
+function assignVideoItemKind(target, item) {
+  target.contentKind = hasUsefulValue(item?.contentKind) ? item.contentKind : hasUsefulValue(item?.mediaKind) ? item.mediaKind : null
+  target.mediaKind = hasUsefulValue(item?.mediaKind) ? item.mediaKind : hasUsefulValue(item?.contentKind) ? item.contentKind : null
+  target.entityKind = hasUsefulValue(item?.entityKind) ? item.entityKind : null
+  target.localEntityId = nonEmptyString(item?.localEntityId) ? item.localEntityId : null
+  target.classification = hasUsefulValue(item?.classification) ? item.classification : null
+  target.category = hasUsefulValue(item?.category) ? item.category : null
+  target.profileKind = hasUsefulValue(item?.profileKind) ? item.profileKind : null
+}
+
+function assignVideoItemMetrics(target, item, duration) {
+  target.duration = duration
+  target.durationSec = positiveDuration(item?.durationSec) ?? null
+  target.seasonNumber = Number.isSafeInteger(item?.seasonNumber) ? item.seasonNumber : null
+  target.episodeNumber = Number.isSafeInteger(item?.episodeNumber) ? item.episodeNumber : null
+  target.trackNumber = Number.isSafeInteger(item?.trackNumber) ? item.trackNumber : null
+  target.sourceCount = Number.isSafeInteger(item?.sourceCount) ? item.sourceCount : 0
+}
+
+function assignVideoItemSources(target, item) {
+  target.selectedSource = nonArrayObject(item.selectedSource) ? item.selectedSource : null
+  target.alternateSources = Array.isArray(item.alternateSources) ? item.alternateSources.slice() : []
+  target.sources = Array.isArray(item.sources) ? item.sources.slice() : []
+  target.provenance = Array.isArray(item.provenance) ? item.provenance.slice() : []
+  target.conflicts = Array.isArray(item.conflicts) ? item.conflicts.slice() : []
+  target.archiveStatus = hasUsefulValue(item.archiveStatus) ? item.archiveStatus : null
+  target.availabilityStatus = hasUsefulValue(item.availabilityStatus) ? item.availabilityStatus : null
+  target.publisherName = firstNonEmptyString([item.publisherName, item.sourceProviderName], null)
+  target.sourceProviderName = firstNonEmptyString([item.sourceProviderName, item.publisherName], null)
+  target.publicationId = nonEmptyString(item.publicationId) ? item.publicationId : null
+  target.renditionId = nonEmptyString(item.renditionId) ? item.renditionId : null
+  target.creatorRoles = Array.isArray(item.creatorRoles) ? item.creatorRoles.slice() : []
+  target.items = Array.isArray(item.items) ? item.items.slice() : []
+  target.missingMembers = Array.isArray(item.missingMembers) ? item.missingMembers.slice() : []
+  target.completeness = nonArrayObject(item.completeness) ? { ...item.completeness } : null
+  target.contributions = Array.isArray(item.contributions) ? item.contributions.slice() : []
+  target.sourcePublisherCount = Number.isSafeInteger(item.sourcePublisherCount) ? item.sourcePublisherCount : null
+}
+
 function normalizeVideoItem(item, source) {
   if (!isValidVideoItem(item)) return null
 
@@ -170,50 +222,14 @@ function normalizeVideoItem(item, source) {
     path: nonEmptyString(item?.path) ? item.path : null,
     publicBeeKey: nonEmptyString(item?.publicBeeKey) ? item.publicBeeKey : null,
     title: item.title,
-    subtitle: firstNonEmptyString([item?.subtitle, item?.channelName, item?.channel?.name, item?.creatorName], null),
-    channelName: nonEmptyString(item?.channelName) ? item.channelName : null,
-    channel: nonArrayObject(item?.channel) ? item.channel : null,
-    creatorName: nonEmptyString(item?.creatorName) ? item.creatorName : null,
-    thumbnailUrl: firstNonEmptyString([item?.thumbnailUrl, item?.thumbnail, item?.stillUrl, item?.posterUrl, item?.backdropUrl], null),
-    thumbnail: nonEmptyString(item?.thumbnail) ? item.thumbnail : null,
-    posterUrl: firstNonEmptyString([item?.posterUrl, item?.thumbnailUrl, item?.thumbnail], null),
-    backdropUrl: firstNonEmptyString([item?.backdropUrl, item?.stillUrl, item?.posterUrl, item?.thumbnailUrl, item?.thumbnail], null),
-    stillUrl: firstNonEmptyString([item?.stillUrl, item?.thumbnailUrl, item?.thumbnail, item?.posterUrl], null),
-    artwork: Array.isArray(item?.artwork) ? item.artwork.slice() : [],
-    contentKind: hasUsefulValue(item?.contentKind) ? item.contentKind : hasUsefulValue(item?.mediaKind) ? item.mediaKind : null,
-    mediaKind: hasUsefulValue(item?.mediaKind) ? item.mediaKind : hasUsefulValue(item?.contentKind) ? item.contentKind : null,
-    entityKind: hasUsefulValue(item?.entityKind) ? item.entityKind : null,
-    localEntityId: nonEmptyString(item?.localEntityId) ? item.localEntityId : null,
-    classification: hasUsefulValue(item?.classification) ? item.classification : null,
-    category: hasUsefulValue(item?.category) ? item.category : null,
-    profileKind: hasUsefulValue(item?.profileKind) ? item.profileKind : null,
-    duration,
-    durationSec: positiveDuration(item?.durationSec) ?? null,
-    seasonNumber: Number.isSafeInteger(item?.seasonNumber) ? item.seasonNumber : null,
-    episodeNumber: Number.isSafeInteger(item?.episodeNumber) ? item.episodeNumber : null,
-    trackNumber: Number.isSafeInteger(item?.trackNumber) ? item.trackNumber : null,
-    sourceCount: Number.isSafeInteger(item?.sourceCount) ? item.sourceCount : 0,
-    selectedSource: nonArrayObject(item?.selectedSource) ? item.selectedSource : null,
-    alternateSources: Array.isArray(item?.alternateSources) ? item.alternateSources.slice() : [],
-    sources: Array.isArray(item?.sources) ? item.sources.slice() : [],
-    provenance: Array.isArray(item?.provenance) ? item.provenance.slice() : [],
-    conflicts: Array.isArray(item?.conflicts) ? item.conflicts.slice() : [],
-    archiveStatus: hasUsefulValue(item?.archiveStatus) ? item.archiveStatus : null,
-    availabilityStatus: hasUsefulValue(item?.availabilityStatus) ? item.availabilityStatus : null,
-    publisherName: firstNonEmptyString([item?.publisherName, item?.sourceProviderName], null),
-    sourceProviderName: firstNonEmptyString([item?.sourceProviderName, item?.publisherName], null),
-    publicationId: nonEmptyString(item?.publicationId) ? item.publicationId : null,
-    renditionId: nonEmptyString(item?.renditionId) ? item.renditionId : null,
-    creatorRoles: Array.isArray(item?.creatorRoles) ? item.creatorRoles.slice() : [],
-    items: Array.isArray(item?.items) ? item.items.slice() : [],
-    missingMembers: Array.isArray(item?.missingMembers) ? item.missingMembers.slice() : [],
-    completeness: nonArrayObject(item?.completeness) ? { ...item.completeness } : null,
-    contributions: Array.isArray(item?.contributions) ? item.contributions.slice() : [],
-    sourcePublisherCount: Number.isSafeInteger(item?.sourcePublisherCount) ? item.sourcePublisherCount : null,
-    progress: normalizeProgress(item, duration),
-    createdAt: firstNonEmptyString([item?.createdAt, item?.publishedAt, item?.updatedAt, item?.indexedAt, item?.addedAt], null),
-    item: { ...item },
   }
+  assignVideoItemMedia(normalized, item)
+  assignVideoItemKind(normalized, item)
+  assignVideoItemMetrics(normalized, item, duration)
+  assignVideoItemSources(normalized, item)
+  normalized.progress = normalizeProgress(item, duration)
+  normalized.createdAt = firstNonEmptyString([item?.createdAt, item?.publishedAt, item?.updatedAt, item?.indexedAt, item?.addedAt], null)
+  normalized.item = { ...item }
   normalized[DEDUPE_KEY] = stableDedupeKey(item)
   return normalized
 }
@@ -228,7 +244,7 @@ function isValidContinueWatchingItem(item) {
 function normalizeContinueWatchingItem(item) {
   if (!isValidContinueWatchingItem(item)) return null
 
-  const duration = positiveDuration(item?.durationSec ?? item?.duration)
+  const duration = positiveDuration(item.durationSec ?? item.duration)
   const playbackKey = getMediaHubPlaybackKey(item)
   const normalized = {
     id: item.videoId,
@@ -236,16 +252,16 @@ function normalizeContinueWatchingItem(item) {
     playbackKey,
     channelKey: item.channelKey,
     videoId: item.videoId,
-    publicBeeKey: nonEmptyString(item?.publicBeeKey) ? item.publicBeeKey : null,
-    durationSec: positiveDuration(item?.durationSec) ?? null,
-    positionSec: finiteNumber(item?.positionSec) ? item.positionSec : null,
+    publicBeeKey: nonEmptyString(item.publicBeeKey) ? item.publicBeeKey : null,
+    durationSec: positiveDuration(item.durationSec) ?? null,
+    positionSec: finiteNumber(item.positionSec) ? item.positionSec : null,
     title: item.title,
-    subtitle: firstNonEmptyString([item?.subtitle, item?.channelName, item?.channel?.name], null),
-    thumbnailUrl: firstNonEmptyString([item?.thumbnailUrl, item?.thumbnail], null),
-    thumbnail: nonEmptyString(item?.thumbnail) ? item.thumbnail : null,
+    subtitle: firstNonEmptyString([item.subtitle, item.channelName, item.channel?.name], null),
+    thumbnailUrl: firstNonEmptyString([item.thumbnailUrl, item.thumbnail], null),
+    thumbnail: nonEmptyString(item.thumbnail) ? item.thumbnail : null,
     duration,
     progress: normalizeProgress(item, duration),
-    createdAt: firstNonEmptyString([item?.updatedAt, item?.createdAt, item?.publishedAt], null),
+    createdAt: firstNonEmptyString([item.updatedAt, item.createdAt, item.publishedAt], null),
     item: { ...item },
   }
   normalized[DEDUPE_KEY] = stableDedupeKey(item)
@@ -279,6 +295,13 @@ function mergeMissingTimestampFields(existing, item) {
     const sourceValue = item.item?.[field]
     if (timestampValueMs(sourceValue) !== null) existing[field] = sourceValue
   }
+}
+
+function mergeMissingSourceMetadata(existing, item) {
+  if (Array.isArray(existing.provenance) && existing.provenance.length === 0 && Array.isArray(item.provenance) && item.provenance.length > 0) existing.provenance = item.provenance.slice()
+  if (Array.isArray(existing.conflicts) && existing.conflicts.length === 0 && Array.isArray(item.conflicts) && item.conflicts.length > 0) existing.conflicts = item.conflicts.slice()
+  if (Array.isArray(existing.alternateSources) && existing.alternateSources.length === 0 && Array.isArray(item.alternateSources) && item.alternateSources.length > 0) existing.alternateSources = item.alternateSources.slice()
+  if (Array.isArray(existing.creatorRoles) && existing.creatorRoles.length === 0 && Array.isArray(item.creatorRoles) && item.creatorRoles.length > 0) existing.creatorRoles = item.creatorRoles.slice()
 }
 
 function mergeMissingMediaFields(existing, item) {
@@ -320,10 +343,7 @@ function mergeMissingMediaFields(existing, item) {
   mergeMissingSourceField(existing, item, 'path')
   mergeMissingSourceField(existing, item, 'publicBeeKey')
   if (Array.isArray(existing.artwork) && existing.artwork.length === 0 && Array.isArray(item.artwork) && item.artwork.length > 0) existing.artwork = item.artwork.slice()
-  if (Array.isArray(existing.provenance) && existing.provenance.length === 0 && Array.isArray(item.provenance) && item.provenance.length > 0) existing.provenance = item.provenance.slice()
-  if (Array.isArray(existing.conflicts) && existing.conflicts.length === 0 && Array.isArray(item.conflicts) && item.conflicts.length > 0) existing.conflicts = item.conflicts.slice()
-  if (Array.isArray(existing.alternateSources) && existing.alternateSources.length === 0 && Array.isArray(item.alternateSources) && item.alternateSources.length > 0) existing.alternateSources = item.alternateSources.slice()
-  if (Array.isArray(existing.creatorRoles) && existing.creatorRoles.length === 0 && Array.isArray(item.creatorRoles) && item.creatorRoles.length > 0) existing.creatorRoles = item.creatorRoles.slice()
+  mergeMissingSourceMetadata(existing, item)
   mergeMissingTimestampFields(existing, item)
 }
 
@@ -366,16 +386,16 @@ function isMusicOrCreatorItem(item) {
 }
 
 function hasFeaturedThumbnail(item) {
-  return nonEmptyString(item?.thumbnailUrl)
-    || nonEmptyString(item?.thumbnail)
-    || nonEmptyString(item?.posterUrl)
-    || nonEmptyString(item?.backdropUrl)
-    || nonEmptyString(item?.stillUrl)
-    || nonEmptyString(item?.item?.thumbnailUrl)
-    || nonEmptyString(item?.item?.thumbnail)
-    || nonEmptyString(item?.item?.posterUrl)
-    || nonEmptyString(item?.item?.backdropUrl)
-    || nonEmptyString(item?.item?.stillUrl)
+  return nonEmptyString(item.thumbnailUrl)
+    || nonEmptyString(item.thumbnail)
+    || nonEmptyString(item.posterUrl)
+    || nonEmptyString(item.backdropUrl)
+    || nonEmptyString(item.stillUrl)
+    || nonEmptyString(item.item?.thumbnailUrl)
+    || nonEmptyString(item.item?.thumbnail)
+    || nonEmptyString(item.item?.posterUrl)
+    || nonEmptyString(item.item?.backdropUrl)
+    || nonEmptyString(item.item?.stillUrl)
 }
 
 function isBetterFeaturedItem(candidate, selected) {
@@ -456,21 +476,21 @@ export function getMediaHubPlayableSourceItem(item, options = {}) {
     source.videoId,
     source.path,
     source.id,
-    selectedSource ? null : item?.videoId,
-    selectedSource ? null : item?.id,
-    selectedSource ? null : item?.path,
+    selectedSource ? null : item.videoId,
+    selectedSource ? null : item.id,
+    selectedSource ? null : item.path,
   ], null)
   const channelKey = firstNonEmptyString([
     source.channelKey,
     source.driveKey,
     source.channel?.key,
-    selectedSource ? null : item?.channelKey,
-    selectedSource ? null : item?.driveKey,
+    selectedSource ? null : item.channelKey,
+    selectedSource ? null : item.driveKey,
     options.fallbackChannelKey,
   ], '')
   const publicBeeKey = firstNonEmptyString([
     source.publicBeeKey,
-    selectedSource ? null : item?.publicBeeKey,
+    selectedSource ? null : item.publicBeeKey,
     options.publicBeeKey,
   ], null)
 
@@ -481,9 +501,9 @@ export function getMediaHubPlayableSourceItem(item, options = {}) {
     channelKey,
     driveKey: firstNonEmptyString([source.driveKey, channelKey], channelKey),
     publicBeeKey,
-    title: firstNonEmptyString([source.title, item?.title], 'Untitled'),
-    thumbnailUrl: firstNonEmptyString([source.thumbnailUrl, item?.thumbnailUrl, source.thumbnail, item?.thumbnail], null),
-    thumbnail: firstNonEmptyString([source.thumbnail, item?.thumbnail, source.thumbnailUrl, item?.thumbnailUrl], null),
+    title: firstNonEmptyString([source.title, item.title], 'Untitled'),
+    thumbnailUrl: firstNonEmptyString([source.thumbnailUrl, item.thumbnailUrl, source.thumbnail, item.thumbnail], null),
+    thumbnail: firstNonEmptyString([source.thumbnail, item.thumbnail, source.thumbnailUrl, item.thumbnailUrl], null),
   }
 }
 

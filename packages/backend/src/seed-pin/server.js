@@ -378,7 +378,7 @@ export class SeedPinServer {
           requestId,
           SEED_PIN_ERROR_CODES.INTERNAL,
         ))
-      } catch {}
+      } catch { /* secondary error response may also fail after channel close */ }
     }
   }
 }

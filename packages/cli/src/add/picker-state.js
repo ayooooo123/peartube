@@ -1,25 +1,12 @@
 const MULTI_SELECT_SCREENS = new Set(['episodeSelection', 'bulkMapping'])
-const GUARDED_PUBLICATION_PHASES = new Set([
-  'replicationPending',
-  'projecting',
-  'announcing'
-])
-const RECOGNIZED_PROGRESS_PHASES = new Set([
-  'pending',
-  'resolving',
-  'downloading',
-  'uploading',
-  'uploaded',
-  'replicationPending',
-  'durabilityVerified',
-  'projecting',
-  'projected',
-  'announcing',
-  'announced',
-  'finalizing',
-  'published',
+const CANONICAL_ACQUISITION_STATES = new Set([
+  'queued',
+  'acquiring',
+  'verifying',
+  'publishing',
+  'completed',
   'failed',
-  'skipped'
+  'cancelled'
 ])
 const INVALID_DATA = Symbol('invalid-data')
 const CHOICE_DEPENDENCIES = {
@@ -120,15 +107,11 @@ export function createPickerState (options = {}) {
     choices: {},
     latestRequestId: validInitialRequestId(options.latestRequestId),
     progress: progress === INVALID_DATA || !isProgressRecord(progress) ? null : progress,
-    result: null,
-    exitConfirm: null
+    result: null
   }
 }
 
-export function reducePicker (state, action) {
-  if (!state || typeof state !== 'object' || !action || typeof action !== 'object') return state
-  if (PANE_ACTIONS.has(action.type) && (!state.screens || !state.screens[state.screen])) return state
-
+function reduceQueryAction (state, action) {
   switch (action.type) {
     case 'query.insert':
       return insertQuery(state, action.text)
@@ -142,6 +125,13 @@ export function reducePicker (state, action) {
       return setQueryCursor(state, 0)
     case 'query.end':
       return setQueryCursor(state, currentPane(state).input.value.length)
+    default:
+      return state
+  }
+}
+
+function reduceResultsAction (state, action) {
+  switch (action.type) {
     case 'results.request':
     case 'results.retry':
       return startRequest(state, action.requestId)
@@ -149,6 +139,19 @@ export function reducePicker (state, action) {
       return replaceResults(state, action)
     case 'results.error':
       return failResults(state, action)
+    default:
+      return state
+  }
+}
+
+export function reducePicker (state, action) {
+  if (!state || typeof state !== 'object' || !action || typeof action !== 'object') return state
+  if (PANE_ACTIONS.has(action.type) && (!state.screens || !state.screens[state.screen])) return state
+
+  if (action.type.startsWith('query.')) return reduceQueryAction(state, action)
+  if (action.type.startsWith('results.')) return reduceResultsAction(state, action)
+
+  switch (action.type) {
     case 'selection.move':
       return moveSelection(state, action.delta)
     case 'selection.toggle':
@@ -165,10 +168,6 @@ export function reducePicker (state, action) {
       return completeProgress(state, action.value)
     case 'interrupt':
       return interrupt(state)
-    case 'exit.dismiss':
-      return dismissExit(state)
-    case 'exit.confirm':
-      return confirmExit(state)
     default:
       return state
   }
@@ -341,34 +340,51 @@ function completeSelection (state) {
   })
 }
 
+function searchNextScreen (candidate) {
+  if (!candidate) return null
+  const kind = candidate.kind || candidate.type
+  if (kind === 'tv') return 'tvSeason'
+  if (kind === 'movie') return 'movieSource'
+  if (kind === 'creator') return 'creatorContent'
+  return null
+}
+
+function confirmSearchStep (state, candidate) {
+  const next = searchNextScreen(candidate)
+  if (!next) return state
+  return forwardChoice(state, next, 'search', candidate)
+}
+
+function confirmMultiSelectStep (state, pane) {
+  if (state.screen === 'episodeSelection') {
+    const episodes = selectedCandidates(pane)
+    return episodes.length > 0
+      ? forwardChoice(state, 'sourceSelection', 'episodes', episodes)
+      : state
+  }
+  if (state.screen === 'bulkMapping') {
+    const mappings = selectedCandidates(pane)
+    return mappings.length > 0
+      ? forwardChoice(state, 'review', 'bulkMapping', mappings)
+      : state
+  }
+  return state
+}
+
 function confirmStep (state) {
   const pane = currentPane(state)
   const candidate = pane && pane.results.items[pane.selection.index]
 
   switch (state.screen) {
-    case 'search': {
-      if (!candidate) return state
-      const kind = candidate.kind || candidate.type
-      const next = kind === 'tv'
-        ? 'tvSeason'
-        : kind === 'movie'
-          ? 'movieSource'
-          : kind === 'creator'
-            ? 'creatorContent'
-            : null
-      if (!next) return state
-      return forwardChoice(state, next, 'search', candidate)
-    }
+    case 'search':
+      return confirmSearchStep(state, candidate)
     case 'tvSeason':
       return candidate
         ? forwardChoice(state, 'episodeSelection', 'tvSeason', candidate)
         : state
-    case 'episodeSelection': {
-      const episodes = selectedCandidates(pane)
-      return episodes.length > 0
-        ? forwardChoice(state, 'sourceSelection', 'episodes', episodes)
-        : state
-    }
+    case 'episodeSelection':
+    case 'bulkMapping':
+      return confirmMultiSelectStep(state, pane)
     case 'movieSource':
       return candidate
         ? forwardChoice(state, 'review', 'movieSource', candidate)
@@ -385,17 +401,9 @@ function confirmStep (state) {
       return candidate
         ? forwardChoice(state, 'review', 'sourceSelection', candidate)
         : state
-    case 'bulkMapping': {
-      const mappings = selectedCandidates(pane)
-      return mappings.length > 0
-        ? forwardChoice(state, 'review', 'bulkMapping', mappings)
-        : state
-    }
     case 'review': {
       const progress = state.progress || {
-        phase: 'pending',
-        checkpoint: null,
-        localBytes: null
+        phase: 'queued'
       }
       return forward(state, 'progress', null, { progress })
     }
@@ -441,8 +449,7 @@ function clearDependencies (state, dependencies) {
     screens,
     choices,
     progress: clearsProgress ? null : state.progress,
-    result: clearsProgress ? null : state.result,
-    exitConfirm: null
+    result: clearsProgress ? null : state.result
   }
 }
 
@@ -460,22 +467,19 @@ function forward (state, screen, choices = null, updates = null) {
     screen,
     screens,
     history: [...state.history, state.screen],
-    choices: choices ? { ...state.choices, ...choices } : state.choices,
-    exitConfirm: null
+    choices: choices ? { ...state.choices, ...choices } : state.choices
   }
 }
 
 function backStep (state) {
   if (state.screen === 'result') return state
-  if (state.screen === 'exitConfirm') return dismissExit(state)
   if (state.screen === 'progress') return interrupt(state)
   if (state.history.length === 0) return cancelledResult(state)
   const screen = state.history[state.history.length - 1]
   return {
     ...state,
     screen,
-    history: state.history.slice(0, -1),
-    exitConfirm: null
+    history: state.history.slice(0, -1)
   }
 }
 
@@ -497,51 +501,20 @@ function completeProgress (state, value) {
       status: 'completed',
       value: resultValue,
       progress: state.progress
-    },
-    exitConfirm: null
+    }
   }
 }
 
 function interrupt (state) {
-  if (state.screen === 'exitConfirm' || state.screen === 'result') return state
-  if (state.screen === 'progress' && GUARDED_PUBLICATION_PHASES.has(state.progress && state.progress.phase)) {
-    return {
-      ...state,
-      screen: 'exitConfirm',
-      exitConfirm: { resume: state }
-    }
-  }
+  if (state.screen === 'result') return state
   return cancelledResult(state)
-}
-
-function dismissExit (state) {
-  if (state.screen !== 'exitConfirm' || !state.exitConfirm) return state
-  return state.exitConfirm.resume
-}
-
-function confirmExit (state) {
-  if (state.screen !== 'exitConfirm' || !state.exitConfirm) return state
-  const resume = state.exitConfirm.resume
-  const progress = resume.progress
-  return {
-    ...resume,
-    screen: 'result',
-    result: {
-      status: 'exited',
-      checkpoint: progress && progress.checkpoint,
-      localBytes: progress && progress.localBytes,
-      progress
-    },
-    exitConfirm: null
-  }
 }
 
 function cancelledResult (state) {
   return {
     ...state,
     screen: 'result',
-    result: { status: 'cancelled', progress: state.progress },
-    exitConfirm: null
+    result: { status: 'cancelled', progress: state.progress }
   }
 }
 
@@ -563,14 +536,7 @@ function validInitialRequestId (requestId) {
 
 function isProgressRecord (progress) {
   if (progress == null || typeof progress !== 'object' || Array.isArray(progress)) return false
-  if (!RECOGNIZED_PROGRESS_PHASES.has(progress.phase)) return false
-  if (!GUARDED_PUBLICATION_PHASES.has(progress.phase)) return true
-  return isNonEmptyRecord(progress.checkpoint) && isNonEmptyRecord(progress.localBytes)
-}
-
-function isNonEmptyRecord (value) {
-  return value != null && typeof value === 'object' && !Array.isArray(value) &&
-    Object.keys(value).length > 0
+  return CANONICAL_ACQUISITION_STATES.has(progress.phase)
 }
 
 function isCandidate (candidate) {
@@ -612,32 +578,26 @@ function completionValue (candidate) {
   return typeof value === 'string' ? value : String(value)
 }
 
-function cloneData (value, ancestors = new Set()) {
-  if (value == null || typeof value === 'string' || typeof value === 'boolean') return value
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null
-  if (typeof value !== 'object') return null
-  if (ancestors.has(value)) return INVALID_DATA
-
-  ancestors.add(value)
-  if (Array.isArray(value)) {
-    const clone = new Array(value.length)
-    for (let index = 0; index < value.length; index += 1) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
-      if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
-        clone[index] = null
-        continue
-      }
-      const clonedEntry = cloneData(descriptor.value, ancestors)
-      if (clonedEntry === INVALID_DATA) {
-        ancestors.delete(value)
-        return INVALID_DATA
-      }
-      clone[index] = clonedEntry
+function cloneArrayData (value, ancestors) {
+  const clone = new Array(value.length)
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+    if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
+      clone[index] = null
+      continue
     }
-    ancestors.delete(value)
-    return clone
+    const clonedEntry = cloneData(descriptor.value, ancestors)
+    if (clonedEntry === INVALID_DATA) {
+      ancestors.delete(value)
+      return INVALID_DATA
+    }
+    clone[index] = clonedEntry
   }
+  ancestors.delete(value)
+  return clone
+}
 
+function cloneObjectData (value, ancestors) {
   const clone = {}
   for (const key of Object.keys(value)) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key)
@@ -658,4 +618,17 @@ function cloneData (value, ancestors = new Set()) {
   }
   ancestors.delete(value)
   return clone
+}
+
+function cloneData (value, ancestors = new Set()) {
+  if (value == null || typeof value === 'string' || typeof value === 'boolean') return value
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value !== 'object') return null
+  if (ancestors.has(value)) return INVALID_DATA
+
+  ancestors.add(value)
+  if (Array.isArray(value)) {
+    return cloneArrayData(value, ancestors)
+  }
+  return cloneObjectData(value, ancestors)
 }

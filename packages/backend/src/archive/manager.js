@@ -56,6 +56,77 @@ function restoreState(value) {
   return { assessments, audits }
 }
 
+function validateOffloadConfirmation(input, { assessments, policyVersion, now, rejection }) {
+  let publicationId
+  let assessmentId
+  let evidenceDigest
+  let confirmationNonce
+  try {
+    publicationId = hex32(input.publicationId, 'publicationId')
+    assessmentId = hex32(input.assessmentId, 'assessmentId')
+    evidenceDigest = hex32(input.evidenceDigest, 'evidenceDigest')
+    confirmationNonce = hex32(input.confirmationNonce, 'confirmationNonce')
+  } catch {
+    return { error: rejection('confirmation-invalid') }
+  }
+  const context = { publicationId, assessmentId }
+  const assessment = assessments.get(assessmentId)
+  if (!assessment) return { error: rejection('assessment-not-found', context) }
+  if (assessment.consumed) return { error: rejection('nonce-used', context) }
+  if (input.confirmIrrecoverableRisk !== true) return { error: rejection('irrecoverable-risk-not-confirmed', context) }
+  if (publicationId !== assessment.publicationId) return { error: rejection('publication-mismatch', context) }
+  if (evidenceDigest !== assessment.evidenceDigest) return { error: rejection('evidence-mismatch', context) }
+  if (confirmationNonce !== assessment.confirmationNonce) return { error: rejection('nonce-mismatch', context) }
+  if (Number(input.policyVersion) !== assessment.policyVersion || assessment.policyVersion !== policyVersion) {
+    return { error: rejection('policy-changed', context) }
+  }
+  if (now() < assessment.issuedAt) return { error: rejection('assessment-not-yet-valid', context) }
+  if (now() > assessment.expiresAt) return { error: rejection('assessment-expired', context) }
+  if (!assessment.eligible) return { error: rejection('not-eligible', context) }
+  return { publicationId, assessmentId, evidenceDigest, confirmationNonce, context, assessment }
+}
+
+async function handleFailedOffloadDeletion({ deletion, context, publicationId, assessmentId, authorizationResult, recordAudit, rejection, now }) {
+  const reason = String(deletion?.reason || 'delete-failed')
+  const result = rejection(reason, context)
+  const evidenceDigest = authorizationResult?.response?.evidenceDigest
+  await recordAudit({
+    publicationId,
+    assessmentId,
+    outcome: 'failed',
+    reason,
+    ...(evidenceDigest ? { evidenceDigest } : {}),
+    observedAt: now(),
+  })
+  return result
+}
+
+async function finalizeSuccessfulOffload({ deletion, authorizationResult, publicationId, assessmentId, recordAudit, now }) {
+  const freshDigest = authorizationResult.response.evidenceDigest
+  const freedBytes = Number.isSafeInteger(Number(deletion.freedBytes)) && Number(deletion.freedBytes) >= 0
+    ? Number(deletion.freedBytes)
+    : 0
+  const isShared = deletion.sharedRetention === true
+  const audit = await recordAudit({
+    publicationId,
+    assessmentId,
+    outcome: isShared ? 'retention-released' : 'deleted',
+    evidenceDigest: freshDigest,
+    freedBytes,
+    ...(isShared ? { sharedRetention: true } : {}),
+    observedAt: now(),
+  })
+  return {
+    success: true,
+    accepted: true,
+    publicationId,
+    assessmentId,
+    freedBytes,
+    auditId: audit.auditId,
+    ...(isShared ? { sharedRetention: true } : {}),
+  }
+}
+
 export function createArchiveManager(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now
   const collectEvidence = typeof options.collectEvidence === 'function' ? options.collectEvidence : async () => ({})
@@ -89,7 +160,7 @@ export function createArchiveManager(options = {}) {
   }
 
   function rejection(reason, context = {}) {
-    try { diagnostics?.recordOffloadRejection?.({ reason, observedAt: now() }) } catch {}
+    try { diagnostics?.recordOffloadRejection?.({ reason, observedAt: now() }) } catch { /* diagnostics observers must not mask the rejection result */ }
     return {
       success: false,
       accepted: false,
@@ -188,32 +259,9 @@ export function createArchiveManager(options = {}) {
 
     confirmSourceOffload(input = {}) {
       return serialize(async () => {
-        let publicationId
-        let assessmentId
-        let evidenceDigest
-        let confirmationNonce
-        try {
-          publicationId = hex32(input.publicationId, 'publicationId')
-          assessmentId = hex32(input.assessmentId, 'assessmentId')
-          evidenceDigest = hex32(input.evidenceDigest, 'evidenceDigest')
-          confirmationNonce = hex32(input.confirmationNonce, 'confirmationNonce')
-        } catch {
-          return rejection('confirmation-invalid')
-        }
-        const context = { publicationId, assessmentId }
-        const assessment = assessments.get(assessmentId)
-        if (!assessment) return rejection('assessment-not-found', context)
-        if (assessment.consumed) return rejection('nonce-used', context)
-        if (input.confirmIrrecoverableRisk !== true) return rejection('irrecoverable-risk-not-confirmed', context)
-        if (publicationId !== assessment.publicationId) return rejection('publication-mismatch', context)
-        if (evidenceDigest !== assessment.evidenceDigest) return rejection('evidence-mismatch', context)
-        if (confirmationNonce !== assessment.confirmationNonce) return rejection('nonce-mismatch', context)
-        if (Number(input.policyVersion) !== assessment.policyVersion || assessment.policyVersion !== policyVersion) {
-          return rejection('policy-changed', context)
-        }
-        if (now() < assessment.issuedAt) return rejection('assessment-not-yet-valid', context)
-        if (now() > assessment.expiresAt) return rejection('assessment-expired', context)
-        if (!assessment.eligible) return rejection('not-eligible', context)
+        const validation = validateOffloadConfirmation(input, { assessments, policyVersion, now, rejection })
+        if (validation.error) return validation.error
+        const { publicationId, assessmentId, context, assessment } = validation
 
         let authorizationAttempted = false
         let authorizationResult = null
@@ -304,42 +352,25 @@ export function createArchiveManager(options = {}) {
           deletion = { success: false, reason: 'locked-revalidation-required' }
         }
         if (!deletion?.success) {
-          const reason = String(deletion?.reason || 'delete-failed')
-          const result = rejection(reason, context)
-          await recordAudit({
+          return handleFailedOffloadDeletion({
+            deletion,
+            context,
             publicationId,
             assessmentId,
-            outcome: 'failed',
-            reason,
-            ...(authorizationResult?.response?.evidenceDigest
-              ? { evidenceDigest: authorizationResult.response.evidenceDigest }
-              : {}),
-            observedAt: now(),
+            authorizationResult,
+            recordAudit,
+            rejection,
+            now,
           })
-          return result
         }
-        const freshDigest = authorizationResult.response.evidenceDigest
-        const freedBytes = Number.isSafeInteger(Number(deletion.freedBytes)) && Number(deletion.freedBytes) >= 0
-          ? Number(deletion.freedBytes)
-          : 0
-        const audit = await recordAudit({
+        return finalizeSuccessfulOffload({
+          deletion,
+          authorizationResult,
           publicationId,
           assessmentId,
-          outcome: deletion.sharedRetention === true ? 'retention-released' : 'deleted',
-          evidenceDigest: freshDigest,
-          freedBytes,
-          ...(deletion.sharedRetention === true ? { sharedRetention: true } : {}),
-          observedAt: now(),
+          recordAudit,
+          now,
         })
-        return {
-          success: true,
-          accepted: true,
-          publicationId,
-          assessmentId,
-          freedBytes,
-          auditId: audit.auditId,
-          ...(deletion.sharedRetention === true ? { sharedRetention: true } : {}),
-        }
       })
     },
 

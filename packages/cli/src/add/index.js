@@ -4,8 +4,16 @@ import { CONTENT_TYPES, canBrowse, coordinateRefusal, coordinateRequirement, coo
 import { canReadAuthority, createMetadataProvider } from './providers/index.js'
 import { renderPickerLines } from './render.js'
 import { createDiagnosticScope } from './diagnostic-scope.js'
-import { createBackendExecutorDeps } from './backend-deps.js'
-import { readFileSync, appendFileSync } from 'node:fs'
+import fs, { readFileSync, appendFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, basename } from 'node:path'
+import { loadChannel } from '@peartube/backend/storage'
+import { deriveImportClaimantId } from '@peartube/backend/structured-content'
+import { createYtDlpDownloader } from '../archive-manager.js'
+import { fingerprintFile } from './bulk/source-scanner.js'
+import { itemIdentity } from './duplicate-check.js'
+import { deriveImportIdentityKey } from './content-model.js'
+import { canonicalLocalResolutionRecord, executeLocalFileAcquisition, mimeTypeForPath, normalizeLocalDurationSeconds, sha256File } from '../local-file-acquisition.js'
 import { createInteractiveDriver } from './interactive.js'
 import { createPickerState } from './picker-state.js'
 import nodePath from 'node:path'
@@ -23,15 +31,13 @@ function loadConfigFile (path) {
 }
 
 const PROGRESS_PHASES = {
-  resolving: 'Resolving',
-  downloading: 'Downloading',
-  uploading: 'Uploading',
-  uploaded: 'Uploaded',
-  replicationPending: 'Replicating',
-  durabilityVerified: 'Verifying copy',
-  projecting: 'Projecting',
-  announcing: 'Announcing',
-  published: 'Published'
+  queued: 'Queued',
+  acquiring: 'Acquiring',
+  verifying: 'Verifying',
+  publishing: 'Publishing',
+  completed: 'Completed',
+  failed: 'Failed',
+  cancelled: 'Cancelled'
 }
 
 class AddUsageError extends Error {
@@ -53,14 +59,30 @@ async function loadDeps (context) {
   }
   // The registry itself is cheap — it only lazily imports the one authority
   // module a run actually asks for — so it is injected rather than imported.
-  const [{ openAddRuntime }, { createYtDlpProvider }, { createJobStore }, { createExecutor }, { runTerminal }] = await Promise.all([
+  const [{ openAddRuntime }, { createYtDlpProvider }, { runTerminal }] = await Promise.all([
     import('./runtime.js'),
     import('./providers/yt-dlp.js'),
-    import('./job-store.js'),
-    import('./executor.js'),
     import('./terminal.js')
   ])
-  return { openAddRuntime, createMetadataProvider, createYtDlpProvider, createJobStore, createExecutor, runTerminal }
+  return { openAddRuntime, createMetadataProvider, createYtDlpProvider, runTerminal }
+}
+
+async function executeAddMode ({ context, preferences, deps, mode, emitProgress, logger }) {
+  if (preferences.relayUi) {
+    if (mode === 'scripted') return await runRelayScripted({ context, preferences, deps, emitProgress })
+    if (mode === 'interactive') {
+      if (typeof deps.runTerminal !== 'function') throw new AddUsageError('Interactive mode is unavailable')
+      return await runRelayInteractive({ context, preferences, deps })
+    }
+  }
+  if (mode === 'scripted') {
+    return await runScripted({ context, preferences, deps, emitProgress, logger })
+  }
+  if (mode === 'interactive') {
+    if (typeof deps.runTerminal !== 'function') throw new AddUsageError('Interactive mode is unavailable')
+    return await runInteractive({ context, preferences, deps, logger })
+  }
+  throw new AddUsageError('Unsupported add mode')
 }
 
 export async function runAddCommand (context = {}) {
@@ -78,23 +100,8 @@ export async function runAddCommand (context = {}) {
   const scope = createDiagnosticScope({ logger })
   scope.install()
   try {
-    if (preferences.relayUi) {
-      if (mode === 'scripted') return finish(context, await runRelayScripted({ context, preferences, deps, emitProgress }))
-      if (mode === 'interactive') {
-        if (typeof deps.runTerminal !== 'function') throw new AddUsageError('Interactive mode is unavailable')
-        return finish(context, await runRelayInteractive({ context, preferences, deps }))
-      }
-    }
-    if (mode === 'scripted') {
-      const result = await runScripted({ context, preferences, deps, emitProgress, logger })
-      return finish(context, result)
-    }
-    if (mode === 'interactive') {
-      if (typeof deps.runTerminal !== 'function') throw new AddUsageError('Interactive mode is unavailable')
-      const result = await runInteractive({ context, preferences, deps, logger })
-      return finish(context, result)
-    }
-    throw new AddUsageError('Unsupported add mode')
+    const result = await executeAddMode({ context, preferences, deps, mode, emitProgress, logger })
+    return finish(context, result)
   } catch (error) {
     if (error?.exitCode === 2) {
       write(stderr, `${error.message}\n`)
@@ -164,7 +171,6 @@ async function runRelayInteractive ({ context, preferences, deps }) {
   driver.cleanup()
   if (!selection || !selection.result) return { status: 'cancelled' }
   if (selection.result.status === 'completed') return selection.result.value
-  if (selection.result.status === 'exited') return { status: 'exited' }
   return { status: 'cancelled' }
 }
 
@@ -311,16 +317,20 @@ async function runScripted ({ context, preferences, deps, emitProgress, logger }
       channelDraft = buildDirectChannelDraft({ name: flags.channelName || title })
       itemDraft = buildCreatorItemDraft({ title, contentKind: 'video' }, sourceFrom(fetchUrl))
     } else if (enriched) {
-      ;({ channelDraft, itemDraft } = await buildLookedUpDrafts({
+      const lookedUp = await buildLookedUpDrafts({
         kind: flags.type,
         coordinates,
         flags,
         preferences,
         deps,
         source: sourceFrom(fetchUrl)
-      }))
+      })
+      channelDraft = lookedUp.channelDraft
+      itemDraft = lookedUp.itemDraft
     } else if (coordinates) {
-      ;({ channelDraft, itemDraft } = buildSuppliedDrafts({ kind: flags.type, coordinates, flags, source: sourceFrom(fetchUrl) }))
+      const supplied = buildSuppliedDrafts({ kind: flags.type, coordinates, flags, source: sourceFrom(fetchUrl) })
+      channelDraft = supplied.channelDraft
+      itemDraft = supplied.itemDraft
     } else {
       throw new AddUsageError(`Scripted add requires --type ${CONTENT_TYPES.join(', ')}`)
     }
@@ -371,45 +381,240 @@ async function runInteractive ({ context, preferences, deps, logger }) {
     driver.cleanup()
     if (!selection || !selection.result) return { status: 'cancelled' }
     if (selection.result.status === 'completed') return selection.result.value
-    if (selection.result.status === 'exited') return { status: 'exited' }
     return { status: 'cancelled' }
   } finally {
     await runtime.close?.()
   }
 }
 
-async function executeSingle ({ context, runtime, deps, preferences, channelDraft, itemDraft, fetchUrl, emitProgress }) {
-  const jobStore = deps.createJobStore({ bee: runtime.metadataBee })
-  const jobId = deps.jobId || deriveJobId(itemDraft, fetchUrl)
-  await jobStore.createJob({ jobId, rows: [{ rowId: 'r1', data: { item: itemDraft, channelDraft, channelTarget: channelDraft.channelTarget } }] })
-
-  const executor = deps.createExecutor(buildExecutorDeps({ runtime, deps, jobStore, preferences, fetchUrl, emitProgress, context }))
-  const job = await jobStore.getJob(jobId)
-  const outcome = await executor.executeRow(job, job.rows[0], { force: Boolean(context.flags?.force) })
-
-  if (outcome.status === 'already-exists') {
-    return { status: 'already-exists', channelKey: outcome.existing?.channelKey, videoId: outcome.existing?.videoId, availability: outcome.existing?.availability }
+async function resolvePublisherId (deps, runtime) {
+  const localPublisher = deps.ensureLocalPublisher
+    ? await deps.ensureLocalPublisher()
+    : await runtime.ensureLocalPublisher()
+  const publisherId = localPublisher?.publisherId
+  if (typeof publisherId !== 'string' || !/^[0-9a-f]{64}$/.test(publisherId)) {
+    throw new Error(`invalid publisherId from ensureLocalPublisher: ${publisherId}`)
   }
-  if (outcome.status === 'published') {
-    const data = outcome.row.data
-    return { status: 'published', channelKey: data.channelKey, videoId: data.videoId, url: `peartube://channel/${data.channelKey}/video/${data.videoId}` }
-  }
-  if (outcome.status === 'replicationPending') {
-    emitProgress('No eligible durable peer yet. Local bytes retained; the uploader is still the only source. Retry later.')
-    return { status: 'replicationPending', jobId, videoId: outcome.row.data.videoId }
-  }
-  if (outcome.status === 'released') return { status: 'released', jobId }
-  if (outcome.status === 'failed') return { status: 'failed', jobId, error: outcome.error }
-  return { status: outcome.status, jobId }
+  return publisherId
 }
 
-function buildExecutorDeps ({ runtime, deps, jobStore, preferences, fetchUrl, emitProgress, context }) {
-  // Injected executor dependency wiring is supplied by the smoke/tests via
-  // deps.buildExecutorDeps when driving fakes; otherwise wire the real runtime.
-  if (typeof deps.buildExecutorDeps === 'function') {
-    return deps.buildExecutorDeps({ runtime, jobStore, fetchUrl, emitProgress, context })
+async function checkPreflightChannelState ({ deps, context, channel, channelInfo, itemDraft, jobId }) {
+  const duplicateChecker = deps.duplicateCheck || { check: checkDuplicateForAdd }
+  if (channel && duplicateChecker.check) {
+    const duplicate = await duplicateChecker.check({ channel, item: itemDraft, force: Boolean(context.flags?.force) })
+    if (duplicate?.status === 'already-exists') {
+      return {
+        earlyExit: true,
+        result: {
+          status: 'already-exists',
+          channelKey: duplicate.existing?.channelKey || channelInfo?.channelKey,
+          videoId: duplicate.existing?.videoId,
+          availability: duplicate.existing?.availability
+        }
+      }
+    }
   }
-  return createBackendExecutorDeps({ runtime, jobStore, preferences, fetchUrl, emitProgress })
+
+  const claimArbitrator = deps.arbitrateImportClaim || arbitrateImportClaimForAdd
+  if (channel) {
+    const claim = await claimArbitrator({ channel, itemDraft, jobId })
+    if (claim && !claim.ok) {
+      return {
+        earlyExit: true,
+        result: { status: 'released', jobId }
+      }
+    }
+  }
+
+  return { earlyExit: false }
+}
+
+async function createCanonicalRecordForStaged (staged, itemDraft) {
+  const byteLength = Number(fs.statSync(staged.artifactPath).size)
+  const hex = staged.checksum ? staged.checksum.replace(/^sha256:/, '') : await sha256File(staged.artifactPath)
+  return canonicalLocalResolutionRecord({
+    sha256: hex,
+    byteLength,
+    title: itemDraft.title || staged.title,
+    fileName: basename(staged.artifactPath),
+    kind: itemDraft.contentKind || 'video',
+    namespace: itemDraft.mediaProvider || itemDraft.sourceProvider || null,
+    identifier: itemDraft.mediaId || itemDraft.sourceVideoId || null,
+    season: itemDraft.seasonNumber,
+    episode: itemDraft.episodeNumber
+  })
+}
+
+function buildAcquisitionInput ({ canon, staged, itemDraft, channelDraft, disposeStaged, abortSignal }) {
+  return {
+    idempotencyKey: canon.idempotencyKey,
+    title: canon.title,
+    selector: canon.selector,
+    expectedBytes: canon.expectedBytes,
+    retentionClass: canon.retentionClass,
+    path: staged.artifactPath,
+    mimeType: staged.mimeType || mimeTypeForPath(staged.artifactPath),
+    sourceFileName: canon.sourceFileName,
+    description: itemDraft.description || undefined,
+    artwork: Array.isArray(itemDraft.artwork) ? itemDraft.artwork : undefined,
+    tags: Array.isArray(itemDraft.tags) ? itemDraft.tags : undefined,
+    creatorName: itemDraft.creatorName || channelDraft?.name || undefined,
+    creatorHandle: itemDraft.creatorHandle || undefined,
+    duration: normalizeLocalDurationSeconds(itemDraft.duration) ?? undefined,
+    dispose: disposeStaged,
+    ...(abortSignal ? { signal: abortSignal } : {}),
+    awaitCompletion: true
+  }
+}
+
+function assertJobPublicationValid (job) {
+  if (job?.state !== 'completed') {
+    const error = new Error(job?.errorCode || `Acquisition failed with state ${job?.state || 'unknown'}`)
+    error.code = job?.errorCode || 'ACQUISITION_FAILED'
+    throw error
+  }
+
+  const publicationFields = ['publicationId', 'manifestId', 'renditionId', 'assetId']
+  if (publicationFields.some((field) => typeof job[field] !== 'string' || job[field].length === 0)) {
+    const error = new Error('Completed acquisition lacks immutable publication identifiers')
+    error.code = 'ACQUISITION_PUBLICATION_INVALID'
+    throw error
+  }
+}
+
+async function executeSingle ({ context, runtime, deps, preferences, channelDraft, itemDraft, fetchUrl, emitProgress }) {
+  const jobId = deps.jobId || deriveJobId(itemDraft, fetchUrl)
+  const publisherId = await resolvePublisherId(deps, runtime)
+
+  const channelResolver = deps.resolveChannel || resolveChannelForAdd
+  const channelInfo = await channelResolver({ runtime, channelDraft, emitProgress })
+  const channel = channelInfo?.channel || channelInfo
+
+  const preflight = await checkPreflightChannelState({ deps, context, channel, channelInfo, itemDraft, jobId })
+  if (preflight.earlyExit) return preflight.result
+
+  const sourceStager = deps.stageSource || stageSourceForAdd
+  const staged = await sourceStager({ fetchUrl, preferences, emitProgress, channel, row: { data: { item: itemDraft } } })
+  const disposeStaged = onceAsync(() => staged.dispose?.())
+  const abortSignal = context.signal || context.abortSignal || null
+  try {
+    const canon = await createCanonicalRecordForStaged(staged, itemDraft)
+    const acquireLocalFile = deps.executeLocalFileAcquisition || executeLocalFileAcquisition
+    const input = buildAcquisitionInput({ canon, staged, itemDraft, channelDraft, disposeStaged, abortSignal })
+    const job = await acquireLocalFile({ runtime, publisherId, input })
+
+    if (job?.state === 'cancelled') {
+      return { status: 'cancelled', jobId: job.acquisitionId }
+    }
+
+    assertJobPublicationValid(job)
+
+    const videoId = job.publicationId
+    const channelKey = channelInfo?.channelKey || channel?.channelKey || 'local'
+    return {
+      status: 'published',
+      channelKey,
+      videoId,
+      url: `peartube://channel/${channelKey}/video/${videoId}`
+    }
+  } finally {
+    await disposeStaged()
+  }
+}
+
+async function resolveOrCreateIdentity (identityManager, emitProgress) {
+  let identity = identityManager?.getActiveIdentity?.() || identityManager?.getIdentities?.()[0]
+  if (!identity && identityManager?.createIdentity) {
+    emitProgress('Creating your channel')
+    const created = await identityManager.createIdentity('My PearTube', true, {})
+    identity = identityManager?.getActiveIdentity?.() || {
+      channelKey: created.driveKey,
+      channelWriterKeyName: `peartube-channel-writer:${created.publicKey}`,
+      channelEncryptionKey: created.channelEncryptionKey || null
+    }
+  }
+  return identity
+}
+
+async function loadChannelForIdentity (ctx, channelKey, identity) {
+  const existing = ctx?.channels?.get?.(channelKey)
+  if (existing) return existing
+  if (!channelKey || !ctx) return null
+  return await loadChannel(ctx, channelKey, {
+    writerKeyName: identity?.channelWriterKeyName || null,
+    encryptionKeyHex: identity?.channelEncryptionKey || null,
+    preferWritable: true
+  }).catch(() => null)
+}
+
+async function resolveChannelForAdd ({ runtime, channelDraft, emitProgress }) {
+  const identity = await resolveOrCreateIdentity(runtime.identityManager, emitProgress)
+  const channelKey = identity?.channelKey || identity?.driveKey || 'local'
+  const channel = await loadChannelForIdentity(runtime.ctx, channelKey, identity)
+  return { channel, channelKey, identity }
+}
+
+async function checkDuplicateForAdd ({ channel, item } = {}) {
+  const identity = itemIdentity(item)
+  if (channel && identity && typeof channel.listVideos === 'function') {
+    const videos = await channel.listVideos().catch(() => [])
+    const match = videos.find((video) => itemIdentity({
+      contentKind: video.contentKind,
+      seasonNumber: video.seasonNumber,
+      episodeNumber: video.episodeNumber,
+      sourceProvider: video.sourceProvider,
+      sourceVideoId: video.sourceVideoId,
+      identityUrl: video.identityUrl
+    }) === identity)
+    if (match) {
+      return { status: 'already-exists', existing: { channelKey: channel.keyHex, videoId: match.id, availability: match.publicationState || 'published' } }
+    }
+  }
+  return { status: 'ok', advisories: [] }
+}
+
+async function arbitrateImportClaimForAdd ({ channel, itemDraft, jobId }) {
+  if (!channel || typeof channel.putImportClaim !== 'function') return { ok: true }
+  const importIdentityKey = deriveImportIdentityKey({
+    contentKind: itemDraft.contentKind || 'video',
+    sourceProvider: itemDraft.sourceProvider || 'local',
+    sourceVideoId: itemDraft.sourceVideoId || jobId
+  })
+  const claimantId = deriveImportClaimantId(channel.localWriterKeyHex, jobId)
+  await channel.putImportClaim({ identityKey: importIdentityKey, claimantId, jobId, writerKey: channel.localWriterKeyHex, videoId: jobId })
+  const winner = await channel.resolveImportClaim?.(importIdentityKey)
+  if (winner && winner.claimantId && winner.claimantId !== claimantId) {
+    return { ok: false, status: 'released' }
+  }
+  return { ok: true, importIdentityKey, claimantId }
+}
+
+async function stageSourceForAdd ({ fetchUrl, preferences, emitProgress }) {
+  if (fetchUrl && fs.existsSync(fetchUrl)) {
+    emitProgress('Using local source file')
+    return { artifactPath: fetchUrl, checksum: await fingerprintFile(fetchUrl), title: basename(fetchUrl), mimeType: mimeTypeForPath(fetchUrl), dispose: null }
+  }
+  emitProgress(`Downloading ${fetchUrl}`)
+  const outputDir = mkdtempSync(join(tmpdir(), 'peartube-add-dl-'))
+  const downloader = createYtDlpDownloader({
+    bin: preferences?.ytDlpPath,
+    outputDir,
+    format: 'bv*+ba/b',
+    cookiesPath: preferences?.ytDlpCookiesPath || null
+  })
+  const result = await downloader.download({ url: fetchUrl })
+  const dispose = () => {
+    try { rmSync(outputDir, { recursive: true, force: true }) } catch { /* Best-effort temp cleanup; a failed remove must not mask the add result. */ }
+  }
+  return { artifactPath: result.filePath, checksum: await fingerprintFile(result.filePath), title: result.title, mimeType: result.mimeType || mimeTypeForPath(result.filePath), dispose }
+}
+
+function onceAsync (fn) {
+  let pending = null
+  return () => {
+    if (!pending) pending = Promise.resolve().then(() => fn?.())
+    return pending
+  }
 }
 
 function finish (context, result) {
@@ -427,7 +632,6 @@ function humanLine (result) {
   switch (result.status) {
     case 'published': return `Published ${result.url}`
     case 'already-exists': return `Already added: channel ${result.channelKey} video ${result.videoId}`
-    case 'replicationPending': return `Pending durability (job ${result.jobId}); retained locally.`
     case 'queued': return `Queued on relay ${result.relay}${result.jobId ? ` (job ${result.jobId})` : ''}.`
     case 'pending': return `Relay is still archiving (job ${result.jobId || 'unknown'}); check the relay UI at ${result.relay}.`
     case 'cancelled': return 'Cancelled.'
@@ -481,7 +685,7 @@ function silentLogger (env = {}) {
   const logPath = env.PEARTUBE_LOG
   if (logPath) {
     const emit = (...args) => {
-      try { appendFileSync(logPath, `${args.map(String).join(' ')}\n`) } catch {}
+      try { appendFileSync(logPath, `${args.map(String).join(' ')}\n`) } catch { /* Logging is best-effort; an unwritable log path must not break the add. */ }
     }
     return { log: emit, info: emit, warn: emit, error: emit, debug: emit }
   }

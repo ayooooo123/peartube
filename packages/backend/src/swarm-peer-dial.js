@@ -1,24 +1,31 @@
 import b4a from 'b4a'
 
-export function peerPublicKey(peer) {
-  if (!peer) return null
-  if (typeof peer === 'string' && /^[a-f0-9]{64}$/i.test(peer)) return b4a.from(peer, 'hex')
-  if (b4a.isBuffer(peer) || peer instanceof Uint8Array) return peer
-  const publicKey =
-    peer.publicKey ||
-    peer.remotePublicKey ||
-    peer.key ||
-    peer.value?.publicKey ||
-    peer.value?.remotePublicKey ||
-    peer.value?.key ||
-    peer.peer?.publicKey ||
-    peer.peer?.remotePublicKey ||
-    peer[1]?.publicKey ||
-    peer[1]?.remotePublicKey ||
-    peer[1]?.key
-  if (typeof publicKey === 'string' && /^[a-f0-9]{64}$/i.test(publicKey)) return b4a.from(publicKey, 'hex')
-  if (publicKey && (b4a.isBuffer(publicKey) || publicKey instanceof Uint8Array)) return publicKey
+function toKeyBuffer(val) {
+  if (!val) return null
+  if (typeof val === 'string' && /^[a-f0-9]{64}$/i.test(val)) return b4a.from(val, 'hex')
+  if (b4a.isBuffer(val) || val instanceof Uint8Array) return val
   return null
+}
+
+function extractPeerField(obj) {
+  if (!obj || typeof obj !== 'object') return null
+  return obj.publicKey || obj.remotePublicKey || obj.key || null
+}
+
+function extractCandidateKey(peer) {
+  return (
+    extractPeerField(peer) ||
+    extractPeerField(peer.value) ||
+    extractPeerField(peer.peer) ||
+    extractPeerField(peer[1])
+  )
+}
+
+export function peerPublicKey(peer) {
+  const direct = toKeyBuffer(peer)
+  if (direct) return direct
+  if (!peer || typeof peer !== 'object') return null
+  return toKeyBuffer(extractCandidateKey(peer))
 }
 
 export function peerKeyHex(peer) {
@@ -56,19 +63,44 @@ export function swarmHasConnection(swarm, keyHex, _publicKey = null) {
 }
 
 
+function lookupSwarmPeer(swarm, publicKey, keyHex, relayAddresses) {
+  let peerInfo = swarm.peers?.get?.(keyHex) || null
+  if (!peerInfo && swarm.peers && typeof swarm.peers.get === 'function') {
+    try { peerInfo = swarm.peers.get(publicKey) || null } catch { peerInfo = null }
+  }
+  if (!peerInfo && typeof swarm._upsertPeer === 'function') {
+    try { peerInfo = swarm._upsertPeer(publicKey, relayAddresses) || null } catch { peerInfo = null }
+  }
+  return peerInfo
+}
+
+function mergeRelayAddresses(peerInfo, relayAddresses) {
+  if (relayAddresses.length > 0 && (!Array.isArray(peerInfo.relayAddresses) || peerInfo.relayAddresses.length === 0)) {
+    peerInfo.relayAddresses = relayAddresses
+  }
+}
+
+function attachPeerTopic(peerInfo, topic) {
+  if (!topic) return
+  if (typeof peerInfo._topic === 'function') {
+    peerInfo._topic(topic)
+    return
+  }
+  if (!Array.isArray(peerInfo.topics)) {
+    peerInfo.topics = []
+  }
+  if (!peerInfo.topics.some((seen) => b4a.equals(seen, topic))) {
+    peerInfo.topics.push(topic)
+  }
+}
+
 export function swarmRememberPeer(swarm, peer, topic = null) {
   if (!swarm || !peer) return null
   const publicKey = peerPublicKey(peer)
   const keyHex = publicKey ? b4a.toString(publicKey, 'hex') : null
   if (!publicKey || !keyHex) return null
-  let peerInfo = swarm.peers?.get?.(keyHex) || null
-  if (!peerInfo && swarm.peers && typeof swarm.peers.get === 'function') {
-    try { peerInfo = swarm.peers.get(publicKey) || null } catch { peerInfo = null }
-  }
   const relayAddresses = Array.isArray(peer.relayAddresses) ? peer.relayAddresses : []
-  if (!peerInfo && typeof swarm._upsertPeer === 'function') {
-    try { peerInfo = swarm._upsertPeer(publicKey, relayAddresses) || null } catch { peerInfo = null }
-  }
+  const peerInfo = lookupSwarmPeer(swarm, publicKey, keyHex, relayAddresses)
   if (!peerInfo) {
     return {
       publicKey,
@@ -80,16 +112,8 @@ export function swarmRememberPeer(swarm, peer, topic = null) {
       synthetic: true,
     }
   }
-  if (relayAddresses.length > 0 && (!Array.isArray(peerInfo.relayAddresses) || peerInfo.relayAddresses.length === 0)) {
-    peerInfo.relayAddresses = relayAddresses
-  }
-  if (topic) {
-    if (typeof peerInfo._topic === 'function') peerInfo._topic(topic)
-    else {
-      if (!Array.isArray(peerInfo.topics)) peerInfo.topics = []
-      if (!peerInfo.topics.some((seen) => b4a.equals(seen, topic))) peerInfo.topics.push(topic)
-    }
-  }
+  mergeRelayAddresses(peerInfo, relayAddresses)
+  attachPeerTopic(peerInfo, topic)
   return peerInfo
 }
 

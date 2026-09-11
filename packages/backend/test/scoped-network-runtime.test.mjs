@@ -19,6 +19,7 @@ import {
   createStaticAssetManifest,
   deriveStaticAssetTopic,
   writeStaticAsset,
+  normalizeAssetCoreRefV2,
 } from '../src/assets/index.js'
 import { createBufferSourceReader } from '../src/assets/source-reader.js'
 import { createPermissionlessArchiveNetwork } from '../src/archive/permissionless-network.js'
@@ -80,30 +81,17 @@ function connectionPair (options = {}, remoteBFill = 202) {
     : { consumerPeerFill: options, sourcePeerFill: remoteBFill }
   const { sourcePeerFill = 202, consumerPeerFill = 201, highWaterMark } = config
   // Protomux decodes exactly one message per stream data event; real transports
-  // under it frame every message, so that holds. A Duplex.from over a
-  // PassThrough does not: two writes queued in the same tick arrive as one
-  // concatenated chunk and every message after the first is silently dropped,
-  // which quietly rewrote what several tests observed. Push each write on its
-  // own so the double frames like the real thing.
-  const opts = highWaterMark == null ? {} : { highWaterMark }
-  const make = (peer) => new Duplex({
-    ...opts,
-    write (chunk, _encoding, callback) {
-      const target = peer()
-      if (target && !target.destroyed && !target.readableEnded) target.push(chunk)
-      callback()
-    },
-    final (callback) {
-      const target = peer()
-      if (target && !target.destroyed && !target.readableEnded) target.push(null)
-      callback()
-    },
-    read () {},
-  })
-  let a = null
-  let b = null
-  a = make(() => b)
-  b = make(() => a)
+  // under it frame every message, so that holds. Keep the in-memory transport
+  // in object mode as well, otherwise queued writes can be coalesced into one
+  // byte chunk and every message after the first is silently dropped.
+  const streamOptions = {
+    objectMode: true,
+    ...(highWaterMark == null ? {} : { highWaterMark }),
+  }
+  const aToB = new PassThrough(streamOptions)
+  const bToA = new PassThrough(streamOptions)
+  const a = Duplex.from({ readable: bToA, writable: aToB })
+  const b = Duplex.from({ readable: aToB, writable: bToA })
   a.userData = null
   b.userData = null
   a.remotePublicKey = bytes(32, consumerPeerFill)
@@ -125,6 +113,9 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 20))
 // the write and answers true.
 function backpressuredPair ({ sourcePeerFill = 206, consumerPeerFill = 205 } = {}) {
   const make = (peer) => new Duplex({
+    // Keep writes byte-counted so highWaterMark: 1 still exercises real
+    // backpressure, while each pushed frame remains one readable object.
+    readableObjectMode: true,
     highWaterMark: 1,
     write (chunk, _encoding, callback) {
       peer().push(chunk)
@@ -316,9 +307,25 @@ function fakeRegistry (descriptor, root = null) {
   return {
     binding,
     async bindNamespace () { return binding },
+    // Local publisher serving reacquires an ID-based writable lease for each
+    // page; keep that fixture surface equivalent to the production registry.
+    async acquireWritableBinding () {
+      return { binding, async release () { return true } }
+    },
     async resolve () { return binding },
     async release () { return true },
   }
+}
+
+function registerRuntimeTeardown (t, runtimes, pairs) {
+  t.teardown(async () => {
+    await Promise.allSettled(runtimes.map(runtime =>
+      Promise.resolve().then(() => runtime?.close?.())))
+    for (const pair of pairs) {
+      pair?.a?.destroy?.()
+      pair?.b?.destroy?.()
+    }
+  })
 }
 
 test('startup republishes only persisted writable catalogs with accepted projections', async t => {
@@ -421,15 +428,48 @@ test('archive consent with zero archive budget cannot allocate retention', async
     initialNetworkPolicy: archivePolicy({ archiveBudgetBytes: 0 }),
   })
   await runtime.start()
+  const testCoreRef = normalizeAssetCoreRefV2(createStaticAssetManifest({
+    treeHash: bytes(32, 27),
+    blockLength: 4,
+    byteLength: 4 * ASSET_BLOCK_SIZE,
+  }))
+  const coreKey = b4a.from(testCoreRef.key, 'hex')
+  const archivist = crypto.keyPair(bytes(32, 28))
+  const pledge = createArchivePledge({
+    archivistId: archivist.publicKey,
+    publicationId: bytes(32, 29),
+    renditionId: bytes(32, 30),
+    ranges: [{ coreKey, start: 0, end: 1 }],
+    retentionUntil: 10_000,
+    issuedAt: 10,
+    uploadCeilingBytes: 0,
+    keyPair: archivist,
+  })
   await t.exception(
     runtime.retainAuthorizedArchive({
-      pledge: {},
-      coreKey: bytes(32, 27),
+      pledge,
+      coreKey,
+      coreRef: testCoreRef,
       start: 0,
       end: 1,
     }),
-    /archive budget exhausted/
+    { code: 'SCOPED_NETWORK_REJECTED' },
   )
+  t.is(runtime.getDiagnostics().topics.filter(topic => topic.purpose === 'archive').length, 0,
+    'zero archive budget does not retain an archive scope')
+
+  await runtime.applyNetworkPolicy(archivePolicy())
+  await t.exception(
+    runtime.retainAuthorizedArchive({
+      pledge,
+      coreKey,
+      start: 0,
+      end: 1,
+    }),
+    { code: 'SCOPED_NETWORK_REJECTED' },
+  )
+  t.is(runtime.getDiagnostics().topics.filter(topic => topic.purpose === 'archive').length, 0,
+    'missing immutable core metadata does not retain an archive scope')
   await runtime.close()
 })
 
@@ -1468,13 +1508,7 @@ test('asset sessions transfer only manifest-authorized blocks over their scoped 
   releaseGlobalReductionProof()
   const exhausted = await observedInFlight
   t.ok(exhausted, 'global ceiling reduction settles the already accepted peer request')
-  // The provider refuses the held block with a bounded UNAVAILABLE error before
-  // the cutover destroys the transport, and failAssetRequestPeer keeps the first
-  // failure recorded per peer, so that is what the caller sees. It read
-  // DISCONNECTED only while this harness concatenated same-tick writes and
-  // dropped the frame carrying the refusal, leaving the session close as the
-  // only outcome the requester ever observed.
-  t.is(exhausted.code, 'UNAVAILABLE')
+  t.is(exhausted.code, 'DISCONNECTED', 'cutover disconnects before the held proof can be released')
   t.is(exhausted.peerId, b4a.toString(pair.b.remotePublicKey, 'hex'))
   t.ok(exhausted.message.length <= 256)
   t.ok(runtimeA.getDiagnostics().counters.closedSessions > closedBeforeGlobalReduction,
@@ -2083,6 +2117,7 @@ test('scoped index and moderation feeds transfer only signed bounded pages', asy
   await archiveNetwork.requestArchive({
     publicationId,
     renditionId: rendition.renditionId,
+    coreRef: staticCore,
     ranges: [{ coreKey, start: 0, end: 4 }],
     requestedBytes: 4096,
     retentionUntil: 200,
@@ -2134,7 +2169,12 @@ test('signed remote moderation cancels an archivist pledge and permits only futu
   const moderatorId = b4a.toString(moderator.publicKey, 'hex')
   const publicationId = b4a.toString(bytes(32, 150), 'hex')
   const renditionId = b4a.toString(bytes(32, 151), 'hex')
-  const coreKey = bytes(32, 152)
+  const coreRef = normalizeAssetCoreRefV2(createStaticAssetManifest({
+    treeHash: bytes(32, 152),
+    blockLength: 4,
+    byteLength: 4 * ASSET_BLOCK_SIZE,
+  }))
+  const coreKey = coreRef.key
   const candidate = {
     directPublisher: true,
     kind: 'movie',
@@ -2199,7 +2239,11 @@ test('signed remote moderation cancels an archivist pledge and permits only futu
       get ({ key }) {
         return {
           key,
+          length: 0,
+          byteLength: 0,
           async ready () {},
+          async has () { return false },
+          async get () { return null },
           download () { return { destroy () {} } },
           async close () { closedArchivistCores++ },
         }
@@ -2232,6 +2276,7 @@ test('signed remote moderation cancels an archivist pledge and permits only futu
       accepted: true,
       requestedBytes: request.body.requestedBytes,
       ranges: request.body.ranges,
+      coreRef,
     }),
     authorizeConsumerVisibility: async request =>
       request.body.publicationId === publicationId && isPublicationVisible(),
@@ -2273,6 +2318,7 @@ test('signed remote moderation cancels an archivist pledge and permits only futu
   await requesterNetwork.requestArchive({
     publicationId,
     renditionId,
+    coreRef,
     ranges: [{ coreKey, start: 0, end: 4 }],
     requestedBytes: 4096,
     retentionUntil: 200,
@@ -2326,6 +2372,7 @@ test('signed remote moderation cancels an archivist pledge and permits only futu
   await requesterNetwork.requestArchive({
     publicationId,
     renditionId,
+    coreRef,
     ranges: [{ coreKey, start: 0, end: 4 }],
     requestedBytes: 4096,
     retentionUntil: 200,
@@ -2389,6 +2436,65 @@ test('an untrusted bootstrap locator can bind a publisher only after a scoped na
   await consumer.close()
   pair.a.destroy()
   pair.b.destroy()
+})
+
+test('failed publisher promotion releases its candidate scope and preserves the promotion error', async (t) => {
+  const root = crypto.keyPair(bytes(32, 213))
+  const locatorSigner = crypto.keyPair(bytes(32, 214))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 215),
+  })
+  const locator = createBootstrapLocator({
+    publisherId: b4a.toString(descriptor.publisherId, 'hex'),
+    catalogBootstrapKey: b4a.toString(descriptor.catalogBootstrapKey, 'hex'),
+    catalogHead: b4a.toString(bytes(32, 216), 'hex'),
+    authorizationChainDigest: b4a.toString(bytes(32, 217), 'hex'),
+    rootSignerId: b4a.toString(root.publicKey, 'hex'),
+    issuedAt: 10,
+    expiresAt: 100,
+    keyPair: locatorSigner,
+  })
+  const proof = { genesis: namespaceGenesis(descriptor, root), transitions: [], descriptor }
+  const registry = fakeRegistry(descriptor)
+  const promotionError = Object.assign(new Error('injected publisher promotion failure'), {
+    code: 'PUBLISHER_PROMOTION_INJECTED',
+  })
+  const swarm = fakeSwarm()
+  const runtime = createScopedNetworkRuntime({
+    swarm,
+    store: {},
+    catalogRegistry: registry,
+    publisherManager: {
+      async followPublisher () { throw promotionError },
+      async unfollowPublisher () {},
+    },
+    now: () => 20,
+  })
+  await runtime.start()
+  const ingested = await runtime.inspectIncomingFrame({
+    purpose: 'bootstrap',
+    topic: deriveBootstrapTopic(),
+    peerId: 'promotion-failure-bootstrap-peer',
+    frame: encodePeerFrame({
+      purpose: 'bootstrap',
+      type: 'locator',
+      requestId: 1,
+      payload: encodeApplicationEnvelope(locator.envelope),
+    }),
+  })
+  t.is(ingested.status, 'accepted')
+
+  const thrown = await runtime.followBootstrapLocator({
+    publisherId: locator.body.publisherId,
+    proof,
+  }).then(() => null, error => error)
+  t.is(thrown?.code, promotionError.code, 'promotion failure keeps its public error code')
+  t.is(thrown?.message, promotionError.message, 'promotion failure keeps its public reason')
+  t.is(runtime.getDiagnostics().topics.filter(topic => topic.purpose === 'publisher').length, 0,
+    'a failed promotion leaves no candidate publisher scope behind')
+
+  await runtime.close()
 })
 
 test('locator authorization digests are hints while reconstructed announce authority is mandatory', async (t) => {
@@ -2534,7 +2640,7 @@ test('a local publisher automatically advertises a signed locator and consumers 
     catalogBootstrapKey: bytes(32, 157),
   })
   const genesis = namespaceGenesis(descriptor, root)
-  const sourceRegistry = fakeRegistry(descriptor)
+  const sourceRegistry = fakeRegistry(descriptor, root)
   sourceRegistry.binding.catalog.localWriterKey = root.publicKey
   sourceRegistry.binding.catalog.localSignerKey = root.publicKey
   sourceRegistry.binding.catalog.listProjections = async kind => ({
@@ -2610,18 +2716,21 @@ test('a local publisher automatically advertises a signed locator and consumers 
     now: () => sourceTime,
     onCatalogUpdate: async () => { consumerUpdates[index]++ },
   }))
+  const pairs = []
+  registerRuntimeTeardown(t, [source, ...consumers], pairs)
   await source.start()
   await Promise.all(consumers.map(consumer => consumer.start()))
-  await source.publishLocalPublisherCatalog({ publisherId: b4a.toString(descriptor.publisherId, 'hex') })
+  const published = await source.publishLocalPublisherCatalog({ publisherId: b4a.toString(descriptor.publisherId, 'hex') })
+  t.is(published.status, 'published', 'the local catalog publication succeeds before locator refresh')
 
-  const pairs = consumers.map((consumer, index) => {
+  for (const [index, consumer] of consumers.entries()) {
     const pair = connectionPair({ consumerPeerFill: 171 + index, sourcePeerFill: 173 })
+    pairs.push(pair)
     sourceSwarm.connections.add(pair.a)
     consumerSwarms[index].connections.add(pair.b)
     sourceSwarm.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, topics: [], client: false })
     consumerSwarms[index].emit('connection', pair.b, { publicKey: pair.b.remotePublicKey, topics: [], client: true })
-    return pair
-  })
+  }
 
   for (let attempt = 0; attempt < 20; attempt++) {
     if (consumers.every(consumer =>
@@ -2647,12 +2756,15 @@ test('a local publisher automatically advertises a signed locator and consumers 
   t.ok(consumers[2].getDiagnostics().recentErrors.some(error => error.code === 'PUBLISHER_CATALOG_PAGE_INGEST_REJECTED'),
     'any locally rejected or invalid operation prevents completion')
   sourceTime = 30
-  refreshCallback()
-  for (let attempt = 0; attempt < 20 && consumers.some(consumer => consumer.listBootstrapLocators()[0]?.issuedAt !== 30); attempt++) {
-    await settle()
+  t.is(typeof refreshCallback, 'function', 'publication installs the bounded locator refresh callback')
+  if (typeof refreshCallback === 'function') {
+    refreshCallback()
+    for (let attempt = 0; attempt < 20 && consumers.some(consumer => consumer.listBootstrapLocators()[0]?.issuedAt !== 30); attempt++) {
+      await settle()
+    }
+    t.ok(consumers.every(consumer => consumer.listBootstrapLocators()[0]?.issuedAt === 30),
+      'the bounded refresh timer republishes a newer signed locator to every live bootstrap peer')
   }
-  t.ok(consumers.every(consumer => consumer.listBootstrapLocators()[0]?.issuedAt === 30),
-    'the bounded refresh timer republishes a newer signed locator to every live bootstrap peer')
 
   await source.close()
   t.ok(cancelledRefreshes > 0, 'closing the publisher removes its refresh schedule')
@@ -2686,7 +2798,7 @@ test('live publisher root rotation rebinds advertisements, proof, pages, and exi
   let sourceTime = 20
   let currentDescriptor = descriptor
   let acceptedOperations = [genesis]
-  const sourceRegistry = fakeRegistry(descriptor)
+  const sourceRegistry = fakeRegistry(descriptor, root)
   const sourceCatalog = sourceRegistry.binding.catalog
   sourceCatalog.localWriterKey = locatorSigner.publicKey
   sourceCatalog.localSignerKey = locatorSigner.publicKey
@@ -2758,17 +2870,19 @@ test('live publisher root rotation rebinds advertisements, proof, pages, and exi
     catalogRegistry: consumerRegistries[index],
     now: () => sourceTime,
   }))
+  const pairs = []
+  registerRuntimeTeardown(t, [source, ...consumers], pairs)
   await source.start()
   await Promise.all(consumers.map(consumer => consumer.start()))
   await source.publishLocalPublisherCatalog({ publisherId: b4a.toString(descriptor.publisherId, 'hex') })
-  const pairs = consumers.slice(0, 2).map((consumer, index) => {
+  for (const [index] of consumers.slice(0, 2).entries()) {
     const pair = connectionPair({ consumerPeerFill: 188 + index, sourcePeerFill: 190 })
+    pairs.push(pair)
     sourceSwarm.connections.add(pair.a)
     consumerSwarms[index].connections.add(pair.b)
     sourceSwarm.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, client: false })
     consumerSwarms[index].emit('connection', pair.b, { publicKey: pair.b.remotePublicKey, client: true })
-    return pair
-  })
+  }
   for (let attempt = 0; attempt < 30; attempt++) {
     if (consumers.every(consumer =>
       consumer.listBootstrapLocators()[0]?.catalogEpoch === 0 &&
@@ -2880,7 +2994,12 @@ test('live publisher root rotation rebinds advertisements, proof, pages, and exi
 
 test('archive pledges retain multiple exact ranges without exposing a Hypercore responder', async (t) => {
   const archivist = crypto.keyPair(bytes(32, 51))
-  const coreKey = bytes(32, 52)
+  const coreRef = normalizeAssetCoreRefV2(createStaticAssetManifest({
+    treeHash: bytes(32, 52),
+    blockLength: 8,
+    byteLength: 8 * ASSET_BLOCK_SIZE,
+  }))
+  const coreKey = b4a.from(coreRef.key, 'hex')
   const pledge = createArchivePledge({
     archivistId: archivist.publicKey,
     publicationId: bytes(32, 53),
@@ -2906,6 +3025,8 @@ test('archive pledges retain multiple exact ranges without exposing a Hypercore 
       get ({ key }) {
         return {
           key,
+          length: 8,
+          byteLength: 8 * ASSET_BLOCK_SIZE,
           async ready () {},
           replicate () { replicated++ },
           download () { downloads++; return { destroy () {} } },
@@ -2920,8 +3041,8 @@ test('archive pledges retain multiple exact ranges without exposing a Hypercore 
     initialNetworkPolicy: archivePolicy(),
   })
   await runtime.start()
-  const first = await runtime.retainAuthorizedArchive({ pledge, coreKey, start: 0, end: 2 })
-  const second = await runtime.retainAuthorizedArchive({ pledge, coreKey, start: 4, end: 7, download: false })
+  const first = await runtime.retainAuthorizedArchive({ pledge, coreKey, coreRef, start: 0, end: 2 })
+  const second = await runtime.retainAuthorizedArchive({ pledge, coreKey, coreRef, start: 4, end: 7, download: false })
   t.is(protectedRanges, 2)
   t.is(downloads, 1, 'verification-only requester scopes do not start a full-range download')
   t.is(first.archiveId, second.archiveId)
@@ -2939,12 +3060,17 @@ test('archive pledges retain multiple exact ranges without exposing a Hypercore 
 
 test('archive sessions transfer only pledge-authorized blocks over their scoped channel', async (t) => {
   const archivist = crypto.keyPair(bytes(32, 55))
-  const coreKey = bytes(32, 56)
+  const coreRef = normalizeAssetCoreRefV2(createStaticAssetManifest({
+    treeHash: bytes(32, 56),
+    blockLength: 8,
+    byteLength: 8 * ASSET_BLOCK_SIZE,
+  }))
+  const coreKey = b4a.from(coreRef.key, 'hex')
   const sourceBlocks = new Map([
-    [2, bytes(1024, 2)],
-    [3, bytes(96 * 1024, 3)],
-    [4, bytes(1024, 4)],
-    [5, bytes(200 * 1024, 5)],
+    [2, bytes(ASSET_BLOCK_SIZE, 2)],
+    [3, bytes(ASSET_BLOCK_SIZE, 3)],
+    [4, bytes(ASSET_BLOCK_SIZE, 4)],
+    [5, bytes(ASSET_BLOCK_SIZE, 5)],
   ])
   const received = new Map()
   let markProofStarted
@@ -2960,12 +3086,13 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
     ranges: [{ coreKey, start: 2, end: 6 }],
     retentionUntil: 10_000,
     issuedAt: 10,
-    uploadCeilingBytes: 256 * 1024,
+    uploadCeilingBytes: 3 * ASSET_BLOCK_SIZE,
     keyPair: archivist,
   })
   const sourceCore = {
     key: coreKey,
-    length: 6,
+    length: 8,
+    byteLength: 8 * ASSET_BLOCK_SIZE,
     async ready () {},
     async has (index) { return sourceBlocks.has(index) },
     async proof ({ block }) {
@@ -2989,7 +3116,8 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   }
   const targetCore = {
     key: coreKey,
-    length: 6,
+    length: 8,
+    byteLength: 8 * ASSET_BLOCK_SIZE,
     async ready () {},
     async has (index) { return received.has(index) },
     async applyProof (proof) {
@@ -3008,7 +3136,7 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   const runtimeA = createScopedNetworkRuntime({
     swarm: swarmA,
     store: { get: () => sourceCore },
-    initialNetworkPolicy: archivePolicy({ uploadCeilingBytes: 1024 }),
+    initialNetworkPolicy: archivePolicy({ uploadCeilingBytes: ASSET_BLOCK_SIZE }),
   })
   const runtimeB = createScopedNetworkRuntime({
     swarm: swarmB,
@@ -3030,8 +3158,8 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   await runtimeB.start()
   pair = connectPair()
   await settle()
-  await runtimeA.retainAuthorizedArchive({ pledge, coreKey, start: 2, end: 6 })
-  await runtimeB.retainAuthorizedArchive({ pledge, coreKey, start: 2, end: 6 })
+  await runtimeA.retainAuthorizedArchive({ pledge, coreKey, coreRef, start: 2, end: 6 })
+  await runtimeB.retainAuthorizedArchive({ pledge, coreKey, coreRef, start: 2, end: 6 })
   await proofStarted
   t.is(runtimeA.getDiagnostics().publicWork.activeServes, 1, 'archive proof generation counts as an active serve')
   t.ok(runtimeA.getDiagnostics().sessions.some(session => session.archiveServing), 'archiveServing is exposed as a bounded boolean')
@@ -3048,7 +3176,7 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   t.absent(runtimeB.getDiagnostics().sessions.find(session => session.purpose === 'archive'), 'the requester closes its in-flight archive session on consent withdrawal')
   releaseProof()
   await Promise.all([
-    runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 1024 })),
+    runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: ASSET_BLOCK_SIZE })),
     runtimeB.applyNetworkPolicy(archivePolicy()),
   ])
   await settle()
@@ -3061,7 +3189,7 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   t.ok(failedThreeAttempt >= 0, 'the first oversized retry reaches index 3')
   t.absent(archiveProofIndexes.slice(failedThreeAttempt + 1).some(index => index > 3),
     'a failed earliest retry blocks later indexes on the same peer session')
-  await runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 256 * 1024 }))
+  await runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 3 * ASSET_BLOCK_SIZE }))
   await runtimeB.applyNetworkPolicy(archivePolicy())
   await settle()
   t.ok(pair.a.destroyed, 'archive ceiling cutover destroys the old provider transport')
@@ -3089,7 +3217,7 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   t.ok(committedUploadBytes > 0)
   const archiveServingPair = pair
   await runtimeA.applyNetworkPolicy(archivePolicy({
-    uploadCeilingBytes: 256 * 1024,
+    uploadCeilingBytes: 3 * ASSET_BLOCK_SIZE,
     archiveBudgetBytes: 0
   }))
   await settle()
@@ -3102,7 +3230,7 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
     'zero archive role budget closes the affected archive session')
   t.absent(diagnostics.topics.find(topic => topic.purpose === 'archive')?.publicAnnounced,
     'zero archive role budget suppresses archive announcement')
-  await runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 256 * 1024 }))
+  await runtimeA.applyNetworkPolicy(archivePolicy({ uploadCeilingBytes: 3 * ASSET_BLOCK_SIZE }))
   await settle()
   pair = connectPair()
   for (let attempt = 0; attempt < 30; attempt++) {
@@ -3135,6 +3263,308 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
     connection.a.destroy()
     connection.b.destroy()
   }
+})
+
+test('multi-range multi-core pledge aggregates progress across resources through public onProgress in real transport harness', async (t) => {
+  const archivist = crypto.keyPair(bytes(32, 77))
+  const coreRefA = normalizeAssetCoreRefV2(createStaticAssetManifest({
+    treeHash: bytes(32, 78),
+    blockLength: 8,
+    byteLength: 8 * ASSET_BLOCK_SIZE,
+  }))
+  const coreRefB = normalizeAssetCoreRefV2(createStaticAssetManifest({
+    treeHash: bytes(32, 79),
+    blockLength: 8,
+    byteLength: 8 * ASSET_BLOCK_SIZE,
+  }))
+  const coreKeyA = b4a.from(coreRefA.key, 'hex')
+  const coreKeyB = b4a.from(coreRefB.key, 'hex')
+
+  const multiRanges = [
+    { coreKey: coreKeyA, start: 2, end: 4 },
+    { coreKey: coreKeyB, start: 4, end: 6 },
+  ]
+  const pledge = createArchivePledge({
+    archivistId: archivist.publicKey,
+    publicationId: bytes(32, 80),
+    renditionId: bytes(32, 81),
+    ranges: multiRanges,
+    retentionUntil: 10_000,
+    issuedAt: 10,
+    uploadCeilingBytes: 4 * ASSET_BLOCK_SIZE,
+    keyPair: archivist,
+  })
+
+  const sourceBlocksA = new Map([[2, bytes(ASSET_BLOCK_SIZE, 2)], [3, bytes(ASSET_BLOCK_SIZE, 3)]])
+  const sourceBlocksB = new Map([[4, bytes(ASSET_BLOCK_SIZE, 4)], [5, bytes(ASSET_BLOCK_SIZE, 5)]])
+  const receivedA = new Map()
+  const receivedB = new Map()
+
+  const createFakeCore = (key, length, sourceBlocks, received) => ({
+    key,
+    length,
+    byteLength: length * ASSET_BLOCK_SIZE,
+    async ready () {},
+    async has (index) { return sourceBlocks ? sourceBlocks.has(index) : received.has(index) },
+    async proof ({ block }) {
+      return {
+        fork: 0,
+        block: { index: block.index, value: sourceBlocks.get(block.index), nodes: [] },
+        hash: null,
+        seek: null,
+        upgrade: null,
+        manifest: null,
+      }
+    },
+    async applyProof (proof) {
+      if (received) received.set(proof.block.index, b4a.from(proof.block.value))
+      return true
+    },
+    download () { return { destroy () {} } },
+    async close () {},
+  })
+
+  const sourceCoreA = createFakeCore(coreKeyA, 8, sourceBlocksA, null)
+  const sourceCoreB = createFakeCore(coreKeyB, 8, sourceBlocksB, null)
+  const targetCoreA = createFakeCore(coreKeyA, 8, null, receivedA)
+  const targetCoreB = createFakeCore(coreKeyB, 8, null, receivedB)
+
+  const swarmA = fakeSwarm()
+  const swarmB = fakeSwarm()
+  const runtimeA = createScopedNetworkRuntime({
+    swarm: swarmA,
+    store: {
+      get ({ key }) {
+        if (b4a.equals(key, coreKeyA)) return sourceCoreA
+        if (b4a.equals(key, coreKeyB)) return sourceCoreB
+        return sourceCoreA
+      },
+    },
+    initialNetworkPolicy: archivePolicy(),
+  })
+  const runtimeB = createScopedNetworkRuntime({
+    swarm: swarmB,
+    store: {
+      get ({ key }) {
+        if (b4a.equals(key, coreKeyA)) return targetCoreA
+        if (b4a.equals(key, coreKeyB)) return targetCoreB
+        return targetCoreA
+      },
+    },
+    initialNetworkPolicy: archivePolicy(),
+  })
+  await runtimeA.start()
+  await runtimeB.start()
+
+  const reports = []
+  const onProgress = async (report) => {
+    reports.push(structuredClone(report))
+  }
+
+  // 1. Holder and archivist retain ONLY range 1 on core A first
+  await runtimeA.retainAuthorizedArchive({ pledge, coreKey: coreKeyA, coreRef: coreRefA, start: 2, end: 4, download: false })
+  await runtimeB.retainAuthorizedArchive({ pledge, coreKey: coreKeyA, coreRef: coreRefA, start: 2, end: 4, download: true, onProgress })
+
+  // Connect runtimes while range 2 is NOT yet registered
+  const pair = connectionPair()
+  swarmA.connections.add(pair.a)
+  swarmB.connections.add(pair.b)
+  swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey })
+  swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey })
+
+  // Wait for range 1 to complete transfer over the wire
+  for (let attempt = 0; attempt < 40 && (reports.length === 0 || reports[reports.length - 1].verifiedBlocks < 2); attempt++) {
+    await settle()
+  }
+
+  t.ok(reports.length > 0, 'received progress reports for range 1')
+  const intermediateReport = reports[reports.length - 1]
+  t.is(intermediateReport.verifiedBlocks, 2, 'range 1 fully transferred')
+  t.is(intermediateReport.totalBlocks, 4, 'total blocks derived from signed pledge')
+  t.is(intermediateReport.complete, false, 'pledge is NOT complete while range 2 is unregistered')
+
+  // 2. Now sequentially retain range 2 on core B
+  await runtimeA.retainAuthorizedArchive({ pledge, coreKey: coreKeyB, coreRef: coreRefB, start: 4, end: 6, download: false })
+  await runtimeB.retainAuthorizedArchive({ pledge, coreKey: coreKeyB, coreRef: coreRefB, start: 4, end: 6, download: true, onProgress })
+
+  // Wait for range 2 to complete transfer
+  for (let attempt = 0; attempt < 60 && !reports[reports.length - 1].complete; attempt++) {
+    await settle()
+  }
+  t.ok(reports.length > 0, 'received progress reports over archive transport across cores')
+  const finalReport = reports[reports.length - 1]
+  t.is(finalReport.verifiedBlocks, 4, 'all 4 blocks across both distinct cores transferred')
+  t.is(finalReport.totalBlocks, 4)
+  t.is(finalReport.complete, true, 'multi-core pledge reaches complete when all cores complete')
+  t.is(finalReport.verifiedRanges.length, 2, 'verified ranges preserve distinct core identities')
+  t.ok(finalReport.verifiedRanges.some(r => r.coreKey === coreRefA.key && r.start === 2 && r.end === 4))
+  t.ok(finalReport.verifiedRanges.some(r => r.coreKey === coreRefB.key && r.start === 4 && r.end === 6))
+
+  await runtimeA.close().catch(() => {})
+  await runtimeB.close().catch(() => {})
+  pair.a.destroy()
+  pair.b.destroy()
+})
+
+test('archive progress accepts only the current opaque cursor for the exact archive resource set', async (t) => {
+  const coreRef = normalizeAssetCoreRefV2(createStaticAssetManifest({
+    treeHash: bytes(32, 91),
+    blockLength: 4,
+    byteLength: 4 * ASSET_BLOCK_SIZE,
+  }))
+  const coreKey = b4a.from(coreRef.key, 'hex')
+  const archivistA = crypto.keyPair(bytes(32, 92))
+  const archivistB = crypto.keyPair(bytes(32, 93))
+  const makePledge = (archivist, fill, ranges) => createArchivePledge({
+    archivistId: archivist.publicKey,
+    publicationId: bytes(32, fill),
+    renditionId: bytes(32, fill + 1),
+    ranges: ranges.map(([start, end]) => ({ coreKey, start, end })),
+    retentionUntil: 10_000,
+    issuedAt: 10,
+    uploadCeilingBytes: 0,
+    nonce: `cursor-${fill}`,
+    keyPair: archivist,
+  })
+  const pledgeA = makePledge(archivistA, 94, [[0, 2], [2, 4]])
+  const pledgeB = makePledge(archivistB, 95, [[0, 2]])
+  const runtime = createScopedNetworkRuntime({
+    swarm: fakeSwarm(),
+    store: {
+      get: () => ({
+        key: coreKey,
+        length: coreRef.length,
+        byteLength: coreRef.byteLength,
+        async ready () {},
+        async get (index) { return bytes(ASSET_BLOCK_SIZE, index + 1) },
+        async close () {},
+      }),
+    },
+    initialNetworkPolicy: archivePolicy(),
+  })
+  await runtime.start()
+
+  await runtime.retainAuthorizedArchive({ pledge: pledgeA, coreKey, coreRef, start: 0, end: 2, download: false })
+  await runtime.retainAuthorizedArchive({ pledge: pledgeB, coreKey, coreRef, start: 0, end: 2, download: false })
+
+  const first = await runtime.getAuthorizedArchiveProgress({ archiveId: pledgeA.pledgeId, maxBlocks: 1 })
+  t.ok(/^[0-9a-f]{64}$/.test(first.nextCursor), 'the continuation is a random opaque token')
+
+  const foreign = await runtime.getAuthorizedArchiveProgress({ archiveId: pledgeB.pledgeId, cursor: first.nextCursor, maxBlocks: 1 })
+  t.is(foreign.complete, false, 'a cursor from another archive cannot select this resource')
+  t.is(foreign.verifiedBlocks, 0, 'foreign cursor returns no fabricated evidence')
+
+  const forged = `${first.nextCursor.slice(0, -1)}${first.nextCursor.endsWith('0') ? '1' : '0'}`
+  const forgedResult = await runtime.getAuthorizedArchiveProgress({ archiveId: pledgeA.pledgeId, cursor: forged, maxBlocks: 1 })
+  t.is(forgedResult.complete, false, 'an unissued token is rejected')
+  t.is(forgedResult.verifiedBlocks, 0, 'forged cursor returns no fabricated evidence')
+
+  const abortedSignal = new AbortController()
+  abortedSignal.abort()
+  const aborted = await runtime.getAuthorizedArchiveProgress({
+    archiveId: pledgeA.pledgeId,
+    signal: abortedSignal.signal,
+    maxBlocks: 1,
+  })
+  t.is(aborted.complete, false, 'an aborted scan cannot claim completion')
+  const reset = await runtime.getAuthorizedArchiveProgress({ archiveId: pledgeA.pledgeId, cursor: first.nextCursor, maxBlocks: 1 })
+  t.is(reset.complete, false, 'a reset scan invalidates its previous cursor')
+  t.is(reset.verifiedBlocks, 0, 'a reset cursor returns no fabricated evidence')
+
+  await runtime.retainAuthorizedArchive({ pledge: pledgeA, coreKey, coreRef, start: 2, end: 4, download: false })
+  const changedOrder = await runtime.getAuthorizedArchiveProgress({ archiveId: pledgeA.pledgeId, cursor: aborted.nextCursor, maxBlocks: 1 })
+  t.is(changedOrder.complete, false, 'resource-set changes invalidate the old ordering')
+  t.is(changedOrder.verifiedBlocks, 0, 'changed ordering returns no fabricated evidence')
+
+  await runtime.releaseAuthorizedArchive({ archiveId: pledgeA.pledgeId })
+  await runtime.retainAuthorizedArchive({ pledge: pledgeA, coreKey, coreRef, start: 0, end: 2, download: false })
+  const released = await runtime.getAuthorizedArchiveProgress({ archiveId: pledgeA.pledgeId, cursor: first.nextCursor, maxBlocks: 1 })
+  t.is(released.complete, false, 'release and re-retain invalidate the prior cursor')
+  t.is(released.verifiedBlocks, 0, 're-retained resource returns no fabricated evidence')
+
+  const fresh = await runtime.getAuthorizedArchiveProgress({ archiveId: pledgeA.pledgeId, maxBlocks: 1 })
+  const completed = await runtime.getAuthorizedArchiveProgress({ archiveId: pledgeA.pledgeId, cursor: fresh.nextCursor, maxBlocks: 1 })
+  t.is(completed.complete, true, 'the newly issued cursor resumes the ordinary Corestore scan')
+  const stale = await runtime.getAuthorizedArchiveProgress({ archiveId: pledgeA.pledgeId, cursor: fresh.nextCursor, maxBlocks: 1 })
+  t.is(stale.complete, false, 'a consumed cursor is stale')
+  t.is(stale.verifiedBlocks, 0, 'a stale cursor returns no fabricated evidence')
+
+  await runtime.close()
+})
+
+test('offload archive progress preserves the bound cursor across pages and rejects foreign or consumed tokens', async (t) => {
+  const coreRef = normalizeAssetCoreRefV2(createStaticAssetManifest({
+    treeHash: bytes(32, 96),
+    blockLength: 4,
+    byteLength: 4 * ASSET_BLOCK_SIZE,
+  }))
+  const coreKey = b4a.from(coreRef.key, 'hex')
+  const archivistA = crypto.keyPair(bytes(32, 97))
+  const archivistB = crypto.keyPair(bytes(32, 98))
+  const makePledge = (archivist, fill) => createArchivePledge({
+    archivistId: archivist.publicKey,
+    publicationId: bytes(32, fill),
+    renditionId: bytes(32, fill + 1),
+    ranges: [{ coreKey, start: 0, end: 2 }],
+    retentionUntil: 10_000,
+    issuedAt: 10,
+    uploadCeilingBytes: 0,
+    nonce: `offload-cursor-${fill}`,
+    keyPair: archivist,
+  })
+  const pledgeA = makePledge(archivistA, 99)
+  const pledgeB = makePledge(archivistB, 100)
+  const calls = []
+  const blockOffload = {
+    async assessRetrievability ({ core, ranges, cursor, maxBlocks }) {
+      const range = ranges[0]
+      const start = cursor?.blockIndex ?? range.start
+      const end = Math.min(range.end, start + maxBlocks)
+      calls.push({ coreKey: b4a.toString(core.key, 'hex'), cursor })
+      return {
+        assessedBlocks: end - start,
+        residentBlocks: end - start,
+        residentBytes: (end - start) * ASSET_BLOCK_SIZE,
+        remoteRetrievableBlocks: 0,
+        remoteRetrievableBytes: 0,
+        truncated: end < range.end,
+        nextCursor: end < range.end ? { rangeIndex: 0, blockIndex: end } : null,
+      }
+    },
+  }
+  const runtime = createScopedNetworkRuntime({
+    swarm: fakeSwarm(),
+    blockOffload,
+    store: {
+      get: () => ({
+        key: coreKey,
+        length: coreRef.length,
+        byteLength: coreRef.byteLength,
+        async ready () {},
+        async close () {},
+      }),
+    },
+    initialNetworkPolicy: archivePolicy(),
+  })
+  await runtime.start()
+  await runtime.retainAuthorizedArchive({ pledge: pledgeA, coreKey, coreRef, start: 0, end: 2, download: false })
+  await runtime.retainAuthorizedArchive({ pledge: pledgeB, coreKey, coreRef, start: 0, end: 2, download: false })
+
+  const first = await runtime.getAuthorizedArchiveProgress({ archiveId: pledgeA.pledgeId, maxBlocks: 1 })
+  const completed = await runtime.getAuthorizedArchiveProgress({ archiveId: pledgeA.pledgeId, cursor: first.nextCursor, maxBlocks: 1 })
+  t.is(completed.complete, true, 'the offload branch resumes the exact next block')
+  t.is(calls[1].cursor.archiveId, pledgeA.pledgeId, 'the offload handoff keeps archive identity')
+  t.is(calls[1].cursor.coreKey, coreRef.key, 'the offload handoff keeps core identity')
+  t.is(calls[1].cursor.rangeStart, 0, 'the offload handoff keeps the exact range start')
+  t.is(calls[1].cursor.rangeEnd, 2, 'the offload handoff keeps the exact range end')
+
+  const foreign = await runtime.getAuthorizedArchiveProgress({ archiveId: pledgeB.pledgeId, cursor: first.nextCursor, maxBlocks: 1 })
+  t.is(foreign.complete, false, 'the offload branch rejects a foreign archive cursor')
+  const stale = await runtime.getAuthorizedArchiveProgress({ archiveId: pledgeA.pledgeId, cursor: first.nextCursor, maxBlocks: 1 })
+  t.is(stale.complete, false, 'the offload branch rejects a consumed cursor')
+  t.is(stale.verifiedBlocks, 0, 'stale offload cursors return no fabricated evidence')
+
+  await runtime.close()
 })
 
 test('permissionless archive discovery carries bounded signed requests and pledges without a relay registry', async (t) => {
@@ -3396,7 +3826,7 @@ test('a catalog page too large for one frame is trimmed to fit and the walk cont
   const genesisFrame = encodePublisherCatalogFrame(genesis)
   const genesisId = b4a.toString(genesis.recordId, 'hex')
   const sourceWriterKey = bytes(32, 234)
-  const sourceRegistry = fakeRegistry(descriptor)
+  const sourceRegistry = fakeRegistry(descriptor, root)
   sourceRegistry.binding.catalog.listProjections = async kind => ({
     items: kind === 'publication' ? [{ accepted: true }] : [],
     nextCursor: null,
@@ -3480,12 +3910,15 @@ test('a catalog page too large for one frame is trimmed to fit and the walk cont
     initialNetworkPolicy: contributionPolicy(),
   })
   const consumer = createScopedNetworkRuntime({ swarm: swarmB, store: {}, catalogRegistry: consumerRegistry })
+  const pairs = []
+  registerRuntimeTeardown(t, [source, consumer], pairs)
   await source.start()
   await consumer.start()
   await source.publishLocalPublisherCatalog({ publisherId: descriptor.publisherId })
   await consumer.followPublisher({ publisherId: descriptor.publisherId, namespaceDescriptor: descriptor })
 
   const pair = connectionPair()
+  pairs.push(pair)
   swarmA.connections.add(pair.a)
   swarmB.connections.add(pair.b)
   swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, client: false })
@@ -3518,7 +3951,7 @@ test('a multi-page catalog with late-sorting roots syncs via buffered ingest', a
   const genesisFrame = encodePublisherCatalogFrame(genesis)
   const genesisId = b4a.toString(genesis.recordId, 'hex')
   const sourceWriterKey = bytes(32, 250)
-  const sourceRegistry = fakeRegistry(descriptor)
+  const sourceRegistry = fakeRegistry(descriptor, root)
   sourceRegistry.binding.catalog.listProjections = async kind => ({
     items: kind === 'publication' ? [{ accepted: true }] : [],
     nextCursor: null,
@@ -3622,12 +4055,15 @@ test('a multi-page catalog with late-sorting roots syncs via buffered ingest', a
     initialNetworkPolicy: contributionPolicy(),
   })
   const consumer = createScopedNetworkRuntime({ swarm: swarmB, store: {}, catalogRegistry: consumerRegistry })
+  const pairs = []
+  registerRuntimeTeardown(t, [source, consumer], pairs)
   await source.start()
   await consumer.start()
   await source.publishLocalPublisherCatalog({ publisherId: descriptor.publisherId })
   await consumer.followPublisher({ publisherId: descriptor.publisherId, namespaceDescriptor: descriptor })
 
   const pair = connectionPair()
+  pairs.push(pair)
   swarmA.connections.add(pair.a)
   swarmB.connections.add(pair.b)
   swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, client: false })
@@ -3661,7 +4097,7 @@ test('a backpressured socket does not abort the catalog walk', async (t) => {
   const genesisFrame = encodePublisherCatalogFrame(genesis)
   const genesisId = b4a.toString(genesis.recordId, 'hex')
   const sourceWriterKey = bytes(32, 242)
-  const sourceRegistry = fakeRegistry(descriptor)
+  const sourceRegistry = fakeRegistry(descriptor, root)
   sourceRegistry.binding.catalog.listProjections = async kind => ({
     items: kind === 'publication' ? [{ accepted: true }] : [],
     nextCursor: null,
@@ -3741,6 +4177,8 @@ test('a backpressured socket does not abort the catalog walk', async (t) => {
     initialNetworkPolicy: contributionPolicy(),
   })
   const consumer = createScopedNetworkRuntime({ swarm: swarmB, store: {}, catalogRegistry: consumerRegistry })
+  const pairs = []
+  registerRuntimeTeardown(t, [source, consumer], pairs)
   await source.start()
   await consumer.start()
   await source.publishLocalPublisherCatalog({ publisherId: descriptor.publisherId })
@@ -3749,6 +4187,7 @@ test('a backpressured socket does not abort the catalog walk', async (t) => {
   // A page this size cannot be written without the socket asking the writer to
   // wait, so this is the exact condition that used to abort the walk.
   const pair = backpressuredPair()
+  pairs.push(pair)
   swarmA.connections.add(pair.a)
   swarmB.connections.add(pair.b)
   swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, client: false })
@@ -3942,7 +4381,7 @@ test('a relay with no direct view of the publisher learns and mirrors a catalog 
   const genesis = namespaceGenesis(descriptor, root)
 
   // Publisher fixture: one accepted publication so its catalog is worth following.
-  const sourceRegistry = fakeRegistry(descriptor)
+  const sourceRegistry = fakeRegistry(descriptor, root)
   sourceRegistry.binding.catalog.localWriterKey = root.publicKey
   sourceRegistry.binding.catalog.listProjections = async kind => ({
     items: kind === 'publication' ? [{ accepted: true }] : [],
@@ -4018,6 +4457,8 @@ test('a relay with no direct view of the publisher learns and mirrors a catalog 
     catalogRegistry: gossiperRegistry(createPublisherNamespaceDescriptor({ genesisRootKey: relayBKeys.publicKey, catalogBootstrapKey: bytes(32, 196) }), relayBKeys),
     now: () => 100,
   })
+  const pairs = []
+  registerRuntimeTeardown(t, [source, relayA, relayB], pairs)
 
   await source.start()
   await relayA.start()
@@ -4028,6 +4469,7 @@ test('a relay with no direct view of the publisher learns and mirrors a catalog 
   await source.publishLocalPublisherCatalog({ publisherId: publisherIdHex })
 
   const sAPair = connectionPair({ sourcePeerFill: 173, consumerPeerFill: 174 })
+  pairs.push(sAPair)
   swarmS.connections.add(sAPair.a)
   swarmA.connections.add(sAPair.b)
   swarmS.emit('connection', sAPair.a, { publicKey: sAPair.a.remotePublicKey, topics: [], client: false })
@@ -4047,6 +4489,7 @@ test('a relay with no direct view of the publisher learns and mirrors a catalog 
   // session activation, B must auto-follow, and the catalog walk must come
   // from A's mirrored publisher scope (namespace proof included).
   const aBPair = connectionPair({ sourcePeerFill: 175, consumerPeerFill: 176 })
+  pairs.push(aBPair)
   swarmA.connections.add(aBPair.a)
   swarmB.connections.add(aBPair.b)
   swarmA.emit('connection', aBPair.a, { publicKey: aBPair.a.remotePublicKey, topics: [], client: false })
@@ -4082,6 +4525,498 @@ test('a relay with no direct view of the publisher learns and mirrors a catalog 
   const bTopic = relayB.getDiagnostics().topics.find(topic => topic.purpose === 'publisher' && topic.modes.includes('followed'))
   t.ok(bTopic, 'relay B holds a followed publisher scope')
   t.not(bTopic.topicHex, undefined)
-  aBPair.b.destroy()
-  aBPair.b.destroy()
+})
+
+test('publisher follow admission cancelled by close rejects and never joins a late scope', async t => {
+  const root = crypto.keyPair(bytes(32, 61))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 62),
+  })
+  const publisherId = b4a.toString(derivePublisherId(root.publicKey), 'hex')
+  const registry = fakeRegistry(descriptor)
+  let releaseBind = null
+  registry.bindNamespace = () => new Promise(resolve => { releaseBind = resolve })
+  let registryReleases = 0
+  const ownedRelease = registry.release
+  registry.release = async id => {
+    registryReleases++
+    return ownedRelease(id)
+  }
+  const swarm = fakeSwarm()
+  const runtime = createScopedNetworkRuntime({ swarm, store: {}, catalogRegistry: registry })
+  await runtime.start()
+
+  const joinsAtClose = swarm.joins.length
+  const admission = runtime.followPublisher({ publisherId, namespaceDescriptor: descriptor })
+  await settle()
+  await runtime.close()
+
+  await t.exception(admission, /runtime is closed/)
+  releaseBind(registry.binding)
+  await settle()
+  t.is(swarm.joins.length, joinsAtClose, 'the late bind result never joins publisher discovery')
+  t.absent(runtime.getDiagnostics().topics.find(topic => topic.purpose === 'publisher'))
+  t.is(registryReleases, 0, 'the registry-retained binding is never released by cancelled admission cleanup')
+  await t.exception(
+    runtime.followPublisher({ publisherId, namespaceDescriptor: descriptor }),
+    /runtime is not active/,
+  )
+})
+
+test('late writable lease after close is released exactly once and never admitted', async t => {
+  const root = crypto.keyPair(bytes(32, 63))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 64),
+  })
+  const publisherId = b4a.toString(derivePublisherId(root.publicKey), 'hex')
+  const registry = fakeRegistry(descriptor, root)
+  registry.binding.catalog.listProjections = async kind => ({
+    items: kind === 'publication' ? [{ accepted: true }] : [],
+    nextCursor: null,
+  })
+  let leaseReleases = 0
+  let deliverLease = null
+  registry.acquireWritableBinding = () => new Promise(resolve => {
+    deliverLease = () => resolve({ binding: registry.binding, release: async () => { leaseReleases++ } })
+  })
+  let registryReleases = 0
+  const ownedRelease = registry.release
+  registry.release = async id => {
+    registryReleases++
+    return ownedRelease(id)
+  }
+  const swarm = fakeSwarm()
+  const runtime = createScopedNetworkRuntime({
+    swarm,
+    store: {},
+    catalogRegistry: registry,
+    initialNetworkPolicy: contributionPolicy(),
+  })
+  await runtime.start()
+
+  const joinsAtClose = swarm.joins.length
+  const admission = runtime.publishLocalPublisherCatalog({
+    publisherId,
+    retentionClass: 'contribution-cache',
+  })
+  await settle()
+  await runtime.close()
+  deliverLease()
+  await settle()
+  await settle()
+
+  await t.exception(admission, /runtime is closed/)
+  t.is(leaseReleases, 1, 'the late lease is released exactly once by the disposal continuation')
+  t.is(registryReleases, 0, 'borrowed registry ownership is untouched')
+  t.absent(runtime.getDiagnostics().topics.find(topic => topic.purpose === 'publisher'))
+  t.is(swarm.joins.length, joinsAtClose, 'no publisher scope joined after the close snapshot')
+  t.is(
+    runtime.authorizeConnection({
+      purpose: 'publisher',
+      topic: derivePublisherTopic({ publisherId, catalogEpoch: descriptor.catalogEpoch }),
+    }).status,
+    'rejected',
+    'no local provider scope was retained',
+  )
+})
+
+test('close aborts a publish admission stalled on catalog readiness and releases its owned lease', async t => {
+  const root = crypto.keyPair(bytes(32, 65))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 66),
+  })
+  const publisherId = b4a.toString(derivePublisherId(root.publicKey), 'hex')
+  const registry = fakeRegistry(descriptor, root)
+  registry.binding.catalog.listProjections = async kind => ({
+    items: kind === 'publication' ? [{ accepted: true }] : [],
+    nextCursor: null,
+  })
+  let leaseReleases = 0
+  registry.acquireWritableBinding = async () => ({
+    binding: registry.binding,
+    release: async () => { leaseReleases++ },
+  })
+  let releaseReady = null
+  registry.binding.catalog.ready = () => new Promise(resolve => { releaseReady = resolve })
+  const swarm = fakeSwarm()
+  const runtime = createScopedNetworkRuntime({
+    swarm,
+    store: {},
+    catalogRegistry: registry,
+    initialNetworkPolicy: contributionPolicy(),
+  })
+  await runtime.start()
+
+  const admission = runtime.publishLocalPublisherCatalog({
+    publisherId,
+    retentionClass: 'contribution-cache',
+  })
+  await settle()
+  await runtime.close()
+
+  await t.exception(admission, /runtime is closed/)
+  t.is(leaseReleases, 1, 'the owned lease was released by the admission finally during close')
+  releaseReady()
+  await settle()
+  t.is(leaseReleases, 1, 'close never needed the readiness gate and never double-releases')
+  t.absent(runtime.getDiagnostics().topics.find(topic => topic.purpose === 'publisher'))
+})
+
+test('late proof, head, and bootstrap work after close cannot repopulate runtime state', async t => {
+  const root = crypto.keyPair(bytes(32, 67))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 68),
+  })
+  const publisherId = b4a.toString(derivePublisherId(root.publicKey), 'hex')
+  const registry = fakeRegistry(descriptor, root)
+  registry.binding.catalog.listProjections = async kind => ({
+    items: kind === 'publication' ? [{ accepted: true }] : [],
+    nextCursor: null,
+  })
+  registry.binding.catalog.localWriterKey = descriptor.publisherRootKey
+  const locatorKeys = crypto.keyPair(bytes(32, 69))
+  registry.binding.catalog.getAuthorizationState = async () => ({
+    policyEpoch: 0,
+    policySequence: 0,
+    writers: [{
+      key: b4a.toString(descriptor.publisherRootKey, 'hex'),
+      signerKey: b4a.toString(locatorKeys.publicKey, 'hex'),
+      capabilities: ['announce', 'publish'],
+      firstAcceptedSequence: 0,
+      lastAcceptedSequence: 0,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      admissionPolicyEpoch: 0,
+      revocation: null,
+    }],
+  })
+  let headCalls = 0
+  let releaseHead = null
+  registry.binding.catalog.getViewHead = () => {
+    headCalls++
+    if (headCalls === 1) {
+      return Promise.resolve({
+        viewKey: descriptor.catalogBootstrapKey,
+        length: 0,
+        digest: bytes(32, 210),
+        authorizationStateDigest: bytes(32, 211),
+      })
+    }
+    return new Promise(resolve => { releaseHead = resolve })
+  }
+  let leaseAcquires = 0
+  let leaseReleases = 0
+  const ownedAcquire = registry.acquireWritableBinding
+  registry.acquireWritableBinding = async (...args) => {
+    leaseAcquires++
+    const lease = await ownedAcquire(...args)
+    const ownedRelease = lease.release
+    return {
+      ...lease,
+      release: async () => {
+        leaseReleases++
+        return ownedRelease()
+      },
+    }
+  }
+  const swarm = fakeSwarm()
+  const runtime = createScopedNetworkRuntime({
+    swarm,
+    store: {},
+    catalogRegistry: registry,
+    bootstrapLocatorKeyPair: locatorKeys,
+    initialNetworkPolicy: contributionPolicy(),
+  })
+  await runtime.start()
+
+  const published = await runtime.publishLocalPublisherCatalog({
+    publisherId,
+    retentionClass: 'contribution-cache',
+  })
+  t.is(published.status, 'published', 'the initial publish completes with an ungated head read')
+
+  const rebind = runtime.rebindLocalPublisherCatalog({ publisherId })
+  await settle()
+  await settle()
+  t.is(headCalls, 2, 'the rebind refresh is parked on the gated head read')
+
+  const joinsAtClose = swarm.joins.length
+  await runtime.close()
+  await t.exception(rebind, /runtime is closed/)
+  releaseHead({})
+  await settle()
+  await settle()
+
+  t.is(leaseAcquires, leaseReleases, 'every acquired lease was released exactly once')
+  t.is(swarm.joins.length, joinsAtClose, 'late head work never joins or re-joins discovery')
+  t.absent(runtime.getDiagnostics().topics.find(topic => topic.purpose === 'publisher'))
+  await t.exception(
+    runtime.providePublisherNamespaceProof({ locator: {}, proof: {} }),
+    /runtime is closed/,
+    'late proof registration is rejected before writing provider state',
+  )
+  await t.exception(
+    runtime.provideLocalPublisherNamespaceProof({
+      publisherId,
+      descriptor,
+      catalog: registry.binding.catalog,
+    }),
+    /runtime is closed/,
+    'late local proof registration is rejected before writing provider state',
+  )
+  await t.exception(
+    runtime.publishBootstrapLocator({ locator: {} }),
+    /runtime is closed/,
+    'bootstrap publish is rejected during shutdown',
+  )
+})
+
+test('pre-start follow reason registration and normal publish and follow still behave', async t => {
+  const root = crypto.keyPair(bytes(32, 70))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 71),
+  })
+  const publisherId = b4a.toString(derivePublisherId(root.publicKey), 'hex')
+  const registry = fakeRegistry(descriptor, root)
+  registry.binding.catalog.listProjections = async kind => ({
+    items: kind === 'publication' ? [{ accepted: true }] : [],
+    nextCursor: null,
+  })
+  const swarm = fakeSwarm()
+  const runtime = createScopedNetworkRuntime({
+    swarm,
+    store: {},
+    catalogRegistry: registry,
+    initialNetworkPolicy: contributionPolicy(),
+  })
+
+  const registered = await runtime.addPublisherFollowReason({
+    publisherId,
+    reason: 'bootstrap:auto',
+  })
+  t.is(registered.status, 'scheduled', 'idle pre-start reason registration stays allowed')
+  t.alike(registered.reasons, ['bootstrap:auto'])
+
+  await runtime.start()
+  const published = await runtime.publishLocalPublisherCatalog({
+    publisherId,
+    retentionClass: 'contribution-cache',
+  })
+  t.is(published.status, 'published')
+  t.ok(runtime.getDiagnostics().topics.find(topic => topic.purpose === 'publisher')?.publicAnnounced)
+
+  const followed = await runtime.followPublisher({ publisherId, namespaceDescriptor: descriptor })
+  t.is(followed.status, 'following')
+  t.ok(runtime.getDiagnostics().topics.find(topic => topic.purpose === 'publisher')?.modes.includes('followed'))
+  await runtime.close()
+})
+
+function publisherGate () {
+  let resolve
+  let reject
+  const promise = new Promise((accept, fail) => { resolve = accept; reject = fail })
+  return { promise, resolve, reject }
+}
+
+function publisherCloseFixture (fill, options = {}) {
+  const root = crypto.keyPair(bytes(32, fill))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, fill + 1),
+  })
+  const publisherId = b4a.toString(descriptor.publisherId, 'hex')
+  const registry = fakeRegistry(descriptor, root)
+  const swarm = fakeSwarm()
+  const runtime = createScopedNetworkRuntime({
+    swarm, store: {}, catalogRegistry: registry, ...options,
+  })
+  return { descriptor, publisherId, registry, swarm, runtime }
+}
+
+test('restore page handed off before close is released once before close settles', async t => {
+  t.timeout(3000)
+  const { registry, swarm, runtime } = publisherCloseFixture(71, {
+    initialNetworkPolicy: contributionPolicy(),
+  })
+  const pageGate = publisherGate()
+  const pageRequested = publisherGate()
+  const closeGate = publisherGate()
+  const releaseStarted = publisherGate()
+  const releaseGate = publisherGate()
+  const events = []
+  let releases = 0
+  let closed = false
+  registry.listBindingPage = () => {
+    pageRequested.resolve()
+    return pageGate.promise
+  }
+  const page = {
+    items: [registry.binding],
+    nextCursor: null,
+    release () {
+      releases++
+      events.push('release')
+      releaseStarted.resolve()
+      return releaseGate.promise
+    },
+  }
+  const starting = runtime.start()
+  const startError = starting.then(() => null, error => error)
+  const closing = closeGate.promise.then(() => {
+    events.push('close')
+    return runtime.close()
+  }).then(() => { closed = true })
+  t.teardown(async () => {
+    pageGate.resolve(page)
+    closeGate.resolve()
+    releaseGate.resolve()
+    await Promise.allSettled([starting, closing])
+  })
+  await pageRequested.promise
+  const joinsBeforeClose = swarm.joins.length
+  // raceOwned's handoff and disposal reactions were registered first. The
+  // independently queued close reaction then precedes the await consumer
+  // queued by that successful handoff. A synchronous close here would not.
+  pageGate.promise.then(() => { events.push('page-ready') })
+  pageGate.resolve(page)
+  closeGate.resolve()
+  await releaseStarted.promise
+  t.alike(events, ['page-ready', 'close', 'release'])
+  t.is(releases, 1)
+  t.is(closed, false, 'close waits for the handed-off page release')
+  t.is(swarm.joins.length, joinsBeforeClose, 'the page is never admitted after close')
+  releaseGate.resolve()
+  await closing
+  t.is((await startError)?.code, 'SCOPED_NETWORK_CLOSED')
+  t.is(releases, 1, 'late disposal does not release the handed-off page twice')
+  t.absent(runtime.getDiagnostics().topics.find(topic => topic.purpose === 'publisher'))
+})
+
+for (const stage of ['ready', 'descriptor']) {
+  test(`local catalog resolution close interrupts stalled ${stage} and drains its lease`, async t => {
+    t.timeout(3000)
+    const { registry, publisherId, runtime } = publisherCloseFixture(stage === 'ready' ? 73 : 75)
+    await runtime.start()
+    const readStarted = publisherGate()
+    const readGate = publisherGate()
+    const releaseStarted = publisherGate()
+    const releaseGate = publisherGate()
+    let releases = 0
+    let catalogCloses = 0
+    let closed = false
+    const stalledRead = () => {
+      readStarted.resolve()
+      return readGate.promise
+    }
+    if (stage === 'ready') registry.binding.catalog.ready = stalledRead
+    else registry.binding.catalog.view.get = stalledRead
+    registry.binding.catalog.close = async () => { catalogCloses++ }
+    registry.acquireWritableBinding = async () => ({
+      binding: registry.binding,
+      release () {
+        releases++
+        releaseStarted.resolve()
+        return releaseGate.promise
+      },
+    })
+    const resolving = runtime.resolveLocalPublisherCatalog({ publisherId })
+    t.teardown(async () => {
+      readGate.resolve()
+      releaseGate.resolve()
+      await Promise.allSettled([resolving, runtime.close()])
+    })
+    await readStarted.promise
+    const closing = runtime.close().then(() => { closed = true })
+    await releaseStarted.promise
+    t.is(closed, false, 'close is still draining the owned release, not the read')
+    t.is(releases, 1)
+    releaseGate.resolve()
+    await closing
+    t.is((await resolving).status, 'unavailable')
+    t.is(catalogCloses, 0, 'the registry retains the catalog; only its lease is released')
+    readGate.resolve()
+    await new Promise(resolve => setImmediate(resolve))
+    t.is(releases, 1)
+    t.absent(runtime.getDiagnostics().topics.find(topic => topic.purpose === 'publisher'))
+  })
+}
+
+test('already-aborted admission observes a late rejection from reentrant binding work', async t => {
+  t.timeout(3000)
+  const { descriptor, publisherId, registry, swarm, runtime } = publisherCloseFixture(77)
+  await runtime.start()
+  const bindingGate = publisherGate()
+  const lateError = new Error('late binding failure')
+  const unhandled = []
+  const observeRejection = error => { unhandled.push(error) }
+  process.on('unhandledRejection', observeRejection)
+  let closing
+  registry.bindNamespace = () => {
+    // The dependency runs synchronously before raceAdmission receives the
+    // bindAndLoadFollowedPublisher promise: its abort fast path must observe
+    // that already-started work, not merely remove a normal abort listener.
+    closing = runtime.close()
+    return bindingGate.promise
+  }
+  const joinsBeforeClose = swarm.joins.length
+  try {
+    const failure = await runtime.followPublisher({ publisherId, namespaceDescriptor: descriptor })
+      .then(() => null, error => error)
+    t.is(failure?.code, 'SCOPED_NETWORK_CLOSED')
+    await closing
+    bindingGate.reject(lateError)
+    await new Promise(resolve => setImmediate(resolve))
+    await new Promise(resolve => setImmediate(resolve))
+    t.alike(unhandled, [], 'no already-started rejection escapes after admission closes')
+    t.is(swarm.joins.length, joinsBeforeClose)
+    t.absent(runtime.getDiagnostics().topics.find(topic => topic.purpose === 'publisher'))
+  } finally {
+    bindingGate.resolve(registry.binding)
+    await runtime.close()
+    process.removeListener('unhandledRejection', observeRejection)
+  }
+})
+
+test('direct local namespace proof close drains its acquired lease without the page completing', async t => {
+  t.timeout(3000)
+  const { descriptor, publisherId, registry, runtime } = publisherCloseFixture(79)
+  await runtime.start()
+  const pageStarted = publisherGate()
+  const pageGate = publisherGate()
+  const releaseStarted = publisherGate()
+  const releaseGate = publisherGate()
+  let releases = 0
+  let closed = false
+  registry.binding.catalog.listAcceptedPage = () => {
+    pageStarted.resolve()
+    return pageGate.promise
+  }
+  registry.acquireWritableBinding = async () => ({
+    binding: registry.binding,
+    release () {
+      releases++
+      releaseStarted.resolve()
+      return releaseGate.promise
+    },
+  })
+  const proving = runtime.provideLocalPublisherNamespaceProof({ publisherId, descriptor })
+  const proofError = proving.then(() => null, error => error)
+  t.teardown(async () => {
+    pageGate.resolve({ entries: [], nextCursor: null })
+    releaseGate.resolve()
+    await Promise.allSettled([proving, runtime.close()])
+  })
+  await pageStarted.promise
+  const closing = runtime.close().then(() => { closed = true })
+  await releaseStarted.promise
+  t.is(closed, false, 'the direct proof retains ownership through release')
+  t.is(releases, 1)
+  releaseGate.resolve()
+  await closing
+  t.is((await proofError)?.code, 'SCOPED_NETWORK_CLOSED')
+  t.absent(runtime.getDiagnostics().topics.find(topic => topic.purpose === 'publisher'))
 })

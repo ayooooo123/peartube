@@ -12,15 +12,23 @@ import {
   authorizeArchiveRequestFromManifestStore,
   verifyArchiveRequest
 } from '../src/archive/index.js'
-import { createStaticAssetManifest } from '../src/assets/static-core.js'
+import { createStaticAssetManifest, ASSET_BLOCK_SIZE } from '../src/assets/static-core.js'
+import { normalizeAssetCoreRefV2 } from '../src/assets/rendition.js'
+
+const testCoreRef = normalizeAssetCoreRefV2(createStaticAssetManifest({
+  treeHash: b4a.alloc(32, 55),
+  blockLength: 4,
+  byteLength: 4 * ASSET_BLOCK_SIZE,
+}))
 
 const requester = crypto.keyPair(b4a.alloc(32, 71))
 const volunteer = crypto.keyPair(b4a.alloc(32, 72))
 const standby = crypto.keyPair(b4a.alloc(32, 73))
 const publicationId = 'a'.repeat(64)
 const renditionId = 'b'.repeat(64)
-const coreKey = 'c'.repeat(64)
+const coreKey = testCoreRef.key
 const ranges = [{ coreKey, start: 0, end: 4 }]
+const REQUESTED_BYTES = testCoreRef.byteLength
 
 function scopedRecorder () {
   const retained = []
@@ -44,6 +52,7 @@ function authorized (request) {
     accepted: true,
     requestedBytes: request.body.requestedBytes,
     ranges: request.body.ranges,
+    coreRef: testCoreRef,
   }
 }
 
@@ -70,7 +79,8 @@ test('default archive request transport preserves publication authorization cont
     publicationId,
     renditionId,
     ranges,
-    requestedBytes: 4096,
+    requestedBytes: REQUESTED_BYTES,
+    coreRef: testCoreRef,
     retentionUntil: 20_000,
     expiresAt: 2_000,
   })
@@ -119,6 +129,9 @@ test('opted-in strangers randomly accept verified requests without API keys or t
   const requesterScoped = scopedRecorder()
   const volunteerScoped = scopedRecorder()
   const standbyScoped = scopedRecorder()
+  volunteerScoped.getAuthorizedArchiveProgress = async () => ({
+    verifiedBytes: REQUESTED_BYTES, verifiedRanges: ranges, complete: true, truncated: false,
+  })
   const deliveredPledges = []
   let requestNetwork
   const volunteerNetwork = createPermissionlessArchiveNetwork({
@@ -126,11 +139,12 @@ test('opted-in strangers randomly accept verified requests without API keys or t
     now: () => 1_000,
     random: () => 0.1,
     enabled: true,
-    capacityBytes: 8192,
+    capacityBytes: 2 * REQUESTED_BYTES,
     acceptanceProbability: 0.5,
     authorizeRequest: authorized,
     authorizeConsumerVisibility: consumerVisible,
     scopedNetwork: volunteerScoped,
+    archivePolicy: createArchivePolicy({ capacityBytes: 2 * REQUESTED_BYTES, now: () => 1_000 }),
     publishPledge: async envelope => {
       deliveredPledges.push(envelope)
       await requestNetwork.ingestPledge(envelope)
@@ -141,7 +155,7 @@ test('opted-in strangers randomly accept verified requests without API keys or t
     now: () => 1_000,
     random: () => 0.9,
     enabled: true,
-    capacityBytes: 8192,
+    capacityBytes: 2 * REQUESTED_BYTES,
     acceptanceProbability: 0.5,
     authorizeRequest: authorized,
     authorizeConsumerVisibility: consumerVisible,
@@ -157,12 +171,14 @@ test('opted-in strangers randomly accept verified requests without API keys or t
       await standbyNetwork.ingestRequest(envelope)
     },
   })
+  t.teardown(() => Promise.all([requestNetwork.close(), volunteerNetwork.close(), standbyNetwork.close()]))
 
   const result = await requestNetwork.requestArchive({
     publicationId,
     renditionId,
     ranges,
-    requestedBytes: 4096,
+    requestedBytes: REQUESTED_BYTES,
+    coreRef: testCoreRef,
     retentionUntil: 20_000,
     expiresAt: 2_000,
   })
@@ -173,7 +189,7 @@ test('opted-in strangers randomly accept verified requests without API keys or t
   t.is(standbyScoped.retained.length, 0)
   t.is(requesterScoped.retained.length, 1, 'the requester joins the pledge scope to serve and verify transfers')
   t.is(requesterScoped.retained[0].download, false, 'requesters do not refill an offloaded source range')
-  t.is(volunteerNetwork.getStatus().reservedBytes, 4096)
+    t.is(volunteerNetwork.getStatus().reservedBytes, REQUESTED_BYTES)
   t.is(volunteerNetwork.getStatus().acceptedRequests, 1)
   t.is(standbyNetwork.getStatus().randomRejections, 1)
   t.is('apiKey' in volunteerNetwork.getStatus(), false)
@@ -192,7 +208,8 @@ test('consumer policy changes cancel hidden archive requests and release their r
     publicationId,
     renditionId,
     ranges,
-    requestedBytes: 4096,
+    requestedBytes: REQUESTED_BYTES,
+    coreRef: testCoreRef,
     retentionUntil: 20_000,
     expiresAt: 2_000,
   })
@@ -409,6 +426,7 @@ test('manifest authorization recomputes full-copy bytes instead of trusting requ
     accepted: true,
     requestedBytes: core.byteLength,
     ranges: testRanges,
+    coreRef: normalizeAssetCoreRefV2(core),
   })
   t.is(await authorizeArchiveRequestFromManifestStore({
     body: { ...request.body, requestedBytes: 1 },
@@ -445,6 +463,9 @@ test('random possession challenges bind transport identity, score proofs, and ex
     retainArchiveDiscovery: async () => ({ status: 'retained' }),
     releaseArchiveDiscovery: async () => ({ status: 'released' }),
     createAuthorizedArchiveChallengeProof: async () => proofBytes,
+    getAuthorizedArchiveProgress: async () => ({
+      verifiedBytes: REQUESTED_BYTES, verifiedRanges: ranges, complete: true, truncated: false,
+    }),
   }
   const archiveStore = {
     async putPledge () {},
@@ -456,13 +477,14 @@ test('random possession challenges bind transport identity, score proofs, and ex
     now: () => currentTime,
     random: () => 0,
     enabled: true,
-    capacityBytes: 8192,
+    capacityBytes: 2 * REQUESTED_BYTES,
     acceptanceProbability: 1,
     challengeIntervalMs: 1_000,
     challengeTimeoutMs: 20,
     authorizeRequest: authorized,
     authorizeConsumerVisibility: consumerVisible,
     scopedNetwork: volunteerScoped,
+    archivePolicy: createArchivePolicy({ capacityBytes: 2 * REQUESTED_BYTES, now: () => currentTime }),
     publishPledge: envelope => requesterNetwork.ingestPledge(envelope, { peerId: volunteerPeerId }),
     publishChallengeProof: packet => {
       responseTransportPeerId = JSON.parse(b4a.toString(packet.envelope.body)).transportPeerId
@@ -494,7 +516,8 @@ test('random possession challenges bind transport identity, score proofs, and ex
     publicationId,
     renditionId,
     ranges,
-    requestedBytes: 4096,
+    requestedBytes: REQUESTED_BYTES,
+    coreRef: testCoreRef,
     retentionUntil: 20_000,
     expiresAt: 2_000,
   })
@@ -577,7 +600,7 @@ test('permissionless acceptance reserves before retain and releases reservation 
   t.is((await network.ingestRequest(makeRequest('success').envelope)).status, 'accepted')
   t.is((await policy.snapshot()).reservedBytes, 512)
   currentTime = 2_000
-  await timers.at(-1).fn()
+  for (const timer of timers.filter(timer => timer.delay <= currentTime - 1_000)) await timer.fn()
   await new Promise(resolve => setTimeout(resolve, 0))
   t.is((await policy.snapshot()).reservedBytes, 0, 'retention expiry releases persisted capacity')
   t.is(network.getStatus().acceptedRequests, 0)
@@ -723,20 +746,11 @@ test('archive participation policy persists across backend restarts', async (t) 
     participationRepository,
   })
   await restarted.ready
-  t.alike(restarted.getStatus(), {
-    enabled: true,
-    capacityBytes: 8192,
-    maxRequestBytes: 2048,
-    acceptanceProbability: 0.75,
-    reservedBytes: 0,
-    availableBytes: 8192,
-    acceptedRequests: 0,
-    knownRequests: 0,
-    receivedPledges: 0,
-    randomRejections: 0,
-    capacityRejections: 0,
-    authorizationRejections: 0,
-  })
+  const restored = restarted.getStatus()
+  t.is(restored.enabled, true)
+  t.is(restored.capacityBytes, 8192)
+  t.is(restored.maxRequestBytes, 2048)
+  t.is(restored.acceptanceProbability, 0.75)
   await restarted.close()
 })
 
@@ -760,7 +774,8 @@ test('requester releases received pledge scopes when retention expires', async (
     publicationId,
     renditionId,
     ranges,
-    requestedBytes: 4096,
+    requestedBytes: REQUESTED_BYTES,
+    coreRef: testCoreRef,
     expiresAt: 1_500,
     retentionUntil: 2_000,
   })

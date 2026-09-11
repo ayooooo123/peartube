@@ -2,39 +2,100 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import { build } from 'esbuild'
+import React from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 
 const __dirname = path.dirname(new URL(import.meta.url).pathname)
 // The settings tab is now a redirect to the Profile screen, which owns the
-// storage card (renderStorageCard). Assert the storage UI lives there.
+// StorageCard component. Assert the storage UI lives there.
 const profileSource = fs.readFileSync(path.join(__dirname, '..', 'app', 'profile.tsx'), 'utf8')
 
-test('profile storage card surfaces real disk usage, not only the tracked cache quota', () => {
-  const storageStart = profileSource.indexOf('function renderStorageCard()')
-  // The card body ends where the main component render begins.
-  const storageEnd = profileSource.indexOf('<View style={styles.screen}>', storageStart + 1)
-  const storageSection = storageStart >= 0 && storageEnd >= 0
-    ? profileSource.slice(storageStart, storageEnd)
-    : ''
+async function loadStorageCard() {
+  const start = profileSource.indexOf('function StorageCard')
+  const end = profileSource.indexOf('function ProfileDiagnosticsCard', start)
+  assert.ok(start >= 0 && end > start, 'StorageCard component should exist')
+  const result = await build({
+    stdin: {
+      contents: [
+        'const React = globalThis.__storageReact',
+        'const host = tag => ({ children }) => React.createElement(tag, null, children)',
+        'const View = host("div")',
+        'const Text = host("span")',
+        'const GlassCard = host("section")',
+        'const Feather = () => null',
+        'const StorageOperabilityDetails = () => null',
+        'const TextInput = props => React.createElement("input", { "data-keyboard-type": props.keyboardType, value: props.value })',
+        'const Pressable = props => { globalThis.__storagePressables.push(props.onPress); return React.createElement("button", null, props.children) }',
+        'const colors = { text: "text", textMuted: "muted", swarm: "swarm", onPrimary: "on-primary" }',
+        'const styles = new Proxy({}, { get: () => null })',
+        profileSource.slice(start, end),
+        'export { StorageCard }',
+      ].join('\n'),
+      resolveDir: path.join(__dirname, '..'),
+      sourcefile: 'storage-card-runtime.tsx',
+      loader: 'tsx',
+    },
+    bundle: false,
+    write: false,
+    format: 'esm',
+    platform: 'node',
+    jsxFactory: 'React.createElement',
+    jsxFragment: 'React.Fragment',
+  })
+  const directory = fs.mkdtempSync(path.join(__dirname, '.storage-card-'))
+  const output = path.join(directory, 'storage-card.mjs')
+  fs.writeFileSync(output, result.outputFiles[0].text)
+  globalThis.__storageReact = React
+  globalThis.__storagePressables = []
+  try {
+    return (await import(`${new URL(output, 'file:').href}?${Math.random()}`)).StorageCard
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+}
 
-  assert.ok(storageSection.length > 0, 'expected renderStorageCard in profile.tsx')
-  // Real on-disk total + tracked cache + the untracked remainder must all be shown
-  // so the user can see what is actually consuming space (the reported bug: the
-  // card only ever showed the tracked-seed subset).
-  assert.match(storageSection, /GB total/)
-  assert.match(storageSection, /GB cached/)
-  assert.match(storageSection, /app\/P2P data outside tracked peer cache/)
-  assert.match(storageSection, /totalStorageGB/)
-  assert.match(storageSection, /untrackedStorageGB/)
-  // The cache budget itself is now the participation mode's; the card only
-  // reports usage, points at that choice, and can still clear the cache.
-  assert.match(storageSection, /Your sharing choice above sets this budget/)
-  assert.match(storageSection, /handleCustomStorageLimitApply/)
-  assert.match(storageSection, /handleClearCache/)
-})
+test('profile storage card surfaces real disk usage and gates the exact cache limit', async () => {
+  const StorageCard = await loadStorageCard()
+  const storageStats = {
+    usedBytes: 1,
+    maxBytes: 5,
+    usedGB: '1.0',
+    maxGB: 5,
+    seedCount: 1,
+    pinnedCount: 0,
+    totalStorageGB: '4.0',
+    untrackedStorageBytes: 3,
+    untrackedStorageGB: '3.0',
+  }
+  const props = {
+    storageStats,
+    storageLimitPreview: null,
+    usedPct: 20,
+    customStorageLimit: '5',
+    storageLimitSaving: false,
+    clearingCache: false,
+    onCustomLimitChange() {},
+    onCustomLimitApply() {},
+    onClearCache() {},
+  }
 
-test('the exact cache limit input survives, gated behind Developer Mode', () => {
-  assert.match(profileSource, /customStorageLimit/)
-  assert.match(profileSource, /handleCustomStorageLimitApply/)
-  assert.match(profileSource, /keyboardType="numeric"/)
-  assert.match(profileSource, /\{developerMode\.enabled \? \([\s\S]*?keyboardType="numeric"/)
+  const normal = renderToStaticMarkup(React.createElement(StorageCard, {
+    ...props,
+    developerModeEnabled: false,
+  }))
+  assert.match(normal, /4\.0 GB total/)
+  assert.match(normal, /1\.0 GB cached/)
+  assert.match(normal, /app\/P2P data outside tracked peer cache/)
+  assert.match(normal, /Your sharing choice above sets this budget/)
+  assert.match(normal, /Clear cached videos/)
+  assert.doesNotMatch(normal, /Cache budget override/)
+  assert.doesNotMatch(normal, /data-keyboard-type="numeric"/)
+
+  const developer = renderToStaticMarkup(React.createElement(StorageCard, {
+    ...props,
+    developerModeEnabled: true,
+  }))
+  assert.match(developer, /Cache budget override/)
+  assert.match(developer, /data-keyboard-type="numeric"/)
 })

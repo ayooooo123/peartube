@@ -8,6 +8,13 @@ export type NativePublisherKeyVault = {
     publicKey: unknown
     challengeSignature: unknown
   }>
+  getPublicKey(input?: { publisherId?: string }): Promise<Uint8Array | null>
+  signProtocolRecord(input?: {
+    publisherId?: string
+    recordType?: string
+    recordId?: Uint8Array
+    transitionId?: Uint8Array
+  }): Promise<{ signerPublicKey: Uint8Array; signature: Uint8Array }>
 }
 
 let vaultPromise: Promise<NativePublisherKeyVault> | null = null

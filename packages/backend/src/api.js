@@ -464,7 +464,7 @@ async function refreshPeerBitfieldBatch(peer, refs, batchStart, batchEnd, timeou
   return requestPeerAvailability(peer, refs, batchStart, batchEnd, timeout)
 }
 
-async function refreshPeerBitfieldRanges(peers, refs, deps, refreshBudget) {
+function resolveDurabilityBitfieldTimeout(deps, refreshBudget) {
   const configuredTimeout = deps?.bitfieldRefreshTimeoutMs
   const timeout = configuredTimeout === undefined
     ? DEFAULT_DURABILITY_BITFIELD_REFRESH_TIMEOUT_MS
@@ -486,13 +486,10 @@ async function refreshPeerBitfieldRanges(peers, refs, deps, refreshBudget) {
     )
   }
   if (refreshBudget.deadline === null) refreshBudget.deadline = Date.now() + deadlineMs
+  return timeout
+}
 
-  const incompletePeers = peers.filter(peer =>
-    refs.some(ref => !peerBitfieldHasFullRange(peer, ref.start, ref.end))
-  )
-  const rangeBatches = new Map()
-  if (incompletePeers.length === 0) return { batchLength: null, rangeBatches }
-
+function resolveDurabilityProbeLength() {
   const batchLength = hypercoreWants?.WANT_BATCH
   const probeLength = batchLength / 2
   const minRange = MIN_DURABILITY_WANT_PROBE
@@ -503,7 +500,10 @@ async function refreshPeerBitfieldRanges(peers, refs, deps, refreshBudget) {
       (probeLength & (probeLength - 1)) !== 0) {
     throw new Error('unsupported Hypercore isolated WANT probe length')
   }
+  return probeLength
+}
 
+function collectDurabilityBatchStarts(refs, probeLength) {
   const batchStarts = new Set()
   for (const ref of refs) {
     let batchStart = Math.floor(ref.start / probeLength) * probeLength
@@ -517,7 +517,10 @@ async function refreshPeerBitfieldRanges(peers, refs, deps, refreshBudget) {
       batchStart = batchEnd
     }
   }
+  return batchStarts
+}
 
+function collectDurabilityPendingBatches(incompletePeers, batchStarts, probeLength, refs, refreshBudget) {
   const pending = []
   for (const peer of incompletePeers) {
     for (const batchStart of batchStarts) {
@@ -530,7 +533,10 @@ async function refreshPeerBitfieldRanges(peers, refs, deps, refreshBudget) {
       pending.push({ peer, batchStart, batchEnd })
     }
   }
+  return pending
+}
 
+async function executeDurabilityBitfieldRefreshes(pending, refs, timeout, refreshBudget, rangeBatches) {
   let cursor = 0
   const runNext = async () => {
     while (cursor < pending.length) {
@@ -565,6 +571,22 @@ async function refreshPeerBitfieldRanges(peers, refs, deps, refreshBudget) {
     { length: Math.min(MAX_CONCURRENT_DURABILITY_REFRESHES, pending.length) },
     runNext,
   ))
+}
+
+async function refreshPeerBitfieldRanges(peers, refs, deps, refreshBudget) {
+  const timeout = resolveDurabilityBitfieldTimeout(deps, refreshBudget)
+
+  const incompletePeers = peers.filter(peer =>
+    refs.some(ref => !peerBitfieldHasFullRange(peer, ref.start, ref.end))
+  )
+  const rangeBatches = new Map()
+  if (incompletePeers.length === 0) return { batchLength: null, rangeBatches }
+
+  const probeLength = resolveDurabilityProbeLength()
+  const batchStarts = collectDurabilityBatchStarts(refs, probeLength)
+  const pending = collectDurabilityPendingBatches(incompletePeers, batchStarts, probeLength, refs, refreshBudget)
+
+  await executeDurabilityBitfieldRefreshes(pending, refs, timeout, refreshBudget, rangeBatches)
   return { batchLength: probeLength, rangeBatches }
 }
 
@@ -587,20 +609,19 @@ async function openDurabilityCore(coreKey, deps) {
  * then evaluate that complete-item holder set under the durability policy.
  * Missing or malformed runtime evidence always fails closed.
  */
-export async function assessDurableManifest(refs, trust = {}, deps = {}) {
+function validateDurabilityManifestInput(refs, trust) {
   if (!Array.isArray(refs)) {
-    return failClosedDurabilityAssessment('refs must be an array')
+    return { failure: failClosedDurabilityAssessment('refs must be an array') }
   }
   if (refs.length > MAX_DURABILITY_REFS) {
-    return failClosedDurabilityAssessment(`refs exceeds maximum of ${MAX_DURABILITY_REFS}`)
+    return { failure: failClosedDurabilityAssessment(`refs exceeds maximum of ${MAX_DURABILITY_REFS}`) }
   }
-  if (refs.length === 0) return failClosedDurabilityAssessment()
+  if (refs.length === 0) return { failure: failClosedDurabilityAssessment() }
 
-  let canonicalRefs
   try {
-    canonicalRefs = canonicalizeDurabilityRefs(refs)
+    const canonicalRefs = canonicalizeDurabilityRefs(refs)
     if (!trust || typeof trust !== 'object') {
-      return failClosedDurabilityAssessment('trust must be an object')
+      return { failure: failClosedDurabilityAssessment('trust must be an object') }
     }
     // Validate trust keys and the threshold before opening any sessions.
     evaluateDurabilityPolicy({
@@ -609,16 +630,75 @@ export async function assessDurableManifest(refs, trust = {}, deps = {}) {
       pairedDeviceKeys: trust.pairedDeviceKeys,
       ordinaryRequired: trust.ordinaryRequired
     })
+    return { canonicalRefs }
   } catch (error) {
-    return failClosedDurabilityAssessment(durabilityErrorMessage(error))
+    return { failure: failClosedDurabilityAssessment(durabilityErrorMessage(error)) }
   }
+}
 
+function groupDurabilityRefsByCore(canonicalRefs) {
   const refsByCore = new Map()
   for (const durabilityRef of canonicalRefs) {
     const coreRefs = refsByCore.get(durabilityRef.coreKey)
     if (coreRefs) coreRefs.push(durabilityRef)
     else refsByCore.set(durabilityRef.coreKey, [durabilityRef])
   }
+  return refsByCore
+}
+
+async function assessDurabilityForCore(core, coreRefs, holderKeys, deps, refreshBudget) {
+  if (typeof core.ready === 'function') await core.ready()
+
+  const iterable = durabilityPeerIterable(core, deps?.getCorePeers)
+  if (!iterable) return { failed: true }
+
+  const peers = []
+  for (const peer of iterable) {
+    peers.push(peer)
+    if (peers.length > MAX_DURABILITY_PEERS_PER_CORE) {
+      throw new Error(`peer count exceeds maximum of ${MAX_DURABILITY_PEERS_PER_CORE}`)
+    }
+  }
+  const candidatePeers = peers.filter(peer => {
+    const holderKey = authenticatedPeerKeyHex(peer)
+    return holderKey !== null && (holderKeys === null || holderKeys.has(holderKey))
+  })
+  const refreshEvidence = await refreshPeerBitfieldRanges(
+    candidatePeers,
+    coreRefs,
+    deps,
+    refreshBudget,
+  )
+
+  let currentHolderKeys = holderKeys
+  for (const durabilityRef of coreRefs) {
+    const holders = new Set()
+    for (const peer of peers) {
+      const holderKey = authenticatedPeerKeyHex(peer)
+      if (!holderKey || (currentHolderKeys !== null && !currentHolderKeys.has(holderKey))) continue
+      if (peerHasRefAvailability(peer, durabilityRef, refreshEvidence)) {
+        holders.add(holderKey)
+      }
+    }
+
+    if (currentHolderKeys === null) {
+      currentHolderKeys = holders
+    } else {
+      for (const holderKey of currentHolderKeys) {
+        if (!holders.has(holderKey)) currentHolderKeys.delete(holderKey)
+      }
+    }
+
+    if (currentHolderKeys.size === 0) return { failed: true }
+  }
+  return { holderKeys: currentHolderKeys, failed: false }
+}
+
+export async function assessDurableManifest(refs, trust = {}, deps = {}) {
+  const validation = validateDurabilityManifestInput(refs, trust)
+  if (validation.failure) return validation.failure
+
+  const refsByCore = groupDurabilityRefsByCore(validation.canonicalRefs)
   const refreshBudget = { used: 0, deadline: null }
   let holderKeys = null
   try {
@@ -627,50 +707,9 @@ export async function assessDurableManifest(refs, trust = {}, deps = {}) {
       try {
         core = await openDurabilityCore(coreKey, deps)
         if (!core) throw new Error('durability core unavailable')
-        if (typeof core.ready === 'function') await core.ready()
-
-        const iterable = durabilityPeerIterable(core, deps?.getCorePeers)
-        if (!iterable) return failClosedDurabilityAssessment()
-
-        const peers = []
-        for (const peer of iterable) {
-          peers.push(peer)
-          if (peers.length > MAX_DURABILITY_PEERS_PER_CORE) {
-            throw new Error(`peer count exceeds maximum of ${MAX_DURABILITY_PEERS_PER_CORE}`)
-          }
-        }
-        const candidatePeers = peers.filter(peer => {
-          const holderKey = authenticatedPeerKeyHex(peer)
-          return holderKey !== null && (holderKeys === null || holderKeys.has(holderKey))
-        })
-        const refreshEvidence = await refreshPeerBitfieldRanges(
-          candidatePeers,
-          coreRefs,
-          deps,
-          refreshBudget,
-        )
-
-        for (const durabilityRef of coreRefs) {
-          const holders = new Set()
-          for (const peer of peers) {
-            const holderKey = authenticatedPeerKeyHex(peer)
-            if (!holderKey || (holderKeys !== null && !holderKeys.has(holderKey))) continue
-            if (peerHasRefAvailability(peer, durabilityRef, refreshEvidence)) {
-              holders.add(holderKey)
-            }
-          }
-
-          if (holderKeys === null) {
-            holderKeys = holders
-          } else {
-            for (const holderKey of holderKeys) {
-              if (!holders.has(holderKey)) holderKeys.delete(holderKey)
-            }
-          }
-
-          // Returning here still executes the current core's finally block.
-          if (holderKeys.size === 0) return failClosedDurabilityAssessment()
-        }
+        const result = await assessDurabilityForCore(core, coreRefs, holderKeys, deps, refreshBudget)
+        if (result.failed) return failClosedDurabilityAssessment()
+        holderKeys = result.holderKeys
       } finally {
         try { await core?.close?.() } catch { /* session release is best effort */ }
       }
@@ -724,6 +763,34 @@ function summarizeBlobPeerReadiness(core) {
   }
 }
 
+async function flushBlobPrefetchDiscovery(discoveryHandle, core, label) {
+  if (!discoveryHandle || typeof discoveryHandle.flushed !== 'function') return
+  try {
+    const flushed = await Promise.race([
+      discoveryHandle.flushed().then(() => true),
+      delay(BLOB_PREFETCH_DISCOVERY_FLUSH_TIMEOUT_MS).then(() => false)
+    ])
+    console.log('[API] Blob prefetch discovery flush:', label, flushed ? 'ready' : 'timeout', JSON.stringify(summarizeBlobPeerReadiness(core)))
+  } catch (err) {
+    console.log('[API] Blob prefetch discovery flush failed:', label, err?.message || err)
+  }
+}
+
+async function updateBlobPrefetchCore(core, initialPeers, label) {
+  if (typeof core.update !== 'function') return
+  try {
+    const timeoutMs = initialPeers > 0 ? BLOB_PREFETCH_PEER_SYNC_TIMEOUT_MS : BLOB_PREFETCH_CORE_UPDATE_TIMEOUT_MS
+    const updated = await Promise.race([
+      core.update({ wait: true }).then(() => true),
+      delay(timeoutMs).then(() => false)
+    ])
+    console.log('[API] Blob prefetch core update:', label, updated ? 'ready' : 'timeout', JSON.stringify(summarizeBlobPeerReadiness(core)))
+    try { core.core?.replicator?.updateAll?.() } catch { /* best effort */ }
+  } catch (err) {
+    console.log('[API] Blob prefetch core update failed:', label, err?.message || err, JSON.stringify(summarizeBlobPeerReadiness(core)))
+  }
+}
+
 async function waitForBlobPrefetchReadiness(core, discoveryHandle, label) {
   if (!core) return
   const initialPeers = Number(core.peers?.length || 0) || 0
@@ -735,31 +802,43 @@ async function waitForBlobPrefetchReadiness(core, discoveryHandle, label) {
     console.log('[API] Blob prefetch peer-unsynced:', label, JSON.stringify(summarizeBlobPeerReadiness(core)))
   }
 
-  if (discoveryHandle && typeof discoveryHandle.flushed === 'function') {
-    try {
-      const flushed = await Promise.race([
-        discoveryHandle.flushed().then(() => true),
-        delay(BLOB_PREFETCH_DISCOVERY_FLUSH_TIMEOUT_MS).then(() => false)
-      ])
-      console.log('[API] Blob prefetch discovery flush:', label, flushed ? 'ready' : 'timeout', JSON.stringify(summarizeBlobPeerReadiness(core)))
-    } catch (err) {
-      console.log('[API] Blob prefetch discovery flush failed:', label, err?.message || err)
-    }
-  }
-
+  await flushBlobPrefetchDiscovery(discoveryHandle, core, label)
   if (hasBlobPeerRemoteLength(core)) return
-  if (typeof core.update !== 'function') return
 
-  try {
-    const updated = await Promise.race([
-      core.update({ wait: true }).then(() => true),
-      delay(initialPeers > 0 ? BLOB_PREFETCH_PEER_SYNC_TIMEOUT_MS : BLOB_PREFETCH_CORE_UPDATE_TIMEOUT_MS).then(() => false)
-    ])
-    console.log('[API] Blob prefetch core update:', label, updated ? 'ready' : 'timeout', JSON.stringify(summarizeBlobPeerReadiness(core)))
-    try { core.core?.replicator?.updateAll?.() } catch { /* best effort */ }
-  } catch (err) {
-    console.log('[API] Blob prefetch core update failed:', label, err?.message || err, JSON.stringify(summarizeBlobPeerReadiness(core)))
-  }
+  await updateBlobPrefetchCore(core, initialPeers, label)
+}
+
+function calculatePrefetchHeadBlockCount(totalBlocks, totalBytes) {
+  if (!totalBlocks || totalBlocks <= 0) return 0
+  if (!totalBytes || totalBytes <= 0) return Math.min(totalBlocks, 16)
+  const bytesPerBlock = totalBytes / totalBlocks
+  const minHeadBytes = 4 * 1024 * 1024
+  const maxHeadBytes = 32 * 1024 * 1024
+  const adaptiveBytes = Math.round(totalBytes * 0.02)
+  const headTargetBytes = Math.min(maxHeadBytes, Math.max(minHeadBytes, adaptiveBytes))
+  const headBlocks = Math.ceil(headTargetBytes / bytesPerBlock)
+  return Math.max(1, Math.min(totalBlocks, headBlocks))
+}
+
+function calculatePrefetchTailBlockCount(totalBlocks, totalBytes) {
+  if (!totalBlocks || totalBlocks <= 0) return 0
+  if (!totalBytes || totalBytes <= 0) return Math.min(totalBlocks, 16)
+  const bytesPerBlock = totalBytes / totalBlocks
+  const minTailBytes = 2 * 1024 * 1024
+  const maxTailBytes = 16 * 1024 * 1024
+  const adaptiveBytes = Math.round(totalBytes * 0.01)
+  const tailTargetBytes = Math.min(maxTailBytes, Math.max(minTailBytes, adaptiveBytes))
+  const tailBlocks = Math.ceil(tailTargetBytes / bytesPerBlock)
+  return Math.max(1, Math.min(totalBlocks, tailBlocks))
+}
+
+function calculatePrefetchMidBlockCount(totalBlocks, totalBytes) {
+  if (!totalBlocks || totalBlocks <= 0) return 0
+  if (!totalBytes || totalBytes <= 0) return Math.min(totalBlocks, 8)
+  const bytesPerBlock = totalBytes / totalBlocks
+  const targetBytes = 2 * 1024 * 1024
+  const midBlocks = Math.ceil(targetBytes / bytesPerBlock)
+  return Math.max(1, Math.min(totalBlocks, midBlocks))
 }
 
 /**
@@ -771,28 +850,63 @@ async function waitForBlobPrefetchReadiness(core, discoveryHandle, label) {
  * @param {import('./video-stats.js').VideoStatsTracker} [deps.videoStats] - Video stats tracker
  * @returns {Object}
  */
-export function createApi({
+function normalizeVideoId(value) {
+  if (!value || typeof value !== 'string') return value
+  if (value.startsWith('/videos/')) {
+    const match = value.match(/\/videos\/([^./]+)/)
+    if (match?.[1]) return match[1]
+  }
+  const base = value.split('/').pop() || value
+  return base.replace(/\.[^./]+$/, '') || value
+}
+
+function resolveCreateApiOptions(rawOptions = {}) {
+  const options = rawOptions && typeof rawOptions === 'object' ? rawOptions : {}
+  const ctx = options.ctx
+  const permissionlessArchiveNetwork = options.permissionlessArchiveNetwork !== undefined
+    ? options.permissionlessArchiveNetwork
+    : ctx?.permissionlessArchiveNetwork
+  const indexVerificationRuntime = options.indexVerificationRuntime !== undefined
+    ? options.indexVerificationRuntime
+    : (ctx?.indexVerificationRuntime || null)
+  const policyApi = options.policyApi !== undefined ? options.policyApi : null
+  const networkPolicyRuntime = options.networkPolicyRuntime !== undefined
+    ? options.networkPolicyRuntime
+    : (ctx?.networkPolicyRuntime || null)
+  const sourceOffload = options.sourceOffload || {}
+  const loadChannel = options.loadChannel || storageLoadChannel
+  const loadPublicBee = options.loadPublicBee || storageLoadPublicBee
+  const hostKind = options.hostKind || 'device'
+  const getPreviewVideoFromFeed = options.getPreviewVideoFromFeed || (() => null)
+
+  return {
+    ctx,
+    seedingManager: options.seedingManager,
+    videoStats: options.videoStats,
+    operability: options.operability,
+    catalogRegistry: options.catalogRegistry,
+    scopedNetwork: options.scopedNetwork,
+    permissionlessArchiveNetwork,
+    indexVerificationRuntime,
+    policyApi,
+    networkPolicyRuntime,
+    sourceOffload,
+    loadChannel,
+    loadPublicBee,
+    hostKind,
+    getPreviewVideoFromFeed,
+  }
+}
+
+function initCreateApiSubApis({
   ctx,
-  seedingManager,
-  videoStats,
-  operability,
   catalogRegistry,
   scopedNetwork,
-  permissionlessArchiveNetwork = ctx?.permissionlessArchiveNetwork,
-  indexVerificationRuntime = ctx?.indexVerificationRuntime || null,
-  policyApi = null,
-  networkPolicyRuntime = ctx?.networkPolicyRuntime || null,
-  sourceOffload = {},
-  loadChannel = storageLoadChannel,
-  loadPublicBee = storageLoadPublicBee,
-  // 'device' or 'server'. A headless relay/seeder is a server: it has no
-  // battery, thermal envelope, metered link, app lifecycle or playback window.
-  hostKind = 'device',
-  getPreviewVideoFromFeed = () => null,
+  permissionlessArchiveNetwork,
+  seedingManager,
+  operability,
+  policyApi,
 }) {
-  const blobPlayback = createBlobPlaybackService(ctx)
-  const pendingStaticPlaybackAuthorizations = new Map()
-  let companionStreamSequence = 0
   const publisherApi = createPublisherApi({ ctx, catalogRegistry, now: () => Date.now() })
   const mediaGraphApi = createMediaGraphApi({ ctx })
   const scopedNetworkApi = scopedNetwork ? createScopedNetworkApi(scopedNetwork) : {}
@@ -807,11 +921,60 @@ export function createApi({
     seedingManager,
     ...(operability || {})
   })
+  const policyStore = ctx.networkPolicyStore || ctx.metaDb || new Map()
   const localPolicyApi = policyApi || createPolicyApi({
-    store: ctx.networkPolicyStore || ctx.metaDb || new Map(),
+    store: policyStore,
     onPolicyChange: ctx.onNetworkPolicyChange,
   })
 
+  return {
+    publisherApi,
+    mediaGraphApi,
+    scopedNetworkApi,
+    archiveParticipationApi,
+    operabilityApi,
+    localPolicyApi,
+  }
+}
+
+export function createApi(rawOptions = {}) {
+  const {
+    ctx,
+    seedingManager,
+    videoStats,
+    operability,
+    catalogRegistry,
+    scopedNetwork,
+    permissionlessArchiveNetwork,
+    indexVerificationRuntime,
+    policyApi,
+    networkPolicyRuntime,
+    sourceOffload,
+    loadChannel,
+    loadPublicBee,
+    hostKind,
+    getPreviewVideoFromFeed,
+  } = resolveCreateApiOptions(rawOptions)
+
+  const blobPlayback = createBlobPlaybackService(ctx)
+  const pendingStaticPlaybackAuthorizations = new Map()
+  let companionStreamSequence = 0
+  const {
+    publisherApi,
+    mediaGraphApi,
+    scopedNetworkApi,
+    archiveParticipationApi,
+    operabilityApi,
+    localPolicyApi,
+  } = initCreateApiSubApis({
+    ctx,
+    catalogRegistry,
+    scopedNetwork,
+    permissionlessArchiveNetwork,
+    seedingManager,
+    operability,
+    policyApi,
+  })
   async function isMultiWriterChannelKey(channelKey) {
     try {
       const res = await ctx.metaSubspaces.channelKinds.get(channelKey)
@@ -1122,17 +1285,38 @@ export function createApi({
     return context.semanticFinder
   }
 
-  async function buildSearchEnvelope(channelKey, videoId, options = {}) {
-    const normalizeVideoId = (value) => {
-      if (!value || typeof value !== 'string') return value
-      if (value.startsWith('/videos/')) {
-        const match = value.match(/\/videos\/([^.]+)/)
-        if (match?.[1]) return match[1]
-      }
-      const base = value.split('/').pop() || value
-      return base.replace(/\.[^./]+$/, '') || value
-    }
+  function resolveSearchEnvelopeCreatorName(options, video, channelMeta) {
+    return (
+      options.creatorName ||
+      video.creatorName ||
+      video.sourceCreatorName ||
+      video.originalCreatorName ||
+      video.sourceAuthor ||
+      video.author ||
+      channelMeta?.creatorName ||
+      null
+    )
+  }
 
+  function resolveSearchEnvelopeChannelName(video, channelMeta) {
+    return video.channelName || video.channel?.name || channelMeta?.name || null
+  }
+
+  function resolveSearchEnvelopeSubtitles(options, video) {
+    if (options.includeSubtitles === false) return []
+    return video.subtitles ?? video.subtitleText ?? video.transcript ?? video.captions ?? []
+  }
+
+  async function fetchSearchEnvelopeComments(channel, videoId, options) {
+    if (options.includeComments === false || !channel.comments?.listComments) return []
+    try {
+      return await channel.comments.listComments(videoId, { page: 0, limit: 200 })
+    } catch {
+      return []
+    }
+  }
+
+  async function buildSearchEnvelope(channelKey, videoId, options = {}) {
     try {
       const channel = await loadChannelBounded(channelKey, 3000)
       if (!channel) return null
@@ -1145,23 +1329,15 @@ export function createApi({
         channelMeta = typeof channel.getMetadata === 'function' ? await channel.getMetadata() : null
       } catch { /* best effort */ }
 
-      let comments = []
-      if (options.includeComments !== false && channel.comments?.listComments) {
-        try {
-          comments = await channel.comments.listComments(normalizedVideoId, { page: 0, limit: 200 })
-        } catch { /* best effort */ }
-      }
-
-      const subtitles = options.includeSubtitles === false
-        ? []
-        : (video.subtitles ?? video.subtitleText ?? video.transcript ?? video.captions ?? [])
+      const comments = await fetchSearchEnvelopeComments(channel, normalizedVideoId, options)
+      const subtitles = resolveSearchEnvelopeSubtitles(options, video)
 
       return buildMetadataEnvelope(video, {
         videoId: normalizedVideoId,
         channelKey,
         publicBeeKey: options.publicBeeKey || null,
-        creatorName: options.creatorName || video.creatorName || video.sourceCreatorName || video.originalCreatorName || video.sourceAuthor || video.author || channelMeta?.creatorName || null,
-        channelName: video.channelName || video.channel?.name || channelMeta?.name || null,
+        creatorName: resolveSearchEnvelopeCreatorName(options, video, channelMeta),
+        channelName: resolveSearchEnvelopeChannelName(video, channelMeta),
         comments,
         subtitles,
       })
@@ -1330,30 +1506,38 @@ export function createApi({
     await activePrefetchCores.get(prefetchKey)?.cleanup?.()
   }
 
+  function teardownActiveRangeRequestTimersAndListeners(request, cancelled) {
+    try { request.release?.() } catch { /* best effort */ }
+    for (const timer of request.timers || []) clearApiTimeout(timer)
+    request.timers?.clear?.()
+    if (!cancelled) request.ranges?.forEach(range => { try { range?.destroy?.() } catch { /* best effort */ } })
+    if (request.core) {
+      try { request.core.off('download', request.onDownload) } catch { /* best effort */ }
+      try { request.core.off('upload', request.onUpload) } catch { /* best effort */ }
+    }
+    try { request.resolvePlaybackReady?.() } catch { /* best effort */ }
+  }
+
+  function teardownActiveRangeRequest(request, cleanupMonitor) {
+    let cancelled = false
+    try {
+      if (typeof request.cancel === 'function') {
+        request.cancel()
+        cancelled = true
+      }
+    } catch { /* best effort */ }
+    teardownActiveRangeRequestTimersAndListeners(request, cancelled)
+    if (cleanupMonitor) {
+      try { videoStats?.cleanupMonitor?.(request.driveKey, request.videoPath) } catch { /* best effort */ }
+    }
+  }
+
   async function cleanupRangeRequest(prefetchKey, { cleanupMonitor = true } = {}) {
     prefetchQuotaReservations.delete(prefetchKey)
     const request = activeRangeRequests.get(prefetchKey)
     if (request) {
       activeRangeRequests.delete(prefetchKey)
-      let cancelled = false
-      try {
-        if (typeof request.cancel === 'function') {
-          request.cancel()
-          cancelled = true
-        }
-      } catch { /* best effort */ }
-      try { request.release?.() } catch { /* best effort */ }
-      for (const timer of request.timers || []) clearApiTimeout(timer)
-      request.timers?.clear?.()
-      if (!cancelled) request.ranges?.forEach(range => { try { range?.destroy?.() } catch { /* best effort */ } })
-      if (request.core) {
-        try { request.core.off('download', request.onDownload) } catch { /* best effort */ }
-        try { request.core.off('upload', request.onUpload) } catch { /* best effort */ }
-      }
-      try { request.resolvePlaybackReady?.() } catch { /* best effort */ }
-      if (cleanupMonitor) {
-        try { videoStats?.cleanupMonitor?.(request.driveKey, request.videoPath) } catch { /* best effort */ }
-      }
+      teardownActiveRangeRequest(request, cleanupMonitor)
     }
     await cleanupPrefetchCore(prefetchKey)
   }
@@ -1414,138 +1598,218 @@ export function createApi({
     return sampledTotal > 0 ? Math.round((sampledHits / sampledTotal) * totalBlocks) : 0
   }
 
-  async function startOnDemandPlaybackStats(driveKey, videoPath, playbackBlobRef) {
-    if (!videoStats || !ctx?.store || !playbackBlobRef?.blobsCoreKey || !playbackBlobRef?.blobId) return null
-    let coreOwnership = null
+  function createPlaybackStatsTransferTrackers({
+    core,
+    driveKey,
+    videoPath,
+    startBlock,
+    endBlock,
+    totalBlocks,
+    bytesPerBlock,
+    initialBlocks,
+  }) {
+    let downloadedBlocks = 0
+    let downloadedBytesTotal = 0
+    let downloadSpeed = 0
+    let lastSpeedTime = Date.now()
+    let lastSpeedBytes = 0
+    let uploadedBytesTotal = 0
+    let uploadSpeed = 0
+    let lastUploadTime = Date.now()
+    let lastUploadBytes = 0
+    const downloadedIndices = new Set()
 
+    const onDownload = (index, byteLength) => {
+      if (typeof index !== 'number') return
+      if (index < startBlock || index >= endBlock) return
+      if (!downloadedIndices.has(index)) {
+        downloadedIndices.add(index)
+        downloadedBlocks = downloadedIndices.size
+      }
+
+      const chunkBytes =
+        typeof byteLength === 'number' && Number.isFinite(byteLength) && byteLength > 0
+          ? byteLength
+          : bytesPerBlock
+      downloadedBytesTotal += chunkBytes
+      const now = Date.now()
+      const elapsed = (now - lastSpeedTime) / 1000
+      if (elapsed >= 0.5) {
+        const deltaBytes = downloadedBytesTotal - lastSpeedBytes
+        downloadSpeed = elapsed > 0 ? deltaBytes / elapsed : 0
+        lastSpeedBytes = downloadedBytesTotal
+        lastSpeedTime = now
+      }
+
+      const totalDownloaded = initialBlocks + downloadedBlocks
+      const isComplete = totalBlocks > 0 && totalDownloaded >= totalBlocks
+      videoStats.updateStats(driveKey, videoPath, {
+        status: isComplete ? 'complete' : 'downloading',
+        downloadedBlocks,
+        initialBlocks,
+        peerCount: describeCorePeerDetails(core).peerCount,
+      })
+      videoStats.emitStats(driveKey, videoPath, isComplete)
+    }
+
+    const onUpload = (index, byteLength) => {
+      if (typeof index !== 'number') return
+      if (index < startBlock || index >= endBlock) return
+      const chunkBytes =
+        typeof byteLength === 'number' && Number.isFinite(byteLength) && byteLength > 0
+          ? byteLength
+          : bytesPerBlock
+      uploadedBytesTotal += chunkBytes
+      const now = Date.now()
+      const elapsed = (now - lastUploadTime) / 1000
+      if (elapsed >= 0.5) {
+        const deltaBytes = uploadedBytesTotal - lastUploadBytes
+        uploadSpeed = elapsed > 0 ? deltaBytes / elapsed : 0
+        lastUploadBytes = uploadedBytesTotal
+        lastUploadTime = now
+      }
+
+      videoStats.updateStats(driveKey, videoPath, {
+        peerCount: describeCorePeerDetails(core).peerCount,
+      })
+      videoStats.emitStats(driveKey, videoPath)
+    }
+
+    const monitor = {
+      downloadSpeed: () => (Date.now() - lastSpeedTime > 2000 ? 0 : downloadSpeed),
+      uploadSpeed: () => (Date.now() - lastUploadTime > 2000 ? 0 : uploadSpeed),
+    }
+
+    return { onDownload, onUpload, monitor }
+  }
+
+  function resolveOnDemandPlaybackBlobRef(playbackBlobRef) {
+    if (!playbackBlobRef?.blobsCoreKey || !playbackBlobRef?.blobId) return null
     const blobsCoreKey = normalizeBlobsCoreKey(playbackBlobRef.blobsCoreKey)
     const blob = normalizeBlobRefInput(playbackBlobRef.blobId) || parseBlobRef(playbackBlobRef)?.blob
     if (!blobsCoreKey || !blob) return null
+    return { blobsCoreKey, blob }
+  }
+
+  function readActiveRangePlaybackStats(driveKey, videoPath) {
+    if (!activeRangeRequests.has(encodeIndexKey(driveKey || '', videoPath || ''))) return undefined
+    return typeof videoStats.getStats === 'function' ? videoStats.getStats(driveKey, videoPath) : null
+  }
+
+  async function openReadyManagedCoreByKey(blobsCoreKey) {
+    assertApiContextRunning(ctx)
+    const core = ctx.store.get({ key: b4a.from(blobsCoreKey, 'hex') })
+    const ownership = ownManagedApiResource(core, 'close')
+    await core.ready()
+    assertApiContextRunning(ctx)
+    return { core, ownership }
+  }
+
+  function measureOnDemandPlaybackBlob(blob, playbackBlobRef, initialBlocks, peerCount) {
+    const startBlock = blob.blockOffset
+    const totalBlocks = blob.blockLength
+    const totalBytes = blob.byteLength || playbackBlobRef.byteLength || 0
+    return {
+      startBlock,
+      totalBlocks,
+      endBlock: startBlock + totalBlocks,
+      totalBytes,
+      initialBlocks,
+      wasCached: totalBlocks > 0 && initialBlocks >= totalBlocks,
+      bytesPerBlock: totalBlocks > 0 ? totalBytes / totalBlocks : 0,
+      peerCount,
+    }
+  }
+
+  function detachOnDemandPlaybackStatsListeners(core, onDownload, onUpload, statsKey, coreOwnership) {
+    try { core.off('download', onDownload) } catch { /* best effort */ }
+    try { core.off('upload', onUpload) } catch { /* best effort */ }
+    const active = activeOnDemandPlaybackStats.get(statsKey)
+    if (active?.core === core) activeOnDemandPlaybackStats.delete(statsKey)
+    void coreOwnership?.cleanup?.()
+  }
+
+  function attachOnDemandPlaybackStats({
+    statsKey,
+    driveKey,
+    videoPath,
+    core,
+    coreOwnership,
+    snapshot,
+  }) {
+    const { onDownload, onUpload, monitor } = createPlaybackStatsTransferTrackers({
+      core,
+      driveKey,
+      videoPath,
+      startBlock: snapshot.startBlock,
+      endBlock: snapshot.endBlock,
+      totalBlocks: snapshot.totalBlocks,
+      bytesPerBlock: snapshot.bytesPerBlock,
+      initialBlocks: snapshot.initialBlocks,
+    })
+
+    videoStats.updateStats(driveKey, videoPath, {
+      status: snapshot.wasCached ? 'complete' : 'downloading',
+      startTime: Date.now(),
+      totalBlocks: snapshot.totalBlocks,
+      totalBytes: snapshot.totalBytes,
+      initialBlocks: snapshot.initialBlocks,
+      downloadedBlocks: 0,
+      peerCount: snapshot.peerCount,
+    })
+
+    core.on('download', onDownload)
+    core.on('upload', onUpload)
+    const cleanupMonitor = () => videoStats.cleanupMonitor(driveKey, videoPath)
+    activeOnDemandPlaybackStats.set(statsKey, {
+      core,
+      ownership: coreOwnership,
+      cleanupMonitor,
+    })
+    videoStats.registerMonitor(driveKey, videoPath, monitor, () => {
+      detachOnDemandPlaybackStatsListeners(core, onDownload, onUpload, statsKey, coreOwnership)
+    })
+    videoStats.emitStats(driveKey, videoPath, true)
+    return videoStats.getStats(driveKey, videoPath)
+  }
+
+  async function startOnDemandPlaybackStats(driveKey, videoPath, playbackBlobRef) {
+    if (!videoStats || !ctx?.store) return null
+    const resolved = resolveOnDemandPlaybackBlobRef(playbackBlobRef)
+    if (!resolved) return null
+
+    const existing = readActiveRangePlaybackStats(driveKey, videoPath)
+    if (existing !== undefined) return existing
 
     const statsKey = getStatsKey(driveKey, videoPath)
-    if (activeRangeRequests.has(encodeIndexKey(driveKey || '', videoPath || ''))) {
-      return typeof videoStats.getStats === 'function' ? videoStats.getStats(driveKey, videoPath) : null
-    }
+    let coreOwnership = null
 
     try {
       await cleanupOnDemandPlaybackStats(statsKey)
       try { videoStats.cleanupMonitor(driveKey, videoPath) } catch { /* best effort */ }
 
-      assertApiContextRunning(ctx)
-      const keyBuf = b4a.from(blobsCoreKey, 'hex')
-      const core = ctx.store.get({ key: keyBuf })
-      coreOwnership = ownManagedApiResource(core, 'close')
-      await core.ready()
-      assertApiContextRunning(ctx)
-
-      const startBlock = blob.blockOffset
-      const totalBlocks = blob.blockLength
-      const endBlock = startBlock + totalBlocks
-      const totalBytes = blob.byteLength || playbackBlobRef.byteLength || 0
-      const initialBlocks = await countInitialBlobBlocks(core, startBlock, endBlock, totalBlocks)
-      const wasCached = totalBlocks > 0 && initialBlocks >= totalBlocks
-      const bytesPerBlock = totalBlocks > 0 ? totalBytes / totalBlocks : 0
-      const peerDetails = describeCorePeerDetails(core)
-
-      let downloadedBlocks = 0
-      let downloadedBytesTotal = 0
-      let downloadSpeed = 0
-      let lastSpeedTime = Date.now()
-      let lastSpeedBytes = 0
-      let uploadedBytesTotal = 0
-      let uploadSpeed = 0
-      let lastUploadTime = Date.now()
-      let lastUploadBytes = 0
-      const downloadedIndices = new Set()
-
-      const onDownload = (index, byteLength) => {
-        if (typeof index !== 'number') return
-        if (index < startBlock || index >= endBlock) return
-        if (!downloadedIndices.has(index)) {
-          downloadedIndices.add(index)
-          downloadedBlocks = downloadedIndices.size
-        }
-
-        const chunkBytes =
-          typeof byteLength === 'number' && Number.isFinite(byteLength) && byteLength > 0
-            ? byteLength
-            : bytesPerBlock
-        downloadedBytesTotal += chunkBytes
-        const now = Date.now()
-        const elapsed = (now - lastSpeedTime) / 1000
-        if (elapsed >= 0.5) {
-          const deltaBytes = downloadedBytesTotal - lastSpeedBytes
-          downloadSpeed = elapsed > 0 ? deltaBytes / elapsed : 0
-          lastSpeedBytes = downloadedBytesTotal
-          lastSpeedTime = now
-        }
-
-        const totalDownloaded = initialBlocks + downloadedBlocks
-        const isComplete = totalBlocks > 0 && totalDownloaded >= totalBlocks
-        videoStats.updateStats(driveKey, videoPath, {
-          status: isComplete ? 'complete' : 'downloading',
-          downloadedBlocks,
-          initialBlocks,
-          peerCount: describeCorePeerDetails(core).peerCount,
-        })
-        videoStats.emitStats(driveKey, videoPath, isComplete)
-      }
-
-      const onUpload = (index, byteLength) => {
-        if (typeof index !== 'number') return
-        if (index < startBlock || index >= endBlock) return
-        const chunkBytes =
-          typeof byteLength === 'number' && Number.isFinite(byteLength) && byteLength > 0
-            ? byteLength
-            : bytesPerBlock
-        uploadedBytesTotal += chunkBytes
-        const now = Date.now()
-        const elapsed = (now - lastUploadTime) / 1000
-        if (elapsed >= 0.5) {
-          const deltaBytes = uploadedBytesTotal - lastUploadBytes
-          uploadSpeed = elapsed > 0 ? deltaBytes / elapsed : 0
-          lastUploadBytes = uploadedBytesTotal
-          lastUploadTime = now
-        }
-
-        videoStats.updateStats(driveKey, videoPath, {
-          peerCount: describeCorePeerDetails(core).peerCount,
-        })
-        videoStats.emitStats(driveKey, videoPath)
-      }
-
-      videoStats.updateStats(driveKey, videoPath, {
-        status: wasCached ? 'complete' : 'downloading',
-        startTime: Date.now(),
-        totalBlocks,
-        totalBytes,
+      const opened = await openReadyManagedCoreByKey(resolved.blobsCoreKey)
+      coreOwnership = opened.ownership
+      const initialBlocks = await countInitialBlobBlocks(
+        opened.core,
+        resolved.blob.blockOffset,
+        resolved.blob.blockOffset + resolved.blob.blockLength,
+        resolved.blob.blockLength,
+      )
+      const snapshot = measureOnDemandPlaybackBlob(
+        resolved.blob,
+        playbackBlobRef,
         initialBlocks,
-        downloadedBlocks: 0,
-        peerCount: peerDetails.peerCount,
+        describeCorePeerDetails(opened.core).peerCount,
+      )
+      return attachOnDemandPlaybackStats({
+        statsKey,
+        driveKey,
+        videoPath,
+        core: opened.core,
+        coreOwnership,
+        snapshot,
       })
-
-      const monitor = {
-        downloadSpeed: () => (Date.now() - lastSpeedTime > 2000 ? 0 : downloadSpeed),
-        uploadSpeed: () => (Date.now() - lastUploadTime > 2000 ? 0 : uploadSpeed),
-      }
-      core.on('download', onDownload)
-      core.on('upload', onUpload)
-      const cleanupMonitor = () => videoStats.cleanupMonitor(driveKey, videoPath)
-      activeOnDemandPlaybackStats.set(statsKey, {
-        core,
-        ownership: coreOwnership,
-        cleanupMonitor,
-      })
-      videoStats.registerMonitor(driveKey, videoPath, monitor, () => {
-        try { core.off('download', onDownload) } catch { /* best effort */ }
-        try { core.off('upload', onUpload) } catch { /* best effort */ }
-        const active = activeOnDemandPlaybackStats.get(statsKey)
-        if (active?.core === core) activeOnDemandPlaybackStats.delete(statsKey)
-        void coreOwnership?.cleanup?.()
-      })
-      videoStats.emitStats(driveKey, videoPath, true)
-
-      return videoStats.getStats(driveKey, videoPath)
     } catch (err) {
       console.log('[API] on-demand playback stats unavailable:', err?.message || err)
       await cleanupOnDemandPlaybackStats(statsKey)
@@ -1567,8 +1831,10 @@ export function createApi({
   // debounce it so rapid open/close and pause/resume cancel it before it runs,
   // and (b) protect the most-recently-played video so seeking/replaying it never
   // hits an evicted range.
-  const QUOTA_SWEEP_AFTER_PLAYBACK_MS =
-    Number(globalThis?.process?.env?.PEARTUBE_QUOTA_SWEEP_DELAY_MS) || 1500
+  function getQuotaSweepDelayMs() {
+    return Number(globalThis?.process?.env?.PEARTUBE_QUOTA_SWEEP_DELAY_MS) || 1500
+  }
+  const QUOTA_SWEEP_AFTER_PLAYBACK_MS = getQuotaSweepDelayMs()
   let quotaSweepTimer = null
   let lastPlayedSeedKey = null
 
@@ -1695,6 +1961,164 @@ export function createApi({
     return []
   }
 
+  function thumbnailMetaFromCacheMatch(match) {
+    if (!match || typeof match !== 'object') return null
+    if (match.thumbnailBlobId && match.thumbnailBlobsCoreKey) {
+      return {
+        thumbnailBlobId: match.thumbnailBlobId,
+        thumbnailBlobsCoreKey: match.thumbnailBlobsCoreKey,
+        thumbnailMimeType: match.thumbnailMimeType,
+        thumbnail: match.thumbnail,
+      }
+    }
+    if (typeof match.thumbnail === 'string' && match.thumbnail.length > 0) {
+      return { thumbnail: match.thumbnail }
+    }
+    return null
+  }
+
+  function findCachedThumbnailMeta(driveKey, targetVideoId) {
+    const cached = listVideosCache.get(driveKey)
+    const items = Array.isArray(cached?.value) ? cached.value : []
+    if (!items.length) return null
+    const match = items.find((v) => {
+      if (!v || typeof v !== 'object') return false
+      const cachedId = normalizeVideoId(v.id || v.videoId || v.path)
+      return cachedId === targetVideoId
+    })
+    return thumbnailMetaFromCacheMatch(match)
+  }
+
+  function thumbnailMetaFromRefs(refs) {
+    if (!(refs?.thumbnailBlobId && refs?.thumbnailBlobsCoreKey)) return null
+    return {
+      thumbnailBlobId: refs.thumbnailBlobId,
+      thumbnailBlobsCoreKey: refs.thumbnailBlobsCoreKey,
+      thumbnailMimeType: refs.thumbnailMimeType || null,
+    }
+  }
+
+  function isDirectThumbnailUrlMeta(meta) {
+    return !meta.thumbnailBlobId &&
+      !meta.thumbnailBlobsCoreKey &&
+      typeof meta.thumbnail === 'string' &&
+      meta.thumbnail.length > 0
+  }
+
+  async function hasThumbnailBlobBlocks(blobsCore, blobStart, blobEnd) {
+    try { return Boolean(await blobsCore.has(blobStart, blobEnd)) } catch { return false }
+  }
+
+  async function downloadThumbnailBlobBlocks(blobsCore, blobStart, blobEnd) {
+    let range = null
+    try {
+      range = blobsCore.download({ start: blobStart, end: blobEnd, linear: true })
+      await Promise.race([
+        typeof range?.done === 'function' ? range.done() : Promise.resolve(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail download timeout')), 3000))
+      ])
+    } catch { /* best effort */ } finally {
+      try { range?.destroy?.() } catch { /* best effort */ }
+    }
+  }
+
+  async function ensureThumbnailBlobLocal(blobsCore, blob, ensureLocal) {
+    const blobStart = blob.blockOffset
+    const blobEnd = blob.blockOffset + Math.max(1, blob.blockLength || 1)
+
+    let thumbnailLocal = await hasThumbnailBlobBlocks(blobsCore, blobStart, blobEnd)
+    assertApiContextRunning(ctx)
+    if (thumbnailLocal) return true
+
+    if (ensureLocal) {
+      await downloadThumbnailBlobBlocks(blobsCore, blobStart, blobEnd)
+      assertApiContextRunning(ctx)
+      return await hasThumbnailBlobBlocks(blobsCore, blobStart, blobEnd)
+    }
+
+    try {
+      await Promise.race([
+        blobsCore.update({ wait: true }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail core update timeout')), 1500))
+      ])
+    } catch { /* best effort */ }
+    assertApiContextRunning(ctx)
+    return true
+  }
+
+  function buildThumbnailBlobUrl(blobsCore, blob, meta) {
+    const thumbnailMimeType = typeof meta.thumbnailMimeType === 'string' && meta.thumbnailMimeType.length > 0
+      ? meta.thumbnailMimeType
+      : 'image/jpeg'
+
+    const baseUrl = ctx.blobServer.getLink(blobsCore.key, {
+      blob,
+      type: thumbnailMimeType,
+      host: ctx.blobServerHost || '127.0.0.1',
+      port: ctx.blobServer?.port || ctx.blobServerPort
+    })
+    const [blobOrigin, blobQuery = ''] = baseUrl.split('?')
+    const thumbnailPathUrl = `${blobOrigin.replace(/\/$/, '')}/__peartube_thumbnail__.jpg${blobQuery ? `?${blobQuery}` : ''}`
+    return `${thumbnailPathUrl}${thumbnailPathUrl.includes('?') ? '&' : '?'}pt_thumbnail=1`
+  }
+
+  async function openThumbnailBlobsCore(meta) {
+    const keyBuffer = b4a.from(meta.thumbnailBlobsCoreKey, 'hex')
+    let blobsCore
+    let blobsCoreOwnership = null
+    try {
+      assertApiContextRunning(ctx)
+      blobsCore = ctx.store.get(keyBuffer)
+      blobsCoreOwnership = ownApiResource(
+        ctx,
+        `thumbnail blob core ${meta.thumbnailBlobsCoreKey.slice(0, 16)}`,
+        blobsCore,
+        'close',
+        2000
+      )
+      await blobsCore.ready()
+      assertApiContextRunning(ctx)
+    } catch (storeErr) {
+      await blobsCoreOwnership?.cleanup?.()
+      console.error('[API] GET_VIDEO_THUMBNAIL: store.get/ready failed:', storeErr.message)
+      throw storeErr
+    }
+
+    if (ctx.swarm && blobsCore.discoveryKey) {
+      try {
+        retainSwarmDiscovery(ctx, blobsCore.discoveryKey, {
+          label: `thumbnail:${meta.thumbnailBlobsCoreKey.slice(0, 16)}`
+        })
+      } catch { /* best effort */ }
+    }
+
+    return blobsCore
+  }
+
+  function resolveThumbnailBlob(meta) {
+    return normalizeBlobRefInput(meta.thumbnailBlobId) || parseBlobRef({
+      blobsCoreKey: meta.thumbnailBlobsCoreKey,
+      blobId: meta.thumbnailBlobId,
+    })?.blob
+  }
+
+  async function loadThumbnailBlobUrl(meta, ensureLocal) {
+    const blobsCore = await openThumbnailBlobsCore(meta)
+    const blob = resolveThumbnailBlob(meta)
+    if (!blob) return { exists: false, error: 'Invalid thumbnail blob ID format' }
+    const isLocal = await ensureThumbnailBlobLocal(blobsCore, blob, ensureLocal)
+    if (!isLocal) return { exists: false }
+    return { url: buildThumbnailBlobUrl(blobsCore, blob, meta), exists: true }
+  }
+
+  async function resolveVideoThumbnailMeta(api, driveKey, videoId, refs) {
+    const targetVideoId = normalizeVideoId(videoId)
+    let meta = thumbnailMetaFromRefs(refs)
+    if (!meta) meta = findCachedThumbnailMeta(driveKey, targetVideoId)
+    if (!meta) meta = await api.getVideoData(driveKey, targetVideoId)
+    return meta
+  }
+
   function getPeerShortKey(peer) {
     try {
       const key = peer?.remotePublicKey || peer?.publicKey || peer?.key || peer?.id || peer?.stream?.remotePublicKey
@@ -1737,49 +2161,56 @@ export function createApi({
     }
   }
 
+  function readPeerBitfieldDiagnostics(peer, start, end) {
+    let remoteContiguousLength = null
+    let firstUnset = null
+    let hasStart = null
+    let hasStartupRange = false
+    try {
+      remoteContiguousLength = Number(peer?.remoteContiguousLength)
+      if (!Number.isFinite(remoteContiguousLength)) remoteContiguousLength = null
+    } catch { /* best effort */ }
+    try {
+      if (typeof peer?.remoteBitfield?.firstUnset === 'function') {
+        firstUnset = peer.remoteBitfield.firstUnset(start)
+      }
+    } catch { /* best effort */ }
+    try {
+      if (typeof peer?.remoteBitfield?.get === 'function') {
+        hasStart = peer.remoteBitfield.get(start) === true
+      }
+    } catch { /* best effort */ }
+    try {
+      hasStartupRange = peerHasFullRange(peer, start, end)
+    } catch { /* best effort */ }
+    return { remoteContiguousLength, firstUnset, hasStart, hasStartupRange }
+  }
+
+  function describeSinglePeerAvailability(peer, start, end) {
+    const diag = readPeerBitfieldDiagnostics(peer, start, end)
+    return {
+      key: getPeerShortKey(peer),
+      remoteOpened: peer?.remoteOpened === true,
+      remoteSynced: peer?.remoteSynced === true,
+      remoteLength: Number(peer?.remoteLength || 0),
+      remoteContiguousLength: diag.remoteContiguousLength,
+      firstUnset: diag.firstUnset,
+      hasStart: diag.hasStart,
+      hasStartupRange: diag.hasStartupRange,
+      remoteUploading: peer?.remoteUploading === true,
+      remoteDownloading: peer?.remoteDownloading === true,
+      remoteCanUpgrade: peer?.remoteCanUpgrade === true,
+      canUpgrade: peer?.canUpgrade === true,
+      inflight: Number(peer?.inflight || 0),
+      syncsProcessing: Number(peer?.syncsProcessing || 0),
+      lengthAcked: Number(peer?.lengthAcked || 0),
+      stats: getWireStats(peer?.stats)
+    }
+  }
+
   function describeBlobPeerAvailability(core, start, end) {
     const peerList = getCorePeerObjects(core)
-    return peerList.slice(0, 4).map((peer) => {
-      let remoteContiguousLength = null
-      let firstUnset = null
-      let hasStart = null
-      let hasStartupRange = false
-      try {
-        remoteContiguousLength = Number(peer?.remoteContiguousLength)
-        if (!Number.isFinite(remoteContiguousLength)) remoteContiguousLength = null
-      } catch { /* best effort */ }
-      try {
-        if (typeof peer?.remoteBitfield?.firstUnset === 'function') {
-          firstUnset = peer.remoteBitfield.firstUnset(start)
-        }
-      } catch { /* best effort */ }
-      try {
-        if (typeof peer?.remoteBitfield?.get === 'function') {
-          hasStart = peer.remoteBitfield.get(start) === true
-        }
-      } catch { /* best effort */ }
-      try {
-        hasStartupRange = peerHasFullRange(peer, start, end)
-      } catch { /* best effort */ }
-      return {
-        key: getPeerShortKey(peer),
-        remoteOpened: peer?.remoteOpened === true,
-        remoteSynced: peer?.remoteSynced === true,
-        remoteLength: Number(peer?.remoteLength || 0),
-        remoteContiguousLength,
-        firstUnset,
-        hasStart,
-        hasStartupRange,
-        remoteUploading: peer?.remoteUploading === true,
-        remoteDownloading: peer?.remoteDownloading === true,
-        remoteCanUpgrade: peer?.remoteCanUpgrade === true,
-        canUpgrade: peer?.canUpgrade === true,
-        inflight: Number(peer?.inflight || 0),
-        syncsProcessing: Number(peer?.syncsProcessing || 0),
-        lengthAcked: Number(peer?.lengthAcked || 0),
-        stats: getWireStats(peer?.stats)
-      }
-    })
+    return peerList.slice(0, 4).map((peer) => describeSinglePeerAvailability(peer, start, end))
   }
 
   function logBlobDownloadDiagnostics(label, core, start, end) {
@@ -1879,7 +2310,7 @@ export function createApi({
     return error
   }
 
-  async function resolveImmutableStaticPlayback(meta, requestedMimeType) {
+  async function validateImmutableStaticPublication(meta) {
     const publication = meta?.immutablePublication
     if (publication == null) return null
     if (!publication || typeof publication !== 'object') throw immutablePublicationError('metadata is malformed')
@@ -1906,6 +2337,43 @@ export function createApi({
     if (publication.assetId !== coreRef.assetId || publication.coreKey !== coreRef.key) {
       throw immutablePublicationError('rendition core identity mismatch')
     }
+    return { publication, manifest, rendition, coreRef }
+  }
+
+  function createScopedAssetPlaybackInstance({
+    coreRef,
+    mimeType,
+    authorizationKey,
+    release,
+    scopedNetwork,
+    blobPlayback,
+    ctx,
+  }) {
+    if (ctx?.staticAssetPlaybackEntries?.has(coreRef.assetId)) {
+      return blobPlayback.resolveStaticAssetUrl({
+        coreRef,
+        mimeType,
+        authorizationKey,
+        release,
+      })
+    }
+    const session = scopedNetwork.getActiveAssetSession({ assetId: coreRef.assetId })
+    return createStaticAssetPlayback({
+      coreRef,
+      session,
+      transport: scopedNetwork,
+      playbackService: blobPlayback,
+      mimeType,
+      authorizationKey,
+      release,
+    })
+  }
+
+  async function resolveImmutableStaticPlayback(meta, requestedMimeType) {
+    const validated = await validateImmutableStaticPublication(meta)
+    if (!validated) return null
+    const { publication, manifest, rendition, coreRef } = validated
+
     const mimeType = rendition.format || meta?.mimeType || requestedMimeType || 'video/mp4'
     const authorizationKey = `${publication.publicationId}:${rendition.renditionId}`
     if (blobPlayback.hasStaticAssetAuthorization(coreRef.assetId, authorizationKey)) {
@@ -1936,26 +2404,15 @@ export function createApi({
       let registered = false
       try {
         const release = () => scopedNetwork.releaseAuthorizedRendition(releaseRequest)
-        let playback
-        if (ctx?.staticAssetPlaybackEntries?.has(coreRef.assetId)) {
-          playback = blobPlayback.resolveStaticAssetUrl({
-            coreRef,
-            mimeType,
-            authorizationKey,
-            release,
-          })
-        } else {
-          const session = scopedNetwork.getActiveAssetSession({ assetId: coreRef.assetId })
-          playback = createStaticAssetPlayback({
-            coreRef,
-            session,
-            transport: scopedNetwork,
-            playbackService: blobPlayback,
-            mimeType,
-            authorizationKey,
-            release,
-          })
-        }
+        const playback = createScopedAssetPlaybackInstance({
+          coreRef,
+          mimeType,
+          authorizationKey,
+          release,
+          scopedNetwork,
+          blobPlayback,
+          ctx,
+        })
         registered = true
         return playback
       } finally {
@@ -1972,15 +2429,26 @@ export function createApi({
     }
   }
 
-  async function resolveVerifiedCandidateStream(candidate, { signal = null } = {}) {
-    assertApiContextRunning(ctx)
+  function validateVerifiedCandidateFields(candidate, manifest, coreRef) {
+    const expectedAsset = candidate.asset || {}
+    for (const [field, expected] of [
+      ['assetId', coreRef.assetId],
+      ['coreKey', coreRef.key],
+      ['treeHash', coreRef.treeHash],
+      ['blockLength', coreRef.length],
+      ['blockSize', coreRef.blockSize],
+      ['byteLength', coreRef.byteLength],
+    ]) {
+      if (expectedAsset[field] !== expected) {
+        throw immutablePublicationError(`verified candidate ${field} mismatch`)
+      }
+    }
+  }
+
+  function validateVerifiedCandidateStructure(candidate, signal) {
     if (!candidate || typeof candidate !== 'object' || candidate.verification?.state !== 'source-verified') {
       throw immutablePublicationError('verified candidate is invalid')
     }
-    // The source verifier already checked this device-signed manifest against
-    // the publisher catalog's current writer authorization. The generic
-    // verifier is root-signer-only and rejects valid catalog writers, so the
-    // verifier-only attachment is the trust boundary here.
     const manifest = verifiedCandidateManifest(candidate)
     if (!manifest) throw immutablePublicationError('verified candidate manifest is unavailable')
     if (signal?.aborted) {
@@ -1996,19 +2464,25 @@ export function createApi({
     const rendition = manifest.body.renditions.find(value => value.renditionId === renditionId)
     if (!rendition) throw immutablePublicationError('verified candidate rendition identity mismatch')
     const coreRef = normalizeAssetCoreRefV2(rendition.core)
-    const expectedAsset = candidate.asset || {}
-    for (const [field, expected] of [
-      ['assetId', coreRef.assetId],
-      ['coreKey', coreRef.key],
-      ['treeHash', coreRef.treeHash],
-      ['blockLength', coreRef.length],
-      ['blockSize', coreRef.blockSize],
-      ['byteLength', coreRef.byteLength],
-    ]) {
-      if (expectedAsset[field] !== expected) {
-        throw immutablePublicationError(`verified candidate ${field} mismatch`)
-      }
+    validateVerifiedCandidateFields(candidate, manifest, coreRef)
+    return { manifest, rendition, coreRef, publicationId, renditionId }
+  }
+
+  function resolveCandidateStreamScheduler(ctx, scopedNetwork, coreRef) {
+    if (ctx?.staticAssetPlaybackEntries?.has(coreRef.assetId)) {
+      return ctx.staticAssetPlaybackEntries.get(coreRef.assetId).scheduler
     }
+    return createMultiPeerScheduler({
+      coreRef,
+      session: scopedNetwork.getActiveAssetSession({ assetId: coreRef.assetId }),
+      transport: scopedNetwork,
+    })
+  }
+
+  async function resolveVerifiedCandidateStream(candidate, { signal = null } = {}) {
+    assertApiContextRunning(ctx)
+    const { manifest, rendition, coreRef, publicationId, renditionId } = validateVerifiedCandidateStructure(candidate, signal)
+
     if (typeof scopedNetwork?.retainAuthorizedRendition !== 'function' ||
         typeof scopedNetwork?.releaseAuthorizedRendition !== 'function' ||
         typeof scopedNetwork?.getActiveAssetSession !== 'function') {
@@ -2039,16 +2513,7 @@ export function createApi({
         throw error
       }
       const release = () => scopedNetwork.releaseAuthorizedRendition(releaseRequest)
-      let scheduler
-      if (ctx?.staticAssetPlaybackEntries?.has(coreRef.assetId)) {
-        scheduler = ctx.staticAssetPlaybackEntries.get(coreRef.assetId).scheduler
-      } else {
-        scheduler = createMultiPeerScheduler({
-          coreRef,
-          session: scopedNetwork.getActiveAssetSession({ assetId: coreRef.assetId }),
-          transport: scopedNetwork,
-        })
-      }
+      const scheduler = resolveCandidateStreamScheduler(ctx, scopedNetwork, coreRef)
       const asset = blobPlayback.resolveStaticAssetStream({
         coreRef,
         scheduler,
@@ -2138,18 +2603,21 @@ export function createApi({
     return intents
   }
   const SOURCE_OFFLOAD_STATE_KEY = 'archive:source-offload-state:v1'
-  const sourceOffloadRepository = sourceOffload.repository || (
-    typeof ctx?.metaDb?.get === 'function' && typeof ctx?.metaDb?.put === 'function'
-      ? {
-          async load() {
-            return (await ctx.metaDb.get(SOURCE_OFFLOAD_STATE_KEY))?.value || null
-          },
-          async save(state) {
-            await ctx.metaDb.put(SOURCE_OFFLOAD_STATE_KEY, state)
-          },
-        }
-      : null
-  )
+  function initSourceOffloadRepository(ctx, sourceOffload) {
+    if (sourceOffload?.repository) return sourceOffload.repository
+    if (typeof ctx?.metaDb?.get !== 'function' || typeof ctx?.metaDb?.put !== 'function') {
+      return null
+    }
+    return {
+      async load() {
+        return (await ctx.metaDb.get(SOURCE_OFFLOAD_STATE_KEY))?.value || null
+      },
+      async save(state) {
+        await ctx.metaDb.put(SOURCE_OFFLOAD_STATE_KEY, state)
+      },
+    }
+  }
+  const sourceOffloadRepository = initSourceOffloadRepository(ctx, sourceOffload)
 
   function exactSourceLocators(manifest) {
     const renditions = (manifest?.body?.renditions || []).filter(rendition => rendition?.purpose === 'original')
@@ -2211,22 +2679,30 @@ export function createApi({
     return key ? b4a.toString(b4a.from(key), 'hex') : null
   }
 
-  function sourceIsActivelyPlaying(locators) {
-    const keys = new Set(locators.map(locator => locator.coreKey))
-    if (typeof sourceOffload.isPlaybackActive === 'function' &&
-        sourceOffload.isPlaybackActive({ locators }) === true) return true
-    for (const active of activeOnDemandPlaybackStats.values()) {
-      const key = active?.core?.key ? b4a.toString(b4a.from(active.core.key), 'hex') : null
-      if (key && keys.has(key)) return true
+  function hasMatchingActiveCoreKey(entries, keys) {
+    for (const active of entries) {
+      const rawKey = active?.core?.key
+      if (!rawKey) continue
+      const key = b4a.toString(b4a.from(rawKey), 'hex')
+      if (keys.has(key)) return true
     }
-    for (const active of activePrefetchCores.values()) {
-      const key = active?.core?.key ? b4a.toString(b4a.from(active.core.key), 'hex') : null
-      if (key && keys.has(key)) return true
-    }
+    return false
+  }
+
+  function hasSeedingProtectedBlobCores(seedingManager, keys) {
     for (const key of keys) {
       if (Number(seedingManager?.protectedBlobCores?.get?.(key) || 0) > 0) return true
     }
     return false
+  }
+
+  function sourceIsActivelyPlaying(locators) {
+    const keys = new Set(locators.map(locator => locator.coreKey))
+    if (typeof sourceOffload.isPlaybackActive === 'function' &&
+        sourceOffload.isPlaybackActive({ locators }) === true) return true
+    if (hasMatchingActiveCoreKey(activeOnDemandPlaybackStats.values(), keys)) return true
+    if (hasMatchingActiveCoreKey(activePrefetchCores.values(), keys)) return true
+    return hasSeedingProtectedBlobCores(seedingManager, keys)
   }
 
   function sourceIsManuallyPinned(locators) {
@@ -2329,6 +2805,23 @@ export function createApi({
     }
   }
 
+  function validateSourceDeletionPreconditions(authorize, expectedLocators, locators) {
+    if (typeof authorize !== 'function') return { success: false, reason: 'locked-revalidation-required' }
+    if (expectedLocators && !sameSourceLocators(expectedLocators, locators)) {
+      return authorize({ refusalReason: 'evidence-changed' })
+    }
+    if (sourceIsManuallyPinned(locators)) return authorize({ refusalReason: 'source-pinned' })
+    return null
+  }
+
+  async function executeCorestoreGarbageCollection(store) {
+    const garbage = await collectCorestoreGarbage(store, {
+      label: 'confirmed source offload',
+      log: console.warn,
+    })
+    if (garbage.error) throw new Error(`source garbage collection failed: ${garbage.error}`)
+  }
+
   async function deleteConfirmedPublicationSource(request, sourceMutationLocked = false, expectedLocators = null) {
     const { publicationId, authorize } = request
     const { manifest, locators } = await resolveOwnedPublication(publicationId)
@@ -2338,11 +2831,8 @@ export function createApi({
         () => deleteConfirmedPublicationSource(request, true, locators)
       )
     }
-    if (typeof authorize !== 'function') return { success: false, reason: 'locked-revalidation-required' }
-    if (expectedLocators && !sameSourceLocators(expectedLocators, locators)) {
-      return authorize({ refusalReason: 'evidence-changed' })
-    }
-    if (sourceIsManuallyPinned(locators)) return authorize({ refusalReason: 'source-pinned' })
+    const preconditionFailure = validateSourceDeletionPreconditions(authorize, expectedLocators, locators)
+    if (preconditionFailure) return preconditionFailure
 
     const collectLockedEvidence = () => collectSourceOffloadEvidence(publicationId, { manifest, locators })
     const locator = locators[0]
@@ -2391,11 +2881,7 @@ export function createApi({
       }
 
       await core.clear(locator.start, locator.end)
-      const garbage = await collectCorestoreGarbage(ctx.store, {
-        label: 'confirmed source offload',
-        log: console.warn,
-      })
-      if (garbage.error) throw new Error(`source garbage collection failed: ${garbage.error}`)
+      await executeCorestoreGarbageCollection(ctx.store)
       return { success: true, freedBytes: locator.byteLength }
     } catch (error) {
       await reacquireReleasedOwnership()
@@ -2467,58 +2953,72 @@ export function createApi({
       return sourceOffloadManager.confirmSourceOffload(request)
     },
     async getAvailabilityHints(requests = []) {
+      const probeAvailabilityHintBlocks = async (core, blobId) => {
+        const startBlock = blobId?.blockOffset
+        const totalBlocks = blobId?.blockLength
+        const endBlock = Number.isFinite(startBlock) && Number.isFinite(totalBlocks) ? startBlock + totalBlocks : null
+        if (!Number.isFinite(startBlock) || !Number.isFinite(endBlock)) {
+          return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
+        }
+        const fullyCached = await core.has(startBlock, endBlock)
+        if (fullyCached) {
+          return { availability: 'playable', contiguousBlocks: totalBlocks || 0, hasHeadBlock: true }
+        }
+        const headEnd = Math.min(endBlock, startBlock + Math.max(1, Math.min(32, totalBlocks || 32)))
+        let initialAvailable = false
+        try { initialAvailable = await core.has(startBlock, headEnd) } catch { /* best effort */ }
+        return {
+          availability: initialAvailable ? 'playable' : 'unknown',
+          contiguousBlocks: initialAvailable ? Math.max(1, headEnd - startBlock) : 0,
+          hasHeadBlock: initialAvailable,
+        }
+      }
+
+      const probeLocalVideoAvailability = async (req) => {
+        let coreOwnership = null
+        try {
+          const id = req?.id
+          const video = {
+            id,
+            blobsCoreKey: req?.blobsCoreKey,
+            blobId: req?.blobId,
+          }
+          const key = req?.driveKey || 'unknown'
+          const cacheKey = buildBlobRefCacheKey({
+            driveKey: key,
+            id,
+            blobsCoreKey: video.blobsCoreKey,
+            blobId: video.blobId,
+          })
+          const cachedAvailability = videoAvailabilityCache.get(cacheKey)
+          if (
+            cachedAvailability &&
+            cachedAvailability.value !== 'playable' &&
+            (Date.now() - cachedAvailability.ts) < getVideoAvailabilityCacheTtl(cachedAvailability.value)
+          ) {
+            return { availability: cachedAvailability.value, contiguousBlocks: 0, hasHeadBlock: false }
+          }
+          const keyBuf = normalizeBlobsCoreKey(video?.blobsCoreKey) ? b4a.from(normalizeBlobsCoreKey(video.blobsCoreKey), 'hex') : null
+          const blobId = normalizeBlobRefInput(video?.blobId) || parseBlobRef(video)?.blob
+          if (!keyBuf || !blobId) return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
+          assertApiContextRunning(ctx)
+          const core = ctx.store.get({ key: keyBuf })
+          coreOwnership = ownApiResource(ctx, 'availability probe core', core, 'close', 2000)
+          await core.ready()
+          assertApiContextRunning(ctx)
+          return await probeAvailabilityHintBlocks(core, blobId)
+        } catch {
+          return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
+        } finally {
+          try { await coreOwnership?.cleanup?.() } catch { /* best effort */ }
+        }
+      }
+
       const hints = []
       for (const req of requests) {
         const id = req?.id
         if (!id) continue
-        const local = await (async () => {
-          let coreOwnership = null
-          try {
-            const video = {
-              id,
-              blobsCoreKey: req?.blobsCoreKey,
-              blobId: req?.blobId,
-            }
-            const key = req?.driveKey || 'unknown'
-            // Reuse the cheap local-only availability path shape
-            const cacheKey = buildBlobRefCacheKey({
-              driveKey: key,
-              id,
-              blobsCoreKey: video.blobsCoreKey,
-              blobId: video.blobId,
-            })
-            const cachedAvailability = videoAvailabilityCache.get(cacheKey)
-            if (
-              cachedAvailability &&
-              cachedAvailability.value !== 'playable' &&
-              (Date.now() - cachedAvailability.ts) < getVideoAvailabilityCacheTtl(cachedAvailability.value)
-            ) {
-              return { availability: cachedAvailability.value, contiguousBlocks: 0, hasHeadBlock: false }
-            }
-            const keyBuf = normalizeBlobsCoreKey(video?.blobsCoreKey) ? b4a.from(normalizeBlobsCoreKey(video.blobsCoreKey), 'hex') : null
-            const blobId = normalizeBlobRefInput(video?.blobId) || parseBlobRef(video)?.blob
-            if (!keyBuf || !blobId) return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
-            assertApiContextRunning(ctx)
-            const core = ctx.store.get({ key: keyBuf })
-            coreOwnership = ownApiResource(ctx, 'availability probe core', core, 'close', 2000)
-            await core.ready()
-            assertApiContextRunning(ctx)
-            const startBlock = blobId?.blockOffset
-            const totalBlocks = blobId?.blockLength
-            const endBlock = Number.isFinite(startBlock) && Number.isFinite(totalBlocks) ? startBlock + totalBlocks : null
-            if (!Number.isFinite(startBlock) || !Number.isFinite(endBlock)) return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
-            const fullyCached = await core.has(startBlock, endBlock)
-            if (fullyCached) return { availability: 'playable', contiguousBlocks: totalBlocks || 0, hasHeadBlock: true }
-            const headEnd = Math.min(endBlock, startBlock + Math.max(1, Math.min(32, totalBlocks || 32)))
-            let initialAvailable = false
-            try { initialAvailable = await core.has(startBlock, headEnd) } catch { /* best effort */ }
-            return { availability: initialAvailable ? 'playable' : 'unknown', contiguousBlocks: initialAvailable ? Math.max(1, headEnd - startBlock) : 0, hasHeadBlock: initialAvailable }
-          } catch {
-            return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
-          } finally {
-            try { await coreOwnership?.cleanup?.() } catch { /* best effort */ }
-          }
-        })()
+        const local = await probeLocalVideoAvailability(req)
         const localPeerId = localSwarmPeerId()
         hints.push({
           driveKey: req?.driveKey,
@@ -2542,35 +3042,491 @@ export function createApi({
       const existing = prefetchInFlight.get(prefetchKey)
       if (existing) return existing
 
-      const prefetchPromise = (async () => {
-        if (ctx.store?.closed) return { success: false, error: 'Corestore is closed' }
-        await cleanupRangeRequest(prefetchKey)
+      const isValidPrefetchBlobRange = (startBlock, totalBlocks, endBlock) => (
+        Number.isSafeInteger(startBlock) &&
+        Number.isSafeInteger(totalBlocks) &&
+        startBlock >= 0 &&
+        totalBlocks > 0 &&
+        Number.isSafeInteger(endBlock)
+      )
 
-        const intent = await loadDownloadIntent(ctx, driveKey, videoPath)
-        const video = intent ? null : await this.getVideoData(driveKey, videoPath, publicBeeKey)
+      const resolvePrefetchTotalBytes = (blob, intent, video) => (
+        blob.byteLength || intent?.totalBytes || video?.size || video?.byteLength || 0
+      )
+
+      const resolvePrefetchBlobFields = (intent, video) => {
         const blobsCoreKey = normalizeBlobsCoreKey(intent?.blobsCoreKey || video?.blobsCoreKey)
         const rawBlobId = intent?.blobId || video?.blobId
         const blob = normalizeBlobRefInput(rawBlobId) || parseBlobRef({ blobId: rawBlobId })?.blob
-        if (!blobsCoreKey || !blob) return { success: false, error: 'Video missing blob metadata' }
+        if (!blobsCoreKey || !blob) return { error: 'Video missing blob metadata' }
 
-        const normalizedBlobId = typeof rawBlobId === 'string'
-          ? rawBlobId
-          : stringifyBlobId(blob)
+        const normalizedBlobId = typeof rawBlobId === 'string' ? rawBlobId : stringifyBlobId(blob)
         const startBlock = blob.blockOffset
         const totalBlocks = blob.blockLength
         const endBlock = startBlock + totalBlocks
-        const totalBytes = blob.byteLength || intent?.totalBytes || video?.size || video?.byteLength || 0
-        if (!Number.isSafeInteger(startBlock) || !Number.isSafeInteger(totalBlocks) ||
-            startBlock < 0 || totalBlocks <= 0 || !Number.isSafeInteger(endBlock)) {
-          return { success: false, error: 'Invalid blob range' }
+        if (!isValidPrefetchBlobRange(startBlock, totalBlocks, endBlock)) {
+          return { error: 'Invalid blob range' }
         }
 
+        return {
+          blobsCoreKey,
+          normalizedBlobId,
+          startBlock,
+          totalBlocks,
+          endBlock,
+          totalBytes: resolvePrefetchTotalBytes(blob, intent, video),
+        }
+      }
+
+      const resolvePrefetchTarget = async (api) => {
+        const intent = await loadDownloadIntent(ctx, driveKey, videoPath)
+        const video = intent ? null : await api.getVideoData(driveKey, videoPath, publicBeeKey)
+        const fields = resolvePrefetchBlobFields(intent, video)
+        if (fields.error) return fields
+        return { intent, video, ...fields }
+      }
+
+      const checkPrefetchQuotaFits = async (cachedBytes, totalBytes) => {
+        if (!seedingManager?.getQuotaBudget) return { fits: true }
+        const budget = await Promise.resolve(seedingManager.getQuotaBudget()).catch(() => null)
+        const remainingBytes = Math.max(0, totalBytes - cachedBytes)
+        const promisedBytes = Array.from(prefetchQuotaReservations.values())
+          .reduce((total, bytes) => total + bytes, 0)
+        if (budget && !fullDownloadFitsQuota(
+          Math.max(0, budget.headroomBytes - promisedBytes),
+          remainingBytes,
+        )) {
+          return { fits: false }
+        }
+        if (budget && remainingBytes > 0) prefetchQuotaReservations.set(prefetchKey, remainingBytes)
+        return { fits: true }
+      }
+
+      const startPrefetchHeadRange = ({ core, rangeEntry, startBlock, endBlock, totalBlocks, headBlocks, isCancelled, onFullDownload }) => {
+        if (!(headBlocks > 0 && headBlocks < totalBlocks)) {
+          onFullDownload()
+          return
+        }
+        const headEnd = Math.min(endBlock, startBlock + headBlocks)
+        const headRange = core.download({ start: startBlock, end: headEnd, linear: true })
+        rangeEntry.ranges.push(headRange)
+        const headTimeout = setTimeout(() => { onFullDownload() }, 1500)
+        headRange.done().then((completed) => {
+          clearTimeout(headTimeout)
+          if (completed === false || isCancelled()) return
+          onFullDownload()
+        }).catch(() => {
+          clearTimeout(headTimeout)
+          onFullDownload()
+        })
+      }
+
+      const startPrefetchTailRange = ({ core, rangeEntry, startBlock, endBlock, totalBlocks, headBlocks, tailBlocks }) => {
+        if (!(tailBlocks > 0 && tailBlocks < totalBlocks)) return
+        const tailStart = Math.max(startBlock, endBlock - tailBlocks)
+        if (!(tailStart > startBlock + Math.max(1, headBlocks))) return
+        const tailRange = core.download({ start: tailStart, end: endBlock })
+        rangeEntry.ranges.push(tailRange)
+        tailRange.done().then((completed) => {
+          if (completed === false) return
+        }).catch(() => {})
+      }
+
+      const startPrefetchMidRange = ({ core, rangeEntry, startBlock, endBlock, totalBlocks, headBlocks, tailBlocks, midBlocks }) => {
+        if (!(midBlocks > 0 && midBlocks < totalBlocks && totalBlocks > (headBlocks + tailBlocks + midBlocks + 4))) return
+        const midStart = startBlock + Math.floor((totalBlocks - midBlocks) / 2)
+        const midEnd = midStart + midBlocks
+        if (!(midStart > startBlock + headBlocks && midEnd < endBlock - tailBlocks)) return
+        const midRange = core.download({ start: midStart, end: midEnd })
+        rangeEntry.ranges.push(midRange)
+        midRange.done().then((completed) => {
+          if (completed === false) return
+        }).catch(() => {})
+      }
+
+      const startPrefetchInitialRanges = (params) => {
+        startPrefetchHeadRange(params)
+        startPrefetchTailRange(params)
+        startPrefetchMidRange(params)
+      }
+
+      const finishPrefetchFullDownload = async ({
+        unsubscribePlayhead,
+        seedMetadata,
+        totalBytes,
+        totalBlocks,
+      }) => {
+        unsubscribePlayhead()
+        await deleteDownloadIntent(ctx, driveKey, videoPath).catch(() => {})
+        if (seedingManager) {
+          await seedingManager.addSeed(
+            driveKey,
+            videoPath,
+            'watched',
+            { ...seedMetadata, byteLength: totalBytes },
+            { protectSelf: true, protectedKeys: getActiveRangeSeedKeys() },
+          ).catch(() => {})
+        }
+        if (videoStats) {
+          videoStats.updateStats(driveKey, videoPath, { status: 'complete', downloadedBlocks: totalBlocks })
+          videoStats.emitStats(driveKey, videoPath, true)
+        }
+        await cleanupRangeRequest(prefetchKey)
+      }
+
+      const createPrefetchDownloadRunner = ({
+        core,
+        blobsCoreKey,
+        startBlock,
+        endBlock,
+        totalBlocks,
+        totalBytes,
+        seedMetadata,
+        releasePrefetchGuards,
+      }) => {
+        let fullDownloadStarted = false
+        let fillCancelled = false
+        let currentFillRange = null
+        const blobCoreKeyHex = String(blobsCoreKey || '').toLowerCase()
+        let startFillPass = null
+
+        const rangeEntry = {
+          ranges: [],
+          timers: new Set(),
+          core,
+          onDownload: null,
+          onUpload: null,
+          driveKey,
+          videoPath,
+          seedKey: `${driveKey}:${videoPath}`,
+          release: releasePrefetchGuards,
+          cancel: () => {
+            fillCancelled = true
+            unsubscribePlayhead()
+            for (const r of rangeEntry.ranges) {
+              try { r.destroy?.() } catch { /* best effort */ }
+            }
+          },
+        }
+
+        const unsubscribePlayhead = subscribeBlobPlayhead((event) => {
+          if (fillCancelled || !fullDownloadStarted) return
+          if (event.coreKeyHex !== blobCoreKeyHex) return
+          if (event.windowEnd <= startBlock || event.windowStart >= endBlock) return
+          const nextAnchor = Math.max(startBlock, Math.min(event.windowEnd, endBlock - 1))
+          const staleRange = currentFillRange
+          currentFillRange = null
+          if (staleRange) {
+            const idx = rangeEntry.ranges.indexOf(staleRange)
+            if (idx >= 0) rangeEntry.ranges.splice(idx, 1)
+            try { staleRange.destroy() } catch { /* best effort */ }
+          }
+          startFillPass?.(nextAnchor)
+        })
+
+        const failFullDownload = async (error) => {
+          unsubscribePlayhead()
+          console.log('[API] Prefetch range failed:', error?.message || error)
+          await cleanupRangeRequest(prefetchKey)
+        }
+
+        startFillPass = (anchor) => {
+          if (fillCancelled) return
+          const fillRange = core.download({ start: anchor, end: endBlock, linear: true })
+          currentFillRange = fillRange
+          rangeEntry.ranges.push(fillRange)
+          fillRange.done().then((completed) => {
+            if (completed === false || fillCancelled || currentFillRange !== fillRange) return
+            if (anchor > startBlock) {
+              startFillPass(startBlock)
+              return
+            }
+            void finishPrefetchFullDownload({
+              unsubscribePlayhead,
+              seedMetadata,
+              totalBytes,
+              totalBlocks,
+            })
+          }).catch(failFullDownload)
+        }
+
+        const triggerFullDownload = () => {
+          if (fullDownloadStarted || fillCancelled) return
+          fullDownloadStarted = true
+          startFillPass(startBlock)
+        }
+
+        return {
+          rangeEntry,
+          triggerFullDownload,
+          isCancelled: () => fillCancelled,
+        }
+      }
+
+      const assignPrefetchSeedMediaFields = (seedMetadata, video, intent) => {
+        seedMetadata.thumbnailBlobId = video?.thumbnailBlobId || intent?.thumbnailBlobId || null
+        seedMetadata.thumbnailBlobsCoreKey = video?.thumbnailBlobsCoreKey || intent?.thumbnailBlobsCoreKey || null
+        seedMetadata.mimeType = video?.mimeType || intent?.mimeType || null
+        seedMetadata.thumbnailMimeType = video?.thumbnailMimeType || intent?.thumbnailMimeType || null
+      }
+
+      const buildPrefetchSeedMetadata = ({
+        video,
+        intent,
+        totalBlocks,
+        cachedBytes,
+        normalizedBlobId,
+        blobsCoreKey,
+      }) => {
+        const seedMetadata = {
+          blockLength: totalBlocks,
+          byteLength: cachedBytes,
+          publicBeeKey: publicBeeKey || (video && video.publicBeeKey) || (intent && intent.publicBeeKey) || null,
+          blobId: normalizedBlobId,
+          blobsCoreKey,
+        }
+        assignPrefetchSeedMediaFields(seedMetadata, video, intent)
+        return seedMetadata
+      }
+
+      const buildPrefetchSuccessResult = ({
+        totalBlocks,
+        totalBytes,
+        peerCount,
+        initialBlocks,
+        cached,
+        message,
+      }) => ({
+        success: true,
+        totalBlocks,
+        totalBytes,
+        peerCount,
+        initialBlocks,
+        cached,
+        message,
+      })
+
+      const openPrefetchCoreSession = async (blobsCoreKey) => {
         let core
         let coreOwnership
         await withSourceMutationLocks([blobsCoreKey], () => {
           core = ctx.store.get({ key: b4a.from(blobsCoreKey, 'hex') })
           coreOwnership = ownPrefetchCore(prefetchKey, core)
         })
+        await core.ready()
+        assertApiContextRunning(ctx)
+        let discoveryHandle = null
+        if (ctx.swarm && core.discoveryKey) {
+          discoveryHandle = retainSwarmDiscovery(ctx, core.discoveryKey, {
+            label: `prefetch:${blobsCoreKey.slice(0, 16)}`,
+          })
+        }
+        await waitForBlobPrefetchReadiness(core, discoveryHandle, blobsCoreKey.slice(0, 16))
+        return { core, coreOwnership, discoveryHandle }
+      }
+
+      const ensurePrefetchDownloadIntent = async (target) => {
+        if (target.intent) return
+        await saveDownloadIntent(ctx, {
+          driveKey,
+          videoPath,
+          blobsCoreKey: target.blobsCoreKey,
+          blobId: target.normalizedBlobId,
+          startBlock: target.startBlock,
+          endBlock: target.endBlock,
+          totalBlocks: target.totalBlocks,
+          totalBytes: target.totalBytes,
+          mimeType: target.video?.mimeType || '',
+          startedAt: Date.now(),
+        })
+      }
+
+      const registerPrefetchSeedAndStats = async ({
+        core,
+        seedMetadata,
+        wasCached,
+        totalBlocks,
+        totalBytes,
+        initialAvailable,
+      }) => {
+        if (seedingManager) {
+          await seedingManager.addSeed(
+            driveKey,
+            videoPath,
+            'watched',
+            seedMetadata,
+            { protectSelf: true, protectedKeys: getActiveRangeSeedKeys() },
+          ).catch(err => {
+            console.log('[API] Failed to register seed:', err?.message || err)
+          })
+        }
+        if (!videoStats) return
+        videoStats.cleanupMonitor(driveKey, videoPath)
+        videoStats.updateStats(driveKey, videoPath, {
+          status: wasCached ? 'complete' : 'downloading',
+          totalBlocks,
+          totalBytes,
+          initialBlocks: initialAvailable,
+          downloadedBlocks: 0,
+          peerCount: core.peers?.length || 0,
+        })
+        videoStats.emitStats(driveKey, videoPath, true)
+      }
+
+      const createPrefetchTransferHandlers = ({
+        core,
+        startBlock,
+        endBlock,
+        totalBytes,
+        bytesPerBlock,
+        initialAvailable,
+        onCachedBytes,
+      }) => {
+        const downloaded = new Set()
+        const onDownload = (index, byteLength) => {
+          if (!Number.isSafeInteger(index) || index < startBlock || index >= endBlock || downloaded.has(index)) return
+          downloaded.add(index)
+          const delta = Number.isFinite(byteLength) && byteLength > 0 ? byteLength : bytesPerBlock
+          const cachedBytes = onCachedBytes(delta)
+          seedingManager?.updateSeedCachedBytes?.(driveKey, videoPath, Math.round(cachedBytes))?.catch?.(() => {})
+          if (!videoStats) return
+          videoStats.updateStats(driveKey, videoPath, {
+            downloadedBlocks: downloaded.size,
+            peerCount: core.peers?.length || 0,
+            status: 'downloading',
+            initialBlocks: initialAvailable,
+          })
+          videoStats.emitStats(driveKey, videoPath)
+        }
+        const onUpload = () => {
+          if (!videoStats) return
+          videoStats.updateStats(driveKey, videoPath, { peerCount: core.peers?.length || 0 })
+          videoStats.emitStats(driveKey, videoPath)
+        }
+        return { onDownload, onUpload }
+      }
+
+      const beginPrefetchRangeDownload = ({
+        core,
+        target,
+        seedMetadata,
+        initialAvailable,
+        bytesPerBlock,
+        initialCachedBytes,
+        releasePrefetchGuards,
+      }) => {
+        let cachedBytes = initialCachedBytes
+        const runner = createPrefetchDownloadRunner({
+          core,
+          blobsCoreKey: target.blobsCoreKey,
+          startBlock: target.startBlock,
+          endBlock: target.endBlock,
+          totalBlocks: target.totalBlocks,
+          totalBytes: target.totalBytes,
+          seedMetadata,
+          releasePrefetchGuards,
+        })
+        const { rangeEntry, triggerFullDownload, isCancelled } = runner
+        const { onDownload, onUpload } = createPrefetchTransferHandlers({
+          core,
+          startBlock: target.startBlock,
+          endBlock: target.endBlock,
+          totalBytes: target.totalBytes,
+          bytesPerBlock,
+          initialAvailable,
+          onCachedBytes: (delta) => {
+            cachedBytes = Math.min(target.totalBytes, cachedBytes + delta)
+            return cachedBytes
+          },
+        })
+        rangeEntry.onDownload = onDownload
+        rangeEntry.onUpload = onUpload
+        core.on?.('download', onDownload)
+        core.on?.('upload', onUpload)
+        activeRangeRequests.set(prefetchKey, rangeEntry)
+
+        startPrefetchInitialRanges({
+          core,
+          rangeEntry,
+          startBlock: target.startBlock,
+          endBlock: target.endBlock,
+          totalBlocks: target.totalBlocks,
+          headBlocks: calculatePrefetchHeadBlockCount(target.totalBlocks, target.totalBytes),
+          tailBlocks: calculatePrefetchTailBlockCount(target.totalBlocks, target.totalBytes),
+          midBlocks: calculatePrefetchMidBlockCount(target.totalBlocks, target.totalBytes),
+          isCancelled,
+          onFullDownload: triggerFullDownload,
+        })
+
+        return buildPrefetchSuccessResult({
+          totalBlocks: target.totalBlocks,
+          totalBytes: target.totalBytes,
+          peerCount: core.peers?.length || 0,
+          initialBlocks: initialAvailable,
+          cached: false,
+          message: 'Prefetch started',
+        })
+      }
+
+
+      const finishPrefetchWithoutDownload = async ({
+        coreOwnership,
+        core,
+        target,
+        initialAvailable,
+        cached,
+        message,
+      }) => {
+        await deleteDownloadIntent(ctx, driveKey, videoPath).catch(() => {})
+        await coreOwnership.cleanup()
+        return buildPrefetchSuccessResult({
+          totalBlocks: target.totalBlocks,
+          totalBytes: target.totalBytes,
+          peerCount: core.peers?.length || 0,
+          initialBlocks: initialAvailable,
+          cached,
+          message,
+        })
+      }
+
+      const preparePrefetchSessionState = async (core, target) => {
+        await ensurePrefetchDownloadIntent(target)
+        const initialAvailable = await countInitialBlobBlocks(
+          core,
+          target.startBlock,
+          target.endBlock,
+          target.totalBlocks,
+        )
+        const wasCached = initialAvailable === target.totalBlocks
+        const bytesPerBlock = target.totalBlocks > 0 ? target.totalBytes / target.totalBlocks : 0
+        const initialCachedBytes = wasCached ? target.totalBytes : 0
+        const seedMetadata = buildPrefetchSeedMetadata({
+          video: target.video,
+          intent: target.intent,
+          totalBlocks: target.totalBlocks,
+          cachedBytes: initialCachedBytes,
+          normalizedBlobId: target.normalizedBlobId,
+          blobsCoreKey: target.blobsCoreKey,
+        })
+        await registerPrefetchSeedAndStats({
+          core,
+          seedMetadata,
+          wasCached,
+          totalBlocks: target.totalBlocks,
+          totalBytes: target.totalBytes,
+          initialAvailable,
+        })
+        return { initialAvailable, wasCached, bytesPerBlock, initialCachedBytes, seedMetadata }
+      }
+
+      const runPrefetchVideoSession = async (api) => {
+        if (ctx.store?.closed) return { success: false, error: 'Corestore is closed' }
+        await cleanupRangeRequest(prefetchKey)
+
+        const target = await resolvePrefetchTarget(api)
+        if (target.error) return { success: false, error: target.error }
+
+        let coreOwnership = null
         let releaseBlobRef = null
         let discoveryHandle = null
         const releasePrefetchGuards = () => {
@@ -2579,328 +3535,63 @@ export function createApi({
           try { discoveryHandle?.release?.() } catch { /* best effort */ }
           discoveryHandle = null
         }
+
         try {
-          await core.ready()
-          assertApiContextRunning(ctx)
-          if (ctx.swarm && core.discoveryKey) {
-            discoveryHandle = retainSwarmDiscovery(ctx, core.discoveryKey, {
-              label: `prefetch:${blobsCoreKey.slice(0, 16)}`,
-            })
-          }
-          await waitForBlobPrefetchReadiness(core, discoveryHandle, blobsCoreKey.slice(0, 16))
+          const opened = await openPrefetchCoreSession(target.blobsCoreKey)
+          coreOwnership = opened.coreOwnership
+          discoveryHandle = opened.discoveryHandle
+          const core = opened.core
+          const state = await preparePrefetchSessionState(core, target)
 
-          if (!intent) {
-            await saveDownloadIntent(ctx, {
-              driveKey,
-              videoPath,
-              blobsCoreKey,
-              blobId: normalizedBlobId,
-              startBlock,
-              endBlock,
-              totalBlocks,
-              totalBytes,
-              mimeType: video?.mimeType || '',
-              startedAt: Date.now(),
-            })
-          }
-
-          const initialAvailable = await countInitialBlobBlocks(core, startBlock, endBlock, totalBlocks)
-          const wasCached = initialAvailable === totalBlocks
-          const bytesPerBlock = totalBlocks > 0 ? totalBytes / totalBlocks : 0
-          let cachedBytes = wasCached ? totalBytes : 0
-          const seedMetadata = {
-            blockLength: totalBlocks,
-            byteLength: cachedBytes,
-            publicBeeKey: publicBeeKey || video?.publicBeeKey || intent?.publicBeeKey || null,
-            blobId: normalizedBlobId,
-            blobsCoreKey,
-            thumbnailBlobId: video?.thumbnailBlobId || intent?.thumbnailBlobId || null,
-            thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey || intent?.thumbnailBlobsCoreKey || null,
-            mimeType: video?.mimeType || intent?.mimeType || null,
-            thumbnailMimeType: video?.thumbnailMimeType || intent?.thumbnailMimeType || null,
-          }
-          if (seedingManager) {
-            await seedingManager.addSeed(
-              driveKey,
-              videoPath,
-              'watched',
-              seedMetadata,
-              { protectSelf: true, protectedKeys: getActiveRangeSeedKeys() },
-            ).catch(err => {
-              console.log('[API] Failed to register seed:', err?.message || err)
-            })
-          }
-
-          if (videoStats) {
-            videoStats.cleanupMonitor(driveKey, videoPath)
-            videoStats.updateStats(driveKey, videoPath, {
-              status: wasCached ? 'complete' : 'downloading',
-              totalBlocks,
-              totalBytes,
-              initialBlocks: initialAvailable,
-              downloadedBlocks: 0,
-              peerCount: core.peers?.length || 0,
-            })
-            videoStats.emitStats(driveKey, videoPath, true)
-          }
-
-          if (wasCached) {
-            await deleteDownloadIntent(ctx, driveKey, videoPath).catch(() => {})
-            await coreOwnership.cleanup()
-            return {
-              success: true,
-              totalBlocks,
-              totalBytes,
-              peerCount: core.peers?.length || 0,
-              initialBlocks: initialAvailable,
+          if (state.wasCached) {
+            return finishPrefetchWithoutDownload({
+              coreOwnership,
+              core,
+              target,
+              initialAvailable: state.initialAvailable,
               cached: true,
               message: 'Video already fully cached',
-            }
+            })
           }
 
-          if (seedingManager?.getQuotaBudget) {
-            const budget = await Promise.resolve(seedingManager.getQuotaBudget()).catch(() => null)
-            const remainingBytes = Math.max(0, totalBytes - cachedBytes)
-            const promisedBytes = Array.from(prefetchQuotaReservations.values())
-              .reduce((total, bytes) => total + bytes, 0)
-            if (budget && !fullDownloadFitsQuota(
-              Math.max(0, budget.headroomBytes - promisedBytes),
-              remainingBytes,
-            )) {
-              await deleteDownloadIntent(ctx, driveKey, videoPath).catch(() => {})
-              await coreOwnership.cleanup()
-              return {
-                success: true,
-                totalBlocks,
-                totalBytes,
-                peerCount: core.peers?.length || 0,
-                initialBlocks: initialAvailable,
-                cached: false,
-                message: 'Streaming within storage quota',
-              }
-            }
-            if (budget && remainingBytes > 0) prefetchQuotaReservations.set(prefetchKey, remainingBytes)
+          const quota = await checkPrefetchQuotaFits(state.initialCachedBytes, target.totalBytes)
+          if (!quota.fits) {
+            return finishPrefetchWithoutDownload({
+              coreOwnership,
+              core,
+              target,
+              initialAvailable: state.initialAvailable,
+              cached: false,
+              message: 'Streaming within storage quota',
+            })
           }
 
           if (seedingManager?.retainBlobRef) {
-            releaseBlobRef = seedingManager.retainBlobRef({ blobsCoreKey, blobId: normalizedBlobId })
-          }
-          const downloaded = new Set()
-          const onDownload = (index, byteLength) => {
-            if (!Number.isSafeInteger(index) || index < startBlock || index >= endBlock || downloaded.has(index)) return
-            downloaded.add(index)
-            cachedBytes = Math.min(totalBytes, cachedBytes + (
-              Number.isFinite(byteLength) && byteLength > 0 ? byteLength : bytesPerBlock
-            ))
-            seedingManager?.updateSeedCachedBytes?.(driveKey, videoPath, Math.round(cachedBytes))?.catch?.(() => {})
-            if (videoStats) {
-              videoStats.updateStats(driveKey, videoPath, {
-                downloadedBlocks: downloaded.size,
-                peerCount: core.peers?.length || 0,
-                status: 'downloading',
-                initialBlocks: initialAvailable,
-              })
-              videoStats.emitStats(driveKey, videoPath)
-            }
-          }
-          const onUpload = () => {
-            if (!videoStats) return
-            videoStats.updateStats(driveKey, videoPath, { peerCount: core.peers?.length || 0 })
-            videoStats.emitStats(driveKey, videoPath)
-          }
-          core.on?.('download', onDownload)
-          core.on?.('upload', onUpload)
-
-          const getHeadBlockCount = (totalBlocks, totalBytes) => {
-            if (!totalBlocks || totalBlocks <= 0) return 0
-            if (!totalBytes || totalBytes <= 0) return Math.min(totalBlocks, 16)
-            const bytesPerBlock = totalBytes / totalBlocks
-            const minHeadBytes = 4 * 1024 * 1024
-            const maxHeadBytes = 32 * 1024 * 1024
-            const adaptiveBytes = Math.round(totalBytes * 0.02)
-            const headTargetBytes = Math.min(maxHeadBytes, Math.max(minHeadBytes, adaptiveBytes))
-            const headBlocks = Math.ceil(headTargetBytes / bytesPerBlock)
-            return Math.max(1, Math.min(totalBlocks, headBlocks))
+            releaseBlobRef = seedingManager.retainBlobRef({
+              blobsCoreKey: target.blobsCoreKey,
+              blobId: target.normalizedBlobId,
+            })
           }
 
-          const getTailBlockCount = (totalBlocks, totalBytes) => {
-            if (!totalBlocks || totalBlocks <= 0) return 0
-            if (!totalBytes || totalBytes <= 0) return Math.min(totalBlocks, 16)
-            const bytesPerBlock = totalBytes / totalBlocks
-            const minTailBytes = 2 * 1024 * 1024
-            const maxTailBytes = 16 * 1024 * 1024
-            const adaptiveBytes = Math.round(totalBytes * 0.01)
-            const tailTargetBytes = Math.min(maxTailBytes, Math.max(minTailBytes, adaptiveBytes))
-            const tailBlocks = Math.ceil(tailTargetBytes / bytesPerBlock)
-            return Math.max(1, Math.min(totalBlocks, tailBlocks))
-          }
-
-          const getMidBlockCount = (totalBlocks, totalBytes) => {
-            if (!totalBlocks || totalBlocks <= 0) return 0
-            if (!totalBytes || totalBytes <= 0) return Math.min(totalBlocks, 8)
-            const bytesPerBlock = totalBytes / totalBlocks
-            const targetBytes = 2 * 1024 * 1024
-            const midBlocks = Math.ceil(targetBytes / bytesPerBlock)
-            return Math.max(1, Math.min(totalBlocks, midBlocks))
-          }
-
-          const headBlocks = getHeadBlockCount(totalBlocks, totalBytes)
-          const tailBlocks = getTailBlockCount(totalBlocks, totalBytes)
-          const midBlocks = getMidBlockCount(totalBlocks, totalBytes)
-
-          let fullDownloadStarted = false
-          let fillCancelled = false
-          let currentFillRange = null
-          const blobCoreKeyHex = String(blobsCoreKey || '').toLowerCase()
-
-          let finishFullDownload = null
-          let startFillPass = null
-          let startFullDownload = null
-
-          const unsubscribePlayhead = subscribeBlobPlayhead((event) => {
-            if (fillCancelled || !fullDownloadStarted) return
-            if (event.coreKeyHex !== blobCoreKeyHex) return
-            if (event.windowEnd <= startBlock || event.windowStart >= endBlock) return
-            const nextAnchor = Math.max(startBlock, Math.min(event.windowEnd, endBlock - 1))
-            const staleRange = currentFillRange
-            currentFillRange = null
-            if (staleRange) {
-              const idx = rangeEntry.ranges.indexOf(staleRange)
-              if (idx >= 0) rangeEntry.ranges.splice(idx, 1)
-              try { staleRange.destroy() } catch { /* best effort */ }
-            }
-            startFillPass?.(nextAnchor)
-          })
-
-          const rangeEntry = {
-            ranges: [],
-            timers: new Set(),
+          return beginPrefetchRangeDownload({
             core,
-            onDownload,
-            onUpload,
-            driveKey,
-            videoPath,
-            seedKey: `${driveKey}:${videoPath}`,
-            release: releasePrefetchGuards,
-            cancel: () => {
-              fillCancelled = true
-              unsubscribePlayhead()
-              for (const r of rangeEntry.ranges) {
-                try { r.destroy?.() } catch { /* best effort */ }
-              }
-            },
-          }
-          activeRangeRequests.set(prefetchKey, rangeEntry)
-
-          finishFullDownload = async () => {
-            unsubscribePlayhead()
-            await deleteDownloadIntent(ctx, driveKey, videoPath).catch(() => {})
-            if (seedingManager) {
-              await seedingManager.addSeed(
-                driveKey,
-                videoPath,
-                'watched',
-                { ...seedMetadata, byteLength: totalBytes },
-                { protectSelf: true, protectedKeys: getActiveRangeSeedKeys() },
-              ).catch(() => {})
-            }
-            if (videoStats) {
-              videoStats.updateStats(driveKey, videoPath, { status: 'complete', downloadedBlocks: totalBlocks })
-              videoStats.emitStats(driveKey, videoPath, true)
-            }
-            await cleanupRangeRequest(prefetchKey)
-          }
-
-          const failFullDownload = async (error) => {
-            unsubscribePlayhead()
-            console.log('[API] Prefetch range failed:', error?.message || error)
-            await cleanupRangeRequest(prefetchKey)
-          }
-
-          startFillPass = (anchor) => {
-            if (fillCancelled) return
-            const fillRange = core.download({ start: anchor, end: endBlock, linear: true })
-            currentFillRange = fillRange
-            rangeEntry.ranges.push(fillRange)
-            fillRange.done().then((completed) => {
-              if (completed === false || fillCancelled || currentFillRange !== fillRange) return
-              if (anchor > startBlock) {
-                startFillPass(startBlock)
-                return
-              }
-              void finishFullDownload()
-            }).catch(failFullDownload)
-          }
-
-          startFullDownload = () => {
-            if (fullDownloadStarted || fillCancelled) return
-            fullDownloadStarted = true
-            startFillPass(startBlock)
-          }
-
-          const startInitPrefetch = () => {
-            if (headBlocks > 0 && headBlocks < totalBlocks) {
-              const headEnd = Math.min(endBlock, startBlock + headBlocks)
-              const headRange = core.download({ start: startBlock, end: headEnd, linear: true })
-              rangeEntry.ranges.push(headRange)
-              let headTimeout = setTimeout(() => {
-                startFullDownload()
-              }, 1500)
-              headRange.done().then((completed) => {
-                if (headTimeout) clearTimeout(headTimeout)
-                if (completed === false || fillCancelled) return
-                startFullDownload()
-              }).catch(() => {
-                if (headTimeout) clearTimeout(headTimeout)
-                startFullDownload()
-              })
-            } else {
-              startFullDownload()
-            }
-
-            if (tailBlocks > 0 && tailBlocks < totalBlocks) {
-              const tailStart = Math.max(startBlock, endBlock - tailBlocks)
-              if (tailStart > startBlock + Math.max(1, headBlocks)) {
-                const tailRange = core.download({ start: tailStart, end: endBlock })
-                rangeEntry.ranges.push(tailRange)
-                tailRange.done().then((completed) => {
-                  if (completed === false) return
-                }).catch(() => {})
-              }
-            }
-
-            if (midBlocks > 0 && midBlocks < totalBlocks && totalBlocks > (headBlocks + tailBlocks + midBlocks + 4)) {
-              const midStart = startBlock + Math.floor((totalBlocks - midBlocks) / 2)
-              const midEnd = midStart + midBlocks
-              if (midStart > startBlock + headBlocks && midEnd < endBlock - tailBlocks) {
-                const midRange = core.download({ start: midStart, end: midEnd })
-                rangeEntry.ranges.push(midRange)
-                midRange.done().then((completed) => {
-                  if (completed === false) return
-                }).catch(() => {})
-              }
-            }
-          }
-
-          startInitPrefetch()
-          return {
-            success: true,
-            totalBlocks,
-            totalBytes,
-            peerCount: core.peers?.length || 0,
-            initialBlocks: initialAvailable,
-            cached: false,
-            message: 'Prefetch started',
-          }
+            target,
+            seedMetadata: state.seedMetadata,
+            initialAvailable: state.initialAvailable,
+            bytesPerBlock: state.bytesPerBlock,
+            initialCachedBytes: state.initialCachedBytes,
+            releasePrefetchGuards,
+          })
         } catch (error) {
           console.log('[API] Prefetch setup failed:', error?.message || error)
           releasePrefetchGuards()
           await cleanupRangeRequest(prefetchKey)
-          await coreOwnership.cleanup()
+          await coreOwnership?.cleanup?.()
           return { success: false, error: error?.message || 'Prefetch failed' }
         }
-      })()
+      }
 
+      const prefetchPromise = runPrefetchVideoSession(this)
       prefetchInFlight.set(prefetchKey, prefetchPromise)
       try {
         return await prefetchPromise
@@ -3032,53 +3723,53 @@ export function createApi({
 
     async updateChannelAvatar(driveKey, imageBuffer, mimeType) {
       console.log('[API] UPDATE_CHANNEL_AVATAR:', driveKey?.slice(0, 16))
-      try {
-        const channel = await loadChannel(ctx, driveKey)
+      const getAvatarServerLink = (coreKey, blob) => {
+        return ctx.blobServer.getLink(coreKey, {
+          blob,
+          type: mimeType || 'image/png',
+          host: ctx.blobServerHost || '127.0.0.1',
+          port: ctx.blobServer?.port || ctx.blobServerPort,
+        })
+      }
 
-        const extensionByMime = {
-          'image/jpeg': 'jpg',
-          'image/png': 'png',
-          'image/webp': 'webp'
-        }
-        const ext = extensionByMime[mimeType] || 'png'
+      const saveChannelAvatarData = async (channel, imageData, ext) => {
         const avatarPath = `/avatars/channel.${ext}`
-
-        const imageData = b4a.isBuffer(imageBuffer) ? imageBuffer : b4a.from(imageBuffer || [])
-
         let avatarUrl = null
-
         if (channel?.drive && typeof channel.drive.put === 'function') {
           await channel.drive.put(avatarPath, imageData)
           if (ctx.blobServer && channel.drive.core?.key) {
             const byteLength = imageData.byteLength || imageData.length || 0
-            avatarUrl = ctx.blobServer.getLink(channel.drive.core.key, {
-              blob: {
-                blockOffset: 0,
-                blockLength: channel.drive.core.length || 1,
-                byteOffset: 0,
-                byteLength
-              },
-              type: mimeType || 'image/png',
-              host: ctx.blobServerHost || '127.0.0.1',
-              port: ctx.blobServer?.port || ctx.blobServerPort
+            avatarUrl = getAvatarServerLink(channel.drive.core.key, {
+              blockOffset: 0,
+              blockLength: channel.drive.core.length || 1,
+              byteOffset: 0,
+              byteLength,
             })
           }
         }
 
         if (!avatarUrl) {
           const blob = await channel.putBlob(imageData)
-          avatarUrl = ctx.blobServer.getLink(channel.blobsKey, {
-            blob: {
-              blockOffset: blob.blockOffset,
-              blockLength: blob.blockLength,
-              byteOffset: blob.byteOffset,
-              byteLength: blob.byteLength
-            },
-            type: mimeType || 'image/png',
-            host: ctx.blobServerHost || '127.0.0.1',
-            port: ctx.blobServer?.port || ctx.blobServerPort
+          avatarUrl = getAvatarServerLink(channel.blobsKey, {
+            blockOffset: blob.blockOffset,
+            blockLength: blob.blockLength,
+            byteOffset: blob.byteOffset,
+            byteLength: blob.byteLength,
           })
         }
+        return avatarUrl
+      }
+
+      try {
+        const channel = await loadChannel(ctx, driveKey)
+        const extensionByMime = {
+          'image/jpeg': 'jpg',
+          'image/png': 'png',
+          'image/webp': 'webp',
+        }
+        const ext = extensionByMime[mimeType] || 'png'
+        const imageData = b4a.isBuffer(imageBuffer) ? imageBuffer : b4a.from(imageBuffer || [])
+        const avatarUrl = await saveChannelAvatarData(channel, imageData, ext)
 
         await channel.updateMetadata({ avatar: avatarUrl })
         invalidateChannelCaches(driveKey)
@@ -3101,53 +3792,49 @@ export function createApi({
         publicBeeKey = driveKey.publicBeeKey || publicBeeKey
         driveKey = driveKey.channelKey || driveKey.driveKey || driveKey.key || null
       }
-      console.log('[API] GET_CHANNEL_META:', driveKey?.slice?.(0, 16));
+      console.log('[API] GET_CHANNEL_META:', driveKey?.slice?.(0, 16))
+
+      const buildChannelMetaResult = (meta) => ({
+        driveKey,
+        name: meta?.name || 'Channel',
+        description: meta?.description || '',
+        avatar: meta?.avatar || null,
+        createdAt: meta?.createdAt || Date.now(),
+        publicKey: meta?.createdBy || null,
+        videoCount: Number.isSafeInteger(meta?.videoCount) ? meta.videoCount : 0,
+      })
+
+      const fetchPublicBeeMeta = async () => {
+        const publicBee = await loadPublicBee(ctx, publicBeeKey)
+        const label = `PublicBee getMetadata ${driveKey?.slice?.(0, 16) || ''}`
+        return await withTimeout(publicBee.getMetadata().catch(() => null), 1000, label).catch(() => null)
+      }
+
+      const fetchAutobaseMeta = async () => {
+        const channel = await loadChannelBounded(driveKey)
+        await markAsMultiWriterChannel(driveKey)
+        return await channel.getMetadata().catch(() => null)
+      }
+
       try {
         const cached = channelMetaCache.get(driveKey)
         if (cached && (Date.now() - cached.ts) < CHANNEL_META_CACHE_TTL_MS) {
           return cloneObject(cached.value)
         }
-        // Fast catalog path: if publicBeeKey is provided, don't load Autobase.
-        // Viewers should be able to read metadata via the auto-replicating PublicBee.
-        if (publicBeeKey) {
-          const publicBee = await loadPublicBee(ctx, publicBeeKey)
-          const meta = await withTimeout(publicBee.getMetadata().catch(() => null), 1000, `PublicBee getMetadata ${driveKey?.slice?.(0, 16) || ''}`).catch(() => null)
-          const result = {
-            driveKey,
-            name: meta?.name || 'Channel',
-            description: meta?.description || '',
-            avatar: meta?.avatar || null,
-            createdAt: meta?.createdAt || Date.now(),
-            publicKey: meta?.createdBy || null,
-            videoCount: Number.isSafeInteger(meta?.videoCount) ? meta.videoCount : 0
-          }
-          channelMetaCache.set(driveKey, { ts: Date.now(), value: result })
-          return cloneObject(result)
-        }
 
-        const channel = await loadChannelBounded(driveKey)
-        await markAsMultiWriterChannel(driveKey)
-        const meta = await channel.getMetadata().catch(() => null)
-        const result = {
-          driveKey,
-          name: meta?.name || 'Channel',
-          description: meta?.description || '',
-          avatar: meta?.avatar || null,
-          createdAt: meta?.createdAt || Date.now(),
-          publicKey: meta?.createdBy || null,
-          videoCount: Number.isSafeInteger(meta?.videoCount) ? meta.videoCount : 0
-        }
+        const meta = publicBeeKey ? await fetchPublicBeeMeta() : await fetchAutobaseMeta()
+        const result = buildChannelMetaResult(meta)
         channelMetaCache.set(driveKey, { ts: Date.now(), value: result })
         return cloneObject(result)
       } catch (err) {
-        console.error('[API] GET_CHANNEL_META error:', err.message);
+        console.error('[API] GET_CHANNEL_META error:', err.message)
         return {
           driveKey,
           name: 'Unknown Channel',
           description: '',
           videoCount: 0,
-          error: err.message
-        };
+          error: err.message,
+        }
       }
     },
 
@@ -3162,245 +3849,230 @@ export function createApi({
      * @returns {Promise<VideoMetadata[]>}
      */
     async listVideos(driveKey, publicBeeKey) {
-      console.log('[API] LIST_VIDEOS for:', driveKey?.slice(0, 16), 'publicBeeKey:', publicBeeKey?.slice(0, 16));
-      try {
-        const extractVideoId = (video) => {
-          if (!video) return null
-          if (video.id) return video.id
-          if (video.path && typeof video.path === 'string') {
-            const match = video.path.match(/\/videos\/([^./]+)/)
-            if (match?.[1]) return match[1]
-            const base = video.path.split('/').pop() || ''
-            return base.replace(/\.[^./]+$/, '') || null
-          }
-          return null
+      console.log('[API] LIST_VIDEOS for:', driveKey?.slice(0, 16), 'publicBeeKey:', publicBeeKey?.slice(0, 16))
+
+      const extractVideoId = (video) => {
+        if (!video) return null
+        if (video.id) return video.id
+        if (video.path && typeof video.path === 'string') {
+          const match = video.path.match(/\/videos\/([^./]+)/)
+          if (match?.[1]) return match[1]
+          const base = video.path.split('/').pop() || ''
+          return base.replace(/\.[^./]+$/, '') || null
+        }
+        return null
+      }
+
+      const probeFeedVideoAvailabilityBlocks = async (core, blobId) => {
+        const startBlock = blobId?.blockOffset
+        const totalBlocks = blobId?.blockLength
+        const endBlock = Number.isFinite(startBlock) && Number.isFinite(totalBlocks)
+          ? startBlock + totalBlocks
+          : null
+
+        if (!Number.isFinite(startBlock) || !Number.isFinite(endBlock)) {
+          return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
         }
 
-        const enrichMissingBlobMeta = async (videos, fetcher) => {
-          const missing = (videos || []).filter(v => !v?.blobId || !v?.blobsCoreKey)
-          if (missing.length === 0) return videos
-
-          const MAX_ENRICH = 10
-          const ids = Array.from(new Set(
-            missing
-              .slice(0, MAX_ENRICH)
-              .map(v => extractVideoId(v))
-              .filter(Boolean)
-          ))
-          if (ids.length === 0) return videos
-
-          const metaById = new Map()
-          await Promise.all(ids.map(async (id) => {
-            try {
-              const meta = await fetcher(id)
-              if (meta) metaById.set(id, meta)
-            } catch { /* best effort */ }
-          }))
-
-          if (metaById.size === 0) return videos
-
-          return (videos || []).map((v) => {
-            if (!v || (v.blobId && v.blobsCoreKey)) return v
-            const id = extractVideoId(v)
-            const meta = id ? metaById.get(id) : null
-            if (!meta) return v
-            return {
-              ...v,
-              blobId: v.blobId || meta.blobId,
-              blobsCoreKey: v.blobsCoreKey || meta.blobsCoreKey,
-              mimeType: v.mimeType || meta.mimeType,
-              size: v.size || meta.size,
-              byteLength: v.byteLength || meta.byteLength,
-            }
-          })
+        const fullyCached = await core.has(startBlock, endBlock)
+        if (fullyCached) {
+          return { availability: 'playable', contiguousBlocks: totalBlocks || 0, hasHeadBlock: true }
         }
 
-        const getLocalVideoAvailabilityHint = async (video) => {
-          const id = extractVideoId(video)
-          const blobsCoreKey = video?.blobsCoreKey
-          const blobIdRaw = video?.blobId
-          if (!id || !blobsCoreKey || !blobIdRaw) {
-            return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
+        const headEnd = Math.min(endBlock, startBlock + Math.max(1, Math.min(32, totalBlocks || 32)))
+        let initialAvailable = false
+        try {
+          initialAvailable = await core.has(startBlock, headEnd)
+        } catch { /* best effort */ }
+        return {
+          availability: initialAvailable ? 'playable' : 'unknown',
+          contiguousBlocks: initialAvailable ? Math.max(1, headEnd - startBlock) : 0,
+          hasHeadBlock: initialAvailable,
+        }
+      }
+
+      const getLocalVideoAvailabilityHint = async (video) => {
+        const id = extractVideoId(video)
+        const blobsCoreKey = video?.blobsCoreKey
+        const blobIdRaw = video?.blobId
+        if (!id || !blobsCoreKey || !blobIdRaw) {
+          return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
+        }
+
+        const cacheKey = buildBlobRefCacheKey({
+          driveKey,
+          id,
+          blobsCoreKey,
+          blobId: blobIdRaw,
+        })
+        const cachedAvailability = videoAvailabilityCache.get(cacheKey)
+        if (
+          cachedAvailability &&
+          cachedAvailability.value !== 'playable' &&
+          (Date.now() - cachedAvailability.ts) < getVideoAvailabilityCacheTtl(cachedAvailability.value)
+        ) {
+          return { availability: cachedAvailability.value, contiguousBlocks: 0, hasHeadBlock: false }
+        }
+
+        let availability = 'unknown'
+        let contiguousBlocks = 0
+        let hasHeadBlock = false
+        let coreOwnership = null
+        try {
+          assertApiContextRunning(ctx)
+          const keyBuf = b4a.from(normalizeBlobsCoreKey(blobsCoreKey) || blobsCoreKey, 'hex')
+          const core = ctx.store.get({ key: keyBuf })
+          coreOwnership = ownApiResource(ctx, 'feed availability core', core, 'close', 2000)
+          await core.ready()
+          assertApiContextRunning(ctx)
+
+          const blobId = normalizeBlobRefInput(blobIdRaw) || parseBlobRef({ blobsCoreKey, blobId: blobIdRaw })?.blob
+          if (!blobId) {
+            videoAvailabilityCache.set(cacheKey, { ts: Date.now(), value: availability })
+            return { availability, contiguousBlocks, hasHeadBlock }
           }
 
-          const cacheKey = buildBlobRefCacheKey({
-            driveKey,
-            id,
-            blobsCoreKey,
-            blobId: blobIdRaw,
-          })
-          const cachedAvailability = videoAvailabilityCache.get(cacheKey)
-          if (
-            cachedAvailability &&
-            cachedAvailability.value !== 'playable' &&
-            (Date.now() - cachedAvailability.ts) < getVideoAvailabilityCacheTtl(cachedAvailability.value)
-          ) {
-            return { availability: cachedAvailability.value, contiguousBlocks: 0, hasHeadBlock: false }
-          }
+          const probe = await probeFeedVideoAvailabilityBlocks(core, blobId)
+          availability = probe.availability
+          contiguousBlocks = probe.contiguousBlocks
+          hasHeadBlock = probe.hasHeadBlock
+        } catch (err) {
+          availability = 'unknown'
+        } finally {
+          try { await coreOwnership?.cleanup?.() } catch { /* best effort */ }
+        }
 
-          let availability = 'unknown'
-          let contiguousBlocks = 0
-          let hasHeadBlock = false
-          let coreOwnership = null
+        videoAvailabilityCache.set(cacheKey, { ts: Date.now(), value: availability })
+        return { availability, contiguousBlocks, hasHeadBlock }
+      }
+
+      const enrichMissingBlobMeta = async (videos, fetcher) => {
+        const missing = (videos || []).filter(v => !v?.blobId || !v?.blobsCoreKey)
+        if (missing.length === 0) return videos
+
+        const MAX_ENRICH = 10
+        const ids = Array.from(new Set(
+          missing
+            .slice(0, MAX_ENRICH)
+            .map(v => extractVideoId(v))
+            .filter(Boolean)
+        ))
+        if (ids.length === 0) return videos
+
+        const metaById = new Map()
+        await Promise.all(ids.map(async (id) => {
           try {
-            assertApiContextRunning(ctx)
-            const keyBuf = b4a.from(normalizeBlobsCoreKey(blobsCoreKey) || blobsCoreKey, 'hex')
-            const core = ctx.store.get({ key: keyBuf })
-            coreOwnership = ownApiResource(ctx, 'feed availability core', core, 'close', 2000)
-            await core.ready()
-            assertApiContextRunning(ctx)
+            const meta = await fetcher(id)
+            if (meta) metaById.set(id, meta)
+          } catch { /* best effort */ }
+        }))
 
-            const blobId = normalizeBlobRefInput(blobIdRaw) || parseBlobRef({ blobsCoreKey, blobId: blobIdRaw })?.blob
-            if (!blobId) {
-              videoAvailabilityCache.set(cacheKey, { ts: Date.now(), value: availability })
-              return { availability, contiguousBlocks, hasHeadBlock }
-            }
+        if (metaById.size === 0) return videos
 
-            const startBlock = blobId?.blockOffset
-            const totalBlocks = blobId?.blockLength
-            const endBlock = Number.isFinite(startBlock) && Number.isFinite(totalBlocks)
-              ? startBlock + totalBlocks
-              : null
-
-            if (Number.isFinite(startBlock) && Number.isFinite(endBlock)) {
-              const fullyCached = await core.has(startBlock, endBlock)
-              if (fullyCached) {
-                availability = 'playable'
-                contiguousBlocks = totalBlocks || 0
-                hasHeadBlock = true
-              } else {
-                const headEnd = Math.min(endBlock, startBlock + Math.max(1, Math.min(32, totalBlocks || 32)))
-                let initialAvailable = false
-                try {
-                  initialAvailable = await core.has(startBlock, headEnd)
-                } catch { /* best effort */ }
-                hasHeadBlock = initialAvailable
-                contiguousBlocks = initialAvailable ? Math.max(1, headEnd - startBlock) : 0
-                availability = initialAvailable ? 'playable' : 'unknown'
-              }
-            }
-          } catch (err) {
-            availability = 'unknown'
-          } finally {
-            try { await coreOwnership?.cleanup?.() } catch { /* best effort */ }
+        return (videos || []).map((v) => {
+          if (!v || (v.blobId && v.blobsCoreKey)) return v
+          const id = extractVideoId(v)
+          const meta = id ? metaById.get(id) : null
+          if (!meta) return v
+          return {
+            ...v,
+            blobId: v.blobId || meta.blobId,
+            blobsCoreKey: v.blobsCoreKey || meta.blobsCoreKey,
+            mimeType: v.mimeType || meta.mimeType,
+            size: v.size || meta.size,
+            byteLength: v.byteLength || meta.byteLength,
           }
+        })
+      }
 
-          videoAvailabilityCache.set(cacheKey, { ts: Date.now(), value: availability })
-          return { availability, contiguousBlocks, hasHeadBlock }
+      const hasPlayableByteProof = (hint) => hint?.availability === 'playable' &&
+        (hint?.readyForPlayback === true ||
+          (hint?.hasHeadBlock === true && (Number(hint?.contiguousBlocks || 0) || 0) > 0))
+
+      const hasVideoByteProof = (video) => video?.readyForPlayback === true ||
+        (video?.hasHeadBlock === true && (Number(video?.contiguousBlocks || 0) || 0) > 0)
+
+      const resolveExplicitVideoAvailability = ({ localHint, peerHint, video }) => {
+        const explicitAvailability = video?.byteAvailability || video?.availability || null
+        if (hasPlayableByteProof(localHint)) return 'playable'
+        if (hasPlayableByteProof(peerHint)) return 'playable'
+        if (explicitAvailability === 'playable' && hasVideoByteProof(video)) return 'playable'
+        if (peerHint?.availability && peerHint.availability !== 'playable' && peerHint.availability !== 'unknown') {
+          return peerHint.availability
         }
+        if (explicitAvailability && explicitAvailability !== 'playable' && explicitAvailability !== 'unknown') {
+          return explicitAvailability
+        }
+        return explicitAvailability === 'unknown' ? 'unknown' : 'unavailable'
+      }
 
-        const hasPlayableByteProof = (hint) => hint?.availability === 'playable' &&
-          (hint?.readyForPlayback === true ||
-            (hint?.hasHeadBlock === true && (Number(hint?.contiguousBlocks || 0) || 0) > 0))
+      const attachVideoAvailability = async (videos) => {
+        const cloned = cloneArrayOfObjects(videos)
+        const localHints = await Promise.all(cloned.map((video) => getLocalVideoAvailabilityHint(video)))
 
-        const hasVideoByteProof = (video) => video?.readyForPlayback === true ||
-          (video?.hasHeadBlock === true && (Number(video?.contiguousBlocks || 0) || 0) > 0)
-
-        const resolveExplicitVideoAvailability = ({ localHint, peerHint, video }) => {
-          const explicitAvailability = video?.byteAvailability || video?.availability || null
-          // A direct blob is watchable only when the selected blob has current
-          // byte proof. Feed peers, relay metadata, and stale playable labels are
-          // discovery signals, not media readiness.
-          if (hasPlayableByteProof(localHint)) return 'playable'
-          if (hasPlayableByteProof(peerHint)) return 'playable'
-          if (explicitAvailability === 'playable' && hasVideoByteProof(video)) return 'playable'
-          if (peerHint?.availability && peerHint.availability !== 'playable' && peerHint.availability !== 'unknown') {
-            return peerHint.availability
+        return cloned.map((video, index) => {
+          const localHint = localHints[index]
+          const peerHint = null
+          const availability = resolveExplicitVideoAvailability({ localHint, peerHint, video })
+          const proofHint = hasPlayableByteProof(localHint)
+            ? localHint
+            : hasPlayableByteProof(peerHint)
+              ? peerHint
+              : hasVideoByteProof(video)
+                ? video
+                : null
+          return {
+            ...video,
+            availability,
+            byteAvailability: availability,
+            contiguousBlocks: Number(proofHint?.contiguousBlocks || 0) || 0,
+            hasHeadBlock: Boolean(proofHint?.hasHeadBlock),
+            readyForPlayback: availability === 'playable' && Boolean(proofHint),
           }
-          if (explicitAvailability && explicitAvailability !== 'playable' && explicitAvailability !== 'unknown') {
-            return explicitAvailability
-          }
+        })
+      }
 
-          return explicitAvailability === 'unknown' ? 'unknown' : 'unavailable'
-        }
-
-        const attachVideoAvailability = async (videos) => {
-          const cloned = cloneArrayOfObjects(videos)
-          const localHints = await Promise.all(cloned.map((video) => getLocalVideoAvailabilityHint(video)))
-
-
-          return cloned.map((video, index) => {
-            const localHint = localHints[index]
-            const peerHint = null
-            const availability = resolveExplicitVideoAvailability({ localHint, peerHint, video })
-            const proofHint = hasPlayableByteProof(localHint)
-              ? localHint
-              : hasPlayableByteProof(peerHint)
-                ? peerHint
-                : hasVideoByteProof(video)
-                  ? video
-                  : null
-            return {
-              ...video,
-              availability,
-              byteAvailability: availability,
-              contiguousBlocks: Number(proofHint?.contiguousBlocks || 0) || 0,
-              hasHeadBlock: Boolean(proofHint?.hasHeadBlock),
-              readyForPlayback: availability === 'playable' && Boolean(proofHint),
-            }
-          })
-        }
-
-        const cached = listVideosCache.get(driveKey)
-        if (cached && !publicBeeKey) {
-          const ttl = Array.isArray(cached.value) && cached.value.length === 0
-            ? LIST_VIDEOS_EMPTY_CACHE_TTL_MS
-            : LIST_VIDEOS_CACHE_TTL_MS
-          if ((Date.now() - cached.ts) < ttl) {
-            const revalidated = await attachVideoAvailability(cloneArrayOfObjects(cached.value))
-            return cloneArrayOfObjects(revalidated)
-          }
-        }
-
-        // FAST PATH: If publicBeeKey is provided, read directly from PublicBee
-        // This is the preferred path for remote catalog readers; no Autobase sync is needed.
-        // IMPORTANT: If publicBeeKey is provided, this is definitely a multi-writer channel,
-        // so we should not fall back to legacy storage paths.
-        if (publicBeeKey) {
-          console.log('[API] LIST_VIDEOS: using PublicBee fast path')
-          // Mark as multi-writer since PublicBee is only used with multi-writer channels
-          await markAsMultiWriterChannel(driveKey)
+      const loadPublicBeeVideosList = async () => {
+        console.log('[API] LIST_VIDEOS: using PublicBee fast path')
+        await markAsMultiWriterChannel(driveKey)
+        try {
+          const publicBee = await loadPublicBee(ctx, publicBeeKey)
+          let listing
           try {
-            const publicBee = await loadPublicBee(ctx, publicBeeKey)
-            let listing
-            try {
-              listing = typeof publicBee.listVideosWithStatus === 'function'
-                ? await publicBee.listVideosWithStatus()
-                : { status: 'authoritative', videos: await publicBee.listVideos() }
-            } catch (readErr) {
-              console.log('[API] LIST_VIDEOS: PublicBee visibility is uncertain:', readErr.message)
-              return []
-            }
-            const videos = listing?.videos || []
-            console.log('[API] LIST_VIDEOS: PublicBee returned', videos.length, 'videos')
-            if (videos.length === 0) {
-              if (listing?.status !== 'authoritative' || Number(listing?.filteredCount || 0) > 0) {
-                console.log('[API] LIST_VIDEOS: PublicBee visibility is uncertain, suppressing preview fallback')
-                return []
-              }
-              console.log('[API] LIST_VIDEOS: PublicBee returned no videos, skipping slow channel fallback')
-              return []
-            }
-            const result = (videos || []).map(v => ({ ...v, channelKey: driveKey, publicBeeKey }))
-            const enriched = await enrichMissingBlobMeta(result, (id) => publicBee.getVideo(id))
-            const withAvailability = await attachVideoAvailability(enriched)
-            listVideosCache.set(driveKey, { ts: Date.now(), value: withAvailability })
-            // YouTube-Fast: background index for search
-            backgroundIndexVideos(withAvailability, driveKey)
-            return cloneArrayOfObjects(withAvailability)
-          } catch (err) {
-            console.log('[API] LIST_VIDEOS: PublicBee fast path failed:', err.message, '- returning preview/cache only')
+            listing = typeof publicBee.listVideosWithStatus === 'function'
+              ? await publicBee.listVideosWithStatus()
+              : { status: 'authoritative', videos: await publicBee.listVideos() }
+          } catch (readErr) {
+            console.log('[API] LIST_VIDEOS: PublicBee visibility is uncertain:', readErr.message)
             return []
           }
+          const videos = listing?.videos || []
+          console.log('[API] LIST_VIDEOS: PublicBee returned', videos.length, 'videos')
+          if (videos.length === 0) {
+            if (listing?.status !== 'authoritative' || Number(listing?.filteredCount || 0) > 0) {
+              console.log('[API] LIST_VIDEOS: PublicBee visibility is uncertain, suppressing preview fallback')
+              return []
+            }
+            console.log('[API] LIST_VIDEOS: PublicBee returned no videos, skipping slow channel fallback')
+            return []
+          }
+          const result = (videos || []).map(v => ({ ...v, channelKey: driveKey, publicBeeKey }))
+          const enriched = await enrichMissingBlobMeta(result, (id) => publicBee.getVideo(id))
+          const withAvailability = await attachVideoAvailability(enriched)
+          listVideosCache.set(driveKey, { ts: Date.now(), value: withAvailability })
+          backgroundIndexVideos(withAvailability, driveKey)
+          return cloneArrayOfObjects(withAvailability)
+        } catch (err) {
+          console.log('[API] LIST_VIDEOS: PublicBee fast path failed:', err.message, '- returning preview/cache only')
+          return []
         }
+      }
 
+      const loadChannelVideosList = async () => {
         const channel = await loadChannelBounded(driveKey)
         await markAsMultiWriterChannel(driveKey)
         console.log('[API] LIST_VIDEOS channel loaded, calling listVideos...')
 
-        // IMPORTANT: Never block listVideos on network sync.
-        // Mobile has a 30s init timeout, and pairing/DHT discovery can exceed that.
-        // Return current materialized view immediately; the UI already retries.
         let videos = await channel.listVideos()
         let usedOwnerPublicBeeFallback = false
         let resolvedPublicBeeKey = null
@@ -3441,12 +4113,29 @@ export function createApi({
         )
         const withAvailability = await attachVideoAvailability(enriched)
         listVideosCache.set(driveKey, { ts: Date.now(), value: withAvailability })
-        // YouTube-Fast: background index for search
         backgroundIndexVideos(withAvailability, driveKey)
         return cloneArrayOfObjects(withAvailability)
+      }
+
+      try {
+        const cached = listVideosCache.get(driveKey)
+        if (cached && !publicBeeKey) {
+          const ttl = Array.isArray(cached.value) && cached.value.length === 0
+            ? LIST_VIDEOS_EMPTY_CACHE_TTL_MS
+            : LIST_VIDEOS_CACHE_TTL_MS
+          if ((Date.now() - cached.ts) < ttl) {
+            const revalidated = await attachVideoAvailability(cloneArrayOfObjects(cached.value))
+            return cloneArrayOfObjects(revalidated)
+          }
+        }
+
+        if (publicBeeKey) {
+          return await loadPublicBeeVideosList()
+        }
+        return await loadChannelVideosList()
       } catch (err) {
-        console.error('[API] LIST_VIDEOS error:', err.message);
-        return [];
+        console.error('[API] LIST_VIDEOS error:', err.message)
+        return []
       }
     },
 
@@ -3529,15 +4218,47 @@ export function createApi({
       console.log('[API] preparePlayback:', driveKey?.slice(0, 16), videoPath)
       markVideoPlayed(driveKey, videoPath)
       const startedAt = Date.now()
-      // Lowercase hex so the begin key matches the marks recorded by the blob
-      // server (key.toString('hex')) and the prefetch path (blobCoreKeyHex).
       const timingKey = (playbackBlobRef?.blobsCoreKey || (typeof blobsCoreKey === 'string' ? blobsCoreKey : '') || '').toLowerCase() || null
       beginPlaybackTiming(timingKey, videoPath)
 
-      // Resolve the blob-server URL first, then start the playback download
-      // session. The direct URL alone is not enough for large/back-index MP4s:
-      // native players can issue a plain GET from byte 0 and never surface the
-      // tail/index range the blob needs before startup stalls.
+      const recordPlaybackStageTiming = () => {
+        trackPlaybackTiming({
+          at: startedAt,
+          driveKey: driveKey ? String(driveKey).slice(0, 16) : null,
+          videoId: videoPath || null,
+          stages: { totalMs: Date.now() - startedAt },
+          readyForPlayback: null,
+          peerCount: null,
+          hasHeadBlock: null,
+        })
+      }
+
+      const resolveHandoffPlaybackStats = async () => {
+        let stats = null
+        const onDemandStatsPromise = startOnDemandPlaybackStats(driveKey, videoPath, playbackBlobRef)
+          .catch((err) => {
+            console.log('[API] direct playback stats failed:', err?.message || err)
+            return null
+          })
+        let statsHandoffTimer = null
+        try {
+          const statsHandoffTimeout = new Promise((resolve) => {
+            statsHandoffTimer = setTimeout(() => resolve(null), PLAYBACK_STATS_HANDOFF_TIMEOUT_MS)
+          })
+          const onDemandStats = await Promise.race([
+            onDemandStatsPromise,
+            statsHandoffTimeout
+          ])
+          if (onDemandStats) stats = this.getVideoStats(driveKey, videoPath)
+        } catch { /* best effort */ } finally {
+          clearTimeout(statsHandoffTimer)
+        }
+        if (!stats) {
+          try { stats = this.getVideoStats(driveKey, videoPath) } catch { /* best effort */ }
+        }
+        return stats
+      }
+
       const prepared = await blobPlayback.preparePlayback({
         driveKey,
         videoPath,
@@ -3549,36 +4270,12 @@ export function createApi({
       })
       markPlaybackTiming(timingKey, 'url-resolved')
       if (String(prepared.url || '').includes('pt_static_asset=')) {
-        trackPlaybackTiming({
-          at: startedAt,
-          driveKey: driveKey ? String(driveKey).slice(0, 16) : null,
-          videoId: videoPath || null,
-          stages: { totalMs: Date.now() - startedAt },
-          readyForPlayback: null,
-          peerCount: null,
-          hasHeadBlock: null,
-        })
+        recordPlaybackStageTiming()
         return prepared
       }
-      let playbackStats = null
-      const onDemandStatsPromise = startOnDemandPlaybackStats(driveKey, videoPath, playbackBlobRef)
-        .catch((err) => {
-          console.log('[API] direct playback stats failed:', err?.message || err)
-          return null
-        })
-      let statsHandoffTimer = null
-      try {
-        const statsHandoffTimeout = new Promise((resolve) => {
-          statsHandoffTimer = setTimeout(() => resolve(null), PLAYBACK_STATS_HANDOFF_TIMEOUT_MS)
-        })
-        const onDemandStats = await Promise.race([
-          onDemandStatsPromise,
-          statsHandoffTimeout
-        ])
-        if (onDemandStats) playbackStats = this.getVideoStats(driveKey, videoPath)
-      } catch { /* best effort */ } finally {
-        if (statsHandoffTimer) clearTimeout(statsHandoffTimer)
-      }
+
+      const playbackStats = await resolveHandoffPlaybackStats()
+      if (playbackStats) prepared.stats = playbackStats
 
       const prefetchPromise = this.prefetchVideo(driveKey, videoPath, publicBeeKey).then((prefetch) => {
         if (prefetch?.success === false) {
@@ -3591,21 +4288,7 @@ export function createApi({
       })
       void prefetchPromise
 
-      if (!playbackStats) {
-        try { playbackStats = this.getVideoStats(driveKey, videoPath) } catch { /* best effort */ }
-      }
-      if (playbackStats) prepared.stats = playbackStats
-
-      trackPlaybackTiming({
-        at: startedAt,
-        driveKey: driveKey ? String(driveKey).slice(0, 16) : null,
-        videoId: videoPath || null,
-        stages: { totalMs: Date.now() - startedAt },
-        readyForPlayback: null,
-        peerCount: null,
-        hasHeadBlock: null,
-      })
-
+      recordPlaybackStageTiming()
       return prepared
     },
 
@@ -3702,68 +4385,79 @@ export function createApi({
      * @returns {Promise<VideoMetadata|null>}
      */
     async getVideoData(driveKey, videoId, publicBeeKey, blobId, blobsCoreKey, mimeType) {
-      console.log('[API] GET_VIDEO_DATA:', driveKey?.slice(0, 16), videoId, 'publicBeeKey:', publicBeeKey?.slice(0, 16));
+      console.log('[API] GET_VIDEO_DATA:', driveKey?.slice(0, 16), videoId, 'publicBeeKey:', publicBeeKey?.slice(0, 16))
+      const buildInstantVideoMetadata = (id) => {
+        if (!blobId || !blobsCoreKey) return null
+        console.log('[API] GET_VIDEO_DATA: INSTANT metadata from direct blobId/blobsCoreKey')
+        return {
+          id,
+          path: typeof videoId === 'string' && videoId.startsWith('/videos/') ? videoId : `/videos/${id}.mp4`,
+          channelKey: driveKey,
+          publicBeeKey: publicBeeKey || null,
+          blobId,
+          blobsCoreKey,
+          mimeType: mimeType || 'video/mp4',
+          title: id,
+        }
+      }
+
+      const fetchPublicBeeVideoMetadata = async (id) => {
+        console.log('[API] GET_VIDEO_DATA: using PublicBee fast path')
+        const publicBee = await loadPublicBee(ctx, publicBeeKey)
+        const result = await getPublicBeeVideoWithStatus(publicBee, id)
+        const v = result.video
+        console.log('[API] GET_VIDEO_DATA PublicBee result:', v?.id, 'status:', result.status, 'blobId:', v?.blobId, 'blobsCoreKey:', v?.blobsCoreKey?.slice(0, 16))
+        if (result.status === 'found' && v) return { video: { ...v, channelKey: driveKey } }
+        if (result.status !== 'notFound') {
+          console.log('[API] GET_VIDEO_DATA: public visibility is uncertain or suppressed, skipping stale fallbacks')
+          return { video: null }
+        }
+        return null
+      }
+
+      const resolveFeedPreviewVideo = (id) => {
+        const previewVideo = getPreviewVideoFromFeed(driveKey, id, publicBeeKey)
+        if (!previewVideo?.blobId || !previewVideo?.blobsCoreKey) return null
+        console.log('[API] GET_VIDEO_DATA: using relay/feed preview direct refs')
+        return {
+          ...previewVideo,
+          id,
+          path: previewVideo.path || `/videos/${id}.mp4`,
+          channelKey: driveKey,
+          publicBeeKey: previewVideo.publicBeeKey || publicBeeKey || null,
+          mimeType: previewVideo.mimeType || mimeType || 'video/mp4',
+        }
+      }
+
       try {
-        // Parse videoId to extract the actual ID
         let id = videoId
         if (typeof videoId === 'string' && videoId.startsWith('/videos/')) {
           const match = videoId.match(/\/videos\/([^.]+)/)
           if (match) id = match[1]
         }
 
-        if (blobId && blobsCoreKey) {
-          console.log('[API] GET_VIDEO_DATA: INSTANT metadata from direct blobId/blobsCoreKey')
-          return {
-            id,
-            path: typeof videoId === 'string' && videoId.startsWith('/videos/') ? videoId : `/videos/${id}.mp4`,
-            channelKey: driveKey,
-            publicBeeKey: publicBeeKey || null,
-            blobId,
-            blobsCoreKey,
-            mimeType: mimeType || 'video/mp4',
-            title: id,
-          }
-        }
+        const instant = buildInstantVideoMetadata(id)
+        if (instant) return instant
 
-        // Fast path: use PublicBee if we have the key (for viewers)
         if (publicBeeKey) {
-          console.log('[API] GET_VIDEO_DATA: using PublicBee fast path')
-          const publicBee = await loadPublicBee(ctx, publicBeeKey)
-          const result = await getPublicBeeVideoWithStatus(publicBee, id)
-          const v = result.video
-          console.log('[API] GET_VIDEO_DATA PublicBee result:', v?.id, 'status:', result.status, 'blobId:', v?.blobId, 'blobsCoreKey:', v?.blobsCoreKey?.slice(0, 16))
-          if (result.status === 'found' && v) return { ...v, channelKey: driveKey }
-          if (result.status !== 'notFound') {
-            console.log('[API] GET_VIDEO_DATA: public visibility is uncertain or suppressed, skipping stale fallbacks')
-            return null
-          }
-          // Fall through to feed previews/channel methods only for authoritative absence
+          const pbResult = await fetchPublicBeeVideoMetadata(id)
+          if (pbResult) return pbResult.video
         }
 
-        const previewVideo = getPreviewVideoFromFeed(driveKey, id, publicBeeKey)
-        if (previewVideo?.blobId && previewVideo?.blobsCoreKey) {
-          console.log('[API] GET_VIDEO_DATA: using relay/feed preview direct refs')
-          return {
-            ...previewVideo,
-            id,
-            path: previewVideo.path || `/videos/${id}.mp4`,
-            channelKey: driveKey,
-            publicBeeKey: previewVideo.publicBeeKey || publicBeeKey || null,
-            mimeType: previewVideo.mimeType || mimeType || 'video/mp4',
-          }
-        }
+        const preview = resolveFeedPreviewVideo(id)
+        if (preview) return preview
 
-      const channel = await loadChannel(ctx, driveKey)
-      console.log('[API] GET_VIDEO_DATA channel loaded')
-      console.log('[API] GET_VIDEO_DATA looking up id:', id)
+        const channel = await loadChannel(ctx, driveKey)
+        console.log('[API] GET_VIDEO_DATA channel loaded')
+        console.log('[API] GET_VIDEO_DATA looking up id:', id)
 
-      const v = await channel.getVideo(id)
-      console.log('[API] GET_VIDEO_DATA result:', v?.id, 'blobId:', v?.blobId, 'blobsCoreKey:', v?.blobsCoreKey?.slice(0, 16))
-      if (!v) return null
-      return { ...v, channelKey: driveKey }
+        const v = await channel.getVideo(id)
+        console.log('[API] GET_VIDEO_DATA result:', v?.id, 'blobId:', v?.blobId, 'blobsCoreKey:', v?.blobsCoreKey?.slice(0, 16))
+        if (!v) return null
+        return { ...v, channelKey: driveKey }
       } catch (err) {
-        console.error('[API] GET_VIDEO_DATA error:', err.message);
-        return null;
+        console.error('[API] GET_VIDEO_DATA error:', err.message)
+        return null
       }
     },
 
@@ -3812,191 +4506,18 @@ export function createApi({
     async getVideoThumbnail(driveKey, videoId, refs = {}, opts = {}) {
       try {
         assertApiContextRunning(ctx)
-        const normalizeVideoId = (value) => {
-          if (!value || typeof value !== 'string') return value
-          if (value.startsWith('/videos/')) {
-            const match = value.match(/\/videos\/([^./]+)/)
-            if (match?.[1]) return match[1]
-          }
-          return value
+        const meta = await resolveVideoThumbnailMeta(this, driveKey, videoId, refs)
+        if (!meta) return { exists: false }
+        if (isDirectThumbnailUrlMeta(meta)) {
+          return { url: meta.thumbnail, exists: true }
         }
-
-        const targetVideoId = normalizeVideoId(videoId)
-
-        const getThumbnailMetaFromCachedList = () => {
-          const cached = listVideosCache.get(driveKey)
-          const items = Array.isArray(cached?.value) ? cached.value : []
-          if (!items.length) return null
-
-          const match = items.find((v) => {
-            if (!v || typeof v !== 'object') return false
-            const cachedId = normalizeVideoId(v.id || v.videoId || v.path)
-            return cachedId === targetVideoId
-          })
-
-          if (!match || typeof match !== 'object') return null
-
-          if (match.thumbnailBlobId && match.thumbnailBlobsCoreKey) {
-            return {
-              thumbnailBlobId: match.thumbnailBlobId,
-              thumbnailBlobsCoreKey: match.thumbnailBlobsCoreKey,
-              thumbnailMimeType: match.thumbnailMimeType,
-              thumbnail: match.thumbnail,
-            }
-          }
-
-          if (typeof match.thumbnail === 'string' && match.thumbnail.length > 0) {
-            return { thumbnail: match.thumbnail }
-          }
-
-          return null
-        }
-
-
-        let meta = null;
-        if (refs?.thumbnailBlobId && refs?.thumbnailBlobsCoreKey) {
-          meta = {
-            thumbnailBlobId: refs.thumbnailBlobId,
-            thumbnailBlobsCoreKey: refs.thumbnailBlobsCoreKey,
-            thumbnailMimeType: refs.thumbnailMimeType || null,
-          }
-        }
-        const cachedMeta = meta ? null : getThumbnailMetaFromCachedList()
-        if (cachedMeta) {
-          meta = cachedMeta
-        }
-
-        if (!meta) {
-          meta = await this.getVideoData(driveKey, targetVideoId);
-        }
-        if (!meta) {
-          return { exists: false };
-        }
-
-        if (!meta.thumbnailBlobId && !meta.thumbnailBlobsCoreKey && typeof meta.thumbnail === 'string' && meta.thumbnail.length > 0) {
-          return { url: meta.thumbnail, exists: true };
-        }
-
-        // New Hyperblobs-based thumbnail
         if (meta.thumbnailBlobId && meta.thumbnailBlobsCoreKey) {
-          const keyBuffer = b4a.from(meta.thumbnailBlobsCoreKey, 'hex');
-          
-          let blobsCore;
-          let blobsCoreOwnership = null;
-          try {
-            assertApiContextRunning(ctx)
-            blobsCore = ctx.store.get(keyBuffer);
-            blobsCoreOwnership = ownApiResource(
-              ctx,
-              `thumbnail blob core ${meta.thumbnailBlobsCoreKey.slice(0, 16)}`,
-              blobsCore,
-              'close',
-              2000
-            );
-            await blobsCore.ready();
-            assertApiContextRunning(ctx)
-          } catch (storeErr) {
-            await blobsCoreOwnership?.cleanup?.();
-            console.error('[API] GET_VIDEO_THUMBNAIL: store.get/ready failed:', storeErr.message);
-            throw storeErr;
-          }
-
-          // Join swarm for thumbnail core
-          if (ctx.swarm && blobsCore.discoveryKey) {
-            try {
-              retainSwarmDiscovery(ctx, blobsCore.discoveryKey, {
-                label: `thumbnail:${meta.thumbnailBlobsCoreKey.slice(0, 16)}`
-              })
-            } catch { /* best effort */ }
-          }
-
-          const blob = normalizeBlobRefInput(meta.thumbnailBlobId) || parseBlobRef({
-            blobsCoreKey: meta.thumbnailBlobsCoreKey,
-            blobId: meta.thumbnailBlobId,
-          })?.blob
-          if (!blob) {
-            return { exists: false, error: 'Invalid thumbnail blob ID format' }
-          }
-
-          // The blob server pipes the blob via hypercore-byte-stream, which reads
-          // blocks with wait:true — so a plain GET stalls until the blocks
-          // replicate. Image loaders (RN <Image>/Fresco, expo-image/Glide) give up
-          // or hang on that wait where the video player tolerates it; that's why a
-          // thumbnail URL only renders once its bytes are local. URL callers that
-          // can't absorb a stalling response (mobile: opts.ensureLocal) actively
-          // download the thumbnail blocks first, then only return the URL once the
-          // bytes are local — otherwise report a retryable miss.
-          const blobStart = blob.blockOffset
-          const blobEnd = blob.blockOffset + Math.max(1, blob.blockLength || 1)
-          const hasThumbnailBlocks = async () => {
-            try { return Boolean(await blobsCore.has(blobStart, blobEnd)) } catch { return false }
-          }
-
-          let thumbnailLocal = await hasThumbnailBlocks()
-          assertApiContextRunning(ctx)
-          if (!thumbnailLocal) {
-            if (opts?.ensureLocal) {
-              let range = null
-              try {
-                range = blobsCore.download({ start: blobStart, end: blobEnd, linear: true })
-                await Promise.race([
-                  typeof range?.done === 'function' ? range.done() : Promise.resolve(),
-                  new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail download timeout')), 3000))
-                ])
-              } catch { /* best effort */ } finally {
-                try { range?.destroy?.() } catch { /* best effort */ }
-              }
-              assertApiContextRunning(ctx)
-              thumbnailLocal = await hasThumbnailBlocks()
-              // Only hand back a URL once the bytes are local: the blob server's
-              // buffered thumbnail response reads them on the next request, so this
-              // keeps that read instant. Otherwise report a retryable miss.
-              if (!thumbnailLocal) return { exists: false }
-            } else {
-              try {
-                await Promise.race([
-                  blobsCore.update({ wait: true }),
-                  new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail core update timeout')), 1500))
-                ]);
-              } catch { /* best effort */ }
-              assertApiContextRunning(ctx)
-            }
-          }
-
-          // Thumbnails are always encoded as JPEG (the bare-ffmpeg build has no
-          // libwebp; see thumbnail.js). Defaulting to image/webp mislabeled the
-          // JPEG bytes, which Android's <Image>/Fresco refused to decode while
-          // browsers/iOS sniffed past it. Use the stored type when present, else
-          // image/jpeg to match the actual bytes.
-          const thumbnailMimeType = typeof meta.thumbnailMimeType === 'string' && meta.thumbnailMimeType.length > 0
-            ? meta.thumbnailMimeType
-            : 'image/jpeg';
-
-          // Tag the URL with pt_thumbnail=1 so the blob server serves it via its
-          // buffered thumbnail path (a deterministic 200 + Content-Length +
-          // Connection: close response image loaders accept) instead of the
-          // streaming pipe. Renders directly in <Image> — no base64. type flows
-          // through as the Content-Type.
-          const baseUrl = ctx.blobServer.getLink(blobsCore.key, {
-            blob,
-            type: thumbnailMimeType,
-            // Match the blob server bind/default host and the video playback
-            // URLs. Android native image loaders can resolve localhost through
-            // IPv6 first, while Bare's blob server is bound to IPv4 loopback.
-            host: ctx.blobServerHost || '127.0.0.1',
-            port: ctx.blobServer?.port || ctx.blobServerPort
-          });
-          const [blobOrigin, blobQuery = ''] = baseUrl.split('?');
-          const thumbnailPathUrl = `${blobOrigin.replace(/\/$/, '')}/__peartube_thumbnail__.jpg${blobQuery ? `?${blobQuery}` : ''}`;
-          const url = `${thumbnailPathUrl}${thumbnailPathUrl.includes('?') ? '&' : '?'}pt_thumbnail=1`;
-
-          return { url, exists: true };
+          return await loadThumbnailBlobUrl(meta, opts?.ensureLocal)
         }
-
-        return { exists: false };
+        return { exists: false }
       } catch (err) {
-        console.error('[API] GET_VIDEO_THUMBNAIL error:', err.message);
-        return { exists: false, error: err.message };
+        console.error('[API] GET_VIDEO_THUMBNAIL error:', err.message)
+        return { exists: false, error: err.message }
       }
     },
 
@@ -4158,32 +4679,44 @@ export function createApi({
             publicBeeKey,
           }))
           const enrichedVideos = await enrichMissingBlobMeta(baseVideos, (id) => publicBee.getVideo(id))
+          const formatFeedVideoPlaybackFields = (video) => ({
+            blobId: video?.blobId ? String(video.blobId) : null,
+            blobsCoreKey: video?.blobsCoreKey ? String(video.blobsCoreKey) : null,
+            mimeType: video?.mimeType ? String(video.mimeType) : null,
+            playbackSupport: video?.playbackSupport ? String(video.playbackSupport) : null,
+            containerSupport: video?.containerSupport
+              ? String(video.containerSupport)
+              : (video?.playbackSupport ? String(video.playbackSupport) : null),
+          })
+
+          const formatFeedVideoMetadataFields = (video) => ({
+            thumbnailBlobId: video?.thumbnailBlobId ? String(video.thumbnailBlobId) : null,
+            thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey) : null,
+            thumbnailMimeType: video?.thumbnailMimeType ? String(video.thumbnailMimeType) : null,
+            contentKind: video?.contentKind ? String(video.contentKind) : null,
+            seasonNumber: boundedContentInt(video?.seasonNumber),
+            episodeNumber: boundedContentInt(video?.episodeNumber),
+            mediaProvider: video?.mediaProvider ? String(video.mediaProvider) : null,
+            mediaId: video?.mediaId ? String(video.mediaId) : null,
+          })
+
+          const formatFeedSnapshotVideo = (video) => {
+            const id = extractVideoId(video)
+            if (!id) return null
+            return {
+              id,
+              title: video?.title ? String(video.title) : 'Untitled',
+              creatorName: video?.creatorName ? String(video.creatorName) : null,
+              uploadedAt: Number(video?.uploadedAt || 0) || 0,
+              duration: Number(video?.duration || 0) || 0,
+              thumbnail: video?.thumbnail ? String(video.thumbnail) : null,
+              ...formatFeedVideoPlaybackFields(video),
+              ...formatFeedVideoMetadataFields(video),
+            }
+          }
+
           const videos = enrichedVideos
-            .map((video) => {
-              const id = extractVideoId(video)
-              if (!id) return null
-              return {
-                id,
-                title: video?.title ? String(video.title) : 'Untitled',
-                creatorName: video?.creatorName ? String(video.creatorName) : null,
-                uploadedAt: Number(video?.uploadedAt || 0) || 0,
-                duration: Number(video?.duration || 0) || 0,
-                thumbnail: video?.thumbnail ? String(video.thumbnail) : null,
-                blobId: video?.blobId ? String(video.blobId) : null,
-                blobsCoreKey: video?.blobsCoreKey ? String(video.blobsCoreKey) : null,
-                mimeType: video?.mimeType ? String(video.mimeType) : null,
-                playbackSupport: video?.playbackSupport ? String(video.playbackSupport) : null,
-                containerSupport: video?.containerSupport ? String(video.containerSupport) : (video?.playbackSupport ? String(video.playbackSupport) : null),
-                thumbnailBlobId: video?.thumbnailBlobId ? String(video.thumbnailBlobId) : null,
-                thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey) : null,
-                thumbnailMimeType: video?.thumbnailMimeType ? String(video.thumbnailMimeType) : null,
-                contentKind: video?.contentKind ? String(video.contentKind) : null,
-                seasonNumber: boundedContentInt(video?.seasonNumber),
-                episodeNumber: boundedContentInt(video?.episodeNumber),
-                mediaProvider: video?.mediaProvider ? String(video.mediaProvider) : null,
-                mediaId: video?.mediaId ? String(video.mediaId) : null,
-              }
-            })
+            .map(formatFeedSnapshotVideo)
             .filter(Boolean)
 
           return {

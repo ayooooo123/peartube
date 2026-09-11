@@ -61,7 +61,7 @@ function filenameFromDisposition (value) {
 }
 
 function safeName (name, fallbackExt) {
-  const cleaned = String(name || '').replace(/[^\w.\-]+/g, '_').replace(/^\.+/, '').slice(-180)
+  const cleaned = String(name || '').replace(/[^\w.-]+/g, '_').replace(/^\.+/, '').slice(-180)
   if (!cleaned) return `video${fallbackExt}`
   return VIDEO_EXT.test(cleaned) ? cleaned : `${cleaned}${fallbackExt}`
 }
@@ -148,29 +148,15 @@ function boundedRoomError(bounded, room, chunkLength, kind) {
 // `bounded` is null unless the caller has told this download its bytes never
 // all land on the volume. Null keeps every branch below byte-for-byte what it
 // was: the staged file plus its eventual persisted copy, both title-sized.
-function storageHeadroomError(snapshot, written, chunkLength, kind, state = null, boundedBytes = null) {
-  const bounded = Number.isFinite(boundedBytes) && boundedBytes > 0 ? Math.floor(boundedBytes) : null
-  const staged = written + chunkLength
-  if (Number.isFinite(snapshot)) {
-    const room = Math.floor(snapshot)
-    if (bounded !== null) return boundedRoomError(bounded, room, chunkLength, kind)
-    if (state && !Number.isFinite(state.sharedRoom)) state.sharedRoom = room
-    const baseline = state && Number.isFinite(state.sharedRoom) ? state.sharedRoom : room
-    if ((2 * staged) <= baseline && written + (2 * chunkLength) <= room) return null
-    return `${kind} exceeded available storage headroom of ${Math.max(0, room)} bytes`
-  }
-  if (!snapshot || typeof snapshot !== 'object') return `${kind} cannot measure archive storage headroom`
-  const tmp = Math.floor(snapshot.tmp)
-  const storage = Math.floor(snapshot.storage)
-  if (!Number.isFinite(tmp) || !Number.isFinite(storage)) return `${kind} cannot measure archive storage headroom`
-  if (snapshot.sharedVolume !== false) {
-    const room = Math.min(tmp, storage)
-    if (bounded !== null) return boundedRoomError(bounded, room, chunkLength, kind)
-    if (state && !Number.isFinite(state.sharedRoom)) state.sharedRoom = room
-    const baseline = state && Number.isFinite(state.sharedRoom) ? state.sharedRoom : room
-    if ((2 * staged) <= baseline && written + (2 * chunkLength) <= room) return null
-    return `${kind} exceeded available storage headroom of ${Math.max(0, room)} bytes`
-  }
+function sharedVolumeHeadroomError(room, staged, written, chunkLength, kind, state, bounded) {
+  if (bounded !== null) return boundedRoomError(bounded, room, chunkLength, kind)
+  if (state && !Number.isFinite(state.sharedRoom)) state.sharedRoom = room
+  const baseline = state && Number.isFinite(state.sharedRoom) ? state.sharedRoom : room
+  if ((2 * staged) <= baseline && written + (2 * chunkLength) <= room) return null
+  return `${kind} exceeded available storage headroom of ${Math.max(0, room)} bytes`
+}
+
+function splitVolumeHeadroomError(tmp, storage, staged, chunkLength, kind, state, bounded) {
   // The temp volume still has to hold the chunk in flight in either mode; only
   // the persisted side stops being title-sized.
   if (bounded !== null) {
@@ -186,6 +172,25 @@ function storageHeadroomError(snapshot, written, chunkLength, kind, state = null
   return null
 }
 
+// `bounded` is null unless the caller has told this download its bytes never
+// all land on the volume. Null keeps every branch below byte-for-byte what it
+// was: the staged file plus its eventual persisted copy, both title-sized.
+function storageHeadroomError(snapshot, written, chunkLength, kind, state = null, boundedBytes = null) {
+  const bounded = Number.isFinite(boundedBytes) && boundedBytes > 0 ? Math.floor(boundedBytes) : null
+  const staged = written + chunkLength
+  if (Number.isFinite(snapshot)) {
+    return sharedVolumeHeadroomError(Math.floor(snapshot), staged, written, chunkLength, kind, state, bounded)
+  }
+  if (!snapshot || typeof snapshot !== 'object') return `${kind} cannot measure archive storage headroom`
+  const tmp = Math.floor(snapshot.tmp)
+  const storage = Math.floor(snapshot.storage)
+  if (!Number.isFinite(tmp) || !Number.isFinite(storage)) return `${kind} cannot measure archive storage headroom`
+  if (snapshot.sharedVolume !== false) {
+    return sharedVolumeHeadroomError(Math.min(tmp, storage), staged, written, chunkLength, kind, state, bounded)
+  }
+  return splitVolumeHeadroomError(tmp, storage, staged, chunkLength, kind, state, bounded)
+}
+
 function pipeToFile (res, filePath, fs, { storageHeadroom = null, headroomState = null, reserveStorageBytes = null, releaseStorageBytes = null, boundedBytesFor = null, reserveBoundedBytes = null } = {}) {
   return new Promise((resolve, reject) => {
     let fd
@@ -195,7 +200,7 @@ function pipeToFile (res, filePath, fs, { storageHeadroom = null, headroomState 
     const finish = (err) => {
       if (done) return
       done = true
-      try { fs.closeSync(fd) } catch {}
+      try { fs.closeSync(fd) } catch { /* Descriptor may already be closed after a write failure. */ }
       if (err) reject(err); else resolve()
     }
     res.on('data', (chunk) => {
@@ -265,6 +270,64 @@ export function byteCeiling (_maxBytes, _requirePublicSource, headroomBytes) {
 // Both run exactly the same prologue and the same per-chunk guard: the floor is
 // re-read on every chunk either way. Streaming relaxes the title-sized
 // reservation, never the floor.
+function createReservationController (storageReservations, storageHeadroom) {
+  const reservation = { bytes: 0, released: false }
+  const reserveBytes = (bytes) => {
+    const size = Math.max(0, Math.floor(Number(bytes) || 0))
+    if (size <= 0 || !storageReservations) return
+    reservation.bytes += size
+    storageReservations.bytes = Math.max(0, Math.floor(Number(storageReservations.bytes) || 0)) + size
+  }
+  const releaseBytes = (bytes) => {
+    const size = Math.max(0, Math.min(reservation.bytes, Math.floor(Number(bytes) || 0)))
+    if (size <= 0 || !storageReservations) return
+    reservation.bytes -= size
+    storageReservations.bytes = Math.max(0, Math.floor(Number(storageReservations.bytes) || 0) - size)
+  }
+  const releaseReservation = () => {
+    if (reservation.released) return
+    reservation.released = true
+    releaseBytes(reservation.bytes)
+    storageReservations?.invalidate?.()
+  }
+  const reserveBoundedBytes = (target) => {
+    const claim = Math.max(0, Math.floor(target) - reservation.bytes)
+    if (claim > 0) reserveBytes(claim)
+    return claim
+  }
+  const measuredHeadroom = typeof storageHeadroom === 'function'
+    ? () => reserveAdjustedHeadroom(storageHeadroom(), Math.max(0, Math.floor(Number(storageReservations?.bytes) || 0) - reservation.bytes))
+    : null
+  return {
+    reserveBytes,
+    releaseBytes,
+    releaseReservation,
+    reserveBoundedBytes,
+    measuredHeadroom
+  }
+}
+
+function validateVideoResponse (res, url, requirePublicSource, discard) {
+  const contentType = res.headers?.['content-type'] || ''
+  const disposition = res.headers?.['content-disposition'] || ''
+  const dispositionName = filenameFromDisposition(disposition)
+  const looksVideo = requirePublicSource
+    ? VIDEO_CONTENT_TYPE.test(contentType)
+    : VIDEO_CONTENT_TYPE.test(contentType) || isDirectVideoUrl(url) || VIDEO_EXT.test(dispositionName || '')
+  if (!looksVideo) {
+    res.destroy?.()
+    discard()
+    throw new Error(`URL did not return a downloadable video file (content-type: ${contentType || 'unknown'})`)
+  }
+
+  const ext = extensionForContentType(contentType)
+  let urlName = ''
+  try { urlName = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch { urlName = '' }
+  const fileName = safeName(dispositionName || urlName, ext)
+
+  return { contentType, fileName }
+}
+
 export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lookup = null, storageHeadroom = null, storageReservations = null, boundedLocalBytes = null } = {}) {
   const boundedBytesFor = typeof boundedLocalBytes === 'function'
     ? (streamBytes) => Math.max(0, Math.floor(Number(boundedLocalBytes(streamBytes)) || 0))
@@ -286,33 +349,8 @@ export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lo
     // Read once, before a byte is fetched: the same free-disk floor archive
     // ingestion is gated on. At or below the floor there is nothing to write
     // into, so say so instead of streaming a body onto a full volume.
-    const reservation = { bytes: 0, released: false }
-    const reserveBytes = (bytes) => {
-      const size = Math.max(0, Math.floor(Number(bytes) || 0))
-      if (size <= 0 || !storageReservations) return
-      reservation.bytes += size
-      storageReservations.bytes = Math.max(0, Math.floor(Number(storageReservations.bytes) || 0)) + size
-    }
-    const releaseBytes = (bytes) => {
-      const size = Math.max(0, Math.min(reservation.bytes, Math.floor(Number(bytes) || 0)))
-      if (size <= 0 || !storageReservations) return
-      reservation.bytes -= size
-      storageReservations.bytes = Math.max(0, Math.floor(Number(storageReservations.bytes) || 0) - size)
-    }
-    const releaseReservation = () => {
-      if (reservation.released) return
-      reservation.released = true
-      releaseBytes(reservation.bytes)
-      storageReservations?.invalidate?.()
-    }
-    const reserveBoundedBytes = (target) => {
-      const claim = Math.max(0, Math.floor(target) - reservation.bytes)
-      if (claim > 0) reserveBytes(claim)
-      return claim
-    }
-    const measuredHeadroom = typeof storageHeadroom === 'function'
-      ? () => reserveAdjustedHeadroom(storageHeadroom(), Math.max(0, Math.floor(Number(storageReservations?.bytes) || 0) - reservation.bytes))
-      : null
+    const controller = createReservationController(storageReservations, storageHeadroom)
+    const { measuredHeadroom } = controller
     const headroomState = {}
     if (typeof measuredHeadroom === 'function') {
       const snapshot = measuredHeadroom()
@@ -335,25 +373,7 @@ export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lo
       throw err
     }
 
-    const contentType = res.headers?.['content-type'] || ''
-    const disposition = res.headers?.['content-disposition'] || ''
-    const dispositionName = filenameFromDisposition(disposition)
-    // A guarded fetch takes the server's word for what this is and nothing
-    // else: the path and the filename are both chosen by the caller, so
-    // letting either vouch for the content would make the check decorative.
-    const looksVideo = requirePublicSource
-      ? VIDEO_CONTENT_TYPE.test(contentType)
-      : VIDEO_CONTENT_TYPE.test(contentType) || isDirectVideoUrl(url) || VIDEO_EXT.test(dispositionName || '')
-    if (!looksVideo) {
-      res.destroy?.()
-      discard()
-      throw new Error(`URL did not return a downloadable video file (content-type: ${contentType || 'unknown'})`)
-    }
-
-    const ext = extensionForContentType(contentType)
-    let urlName = ''
-    try { urlName = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch { urlName = '' }
-    const fileName = safeName(dispositionName || urlName, ext)
+    const { contentType, fileName } = validateVideoResponse(res, url, requirePublicSource, discard)
 
     return {
       res,
@@ -363,10 +383,10 @@ export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lo
       discard,
       measuredHeadroom,
       headroomState,
-      reserveBytes,
-      releaseBytes,
-      releaseReservation,
-      reserveBoundedBytes
+      reserveBytes: controller.reserveBytes,
+      releaseBytes: controller.releaseBytes,
+      releaseReservation: controller.releaseReservation,
+      reserveBoundedBytes: controller.reserveBoundedBytes
     }
   }
 

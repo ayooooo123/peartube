@@ -38,6 +38,18 @@ export const COMPANION_ROUTE_SCOPES = Object.freeze({
   acquisitionPolicyWrite: 'acquisition-policy.write'
 })
 
+// Mutating machine surfaces are not public facts: a remote caller on an
+// auth-off listener may read and stream but must prove identity before the
+// relay writes policy, acquires media, or accepts a private source grant.
+const PRIVILEGED_ROUTE_SCOPES = new Set([
+  COMPANION_ROUTE_SCOPES.policyWrite,
+  COMPANION_ROUTE_SCOPES.acquisitionPolicyWrite,
+  COMPANION_ROUTE_SCOPES.acquisitionRequest,
+  COMPANION_ROUTE_SCOPES.acquisitionCancel,
+  COMPANION_ROUTE_SCOPES.acquisitionRetry,
+  COMPANION_ROUTE_SCOPES.acquisitionGrant
+])
+
 function contractError (statusCode, code, message, field = null) {
   return new CompanionContractError(statusCode, code, message, field)
 }
@@ -92,8 +104,7 @@ function backendFailure (error) {
   return translated
 }
 
-function translateBackendFailure (error) {
-  const raw = typeof error?.code === 'string' ? error.code.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') : ''
+function translateCandidateSourceFailure (raw) {
   if (raw === 'CANDIDATE_EXPIRED') return contractError(410, 'CANDIDATE_EXPIRED', 'Candidate reference expired')
   if (raw === 'SOURCE_NOT_CURRENT') return contractError(409, 'SOURCE_NOT_CURRENT', 'Candidate source is no longer current')
   if (raw === 'SOURCE_INVALID') return contractError(502, raw, 'Candidate source failed verification')
@@ -101,12 +112,26 @@ function translateBackendFailure (error) {
   if (raw.startsWith('IMMUTABLE_PUBLICATION_')) {
     return contractError(502, raw, 'Immutable publication stream is invalid')
   }
+  return null
+}
+
+function translateAcquisitionFailure (raw) {
   if (raw === 'IDEMPOTENCY_CONFLICT') return contractError(409, raw, 'Idempotency key is already bound to another request')
   if (raw === 'ACQUISITION_TERMINAL' || raw === 'ACQUISITION_VERSION_CONFLICT' || raw === 'ACQUISITION_NOT_FAILED' || raw === 'ACQUISITION_NOT_RECOVERABLE' || raw === 'ACQUISITION_RETRY_LIMIT_EXCEEDED') return contractError(409, raw, 'Acquisition state conflict')
   if (raw === 'ACQUISITION_NOT_FOUND') return contractError(404, raw, 'Acquisition not found')
   if (raw === 'PRINCIPAL_MISMATCH' || raw === 'PUBLISHER_MISMATCH' || raw === 'FORBIDDEN') {
     return contractError(403, 'FORBIDDEN', 'Principal is not authorized for this acquisition')
   }
+  return null
+}
+
+function translateBackendFailure (error) {
+  const raw = typeof error?.code === 'string' ? error.code.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') : ''
+  const candidateError = translateCandidateSourceFailure(raw)
+  if (candidateError) return candidateError
+  const acquisitionError = translateAcquisitionFailure(raw)
+  if (acquisitionError) return acquisitionError
+
   if (raw === 'STORAGE_ADMISSION_DENIED') return contractError(507, raw, 'Insufficient storage for acquisition')
   if (raw === 'RETENTION_ADMISSION_DENIED') return contractError(503, raw, 'Retention policy is not ready')
   if (raw === 'ACQUISITION_MANAGER_CLOSED' || raw === 'ACQUISITION_PERSISTENCE_FAILED' || raw === 'ACQUISITION_PERSISTENCE_CORRUPT') {
@@ -142,35 +167,54 @@ async function callBackend (fn, args, signal = null) {
   }
 }
 
-function boundedPublicValue (value, { stripUrls = false, stripSecrets = false } = {}, depth = 0, seen = new Set()) {
-  if (depth > COMPANION_CONTRACT_LIMITS.maxJsonDepth) return null
+function isOmittedField (key, stripUrls, stripSecrets) {
+  if (stripUrls && LOCATOR_FIELD.test(key)) return true
+  if (stripSecrets && (SENSITIVE_STATUS_FIELD.test(key) || LOCATOR_FIELD.test(key))) return true
+  return false
+}
+
+function boundedPublicPrimitive (value, stripUrls) {
   if (value === null || typeof value === 'boolean') return value
   if (typeof value === 'number') return Number.isFinite(value) ? value : null
   if (typeof value === 'string') {
     if (stripUrls && LOCATOR_VALUE.test(value)) return null
     return b4a.byteLength(value) <= COMPANION_CONTRACT_LIMITS.maxJsonStringBytes ? value : value.slice(0, 1024)
   }
-  if (typeof value !== 'object' || seen.has(value)) return null
-  seen.add(value)
-  if (Array.isArray(value)) {
-    const result = value.slice(0, COMPANION_CONTRACT_LIMITS.maxJsonFields)
-      .map(child => boundedPublicValue(child, { stripUrls, stripSecrets }, depth + 1, seen))
-    seen.delete(value)
-    return result
-  }
+  return undefined
+}
+
+function boundedPublicObject (value, options, depth, seen) {
   const result = {}
   let count = 0
+  const { stripUrls = false, stripSecrets = false } = options
   for (const [key, child] of Object.entries(value)) {
     if (count >= COMPANION_CONTRACT_LIMITS.maxJsonFields) break
-    if ((stripUrls && LOCATOR_FIELD.test(key)) || (stripSecrets && (SENSITIVE_STATUS_FIELD.test(key) || LOCATOR_FIELD.test(key)))) continue
+    if (isOmittedField(key, stripUrls, stripSecrets)) continue
     Object.defineProperty(result, key, {
-      value: boundedPublicValue(child, { stripUrls, stripSecrets }, depth + 1, seen),
+      value: boundedPublicValue(child, options, depth + 1, seen),
       enumerable: true,
       configurable: true,
       writable: true
     })
     count++
   }
+  return result
+}
+
+function boundedPublicValue (value, options = {}, depth = 0, seen = new Set()) {
+  if (depth > COMPANION_CONTRACT_LIMITS.maxJsonDepth) return null
+  const primitive = boundedPublicPrimitive(value, options.stripUrls)
+  if (primitive !== undefined) return primitive
+
+  if (typeof value !== 'object' || seen.has(value)) return null
+  seen.add(value)
+  if (Array.isArray(value)) {
+    const result = value.slice(0, COMPANION_CONTRACT_LIMITS.maxJsonFields)
+      .map(child => boundedPublicValue(child, options, depth + 1, seen))
+    seen.delete(value)
+    return result
+  }
+  const result = boundedPublicObject(value, options, depth, seen)
   seen.delete(value)
   return result
 }
@@ -205,7 +249,7 @@ function requirePrincipal (input, scope) {
   const publisherIds = Array.isArray(value.publisherIds)
     ? value.publisherIds.map((id, index) => decodeId(id, `publisherIds.${index}`))
     : (publisherId === null ? [] : [publisherId])
-  return Object.freeze({
+  const principal = Object.freeze({
     id: decodeId(value.id, 'principalId'),
     publisherId,
     publisherIds: Object.freeze(publisherIds),
@@ -214,6 +258,13 @@ function requirePrincipal (input, scope) {
     isAuthenticated: value.isAuthenticated === true,
     scopes
   })
+  const privileged = Array.isArray(scope)
+    ? scope.some(name => PRIVILEGED_ROUTE_SCOPES.has(name))
+    : PRIVILEGED_ROUTE_SCOPES.has(scope)
+  if (privileged && input.inProcess !== true && principal.isLocal !== true && principal.isAuthenticated !== true) {
+    throw contractError(403, 'PRIVATE_ROUTE_REQUIRES_AUTHENTICATION', 'Privileged companion routes require authenticated, local, or in-process transport')
+  }
+  return principal
 }
 
 function safeInteger (value, field, { nullable = false } = {}) {
@@ -270,20 +321,27 @@ function acquisitionList (value) {
   return { items: items.map(publicAcquisition), nextCursor }
 }
 
-function streamLease (value) {
-  const candidate = value?.candidate || null
-  const asset = value?.asset || value?.lease || value
+function resolveLeaseIds (value, candidate, asset) {
   const publicationId = value?.publicationId || candidate?.publication?.publicationId
   const renditionId = value?.renditionId || candidate?.rendition?.renditionId
   const assetId = value?.assetId || asset?.assetId || candidate?.asset?.assetId
-  if (!asset || typeof asset !== 'object') {
-    throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Stream backend returned an invalid lease')
-  }
   return {
-    asset,
     publicationId: decodeId(publicationId, 'publicationId'),
     renditionId: decodeId(renditionId, 'renditionId'),
     assetId: decodeId(assetId, 'assetId')
+  }
+}
+
+function streamLease (value) {
+  const candidate = value?.candidate || null
+  const asset = value?.asset || value?.lease || value
+  if (!asset || typeof asset !== 'object') {
+    throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Stream backend returned an invalid lease')
+  }
+  const ids = resolveLeaseIds(value, candidate, asset)
+  return {
+    asset,
+    ...ids
   }
 }
 function localBlobUrl (value) {
@@ -336,6 +394,54 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
   if (typeof clock !== 'function') throw new TypeError('clock is required')
   const capabilityStore = capabilities || createStreamCapabilityStore({ now: clock })
 
+function extractSearchCursor (raw) {
+  const returnedCursor = raw && !Array.isArray(raw) ? (raw.nextCursor ?? raw.cursor) : null
+  if (returnedCursor == null) return null
+  if (typeof returnedCursor === 'string' && /^[A-Za-z0-9._~-]+$/.test(returnedCursor) &&
+      b4a.byteLength(returnedCursor) <= COMPANION_CONTRACT_LIMITS.maxCursorBytes) {
+    return returnedCursor
+  }
+  return null
+}
+
+function diagnosticsFlag (value, field) {
+  if (value === undefined) return false
+  if (typeof value !== 'boolean') {
+    throw contractError(502, 'BACKEND_CONTRACT_INVALID', `Backend returned an invalid diagnostics.${field} flag`)
+  }
+  return value
+}
+
+function extractSearchDiagnostics (raw) {
+  const declared = raw?.diagnostics
+  if (declared != null && (typeof declared !== 'object' || Array.isArray(declared))) {
+    throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Backend returned an invalid diagnostics container')
+  }
+  const partial = declared?.partial !== undefined
+    ? diagnosticsFlag(declared.partial, 'diagnostics.partial')
+    : diagnosticsFlag(raw?.partial, 'partial')
+  const stale = declared?.stale !== undefined
+    ? diagnosticsFlag(declared.stale, 'diagnostics.stale')
+    : diagnosticsFlag(raw?.stale, 'stale')
+  if (!declared) return { partial, stale, diagnostics: null }
+  const queriedServices = declared.queriedServices === undefined
+    ? null
+    : safeInteger(declared.queriedServices, 'diagnostics.queriedServices')
+  const respondingServices = declared.respondingServices === undefined
+    ? null
+    : safeInteger(declared.respondingServices, 'diagnostics.respondingServices')
+  if (queriedServices !== null && respondingServices !== null && respondingServices > queriedServices) {
+    throw contractError(502, 'BACKEND_CONTRACT_INVALID', 'Backend returned inconsistent search diagnostics counts')
+  }
+  const diagnostics = {
+    partial,
+    stale,
+    ...(queriedServices === null ? {} : { queriedServices }),
+    ...(respondingServices === null ? {} : { respondingServices }),
+  }
+  return { partial, stale, diagnostics }
+}
+
   async function search (input, url) {
     // The principal authorizes the call; it is not part of the query. The
     // provider's search contract is a closed field list and refuses `principal`
@@ -345,16 +451,16 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
     if (typeof service.search !== 'function') unavailable('Index search')
     const raw = await callBackend(service.search.bind(service), [{ ...query, signal: input.signal }], input.signal)
     const candidates = candidateList(raw).slice(0, query.limit).map(backendCandidate)
-    const returnedCursor = raw && !Array.isArray(raw) ? (raw.nextCursor ?? raw.cursor) : null
-    const cursor = returnedCursor == null
-      ? null
-      : (typeof returnedCursor === 'string' && /^[A-Za-z0-9._~-]+$/.test(returnedCursor) &&
-          b4a.byteLength(returnedCursor) <= COMPANION_CONTRACT_LIMITS.maxCursorBytes
-          ? returnedCursor
-          : null)
-    return routeResponse(200, { candidates, cursor })
+    const cursor = extractSearchCursor(raw)
+    const { partial, stale, diagnostics } = extractSearchDiagnostics(raw)
+    return routeResponse(200, {
+      candidates,
+      cursor,
+      ...(diagnostics ? { diagnostics } : {}),
+      ...(partial ? { partial: true } : {}),
+      ...(stale ? { stale: true } : {}),
+    })
   }
-
   async function openStream (input) {
     const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.stream)
     const value = decodeOpenStreamBody(input.body)
@@ -508,9 +614,6 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
 
   async function attachSourceGrant (input, acquisitionPart) {
     const principal = requirePrincipal(input, COMPANION_ROUTE_SCOPES.acquisitionGrant)
-    if (input.inProcess !== true && principal.isLocal !== true && principal.isAuthenticated !== true) {
-      throw contractError(403, 'PRIVATE_ROUTE_REQUIRES_AUTHENTICATION', 'Source grants require authenticated or local protected transport')
-    }
     const acquisitionId = decodedSegment(acquisitionPart, 'acquisitionId')
     const { grant } = decodeSourceGrantBody(input.body)
     if (typeof service.attachSourceGrant !== 'function') unavailable('Source grants')
@@ -530,8 +633,9 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
     let args
     if (write) {
       const policy = decodePolicyControlBody(input.body)
-      let expectedRevision = typeof input.body?.expectedRevision === 'number' ? input.body.expectedRevision : null
-      if (expectedRevision === null && typeof service.getPolicy === 'function') {
+      // The control body contains policy fields; compare against the provider's current revision.
+      let expectedRevision = null
+      if (typeof service.getPolicy === 'function') {
         const current = await callBackend(service.getPolicy.bind(service), [{ principal, signal: input.signal }], input.signal)
         if (typeof current?.revision === 'number') expectedRevision = current.revision
       }
@@ -584,74 +688,88 @@ export function createCompanionRouter ({ service, config = {}, clock = Date.now,
     })
   }
 
+  async function dispatchExactRoute (path, method, input, url) {
+    if (path === '/api/v2/search') {
+      if (method !== 'GET') allow(['GET'])
+      return await search(input, url)
+    }
+    if (path === '/api/v2/streams/open') {
+      if (method !== 'POST') allow(['POST'])
+      rejectQuery(url.searchParams)
+      return await openStream(input)
+    }
+    if (path === '/api/v2/status') {
+      if (method !== 'GET') allow(['GET'])
+      rejectQuery(url.searchParams)
+      return await status(input)
+    }
+    if (path === '/api/v2/policy') {
+      if (method !== 'GET' && method !== 'PUT') allow(['GET', 'PUT'])
+      rejectQuery(url.searchParams)
+      return await networkPolicy(input, method)
+    }
+    if (path === '/api/v2/acquisition-policy') {
+      if (method !== 'GET' && method !== 'PUT') allow(['GET', 'PUT'])
+      rejectQuery(url.searchParams)
+      return await acquisitionPolicy(input, method)
+    }
+    if (path === '/api/v2/acquisitions') {
+      if (method === 'POST') {
+        rejectQuery(url.searchParams)
+        return await requestAcquisition(input)
+      }
+      if (method === 'GET') return await listAcquisitions(input, url)
+      allow(['GET', 'POST'])
+    }
+    if (path === '/api/v2/acquisitions/contribute') {
+      if (method !== 'POST') allow(['POST'])
+      rejectQuery(url.searchParams)
+      return await contributeAcquisition(input)
+    }
+    return null
+  }
+
+  async function dispatchPatternRoute (path, method, input, url) {
+    let match = path.match(/^\/api\/v2\/publications\/([^/]+)$/)
+    if (match) {
+      if (method !== 'GET') allow(['GET'])
+      rejectQuery(url.searchParams)
+      return await publication(input, match[1])
+    }
+    match = path.match(/^\/api\/v2\/acquisitions\/([^/]+)\/source-grants$/)
+    if (match) {
+      if (method !== 'POST') allow(['POST'])
+      rejectQuery(url.searchParams)
+      return await attachSourceGrant(input, match[1])
+    }
+    match = path.match(/^\/api\/v2\/acquisitions\/([^/]+)\/retry$/)
+    if (match) {
+      if (method !== 'POST') allow(['POST'])
+      rejectQuery(url.searchParams)
+      return await retryAcquisition(input, match[1])
+    }
+    match = path.match(/^\/api\/v2\/acquisitions\/([^/]+)$/)
+    if (match) {
+      rejectQuery(url.searchParams)
+      if (method === 'GET') return await getAcquisition(input, match[1])
+      if (method === 'DELETE') return await cancelAcquisition(input, match[1])
+      allow(['GET', 'DELETE'])
+    }
+    return null
+  }
+
   async function dispatch (input = {}) {
     try {
       const method = typeof input.method === 'string' ? input.method.toUpperCase() : ''
       const url = parseUrl(input.url)
       const path = url.pathname
-      if (path === '/api/v2/search') {
-        if (method !== 'GET') allow(['GET'])
-        return await search(input, url)
-      }
-      if (path === '/api/v2/streams/open') {
-        if (method !== 'POST') allow(['POST'])
-        rejectQuery(url.searchParams)
-        return await openStream(input)
-      }
-      if (path === '/api/v2/status') {
-        if (method !== 'GET') allow(['GET'])
-        rejectQuery(url.searchParams)
-        return await status(input)
-      }
-      if (path === '/api/v2/policy') {
-        if (method !== 'GET' && method !== 'PUT') allow(['GET', 'PUT'])
-        rejectQuery(url.searchParams)
-        return await networkPolicy(input, method)
-      }
-      if (path === '/api/v2/acquisition-policy') {
-        if (method !== 'GET' && method !== 'PUT') allow(['GET', 'PUT'])
-        rejectQuery(url.searchParams)
-        return await acquisitionPolicy(input, method)
-      }
-      if (path === '/api/v2/acquisitions') {
-        if (method === 'POST') {
-          rejectQuery(url.searchParams)
-          return await requestAcquisition(input)
-        }
-        if (method === 'GET') return await listAcquisitions(input, url)
-        allow(['GET', 'POST'])
-      }
-      if (path === '/api/v2/acquisitions/contribute') {
-        if (method !== 'POST') allow(['POST'])
-        rejectQuery(url.searchParams)
-        return await contributeAcquisition(input)
-      }
 
-      let match = path.match(/^\/api\/v2\/publications\/([^/]+)$/)
-      if (match) {
-        if (method !== 'GET') allow(['GET'])
-        rejectQuery(url.searchParams)
-        return await publication(input, match[1])
-      }
-      match = path.match(/^\/api\/v2\/acquisitions\/([^/]+)\/source-grants$/)
-      if (match) {
-        if (method !== 'POST') allow(['POST'])
-        rejectQuery(url.searchParams)
-        return await attachSourceGrant(input, match[1])
-      }
-      match = path.match(/^\/api\/v2\/acquisitions\/([^/]+)\/retry$/)
-      if (match) {
-        if (method !== 'POST') allow(['POST'])
-        rejectQuery(url.searchParams)
-        return await retryAcquisition(input, match[1])
-      }
-      match = path.match(/^\/api\/v2\/acquisitions\/([^/]+)$/)
-      if (match) {
-        rejectQuery(url.searchParams)
-        if (method === 'GET') return await getAcquisition(input, match[1])
-        if (method === 'DELETE') return await cancelAcquisition(input, match[1])
-        allow(['GET', 'DELETE'])
-      }
+      const exactResult = await dispatchExactRoute(path, method, input, url)
+      if (exactResult) return exactResult
+
+      const patternResult = await dispatchPatternRoute(path, method, input, url)
+      if (patternResult) return patternResult
+
       throw contractError(404, 'NOT_FOUND', 'Companion route not found')
     } catch (error) {
       const known = error instanceof CompanionContractError ? error : backendFailure(error)

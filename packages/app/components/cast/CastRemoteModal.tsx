@@ -42,6 +42,133 @@ function formatCastState(state: string) {
       return 'Casting'
   }
 }
+function formatTranscodeLabel(status?: { isTranscoding?: boolean; progress?: number } | null): string | null {
+  if (!status?.isTranscoding) return null
+  const pct = Math.max(0, Math.min(100, Math.round(status.progress || 0)))
+  return `Optimizing for Chromecast… ${pct}%`
+}
+
+function CastControlsRow({
+  isPlayingOrBuffering,
+  isConnected,
+  onPlayPause,
+  onSwitchDevice,
+}: {
+  isPlayingOrBuffering: boolean
+  isConnected: boolean
+  onPlayPause: () => void
+  onSwitchDevice: () => void
+}) {
+  return (
+    <View style={styles.controlsRow}>
+      <Pressable
+        style={[styles.primaryButton, !isConnected && styles.disabled]}
+        onPress={onPlayPause}
+        disabled={!isConnected}
+        accessibilityRole="button"
+        accessibilityLabel={isPlayingOrBuffering ? 'Pause' : 'Play'}
+      >
+        <Ionicons
+          name={isPlayingOrBuffering ? 'pause' : 'play'}
+          size={22}
+          color={colors.onPrimary}
+        />
+        <Text style={styles.primaryButtonText}>
+          {isPlayingOrBuffering ? 'Pause' : 'Play'}
+        </Text>
+      </Pressable>
+
+      <Pressable
+        style={styles.secondaryButton}
+        onPress={onSwitchDevice}
+        accessibilityRole="button"
+        accessibilityLabel="Switch cast device"
+      >
+        <Feather name="tv" size={18} color={colors.text} />
+        <Text style={styles.secondaryButtonText}>Switch</Text>
+      </Pressable>
+    </View>
+  )
+}
+
+function CastVolumeSection({
+  volume,
+  isConnected,
+  onStep,
+}: {
+  volume: number
+  isConnected: boolean
+  onStep: (delta: number) => void
+}) {
+  const clamped = Math.max(0, Math.min(100, volume))
+  return (
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>Volume</Text>
+        <Text style={styles.sectionMeta}>{Math.round(clamped)}%</Text>
+      </View>
+      <View style={styles.volumeRow}>
+        <Pressable
+          style={[styles.volumeStep, !isConnected && styles.disabled]}
+          onPress={() => onStep(-5)}
+          disabled={!isConnected}
+          accessibilityRole="button"
+          accessibilityLabel="Volume down"
+        >
+          <Feather name="minus" size={18} color={colors.text} />
+        </Pressable>
+        <View style={styles.volumeBarOuter}>
+          <View style={[styles.volumeBarInner, { width: `${clamped}%` }]} />
+        </View>
+        <Pressable
+          style={[styles.volumeStep, !isConnected && styles.disabled]}
+          onPress={() => onStep(5)}
+          disabled={!isConnected}
+          accessibilityRole="button"
+          accessibilityLabel="Volume up"
+        >
+          <Feather name="plus" size={18} color={colors.text} />
+        </Pressable>
+      </View>
+    </View>
+  )
+}
+
+function CastFooterRow({
+  isConnected,
+  onDisconnect,
+  onStop,
+}: {
+  isConnected: boolean
+  onDisconnect: () => void
+  onStop: () => void
+}) {
+  return (
+    <View style={styles.footerRow}>
+      <Pressable
+        style={[styles.dangerButton, !isConnected && styles.disabled]}
+        onPress={onDisconnect}
+        disabled={!isConnected}
+        accessibilityRole="button"
+        accessibilityLabel="Disconnect casting"
+      >
+        <Feather name="x-circle" size={18} color="#fff" />
+        <Text style={styles.dangerButtonText}>Disconnect</Text>
+      </Pressable>
+
+      <Pressable
+        style={[styles.secondaryButton, !isConnected && styles.disabled]}
+        onPress={onStop}
+        disabled={!isConnected}
+        accessibilityRole="button"
+        accessibilityLabel="Stop playback"
+      >
+        <Feather name="square" size={18} color={colors.text} />
+        <Text style={styles.secondaryButtonText}>Stop</Text>
+      </Pressable>
+    </View>
+  )
+}
 
 export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }: Props) {
   const cast = useCast()
@@ -99,11 +226,10 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
 
   const statusLabel = formatCastState(playback.state)
 
-  const transcodeLabel = useMemo(() => {
-    if (!cast.transcodeStatus?.isTranscoding) return null
-    const pct = Math.max(0, Math.min(100, Math.round(cast.transcodeStatus.progress || 0)))
-    return `Optimizing for Chromecast… ${pct}%`
-  }, [cast.transcodeStatus?.isTranscoding, cast.transcodeStatus?.progress])
+  const transcodeLabel = useMemo(
+    () => formatTranscodeLabel(cast.transcodeStatus),
+    [cast.transcodeStatus]
+  )
 
   return (
     <Modal
@@ -141,34 +267,12 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
             </View>
           ) : null}
 
-          <View style={styles.controlsRow}>
-            <Pressable
-              style={[styles.primaryButton, !isConnected && styles.disabled]}
-              onPress={handlePlayPause}
-              disabled={!isConnected}
-              accessibilityRole="button"
-              accessibilityLabel={playback.state === 'playing' ? 'Pause' : 'Play'}
-            >
-              <Ionicons
-                name={(playback.state === 'playing' || playback.state === 'buffering') ? 'pause' : 'play'}
-                size={22}
-                color={colors.onPrimary}
-              />
-              <Text style={styles.primaryButtonText}>
-                {(playback.state === 'playing' || playback.state === 'buffering') ? 'Pause' : 'Play'}
-              </Text>
-            </Pressable>
-
-            <Pressable
-              style={styles.secondaryButton}
-              onPress={onSwitchDevice}
-              accessibilityRole="button"
-              accessibilityLabel="Switch cast device"
-            >
-              <Feather name="tv" size={18} color={colors.text} />
-              <Text style={styles.secondaryButtonText}>Switch</Text>
-            </Pressable>
-          </View>
+          <CastControlsRow
+            isPlayingOrBuffering={playback.state === 'playing' || playback.state === 'buffering'}
+            isConnected={isConnected}
+            onPlayPause={handlePlayPause}
+            onSwitchDevice={onSwitchDevice}
+          />
 
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
@@ -191,59 +295,17 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
             ) : null}
           </View>
 
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Volume</Text>
-              <Text style={styles.sectionMeta}>{Math.round(playback.volume || 0)}%</Text>
-            </View>
-            <View style={styles.volumeRow}>
-              <Pressable
-                style={[styles.volumeStep, !isConnected && styles.disabled]}
-                onPress={() => handleVolStep(-5)}
-                disabled={!isConnected}
-                accessibilityRole="button"
-                accessibilityLabel="Volume down"
-              >
-                <Feather name="minus" size={18} color={colors.text} />
-              </Pressable>
-              <View style={styles.volumeBarOuter}>
-                <View style={[styles.volumeBarInner, { width: `${Math.max(0, Math.min(100, playback.volume || 0))}%` }]} />
-              </View>
-              <Pressable
-                style={[styles.volumeStep, !isConnected && styles.disabled]}
-                onPress={() => handleVolStep(5)}
-                disabled={!isConnected}
-                accessibilityRole="button"
-                accessibilityLabel="Volume up"
-              >
-                <Feather name="plus" size={18} color={colors.text} />
-              </Pressable>
-            </View>
-          </View>
+          <CastVolumeSection
+            volume={playback.volume || 0}
+            isConnected={isConnected}
+            onStep={handleVolStep}
+          />
 
-          <View style={styles.footerRow}>
-            <Pressable
-              style={[styles.dangerButton, !isConnected && styles.disabled]}
-              onPress={() => cast.disconnect()}
-              disabled={!isConnected}
-              accessibilityRole="button"
-              accessibilityLabel="Disconnect casting"
-            >
-              <Feather name="x-circle" size={18} color="#fff" />
-              <Text style={styles.dangerButtonText}>Disconnect</Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.secondaryButton, !isConnected && styles.disabled]}
-              onPress={() => cast.stop()}
-              disabled={!isConnected}
-              accessibilityRole="button"
-              accessibilityLabel="Stop playback"
-            >
-              <Feather name="square" size={18} color={colors.text} />
-              <Text style={styles.secondaryButtonText}>Stop</Text>
-            </Pressable>
-          </View>
+          <CastFooterRow
+            isConnected={isConnected}
+            onDisconnect={() => cast.disconnect()}
+            onStop={() => cast.stop()}
+          />
         </View>
       </View>
     </Modal>

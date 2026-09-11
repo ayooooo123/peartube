@@ -285,6 +285,20 @@ async function fixture(t, { offload = true } = {}) {
       async getWritableBindings() {
         return [{ publisherId: deviceKeyPair.publicKey, catalog: makeCatalog(deviceKeyPair, appended) }]
       },
+      async listBindingPage() {
+        return {
+          items: [{ publisherId: deviceKeyPair.publicKey, catalog: makeCatalog(deviceKeyPair, appended) }],
+          nextCursor: null,
+          errors: [],
+          release: async () => {},
+        }
+      },
+      async acquireWritableBinding() {
+        return {
+          binding: { publisherId: deviceKeyPair.publicKey, catalog: makeCatalog(deviceKeyPair, appended) },
+          release: async () => {},
+        }
+      },
       async resolve() {
         return { publisherId: deviceKeyPair.publicKey, catalog: makeCatalog(deviceKeyPair, appended) }
       },

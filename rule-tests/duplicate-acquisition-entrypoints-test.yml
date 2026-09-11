@@ -1,0 +1,24 @@
+id: duplicate-acquisition-entrypoints
+valid:
+  - |
+    async function ingest(service, filePath) {
+      return await service.requestLocalFileAcquisition({ filePath })
+    }
+  - |
+    async function requestRemote(service, sourceRef) {
+      return await service.requestAcquisition({ sourceRef })
+    }
+  - |
+    async function archiveUpload(uploadManager, channel, filePath, uploadOptions, fs) {
+      return await uploadManager.uploadFromPath(channel, filePath, uploadOptions, fs)
+    }
+invalid:
+  - |
+    function runAdd(deps) {
+      const executor = deps.createExecutor({ runtime })
+      return executor
+    }
+  - |
+    function buildPipeline() {
+      return createExecutor({ jobStore, resolveChannel })
+    }

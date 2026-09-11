@@ -20,6 +20,7 @@ import fs from 'bare-fs'
 
 import { logger } from './logger.js'
 import { safeDestroy, ResourceTracker } from './transcode/ffmpeg-utils.mjs'
+import { resolveBareFfmpegModuleSync } from './runtime-modules.js'
 
 const log = logger('Thumbnail')
 
@@ -30,16 +31,8 @@ async function getFfmpegRuntime() {
   if (ffmpegRuntime) return ffmpegRuntime
   if (ffmpegLoadFailed) return null
 
-  let mod = null
-  // Prefer require when available (matches transcoder loader), fall back to
-  // dynamic import for environments without a CJS require.
-  if (typeof require === 'function') {
-    try {
-      mod = require('bare-ffmpeg')
-    } catch {
-      mod = null
-    }
-  }
+  let mod = resolveBareFfmpegModuleSync()
+  // Native FFmpeg is optional outside Bare, so a static import would prevent fallback.
   if (!mod) {
     try {
       mod = await import('bare-ffmpeg')
@@ -122,7 +115,9 @@ function createFileReadIOContext(ff, filePath, fileSize) {
   })
 
   ioContext._cleanup = () => {
-    try { fs.closeSync(fd) } catch {}
+    // The demuxer may already have closed the descriptor during teardown;
+    // closing again is best-effort and must not mask the original failure.
+    try { fs.closeSync(fd) } catch { /* descriptor already closed */ }
   }
 
   return ioContext
@@ -147,7 +142,7 @@ function selectImageEncoder(ff, mimeType) {
     try {
       const e = ff.findEncoderByName?.(name)
       if (e && e._handle) return e
-    } catch {}
+    } catch { /* encoder lookup is best-effort; the caller falls back */ }
     return null
   }
 
@@ -169,7 +164,9 @@ function selectImageEncoder(ff, mimeType) {
 
   let mjpeg = findByName('mjpeg')
   if (!mjpeg) {
-    try { mjpeg = ff.Codec?.for?.(ff.constants.codecs.MJPEG)?.encoder } catch {}
+    // The Codec helper is optional; absence only means the named-encoder
+    // lookup above is the last chance to find mjpeg.
+    try { mjpeg = ff.Codec?.for?.(ff.constants.codecs.MJPEG)?.encoder } catch { /* optional Codec API unavailable */ }
   }
   if (mjpeg && mjpeg._handle) {
     return { encoder: mjpeg, pixelFormat: ff.constants.pixelFormats.YUVJ420P, mimeType: 'image/jpeg' }
@@ -195,6 +192,121 @@ function fitDimensions(srcW, srcH, maxW, maxH) {
   w = Math.max(2, w - (w % 2))
   h = Math.max(2, h - (h % 2))
   return { width: w, height: h }
+}
+
+function extractVideoFrame(ff, tracker, input, videoStream, config, imageSel) {
+  const decoder = tracker.track(videoStream.decoder(), 'decoder')
+  decoder.timeBase = videoStream.timeBase
+  decoder.open()
+
+  const packet = tracker.track(new ff.Packet(), 'packet')
+  const frame = tracker.track(new ff.Frame(), 'frame')
+
+  const targetIndex = Math.max(0, config.frameIndex | 0)
+  let decodedCount = 0
+  let captured = false
+  let hitTarget = false
+  let scaler = null
+  let scaledFrame = null
+  let outW = 0
+  let outH = 0
+
+  const ensureScaler = (srcFormat, srcW, srcH) => {
+    const NONE = ff.constants.pixelFormats.NONE
+    let inFmt = srcFormat
+    if (inFmt == null || inFmt === NONE || inFmt < 0) {
+      inFmt = ff.constants.pixelFormats.YUV420P
+    }
+    const dims = fitDimensions(srcW, srcH, config.maxWidth, config.maxHeight)
+    outW = dims.width
+    outH = dims.height
+    scaler = tracker.track(
+      new ff.Scaler(inFmt, srcW, srcH, imageSel.pixelFormat, outW, outH),
+      'scaler'
+    )
+    scaledFrame = tracker.track(new ff.Frame(), 'scaledFrame')
+    scaledFrame.width = outW
+    scaledFrame.height = outH
+    scaledFrame.format = imageSel.pixelFormat
+    scaledFrame.alloc()
+  }
+
+  const captureCurrentFrame = () => {
+    const srcW = frame.width || videoStream.codecParameters.width
+    const srcH = frame.height || videoStream.codecParameters.height
+    if (!scaler) ensureScaler(frame.format, srcW, srcH)
+    scaler.scale(frame, scaledFrame)
+    scaledFrame.pts = 0
+    captured = true
+  }
+
+  const consumeDecodedFrames = () => {
+    while (decoder.receiveFrame(frame)) {
+      if (decodedCount === 0 || decodedCount === targetIndex) {
+        captureCurrentFrame()
+        if (decodedCount === targetIndex) {
+          hitTarget = true
+          return
+        }
+      }
+      decodedCount++
+    }
+  }
+
+  while (input.readFrame(packet)) {
+    if (packet.streamIndex === videoStream.index && decoder.sendPacket(packet)) {
+      consumeDecodedFrames()
+    }
+    packet.unref()
+    if (hitTarget) break
+  }
+
+  if (!hitTarget) {
+    decoder.sendPacket(null)
+    consumeDecodedFrames()
+  }
+
+  if (!captured || !scaledFrame) {
+    return null
+  }
+
+  return { scaledFrame, outW, outH }
+}
+
+function encodeStillImage(ff, tracker, imageSel, scaledFrame, outW, outH, quality) {
+  const encoder = tracker.track(new ff.CodecContext(imageSel.encoder), 'encoder')
+  encoder.width = outW
+  encoder.height = outH
+  encoder.pixelFormat = imageSel.pixelFormat
+  encoder.timeBase = { numerator: 1, denominator: 25 }
+
+  const clampedQuality = Math.max(1, Math.min(100, quality))
+  if (imageSel.mimeType === 'image/webp') {
+    // Unsupported options must not fail encoding; the encoder keeps defaults.
+    try { encoder.setOption('quality', String(clampedQuality)) } catch { /* quality option unsupported */ }
+  } else {
+    const qscale = Math.max(2, Math.min(31, Math.round(31 - (clampedQuality / 100) * 29)))
+    try { encoder.setOption('qscale', String(qscale)) } catch { /* qscale option unsupported */ }
+    try { encoder.setOption('q:v', String(qscale)) } catch { /* q:v option unsupported */ }
+  }
+
+  encoder.open()
+
+  const outPacket = tracker.track(new ff.Packet(), 'outPacket')
+  let encoded = null
+  if (encoder.sendFrame(scaledFrame) && encoder.receivePacket(outPacket)) {
+    encoded = Buffer.from(outPacket.data)
+    outPacket.unref()
+  }
+  if (!encoded) {
+    encoder.sendFrame(null)
+    if (encoder.receivePacket(outPacket)) {
+      encoded = Buffer.from(outPacket.data)
+      outPacket.unref()
+    }
+  }
+
+  return encoded
 }
 
 /**
@@ -251,123 +363,14 @@ export async function generateThumbnail(filePath, options = {}) {
       return null
     }
 
-    const decoder = tracker.track(videoStream.decoder(), 'decoder')
-    decoder.timeBase = videoStream.timeBase
-    decoder.open()
-
-    const packet = tracker.track(new ff.Packet(), 'packet')
-    const frame = tracker.track(new ff.Frame(), 'frame')
-
-    const targetIndex = Math.max(0, config.frameIndex | 0)
-    let decodedCount = 0
-    let captured = false
-    let hitTarget = false
-    let scaler = null
-    let scaledFrame = null
-    let outW = 0
-    let outH = 0
-
-    const ensureScaler = (srcFormat, srcW, srcH) => {
-      const NONE = ff.constants.pixelFormats.NONE
-      let inFmt = srcFormat
-      if (inFmt == null || inFmt === NONE || inFmt < 0) {
-        inFmt = ff.constants.pixelFormats.YUV420P
-      }
-      const dims = fitDimensions(srcW, srcH, config.maxWidth, config.maxHeight)
-      outW = dims.width
-      outH = dims.height
-      // Scaler args: srcPixelFormat, srcW, srcH, dstPixelFormat, dstW, dstH
-      scaler = tracker.track(
-        new ff.Scaler(inFmt, srcW, srcH, imageSel.pixelFormat, outW, outH),
-        'scaler'
-      )
-      scaledFrame = tracker.track(new ff.Frame(), 'scaledFrame')
-      scaledFrame.width = outW
-      scaledFrame.height = outH
-      scaledFrame.format = imageSel.pixelFormat
-      scaledFrame.alloc()
-    }
-
-    // Capture the current decoder `frame` into `scaledFrame` (scaling/converting).
-    const captureCurrentFrame = () => {
-      const srcW = frame.width || videoStream.codecParameters.width
-      const srcH = frame.height || videoStream.codecParameters.height
-      if (!scaler) ensureScaler(frame.format, srcW, srcH)
-      scaler.scale(frame, scaledFrame)
-      scaledFrame.pts = 0
-      captured = true
-    }
-
-    // Decode until we reach the target frame. Always keep the first decoded
-    // frame as a fallback (covers videos shorter than the target index).
-    const consumeDecodedFrames = () => {
-      while (decoder.receiveFrame(frame)) {
-        if (decodedCount === 0 || decodedCount === targetIndex) {
-          captureCurrentFrame()
-          if (decodedCount === targetIndex) {
-            hitTarget = true
-            return
-          }
-        }
-        decodedCount++
-      }
-    }
-
-    while (input.readFrame(packet)) {
-      if (packet.streamIndex === videoStream.index && decoder.sendPacket(packet)) {
-        consumeDecodedFrames()
-      }
-      packet.unref()
-      if (hitTarget) break
-    }
-
-    // Flush the decoder for any buffered frames if we haven't hit the target.
-    if (!hitTarget) {
-      decoder.sendPacket(null)
-      consumeDecodedFrames()
-    }
-
-    if (!captured || !scaledFrame) {
+    const extracted = extractVideoFrame(ff, tracker, input, videoStream, config, imageSel)
+    if (!extracted) {
       log.warn('No frame could be extracted from video')
       return null
     }
 
-    // Encode the captured frame to a still image.
-    const encoder = tracker.track(new ff.CodecContext(imageSel.encoder), 'encoder')
-    encoder.width = outW
-    encoder.height = outH
-    encoder.pixelFormat = imageSel.pixelFormat
-    encoder.timeBase = { numerator: 1, denominator: 25 }
-
-    const quality = Math.max(1, Math.min(100, config.quality))
-    if (imageSel.mimeType === 'image/webp') {
-      // libwebp takes a 0..100 quality (higher = better), the inverse of MJPEG's
-      // qscale. Best-effort; ignored by builds/encoders that don't expose it.
-      try { encoder.setOption('quality', String(quality)) } catch {}
-    } else {
-      // Best-effort quality control for MJPEG (qscale 2=best .. 31=worst).
-      const qscale = Math.max(2, Math.min(31, Math.round(31 - (quality / 100) * 29)))
-      try { encoder.setOption('qscale', String(qscale)) } catch {}
-      try { encoder.setOption('q:v', String(qscale)) } catch {}
-    }
-
-    encoder.open()
-
-    const outPacket = tracker.track(new ff.Packet(), 'outPacket')
-    let encoded = null
-    if (encoder.sendFrame(scaledFrame) && encoder.receivePacket(outPacket)) {
-      encoded = Buffer.from(outPacket.data)
-      outPacket.unref()
-    }
-    if (!encoded) {
-      // Flush the encoder (single intra frame may emit on flush).
-      encoder.sendFrame(null)
-      if (encoder.receivePacket(outPacket)) {
-        encoded = Buffer.from(outPacket.data)
-        outPacket.unref()
-      }
-    }
-
+    const { scaledFrame, outW, outH } = extracted
+    const encoded = encodeStillImage(ff, tracker, imageSel, scaledFrame, outW, outH, config.quality)
     if (!encoded || !encoded.length) {
       log.warn('Encoder produced no thumbnail data')
       return null
@@ -386,7 +389,8 @@ export async function generateThumbnail(filePath, options = {}) {
     return null
   } finally {
     tracker.destroyAll()
-    try { ioContext?._cleanup?.() } catch {}
+    // Cleanup is best-effort; the teardown must never mask the result above.
+    try { ioContext?._cleanup?.() } catch { /* cleanup already ran */ }
   }
 }
 

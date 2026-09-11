@@ -31,12 +31,12 @@ export const styles = StyleSheet.create({
   },
   // Landscape fullscreen styles
   landscapeContainer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: PLAYER_COLORS.black,
     zIndex: PLAYER_Z_INDEX.overlay,
   },
   landscapeAnimatedContainer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: PLAYER_COLORS.black,
   },
   landscapeExitButton: {
@@ -71,7 +71,7 @@ export const styles = StyleSheet.create({
     zIndex: 20,
   },
   landscapeVideoWrapper: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     flex: 1,
     backgroundColor: PLAYER_COLORS.black,
   },
@@ -84,7 +84,7 @@ export const styles = StyleSheet.create({
     backgroundColor: PLAYER_COLORS.black,
   },
   landscapeVideoBackground: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: PLAYER_COLORS.black,
   },
   videoPlaceholder: {
@@ -143,7 +143,7 @@ export const styles = StyleSheet.create({
     fontWeight: '600',
   },
   loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.7)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -480,7 +480,7 @@ export const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   miniPipOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0, 0, 0, 0.4)',
     justifyContent: 'center',
     alignItems: 'center',

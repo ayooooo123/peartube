@@ -83,7 +83,7 @@ async function residency (raw, discoveryKey) {
   return { bytes, indices }
 }
 
-async function fixture (t, { window: offloadWindowBytes }) {
+async function fixture (t, { window: offloadWindowBytes, hold = false }) {
   const bucket = createFakeBucket()
   const offload = await createRelayBlockOffload({
     config: relayConfig(offloadWindowBytes),
@@ -94,13 +94,20 @@ async function fixture (t, { window: offloadWindowBytes }) {
   const directory = mkdtempSync(join(tmpdir(), 'pt-offload-residency-'))
   const raw = Hypercore.defaultStorage(directory)
   const storage = offload.wrapStorage(raw)
+  // A held fixture is deliberately held before the real core is opened and
+  // before its blocks are appended. Automatic residency eviction is allowed
+  // to arm during that interval, but not to delete anything until the caller
+  // has made its registration decision.
+  if (hold === true) offload.holdEviction()
   const core = new Hypercore(storage)
-  await core.ready()
 
   t.teardown(async () => {
+    if (hold === true) offload.startEviction()
     await core.close().catch(() => {})
     rmSync(directory, { recursive: true, force: true })
   })
+
+  await core.ready()
 
   const blocks = []
   for (let index = 0; index < BLOCK_COUNT; index++) {
@@ -112,10 +119,12 @@ async function fixture (t, { window: offloadWindowBytes }) {
 }
 
 test('the relay holds an offload-backed core to the configured window and reports what it holds', async (t) => {
-  const { bucket, offload, storage, core, blocks, discoveryKey, raw } = await fixture(t, { window: WINDOW_BYTES })
+  const { bucket, offload, storage, core, blocks, discoveryKey, raw } = await fixture(t, { window: WINDOW_BYTES, hold: true })
 
   t.is((await residency(raw, discoveryKey)).bytes, BLOCK_COUNT * BLOCK_SIZE, 'the whole title starts on local disk')
 
+  // Release only after the fresh core has been observed with all of its blocks.
+  offload.startEviction()
   await storage.offloadSweep()
 
   t.alike(
@@ -188,13 +197,11 @@ test('a window of zero keeps no block data local, and offload off keeps all of i
 // out of that window, so a core registered as keep-local a moment later still
 // has all its blocks.
 test('a sweep asked for while eviction is held runs only after the keep-local list is registered', async (t) => {
-  const { offload, storage, core, discoveryKey, raw } = await fixture(t, { window: WINDOW_BYTES })
-
-  offload.holdEviction()
+  const { offload, storage, core, discoveryKey, raw } = await fixture(t, { window: WINDOW_BYTES, hold: true })
 
   let swept = false
   const sweeping = storage.offloadSweep().then((stats) => { swept = true; return stats })
-  await new Promise(resolve => setTimeout(resolve, 50))
+  await Promise.resolve()
 
   t.is(swept, false, 'the sweep is still waiting on the hold')
   t.is((await residency(raw, discoveryKey)).bytes, BLOCK_COUNT * BLOCK_SIZE, 'and nothing has left the volume')
@@ -213,9 +220,8 @@ test('a sweep asked for while eviction is held runs only after the keep-local li
 // release therefore has to survive a failing open, which is why the storage
 // layer releases in a `finally`.
 test('a hold released after a failed open still lets sweeps run', async (t) => {
-  const { offload, storage, discoveryKey, raw } = await fixture(t, { window: WINDOW_BYTES })
+  const { offload, storage, discoveryKey, raw } = await fixture(t, { window: WINDOW_BYTES, hold: true })
 
-  offload.holdEviction()
   // The storage layer's failure path: cleanup throws, the release still runs.
   try {
     await Promise.reject(new Error('metaCore.ready failed'))

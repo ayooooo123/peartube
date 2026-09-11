@@ -16,7 +16,11 @@ function runEntry (args, env = {}) {
         PATH: process.env.PATH,
         PEARTUBE_ADD_DEPS_MODULE: depsModule,
         TMDB_API_KEY: 'super-secret-token',
-        ...env
+        ...env,
+        // Keep the child hermetic while carrying the selected parent loader.
+        // The loader supplies cached third-party dependencies for this
+        // worktree; inheriting the full environment would also inherit secrets.
+        ...(process.env.NODE_OPTIONS ? { NODE_OPTIONS: process.env.NODE_OPTIONS } : {})
       }
     })
     let stdout = ''

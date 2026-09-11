@@ -30,8 +30,6 @@ import { createBackendContext } from '@peartube/backend/orchestrator'
 // @ts-ignore
 import { PROTOCOL_VERSION } from '@peartube/host'
 // @ts-ignore
-import { isExpectedBlobRequestCancellation } from '@peartube/backend/blob-request-cancellation'
-// @ts-ignore
 import { normalizeUploadVideoMediaMetadata } from '@peartube/backend/upload-video-contract'
 // Bare runtime globals (available when spawned via pear.run())
 declare const Bare: { argv: string[]; IPC: any } | undefined
@@ -41,16 +39,13 @@ declare const Bare: { argv: string[]; IPC: any } | undefined
 // unhandledRejection/uncaughtException handler calls abort() (SIGABRT), which
 // tears down the app's whole backend — observed as recurring `bare` crashes.
 // The mobile backend (packages/app/backend/index.mjs) already installs this
-// parity; the desktop worker was missing it. Log the reason and return true to
-// suppress the fatal default; expected P2P blob-range cancellations are consumed
-// silently. Covers post-import runtime rejections (static imports run first).
+// parity; the desktop worker was missing it. Log every reason and return true to
+// suppress the fatal default. Covers post-import runtime rejections (static
+// imports run first); blob teardown is handled by the owning HTTP request.
 if (typeof Bare !== 'undefined' && Bare !== null && 'on' in Bare) {
   const on = Bare.on
   if (typeof on === 'function') {
     on.call(Bare, 'unhandledRejection', (reason: unknown) => {
-      let expected = false
-      try { expected = isExpectedBlobRequestCancellation(reason) } catch { expected = false }
-      if (expected) return true
       try {
         console.error('[DesktopWorker] Unhandled rejection:', reason instanceof Error ? (reason.stack ?? reason.message) : String(reason))
       } catch {}
@@ -75,6 +70,14 @@ interface TranscodeSession {
   status: 'pending' | 'transcoding' | 'complete' | 'error'; progress: number
   transcodeUrl?: string; proxyUrl?: string; error?: string
   mode: 'transcode' | 'audio' | 'remux'; duration?: number
+}
+type CompatTranscodeResult = {
+  success: boolean
+  sessionId: string
+  mode?: string
+  reused?: boolean
+  reason?: string
+  error?: string | null
 }
 const transcodeSessions = new Map<string, TranscodeSession>()
 function handleTranscodeProgress(sessionId: string, progress: number) {
@@ -391,7 +394,7 @@ function getMimeTypeFromPath(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() || ''
   return { mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', mov: 'video/quicktime', avi: 'video/x-msvideo' }[ext] || 'video/mp4'
 }
-function spawnOsascript(script: string): Promise<any> {
+function spawnOsascript(script: string): Promise<string | null> {
   return new Promise((resolve, reject) => {
     const proc = spawn('osascript', ['-e', script])
     let stdout = '', stderr = ''
@@ -420,7 +423,6 @@ async function pickImageFile(): Promise<any> {
   return { filePath, name: filePath.split('/').pop() || 'image', size: stat.size, dataUrl: `data:${mimeType};base64,${buf.toString('base64')}` }
 }
 // Storage + Transport + Backend Init
-declare const Bare: { argv: string[]; IPC: any } | undefined
 console.log('[Worker] PearTube Desktop Worker starting...')
 
 // Storage: Bare.argv[2] (from Electrobun/pear-runtime), then default
@@ -578,7 +580,7 @@ rpc.onWebPreparePlayback(async (r: any) => {
   try {
     const directUrl = normalizeLocalUrlForWorker(prep.url)
     const sourceKey = buildTranscodeCacheKey(directUrl) || directUrl
-    const result = await castTranscoder.startCompatTranscode(directUrl, {
+    const result: CompatTranscodeResult = await castTranscoder.startCompatTranscode(directUrl, {
       player: 'webkit', sourceKey, force: true, isVideoComplete: true,
     })
     if (!result?.success) {

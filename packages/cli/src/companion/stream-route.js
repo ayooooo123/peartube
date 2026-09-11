@@ -124,6 +124,10 @@ function sendError (request, response, error, { byteLength = null, allow = null 
     if (error.statusCode === 416) response.setHeader('Content-Range', `bytes */${byteLength}`)
   }
   response.writeHead(error.statusCode)
+  // bare-http1._final rewrites Content-Length to 0 when end() finds unflushed
+  // headers; flushing the declared block first keeps a bodyless HEAD error
+  // response mirroring the headers the same error would produce for GET.
+  if (request.method === 'HEAD') response.flushHeaders()
   response.end(request.method === 'HEAD' ? undefined : body)
   return true
 }
@@ -227,6 +231,94 @@ function verifiedChunk (result, expectedLength) {
   }
   return result.bytes
 }
+function terminateStreamingError (response, error) {
+  try {
+    const socket = response.socket
+    response.end?.(() => {
+      try {
+        if (typeof socket?.end === 'function' && !socket.destroyed) socket.end()
+      } catch {
+        // The response is already terminal; the socket may have closed concurrently.
+      }
+    })
+  } catch {
+    try {
+      response.destroy?.(error)
+    } catch {
+      // The failed response may already have destroyed its transport.
+    }
+  }
+}
+
+function handleStreamingError (request, response, method, error, asset, controller) {
+  if (response.destroyed || response.writableEnded) return
+  if (response.headersSent) {
+    terminateStreamingError(response, error)
+    return
+  }
+  if (controller.signal.aborted || error?.name === 'AbortError') {
+    sendError({ ...request, method }, response, contractError(499, 'REQUEST_CANCELLED', 'Stream request was cancelled'), { byteLength: asset?.byteLength })
+    return
+  }
+  const known = error instanceof CompanionContractError
+    ? error
+    : contractError(502, 'BACKEND_FAILURE', 'Stream backend request failed')
+  sendError({ ...request, method }, response, known, { byteLength: asset?.byteLength })
+}
+
+async function pipeStreamChunks (response, asset, range, headers, streamChunkBytes, rangeDeadlineMs, streamWriteIdleMs, controller, stallWrite) {
+  asset.seek?.({ byteStart: range.start })
+  let offset = range.start
+  const firstEnd = Math.min(range.end + 1, offset + streamChunkBytes)
+  const first = verifiedChunk(await asset.requestRange({
+    assetId: asset.assetId,
+    byteStart: offset,
+    byteEnd: firstEnd,
+    deadlineMs: rangeDeadlineMs,
+    signal: controller.signal
+  }), firstEnd - offset)
+  if (controller.signal.aborted || response.destroyed || response.writableEnded) return false
+
+  setHeaders(response, headers)
+  response.statusCode = range.statusCode
+  response.writeHead(range.statusCode)
+  await writeChunk(response, first, controller.signal, streamWriteIdleMs, stallWrite)
+  offset = firstEnd
+
+  while (offset <= range.end) {
+    const byteEnd = Math.min(range.end + 1, offset + streamChunkBytes)
+    const bytes = verifiedChunk(await asset.requestRange({
+      assetId: asset.assetId,
+      byteStart: offset,
+      byteEnd,
+      deadlineMs: rangeDeadlineMs,
+      signal: controller.signal
+    }), byteEnd - offset)
+    await writeChunk(response, bytes, controller.signal, streamWriteIdleMs, stallWrite)
+    offset = byteEnd
+  }
+  return true
+}
+
+function bindStreamAbort (signal, request, response, abort) {
+  signal?.addEventListener?.('abort', abort, { once: true })
+  request?.once?.('aborted', abort)
+  response?.once?.('close', abort)
+}
+
+function unbindStreamAbort (signal, request, response, abort) {
+  signal?.removeEventListener?.('abort', abort)
+  request?.removeListener?.('aborted', abort)
+  response?.removeListener?.('close', abort)
+}
+
+function releaseStreamLease (capabilities, token, writeStalled, acquisition) {
+  try {
+    if (writeStalled && token !== null) capabilities.close(token)
+  } finally {
+    acquisition?.release()
+  }
+}
 
 export function isCompanionStreamRoute (rawUrl) {
   try {
@@ -278,10 +370,7 @@ export function createCompanionStreamRoute ({
         // The stalled response transport may already be closed.
       }
     }
-    signal?.addEventListener?.('abort', abort, { once: true })
-    request?.once?.('aborted', abort)
-    response?.once?.('close', abort)
-
+    bindStreamAbort(signal, request, response, abort)
     try {
       const url = parseUrl(request.url)
       const match = url.pathname.match(STREAM_PATH)
@@ -307,82 +396,31 @@ export function createCompanionStreamRoute ({
         setHeaders(response, headers)
         response.statusCode = range.statusCode
         response.writeHead(range.statusCode)
+        // bare-http1._final rewrites unflushed headers to Content-Length:0 on bodyless end().
+        response.flushHeaders()
         completed = true
         response.end()
         return true
       }
 
-      asset.seek?.({ byteStart: range.start })
-      let offset = range.start
-      const firstEnd = Math.min(range.end + 1, offset + streamChunkBytes)
-      const first = verifiedChunk(await asset.requestRange({
-        assetId: asset.assetId,
-        byteStart: offset,
-        byteEnd: firstEnd,
-        deadlineMs: rangeDeadlineMs,
-        signal: controller.signal
-      }), firstEnd - offset)
-      if (controller.signal.aborted || response.destroyed || response.writableEnded) return true
-
-      setHeaders(response, headers)
-      response.statusCode = range.statusCode
-      response.writeHead(range.statusCode)
-      await writeChunk(response, first, controller.signal, streamWriteIdleMs, stallWrite)
-      offset = firstEnd
-
-      while (offset <= range.end) {
-        const byteEnd = Math.min(range.end + 1, offset + streamChunkBytes)
-        const bytes = verifiedChunk(await asset.requestRange({
-          assetId: asset.assetId,
-          byteStart: offset,
-          byteEnd,
-          deadlineMs: rangeDeadlineMs,
-          signal: controller.signal
-        }), byteEnd - offset)
-        await writeChunk(response, bytes, controller.signal, streamWriteIdleMs, stallWrite)
-        offset = byteEnd
+      const streamed = await pipeStreamChunks(
+        response, asset, range, headers, streamChunkBytes,
+        rangeDeadlineMs, streamWriteIdleMs, controller, stallWrite
+      )
+      if (streamed) {
+        completed = true
+        response.end()
+      } else {
+        handleStreamingError(request, response, method, abortError(), asset, controller)
       }
-
-      completed = true
-      response.end()
-      return true
     } catch (error) {
-      if (controller.signal.aborted || error?.name === 'AbortError' || response.destroyed || response.writableEnded) return true
-      if (response.headersSent) {
-        try {
-          const socket = response.socket
-          response.end?.(() => {
-            try {
-              if (typeof socket?.end === 'function' && !socket.destroyed) socket.end()
-            } catch {
-              // The response is already terminal; the socket may have closed concurrently.
-            }
-          })
-        } catch {
-          try {
-            response.destroy?.(error)
-          } catch {
-            // The failed response may already have destroyed its transport.
-          }
-        }
-        return true
-      }
-      const known = error instanceof CompanionContractError
-        ? error
-        : contractError(502, 'BACKEND_FAILURE', 'Stream backend request failed')
-      sendError({ ...request, method }, response, known, { byteLength: asset?.byteLength })
-      return true
+      handleStreamingError(request, response, method, error, asset, controller)
     } finally {
       completed = true
-      signal?.removeEventListener?.('abort', abort)
-      request?.removeListener?.('aborted', abort)
-      response?.removeListener?.('close', abort)
-      try {
-        if (writeStalled && token !== null) capabilities.close(token)
-      } finally {
-        acquisition?.release()
-      }
+      unbindStreamAbort(signal, request, response, abort)
+      releaseStreamLease(capabilities, token, writeStalled, acquisition)
     }
+    return true
   }
 
   return Object.freeze({ handle, matches: isCompanionStreamRoute })

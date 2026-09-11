@@ -14,6 +14,13 @@ export class TmdbProviderError extends Error {
   }
 }
 
+export function tmdbImageUrl (path, size, imageBaseUrl = DEFAULT_IMAGE_BASE_URL) {
+  if (typeof path !== 'string' || !/^\/?[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(path)) {
+    throw new Error('TMDB artwork path must be a single filename')
+  }
+  return `${imageBaseUrl.replace(/\/+$/, '')}/${size}/${path.replace(/^\//, '')}`
+}
+
 export function createTmdbProvider ({
   apiKey,
   fetch: fetchImpl,
@@ -65,7 +72,7 @@ export function createTmdbProvider ({
       provider: 'tmdb',
       path,
       size: ARTWORK_SIZES[role],
-      url: `${imageBaseUrl}/${ARTWORK_SIZES[role]}${path}`
+      url: tmdbImageUrl(path, ARTWORK_SIZES[role], imageBaseUrl)
     }
   }
 

@@ -1,19 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Platform, Pressable, Text, TextInput, View } from 'react-native'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { ActivityIndicator, FlatList, Platform, Pressable, Text, TextInput, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { useLocalSearchParams, useRouter } from 'expo-router'
-import type { MediaEntitySummary } from '@peartube/core'
 
-import { MediaCatalogView } from '@/components/media/MediaCatalogView'
-import {
-  encodeMediaEntityRouteParam,
-  getMediaEntityRouteId,
-} from '@/components/media/MediaEntityDetailScreen'
-import { useMediaCatalog } from '@/hooks/useMediaCatalog'
 import { colors } from '@/lib/colors'
-import { searchMediaCatalog } from '@/lib/media-catalog-controller.mjs'
 import { usePlatform } from '@/lib/PlatformProvider'
-import { resolveProviderHit, type ProviderHit } from '@/lib/provider-consumer-flow'
+import { providerHitAction, resolveProviderHit, type ProviderHit, type ProviderResolution } from '@/lib/provider-consumer-flow'
 import { useApp } from './_layout'
 
 function MobileSearchBar({
@@ -85,7 +77,11 @@ function MobileSearchBar({
 type ProviderSearchState = {
   status: 'idle' | 'searching' | 'ready' | 'error'
   hits: ProviderHit[]
+  nextCursor: string | null
+  loadingNext: boolean
   openingRef: string | null
+  partial: boolean
+  stale: boolean
 }
 
 function isProviderHit(value: unknown): value is ProviderHit {
@@ -102,142 +98,227 @@ function isProviderHit(value: unknown): value is ProviderHit {
     typeof value.acquirable === 'boolean',
   )
 }
+type ResolvedHit =
+  | { kind: 'published'; entityId: string; publicationId: string | null }
+  | { kind: 'local'; entityId: string; entityKind: string }
+  | { kind: 'request'; resolution: ProviderResolution }
+  | { kind: 'unavailable' }
+
+type ParsedSearchResponse = {
+  hits: ProviderHit[]
+  nextCursor: string | null
+  partial: boolean
+  stale: boolean
+}
+
+function parseSearchResponse(response: unknown): ParsedSearchResponse {
+  if (!response || typeof response !== 'object' || !('success' in response)) {
+    throw new Error('Search unavailable')
+  }
+  const hasSuccess = 'success' in response && response.success === true
+  if (!hasSuccess) {
+    throw new Error('Search unavailable')
+  }
+  const hits = 'hits' in response && Array.isArray(response.hits) ? response.hits.filter(isProviderHit) : []
+  const nextCursor = 'nextCursor' in response && typeof response.nextCursor === 'string' ? response.nextCursor : null
+  const partial = 'partial' in response && response.partial === true
+  const stale = 'stale' in response && response.stale === true
+  return { hits, nextCursor, partial, stale }
+}
+
+function mergeSearchResult(
+  current: ProviderSearchState,
+  parsed: ParsedSearchResponse,
+  cursor: string | null,
+): ProviderSearchState {
+  return {
+    ...current,
+    status: 'ready',
+    hits: cursor ? [...current.hits, ...parsed.hits] : parsed.hits,
+    nextCursor: parsed.nextCursor,
+    loadingNext: false,
+    partial: Boolean(cursor && current.partial) || parsed.partial,
+    stale: Boolean(cursor && current.stale) || parsed.stale,
+  }
+}
+
+function navigateDirectHit(router: ReturnType<typeof useRouter>, hit: ProviderHit): boolean {
+  if (hit.mediaKind === 'collection' && hit.entityId) {
+    router.push({
+      pathname: '/collection/[id]',
+      params: { id: encodeURIComponent(hit.entityId) },
+    })
+    return true
+  }
+  if ((hit.mediaKind === 'creator' || hit.mediaKind === 'agent') && hit.entityId) {
+    router.push({
+      pathname: '/creator/[id]',
+      params: { id: encodeURIComponent(hit.entityId) },
+    })
+    return true
+  }
+  return false
+}
+
+function navigateResolvedHit(router: ReturnType<typeof useRouter>, result: ResolvedHit): boolean {
+  if (result.kind === 'local') {
+    if (result.entityKind === 'collection') {
+      router.push({
+        pathname: '/collection/[id]',
+        params: { id: encodeURIComponent(result.entityId) },
+      })
+      return true
+    }
+    if (result.entityKind === 'creator' || result.entityKind === 'agent') {
+      router.push({
+        pathname: '/creator/[id]',
+        params: { id: encodeURIComponent(result.entityId) },
+      })
+      return true
+    }
+    router.push({
+      pathname: '/media/[id]',
+      params: { id: encodeURIComponent(result.entityId) },
+    })
+    return true
+  }
+  if (result.kind === 'published') {
+    router.push({
+      pathname: '/media/[id]',
+      params: {
+        id: encodeURIComponent(result.entityId),
+        autoplay: 'true',
+        ...(result.publicationId ? { publicationId: result.publicationId } : {}),
+      },
+    })
+    return true
+  }
+  if (result.kind === 'request') {
+    const routeId = result.resolution.entityId || `request:${result.resolution.resolutionRef}`
+    const item = {
+      entityId: routeId,
+      localEntityId: routeId,
+      entityKind: 'work',
+      title: result.resolution.title,
+      subtitle: result.resolution.subtitle || null,
+      providerResolution: result.resolution,
+      availability: {
+        state: 'unavailable',
+        observedAt: Date.now(),
+        expiresAt: Date.now(),
+        requiredRangeCount: 1,
+        reachableRangeCount: 0,
+        independentPeerCount: 0,
+        completePeerCount: 0,
+        offlinePlayable: false,
+        archivePledged: false,
+        reasonCodes: [],
+      },
+      sources: [],
+    }
+    router.push({
+      pathname: '/media/[id]',
+      params: {
+        id: encodeURIComponent(routeId),
+        item: encodeURIComponent(JSON.stringify(item)),
+      },
+    })
+    return true
+  }
+  return false
+}
+
 
 
 export default function SearchScreen() {
   const router = useRouter()
   const params = useLocalSearchParams<{ q?: string }>()
   const { isDesktop, insets } = usePlatform()
-  const { ready, rpc, platformEvents, backendError, startupStatus } = useApp()
+  const { ready, rpc } = useApp()
   const query = typeof params.q === 'string' ? params.q.trim() : ''
   const [providerSearch, setProviderSearch] = useState<ProviderSearchState>({
     status: 'idle',
     hits: [],
+    nextCursor: null,
+    loadingNext: false,
     openingRef: null,
+    partial: false,
+    stale: false,
   })
 
-  const searchRpc = useMemo(() => {
-    if (!rpc || typeof rpc.getMediaCatalog !== 'function' || !query) return null
-    return {
-      getMediaCatalog: (request: { cursor?: string; limit?: number }) => searchMediaCatalog({
-        getMediaCatalog: (catalogRequest) => rpc.getMediaCatalog(catalogRequest),
-        query,
-        cursor: request.cursor,
-        limit: request.limit,
-      }),
-    }
-  }, [query, rpc])
-
-  const catalog = useMediaCatalog({
-    ready: ready && Boolean(query),
-    rpc: searchRpc,
-    events: platformEvents,
-    diagnostics: { backendError, startupStatus },
-  })
-  useEffect(() => {
+  const pendingSearch = useRef({ generation: 0, scope: 0, paging: false, query, ready, rpc })
+  const requestPage = useCallback(async (cursor: string | null = null) => {
+    if (cursor && (pendingSearch.current.paging || query !== pendingSearch.current.query
+      || ready !== pendingSearch.current.ready || rpc !== pendingSearch.current.rpc)) return
+    const generation = ++pendingSearch.current.generation
+    pendingSearch.current.paging = cursor !== null
+    pendingSearch.current.query = query
+    pendingSearch.current.ready = ready
+    pendingSearch.current.rpc = rpc
     const provider = rpc?.provider
     if (!ready || !query || typeof provider?.search !== 'function') {
-      setProviderSearch({ status: 'idle', hits: [], openingRef: null })
+      setProviderSearch({ status: 'idle', hits: [], nextCursor: null, loadingNext: false, openingRef: null, partial: false, stale: false })
       return
     }
-
-    let active = true
-    setProviderSearch({ status: 'searching', hits: [], openingRef: null })
-    void (async () => {
-      try {
-        const response: unknown = await provider.search({ query, limit: 20 })
-        if (!response || typeof response !== 'object' || !('success' in response) || response.success !== true) {
-          throw new Error('Search unavailable')
-        }
-        const hits = 'hits' in response && Array.isArray(response.hits)
-          ? response.hits.filter(isProviderHit)
-          : []
-        if (active) setProviderSearch({ status: 'ready', hits, openingRef: null })
-      } catch {
-        if (active) setProviderSearch({ status: 'error', hits: [], openingRef: null })
-      }
-    })()
-
-    return () => {
-      active = false
+    setProviderSearch(current => cursor
+      ? { ...current, loadingNext: true }
+      : { status: 'searching', hits: [], nextCursor: null, loadingNext: false, openingRef: null, partial: false, stale: false })
+    try {
+      const response: unknown = await provider.search({ query, limit: 20, ...(cursor ? { cursor } : {}) })
+      const parsed = parseSearchResponse(response)
+      if (generation !== pendingSearch.current.generation) return
+      setProviderSearch(current => generation !== pendingSearch.current.generation
+        ? current
+        : mergeSearchResult(current, parsed, cursor))
+    } catch {
+      setProviderSearch(current => generation !== pendingSearch.current.generation
+        ? current
+        : { ...current, status: 'error', loadingNext: false })
+    } finally {
+      if (generation === pendingSearch.current.generation) pendingSearch.current.paging = false
     }
   }, [query, ready, rpc])
 
+  useLayoutEffect(() => {
+    void requestPage()
+    return () => {
+      pendingSearch.current.generation++
+      pendingSearch.current.scope++
+      pendingSearch.current.paging = false
+    }
+  }, [requestPage])
+
   const openProviderHit = useCallback(async (hit: ProviderHit) => {
     const provider = rpc?.provider
-    if (!provider) return
-    setProviderSearch(current => ({ ...current, openingRef: hit.resolutionRef }))
+    const scope = pendingSearch.current.scope
+    const isCurrent = () => scope === pendingSearch.current.scope
+      && query === pendingSearch.current.query
+      && ready === pendingSearch.current.ready
+      && rpc === pendingSearch.current.rpc
+    if (!ready || !provider || !isCurrent()) return
+    setProviderSearch(current => isCurrent() ? { ...current, openingRef: hit.resolutionRef } : current)
     try {
+      if (navigateDirectHit(router, hit)) {
+        setProviderSearch(current => ({ ...current, openingRef: null }))
+        return
+      }
       const result = await resolveProviderHit(provider, hit)
-      if (result.kind === 'published') {
-        router.push({
-          pathname: '/media/[id]',
-          params: {
-            id: encodeURIComponent(result.entityId),
-            autoplay: 'true',
-            publicationId: result.publicationId,
-          },
-        })
-        return
+      if (!isCurrent()) return
+      if (result.kind === 'local') {
+        setProviderSearch(current => ({ ...current, openingRef: null }))
       }
-      if (result.kind === 'request') {
-        const routeId = result.resolution.entityId || `request:${result.resolution.resolutionRef}`
-        const item = {
-          entityId: routeId,
-          localEntityId: routeId,
-          entityKind: 'work',
-          title: result.resolution.title,
-          subtitle: result.resolution.subtitle || null,
-          providerResolution: result.resolution,
-          availability: {
-            state: 'unavailable',
-            observedAt: Date.now(),
-            expiresAt: Date.now(),
-            requiredRangeCount: 1,
-            reachableRangeCount: 0,
-            independentPeerCount: 0,
-            completePeerCount: 0,
-            offlinePlayable: false,
-            archivePledged: false,
-            reasonCodes: [],
-          },
-          sources: [],
-        }
-        router.push({
-          pathname: '/media/[id]',
-          params: {
-            id: encodeURIComponent(routeId),
-            item: encodeURIComponent(JSON.stringify(item)),
-          },
-        })
-        return
+      const handled = navigateResolvedHit(router, result)
+      if (!handled) {
+        setProviderSearch(current => isCurrent() ? { ...current, status: 'error', openingRef: null } : current)
       }
-      setProviderSearch(current => ({ ...current, status: 'error', openingRef: null }))
     } catch {
-      setProviderSearch(current => ({ ...current, status: 'error', openingRef: null }))
+      setProviderSearch(current => isCurrent() ? { ...current, status: 'error', openingRef: null } : current)
     }
-  }, [router, rpc])
-
+  }, [query, ready, router, rpc])
 
   const submitSearch = useCallback((nextQuery: string) => {
     router.replace({ pathname: '/search', params: { q: nextQuery } })
   }, [router])
-
-  const openEntity = useCallback((_entityId: string, item: MediaEntitySummary) => {
-    const pathname = item.entityKind === 'collection'
-      ? '/collection/[id]'
-      : item.entityKind === 'agent'
-        ? '/creator/[id]'
-        : '/media/[id]'
-    router.push({
-      pathname,
-      params: {
-        id: encodeURIComponent(getMediaEntityRouteId(item as any)),
-        item: encodeMediaEntityRouteParam(item as any),
-      },
-    })
-  }, [router])
-
   return (
     <View style={{
       flex: 1,
@@ -266,68 +347,106 @@ export default function SearchScreen() {
         <MobileSearchBar
           key={query}
           initialQuery={query}
-          searching={catalog.status === 'loading' || catalog.refreshing || providerSearch.status === 'searching'}
+          searching={providerSearch.status === 'searching'}
           onSubmit={submitSearch}
         />
       ) : null}
 
       {query ? (
-        <>
-          {providerSearch.hits.length > 0 ? (
-            <View style={{ paddingHorizontal: 16, paddingVertical: 12, gap: 8 }}>
-              <Text style={{ color: colors.text, fontSize: 16, fontWeight: '700' }}>More results</Text>
-              {providerSearch.hits.slice(0, 3).map((hit) => {
-                const opening = providerSearch.openingRef === hit.resolutionRef
-                return (
-                  <Pressable
-                    key={hit.resolutionRef}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${hit.published ? 'Play' : 'Open'} ${hit.title}`}
-                    disabled={Boolean(providerSearch.openingRef)}
-                    onPress={() => { void openProviderHit(hit) }}
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      borderWidth: 1,
-                      borderColor: colors.border,
-                      borderRadius: 12,
-                      backgroundColor: colors.bgSecondary,
-                      paddingHorizontal: 14,
-                      paddingVertical: 12,
-                      opacity: providerSearch.openingRef && !opening ? 0.55 : 1,
-                    }}
-                  >
-                    <View style={{ flex: 1, paddingRight: 12 }}>
-                      <Text style={{ color: colors.text, fontWeight: '700' }} numberOfLines={1}>{hit.title}</Text>
-                      <Text style={{ color: colors.textMuted }} numberOfLines={1}>
-                        {hit.subtitle || (hit.published ? 'Ready to watch' : 'Available by request')}
-                      </Text>
-                    </View>
-                    <Text style={{ color: colors.primary, fontWeight: '700' }}>
-                      {opening ? 'Opening…' : hit.published ? 'Play' : 'View'}
-                    </Text>
-                  </Pressable>
-                )
-              })}
-            </View>
-          ) : null}
-          {providerSearch.status === 'error' ? (
-            <Text accessibilityRole="alert" style={{ color: colors.textMuted, paddingHorizontal: 16, paddingBottom: 8 }}>
-              More results are unavailable.
-            </Text>
-          ) : null}
-          <MediaCatalogView
-            title={`Search results for “${query}”`}
-            subtitle="Results from the locally projected, moderated media catalog"
-            state={catalog}
-            diagnostic={catalog.diagnostic}
-            onRefresh={() => { void catalog.refresh() }}
-            onLoadNext={() => { void catalog.loadNext() }}
-            onEntityPress={openEntity}
-            contentBottomInset={Math.max(insets.bottom + 24, 24)}
-          />
-        </>
+        <FlatList
+          data={providerSearch.hits}
+          keyExtractor={(item) => item.resolutionRef}
+          refreshing={providerSearch.status === 'searching'}
+          onRefresh={() => { void requestPage() }}
+          onEndReached={() => {
+            if (providerSearch.nextCursor && providerSearch.status === 'ready') {
+              void requestPage(providerSearch.nextCursor)
+            }
+          }}
+          onEndReachedThreshold={0.5}
+          contentContainerStyle={{
+            paddingHorizontal: 16,
+            paddingVertical: 12,
+            paddingBottom: Math.max(insets.bottom + 24, 24),
+            gap: 8,
+          }}
+          ListHeaderComponent={
+            providerSearch.status === 'error' || providerSearch.partial || providerSearch.stale ? (
+              <Text accessibilityRole="alert" style={{ color: colors.textMuted, paddingBottom: 8 }}>
+                {providerSearch.status === 'error'
+                  ? 'Search results are currently unavailable.'
+                  : providerSearch.partial
+                    ? 'Some index services did not respond. Results may be incomplete.'
+                    : 'The index changed during this search. Refresh for current results.'}
+              </Text>
+            ) : null
+          }
+          ListEmptyComponent={
+            providerSearch.status === 'ready' && !providerSearch.partial && !providerSearch.stale ? (
+              <View style={{ paddingVertical: 32, alignItems: 'center' }}>
+                <Text style={{ color: colors.textMuted, fontSize: 16 }}>No results found for “{query}”</Text>
+              </View>
+            ) : null
+          }
+          ListFooterComponent={
+            providerSearch.loadingNext ? (
+              <View style={{ paddingVertical: 16, alignItems: 'center' }}>
+                <ActivityIndicator color={colors.primary} />
+              </View>
+            ) : null
+          }
+          renderItem={({ item: hit }) => {
+            const opening = providerSearch.openingRef === hit.resolutionRef
+            const action = providerHitAction(hit)
+            const actionLabel = opening
+              ? 'Opening…'
+              : action === 'open'
+                ? 'View'
+                : action === 'play'
+                  ? 'Play'
+                  : action === 'resolve' ? 'Request' : 'Unavailable'
+            const badgeLabel = hit.subtitle
+              || (hit.mediaKind === 'collection'
+                ? 'Collection'
+                : hit.mediaKind === 'creator' || hit.mediaKind === 'agent'
+                  ? 'Creator'
+                  : hit.published
+                    ? 'Ready to watch'
+                    : 'Available by request')
+            return (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`${actionLabel} ${hit.title}`}
+                disabled={Boolean(providerSearch.openingRef) || action === 'unavailable'}
+                onPress={() => { void openProviderHit(hit) }}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  borderRadius: 12,
+                  backgroundColor: colors.bgSecondary,
+                  paddingHorizontal: 14,
+                  paddingVertical: 12,
+                  opacity: providerSearch.openingRef && !opening ? 0.55 : 1,
+                }}
+              >
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={{ color: colors.text, fontWeight: '700', fontSize: 15 }} numberOfLines={1}>
+                    {hit.title}
+                  </Text>
+                  <Text style={{ color: colors.textMuted, fontSize: 13 }} numberOfLines={1}>
+                    {badgeLabel}
+                  </Text>
+                </View>
+                <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 14 }}>
+                  {actionLabel}
+                </Text>
+              </Pressable>
+            )
+          }}
+        />
       ) : (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 }}>
           <Feather name="search" size={42} color={colors.textMuted} />

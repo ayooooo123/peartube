@@ -1,6 +1,8 @@
 const FOOTER = 'peartube add · interactive'
 const BAR_WIDTH = 20
-const ANSI_PATTERN = /\u001b\[[0-9;?]*[A-Za-z]/g
+// Build the CSI matcher without embedding the ESC control byte in a regex
+// literal/string that no-control-regex can statically flag.
+const ANSI_PATTERN = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;?]*[A-Za-z]`, 'g')
 
 const MULTI_SELECT_SCREENS = new Set(['episodeSelection', 'bulkMapping'])
 
@@ -17,28 +19,19 @@ const LIST_SCREENS = {
 }
 
 const PHASE_LABELS = {
-  pending: 'Pending',
-  resolving: 'Resolving',
-  downloading: 'Downloading',
-  uploading: 'Uploading',
-  uploaded: 'Uploaded',
-  replicationPending: 'Replication pending',
-  durabilityVerified: 'Durability verified',
-  projecting: 'Projecting',
-  projected: 'Projected',
-  announcing: 'Announcing',
-  announced: 'Announced',
-  finalizing: 'Finalizing',
-  published: 'Published',
+  queued: 'Queued',
+  acquiring: 'Acquiring',
+  verifying: 'Verifying',
+  publishing: 'Publishing',
+  completed: 'Completed',
   failed: 'Failed',
-  skipped: 'Skipped'
+  cancelled: 'Cancelled'
 }
 
 const RESULT_LABELS = {
   completed: 'Completed',
   error: 'Error',
-  cancelled: 'Cancelled',
-  exited: 'Exited'
+  cancelled: 'Cancelled'
 }
 
 export function stripAnsi (value) {
@@ -87,8 +80,6 @@ function buildFrame (state, rows) {
   switch (state.screen) {
     case 'progress':
       return progressFrame(state)
-    case 'exitConfirm':
-      return exitConfirmFrame(state)
     case 'result':
       return resultFrame(state)
     default:
@@ -170,25 +161,9 @@ function progressFrame (state) {
   }
   if (progress.message) lines.push(line(progress.message))
   lines.push(line(''))
-  lines.push(line('Ctrl-C Exit safely'))
+  lines.push(line('Ctrl-C Cancel'))
   lines.push(line(FOOTER))
   return lines
-}
-
-function exitConfirmFrame (state) {
-  const progress = (state.exitConfirm && state.exitConfirm.resume && state.exitConfirm.resume.progress) || {}
-  const checkpoint = progress.checkpoint || {}
-  return [
-    line('PearTube Add'),
-    line('Publication in progress'),
-    line(''),
-    line('Publishing is past the durable checkpoint.'),
-    line('Exit without rolling back published work?'),
-    line(`Checkpoint: ${checkpoint.jobId ?? 'unknown'}`),
-    line(''),
-    line('Enter Exit safely  Esc Keep waiting'),
-    line(FOOTER)
-  ]
 }
 
 function resultFrame (state) {
@@ -271,15 +246,19 @@ function isZeroWidth (code) {
   )
 }
 
-function isWide (code) {
+function isWideCjkBlock (code) {
   return (
-    (code >= 0x1100 && code <= 0x115f) ||
     (code >= 0x2e80 && code <= 0x303e) ||
     (code >= 0x3041 && code <= 0x33ff) ||
     (code >= 0x3400 && code <= 0x4dbf) ||
     (code >= 0x4e00 && code <= 0x9fff) ||
     (code >= 0xa000 && code <= 0xa4cf) ||
-    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xac00 && code <= 0xd7a3)
+  )
+}
+
+function isWideFormsOrSupplementary (code) {
+  return (
     (code >= 0xf900 && code <= 0xfaff) ||
     (code >= 0xfe30 && code <= 0xfe4f) ||
     (code >= 0xff00 && code <= 0xff60) ||
@@ -287,4 +266,12 @@ function isWide (code) {
     (code >= 0x1f300 && code <= 0x1faff) ||
     (code >= 0x20000 && code <= 0x3fffd)
   )
+}
+
+function isWide (code) {
+  if (code < 0x1100) return false
+  if (code <= 0x115f) return true
+  if (code < 0x2e80) return false
+  if (code <= 0xd7a3) return isWideCjkBlock(code)
+  return isWideFormsOrSupplementary(code)
 }

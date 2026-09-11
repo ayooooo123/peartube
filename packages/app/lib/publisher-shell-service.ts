@@ -371,7 +371,7 @@ export function createPublisherShellService(dependencies: PublisherShellWorkflow
       intentId = null
     } catch (error) {
       if (intentId) {
-        try { await dependencies.signer.cancelIntent(intentId) } catch {}
+        try { await dependencies.signer.cancelIntent(intentId) } catch { /* best-effort cancel */ }
       }
       throw error
     } finally {

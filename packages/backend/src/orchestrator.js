@@ -5,7 +5,7 @@
  * It initializes storage, managers, and wires up all components.
  *
  * Usage:
- *   const backend = await createBackendContext({ storagePath: '/path/to/storage', expectedProtocolVersion: hostProtocolVersion });
+ *   const backend = await createBackendContext({ storagePath: '/path/to/storage' });
  *   const { ctx, api, identityManager, uploadManager, scopedNetwork, seedingManager, videoStats } = backend;
  */
 
@@ -21,6 +21,7 @@ import {
   resumeNetworking,
   suspendNetworking,
 } from './storage.js';
+import { STORAGE_FORMAT_VERSION } from './stored-protocol.js'
 import { VideoStatsTracker } from './video-stats.js';
 import { SeedingManager } from './seeding.js';
 import { createPlaybackWindowCache } from './playback-window-cache.js';
@@ -99,6 +100,7 @@ import {
 } from './corestore-error-utils.js'
 import { createStartupGate } from './startup-gates.js'
 import { appendDebugLine } from './debug-log.js'
+import { createLocalPublicationCustody } from './network/local-publication-custody.js'
 
 const STARTUP_GATE_WARMUP_WAIT_MS = 2000
 
@@ -114,7 +116,7 @@ export function buildStorageConfig(config, primaryKey) {
     platform: config.platform ?? 'desktop',
     network: config.network ?? {},
     swarmOptions: config.swarmOptions ?? {},
-    expectedProtocolVersion: config.expectedProtocolVersion,
+    expectedStorageFormatVersion: config.expectedStorageFormatVersion ?? STORAGE_FORMAT_VERSION,
     storedProtocolMigrations: config.storedProtocolMigrations ?? DEFAULT_STORED_PROTOCOL_MIGRATIONS,
     // Optional relay block offload. Reaches initializeStorage, which wraps the
     // CorestoreStorage with it and publishes it on the storage context.
@@ -287,174 +289,112 @@ export async function startBackendSeedPin({
   return registration
 }
 
-/**
- * Create and initialize the complete backend context.
- *
- * This function initializes storage, managers, bounded scoped discovery, and
- * the universal API before returning. Heavy local channel warming remains
- * deferred so startup is not coupled to remote peer availability.
- *
- * @param {BackendConfig} config - Configuration options
- * @returns {Promise<BackendContext>} - All backend components
- */
-// A publisher is only a source for what it currently holds. Publishing takes
-// custody for the life of that process; nothing did so again on the next start,
-// so a restarted relay advertised a catalog whose bytes no peer could fetch.
-// Bounded on purpose: this runs on every boot, and a publisher with a large
-// catalog must not spend its startup taking custody of all of it at once.
-const MAX_SERVED_LOCAL_PUBLICATIONS = 256
-
-async function serveLocalPublications(ctx, { catalogRegistry, verifiedQueryView, scopedNetwork } = {}) {
-  if (typeof catalogRegistry?.getWritableBindings !== 'function') return
-  if (typeof scopedNetwork?.retainAuthorizedRendition !== 'function') return
-  if (typeof verifiedQueryView?.getRendition !== 'function') return
-
-  let served = 0
-  const bindings = await catalogRegistry.getWritableBindings()
-  for (const binding of Array.isArray(bindings) ? bindings : []) {
-    const catalog = binding?.catalog
-    if (!catalog?.writable || typeof catalog.listProjections !== 'function') continue
-    let cursor = null
-    do {
-      if (isContextShuttingDown(ctx)) return
-      const page = await catalog.listProjections('publication', { cursor, limit: 64 })
-      for (const item of page?.items || []) {
-        if (served >= MAX_SERVED_LOCAL_PUBLICATIONS) break
-        const publicationId = item?.body?.publicationId
-        const publicationIdHex = typeof publicationId === 'string'
-          ? publicationId
-          : (publicationId ? b4a.toString(publicationId, 'hex') : null)
-        if (!publicationIdHex) continue
-        const projected = await verifiedQueryView.getRendition({ publicationId: publicationIdHex })
-        if (!projected) continue
-        try {
-          // Artwork published with the title is taken along by the runtime.
-          await scopedNetwork.retainAuthorizedRendition({
-            manifest: projected.manifest,
-            renditionId: projected.rendition.renditionId,
-            publicationId: publicationIdHex,
-          })
-          served++
-        } catch {
-          // One title that cannot be served must not stop the rest.
-        }
-      }
-      cursor = served >= MAX_SERVED_LOCAL_PUBLICATIONS ? null : (page?.nextCursor || null)
-    } while (cursor)
-  }
-  if (served > 0) console.log('[Orchestrator] Serving local publications:', served)
-}
-
-export async function createBackendContext(config) {
-  const {
-    storagePath,
-    platform = 'desktop',
-    blobServerHost,
-    blobServerBindHost,
-    onStatsUpdate,
-    corestoreWaitForLock = false,
-    disableStandalonePrimaryKeyFile = false,
-    network = {},
-    swarmOptions = {},
-    expectedProtocolVersion,
-    peerScorer = null,
-    seedPin = {},
-    archive = {},
-    networkPolicy = {},
-    ipcLog: _ipcLog,
-    onMediaGraphUpdate,
-  } = config;
-
-  if (!Number.isSafeInteger(expectedProtocolVersion) || expectedProtocolVersion <= 0) {
-    throw new TypeError('createBackendContext requires a host-provided expectedProtocolVersion')
-  }
-
-  const ipcLog = typeof _ipcLog === 'function' ? _ipcLog : () => {}
-  const lifecycle = config.lifecycle || createBackendLifecycle()
-  const storageConfig = { ...config, platform, lifecycle }
-
-
-  console.log('[Orchestrator] ===== INITIALIZING BACKEND =====');
-  console.log('[Orchestrator] Storage path:', storagePath);
-  await appendDebugLine(`[orchestrator] createBackendContext start storagePath=${storagePath}`)
+async function resolveOrchestratorPrimaryKey(storagePath, disableStandalonePrimaryKeyFile, ipcLog) {
   ipcLog('[orchestrator] reading identity key file')
   const useStandalonePrimaryKeyFile = !disableStandalonePrimaryKeyFile
-
-  let primaryKey = null;
-  const identityKeyData = await readIdentityKeyFile(storagePath);
+  let primaryKey = null
+  const identityKeyData = await readIdentityKeyFile(storagePath)
   await appendDebugLine(`[orchestrator] readIdentityKeyFile done present=${Boolean(identityKeyData)}`)
   if (identityKeyData) {
-    primaryKey = identityKeyData.primaryKey;
-    console.log('[Orchestrator] Identity key file found, using deterministic primaryKey');
+    primaryKey = identityKeyData.primaryKey
+    console.log('[Orchestrator] Identity key file found, using deterministic primaryKey')
   } else if (useStandalonePrimaryKeyFile) {
-    const storedPrimaryKey = await readPrimaryKeyFile(storagePath);
+    const storedPrimaryKey = await readPrimaryKeyFile(storagePath)
     if (storedPrimaryKey) {
-      primaryKey = storedPrimaryKey;
-      console.log('[Orchestrator] Primary key file found, reusing persisted Corestore seed');
+      primaryKey = storedPrimaryKey
+      console.log('[Orchestrator] Primary key file found, reusing persisted Corestore seed')
       await appendDebugLine('[orchestrator] readPrimaryKeyFile done present=true')
     } else {
-      console.log('[Orchestrator] No identity key file, Corestore will use random primaryKey');
+      console.log('[Orchestrator] No identity key file, Corestore will use random primaryKey')
       await appendDebugLine('[orchestrator] readPrimaryKeyFile done present=false')
     }
   } else {
-    console.log('[Orchestrator] Standalone primary key file disabled for this host path until an identity exists');
+    console.log('[Orchestrator] Standalone primary key file disabled for this host path until an identity exists')
     await appendDebugLine('[orchestrator] standalone primary-key file disabled for this host path')
   }
+  return { primaryKey, identityKeyData, useStandalonePrimaryKeyFile }
+}
 
-  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-  const getFsModule = async () => resolveBareFsModuleSync() || await loadBareFsModule()
-  const getPathModule = async () => resolveBarePathModuleSync() || await loadBarePathModule()
-
-  const initializeStorageWithRetry = async (opts) => {
-    // Mobile callers clean stale locks before reaching here, so we only need
-    // a few quick retries for genuine race conditions (e.g. two worklets
-    // starting near-simultaneously).  Desktop can tolerate a slightly longer
-    // window, but 5 attempts at ≤500 ms each keeps total wait under 2 s.
-    const maxAttempts = 5
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        return await initializeStorage(opts)
-      } catch (err) {
-        if (!isCorestoreLockError(err) || attempt === maxAttempts) {
-          if (isCorestoreLockError(err)) {
-            console.warn('[Orchestrator] All retries exhausted. Attempting stale lock recovery...')
-            try {
-              const _fs = await getFsModule()
-              const _path = await getPathModule()
-              const lockFiles = [
-                _path.join(opts.storagePath, 'LOCK'),
-                _path.join(opts.storagePath, 'db', 'LOCK'),
-                _path.join(opts.storagePath, 'primary', 'LOCK')
-              ]
-              for (const lockFile of lockFiles) {
-                try {
-                  _fs.unlinkSync(lockFile)
-                } catch (err) {
-                  void err
-                }
-              }
-              const result = await initializeStorage(opts)
-              console.log('[Orchestrator] Stale lock recovery succeeded')
-              return result
-            } catch {
-              throw err
-            }
-          }
-          throw err
-        }
-        const backoffMs = Math.min(300 * attempt, 500)
-        console.warn(`[Orchestrator] Corestore lock detected during init. Retrying in ${backoffMs}ms (attempt ${attempt}/${maxAttempts})`)
-        ipcLog(`[orchestrator] lock retry ${attempt}/${maxAttempts}`)
-        await delay(backoffMs)
-      }
+async function removeStaleLockFiles(storagePath) {
+  const _fs = resolveBareFsModuleSync() || await loadBareFsModule()
+  const _path = resolveBarePathModuleSync() || await loadBarePathModule()
+  const lockFiles = [
+    _path.join(storagePath, 'LOCK'),
+    _path.join(storagePath, 'db', 'LOCK'),
+    _path.join(storagePath, 'primary', 'LOCK'),
+  ]
+  for (const lockFile of lockFiles) {
+    try {
+      _fs.unlinkSync(lockFile)
+    } catch {
+      // ignore
     }
   }
+}
 
+async function initializeStorageWithRetry(opts, ipcLog) {
+  const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
+  const maxAttempts = 5
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await initializeStorage(opts)
+    } catch (err) {
+      if (!isCorestoreLockError(err) || attempt === maxAttempts) {
+        if (isCorestoreLockError(err)) {
+          console.warn('[Orchestrator] All retries exhausted. Attempting stale lock recovery...')
+          try {
+            await removeStaleLockFiles(opts.storagePath)
+            const result = await initializeStorage(opts)
+            console.log('[Orchestrator] Stale lock recovery succeeded')
+            return result
+          } catch {
+            throw err
+          }
+        }
+        throw err
+      }
+      const backoffMs = Math.min(300 * attempt, 500)
+      console.warn(`[Orchestrator] Corestore lock detected during init. Retrying in ${backoffMs}ms (attempt ${attempt}/${maxAttempts})`)
+      ipcLog(`[orchestrator] lock retry ${attempt}/${maxAttempts}`)
+      await delay(backoffMs)
+    }
+  }
+}
+
+async function reconcileStoredPrimaryKey({ ctx, identityKeyData, useStandalonePrimaryKeyFile, storagePath }) {
+  try {
+    const identityPublicKey = identityKeyData?.identityPublicKey
+    if (ctx?.store?.primaryKey && identityPublicKey) {
+      await writeIdentityKeyFile(storagePath, {
+        primaryKey: ctx.store.primaryKey,
+        identityPublicKey,
+      })
+      console.log('[Orchestrator] Rewrote identity key file to match existing Corestore seed')
+    } else if (ctx?.store?.primaryKey && useStandalonePrimaryKeyFile) {
+      await writePrimaryKeyFile(storagePath, ctx.store.primaryKey)
+      console.log('[Orchestrator] Rewrote primary key file to match existing Corestore seed')
+    } else if (ctx?.store?.primaryKey) {
+      console.log('[Orchestrator] Skipped standalone primary key persistence for this host path')
+    }
+  } catch (persistErr) {
+    console.warn('[Orchestrator] Failed to persist reconciled identity key file:', persistErr?.message)
+  }
+}
+
+async function initializeStorageWithFallback({
+  storageConfig,
+  primaryKey,
+  identityKeyData,
+  useStandalonePrimaryKeyFile,
+  storagePath,
+  lifecycle,
+  ipcLog,
+}) {
   let ctx
   ipcLog('[orchestrator] initializeStorage starting')
   await appendDebugLine('[orchestrator] initializeStorage starting')
   try {
-    ctx = await initializeStorageWithRetry(buildStorageConfig(storageConfig, primaryKey));
+    ctx = await initializeStorageWithRetry(buildStorageConfig(storageConfig, primaryKey), ipcLog)
     await appendDebugLine('[orchestrator] initializeStorage done')
   } catch (err) {
     await appendDebugLine(`[orchestrator] initializeStorage error ${err?.message || String(err)}`)
@@ -464,32 +404,15 @@ export async function createBackendContext(config) {
     }
 
     console.warn('[Orchestrator] Identity key file primaryKey mismatches existing Corestore seed. Falling back to stored Corestore seed.')
-    
+
     try {
-      ctx = await initializeStorageWithRetry(buildStorageConfig(storageConfig, null))
+      ctx = await initializeStorageWithRetry(buildStorageConfig(storageConfig, null), ipcLog)
     } catch (retryError) {
       await lifecycle.shutdown()
       throw retryError
     }
 
-
-    try {
-      const identityPublicKey = identityKeyData?.identityPublicKey
-      if (ctx?.store?.primaryKey && identityPublicKey) {
-        await writeIdentityKeyFile(storagePath, {
-          primaryKey: ctx.store.primaryKey,
-          identityPublicKey
-        })
-        console.log('[Orchestrator] Rewrote identity key file to match existing Corestore seed')
-      } else if (ctx?.store?.primaryKey && useStandalonePrimaryKeyFile) {
-        await writePrimaryKeyFile(storagePath, ctx.store.primaryKey)
-        console.log('[Orchestrator] Rewrote primary key file to match existing Corestore seed')
-      } else if (ctx?.store?.primaryKey) {
-        console.log('[Orchestrator] Skipped standalone primary key persistence for this host path')
-      }
-    } catch (persistErr) {
-      console.warn('[Orchestrator] Failed to persist reconciled identity key file:', persistErr?.message)
-    }
+    await reconcileStoredPrimaryKey({ ctx, identityKeyData, useStandalonePrimaryKeyFile, storagePath })
   }
 
   ipcLog('[orchestrator] storage initialized, port: ' + ctx.blobServerPort)
@@ -505,9 +428,13 @@ export async function createBackendContext(config) {
     }
   }
 
+  return ctx
+}
+
+async function setupFileLogger(storagePath) {
   try {
-    const _fs = await getFsModule()
-    const _path = await getPathModule()
+    const _fs = resolveBareFsModuleSync() || await loadBareFsModule()
+    const _path = resolveBarePathModuleSync() || await loadBarePathModule()
     const logsDir = _path.join(storagePath, 'logs')
     _fs.mkdirSync(logsDir, { recursive: true })
     await initFileLogger(_path.join(logsDir, 'peartube.log'))
@@ -515,11 +442,372 @@ export async function createBackendContext(config) {
   } catch (err) {
     console.log('[Orchestrator] File logger setup skipped:', err?.message)
   }
-  ipcLog('[orchestrator] managers creating')
-  await appendDebugLine('[orchestrator] managers creating')
+}
+
+async function setupOrchestratorStorage({
+  storageConfig,
+  storagePath,
+  disableStandalonePrimaryKeyFile,
+  lifecycle,
+  ipcLog,
+}) {
+  const { primaryKey, identityKeyData, useStandalonePrimaryKeyFile } =
+    await resolveOrchestratorPrimaryKey(storagePath, disableStandalonePrimaryKeyFile, ipcLog)
+
+  const ctx = await initializeStorageWithFallback({
+    storageConfig,
+    primaryKey,
+    identityKeyData,
+    useStandalonePrimaryKeyFile,
+    storagePath,
+    lifecycle,
+    ipcLog,
+  })
+
+  await setupFileLogger(storagePath)
+
+  return { ctx, primaryKey }
+}
+
+async function loadStoredTranscodeSettings(metaDb) {
+  try {
+    const stored = await metaDb.get('transcode-settings').catch(() => null)
+    const storedEnabled = stored?.value?.videoToolboxDecodeEnabled
+    const storedHwMap = stored?.value?.videoToolboxHwMapEnabled
+    let appliedSettings = getVideoToolboxDecodeSettings()
+    let hasStored = false
+    if (typeof storedEnabled === 'boolean') {
+      appliedSettings = setVideoToolboxDecodeEnabled(storedEnabled, 'stored')
+      hasStored = true
+    }
+    if (typeof storedHwMap === 'boolean') {
+      appliedSettings = setVideoToolboxHwMapEnabled(storedHwMap, 'stored')
+      hasStored = true
+    }
+    if (hasStored) {
+      console.log('[Orchestrator] Transcode settings loaded:', appliedSettings)
+    } else {
+      console.log('[Orchestrator] Transcode settings default:', appliedSettings)
+    }
+  } catch (e) {
+    console.log('[Orchestrator] Transcode settings load skipped:', e?.message)
+  }
+}
+
+function setupPlaybackCaches(ctx, lifecycle) {
+  const playbackWindowCache = createPlaybackWindowCache({
+    store: ctx.store,
+    enabled: ctx.blockOffload?.enabled !== true,
+  })
+  lifecycle.ownResource('playback window cache', playbackWindowCache, 'stop', 2000)
+  playbackWindowCache.start()
+  ctx.playbackWindowCache = playbackWindowCache
+  ctx.registerCleanup?.('playback window cache stop', () => playbackWindowCache.stop?.(), { timeoutMs: 1000 })
+
+  const playbackForwardFill = createPlaybackForwardFill({
+    store: ctx.store,
+    staticAssetEntries: ctx.staticAssetPlaybackEntries,
+  })
+  lifecycle.ownResource('playback forward fill', playbackForwardFill, 'stop', 2000)
+  playbackForwardFill.start()
+  ctx.playbackForwardFill = playbackForwardFill
+  ctx.registerCleanup?.('playback forward fill stop', () => playbackForwardFill.stop?.(), { timeoutMs: 1000 })
+
+  return { playbackWindowCache, playbackForwardFill }
+}
+
+function setupPersonalStoreSync({ ctx, identityManager, personalManager, lifecycle }) {
+  const refreshActivePersonalStore = async (publicKey, { allowDeviceLocal = false } = {}) => {
+    const pk = publicKey || identityManager.getActivePublicKey?.()
+    if (!pk) return
+    const store = await personalManager.setActive(pk, { allowDeviceLocal })
+    if (ctx.platform === 'relay') {
+      ctx.personal = store || null
+      return store || null
+    }
+    const explicitDeviceLocal = (
+      allowDeviceLocal &&
+      personalManager.getActivePublicKey() === 'device-local' &&
+      personalManager.getAnonymous() === store &&
+      ctx.personal === store
+    )
+    if (explicitDeviceLocal) return store
+    if (
+      !store ||
+      personalManager.getActivePublicKey() !== pk ||
+      personalManager.getActive() !== store ||
+      ctx.personal !== store
+    ) {
+      const error = new Error(`Active PersonalStore does not match identity ${pk}`)
+      error.code = 'PERSONAL_STORE_IDENTITY_MISMATCH'
+      throw error
+    }
+    return store
+  }
+
+  const removeIdentityMutationHooks = installSeedPinIdentityMutationHooks({
+    identityManager,
+    onMutation: async mutation => {
+      const allowDeviceLocal = (
+        personalManager.getActivePublicKey() === 'device-local' &&
+        (
+          mutation.method === 'createIdentity' ||
+          mutation.method === 'addPairedChannelIdentity'
+        )
+      )
+      await refreshActivePersonalStore(null, { allowDeviceLocal })
+      await ctx.seedPinRegistration?.refreshClientAuth?.()
+    },
+    onRollback: async ({ previousPublicKey }) => {
+      await refreshActivePersonalStore(previousPublicKey, {
+        allowDeviceLocal: personalManager.getActivePublicKey() === 'device-local',
+      })
+      await ctx.seedPinRegistration?.refreshClientAuth?.()
+    },
+  })
+  lifecycle.own('identity mutation hooks', removeIdentityMutationHooks, 2000)
+
+  return { refreshActivePersonalStore }
+}
+
+async function setupPermissionlessArchiveNetwork({
+  ctx,
+  config,
+  archive,
+  network,
+  deviceKeyPair,
+  scopedNetwork,
+  verifiedQueryView,
+  initialNetworkPolicy,
+  peerScorer,
+  lifecycle,
+}) {
+  const configuredOperabilityServices = config.operability?.services
+    ? await Promise.resolve(config.operability.services)
+    : config.operability?.servicesPromise
+      ? await Promise.resolve(config.operability.servicesPromise)
+      : await getOrCreateDurableOperabilityServices({ ctx, operability: config.operability })
+  const archiveDiagnostics = configuredOperabilityServices?.archiveDiagnostics || null
+  ctx.archiveDiagnostics = archiveDiagnostics
+  const archiveStore = createArchiveStore({
+    diagnostics: archiveDiagnostics,
+    maxObservations: archive.maxObservations,
+    now: typeof archive.now === 'function' ? archive.now : () => Date.now(),
+  })
+  const archiveReservationStateKey = 'archive:retention-reservations:v1'
+  const archiveParticipationStateKey = 'archive:participation-policy:v1'
+  const archivePolicy = createArchivePolicy({
+    capacityBytes: archive.capacityBytes,
+    diagnostics: archiveDiagnostics,
+    now: typeof archive.now === 'function' ? archive.now : () => Date.now(),
+    participation: () => ctx.participationDecision ?? null,
+    repository: {
+      async load() {
+        return (await ctx.metaDb.get(archiveReservationStateKey))?.value || null
+      },
+      async save(state) {
+        await ctx.metaDb.put(archiveReservationStateKey, state)
+      },
+    },
+  })
+  await archivePolicy.ready
+
+  const desiredArchiveParticipationEnabled =
+    archive.enabled !== false &&
+    initialNetworkPolicy.policyVersion === 2 &&
+    initialNetworkPolicy.migrationRequired !== true &&
+    initialNetworkPolicy.archiveEnabled === true
+
+  const permissionlessArchiveNetwork = deviceKeyPair?.publicKey && deviceKeyPair?.secretKey
+    ? createPermissionlessArchiveNetwork({
+        keyPair: deviceKeyPair,
+        scopedNetwork,
+        archiveStore,
+        archivePolicy,
+        participationRepository: {
+          async load() {
+            return (await ctx.metaDb.get(archiveParticipationStateKey))?.value || null
+          },
+          async save(state) {
+            await ctx.metaDb.put(archiveParticipationStateKey, state)
+          },
+        },
+        enabled: desiredArchiveParticipationEnabled,
+        deferActivation: true,
+        capacityBytes: initialNetworkPolicy.archiveBudgetBytes,
+        maxRequestBytes: archive.maxRequestBytes,
+        diagnostics: archiveDiagnostics,
+        peerScorer,
+        challengeIntervalMs: archive.challengeIntervalMs,
+        challengeTimeoutMs: archive.challengeTimeoutMs,
+        acceptanceProbability: archive.acceptanceProbability,
+        random: archive.random,
+        now: archive.now,
+        authorizeRequest: async request => {
+          const manifest = await verifiedQueryView.getManifest({ publicationId: request?.body?.publicationId })
+          return authorizeArchiveRequestFromManifestStore(request, {
+            manifestStore: { getManifest: () => manifest },
+            authorizeRendition: input => verifiedQueryView.authorizeRendition(input),
+          })
+        },
+        authorizeConsumerVisibility: async request => {
+          const publication = await verifiedQueryView.getPublication({
+            publicationId: request.body.publicationId,
+          })
+          return Boolean(publication && await verifiedQueryView.isVisible(publication))
+        },
+      })
+    : null
+
+  await permissionlessArchiveNetwork?.ready
+  ctx.archiveStore = archiveStore
+  ctx.archivePolicy = archivePolicy
+  ctx.permissionlessArchiveNetwork = permissionlessArchiveNetwork
+  if (permissionlessArchiveNetwork) {
+    lifecycle.ownResource('permissionless archive network', permissionlessArchiveNetwork, 'close', 5000)
+  }
+
+  return {
+    archiveStore,
+    archivePolicy,
+    permissionlessArchiveNetwork,
+    desiredArchiveParticipationEnabled,
+  }
+}
+
+async function startAndRegisterSeedPin({ ctx, identityManager, seedPin }) {
+  let seedPinRegistration
+  try {
+    seedPinRegistration = await startBackendSeedPin({
+      ctx,
+      identityManager,
+      seedPin,
+    })
+  } catch (error) {
+    await shutdownBackend(ctx).catch(() => {})
+    throw error
+  }
+  ctx.registerCleanup?.('seed-pin unregister', async () => {
+    const registration = ctx.seedPinRegistration
+    await registration?.unregister?.()
+    if (ctx.seedPinRegistration === registration) ctx.seedPinRegistration = null
+  }, { timeoutMs: 2000 })
+
+  return seedPinRegistration
+}
+
+function buildBackendResult({
+  ctx,
+  api,
+  scopedNetwork,
+  seedingManager,
+  videoStats,
+  identityManager,
+  personalManager,
+  uploadManager,
+  verifiedQueryView,
+  archiveStore,
+  permissionlessArchiveNetwork,
+  providerSubsystem,
+  seedPinRegistration,
+  primaryKey,
+  storagePath,
+}) {
+  return {
+    ctx,
+    api,
+    scopedNetwork,
+    seedingManager,
+    videoStats,
+    identityManager,
+    personalManager,
+    uploadManager,
+    verifiedQueryView,
+    archiveStore,
+    permissionlessArchiveNetwork,
+    provider: providerSubsystem.service,
+    acquisitionManager: providerSubsystem.manager,
+    issueLocalProviderResolution: input => providerSubsystem.issueLocalResolution(input),
+    retractPublication: input => providerSubsystem.retractPublication(input),
+    seedPin: seedPinRegistration,
+    seedPinClients: seedPinRegistration?.clients || null,
+    async destroy() {
+      await shutdownBackend(ctx)
+    },
+    async initializeIdentityFromMnemonic(mnemonic) {
+      const pk = await derivePrimaryKey(mnemonic)
+      const { identityPublicKey } = await (await import('./peartube-identity.js')).deriveIdentity(mnemonic)
+      await writeIdentityKeyFile(storagePath, { primaryKey: pk, identityPublicKey })
+      console.log('[Orchestrator] Identity key file written for mnemonic-derived identity')
+      return { needsRestart: !primaryKey }
+    },
+  }
+}
+
+async function waitForStartupGate(startupGate, signal) {
+  try {
+    const startupMilestones = await startupGate.waitUntilOpen({ timeoutMs: STARTUP_GATE_WARMUP_WAIT_MS })
+    if (!startupMilestones) {
+      console.log('[Orchestrator] scoped-network startup gate timed out; continuing backend warmup offline')
+    } else {
+      console.log('[Orchestrator] Startup gate opened, beginning deferred warm-up')
+    }
+    return !signal.aborted
+  } catch (e) {
+    console.log('[Orchestrator] Startup gate wait failed:', e?.message)
+    return false
+  }
+}
+
+async function warmSubscribedAndSeededChannels(ctx, signal, seedingManager) {
+  try {
+    const subs = (await ctx.metaDb.get('subscriptions').catch(() => null))?.value || []
+    if (signal.aborted) return
+    const subscriptionKeys = subs.map((s) => s.driveKey).filter(Boolean)
+    const pinnedKeys = seedingManager.getPinnedChannels?.() || []
+    const seeds = seedingManager.getActiveSeeds?.() || []
+    const seedKeys = seeds.map((s) => s.driveKey).filter(Boolean) || []
+
+    await warmChannels(ctx, [...subscriptionKeys, ...pinnedKeys, ...seedKeys], 'subscriptions/pins/seeds')
+  } catch (e) {
+    console.log('[Orchestrator] Warm-up skipped:', e?.message)
+  }
+}
+
+async function runDeferredBackendWarmup(ctx, signal, startupGate, identityManager, seedingManager) {
+  if (signal.aborted || isContextShuttingDown(ctx)) {
+    console.log('[Orchestrator] Deferred init aborted: shutdown in progress')
+    return
+  }
+
+  if (ctx.swarm?.connections?.size) {
+    startupGate.noteSwarmPeer()
+  }
+
+  const gateReady = await waitForStartupGate(startupGate, signal)
+  if (!gateReady || signal.aborted) return
 
   try {
-  // Phase 2: Create managers (synchronous, fast)
+    if (signal.aborted || isContextShuttingDown(ctx)) return
+    try {
+      await identityManager.loadChannelDrives()
+    } catch (e) {
+      console.error('[Orchestrator] Identity background init error:', e?.message)
+    }
+
+    if (signal.aborted || isContextShuttingDown(ctx)) return
+    await warmSubscribedAndSeededChannels(ctx, signal, seedingManager)
+
+    if (signal.aborted || isContextShuttingDown(ctx)) return
+    console.log('[Orchestrator] ===== BACKGROUND INIT COMPLETE =====')
+    console.log('[Orchestrator] Channels cached:', ctx.channels?.size || 0)
+    console.log('[Orchestrator] Swarm connections:', ctx.swarm.connections.size)
+  } catch (e) {
+    console.error('[Orchestrator] Background init error:', e?.message)
+  }
+}
+
+async function loadInitialNetworkPolicyState ({ ctx, networkPolicy, network }) {
   const networkPolicyStore = ctx.metaDb
   let initialNetworkPolicy = await loadNetworkPolicy({
     store: networkPolicyStore,
@@ -540,6 +828,7 @@ export async function createBackendContext(config) {
       uploadCeilingBytes: Number(networkPolicy.uploadCeilingBytes || initialNetworkPolicy.uploadCeilingBytes || 0),
     }
   }
+
   const consumerModerationProfile = createConsumerModerationProfileController({
     repository: {
       async load() {
@@ -565,52 +854,28 @@ export async function createBackendContext(config) {
     metered: network.metered === true,
     background: false,
   }
-  let initialRuntimeNetworkPolicy = resolveNetworkPolicyForEnvironment(
+  const initialRuntimeNetworkPolicy = resolveNetworkPolicyForEnvironment(
     initialNetworkPolicy,
     initialNetworkEnvironment,
   )
-  const deviceKeyPair = ctx.swarm?.keyPair
-  const deviceSigner = deviceKeyPair?.publicKey && deviceKeyPair?.secretKey
-    ? Object.freeze({
-        signerKey: b4a.from(deviceKeyPair.publicKey),
-        sign: preimage => crypto.sign(b4a.from(preimage), deviceKeyPair.secretKey)
-      })
-    : null
-  const catalogRegistry = createPublisherCatalogRegistry(ctx, {
-    now: () => Date.now(),
-    deviceSigner
+  return {
+    networkPolicyStore,
+    initialNetworkPolicy,
+    initialNetworkEnvironment,
+    initialRuntimeNetworkPolicy,
+    consumerModerationProfile,
+  }
+}
+
+function createDeviceSigner (deviceKeyPair) {
+  if (!deviceKeyPair?.publicKey || !deviceKeyPair?.secretKey) return null
+  return Object.freeze({
+    signerKey: b4a.from(deviceKeyPair.publicKey),
+    sign: preimage => crypto.sign(b4a.from(preimage), deviceKeyPair.secretKey),
   })
-  lifecycle.ownResource('publisher catalog registry', catalogRegistry, 'close', 5000)
-  let consumerModerationManager = null
-  let consumerModerationPolicy = null
-  const verifiedQueryView = await createVerifiedQueryView({
-    store: ctx.store,
-    catalogRegistry,
-    moderationPolicy: {
-      evaluate(record) {
-        return consumerModerationPolicy?.evaluate(record) || { action: 'visible' }
-      },
-      beginEvaluation() {
-        return consumerModerationPolicy?.beginEvaluation?.() || {
-          enabled: true,
-          evaluate: () => ({ action: 'visible' }),
-        }
-      },
-      revision() {
-        const state = {
-          profile: consumerModerationProfile.getProfile(),
-          records: consumerModerationManager?.getRecords?.() || [],
-        }
-        return b4a.toString(crypto.hash(b4a.from(JSON.stringify(state))), 'hex')
-      },
-    },
-    onError: (error, { publisherId } = {}) => {
-      console.log('[Orchestrator] verified query refresh failed:', publisherId || 'unknown', error?.message || error)
-    },
-  })
-  ctx.verifiedQueryView = verifiedQueryView
-  lifecycle.ownResource('verified query view', verifiedQueryView, 'close', 5000)
-  let scopedNetwork = null
+}
+
+function createArchiveCoreProtector () {
   const protectedArchiveCores = new Map()
   const retainArchiveCore = ({ coreKey }) => {
     protectedArchiveCores.set(coreKey, (protectedArchiveCores.get(coreKey) || 0) + 1)
@@ -623,10 +888,10 @@ export async function createBackendContext(config) {
       else protectedArchiveCores.delete(coreKey)
     }
   }
-  // Availability evidence is collected lazily by the asset/playback layer and
-  // read passively by the media graph API. An empty store honestly reports
-  // "awaiting replication" rather than inventing reachability.
-  ctx.availabilityEvidenceStore = createAvailabilityEvidenceStore()
+  return { protectedArchiveCores, retainArchiveCore }
+}
+
+function installOpenAssetCore (ctx) {
   // Opens the immutable rendition core a signed manifest names. Playback
   // preparation authorizes the key against the manifest before reading, so this
   // never widens what a selected source is allowed to touch. A core that cannot
@@ -642,6 +907,146 @@ export async function createBackendContext(config) {
     }
     return core
   }
+}
+
+function createVerifiedQueryModerationPolicyBridge ({
+  consumerModerationProfile,
+  getConsumerModerationManager,
+  getConsumerModerationPolicy,
+}) {
+  return {
+    evaluate(record) {
+      return getConsumerModerationPolicy()?.evaluate(record) || { action: 'visible' }
+    },
+    beginEvaluation() {
+      return getConsumerModerationPolicy()?.beginEvaluation?.() || {
+        enabled: true,
+        evaluate: () => ({ action: 'visible' }),
+      }
+    },
+    revision() {
+      const state = {
+        profile: consumerModerationProfile.getProfile(),
+        records: getConsumerModerationManager()?.getRecords?.() || [],
+      }
+      return b4a.toString(crypto.hash(b4a.from(JSON.stringify(state))), 'hex')
+    },
+  }
+}
+
+async function authorizeScopedConsumerWork (verifiedQueryView, { entityRef, publicationId }) {
+  if (publicationId != null) {
+    const publication = await verifiedQueryView.getPublication({ publicationId })
+    return Boolean(publication && await verifiedQueryView.isVisible(publication))
+  }
+  if (entityRef != null) {
+    const entity = await verifiedQueryView.getEntity({ entityId: entityRef })
+    return Boolean(entity && await verifiedQueryView.isVisible(entity))
+  }
+  return false
+}
+
+async function handleScopedCatalogUpdate ({
+  event = {},
+  verifiedQueryView,
+  onMediaGraphUpdate,
+  getScopedNetwork,
+}) {
+  const publisherId = event.publisherId
+  try {
+    const refreshed = await verifiedQueryView.refresh(publisherId ? { publisherIds: [publisherId] } : {})
+    if (refreshed.failed > 0) throw new Error('verified query refresh failed after catalog update')
+    const source = publisherId ? await verifiedQueryView.sourceState({ publisherId }) : null
+    await onMediaGraphUpdate?.({
+      revision: publisherId && source
+        ? `${publisherId}:${source.viewFork}:${source.viewVersion}`
+        : `catalog:${refreshed.indexed}`,
+      changedCount: refreshed.indexed,
+    })
+  } finally {
+    await getScopedNetwork()?.revalidateRetainedRenditions?.()
+  }
+}
+
+function createPublisherSyncStateRepository (metaDb) {
+  return {
+    async load(publisherId) {
+      return (await metaDb.get(`consumer-publisher-sync-state:v1:${publisherId}`))?.value || null
+    },
+    async save(publisherId, state) {
+      await metaDb.put(`consumer-publisher-sync-state:v1:${publisherId}`, state)
+    },
+    async clear(publisherId) {
+      await metaDb.del(`consumer-publisher-sync-state:v1:${publisherId}`)
+    },
+    async loadGlobal() {
+      return (await metaDb.get('consumer-publisher-sync-budget-global:v1'))?.value || null
+    },
+    async saveGlobal(state) {
+      await metaDb.put('consumer-publisher-sync-budget-global:v1', state)
+    },
+  }
+}
+
+function createLocalRelayIndexService (verifiedQueryView) {
+  const localIndexServiceId = 'local-relay-index'
+  const localIndexService = Object.freeze({
+    indexerId: localIndexServiceId,
+    isLocal: true,
+    async queryIndexService({ query, signal } = {}) {
+      const page = await verifiedQueryView.query({
+        selectors: query?.selectors,
+        limit: query?.limit,
+        cursor: query?.cursor ?? null,
+        sourceRevision: query?.sourceRevision ?? null,
+        signal,
+      })
+      return {
+        queryId: query?.queryId,
+        results: page.results,
+        nextCursor: page.nextCursor,
+        sourceRevision: page.sourceRevision,
+      }
+    },
+  })
+  return { localIndexServiceId, localIndexService }
+}
+
+async function setupScopedNetworkStack ({
+  ctx,
+  lifecycle,
+  network,
+  catalogRegistry,
+  consumerModerationProfile,
+  deviceKeyPair,
+  initialRuntimeNetworkPolicy,
+  onMediaGraphUpdate,
+}) {
+  let consumerModerationManager = null
+  let consumerModerationPolicy = null
+  const verifiedQueryView = await createVerifiedQueryView({
+    store: ctx.store,
+    catalogRegistry,
+    moderationPolicy: createVerifiedQueryModerationPolicyBridge({
+      consumerModerationProfile,
+      getConsumerModerationManager: () => consumerModerationManager,
+      getConsumerModerationPolicy: () => consumerModerationPolicy,
+    }),
+    onError: (error, { publisherId } = {}) => {
+      console.log('[Orchestrator] verified query refresh failed:', publisherId || 'unknown', error?.message || error)
+    },
+  })
+  ctx.verifiedQueryView = verifiedQueryView
+  lifecycle.ownResource('verified query view', verifiedQueryView, 'close', 5000)
+
+  let scopedNetwork = null
+  const { protectedArchiveCores, retainArchiveCore } = createArchiveCoreProtector()
+  // Availability evidence is collected lazily by the asset/playback layer and
+  // read passively by the media graph API. An empty store honestly reports
+  // "awaiting replication" rather than inventing reachability.
+  ctx.availabilityEvidenceStore = createAvailabilityEvidenceStore()
+  installOpenAssetCore(ctx)
+
   // Signed curator pages remain bounded discovery hints. They never populate
   // the verified publisher query view or become display authority.
   let consumerIndexFeedManager = null
@@ -679,59 +1084,25 @@ export async function createBackendContext(config) {
     swarm: ctx.swarm,
     store: ctx.store,
     catalogRegistry,
+    blockOffload: ctx.blockOffload,
+    availabilityEvidenceStore: ctx.availabilityEvidenceStore,
     networkId: network.networkId,
     bootstrapEnabled: network.bootstrapEnabled,
     trustedBootstrapSigners: network.trustedBootstrapSigners,
     trustedBootstrapRootIds: network.trustedBootstrapRootIds,
     authorizePublication: request => verifiedQueryView.authorizeRendition(request),
-    authorizeConsumerWork: async ({ entityRef, publicationId }) => {
-      if (publicationId != null) {
-        const publication = await verifiedQueryView.getPublication({ publicationId })
-        return Boolean(publication && await verifiedQueryView.isVisible(publication))
-      }
-      if (entityRef != null) {
-        const entity = await verifiedQueryView.getEntity({ entityId: entityRef })
-        return Boolean(entity && await verifiedQueryView.isVisible(entity))
-      }
-      return false
-    },
-    onCatalogUpdate: async (event = {}) => {
-      const publisherId = event.publisherId
-      try {
-        const refreshed = await verifiedQueryView.refresh(publisherId ? { publisherIds: [publisherId] } : {})
-        if (refreshed.failed > 0) throw new Error('verified query refresh failed after catalog update')
-        const source = publisherId ? await verifiedQueryView.sourceState({ publisherId }) : null
-        await onMediaGraphUpdate?.({
-          revision: publisherId && source
-            ? `${publisherId}:${source.viewFork}:${source.viewVersion}`
-            : `catalog:${refreshed.indexed}`,
-          changedCount: refreshed.indexed,
-        })
-      } finally {
-        await scopedNetwork?.revalidateRetainedRenditions?.()
-      }
-    },
+    authorizeConsumerWork: input => authorizeScopedConsumerWork(verifiedQueryView, input),
+    onCatalogUpdate: event => handleScopedCatalogUpdate({
+      event,
+      verifiedQueryView,
+      onMediaGraphUpdate,
+      getScopedNetwork: () => scopedNetwork,
+    }),
     retainArchiveCore,
     indexFeedManager: consumerIndexFeedManager,
     moderationManager: consumerModerationManager,
     bootstrapLocatorKeyPair: deviceKeyPair,
-    publisherSyncStateRepository: {
-      async load(publisherId) {
-        return (await ctx.metaDb.get(`consumer-publisher-sync-state:v1:${publisherId}`))?.value || null
-      },
-      async save(publisherId, state) {
-        await ctx.metaDb.put(`consumer-publisher-sync-state:v1:${publisherId}`, state)
-      },
-      async clear(publisherId) {
-        await ctx.metaDb.del(`consumer-publisher-sync-state:v1:${publisherId}`)
-      },
-      async loadGlobal() {
-        return (await ctx.metaDb.get('consumer-publisher-sync-budget-global:v1'))?.value || null
-      },
-      async saveGlobal(state) {
-        await ctx.metaDb.put('consumer-publisher-sync-budget-global:v1', state)
-      },
-    },
+    publisherSyncStateRepository: createPublisherSyncStateRepository(ctx.metaDb),
     initialNetworkPolicy: initialRuntimeNetworkPolicy,
   })
   ctx.scopedNetwork = scopedNetwork
@@ -750,33 +1121,44 @@ export async function createBackendContext(config) {
   } catch (error) {
     console.log('[Orchestrator] verified query view backfill failed at startup:', error?.message || error)
   }
+
+  return {
+    verifiedQueryView,
+    scopedNetwork,
+    protectedArchiveCores,
+    consumerModerationManager,
+    consumerModerationPolicy,
+    setOnConsumerModerationRecordsChanged (handler) {
+      onConsumerModerationRecordsChanged = handler
+    },
+  }
+}
+
+async function setupIndexArchiveAndCoreManagers ({
+  ctx,
+  config,
+  lifecycle,
+  network,
+  archive,
+  peerScorer,
+  storagePath,
+  catalogRegistry,
+  deviceKeyPair,
+  verifiedQueryView,
+  scopedNetwork,
+  initialNetworkPolicy,
+  protectedArchiveCores,
+  onStatsUpdate,
+}) {
   const localAssetAvailabilityProbe = createLocalAssetAvailabilityProbe({
     openAssetCore: ctx.openAssetCore,
     now: () => Date.now(),
   })
-  const localIndexServiceId = 'local-relay-index'
-  const localIndexService = Object.freeze({
-    indexerId: localIndexServiceId,
-    async queryIndexService({ query, signal } = {}) {
-      const page = await verifiedQueryView.query({
-        selectors: query?.selectors,
-        limit: query?.limit,
-        cursor: query?.cursor ?? null,
-        sourceRevision: query?.sourceRevision ?? null,
-        signal,
-      })
-      return {
-        queryId: query?.queryId,
-        results: page.results,
-        nextCursor: page.nextCursor,
-        sourceRevision: page.sourceRevision,
-      }
-    },
-  })
+  const { localIndexServiceId, localIndexService } = createLocalRelayIndexService(verifiedQueryView)
   const indexVerificationRuntime = createIndexVerificationRuntime({
-    services: maximum => [
+    services: () => [
       localIndexService,
-      ...scopedNetwork.listRetainedIndexServiceAdapters(Math.max(0, maximum - 1)),
+      ...scopedNetwork.listRetainedIndexServiceAdapters(),
     ],
     catalogRegistry,
     localIndexServiceId,
@@ -785,103 +1167,30 @@ export async function createBackendContext(config) {
     lifecycle,
   })
   ctx.indexVerificationRuntime = indexVerificationRuntime
-  const configuredOperabilityServices = config.operability?.services
-    ? await Promise.resolve(config.operability.services)
-    : config.operability?.servicesPromise
-      ? await Promise.resolve(config.operability.servicesPromise)
-      : await getOrCreateDurableOperabilityServices({ ctx, operability: config.operability })
-  const archiveDiagnostics = configuredOperabilityServices?.archiveDiagnostics || null
-  ctx.archiveDiagnostics = archiveDiagnostics
-  const archiveStore = createArchiveStore({
-    diagnostics: archiveDiagnostics,
-    maxObservations: archive.maxObservations,
-    now: typeof archive.now === 'function' ? archive.now : () => Date.now(),
+  const archiveNetwork = await setupPermissionlessArchiveNetwork({
+    ctx,
+    config,
+    archive,
+    network,
+    deviceKeyPair,
+    scopedNetwork,
+    verifiedQueryView,
+    initialNetworkPolicy,
+    peerScorer,
+    lifecycle,
   })
-  const archiveReservationStateKey = 'archive:retention-reservations:v1'
-  const archiveParticipationStateKey = 'archive:participation-policy:v1'
-  const archivePolicy = createArchivePolicy({
-    capacityBytes: archive.capacityBytes,
-    diagnostics: archiveDiagnostics,
-    now: typeof archive.now === 'function' ? archive.now : () => Date.now(),
-    // Published by the network lifecycle API on every evaluation. Until one has
-    // been published this device has not been cleared to promise anyone durable
-    // storage, so the ledger refuses new pledges and keeps the ones it holds.
-    participation: () => ctx.participationDecision ?? null,
-    repository: {
-      async load() {
-        return (await ctx.metaDb.get(archiveReservationStateKey))?.value || null
-      },
-      async save(state) {
-        await ctx.metaDb.put(archiveReservationStateKey, state)
-      },
-    },
-  })
-  await archivePolicy.ready
-
-  const desiredArchiveParticipationEnabled =
-    archive.enabled !== false &&
-    initialNetworkPolicy.policyVersion === 2 &&
-    initialNetworkPolicy.migrationRequired !== true &&
-    initialNetworkPolicy.archiveEnabled === true
-  const permissionlessArchiveNetwork = deviceKeyPair?.publicKey && deviceKeyPair?.secretKey
-    ? createPermissionlessArchiveNetwork({
-        keyPair: deviceKeyPair,
-        scopedNetwork,
-        archiveStore,
-        archivePolicy,
-        participationRepository: {
-          async load() {
-            return (await ctx.metaDb.get(archiveParticipationStateKey))?.value || null
-          },
-          async save(state) {
-            await ctx.metaDb.put(archiveParticipationStateKey, state)
-          },
-        },
-        enabled: false,
-        capacityBytes: initialNetworkPolicy.archiveBudgetBytes,
-        maxRequestBytes: archive.maxRequestBytes,
-        diagnostics: archiveDiagnostics,
-        peerScorer,
-        challengeIntervalMs: archive.challengeIntervalMs,
-        challengeTimeoutMs: archive.challengeTimeoutMs,
-        acceptanceProbability: archive.acceptanceProbability,
-        random: archive.random,
-        now: archive.now,
-        authorizeRequest: async request => {
-          const manifest = await verifiedQueryView.getManifest({ publicationId: request?.body?.publicationId })
-          return authorizeArchiveRequestFromManifestStore(request, {
-            manifestStore: { getManifest: () => manifest },
-            authorizeRendition: input => verifiedQueryView.authorizeRendition(input),
-          })
-        },
-        authorizeConsumerVisibility: async request => {
-          const publication = await verifiedQueryView.getPublication({
-            publicationId: request.body.publicationId,
-          })
-          return Boolean(publication && await verifiedQueryView.isVisible(publication))
-        },
-      })
-    : null
   const revalidateConsumerWork = createConsumerWorkRevalidator({
     verifiedQueryView,
     scopedNetwork,
-    getArchiveNetwork: () => permissionlessArchiveNetwork,
+    getArchiveNetwork: () => archiveNetwork.permissionlessArchiveNetwork,
   })
-  onConsumerModerationRecordsChanged = revalidateConsumerWork
-  await permissionlessArchiveNetwork?.ready
-  ctx.archiveStore = archiveStore
-  ctx.archivePolicy = archivePolicy
-  ctx.permissionlessArchiveNetwork = permissionlessArchiveNetwork
-  if (permissionlessArchiveNetwork) {
-    lifecycle.ownResource('permissionless archive network', permissionlessArchiveNetwork, 'close', 5000)
-  }
   ctx.trustedRelayKeys = Array.isArray(network.trustedRelayKeys) ? network.trustedRelayKeys.slice() : []
   ctx.refreshTrustedRelayKeys = async () => ctx.trustedRelayKeys
 
   const startupGate = createStartupGate()
-  const videoStats = new VideoStatsTracker();
+  const videoStats = new VideoStatsTracker()
   lifecycle.ownResource('video statistics', videoStats)
-  const identityManager = createIdentityManager({ ctx });
+  const identityManager = createIdentityManager({ ctx })
   lifecycle.ownResource('identity manager', identityManager)
   const personalManager = createPersonalManager({
     ctx,
@@ -889,62 +1198,10 @@ export async function createBackendContext(config) {
     onActiveStoreChanged: async () => {
       await ctx.reloadConsumerModerationProfile?.()
     },
-  });
-  lifecycle.ownResource('personal manager', personalManager, 'close', 2000)
-  ctx.personalManager = personalManager;
-
-  // Keep the active personal store in sync with the active identity across all
-  // platforms by wrapping the identity-manager mutators in one place (every
-  // platform changes identities through these). Store activation is committed
-  // only after the consumer profile and transport subscriptions reconcile.
-  const refreshActivePersonalStore = async (publicKey, { allowDeviceLocal = false } = {}) => {
-    const pk = publicKey || identityManager.getActivePublicKey?.()
-    if (!pk) return
-    const store = await personalManager.setActive(pk, { allowDeviceLocal })
-    if (ctx.platform === 'relay') {
-      ctx.personal = store || null
-      return store || null
-    }
-    const explicitDeviceLocal = (
-      allowDeviceLocal &&
-      personalManager.getActivePublicKey() === 'device-local' &&
-      personalManager.getAnonymous() === store &&
-      ctx.personal === store
-    )
-    if (explicitDeviceLocal) return store
-    if (
-      !store ||
-      personalManager.getActivePublicKey() !== pk ||
-      personalManager.getActive() !== store ||
-      ctx.personal !== store
-    ) {
-      const error = new Error(`Active PersonalStore does not match identity ${pk}`)
-      error.code = 'PERSONAL_STORE_IDENTITY_MISMATCH'
-      throw error
-    }
-    return store
-  }
-  const removeIdentityMutationHooks = installSeedPinIdentityMutationHooks({
-    identityManager,
-    onMutation: async mutation => {
-      const allowDeviceLocal = (
-        personalManager.getActivePublicKey() === 'device-local' &&
-        (
-          mutation.method === 'createIdentity' ||
-          mutation.method === 'addPairedChannelIdentity'
-        )
-      )
-      await refreshActivePersonalStore(null, { allowDeviceLocal })
-      await ctx.seedPinRegistration?.refreshClientAuth?.()
-    },
-    onRollback: async ({ previousPublicKey }) => {
-      await refreshActivePersonalStore(previousPublicKey, {
-        allowDeviceLocal: personalManager.getActivePublicKey() === 'device-local',
-      })
-      await ctx.seedPinRegistration?.refreshClientAuth?.()
-    },
   })
-  lifecycle.own('identity mutation hooks', removeIdentityMutationHooks, 2000)
+  lifecycle.ownResource('personal manager', personalManager, 'close', 2000)
+  ctx.personalManager = personalManager
+  setupPersonalStoreSync({ ctx, identityManager, personalManager, lifecycle })
 
   const seedingManager = new SeedingManager(ctx.store, ctx.metaDb, {
     identityManager,
@@ -952,168 +1209,66 @@ export async function createBackendContext(config) {
     isCacheClearBlocked: isPlaybackActive,
     metaSubspaces: ctx.metaSubspaces,
     protectedArchiveCores,
-  });
+  })
   lifecycle.own('seeding manager', async () => {
     seedingManager.clearTimer?.(seedingManager._storageMaintenanceTimer)
     seedingManager._storageMaintenanceTimer = null
     await seedingManager.flushSeedPersist?.()
   }, 2000)
 
-
-  // Keep a single playing video from filling the disk: trim already-played
-  // blocks behind a bounded seek-back window while it streams. Unlike the
-  // seed-quota sweep this is playhead-aware, so it runs *during* playback.
-  const playbackWindowCache = createPlaybackWindowCache({
-    store: ctx.store,
-    // Block offload already bounds restored data through its
-    // confirm-before-delete residency sweep. core.clear() is unsafe there: it
-    // can delete the Merkle leaf needed to address and verify an S3 block.
-    enabled: ctx.blockOffload?.enabled !== true,
-  });
-  lifecycle.ownResource('playback window cache', playbackWindowCache, 'stop', 2000)
-  playbackWindowCache.start();
-  ctx.playbackWindowCache = playbackWindowCache;
-  ctx.registerCleanup?.('playback window cache stop', () => playbackWindowCache.stop?.(), { timeoutMs: 1000 })
-
-  // Symmetric counterpart to the window cache: keep a deep read-ahead window
-  // downloading *ahead* of the playhead so a fast peer builds a real buffer
-  // instead of the on-demand stream settling at playback bitrate. The window
-  // cache trims behind, so the two together bound the on-disk footprint.
-  const playbackForwardFill = createPlaybackForwardFill({
-    store: ctx.store,
-    staticAssetEntries: ctx.staticAssetPlaybackEntries,
-  });
-  lifecycle.ownResource('playback forward fill', playbackForwardFill, 'stop', 2000)
-  playbackForwardFill.start();
-  ctx.playbackForwardFill = playbackForwardFill;
-  ctx.registerCleanup?.('playback forward fill stop', () => playbackForwardFill.stop?.(), { timeoutMs: 1000 })
-
+  setupPlaybackCaches(ctx, lifecycle)
   const uploadManager = createUploadManager({
     ctx,
     catalogRegistry,
     verifiedQueryView,
     scopedNetwork,
-    deviceKeyPair
-  });
-  lifecycle.ownResource('upload manager', uploadManager)
-
-
-  if (onStatsUpdate) {
-    videoStats.setOnStatsUpdate(onStatsUpdate);
-  }
-
-
-  ipcLog('[orchestrator] seedingManager.init starting')
-  await appendDebugLine('[orchestrator] seedingManager.init starting')
-
-  // Phase 5: Initialize seeding manager (fast - just loads config from db)
-  await seedingManager.init();
-  await seedingManager.applyNetworkPolicy(initialNetworkPolicy)
-  await appendDebugLine('[orchestrator] seedingManager.init done')
-  ipcLog('[orchestrator] seedingManager.init done')
-
-  // Phase 5.5: Load transcode settings (optional)
-  try {
-    const stored = await ctx.metaDb.get('transcode-settings').catch(() => null);
-    const storedEnabled = stored?.value?.videoToolboxDecodeEnabled;
-    const storedHwMap = stored?.value?.videoToolboxHwMapEnabled;
-    let appliedSettings = getVideoToolboxDecodeSettings();
-    let hasStored = false;
-    if (typeof storedEnabled === 'boolean') {
-      appliedSettings = setVideoToolboxDecodeEnabled(storedEnabled, 'stored');
-      hasStored = true;
-    }
-    if (typeof storedHwMap === 'boolean') {
-      appliedSettings = setVideoToolboxHwMapEnabled(storedHwMap, 'stored');
-      hasStored = true;
-    }
-    if (hasStored) {
-      console.log('[Orchestrator] Transcode settings loaded:', appliedSettings);
-    } else {
-      console.log('[Orchestrator] Transcode settings default:', appliedSettings);
-    }
-  } catch (e) {
-    console.log('[Orchestrator] Transcode settings load skipped:', e?.message);
-  }
-
-  ipcLog('[orchestrator] loadIdentities starting')
-  await appendDebugLine('[orchestrator] loadIdentities starting')
-  await identityManager.loadIdentities();
-  await appendDebugLine('[orchestrator] loadIdentities done')
-  ipcLog('[orchestrator] loadIdentities done')
-
-  const publicationV1SourceRepository = createPublicationV1LegacyRepository({
-    identityManager,
-    loadChannel: (driveKey, identity) => loadChannel(ctx, driveKey, {
-      preferWritable: true,
-      deferPublicProjection: true,
-      writerKeyName: identity?.channelWriterKeyName || null,
-    }),
+    deviceKeyPair,
   })
-  const publicationV1CheckpointRepository = createPublicationV1CheckpointRepository(ctx.metaDb)
-  let networkPolicyRuntime = null
-  let pendingNetworkPolicy = initialNetworkPolicy
-  const publicationV1Startup = createPublicationV1StartupLifecycle({
-    migrate: () => runPublicationV1StartupMigration({
-      sourceRepository: publicationV1SourceRepository,
-      checkpointRepository: publicationV1CheckpointRepository,
-      resolveCatalog: createLegacyCatalogResolver({ catalogRegistry, derivePublisherId }),
-      deviceKeyPair,
-      verifiedQueryView,
-    }),
-    startDiscovery: async () => {
-      await scopedNetwork.start()
-      if (networkPolicyRuntime) {
-        await networkPolicyRuntime.start(pendingNetworkPolicy)
-      } else if (permissionlessArchiveNetwork && desiredArchiveParticipationEnabled) {
-        await permissionlessArchiveNetwork.setParticipation({
-          enabled: true,
-          capacityBytes: initialNetworkPolicy.archiveBudgetBytes,
-          maxRequestBytes: archive.maxRequestBytes,
-          acceptanceProbability: archive.acceptanceProbability,
-        })
-      }
+  lifecycle.ownResource('upload manager', uploadManager)
+  if (onStatsUpdate) videoStats.setOnStatsUpdate(onStatsUpdate)
+
+  return {
+    ...archiveNetwork,
+    indexVerificationRuntime,
+    revalidateConsumerWork,
+    startupGate,
+    videoStats,
+    identityManager,
+    personalManager,
+    seedingManager,
+    uploadManager,
+  }
+}
+
+function createConsumerPolicyTransactionQueue () {
+  let consumerPolicyWrites = Promise.resolve()
+  return Object.freeze({
+    run(operation) {
+      const next = consumerPolicyWrites.then(operation, operation)
+      consumerPolicyWrites = next.catch(() => {})
+      return next
     },
   })
-  let startupMayCommitStoredProtocol = false
-  const completePublicationV1Migration = async () => {
-    const migration = await publicationV1Startup.complete()
-    ctx.publicationV1Migration = migration
-    if (migration?.status === 'complete' && startupMayCommitStoredProtocol) {
-      ctx.storedProtocol?.commit()
-    }
-    return migration
-  }
-  ctx.completePublicationV1Migration = completePublicationV1Migration
-  lifecycle.own('publication v1 migration hook', () => {
-    if (ctx.completePublicationV1Migration === completePublicationV1Migration) {
-      ctx.completePublicationV1Migration = null
-    }
-  })
-  // Scoped discovery only starts once this reports 'complete'. When it does
-  // not, the device stays on legacy channel discovery, joins no bootstrap
-  // scope, follows no publisher, and every catalog surface is empty with no
-  // indication of why. Say so plainly instead of leaving it to be inferred
-  // from an absence of logs.
-  const bootMigration = await completePublicationV1Migration()
-  console.log('[Orchestrator] publication v1 migration status:', bootMigration?.status ?? 'unknown',
-    'scopedDiscoveryStarted:', publicationV1Startup.ready)
+}
 
-  // Open the active identity's private multi-writer personal store (subscriptions,
-  // playlists, watch history, settings) and expose it on ctx. Best-effort: a
-  // failure here must not block backend startup.
-  await personalManager.init().catch((err) => ipcLog('[orchestrator] personal store init failed: ' + (err?.message || err)))
-  // PersonalStore is the durable, encrypted device/paired-device authority for
-  // the local moderation profile. Network policy mirrors only its effective
-  // feed set so transport has no independent profile state to drift from.
-  if (ctx.personal) await consumerModerationProfile.reload()
-  initialNetworkPolicy = {
-    ...initialNetworkPolicy,
-    trustedModerationFeeds: consumerModerationProfile.getEffectiveCuratorSubscriptions(),
-  }
-  initialRuntimeNetworkPolicy = resolveNetworkPolicyForEnvironment(initialNetworkPolicy, initialNetworkEnvironment)
+async function wireNetworkPolicyAndProfile ({
+  ctx,
+  archive,
+  networkPolicyStore,
+  consumerModerationProfile,
+  scopedNetwork,
+  seedingManager,
+  permissionlessArchiveNetwork,
+  initialNetworkPolicy,
+  initialNetworkEnvironment,
+  publicationV1Startup,
+  revalidateConsumerWork,
+  setPendingNetworkPolicy,
+  getNetworkPolicyRuntime,
+  setNetworkPolicyRuntime,
+}) {
 
-  networkPolicyRuntime = createNetworkPolicyRuntime({
+  const networkPolicyRuntime = createNetworkPolicyRuntime({
     initialPolicy: initialNetworkPolicy,
     scopedNetwork,
     seedingManager,
@@ -1122,32 +1277,27 @@ export async function createBackendContext(config) {
     suspendTransport: suspendNetworking,
     resumeTransport: resumeNetworking,
   })
+  setNetworkPolicyRuntime(networkPolicyRuntime)
   if (publicationV1Startup.ready) await networkPolicyRuntime.start()
   ctx.networkPolicyRuntime = networkPolicyRuntime
   ctx.networkPolicyStore = networkPolicyStore
   ctx.onNetworkPolicyChange = async policy => {
     if (!publicationV1Startup.ready) {
-      pendingNetworkPolicy = policy
+      setPendingNetworkPolicy(policy)
       return resolveNetworkPolicyForEnvironment(policy, initialNetworkEnvironment)
     }
-    const effective = await networkPolicyRuntime.apply(policy)
-    pendingNetworkPolicy = policy
+    const effective = await getNetworkPolicyRuntime().apply(policy)
+    setPendingNetworkPolicy(policy)
     await revalidateConsumerWork()
     return effective
   }
-  let consumerPolicyWrites = Promise.resolve()
-  const consumerPolicyTransactionQueue = Object.freeze({
-    run(operation) {
-      const next = consumerPolicyWrites.then(operation, operation)
-      consumerPolicyWrites = next.catch(() => {})
-      return next
-    },
-  })
+
+  const consumerPolicyTransactionQueue = createConsumerPolicyTransactionQueue()
   const policyApi = createPolicyApi({
     store: networkPolicyStore,
     initialPolicy: initialNetworkPolicy,
     onPolicyChange: ctx.onNetworkPolicyChange,
-    validatePolicy: policy => networkPolicyRuntime.assertSupported(policy),
+    validatePolicy: policy => getNetworkPolicyRuntime().assertSupported(policy),
     getProfileModerationFeeds: () =>
       consumerModerationProfile.getEffectiveCuratorSubscriptions(),
     transactionQueue: consumerPolicyTransactionQueue,
@@ -1168,8 +1318,112 @@ export async function createBackendContext(config) {
   })
   ctx.setConsumerModerationProfile = input => moderationProfileTransaction.apply(input)
   ctx.reloadConsumerModerationProfile = () => moderationProfileTransaction.reload()
+  return policyApi
+}
 
-  // Phase 6: Create the universal API over the single scoped P2P runtime.
+async function startPublicationMigrationLifecycle ({
+  ctx,
+  lifecycle,
+  identityManager,
+  catalogRegistry,
+  deviceKeyPair,
+  verifiedQueryView,
+  scopedNetwork,
+  permissionlessArchiveNetwork,
+  desiredArchiveParticipationEnabled,
+  initialNetworkPolicy,
+  archive,
+  getNetworkPolicyRuntime,
+  getPendingNetworkPolicy,
+}) {
+  const publicationV1SourceRepository = createPublicationV1LegacyRepository({
+    identityManager,
+    loadChannel: (driveKey, identity) => loadChannel(ctx, driveKey, {
+      preferWritable: true,
+      deferPublicProjection: true,
+      writerKeyName: identity?.channelWriterKeyName || null,
+    }),
+  })
+  const publicationV1CheckpointRepository = createPublicationV1CheckpointRepository(ctx.metaDb)
+  const publicationV1Startup = createPublicationV1StartupLifecycle({
+    migrate: () => runPublicationV1StartupMigration({
+      sourceRepository: publicationV1SourceRepository,
+      checkpointRepository: publicationV1CheckpointRepository,
+      resolveCatalog: createLegacyCatalogResolver({ catalogRegistry, derivePublisherId }),
+      deviceKeyPair,
+      verifiedQueryView,
+    }),
+    startDiscovery: async () => {
+      await scopedNetwork.start()
+      const networkPolicyRuntime = getNetworkPolicyRuntime()
+      if (networkPolicyRuntime) {
+        await networkPolicyRuntime.start(getPendingNetworkPolicy())
+        return
+      }
+      if (!permissionlessArchiveNetwork) return
+      await permissionlessArchiveNetwork.setParticipation({
+        enabled: desiredArchiveParticipationEnabled,
+        capacityBytes: initialNetworkPolicy.archiveBudgetBytes,
+        maxRequestBytes: archive.maxRequestBytes,
+        acceptanceProbability: archive.acceptanceProbability,
+      })
+    },
+  })
+
+  let startupMayCommitStoredProtocol = false
+  const completePublicationV1Migration = async () => {
+    const migration = await publicationV1Startup.complete()
+    ctx.publicationV1Migration = migration
+    if (migration?.status === 'complete' && startupMayCommitStoredProtocol) {
+      ctx.storedProtocol?.commit()
+    }
+    return migration
+  }
+  ctx.completePublicationV1Migration = completePublicationV1Migration
+  lifecycle.own('publication v1 migration hook', () => {
+    if (ctx.completePublicationV1Migration === completePublicationV1Migration) {
+      ctx.completePublicationV1Migration = null
+    }
+  })
+
+  const bootMigration = await completePublicationV1Migration()
+  console.log('[Orchestrator] publication v1 migration status:', bootMigration?.status ?? 'unknown',
+    'scopedDiscoveryStarted:', publicationV1Startup.ready)
+
+  return {
+    publicationV1Startup,
+    markStartupMayCommitStoredProtocol () {
+      startupMayCommitStoredProtocol = true
+    },
+  }
+}
+
+async function assembleBackendApiSurface ({
+  ctx,
+  config,
+  platform,
+  lifecycle,
+  ipcLog,
+  seedingManager,
+  videoStats,
+  catalogRegistry,
+  scopedNetwork,
+  permissionlessArchiveNetwork,
+  indexVerificationRuntime,
+  policyApi,
+  networkPolicyRuntime,
+  verifiedQueryView,
+  uploadManager,
+  identityManager,
+  seedPin,
+  personalManager,
+  archiveStore,
+  primaryKey,
+  storagePath,
+  startupGate,
+  publicationV1Startup,
+  markStartupMayCommitStoredProtocol,
+}) {
   const baseApi = createApi({
     ctx,
     seedingManager,
@@ -1186,7 +1440,7 @@ export async function createBackendContext(config) {
     // the participation decision has to say so or its archive custody gate
     // never opens.
     hostKind: platform === 'relay' ? 'server' : 'device',
-  });
+  })
   const providerSubsystem = await createProviderSubsystem({
     ctx,
     verifiedQueryView,
@@ -1206,7 +1460,6 @@ export async function createBackendContext(config) {
   lifecycle.ownResource('provider subsystem', providerSubsystem, 'close', 5000)
   const api = Object.freeze({ ...baseApi, ...providerSubsystem.api })
 
-
   // Sender auth requires the stored descriptor proof, so backfill completes
   // before seed-pin registration and discovery.
   try {
@@ -1216,31 +1469,15 @@ export async function createBackendContext(config) {
     ipcLog('[orchestrator] descriptor backfill failed: ' + (err?.message || err))
   }
 
-  let seedPinRegistration
-  try {
-    seedPinRegistration = await startBackendSeedPin({
-      ctx,
-      identityManager,
-      seedPin,
-    })
-  } catch (error) {
-    await shutdownBackend(ctx).catch(() => {})
-    throw error
-  }
-  ctx.registerCleanup?.('seed-pin unregister', async () => {
-    const registration = ctx.seedPinRegistration
-    await registration?.unregister?.()
-    if (ctx.seedPinRegistration === registration) ctx.seedPinRegistration = null
-  }, { timeoutMs: 2000 })
+  const seedPinRegistration = await startAndRegisterSeedPin({ ctx, identityManager, seedPin })
 
   // The marker is the durable readiness commit. Keep it last: identities,
   // managers, migrations, seed-pin, and discovery must all initialize before a
   // later host is allowed to treat this state as fully written by this version.
-  startupMayCommitStoredProtocol = true
+  markStartupMayCommitStoredProtocol()
   if (publicationV1Startup.ready) ctx.storedProtocol?.commit()
 
-  // Return result - heavy channel warming happens in background
-  const result = {
+  const result = buildBackendResult({
     ctx,
     api,
     scopedNetwork,
@@ -1252,107 +1489,225 @@ export async function createBackendContext(config) {
     verifiedQueryView,
     archiveStore,
     permissionlessArchiveNetwork,
-    provider: providerSubsystem.service,
-    acquisitionManager: providerSubsystem.manager,
-    issueLocalProviderResolution: input => providerSubsystem.issueLocalResolution(input),
-    retractPublication: input => providerSubsystem.retractPublication(input),
-    seedPin: seedPinRegistration,
-    seedPinClients: seedPinRegistration?.clients || null,
-    async destroy() {
-      await shutdownBackend(ctx)
-    },
-    async initializeIdentityFromMnemonic(mnemonic) {
-      const pk = await derivePrimaryKey(mnemonic);
-      const { identityPublicKey } = await (await import('./peartube-identity.js')).deriveIdentity(mnemonic);
-      await writeIdentityKeyFile(storagePath, { primaryKey: pk, identityPublicKey });
-      console.log('[Orchestrator] Identity key file written for mnemonic-derived identity');
-      return { needsRestart: !primaryKey };
-    }
-  };
-
-  ipcLog('[orchestrator] ===== BACKEND READY =====')
-  console.log('[Orchestrator] Identities loaded:', identityManager.getIdentities().length);
-
-  // Phase 8: Heavy local initialization in background (non-blocking).
-  lifecycle.defer('backend warm-up', async (signal) => {
-    // Early return if shutdown was initiated during deferred init setup
-    if (signal.aborted || isContextShuttingDown(ctx)) {
-      console.log('[Orchestrator] Deferred init aborted: shutdown in progress')
-      return
-    }
-
-    if (ctx.swarm?.connections?.size) {
-      startupGate.noteSwarmPeer()
-    }
-
-    try {
-      const startupMilestones = await startupGate.waitUntilOpen({ timeoutMs: STARTUP_GATE_WARMUP_WAIT_MS })
-      if (!startupMilestones) {
-        console.log('[Orchestrator] scoped-network startup gate timed out; continuing backend warmup offline')
-      } else {
-        console.log('[Orchestrator] Startup gate opened, beginning deferred warm-up')
-      }
-    } catch (e) {
-      console.log('[Orchestrator] Startup gate wait failed:', e?.message)
-      return
-    }
-    if (signal.aborted) return
-    
-    try {
-      // Load channels in the background.
-      // This can be slow (sync + metadata replay) and should NOT block worker init.
-      if (signal.aborted || isContextShuttingDown(ctx)) return
-      try {
-        await identityManager.loadChannelDrives()
-      } catch (e) {
-        console.error('[Orchestrator] Identity background init error:', e?.message)
-      }
-      if (signal.aborted) return
-      // Warm local subscribed / pinned / seeding channels without opening
-      // unverified remote cores; scoped retention is explicit through the API.
-      if (signal.aborted || isContextShuttingDown(ctx)) return
-      try {
-        const subs = (await ctx.metaDb.get('subscriptions').catch(() => null))?.value || []
-        if (signal.aborted) return
-        const subscriptionKeys = subs.map((s) => s.driveKey).filter(Boolean)
-        const pinnedKeys = seedingManager.getPinnedChannels?.() || []
-        const seeds = seedingManager.getActiveSeeds?.() || []
-        const seedKeys = seeds.map((s) => s.driveKey).filter(Boolean) || []
-
-
-        await warmChannels(ctx, [...subscriptionKeys, ...pinnedKeys, ...seedKeys], 'subscriptions/pins/seeds')
-        // Skip prefetch - it was causing errors and slowing things down
-      } catch (e) {
-        console.log('[Orchestrator] Warm-up skipped:', e?.message)
-      }
-
-      if (signal.aborted || isContextShuttingDown(ctx)) return
-      // Publishing announces a catalog for the life of one process, but the
-      // bytes are served from the rendition's asset scope, which only exists
-      // while something holds the publication. Restart the publisher and it
-      // keeps advertising titles nobody can fetch: peers ask, nothing answers,
-      // and every source reads as awaiting replication. Take custody of what
-      // this device published so it stays a source for it.
-      try {
-        await serveLocalPublications(ctx, {
-          catalogRegistry,
-          verifiedQueryView,
-          scopedNetwork,
-        })
-      } catch (e) {
-        console.log('[Orchestrator] Local publications are not being served:', e?.message)
-      }
-
-      if (signal.aborted || isContextShuttingDown(ctx)) return
-      console.log('[Orchestrator] ===== BACKGROUND INIT COMPLETE =====')
-      console.log('[Orchestrator] Channels cached:', ctx.channels?.size || 0)
-      console.log('[Orchestrator] Swarm connections:', ctx.swarm.connections.size)
-    } catch (e) {
-      console.error('[Orchestrator] Background init error:', e?.message)
-    }
+    providerSubsystem,
+    seedPinRegistration,
+    primaryKey,
+    storagePath,
   })
 
-  return result;
+  ipcLog('[orchestrator] ===== BACKEND READY =====')
+  console.log('[Orchestrator] Identities loaded:', identityManager.getIdentities().length)
+
+  const localPublicationCustody = createLocalPublicationCustody({ catalogRegistry, verifiedQueryView, scopedNetwork })
+  lifecycle.ownResource('local publication custody', localPublicationCustody, 'close', 5000)
+  localPublicationCustody.start()
+
+  lifecycle.defer('backend warm-up', (signal) =>
+    runDeferredBackendWarmup(ctx, signal, startupGate, identityManager, seedingManager)
+  )
+
+  return result
+}
+
+/**
+ * Create and initialize the complete backend context.
+ *
+ * This function initializes storage, managers, bounded scoped discovery, and
+ * the universal API before returning. Heavy local channel warming remains
+ * deferred so startup is not coupled to remote peer availability.
+ *
+ * @param {BackendConfig} config - Configuration options
+ * @returns {Promise<BackendContext>} - All backend components
+ */
+
+export async function createBackendContext(config) {
+  const {
+    storagePath,
+    platform = 'desktop',
+    onStatsUpdate,
+    disableStandalonePrimaryKeyFile = false,
+    network = {},
+    expectedStorageFormatVersion = STORAGE_FORMAT_VERSION,
+    peerScorer = null,
+    seedPin = {},
+    archive = {},
+    networkPolicy = {},
+    ipcLog: _ipcLog,
+    onMediaGraphUpdate,
+  } = config
+
+  if (!Number.isSafeInteger(expectedStorageFormatVersion) || expectedStorageFormatVersion <= 0) {
+    throw new TypeError('createBackendContext requires a positive expected storage format version')
+  }
+
+  const ipcLog = typeof _ipcLog === 'function' ? _ipcLog : () => {}
+  const lifecycle = config.lifecycle || createBackendLifecycle()
+  const storageConfig = { ...config, platform, lifecycle }
+
+  console.log('[Orchestrator] ===== INITIALIZING BACKEND =====')
+  console.log('[Orchestrator] Storage path:', storagePath)
+  await appendDebugLine(`[orchestrator] createBackendContext start storagePath=${storagePath}`)
+
+  const { ctx, primaryKey } = await setupOrchestratorStorage({
+    storageConfig,
+    storagePath,
+    disableStandalonePrimaryKeyFile,
+    lifecycle,
+    ipcLog,
+  })
+
+  ipcLog('[orchestrator] managers creating')
+  await appendDebugLine('[orchestrator] managers creating')
+
+  try {
+    let {
+      networkPolicyStore,
+      initialNetworkPolicy,
+      initialNetworkEnvironment,
+      initialRuntimeNetworkPolicy,
+      consumerModerationProfile,
+    } = await loadInitialNetworkPolicyState({ ctx, networkPolicy, network })
+
+    const deviceKeyPair = ctx.swarm?.keyPair
+    const deviceSigner = createDeviceSigner(deviceKeyPair)
+    const catalogRegistry = createPublisherCatalogRegistry(ctx, {
+      now: () => Date.now(),
+      deviceSigner,
+    })
+    lifecycle.ownResource('publisher catalog registry', catalogRegistry, 'close', 5000)
+
+    const scopedStack = await setupScopedNetworkStack({
+      ctx,
+      lifecycle,
+      network,
+      catalogRegistry,
+      consumerModerationProfile,
+      deviceKeyPair,
+      initialRuntimeNetworkPolicy,
+      onMediaGraphUpdate,
+    })
+    const {
+      verifiedQueryView,
+      scopedNetwork,
+      protectedArchiveCores,
+      setOnConsumerModerationRecordsChanged,
+    } = scopedStack
+
+    const managers = await setupIndexArchiveAndCoreManagers({
+      ctx,
+      config,
+      lifecycle,
+      network,
+      archive,
+      peerScorer,
+      storagePath,
+      catalogRegistry,
+      deviceKeyPair,
+      verifiedQueryView,
+      scopedNetwork,
+      initialNetworkPolicy,
+      protectedArchiveCores,
+      onStatsUpdate,
+    })
+    const {
+      archiveStore,
+      permissionlessArchiveNetwork,
+      desiredArchiveParticipationEnabled,
+      indexVerificationRuntime,
+      revalidateConsumerWork,
+      startupGate,
+      videoStats,
+      identityManager,
+      personalManager,
+      seedingManager,
+      uploadManager,
+    } = managers
+    setOnConsumerModerationRecordsChanged(revalidateConsumerWork)
+
+    ipcLog('[orchestrator] seedingManager.init starting')
+    await appendDebugLine('[orchestrator] seedingManager.init starting')
+    await seedingManager.init()
+    await seedingManager.applyNetworkPolicy(initialNetworkPolicy)
+    await appendDebugLine('[orchestrator] seedingManager.init done')
+    ipcLog('[orchestrator] seedingManager.init done')
+    await loadStoredTranscodeSettings(ctx.metaDb)
+
+    ipcLog('[orchestrator] loadIdentities starting')
+    await appendDebugLine('[orchestrator] loadIdentities starting')
+    await identityManager.loadIdentities()
+    await appendDebugLine('[orchestrator] loadIdentities done')
+    ipcLog('[orchestrator] loadIdentities done')
+
+    let networkPolicyRuntime = null
+    let pendingNetworkPolicy = initialNetworkPolicy
+    const { publicationV1Startup, markStartupMayCommitStoredProtocol } = await startPublicationMigrationLifecycle({
+      ctx,
+      lifecycle,
+      identityManager,
+      catalogRegistry,
+      deviceKeyPair,
+      verifiedQueryView,
+      scopedNetwork,
+      permissionlessArchiveNetwork,
+      desiredArchiveParticipationEnabled,
+      initialNetworkPolicy,
+      archive,
+      getNetworkPolicyRuntime: () => networkPolicyRuntime,
+      getPendingNetworkPolicy: () => pendingNetworkPolicy,
+    })
+
+    await personalManager.init().catch((err) => ipcLog('[orchestrator] personal store init failed: ' + (err?.message || err)))
+    if (ctx.personal) await consumerModerationProfile.reload()
+    initialNetworkPolicy = {
+      ...initialNetworkPolicy,
+      trustedModerationFeeds: consumerModerationProfile.getEffectiveCuratorSubscriptions(),
+    }
+
+
+    const policyApi = await wireNetworkPolicyAndProfile({
+      ctx,
+      archive,
+      networkPolicyStore,
+      consumerModerationProfile,
+      scopedNetwork,
+      seedingManager,
+      permissionlessArchiveNetwork,
+      initialNetworkPolicy,
+      initialNetworkEnvironment,
+      publicationV1Startup,
+      revalidateConsumerWork,
+      setPendingNetworkPolicy: policy => { pendingNetworkPolicy = policy },
+      getNetworkPolicyRuntime: () => networkPolicyRuntime,
+      setNetworkPolicyRuntime: runtime => { networkPolicyRuntime = runtime },
+    })
+
+
+    return await assembleBackendApiSurface({
+      ctx,
+      config,
+      platform,
+      lifecycle,
+      ipcLog,
+      seedingManager,
+      videoStats,
+      catalogRegistry,
+      scopedNetwork,
+      permissionlessArchiveNetwork,
+      indexVerificationRuntime,
+      policyApi,
+      networkPolicyRuntime,
+      verifiedQueryView,
+      uploadManager,
+      identityManager,
+      seedPin,
+      personalManager,
+      archiveStore,
+      primaryKey,
+      storagePath,
+      startupGate,
+      publicationV1Startup,
+      markStartupMayCommitStoredProtocol,
+    })
   } catch (error) {
     await lifecycle.shutdown()
     throw error

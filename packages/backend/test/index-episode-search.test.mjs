@@ -103,6 +103,7 @@ function createArchiveService(indexerId = 'relay-index') {
   const selectors = []
   return {
     indexerId,
+    isLocal: true,
     selectors,
     async queryIndexService({ query }) {
       const selector = query.selectors[0]
@@ -135,8 +136,8 @@ test('an archived episode resolves through the same exact-external-ref lookup a 
   const federation = createFederation(service)
   t.teardown(() => federation.close())
 
-  const [movie] = await federation.search({ selector: MOVIE_SELECTOR, limit: 64 })
-  const episodes = await federation.search({ selector: EPISODE_SELECTOR, limit: 64 })
+  const { candidates: [movie] } = await federation.search({ selector: MOVIE_SELECTOR, limit: 64 })
+  const { candidates: episodes } = await federation.search({ selector: EPISODE_SELECTOR, limit: 64 })
 
   t.is(episodes.length, 2, 'both renditions of the held episode are candidates')
   const [episode] = episodes
@@ -161,9 +162,9 @@ test('season and episode ordinals select: a held S3E7 is not an answer for S3E8 
   const federation = createFederation(createArchiveService())
   t.teardown(() => federation.close())
 
-  t.is((await federation.search({ selector: EPISODE_SELECTOR, limit: 64 })).length, 2)
+  t.is((await federation.search({ selector: EPISODE_SELECTOR, limit: 64 })).candidates.length, 2)
   for (const [season, episode] of [[3, 8], [2, 7], [4, 7], [3, 6]]) {
-    const results = await federation.search({
+    const { candidates: results } = await federation.search({
       selector: { ...EPISODE_SELECTOR, season, episode },
       limit: 64,
     })
@@ -180,7 +181,7 @@ test('an episode the relay does not hold is an empty answer, not a failure', asy
     { namespace: 'tvdb', identifier: '1399', kind: 'episode', season: 3, episode: 7 },
     { namespace: 'tmdb', identifier: '1399', kind: 'episode', season: 100_000, episode: 100_000 },
   ]) {
-    t.alike(await federation.search({ selector, limit: 64 }), [])
+    t.alike((await federation.search({ selector, limit: 64 })).candidates, [])
   }
 })
 
@@ -208,9 +209,9 @@ test('limit bounds an episode answer exactly as it bounds a movie answer', async
   const federation = createFederation(createArchiveService())
   t.teardown(() => federation.close())
 
-  t.is((await federation.search({ selector: EPISODE_SELECTOR, limit: 1 })).length, 1)
-  t.is((await federation.search({ selector: EPISODE_SELECTOR, limit: 2 })).length, 2)
-  t.is((await federation.search({ selector: MOVIE_SELECTOR, limit: 1 })).length, 1)
+  t.is((await federation.search({ selector: EPISODE_SELECTOR, limit: 1 })).candidates.length, 1)
+  t.is((await federation.search({ selector: EPISODE_SELECTOR, limit: 2 })).candidates.length, 2)
+  t.is((await federation.search({ selector: MOVIE_SELECTOR, limit: 1 })).candidates.length, 1)
   await t.exception(federation.search({ selector: EPISODE_SELECTOR, limit: 0 }), /bounded limit/)
   await t.exception(federation.search({ selector: MOVIE_SELECTOR, limit: 0 }), /bounded limit/)
 })
@@ -220,12 +221,12 @@ test('a movie selector still passes its identifier through untouched', async t =
   const federation = createFederation(service)
   t.teardown(() => federation.close())
 
-  const results = await federation.search({ selector: MOVIE_SELECTOR, limit: 64 })
+  const { candidates: results } = await federation.search({ selector: MOVIE_SELECTOR, limit: 64 })
   t.is(results.length, 1)
   t.is(results[0].work.entityId, MOVIE.workEntityId)
   t.is(results[0].work.title, MOVIE.title)
   t.is(results[0].work.releaseYear, 1999)
   t.alike(results[0].work.externalRefs, [{ namespace: 'tmdb', identifier: '348' }])
   t.is(service.selectors[0].identifier, '348')
-  t.alike(await federation.search({ selector: { ...MOVIE_SELECTOR, identifier: '349' }, limit: 64 }), [])
+  t.alike((await federation.search({ selector: { ...MOVIE_SELECTOR, identifier: '349' }, limit: 64 })).candidates, [])
 })

@@ -1,7 +1,8 @@
 import {
   attachSharedAppHandlers,
   buildSharedSystemHandlers,
-  requireHostProtocolVersion
+  requireHostProtocolVersion,
+  STORAGE_FORMAT_VERSION
 } from './runtime.js'
 import { createBackendContext } from './orchestrator.js'
 import { createUniversalCore } from './universal-core.js'
@@ -24,7 +25,48 @@ function getBlobServerStatus(backend) {
   }
 }
 
+function validateBackendOptions(opts) {
+  const { storagePath, stream, platform = 'desktop' } = opts
+  if (typeof storagePath !== 'string' || storagePath.length === 0) {
+    throw new Error('createBackend requires a non-empty storagePath')
+  }
+  if (!stream || typeof stream !== 'object') {
+    throw new Error('createBackend requires a duplex stream transport')
+  }
+  if (platform !== 'mobile' && platform !== 'desktop') {
+    throw new Error('createBackend requires platform to be "mobile" or "desktop"')
+  }
+}
+
+async function instantiateHRPC(HRPCImpl, stream) {
+  const resolved = HRPCImpl || (await import('@peartube/spec'))
+  const HRPC = resolved?.default ?? resolved
+  return new HRPC(stream)
+}
+
+function emitBackendReady(rpc, readyPayload, readyCallback) {
+  readyCallback(readyPayload)
+  try {
+    rpc.eventReady?.(readyPayload)
+  } catch {
+    // Older HRPC shims may not expose ready events.
+  }
+}
+
+function emitStartupError(rpc, error) {
+  try {
+    rpc?.eventError?.({
+      code: error?.code || 'HOST_START_FAILED',
+      message: error?.message || String(error),
+      retryable: false
+    })
+  } catch {
+    // Preserve the original startup error if event emission fails.
+  }
+}
+
 export async function createBackend(opts = {}) {
+  validateBackendOptions(opts)
   const {
     storagePath,
     stream,
@@ -35,24 +77,13 @@ export async function createBackend(opts = {}) {
     onError,
     onVideoStats,
     protocolVersion,
+    expectedStorageFormatVersion,
     HRPCImpl = null,
     ...lifecycleOptions
   } = opts
 
   const readyCallback = toCallback(onReady)
   const errorCallback = toCallback(onError)
-
-  if (typeof storagePath !== 'string' || storagePath.length === 0) {
-    throw new Error('createBackend requires a non-empty storagePath')
-  }
-
-  if (!stream || typeof stream !== 'object') {
-    throw new Error('createBackend requires a duplex stream transport')
-  }
-
-  if (platform !== 'mobile' && platform !== 'desktop') {
-    throw new Error('createBackend requires platform to be "mobile" or "desktop"')
-  }
 
   const hostProtocolVersion = requireHostProtocolVersion(
     protocolVersion,
@@ -80,7 +111,7 @@ export async function createBackend(opts = {}) {
       createBackendContext,
       onStatsUpdate: onVideoStats,
       ...lifecycleOptions,
-      expectedProtocolVersion: hostProtocolVersion
+      expectedStorageFormatVersion: expectedStorageFormatVersion ?? STORAGE_FORMAT_VERSION
     })
 
     backend = await core.init()
@@ -89,9 +120,7 @@ export async function createBackend(opts = {}) {
       ...buildSharedSystemHandlers(backend, { protocolVersion: hostProtocolVersion })
     }
 
-    const resolvedHRPCImpl = HRPCImpl || (await import('@peartube/spec'))
-    const HRPC = resolvedHRPCImpl?.default ?? resolvedHRPCImpl
-    rpc = new HRPC(stream)
+    rpc = await instantiateHRPC(HRPCImpl, stream)
     if (core.services) core.services.hrpc = rpc
     backend.universalCore = core
 
@@ -115,12 +144,7 @@ export async function createBackend(opts = {}) {
     await core.start()
 
     const readyPayload = { ...getBlobServerStatus(backend), protocolVersion: hostProtocolVersion }
-    readyCallback(readyPayload)
-    try {
-      rpc.eventReady?.(readyPayload)
-    } catch {
-      // Older HRPC shims may not expose ready events.
-    }
+    emitBackendReady(rpc, readyPayload, readyCallback)
 
     return {
       core,
@@ -131,15 +155,7 @@ export async function createBackend(opts = {}) {
     }
   } catch (error) {
     errorCallback(error)
-    try {
-      rpc?.eventError?.({
-        code: error?.code || 'HOST_START_FAILED',
-        message: error?.message || String(error),
-        retryable: false
-      })
-    } catch {
-      // Preserve the original startup error if event emission fails.
-    }
+    emitStartupError(rpc, error)
     await destroy()
     throw error
   }

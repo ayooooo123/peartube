@@ -260,19 +260,66 @@ export function createPortableStateRepositoryAdapter (repository) {
  * the backend metadata Hyperbee. Missing domain dependencies remain absent so
  * API handlers fail closed rather than consulting fake empty stores.
  */
-export async function createDurableOperabilityServices (options = {}) {
+function pickCascade (options, configured, ctx, prop, fallback = null) {
+  return options[prop] || configured[prop] || ctx?.[prop] || fallback
+}
+
+function resolveOperabilityConfig (options) {
   const ctx = options.ctx || null
   const configured = options.operability || ctx?.operability || {}
-  const metaDb = options.metaDb || configured.metaDb || ctx?.metaDb || null
-  const migrations = options.migrations || configured.migrations || ctx?.migrations || null
+  const metaDb = pickCascade(options, configured, ctx, 'metaDb')
+  const migrations = pickCascade(options, configured, ctx, 'migrations')
   const migrationStore = options.migrationStore || configured.migrationStore || prefixedStore(metaDb, 'operability:')
-  const portableRepository = createPortableStateRepositoryAdapter(
-    options.portableStateRepository || configured.portableStateRepository || ctx?.portableStateRepository
-  )
-  const publisherDeviceStatusProvider = options.publisherDeviceStatusProvider || configured.publisherDeviceStatusProvider || ctx?.publisherDeviceStatusProvider || null
+  const portableRepoInput = pickCascade(options, configured, ctx, 'portableStateRepository')
+  const portableRepository = createPortableStateRepositoryAdapter(portableRepoInput)
+  const publisherDeviceStatusProvider = pickCascade(options, configured, ctx, 'publisherDeviceStatusProvider')
+  const now = options.now || configured.now || Date.now
+  return { ctx, configured, metaDb, migrations, migrationStore, portableRepository, publisherDeviceStatusProvider, now }
+}
+
+async function resolveArchiveDiagnostics ({ options, configured, ctx, metaDb, now }) {
+  let archiveDiagnostics = pickCascade(options, configured, ctx, 'archiveDiagnostics')
+  if (!archiveDiagnostics && metaDb) {
+    const archiveStateKey = 'operability:archive-diagnostics:v1'
+    const stored = recordValue(await metaDb.get(archiveStateKey).catch(() => null))
+    archiveDiagnostics = createArchiveDiagnostics({
+      state: stored,
+      operatorMode: configured.operatorMode,
+      now,
+      maxHistory: MAX_ARCHIVE_FAILURE_CODES,
+      persist: state => metaDb.put(archiveStateKey, state)
+    })
+  }
+  return archiveDiagnostics
+}
+
+function createCloseHandler (archiveDiagnostics, portableRepository) {
+  let closePromise = null
+  return function close () {
+    if (!closePromise) {
+      closePromise = Promise.all([
+        archiveDiagnostics?.flush?.(),
+        portableRepository?.flush?.()
+      ]).then(() => undefined)
+    }
+    return closePromise
+  }
+}
+
+export async function createDurableOperabilityServices (options = {}) {
+  const {
+    ctx,
+    configured,
+    metaDb,
+    migrations,
+    migrationStore,
+    portableRepository,
+    publisherDeviceStatusProvider,
+    now
+  } = resolveOperabilityConfig(options)
 
   const migrationLifecycle = migrationStore && hasMigrationAdapters(migrations)
-    ? createMigrationLifecycle({ store: migrationStore, migrations, now: options.now || configured.now || Date.now })
+    ? createMigrationLifecycle({ store: migrationStore, migrations, now })
     : null
 
   const portabilityService = portableRepository
@@ -280,39 +327,19 @@ export async function createDurableOperabilityServices (options = {}) {
         snapshotPortableState: portableRepository.snapshotPortableState,
         restoreTransaction: portableRepository.restorePortableStateTransaction,
         verifyArchiveEvidence: options.verifyArchiveEvidence || configured.verifyArchiveEvidence,
-        now: options.now || configured.now || Date.now
+        now
       })
     : null
 
-  let archiveDiagnostics = options.archiveDiagnostics || configured.archiveDiagnostics || ctx?.archiveDiagnostics || null
-  if (!archiveDiagnostics && metaDb) {
-    const archiveStateKey = 'operability:archive-diagnostics:v1'
-    const stored = recordValue(await metaDb.get(archiveStateKey).catch(() => null))
-    archiveDiagnostics = createArchiveDiagnostics({
-      state: stored,
-      operatorMode: configured.operatorMode,
-      now: options.now || configured.now || Date.now,
-      maxHistory: MAX_ARCHIVE_FAILURE_CODES,
-      persist: state => metaDb.put(archiveStateKey, state)
-    })
-  }
+  const archiveDiagnostics = await resolveArchiveDiagnostics({ options, configured, ctx, metaDb, now })
 
-  let closePromise = null
   const services = {
     migrationLifecycle,
     portabilityService,
     portableRepository,
     publisherDeviceStatusProvider,
     archiveDiagnostics,
-    close () {
-      if (!closePromise) {
-        closePromise = Promise.all([
-          archiveDiagnostics?.flush?.(),
-          portableRepository?.flush?.()
-        ]).then(() => undefined)
-      }
-      return closePromise
-    }
+    close: createCloseHandler(archiveDiagnostics, portableRepository)
   }
 
   const lifecycle = options.lifecycle || ctx?.lifecycle

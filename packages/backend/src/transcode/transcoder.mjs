@@ -1059,6 +1059,61 @@ function createFileWriteIOContext(filePath) {
   return ioContext
 }
 
+async function setupProbeInput(url) {
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    const fileSize = await getHttpContentLength(url)
+    if (!fileSize) {
+      throw new Error('Probe failed: could not determine content length')
+    }
+    const moovAtEnd = await checkMoovAtEnd(url, fileSize)
+    const inputIO = await prepareHttpStreamingIOContext(url, fileSize)
+    return { fileSize, moovAtEnd, inputIO }
+  }
+  const filePath = url.replace(/^file:\/\//, '')
+  const stats = fs.statSync(filePath)
+  const fileSize = stats.size
+  const moovAtEnd = await checkMoovAtEndFile(filePath, fileSize)
+  const inputIO = createFileReadIOContext(filePath, fileSize)
+  return { fileSize, moovAtEnd, inputIO }
+}
+
+function extractStreamDuration(stream) {
+  if (stream && stream.duration && stream.duration > 0 && stream.timeBase) {
+    const tb = stream.timeBase
+    if (tb.denominator > 0) {
+      return (stream.duration * tb.numerator) / tb.denominator
+    }
+  }
+  return 0
+}
+
+function extractProbeVideoStream(videoStream, result) {
+  if (!videoStream || !videoStream.codecParameters) return
+  const cp = videoStream.codecParameters
+  result.width = cp.width || 0
+  result.height = cp.height || 0
+  result.videoCodec = cp.codecName?.toLowerCase() || mapCodecIdToName(cp.id, 'video')
+  if (cp.profile !== undefined && cp.profile >= 0) {
+    result.videoProfile = H264_PROFILE_NAME_MAP.get(cp.profile) || String(cp.profile)
+  }
+  if (cp.level !== undefined && cp.level > 0) {
+    result.videoLevel = cp.level / 10
+  }
+  const duration = extractStreamDuration(videoStream)
+  if (duration > 0) {
+    result.duration = duration
+  }
+}
+
+function extractProbeAudioStream(audioStream, result) {
+  if (!audioStream || !audioStream.codecParameters) return
+  const cp = audioStream.codecParameters
+  result.audioCodec = cp.codecName?.toLowerCase() || mapCodecIdToName(cp.id, 'audio')
+  if (cp.channelLayout && cp.channelLayout.nbChannels) {
+    result.audioChannels = cp.channelLayout.nbChannels
+  }
+}
+
 async function probeWithBareFFmpeg(url) {
   const result = {
     videoCodec: null,
@@ -1076,25 +1131,12 @@ async function probeWithBareFFmpeg(url) {
 
   let inputIO = null
   let inputFmt = null
-  let fileSize = 0
 
   try {
-    if (url.startsWith('http://') || url.startsWith('https://')) {
-      fileSize = await getHttpContentLength(url)
-      if (!fileSize) {
-        throw new Error('Probe failed: could not determine content length')
-      }
-      result.fileSize = fileSize
-      result.moovAtEnd = await checkMoovAtEnd(url, fileSize)
-      inputIO = await prepareHttpStreamingIOContext(url, fileSize)
-    } else {
-      const filePath = url.replace(/^file:\/\//, '')
-      const stats = fs.statSync(filePath)
-      fileSize = stats.size
-      result.fileSize = fileSize
-      result.moovAtEnd = await checkMoovAtEndFile(filePath, fileSize)
-      inputIO = createFileReadIOContext(filePath, fileSize)
-    }
+    const input = await setupProbeInput(url)
+    result.fileSize = input.fileSize
+    result.moovAtEnd = input.moovAtEnd
+    inputIO = input.inputIO
 
     inputFmt = new ffmpeg.InputFormatContext(inputIO)
     if (typeof inputFmt.openInput === 'function') {
@@ -1103,45 +1145,16 @@ async function probeWithBareFFmpeg(url) {
 
     result.container = inputFmt.inputFormat?.name?.toLowerCase() || null
 
-    const videoStream = inputFmt.getBestStream?.(ffmpeg.constants?.mediaTypes?.VIDEO ?? 0)
-    const audioStream = inputFmt.getBestStream?.(ffmpeg.constants?.mediaTypes?.AUDIO ?? 1)
+    const videoType = ffmpeg.constants?.mediaTypes?.VIDEO ?? 0
+    const audioType = ffmpeg.constants?.mediaTypes?.AUDIO ?? 1
+    const videoStream = typeof inputFmt.getBestStream === 'function' ? inputFmt.getBestStream(videoType) : null
+    const audioStream = typeof inputFmt.getBestStream === 'function' ? inputFmt.getBestStream(audioType) : null
 
-    if (videoStream?.codecParameters) {
-      const cp = videoStream.codecParameters
-      result.width = cp.width || 0
-      result.height = cp.height || 0
-      result.videoCodec = cp.codecName?.toLowerCase() || mapCodecIdToName(cp.id, 'video')
-      if (cp.profile !== undefined && cp.profile >= 0) {
-        result.videoProfile = H264_PROFILE_NAME_MAP.get(cp.profile) || String(cp.profile)
-      }
-      if (cp.level !== undefined && cp.level > 0) {
-        result.videoLevel = cp.level / 10
-      }
-      // Get duration from video stream (in stream timebase units)
-      // Stream duration is in timebase units, need to convert to seconds
-      if (videoStream.duration && videoStream.duration > 0 && videoStream.timeBase) {
-        const tb = videoStream.timeBase
-        if (tb.denominator > 0) {
-          result.duration = (videoStream.duration * tb.numerator) / tb.denominator
-        }
-      }
-    }
+    extractProbeVideoStream(videoStream, result)
+    extractProbeAudioStream(audioStream, result)
 
-    if (audioStream?.codecParameters) {
-      const cp = audioStream.codecParameters
-      result.audioCodec = cp.codecName?.toLowerCase() || mapCodecIdToName(cp.id, 'audio')
-      // Get audio channel count for surround sound detection
-      if (cp.channelLayout && cp.channelLayout.nbChannels) {
-        result.audioChannels = cp.channelLayout.nbChannels
-      }
-    }
-
-    // Fallback: try to get duration from audio stream if video didn't have it
-    if (result.duration === 0 && audioStream?.duration && audioStream.duration > 0 && audioStream.timeBase) {
-      const tb = audioStream.timeBase
-      if (tb.denominator > 0) {
-        result.duration = (audioStream.duration * tb.numerator) / tb.denominator
-      }
+    if (result.duration === 0) {
+      result.duration = extractStreamDuration(audioStream)
     }
   } finally {
     const ownsIO = !!inputFmt
@@ -1197,63 +1210,58 @@ export async function probeMedia(url, title = '', options = {}) {
 /**
  * Map FFmpeg codec ID to name
  */
-function mapCodecIdToName(codecId, type) {
-  if (!codecId) return null
-
-  // Common video codecs
-  const videoCodecs = {
-    [ffmpeg.constants?.codecs?.H264]: 'h264',
-    [ffmpeg.constants?.codecs?.HEVC]: 'hevc',
-    [ffmpeg.constants?.codecs?.VP8]: 'vp8',
-    [ffmpeg.constants?.codecs?.VP9]: 'vp9',
-    [ffmpeg.constants?.codecs?.AV1]: 'av1',
+function getCodecNameMap(type) {
+  const codecs = ffmpeg?.constants?.codecs
+  if (!codecs) return null
+  if (type === 'video') {
+    return {
+      [codecs.H264]: 'h264',
+      [codecs.HEVC]: 'hevc',
+      [codecs.VP8]: 'vp8',
+      [codecs.VP9]: 'vp9',
+      [codecs.AV1]: 'av1',
+    }
   }
-
-  // Common audio codecs
-  const audioCodecs = {
-    [ffmpeg.constants?.codecs?.AAC]: 'aac',
-    [ffmpeg.constants?.codecs?.MP3]: 'mp3',
-    [ffmpeg.constants?.codecs?.AC3]: 'ac3',
-    [ffmpeg.constants?.codecs?.EAC3]: 'eac3',
-    [ffmpeg.constants?.codecs?.DTS]: 'dts',
-    [ffmpeg.constants?.codecs?.OPUS]: 'opus',
-    [ffmpeg.constants?.codecs?.FLAC]: 'flac',
-    [ffmpeg.constants?.codecs?.VORBIS]: 'vorbis',
+  return {
+    [codecs.AAC]: 'aac',
+    [codecs.MP3]: 'mp3',
+    [codecs.AC3]: 'ac3',
+    [codecs.EAC3]: 'eac3',
+    [codecs.DTS]: 'dts',
+    [codecs.OPUS]: 'opus',
+    [codecs.FLAC]: 'flac',
+    [codecs.VORBIS]: 'vorbis',
   }
-
-  const map = type === 'video' ? videoCodecs : audioCodecs
-  return map[codecId] || `codec-${codecId}`
 }
 
-/**
- * Check if transcoding is needed for Chromecast
- *
- * @param {object} result - Probe result object to populate
- */
-function checkTranscodeNeeded(result) {
-  const reasons = []
+function mapCodecIdToName(codecId, type) {
+  if (!codecId) return null
+  const map = getCodecNameMap(type)
+  const name = map ? map[codecId] : null
+  return name || `codec-${codecId}`
+}
 
-  // Check video codec
-  if (result.videoCodec) {
-    const videoSupported = CHROMECAST_VIDEO_CODECS.includes(result.videoCodec)
-    if (!videoSupported) {
+function checkVideoCompatibility(result, reasons) {
+  if (!result.videoCodec) return
+  const videoSupported = CHROMECAST_VIDEO_CODECS.includes(result.videoCodec)
+  if (!videoSupported) {
+    result.needsVideoTranscode = true
+    reasons.push(`Video codec ${result.videoCodec} not supported`)
+  }
+  if (!result.needsVideoTranscode && ['h264', 'avc1', 'avc'].includes(result.videoCodec)) {
+    const profile = String(result.videoProfile || '').toLowerCase()
+    if (profile && H264_UNSUPPORTED_PROFILES.some(p => profile.includes(p))) {
       result.needsVideoTranscode = true
-      reasons.push(`Video codec ${result.videoCodec} not supported`)
+      reasons.push(`H.264 profile '${result.videoProfile}' not supported (10-bit or 4:4:4)`)
     }
-    if (!result.needsVideoTranscode && ['h264', 'avc1', 'avc'].includes(result.videoCodec)) {
-      const profile = String(result.videoProfile || '').toLowerCase()
-      if (profile && H264_UNSUPPORTED_PROFILES.some(p => profile.includes(p))) {
-        result.needsVideoTranscode = true
-        reasons.push(`H.264 profile '${result.videoProfile}' not supported (10-bit or 4:4:4)`)
-      }
-      if (result.videoLevel && result.videoLevel > H264_MAX_LEVEL) {
-        result.needsVideoTranscode = true
-        reasons.push(`H.264 level ${result.videoLevel} too high (max ~${H264_MAX_LEVEL})`)
-      }
+    if (result.videoLevel && result.videoLevel > H264_MAX_LEVEL) {
+      result.needsVideoTranscode = true
+      reasons.push(`H.264 level ${result.videoLevel} too high (max ~${H264_MAX_LEVEL})`)
     }
   }
+}
 
-  // Check audio codec
+function checkAudioCompatibility(result, reasons) {
   if (result.audioCodec) {
     const audioSupported = CHROMECAST_AUDIO_CODECS.includes(result.audioCodec)
     if (!audioSupported) {
@@ -1261,14 +1269,13 @@ function checkTranscodeNeeded(result) {
       reasons.push(`Audio codec ${result.audioCodec} not supported`)
     }
   }
-
-  // Surround (5.1+) AAC must be downmixed to stereo for Chromecast HLS/MPEGTS
   if (result.audioChannels > 2 && !result.needsAudioTranscode) {
     result.needsAudioTranscode = true
     reasons.push(`Surround audio (${result.audioChannels}ch) needs stereo downmix for Chromecast`)
   }
+}
 
-  // Check container - MKV needs remux even if codecs are compatible
+function checkContainerAndSizeCompatibility(result, reasons) {
   if (result.container) {
     const containerNeedsRemux = result.container.includes('matroska') ||
                                  result.container.includes('mkv') ||
@@ -1281,8 +1288,6 @@ function checkTranscodeNeeded(result) {
     }
   }
 
-  // Check for moov atom at end - problematic for HTTP streaming to Chromecast
-  // Large files (>500MB) with moov at end need remux to faststart format
   const LARGE_FILE_THRESHOLD = 500 * 1024 * 1024
   if (result.moovAtEnd && result.fileSize > LARGE_FILE_THRESHOLD) {
     if (!result.needsVideoTranscode && !result.needsRemux) {
@@ -1291,8 +1296,6 @@ function checkTranscodeNeeded(result) {
     }
   }
 
-  // Very large files (>1GB) need HLS for reliable Chromecast streaming
-  // With BitstreamFilter available, we can use fast remux (h264_mp4toannexb converts AVCC->Annex B)
   const VERY_LARGE_FILE_THRESHOLD = 1024 * 1024 * 1024
   if (result.fileSize > VERY_LARGE_FILE_THRESHOLD) {
     if (!result.needsVideoTranscode && !result.needsRemux) {
@@ -1300,7 +1303,13 @@ function checkTranscodeNeeded(result) {
       reasons.push(`Very large file (${Math.round(result.fileSize / 1024 / 1024)}MB) needs HLS for reliable streaming`)
     }
   }
+}
 
+function checkTranscodeNeeded(result) {
+  const reasons = []
+  checkVideoCompatibility(result, reasons)
+  checkAudioCompatibility(result, reasons)
+  checkContainerAndSizeCompatibility(result, reasons)
   result.needsTranscode = result.needsVideoTranscode || result.needsAudioTranscode
   result.reason = reasons.join('; ') || 'Compatible'
 }
@@ -1362,11 +1371,224 @@ async function createInputIOContext(inputSource) {
  * For HTTP sources, uses single-pass processing with byte-based progress.
  * For file sources, uses two-pass for accurate packet-based progress.
  */
+function cleanupIOContext(ioContext, ownedByFormat) {
+  if (ioContext && ioContext._cleanup) {
+    try { ioContext._cleanup() } catch {}
+  }
+  if (ioContext && !ownedByFormat) safeDestroy(ioContext)
+}
+
+function reportStreamProgress(session, onProgress, bytesProcessed, inputSize, lastProgressPercent, label) {
+  const percent = Math.min(99, Math.round((bytesProcessed / inputSize) * 100))
+  if (percent > lastProgressPercent) {
+    session.progress = percent
+    if (onProgress) onProgress(percent)
+    console.log(`[Transcoder] ${label} progress:`, percent + '%', '(' + Math.round(bytesProcessed / 1024 / 1024) + 'MB)')
+    return percent
+  }
+  return lastProgressPercent
+}
+
+function setupRemuxStreams(outputFormat, videoStream, audioStream) {
+  const outVideoStream = outputFormat.createStream()
+  copyCodecParameters(outVideoStream.codecParameters, videoStream.codecParameters)
+  outVideoStream.timeBase = videoStream.timeBase
+
+  let outAudioStream = null
+  if (audioStream) {
+    outAudioStream = outputFormat.createStream()
+    copyCodecParameters(outAudioStream.codecParameters, audioStream.codecParameters)
+    outAudioStream.timeBase = audioStream.timeBase
+  }
+  return { outVideoStream, outAudioStream }
+}
+
+function dispatchRemuxPacket(packet, videoStream, outVideoStream, audioStream, outAudioStream, outputFormat) {
+  if (packet.streamIndex === videoStream.index) {
+    packet.streamIndex = outVideoStream.index
+    outputFormat.writeFrame(packet)
+  } else if (audioStream && outAudioStream && packet.streamIndex === audioStream.index) {
+    packet.streamIndex = outAudioStream.index
+    outputFormat.writeFrame(packet)
+  }
+}
+
+function setupAudioTranscodePipeline(audioStream, outputFormat) {
+  if (!audioStream) return null
+  const outAudioStream = outputFormat.createStream()
+  outAudioStream.codecParameters.type = ffmpeg.constants.mediaTypes.AUDIO
+  outAudioStream.codecParameters.id = ffmpeg.constants.codecs.AAC
+  outAudioStream.codecParameters.sampleRate = audioStream.codecParameters.sampleRate || 48000
+  outAudioStream.codecParameters.channelLayout = ffmpeg.constants.channelLayouts.STEREO
+  outAudioStream.codecParameters.format = ffmpeg.constants.sampleFormats.FLTP
+  outAudioStream.timeBase = { numerator: 1, denominator: outAudioStream.codecParameters.sampleRate }
+
+  let audioDecoder = null
+  try {
+    audioDecoder = audioStream.decoder()
+    console.log('[Transcoder] Audio decoder created via stream.decoder()')
+  } catch (e) {
+    console.log('[Transcoder] stream.decoder() failed, creating manually:', e?.message)
+    const decoderCodec = selectDecoderForId(audioStream.codecParameters.id)
+    if (!decoderCodec) {
+      throw new Error('Audio decoder not available')
+    }
+    audioDecoder = new ffmpeg.CodecContext(decoderCodec)
+    audioStream.codecParameters.toContext(audioDecoder)
+  }
+  audioDecoder.timeBase = audioStream.timeBase
+  audioDecoder.open()
+
+  const aacSelection = selectAacEncoder()
+  if (!aacSelection) {
+    throw new Error('AAC encoder not available')
+  }
+  console.log('[Transcoder] Using AAC encoder:', aacSelection.name)
+  const audioEncoder = new ffmpeg.CodecContext(aacSelection.encoder)
+  audioEncoder.sampleRate = outAudioStream.codecParameters.sampleRate
+  audioEncoder.channelLayout = ffmpeg.constants.channelLayouts.STEREO
+  audioEncoder.sampleFormat = ffmpeg.constants.sampleFormats.FLTP
+  audioEncoder.timeBase = outAudioStream.timeBase
+  audioEncoder.open()
+
+  const resampler = new ffmpeg.Resampler(
+    audioDecoder.sampleRate,
+    audioDecoder.channelLayout,
+    audioDecoder.sampleFormat,
+    audioEncoder.sampleRate,
+    audioEncoder.channelLayout,
+    audioEncoder.sampleFormat
+  )
+
+  return { outAudioStream, audioDecoder, audioEncoder, resampler }
+}
+
+function processAudioTranscodePacket(packet, audioDecoder, audioEncoder, resampler, frame, resampledFrame, outputPacket, outAudioStream, outputFormat) {
+  if (!audioDecoder.sendPacket(packet)) return
+  while (audioDecoder.receiveFrame(frame)) {
+    const samplesConverted = resampler.convert(frame, resampledFrame)
+    resampledFrame.nbSamples = samplesConverted
+    resampledFrame.pts = frame.pts
+    resampledFrame.timeBase = frame.timeBase
+
+    if (audioEncoder.sendFrame(resampledFrame)) {
+      while (audioEncoder.receivePacket(outputPacket)) {
+        outputPacket.streamIndex = outAudioStream.index
+        outputFormat.writeFrame(outputPacket)
+        outputPacket.unref()
+      }
+    }
+  }
+}
+
+function flushEncoder(encoder, outputPacket, streamIndex, outputFormat) {
+  if (!encoder) return
+  encoder.sendFrame(null)
+  while (encoder.receivePacket(outputPacket)) {
+    outputPacket.streamIndex = streamIndex
+    outputFormat.writeFrame(outputPacket)
+    outputPacket.unref()
+  }
+}
+
+function setupVideoTranscodePipeline(videoStream, outputFormat) {
+  const outVideoStream = outputFormat.createStream()
+  outVideoStream.codecParameters.type = ffmpeg.constants.mediaTypes.VIDEO
+  outVideoStream.codecParameters.id = ffmpeg.constants.codecs.H264
+  outVideoStream.codecParameters.width = videoStream.codecParameters.width
+  outVideoStream.codecParameters.height = videoStream.codecParameters.height
+  outVideoStream.timeBase = videoStream.timeBase
+
+  let videoDecoder = null
+  try {
+    videoDecoder = videoStream.decoder()
+    console.log('[Transcoder] Video decoder created via stream.decoder()')
+  } catch (e) {
+    console.log('[Transcoder] stream.decoder() failed, creating manually:', e?.message)
+    const videoDecoderSelection = selectDecoderForId(videoStream.codecParameters.id)
+    if (!videoDecoderSelection) {
+      throw new Error('Video decoder not available')
+    }
+    videoDecoder = new ffmpeg.CodecContext(videoDecoderSelection.decoder)
+    videoStream.codecParameters.toContext(videoDecoder)
+  }
+  videoDecoder.timeBase = videoStream.timeBase
+  videoDecoder.open()
+
+  const h264Selection = selectH264Encoder()
+  if (!h264Selection) {
+    throw new Error('H.264 encoder not available')
+  }
+  console.log('[Transcoder] Using H.264 encoder:', h264Selection.name)
+  outVideoStream.codecParameters.format = h264Selection.pixelFormat
+  const videoEncoder = new ffmpeg.CodecContext(h264Selection.encoder)
+  videoEncoder.width = videoStream.codecParameters.width
+  videoEncoder.height = videoStream.codecParameters.height
+  videoEncoder.pixelFormat = h264Selection.pixelFormat
+  videoEncoder.timeBase = videoStream.timeBase
+  videoEncoder.bitRate = 8000000
+  videoEncoder.gopSize = 48
+  videoEncoder.maxBFrames = 0
+
+  if (h264Selection.isHardware) {
+    try {
+      videoEncoder.setOption('b', '8000000')
+      videoEncoder.setOption('profile', 'main')
+      videoEncoder.setOption('level', '4.1')
+      videoEncoder.setOption('i-frame-interval', '2')
+      videoEncoder.setOption('g', '48')
+    } catch {}
+  }
+  videoEncoder.open()
+
+  const decoderPixelFormat = videoDecoder.pixelFormat
+  const NONE = ffmpeg.constants.pixelFormats.NONE
+  let inputPixelFormat = decoderPixelFormat
+  if (!inputPixelFormat || inputPixelFormat === NONE || inputPixelFormat === 0 || inputPixelFormat < 0) {
+    inputPixelFormat = ffmpeg.constants.pixelFormats.YUV420P
+    console.log('[Transcoder] Decoder format unknown (' + decoderPixelFormat + '), assuming YUV420P')
+  }
+
+  let scaler = null
+  if (inputPixelFormat !== h264Selection.pixelFormat) {
+    scaler = new ffmpeg.Scaler(
+      inputPixelFormat,
+      videoStream.codecParameters.width,
+      videoStream.codecParameters.height,
+      h264Selection.pixelFormat,
+      videoStream.codecParameters.width,
+      videoStream.codecParameters.height
+    )
+  }
+
+  return { outVideoStream, videoDecoder, videoEncoder, scaler }
+}
+
+function processVideoTranscodePacket(packet, videoDecoder, videoEncoder, scaler, videoFrame, scaledFrame, outputPacket, outVideoStream, outputFormat) {
+  if (!videoDecoder.sendPacket(packet)) return
+  while (videoDecoder.receiveFrame(videoFrame)) {
+    let frameToEncode = videoFrame
+    if (scaler) {
+      scaler.scale(videoFrame, scaledFrame)
+      scaledFrame.pts = videoFrame.pts
+      scaledFrame.timeBase = videoFrame.timeBase
+      frameToEncode = scaledFrame
+    }
+
+    if (videoEncoder.sendFrame(frameToEncode)) {
+      while (videoEncoder.receivePacket(outputPacket)) {
+        outputPacket.streamIndex = outVideoStream.index
+        outputFormat.writeFrame(outputPacket)
+        outputPacket.unref()
+      }
+    }
+  }
+}
+
 async function remuxWithBareFFmpeg(session, inputSource, onProgress) {
   const inputSize = inputSource.size
   console.log('[Transcoder] Remuxing with bare-ffmpeg (stream copy), input size:', inputSize)
 
-  // Declare ALL native objects at top for proper cleanup
   let inputIO = null
   let inputFormat = null
   let outputIO = null
@@ -1374,7 +1596,6 @@ async function remuxWithBareFFmpeg(session, inputSource, onProgress) {
   let packet = null
 
   try {
-    // Create input IOContext based on source type
     console.log('[Transcoder] Creating input IOContext for', inputSource.type, '...')
     inputIO = await createInputIOContext(inputSource)
     console.log('[Transcoder] IOContext created, creating InputFormatContext...')
@@ -1390,22 +1611,10 @@ async function remuxWithBareFFmpeg(session, inputSource, onProgress) {
       throw new Error('No video stream found')
     }
 
-    // Use streaming output IOContext that writes directly to file
     outputIO = createFileWriteIOContext(session.outputPath)
     outputFormat = new ffmpeg.OutputFormatContext('mp4', outputIO)
 
-    // Copy video stream
-    const outVideoStream = outputFormat.createStream()
-    copyCodecParameters(outVideoStream.codecParameters, videoStream.codecParameters)
-    outVideoStream.timeBase = videoStream.timeBase
-
-    // Copy audio stream if present
-    let outAudioStream = null
-    if (audioStream) {
-      outAudioStream = outputFormat.createStream()
-      copyCodecParameters(outAudioStream.codecParameters, audioStream.codecParameters)
-      outAudioStream.timeBase = audioStream.timeBase
-    }
+    const { outVideoStream, outAudioStream } = setupRemuxStreams(outputFormat, videoStream, audioStream)
 
     outputFormat.writeHeader()
 
@@ -1414,30 +1623,15 @@ async function remuxWithBareFFmpeg(session, inputSource, onProgress) {
     let bytesProcessed = 0
     let lastProgressPercent = 0
 
-    // Single-pass processing with byte-based progress
     while (inputFormat.readFrame(packet)) {
       packetCount++
       bytesProcessed += packet.size || 0
 
-      if (packet.streamIndex === videoStream.index) {
-        packet.streamIndex = outVideoStream.index
-        outputFormat.writeFrame(packet)
-      } else if (audioStream && outAudioStream && packet.streamIndex === audioStream.index) {
-        packet.streamIndex = outAudioStream.index
-        outputFormat.writeFrame(packet)
-      }
-
+      dispatchRemuxPacket(packet, videoStream, outVideoStream, audioStream, outAudioStream, outputFormat)
       packet.unref()
 
-      // Report progress based on bytes processed
       if (inputSize > 0 && packetCount % 500 === 0) {
-        const percent = Math.min(99, Math.round((bytesProcessed / inputSize) * 100))
-        if (percent > lastProgressPercent) {
-          lastProgressPercent = percent
-          session.progress = percent
-          if (onProgress) onProgress(percent)
-          console.log('[Transcoder] Remux progress:', percent + '%', '(' + Math.round(bytesProcessed / 1024 / 1024) + 'MB)')
-        }
+        lastProgressPercent = reportStreamProgress(session, onProgress, bytesProcessed, inputSize, lastProgressPercent, 'Remux')
       }
     }
 
@@ -1445,46 +1639,31 @@ async function remuxWithBareFFmpeg(session, inputSource, onProgress) {
     console.log('[Transcoder] Remux complete, output written to:', session.outputPath)
 
   } finally {
-    // Destroy ALL native objects in reverse order using safeDestroy
     safeDestroy(packet)
     const outputOwnsIO = !!outputFormat
     const inputOwnsIO = !!inputFormat
     safeDestroy(outputFormat)
-    if (outputIO && outputIO._cleanup) {
-      try { outputIO._cleanup() } catch {}
-    }
-    if (outputIO && !outputOwnsIO) safeDestroy(outputIO)
+    cleanupIOContext(outputIO, outputOwnsIO)
     safeDestroy(inputFormat)
-    if (inputIO && inputIO._cleanup) {
-      try { inputIO._cleanup() } catch {}
-    }
-    if (inputIO && !inputOwnsIO) safeDestroy(inputIO)
+    cleanupIOContext(inputIO, inputOwnsIO)
   }
 }
 
-/**
- * Transcode audio (video copy, audio to AAC)
- * Uses streaming I/O to avoid OOM on large files
- */
 async function transcodeAudioWithBareFFmpeg(session, inputSource, onProgress) {
   const inputSize = inputSource.size
   console.log('[Transcoder] Transcoding audio (video copy, audio to AAC), input size:', inputSize)
 
-  // Declare ALL native objects at top for proper cleanup
   let inputIO = null
   let inputFormat = null
   let outputIO = null
   let outputFormat = null
-  let audioDecoder = null
-  let audioEncoder = null
-  let resampler = null
+  let audioPipeline = null
   let packet = null
   let frame = null
   let resampledFrame = null
   let outputPacket = null
 
   try {
-    // Create input IOContext based on source type
     console.log('[Transcoder] Creating input IOContext for', inputSource.type, '...')
     inputIO = await createInputIOContext(inputSource)
     inputFormat = new ffmpeg.InputFormatContext(inputIO)
@@ -1496,66 +1675,14 @@ async function transcodeAudioWithBareFFmpeg(session, inputSource, onProgress) {
       throw new Error('No video stream found')
     }
 
-    // Use streaming output IOContext that writes directly to file
     outputIO = createFileWriteIOContext(session.outputPath)
     outputFormat = new ffmpeg.OutputFormatContext('mp4', outputIO)
 
-    // Copy video stream
     const outVideoStream = outputFormat.createStream()
     copyCodecParameters(outVideoStream.codecParameters, videoStream.codecParameters)
     outVideoStream.timeBase = videoStream.timeBase
 
-    // Set up audio transcoding to AAC
-    let outAudioStream = null
-
-    if (audioStream) {
-      outAudioStream = outputFormat.createStream()
-      outAudioStream.codecParameters.type = ffmpeg.constants.mediaTypes.AUDIO
-      outAudioStream.codecParameters.id = ffmpeg.constants.codecs.AAC
-      outAudioStream.codecParameters.sampleRate = audioStream.codecParameters.sampleRate || 48000
-      outAudioStream.codecParameters.channelLayout = ffmpeg.constants.channelLayouts.STEREO
-      outAudioStream.codecParameters.format = ffmpeg.constants.sampleFormats.FLTP
-      outAudioStream.timeBase = { numerator: 1, denominator: outAudioStream.codecParameters.sampleRate }
-
-      // Audio decoder - use stream's decoder() helper which copies codec parameters
-      try {
-        audioDecoder = audioStream.decoder()
-        console.log('[Transcoder] Audio decoder created via stream.decoder()')
-      } catch (e) {
-        console.log('[Transcoder] stream.decoder() failed, creating manually:', e?.message)
-        const decoderCodec = selectDecoderForId(audioStream.codecParameters.id)
-        if (!decoderCodec) {
-          throw new Error('Audio decoder not available')
-        }
-        audioDecoder = new ffmpeg.CodecContext(decoderCodec)
-        audioStream.codecParameters.toContext(audioDecoder)
-      }
-      audioDecoder.timeBase = audioStream.timeBase
-      audioDecoder.open()
-
-      // Encoder
-      const aacSelection = selectAacEncoder()
-      if (!aacSelection) {
-        throw new Error('AAC encoder not available')
-      }
-      console.log('[Transcoder] Using AAC encoder:', aacSelection.name)
-      audioEncoder = new ffmpeg.CodecContext(aacSelection.encoder)
-      audioEncoder.sampleRate = outAudioStream.codecParameters.sampleRate
-      audioEncoder.channelLayout = ffmpeg.constants.channelLayouts.STEREO
-      audioEncoder.sampleFormat = ffmpeg.constants.sampleFormats.FLTP
-      audioEncoder.timeBase = outAudioStream.timeBase
-      audioEncoder.open()
-
-      // Resampler
-      resampler = new ffmpeg.Resampler(
-        audioDecoder.sampleRate,
-        audioDecoder.channelLayout,
-        audioDecoder.sampleFormat,
-        audioEncoder.sampleRate,
-        audioEncoder.channelLayout,
-        audioEncoder.sampleFormat
-      )
-    }
+    audioPipeline = setupAudioTranscodePipeline(audioStream, outputFormat)
 
     outputFormat.writeHeader()
 
@@ -1564,10 +1691,10 @@ async function transcodeAudioWithBareFFmpeg(session, inputSource, onProgress) {
     resampledFrame = new ffmpeg.Frame()
     outputPacket = new ffmpeg.Packet()
 
-    if (outAudioStream) {
+    if (audioPipeline) {
       resampledFrame.format = ffmpeg.constants.sampleFormats.FLTP
       resampledFrame.channelLayout = ffmpeg.constants.channelLayouts.STEREO
-      resampledFrame.sampleRate = audioEncoder.sampleRate
+      resampledFrame.sampleRate = audioPipeline.audioEncoder.sampleRate
       resampledFrame.nbSamples = 1024
       resampledFrame.alloc()
     }
@@ -1576,7 +1703,6 @@ async function transcodeAudioWithBareFFmpeg(session, inputSource, onProgress) {
     let bytesProcessed = 0
     let lastProgressPercent = 0
 
-    // Single-pass processing with byte-based progress
     while (inputFormat.readFrame(packet)) {
       packetCount++
       bytesProcessed += packet.size || 0
@@ -1584,97 +1710,64 @@ async function transcodeAudioWithBareFFmpeg(session, inputSource, onProgress) {
       if (packet.streamIndex === videoStream.index) {
         packet.streamIndex = outVideoStream.index
         outputFormat.writeFrame(packet)
-      } else if (audioStream && outAudioStream && packet.streamIndex === audioStream.index) {
+      } else if (audioStream && audioPipeline && packet.streamIndex === audioStream.index) {
         packet.timeBase = audioStream.timeBase
-
-        if (audioDecoder.sendPacket(packet)) {
-          while (audioDecoder.receiveFrame(frame)) {
-            const samplesConverted = resampler.convert(frame, resampledFrame)
-            resampledFrame.nbSamples = samplesConverted
-            resampledFrame.pts = frame.pts
-            resampledFrame.timeBase = frame.timeBase
-
-            if (audioEncoder.sendFrame(resampledFrame)) {
-              while (audioEncoder.receivePacket(outputPacket)) {
-                outputPacket.streamIndex = outAudioStream.index
-                outputFormat.writeFrame(outputPacket)
-                outputPacket.unref()
-              }
-            }
-          }
-        }
+        processAudioTranscodePacket(
+          packet,
+          audioPipeline.audioDecoder,
+          audioPipeline.audioEncoder,
+          audioPipeline.resampler,
+          frame,
+          resampledFrame,
+          outputPacket,
+          audioPipeline.outAudioStream,
+          outputFormat,
+        )
       }
 
       packet.unref()
 
-      // Report progress based on bytes processed
       if (inputSize > 0 && packetCount % 500 === 0) {
-        const percent = Math.min(99, Math.round((bytesProcessed / inputSize) * 100))
-        if (percent > lastProgressPercent) {
-          lastProgressPercent = percent
-          session.progress = percent
-          if (onProgress) onProgress(percent)
-          console.log('[Transcoder] Audio transcode progress:', percent + '%')
-        }
+        lastProgressPercent = reportStreamProgress(session, onProgress, bytesProcessed, inputSize, lastProgressPercent, 'Audio transcode')
       }
     }
 
-    // Flush audio encoder
-    if (audioEncoder) {
-      audioEncoder.sendFrame(null)
-      while (audioEncoder.receivePacket(outputPacket)) {
-        outputPacket.streamIndex = outAudioStream.index
-        outputFormat.writeFrame(outputPacket)
-        outputPacket.unref()
-      }
+    if (audioPipeline) {
+      flushEncoder(audioPipeline.audioEncoder, outputPacket, audioPipeline.outAudioStream.index, outputFormat)
     }
 
     outputFormat.writeTrailer()
     console.log('[Transcoder] Audio transcode complete, output written to:', session.outputPath)
 
   } finally {
-    // Destroy ALL native objects in reverse order using safeDestroy
     safeDestroy(resampledFrame)
     safeDestroy(frame)
     safeDestroy(outputPacket)
     safeDestroy(packet)
-    safeDestroy(resampler)
-    safeDestroy(audioEncoder)
-    safeDestroy(audioDecoder)
+    if (audioPipeline) {
+      safeDestroy(audioPipeline.resampler)
+      safeDestroy(audioPipeline.audioEncoder)
+      safeDestroy(audioPipeline.audioDecoder)
+    }
     const outputOwnsIO = !!outputFormat
     const inputOwnsIO = !!inputFormat
     safeDestroy(outputFormat)
-    if (outputIO && outputIO._cleanup) {
-      try { outputIO._cleanup() } catch {}
-    }
-    if (outputIO && !outputOwnsIO) safeDestroy(outputIO)
+    cleanupIOContext(outputIO, outputOwnsIO)
     safeDestroy(inputFormat)
-    if (inputIO && inputIO._cleanup) {
-      try { inputIO._cleanup() } catch {}
-    }
-    if (inputIO && !inputOwnsIO) safeDestroy(inputIO)
+    cleanupIOContext(inputIO, inputOwnsIO)
   }
 }
 
-/**
- * Full transcode (video + audio re-encoding)
- * Uses streaming I/O to avoid OOM on large files
- */
 async function transcodeVideoWithBareFFmpeg(session, inputSource, onProgress) {
   const inputSize = inputSource.size
   console.log('[Transcoder] Full transcode (HEVC → H.264, audio to AAC), input size:', inputSize)
 
-  // Declare ALL native objects at top for proper cleanup
   let inputIO = null
   let inputFormat = null
   let outputIO = null
   let outputFormat = null
-  let videoDecoder = null
-  let videoEncoder = null
-  let scaler = null
-  let audioDecoder = null
-  let audioEncoder = null
-  let resampler = null
+  let videoPipeline = null
+  let audioPipeline = null
   let packet = null
   let videoFrame = null
   let scaledFrame = null
@@ -1683,7 +1776,6 @@ async function transcodeVideoWithBareFFmpeg(session, inputSource, onProgress) {
   let outputPacket = null
 
   try {
-    // Create input IOContext based on source type
     console.log('[Transcoder] Creating input IOContext for', inputSource.type, '...')
     inputIO = await createInputIOContext(inputSource)
     console.log('[Transcoder] IOContext created, creating InputFormatContext...')
@@ -1699,137 +1791,11 @@ async function transcodeVideoWithBareFFmpeg(session, inputSource, onProgress) {
       throw new Error('No video stream found')
     }
 
-    // Use streaming output IOContext that writes directly to file
     outputIO = createFileWriteIOContext(session.outputPath)
     outputFormat = new ffmpeg.OutputFormatContext('mp4', outputIO)
 
-    // Set up video transcoding to H.264
-    const outVideoStream = outputFormat.createStream()
-    outVideoStream.codecParameters.type = ffmpeg.constants.mediaTypes.VIDEO
-    outVideoStream.codecParameters.id = ffmpeg.constants.codecs.H264
-    outVideoStream.codecParameters.width = videoStream.codecParameters.width
-    outVideoStream.codecParameters.height = videoStream.codecParameters.height
-    // Output format will be aligned to the selected encoder below
-    outVideoStream.timeBase = videoStream.timeBase
-
-    // Video decoder - use stream's decoder() helper which copies codec parameters
-    // This is critical for HEVC which needs extradata (VPS/SPS/PPS)
-    try {
-      videoDecoder = videoStream.decoder()
-      console.log('[Transcoder] Video decoder created via stream.decoder()')
-    } catch (e) {
-      // Fallback to manual creation if stream.decoder() fails
-      console.log('[Transcoder] stream.decoder() failed, creating manually:', e?.message)
-      const videoDecoderSelection = selectDecoderForId(videoStream.codecParameters.id)
-      if (!videoDecoderSelection) {
-        throw new Error('Video decoder not available')
-      }
-      videoDecoder = new ffmpeg.CodecContext(videoDecoderSelection.decoder)
-      // Copy codec parameters from stream (includes extradata)
-      videoStream.codecParameters.toContext(videoDecoder)
-    }
-    videoDecoder.timeBase = videoStream.timeBase
-    videoDecoder.open()
-
-    // Video encoder (H.264)
-    const h264Selection = selectH264Encoder()
-    if (!h264Selection) {
-      throw new Error('H.264 encoder not available')
-    }
-    console.log('[Transcoder] Using H.264 encoder:', h264Selection.name)
-    outVideoStream.codecParameters.format = h264Selection.pixelFormat
-    videoEncoder = new ffmpeg.CodecContext(h264Selection.encoder)
-    videoEncoder.width = videoStream.codecParameters.width
-    videoEncoder.height = videoStream.codecParameters.height
-    videoEncoder.pixelFormat = h264Selection.pixelFormat
-    videoEncoder.timeBase = videoStream.timeBase
-    videoEncoder.bitRate = 8000000 // 8 Mbps
-    videoEncoder.gopSize = 48
-    videoEncoder.maxBFrames = 0
-
-    if (h264Selection.isHardware) {
-      try {
-        videoEncoder.setOption('b', '8000000')
-        videoEncoder.setOption('profile', 'main')
-        videoEncoder.setOption('level', '4.1')
-        videoEncoder.setOption('i-frame-interval', '2')
-        videoEncoder.setOption('g', '48')
-      } catch {}
-    }
-    videoEncoder.open()
-
-    // Video scaler for pixel format conversion if needed
-    const decoderPixelFormat = videoDecoder.pixelFormat
-    const NONE = ffmpeg.constants.pixelFormats.NONE
-    let inputPixelFormat = decoderPixelFormat
-    if (!inputPixelFormat || inputPixelFormat === NONE || inputPixelFormat === 0 || inputPixelFormat < 0) {
-      inputPixelFormat = ffmpeg.constants.pixelFormats.YUV420P
-      console.log('[Transcoder] Decoder format unknown (' + decoderPixelFormat + '), assuming YUV420P')
-    }
-
-    // Scaler args: srcPixelFormat, srcWidth, srcHeight, dstPixelFormat, dstWidth, dstHeight
-    if (inputPixelFormat !== h264Selection.pixelFormat) {
-      scaler = new ffmpeg.Scaler(
-        inputPixelFormat,
-        videoStream.codecParameters.width,
-        videoStream.codecParameters.height,
-        h264Selection.pixelFormat,
-        videoStream.codecParameters.width,
-        videoStream.codecParameters.height
-      )
-    }
-
-    // Set up audio transcoding to AAC
-    let outAudioStream = null
-
-    if (audioStream) {
-      outAudioStream = outputFormat.createStream()
-      outAudioStream.codecParameters.type = ffmpeg.constants.mediaTypes.AUDIO
-      outAudioStream.codecParameters.id = ffmpeg.constants.codecs.AAC
-      outAudioStream.codecParameters.sampleRate = audioStream.codecParameters.sampleRate || 48000
-      outAudioStream.codecParameters.channelLayout = ffmpeg.constants.channelLayouts.STEREO
-      outAudioStream.codecParameters.format = ffmpeg.constants.sampleFormats.FLTP
-      outAudioStream.timeBase = { numerator: 1, denominator: outAudioStream.codecParameters.sampleRate }
-
-      // Audio decoder - use stream's decoder() helper which copies codec parameters
-      try {
-        audioDecoder = audioStream.decoder()
-        console.log('[Transcoder] Audio decoder created via stream.decoder()')
-      } catch (e) {
-        console.log('[Transcoder] stream.decoder() failed, creating manually:', e?.message)
-        const decoderSelection = selectDecoderForId(audioStream.codecParameters.id)
-        if (!decoderSelection) {
-          throw new Error('Audio decoder not available')
-        }
-        audioDecoder = new ffmpeg.CodecContext(decoderSelection.decoder)
-        audioStream.codecParameters.toContext(audioDecoder)
-      }
-      audioDecoder.timeBase = audioStream.timeBase
-      audioDecoder.open()
-
-      // Encoder
-      const aacSelection = selectAacEncoder()
-      if (!aacSelection) {
-        throw new Error('AAC encoder not available')
-      }
-      console.log('[Transcoder] Using AAC encoder:', aacSelection.name)
-      audioEncoder = new ffmpeg.CodecContext(aacSelection.encoder)
-      audioEncoder.sampleRate = outAudioStream.codecParameters.sampleRate
-      audioEncoder.channelLayout = ffmpeg.constants.channelLayouts.STEREO
-      audioEncoder.sampleFormat = ffmpeg.constants.sampleFormats.FLTP
-      audioEncoder.timeBase = outAudioStream.timeBase
-      audioEncoder.open()
-
-      // Resampler
-      resampler = new ffmpeg.Resampler(
-        audioDecoder.sampleRate,
-        audioDecoder.channelLayout,
-        audioDecoder.sampleFormat,
-        audioEncoder.sampleRate,
-        audioEncoder.channelLayout,
-        audioEncoder.sampleFormat
-      )
-    }
+    videoPipeline = setupVideoTranscodePipeline(videoStream, outputFormat)
+    audioPipeline = setupAudioTranscodePipeline(audioStream, outputFormat)
 
     outputFormat.writeHeader()
 
@@ -1840,18 +1806,17 @@ async function transcodeVideoWithBareFFmpeg(session, inputSource, onProgress) {
     resampledFrame = new ffmpeg.Frame()
     outputPacket = new ffmpeg.Packet()
 
-    // Allocate scaled frame if scaler is needed
-    if (scaler) {
+    if (videoPipeline.scaler) {
       scaledFrame.width = videoStream.codecParameters.width
       scaledFrame.height = videoStream.codecParameters.height
       scaledFrame.format = ffmpeg.constants.pixelFormats.YUV420P
       scaledFrame.alloc()
     }
 
-    if (outAudioStream) {
+    if (audioPipeline) {
       resampledFrame.format = ffmpeg.constants.sampleFormats.FLTP
       resampledFrame.channelLayout = ffmpeg.constants.channelLayouts.STEREO
-      resampledFrame.sampleRate = audioEncoder.sampleRate
+      resampledFrame.sampleRate = audioPipeline.audioEncoder.sampleRate
       resampledFrame.nbSamples = 1024
       resampledFrame.alloc()
     }
@@ -1860,117 +1825,75 @@ async function transcodeVideoWithBareFFmpeg(session, inputSource, onProgress) {
     let bytesProcessed = 0
     let lastProgressPercent = 0
 
-    // Single-pass processing with byte-based progress
     while (inputFormat.readFrame(packet)) {
       packetCount++
       bytesProcessed += packet.size || 0
 
       if (packet.streamIndex === videoStream.index) {
         packet.timeBase = videoStream.timeBase
-
-        if (videoDecoder.sendPacket(packet)) {
-          while (videoDecoder.receiveFrame(videoFrame)) {
-            let frameToEncode = videoFrame
-
-            // Scale if needed
-            if (scaler) {
-              scaler.scale(videoFrame, scaledFrame)
-              scaledFrame.pts = videoFrame.pts
-              scaledFrame.timeBase = videoFrame.timeBase
-              frameToEncode = scaledFrame
-            }
-
-            if (videoEncoder.sendFrame(frameToEncode)) {
-              while (videoEncoder.receivePacket(outputPacket)) {
-                outputPacket.streamIndex = outVideoStream.index
-                outputFormat.writeFrame(outputPacket)
-                outputPacket.unref()
-              }
-            }
-          }
-        }
-      } else if (audioStream && outAudioStream && packet.streamIndex === audioStream.index) {
+        processVideoTranscodePacket(
+          packet,
+          videoPipeline.videoDecoder,
+          videoPipeline.videoEncoder,
+          videoPipeline.scaler,
+          videoFrame,
+          scaledFrame,
+          outputPacket,
+          videoPipeline.outVideoStream,
+          outputFormat,
+        )
+      } else if (audioStream && audioPipeline && packet.streamIndex === audioStream.index) {
         packet.timeBase = audioStream.timeBase
-
-        if (audioDecoder.sendPacket(packet)) {
-          while (audioDecoder.receiveFrame(audioFrame)) {
-            const samplesConverted = resampler.convert(audioFrame, resampledFrame)
-            resampledFrame.nbSamples = samplesConverted
-            resampledFrame.pts = audioFrame.pts
-            resampledFrame.timeBase = audioFrame.timeBase
-
-            if (audioEncoder.sendFrame(resampledFrame)) {
-              while (audioEncoder.receivePacket(outputPacket)) {
-                outputPacket.streamIndex = outAudioStream.index
-                outputFormat.writeFrame(outputPacket)
-                outputPacket.unref()
-              }
-            }
-          }
-        }
+        processAudioTranscodePacket(
+          packet,
+          audioPipeline.audioDecoder,
+          audioPipeline.audioEncoder,
+          audioPipeline.resampler,
+          audioFrame,
+          resampledFrame,
+          outputPacket,
+          audioPipeline.outAudioStream,
+          outputFormat,
+        )
       }
 
       packet.unref()
 
-      // Report progress based on bytes processed
       if (inputSize > 0 && packetCount % 500 === 0) {
-        const percent = Math.min(99, Math.round((bytesProcessed / inputSize) * 100))
-        if (percent > lastProgressPercent) {
-          lastProgressPercent = percent
-          session.progress = percent
-          if (onProgress) onProgress(percent)
-          console.log('[Transcoder] Video transcode progress:', percent + '%', '(' + Math.round(bytesProcessed / 1024 / 1024) + 'MB)')
-        }
+        lastProgressPercent = reportStreamProgress(session, onProgress, bytesProcessed, inputSize, lastProgressPercent, 'Video transcode')
       }
     }
 
-    // Flush video encoder
-    videoEncoder.sendFrame(null)
-    while (videoEncoder.receivePacket(outputPacket)) {
-      outputPacket.streamIndex = outVideoStream.index
-      outputFormat.writeFrame(outputPacket)
-      outputPacket.unref()
-    }
-
-    // Flush audio encoder
-    if (audioEncoder) {
-      audioEncoder.sendFrame(null)
-      while (audioEncoder.receivePacket(outputPacket)) {
-        outputPacket.streamIndex = outAudioStream.index
-        outputFormat.writeFrame(outputPacket)
-        outputPacket.unref()
-      }
+    flushEncoder(videoPipeline.videoEncoder, outputPacket, videoPipeline.outVideoStream.index, outputFormat)
+    if (audioPipeline) {
+      flushEncoder(audioPipeline.audioEncoder, outputPacket, audioPipeline.outAudioStream.index, outputFormat)
     }
 
     outputFormat.writeTrailer()
     console.log('[Transcoder] Video transcode complete, output written to:', session.outputPath)
-
   } finally {
-    // Destroy ALL native objects in reverse order using safeDestroy
     safeDestroy(resampledFrame)
     safeDestroy(audioFrame)
     safeDestroy(scaledFrame)
     safeDestroy(videoFrame)
     safeDestroy(outputPacket)
     safeDestroy(packet)
-    safeDestroy(resampler)
-    safeDestroy(audioEncoder)
-    safeDestroy(audioDecoder)
-    safeDestroy(scaler)
-    safeDestroy(videoEncoder)
-    safeDestroy(videoDecoder)
+    if (audioPipeline) {
+      safeDestroy(audioPipeline.resampler)
+      safeDestroy(audioPipeline.audioEncoder)
+      safeDestroy(audioPipeline.audioDecoder)
+    }
+    if (videoPipeline) {
+      safeDestroy(videoPipeline.scaler)
+      safeDestroy(videoPipeline.videoEncoder)
+      safeDestroy(videoPipeline.videoDecoder)
+    }
     const outputOwnsIO = !!outputFormat
     const inputOwnsIO = !!inputFormat
     safeDestroy(outputFormat)
-    if (outputIO && outputIO._cleanup) {
-      try { outputIO._cleanup() } catch {}
-    }
-    if (outputIO && !outputOwnsIO) safeDestroy(outputIO)
+    cleanupIOContext(outputIO, outputOwnsIO)
     safeDestroy(inputFormat)
-    if (inputIO && inputIO._cleanup) {
-      try { inputIO._cleanup() } catch {}
-    }
-    if (inputIO && !inputOwnsIO) safeDestroy(inputIO)
+    cleanupIOContext(inputIO, inputOwnsIO)
   }
 }
 

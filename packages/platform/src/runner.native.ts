@@ -184,6 +184,44 @@ function decodeLegacyRootFrameChunk(
 }
 
 
+function extractMigrationRequestPayload(message: Record<string, unknown>): {
+  publicKey: Uint8Array
+  secretKey: Uint8Array
+  challenge: Uint8Array
+} | null {
+  const publicKey = fixedHexToBytes(message.identityPublicKey, 32)
+  const secretKey = fixedHexToBytes(message.secretKey, 64)
+  const challenge = fixedHexToBytes(message.challenge, LEGACY_ROOT_CHALLENGE_BYTES)
+  message.secretKey = ''
+  message.challenge = ''
+  if (message.version !== 1 || !publicKey || !secretKey || !challenge) {
+    secretKey?.fill(0)
+    challenge?.fill(0)
+    return null
+  }
+  return { publicKey, secretKey, challenge }
+}
+
+function parseMigrationAcknowledgement(
+  acknowledgement: LegacyPublisherRootMigrationAcknowledgement | null | undefined,
+): {
+  publicKey: string
+  challengeSignature: string
+} | null {
+  const acknowledgedPublicKey = fixedBytesToHex(acknowledgement?.publicKey, 32)
+  const challengeSignature = fixedBytesToHex(acknowledgement?.challengeSignature, 64)
+  if (
+    acknowledgement?.version !== 1 ||
+    acknowledgement?.durable !== true ||
+    !acknowledgedPublicKey ||
+    !challengeSignature
+  ) {
+    return null
+  }
+  return { publicKey: acknowledgedPublicKey, challengeSignature }
+}
+
+
 /**
  * Launch the migration-only Bare worklet and bridge its single-purpose
  * challenge protocol to the native shell vault. This transport is deliberately
@@ -249,18 +287,13 @@ export async function runNativeLegacyPublisherRootPreflight(
           return
         }
 
-        const publicKey = fixedHexToBytes(message.identityPublicKey, 32)
-        const secretKey = fixedHexToBytes(message.secretKey, 64)
-        const challenge = fixedHexToBytes(message.challenge, LEGACY_ROOT_CHALLENGE_BYTES)
-        message.secretKey = ''
-        message.challenge = ''
-        if (message.version !== 1 || !publicKey || !secretKey || !challenge) {
-          secretKey?.fill(0)
-          challenge?.fill(0)
+        const payload = extractMigrationRequestPayload(message)
+        if (!payload) {
           rejectRequest(id)
           return
         }
 
+        const { publicKey, secretKey, challenge } = payload
         pendingRequest = true
         requestCount += 1
         try {
@@ -270,14 +303,8 @@ export async function runNativeLegacyPublisherRootPreflight(
             secretKey,
             challenge,
           })
-          const acknowledgedPublicKey = fixedBytesToHex(acknowledgement?.publicKey, 32)
-          const challengeSignature = fixedBytesToHex(acknowledgement?.challengeSignature, 64)
-          if (
-            acknowledgement?.version !== 1 ||
-            acknowledgement?.durable !== true ||
-            !acknowledgedPublicKey ||
-            !challengeSignature
-          ) {
+          const parsedAck = parseMigrationAcknowledgement(acknowledgement)
+          if (!parsedAck) {
             rejectRequest(id)
             return
           }
@@ -287,8 +314,8 @@ export async function runNativeLegacyPublisherRootPreflight(
             ok: true,
             version: 1,
             durable: true,
-            publicKey: acknowledgedPublicKey,
-            challengeSignature,
+            publicKey: parsedAck.publicKey,
+            challengeSignature: parsedAck.challengeSignature,
           })
         } catch {
           rejectRequest(id)

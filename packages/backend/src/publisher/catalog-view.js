@@ -162,6 +162,25 @@ async function collectPrefix (view, prefix, maximum = PUBLISHER_LIMITS.maxJourna
   return entries
 }
 
+// Best-effort decodes for the legacy genesis scan: a stored entry may be
+// either accepted-entry or frame shaped, and either attempt may reject.
+function tryDecodeAcceptedEntryValue(raw) {
+  try {
+    const accepted = decodeAcceptedEntry(raw)
+    return accepted ? accepted.value : null
+  } catch {
+    return null
+  }
+}
+
+function tryDecodeCatalogFrameValue(raw) {
+  try {
+    return decodePublisherCatalogFrame(raw)
+  } catch {
+    return null
+  }
+}
+
 async function getPersistedLegacyGenesisId (view, bootstrapKey, publisherId) {
   const marker = await view.get(LEGACY_GENESIS_ID_KEY)
   if (marker) {
@@ -191,16 +210,8 @@ async function getPersistedLegacyGenesisId (view, bootstrapKey, publisherId) {
       !equalBytes(descriptor.catalogBootstrapKey, bootstrapKey)) return null
 
   for (const entry of await collectPrefix(view, PREFIX.ACCEPTED)) {
-    let value = null
-    try {
-      const accepted = decodeAcceptedEntry(entry.value)
-      if (accepted) value = accepted.value
-    } catch {}
-    if (!value) {
-      try {
-        value = decodePublisherCatalogFrame(entry.value)
-      } catch {}
-    }
+    let value = tryDecodeAcceptedEntryValue(entry.value)
+    if (!value) value = tryDecodeCatalogFrameValue(entry.value)
     if (!value) continue
     const operationId = idHex(value)
     if (value.recordType !== PUBLISHER_RECORD_TYPES.NAMESPACE ||
@@ -330,8 +341,7 @@ async function applyProjection (projections, rejected, result, entry) {
   }
 }
 
-export async function rebuildPublisherCatalogView (view, host, { keyProvider = createPublisherKeyProvider(), publisherId } = {}) {
-  assertBytes(publisherId, 32, 'expected publisherId')
+async function loadParsedJournalAndGenesis (view, host, publisherId, keyProvider) {
   const legacyGenesisId = await getPersistedLegacyGenesisId(view, host.key, publisherId)
   const journal = await collectPrefix(view, PREFIX.JOURNAL)
   const parsed = []
@@ -356,16 +366,10 @@ export async function rebuildPublisherCatalogView (view, host, { keyProvider = c
   }
   genesisCandidates.sort((left, right) => b4a.compare(left.value.recordId, right.value.recordId))
   const genesis = genesisCandidates[0] || null
-  const oldRoster = new Set((await collectPrefix(view, PREFIX.ROSTER)).map(entry => entry.key.slice(PREFIX.ROSTER.length)))
-  const drainedCheckpoints = new Map(
-    (await collectPrefix(view, PREFIX.DRAINED)).map(entry => [
-      entry.key.slice(PREFIX.DRAINED.length),
-      b4a.toString(entry.value)
-    ])
-  )
-  await clearDerived(view)
-  if (!genesis) return { descriptor: null, state: null, accepted: [], rejected: [], projections: new Map() }
+  return { parsed, genesis }
+}
 
+function groupRootPolicyEntries (parsed, genesis) {
   const rootGroups = new Map()
   for (const entry of parsed) {
     if (entry === genesis || entry.value.recordType === PUBLISHER_RECORD_TYPES.NAMESPACE || !isRootPolicyOperation(entry.value)) continue
@@ -373,42 +377,55 @@ export async function rebuildPublisherCatalogView (view, host, { keyProvider = c
     if (group) group.push(entry)
     else rootGroups.set(entry.value.issuerSequence, [entry])
   }
+  return [...rootGroups.entries()].sort((left, right) => left[0] - right[0])
+}
 
+function evaluateRootCandidates (candidates, rootState, parsed, admissionPositions, keyProvider, effectivePosition, rootRejected) {
+  candidates.sort(comparePublisherOperationEntries)
+  const baseline = clonePublisherAuthorizationState(rootState)
+  const authorized = []
+  for (const candidate of candidates) {
+    const candidateState = clonePublisherAuthorizationState(baseline)
+    const candidatePosition = Math.max(effectivePosition, candidate.position)
+    carryAuthenticatedWriterHighWater(candidateState, parsed, admissionPositions, keyProvider, candidatePosition)
+    const trial = reducePublisherOperation(candidateState, candidate.value, {
+      keyProvider,
+      sourceWriterKey: candidate.sourceWriterKey
+    })
+    if (trial.accepted || trial.code === 'DUPLICATE') authorized.push({ candidate, trial })
+    else rootRejected.push(contextualRejection(candidate, trial.code, trial.error || ''))
+  }
+  return authorized
+}
+
+function recordAnticipatedRevocations (rootState, trial, anticipatedRevocations) {
+  for (const revocation of trial.body.revocations) {
+    const writer = rootState.writers.get(b4a.toString(revocation.writerKey, 'hex'))
+    if (!writer) continue
+    anticipatedRevocations.set(writerGenerationKey(writer), {
+      revokedFromEpoch: rootState.policyEpoch,
+      revokedAtEpoch: trial.body.newPolicyEpoch,
+      acceptedThroughSequence: revocation.acceptedThroughSequence
+    })
+  }
+}
+
+function resolveRootPolicyOperations ({ genesis, parsed, keyProvider }) {
+  const orderedRootGroups = groupRootPolicyEntries(parsed, genesis)
   const rootState = createPublisherAuthorizationState(genesis.descriptor)
   const rootEvents = []
   const rootRejected = []
   const anticipatedRevocations = new Map()
   const admissionPositions = new Map()
   let effectivePosition = genesis.position
-  const orderedRootGroups = [...rootGroups.entries()].sort((left, right) => left[0] - right[0])
+
   for (const [, candidates] of orderedRootGroups) {
-    candidates.sort(comparePublisherOperationEntries)
-    const baseline = clonePublisherAuthorizationState(rootState)
-    const authorized = []
-    for (const candidate of candidates) {
-      const candidateState = clonePublisherAuthorizationState(baseline)
-      const candidatePosition = Math.max(effectivePosition, candidate.position)
-      carryAuthenticatedWriterHighWater(candidateState, parsed, admissionPositions, keyProvider, candidatePosition)
-      const trial = reducePublisherOperation(candidateState, candidate.value, {
-        keyProvider,
-        sourceWriterKey: candidate.sourceWriterKey
-      })
-      if (trial.accepted || trial.code === 'DUPLICATE') authorized.push({ candidate, trial })
-      else rootRejected.push(contextualRejection(candidate, trial.code, trial.error || ''))
-    }
+    const authorized = evaluateRootCandidates(candidates, rootState, parsed, admissionPositions, keyProvider, effectivePosition, rootRejected)
     if (authorized.length === 0) continue
     const { candidate: winner, trial } = authorized[0]
     const winnerPosition = Math.max(effectivePosition, winner.position)
     if (winner.value.recordType === PUBLISHER_RECORD_TYPES.WRITER_REVOCATION) {
-      for (const revocation of trial.body.revocations) {
-        const writer = rootState.writers.get(b4a.toString(revocation.writerKey, 'hex'))
-        if (!writer) continue
-        anticipatedRevocations.set(writerGenerationKey(writer), {
-          revokedFromEpoch: rootState.policyEpoch,
-          revokedAtEpoch: trial.body.newPolicyEpoch,
-          acceptedThroughSequence: revocation.acceptedThroughSequence
-        })
-      }
+      recordAnticipatedRevocations(rootState, trial, anticipatedRevocations)
     }
     carryAuthenticatedWriterHighWater(rootState, parsed, admissionPositions, keyProvider, winnerPosition)
     const reduced = reducePublisherOperation(rootState, winner.value, {
@@ -432,7 +449,70 @@ export async function rebuildPublisherCatalogView (view, host, { keyProvider = c
       }
     }
   }
+  return { rootEvents, rootRejected, anticipatedRevocations }
+}
 
+function applyRootEventsAtPosition (events, state, keyProvider, accepted, rejected) {
+  for (const event of events) {
+    const reduced = reducePublisherOperation(state, event.value, {
+      keyProvider,
+      sourceWriterKey: event.sourceWriterKey
+    })
+    if (!reduced.accepted && reduced.code !== 'DUPLICATE') {
+      rejected.push(contextualRejection(event, reduced.code, reduced.error || ''))
+      continue
+    }
+    accepted.push({ ...reduced, frame: frameForResult(event), sourceWriterKey: event.sourceWriterKey })
+  }
+}
+
+// Injects the anticipated revocation into a still-active writer for the span
+// of one entry evaluation; returns whether an injection happened.
+function anticipateWriterRevocation(writer, anticipatedRevocations) {
+  if (!writer || writer.revocation) return false
+  const anticipated = anticipatedRevocations.get(writerGenerationKey(writer))
+  if (!anticipated) return false
+  writer.revocation = { ...anticipated }
+  return true
+}
+
+function recordRejectedCatalogEntry({ writer, entry, reduced, injectedRevocation, rejected, drainedWriterIds }) {
+  if (writer && reduced.code === 'REVOKED_WRITER') {
+    writer.lastAcceptedSequence = Math.max(writer.lastAcceptedSequence, entry.value.issuerSequence)
+  }
+  rejected.push(contextualRejection(entry, reduced.code, reduced.error || ''))
+  if ((writer?.revocation || injectedRevocation) && reduced.code === 'REVOKED_WRITER') {
+    drainedWriterIds.add(b4a.toString(writer.writerKey, 'hex'))
+  }
+}
+
+async function evaluateStandardCatalogEntry ({ entry, state, genesis, anticipatedRevocations, keyProvider, accepted, rejected, projections, drainedWriterIds }) {
+  if (entry === genesis) return
+  if (entry.value.recordType === PUBLISHER_RECORD_TYPES.NAMESPACE) {
+    rejected.push(contextualRejection(entry, 'CONFLICTING_NAMESPACE', 'catalog has one canonical genesis descriptor'))
+    return
+  }
+  if (isRootPolicyOperation(entry.value)) return
+
+  const writer = entry.value.signerKey
+    ? state.signers.get(b4a.toString(entry.value.signerKey, 'hex'))
+    : null
+  const injectedRevocation = anticipateWriterRevocation(writer, anticipatedRevocations)
+  const reduced = reducePublisherOperation(state, entry.value, {
+    keyProvider,
+    sourceWriterKey: entry.sourceWriterKey
+  })
+  if (injectedRevocation) writer.revocation = null
+
+  if (!reduced.accepted && reduced.code !== 'DUPLICATE') {
+    recordRejectedCatalogEntry({ writer, entry, reduced, injectedRevocation, rejected, drainedWriterIds })
+    return
+  }
+  accepted.push({ ...reduced, frame: frameForResult(entry), sourceWriterKey: entry.sourceWriterKey })
+  if (reduced.accepted && reduced.effect?.type === 'projection') await applyProjection(projections, rejected, reduced, entry)
+}
+
+async function evaluateCatalogJournalEntries ({ genesis, parsed, rootEvents, rootRejected, anticipatedRevocations, keyProvider }) {
   const state = createPublisherAuthorizationState(genesis.descriptor)
   const accepted = [{ value: genesis.value, body: genesis.descriptor, frame: genesis.frame, sourceWriterKey: genesis.sourceWriterKey, code: 'ACCEPTED' }]
   const rejected = [...rootRejected]
@@ -446,82 +526,47 @@ export async function rebuildPublisherCatalogView (view, host, { keyProvider = c
   }
 
   for (const entry of parsed) {
-    const events = eventsByPosition.get(entry.position) || []
-    for (const event of events) {
-      const reduced = reducePublisherOperation(state, event.value, {
-        keyProvider,
-        sourceWriterKey: event.sourceWriterKey
-      })
-      if (!reduced.accepted && reduced.code !== 'DUPLICATE') {
-        rejected.push(contextualRejection(event, reduced.code, reduced.error || ''))
-        continue
-      }
-      accepted.push({ ...reduced, frame: frameForResult(event), sourceWriterKey: event.sourceWriterKey })
+    const events = eventsByPosition.get(entry.position)
+    if (events && events.length > 0) {
+      applyRootEventsAtPosition(events, state, keyProvider, accepted, rejected)
     }
-
-    if (entry === genesis) continue
-    if (entry.value.recordType === PUBLISHER_RECORD_TYPES.NAMESPACE) {
-      rejected.push(contextualRejection(entry, 'CONFLICTING_NAMESPACE', 'catalog has one canonical genesis descriptor'))
-      continue
-    }
-    if (isRootPolicyOperation(entry.value)) continue
-
-    const writer = entry.value.signerKey
-      ? state.signers.get(b4a.toString(entry.value.signerKey, 'hex'))
-      : null
-    let injectedRevocation = false
-    if (writer && !writer.revocation) {
-      const anticipated = anticipatedRevocations.get(writerGenerationKey(writer))
-      if (anticipated) {
-        writer.revocation = { ...anticipated }
-        injectedRevocation = true
-      }
-    }
-    const reduced = reducePublisherOperation(state, entry.value, {
-      keyProvider,
-      sourceWriterKey: entry.sourceWriterKey
+    await evaluateStandardCatalogEntry({
+      entry, state, genesis, anticipatedRevocations, keyProvider, accepted, rejected, projections, drainedWriterIds
     })
-    if (injectedRevocation) writer.revocation = null
-
-    if (!reduced.accepted && reduced.code !== 'DUPLICATE') {
-      if (writer && reduced.code === 'REVOKED_WRITER') {
-        writer.lastAcceptedSequence = Math.max(writer.lastAcceptedSequence, entry.value.issuerSequence)
-      }
-      rejected.push(contextualRejection(entry, reduced.code, reduced.error || ''))
-      if (writer?.revocation && reduced.code === 'REVOKED_WRITER') {
-        drainedWriterIds.add(b4a.toString(writer.writerKey, 'hex'))
-      } else if (injectedRevocation && reduced.code === 'REVOKED_WRITER') {
-        drainedWriterIds.add(b4a.toString(writer.writerKey, 'hex'))
-      }
-      continue
-    }
-    accepted.push({ ...reduced, frame: frameForResult(entry), sourceWriterKey: entry.sourceWriterKey })
-    if (reduced.accepted && reduced.effect?.type === 'projection') await applyProjection(projections, rejected, reduced, entry)
   }
+
   const acceptedOperationIds = new Set(accepted.map(entry => idHex(entry.value)))
   const canonicalRejected = rejected.filter(entry => !acceptedOperationIds.has(idHex(entry.value)) || entry.code === 'CONFLICT_LOST')
+  return { state, accepted, canonicalRejected, projections, drainedWriterIds }
+}
+
+async function updateWriterDrainedState (view, writer, writerId, generation, drainedCheckpoints, drainedWriterIds, desiredRoster) {
+  const checkpointed = drainedCheckpoints.get(writerId) === generation
+  const cutoffReached = writer.revocation &&
+    writer.lastAcceptedSequence >= writer.revocation.acceptedThroughSequence
+  const hardDrained = writer.revocation &&
+    (writer.revocation.acceptedThroughSequence < writer.firstAcceptedSequence || drainedWriterIds.has(writerId))
+  const checkpointCutoff = cutoffReached && !hardDrained && !checkpointed
+  const drained = hardDrained || checkpointed
+  if (checkpointCutoff) {
+    desiredRoster.set(writerId, writer.writerKey)
+    await view.put(`${PREFIX.DRAINED}${writerId}`, b4a.from(generation))
+  } else if (!writer.revocation || !drained) {
+    desiredRoster.set(writerId, writer.writerKey)
+    if (drainedCheckpoints.has(writerId)) await view.del(`${PREFIX.DRAINED}${writerId}`)
+  } else if (!checkpointed) {
+    await view.put(`${PREFIX.DRAINED}${writerId}`, b4a.from(generation))
+  }
+}
+
+async function syncCatalogRosterAndViewCheckpoints ({ view, host, state, drainedCheckpoints, drainedWriterIds, oldRoster }) {
   const desiredRoster = new Map()
   const knownWriterIds = new Set()
   for (const writer of state.writers.values()) {
     const writerId = b4a.toString(writer.writerKey, 'hex')
     const generation = writerGenerationKey(writer)
-    const checkpointed = drainedCheckpoints.get(writerId) === generation
-    const cutoffReached = writer.revocation &&
-      writer.lastAcceptedSequence >= writer.revocation.acceptedThroughSequence
-    const hardDrained = writer.revocation &&
-      (writer.revocation.acceptedThroughSequence < writer.firstAcceptedSequence || drainedWriterIds.has(writerId))
-    const checkpointCutoff = cutoffReached && !hardDrained && !checkpointed
-    const drained = hardDrained || checkpointed
     knownWriterIds.add(writerId)
-    if (checkpointCutoff) {
-      desiredRoster.set(writerId, writer.writerKey)
-      await view.put(`${PREFIX.DRAINED}${writerId}`, b4a.from(generation))
-    } else if (!writer.revocation || !drained) {
-      desiredRoster.set(writerId, writer.writerKey)
-      if (drainedCheckpoints.has(writerId)) await view.del(`${PREFIX.DRAINED}${writerId}`)
-    } else if (!checkpointed) {
-      await view.put(`${PREFIX.DRAINED}${writerId}`, b4a.from(generation))
-    }
+    await updateWriterDrainedState(view, writer, writerId, generation, drainedCheckpoints, drainedWriterIds, desiredRoster)
   }
   for (const writerId of drainedCheckpoints.keys()) {
     if (!knownWriterIds.has(writerId)) await view.del(`${PREFIX.DRAINED}${writerId}`)
@@ -536,7 +581,10 @@ export async function rebuildPublisherCatalogView (view, host, { keyProvider = c
     if (host.removeable(writerKey)) await host.removeWriter(writerKey)
     else persistedRoster.set(writerId, writerKey)
   }
+  return persistedRoster
+}
 
+async function persistRebuiltCatalogView ({ view, state, persistedRoster, accepted, canonicalRejected, projections, parsed }) {
   await view.put(STATE_DESCRIPTOR_KEY, encodePublisherNamespaceDescriptor(state.descriptor))
   await view.put(STATE_AUTHORIZATION_KEY, encodePublisherAuthorizationState(state))
   for (const [writerId, writerKey] of persistedRoster) await view.put(`${PREFIX.ROSTER}${writerId}`, writerKey)
@@ -548,6 +596,34 @@ export async function rebuildPublisherCatalogView (view, host, { keyProvider = c
   }
   for (const entry of canonicalRejected) await view.put(`${PREFIX.REJECTED}${idHex(entry.value)}`, rejectionValue(entry.value, entry.code, entry.error))
   for (const [key, entry] of projections) await view.put(key, entry.frame)
+}
+
+export async function rebuildPublisherCatalogView (view, host, { keyProvider = createPublisherKeyProvider(), publisherId } = {}) {
+  assertBytes(publisherId, 32, 'expected publisherId')
+  const { parsed, genesis } = await loadParsedJournalAndGenesis(view, host, publisherId, keyProvider)
+  const oldRoster = new Set((await collectPrefix(view, PREFIX.ROSTER)).map(entry => entry.key.slice(PREFIX.ROSTER.length)))
+  const drainedCheckpoints = new Map(
+    (await collectPrefix(view, PREFIX.DRAINED)).map(entry => [
+      entry.key.slice(PREFIX.DRAINED.length),
+      b4a.toString(entry.value)
+    ])
+  )
+  await clearDerived(view)
+  if (!genesis) return { descriptor: null, state: null, accepted: [], rejected: [], projections: new Map() }
+
+  const { rootEvents, rootRejected, anticipatedRevocations } = resolveRootPolicyOperations({ genesis, parsed, keyProvider })
+  const { state, accepted, canonicalRejected, projections, drainedWriterIds } = await evaluateCatalogJournalEntries({
+    genesis, parsed, rootEvents, rootRejected, anticipatedRevocations, keyProvider
+  })
+
+  const persistedRoster = await syncCatalogRosterAndViewCheckpoints({
+    view, host, state, drainedCheckpoints, drainedWriterIds, oldRoster
+  })
+
+  await persistRebuiltCatalogView({
+    view, state, persistedRoster, accepted, canonicalRejected, projections, parsed
+  })
+
   return { descriptor: state.descriptor, state, accepted, rejected: canonicalRejected, projections }
 }
 
@@ -714,6 +790,77 @@ async function compactRejectedJournal (view, rebuilt, journalLimit, keyProvider)
   return journalUsage(retained, rebuilt)
 }
 
+function isAtJournalCapacity (usage, limits, authority, trustedAuthority) {
+  return usage.total >= limits.journalLimit ||
+    (!authority && usage.data >= limits.dataLimit) ||
+    (authority && !trustedAuthority && usage.speculativeAuthority >= limits.speculativeLimit)
+}
+
+function overflowReason (authority, trustedAuthority) {
+  if (!authority) return 'source data reached the bounded journal quota reserved below authority'
+  if (trustedAuthority) return 'accepted journal checkpoint exhausted its authority reserve'
+  return 'speculative authority reached its bounded journal quota'
+}
+
+function appendJournalEntry (usage, operationId, entryFingerprint, authority, trustedAuthority) {
+  usage.operationIds.add(operationId)
+  usage.entryFingerprints.add(entryFingerprint)
+  usage.total++
+  if (authority) {
+    usage.authority++
+    if (!trustedAuthority) usage.speculativeAuthority++
+  } else {
+    usage.data++
+  }
+}
+
+async function processCatalogNode (node, context) {
+  const { view, host, options, keyProvider, limits, state } = context
+  const frame = node?.value
+  let value
+  let writerKey
+  try {
+    value = decodePublisherCatalogFrame(frame)
+    writerKey = sourceKey(node)
+  } catch {
+    return
+  }
+  const operationId = idHex(value)
+  const journalValue = encodeJournalValue(writerKey, frame)
+  const entryFingerprint = journalEntryFingerprint(journalValue)
+  if (state.usage.entryFingerprints.has(entryFingerprint)) return
+
+  let rebuilt = null
+  if (state.usage.operationIds.has(operationId)) {
+    rebuilt = await rebuildPublisherCatalogView(view, host, options)
+    state.usage = await readJournalUsage(view, rebuilt)
+    if (state.usage.acceptedOperationIds.has(operationId)) return
+  }
+
+  const authority = isAuthorityOperation(value)
+  let trustedAuthority = false
+  if (authority) {
+    rebuilt ||= await rebuildPublisherCatalogView(view, host, options)
+    state.usage = await readJournalUsage(view, rebuilt)
+    trustedAuthority = authorityCandidateAccepted(rebuilt, value, writerKey, keyProvider, host, options.publisherId)
+    if (node.optimistic && trustedAuthority && value.recordType === PUBLISHER_RECORD_TYPES.NAMESPACE) {
+      await host.ackWriter(writerKey)
+    }
+  }
+
+  if (isAtJournalCapacity(state.usage, limits, authority, trustedAuthority)) {
+    rebuilt ||= await rebuildPublisherCatalogView(view, host, options)
+    state.usage = await compactRejectedJournal(view, rebuilt, limits.journalLimit, keyProvider)
+  }
+  if (isAtJournalCapacity(state.usage, limits, authority, trustedAuthority)) {
+    await recordJournalOverflow(view, writerKey, value, overflowReason(authority, trustedAuthority))
+    return
+  }
+
+  await view.put(journalKey(state.usage.total), journalValue)
+  appendJournalEntry(state.usage, operationId, entryFingerprint, authority, trustedAuthority)
+}
+
 export async function applyPublisherCatalogNodes (nodes, view, host, options = {}) {
   if (!Array.isArray(nodes)) invalid('Autobase apply batch must be an array')
   const journalLimit = options.journalLimit ?? PUBLISHER_LIMITS.maxJournalOperations
@@ -725,68 +872,17 @@ export async function applyPublisherCatalogNodes (nodes, view, host, options = {
   const count = parseCount(await view.get(JOURNAL_COUNT_KEY))
   let usage = await readJournalUsage(view)
   if (count !== usage.total) invalid('journal count does not match retained entries')
-  for (const node of nodes) {
-    const frame = node?.value
-    let value
-    let writerKey
-    try {
-      value = decodePublisherCatalogFrame(frame)
-      writerKey = sourceKey(node)
-    } catch {
-      // Reject malformed/noncanonical input before any catalog-view mutation.
-      continue
-    }
-    const operationId = idHex(value)
-    const journalValue = encodeJournalValue(writerKey, frame)
-    const entryFingerprint = journalEntryFingerprint(journalValue)
-    if (usage.entryFingerprints.has(entryFingerprint)) continue
-    let rebuilt = null
-    if (usage.operationIds.has(operationId)) {
-      rebuilt = await rebuildPublisherCatalogView(view, host, options)
-      usage = await readJournalUsage(view, rebuilt)
-      if (usage.acceptedOperationIds.has(operationId)) continue
-    }
-    const authority = isAuthorityOperation(value)
-    let trustedAuthority = false
-    if (authority) {
-      rebuilt ||= await rebuildPublisherCatalogView(view, host, options)
-      usage = await readJournalUsage(view, rebuilt)
-      trustedAuthority = authorityCandidateAccepted(rebuilt, value, writerKey, keyProvider, host, options.publisherId)
-      if (node.optimistic && trustedAuthority && value.recordType === PUBLISHER_RECORD_TYPES.NAMESPACE) {
-        await host.ackWriter(writerKey)
-      }
-    }
-    const atCapacity = () => usage.total >= journalLimit ||
-      (!authority && usage.data >= dataLimit) ||
-      (authority && !trustedAuthority && usage.speculativeAuthority >= speculativeLimit)
-    if (atCapacity()) {
-      rebuilt ||= await rebuildPublisherCatalogView(view, host, options)
-      usage = await compactRejectedJournal(view, rebuilt, journalLimit, keyProvider)
-    }
-    if (atCapacity()) {
-      await recordJournalOverflow(
-        view,
-        writerKey,
-        value,
-        authority
-          ? trustedAuthority
-              ? 'accepted journal checkpoint exhausted its authority reserve'
-              : 'speculative authority reached its bounded journal quota'
-          : 'source data reached the bounded journal quota reserved below authority'
-      )
-      continue
-    }
-    await view.put(journalKey(usage.total), journalValue)
-    usage.operationIds.add(operationId)
-    usage.entryFingerprints.add(entryFingerprint)
-    usage.total++
-    if (authority) {
-      usage.authority++
-      if (!trustedAuthority) usage.speculativeAuthority++
-    } else {
-      usage.data++
-    }
+
+  const context = {
+    view, host, options, keyProvider,
+    limits: { journalLimit, dataLimit, speculativeLimit },
+    state: { usage }
   }
+  for (const node of nodes) {
+    await processCatalogNode(node, context)
+  }
+  usage = context.state.usage
+
   await view.put(JOURNAL_COUNT_KEY, b4a.from(String(usage.total)))
   if (options.deferRebuild === true) {
     return { deferred: true, accepted: [], rejected: [], projections: new Map() }

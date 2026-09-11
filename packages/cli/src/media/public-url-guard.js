@@ -132,15 +132,16 @@ function embeddedIpv4(high, low) {
   return `${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`
 }
 
-function ipv6Reason(address) {
-  const groups = ipv6Groups(address)
-  if (!groups) return 'an unrecognized IPv6 address'
-  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups
-
-  if (groups.every((group) => group === 0)) return 'the unspecified :: address'
-  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0 && g6 === 0 && g7 === 1) {
-    return 'a loopback address'
+function isLoopbackIpv6(groups) {
+  if (groups[7] !== 1) return false
+  for (let i = 0; i < 7; i++) {
+    if (groups[i] !== 0) return false
   }
+  return true
+}
+
+function embeddedIpv4MappedReason(groups) {
+  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups
   // A v4 address wearing a v6 hat reaches exactly the same host, so it is
   // judged as the v4 address it carries. ::ffff:0:0/96 is what the URL parser
   // produces for `::ffff:127.0.0.1`; 64:ff9b::/96 is NAT64; 2002::/16 is 6to4;
@@ -155,6 +156,20 @@ function ipv6Reason(address) {
     const reason = ipv4Reason(embeddedIpv4(g1, g2))
     if (reason) return reason
   }
+  return null
+}
+
+function ipv6Reason(address) {
+  const groups = ipv6Groups(address)
+  if (!groups) return 'an unrecognized IPv6 address'
+  const g0 = groups[0]
+
+  if (groups.every((group) => group === 0)) return 'the unspecified :: address'
+  if (isLoopbackIpv6(groups)) {
+    return 'a loopback address'
+  }
+  const embeddedReason = embeddedIpv4MappedReason(groups)
+  if (embeddedReason) return embeddedReason
   if ((g0 & 0xfe00) === 0xfc00) return 'a unique-local fc00::/7 address'
   if ((g0 & 0xffc0) === 0xfe80) return 'a link-local fe80::/10 address'
   if ((g0 & 0xff00) === 0xff00) return 'a multicast address'

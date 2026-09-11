@@ -32,43 +32,122 @@ export function parseBoundary (contentType = '') {
   return boundary
 }
 
+function parseHeaderLine (line, headers, strict) {
+  const idx = line.indexOf(':')
+  if (idx <= 0) {
+    if (strict) throw multipartError('MULTIPART_HEADERS_INVALID', 'invalid multipart part headers')
+    return
+  }
+  const name = line.slice(0, idx).trim().toLowerCase()
+  const value = line.slice(idx + 1).trim()
+  if (strict && (!/^[a-z0-9-]{1,64}$/.test(name) || name in headers || !value || value.length > 1024)) {
+    throw multipartError('MULTIPART_HEADERS_INVALID', 'invalid multipart part headers')
+  }
+  if (strict && name !== 'content-disposition' && name !== 'content-type') {
+    throw multipartError('MULTIPART_HEADERS_INVALID', 'unsupported multipart part header')
+  }
+  headers[name] = value
+}
+
+function parsePartDisposition (disposition, strict) {
+  if (strict) {
+    const match = /^form-data;\s*name="([^"\r\n]{1,64})"(?:;\s*filename="([^"\r\n]{0,255})")?$/.exec(disposition)
+    if (!match) throw multipartError('MULTIPART_DISPOSITION_INVALID', 'invalid multipart content disposition')
+    return {
+      name: match[1],
+      filename: match[2] ?? null
+    }
+  }
+  return {
+    name: /name="([^"]*)"/i.exec(disposition)?.[1] ?? null,
+    filename: /filename="([^"]*)"/i.exec(disposition)?.[1] ?? null
+  }
+}
+
 function parsePartHeaders (headerText, strict) {
   const headers = {}
   const lines = headerText.split('\r\n')
   if (strict && (lines.length === 0 || lines.length > 16)) throw multipartError('MULTIPART_HEADERS_INVALID', 'invalid multipart part headers')
   for (const line of lines) {
-    const idx = line.indexOf(':')
-    if (idx <= 0) {
-      if (strict) throw multipartError('MULTIPART_HEADERS_INVALID', 'invalid multipart part headers')
-      continue
-    }
-    const name = line.slice(0, idx).trim().toLowerCase()
-    const value = line.slice(idx + 1).trim()
-    if (strict && (!/^[a-z0-9-]{1,64}$/.test(name) || name in headers || !value || value.length > 1024)) {
-      throw multipartError('MULTIPART_HEADERS_INVALID', 'invalid multipart part headers')
-    }
-    if (strict && name !== 'content-disposition' && name !== 'content-type') {
-      throw multipartError('MULTIPART_HEADERS_INVALID', 'unsupported multipart part header')
-    }
-    headers[name] = value
+    parseHeaderLine(line, headers, strict)
   }
   const disposition = headers['content-disposition'] || ''
-  let name = null
-  let filename = null
-  if (strict) {
-    const match = /^form-data;\s*name="([^"\r\n]{1,64})"(?:;\s*filename="([^"\r\n]{0,255})")?$/.exec(disposition)
-    if (!match) throw multipartError('MULTIPART_DISPOSITION_INVALID', 'invalid multipart content disposition')
-    name = match[1]
-    filename = match[2] ?? null
-  } else {
-    name = /name="([^"]*)"/i.exec(disposition)?.[1] ?? null
-    filename = /filename="([^"]*)"/i.exec(disposition)?.[1] ?? null
-  }
+  const { name, filename } = parsePartDisposition(disposition, strict)
   return { name, filename, contentType: headers['content-type'] || null }
 }
 
 function asBuffer (chunk) {
   return Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+}
+function validateStrictPartMeta (meta, strict, seenNames, allowed) {
+  if (!strict) return
+  if (!meta.name || seenNames.has(meta.name)) throw multipartError('MULTIPART_FIELD_DUPLICATE', 'multipart fields must be unique')
+  if (allowed && !allowed.has(meta.name)) throw multipartError('MULTIPART_FIELD_UNKNOWN', `unknown multipart field ${meta.name}`)
+  seenNames.add(meta.name)
+}
+
+function validateStrictPartFile (part, strict, fileField, file) {
+  if (!strict) return
+  if (part.isFile && part.name !== fileField) throw multipartError('MULTIPART_FILE_FIELD_INVALID', 'multipart file field is invalid')
+  if (!part.isFile && part.name === fileField) throw multipartError('MULTIPART_FILE_REQUIRED', 'multipart file field requires a filename')
+  if (part.isFile && file) throw multipartError('MULTIPART_FILE_DUPLICATE', 'multipart request requires exactly one file')
+}
+
+function allocateFileStaging (part, uploadDir, fs, path) {
+  const safeName = (part.filename || 'upload').replace(/[^\w.-]+/g, '_').replace(/^\.+/, '').slice(-180) || 'upload'
+  const uploadsDir = path.join(uploadDir, 'uploads')
+  fs.mkdirSync(uploadsDir, { recursive: true })
+  let uploadId = null
+  let dir = null
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const candidateId = `up_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`
+    const candidateDir = path.join(uploadsDir, candidateId)
+    try {
+      fs.mkdirSync(candidateDir)
+      uploadId = candidateId
+      dir = candidateDir
+      break
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error
+    }
+  }
+  if (!dir) throw multipartError('MULTIPART_STORAGE_COLLISION', 'unable to allocate multipart staging', 503)
+  part.dir = dir
+  part.relativePath = `uploads/${uploadId}/${safeName}`
+  part.filePath = path.join(dir, safeName)
+  part.fd = fs.openSync(part.filePath, 'wx')
+}
+
+function sharedVolumeUploadHeadroomError (room, staged, written, chunkLength, state) {
+  if (state && !Number.isFinite(state.sharedRoom)) state.sharedRoom = room
+  const baseline = state && Number.isFinite(state.sharedRoom) ? state.sharedRoom : room
+  if ((2 * staged) <= baseline && written + (2 * chunkLength) <= room) return null
+  return `upload exceeded available storage headroom of ${Math.max(0, room)} bytes`
+}
+
+function splitVolumeUploadHeadroomError (tmp, storage, staged, chunkLength, state) {
+  if (state && !Number.isFinite(state.tmpRoom)) state.tmpRoom = tmp
+  if (state && !Number.isFinite(state.storageRoom)) state.storageRoom = storage
+  const tmpBaseline = state && Number.isFinite(state.tmpRoom) ? state.tmpRoom : tmp
+  const storageBaseline = state && Number.isFinite(state.storageRoom) ? state.storageRoom : storage
+  if (staged > tmpBaseline || tmp < chunkLength) return `upload exceeded available archive temp headroom of ${Math.max(0, Math.min(tmp, tmpBaseline))} bytes`
+  if (staged > storageBaseline || storage < staged) return `upload exceeded available archive storage headroom of ${Math.max(0, Math.min(storage, storageBaseline))} bytes`
+  return null
+}
+
+function uploadHeadroomError (snapshot, written, chunkLength, state = null) {
+  const staged = written + chunkLength
+  if (Number.isFinite(snapshot)) {
+    return sharedVolumeUploadHeadroomError(Math.floor(snapshot), staged, written, chunkLength, state)
+  }
+  if (!snapshot || typeof snapshot !== 'object') return 'upload cannot measure archive storage headroom'
+  const tmp = Math.floor(snapshot.tmp)
+  const storage = Math.floor(snapshot.storage)
+  if (!Number.isFinite(tmp) || !Number.isFinite(storage)) return 'upload cannot measure archive storage headroom'
+  if (snapshot.sharedVolume !== false) {
+    return sharedVolumeUploadHeadroomError(Math.min(tmp, storage), staged, written, chunkLength, state)
+  }
+  return splitVolumeUploadHeadroomError(tmp, storage, staged, chunkLength, state)
 }
 
 export function receiveMultipartUpload (req, {
@@ -180,11 +259,7 @@ export function receiveMultipartUpload (req, {
       const meta = parsePartHeaders(buf.slice(0, idx).toString('utf8'), strict)
       buf = buf.slice(idx + DOUBLE_CRLF.length)
       partCount++
-      if (strict) {
-        if (!meta.name || seenNames.has(meta.name)) throw multipartError('MULTIPART_FIELD_DUPLICATE', 'multipart fields must be unique')
-        if (allowed && !allowed.has(meta.name)) throw multipartError('MULTIPART_FIELD_UNKNOWN', `unknown multipart field ${meta.name}`)
-        seenNames.add(meta.name)
-      }
+      validateStrictPartMeta(meta, strict, seenNames, allowed)
       part = {
         ...meta,
         isFile: meta.filename != null && meta.filename !== '',
@@ -195,68 +270,14 @@ export function receiveMultipartUpload (req, {
         relativePath: null,
         dir: null
       }
-      if (strict) {
-        if (part.isFile && part.name !== fileField) throw multipartError('MULTIPART_FILE_FIELD_INVALID', 'multipart file field is invalid')
-        if (!part.isFile && part.name === fileField) throw multipartError('MULTIPART_FILE_REQUIRED', 'multipart file field requires a filename')
-        if (part.isFile && file) throw multipartError('MULTIPART_FILE_DUPLICATE', 'multipart request requires exactly one file')
-      }
+      validateStrictPartFile(part, strict, fileField, file)
       if (partCount > maxFields + 1) throw multipartError('MULTIPART_PARTS_TOO_MANY', 'multipart request has too many parts', 413)
       if (part.isFile && !file) {
-        const safeName = (part.filename || 'upload').replace(/[^\w.-]+/g, '_').replace(/^\.+/, '').slice(-180) || 'upload'
-        const uploadsDir = path.join(uploadDir, 'uploads')
-        fs.mkdirSync(uploadsDir, { recursive: true })
-        let uploadId = null
-        let dir = null
-        for (let attempt = 0; attempt < 8; attempt++) {
-          const candidateId = `up_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`
-          const candidateDir = path.join(uploadsDir, candidateId)
-          try {
-            fs.mkdirSync(candidateDir)
-            uploadId = candidateId
-            dir = candidateDir
-            break
-          } catch (error) {
-            if (error?.code !== 'EEXIST') throw error
-          }
-        }
-        if (!dir) throw multipartError('MULTIPART_STORAGE_COLLISION', 'unable to allocate multipart staging', 503)
-        part.dir = dir
-        part.relativePath = `uploads/${uploadId}/${safeName}`
-        part.filePath = path.join(dir, safeName)
-        part.fd = fs.openSync(part.filePath, 'wx')
+        allocateFileStaging(part, uploadDir, fs, path)
       }
       state = 'body'
       return true
     }
-
-function uploadHeadroomError(snapshot, written, chunkLength, state = null) {
-  const staged = written + chunkLength
-  if (Number.isFinite(snapshot)) {
-    const room = Math.floor(snapshot)
-    if (state && !Number.isFinite(state.sharedRoom)) state.sharedRoom = room
-    const baseline = state && Number.isFinite(state.sharedRoom) ? state.sharedRoom : room
-    if ((2 * staged) <= baseline && written + (2 * chunkLength) <= room) return null
-    return `upload exceeded available storage headroom of ${Math.max(0, room)} bytes`
-  }
-  if (!snapshot || typeof snapshot !== 'object') return 'upload cannot measure archive storage headroom'
-  const tmp = Math.floor(snapshot.tmp)
-  const storage = Math.floor(snapshot.storage)
-  if (!Number.isFinite(tmp) || !Number.isFinite(storage)) return 'upload cannot measure archive storage headroom'
-  if (snapshot.sharedVolume !== false) {
-    const room = Math.min(tmp, storage)
-    if (state && !Number.isFinite(state.sharedRoom)) state.sharedRoom = room
-    const baseline = state && Number.isFinite(state.sharedRoom) ? state.sharedRoom : room
-    if ((2 * staged) <= baseline && written + (2 * chunkLength) <= room) return null
-    return `upload exceeded available storage headroom of ${Math.max(0, room)} bytes`
-  }
-  if (state && !Number.isFinite(state.tmpRoom)) state.tmpRoom = tmp
-  if (state && !Number.isFinite(state.storageRoom)) state.storageRoom = storage
-  const tmpBaseline = state && Number.isFinite(state.tmpRoom) ? state.tmpRoom : tmp
-  const storageBaseline = state && Number.isFinite(state.storageRoom) ? state.storageRoom : storage
-  if (staged > tmpBaseline || tmp < chunkLength) return `upload exceeded available archive temp headroom of ${Math.max(0, Math.min(tmp, tmpBaseline))} bytes`
-  if (staged > storageBaseline || storage < staged) return `upload exceeded available archive storage headroom of ${Math.max(0, Math.min(storage, storageBaseline))} bytes`
-  return null
-}
 
     function appendBody (chunk) {
       if (chunk.length === 0) return
@@ -336,22 +357,52 @@ function uploadHeadroomError(snapshot, written, chunkLength, state = null) {
       return false
     }
 
+    function consumePreamble () {
+      if (strict) {
+        if (buf.length < dashBoundary.length) return false
+        if (buf.indexOf(dashBoundary) !== 0) throw multipartError('MULTIPART_PREAMBLE_INVALID', 'multipart preamble is invalid')
+        buf = buf.slice(dashBoundary.length)
+      } else {
+        const idx = buf.indexOf(dashBoundary)
+        if (idx === -1) {
+          if (buf.length > dashBoundary.length) buf = buf.slice(buf.length - dashBoundary.length)
+          return false
+        }
+        buf = buf.slice(idx + dashBoundary.length)
+      }
+      state = 'boundary'
+      return true
+    }
+
+    function consumeBody () {
+      const idx = buf.indexOf(delimiter)
+      if (idx === -1) {
+        const keep = delimiter.length - 1
+        if (buf.length > keep) {
+          appendBody(buf.slice(0, buf.length - keep))
+          buf = buf.slice(buf.length - keep)
+        }
+        return false
+      }
+      appendBody(buf.slice(0, idx))
+      finishPart()
+      buf = buf.slice(idx + delimiter.length)
+      state = 'boundary'
+      return true
+    }
+
+    function consumeTrailer () {
+      if (strict) {
+        if (buf.length > 2 || (buf.length >= 1 && buf[0] !== CR) || (buf.length === 2 && buf[1] !== LF)) {
+          throw multipartError('MULTIPART_TRAILER_INVALID', 'multipart trailer is invalid')
+        }
+      }
+    }
+
     function process () {
       while (!settled) {
         if (state === 'preamble') {
-          if (strict) {
-            if (buf.length < dashBoundary.length) return
-            if (buf.indexOf(dashBoundary) !== 0) throw multipartError('MULTIPART_PREAMBLE_INVALID', 'multipart preamble is invalid')
-            buf = buf.slice(dashBoundary.length)
-          } else {
-            const idx = buf.indexOf(dashBoundary)
-            if (idx === -1) {
-              if (buf.length > dashBoundary.length) buf = buf.slice(buf.length - dashBoundary.length)
-              return
-            }
-            buf = buf.slice(idx + dashBoundary.length)
-          }
-          state = 'boundary'
+          if (!consumePreamble()) return
           continue
         }
         if (state === 'boundary') {
@@ -363,27 +414,11 @@ function uploadHeadroomError(snapshot, written, chunkLength, state = null) {
           continue
         }
         if (state === 'body') {
-          const idx = buf.indexOf(delimiter)
-          if (idx === -1) {
-            const keep = delimiter.length - 1
-            if (buf.length > keep) {
-              appendBody(buf.slice(0, buf.length - keep))
-              buf = buf.slice(buf.length - keep)
-            }
-            return
-          }
-          appendBody(buf.slice(0, idx))
-          finishPart()
-          buf = buf.slice(idx + delimiter.length)
-          state = 'boundary'
+          if (!consumeBody()) return
           continue
         }
         if (state === 'done') {
-          if (strict) {
-            if (buf.length > 2 || (buf.length >= 1 && buf[0] !== CR) || (buf.length === 2 && buf[1] !== LF)) {
-              throw multipartError('MULTIPART_TRAILER_INVALID', 'multipart trailer is invalid')
-            }
-          }
+          consumeTrailer()
           return
         }
         return

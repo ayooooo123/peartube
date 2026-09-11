@@ -6,10 +6,27 @@ import { createFileSourceReader, createSourceReader } from '@peartube/backend/as
 import fetch from '#fetch'
 
 import { createBackendContext } from '@peartube/backend'
-import { PROTOCOL_VERSION } from '@peartube/host/contracts'
+import { STORAGE_FORMAT_VERSION } from '@peartube/backend/storage'
+import { PROTOCOL_MAJOR } from '@peartube/backend/network-version'
 
 import { measureVolumeBytes } from './storage-guard.js'
 import { createTorBoxSourceGrants } from './companion/sources/torbox.js'
+import { normalizePrivateArtwork, openPrivateArtworkSources } from './artwork-sources.js'
+
+async function closeResources (resources, primaryError = null) {
+  const errors = []
+  for (const resource of resources) {
+    try {
+      await resource?.close?.()
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+  if (primaryError) errors.unshift(primaryError)
+  if (errors.length === 0) return
+  if (errors.length === 1) throw errors[0]
+  throw new AggregateError(errors, 'runtime shutdown failed')
+}
 
 const HEX_32 = /^[0-9a-f]{64}$/
 
@@ -30,7 +47,7 @@ function trustedSignerBytes (values) {
   return normalizeHexList(values).map((hex) => b4a.from(hex, 'hex'))
 }
 
-function createLocalFileSourceGrantRegistry ({ fs = runtimeFs, now = Date.now } = {}) {
+export function createLocalFileSourceGrantRegistry ({ fs = runtimeFs, fetch: fetchImpl = fetch, now = Date.now } = {}) {
   const grants = new Map()
   async function revokeToken(token) {
     const entry = grants.get(token)
@@ -49,19 +66,24 @@ function createLocalFileSourceGrantRegistry ({ fs = runtimeFs, now = Date.now } 
           error.code = 'SOURCE_GRANT_UNAVAILABLE'
           throw error
         }
-        return createFileSourceReader({ fs, path: entry.path, mimeType: entry.mimeType })
+        return createFileSourceReader({
+          fs, path: entry.path, mimeType: entry.mimeType,
+          openArtwork: entry.artwork.length > 0
+            ? ({ signal }) => openPrivateArtworkSources(entry.artwork, { fs, fetch: fetchImpl, signal })
+            : null
+        })
       },
       revoke ({ token }) {
         return revokeToken(token)
       }
     }),
-    issue ({ acquisitionId, principalId, path, mimeType, expiresAt, dispose = null }) {
+    issue ({ acquisitionId, principalId, path, mimeType, artwork = [], expiresAt, dispose = null }) {
       if (typeof path !== 'string' || !path || !Number.isSafeInteger(expiresAt) || expiresAt <= now() ||
           (dispose !== null && typeof dispose !== 'function')) {
         throw new TypeError('local file source grant input is invalid')
       }
       const token = b4a.toString(crypto.randomBytes(32), 'hex')
-      grants.set(token, { acquisitionId, principalId, path, mimeType, expiresAt, dispose })
+      grants.set(token, { acquisitionId, principalId, path, mimeType, artwork: normalizePrivateArtwork(artwork), expiresAt, dispose })
       return Object.freeze({
         token,
         adapterId: 'local-file',
@@ -71,9 +93,213 @@ function createLocalFileSourceGrantRegistry ({ fs = runtimeFs, now = Date.now } 
     },
     revoke: revokeToken,
     async close () {
-      await Promise.all([...grants.keys()].map(revokeToken))
+      const results = await Promise.allSettled([...grants.keys()].map(revokeToken))
+      const errors = results.filter(result => result.status === 'rejected').map(result => result.reason)
+      if (errors.length === 1) throw errors[0]
+      if (errors.length > 1) throw new AggregateError(errors, 'local source grant cleanup failed')
     }
   })
+}
+function isRetryableRangeStatus (status) {
+  return status === 503 || status === 429 || status === 502 || status === 504
+}
+
+function createRangeShortError (message, extra = null) {
+  const error = new Error(message)
+  error.code = 'SOURCE_RANGE_SHORT'
+  error.recoverable = true
+  if (extra) Object.assign(error, extra)
+  return error
+}
+
+function delayRangeAttempt (attempt) {
+  return new Promise(resolve => setTimeout(resolve, attempt * 500))
+}
+
+async function handleRangeStatusError (response, rangeHeader, attempt, rangeAttempts) {
+  const retryableStatus = isRetryableRangeStatus(response.status)
+  if (retryableStatus && attempt < rangeAttempts) {
+    const retryAfter = Number(response.headers?.get?.('retry-after')) || 0
+    const delayMs = retryAfter > 0 ? Math.min(retryAfter * 1000, 2000) : attempt * 500
+    await new Promise(resolve => setTimeout(resolve, delayMs))
+    return
+  }
+  const error = new Error(`Companion callback GET range ${rangeHeader} failed with HTTP ${response.status}`)
+  error.code = response.status === 410 ? 'SOURCE_GRANT_REVOKED' : (retryableStatus ? 'SOURCE_RANGE_SHORT' : 'SOURCE_GRANT_UNAVAILABLE')
+  error.recoverable = retryableStatus
+  throw error
+}
+
+function throwRangeOverrun (rangeHeader) {
+  throw createRangeShortError(
+    `Companion callback GET range ${rangeHeader} exceeded expected length`,
+    { isOverrun: true }
+  )
+}
+
+function appendBodyChunk (attemptBuffers, attemptBytesRead, value, expectedAttemptBytes, rangeHeader) {
+  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value)
+  if (attemptBytesRead + bytes.byteLength > expectedAttemptBytes) {
+    throwRangeOverrun(rangeHeader)
+  }
+  attemptBuffers.push(bytes)
+  return attemptBytesRead + bytes.byteLength
+}
+
+async function readBodyWithReader (reader, expectedAttemptBytes, rangeHeader, signal) {
+  const attemptBuffers = []
+  let attemptBytesRead = 0
+  let reading = true
+  try {
+    while (reading) {
+      if (signal?.aborted) {
+        await reader.cancel().catch(() => {})
+        throw signal.reason || new Error('aborted')
+      }
+      const { done, value } = await reader.read()
+      if (done) {
+        reading = false
+        break
+      }
+      if (value && value.byteLength > 0) {
+        attemptBytesRead = appendBodyChunk(
+          attemptBuffers,
+          attemptBytesRead,
+          value,
+          expectedAttemptBytes,
+          rangeHeader
+        )
+      }
+    }
+  } finally {
+    reader.releaseLock?.()
+  }
+  return { attemptBuffers, attemptBytesRead }
+}
+
+async function readBodyWithArrayBuffer (response, expectedAttemptBytes, rangeHeader) {
+  const buffer = await response.arrayBuffer()
+  const bytes = new Uint8Array(buffer)
+  if (bytes.byteLength > expectedAttemptBytes) {
+    throwRangeOverrun(rangeHeader)
+  }
+  return { attemptBuffers: [bytes], attemptBytesRead: bytes.byteLength }
+}
+
+async function readResponseBody (response, expectedAttemptBytes, rangeHeader, signal) {
+  if (response.body && typeof response.body.getReader === 'function') {
+    return readBodyWithReader(response.body.getReader(), expectedAttemptBytes, rangeHeader, signal)
+  }
+  if (response.arrayBuffer) {
+    return readBodyWithArrayBuffer(response, expectedAttemptBytes, rangeHeader)
+  }
+  return { attemptBuffers: [], attemptBytesRead: 0 }
+}
+
+async function fetchRangeResponse ({ origin, path, rangeHeader, authHeaders, fetchFn, signal }) {
+  const headers = {
+    ...authHeaders('GET'),
+    range: rangeHeader
+  }
+  return fetchFn(`${origin}${path}`, { method: 'GET', headers, signal })
+}
+
+async function fetchRangeOrRetry ({ origin, path, rangeHeader, authHeaders, fetchFn, signal, attempt, rangeAttempts }) {
+  try {
+    return await fetchRangeResponse({ origin, path, rangeHeader, authHeaders, fetchFn, signal })
+  } catch (err) {
+    if (signal?.aborted || attempt === rangeAttempts) {
+      throw createRangeShortError(
+        `Companion callback GET range ${rangeHeader} network failed: ${err?.message || err}`
+      )
+    }
+    await delayRangeAttempt(attempt)
+    return null
+  }
+}
+
+async function readRangeBodyOrRetry ({ response, expectedAttemptBytes, rangeHeader, signal, attempt, rangeAttempts }) {
+  try {
+    return await readResponseBody(response, expectedAttemptBytes, rangeHeader, signal)
+  } catch (streamErr) {
+    if (signal?.aborted || streamErr?.isOverrun || attempt === rangeAttempts) {
+      if (streamErr?.isOverrun) throw streamErr
+      throw createRangeShortError(
+        `Companion callback GET range ${rangeHeader} stream failed: ${streamErr?.message || streamErr}`
+      )
+    }
+    await delayRangeAttempt(attempt)
+    return null
+  }
+}
+
+function finishShortChunk ({ rangeHeader, chunkBytesRead, expectedChunkBytes, attempt, rangeAttempts }) {
+  if (attempt === rangeAttempts) {
+    throw createRangeShortError(
+      `Companion callback GET range ${rangeHeader} returned short body: ${chunkBytesRead}/${expectedChunkBytes}`
+    )
+  }
+  return delayRangeAttempt(attempt)
+}
+
+async function readChunkBuffers ({ origin, path, current, chunkEnd, expectedChunkBytes, authHeaders, fetchFn, signal }) {
+  const RANGE_ATTEMPTS = 4
+  const chunkBuffers = []
+  let chunkBytesRead = 0
+
+  for (let attempt = 1; attempt <= RANGE_ATTEMPTS; attempt++) {
+    if (signal?.aborted) throw new Error('source read aborted')
+    const rangeStart = current + chunkBytesRead
+    if (rangeStart > chunkEnd) break
+    const expectedAttemptBytes = chunkEnd - rangeStart + 1
+    const rangeHeader = `bytes=${rangeStart}-${chunkEnd}`
+
+    const response = await fetchRangeOrRetry({
+      origin,
+      path,
+      rangeHeader,
+      authHeaders,
+      fetchFn,
+      signal,
+      attempt,
+      rangeAttempts: RANGE_ATTEMPTS
+    })
+    if (!response) continue
+
+    if (response.status !== 206) {
+      await handleRangeStatusError(response, rangeHeader, attempt, RANGE_ATTEMPTS)
+      continue
+    }
+
+    const body = await readRangeBodyOrRetry({
+      response,
+      expectedAttemptBytes,
+      rangeHeader,
+      signal,
+      attempt,
+      rangeAttempts: RANGE_ATTEMPTS
+    })
+    if (!body) continue
+
+    for (const buf of body.attemptBuffers) {
+      chunkBuffers.push(buf)
+    }
+    chunkBytesRead += body.attemptBytesRead
+    if (chunkBytesRead === expectedChunkBytes) {
+      return chunkBuffers
+    }
+    await finishShortChunk({
+      rangeHeader,
+      chunkBytesRead,
+      expectedChunkBytes,
+      attempt,
+      rangeAttempts: RANGE_ATTEMPTS
+    })
+  }
+
+  throw createRangeShortError(
+    `Companion callback GET range bytes=${current}-${chunkEnd} failed after ${RANGE_ATTEMPTS} attempts`
+  )
 }
 
 export function createCompanionCallbackSourceReader ({ origin, client, secret, token, jobId = '', etag = null, length = null, sha256 = null, contentType = 'application/octet-stream', logger = null, fetch: fetchFn = fetch }) {
@@ -139,130 +365,24 @@ export function createCompanionCallbackSourceReader ({ origin, client, secret, t
       return (async function * () {
         if (!readLength || readLength <= 0) return
         const CHUNK_SIZE = 4 * 1024 * 1024
-        const RANGE_ATTEMPTS = 4
         let current = offset
         const end = offset + readLength
         while (current < end) {
           if (signal?.aborted) throw new Error('source read aborted')
           const chunkEnd = Math.min(current + CHUNK_SIZE - 1, end - 1)
           const expectedChunkBytes = chunkEnd - current + 1
-          const chunkBuffers = []
-          let chunkBytesRead = 0
-          let chunkSucceeded = false
-          for (let attempt = 1; attempt <= RANGE_ATTEMPTS; attempt++) {
-            if (signal?.aborted) throw new Error('source read aborted')
-            const rangeStart = current + chunkBytesRead
-            if (rangeStart > chunkEnd) break
-            const expectedAttemptBytes = chunkEnd - rangeStart + 1
-            const rangeHeader = `bytes=${rangeStart}-${chunkEnd}`
-            const headers = {
-              ...authHeaders('GET'),
-              range: rangeHeader
-            }
-            let response
-            try {
-              response = await fetchFn(`${origin}${path}`, { method: 'GET', headers, signal })
-            } catch (err) {
-              if (signal?.aborted || attempt === RANGE_ATTEMPTS) {
-                const error = new Error(`Companion callback GET range ${rangeHeader} network failed: ${err?.message || err}`)
-                error.code = 'SOURCE_RANGE_SHORT'
-                error.recoverable = true
-                throw error
-              }
-              await new Promise(resolve => setTimeout(resolve, attempt * 500))
-              continue
-            }
-            if (response.status !== 206) {
-              const retryableStatus = response.status === 503 || response.status === 429 || response.status === 502 || response.status === 504
-              if (retryableStatus && attempt < RANGE_ATTEMPTS) {
-                const retryAfter = Number(response.headers?.get?.('retry-after')) || 0
-                const delayMs = retryAfter > 0 ? Math.min(retryAfter * 1000, 2000) : attempt * 500
-                await new Promise(resolve => setTimeout(resolve, delayMs))
-                continue
-              }
-              const error = new Error(`Companion callback GET range ${rangeHeader} failed with HTTP ${response.status}`)
-              error.code = response.status === 410 ? 'SOURCE_GRANT_REVOKED' : (retryableStatus ? 'SOURCE_RANGE_SHORT' : 'SOURCE_GRANT_UNAVAILABLE')
-              error.recoverable = retryableStatus
-              throw error
-            }
-            const attemptBuffers = []
-            let attemptBytesRead = 0
-            try {
-              if (response.body && typeof response.body.getReader === 'function') {
-                const reader = response.body.getReader()
-                try {
-                  while (true) {
-                    if (signal?.aborted) {
-                      await reader.cancel().catch(() => {})
-                      throw signal.reason || new Error('aborted')
-                    }
-                    const { done, value } = await reader.read()
-                    if (done) break
-                    if (value && value.byteLength > 0) {
-                      const bytes = value instanceof Uint8Array ? value : new Uint8Array(value)
-                      if (attemptBytesRead + bytes.byteLength > expectedAttemptBytes) {
-                        const error = new Error(`Companion callback GET range ${rangeHeader} exceeded expected length`)
-                        error.code = 'SOURCE_RANGE_SHORT'
-                        error.isOverrun = true
-                        error.recoverable = true
-                        throw error
-                      }
-                      attemptBytesRead += bytes.byteLength
-                      attemptBuffers.push(bytes)
-                    }
-                  }
-                } finally {
-                  reader.releaseLock?.()
-                }
-              } else if (response.arrayBuffer) {
-                const buffer = await response.arrayBuffer()
-                const bytes = new Uint8Array(buffer)
-                if (bytes.byteLength > expectedAttemptBytes) {
-                  const error = new Error(`Companion callback GET range ${rangeHeader} exceeded expected length`)
-                  error.code = 'SOURCE_RANGE_SHORT'
-                  error.isOverrun = true
-                  error.recoverable = true
-                  throw error
-                }
-                attemptBytesRead = bytes.byteLength
-                attemptBuffers.push(bytes)
-              }
-            } catch (streamErr) {
-              if (signal?.aborted || streamErr?.isOverrun || attempt === RANGE_ATTEMPTS) {
-                const error = streamErr?.isOverrun
-                  ? streamErr
-                  : new Error(`Companion callback GET range ${rangeHeader} stream failed: ${streamErr?.message || streamErr}`)
-                error.code = 'SOURCE_RANGE_SHORT'
-                error.recoverable = true
-                throw error
-              }
-              await new Promise(resolve => setTimeout(resolve, attempt * 500))
-              continue
-            }
-            for (const buf of attemptBuffers) {
-              chunkBuffers.push(buf)
-            }
-            chunkBytesRead += attemptBytesRead
-            if (chunkBytesRead === expectedChunkBytes) {
-              for (const buf of chunkBuffers) {
-                yield buf
-              }
-              chunkSucceeded = true
-              break
-            }
-            if (attempt === RANGE_ATTEMPTS) {
-              const error = new Error(`Companion callback GET range ${rangeHeader} returned short body: ${chunkBytesRead}/${expectedChunkBytes}`)
-              error.code = 'SOURCE_RANGE_SHORT'
-              error.recoverable = true
-              throw error
-            }
-            await new Promise(resolve => setTimeout(resolve, attempt * 500))
-          }
-          if (!chunkSucceeded) {
-            const error = new Error(`Companion callback GET range bytes=${current}-${chunkEnd} failed after ${RANGE_ATTEMPTS} attempts`)
-            error.code = 'SOURCE_RANGE_SHORT'
-            error.recoverable = true
-            throw error
+          const chunkBuffers = await readChunkBuffers({
+            origin,
+            path,
+            current,
+            chunkEnd,
+            expectedChunkBytes,
+            authHeaders,
+            fetchFn,
+            signal
+          })
+          for (const buf of chunkBuffers) {
+            yield buf
           }
           current += expectedChunkBytes
         }
@@ -293,161 +413,186 @@ function archiveOperatorMode (relayMode) {
   return relayMode === 'public' ? 'community' : 'local-first'
 }
 
-export async function createRelayRuntime ({ config, logger, dependencies = null, blockOffload = null } = {}) {
-  if (!config?.storage?.path) throw new Error('relay runtime requires config.storage.path')
-  const backendFactory = dependencies?.createBackendContext || createBackendContext
-  const networkConfig = config.network || {}
-  const trustedBootstrapSigners = trustedSignerBytes(networkConfig.trustedBootstrapSigners)
-  const trustedBootstrapRootIds = normalizeHexList(networkConfig.trustedBootstrapRootIds)
-  const bootstrapEnabled = networkConfig.bootstrapEnabled !== false && config.discovery?.enabled !== false
-  const maxBytes = Number.isSafeInteger(config.storage.maxBytes) && config.storage.maxBytes > 0
-    ? config.storage.maxBytes
-    : 0
-  const maxConcurrent = Number.isSafeInteger(config.seedPin?.maxConcurrent) && config.seedPin.maxConcurrent > 0
-    ? config.seedPin.maxConcurrent
-    : 1
-  // Re-seeding: this relay mirrors what peer relays publish, and asks them to
-  // mirror what it publishes. Off only when the operator passed --no-reseed.
-  const reseedEnabled = config.reseed?.enabled !== false
-  // Every rendition this relay has asked the network to mirror, keyed by
-  // publication+rendition. Status reads the archivists' own possession
-  // evidence back through these locators; a request with no evidence is
-  // reported as a request with no evidence, never as a durable copy.
-  const archiveRequests = new Map()
-  const localFileSourceGrants = createLocalFileSourceGrantRegistry({
-    fs: dependencies?.fs || runtimeFs
+function buildSourceAdapters ({ config, dependencies, localFileSourceGrants, torBoxSourceGrants, logger }) {
+  const sourceAdapters = new Map()
+  sourceAdapters.set('local-file', {
+    adapterId: 'local-file',
+    enabled: true,
+    async resolve ({ token, adapterId, acquisitionId, principalId, expiresAt }) {
+      return localFileSourceGrants.resolver.resolve({ token, adapterId, acquisitionId, principalId, expiresAt })
+    },
+    async revoke ({ token }) {
+      return localFileSourceGrants.revoke(token)
+    },
+    async close () {
+      return localFileSourceGrants.close?.()
+    }
   })
-  // TorBox source grants (usenet and torrent). The archival client attaches
-  // one to an acquisition; the resolver turns its token into a CDN-backed
-  // SourceReader. Disabled - but constructible - when no API key is set, so a
-  // grant with adapterId 'torbox' fails with a clear reason rather than
-  // "unsupported adapter".
-  const torBoxSourceGrants = createTorBoxSourceGrants({
-    apiKey: config.archive?.torbox?.apiKey || '',
-    chunkBytes: config.archive?.torbox?.chunkBytes,
-    fetchImpl: fetch,
+
+  const torBoxApiKey = config.archive?.torbox?.apiKey
+  sourceAdapters.set('torbox', {
+    adapterId: 'torbox',
+    enabled: Boolean(torBoxApiKey && String(torBoxApiKey).trim() !== ''),
+    async resolve ({ token, etag, length, sha256, contentType, signal }) {
+      return torBoxSourceGrants.resolve({ token, etag, length, sha256, contentType, signal })
+    },
+    async revoke ({ token, reason }) {
+      return torBoxSourceGrants.revoke?.({ token, reason })
+    },
+    async close () {
+      return torBoxSourceGrants.close?.()
+    }
   })
-  const backend = await backendFactory({
+
+  const companionOrigin = config.companion?.sourceOrigin
+  const companionSecret = config.companion?.sourceSharedSecret || config.companion?.sharedSecret
+  sourceAdapters.set('companion-callback', {
+    adapterId: 'companion-callback',
+    enabled: Boolean(companionOrigin && companionSecret),
+    async resolve ({ token, acquisitionId, etag, length, sha256, contentType, signal }) {
+      if (!companionOrigin || !companionSecret) {
+        const error = new Error('Companion callback source origin/secret is not configured')
+        error.code = 'SOURCE_GRANT_UNAVAILABLE'
+        throw error
+      }
+      const client = config.companion?.sourceClient || 'peartube-companion'
+      return createCompanionCallbackSourceReader({ origin: companionOrigin, client, secret: companionSecret, token, jobId: acquisitionId, etag, length, sha256, contentType, logger })
+    },
+    async revoke () {
+      return false
+    },
+    async close () {}
+  })
+
+  if (dependencies?.sourceAdapters) {
+    const injected = dependencies.sourceAdapters instanceof Map
+      ? dependencies.sourceAdapters.entries()
+      : Object.entries(dependencies.sourceAdapters)
+    for (const [id, adapter] of injected) {
+      if (!adapter) continue
+      sourceAdapters.set(id, {
+        adapterId: id,
+        enabled: adapter.enabled !== false,
+        async resolve (params) {
+          return adapter.resolve ? adapter.resolve(params) : adapter(params)
+        },
+        async revoke (params) {
+          return adapter.revoke ? adapter.revoke(params) : false
+        },
+        async close () {
+          return adapter.close?.()
+        }
+      })
+    }
+  }
+
+  return sourceAdapters
+}
+
+function buildNetworkPolicy ({ config, reseedEnabled, maxBytes }) {
+  if (!reseedEnabled) {
+    return {
+      uploadPermission: 'enabled',
+      uploadCeilingBytes: Number.MAX_SAFE_INTEGER,
+      ...(config.networkPolicy || {})
+    }
+  }
+  return {
+    uploadPermission: 'enabled',
+    uploadCeilingBytes: Number.MAX_SAFE_INTEGER,
+    retentionMode: 'archive-pledges',
+    consentVersion: 1,
+    migrationRequired: false,
+    contributeWatchedMedia: true,
+    archiveEnabled: true,
+    ...(maxBytes > 0
+      ? {
+          diskCeilingBytes: maxBytes,
+          diskCeilingExplicit: true,
+          contributionBudgetBytes: maxBytes,
+          archiveBudgetBytes: maxBytes
+        }
+      : {}),
+    ...(config.networkPolicy || {})
+  }
+}
+
+function buildArchiveOptions ({ config, reseedEnabled }) {
+  return {
+    enabled: reseedEnabled ? true : config.archive?.enabled !== false,
+    ...(config.archive?.challengeIntervalMs === undefined
+      ? {}
+      : { challengeIntervalMs: config.archive.challengeIntervalMs }),
+    ...(config.archive?.challengeTimeoutMs === undefined
+      ? {}
+      : { challengeTimeoutMs: config.archive.challengeTimeoutMs }),
+  }
+}
+
+function createSourceGrantResolver (sourceAdapters) {
+  return Object.freeze({
+    async resolve ({ token, adapterId, acquisitionId, principalId, expiresAt, etag, length, sha256, contentType, signal }) {
+      const adapter = sourceAdapters.get(adapterId)
+      if (!adapter || adapter.enabled !== true) {
+        const error = new Error(`Unsupported source grant adapter: ${adapterId}`)
+        error.code = 'SOURCE_GRANT_UNAVAILABLE'
+        throw error
+      }
+      return adapter.resolve({ token, adapterId, acquisitionId, principalId, expiresAt, etag, length, sha256, contentType, signal })
+    },
+    async revoke ({ token, adapterId, acquisitionId, principalId, reason }) {
+      if (adapterId && sourceAdapters.has(adapterId)) {
+        const adapter = sourceAdapters.get(adapterId)
+        if (typeof adapter.revoke === 'function') {
+          return adapter.revoke({ token, adapterId, acquisitionId, principalId, reason })
+        }
+      }
+      return false
+    }
+  })
+}
+
+function buildBackendOptions ({
+  config,
+  networkConfig,
+  trustedBootstrapSigners,
+  trustedBootstrapRootIds,
+  bootstrapEnabled,
+  reseedEnabled,
+  maxBytes,
+  maxConcurrent,
+  blockOffload,
+  sourceAdapters,
+  dependencies,
+  logger
+}) {
+  return {
     storagePath: config.storage.path,
-    // Optional. When the operator enabled block offload the backend opens its
-    // Corestore over the wrapped storage, so a block whose data now lives in
-    // the object store is restored and served exactly as a local one, and the
-    // asset write path gets the hook that puts it there.
     blockOffload,
     platform: 'relay',
     role: 'relay',
-    expectedProtocolVersion: PROTOCOL_VERSION,
+    expectedStorageFormatVersion: STORAGE_FORMAT_VERSION,
     network: {
       networkId: networkConfig.networkId || 'peartube-main',
       trustedBootstrapSigners,
       trustedBootstrapRootIds,
       bootstrapEnabled
     },
-    // A relay exists to make data available. The shared default upload
-    // permission is 'manual', which is right for a phone on a metered link and
-    // exactly wrong here: uploadAllowed requires 'enabled', so a relay left on
-    // the default answers every block request with "unavailable". It announces
-    // a catalog it will never serve, and every peer reads the whole library as
-    // awaiting replication. An operator can still narrow this at runtime.
-    networkPolicy: {
-      uploadPermission: 'enabled',
-      uploadCeilingBytes: Number.MAX_SAFE_INTEGER,
-      // The shared default retentionMode is 'none', which leaves
-      // desiredArchiveParticipationEnabled false (orchestrator.js) and the
-      // archive network idle. A relay that publishes and never mirrors makes
-      // every title depend on the one machine that published it. The archive
-      // ceiling is the storage ceiling the operator already configured, not a
-      // second number: the policy runtime hands diskCeilingBytes straight to
-      // the archive network (api/policy.js applyNow), floored at whatever is
-      // already pledged.
-      ...(reseedEnabled
-        ? {
-            retentionMode: 'archive-pledges',
-            // Consent is a device-owner question on a phone; on a relay the
-            // operator already answered it by configuring re-seeding. Without
-            // these the consent gate leaves permissions.archive false and the
-            // archive network stays idle no matter what the operator asked for.
-            consentVersion: 1,
-            migrationRequired: false,
-            contributeWatchedMedia: true,
-            archiveEnabled: true,
-            ...(maxBytes > 0
-              ? {
-                  diskCeilingBytes: maxBytes,
-                  diskCeilingExplicit: true,
-                  contributionBudgetBytes: maxBytes,
-                  archiveBudgetBytes: maxBytes
-                }
-              : {})
-          }
-        : {}),
-      ...(config.networkPolicy || {}),
-    },
+    networkPolicy: buildNetworkPolicy({ config, reseedEnabled, maxBytes }),
     resources: {
       profile: { maxBytesPerDay: maxBytes },
       maxConcurrentSync: maxConcurrent,
       maxConcurrentProofs: maxConcurrent,
       maxConcurrentFetches: maxConcurrent
     },
-    // Capacity is deliberately not configured here. Passing archive.capacityBytes
-    // makes the reservation ledger authoritative at boot, and a ceiling lowered
-    // under the bytes already pledged fails the whole startup
-    // (archive/policy.js decodeState). The live number comes from the storage
-    // guard through applyArchiveCapacity instead, which floors at the pledges.
-    // The cadence is the operator's, when they set one: the backend already
-    // accepts both knobs and only ever saw its own defaults, so custody could
-    // not be confirmed sooner than every five minutes - or verified at all
-    // inside a test - without reaching into the runtime by hand.
     seedPin: config.seedPin || {},
-    // One archive option, not two: a second `archive` key in this literal
-    // silently overwrote the re-seeding block, so a relay asked to re-seed
-    // still handed the backend `enabled: false`.
-    archive: {
-      enabled: reseedEnabled ? true : config.archive?.enabled !== false,
-      ...(config.archive?.challengeIntervalMs === undefined
-        ? {}
-        : { challengeIntervalMs: config.archive.challengeIntervalMs }),
-      ...(config.archive?.challengeTimeoutMs === undefined
-        ? {}
-        : { challengeTimeoutMs: config.archive.challengeTimeoutMs }),
-    },
+    archive: buildArchiveOptions({ config, reseedEnabled }),
     operability: {
-      // Relay mode (public/private) and archive operator mode
-      // (local-first/altruistic/friend-family/community/...) are different
-      // vocabularies. Passing the relay mode straight through made every
-      // public relay fail startup with "invalid archive operator mode", so the
-      // operator intent is configured on its own or derived from the relay mode.
       operatorMode: config.archiveOperatorMode || archiveOperatorMode(config.mode)
     },
     provider: {
       ...(config.provider || {}),
-      sourceGrantResolver: Object.freeze({
-        async resolve ({ token, adapterId, acquisitionId, principalId, expiresAt, etag, length, sha256, contentType }) {
-          if (adapterId === 'local-file') {
-            return localFileSourceGrants.resolver.resolve({ token, adapterId, acquisitionId, principalId, expiresAt })
-          }
-          if (adapterId === 'torbox') {
-            return torBoxSourceGrants.resolve({ token, etag, length, sha256, contentType })
-          }
-          if (adapterId === 'companion-callback') {
-            const origin = config.companion?.sourceOrigin
-            const client = config.companion?.sourceClient || 'peartube-companion'
-            const secret = config.companion?.sourceSharedSecret || config.companion?.sharedSecret
-            if (!origin || !secret) {
-              const error = new Error('Companion callback source origin/secret is not configured')
-              error.code = 'SOURCE_GRANT_UNAVAILABLE'
-              throw error
-            }
-            return createCompanionCallbackSourceReader({ origin, client, secret, token, jobId: acquisitionId, etag, length, sha256, contentType, logger })
-          }
-          const error = new Error(`Unsupported source grant adapter: ${adapterId}`)
-          error.code = 'SOURCE_GRANT_UNAVAILABLE'
-          throw error
-        },
-        async revoke ({ token }) {
-          return localFileSourceGrants.revoke(token)
-        }
-      }),
+      sourceGrantResolver: createSourceGrantResolver(sourceAdapters),
       principalId: config.companion?.client || 'local-provider',
       freeDiskBytes: () => measureVolumeBytes({
         storagePath: config.storage.path,
@@ -456,114 +601,462 @@ export async function createRelayRuntime ({ config, logger, dependencies = null,
       })?.freeBytes || 0,
     },
     ipcLog: (message) => logger?.runtime?.debug?.(message)
+  }
+}
+
+function mirrorEvidence (network, record) {
+  if (typeof network?.getOffloadEvidence !== 'function') return []
+  try {
+    const evidence = network.getOffloadEvidence(record.publicationId, record.locators)
+    return Array.isArray(evidence) ? evidence : []
+  } catch {
+    return []
+  }
+}
+
+async function measureAndReportHostDisk ({ backend, dependencies, config, logger }) {
+  if (typeof backend.api.setDeviceConditions !== 'function') {
+    return { measured: false, reason: 'device-conditions-unavailable', freeBytes: null, totalBytes: null }
+  }
+  const fs = dependencies?.fs || await import('#fs').catch(() => null)
+  const volume = measureVolumeBytes({
+    storagePath: config.storage.path,
+    statfsSync: fs?.statfsSync || null,
+    log: (message) => logger?.runtime?.debug?.(message)
   })
-
-  if (!backend?.ctx || !backend?.api || typeof backend.destroy !== 'function') {
-    await backend?.destroy?.().catch(() => {})
-    throw new Error('universal backend returned an incomplete relay context')
-  }
-
-  let closed = false
-  let started = false
-  // The archivists' own possession evidence for one requested mirror: peers
-  // whose challenge for these exact ranges passed. Never a peer count — a peer
-  // that can stream the bytes has promised nothing about keeping them.
-  function mirrorEvidence (record) {
-    const network = backend.ctx?.permissionlessArchiveNetwork
-    if (typeof network?.getOffloadEvidence !== 'function') return []
-    try {
-      const evidence = network.getOffloadEvidence(record.publicationId, record.locators)
-      return Array.isArray(evidence) ? evidence : []
-    } catch {
-      return []
-    }
-  }
-
-  // The host volume, measured once at start and reported to the participation
-  // decision. archiveEligible requires a real free-disk reading
-  // (playback/resource-policy.js: allSignalsKnown -> diskKnown), and until one
-  // exists the archive ledger refuses every pledge with
-  // 'archiving-not-permitted'.
-  //
-  // Exactly two fields go out. On a server host the battery, thermal and
-  // metered signals are not-applicable rather than unread, so they need nothing
-  // from here, and inventing values for them would be a lie told to open a
-  // gate. These two are a real statfs on the storage volume — the host's own
-  // numbers, never the operator's byte budget, which answers a different
-  // question and is enforced separately by applyArchiveCapacity.
-  let hostDisk = { measured: false, reason: 'not-measured', freeBytes: null, totalBytes: null }
-
-  async function reportHostDisk () {
-    if (typeof backend.api.setDeviceConditions !== 'function') {
-      hostDisk = { measured: false, reason: 'device-conditions-unavailable', freeBytes: null, totalBytes: null }
-      return hostDisk
-    }
-    const fs = dependencies?.fs || await import('#fs').catch(() => null)
-    const volume = measureVolumeBytes({
+  if (!volume || !Number.isFinite(volume.freeBytes) || !Number.isFinite(volume.totalBytes)) {
+    logger?.runtime?.warn?.('Host disk is unmeasurable; this relay will not take archive pledges', {
       storagePath: config.storage.path,
-      statfsSync: fs?.statfsSync || null,
-      log: (message) => logger?.runtime?.debug?.(message)
+      reason: 'statfs-unavailable'
     })
-    // Both numbers or neither: the decision measures its floor as a fraction of
-    // the volume, so a free reading without a total cannot be judged and must
-    // stay unknown rather than be judged against a guess.
-    if (!volume || !Number.isFinite(volume.freeBytes) || !Number.isFinite(volume.totalBytes)) {
-      hostDisk = { measured: false, reason: 'statfs-unavailable', freeBytes: null, totalBytes: null }
-      // A host that cannot read its own disk must not promise anyone durable
-      // storage, so custody stays shut — but an operator whose relay is not
-      // pledging deserves the reason rather than an absence of logs. Bare's
-      // `#fs` exports no statfsSync, so this is the normal state there.
-      logger?.runtime?.warn?.('Host disk is unmeasurable; this relay will not take archive pledges', {
-        storagePath: config.storage.path,
-        reason: 'statfs-unavailable'
-      })
-      return hostDisk
-    }
-    await backend.api.setDeviceConditions({
-      freeDiskBytes: volume.freeBytes,
-      freeDiskBytesProvided: true,
-      totalDiskBytes: volume.totalBytes,
-      totalDiskBytesProvided: true
-    })
-    hostDisk = { measured: true, reason: null, freeBytes: volume.freeBytes, totalBytes: volume.totalBytes }
-    return hostDisk
+    return { measured: false, reason: 'statfs-unavailable', freeBytes: null, totalBytes: null }
   }
+  await backend.api.setDeviceConditions({
+    freeDiskBytes: volume.freeBytes,
+    freeDiskBytesProvided: true,
+    totalDiskBytes: volume.totalBytes,
+    totalDiskBytesProvided: true
+  })
+  return { measured: true, reason: null, freeBytes: volume.freeBytes, totalBytes: volume.totalBytes }
+}
 
-  const runtime = {
-    backend,
-    ctx: backend.ctx,
-    api: backend.api,
+async function executeArchiveMirrorRequest (backend, logger, publicationId, renditionId) {
+  try {
+    return await backend.api.requestArchivePublication({ publicationId, renditionId })
+  } catch (error) {
+    logger?.runtime?.warn?.('Archive mirror request failed', {
+      publicationId,
+      renditionId,
+      error: error?.message || String(error)
+    })
+    return { success: false, status: 'failed', requestId: '', errorCode: 'ARCHIVE_REQUEST_FAILED' }
+  }
+}
+
+function normalizeArchiveMirrorResult (result) {
+  return {
+    requested: result?.success === true,
+    status: String(result?.status || 'failed'),
+    requestId: String(result?.requestId || ''),
+    errorCode: result?.errorCode || null
+  }
+}
+
+function formatPolicyDiagnostics (scoped, policyResult) {
+  const policy = policyResult?.policy || {}
+  return {
+    policyVersion: Number(policy.policyVersion) || 0,
+    consentVersion: Number(policy.consentVersion) || 0,
+    migrationRequired: policy.migrationRequired !== false,
+    effectiveRole: policy.effectiveRole || 'watch-only',
+    permissions: {
+      contribute: policy.permissions?.contribute === true,
+      archive: policy.permissions?.archive === true
+    },
+    contributionBudgetBytes: Number(policy.contributionBudgetBytes) || 0,
+    archiveBudgetBytes: Number(policy.archiveBudgetBytes) || 0,
+    selectedIndexerCount: Number(scoped?.selectedIndexerCount) || 0,
+    selectedIndexers: Array.isArray(scoped?.selectedIndexers)
+      ? scoped.selectedIndexers.slice(0, 8).map((indexer, index) => ({
+          id: String(indexer?.id || `selected-${index + 1}`).slice(0, 32),
+          status: String(indexer?.status || 'unknown').slice(0, 32)
+        }))
+      : []
+  }
+}
+
+function formatDhtDiagnostics (swarm) {
+  return {
+    bootstrapped: swarm?.dht?.bootstrapped ?? null,
+    firewalled: swarm?.dht?.firewalled ?? null,
+    online: swarm?.dht?.online ?? null
+  }
+}
+
+function formatScopedRecentErrors (scoped) {
+  if (!Array.isArray(scoped?.recentErrors)) return []
+  return scoped.recentErrors.slice(-8).map(error => String(error?.code || 'SCOPED_NETWORK_ERROR').slice(0, 64))
+}
+
+function formatNetworkDiagnostics (scoped, swarm, networkConfig) {
+  return {
+    status: scoped?.status || 'unknown',
+    protocolMajor: scoped?.protocolMajor ?? PROTOCOL_MAJOR,
+    networkId: scoped?.networkId || networkConfig.networkId || 'peartube-main',
+    peers: swarm?.peers?.size || 0,
+    connections: swarm?.connections?.size || 0,
+    dht: formatDhtDiagnostics(swarm),
+    offline: Boolean(swarm?._peartubeOffline),
+    offlineReason: swarm?._peartubeOfflineReason || null,
+    listenResolved: Boolean(swarm?._peartubeListenResolved),
+    lastErrors: formatScopedRecentErrors(scoped)
+  }
+}
+
+function formatPublisherDiagnostics (scoped, counters, publisherTopics) {
+  return {
+    catalogs: counter(counters, 'publisherCatalogs', 'catalogs') || publisherTopics,
+    followed: counter(counters, 'publishersFollowed', 'followedPublishers'),
+    lastErrorCode: scoped?.lastErrorCode || null
+  }
+}
+
+function formatBootstrapDiagnostics (scoped, counters, bootstrapEnabled, locators) {
+  const active = scoped && scoped.status === 'active'
+  return {
+    joined: Boolean(bootstrapEnabled && active),
+    locators: Array.isArray(locators) ? locators.length : 0,
+    rejected: counter(counters, 'locatorsRejected', 'bootstrapRejected'),
+    maxLocators: counter(counters, 'maxLocators', 'bootstrapLimit')
+  }
+}
+
+function publicWorkNumber (scoped, key) {
+  const publicWork = scoped && scoped.publicWork
+  return Number(publicWork && publicWork[key]) || 0
+}
+
+function formatPublicWorkDiagnostics (scoped) {
+  return {
+    activeAnnouncements: publicWorkNumber(scoped, 'activeAnnouncements'),
+    activeServes: publicWorkNumber(scoped, 'activeServes'),
+    servedBytes: publicWorkNumber(scoped, 'servedBytes')
+  }
+}
+
+function formatAssetDiagnostics (scoped, counters, assetTopics) {
+  return {
+    retainedRenditions: counter(counters, 'retainedRenditions'),
+    activeSessions: purposeCount(scoped && scoped.sessions, 'asset'),
+    topics: assetTopics,
+    activeServes: publicWorkNumber(scoped, 'activeServes'),
+    servedBytes: publicWorkNumber(scoped, 'servedBytes'),
+    maxSessions: counter(counters, 'maxAssetSessions', 'assetSessionLimit')
+  }
+}
+
+function positiveSafeInteger (value) {
+  return Number.isSafeInteger(value) && value > 0 ? value : null
+}
+
+function resolveRelayRuntimeConfig (config) {
+  const networkConfig = config.network || {}
+  const maxBytes = positiveSafeInteger(config.storage.maxBytes) || 0
+  const maxConcurrent = positiveSafeInteger(config.seedPin && config.seedPin.maxConcurrent) || 1
+  const bootstrapEnabled = networkConfig.bootstrapEnabled !== false &&
+    (config.discovery ? config.discovery.enabled !== false : true)
+  const reseedEnabled = !config.reseed || config.reseed.enabled !== false
+  return {
+    networkConfig,
+    trustedBootstrapSigners: trustedSignerBytes(networkConfig.trustedBootstrapSigners),
+    trustedBootstrapRootIds: normalizeHexList(networkConfig.trustedBootstrapRootIds),
+    bootstrapEnabled,
+    maxBytes,
+    maxConcurrent,
+    reseedEnabled
+  }
+}
+
+function resolveBackendBindings (backend) {
+  return {
     provider: backend.provider || backend.ctx?.providerService || null,
     acquisitionManager: backend.acquisitionManager || backend.ctx?.acquisitionManager || null,
     issueLocalProviderResolution: backend.issueLocalProviderResolution || backend.ctx?.issueLocalProviderResolution || null,
     retractPublication: backend.retractPublication || backend.uploadManager?.retractAcquiredPublication || null,
-    localFileSourceGrants,
+    verifiedQueryView: backend.verifiedQueryView || backend.ctx?.verifiedQueryView || null,
+    uploadManager: backend.uploadManager || backend.ctx?.uploadManager || null
+  }
+}
+
+function isCompleteBackend (backend) {
+  return Boolean(backend && backend.ctx && backend.api && typeof backend.destroy === 'function')
+}
+
+async function destroyIncompleteBackend (backend) {
+  if (!backend || typeof backend.destroy !== 'function') return
+  try {
+    await backend.destroy()
+  } catch {
+    /* incomplete backend teardown is best effort */
+  }
+}
+
+async function openRelayBackend (backendFactory, backendOptions) {
+  const backend = await backendFactory(backendOptions)
+  if (isCompleteBackend(backend)) return backend
+  await destroyIncompleteBackend(backend)
+  throw new Error('universal backend returned an incomplete relay context')
+}
+
+function countFreshArchivists (evidence) {
+  let count = 0
+  for (const entry of evidence) {
+    if (entry && entry.passed === true && entry.recent === true) count += 1
+  }
+  return count
+}
+
+function listArchiveMirrorRequests (archiveRequests, backend) {
+  const network = backend.ctx && backend.ctx.permissionlessArchiveNetwork
+  return Array.from(archiveRequests.values(), (record) => {
+    const evidence = mirrorEvidence(network, record)
+    return {
+      publicationId: record.publicationId,
+      renditionId: record.renditionId,
+      status: record.status,
+      requestId: record.requestId,
+      errorCode: record.errorCode,
+      requestedAt: record.requestedAt,
+      archivists: evidence.length,
+      freshArchivists: countFreshArchivists(evidence)
+    }
+  })
+}
+
+async function requestArchiveMirrorAction (state, { publicationId, renditionId, locators = [] } = {}) {
+  const { reseedEnabled, backend, logger, archiveRequests } = state
+  if (!reseedEnabled) return { requested: false, reason: 'reseed-disabled' }
+  if (!HEX_32.test(publicationId || '') || !HEX_32.test(renditionId || '')) {
+    return { requested: false, reason: 'invalid-rendition', errorCode: 'ARCHIVE_REQUEST_INVALID' }
+  }
+  if (typeof backend.api.requestArchivePublication !== 'function') {
+    return { requested: false, reason: 'unavailable', errorCode: 'ARCHIVE_NETWORK_UNAVAILABLE' }
+  }
+  const result = await executeArchiveMirrorRequest(backend, logger, publicationId, renditionId)
+  const normalized = normalizeArchiveMirrorResult(result)
+  archiveRequests.set(`${publicationId}:${renditionId}`, {
+    publicationId,
+    renditionId,
+    locators: Array.isArray(locators) ? locators : [],
+    ...normalized,
+    requestedAt: Date.now()
+  })
+  return normalized
+}
+
+function resolveArchiveRoom (headroomBytes, maxBytes, reservedBytes) {
+  const measured = positiveSafeInteger(headroomBytes)
+  if (measured != null) return measured
+  if (headroomBytes == null) return Math.max(0, maxBytes - reservedBytes)
+  return 0
+}
+
+async function applyArchiveCapacityAction (state, { headroomBytes = null } = {}) {
+  const { reseedEnabled, backend, maxBytes } = state
+  if (!reseedEnabled) return { applied: false, reason: 'reseed-disabled' }
+  if (typeof backend.api.getArchiveParticipation !== 'function' ||
+      typeof backend.api.setArchiveParticipation !== 'function') {
+    return { applied: false, reason: 'archive-participation-unavailable' }
+  }
+  const status = await backend.api.getArchiveParticipation({})
+  if (status && status.success === false) {
+    return { applied: false, reason: status.errorCode || 'archive-participation-unavailable' }
+  }
+  const reservedBytes = positiveSafeInteger(status && status.reservedBytes) || 0
+  const room = resolveArchiveRoom(headroomBytes, maxBytes, reservedBytes)
+  const capacityBytes = reservedBytes + room
+  const applied = await backend.api.setArchiveParticipation({
+    enabled: true,
+    capacityBytes,
+    maxRequestBytes: room,
+    acceptancePermille: 1000
+  })
+  if (applied && applied.success === false) {
+    return { applied: false, reason: applied.errorCode || 'archive-participation-unavailable' }
+  }
+  return { applied: true, capacityBytes, maxRequestBytes: room, reservedBytes }
+}
+
+function invokeOptional (fn, thisArg, args = []) {
+  if (typeof fn !== 'function') return {}
+  return fn.apply(thisArg, args) || {}
+}
+
+async function collectDiagnosticsSnapshots (backend) {
+  const seedingManager = backend.seedingManager
+  return Promise.all([
+    backend.api.getScopedNetworkDiagnostics(),
+    backend.api.listBootstrapLocators(),
+    invokeOptional(seedingManager && seedingManager.getStatus, seedingManager),
+    invokeOptional(backend.api.getArchiveOperatorStatus, backend.api, [{}]),
+    invokeOptional(backend.api.getStorageStats, backend.api),
+    invokeOptional(backend.api.getArchiveParticipation, backend.api, [{}]),
+    invokeOptional(backend.api.getNetworkPolicy, backend.api)
+  ])
+}
+
+function assembleDiagnosticsReport ({
+  scoped,
+  locators,
+  seedRetention,
+  archive,
+  storage,
+  archiveParticipation,
+  policyResult,
+  backend,
+  networkConfig,
+  bootstrapEnabled,
+  hostDisk,
+  archiveRequests
+}) {
+  const counters = (scoped && scoped.counters) || {}
+  const swarm = backend.ctx && backend.ctx.swarm
+  const publisherTopics = purposeCount(scoped && scoped.topics, 'publisher')
+  const assetTopics = purposeCount(scoped && scoped.topics, 'asset')
+  return {
+    policy: formatPolicyDiagnostics(scoped, policyResult),
+    network: formatNetworkDiagnostics(scoped, swarm, networkConfig),
+    publicWork: formatPublicWorkDiagnostics(scoped),
+    publisher: formatPublisherDiagnostics(scoped, counters, publisherTopics),
+    bootstrap: formatBootstrapDiagnostics(scoped, counters, bootstrapEnabled, locators),
+    assets: formatAssetDiagnostics(scoped, counters, assetTopics),
+    seedRetention: seedRetention || {},
+    archive: archive || {},
+    storage: storage || {},
+    archiveRequests: listArchiveMirrorRequests(archiveRequests, backend),
+    archiveParticipation: archiveParticipation || {},
+    archiveHostDisk: { ...hostDisk }
+  }
+}
+
+async function getRelayDiagnostics (state) {
+  const [
+    scoped,
+    locators,
+    seedRetention,
+    archive,
+    storage,
+    archiveParticipation,
+    policyResult
+  ] = await collectDiagnosticsSnapshots(state.backend)
+  return assembleDiagnosticsReport({
+    scoped,
+    locators,
+    seedRetention,
+    archive,
+    storage,
+    archiveParticipation,
+    policyResult,
+    backend: state.backend,
+    networkConfig: state.networkConfig,
+    bootstrapEnabled: state.bootstrapEnabled,
+    hostDisk: state.hostDisk,
+    archiveRequests: state.archiveRequests
+  })
+}
+
+async function awaitOptionalCall (result) {
+  if (result == null) return
+  if (typeof result.catch === 'function') {
+    await result.catch(() => {})
+    return
+  }
+  await result
+}
+
+async function startRelayRuntime (state) {
+  if (state.closed) throw new Error('relay runtime is closed')
+  if (state.started) return
+  state.started = true
+  state.hostDisk = await measureAndReportHostDisk({
+    backend: state.backend,
+    dependencies: state.dependencies,
+    config: state.config,
+    logger: state.logger
+  })
+  await awaitOptionalCall(state.backend.api.getParticipationStatus?.())
+  const networkId = state.networkConfig.networkId || 'peartube-main'
+  const readyInfo = {
+    platform: 'relay',
+    networkId,
+    hostDiskMeasured: state.hostDisk.measured
+  }
+  if (!state.hostDisk.measured) readyInfo.hostDiskReason = state.hostDisk.reason
+  state.logger?.runtime?.info?.('Relay universal backend ready', readyInfo)
+}
+
+async function refreshRelayAuthorization (backend, trustedClients) {
+  if (typeof backend.api.refreshScopedAuthorization !== 'function') return false
+  const result = await backend.api.refreshScopedAuthorization({
+    trustedClients: normalizeHexList(trustedClients)
+  })
+  return result && result.status === 'updated'
+}
+
+async function requestRelayCatalogSync (backend) {
+  if (typeof backend.api.reannounceArchiveRequests === 'function') {
+    await backend.api.reannounceArchiveRequests().catch(() => {})
+  }
+  const locators = await backend.api.listBootstrapLocators()
+  return Array.isArray(locators) ? locators.length : 0
+}
+
+async function resolveRelayCandidate (backend, candidate = {}) {
+  const publisherId = candidate.publisherId || null
+  if (!publisherId) return { ...candidate }
+  const catalog = await backend.api.resolveLocalPublisherCatalog({ publisherId })
+  return { ...candidate, publisherId, catalog }
+}
+
+async function closeRelayRuntime (state) {
+  if (state.closed) return
+  state.closed = true
+  let backendError = null
+  try {
+    await state.backend.destroy()
+  } catch (error) {
+    backendError = error
+  }
+  await closeResources(
+    [...state.sourceAdapters.values(), state.localFileSourceGrants],
+    backendError
+  )
+}
+
+function createRelayRuntimeSurface (state) {
+  const { backend } = state
+  const bindings = resolveBackendBindings(backend)
+  return {
+    backend,
+    ctx: backend.ctx,
+    api: backend.api,
+    provider: bindings.provider,
+    acquisitionManager: bindings.acquisitionManager,
+    issueLocalProviderResolution: bindings.issueLocalProviderResolution,
+    retractPublication: bindings.retractPublication,
+    localFileSourceGrants: state.localFileSourceGrants,
+    sourceAdapters: state.sourceAdapters,
+    configuredSourceAdapterIds: state.configuredSourceAdapterIds,
     scopedNetwork: backend.scopedNetwork,
     seedingManager: backend.seedingManager,
-    verifiedQueryView: backend.verifiedQueryView || backend.ctx?.verifiedQueryView || null,
+    verifiedQueryView: bindings.verifiedQueryView,
     identityManager: backend.identityManager,
-    uploadManager: backend.uploadManager || backend.ctx?.uploadManager || null,
+    uploadManager: bindings.uploadManager,
     seedPin: backend.seedPin,
     seedPinClients: backend.seedPinClients,
 
     async start () {
-      if (closed) throw new Error('relay runtime is closed')
-      if (started) return
-      started = true
-      await reportHostDisk()
-      // The server-host decision is published from the backend's own startup as
-      // fire-and-forget, so without this barrier start() can return while
-      // ctx.participationDecision is still null and the first inbound archive
-      // request is refused 'archiving-not-permitted' for no reason an operator
-      // could see. Evaluating once here makes start() returning mean custody
-      // has an answer, whatever that answer is.
-      await backend.api.getParticipationStatus?.().catch?.(() => {})
-      logger?.runtime?.info?.('Relay universal backend ready', {
-        platform: 'relay',
-        networkId: networkConfig.networkId || 'peartube-main',
-        hostDiskMeasured: hostDisk.measured,
-        ...(hostDisk.measured ? {} : { hostDiskReason: hostDisk.reason })
-      })
+      return startRelayRuntime(state)
     },
 
     async followPublisher (request) {
@@ -606,88 +1099,12 @@ export async function createRelayRuntime ({ config, logger, dependencies = null,
       return backend.api.releaseAuthorizedArchive(request)
     },
 
-    // Ask the network to mirror a rendition this relay already holds. The
-    // archive network resolves the byte ranges from the signed manifest itself;
-    // the locators are kept here only so status can read the archivists'
-    // possession evidence back for this exact rendition.
-    async requestArchiveMirror ({ publicationId, renditionId, locators = [] } = {}) {
-      if (!reseedEnabled) return { requested: false, reason: 'reseed-disabled' }
-      if (!HEX_32.test(publicationId || '') || !HEX_32.test(renditionId || '')) {
-        return { requested: false, reason: 'invalid-rendition', errorCode: 'ARCHIVE_REQUEST_INVALID' }
-      }
-      if (typeof backend.api.requestArchivePublication !== 'function') {
-        return { requested: false, reason: 'unavailable', errorCode: 'ARCHIVE_NETWORK_UNAVAILABLE' }
-      }
-      let result = null
-      try {
-        result = await backend.api.requestArchivePublication({ publicationId, renditionId })
-      } catch (error) {
-        result = { success: false, status: 'failed', requestId: '', errorCode: 'ARCHIVE_REQUEST_FAILED' }
-        logger?.runtime?.warn?.('Archive mirror request failed', {
-          publicationId,
-          renditionId,
-          error: error?.message || String(error)
-        })
-      }
-      archiveRequests.set(`${publicationId}:${renditionId}`, {
-        publicationId,
-        renditionId,
-        locators: Array.isArray(locators) ? locators : [],
-        status: String(result?.status || 'failed'),
-        requestId: String(result?.requestId || ''),
-        errorCode: result?.errorCode || null,
-        requestedAt: Date.now()
-      })
-      return {
-        requested: result?.success === true,
-        status: String(result?.status || 'failed'),
-        requestId: String(result?.requestId || ''),
-        errorCode: result?.errorCode || null
-      }
+    async requestArchiveMirror (args) {
+      return requestArchiveMirrorAction(state, args)
     },
 
-    // One ceiling governs both the local store and the pledges this relay takes
-    // on for other relays. `headroomBytes` is the storage guard's live number:
-    // null when neither the byte budget nor the free-disk floor is measurable.
-    async applyArchiveCapacity ({ headroomBytes = null } = {}) {
-      if (!reseedEnabled) return { applied: false, reason: 'reseed-disabled' }
-      if (typeof backend.api.getArchiveParticipation !== 'function' ||
-          typeof backend.api.setArchiveParticipation !== 'function') {
-        return { applied: false, reason: 'archive-participation-unavailable' }
-      }
-      const status = await backend.api.getArchiveParticipation({})
-      if (status?.success === false) {
-        return { applied: false, reason: status.errorCode || 'archive-participation-unavailable' }
-      }
-      const reservedBytes = Number.isSafeInteger(status?.reservedBytes) && status.reservedBytes > 0
-        ? status.reservedBytes
-        : 0
-      // A measured headroom already has the pledged bytes on disk subtracted
-      // from it. When neither storage signal is measurable the configured
-      // ceiling is all there is, and what is already pledged comes off it.
-      const measured = Number.isSafeInteger(headroomBytes) && headroomBytes > 0 ? headroomBytes : null
-      const room = measured ?? (headroomBytes == null ? Math.max(0, maxBytes - reservedBytes) : 0)
-      // Floored at the bytes already pledged. setParticipation releases EVERY
-      // local pledge when the new capacity falls under what is reserved
-      // (archive/permissionless-network.js), so a full disk must never be handed
-      // down as an instruction to abandon custody. A relay at its ceiling
-      // reports capacity == reserved, which the ingest path reads as no room for
-      // anything new while every existing pledge stays exactly where it is.
-      const capacityBytes = reservedBytes + room
-      const applied = await backend.api.setArchiveParticipation({
-        enabled: true,
-        capacityBytes,
-        maxRequestBytes: room,
-        // A dedicated relay is a public archivist, not a consumer device hiding
-        // in a crowd: it accepts every request it has room for. The
-        // probabilistic decline exists so a phone cannot be mapped by what it
-        // agrees to keep, which is not a relay's problem.
-        acceptancePermille: 1000
-      })
-      if (applied?.success === false) {
-        return { applied: false, reason: applied.errorCode || 'archive-participation-unavailable' }
-      }
-      return { applied: true, capacityBytes, maxRequestBytes: room, reservedBytes }
+    async applyArchiveCapacity (args) {
+      return applyArchiveCapacityAction(state, args)
     },
 
     async getArchiveParticipation () {
@@ -695,160 +1112,111 @@ export async function createRelayRuntime ({ config, logger, dependencies = null,
       return backend.api.getArchiveParticipation({}) || {}
     },
 
-    // What this relay has asked the network to mirror, each with the archivist
-    // evidence backing it at this moment.
     getArchiveMirrorRequests () {
-      return Array.from(archiveRequests.values(), (record) => {
-        const evidence = mirrorEvidence(record)
-        return {
-          publicationId: record.publicationId,
-          renditionId: record.renditionId,
-          status: record.status,
-          requestId: record.requestId,
-          errorCode: record.errorCode,
-          requestedAt: record.requestedAt,
-          archivists: evidence.length,
-          freshArchivists: evidence.reduce(
-            (count, entry) => count + (entry?.passed === true && entry?.recent === true ? 1 : 0),
-            0
-          )
-        }
-      })
+      return listArchiveMirrorRequests(state.archiveRequests, backend)
     },
 
     async refreshAuthorization (trustedClients) {
-      if (typeof backend.api.refreshScopedAuthorization !== 'function') return false
-      const result = await backend.api.refreshScopedAuthorization({
-        trustedClients: normalizeHexList(trustedClients)
-      })
-      return result?.status === 'updated'
+      return refreshRelayAuthorization(backend, trustedClients)
     },
 
     async requestCatalogSync () {
-      if (typeof backend.api.reannounceArchiveRequests === 'function') {
-        await backend.api.reannounceArchiveRequests().catch(() => {})
-      }
-      const locators = await backend.api.listBootstrapLocators()
-      return Array.isArray(locators) ? locators.length : 0
+      return requestRelayCatalogSync(backend)
     },
 
-    async resolveCandidate (candidate = {}) {
-      const publisherId = candidate.publisherId || null
-      if (!publisherId) return { ...candidate }
-      const catalog = await backend.api.resolveLocalPublisherCatalog({ publisherId })
-      return { ...candidate, publisherId, catalog }
+    async resolveCandidate (candidate) {
+      return resolveRelayCandidate(backend, candidate)
     },
 
     setCandidateHandler () {
-      // Candidate delivery belongs to the backend's scoped publisher manager.
-      // Callers explicitly follow authenticated publishers through followPublisher.
+      /* candidate delivery belongs to the backend scoped publisher manager */
     },
 
     async getDiagnostics () {
-      const [scoped, locators, seedRetention, archive, storage, archiveParticipation, policyResult] = await Promise.all([
-        backend.api.getScopedNetworkDiagnostics(),
-        backend.api.listBootstrapLocators(),
-        backend.seedingManager?.getStatus?.() || {},
-        backend.api.getArchiveOperatorStatus?.({}) || {},
-        backend.api.getStorageStats?.() || {},
-        backend.api.getArchiveParticipation?.({}) || {},
-        backend.api.getNetworkPolicy?.() || {}
-      ])
-      const counters = scoped?.counters || {}
-      const swarm = backend.ctx?.swarm
-      const publisherTopics = purposeCount(scoped?.topics, 'publisher')
-      const assetTopics = purposeCount(scoped?.topics, 'asset')
-      const policy = policyResult?.policy || {}
-      return {
-        policy: {
-          policyVersion: Number(policy.policyVersion) || 0,
-          consentVersion: Number(policy.consentVersion) || 0,
-          migrationRequired: policy.migrationRequired !== false,
-          effectiveRole: policy.effectiveRole || 'watch-only',
-          permissions: {
-            contribute: policy.permissions?.contribute === true,
-            archive: policy.permissions?.archive === true
-          },
-          contributionBudgetBytes: Number(policy.contributionBudgetBytes) || 0,
-          archiveBudgetBytes: Number(policy.archiveBudgetBytes) || 0,
-          selectedIndexerCount: Number(scoped?.selectedIndexerCount) || 0,
-          selectedIndexers: Array.isArray(scoped?.selectedIndexers)
-            ? scoped.selectedIndexers.slice(0, 8).map((indexer, index) => ({
-                id: String(indexer?.id || `selected-${index + 1}`).slice(0, 32),
-                status: String(indexer?.status || 'unknown').slice(0, 32)
-              }))
-            : []
-        },
-        network: {
-          status: scoped?.status || 'unknown',
-          protocolMajor: scoped?.protocolMajor ?? PROTOCOL_VERSION,
-          networkId: scoped?.networkId || networkConfig.networkId || 'peartube-main',
-          peers: swarm?.peers?.size || 0,
-          connections: swarm?.connections?.size || 0,
-          dht: {
-            bootstrapped: swarm?.dht?.bootstrapped ?? null,
-            firewalled: swarm?.dht?.firewalled ?? null,
-            online: swarm?.dht?.online ?? null
-          },
-          offline: Boolean(swarm?._peartubeOffline),
-          offlineReason: swarm?._peartubeOfflineReason || null,
-          listenResolved: Boolean(swarm?._peartubeListenResolved),
-          lastErrors: Array.isArray(scoped?.recentErrors)
-            ? scoped.recentErrors.slice(-8).map(error => String(error?.code || 'SCOPED_NETWORK_ERROR').slice(0, 64))
-            : []
-        },
-        publicWork: {
-          activeAnnouncements: Number(scoped?.publicWork?.activeAnnouncements) || 0,
-          activeServes: Number(scoped?.publicWork?.activeServes) || 0,
-          servedBytes: Number(scoped?.publicWork?.servedBytes) || 0
-        },
-        publisher: {
-          catalogs: counter(counters, 'publisherCatalogs', 'catalogs') || publisherTopics,
-          followed: counter(counters, 'publishersFollowed', 'followedPublishers'),
-          lastErrorCode: scoped?.lastErrorCode || null
-        },
-        bootstrap: {
-          // The scoped runtime reports 'active' once it is running; it never
-          // reports 'ready', so comparing against that pinned joined to false
-          // even while the bootstrap scope was live.
-          joined: bootstrapEnabled && scoped?.status === 'active',
-          locators: Array.isArray(locators) ? locators.length : 0,
-          rejected: counter(counters, 'locatorsRejected', 'bootstrapRejected'),
-          maxLocators: counter(counters, 'maxLocators', 'bootstrapLimit')
-        },
-        assets: {
-          retainedRenditions: counter(counters, 'retainedRenditions'),
-          activeSessions: purposeCount(scoped?.sessions, 'asset'),
-          topics: assetTopics,
-          activeServes: Number(scoped?.publicWork?.activeServes) || 0,
-          servedBytes: Number(scoped?.publicWork?.servedBytes) || 0,
-          maxSessions: counter(counters, 'maxAssetSessions', 'assetSessionLimit')
-        },
-        seedRetention: seedRetention || {},
-        archive: archive || {},
-        storage: storage || {},
-        // Both directions of re-seeding: what this relay asked the network to
-        // mirror, and what it is mirroring for other relays.
-        archiveRequests: this.getArchiveMirrorRequests(),
-        archiveParticipation: archiveParticipation || {},
-        // Why custody is open or shut: without a real free-disk reading the
-        // participation decision refuses every pledge, and an operator should
-        // be able to see that rather than infer it.
-        archiveHostDisk: { ...hostDisk }
-      }
+      return getRelayDiagnostics(state)
     },
 
     async getNetworkStats () {
-      return this.getDiagnostics()
+      return getRelayDiagnostics(state)
     },
 
     async close () {
-      if (closed) return
-      closed = true
-      await backend.destroy()
-      await localFileSourceGrants.close()
+      return closeRelayRuntime(state)
     }
   }
+}
 
-  return runtime
+export async function createRelayRuntime ({ config, logger, dependencies = null, blockOffload = null } = {}) {
+  if (!config || !config.storage || !config.storage.path) {
+    throw new Error('relay runtime requires config.storage.path')
+  }
+  const backendFactory = (dependencies && dependencies.createBackendContext) || createBackendContext
+  const runtimeConfig = resolveRelayRuntimeConfig(config)
+  const archiveRequests = new Map()
+  const localFileSourceGrants = createLocalFileSourceGrantRegistry({
+    fs: (dependencies && dependencies.fs) || runtimeFs
+  })
+  const torbox = config.archive && config.archive.torbox
+  const torBoxSourceGrants = createTorBoxSourceGrants({
+    apiKey: (torbox && torbox.apiKey) || '',
+    chunkBytes: torbox && torbox.chunkBytes,
+    fetchImpl: fetch
+  })
+
+  const sourceAdapters = buildSourceAdapters({
+    config,
+    dependencies,
+    localFileSourceGrants,
+    torBoxSourceGrants,
+    logger
+  })
+  const configuredSourceAdapterIds = Object.freeze(
+    [...sourceAdapters.values()].filter((adapter) => adapter.enabled).map((adapter) => adapter.adapterId).sort()
+  )
+
+  let backend
+  try {
+    backend = await openRelayBackend(
+      backendFactory,
+      buildBackendOptions({
+        config,
+        networkConfig: runtimeConfig.networkConfig,
+        trustedBootstrapSigners: runtimeConfig.trustedBootstrapSigners,
+        trustedBootstrapRootIds: runtimeConfig.trustedBootstrapRootIds,
+        bootstrapEnabled: runtimeConfig.bootstrapEnabled,
+        reseedEnabled: runtimeConfig.reseedEnabled,
+        maxBytes: runtimeConfig.maxBytes,
+        maxConcurrent: runtimeConfig.maxConcurrent,
+        blockOffload,
+        sourceAdapters,
+        dependencies,
+        logger
+      })
+    )
+  } catch (backendError) {
+    // Adapters and the local-file grant registry are owned once built, so a
+    // failed open must tear them down through the same closeResources policy
+    // closeRelayRuntime uses, keeping the backend error primary.
+    await closeResources([...sourceAdapters.values(), localFileSourceGrants], backendError)
+  }
+
+  const state = {
+    config,
+    logger,
+    dependencies,
+    backend,
+    networkConfig: runtimeConfig.networkConfig,
+    bootstrapEnabled: runtimeConfig.bootstrapEnabled,
+    reseedEnabled: runtimeConfig.reseedEnabled,
+    maxBytes: runtimeConfig.maxBytes,
+    archiveRequests,
+    localFileSourceGrants,
+    sourceAdapters,
+    configuredSourceAdapterIds,
+    closed: false,
+    started: false,
+    hostDisk: { measured: false, reason: 'not-measured', freeBytes: null, totalBytes: null }
+  }
+
+  return createRelayRuntimeSurface(state)
 }

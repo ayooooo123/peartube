@@ -49,6 +49,15 @@ jobs:
       - name: Run changed-file linter
         run: npm run lint:changed
 
+      - name: Test ast-grep rules
+        run: npm run lint:ast:test
+
+      - name: Scan AST regressions
+        run: npm run lint:ast
+
+      - name: Run targeted oxlint
+        run: npm run lint:oxlint
+
   backend-test:
     runs-on: ubuntu-latest
     timeout-minutes: 20

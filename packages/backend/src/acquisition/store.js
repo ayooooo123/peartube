@@ -10,9 +10,10 @@ import {
   assertNoPrivateSourceMaterial,
   normalizeAcquisitionRequest,
   normalizePrincipalId,
-  normalizePublicTitle,
-  PUBLICATION_MEDIA_FIELDS,
-  projectAcquisitionJob
+  normalizePublicationMetadata,
+  PUBLICATION_METADATA_FIELDS,
+  projectAcquisitionJob,
+  normalizeCoordinationRecord
 } from './contract.js'
 
 const JOB_PREFIX = 'acquisition/v1/job/'
@@ -20,8 +21,15 @@ const IDEMPOTENCY_PREFIX = 'acquisition/v1/idempotency/'
 const ACTIVE_PREFIX = 'acquisition/v1/active/'
 const EVENT_PREFIX = 'acquisition/v1/event/'
 const LEGACY_MARKER_PREFIX = 'acquisition/v1/migration/companion-ingest-v1/'
+const COORDINATION_PREFIX = 'acquisition/v1/coordination/job/'
+const COORDINATION_ASSIGNMENT_PREFIX = 'acquisition/v1/coordination/by-assignment/'
+const COORDINATION_REQUEST_PREFIX = 'acquisition/v1/coordination/by-request/'
+const COORDINATION_SUPERSEDED_REQUEST_PREFIX = 'acquisition/v1/coordination/superseded-request/'
+const COORDINATION_ACTIVE_PREFIX = 'acquisition/v1/coordination/active/'
+const MAX_SUPERSEDED_REQUEST_IDS = 8
 const STATES = new Set(ACQUISITION_STATES)
 const TERMINAL = new Set(TERMINAL_ACQUISITION_STATES)
+const TERMINAL_COORDINATION_PHASES = new Set(['completed', 'cancelled', 'failed'])
 const NEXT = new Map([
   ['queued', 'acquiring'],
   ['acquiring', 'verifying'],
@@ -31,6 +39,11 @@ const NEXT = new Map([
 const ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const MIGRATION_MARKER = /^[A-Za-z0-9_-]{32}$/
+const HEX64 = /^[0-9a-f]{64}$/
+function hex64 (value, name = 'id') {
+  if (typeof value !== 'string' || !HEX64.test(value)) fail('ACQUISITION_PERSISTENCE_INVALID', `${name} must be 64-hex`, 500)
+  return value
+}
 const COUNTER_FIELDS = ['sourceBytesRead', 'sourceBytesAccepted', 'bytesAcquired', 'verifiedBytes', 'committedBytes', 'retainedBytes', 'stagingBytes', 'stagingPeakBytes']
 const PATCH_FIELDS = new Set([...COUNTER_FIELDS, 'expectedIdentity', 'attempts', 'startedAt', 'finishedAt', 'errorCode', 'recoverable', 'verifiedPrefix', 'verifiedAsset', 'publication'])
 
@@ -92,28 +105,6 @@ function boundedMetadataValue (value) {
 }
 
 
-function normalizePublicationMetadata (input) {
-  if (input == null) return null
-  if (!plainObject(input) || Object.keys(input).some(key => key !== 'title' && key !== 'sourceFileName' && key !== 'mediaContext')) {
-    fail('ACQUISITION_PERSISTENCE_INVALID', 'publication metadata is invalid', 500)
-  }
-  if (input.title !== null && input.title !== undefined) {
-    normalizePublicTitle(input.title, 'ACQUISITION_PERSISTENCE_INVALID')
-  }
-  if (input.sourceFileName !== null && input.sourceFileName !== undefined &&
-      (typeof input.sourceFileName !== 'string' || !/^[^/\\]{1,255}$/.test(input.sourceFileName))) {
-    fail('ACQUISITION_PERSISTENCE_INVALID', 'publication source file name is invalid', 500)
-  }
-  if (input.mediaContext !== null) {
-    if (!plainObject(input.mediaContext) || Object.keys(input.mediaContext).some(key => !PUBLICATION_MEDIA_FIELDS.has(key))) {
-      fail('ACQUISITION_PERSISTENCE_INVALID', 'publication media context is invalid', 500)
-    }
-    if (!Object.values(input.mediaContext).every(boundedMetadataValue)) {
-      fail('ACQUISITION_PERSISTENCE_INVALID', 'publication media context value is invalid', 500)
-    }
-  }
-  return input
-}
 function normalizeRequesterPublisherIds (input) {
   if (!Array.isArray(input) || input.length > 64) fail('ACQUISITION_PERSISTENCE_INVALID', 'requester publisher scope is invalid', 500)
   const values = input.map(value => id(value, 'requester publisher id'))
@@ -131,40 +122,78 @@ function mergedPublicationMetadata (existing, incoming) {
   if (existing == null) return incoming
   const merged = { ...existing }
   let changed = false
-  for (const field of ['title', 'sourceFileName', 'mediaContext']) {
+  for (const field of PUBLICATION_METADATA_FIELDS) {
     if (merged[field] != null || incoming[field] == null) continue
     merged[field] = incoming[field]
     changed = true
   }
   return changed ? merged : null
 }
+function validatePatchIdentity (patch, current) {
+  if (patch.expectedIdentity === undefined) return undefined
+  const identity = normalizeIdentity(patch.expectedIdentity)
+  if (identity === null) {
+    fail('ACQUISITION_PERSISTENCE_INVALID', 'expectedIdentity cannot change after acquisition starts', 500)
+  }
+  if (current.expectedIdentity !== null &&
+      (identity.kind !== current.expectedIdentity.kind || identity.value !== current.expectedIdentity.value)) {
+    fail('ACQUISITION_PERSISTENCE_INVALID', 'expectedIdentity cannot change after acquisition starts', 500)
+  }
+  if (current.bytesAcquired !== 0 || current.verifiedBytes !== 0 || current.committedBytes !== 0) {
+    fail('ACQUISITION_PERSISTENCE_INVALID', 'expectedIdentity cannot change after acquisition starts', 500)
+  }
+  return identity
+}
+
+function applyPatchCounters (result, patch, current) {
+  for (const field of COUNTER_FIELDS) {
+    if (patch[field] === undefined) continue
+    result[field] = uint(patch[field], field)
+    if (field !== 'stagingBytes' && result[field] < current[field]) {
+      fail('ACQUISITION_ACCOUNTING_REGRESSION', `${field} must be monotonic`)
+    }
+  }
+  if (patch.attempts !== undefined) {
+    result.attempts = uint(patch.attempts, 'attempts')
+    if (result.attempts < current.attempts) {
+      fail('ACQUISITION_ACCOUNTING_REGRESSION', 'attempts must be monotonic')
+    }
+  }
+}
+
+function applyPatchMetadata (result, patch, current) {
+  for (const field of ['startedAt', 'finishedAt']) {
+    if (patch[field] !== undefined) {
+      result[field] = patch[field] == null ? null : uint(patch[field], field)
+    }
+  }
+  if (patch.errorCode !== undefined) {
+    if (patch.errorCode !== null && (typeof patch.errorCode !== 'string' || !ERROR_CODE.test(patch.errorCode))) {
+      fail('ACQUISITION_PERSISTENCE_INVALID', 'errorCode is invalid', 500)
+    }
+    result.errorCode = patch.errorCode
+  }
+  if (patch.recoverable !== undefined) {
+    if (typeof patch.recoverable !== 'boolean') {
+      fail('ACQUISITION_PERSISTENCE_INVALID', 'recoverable is invalid', 500)
+    }
+    result.recoverable = patch.recoverable
+  }
+  if (patch.verifiedPrefix !== undefined) result.verifiedPrefix = normalizeVerifiedPrefix(patch.verifiedPrefix, current.expectedBytes)
+  if (patch.verifiedAsset !== undefined) result.verifiedAsset = normalizeVerifiedAsset(patch.verifiedAsset, current.expectedBytes)
+  if (patch.publication !== undefined) result.publication = normalizePublication(patch.publication)
+}
+
 function normalizePatch (patch, current) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) fail('ACQUISITION_PERSISTENCE_INVALID', 'job patch is invalid', 500)
   for (const key of Object.keys(patch)) if (!PATCH_FIELDS.has(key)) fail('ACQUISITION_PERSISTENCE_INVALID', `unknown job patch field ${key}`, 500)
   const result = {}
-  for (const field of COUNTER_FIELDS) {
-    if (patch[field] === undefined) continue
-    result[field] = uint(patch[field], field)
-    if (field !== 'stagingBytes' && result[field] < current[field]) fail('ACQUISITION_ACCOUNTING_REGRESSION', `${field} must be monotonic`)
+  applyPatchCounters(result, patch, current)
+  const identity = validatePatchIdentity(patch, current)
+  if (identity !== undefined) {
+    result.expectedIdentity = identity
   }
-  if (patch.expectedIdentity !== undefined) {
-    result.expectedIdentity = normalizeIdentity(patch.expectedIdentity)
-    if (result.expectedIdentity === null || (current.expectedIdentity !== null &&
-        (result.expectedIdentity.kind !== current.expectedIdentity.kind || result.expectedIdentity.value !== current.expectedIdentity.value)) ||
-        current.bytesAcquired !== 0 || current.verifiedBytes !== 0 || current.committedBytes !== 0) {
-      fail('ACQUISITION_PERSISTENCE_INVALID', 'expectedIdentity cannot change after acquisition starts', 500)
-    }
-  }
-  if (patch.attempts !== undefined) { result.attempts = uint(patch.attempts, 'attempts'); if (result.attempts < current.attempts) fail('ACQUISITION_ACCOUNTING_REGRESSION', 'attempts must be monotonic') }
-  for (const field of ['startedAt', 'finishedAt']) if (patch[field] !== undefined) result[field] = patch[field] == null ? null : uint(patch[field], field)
-  if (patch.errorCode !== undefined) {
-    if (patch.errorCode !== null && (typeof patch.errorCode !== 'string' || !ERROR_CODE.test(patch.errorCode))) fail('ACQUISITION_PERSISTENCE_INVALID', 'errorCode is invalid', 500)
-    result.errorCode = patch.errorCode
-  }
-  if (patch.recoverable !== undefined) { if (typeof patch.recoverable !== 'boolean') fail('ACQUISITION_PERSISTENCE_INVALID', 'recoverable is invalid', 500); result.recoverable = patch.recoverable }
-  if (patch.verifiedPrefix !== undefined) result.verifiedPrefix = normalizeVerifiedPrefix(patch.verifiedPrefix, current.expectedBytes)
-  if (patch.verifiedAsset !== undefined) result.verifiedAsset = normalizeVerifiedAsset(patch.verifiedAsset, current.expectedBytes)
-  if (patch.publication !== undefined) result.publication = normalizePublication(patch.publication)
+  applyPatchMetadata(result, patch, current)
   return result
 }
 function validateCounters (job) {
@@ -183,7 +212,7 @@ function validateDurableJob (job) {
   if (typeof job.recoverable !== 'boolean') fail('ACQUISITION_PERSISTENCE_INVALID', 'job recoverable is invalid', 500)
   if (typeof job.isRemote !== 'boolean') fail('ACQUISITION_PERSISTENCE_INVALID', 'job remote-origin flag is invalid', 500)
   if (job.deferredInput !== undefined && typeof job.deferredInput !== 'boolean') fail('ACQUISITION_PERSISTENCE_INVALID', 'job deferred-input flag is invalid', 500)
-  normalizeRequesterPublisherIds(job.requesterPublisherIds); normalizePublicationMetadata(job.publicationMetadata); normalizeIdentity(job.expectedIdentity); normalizeVerifiedPrefix(job.verifiedPrefix, job.expectedBytes); normalizeVerifiedAsset(job.verifiedAsset, job.expectedBytes); normalizePublication(job.publication)
+  normalizeRequesterPublisherIds(job.requesterPublisherIds); normalizePublicationMetadata(job.publicationMetadata, 'ACQUISITION_PERSISTENCE_INVALID'); normalizeIdentity(job.expectedIdentity); normalizeVerifiedPrefix(job.verifiedPrefix, job.expectedBytes); normalizeVerifiedAsset(job.verifiedAsset, job.expectedBytes); normalizePublication(job.publication)
   assertNoPrivateSourceMaterial({
     ...job,
     request: { ...job.request, sourceFileName: null },
@@ -192,6 +221,44 @@ function validateDurableJob (job) {
   return job
 }
 function stateEventType (state) { return `acquisition.${state}` }
+function validateListFilter ({ cursor, limit, states, principalId }) {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 64) fail('ACQUISITION_LIST_INVALID', 'list limit is invalid', 400)
+  if (cursor != null) id(cursor, 'cursor')
+  let selectedStates = null
+  if (states != null) {
+    selectedStates = new Set(states)
+    if ([...selectedStates].some(state => !STATES.has(state)) || selectedStates.size !== states.length) {
+      fail('ACQUISITION_LIST_INVALID', 'list states are invalid', 400)
+    }
+  }
+  const owner = principalId == null ? null : normalizePrincipalId(principalId)
+  return { selectedStates, owner }
+}
+
+function paginateJobs (jobs, cursor, limit) {
+  jobs.sort((left, right) => right.updatedAt - left.updatedAt || left.acquisitionId.localeCompare(right.acquisitionId))
+  const found = cursor == null ? -1 : jobs.findIndex(job => job.acquisitionId === cursor)
+  const start = found < 0 ? 0 : found + 1
+  const page = jobs.slice(start, start + limit)
+  const nextCursor = start + page.length < jobs.length && page.length > 0 ? page[page.length - 1].acquisitionId : null
+  return { items: page.map(clone), cursor: nextCursor }
+}
+
+function buildCoordinationRecord (idVal, input, current, timestamp) {
+  if (current && TERMINAL_COORDINATION_PHASES.has(current.phase) && input.phase !== current.phase) {
+    fail('COORDINATION_TERMINAL', `coordination is ${current.phase}`)
+  }
+  return normalizeCoordinationRecord({
+    ...input,
+    acquisitionId: idVal,
+    supersededRequestIds: input.supersededRequestIds ?? current?.supersededRequestIds ?? [],
+    budget: input.budget ?? current?.budget ?? null,
+    output: input.output ?? current?.output ?? null,
+    createdAt: current?.createdAt ?? timestamp(),
+    updatedAt: timestamp()
+  })
+}
+
 
 export function createAcquisitionStore ({ bee, now = () => Date.now() } = {}) {
   if (!bee || typeof bee.get !== 'function' || typeof bee.batch !== 'function' || typeof bee.createReadStream !== 'function') throw new TypeError('acquisition store requires an atomic Hyperbee-compatible store')
@@ -202,6 +269,40 @@ export function createAcquisitionStore ({ bee, now = () => Date.now() } = {}) {
   const idempotencyKey = digest => `${IDEMPOTENCY_PREFIX}${digest}`
   const activeKey = acquisitionId => `${ACTIVE_PREFIX}${acquisitionId}`
   const eventKey = (acquisitionId, sequence) => `${EVENT_PREFIX}${acquisitionId}/${String(sequence).padStart(16, '0')}`
+  const coordinationKey = acquisitionId => `${COORDINATION_PREFIX}${acquisitionId}`
+  const coordinationAssignmentKey = assignmentId => `${COORDINATION_ASSIGNMENT_PREFIX}${assignmentId}`
+  const coordinationRequestKey = requestId => `${COORDINATION_REQUEST_PREFIX}${requestId}`
+  const coordinationSupersededRequestKey = requestId => `${COORDINATION_SUPERSEDED_REQUEST_PREFIX}${requestId}`
+  const coordinationActiveKey = acquisitionId => `${COORDINATION_ACTIVE_PREFIX}${acquisitionId}`
+  function buildCoordinationSaveOperations (idVal, current, record) {
+    const operations = []
+    if (current) {
+      if (current.assignmentId && current.assignmentId !== record.assignmentId) {
+        operations.push(['del', coordinationAssignmentKey(current.assignmentId)])
+      }
+      if (current.requestId && current.requestId !== record.requestId) {
+        operations.push(['del', coordinationRequestKey(current.requestId)])
+        operations.push(['put', coordinationSupersededRequestKey(current.requestId), {
+          acquisitionId: idVal,
+          replacedBy: record.requestId,
+          supersededAt: timestamp()
+        }])
+      }
+    }
+    operations.push(['put', coordinationKey(idVal), record])
+    if (record.assignmentId) {
+      operations.push(['put', coordinationAssignmentKey(record.assignmentId), { acquisitionId: idVal }])
+    }
+    if (record.requestId) {
+      operations.push(['put', coordinationRequestKey(record.requestId), { acquisitionId: idVal }])
+    }
+    if (TERMINAL_COORDINATION_PHASES.has(record.phase)) {
+      operations.push(['del', coordinationActiveKey(idVal)])
+    } else {
+      operations.push(['put', coordinationActiveKey(idVal), { acquisitionId: idVal }])
+    }
+    return operations
+  }
   function timestamp () { const value = now(); if (!Number.isSafeInteger(value) || value < 0) throw new TypeError('now must return a non-negative safe integer'); return value }
   function serialized (operation) { const result = writes.then(operation, operation); writes = result.catch(() => {}); return result }
   async function readUnserialized (key) { const node = await bee.get(key); return node ? decode(node.value) : null }
@@ -265,8 +366,10 @@ export function createAcquisitionStore ({ bee, now = () => Date.now() } = {}) {
         await ensureStateCounts()
         const current = await readUnserialized(jobKey(acquisitionId)); checkedCurrent(current, acquisitionId, expectedVersion, from)
         if (TERMINAL.has(current.state)) fail('ACQUISITION_TERMINAL', `acquisition is ${current.state}`)
-        if (!STATES.has(to) || (to !== 'failed' && to !== 'cancelled' && NEXT.get(current.state) !== to)) fail('ACQUISITION_INVALID_TRANSITION', `${current.state} -> ${to}`)
-        if (to === 'completed') fail('ACQUISITION_PERSISTENCE_INVALID', 'completed transition requires atomic publication', 500)
+        if (!STATES.has(to) || (to !== 'failed' && to !== 'cancelled' && NEXT.get(current.state) !== to)) {
+          fail('ACQUISITION_INVALID_TRANSITION', `${current.state} -> ${to}`)
+        }
+        if (to === 'completed' || to === 'verified') fail('ACQUISITION_PERSISTENCE_INVALID', `${to} transition requires atomic completion`, 500)
         const next = { ...current, ...normalizePatch(patch, current), state: to, version: current.version + 1, updatedAt: timestamp() }
         if (to === 'failed' || to === 'cancelled') next.finishedAt = next.finishedAt ?? next.updatedAt
         else { next.errorCode = null; next.recoverable = false }
@@ -334,20 +437,48 @@ export function createAcquisitionStore ({ bee, now = () => Date.now() } = {}) {
         const operations = [['put', jobKey(acquisitionId), next], ['del', activeKey(acquisitionId)]]; const event = withEventOperations(next, 'acquisition.completed', operations); await atomic(operations); moveStateCount('publishing', 'completed'); return { job: clone(next), event }
       })
     },
+    completeVerified (acquisitionId, { expectedVersion, asset } = {}) {
+      return serialized(async () => {
+        await ensureStateCounts()
+        const current = await readUnserialized(jobKey(acquisitionId)); checkedCurrent(current, acquisitionId, expectedVersion, 'verifying')
+        if (current.isRemote !== true) fail('ACQUISITION_INVALID_TRANSITION', 'only acquisition-only worker jobs complete as verified')
+        const verifiedAsset = normalizeVerifiedAsset(asset ?? current.verifiedAsset, current.expectedBytes)
+        if (!verifiedAsset || current.bytesAcquired !== current.expectedBytes) fail('ACQUISITION_NOT_VERIFIED', 'verified completion requires exact asset bytes')
+        const at = timestamp()
+        const next = {
+          ...current,
+          state: 'verified',
+          version: current.version + 1,
+          bytesAcquired: current.expectedBytes,
+          sourceBytesAccepted: current.expectedBytes,
+          verifiedBytes: current.expectedBytes,
+          verifiedAsset,
+          publication: null,
+          errorCode: null,
+          recoverable: false,
+          finishedAt: at,
+          updatedAt: at
+        }
+        validateDurableJob(next)
+        const operations = [['put', jobKey(acquisitionId), next], ['del', activeKey(acquisitionId)]]
+        const event = withEventOperations(next, 'acquisition.verified', operations)
+        await atomic(operations)
+        moveStateCount('verifying', 'verified')
+        return { job: clone(next), event }
+      })
+    },
+
     async list ({ cursor = null, limit = 64, states = null, principalId = null } = {}) {
       await writes
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 64) fail('ACQUISITION_LIST_INVALID', 'list limit is invalid', 400)
-      if (cursor != null) id(cursor, 'cursor')
-      const selectedStates = states == null ? null : new Set(states)
-      if (selectedStates && ([...selectedStates].some(state => !STATES.has(state)) || selectedStates.size !== states.length)) fail('ACQUISITION_LIST_INVALID', 'list states are invalid', 400)
-      const owner = principalId == null ? null : normalizePrincipalId(principalId)
+      const { selectedStates, owner } = validateListFilter({ cursor, limit, states, principalId })
       const jobs = []
-      for await (const entry of bee.createReadStream({ gte: JOB_PREFIX, lt: `${JOB_PREFIX}\uffff` })) { const job = validateDurableJob(decode(entry.value)); if (owner != null && job.principalId !== owner) continue; if (selectedStates && !selectedStates.has(job.state)) continue; jobs.push(job) }
-      jobs.sort((left, right) => right.updatedAt - left.updatedAt || left.acquisitionId.localeCompare(right.acquisitionId))
-      const found = cursor == null ? -1 : jobs.findIndex(job => job.acquisitionId === cursor)
-      const start = found < 0 ? 0 : found + 1
-      const page = jobs.slice(start, start + limit)
-      return { items: page.map(clone), cursor: start + page.length < jobs.length && page.length > 0 ? page[page.length - 1].acquisitionId : null }
+      for await (const entry of bee.createReadStream({ gte: JOB_PREFIX, lt: `${JOB_PREFIX}\uffff` })) {
+        const job = validateDurableJob(decode(entry.value))
+        if (owner != null && job.principalId !== owner) continue
+        if (selectedStates && !selectedStates.has(job.state)) continue
+        jobs.push(job)
+      }
+      return paginateJobs(jobs, cursor, limit)
     },
     countByState () {
       return serialized(async () => ({ ...(await ensureStateCounts()) }))
@@ -389,6 +520,13 @@ export function createAcquisitionStore ({ bee, now = () => Date.now() } = {}) {
         if (!TERMINAL.has(current.state)) fail('ACQUISITION_JOB_ACTIVE', 'only a finished acquisition can be forgotten', 409)
         const operations = [['del', key], ['del', activeKey(current.acquisitionId)]]
         if (current.idempotencyDigest) operations.push(['del', idempotencyKey(current.idempotencyDigest)])
+        const currentCoord = await readUnserialized(coordinationKey(current.acquisitionId))
+        if (currentCoord) {
+          operations.push(['del', coordinationKey(current.acquisitionId)])
+          operations.push(['del', coordinationActiveKey(current.acquisitionId)])
+          if (currentCoord.assignmentId) operations.push(['del', coordinationAssignmentKey(currentCoord.assignmentId)])
+          if (currentCoord.requestId) operations.push(['del', coordinationRequestKey(currentCoord.requestId)])
+        }
         const prefix = `${EVENT_PREFIX}${current.acquisitionId}/`
         for await (const entry of bee.createReadStream({ gte: prefix, lt: `${prefix}\uffff` })) operations.push(['del', entry.key])
         await atomic(operations)
@@ -434,6 +572,185 @@ export function createAcquisitionStore ({ bee, now = () => Date.now() } = {}) {
         if (operations.length > 0) await atomic(operations)
         for (const state of insertedStates) moveStateCount(null, state)
         return { migrated, skipped }
+      })
+    },
+    saveCoordination (acquisitionId, input) {
+      return serialized(async () => {
+        const idVal = id(acquisitionId, 'acquisitionId')
+        const current = await readUnserialized(coordinationKey(idVal))
+        const record = buildCoordinationRecord(idVal, input, current, timestamp)
+        const operations = buildCoordinationSaveOperations(idVal, current, record)
+        await atomic(operations)
+        return clone(record)
+      })
+    },
+    /**
+     * Atomically rotate the live requestId for an open requested-phase record.
+     * Old reverse pointers are deleted and marked superseded before the new
+     * requestId becomes authoritative. Call before wire dispatch of a re-signed envelope.
+     */
+    replaceCoordinationRequest (acquisitionId, input = {}) {
+      return serialized(async () => {
+        const idVal = id(acquisitionId, 'acquisitionId')
+        const current = await readUnserialized(coordinationKey(idVal))
+        if (!current) fail('COORDINATION_NOT_FOUND', 'no coordination record found for acquisition', 404)
+        if (current.role !== 'requester') fail('COORDINATION_ROLE_INVALID', 'only requester coordination can rotate requestId', 409)
+        if (current.assignmentId != null) fail('COORDINATION_ALREADY_ASSIGNED', 'cannot rotate requestId after assignment', 409)
+        if (current.phase !== 'requested') fail('COORDINATION_PHASE_INVALID', 'request rotation requires requested phase', 409)
+        const nextRequestId = hex64(input.requestId, 'requestId')
+        const superseded = Array.isArray(current.supersededRequestIds) ? [...current.supersededRequestIds] : []
+        const operations = []
+        if (current.requestId && current.requestId !== nextRequestId) {
+          superseded.unshift(current.requestId)
+          while (superseded.length > MAX_SUPERSEDED_REQUEST_IDS) superseded.pop()
+          operations.push(['del', coordinationRequestKey(current.requestId)])
+          operations.push(['put', coordinationSupersededRequestKey(current.requestId), {
+            acquisitionId: idVal,
+            replacedBy: nextRequestId,
+            supersededAt: timestamp()
+          }])
+        }
+        const record = normalizeCoordinationRecord({
+          ...current,
+          ...input,
+          acquisitionId: idVal,
+          role: 'requester',
+          phase: 'requested',
+          requestId: nextRequestId,
+          offerId: null,
+          assignmentId: null,
+          peerId: null,
+          supersededRequestIds: superseded,
+          sourceRef: input.sourceRef ?? current.sourceRef,
+          publisherId: input.publisherId ?? current.publisherId,
+          publicationIntentDigest: input.publicationIntentDigest ?? current.publicationIntentDigest,
+          budget: input.budget ?? current.budget,
+          output: input.output ?? current.output,
+          resultHoldUntil: input.resultHoldUntil ?? current.resultHoldUntil,
+          epoch: input.epoch ?? current.epoch,
+          deadline: input.deadline ?? current.deadline,
+          progress: null,
+          result: null,
+          error: null,
+          createdAt: current.createdAt,
+          updatedAt: timestamp()
+        })
+        operations.push(['put', coordinationKey(idVal), record])
+        operations.push(['put', coordinationRequestKey(record.requestId), { acquisitionId: idVal }])
+        operations.push(['put', coordinationActiveKey(idVal), { acquisitionId: idVal }])
+        await atomic(operations)
+        return clone(record)
+      })
+    },
+    /**
+     * Serialized compare-and-set: only the first assignment wins when the
+     * durable record still has a null assignmentId (or the same assignment).
+     */
+    claimCoordinationAssignment (acquisitionId, input) {
+      return serialized(async () => {
+        const idVal = id(acquisitionId, 'acquisitionId')
+        const current = await readUnserialized(coordinationKey(idVal))
+        if (!current) fail('COORDINATION_NOT_FOUND', 'no coordination record found for acquisition', 404)
+        if (current.role !== 'requester') fail('COORDINATION_ROLE_INVALID', 'only requester coordination can claim an assignment', 409)
+        if (current.assignmentId != null) {
+          if (current.assignmentId === input.assignmentId) return { claimed: false, record: clone(current) }
+          fail('COORDINATION_ALREADY_ASSIGNED', 'acquisition already has a selected assignment', 409)
+        }
+        if (current.phase !== 'requested' && current.phase !== 'assigned') {
+          fail('COORDINATION_PHASE_INVALID', 'assignment claim requires an open request phase', 409)
+        }
+        const record = normalizeCoordinationRecord({
+          ...current,
+          ...input,
+          acquisitionId: idVal,
+          role: 'requester',
+          phase: 'assigned',
+          requestId: current.requestId,
+          sourceRef: input.sourceRef ?? current.sourceRef,
+          publisherId: input.publisherId ?? current.publisherId,
+          publicationIntentDigest: input.publicationIntentDigest ?? current.publicationIntentDigest,
+          budget: input.budget ?? current.budget,
+          output: input.output ?? current.output,
+          supersededRequestIds: current.supersededRequestIds || [],
+          createdAt: current.createdAt,
+          updatedAt: timestamp()
+        })
+        if (!record.assignmentId || !record.offerId || !record.peerId) {
+          fail('COORDINATION_RECORD_INVALID', 'assignment claim requires assignmentId, offerId, and peerId')
+        }
+        const operations = [
+          ['put', coordinationKey(idVal), record],
+          ['put', coordinationAssignmentKey(record.assignmentId), { acquisitionId: idVal }],
+          ['put', coordinationRequestKey(record.requestId), { acquisitionId: idVal }],
+          ['put', coordinationActiveKey(idVal), { acquisitionId: idVal }]
+        ]
+        await atomic(operations)
+        return { claimed: true, record: clone(record) }
+      })
+    },
+    async getCoordination (acquisitionId) {
+      const record = await read(coordinationKey(id(acquisitionId, 'acquisitionId')))
+      return record ? clone(record) : null
+    },
+    async getCoordinationByAssignment (assignmentId) {
+      if (!assignmentId) return null
+      const idVal = hex64(assignmentId, 'assignmentId')
+      const index = await read(coordinationAssignmentKey(idVal))
+      if (!index?.acquisitionId) return null
+      const record = await this.getCoordination(index.acquisitionId)
+      if (!record || record.assignmentId !== idVal) return null
+      return record
+    },
+    async getCoordinationByRequest (requestId) {
+      if (!requestId) return null
+      const idVal = hex64(requestId, 'requestId')
+      const index = await read(coordinationRequestKey(idVal))
+      if (!index?.acquisitionId) return null
+      const record = await this.getCoordination(index.acquisitionId)
+      // Reverse pointer must still name the live requestId; stale rows are ignored.
+      if (!record || record.requestId !== idVal) return null
+      return record
+    },
+    async isSupersededRequest (requestId) {
+      if (!requestId) return false
+      const idVal = hex64(requestId, 'requestId')
+      const index = await read(coordinationSupersededRequestKey(idVal))
+      return Boolean(index?.acquisitionId)
+    },
+    async getSupersededRequest (requestId) {
+      if (!requestId) return null
+      const idVal = hex64(requestId, 'requestId')
+      const index = await read(coordinationSupersededRequestKey(idVal))
+      return index ? clone(index) : null
+    },
+    async listActiveCoordinations () {
+      await writes
+      const results = []
+      for await (const entry of bee.createReadStream({ gte: COORDINATION_ACTIVE_PREFIX, lt: `${COORDINATION_ACTIVE_PREFIX}\uffff` })) {
+        const pointer = decode(entry.value)
+        if (pointer?.acquisitionId) {
+          const record = await readUnserialized(coordinationKey(pointer.acquisitionId))
+          if (record) results.push(clone(record))
+        }
+      }
+      return results
+    },
+    deleteCoordination (acquisitionId) {
+      return serialized(async () => {
+        const idVal = id(acquisitionId, 'acquisitionId')
+        const current = await readUnserialized(coordinationKey(idVal))
+        if (!current) return false
+        const operations = [
+          ['del', coordinationKey(idVal)],
+          ['del', coordinationActiveKey(idVal)]
+        ]
+        if (current.assignmentId) operations.push(['del', coordinationAssignmentKey(current.assignmentId)])
+        if (current.requestId) operations.push(['del', coordinationRequestKey(current.requestId)])
+        for (const oldId of current.supersededRequestIds || []) {
+          operations.push(['del', coordinationSupersededRequestKey(oldId)])
+        }
+        await atomic(operations)
+        return true
       })
     },
     async close () { await writes }
@@ -515,20 +832,105 @@ function legacyPublicationMetadata (job) {
     ? null
     : { title, sourceFileName, mediaContext }
 }
+function safePositiveInt (value, fallback) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : fallback
+}
+
+function resolveLegacyState (legacyState, publication) {
+  if (legacyState === 'completed' && publication !== null) return 'completed'
+  if (legacyState === 'cancelled') return 'cancelled'
+  if (legacyState === 'queued') return 'queued'
+  return 'failed'
+}
+
+function resolveLegacyErrorCode (state, legacy, interrupted) {
+  if (state === 'failed') {
+    if (interrupted) return 'LEGACY_SOURCE_GRANT_REQUIRED'
+    if (ERROR_CODE.test(legacy.errorCode || '')) return legacy.errorCode
+    return 'LEGACY_INGEST_FAILED'
+  }
+  if (state === 'cancelled') return 'CANCELLED'
+  return null
+}
+
+function convertLegacyJob (legacy, { principalId, publisherId, now }) {
+  const acquisitionId = id(legacy.jobId ?? legacy.acquisitionId, 'legacy job id')
+  const expectedBytes = uint(legacy.expectedBytes ?? legacy.request?.expected?.byteLength, 'legacy expectedBytes')
+  if (expectedBytes < 1) fail('ACQUISITION_PERSISTENCE_INVALID', 'legacy expectedBytes is invalid', 500)
+
+  const legacyState = STATES.has(legacy.state) ? legacy.state : 'failed'
+  const interrupted = !TERMINAL.has(legacyState) && legacyState !== 'queued'
+  const publication = legacyPublication(legacy)
+  const state = resolveLegacyState(legacyState, publication)
+  const completed = state === 'completed'
+
+  const at = safePositiveInt(legacy.updatedAt, now())
+  const bytesAcquired = Math.min(expectedBytes, safePositiveInt(legacy.bytesReceived, 0))
+
+  const retentionClass = legacy.retentionClass === 'archive-pin' ? 'archive-pin' : 'contribution-cache'
+  const request = normalizeAcquisitionRequest({
+    schemaVersion: 1,
+    resolutionRef: legacyResolutionRef(acquisitionId),
+    publisherId,
+    retentionClass
+  })
+
+  const verifiedAsset = completed ? {
+    assetId: publication.assetId,
+    key: publication.assetId,
+    treeHash: publication.assetId,
+    length: 1,
+    byteLength: expectedBytes,
+    blockSize: expectedBytes
+  } : null
+
+  const errorCode = resolveLegacyErrorCode(state, legacy, interrupted)
+  const recoverable = state === 'failed' && (interrupted || legacy.recoverable === true)
+  const createdAt = safePositiveInt(legacy.createdAt, at)
+
+  return {
+    schemaVersion: 1,
+    acquisitionId,
+    state,
+    version: 0,
+    principalId,
+    publisherId,
+    requesterPublisherIds: [publisherId],
+    isRemote: false,
+    idempotencyDigest: null,
+    requestFingerprint: null,
+    request,
+    retentionClass: request.retentionClass,
+    publicationMetadata: legacyPublicationMetadata(legacy),
+    expectedBytes,
+    sourceBytesRead: bytesAcquired,
+    sourceBytesAccepted: bytesAcquired,
+    bytesAcquired,
+    verifiedBytes: completed ? expectedBytes : 0,
+    committedBytes: completed ? expectedBytes : 0,
+    retainedBytes: completed ? expectedBytes : 0,
+    stagingBytes: 0,
+    stagingPeakBytes: 0,
+    attempts: 0,
+    startedAt: null,
+    finishedAt: TERMINAL.has(state) ? at : null,
+    verifiedPrefix: null,
+    verifiedAsset,
+    publication: completed ? publication : null,
+    errorCode,
+    recoverable,
+    createdAt,
+    updatedAt: at
+  }
+}
+
 export async function migrateLegacyIngest ({ legacyStore, acquisitionStore, legacyPrincipalId = 'local', legacyPublisherId = 'local', now = () => Date.now() } = {}) {
   if (!acquisitionStore || typeof acquisitionStore.importLegacyPublicJobs !== 'function') throw new TypeError('acquisitionStore is required')
   if (typeof now !== 'function') throw new TypeError('now must be a function')
-  const principalId = normalizePrincipalId(legacyPrincipalId); const publisherId = id(legacyPublisherId, 'legacyPublisherId'); const imported = []
-  for (const legacy of await legacyPublicJobs(legacyStore)) {
-    const acquisitionId = id(legacy.jobId ?? legacy.acquisitionId, 'legacy job id'); const expectedBytes = uint(legacy.expectedBytes ?? legacy.request?.expected?.byteLength, 'legacy expectedBytes')
-    if (expectedBytes < 1) fail('ACQUISITION_PERSISTENCE_INVALID', 'legacy expectedBytes is invalid', 500)
-    const legacyState = STATES.has(legacy.state) ? legacy.state : 'failed'; const interrupted = !TERMINAL.has(legacyState) && legacyState !== 'queued'; const publication = legacyPublication(legacy); const completed = legacyState === 'completed' && publication !== null
-    const state = completed ? 'completed' : (legacyState === 'cancelled' ? 'cancelled' : (legacyState === 'failed' ? 'failed' : (legacyState === 'queued' ? 'queued' : 'failed')))
-    const at = Number.isSafeInteger(legacy.updatedAt) && legacy.updatedAt >= 0 ? legacy.updatedAt : now(); const bytesAcquired = Math.min(expectedBytes, Number.isSafeInteger(legacy.bytesReceived) && legacy.bytesReceived >= 0 ? legacy.bytesReceived : 0)
-    const request = normalizeAcquisitionRequest({ schemaVersion: 1, resolutionRef: legacyResolutionRef(acquisitionId), publisherId, retentionClass: legacy.retentionClass === 'archive-pin' ? 'archive-pin' : 'contribution-cache' })
-    const verifiedAsset = completed ? { assetId: publication.assetId, key: publication.assetId, treeHash: publication.assetId, length: 1, byteLength: expectedBytes, blockSize: expectedBytes } : null
-    imported.push({ schemaVersion: 1, acquisitionId, state, version: 0, principalId, publisherId, requesterPublisherIds: [publisherId], isRemote: false, idempotencyDigest: null, requestFingerprint: null, request, retentionClass: request.retentionClass, publicationMetadata: legacyPublicationMetadata(legacy), expectedBytes, sourceBytesRead: bytesAcquired, sourceBytesAccepted: bytesAcquired, bytesAcquired, verifiedBytes: completed ? expectedBytes : 0, committedBytes: completed ? expectedBytes : 0, retainedBytes: completed ? expectedBytes : 0, stagingBytes: 0, stagingPeakBytes: 0, attempts: 0, startedAt: null, finishedAt: TERMINAL.has(state) ? at : null, verifiedPrefix: null, verifiedAsset, publication: completed ? publication : null, errorCode: state === 'failed' ? (interrupted ? 'LEGACY_SOURCE_GRANT_REQUIRED' : (ERROR_CODE.test(legacy.errorCode || '') ? legacy.errorCode : 'LEGACY_INGEST_FAILED')) : (state === 'cancelled' ? 'CANCELLED' : null), recoverable: state === 'failed' && (interrupted || legacy.recoverable === true), createdAt: Number.isSafeInteger(legacy.createdAt) && legacy.createdAt >= 0 ? legacy.createdAt : at, updatedAt: at })
-  }
+  const principalId = normalizePrincipalId(legacyPrincipalId)
+  const publisherId = id(legacyPublisherId, 'legacyPublisherId')
+  const legacyJobs = await legacyPublicJobs(legacyStore)
+  const imported = legacyJobs.map(legacy => convertLegacyJob(legacy, { principalId, publisherId, now }))
   const marker = base64url(crypto.hash(b4a.from(`${principalId}\u0000${publisherId}`))).slice(0, 32)
   return acquisitionStore.importLegacyPublicJobs(imported, marker)
 }

@@ -309,39 +309,38 @@ async function loadCastContext() {
     return castContext
   }
 
-  function rewriteHlsPlaylist(body) {
-    const lines = body.split(/\r?\n/)
+  function rewriteUri(trimmed) {
+    let pathPart = trimmed
+    let query = ''
+    if (/^https?:\/\//i.test(trimmed)) {
+      try {
+        const parsedUrl = new URL(trimmed)
+        pathPart = parsedUrl.pathname || ''
+        query = parsedUrl.search || ''
+      } catch {
+        pathPart = trimmed
+      }
+    } else {
+      const qIndex = trimmed.indexOf('?')
+      if (qIndex !== -1) {
+        pathPart = trimmed.slice(0, qIndex)
+        query = trimmed.slice(qIndex)
+      }
+    }
+    if (pathPart.startsWith('/')) {
+      pathPart = (path.posix || path).basename(pathPart)
+    }
+    pathPart = pathPart.replace(/^\.?\//, '').replace(/^(\.\.\/)+/, '')
+    if (!pathPart) return ''
+    return `${pathPart}${query}`
+  }
+
+  function parsePlaylistMetadataAndSegments(lines) {
     const segments = []
     let targetDuration = null
     let mediaSequence = null
     let pendingInf = null
     let maxDuration = 0
-
-    const rewriteUri = (trimmed) => {
-      let pathPart = trimmed
-      let query = ''
-      if (/^https?:\/\//i.test(trimmed)) {
-        try {
-          const parsedUrl = new URL(trimmed)
-          pathPart = parsedUrl.pathname || ''
-          query = parsedUrl.search || ''
-        } catch {
-          pathPart = trimmed
-        }
-      } else {
-        const qIndex = trimmed.indexOf('?')
-        if (qIndex !== -1) {
-          pathPart = trimmed.slice(0, qIndex)
-          query = trimmed.slice(qIndex)
-        }
-      }
-      if (pathPart.startsWith('/')) {
-        pathPart = path.posix.basename(pathPart)
-      }
-      pathPart = pathPart.replace(/^\.?\//, '').replace(/^(\.\.\/)+/, '')
-      if (!pathPart) return ''
-      return `${pathPart}${query}`
-    }
 
     for (const line of lines) {
       const trimmed = line.trim()
@@ -374,6 +373,13 @@ async function loadCastContext() {
       }
       pendingInf = null
     }
+
+    return { segments, targetDuration, mediaSequence, maxDuration }
+  }
+
+  function rewriteHlsPlaylist(body) {
+    const lines = body.split(/\r?\n/)
+    const { segments, targetDuration, mediaSequence, maxDuration } = parsePlaylistMetadataAndSegments(lines)
 
     const maxSegments = 10000
     const dropCount = Math.max(0, segments.length - maxSegments)
@@ -420,8 +426,153 @@ async function loadCastContext() {
         res.setHeader('Access-Control-Allow-Headers', 'Range,Content-Type,Accept,Origin')
         res.setHeader('Access-Control-Expose-Headers', 'Content-Length,Content-Range,Accept-Ranges')
       }
+      function parseCastProxyRequest(url) {
+        const base = 'http://localhost'
+        const parsed = new URL(url || '/', base)
+        if (parsed.pathname === '/cast/ping') return { isPing: true }
+        const parts = parsed.pathname.split('/').filter(Boolean)
+        const token = parts[0] === 'cast' ? parts[1] : null
+        const extraSegments = parts[0] === 'cast' ? parts.slice(2) : []
+        const isInvalid = extraSegments.some((seg) => seg === '.' || seg === '..')
+        const extraPath = extraSegments.join('/')
+        return {
+          isPing: false,
+          token,
+          extraPath,
+          isInvalid,
+          isIndexRequest: extraPath.endsWith('index.m3u8'),
+          isStreamRequest: extraPath.endsWith('stream.m3u8'),
+        }
+      }
 
-      castProxyServer = http1.createServer((req, res) => {
+      function handleHlsProxyResponse(proxyRes, res, isIndexRequest, baseUrl, token) {
+        let body = ''
+        proxyRes.setEncoding('utf8')
+        proxyRes.on('data', (chunk) => { body += chunk })
+        proxyRes.on('end', () => {
+          let out
+          if (isIndexRequest) {
+            const streamUrl = baseUrl
+              ? `${baseUrl}/cast/${token}/stream.m3u8`
+              : `/cast/${token}/stream.m3u8`
+            out = [
+              '#EXTM3U',
+              '#EXT-X-VERSION:3',
+              '#EXT-X-STREAM-INF:BANDWIDTH=6000000',
+              streamUrl,
+              '',
+            ].join('\r\n')
+          } else {
+            out = Buffer.from(rewriteHlsPlaylist(body), 'utf8')
+          }
+          res.statusCode = isIndexRequest ? 200 : (proxyRes.statusCode || 200)
+          res.setHeader('Content-Type', 'application/vnd.apple.mpegurl')
+          res.setHeader('Content-Length', Buffer.isBuffer(out) ? out.byteLength : Buffer.byteLength(out))
+          res.setHeader('Cache-Control', 'no-cache')
+          setCorsHeaders(res)
+          res.end(out)
+        })
+        proxyRes.on('error', () => {
+          if (!res.headersSent) { res.statusCode = 502; res.end('Cast proxy upstream error') }
+        })
+      }
+
+      function pipeProxyResponse(proxyRes, res) {
+        res.statusCode = proxyRes.statusCode || 502
+        if (proxyRes.headers) {
+          for (const [key, value] of Object.entries(proxyRes.headers)) {
+            if (value !== undefined) res.setHeader(key, value)
+          }
+        }
+        setCorsHeaders(res)
+
+        let pipeCleanedUp = false
+        const cleanupPipe = () => {
+          if (pipeCleanedUp) return
+          pipeCleanedUp = true
+          try { proxyRes.unpipe?.(res) } catch {}
+          try { proxyRes.destroy?.() } catch {}
+        }
+
+        proxyRes.on('error', cleanupPipe)
+        res.on('error', cleanupPipe)
+        res.on('close', cleanupPipe)
+
+        proxyRes.on('data', (chunk) => {
+          if (pipeCleanedUp) return
+          try {
+            const canWrite = res.write(chunk)
+            if (!canWrite && !pipeCleanedUp) {
+              proxyRes.pause?.()
+              res.once('drain', () => {
+                if (!pipeCleanedUp) proxyRes.resume?.()
+              })
+            }
+          } catch (err) {
+            console.warn('[CastProxy] write error:', err?.message || err)
+            cleanupPipe()
+          }
+        })
+        proxyRes.on('end', () => {
+          if (pipeCleanedUp) return
+          try { res.end() } catch {}
+        })
+      }
+
+      function sendCastProxyText(res, statusCode, body) {
+        res.statusCode = statusCode
+        res.setHeader('Content-Type', 'text/plain')
+        res.end(body)
+      }
+
+      function resolveCastProxyTargetPath(target, extraPath, isIndexRequest, isStreamRequest) {
+        let targetPathname = target.pathname
+        if (extraPath && !isIndexRequest && !isStreamRequest) {
+          const basePath = target.pathname || '/'
+          const pathApi = path.posix || path
+          const baseDir = pathApi.extname(basePath) ? pathApi.dirname(basePath) : basePath
+          targetPathname = pathApi.join(baseDir, extraPath)
+        }
+        return {
+          targetPathname,
+          targetPath: `${targetPathname}${target.search || ''}`,
+        }
+      }
+
+      function routeCastProxyUpstreamResponse(proxyRes, res, { extraPath, targetPathname, isIndexRequest, baseUrl, token }) {
+        const contentType = (proxyRes.headers?.['content-type'] || '').toString()
+        const isM3u8 = extraPath.endsWith('.m3u8')
+          || targetPathname.endsWith('.m3u8')
+          || contentType.includes('mpegurl')
+
+        if ((isIndexRequest || isM3u8) && (proxyRes.statusCode || 200) < 400) {
+          handleHlsProxyResponse(proxyRes, res, isIndexRequest, baseUrl, token)
+          return
+        }
+
+        pipeProxyResponse(proxyRes, res)
+      }
+
+      function forwardCastProxyRequestBody(req, proxyReq, method) {
+        const hasBody = !['GET', 'HEAD', 'OPTIONS'].includes(method)
+          && (req.headers?.['content-length'] || req.headers?.['transfer-encoding'])
+        if (hasBody) {
+          req.pipe(proxyReq)
+          return
+        }
+        proxyReq.end()
+      }
+
+      function resolveCastProxySessionTarget(token) {
+        if (!token || !castProxySessions.has(token)) return { errorStatus: 404, errorBody: 'Cast proxy session not found.' }
+        const entry = castProxySessions.get(token)
+        if (entry) entry.lastAccessAt = Date.now()
+        const target = entry ? buildLocalProxyTarget(entry.url) : null
+        if (!target) return { errorStatus: 500, errorBody: 'Cast proxy target invalid.' }
+        return { target }
+      }
+
+      function handleCastProxyHttpRequest(req, res) {
         try {
           console.log('[CastProxy] incoming', req.method || 'GET', redactCapabilityUrl(req.url || '/'))
         } catch {}
@@ -431,58 +582,34 @@ async function loadCastContext() {
           res.end()
           return
         }
-        const now = Date.now()
-        cleanupCastProxySessions(now, isCastActive)
-        const base = 'http://localhost'
-        const parsed = new URL(req.url || '/', base)
-        if (parsed.pathname === '/cast/ping') {
-          res.statusCode = 200
-          res.setHeader('Content-Type', 'text/plain')
-          res.end('pong')
+        cleanupCastProxySessions(Date.now(), isCastActive)
+        const parsedRequest = parseCastProxyRequest(req.url)
+        if (parsedRequest.isPing) {
+          sendCastProxyText(res, 200, 'pong')
           return
         }
-        const parts = parsed.pathname.split('/').filter(Boolean)
-        const token = parts[0] === 'cast' ? parts[1] : null
-        const extraSegments = parts[0] === 'cast' ? parts.slice(2) : []
-        if (extraSegments.some((seg) => seg === '.' || seg === '..')) {
-          res.statusCode = 400
-          res.setHeader('Content-Type', 'text/plain')
-          res.end('Invalid cast proxy path.')
+        if (parsedRequest.isInvalid) {
+          sendCastProxyText(res, 400, 'Invalid cast proxy path.')
           return
         }
-        const extraPath = extraSegments.join('/')
-        const isIndexRequest = extraPath.endsWith('index.m3u8')
-        const isStreamRequest = extraPath.endsWith('stream.m3u8')
 
+        const { token, extraPath, isIndexRequest, isStreamRequest } = parsedRequest
         const hostHeader = req.headers?.host
         const baseUrl = hostHeader ? `http://${hostHeader}` : ''
-
-        if (!token || !castProxySessions.has(token)) {
-          res.statusCode = 404
-          res.setHeader('Content-Type', 'text/plain')
-          res.end('Cast proxy session not found.')
+        const sessionTarget = resolveCastProxySessionTarget(token)
+        if (sessionTarget.errorStatus) {
+          sendCastProxyText(res, sessionTarget.errorStatus, sessionTarget.errorBody)
           return
         }
 
-        const entry = castProxySessions.get(token)
-        if (entry) entry.lastAccessAt = Date.now()
-        const target = entry ? buildLocalProxyTarget(entry.url) : null
-        if (!target) {
-          res.statusCode = 500
-          res.setHeader('Content-Type', 'text/plain')
-          res.end('Cast proxy target invalid.')
-          return
-        }
-
+        const { target } = sessionTarget
         const method = (req.method || 'GET').toUpperCase()
-        let targetPathname = target.pathname
-        if (extraPath && !isIndexRequest && !isStreamRequest) {
-          const basePath = target.pathname || '/'
-          const pathApi = path.posix || path
-          const baseDir = pathApi.extname(basePath) ? pathApi.dirname(basePath) : basePath
-          targetPathname = pathApi.join(baseDir, extraPath)
-        }
-        const targetPath = `${targetPathname}${target.search || ''}`
+        const { targetPathname, targetPath } = resolveCastProxyTargetPath(
+          target,
+          extraPath,
+          isIndexRequest,
+          isStreamRequest,
+        )
         const headers = {}
         if (req.headers?.range) {
           headers.range = req.headers.range
@@ -494,118 +621,27 @@ async function loadCastContext() {
           path: targetPath,
           headers,
         }, (proxyRes) => {
-          const contentType = (proxyRes.headers?.['content-type'] || '').toString()
-          const isM3u8 = extraPath.endsWith('.m3u8')
-            || targetPathname.endsWith('.m3u8')
-            || contentType.includes('mpegurl')
-
-          if (isIndexRequest && (proxyRes.statusCode || 200) < 400) {
-            let body = ''
-            proxyRes.setEncoding('utf8')
-            proxyRes.on('data', (chunk) => { body += chunk })
-            proxyRes.on('end', () => {
-              const streamUrl = baseUrl
-                ? `${baseUrl}/cast/${token}/stream.m3u8`
-                : `/cast/${token}/stream.m3u8`
-              const master = [
-                '#EXTM3U',
-                '#EXT-X-VERSION:3',
-                '#EXT-X-STREAM-INF:BANDWIDTH=6000000',
-                streamUrl,
-                ''
-              ].join('\r\n')
-              res.statusCode = 200
-              res.setHeader('Content-Type', 'application/vnd.apple.mpegurl')
-              res.setHeader('Content-Length', Buffer.byteLength(master))
-              res.setHeader('Cache-Control', 'no-cache')
-              setCorsHeaders(res)
-              res.end(master)
-            })
-            proxyRes.on('error', (err) => {
-              if (!res.headersSent) { res.statusCode = 502; res.end('Cast proxy upstream error') }
-            })
-            return
-          }
-
-          if (isM3u8 && (proxyRes.statusCode || 200) < 400) {
-            let body = ''
-            proxyRes.setEncoding('utf8')
-            proxyRes.on('data', (chunk) => { body += chunk })
-            proxyRes.on('end', () => {
-              const rewritten = rewriteHlsPlaylist(body)
-              const out = Buffer.from(rewritten, 'utf8')
-              res.statusCode = proxyRes.statusCode || 200
-              res.setHeader('Content-Type', 'application/vnd.apple.mpegurl')
-              res.setHeader('Content-Length', out.byteLength)
-              res.setHeader('Cache-Control', 'no-cache')
-              setCorsHeaders(res)
-              res.end(out)
-            })
-            proxyRes.on('error', (err) => {
-              if (!res.headersSent) { res.statusCode = 502; res.end('Cast proxy upstream error') }
-            })
-            return
-          }
-
-          res.statusCode = proxyRes.statusCode || 502
-          if (proxyRes.headers) {
-            for (const [key, value] of Object.entries(proxyRes.headers)) {
-              if (value !== undefined) res.setHeader(key, value)
-            }
-          }
-          setCorsHeaders(res)
-
-          let pipeCleanedUp = false
-          const cleanupPipe = () => {
-            if (pipeCleanedUp) return
-            pipeCleanedUp = true
-            try { proxyRes.unpipe?.(res) } catch {}
-            try { proxyRes.destroy?.() } catch {}
-          }
-
-          proxyRes.on('error', () => cleanupPipe())
-          res.on('error', () => cleanupPipe())
-          res.on('close', () => cleanupPipe())
-
-          proxyRes.on('data', (chunk) => {
-            if (pipeCleanedUp) return
-            try {
-              const canWrite = res.write(chunk)
-              if (!canWrite && !pipeCleanedUp) {
-                proxyRes.pause?.()
-                res.once('drain', () => {
-                  if (!pipeCleanedUp) proxyRes.resume?.()
-                })
-              }
-            } catch (err) {
-              console.warn('[CastProxy] write error:', err?.message || err)
-              cleanupPipe()
-            }
-          })
-          proxyRes.on('end', () => {
-            if (pipeCleanedUp) return
-            try { res.end() } catch {}
+          routeCastProxyUpstreamResponse(proxyRes, res, {
+            extraPath,
+            targetPathname,
+            isIndexRequest,
+            baseUrl,
+            token,
           })
         })
 
         proxyReq.on('error', (err) => {
           if (!res.headersSent) {
-            res.statusCode = 502
-            res.setHeader('Content-Type', 'text/plain')
-            res.end(`Cast proxy upstream error: ${err?.message || err}`)
+            sendCastProxyText(res, 502, `Cast proxy upstream error: ${err?.message || err}`)
             return
           }
           res.end()
         })
 
-        const hasBody = !['GET', 'HEAD', 'OPTIONS'].includes(method)
-          && (req.headers?.['content-length'] || req.headers?.['transfer-encoding'])
-        if (hasBody) {
-          req.pipe(proxyReq)
-        } else {
-          proxyReq.end()
-        }
-      })
+        forwardCastProxyRequestBody(req, proxyReq, method)
+      }
+
+      castProxyServer = http1.createServer(handleCastProxyHttpRequest)
 
       castProxyServer.on('error', (err) => {
         console.error('[CastProxy] server error:', err?.message || err)
@@ -817,13 +853,214 @@ async function loadCastContext() {
 
   B.castIsConnected = async () => ({ connected: Boolean(castContext?.isConnected()) })
 
-  B.castPlay = async (r) => {
+  function triggerCastPrefetch(url) {
+    const castPrefetchTarget = extractCastPrefetchTarget(url)
+    if (!castPrefetchTarget?.driveKey || !castPrefetchTarget?.filePath) return null
+    const channel = ctx?.channels?.get?.(castPrefetchTarget.driveKey)
+    const drive = channel?.drive || channel?.hyperdrive || null
+    if (!drive || typeof prefetchVideoForCast !== 'function') return null
+    const controller = new AbortController()
+    prefetchVideoForCast(drive, castPrefetchTarget.filePath, controller.signal)
+      .catch((err) => {
+        if (err?.name !== 'AbortError') console.warn('[CastDiag] Cast pre-buffer failed:', err?.message || err)
+      })
+    return controller
+  }
+
+  async function waitForCastTranscodeStartup(sessionId) {
+    const MAX_WAIT_MS = 90 * 1000
+    const POLL_INTERVAL_MS = 500
+    const MIN_STARTUP_FRAGMENTS = 1
+    const waitStart = Date.now()
+    let fragmentCount = 0
+    let hasInit = false
+    let startupStatus = 'pending'
+    while (Date.now() - waitStart < MAX_WAIT_MS) {
+      const status = castTranscoder.getCastStatus(sessionId)
+      fragmentCount = status?.fragmentCount || 0
+      const snapshot = status?.storeSnapshot || null
+      hasInit = !!snapshot?.hasInit
+      startupStatus = status?.status || startupStatus
+      if (hasInit && fragmentCount >= MIN_STARTUP_FRAGMENTS) break
+      if (status?.status === 'error') throw new Error(status.error || 'Cast transcode failed')
+      if (status?.status === 'cancelled') throw new Error(status.error || 'Cast transcode cancelled')
+      await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS))
+    }
+    if (!hasInit || fragmentCount < MIN_STARTUP_FRAGMENTS) {
+      throw new Error(
+        `Cast transcode startup timeout: only ${fragmentCount}/${MIN_STARTUP_FRAGMENTS} fragments ready (init=${hasInit ? 1 : 0}, status=${startupStatus})`
+      )
+    }
+  }
+
+  async function prepareCastMedia({ protocol, deviceHost, requestedUrl, requestedKey, title }) {
+    if (protocol === 'chromecast') {
+      let probeResult = null
+      try {
+        probeResult = await transcoder.probeMedia(requestedUrl, title)
+        console.log('[CastDiag] probeMedia', {
+          videoCodec: probeResult?.videoCodec,
+          audioCodec: probeResult?.audioCodec,
+          container: probeResult?.container,
+          needsVideoTranscode: probeResult?.needsVideoTranscode,
+          needsAudioTranscode: probeResult?.needsAudioTranscode,
+          needsRemux: probeResult?.needsRemux,
+        })
+      } catch (probeErr) {
+        console.warn('[Backend] Cast play: probe failed:', probeErr?.message)
+      }
+
+      const localIp = await getLocalIPv4ForTarget(deviceHost)
+      if (!localIp) throw new Error('Could not determine LAN IP for HLS cast URL')
+
+      const result = await castTranscoder.startCastTranscode(requestedUrl, {
+        sourceKey: requestedKey,
+        isVideoComplete: false,
+      })
+      if (!result.success) throw new Error(result.error || 'Cast transcode failed')
+
+      await waitForCastTranscodeStartup(result.sessionId)
+      const hlsUrl = castTranscoder.getCastHlsUrl(result.sessionId, localIp)
+      if (!hlsUrl) throw new Error('Could not get cast HLS URL')
+      console.log('[CastDiag] Chromecast HLS URL:', redactCapabilityUrl(hlsUrl))
+      return {
+        url: hlsUrl,
+        contentType: 'application/vnd.apple.mpegurl',
+        currentTranscodeSessionId: result.sessionId,
+        probeResult,
+      }
+    }
+
+    await ensureCastProxyServer()
+    const proxyUrl = await createCastProxyUrl(deviceHost, requestedUrl)
+    if (!proxyUrl) throw new Error('Could not create cast proxy URL for cast device')
+    return {
+      url: proxyUrl,
+      contentType: undefined,
+      currentTranscodeSessionId: null,
+      probeResult: null,
+    }
+  }
+
+  function resolveCastStreamType({ probedDuration, requestedDuration, contentType }) {
+    const castDuration = requestedDuration > 0 ? requestedDuration : (probedDuration > 0 ? probedDuration : 0)
+    const isHlsCast = contentType === 'application/x-mpegURL' || contentType === 'application/vnd.apple.mpegurl'
+    const hasKnownDuration = castDuration > 0
+    const streamType = isHlsCast ? 'LIVE' : (hasKnownDuration ? 'BUFFERED' : 'LIVE')
+    const loadDuration = (streamType === 'BUFFERED' && hasKnownDuration) ? castDuration : undefined
+    return { streamType, loadDuration }
+  }
+
+  function isCastTimeoutIdleRejection(playRejected) {
+    const message = String(playRejected?.message || '')
+    return /timed out waiting for chromecast playback to start/i.test(message)
+      && /state=IDLE/i.test(message)
+      && /idle=none/i.test(message)
+  }
+
+  function isHlsCastContentType(contentType) {
+    return contentType === 'application/x-mpegURL' || contentType === 'application/vnd.apple.mpegurl'
+  }
+
+  function readHlsReceiverConsumption(currentTranscodeSessionId) {
+    const status = castTranscoder.getCastStatus(currentTranscodeSessionId)
+    const stats = status?.requestStats || {}
+    const segmentHits = Number(stats.successfulSegmentResponses || status?.fragmentCount || 0)
+    const playlistHits = Number(stats.playlistRequests || (segmentHits > 0 ? 2 : 0))
+    return {
+      segmentHits,
+      playlistHits,
+      hasReceiverConsumption: segmentHits >= 3 && playlistHits >= 2,
+    }
+  }
+
+  async function tryRecoverIdleHlsTimeout(currentTranscodeSessionId) {
+    const consumption = readHlsReceiverConsumption(currentTranscodeSessionId)
+    if (!consumption.hasReceiverConsumption) return false
+
+    console.warn(
+      '[CastDiag] IDLE timeout with sustained HLS fetches; waiting longer and nudging resume',
+      'session=',
+      currentTranscodeSessionId,
+      'segmentHits=',
+      consumption.segmentHits,
+      'playlistHits=',
+      consumption.playlistHits,
+    )
+    try {
+      await new Promise(resolve => setTimeout(resolve, 6000))
+      await castContext.resume()
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  async function handleCastPlayRejection(playRejected, currentTranscodeSessionId, contentType) {
+    if (!playRejected) return
+    const canRecover = isCastTimeoutIdleRejection(playRejected)
+      && !!currentTranscodeSessionId
+      && isHlsCastContentType(contentType)
+    if (canRecover && await tryRecoverIdleHlsTimeout(currentTranscodeSessionId)) {
+      return
+    }
+    throw playRejected
+  }
+
+  async function performInitialCastSeek(requestedStartTime) {
+    if (requestedStartTime <= 0) return
+    const initialSeekAttempts = 4
+    const initialSeekDelayMs = 700
+    for (let attempt = 1; attempt <= initialSeekAttempts; attempt += 1) {
+      try {
+        await castContext.seek(requestedStartTime)
+        return
+      } catch (seekErr) {
+        if (attempt === initialSeekAttempts) {
+          console.warn('[CastDiag] Initial cast seek failed after', initialSeekAttempts, 'attempts:', seekErr?.message || seekErr)
+          try {
+            rpc?.eventCastPlaybackState?.({
+              state: 'error',
+              error: `Failed to seek to ${Math.floor(requestedStartTime)}s after ${initialSeekAttempts} attempts. Playback will start from the beginning.`,
+            })
+          } catch {}
+          return
+        }
+        await new Promise(resolve => setTimeout(resolve, initialSeekDelayMs))
+      }
+    }
+  }
+
+  function startCastStallMonitor(monitorSessionId) {
+    let lastStallSegmentCount = 0
+    let stallCheckCount = 0
+    return setInterval(() => {
+      try {
+        const status = castTranscoder.getCastStatus(monitorSessionId)
+        if (status && status.fragmentCount !== undefined) {
+          if (status.fragmentCount > lastStallSegmentCount) {
+            lastStallSegmentCount = status.fragmentCount
+            stallCheckCount = 0
+          } else {
+            stallCheckCount++
+            if (stallCheckCount >= 6) {
+              clearInterval(castStallMonitor)
+              castStallMonitor = null
+              rpc.eventLog?.({ message: '[Cast] Stall detected: no new fragments for 60s' })
+            }
+          }
+        }
+      } catch {}
+    }, 10000)
+  }
+
+  function beginCastPlaySession(url) {
     const now = Date.now()
     if (now - lastCastPlayTime < CAST_PLAY_DEBOUNCE_MS) {
-      return { success: true, reason: 'debounced' }
+      return { blocked: { success: true, reason: 'debounced' } }
     }
     if (castPlayInProgress) {
-      return { success: true, reason: 'in-progress' }
+      return { blocked: { success: true, reason: 'in-progress' } }
     }
 
     castPlayInProgress = true
@@ -836,247 +1073,103 @@ async function loadCastContext() {
       castPrefetchAbortController = null
     }
 
-    const castPrefetchTarget = extractCastPrefetchTarget(r?.url)
-    if (castPrefetchTarget?.driveKey && castPrefetchTarget?.filePath) {
-      const channel = ctx?.channels?.get?.(castPrefetchTarget.driveKey)
-      const drive = channel?.drive || channel?.hyperdrive || null
-      if (drive && typeof prefetchVideoForCast === 'function') {
-        castPrefetchAbortController = new AbortController()
-        prefetchVideoForCast(drive, castPrefetchTarget.filePath, castPrefetchAbortController.signal)
-          .catch((err) => {
-            if (err?.name !== 'AbortError') console.warn('[CastDiag] Cast pre-buffer failed:', err?.message || err)
-          })
+    castPrefetchAbortController = triggerCastPrefetch(url)
+    return { blocked: null }
+  }
+
+  function retirePreviousCastTranscodeSession(currentTranscodeSessionId, requestedKey) {
+    const previousSessionId = activeCastTranscodeId
+    if (previousSessionId && previousSessionId !== currentTranscodeSessionId) {
+      const keepSameSource = !currentTranscodeSessionId && activeCastSourceKey === requestedKey
+      if (!keepSameSource) {
+        castSessionsWithLoadSent.delete(previousSessionId)
+        castTranscoder.stopCastTranscode(previousSessionId)
+        if (!currentTranscodeSessionId) {
+          activeCastTranscodeId = null
+          activeCastSourceKey = null
+        }
       }
     }
+    if (currentTranscodeSessionId) {
+      activeCastTranscodeId = currentTranscodeSessionId
+      activeCastSourceKey = requestedKey
+    }
+  }
+
+  function armHlsCastStallMonitor(contentType) {
+    if (!activeCastTranscodeId || !isHlsCastContentType(contentType)) return
+    castSessionsWithLoadSent.add(activeCastTranscodeId)
+    if (castStallMonitor) { clearInterval(castStallMonitor); castStallMonitor = null }
+    castStallMonitor = startCastStallMonitor(activeCastTranscodeId)
+  }
+
+  async function executeCastPlayRequest(r) {
+    if (!castContext?.isConnected()) {
+      return { success: false, error: 'Not connected to cast device' }
+    }
+
+    const protocol = castContext?._connectedDevice?.deviceInfo?.protocol
+    const deviceHost = castContext?._connectedDevice?.deviceInfo?.host
+    const requestedUrl = normalizeLocalUrlForCast(r.url)
+    const requestedKey = buildTranscodeCacheKey(requestedUrl) || requestedUrl
+
+    const prepared = await prepareCastMedia({
+      protocol,
+      deviceHost,
+      requestedUrl,
+      requestedKey,
+      title: r.title,
+    })
+
+    const url = prepared.url
+    const contentType = prepared.contentType || r.contentType
+    const currentTranscodeSessionId = prepared.currentTranscodeSessionId
+    const probedDuration = Number(prepared.probeResult?.duration || 0)
+    const requestedDuration = Number(r.duration || 0)
+    const { streamType, loadDuration } = resolveCastStreamType({
+      probedDuration,
+      requestedDuration,
+      contentType,
+    })
+    const requestedStartTime = Number.isFinite(r?.time) ? Math.max(0, Number(r.time)) : 0
 
     try {
-      if (!castContext?.isConnected()) {
-        return { success: false, error: 'Not connected to cast device' }
-      }
+      await castContext.stop()
+      await new Promise(resolve => setTimeout(resolve, 200))
+    } catch {}
 
-      let url = r.url
-      let contentType = r.contentType
-      let currentTranscodeSessionId = null
-      let transcodeRequired = false
+    retirePreviousCastTranscodeSession(currentTranscodeSessionId, requestedKey)
 
-      const protocol = castContext?._connectedDevice?.deviceInfo?.protocol
-      const deviceHost = castContext?._connectedDevice?.deviceInfo?.host
-      const requestedUrl = normalizeLocalUrlForCast(r.url)
-      const requestedKey = buildTranscodeCacheKey(requestedUrl) || requestedUrl
+    let playRejected = null
+    try {
+      await castContext.play({
+        url, contentType, title: r.title, thumbnail: r.thumbnail,
+        time: requestedStartTime, volume: normalizeCastVolume(r.volume),
+        duration: loadDuration, streamType,
+        startTimeoutMs: 30000,
+      })
+    } catch (playErr) {
+      playRejected = playErr
+    }
 
-      let probeResult = null
-      if (protocol === 'chromecast') {
-        transcodeRequired = true
+    if (playRejected) {
+      await handleCastPlayRejection(playRejected, currentTranscodeSessionId, contentType)
+    }
 
-        try {
-          probeResult = await transcoder.probeMedia(requestedUrl, r.title)
-          console.log('[CastDiag] probeMedia', {
-            videoCodec: probeResult?.videoCodec,
-            audioCodec: probeResult?.audioCodec,
-            container: probeResult?.container,
-            needsVideoTranscode: probeResult?.needsVideoTranscode,
-            needsAudioTranscode: probeResult?.needsAudioTranscode,
-            needsRemux: probeResult?.needsRemux,
-          })
-        } catch (probeErr) {
-          console.warn('[Backend] Cast play: probe failed:', probeErr?.message)
-        }
+    castLoadCompletedAt = Date.now()
+    await performInitialCastSeek(requestedStartTime)
+    armHlsCastStallMonitor(contentType)
 
-        const localIp = await getLocalIPv4ForTarget(deviceHost)
-        if (!localIp) throw new Error('Could not determine LAN IP for HLS cast URL')
+    lastCastPlayTime = Date.now()
+    return { success: true }
+  }
 
-        const result = await castTranscoder.startCastTranscode(requestedUrl, {
-          sourceKey: requestedKey,
-          // Keep transcode startup progressive so cast can begin before full source sync.
-          // Underflowed sessions are now rejected in cast-transcoder.
-          isVideoComplete: false,
-        })
+  B.castPlay = async (r) => {
+    const started = beginCastPlaySession(r?.url)
+    if (started.blocked) return started.blocked
 
-        if (!result.success) throw new Error(result.error || 'Cast transcode failed')
-
-        currentTranscodeSessionId = result.sessionId
-
-        const MAX_WAIT_MS = 90 * 1000
-        const POLL_INTERVAL_MS = 500
-        const MIN_STARTUP_FRAGMENTS = 1
-        const waitStart = Date.now()
-        let fragmentCount = 0
-        let hasInit = false
-        let startupStatus = 'pending'
-        while (Date.now() - waitStart < MAX_WAIT_MS) {
-          const status = castTranscoder.getCastStatus(result.sessionId)
-          fragmentCount = status?.fragmentCount || 0
-          const snapshot = status?.storeSnapshot || null
-          hasInit = !!snapshot?.hasInit
-          startupStatus = status?.status || startupStatus
-          if (hasInit && fragmentCount >= MIN_STARTUP_FRAGMENTS) break
-          if (status?.status === 'error') throw new Error(status.error || 'Cast transcode failed')
-          if (status?.status === 'cancelled') throw new Error(status.error || 'Cast transcode cancelled')
-          await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS))
-        }
-        if (!hasInit || fragmentCount < MIN_STARTUP_FRAGMENTS) {
-          throw new Error(
-            `Cast transcode startup timeout: only ${fragmentCount}/${MIN_STARTUP_FRAGMENTS} fragments ready (init=${hasInit ? 1 : 0}, status=${startupStatus})`
-          )
-        }
-
-        const hlsUrl = castTranscoder.getCastHlsUrl(result.sessionId, localIp)
-        if (!hlsUrl) throw new Error('Could not get cast HLS URL')
-        console.log('[CastDiag] Chromecast HLS URL:', redactCapabilityUrl(hlsUrl))
-        url = hlsUrl
-        contentType = 'application/vnd.apple.mpegurl'
-      } else {
-        // Non-Chromecast protocols: use cast proxy
-        await ensureCastProxyServer()
-        const proxyUrl = await createCastProxyUrl(deviceHost, requestedUrl)
-        if (!proxyUrl) throw new Error('Could not create cast proxy URL for cast device')
-        url = proxyUrl
-      }
-
-      const probedDuration = Number(probeResult?.duration || 0)
-      const requestedDuration = Number(r.duration || 0)
-      const castDuration = requestedDuration > 0 ? requestedDuration : (probedDuration > 0 ? probedDuration : 0)
-      const requestedStartTime = Number.isFinite(r?.time) ? Math.max(0, Number(r.time)) : 0
-      const isHlsCast = contentType === 'application/x-mpegURL' || contentType === 'application/vnd.apple.mpegurl'
-      const hasKnownDuration = castDuration > 0
-      // A LIVE payload must never carry a positive `duration`. Chromecast reads
-      // "unbounded, but 82s long" as contradictory and stalls at 56.48s. HLS
-      // always casts LIVE, so it never gets one. See the PearTube vault page.
-      const streamType = isHlsCast
-        ? 'LIVE'
-        : (hasKnownDuration ? 'BUFFERED' : 'LIVE')
-      const loadDuration = (streamType === 'BUFFERED' && hasKnownDuration) ? castDuration : undefined
-
-      try {
-        await castContext.stop()
-        await new Promise(resolve => setTimeout(resolve, 200))
-      } catch {}
-
-      // Cleanup previous session
-      const previousSessionId = activeCastTranscodeId
-      if (previousSessionId && previousSessionId !== currentTranscodeSessionId) {
-        if (!currentTranscodeSessionId && activeCastSourceKey === requestedKey) {
-          // Keep existing session for same source
-        } else {
-          castSessionsWithLoadSent.delete(previousSessionId)
-          castTranscoder.stopCastTranscode(previousSessionId)
-          if (!currentTranscodeSessionId) {
-            activeCastTranscodeId = null
-            activeCastSourceKey = null
-          }
-        }
-      }
-      if (currentTranscodeSessionId) {
-        activeCastTranscodeId = currentTranscodeSessionId
-        activeCastSourceKey = requestedKey
-      }
-
-      let playRejected = null
-      try {
-        await castContext.play({
-          url, contentType, title: r.title, thumbnail: r.thumbnail,
-          time: requestedStartTime, volume: normalizeCastVolume(r.volume),
-          duration: loadDuration, streamType,
-          startTimeoutMs: 30000,
-        })
-      } catch (playErr) {
-        playRejected = playErr
-      }
-
-      if (playRejected) {
-        const isCastTimeoutIdle = /timed out waiting for chromecast playback to start/i.test(String(playRejected?.message || ''))
-          && /state=IDLE/i.test(String(playRejected?.message || ''))
-          && /idle=none/i.test(String(playRejected?.message || ''))
-
-        const isHlsTranscodeSession = !!currentTranscodeSessionId
-          && (contentType === 'application/x-mpegURL' || contentType === 'application/vnd.apple.mpegurl')
-
-        if (isCastTimeoutIdle && isHlsTranscodeSession) {
-          const status = castTranscoder.getCastStatus(currentTranscodeSessionId)
-          const stats = status?.requestStats || {}
-          const segmentHits = Number(stats.successfulSegmentResponses || status?.fragmentCount || 0)
-          const playlistHits = Number(stats.playlistRequests || (segmentHits > 0 ? 2 : 0))
-          const hasReceiverConsumption = segmentHits >= 3 && playlistHits >= 2
-
-          if (hasReceiverConsumption) {
-            console.warn(
-              '[CastDiag] IDLE timeout with sustained HLS fetches; waiting longer and nudging resume',
-              'session=',
-              currentTranscodeSessionId,
-              'segmentHits=',
-              segmentHits,
-              'playlistHits=',
-              playlistHits,
-            )
-            try {
-              await new Promise(resolve => setTimeout(resolve, 6000))
-              await castContext.resume()
-            } catch {}
-          } else {
-            throw playRejected
-          }
-        } else {
-          throw playRejected
-        }
-      }
-
-      castLoadCompletedAt = Date.now()
-
-      if (requestedStartTime > 0) {
-        const initialSeekAttempts = 4
-        const initialSeekDelayMs = 700
-        let seekSucceeded = false
-        for (let attempt = 1; attempt <= initialSeekAttempts; attempt += 1) {
-          try {
-            await castContext.seek(requestedStartTime)
-            seekSucceeded = true
-            break
-          } catch (seekErr) {
-            if (attempt === initialSeekAttempts) {
-              console.warn('[CastDiag] Initial cast seek failed after', initialSeekAttempts, 'attempts:', seekErr?.message || seekErr)
-              // Emit user-facing error so the UI can inform the user
-              try {
-                rpc?.eventCastPlaybackState?.({
-                  state: 'error',
-                  error: `Failed to seek to ${Math.floor(requestedStartTime)}s after ${initialSeekAttempts} attempts. Playback will start from the beginning.`,
-                })
-              } catch {}
-              break
-            }
-            await new Promise(resolve => setTimeout(resolve, initialSeekDelayMs))
-          }
-        }
-      }
-
-      if (activeCastTranscodeId && (contentType === 'application/x-mpegURL' || contentType === 'application/vnd.apple.mpegurl')) {
-        castSessionsWithLoadSent.add(activeCastTranscodeId)
-
-        if (castStallMonitor) { clearInterval(castStallMonitor); castStallMonitor = null }
-        let lastStallSegmentCount = 0
-        let stallCheckCount = 0
-        const monitorSessionId = activeCastTranscodeId
-        castStallMonitor = setInterval(() => {
-          try {
-            const status = castTranscoder.getCastStatus(monitorSessionId)
-            if (status && status.fragmentCount !== undefined) {
-              if (status.fragmentCount > lastStallSegmentCount) {
-                lastStallSegmentCount = status.fragmentCount
-                stallCheckCount = 0
-              } else {
-                stallCheckCount++
-                if (stallCheckCount >= 6) {
-                  clearInterval(castStallMonitor)
-                  castStallMonitor = null
-                  rpc.eventLog?.({ message: '[Cast] Stall detected: no new fragments for 60s' })
-                }
-              }
-            }
-          } catch {}
-        }, 10000)
-      }
-
-      lastCastPlayTime = Date.now()
-      return { success: true }
+    try {
+      return await executeCastPlayRequest(r)
     } catch (err) {
       console.error('[Backend] Cast play error:', err?.message || err)
       return { success: false, error: err?.message }

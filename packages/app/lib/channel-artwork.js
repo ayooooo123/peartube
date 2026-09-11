@@ -48,10 +48,64 @@ function resolveBlobBeforeDeadline(resolveBlob, candidate, { deadline, signal })
   })
 }
 
+function populateSeenCandidates(candidates, firstIndex, seenRemoteUrls, seenBlobRefs) {
+  for (let index = 0; index < firstIndex; index += 1) {
+    const candidate = candidates[index]
+    if (candidate?.kind === 'remote' && typeof candidate.url === 'string') {
+      seenRemoteUrls.add(candidate.url)
+    } else if (candidate?.kind === 'blob') {
+      seenBlobRefs.add(`${candidate.blobsCoreKey}\u0000${candidate.blobId}`)
+    }
+  }
+}
+
+function resolveRemoteCandidate(candidate, seenRemoteUrls, failedUrlSet) {
+  if (
+    typeof candidate.url !== 'string' ||
+    candidate.url.trim().length === 0 ||
+    seenRemoteUrls.has(candidate.url)
+  ) return null
+  seenRemoteUrls.add(candidate.url)
+  if (failedUrlSet.has(candidate.url)) return null
+  return candidate.url
+}
+
+async function tryResolveBlobCandidate({
+  candidate,
+  resolveBlob,
+  blobResolverAvailable,
+  seenBlobRefs,
+  deadline,
+  signal,
+  isStale,
+  failedUrlSet,
+}) {
+  const blobRef = `${candidate.blobsCoreKey}\u0000${candidate.blobId}`
+  if (seenBlobRefs.has(blobRef)) return { skipped: true }
+  seenBlobRefs.add(blobRef)
+  if (!blobResolverAvailable || typeof resolveBlob !== 'function') {
+    return { provisional: true }
+  }
+  if (Date.now() >= deadline) return { skipped: true }
+
+  const resolved = await resolveBlobBeforeDeadline(resolveBlob, candidate, { deadline, signal })
+  if (isCancelled(signal, isStale)) return { cancelled: true }
+  if (resolved && !failedUrlSet.has(resolved)) {
+    return { url: resolved }
+  }
+  return { skipped: true }
+}
+
 export async function resolveArtworkCandidates(
   candidates,
   resolveBlob,
-  {
+  options = {},
+) {
+  if (!Array.isArray(candidates)) {
+    return { url: null, nextIndex: 0, provisional: false, failedUrls: [] }
+  }
+
+  const {
     deadline = Infinity,
     signal,
     isStale,
@@ -59,11 +113,7 @@ export async function resolveArtworkCandidates(
     blobResolverAvailable = typeof resolveBlob === 'function',
     initialProvisional = false,
     failedUrls = [],
-  } = {},
-) {
-  if (!Array.isArray(candidates)) {
-    return { url: null, nextIndex: 0, provisional: false, failedUrls: [] }
-  }
+  } = options
 
   const firstIndex = Math.min(
     candidates.length,
@@ -74,49 +124,46 @@ export async function resolveArtworkCandidates(
   const failedUrlSet = new Set(boundedFailures)
   const seenRemoteUrls = new Set()
   const seenBlobRefs = new Set()
-  for (let index = 0; index < firstIndex; index += 1) {
-    const candidate = candidates[index]
-    if (candidate?.kind === 'remote' && typeof candidate.url === 'string') {
-      seenRemoteUrls.add(candidate.url)
-    } else if (candidate?.kind === 'blob') {
-      seenBlobRefs.add(`${candidate.blobsCoreKey}\u0000${candidate.blobId}`)
-    }
-  }
+  populateSeenCandidates(candidates, firstIndex, seenRemoteUrls, seenBlobRefs)
 
   for (let index = firstIndex; index < candidates.length; index += 1) {
     if (isCancelled(signal, isStale)) return null
 
     const candidate = candidates[index]
     if (candidate?.kind === 'remote') {
-      if (
-        typeof candidate.url !== 'string' ||
-        candidate.url.trim().length === 0 ||
-        seenRemoteUrls.has(candidate.url)
-      ) continue
-      seenRemoteUrls.add(candidate.url)
-      if (failedUrlSet.has(candidate.url)) continue
-      return {
-        url: candidate.url,
-        nextIndex: index + 1,
-        provisional,
-        failedUrls: boundedFailures,
+      const remoteUrl = resolveRemoteCandidate(candidate, seenRemoteUrls, failedUrlSet)
+      if (remoteUrl) {
+        return {
+          url: remoteUrl,
+          nextIndex: index + 1,
+          provisional,
+          failedUrls: boundedFailures,
+        }
       }
+      continue
     }
+
     if (candidate?.kind !== 'blob') continue
-    const blobRef = `${candidate.blobsCoreKey}\u0000${candidate.blobId}`
-    if (seenBlobRefs.has(blobRef)) continue
-    seenBlobRefs.add(blobRef)
-    if (!blobResolverAvailable || typeof resolveBlob !== 'function') {
+
+    const blobResult = await tryResolveBlobCandidate({
+      candidate,
+      resolveBlob,
+      blobResolverAvailable,
+      seenBlobRefs,
+      deadline,
+      signal,
+      isStale,
+      failedUrlSet,
+    })
+
+    if (blobResult.cancelled) return null
+    if (blobResult.provisional) {
       provisional = true
       continue
     }
-    if (Date.now() >= deadline) continue
-
-    const resolved = await resolveBlobBeforeDeadline(resolveBlob, candidate, { deadline, signal })
-    if (isCancelled(signal, isStale)) return null
-    if (resolved && !failedUrlSet.has(resolved)) {
+    if (blobResult.url) {
       return {
-        url: resolved,
+        url: blobResult.url,
         nextIndex: index + 1,
         provisional: false,
         failedUrls: boundedFailures,

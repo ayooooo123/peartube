@@ -86,18 +86,7 @@ export function companionConfigFromCli (cli = {}) {
   return Object.keys(config).length ? { companion: config } : {}
 }
 
-export function resolveCompanionConfig (raw = {}, options = {}) {
-  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
-  const config = { ...DEFAULT_COMPANION_CONFIG, ...source }
-  config.hasExplicitPort = Boolean(options.hasExplicitPort || source.hasExplicitPort)
-  config.enabled = parseBoolean(config.enabled, DEFAULT_COMPANION_CONFIG.enabled)
-  config.auth = options.auth !== undefined
-    ? parseBoolean(options.auth, DEFAULT_COMPANION_CONFIG.auth)
-    : (source.auth !== undefined ? parseBoolean(source.auth, DEFAULT_COMPANION_CONFIG.auth) : DEFAULT_COMPANION_CONFIG.auth)
-  // The machine API is HTTP-only. Keep transport in the resolved state as a
-  // protocol fact for status responses, not as an operator-selectable branch.
-  config.transport = 'tcp'
-  delete config.socketPath
+function resolveHostAndPort (config) {
   config.host = typeof config.host === 'string' && config.host.trim()
     ? config.host.trim()
     : DEFAULT_COMPANION_CONFIG.host
@@ -108,17 +97,9 @@ export function resolveCompanionConfig (raw = {}, options = {}) {
   if (!Number.isSafeInteger(config.port) || config.port < 0 || config.port > 65535) {
     throw new Error('companion.port must be an integer from 0 through 65535')
   }
-  config.client = typeof config.client === 'string' ? config.client.trim() : ''
-  if (!/^[A-Za-z0-9._-]{1,128}$/.test(config.client)) {
-    throw new Error('companion.client must be 1 to 128 identifier characters')
-  }
-  config.publisherId = config.publisherId == null || config.publisherId === ''
-    ? config.client
-    : String(config.publisherId).trim()
-  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(config.publisherId)) {
-    throw new Error('companion.publisherId must be 1 to 128 identifier characters')
-  }
-  config.scopes = routeScopes(config.scopes)
+}
+
+function resolveCompanionSecurity (config) {
   config.sharedSecret = typeof config.sharedSecret === 'string' ? config.sharedSecret : ''
   if (config.sharedSecret && !/^[a-f0-9]{64}$/.test(config.sharedSecret)) {
     throw new Error('companion.sharedSecret must be 64 lowercase hexadecimal characters')
@@ -138,5 +119,32 @@ export function resolveCompanionConfig (raw = {}, options = {}) {
   config.maxBodyBytes = positiveInteger(config.maxBodyBytes, undefined, 'companion.maxBodyBytes')
   config.maxClockSkewMs = positiveInteger(config.maxClockSkewMs, undefined, 'companion.maxClockSkewMs')
   config.maxNonces = positiveInteger(config.maxNonces, undefined, 'companion.maxNonces')
+}
+
+export function resolveCompanionConfig (raw = {}, options = {}) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
+  const config = { ...DEFAULT_COMPANION_CONFIG, ...source }
+  config.hasExplicitPort = Boolean(options.hasExplicitPort || source.hasExplicitPort)
+  config.enabled = parseBoolean(config.enabled, DEFAULT_COMPANION_CONFIG.enabled)
+  config.auth = options.auth !== undefined
+    ? parseBoolean(options.auth, DEFAULT_COMPANION_CONFIG.auth)
+    : (source.auth !== undefined ? parseBoolean(source.auth, DEFAULT_COMPANION_CONFIG.auth) : DEFAULT_COMPANION_CONFIG.auth)
+  // The machine API is HTTP-only. Keep transport in the resolved state as a
+  // protocol fact for status responses, not as an operator-selectable branch.
+  config.transport = 'tcp'
+  delete config.socketPath
+  resolveHostAndPort(config)
+  config.client = typeof config.client === 'string' ? config.client.trim() : ''
+  if (!/^[A-Za-z0-9._-]{1,128}$/.test(config.client)) {
+    throw new Error('companion.client must be 1 to 128 identifier characters')
+  }
+  config.publisherId = config.publisherId == null || config.publisherId === ''
+    ? config.client
+    : String(config.publisherId).trim()
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(config.publisherId)) {
+    throw new Error('companion.publisherId must be 1 to 128 identifier characters')
+  }
+  config.scopes = routeScopes(config.scopes)
+  resolveCompanionSecurity(config)
   return config
 }

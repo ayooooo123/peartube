@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import test from 'brittle'
 
 import * as backendEntry from '../src/backend-entry.js'
+import { prepareStoredProtocolState, STORAGE_FORMAT_VERSION } from '../src/stored-protocol.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -128,7 +129,7 @@ test('createBackend exposes universal core as the entry runtime composition root
   let readyPayload = null
   const lifecycle = []
   let contextPlatform = null
-  let contextExpectedProtocolVersion = null
+  let contextExpectedStorageFormatVersion = null
   let releaseBackendDestroy = null
   const backendDestroyGate = new Promise((resolve) => {
     releaseBackendDestroy = resolve
@@ -146,7 +147,7 @@ test('createBackend exposes universal core as the entry runtime composition root
     onReady(payload) { readyPayload = payload },
     createBackendContext: async (contextOptions) => {
       contextPlatform = contextOptions.platform
-      contextExpectedProtocolVersion = contextOptions.expectedProtocolVersion
+      contextExpectedStorageFormatVersion = contextOptions.expectedStorageFormatVersion
       return {
         ctx: { metaDb },
         api: {},
@@ -187,7 +188,7 @@ test('createBackend exposes universal core as the entry runtime composition root
   t.is(readyPayload.protocolVersion, 42)
   t.is(session.rpc.ready.protocolVersion, 42)
   t.is(contextPlatform, 'desktop')
-  t.is(contextExpectedProtocolVersion, 42)
+  t.is(contextExpectedStorageFormatVersion, STORAGE_FORMAT_VERSION)
   t.ok(lifecycle.includes('hc:init'))
   t.is(contextPlatform, 'desktop')
   t.ok(lifecycle.includes('hc:start'))
@@ -203,6 +204,70 @@ test('createBackend exposes universal core as the entry runtime composition root
   await Promise.all([firstDestroy, secondDestroy])
   t.is(session.core.state, 'shutdown')
   t.is(lifecycle.filter((entry) => entry === 'backend:destroy').length, 1)
+})
+
+test('backend accepts current storage independently of a newer live host protocol', async (t) => {
+  const storagePath = fs.mkdtempSync(path.join('/tmp', 'peartube-entry-storage-format-'))
+  fs.writeFileSync(
+    path.join(storagePath, 'stored-protocol.json'),
+    JSON.stringify({ protocolVersion: STORAGE_FORMAT_VERSION })
+  )
+
+  let session = null
+  let capturedStorageFormatVersion = null
+  let backendDestroyed = false
+  const metaDb = {
+    async get() { return null },
+    async put() {}
+  }
+
+  try {
+    session = await backendEntry.createBackend({
+      storagePath,
+      stream: {},
+      platform: 'desktop',
+      protocolVersion: STORAGE_FORMAT_VERSION + 1,
+      createBackendContext: async (contextOptions) => {
+        capturedStorageFormatVersion = contextOptions.expectedStorageFormatVersion
+        assert.equal(Object.hasOwn(contextOptions, 'protocolVersion'), false)
+        const storedState = prepareStoredProtocolState({
+          storagePath,
+          expectedVersion: capturedStorageFormatVersion,
+          fs,
+          path,
+        })
+        assert.equal(storedState.status, 'compatible')
+        await storedState.migrate({})
+        storedState.commit()
+        assert.deepEqual(
+          JSON.parse(fs.readFileSync(path.join(storagePath, 'stored-protocol.json'), 'utf8')),
+          { protocolVersion: STORAGE_FORMAT_VERSION }
+        )
+        return {
+          ctx: { metaDb },
+          api: {},
+          identityManager: { getIdentities: () => [] },
+          uploadManager: {},
+          async destroy() {
+            backendDestroyed = true
+          },
+        }
+      },
+      HRPCImpl: class MockHRPC {
+        respond() {}
+        eventReady(payload) { this.ready = payload }
+        eventError(payload) { this.error = payload }
+      }
+    })
+
+    t.is(capturedStorageFormatVersion, STORAGE_FORMAT_VERSION)
+    t.is(session.rpc.ready.protocolVersion, STORAGE_FORMAT_VERSION + 1)
+  } finally {
+    await session?.destroy?.()
+    fs.rmSync(storagePath, { recursive: true, force: true })
+  }
+
+  t.ok(backendDestroyed)
 })
 
 test('stored protocol rejection happens before RPC handlers or readiness are exposed', async (t) => {

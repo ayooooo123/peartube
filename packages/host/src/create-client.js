@@ -89,7 +89,10 @@ function normalizeNetworkStatusPayload(payload = {}) {
   const network = payload?.network ?? parseOptionalJson(payload?.networkJson)
   const startupTiming = payload?.startupTiming ?? parseOptionalJson(payload?.startupTimingJson)
   const doctor = payload?.doctor ?? parseOptionalJson(payload?.doctorJson)
+  return buildNetworkStatusPayload(payload, swarmConnections, peerCount, network, startupTiming, doctor)
+}
 
+function buildNetworkStatusPayload(payload, swarmConnections, peerCount, network, startupTiming, doctor) {
   return {
     connected: Boolean(payload?.connected ?? (swarmConnections > 0 || peerCount > 0)),
     peerCount,
@@ -137,9 +140,15 @@ function createMethodCaller(rpc, ready, methodName) {
 }
 function createProviderNamespace(provider = {}) {
   return {
-    search: provider.providerSearch,
+    search: request => provider.providerSearch({ ...request, query: request?.query ?? '' }),
     resolveProviderRef: provider.resolveProviderRef,
-    requestAcquisition: provider.requestAcquisition,
+    requestAcquisition: request => provider.requestAcquisition({
+      ...request,
+      request: {
+        ...request?.request,
+        retentionUntilPresent: request?.request?.retentionUntil != null
+      }
+    }),
     attachSourceGrant: provider.attachSourceGrant,
     getAcquisition: provider.getAcquisition,
     listAcquisitions: provider.listAcquisitions,
@@ -166,13 +175,14 @@ function createNetworkStatusCaller(rpc, ready, events) {
 }
 
 
-function bindTransport(stream, events, emitHostError) {
+function bindTransport(stream, events, emitHostError, rememberReadyFailure) {
   if (!stream || typeof stream.on !== 'function') return
 
   let closed = false
   const emitClosed = (reason) => {
     if (closed) return
     closed = true
+    rememberReadyFailure(createTransportClosedError(reason))
     events.emit(PROTOCOL_EVENTS.TRANSPORT_CLOSED, reason ? { reason } : {})
   }
 
@@ -204,6 +214,11 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
   void appendDebugLine('[createProtocolClient] HRPC client constructed')
 
   let lastReady = null
+  let lastReadyError = null
+  const rememberReadyFailure = (error) => {
+    if (!lastReady && !lastReadyError) lastReadyError = error
+    return error
+  }
   // Single choke point for readiness: an unsupported backend must never reach
   // HOST_READY listeners, because they apply backend data (blob server port,
   // catalog reads) as soon as they fire.
@@ -216,6 +231,8 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
       ))
       return null
     }
+
+    if (lastReadyError) return null
 
     if (
       lastReady &&
@@ -234,6 +251,7 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
 
   const emitHostError = (error) => {
     const normalized = normalizeProtocolError(error)
+    rememberReadyFailure(normalized)
     events.emit(PROTOCOL_EVENTS.HOST_ERROR, {
       code: normalized.code ?? HOST_ERROR_CODES.HOST_START_FAILED,
       message: normalized.message,
@@ -261,11 +279,12 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
     })
   }
 
-  bindTransport(stream, events, emitHostError)
+  bindTransport(stream, events, emitHostError, rememberReadyFailure)
 
   let readyPromise = null
   const ready = async () => {
     if (lastReady) return lastReady
+    if (lastReadyError) throw lastReadyError
 
     if (!readyPromise) {
       void appendDebugLine('[createProtocolClient] ready() creating readyPromise')
@@ -285,6 +304,7 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
         const settleReject = (error) => {
           if (settled) return
           settled = true
+          rememberReadyFailure(error)
           cleanup()
           reject(error)
         }

@@ -132,6 +132,32 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
     })
   }
 
+  async function persistStoreKeyIfNeeded (pk, store, identity) {
+    if (
+      pk !== DEVICE_LOCAL_PERSONAL_ID &&
+      store.keyHex &&
+      identity.personalKey !== store.keyHex &&
+      typeof identityManager?.setPersonalKey === 'function'
+    ) {
+      try { await identityManager.setPersonalKey(pk, store.keyHex) } catch (err) {
+        log.warn(' Failed to persist personal key:', err?.message)
+      }
+    }
+  }
+
+  async function setupStorePairing (store) {
+    if (ctx.swarm) {
+      try { await store.setupPairing(ctx.swarm) } catch (err) { log.debug(' Pairing setup skipped:', err?.message) }
+    }
+  }
+
+  async function runStoreMigrations (store) {
+    if (store.writable) {
+      await migrateSubscriptions(store).catch((err) => log.warn(' Subscription migration skipped:', err?.message))
+      await migrateLegacyResume(store).catch((err) => log.warn(' Resume migration skipped:', err?.message))
+    }
+  }
+
   async function openForIdentity(identity) {
     if (!identity?.publicKey) return null
     const pk = identity.publicKey
@@ -155,25 +181,9 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
     await store.ready()
     stores.set(pk, store)
 
-    if (
-      pk !== DEVICE_LOCAL_PERSONAL_ID &&
-      store.keyHex &&
-      identity.personalKey !== store.keyHex &&
-      typeof identityManager?.setPersonalKey === 'function'
-    ) {
-      try { await identityManager.setPersonalKey(pk, store.keyHex) } catch (err) {
-        log.warn(' Failed to persist personal key:', err?.message)
-      }
-    }
-
-    if (ctx.swarm) {
-      try { await store.setupPairing(ctx.swarm) } catch (err) { log.debug(' Pairing setup skipped:', err?.message) }
-    }
-
-    if (store.writable) {
-      await migrateSubscriptions(store).catch((err) => log.warn(' Subscription migration skipped:', err?.message))
-      await migrateLegacyResume(store).catch((err) => log.warn(' Resume migration skipped:', err?.message))
-    }
+    await persistStoreKeyIfNeeded(pk, store, identity)
+    await setupStorePairing(store)
+    await runStoreMigrations(store)
 
     log.info(' Opened personal store for', pk.slice(0, 16), 'encrypted=', store.encrypted, 'writable=', store.writable)
     return store
@@ -384,6 +394,75 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
       try { await previous.close() } catch { /* best effort */ }
     }
   }
+  async function provisionSecretActivation (pk, isDeviceLocal, bootstrapKey, existingStore) {
+    if (isDeviceLocal) {
+      anonymousBootstrapKey = bootstrapKey || anonymousBootstrapKey
+      const identity = {
+        publicKey: DEVICE_LOCAL_PERSONAL_ID,
+        personalKey: anonymousBootstrapKey,
+      }
+      const store = existingStore || await openForIdentity(identity)
+      anonymousBootstrapKey = store?.keyHex || anonymousBootstrapKey
+      let activation = { profileReconciled: false }
+      if (store && (!ctx.personal || activePublicKey === DEVICE_LOCAL_PERSONAL_ID)) {
+        activation = await activateStore(DEVICE_LOCAL_PERSONAL_ID, store)
+      }
+      return { store, activation }
+    }
+
+    const currentActivePk = identityManager?.getActivePublicKey?.() || activePublicKey
+    if (pk === currentActivePk) {
+      const identity = identityManager?.getIdentities?.().find((i) => i.publicKey === pk) || activeIdentityRecord()
+      const store = existingStore || await openForIdentity(identity)
+      const activation = await activateStore(pk, store, { migrateAnonymous: true })
+      return { store, activation }
+    }
+
+    return { store: existingStore || null, activation: { profileReconciled: false } }
+  }
+
+  async function rotatePersonalStoreEpoch (pk, store, nextSecret) {
+    const state = await store.exportState()
+    const current = await readEpoch(pk)
+    const epoch = (current?.epoch || 0) + 1
+    const namespace = epochNamespace(pk, epoch)
+
+    const next = new PersonalStore(ctx.store, { namespace, secret: nextSecret, swarm: ctx.swarm || null })
+    await next.ready()
+    await next.importState(state)
+
+    secrets.set(pk, b4a.from(nextSecret))
+    await writeEpoch(pk, { epoch, namespace, bootstrapKey: next.keyHex, joined: false })
+    return { next, epoch, namespace }
+  }
+
+  async function commitPersonalStoreRotation ({ pk, store, next, epoch, revokedKey, deviceName }) {
+    if (pk !== DEVICE_LOCAL_PERSONAL_ID && typeof identityManager?.setPersonalKey === 'function') {
+      await identityManager.setPersonalKey(pk, next.keyHex).catch(() => {})
+    }
+    if (pk === DEVICE_LOCAL_PERSONAL_ID) anonymousBootstrapKey = next.keyHex
+
+    await replaceActiveStore(pk, store, next)
+    if (ctx.swarm) await next.setupPairing(ctx.swarm).catch(() => {})
+
+    log.info(' Rotated personal store to epoch', epoch, 'after revoking', revokedKey.slice(0, 16), deviceName || '')
+    const remaining = (await next.listWriters()).length + (next.localKeyHex ? 1 : 0)
+    return { success: true, bootstrapKey: next.keyHex, remainingDeviceCount: remaining }
+  }
+
+  async function handleRevocationFailure ({ err, next, pk, epochRecorded, previousSecret }) {
+    log.warn(' Personal device revocation failed:', err?.message)
+    if (next && stores.get(pk) !== next) {
+      try { await next.close() } catch { /* best effort */ }
+    }
+    if (!epochRecorded) {
+      if (previousSecret) secrets.set(pk, previousSecret)
+      else secrets.delete(pk)
+      return { success: false, error: 'personal-revoke-failed' }
+    }
+    return { success: false, error: 'personal-revoke-incomplete' }
+  }
+
 
   return {
     /**
@@ -431,24 +510,8 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
         const buf = b4a.isBuffer(secret) ? b4a.from(secret) : b4a.from(secret, 'hex')
         secrets.set(pk, buf)
 
-        let store = existingStore || null
-        let activation = { profileReconciled: false }
-        if (isDeviceLocal) {
-          anonymousBootstrapKey = bootstrapKey || anonymousBootstrapKey
-          const identity = {
-            publicKey: DEVICE_LOCAL_PERSONAL_ID,
-            personalKey: anonymousBootstrapKey,
-          }
-          store = store || await openForIdentity(identity)
-          anonymousBootstrapKey = store?.keyHex || anonymousBootstrapKey
-          if (store && (!ctx.personal || activePublicKey === DEVICE_LOCAL_PERSONAL_ID)) {
-            activation = await activateStore(DEVICE_LOCAL_PERSONAL_ID, store)
-          }
-        } else if (pk === (identityManager?.getActivePublicKey?.() || activePublicKey)) {
-          const identity = identityManager?.getIdentities?.().find((i) => i.publicKey === pk) || activeIdentityRecord()
-          store = store || await openForIdentity(identity)
-          activation = await activateStore(pk, store, { migrateAnonymous: true })
-        }
+        const { store, activation } = await provisionSecretActivation(pk, isDeviceLocal, bootstrapKey, existingStore)
+
         return {
           success: true,
           bootstrapKey: store?.keyHex || bootstrapKey,
@@ -650,45 +713,22 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
           store.freeze('personal-store-rotating')
           frozen = true
 
-          const state = await store.exportState()
-          const current = await readEpoch(pk)
-          const epoch = (current?.epoch || 0) + 1
-          const namespace = epochNamespace(pk, epoch)
-
-          next = new PersonalStore(ctx.store, { namespace, secret: nextSecret, swarm: ctx.swarm || null })
-          await next.ready()
-          await next.importState(state)
-
-          secrets.set(pk, b4a.from(nextSecret))
-          await writeEpoch(pk, { epoch, namespace, bootstrapKey: next.keyHex, joined: false })
-          // Past this line the rotation is durable: a restart reopens the new
-          // epoch, so the platform must keep the secret it supplied.
+          const rotated = await rotatePersonalStoreEpoch(pk, store, nextSecret)
+          next = rotated.next
           epochRecorded = true
-          if (pk !== DEVICE_LOCAL_PERSONAL_ID && typeof identityManager?.setPersonalKey === 'function') {
-            await identityManager.setPersonalKey(pk, next.keyHex).catch(() => {})
-          }
-          if (pk === DEVICE_LOCAL_PERSONAL_ID) anonymousBootstrapKey = next.keyHex
 
-          await replaceActiveStore(pk, store, next)
-          // The swap is committed and the abandoned epoch closed: the write
-          // window is shut, and writes now reach the new epoch.
+          const result = await commitPersonalStoreRotation({
+            pk,
+            store,
+            next,
+            epoch: rotated.epoch,
+            revokedKey,
+            deviceName,
+          })
           frozen = false
-          if (ctx.swarm) await next.setupPairing(ctx.swarm).catch(() => {})
-
-          log.info(' Rotated personal store to epoch', epoch, 'after revoking', revokedKey.slice(0, 16), deviceName || '')
-          const remaining = (await next.listWriters()).length + (next.localKeyHex ? 1 : 0)
-          return { success: true, bootstrapKey: next.keyHex, remainingDeviceCount: remaining }
+          return result
         } catch (err) {
-          log.warn(' Personal device revocation failed:', err?.message)
-          if (next && stores.get(pk) !== next) { try { await next.close() } catch { /* best effort */ } }
-          if (!epochRecorded) {
-            // Nothing durable happened, so leave this device exactly as it was
-            // and let the platform restore the secret it was holding.
-            if (previousSecret) secrets.set(pk, previousSecret)
-            else secrets.delete(pk)
-            return { success: false, error: 'personal-revoke-failed' }
-          }
-          return { success: false, error: 'personal-revoke-incomplete' }
+          return await handleRevocationFailure({ err, next, pk, epochRecorded, previousSecret })
         } finally {
           // Every failure path leaves the old store active, so it has to take
           // writes again; the success path closed it already.

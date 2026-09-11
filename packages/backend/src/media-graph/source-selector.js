@@ -77,25 +77,36 @@ function supportsAll(supported, required) {
  * device can actually decode; an absent capability list means the caller has
  * not constrained that dimension and the source passes.
  */
+function appendCapabilityRejections(codes, source, capabilities) {
+  if (!supportsAll(capabilities.codecs, source.codecs)) codes.push('UNSUPPORTED_CODEC')
+  if (nonEmptyString(source.container) && Array.isArray(capabilities.containers) && !capabilities.containers.includes(source.container)) {
+    codes.push('UNSUPPORTED_CONTAINER')
+  }
+}
+
+function appendAvailabilityRejections(codes, source, now) {
+  const state = source.availability?.state
+  const expiresAt = Number(source.availability?.expiresAt)
+  if (state === AVAILABILITY_STATES.unavailable) {
+    codes.push('NO_AVAILABLE_COPY')
+  } else if (Number.isFinite(now) && Number.isFinite(expiresAt) && expiresAt > 0 && now > expiresAt) {
+    codes.push('STALE_AVAILABILITY')
+  }
+}
+
 function rejectionCodesFor(source, capabilities, now) {
   const codes = []
   if (decisionBlocks(source.moderationDecision)) codes.push('BLOCKED_BY_MODERATION')
   if (decisionBlocks(source.localPolicyDecision) || source.blocked === true) codes.push('BLOCKED_BY_LOCAL_POLICY')
   if (source.publicationAuthorized !== true || !nonEmptyString(source.renditionId)) codes.push('UNAUTHORIZED_PUBLICATION')
 
-  if (!supportsAll(capabilities.codecs, source.codecs)) codes.push('UNSUPPORTED_CODEC')
-  if (nonEmptyString(source.container) && Array.isArray(capabilities.containers) && !capabilities.containers.includes(source.container)) {
-    codes.push('UNSUPPORTED_CONTAINER')
-  }
+  appendCapabilityRejections(codes, source, capabilities)
 
   if (source.manifestStale === true || source.superseded === true) codes.push('STALE_MANIFEST')
   if (source.incomplete === true || source.manifestComplete === false) codes.push('INCOMPLETE_PUBLICATION')
   if (source.collectionMemberBound === false) codes.push('INCOMPLETE_COLLECTION_BINDING')
 
-  const state = source.availability?.state
-  const expiresAt = Number(source.availability?.expiresAt)
-  if (state === AVAILABILITY_STATES.unavailable) codes.push('NO_AVAILABLE_COPY')
-  else if (Number.isFinite(now) && Number.isFinite(expiresAt) && expiresAt > 0 && now > expiresAt) codes.push('STALE_AVAILABILITY')
+  appendAvailabilityRejections(codes, source, now)
   // Not having asked a peer yet is not a reason to refuse: the catalog names
   // the core, holding it is how bytes arrive, and trying is how anyone finds
   // out. Only a decided negative - no copy, or an expired assessment - keeps a

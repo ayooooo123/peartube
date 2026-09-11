@@ -63,6 +63,7 @@ export const videoLoadEventEmitter = {
       try {
         listener(lastLoadedVideo)
       } catch {
+        // A listener that throws on replay must not break subscribe.
       }
     }
     return () => { loadListeners.delete(listener) }

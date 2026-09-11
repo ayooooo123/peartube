@@ -78,13 +78,13 @@ export function createIndexVerificationRuntime({
   })
   let closed = false
   const runtime = Object.freeze({
-    searchIndexCandidates({ selector, limit, signal } = {}) {
+    searchIndexCandidates({ selector, limit, cursor, signal } = {}) {
       if (closed) {
         const error = new Error('Index verification runtime is closed')
         error.code = 'INDEX_VERIFICATION_CLOSED'
         throw error
       }
-      return federation.search({ selector, ...(limit === undefined ? {} : { limit }), signal })
+      return federation.search({ selector, ...(limit === undefined ? {} : { limit }), ...(cursor == null ? {} : { cursor }), signal })
     },
     verifyIndexCandidate({ candidateRef, signal } = {}) {
       if (closed) {
@@ -254,4 +254,6 @@ export async function attachSharedAppHandlers(options) {
 
   return true
 }
+
+export { STORAGE_FORMAT_VERSION } from './stored-protocol.js'
 

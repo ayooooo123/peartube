@@ -1,3 +1,11 @@
+import b4a from 'b4a'
+import {
+  decodeIndexServiceAnnouncement,
+  MAX_INDEX_SERVICE_ANNOUNCEMENT_BYTES,
+  verifyIndexServiceAnnouncement,
+} from '../indexer/service-announcement.js'
+import { getIndexServicePolicyControl } from '../network/index-service-policy-control-internal.js'
+
 import {
   DEFAULT_PARTICIPATION_MODE,
   PARTICIPATION_LIMITS,
@@ -7,6 +15,9 @@ import {
 const DEFAULT_PARTICIPATION_LIMITS = PARTICIPATION_LIMITS[DEFAULT_PARTICIPATION_MODE]
 
 export const NETWORK_POLICY_VERSION = 2
+const MAX_RETAINED_INDEX_SERVICES = 32
+const EMPTY_INDEX_SERVICES = Object.freeze([])
+const indexServiceRecords = new WeakMap([[EMPTY_INDEX_SERVICES, EMPTY_INDEX_SERVICES]])
 
 export const DEFAULT_NETWORK_POLICY = Object.freeze({
   policyVersion: NETWORK_POLICY_VERSION,
@@ -50,6 +61,7 @@ export const DEFAULT_NETWORK_POLICY = Object.freeze({
   retentionMode: 'none',
   followedPublishers: [],
   followedIndexes: [],
+  indexServiceAnnouncements: EMPTY_INDEX_SERVICES,
   trustedModerationFeeds: [],
   aiAnalysis: 'disabled',
 })
@@ -119,6 +131,33 @@ function boundedTransportIdList(value, name) {
   }))).sort()
 }
 
+function normalizeIndexServiceAnnouncements(value) {
+  if (value == null) return EMPTY_INDEX_SERVICES
+  if (indexServiceRecords.has(value)) return value
+  if (!Array.isArray(value) || value.length > MAX_RETAINED_INDEX_SERVICES) {
+    throw new Error('indexServiceAnnouncements must be a bounded list')
+  }
+  const records = new Map()
+  for (const encoded of value) {
+    if (typeof encoded !== 'string' || encoded.length > MAX_INDEX_SERVICE_ANNOUNCEMENT_BYTES * 2 ||
+        !/^(?:[0-9a-f]{2})+$/.test(encoded)) {
+      throw new Error('indexServiceAnnouncements entries must be canonical signed-envelope hex')
+    }
+    const announcement = decodeIndexServiceAnnouncement(b4a.from(encoded, 'hex'))
+    // Historical expired records remain loadable; runtime rejects future issuance.
+    if (!verifyIndexServiceAnnouncement(announcement, { now: announcement.issuedAt })) {
+      throw new Error('index service announcement signature is invalid')
+    }
+    const indexerId = b4a.toString(announcement.indexerId, 'hex')
+    if (records.has(indexerId)) throw new Error('indexServiceAnnouncements contains a duplicate indexer')
+    records.set(indexerId, Object.freeze({ indexerId, encoded, announcement }))
+  }
+  const entries = [...records.values()].sort((left, right) => left.indexerId.localeCompare(right.indexerId))
+  const normalized = Object.freeze(entries.map(entry => entry.encoded))
+  indexServiceRecords.set(normalized, entries)
+  return normalized
+}
+
 function boundedBytes(value, name) {
   const next = Number(value)
   if (!Number.isSafeInteger(next) || next < 0) throw new Error(`${name} must be nonnegative safe integer`)
@@ -179,6 +218,15 @@ function decodeNetworkPolicyPatch(input = {}) {
     if (input[wireName] != null) patch[policyName] = decodeBoundedList(input[wireName], policyName)
     delete patch[wireName]
   }
+  if (input.indexServiceAnnouncementsJson != null) {
+    const serialized = input.indexServiceAnnouncementsJson
+    if (typeof serialized !== 'string' ||
+        serialized.length > MAX_RETAINED_INDEX_SERVICES * (MAX_INDEX_SERVICE_ANNOUNCEMENT_BYTES * 2 + 4) + 2) {
+      throw new Error('indexServiceAnnouncementsJson exceeds its bound')
+    }
+    patch.indexServiceAnnouncements = normalizeIndexServiceAnnouncements(JSON.parse(serialized))
+  }
+  delete patch.indexServiceAnnouncementsJson
   for (const key of [
     'diskCeilingBytes',
     'uploadCeilingBytes',
@@ -212,6 +260,7 @@ function networkPolicyWireFields(policy) {
     retentionMode: policy.retentionMode,
     followedPublishersJson: JSON.stringify(policy.followedPublishers),
     followedIndexesJson: JSON.stringify(policy.followedIndexes),
+    indexServiceAnnouncementsJson: JSON.stringify(policy.indexServiceAnnouncements),
     trustedModerationFeedsJson: JSON.stringify(policy.trustedModerationFeeds),
     aiAnalysis: policy.aiAnalysis,
     participationMode: policy.participationMode,
@@ -243,6 +292,9 @@ export function normalizeNetworkPolicy(input = {}, base = DEFAULT_NETWORK_POLICY
   for (const key of ['followedPublishers', 'followedIndexes', 'trustedModerationFeeds']) {
     if (input[key] !== undefined) policy[key] = boundedTransportIdList(input[key], key)
   }
+  policy.indexServiceAnnouncements = normalizeIndexServiceAnnouncements(
+    input.indexServiceAnnouncements ?? policy.indexServiceAnnouncements,
+  )
   policy.policyVersion = NETWORK_POLICY_VERSION
   policy.consentVersion = boundedBytes(input.consentVersion ?? policy.consentVersion ?? 0, 'consentVersion')
   policy.migrationRequired = hasOwn(input, 'migrationRequired')
@@ -501,6 +553,45 @@ function sameTransportTerms(left, right) {
     left.outboundBytesPerSecond === right.outboundBytesPerSecond
 }
 
+function assertAnnouncementValidity(announcements, currentTime) {
+  for (const record of indexServiceRecords.get(announcements)) {
+    if (record.announcement.issuedAt > currentTime) {
+      throw new Error('index service announcement is not yet valid')
+    }
+  }
+}
+
+function assertFeedTransportSupported(normalized, scopedNetwork) {
+  if (normalized.followedPublishers.length > 0 &&
+    (typeof scopedNetwork?.addPublisherFollowReason !== 'function' || typeof scopedNetwork?.removePublisherFollowReason !== 'function')) {
+    throw unsupportedPolicyError('followedPublishers', 'verified publisher discovery is unavailable on this runtime')
+  }
+  if (normalized.followedIndexes.length > 0 &&
+    (typeof scopedNetwork?.followIndexFeed !== 'function' || typeof scopedNetwork?.unfollowIndexFeed !== 'function')) {
+    throw unsupportedPolicyError('followedIndexes', 'bounded index-feed transport is unavailable on this runtime')
+  }
+}
+
+function assertServiceAndModerationSupported(normalized, scopedNetwork) {
+  if (normalized.indexServiceAnnouncements.length > 0 &&
+    (typeof scopedNetwork?.retainIndexService !== 'function' || typeof scopedNetwork?.releaseIndexService !== 'function')) {
+    throw unsupportedPolicyError('indexServiceAnnouncements', 'independent index query transport is unavailable')
+  }
+  if (normalized.trustedModerationFeeds.length > 0 &&
+    (typeof scopedNetwork?.followModerationFeed !== 'function' || typeof scopedNetwork?.unfollowModerationFeed !== 'function')) {
+    throw unsupportedPolicyError('trustedModerationFeeds', 'bounded moderation-feed transport is unavailable on this runtime')
+  }
+}
+
+function assertArchivePolicySupported(normalized, archiveNetwork) {
+  if (normalized.retentionMode === 'archive-pledges' && !archiveNetwork?.setParticipation) {
+    throw unsupportedPolicyError('retentionMode', 'archive participation is unavailable on this runtime')
+  }
+  if (normalized.archiveEnabled && !archiveNetwork?.setParticipation) {
+    throw unsupportedPolicyError('archiveEnabled', 'archive participation is unavailable on this runtime')
+  }
+}
+
 export function createNetworkPolicyRuntime({
   initialPolicy = DEFAULT_NETWORK_POLICY,
   scopedNetwork = null,
@@ -511,6 +602,7 @@ export function createNetworkPolicyRuntime({
   suspendTransport = null,
   resumeTransport = null,
   participationDecision = null,
+  now = Date.now,
 } = {}) {
   let policy = normalizePolicySnapshot(initialPolicy, DEFAULT_NETWORK_POLICY)
   const environment = { metered: metered === true, background: background === true }
@@ -520,6 +612,7 @@ export function createNetworkPolicyRuntime({
   let appliedPublishers = new Set()
   let appliedIndexes = new Set()
   let appliedModerationFeeds = new Set()
+  const appliedIndexServices = new Map()
   // The last participation decision published by the decision authority. Null
   // means nothing has published one yet, not that this device was cleared.
   let participation = transportTermsOf(participationDecision)
@@ -533,24 +626,10 @@ export function createNetworkPolicyRuntime({
   const normalizeSupported = candidate => {
     const normalized = normalizeNetworkPolicy(candidate, DEFAULT_NETWORK_POLICY)
     assertNetworkPolicyRuntimeSupported(normalized)
-    if (normalized.followedPublishers.length > 0 &&
-      (typeof scopedNetwork?.addPublisherFollowReason !== 'function' || typeof scopedNetwork?.removePublisherFollowReason !== 'function')) {
-      throw unsupportedPolicyError('followedPublishers', 'verified publisher discovery is unavailable on this runtime')
-    }
-    if (normalized.followedIndexes.length > 0 &&
-      (typeof scopedNetwork?.followIndexFeed !== 'function' || typeof scopedNetwork?.unfollowIndexFeed !== 'function')) {
-      throw unsupportedPolicyError('followedIndexes', 'bounded index-feed transport is unavailable on this runtime')
-    }
-    if (normalized.trustedModerationFeeds.length > 0 &&
-      (typeof scopedNetwork?.followModerationFeed !== 'function' || typeof scopedNetwork?.unfollowModerationFeed !== 'function')) {
-      throw unsupportedPolicyError('trustedModerationFeeds', 'bounded moderation-feed transport is unavailable on this runtime')
-    }
-    if (normalized.retentionMode === 'archive-pledges' && !archiveNetwork?.setParticipation) {
-      throw unsupportedPolicyError('retentionMode', 'archive participation is unavailable on this runtime')
-    }
-    if (normalized.archiveEnabled && !archiveNetwork?.setParticipation) {
-      throw unsupportedPolicyError('archiveEnabled', 'archive participation is unavailable on this runtime')
-    }
+    assertAnnouncementValidity(normalized.indexServiceAnnouncements, now())
+    assertFeedTransportSupported(normalized, scopedNetwork)
+    assertServiceAndModerationSupported(normalized, scopedNetwork)
+    assertArchivePolicySupported(normalized, archiveNetwork)
     return normalized
   }
   policy = normalizeSupported(policy)
@@ -616,6 +695,69 @@ export function createNetworkPolicyRuntime({
     appliedModerationFeeds = moderation
   }
 
+  const reconcileIndexServices = async nextPolicy => {
+    const currentTime = now()
+    const desired = new Map()
+    for (const record of indexServiceRecords.get(nextPolicy.indexServiceAnnouncements)) {
+      if (record.announcement.issuedAt <= currentTime && record.announcement.expiresAt > currentTime) {
+        desired.set(record.indexerId, record)
+      }
+    }
+    const removed = [...appliedIndexServices.keys()].filter(indexerId => !desired.has(indexerId))
+    const growing = [...desired.keys()].filter(indexerId => !appliedIndexServices.has(indexerId))
+    // Admission first, release after: a failed retain leaves the previous set
+    // fully applied. Full-capacity swaps release first; applyTransactional's
+    // catch rebinds last-admitted snapshots before rolling policy back.
+    if (growing.length > 0 && appliedIndexServices.size + growing.length > MAX_RETAINED_INDEX_SERVICES) {
+      for (const indexerId of removed) {
+        await scopedNetwork.releaseIndexService({ indexerId })
+        appliedIndexServices.delete(indexerId)
+      }
+      removed.length = 0
+    }
+    for (const [indexerId, record] of desired) {
+      if (appliedIndexServices.get(indexerId) === record.encoded) continue
+      await scopedNetwork.retainIndexService({ announcement: record.announcement })
+      appliedIndexServices.set(indexerId, record.encoded)
+    }
+    for (const indexerId of removed) {
+      await scopedNetwork.releaseIndexService({ indexerId })
+      appliedIndexServices.delete(indexerId)
+    }
+  }
+
+  const rollbackIndexServicesToPolicy = async (previousPolicy, sessionSnapshot) => {
+    const control = getIndexServicePolicyControl(scopedNetwork)
+    if (control?.restoreIndexServiceSession && sessionSnapshot) {
+      // Full session restore undoes same-indexer supersession and multi-swap
+      // admissions that committed floors/lastAdmitted before a later failure.
+      await control.restoreIndexServiceSession(sessionSnapshot)
+      appliedIndexServices.clear()
+      const currentTime = now()
+      for (const record of indexServiceRecords.get(previousPolicy.indexServiceAnnouncements) || []) {
+        if (record.announcement.issuedAt <= currentTime && record.announcement.expiresAt > currentTime) {
+          appliedIndexServices.set(record.indexerId, record.encoded)
+        }
+      }
+      return
+    }
+    // No-control mock fallback: release non-previous only, then let applyNow
+    // public-reconcile. Missing private control cannot undo floor-committed
+    // supersession on a real runtime.
+    const currentTime = now()
+    const desired = new Map()
+    for (const record of indexServiceRecords.get(previousPolicy.indexServiceAnnouncements) || []) {
+      if (record.announcement.issuedAt <= currentTime && record.announcement.expiresAt > currentTime) {
+        desired.set(record.indexerId, record)
+      }
+    }
+    for (const indexerId of [...appliedIndexServices.keys()]) {
+      if (desired.has(indexerId)) continue
+      await scopedNetwork.releaseIndexService({ indexerId })
+      appliedIndexServices.delete(indexerId)
+    }
+  }
+
   // The reserved bytes an archive has already promised to keep. Custody is a
   // promise this device made; a ceiling that shrinks under it takes away free
   // headroom, never a pledge, so the capacity handed to the archive is floored
@@ -669,28 +811,50 @@ export function createNetworkPolicyRuntime({
       await resumeTransport?.()
       transportSuspended = false
     }
+    await reconcileIndexServices(nextPolicy)
     policy = nextPolicy
     return effective
   }
 
   const applyTransactional = async nextInput => {
+    // Invalid input has no side effects to roll back, including service sessions.
+    const nextPolicy = normalizeSupported(nextInput)
     const previous = policy
+    const control = getIndexServicePolicyControl(scopedNetwork)
+    const sessionSnapshot = typeof control?.captureIndexServiceSession === 'function'
+      ? control.captureIndexServiceSession()
+      : null
     try {
-      return await applyNow(nextInput)
+      return await applyNow(nextPolicy)
     } catch (error) {
-      await applyNow(previous).catch(() => {})
+      try {
+        await rollbackIndexServicesToPolicy(previous, sessionSnapshot)
+        await applyNow(previous)
+      } catch (rollbackError) {
+        const compound = new Error(
+          `network policy apply failed (${error.message}) and rollback failed (${rollbackError.message})`
+        )
+        compound.code = 'NETWORK_POLICY_ROLLBACK_FAILED'
+        compound.cause = { apply: error, rollback: rollbackError }
+        throw compound
+      }
       throw error
     }
   }
+
 
   return {
     assertSupported(candidate) {
       return normalizeSupported(candidate)
     },
     start(candidate = policy) {
-      if (started) return transition.then(() => resolveNetworkPolicyForEnvironment(policy, environment, participation))
-      started = true
-      return runTransition(() => applyTransactional(candidate))
+      return runTransition(async () => {
+        const nextPolicy = normalizeSupported(candidate)
+        if (started) return resolveNetworkPolicyForEnvironment(policy, environment, participation)
+        const effective = await applyTransactional(nextPolicy)
+        started = true
+        return effective
+      })
     },
     apply(candidate) {
       return runTransition(() => applyTransactional(candidate))

@@ -31,6 +31,76 @@ function archiveLabel(status: string | null): string {
   if (status === 'missing' || status === 'unavailable') return 'Source currently missing'
   return status || 'No archive evidence yet'
 }
+function computePledgeCount(rawPledgeCount: unknown): number {
+  if (Number.isSafeInteger(rawPledgeCount) && Number(rawPledgeCount) > 0) {
+    return Math.min(Number(rawPledgeCount), 1_000_000)
+  }
+  return 0
+}
+
+function computeSourceCount(item?: ArchiveItem | null): number {
+  if (typeof item?.sourceCount === 'number') return item.sourceCount
+  if (Array.isArray(item?.sources)) return item.sources.length
+  return 0
+}
+
+function isPositiveArchiveState(state: string | null): boolean {
+  return (
+    state === 'local' ||
+    state === 'complete-local' ||
+    state === 'cached' ||
+    state === 'retained' ||
+    state === 'archived'
+  )
+}
+
+function isWarningArchiveState(state: string | null, pledgeCount: number): boolean {
+  return state === 'partial' || state === 'pledged' || pledgeCount > 0
+}
+
+function formatArchiveDetail(
+  hasStatus: boolean,
+  pledgeCount: number,
+  sourceCount: number
+): string {
+  if (hasStatus) {
+    if (pledgeCount > 0) {
+      const suffix = pledgeCount === 1 ? '' : 's'
+      return `${pledgeCount} archival pledge${suffix} observed; retention is not guaranteed and may change.`
+    }
+    return 'Archive state is uncertain; retention is not guaranteed.'
+  }
+  if (sourceCount > 0) {
+    const suffix = sourceCount === 1 ? '' : 's'
+    return `${sourceCount} source${suffix} known for this entity; retention is not guaranteed.`
+  }
+  return 'No source claims are attached to this entity; retention is not guaranteed.'
+}
+
+function getArchiveTone(positive: boolean, warning: boolean) {
+  if (positive) {
+    return {
+      cardStyle: styles.cardPositive,
+      iconStyle: styles.iconPositive,
+      iconName: 'shield-checkmark' as const,
+      iconColor: colors.primary,
+    }
+  }
+  if (warning) {
+    return {
+      cardStyle: styles.cardWarning,
+      iconStyle: styles.iconWarning,
+      iconName: 'alert-circle' as const,
+      iconColor: '#fde68a',
+    }
+  }
+  return {
+    cardStyle: null,
+    iconStyle: null,
+    iconName: 'cloud-offline' as const,
+    iconColor: colors.textMuted,
+  }
+}
 
 export function ArchiveStatus({ status = null, item = null }: ArchiveStatusProps) {
   const selectedSource = item?.selectedSource || item?.item?.selectedSource || null
@@ -40,32 +110,20 @@ export function ArchiveStatus({ status = null, item = null }: ArchiveStatusProps
     selectedSource?.archiveStatus,
     selectedSource?.availabilityStatus,
   )
-  const rawPledgeCount = status?.pledgeCount
-  const pledgeCount = Number.isSafeInteger(rawPledgeCount) && Number(rawPledgeCount) > 0
-    ? Math.min(Number(rawPledgeCount), 1_000_000)
-    : 0
-  const sourceCount = typeof item?.sourceCount === 'number'
-    ? item.sourceCount
-    : Array.isArray(item?.sources)
-      ? item.sources.length
-      : 0
-  const positive = archiveState === 'local' || archiveState === 'complete-local' || archiveState === 'cached' || archiveState === 'retained' || archiveState === 'archived'
-  const warning = archiveState === 'partial' || archiveState === 'pledged' || pledgeCount > 0
-  const detail = status
-    ? pledgeCount > 0
-      ? `${pledgeCount} archival pledge${pledgeCount === 1 ? '' : 's'} observed; retention is not guaranteed and may change.`
-      : 'Archive state is uncertain; retention is not guaranteed.'
-    : sourceCount > 0
-      ? `${sourceCount} source${sourceCount === 1 ? '' : 's'} known for this entity; retention is not guaranteed.`
-      : 'No source claims are attached to this entity; retention is not guaranteed.'
+  const pledgeCount = computePledgeCount(status?.pledgeCount)
+  const sourceCount = computeSourceCount(item)
+  const positive = isPositiveArchiveState(archiveState)
+  const warning = isWarningArchiveState(archiveState, pledgeCount)
+  const detail = formatArchiveDetail(Boolean(status), pledgeCount, sourceCount)
+  const tone = getArchiveTone(positive, warning)
 
   return (
-    <View style={[styles.card, positive ? styles.cardPositive : warning ? styles.cardWarning : null]}>
+    <View style={[styles.card, tone.cardStyle]}>
       <View style={styles.header}>
-        <View style={[styles.icon, positive ? styles.iconPositive : warning ? styles.iconWarning : null]}>
+        <View style={[styles.icon, tone.iconStyle]}>
           <Ionicons
-            name={positive ? 'shield-checkmark' : warning ? 'alert-circle' : 'cloud-offline'}
-            color={positive ? colors.primary : warning ? '#fde68a' : colors.textMuted}
+            name={tone.iconName}
+            color={tone.iconColor}
             size={17}
           />
         </View>

@@ -1,0 +1,12 @@
+id: writer-key-as-authority
+message: "A proposed local writer key is not write authority; use catalog.writable."
+severity: error
+language: Tsx
+files:
+  - "packages/backend/src/**"
+rule:
+  any:
+    - pattern: $CAT.writable || $CAT.localWriterKey != null
+    - pattern: $CAT?.writable || $CAT?.localWriterKey != null
+    - pattern: $CAT.writable || $CAT.localWriterKey
+    - pattern: $CAT?.writable || $CAT?.localWriterKey

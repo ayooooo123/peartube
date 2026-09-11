@@ -16,7 +16,10 @@ import { execSync } from 'child_process'
 import { createPublisherSignerBridge } from '../../lib/publisher-signer-bridge'
 import { createBunPublisherKeyVault } from './publisher-key-vault'
 import { createBunPersonalSecretVault } from './personal-secret-vault'
-import { createPublisherShellService } from '../../lib/publisher-shell-service'
+import {
+  createPublisherShellService,
+  createDesktopPublisherLifecycleHandlers,
+} from '../../lib/publisher-shell-service'
 import { runLegacyPublisherRootPreflight } from '@peartube/backend/legacy-publisher-root-preflight'
 
 type LegacyPublisherRootMigrationRequest = {
@@ -159,6 +162,10 @@ const publisherShellService = createPublisherShellService({
   },
 })
 let legacyPublisherRootPreflightSettled = false
+
+const desktopPublisherLifecycleHandlers = createDesktopPublisherLifecycleHandlers({
+  publisherShell: publisherShellService,
+})
 
 const legacyPublisherRootPreflightPromise = runLegacyPublisherRootPreflight({
   storagePath,
@@ -364,7 +371,7 @@ const appRPC = BrowserView.defineRPC<PearTubeRPC>({
         return { blobServerPort }
       },
       publisherEnsureLocalCatalog: async (request) =>
-        publisherShellService.publisherEnsureLocalCatalog(request),
+        desktopPublisherLifecycleHandlers.publisherEnsureLocalCatalog(request),
       personalSecureGet: async ({ account }) => ({
         value: await personalSecretVault.get(account),
       }),
@@ -474,7 +481,7 @@ async function createWindow() {
   mainWindow = new BrowserWindow({
     title: APP_NAME,
     url: `http://127.0.0.1:${staticPort}`,
-    frame: { width: 1280, height: 800 },
+    frame: { x: 0, y: 0, width: 1280, height: 800 },
     titleBarStyle: 'hiddenInset',
     renderer: 'native',
     rpc: appRPC,

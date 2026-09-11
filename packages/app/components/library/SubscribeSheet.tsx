@@ -18,6 +18,68 @@ interface SubscribeSheetProps {
   rpc: any
   onSubscribed: () => void
 }
+function formatPreviewMeta(preview: ChannelPreview | null): string {
+  if (!preview?.name) {
+    return 'You can still subscribe — it will sync when peers appear.'
+  }
+  const count = preview.videoCount ?? 0
+  const suffix = count === 1 ? '' : 's'
+  const desc = preview.description ? ` · ${preview.description}` : ''
+  return `${count} video${suffix}${desc}`
+}
+
+interface ChannelPreviewCardProps {
+  preview: ChannelPreview | null
+  phase: 'input' | 'previewing' | 'preview' | 'subscribing'
+  error: string | null
+  onReset: () => void
+  onSubscribe: () => void
+}
+
+function ChannelPreviewCard({ preview, phase, error, onReset, onSubscribe }: ChannelPreviewCardProps) {
+  const isSubscribing = phase === 'subscribing'
+  const initial = (preview?.name || '?').charAt(0).toUpperCase()
+  const title = preview?.name || 'Channel not reachable yet'
+  const metaText = formatPreviewMeta(preview)
+
+  return (
+    <GlassCard highlight style={styles.previewCard}>
+      <View style={styles.previewRow}>
+        <View style={styles.previewAvatar}>
+          <Text style={styles.previewLetter}>{initial}</Text>
+        </View>
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <Text style={styles.previewName} numberOfLines={1}>
+            {title}
+          </Text>
+          <Text style={styles.previewMeta} numberOfLines={2}>
+            {metaText}
+          </Text>
+        </View>
+      </View>
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+      <View style={styles.previewActions}>
+        <Pressable onPress={onReset} style={({ pressed }) => [styles.secondaryButton, pressed && { opacity: 0.7 }]}>
+          <Text style={styles.secondaryLabel}>Cancel</Text>
+        </Pressable>
+        <Pressable
+          onPress={onSubscribe}
+          disabled={isSubscribing}
+          style={({ pressed }) => [styles.primaryButton, pressed && { opacity: 0.8 }]}
+        >
+          {isSubscribing ? (
+            <ActivityIndicator size="small" color={colors.onPrimary} />
+          ) : (
+            <>
+              <Feather name="user-plus" size={15} color={colors.onPrimary} />
+              <Text style={styles.primaryLabel}>Subscribe</Text>
+            </>
+          )}
+        </Pressable>
+      </View>
+    </GlassCard>
+  )
+}
 
 /**
  * Paste-a-key subscribe flow with a channel preview step:
@@ -116,45 +178,13 @@ export function SubscribeSheet({ rpc, onSubscribed }: SubscribeSheetProps) {
       )}
 
       {(phase === 'preview' || phase === 'subscribing') && (
-        <GlassCard highlight style={styles.previewCard}>
-          <View style={styles.previewRow}>
-            <View style={styles.previewAvatar}>
-              <Text style={styles.previewLetter}>
-                {(preview?.name || '?').charAt(0).toUpperCase()}
-              </Text>
-            </View>
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={styles.previewName} numberOfLines={1}>
-                {preview?.name || 'Channel not reachable yet'}
-              </Text>
-              <Text style={styles.previewMeta} numberOfLines={2}>
-                {preview?.name
-                  ? `${preview?.videoCount ?? 0} video${(preview?.videoCount ?? 0) === 1 ? '' : 's'}${preview?.description ? ` · ${preview.description}` : ''}`
-                  : 'You can still subscribe — it will sync when peers appear.'}
-              </Text>
-            </View>
-          </View>
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-          <View style={styles.previewActions}>
-            <Pressable onPress={reset} style={({ pressed }) => [styles.secondaryButton, pressed && { opacity: 0.7 }]}>
-              <Text style={styles.secondaryLabel}>Cancel</Text>
-            </Pressable>
-            <Pressable
-              onPress={subscribe}
-              disabled={phase === 'subscribing'}
-              style={({ pressed }) => [styles.primaryButton, pressed && { opacity: 0.8 }]}
-            >
-              {phase === 'subscribing' ? (
-                <ActivityIndicator size="small" color={colors.onPrimary} />
-              ) : (
-                <>
-                  <Feather name="user-plus" size={15} color={colors.onPrimary} />
-                  <Text style={styles.primaryLabel}>Subscribe</Text>
-                </>
-              )}
-            </Pressable>
-          </View>
-        </GlassCard>
+        <ChannelPreviewCard
+          preview={preview}
+          phase={phase}
+          error={error}
+          onReset={reset}
+          onSubscribe={subscribe}
+        />
       )}
     </View>
   )

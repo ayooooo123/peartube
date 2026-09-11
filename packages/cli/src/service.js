@@ -16,6 +16,7 @@ import { createRelayBlockOffload } from './archive/block-offload.js'
 import { createStorageGuard } from './storage-guard.js'
 import { createCompanionServer } from './companion/server.js'
 import { createLegacyIngestMigrationStore } from './companion/legacy-ingest-migration-store.js'
+import { executeLocalFileAcquisition } from './local-file-acquisition.js'
 import tmdbFetch from '#fetch'
 
 const CANDIDATE_REF_PATTERN = /^[A-Za-z0-9_-]{43}$/
@@ -38,6 +39,32 @@ function selectorForMediaCoordinates(source = {}) {
 function sourceFileNameOf(value) {
   const name = String(value || '').split(/[/\\]/).pop().trim()
   return name && name.length <= 255 ? name : null
+}
+
+function formatStreamUrlPayload(opened) {
+  return {
+    schemaVersion: 1,
+    streamId: opened.assetId,
+    publicationId: opened.publicationId,
+    renditionId: opened.renditionId,
+    assetId: opened.assetId,
+    byteLength: opened.byteLength,
+    mimeType: opened.contentType,
+    capability: null,
+    expiresAt: Date.now() + 5 * 60 * 1000,
+    etag: `"asset-${opened.assetId}"`,
+    url: opened.url
+  }
+}
+
+function computeWarmingByteStart(startOffsetSeconds, durationSeconds, byteLength) {
+  if (Number.isFinite(startOffsetSeconds) && startOffsetSeconds > 0 &&
+      Number.isFinite(durationSeconds) && durationSeconds > 0 &&
+      Number.isSafeInteger(byteLength) && byteLength > 0) {
+    const fraction = Math.min(1, startOffsetSeconds / durationSeconds)
+    return Math.min(byteLength - 1, Math.floor(byteLength * fraction))
+  }
+  return null
 }
 
 function createStreamAsset(opened) {
@@ -202,19 +229,7 @@ function createProviderMachineService(runtime, options = {}) {
         throw error
       }
       if (openMethod === 'openMediaRenditionUrl') {
-        return {
-          schemaVersion: 1,
-          streamId: opened.assetId,
-          publicationId: opened.publicationId,
-          renditionId: opened.renditionId,
-          assetId: opened.assetId,
-          byteLength: opened.byteLength,
-          mimeType: opened.contentType,
-          capability: null,
-          expiresAt: Date.now() + 5 * 60 * 1000,
-          etag: `"asset-${opened.assetId}"`,
-          url: opened.url
-        }
+        return formatStreamUrlPayload(opened)
       }
       return createStreamAsset(opened)
     },
@@ -240,27 +255,12 @@ function createProviderMachineService(runtime, options = {}) {
         error.code = opened?.errorCode || 'PROVIDER_STREAM_UNAVAILABLE'
         throw error
       }
-      if (Number.isFinite(startOffsetSeconds) && startOffsetSeconds > 0 &&
-          Number.isFinite(durationSeconds) && durationSeconds > 0 && Number.isSafeInteger(opened.byteLength) &&
-          opened.byteLength > 0) {
-        const fraction = Math.min(1, startOffsetSeconds / durationSeconds)
-        const byteStart = Math.min(opened.byteLength - 1, Math.floor(opened.byteLength * fraction))
+      const byteStart = computeWarmingByteStart(startOffsetSeconds, durationSeconds, opened.byteLength)
+      if (byteStart !== null) {
         await warmPublishedCandidate({ publicationId, renditionId }, { byteStart })
       }
       if (openMethod === 'openMediaRenditionUrl') {
-        return {
-          schemaVersion: 1,
-          streamId: opened.assetId,
-          publicationId: opened.publicationId,
-          renditionId: opened.renditionId,
-          assetId: opened.assetId,
-          byteLength: opened.byteLength,
-          mimeType: opened.contentType,
-          capability: null,
-          expiresAt: Date.now() + 5 * 60 * 1000,
-          etag: `"asset-${opened.assetId}"`,
-          url: opened.url
-        }
+        return formatStreamUrlPayload(opened)
       }
       return createStreamAsset(opened)
     },
@@ -343,6 +343,665 @@ export async function createRelayService(options = {}) {
     throw error
   }
 }
+function normalizeLocalMirrorOptions(localMirrorConfig, fsModule, pathModule) {
+  return {
+    rootPath: localMirrorConfig.path,
+    channelName: localMirrorConfig.channelName || 'Local Drive Mirror',
+    description: localMirrorConfig.description || '',
+    recursive: localMirrorConfig.recursive !== false,
+    maxFiles: Number.isFinite(Number(localMirrorConfig.maxFiles)) ? Number(localMirrorConfig.maxFiles) : Infinity,
+    fs: fsModule,
+    path: pathModule
+  }
+}
+
+function logLocalMirrorOutcome(logger, path, result, err) {
+  if (err) {
+    const errorText = err?.message || String(err)
+    logger.archive.error('Local mirror scan failed', {
+      path: path || null,
+      error: errorText
+    })
+    return { error: errorText }
+  }
+  if (result?.imported || result?.failed) {
+    logger.archive.info('Local mirror scan complete', {
+      path,
+      scanned: result.scanned,
+      imported: result.imported,
+      skipped: result.skipped,
+      failed: result.failed
+    })
+  }
+  return result
+}
+function renditionLocators(publication) {
+  const rendition = (publication?.manifest?.body?.renditions || [])
+    .find((candidate) => candidate.renditionId === publication.renditionId)
+  const core = rendition?.core
+  if (!core?.key || !Number.isSafeInteger(core.length) || core.length < 1) return []
+  return [{ coreKey: core.key, start: 0, end: core.length, renditionId: publication.renditionId }]
+}
+
+function validateArchiveJobPreconditions(job, closed, retentionPermission) {
+  if (!retentionPermission('archive-pin')) return { published: false, reason: 'archive-consent-required' }
+  if (closed) return { published: false, reason: 'closed' }
+  if (job?.status !== 'completed') return { published: false, reason: 'not-completed' }
+  if (job?.publish === false) return { published: false, reason: 'not-published' }
+  if (!job?.publisherId || !job?.previewVideo?.id) {
+    return { published: false, reason: 'missing-publisher-assets' }
+  }
+  return null
+}
+
+async function requestJobArchiveMirror(runtime, logger, publication) {
+  if (!publication?.publicationId || typeof runtime?.requestArchiveMirror !== 'function') {
+    return false
+  }
+  try {
+    const mirror = await runtime.requestArchiveMirror({
+      publicationId: publication.publicationId,
+      renditionId: publication.renditionId,
+      locators: renditionLocators(publication)
+    })
+    const requested = mirror?.requested === true
+    if (!requested) {
+      logger.archive?.warn?.('Archive mirror request was not published', {
+        publicationId: publication.publicationId,
+        renditionId: publication.renditionId,
+        reason: mirror?.errorCode || mirror?.reason || mirror?.status || 'unknown'
+      })
+    }
+    return requested
+  } catch (err) {
+    logger.archive?.warn?.('Archive mirror request failed', {
+      publicationId: publication.publicationId,
+      renditionId: publication.renditionId,
+      error: err?.message || String(err)
+    })
+    return false
+  }
+}
+
+async function retainJobPublication(runtime, logger, publication, classifiedPreview) {
+  const retained = []
+  let mirrorRequested = false
+  if (publication?.manifest && publication?.renditionId) {
+    retained.push(await runtime.retainRendition({
+      manifest: publication.manifest,
+      renditionId: publication.renditionId,
+      retentionClass: 'archive-pin'
+    }))
+    mirrorRequested = await requestJobArchiveMirror(runtime, logger, publication)
+  }
+  if (classifiedPreview?.archivePledge && classifiedPreview?.blobsCoreKey) {
+    const [start, length] = String(classifiedPreview.blobId || '').split(':').map(Number)
+    if (Number.isSafeInteger(start) && Number.isSafeInteger(length) && length > 0) {
+      retained.push(await runtime.retainArchive({
+        pledge: classifiedPreview.archivePledge,
+        coreKey: classifiedPreview.blobsCoreKey,
+        start,
+        end: start + length
+      }))
+    }
+  }
+  return { retained, mirrorRequested }
+}
+
+async function upsertJobCatalogChannel(relayCatalog, job, classifiedPreview, nowFn) {
+  const observedAt = Number(job.completedAt || job.updatedAt || nowFn()) || Date.now()
+  const existing = relayCatalog.getChannel(job.channelKey)
+  const previews = new Map((existing?.previewVideos || []).filter(video => video?.id).map(video => [video.id, video]))
+  previews.set(classifiedPreview.id, classifiedPreview)
+  const previewVideos = Array.from(previews.values())
+  await relayCatalog.upsertChannel({
+    channelKey: job.channelKey,
+    publisherId: job.publisherId,
+    publicBeeKey: job.publicBeeKey || null,
+    source: 'archive-job',
+    retentionClass: 'private',
+    lastDecisionReason: 'archive-completed',
+    lastSeenAt: observedAt,
+    mirroredAt: observedAt,
+    previewVideos,
+    unavailableVideos: [],
+    videoCount: previewVideos.length,
+    manifestUpdatedAt: observedAt
+  })
+  return previewVideos.length
+}
+function parseReleaseTarget(target) {
+  const raw = typeof target === 'object' && target !== null ? (target.id || target.publicationId || target.acquisitionId) : String(target || '')
+  const id = String(raw || '').trim()
+  if (!id) return { id: '', publicationId: null, renditionId: null, acquisitionId: null }
+  let publicationId = null
+  let renditionId = null
+  let acquisitionId = null
+  if (id.startsWith('acq_')) {
+    acquisitionId = id
+  } else if (id.includes(':')) {
+    const parts = id.split(':')
+    publicationId = parts[0]
+    renditionId = parts[1] || null
+  } else if (/^[0-9a-f]{64}$/i.test(id)) {
+    publicationId = id
+  } else {
+    acquisitionId = id
+  }
+  return { id, publicationId, renditionId, acquisitionId }
+}
+
+async function resolveLocalPublicationOwner(runtime, publisherShell, publicationId) {
+  const local = publisherShell ? await publisherShell.ensureLocalPublisher().catch(() => null) : null
+  const localPublisherId = local?.publisherId || null
+  if (!localPublisherId) return { localPublisherId: null, isLocal: false }
+  try {
+    const pub = await (runtime.api?.getPublication?.(publicationId) ||
+      runtime.verifiedQueryView?.getPublication?.({ publicationId }))
+    const pubPublisherId = pub?.publisherId || pub?.body?.publisherId || null
+    // A publication with no recorded publisher cannot be this relay's; the
+    // equality check alone decides because localPublisherId is known non-null.
+    return { localPublisherId, isLocal: pubPublisherId === localPublisherId }
+  } catch {
+    // An absent or unreadable publication stays non-local; relay blocking still applies.
+    return { localPublisherId, isLocal: false }
+  }
+}
+
+async function retractOwnedPublicationIfPresent(runtime, logger, publicationId, localPublisherId, isLocal) {
+  if (!isLocal || !runtime.retractPublication) return false
+  try {
+    const outcome = await runtime.retractPublication({
+      publicationId,
+      publisherId: localPublisherId
+    })
+    return outcome?.done === true
+  } catch (err) {
+    logger?.archive?.warn?.('Retracting local publication failed', { publicationId, error: err?.message || String(err) })
+    return false
+  }
+}
+
+async function releaseRenditionIfAuthorized(runtime, renditionId, ownerId) {
+  if (!renditionId || typeof runtime.scopedNetwork?.releaseAuthorizedRendition !== 'function') return
+  await runtime.scopedNetwork.releaseAuthorizedRendition({
+    renditionId,
+    ownerId
+  }).catch(() => {})
+}
+
+async function blockReleaseOnRelay(relaySettings, id, publicationId, renditionId) {
+  const currentBlocked = relaySettings.get('blockedReleases', [])
+  const toAdd = [id, publicationId, ...(renditionId ? [renditionId] : [])]
+  const updatedBlocked = Array.from(new Set([...currentBlocked, ...toAdd]))
+  await relaySettings.set('blockedReleases', updatedBlocked)
+}
+
+async function deletePublicationRelease({ runtime, logger, publisherShell, relaySettings, id, publicationId, renditionId }) {
+  const { localPublisherId, isLocal } = await resolveLocalPublicationOwner(runtime, publisherShell, publicationId)
+  const localRetracted = await retractOwnedPublicationIfPresent(runtime, logger, publicationId, localPublisherId, isLocal)
+  await releaseRenditionIfAuthorized(runtime, renditionId, publicationId || id)
+  let remoteBlocked = false
+  if (!localRetracted) {
+    await blockReleaseOnRelay(relaySettings, id, publicationId, renditionId)
+    remoteBlocked = true
+  }
+  return { localRetracted, remoteBlocked }
+}
+
+async function deleteAcquisitionRelease({ runtime, publisherShell, acquisitionId, localRetracted, remoteBlocked, providerPrincipal }) {
+  if (!acquisitionId || !runtime.provider?.forgetAcquisition) {
+    return { localRetracted, failureReason: null }
+  }
+  try {
+    const local = publisherShell ? await publisherShell.ensureLocalPublisher().catch(() => null) : null
+    const result = await runtime.provider.forgetAcquisition({
+      acquisitionId,
+      principal: providerPrincipal(local?.publisherId || 'local-provider')
+    })
+    if (result?.forgotten === true) return { localRetracted: true, failureReason: null }
+    if (!localRetracted && !remoteBlocked) {
+      return { localRetracted, failureReason: result?.reason || 'acquisition record could not be forgotten' }
+    }
+  } catch (err) {
+    if (!localRetracted && !remoteBlocked) {
+      return { localRetracted, failureReason: err?.message || String(err) }
+    }
+  }
+  return { localRetracted, failureReason: null }
+}
+async function runLegacyIngestMigration(runtime, config, nowFn) {
+  if (!runtime.ctx?.metaDb) return
+  if (typeof runtime.provider?.migrateLegacyIngest !== 'function') {
+    throw new Error('ProviderService legacy acquisition migration is unavailable')
+  }
+  await runtime.provider.migrateLegacyIngest({
+    legacyStore: createLegacyIngestMigrationStore({ bee: runtime.ctx.metaDb, now: nowFn }),
+    legacyPrincipalId: config.companion.client,
+    legacyPublisherId: config.companion.publisherId,
+    now: nowFn
+  })
+}
+
+async function startArchiveConsole({
+  config,
+  logger,
+  archiveConsoleFactory,
+  archiveHttp,
+  service,
+  archivePublisher,
+  archiveSpoolRoot,
+  archiveHeadroom,
+  archiveStorageReservations,
+  storageGuard,
+  spawnFn,
+  runtimeFsModule,
+  runtimePathModule,
+  bootStartedAt
+}) {
+  const archiveConsole = await archiveConsoleFactory({
+    service,
+    logger,
+    host: archiveUiHost(config),
+    port: archiveUiPort(config),
+    uploadDir: archiveSpoolRoot,
+    uploadStorageHeadroom: archiveHeadroom,
+    storageReservations: archiveStorageReservations,
+    publisher: archivePublisher,
+    downloader: createYtDlpDownloader({
+      bin: config.archive.ytDlpPath,
+      outputDir: runtimePathModule.join(archiveSpoolRoot, 'uploads'),
+      format: config.archive.format,
+      ffmpegPath: config.archive.ffmpegPath,
+      cookiesPath: config.archive.cookiesPath,
+      jsRuntime: config.archive.jsRuntime,
+      storageHeadroom: archiveHeadroom,
+      storageReservations: archiveStorageReservations,
+      onStorageChanged: () => storageGuard.invalidate(),
+      ytDlpExtraArgs: config.archive.ytDlpExtraArgs,
+      ytDlpRetryExtraArgs: config.archive.ytDlpRetryExtraArgs,
+      spawnFn: spawnFn || undefined,
+      fs: runtimeFsModule,
+      path: runtimePathModule
+    }),
+    httpSurface: archiveHttp,
+  })
+  await archiveConsole.start()
+  logger.relay.info('Relay archive console ready', {
+    host: archiveUiHost(config),
+    port: archiveHttp ? archiveHttp.port : archiveUiPort(config),
+    bootMs: Date.now() - bootStartedAt
+  })
+  return archiveConsole
+}
+
+async function startArchiveUiIfEnabled({
+  config,
+  logger,
+  archiveConsoleFactory,
+  archiveHttp,
+  service,
+  archivePublisher,
+  archiveSpoolRoot,
+  storageGuard,
+  spawnFn,
+  fsModule,
+  pathModule,
+  bootStartedAt
+}) {
+  if (!config.archive?.uiEnabled) return null
+  const runtimeFsModule = fsModule
+  const runtimePathModule = pathModule
+  try { runtimeFsModule?.mkdirSync?.(archiveSpoolRoot, { recursive: true }) } catch { /* Admission reports missing storage later. */ }
+  const tmpHeadroom = liveFreeDiskHeadroom({
+    fsModule: runtimeFsModule,
+    path: archiveSpoolRoot,
+    minFreeBytes: config.storage.minFreeBytes || 0,
+    log: (...args) => logger.status?.debug?.(args.map(String).join(' '))
+  })
+  const persistedHeadroom = () => storageGuard.headroomBytes()
+  const archiveHeadroom = archiveWriteHeadroom({
+    tmpHeadroom,
+    storageHeadroom: persistedHeadroom,
+    sharedVolume: true
+  })
+  const archiveStorageReservations = {
+    bytes: 0,
+    invalidate: () => storageGuard.invalidate()
+  }
+  return startArchiveConsole({
+    config,
+    logger,
+    archiveConsoleFactory,
+    archiveHttp,
+    service,
+    archivePublisher,
+    archiveSpoolRoot,
+    archiveHeadroom,
+    archiveStorageReservations,
+    storageGuard,
+    spawnFn,
+    runtimeFsModule,
+    runtimePathModule,
+    bootStartedAt
+  })
+}
+
+async function startCompanionServer({
+  config,
+  logger,
+  companionServerFactory,
+  runtime,
+  publisherShell,
+  relaySettings,
+  archiveConsole,
+  archiveHttp,
+  ensureLocalAcquisitionPolicy,
+  nowFn
+}) {
+  if (!runtime.provider) throw new Error('Relay runtime did not expose ProviderService')
+  const localPub = publisherShell ? await publisherShell.ensureLocalPublisher().catch((err) => {
+    logger.relay?.warn?.('Relay local publisher setup failed', { error: err?.message || String(err) })
+    return null
+  }) : null
+  logger.relay.info('Local publisher resolved', { publisherId: localPub?.publisherId })
+  if (localPub?.publisherId && (!config.companion.publisherId || !/^[0-9a-f]{64}$/.test(config.companion.publisherId))) {
+    config.companion.publisherId = localPub.publisherId
+  }
+  if (localPub?.publisherId) {
+    await ensureLocalAcquisitionPolicy(localPub.publisherId).catch((err) => {
+      logger.relay?.warn?.('Ensure acquisition policy failed', { error: err?.message || String(err) })
+    })
+  }
+  const companionServer = await companionServerFactory({
+    service: createProviderMachineService(runtime, {
+      ensureAcquisitionPolicy: ensureLocalAcquisitionPolicy,
+      releaseFileNames: () => relaySettings.get('releaseFileNames', {})
+    }),
+    config: config.companion,
+    clock: nowFn,
+    logger
+  })
+  if (archiveConsole && typeof archiveConsole.setCompanionHandler === 'function') {
+    archiveConsole.setCompanionHandler(companionServer.handleRequest)
+  }
+  const uiPort = archiveHttp ? archiveHttp.port : archiveUiPort(config)
+  const uiActive = Boolean(config.archive?.uiEnabled && archiveConsole)
+  const separatePort = Boolean(config.companion?.hasExplicitPort && config.companion.port !== uiPort)
+  if (!uiActive || separatePort) {
+    logger.relay.info('Starting companion server listener...', { port: config.companion.port })
+    await companionServer.start()
+    logger.relay.info('Companion server started!')
+  } else {
+    companionServer.setPublicAddress?.({
+      host: archiveUiHost(config),
+      port: uiPort
+    })
+    logger.relay.info('Companion API mounted on unified archive UI server', { port: uiPort })
+  }
+  return companionServer
+}
+
+function startLocalMirrorIfEnabled({ config, logger, setIntervalFn, runLocalMirrorOnce }) {
+  if (!config.archive?.localMirror?.enabled) return null
+  const pollMs = Math.max(1, Number(config.archive.localMirror.poll || 30)) * 1000
+  const triggerLocalMirrorScan = () => runLocalMirrorOnce().catch((err) => {
+    logger.archive.error('Local mirror periodic scan failed', { error: err?.message || String(err) })
+    return { error: err?.message || String(err) }
+  })
+  const timer = setIntervalFn(triggerLocalMirrorScan, pollMs)
+  timer?.unref?.()
+  triggerLocalMirrorScan()
+  logger.archive.info('Local directory mirror started', {
+    path: config.archive.localMirror.path,
+    pollSeconds: Math.round(pollMs / 1000),
+    channelName: config.archive.localMirror.channelName
+  })
+  return timer
+}
+
+async function announcePublisherCatalog(publisherShell, runtime, logger) {
+  try {
+    const local = await publisherShell.ensureLocalPublisher()
+    const published = await runtime.publishPublisherCatalog({ publisherId: local.publisherId })
+    logger.relay.info('Relay publisher catalog announced', {
+      publisherId: local.publisherId,
+      status: published?.status || 'unknown'
+    })
+  } catch (error) {
+    const message = error?.message || String(error)
+    if (/no accepted publication or claim/.test(message)) {
+      logger.relay.info('Relay publisher catalog has nothing to announce yet')
+    } else {
+      logger.relay.warn('Relay publisher catalog announcement failed', { error: message })
+    }
+  }
+}
+
+function logHeartbeatStatus(logger, heartbeatStatus) {
+  const network = heartbeatStatus.network || {}
+  const peers = network.peers || 0
+  const connections = network.connections || 0
+  if (peers > 0 && connections === 0) {
+    logger.status.warn('Relay discovered peers without sockets', {
+      peers,
+      connections,
+      networkStatus: network.status || 'unknown'
+    })
+  }
+  if (peers === 0 && network.dht?.bootstrapped === false) {
+    logger.status.warn('Relay DHT has no discovered peers and is not bootstrapped', {
+      peers: 0,
+      connections: 0,
+      bootstrapped: network.dht.bootstrapped,
+      firewalled: network.dht.firewalled ?? null,
+      online: network.dht.online ?? null,
+      listenResolved: Boolean(network.listenResolved),
+      offline: Boolean(network.offline),
+      offlineReason: network.offlineReason || null
+    })
+  }
+  const publicWork = heartbeatStatus.publicWork || {}
+  logger.status.info('Relay heartbeat', {
+    peers,
+    connections,
+    activeAnnouncements: publicWork.activeAnnouncements || 0,
+    activeServes: publicWork.activeServes || 0,
+    servedBytes: publicWork.servedBytes || 0,
+    activeAcquisitions: publicWork.activeAcquisitions || 0
+  })
+}
+
+function logRelayStarted(logger, status) {
+  const networkStatus = status.network || {}
+  const publicWorkStatus = status.publicWork || {}
+  logger.relay.info('Relay started', {
+    peers: networkStatus.peers || 0,
+    connections: networkStatus.connections || 0,
+    activeAnnouncements: publicWorkStatus.activeAnnouncements || 0,
+    activeServes: publicWorkStatus.activeServes || 0,
+    activeAcquisitions: publicWorkStatus.activeAcquisitions || 0,
+    archivedChannels: status.summary?.totalChannels || 0
+  })
+}
+
+async function runHeartbeatTick({ syncCreators, storageGuard, refreshArchiveCapacity, persistStatus, logger }) {
+  try {
+    await syncCreators()
+    storageGuard.invalidate()
+    await refreshArchiveCapacity()
+    const heartbeatStatus = await persistStatus()
+    logHeartbeatStatus(logger, heartbeatStatus)
+  } catch (err) {
+    logger.status.error('Relay heartbeat failed', {
+      error: err?.message || String(err)
+    })
+  }
+}
+
+async function rollbackServiceStart({ heartbeatTimer, localMirrorTimer, companionServer, archiveConsole, runtime, clearIntervalFn }) {
+  if (heartbeatTimer) clearIntervalFn(heartbeatTimer)
+  if (localMirrorTimer) clearIntervalFn(localMirrorTimer)
+  if (companionServer) await companionServer.close().catch(() => {})
+  if (archiveConsole) await archiveConsole.close().catch(() => {})
+  try {
+    await runtime.close?.()
+  } catch {
+    // Preserve the startup error after best-effort runtime cleanup.
+  }
+}
+
+function filterBlockedCatalogItems(items, blocked) {
+  if (!blocked || blocked.size === 0 || !Array.isArray(items)) return items
+  return items.filter(item => {
+    if (blocked.has(item.publicationId) || blocked.has(item.id)) return false
+    if (Array.isArray(item.sources)) {
+      item.sources = item.sources.filter(src =>
+        !blocked.has(src.publicationId) &&
+        !blocked.has(src.renditionId) &&
+        !blocked.has(`${src.publicationId}:${src.renditionId}`)
+      )
+      if (item.sources.length === 0) return false
+    }
+    if (Array.isArray(item.publications)) {
+      item.publications = item.publications.filter(pub =>
+        !blocked.has(pub.publicationId) &&
+        !blocked.has(pub.renditionId) &&
+        !blocked.has(`${pub.publicationId}:${pub.renditionId}`)
+      )
+      if (item.publications.length === 0 && !Array.isArray(item.sources)) return false
+    }
+    return true
+  })
+}
+
+async function enrichCatalogSource({ source, catalogEnrichmentCache, searches, provider, logger, nowMs, enrichmentTtlMs }) {
+  const cacheKey = source.publicationId && source.renditionId ? `${source.publicationId}:${source.renditionId}` : null
+  const cached = cacheKey ? catalogEnrichmentCache.get(cacheKey) : null
+  if (cached && cached.expiresAt > nowMs) {
+    return cached.ref ? { ...source, candidateRef: cached.ref } : source
+  }
+
+  const selector = selectorForMediaCoordinates(source)
+  if (!selector) return source
+
+  const key = JSON.stringify(selector)
+  let hits = searches.get(key)
+  if (!hits) {
+    hits = provider.search({ selector, limit: 16 }).then(result =>
+      (result?.candidates || []).filter(candidate =>
+        candidate?.kind === 'published' && candidate.publicationId && candidate.renditionId)
+    ).catch(err => {
+      logger?.archive?.warn?.('Catalog playback enrichment search failed', {
+        error: err?.code || err?.message || String(err),
+        selector
+      })
+      return []
+    })
+    searches.set(key, hits)
+  }
+
+  const match = (await hits).find(candidate =>
+    candidate.publicationId === source.publicationId &&
+    (!source.renditionId || candidate.renditionId === source.renditionId))
+
+  if (match?.ref) {
+    if (cacheKey) {
+      catalogEnrichmentCache.set(cacheKey, { ref: match.ref, expiresAt: nowMs + enrichmentTtlMs })
+    }
+    return { ...source, candidateRef: match.ref }
+  }
+
+  return source
+}
+
+function pruneEnrichmentCache(catalogEnrichmentCache, nowMs) {
+  if (catalogEnrichmentCache.size > 256) {
+    for (const [k, v] of catalogEnrichmentCache) {
+      if (v.expiresAt <= nowMs) catalogEnrichmentCache.delete(k)
+    }
+  }
+}
+
+async function enrichCatalogItem({ item, catalogEnrichmentCache, searches, provider, logger, nowMs, enrichmentTtlMs }) {
+  const sources = []
+  for (const source of item?.sources || []) {
+    sources.push(await enrichCatalogSource({ source, catalogEnrichmentCache, searches, provider, logger, nowMs, enrichmentTtlMs }))
+  }
+  const candidateRef = sources.find(source => CANDIDATE_REF_PATTERN.test(source?.candidateRef || ''))?.candidateRef || null
+  return { ...item, sources, ...(candidateRef ? { candidateRef } : {}) }
+}
+
+async function openRelayStores({ config, catalog, fsModule, nowFn, logger }) {
+  const relayCatalog = catalog || await RelayCatalog.open({
+    storagePath: config.storage.path,
+    catalogPath: config.paths.catalog
+  })
+  const relayCreators = await RelayCreators.open({
+    storagePath: config.storage.path,
+    creatorsPath: config.paths.creators
+  })
+  const relaySettings = await RelaySettings.open({ storagePath: config.storage.path })
+
+  const guardFsModule = fsModule || await import('#fs')
+  const storageGuard = createStorageGuard({
+    storagePath: config.storage.path,
+    maxBytes: config.storage.maxBytes || 0,
+    minFreeBytes: config.storage.minFreeBytes || 0,
+    statfsSync: guardFsModule?.statfsSync || null,
+    statSync: guardFsModule?.statSync || null,
+    readdirSync: guardFsModule?.readdirSync || null,
+    log: (...args) => logger.status?.debug?.(args.map(String).join(' ')),
+    now: nowFn
+  })
+  const classificationStore = await RelayClassificationStore.open({
+    storagePath: config.storage.path,
+    classificationPath: config.paths.classification
+  })
+  const trustedClients = await TrustedClients.open({
+    storagePath: config.storage.path,
+    trustedClientsPath: config.paths.trustedClients
+  })
+  config.seedPin = config.seedPin || {}
+  config.seedPin.trustedClients = mergeTrustedClientKeys(
+    config.seedPin.trustedClients,
+    trustedClients.keys()
+  )
+  return { relayCatalog, relayCreators, relaySettings, storageGuard, classificationStore, trustedClients }
+}
+
+async function initRelayBlockOffload(config, logger) {
+  const blockOffload = await createRelayBlockOffload({ config, logger, fetchImpl: tmdbFetch })
+  if (blockOffload) {
+    logger.relay?.info?.('S3 block offload enabled', {
+      windowBytes: blockOffload.windowBytes,
+      bucket: blockOffload.bucket,
+      prefix: blockOffload.prefix
+    })
+  } else {
+    logger.relay?.info?.('Relay block offload disabled; block data stays on the local volume')
+  }
+  return blockOffload
+}
+
+function isNonNegativeSafeInteger(val) {
+  return Number.isSafeInteger(val) && val >= 0
+}
+
+function completePolicyControl(policy) {
+  if (!policy || policy.policyVersion !== 2 || policy.consentVersion !== 1 || policy.migrationRequired !== false) {
+    return false
+  }
+  if (typeof policy.contributeWatchedMedia !== 'boolean' || typeof policy.archiveEnabled !== 'boolean') {
+    return false
+  }
+  if (!['disabled', 'manual', 'enabled'].includes(policy.uploadPermission)) {
+    return false
+  }
+  return isNonNegativeSafeInteger(policy.contributionBudgetBytes) &&
+    isNonNegativeSafeInteger(policy.archiveBudgetBytes) &&
+    isNonNegativeSafeInteger(policy.uploadCeilingBytes)
+}
 
 async function buildRelayService({
   config,
@@ -363,68 +1022,19 @@ async function buildRelayService({
   if (!config) throw new Error('config is required')
   if (typeof runtimeFactory !== 'function') throw new Error('runtimeFactory is required')
 
-  const relayCatalog = catalog || await RelayCatalog.open({
-    storagePath: config.storage.path,
-    catalogPath: config.paths.catalog
-  })
-  const relayCreators = await RelayCreators.open({
-    storagePath: config.storage.path,
-    creatorsPath: config.paths.creators
-  })
-  const relaySettings = await RelaySettings.open({ storagePath: config.storage.path })
-
-  // Storage threshold gate: refuse new ingestion (discovery mirroring, archive
-  // imports) once actual storage-dir usage reaches storage.maxBytes, or free
-  // disk drops below storage.minFreeBytes, so the relay stops growing instead
-  // of crashing the whole process with ENOSPC. Degrades gracefully when the
-  // injected fs module lacks statfs/stat primitives (e.g. Bare builds).
-  const guardFsModule = fsModule || await import('#fs')
-  const storageGuard = createStorageGuard({
-    storagePath: config.storage.path,
-    maxBytes: config.storage.maxBytes || 0,
-    minFreeBytes: config.storage.minFreeBytes || 0,
-    statfsSync: guardFsModule?.statfsSync || null,
-    statSync: guardFsModule?.statSync || null,
-    readdirSync: guardFsModule?.readdirSync || null,
-    log: (...args) => logger.status?.debug?.(args.map(String).join(' ')),
-    now: nowFn
-  })
-  const classificationStore = await RelayClassificationStore.open({
-    storagePath: config.storage.path,
-    classificationPath: config.paths.classification
-  })
+  const {
+    relayCatalog,
+    relayCreators,
+    relaySettings,
+    storageGuard,
+    classificationStore,
+    trustedClients
+  } = await openRelayStores({ config, catalog, fsModule, nowFn, logger })
   const tmdbOptions = () => ({ ...resolveTmdbOptions(config, relaySettings), fetchFn: tmdbFetch })
   let classifier = createTmdbClassifier(tmdbOptions())
   let tmdbDiscover = createTmdbDiscoverClient(tmdbOptions())
 
-  // Merge persisted operator-authorized client keys into the bounded seed-pin
-  // policy before the universal backend starts.
-  const trustedClients = await TrustedClients.open({
-    storagePath: config.storage.path,
-    trustedClientsPath: config.paths.trustedClients
-  })
-  config.seedPin = config.seedPin || {}
-  config.seedPin.trustedClients = mergeTrustedClientKeys(
-    config.seedPin.trustedClients,
-    trustedClients.keys()
-  )
-
-  // Block offload, decided before the runtime exists because it changes how the
-  // Corestore is opened: the storage is wrapped so a block whose data now lives
-  // in the bucket is still restored, verified and served. Off by default, and
-  // when it is off nothing is wrapped and nothing is injected. Enabled with a
-  // half-configured bucket throws here rather than downgrading to local-only.
-  const blockOffload = await createRelayBlockOffload({ config, logger, fetchImpl: tmdbFetch })
-  if (blockOffload) {
-    logger.relay?.info?.('S3 block offload enabled', {
-      windowBytes: blockOffload.windowBytes,
-      bucket: blockOffload.bucket,
-      prefix: blockOffload.prefix
-    })
-  } else {
-    logger.relay?.info?.('Relay block offload disabled; block data stays on the local volume')
-  }
-
+  const blockOffload = await initRelayBlockOffload(config, logger)
   const runtime = await runtimeFactory({ config, logger, blockOffload })
 
   let closed = false
@@ -442,20 +1052,6 @@ async function buildRelayService({
   const catalogEnrichmentCache = new Map()
   const ENRICHMENT_CACHE_TTL_MS = 6 * 60 * 1000
 
-  function completePolicyControl(policy) {
-    return policy?.policyVersion === 2 &&
-      policy?.consentVersion === 1 &&
-      policy?.migrationRequired === false &&
-      typeof policy?.contributeWatchedMedia === 'boolean' &&
-      typeof policy?.archiveEnabled === 'boolean' &&
-      Number.isSafeInteger(policy?.contributionBudgetBytes) &&
-      policy.contributionBudgetBytes >= 0 &&
-      Number.isSafeInteger(policy?.archiveBudgetBytes) &&
-      policy.archiveBudgetBytes >= 0 &&
-      ['disabled', 'manual', 'enabled'].includes(policy?.uploadPermission) &&
-      Number.isSafeInteger(policy?.uploadCeilingBytes) &&
-      policy.uploadCeilingBytes >= 0
-  }
 
   // The budget the operator authorized for this retention class and how much of
   // it is already spent, or null when the class is not permitted at all: a
@@ -594,35 +1190,21 @@ async function buildRelayService({
     try {
       const runtimeFsModule = fsModule || await import('#fs')
       const runtimePathModule = pathModule || await import('#path')
+      const mirrorOpts = normalizeLocalMirrorOptions(localMirrorConfig, runtimeFsModule, runtimePathModule)
       const result = await mirrorLocalDriveToRelayChannel({
-        rootPath: localMirrorConfig.path,
-        channelName: localMirrorConfig.channelName || 'Local Drive Mirror',
-        description: localMirrorConfig.description || '',
-        recursive: localMirrorConfig.recursive !== false,
-        maxFiles: Number.isFinite(Number(localMirrorConfig.maxFiles)) ? Number(localMirrorConfig.maxFiles) : Infinity,
-        fs: runtimeFsModule,
-        path: runtimePathModule,
+        ...mirrorOpts,
         logger,
         state: localMirrorState,
-        publisher: createLocalDrivePublisher(runtimeFsModule)
+        publisher: createLocalDrivePublisher(runtimeFsModule),
+        service,
+        requestLocalFileAcquisition: (input) => requestLocalFileAcquisition(input)
       })
       if (result?.imported || result?.failed) {
-        logger.archive.info('Local mirror scan complete', {
-          path: localMirrorConfig.path,
-          scanned: result.scanned,
-          imported: result.imported,
-          skipped: result.skipped,
-          failed: result.failed
-        })
         await persistStatus()
       }
-      return result
+      return logLocalMirrorOutcome(logger, localMirrorConfig.path, result, null)
     } catch (err) {
-      logger.archive.error('Local mirror scan failed', {
-        path: localMirrorConfig.path || null,
-        error: err?.message || String(err)
-      })
-      return { error: err?.message || String(err) }
+      return logLocalMirrorOutcome(logger, localMirrorConfig.path, null, err)
     } finally {
       localMirrorRunning = false
     }
@@ -751,22 +1333,9 @@ async function buildRelayService({
   // possession challenge names them. The archive network derives the same
   // ranges from the signed manifest; these travel with the request so status
   // can read the archivists' evidence back for this exact rendition.
-  function renditionLocators(publication) {
-    const rendition = (publication?.manifest?.body?.renditions || [])
-      .find((candidate) => candidate.renditionId === publication.renditionId)
-    const core = rendition?.core
-    if (!core?.key || !Number.isSafeInteger(core.length) || core.length < 1) return []
-    return [{ coreKey: core.key, start: 0, end: core.length, renditionId: publication.renditionId }]
-  }
-
   async function publishArchiveJob(job) {
-    if (!retentionPermission('archive-pin')) return { published: false, reason: 'archive-consent-required' }
-    if (closed) return { published: false, reason: 'closed' }
-    if (job?.status !== 'completed') return { published: false, reason: 'not-completed' }
-    if (job?.publish === false) return { published: false, reason: 'not-published' }
-    if (!job?.publisherId || !job?.previewVideo?.id) {
-      return { published: false, reason: 'missing-publisher-assets' }
-    }
+    const refusal = validateArchiveJobPreconditions(job, closed, retentionPermission)
+    if (refusal) return refusal
 
     const classifiedPreview = await classifyPreviewVideo(job.previewVideo)
     const publication = classifiedPreview?.immutablePublication
@@ -774,83 +1343,15 @@ async function buildRelayService({
       publisherId: job.publisherId,
       retentionClass: 'archive-pin'
     })
-    // 'refreshed' means the local publisher scope already existed and was
-    // rebound, which is a successful publication.
     if (published?.status !== 'published' && published?.status !== 'already-published' && published?.status !== 'refreshed') {
       return { published: false, reason: published?.status || 'catalog-publication-failed' }
     }
 
-    const retained = []
-    let mirrorRequested = false
-    if (publication?.manifest && publication?.renditionId) {
-      retained.push(await runtime.retainRendition({
-        manifest: publication.manifest,
-        renditionId: publication.renditionId,
-        retentionClass: 'archive-pin'
-      }))
-      // Now that this relay holds the bytes, ask peer relays to mirror them.
-      // An archive request that fails or is unavailable is recorded and left
-      // there: a publication that reached the network is published whether or
-      // not anyone else agreed to keep a copy, and saying otherwise would make
-      // the relay refuse to publish the moment the archive network hiccuped.
-      if (publication.publicationId && typeof runtime.requestArchiveMirror === 'function') {
-        try {
-          const mirror = await runtime.requestArchiveMirror({
-            publicationId: publication.publicationId,
-            renditionId: publication.renditionId,
-            locators: renditionLocators(publication)
-          })
-          mirrorRequested = mirror?.requested === true
-          if (!mirrorRequested) {
-            logger.archive?.warn?.('Archive mirror request was not published', {
-              publicationId: publication.publicationId,
-              renditionId: publication.renditionId,
-              reason: mirror?.errorCode || mirror?.reason || mirror?.status || 'unknown'
-            })
-          }
-        } catch (err) {
-          logger.archive?.warn?.('Archive mirror request failed', {
-            publicationId: publication.publicationId,
-            renditionId: publication.renditionId,
-            error: err?.message || String(err)
-          })
-        }
-      }
-    }
-    if (classifiedPreview?.archivePledge && classifiedPreview?.blobsCoreKey) {
-      const [start, length] = String(classifiedPreview.blobId || '').split(':').map(Number)
-      if (Number.isSafeInteger(start) && Number.isSafeInteger(length) && length > 0) {
-        retained.push(await runtime.retainArchive({
-          pledge: classifiedPreview.archivePledge,
-          coreKey: classifiedPreview.blobsCoreKey,
-          start,
-          end: start + length
-        }))
-      }
-    }
-
-    const observedAt = Number(job.completedAt || job.updatedAt || nowFn()) || Date.now()
-    const existing = relayCatalog.getChannel(job.channelKey)
-    const previews = new Map((existing?.previewVideos || []).filter(video => video?.id).map(video => [video.id, video]))
-    previews.set(classifiedPreview.id, classifiedPreview)
-    const previewVideos = Array.from(previews.values())
-    await relayCatalog.upsertChannel({
-      channelKey: job.channelKey,
-      publisherId: job.publisherId,
-      publicBeeKey: job.publicBeeKey || null,
-      source: 'archive-job',
-      retentionClass: 'private',
-      lastDecisionReason: 'archive-completed',
-      lastSeenAt: observedAt,
-      mirroredAt: observedAt,
-      previewVideos,
-      unavailableVideos: [],
-      videoCount: previewVideos.length,
-      manifestUpdatedAt: observedAt
-    })
+    const { retained, mirrorRequested } = await retainJobPublication(runtime, logger, publication, classifiedPreview)
+    const previewCount = await upsertJobCatalogChannel(relayCatalog, job, classifiedPreview, nowFn)
     await syncCreators()
     await persistStatus()
-    return { published: true, previewVideos: previewVideos.length, retained: retained.length, mirrorRequested }
+    return { published: true, previewVideos: previewCount, retained: retained.length, mirrorRequested }
   }
 
   function scheduleCandidate(candidate) {
@@ -861,35 +1362,38 @@ async function buildRelayService({
   const s3Configured = ['endpoint', 'bucket', 'accessKeyId', 'secretAccessKey']
     .every((field) => typeof s3Config[field] === 'string' && s3Config[field].length > 0)
 
-  function providerPrincipal(publisherId) {
+  function providerPrincipal(publisherId, clientId = 'local-provider') {
+    const id = clientId || 'local-provider'
     return {
-      id: config.companion.client,
-      principalId: config.companion.client,
+      id,
+      principalId: id,
       publisherId,
       isLocal: true,
       publisherIds: [publisherId],
-      scopes: new Set(config.companion.scopes || ['*'])
+      scopes: new Set(config.companion?.scopes || ['*'])
     }
   }
 
   async function ensureLocalAcquisitionPolicy(publisherId) {
     const current = await runtime.provider.getAcquisitionPolicy()
     const allowedPublisherIds = [...new Set([...(current.allowedPublisherIds || []), publisherId])].sort()
-    const allowedAdapterIds = [...new Set([...(current.allowedAdapterIds || []), 'local-file', 'companion-callback', 'torbox'])].sort()
-    // Archives run in parallel: a relay serializing to one job at a time makes
-    // every watched title wait behind the one in front, and a feature-length
-    // remux ahead of a 20-minute episode blocks it for hours. The shared byte
-    // rate below still bounds total throughput, so parallelism costs bandwidth
-    // only when there is bandwidth to spend.
+    const enabledAdapterIds = runtime.configuredSourceAdapterIds || ['local-file']
+    const isInitialBootstrap = current.migrationRequired === true
+
+    // Preserve explicit operator allowlist removals on already-initialized policy;
+    // only seed configured enabled adapters when migrationRequired is true.
+    const allowedAdapterIds = isInitialBootstrap
+      ? [...new Set(enabledAdapterIds)].sort()
+      : [...(current.allowedAdapterIds || [])].sort()
+
     const maxConcurrentJobs = 4
     const maxConcurrentPerRequester = 4
-    const needsUpdate = current.migrationRequired === true ||
+    const needsUpdate = isInitialBootstrap ||
       current.enabled !== true ||
       current.requesterMode !== 'allowlisted' ||
       current.maxConcurrentJobs !== maxConcurrentJobs ||
       current.maxConcurrentPerRequester !== maxConcurrentPerRequester ||
-      !allowedPublisherIds.every(id => (current.allowedPublisherIds || []).includes(id)) ||
-      !allowedAdapterIds.every(id => (current.allowedAdapterIds || []).includes(id))
+      !allowedPublisherIds.every(id => (current.allowedPublisherIds || []).includes(id))
     if (!needsUpdate) return current
     const capacity = Number(config.storage?.maxBytes) || 107374182400
     return runtime.provider.setAcquisitionPolicy({
@@ -927,74 +1431,15 @@ async function buildRelayService({
     const local = await publisherShell.ensureLocalPublisher()
     const publisherId = local.publisherId
     const policy = await ensureLocalAcquisitionPolicy(publisherId)
-    const principal = providerPrincipal(publisherId)
-    const baseIdempotencyKey = String(input.idempotencyKey || '')
-    let requestKey = baseIdempotencyKey
-    let acquisition = null
-    for (let attempt = 0; attempt < 8; attempt++) {
-      const resolution = runtime.issueLocalProviderResolution({
-        title: input.title,
-        selector: input.selector,
-        publisherId,
-        idempotencyKey: requestKey,
-        expectedBytes: input.expectedBytes,
-        // The archival source named this file; the relay keeps that name so two
-        // versions of one work stay distinguishable after publication.
-        sourceFileName: sourceFileNameOf(input.sourceFileName)
-      })
-      acquisition = await runtime.provider.requestAcquisition({
-        idempotencyKey: requestKey,
-        request: {
-          schemaVersion: 1,
-          resolutionRef: resolution.resolutionRef,
-          publisherId,
-          retentionClass: input.retentionClass || 'archive-pin',
-          sourceFileName: sourceFileNameOf(input.sourceFileName)
-        },
-        principal
-      })
-      const terminalRetry = acquisition.state === 'cancelled' ||
-        (acquisition.state === 'failed' && acquisition.recoverable !== true)
-      if (!terminalRetry) break
-      requestKey = `${baseIdempotencyKey.slice(0, 96)}:retry:${acquisition.acquisitionId}`
-    }
-    if (acquisition === null) throw new Error('Local acquisition request did not return a result')
-    if (acquisition.state === 'cancelled' || (acquisition.state === 'failed' && acquisition.recoverable !== true)) {
-      const error = new Error('Local acquisition retry chain is exhausted')
-      error.code = 'ACQUISITION_RETRY_EXHAUSTED'
-      throw error
-    }
-    if (acquisition.state !== 'queued') return { ...acquisition, sourceAccepted: false }
-    const grant = runtime.localFileSourceGrants.issue({
-      acquisitionId: acquisition.acquisitionId,
-      principalId: principal.principalId,
-      path: input.path,
-      mimeType: input.mimeType || 'application/octet-stream',
-      expiresAt: nowFn() + policy.sourceGrantTtlMs,
-      dispose: input.dispose || null
+    const principal = providerPrincipal(publisherId, 'local-provider')
+    return executeLocalFileAcquisition({
+      runtime,
+      publisherId,
+      principal,
+      policy,
+      input,
+      now: nowFn
     })
-    try {
-      const attached = await runtime.provider.attachSourceGrant({
-        acquisitionId: acquisition.acquisitionId,
-        grant,
-        principal
-      })
-      return { ...attached, sourceAccepted: true }
-    } catch (error) {
-      await runtime.localFileSourceGrants.revoke(grant.token)
-      if (error?.code === 'ACQUISITION_NOT_QUEUED') {
-        const latest = await runtime.provider.getAcquisition({
-          acquisitionId: acquisition.acquisitionId,
-          principal
-        })
-        if (latest) return { ...latest, sourceAccepted: false }
-      }
-      await runtime.provider.cancelAcquisition({
-        acquisitionId: acquisition.acquisitionId,
-        principal
-      }).catch(() => {})
-      throw error
-    }
   }
 
   const service = {
@@ -1002,42 +1447,51 @@ async function buildRelayService({
     async listAcquisitions(request = {}) {
       if (!publisherShell) return []
       const local = await publisherShell.ensureLocalPublisher()
+      const principal = request?.principal || providerPrincipal(local.publisherId, 'local-provider')
       const page = await runtime.provider.listAcquisitions({
         ...request,
-        principal: providerPrincipal(local.publisherId)
+        principal
       })
       return page.items
     },
-    async getAcquisition(acquisitionId) {
+    async getAcquisition(target) {
       if (!publisherShell) return null
       const local = await publisherShell.ensureLocalPublisher()
+      const req = typeof target === 'object' && target !== null ? target : { acquisitionId: target }
+      const principal = req.principal || providerPrincipal(local.publisherId, 'local-provider')
       return runtime.provider.getAcquisition({
-        acquisitionId,
-        principal: providerPrincipal(local.publisherId)
+        ...req,
+        principal
       })
     },
-    async cancelAcquisition(acquisitionId) {
+    async cancelAcquisition(target) {
       if (!publisherShell) return null
       const local = await publisherShell.ensureLocalPublisher()
+      const req = typeof target === 'object' && target !== null ? target : { acquisitionId: target }
+      const principal = req.principal || providerPrincipal(local.publisherId, 'local-provider')
       return runtime.provider.cancelAcquisition({
-        acquisitionId,
-        principal: providerPrincipal(local.publisherId)
+        ...req,
+        principal
       })
     },
-    async retryAcquisition(acquisitionId) {
+    async retryAcquisition(target) {
       if (!publisherShell) return null
       const local = await publisherShell.ensureLocalPublisher()
+      const req = typeof target === 'object' && target !== null ? target : { acquisitionId: target }
+      const principal = req.principal || providerPrincipal(local.publisherId, 'local-provider')
       return runtime.provider.retryAcquisition({
-        acquisitionId,
-        principal: providerPrincipal(local.publisherId)
+        ...req,
+        principal
       })
     },
-    async forgetAcquisition(acquisitionId) {
+    async forgetAcquisition(target) {
       if (!publisherShell) return null
       const local = await publisherShell.ensureLocalPublisher()
+      const req = typeof target === 'object' && target !== null ? target : { acquisitionId: target }
+      const principal = req.principal || providerPrincipal(local.publisherId, 'local-provider')
       return runtime.provider.forgetAcquisition({
-        acquisitionId,
-        principal: providerPrincipal(local.publisherId)
+        ...req,
+        principal
       })
     },
     async retractPublication(publicationId) {
@@ -1049,76 +1503,25 @@ async function buildRelayService({
       })
     },
     async deleteRelease(target) {
-      const raw = typeof target === 'object' && target !== null ? (target.id || target.publicationId || target.acquisitionId) : String(target || '')
-      const id = String(raw || '').trim()
+      const { id, publicationId, renditionId, acquisitionId } = parseReleaseTarget(target)
       if (!id) return { id: '', done: false, reason: 'invalid release target' }
-      let publicationId = null
-      let renditionId = null
-      let acquisitionId = null
-      if (id.startsWith('acq_')) {
-        acquisitionId = id
-      } else if (id.includes(':')) {
-        const parts = id.split(':')
-        publicationId = parts[0]
-        renditionId = parts[1] || null
-      } else if (/^[0-9a-f]{64}$/i.test(id)) {
-        publicationId = id
-      } else {
-        acquisitionId = id
-      }
+
       let localRetracted = false
       let remoteBlocked = false
       let failureReason = null
+
       if (publicationId) {
-        const local = publisherShell ? await publisherShell.ensureLocalPublisher().catch(() => null) : null
-        const localPublisherId = local?.publisherId || null
-        let isLocalPublication = false
-        if (localPublisherId) {
-          try {
-            const pub = await (runtime.api?.getPublication?.(publicationId) ||
-              runtime.verifiedQueryView?.getPublication?.({ publicationId }))
-            const pubPublisherId = pub?.publisherId || pub?.body?.publisherId || null
-            if (pubPublisherId && pubPublisherId === localPublisherId) isLocalPublication = true
-          } catch { /* absent publication remains non-local */ }
-        }
-        if (isLocalPublication && runtime.retractPublication) {
-          try {
-            const outcome = await runtime.retractPublication({
-              publicationId,
-              publisherId: localPublisherId
-            })
-            if (outcome?.done === true) localRetracted = true
-          } catch (err) {
-            logger?.archive?.warn?.('Retracting local publication failed', { publicationId, error: err?.message || String(err) })
-          }
-        }
-        if (renditionId && typeof runtime.scopedNetwork?.releaseAuthorizedRendition === 'function') {
-          await runtime.scopedNetwork.releaseAuthorizedRendition({
-            renditionId,
-            ownerId: publicationId || id
-          }).catch(() => {})
-        }
-        if (!localRetracted) {
-          const currentBlocked = relaySettings.get('blockedReleases', [])
-          const toAdd = [id, publicationId, ...(renditionId ? [renditionId] : [])]
-          const updatedBlocked = Array.from(new Set([...currentBlocked, ...toAdd]))
-          await relaySettings.set('blockedReleases', updatedBlocked)
-          remoteBlocked = true
-        }
+        const pubResult = await deletePublicationRelease({ runtime, logger, publisherShell, relaySettings, id, publicationId, renditionId })
+        localRetracted = pubResult.localRetracted
+        remoteBlocked = pubResult.remoteBlocked
       }
-      if (acquisitionId && runtime.provider?.forgetAcquisition) {
-        try {
-          const local = publisherShell ? await publisherShell.ensureLocalPublisher().catch(() => null) : null
-          const result = await runtime.provider.forgetAcquisition({
-            acquisitionId,
-            principal: providerPrincipal(local?.publisherId || 'local-provider')
-          })
-          if (result?.forgotten === true) localRetracted = true
-          else if (!localRetracted && !remoteBlocked) failureReason = result?.reason || 'acquisition record could not be forgotten'
-        } catch (err) {
-          if (!localRetracted && !remoteBlocked) failureReason = err?.message || String(err)
-        }
+
+      if (acquisitionId) {
+        const acqResult = await deleteAcquisitionRelease({ runtime, publisherShell, acquisitionId, localRetracted, remoteBlocked, providerPrincipal })
+        if (acqResult.localRetracted) localRetracted = true
+        if (acqResult.failureReason) failureReason = acqResult.failureReason
       }
+
       const done = localRetracted || remoteBlocked
       if (!done) {
         return { id, done: false, reason: failureReason || 'nothing was deleted' }
@@ -1332,261 +1735,75 @@ async function buildRelayService({
         canPublish: retentionPermission
       })
       if (runtime.ctx?.metaDb) {
-        if (typeof runtime.provider?.migrateLegacyIngest !== 'function') {
-          throw new Error('ProviderService legacy acquisition migration is unavailable')
-        }
-        await runtime.provider.migrateLegacyIngest({
-          legacyStore: createLegacyIngestMigrationStore({ bee: runtime.ctx.metaDb, now: nowFn }),
-          legacyPrincipalId: config.companion.client,
-          legacyPublisherId: config.companion.publisherId,
-          now: nowFn
-        })
+        await runLegacyIngestMigration(runtime, config, nowFn)
       }
-      if (config.archive?.uiEnabled) {
-        const runtimeFsModule = companionFsModule
-        const runtimePathModule = companionPathModule
-        try { runtimeFsModule?.mkdirSync?.(archiveSpoolRoot, { recursive: true }) } catch { /* Admission reports missing storage later. */ }
-        const tmpHeadroom = liveFreeDiskHeadroom({
-          fsModule: runtimeFsModule,
-          path: archiveSpoolRoot,
-          minFreeBytes: config.storage.minFreeBytes || 0,
-          log: (...args) => logger.status?.debug?.(args.map(String).join(' '))
-        })
-        // The archive temp volume is bounded by free disk. The persisted copy
-        // is bounded by BOTH free disk and storage.maxBytes; reservations below
-        // subtract concurrent staged/copy bytes from that aggregate room.
-        const persistedHeadroom = () => storageGuard.headroomBytes()
-        const archiveHeadroom = archiveWriteHeadroom({
-          tmpHeadroom,
-          storageHeadroom: persistedHeadroom,
-          sharedVolume: true
-        })
-        const archiveStorageReservations = {
-          bytes: 0,
-          invalidate: () => storageGuard.invalidate()
-        }
-        archiveConsole = await archiveConsoleFactory({
-          service,
-          logger,
-          host: archiveUiHost(config),
-          port: archiveUiPort(config),
-          uploadDir: archiveSpoolRoot,
-          uploadStorageHeadroom: archiveHeadroom,
-          storageReservations: archiveStorageReservations,
-          publisher: archivePublisher,
-          downloader: createYtDlpDownloader({
-            bin: config.archive.ytDlpPath,
-            outputDir: companionPathModule.join(archiveSpoolRoot, 'uploads'),
-            format: config.archive.format,
-            ffmpegPath: config.archive.ffmpegPath,
-            cookiesPath: config.archive.cookiesPath,
-            jsRuntime: config.archive.jsRuntime,
-            storageHeadroom: archiveHeadroom,
-            storageReservations: archiveStorageReservations,
-            onStorageChanged: () => storageGuard.invalidate(),
-            ytDlpExtraArgs: config.archive.ytDlpExtraArgs,
-            ytDlpRetryExtraArgs: config.archive.ytDlpRetryExtraArgs,
-            spawnFn: spawnFn || undefined,
-            fs: runtimeFsModule,
-            path: runtimePathModule
-          }),
-          httpSurface: archiveHttp,
-        })
-        await archiveConsole.start()
-        // The one line that separates "still opening the store" from "stuck":
-        // everything the console reads is answerable from here on.
-        logger.relay.info('Relay archive console ready', {
-          host: archiveUiHost(config),
-          port: archiveHttp ? archiveHttp.port : archiveUiPort(config),
-          bootMs: Date.now() - bootStartedAt
-        })
-      }
+      archiveConsole = await startArchiveUiIfEnabled({
+        config,
+        logger,
+        archiveConsoleFactory,
+        archiveHttp,
+        service,
+        archivePublisher,
+        archiveSpoolRoot,
+        storageGuard,
+        spawnFn,
+        fsModule: companionFsModule,
+        pathModule: companionPathModule,
+        bootStartedAt
+      })
       if (config.companion?.enabled !== false) {
-        if (!runtime.provider) throw new Error('Relay runtime did not expose ProviderService')
-        const localPub = publisherShell ? await publisherShell.ensureLocalPublisher().catch((err) => {
-          logger.relay?.warn?.('Relay local publisher setup failed', { error: err?.message || String(err) })
-          return null
-        }) : null
-        logger.relay.info('Local publisher resolved', { publisherId: localPub?.publisherId })
-        if (localPub?.publisherId && (!config.companion.publisherId || !/^[0-9a-f]{64}$/.test(config.companion.publisherId))) {
-          config.companion.publisherId = localPub.publisherId
-        }
-        if (localPub?.publisherId) {
-          await ensureLocalAcquisitionPolicy(localPub.publisherId).catch((err) => {
-            logger.relay?.warn?.('Ensure acquisition policy failed', { error: err?.message || String(err) })
-          })
-        }
-        companionServer = await companionServerFactory({
-          service: createProviderMachineService(runtime, {
-            ensureAcquisitionPolicy: ensureLocalAcquisitionPolicy,
-            releaseFileNames: () => relaySettings.get('releaseFileNames', {})
-          }),
-          config: config.companion,
-          clock: nowFn,
-          logger
+        companionServer = await startCompanionServer({
+          config,
+          logger,
+          companionServerFactory,
+          runtime,
+          publisherShell,
+          relaySettings,
+          archiveConsole,
+          archiveHttp,
+          ensureLocalAcquisitionPolicy,
+          nowFn
         })
-        if (archiveConsole && typeof archiveConsole.setCompanionHandler === 'function') {
-          archiveConsole.setCompanionHandler(companionServer.handleRequest)
-        }
-        const uiPort = archiveHttp ? archiveHttp.port : archiveUiPort(config)
-        const uiActive = Boolean(config.archive?.uiEnabled && archiveConsole)
-        const separatePort = Boolean(config.companion?.hasExplicitPort && config.companion.port !== uiPort)
-        if (!uiActive || separatePort) {
-          logger.relay.info('Starting companion server listener...', { port: config.companion.port })
-          await companionServer.start()
-          logger.relay.info('Companion server started!')
-        } else {
-          companionServer.setPublicAddress?.({
-            host: archiveUiHost(config),
-            port: uiPort
-          })
-          logger.relay.info('Companion API mounted on unified archive UI server', { port: uiPort })
-        }
       }
 
       const runtimeStartedAt = Date.now()
       await runtime.start?.()
       logger.relay.info('Relay runtime network ready', { runtimeStartMs: Date.now() - runtimeStartedAt })
-      // The publisher root is CLI-owned, so the backend cannot restore a
-      // writable binding by itself: restoreLocalPublisherScopes() finds nothing
-      // at boot and the relay joins no publisher scope and announces no
-      // bootstrap locator. Consumers can connect and still discover nothing
-      // until some archive job happens to bind the catalog. Bind it here so a
-      // restarted relay is discoverable immediately.
-      //
-      // One shell instance is shared with the archive publisher; two would race
-      // over the same publisher-root file.
 
-      try {
-        const local = await publisherShell.ensureLocalPublisher()
-        const published = await runtime.publishPublisherCatalog({ publisherId: local.publisherId })
-        logger.relay.info('Relay publisher catalog announced', {
-          publisherId: local.publisherId,
-          status: published?.status || 'unknown'
-        })
-      } catch (error) {
-        // An empty relay has no accepted publication to announce yet. That is
-        // normal on a fresh install and must not stop startup; a genuine
-        // provisioning failure is a different matter and says so.
-        const message = error?.message || String(error)
-        if (/no accepted publication or claim/.test(message)) {
-          logger.relay.info('Relay publisher catalog has nothing to announce yet')
-        } else {
-          logger.relay.warn('Relay publisher catalog announcement failed', { error: message })
-        }
-      }
-
-
-      // Hand the archive network this relay's real headroom before it can be
-      // offered any pledge. Restored pledges are already in place by now, so
-      // the ceiling is computed above them, never under them.
+      await announcePublisherCatalog(publisherShell, runtime, logger)
       await refreshArchiveCapacity()
 
-
       const status = await persistStatus()
-      const networkStatus = status.network || {}
-      const publicWorkStatus = status.publicWork || {}
-      logger.relay.info('Relay started', {
-        peers: networkStatus.peers || 0,
-        connections: networkStatus.connections || 0,
-        activeAnnouncements: publicWorkStatus.activeAnnouncements || 0,
-        activeServes: publicWorkStatus.activeServes || 0,
-        activeAcquisitions: publicWorkStatus.activeAcquisitions || 0,
-        archivedChannels: status.summary?.totalChannels || 0
-      })
+      logRelayStarted(logger, status)
 
-
-      // Populate the persisted creators DB from the restored catalog so the
-      // console/CLI creator views are accurate on boot (then refreshed on the
-      // heartbeat and on archive completion). Runs after the console is already
-      // listening, so it never delays the web UI.
       await syncCreators()
 
-      if (config.archive?.localMirror?.enabled) {
-        const pollMs = Math.max(1, Number(config.archive.localMirror.poll || 30)) * 1000
-        const triggerLocalMirrorScan = () => runLocalMirrorOnce().catch((err) => {
-          logger.archive.error('Local mirror periodic scan failed', { error: err?.message || String(err) })
-          return { error: err?.message || String(err) }
-        })
-        localMirrorTimer = setIntervalFn(triggerLocalMirrorScan, pollMs)
-        localMirrorTimer?.unref?.()
-        triggerLocalMirrorScan()
-        logger.archive.info('Local directory mirror started', {
-          path: config.archive.localMirror.path,
-          pollSeconds: Math.round(pollMs / 1000),
-          channelName: config.archive.localMirror.channelName
-        })
-      }
+      localMirrorTimer = startLocalMirrorIfEnabled({
+        config,
+        logger,
+        setIntervalFn,
+        runLocalMirrorOnce
+      })
 
-      heartbeatTimer = setIntervalFn(async () => {
-        try {
-          await syncCreators()
-          // Headroom moves as the relay archives, evicts and grows. Re-derive
-          // it before status is written so what the archive network will accept
-          // and what status reports are the same number.
-          storageGuard.invalidate()
-          await refreshArchiveCapacity()
-          const heartbeatStatus = await persistStatus()
-          const network = heartbeatStatus.network || {}
-          if ((network.peers || 0) > 0 && (network.connections || 0) === 0) {
-            logger.status.warn('Relay discovered peers without sockets', {
-              peers: network.peers,
-              connections: network.connections,
-              networkStatus: network.status || 'unknown'
-            })
-          }
-          if ((network.peers || 0) === 0 && network.dht?.bootstrapped === false) {
-            logger.status.warn('Relay DHT has no discovered peers and is not bootstrapped', {
-              peers: network.peers || 0,
-              connections: network.connections || 0,
-              bootstrapped: network.dht.bootstrapped,
-              firewalled: network.dht.firewalled ?? null,
-              online: network.dht.online ?? null,
-              listenResolved: Boolean(network.listenResolved),
-              offline: Boolean(network.offline),
-              offlineReason: network.offlineReason || null
-            })
-          }
-          const publicWork = heartbeatStatus.publicWork || {}
-          logger.status.info('Relay heartbeat', {
-            peers: network.peers || 0,
-            connections: network.connections || 0,
-            activeAnnouncements: publicWork.activeAnnouncements || 0,
-            activeServes: publicWork.activeServes || 0,
-            servedBytes: publicWork.servedBytes || 0,
-            activeAcquisitions: publicWork.activeAcquisitions || 0
-          })
-        } catch (err) {
-          logger.status.error('Relay heartbeat failed', {
-            error: err?.message || String(err)
-          })
-        }
-      }, 30_000)
-
+      heartbeatTimer = setIntervalFn(
+        () => runHeartbeatTick({ syncCreators, storageGuard, refreshArchiveCapacity, persistStatus, logger }),
+        30_000
+      )
 
       return service
       } catch (error) {
-        if (heartbeatTimer) {
-          clearIntervalFn(heartbeatTimer)
-          heartbeatTimer = null
-        }
-        if (localMirrorTimer) {
-          clearIntervalFn(localMirrorTimer)
-          localMirrorTimer = null
-        }
-        if (companionServer) {
-          await companionServer.close().catch(() => {})
-          companionServer = null
-        }
-        if (archiveConsole) {
-          await archiveConsole.close().catch(() => {})
-          archiveConsole = null
-        }
-        try {
-          await runtime.close?.()
-        } catch {
-          // Preserve the startup error after best-effort runtime cleanup.
-        }
+        await rollbackServiceStart({
+          heartbeatTimer,
+          localMirrorTimer,
+          companionServer,
+          archiveConsole,
+          runtime,
+          clearIntervalFn
+        })
+        heartbeatTimer = null
+        localMirrorTimer = null
+        companionServer = null
+        archiveConsole = null
         throw error
       }
       })()
@@ -1640,84 +1857,28 @@ async function buildRelayService({
       }
       const page = await runtime.api.getMediaCatalog(request)
       if (page?.success !== true || !Array.isArray(page.items)) return page
+
       const blocked = new Set(relaySettings.get('blockedReleases', []))
-      if (blocked.size > 0) {
-        page.items = page.items.filter(item => {
-          if (blocked.has(item.publicationId) || blocked.has(item.id)) return false
-          if (Array.isArray(item.sources)) {
-            item.sources = item.sources.filter(src =>
-              !blocked.has(src.publicationId) &&
-              !blocked.has(src.renditionId) &&
-              !blocked.has(`${src.publicationId}:${src.renditionId}`)
-            )
-            if (item.sources.length === 0) return false
-          }
-          if (Array.isArray(item.publications)) {
-            item.publications = item.publications.filter(pub =>
-              !blocked.has(pub.publicationId) &&
-              !blocked.has(pub.renditionId) &&
-              !blocked.has(`${pub.publicationId}:${pub.renditionId}`)
-            )
-            if (item.publications.length === 0 && !Array.isArray(item.sources)) return false
-          }
-          return true
-        })
-      }
+      page.items = filterBlockedCatalogItems(page.items, blocked)
+
       const provider = runtime.provider
       if (typeof provider?.search !== 'function') return page
+
       const searches = new Map()
       const nowMs = nowFn()
-      if (catalogEnrichmentCache.size > 256) {
-        for (const [k, v] of catalogEnrichmentCache) {
-          if (v.expiresAt <= nowMs) catalogEnrichmentCache.delete(k)
-        }
-      }
-      // A playable reference is the provider's own lease, minted by a search
-      // through `publicHit` - not the raw index candidate token, which
-      // `provider.resolve` refuses. One provider search per selector, then
-      // match the lease to the catalog row by publication and rendition.
+      pruneEnrichmentCache(catalogEnrichmentCache, nowMs)
+
       const items = []
       for (const item of page.items) {
-        const sources = []
-        for (const source of item?.sources || []) {
-          const cacheKey = source.publicationId && source.renditionId ? `${source.publicationId}:${source.renditionId}` : null
-          const cached = cacheKey ? catalogEnrichmentCache.get(cacheKey) : null
-          let ref = null
-          if (cached && cached.expiresAt > nowMs) {
-            ref = cached.ref
-          } else {
-            const selector = selectorForMediaCoordinates(source)
-            if (selector) {
-              const key = JSON.stringify(selector)
-              let hits = searches.get(key)
-              if (!hits) {
-                hits = provider.search({ selector, limit: 16 }).then(result =>
-                  (result?.candidates || []).filter(candidate =>
-                    candidate?.kind === 'published' && candidate.publicationId && candidate.renditionId)
-                ).catch(err => {
-                  logger?.archive?.warn?.('Catalog playback enrichment search failed', {
-                    error: err?.code || err?.message || String(err),
-                    selector
-                  })
-                  return []
-                })
-                searches.set(key, hits)
-              }
-              const match = (await hits).find(candidate =>
-                candidate.publicationId === source.publicationId &&
-                (!source.renditionId || candidate.renditionId === source.renditionId))
-              if (match?.ref) {
-                ref = match.ref
-                if (cacheKey) {
-                  catalogEnrichmentCache.set(cacheKey, { ref, expiresAt: nowMs + ENRICHMENT_CACHE_TTL_MS })
-                }
-              }
-            }
-          }
-          sources.push(ref ? { ...source, candidateRef: ref } : source)
-        }
-        const candidateRef = sources.find(source => CANDIDATE_REF_PATTERN.test(source?.candidateRef || ''))?.candidateRef || null
-        items.push({ ...item, sources, ...(candidateRef ? { candidateRef } : {}) })
+        items.push(await enrichCatalogItem({
+          item,
+          catalogEnrichmentCache,
+          searches,
+          provider,
+          logger,
+          nowMs,
+          enrichmentTtlMs: ENRICHMENT_CACHE_TTL_MS
+        }))
       }
       return { ...page, items }
     },

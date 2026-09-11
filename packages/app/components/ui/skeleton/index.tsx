@@ -1,7 +1,10 @@
-import React, { forwardRef } from 'react';
+import React, { forwardRef, useEffect, useState } from 'react';
 import type { VariantProps } from '@gluestack-ui/nativewind-utils';
 import { Animated, Easing, Platform, View } from 'react-native';
 import { skeletonStyle, skeletonTextStyle } from './styles';
+
+const PULSE_EASING = Easing.bezier(0.4, 0, 0.6, 1);
+const FADE_DURATION = 0.6;
 
 type ISkeletonProps = React.ComponentProps<typeof View> &
   VariantProps<typeof skeletonStyle> & {
@@ -17,7 +20,7 @@ type ISkeletonTextProps = React.ComponentProps<typeof View> &
   };
 
 const Skeleton = forwardRef<
-  React.ElementRef<typeof Animated.View>,
+  React.ElementRef<typeof View>,
   ISkeletonProps
 >(
   (
@@ -32,34 +35,43 @@ const Skeleton = forwardRef<
     },
     ref
   ) => {
-    const pulseAnim = new Animated.Value(1);
-    const customTimingFunction = Easing.bezier(0.4, 0, 0.6, 1);
-    const fadeDuration = 0.6;
-    const animationDuration = (fadeDuration * 10000) / speed; // Convert seconds to milliseconds
+    const [pulseAnim] = useState(() => new Animated.Value(1));
 
-    const pulse = Animated.sequence([
-      Animated.timing(pulseAnim, {
-        toValue: 1, // Start with opacity 1
-        duration: animationDuration / 2, // Third of the animation duration
-        easing: customTimingFunction,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-      Animated.timing(pulseAnim, {
-        toValue: 0.75,
-        duration: animationDuration / 2, // Third of the animation duration
-        easing: customTimingFunction,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-      Animated.timing(pulseAnim, {
-        toValue: 1,
-        duration: animationDuration / 2, // Third of the animation duration
-        easing: customTimingFunction,
-        useNativeDriver: Platform.OS !== 'web',
-      }),
-    ]);
+    useEffect(() => {
+      if (isLoaded) {
+        return;
+      }
+      const animationDuration = (FADE_DURATION * 10000) / speed; // Convert seconds to milliseconds
+      const pulse = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1, // Start with opacity 1
+            duration: animationDuration / 2,
+            easing: PULSE_EASING,
+            useNativeDriver: Platform.OS !== 'web',
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 0.75,
+            duration: animationDuration / 2,
+            easing: PULSE_EASING,
+            useNativeDriver: Platform.OS !== 'web',
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: animationDuration / 2,
+            easing: PULSE_EASING,
+            useNativeDriver: Platform.OS !== 'web',
+          }),
+        ]),
+      );
+      pulse.start();
+
+      return () => {
+        pulse.stop();
+      };
+    }, [isLoaded, speed, pulseAnim]);
 
     if (!isLoaded) {
-      Animated.loop(pulse).start();
       return (
         <Animated.View
           style={{ opacity: pulseAnim }}
@@ -71,11 +83,9 @@ const Skeleton = forwardRef<
           ref={ref}
         />
       );
-    } else {
-      Animated.loop(pulse).stop();
-
-      return children;
     }
+
+    return children;
   }
 );
 

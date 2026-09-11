@@ -103,6 +103,32 @@ function containerNeedsRemux(policy, container) {
   const c = String(container).toLowerCase()
   return policy.remuxContainerPatterns.some((pat) => c.includes(pat))
 }
+function evaluateVideoTranscode(policy, v, player, videoProfile, videoLevel) {
+  if (!v) return { needsVideoTranscode: false, reason: null }
+  if (!policy.video.has(v)) {
+    return { needsVideoTranscode: true, reason: `video ${v} unsupported on ${player}` }
+  }
+  if (v === 'h264' && policy.rejectHiProfileH264 && videoProfile) {
+    const profile = String(videoProfile).toLowerCase()
+    if (H264_UNSUPPORTED_PROFILES.some((p) => profile.includes(p))) {
+      return { needsVideoTranscode: true, reason: `H.264 profile '${videoProfile}' unsupported (10-bit/4:4:4)` }
+    }
+  }
+  if (v === 'h264' && policy.h264MaxLevel && videoLevel && videoLevel > policy.h264MaxLevel) {
+    return { needsVideoTranscode: true, reason: `H.264 level ${videoLevel} > ${policy.h264MaxLevel}` }
+  }
+  return { needsVideoTranscode: false, reason: null }
+}
+
+function evaluateRemux(probeNeedsRemux, remuxReason, policy, container, player) {
+  if (probeNeedsRemux) {
+    return { needsRemux: true, reason: remuxReason || `source needs remux for ${player}` }
+  }
+  if (containerNeedsRemux(policy, container)) {
+    return { needsRemux: true, reason: `container '${container}' needs remux for ${player}` }
+  }
+  return { needsRemux: false, reason: null }
+}
 
 /**
  * Decide how to play a source on a given OS-native player.
@@ -138,23 +164,9 @@ export function decidePlayback({ player, videoCodec, audioCodec, container, vide
   const v = normVideo(videoCodec)
   const a = normAudio(audioCodec)
 
-  let needsVideoTranscode = false
-  if (v) {
-    if (!policy.video.has(v)) {
-      needsVideoTranscode = true
-      reasons.push(`video ${v} unsupported on ${player}`)
-    } else if (v === 'h264' && policy.rejectHiProfileH264 && videoProfile) {
-      const profile = String(videoProfile).toLowerCase()
-      if (H264_UNSUPPORTED_PROFILES.some((p) => profile.includes(p))) {
-        needsVideoTranscode = true
-        reasons.push(`H.264 profile '${videoProfile}' unsupported (10-bit/4:4:4)`)
-      }
-    }
-    if (!needsVideoTranscode && v === 'h264' && policy.h264MaxLevel && videoLevel && videoLevel > policy.h264MaxLevel) {
-      needsVideoTranscode = true
-      reasons.push(`H.264 level ${videoLevel} > ${policy.h264MaxLevel}`)
-    }
-  }
+  const videoDecision = evaluateVideoTranscode(policy, v, player, videoProfile, videoLevel)
+  const needsVideoTranscode = videoDecision.needsVideoTranscode
+  if (videoDecision.reason) reasons.push(videoDecision.reason)
 
   let needsAudioTranscode = false
   if (a && !policy.audio.has(a)) {
@@ -165,12 +177,10 @@ export function decidePlayback({ player, videoCodec, audioCodec, container, vide
   // Container remux only matters when we're otherwise stream-copying — a video
   // or audio transcode already rewrites into the output (HLS/fMP4) container.
   let needsRemux = false
-  if (!needsVideoTranscode && !needsAudioTranscode && probeNeedsRemux) {
-    needsRemux = true
-    reasons.push(remuxReason || `source needs remux for ${player}`)
-  } else if (!needsVideoTranscode && !needsAudioTranscode && containerNeedsRemux(policy, container)) {
-    needsRemux = true
-    reasons.push(`container '${container}' needs remux for ${player}`)
+  if (!needsVideoTranscode && !needsAudioTranscode) {
+    const remuxDecision = evaluateRemux(probeNeedsRemux, remuxReason, policy, container, player)
+    needsRemux = remuxDecision.needsRemux
+    if (remuxDecision.reason) reasons.push(remuxDecision.reason)
   }
 
   let mode = 'direct'

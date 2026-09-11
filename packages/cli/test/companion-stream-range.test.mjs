@@ -229,6 +229,25 @@ test('malformed, multi, and unsatisfiable ranges return bounded 416 responses wi
   t.is(rejected.headers.allow, 'GET, HEAD')
 })
 
+test('HEAD error responses mirror the GET 416 headers at the wire with an empty body', async (t) => {
+  const { asset, calls } = streamAsset()
+  const { state, opened } = await startHarness(t, asset)
+  const headers = { range: `bytes=${BODY.byteLength}-` }
+  const get = await request({ host: state.host, port: state.port, path: opened.url, headers })
+  t.is(get.statusCode, 416)
+  t.ok(get.body.byteLength > 0 && get.body.byteLength <= 512)
+  t.is(get.headers['content-length'], String(get.body.byteLength))
+
+  const head = await request({ host: state.host, port: state.port, method: 'HEAD', path: opened.url, headers })
+  t.is(head.statusCode, 416)
+  t.is(head.headers['content-length'], get.headers['content-length'], 'HEAD mirrors the GET declared body length')
+  t.is(head.headers['content-type'], get.headers['content-type'])
+  t.is(head.headers['content-range'], `bytes */${BODY.byteLength}`)
+  t.is(head.headers['accept-ranges'], 'bytes')
+  t.is(head.body.byteLength, 0)
+  t.alike(rangeCalls(calls), [])
+})
+
 test('verified-source exhaustion is structured before headers and terminates after headers', async (t) => {
   let calls = 0
   const before = streamAsset(BODY, {
@@ -507,4 +526,119 @@ test('stalled response writes abort and retire their pinned capability', async (
   t.is(schedulerSignal.aborted, true)
   t.is(capabilities.size, 0)
   t.is(releases, 1)
+})
+
+function waitFor (check) {
+  return new Promise(resolve => {
+    const timer = setInterval(() => {
+      if (check()) {
+        clearInterval(timer)
+        resolve()
+      }
+    }, 5)
+    timer.unref?.()
+  })
+}
+
+test('server close during gated stream metadata reaches a terminal 499 and releases the capability', async (t) => {
+  let schedulerSignal = null
+  let releases = 0
+  const { asset } = streamAsset(BODY, {
+    requestRange ({ signal }) {
+      schedulerSignal = signal
+      return new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          const error = new Error('aborted')
+          error.name = 'AbortError'
+          reject(error)
+        }, { once: true })
+      })
+    },
+    async release () { releases++ }
+  })
+  const capabilities = createStreamCapabilityStore({ now: () => NOW, maxConcurrentUses: 1 })
+  const { state, server, opened } = await startHarness(t, asset, { capabilities })
+  const pending = request({ host: state.host, port: state.port, path: opened.url, allowAbort: true })
+  await waitFor(() => schedulerSignal !== null)
+
+  const closed = server.close()
+  const response = await Promise.race([
+    pending,
+    new Promise(resolve => setTimeout(() => resolve(null), 2000))
+  ])
+  await closed
+  await capabilities.drain()
+
+  t.ok(response, 'the cancelled stream reached a terminal response promptly instead of hanging')
+  t.is(response.statusCode, 499)
+  t.is(JSON.parse(b4a.toString(response.body)).error?.code, 'REQUEST_CANCELLED')
+  t.is(releases, 1, 'the acquired capability was released exactly once')
+})
+
+test('a cooperative backend abort after the first chunk terminates the truncated response', async (t) => {
+  let firstServed = false
+  const { asset } = streamAsset(BODY, {
+    async requestRange ({ byteStart, byteEnd }) {
+      if (!firstServed) {
+        firstServed = true
+        return { status: 'ok', verified: true, bytes: BODY.subarray(byteStart, byteEnd) }
+      }
+      const error = new Error('backend closed cooperatively')
+      error.name = 'AbortError'
+      throw error
+    }
+  })
+  const { state, opened } = await startHarness(t, asset)
+  const response = await Promise.race([
+    request({ host: state.host, port: state.port, path: opened.url, allowAbort: true }),
+    new Promise(resolve => setTimeout(() => resolve(null), 2000))
+  ])
+
+  t.ok(response, 'the truncated stream terminated instead of hanging the client')
+  t.is(response.aborted, true, 'the response ended without a complete body')
+  t.alike(response.body, BODY.subarray(0, 4))
+})
+
+test('server close during async asset resolution sends a terminal 499 before headers', async (t) => {
+  let resolveSignal = null
+  const service = {
+    resolveStreamAsset ({ signal }) {
+      resolveSignal = signal
+      return new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          const error = new Error('aborted')
+          error.name = 'AbortError'
+          reject(error)
+        }, { once: true })
+      })
+    }
+  }
+  const capabilities = createStreamCapabilityStore({ now: () => NOW })
+  const grant = capabilities.issue({
+    clientIdentity: CLIENT,
+    publicationId: 'pub-1',
+    renditionId: 'rend-1',
+    assetId: 'asset-1'
+  })
+  const server = createCompanionServer({ service, capabilities, config: config(), clock: () => NOW, requestDeadlineMs: 5_000 })
+  t.teardown(() => server.close().catch(() => {}))
+  const state = await server.start()
+  const pending = request({
+    host: state.host,
+    port: state.port,
+    path: `/api/v2/stream/pub-1/rend-1?cap=${grant.token}`,
+    allowAbort: true
+  })
+  await waitFor(() => resolveSignal !== null)
+
+  const closed = server.close()
+  const response = await Promise.race([
+    pending,
+    new Promise(resolve => setTimeout(() => resolve(null), 2000))
+  ])
+  await closed
+
+  t.ok(response, 'cancellation during asset resolution reached a terminal response')
+  t.is(response.statusCode, 499)
+  t.is(JSON.parse(b4a.toString(response.body)).error?.code, 'REQUEST_CANCELLED')
 })

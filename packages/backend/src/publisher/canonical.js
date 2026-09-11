@@ -147,6 +147,7 @@ const BODY_VERSION = 1
 const TARGET_TYPES = Object.freeze(['claim', 'collection', 'publication'])
 const OWNER_ACTIONS = Object.freeze(['feature', 'hide', 'restore', 'unfeature'])
 
+/** @returns {never} */
 function invalid (message) {
   throw new Error(`Invalid publisher operation: ${message}`)
 }

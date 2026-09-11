@@ -77,6 +77,7 @@ export function deriveRenditionId(input = {}) {
 // test for "this is artwork, not media" lives with the descriptor rather than
 // being re-guessed at each call site.
 export const ARTWORK_RENDITION_PURPOSES = Object.freeze(new Set(['poster', 'backdrop', 'thumbnail', 'still']))
+export const MAX_ARTWORK_BYTES = 8 * 1024 * 1024
 
 export function isArtworkRendition(rendition) {
   return ARTWORK_RENDITION_PURPOSES.has(String(rendition?.purpose || ''))

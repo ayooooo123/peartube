@@ -1,0 +1,15 @@
+id: duplicate-acquisition-entrypoints
+message: "CLI add and mirror workflows must route through universal ProviderService (e.g. requestAcquisition or requestLocalFileAcquisition), not direct createExecutor pipelines."
+severity: error
+language: Tsx
+files:
+  - "packages/cli/src/add/**"
+  - "packages/cli/src/local-drive-mirror.js"
+ignores:
+  - "**/test/**"
+  - "**/tests/**"
+  - "**/__tests__/**"
+rule:
+  any:
+    - pattern: createExecutor($$$ARGS)
+    - pattern: deps.createExecutor($$$ARGS)

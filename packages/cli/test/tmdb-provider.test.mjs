@@ -2,7 +2,7 @@ import test from 'brittle'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { createTmdbProvider, TmdbProviderError } from '../src/add/providers/tmdb.js'
+import { createTmdbProvider, TmdbProviderError, tmdbImageUrl } from '../src/add/providers/tmdb.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fixture = (name) => JSON.parse(readFileSync(join(here, 'fixtures', name), 'utf8'))
@@ -40,7 +40,7 @@ test('search normalizes tv and movie results, drops people, and derives badges',
   t.is(show.badge, 'TV')
   t.ok(show.description.length > 0)
   t.is(show.artwork.find((art) => art.role === 'poster').path, '/poster-bb.jpg')
-  t.ok(show.artwork.find((art) => art.role === 'poster').url.includes('/poster-bb.jpg'))
+  t.is(show.artwork.find((art) => art.role === 'poster').url, 'https://image.tmdb.org/t/p/w500/poster-bb.jpg')
   t.is(movie.kind, 'movie')
   t.is(movie.badge, 'Movie')
   t.is(movie.year, 1999)
@@ -88,6 +88,27 @@ test('getMovie returns a movie profile with runtime and artwork', async (t) => {
   t.is(movie.year, 1999)
   t.is(movie.runtime, 136)
   t.is(movie.artwork.find((art) => art.role === 'poster').path, '/poster-matrix.jpg')
+})
+
+test('TMDB image URLs join one size separator and accept only a single filename', (t) => {
+  t.is(tmdbImageUrl('/poster.jpg', 'w780'), 'https://image.tmdb.org/t/p/w780/poster.jpg')
+  t.is(tmdbImageUrl('poster.jpg', 'w780', 'https://image.tmdb.org/t/p/'), 'https://image.tmdb.org/t/p/w780/poster.jpg')
+  for (const path of [
+    '../poster.jpg', '/..', '/nested/poster.jpg', '//poster.jpg',
+    '/poster.jpg?width=2', '/poster.jpg#fragment', '/%2e%2e%2fposter.jpg',
+    '/poster\\other.jpg', 'https://example.invalid/poster.jpg', ' /poster.jpg', {}, 7,
+  ]) {
+    t.exception(() => tmdbImageUrl(path, 'w780'), /single filename/)
+  }
+})
+
+test('TMDB provider refuses an injected artwork path rather than returning a fetchable URL', async (t) => {
+  const { fetch } = routedFetch([['/movie/603', jsonResponse({
+    ...fixture('tmdb-movie.json'),
+    poster_path: '/nested/poster.jpg',
+  })]])
+  const provider = createTmdbProvider({ apiKey: 'token', fetch })
+  await t.exception(() => provider.getMovie('603'), /single filename/)
 })
 
 async function caught (promise) {

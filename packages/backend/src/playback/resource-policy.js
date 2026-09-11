@@ -169,6 +169,202 @@ function freeDiskFloor(totalDiskBytes, server) {
     Math.ceil(totalDiskBytes * PARTICIPATION_HARD_LIMITS.minFreeDiskFraction),
   )
 }
+function evaluateNetworkSignal (source, server, reasons) {
+  if (source.metered === false || (server && source.metered == null)) {
+    return { blocked: false, known: true }
+  }
+  if (source.metered === true) {
+    reasons.push('NETWORK_METERED')
+    return { blocked: true, known: false }
+  }
+  reasons.push('NETWORK_SIGNAL_UNKNOWN')
+  return { blocked: false, known: false }
+}
+
+function evaluateThermalSignal (source, server, reasons) {
+  const thermalState = typeof source.thermalState === 'string' ? source.thermalState : null
+  if (thermalState !== null && PERMISSIVE_THERMAL_STATES.has(thermalState)) {
+    return { blocked: false, known: true }
+  }
+  if (thermalState !== null && BLOCKING_THERMAL_STATES.has(thermalState)) {
+    reasons.push('THERMAL_PRESSURE')
+    return { blocked: true, known: false }
+  }
+  if (server && thermalState === null) {
+    return { blocked: false, known: true }
+  }
+  reasons.push('THERMAL_SIGNAL_UNKNOWN')
+  return { blocked: false, known: false }
+}
+
+function evaluatePowerSignal (source, server, reasons) {
+  if (source.charging === true) return { blocked: false, known: true }
+  const batteryPercent = finitePercent(source.batteryPercent)
+  if (batteryPercent === null) {
+    if (server && source.charging == null) return { blocked: false, known: true }
+    reasons.push('POWER_SIGNAL_UNKNOWN')
+    return { blocked: false, known: false }
+  }
+  if (batteryPercent < PARTICIPATION_HARD_LIMITS.minBatteryPercent) {
+    reasons.push('BATTERY_BELOW_FLOOR')
+    return { blocked: true, known: false }
+  }
+  return { blocked: false, known: true }
+}
+
+function evaluateDiskSignal (source, server, reasons) {
+  const freeDiskBytes = nonNegativeCount(source.freeDiskBytes)
+  const totalDiskBytes = nonNegativeCount(source.totalDiskBytes)
+  if (freeDiskBytes === null || totalDiskBytes === null) {
+    reasons.push('DISK_SIGNAL_UNKNOWN')
+    return { blocked: false, known: false }
+  }
+  if (freeDiskBytes < freeDiskFloor(totalDiskBytes, server)) {
+    reasons.push('DISK_BELOW_FLOOR')
+    return { blocked: true, known: false }
+  }
+  return { blocked: false, known: true }
+}
+
+function evaluatePlaybackWindow (source, limits, server, reasons) {
+  const playbackActive = source.playbackActive === true
+  const msSincePlaybackEnded = nonNegativeCount(source.msSincePlaybackEnded)
+  const withinGrace = limits.postPlaybackGraceMs > 0 &&
+    msSincePlaybackEnded !== null &&
+    msSincePlaybackEnded <= limits.postPlaybackGraceMs
+  const windowOk = server || playbackActive || withinGrace
+  if (!windowOk) reasons.push('OUTSIDE_PLAYBACK_WINDOW')
+  return windowOk
+}
+
+function evaluateBackgroundBudgets (source, limits) {
+  const backgroundRemainingSessionMs = Math.max(
+    0,
+    limits.backgroundSessionMs - (nonNegativeCount(source.backgroundMsThisSession) ?? 0),
+  )
+  const backgroundRemainingDailyMs = Math.max(
+    0,
+    limits.backgroundPer24hMs - (nonNegativeCount(source.backgroundMsLast24h) ?? 0),
+  )
+  const blockers = []
+  if (limits.backgroundSessionMs <= 0 || limits.backgroundPer24hMs <= 0) {
+    blockers.push('MODE_BACKGROUND_DISABLED')
+  } else {
+    if (source.backgroundPermitted !== true) blockers.push('BACKGROUND_NOT_PERMITTED')
+    if (backgroundRemainingSessionMs <= 0) blockers.push('BACKGROUND_SESSION_BUDGET_EXHAUSTED')
+    if (backgroundRemainingDailyMs <= 0) blockers.push('BACKGROUND_DAILY_BUDGET_EXHAUSTED')
+  }
+  return {
+    remainingSessionMs: backgroundRemainingSessionMs,
+    remainingDailyMs: backgroundRemainingDailyMs,
+    blockers,
+  }
+}
+
+function isParticipationRunnable ({ server, foreground, backgroundWorkOk, allSignalsKnown }) {
+  if (server || foreground) return true
+  return backgroundWorkOk && allSignalsKnown
+}
+
+function isUploadBlocked ({ server, fetchBlocked, powerBlocked, contributionBlocked }) {
+  return server ? (fetchBlocked || powerBlocked) : contributionBlocked
+}
+
+function resolveUploadFlags ({
+  permissionOk,
+  uploadBlocked,
+  windowOk,
+  quotaOk,
+  runnable,
+  recentOutboundBytes,
+}) {
+  const contributionOk = permissionOk && !uploadBlocked && windowOk && quotaOk
+  const uploadEligible = contributionOk && runnable
+  const uploading = uploadEligible && recentOutboundBytes > 0
+  return { uploadEligible, uploading }
+}
+
+function isBackgroundEligible ({
+  permissionOk,
+  contributionBlocked,
+  allSignalsKnown,
+  server,
+  backgroundWorkOk,
+  windowOk,
+  quotaOk,
+}) {
+  if (!permissionOk || contributionBlocked || !allSignalsKnown || !windowOk || !quotaOk) {
+    return false
+  }
+  return server || backgroundWorkOk
+}
+
+function resolveArchiveFlags ({
+  permissionOk,
+  contributionBlocked,
+  allSignalsKnown,
+  uploadEligible,
+  archiveOptIn,
+}) {
+  if (archiveOptIn !== true || !permissionOk || contributionBlocked) {
+    return { archiving: false, archiveEligible: false }
+  }
+  return {
+    archiving: uploadEligible,
+    archiveEligible: allSignalsKnown,
+  }
+}
+
+function isAcquisitionUnconstrained (state) {
+  if (state.metered === true) return false
+  return state.thermalState !== 'serious' && state.thermalState !== 'critical'
+}
+
+function participationStateName (uploading, uploadEligible) {
+  if (uploading) return 'uploading'
+  if (uploadEligible) return 'eligible'
+  return 'suspended'
+}
+
+function buildParticipationDecision ({
+  mode,
+  limits,
+  peerDiscovery,
+  cacheFill,
+  archiving,
+  archiveEligible,
+  uploadEligible,
+  uploading,
+  backgroundEligible,
+  cacheCeilingBytes,
+  uploadCeilingBytesPer24h,
+  uploadedBytesLast24h,
+  background,
+  reasons,
+}) {
+  return {
+    mode,
+    state: participationStateName(uploading, uploadEligible),
+    localPlayback: true,
+    peerDiscovery,
+    upload: uploadEligible,
+    cacheFill,
+    archiving,
+    archiveEligible,
+    uploadEligible,
+    uploading,
+    backgroundEligible,
+    cacheCeilingBytes,
+    uploadCeilingBytesPer24h,
+    uploadedBytesLast24h,
+    outboundBytesPerSecond: limits.outboundBytesPerSecond,
+    postPlaybackGraceMs: limits.postPlaybackGraceMs,
+    backgroundRemainingSessionMs: background.remainingSessionMs,
+    backgroundRemainingDailyMs: background.remainingDailyMs,
+    reasonCodes: orderReasonCodes(reasons),
+  }
+}
+
 
 /**
  * The single participation decision. Pure: no clock, no I/O, no module state.
@@ -194,148 +390,83 @@ export function evaluateParticipation(state = {}) {
   const resolved = resolveMode(source.mode)
   const mode = resolved.mode
   const limits = PARTICIPATION_LIMITS[mode]
-  // The two user-facing byte ceilings may be overridden by an explicit viewer
-  // setting; everything else about a mode is fixed, and no override touches a
-  // hard or OS gate.
   const cacheCeilingBytes = effectiveCeiling(source.cacheCeilingBytes, limits.cacheCeilingBytes)
   const uploadCeilingBytesPer24h = effectiveCeiling(source.uploadCeilingBytesPer24h, limits.uploadCeilingBytesPer24h)
   const reasons = []
   if (resolved.unrecognized) reasons.push('MODE_UNRECOGNIZED')
 
-  // A headless server has no battery, no thermal throttle, no metered link, no
-  // app lifecycle and no playback window. Absent values for those are
-  // not-applicable here, never "unread".
   const server = source.hostKind === 'server'
-
   const permissionOk = source.userAllowsP2P !== false
   if (!permissionOk) reasons.push('USER_DECLINED_P2P')
 
-  // Each OS signal resolves to one of three answers, and the difference
-  // matters: a signal that is READ and comes back bad stops every kind of
-  // contribution, while a signal this device cannot read at all only stops the
-  // opportunistic background work. Acceptance promises upload during playback
-  // and its grace window outright, and names the unmetered/thermal/power/disk
-  // conditions as requirements for background work — so an unreadable signal
-  // is never a green light for unsupervised work, and never a reason to refuse
-  // to serve a peer while the viewer is watching.
-  let networkBlocked = false
-  let networkKnown = false
-  if (source.metered === false || (server && source.metered == null)) networkKnown = true
-  else if (source.metered === true) { networkBlocked = true; reasons.push('NETWORK_METERED') }
-  else reasons.push('NETWORK_SIGNAL_UNKNOWN')
+  const network = evaluateNetworkSignal(source, server, reasons)
+  const thermal = evaluateThermalSignal(source, server, reasons)
+  const power = evaluatePowerSignal(source, server, reasons)
+  const disk = evaluateDiskSignal(source, server, reasons)
 
-  let thermalBlocked = false
-  let thermalKnown = false
-  const thermalState = typeof source.thermalState === 'string' ? source.thermalState : null
-  if (thermalState !== null && PERMISSIVE_THERMAL_STATES.has(thermalState)) thermalKnown = true
-  else if (thermalState !== null && BLOCKING_THERMAL_STATES.has(thermalState)) { thermalBlocked = true; reasons.push('THERMAL_PRESSURE') }
-  else if (server && thermalState === null) thermalKnown = true
-  else reasons.push('THERMAL_SIGNAL_UNKNOWN')
-
-  const batteryPercent = finitePercent(source.batteryPercent)
-  let powerBlocked = false
-  let powerKnown = false
-  if (source.charging === true) powerKnown = true
-  else if (batteryPercent === null) {
-    if (server && source.charging == null) powerKnown = true
-    else reasons.push('POWER_SIGNAL_UNKNOWN')
-  }
-  else if (batteryPercent < PARTICIPATION_HARD_LIMITS.minBatteryPercent) { powerBlocked = true; reasons.push('BATTERY_BELOW_FLOOR') }
-  else powerKnown = true
-
-  const freeDiskBytes = nonNegativeCount(source.freeDiskBytes)
-  const totalDiskBytes = nonNegativeCount(source.totalDiskBytes)
-  let diskBlocked = false
-  let diskKnown = false
-  if (freeDiskBytes === null || totalDiskBytes === null) reasons.push('DISK_SIGNAL_UNKNOWN')
-  else if (freeDiskBytes < freeDiskFloor(totalDiskBytes, server)) { diskBlocked = true; reasons.push('DISK_BELOW_FLOOR') }
-  else diskKnown = true
-
-  const playbackActive = source.playbackActive === true
-  const msSincePlaybackEnded = nonNegativeCount(source.msSincePlaybackEnded)
-  const withinGrace = limits.postPlaybackGraceMs > 0 &&
-    msSincePlaybackEnded !== null &&
-    msSincePlaybackEnded <= limits.postPlaybackGraceMs
-  // A server is not waiting for anyone to press play; serving continuously is
-  // the whole point of it.
-  const windowOk = server || playbackActive || withinGrace
-  if (!windowOk) reasons.push('OUTSIDE_PLAYBACK_WINDOW')
+  const windowOk = evaluatePlaybackWindow(source, limits, server, reasons)
 
   const uploadedBytesLast24h = nonNegativeCount(source.uploadedBytesLast24h) ?? 0
   const quotaOk = uploadedBytesLast24h < uploadCeilingBytesPer24h
   if (!quotaOk) reasons.push('UPLOAD_QUOTA_EXHAUSTED')
 
-  // "Actively uploading" is a measurement, not a guess: it means bytes left
-  // this device recently. A player that is eligible but sending nothing is
-  // eligible, not uploading.
   const recentOutboundBytes = nonNegativeCount(source.recentOutboundBytes) ?? 0
 
-  const backgroundRemainingSessionMs = Math.max(
-    0,
-    limits.backgroundSessionMs - (nonNegativeCount(source.backgroundMsThisSession) ?? 0),
-  )
-  const backgroundRemainingDailyMs = Math.max(
-    0,
-    limits.backgroundPer24hMs - (nonNegativeCount(source.backgroundMsLast24h) ?? 0),
-  )
-  const backgroundBlockers = []
-  if (limits.backgroundSessionMs <= 0 || limits.backgroundPer24hMs <= 0) {
-    backgroundBlockers.push('MODE_BACKGROUND_DISABLED')
-  } else {
-    if (source.backgroundPermitted !== true) backgroundBlockers.push('BACKGROUND_NOT_PERMITTED')
-    if (backgroundRemainingSessionMs <= 0) backgroundBlockers.push('BACKGROUND_SESSION_BUDGET_EXHAUSTED')
-    if (backgroundRemainingDailyMs <= 0) backgroundBlockers.push('BACKGROUND_DAILY_BUDGET_EXHAUSTED')
-  }
-  const backgroundWorkOk = backgroundBlockers.length === 0
-  // Foreground is a categorical signal like every other: only an explicit
-  // boolean counts, and anything we cannot read is treated as backgrounded so
-  // an unknown lifecycle never buys unsupervised work.
+  const background = evaluateBackgroundBudgets(source, limits)
+  const backgroundWorkOk = background.blockers.length === 0
   const foreground = source.foreground === true
-  // Background constraints only block while the app is actually backgrounded,
-  // and a server is never "backgrounded" — nothing is in front of it.
-  if (!server && !foreground) reasons.push(...backgroundBlockers)
+  if (!server && !foreground) reasons.push(...background.blockers)
 
-  // A signal the device reported as bad stops what it is about. Fetching for
-  // the viewer's own playback answers to the network and thermal signals;
-  // taking on more storage additionally answers to power and disk.
-  const fetchBlocked = networkBlocked || thermalBlocked
-  const contributionBlocked = fetchBlocked || powerBlocked || diskBlocked
-  // Serving a block is a read. A full disk is a reason to stop writing, never a
-  // reason to stop reading, and on a server the two come apart: its uploads are
-  // pure reads of bytes it already holds, so silencing a nearly-full relay
-  // would delete availability from the network and free not one byte. On a
-  // viewer's device the same bytes arrive by caching what it watches, so there
-  // the disk still governs both.
-  const uploadBlocked = server ? (fetchBlocked || powerBlocked) : contributionBlocked
-  // Unsupervised work additionally requires every one of those signals to have
-  // actually been read.
-  const allSignalsKnown = networkKnown && thermalKnown && powerKnown && diskKnown
+  const fetchBlocked = network.blocked || thermal.blocked
+  const contributionBlocked = fetchBlocked || power.blocked || disk.blocked
+  const uploadBlocked = isUploadBlocked({
+    server,
+    fetchBlocked,
+    powerBlocked: power.blocked,
+    contributionBlocked,
+  })
+  const allSignalsKnown = network.known && thermal.known && power.known && disk.known
+  const runnable = isParticipationRunnable({
+    server,
+    foreground,
+    backgroundWorkOk,
+    allSignalsKnown,
+  })
 
-  const runnable = server || foreground || (backgroundWorkOk && allSignalsKnown)
-  // Discovery and cache fill serve the viewer's own playback, so they answer to
-  // the device signals but not to the contribution budgets.
   const peerDiscovery = permissionOk && !fetchBlocked && runnable
-  const cacheFill = peerDiscovery && !diskBlocked
-  const contributionOk = permissionOk && !uploadBlocked && windowOk && quotaOk
-  const uploadEligible = contributionOk && runnable
-  const uploading = uploadEligible && recentOutboundBytes > 0
-  const backgroundEligible = permissionOk && !contributionBlocked && allSignalsKnown &&
-    (server || backgroundWorkOk) && windowOk && quotaOk
-  // Archiving is custody: it writes, so it answers to the disk even where
-  // serving does not.
-  const archiving = uploadEligible && !contributionBlocked && source.archiveOptIn === true
-  // An archive pledge is an unattended storage commitment, not a viewing side
-  // effect: a dedicated archivist that never plays anything still qualifies,
-  // and — because nobody is watching it — every device signal must have been
-  // read and come back good, not merely not-bad.
-  const archiveEligible = permissionOk && !contributionBlocked && allSignalsKnown && source.archiveOptIn === true
+  const cacheFill = peerDiscovery && !disk.blocked
 
-  return {
+  const { uploadEligible, uploading } = resolveUploadFlags({
+    permissionOk,
+    uploadBlocked,
+    windowOk,
+    quotaOk,
+    runnable,
+    recentOutboundBytes,
+  })
+
+  const backgroundEligible = isBackgroundEligible({
+    permissionOk,
+    contributionBlocked,
+    allSignalsKnown,
+    server,
+    backgroundWorkOk,
+    windowOk,
+    quotaOk,
+  })
+
+  const { archiving, archiveEligible } = resolveArchiveFlags({
+    permissionOk,
+    contributionBlocked,
+    allSignalsKnown,
+    uploadEligible,
+    archiveOptIn: source.archiveOptIn,
+  })
+
+  return buildParticipationDecision({
     mode,
-    state: uploading ? 'uploading' : uploadEligible ? 'eligible' : 'suspended',
-    localPlayback: true,
+    limits,
     peerDiscovery,
-    upload: uploadEligible,
     cacheFill,
     archiving,
     archiveEligible,
@@ -345,13 +476,12 @@ export function evaluateParticipation(state = {}) {
     cacheCeilingBytes,
     uploadCeilingBytesPer24h,
     uploadedBytesLast24h,
-    outboundBytesPerSecond: limits.outboundBytesPerSecond,
-    postPlaybackGraceMs: limits.postPlaybackGraceMs,
-    backgroundRemainingSessionMs,
-    backgroundRemainingDailyMs,
-    reasonCodes: orderReasonCodes(reasons),
-  }
+    background,
+    reasons,
+  })
+
 }
+
 
 export function createPlaybackResourcePolicy(options = {}) {
   const limits = {
@@ -374,19 +504,23 @@ export function createPlaybackResourcePolicy(options = {}) {
   function evaluateAcquisition(state = {}) {
     const foreground = state.foreground !== false
     const discoveryAllowed = state.userAllowsP2P !== false
-    const unconstrained = state.metered !== true && state.thermalState !== 'serious' && state.thermalState !== 'critical'
+    const unconstrained = isAcquisitionUnconstrained(state)
     const powered = state.charging !== false
-    const contribute = state.permissions?.contribute === true &&
-      state.migrationRequired !== true
-    const archive = state.permissions?.archive === true &&
-      state.migrationRequired !== true
+    const migrationAllowed = state.migrationRequired !== true
+    const contribute = migrationAllowed && state.permissions?.contribute === true
+    const archive = migrationAllowed && state.permissions?.archive === true
+
+    const baseEligible = foreground && unconstrained
+    const peerDiscovery = discoveryAllowed && baseEligible
+    const poweredEligible = baseEligible && powered
+
     return {
       localPlayback: true,
-      peerDiscovery: discoveryAllowed && foreground && unconstrained,
-      upload: (contribute || archive) && foreground && unconstrained && powered,
-      cacheFill: discoveryAllowed && foreground && unconstrained,
-      contributionCache: contribute && foreground && unconstrained,
-      archiving: archive && foreground && unconstrained && powered,
+      peerDiscovery,
+      upload: (contribute || archive) && poweredEligible,
+      cacheFill: peerDiscovery,
+      contributionCache: contribute && baseEligible,
+      archiving: archive && poweredEligible,
     }
   }
 

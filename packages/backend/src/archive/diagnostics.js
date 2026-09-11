@@ -113,15 +113,86 @@ function normalizeOperatorMode(value) {
   return mode
 }
 
+function resolveOperatorMode(options, source) {
+  if (Object.prototype.hasOwnProperty.call(options, 'operatorMode')) {
+    return normalizeOperatorMode(options.operatorMode)
+  }
+  if (OPERATOR_MODE_SET.has(source?.operatorMode)) {
+    return source.operatorMode
+  }
+  return 'local-first'
+}
+
+function restoreCountMap(target, stored, allowedCodes) {
+  if (!stored || typeof stored !== 'object') return
+  for (const code of allowedCodes) {
+    const value = counter(stored[code])
+    if (value > 0) target[code] = value
+  }
+}
+
+function restorePledges(source, maxPledges, setPledgeHealth) {
+  if (!Array.isArray(source?.pledges)) return
+  for (const entry of source.pledges.slice(-maxPledges)) {
+    try {
+      const pledgeId = pledgeKey(entry?.pledgeId)
+      const health = String(entry?.health || '')
+      if (!ARCHIVE_PLEDGE_HEALTH.has(health)) continue
+      setPledgeHealth(
+        pledgeId,
+        health,
+        entry.active === undefined ? health !== 'expired' : Boolean(entry.active)
+      )
+    } catch {
+      // Ignore malformed persisted pledge diagnostics.
+    }
+  }
+}
+
+function restoreChallenges(source, maxHistory, recentChallenges) {
+  if (!Array.isArray(source?.recentChallenges)) return
+  for (const entry of source.recentChallenges.slice(-maxHistory)) {
+    const outcome = String(entry?.outcome || '')
+    if (outcome !== 'passed' && outcome !== 'failed' && outcome !== 'expired') continue
+    const event = {
+      outcome,
+      observedAt: timestamp(entry?.observedAt),
+    }
+    if (outcome !== 'passed') {
+      const failureCode = storedFailureCode(entry?.failureCode)
+      event.failureCode = STORED_CHALLENGE_FAILURE_CODES.has(failureCode)
+        ? failureCode
+        : challengeFailureCode(null, outcome)
+    }
+    recentChallenges.push(event)
+  }
+}
+
+function restoreFailureCodes(source, maxHistory, recentFailureCodes) {
+  if (!Array.isArray(source?.recentFailureCodes)) return
+  for (const value of source.recentFailureCodes.slice(-maxHistory)) {
+    const failureCode = storedFailureCode(value)
+    if (failureCode) recentFailureCodes.push(failureCode)
+  }
+}
+
+function parseCapacity(input) {
+  if (!input || typeof input !== 'object') return null
+  try {
+    return {
+      totalBytes: nonNegativeInteger(input.totalBytes, 'capacity totalBytes'),
+      reservedBytes: nonNegativeInteger(input.reservedBytes, 'capacity reservedBytes'),
+      availableBytes: nonNegativeInteger(input.availableBytes, 'capacity availableBytes'),
+    }
+  } catch {
+    return null
+  }
+}
+
 export function createArchiveDiagnostics(options = {}) {
   const now = typeof options.now === 'function' ? options.now : () => Date.now()
   const source = options.state?.version === 1 ? options.state : null
-  const hasDeclaredMode = Object.prototype.hasOwnProperty.call(options, 'operatorMode')
-  const operatorMode = hasDeclaredMode
-    ? normalizeOperatorMode(options.operatorMode)
-    : OPERATOR_MODE_SET.has(source?.operatorMode)
-      ? source.operatorMode
-      : 'local-first'
+  const operatorMode = resolveOperatorMode(options, source)
   const maxHistory = boundedLimit(
     options.maxHistory ?? source?.limits?.maxHistory,
     DEFAULT_MAX_HISTORY,
@@ -142,20 +213,12 @@ export function createArchiveDiagnostics(options = {}) {
   let challengeFailureCount = counter(source?.challengeFailureCount)
   let capacityRejectionCount = counter(source?.capacityRejectionCount)
   let offloadRejectionCount = counter(source?.offloadRejectionCount)
-  let capacity = null
+  let capacity = parseCapacity(source?.capacity)
   let updatedAt = source
     ? timestamp(source.updatedAt, timestamp(now()))
     : timestamp(now())
   let persistQueue = Promise.resolve()
   let persistError = null
-
-  function restoreCountMap(target, stored, allowedCodes) {
-    if (!stored || typeof stored !== 'object') return
-    for (const code of allowedCodes) {
-      const value = counter(stored[code])
-      if (value > 0) target[code] = value
-    }
-  }
 
   function setCapacity(input) {
     capacity = {
@@ -171,58 +234,11 @@ export function createArchiveDiagnostics(options = {}) {
     while (pledges.size > maxPledges) pledges.delete(pledges.keys().next().value)
   }
 
-  if (Array.isArray(source?.pledges)) {
-    for (const entry of source.pledges.slice(-maxPledges)) {
-      try {
-        const pledgeId = pledgeKey(entry?.pledgeId)
-        const health = String(entry?.health || '')
-        if (!ARCHIVE_PLEDGE_HEALTH.has(health)) continue
-        setPledgeHealth(
-          pledgeId,
-          health,
-          entry.active === undefined ? health !== 'expired' : Boolean(entry.active)
-        )
-      } catch {
-        // Ignore malformed persisted pledge diagnostics.
-      }
-    }
-  }
-
-  if (Array.isArray(source?.recentChallenges)) {
-    for (const entry of source.recentChallenges.slice(-maxHistory)) {
-      const outcome = String(entry?.outcome || '')
-      if (outcome !== 'passed' && outcome !== 'failed' && outcome !== 'expired') continue
-      const event = {
-        outcome,
-        observedAt: timestamp(entry?.observedAt),
-      }
-      if (outcome !== 'passed') {
-        const failureCode = storedFailureCode(entry?.failureCode)
-        event.failureCode = STORED_CHALLENGE_FAILURE_CODES.has(failureCode)
-          ? failureCode
-          : challengeFailureCode(null, outcome)
-      }
-      recentChallenges.push(event)
-    }
-  }
-
-  if (Array.isArray(source?.recentFailureCodes)) {
-    for (const value of source.recentFailureCodes.slice(-maxHistory)) {
-      const failureCode = storedFailureCode(value)
-      if (failureCode) recentFailureCodes.push(failureCode)
-    }
-  }
-
-  if (source?.capacity && typeof source.capacity === 'object') {
-    try {
-      setCapacity(source.capacity)
-    } catch {
-      capacity = null
-    }
-  }
+  restorePledges(source, maxPledges, setPledgeHealth)
+  restoreChallenges(source, maxHistory, recentChallenges)
+  restoreFailureCodes(source, maxHistory, recentFailureCodes)
   restoreCountMap(capacityRejectionCounts, source?.capacityRejectionCounts, CAPACITY_FAILURE_CODES)
   restoreCountMap(offloadRejectionCounts, source?.offloadRejectionCounts, STORED_OFFLOAD_FAILURE_CODES)
-
   function touch(observedAt) {
     const fallback = timestamp(now())
     updatedAt = Math.max(updatedAt, timestamp(observedAt, fallback))

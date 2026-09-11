@@ -83,7 +83,7 @@ export function createInteractiveDriver ({
 
   function abortActive () {
     if (activeAbort) {
-      try { activeAbort.abort() } catch {}
+      try { activeAbort.abort() } catch { /* An already-settled request aborts into a no-op; the stale-response guard below is authoritative. */ }
       activeAbort = null
     }
   }
@@ -167,7 +167,7 @@ export function createInteractiveDriver ({
           directory: candidate.directory
         })
       }
-    } catch {}
+    } catch { /* Path listing is advisory: an unreadable directory simply contributes no Tab completions. */ }
     return items
   }
 
@@ -328,12 +328,13 @@ export function createInteractiveDriver ({
   function progressEmit (message) {
     if (!dispatch) return
     const text = String(message)
-    let phase = 'resolving'
-    if (/download/i.test(text)) phase = 'downloading'
-    else if (/upload complete|uploaded/i.test(text)) phase = 'uploaded'
-    else if (/upload/i.test(text)) phase = 'uploading'
-    // Guarded phases (replicationPending/projecting/announcing) require a
-    // checkpoint record the reducer validates; keep updates on open phases.
+    let phase = 'acquiring'
+    if (/cancel|abort/i.test(text)) phase = 'cancelled'
+    else if (/fail|error/i.test(text)) phase = 'failed'
+    else if (/complete|published/i.test(text)) phase = 'completed'
+    else if (/verif/i.test(text)) phase = 'verifying'
+    else if (/publish/i.test(text)) phase = 'publishing'
+    else if (/queue|send/i.test(text)) phase = 'queued'
     dispatch({ type: 'progress.update', progress: { phase, message: text } })
   }
 
@@ -341,7 +342,7 @@ export function createInteractiveDriver ({
     switch (outcome.status) {
       case 'published': return `Published ${outcome.url}`
       case 'already-exists': return `Already added (video ${outcome.videoId})`
-      case 'replicationPending': return 'Saved locally — awaiting a durable peer.'
+      case 'cancelled': return 'Cancelled'
       case 'failed': return `Failed: ${outcome.error?.message || 'unknown error'}`
       default: return `Status: ${outcome.status}`
     }

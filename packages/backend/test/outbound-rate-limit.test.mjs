@@ -6,6 +6,10 @@
 import test from 'brittle'
 import { EventEmitter } from 'node:events'
 import { Duplex, PassThrough } from 'node:stream'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import Corestore from 'corestore'
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 
@@ -14,12 +18,13 @@ import { createScopedNetworkRuntime } from '../src/network/scoped-runtime.js'
 import { SeedingManager } from '../src/seeding.js'
 import { createBudgetManager } from '../src/budget-manager.js'
 import { DEFAULT_POLICY } from '../src/universal-core-utils.js'
-
-const BLOCK_BYTES = 128 * 1024
-// The bucket never holds less than one maximal block, so a rate at that floor
-// makes capacity exactly two of our blocks and the arithmetic readable.
-const RATE_BYTES_PER_SECOND = 256 * 1024
-const CAPACITY_BYTES = 256 * 1024
+import { writeStaticAsset, ASSET_BLOCK_SIZE } from '../src/assets/static-core.js'
+import { createBufferSourceReader } from '../src/assets/source-reader.js'
+import { normalizeAssetCoreRefV2 } from '../src/assets/rendition.js'
+const BLOCK_BYTES = ASSET_BLOCK_SIZE
+// A one-second bucket at this rate holds exactly two canonical blocks.
+const RATE_BYTES_PER_SECOND = 2 * BLOCK_BYTES
+const CAPACITY_BYTES = 2 * BLOCK_BYTES
 const PLEDGE_CEILING_BYTES = 16 * BLOCK_BYTES
 const UPLOAD_CEILING_BYTES = 64 * BLOCK_BYTES
 
@@ -28,8 +33,8 @@ function bytes (size, fill) {
 }
 
 function connectionPair ({ sourcePeerFill = 202, consumerPeerFill = 201 } = {}) {
-  const aToB = new PassThrough()
-  const bToA = new PassThrough()
+  const aToB = new PassThrough({ objectMode: true })
+  const bToA = new PassThrough({ objectMode: true })
   const a = Duplex.from({ readable: bToA, writable: aToB })
   const b = Duplex.from({ readable: aToB, writable: bToA })
   a.userData = null
@@ -86,14 +91,35 @@ function fakeSchedule () {
   }
 }
 
-function archiveFixture ({ blockCount = 4, fill = 90 } = {}) {
-  const archivist = crypto.keyPair(bytes(32, fill))
-  const coreKey = bytes(32, fill + 1)
-  const sourceBlocks = new Map()
+async function archiveFixture ({ blockCount = 4, fill = 90 } = {}) {
+  const sourceDirectory = mkdtempSync(join(tmpdir(), 'peartube-rate-source-'))
+  const targetDirectory = mkdtempSync(join(tmpdir(), 'peartube-rate-target-'))
+  const sourceStore = new Corestore(sourceDirectory)
+  const targetStore = new Corestore(targetDirectory)
+  await Promise.all([sourceStore.ready(), targetStore.ready()])
+  const sourceBytes = b4a.alloc(blockCount * BLOCK_BYTES)
   for (let index = 0; index < blockCount; index++) {
-    sourceBlocks.set(index, bytes(BLOCK_BYTES, index + 1))
+    sourceBytes.fill(index + 1, index * BLOCK_BYTES, (index + 1) * BLOCK_BYTES)
   }
+  const asset = await writeStaticAsset({
+    store: sourceStore,
+    reader: createBufferSourceReader(sourceBytes),
+  })
+  const sourceCore = asset.core
+  const coreRef = normalizeAssetCoreRefV2(asset.descriptor)
+  const coreKey = b4a.from(coreRef.key, 'hex')
+  const targetCore = targetStore.get({ key: coreKey, manifest: sourceCore.manifest, writable: false })
+  await targetCore.ready()
   const received = new Map()
+  const applyProof = targetCore.applyProof.bind(targetCore)
+  targetCore.applyProof = async (proof, from) => {
+    const accepted = await applyProof(proof, from)
+    if (accepted && proof.block) {
+      received.set(proof.block.index, await targetCore.get(proof.block.index, { wait: false }))
+    }
+    return accepted
+  }
+  const archivist = crypto.keyPair(bytes(32, fill))
   const pledge = createArchivePledge({
     archivistId: archivist.publicKey,
     publicationId: bytes(32, fill + 2),
@@ -104,37 +130,15 @@ function archiveFixture ({ blockCount = 4, fill = 90 } = {}) {
     uploadCeilingBytes: PLEDGE_CEILING_BYTES,
     keyPair: archivist,
   })
-  const sourceCore = {
-    key: coreKey,
-    length: blockCount,
-    async ready () {},
-    async has (index) { return sourceBlocks.has(index) },
-    async proof ({ block }) {
-      return {
-        fork: 0,
-        block: { index: block.index, value: sourceBlocks.get(block.index), nodes: [] },
-        hash: null,
-        seek: null,
-        upgrade: null,
-        manifest: null,
-      }
+  return {
+    archivist, coreKey, coreRef, blockCount, pledge, sourceCore, targetCore, received,
+    async close () {
+      await sourceStore.close()
+      await targetStore.close()
+      rmSync(sourceDirectory, { recursive: true, force: true })
+      rmSync(targetDirectory, { recursive: true, force: true })
     },
-    download () { return { destroy () {} } },
-    async close () {},
   }
-  const targetCore = {
-    key: coreKey,
-    length: blockCount,
-    async ready () {},
-    async has (index) { return received.has(index) },
-    async applyProof (proof) {
-      received.set(proof.block.index, b4a.from(proof.block.value))
-      return true
-    },
-    download () { return { destroy () {} } },
-    async close () {},
-  }
-  return { archivist, coreKey, blockCount, pledge, sourceCore, targetCore, received }
 }
 
 async function connectArchivePair (fixture, { schedule, sourcePolicy }) {
@@ -178,15 +182,15 @@ async function connectArchivePair (fixture, { schedule, sourcePolicy }) {
   swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey })
   swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey })
   await settle()
-  const retain = { pledge: fixture.pledge, coreKey: fixture.coreKey, start: 0, end: fixture.blockCount }
+  const retain = { pledge: fixture.pledge, coreKey: fixture.coreKey, coreRef: fixture.coreRef, start: 0, end: fixture.blockCount }
   await source.retainAuthorizedArchive(retain)
   await consumer.retainAuthorizedArchive(retain)
-  for (let attempt = 0; attempt < 20 && schedule.pending.length === 0; attempt++) await settle()
+  for (let attempt = 0; attempt < 20 && (schedule.pending.length === 0 || fixture.received.size < 2); attempt++) await settle()
   return { source, consumer }
 }
 
 test('the outbound rate throttles a sender the cumulative ceiling would wave through', async (t) => {
-  const fixture = archiveFixture({ fill: 90 })
+  const fixture = await archiveFixture({ fill: 90 })
   const schedule = fakeSchedule()
   const { source, consumer } = await connectArchivePair(fixture, {
     schedule,
@@ -195,6 +199,7 @@ test('the outbound rate throttles a sender the cumulative ceiling would wave thr
   t.teardown(async () => {
     await source.close()
     await consumer.close()
+    await fixture.close()
   })
 
   const served = () => [...fixture.received.keys()].sort((left, right) => left - right)
@@ -206,7 +211,7 @@ test('the outbound rate throttles a sender the cumulative ceiling would wave thr
     'the cumulative ceiling had 61 blocks of headroom left, so only the rate can have stopped this',
   )
   t.is(schedule.pending.length, 1, 'the third block is deferred, not refused')
-  t.is(schedule.pending[0].delay, 500, 'half a second buys back one 128 KiB block at 256 KiB/s')
+  t.is(schedule.pending[0]?.delay, 500, 'half a second buys back one 256 KiB block at 512 KiB/s')
 
   // Firing the refill without moving the clock must not mint anything.
   await schedule.fire()
@@ -214,13 +219,14 @@ test('the outbound rate throttles a sender the cumulative ceiling would wave thr
 
   schedule.advance(1000)
   await schedule.fire()
+  for (let attempt = 0; attempt < 20 && fixture.received.size < fixture.blockCount; attempt++) await settle()
   t.alike(served(), [0, 1, 2, 3], 'one second of refill releases exactly one bucket more')
   t.is(servedBytes(), 2 * CAPACITY_BYTES, 'a second of refill is worth exactly a second of bytes')
   t.is(source.getDiagnostics().policy.uploadedBytes, 2 * CAPACITY_BYTES)
 })
 
 test('a zero outbound rate serves no content bytes however much ceiling is left', async (t) => {
-  const fixture = archiveFixture({ fill: 100 })
+  const fixture = await archiveFixture({ fill: 100 })
   const schedule = fakeSchedule()
   const { source, consumer } = await connectArchivePair(fixture, {
     schedule,
@@ -229,6 +235,7 @@ test('a zero outbound rate serves no content bytes however much ceiling is left'
   t.teardown(async () => {
     await source.close()
     await consumer.close()
+    await fixture.close()
   })
 
   for (let attempt = 0; attempt < 10; attempt++) await settle()
@@ -302,7 +309,7 @@ test('an absent outbound rate leaves the enforced limit exactly where it was', a
 })
 
 test('a rate that survives a policy round trip still throttles the wire', async (t) => {
-  const fixture = archiveFixture({ fill: 110 })
+  const fixture = await archiveFixture({ fill: 110 })
   const schedule = fakeSchedule()
   const swarmA = fakeSwarm()
   const swarmB = fakeSwarm()
@@ -339,6 +346,7 @@ test('a rate that survives a policy round trip still throttles the wire', async 
   t.teardown(async () => {
     await source.close()
     await consumer.close()
+    await fixture.close()
   })
   await source.start()
   await consumer.start()
@@ -360,10 +368,10 @@ test('a rate that survives a policy round trip still throttles the wire', async 
   swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey })
   swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey })
   await settle()
-  const retain = { pledge: fixture.pledge, coreKey: fixture.coreKey, start: 0, end: fixture.blockCount }
+  const retain = { pledge: fixture.pledge, coreKey: fixture.coreKey, coreRef: fixture.coreRef, start: 0, end: fixture.blockCount }
   await source.retainAuthorizedArchive(retain)
   await consumer.retainAuthorizedArchive(retain)
-  for (let attempt = 0; attempt < 20 && schedule.pending.length === 0; attempt++) await settle()
+  for (let attempt = 0; attempt < 20 && (schedule.pending.length === 0 || fixture.received.size < 2); attempt++) await settle()
 
   t.alike([...fixture.received.keys()].sort((left, right) => left - right), [0, 1])
   t.is(schedule.pending.length, 1, 'the limit carried through the update and still defers the third block')

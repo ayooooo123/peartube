@@ -27,6 +27,50 @@ async function closeQuietly(session) {
   }
 }
 
+async function executeSourceAttempt({ source, publicationId, remainingMs, deadlineAt, openSession, signal }) {
+  const controller = createAbortController()
+  const abortAttempt = () => controller.abort()
+  signal?.addEventListener?.('abort', abortAttempt, { once: true })
+  let deadlineTimer = null
+  const expired = new Promise(resolve => {
+    deadlineTimer = setTimeout(() => {
+      controller.abort()
+      resolve(DEADLINE)
+    }, remainingMs)
+    deadlineTimer?.unref?.()
+  })
+
+  let session = null
+  try {
+    const attempt = Promise.resolve(
+      openSession({ source, publicationId, remainingMs, deadlineAt, signal: controller.signal })
+    )
+    session = await Promise.race([attempt, expired])
+    if (session === DEADLINE) {
+      void attempt.then(closeQuietly, () => {})
+      return { status: 'deadline', errorCode: 'PREPARATION_DEADLINE' }
+    }
+  } catch (error) {
+    return { status: 'failed', errorCode: error?.errorCode || 'PEER_TIMEOUT' }
+  } finally {
+    clearTimeout(deadlineTimer)
+    signal?.removeEventListener?.('abort', abortAttempt)
+  }
+
+  if (signal?.aborted === true) {
+    await closeQuietly(session)
+    return { status: 'cancelled', errorCode: 'PREPARATION_CANCELLED' }
+  }
+
+  if (session?.success === true) {
+    return { status: 'success', session }
+  }
+
+  const errorCode = session?.errorCode || 'PEER_TIMEOUT'
+  await closeQuietly(session)
+  return { status: 'failed', errorCode }
+}
+
 /**
  * Prepare playback for one entity by walking the selector's failover order.
  *
@@ -86,68 +130,35 @@ export async function preparePlaybackSource(options = {}) {
       break
     }
 
-    // One cancellation tree: the caller's signal and the shared deadline both
-    // abort the in-flight attempt, and an opener that ignores the abort loses
-    // the race and has its late session closed rather than leaked.
-    const controller = createAbortController()
-    const abortAttempt = () => controller.abort()
-    options.signal?.addEventListener?.('abort', abortAttempt, { once: true })
-    let deadlineTimer = null
-    const expired = new Promise(resolve => {
-      deadlineTimer = setTimeout(() => {
-        controller.abort()
-        resolve(DEADLINE)
-      }, remainingMs)
-      deadlineTimer?.unref?.()
+    const result = await executeSourceAttempt({
+      source,
+      publicationId,
+      remainingMs,
+      deadlineAt,
+      openSession,
+      signal: options.signal,
     })
 
-    let session = null
-    try {
-      const attempt = Promise.resolve(
-        openSession({ source, publicationId, remainingMs, deadlineAt, signal: controller.signal })
-      )
-      session = await Promise.race([attempt, expired])
-      if (session === DEADLINE) {
-        void attempt.then(closeQuietly, () => {})
-        lastErrorCode = 'PREPARATION_DEADLINE'
-        attempts.push({ publicationId, errorCode: lastErrorCode })
-        break
-      }
-    } catch (error) {
-      lastErrorCode = error?.errorCode || 'PEER_TIMEOUT'
-      attempts.push({ publicationId, errorCode: lastErrorCode })
-      // One rule for both paths: only an automatically retryable code earns
-      // another attempt. Anything else stops here.
-      if (!RETRYABLE_ERROR_CODES.has(lastErrorCode)) break
-      continue
-    } finally {
-      clearTimeout(deadlineTimer)
-      options.signal?.removeEventListener?.('abort', abortAttempt)
-    }
-
-    if (options.signal?.aborted === true) {
-      await closeQuietly(session)
-      lastErrorCode = 'PREPARATION_CANCELLED'
-      attempts.push({ publicationId, errorCode: lastErrorCode })
-      break
-    }
-
-    if (session?.success === true) {
+    if (result.status === 'success') {
       attempts.push({ publicationId, errorCode: null })
       return {
         success: true,
         publicationId,
         renditionId: source.renditionId || null,
-        session,
+        session: result.session,
         attempts,
         candidates: selection.candidates,
       }
     }
 
-    lastErrorCode = session?.errorCode || 'PEER_TIMEOUT'
+    lastErrorCode = result.errorCode
     attempts.push({ publicationId, errorCode: lastErrorCode })
-    await closeQuietly(session)
-    if (!RETRYABLE_ERROR_CODES.has(lastErrorCode)) break
+    if (result.status === 'deadline' || result.status === 'cancelled') {
+      break
+    }
+    if (!RETRYABLE_ERROR_CODES.has(lastErrorCode)) {
+      break
+    }
   }
 
   // Walking off the end of the failover order means every equivalent source

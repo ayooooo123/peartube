@@ -12,6 +12,66 @@ const HEX_32 = /^[0-9a-f]{64}$/
 const INITIATOR_CHANNEL_ID = b4a.from('peartube.seed-pin/initiator')
 const RESPONDER_CHANNEL_ID = b4a.from('peartube.seed-pin/responder')
 
+function isValidKeyPair(keyPair) {
+  const publicKey = keyPair?.publicKey
+  const secretKey = keyPair?.secretKey
+  const validPub = (b4a.isBuffer(publicKey) || publicKey instanceof Uint8Array) && publicKey.byteLength === 32
+  const validSec = (b4a.isBuffer(secretKey) || secretKey instanceof Uint8Array) && secretKey.byteLength === 64
+  return validPub && validSec
+}
+
+function isValidDeviceProof(deviceProof) {
+  return (b4a.isBuffer(deviceProof) || deviceProof instanceof Uint8Array) && deviceProof.byteLength > 0
+}
+
+function matchesDescriptorVerification(verification, candidate, devicePublicKey) {
+  if (verification?.valid !== true) return false
+  if (verification.identityPublicKey !== candidate.identityPublicKey) return false
+  if (verification.devicePublicKey !== devicePublicKey) return false
+  if (verification.descriptor?.identityPublicKey !== candidate.identityPublicKey) return false
+  if (verification.descriptor?.channelId !== candidate.channelKey) return false
+  return true
+}
+
+function validateSeedPinFactories(options) {
+  const protomuxFrom = options.protomuxFrom || Protomux.from
+  const serverFactory = options.serverFactory || ((mux, serverOptions) => new SeedPinServer(mux, serverOptions))
+  const clientFactory = options.clientFactory || ((mux, clientOptions) => new SeedPinClient(mux, clientOptions))
+  if (typeof protomuxFrom !== 'function') throw new TypeError('protomuxFrom must be a function')
+  if (typeof serverFactory !== 'function') throw new TypeError('serverFactory must be a function')
+  if (typeof clientFactory !== 'function') throw new TypeError('clientFactory must be a function')
+  return { protomuxFrom, serverFactory, clientFactory }
+}
+
+function initSeedPinStoresAndWorker(ctx, options) {
+  const ownsStore = options.store === undefined
+  const pinStoreFactory = options.pinStoreFactory || (storeOptions => new PinStore(storeOptions))
+  const pinStore = ownsStore
+    ? pinStoreFactory({ db: ctx.metaDb, ...(options.pinStoreOptions || {}) })
+    : options.store
+  if (!pinStore) throw new TypeError('seed pin store is required')
+
+  const pinWorkerOptions = typeof options.pinWorkerOptions === 'function'
+    ? options.pinWorkerOptions(pinStore)
+    : (options.pinWorkerOptions || {})
+  if (!pinWorkerOptions || typeof pinWorkerOptions !== 'object' || Array.isArray(pinWorkerOptions)) {
+    throw new TypeError('pinWorkerOptions must resolve to an object')
+  }
+
+  const ownsWorker = options.worker === undefined
+  const pinWorkerFactory = options.pinWorkerFactory || (workerOptions => new PinWorker(workerOptions))
+  const worker = ownsWorker
+    ? pinWorkerFactory({
+        corestore: ctx.store,
+        pinStore,
+        ...pinWorkerOptions,
+      })
+    : options.worker
+  if (!worker || typeof worker.resume !== 'function') throw new TypeError('seed pin worker must provide resume()')
+
+  return { pinStore, ownsStore, worker, ownsWorker }
+}
+
 export async function resolveSeedPinClientAuth ({
   ctx,
   identityManager,
@@ -23,21 +83,12 @@ export async function resolveSeedPinClientAuth ({
     const candidate = identityManager.getActiveSeedPinCandidate()
     if (!candidate) return null
     const keyPair = ctx?.swarm?.keyPair
-    const publicKey = keyPair?.publicKey
-    const secretKey = keyPair?.secretKey
-    if (!(b4a.isBuffer(publicKey) || publicKey instanceof Uint8Array) || publicKey.byteLength !== 32 ||
-        !(b4a.isBuffer(secretKey) || secretKey instanceof Uint8Array) || secretKey.byteLength !== 64) {
-      return null
-    }
-    if (!(b4a.isBuffer(candidate.deviceProof) || candidate.deviceProof instanceof Uint8Array) ||
-        candidate.deviceProof.byteLength === 0) return null
+    if (!isValidKeyPair(keyPair)) return null
+    if (!isValidDeviceProof(candidate.deviceProof)) return null
+
     const verification = await verifySignedDescriptor(candidate.signedDescriptor)
-    const devicePublicKey = b4a.toString(publicKey, 'hex')
-    if (verification?.valid !== true ||
-        verification.identityPublicKey !== candidate.identityPublicKey ||
-        verification.devicePublicKey !== devicePublicKey ||
-        verification.descriptor?.identityPublicKey !== candidate.identityPublicKey ||
-        verification.descriptor?.channelId !== candidate.channelKey) {
+    const devicePublicKey = b4a.toString(keyPair.publicKey, 'hex')
+    if (!matchesDescriptorVerification(verification, candidate, devicePublicKey)) {
       return null
     }
     const storedProof = b4a.from(candidate.signedDescriptor.proof, 'hex')
@@ -64,35 +115,8 @@ export function registerSeedPinProtocol (ctx, options = {}) {
     throw new TypeError('ctx.swarm must be an event emitter')
   }
 
-  const protomuxFrom = options.protomuxFrom || Protomux.from
-  const serverFactory = options.serverFactory || ((mux, serverOptions) => new SeedPinServer(mux, serverOptions))
-  const clientFactory = options.clientFactory || ((mux, clientOptions) => new SeedPinClient(mux, clientOptions))
-  if (typeof protomuxFrom !== 'function') throw new TypeError('protomuxFrom must be a function')
-  if (typeof serverFactory !== 'function') throw new TypeError('serverFactory must be a function')
-  if (typeof clientFactory !== 'function') throw new TypeError('clientFactory must be a function')
-
-  const ownsStore = options.store === undefined
-  const pinStoreFactory = options.pinStoreFactory || (storeOptions => new PinStore(storeOptions))
-  const pinStore = ownsStore
-    ? pinStoreFactory({ db: ctx.metaDb, ...(options.pinStoreOptions || {}) })
-    : options.store
-  if (!pinStore) throw new TypeError('seed pin store is required')
-  const pinWorkerOptions = typeof options.pinWorkerOptions === 'function'
-    ? options.pinWorkerOptions(pinStore)
-    : (options.pinWorkerOptions || {})
-  if (!pinWorkerOptions || typeof pinWorkerOptions !== 'object' || Array.isArray(pinWorkerOptions)) {
-    throw new TypeError('pinWorkerOptions must resolve to an object')
-  }
-  const ownsWorker = options.worker === undefined
-  const pinWorkerFactory = options.pinWorkerFactory || (workerOptions => new PinWorker(workerOptions))
-  const worker = ownsWorker
-    ? pinWorkerFactory({
-        corestore: ctx.store,
-        pinStore,
-        ...pinWorkerOptions,
-      })
-    : options.worker
-  if (!worker || typeof worker.resume !== 'function') throw new TypeError('seed pin worker must provide resume()')
+  const { protomuxFrom, serverFactory, clientFactory } = validateSeedPinFactories(options)
+  const { pinStore, ownsStore, worker, ownsWorker } = initSeedPinStoresAndWorker(ctx, options)
 
   const verificationLimiter = options.verificationLimiter || new SeedPinVerificationLimiter(
     options.verificationLimiterOptions,
@@ -105,7 +129,6 @@ export function registerSeedPinProtocol (ctx, options = {}) {
   let currentClientAuthFingerprint = fingerprintClientAuth(currentClientAuth)
   const clients = ctx.seedPinClients instanceof Map ? ctx.seedPinClients : new Map()
   ctx.seedPinClients = clients
-
   let closed = false
   const records = new Set()
   const pendingConnections = new Map()
@@ -201,7 +224,12 @@ export function registerSeedPinProtocol (ctx, options = {}) {
       record.client.updateAuth(auth)
     } catch (error) {
       reportError(error)
-      try { record.client.updateAuth(null) } catch {}
+      try {
+        record.client.updateAuth(null)
+      } catch {
+        // Best-effort auth revert: the update above already failed, and there
+        // is no safer state to force the client into.
+      }
       clientRecordsByRemote.get(record.remoteKeyHex)?.delete(record)
     }
     refreshExposedClient(record.remoteKeyHex)
@@ -257,23 +285,71 @@ export function registerSeedPinProtocol (ctx, options = {}) {
     return refresh
   }
 
+  const deferPendingConnection = connection => {
+    if (pendingConnections.has(connection) || typeof connection?.on !== 'function') return
+    const onOpen = () => {
+      clearPending(connection)
+      try { attach(connection) } catch (error) { reportError(error) }
+    }
+    const onClose = () => clearPending(connection)
+    pendingConnections.set(connection, { onOpen, onClose })
+    connection.once?.('open', onOpen)
+    connection.once?.('close', onClose)
+    connection.once?.('end', onClose)
+  }
+
+  const createRecord = (connection, mux, muxRecordMap, remoteKeyHex, remotePublicKey) => {
+    const record = {
+      connection,
+      mux,
+      muxRecordMap,
+      remoteKeyHex,
+      remotePublicKey,
+      server: null,
+      client: null,
+      closed: false,
+      clientChannelId: connection.isInitiator === true ? INITIATOR_CHANNEL_ID : RESPONDER_CHANNEL_ID,
+    }
+    record.onClose = () => closeRecord(record)
+    records.add(record)
+    connectionRecords.set(connection, record)
+    muxRecordMap.set(remoteKeyHex, record)
+    connection.once?.('close', record.onClose)
+    connection.once?.('end', record.onClose)
+    return record
+  }
+
+  const startRecordServer = record => {
+    const localInitiator = record.connection.isInitiator === true
+    const serverChannelId = localInitiator ? RESPONDER_CHANNEL_ID : INITIATOR_CHANNEL_ID
+    try {
+      record.server = serverFactory(record.mux, {
+        remotePublicKey: record.remotePublicKey,
+        store: pinStore,
+        worker,
+        admission: options.admission,
+        capacity: options.capacity,
+        verificationLimiter,
+        ...(options.serverOptions || {}),
+        channelId: serverChannelId,
+      })
+      if (!record.server) throw new Error('seed pin server factory returned no server')
+      if (clientAuthResolver === null) openClient(record, currentClientAuth)
+      else void refreshClientAuth()
+      return record
+    } catch (error) {
+      closeRecord(record)
+      throw error
+    }
+  }
+
   const attach = connection => {
     if (closed || !connection || connection.destroyed) return null
     const existingForConnection = connectionRecords.get(connection)
     if (existingForConnection) return existingForConnection
     const remotePublicKey = exactRemotePublicKey(connection.remotePublicKey)
     if (remotePublicKey === null) {
-      if (!pendingConnections.has(connection) && typeof connection.on === 'function') {
-        const onOpen = () => {
-          clearPending(connection)
-          try { attach(connection) } catch (error) { reportError(error) }
-        }
-        const onClose = () => clearPending(connection)
-        pendingConnections.set(connection, { onOpen, onClose })
-        connection.once?.('open', onOpen)
-        connection.once?.('close', onClose)
-        connection.once?.('end', onClose)
-      }
+      deferPendingConnection(connection)
       return null
     }
     clearPending(connection)
@@ -293,46 +369,8 @@ export function registerSeedPinProtocol (ctx, options = {}) {
       return existingForMux
     }
 
-    const record = {
-      connection,
-      mux,
-      muxRecordMap,
-      remoteKeyHex,
-      remotePublicKey,
-      server: null,
-      client: null,
-      closed: false,
-      clientChannelId: connection.isInitiator === true ? INITIATOR_CHANNEL_ID : RESPONDER_CHANNEL_ID,
-    }
-    record.onClose = () => closeRecord(record)
-    records.add(record)
-    connectionRecords.set(connection, record)
-    muxRecordMap.set(remoteKeyHex, record)
-    connection.once?.('close', record.onClose)
-    connection.once?.('end', record.onClose)
-
-    const localInitiator = connection.isInitiator === true
-    const serverChannelId = localInitiator ? RESPONDER_CHANNEL_ID : INITIATOR_CHANNEL_ID
-
-    try {
-      record.server = serverFactory(mux, {
-        remotePublicKey,
-        store: pinStore,
-        worker,
-        admission: options.admission,
-        capacity: options.capacity,
-        verificationLimiter,
-        ...(options.serverOptions || {}),
-        channelId: serverChannelId,
-      })
-      if (!record.server) throw new Error('seed pin server factory returned no server')
-      if (clientAuthResolver === null) openClient(record, currentClientAuth)
-      else void refreshClientAuth()
-      return record
-    } catch (error) {
-      closeRecord(record)
-      throw error
-    }
+    const record = createRecord(connection, mux, muxRecordMap, remoteKeyHex, remotePublicKey)
+    return startRecordServer(record)
   }
 
   const onConnection = connection => {
@@ -340,17 +378,26 @@ export function registerSeedPinProtocol (ctx, options = {}) {
   }
   ctx.swarm.on('connection', onConnection)
 
-  try {
-    for (const connection of ctx.swarm.connections || []) attach(connection)
-  } catch (error) {
+  const cleanupAll = (stopAsync = false) => {
     removeListener(ctx.swarm, 'connection', onConnection)
     for (const record of [...records]) closeRecord(record)
     for (const connection of [...pendingConnections.keys()]) clearPending(connection)
+    if (stopAsync) {
+      return (async () => {
+        if (ownsWorker && typeof worker.stop === 'function') await worker.stop()
+        if (ownsStore && typeof pinStore.close === 'function') await pinStore.close()
+      })()
+    }
     if (ownsWorker) void Promise.resolve(worker.stop?.()).catch(reportError)
     if (ownsStore) void Promise.resolve(pinStore.close?.()).catch(reportError)
-    throw error
   }
 
+  try {
+    for (const connection of ctx.swarm.connections || []) attach(connection)
+  } catch (error) {
+    cleanupAll(false)
+    throw error
+  }
 
   const registration = {
     enabled: true,
@@ -364,11 +411,7 @@ export function registerSeedPinProtocol (ctx, options = {}) {
     async unregister () {
       if (closed) return
       closed = true
-      removeListener(ctx.swarm, 'connection', onConnection)
-      for (const connection of [...pendingConnections.keys()]) clearPending(connection)
-      for (const record of [...records]) closeRecord(record)
-      if (ownsWorker && typeof worker.stop === 'function') await worker.stop()
-      if (ownsStore && typeof pinStore.close === 'function') await pinStore.close()
+      await cleanupAll(true)
     },
   }
   registration.ready = Promise.resolve().then(async () => {
@@ -393,6 +436,60 @@ const IDENTITY_MUTATIONS = Object.freeze([
   Object.freeze({ method: 'ensureSignedChannelDescriptors', label: 'Channel descriptors', reconcile: false }),
 ])
 
+async function captureIdentityState(identityManager) {
+  const previousState = typeof identityManager.createQueuedStateSnapshot === 'function'
+    ? await identityManager.createQueuedStateSnapshot()
+    : (identityManager.createStateSnapshot?.() || null)
+  const previousPublicKey = previousState?.activeIdentity ??
+    identityManager.getActivePublicKey?.() ??
+    null
+  return { previousState, previousPublicKey }
+}
+
+async function rollbackFailedMutation({
+  identityManager,
+  mutation,
+  previousState,
+  previousPublicKey,
+  postMutationState,
+  currentPublicKey,
+  restoreActiveIdentity,
+  onRollback,
+  error,
+  firstArg
+}) {
+  const rollbackErrors = []
+  try {
+    if (previousState && typeof identityManager.restoreState === 'function') {
+      await identityManager.restoreState(previousState, { postMutationState })
+    } else if (
+      previousPublicKey &&
+      currentPublicKey !== previousPublicKey &&
+      typeof restoreActiveIdentity === 'function'
+    ) {
+      await restoreActiveIdentity.call(identityManager, previousPublicKey)
+    }
+  } catch (rollbackError) {
+    rollbackErrors.push(rollbackError)
+  }
+  try {
+    await onRollback({
+      mutation,
+      previousPublicKey,
+      failedPublicKey: currentPublicKey || firstArg,
+      error,
+    })
+  } catch (rollbackError) {
+    rollbackErrors.push(rollbackError)
+  }
+  if (rollbackErrors.length > 0) {
+    throw new AggregateError(
+      [error, ...rollbackErrors],
+      'Identity mutation and compensation both failed',
+    )
+  }
+}
+
 export function installSeedPinIdentityMutationHooks ({
   identityManager,
   onMutation,
@@ -416,12 +513,7 @@ export function installSeedPinIdentityMutationHooks ({
     if (typeof original !== 'function') continue
     const wrapped = async (...args) => {
       return enqueueMutation(async () => {
-        const previousState = typeof identityManager.createQueuedStateSnapshot === 'function'
-          ? await identityManager.createQueuedStateSnapshot()
-          : (identityManager.createStateSnapshot?.() || null)
-        const previousPublicKey = previousState?.activeIdentity ??
-          identityManager.getActivePublicKey?.() ??
-          null
+        const { previousState, previousPublicKey } = await captureIdentityState(identityManager)
         let postMutationState = null
         let mutationCompleted = false
         try {
@@ -431,38 +523,20 @@ export function installSeedPinIdentityMutationHooks ({
           await onMutation(mutation)
           return result
         } catch (error) {
-          const currentPublicKey = identityManager.getActivePublicKey?.() || null
           if (mutationCompleted) {
-            const rollbackErrors = []
-            try {
-              if (previousState && typeof identityManager.restoreState === 'function') {
-                await identityManager.restoreState(previousState, { postMutationState })
-              } else if (
-                previousPublicKey &&
-                currentPublicKey !== previousPublicKey &&
-                typeof restoreActiveIdentity === 'function'
-              ) {
-                await restoreActiveIdentity.call(identityManager, previousPublicKey)
-              }
-            } catch (rollbackError) {
-              rollbackErrors.push(rollbackError)
-            }
-            try {
-              await onRollback({
-                mutation,
-                previousPublicKey,
-                failedPublicKey: currentPublicKey || args[0],
-                error,
-              })
-            } catch (rollbackError) {
-              rollbackErrors.push(rollbackError)
-            }
-            if (rollbackErrors.length > 0) {
-              throw new AggregateError(
-                [error, ...rollbackErrors],
-                'Identity mutation and compensation both failed',
-              )
-            }
+            const currentPublicKey = identityManager.getActivePublicKey?.() || null
+            await rollbackFailedMutation({
+              identityManager,
+              mutation,
+              previousState,
+              previousPublicKey,
+              postMutationState,
+              currentPublicKey,
+              restoreActiveIdentity,
+              onRollback,
+              error,
+              firstArg: args[0]
+            })
           }
           throw error
         }

@@ -127,9 +127,37 @@ export async function runStorageLimitChange({
   return { status: 'applied', preview, previewView }
 }
 
+function resolveOperatorMode(declaredMode) {
+  if (typeof declaredMode === 'string' && Object.prototype.hasOwnProperty.call(OPERATOR_MODES, declaredMode)) {
+    return declaredMode
+  }
+  return 'local-first'
+}
+
+function resolveFailureCodes(status) {
+  const reportedFailureCodes = Array.isArray(status?.recentFailureCodes) ? status.recentFailureCodes.map(String) : []
+  const errorCode = typeof status?.errorCode === 'string' && status.errorCode ? status.errorCode : null
+  const rawFailureCodes = errorCode
+    ? [errorCode, ...reportedFailureCodes.filter((code) => code !== errorCode)]
+    : reportedFailureCodes
+  const failureCodes = rawFailureCodes.slice(0, MAX_RENDERED_DIAGNOSTIC_ITEMS)
+  return {
+    failureCodes,
+    hiddenFailureCount: Math.max(0, rawFailureCodes.length - failureCodes.length),
+  }
+}
+
+function resolvePledgeSummary(active, healthy, failed) {
+  const pledgeHealth = failed > 0 || healthy < active ? 'degraded' : active > 0 ? 'healthy' : 'idle'
+  const failedSuffix = failed > 0 ? ` · ${failed} failed` : ''
+  const pledgeCopy = active > 0
+    ? `${healthy} of ${active} healthy${failedSuffix}`
+    : 'No active archive pledges.'
+  return { pledgeHealth, pledgeCopy }
+}
+
 export function buildArchiveOperatorView(status) {
-  const declaredMode = typeof status?.operatorMode === 'string' ? status.operatorMode : 'local-first'
-  const mode = Object.prototype.hasOwnProperty.call(OPERATOR_MODES, declaredMode) ? declaredMode : 'local-first'
+  const mode = resolveOperatorMode(status?.operatorMode)
   const active = finiteNonNegative(status?.activePledgeCount)
   const healthy = finiteNonNegative(status?.healthyPledgeCount)
   const failed = finiteNonNegative(status?.failedPledgeCount)
@@ -137,12 +165,8 @@ export function buildArchiveOperatorView(status) {
   const challengeFailures = finiteNonNegative(status?.challengeFailureCount)
   const capacityRejections = finiteNonNegative(status?.capacityRejectionCount)
   const offloadRejections = finiteNonNegative(status?.offloadRejectionCount)
-  const reportedFailureCodes = Array.isArray(status?.recentFailureCodes) ? status.recentFailureCodes.map(String) : []
-  const rawFailureCodes = typeof status?.errorCode === 'string' && status.errorCode
-    ? [status.errorCode, ...reportedFailureCodes.filter((code) => code !== status.errorCode)]
-    : reportedFailureCodes
-  const failureCodes = rawFailureCodes.slice(0, MAX_RENDERED_DIAGNOSTIC_ITEMS)
-  const pledgeHealth = failed > 0 || healthy < active ? 'degraded' : active > 0 ? 'healthy' : 'idle'
+  const { failureCodes, hiddenFailureCount } = resolveFailureCodes(status)
+  const { pledgeHealth, pledgeCopy } = resolvePledgeSummary(active, healthy, failed)
 
   return {
     mode,
@@ -151,13 +175,11 @@ export function buildArchiveOperatorView(status) {
       ? 'Untrusted local-first mode: this device keeps local data first and does not assume any relay is trusted.'
       : 'Remote operators remain untrusted; local copies and verified proofs stay authoritative.',
     pledgeHealth,
-    pledgeCopy: active > 0
-      ? `${healthy} of ${active} healthy${failed > 0 ? ` · ${failed} failed` : ''}`
-      : 'No active archive pledges.',
+    pledgeCopy,
     challengeCopy: `${challengeSuccesses} passed · ${challengeFailures} failed`,
     capacityCopy: `${formatStorageBytes(status?.capacityAvailableBytes)} available of ${formatStorageBytes(status?.capacityTotalBytes)} · ${capacityRejections} rejected`,
     offloadCopy: `${offloadRejections} rejected offload request${offloadRejections === 1 ? '' : 's'}`,
     failureCodes,
-    hiddenFailureCount: Math.max(0, rawFailureCodes.length - failureCodes.length),
+    hiddenFailureCount,
   }
 }

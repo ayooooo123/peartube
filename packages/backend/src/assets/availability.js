@@ -46,6 +46,7 @@ export const AVAILABILITY_REASON_CODES = Object.freeze([
   'PEER_TIMEOUT',
   'PEER_DISCONNECT',
   'LOCAL_COMPLETE_COPY',
+  'S3_RETRIEVABLE_COPY',
   'ARCHIVE_PLEDGE_ONLY',
 ])
 
@@ -286,6 +287,53 @@ function challengeStatus(value) {
  * only cover part of the advertisement; omitting it asserts the challenge
  * sampled across the whole advertised set.
  */
+function createEmptyPeerIdentity(key) {
+  return {
+    transportKey: key,
+    connected: false,
+    advertisedRanges: [],
+    provenRanges: [],
+    provenScoped: false,
+    advertisedAt: 0,
+    challengeStatus: 'passed',
+    verifiedAt: 0,
+    latencyMs: 0,
+    archivist: false,
+  }
+}
+
+function mergePeerObservation(normalized, peer, status) {
+  normalized.connected = normalized.connected || peer?.connected === true
+  normalized.archivist = normalized.archivist || peer?.archivist === true
+  // Duplicate sockets of one identity: keep the best measured round trip.
+  const latencyMs = coerceNonNegativeInteger(peer?.latencyMs)
+  if (latencyMs > 0) {
+    normalized.latencyMs = normalized.latencyMs > 0 ? Math.min(normalized.latencyMs, latencyMs) : latencyMs
+  }
+  normalized.advertisedRanges.push(...boundedRanges(peer?.advertisedRanges, 'advertisedRanges'))
+  if (peer?.provenRanges != null) {
+    normalized.provenScoped = true
+    normalized.provenRanges.push(...boundedRanges(peer.provenRanges, 'provenRanges'))
+  }
+  normalized.advertisedAt = Math.max(normalized.advertisedAt, coerceNonNegativeInteger(peer?.advertisedAt))
+  if (CHALLENGE_SEVERITY[status] > CHALLENGE_SEVERITY[normalized.challengeStatus]) {
+    normalized.challengeStatus = status
+  }
+  if (status === 'passed') {
+    normalized.verifiedAt = Math.max(normalized.verifiedAt, coerceNonNegativeInteger(peer?.verifiedAt))
+  }
+}
+
+function finalizePeerIdentity(identity) {
+  identity.advertisedRanges = mergeRanges(identity.advertisedRanges)
+  identity.provenRanges = mergeRanges(identity.provenRanges)
+  // Hash-verified reachability bounds what a peer may contribute: an
+  // advertisement the local challenge never reached proves nothing.
+  identity.evidenceRanges = identity.provenScoped
+    ? intersectRanges(identity.advertisedRanges, identity.provenRanges)
+    : identity.advertisedRanges
+}
+
 function normalizePeers(value) {
   if (value == null) return []
   if (!Array.isArray(value) || value.length > MAX_AVAILABILITY_PEERS) throw new Error('peers must be a bounded array')
@@ -293,46 +341,12 @@ function normalizePeers(value) {
   for (const peer of value) {
     const key = transportKey(peer?.transportKey)
     const status = challengeStatus(peer?.challengeStatus)
-    const existing = identities.get(key)
-    const normalized = existing || {
-      transportKey: key,
-      connected: false,
-      advertisedRanges: [],
-      provenRanges: [],
-      provenScoped: false,
-      advertisedAt: 0,
-      challengeStatus: 'passed',
-      verifiedAt: 0,
-      latencyMs: 0,
-      archivist: false,
-    }
-    normalized.connected = normalized.connected || peer?.connected === true
-    normalized.archivist = normalized.archivist || peer?.archivist === true
-    // Duplicate sockets of one identity: keep the best measured round trip.
-    const latencyMs = coerceNonNegativeInteger(peer?.latencyMs)
-    if (latencyMs > 0) {
-      normalized.latencyMs = normalized.latencyMs > 0 ? Math.min(normalized.latencyMs, latencyMs) : latencyMs
-    }
-    normalized.advertisedRanges.push(...boundedRanges(peer?.advertisedRanges, 'advertisedRanges'))
-    if (peer?.provenRanges != null) {
-      normalized.provenScoped = true
-      normalized.provenRanges.push(...boundedRanges(peer.provenRanges, 'provenRanges'))
-    }
-    normalized.advertisedAt = Math.max(normalized.advertisedAt, coerceNonNegativeInteger(peer?.advertisedAt))
-    if (CHALLENGE_SEVERITY[status] > CHALLENGE_SEVERITY[normalized.challengeStatus]) {
-      normalized.challengeStatus = status
-    }
-    if (status === 'passed') normalized.verifiedAt = Math.max(normalized.verifiedAt, coerceNonNegativeInteger(peer?.verifiedAt))
+    const normalized = identities.get(key) || createEmptyPeerIdentity(key)
+    mergePeerObservation(normalized, peer, status)
     identities.set(key, normalized)
   }
   for (const identity of identities.values()) {
-    identity.advertisedRanges = mergeRanges(identity.advertisedRanges)
-    identity.provenRanges = mergeRanges(identity.provenRanges)
-    // Hash-verified reachability bounds what a peer may contribute: an
-    // advertisement the local challenge never reached proves nothing.
-    identity.evidenceRanges = identity.provenScoped
-      ? intersectRanges(identity.advertisedRanges, identity.provenRanges)
-      : identity.advertisedRanges
+    finalizePeerIdentity(identity)
   }
   return [...identities.values()].sort((left, right) => left.transportKey.localeCompare(right.transportKey))
 }
@@ -340,11 +354,13 @@ function normalizePeers(value) {
 export function normalizeAvailabilityEvidence(input = {}) {
   const requiredRanges = mergeRanges(boundedRanges(input.requiredRanges, 'requiredRanges'))
   const localRanges = mergeRanges(boundedRanges(input.localRanges, 'localRanges'))
+  const s3Ranges = mergeRanges(boundedRanges(input.s3Ranges, 's3Ranges'))
   return {
     publicationId: input.publicationId == null ? null : String(input.publicationId),
     renditionId: input.renditionId == null ? null : String(input.renditionId),
     requiredRanges,
     localRanges,
+    s3Ranges,
     peers: normalizePeers(input.peers),
     archivePledgeCount: coerceNonNegativeInteger(input.archivePledgeCount ?? (Array.isArray(input.archivePledges) ? input.archivePledges.length : 0)),
     previouslyObserved: input.previouslyObserved === true,
@@ -382,46 +398,10 @@ function exclusionReason(peer, fresh) {
  * Static archive pledges and a local complete copy are reported separately and
  * never advance network availability.
  */
-export function assessAvailability(input = {}, options = {}) {
-  const evidence = normalizeAvailabilityEvidence(input)
-  const observedAt = coerceNonNegativeInteger(options.now ?? input.now ?? Date.now())
-  const requiredRangeCount = evidence.requiredRanges.length
-  const offlinePlayable = requiredRangeCount > 0 &&
-    coveredCount(evidence.localRanges, evidence.requiredRanges) === requiredRangeCount
-  const archivePledged = evidence.archivePledgeCount > 0
-
-  const base = {
-    publicationId: evidence.publicationId,
-    renditionId: evidence.renditionId,
-    observedAt,
-    expiresAt: observedAt,
-    requiredRangeCount,
-    reachableRangeCount: 0,
-    independentPeerCount: 0,
-    completePeerCount: 0,
-    measuredLatencyMs: 0,
-    offlinePlayable,
-    archivePledged,
-  }
-
-  // Metadata without an immutable rendition can never be Healthy: there is
-  // nothing for a peer to serve.
-  if (requiredRangeCount === 0) {
-    return Object.freeze({
-      ...base,
-      state: AVAILABILITY_STATES.awaitingReplication,
-      // Nobody has asked a peer yet, so there is nothing to go stale. Dating
-      // this at the observation time made the summary expired the instant any
-      // later clock read it, and playback then refused sources its own entity
-      // view had just called eligible.
-      expiresAt: 0,
-      reasonCodes: orderReasons(['METADATA_ONLY', ...(archivePledged ? ['ARCHIVE_PLEDGE_ONLY'] : [])]),
-    })
-  }
-
+function partitionEvidencePeers(peers, observedAt) {
   const exclusions = []
   const contributors = []
-  for (const peer of evidence.peers) {
+  for (const peer of peers) {
     const fresh = peer.verifiedAt > 0 && observedAt - peer.verifiedAt <= AVAILABILITY_EVIDENCE_TTL_MS
     const eligible = peer.connected &&
       peer.challengeStatus === 'passed' &&
@@ -434,27 +414,19 @@ export function assessAvailability(input = {}, options = {}) {
     }
     contributors.push(peer)
   }
+  return { exclusions, contributors }
+}
 
-  const union = mergeRanges(contributors.flatMap(peer => peer.evidenceRanges))
-  const reachableRangeCount = coveredCount(union, evidence.requiredRanges)
-  const completePeers = contributors.filter(
-    peer => coveredCount(peer.evidenceRanges, evidence.requiredRanges) === requiredRangeCount
-  )
-
-  // The best round trip actually measured against a contributing peer. Zero
-  // means "not measured", never "instant".
-  const measured = contributors.map(peer => peer.latencyMs).filter(value => value > 0)
-  const summary = {
-    ...base,
+function determineAvailabilityState(summary, assessment) {
+  const {
+    completePeers,
+    contributors,
     reachableRangeCount,
-    independentPeerCount: contributors.length,
-    completePeerCount: completePeers.length,
-    measuredLatencyMs: measured.length > 0 ? Math.min(...measured) : 0,
-  }
-  const localReasons = [
-    ...(offlinePlayable ? ['LOCAL_COMPLETE_COPY'] : []),
-    ...(archivePledged && contributors.length === 0 ? ['ARCHIVE_PLEDGE_ONLY'] : []),
-  ]
+    requiredRangeCount,
+    exclusions,
+    localReasons,
+    evidence,
+  } = assessment
 
   if (completePeers.length >= MIN_HEALTHY_PEERS) {
     // Healthy holds until the MIN_HEALTHY_PEERS-th freshest complete proof ages out.
@@ -508,6 +480,88 @@ export function assessAvailability(input = {}, options = {}) {
       ...exclusions,
       ...localReasons,
     ]),
+  })
+}
+
+export function assessAvailability(input = {}, options = {}) {
+  const evidence = normalizeAvailabilityEvidence(input)
+  const observedAt = coerceNonNegativeInteger(options.now ?? input.now ?? Date.now())
+  const requiredRangeCount = evidence.requiredRanges.length
+  const offlinePlayable = requiredRangeCount > 0 &&
+    coveredCount(evidence.localRanges, evidence.requiredRanges) === requiredRangeCount
+  const s3Retrievable = requiredRangeCount > 0 &&
+    coveredCount(evidence.s3Ranges, evidence.requiredRanges) === requiredRangeCount
+  // Mixed local DATA + verified S3 subranges can cover the required ranges
+  // without either advertisement alone doing so. Keep the two facts distinct;
+  // expose their union as retrievable only.
+  const custodyUnion = mergeRanges([...evidence.localRanges, ...evidence.s3Ranges])
+  const retrievable = requiredRangeCount > 0 &&
+    coveredCount(custodyUnion, evidence.requiredRanges) === requiredRangeCount
+  const archivePledged = evidence.archivePledgeCount > 0
+
+  const base = {
+    publicationId: evidence.publicationId,
+    renditionId: evidence.renditionId,
+    observedAt,
+    expiresAt: observedAt,
+    requiredRangeCount,
+    reachableRangeCount: 0,
+    independentPeerCount: 0,
+    completePeerCount: 0,
+    measuredLatencyMs: 0,
+    offlinePlayable,
+    s3Retrievable,
+    retrievable,
+    archivePledged,
+  }
+  // Metadata without an immutable rendition can never be Healthy: there is
+  // nothing for a peer to serve.
+  if (requiredRangeCount === 0) {
+    return Object.freeze({
+      ...base,
+      state: AVAILABILITY_STATES.awaitingReplication,
+      // Nobody has asked a peer yet, so there is nothing to go stale. Dating
+      // this at the observation time made the summary expired the instant any
+      // later clock read it, and playback then refused sources its own entity
+      // view had just called eligible.
+      expiresAt: 0,
+      reasonCodes: orderReasons(['METADATA_ONLY', ...(archivePledged ? ['ARCHIVE_PLEDGE_ONLY'] : [])]),
+    })
+  }
+
+  const { exclusions, contributors } = partitionEvidencePeers(evidence.peers, observedAt)
+  const union = mergeRanges(contributors.flatMap(peer => peer.evidenceRanges))
+  const reachableRangeCount = coveredCount(union, evidence.requiredRanges)
+  const completePeers = contributors.filter(
+    peer => coveredCount(peer.evidenceRanges, evidence.requiredRanges) === requiredRangeCount
+  )
+
+  // The best round trip actually measured against a contributing peer. Zero
+  // means "not measured", never "instant".
+  const measured = contributors.map(peer => peer.latencyMs).filter(value => value > 0)
+  const summary = {
+    ...base,
+    reachableRangeCount,
+    independentPeerCount: contributors.length,
+    completePeerCount: completePeers.length,
+    measuredLatencyMs: measured.length > 0 ? Math.min(...measured) : 0,
+  }
+  const localReasons = [
+    ...(offlinePlayable ? ['LOCAL_COMPLETE_COPY'] : []),
+    ...(s3Retrievable ? ['S3_RETRIEVABLE_COPY'] : []),
+    // Mixed union is retrievable without being wholly local or wholly S3 —
+    // do not emit pure-copy reason codes for that case.
+    ...(archivePledged && contributors.length === 0 ? ['ARCHIVE_PLEDGE_ONLY'] : []),
+  ]
+
+  return determineAvailabilityState(summary, {
+    completePeers,
+    contributors,
+    reachableRangeCount,
+    requiredRangeCount,
+    exclusions,
+    localReasons,
+    evidence,
   })
 }
 

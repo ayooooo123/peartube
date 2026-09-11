@@ -60,7 +60,7 @@ function isStorageLockError (error) {
 async function closeResource (resource) {
   try {
     await resource?.close?.()
-  } catch {}
+  } catch { /* close is best-effort: the resource may already be destroyed */ }
 }
 
 /**

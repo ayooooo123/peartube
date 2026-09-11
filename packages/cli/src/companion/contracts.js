@@ -22,7 +22,7 @@ const ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/
 const FIELD = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const CANDIDATE_REF = /^[A-Za-z0-9_-]{43}$/
-const KIND = new Set(['movie', 'episode'])
+const KIND = new Set(['movie', 'episode', 'series', 'collection', 'creator', 'all', 'any'])
 const CANONICAL_NAMESPACE = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/
 const SEARCH_FIELDS = new Set(['namespace', 'identifier', 'kind', 'season', 'episode', 'title', 'year', 'limit', 'cursor'])
 const OPEN_FIELDS = new Set(['candidateRef', 'publicationId', 'renditionId', 'startOffsetSeconds', 'durationSeconds'])
@@ -290,16 +290,7 @@ export function decodeJsonBody (body) {
   return strictJsonParser(source)
 }
 
-export function decodeSearchQuery (values) {
-  if (!values || typeof values.getAll !== 'function') throw new CompanionContractError(400, 'INVALID_QUERY', 'Invalid search query')
-  for (const [field] of values) {
-    if (!SEARCH_FIELDS.has(field)) throw new CompanionContractError(400, 'UNKNOWN_FIELD', 'Unknown search field', boundedFieldName(field))
-  }
-
-  const raw = Object.fromEntries([...SEARCH_FIELDS].map(field => [field, optionalQueryValue(values, field)]))
-  const kind = boundedString(raw.kind, 'kind', 16)
-  if (!KIND.has(kind)) throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid kind', 'kind')
-
+function decodeSearchSelector (raw, kind) {
   const hasExact = raw.namespace !== null || raw.identifier !== null
   const hasFallback = raw.title !== null || raw.year !== null
   if (hasExact === hasFallback) throw new CompanionContractError(400, 'INVALID_QUERY', 'Provide exactly one exact or title selector')
@@ -323,8 +314,23 @@ export function decodeSearchQuery (values) {
     selector.season = positiveIntegerText(raw.season, 'season')
     selector.episode = positiveIntegerText(raw.episode, 'episode')
   } else if (raw.season !== null || raw.episode !== null) {
-    throw new CompanionContractError(400, 'INVALID_QUERY', 'Movie selector cannot include season or episode')
+    throw new CompanionContractError(400, 'INVALID_QUERY', `${kind} selector cannot include season or episode`)
   }
+
+  return selector
+}
+
+export function decodeSearchQuery (values) {
+  if (!values || typeof values.getAll !== 'function') throw new CompanionContractError(400, 'INVALID_QUERY', 'Invalid search query')
+  for (const [field] of values) {
+    if (!SEARCH_FIELDS.has(field)) throw new CompanionContractError(400, 'UNKNOWN_FIELD', 'Unknown search field', boundedFieldName(field))
+  }
+
+  const raw = Object.fromEntries([...SEARCH_FIELDS].map(field => [field, optionalQueryValue(values, field)]))
+  const kind = boundedString(raw.kind, 'kind', 16)
+  if (!KIND.has(kind)) throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid kind', 'kind')
+
+  const selector = decodeSearchSelector(raw, kind)
 
   const limit = raw.limit === null
     ? COMPANION_CONTRACT_LIMITS.defaultSearchLimit

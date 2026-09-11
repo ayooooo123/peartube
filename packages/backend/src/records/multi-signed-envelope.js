@@ -110,16 +110,7 @@ export function attachMultiSignedEnvelopeSignatures (prepared, signatures) {
   assertBytes(prepared?.transitionId, 32, 'transitionId'); assertSignatures(signatures)
   return { ...prepared, signatures }
 }
-export function verifyMultiSignedEnvelope (value, { hash, verifySignature, authorization } = {}) {
-  if (!authorization || typeof authorization !== 'object') fail('explicit authorization context is required')
-  if (typeof hash !== 'function' || typeof verifySignature !== 'function') fail('crypto providers are required')
-  const decoded = decodeMultiSignedEnvelope(encodeMultiSignedEnvelope(value))
-  const candidate = hash(encodeUnsignedMultiSignedEnvelope(decoded)); assertBytes(candidate, 32, 'hash output')
-  if (!equalBytes(candidate, decoded.transitionId)) fail('transitionId mismatch')
-  if (!equalBytes(authorization.issuerIdentityKey, decoded.issuerIdentityKey)) fail('issuer authorization mismatch')
-  if (authorization.policyEpoch !== decoded.policyEpoch) fail('policy epoch is stale')
-  if (authorization.expectedSequence !== decoded.issuerSequence) fail('issuer sequence mismatch')
-  const policy = authorization.signerPolicy
+function buildSignerPolicyMaps (policy) {
   if (!policy || !Array.isArray(policy.requiredSignerKeys) || !Array.isArray(policy.quorumSignerKeys)) fail('complete signer policy is required')
   assertUint(policy.quorum, 'signer policy quorum', RECORD_LIMITS.maxSignatures)
   if (policy.requiredSignerKeys.length + policy.quorumSignerKeys.length > RECORD_LIMITS.maxSignatures) fail('signer policy is out of bounds')
@@ -139,16 +130,35 @@ export function verifyMultiSignedEnvelope (value, { hash, verifySignature, autho
     quorum.set(id, false)
   }
   if (policy.quorum > quorum.size) fail('signer policy quorum is out of bounds')
+  return { required, quorum }
+}
+
+function verifyEnvelopeSignatures (decoded, required, quorum, quorumTarget, verifySignature) {
   let quorumCount = 0
+  const preimage = multiSignedRecordSignaturePreimage(decoded)
   for (const entry of decoded.signatures) {
     const id = b4a.toString(entry.signerKey, 'hex')
     if (required.has(id)) required.set(id, true)
     else if (quorum.has(id)) { quorum.set(id, true); quorumCount++ }
     else fail('extra signer is not authorized')
-    if (verifySignature(entry.signature, multiSignedRecordSignaturePreimage(decoded), entry.signerKey) !== true) fail('signature verification failed')
+    if (verifySignature(entry.signature, preimage, entry.signerKey) !== true) fail('signature verification failed')
   }
   for (const present of required.values()) if (!present) fail('required signer is missing')
-  if (quorumCount !== policy.quorum) fail('exact signer quorum is not met')
+  if (quorumCount !== quorumTarget) fail('exact signer quorum is not met')
+}
+
+export function verifyMultiSignedEnvelope (value, { hash, verifySignature, authorization } = {}) {
+  if (!authorization || typeof authorization !== 'object') fail('explicit authorization context is required')
+  if (typeof hash !== 'function' || typeof verifySignature !== 'function') fail('crypto providers are required')
+  const decoded = decodeMultiSignedEnvelope(encodeMultiSignedEnvelope(value))
+  const candidate = hash(encodeUnsignedMultiSignedEnvelope(decoded)); assertBytes(candidate, 32, 'hash output')
+  if (!equalBytes(candidate, decoded.transitionId)) fail('transitionId mismatch')
+  if (!equalBytes(authorization.issuerIdentityKey, decoded.issuerIdentityKey)) fail('issuer authorization mismatch')
+  if (authorization.policyEpoch !== decoded.policyEpoch) fail('policy epoch is stale')
+  if (authorization.expectedSequence !== decoded.issuerSequence) fail('issuer sequence mismatch')
+  const policy = authorization.signerPolicy
+  const { required, quorum } = buildSignerPolicyMaps(policy)
+  verifyEnvelopeSignatures(decoded, required, quorum, policy.quorum, verifySignature)
   if (typeof authorization.claimReplay !== 'function' || authorization.claimReplay(decoded.transitionId, decoded) !== true) fail('transition replay rejected')
   return { valid: true, envelope: decoded }
 }

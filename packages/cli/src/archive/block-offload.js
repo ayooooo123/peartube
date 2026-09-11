@@ -117,7 +117,7 @@ export async function createRelayBlockOffload ({
   }
 
   let offloadStats = () => ({ restored: 0, eviction: null })
-  // Cores the operator's data lives in rather than media blocks. Offload moves
+  let wrappedStorage = null
   // block DATA to the bucket and keeps only the merkle tree and bitfield on
   // disk, which is right for a 50 GB title and wrong for the metadata core: it
   // holds the acquisition ledger, accounting and settings, it is small, and
@@ -198,7 +198,7 @@ export async function createRelayBlockOffload ({
      * offloaded block, and a stray 404 costs one HEAD-shaped GET.
      */
     wrapStorage (storage) {
-      const wrapped = createOffloadStorage({
+      wrappedStorage = createOffloadStorage({
         storage,
         readAheadBlocks,
         restoreCacheBytes,
@@ -210,23 +210,26 @@ export async function createRelayBlockOffload ({
         ),
         eviction: {
           windowBytes,
+          // A registration hold gates destructive sweeps, not core arming or
+          // writes. The latter must be able to finish so the caller can reach
+          // the explicit point where it registers keep-local cores and opens
+          // eviction again.
+          waitForSweep: async () => {
+            if (evictionReady !== null) await evictionReady
+          },
           // Playback interest, per block. `blob-range-priority.js` holds the
           // exact block range each active player is blocking on, and the
           // backend runs in this process, so this reads the same registry the
           // blob server writes into — no second model of the playhead.
           isPinned: ({ keyHex, index }) => isBlockPlaybackPinned(keyHex, index),
-          // The operator's keep-local list, read per sweep and only once any
-          // hold has been released. Restore still answers for these cores;
-          // nothing sweeps them.
-          isEvictable: async ({ keyHex }) => {
-            if (evictionReady !== null) await evictionReady
-            return !excluded.has(String(keyHex).toLowerCase())
-          }
+          // The operator's keep-local list is read per sweep. Restore still
+          // answers for excluded cores; nothing sweeps them.
+          isEvictable: ({ keyHex }) => !excluded.has(String(keyHex).toLowerCase())
         },
         log
       })
-      offloadStats = wrapped.offloadStats
-      return wrapped
+      offloadStats = wrappedStorage.offloadStats
+      return wrappedStorage
     },
 
     /**
@@ -253,6 +256,16 @@ export async function createRelayBlockOffload ({
     },
 
     /**
+     * Assess physical resident DATA vs verified S3 retrievability.
+     */
+    assessRetrievability (options = {}) {
+      if (!wrappedStorage || typeof wrappedStorage.assessRetrievability !== 'function') {
+        throw new Error('assessRetrievability requires initialized storage wrapper; call wrapStorage first')
+      }
+      return wrappedStorage.assessRetrievability(options)
+    },
+
+    /**
      * Process-local residency and restore activity. Durable S3 inventory is
      * deliberately not inferred from counters that reset on restart or include
      * temporary staging objects.
@@ -265,6 +278,11 @@ export async function createRelayBlockOffload ({
         windowBytes,
         restored: offload.restored,
         residentBytes: eviction === null ? 0 : eviction.residentBytes,
+        overageBytes: eviction ? (eviction.overageBytes || 0) : 0,
+        pinnedBytes: eviction ? (eviction.pinnedBytes || 0) : 0,
+        unconfirmedBytes: eviction ? (eviction.unconfirmedBytes || 0) : 0,
+        unverifiableBytes: eviction ? (eviction.unverifiableBytes || 0) : 0,
+        eviction,
       }
     }
   }

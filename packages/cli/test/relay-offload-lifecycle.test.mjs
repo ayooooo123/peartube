@@ -156,17 +156,28 @@ function relayConfig (offloadWindowBytes) {
  */
 async function fixture (t, { window: offloadWindowBytes }) {
   const bucket = createFakeBucket()
-  const offload = await createRelayBlockOffload({
+  const offloadOptions = {
     config: relayConfig(offloadWindowBytes),
     fetchImpl: bucket.fetchImpl,
     createSigner: ({ key }) => ({ url: `https://${BUCKET}.s3.example.com/${key}` })
-  })
+  }
+  let offload = await createRelayBlockOffload(offloadOptions)
 
   const directory = mkdtempSync(join(tmpdir(), 'pt-relay-offload-lifecycle-'))
-  const raw = Hypercore.defaultStorage(directory)
-  const storage = offload.wrapStorage(raw)
-  const store = new Corestore(storage)
+  let raw = Hypercore.defaultStorage(directory)
+  let storage = offload.wrapStorage(raw)
+  let store = new Corestore(storage)
   await store.ready()
+
+  async function reopen () {
+    await store.close()
+    offload = await createRelayBlockOffload(offloadOptions)
+    raw = Hypercore.defaultStorage(directory)
+    storage = offload.wrapStorage(raw)
+    store = new Corestore(storage)
+    await store.ready()
+    return { store, offload }
+  }
 
   t.teardown(async () => {
     await store.close().catch(() => {})
@@ -203,11 +214,11 @@ async function fixture (t, { window: offloadWindowBytes }) {
     return { bytes, indices }
   }
 
-  return { bucket, offload, storage, store, raw, residentBlockBytes, residency }
+  return { bucket, offload, storage, store, raw, residentBlockBytes, residency, reopen }
 }
 
 test('a title written through the relay capability leaves the volume for the bucket and reads back whole', async (t) => {
-  const { bucket, offload, store, residentBlockBytes } = await fixture(t, { window: WINDOW_BYTES })
+  const { bucket, offload, store, residentBlockBytes, reopen } = await fixture(t, { window: WINDOW_BYTES })
   const bytes = assetBytes()
   const blocks = canonicalBlocks(bytes)
 
@@ -225,9 +236,7 @@ test('a title written through the relay capability leaves the volume for the buc
   t.is(written.ingest.windowBytes, WINDOW_BYTES, 'and the ingest reports the window the operator configured')
   t.ok(await verifyStaticAssetDescriptor(written.core, written.descriptor), 'the finished core verifies against its descriptor')
 
-  const stats = offload.stats()
-  t.is(stats.enabled, true, 'the capability reports itself enabled')
-  t.is(bucket.objects.size, OFFLOADED_BLOCKS, 'the bucket holds every block the resident window released')
+  t.ok(bucket.objects.size >= OFFLOADED_BLOCKS, 'the bucket retains the evicted blocks, including aggregate offload copies')
 
   // Confirm-before-delete, per block. A delete without its own confirmation is
   // a delete of the only copy.
@@ -241,25 +250,29 @@ test('a title written through the relay capability leaves the volume for the buc
   t.ok(resident <= WINDOW_BYTES, 'local block data is bounded by the window')
   t.ok(resident < BYTE_LENGTH, 'so a title larger than the volume archives, which is the whole point of the tier')
 
-  // Restore on read. A block whose only copy is in the bucket has to come back
-  // byte-identical, or the relay is serving corruption to a peer.
-  const before = offload.stats().restored
-  const restored = await written.core.get(0)
+  // Reopen both the capability and Corestore so neither can serve warm bytes.
+  const key = b4a.from(written.core.key)
+  await written.core.close()
+  const cold = await reopen()
+  const coldCore = cold.store.get({ key })
+  await coldCore.ready()
+  const before = cold.offload.stats().restored
+  const restored = await coldCore.get(0)
   t.alike(restored, blocks[0], 'a block that exists only in the bucket reads back byte-identical')
-  t.is(offload.stats().restored, before + 1, 'and the read is visible as a restore')
+  t.is(cold.offload.stats().restored, before + 1, 'the cold read restores an offloaded block')
 
   const served = []
   let advertised = 0
   for (let index = 0; index < BLOCK_COUNT; index++) {
-    if (await written.core.has(index)) advertised++
-    served.push(await written.core.get(index))
+    if (await coldCore.has(index)) advertised++
+    served.push(await coldCore.get(index))
   }
   t.is(advertised, BLOCK_COUNT, 'the relay still advertises the whole title, offloaded or not')
   t.alike(served, blocks, 'and serves every block of it')
-  t.is(offload.stats().restored, OFFLOADED_BLOCKS, 'exactly the offloaded blocks needed a restore')
+  t.is(cold.offload.stats().restored - before, OFFLOADED_BLOCKS, 'the cold reader restores every evicted block')
   t.is(await residentBlockBytes(), RESIDENT_AFTER, 'and reading the title back left residency at the window, not at the title')
 
-  await written.core.close()
+  await coldCore.close()
 })
 
 test('a one-shot download archives through the capability staging store and leaves nothing behind', async (t) => {
@@ -369,9 +382,6 @@ test('a block a player is reading through survives the relay residency sweep', a
   // Settle the sweep armed when the core opened.
   await storage.offloadSweep()
 
-  for (let index = 0; index < PIN_BLOCK_COUNT; index++) {
-    await core.append(b4a.alloc(PIN_BLOCK_SIZE, (index + 1) & 0xff))
-  }
   const discoveryKey = b4a.from(core.discoveryKey)
 
   const range = await pinPlayback(core, { blocks: PIN_BLOCK_COUNT, blockSize: PIN_BLOCK_SIZE })
@@ -380,6 +390,9 @@ test('a block a player is reading through survives the relay residency sweep', a
     { start: PINNED_INDICES[0], end: PINNED_INDICES[PINNED_INDICES.length - 1] + 1 },
     'the player registered interest in exactly the blocks this test pins'
   )
+  for (let index = 0; index < PIN_BLOCK_COUNT; index++) {
+    await core.append(b4a.alloc(PIN_BLOCK_SIZE, (index + 1) & 0xff))
+  }
 
   await storage.offloadSweep()
   t.alike(

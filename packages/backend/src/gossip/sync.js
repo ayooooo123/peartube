@@ -28,14 +28,27 @@ function safeNumber(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback
 }
 
-function isFreshEnough(descriptor, now = Date.now(), maxAgeMs = 10 * 60 * 1000, options = {}) {
-  if (!descriptor || typeof descriptor !== 'object') return false
-  const expiresAt = safeNumber(descriptor.expiresAt, 0)
-  const publishAt = safeNumber(descriptor.publishAt ?? descriptor.publishedAt ?? descriptor.createdAt ?? descriptor.updatedAt ?? descriptor.timestamp, 0)
-  const availabilityEpoch = safeNumber(descriptor.availabilityEpoch ?? descriptor.epoch ?? descriptor.sequenceEpoch, 0)
+function getDescriptorPublishTime(descriptor) {
+  return safeNumber(descriptor.publishAt ?? descriptor.publishedAt ?? descriptor.createdAt ?? descriptor.updatedAt ?? descriptor.timestamp, 0)
+}
+
+function getDescriptorEpoch(descriptor) {
+  return safeNumber(descriptor.availabilityEpoch ?? descriptor.epoch ?? descriptor.sequenceEpoch, 0)
+}
+
+function getFreshnessLimits(options) {
   const freshnessSkewMs = Math.max(0, safeNumber(options.freshnessSkewMs ?? options.maxClockSkewMs ?? options.clockDriftMs, 15 * 60 * 1000))
   const expireGraceMs = Math.max(0, safeNumber(options.expireGraceMs, 5 * 60 * 1000))
   const availabilityEpochSlack = Math.max(1, safeNumber(options.availabilityEpochSlack ?? options.maxEpochSkew ?? options.epochDrift, 6))
+  return { freshnessSkewMs, expireGraceMs, availabilityEpochSlack }
+}
+
+function isFreshEnough(descriptor, now = Date.now(), maxAgeMs = 10 * 60 * 1000, options = {}) {
+  if (!descriptor || typeof descriptor !== 'object') return false
+  const expiresAt = safeNumber(descriptor.expiresAt, 0)
+  const publishAt = getDescriptorPublishTime(descriptor)
+  const availabilityEpoch = getDescriptorEpoch(descriptor)
+  const { freshnessSkewMs, expireGraceMs, availabilityEpochSlack } = getFreshnessLimits(options)
   if (expiresAt && now > expiresAt + Math.max(expireGraceMs, freshnessSkewMs)) return false
   if (publishAt && now + Math.max(maxAgeMs, freshnessSkewMs) < publishAt) return false
   if (availabilityEpoch) {

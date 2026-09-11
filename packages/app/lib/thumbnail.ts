@@ -139,7 +139,7 @@ async function attemptThumbnailFetch(
     // don't sit on a stalling Hypercore read. Do not fall back to data: URLs.
     const url = response?.url
     if (response?.exists && url) return url
-  } catch {}
+  } catch { /* thumbnail attempt failed; caller retries */ }
   return null
 }
 

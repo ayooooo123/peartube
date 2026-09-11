@@ -61,6 +61,85 @@ function boundedSelectedIndexers(policy) {
   })
 }
 
+function buildEffectivePolicy(policy) {
+  const permissions = {
+    contribute: policy.permissions?.contribute === true,
+    archive: policy.permissions?.archive === true
+  }
+  const effectiveRole = ['watch-only', 'contributor', 'archive-enabled'].includes(policy.effectiveRole)
+    ? policy.effectiveRole
+    : 'watch-only'
+  return {
+    policyVersion: count(policy.policyVersion),
+    consentVersion: count(policy.consentVersion),
+    migrationRequired: policy.migrationRequired !== false,
+    effectiveRole,
+    permissions
+  }
+}
+
+function buildBudgets(policy, retention) {
+  return {
+    contribution: {
+      configuredBytes: count(policy.contributionBudgetBytes),
+      usedBytes: count(retention.contributionUsedBytes)
+    },
+    archive: {
+      configuredBytes: count(policy.archiveBudgetBytes),
+      usedBytes: count(retention.archiveUsedBytes)
+    }
+  }
+}
+
+function buildAcquisitionsByState(acquisitionStatus) {
+  const acquisitionsByState = {}
+  for (const state of ['queued', 'acquiring', 'verifying', 'publishing', 'completed', 'failed', 'cancelled']) {
+    acquisitionsByState[state] = count(acquisitionStatus.acquisitionsByState?.[state])
+  }
+  return acquisitionsByState
+}
+
+function collectErrors(acquisitionStatus, network, publisher) {
+  return boundedErrorCodes([
+    ...(acquisitionStatus.lastErrors || []),
+    ...(network.lastErrors || []),
+    publisher.lastErrorCode
+  ])
+}
+
+function buildPublicWork(publicWork, publisher, archive, acquisitionStatus, acquisitionsByState) {
+  return {
+    activeAnnouncements: count(publicWork.activeAnnouncements ??
+      (count(publisher.catalogs) + count(archive.activePledgeCount))),
+    activeServes: count(publicWork.activeServes),
+    servedBytes: count(publicWork.servedBytes),
+    activeAcquisitions: count(acquisitionStatus.activeAcquisitions),
+    acquisitionsByState
+  }
+}
+
+function buildBlockOffload(blockOffload) {
+  return {
+    enabled: blockOffload?.enabled === true,
+    windowBytes: count(blockOffload?.windowBytes),
+    restored: count(blockOffload?.restored),
+    residentBytes: count(blockOffload?.residentBytes)
+  }
+}
+
+// Named field by field on purpose: this file is world-readable to anything
+// that can read the relay's storage directory, and a passthrough spread
+// would be one careless caller away from writing a bucket name or a key
+// into it.
+function buildCapacity(capacity) {
+  return {
+    localUsedBytes: measured(capacity?.localUsedBytes),
+    localFreeBytes: measured(capacity?.localFreeBytes),
+    localHeadroomBytes: measured(capacity?.localHeadroomBytes),
+    effectiveCapacityBytes: measured(capacity?.effectiveCapacityBytes)
+  }
+}
+
 export function buildRelayStatus({
   config,
   catalog,
@@ -82,53 +161,17 @@ export function buildRelayStatus({
   const policy = runtimeStats.policy || {}
   const archive = runtimeStats.archive || {}
   const retention = runtimeStats.seedRetention?.retention || {}
-  const permissions = {
-    contribute: policy.permissions?.contribute === true,
-    archive: policy.permissions?.archive === true
-  }
   const publicWork = runtimeStats.publicWork || {}
-  const acquisitionsByState = {}
-  for (const state of ['queued', 'acquiring', 'verifying', 'publishing', 'completed', 'failed', 'cancelled']) {
-    acquisitionsByState[state] = count(acquisitionStatus.acquisitionsByState?.[state])
-  }
-  const errors = boundedErrorCodes([
-    ...(acquisitionStatus.lastErrors || []),
-    ...(network.lastErrors || []),
-    publisher.lastErrorCode
-  ])
+  const acquisitionsByState = buildAcquisitionsByState(acquisitionStatus)
 
   return {
     generatedAt: Date.now(),
     mode: String(config.mode || 'unknown').slice(0, 32),
-    effectivePolicy: {
-      policyVersion: count(policy.policyVersion),
-      consentVersion: count(policy.consentVersion),
-      migrationRequired: policy.migrationRequired !== false,
-      effectiveRole: ['watch-only', 'contributor', 'archive-enabled'].includes(policy.effectiveRole)
-        ? policy.effectiveRole
-        : 'watch-only',
-      permissions
-    },
-    budgets: {
-      contribution: {
-        configuredBytes: count(policy.contributionBudgetBytes),
-        usedBytes: count(retention.contributionUsedBytes)
-      },
-      archive: {
-        configuredBytes: count(policy.archiveBudgetBytes),
-        usedBytes: count(retention.archiveUsedBytes)
-      }
-    },
-    publicWork: {
-      activeAnnouncements: count(publicWork.activeAnnouncements ??
-        (count(publisher.catalogs) + count(archive.activePledgeCount))),
-      activeServes: count(publicWork.activeServes),
-      servedBytes: count(publicWork.servedBytes),
-      activeAcquisitions: count(acquisitionStatus.activeAcquisitions),
-      acquisitionsByState
-    },
+    effectivePolicy: buildEffectivePolicy(policy),
+    budgets: buildBudgets(policy, retention),
+    publicWork: buildPublicWork(publicWork, publisher, archive, acquisitionStatus, acquisitionsByState),
     selectedIndexers: boundedSelectedIndexers(policy),
-    lastErrors: errors,
+    lastErrors: collectErrors(acquisitionStatus, network, publisher),
     network: {
       status: String(network.status || 'unknown').slice(0, 32),
       peers: count(network.peers),
@@ -143,24 +186,11 @@ export function buildRelayStatus({
     },
     creators: summarizeCreators(creatorRecords),
     authorizedClients: count(trustedClientsCount),
-    blockOffload: {
-      enabled: blockOffload?.enabled === true,
-      windowBytes: count(blockOffload?.windowBytes),
-      restored: count(blockOffload?.restored),
-      residentBytes: count(blockOffload?.residentBytes)
-    },
-    // Named field by field on purpose: this file is world-readable to anything
-    // that can read the relay's storage directory, and a passthrough spread
-    // would be one careless caller away from writing a bucket name or a key
-    // into it.
-    capacity: {
-      localUsedBytes: measured(capacity?.localUsedBytes),
-      localFreeBytes: measured(capacity?.localFreeBytes),
-      localHeadroomBytes: measured(capacity?.localHeadroomBytes),
-      effectiveCapacityBytes: measured(capacity?.effectiveCapacityBytes)
-    }
+    blockOffload: buildBlockOffload(blockOffload),
+    capacity: buildCapacity(capacity)
   }
 }
+
 
 export function writeRelayStatus(statusPath, status) {
   if (statusPath) {
@@ -175,26 +205,53 @@ export function readRelayStatus(statusPath) {
   return JSON.parse(readFileSync(statusPath, 'utf8'))
 }
 
-export function formatRelayStatus(status) {
+function formatPolicyLines(status) {
   const policy = status.effectivePolicy || {}
   const contribution = status.budgets?.contribution || {}
   const archive = status.budgets?.archive || {}
-  const work = status.publicWork || {}
-  const lines = [
+  return [
     `mode: ${status.mode || 'unknown'}`,
     `role: ${policy.effectiveRole || 'watch-only'} migrationRequired=${policy.migrationRequired !== false} consentVersion=${policy.consentVersion || 0}`,
     `permissions: contribute=${policy.permissions?.contribute === true} archive=${policy.permissions?.archive === true}`,
     `contributionBudget: ${contribution.usedBytes || 0}/${contribution.configuredBytes || 0} bytes`,
-    `archiveBudget: ${archive.usedBytes || 0}/${archive.configuredBytes || 0} bytes`,
+    `archiveBudget: ${archive.usedBytes || 0}/${archive.configuredBytes || 0} bytes`
+  ]
+}
+
+function formatWorkAndNetworkLines(status) {
+  const work = status.publicWork || {}
+  const network = status.network || {}
+  const summary = status.summary || {}
+  const acquisitionsFormatted = Object.entries(work.acquisitionsByState || {})
+    .map(([state, value]) => `${state}=${value}`)
+    .join(' ')
+  return [
     `publicWork: announcements=${work.activeAnnouncements || 0} serves=${work.activeServes || 0} servedBytes=${work.servedBytes || 0} acquisitions=${work.activeAcquisitions || 0}`,
-    `acquisitions: ${Object.entries(work.acquisitionsByState || {}).map(([state, value]) => `${state}=${value}`).join(' ')}`,
-    `network: status=${status.network?.status || 'unknown'} peers=${status.network?.peers || 0} connections=${status.network?.connections || 0} offline=${status.network?.offline === true}`,
-    `channels: total=${status.summary?.totalChannels || 0} protected=${status.summary?.protectedChannels || 0} evictable=${status.summary?.evictableChannels || 0}`,
-    `selectedIndexers: ${(status.selectedIndexers || []).map(indexer => `${indexer.id}:${indexer.status}`).join(',') || 'none'}`,
-    `lastErrors: ${(status.lastErrors || []).join(',') || 'none'}`,
+    `acquisitions: ${acquisitionsFormatted}`,
+    `network: status=${network.status || 'unknown'} peers=${network.peers || 0} connections=${network.connections || 0} offline=${network.offline === true}`,
+    `channels: total=${summary.totalChannels || 0} protected=${summary.protectedChannels || 0} evictable=${summary.evictableChannels || 0}`
+  ]
+}
+
+function formatSystemLines(status) {
+  const blockOffload = status.blockOffload || {}
+  const creators = status.creators || {}
+  const selectedIndexers = (status.selectedIndexers || []).map(indexer => `${indexer.id}:${indexer.status}`).join(',') || 'none'
+  const lastErrors = (status.lastErrors || []).join(',') || 'none'
+  return [
+    `selectedIndexers: ${selectedIndexers}`,
+    `lastErrors: ${lastErrors}`,
     `authorizedClients: ${status.authorizedClients || 0}`,
-    `blockOffload: enabled=${status.blockOffload?.enabled === true} windowBytes=${status.blockOffload?.windowBytes || 0} residentBytes=${status.blockOffload?.residentBytes || 0} restored=${status.blockOffload?.restored || 0}`,
-    `creators: total=${status.creators?.totalCreators || 0} archived=${status.creators?.videosArchived || 0} unseeded=${status.creators?.videosUnseeded || 0}`
+    `blockOffload: enabled=${blockOffload.enabled === true} windowBytes=${blockOffload.windowBytes || 0} residentBytes=${blockOffload.residentBytes || 0} restored=${blockOffload.restored || 0}`,
+    `creators: total=${creators.totalCreators || 0} archived=${creators.videosArchived || 0} unseeded=${creators.videosUnseeded || 0}`
+  ]
+}
+
+export function formatRelayStatus(status) {
+  const lines = [
+    ...formatPolicyLines(status),
+    ...formatWorkAndNetworkLines(status),
+    ...formatSystemLines(status)
   ]
   return lines.join('\n')
 }

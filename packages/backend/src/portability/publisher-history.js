@@ -119,16 +119,7 @@ function sameCanonicalValue (left, right) {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
-export function normalizePublisherCatalog (input, { exact = false } = {}) {
-  if (!isPlainObject(input)) failPortableState(PORTABLE_STATE_ERROR_CODES.INVALID_FIELD, 'publisher catalog must be an object')
-  if (exact) assertExactFields(input, ['publisherId', 'catalogBootstrapKey', 'rootHistory', 'recoveryMetadata', 'checkpoint'], 'publisher catalog')
-
-  const publisherId = hex32(readOwnDataField(input, 'publisherId'), 'publisher catalog.publisherId')
-  const catalogBootstrapKey = hex32(readOwnDataField(input, 'catalogBootstrapKey'), 'publisher catalog.catalogBootstrapKey')
-  const sourceHistory = denseArray(readOwnDataField(input, 'rootHistory'), 'publisher catalog.rootHistory', MAX_PORTABLE_ROOT_HISTORY)
-  if (sourceHistory.length === 0) failPortableState(PORTABLE_STATE_ERROR_CODES.INVALID_FIELD, 'publisher catalog.rootHistory must include genesis')
-
-  const provider = createPublisherKeyProvider()
+function parseRootHistory(sourceHistory, exact) {
   const history = []
   const decoded = []
   const operationIds = new Set()
@@ -152,7 +143,10 @@ export function normalizePublisherCatalog (input, { exact = false } = {}) {
     history.push({ frame: b4a.toString(bytes, 'hex') })
     decoded.push(operation)
   }
+  return { history, decoded }
+}
 
+function replayPublisherHistory(decoded, publisherId, catalogBootstrapKey, provider) {
   let descriptor
   try {
     descriptor = decodePublisherNamespaceDescriptor(decoded[0].canonicalBody)
@@ -176,18 +170,37 @@ export function normalizePublisherCatalog (input, { exact = false } = {}) {
       )
     }
   }
+  return state
+}
+
+function verifyExactHistoryMetadata(input, recoveryMetadata, checkpoint) {
+  const suppliedRecovery = normalizeRecoveryMetadata(readOwnDataField(input, 'recoveryMetadata'))
+  const suppliedCheckpoint = normalizeCheckpoint(readOwnDataField(input, 'checkpoint'))
+  if (!sameCanonicalValue(suppliedRecovery, recoveryMetadata)) {
+    failPortableState(PORTABLE_STATE_ERROR_CODES.CHECKPOINT_INVALID, 'publisher recovery metadata does not match verified root history')
+  }
+  if (!sameCanonicalValue(suppliedCheckpoint, checkpoint)) {
+    failPortableState(PORTABLE_STATE_ERROR_CODES.CHECKPOINT_INVALID, 'publisher checkpoint does not match verified root history')
+  }
+}
+
+export function normalizePublisherCatalog (input, { exact = false } = {}) {
+  if (!isPlainObject(input)) failPortableState(PORTABLE_STATE_ERROR_CODES.INVALID_FIELD, 'publisher catalog must be an object')
+  if (exact) assertExactFields(input, ['publisherId', 'catalogBootstrapKey', 'rootHistory', 'recoveryMetadata', 'checkpoint'], 'publisher catalog')
+
+  const publisherId = hex32(readOwnDataField(input, 'publisherId'), 'publisher catalog.publisherId')
+  const catalogBootstrapKey = hex32(readOwnDataField(input, 'catalogBootstrapKey'), 'publisher catalog.catalogBootstrapKey')
+  const sourceHistory = denseArray(readOwnDataField(input, 'rootHistory'), 'publisher catalog.rootHistory', MAX_PORTABLE_ROOT_HISTORY)
+  if (sourceHistory.length === 0) failPortableState(PORTABLE_STATE_ERROR_CODES.INVALID_FIELD, 'publisher catalog.rootHistory must include genesis')
+
+  const provider = createPublisherKeyProvider()
+  const { history, decoded } = parseRootHistory(sourceHistory, exact)
+  const state = replayPublisherHistory(decoded, publisherId, catalogBootstrapKey, provider)
 
   const recoveryMetadata = derivedRecoveryMetadata(state)
   const checkpoint = derivedCheckpoint(history, state, provider)
   if (exact) {
-    const suppliedRecovery = normalizeRecoveryMetadata(readOwnDataField(input, 'recoveryMetadata'))
-    const suppliedCheckpoint = normalizeCheckpoint(readOwnDataField(input, 'checkpoint'))
-    if (!sameCanonicalValue(suppliedRecovery, recoveryMetadata)) {
-      failPortableState(PORTABLE_STATE_ERROR_CODES.CHECKPOINT_INVALID, 'publisher recovery metadata does not match verified root history')
-    }
-    if (!sameCanonicalValue(suppliedCheckpoint, checkpoint)) {
-      failPortableState(PORTABLE_STATE_ERROR_CODES.CHECKPOINT_INVALID, 'publisher checkpoint does not match verified root history')
-    }
+    verifyExactHistoryMetadata(input, recoveryMetadata, checkpoint)
   }
 
   return { publisherId, catalogBootstrapKey, rootHistory: history, recoveryMetadata, checkpoint }

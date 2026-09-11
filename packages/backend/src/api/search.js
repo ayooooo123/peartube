@@ -6,6 +6,66 @@ import b4a from 'b4a'
 function assertContextRunning(ctx) {
   if (ctx?.lifecycle?.signal?.aborted) throw new Error('Backend is shutting down')
 }
+function triggerChannelVectorsSync(ctx, finder) {
+  if (!ctx.channels || ctx.channels.size === 0) return
+  (async () => {
+    for (const [channelKey, channel] of ctx.channels.entries()) {
+      try {
+        await finder.ensureGlobalIndexedFromChannelView(channelKey, channel)
+      } catch { /* best effort */ }
+    }
+  })()
+}
+
+function enrichPreviewMetadata(r, meta, channelKey, previewVideo) {
+  return {
+    ...r,
+    metadata: {
+      ...meta,
+      ...(previewVideo || {}),
+      channelKey,
+      publicBeeKey: meta.publicBeeKey || previewVideo?.publicBeeKey || null,
+      blobId: meta.blobId || previewVideo?.blobId || null,
+      blobsCoreKey: meta.blobsCoreKey || previewVideo?.blobsCoreKey || null,
+    },
+  }
+}
+
+async function filterAndEnrichSearchResults(api, results, getPreviewVideoFromFeed) {
+  const validated = []
+  const staleIds = []
+  for (const r of results) {
+    const meta = typeof r.metadata === 'string' ? JSON.parse(r.metadata) : (r.metadata || {})
+    const channelKey = meta.channelKey || meta.driveKey
+    if (!channelKey) {
+      validated.push(r)
+      continue
+    }
+    const hasDirectRefs = Boolean(meta.blobId && meta.blobsCoreKey)
+    const previewVideo = getPreviewVideoFromFeed(channelKey, r.id, meta.publicBeeKey)
+    if (hasDirectRefs || previewVideo?.blobId) {
+      validated.push(enrichPreviewMetadata(r, meta, channelKey, previewVideo))
+      continue
+    }
+    try {
+      const video = await api.getVideoData(channelKey, r.id, meta.publicBeeKey)
+      if (video) {
+        validated.push(r)
+        continue
+      }
+    } catch { /* best effort */ }
+    staleIds.push(r.id)
+  }
+  return { validated, staleIds }
+}
+
+function pruneStaleSearchEntries(finder, staleIds) {
+  if (!staleIds || staleIds.length === 0) return
+  console.log('[API] globalSearchVideos: pruning', staleIds.length, 'stale entries')
+  for (const id of staleIds) {
+    try { finder.removeVideo(id) } catch { /* best effort */ }
+  }
+}
 
 export function createSearchApi({
   ctx,
@@ -17,14 +77,14 @@ export function createSearchApi({
   loadChannel,
 }) {
   return {
-    async searchIndexCandidates(selector, { limit = undefined, signal = null } = {}) {
+    async searchIndexCandidates(selector, { limit = undefined, cursor = null, signal = null } = {}) {
       assertContextRunning(ctx)
       if (!indexVerificationRuntime || typeof indexVerificationRuntime.searchIndexCandidates !== 'function') {
         const error = new Error('Index candidate search is unsupported')
         error.code = 'INDEX_SEARCH_UNSUPPORTED'
         throw error
       }
-      return indexVerificationRuntime.searchIndexCandidates({ selector, limit, signal: signal || ctx?.lifecycle?.signal })
+      return indexVerificationRuntime.searchIndexCandidates({ selector, limit, cursor, signal: signal || ctx?.lifecycle?.signal })
     },
 
     async verifyIndexCandidate(candidateRef, { signal = null } = {}) {
@@ -71,15 +131,7 @@ export function createSearchApi({
       const finder = await ensureSemanticFinder(ctx)
 
       // Best-effort: import replicated vectors from any loaded channels.
-      if (ctx.channels && ctx.channels.size > 0) {
-        (async () => {
-          for (const [channelKey, channel] of ctx.channels.entries()) {
-            try {
-              await finder.ensureGlobalIndexedFromChannelView(channelKey, channel)
-            } catch { /* best effort */ }
-          }
-        })()
-      }
+      triggerChannelVectorsSync(ctx, finder)
 
       // Fast global search - O(1) not O(channels)
       const results = await finder.globalSearch(query, topK)
@@ -89,41 +141,8 @@ export function createSearchApi({
       // entries just because PublicBee/channel hydration timed out. Search may
       // have a durable preview record while loadChannel/listVideos is currently
       // unproductive over P2P.
-      const validated = []
-      const staleIds = []
-      for (const r of results) {
-        const meta = typeof r.metadata === 'string' ? JSON.parse(r.metadata) : (r.metadata || {})
-        const channelKey = meta.channelKey || meta.driveKey
-        if (!channelKey) { validated.push(r); continue }
-        const hasDirectRefs = Boolean(meta.blobId && meta.blobsCoreKey)
-        const previewVideo = getPreviewVideoFromFeed(channelKey, r.id, meta.publicBeeKey)
-        if (hasDirectRefs || previewVideo?.blobId) {
-          validated.push({
-            ...r,
-            metadata: {
-              ...meta,
-              ...(previewVideo || {}),
-              channelKey,
-              publicBeeKey: meta.publicBeeKey || previewVideo?.publicBeeKey || null,
-              blobId: meta.blobId || previewVideo?.blobId || null,
-              blobsCoreKey: meta.blobsCoreKey || previewVideo?.blobsCoreKey || null,
-            },
-          })
-          continue
-        }
-        try {
-          const video = await this.getVideoData(channelKey, r.id, meta.publicBeeKey)
-          if (video) { validated.push(r); continue }
-        } catch { /* best effort */ }
-        staleIds.push(r.id)
-      }
-
-      if (staleIds.length > 0) {
-        console.log('[API] globalSearchVideos: pruning', staleIds.length, 'stale entries')
-        for (const id of staleIds) {
-          try { finder.removeVideo(id) } catch { /* best effort */ }
-        }
-      }
+      const { validated, staleIds } = await filterAndEnrichSearchResults(this, results, getPreviewVideoFromFeed)
+      pruneStaleSearchEntries(finder, staleIds)
 
       return validated
     },

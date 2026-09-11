@@ -2,7 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { build } from 'esbuild'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -10,6 +11,46 @@ const appRoot = path.resolve(__dirname, '..')
 
 function read(relativePath) {
   return fs.readFileSync(path.join(appRoot, relativePath), 'utf8')
+}
+async function loadVideoRouteHelpers() {
+  const source = read('app/video/[id].tsx')
+  const slice = (startMarker, endMarker) => {
+    const start = source.indexOf(startMarker)
+    const end = source.indexOf(endMarker, start)
+    assert.ok(start >= 0 && end > start, `production boundary ${startMarker}`)
+    return source.slice(start, end)
+  }
+  const result = await build({
+    stdin: {
+      contents: [
+        slice('function getVideoRef', 'function createPlaybackRequest'),
+        slice('function isCurrentVideoActive', 'function getChannelDisplayName'),
+        'export function attachWatch(dependencies) {',
+        'const { videoData, loadingMeta, videoLoaded, currentVideo, videoUrl, loadVideo, startStatsPolling, loadChannelInfo, setIsLoading, setVideoLoaded, clearStatsPolling } = dependencies',
+        'const Platform = { OS: "android" }; const isPear = false',
+        'let effect; const useEffect = callback => { effect = callback }',
+        slice('// Load video when videoData is available', 'const handleCastDeviceSelect'),
+        'return effect()',
+        '}',
+        'export { isCurrentVideoActive }',
+      ].join('\n'),
+      resolveDir: appRoot,
+      sourcefile: 'video-route-helper-entry.ts',
+      loader: 'ts',
+    },
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    write: false,
+  })
+  const directory = fs.mkdtempSync(path.join(appRoot, '.video-route-helper-'))
+  const output = path.join(directory, 'helper.cjs')
+  fs.writeFileSync(output, result.outputFiles[0].text)
+  try {
+    return await import(`${pathToFileURL(output).href}?${Math.random()}`)
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 }
 
 test('mobile watch page keeps live context stats ahead of stale polled stats', () => {
@@ -91,20 +132,6 @@ test('backend preparePlayback keeps stats bounded and prefetch off the URL hando
   )
 })
 
-test('mobile watch page reattaches stats when returning to an already playing video', () => {
-  const source = read('app/video/[id].tsx')
-
-  assert.match(
-    source,
-    /if \(isSameVideoAsCurrent && videoUrl && \(Platform\.OS !== 'web' \|\| isPear\)\) \{[\s\S]*setIsLoading\(false\)[\s\S]*startStatsPolling\(\)/,
-    'returning to the active video should poll stats instead of replaying preparePlayback and showing the loading gate',
-  )
-  assert.doesNotMatch(
-    source,
-    /fromMiniPlayer && isSameVideoAsCurrent/,
-    'same-video lifecycle handling must not depend only on fromMiniPlayer route params',
-  )
-})
 
 test('mobile watch page clears stale local stats only when starting a different load', () => {
   const source = read('app/video/[id].tsx')
@@ -130,4 +157,56 @@ test('watch page playback prepares the backend before opening a URL', () => {
   assert.match(prepareBlock, /loadGenerationRef\.current !== generation/, 'preparePlayback completion should be generation-gated')
   assert.match(source, /if \(cacheKey\) setCachedVideoUrl\(cacheKey, result\.url\)/, 'prepared URL should refresh the cache only after backend preparation')
   assert.doesNotMatch(source, /loadAndPlayVideo\(videoData, cachedUrl\)/, 'watch page must not hand cached URLs to the player before backend preparation')
+})
+test('mobile watch reattachment uses the actual media identity and channel key', async () => {
+  const { isCurrentVideoActive, attachWatch } = await loadVideoRouteHelpers()
+  const activeVideo = {
+    id: 'video-1',
+    path: '/videos/video-1.mp4',
+    channelKey: 'channel-1',
+  }
+
+  assert.equal(
+    isCurrentVideoActive(activeVideo, { id: 'video-1', path: '/videos/video-1.mp4', channelKey: 'channel-1' }),
+    true,
+    'the same media on the same channel is eligible for stats reattachment',
+  )
+  assert.equal(
+    isCurrentVideoActive(activeVideo, { id: 'video-2', path: '/videos/video-2.mp4', channelKey: 'channel-1' }),
+    false,
+    'a different media must take the fresh-load path',
+  )
+  assert.equal(
+    isCurrentVideoActive(activeVideo, { id: 'video-1', path: '/videos/video-1.mp4', channelKey: 'channel-2' }),
+    false,
+    'the same path on another channel is not the active playback session',
+  )
+
+  const events = []
+  const dependencies = {
+    videoData: activeVideo,
+    currentVideo: activeVideo,
+    videoUrl: 'playing-url',
+    loadingMeta: false,
+    videoLoaded: false,
+    loadVideo: () => events.push('prepare'),
+    startStatsPolling: () => events.push('poll'),
+    loadChannelInfo() {},
+    setIsLoading: value => events.push(`loading:${value}`),
+    setVideoLoaded: () => events.push('loaded'),
+    clearStatsPolling() {},
+  }
+  const detach = attachWatch(dependencies)
+  try {
+    assert.deepEqual(events, ['loading:false', 'poll', 'loaded'], 'reattachment resumes stats without restarting playback')
+  } finally {
+    detach()
+  }
+  events.length = 0
+  const detachChanged = attachWatch({ ...dependencies, videoData: { ...activeVideo, channelKey: 'another-channel' } })
+  try {
+    assert.deepEqual(events, ['prepare', 'loaded'], 'a changed channel starts a fresh playback request instead')
+  } finally {
+    detachChanged()
+  }
 })

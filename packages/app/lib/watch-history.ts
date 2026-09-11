@@ -253,6 +253,28 @@ function identityOf(record: StoredProgressRecord | null | undefined): WatchIdent
  * a title), so both are read leniently and merged by order rather than by
  * whichever arrived last.
  */
+function entryFromRecord(
+  record: StoredProgressRecord,
+  identity: WatchIdentity | null,
+  channelKey: string,
+  videoId: string,
+): WatchHistoryEntry {
+  return {
+    videoId,
+    channelKey,
+    publicBeeKey: null,
+    title: text(record?.title) ?? '',
+    thumbnailUrl: null,
+    positionSec: finite(record?.position ?? record?.positionSec),
+    durationSec: finite(record?.duration ?? record?.durationSec),
+    updatedAt: finite(record?.updatedAt ?? record?.timestamp),
+    completed: record?.completed === true,
+    saved: record?.saved === true,
+    identity,
+    playbackGeneration: uint(record?.order?.playbackGeneration ?? record?.playbackGeneration),
+  }
+}
+
 function fromRecord(record: StoredProgressRecord): { key: string; entry: WatchHistoryEntry; tombstone: boolean } | null {
   const identity = identityOf(record)
   const channelKey = text(record?.channelKey) ?? ''
@@ -262,20 +284,7 @@ function fromRecord(record: StoredProgressRecord): { key: string; entry: WatchHi
   return {
     key,
     tombstone: record?.order?.tombstone === true,
-    entry: {
-      videoId,
-      channelKey,
-      publicBeeKey: null,
-      title: text(record?.title) ?? '',
-      thumbnailUrl: null,
-      positionSec: finite(record?.position ?? record?.positionSec),
-      durationSec: finite(record?.duration ?? record?.durationSec),
-      updatedAt: finite(record?.updatedAt ?? record?.timestamp),
-      completed: record?.completed === true,
-      saved: record?.saved === true,
-      identity,
-      playbackGeneration: uint(record?.order?.playbackGeneration ?? record?.playbackGeneration),
-    },
+    entry: entryFromRecord(record, identity, channelKey, videoId),
   }
 }
 
@@ -548,12 +557,31 @@ function storedKeysOf(record: StoredProgressRecord): string[] {
  * Only a row carrying no identity at all is exempt, because there is nothing
  * in it to preserve.
  */
-async function migrateLegacyState(): Promise<void> {
-  const legacy = await readLegacySource()
-  if (!legacy) return
+function legacyEntryFromRaw(
+  raw: LegacyWatchRecord,
+  identity: WatchIdentity | null,
+  channelKey: string,
+  videoId: string,
+): WatchHistoryEntry {
+  return {
+    videoId,
+    channelKey,
+    publicBeeKey: text(raw?.publicBeeKey),
+    title: text(raw?.title) ?? 'Untitled',
+    channelName: text(raw?.channelName) ?? undefined,
+    thumbnailUrl: text(raw?.thumbnailUrl),
+    positionSec: finite(raw?.positionSec ?? raw?.position),
+    durationSec: finite(raw?.durationSec ?? raw?.duration),
+    updatedAt: finite(raw?.updatedAt),
+    completed: raw?.completed === true,
+    saved: raw?.saved === true,
+    identity,
+    playbackGeneration: 0,
+  }
+}
 
-  const required = new Set<string>()
-  for (const raw of legacy.entries) {
+async function migrateLegacyEntries(entries: readonly LegacyWatchRecord[], required: Set<string>): Promise<boolean> {
+  for (const raw of entries) {
     const identity = identityOf(raw)
     const channelKey = text(raw?.channelKey) ?? ''
     const videoId = text(raw?.videoId) ?? ''
@@ -561,49 +589,51 @@ async function migrateLegacyState(): Promise<void> {
     if (!key) continue
     required.add(key)
     if (cache.has(key)) continue
-    const entry: WatchHistoryEntry = {
-      videoId,
-      channelKey,
-      publicBeeKey: text(raw?.publicBeeKey),
-      title: text(raw?.title) ?? 'Untitled',
-      channelName: text(raw?.channelName) ?? undefined,
-      thumbnailUrl: text(raw?.thumbnailUrl),
-      positionSec: finite(raw?.positionSec ?? raw?.position),
-      durationSec: finite(raw?.durationSec ?? raw?.duration),
-      updatedAt: finite(raw?.updatedAt),
-      completed: raw?.completed === true,
-      saved: raw?.saved === true,
-      identity,
-      playbackGeneration: 0,
-    }
+    const entry = legacyEntryFromRaw(raw, identity, channelKey, videoId)
     const platform = await readyPlatform()
-    if (!platform) return
+    if (!platform) return false
     try {
       await platform.rpc.logWatchHistory(requestFor(entry, false))
     } catch {
       // A failed migration write means the legacy file stays exactly where it is.
-      return
+      return false
     }
     cache.set(key, entry)
   }
-  prune()
+  return true
+}
 
-  if (required.size > 0) {
-    const platform = await readyPlatform()
-    if (!platform) return
-    const stored = new Set<string>()
-    try {
-      const readback = await platform.rpc.listResumePositions()
-      for (const record of readback?.entries ?? []) {
-        for (const key of storedKeysOf(record)) stored.add(key)
-      }
-    } catch {
-      return
+async function verifyLegacyStored(required: Set<string>): Promise<boolean> {
+  if (required.size === 0) return true
+  const platform = await readyPlatform()
+  if (!platform) return false
+  const stored = new Set<string>()
+  try {
+    const readback = await platform.rpc.listResumePositions()
+    for (const record of readback?.entries ?? []) {
+      for (const key of storedKeysOf(record)) stored.add(key)
     }
-    for (const key of required) {
-      if (!stored.has(key)) return
-    }
+  } catch {
+    return false
   }
+  for (const key of required) {
+    if (!stored.has(key)) return false
+  }
+  return true
+}
+
+async function migrateLegacyState(): Promise<void> {
+  const legacy = await readLegacySource()
+  if (!legacy) return
+
+  const required = new Set<string>()
+  const migrated = await migrateLegacyEntries(legacy.entries, required)
+  prune()
+  if (!migrated) return
+
+  const verified = await verifyLegacyStored(required)
+  if (!verified) return
+
   try {
     await legacy.clear()
   } catch {
@@ -669,6 +699,66 @@ export function beginWatchSession(coordinates: { channelKey?: string | null; vid
   if (grave) grave.blocked = false
 }
 
+function computeProgressState(
+  input: WatchProgressInput,
+  previous: WatchHistoryEntry | null,
+  grave: { generation: number; blocked: boolean } | undefined,
+): { completed: boolean; playbackGeneration: number } {
+  const durationSec = finite(input.durationSec)
+  const positionSec = finite(input.positionSec)
+  const fraction = durationSec > 0 ? positionSec / durationSec : 0
+  const replaying = previous?.completed === true && fraction < MIN_RESUME_RATIO
+  const completedNow = durationSec > 0 && fraction >= COMPLETED_RATIO
+  const completed = replaying ? completedNow : previous?.completed === true || completedNow
+  const playbackGeneration = grave
+    ? grave.generation + 1
+    : (previous?.playbackGeneration ?? 0) + (replaying ? 1 : 0)
+  return { completed, playbackGeneration }
+}
+
+function resolveProgressMediaFields(
+  input: WatchProgressInput,
+  previous: WatchHistoryEntry | null,
+): Pick<WatchHistoryEntry, 'videoId' | 'channelKey' | 'publicBeeKey' | 'title' | 'channelName' | 'thumbnailUrl'> {
+  return {
+    videoId: text(input.videoId) ?? previous?.videoId ?? '',
+    channelKey: text(input.channelKey) ?? previous?.channelKey ?? '',
+    publicBeeKey: input.publicBeeKey ?? previous?.publicBeeKey ?? null,
+    title: text(input.title) ?? previous?.title ?? 'Untitled',
+    channelName: input.channelName ?? previous?.channelName,
+    thumbnailUrl: input.thumbnailUrl ?? previous?.thumbnailUrl ?? null,
+  }
+}
+
+function resolveProgressViewerFields(
+  input: WatchProgressInput,
+  previous: WatchHistoryEntry | null,
+  completed: boolean,
+  playbackGeneration: number,
+): Pick<WatchHistoryEntry, 'positionSec' | 'durationSec' | 'updatedAt' | 'completed' | 'saved' | 'identity' | 'playbackGeneration'> {
+  return {
+    positionSec: finite(input.positionSec),
+    durationSec: finite(input.durationSec),
+    updatedAt: Date.now(),
+    completed,
+    saved: input.saved ?? previous?.saved,
+    identity: input.identity ?? previous?.identity ?? null,
+    playbackGeneration,
+  }
+}
+
+function buildProgressEntry(
+  input: WatchProgressInput,
+  previous: WatchHistoryEntry | null,
+  completed: boolean,
+  playbackGeneration: number,
+): WatchHistoryEntry {
+  return {
+    ...resolveProgressMediaFields(input, previous),
+    ...resolveProgressViewerFields(input, previous, completed, playbackGeneration),
+  }
+}
+
 export async function recordProgress(input: WatchProgressInput): Promise<void> {
   try {
     const key = stateKeyOf(input)
@@ -680,35 +770,9 @@ export async function recordProgress(input: WatchProgressInput): Promise<void> {
     // player does not get to undo the delete; only a deliberate new watch does.
     if (grave?.blocked) return
 
-    const durationSec = finite(input.durationSec)
-    const positionSec = finite(input.positionSec)
     const previous = cache.get(key) ?? null
-    const fraction = durationSec > 0 ? positionSec / durationSec : 0
-    // Restarting a finished title is a new generation; anything else inside the
-    // current generation can move the position but never un-complete it. A
-    // write to a deleted key is a new watch too, and starts strictly above the
-    // tombstone so it wins outright rather than out-timestamping the delete.
-    const replaying = previous?.completed === true && fraction < MIN_RESUME_RATIO
-    const playbackGeneration = grave
-      ? grave.generation + 1
-      : (previous?.playbackGeneration ?? 0) + (replaying ? 1 : 0)
-    const completedNow = durationSec > 0 && fraction >= COMPLETED_RATIO
-
-    const entry: WatchHistoryEntry = {
-      videoId: text(input.videoId) ?? previous?.videoId ?? '',
-      channelKey: text(input.channelKey) ?? previous?.channelKey ?? '',
-      publicBeeKey: input.publicBeeKey ?? previous?.publicBeeKey ?? null,
-      title: text(input.title) ?? previous?.title ?? 'Untitled',
-      channelName: input.channelName ?? previous?.channelName,
-      thumbnailUrl: input.thumbnailUrl ?? previous?.thumbnailUrl ?? null,
-      positionSec,
-      durationSec,
-      updatedAt: Date.now(),
-      completed: replaying ? completedNow : previous?.completed === true || completedNow,
-      saved: input.saved ?? previous?.saved,
-      identity: input.identity ?? previous?.identity ?? null,
-      playbackGeneration,
-    }
+    const { completed, playbackGeneration } = computeProgressState(input, previous, grave)
+    const entry = buildProgressEntry(input, previous, completed, playbackGeneration)
 
     cache.set(key, entry)
     tombstones.delete(key)

@@ -1,42 +1,31 @@
+import {
+  PROTOCOL_VERSION,
+  HOST_ERROR_CODES,
+  createHostError
+} from './contracts.js'
+
+export {
+  PROTOCOL_VERSION,
+  HOST_ERROR_CODES,
+  createHostError
+}
+
 export type HostReadyData = {
   blobServerPort: number | null
   blobServerReady?: boolean
   blobServerError?: string | null
-  protocolVersion: 9
+  protocolVersion: typeof PROTOCOL_VERSION
 }
 
 export type HostLifecycleEvent =
   | { type: 'host.ready'; data: HostReadyData }
   | { type: 'host.error'; code: string; message: string; retryable: boolean; storedVersion?: number | null; expectedVersion?: number | null }
   | { type: 'transport.closed'; reason?: string }
-
-export const PROTOCOL_VERSION: 9
-
-export const HOST_ERROR_CODES: {
-  readonly HOST_START_FAILED: 'HOST_START_FAILED'
-  readonly STORAGE_INIT_FAILED: 'STORAGE_INIT_FAILED'
-  readonly PERMISSION_DENIED: 'PERMISSION_DENIED'
-  readonly TRANSPORT_DISCONNECTED: 'TRANSPORT_DISCONNECTED'
-  readonly PROTOCOL_VERSION_MISMATCH: 'PROTOCOL_VERSION_MISMATCH'
-  readonly STORED_PROTOCOL_VERSION_UNSUPPORTED: 'STORED_PROTOCOL_VERSION_UNSUPPORTED'
-  readonly CAPABILITY_UNAVAILABLE: 'CAPABILITY_UNAVAILABLE'
-  readonly OFFLINE_UNAVAILABLE: 'OFFLINE_UNAVAILABLE'
-  readonly REPLICATION_TIMEOUT: 'REPLICATION_TIMEOUT'
-  readonly PLAYBACK_URL_UNAVAILABLE: 'PLAYBACK_URL_UNAVAILABLE'
-  readonly PLAYER_LOAD_FAILED: 'PLAYER_LOAD_FAILED'
-}
-
-export function createHostError(
-  code: string,
-  message: string,
-  options?: { cause?: unknown; retryable?: boolean }
-): Error & { code: string; retryable: boolean; cause?: unknown }
-
 // --- Protocol client (merged from the former @peartube/protocol) ---
 
 export type ProtocolReadyData = {
   blobServerPort: number | null
-  protocolVersion: 9
+  protocolVersion: typeof PROTOCOL_VERSION
 }
 
 export type ProtocolNetworkStatus = {
@@ -712,6 +701,29 @@ export type ProviderError = {
   retryable: boolean
 }
 
+export type ProviderSearchSelector =
+  | {
+      namespace: string
+      identifier: string
+      kind: string
+      season?: number | null
+      episode?: number | null
+    }
+  | {
+      title: string
+      kind: string
+      year?: number | null
+      season?: number | null
+      episode?: number | null
+    }
+
+export type ProviderSearchDiagnostics = {
+  partial?: boolean
+  stale?: boolean
+  queriedServices?: number
+  respondingServices?: number
+}
+
 export type ProviderSearchHit = {
   schemaVersion: 1
   resolutionRef: string
@@ -723,10 +735,22 @@ export type ProviderSearchHit = {
   entityId?: string | null
   publicationId?: string | null
   expectedBytes?: number | null
+  entityKind?: string | null
+  localEntity?: boolean
 }
-
 export type ProviderResolution = ProviderSearchHit & {
   publisherId: string
+}
+
+export type ProviderMediaContext = {
+  kind?: string | null
+  namespace?: string | null
+  identifier?: string | null
+  title?: string | null
+  season?: number | null
+  episode?: number | null
+  releaseYear?: number | null
+  workEntityId?: string | null
 }
 
 export type AcquisitionRequest = {
@@ -913,10 +937,17 @@ export type MediaGraphProtocolNamespace = ProtocolNamespace & {
 
 export type ProviderProtocolNamespace = ProtocolNamespace & {
   search(request: {
-    query: string
+    query?: string
+    selector?: ProviderSearchSelector
     cursor?: string
     limit?: number
-  }): Promise<ProviderResult<{ hits: ProviderSearchHit[]; nextCursor?: string | null }>>
+  }): Promise<ProviderResult<{
+    hits: ProviderSearchHit[]
+    nextCursor?: string | null
+    diagnostics?: ProviderSearchDiagnostics | null
+    partial?: boolean
+    stale?: boolean
+  }>>
   resolveProviderRef(request: {
     resolutionRef: string
   }): Promise<ProviderResult<{ resolution: ProviderResolution }>>

@@ -13,6 +13,7 @@ import {
   PUBLISHER_RECORD_TYPES,
   createPublisherNamespaceDescriptor,
   decodePublisherNamespaceDescriptor,
+  decodePublisherOperationBody,
   derivePublisherId,
   encodePublisherNamespaceDescriptor,
   encodePublisherOperationBody,
@@ -173,6 +174,9 @@ function createCatalogRegistry({ catalogKey = bytes(32, 100), appendError = null
     async getWritableBindings() {
       return binding ? [binding] : []
     },
+    async listBindingPage() {
+      return { items: binding ? [binding] : [], nextCursor: null, errors: [], release: async () => {} }
+    },
     async resolve() {
       return binding
     },
@@ -321,8 +325,8 @@ test('provision reports one writable local catalog with public writer and signer
     }
   }
   const registry = {
-    async getWritableBindings() {
-      return [binding]
+    async listBindingPage() {
+      return { items: [binding], nextCursor: null, errors: [], release: async () => {} }
     },
     async provision() {
       return binding
@@ -539,7 +543,7 @@ test('real context registry durably applies a provisioned namespace genesis befo
       recoveryThreshold: 0,
       profileRef: b4a.alloc(0)
     })
-    async function submitRotationContribution(seed, signer) {
+    const submitRotationContribution = async (seed, signer) => {
       const transition = await api.preparePublisherRootOperation({
         intentId: intentId(seed),
         publisherId: hex(publisherId),
@@ -890,7 +894,7 @@ test('recovery transition requires the new root and committed recovery quorum', 
 test('publisher registry opens lazily so unrelated API contexts remain usable', async (t) => {
   const api = publisherApiModule.createPublisherApi({ ctx: {} })
   const result = await api.provisionPublisherCatalog({
-    publisherId: 'a'.repeat(64),
+    publisherId: hex(derivePublisherId(bytes(32, 1))),
     genesisRootKey: bytes(32, 1)
   })
   t.is(result.success, false)
@@ -1052,4 +1056,519 @@ test('publisher catalog provision is registered on shared and mobile handler sur
   await backend.preparePublisherRootOperation({ intentId: '1'.repeat(32) })
   await backend.submitPublisherRootOperation({ intentId: '1'.repeat(32) })
   t.alike(calls.map(call => call[0]), ['provision', 'prepare', 'submit'])
+})
+
+test('listBindingPage paginates persisted bindings and admits/evicts under capacity', async (t) => {
+  const values = new Map()
+  const metaDb = {
+    async get(key) { return values.has(key) ? { value: values.get(key) } : null },
+    async put(key, value) { values.set(key, value) },
+    async * createReadStream(options = {}) {
+      const gte = options.gte || ''
+      const lt = options.lt || '\xff'
+      const sortedKeys = [...values.keys()].sort()
+      for (const key of sortedKeys) {
+        if (key >= gte && key < lt) yield { key, value: values.get(key) }
+      }
+    }
+  }
+
+  const closedCatalogs = []
+  const catalogFactory = (_store, options) => {
+    return {
+      key: options.key ? b4a.from(options.key) : b4a.alloc(32, 1),
+      localWriterKey: null,
+      writable: false,
+      async ready() {},
+      async close() { closedCatalogs.push(b4a.toString(options.publisherId, 'hex')) }
+    }
+  }
+
+  const publishers = []
+  for (let i = 1; i <= 5; i++) {
+    const rootKey = b4a.alloc(32, i)
+    const pubId = derivePublisherId(rootKey)
+    const pubHex = b4a.toString(pubId, 'hex')
+    const bootKey = b4a.alloc(32, 100 + i)
+    publishers.push({ pubId, pubHex, rootKey, bootKey })
+    values.set(`publisher-catalog:v1:${pubHex}`, {
+      version: 1,
+      publisherId: pubHex,
+      genesisRootKey: b4a.toString(rootKey, 'hex'),
+      catalogBootstrapKey: b4a.toString(bootKey, 'hex')
+    })
+  }
+
+  const registry = publisherApiModule.createPublisherCatalogRegistry(
+    { store: {}, metaDb },
+    { catalogFactory, maxOpenCatalogs: 2 }
+  )
+
+  const page1 = await registry.listBindingPage({ limit: 2 })
+  t.is(page1.items.length, 2)
+  t.ok(page1.nextCursor)
+  await page1.release()
+
+  const page2 = await registry.listBindingPage({ cursor: page1.nextCursor, limit: 2 })
+  t.is(page2.items.length, 2)
+  t.ok(page2.nextCursor)
+  await page2.release()
+
+  const page3 = await registry.listBindingPage({ cursor: page2.nextCursor, limit: 2 })
+  t.is(page3.items.length, 1)
+  t.is(page3.nextCursor, null)
+  await page3.release()
+
+  t.is(closedCatalogs.length, 5, 'all transiently paged catalogs were cleanly released')
+
+  const snapshot = await registry.listBindings()
+  t.is(snapshot.length, 0, 'no unowned catalogs remain in admitted-open snapshot')
+
+  await registry.close()
+})
+
+test('listBindingPage pins current-page items and returns shorter page when remaining slots are protected', async (t) => {
+  const values = new Map()
+  const metaDb = {
+    async get(key) { return values.has(key) ? { value: values.get(key) } : null },
+    async put(key, value) { values.set(key, value) },
+    async * createReadStream(options = {}) {
+      const gte = options.gte || ''
+      const lt = options.lt || '\xff'
+      const limit = options.limit || Infinity
+      const sortedKeys = [...values.keys()].sort()
+      let count = 0
+      for (const key of sortedKeys) {
+        if (key >= gte && key < lt) {
+          yield { key, value: values.get(key) }
+          count++
+          if (count >= limit) break
+        }
+      }
+    }
+  }
+
+  const catalogStates = new Map()
+  const writableRoot = b4a.alloc(32, 99)
+  const writablePubId = derivePublisherId(writableRoot)
+  const writablePubHex = b4a.toString(writablePubId, 'hex')
+  const writableBoot = b4a.alloc(32, 199)
+  values.set(`publisher-catalog:v1:${writablePubHex}`, {
+    version: 1,
+    publisherId: writablePubHex,
+    genesisRootKey: b4a.toString(writableRoot, 'hex'),
+    catalogBootstrapKey: b4a.toString(writableBoot, 'hex')
+  })
+
+  for (let i = 1; i <= 3; i++) {
+    const rootKey = b4a.alloc(32, i)
+    const pubId = derivePublisherId(rootKey)
+    const pubHex = b4a.toString(pubId, 'hex')
+    const bootKey = b4a.alloc(32, 100 + i)
+    values.set(`publisher-catalog:v1:${pubHex}`, {
+      version: 1,
+      publisherId: pubHex,
+      genesisRootKey: b4a.toString(rootKey, 'hex'),
+      catalogBootstrapKey: b4a.toString(bootKey, 'hex')
+    })
+  }
+
+  const registry = publisherApiModule.createPublisherCatalogRegistry(
+    { store: {}, metaDb },
+    {
+      catalogFactory: (_store, options) => {
+        const pubHex = b4a.toString(options.publisherId, 'hex')
+        const isWritable = pubHex === writablePubHex
+        const state = {
+          key: options.key ? b4a.from(options.key) : b4a.alloc(32, 1),
+          localWriterKey: isWritable ? b4a.alloc(32, 88) : null,
+          writable: isWritable,
+          closed: false,
+          async ready() {},
+          async close() { this.closed = true }
+        }
+        catalogStates.set(pubHex, state)
+        return state
+      },
+      maxOpenCatalogs: 2
+    }
+  )
+
+  await registry.resolve(writablePubId)
+
+  const page1 = await registry.listBindingPage({ limit: 2, skipPublisherId: writablePubId })
+  t.ok(page1.items.length >= 1 && page1.items.length <= 2, 'page returns a scan-bounded batch of items')
+  for (const item of page1.items) {
+    t.is(item.catalog.closed, false, 'returned catalog is active and not closed')
+    t.is(item.transient, true, 'non-owned followers are page-leased')
+  }
+  t.ok(page1.nextCursor, 'scan budget advances even when skip filters reduce items')
+  await page1.release()
+  for (const item of page1.items) {
+    t.is(item.catalog.closed, true, 'transient catalog is released on page release')
+  }
+  t.is(catalogStates.get(writablePubHex).closed, false, 'owned live writable catalog was never closed')
+
+  // Walk remaining pages until exhaustion; live writable stays open.
+  let cursor = page1.nextCursor
+  let pages = 1
+  while (cursor) {
+    const page = await registry.listBindingPage({ cursor, limit: 2, skipPublisherId: writablePubId })
+    pages += 1
+    t.ok(pages <= 8, 'follower walk remains finite under skip filtering')
+    for (const item of page.items) {
+      t.is(item.catalog.closed, false, 'returned catalog on later page is active')
+    }
+    await page.release()
+    for (const item of page.items) {
+      t.is(item.catalog.closed, true, 'later-page transient released')
+    }
+    t.is(catalogStates.get(writablePubHex).closed, false, 'owned live writable catalog remains open')
+    cursor = page.nextCursor
+  }
+
+  await registry.close()
+})
+
+test('failed resolve at capacity does not evict healthy open catalogs and leaves listBindings unchanged', async (t) => {
+  const values = new Map()
+  const metaDb = {
+    async get(key) { return values.has(key) ? { value: values.get(key) } : null },
+    async put(key, value) { values.set(key, value) },
+    async * createReadStream(options = {}) {
+      for (const [key, value] of values) yield { key, value }
+    }
+  }
+
+  const catalogStates = new Map()
+  const catalogFactory = (_store, options) => {
+    const pubHex = b4a.toString(options.publisherId, 'hex')
+    const state = {
+      key: options.key ? b4a.from(options.key) : b4a.alloc(32, 1),
+      localWriterKey: null,
+      writable: false,
+      closed: false,
+      async ready() {},
+      async close() { this.closed = true }
+    }
+    catalogStates.set(pubHex, state)
+    return state
+  }
+
+  const pubIds = []
+  for (let i = 1; i <= 2; i++) {
+    const rootKey = b4a.alloc(32, i)
+    const pubId = derivePublisherId(rootKey)
+    const pubHex = b4a.toString(pubId, 'hex')
+    const bootKey = b4a.alloc(32, 100 + i)
+    pubIds.push(pubId)
+    values.set(`publisher-catalog:v1:${pubHex}`, {
+      version: 1,
+      publisherId: pubHex,
+      genesisRootKey: b4a.toString(rootKey, 'hex'),
+      catalogBootstrapKey: b4a.toString(bootKey, 'hex')
+    })
+  }
+
+  const registry = publisherApiModule.createPublisherCatalogRegistry(
+    { store: {}, metaDb },
+    { catalogFactory, maxOpenCatalogs: 2 }
+  )
+
+  await registry.resolve(pubIds[0])
+  await registry.resolve(pubIds[1])
+
+  const beforeBindings = await registry.listBindings()
+  t.is(beforeBindings.length, 2)
+  t.is(beforeBindings[0].catalog.closed, false)
+  t.is(beforeBindings[1].catalog.closed, false)
+
+  const unknownPublisherId = b4a.alloc(32, 255)
+  await t.exception(
+    registry.resolve(unknownPublisherId),
+    { code: 'PUBLISHER_CATALOG_UNAVAILABLE' }
+  )
+
+  const afterBindings = await registry.listBindings()
+  t.is(afterBindings.length, 2)
+  t.alike(afterBindings.map(b => b.publisherId), beforeBindings.map(b => b.publisherId))
+  t.is(afterBindings[0].catalog.closed, false, 'first catalog was not evicted or closed')
+  t.is(afterBindings[1].catalog.closed, false, 'second catalog was not evicted or closed')
+
+  await registry.close()
+})
+
+function createMemoryMetaDb(values = new Map()) {
+  return {
+    async get(key) { return values.has(key) ? { value: values.get(key) } : null },
+    async put(key, value) { values.set(key, value) },
+    async * createReadStream(options = {}) {
+      const gte = options.gte || ''
+      const lt = options.lt || '\xff'
+      const sortedKeys = [...values.keys()].sort()
+      for (const key of sortedKeys) {
+        if (key >= gte && key < lt) yield { key, value: values.get(key) }
+      }
+    }
+  }
+}
+
+function putCatalogMapping(values, rootSeed, bootSeed) {
+  const rootKey = b4a.alloc(32, rootSeed)
+  const pubId = derivePublisherId(rootKey)
+  const pubHex = b4a.toString(pubId, 'hex')
+  const bootKey = b4a.alloc(32, bootSeed)
+  values.set(`publisher-catalog:v1:${pubHex}`, {
+    version: 1,
+    publisherId: pubHex,
+    genesisRootKey: b4a.toString(rootKey, 'hex'),
+    catalogBootstrapKey: b4a.toString(bootKey, 'hex')
+  })
+  return { rootKey, pubId, pubHex, bootKey }
+}
+
+test('listBindingPage writableOnly bounds scanned mappings and open handles with no matches', async (t) => {
+  const values = new Map()
+  values.set('publisher-catalog:v1:not-a-valid-hex-key', { version: 1 })
+  values.set('publisher-catalog:v1:zzzz', { version: 1 })
+  for (let i = 1; i <= 12; i++) putCatalogMapping(values, i, 40 + i)
+
+  let liveOpens = 0
+  let peakLiveOpens = 0
+  let readyCalls = 0
+  const catalogFactory = (_store, options) => {
+    liveOpens += 1
+    peakLiveOpens = Math.max(peakLiveOpens, liveOpens)
+    readyCalls += 1
+    return {
+      key: options.key ? b4a.from(options.key) : b4a.alloc(32, 1),
+      localWriterKey: null,
+      writable: false,
+      closed: false,
+      async ready() {},
+      async close() {
+        this.closed = true
+        liveOpens = Math.max(0, liveOpens - 1)
+      }
+    }
+  }
+
+  const registry = publisherApiModule.createPublisherCatalogRegistry(
+    { store: {}, metaDb: createMemoryMetaDb(values) },
+    { catalogFactory, maxOpenCatalogs: 3 }
+  )
+
+  let cursor = null
+  let pages = 0
+  let totalItems = 0
+  const seenCursors = new Set()
+  do {
+    if (cursor) {
+      t.is(seenCursors.has(cursor), false, 'continuation cursors are unique and forward-only')
+      seenCursors.add(cursor)
+    }
+    const page = await registry.listBindingPage({ cursor, limit: 3, writableOnly: true })
+    pages += 1
+    totalItems += page.items.length
+    t.ok(pages <= 8, 'no-match writableOnly walk stays finite over >cache mappings')
+    t.is(page.items.length, 0, 'writableOnly yields no non-writable items')
+    t.ok(liveOpens <= 3, 'open handles stay within the scan/page bound during writableOnly miss path')
+    await page.release()
+    t.is(liveOpens, 0, 'page release leaves no leftover transient opens on miss path')
+    cursor = page.nextCursor
+  } while (cursor)
+
+  t.is(totalItems, 0)
+  t.ok(readyCalls >= 12, 'valid mappings were probed')
+  t.ok(peakLiveOpens <= 3, 'peak concurrent opens never exceeded page scan bound')
+  t.is((await registry.listBindings()).length, 0, 'miss path did not admit followers into opened')
+  await registry.close()
+})
+
+test('listBindingPage closes catalogs when ready throws and on reader abort', async (t) => {
+  const values = new Map()
+  const failing = putCatalogMapping(values, 1, 101)
+  putCatalogMapping(values, 2, 102)
+  putCatalogMapping(values, 3, 103)
+
+  const states = new Map()
+  const catalogFactory = (_store, options) => {
+    const pubHex = b4a.toString(options.publisherId, 'hex')
+    const state = {
+      key: options.key ? b4a.from(options.key) : b4a.alloc(32, 1),
+      localWriterKey: null,
+      writable: false,
+      closed: false,
+      async ready() {
+        if (pubHex === failing.pubHex) throw new Error('ready failed')
+      },
+      async close() { this.closed = true }
+    }
+    states.set(pubHex, state)
+    return state
+  }
+
+  const registry = publisherApiModule.createPublisherCatalogRegistry(
+    { store: {}, metaDb: createMemoryMetaDb(values) },
+    { catalogFactory, maxOpenCatalogs: 8 }
+  )
+
+  const page = await registry.listBindingPage({ limit: 8 })
+  t.is(page.items.length, 2, 'ready failure is skipped while healthy mappings still page')
+  t.is(page.errors.length, 1)
+  t.is(page.errors[0].key, failing.pubHex)
+  t.is(states.get(failing.pubHex).closed, true, 'ready() throw closes the failed candidate')
+  for (const item of page.items) t.is(item.catalog.closed, false)
+  await page.release()
+  for (const item of page.items) t.is(item.catalog.closed, true, 'healthy transients release cleanly after ready-error page')
+
+  const values2 = new Map()
+  for (let i = 1; i <= 6; i++) putCatalogMapping(values2, i, 120 + i)
+
+  let openedBeforeAbort = 0
+  const abortStates = []
+  const ac = new AbortController()
+  const abortFactory = (_store, options) => {
+    const state = {
+      key: options.key ? b4a.from(options.key) : b4a.alloc(32, 1),
+      localWriterKey: null,
+      writable: false,
+      closed: false,
+      async ready() {
+        openedBeforeAbort += 1
+        abortStates.push(state)
+        if (openedBeforeAbort >= 2) ac.abort(new Error('reader aborted'))
+      },
+      async close() { this.closed = true }
+    }
+    return state
+  }
+
+  const abortRegistry = publisherApiModule.createPublisherCatalogRegistry(
+    { store: {}, metaDb: createMemoryMetaDb(values2) },
+    { catalogFactory: abortFactory, maxOpenCatalogs: 8 }
+  )
+
+  await t.exception(abortRegistry.listBindingPage({ limit: 8, signal: ac.signal }))
+  t.ok(abortStates.length >= 2, 'abort fired after some catalogs opened')
+  t.ok(abortStates.every(state => state.closed === true), 'abort releases already-opened transients')
+  t.is((await abortRegistry.listBindings()).length, 0, 'abort did not admit partial opens')
+
+  await registry.close()
+  await abortRegistry.close()
+})
+
+test('getWritableBindings cold-discovers writable at full follower cache without eviction', async (t) => {
+  const values = new Map()
+  const followers = []
+  for (let i = 1; i <= 3; i++) followers.push(putCatalogMapping(values, i, 50 + i))
+  const local = putCatalogMapping(values, 99, 199)
+
+  const states = new Map()
+  const catalogFactory = (_store, options) => {
+    const pubHex = b4a.toString(options.publisherId, 'hex')
+    const isWritable = pubHex === local.pubHex
+    const state = {
+      key: options.key ? b4a.from(options.key) : b4a.alloc(32, 1),
+      localWriterKey: isWritable ? b4a.alloc(32, 88) : null,
+      writable: isWritable,
+      closed: false,
+      async ready() {},
+      async close() { this.closed = true }
+    }
+    states.set(pubHex, state)
+    return state
+  }
+
+  const registry = publisherApiModule.createPublisherCatalogRegistry(
+    { store: {}, metaDb: createMemoryMetaDb(values) },
+    { catalogFactory, maxOpenCatalogs: 3 }
+  )
+
+  // Fill the entire follower cache with active followers (no eviction allowed).
+  for (const follower of followers) {
+    const binding = await registry.resolve(follower.pubId)
+    t.is(binding.catalog.closed, false)
+  }
+  t.is((await registry.listBindings()).length, 3, 'follower cache is full')
+
+  // Additional follower resolve must still fail capacity without touching writables.
+  const extra = putCatalogMapping(values, 4, 54)
+  await t.exception(registry.resolve(extra.pubId), /PUBLISHER_CATALOG_CAPACITY|PUBLISHER_CATALOG_UNAVAILABLE/)
+
+  for (const follower of followers) {
+    t.is(states.get(follower.pubHex).closed, false, 'active follower was not evicted for capacity pressure')
+  }
+
+  const writables = await registry.getWritableBindings()
+  t.is(writables.length, 1, 'cold discovery finds persisted local writable despite full follower cache')
+  t.alike(writables[0].publisherId, local.pubId)
+  t.is(writables[0].catalog.closed, false, 'returned writable handle is live')
+  t.is(writables[0].transient, undefined, 'writable is registry-owned, not page-leased')
+  t.is(states.get(local.pubHex).closed, false, 'discovered writable survived page release')
+
+  // resolve must return the retained local writable without evicting followers.
+  const resolved = await registry.resolve(local.pubId)
+  t.is(resolved.catalog.closed, false)
+  t.ok(resolved.catalog.writable || resolved.catalog.localWriterKey != null)
+  for (const follower of followers) {
+    t.is(states.get(follower.pubHex).closed, false, 'followers remain after writable resolve')
+  }
+
+  const admitted = await registry.listBindings()
+  t.ok(admitted.some(b => b4a.equals(b.publisherId, local.pubId)))
+  t.is(admitted.filter(b => followers.some(f => b4a.equals(f.pubId, b.publisherId))).length, 3)
+
+  await registry.close()
+})
+
+test('listBindingPage restores more than active cache via finite pages without closing active follower', async (t) => {
+  const values = new Map()
+  const pubs = []
+  for (let i = 1; i <= 20; i++) pubs.push(putCatalogMapping(values, i, 70 + i))
+
+  const states = new Map()
+  const catalogFactory = (_store, options) => {
+    const pubHex = b4a.toString(options.publisherId, 'hex')
+    const state = {
+      key: options.key ? b4a.from(options.key) : b4a.alloc(32, 1),
+      localWriterKey: null,
+      writable: false,
+      closed: false,
+      async ready() {},
+      async close() { this.closed = true }
+    }
+    states.set(pubHex, state)
+    return state
+  }
+
+  const registry = publisherApiModule.createPublisherCatalogRegistry(
+    { store: {}, metaDb: createMemoryMetaDb(values) },
+    { catalogFactory, maxOpenCatalogs: 3 }
+  )
+
+  const active = await registry.resolve(pubs[0].pubId)
+  t.is(active.catalog.closed, false)
+
+  let cursor = null
+  let seen = 0
+  let pages = 0
+  do {
+    const page = await registry.listBindingPage({ cursor, limit: 3 })
+    pages += 1
+    seen += page.items.length
+    t.ok(pages <= 12, 'full persisted walk stays page-bounded')
+    for (const item of page.items) {
+      t.is(item.catalog.closed, false, 'page items remain usable until release')
+    }
+    await page.release()
+    t.is(active.catalog.closed, false, 'active follower remains usable across paging')
+    cursor = page.nextCursor
+  } while (cursor)
+
+  t.is(seen, 20, 'full persisted mapping set is reachable across pages')
+  t.is((await registry.listBindings()).length, 1, 'only the actively resolved follower remains admitted')
+  t.is(active.catalog.closed, false)
+
+  await registry.close()
 })

@@ -907,6 +907,29 @@ async function withStagingCore(store, id, fn) {
  * exactly why it lives here rather than in a bucket object or a manager's
  * memory: there is no second place that could disagree with it.
  */
+function isValidStagingTimes(value) {
+  return Number.isSafeInteger(value?.createdAt) && Number.isSafeInteger(value?.touchedAt)
+}
+
+function isValidLegacyStagingRecord(value) {
+  return value?.version === 1 &&
+    (value.etag === null || typeof value.etag === 'string') &&
+    isValidStagingTimes(value)
+}
+
+function isValidCurrentStagingRecord(value) {
+  return value?.version === STAGING_IDENTITY_VERSION &&
+    value.identity && typeof value.identity === 'object' &&
+    ['sha256', 'etag'].includes(value.identity.kind) &&
+    typeof value.identity.value === 'string' &&
+    Number.isSafeInteger(value.byteLength) && value.byteLength >= 0 &&
+    isValidStagingTimes(value)
+}
+
+function isValidStagingRecord(value) {
+  return isValidLegacyStagingRecord(value) || isValidCurrentStagingRecord(value)
+}
+
 async function readStagingIdentity(staging) {
   const raw = await staging.getUserData(STAGING_IDENTITY_KEY)
   if (raw === null || raw === undefined) return null
@@ -916,18 +939,7 @@ async function readStagingIdentity(staging) {
   } catch {
     throw stagingStateError('the staging identity record is unreadable', 'ASSET_STAGING_IDENTITY_CORRUPT')
   }
-  const validTimes = Number.isSafeInteger(value?.createdAt) &&
-    Number.isSafeInteger(value?.touchedAt)
-  const legacy = value?.version === 1 &&
-    (value.etag === null || typeof value.etag === 'string') &&
-    validTimes
-  const current = value?.version === STAGING_IDENTITY_VERSION &&
-    value.identity && typeof value.identity === 'object' &&
-    ['sha256', 'etag'].includes(value.identity.kind) &&
-    typeof value.identity.value === 'string' &&
-    Number.isSafeInteger(value.byteLength) && value.byteLength >= 0 &&
-    validTimes
-  if (!legacy && !current) {
+  if (!isValidStagingRecord(value)) {
     throw stagingStateError(
       'the staging identity record is not the shape this version writes',
       'ASSET_STAGING_IDENTITY_CORRUPT'
@@ -1018,48 +1030,45 @@ async function confirmStagedTail({ staging, stagingStore, staged, confirmed, sig
  * anywhere, which is what makes this survive a process that died without
  * getting to write one down.
  */
-async function prepareResume({ staging, stagingStore, staged, resume, signal }) {
-  let record = await readStagingIdentity(staging)
-  const timestamp = resume.now()
-
-  if (record === null) {
-    if (staging.length > 0) {
-      throw stagingStateError(
-        'the staging core holds blocks but no identity record, so nothing can say which source they came from',
-        'ASSET_STAGING_IDENTITY_CORRUPT'
-      )
-    }
-    await writeStagingIdentity(staging, {
-      version: STAGING_IDENTITY_VERSION,
-      identity: resume.identity,
-      byteLength: resume.byteLength,
-      createdAt: timestamp,
-      touchedAt: timestamp,
-    })
-    return { byteOffset: 0, blockIndex: 0, complete: resume.byteLength === 0, resumed: false }
+async function initNewStagingIdentity(staging, resume, timestamp) {
+  if (staging.length > 0) {
+    throw stagingStateError(
+      'the staging core holds blocks but no identity record, so nothing can say which source they came from',
+      'ASSET_STAGING_IDENTITY_CORRUPT'
+    )
   }
-  // Version 1 stored only an ETag. Migrate it in place after proving that the
-  // current source reports the same ETag; a null legacy ETag cannot prove
-  // continuity and remains a hard failure.
-  if (record.version === 1) {
-    const stagedIdentity = typeof record.etag === 'string' && record.etag.length > 0
-      ? { kind: 'etag', value: record.etag }
-      : null
-    if (stagedIdentity === null ||
-        resume.identity.kind !== stagedIdentity.kind ||
-        resume.identity.value !== stagedIdentity.value) {
-      throw sourceIdentityChangedError(stagedIdentity, resume.identity)
-    }
-    record = {
-      version: STAGING_IDENTITY_VERSION,
-      identity: stagedIdentity,
-      byteLength: resume.byteLength,
-      createdAt: record.createdAt,
-      touchedAt: record.touchedAt,
-    }
-    await writeStagingIdentity(staging, record)
-  }
+  await writeStagingIdentity(staging, {
+    version: STAGING_IDENTITY_VERSION,
+    identity: resume.identity,
+    byteLength: resume.byteLength,
+    createdAt: timestamp,
+    touchedAt: timestamp,
+  })
+  return { byteOffset: 0, blockIndex: 0, complete: resume.byteLength === 0, resumed: false }
+}
 
+async function migrateLegacyStagingRecord(staging, record, resume) {
+  if (record.version !== 1) return record
+  const stagedIdentity = typeof record.etag === 'string' && record.etag.length > 0
+    ? { kind: 'etag', value: record.etag }
+    : null
+  if (stagedIdentity === null ||
+      resume.identity.kind !== stagedIdentity.kind ||
+      resume.identity.value !== stagedIdentity.value) {
+    throw sourceIdentityChangedError(stagedIdentity, resume.identity)
+  }
+  const migrated = {
+    version: STAGING_IDENTITY_VERSION,
+    identity: stagedIdentity,
+    byteLength: resume.byteLength,
+    createdAt: record.createdAt,
+    touchedAt: record.touchedAt,
+  }
+  await writeStagingIdentity(staging, migrated)
+  return migrated
+}
+
+function validateResumeIdentity(record, resume, staging) {
   const isStagedComplete = staging.byteLength === resume.byteLength && staging.length > 0
   const incoming = resume.identity
   const resumeMatchesStaged = (incoming && record.identity.kind === incoming.kind && record.identity.value === incoming.value) ||
@@ -1070,7 +1079,9 @@ async function prepareResume({ staging, stagingStore, staged, resume, signal }) 
   if (!resumeMatchesStaged || record.byteLength !== resume.byteLength) {
     throw sourceIdentityChangedError(record.identity, incoming || record.identity)
   }
+}
 
+function validateStagingBoundaries(staging, record, resume, timestamp) {
   const idle = timestamp - record.touchedAt
   if (idle > resume.ttlMs) {
     throw stagingStateError(
@@ -1086,6 +1097,18 @@ async function prepareResume({ staging, stagingStore, staged, resume, signal }) 
       'ASSET_STAGING_IDENTITY_CORRUPT'
     )
   }
+}
+
+async function prepareResume({ staging, stagingStore, staged, resume, signal }) {
+  let record = await readStagingIdentity(staging)
+  const timestamp = resume.now()
+
+  if (record === null) {
+    return initNewStagingIdentity(staging, resume, timestamp)
+  }
+  record = await migrateLegacyStagingRecord(staging, record, resume)
+  validateResumeIdentity(record, resume, staging)
+  validateStagingBoundaries(staging, record, resume, timestamp)
 
   const confirmed = await confirmedStagingBlocks({ stagingStore, length: staging.length, signal })
   staged.uploaded = confirmed
@@ -1280,6 +1303,151 @@ export function createStaticAssetManifest(input = {}) {
  * failures keep a truthful prefix; identity, hash, Merkle, and staged-leaf
  * failures reclaim or quarantine it according to classifyIngestFailure.
  */
+async function initWriteStaticAssetContext({
+  store,
+  reader,
+  signal,
+  offload,
+  resume,
+  preferStaging,
+}) {
+  assertWriteInput(store, reader)
+  const sourceReader = createSourceReader(reader)
+  let description
+  try {
+    description = await sourceReader.describe({ signal })
+  } catch (error) {
+    await sourceReader.close(error).catch(() => {})
+    throw error
+  }
+  try {
+    const resumeState = normalizeResume(resume, description)
+    const { createOffloader, createStagingStore } = normalizeOffload(offload)
+    if (resumeState !== null && !sourceReader.resumable) throw resumeUnsupportedError()
+    if (resumeState !== null && (createOffloader === null || createStagingStore === null)) {
+      throw resumeUnsupportedError()
+    }
+    const streaming = createOffloader !== null && (resumeState !== null || !sourceReader.resumable ||
+      (preferStaging === true && createStagingStore !== null))
+    if (streaming && createStagingStore === null) throw sourceNotReopenableError()
+    assertNotCancelled(signal)
+    const stagingName = resumeState === null
+      ? `${STAGING_NAME_PREFIX}${b4a.toString(crypto.randomBytes(16), 'hex')}`
+      : stagingCoreName(resumeState.id)
+    const stagingKeyPair = await store.createKeyPair(stagingName)
+    const staging = store.get({ keyPair: stagingKeyPair })
+    return {
+      sourceReader,
+      description,
+      resumeState,
+      createOffloader,
+      createStagingStore,
+      streaming,
+      staging,
+    }
+  } catch (error) {
+    await sourceReader.close(error).catch(() => {})
+    throw error
+  }
+}
+
+function buildAppendedCallback({ createOffloader, streaming, uploads, staging, stagingStore, staged, signal }) {
+  if (createOffloader === null) return null
+  if (streaming) {
+    return (index, block) => uploads.start(() => offloadStagedBlock({
+      staging,
+      stagingStore,
+      staged,
+      index,
+      block: b4a.from(block),
+      signal,
+    }))
+  }
+  return (index) => dropStagedBlockData(staging.core.state.storage, index)
+}
+
+async function executeCoreIngest({
+  staging,
+  finalCore,
+  descriptor,
+  createOffloader,
+  streaming,
+  stagingStore,
+  staged,
+  sourceReader,
+  description,
+  signal,
+}) {
+  await copyStaticPrologue({
+    sourceState: staging.core.state,
+    target: finalCore,
+  })
+  if (createOffloader === null) {
+    return null
+  }
+  assertNotCancelled(signal)
+  const offloader = assertOffloader(await createOffloader({ core: finalCore, descriptor, signal }))
+  assertNotCancelled(signal)
+  if (streaming) {
+    return ingestStagedBlocks({
+      staging,
+      finalCore,
+      descriptor,
+      stagingStore,
+      staged,
+      offloader,
+      signal,
+    })
+  }
+  return ingestBoundedSource({
+    staging,
+    finalCore,
+    descriptor,
+    source: openReaderBytes(sourceReader, {
+      offset: 0,
+      length: description.byteLength,
+      signal,
+    }),
+    offloader,
+    signal,
+  })
+}
+
+function handleStagingError(error, staging, resumeState, staged) {
+  const retainStaging = retainStagingState(error, resumeState)
+  if (retainStaging) {
+    annotateRetainedStaging(error, staging, resumeState)
+  } else if (resumeState !== null && staging && Number.isSafeInteger(staging.length)) {
+    staged.uploaded = Math.max(staged.uploaded, staging.length)
+  }
+  return retainStaging
+}
+
+async function cleanupStagingOnError(stagingStore, retainStaging, stagedUploaded, error) {
+  if (stagingStore !== null && !retainStaging && error !== null && typeof error === 'object') {
+    const cleanup = await purgeStagingObjects(stagingStore, stagedUploaded)
+    if (cleanup.orphaned.length > 0) {
+      error.orphanedStagingKeys = cleanup.orphaned
+      if (cleanup.error !== null) error.stagingCleanupError = cleanup.error
+    }
+  }
+}
+
+async function finalizeStagingCleanup(stagingStore, staged, ingest, resumeState, resumeAtBlock) {
+  if (stagingStore === null) return
+  const cleanup = await purgeStagingObjects(stagingStore, staged.uploaded)
+  if (ingest !== null) {
+    ingest.staging = {
+      uploaded: staged.uploaded,
+      restored: staged.restored,
+      deleted: cleanup.deleted,
+      orphaned: cleanup.orphaned,
+      ...(cleanup.error !== null ? { error: cleanup.error } : {}),
+    }
+    if (resumeState !== null) ingest.staging.resumed = resumeAtBlock
+  }
+}
+
 export async function writeStaticAsset({
   store,
   reader = null,
@@ -1295,44 +1463,23 @@ export async function writeStaticAsset({
   // re-read, which is cheaper than object-store round trips.
   preferStaging = false,
 } = {}) {
-  assertWriteInput(store, reader)
-  const sourceReader = createSourceReader(reader)
-  let description
-  try {
-    description = await sourceReader.describe({ signal })
-  } catch (error) {
-    await sourceReader.close(error).catch(() => {})
-    throw error
-  }
-  let resumeState
-  let createOffloader
-  let createStagingStore
-  let streaming
-  let staging
-  try {
-    resumeState = normalizeResume(resume, description)
-    ;({ createOffloader, createStagingStore } = normalizeOffload(offload))
-    if (resumeState !== null && !sourceReader.resumable) throw resumeUnsupportedError()
-    if (resumeState !== null && (createOffloader === null || createStagingStore === null)) {
-      throw resumeUnsupportedError()
-    }
-    // An expensive source asked for staging: upload staged blocks in pass 1
-    // and restore them in pass 2, instead of re-reading the whole title from
-    // the source a second time. Local sources keep the re-read - it is
-    // cheaper than object-store round trips.
-    streaming = createOffloader !== null && (resumeState !== null || !sourceReader.resumable ||
-      (preferStaging === true && createStagingStore !== null))
-    if (streaming && createStagingStore === null) throw sourceNotReopenableError()
-    assertNotCancelled(signal)
-    const stagingName = resumeState === null
-      ? `${STAGING_NAME_PREFIX}${b4a.toString(crypto.randomBytes(16), 'hex')}`
-      : stagingCoreName(resumeState.id)
-    const stagingKeyPair = await store.createKeyPair(stagingName)
-    staging = store.get({ keyPair: stagingKeyPair })
-  } catch (error) {
-    await sourceReader.close(error).catch(() => {})
-    throw error
-  }
+  const context = await initWriteStaticAssetContext({
+    store,
+    reader,
+    signal,
+    offload,
+    resume,
+    preferStaging,
+  })
+  const {
+    sourceReader,
+    description,
+    resumeState,
+    createOffloader,
+    createStagingStore,
+    streaming,
+    staging,
+  } = context
 
   let finalCore = null
   let descriptor = null
@@ -1354,6 +1501,7 @@ export async function writeStaticAsset({
   // Which block a resumed attempt started at, reported so a caller can see that
   // an interruption cost it nothing.
   let resumeAtBlock = 0
+
   try {
     try {
       await staging.ready()
@@ -1369,6 +1517,15 @@ export async function writeStaticAsset({
       assertNotCancelled(signal)
 
       if (!resumeAt.complete) {
+        const onAppended = buildAppendedCallback({
+          createOffloader,
+          streaming,
+          uploads,
+          staging,
+          stagingStore,
+          staged,
+          signal,
+        })
         await appendCanonicalSource(staging, openReaderBytes(sourceReader, {
           offset: resumeAt.byteOffset,
           length: description.byteLength - resumeAt.byteOffset,
@@ -1377,18 +1534,7 @@ export async function writeStaticAsset({
           blockSize: ASSET_BLOCK_SIZE,
           signal,
           startIndex: resumeAt.blockIndex,
-          onAppended: createOffloader === null
-            ? null
-            : (streaming
-                ? (index, block) => uploads.start(() => offloadStagedBlock({
-                  staging,
-                  stagingStore,
-                  staged,
-                  index,
-                  block: b4a.from(block),
-                  signal,
-                }))
-                : (index) => dropStagedBlockData(staging.core.state.storage, index)),
+          onAppended,
         })
       }
       // Wait for all in-flight block uploads to land before manifest creation
@@ -1415,46 +1561,18 @@ export async function writeStaticAsset({
         manifest: descriptor.hypercoreManifest,
         writable: false,
       })
-      if (createOffloader === null) {
-        await copyStaticPrologue({
-          sourceState: staging.core.state,
-          target: finalCore,
-        })
-      } else {
-        // The finished core learns its length, byte length, roots and bitfield
-        // from the completed staging state via prologue copy.
-        await copyStaticPrologue({
-          sourceState: staging.core.state,
-          target: finalCore,
-        })
-        assertNotCancelled(signal)
-        const offloader = assertOffloader(await createOffloader({ core: finalCore, descriptor, signal }))
-        assertNotCancelled(signal)
-        if (streaming) {
-          ingest = await ingestStagedBlocks({
-            staging,
-            finalCore,
-            descriptor,
-            stagingStore,
-            staged,
-            offloader,
-            signal,
-          })
-        } else {
-          ingest = await ingestBoundedSource({
-            staging,
-            finalCore,
-            descriptor,
-            source: openReaderBytes(sourceReader, {
-              offset: 0,
-              length: description.byteLength,
-              signal,
-            }),
-            offloader,
-            signal,
-          })
-        }
-      }
+      ingest = await executeCoreIngest({
+        staging,
+        finalCore,
+        descriptor,
+        createOffloader,
+        streaming,
+        stagingStore,
+        staged,
+        sourceReader,
+        description,
+        signal,
+      })
       const verified = await verifyStaticAssetDescriptor(finalCore, descriptor)
       assertNotCancelled(signal)
       if (!verified) {
@@ -1465,30 +1583,14 @@ export async function writeStaticAsset({
       }
     } catch (error) {
       await uploads.settle().catch(() => {})
-      retainStaging = retainStagingState(error, resumeState)
-      if (retainStaging) annotateRetainedStaging(error, staging, resumeState)
-      else if (resumeState !== null && staging && Number.isSafeInteger(staging.length)) {
-        staged.uploaded = Math.max(staged.uploaded, staging.length)
-      }
+      retainStaging = handleStagingError(error, staging, resumeState, staged)
       throw error
     } finally {
       if (retainStaging) await closeStagingCore(staging)
       else await removeStagingCore(staging)
     }
 
-    if (stagingStore !== null) {
-      const cleanup = await purgeStagingObjects(stagingStore, staged.uploaded)
-      if (ingest !== null) {
-        ingest.staging = {
-          uploaded: staged.uploaded,
-          restored: staged.restored,
-          deleted: cleanup.deleted,
-          orphaned: cleanup.orphaned,
-          ...(cleanup.error !== null ? { error: cleanup.error } : {}),
-        }
-        if (resumeState !== null) ingest.staging.resumed = resumeAtBlock
-      }
-    }
+    await finalizeStagingCleanup(stagingStore, staged, ingest, resumeState, resumeAtBlock)
 
     assertNotCancelled(signal)
     await sourceReader.close()
@@ -1502,13 +1604,7 @@ export async function writeStaticAsset({
     // A resumable interruption is the exception: its staging objects are the
     // progress, and purging them here is exactly the bug this path exists to
     // stop.
-    if (stagingStore !== null && !retainStaging && error !== null && typeof error === 'object') {
-      const cleanup = await purgeStagingObjects(stagingStore, staged.uploaded)
-      if (cleanup.orphaned.length > 0) {
-        error.orphanedStagingKeys = cleanup.orphaned
-        if (cleanup.error !== null) error.stagingCleanupError = cleanup.error
-      }
-    }
+    await cleanupStagingOnError(stagingStore, retainStaging, staged.uploaded, error)
     throw error
   }
 }

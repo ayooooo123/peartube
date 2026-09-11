@@ -1,173 +1,248 @@
 import test from 'brittle'
-import { createExecutor } from '../src/add/executor.js'
-import { createJobStore } from '../src/add/job-store.js'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { runAddCommand } from '../src/add/index.js'
 
-function fakeBee () {
-  const map = new Map()
-  return {
-    map,
-    async get (key) { return map.has(key) ? { value: map.get(key) } : null },
-    async put (key, value) { map.set(key, JSON.parse(JSON.stringify(value))) },
-    async del (key) { map.delete(key) },
-    batch () {
-      const staged = []
-      return { async put (k, v) { staged.push([k, v]) }, async flush () { for (const [k, v] of staged) map.set(k, JSON.parse(JSON.stringify(v))) } }
-    },
-    async * createReadStream ({ gte, lt } = {}) {
-      for (const key of [...map.keys()].sort()) {
-        if (gte !== undefined && key < gte) continue
-        if (lt !== undefined && key >= lt) continue
-        yield { key, value: map.get(key) }
-      }
-    }
-  }
-}
-
+const PUBLISHER_ID = 'e'.repeat(64)
 const CHANNEL = { channelKey: 'chan-1', writerKeyHex: 'a'.repeat(64), publicBeeKey: 'b'.repeat(64) }
 
-function baseDeps (overrides = {}) {
-  const calls = { download: 0, upload: [], pin: 0, project: 0, announce: 0, finalize: 0, markDurable: 0, claims: [] }
-  const deps = {
-    resolveChannel: async () => CHANNEL,
-    loadChannel: async () => CHANNEL,
-    duplicateCheck: { check: async () => ({ status: 'ok', advisories: [] }) },
-    deriveImportClaimantId: (writer, jobId) => `claim:${writer.slice(0, 4)}:${jobId}`,
-    writeClaim: async (claim) => { calls.claims.push(claim) },
-    resolveClaimWinner: async ({ identityKey }) => ({ claimantId: `claim:${CHANNEL.writerKeyHex.slice(0, 4)}:job-1`, identityKey }),
-    downloadSource: async () => { calls.download += 1; return { artifactPath: '/tmp/pilot.mkv', checksum: 'sha256:v' } },
-    uploadFromPath: async (args) => { calls.upload.push(args); return { videoId: args.videoId, channelKey: CHANNEL.channelKey, blobKey: 'blob-1' } },
-    requestPin: async () => { calls.pin += 1 },
-    awaitDurable: async () => ({ verified: true, holders: ['relay-1'] }),
-    publication: {
-      markDurabilityVerified: async () => { calls.markDurable += 1 },
-      project: async () => { calls.project += 1; return { channelKey: CHANNEL.channelKey, publicBeeKey: CHANNEL.publicBeeKey } },
-      announce: async () => { calls.announce += 1 },
-      finalize: async () => { calls.finalize += 1 }
-    },
-    ...overrides
+function makeContext (overrides = {}) {
+  const tempDir = mkdtempSync(join(tmpdir(), 'peartube-add-exec-'))
+  const defaultFilePath = join(tempDir, 'test.mp4')
+  writeFileSync(defaultFilePath, Buffer.from('dummy-payload'))
+
+  const stdout = []
+  const stderr = []
+  const calls = {
+    acquired: [],
+    claims: [],
+    downloads: []
   }
-  return { deps, calls }
+  const deps = {
+    openAddRuntime: async () => ({
+      ensureLocalPublisher: async () => ({ publisherId: PUBLISHER_ID }),
+      close: async () => {}
+    }),
+    ensureLocalPublisher: async () => ({ publisherId: PUBLISHER_ID }),
+    resolveChannel: async () => CHANNEL,
+    duplicateCheck: {
+      check: async () => ({ status: 'ok', advisories: [] })
+    },
+    arbitrateImportClaim: async () => ({ ok: true }),
+    stageSource: async ({ row }) => {
+      calls.downloads.push(row)
+      return { artifactPath: defaultFilePath, checksum: 'sha256:1f4ce640e765845a6ae310817110c5f2fa08e2e0a1d1e70137ea6da43a8b0c90', title: 'Test Video', dispose: null }
+    },
+    executeLocalFileAcquisition: async (args) => {
+      calls.acquired.push(args)
+      return {
+        acquisitionId: `acq-${args.input.idempotencyKey}`,
+        state: 'completed',
+        publicationId: `pub-${args.input.idempotencyKey}`,
+        manifestId: 'manifest-1',
+        renditionId: 'rendition-1',
+        assetId: 'asset-1'
+      }
+    },
+    createMetadataProvider: async () => ({
+      async getMovie () { return { title: 'Test Movie', mediaId: '100', provider: 'tmdb', artwork: [] } },
+      async getShow () { return { name: 'Test Show', mediaId: '200', provider: 'tmdb', artwork: [] } },
+      async getSeason () { return [{ seasonNumber: 1, episodeNumber: 1, title: 'Test Ep', airDate: '2020-01-01', artwork: [] }] }
+    }),
+    ...overrides.deps
+  }
+
+  return {
+    context: {
+      command: 'add',
+      mode: 'scripted',
+      fetchUrl: defaultFilePath,
+      stdout: { write (t) { stdout.push(String(t)) } },
+      stderr: { write (t) { stderr.push(String(t)) } },
+      env: {},
+      resolveConfig: async () => ({ content: { tmdbApiKey: 'token' } }),
+      deps,
+      flags: { type: 'movie', provider: 'tmdb', movieId: '100', yes: true, json: true },
+      ...overrides.context
+    },
+    calls,
+    stdout,
+    stderr,
+    cleanup () {
+      rmSync(tempDir, { recursive: true, force: true })
+    }
+  }
 }
 
-async function seedJob (bee, item) {
-  const store = createJobStore({ bee, now: () => 1000 })
-  await store.createJob({
-    jobId: 'job-1',
-    rows: [{ rowId: 'r1', data: { item, channelDraft: { channelTarget: { mode: 'new' } }, channelTarget: { mode: 'new' } } }]
-  })
-  return store
-}
-
-const EPISODE = { contentKind: 'episode', title: 'Pilot', seasonNumber: 1, episodeNumber: 1, sourceProvider: 'youtube', sourceVideoId: 'v1', identityUrl: 'https://youtube.com/watch?v=v1' }
-
-test('a verified import advances to published only after durability, projection, and announcement', async (t) => {
-  const bee = fakeBee()
-  const store = await seedJob(bee, EPISODE)
-  const { deps, calls } = baseDeps({ jobStore: store })
-  const executor = createExecutor(deps)
-  const job = await store.getJob('job-1')
-  const result = await executor.executeRow(job, job.rows[0])
-
-  t.is(result.status, 'published')
-  t.is(calls.download, 1)
-  t.is(calls.upload.length, 1)
-  t.is(calls.pin, 1)
-  t.is(calls.markDurable, 1)
-  t.is(calls.project, 1)
-  t.is(calls.announce, 1)
-  t.is(calls.finalize, 1)
-})
-
-test('upload receives identityUrl provenance and the deterministic video id, never fetchUrl', async (t) => {
-  const bee = fakeBee()
-  const store = await seedJob(bee, EPISODE)
-  const { deps, calls } = baseDeps({ jobStore: store })
-  const executor = createExecutor(deps)
-  const job = await store.getJob('job-1')
-  await executor.executeRow(job, job.rows[0])
-
-  const upload = calls.upload[0]
-  t.is(upload.identityUrl, 'https://youtube.com/watch?v=v1')
-  t.is(upload.videoId, job.rows[0].intent.videoId, 'deterministic video id is the idempotency key')
-  t.absent('fetchUrl' in upload)
-})
-
-test('does not report success on pin acceptance and remains pending without durability', async (t) => {
-  const bee = fakeBee()
-  const store = await seedJob(bee, EPISODE)
-  let verified = false
-  const { deps, calls } = baseDeps({ jobStore: store, awaitDurable: async () => ({ verified }) })
-  const executor = createExecutor(deps)
-  let job = await store.getJob('job-1')
-  const pending = await executor.executeRow(job, job.rows[0])
-  t.is(pending.status, 'replicationPending')
-  t.is(calls.pin, 1)
-  t.is(calls.project, 0, 'no projection before verified durability')
-
-  // Durability later succeeds; resuming advances without re-download or re-upload.
-  verified = true
-  job = await store.getJob('job-1')
-  const row = job.rows[0]
-  const done = await executor.executeRow(job, row)
-  t.is(done.status, 'published')
-  t.is(calls.download, 1, 'download not repeated')
-  t.is(calls.upload.length, 1, 'upload not repeated')
-})
-
-test('an existing target-authority identity returns already-exists with no transfer', async (t) => {
-  const bee = fakeBee()
-  const store = await seedJob(bee, EPISODE)
-  const { deps, calls } = baseDeps({
-    jobStore: store,
-    duplicateCheck: { check: async () => ({ status: 'already-exists', existing: { channelKey: 'chan-1', videoId: 'existing-9', availability: 'published' } }) }
-  })
-  const executor = createExecutor(deps)
-  const job = await store.getJob('job-1')
-  const result = await executor.executeRow(job, job.rows[0])
-
-  t.is(result.status, 'already-exists')
-  t.is(result.existing.videoId, 'existing-9')
-  t.is(calls.download, 0, 'no download for an existing item')
-  t.is(calls.upload.length, 0)
-})
-
-test('a losing import claim is released without downloading or uploading', async (t) => {
-  const bee = fakeBee()
-  const store = await seedJob(bee, EPISODE)
-  const { deps, calls } = baseDeps({
-    jobStore: store,
-    resolveClaimWinner: async () => ({ claimantId: 'claim:other:job-9' })
-  })
-  const executor = createExecutor(deps)
-  const job = await store.getJob('job-1')
-  const result = await executor.executeRow(job, job.rows[0])
-
-  t.is(result.status, 'released')
-  t.is(calls.download, 0)
-  t.is(calls.upload.length, 0)
-})
-
-test('a failed step retries idempotently without duplicating completed work', async (t) => {
-  const bee = fakeBee()
-  const store = await seedJob(bee, EPISODE)
-  let failUpload = true
-  const { deps, calls } = baseDeps({
-    jobStore: store,
-    uploadFromPath: async (args) => {
-      if (failUpload) { failUpload = false; throw Object.assign(new Error('upload glitch'), { code: 'UPLOAD' }) }
-      calls.upload.push(args)
-      return { videoId: args.videoId, channelKey: CHANNEL.channelKey, blobKey: 'blob-1' }
+test('pre-admission duplicate check halts before transfer when item already exists', async (t) => {
+  const { context, calls, stdout, cleanup } = makeContext({
+    deps: {
+      duplicateCheck: {
+        check: async () => ({
+          status: 'already-exists',
+          existing: { channelKey: 'chan-1', videoId: 'existing-1', availability: 'published' }
+        })
+      }
     }
   })
-  const executor = createExecutor(deps)
-  let job = await store.getJob('job-1')
-  const failedResult = await executor.executeRow(job, job.rows[0])
-  t.is(failedResult.status, 'failed')
-  t.is(calls.download, 1)
 
-  job = await store.getJob('job-1')
-  const retry = await executor.executeRow(job, job.rows[0])
-  t.is(retry.status, 'published')
-  t.is(calls.download, 1, 'download not repeated after upload retry')
-  t.is(calls.upload.length, 1, 'exactly one successful upload')
+  try {
+    const code = await runAddCommand(context)
+    t.is(code, 0)
+    t.is(calls.downloads.length, 0, 'no source download on existing item')
+    t.is(calls.acquired.length, 0, 'no provider acquisition on existing item')
+    const result = JSON.parse(stdout.join(''))
+    t.is(result.status, 'already-exists')
+    t.is(result.videoId, 'existing-1')
+  } finally {
+    cleanup()
+  }
+})
+
+test('pre-admission claim arbitration halts with released when another writer won', async (t) => {
+  const { context, calls, stdout, cleanup } = makeContext({
+    deps: {
+      arbitrateImportClaim: async () => ({ ok: false, status: 'released' })
+    }
+  })
+
+  try {
+    const code = await runAddCommand(context)
+    t.is(code, 0)
+    t.is(calls.downloads.length, 0, 'no source download when claim lost')
+    t.is(calls.acquired.length, 0, 'no provider acquisition when claim lost')
+    const result = JSON.parse(stdout.join(''))
+    t.is(result.status, 'released')
+  } finally {
+    cleanup()
+  }
+})
+
+test('add rejects an invalid publisher before staging or acquisition', async (t) => {
+  const { context, calls, stdout, cleanup } = makeContext({
+    deps: {
+      ensureLocalPublisher: async () => ({ publisherId: 'not-a-valid-hex-key' })
+    }
+  })
+
+  try {
+    t.is(await runAddCommand(context), 1)
+    t.is(calls.downloads.length, 0)
+    t.is(calls.acquired.length, 0)
+    t.is(stdout.join(''), '')
+  } finally {
+    cleanup()
+  }
+})
+
+test('executeSingle passes publisherId and selector to executeLocalFileAcquisition and returns publicationId', async (t) => {
+  const { context, calls, stdout, cleanup } = makeContext()
+
+  try {
+    const code = await runAddCommand(context)
+    t.is(code, 0)
+    t.is(calls.acquired.length, 1)
+
+    const call = calls.acquired[0]
+    t.is(call.publisherId, PUBLISHER_ID)
+    t.is(call.input.retentionClass, 'archive-pin')
+    t.is(call.input.title, 'Test Movie')
+    t.alike(call.input.selector, {
+      kind: 'movie',
+      namespace: 'tmdb',
+      identifier: '100'
+    })
+
+    const result = JSON.parse(stdout.join(''))
+    t.is(result.status, 'published')
+    t.ok(result.videoId.startsWith('pub-'))
+    t.is(result.url, `peartube://channel/chan-1/video/${result.videoId}`)
+  } finally {
+    cleanup()
+  }
+})
+
+test('executeSingle fails if provider acquisition does not reach completed', async (t) => {
+  const { context, stdout, cleanup } = makeContext({
+    deps: {
+      executeLocalFileAcquisition: async () => ({
+        acquisitionId: 'acq-failed',
+        state: 'failed',
+        errorCode: 'ACQUISITION_VERIFICATION_FAILED'
+      })
+    }
+  })
+
+  try {
+    t.is(await runAddCommand(context), 1)
+    t.is(stdout.join(''), '', 'a failed acquisition never prints a published result')
+  } finally {
+    cleanup()
+  }
+})
+
+test('executeSingle infers container mimeType from staged extension rather than hardcoding video/mp4', async (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'peartube-mime-test-'))
+  try {
+    for (const [ext, expectedMime] of [
+      ['.webm', 'video/webm'],
+      ['.mkv', 'video/x-matroska'],
+      ['.mov', 'video/quicktime'],
+      ['.avi', 'video/x-msvideo'],
+      ['.mp4', 'video/mp4']
+    ]) {
+      const realFilePath = join(tempDir, `video${ext}`)
+      writeFileSync(realFilePath, Buffer.from('dummy-video-data'))
+
+      const { context, calls, cleanup } = makeContext({
+        deps: {
+          stageSource: async () => ({
+            artifactPath: realFilePath,
+            checksum: 'sha256:e8051ad8932b95a0fb97c2971a1b232b712d04bfb3e9c21ed7cb9efb9f554554',
+            title: 'Format Test',
+            dispose: null
+          })
+        }
+      })
+
+      try {
+        const code = await runAddCommand(context)
+        t.is(code, 0)
+        t.is(calls.acquired.length, 1)
+        t.is(calls.acquired[0].input.mimeType, expectedMime, `extension ${ext} must map to ${expectedMime}`)
+      } finally {
+        cleanup()
+      }
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('aborted add forwards its signal and disposes a staged source only once', async (t) => {
+  const controller = new AbortController()
+  controller.abort()
+  const events = []
+  const { context, stdout, cleanup } = makeContext({ context: { signal: controller.signal } })
+  context.deps.stageSource = async () => ({
+    artifactPath: context.fetchUrl,
+    checksum: 'sha256:1f4ce640e765845a6ae310817110c5f2fa08e2e0a1d1e70137ea6da43a8b0c90',
+    title: 'Test Video',
+    dispose: () => events.push('dispose')
+  })
+  context.deps.executeLocalFileAcquisition = async ({ input }) => {
+    t.is(input.signal, controller.signal)
+    events.push('cancel')
+    await input.dispose()
+    return { acquisitionId: 'acq-cancelled', state: 'cancelled' }
+  }
+
+  try {
+    t.is(await runAddCommand(context), 0)
+    t.is(JSON.parse(stdout.join('')).status, 'cancelled')
+    t.alike(events, ['cancel', 'dispose'])
+  } finally {
+    cleanup()
+  }
 })

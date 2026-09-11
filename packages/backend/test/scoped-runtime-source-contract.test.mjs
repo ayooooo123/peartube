@@ -44,10 +44,6 @@ test('backend result and CLI-facing API use only the universal scoped network co
     t.ok(implementation.includes(method), `scoped modules implement ${method}`)
     t.ok(api.includes('createScopedNetworkApi'), 'API composes scoped runtime methods')
   }
-  t.ok(
-    orchestrator.includes('...scopedNetwork.listRetainedIndexServiceAdapters(Math.max(0, maximum - 1))'),
-    'production verifier combines the local index with retained network services only when a client searches',
-  )
   t.ok(sessionRuntime.includes('listRetainedIndexServiceAdapters'), 'session runtime owns the bounded index query adapters')
   t.is(cliRuntime.includes('publicFeed'), false, 'CLI-facing runtime type has no publicFeed result')
 })

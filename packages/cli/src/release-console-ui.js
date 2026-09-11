@@ -155,35 +155,61 @@ function reachCell(row) {
   return `<span class="reach" title="${escapeHtml(row.reachDetail || '')}">${escapeHtml(row.reach)}</span>`
 }
 
+function releasePlayPath(row) {
+  if (!row.playable) return null
+  if (row.publicationId && row.renditionId) {
+    return `/play/pub/${encodeURIComponent(row.publicationId)}/${encodeURIComponent(row.renditionId)}`
+  }
+  return row.candidateRef ? `/play/${encodeURIComponent(row.candidateRef)}` : null
+}
+
+function playLink(row) {
+  const playPath = releasePlayPath(row)
+  return playPath
+    ? `<a class="play js-play" href="${playPath}" title="Play this release">▶ Play</a>`
+    : ''
+}
+
+function fileCell(row, name) {
+  const play = playLink(row)
+  const coords = row.work || !row.coordinates ? '' : ` <span class="coords">${escapeHtml(row.coordinates)}</span>`
+  return `<td class="file" title="${escapeHtml(name)}"><div class="file-row">${play}<span class="file-name"><button type="button" class="js-open link" title="${escapeHtml(name)}">${escapeHtml(name)}</button>${coords}</span></div></td>`
+}
+
+function workCell(row) {
+  if (!row.work) return '<td class="work"><span class="none" title="No publisher metadata named this work">—</span></td>'
+  const label = row.workLabel ? `<span class="coords">${escapeHtml(row.workLabel)}</span>` : ''
+  return `<td class="work">${escapeHtml(row.work)}${label}</td>`
+}
+
+function stateCell(row) {
+  const label = escapeHtml(STATE_LABELS[row.state] || row.state || 'Unknown')
+  const err = row.errorCode ? `<span class="err" title="${escapeHtml(row.errorCode)}">${row.recoverable ? 'retryable' : 'terminal'}</span>` : ''
+  return `<td class="state"><span class="tag ${escapeHtml(row.state || '')}">${label}</span>${err}</td>`
+}
+
+function residencyCell(row) {
+  const tag = `tag res-${escapeHtml(row.residency || 'unknown')}`
+  const title = escapeHtml(row.residencyDetail || '')
+  const label = escapeHtml(RESIDENCY_LABELS[row.residency] || 'Unknown')
+  return `<td class="residency"><span class="${tag}" title="${title}">${label}</span></td>`
+}
+
 // A release with a verified candidate reference gets a play link inline: the
 // operator's most common read of a row is "is this actually playable".
 export function renderReleaseRow(row = {}) {
   const name = releaseName(row)
-  // A catalogued row opens deterministically by publication and rendition -
-  // stable ids, unlike a provider lease which expires and takes the button
-  // with it. Only rows without both ids fall back to a candidate reference.
-  // Every variant is gated on the relay's own per-request playback gate: an
-  // off-machine client renders the table with no play control at all.
-  const playPath = !row.playable
-    ? null
-    : (row.publicationId && row.renditionId
-        ? `/play/pub/${encodeURIComponent(row.publicationId)}/${encodeURIComponent(row.renditionId)}`
-        : (row.candidateRef ? `/play/${encodeURIComponent(row.candidateRef)}` : null))
-  const play = playPath
-    ? `<a class="play js-play" href="${playPath}" title="Play this release">▶ Play</a>`
-    : ''
-  return `<tr data-id="${escapeHtml(row.id || '')}" data-acquisition="${escapeHtml(row.acquisitionId || '')}" data-name="${escapeHtml(name)}" data-backups="${escapeHtml(String(Math.max(0, Number(row.backups) || 0)))}">
+  const backups = escapeHtml(String(Math.max(0, Number(row.backups) || 0)))
+  return `<tr data-id="${escapeHtml(row.id || '')}" data-acquisition="${escapeHtml(row.acquisitionId || '')}" data-name="${escapeHtml(name)}" data-backups="${backups}">
   <td class="pick"><input type="checkbox" class="js-pick" aria-label="Select ${escapeHtml(name)}"></td>
-  <td class="file" title="${escapeHtml(name)}"><div class="file-row">${play}<span class="file-name"><button type="button" class="js-open link" title="${escapeHtml(name)}">${escapeHtml(name)}</button>${row.work || !row.coordinates ? '' : ` <span class="coords">${escapeHtml(row.coordinates)}</span>`}</span></div></td>
-  <td class="work">${row.work
-    ? `${escapeHtml(row.work)}${row.workLabel ? `<span class="coords">${escapeHtml(row.workLabel)}</span>` : ''}`
-    : '<span class="none" title="No publisher metadata named this work">—</span>'}</td>
+  ${fileCell(row, name)}
+  ${workCell(row)}
   <td class="num">${sizeCell(row)}</td>
   <td class="progress">${progressCell(row)}</td>
-  <td class="state"><span class="tag ${escapeHtml(row.state || '')}">${escapeHtml(STATE_LABELS[row.state] || row.state || 'Unknown')}</span>${row.errorCode ? `<span class="err" title="${escapeHtml(row.errorCode)}">${row.recoverable ? 'retryable' : 'terminal'}</span>` : ''}</td>
+  ${stateCell(row)}
   <td class="num">${reachCell(row)}</td>
   <td class="num">${backupsCell(row)}</td>
-  <td class="residency"><span class="tag res-${escapeHtml(row.residency || 'unknown')}" title="${escapeHtml(row.residencyDetail || '')}">${escapeHtml(RESIDENCY_LABELS[row.residency] || 'Unknown')}</span></td>
+  ${residencyCell(row)}
   <td class="age" title="${escapeHtml(absoluteTime(row.updatedAt))}">${escapeHtml(relativeAge(row.updatedAt) || '—')}</td>
 </tr>`
 }

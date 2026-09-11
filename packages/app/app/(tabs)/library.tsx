@@ -344,7 +344,7 @@ function DownloadsTab({ downloads, bottomPadding, onCancel, onRemove, onClearCom
             {failedDownloads.length > 0 && (
               <>
                 {(activeDownloads.length > 0 || completedDownloads.length > 0) ? <Divider weight="rule" /> : null}
-                <Text style={styles.sectionLabel}>Didn't finish</Text>
+                <Text style={styles.sectionLabel}>Didn&apos;t finish</Text>
               </>
             )}
             {failedDownloads.map((item, index) => (

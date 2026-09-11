@@ -17,10 +17,12 @@ import { join } from 'node:path'
 
 import { createArchivePledge } from '../src/archive/pledge.js'
 import { createScopedNetworkRuntime } from '../src/network/scoped-runtime.js'
+import { writeStaticAsset, ASSET_BLOCK_SIZE } from '../src/assets/static-core.js'
+import { createBufferSourceReader } from '../src/assets/source-reader.js'
+import { normalizeAssetCoreRefV2 } from '../src/assets/rendition.js'
 
 const BLOCK_COUNT = 8
-const BLOCK_BYTES = 1024
-
+const BLOCK_BYTES = ASSET_BLOCK_SIZE
 function bytes (length, fill) {
   return b4a.alloc(length, fill)
 }
@@ -66,10 +68,13 @@ async function createFixture (t, peerNames) {
   await publisherStore.ready()
   stores.set('publisher', publisherStore)
 
-  const source = publisherStore.get({ name: 'rendition' })
-  await source.ready()
-  await source.append(Array.from({ length: BLOCK_COUNT }, (_, index) => blockAt(index)))
-
+  const sourceBytes = b4a.alloc(BLOCK_COUNT * ASSET_BLOCK_SIZE)
+  for (let index = 0; index < BLOCK_COUNT; index++) {
+    sourceBytes.fill(index + 1, index * ASSET_BLOCK_SIZE, (index + 1) * ASSET_BLOCK_SIZE)
+  }
+  const asset = await writeStaticAsset({ store: publisherStore, reader: createBufferSourceReader(sourceBytes) })
+  const source = asset.core
+  const coreRef = normalizeAssetCoreRefV2(asset.descriptor)
   for (const [offset, name] of peerNames.entries()) {
     const dir = mkdtempSync(join(tmpdir(), `peartube-archive-${name}-`))
     dirs.set(name, dir)
@@ -88,9 +93,9 @@ async function createFixture (t, peerNames) {
       initialNetworkPolicy: {
         networkEnabled: true,
         uploadPermission: 'enabled',
-        uploadCeilingBytes: 1024 * 1024,
-        archiveBudgetBytes: 1024 * 1024,
-        diskCeilingBytes: 16 * 1024 * 1024,
+        uploadCeilingBytes: 16 * 1024 * 1024,
+        archiveBudgetBytes: 16 * 1024 * 1024,
+        diskCeilingBytes: 32 * 1024 * 1024,
         permissions: { archive: true },
         publicServingAllowed: true,
       },
@@ -108,10 +113,11 @@ async function createFixture (t, peerNames) {
 
   return {
     source,
-    coreKey: b4a.toString(source.key, 'hex'),
+    coreRef,
+    coreKey: coreRef.key,
     runtime: name => runtimes.get(name),
     async core (name) {
-      const core = stores.get(name).get({ key: source.key })
+      const core = stores.get(name).get({ key: b4a.from(coreRef.key, 'hex'), manifest: coreRef.hypercoreManifest })
       await core.ready()
       return core
     },
@@ -126,7 +132,7 @@ function pledgeFor (coreKey, { fill = 20, start = 0, end = BLOCK_COUNT } = {}) {
     renditionId: 'b'.repeat(64),
     ranges: [{ coreKey, start, end }],
     retentionUntil: Date.now() + 3_600_000,
-    uploadCeilingBytes: 1024 * 1024,
+    uploadCeilingBytes: 16 * 1024 * 1024,
     issuedAt: Date.now(),
     nonce: 'f'.repeat(64),
     keyPair: archivist,
@@ -143,6 +149,7 @@ test('retaining an archive pledge actually moves the bytes onto the archivist', 
   const retained = await fixture.runtime('archivist').retainAuthorizedArchive({
     pledge,
     coreKey: fixture.coreKey,
+    coreRef: fixture.coreRef,
     start: 0,
     end: BLOCK_COUNT,
   })
@@ -169,6 +176,7 @@ test('an auditor holding none of the content can still prove an archivist holds 
   await fixture.runtime('archivist').retainAuthorizedArchive({
     pledge,
     coreKey: fixture.coreKey,
+    coreRef: fixture.coreRef,
     start: 0,
     end: BLOCK_COUNT,
   })
@@ -177,6 +185,7 @@ test('an auditor holding none of the content can still prove an archivist holds 
   await fixture.runtime('auditor').retainAuthorizedArchive({
     pledge,
     coreKey: fixture.coreKey,
+    coreRef: fixture.coreRef,
     start: 0,
     end: BLOCK_COUNT,
     download: false,
@@ -216,8 +225,8 @@ test('a tampered or substituted possession proof is refused', async (t) => {
   const fixture = await createFixture(t, ['archivist', 'auditor'])
   const pledge = pledgeFor(fixture.coreKey)
 
-  await fixture.runtime('archivist').retainAuthorizedArchive({ pledge, coreKey: fixture.coreKey, start: 0, end: BLOCK_COUNT })
-  await fixture.runtime('auditor').retainAuthorizedArchive({ pledge, coreKey: fixture.coreKey, start: 0, end: BLOCK_COUNT, download: false })
+  await fixture.runtime('archivist').retainAuthorizedArchive({ pledge, coreKey: fixture.coreKey, coreRef: fixture.coreRef, start: 0, end: BLOCK_COUNT })
+  await fixture.runtime('auditor').retainAuthorizedArchive({ pledge, coreKey: fixture.coreKey, coreRef: fixture.coreRef, start: 0, end: BLOCK_COUNT, download: false })
 
   const archivistCore = await fixture.core('archivist')
   await archivistCore.download({ start: 0, end: BLOCK_COUNT }).done()
@@ -266,7 +275,7 @@ test('an archivist cannot prove or retain a block outside its pledged range', as
   const pledge = pledgeFor(fixture.coreKey, { start: 0, end: 4 })
   const archivist = fixture.runtime('archivist')
 
-  await archivist.retainAuthorizedArchive({ pledge, coreKey: fixture.coreKey, start: 0, end: 4 })
+  await archivist.retainAuthorizedArchive({ pledge, coreKey: fixture.coreKey, coreRef: fixture.coreRef, start: 0, end: 4 })
   const core = await fixture.core('archivist')
   await core.download({ start: 0, end: 4 }).done()
 
@@ -277,7 +286,7 @@ test('an archivist cannot prove or retain a block outside its pledged range', as
   )
 
   await t.exception(
-    archivist.retainAuthorizedArchive({ pledge, coreKey: fixture.coreKey, start: 4, end: 8 }),
+    archivist.retainAuthorizedArchive({ pledge, coreKey: fixture.coreKey, coreRef: fixture.coreRef, start: 4, end: 8 }),
     /not pledge-authorized/,
     'and it cannot widen its own custody past the signed pledge',
   )

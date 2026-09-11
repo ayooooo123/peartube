@@ -81,6 +81,53 @@ const VALID_STATUS: Readonly<Record<PublisherDeviceState, true>> = Object.freeze
   'authority-lost': true,
   'unable-to-publish': true,
 })
+function resolveDeviceStateAndCopy(
+  requestSucceeded: boolean,
+  candidate?: string | null
+): { status: PublisherDeviceState; copy: { label: string; explanation: string }; isPrivileged: boolean } {
+  const isKnown = typeof candidate === 'string' && Object.prototype.hasOwnProperty.call(VALID_STATUS, candidate)
+  if (requestSucceeded && isKnown) {
+    const status = candidate as PublisherDeviceState
+    return {
+      status,
+      copy: STATUS_COPY[status],
+      isPrivileged: status === 'authorized',
+    }
+  }
+  return {
+    status: 'unable-to-publish',
+    copy: {
+      label: 'Publisher status unavailable',
+      explanation: 'Publisher security status could not be loaded on this device.',
+    },
+    isPrivileged: false,
+  }
+}
+
+function resolveReasonDetail(requestSucceeded: boolean, reasonCode?: string | null): string | null {
+  if (
+    requestSucceeded &&
+    typeof reasonCode === 'string' &&
+    Object.prototype.hasOwnProperty.call(REASON_COPY, reasonCode)
+  ) {
+    return REASON_COPY[reasonCode]
+  }
+  return null
+}
+
+function buildDeviceStatusActions(
+  requestSucceeded: boolean,
+  privilegedStatus: boolean,
+  input: PublisherDeviceStatusInput | null | undefined
+): PublisherDeviceStatusModel['actions'] {
+  return [
+    { id: 'publish', label: 'Publish', allowed: privilegedStatus && input?.canPublish === true },
+    { id: 'root-transition', label: 'Change publisher authority', allowed: privilegedStatus && input?.canRootTransition === true },
+    { id: 'play-local', label: 'Play local media', allowed: requestSucceeded && input?.canPlayLocal === true },
+    { id: 'export-local', label: 'Export local media', allowed: requestSucceeded && input?.canExportLocal === true },
+    { id: 'delete-local', label: 'Delete local media', allowed: requestSucceeded && input?.canDeleteLocal === true },
+  ]
+}
 
 const STATUS_TAG: Readonly<Record<PublisherDeviceState, { label: string, tone: 'success' | 'warning' | 'danger' }>> = Object.freeze({
   authorized: { label: 'PAIRED', tone: 'success' },
@@ -98,35 +145,16 @@ const TAG_TONE_COLOR = {
 
 export function normalizePublisherDeviceStatus(input: PublisherDeviceStatusInput | null | undefined): PublisherDeviceStatusModel {
   const requestSucceeded = input?.success === true
-  const candidate = input?.status
-  const knownStatus = typeof candidate === 'string' && Object.prototype.hasOwnProperty.call(VALID_STATUS, candidate)
-  const status = requestSucceeded && knownStatus ? candidate as PublisherDeviceState : 'unable-to-publish'
-  const privilegedStatus = requestSucceeded && knownStatus && status === 'authorized'
-  const copy = requestSucceeded && knownStatus
-    ? STATUS_COPY[status]
-    : {
-        label: 'Publisher status unavailable',
-        explanation: 'Publisher security status could not be loaded on this device.',
-      }
-  const reasonCode = input?.reasonCode
-  const detail = requestSucceeded &&
-    typeof reasonCode === 'string' &&
-    Object.prototype.hasOwnProperty.call(REASON_COPY, reasonCode)
-    ? REASON_COPY[reasonCode]
-    : null
+  const { status, copy, isPrivileged } = resolveDeviceStateAndCopy(requestSucceeded, input?.status)
+  const detail = resolveReasonDetail(requestSucceeded, input?.reasonCode)
+  const actions = buildDeviceStatusActions(requestSucceeded, isPrivileged, input)
 
   return {
     status,
     label: copy.label,
     explanation: copy.explanation,
     detail,
-    actions: [
-      { id: 'publish', label: 'Publish', allowed: privilegedStatus && input?.canPublish === true },
-      { id: 'root-transition', label: 'Change publisher authority', allowed: privilegedStatus && input?.canRootTransition === true },
-      { id: 'play-local', label: 'Play local media', allowed: requestSucceeded && input?.canPlayLocal === true },
-      { id: 'export-local', label: 'Export local media', allowed: requestSucceeded && input?.canExportLocal === true },
-      { id: 'delete-local', label: 'Delete local media', allowed: requestSucceeded && input?.canDeleteLocal === true },
-    ],
+    actions,
   }
 }
 

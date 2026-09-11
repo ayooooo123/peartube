@@ -146,6 +146,28 @@ function readEntryCountTable(buf, box) {
   return { count: buf.readUInt32BE(countOffset), entriesStart: countOffset + 4 }
 }
 
+function parseSyncSamples(buf, stss) {
+  if (!stss) return { ok: true, syncSamples: null }
+  const stssTable = readEntryCountTable(buf, stss)
+  if (!stssTable || stssTable.entriesStart + stssTable.count * 4 > stss.contentEnd) {
+    return { ok: false }
+  }
+  const syncSamples = new Set()
+  for (let i = 0; i < stssTable.count; i++) {
+    syncSamples.add(buf.readUInt32BE(stssTable.entriesStart + i * 4))
+  }
+  return { ok: true, syncSamples }
+}
+
+function parseStszInfo(buf, stsz) {
+  if (stsz.contentStart + 12 > stsz.contentEnd) return null
+  const uniformSampleSize = buf.readUInt32BE(stsz.contentStart + 4)
+  const sampleCount = buf.readUInt32BE(stsz.contentStart + 8)
+  if (sampleCount === 0 || sampleCount > MAX_SAMPLES) return null
+  if (uniformSampleSize === 0 && stsz.contentStart + 12 + sampleCount * 4 > stsz.contentEnd) return null
+  return { uniformSampleSize, sampleCount }
+}
+
 function parseStblTables(buf, stbl) {
   const stts = findChildBox(buf, stbl.contentStart, stbl.contentEnd, 'stts')
   const stsc = findChildBox(buf, stbl.contentStart, stbl.contentEnd, 'stsc')
@@ -157,30 +179,20 @@ function parseStblTables(buf, stbl) {
 
   const sttsTable = readEntryCountTable(buf, stts)
   const stscTable = readEntryCountTable(buf, stsc)
-  const chunkTable = readEntryCountTable(buf, stco || co64)
+  const chunkBox = stco || co64
+  const chunkTable = readEntryCountTable(buf, chunkBox)
   if (!sttsTable || !stscTable || !chunkTable) return null
 
-  // stsz: version/flags(4) sample_size(4) sample_count(4)
-  if (stsz.contentStart + 12 > stsz.contentEnd) return null
-  const uniformSampleSize = buf.readUInt32BE(stsz.contentStart + 4)
-  const sampleCount = buf.readUInt32BE(stsz.contentStart + 8)
-  if (sampleCount === 0 || sampleCount > MAX_SAMPLES) return null
-  if (uniformSampleSize === 0 && stsz.contentStart + 12 + sampleCount * 4 > stsz.contentEnd) return null
+  const stszInfo = parseStszInfo(buf, stsz)
+  if (!stszInfo) return null
 
   if (sttsTable.entriesStart + sttsTable.count * 8 > stts.contentEnd) return null
   if (stscTable.entriesStart + stscTable.count * 12 > stsc.contentEnd) return null
   const chunkEntrySize = stco ? 4 : 8
-  if (chunkTable.entriesStart + chunkTable.count * chunkEntrySize > (stco || co64).contentEnd) return null
+  if (chunkTable.entriesStart + chunkTable.count * chunkEntrySize > chunkBox.contentEnd) return null
 
-  let syncSamples = null
-  if (stss) {
-    const stssTable = readEntryCountTable(buf, stss)
-    if (!stssTable || stssTable.entriesStart + stssTable.count * 4 > stss.contentEnd) return null
-    syncSamples = new Set()
-    for (let i = 0; i < stssTable.count; i++) {
-      syncSamples.add(buf.readUInt32BE(stssTable.entriesStart + i * 4))
-    }
-  }
+  const syncParsed = parseSyncSamples(buf, stss)
+  if (!syncParsed.ok) return null
 
   return {
     buf,
@@ -188,9 +200,9 @@ function parseStblTables(buf, stbl) {
     stsc: stscTable,
     chunks: { ...chunkTable, is64: !stco },
     stszStart: stsz.contentStart + 12,
-    uniformSampleSize,
-    sampleCount,
-    syncSamples,
+    uniformSampleSize: stszInfo.uniformSampleSize,
+    sampleCount: stszInfo.sampleCount,
+    syncSamples: syncParsed.syncSamples,
   }
 }
 
@@ -257,6 +269,50 @@ function downsample(values, maxEntries) {
   return sampled
 }
 
+function calculateMaxGopUnits(keyframes, duration) {
+  let maxGopUnits = 0
+  for (let i = 1; i < keyframes.length; i++) {
+    const gap = keyframes[i].timeUnits - keyframes[i - 1].timeUnits
+    if (gap > maxGopUnits) maxGopUnits = gap
+  }
+  if (duration != null && keyframes.length > 0) {
+    const tailGap = duration - keyframes[keyframes.length - 1].timeUnits
+    if (tailGap > maxGopUnits) maxGopUnits = tailGap
+  }
+  return maxGopUnits
+}
+
+function populateVideoTrackProfile(buf, moovStart, moovEnd, profile, maxKeyframeEntries) {
+  for (const trak of iterateChildBoxes(buf, moovStart, moovEnd)) {
+    if (trak.type !== 'trak' || !isVideoTrak(buf, trak)) continue
+
+    const mdhd = findBoxPath(buf, trak.contentStart, trak.contentEnd, ['mdia', 'mdhd'])
+    const stbl = findBoxPath(buf, trak.contentStart, trak.contentEnd, ['mdia', 'minf', 'stbl'])
+    if (!mdhd || !stbl) continue
+
+    const timing = parseMdhdTimescale(buf, mdhd)
+    if (!timing || !timing.timescale) continue
+
+    const tables = parseStblTables(buf, stbl)
+    if (!tables) continue
+
+    const keyframes = collectKeyframes(tables)
+    if (!keyframes || keyframes.length === 0) continue
+
+    const toMs = (units) => Math.round((units * 1000) / timing.timescale)
+    profile.timescale = timing.timescale
+    if (timing.duration != null) profile.durationMs = toMs(timing.duration)
+
+    const maxGopUnits = calculateMaxGopUnits(keyframes, timing.duration)
+    profile.maxGopMs = keyframes.length > 1 || timing.duration != null ? toMs(maxGopUnits) : null
+
+    const sampled = downsample(keyframes, maxKeyframeEntries)
+    profile.keyframeTimesMs = sampled.map((kf) => toMs(kf.timeUnits))
+    profile.keyframeOffsets = sampled.map((kf) => kf.byteOffset)
+    break
+  }
+}
+
 /**
  * Probe an MP4 file through a sparse byte reader.
  *
@@ -307,42 +363,13 @@ export async function probeMp4PlaybackProfile(readAt, fileSize, options = {}) {
 
     profile.fragmented = Boolean(findChildBox(buf, moovStart, moovEnd, 'mvex'))
 
-    for (const trak of iterateChildBoxes(buf, moovStart, moovEnd)) {
-      if (trak.type !== 'trak' || !isVideoTrak(buf, trak)) continue
-
-      const mdhd = findBoxPath(buf, trak.contentStart, trak.contentEnd, ['mdia', 'mdhd'])
-      const stbl = findBoxPath(buf, trak.contentStart, trak.contentEnd, ['mdia', 'minf', 'stbl'])
-      if (!mdhd || !stbl) continue
-
-      const timing = parseMdhdTimescale(buf, mdhd)
-      if (!timing || !timing.timescale) continue
-
-      const tables = parseStblTables(buf, stbl)
-      if (!tables) continue
-
-      const keyframes = collectKeyframes(tables)
-      if (!keyframes || keyframes.length === 0) continue
-
-      const toMs = (units) => Math.round((units * 1000) / timing.timescale)
-      profile.timescale = timing.timescale
-      if (timing.duration != null) profile.durationMs = toMs(timing.duration)
-
-      let maxGopUnits = 0
-      for (let i = 1; i < keyframes.length; i++) {
-        const gap = keyframes[i].timeUnits - keyframes[i - 1].timeUnits
-        if (gap > maxGopUnits) maxGopUnits = gap
-      }
-      if (timing.duration != null && keyframes.length > 0) {
-        const tailGap = timing.duration - keyframes[keyframes.length - 1].timeUnits
-        if (tailGap > maxGopUnits) maxGopUnits = tailGap
-      }
-      profile.maxGopMs = keyframes.length > 1 || timing.duration != null ? toMs(maxGopUnits) : null
-
-      const sampled = downsample(keyframes, options.maxKeyframeEntries ?? DEFAULT_MAX_KEYFRAME_ENTRIES)
-      profile.keyframeTimesMs = sampled.map((kf) => toMs(kf.timeUnits))
-      profile.keyframeOffsets = sampled.map((kf) => kf.byteOffset)
-      break
-    }
+    populateVideoTrackProfile(
+      buf,
+      moovStart,
+      moovEnd,
+      profile,
+      options.maxKeyframeEntries ?? DEFAULT_MAX_KEYFRAME_ENTRIES
+    )
 
     return profile
   } catch {

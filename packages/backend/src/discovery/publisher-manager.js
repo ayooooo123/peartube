@@ -32,7 +32,7 @@ export function createPublisherManager(options = {}) {
       let cursor = startCursor
       let pages = 0
       let batches = 0
-      while (true) {
+      for (;;) {
         if (pages >= maxPagesPerSync || batches >= maxBatchesPerSync) {
           checkpoints.set(id, { cursor })
           return { status: 'partial', nextCursor: cursor }

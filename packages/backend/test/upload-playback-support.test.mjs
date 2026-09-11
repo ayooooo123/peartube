@@ -12,7 +12,8 @@ import Hyperblobs from 'hyperblobs'
 import { createStaticAssetManifest, decodePublicationManifest, writeStaticAsset } from '../src/assets/index.js'
 import { createUploadManager } from '../src/upload.js'
 import { normalizeBlobRefInput } from '../src/blob-utils.js'
-import { createBufferSourceReader } from '../src/assets/source-reader.js'
+import { createBufferSourceReader, createSourceReader } from '../src/assets/source-reader.js'
+import { createSourceGrantVault } from '../src/acquisition/source-grant-vault.js'
 import { createMediaGraphApi } from '../src/api/media-graph.js'
 import {
   encodePublisherCatalogFrame,
@@ -138,6 +139,20 @@ function makePublishingManager({ store, deviceKeyPair, catalog, scopedNetwork = 
       async getWritableBindings() {
         return [{ publisherId: deviceKeyPair.publicKey, catalog }]
       },
+      async listBindingPage() {
+        return {
+          items: [{ publisherId: deviceKeyPair.publicKey, catalog }],
+          nextCursor: null,
+          errors: [],
+          release: async () => {},
+        }
+      },
+      async acquireWritableBinding() {
+        return {
+          binding: { publisherId: deviceKeyPair.publicKey, catalog },
+          release: async () => {},
+        }
+      },
       async resolve(publisherId) {
         assert.equal(Buffer.isBuffer(publisherId), true, 'persisted publisher ID is decoded before registry resolution')
         assert.equal(publisherId.byteLength, 32)
@@ -151,6 +166,71 @@ function makePublishingManager({ store, deviceKeyPair, catalog, scopedNetwork = 
       async publishLocalPublisherCatalog() { return { status: 'published' } },
     },
     now: () => 1_700_000_000_000,
+  })
+}
+
+async function acquiredArtworkFixture(t) {
+  const store = makeStore(t, 'acquired-artwork')
+  const deviceKeyPair = crypto.keyPair(Buffer.alloc(32, 19))
+  const appended = []
+  const rows = new Map()
+  const manager = makePublishingManager({
+    store,
+    deviceKeyPair,
+    catalog: makeCatalog(deviceKeyPair, appended),
+    metaDb: {
+      async get(key) { return rows.get(key) || null },
+      async put(key, value) { rows.set(key, { value }) },
+    },
+  })
+  const written = await writeStaticAsset({ store, reader: createBufferSourceReader(Buffer.alloc(32, 7)) })
+  const descriptor = written.descriptor
+  await written.core.close()
+  const fixture = {
+    store,
+    appended,
+    publish(reader, mimeType, signal) {
+      return fixture.publishArtwork([{ role: 'poster', mimeType, reader }], ['poster'], signal)
+    },
+    publishArtwork(sources, artworkRoles, signal) {
+      return manager.publishAcquiredAsset({
+        acquisitionId: 'acq_artwork',
+        publisherId: Buffer.from(deviceKeyPair.publicKey).toString('hex'),
+        asset: {
+          assetId: descriptor.assetId,
+          key: Buffer.from(descriptor.key).toString('hex'),
+          treeHash: Buffer.from(descriptor.treeHash).toString('hex'),
+          length: descriptor.length,
+          byteLength: descriptor.byteLength,
+          blockSize: descriptor.blockSize,
+        },
+        resolution: { title: 'Artwork fixture', artworkRoles },
+        createArtworkSources: async () => sources,
+        signal,
+      })
+    },
+  }
+  return fixture
+}
+
+function fragmentedArtworkReader(bytes, mimeType, { resumable = false, afterPrefix = null, onClose = () => {}, describeError = null, closeError = null } = {}) {
+  return createSourceReader({
+    resumable,
+    maxReadBytes: resumable ? 2 : bytes.byteLength,
+    async describe() {
+      if (describeError) throw describeError
+      return { identity: { kind: 'etag', value: 'artwork-fixture' }, byteLength: bytes.byteLength, mimeType }
+    },
+    async *open({ offset, length }) {
+      for (let index = offset; index < offset + length; index++) {
+        yield bytes.subarray(index, index + 1)
+        if (index === 0 && afterPrefix) await afterPrefix()
+      }
+    },
+    async close(reason) {
+      onClose(reason)
+      if (closeError) throw closeError
+    },
   })
 }
 
@@ -239,6 +319,7 @@ test('acquired static publications sign the complete readable core range', async
   const sourceBytes = Buffer.alloc(1024, 7)
   const written = await writeStaticAsset({ store, reader: createBufferSourceReader(sourceBytes) })
   const descriptor = written.descriptor
+  const imageBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=', 'base64')
 
   await manager.publishAcquiredAsset({
     acquisitionId: 'acq_static_range',
@@ -252,7 +333,12 @@ test('acquired static publications sign the complete readable core range', async
       blockSize: descriptor.blockSize,
     },
     source: { mimeType: 'video/mp4', durationMs: 1000 },
-    resolution: { title: 'Acquired fixture', mediaContext: { kind: 'movie' } },
+    resolution: { title: 'Acquired fixture', mediaContext: { kind: 'movie' }, artworkRoles: ['poster'] },
+    createArtworkSources: async () => [{
+      role: 'poster',
+      mimeType: 'image/png',
+      reader: createBufferSourceReader(imageBytes, { mimeType: 'image/png' }),
+    }],
   })
 
   const manifest = decodePublicationManifest(appended[0][0].body.payload)
@@ -261,8 +347,14 @@ test('acquired static publications sign the complete readable core range', async
   assert.equal(provenance.blobId, `0:${descriptor.length}:0:${descriptor.byteLength}`)
   assert.equal('start' in provenance, false)
   assert.equal('end' in provenance, false)
+  const poster = manifest.body.renditions.find(value => value.purpose === 'poster')
+  assert.equal(poster.format, 'image/png')
+  const posterCore = store.get({ key: Buffer.from(poster.core.key, 'hex') })
+  await posterCore.ready()
+  assert.deepEqual(await posterCore.get(0), imageBytes)
+  await posterCore.close()
 
-  const rendition = manifest.body.renditions[0]
+  const rendition = manifest.body.renditions.find(value => value.purpose === 'original')
   const api = createMediaGraphApi({
     store,
     verifiedQueryView: {
@@ -283,6 +375,197 @@ test('acquired static publications sign the complete readable core range', async
   assert.deepEqual(Buffer.concat(resumed), sourceBytes.subarray(512, 528))
   await opened.close()
   await written.core.close()
+})
+
+test('acquired artwork preserves supported image signatures from fragmented one-shot readers', async t => {
+  const signatures = [
+    ['image/png', Buffer.from('89504e470d0a1a0a', 'hex')],
+    ['image/jpeg', Buffer.from('ffd8ff', 'hex')],
+    ['image/gif', Buffer.from('GIF87a')],
+    ['image/gif', Buffer.from('GIF89a')],
+    ['image/webp', Buffer.from('524946460400000057454250', 'hex')],
+  ]
+  for (const [mimeType, bytes] of signatures) {
+    await t.test(`${mimeType} ${bytes.toString('hex')}`, async t => {
+      const fixture = await acquiredArtworkFixture(t)
+      let closed = 0
+      await fixture.publish(fragmentedArtworkReader(bytes, mimeType, { onClose: () => closed++ }), mimeType)
+      const manifest = decodePublicationManifest(fixture.appended[0][0].body.payload)
+      const poster = manifest.body.renditions.find(value => value.purpose === 'poster')
+      assert.equal(poster.format, mimeType)
+      const core = fixture.store.get({ key: Buffer.from(poster.core.key, 'hex') })
+      await core.ready()
+      assert.deepEqual(await core.get(0), bytes)
+      await core.close()
+      assert.equal(closed, 1)
+    })
+  }
+})
+
+test('artwork header can span resumable ranges without losing the body', async t => {
+  const fixture = await acquiredArtworkFixture(t)
+  const bytes = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(40, 23)])
+  await fixture.publish(fragmentedArtworkReader(bytes, 'image/png', { resumable: true }), 'image/png')
+  const manifest = decodePublicationManifest(fixture.appended[0][0].body.payload)
+  const poster = manifest.body.renditions.find(value => value.purpose === 'poster')
+  const core = fixture.store.get({ key: Buffer.from(poster.core.key, 'hex') })
+  await core.ready()
+  assert.deepEqual(await core.get(0), bytes)
+  await core.close()
+})
+
+test('acquired artwork rejects nonimages and declared MIME mismatches before signing a manifest', async t => {
+  const invalid = [
+    ['image/png', Buffer.from('not an image payload')],
+    ['image/png', Buffer.from('GIF89a')],
+    ['image/gif', Buffer.from('c7c9c6b8b9e1', 'hex')],
+    ['image/webp', Buffer.from('d2c9c6c604000000d7c5c2d0', 'hex')],
+  ]
+  for (const [mimeType, bytes] of invalid) {
+    await t.test(`${mimeType} ${bytes.toString('hex')}`, async t => {
+      const fixture = await acquiredArtworkFixture(t)
+      let closed = 0
+      const reader = fragmentedArtworkReader(bytes, mimeType, { onClose: () => closed++ })
+      await assert.rejects(fixture.publish(reader, mimeType))
+      assert.deepEqual(fixture.appended, [])
+      assert.equal(closed, 1)
+    })
+  }
+})
+
+test('acquired artwork pre-handoff failure closes every owned reader without publishing', async t => {
+  const pngHeader = Buffer.from('89504e470d0a1a0a', 'hex')
+  const counter = closes => () => { closes.closes++ }
+
+  await t.test('describe rejection rolls back every sibling past a rejecting close', async t => {
+    const fixture = await acquiredArtworkFixture(t)
+    const backdrop = { closes: 0 }
+    const poster = { closes: 0 }
+    const still = { closes: 0 }
+    const describeFailure = new Error('injected artwork describe failure')
+    const sources = [
+      { role: 'backdrop', mimeType: 'image/png', reader: fragmentedArtworkReader(Buffer.concat([pngHeader, Buffer.from('backdrop')]), 'image/png', { onClose: counter(backdrop) }) },
+      { role: 'poster', mimeType: 'image/png', reader: fragmentedArtworkReader(pngHeader, 'image/png', { onClose: counter(poster), describeError: describeFailure, closeError: new Error('injected artwork close failure') }) },
+      { role: 'still', mimeType: 'image/png', reader: fragmentedArtworkReader(Buffer.concat([pngHeader, Buffer.from('still')]), 'image/png', { onClose: counter(still) }) },
+    ]
+    await assert.rejects(
+      fixture.publishArtwork(sources, ['backdrop', 'poster', 'still']),
+      error => error === describeFailure,
+    )
+    assert.deepEqual([backdrop.closes, poster.closes, still.closes], [1, 1, 1],
+      'the written sibling stays closed once, the failing reader is closed despite rejecting, and the unvisited sibling is not leaked')
+    assert.deepEqual(fixture.appended, [])
+  })
+
+  await t.test('declared type mismatch leaves no owned reader open', async t => {
+    const fixture = await acquiredArtworkFixture(t)
+    const backdrop = { closes: 0 }
+    const poster = { closes: 0 }
+    const still = { closes: 0 }
+    const sources = [
+      { role: 'backdrop', mimeType: 'image/png', reader: fragmentedArtworkReader(Buffer.concat([pngHeader, Buffer.from('backdrop')]), 'image/png', { onClose: counter(backdrop) }) },
+      { role: 'poster', mimeType: 'image/png', reader: fragmentedArtworkReader(pngHeader, 'image/jpeg', { onClose: counter(poster) }) },
+      { role: 'still', mimeType: 'image/png', reader: fragmentedArtworkReader(Buffer.concat([pngHeader, Buffer.from('still')]), 'image/png', { onClose: counter(still) }) },
+    ]
+    await assert.rejects(fixture.publishArtwork(sources, ['backdrop', 'poster', 'still']))
+    assert.deepEqual([backdrop.closes, poster.closes, still.closes], [1, 1, 1])
+    assert.deepEqual(fixture.appended, [])
+  })
+
+  await t.test('write failure mid-loop closes the unvisited sibling', async t => {
+    const fixture = await acquiredArtworkFixture(t)
+    const backdrop = { closes: 0 }
+    const poster = { closes: 0 }
+    const still = { closes: 0 }
+    const sources = [
+      { role: 'backdrop', mimeType: 'image/png', reader: fragmentedArtworkReader(Buffer.concat([pngHeader, Buffer.from('backdrop')]), 'image/png', { onClose: counter(backdrop) }) },
+      { role: 'poster', mimeType: 'image/png', reader: fragmentedArtworkReader(Buffer.from('not an image payload'), 'image/png', { onClose: counter(poster) }) },
+      { role: 'still', mimeType: 'image/png', reader: fragmentedArtworkReader(Buffer.concat([pngHeader, Buffer.from('still')]), 'image/png', { onClose: counter(still) }) },
+    ]
+    await assert.rejects(fixture.publishArtwork(sources, ['backdrop', 'poster', 'still']))
+    assert.deepEqual([backdrop.closes, poster.closes, still.closes], [1, 1, 1])
+    assert.deepEqual(fixture.appended, [])
+  })
+
+  await t.test('count mismatch closes every returned reader', async t => {
+    const fixture = await acquiredArtworkFixture(t)
+    const backdrop = { closes: 0 }
+    const poster = { closes: 0 }
+    const sources = [
+      { role: 'backdrop', mimeType: 'image/png', reader: fragmentedArtworkReader(Buffer.concat([pngHeader, Buffer.from('backdrop')]), 'image/png', { onClose: counter(backdrop) }) },
+      { role: 'poster', mimeType: 'image/png', reader: fragmentedArtworkReader(Buffer.concat([pngHeader, Buffer.from('poster')]), 'image/png', { onClose: counter(poster) }) },
+    ]
+    await assert.rejects(fixture.publishArtwork(sources, ['backdrop']))
+    assert.deepEqual([backdrop.closes, poster.closes], [1, 1])
+    assert.deepEqual(fixture.appended, [])
+  })
+
+  await t.test('role that was never requested closes every returned reader', async t => {
+    const fixture = await acquiredArtworkFixture(t)
+    const backdrop = { closes: 0 }
+    const still = { closes: 0 }
+    const sources = [
+      { role: 'backdrop', mimeType: 'image/png', reader: fragmentedArtworkReader(Buffer.concat([pngHeader, Buffer.from('backdrop')]), 'image/png', { onClose: counter(backdrop) }) },
+      { role: 'still', mimeType: 'image/png', reader: fragmentedArtworkReader(Buffer.concat([pngHeader, Buffer.from('still')]), 'image/png', { onClose: counter(still) }) },
+    ]
+    await assert.rejects(fixture.publishArtwork(sources, ['backdrop', 'poster']))
+    assert.deepEqual([backdrop.closes, still.closes], [1, 1])
+    assert.deepEqual(fixture.appended, [])
+  })
+
+  await t.test('every requested role still publishes and closes exactly once', async t => {
+    const fixture = await acquiredArtworkFixture(t)
+    const backdrop = { closes: 0 }
+    const poster = { closes: 0 }
+    const still = { closes: 0 }
+    const sources = [
+      { role: 'backdrop', mimeType: 'image/png', reader: fragmentedArtworkReader(Buffer.concat([pngHeader, Buffer.from('backdrop')]), 'image/png', { onClose: counter(backdrop) }) },
+      { role: 'poster', mimeType: 'image/png', reader: fragmentedArtworkReader(Buffer.concat([pngHeader, Buffer.from('poster')]), 'image/png', { onClose: counter(poster) }) },
+      { role: 'still', mimeType: 'image/png', reader: fragmentedArtworkReader(Buffer.concat([pngHeader, Buffer.from('still')]), 'image/png', { onClose: counter(still) }) },
+    ]
+    const result = await fixture.publishArtwork(sources, ['backdrop', 'poster', 'still'])
+    assert.equal(typeof result.publicationId, 'string')
+    const manifest = decodePublicationManifest(fixture.appended[0][0].body.payload)
+    assert.deepEqual(
+      manifest.body.renditions.map(rendition => rendition.purpose).sort(),
+      ['backdrop', 'original', 'poster', 'still'],
+    )
+    assert.deepEqual([backdrop.closes, poster.closes, still.closes], [1, 1, 1])
+  })
+})
+
+test('aborting or revoking a grant during artwork header reads closes the reader without publication', async t => {
+  for (const revoke of [false, true]) {
+    await t.test(revoke ? 'grant revocation' : 'publication abort', async t => {
+      const fixture = await acquiredArtworkFixture(t)
+      const controller = new AbortController()
+      let closed = 0
+      let vault
+      const reader = fragmentedArtworkReader(Buffer.from('89504e470d0a1a0a', 'hex'), 'image/png', {
+        afterPrefix: () => revoke
+          ? vault.revoke({ acquisitionId: 'acq_artwork' })
+          : controller.abort(),
+        onClose: () => closed++,
+      })
+      vault = createSourceGrantVault({ resolver: { async resolve() { return reader } }, now: () => 1000 })
+      t.after(() => vault.close())
+      await vault.attach({
+        acquisitionId: 'acq_artwork',
+        principal: 'artwork-reader',
+        maxTtlMs: 10000,
+        grant: {
+          token: 'artwork-fixture-token',
+          adapterId: 'artwork-fixture',
+          audience: { acquisitionId: 'acq_artwork', principalId: 'artwork-reader' },
+          expiresAt: 11000,
+        },
+      })
+      const bound = await vault.resolve({ acquisitionId: 'acq_artwork', principal: 'artwork-reader' })
+      await assert.rejects(fixture.publish(bound, 'image/png', controller.signal))
+      assert.deepEqual(fixture.appended, [])
+      assert.equal(closed, 1)
+    })
+  }
 })
 
 test('archive publication carries its explicit retention class to asset and catalog serving', async (t) => {
@@ -854,6 +1137,20 @@ test('catalog commit failure leaves the shared rendition core intact and no uplo
           publisherId: deviceKeyPair.publicKey,
           catalog,
         }]
+      },
+      async listBindingPage() {
+        return {
+          items: [{ publisherId: deviceKeyPair.publicKey, catalog }],
+          nextCursor: null,
+          errors: [],
+          release: async () => {},
+        }
+      },
+      async acquireWritableBinding() {
+        return {
+          binding: { publisherId: deviceKeyPair.publicKey, catalog },
+          release: async () => {},
+        }
       },
     },
     now: () => 1_700_000_000_000,

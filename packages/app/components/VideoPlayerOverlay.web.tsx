@@ -1,12 +1,12 @@
-let Impl: React.ComponentType | null = null
+import { lazy, Suspense } from 'react'
 
-if (typeof window !== 'undefined') {
-  try {
-    Impl = require('./VideoPlayerOverlayImpl').VideoPlayerOverlay
-  } catch {}
-}
+// Browser-only player dependencies must not execute during Expo's Node SSR.
+const Impl = lazy(async () => {
+  const { VideoPlayerOverlay } = await import('./VideoPlayerOverlayImpl')
+  return { default: VideoPlayerOverlay }
+})
 
 export function VideoPlayerOverlay() {
-  if (!Impl) return null
-  return <Impl />
+  if (typeof window === 'undefined') return null
+  return <Suspense fallback={null}><Impl /></Suspense>
 }

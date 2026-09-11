@@ -3,6 +3,35 @@ import { createWindowedIngestBudget, normalizeBudgetLimit } from '../bounded-ing
 import { verifyBootstrapLocator } from './bootstrap-protocol.js'
 import b4a from 'b4a'
 
+async function verifyLocatorEnvelope(envelope, options, currentTime) {
+  try {
+    const verified = await verifyBootstrapLocator(envelope, { ...options, now: currentTime })
+    if (!verified) return { quarantined: true, errorCode: 'INVALID_LOCATOR' }
+    return { verified }
+  } catch (error) {
+    if (typeof error?.code === 'string' && error.code.startsWith('PROTOCOL_')) {
+      return { quarantined: true, errorCode: error.code }
+    }
+    throw error
+  }
+}
+
+function checkExistingLocator(current, body, envelope, maxPublishers, currentPublishersCount) {
+  if (current && (body.issuedAt < current.issuedAt || (body.issuedAt === current.issuedAt && body.catalogEpoch < current.catalogEpoch))) {
+    return { status: 'rejected', errorCode: 'STALE_LOCATOR' }
+  }
+  // Identical re-delivery (a gossip cycle re-forwarding the same signed
+  // locator) must not re-announce as fresh: the accepted status is what
+  // triggers re-gossip, so classifying it as a replay is what terminates
+  // the flood in a cyclic topology.
+  if (current && current.envelope && b4a.isBuffer(current.envelope) && b4a.isBuffer(envelope) && b4a.equals(current.envelope, envelope)) {
+    return { status: 'replay', errorCode: 'DUPLICATE_LOCATOR', publisherId: body.publisherId }
+  }
+  if (!current && currentPublishersCount >= maxPublishers) {
+    return { status: 'rejected', errorCode: 'PUBLISHER_PROJECTION_BUDGET_EXCEEDED' }
+  }
+  return null
+}
 export function createBootstrapManager(options = {}) {
   const now = typeof options.now === 'function' ? options.now : () => Date.now()
   const budgetWindowMs = normalizeBudgetLimit(options.budgetWindowMs, 60_000)
@@ -58,16 +87,11 @@ export function createBootstrapManager(options = {}) {
         }
       }
 
-      let verified
-      try {
-        verified = await verifyBootstrapLocator(envelope, { ...options, now: currentTime })
-      } catch (error) {
-        if (typeof error?.code === 'string' && error.code.startsWith('PROTOCOL_')) {
-          return { status: 'quarantined', errorCode: error.code }
-        }
-        throw error
+      const verification = await verifyLocatorEnvelope(envelope, options, currentTime)
+      if (verification.quarantined) {
+        return { status: 'quarantined', errorCode: verification.errorCode }
       }
-      if (!verified) return { status: 'quarantined', errorCode: 'INVALID_LOCATOR' }
+      const verified = verification.verified
       const body = verified.body
       const replayKey = `${String(peerId)}\0${body.publisherId}\0${body.catalogHead}\0${body.issuedAt}`
       pruneSeen(currentTime)
@@ -97,35 +121,23 @@ export function createBootstrapManager(options = {}) {
       }
 
       const current = locatorsByPublisher.get(body.publisherId)
-      if (current && (body.issuedAt < current.issuedAt || (body.issuedAt === current.issuedAt && body.catalogEpoch < current.catalogEpoch))) {
-        return { status: 'rejected', errorCode: 'STALE_LOCATOR' }
+      const existingCheck = checkExistingLocator(current, body, envelope, maxPublishers, locatorsByPublisher.size)
+      if (existingCheck) return existingCheck
+
+      const locator = {
+        ...body,
+        signerId: verified.signerId,
+        trusted: verified.trusted,
+        catalogChainVerified: verified.catalogChainVerified,
+        // The origin-signed envelope is retained so a gossiper can forward
+        // the locator verbatim on later session activations without
+        // re-signing it; every hop re-verifies signature and TTL.
+        envelope,
       }
-      // Identical re-delivery (a gossip cycle re-forwarding the same signed
-      // locator) must not re-announce as fresh: the accepted status is what
-      // triggers re-gossip, so classifying it as a replay is what terminates
-      // the flood in a cyclic topology.
-      if (current && current.envelope && b4a.isBuffer(current.envelope) && b4a.isBuffer(envelope) && b4a.equals(current.envelope, envelope)) {
-        return { status: 'replay', errorCode: 'DUPLICATE_LOCATOR', publisherId: body.publisherId }
+      if (!await onAcceptedLocator(locator, { peerId: String(peerId) })) {
+        return { status: 'rejected', errorCode: 'LOCAL_PROJECTION_REJECTED' }
       }
-      if (!current && locatorsByPublisher.size >= maxPublishers) {
-        return { status: 'rejected', errorCode: 'PUBLISHER_PROJECTION_BUDGET_EXCEEDED' }
-      }
-      if (!current || body.issuedAt > current.issuedAt || (body.issuedAt === current.issuedAt && body.catalogEpoch >= current.catalogEpoch)) {
-        const locator = {
-          ...body,
-          signerId: verified.signerId,
-          trusted: verified.trusted,
-          catalogChainVerified: verified.catalogChainVerified,
-          // The origin-signed envelope is retained so a gossiper can forward
-          // the locator verbatim on later session activations without
-          // re-signing it; every hop re-verifies signature and TTL.
-          envelope,
-        }
-        if (!await onAcceptedLocator(locator, { peerId: String(peerId) })) {
-          return { status: 'rejected', errorCode: 'LOCAL_PROJECTION_REJECTED' }
-        }
-        locatorsByPublisher.set(body.publisherId, locator)
-      }
+      locatorsByPublisher.set(body.publisherId, locator)
       return { status: 'accepted', publisherId: body.publisherId }
     },
     getLocator(publisherId) {

@@ -1,7 +1,7 @@
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 
-import { normalizePublicMediaContext } from '../acquisition/contract.js'
+import { normalizePublicMediaContext, normalizePublicationMetadata, PUBLICATION_ENRICHMENT_FIELDS } from '../acquisition/contract.js'
 import { episodeWorkIdentifier } from '../channel/structured-content.js'
 import {
   PROVIDER_ERROR_CODES,
@@ -45,7 +45,16 @@ const MAX_TEXT_BYTES = 512
 const MAX_IDEMPOTENCY_KEY_BYTES = 256
 const MAX_POLICY_DEPTH = 6
 const MAX_POLICY_FIELDS = 144
-
+const LOCAL_RESOLUTION_OPTIONAL = Object.freeze([
+  'idempotencyKey',
+  'sourceFileName',
+  'description',
+  'tags',
+  'creatorName',
+  'creatorHandle',
+  'duration',
+  'artworkRoles',
+])
 function fail(code, message, options) {
   throw providerError(code, message, options)
 }
@@ -107,20 +116,27 @@ function opaqueToken(value, name, code = PROVIDER_ERROR_CODES.INVALID_FIELD) {
 
 function normalizeSelector(value) {
   object(value, 'selector')
-  const episodic = value.kind === 'episode'
   const byTitle = Object.hasOwn(value, 'title')
-  exactFields(
-    value,
-    byTitle
-      ? (episodic ? ['title', 'kind', 'season', 'episode'] : ['title', 'kind'])
-      : (episodic ? ['namespace', 'identifier', 'kind', 'season', 'episode'] : ['namespace', 'identifier', 'kind']),
-    byTitle ? ['year'] : [],
-    'selector',
-  )
+  const episodic = value.kind === 'episode'
+  if (byTitle) {
+    exactFields(
+      value,
+      episodic ? ['title', 'kind', 'season', 'episode'] : ['title'],
+      episodic ? ['year'] : ['kind', 'year'],
+      'selector',
+    )
+  } else {
+    exactFields(
+      value,
+      episodic ? ['namespace', 'identifier', 'kind', 'season', 'episode'] : ['namespace', 'identifier', 'kind'],
+      [],
+      'selector',
+    )
+  }
   const selector = byTitle
     ? {
         title: text(value.title, 'selector.title'),
-        kind: text(value.kind, 'selector.kind', 64),
+        ...(value.kind ? { kind: text(value.kind, 'selector.kind', 64) } : {}),
         ...(value.year == null ? {} : { year: uint(value.year, 'selector.year') }),
       }
     : {
@@ -154,7 +170,7 @@ function localSelector(selector) {
 
 function mediaContext(selector, candidate = null) {
   const context = selector.title
-    ? { kind: selector.kind, title: selector.title, ...(selector.year == null ? {} : { releaseYear: selector.year }) }
+    ? { ...(selector.kind ? { kind: selector.kind } : {}), title: selector.title, ...(selector.year == null ? {} : { releaseYear: selector.year }) }
     : { kind: selector.kind, namespace: selector.namespace, identifier: selector.identifier }
   if (selector.kind === 'episode') {
     context.season = selector.season
@@ -392,14 +408,15 @@ function matchExternalReference(job, selector) {
   return true
 }
 
-function matchTitleSelector(job, selector) {
+function matchJobText(job, selector) {
   const queryTokens = selector.title ? selector.title.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu) || [] : []
   if (queryTokens.length === 0) return false
   const title = job.publicationMetadata?.title || job.title || null
   const sourceFileName = job.request?.sourceFileName || job.publicationMetadata?.sourceFileName || job.sourceFileName || null
-  const matched = textMatchesTokens(title, queryTokens) || textMatchesTokens(sourceFileName, queryTokens)
-  if (!matched) return false
-  const ctx = job.publicationMetadata?.mediaContext || job.mediaContext || null
+  return textMatchesTokens(title, queryTokens) || textMatchesTokens(sourceFileName, queryTokens)
+}
+
+function matchMediaContext(ctx, selector) {
   if (selector.kind && ctx?.kind && selector.kind !== ctx.kind) {
     return false
   }
@@ -410,6 +427,12 @@ function matchTitleSelector(job, selector) {
     if (ctx?.episode !== undefined && ctx?.episode !== null && ctx.episode !== selector.episode) return false
   }
   return true
+}
+
+function matchTitleSelector(job, selector) {
+  if (!matchJobText(job, selector)) return false
+  const ctx = job.publicationMetadata?.mediaContext || job.mediaContext || null
+  return matchMediaContext(ctx, selector)
 }
 
 function requireAdapter(adapter, method, name) {
@@ -479,21 +502,47 @@ export function createProviderService({
   }
 
   function prune(map, time = currentTime()) {
-    for (const [token, record] of map) if (record.expiresAt <= time) map.delete(token)
+    for (const [token, record] of map) {
+      if (record.inFlight || record.expiresAt > time) continue
+      map.delete(token)
+    }
   }
 
-  function issue(map, maximum, record) {
+  function issue(map, maximum, record, avoidToken = null) {
     prune(map)
     if (map.size >= maximum) fail(PROVIDER_ERROR_CODES.PROVIDER_OVERLOADED, 'Provider lease capacity is exhausted', { retryable: true })
     for (let attempt = 0; attempt < 6; attempt++) {
       const bytes = b4a.from(randomBytes(32))
       if (bytes.byteLength !== 32) fail(PROVIDER_ERROR_CODES.STATUS_UNAVAILABLE, 'Provider entropy source is invalid')
       const token = base64url(bytes)
-      if (map.has(token)) continue
-      map.set(token, Object.freeze(record))
+      if (token === avoidToken || map.has(token)) continue
+      map.set(token, { ...record, inFlight: false })
       return token
     }
     fail(PROVIDER_ERROR_CODES.PROVIDER_OVERLOADED, 'Provider lease allocation failed', { retryable: true })
+  }
+
+  function localResolutionIdentity(record) {
+    return {
+      kind: record.kind,
+      title: record.title,
+      sourceFileName: record.sourceFileName ?? null,
+      mediaContext: record.mediaContext ?? null,
+      publisherId: record.publisherId ?? null,
+      publicationId: record.publicationId ?? null,
+      renditionId: record.renditionId ?? null,
+      expectedBytes: record.expectedBytes ?? null,
+      availability: record.availability ?? null,
+      private: record.private ?? null,
+    }
+  }
+
+  function localEnrichment(input) {
+    const output = {}
+    for (const field of PUBLICATION_ENRICHMENT_FIELDS) {
+      if (input[field] != null) output[field] = input[field]
+    }
+    return normalizePublicationMetadata(output, PROVIDER_ERROR_CODES.INVALID_FIELD)
   }
 
   function issueReference(record, preferredRef = null) {
@@ -507,23 +556,34 @@ export function createProviderService({
     const existing = references.get(preferredRef)
     if (existing) {
       const { expiresAt: ignored, ...existingRecord } = existing
-      if (JSON.stringify(existingRecord) !== JSON.stringify(record)) {
+      // Identity fields decide binding collisions. Enrichment (description/tags/
+      // creatorName/...) may differ across entrypoints; first-bound wins.
+      if (JSON.stringify(localResolutionIdentity(existingRecord)) !== JSON.stringify(localResolutionIdentity(record))) {
         fail(PROVIDER_ERROR_CODES.INVALID_FIELD, 'local resolution idempotency key is already bound')
       }
-    } else if (references.size >= maxReferences) {
+      references.set(preferredRef, Object.freeze({ ...existingRecord, expiresAt }))
+      return { ref: preferredRef, expiresAt, record: existingRecord }
+    }
+    if (references.size >= maxReferences) {
       fail(PROVIDER_ERROR_CODES.PROVIDER_OVERLOADED, 'Provider lease capacity is exhausted', { retryable: true })
     }
     references.set(preferredRef, Object.freeze({ ...record, expiresAt }))
-    return { ref: preferredRef, expiresAt }
+    return { ref: preferredRef, expiresAt, record }
   }
 
   function issueLocalResolution(input = {}) {
-    exactFields(input, ['title', 'selector', 'publisherId', 'expectedBytes'], ['idempotencyKey', 'sourceFileName'], 'local resolution')
+    exactFields(
+      input,
+      ['title', 'selector', 'publisherId', 'expectedBytes'],
+      LOCAL_RESOLUTION_OPTIONAL,
+      'local resolution',
+    )
     const selector = normalizeSelector(input.selector)
     const publisherId = text(input.publisherId, 'local resolution.publisherId', 64)
     if (!PUBLISHER_ID.test(publisherId)) fail(PROVIDER_ERROR_CODES.INVALID_FIELD, 'local resolution publisherId is invalid', { field: 'publisherId' })
     const expectedBytes = uint(input.expectedBytes, 'local resolution.expectedBytes')
     if (expectedBytes < 1) fail(PROVIDER_ERROR_CODES.INVALID_FIELD, 'local resolution expectedBytes is invalid', { field: 'expectedBytes' })
+    const enrichment = localEnrichment(input)
     const record = {
       kind: 'acquirable',
       title: text(input.title, 'local resolution.title'),
@@ -537,6 +597,7 @@ export function createProviderService({
       expectedBytes,
       availability: null,
       private: Object.freeze({ local: true }),
+      ...enrichment,
     }
     const idempotency = input.idempotencyKey === undefined
       ? null
@@ -545,7 +606,8 @@ export function createProviderService({
       ? null
       : base64url(crypto.hash(b4a.from(`peartube.provider.local-resolution.v1\u0000${publisherId}\u0000${idempotency}`))).slice(0, 43)
     const lease = issueReference(record, preferredRef)
-    return resolution({ ...record, expiresAt: lease.expiresAt }, lease.ref)
+    const bound = lease.record || record
+    return resolution({ ...bound, expiresAt: lease.expiresAt }, lease.ref)
   }
 
   function reference(ref) {
@@ -563,17 +625,84 @@ export function createProviderService({
     opaqueToken(token, 'cursor', PROVIDER_ERROR_CODES.INVALID_CURSOR)
     const record = cursors.get(token)
     if (!record || record.fingerprint !== fingerprint) fail(PROVIDER_ERROR_CODES.INVALID_CURSOR, 'Search cursor is invalid')
+    if (record.inFlight) fail(PROVIDER_ERROR_CODES.INVALID_CURSOR, 'Search cursor is already in use')
     if (record.expiresAt <= currentTime()) {
       cursors.delete(token)
       fail(PROVIDER_ERROR_CODES.CURSOR_EXPIRED, 'Search cursor expired')
     }
+    record.inFlight = true
     return record
   }
 
-  function issueCursor(fingerprint, records, offset) {
-    if (offset >= records.length) return null
+  function issueCursor(input, recordsArg, offsetArg) {
+    let fingerprint
+    let records
+    let offset
+    let federationCursor = null
+    let seenKeys = null
+    let partial = false
+    let stale = false
+    let avoidToken = null
+
+    if (input && typeof input === 'object' && !Array.isArray(input)) {
+      fingerprint = input.fingerprint
+      records = input.records || []
+      offset = input.offset || 0
+      federationCursor = input.federationCursor || null
+      seenKeys = input.seenKeys || null
+      partial = Boolean(input.partial)
+      stale = Boolean(input.stale)
+      avoidToken = input.avoidToken || null
+    } else {
+      fingerprint = input
+      records = recordsArg || []
+      offset = offsetArg || 0
+    }
+
+    const hasMoreLocal = offset < records.length
+    const hasMoreRemote = Boolean(federationCursor)
+    if (!hasMoreLocal && !hasMoreRemote) return null
     const expiresAt = currentTime() + cursorLeaseMs
-    return issue(cursors, maxCursors, { fingerprint, records, offset, expiresAt })
+    const keys = seenKeys instanceof Set ? seenKeys : new Set(records.map(r => r.key))
+    return issue(cursors, maxCursors, {
+      fingerprint,
+      records,
+      offset,
+      federationCursor,
+      seenKeys: keys,
+      partial,
+      stale,
+      expiresAt,
+    }, avoidToken)
+  }
+
+  function releaseCursor(token, record) {
+    if (cursors.get(token) !== record) return false
+    cursors.delete(token)
+    record.inFlight = false
+    return true
+  }
+
+  function restoreCursor(token, record) {
+    const existing = cursors.get(token)
+    if (existing && existing !== record) fail(PROVIDER_ERROR_CODES.INVALID_CURSOR, 'Search cursor reference collided during restore')
+    if (existing === record) {
+      record.inFlight = false
+      return
+    }
+    record.inFlight = false
+    cursors.set(token, record)
+  }
+
+  function completeCursor(token, record, nextState, { restoreOnIssueFailure = true } = {}) {
+    if (!releaseCursor(token, record)) fail(PROVIDER_ERROR_CODES.INVALID_CURSOR, 'Search cursor was not retained')
+    if (nextState === null) return null
+    try {
+      return issueCursor({ ...nextState, avoidToken: token })
+    } catch (error) {
+      if (restoreOnIssueFailure) restoreCursor(token, record)
+      throw error
+    }
   }
 
   async function extraPublication(publicationId) {
@@ -583,9 +712,7 @@ export function createProviderService({
       : publicationLookup.getPublication({ publicationId })
   }
 
-  async function verifiedPublication(publicationId, renditionId = null) {
-    const projection = await verifiedQueryView.getPublication({ publicationId })
-    if (!projection) return null
+  async function resolveVerifiedManifest(publicationId, projection) {
     const extra = await extraPublication(publicationId)
     if (extra?.publicationId && extra.publicationId !== publicationId) {
       fail(PROVIDER_ERROR_CODES.PUBLICATION_NOT_VERIFIED, 'Publication lookup returned a different publication')
@@ -595,6 +722,10 @@ export function createProviderService({
     if (!manifest || manifest.publicationId !== publicationId) {
       fail(PROVIDER_ERROR_CODES.PUBLICATION_NOT_VERIFIED, 'Publication manifest is not verified')
     }
+    return { extra, publication, manifest }
+  }
+
+  async function resolveVerifiedRendition(publicationId, renditionId, extra, manifest) {
     const available = Array.isArray(manifest.body?.renditions) ? manifest.body.renditions : []
     const selectedId = renditionId || extra?.rendition?.renditionId || available[0]?.renditionId || null
     const detailed = selectedId === null ? null : await verifiedQueryView.getRendition({ publicationId, renditionId: selectedId })
@@ -602,32 +733,23 @@ export function createProviderService({
     if (selectedId !== null && (!rendition || rendition.renditionId !== selectedId)) {
       fail(PROVIDER_ERROR_CODES.PUBLICATION_NOT_VERIFIED, 'Publication rendition is not verified')
     }
+    return rendition
+  }
+
+  async function verifiedPublication(publicationId, renditionId = null) {
+    const projection = await verifiedQueryView.getPublication({ publicationId })
+    if (!projection) return null
+    const { extra, publication, manifest } = await resolveVerifiedManifest(publicationId, projection)
+    const rendition = await resolveVerifiedRendition(publicationId, renditionId, extra, manifest)
     return Object.freeze({ publication: { ...projection, ...publication }, manifest, rendition })
   }
   function firstPresent(values) { return values.find(value => value !== null && value !== undefined) ?? null }
 
 
-  async function publishedSearch(selector) {
+  async function publishedSearchByIdentifier(selector) {
     const page = await verifiedQueryView.query({ selectors: [localSelector(selector)], limit: MAX_SEARCH_RESULTS })
     const entityIds = [...new Set((page?.results ?? []).map(row => row?.entityId).filter(Boolean))]
-    let entities
-    if (entityIds.length > 0) {
-      entities = await Promise.all(entityIds.map(entityId => verifiedQueryView.getEntity({ entityKind: 'work', entityId })))
-    } else if (selector.title && typeof verifiedQueryView.listEntities === 'function') {
-      const expectedTitle = selector.title.normalize('NFKC').trim().toLowerCase().replace(/\s+/gu, ' ')
-      const listed = await verifiedQueryView.listEntities()
-      entities = listed.filter(entity => {
-        const manifest = entity.publications?.[0]?.manifest
-        const title = firstPresent([entity.resolved?.metadata?.title, manifest?.body?.title])
-        if (typeof title !== 'string' || title.normalize('NFKC').trim().toLowerCase().replace(/\s+/gu, ' ') !== expectedTitle) {
-          return false
-        }
-        const releaseYear = firstPresent([entity.resolved?.metadata?.releaseYear, manifest?.body?.releaseYear])
-        return selector.year == null || releaseYear == null || releaseYear === selector.year
-      })
-    } else {
-      entities = []
-    }
+    const entities = await Promise.all(entityIds.map(entityId => verifiedQueryView.getEntity({ entityKind: null, entityId })))
     const output = []
     for (const entity of entities) {
       if (!entity) continue
@@ -656,11 +778,177 @@ export function createProviderService({
     return output
   }
 
+  async function collectTitleSearchCandidates() {
+    let candidates = []
+    if (typeof verifiedQueryView.listEntities === 'function') {
+      candidates = (await verifiedQueryView.listEntities()) || []
+    }
+    if (typeof verifiedQueryView.getClaims === 'function') {
+      try {
+        const claims = await verifiedQueryView.getClaims()
+        const claimEntityIds = new Set()
+        for (const claim of claims || []) {
+          const collectionId = claim?.body?.payload?.collectionRef?.entityId
+          const agentId = claim?.body?.payload?.agentRef?.entityId
+          if (collectionId) claimEntityIds.add(collectionId)
+          if (agentId) claimEntityIds.add(agentId)
+        }
+        const missingIds = [...claimEntityIds].filter(id => !candidates.some(e => e?.entityId === id))
+        if (missingIds.length > 0 && typeof verifiedQueryView.getEntity === 'function') {
+          const extra = await Promise.all(missingIds.map(entityId => verifiedQueryView.getEntity({ entityId })))
+          candidates.push(...extra.filter(Boolean))
+        }
+      } catch {
+        // best-effort
+      }
+    }
+    return candidates
+  }
+
+  const WORK_LIKE_KINDS = ['work', 'movie', 'series', 'episode']
+
+  function kindMatchesSelector(entityKind, kind) {
+    if (WORK_LIKE_KINDS.includes(kind)) return WORK_LIKE_KINDS.includes(entityKind)
+    return entityKind === kind
+  }
+
+  function episodeNumbersMatch(entity, manifest, selector) {
+    const season = entity.resolved?.metadata?.season ?? manifest?.body?.season
+    const episode = entity.resolved?.metadata?.episode ?? manifest?.body?.episode
+    if (season != null && season !== selector.season) return false
+    if (episode != null && episode !== selector.episode) return false
+    return true
+  }
+
+  function matchEntityKindAndAttributes(entity, manifest, selector) {
+    const entityKind = entity.entityKind || 'work'
+    if (selector.kind && selector.kind !== 'all' && selector.kind !== 'any' &&
+        !kindMatchesSelector(entityKind, selector.kind)) {
+      return false
+    }
+
+    if (selector.year != null) {
+      const releaseYear = firstPresent([entity.resolved?.metadata?.releaseYear, manifest?.body?.releaseYear])
+      if (releaseYear != null && releaseYear !== selector.year) return false
+    }
+
+    if (selector.kind === 'episode' && !episodeNumbersMatch(entity, manifest, selector)) return false
+    return true
+  }
+
+  function matchEntityQuery(entity, manifest, queryWords, expectedTitle) {
+    if (queryWords.length === 0) return true
+    const resolved = entity.resolved || {}
+    const metadata = resolved.metadata || {}
+    const body = manifest?.body || {}
+    const title = firstPresent([metadata.title, metadata.displayName, body.title])
+    const subtitle = firstPresent([metadata.subtitle, metadata.overview, body.description])
+    const creatorName = firstPresent([metadata.creatorName, metadata.author])
+    const entityKind = entity.entityKind || 'work'
+    const entityId = entity.entityId || ''
+    const searchable = [title, subtitle, creatorName, entityKind, entityId].filter(Boolean).join(' ').toLowerCase().normalize('NFKC')
+    if (queryWords.every(word => searchable.includes(word))) return true
+    return typeof title === 'string' && title.normalize('NFKC').trim().toLowerCase().replace(/\s+/gu, ' ') === expectedTitle
+  }
+
+  function matchSearchEntity(entity, selector, queryWords, expectedTitle) {
+    if (!entity) return false
+    const manifest = entity.publications?.[0]?.manifest
+    if (!matchEntityKindAndAttributes(entity, manifest, selector)) return false
+    return matchEntityQuery(entity, manifest, queryWords, expectedTitle)
+  }
+
+  async function formatEntityPublications(entity, selector, output) {
+    for (const publication of entity.publications) {
+      const manifest = publication.manifest || (typeof verifiedQueryView.getManifest === 'function' ? await verifiedQueryView.getManifest({ publicationId: publication.publicationId }) : null)
+      const renditions = Array.isArray(manifest?.body?.renditions) ? manifest.body.renditions : []
+      for (const rendition of renditions) {
+        output.push({
+          key: `${publication.publicationId}:${rendition.renditionId}`,
+          kind: 'published',
+          title: firstPresent([manifest?.body?.title, publication.normalizedTitle, entity.resolved?.metadata?.title]),
+          sourceFileName: firstPresent([manifest?.body?.sourceFileName, publication.sourceFileName]),
+          mediaContext: mediaContext(selector),
+          publisherId: firstPresent([publication.publisherId, manifest?.body?.publisherId]),
+          publicationId: publication.publicationId,
+          renditionId: rendition.renditionId,
+          expectedBytes: rendition.core?.byteLength ?? null,
+          availability: null,
+          private: Object.freeze({ publication, manifest, rendition, entity }),
+        })
+        if (output.length >= MAX_SEARCH_RESULTS) return true
+      }
+    }
+    return false
+  }
+
+  function formatLocalEntityRow(entity) {
+    const entityTitle = firstPresent([entity.resolved?.metadata?.title, entity.resolved?.metadata?.displayName, entity.entityId])
+    const entitySubtitle = firstPresent([
+      entity.resolved?.metadata?.subtitle,
+      entity.resolved?.metadata?.overview,
+      entity.entityKind === 'collection' ? 'Collection' : (entity.entityKind === 'creator' || entity.entityKind === 'agent') ? 'Creator' : null,
+    ])
+    return {
+      key: `entity:${entity.entityId}`,
+      kind: 'local-entity',
+      title: entityTitle,
+      subtitle: entitySubtitle,
+      sourceFileName: null,
+      mediaContext: {
+        kind: entity.entityKind || 'work',
+        title: entityTitle,
+        workEntityId: entity.entityId,
+      },
+      publisherId: null,
+      publicationId: null,
+      renditionId: null,
+      expectedBytes: null,
+      availability: null,
+      localEntity: true,
+      entityKind: entity.entityKind || 'work',
+      private: Object.freeze({ entity, localEntity: true }),
+    }
+  }
+
+  async function publishedSearchByTitle(selector) {
+    const expectedTitle = selector.title.normalize('NFKC').trim().toLowerCase().replace(/\s+/gu, ' ')
+    const queryWords = expectedTitle.split(' ').filter(Boolean)
+    const candidates = await collectTitleSearchCandidates()
+    const matches = candidates.filter(entity => matchSearchEntity(entity, selector, queryWords, expectedTitle))
+
+    const output = []
+    for (const entity of matches) {
+      if (Array.isArray(entity.publications) && entity.publications.length > 0) {
+        if (await formatEntityPublications(entity, selector, output)) return output
+      } else {
+        output.push(formatLocalEntityRow(entity))
+        if (output.length >= MAX_SEARCH_RESULTS) return output
+      }
+    }
+    return output
+  }
+
+  async function publishedSearch(selector) {
+    if (selector.namespace && selector.identifier) {
+      return publishedSearchByIdentifier(selector)
+    }
+    if (selector.title) {
+      return publishedSearchByTitle(selector)
+    }
+    return []
+  }
+
   function acquirableSearch(selector, candidates) {
     const output = []
+    const queryTokens = selector.title ? (selector.title.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu) || []) : []
     for (const candidate of candidates || []) {
       const facts = candidateFacts(candidate, selector)
       if (!candidate.candidateRef || !OPAQUE_TOKEN.test(candidate.candidateRef)) continue
+      if (selector.title && queryTokens.length > 0) {
+        const candidateTitle = facts.title || candidate.work?.title || ''
+        if (!textMatchesTokens(candidateTitle, queryTokens)) continue
+      }
       output.push({
         key: facts.publicationId && facts.renditionId
           ? `${facts.publicationId}:${facts.renditionId}`
@@ -673,22 +961,68 @@ export function createProviderService({
     }
     return output
   }
-  async function inFlightAcquisitionSearch(selector) {
+  async function loadActiveAcquisitionJobs() {
     if (!acquisitionManager) return []
-    let rawJobs
     try {
       if (typeof acquisitionManager.listActive === 'function') {
-        rawJobs = await acquisitionManager.listActive()
-      } else if (typeof acquisitionManager.list === 'function') {
+        const raw = await acquisitionManager.listActive()
+        return Array.isArray(raw) ? raw : []
+      }
+      if (typeof acquisitionManager.list === 'function') {
         const page = await acquisitionManager.list({ states: ACTIVE_ACQUISITION_STATES, limit: MAX_SEARCH_RESULTS })
-        rawJobs = page?.items || page || []
-      } else {
-        return []
+        const raw = page?.items || page || []
+        return Array.isArray(raw) ? raw : []
       }
     } catch {
       return []
     }
-    const jobs = Array.isArray(rawJobs) ? rawJobs : []
+    return []
+  }
+
+  function formatInFlightJob(job, selector) {
+    const metadata = job.publicationMetadata || {}
+    const request = job.request || {}
+    const publication = job.publication || {}
+    const title = firstPresent([
+      metadata.title,
+      job.title,
+      request.sourceFileName,
+      metadata.sourceFileName,
+      job.sourceFileName,
+    ])
+    const publisherId = firstPresent([
+      job.publisherId,
+      request.publisherId,
+      metadata.publisherId,
+    ])
+    const pubId = publication.publicationId || job.publicationId || null
+    const rendId = publication.renditionId || job.renditionId || null
+    const sourceFileName = firstPresent([
+      metadata.sourceFileName,
+      request.sourceFileName,
+      job.sourceFileName,
+    ])
+
+    return {
+      key: pubId && rendId ? `${pubId}:${rendId}` : `acquisition:${job.acquisitionId}`,
+      kind: 'acquirable',
+      title,
+      expectedBytes: job.expectedBytes ?? null,
+      mediaContext: mediaContext(selector),
+      publisherId: publisherId || null,
+      ...(pubId ? { publicationId: pubId } : {}),
+      ...(rendId ? { renditionId: rendId } : {}),
+      availability: null,
+      ...(sourceFileName ? { sourceFileName } : {}),
+      private: Object.freeze({
+        acquisitionId: job.acquisitionId,
+        inFlight: true,
+      }),
+    }
+  }
+
+  async function inFlightAcquisitionSearch(selector) {
+    const jobs = await loadActiveAcquisitionJobs()
     const output = []
     for (const job of jobs) {
       if (!job || !job.acquisitionId) continue
@@ -697,52 +1031,15 @@ export function createProviderService({
         ? matchTitleSelector(job, selector)
         : matchExternalReference(job, selector)
       if (!matched) continue
-
-      const title = firstPresent([
-        job.publicationMetadata?.title,
-        job.title,
-        job.request?.sourceFileName,
-        job.publicationMetadata?.sourceFileName,
-        job.sourceFileName,
-      ])
-      const publisherId = firstPresent([
-        job.publisherId,
-        job.request?.publisherId,
-        job.publicationMetadata?.publisherId,
-      ])
-      const pubId = job.publication?.publicationId || job.publicationId || null
-      const rendId = job.publication?.renditionId || job.renditionId || null
-      const sourceFileName = firstPresent([
-        job.publicationMetadata?.sourceFileName,
-        job.request?.sourceFileName,
-        job.sourceFileName,
-      ])
-
-      output.push({
-        key: pubId && rendId ? `${pubId}:${rendId}` : `acquisition:${job.acquisitionId}`,
-        kind: 'acquirable',
-        title,
-        expectedBytes: job.expectedBytes ?? null,
-        mediaContext: mediaContext(selector),
-        publisherId: publisherId || null,
-        ...(pubId ? { publicationId: pubId } : {}),
-        ...(rendId ? { renditionId: rendId } : {}),
-        availability: null,
-        ...(sourceFileName ? { sourceFileName } : {}),
-        private: Object.freeze({
-          acquisitionId: job.acquisitionId,
-          inFlight: true,
-        }),
-      })
+      output.push(formatInFlightJob(job, selector))
       if (output.length >= MAX_SEARCH_RESULTS) break
     }
     return output
   }
 
-
-  function publicHit(record) {
-    const lease = issueReference({
-      kind: record.kind,
+  function createReferenceLease(record, isLocalEntity) {
+    return issueReference({
+      kind: isLocalEntity ? 'local-entity' : record.kind,
       title: record.title,
       sourceFileName: record.sourceFileName || null,
       mediaContext: record.mediaContext,
@@ -753,47 +1050,187 @@ export function createProviderService({
       availability: record.availability || null,
       private: record.private,
     })
+  }
+
+  function publicHit(record) {
+    const isLocalEntity = record.private?.localEntity === true || record.kind === 'local-entity'
+    const lease = createReferenceLease(record, isLocalEntity)
+    const hasExpectedBytes = record.expectedBytes !== null && record.expectedBytes !== undefined
     return Object.freeze({
       schemaVersion: 1,
       ref: lease.ref,
       title: record.title,
       ...(record.sourceFileName ? { sourceFileName: record.sourceFileName } : {}),
       mediaContext: record.mediaContext,
-      kind: record.kind,
+      kind: isLocalEntity ? 'local-entity' : record.kind,
+      published: !isLocalEntity && record.kind === 'published' && Boolean(record.publicationId),
+      acquirable: record.kind === 'acquirable',
       ...(record.publicationId ? { publicationId: record.publicationId } : {}),
       ...(record.renditionId ? { renditionId: record.renditionId } : {}),
       ...(record.availability ? { availability: record.availability } : {}),
-      ...(record.expectedBytes !== null && record.expectedBytes !== undefined ? { expectedBytes: record.expectedBytes } : {}),
+      ...(hasExpectedBytes ? { expectedBytes: record.expectedBytes } : {}),
+      ...(isLocalEntity ? { localEntity: true, entityKind: record.mediaContext?.kind || 'entity' } : {}),
     })
   }
 
-  async function search(request = {}) {
-    exactFields(request, ['selector'], ['limit', 'cursor', 'signal'], 'request')
-    const selector = normalizeSelector(request.selector)
-    const limit = positiveLimit(request.limit, 20, MAX_SEARCH_RESULTS, 'limit')
-    const fingerprint = queryFingerprint(selector)
-    if (request.cursor !== undefined && request.cursor !== null) {
-      const stored = cursor(request.cursor, fingerprint)
-      const end = Math.min(stored.records.length, stored.offset + limit)
-      return Object.freeze({
-        candidates: Object.freeze(stored.records.slice(stored.offset, end).map(publicHit)),
-        nextCursor: issueCursor(fingerprint, stored.records, end),
+  function serveStoredCursorRecords({ token, stored, fingerprint, limit }) {
+    const end = Math.min(stored.records.length, stored.offset + limit)
+    const slice = stored.records.slice(stored.offset, end)
+    const candidates = Object.freeze(slice.map(publicHit))
+    const nextCursor = completeCursor(token, stored, {
+      fingerprint,
+      records: stored.records,
+      offset: end,
+      federationCursor: stored.federationCursor,
+      seenKeys: stored.seenKeys,
+      partial: stored.partial,
+      stale: stored.stale,
+    })
+    return Object.freeze({
+      candidates,
+      nextCursor,
+      diagnostics: Object.freeze({
+        partial: stored.partial,
+        stale: stored.stale,
+      }),
+      partial: stored.partial,
+      stale: stored.stale,
+    })
+  }
+
+  function rollbackCursorOnFailure({ token, stored, upstreamConsumed }) {
+    if (cursors.get(token) === stored) {
+      if (upstreamConsumed) releaseCursor(token, stored)
+      else restoreCursor(token, stored)
+    } else if (!upstreamConsumed) {
+      restoreCursor(token, stored)
+    }
+  }
+
+  async function fetchFederationPage({ selector, stored, signal }) {
+    let remoteValue = null
+    let partialDiagnostic = stored.partial
+    let staleDiagnostic = stored.stale
+    let upstreamConsumed = false
+    try {
+      remoteValue = await indexVerificationRuntime.searchIndexCandidates({
+        selector,
+        limit: MAX_SEARCH_RESULTS,
+        signal,
+        cursor: stored.federationCursor,
       })
+      upstreamConsumed = true
+      if (remoteValue?.diagnostics?.partial || remoteValue?.partial) partialDiagnostic = true
+      if (remoteValue?.diagnostics?.stale || remoteValue?.stale) staleDiagnostic = true
+    } catch (error) {
+      if (signal?.aborted) throw error
+      partialDiagnostic = true
+      remoteValue = { candidates: [], nextCursor: stored.federationCursor }
+    }
+    return { remoteValue, partialDiagnostic, staleDiagnostic, upstreamConsumed }
+  }
+
+  function processFederationPageRecords({
+    token,
+    stored,
+    fingerprint,
+    selector,
+    remoteValue,
+    partialDiagnostic,
+    staleDiagnostic,
+    upstreamConsumed,
+    limit,
+  }) {
+    const remoteCandidates = Array.isArray(remoteValue) ? remoteValue : (remoteValue?.candidates || [])
+    const acquirable = acquirableSearch(selector, remoteCandidates)
+    const newRecords = []
+    const seenKeys = new Set(stored.seenKeys)
+    for (const record of acquirable) {
+      if (seenKeys.has(record.key)) continue
+      seenKeys.add(record.key)
+      newRecords.push(record)
+      if (newRecords.length >= MAX_SEARCH_RESULTS) break
     }
 
-    const [publishedResult, remoteResult, inFlightResult] = await Promise.allSettled([
-      publishedSearch(selector),
-      selector.title
-        ? Promise.resolve([])
-        : indexVerificationRuntime.searchIndexCandidates({ selector, limit: MAX_SEARCH_RESULTS, signal: request.signal }),
-      inFlightAcquisitionSearch(selector),
-    ])
-    if (publishedResult.status === 'rejected' && remoteResult.status === 'rejected' && inFlightResult.status === 'rejected') {
-      throw mapProviderError(remoteResult.reason || inFlightResult.reason || publishedResult.reason, PROVIDER_ERROR_CODES.SOURCE_UNAVAILABLE, 'No verified search source is available', { retryable: true })
+    const nextFedCursor = remoteValue && !Array.isArray(remoteValue) ? (remoteValue.nextCursor || null) : null
+    const end = Math.min(newRecords.length, limit)
+    const slice = newRecords.slice(0, end)
+    const candidates = Object.freeze(slice.map(publicHit))
+    const nextState = {
+      fingerprint,
+      records: newRecords,
+      offset: end,
+      federationCursor: nextFedCursor,
+      seenKeys,
+      partial: partialDiagnostic,
+      stale: staleDiagnostic,
     }
-    const published = publishedResult.status === 'fulfilled' ? publishedResult.value : []
-    const inFlight = inFlightResult.status === 'fulfilled' ? inFlightResult.value : []
-    const acquirable = remoteResult.status === 'fulfilled' ? acquirableSearch(selector, remoteResult.value) : []
+    const nextCursor = completeCursor(token, stored, nextState, {
+      restoreOnIssueFailure: !upstreamConsumed,
+    })
+
+    return Object.freeze({
+      candidates,
+      nextCursor,
+      diagnostics: Object.freeze({
+        partial: partialDiagnostic,
+        stale: staleDiagnostic,
+      }),
+      partial: partialDiagnostic,
+      stale: staleDiagnostic,
+    })
+  }
+
+  async function searchWithCursor({ token, fingerprint, selector, limit, signal }) {
+    const stored = cursor(token, fingerprint)
+    let upstreamConsumed = false
+    let committed = false
+    try {
+      if (stored.offset < stored.records.length) {
+        const result = serveStoredCursorRecords({ token, stored, fingerprint, limit })
+        committed = true
+        return result
+      }
+
+      if (stored.federationCursor) {
+        const fed = await fetchFederationPage({ selector, stored, signal })
+        upstreamConsumed = fed.upstreamConsumed
+        const result = processFederationPageRecords({
+          token,
+          stored,
+          fingerprint,
+          selector,
+          remoteValue: fed.remoteValue,
+          partialDiagnostic: fed.partialDiagnostic,
+          staleDiagnostic: fed.staleDiagnostic,
+          upstreamConsumed,
+          limit,
+        })
+        committed = true
+        return result
+      }
+
+      const nextCursor = completeCursor(token, stored, null)
+      committed = true
+      return Object.freeze({
+        candidates: Object.freeze([]),
+        nextCursor,
+        diagnostics: Object.freeze({
+          partial: stored.partial,
+          stale: stored.stale,
+        }),
+        partial: stored.partial,
+        stale: stored.stale,
+      })
+    } catch (error) {
+      if (!committed) {
+        rollbackCursorOnFailure({ token, stored, upstreamConsumed })
+      }
+      throw error
+    }
+  }
+
+  function mergeInitialSearchRecords(published, inFlight, acquirable) {
     const records = []
     const seen = new Set()
     for (const record of [...published, ...inFlight, ...acquirable]) {
@@ -802,12 +1239,68 @@ export function createProviderService({
       records.push(record)
       if (records.length >= MAX_SEARCH_RESULTS) break
     }
-    const boundedRecords = Object.freeze(records)
+    return { records: Object.freeze(records), seen }
+  }
+
+  function deriveFederationDiagnostics(remoteResult, remoteValue) {
+    const partial = remoteResult.status === 'rejected' || Boolean(remoteValue?.diagnostics?.partial ?? remoteValue?.partial)
+    const stale = Boolean(remoteValue?.diagnostics?.stale ?? remoteValue?.stale)
+    const cursor = remoteValue && !Array.isArray(remoteValue) ? (remoteValue.nextCursor || null) : null
+    return { partial, stale, cursor }
+  }
+
+  async function searchInitial({ selector, limit, fingerprint, signal }) {
+    const [publishedResult, remoteResult, inFlightResult] = await Promise.allSettled([
+      publishedSearch(selector),
+      indexVerificationRuntime.searchIndexCandidates({ selector, limit: MAX_SEARCH_RESULTS, signal }),
+      inFlightAcquisitionSearch(selector),
+    ])
+    if (publishedResult.status === 'rejected' && remoteResult.status === 'rejected' && inFlightResult.status === 'rejected') {
+      throw mapProviderError(remoteResult.reason || inFlightResult.reason || publishedResult.reason, PROVIDER_ERROR_CODES.SOURCE_UNAVAILABLE, 'No verified search source is available', { retryable: true })
+    }
+    const published = publishedResult.status === 'fulfilled' ? publishedResult.value : []
+    const inFlight = inFlightResult.status === 'fulfilled' ? inFlightResult.value : []
+    const remoteValue = remoteResult.status === 'fulfilled' ? remoteResult.value : null
+    const remoteCandidates = Array.isArray(remoteValue) ? remoteValue : (remoteValue?.candidates || [])
+    const acquirable = acquirableSearch(selector, remoteCandidates)
+    const { records: boundedRecords, seen } = mergeInitialSearchRecords(published, inFlight, acquirable)
+
     const end = Math.min(boundedRecords.length, limit)
+    const { partial: partialDiagnostic, stale: staleDiagnostic, cursor: fedCursor } = deriveFederationDiagnostics(remoteResult, remoteValue)
+
+    const nextCursor = issueCursor({
+      fingerprint,
+      records: boundedRecords,
+      offset: end,
+      federationCursor: fedCursor,
+      seenKeys: seen,
+      partial: partialDiagnostic,
+      stale: staleDiagnostic,
+    })
+
     return Object.freeze({
       candidates: Object.freeze(boundedRecords.slice(0, end).map(publicHit)),
-      nextCursor: issueCursor(fingerprint, boundedRecords, end),
+      nextCursor,
+      diagnostics: Object.freeze({
+        partial: partialDiagnostic,
+        stale: staleDiagnostic,
+      }),
+      partial: partialDiagnostic,
+      stale: staleDiagnostic,
     })
+  }
+
+  async function search(request = {}) {
+    exactFields(request, ['selector'], ['limit', 'cursor', 'signal'], 'request')
+    const selector = normalizeSelector(request.selector)
+    const limit = positiveLimit(request.limit, 20, MAX_SEARCH_RESULTS, 'limit')
+    const fingerprint = queryFingerprint(selector)
+
+    if (request.cursor !== undefined && request.cursor !== null) {
+      return searchWithCursor({ token: request.cursor, fingerprint, selector, limit, signal: request.signal })
+    }
+
+    return searchInitial({ selector, limit, fingerprint, signal: request.signal })
   }
 
 // Labels a resolution carries when the record has them: what the work is
@@ -816,11 +1309,31 @@ function resolutionLabels(record) {
   const labels = {}
   if (record.sourceFileName) labels.sourceFileName = record.sourceFileName
   if (record.title) labels.title = record.title
+  if (record.description) labels.description = record.description
+  if (Array.isArray(record.tags) && record.tags.length > 0) labels.tags = record.tags
+  if (record.creatorName) labels.creatorName = record.creatorName
+  if (record.creatorHandle) labels.creatorHandle = record.creatorHandle
+  if (Number.isSafeInteger(record.duration) && record.duration > 0) labels.duration = record.duration
+  if (Array.isArray(record.artworkRoles) && record.artworkRoles.length > 0) labels.artworkRoles = record.artworkRoles
   return labels
 }
+  function resolutionIdentifiers(record, overrides) {
+    const publisherId = overrides.publisherId || record.publisherId
+    const publicationId = overrides.publicationId || record.publicationId
+    const renditionId = overrides.renditionId || record.renditionId
+    const availability = overrides.availability || record.availability
+    return {
+      ...(publisherId ? { publisherId } : {}),
+      ...(publicationId ? { publicationId } : {}),
+      ...(renditionId ? { renditionId } : {}),
+      ...(availability ? { measuredFacts: Object.freeze({ availability }) } : {}),
+    }
+  }
+
   function resolution(record, ref, overrides = {}) {
     const kind = overrides.kind || record.kind
     const expectedBytes = overrides.expectedBytes ?? record.expectedBytes
+    const hasExpectedBytes = expectedBytes !== null && expectedBytes !== undefined
     return Object.freeze({
       schemaVersion: 1,
       resolutionRef: ref,
@@ -828,72 +1341,82 @@ function resolutionLabels(record) {
       kind,
       mediaContext: record.mediaContext,
       ...resolutionLabels(record),
-      ...(overrides.publisherId || record.publisherId ? { publisherId: overrides.publisherId || record.publisherId } : {}),
-      ...(overrides.publicationId || record.publicationId ? { publicationId: overrides.publicationId || record.publicationId } : {}),
-      ...(overrides.renditionId || record.renditionId ? { renditionId: overrides.renditionId || record.renditionId } : {}),
-      ...(overrides.availability || record.availability ? { measuredFacts: Object.freeze({ availability: overrides.availability || record.availability }) } : {}),
-      ...(expectedBytes !== null && expectedBytes !== undefined
-        ? { expected: Object.freeze({ byteLength: expectedBytes }) }
-        : {}),
+      ...resolutionIdentifiers(record, overrides),
+      ...(hasExpectedBytes ? { expected: Object.freeze({ byteLength: expectedBytes }) } : {}),
       acquisitionAvailable: kind === 'acquirable',
       ...(record.private?.local === true ? { deferredInput: true } : {}),
       ...(overrides.denialCode ? { denialCode: overrides.denialCode } : {}),
     })
   }
 
-  async function resolve({ ref } = {}) {
-    const record = reference(ref)
-    if (record.kind === 'published') {
+  async function resolvePublishedRecord(record, ref) {
+    if (record.publicationId) {
       const published = await verifiedPublication(record.publicationId, record.renditionId)
       if (!published) return resolution(record, ref, { kind: 'unavailable', denialCode: 'PUBLICATION_UNAVAILABLE' })
-      return resolution(record, ref, { kind: 'published' })
     }
-    if (record.private?.inFlight === true) {
-      const visible = await verifiedQueryView.isVisible({
-        kind: 'acquisition-candidate',
-        publisherId: record.publisherId,
-        externalRefs: record.mediaContext?.namespace
-          ? [{ namespace: record.mediaContext.namespace, identifier: record.mediaContext.identifier }]
-          : [],
-      })
-      if (!visible) return resolution(record, ref, { kind: 'unavailable', denialCode: PROVIDER_ERROR_CODES.MODERATION_BLOCKED })
-      let job = null
+    return resolution(record, ref, { kind: 'published' })
+  }
+
+  async function fetchInFlightJob(record) {
+    if (!record.private.acquisitionId) return null
+    if (typeof acquisitionManager?.getPublicProjection === 'function') {
       try {
-        if (record.private.acquisitionId && typeof acquisitionManager?.get === 'function') {
-          job = await acquisitionManager.get({ acquisitionId: record.private.acquisitionId })
-        }
+        return await acquisitionManager.getPublicProjection({ acquisitionId: record.private.acquisitionId })
       } catch {
         // ignore get error, fallback to record
       }
-      if (job?.state === 'completed' && job?.publicationId) {
-        const published = await verifiedPublication(job.publicationId, job.renditionId)
-        if (published) {
-          return resolution(record, ref, {
-            kind: 'published',
-            publisherId: job.publisherId || record.publisherId,
-            publicationId: job.publicationId,
-            renditionId: job.renditionId,
-          })
-        }
+    } else if (typeof acquisitionManager?.get === 'function') {
+      try {
+        return await acquisitionManager.get({ acquisitionId: record.private.acquisitionId })
+      } catch {
+        // ignore get error, fallback to record
       }
-      return resolution(record, ref, {
-        kind: 'acquirable',
-        publisherId: record.publisherId || job?.publisherId || null,
-        expectedBytes: record.expectedBytes ?? job?.expectedBytes ?? null,
-      })
     }
-    if (record.private?.local === true) {
-      const visible = await verifiedQueryView.isVisible({
-        kind: 'acquisition-candidate',
-        publisherId: record.publisherId,
-        externalRefs: record.mediaContext.namespace
-          ? [{ namespace: record.mediaContext.namespace, identifier: record.mediaContext.identifier }]
-          : [],
-      })
-      return visible
-        ? resolution(record, ref)
-        : resolution(record, ref, { kind: 'unavailable', denialCode: PROVIDER_ERROR_CODES.MODERATION_BLOCKED })
+    return null
+  }
+
+  async function resolveInFlightRecord(record, ref) {
+    const visible = await verifiedQueryView.isVisible({
+      kind: 'acquisition-candidate',
+      publisherId: record.publisherId,
+      externalRefs: record.mediaContext?.namespace
+        ? [{ namespace: record.mediaContext.namespace, identifier: record.mediaContext.identifier }]
+        : [],
+    })
+    if (!visible) return resolution(record, ref, { kind: 'unavailable', denialCode: PROVIDER_ERROR_CODES.MODERATION_BLOCKED })
+    const job = await fetchInFlightJob(record)
+    if (job?.state === 'completed' && job?.publicationId) {
+      const published = await verifiedPublication(job.publicationId, job.renditionId)
+      if (published) {
+        return resolution(record, ref, {
+          kind: 'published',
+          publisherId: job.publisherId || record.publisherId,
+          publicationId: job.publicationId,
+          renditionId: job.renditionId,
+        })
+      }
     }
+    return resolution(record, ref, {
+      kind: 'acquirable',
+      publisherId: record.publisherId || job?.publisherId || null,
+      expectedBytes: record.expectedBytes ?? job?.expectedBytes ?? null,
+    })
+  }
+
+  async function resolveLocalRecord(record, ref) {
+    const visible = await verifiedQueryView.isVisible({
+      kind: 'acquisition-candidate',
+      publisherId: record.publisherId,
+      externalRefs: record.mediaContext.namespace
+        ? [{ namespace: record.mediaContext.namespace, identifier: record.mediaContext.identifier }]
+        : [],
+    })
+    return visible
+      ? resolution(record, ref)
+      : resolution(record, ref, { kind: 'unavailable', denialCode: PROVIDER_ERROR_CODES.MODERATION_BLOCKED })
+  }
+
+  async function resolveCandidateRefRecord(record, ref) {
     let verified
     try {
       verified = await indexVerificationRuntime.verifyIndexCandidate({ candidateRef: record.private.candidateRef })
@@ -925,6 +1448,23 @@ function resolutionLabels(record) {
       availability: facts.availability,
       expectedBytes: facts.expectedBytes,
     })
+  }
+
+  async function resolve({ ref } = {}) {
+    const record = reference(ref)
+    if (record.private?.localEntity === true || record.kind === 'local-entity') {
+      return resolution(record, ref, { kind: 'local' })
+    }
+    if (record.kind === 'published') {
+      return resolvePublishedRecord(record, ref)
+    }
+    if (record.private?.inFlight === true) {
+      return resolveInFlightRecord(record, ref)
+    }
+    if (record.private?.local === true) {
+      return resolveLocalRecord(record, ref)
+    }
+    return resolveCandidateRefRecord(record, ref)
   }
 
   async function requestAcquisition({ idempotencyKey, request, principal } = {}) {
@@ -1041,31 +1581,30 @@ function resolutionLabels(record) {
     return record === null ? null : publicPublicationRecord(record)
   }
 
-  async function openStream(input = {}) {
-    object(input, 'input')
-    const principal = input.principal === undefined ? null : normalizePrincipal(input.principal)
-    let publicationId = input.publicationId || null
-    let renditionId = input.renditionId || null
+  async function resolveStreamTarget(input, principal) {
     if (input.acquisitionId !== undefined) {
       if (!principal) fail(PROVIDER_ERROR_CODES.ACQUISITION_FORBIDDEN, 'principal is required for acquisition playback')
       const acquisition = await getAcquisition({ acquisitionId: input.acquisitionId, principal })
       if (!acquisition || acquisition.state !== 'completed' || !acquisition.publicationId) {
         fail(PROVIDER_ERROR_CODES.ACQUISITION_NOT_COMPLETED, 'Acquisition has no completed publication')
       }
-      publicationId = acquisition.publicationId
-      renditionId = acquisition.renditionId
-    } else if (input.ref !== undefined || input.candidateRef !== undefined) {
+      return { publicationId: acquisition.publicationId, renditionId: acquisition.renditionId }
+    }
+    if (input.ref !== undefined || input.candidateRef !== undefined) {
       const ref = input.candidateRef || input.ref
       const resolved = await resolve({ ref })
       if (resolved.kind !== 'published' || !resolved.publicationId) {
         fail(PROVIDER_ERROR_CODES.ACQUISITION_REQUIRED, 'A completed publication is required before streaming')
       }
-      publicationId = resolved.publicationId
-      renditionId = input.renditionId || resolved.renditionId || null
+      return { publicationId: resolved.publicationId, renditionId: input.renditionId || resolved.renditionId || null }
     }
-    if (!publicationId) fail(PROVIDER_ERROR_CODES.INVALID_FIELD, 'publicationId, ref, or acquisitionId is required', { field: 'publicationId' })
-    const record = await verifiedPublication(text(publicationId, 'publicationId', 128), renditionId)
-    if (!record || !record.rendition) fail(PROVIDER_ERROR_CODES.PUBLICATION_NOT_FOUND, 'Verified publication was not found')
+    return {
+      publicationId: input.publicationId || null,
+      renditionId: input.renditionId || null,
+    }
+  }
+
+  async function authorizeStreamRendition(publicationId, record) {
     const coreLength = record.rendition.core?.length
     if (!Number.isSafeInteger(coreLength) || coreLength < 1 || !await verifiedQueryView.authorizeRendition({
       publicationId,
@@ -1074,19 +1613,37 @@ function resolutionLabels(record) {
       end: coreLength,
       operation: 'stream',
     })) fail(PROVIDER_ERROR_CODES.MODERATION_BLOCKED, 'Publication is not authorized for streaming')
-    let opened
+  }
+
+  async function executeStreamOpen(record, principal, signal) {
     try {
       const request = {
         publication: record.publication,
         manifest: record.manifest,
         rendition: record.rendition,
         principal,
-        signal: input.signal,
+        signal,
       }
-      opened = typeof streamOpener === 'function' ? await streamOpener(request) : await streamOpener.openStream(request)
+      return typeof streamOpener === 'function' ? await streamOpener(request) : await streamOpener.openStream(request)
     } catch (error) {
       throw mapProviderError(error, PROVIDER_ERROR_CODES.STREAM_UNAVAILABLE, 'Verified stream could not be opened', { retryable: true })
     }
+  }
+
+  async function openStream(input = {}) {
+    object(input, 'input')
+    const principal = input.principal === undefined ? null : normalizePrincipal(input.principal)
+    const target = await resolveStreamTarget(input, principal)
+    const publicationId = target.publicationId
+    const renditionId = target.renditionId
+    if (!publicationId) fail(PROVIDER_ERROR_CODES.INVALID_FIELD, 'publicationId, ref, or acquisitionId is required', { field: 'publicationId' })
+
+    const record = await verifiedPublication(text(publicationId, 'publicationId', 128), renditionId)
+    if (!record || !record.rendition) fail(PROVIDER_ERROR_CODES.PUBLICATION_NOT_FOUND, 'Verified publication was not found')
+
+    await authorizeStreamRendition(publicationId, record)
+    const opened = await executeStreamOpen(record, principal, input.signal)
+
     return publicStream(opened, {
       publicationId,
       renditionId: record.rendition.renditionId,

@@ -9,7 +9,8 @@ function fail (message, code = 'SCOPED_NETWORK_REJECTED') {
 export function createScopedNetworkApi (runtime) {
   if (!runtime) fail('scoped network runtime is required')
   return {
-    retainIndexService: request => runtime.retainIndexService(request), releaseIndexService: request => runtime.releaseIndexService(request),
+    retainIndexService: request => runtime.retainIndexService(request),
+    releaseIndexService: request => runtime.releaseIndexService(request),
     followPublisher: request => runtime.followPublisher(request), followBootstrapLocator: request => runtime.followBootstrapLocator(request),
     addPublisherFollowReason: request => runtime.addPublisherFollowReason(request), removePublisherFollowReason: request => runtime.removePublisherFollowReason(request),
     getPublisherFollowReasons: request => runtime.getPublisherFollowReasons(request), providePublisherNamespaceProof: request => runtime.providePublisherNamespaceProof(request),
@@ -28,6 +29,8 @@ export function createScopedNetworkApi (runtime) {
     publishArchiveRequest: request => runtime.publishArchiveRequest(request), publishArchivePledge: request => runtime.publishArchivePledge(request),
     publishArchiveChallenge: request => runtime.publishArchiveChallenge(request), publishArchiveChallengeProof: request => runtime.publishArchiveChallengeProof(request),
     retainAuthorizedArchive: request => runtime.retainAuthorizedArchive(request), releaseAuthorizedArchive: request => runtime.releaseAuthorizedArchive(request),
+    getAuthorizedArchiveProgress: request => runtime.getAuthorizedArchiveProgress(request),
+    assessAvailability: request => runtime.assessAvailability(request),
     createAuthorizedArchiveChallengeProof: request => runtime.createAuthorizedArchiveChallengeProof(request), verifyAuthorizedArchiveChallengeProof: request => runtime.verifyAuthorizedArchiveChallengeProof(request),
     publishBootstrapLocator: request => runtime.publishBootstrapLocator(request), getLocalTransportPeerId: () => runtime.getLocalTransportPeerId(),
     listBootstrapLocators: () => runtime.listBootstrapLocators(), getIndexFeedRecords: () => runtime.getIndexFeedRecords(),

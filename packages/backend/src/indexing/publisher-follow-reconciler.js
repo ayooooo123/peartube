@@ -26,10 +26,18 @@ export function createIndexPublisherFollowReconciler(options = {}) {
     },
 
     async onRecordsRemoved(removed = [], context = {}) {
-      const curatorId = String(context.curatorId || '')
       const retained = getRecords()
-      const removedPublishers = new Set(removed.map(record => record?.publisherId).filter(Boolean))
-      for (const publisherId of removedPublishers) {
+      const targets = new Map()
+      for (const record of removed) {
+        const curatorId = String(context.curatorId || record?.indexId || '')
+        const publisherId = record?.publisherId
+        if (!curatorId || !publisherId) continue
+        const key = `${curatorId}\0${String(publisherId)}`
+        if (!targets.has(key)) {
+          targets.set(key, { curatorId, publisherId })
+        }
+      }
+      for (const { curatorId, publisherId } of targets.values()) {
         if (retained.some(record =>
           String(record?.indexId) === curatorId &&
           String(record?.publisherId) === String(publisherId)

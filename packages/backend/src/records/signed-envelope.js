@@ -118,6 +118,23 @@ export function attachSignedEnvelopeSignature (prepared, signature) {
   return { ...prepared, signature }
 }
 
+function assertEnvelopeAuthorization (decoded, authorization) {
+  if (!equalBytes(authorization.issuerIdentityKey, decoded.issuerIdentityKey)) fail('issuer authorization mismatch')
+  if (authorization.policyEpoch !== decoded.policyEpoch) fail('policy epoch is stale')
+  if (typeof authorization.authorizeSequence !== 'function' || authorization.authorizeSequence(decoded) !== true) fail('issuer sequence is not authorized')
+  if (typeof authorization.authorizeSigner !== 'function' || authorization.authorizeSigner(decoded) !== true) fail('signer is not authorized')
+}
+
+function assertEnvelopeTiming (decoded, authorization) {
+  assertUint(authorization.now, 'authorization now')
+  const skew = authorization.maxClockSkew ?? 0
+  assertUint(skew, 'maxClockSkew')
+  if (decoded.expiresAt !== undefined && decoded.expiresAt < decoded.signedAt) fail('expiresAt precedes signedAt')
+  if (decoded.signedAt > authorization.now && decoded.signedAt - authorization.now > skew) fail('record is future-issued')
+  if (decoded.expiresAt !== undefined && authorization.now > decoded.expiresAt && authorization.now - decoded.expiresAt > skew) fail('record expired')
+  if (typeof authorization.claimReplay !== 'function' || authorization.claimReplay(decoded.recordId, decoded) !== true) fail('record replay rejected')
+}
+
 export function verifySignedEnvelope (value, { hash, verifySignature, authorization } = {}) {
   if (!authorization || typeof authorization !== 'object') fail('explicit authorization context is required')
   if (typeof hash !== 'function' || typeof verifySignature !== 'function') fail('crypto providers are required')
@@ -128,16 +145,7 @@ export function verifySignedEnvelope (value, { hash, verifySignature, authorizat
   if (!equalBytes(candidate, decoded.recordId)) fail('recordId mismatch')
   const verified = verifySignature(decoded.signature, signedRecordSignaturePreimage(decoded), decoded.signerKey)
   if (verified !== true) fail('signature verification failed')
-  if (!equalBytes(authorization.issuerIdentityKey, decoded.issuerIdentityKey)) fail('issuer authorization mismatch')
-  if (authorization.policyEpoch !== decoded.policyEpoch) fail('policy epoch is stale')
-  if (typeof authorization.authorizeSequence !== 'function' || authorization.authorizeSequence(decoded) !== true) fail('issuer sequence is not authorized')
-  if (typeof authorization.authorizeSigner !== 'function' || authorization.authorizeSigner(decoded) !== true) fail('signer is not authorized')
-  assertUint(authorization.now, 'authorization now')
-  const skew = authorization.maxClockSkew ?? 0
-  assertUint(skew, 'maxClockSkew')
-  if (decoded.expiresAt !== undefined && decoded.expiresAt < decoded.signedAt) fail('expiresAt precedes signedAt')
-  if (decoded.signedAt > authorization.now && decoded.signedAt - authorization.now > skew) fail('record is future-issued')
-  if (decoded.expiresAt !== undefined && authorization.now > decoded.expiresAt && authorization.now - decoded.expiresAt > skew) fail('record expired')
-  if (typeof authorization.claimReplay !== 'function' || authorization.claimReplay(decoded.recordId, decoded) !== true) fail('record replay rejected')
+  assertEnvelopeAuthorization(decoded, authorization)
+  assertEnvelopeTiming(decoded, authorization)
   return { valid: true, envelope: decoded }
 }

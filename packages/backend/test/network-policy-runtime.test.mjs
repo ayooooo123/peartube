@@ -1,7 +1,11 @@
 import test from 'brittle'
+import { EventEmitter } from 'node:events'
+import b4a from 'b4a'
+import crypto from 'hypercore-crypto'
 import { createNetworkLifecycleApi } from '../src/api/network-lifecycle.js'
 import { createArchivePolicy } from '../src/archive/policy.js'
 import { registerSharedHandlers, SHARED_HANDLER_NAMES } from '../src/hrpc-handlers.js'
+import { createScopedNetworkRuntime } from '../src/network/scoped-runtime.js'
 
 import {
   createNetworkPolicyRuntime,
@@ -9,6 +13,11 @@ import {
   loadNetworkPolicy,
   normalizeNetworkPolicy,
 } from '../src/api/policy.js'
+import {
+  createIndexServiceAnnouncement,
+  deriveIndexerId,
+  encodeIndexServiceAnnouncement,
+} from '../src/indexer/service-announcement.js'
 
 const GIB = 1024 * 1024 * 1024
 const MIB = 1024 * 1024
@@ -1179,4 +1188,492 @@ test('a stored policy carrying the retired background default adopts the new one
     }),
   })
   t.is(recorded.backgroundMode, 'local-only', 'a recorded choice is never revisited by a later default')
+})
+
+const INDEX_POLICY_NOW = 1_700_000_000_000
+
+function signedIndexAnnouncement ({ fill = 9, sequence = 7, issuedAt = INDEX_POLICY_NOW, expiresAt = INDEX_POLICY_NOW + 3_600_000, transportFill = 2 } = {}) {
+  const signer = crypto.keyPair(b4a.alloc(32, fill))
+  return createIndexServiceAnnouncement({
+    indexerId: deriveIndexerId(signer.publicKey),
+    transportPublicKey: b4a.alloc(32, transportFill),
+    dimensions: ['external-ref'],
+    shardRanges: [{ dimension: 'external-ref', start: null, end: null }],
+    queryCapabilities: ['exact-external-ref'],
+    policyDigest: b4a.alloc(32, 3),
+    sequence,
+    issuedAt,
+    expiresAt,
+  }, signer)
+}
+
+function encodeAnnouncement (announcement) {
+  return b4a.toString(encodeIndexServiceAnnouncement(announcement), 'hex')
+}
+
+test('policy retains and releases index services; normal re-add uses public retain', async (t) => {
+  const initialPolicy = await loadNetworkPolicy({ store: asyncPolicyStore() })
+  const service = signedIndexAnnouncement()
+  const encoded = encodeAnnouncement(service)
+  const indexerId = b4a.toString(service.indexerId, 'hex')
+  const calls = []
+  const scopedNetwork = {
+    async applyNetworkPolicy () {},
+    async retainIndexService ({ announcement }) {
+      calls.push(['retain', b4a.toString(announcement.indexerId, 'hex')])
+      return { status: 'retained' }
+    },
+    async releaseIndexService ({ indexerId: id }) {
+      calls.push(['release', id])
+      return { status: 'released', released: true }
+    },
+  }
+  const runtime = createNetworkPolicyRuntime({
+    initialPolicy,
+    scopedNetwork,
+    now: () => INDEX_POLICY_NOW,
+  })
+  await runtime.start()
+  await runtime.apply({ ...initialPolicy, indexServiceAnnouncements: [encoded] })
+  t.alike(calls, [['retain', indexerId]])
+  calls.length = 0
+  await runtime.apply({ ...initialPolicy, indexServiceAnnouncements: [] })
+  t.alike(calls, [['release', indexerId]])
+  calls.length = 0
+  // Ordinary re-add is public retain, not private restore.
+  await runtime.apply({ ...initialPolicy, indexServiceAnnouncements: [encoded] })
+  t.alike(calls, [['retain', indexerId]])
+})
+
+test('failed index service retain leaves the previous set applied without release', async (t) => {
+  const initialPolicy = await loadNetworkPolicy({ store: asyncPolicyStore() })
+  const first = signedIndexAnnouncement({ fill: 11, sequence: 1, transportFill: 11 })
+  const second = signedIndexAnnouncement({ fill: 12, sequence: 1, transportFill: 12 })
+  const firstEncoded = encodeAnnouncement(first)
+  const secondEncoded = encodeAnnouncement(second)
+  const firstId = b4a.toString(first.indexerId, 'hex')
+  const calls = []
+  let rejectSecond = false
+  const scopedNetwork = {
+    async applyNetworkPolicy () {},
+    async retainIndexService ({ announcement }) {
+      const id = b4a.toString(announcement.indexerId, 'hex')
+      if (rejectSecond && id === b4a.toString(second.indexerId, 'hex')) {
+        calls.push(['retain-fail', id])
+        throw Object.assign(new Error('admission failed'), { code: 'SCOPED_NETWORK_REJECTED' })
+      }
+      calls.push(['retain', id])
+      return { status: 'retained', indexerId: id }
+    },
+    async releaseIndexService ({ indexerId: id }) {
+      calls.push(['release', id])
+      return { status: 'released', indexerId: id, released: true }
+    },
+  }
+  const runtime = createNetworkPolicyRuntime({
+    initialPolicy,
+    scopedNetwork,
+    now: () => INDEX_POLICY_NOW,
+  })
+  await runtime.start()
+  await runtime.apply({ ...initialPolicy, indexServiceAnnouncements: [firstEncoded] })
+  calls.length = 0
+  rejectSecond = true
+  await t.exception(
+    runtime.apply({ ...initialPolicy, indexServiceAnnouncements: [firstEncoded, secondEncoded] }),
+    { message: /admission failed/ },
+  )
+  t.alike(calls.filter(([name]) => name === 'release'), [])
+  t.ok(calls.some(entry => entry[0] === 'retain-fail'))
+  calls.length = 0
+  // First is still applied bookkeeping: re-apply is a no-op skip.
+  await runtime.apply({ ...initialPolicy, indexServiceAnnouncements: [firstEncoded] })
+  t.alike(calls, [])
+  t.is(firstId.length, 64)
+})
+
+test('policy skips announcements at the half-open expiry boundary', async (t) => {
+  const initialPolicy = await loadNetworkPolicy({ store: asyncPolicyStore() })
+  const expired = signedIndexAnnouncement({
+    fill: 13,
+    sequence: 1,
+    issuedAt: INDEX_POLICY_NOW - 60_000,
+    expiresAt: INDEX_POLICY_NOW,
+  })
+  const encoded = encodeAnnouncement(expired)
+  const calls = []
+  const scopedNetwork = {
+    async applyNetworkPolicy () {},
+    async retainIndexService () { calls.push('retain') },
+    async releaseIndexService () { calls.push('release') },
+  }
+  const runtime = createNetworkPolicyRuntime({
+    initialPolicy,
+    scopedNetwork,
+    now: () => INDEX_POLICY_NOW,
+  })
+  await runtime.start()
+  await runtime.apply({ ...initialPolicy, indexServiceAnnouncements: [encoded] })
+  t.alike(calls, [])
+})
+
+test('future-issued policy is rejected by assertSupported, apply and start without mutation', async (t) => {
+  const store = asyncPolicyStore()
+  const initialPolicy = await loadNetworkPolicy({ store })
+  const current = encodeAnnouncement(signedIndexAnnouncement())
+  const future = encodeAnnouncement(signedIndexAnnouncement({
+    sequence: 8,
+    issuedAt: INDEX_POLICY_NOW + 1,
+  }))
+  const goodPolicy = { ...initialPolicy, indexServiceAnnouncements: [current] }
+  const futurePolicy = { ...initialPolicy, indexServiceAnnouncements: [future] }
+  const effects = []
+  const runtime = createNetworkPolicyRuntime({
+    initialPolicy,
+    now: () => INDEX_POLICY_NOW,
+    scopedNetwork: {
+      async applyNetworkPolicy () { effects.push('apply') },
+      async retainIndexService () { effects.push('retain') },
+      async releaseIndexService () { effects.push('release') },
+    },
+  })
+  t.exception(() => runtime.assertSupported(futurePolicy), /not yet valid/)
+  await t.exception(runtime.apply(futurePolicy), /not yet valid/)
+  await t.exception(runtime.start(futurePolicy), /not yet valid/)
+  t.alike(effects, [], 'validation does not configure managers or replay rollback')
+  t.alike(runtime.getPolicy(), initialPolicy)
+  await runtime.start(goodPolicy)
+  t.alike(runtime.getPolicy().indexServiceAnnouncements, [current], 'a rejected start does not prevent a valid startup')
+
+  const api = createPolicyApi({
+    store,
+    initialPolicy,
+    validatePolicy: policy => runtime.assertSupported(policy),
+    onPolicyChange: policy => runtime.apply(policy),
+  })
+  t.is((await api.setNetworkPolicy({ indexServiceAnnouncements: [current] })).success, true)
+  const persisted = structuredClone(store.values.get('network-policy:v1'))
+  let writes = 0
+  const put = store.put.bind(store)
+  store.put = async (...args) => { writes++; await put(...args) }
+  effects.length = 0
+  const rejected = await api.setNetworkPolicy({ indexServiceAnnouncements: [future] })
+  t.is(rejected.success, false)
+  t.is(rejected.errorCode, 'INVALID_POLICY')
+  t.is(writes, 0, 'the future record is rejected before persistence')
+  t.alike(effects, [])
+  t.alike(store.values.get('network-policy:v1'), persisted)
+  t.alike((await api.getNetworkPolicy()).policy.indexServiceAnnouncements, [current])
+  t.alike(runtime.getPolicy().indexServiceAnnouncements, [current])
+})
+
+test('fresh persisted signed policy survives a new store and controller while expired history stays inactive', async (t) => {
+  const announcement = signedIndexAnnouncement()
+  const encoded = encodeAnnouncement(announcement)
+  const peerId = b4a.toString(announcement.transportPublicKey, 'hex')
+  const firstStore = asyncPolicyStore()
+  const launch = async (store, time) => {
+    const peers = new Set()
+    const swarm = new EventEmitter()
+    swarm.connections = new Set()
+    swarm.join = () => { throw new Error('index policy must not discover a global topic') }
+    swarm.joinPeer = key => peers.add(b4a.toString(key, 'hex'))
+    swarm.leavePeer = key => peers.delete(b4a.toString(key, 'hex'))
+    const network = createScopedNetworkRuntime({
+      swarm,
+      store: {},
+      bootstrapEnabled: false,
+      now: () => time,
+    })
+    t.teardown(() => network.close())
+    await network.start()
+    const initialPolicy = await loadNetworkPolicy({ store })
+    const runtime = createNetworkPolicyRuntime({ initialPolicy, scopedNetwork: network, now: () => time })
+    await runtime.start()
+    const api = createPolicyApi({
+      store,
+      initialPolicy,
+      validatePolicy: policy => runtime.assertSupported(policy),
+      onPolicyChange: policy => runtime.apply(policy),
+    })
+    return { network, runtime, api, peers }
+  }
+  const first = await launch(firstStore, INDEX_POLICY_NOW)
+  t.is((await first.api.setNetworkPolicy({ indexServiceAnnouncements: [encoded] })).success, true)
+  t.ok(first.peers.has(peerId), 'a current signed policy admits its peer')
+  await first.network.close()
+  t.is(first.peers.has(peerId), false)
+
+  const reloadedStore = asyncPolicyStore(firstStore.values.get('network-policy:v1'))
+  const restarted = await launch(reloadedStore, INDEX_POLICY_NOW + 1)
+  t.alike(restarted.runtime.getPolicy().indexServiceAnnouncements, [encoded])
+  t.ok(restarted.peers.has(peerId), 'fresh controllers re-admit the persisted signed announcement')
+  await restarted.network.close()
+
+  const historicalStore = asyncPolicyStore(reloadedStore.values.get('network-policy:v1'))
+  const expired = await launch(historicalStore, announcement.expiresAt)
+  t.alike((await expired.api.getNetworkPolicy()).policy.indexServiceAnnouncements, [encoded])
+  t.is(expired.peers.has(peerId), false, 'expired history loads without activating a peer')
+})
+
+test('failed multi-swap at capacity releases successful newcomers then restores previous', async (t) => {
+  const { registerIndexServicePolicyControl } = await import('../src/network/index-service-policy-control-internal.js')
+  const initialPolicy = await loadNetworkPolicy({ store: asyncPolicyStore() })
+  const services = Array.from({ length: 32 }, (_, index) => signedIndexAnnouncement({
+    fill: index + 20,
+    sequence: 1,
+    transportFill: index + 20,
+  }))
+  const encoded = services.map(encodeAnnouncement)
+  const [firstNew, secondNew] = [
+    signedIndexAnnouncement({ fill: 98, sequence: 1, transportFill: 98 }),
+    signedIndexAnnouncement({ fill: 99, sequence: 1, transportFill: 99 }),
+  ].sort((left, right) => b4a.compare(left.indexerId, right.indexerId))
+  const firstNewEncoded = encodeAnnouncement(firstNew)
+  const secondNewEncoded = encodeAnnouncement(secondNew)
+  const firstNewId = b4a.toString(firstNew.indexerId, 'hex')
+  const secondNewId = b4a.toString(secondNew.indexerId, 'hex')
+  const removedA = b4a.toString(services[0].indexerId, 'hex')
+  const removedB = b4a.toString(services[1].indexerId, 'hex')
+  const live = new Map()
+  const lastAdmitted = new Map()
+  const floors = new Map()
+  const announcements = new Map()
+  let failSecond = false
+  const scopedNetwork = {
+    async applyNetworkPolicy () {},
+    async retainIndexService ({ announcement }) {
+      const id = b4a.toString(announcement.indexerId, 'hex')
+      const body = encodeAnnouncement(announcement)
+      if (failSecond && id === secondNewId) {
+        throw Object.assign(new Error('injected replacement failure'), { code: 'TEST_INDEX_RETAIN_FAILED' })
+      }
+      if (live.size >= 32 && !live.has(id)) {
+        throw Object.assign(new Error('retained index services exceed their bounded limit'), { code: 'SCOPED_NETWORK_REJECTED' })
+      }
+      live.set(id, body)
+      lastAdmitted.set(id, { indexerId: id, encoded: body, announcement, transportPublicKey: id, limits: {} })
+      floors.set(id, announcement.sequence)
+      announcements.set(id, announcement)
+      return { status: 'retained', indexerId: id }
+    },
+    async releaseIndexService ({ indexerId: id }) {
+      live.delete(id)
+      return { status: 'released', indexerId: id, released: true }
+    },
+  }
+  registerIndexServicePolicyControl(scopedNetwork, {
+    captureIndexServiceSession () {
+      return {
+        floors: new Map(floors),
+        lastAdmitted: new Map([...lastAdmitted.entries()].map(([id, snap]) => [id, { ...snap }])),
+        live: [...live.entries()].map(([id, encodedBody]) => ({
+          indexerId: id,
+          encoded: encodedBody,
+          announcement: announcements.get(id),
+          transportPublicKey: lastAdmitted.get(id)?.transportPublicKey,
+          limits: {},
+        })),
+      }
+    },
+    async restoreIndexServiceSession (snapshot) {
+      const desired = new Map(snapshot.live.map(entry => [entry.indexerId, entry]))
+      for (const id of [...live.keys()]) {
+        const want = desired.get(id)
+        if (want && want.encoded === live.get(id)) continue
+        live.delete(id)
+      }
+      for (const entry of snapshot.live) {
+        if (live.get(entry.indexerId) === entry.encoded) continue
+        if (live.size >= 32 && !live.has(entry.indexerId)) {
+          throw Object.assign(new Error('retained index services exceed their bounded limit'), { code: 'SCOPED_NETWORK_REJECTED' })
+        }
+        live.set(entry.indexerId, entry.encoded)
+        announcements.set(entry.indexerId, entry.announcement)
+      }
+      floors.clear()
+      for (const [id, sequence] of snapshot.floors || []) floors.set(id, sequence)
+      lastAdmitted.clear()
+      for (const [id, snap] of snapshot.lastAdmitted || []) lastAdmitted.set(id, { ...snap })
+    },
+    async restoreLastIndexService ({ indexerId: id }) {
+      const body = lastAdmitted.get(id)?.encoded
+      if (!body) throw new Error('no previously admitted index service to restore')
+      live.set(id, body)
+      return { status: 'retained', restored: true, indexerId: id, encoded: body }
+    },
+  })
+  const runtime = createNetworkPolicyRuntime({
+    initialPolicy,
+    scopedNetwork,
+    now: () => INDEX_POLICY_NOW,
+  })
+  await runtime.start()
+  await runtime.apply({ ...initialPolicy, indexServiceAnnouncements: encoded })
+  t.is(live.size, 32)
+  failSecond = true
+  const nextList = [firstNewEncoded, secondNewEncoded, ...encoded.slice(2)]
+  await t.exception(
+    runtime.apply({ ...initialPolicy, indexServiceAnnouncements: nextList }),
+    { code: 'TEST_INDEX_RETAIN_FAILED' },
+  )
+  t.ok(live.has(removedA) && live.has(removedB))
+  t.is(live.has(firstNewId), false)
+  t.is(live.has(secondNewId), false)
+  t.is(live.size, 32)
+  t.alike([...live.entries()].sort(), services.map((service, index) => [b4a.toString(service.indexerId, 'hex'), encoded[index]]).sort())
+})
+
+test('failed rollback surfaces NETWORK_POLICY_ROLLBACK_FAILED', async (t) => {
+  const initialPolicy = await loadNetworkPolicy({ store: asyncPolicyStore() })
+  let calls = 0
+  const scopedNetwork = {
+    async applyNetworkPolicy () {
+      calls++
+      if (calls >= 2) throw Object.assign(new Error('transport refused'), { code: 'TRANSPORT_REFUSED' })
+    },
+  }
+  const runtime = createNetworkPolicyRuntime({ initialPolicy, scopedNetwork })
+  await runtime.start()
+  t.is(calls, 1)
+  await t.exception(
+    runtime.apply({
+      ...initialPolicy,
+      uploadPermission: 'enabled',
+      consentVersion: 1,
+      migrationRequired: false,
+      contributeWatchedMedia: true,
+      contributionBudgetBytes: 1024,
+    }),
+    { code: 'NETWORK_POLICY_ROLLBACK_FAILED' },
+  )
+  t.is(calls, 3)
+})
+
+
+
+test('failed apply after same-indexer supersession restores prior sequence via session snapshot', async (t) => {
+  const { registerIndexServicePolicyControl } = await import('../src/network/index-service-policy-control-internal.js')
+  const initialPolicy = await loadNetworkPolicy({ store: asyncPolicyStore() })
+  const signer = crypto.keyPair(b4a.alloc(32, 40))
+  const a1 = createIndexServiceAnnouncement({
+    indexerId: deriveIndexerId(signer.publicKey),
+    transportPublicKey: b4a.alloc(32, 41),
+    dimensions: ['external-ref'],
+    shardRanges: [{ dimension: 'external-ref', start: null, end: null }],
+    queryCapabilities: ['exact-external-ref'],
+    policyDigest: b4a.alloc(32, 3),
+    sequence: 1,
+    issuedAt: INDEX_POLICY_NOW,
+    expiresAt: INDEX_POLICY_NOW + 3_600_000,
+  }, signer)
+  const a2 = createIndexServiceAnnouncement({
+    indexerId: deriveIndexerId(signer.publicKey),
+    transportPublicKey: b4a.alloc(32, 41),
+    dimensions: ['external-ref'],
+    shardRanges: [{ dimension: 'external-ref', start: null, end: null }],
+    queryCapabilities: ['exact-external-ref'],
+    policyDigest: b4a.alloc(32, 3),
+    sequence: 2,
+    issuedAt: INDEX_POLICY_NOW + 1,
+    expiresAt: INDEX_POLICY_NOW + 3_600_000,
+  }, signer)
+  const b = signedIndexAnnouncement({ fill: 42, sequence: 1, transportFill: 42 })
+  const a1Encoded = encodeAnnouncement(a1)
+  const a2Encoded = encodeAnnouncement(a2)
+  const bEncoded = encodeAnnouncement(b)
+  const aId = b4a.toString(a1.indexerId, 'hex')
+  const bId = b4a.toString(b.indexerId, 'hex')
+  const live = new Map()
+  const lastAdmitted = new Map()
+  const floors = new Map()
+  const announcements = new Map()
+  let failB = false
+  const scopedNetwork = {
+    async applyNetworkPolicy () {},
+    async retainIndexService ({ announcement }) {
+      const id = b4a.toString(announcement.indexerId, 'hex')
+      const body = encodeAnnouncement(announcement)
+      if (failB && id === bId) {
+        throw Object.assign(new Error('B admission failed'), { code: 'SCOPED_NETWORK_REJECTED' })
+      }
+      const floor = floors.get(id)
+      if (floor != null && announcement.sequence <= floor && live.get(id) !== body) {
+        throw Object.assign(new Error('index service announcement is invalid, unsupported, expired, or replayed'), {
+          code: 'SCOPED_NETWORK_REJECTED',
+        })
+      }
+      live.set(id, body)
+      lastAdmitted.set(id, {
+        indexerId: id,
+        encoded: body,
+        announcement,
+        transportPublicKey: b4a.toString(announcement.transportPublicKey, 'hex'),
+        limits: {},
+      })
+      floors.set(id, announcement.sequence)
+      announcements.set(id, announcement)
+      return { status: live.has(id) ? 'superseded' : 'retained', indexerId: id }
+    },
+    async releaseIndexService ({ indexerId: id }) {
+      live.delete(id)
+      return { status: 'released', indexerId: id, released: true }
+    },
+  }
+  registerIndexServicePolicyControl(scopedNetwork, {
+    captureIndexServiceSession () {
+      return {
+        floors: new Map(floors),
+        lastAdmitted: new Map([...lastAdmitted.entries()].map(([id, snap]) => [id, { ...snap }])),
+        live: [...live.entries()].map(([id, encoded]) => ({
+          indexerId: id,
+          encoded,
+          announcement: announcements.get(id),
+          transportPublicKey: lastAdmitted.get(id)?.transportPublicKey,
+          limits: {},
+        })),
+      }
+    },
+    async restoreIndexServiceSession (snapshot) {
+      const desired = new Map(snapshot.live.map(entry => [entry.indexerId, entry]))
+      for (const id of [...live.keys()]) {
+        const want = desired.get(id)
+        if (want && want.encoded === live.get(id)) continue
+        live.delete(id)
+      }
+      for (const entry of snapshot.live) {
+        if (live.get(entry.indexerId) === entry.encoded) continue
+        live.set(entry.indexerId, entry.encoded)
+        announcements.set(entry.indexerId, entry.announcement)
+      }
+      floors.clear()
+      for (const [id, sequence] of snapshot.floors || []) floors.set(id, sequence)
+      lastAdmitted.clear()
+      for (const [id, snap] of snapshot.lastAdmitted || []) lastAdmitted.set(id, { ...snap })
+    },
+    async restoreLastIndexService ({ indexerId: id }) {
+      const snap = lastAdmitted.get(id)
+      if (!snap) throw new Error('no previously admitted index service to restore')
+      live.set(id, snap.encoded)
+      return { restored: true, encoded: snap.encoded, indexerId: id }
+    },
+  })
+  const runtime = createNetworkPolicyRuntime({
+    initialPolicy,
+    scopedNetwork,
+    now: () => INDEX_POLICY_NOW + 2,
+  })
+  await runtime.start()
+  await runtime.apply({ ...initialPolicy, indexServiceAnnouncements: [a1Encoded] })
+  t.is(live.get(aId), a1Encoded)
+  t.is(floors.get(aId), 1)
+  failB = true
+  await t.exception(
+    runtime.apply({ ...initialPolicy, indexServiceAnnouncements: [a2Encoded, bEncoded] }),
+    { message: /B admission failed/ },
+  )
+  t.is(live.get(aId), a1Encoded, 'session restore rolled A back to seq1')
+  t.is(floors.get(aId), 1, 'floor restored to seq1')
+  t.is(live.has(bId), false)
+  t.is(lastAdmitted.get(aId)?.encoded, a1Encoded)
 })

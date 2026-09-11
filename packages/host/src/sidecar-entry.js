@@ -21,11 +21,58 @@ function createEmitter() {
   return { add, remove, emit }
 }
 
-export function createProcessTransport() {
-  const emitter = createEmitter()
-  const input = globalThis.Bare?.stdin ?? process.stdin
-  const output = globalThis.Bare?.stdout ?? process.stdout
+function resolveDefaultInputStream() {
+  return globalThis.Bare?.stdin ?? process.stdin
+}
 
+function resolveDefaultOutputStream() {
+  return globalThis.Bare?.stdout ?? process.stdout
+}
+
+function attachTransportListeners(input, output, handlers) {
+  input?.on?.('data', handlers.onData)
+  input?.on?.('end', handlers.onEnd)
+  input?.on?.('close', handlers.onClose)
+  input?.on?.('error', handlers.onError)
+  output?.on?.('drain', handlers.onDrain)
+  output?.on?.('close', handlers.onClose)
+  output?.on?.('error', handlers.onError)
+}
+
+function detachTransportListeners(input, output, handlers) {
+  input?.removeListener?.('data', handlers.onData)
+  input?.removeListener?.('end', handlers.onEnd)
+  input?.removeListener?.('close', handlers.onClose)
+  input?.removeListener?.('error', handlers.onError)
+  output?.removeListener?.('drain', handlers.onDrain)
+  output?.removeListener?.('close', handlers.onClose)
+  output?.removeListener?.('error', handlers.onError)
+}
+
+export function createProcessTransport({
+  input = resolveDefaultInputStream(),
+  output = resolveDefaultOutputStream(),
+} = {}) {
+  const emitter = createEmitter()
+  let closed = false
+  const onData = chunk => emitter.emit('data', chunk)
+  const onDrain = () => emitter.emit('drain')
+  const onError = error => emitter.emit('error', error)
+  const onEnd = () => {
+    if (closed) return
+    try {
+      emitter.emit('end')
+    } finally {
+      onClose()
+    }
+  }
+  const onClose = () => {
+    if (closed) return
+    closed = true
+    detachTransportListeners(input, output, handlers)
+    emitter.emit('close')
+  }
+  const handlers = { onData, onDrain, onError, onEnd, onClose }
   const transport = {
     on(event, listener) {
       emitter.add(event, listener)
@@ -56,23 +103,18 @@ export function createProcessTransport() {
       return transport
     },
     destroy(error) {
-      if (error) emitter.emit('error', error)
-      input?.destroy?.(error)
-      output?.destroy?.(error)
-      emitter.emit('close')
+      try {
+        if (!closed && error) emitter.emit('error', error)
+      } finally {
+        onClose()
+        input?.destroy?.()
+        if (output !== input) output?.destroy?.()
+      }
       return transport
     }
   }
 
-  input?.on?.('data', (chunk) => emitter.emit('data', chunk))
-  input?.on?.('end', () => emitter.emit('end'))
-  input?.on?.('end', () => emitter.emit('close'))
-  input?.on?.('close', () => emitter.emit('close'))
-  input?.on?.('error', (error) => emitter.emit('error', error))
-  output?.on?.('drain', () => emitter.emit('drain'))
-  output?.on?.('close', () => emitter.emit('close'))
-  output?.on?.('error', (error) => emitter.emit('error', error))
-
+  attachTransportListeners(input, output, handlers)
   return transport
 }
 

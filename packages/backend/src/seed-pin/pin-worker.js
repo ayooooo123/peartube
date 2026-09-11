@@ -42,6 +42,61 @@ class WorkerFault extends Error {
   }
 }
 
+function validateCorestore (corestore) {
+  if (!corestore || typeof corestore.session !== 'function') {
+    throw new TypeError('corestore must provide session()')
+  }
+}
+
+function validatePinStore (pinStore) {
+  if (!pinStore || typeof pinStore.getByRequestId !== 'function' ||
+      typeof pinStore.listResumable !== 'function' ||
+      typeof pinStore.listActive !== 'function' ||
+      typeof pinStore.reopenCompleteForRepair !== 'function' ||
+      typeof pinStore.reserveWorkerCapacity !== 'function' ||
+      typeof pinStore.updateWorkerStatus !== 'function') {
+    throw new TypeError(
+      'pinStore must provide getByRequestId, listResumable, listActive, ' +
+      'reopenCompleteForRepair, reserveWorkerCapacity, and updateWorkerStatus',
+    )
+  }
+}
+
+function validateWorkerDependencies (corestore, pinStore, capacityPolicy, releasePolicy, now) {
+  validateCorestore(corestore)
+  validatePinStore(pinStore)
+  if (typeof capacityPolicy !== 'function') throw new TypeError('capacityPolicy must be a function')
+  if (typeof releasePolicy !== 'function') throw new TypeError('releasePolicy must be a function')
+  if (typeof now !== 'function') throw new TypeError('now must be a function')
+}
+
+function validateActivePage (page, previousCursor) {
+  const pageError = page?.error || null
+  if (!page || !Array.isArray(page.records) ||
+      (page.cursor !== null && !isBoundedActiveCursor(page.cursor)) ||
+      (pageError !== null && (typeof pageError.message !== 'string' || page.cursor === null)) ||
+      (page.cursor !== null && page.cursor === previousCursor)) {
+    throw new PinWorkerError('pinStore returned a malformed active page')
+  }
+  return pageError
+}
+
+function validateSeekInput (length, byteLength, index) {
+  if (!Number.isSafeInteger(length) || length < 0 ||
+      !Number.isSafeInteger(byteLength) || byteLength < 0 ||
+      !Number.isSafeInteger(index) || index < 0 || index > length) {
+    throw capacityFault()
+  }
+}
+
+function validateSeekResult (result, length, maxOffset, minIndex = 0) {
+  if (!Array.isArray(result) || !Number.isSafeInteger(result[0]) ||
+      result[0] < minIndex || result[0] > length ||
+      !Number.isSafeInteger(result[1]) || result[1] < 0 || result[1] > maxOffset) {
+    throw capacityFault()
+  }
+}
+
 export class PinWorker {
   constructor ({
     corestore,
@@ -57,20 +112,7 @@ export class PinWorker {
     maxBlocksPerRequest = DEFAULT_MAX_BLOCKS_PER_REQUEST,
     now = Date.now,
   } = {}) {
-    if (!corestore || typeof corestore.session !== 'function') {
-      throw new TypeError('corestore must provide session()')
-    }
-    if (!pinStore || typeof pinStore.getByRequestId !== 'function' ||
-        typeof pinStore.listResumable !== 'function' ||
-        typeof pinStore.listActive !== 'function' ||
-        typeof pinStore.reopenCompleteForRepair !== 'function' ||
-        typeof pinStore.reserveWorkerCapacity !== 'function' ||
-        typeof pinStore.updateWorkerStatus !== 'function') {
-      throw new TypeError(
-        'pinStore must provide getByRequestId, listResumable, listActive, ' +
-        'reopenCompleteForRepair, reserveWorkerCapacity, and updateWorkerStatus',
-      )
-    }
+    validateWorkerDependencies(corestore, pinStore, capacityPolicy, releasePolicy, now)
     this.concurrency = boundedInteger(concurrency, 'concurrency', MAX_PIN_WORKER_CONCURRENCY)
     this.queueLimit = boundedInteger(queueLimit, 'queueLimit', MAX_QUEUE_LIMIT)
     this.rangeTimeout = boundedInteger(rangeTimeout, 'rangeTimeout', MAX_TIMER_DELAY)
@@ -86,9 +128,6 @@ export class PinWorker {
       'maxBlocksPerRequest',
       Number.MAX_SAFE_INTEGER,
     )
-    if (typeof capacityPolicy !== 'function') throw new TypeError('capacityPolicy must be a function')
-    if (typeof releasePolicy !== 'function') throw new TypeError('releasePolicy must be a function')
-    if (typeof now !== 'function') throw new TypeError('now must be a function')
 
     this.corestore = corestore
     this.pinStore = pinStore
@@ -185,6 +224,30 @@ export class PinWorker {
     return { ...stats }
   }
 
+  async _feedRecord (record, stats, initial, firstFetchedPage) {
+    for (;;) {
+      if (firstFetchedPage && !initial.settled && this._queueIsFull()) initial.resolve()
+      if (!(await this._waitForQueueCapacity())) return false
+      try {
+        const result = await this.start(record.requestId)
+        if (result.outcome === 'scheduled') stats.scheduled++
+        else stats.matched++
+        if (firstFetchedPage && !initial.settled && this._queueIsFull()) initial.resolve()
+        return true
+      } catch (error) {
+        if (error?.code !== SEED_PIN_ERROR_CODES.BUSY) throw error
+      }
+    }
+  }
+
+  async _feedPageRecords (records, stats, initial, firstFetchedPage) {
+    for (const record of records) {
+      const continued = await this._feedRecord(record, stats, initial, firstFetchedPage)
+      if (!continued) return false
+    }
+    return true
+  }
+
   async _feedActive (stats, initial) {
     let cursor = null
     let firstFetchedPage = true
@@ -195,28 +258,9 @@ export class PinWorker {
         throw new PinWorkerError('seed pin worker is stopped', SEED_PIN_ERROR_CODES.WORKER_UNAVAILABLE)
       }
       const page = await this.pinStore.listActive({ limit: pageLimit, cursor })
-      const pageError = page?.error || null
-      if (!page || !Array.isArray(page.records) ||
-          (page.cursor !== null && !isBoundedActiveCursor(page.cursor)) ||
-          (pageError !== null && (typeof pageError.message !== 'string' || page.cursor === null)) ||
-          (page.cursor !== null && page.cursor === cursor)) {
-        throw new PinWorkerError('pinStore returned a malformed active page')
-      }
-      for (const record of page.records) {
-        while (true) {
-          if (firstFetchedPage && !initial.settled && this._queueIsFull()) initial.resolve()
-          if (!(await this._waitForQueueCapacity())) return
-          try {
-            const result = await this.start(record.requestId)
-            if (result.outcome === 'scheduled') stats.scheduled++
-            else stats.matched++
-            if (firstFetchedPage && !initial.settled && this._queueIsFull()) initial.resolve()
-            break
-          } catch (error) {
-            if (error?.code !== SEED_PIN_ERROR_CODES.BUSY) throw error
-          }
-        }
-      }
+      const pageError = validateActivePage(page, cursor)
+      const continued = await this._feedPageRecords(page.records, stats, initial, firstFetchedPage)
+      if (!continued) return
       if (firstFetchedPage) {
         firstFetchedPage = false
         if (!initial.settled) initial.resolve()
@@ -330,6 +374,239 @@ export class PinWorker {
     this._notifyIdle()
   }
 
+  async _preflightJobEstimate (job, current) {
+    const totalBlocks = countUniqueBlocks(current.manifest.refs)
+    const traversalBlocks = countTraversedBlocks(current.manifest.refs)
+    if (totalBlocks === null || traversalBlocks === null ||
+        totalBlocks > this.maxBlocksPerRequest ||
+        traversalBlocks > this.maxBlocksPerRequest) {
+      throw new WorkerFault('capacity', {
+        state: 'failed',
+        errorCode: SEED_PIN_ERROR_CODES.CAPACITY_EXCEEDED,
+      })
+    }
+    const estimateAllowed = await runJobOperation(
+      job,
+      Promise.resolve().then(() => this._runCapacityPolicy(Object.freeze({
+        phase: 'estimate',
+        requestId: job.requestId,
+        manifest: cloneManifest(current.manifest),
+        refs: current.manifest.refs.map(ref => Object.freeze({ ...ref })),
+        totalBlocks,
+        traversalBlocks,
+        knownBytes: current.progress.downloadedBytes,
+        downloadedBlocks: current.progress.downloadedBlocks,
+        downloadedBytes: current.progress.downloadedBytes,
+        persistedReservedBytes: current.progress.reservedBytes,
+        persistedDownloadedBytes: current.progress.downloadedBytes,
+        persistedUsageBytes: Math.max(current.progress.reservedBytes, current.progress.downloadedBytes),
+      }))),
+      this.downloadTimeout,
+      () => new WorkerFault('capacity-policy'),
+    )
+    this._throwIfInterrupted(job)
+    if (estimateAllowed !== true) {
+      throw new WorkerFault('capacity', {
+        state: 'failed',
+        errorCode: SEED_PIN_ERROR_CODES.CAPACITY_EXCEEDED,
+      })
+    }
+    return { totalBlocks, traversalBlocks }
+  }
+
+  async _initJobRetention (job, totalBlocks, restoreVerification) {
+    if (!restoreVerification) job.record = await this._setPinning(job.record)
+    this._throwIfInterrupted(job)
+    let session
+    try {
+      session = this.corestore.session()
+    } catch {
+      throw new WorkerFault('open', { cleanup: true })
+    }
+    if (!session || typeof session.get !== 'function' || typeof session.close !== 'function') {
+      if (session && typeof session.close === 'function') await session.close().catch(() => {})
+      throw new WorkerFault('open', { cleanup: true })
+    }
+    const retention = {
+      session,
+      cores: new Map(),
+      downloads: new Set(),
+      downloadsDestroyed: false,
+      closed: false,
+    }
+    this.retentions.set(job.requestId, retention)
+    try {
+      this._throwIfInterrupted(job)
+      job.record = await this._preflightCapacity(job, retention, totalBlocks)
+      this._throwIfInterrupted(job)
+      return retention
+    } catch (error) {
+      await closeRetention(retention).catch(noop)
+      if (this.retentions.get(job.requestId) === retention) this.retentions.delete(job.requestId)
+      throw error
+    }
+  }
+
+  async _downloadRefRange (job, core, ref, retention) {
+    await this._waitForRange(job, core, ref.end)
+    this._throwIfInterrupted(job)
+    let download
+    try {
+      download = core.download({ start: ref.start, end: ref.end, linear: true })
+      if (!download || typeof download.done !== 'function') throw new Error('invalid download handle')
+    } catch {
+      throw new WorkerFault('download')
+    }
+    retention.downloads.add(download)
+    try {
+      await runJobOperation(
+        job,
+        download.done(),
+        this.downloadTimeout,
+        () => {
+          destroyDownload(download)
+          return new WorkerFault('download')
+        },
+      )
+    } catch (error) {
+      this._throwIfInterrupted(job)
+      if (error instanceof WorkerFault) throw error
+      throw new WorkerFault('download')
+    }
+    this._throwIfInterrupted(job)
+  }
+
+  async _readVerifiedBlock (job, core, index) {
+    let local
+    try {
+      local = await runJobOperation(
+        job,
+        Promise.resolve().then(() => core.has(index)),
+        this.rangeTimeout,
+        () => new WorkerFault('local-missing'),
+      )
+    } catch (error) {
+      this._throwIfInterrupted(job)
+      if (error instanceof WorkerFault) throw error
+      throw new WorkerFault('local-missing')
+    }
+    if (local !== true) throw new WorkerFault('local-missing')
+    let block
+    try {
+      block = await runJobOperation(
+        job,
+        Promise.resolve().then(() => core.get(index, { wait: false })),
+        this.rangeTimeout,
+        () => new WorkerFault('local-missing'),
+      )
+    } catch (error) {
+      this._throwIfInterrupted(job)
+      if (error instanceof WorkerFault) throw error
+      throw new WorkerFault('corrupt', {
+        state: 'failed',
+        errorCode: SEED_PIN_ERROR_CODES.INTERNAL,
+      })
+    }
+    if (!(block instanceof Uint8Array) && !b4a.isBuffer(block)) {
+      throw new WorkerFault('local-missing')
+    }
+    return block
+  }
+
+  async _processRefBlocks (job, context) {
+    const {
+      core, ref, refIndex, totalBlocks, previouslyAccountedEnd,
+      restoreVerification, repairing, progressState
+    } = context
+    let refBytes = 0
+    for (let index = ref.start; index < ref.end; index++) {
+      this._throwIfInterrupted(job)
+      const block = await this._readVerifiedBlock(job, core, index)
+      refBytes = safeAdd(refBytes, block.byteLength, 'capacity')
+      if (index >= previouslyAccountedEnd) {
+        progressState.downloadedBlocks = safeAdd(progressState.downloadedBlocks, 1, 'capacity')
+        progressState.downloadedBytes = safeAdd(progressState.downloadedBytes, block.byteLength, 'capacity')
+      }
+
+      const allowed = await runJobOperation(
+        job,
+        Promise.resolve().then(() => this._runCapacityPolicy(Object.freeze({
+          phase: 'progress',
+          requestId: job.requestId,
+          manifest: cloneManifest(job.record.manifest),
+          ref: Object.freeze({ ...ref }),
+          refIndex,
+          totalBlocks,
+          knownBytes: progressState.downloadedBytes,
+          downloadedBlocks: progressState.downloadedBlocks,
+          downloadedBytes: progressState.downloadedBytes,
+          persistedReservedBytes: job.record.progress.reservedBytes,
+          persistedDownloadedBytes: job.record.progress.downloadedBytes,
+          persistedUsageBytes: Math.max(job.record.progress.reservedBytes, job.record.progress.downloadedBytes),
+        }))),
+        this.downloadTimeout,
+        () => new WorkerFault('capacity-policy'),
+      )
+      this._throwIfInterrupted(job)
+      if (allowed !== true) {
+        throw new WorkerFault('quota', {
+          state: 'failed',
+          errorCode: SEED_PIN_ERROR_CODES.CAPACITY_EXCEEDED,
+        })
+      }
+
+      const finalBlock = index + 1 === ref.end
+      if (!restoreVerification || repairing) {
+        if (finalBlock || ((index - ref.start + 1) % this.progressChunkBlocks === 0)) {
+          job.record = await this._checkpoint(
+            job.record,
+            refIndex,
+            refBytes,
+            finalBlock,
+            progressState.downloadedBlocks,
+            progressState.downloadedBytes,
+          )
+        }
+      }
+      this._throwIfInterrupted(job)
+    }
+    return refBytes
+  }
+
+  async _handleExecuteError (job, error, retention) {
+    if (retention) {
+      await closeRetention(retention)
+      if (this.retentions.get(job.requestId) === retention) this.retentions.delete(job.requestId)
+    }
+    if (job.cancelled) return
+    let fault = error
+    if (job.stopping || this.stopping) fault = new WorkerFault('worker-stopped')
+    else if (!(fault instanceof WorkerFault)) fault = new WorkerFault('internal')
+    try {
+      const current = await this.pinStore.getByRequestId(job.requestId)
+      if (current !== null && ACTIVE_STATES.has(current.status.state)) {
+        const refs = markCurrentRefFailed(current.status.refs)
+        job.record = await this.pinStore.updateWorkerStatus({
+          requestId: job.requestId,
+          state: fault.state,
+          refs,
+          errorCode: fault.errorCode,
+          error: fault.reason,
+          completedAt: null,
+          downloadedBlocks: current.progress.downloadedBlocks,
+          downloadedBytes: current.progress.downloadedBytes,
+          updatedAt: this._now(),
+        })
+        if (fault.state === 'failed') {
+          await this._releaseCapacityReservation(job.requestId)
+        }
+      }
+    } catch {
+      // The metadata store is authoritative. A failed checkpoint remains visible
+      // as its last durable active state rather than being fabricated here.
+    }
+  }
+
   async _execute (job) {
     let retention = null
     try {
@@ -339,69 +616,10 @@ export class PinWorker {
       const restoreVerification = current.status.state === 'complete'
       let repairing = false
 
-      const totalBlocks = countUniqueBlocks(current.manifest.refs)
-      const traversalBlocks = countTraversedBlocks(current.manifest.refs)
-      if (totalBlocks === null || traversalBlocks === null ||
-          totalBlocks > this.maxBlocksPerRequest ||
-          traversalBlocks > this.maxBlocksPerRequest) {
-        throw new WorkerFault('capacity', {
-          state: 'failed',
-          errorCode: SEED_PIN_ERROR_CODES.CAPACITY_EXCEEDED,
-        })
-      }
-      const estimateAllowed = await runJobOperation(
-        job,
-        Promise.resolve().then(() => this._runCapacityPolicy(Object.freeze({
-          phase: 'estimate',
-          requestId: job.requestId,
-          manifest: cloneManifest(current.manifest),
-          refs: current.manifest.refs.map(ref => Object.freeze({ ...ref })),
-          totalBlocks,
-          traversalBlocks,
-          knownBytes: current.progress.downloadedBytes,
-          downloadedBlocks: current.progress.downloadedBlocks,
-          downloadedBytes: current.progress.downloadedBytes,
-          persistedReservedBytes: current.progress.reservedBytes,
-          persistedDownloadedBytes: current.progress.downloadedBytes,
-          persistedUsageBytes: Math.max(current.progress.reservedBytes, current.progress.downloadedBytes),
-        }))),
-        this.downloadTimeout,
-        () => new WorkerFault('capacity-policy'),
-      )
-      this._throwIfInterrupted(job)
-      if (estimateAllowed !== true) {
-        throw new WorkerFault('capacity', {
-          state: 'failed',
-          errorCode: SEED_PIN_ERROR_CODES.CAPACITY_EXCEEDED,
-        })
-      }
+      const { totalBlocks } = await this._preflightJobEstimate(job, current)
+      retention = await this._initJobRetention(job, totalBlocks, restoreVerification)
 
-      if (!restoreVerification) job.record = await this._setPinning(job.record)
-      this._throwIfInterrupted(job)
-      let session
-      try {
-        session = this.corestore.session()
-      } catch {
-        throw new WorkerFault('open', { cleanup: true })
-      }
-      if (!session || typeof session.get !== 'function' || typeof session.close !== 'function') {
-        if (session && typeof session.close === 'function') await session.close().catch(() => {})
-        throw new WorkerFault('open', { cleanup: true })
-      }
-      retention = {
-        session,
-        cores: new Map(),
-        downloads: new Set(),
-        downloadsDestroyed: false,
-        closed: false,
-      }
-      this.retentions.set(job.requestId, retention)
-      this._throwIfInterrupted(job)
-      job.record = await this._preflightCapacity(job, retention, totalBlocks)
-      this._throwIfInterrupted(job)
-
-      let downloadedBlocks = 0
-      let downloadedBytes = 0
+      const progressState = { downloadedBlocks: 0, downloadedBytes: 0 }
       const accountedEnds = new Map()
       const verifiedRefs = job.record.status.refs.map(ref => ({ ...ref }))
       for (let refIndex = 0; refIndex < job.record.manifest.refs.length; refIndex++) {
@@ -424,119 +642,14 @@ export class PinWorker {
         }
 
         if (!locallyComplete) {
-          await this._waitForRange(job, core, ref.end)
-          this._throwIfInterrupted(job)
-          let download
-          try {
-            download = core.download({ start: ref.start, end: ref.end, linear: true })
-            if (!download || typeof download.done !== 'function') throw new Error('invalid download handle')
-          } catch {
-            throw new WorkerFault('download')
-          }
-          retention.downloads.add(download)
-          try {
-            await runJobOperation(
-              job,
-              download.done(),
-              this.downloadTimeout,
-              () => {
-                destroyDownload(download)
-                return new WorkerFault('download')
-              },
-            )
-          } catch (error) {
-            this._throwIfInterrupted(job)
-            if (error instanceof WorkerFault) throw error
-            throw new WorkerFault('download')
-          }
-          this._throwIfInterrupted(job)
+          await this._downloadRefRange(job, core, ref, retention)
         }
 
-        let refBytes = 0
         const previouslyAccountedEnd = accountedEnds.get(ref.coreKey) ?? -1
-        for (let index = ref.start; index < ref.end; index++) {
-          this._throwIfInterrupted(job)
-          let local
-          try {
-            local = await runJobOperation(
-              job,
-              Promise.resolve().then(() => core.has(index)),
-              this.rangeTimeout,
-              () => new WorkerFault('local-missing'),
-            )
-          } catch (error) {
-            this._throwIfInterrupted(job)
-            if (error instanceof WorkerFault) throw error
-            throw new WorkerFault('local-missing')
-          }
-          if (local !== true) throw new WorkerFault('local-missing')
-          let block
-          try {
-            block = await runJobOperation(
-              job,
-              Promise.resolve().then(() => core.get(index, { wait: false })),
-              this.rangeTimeout,
-              () => new WorkerFault('local-missing'),
-            )
-          } catch (error) {
-            this._throwIfInterrupted(job)
-            if (error instanceof WorkerFault) throw error
-            throw new WorkerFault('corrupt', {
-              state: 'failed',
-              errorCode: SEED_PIN_ERROR_CODES.INTERNAL,
-            })
-          }
-          if (!(block instanceof Uint8Array) && !b4a.isBuffer(block)) {
-            throw new WorkerFault('local-missing')
-          }
-          refBytes = safeAdd(refBytes, block.byteLength, 'capacity')
-          if (index >= previouslyAccountedEnd) {
-            downloadedBlocks = safeAdd(downloadedBlocks, 1, 'capacity')
-            downloadedBytes = safeAdd(downloadedBytes, block.byteLength, 'capacity')
-          }
-
-          const allowed = await runJobOperation(
-            job,
-            Promise.resolve().then(() => this._runCapacityPolicy(Object.freeze({
-              phase: 'progress',
-              requestId: job.requestId,
-              manifest: cloneManifest(job.record.manifest),
-              ref: Object.freeze({ ...ref }),
-              refIndex,
-              totalBlocks,
-              knownBytes: downloadedBytes,
-              downloadedBlocks,
-              downloadedBytes,
-              persistedReservedBytes: job.record.progress.reservedBytes,
-              persistedDownloadedBytes: job.record.progress.downloadedBytes,
-              persistedUsageBytes: Math.max(job.record.progress.reservedBytes, job.record.progress.downloadedBytes),
-            }))),
-            this.downloadTimeout,
-            () => new WorkerFault('capacity-policy'),
-          )
-          this._throwIfInterrupted(job)
-          if (allowed !== true) {
-            throw new WorkerFault('quota', {
-              state: 'failed',
-              errorCode: SEED_PIN_ERROR_CODES.CAPACITY_EXCEEDED,
-            })
-          }
-
-          const finalBlock = index + 1 === ref.end
-          if (!restoreVerification || repairing) {
-            if (finalBlock || ((index - ref.start + 1) % this.progressChunkBlocks === 0)) {
-              job.record = await this._checkpoint(
-                job.record,
-                refIndex,
-                refBytes,
-                finalBlock,
-                downloadedBlocks,
-                downloadedBytes,
-              )
-            }
-          }
-          this._throwIfInterrupted(job)
-        }
+        const refBytes = await this._processRefBlocks(job, {
+          core, ref, refIndex, totalBlocks, previouslyAccountedEnd,
+          restoreVerification, repairing, progressState
+        })
         verifiedRefs[refIndex] = {
           ...verifiedRefs[refIndex],
           state: 'complete',
@@ -558,43 +671,13 @@ export class PinWorker {
         errorCode: null,
         error: null,
         completedAt,
-        downloadedBlocks,
-        downloadedBytes,
+        downloadedBlocks: progressState.downloadedBlocks,
+        downloadedBytes: progressState.downloadedBytes,
         updatedAt: this._now(),
       })
       await this._capacityPersisted(job.requestId)
     } catch (error) {
-      if (retention) {
-        await closeRetention(retention)
-        if (this.retentions.get(job.requestId) === retention) this.retentions.delete(job.requestId)
-      }
-      if (job.cancelled) return
-      let fault = error
-      if (job.stopping || this.stopping) fault = new WorkerFault('worker-stopped')
-      else if (!(fault instanceof WorkerFault)) fault = new WorkerFault('internal')
-      try {
-        const current = await this.pinStore.getByRequestId(job.requestId)
-        if (current !== null && ACTIVE_STATES.has(current.status.state)) {
-          const refs = markCurrentRefFailed(current.status.refs)
-          job.record = await this.pinStore.updateWorkerStatus({
-            requestId: job.requestId,
-            state: fault.state,
-            refs,
-            errorCode: fault.errorCode,
-            error: fault.reason,
-            completedAt: null,
-            downloadedBlocks: current.progress.downloadedBlocks,
-            downloadedBytes: current.progress.downloadedBytes,
-            updatedAt: this._now(),
-          })
-          if (fault.state === 'failed') {
-            await this._releaseCapacityReservation(job.requestId)
-          }
-        }
-      } catch {
-        // The metadata store is authoritative. A failed checkpoint remains visible
-        // as its last durable active state rather than being fabricated here.
-      }
+      await this._handleExecuteError(job, error, retention)
     }
   }
 
@@ -779,14 +862,28 @@ export class PinWorker {
     }
   }
 
+  async _seekStep (job, core, lower, upper, length, deadline) {
+    this._throwIfInterrupted(job)
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) throw capacityFault()
+    const offset = lower + Math.floor((upper - lower) / 2)
+    const found = await runJobOperation(
+      job,
+      Promise.resolve().then(() => core.seek(offset, {
+        wait: true,
+        timeout: remaining,
+      })),
+      remaining,
+      () => capacityFault(),
+    )
+    validateSeekResult(found, length, offset)
+    return { offset, found }
+  }
+
   async _seekByteOffset (job, core, index, deadline = Date.now() + this.rangeTimeout) {
     const length = core.length
     const byteLength = core.byteLength
-    if (!Number.isSafeInteger(length) || length < 0 ||
-        !Number.isSafeInteger(byteLength) || byteLength < 0 ||
-        !Number.isSafeInteger(index) || index < 0 || index > length) {
-      throw capacityFault()
-    }
+    validateSeekInput(length, byteLength, index)
     if (index === 0) return 0
     if (index === length) return byteLength
     if (byteLength === 0) return 0
@@ -796,24 +893,7 @@ export class PinWorker {
     let candidateOffset = -1
     let candidate = null
     while (lower < upper) {
-      this._throwIfInterrupted(job)
-      const remaining = deadline - Date.now()
-      if (remaining <= 0) throw capacityFault()
-      const offset = lower + Math.floor((upper - lower) / 2)
-      const found = await runJobOperation(
-        job,
-        Promise.resolve().then(() => core.seek(offset, {
-          wait: true,
-          timeout: remaining,
-        })),
-        remaining,
-        () => capacityFault(),
-      )
-      if (!Array.isArray(found) || !Number.isSafeInteger(found[0]) ||
-          found[0] < 0 || found[0] > length ||
-          !Number.isSafeInteger(found[1]) || found[1] < 0 || found[1] > offset) {
-        throw capacityFault()
-      }
+      const { offset, found } = await this._seekStep(job, core, lower, upper, length, deadline)
       if (found[0] < index) {
         lower = offset + 1
       } else {
@@ -835,15 +915,9 @@ export class PinWorker {
         () => capacityFault(),
       )
     }
-    if (!Array.isArray(candidate) || !Number.isSafeInteger(candidate[0]) ||
-        candidate[0] < index || candidate[0] > length ||
-        !Number.isSafeInteger(candidate[1]) || candidate[1] < 0 ||
-        candidate[1] > lower) {
-      throw capacityFault()
-    }
+    validateSeekResult(candidate, length, lower, index)
     const blockStart = lower - candidate[1]
-    if (!Number.isSafeInteger(blockStart) || blockStart < 0 ||
-        blockStart > byteLength) {
+    if (!Number.isSafeInteger(blockStart) || blockStart < 0 || blockStart > byteLength) {
       throw capacityFault()
     }
     return blockStart
@@ -920,7 +994,7 @@ export class PinWorker {
 
   async _waitForRange (job, core, end) {
     const deadline = Date.now() + this.rangeTimeout
-    while (true) {
+    for (;;) {
       const length = core.length
       if (!Number.isSafeInteger(length) || length < 0) {
         throw new WorkerFault('range-unavailable')
@@ -1229,7 +1303,9 @@ function destroyDownload (download) {
   try {
     if (typeof download.destroy === 'function') download.destroy()
     else if (typeof download.close === 'function') download.close()
-  } catch {}
+  } catch {
+    // best-effort teardown: a failing download destroy must not mask the caller's result
+  }
 }
 
 function destroyDownloads (retention) {

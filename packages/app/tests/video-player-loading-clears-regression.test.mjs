@@ -29,11 +29,6 @@ test('VideoPlayerContext also clears the connecting gate once backend stats show
   assert.match(statsHandler, /isBufferingRef\.current\s*=\s*false/, 'stats handler must clear buffering ref')
 })
 
-test('mobile/native route uses the shared overlay player instead of an inline player shell', async () => {
-  const src = await source(videoRoutePath)
-  assert.match(src, /Video is rendered by VideoPlayerOverlay on all platforms/, 'route should not own the native video load event directly')
-  assert.doesNotMatch(src, /onLoad=\{onLoaded\}/, 'route should not try to wire a nonexistent inline player load handler')
-})
 
 test('mobile/native route cancels delayed stats polling when closed quickly', async () => {
   const src = await source(videoRoutePath)

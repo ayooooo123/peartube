@@ -2232,7 +2232,8 @@ ns.register({
     { name: 'aiAnalysis', type: 'string', required: false },
     // Data Saver | Balanced | Help More. One choice that decides every
     // contribution ceiling; the exact byte values stay visible above it.
-    { name: 'participationMode', type: 'string', required: false }
+    { name: 'participationMode', type: 'string', required: false },
+    { name: 'indexServiceAnnouncementsJson', type: 'string', required: false },
   ]
 })
 
@@ -2251,7 +2252,8 @@ ns.register({
     { name: 'followedIndexesJson', type: 'string', required: false },
     { name: 'trustedModerationFeedsJson', type: 'string', required: false },
     { name: 'aiAnalysis', type: 'string', required: false },
-    { name: 'participationMode', type: 'string', required: false }
+    { name: 'participationMode', type: 'string', required: false },
+    { name: 'indexServiceAnnouncementsJson', type: 'string', required: false },
   ]
 })
 
@@ -2916,7 +2918,9 @@ ns.register({
 ns.register({
   name: 'search-index-candidates-request',
   fields: [
-    { name: 'selector', type: '@peartube/index-search-selector', required: true }
+    { name: 'selector', type: '@peartube/index-search-selector', required: true },
+    { name: 'limit', type: 'uint', required: false },
+    { name: 'cursor', type: 'string', required: false }
   ]
 })
 
@@ -2926,7 +2930,10 @@ ns.register({
     { name: 'success', type: 'bool', required: true },
     { name: 'candidates', type: '@peartube/index-candidate-v2', array: true, required: true },
     { name: 'errorCode', type: 'string', required: false },
-    { name: 'errorMessage', type: 'string', required: false }
+    { name: 'errorMessage', type: 'string', required: false },
+    { name: 'nextCursor', type: 'string', required: false },
+    { name: 'partial', type: 'bool', required: false },
+    { name: 'stale', type: 'bool', required: false }
   ]
 })
 
@@ -3918,7 +3925,31 @@ ns.register({
     { name: 'acquirable', type: 'bool', required: true },
     { name: 'entityId', type: 'string', required: false },
     { name: 'publicationId', type: 'string', required: false },
-    { name: 'expectedBytes', type: 'uint', required: false }
+    { name: 'expectedBytes', type: 'uint', required: false },
+    { name: 'entityKind', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'provider-search-selector-v1',
+  fields: [
+    { name: 'namespace', type: 'string', required: false },
+    { name: 'identifier', type: 'string', required: false },
+    { name: 'title', type: 'string', required: false },
+    { name: 'kind', type: 'string', required: true },
+    { name: 'year', type: 'uint', required: false },
+    { name: 'season', type: 'uint', required: false },
+    { name: 'episode', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'provider-search-diagnostics-v1',
+  fields: [
+    { name: 'partial', type: 'bool', required: false },
+    { name: 'stale', type: 'bool', required: false },
+    { name: 'queriedServices', type: 'uint', required: false },
+    { name: 'respondingServices', type: 'uint', required: false }
   ]
 })
 
@@ -3927,7 +3958,8 @@ ns.register({
   fields: [
     { name: 'query', type: 'string', required: true },
     { name: 'cursor', type: 'string', required: false },
-    { name: 'limit', type: 'uint', required: false }
+    { name: 'limit', type: 'uint', required: false },
+    { name: 'selector', type: '@peartube/provider-search-selector-v1', required: false },
   ]
 })
 
@@ -3937,7 +3969,10 @@ ns.register({
     { name: 'success', type: 'bool', required: true },
     { name: 'hits', type: '@peartube/provider-search-hit-v1', array: true, required: true },
     { name: 'nextCursor', type: 'string', required: false },
-    { name: 'error', type: '@peartube/provider-error', required: false }
+    { name: 'error', type: '@peartube/provider-error', required: false },
+    { name: 'diagnostics', type: '@peartube/provider-search-diagnostics-v1', required: false },
+    { name: 'partial', type: 'bool', required: false },
+    { name: 'stale', type: 'bool', required: false }
   ]
 })
 
@@ -3982,7 +4017,22 @@ ns.register({
     { name: 'publisherId', type: 'string', required: true },
     { name: 'retentionClass', type: 'string', required: true },
     { name: 'retentionUntil', type: 'uint', required: false },
-    { name: 'retentionUntilPresent', type: 'bool', required: false }
+    { name: 'retentionUntilPresent', type: 'bool', required: false },
+    { name: 'sourceFileName', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'provider-media-context-v1',
+  fields: [
+    { name: 'kind', type: 'string', required: false },
+    { name: 'namespace', type: 'string', required: false },
+    { name: 'identifier', type: 'string', required: false },
+    { name: 'title', type: 'string', required: false },
+    { name: 'season', type: 'uint', required: false },
+    { name: 'episode', type: 'uint', required: false },
+    { name: 'releaseYear', type: 'uint', required: false },
+    { name: 'workEntityId', type: 'string', required: false }
   ]
 })
 
@@ -4002,7 +4052,10 @@ ns.register({
     { name: 'errorCode', type: 'string', required: false },
     { name: 'recoverable', type: 'bool', required: true },
     { name: 'createdAt', type: 'uint', required: true },
-    { name: 'updatedAt', type: 'uint', required: true }
+    { name: 'updatedAt', type: 'uint', required: true },
+    { name: 'title', type: 'string', required: false },
+    { name: 'sourceFileName', type: 'string', required: false },
+    { name: 'mediaContext', type: '@peartube/provider-media-context-v1', required: false }
   ]
 })
 

@@ -28,7 +28,7 @@ import { Panel, Button, Eyebrow, Body } from '@/components/primitives'
 import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated'
 import { AppContext, type AppContextType } from '@/lib/AppContext'
 import { buildBundleVersionKey } from '@peartube/platform/native-bundle-cache'
-import { getNativePublisherKeyVault, getNativePublisherSigner } from '@/lib/publisher-shell-signer'
+import { getNativePublisherKeyVault, getNativePublisherSigner } from '@/lib/publisher-shell-signer.native'
 import { useDeviceConditionsReporter } from '@/hooks/useNetworkPolicy'
 export { useApp } from '@/lib/AppContext'
 

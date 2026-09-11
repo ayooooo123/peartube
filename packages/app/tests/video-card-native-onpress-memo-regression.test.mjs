@@ -2,29 +2,96 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-const appRoot = path.resolve(__dirname, '..')
+import { build } from 'esbuild'
 
-test('native VideoCard memo comparison treats onPress changes as render-relevant after video data matches', () => {
-  const source = fs.readFileSync(
-    path.join(appRoot, 'components/video/VideoCard.tsx'),
-    'utf8',
+const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+
+async function loadVideoCard() {
+  const stubs = {
+    'icons-stub': 'export const Feather = () => null; export const Ionicons = () => null',
+    'reanimated-stub': [
+      'export const useSharedValue = value => ({ value })',
+      'export const useAnimatedStyle = fn => fn()',
+      'export const withSpring = value => value',
+      'export const withTiming = value => value',
+      'export const withRepeat = value => value',
+      'export const cancelAnimation = () => {}',
+      'export const Easing = new Proxy({}, { get: () => () => null })',
+      'const Animated = { createAnimatedComponent: component => component }',
+      'export default Animated',
+      '',
+    ].join('\n'),
+    'thumbnail-stub': [
+      "import React from 'react'",
+      'export const ThumbnailImage = () => React.createElement("img", null)',
+      '',
+    ].join('\n'),
+  }
+  const plugin = {
+    name: 'stub-video-card-native-deps',
+    setup(builder) {
+      builder.onResolve({ filter: /^react-native-reanimated/ }, () => ({ path: 'reanimated-stub', namespace: 'video-card-stub' }))
+      builder.onResolve({ filter: /\/ThumbnailImage$/ }, () => ({ path: 'thumbnail-stub', namespace: 'video-card-stub' }))
+      builder.onResolve({ filter: /^@expo\/vector-icons/ }, () => ({ path: 'icons-stub', namespace: 'video-card-stub' }))
+      builder.onLoad({ filter: /.*/, namespace: 'video-card-stub' }, args => ({
+        contents: stubs[args.path],
+        loader: 'js',
+      }))
+    },
+  }
+  const result = await build({
+    stdin: {
+      contents: "export { VideoCard } from './components/video/VideoCard.tsx'",
+      resolveDir: appRoot,
+      sourcefile: 'video-card-entry.ts',
+      loader: 'ts',
+    },
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    external: ['react', 'react-dom'],
+    alias: { 'react-native': 'react-native-web' },
+    plugins: [plugin],
+    tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', baseUrl: appRoot, paths: { '@/*': ['./*'] } } },
+    write: false,
+  })
+  const directory = fs.mkdtempSync(path.join(appRoot, '.video-card-native-'))
+  const output = path.join(directory, 'card.cjs')
+  fs.writeFileSync(output, result.outputFiles[0].text)
+  try {
+    return await import(`${pathToFileURL(output).href}?${Math.random()}`)
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+}
+
+test('native VideoCard memo comparison treats onPress and creator changes as render-relevant', async () => {
+  const { VideoCard } = await loadVideoCard()
+  const onPress = () => {}
+  const onChannelPress = () => {}
+  const base = {
+    video: {
+      id: 'video-1',
+      title: 'Video',
+      creatorName: 'Creator',
+      channel: { name: 'Channel' },
+    },
+    onPress,
+    onChannelPress,
+    showChannelInfo: true,
+  }
+
+  assert.equal(VideoCard.compare(base, { ...base }), true, 'unchanged public props should remain memo-equal')
+  assert.equal(
+    VideoCard.compare(base, { ...base, onPress: () => {} }),
+    false,
+    'the live comparator must invalidate a changed press handler',
   )
-
-  const comparisonStart = source.indexOf('function arePropsEqual')
-  assert.notEqual(comparisonStart, -1, 'VideoCard should define a custom memo comparator')
-  const comparisonSource = source.slice(comparisonStart, source.indexOf('export const VideoCard', comparisonStart))
-
-  const deepReturnStart = comparisonSource.indexOf('// Deep comparison of video data that affects rendering')
-  assert.notEqual(deepReturnStart, -1, 'VideoCard comparator should have a deep comparison branch')
-  const deepComparisonSource = comparisonSource.slice(deepReturnStart)
-
-  assert.match(
-    deepComparisonSource,
-    /prevProps\.onPress\s*===\s*nextProps\.onPress/,
-    'the deep memo comparison must return false when onPress changes; otherwise cards can keep a stale no-op press handler from before rpc readiness',
+  assert.equal(
+    VideoCard.compare(base, { ...base, video: { ...base.video, creatorName: 'Another creator' } }),
+    false,
+    'the live comparator must invalidate changed creator attribution',
   )
 })

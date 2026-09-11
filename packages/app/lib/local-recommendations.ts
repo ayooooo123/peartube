@@ -252,6 +252,76 @@ function reasonLabel(kind: RecommendationReason['kind'], creator: string | null,
   if (tags.length > 0) return `Shares ${tags[0]} with what you have watched`
   return 'From what you have watched on this device'
 }
+function collectWatchedSignals(
+  watched: LocalWatchEntry[],
+  now: number,
+  excludeInput?: Iterable<unknown> | null,
+) {
+  const excluded = new Set<string>()
+  for (const id of excludeInput ?? []) {
+    const value = text(id)
+    if (value) excluded.add(value)
+  }
+
+  const tagSignals = new Map<string, Signal>()
+  const creatorSignals = new Map<string, Signal>()
+  for (const entry of watched) {
+    const entityId = entityIdOf(entry)
+    if (!entityId) continue
+    // Already-watched titles are never recommended back, completed or not.
+    excluded.add(entityId)
+    const weight = recencyWeight(entry, now) * engagementWeight(entry)
+    for (const tag of tagKeysOf(entry)) recordSignal(tagSignals, tag.key, weight, entry, entityId)
+    const creator = creatorOf(entry)
+    if (creator) recordSignal(creatorSignals, creator.toLowerCase(), weight, entry, entityId)
+  }
+  return { excluded, tagSignals, creatorSignals }
+}
+
+type ScoredCandidate = {
+  score: number
+  reason: RecommendationReason
+}
+
+function scoreCandidateItem(
+  item: RankableItem,
+  tagSignals: Map<string, Signal>,
+  creatorSignals: Map<string, Signal>,
+): ScoredCandidate | null {
+  let score = 0
+  const matchedTags: string[] = []
+  let strongestTag: Signal | null = null
+  for (const tag of tagKeysOf(item)) {
+    const signal = tagSignals.get(tag.key)
+    if (!signal) continue
+    score += TAG_WEIGHT * signal.weight
+    matchedTags.push(tag.label)
+    if (!strongestTag || signal.weight > strongestTag.weight) strongestTag = signal
+  }
+
+  const creator = creatorOf(item)
+  const creatorSignal = creator ? creatorSignals.get(creator.toLowerCase()) ?? null : null
+  if (creatorSignal) score += CREATOR_WEIGHT * creatorSignal.weight
+
+  if (score <= 0) return null
+
+  matchedTags.sort((left, right) => left.localeCompare(right))
+  const kind: RecommendationReason['kind'] = creatorSignal
+    ? (matchedTags.length > 0 ? 'creator-and-tag' : 'creator')
+    : 'tag'
+  const sourceTitle = (creatorSignal ?? strongestTag)?.sourceTitle ?? null
+  return {
+    score,
+    reason: {
+      kind,
+      label: reasonLabel(kind, creatorSignal ? creator : null, sourceTitle, matchedTags),
+      creator: creatorSignal ? creator : null,
+      tags: matchedTags,
+      sourceTitle,
+    },
+  }
+}
+
 
 /**
  * Rank catalog rows against this device's watch state.
@@ -288,24 +358,7 @@ export function rankLocalRecommendations<TItem extends RankableItem = RankableIt
   const watched = boundedWatchState(options.watchState)
   if (watched.length === 0) return []
 
-  const excluded = new Set<string>()
-  for (const id of options.exclude ?? []) {
-    const value = text(id)
-    if (value) excluded.add(value)
-  }
-
-  const tagSignals = new Map<string, Signal>()
-  const creatorSignals = new Map<string, Signal>()
-  for (const entry of watched) {
-    const entityId = entityIdOf(entry)
-    if (!entityId) continue
-    // Already-watched titles are never recommended back, completed or not.
-    excluded.add(entityId)
-    const weight = recencyWeight(entry, now) * engagementWeight(entry)
-    for (const tag of tagKeysOf(entry)) recordSignal(tagSignals, tag.key, weight, entry, entityId)
-    const creator = creatorOf(entry)
-    if (creator) recordSignal(creatorSignals, creator.toLowerCase(), weight, entry, entityId)
-  }
+  const { excluded, tagSignals, creatorSignals } = collectWatchedSignals(watched, now, options.exclude)
   if (tagSignals.size === 0 && creatorSignals.size === 0) return []
 
   const seen = new Set<string>()
@@ -317,41 +370,13 @@ export function rankLocalRecommendations<TItem extends RankableItem = RankableIt
     if (excluded.has(entityId)) continue
     if (isUnrecommendable(item, now)) continue
 
-    let score = 0
-    const matchedTags: string[] = []
-    let strongestTag: Signal | null = null
-    for (const tag of tagKeysOf(item)) {
-      const signal = tagSignals.get(tag.key)
-      if (!signal) continue
-      score += TAG_WEIGHT * signal.weight
-      matchedTags.push(tag.label)
-      if (!strongestTag || signal.weight > strongestTag.weight) strongestTag = signal
-    }
+    const candidate = scoreCandidateItem(item, tagSignals, creatorSignals)
+    if (!candidate) continue
 
-    const creator = creatorOf(item)
-    const creatorSignal = creator ? creatorSignals.get(creator.toLowerCase()) ?? null : null
-    if (creatorSignal) score += CREATOR_WEIGHT * creatorSignal.weight
-
-    if (score <= 0) continue
-
-    matchedTags.sort((left, right) => left.localeCompare(right))
-    const kind: RecommendationReason['kind'] = creatorSignal
-      ? (matchedTags.length > 0 ? 'creator-and-tag' : 'creator')
-      : 'tag'
-    const sourceTitle = (creatorSignal ?? strongestTag)?.sourceTitle ?? null
     ranked.push({
       ...item,
       entityId,
-      recommendation: {
-        score,
-        reason: {
-          kind,
-          label: reasonLabel(kind, creatorSignal ? creator : null, sourceTitle, matchedTags),
-          creator: creatorSignal ? creator : null,
-          tags: matchedTags,
-          sourceTitle,
-        },
-      },
+      recommendation: candidate,
     })
   }
 

@@ -1,12 +1,90 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { build } from 'esbuild'
 import { test } from 'node:test'
 
 const inlineViewPath = new URL('../components/video-player/PearInlineVideoView.tsx', import.meta.url)
+const contextPath = new URL('../lib/VideoPlayerContext.tsx', import.meta.url)
 
 async function source(url) {
   return readFile(url, 'utf8')
 }
+
+async function loadPlaybackHelpers() {
+  const appRoot = fileURLToPath(new URL('..', import.meta.url))
+  const stubs = {
+    'react-native-test-stub': [
+      "import * as RN from 'react-native-web'",
+      "export * from 'react-native-web'",
+      "export const Platform = { ...RN.Platform, OS: 'android' }",
+      '',
+    ].join('\n'),
+    'expo-test-stub': 'export const useEventListener = () => {}\n',
+    'expo-video-test-stub': 'export const useVideoPlayer = () => null\nexport const VideoView = () => null\n',
+    'rpc-test-stub': 'export const rpc = {}\n',
+    'file-system-test-stub': 'export const documentDirectory = ""\nexport const cacheDirectory = ""\nexport default {}\n',
+  }
+  const instrument = {
+    name: 'instrument-playback-helpers',
+    setup(builder) {
+      builder.onResolve({ filter: /^react-native$/ }, () => ({ path: 'react-native-test-stub', namespace: 'test-stub' }))
+      builder.onResolve({ filter: /^expo$/ }, () => ({ path: 'expo-test-stub', namespace: 'test-stub' }))
+      builder.onResolve({ filter: /^expo-video$/ }, () => ({ path: 'expo-video-test-stub', namespace: 'test-stub' }))
+      builder.onResolve({ filter: /^@peartube\/platform\/rpc$/ }, () => ({ path: 'rpc-test-stub', namespace: 'test-stub' }))
+      builder.onResolve({ filter: /^expo-file-system$/ }, () => ({ path: 'file-system-test-stub', namespace: 'test-stub' }))
+      builder.onLoad({ filter: /.*/, namespace: 'test-stub' }, args => ({
+        contents: stubs[args.path],
+        loader: 'js',
+        resolveDir: appRoot,
+      }))
+      builder.onLoad({ filter: /PearInlineVideoView\.tsx$/ }, async args => ({
+        contents: `${await readFile(args.path, 'utf8')}
+export { handleStatusChangeNonError }
+`,
+        loader: 'tsx',
+        resolveDir: path.dirname(args.path),
+      }))
+      builder.onLoad({ filter: /VideoPlayerContext\.tsx$/ }, async args => ({
+        contents: `${await readFile(args.path, 'utf8')}
+export { shouldInterceptStartupPause }
+`,
+        loader: 'tsx',
+        resolveDir: path.dirname(args.path),
+      }))
+    },
+  }
+  const result = await build({
+    stdin: {
+      contents: [
+        "export { handleStatusChangeNonError } from './components/video-player/PearInlineVideoView.tsx'",
+        "export { shouldInterceptStartupPause } from './lib/VideoPlayerContext.tsx'",
+        '',
+      ].join('\n'),
+      resolveDir: appRoot,
+      sourcefile: 'android-playback-entry.ts',
+      loader: 'ts',
+    },
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    external: ['react', 'react-dom'],
+    define: { __DEV__: 'false' },
+    plugins: [instrument],
+    tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', baseUrl: appRoot, paths: { '@/*': ['./*'] } } },
+    write: false,
+  })
+  const directory = await mkdtemp(path.join(appRoot, '.android-playing-'))
+  const output = path.join(directory, 'helpers.cjs')
+  await writeFile(output, result.outputFiles[0].text)
+  try {
+    return await import(`${pathToFileURL(output).href}?${Math.random()}`)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
 
 test('Android keeps initial desired play state when expo-video emits a pre-play paused event', async () => {
   const src = await source(inlineViewPath)
@@ -177,40 +255,62 @@ test('desktop web exposes manual play when bounded startup retries are exhausted
 })
 
 test('Android reasserts desired play when source first becomes ready before native playing event', async () => {
-  const src = await source(inlineViewPath)
-  const handlerStart = src.indexOf("useEventListener(player, 'statusChange'")
-  assert.notEqual(handlerStart, -1, 'expected expo-video statusChange handler')
-  const handler = src.slice(handlerStart, src.indexOf("useEventListener(player, 'playToEnd'", handlerStart))
+  const { handleStatusChangeNonError } = await loadPlaybackHelpers()
+  const playCalls = []
+  const buffering = []
 
-  assert.match(handler, /status === 'readyToPlay'[\s\S]*!hasReceivedPlayEventRef\.current[\s\S]*isPlayingRef\.current[\s\S]*requestNativePlayback\(\)/, 'readyToPlay should reassert play when Android has desired playback but has not emitted native playing yet')
-  assert.ok(handler.indexOf("status === 'readyToPlay'") < handler.indexOf('Date.now() <= seekPlaybackRecoveryUntilRef.current'), 'initial ready-to-play reassertion should run before seek-only recovery')
+  handleStatusChangeNonError({
+    status: 'readyToPlay',
+    previousStatusRef: { current: null },
+    onBuffering: value => buffering.push(value),
+    hasReceivedPlayEventRef: { current: false },
+    isPlayingRef: { current: true },
+    requestNativePlayback: () => playCalls.push('play'),
+    seekPlaybackRecoveryUntilRef: { current: 0 },
+  })
+
+  assert.deepEqual(playCalls, ['play'], 'the real ready-to-play helper should reassert the requested Android playback')
+  assert.deepEqual(buffering, [{ isBuffering: false }], 'ready media should clear buffering before reasserting play')
+  const seekRecoveryCalls = []
+  handleStatusChangeNonError({
+    status: 'readyToPlay',
+    previousStatusRef: { current: null },
+    onBuffering: () => {},
+    hasReceivedPlayEventRef: { current: true },
+    isPlayingRef: { current: true },
+    requestNativePlayback: () => seekRecoveryCalls.push('play'),
+    seekPlaybackRecoveryUntilRef: { current: Date.now() + 1_000 },
+  })
+  assert.deepEqual(seekRecoveryCalls, ['play'], 'the same helper should reassert a desired seek recovery before its deadline')
 })
 
-
 test('Android ignores startup pause events until the replacement source starts', async () => {
-  const src = await source(new URL('../lib/VideoPlayerContext.tsx', import.meta.url))
+  const { shouldInterceptStartupPause } = await loadPlaybackHelpers()
+  const desiredStates = []
+  const playCalls = []
+  const clearedGuards = []
+  const key = 'replacement-source'
 
-  assert.match(src, /const STARTUP_AUTOPLAY_GUARD_MS = 3000/)
-  assert.match(src, /const startupAutoplayGuardRef = useRef<\{ key: string; until: number \} \| null>\(null\)/)
+  const intercepted = shouldInterceptStartupPause(
+    { key, until: Date.now() + 3_000 },
+    key,
+    () => clearedGuards.push('clear'),
+    value => desiredStates.push(value),
+    () => ({ play: () => playCalls.push('play') }),
+  )
 
-  const startBlockStart = src.indexOf('const performPlaybackStartNow = useCallback')
-  const startBlock = src.slice(startBlockStart, src.indexOf('const drainQueuedPlaybackStart', startBlockStart))
-  assert.ok(startBlock.indexOf('currentVideoRef.current = video') < startBlock.indexOf('getPlayerPort()?.stop?.()'))
-  assert.ok(startBlock.indexOf('videoUrlRef.current = url') < startBlock.indexOf('getPlayerPort()?.stop?.()'))
-  assert.ok(startBlock.indexOf('startupAutoplayGuardRef.current = {') < startBlock.indexOf('getPlayerPort()?.stop?.()'))
+  assert.equal(intercepted, true, 'the startup pause guard should consume Android’s pre-play pause')
+  assert.deepEqual(desiredStates, [true], 'consuming the pause should restore the desired state')
+  assert.deepEqual(playCalls, ['play'], 'consuming the pause should reassert the native player')
+  assert.deepEqual(clearedGuards, [], 'a live startup guard must not be cleared')
 
-  const pausedStart = src.indexOf('const onPaused = useCallback')
-  const pausedBlock = src.slice(pausedStart, src.indexOf('const onBuffering = useCallback', pausedStart))
-  assert.match(pausedBlock, /Date\.now\(\) <= startupGuard\.until/)
-  assert.match(pausedBlock, /lastPlaybackStartKeyRef\.current === startupGuard\.key/)
-  assert.match(pausedBlock, /setDesiredPlaying\(true\)[\s\S]*getPlayerPort\(\)\?\.play\?\.\(\)/)
-  assert.doesNotMatch(pausedBlock.slice(0, pausedBlock.indexOf('if (pipExitExpectedPlayingRef.current')), /isPlayingRef\.current/)
-
-  const pauseStart = src.indexOf('const pauseVideo = useCallback')
-  const pauseBlock = src.slice(pauseStart, src.indexOf('const resumeVideo = useCallback', pauseStart))
-  assert.match(pauseBlock, /clearStartupAutoplayGuard\(\)|startupAutoplayGuardRef\.current = null/)
-
-  const playingStart = src.indexOf('const onPlaying = useCallback')
-  const playingBlock = src.slice(playingStart, src.indexOf('const onPaused = useCallback', playingStart))
-  assert.match(playingBlock, /clearStartupAutoplayGuard\(\)|startupAutoplayGuardRef\.current = null/)
+  const expired = shouldInterceptStartupPause(
+    { key, until: Date.now() - 1 },
+    key,
+    () => clearedGuards.push('clear'),
+    () => {},
+    () => null,
+  )
+  assert.equal(expired, false, 'an expired guard must stop intercepting ordinary pauses')
+  assert.deepEqual(clearedGuards, ['clear'], 'expired startup state should be cleared')
 })

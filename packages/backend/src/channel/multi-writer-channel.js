@@ -335,6 +335,130 @@ function makeCoreName(keyHex) {
   return `peartube-channel-hyperdb-${keyHex || 'default'}`
 }
 
+async function cleanupFailedDiscovery(discovery) {
+  try { await discovery?.destroy?.() } catch { /* best effort */ }
+  try { await discovery?.close?.() } catch { /* best effort */ }
+}
+
+function resolveMetadataCoreFields(currentMeta, patch) {
+  return {
+    name: 'name' in patch ? patch.name : (currentMeta?.name || ''),
+    description: 'description' in patch ? patch.description : (currentMeta?.description || ''),
+    avatar: 'avatar' in patch ? patch.avatar : (currentMeta?.avatar || null),
+  }
+}
+
+function resolveMetadataKeyFields(currentMeta, patch, context) {
+  const defaultPublicBeeKey = context._publicProjectionActive ? context.publicBee?.keyHex : null
+  return {
+    publicBeeKey: patch.publicBeeKey || currentMeta?.publicBeeKey || defaultPublicBeeKey,
+    commentsDbKey: patch.commentsDbKey || currentMeta?.commentsDbKey || context.keyHex || null,
+    commentsAdminKey: patch.commentsAdminKey || currentMeta?.commentsAdminKey || null,
+  }
+}
+
+function resolveMetadataAuditFields(currentMeta, patch, context, now) {
+  const nextClock = Math.max((currentMeta?.logicalClock || 0) + 1, patch.logicalClock || 0)
+  return {
+    createdAt: 'createdAt' in patch ? patch.createdAt : (currentMeta?.createdAt || now),
+    createdBy: 'createdBy' in patch ? patch.createdBy : (currentMeta?.createdBy || context.localWriterKeyHex),
+    updatedAt: patch.updatedAt || now,
+    updatedBy: patch.updatedBy || context.localWriterKeyHex,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    logicalClock: nextClock,
+  }
+}
+
+function buildUpdatedMetadataRecord(currentMeta, patch, context, now) {
+  return stripUndefined({
+    ...(currentMeta || {}),
+    key: 'meta',
+    ...resolveMetadataCoreFields(currentMeta, patch),
+    ...resolveMetadataKeyFields(currentMeta, patch, context),
+    ...resolveMetadataAuditFields(currentMeta, patch, context, now),
+  })
+}
+
+function validateClaimWriterAccess(normalized, localWriterKeyHex, writerClaims) {
+  if (normalized.writerKey !== localWriterKeyHex) {
+    throw new Error('Import claim writerKey must match the authenticated writer')
+  }
+  if (writerClaims.some((candidate) =>
+    candidate.identityKey === normalized.identityKey &&
+    candidate.writerKey === normalized.writerKey &&
+    candidate.claimantId !== normalized.claimantId &&
+    candidate.state !== 'released')) {
+    throw new Error('Active import claim already exists for the same writer and identity')
+  }
+}
+
+function createInitialImportClaim(normalized, incomingUpdatedAt, now) {
+  if (normalized.state === 'released' && normalized.releasedAt < incomingUpdatedAt) {
+    throw new Error('releasedAt cannot precede the claim update time')
+  }
+  return normalizeImportClaim({
+    ...normalized,
+    state: normalized.state ?? 'reserved',
+    createdAt: normalized.createdAt ?? now,
+    updatedAt: incomingUpdatedAt,
+  })
+}
+
+function validateExistingClaimInvariants(normalized, existing, incomingUpdatedAt) {
+  for (const field of ['identityKey', 'claimantId', 'jobId', 'writerKey']) {
+    if (normalized[field] !== existing[field]) {
+      throw new Error(`Import claim ${field} cannot change`)
+    }
+  }
+  if (normalized.createdAt !== undefined && normalized.createdAt !== existing.createdAt) {
+    throw new Error('Import claim createdAt cannot change')
+  }
+  const existingVideoId = existing.videoId || undefined
+  if (existingVideoId !== undefined &&
+      normalized.videoId !== undefined &&
+      normalized.videoId !== existingVideoId) {
+    throw new Error('Import claim videoId cannot change once assigned')
+  }
+  if (existing.state !== 'released' &&
+      normalized.state === 'released' &&
+      normalized.releasedAt < Math.max(existing.updatedAt ?? 0, incomingUpdatedAt)) {
+    throw new Error('releasedAt cannot precede the claim update time')
+  }
+}
+
+function checkClaimTimestampOrder(normalized, existing, incomingUpdatedAt) {
+  const existingUpdatedAt = existing.updatedAt ?? 0
+  if (existing.state === 'released' || incomingUpdatedAt < existingUpdatedAt) {
+    return { shouldUpdate: false }
+  }
+  if (incomingUpdatedAt === existingUpdatedAt) {
+    const existingVideoId = existing.videoId || undefined
+    const conflicts = (
+      (normalized.videoId !== undefined && normalized.videoId !== existingVideoId) ||
+      (normalized.state !== undefined && normalized.state !== existing.state) ||
+      (normalized.releasedAt !== undefined && normalized.releasedAt !== existing.releasedAt)
+    )
+    if (conflicts) throw new Error('Import claim equal timestamp payload conflict')
+    return { shouldUpdate: false }
+  }
+  return { shouldUpdate: true }
+}
+
+function computeNextUpdatedClaim(normalized, existing, incomingUpdatedAt) {
+  const nextState = normalized.state ?? existing.state
+  if (IMPORT_CLAIM_STATE_RANK[nextState] < IMPORT_CLAIM_STATE_RANK[existing.state]) {
+    throw new Error(`Invalid import claim state transition from ${existing.state} to ${nextState}`)
+  }
+  const existingVideoId = existing.videoId || undefined
+  return normalizeImportClaim({
+    ...existing,
+    state: nextState,
+    videoId: existingVideoId ?? normalized.videoId,
+    updatedAt: incomingUpdatedAt,
+    releasedAt: nextState === 'released' ? normalized.releasedAt : existing.releasedAt,
+  })
+}
+
 export class MultiWriterChannel extends ReadyResource {
   constructor(store, opts = {}) {
     super()
@@ -570,6 +694,17 @@ export class MultiWriterChannel extends ReadyResource {
     }
   }
 
+  async _attachDiscoveryFlushing(discovery, strict) {
+    if (strict) {
+      await this._flushPublicDiscovery(discovery)
+      if (this._publicProjectionClosing || this.closing) {
+        throw new Error('Channel is closing')
+      }
+    } else {
+      discovery?.flushed?.().catch(() => {})
+    }
+  }
+
   async _joinPublicDiscovery({ strict = false } = {}) {
     if (this._publicProjectionClosing || this.closing) {
       if (strict) throw new Error('Channel is closing')
@@ -587,19 +722,11 @@ export class MultiWriterChannel extends ReadyResource {
     let discovery = null
     try {
       discovery = this.swarm.join(this.publicBee.discoveryKey)
-      if (strict) {
-        await this._flushPublicDiscovery(discovery)
-        if (this._publicProjectionClosing || this.closing) {
-          throw new Error('Channel is closing')
-        }
-      } else {
-        discovery?.flushed?.().catch(() => {})
-      }
+      await this._attachDiscoveryFlushing(discovery, strict)
       this._publicDiscovery = discovery
       return discovery
     } catch (err) {
-      try { await discovery?.destroy?.() } catch { /* best effort */ }
-      try { await discovery?.close?.() } catch { /* best effort */ }
+      await cleanupFailedDiscovery(discovery)
       if (this._publicDiscovery === discovery) this._publicDiscovery = null
       if (strict) throw err
       return null
@@ -902,25 +1029,8 @@ export class MultiWriterChannel extends ReadyResource {
     if (!this.writable) throw new Error('Channel is not writable')
     const patch = updates && typeof updates === 'object' ? updates : {}
     const currentMeta = await this.getMetadata().catch(() => null)
-    const nextClock = Math.max((currentMeta?.logicalClock || 0) + 1, patch.logicalClock || 0)
     const now = Date.now()
-    const meta = stripUndefined({
-      ...(currentMeta || {}),
-      key: 'meta',
-      name: 'name' in patch ? patch.name : currentMeta?.name || '',
-      description: 'description' in patch ? patch.description : currentMeta?.description || '',
-      avatar: 'avatar' in patch ? patch.avatar : currentMeta?.avatar || null,
-      publicBeeKey: patch.publicBeeKey || currentMeta?.publicBeeKey ||
-        (this._publicProjectionActive ? this.publicBee?.keyHex : null),
-      commentsDbKey: patch.commentsDbKey || currentMeta?.commentsDbKey || this.keyHex || null,
-      commentsAdminKey: patch.commentsAdminKey || currentMeta?.commentsAdminKey || null,
-      createdAt: 'createdAt' in patch ? patch.createdAt : (currentMeta?.createdAt || now),
-      createdBy: 'createdBy' in patch ? patch.createdBy : (currentMeta?.createdBy || this.localWriterKeyHex),
-      updatedAt: patch.updatedAt || now,
-      updatedBy: patch.updatedBy || this.localWriterKeyHex,
-      schemaVersion: CURRENT_SCHEMA_VERSION,
-      logicalClock: nextClock
-    })
+    const meta = buildUpdatedMetadataRecord(currentMeta, patch, this, now)
     await this.db.insert('@peartubeChannel/metadata', meta)
     await this._flush()
     await this._syncPublicBeeFromFeedChannel()
@@ -1003,74 +1113,22 @@ export class MultiWriterChannel extends ReadyResource {
       identityKey: normalized.identityKey,
       writerKey: normalized.writerKey
     }).toArray()
-    if (writerClaims.some((candidate) =>
-      candidate.identityKey === normalized.identityKey &&
-      candidate.writerKey === normalized.writerKey &&
-      candidate.claimantId !== normalized.claimantId &&
-      candidate.state !== 'released')) {
-      throw new Error('Active import claim already exists for the same writer and identity')
-    }
+    validateClaimWriterAccess(normalized, this.localWriterKeyHex, writerClaims)
 
     const now = Date.now()
     const incomingUpdatedAt = normalized.updatedAt ?? now
     if (!existing) {
-      if (normalized.state === 'released' && normalized.releasedAt < incomingUpdatedAt) {
-        throw new Error('releasedAt cannot precede the claim update time')
-      }
-      const next = normalizeImportClaim({
-        ...normalized,
-        state: normalized.state ?? 'reserved',
-        createdAt: normalized.createdAt ?? now,
-        updatedAt: incomingUpdatedAt
-      })
+      const next = createInitialImportClaim(normalized, incomingUpdatedAt, now)
       await this.db.insert('@peartubeChannel/importClaims', next)
       await this._flush()
       return next
     }
 
-    for (const field of ['identityKey', 'claimantId', 'jobId', 'writerKey']) {
-      if (normalized[field] !== existing[field]) {
-        throw new Error(`Import claim ${field} cannot change`)
-      }
-    }
-    if (normalized.createdAt !== undefined && normalized.createdAt !== existing.createdAt) {
-      throw new Error('Import claim createdAt cannot change')
-    }
-    const existingVideoId = existing.videoId || undefined
-    if (existingVideoId !== undefined &&
-        normalized.videoId !== undefined &&
-        normalized.videoId !== existingVideoId) {
-      throw new Error('Import claim videoId cannot change once assigned')
-    }
-    if (existing.state !== 'released' &&
-        normalized.state === 'released' &&
-        normalized.releasedAt < Math.max(existing.updatedAt ?? 0, incomingUpdatedAt)) {
-      throw new Error('releasedAt cannot precede the claim update time')
-    }
-    if (existing.state === 'released' || incomingUpdatedAt < (existing.updatedAt ?? 0)) {
-      return existing
-    }
-    if (incomingUpdatedAt === (existing.updatedAt ?? 0)) {
-      const conflicts = (
-        (normalized.videoId !== undefined && normalized.videoId !== existingVideoId) ||
-        (normalized.state !== undefined && normalized.state !== existing.state) ||
-        (normalized.releasedAt !== undefined && normalized.releasedAt !== existing.releasedAt)
-      )
-      if (conflicts) throw new Error('Import claim equal timestamp payload conflict')
-      return existing
-    }
+    validateExistingClaimInvariants(normalized, existing, incomingUpdatedAt)
+    const { shouldUpdate } = checkClaimTimestampOrder(normalized, existing, incomingUpdatedAt)
+    if (!shouldUpdate) return existing
 
-    const nextState = normalized.state ?? existing.state
-    if (IMPORT_CLAIM_STATE_RANK[nextState] < IMPORT_CLAIM_STATE_RANK[existing.state]) {
-      throw new Error(`Invalid import claim state transition from ${existing.state} to ${nextState}`)
-    }
-    const next = normalizeImportClaim({
-      ...existing,
-      state: nextState,
-      videoId: existingVideoId ?? normalized.videoId,
-      updatedAt: incomingUpdatedAt,
-      releasedAt: nextState === 'released' ? normalized.releasedAt : existing.releasedAt
-    })
+    const next = computeNextUpdatedClaim(normalized, existing, incomingUpdatedAt)
     await this.db.insert('@peartubeChannel/importClaims', next)
     await this._flush()
     return next
@@ -1328,21 +1386,34 @@ export class MultiWriterChannel extends ReadyResource {
     }
   }
 
-  async updateVideo(
-    id,
-    updates,
-    {
-      syncPublic = !isPrivatePublicationState(updates?.publicationState),
-      commitAfterPublicSync = false
-    } = {}
-  ) {
-    if (!id) throw new Error('Video id required')
-    await this._update()
-    const [existing, existingDetails] = await Promise.all([
-      this.db.get('@peartubeChannel/videos', { id }),
-      this.db.get('@peartubeChannel/contentDetails', { id })
-    ])
-    if (!existing) throw new Error('Video not found: ' + id)
+  async _syncCommitUncertainVideo(id, videoMeta, details, decodedDetails, syncPublic) {
+    if (
+      !syncPublic ||
+      decodedDetails.publicationState !== 'commitUncertain' ||
+      details?.publicationState !== 'published'
+    ) {
+      throw new Error('Commit-uncertain finalization requires a published public sync')
+    }
+    const projectionVideos = await this.listVideos()
+    const candidate = { ...videoMeta, ...details }
+    const index = projectionVideos.findIndex(video => video.id === id)
+    if (index < 0) throw new Error('Video not found: ' + id)
+    projectionVideos[index] = candidate
+    await this._syncPublicBeeFromFeedChannel({
+      projectionVideos,
+      throwOnError: true
+    })
+  }
+
+  async _postUpdateVideoSync(id, details, syncPublic, commitAfterPublicSync) {
+    if (isPrivatePublicationState(details?.publicationState)) {
+      await this._suppressPublicVideo(id)
+    } else if (syncPublic && !commitAfterPublicSync) {
+      await this._syncPublicBeeFromFeedChannel()
+    }
+  }
+
+  _buildUpdatedVideoRecords(id, updates, existing, existingDetails) {
     const nextClock = this._nextVideoLogicalClock()
     const videoMeta = stripUndefined({
       ...existing,
@@ -1362,23 +1433,30 @@ export class MultiWriterChannel extends ReadyResource {
       ? normalizePublicationOperationFramesRecord(id, updates.publicationOperationFramesHex)
       : null
 
+    return { videoMeta, decodedDetails, details, operationFrames }
+  }
+
+  async updateVideo(
+    id,
+    updates,
+    {
+      syncPublic = !isPrivatePublicationState(updates?.publicationState),
+      commitAfterPublicSync = false
+    } = {}
+  ) {
+    if (!id) throw new Error('Video id required')
+    await this._update()
+    const [existing, existingDetails] = await Promise.all([
+      this.db.get('@peartubeChannel/videos', { id }),
+      this.db.get('@peartubeChannel/contentDetails', { id })
+    ])
+    if (!existing) throw new Error('Video not found: ' + id)
+
+    const { videoMeta, decodedDetails, details, operationFrames } =
+      this._buildUpdatedVideoRecords(id, updates, existing, existingDetails)
+
     if (commitAfterPublicSync) {
-      if (
-        !syncPublic ||
-        decodedDetails.publicationState !== 'commitUncertain' ||
-        details?.publicationState !== 'published'
-      ) {
-        throw new Error('Commit-uncertain finalization requires a published public sync')
-      }
-      const projectionVideos = await this.listVideos()
-      const candidate = { ...videoMeta, ...details }
-      const index = projectionVideos.findIndex(video => video.id === id)
-      if (index < 0) throw new Error('Video not found: ' + id)
-      projectionVideos[index] = candidate
-      await this._syncPublicBeeFromFeedChannel({
-        projectionVideos,
-        throwOnError: true
-      })
+      await this._syncCommitUncertainVideo(id, videoMeta, details, decodedDetails, syncPublic)
     }
 
     await this.db.insert('@peartubeChannel/videos', videoMeta)
@@ -1387,11 +1465,7 @@ export class MultiWriterChannel extends ReadyResource {
       await this.db.insert('@peartubeChannel/publicationOperationFrames', operationFrames)
     }
     await this._flush()
-    if (isPrivatePublicationState(details?.publicationState)) {
-      await this._suppressPublicVideo(id)
-    } else if (syncPublic && !commitAfterPublicSync) {
-      await this._syncPublicBeeFromFeedChannel()
-    }
+    await this._postUpdateVideoSync(id, details, syncPublic, commitAfterPublicSync)
   }
 
   async deleteVideo(id) {

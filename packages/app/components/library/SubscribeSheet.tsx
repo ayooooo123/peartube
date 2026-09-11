@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { ActivityIndicator, StyleSheet, Text, TextInput, View } from 'react-native'
+import { StyleSheet, Text, TextInput, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { Button, Panel } from '@/components/primitives'
 import { colors, radius, spacing, borderWidth } from '@/lib/colors'
@@ -17,6 +17,60 @@ interface ChannelPreview {
 interface SubscribeSheetProps {
   rpc: any
   onSubscribed: () => void
+}
+function formatPreviewMeta(preview: ChannelPreview | null): string {
+  if (!preview?.name) {
+    return 'You can still subscribe — it will sync when peers appear.'
+  }
+  const count = preview.videoCount ?? 0
+  const suffix = count === 1 ? '' : 's'
+  const desc = preview.description ? ` · ${preview.description}` : ''
+  return `${count} video${suffix}${desc}`
+}
+
+interface ChannelPreviewCardProps {
+  preview: ChannelPreview | null
+  phase: 'input' | 'previewing' | 'preview' | 'subscribing'
+  error: string | null
+  onReset: () => void
+  onSubscribe: () => void
+}
+
+function ChannelPreviewCard({ preview, phase, error, onReset, onSubscribe }: ChannelPreviewCardProps) {
+  const isSubscribing = phase === 'subscribing'
+  const initial = (preview?.name || '?').charAt(0).toUpperCase()
+  const title = preview?.name || 'Channel not reachable yet'
+  const metaText = formatPreviewMeta(preview)
+
+  return (
+    <Panel tone="accent" style={styles.previewCard}>
+      <View style={styles.previewRow}>
+        <View style={styles.previewAvatar}>
+          <Text style={styles.previewLetter}>{initial}</Text>
+        </View>
+        <View style={{ flex: 1, marginLeft: spacing.md }}>
+          <Text style={styles.previewName} numberOfLines={1}>
+            {title}
+          </Text>
+          <Text style={styles.previewMeta} numberOfLines={2}>
+            {metaText}
+          </Text>
+        </View>
+      </View>
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+      <View style={styles.previewActions}>
+        <Button label="Cancel" onPress={onReset} variant="ghost" size="sm" />
+        <Button
+          label="Subscribe"
+          onPress={onSubscribe}
+          disabled={isSubscribing}
+          loading={isSubscribing}
+          icon="user-plus"
+          size="sm"
+        />
+      </View>
+    </Panel>
+  )
 }
 
 /**
@@ -111,37 +165,13 @@ export function SubscribeSheet({ rpc, onSubscribed }: SubscribeSheetProps) {
       )}
 
       {(phase === 'preview' || phase === 'subscribing') && (
-        <Panel tone="accent" style={styles.previewCard}>
-          <View style={styles.previewRow}>
-            <View style={styles.previewAvatar}>
-              <Text style={styles.previewLetter}>
-                {(preview?.name || '?').charAt(0).toUpperCase()}
-              </Text>
-            </View>
-            <View style={{ flex: 1, marginLeft: spacing.md }}>
-              <Text style={styles.previewName} numberOfLines={1}>
-                {preview?.name || 'Channel not reachable yet'}
-              </Text>
-              <Text style={styles.previewMeta} numberOfLines={2}>
-                {preview?.name
-                  ? `${preview?.videoCount ?? 0} video${(preview?.videoCount ?? 0) === 1 ? '' : 's'}${preview?.description ? ` · ${preview.description}` : ''}`
-                  : 'You can still subscribe — it will sync when peers appear.'}
-              </Text>
-            </View>
-          </View>
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-          <View style={styles.previewActions}>
-            <Button label="Cancel" onPress={reset} variant="ghost" size="sm" />
-            <Button
-              label="Subscribe"
-              onPress={subscribe}
-              disabled={phase === 'subscribing'}
-              loading={phase === 'subscribing'}
-              icon="user-plus"
-              size="sm"
-            />
-          </View>
-        </Panel>
+        <ChannelPreviewCard
+          preview={preview}
+          phase={phase}
+          error={error}
+          onReset={reset}
+          onSubscribe={subscribe}
+        />
       )}
     </View>
   )

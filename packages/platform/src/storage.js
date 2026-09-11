@@ -7,6 +7,9 @@
  */
 
 import { detectPlatform, isBare, isPear } from './detection.js';
+import { loadBareStorageModuleSync } from './runtime-modules.cjs';
+
+/** @import { PlatformRuntimeGlobals } from './globals.js' */
 
 /**
  * @typedef {import('./types.js').PlatformType} PlatformType
@@ -19,9 +22,12 @@ let _bareStorageLoaded = false;
 function getBareStorage() {
   if (_bareStorageLoaded) return _bareStorage;
   _bareStorageLoaded = true;
+  if (!isBare() && !isPear()) return null;
   try {
-    _bareStorage = require('bare-storage');
-  } catch {}
+    _bareStorage = loadBareStorageModuleSync();
+  } catch {
+    // This optional native addon is unavailable in ordinary browser/Node contexts.
+  }
   return _bareStorage;
 }
 
@@ -46,9 +52,11 @@ export function getStoragePath(options = {}) {
   // Pear desktop - use Pear.config.storage (set via --store flag)
   if (isPear()) {
     try {
-      const pearStorage = globalThis.Pear?.config?.storage;
+      const pearStorage = (/** @type {PlatformRuntimeGlobals} */ (globalThis)).Pear?.config?.storage;
       if (pearStorage) return pearStorage;
-    } catch {}
+    } catch {
+      // A shell without readable configuration falls through to runtime defaults.
+    }
   }
 
   // Bare/Pear runtime - use bare-storage for cross-platform path resolution
@@ -60,9 +68,11 @@ export function getStoragePath(options = {}) {
   // Bare runtime without bare-storage - check argv
   if (isBare()) {
     try {
-      const arg0 = globalThis.Bare?.argv?.[0];
+      const arg0 = (/** @type {PlatformRuntimeGlobals} */ (globalThis)).Bare?.argv?.[0];
       if (typeof arg0 === 'string' && arg0.length > 0) return arg0;
-    } catch {}
+    } catch {
+      // A runtime without readable launch arguments uses the relative storage root.
+    }
   }
 
   return `./storage`;

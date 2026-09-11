@@ -5,6 +5,7 @@ export {
   fsyncSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   lstatSync,
   readdirSync,

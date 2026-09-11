@@ -134,6 +134,55 @@ export type EnsurePersonalEncryptionOptions = {
   force?: boolean
   required?: boolean
 }
+async function provisionWithStoredRecord(
+  rpc: any,
+  owner: string,
+  publicKey: string | null | undefined,
+  stored: PersonalSecretRecord
+): Promise<void> {
+  const candidates = stored.previousSecret ? [stored.secret, stored.previousSecret] : [stored.secret]
+  let failure: string | undefined
+  for (const candidate of candidates) {
+    const result = await rpc.provisionPersonalEncryption({
+      secret: candidate,
+      ...(stored.bootstrapKey ? { bootstrapKey: stored.bootstrapKey } : {}),
+      ...(publicKey ? {} : { deviceLocal: true }),
+    })
+    if (!result?.success) {
+      failure = result?.error
+      continue
+    }
+    // Whichever one opened the store is now the only one worth keeping.
+    if (stored.previousSecret) {
+      await persistPersonalSecret(candidate, {
+        publicKey,
+        bootstrapKey: result.bootstrapKey || stored.bootstrapKey,
+      })
+    }
+    provisioned.add(owner)
+    return
+  }
+  throw new Error(failure || 'personal-encryption-provision-failed')
+}
+
+async function provisionWithNewRecord(
+  rpc: any,
+  owner: string,
+  publicKey: string | null | undefined
+): Promise<void> {
+  const secret = generatePersonalSecretHex()
+  await persistPersonalSecret(secret, { publicKey })
+  const res = await rpc.provisionPersonalEncryption({
+    secret,
+    ...(publicKey ? {} : { deviceLocal: true }),
+  })
+  if (res?.success) {
+    if (res.bootstrapKey) await persistPersonalSecret(secret, { publicKey, bootstrapKey: res.bootstrapKey })
+    provisioned.add(owner)
+  } else {
+    throw new Error(res?.error || 'personal-encryption-provision-failed')
+  }
+}
 
 export async function ensurePersonalEncryption(
   rpc: any,
@@ -148,53 +197,11 @@ export async function ensurePersonalEncryption(
   if (provisioned.has(owner) && !options.force) return
 
   try {
-    // 1. Keychain already has a secret for this identity. An interrupted
-    //    revocation can leave two candidates: the rotated-to secret, which
-    //    always wins, and the pre-rotation one, tried only if the new epoch
-    //    turns out never to have been created.
     const stored = await readPersonalSecretRecord(owner)
     if (stored) {
-      const candidates = stored.previousSecret ? [stored.secret, stored.previousSecret] : [stored.secret]
-      let failure: string | undefined
-      for (const candidate of candidates) {
-        const result = await rpc.provisionPersonalEncryption({
-          secret: candidate,
-          ...(stored.bootstrapKey ? { bootstrapKey: stored.bootstrapKey } : {}),
-          ...(publicKey ? {} : { deviceLocal: true }),
-        })
-        if (!result?.success) {
-          failure = result?.error
-          continue
-        }
-        // Whichever one opened the store is now the only one worth keeping.
-        if (stored.previousSecret) {
-          await persistPersonalSecret(candidate, {
-            publicKey,
-            bootstrapKey: result.bootstrapKey || stored.bootstrapKey,
-          })
-        }
-        provisioned.add(owner)
-        return
-      }
-      throw new Error(failure || 'personal-encryption-provision-failed')
-    }
-
-    // 2. First device: mint it here, prove it is durable in the vault, and only
-    //    then let the backend see it. This goes through persistPersonalSecret
-    //    for the read-back — a write nobody confirmed is not custody, and a
-    //    store opened against a key that did not survive is unreadable at the
-    //    next launch. One shape for every owner: the JSON record.
-    const secret = generatePersonalSecretHex()
-    await persistPersonalSecret(secret, { publicKey })
-    const res = await rpc.provisionPersonalEncryption({
-      secret,
-      ...(publicKey ? {} : { deviceLocal: true }),
-    })
-    if (res?.success) {
-      if (res.bootstrapKey) await persistPersonalSecret(secret, { publicKey, bootstrapKey: res.bootstrapKey })
-      provisioned.add(owner)
+      await provisionWithStoredRecord(rpc, owner, publicKey, stored)
     } else {
-      throw new Error(res?.error || 'personal-encryption-provision-failed')
+      await provisionWithNewRecord(rpc, owner, publicKey)
     }
   } catch (err) {
     provisioningFailed = true

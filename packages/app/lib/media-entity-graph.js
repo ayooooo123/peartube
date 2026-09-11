@@ -200,7 +200,7 @@ function normalizeArtworkEntry(entry) {
 function normalizeArtwork(entity) {
   const meta = metadata(entity)
   const entries = []
-  for (const entry of asArray(entity?.artwork)) {
+  for (const entry of asArray(entity.artwork)) {
     const normalized = normalizeArtworkEntry(entry)
     if (normalized) entries.push(normalized)
   }
@@ -208,14 +208,15 @@ function normalizeArtwork(entity) {
     const normalized = normalizeArtworkEntry(entry)
     if (normalized) entries.push(normalized)
   }
-  for (const [role, value] of [
-    ['poster', entity?.posterUrl || meta.posterUrl],
-    ['backdrop', entity?.backdropUrl || meta.backdropUrl],
-    ['still', entity?.stillUrl || meta.stillUrl],
-    ['thumbnail', entity?.thumbnailUrl || entity?.thumbnail || meta.thumbnailUrl || meta.thumbnail],
-    ['avatar', entity?.avatarUrl || meta.avatarUrl],
-    ['banner', entity?.bannerUrl || meta.bannerUrl],
-  ]) {
+  const directArtwork = [
+    ['poster', entity.posterUrl || meta.posterUrl],
+    ['backdrop', entity.backdropUrl || meta.backdropUrl],
+    ['still', entity.stillUrl || meta.stillUrl],
+    ['thumbnail', entity.thumbnailUrl || entity.thumbnail || meta.thumbnailUrl || meta.thumbnail],
+    ['avatar', entity.avatarUrl || meta.avatarUrl],
+    ['banner', entity.bannerUrl || meta.bannerUrl],
+  ]
+  for (const [role, value] of directArtwork) {
     if (nonEmptyString(value)) entries.push({ role, url: value, remoteUrl: value, blobId: null, blobsCoreKey: null, mimeType: null, raw: null })
   }
   return entries
@@ -233,14 +234,14 @@ function artworkUrl(artwork, roles) {
 
 function provenanceClaimKey(entry) {
   return [
-    entry?.claimId || entry?.id || '',
-    entry?.evidenceId || entry?.evidenceHash || '',
-    entry?.publisherId || '',
-    entry?.publisherName || '',
-    entry?.publicationId || '',
-    entry?.renditionId || '',
-    entry?.role || '',
-    entry?.evidence ? JSON.stringify(entry.evidence) : '',
+    entry.claimId || entry.id || '',
+    entry.evidenceId || entry.evidenceHash || '',
+    entry.publisherId || '',
+    entry.publisherName || '',
+    entry.publicationId || '',
+    entry.renditionId || '',
+    entry.role || '',
+    entry.evidence ? JSON.stringify(entry.evidence) : '',
   ].join(':')
 }
 
@@ -312,7 +313,7 @@ function normalizeGraphEntity(entity, index = 0, options = {}) {
   const meta = metadata(entity)
   const cls = classification(entity)
 
-  return {
+  const projected = {
     id: localEntityId,
     localEntityId,
     entityKind,
@@ -329,35 +330,56 @@ function normalizeGraphEntity(entity, index = 0, options = {}) {
     alternateSources: sourceSelection.alternateSources,
     sources: sourceSelection.sources,
     provenance: normalizeProvenance(entity, sourceSelection),
-    conflicts: asArray(entity?.conflicts),
-    archiveStatus: entity?.archiveStatus || entity?.retentionStatus || selected?.archiveStatus || null,
+    conflicts: asArray(entity.conflicts),
+    archiveStatus: entity.archiveStatus || entity.retentionStatus || selected?.archiveStatus || null,
     availabilityStatus: selected?.availabilityStatus || null,
-    artwork,
-    posterUrl: artworkUrl(artwork, ['poster', 'album', 'thumbnail', 'still']),
-    backdropUrl: artworkUrl(artwork, ['backdrop', 'banner', 'still', 'poster', 'thumbnail']),
-    stillUrl: artworkUrl(artwork, ['still', 'thumbnail', 'backdrop', 'poster']),
-    thumbnailUrl: artworkUrl(artwork, ['thumbnail', 'still', 'poster', 'backdrop', 'avatar']),
-    thumbnail: artworkUrl(artwork, ['thumbnail', 'still', 'poster', 'backdrop', 'avatar']),
-    playbackKey: selected?.playbackKey || `${localEntityId}:unavailable`,
-    channelKey: selected?.channelKey || selected?.publisherId || null,
-    driveKey: selected?.driveKey || selected?.channelKey || null,
-    videoId: selected?.videoId || selected?.publicationId || null,
-    path: selected?.path || null,
-    publicBeeKey: selected?.publicBeeKey || null,
-    publicationId: selected?.publicationId || null,
-    renditionId: selected?.renditionId || null,
-    duration: safePositiveNumber(entity?.duration ?? entity?.durationSec ?? meta.duration ?? meta.durationSec) || null,
-    durationSec: safePositiveNumber(entity?.durationSec ?? entity?.duration ?? meta.durationSec ?? meta.duration) || null,
-    seasonNumber: Number.isSafeInteger(entity?.seasonNumber) ? entity.seasonNumber : Number.isSafeInteger(meta.seasonNumber) ? meta.seasonNumber : Number.isSafeInteger(cls.season) ? cls.season : null,
-    episodeNumber: Number.isSafeInteger(entity?.episodeNumber) ? entity.episodeNumber : Number.isSafeInteger(meta.episodeNumber) ? meta.episodeNumber : Number.isSafeInteger(cls.episode) ? cls.episode : null,
-    trackNumber: Number.isSafeInteger(entity?.trackNumber) ? entity.trackNumber : Number.isSafeInteger(meta.trackNumber) ? meta.trackNumber : null,
-    collectionRefs: asArray(entity?.collectionRefs),
-    collections: asArray(entity?.collections),
-    createdAt: entityCreatedAt(entity),
-    ...describedCategories(entity),
-    progress: finiteNumber(entity?.progress) ? Math.max(0, Math.min(1, entity.progress)) : 0,
-    item: { ...entity, selectedSource: selected, alternateSources: sourceSelection.alternateSources },
   }
+  projectArtworkFields(projected, artwork)
+  projectSelectedSourceFields(projected, selected, localEntityId)
+  projectPlaybackFields(projected, entity, meta)
+  projectPositionFields(projected, entity, meta, cls)
+  projected.collectionRefs = asArray(entity.collectionRefs)
+  projected.collections = asArray(entity.collections)
+  projected.createdAt = entityCreatedAt(entity)
+  Object.assign(projected, describedCategories(entity))
+  projected.progress = finiteNumber(entity.progress) ? Math.max(0, Math.min(1, entity.progress)) : 0
+  projected.item = { ...entity, selectedSource: selected, alternateSources: sourceSelection.alternateSources }
+  return projected
+}
+
+function projectArtworkFields(target, artwork) {
+  target.artwork = artwork
+  target.posterUrl = artworkUrl(artwork, ['poster', 'album', 'thumbnail', 'still'])
+  target.backdropUrl = artworkUrl(artwork, ['backdrop', 'banner', 'still', 'poster', 'thumbnail'])
+  target.stillUrl = artworkUrl(artwork, ['still', 'thumbnail', 'backdrop', 'poster'])
+  target.thumbnailUrl = artworkUrl(artwork, ['thumbnail', 'still', 'poster', 'backdrop', 'avatar'])
+  target.thumbnail = artworkUrl(artwork, ['thumbnail', 'still', 'poster', 'backdrop', 'avatar'])
+}
+
+function projectSelectedSourceFields(target, selected, localEntityId) {
+  target.playbackKey = selected?.playbackKey || `${localEntityId}:unavailable`
+  target.channelKey = selected?.channelKey || selected?.publisherId || null
+  target.driveKey = selected?.driveKey || selected?.channelKey || null
+  target.videoId = selected?.videoId || selected?.publicationId || null
+  projectSelectedAssetFields(target, selected)
+}
+
+function projectSelectedAssetFields(target, selected) {
+  target.path = selected?.path || null
+  target.publicBeeKey = selected?.publicBeeKey || null
+  target.publicationId = selected?.publicationId || null
+  target.renditionId = selected?.renditionId || null
+}
+
+function projectPlaybackFields(target, entity, meta) {
+  target.duration = safePositiveNumber(entity.duration ?? entity.durationSec ?? meta.duration ?? meta.durationSec) || null
+  target.durationSec = safePositiveNumber(entity.durationSec ?? entity.duration ?? meta.durationSec ?? meta.duration) || null
+}
+
+function projectPositionFields(target, entity, meta, cls) {
+  target.seasonNumber = Number.isSafeInteger(entity.seasonNumber) ? entity.seasonNumber : Number.isSafeInteger(meta.seasonNumber) ? meta.seasonNumber : Number.isSafeInteger(cls.season) ? cls.season : null
+  target.episodeNumber = Number.isSafeInteger(entity.episodeNumber) ? entity.episodeNumber : Number.isSafeInteger(meta.episodeNumber) ? meta.episodeNumber : Number.isSafeInteger(cls.episode) ? cls.episode : null
+  target.trackNumber = Number.isSafeInteger(entity.trackNumber) ? entity.trackNumber : Number.isSafeInteger(meta.trackNumber) ? meta.trackNumber : null
 }
 
 function mergeArraysByKey(existing, incoming, keyFn) {
@@ -370,15 +392,23 @@ function mergeArraysByKey(existing, incoming, keyFn) {
   }
 }
 
-function mergeProjectedEntity(existing, incoming) {
+function mergeDescriptiveIdentityFields(existing, incoming) {
   if (!existing.title && incoming.title) existing.title = incoming.title
   if (!existing.subtitle && incoming.subtitle) existing.subtitle = incoming.subtitle
   if (!existing.creatorName && incoming.creatorName) existing.creatorName = incoming.creatorName
   if (!existing.publisherName && incoming.publisherName) existing.publisherName = incoming.publisherName
   if (!existing.sourceProviderName && incoming.sourceProviderName) existing.sourceProviderName = incoming.sourceProviderName
+}
+
+function mergeMediaAttributeFields(existing, incoming) {
   for (const field of ['posterUrl', 'backdropUrl', 'stillUrl', 'thumbnailUrl', 'thumbnail', 'duration', 'durationSec', 'seasonNumber', 'episodeNumber', 'trackNumber', 'archiveStatus', 'availabilityStatus']) {
     if ((existing[field] === null || existing[field] === undefined || existing[field] === '') && incoming[field] !== null && incoming[field] !== undefined && incoming[field] !== '') existing[field] = incoming[field]
   }
+}
+
+function mergeProjectedEntity(existing, incoming) {
+  mergeDescriptiveIdentityFields(existing, incoming)
+  mergeMediaAttributeFields(existing, incoming)
   // Whichever publisher described the title wins over one that carried nothing,
   // and an entity that was never described keeps no key at all.
   for (const [field, value] of Object.entries(describedCategories(incoming))) {
@@ -395,6 +425,11 @@ function mergeProjectedEntity(existing, incoming) {
   existing.selectedSource = selected
   existing.alternateSources = reselection.alternateSources
   existing.sourceCount = reselection.sourceCount
+  mergeSelectedSourceFields(existing, selected)
+  return existing
+}
+
+function mergeSelectedSourceFields(existing, selected) {
   existing.playbackKey = selected?.playbackKey || existing.playbackKey
   existing.publicationId = selected?.publicationId || existing.publicationId
   existing.renditionId = selected?.renditionId || existing.renditionId
@@ -402,7 +437,6 @@ function mergeProjectedEntity(existing, incoming) {
   if (selected?.sourceProviderName || selected?.publisherName) existing.sourceProviderName = selected.sourceProviderName || selected.publisherName
   if (selected?.availabilityStatus) existing.availabilityStatus = selected.availabilityStatus
   if (selected?.archiveStatus) existing.archiveStatus = selected.archiveStatus
-  return existing
 }
 
 function collectionMemberKey(member) {

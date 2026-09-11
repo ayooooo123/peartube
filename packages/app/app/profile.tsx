@@ -3,7 +3,7 @@
  * advanced settings.
  * Replaces the old Settings tab (which now redirects here).
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import {
   ActivityIndicator,
   Alert,
@@ -21,6 +21,7 @@ import * as Clipboard from 'expo-clipboard'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import DiagnosticsPanel from '@/components/native-diagnostics/DiagnosticsPanel'
+import type { SeedingStatus, SwarmStatus } from '@/components/native-diagnostics/types'
 import StorageOperabilityDetails from '@/components/StorageOperabilityDetails'
 import { NativeSwitch } from '@/components/native-ui'
 import { useApp } from './_layout'
@@ -51,6 +52,7 @@ import {
   PARTICIPATION_UNAVAILABLE_COPY,
   participationReasonCopy,
   type ParticipationMode,
+  type ParticipationStatus,
 } from '@/lib/network-policy'
 
 interface StorageStats extends StorageCategoryStats {
@@ -140,6 +142,1054 @@ function requestStorageLimitConfirmation(title: string, message: string): Promis
   return promise
 }
 
+function RecoveryPhraseCard({
+  recoveryPhrase,
+  onCopy,
+  onConfirmSaved,
+}: {
+  recoveryPhrase: string | null
+  onCopy: (phrase: string) => void
+  onConfirmSaved: () => void
+}) {
+  if (!recoveryPhrase) return null
+  return (
+    <>
+      <SectionHeader title="Recovery phrase" subtitle="Shown once — write these words down" />
+      <Panel tone="accent" style={styles.sectionCard}>
+        <Text style={styles.recoveryWarning}>
+          These 12 words are the only way to recover your channel on a new device.
+          Anyone who has them controls your channel — store them somewhere safe, offline.
+        </Text>
+        <View style={styles.recoveryPhraseBox}>
+          <Text selectable style={styles.recoveryPhraseText}>{recoveryPhrase}</Text>
+        </View>
+        <Pressable
+          onPress={() => onCopy(recoveryPhrase)}
+          style={styles.secondaryButton}
+        >
+          <Feather name="copy" size={15} color={colors.text} />
+          <Text style={styles.secondaryLabel}>Copy phrase</Text>
+        </Pressable>
+        <Pressable onPress={onConfirmSaved} style={styles.primaryButton}>
+          <Feather name="check" size={16} color={colors.onPrimary} />
+          <Text style={styles.primaryLabel}>I&apos;ve saved my phrase</Text>
+        </Pressable>
+      </Panel>
+    </>
+  )
+}
+
+function RestoreCard({
+  restorePhrase,
+  restoring,
+  onPhraseChange,
+  onRestore,
+}: {
+  restorePhrase: string
+  restoring: boolean
+  onPhraseChange: (text: string) => void
+  onRestore: () => void
+}) {
+  return (
+    <Panel style={styles.sectionCard}>
+      <TextInput
+        placeholder="Enter your 12-word recovery phrase"
+        value={restorePhrase}
+        onChangeText={onPhraseChange}
+        placeholderTextColor={colors.textMuted}
+        autoCapitalize="none"
+        autoCorrect={false}
+        multiline
+        style={[styles.input, styles.phraseInput]}
+      />
+      <Pressable
+        onPress={onRestore}
+        disabled={restoring || !restorePhrase.trim()}
+        style={[styles.secondaryButton, (restoring || !restorePhrase.trim()) && { opacity: 0.4 }]}
+      >
+        {restoring ? <ActivityIndicator size="small" color={colors.text} /> : (
+          <>
+            <Feather name="rotate-ccw" size={15} color={colors.text} />
+            <Text style={styles.secondaryLabel}>Restore channel</Text>
+          </>
+        )}
+      </Pressable>
+    </Panel>
+  )
+}
+
+function PersonalDevicesCard({
+  devices,
+  devicesLoading,
+  vaultAvailable,
+  inviteCode,
+  inviteExpiresAt,
+  inviteLoading,
+  showPairForm,
+  pairInviteCode,
+  pairDeviceName,
+  pairing,
+  revokingKey,
+  onCreateInvite,
+  onTogglePairForm,
+  onPairInviteCodeChange,
+  onPairDeviceNameChange,
+  onLinkDevice,
+  onUnlinkDevice,
+  onCopy,
+  onShareInvite,
+}: {
+  devices: PersonalDevice[]
+  devicesLoading: boolean
+  vaultAvailable: boolean | null
+  inviteCode: string | null
+  inviteExpiresAt: number | null
+  inviteLoading: boolean
+  showPairForm: boolean
+  pairInviteCode: string
+  pairDeviceName: string
+  pairing: boolean
+  revokingKey: string | null
+  onCreateInvite: () => void
+  onTogglePairForm: () => void
+  onPairInviteCodeChange: (code: string) => void
+  onPairDeviceNameChange: (name: string) => void
+  onLinkDevice: () => void
+  onUnlinkDevice: (device: PersonalDevice) => void
+  onCopy: (text: string, label: string) => void
+  onShareInvite: (code: string) => void
+}) {
+  const vaultReady = vaultAvailable === true
+  return (
+    <>
+      <SectionHeader title="Your devices" subtitle="Sync your watch state and library to devices you link" />
+      <Panel style={styles.sectionCard}>
+        {devices.length ? (
+          <View style={{ gap: 8, marginBottom: 12 }}>
+            {devices.map((device, idx) => {
+              const keyHex = String(device?.keyHex || '')
+              const isSelf = device?.self === true
+              const busy = revokingKey === keyHex
+              return (
+                <View key={keyHex || idx} style={styles.deviceRow}>
+                  <Feather name="smartphone" size={16} color={colors.textSecondary} />
+                  <View style={{ flex: 1, marginLeft: 10 }}>
+                    <Text style={styles.deviceName}>
+                      {device?.deviceName || (isSelf ? 'This device' : `Device ${idx + 1}`)}
+                    </Text>
+                    <Text style={styles.deviceKey} numberOfLines={1}>{keyHex}</Text>
+                  </View>
+                  {isSelf || !vaultReady ? null : (
+                    <Pressable
+                      onPress={() => onUnlinkDevice(device)}
+                      disabled={busy}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Unlink ${device?.deviceName || 'device'}`}
+                      style={[styles.ghostButton, { marginTop: 0 }, busy && { opacity: 0.5 }]}
+                    >
+                      <Feather name="x-circle" size={14} color={colors.textMuted} />
+                      <Text style={styles.ghostLabel}>{busy ? 'Unlinking…' : 'Unlink'}</Text>
+                    </Pressable>
+                  )}
+                </View>
+              )
+            })}
+          </View>
+        ) : (
+          <Text style={[styles.cardMeta, { marginBottom: 12 }]}>
+            {devicesLoading ? 'Checking linked devices…' : 'Only this device holds your watch state and library.'}
+          </Text>
+        )}
+
+        {vaultAvailable === false ? (
+          <Text style={styles.cardMeta}>
+            This device has no secure keychain that will hold a key for us, so it cannot hold the
+            one that encrypts your personal store. Nothing is written to an encrypted store here
+            and nothing syncs: your watch state, library, and recommendations stay on this device.
+            Linking is turned off instead of keeping the key in plain text beside the data it
+            protects.
+          </Text>
+        ) : (
+          <>
+            {inviteCode ? (
+              <View style={styles.inviteBox}>
+                <Text style={styles.inviteLabel}>
+                  Single-use code — enter it on your other device within 5 minutes
+                  {inviteExpiresAt ? ` (by ${new Date(inviteExpiresAt).toLocaleTimeString()})` : ''}
+                </Text>
+                <Text style={styles.inviteCode} selectable>{inviteCode}</Text>
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                  <Pressable onPress={() => onCopy(inviteCode, 'Invite code')} style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}>
+                    <Feather name="copy" size={14} color={colors.text} />
+                    <Text style={styles.secondaryLabel}>Copy</Text>
+                  </Pressable>
+                  <Pressable onPress={() => onShareInvite(inviteCode)} style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}>
+                    <Feather name="share-2" size={14} color={colors.text} />
+                    <Text style={styles.secondaryLabel}>Share</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Pressable
+                onPress={onCreateInvite}
+                disabled={inviteLoading || !vaultReady}
+                style={[styles.primaryButton, { flex: 1 }, (inviteLoading || !vaultReady) && { opacity: 0.6 }]}
+                accessibilityRole="button"
+              >
+                {inviteLoading ? <ActivityIndicator size="small" color={colors.onPrimary} /> : (
+                  <>
+                    <Feather name="plus" size={15} color={colors.onPrimary} />
+                    <Text style={styles.primaryLabel}>Link a device</Text>
+                  </>
+                )}
+              </Pressable>
+              <Pressable
+                onPress={onTogglePairForm}
+                disabled={!vaultReady}
+                style={[styles.secondaryButton, { flex: 1, marginTop: 0 }, !vaultReady && { opacity: 0.4 }]}
+                accessibilityRole="button"
+              >
+                <Feather name="key" size={14} color={colors.text} />
+                <Text style={styles.secondaryLabel}>Enter code</Text>
+              </Pressable>
+            </View>
+
+            {showPairForm && (
+              <View style={{ marginTop: 12 }}>
+                <TextInput
+                  placeholder="Paste invite code"
+                  value={pairInviteCode}
+                  onChangeText={onPairInviteCodeChange}
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                  style={styles.input}
+                />
+                <TextInput
+                  placeholder="Device name (optional)"
+                  value={pairDeviceName}
+                  onChangeText={onPairDeviceNameChange}
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                  style={styles.input}
+                />
+                <Pressable
+                  onPress={onLinkDevice}
+                  disabled={pairing || !pairInviteCode.trim() || !vaultReady}
+                  style={[styles.secondaryButton, (pairing || !pairInviteCode.trim() || !vaultReady) && { opacity: 0.4 }]}
+                >
+                  {pairing ? (
+                    <>
+                      <ActivityIndicator size="small" color={colors.text} />
+                      <Text style={styles.secondaryLabel}>Linking…</Text>
+                    </>
+                  ) : (
+                    <Text style={styles.secondaryLabel}>Link with this code</Text>
+                  )}
+                </Pressable>
+                {pairing ? (
+                  <Text style={[styles.cardMeta, { marginTop: 8 }]}>
+                    Finding your other device over the peer network. This usually takes a few
+                    seconds and can take up to a minute — keep both devices online.
+                  </Text>
+                ) : null}
+              </View>
+            )}
+          </>
+        )}
+      </Panel>
+    </>
+  )
+}
+
+function PrivacyCard({ vaultAvailable }: { vaultAvailable: boolean | null }) {
+  return (
+    <>
+      <SectionHeader title="Privacy" subtitle="What stays here, and what other machines see" />
+      <Panel style={styles.sectionCard}>
+        <Text style={styles.cardTitle}>Your viewing stays on your devices</Text>
+        <Text style={styles.cardMeta}>
+          Watch position, completion, your library, and your recommendations are worked out
+          on this device. PearTube collects no viewing analytics and runs no view counter.
+          This state reaches another machine only if you link a device above.
+        </Text>
+        {vaultAvailable === false ? (
+          <Text style={styles.cardMeta}>
+            This device has no secure keychain, so there is no key to encrypt a personal store
+            with and none is opened here. Anything that needs one stays unavailable rather than
+            being stored unprotected.
+          </Text>
+        ) : (
+          <Text style={styles.cardMeta}>
+            It is stored in a personal store encrypted with a key that never leaves this
+            device&apos;s keychain.
+          </Text>
+        )}
+
+        <Text style={[styles.cardTitle, { marginTop: 14 }]}>Peers see your address and requests</Text>
+        <Text style={styles.cardMeta}>
+          Playback is peer-to-peer. The peers you swarm with see your IP address and the
+          topics and byte ranges you ask for. That is how the transfer works and PearTube
+          cannot hide it, so this is not anonymous browsing.
+        </Text>
+
+        <Text style={[styles.cardTitle, { marginTop: 14 }]}>Unlinking works forward only</Text>
+        <Text style={styles.cardMeta}>
+          Unlinking a device rotates your key so that device receives nothing further. It
+          cannot erase what that device already read, and it cannot reach copies already
+          made from it.
+        </Text>
+      </Panel>
+    </>
+  )
+}
+
+function ParticipationCard({
+  networkPolicy,
+  participation,
+  participationSaving,
+  onModeChange,
+}: {
+  networkPolicy: { policy?: { participationMode?: ParticipationMode | null } | null; error?: string | null; saving?: boolean }
+  participation: { status: ParticipationStatus | null; loading?: boolean; error?: string | null }
+  participationSaving: boolean
+  onModeChange: (mode: ParticipationMode) => void
+}) {
+  const selectedMode = networkPolicy.policy?.participationMode ?? null
+  const status = participation.status
+  const stateCopy = status ? PARTICIPATION_STATE_COPY[status.state] : null
+  const stateColor = !status
+    ? colors.textMuted
+    : status.state === 'uploading' ? colors.success
+    : status.state === 'eligible' ? colors.swarm
+    : colors.warning
+  const busy = participationSaving || networkPolicy.saving
+  const locked = busy || !networkPolicy.policy
+  return (
+    <>
+      <SectionHeader title="How you help" eyebrow="01 NETWORK" subtitle="Sharing what you have watched keeps it reachable for other viewers" />
+      <Panel style={styles.sectionCard}>
+        <View style={styles.participationStateRow}>
+          <View style={[styles.participationDot, { backgroundColor: stateColor }]} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.cardTitle}>
+              {stateCopy ? stateCopy.label : participation.loading ? 'Checking…' : 'Contribution status unavailable'}
+            </Text>
+            <Text style={styles.cardMeta}>
+              {stateCopy
+                ? stateCopy.detail
+                : participation.loading
+                  ? 'Reading this device\u2019s contribution state.'
+                  : 'This device could not read its contribution state, so it is not reporting one.'}
+            </Text>
+          </View>
+        </View>
+
+        {status && (status.errorCode || status.reasonCodes.length > 0) ? (
+          <View style={styles.participationReasons}>
+            {status.errorCode ? (
+              <Text style={styles.participationReason}>{`\u2022  ${PARTICIPATION_UNAVAILABLE_COPY}`}</Text>
+            ) : null}
+            {status.reasonCodes.map((code: string) => (
+              <Text key={code} style={styles.participationReason}>{`\u2022  ${participationReasonCopy(code)}`}</Text>
+            ))}
+          </View>
+        ) : null}
+
+        {!status && participation.error ? (
+          <View style={styles.participationReasons}>
+            <Text style={styles.participationReason}>{participation.error}</Text>
+          </View>
+        ) : null}
+
+        <View style={styles.participationModes} accessibilityRole="radiogroup">
+          {PARTICIPATION_MODE_OPTIONS.map((option) => {
+            const selected = selectedMode === option.value
+            return (
+              <Pressable
+                key={option.value}
+                onPress={() => onModeChange(option.value)}
+                disabled={locked}
+                accessibilityRole="radio"
+                accessibilityState={{ selected, disabled: locked }}
+                style={[
+                  styles.participationMode,
+                  selected && styles.participationModeSelected,
+                  locked && { opacity: 0.7 },
+                ]}
+              >
+                <View style={styles.participationModeHeader}>
+                  <Text style={[styles.participationModeLabel, selected && { color: colors.onPrimary }]}>{option.label}</Text>
+                  {selected ? <Feather name="check" size={15} color={colors.onPrimary} /> : null}
+                </View>
+                <Text style={[styles.participationModeDetail, selected && { color: colors.onPrimary, opacity: 0.85 }]}>
+                  {option.detail}
+                </Text>
+              </Pressable>
+            )
+          })}
+        </View>
+
+        {networkPolicy.error ? (
+          <Text accessibilityRole="alert" style={styles.developerModeError}>{networkPolicy.error}</Text>
+        ) : null}
+
+        <Text style={styles.participationFootnote}>
+          When your system reports that this device is warm, low on battery, low on storage, on a
+          metered connection, or not allowed to work in the background, it stops on its own. Where
+          it cannot read one of those signals it keeps background sharing off rather than guess.
+          Helping is best effort: nothing here promises a video stays online, and none of these
+          choices creates an archive pledge.
+        </Text>
+      </Panel>
+    </>
+  )
+}
+
+function StorageCard({
+  storageStats,
+  storageLimitPreview,
+  usedPct,
+  developerModeEnabled,
+  customStorageLimit,
+  storageLimitSaving,
+  clearingCache,
+  onCustomLimitChange,
+  onCustomLimitApply,
+  onClearCache,
+}: {
+  storageStats: StorageStats | null
+  storageLimitPreview: StorageLimitPreview | null
+  usedPct: number
+  developerModeEnabled: boolean
+  customStorageLimit: string
+  storageLimitSaving: boolean
+  clearingCache: boolean
+  onCustomLimitChange: (val: string) => void
+  onCustomLimitApply: () => void
+  onClearCache: () => void
+}) {
+  return (
+    <Panel style={styles.sectionCard}>
+      <View style={styles.storageHeader}>
+        <View style={styles.storageIcon}>
+          <Feather name="hard-drive" size={18} color={colors.swarm} />
+        </View>
+        <View style={{ flex: 1, marginLeft: 12 }}>
+           <Text style={styles.cardTitle}>Supporting the network</Text>
+          <Text style={styles.cardMeta}>
+            {storageStats
+              ? `Hosting ${storageStats.usedGB} GB for other viewers · ${storageStats.seedCount} videos`
+              : 'Loading…'}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.track}>
+        <View style={[styles.fill, { width: `${usedPct}%` }]} />
+      </View>
+      <Text style={styles.trackLabel}>
+        {storageStats ? `${storageStats.usedGB} GB of ${storageStats.maxGB} GB budget` : ' '}
+      </Text>
+
+      {storageStats?.totalStorageGB ? (
+        <View style={styles.storageBreakdown}>
+          <View style={styles.breakdownRow}>
+            <Text style={styles.breakdownLabel}>On this device</Text>
+            <Text style={styles.breakdownValue}>{storageStats.totalStorageGB} GB total</Text>
+          </View>
+          <View style={styles.breakdownRow}>
+            <Text style={styles.breakdownLabel}>Tracked peer cache</Text>
+            <Text style={styles.breakdownValue}>{storageStats.usedGB} GB cached</Text>
+          </View>
+          {storageStats.untrackedStorageGB && Number(storageStats.untrackedStorageBytes) > 0 ? (
+            <View style={styles.breakdownRow}>
+              <Text style={styles.breakdownLabel}>Your videos & app/P2P data outside tracked peer cache</Text>
+              <Text style={styles.breakdownValue}>{storageStats.untrackedStorageGB} GB</Text>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      <StorageOperabilityDetails stats={storageStats} preview={storageLimitPreview} />
+
+      <Text style={styles.cardMeta}>
+        Your sharing choice above sets this budget, unless a different one has been set in
+        Developer Settings. Cached video is evicted to stay inside it.
+      </Text>
+
+      {developerModeEnabled ? (
+        <View style={styles.developerLimitBlock}>
+          <Text style={styles.advancedFieldLabel}>Cache budget override (GB)</Text>
+          <Text style={styles.cardMeta}>
+            The same disk ceiling Developer Settings › Network policy edits. Set it to anything other
+            than the sharing choice&apos;s own value and it stops following that choice in either
+            direction; set it back and it follows again. Lowering it previews and confirms eviction
+            before anything is removed.
+          </Text>
+          <View style={[styles.customRow, { marginTop: 10 }]}>
+            <TextInput
+              value={customStorageLimit}
+              onChangeText={onCustomLimitChange}
+              onSubmitEditing={onCustomLimitApply}
+              keyboardType="numeric"
+              placeholder="Custom GB"
+              placeholderTextColor={colors.textMuted}
+              style={[styles.input, { flex: 1, marginBottom: 0 }]}
+            />
+            <Pressable
+              onPress={onCustomLimitApply}
+              disabled={storageLimitSaving}
+              style={[styles.secondaryButton, { marginTop: 0, paddingHorizontal: 16 }, storageLimitSaving && { opacity: 0.7 }]}
+            >
+              <Text style={styles.secondaryLabel}>{storageLimitSaving ? 'Saving…' : 'Set'}</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      {storageStats && storageStats.pinnedCount > 0 ? (
+        <Text style={styles.pinnedNote}>
+          <Feather name="anchor" size={11} color={colors.textMuted} />
+          {'  '}{storageStats.pinnedCount} channel{storageStats.pinnedCount === 1 ? '' : 's'} kept online from your Library
+        </Text>
+      ) : null}
+
+      <Pressable
+        onPress={onClearCache}
+        disabled={clearingCache}
+        style={[styles.ghostButton, clearingCache && { opacity: 0.6 }]}
+      >
+        <Feather name="trash-2" size={14} color={colors.textMuted} />
+        <Text style={styles.ghostLabel}>{clearingCache ? 'Clearing…' : 'Clear cached videos'}</Text>
+      </Pressable>
+    </Panel>
+  )
+}
+
+function ProfileDiagnosticsCard({
+  advancedOpen,
+  identity,
+  canManageTranscodeSettings,
+  transcodeSettings,
+  transcodeSettingsLoading,
+  swarmStatus,
+  storageStats,
+  seedingStatus,
+  archiveOperatorStatus,
+  diagnosticsLoading,
+  onToggleAdvanced,
+  onCopy,
+  onTranscodeToggle,
+  onRefreshDiagnostics,
+}: {
+  advancedOpen: boolean
+  identity: { publicKey: string; driveKey?: string | null }
+  canManageTranscodeSettings: boolean
+  transcodeSettings: TranscodeSettings | null
+  transcodeSettingsLoading: boolean
+  swarmStatus: SwarmStatus | null
+  storageStats: StorageStats | null
+  seedingStatus: SeedingStatus | null
+  archiveOperatorStatus: ArchiveOperatorStatus | null
+  diagnosticsLoading: boolean
+  onToggleAdvanced: () => void
+  onCopy: (text: string, label: string) => void
+  onTranscodeToggle: (patch: { videoToolboxDecodeEnabled?: boolean; videoToolboxHwMapEnabled?: boolean }) => void
+  onRefreshDiagnostics: () => void
+}) {
+  return (
+    <>
+      <SectionHeader title="Diagnostics" eyebrow="05 DIAGNOSTICS" subtitle="Local swarm, storage, and technical state" />
+      <Panel padded={false} style={styles.sectionCard}>
+        <Pressable onPress={onToggleAdvanced} style={styles.advancedToggle}>
+          <Feather name="terminal" size={15} color={colors.textMuted} />
+          <Text style={styles.advancedLabel}>Diagnostics & technical settings</Text>
+          <Feather name={advancedOpen ? 'chevron-up' : 'chevron-down'} size={17} color={colors.textMuted} />
+        </Pressable>
+        {advancedOpen && (
+          <View style={styles.advancedBody}>
+            <Text style={styles.advancedFieldLabel}>Public key</Text>
+            <Pressable onPress={() => onCopy(identity.publicKey, 'Public key')}>
+              <Text style={styles.mono} numberOfLines={2}>{identity.publicKey}</Text>
+            </Pressable>
+
+            <Text style={[styles.advancedFieldLabel, { marginTop: 14 }]}>Channel key</Text>
+            <Pressable onPress={() => identity.driveKey && onCopy(identity.driveKey, 'Channel key')}>
+              <Text style={styles.mono} numberOfLines={2}>{identity.driveKey}</Text>
+            </Pressable>
+
+            {canManageTranscodeSettings && (
+              <View style={{ marginTop: 16 }}>
+                <View style={styles.switchRow}>
+                  <View style={{ flex: 1, paddingRight: 12 }}>
+                    <Text style={styles.cardTitle}>Hardware decode (VideoToolbox)</Text>
+                    <Text style={styles.cardMeta}>Lower CPU use on this Mac. Turn off if playback is unstable.</Text>
+                  </View>
+                  <NativeSwitch
+                    value={!!transcodeSettings?.videoToolboxDecodeEnabled}
+                    onValueChange={(v: boolean) => onTranscodeToggle({ videoToolboxDecodeEnabled: v })}
+                    disabled={transcodeSettingsLoading || !!transcodeSettings?.videoToolboxDecodeLocked}
+                    trackColor={{ false: colors.bgActive, true: colors.primary }}
+                    thumbColor={colors.text}
+                  />
+                </View>
+                <View style={[styles.switchRow, { marginTop: 12 }]}>
+                  <View style={{ flex: 1, paddingRight: 12 }}>
+                    <Text style={styles.cardTitle}>Hardware frame mapping</Text>
+                    <Text style={styles.cardMeta}>Troubleshooting option for transfer errors.</Text>
+                  </View>
+                  <NativeSwitch
+                    value={!!transcodeSettings?.videoToolboxHwMapEnabled}
+                    onValueChange={(v: boolean) => onTranscodeToggle({ videoToolboxHwMapEnabled: v })}
+                    disabled={transcodeSettingsLoading || !!transcodeSettings?.videoToolboxHwMapLocked || !transcodeSettings?.videoToolboxDecodeEnabled}
+                    trackColor={{ false: colors.bgActive, true: colors.primary }}
+                    thumbColor={colors.text}
+                  />
+                </View>
+              </View>
+            )}
+
+            <View style={{ marginTop: 16, marginHorizontal: -16 }}>
+              <DiagnosticsPanel
+                swarmStatus={swarmStatus}
+                storageStats={storageStats}
+                seedingStatus={seedingStatus}
+                operatorStatus={archiveOperatorStatus}
+                loading={diagnosticsLoading}
+                onRefresh={onRefreshDiagnostics}
+              />
+            </View>
+          </View>
+        )}
+      </Panel>
+    </>
+  )
+}
+
+function ProfileHeader({
+  title,
+  topInset,
+  onBack,
+}: {
+  title: string
+  topInset: number
+  onBack: () => void
+}) {
+  return (
+    <View style={{ paddingTop: topInset }}>
+      <ScreenHeader
+        title={title}
+        eyebrow="IDENTITY / DEVICE"
+        onBack={onBack}
+      />
+    </View>
+  )
+}
+
+function DeveloperModeSection({
+  enabled,
+  isLoading,
+  error,
+  onToggle,
+  onOpenSettings,
+}: {
+  enabled: boolean
+  isLoading: boolean
+  error: string | null
+  onToggle: (enabled: boolean) => void
+  onOpenSettings: () => void
+}) {
+  return (
+    <>
+      <SectionHeader title="Developer Mode" eyebrow="04 DEVELOPER" subtitle="Local operator tools for this device" />
+      <Panel style={styles.sectionCard}>
+        <View style={styles.switchRow}>
+          <View style={{ flex: 1, paddingRight: spacing.md }}>
+            <Text style={styles.cardTitle}>Developer Mode</Text>
+            <Text style={styles.cardMeta}>Shows publishing and network administration tools locally. It does not grant publishing permission.</Text>
+          </View>
+          <NativeSwitch
+            value={enabled}
+            disabled={isLoading}
+            onValueChange={onToggle}
+            trackColor={{ false: colors.bgActive, true: colors.primary }}
+            thumbColor={colors.text}
+          />
+        </View>
+        {error ? <Text accessibilityRole="alert" style={styles.developerModeError}>{error}</Text> : null}
+        {enabled ? (
+          <Button
+            label="Open Developer Settings"
+            variant="secondary"
+            icon="tool"
+            onPress={onOpenSettings}
+            style={{ marginTop: spacing.md }}
+          />
+        ) : null}
+      </Panel>
+    </>
+  )
+}
+
+function ProfileSharedCards({
+  devices,
+  devicesLoading,
+  vaultAvailable,
+  inviteCode,
+  inviteExpiresAt,
+  inviteLoading,
+  showPairForm,
+  pairInviteCode,
+  pairDeviceName,
+  pairing,
+  revokingKey,
+  onCreateInvite,
+  onTogglePairForm,
+  onPairInviteCodeChange,
+  onPairDeviceNameChange,
+  onLinkDevice,
+  onUnlinkDevice,
+  onCopy,
+  onShareInvite,
+  networkPolicy,
+  participation,
+  participationSaving,
+  onParticipationModeChange,
+  storageStats,
+  storageLimitPreview,
+  usedPct,
+  developerModeEnabled,
+  customStorageLimit,
+  storageLimitSaving,
+  clearingCache,
+  onCustomLimitChange,
+  onCustomLimitApply,
+  onClearCache,
+  storageSectionSubtitle,
+  developerModeSection,
+}: {
+  devices: PersonalDevice[]
+  devicesLoading: boolean
+  vaultAvailable: boolean | null
+  inviteCode: string | null
+  inviteExpiresAt: number | null
+  inviteLoading: boolean
+  showPairForm: boolean
+  pairInviteCode: string
+  pairDeviceName: string
+  pairing: boolean
+  revokingKey: string | null
+  onCreateInvite: () => void
+  onTogglePairForm: () => void
+  onPairInviteCodeChange: (code: string) => void
+  onPairDeviceNameChange: (name: string) => void
+  onLinkDevice: () => void
+  onUnlinkDevice: (device: PersonalDevice) => void
+  onCopy: (text: string, label: string) => void
+  onShareInvite: (code: string) => void
+  networkPolicy: { policy?: { participationMode?: ParticipationMode | null } | null; error?: string | null; saving?: boolean }
+  participation: { status: ParticipationStatus | null; loading?: boolean; error?: string | null }
+  participationSaving: boolean
+  onParticipationModeChange: (mode: ParticipationMode) => void
+  storageStats: StorageStats | null
+  storageLimitPreview: StorageLimitPreview | null
+  usedPct: number
+  developerModeEnabled: boolean
+  customStorageLimit: string
+  storageLimitSaving: boolean
+  clearingCache: boolean
+  onCustomLimitChange: (val: string) => void
+  onCustomLimitApply: () => void
+  onClearCache: () => void
+  storageSectionSubtitle: string
+  developerModeSection: ReactNode
+}) {
+  return (
+    <>
+      <PersonalDevicesCard
+        devices={devices}
+        devicesLoading={devicesLoading}
+        vaultAvailable={vaultAvailable}
+        inviteCode={inviteCode}
+        inviteExpiresAt={inviteExpiresAt}
+        inviteLoading={inviteLoading}
+        showPairForm={showPairForm}
+        pairInviteCode={pairInviteCode}
+        pairDeviceName={pairDeviceName}
+        pairing={pairing}
+        revokingKey={revokingKey}
+        onCreateInvite={onCreateInvite}
+        onTogglePairForm={onTogglePairForm}
+        onPairInviteCodeChange={onPairInviteCodeChange}
+        onPairDeviceNameChange={onPairDeviceNameChange}
+        onLinkDevice={onLinkDevice}
+        onUnlinkDevice={onUnlinkDevice}
+        onCopy={onCopy}
+        onShareInvite={onShareInvite}
+      />
+
+      <PrivacyCard vaultAvailable={vaultAvailable} />
+
+      <ParticipationCard
+        networkPolicy={networkPolicy}
+        participation={participation}
+        participationSaving={participationSaving}
+        onModeChange={onParticipationModeChange}
+      />
+
+      <SectionHeader title="Storage used for sharing" eyebrow="02 STORAGE" subtitle={storageSectionSubtitle} />
+      <StorageCard
+        storageStats={storageStats}
+        storageLimitPreview={storageLimitPreview}
+        usedPct={usedPct}
+        developerModeEnabled={developerModeEnabled}
+        customStorageLimit={customStorageLimit}
+        storageLimitSaving={storageLimitSaving}
+        clearingCache={clearingCache}
+        onCustomLimitChange={onCustomLimitChange}
+        onCustomLimitApply={onCustomLimitApply}
+        onClearCache={onClearCache}
+      />
+
+      {developerModeSection}
+    </>
+  )
+}
+
+function ProfileOnboardingBody({
+  showIdentityTools,
+  newName,
+  creating,
+  onNameChange,
+  onCreateIdentity,
+  restorePhrase,
+  restoring,
+  onPhraseChange,
+  onRestore,
+  sharedCards,
+}: {
+  showIdentityTools: boolean
+  newName: string
+  creating: boolean
+  onNameChange: (name: string) => void
+  onCreateIdentity: () => void
+  restorePhrase: string
+  restoring: boolean
+  onPhraseChange: (text: string) => void
+  onRestore: () => void
+  sharedCards: ReactNode
+}) {
+  return (
+    <>
+      <View style={styles.hero}>
+        <Text style={styles.heroTitle}>PearTube</Text>
+        <Text style={styles.heroSubtitle}>Video, peer to peer. No servers, no accounts.</Text>
+      </View>
+
+      {showIdentityTools ? (
+        <>
+          <SectionHeader title="Start a channel" subtitle="Your channel lives on your devices" />
+          <Panel tone="accent" style={styles.sectionCard}>
+            <TextInput
+              placeholder="Channel name"
+              value={newName}
+              onChangeText={onNameChange}
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              style={styles.input}
+            />
+            <Pressable
+              onPress={onCreateIdentity}
+              disabled={creating || !newName.trim()}
+              style={[styles.primaryButton, (creating || !newName.trim()) && { opacity: 0.4 }]}
+            >
+              {creating ? <ActivityIndicator size="small" color={colors.onPrimary} /> : (
+                <>
+                  <Feather name="plus" size={16} color={colors.onPrimary} />
+                  <Text style={styles.primaryLabel}>Create channel</Text>
+                </>
+              )}
+            </Pressable>
+          </Panel>
+
+          <SectionHeader title="Restore a channel" subtitle="Recover with your 12-word phrase" />
+          <RestoreCard
+            restorePhrase={restorePhrase}
+            restoring={restoring}
+            onPhraseChange={onPhraseChange}
+            onRestore={onRestore}
+          />
+        </>
+      ) : null}
+
+      {sharedCards}
+    </>
+  )
+}
+
+function ProfileIdentityBody({
+  showIdentityTools,
+  recoveryPhrase,
+  onCopyPhrase,
+  onConfirmPhraseSaved,
+  identityName,
+  identityKey,
+  onShareChannel,
+  onCopyKey,
+  restoreOpen,
+  onOpenRestore,
+  restorePhrase,
+  restoring,
+  onPhraseChange,
+  onRestore,
+  sharedCards,
+  developerModeEnabled,
+  diagnostics,
+}: {
+  showIdentityTools: boolean
+  recoveryPhrase: string | null
+  onCopyPhrase: (phrase: string) => void
+  onConfirmPhraseSaved: () => void
+  identityName?: string | null
+  identityKey?: string | null
+  onShareChannel: () => void
+  onCopyKey: () => void
+  restoreOpen: boolean
+  onOpenRestore: () => void
+  restorePhrase: string
+  restoring: boolean
+  onPhraseChange: (text: string) => void
+  onRestore: () => void
+  sharedCards: ReactNode
+  developerModeEnabled: boolean
+  diagnostics: ReactNode
+}) {
+  return (
+    <>
+      {showIdentityTools ? (
+        <>
+          <RecoveryPhraseCard
+            recoveryPhrase={recoveryPhrase}
+            onCopy={onCopyPhrase}
+            onConfirmSaved={onConfirmPhraseSaved}
+          />
+
+          <Panel tone="accent" style={[styles.sectionCard, { marginTop: spacing.sm }]}>
+            <View style={styles.identityRow}>
+              <View style={styles.bigAvatar}>
+                <Text style={styles.bigAvatarLetter}>{identityName?.charAt(0)?.toUpperCase() || '?'}</Text>
+              </View>
+              <View style={{ flex: 1, marginLeft: spacing.md }}>
+                <Text style={styles.identityName} numberOfLines={1}>{identityName}</Text>
+                {identityKey ? (
+                  <Text style={styles.identityKey} numberOfLines={1}>
+                    {(() => {
+                      const key = String(identityKey)
+                      return key.length > 16 ? `${key.slice(0, 8)}…${key.slice(-6)}` : key
+                    })()}
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+
+            <View style={styles.identityActions}>
+              <Button label="Share channel" icon="share-2" onPress={onShareChannel} style={{ flex: 1 }} />
+              <Button
+                label="Copy key"
+                icon="copy"
+                variant="secondary"
+                onPress={onCopyKey}
+                style={{ flex: 1 }}
+              />
+            </View>
+          </Panel>
+
+          <SectionHeader title="Backup & recovery" eyebrow="03 PUBLISHER" subtitle="Restore a channel from its 12-word phrase" />
+          {restoreOpen ? (
+            <RestoreCard
+              restorePhrase={restorePhrase}
+              restoring={restoring}
+              onPhraseChange={onPhraseChange}
+              onRestore={onRestore}
+            />
+          ) : (
+            <Panel padded={false} style={styles.sectionCard}>
+              <Pressable onPress={onOpenRestore} style={styles.advancedToggle}>
+                <Feather name="rotate-ccw" size={15} color={colors.textMuted} />
+                <Text style={styles.advancedLabel}>Restore from recovery phrase</Text>
+                <Feather name="chevron-down" size={17} color={colors.textMuted} />
+              </Pressable>
+            </Panel>
+          )}
+        </>
+      ) : null}
+
+      {sharedCards}
+
+      {developerModeEnabled ? diagnostics : null}
+      <Text style={styles.footer}>PearTube · Powered by Hyperswarm & Hyperdrive</Text>
+    </>
+  )
+}
+
+async function runPersonalDeviceUnlink(args: {
+  rpc: {
+    revokePersonalDevice: (request: {
+      keyHex: string
+      secret: string
+      deviceName?: string
+    }) => Promise<{ success?: boolean; error?: string; bootstrapKey?: string } | null | undefined>
+  }
+  keyHex: string
+  deviceName?: string
+  personalOwner: string | null
+  loadPersonalDevices: () => Promise<void>
+}): Promise<void> {
+  const { rpc, keyHex, deviceName, personalOwner, loadPersonalDevices } = args
+  // Forward-only rotation: this device mints the next epoch key, and the
+  // backend opens a new encrypted store with it. The old key is dead the
+  // moment the backend rotates, so the new one has to be in the vault
+  // before the request goes out — not after the response comes back. The
+  // pre-rotation key rides along as the startup fallback for the one
+  // outcome where the epoch is recorded but never activated.
+  const previous = await readPersonalSecretRecord(personalOwner)
+  const secret = generatePersonalSecretHex()
+  await persistPersonalSecret(secret, { publicKey: personalOwner, previousSecret: previous?.secret })
+
+  const res = await rpc.revokePersonalDevice({
+    keyHex,
+    secret,
+    deviceName: deviceName || undefined,
+  })
+  if (!res?.success) {
+    if (res?.error === ROTATION_ALREADY_RECORDED) {
+      // The new epoch is already recorded and a restart reopens it, so
+      // restoring the old key here would leave this device unable to
+      // unwrap its own store. The new one stays.
+      notify(
+        'Unlink did not finish',
+        'The new key is saved on this device. Restart PearTube and unlink again — your library may take a moment to reopen.',
+      )
+      return
+    }
+    // Every other refusal is raised before anything is written, so the
+    // previous key is still the live one and has to go back.
+    if (previous) await persistPersonalSecret(previous.secret, { publicKey: personalOwner, bootstrapKey: previous.bootstrapKey })
+    throw new Error(res?.error || 'Failed to unlink device')
+  }
+
+  await persistPersonalSecret(secret, { publicKey: personalOwner, bootstrapKey: res.bootstrapKey })
+  await ensurePersonalEncryption(rpc, personalOwner, { force: true, required: true })
+  haptics.success()
+  notify(
+    'Device unlinked',
+    'Future state stays on this device. Every device you keep has to be linked again before it syncs.',
+  )
+  await loadPersonalDevices()
+}
+
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
@@ -184,8 +1234,8 @@ export default function ProfileScreen() {
   const [transcodeSettings, setTranscodeSettings] = useState<TranscodeSettings | null>(null)
   const [transcodeSettingsLoading, setTranscodeSettingsLoading] = useState(false)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
-  const [swarmStatus, setSwarmStatus] = useState<any | null>(null)
-  const [seedingStatus, setSeedingStatus] = useState<any | null>(null)
+  const [swarmStatus, setSwarmStatus] = useState<SwarmStatus | null>(null)
+  const [seedingStatus, setSeedingStatus] = useState<SeedingStatus | null>(null)
   const [archiveOperatorStatus, setArchiveOperatorStatus] = useState<ArchiveOperatorStatus | null>(null)
   const diagnosticsDestination = developerModeDestination(developerMode.enabled, '/profile?developer=diagnostics')
   const showIdentityTools = canShowIdentityTools(developerMode.enabled)
@@ -367,46 +1417,13 @@ export default function ProfileScreen() {
       async () => {
         setRevokingKey(keyHex)
         try {
-          // Forward-only rotation: this device mints the next epoch key, and the
-          // backend opens a new encrypted store with it. The old key is dead the
-          // moment the backend rotates, so the new one has to be in the vault
-          // before the request goes out — not after the response comes back. The
-          // pre-rotation key rides along as the startup fallback for the one
-          // outcome where the epoch is recorded but never activated.
-          const previous = await readPersonalSecretRecord(personalOwner)
-          const secret = generatePersonalSecretHex()
-          await persistPersonalSecret(secret, { publicKey: personalOwner, previousSecret: previous?.secret })
-
-          const res = await rpc.revokePersonalDevice({
+          await runPersonalDeviceUnlink({
+            rpc,
             keyHex,
-            secret,
-            deviceName: device?.deviceName || undefined,
+            deviceName: device?.deviceName,
+            personalOwner,
+            loadPersonalDevices,
           })
-          if (!res?.success) {
-            if (res?.error === ROTATION_ALREADY_RECORDED) {
-              // The new epoch is already recorded and a restart reopens it, so
-              // restoring the old key here would leave this device unable to
-              // unwrap its own store. The new one stays.
-              notify(
-                'Unlink did not finish',
-                'The new key is saved on this device. Restart PearTube and unlink again — your library may take a moment to reopen.',
-              )
-              return
-            }
-            // Every other refusal is raised before anything is written, so the
-            // previous key is still the live one and has to go back.
-            if (previous) await persistPersonalSecret(previous.secret, { publicKey: personalOwner, bootstrapKey: previous.bootstrapKey })
-            throw new Error(res?.error || 'Failed to unlink device')
-          }
-
-          await persistPersonalSecret(secret, { publicKey: personalOwner, bootstrapKey: res.bootstrapKey })
-          await ensurePersonalEncryption(rpc, personalOwner, { force: true, required: true })
-          haptics.success()
-          notify(
-            'Device unlinked',
-            'Future state stays on this device. Every device you keep has to be linked again before it syncs.',
-          )
-          await loadPersonalDevices()
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : 'Failed to unlink device'
           console.error('[Profile] Failed to unlink device:', message)
@@ -621,684 +1638,123 @@ export default function ProfileScreen() {
     ? Math.min(100, (storageStats.usedBytes / storageStats.maxBytes) * 100)
     : 0
 
-  const header = (
-    <View style={{ paddingTop: insets.top }}>
-      <ScreenHeader
-        title={identity ? 'Profile' : 'Welcome'}
-        eyebrow="IDENTITY / DEVICE"
-        onBack={() => router.back()}
-      />
-    </View>
+  const developerModeSection = (
+    <DeveloperModeSection
+      enabled={developerMode.enabled}
+      isLoading={developerMode.isLoading}
+      error={developerModeError}
+      onToggle={(enabled) => { void handleDeveloperModeChange(enabled) }}
+      onOpenSettings={() => router.push('/developer-settings')}
+    />
   )
 
-
-  const developerModeCard = (
-    <>
-      <SectionHeader title="Developer Mode" eyebrow="04 DEVELOPER" subtitle="Local operator tools for this device" />
-      <Panel style={styles.sectionCard}>
-        <View style={styles.switchRow}>
-          <View style={{ flex: 1, paddingRight: spacing.md }}>
-            <Text style={styles.cardTitle}>Developer Mode</Text>
-            <Text style={styles.cardMeta}>Shows publishing and network administration tools locally. It does not grant publishing permission.</Text>
-          </View>
-          <NativeSwitch
-            value={developerMode.enabled}
-            disabled={developerMode.isLoading}
-            onValueChange={(enabled: boolean) => { void handleDeveloperModeChange(enabled) }}
-            trackColor={{ false: colors.bgActive, true: colors.primary }}
-            thumbColor={colors.text}
-          />
-        </View>
-        {developerModeError ? <Text accessibilityRole="alert" style={styles.developerModeError}>{developerModeError}</Text> : null}
-        {developerMode.enabled ? (
-          <Button
-            label="Open Developer Settings"
-            variant="secondary"
-            icon="tool"
-            onPress={() => router.push('/developer-settings')}
-            style={{ marginTop: spacing.md }}
-          />
-        ) : null}
-      </Panel>
-    </>
+  const renderSharedCards = (storageSectionSubtitle: string) => (
+    <ProfileSharedCards
+      devices={devices}
+      devicesLoading={devicesLoading}
+      vaultAvailable={vaultAvailable}
+      inviteCode={inviteCode}
+      inviteExpiresAt={inviteExpiresAt}
+      inviteLoading={inviteLoading}
+      showPairForm={showPairForm}
+      pairInviteCode={pairInviteCode}
+      pairDeviceName={pairDeviceName}
+      pairing={pairing}
+      revokingKey={revokingKey}
+      onCreateInvite={createPersonalInvite}
+      onTogglePairForm={() => setShowPairForm((v) => !v)}
+      onPairInviteCodeChange={setPairInviteCode}
+      onPairDeviceNameChange={setPairDeviceName}
+      onLinkDevice={linkThisDevice}
+      onUnlinkDevice={unlinkDevice}
+      onCopy={copyToClipboard}
+      onShareInvite={shareInviteCode}
+      networkPolicy={networkPolicy}
+      participation={participation}
+      participationSaving={participationSaving}
+      onParticipationModeChange={(mode) => { void handleParticipationModeChange(mode) }}
+      storageStats={storageStats}
+      storageLimitPreview={storageLimitPreview}
+      usedPct={usedPct}
+      developerModeEnabled={developerMode.enabled}
+      customStorageLimit={customStorageLimit}
+      storageLimitSaving={storageLimitSaving}
+      clearingCache={clearingCache}
+      onCustomLimitChange={setCustomStorageLimit}
+      onCustomLimitApply={handleCustomStorageLimitApply}
+      onClearCache={handleClearCache}
+      storageSectionSubtitle={storageSectionSubtitle}
+      developerModeSection={developerModeSection}
+    />
   )
 
   if (!developerMode.isLoading && params.developer && diagnosticsDestination) {
-    return <Redirect href={diagnosticsDestination as any} />
+    return <Redirect href={diagnosticsDestination as never} />
   }
 
   // ---------- Onboarding (no identity yet) ----------
   if (!identity) {
     return (
       <View style={styles.screen}>
-        {header}
+        <ProfileHeader title="Welcome" topInset={insets.top} onBack={() => router.back()} />
         <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 32 }} showsVerticalScrollIndicator={false}>
-          <View style={styles.hero}>
-            <Text style={styles.heroTitle}>PearTube</Text>
-            <Text style={styles.heroSubtitle}>Video, peer to peer. No servers, no accounts.</Text>
-          </View>
-
-
-          {showIdentityTools && <>
-          <SectionHeader title="Start a channel" subtitle="Your channel lives on your devices" />
-          <Panel tone="accent" style={styles.sectionCard}>
-            <TextInput
-              placeholder="Channel name"
-              value={newName}
-              onChangeText={setNewName}
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              style={styles.input}
-            />
-            <Pressable
-              onPress={handleCreateIdentity}
-              disabled={creating || !newName.trim()}
-              style={[styles.primaryButton, (creating || !newName.trim()) && { opacity: 0.4 }]}
-            >
-              {creating ? <ActivityIndicator size="small" color={colors.onPrimary} /> : (
-                <>
-                  <Feather name="plus" size={16} color={colors.onPrimary} />
-                  <Text style={styles.primaryLabel}>Create channel</Text>
-                </>
-              )}
-            </Pressable>
-          </Panel>
-
-          <SectionHeader title="Restore a channel" subtitle="Recover with your 12-word phrase" />
-          {renderRestoreCard()}
-          </>}
-
-          {renderPersonalDevicesCard()}
-
-          {renderPrivacyCard()}
-
-          {renderParticipationCard()}
-
-          <SectionHeader title="Storage used for sharing" subtitle="Works even without a channel" />
-          {renderStorageCard()}
-
-          {developerModeCard}
+          <ProfileOnboardingBody
+            showIdentityTools={showIdentityTools}
+            newName={newName}
+            creating={creating}
+            onNameChange={setNewName}
+            onCreateIdentity={handleCreateIdentity}
+            restorePhrase={restorePhrase}
+            restoring={restoring}
+            onPhraseChange={setRestorePhrase}
+            onRestore={handleRestoreIdentity}
+            sharedCards={renderSharedCards('Works even without a channel')}
+          />
         </ScrollView>
       </View>
     )
   }
 
-  function renderRecoveryPhraseCard() {
-    if (!recoveryPhrase) return null
-    return (
-      <>
-        <SectionHeader title="Recovery phrase" subtitle="Shown once — write these words down" />
-        <Panel tone="accent" style={styles.sectionCard}>
-          <Text style={styles.recoveryWarning}>
-            These 12 words are the only way to recover your channel on a new device.
-            Anyone who has them controls your channel — store them somewhere safe, offline.
-          </Text>
-          <View style={styles.recoveryPhraseBox}>
-            <Text selectable style={styles.recoveryPhraseText}>{recoveryPhrase}</Text>
-          </View>
-          <Pressable
-            onPress={() => copyToClipboard(recoveryPhrase, 'Recovery phrase')}
-            style={styles.secondaryButton}
-          >
-            <Feather name="copy" size={15} color={colors.text} />
-            <Text style={styles.secondaryLabel}>Copy phrase</Text>
-          </Pressable>
-          <Pressable onPress={confirmRecoveryPhraseSaved} style={styles.primaryButton}>
-            <Feather name="check" size={16} color={colors.onPrimary} />
-            <Text style={styles.primaryLabel}>I&apos;ve saved my phrase</Text>
-          </Pressable>
-        </Panel>
-      </>
-    )
-  }
-
-  function renderRestoreCard() {
-    return (
-      <Panel style={styles.sectionCard}>
-        <TextInput
-          placeholder="Enter your 12-word recovery phrase"
-          value={restorePhrase}
-          onChangeText={setRestorePhrase}
-          placeholderTextColor={colors.textMuted}
-          autoCapitalize="none"
-          autoCorrect={false}
-          multiline
-          style={[styles.input, styles.phraseInput]}
-        />
-        <Pressable
-          onPress={handleRestoreIdentity}
-          disabled={restoring || !restorePhrase.trim()}
-          style={[styles.secondaryButton, (restoring || !restorePhrase.trim()) && { opacity: 0.4 }]}
-        >
-          {restoring ? <ActivityIndicator size="small" color={colors.text} /> : (
-            <>
-              <Feather name="rotate-ccw" size={15} color={colors.text} />
-              <Text style={styles.secondaryLabel}>Restore channel</Text>
-
-            </>
-          )}
-        </Pressable>
-      </Panel>
-    )
-  }
-
-  function renderPersonalDevicesCard() {
-    const vaultReady = vaultAvailable === true
-    return (
-      <>
-        <SectionHeader title="Your devices" subtitle="Sync your watch state and library to devices you link" />
-        <Panel style={styles.sectionCard}>
-          {devices.length ? (
-            <View style={{ gap: 8, marginBottom: 12 }}>
-              {devices.map((device, idx) => {
-                const keyHex = String(device?.keyHex || '')
-                const isSelf = device?.self === true
-                const busy = revokingKey === keyHex
-                return (
-                  <View key={keyHex || idx} style={styles.deviceRow}>
-                    <Feather name="smartphone" size={16} color={colors.textSecondary} />
-                    <View style={{ flex: 1, marginLeft: 10 }}>
-                      <Text style={styles.deviceName}>
-                        {device?.deviceName || (isSelf ? 'This device' : `Device ${idx + 1}`)}
-                      </Text>
-                      <Text style={styles.deviceKey} numberOfLines={1}>{keyHex}</Text>
-                    </View>
-                    {isSelf || !vaultReady ? null : (
-                      <Pressable
-                        onPress={() => unlinkDevice(device)}
-                        disabled={busy}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Unlink ${device?.deviceName || 'device'}`}
-                        style={[styles.ghostButton, { marginTop: 0 }, busy && { opacity: 0.5 }]}
-                      >
-                        <Feather name="x-circle" size={14} color={colors.textMuted} />
-                        <Text style={styles.ghostLabel}>{busy ? 'Unlinking…' : 'Unlink'}</Text>
-                      </Pressable>
-                    )}
-                  </View>
-                )
-              })}
-            </View>
-          ) : (
-            <Text style={[styles.cardMeta, { marginBottom: 12 }]}>
-              {devicesLoading ? 'Checking linked devices…' : 'Only this device holds your watch state and library.'}
-            </Text>
-          )}
-
-          {vaultAvailable === false ? (
-            <Text style={styles.cardMeta}>
-              This device has no secure keychain that will hold a key for us, so it cannot hold the
-              one that encrypts your personal store. Nothing is written to an encrypted store here
-              and nothing syncs: your watch state, library, and recommendations stay on this device.
-              Linking is turned off instead of keeping the key in plain text beside the data it
-              protects.
-            </Text>
-          ) : (
-            <>
-              {inviteCode ? (
-                <View style={styles.inviteBox}>
-                  <Text style={styles.inviteLabel}>
-                    Single-use code — enter it on your other device within 5 minutes
-                    {inviteExpiresAt ? ` (by ${new Date(inviteExpiresAt).toLocaleTimeString()})` : ''}
-                  </Text>
-                  <Text style={styles.inviteCode} selectable>{inviteCode}</Text>
-                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-                    <Pressable onPress={() => copyToClipboard(inviteCode, 'Invite code')} style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}>
-                      <Feather name="copy" size={14} color={colors.text} />
-                      <Text style={styles.secondaryLabel}>Copy</Text>
-                    </Pressable>
-                    <Pressable onPress={() => shareInviteCode(inviteCode)} style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}>
-                      <Feather name="share-2" size={14} color={colors.text} />
-                      <Text style={styles.secondaryLabel}>Share</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              ) : null}
-
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                <Pressable
-                  onPress={createPersonalInvite}
-                  disabled={inviteLoading || !vaultReady}
-                  style={[styles.primaryButton, { flex: 1 }, (inviteLoading || !vaultReady) && { opacity: 0.6 }]}
-                  accessibilityRole="button"
-                >
-                  {inviteLoading ? <ActivityIndicator size="small" color={colors.onPrimary} /> : (
-                    <>
-                      <Feather name="plus" size={15} color={colors.onPrimary} />
-                      <Text style={styles.primaryLabel}>Link a device</Text>
-                    </>
-                  )}
-                </Pressable>
-                <Pressable
-                  onPress={() => setShowPairForm((v) => !v)}
-                  disabled={!vaultReady}
-                  style={[styles.secondaryButton, { flex: 1, marginTop: 0 }, !vaultReady && { opacity: 0.4 }]}
-                  accessibilityRole="button"
-                >
-                  <Feather name="key" size={14} color={colors.text} />
-                  <Text style={styles.secondaryLabel}>Enter code</Text>
-                </Pressable>
-              </View>
-
-              {showPairForm && (
-                <View style={{ marginTop: 12 }}>
-                  <TextInput
-                    placeholder="Paste invite code"
-                    value={pairInviteCode}
-                    onChangeText={setPairInviteCode}
-                    placeholderTextColor={colors.textMuted}
-                    autoCapitalize="none"
-                    style={styles.input}
-                  />
-                  <TextInput
-                    placeholder="Device name (optional)"
-                    value={pairDeviceName}
-                    onChangeText={setPairDeviceName}
-                    placeholderTextColor={colors.textMuted}
-                    autoCapitalize="none"
-                    style={styles.input}
-                  />
-                  <Pressable
-                    onPress={linkThisDevice}
-                    disabled={pairing || !pairInviteCode.trim() || !vaultReady}
-                    style={[styles.secondaryButton, (pairing || !pairInviteCode.trim() || !vaultReady) && { opacity: 0.4 }]}
-                  >
-                    {pairing ? (
-                      <>
-                        <ActivityIndicator size="small" color={colors.text} />
-                        <Text style={styles.secondaryLabel}>Linking…</Text>
-                      </>
-                    ) : (
-                      <Text style={styles.secondaryLabel}>Link with this code</Text>
-                    )}
-                  </Pressable>
-                  {pairing ? (
-                    <Text style={[styles.cardMeta, { marginTop: 8 }]}>
-                      Finding your other device over the peer network. This usually takes a few
-                      seconds and can take up to a minute — keep both devices online.
-                    </Text>
-                  ) : null}
-                </View>
-              )}
-            </>
-          )}
-        </Panel>
-      </>
-    )
-  }
-
-  function renderPrivacyCard() {
-    return (
-      <>
-        <SectionHeader title="Privacy" subtitle="What stays here, and what other machines see" />
-        <Panel style={styles.sectionCard}>
-          <Text style={styles.cardTitle}>Your viewing stays on your devices</Text>
-          <Text style={styles.cardMeta}>
-            Watch position, completion, your library, and your recommendations are worked out
-            on this device. PearTube collects no viewing analytics and runs no view counter.
-            This state reaches another machine only if you link a device above.
-          </Text>
-          {vaultAvailable === false ? (
-            <Text style={styles.cardMeta}>
-              This device has no secure keychain, so there is no key to encrypt a personal store
-              with and none is opened here. Anything that needs one stays unavailable rather than
-              being stored unprotected.
-            </Text>
-          ) : (
-            <Text style={styles.cardMeta}>
-              It is stored in a personal store encrypted with a key that never leaves this
-              device&apos;s keychain.
-            </Text>
-          )}
-
-          <Text style={[styles.cardTitle, { marginTop: 14 }]}>Peers see your address and requests</Text>
-          <Text style={styles.cardMeta}>
-            Playback is peer-to-peer. The peers you swarm with see your IP address and the
-            topics and byte ranges you ask for. That is how the transfer works and PearTube
-            cannot hide it, so this is not anonymous browsing.
-          </Text>
-
-          <Text style={[styles.cardTitle, { marginTop: 14 }]}>Unlinking works forward only</Text>
-          <Text style={styles.cardMeta}>
-            Unlinking a device rotates your key so that device receives nothing further. It
-            cannot erase what that device already read, and it cannot reach copies already
-            made from it.
-          </Text>
-        </Panel>
-      </>
-    )
-  }
-
-  /**
-   * The one contribution control a normal viewer sees. It writes a mode and
-   * renders `getParticipationStatus`; it never evaluates a gate itself, so it
-   * cannot claim this device is helping when the backend says it is suspended.
-   */
-  function renderParticipationCard() {
-    const selectedMode = networkPolicy.policy?.participationMode ?? null
-    const status = participation.status
-    const stateCopy = status ? PARTICIPATION_STATE_COPY[status.state] : null
-    const stateColor = !status
-      ? colors.textMuted
-      : status.state === 'uploading' ? colors.success
-      : status.state === 'eligible' ? colors.swarm
-      : colors.warning
-    const busy = participationSaving || networkPolicy.saving
-    const locked = busy || !networkPolicy.policy
-    return (
-      <>
-        <SectionHeader title="How you help" eyebrow="01 NETWORK" subtitle="Sharing what you have watched keeps it reachable for other viewers" />
-        <Panel style={styles.sectionCard}>
-          <View style={styles.participationStateRow}>
-            <View style={[styles.participationDot, { backgroundColor: stateColor }]} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardTitle}>
-                {stateCopy ? stateCopy.label : participation.loading ? 'Checking…' : 'Contribution status unavailable'}
-              </Text>
-              <Text style={styles.cardMeta}>
-                {stateCopy
-                  ? stateCopy.detail
-                  : participation.loading
-                    ? 'Reading this device\u2019s contribution state.'
-                    : 'This device could not read its contribution state, so it is not reporting one.'}
-              </Text>
-            </View>
-          </View>
-
-          {status && (status.errorCode || status.reasonCodes.length > 0) ? (
-            <View style={styles.participationReasons}>
-              {status.errorCode ? (
-                <Text style={styles.participationReason}>{`\u2022  ${PARTICIPATION_UNAVAILABLE_COPY}`}</Text>
-              ) : null}
-              {status.reasonCodes.map((code) => (
-                <Text key={code} style={styles.participationReason}>{`\u2022  ${participationReasonCopy(code)}`}</Text>
-              ))}
-            </View>
-          ) : null}
-
-          {!status && participation.error ? (
-            <View style={styles.participationReasons}>
-              <Text style={styles.participationReason}>{participation.error}</Text>
-            </View>
-          ) : null}
-
-          <View style={styles.participationModes} accessibilityRole="radiogroup">
-            {PARTICIPATION_MODE_OPTIONS.map((option) => {
-              const selected = selectedMode === option.value
-              return (
-                <Pressable
-                  key={option.value}
-                  onPress={() => { void handleParticipationModeChange(option.value) }}
-                  disabled={locked}
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected, disabled: locked }}
-                  style={[
-                    styles.participationMode,
-                    selected && styles.participationModeSelected,
-                    locked && { opacity: 0.7 },
-                  ]}
-                >
-                  <View style={styles.participationModeHeader}>
-                    <Text style={[styles.participationModeLabel, selected && { color: colors.onPrimary }]}>{option.label}</Text>
-                    {selected ? <Feather name="check" size={15} color={colors.onPrimary} /> : null}
-                  </View>
-                  <Text style={[styles.participationModeDetail, selected && { color: colors.onPrimary, opacity: 0.85 }]}>
-                    {option.detail}
-                  </Text>
-                </Pressable>
-              )
-            })}
-          </View>
-
-          {networkPolicy.error ? (
-            <Text accessibilityRole="alert" style={styles.developerModeError}>{networkPolicy.error}</Text>
-          ) : null}
-
-          <Text style={styles.participationFootnote}>
-            When your system reports that this device is warm, low on battery, low on storage, on a
-            metered connection, or not allowed to work in the background, it stops on its own. Where
-            it cannot read one of those signals it keeps background sharing off rather than guess.
-            Helping is best effort: nothing here promises a video stays online, and none of these
-            choices creates an archive pledge.
-          </Text>
-        </Panel>
-      </>
-    )
-  }
-
-  // ---------- Authenticated profile ----------
-  function renderStorageCard() {
-    return (
-      <Panel style={styles.sectionCard}>
-        <View style={styles.storageHeader}>
-          <View style={styles.storageIcon}>
-            <Feather name="hard-drive" size={18} color={colors.swarm} />
-          </View>
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={styles.cardTitle}>Supporting the network</Text>
-            <Text style={styles.cardMeta}>
-              {storageStats
-                ? `Hosting ${storageStats.usedGB} GB for other viewers · ${storageStats.seedCount} videos`
-                : 'Loading…'}
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.track}>
-          <View style={[styles.fill, { width: `${usedPct}%` }]} />
-        </View>
-        <Text style={styles.trackLabel}>
-          {storageStats ? `${storageStats.usedGB} GB of ${storageStats.maxGB} GB budget` : ' '}
-        </Text>
-
-        {storageStats?.totalStorageGB ? (
-          <View style={styles.storageBreakdown}>
-            <View style={styles.breakdownRow}>
-              <Text style={styles.breakdownLabel}>On this device</Text>
-              <Text style={styles.breakdownValue}>{storageStats.totalStorageGB} GB total</Text>
-            </View>
-            <View style={styles.breakdownRow}>
-              <Text style={styles.breakdownLabel}>Tracked peer cache</Text>
-              <Text style={styles.breakdownValue}>{storageStats.usedGB} GB cached</Text>
-            </View>
-            {storageStats.untrackedStorageGB && Number(storageStats.untrackedStorageBytes) > 0 ? (
-              <View style={styles.breakdownRow}>
-                <Text style={styles.breakdownLabel}>Your videos & app/P2P data outside tracked peer cache</Text>
-                <Text style={styles.breakdownValue}>{storageStats.untrackedStorageGB} GB</Text>
-              </View>
-            ) : null}
-          </View>
-        ) : null}
-
-        <StorageOperabilityDetails stats={storageStats} preview={storageLimitPreview} />
-
-        <Text style={styles.cardMeta}>
-          Your sharing choice above sets this budget, unless a different one has been set in
-          Developer Settings. Cached video is evicted to stay inside it.
-        </Text>
-
-        {developerMode.enabled ? (
-          <View style={styles.developerLimitBlock}>
-            <Text style={styles.advancedFieldLabel}>Cache budget override (GB)</Text>
-            <Text style={styles.cardMeta}>
-              The same disk ceiling Developer Settings › Network policy edits. Set it to anything other
-              than the sharing choice's own value and it stops following that choice in either
-              direction; set it back and it follows again. Lowering it previews and confirms eviction
-              before anything is removed.
-            </Text>
-            <View style={[styles.customRow, { marginTop: 10 }]}>
-              <TextInput
-                value={customStorageLimit}
-                onChangeText={setCustomStorageLimit}
-                onSubmitEditing={handleCustomStorageLimitApply}
-                keyboardType="numeric"
-                placeholder="Custom GB"
-                placeholderTextColor={colors.textMuted}
-                style={[styles.input, { flex: 1, marginBottom: 0 }]}
-              />
-              <Pressable
-                onPress={handleCustomStorageLimitApply}
-                disabled={storageLimitSaving}
-                style={[styles.secondaryButton, { marginTop: 0, paddingHorizontal: 16 }, storageLimitSaving && { opacity: 0.7 }]}
-              >
-                <Text style={styles.secondaryLabel}>{storageLimitSaving ? 'Saving…' : 'Set'}</Text>
-              </Pressable>
-            </View>
-          </View>
-        ) : null}
-
-        {storageStats && storageStats.pinnedCount > 0 ? (
-          <Text style={styles.pinnedNote}>
-            <Feather name="anchor" size={11} color={colors.textMuted} />
-            {'  '}{storageStats.pinnedCount} channel{storageStats.pinnedCount === 1 ? '' : 's'} kept online from your Library
-          </Text>
-        ) : null}
-
-        <Pressable
-          onPress={handleClearCache}
-          disabled={clearingCache}
-          style={[styles.ghostButton, clearingCache && { opacity: 0.6 }]}
-        >
-          <Feather name="trash-2" size={14} color={colors.textMuted} />
-          <Text style={styles.ghostLabel}>{clearingCache ? 'Clearing…' : 'Clear cached videos'}</Text>
-        </Pressable>
-      </Panel>
-    )
-  }
-
   return (
     <View style={styles.screen}>
-      {header}
+      <ProfileHeader title="Profile" topInset={insets.top} onBack={() => router.back()} />
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 32 }} showsVerticalScrollIndicator={false}>
-        {showIdentityTools && <>
-        {renderRecoveryPhraseCard()}
-
-        {/* Identity */}
-        <Panel tone="accent" style={[styles.sectionCard, { marginTop: spacing.sm }]}>
-          <View style={styles.identityRow}>
-            <View style={styles.bigAvatar}>
-              <Text style={styles.bigAvatarLetter}>{identity.name?.charAt(0)?.toUpperCase() || '?'}</Text>
-            </View>
-            <View style={{ flex: 1, marginLeft: spacing.md }}>
-              <Text style={styles.identityName} numberOfLines={1}>{identity.name}</Text>
-              {(identity.publicKey || identity.driveKey) ? (
-                <Text style={styles.identityKey} numberOfLines={1}>
-                  {(() => {
-                    const key = String(identity.publicKey || identity.driveKey)
-                    return key.length > 16 ? `${key.slice(0, 8)}…${key.slice(-6)}` : key
-                  })()}
-                </Text>
-              ) : null}
-            </View>
-          </View>
-
-          <View style={styles.identityActions}>
-            <Button label="Share channel" icon="share-2" onPress={shareChannelKey} style={{ flex: 1 }} />
-            <Button
-              label="Copy key"
-              icon="copy"
-              variant="secondary"
-              onPress={() => identity.driveKey && copyToClipboard(identity.driveKey, 'Channel key')}
-              style={{ flex: 1 }}
+        <ProfileIdentityBody
+          showIdentityTools={showIdentityTools}
+          recoveryPhrase={recoveryPhrase}
+          onCopyPhrase={(phrase) => copyToClipboard(phrase, 'Recovery phrase')}
+          onConfirmPhraseSaved={confirmRecoveryPhraseSaved}
+          identityName={identity.name}
+          identityKey={identity.publicKey || identity.driveKey}
+          onShareChannel={shareChannelKey}
+          onCopyKey={() => { if (identity.driveKey) void copyToClipboard(identity.driveKey, 'Channel key') }}
+          restoreOpen={restoreOpen}
+          onOpenRestore={() => setRestoreOpen(true)}
+          restorePhrase={restorePhrase}
+          restoring={restoring}
+          onPhraseChange={setRestorePhrase}
+          onRestore={handleRestoreIdentity}
+          sharedCards={renderSharedCards('Cache space this device is holding for other viewers')}
+          developerModeEnabled={developerMode.enabled}
+          diagnostics={(
+            <ProfileDiagnosticsCard
+              advancedOpen={advancedOpen}
+              identity={identity}
+              canManageTranscodeSettings={canManageTranscodeSettings}
+              transcodeSettings={transcodeSettings}
+              transcodeSettingsLoading={transcodeSettingsLoading}
+              swarmStatus={swarmStatus}
+              storageStats={storageStats}
+              seedingStatus={seedingStatus}
+              archiveOperatorStatus={archiveOperatorStatus}
+              diagnosticsLoading={diagnosticsLoading}
+              onToggleAdvanced={() => setAdvancedOpen((v) => !v)}
+              onCopy={copyToClipboard}
+              onTranscodeToggle={handleTranscodeToggle}
+              onRefreshDiagnostics={loadDiagnostics}
             />
-          </View>
-
-        </Panel>
-
-        {/* Backup & recovery */}
-        <SectionHeader title="Backup & recovery" eyebrow="03 PUBLISHER" subtitle="Restore a channel from its 12-word phrase" />
-        {restoreOpen ? renderRestoreCard() : (
-          <Panel padded={false} style={styles.sectionCard}>
-            <Pressable onPress={() => setRestoreOpen(true)} style={styles.advancedToggle}>
-              <Feather name="rotate-ccw" size={15} color={colors.textMuted} />
-              <Text style={styles.advancedLabel}>Restore from recovery phrase</Text>
-              <Feather name="chevron-down" size={17} color={colors.textMuted} />
-            </Pressable>
-          </Panel>
-        )}
-        </>}
-
-        {renderPersonalDevicesCard()}
-
-        {renderPrivacyCard()}
-
-        {renderParticipationCard()}
-
-        {/* What the sharing choice above is actually using on disk. */}
-        <SectionHeader title="Storage used for sharing" eyebrow="02 STORAGE" subtitle="Cache space this device is holding for other viewers" />
-        {renderStorageCard()}
-
-        {developerModeCard}
-
-        {developerMode.enabled && (
-          <>
-            <SectionHeader title="Diagnostics" eyebrow="05 DIAGNOSTICS" subtitle="Local swarm, storage, and technical state" />
-            <Panel padded={false} style={styles.sectionCard}>
-              <Pressable onPress={() => setAdvancedOpen((v) => !v)} style={styles.advancedToggle}>
-                <Feather name="terminal" size={15} color={colors.textMuted} />
-                <Text style={styles.advancedLabel}>Diagnostics & technical settings</Text>
-                <Feather name={advancedOpen ? 'chevron-up' : 'chevron-down'} size={17} color={colors.textMuted} />
-              </Pressable>
-              {advancedOpen && (
-            <View style={styles.advancedBody}>
-              <Text style={styles.advancedFieldLabel}>Public key</Text>
-              <Pressable onPress={() => copyToClipboard(identity.publicKey, 'Public key')}>
-                <Text style={styles.mono} numberOfLines={2}>{identity.publicKey}</Text>
-              </Pressable>
-
-              <Text style={[styles.advancedFieldLabel, { marginTop: 14 }]}>Channel key</Text>
-              <Pressable onPress={() => identity.driveKey && copyToClipboard(identity.driveKey, 'Channel key')}>
-                <Text style={styles.mono} numberOfLines={2}>{identity.driveKey}</Text>
-              </Pressable>
-
-              {canManageTranscodeSettings && (
-                <View style={{ marginTop: 16 }}>
-                  <View style={styles.switchRow}>
-                    <View style={{ flex: 1, paddingRight: 12 }}>
-                      <Text style={styles.cardTitle}>Hardware decode (VideoToolbox)</Text>
-                      <Text style={styles.cardMeta}>Lower CPU use on this Mac. Turn off if playback is unstable.</Text>
-                    </View>
-                    <NativeSwitch
-                      value={!!transcodeSettings?.videoToolboxDecodeEnabled}
-                      onValueChange={(v: boolean) => handleTranscodeToggle({ videoToolboxDecodeEnabled: v })}
-                      disabled={transcodeSettingsLoading || !!transcodeSettings?.videoToolboxDecodeLocked}
-                      trackColor={{ false: colors.bgActive, true: colors.primary }}
-                      thumbColor={colors.text}
-                    />
-                  </View>
-                  <View style={[styles.switchRow, { marginTop: 12 }]}>
-                    <View style={{ flex: 1, paddingRight: 12 }}>
-                      <Text style={styles.cardTitle}>Hardware frame mapping</Text>
-                      <Text style={styles.cardMeta}>Troubleshooting option for transfer errors.</Text>
-                    </View>
-                    <NativeSwitch
-                      value={!!transcodeSettings?.videoToolboxHwMapEnabled}
-                      onValueChange={(v: boolean) => handleTranscodeToggle({ videoToolboxHwMapEnabled: v })}
-                      disabled={transcodeSettingsLoading || !!transcodeSettings?.videoToolboxHwMapLocked || !transcodeSettings?.videoToolboxDecodeEnabled}
-                      trackColor={{ false: colors.bgActive, true: colors.primary }}
-                      thumbColor={colors.text}
-                    />
-                  </View>
-                </View>
-              )}
-
-              <View style={{ marginTop: 16, marginHorizontal: -16 }}>
-                <DiagnosticsPanel
-                  swarmStatus={swarmStatus}
-                  storageStats={storageStats}
-                  seedingStatus={seedingStatus}
-                  operatorStatus={archiveOperatorStatus}
-                  loading={diagnosticsLoading}
-                  onRefresh={loadDiagnostics}
-                />
-              </View>
-            </View>
-              )}
-            </Panel>
-          </>
-        )}
-
-        <Text style={styles.footer}>PearTube · Powered by Hyperswarm & Hyperdrive</Text>
+          )}
+        />
       </ScrollView>
     </View>
   )

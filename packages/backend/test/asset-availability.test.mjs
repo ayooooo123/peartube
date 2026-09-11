@@ -226,3 +226,57 @@ test('publication availability reports limited, awaiting replication, and unavai
   t.is(expired.independentPeerCount, 0)
   t.ok(expired.reasonCodes.includes('EVIDENCE_EXPIRED'))
 })
+
+test('availability assessment distinguishes local DATA residency from S3 retrievability', (t) => {
+  const local = assessAvailability({
+    renditionId: 'rendition-1',
+    requiredRanges: [{ start: 0, end: 100 }],
+    localRanges: [{ start: 0, end: 100 }],
+  }, { now: 1_000 })
+  t.is(local.offlinePlayable, true, 'complete local DATA copy is offline playable')
+  t.is(local.s3Retrievable, false)
+  t.ok(local.reasonCodes.includes('LOCAL_COMPLETE_COPY'))
+
+  const s3 = assessAvailability({
+    renditionId: 'rendition-1',
+    requiredRanges: [{ start: 0, end: 100 }],
+    s3Ranges: [{ start: 0, end: 100 }],
+  }, { now: 1_000 })
+  t.is(s3.offlinePlayable, false, 'S3 retrievable copy is not local offline playable')
+  t.is(s3.s3Retrievable, true, 'S3 retrievability is reported separately')
+  t.ok(s3.reasonCodes.includes('S3_RETRIEVABLE_COPY'))
+
+  const pledgeOnly = assessAvailability({
+    renditionId: 'rendition-1',
+    requiredRanges: [{ start: 0, end: 100 }],
+    archivePledgeCount: 2,
+  }, { now: 1_000 })
+  t.is(pledgeOnly.archivePledged, true)
+  t.is(pledgeOnly.offlinePlayable, false, 'archive pledge alone is never playable')
+  t.is(pledgeOnly.s3Retrievable, false)
+  t.is(pledgeOnly.state, 'awaiting-replication')
+  t.ok(pledgeOnly.reasonCodes.includes('ARCHIVE_PLEDGE_ONLY'))
+})
+
+test('mixed local and S3 exact subranges are retrievable without being wholly local or S3', (t) => {
+  const mixed = assessAvailability({
+    renditionId: 'rendition-1',
+    requiredRanges: [{ start: 0, end: 100 }],
+    localRanges: [{ start: 0, end: 40 }],
+    s3Ranges: [{ start: 40, end: 100 }],
+  }, { now: 1_000 })
+  t.is(mixed.offlinePlayable, false, 'mixed union is not wholly local')
+  t.is(mixed.s3Retrievable, false, 'mixed union is not wholly S3')
+  t.is(mixed.retrievable, true, 'local∪S3 exact coverage is retrievable')
+  t.absent(mixed.reasonCodes.includes('LOCAL_COMPLETE_COPY'))
+  t.absent(mixed.reasonCodes.includes('S3_RETRIEVABLE_COPY'))
+
+  const revoked = assessAvailability({
+    renditionId: 'rendition-1',
+    requiredRanges: [{ start: 0, end: 100 }],
+    localRanges: [{ start: 0, end: 40 }],
+    s3Ranges: [],
+  }, { now: 1_000 })
+  t.is(revoked.retrievable, false, 'remote outage drops mixed retrievability')
+  t.is(revoked.offlinePlayable, false)
+})

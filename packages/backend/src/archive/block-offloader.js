@@ -69,6 +69,18 @@ function offloadError (message, code, index) {
  * @param onOffloaded   optional `({ index, byteLength, ...stats })` after each
  *                      block's local copy is gone.
  */
+function validateOffloaderParams (storage, store, windowBytes) {
+  if (!storage || typeof storage !== 'object' || typeof storage.read !== 'function' || typeof storage.write !== 'function') {
+    throw new TypeError('core must be a ready Hypercore, or storage its hypercore-storage instance')
+  }
+  if (!store || typeof store.put !== 'function' || typeof store.has !== 'function') {
+    throw new TypeError('store must be a remote block store with put and has')
+  }
+  return Number.isSafeInteger(windowBytes) && windowBytes >= 0
+    ? windowBytes
+    : DEFAULT_OFFLOAD_WINDOW_BYTES
+}
+
 export function createBlockOffloader ({
   core = null,
   storage = core?.state?.storage ?? null,
@@ -77,16 +89,7 @@ export function createBlockOffloader ({
   log = null,
   onOffloaded = null,
 } = {}) {
-  if (!storage || typeof storage !== 'object' || typeof storage.read !== 'function' || typeof storage.write !== 'function') {
-    throw new TypeError('core must be a ready Hypercore, or storage its hypercore-storage instance')
-  }
-  if (!store || typeof store.put !== 'function' || typeof store.has !== 'function') {
-    throw new TypeError('store must be a remote block store with put and has')
-  }
-  const budget = Number.isSafeInteger(windowBytes) && windowBytes >= 0
-    ? windowBytes
-    : DEFAULT_OFFLOAD_WINDOW_BYTES
-
+  const budget = validateOffloaderParams(storage, store, windowBytes)
   const report = typeof log === 'function' ? log : null
   const notify = typeof onOffloaded === 'function' ? onOffloaded : null
 
@@ -213,10 +216,15 @@ export function createBlockOffloader ({
     let held = probeRemote === true && await store.has(index, { expectedHash }) === true
     if (!held) {
       const result = await store.put(index, data)
-      held = result === undefined || result === null || result.success !== false
-      if (probeRemote && held) {
-        held = await store.has(index, { expectedHash }) === true
+      const putOk = result === undefined || result === null || result.success !== false
+      if (!putOk) {
+        throw offloadError(
+          `block ${index} upload failed; the local copy is kept`,
+          'OFFLOAD_BLOCK_UNCONFIRMED',
+          index
+        )
       }
+      held = await store.has(index, { expectedHash }) === true
     }
     if (!held) {
       throw offloadError(

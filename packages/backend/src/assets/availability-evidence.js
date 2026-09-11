@@ -58,7 +58,7 @@ export function createAvailabilityEvidenceStore(options = {}) {
   function ensure(key) {
     const existing = admitted(key)
     if (existing) return existing
-    const entry = { peers: new Map(), localRanges: [], archivePledgeCount: 0, observed: false }
+    const entry = { peers: new Map(), localRanges: [], s3Ranges: [], archivePledgeCount: 0, observed: false }
     renditions.set(key, entry)
     while (renditions.size > budget) {
       const oldest = renditions.keys().next().value
@@ -169,6 +169,10 @@ export function createAvailabilityEvidenceStore(options = {}) {
       const entry = ensure(renditionKey(publicationId, renditionId))
       entry.localRanges = boundedRanges(ranges)
     },
+    recordS3Ranges(publicationId, renditionId, ranges) {
+      const entry = ensure(renditionKey(publicationId, renditionId))
+      entry.s3Ranges = boundedRanges(ranges)
+    },
 
     recordArchivePledgeCount(publicationId, renditionId, count) {
       const entry = ensure(renditionKey(publicationId, renditionId))
@@ -198,6 +202,7 @@ export function createAvailabilityEvidenceStore(options = {}) {
           ...(peer.provenRanges === null ? {} : { provenRanges: peer.provenRanges }),
         })),
         localRanges: entry.localRanges,
+        s3Ranges: entry.s3Ranges || [],
         archivePledgeCount: entry.archivePledgeCount,
         previouslyObserved: entry.observed,
       }

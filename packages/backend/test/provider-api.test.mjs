@@ -52,7 +52,7 @@ test('provider RPC adapter maps consumer search and resolution without leaking b
   })
 
   const searched = await api.providerSearch({ query: 'The Matrix', limit: 10 })
-  t.alike(calls, [{ selector: { title: 'The Matrix', kind: 'movie' }, limit: 10 }])
+  t.alike(calls, [{ selector: { title: 'The Matrix', kind: 'all' }, limit: 10 }])
   t.alike(searched, {
     success: true,
     hits: [{
@@ -74,6 +74,34 @@ test('provider RPC adapter maps consumer search and resolution without leaking b
   t.is(resolved.success, true)
   t.is(resolved.resolution.publisherId, PUBLISHER_ID)
   t.is(resolved.resolution.acquirable, true)
+})
+
+test('provider RPC adapter accepts structured selector and episodic coordinates in query', async t => {
+  const calls = []
+  const api = createProviderApi({
+    providerService: service({
+      async search(request) {
+        calls.push(request)
+        return {
+          candidates: [],
+          nextCursor: null,
+          diagnostics: { partial: true, stale: false },
+        }
+      },
+    }),
+    resolveTrustedPublisherId: async () => PUBLISHER_ID,
+  })
+
+  // Direct structured selector
+  const structured = await api.providerSearch({
+    selector: { namespace: 'tmdb', identifier: '1399', kind: 'episode', season: 1, episode: 2 },
+  })
+  t.alike(calls[0].selector, { namespace: 'tmdb', identifier: '1399', kind: 'episode', season: 1, episode: 2 })
+  t.is(structured.diagnostics.partial, true)
+
+  // Colon coordinates in query string
+  await api.providerSearch({ query: 'tmdb:1399:3:7' })
+  t.alike(calls[1].selector, { namespace: 'tmdb', identifier: '1399', kind: 'episode', season: 3, episode: 7 })
 })
 
 test('provider RPC adapter injects one stable local principal and preserves policy CAS', async t => {

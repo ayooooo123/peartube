@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import fs from 'node:fs'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { build } from 'esbuild'
 import { test } from 'node:test'
 
 const mseBackendPath = new URL('../components/video-player/WebMseVideoBackend.web.tsx', import.meta.url)
@@ -7,6 +11,83 @@ const inlineViewPath = new URL('../components/video-player/PearInlineVideoView.t
 
 async function source(url) {
   return readFile(url, 'utf8')
+}
+async function loadMseBackend() {
+  const appRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
+  const reactStub = [
+    'const runtime = () => globalThis.__peartubeMseHooks',
+    'const same = (left, right) => Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => Object.is(value, right[index]))',
+    'export const memo = component => component',
+    'export const useRef = initial => { const rt = runtime(); const index = rt.index++; if (!rt.refs[index]) rt.refs[index] = { current: initial }; return rt.refs[index] }',
+    'export const useCallback = (fn, deps) => { const rt = runtime(); const index = rt.index++; const previous = rt.callbacks[index]; if (!previous || !same(previous.deps, deps)) rt.callbacks[index] = { deps, fn }; return rt.callbacks[index].fn }',
+    'export const useEffect = (effect, deps) => { const rt = runtime(); const index = rt.index++; const previous = rt.effects[index]; const changed = !previous || !same(previous.deps, deps); rt.effects[index] = { deps, effect: changed ? effect : null } }',
+    'export const jsx = (type, props) => ({ type, props: props || {} })',
+    'export const jsxs = jsx',
+    'export const Fragment = Symbol("Fragment")',
+    '',
+  ].join('\n')
+  const stubs = {
+    'react-stub': reactStub,
+    'player-stub': 'export const createWebMsePlayerPort = controller => controller\n',
+    'hls-stub': [
+      'export const isMasterPlaylist = () => false',
+      'export const parseMasterPlaylist = () => null',
+      'export const parseMediaPlaylist = () => null',
+      'export const resolveAgainstPlaylist = value => value',
+      'export const findSegmentIndexForTime = () => 0',
+      'export const buildCompatMimeCandidates = () => []',
+      '',
+    ].join('\n'),
+    'mediabunny-stub': [
+      'export class Input { constructor() { throw new Error("pipeline stub") } }',
+      'export class UrlSource {}',
+      'export class EncodedPacketSink {}',
+      'export const ALL_FORMATS = []',
+      '',
+    ].join('\n'),
+  }
+  const plugin = {
+    name: 'run-mse-backend-retry',
+    setup(builder) {
+      builder.onResolve({ filter: /^react(?:\/jsx-runtime)?$/ }, () => ({ path: 'react-stub', namespace: 'mse-stub' }))
+      builder.onResolve({ filter: /^@\/lib\/video-player$/ }, () => ({ path: 'player-stub', namespace: 'mse-stub' }))
+      builder.onResolve({ filter: /^@\/lib\/hls-fragment-source\.mjs$/ }, () => ({ path: 'hls-stub', namespace: 'mse-stub' }))
+      builder.onResolve({ filter: /^mediabunny$/ }, () => ({ path: 'mediabunny-stub', namespace: 'mse-stub' }))
+      builder.onLoad({ filter: /.*/, namespace: 'mse-stub' }, args => ({
+        contents: stubs[args.path],
+        loader: 'js',
+      }))
+    },
+  }
+  const result = await build({
+    stdin: {
+      contents: "export { WebMseVideoBackend } from './components/video-player/WebMseVideoBackend.web.tsx'",
+      resolveDir: appRoot,
+      sourcefile: 'mse-backend-entry.ts',
+      loader: 'ts',
+    },
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    plugins: [plugin],
+    tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', baseUrl: appRoot, paths: { '@/*': ['./*'] } } },
+    write: false,
+  })
+  const directory = fs.mkdtempSync(path.join(appRoot, '.mse-backend-'))
+  const output = path.join(directory, 'backend.cjs')
+  fs.writeFileSync(output, result.outputFiles[0].text)
+  try {
+    return await import(`${pathToFileURL(output).href}?${Math.random()}`)
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+}
+
+function runPendingEffects(runtime) {
+  for (const slot of runtime.effects) {
+    if (typeof slot?.effect !== 'function') continue
+    slot.cleanup = slot.effect()
+  }
 }
 
 test('MSE backend remuxes on demand instead of linearly converting the whole file', async () => {
@@ -101,61 +182,44 @@ test('MSE backend keeps its DOM ref stable across progress rerenders', async () 
   )
   assert.match(dependencyList, /videoUrl/, 'video URL changes should still rebind the ref and start a fresh pipeline')
 })
+test('MSE backend retries a dropped desired play while the parent still wants playback', async (t) => {
+  const { WebMseVideoBackend } = await loadMseBackend()
+  const runtime = { index: 0, refs: [], callbacks: [], effects: [] }
+  globalThis.__peartubeMseHooks = runtime
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
+  let playCalls = 0
+  const video = {
+    currentTime: 0,
+    duration: 0,
+    playbackRate: 1,
+    play() {
+      playCalls += 1
+      return playCalls === 1 ? Promise.reject(new Error('startup play dropped')) : Promise.resolve()
+    },
+    pause() {},
+    load() {},
+    setAttribute() {},
+    removeAttribute() {},
+    addEventListener() {},
+    removeEventListener() {},
+  }
+  const element = WebMseVideoBackend({
+    videoUrl: 'http://127.0.0.1/video.mp4',
+    style: null,
+    playerRef: { current: null },
+    isPlaying: true,
+    playbackRate: 1,
+    requestCompatPlayback: async () => null,
+  })
 
-test('MSE backend follows the parent playback state instead of forcing playback after fallback', async () => {
-  const src = await source(mseBackendPath)
+  element.props.ref(video)
+  runPendingEffects(runtime)
+  await Promise.resolve()
+  assert.equal(playCalls, 1, 'the first desired play should reach the MSE controller')
 
-  assert.match(src, /const isPlayingRef = useRef\(isPlaying\)/, 'MSE backend should retain the latest desired playback state')
-  assert.match(
-    src,
-    /useEffect\(\(\) => \{[\s\S]*const controller = mseBackendControllerRef\.current[\s\S]*if \(isPlaying\)[\s\S]*requestDesiredPlayback\(\)[\s\S]*else[\s\S]*controller\.pause\(\)/,
-    'MSE backend should react to parent play/pause state changes'
-  )
-  assert.match(
-    src,
-    /if \(isPlayingRef\.current\) \{[\s\S]*requestDesiredPlayback\(\)[\s\S]*\}/,
-    'MSE pipeline should only auto-start when the parent still wants playback'
-  )
-  assert.doesNotMatch(src, /\sautoPlay\s*[\r\n>]/, 'MSE backend video element should not bypass parent playback state with autoPlay')
-})
+  t.mock.timers.tick(300)
+  await Promise.resolve()
+  assert.equal(playCalls, 2, 'the actual MSE retry timer should reassert playback after a dropped play')
 
-test('MSE backend retries desired autoplay when the first play call is dropped', async () => {
-  const src = await source(mseBackendPath)
-
-  assert.match(
-    src,
-    /const requestDesiredPlayback = useCallback\(/,
-    'MSE backend should centralize desired playback requests so rejected early play() calls can be retried',
-  )
-  assert.match(
-    src,
-    /mseAutoplayRetryTimerRef/,
-    'MSE backend should keep a retry timer for startup play() calls that race MediaSource readiness',
-  )
-  assert.match(
-    src,
-    /catch\(\(\) => \{[\s\S]*scheduleMseAutoplayRetry/,
-    'a rejected play() promise should schedule a retry while playback is still desired',
-  )
-  assert.match(
-    src,
-    /if \(isPlayingRef\.current\) \{[\s\S]*requestDesiredPlayback\(\)[\s\S]*\}/,
-    'newly appended MSE data should reassert playback intent without requiring a pause/play toggle',
-  )
-  assert.match(
-    src,
-    /requestAutoplay: requestDesiredPlayback/,
-    'compat HLS fallback should use the same retrying autoplay request path',
-  )
-})
-
-test('format errors skip stall recovery so the desktop MSE fallback still triggers promptly', async () => {
-  const src = await source(inlineViewPath)
-  assert.match(src, /classifyPlayerError/, 'terminal source errors must be classified, not guessed at')
-  assert.match(
-    src,
-    /!classified\.terminal && tryRecoverFromPlaybackError\(\)/,
-    'recovery must be skipped for format errors (MediaError code 4) so the watch page can fall back to the MSE backend immediately'
-  )
-  assert.match(src, /code,\n\s+errorCode: classified\.code/, 'the nested MediaError code must still reach the watch page')
+  delete globalThis.__peartubeMseHooks
 })

@@ -13,20 +13,53 @@ function providerError(error) {
   }
 }
 
-function defaultSelectorForQuery(query) {
-  if (typeof query !== 'string') throw new TypeError('query is required')
-  const normalized = query.trim()
-  if (!normalized) throw new TypeError('query is required')
-  const separator = normalized.indexOf(':')
-  if (separator < 1) return { title: normalized, kind: 'movie' }
-  const namespace = normalized.slice(0, separator)
-  const identifier = normalized.slice(separator + 1)
-  if (!QUERY_NAMESPACE.test(namespace) || !identifier) {
+function createTitleSelector(title, request) {
+  return {
+    title,
+    kind: request?.kind || 'all',
+    ...(request?.year != null ? { year: request.year } : {}),
+    ...(request?.season != null ? { season: request.season } : {}),
+    ...(request?.episode != null ? { episode: request.episode } : {}),
+  }
+}
+
+function parseNamespacedSelector(namespace, rest, request) {
+  if (!QUERY_NAMESPACE.test(namespace) || !rest) {
     const error = new Error('Provider search selector is invalid')
     error.code = 'PROVIDER_SELECTOR_INVALID'
     throw error
   }
-  return { namespace, identifier, kind: 'movie' }
+  const parts = rest.split(':')
+  if (parts.length === 3 && Number.isSafeInteger(Number(parts[1])) && Number.isSafeInteger(Number(parts[2]))) {
+    return {
+      namespace,
+      identifier: parts[0],
+      kind: 'episode',
+      season: Number(parts[1]),
+      episode: Number(parts[2]),
+    }
+  }
+  return {
+    namespace,
+    identifier: rest,
+    kind: request?.kind || 'movie',
+    ...(request?.season != null ? { season: request.season } : {}),
+    ...(request?.episode != null ? { episode: request.episode } : {}),
+  }
+}
+
+function defaultSelectorForQuery(query, request = {}) {
+  if (request?.selector && typeof request.selector === 'object') {
+    return request.selector
+  }
+  if (typeof query !== 'string') throw new TypeError('query is required')
+  const normalized = query.trim()
+  if (!normalized) throw new TypeError('query is required')
+  const separator = normalized.indexOf(':')
+  if (separator < 1) {
+    return createTitleSelector(normalized, request)
+  }
+  return parseNamespacedSelector(normalized.slice(0, separator), normalized.slice(separator + 1), request)
 }
 
 function defaultGrantDecoder(value) {
@@ -174,7 +207,9 @@ export function createProviderApi({
   return Object.freeze({
     provider: providerService,
     providerSearch: request => wrap(async () => {
-      const selector = await selectorForQuery(request?.query, request)
+      const selector = request?.selector
+        ? request.selector
+        : await selectorForQuery(request?.query, request)
       return providerService.search({
         selector,
         ...(request?.limit == null ? {} : { limit: request.limit }),
@@ -183,13 +218,18 @@ export function createProviderApi({
     }, 'page').then(response => response.success
       ? {
           success: true,
-          hits: response.page.candidates.map(hit),
-          ...(response.page.nextCursor ? { nextCursor: response.page.nextCursor } : {}),
+          hits: (response.page?.candidates || []).map(hit),
+          ...(response.page?.nextCursor ? { nextCursor: response.page.nextCursor } : {}),
+          ...(response.page?.diagnostics ? { diagnostics: response.page.diagnostics } : {}),
+          ...(response.page?.partial ? { partial: true } : {}),
+          ...(response.page?.stale ? { stale: true } : {}),
         }
       : { success: false, hits: [], error: response.error }),
     resolveProviderRef: request => wrap(async () => {
       const value = await providerService.resolve({ ref: request?.resolutionRef })
-      return resolution(value, await trustedPublisherId())
+      let publisherScopeId = null
+      try { publisherScopeId = await trustedPublisherId() } catch { publisherScopeId = ZERO_PUBLISHER_ID }
+      return resolution(value, publisherScopeId)
     }, 'resolution'),
     requestAcquisition: request => wrap(async () => {
       const body = request?.request || {}
@@ -202,6 +242,7 @@ export function createProviderApi({
           publisherId,
           retentionClass: body.retentionClass,
           ...(body.retentionUntilPresent === true ? { retentionUntil: body.retentionUntil } : {}),
+          ...(body.sourceFileName != null ? { sourceFileName: body.sourceFileName } : {}),
         },
         principal: principal(principalId, publisherId),
       })

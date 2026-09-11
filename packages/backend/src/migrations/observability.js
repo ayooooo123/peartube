@@ -71,7 +71,10 @@ function failureSubjectHash (migrationId, failure, code, category) {
   let subject = ''
   try {
     subject = String(failure?.subject ?? '')
-  } catch {}
+  } catch {
+    // Stringification is best-effort: a subject that throws on coercion must
+    // not fail the whole migration failure record.
+  }
   if (subject.length > 4_096) subject = subject.slice(0, 4_096)
 
   return b4a.toString(hashCanonical('peartube.migration.failure-subject.v1', {
@@ -221,7 +224,9 @@ function reportBody (state, failures, failuresTruncated) {
 function buildReport (state, maxReportBytes) {
   const failures = state.failures.slice()
   let bytes
-  while (true) {
+  // Trim failure entries until the canonical body fits; every path returns
+  // (or pops, which terminates on an empty list), so the loop is bounded.
+  for (;;) {
     const body = reportBody(state, failures, state.failureCount > failures.length)
     bytes = encodeCanonical(body)
     if (bytes.byteLength <= maxReportBytes) {

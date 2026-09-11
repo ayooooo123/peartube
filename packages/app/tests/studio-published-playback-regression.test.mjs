@@ -2,22 +2,88 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
+import { build } from 'esbuild'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const appRoot = path.resolve(__dirname, '..')
 
-test('Studio published rows start playback through the shared player path', () => {
-  const source = fs.readFileSync(
-    path.join(appRoot, 'app/(tabs)/studio.tsx'),
-    'utf8',
-  )
+async function loadPublishedPlaybackHelpers() {
+  const source = fs.readFileSync(path.join(appRoot, 'app/(tabs)/studio.tsx'), 'utf8')
+  const start = source.indexOf('function resolvePublishedVideoRef')
+  const end = source.indexOf('async function shareStudioChannelInvite', start)
+  assert.ok(start >= 0 && end > start, 'production published playback boundary')
+  const result = await build({
+    stdin: {
+      contents: [
+        "import { makeVideoUrlCacheKey, getCachedVideoUrl, setCachedVideoUrl } from './lib/video-url-cache'",
+        'const Alert = { alert: (...args) => { throw new Error(args.join(": ")) } }',
+        source.slice(start, end),
+        'export { resolvePublishedVideoRef, buildPublishedPlaybackRequest, playPublishedStudioVideo, makeVideoUrlCacheKey, getCachedVideoUrl, setCachedVideoUrl }',
+      ].join('\n'),
+      resolveDir: appRoot,
+      sourcefile: 'studio-playback-entry.ts',
+      loader: 'ts',
+    },
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    write: false,
+  })
+  const directory = fs.mkdtempSync(path.join(appRoot, '.studio-playback-'))
+  const output = path.join(directory, 'helpers.cjs')
+  fs.writeFileSync(output, result.outputFiles[0].text)
+  try {
+    return await import(`${pathToFileURL(output).href}?${Math.random()}`)
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+}
 
-  assert.match(source, /loadAndPlayVideo/, 'Studio should use the shared player context for published video playback')
-  assert.match(source, /const playPublishedVideo = useCallback/, 'Studio should define a published-row playback handler')
-  assert.match(source, /rpc\.preparePlayback\(playbackRequest\)/, 'Studio should resolve playback through the backend before opening the player')
-  assert.match(source, /onPress=\{\(\) => playPublishedVideo\(item\)\}/, 'Published rows must be pressable, not just show a play icon')
-  assert.match(source, /blobId: item\.blobId \|\| undefined/, 'Published row playback should pass direct blob refs when available')
-  assert.match(source, /blobsCoreKey: item\.blobsCoreKey \|\| undefined/, 'Published row playback should pass direct blobs core refs when available')
+test('Studio published playback awaits preparation and opens only the returned URL', async () => {
+  const {
+    resolvePublishedVideoRef,
+    buildPublishedPlaybackRequest,
+    playPublishedStudioVideo,
+    makeVideoUrlCacheKey,
+    getCachedVideoUrl,
+    setCachedVideoUrl,
+  } = await loadPublishedPlaybackHelpers()
+  const item = {
+    id: 'published-video',
+    path: '/videos/published-video.mp4',
+    channelKey: 'channel-key',
+    publicBeeKey: 'public-bee-key',
+    blobId: 'blob-id',
+    blobsCoreKey: 'blobs-core-key',
+    mimeType: 'video/mp4',
+  }
+  const videoRef = resolvePublishedVideoRef(item)
+  const cacheKey = makeVideoUrlCacheKey(item.channelKey, videoRef, item.blobId, item.blobsCoreKey)
+  setCachedVideoUrl(cacheKey, 'stale-cached-url')
+  const prepared = 'prepared-url'
+  const prepareCalls = []
+  const opened = []
+  let resolvePreparation
+  const preparation = new Promise(resolve => { resolvePreparation = resolve })
+
+  const pending = playPublishedStudioVideo({
+    item,
+    identityDriveKey: 'identity-channel',
+    rpc: {
+      preparePlayback: async request => {
+        prepareCalls.push(request)
+        return await preparation
+      },
+    },
+    loadAndPlayVideo: (video, url) => opened.push({ video, url }),
+  })
+  assert.deepEqual(opened, [], 'the stale cached URL must not open while preparation is pending')
+  resolvePreparation({ url: prepared })
+  await pending
+
+  assert.deepEqual(prepareCalls, [buildPublishedPlaybackRequest(item, item.channelKey, videoRef)])
+  assert.deepEqual(opened, [{ video: item, url: prepared }])
+  assert.equal(getCachedVideoUrl(cacheKey), prepared, 'only the prepared URL may refresh the cache')
 })

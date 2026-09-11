@@ -66,10 +66,10 @@ jobs:
           install: 'false'
 
       - name: Install backend dependencies
-        run: npm install --prefix packages/backend --ignore-scripts
+        run: npm ci --prefix packages/backend --ignore-scripts
 
       - name: Install relay dependencies
-        run: npm install --prefix packages/cli --ignore-scripts
+        run: npm ci --prefix packages/cli --ignore-scripts
 
       - name: Build relay standalone executable (x64)
         run: npm run build:standalone:linux-x64 --prefix packages/cli
@@ -112,10 +112,10 @@ jobs:
           install: 'false'
 
       - name: Install backend dependencies
-        run: npm install --prefix packages/backend --ignore-scripts
+        run: npm ci --prefix packages/backend --ignore-scripts
 
       - name: Install relay dependencies
-        run: npm install --prefix packages/cli --ignore-scripts
+        run: npm ci --prefix packages/cli --ignore-scripts
 
       - name: Build relay standalone executable
         run: npm run build:standalone:${{ matrix.host }} --prefix packages/cli

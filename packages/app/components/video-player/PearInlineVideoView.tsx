@@ -85,14 +85,109 @@ function getExpoEventDurationMs(data: any, player?: VideoPlayer | null) {
   return 0
 }
 
+function extractDimension(
+  data: any,
+  track: any,
+  dim: 'width' | 'height'
+): number {
+  return Number(data?.videoSize?.[dim] ?? data?.[dim] ?? data?.naturalSize?.[dim] ?? track?.size?.[dim] ?? track?.[dim])
+}
+
 function getExpoEventVideoSize(data: any, player?: VideoPlayer | null) {
   const track = data?.videoTrack ?? player?.videoTrack
-  const width = Number(data?.videoSize?.width ?? data?.width ?? data?.naturalSize?.width ?? track?.size?.width ?? track?.width)
-  const height = Number(data?.videoSize?.height ?? data?.height ?? data?.naturalSize?.height ?? track?.size?.height ?? track?.height)
+  const width = extractDimension(data, track, 'width')
+  const height = extractDimension(data, track, 'height')
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return undefined
   }
   return { width, height }
+}
+
+function extractRawErrorCode(error: unknown): number | undefined {
+  if (error && typeof error === 'object') {
+    if ('code' in error && typeof error.code === 'number') return error.code
+    if ('error' in error && error.error && typeof error.error === 'object') {
+      const nested = error.error
+      if ('code' in nested && typeof nested.code === 'number') return nested.code
+    }
+  }
+  return undefined
+}
+
+function handleStatusChangeNonError(opts: {
+  status: string
+  previousStatusRef: { current: string | null }
+  onBuffering?: (ev: { isBuffering: boolean }) => void
+  hasReceivedPlayEventRef: { current: boolean }
+  isPlayingRef: { current: boolean }
+  requestNativePlayback: () => void
+  seekPlaybackRecoveryUntilRef: { current: number }
+}) {
+  const {
+    status,
+    previousStatusRef,
+    onBuffering,
+    hasReceivedPlayEventRef,
+    isPlayingRef,
+    requestNativePlayback,
+    seekPlaybackRecoveryUntilRef,
+  } = opts
+
+  if (status === previousStatusRef.current) return
+  previousStatusRef.current = status
+  if (status === 'loading') {
+    onBuffering?.({ isBuffering: true })
+  } else if (status === 'readyToPlay') {
+    onBuffering?.({ isBuffering: false })
+    if (!hasReceivedPlayEventRef.current && isPlayingRef.current) {
+      try {
+        requestNativePlayback()
+      } catch {
+        // Best effort: Android can report readyToPlay while remaining
+        // paused if play() was requested before the source was ready.
+      }
+    } else if (Date.now() <= seekPlaybackRecoveryUntilRef.current && isPlayingRef.current) {
+      requestNativePlayback()
+    }
+  }
+}
+
+function handleStatusChangeError(opts: {
+  error: any
+  tryRecoverFromPlaybackError: () => boolean
+  terminalPlaybackErrorRef: { current: string | null }
+  errorRecoveryTimerRef: { current: ReturnType<typeof setTimeout> | null }
+  clearAutoplayVerify: () => void
+  onError?: (err: any) => void
+}) {
+  const {
+    error,
+    tryRecoverFromPlaybackError,
+    terminalPlaybackErrorRef,
+    errorRecoveryTimerRef,
+    clearAutoplayVerify,
+    onError,
+  } = opts
+
+  const classified = classifyPlayerError(error)
+  console.error('[PearInlineVideoView] error:', classified.code, error)
+  if (!classified.terminal && tryRecoverFromPlaybackError()) return
+  if (classified.terminal) {
+    // Nothing about the bytes will differ on a second read, so stop here
+    // instead of re-fetching the whole file every few seconds.
+    terminalPlaybackErrorRef.current = classified.code
+    if (errorRecoveryTimerRef.current) {
+      clearTimeout(errorRecoveryTimerRef.current)
+      errorRecoveryTimerRef.current = null
+    }
+    clearAutoplayVerify()
+  }
+  const code = extractRawErrorCode(error)
+  onError?.({
+    message: classified.message,
+    detail: classified.detail,
+    code,
+  })
 }
 
 export const PearInlineVideoView = memo(function PearInlineVideoView({
@@ -724,57 +819,23 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
 
   useEventListener(player, 'statusChange', ({ status, error }) => {
     if (useMseBackend) return
-    if (status !== previousStatusRef.current) {
-      previousStatusRef.current = status
-      if (status === 'loading') {
-        onBuffering?.({ isBuffering: true })
-      } else if (status === 'readyToPlay') {
-        onBuffering?.({ isBuffering: false })
-        if (!hasReceivedPlayEventRef.current && isPlayingRef.current) {
-          try {
-            requestNativePlayback()
-          } catch {
-            // Best effort: Android can report readyToPlay while remaining
-            // paused if play() was requested before the source was ready.
-          }
-        } else if (Date.now() <= seekPlaybackRecoveryUntilRef.current && isPlayingRef.current) {
-          requestNativePlayback()
-        }
-      }
-    }
+    handleStatusChangeNonError({
+      status,
+      previousStatusRef,
+      onBuffering,
+      hasReceivedPlayEventRef,
+      isPlayingRef,
+      requestNativePlayback,
+      seekPlaybackRecoveryUntilRef,
+    })
     if (status === 'error') {
-      const classified = classifyPlayerError(error)
-      console.error('[PearInlineVideoView] error:', classified.code, error)
-      if (!classified.terminal && tryRecoverFromPlaybackError()) return
-      if (classified.terminal) {
-        // Nothing about the bytes will differ on a second read, so stop here
-        // instead of re-fetching the whole file every few seconds.
-        terminalPlaybackErrorRef.current = classified.code
-        if (errorRecoveryTimerRef.current) {
-          clearTimeout(errorRecoveryTimerRef.current)
-          errorRecoveryTimerRef.current = null
-        }
-        clearAutoplayVerify()
-      }
-      // Browsers surface fatal MediaError details under error.error. Forward the
-      // nested code so the active route can select a compatible playback backend
-      // when the native element cannot demux the source.
-      const raw: unknown = error
-      let code: number | undefined
-      if (raw && typeof raw === 'object') {
-        if ('code' in raw && typeof raw.code === 'number') code = raw.code
-        if ('error' in raw && raw.error && typeof raw.error === 'object') {
-          const nested = raw.error
-          if (code === undefined && 'code' in nested && typeof nested.code === 'number') code = nested.code
-        }
-      }
-      onError?.({
-        message: classified.message,
-        detail: classified.detail,
-        code,
-        errorCode: classified.code,
-        terminal: classified.terminal,
-        engine: 'expo-video',
+      handleStatusChangeError({
+        error,
+        tryRecoverFromPlaybackError,
+        terminalPlaybackErrorRef,
+        errorRecoveryTimerRef,
+        clearAutoplayVerify,
+        onError,
       })
     }
   })

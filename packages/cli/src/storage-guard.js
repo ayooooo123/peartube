@@ -80,6 +80,66 @@ export function boundedIngestBytes ({ windowBytes = 0, blockBytes = 0, streamByt
   return window + (2 * block) + (Math.ceil(seen / block) * INGEST_TREE_BYTES_PER_BLOCK)
 }
 
+function normalizePositiveInt(val) {
+  return Number.isFinite(val) && val > 0 ? Math.floor(val) : 0
+}
+
+function measureStorageUsage(storagePath, statSync, readdirSync, maxEntries) {
+  let total = 0
+  let visited = 0
+  const stack = [storagePath]
+  while (stack.length > 0) {
+    const dir = stack.pop()
+    let entries
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (++visited > maxEntries) return total
+      const full = `${dir}/${entry.name}`
+      if (entry.isDirectory()) {
+        stack.push(full)
+        continue
+      }
+      try {
+        const st = statSync(full)
+        total += Number.isFinite(st.blocks) && st.blocks >= 0
+          ? st.blocks * 512
+          : (Number(st.size) || 0)
+      } catch {
+        // File vanished mid-walk (compaction); ignore.
+      }
+    }
+  }
+  return total
+}
+
+function logGuardInit(log, { hasPath, storagePath, budget, canMeasureUsage, floor, canMeasureFree, measureFreeBytes }) {
+  if (!log) return
+  const p = hasPath ? storagePath : 'unset'
+  const b = budget > 0 ? budget : 'off'
+  const u = canMeasureUsage ? 'measurable' : 'unmeasurable'
+  const f = floor > 0 ? floor : 'off'
+  const fr = canMeasureFree ? 'measurable' : 'unmeasurable'
+  log(`[storage-guard] path=${p} budget=${b} usage=${u} floor=${f} free=${fr}`)
+  if (canMeasureFree) {
+    log(`[storage-guard] statfs ${storagePath}: freeBytes=${measureFreeBytes()}`)
+  }
+}
+
+function computeHeadroom(snap) {
+  const limits = []
+  if (snap.usedBytes !== null && snap.maxBytes > 0) {
+    limits.push(Math.max(0, snap.maxBytes - snap.usedBytes))
+  }
+  if (snap.freeBytes !== null && snap.minFreeBytes > 0) {
+    limits.push(Math.max(0, snap.freeBytes - snap.minFreeBytes))
+  }
+  return limits.length > 0 ? Math.min(...limits) : null
+}
+
 export function createStorageGuard({
   storagePath,
   maxBytes = 0,
@@ -92,8 +152,8 @@ export function createStorageGuard({
   now = Date.now,
   maxEntries = 200_000,
 } = {}) {
-  const budget = Number.isFinite(maxBytes) && maxBytes > 0 ? Math.floor(maxBytes) : 0
-  const floor = Number.isFinite(minFreeBytes) && minFreeBytes > 0 ? Math.floor(minFreeBytes) : 0
+  const budget = normalizePositiveInt(maxBytes)
+  const floor = normalizePositiveInt(minFreeBytes)
   const hasPath = typeof storagePath === 'string' && storagePath.length > 0
   const canMeasureUsage = budget > 0 && hasPath && typeof statSync === 'function' && typeof readdirSync === 'function'
   const canMeasureFree = floor > 0 && hasPath && typeof statfsSync === 'function'
@@ -101,63 +161,15 @@ export function createStorageGuard({
   let cached = null
   let cachedAt = 0
 
-  // What this runtime can actually measure, stated once at construction.
-  //
-  // A missing fs primitive degrades silently: the affected signal reads null,
-  // its boundary never trips, and nothing anywhere says so. That is not
-  // hypothetical — `#fs` did not export `statfsSync` for Bare, so on every real
-  // relay `canMeasureFree` was false, `lowDisk` was permanently false, and the
-  // configured free-disk floor measured nothing for this project's entire life
-  // while the Node tests passed. A gate you cannot see is a gate you cannot
-  // trust, so it reports its own capability, and the free-space probe runs once
-  // here so the number is on the record rather than inferred from a later
-  // refusal that may never come.
-  log?.(`[storage-guard] path=${hasPath ? storagePath : 'unset'}` +
-    ` budget=${budget > 0 ? budget : 'off'} usage=${canMeasureUsage ? 'measurable' : 'unmeasurable'}` +
-    ` floor=${floor > 0 ? floor : 'off'} free=${canMeasureFree ? 'measurable' : 'unmeasurable'}`)
-  if (canMeasureFree) log?.(`[storage-guard] statfs ${storagePath}: freeBytes=${measureFreeBytes()}`)
-
-  // Actual allocated bytes under the storage dir. Uses block allocation
-  // (blocks * 512) so sparse Hypercore/RocksDB .blob files — and holes punched
-  // by eviction — are measured like `du`, not by logical file length.
-  function measureUsedBytes() {
-    let total = 0
-    let visited = 0
-    const stack = [storagePath]
-    while (stack.length > 0) {
-      const dir = stack.pop()
-      let entries
-      try {
-        entries = readdirSync(dir, { withFileTypes: true })
-      } catch {
-        continue
-      }
-      for (const entry of entries) {
-        if (++visited > maxEntries) return total
-        const full = `${dir}/${entry.name}`
-        if (entry.isDirectory()) {
-          stack.push(full)
-          continue
-        }
-        try {
-          const st = statSync(full)
-          total += Number.isFinite(st.blocks) && st.blocks >= 0
-            ? st.blocks * 512
-            : (Number(st.size) || 0)
-        } catch {
-          // File vanished mid-walk (compaction); ignore.
-        }
-      }
-    }
-    return total
-  }
-
   function measureFreeBytes() {
     return measureVolumeBytes({ storagePath, statfsSync, log })?.freeBytes ?? null
   }
 
+  // What this runtime can actually measure, stated once at construction.
+  logGuardInit(log, { hasPath, storagePath, budget, canMeasureUsage, floor, canMeasureFree, measureFreeBytes })
+
   function compute() {
-    const usedBytes = canMeasureUsage ? measureUsedBytes() : null
+    const usedBytes = canMeasureUsage ? measureStorageUsage(storagePath, statSync, readdirSync, maxEntries) : null
     const freeBytes = canMeasureFree ? measureFreeBytes() : null
     const overBudget = budget > 0 && usedBytes !== null && usedBytes >= budget
     const lowDisk = floor > 0 && freeBytes !== null && freeBytes < floor
@@ -194,15 +206,7 @@ export function createStorageGuard({
     // budget or the free-disk floor is reached. A signal that cannot be
     // measured is omitted; null means neither bound is measurable.
     headroomBytes() {
-      const snap = snapshot()
-      const limits = []
-      if (snap.usedBytes !== null && snap.maxBytes > 0) {
-        limits.push(Math.max(0, snap.maxBytes - snap.usedBytes))
-      }
-      if (snap.freeBytes !== null && snap.minFreeBytes > 0) {
-        limits.push(Math.max(0, snap.freeBytes - snap.minFreeBytes))
-      }
-      return limits.length > 0 ? Math.min(...limits) : null
+      return computeHeadroom(snapshot())
     },
     snapshot,
     // Force the next snapshot to re-measure (e.g. right after an eviction).

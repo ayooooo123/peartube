@@ -36,6 +36,278 @@ function isEmbeddedBareKitRuntime() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_EMBEDDED_BAREKIT === '1'
 }
 
+async function generateIdentityKeys(generateMnem) {
+  if (generateMnem) {
+    const mnemonic = generateMnemonic()
+    const { identityKeyPair, identityPublicKey } = await deriveIdentity(mnemonic)
+    return {
+      keypair: identityKeyPair,
+      derivedPublicKey: identityPublicKey,
+      mnemonic,
+      hdDerived: true,
+      publicKey: b4a.toString(identityPublicKey, 'hex'),
+    }
+  }
+  const keypair = crypto.keyPair()
+  return {
+    keypair,
+    derivedPublicKey: null,
+    mnemonic: undefined,
+    hdDerived: false,
+    publicKey: b4a.toString(keypair.publicKey, 'hex'),
+  }
+}
+
+async function setupChannelProfile({ channel, stagedProfile, deferPublicProjection, name, log }) {
+  if (deferPublicProjection) {
+    await channel.updateMetadata(stagedProfile)
+    channel.stagePublicProjection({ stagedProfile })
+    log.info(' Deferred public projection staged')
+  } else if (isEmbeddedBareKitRuntime()) {
+    try {
+      if (channel.publicBee?.writable) {
+        await channel.publicBee.setMetadata(stagedProfile)
+      }
+    } catch (err) {
+      log.warn(' Embedded identity metadata publish skipped:', err?.message)
+    }
+  } else {
+    log.info(' Updating channel metadata for identity')
+    await channel.updateMetadata(stagedProfile)
+    log.info(' Channel metadata updated')
+    log.info(' Ensuring local blob drive for identity')
+    await channel.ensureLocalBlobDrive({ deviceName: name })
+    log.info(' Local blob drive ready')
+  }
+
+  if (!channel.blobsKeyHex) {
+    await channel.ensureLocalBlobDrive({ deviceName: name })
+  }
+}
+
+async function initializeSignedChannelDescriptor({
+  channel,
+  channelKeyHex,
+  publicKey,
+  createdAt,
+  name,
+  keypair,
+  ctx,
+  attestDevice,
+  deferPublicProjection,
+}) {
+  try {
+    const metadataKey = channel.publicBeeKey || await channel.getPublicBeeKey()
+    const mediaKey = channel.blobsKeyHex
+    if (!metadataKey || !mediaKey) {
+      throw new Error('Channel metadata and media keys are required')
+    }
+    const descriptor = createChannelRootDescriptor({
+      identityPublicKey: publicKey,
+      channelId: channelKeyHex,
+      metadataKey,
+      mediaKey,
+      seq: 1,
+      createdAt,
+      updatedAt: Date.now(),
+      profile: { name },
+    })
+    const deviceProof = await attestDevice(keypair, ctx.swarm.keyPair.publicKey)
+    const signedDescriptor = await signChannelRootDescriptor({
+      descriptor,
+      deviceKeyPair: ctx.swarm.keyPair,
+      deviceProof,
+    })
+    if (deferPublicProjection) {
+      channel.stagePublicProjection({ stagedDescriptor: signedDescriptor })
+    } else if (channel.publicBee?.writable) {
+      await channel.publicBee.setRootDescriptor(signedDescriptor)
+      await channel.publicBee.setMetadata({
+        name: descriptor.profile?.name,
+      })
+    }
+    return signedDescriptor
+  } catch (err) {
+    try { await channel.close() } catch { /* best effort */ }
+    ctx.channels?.delete?.(channelKeyHex)
+    throw new Error('Signed channel root descriptor creation failed', { cause: err })
+  }
+}
+
+async function verifyExistingChannelDescriptor(existingSigned, channelKey, metadataKey) {
+  if (!existingSigned) return false
+  const verified = await verifySignedChannelRootDescriptor(existingSigned)
+  return Boolean(
+    verified?.valid &&
+    verified.descriptor?.channelId === channelKey.toLowerCase() &&
+    verified.descriptor?.metadataKey === metadataKey.toLowerCase()
+  )
+}
+
+async function signAndVerifyDescriptor({ descriptor, deviceKeyPair, proofHex }) {
+  const signed = await signChannelRootDescriptor({
+    descriptor,
+    deviceKeyPair,
+    deviceProof: proofHex,
+  })
+  const check = await verifySignedChannelRootDescriptor(signed)
+  if (!check?.valid) {
+    return { ok: false, error: check?.error || 'self-verification-failed' }
+  }
+  return { ok: true, signed }
+}
+
+async function resolveWritableChannelAndKeys(ctx, channelOrKey, loadOptions) {
+  let channel = channelOrKey
+  if (typeof channelOrKey === 'string') {
+    channel = await loadChannel(ctx, channelOrKey, { preferWritable: true, ...(loadOptions || {}) }).catch(() => null)
+  }
+  if (!channel?.publicBee?.writable) return { error: 'channel-not-writable' }
+  const channelKey = channel.keyHex
+  const metadataKey = channel.publicBeeKey || await channel.getPublicBeeKey?.()
+  const mediaKey = channel.blobsKeyHex
+  if (!channelKey || !metadataKey || !mediaKey) return { error: 'channel-keys-unavailable' }
+  return { channel, channelKey, metadataKey, mediaKey }
+}
+
+function resolveActiveSigningContext(ctx, identities, activeIdentity) {
+  if (!ctx?.swarm?.keyPair?.publicKey || !ctx?.swarm?.keyPair?.secretKey) {
+    return { error: 'device-keypair-unavailable' }
+  }
+  const active = identities.find(i => i.publicKey === activeIdentity) || null
+  const proofHex = active?.attestationProof || active?.signedDescriptor?.proof || null
+  if (!active?.publicKey || !proofHex) {
+    return { error: 'active-identity-proof-unavailable' }
+  }
+  return { active, proofHex, deviceKeyPair: ctx.swarm.keyPair }
+}
+
+function resolvePreviousSeq(existingSigned, identity) {
+  const fromExisting = existingSigned?.descriptor?.seq
+  if (fromExisting !== undefined) return Number(fromExisting) || 0
+  const fromIdentity = identity.signedDescriptor?.descriptor?.seq
+  return Number(fromIdentity) || 0
+}
+
+async function applyChannelDescriptor(channel, { signed, profile, deferredInactive }) {
+  if (deferredInactive) {
+    channel.stagePublicProjection({
+      stagedDescriptor: signed,
+      stagedProfile: profile,
+    })
+  } else {
+    await channel.publicBee.setRootDescriptor(signed)
+    await channel.publicBee.setMetadata({ name: profile.name })
+  }
+}
+
+function getIdentityAttestationProof(identity) {
+  return identity.attestationProof || identity.signedDescriptor?.proof || null
+}
+
+async function resolveExistingSignedDescriptor(channel, identity, deferredInactive) {
+  const publishedSigned = await channel.publicBee.getRootDescriptor().catch(() => null)
+  if (publishedSigned) return publishedSigned
+  if (deferredInactive) return identity.signedDescriptor || null
+  return null
+}
+
+async function backfillIdentityDescriptor({ identity, channelKey, ctx, log }) {
+  const channel = await loadChannel(ctx, channelKey, {
+    encryptionKeyHex: identity.channelEncryptionKey || null,
+    writerKeyName: identity.channelWriterKeyName || null,
+    preferWritable: true,
+    deferPublicProjection: identity.deferPublicProjection === true,
+  })
+  if (!channel?.publicBee?.writable) return { status: 'skipped' }
+
+  const metadataKey = channel.publicBeeKey || await channel.getPublicBeeKey()
+  const mediaKey = channel.blobsKeyHex
+  if (!metadataKey || !mediaKey) return { status: 'skipped' }
+
+  const deferredInactive = identity.deferPublicProjection === true && !channel.publicProjectionActive
+  const existingSigned = await resolveExistingSignedDescriptor(channel, identity, deferredInactive)
+
+  if (await verifyExistingChannelDescriptor(existingSigned, channelKey, metadataKey)) {
+    if (deferredInactive) {
+      const profile = existingSigned.descriptor?.profile || { name: identity.name || 'Channel' }
+      channel.stagePublicProjection({ stagedDescriptor: existingSigned, stagedProfile: profile })
+    }
+    return { status: 'ok' }
+  }
+
+  const proofHex = getIdentityAttestationProof(identity)
+  if (!proofHex) {
+    log.warn(' Descriptor backfill: no attestation proof for channel', channelKey.slice(0, 16), '- recover with mnemonic to re-sign')
+    return { status: 'missingProof' }
+  }
+
+  const previousSeq = resolvePreviousSeq(existingSigned, identity)
+  const profile = { name: identity.name || 'Channel' }
+  const descriptor = createChannelRootDescriptor({
+    identityPublicKey: identity.publicKey,
+    channelId: channelKey,
+    metadataKey,
+    mediaKey,
+    seq: previousSeq + 1,
+    createdAt: identity.createdAt || Date.now(),
+    updatedAt: Date.now(),
+    profile,
+  })
+
+  const signResult = await signAndVerifyDescriptor({
+    descriptor,
+    deviceKeyPair: ctx.swarm.keyPair,
+    proofHex,
+  })
+  if (!signResult.ok) {
+    log.warn(' Descriptor backfill: self-verification failed for channel', channelKey.slice(0, 16), signResult.error || '')
+    return { status: 'failed' }
+  }
+  const { signed } = signResult
+
+  await applyChannelDescriptor(channel, { signed, profile, deferredInactive })
+
+  log.info(' Descriptor backfill: signed channel root for', channelKey.slice(0, 16))
+  return {
+    status: 'signed',
+    update: {
+      signedDescriptor: signed,
+      channelId: descriptor.channelId,
+    },
+  }
+}
+
+function recordBackfillOutcome(summary, descriptorUpdates, publicKey, result) {
+  if (result.status === 'signed') {
+    descriptorUpdates.set(publicKey, result.update)
+    summary.signed++
+  } else if (result.status === 'ok') {
+    summary.ok++
+  } else if (result.status === 'missingProof') {
+    summary.missingProof++
+  } else if (result.status === 'skipped') {
+    summary.skipped++
+  } else if (result.status === 'failed') {
+    summary.failed++
+  }
+}
+
+async function persistDescriptorUpdates(updateIdentityState, descriptorUpdates, log) {
+  if (descriptorUpdates.size === 0) return
+  try {
+    await updateIdentityState(current => ({
+      identities: current.identities.map(identity => {
+        const update = descriptorUpdates.get(identity.publicKey)
+        return update ? { ...identity, ...update } : identity
+      }),
+      activeIdentity: current.activeIdentity,
+    }))
+  } catch (err) {
+    log.warn(' Descriptor backfill: persisting identities failed:', err?.message)
+  }
+}
+
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
  * @typedef {import('./types.js').Identity} Identity
@@ -434,23 +706,10 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
       }
       log.info(' Corestore state: opened=', ctx.store.opened, 'closed=', ctx.store.closed);
 
-      let keypair;
-      let mnemonic;
-      let hdDerived = false
-      let derivedPublicKey = null
-
+      const { keypair, mnemonic, hdDerived, publicKey } = await generateIdentityKeys(generateMnem)
       if (generateMnem) {
-        mnemonic = generateMnemonic();
-        const { identityKeyPair, identityPublicKey } = await deriveIdentity(mnemonic)
-        keypair = identityKeyPair
-        derivedPublicKey = identityPublicKey
-        hdDerived = true
-        log.info(' Generated HD identity keypair:', b4a.toString(identityPublicKey, 'hex').slice(0, 16));
-      } else {
-        keypair = crypto.keyPair();
+        log.info(' Generated HD identity keypair:', publicKey.slice(0, 16));
       }
-
-      const publicKey = b4a.toString(derivedPublicKey || keypair.publicKey, 'hex');
       log.info(' Generated keypair:', publicKey.slice(0, 16));
 
       // Create the channel's multi-writer HyperDB store
@@ -470,72 +729,19 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
         createdBy: publicKey
       }
       log.info(' Channel created:', channelKeyHex.slice(0, 16))
-      if (deferPublicProjection) {
-        await channel.updateMetadata(stagedProfile)
-        channel.stagePublicProjection({ stagedProfile })
-        log.info(' Deferred public projection staged')
-      } else if (isEmbeddedBareKitRuntime()) {
-        try {
-          if (channel.publicBee?.writable) {
-            await channel.publicBee.setMetadata(stagedProfile)
-          }
-        } catch (err) {
-          log.warn(' Embedded identity metadata publish skipped:', err?.message)
-        }
-      } else {
-        log.info(' Updating channel metadata for identity')
-        await channel.updateMetadata(stagedProfile)
-        log.info(' Channel metadata updated')
-        log.info(' Ensuring local blob drive for identity')
-        await channel.ensureLocalBlobDrive({ deviceName: name })
-        log.info(' Local blob drive ready')
-      }
+      await setupChannelProfile({ channel, stagedProfile, deferPublicProjection, name, log })
 
-      if (!channel.blobsKeyHex) {
-        await channel.ensureLocalBlobDrive({ deviceName: name })
-      }
-
-      let signedDescriptor = null
-      try {
-        const metadataKey = channel.publicBeeKey || await channel.getPublicBeeKey()
-        const mediaKey = channel.blobsKeyHex
-        if (!metadataKey || !mediaKey) {
-          throw new Error('Channel metadata and media keys are required')
-        }
-        if (metadataKey && mediaKey) {
-          const descriptor = createChannelRootDescriptor({
-            identityPublicKey: publicKey,
-            // Peers verify gossip entries by binding the descriptor to the
-            // key the channel is announced under (the multi-writer channel
-            // key), not the identity key.
-            channelId: channelKeyHex,
-            metadataKey,
-            mediaKey,
-            seq: 1,
-            createdAt,
-            updatedAt: Date.now(),
-            profile: { name }
-          })
-          const deviceProof = await this.attestDevice(keypair, ctx.swarm.keyPair.publicKey)
-          signedDescriptor = await signChannelRootDescriptor({
-            descriptor,
-            deviceKeyPair: ctx.swarm.keyPair,
-            deviceProof
-          })
-          if (deferPublicProjection) {
-            channel.stagePublicProjection({ stagedDescriptor: signedDescriptor })
-          } else if (channel.publicBee?.writable) {
-            await channel.publicBee.setRootDescriptor(signedDescriptor)
-            await channel.publicBee.setMetadata({
-              name: descriptor.profile?.name
-            })
-          }
-        }
-      } catch (err) {
-        try { await channel.close() } catch { /* best effort */ }
-        ctx.channels?.delete?.(channelKeyHex)
-        throw new Error('Signed channel root descriptor creation failed', { cause: err })
-      }
+      const signedDescriptor = await initializeSignedChannelDescriptor({
+        channel,
+        channelKeyHex,
+        publicKey,
+        createdAt,
+        name,
+        keypair,
+        ctx,
+        attestDevice: (kp, devPk) => this.attestDevice(kp, devPk),
+        deferPublicProjection,
+      })
 
       // Create identity record
       // SECURITY: Do NOT persist secretKey - it can be re-derived from mnemonic if needed.
@@ -994,116 +1200,15 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
         summary.checked++
 
         try {
-          const channel = await loadChannel(ctx, channelKey, {
-            encryptionKeyHex: identity.channelEncryptionKey || null,
-            writerKeyName: identity.channelWriterKeyName || null,
-            preferWritable: true,
-            deferPublicProjection: identity.deferPublicProjection === true
-          })
-          if (!channel?.publicBee?.writable) {
-            summary.skipped++
-            continue
-          }
-
-          const metadataKey = channel.publicBeeKey || await channel.getPublicBeeKey()
-          const mediaKey = channel.blobsKeyHex
-          if (!metadataKey || !mediaKey) {
-            summary.skipped++
-            continue
-          }
-
-          const deferredInactive =
-            identity.deferPublicProjection === true && !channel.publicProjectionActive
-          const publishedSigned = await channel.publicBee.getRootDescriptor().catch(() => null)
-          const existingSigned = publishedSigned ||
-            (deferredInactive ? identity.signedDescriptor || null : null)
-          if (existingSigned) {
-            const verified = await verifySignedChannelRootDescriptor(existingSigned)
-            if (
-              verified?.valid &&
-              verified.descriptor?.channelId === channelKey.toLowerCase() &&
-              verified.descriptor?.metadataKey === metadataKey.toLowerCase()
-            ) {
-              if (deferredInactive) {
-                channel.stagePublicProjection({
-                  stagedDescriptor: existingSigned,
-                  stagedProfile: existingSigned.descriptor?.profile || { name: identity.name || 'Channel' }
-                })
-              }
-              summary.ok++
-              continue
-            }
-          }
-
-          const proofHex = identity.attestationProof || identity.signedDescriptor?.proof || null
-          if (!proofHex) {
-            summary.missingProof++
-            log.warn(' Descriptor backfill: no attestation proof for channel', channelKey.slice(0, 16), '- recover with mnemonic to re-sign')
-            continue
-          }
-
-          const previousSeq = Number(
-            existingSigned?.descriptor?.seq ?? identity.signedDescriptor?.descriptor?.seq ?? 0
-          ) || 0
-          const descriptor = createChannelRootDescriptor({
-            identityPublicKey: identity.publicKey,
-            channelId: channelKey,
-            metadataKey,
-            mediaKey,
-            seq: previousSeq + 1,
-            createdAt: identity.createdAt || Date.now(),
-            updatedAt: Date.now(),
-            profile: { name: identity.name || 'Channel' }
-          })
-          const signed = await signChannelRootDescriptor({
-            descriptor,
-            deviceKeyPair: ctx.swarm.keyPair,
-            deviceProof: proofHex
-          })
-
-          // Never write a descriptor peers would reject.
-          const check = await verifySignedChannelRootDescriptor(signed)
-          if (!check?.valid) {
-            summary.failed++
-            log.warn(' Descriptor backfill: self-verification failed for channel', channelKey.slice(0, 16), check?.error || '')
-            continue
-          }
-
-          if (deferredInactive) {
-            channel.stagePublicProjection({
-              stagedDescriptor: signed,
-              stagedProfile: descriptor.profile || { name: identity.name || 'Channel' }
-            })
-          } else {
-            await channel.publicBee.setRootDescriptor(signed)
-            await channel.publicBee.setMetadata({ name: descriptor.profile?.name })
-          }
-
-          descriptorUpdates.set(identity.publicKey, {
-            signedDescriptor: signed,
-            channelId: descriptor.channelId,
-          })
-          summary.signed++
-          log.info(' Descriptor backfill: signed channel root for', channelKey.slice(0, 16))
+          const result = await backfillIdentityDescriptor({ identity, channelKey, ctx, log })
+          recordBackfillOutcome(summary, descriptorUpdates, identity.publicKey, result)
         } catch (err) {
           summary.failed++
           log.warn(' Descriptor backfill failed for channel', String(channelKey).slice(0, 16), err?.message)
         }
       }
 
-      if (descriptorUpdates.size > 0) {
-        try {
-          await updateIdentityState(current => ({
-            identities: current.identities.map(identity => {
-              const update = descriptorUpdates.get(identity.publicKey)
-              return update ? { ...identity, ...update } : identity
-            }),
-            activeIdentity: current.activeIdentity,
-          }))
-        } catch (err) {
-          log.warn(' Descriptor backfill: persisting identities failed:', err?.message)
-        }
-      }
+      await persistDescriptorUpdates(updateIdentityState, descriptorUpdates, log)
       return summary
     },
 
@@ -1124,35 +1229,17 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
      * @returns {Promise<{ ok: boolean, changed?: boolean, reason?: string, signed?: object|null }>}
      */
     async signChannelRootDescriptorForOwnedChannel(channelOrKey, { profile = null, loadOptions = null } = {}) {
-      if (!ctx?.swarm?.keyPair?.publicKey || !ctx?.swarm?.keyPair?.secretKey) {
-        return { ok: false, reason: 'device-keypair-unavailable' }
-      }
+      const signingContext = resolveActiveSigningContext(ctx, identities, activeIdentity)
+      if (signingContext.error) return { ok: false, reason: signingContext.error }
+      const { active, proofHex, deviceKeyPair } = signingContext
 
-      const active = identities.find(i => i.publicKey === activeIdentity) || null
-      const proofHex = active?.attestationProof || active?.signedDescriptor?.proof || null
-      if (!active?.publicKey || !proofHex) return { ok: false, reason: 'active-identity-proof-unavailable' }
-
-      let channel = channelOrKey
-      if (typeof channelOrKey === 'string') {
-        channel = await loadChannel(ctx, channelOrKey, { preferWritable: true, ...(loadOptions || {}) }).catch(() => null)
-      }
-      if (!channel?.publicBee?.writable) return { ok: false, reason: 'channel-not-writable' }
-
-      const channelKey = channel.keyHex
-      const metadataKey = channel.publicBeeKey || await channel.getPublicBeeKey?.()
-      const mediaKey = channel.blobsKeyHex
-      if (!channelKey || !metadataKey || !mediaKey) return { ok: false, reason: 'channel-keys-unavailable' }
+      const channelResult = await resolveWritableChannelAndKeys(ctx, channelOrKey, loadOptions)
+      if (channelResult.error) return { ok: false, reason: channelResult.error }
+      const { channel, channelKey, metadataKey, mediaKey } = channelResult
 
       const existing = await channel.publicBee.getRootDescriptor().catch(() => null)
-      if (existing) {
-        const verified = await verifySignedChannelRootDescriptor(existing)
-        if (
-          verified?.valid &&
-          verified.descriptor?.channelId === channelKey.toLowerCase() &&
-          verified.descriptor?.metadataKey === metadataKey.toLowerCase()
-        ) {
-          return { ok: true, changed: false, signed: existing }
-        }
+      if (await verifyExistingChannelDescriptor(existing, channelKey, metadataKey)) {
+        return { ok: true, changed: false, signed: existing }
       }
 
       const previousSeq = Number(existing?.descriptor?.seq ?? 0) || 0
@@ -1166,15 +1253,9 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
         updatedAt: Date.now(),
         profile: profile && typeof profile === 'object' ? profile : { name: channel.name || 'Archive' }
       })
-      const signed = await signChannelRootDescriptor({
-        descriptor,
-        deviceKeyPair: ctx.swarm.keyPair,
-        deviceProof: proofHex
-      })
-
-      // Never write a descriptor peers would reject.
-      const check = await verifySignedChannelRootDescriptor(signed)
-      if (!check?.valid) return { ok: false, reason: check?.error || 'self-verification-failed' }
+      const signResult = await signAndVerifyDescriptor({ descriptor, deviceKeyPair, proofHex })
+      if (!signResult.ok) return { ok: false, reason: signResult.error }
+      const { signed } = signResult
 
       await channel.publicBee.setRootDescriptor(signed)
       await channel.publicBee.setMetadata({ name: descriptor.profile?.name })

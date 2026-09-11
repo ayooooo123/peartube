@@ -69,6 +69,107 @@ function normalizeSeedingStatus(s) {
     }
   }
 }
+function optionalString(value) {
+  return value ? String(value) : null
+}
+
+function fallbackZero(value) {
+  return Number(value || 0) || 0
+}
+
+function normalizeListedImmutablePublication(pub) {
+  if (!pub?.publicationId) return null
+  return {
+    publicationId: String(pub.publicationId),
+    manifestId: optionalString(pub.manifestId),
+    renditionId: optionalString(pub.renditionId),
+    publisherId: optionalString(pub.publisherId),
+  }
+}
+
+function normalizeListedVideoMedia(v) {
+  return {
+    blobId: optionalString(v.blobId),
+    blobsCoreKey: optionalString(v.blobsCoreKey),
+    mimeType: optionalString(v.mimeType),
+    availability: optionalString(v.availability),
+    byteAvailability: optionalString(v.byteAvailability),
+    hasHeadBlock: Boolean(v.hasHeadBlock),
+    contiguousBlocks: fallbackZero(v.contiguousBlocks),
+    readyForPlayback: Boolean(v.readyForPlayback),
+    playbackSupport: optionalString(v.playbackSupport),
+    thumbnailBlobId: optionalString(v.thumbnailBlobId),
+    thumbnailBlobsCoreKey: optionalString(v.thumbnailBlobsCoreKey),
+    thumbnailMimeType: optionalString(v.thumbnailMimeType),
+    publicationId: optionalString(v.publicationId),
+    immutablePublication: normalizeListedImmutablePublication(v.immutablePublication),
+  }
+}
+
+function normalizeListedVideoMeta(v, fallbackChannelKey, fallbackPublicBeeKey) {
+  const id = optionalString(v?.id)
+  if (!id) return null
+  return {
+    id,
+    title: v.title ? String(v.title) : 'Untitled',
+    description: optionalString(v.description),
+    path: optionalString(v.path),
+    duration: fallbackZero(v.duration),
+    thumbnail: optionalString(v.thumbnail),
+    channelKey: v.channelKey || fallbackChannelKey,
+    channelName: v.channelName ? String(v.channelName) : '',
+    size: fallbackZero(v.size),
+    uploadedAt: fallbackZero(v.uploadedAt || v.createdAt),
+    createdAt: fallbackZero(v.createdAt || v.uploadedAt || Date.now()),
+    views: fallbackZero(v.views),
+    category: optionalString(v.category),
+    publicBeeKey: optionalString(v.publicBeeKey) || optionalString(fallbackPublicBeeKey),
+  }
+}
+
+function normalizeListedVideo(v, fallbackChannelKey, fallbackPublicBeeKey) {
+  const meta = normalizeListedVideoMeta(v, fallbackChannelKey, fallbackPublicBeeKey)
+  if (!meta) return null
+  return {
+    ...meta,
+    ...normalizeListedVideoMedia(v),
+  }
+}
+
+const UPLOAD_MIME_BY_EXT = Object.freeze({
+  mp4: 'video/mp4',
+  m4v: 'video/mp4',
+  webm: 'video/webm',
+  mkv: 'video/x-matroska',
+  mov: 'video/quicktime',
+  avi: 'video/x-msvideo',
+})
+
+function resolveUploadFilePath(rawPath) {
+  if (!rawPath) throw new Error('No file path provided')
+  if (rawPath.startsWith('file://')) return rawPath.slice(7)
+  return rawPath
+}
+
+function resolveUploadMimeType(filePath) {
+  const ext = filePath.split('.').pop()?.toLowerCase() || 'mp4'
+  return UPLOAD_MIME_BY_EXT[ext] || 'video/mp4'
+}
+
+async function tryGenerateUploadThumbnail(generateAndStoreThumbnail, channel, filePath, videoId, skip) {
+  if (!videoId || skip) return
+  try {
+    const t = await generateAndStoreThumbnail(filePath, videoId, channel, { frameIndex: 300 })
+    if (t?.thumbnailBlobId) {
+      await channel.updateVideo(videoId, {
+        thumbnailBlobId: t.thumbnailBlobId,
+        thumbnailBlobsCoreKey: t.thumbnailBlobsCoreKey,
+        thumbnailMimeType: t.thumbnailMimeType,
+      })
+    }
+  } catch {}
+}
+
 
 export function attachMobileHandlers(B, deps) {
   const { api, identityManager, uploadManager, ctx, initializeIdentityFromMnemonic, rpc, fs, path, generateAndStoreThumbnail, transcoder, castTranscoder, player, protocolVersion } = deps
@@ -136,46 +237,18 @@ export function attachMobileHandlers(B, deps) {
   B.getChannelMeta = async (r) => { const m = await api.getChannelMeta(r.channelKey, r.publicBeeKey || null); return { name: m.name, description: m.description, videoCount: m.videoCount || 0 } }
 
   B.listVideos = async (r) => {
-    const ck = r?.channelKey || ''; if (!ck) return { videos: [] }
-    let raw = []; try { raw = await api.listVideos(ck, r.publicBeeKey) } catch (err) { return { success: false, error: err?.message || String(err), stale: true, videos: [] } }
-    return { videos: (raw || []).map((v) => {
-      const id = v?.id ? String(v.id) : ''; if (!id) return null
-      return {
-        id,
-        title: v?.title ? String(v.title) : 'Untitled',
-        description: v?.description ? String(v.description) : null,
-        path: v?.path ? String(v.path) : null,
-        duration: Number(v?.duration || 0) || 0,
-        thumbnail: v?.thumbnail ? String(v.thumbnail) : null,
-        channelKey: v?.channelKey || ck,
-        channelName: v?.channelName ? String(v.channelName) : '',
-        size: Number(v?.size || 0) || 0,
-        uploadedAt: Number(v?.uploadedAt || v?.createdAt || 0) || 0,
-        createdAt: Number(v?.createdAt || v?.uploadedAt || Date.now()) || 0,
-        views: Number(v?.views || 0) || 0,
-        category: v?.category ? String(v.category) : null,
-        blobId: v?.blobId ? String(v.blobId) : null,
-        blobsCoreKey: v?.blobsCoreKey ? String(v.blobsCoreKey) : null,
-        mimeType: v?.mimeType ? String(v.mimeType) : null,
-        availability: v?.availability ? String(v.availability) : null,
-        byteAvailability: v?.byteAvailability ? String(v.byteAvailability) : null,
-        hasHeadBlock: Boolean(v?.hasHeadBlock),
-        contiguousBlocks: Number(v?.contiguousBlocks || 0) || 0,
-        readyForPlayback: Boolean(v?.readyForPlayback),
-        playbackSupport: v?.playbackSupport ? String(v.playbackSupport) : null,
-        thumbnailBlobId: v?.thumbnailBlobId ? String(v.thumbnailBlobId) : null,
-        thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey ? String(v.thumbnailBlobsCoreKey) : null,
-        thumbnailMimeType: v?.thumbnailMimeType ? String(v.thumbnailMimeType) : null,
-        publicationId: v?.publicationId ? String(v.publicationId) : null,
-        immutablePublication: v?.immutablePublication?.publicationId ? {
-          publicationId: String(v.immutablePublication.publicationId),
-          manifestId: v.immutablePublication.manifestId ? String(v.immutablePublication.manifestId) : null,
-          renditionId: v.immutablePublication.renditionId ? String(v.immutablePublication.renditionId) : null,
-          publisherId: v.immutablePublication.publisherId ? String(v.immutablePublication.publisherId) : null,
-        } : null,
-        publicBeeKey: v?.publicBeeKey ? String(v.publicBeeKey) : (r?.publicBeeKey ? String(r.publicBeeKey) : null),
-      }
-    }).filter(Boolean) }
+    const ck = r?.channelKey || ''
+    if (!ck) return { videos: [] }
+    let raw = []
+    try {
+      raw = await api.listVideos(ck, r.publicBeeKey)
+    } catch (err) {
+      return { success: false, error: err?.message || String(err), stale: true, videos: [] }
+    }
+    const fallbackPublicBeeKey = r?.publicBeeKey || null
+    return {
+      videos: (raw || []).map(v => normalizeListedVideo(v, ck, fallbackPublicBeeKey)).filter(Boolean),
+    }
   }
   B.getVideoUrl = async (r) => {
     const res = await api.getVideoUrl(
@@ -342,10 +415,8 @@ export function attachMobileHandlers(B, deps) {
     if (!active?.driveKey) throw new Error('No active identity')
     const channel = await identityManager.getActiveChannel?.()
     if (!channel?.blobs) throw new Error('Channel blobs not initialized')
-    let filePath = r.filePath; if (!filePath) throw new Error('No file path provided')
-    if (filePath.startsWith('file://')) filePath = filePath.slice(7)
-    const ext = filePath.split('.').pop()?.toLowerCase() || 'mp4'
-    const mimeType = { mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', mov: 'video/quicktime', avi: 'video/x-msvideo' }[ext] || 'video/mp4'
+    const filePath = resolveUploadFilePath(r.filePath)
+    const mimeType = resolveUploadMimeType(filePath)
     const mediaMetadata = normalizeUploadVideoMediaMetadata(r)
     const result = await uploadManager.uploadFromPath(channel, filePath, {
       title: r.title,
@@ -354,14 +425,26 @@ export function attachMobileHandlers(B, deps) {
       category: r.category || '',
       ...mediaMetadata,
     }, fs, (progress, bytesWritten, totalBytes, stats) => {
-      rpc.eventUploadProgress({ videoId: 'upload', progress, bytesUploaded: bytesWritten, totalBytes, speed: stats?.speed ? Math.max(0, Math.round(stats.speed)) : 0, eta: stats?.eta ? Math.max(0, Math.round(stats.eta)) : 0 })
+      rpc.eventUploadProgress({
+        videoId: 'upload',
+        progress,
+        bytesUploaded: bytesWritten,
+        totalBytes,
+        speed: stats?.speed ? Math.max(0, Math.round(stats.speed)) : 0,
+        eta: stats?.eta ? Math.max(0, Math.round(stats.eta)) : 0,
+      })
     })
     if (!result?.success) throw new Error(result?.error || 'Upload failed')
     try { api.invalidateChannelCaches?.(active.driveKey) } catch {}
-    if (result?.videoId && !r.skipThumbnailGeneration) {
-      try { const t = await generateAndStoreThumbnail(filePath, result.videoId, channel, { frameIndex: 300 }); if (t?.thumbnailBlobId) await channel.updateVideo(result.videoId, { thumbnailBlobId: t.thumbnailBlobId, thumbnailBlobsCoreKey: t.thumbnailBlobsCoreKey, thumbnailMimeType: t.thumbnailMimeType }) } catch {}
+    await tryGenerateUploadThumbnail(generateAndStoreThumbnail, channel, filePath, result.videoId, r.skipThumbnailGeneration)
+    return {
+      video: {
+        id: result.videoId || '',
+        title: r.title,
+        description: r.description || '',
+        channelKey: active.driveKey,
+      },
     }
-    return { video: { id: result?.videoId || '', title: r.title, description: r.description || '', channelKey: active.driveKey } }
   }
 
   B.downloadVideo = async (r) => {

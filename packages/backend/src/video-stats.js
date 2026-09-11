@@ -62,7 +62,7 @@ export class VideoStatsTracker {
     if (!videoPath) return '';
     const raw = String(videoPath);
     const cleaned = raw.split('?')[0].split('#')[0];
-    const match = cleaned.match(/(?:^|\/)videos\/([^.\/]+)(?:\.[^\/]+)?$/);
+    const match = cleaned.match(/(?:^|\/)videos\/([^./]+)(?:\.[^/]+)?$/);
     if (match?.[1]) return match[1];
     const base = cleaned.split('/').pop() || cleaned;
     return base.replace(/\.[^./]+$/, '');

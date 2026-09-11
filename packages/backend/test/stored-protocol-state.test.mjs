@@ -7,6 +7,7 @@ import {
   STORED_PROTOCOL_ERROR_CODE,
   DEFAULT_STORED_PROTOCOL_MIGRATIONS,
   STORED_PROTOCOL_MARKER_FILENAME,
+  STORAGE_FORMAT_VERSION,
   prepareStoredProtocolState,
 } from '../src/stored-protocol.js'
 
@@ -155,4 +156,32 @@ test('a crash before marker commit remains distinguishable as uninitialized stor
   assert.equal(retry.status, 'uninitialized')
   assert.equal(retry.storedVersion, null)
   assert.equal(fs.existsSync(markerPath(storagePath)), false)
+})
+
+test('STORAGE_FORMAT_VERSION is baseline 10 and default expectedVersion', (t) => {
+  assert.equal(STORAGE_FORMAT_VERSION, 10)
+  const storagePath = makeStorage(t)
+  writeMarker(storagePath, { protocolVersion: 10 })
+
+  const state = prepareStoredProtocolState({ storagePath, fs, path })
+  assert.equal(state.status, 'compatible')
+  assert.equal(state.storedVersion, 10)
+})
+
+test('storage format 10 decouples from wire version without missing-migration-10-11 failure', async (t) => {
+  const storagePath = makeStorage(t)
+  writeMarker(storagePath, { protocolVersion: 9 })
+
+  const state = prepareStoredProtocolState({
+    storagePath,
+    expectedVersion: STORAGE_FORMAT_VERSION,
+    migrations: DEFAULT_STORED_PROTOCOL_MIGRATIONS,
+    fs,
+    path
+  })
+  assert.equal(state.status, 'migration-required')
+  await state.migrate({})
+  state.commit()
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(markerPath(storagePath), 'utf8')), { protocolVersion: 10 })
 })

@@ -89,6 +89,119 @@ function P2PStatsOverlay({ stats, showDetails, onPress }: {
   )
 }
 
+// Format bytes to human readable
+function formatBytes(bytes: number): string {
+  if (!bytes) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+function getP2PStatusInfo(stats: VideoStats | null, hasPlayableProgress: boolean) {
+  if (!stats) return { color: colors.textMuted, label: 'Waiting for video peers' }
+  if (stats.isComplete) return { color: colors.success, label: 'Cached' }
+  if (stats.status === 'downloading') return { color: colors.warning, label: 'Downloading' }
+  if (hasPlayableProgress) return { color: colors.primary, label: 'Streaming' }
+  if (stats.status === 'connecting') return { color: colors.primary, label: 'Connecting...' }
+  if (stats.status === 'resolving') return { color: colors.swarm, label: 'Resolving...' }
+  if (stats.status === 'error') return { color: colors.error, label: 'Error' }
+  return { color: colors.textMuted, label: 'Waiting' }
+}
+
+function getP2PStatusLine(
+  stats: VideoStats | null,
+  globalConnections: number,
+  videoPeerCount: number,
+  hasPlayableProgress: boolean
+): string {
+  if (!stats) {
+    return globalConnections > 0 ? 'Reaching out to peers…' : 'Waiting for the swarm…'
+  }
+  if (stats.isComplete) return 'Saved on this device'
+  if (stats.status === 'error') return 'Playback hit a snag'
+  if (videoPeerCount > 0) {
+    return `Streaming from ${videoPeerCount} ${videoPeerCount === 1 ? 'peer' : 'peers'}`
+  }
+  if (hasPlayableProgress) return 'Streaming'
+  return 'Reaching out to peers…'
+}
+
+function P2PStatsExpandedDetails({
+  stats,
+  videoPeerCount,
+  downloadSpeedText,
+  uploadSpeedText,
+}: {
+  stats: VideoStats
+  videoPeerCount: number
+  downloadSpeedText: string
+  uploadSpeedText: string
+}) {
+  const hasElapsed = !stats.isComplete && stats.elapsed > 0
+  return (
+    <>
+      <View style={styles.statsBarRow2}>
+        <Text style={styles.statsBarDetail}>{videoPeerCount} video peer{videoPeerCount !== 1 ? 's' : ''}</Text>
+        <Text style={styles.statsBarSpeed}>↓ {downloadSpeedText} MB/s</Text>
+        <Text style={styles.statsBarUploadSpeed}>↑ {uploadSpeedText} MB/s</Text>
+      </View>
+      <View style={styles.statsBarRow2}>
+        <Text style={styles.statsBarDetail}>
+          {formatBytes(stats.downloadedBytes)} / {formatBytes(stats.totalBytes)}
+        </Text>
+        <Text style={styles.statsBarDetail}>
+          {stats.downloadedBlocks || 0} / {stats.totalBlocks || 0} blocks
+        </Text>
+        {hasElapsed && (
+          <Text style={styles.statsBarDetail}>
+            {stats.elapsed}s
+          </Text>
+        )}
+        <Text style={[styles.statsBarProgress, stats.isComplete && styles.statsBarProgressComplete]}>
+          {stats.progress || 0}%
+        </Text>
+      </View>
+    </>
+  )
+}
+
+function toFixedSpeed(value: number): string {
+  return Number.isFinite(value) ? value.toFixed(2) : '0.00'
+}
+
+function P2PStatsExpandedContent({
+  stats,
+  globalConnections,
+  videoPeerCount,
+  downloadSpeedText,
+  uploadSpeedText,
+}: {
+  stats: VideoStats | null
+  globalConnections: number
+  videoPeerCount: number
+  downloadSpeedText: string
+  uploadSpeedText: string
+}) {
+  return (
+    <>
+      {!stats && globalConnections > 0 && (
+        <View style={styles.statsBarRow2}>
+          <Text style={styles.statsBarDetail}>Network online: {globalConnections} connection{globalConnections !== 1 ? 's' : ''}</Text>
+        </View>
+      )}
+      {stats && (
+        <P2PStatsExpandedDetails
+          stats={stats}
+          videoPeerCount={videoPeerCount}
+          downloadSpeedText={downloadSpeedText}
+          uploadSpeedText={uploadSpeedText}
+        />
+      )}
+    </>
+  )
+}
+
 // P2P Stats Bar Component - Enhanced with more details
 function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
   const { rpc: appRpc } = useApp()
@@ -127,50 +240,15 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
     console.log('[P2PStatsBar] Rendering, stats:', stats ? 'present' : 'null', 'globalConnections:', globalConnections)
   }
 
-  // Format bytes to human readable
-  const formatBytes = (bytes: number): string => {
-    if (!bytes) return '0 B'
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
-  }
-
   const videoPeerCount = stats?.peerCount ?? 0
   const downloadSpeedValue = Number(stats?.speedMBps ?? 0)
   const uploadSpeedValue = Number(stats?.uploadSpeedMBps ?? 0)
   const hasPlayableProgress = downloadSpeedValue > 0
-  const downloadSpeedText = Number.isFinite(downloadSpeedValue) ? downloadSpeedValue.toFixed(2) : '0.00'
-  const uploadSpeedText = Number.isFinite(uploadSpeedValue) ? uploadSpeedValue.toFixed(2) : '0.00'
+  const downloadSpeedText = toFixedSpeed(downloadSpeedValue)
+  const uploadSpeedText = toFixedSpeed(uploadSpeedValue)
 
-  // Status color and label
-  const getStatusInfo = () => {
-    if (!stats) {
-      return { color: colors.textMuted, label: 'Waiting for video peers' }
-    }
-    if (stats.isComplete) return { color: colors.success, label: 'Cached' }
-    if (stats.status === 'downloading') return { color: colors.warning, label: 'Downloading' }
-    if (hasPlayableProgress) return { color: colors.primary, label: 'Streaming' }
-    if (stats.status === 'connecting') return { color: colors.primary, label: 'Connecting...' }
-    if (stats.status === 'resolving') return { color: colors.swarm, label: 'Resolving...' }
-    if (stats.status === 'error') return { color: colors.error, label: 'Error' }
-    return { color: colors.textMuted, label: 'Waiting' }
-  }
-
-  const statusInfo = getStatusInfo()
-
-  // Human one-liner shown by default; raw numbers live behind a tap.
-  const statusLine = !stats
-    ? (globalConnections > 0 ? 'Reaching out to peers…' : 'Waiting for the swarm…')
-    : stats.isComplete
-      ? 'Saved on this device'
-      : stats.status === 'error'
-        ? 'Playback hit a snag'
-        : videoPeerCount > 0
-          ? `Streaming from ${videoPeerCount} ${videoPeerCount === 1 ? 'peer' : 'peers'}`
-          : hasPlayableProgress
-            ? 'Streaming'
-            : 'Reaching out to peers…'
+  const statusInfo = getP2PStatusInfo(stats, hasPlayableProgress)
+  const statusLine = getP2PStatusLine(stats, globalConnections, videoPeerCount, hasPlayableProgress)
 
   return (
     <Pressable
@@ -200,37 +278,15 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
         </View>
       )}
 
-      {statsExpanded && !stats && globalConnections > 0 && (
-        <View style={styles.statsBarRow2}>
-          <Text style={styles.statsBarDetail}>Network online: {globalConnections} connection{globalConnections !== 1 ? 's' : ''}</Text>
-        </View>
-      )}
-
       {/* Detail rows */}
-      {statsExpanded && stats && (
-        <>
-          <View style={styles.statsBarRow2}>
-            <Text style={styles.statsBarDetail}>{videoPeerCount} video peer{videoPeerCount !== 1 ? 's' : ''}</Text>
-            <Text style={styles.statsBarSpeed}>↓ {downloadSpeedText} MB/s</Text>
-            <Text style={styles.statsBarUploadSpeed}>↑ {uploadSpeedText} MB/s</Text>
-          </View>
-          <View style={styles.statsBarRow2}>
-            <Text style={styles.statsBarDetail}>
-              {formatBytes(stats.downloadedBytes)} / {formatBytes(stats.totalBytes)}
-            </Text>
-            <Text style={styles.statsBarDetail}>
-              {stats.downloadedBlocks || 0} / {stats.totalBlocks || 0} blocks
-            </Text>
-            {!stats.isComplete && stats.elapsed > 0 && (
-              <Text style={styles.statsBarDetail}>
-                {stats.elapsed}s
-              </Text>
-            )}
-            <Text style={[styles.statsBarProgress, stats.isComplete && styles.statsBarProgressComplete]}>
-              {stats.progress || 0}%
-            </Text>
-          </View>
-        </>
+      {statsExpanded && (
+        <P2PStatsExpandedContent
+          stats={stats}
+          globalConnections={globalConnections}
+          videoPeerCount={videoPeerCount}
+          downloadSpeedText={downloadSpeedText}
+          uploadSpeedText={uploadSpeedText}
+        />
       )}
     </Pressable>
   )
@@ -293,6 +349,177 @@ export default function VideoPlayerScreen() {
   return <MobileVideoPlayerScreen />
 }
 
+function getVideoRef(video: any): string | undefined {
+  if (video?.path && typeof video.path === 'string' && video.path.startsWith('/')) {
+    return video.path
+  }
+  return video?.id
+}
+
+function createPlaybackRequest(videoData: any, videoRef: string | undefined) {
+  const videoAny = videoData as any
+  return {
+    channelKey: videoData.channelKey,
+    videoId: videoRef,
+    publicBeeKey: videoAny.publicBeeKey || undefined,
+    blobId: videoAny.blobId || undefined,
+    blobsCoreKey: videoAny.blobsCoreKey || undefined,
+    mimeType: videoAny.mimeType || undefined,
+  }
+}
+
+function makePlaybackCacheKey(videoData: any, videoRef: string | undefined) {
+  return makeVideoUrlCacheKey(
+    videoData.channelKey,
+    videoRef,
+    videoData.blobId || undefined,
+    videoData.blobsCoreKey || undefined,
+  )
+}
+
+function isCurrentVideoActive(currentVideo: any, videoData: any): boolean {
+  const currentRef = getVideoRef(currentVideo)
+  const targetRef = getVideoRef(videoData)
+  if (!currentRef || !targetRef || currentRef !== targetRef) return false
+  if (!currentVideo?.channelKey || !videoData?.channelKey) return true
+  return currentVideo.channelKey === videoData.channelKey
+}
+
+function getChannelDisplayName(channelMeta: { name?: string } | null, videoData: any): string {
+  if (channelMeta?.name) return channelMeta.name
+  if (videoData?.channel?.name) return videoData.channel.name
+  const key = videoData?.channelKey ? videoData.channelKey.slice(0, 8) : 'Unknown'
+  return `Channel ${key}`
+}
+
+function VideoPlayerSurface({
+  playbackError,
+  loadingVideo,
+  videoUrl,
+  displayedStats,
+  showStats,
+  onToggleStats,
+  onRetry,
+  screenWidth,
+  videoHeight,
+}: {
+  playbackError: any
+  loadingVideo: boolean
+  videoUrl: string | null
+  displayedStats: VideoStats | null
+  showStats: boolean
+  onToggleStats: () => void
+  onRetry: () => void
+  screenWidth: number
+  videoHeight: number
+}) {
+  if (playbackError?.terminal) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Text style={styles.loadingText}>{playbackError.message}</Text>
+      </View>
+    )
+  }
+  if (loadingVideo) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator color="white" size="large" />
+        <Text style={styles.loadingText}>Connecting to P2P network...</Text>
+      </View>
+    )
+  }
+  if (videoUrl) {
+    return (
+      <View style={{ width: screenWidth, height: videoHeight }}>
+        <P2PStatsOverlay
+          stats={displayedStats}
+          showDetails={showStats}
+          onPress={onToggleStats}
+        />
+      </View>
+    )
+  }
+  return (
+    <View style={styles.errorContainer}>
+      <Text style={styles.errorText}>Failed to load video</Text>
+      <Pressable style={styles.retryButton} onPress={onRetry}>
+        <Text style={styles.retryText}>Retry</Text>
+      </Pressable>
+    </View>
+  )
+}
+
+function CastBanner({
+  cast,
+  onOpenRemote,
+  onDisconnect,
+}: {
+  cast: any
+  onOpenRemote: () => void
+  onDisconnect: () => void
+}) {
+  if (!cast.isConnected) return null
+  return (
+    <View style={styles.castBanner}>
+      <Feather name="cast" color={colors.primary} size={14} />
+      <Meta tone="secondary" style={{ flex: 1 }}>
+        Casting to {cast.connectedDevice?.name || 'Cast device'}
+      </Meta>
+      <Button label="Remote" variant="secondary" size="sm" onPress={onOpenRemote} />
+      <Button label="Stop" variant="secondary" size="sm" onPress={onDisconnect} />
+    </View>
+  )
+}
+
+function parseVideoRouteParams(params: Record<string, string | string[]>) {
+  const channelKeyParam = params.channel as string | undefined
+  const rawPublicBeeParam = params.publicBeeKey ?? params.publicBee
+  const publicBeeParam = Array.isArray(rawPublicBeeParam) ? rawPublicBeeParam[0] : (rawPublicBeeParam as string | undefined)
+  const videoDataParam = params.videoData ? JSON.parse(params.videoData as string) : null
+  return { channelKeyParam, publicBeeParam, videoDataParam }
+}
+
+function getChannelPressHandler(
+  videoData: any,
+  router: { push: (route: { pathname: string; params: Record<string, string | undefined> }) => void }
+) {
+  return videoData?.channelKey
+    ? () => router.push({ pathname: '/channel/[key]', params: { key: videoData.channelKey, publicBeeKey: videoData.publicBeeKey || undefined } })
+    : undefined
+}
+
+function EditVideoButton({
+  identity,
+  videoData,
+  onEdit,
+}: {
+  identity: { driveKey?: string } | null
+  videoData: any
+  onEdit: () => void
+}) {
+  if (!identity?.driveKey || identity.driveKey !== videoData?.channelKey) return null
+  return (
+    <Pressable
+      onPress={onEdit}
+      style={{ padding: spacing.sm, marginLeft: spacing.md }}
+      accessibilityRole="button"
+      accessibilityLabel="Edit video"
+    >
+      <Feather name="edit-2" color={colors.textMuted} size={20} />
+    </Pressable>
+  )
+}
+
+function VideoMetaLine({ videoData }: { videoData: any }) {
+  return (
+    <Meta tone="secondary" style={{ marginTop: spacing.sm }}>
+      {[formatTimeAgo(videoData?.uploadedAt || Date.now()), formatSizeLabel(videoData?.size)]
+        .filter(Boolean)
+        .join(' · ')}
+    </Meta>
+  )
+}
+
 function MobileVideoPlayerScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
@@ -315,10 +542,7 @@ function MobileVideoPlayerScreen() {
 
   // Parse video data from params (JSON encoded or URL params)
   const params = useLocalSearchParams()
-  const channelKeyParam = params.channel as string | undefined
-  const rawPublicBeeParam = params.publicBeeKey ?? params.publicBee
-  const publicBeeParam = Array.isArray(rawPublicBeeParam) ? rawPublicBeeParam[0] : (rawPublicBeeParam as string | undefined)
-  const videoDataParam = params.videoData ? JSON.parse(params.videoData as string) : null
+  const { channelKeyParam, publicBeeParam, videoDataParam } = parseVideoRouteParams(params)
   const fromMiniPlayer = params.fromMiniPlayer === 'true'
 
   // Local UI state only
@@ -432,9 +656,7 @@ function MobileVideoPlayerScreen() {
     if (!videoData || !rpc) return
     if (!mountedRef.current) return
     clearStatsPolling()
-    const videoRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
-      ? videoData.path
-      : videoData.id
+    const videoRef = getVideoRef(videoData)
     if (__DEV__) {
       console.log('[VideoPlayer] Starting stats polling for', videoRef)
     }
@@ -485,48 +707,30 @@ function MobileVideoPlayerScreen() {
     setIsLoading(true)
 
     try {
-      const videoRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
-        ? videoData.path
-        : videoData.id
-      const videoAny = videoData as any
-      const playbackRequest = {
-        channelKey: videoData.channelKey,
-        videoId: videoRef,
-        publicBeeKey: videoAny.publicBeeKey || undefined,
-        blobId: videoAny.blobId || undefined,
-        blobsCoreKey: videoAny.blobsCoreKey || undefined,
-        mimeType: videoAny.mimeType || undefined,
-      }
+      const videoRef = getVideoRef(videoData)
+      const playbackRequest = createPlaybackRequest(videoData, videoRef)
+      const cacheKey = makePlaybackCacheKey(videoData, videoRef)
 
-      const cacheKey = makeVideoUrlCacheKey(
-        videoData.channelKey,
-        videoRef,
-        videoAny.blobId || undefined,
-        videoAny.blobsCoreKey || undefined,
-      )
       // Resolve-and-stream: get the blob-server URL and hand it to the player,
       // which fetches byte ranges on demand. No prewarming.
       const result = await rpc.preparePlayback(playbackRequest)
       if (!result || !mountedRef.current || loadGenerationRef.current !== generation) return
 
-      if (result?.url) {
+      if (result.stats) {
+        setLocalStats(result.stats as VideoStats)
+      }
+
+      if (result.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
         // Use context's loadAndPlayVideo - this uses the shared player
         loadAndPlayVideo(videoData, result.url)
 
-        if (result?.stats) {
-          setLocalStats(result.stats as VideoStats)
-        }
-
         if (Platform.OS !== 'web' || isPear) {
-          if (!isStatsComplete(result?.stats as VideoStats | null | undefined)) {
+          if (!isStatsComplete(result.stats as VideoStats | null | undefined)) {
             scheduleStatsPolling(0)
           }
         }
       } else {
-        if (result?.stats) {
-          setLocalStats(result.stats as VideoStats)
-        }
         scheduleStatsPolling(0)
       }
     } catch (err) {
@@ -544,17 +748,10 @@ function MobileVideoPlayerScreen() {
       void loadChannelInfo()
     }, 250)
 
-    const currentRef = (currentVideo?.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
-      ? currentVideo.path
-      : currentVideo?.id
-    const targetRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
-      ? videoData.path
-      : videoData.id
-    const sameChannel = !currentVideo?.channelKey || !videoData?.channelKey || currentVideo.channelKey === videoData.channelKey
-    const isSameVideoAsCurrent = Boolean(currentRef && targetRef && currentRef === targetRef && sameChannel)
-
     if (!videoLoaded) {
-      if (isSameVideoAsCurrent && videoUrl && (Platform.OS !== 'web' || isPear)) {
+      const isSame = isCurrentVideoActive(currentVideo, videoData)
+      const canResume = isSame && Boolean(videoUrl) && (Platform.OS !== 'web' || isPear)
+      if (canResume) {
         setIsLoading(false)
         startStatsPolling()
       } else {
@@ -569,6 +766,48 @@ function MobileVideoPlayerScreen() {
     }
   }, [videoData, loadingMeta, isPear, videoLoaded, loadVideo, startStatsPolling, loadChannelInfo, currentVideo, videoUrl, setIsLoading, clearStatsPolling])
 
+  const handleCastDeviceSelect = useCallback(async (deviceId: string) => {
+    setConnectingCastDeviceId(deviceId)
+    try {
+      const success = await cast.connect(deviceId)
+      if (!success) {
+        showCastAlert(cast.lastError || 'Failed to connect to Chromecast device.')
+        return
+      }
+      setRecentCastDeviceId(deviceId)
+
+      let urlToCast = videoUrl
+      if (!urlToCast && videoData && rpc?.getVideoUrl) {
+        try {
+          const videoRef = getVideoRef(videoData)
+          const result = await rpc.getVideoUrl({
+            channelKey: videoData.channelKey,
+            videoId: videoRef,
+          })
+          urlToCast = result?.url || null
+        } catch (err: any) {
+          showCastAlert(err?.message || 'Failed to resolve video URL for casting.')
+          return
+        }
+      }
+
+      if (!urlToCast) {
+        showCastAlert('Video URL is not ready yet. Try again once playback starts.')
+        return
+      }
+
+      await cast.play({
+        url: urlToCast,
+        contentType: videoData?.mimeType || 'video/mp4',
+        title: videoData?.title,
+      })
+      setShowCastPicker(false)
+      setShowCastRemote(true)
+    } finally {
+      setConnectingCastDeviceId(null)
+    }
+  }, [cast, videoUrl, videoData, rpc])
+
   // Back/minimize button - beforeRemove listener handles minimizePlayer()
   const goBack = () => {
     router.back()
@@ -578,7 +817,7 @@ function MobileVideoPlayerScreen() {
     router.push('/search')
   }
 
-  const channelName = channelMeta?.name || videoData?.channel?.name || `Channel ${videoData?.channelKey?.slice(0, 8) || 'Unknown'}`
+  const channelName = getChannelDisplayName(channelMeta, videoData)
   const channelInitial = channelName.charAt(0).toUpperCase()
 
   // Show loading while fetching video metadata
@@ -618,34 +857,17 @@ function MobileVideoPlayerScreen() {
         </Pressable>
 
         <View style={[styles.player, { height: videoHeight }]}>
-          {playbackError?.terminal ? (
-            // The source will not decode on a later attempt, so this replaces
-            // the loading gate rather than sitting behind it.
-            <View style={styles.loadingContainer}>
-              <Text style={styles.loadingText}>{playbackError.message}</Text>
-            </View>
-          ) : loadingVideo ? (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator color="white" size="large" />
-              <Text style={styles.loadingText}>Connecting to P2P network...</Text>
-            </View>
-          ) : videoUrl ? (
-            <View style={{ width: screenWidth, height: videoHeight }}>
-              {/* Video is rendered by VideoPlayerOverlay on all platforms */}
-              <P2PStatsOverlay
-                stats={displayedStats}
-                showDetails={showStats}
-                onPress={() => setShowStats(!showStats)}
-              />
-            </View>
-          ) : (
-            <View style={styles.errorContainer}>
-              <Text style={styles.errorText}>Failed to load video</Text>
-              <Pressable style={styles.retryButton} onPress={loadVideo}>
-                <Text style={styles.retryText}>Retry</Text>
-              </Pressable>
-            </View>
-          )}
+          <VideoPlayerSurface
+            playbackError={playbackError}
+            loadingVideo={loadingVideo}
+            videoUrl={videoUrl}
+            displayedStats={displayedStats}
+            showStats={showStats}
+            onToggleStats={() => setShowStats(!showStats)}
+            onRetry={loadVideo}
+            screenWidth={screenWidth}
+            videoHeight={videoHeight}
+          />
         </View>
       </View>
 
@@ -661,31 +883,23 @@ function MobileVideoPlayerScreen() {
         <View style={{ paddingHorizontal: spacing.lg, paddingVertical: spacing.md }}>
           <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
             <Display size="lg" tone="default" style={{ flex: 1 }}>{videoData?.title || 'Untitled'}</Display>
-            {identity?.driveKey && identity.driveKey === videoData?.channelKey && (
-              <Pressable
-                onPress={() => setEditingVideo(videoData)}
-                style={{ padding: spacing.sm, marginLeft: spacing.md }}
-              >
-                <Feather name="edit-2" color={colors.textMuted} size={20} />
-              </Pressable>
-            )}
+            <EditVideoButton
+              identity={identity}
+              videoData={videoData}
+              onEdit={() => setEditingVideo(videoData)}
+            />
           </View>
-          <Meta tone="secondary" style={{ marginTop: spacing.sm }}>
-            {[formatTimeAgo(videoData?.uploadedAt || Date.now()), formatSizeLabel(videoData?.size)]
-              .filter(Boolean)
-              .join(' · ')}
-          </Meta>
+          <VideoMetaLine videoData={videoData} />
         </View>
+        <CastBanner
+          cast={cast}
+          onOpenRemote={() => setShowCastRemote(true)}
+          onDisconnect={async () => {
+            await cast.disconnect()
+            setShowCastRemote(false)
+          }}
+        />
 
-        {/* Cast Banner */}
-        {cast.isConnected && (
-          <View style={{ paddingHorizontal: spacing.lg, paddingVertical: spacing.md, flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
-            <Feather name="cast" color={colors.primary} size={14} />
-            <Meta tone="secondary" style={{ flex: 1 }}>Casting to {cast.connectedDevice?.name || 'Cast device'}</Meta>
-            <Button label="Remote" variant="secondary" size="sm" onPress={() => setShowCastRemote(true)} />
-            <Button label="Stop" variant="secondary" size="sm" onPress={async () => { await cast.disconnect(); setShowCastRemote(false); }} />
-          </View>
-        )}
 
         {/* P2P Stats Bar */}
         {(Platform.OS !== 'web' || isPear) && <P2PStatsBar stats={displayedStats} />}
@@ -703,7 +917,7 @@ function MobileVideoPlayerScreen() {
         <ChannelInfo
           channelName={channelName}
           channelInitial={channelInitial}
-          onChannelPress={videoData?.channelKey ? () => router.push({ pathname: '/channel/[key]', params: { key: videoData.channelKey, publicBeeKey: videoData.publicBeeKey || undefined } }) : undefined}
+          onChannelPress={getChannelPressHandler(videoData, router)}
         />
 
         {/* Description Panel */}
@@ -728,49 +942,7 @@ function MobileVideoPlayerScreen() {
           setShowCastPicker(false)
           setConnectingCastDeviceId(null)
         }}
-        onDeviceSelect={async (deviceId: string) => {
-          setConnectingCastDeviceId(deviceId)
-          try {
-            const success = await cast.connect(deviceId)
-            if (!success) {
-              showCastAlert(cast.lastError || 'Failed to connect to Chromecast device.')
-              return
-            }
-            setRecentCastDeviceId(deviceId)
-
-            let urlToCast = videoUrl
-            if (!urlToCast && videoData && rpc?.getVideoUrl) {
-              try {
-                const videoRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
-                  ? videoData.path
-                  : videoData.id
-                const result = await rpc.getVideoUrl({
-                  channelKey: videoData.channelKey,
-                  videoId: videoRef,
-                })
-                urlToCast = result?.url || null
-              } catch (err: any) {
-                showCastAlert(err?.message || 'Failed to resolve video URL for casting.')
-                return
-              }
-            }
-
-            if (!urlToCast) {
-              showCastAlert('Video URL is not ready yet. Try again once playback starts.')
-              return
-            }
-
-            await cast.play({
-              url: urlToCast,
-              contentType: videoData?.mimeType || 'video/mp4',
-              title: videoData?.title,
-            })
-            setShowCastPicker(false)
-            setShowCastRemote(true)
-          } finally {
-            setConnectingCastDeviceId(null)
-          }
-        }}
+        onDeviceSelect={handleCastDeviceSelect}
         onDisconnect={async () => {
           await cast.disconnect()
           setShowCastPicker(false)

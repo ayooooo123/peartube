@@ -16,7 +16,10 @@ import { execSync } from 'child_process'
 import { createPublisherSignerBridge } from '../../lib/publisher-signer-bridge'
 import { createBunPublisherKeyVault } from './publisher-key-vault'
 import { createBunPersonalSecretVault } from './personal-secret-vault'
-import { createPublisherShellService } from '../../lib/publisher-shell-service'
+import {
+  createPublisherShellService,
+  createDesktopPublisherLifecycleHandlers,
+} from '../../lib/publisher-shell-service'
 import { runLegacyPublisherRootPreflight } from '@peartube/backend/legacy-publisher-root-preflight'
 
 type LegacyPublisherRootMigrationRequest = {
@@ -160,6 +163,10 @@ const publisherShellService = createPublisherShellService({
 })
 let legacyPublisherRootPreflightSettled = false
 
+const desktopPublisherLifecycleHandlers = createDesktopPublisherLifecycleHandlers({
+  publisherShell: publisherShellService,
+})
+
 const legacyPublisherRootPreflightPromise = runLegacyPublisherRootPreflight({
   storagePath,
   migrateLegacyPublisherRoot: (request: LegacyPublisherRootMigrationRequest) =>
@@ -292,7 +299,7 @@ function removeWorkerDataListener(worker: any, listener: (d: Buffer) => void) {
 function startIPCWebSocket() {
   if (ipcWsServer) return ipcWsPort
 
-  const server = Bun.serve({
+  const server = globalThis.Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
     fetch(req, server) {
@@ -364,7 +371,7 @@ const appRPC = BrowserView.defineRPC<PearTubeRPC>({
         return { blobServerPort }
       },
       publisherEnsureLocalCatalog: async (request) =>
-        publisherShellService.publisherEnsureLocalCatalog(request),
+        desktopPublisherLifecycleHandlers.publisherEnsureLocalCatalog(request),
       personalSecureGet: async ({ account }) => ({
         value: await personalSecretVault.get(account),
       }),
@@ -403,7 +410,7 @@ async function startStaticServer() {
   if (staticServer) return staticPort
 
   const viewsDir = join(appCodeDir, 'views', 'app')
-  const server = Bun.serve({
+  const server = globalThis.Bun.serve({
     port: 0, // auto-assign
     hostname: '127.0.0.1',
     async fetch(req) {
@@ -418,7 +425,7 @@ async function startStaticServer() {
 
       let filePath = join(viewsDir, decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname))
 
-      const file = Bun.file(filePath)
+      const file = globalThis.Bun.file(filePath)
       if (!file.size) {
         // SPA fallback: serve index.html for navigation routes
         const ext = filePath.split('.').pop() || ''
@@ -435,7 +442,7 @@ async function startStaticServer() {
       // This replaces the build-time inject-desktop-shell.js script — no
       // post-processing of files on disk, no fragile regex replacements.
       if (ext === '.html') {
-        let html = await Bun.file(filePath).text()
+        let html = await globalThis.Bun.file(filePath).text()
         // Inject view entrypoint before the Expo bundle so window.bridge is ready
         if (!html.includes('views://app/index.js')) {
           html = html.replace(
@@ -446,7 +453,7 @@ async function startStaticServer() {
         return new Response(html, { headers: { 'Content-Type': 'text/html' } })
       }
 
-      return new Response(Bun.file(filePath), {
+      return new Response(globalThis.Bun.file(filePath), {
         headers: { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' },
       })
     },
@@ -474,7 +481,7 @@ async function createWindow() {
   mainWindow = new BrowserWindow({
     title: APP_NAME,
     url: `http://127.0.0.1:${staticPort}`,
-    frame: { width: 1280, height: 800 },
+    frame: { x: 0, y: 0, width: 1280, height: 800 },
     titleBarStyle: 'hiddenInset',
     renderer: 'native',
     rpc: appRPC,

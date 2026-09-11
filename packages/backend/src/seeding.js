@@ -162,6 +162,89 @@ function normalizeDriveKey(value) {
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
+function pickSeedField(blobValue, fallbackValue = null) {
+  return blobValue || fallbackValue || null
+}
+
+function buildUpdatedSeed(existing, mergedReason, retentionClass, blobInfo) {
+  const thumbnailBytes = blobInfo?.thumbnailByteLength == null
+    ? normalizeStorageBytes(existing.thumbnailBytes)
+    : normalizeStorageBytes(blobInfo.thumbnailByteLength)
+  return {
+    ...existing,
+    reason: mergedReason,
+    retentionClass,
+    blocks: blobInfo?.blockLength || existing.blocks || 0,
+    bytes: normalizeByteLength(blobInfo, existing.bytes || 0),
+    thumbnailBytes,
+    publicBeeKey: pickSeedField(blobInfo?.publicBeeKey, existing.publicBeeKey),
+    blobId: pickSeedField(blobInfo?.blobId, existing.blobId),
+    blobsCoreKey: pickSeedField(blobInfo?.blobsCoreKey, existing.blobsCoreKey),
+    thumbnailBlobId: pickSeedField(blobInfo?.thumbnailBlobId, existing.thumbnailBlobId),
+    thumbnailBlobsCoreKey: pickSeedField(blobInfo?.thumbnailBlobsCoreKey, existing.thumbnailBlobsCoreKey),
+    mimeType: pickSeedField(blobInfo?.mimeType, existing.mimeType),
+    thumbnailMimeType: pickSeedField(blobInfo?.thumbnailMimeType, existing.thumbnailMimeType)
+  }
+}
+
+function buildNewSeed({ driveKey, videoPath, reason, retentionClass, blobInfo }) {
+  return {
+    driveKey,
+    videoPath,
+    reason,
+    retentionClass,
+    addedAt: Date.now(),
+    blocks: blobInfo?.blockLength || 0,
+    bytes: normalizeByteLength(blobInfo, 0),
+    thumbnailBytes: normalizeStorageBytes(blobInfo?.thumbnailByteLength),
+    publicBeeKey: pickSeedField(blobInfo?.publicBeeKey),
+    blobId: pickSeedField(blobInfo?.blobId),
+    blobsCoreKey: pickSeedField(blobInfo?.blobsCoreKey),
+    thumbnailBlobId: pickSeedField(blobInfo?.thumbnailBlobId),
+    thumbnailBlobsCoreKey: pickSeedField(blobInfo?.thumbnailBlobsCoreKey),
+    mimeType: pickSeedField(blobInfo?.mimeType),
+    thumbnailMimeType: pickSeedField(blobInfo?.thumbnailMimeType)
+  }
+}
+
+function parseDiskCeiling(diskCeilingBytes) {
+  const ceilingProvided = diskCeilingBytes !== undefined && diskCeilingBytes !== null
+  const ceiling = ceilingProvided ? Number(diskCeilingBytes) : Number.POSITIVE_INFINITY
+  if (ceilingProvided && (!Number.isSafeInteger(ceiling) || ceiling < 0)) {
+    throw new TypeError('diskCeilingBytes must be a non-negative safe integer')
+  }
+  return { ceilingProvided, ceiling }
+}
+
+function computeEffectiveBytes(ceilingProvided, ceiling, budgetedBytes) {
+  if (budgetedBytes > 0) return Math.min(ceiling, budgetedBytes)
+  return ceilingProvided ? ceiling : 0
+}
+
+function buildContributionState(uploadAllowed, outboundBytesPerSecond, outboundRateEnforced) {
+  const outbound = Number(outboundBytesPerSecond)
+  const enforced = outboundRateEnforced === true &&
+    Number.isSafeInteger(outbound) && outbound >= 0
+  return {
+    uploadAllowed: uploadAllowed === true,
+    outboundBytesPerSecond: enforced ? outbound : null,
+    outboundRateEnforced: enforced,
+  }
+}
+
+function buildRetentionPolicyState(contributeWatchedMedia, archiveEnabled, contributionBudgetBytes, archiveBudgetBytes, migrationRequired) {
+  const contribution = normalizeStorageBytes(contributionBudgetBytes)
+  const archive = normalizeStorageBytes(archiveBudgetBytes)
+  const isMigrating = migrationRequired === true
+  return {
+    contributeWatchedMedia: contributeWatchedMedia === true && !isMigrating,
+    archiveEnabled: archiveEnabled === true && !isMigrating,
+    contributionBudgetBytes: contribution,
+    archiveBudgetBytes: archive,
+    migrationRequired: isMigrating
+  }
+}
+
 export class SeedingManager {
   /**
    * @param {import('corestore')} store - Corestore instance
@@ -419,6 +502,12 @@ export class SeedingManager {
    * @param {{protectSelf?: boolean, protectedKeys?: string[] | Set<string>}} [options]
    * @returns {Promise<boolean>}
    */
+  async enforceQuotaForSeed(key, options = {}) {
+    const protectedKeys = normalizeProtectedSeedKeys(options.protectedKeys)
+    if (options.protectSelf) protectedKeys.add(key)
+    await this.enforceQuota({ protectedKeys })
+  }
+
   async addSeed(driveKey, videoPath, reason, blobInfo, options = {}) {
     this.assertAuthorizedForSeed(driveKey, reason, options)
     const key = `${driveKey}:${videoPath}`;
@@ -436,50 +525,15 @@ export class SeedingManager {
     // Check if already seeding
     if (existingSeed) {
       console.log('[SeedingManager] Already seeding:', key.slice(0, 32));
-      const existing = existingSeed
-      const updatedSeedInfo = {
-        ...existing,
-        reason: mergedReason,
-        retentionClass,
-        blocks: blobInfo?.blockLength || existing.blocks || 0,
-        bytes: normalizeByteLength(blobInfo, existing.bytes || 0),
-        thumbnailBytes: blobInfo?.thumbnailByteLength == null
-          ? normalizeStorageBytes(existing.thumbnailBytes)
-          : normalizeStorageBytes(blobInfo.thumbnailByteLength),
-        publicBeeKey: blobInfo?.publicBeeKey || existing.publicBeeKey || null,
-        blobId: blobInfo?.blobId || existing.blobId || null,
-        blobsCoreKey: blobInfo?.blobsCoreKey || existing.blobsCoreKey || null,
-        thumbnailBlobId: blobInfo?.thumbnailBlobId || existing.thumbnailBlobId || null,
-        thumbnailBlobsCoreKey: blobInfo?.thumbnailBlobsCoreKey || existing.thumbnailBlobsCoreKey || null,
-        mimeType: blobInfo?.mimeType || existing.mimeType || null,
-        thumbnailMimeType: blobInfo?.thumbnailMimeType || existing.thumbnailMimeType || null
-      }
+      const updatedSeedInfo = buildUpdatedSeed(existingSeed, mergedReason, retentionClass, blobInfo)
       this.activeSeeds.set(key, updatedSeedInfo)
       await this.persistSeeds()
-      const protectedKeys = normalizeProtectedSeedKeys(options.protectedKeys)
-      if (options.protectSelf) protectedKeys.add(key)
-      await this.enforceQuota({ protectedKeys });
+      await this.enforceQuotaForSeed(key, options)
       return false;
     }
 
     /** @type {SeedInfo} */
-    const seedInfo = {
-      driveKey,
-      videoPath,
-      reason,
-      retentionClass,
-      addedAt: Date.now(),
-      blocks: blobInfo?.blockLength || 0,
-      bytes: normalizeByteLength(blobInfo, 0),
-      thumbnailBytes: normalizeStorageBytes(blobInfo?.thumbnailByteLength),
-      publicBeeKey: blobInfo?.publicBeeKey || null,
-      blobId: blobInfo?.blobId || null,
-      blobsCoreKey: blobInfo?.blobsCoreKey || null,
-      thumbnailBlobId: blobInfo?.thumbnailBlobId || null,
-      thumbnailBlobsCoreKey: blobInfo?.thumbnailBlobsCoreKey || null,
-      mimeType: blobInfo?.mimeType || null,
-      thumbnailMimeType: blobInfo?.thumbnailMimeType || null
-    };
+    const seedInfo = buildNewSeed({ driveKey, videoPath, reason, retentionClass, blobInfo })
 
     this.activeSeeds.set(key, seedInfo);
     await this.persistSeeds();
@@ -487,9 +541,7 @@ export class SeedingManager {
     console.log('[SeedingManager] Added seed:', videoPath, 'reason:', reason, 'bytes:', seedInfo.bytes);
 
     // Enforce quota
-    const protectedKeys = normalizeProtectedSeedKeys(options.protectedKeys)
-    if (options.protectSelf) protectedKeys.add(key)
-    await this.enforceQuota({ protectedKeys });
+    await this.enforceQuotaForSeed(key, options)
 
     return true;
   }
@@ -577,37 +629,18 @@ export class SeedingManager {
     archiveBudgetBytes = 0,
     migrationRequired = true
   } = {}) {
-    // The operator ceiling is optional: a consent-only policy carries just the
-    // per-class budgets. When it is supplied it must still be a real byte count.
-    const ceilingProvided = diskCeilingBytes !== undefined && diskCeilingBytes !== null
-    const ceiling = ceilingProvided ? Number(diskCeilingBytes) : Number.POSITIVE_INFINITY
-    if (ceilingProvided && (!Number.isSafeInteger(ceiling) || ceiling < 0)) {
-      throw new TypeError('diskCeilingBytes must be a non-negative safe integer')
-    }
-    // Only the transport that applied the rate may claim it. Without that
-    // confirmation there is no cap to report, whatever number was requested.
-    const outbound = Number(outboundBytesPerSecond)
-    const enforced = outboundRateEnforced === true &&
-      Number.isSafeInteger(outbound) && outbound >= 0
-    this.contribution = {
-      uploadAllowed: uploadAllowed === true,
-      outboundBytesPerSecond: enforced ? outbound : null,
-      outboundRateEnforced: enforced,
-    }
-    const contribution = normalizeStorageBytes(contributionBudgetBytes)
-    const archive = normalizeStorageBytes(archiveBudgetBytes)
-    this.retentionPolicy = {
-      contributeWatchedMedia: contributeWatchedMedia === true && migrationRequired !== true,
-      archiveEnabled: archiveEnabled === true && migrationRequired !== true,
-      contributionBudgetBytes: contribution,
-      archiveBudgetBytes: archive,
-      migrationRequired: migrationRequired === true
-    }
-    // Two caps now describe the same disk: the operator's absolute ceiling and
-    // the per-class retention budgets. Honour whichever is tighter so neither
-    // the operator's limit nor a class budget can be exceeded.
-    const budgetedBytes = contribution + archive
-    const effectiveBytes = budgetedBytes > 0 ? Math.min(ceiling, budgetedBytes) : (ceilingProvided ? ceiling : 0)
+    const { ceilingProvided, ceiling } = parseDiskCeiling(diskCeilingBytes)
+    this.contribution = buildContributionState(uploadAllowed, outboundBytesPerSecond, outboundRateEnforced)
+    this.retentionPolicy = buildRetentionPolicyState(
+      contributeWatchedMedia,
+      archiveEnabled,
+      contributionBudgetBytes,
+      archiveBudgetBytes,
+      migrationRequired
+    )
+
+    const budgetedBytes = this.retentionPolicy.contributionBudgetBytes + this.retentionPolicy.archiveBudgetBytes
+    const effectiveBytes = computeEffectiveBytes(ceilingProvided, ceiling, budgetedBytes)
     const previousBytes = this.config.maxStorageGB * BYTES_PER_GB
     this.config = {
       ...this.config,
@@ -967,13 +1000,7 @@ export class SeedingManager {
    * @param {{ excludeKeys?: Set<string> | string[] }} [options]
    * @returns {Promise<{ clearedBytes: number, clearedCount: number, clearedBlob: boolean }>}
    */
-  async clearDownloadIntents(options = {}) {
-    const excludeKeys = normalizeProtectedSeedKeys(options.excludeKeys)
-    const downloadIntents = this.metaSubspaces?.downloadIntents
-    if (typeof downloadIntents?.createReadStream !== 'function') {
-      return { clearedBytes: 0, clearedCount: 0, clearedBlob: false }
-    }
-
+  async collectClearableDownloadIntents(downloadIntents, excludeKeys) {
     const entries = []
     for await (const entry of downloadIntents.createReadStream()) {
       const intent = entry?.value
@@ -983,20 +1010,44 @@ export class SeedingManager {
       // entry.key is the decoded sub key (`${driveKey}:${videoPath}`).
       entries.push({ key: entry.key, seedKey, intent })
     }
+    return entries
+  }
+
+  async clearDownloadIntentEntry(downloadIntents, entry) {
+    const intent = entry.intent
+    const bytes = Math.max(0, Number(intent.totalBytes || intent.byteLength || 0) || 0)
+    const clearedBlob = await this.clearSeedBlob({
+      driveKey: intent.driveKey,
+      videoPath: intent.videoPath,
+      blobId: intent.blobId || null,
+      blobsCoreKey: intent.blobsCoreKey || null
+    })
+    await downloadIntents.del(entry.key)
+    this.activeSeeds.delete(entry.seedKey)
+    return { bytes, clearedBlob }
+  }
+
+  /**
+   * Clear persisted partial download intents that reserve cache storage but may
+   * not have been promoted into activeSeeds yet.
+   * @param {{ excludeKeys?: Set<string> | string[] }} [options]
+   * @returns {Promise<{ clearedBytes: number, clearedCount: number, clearedBlob: boolean }>}
+   */
+  async clearDownloadIntents(options = {}) {
+    const excludeKeys = normalizeProtectedSeedKeys(options.excludeKeys)
+    const downloadIntents = this.metaSubspaces?.downloadIntents
+    if (typeof downloadIntents?.createReadStream !== 'function') {
+      return { clearedBytes: 0, clearedCount: 0, clearedBlob: false }
+    }
+
+    const entries = await this.collectClearableDownloadIntents(downloadIntents, excludeKeys)
 
     let clearedBytes = 0
     let clearedBlob = false
     for (const entry of entries) {
-      const intent = entry.intent
-      clearedBytes += Math.max(0, Number(intent.totalBytes || intent.byteLength || 0) || 0)
-      clearedBlob = (await this.clearSeedBlob({
-        driveKey: intent.driveKey,
-        videoPath: intent.videoPath,
-        blobId: intent.blobId || null,
-        blobsCoreKey: intent.blobsCoreKey || null
-      })) || clearedBlob
-      await downloadIntents.del(entry.key)
-      this.activeSeeds.delete(entry.seedKey)
+      const result = await this.clearDownloadIntentEntry(downloadIntents, entry)
+      clearedBytes += result.bytes
+      if (result.clearedBlob) clearedBlob = true
     }
 
     if (entries.length > 0) await this.persistSeeds()

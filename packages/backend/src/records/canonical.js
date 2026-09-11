@@ -39,9 +39,10 @@ export function writeVarint (buffer, offset, value) {
 }
 export function readVarint (state, name, max = Number.MAX_SAFE_INTEGER) {
   let value = 0; let factor = 1; let count = 0
-  while (true) {
+  let byte = 0x80
+  while ((byte & 0x80) !== 0) {
     if (state.offset >= state.buffer.byteLength) fail(`truncated ${name}`)
-    const byte = state.buffer[state.offset++]
+    byte = state.buffer[state.offset++]
     value += (byte & 127) * factor
     count++
     if (!Number.isSafeInteger(value) || value > max || count > 8) fail(`${name} is out of bounds`)
@@ -51,6 +52,7 @@ export function readVarint (state, name, max = Number.MAX_SAFE_INTEGER) {
     }
     factor *= 128
   }
+  fail(`truncated ${name}`)
 }
 export function fieldSize (bytes) { return varintLength(bytes.byteLength) + bytes.byteLength }
 export function writeField (buffer, offset, bytes) {

@@ -11,13 +11,15 @@ import { createBlockOffloader } from '../src/archive/block-offloader.js'
 import { createOffloadStorage } from '../src/archive/offload-storage.js'
 import { createRemoteBlockStore } from '../src/archive/remote-block-store.js'
 import { CLOSED_ACQUISITION_POLICY } from '../src/acquisition/index.js'
-import { ASSET_BLOCK_SIZE } from '../src/assets/static-core.js'
+import { ASSET_BLOCK_SIZE, writeStaticAsset } from '../src/assets/static-core.js'
 import { createBufferSourceReader, createSourceReader } from '../src/assets/source-reader.js'
+import { normalizeAssetCoreRefV2 } from '../src/assets/rendition.js'
 import { createProviderSubsystem } from '../src/provider/subsystem.js'
 
 const NOW = 1_787_788_800_000
 const PUBLISHER_ID = 'a'.repeat(64)
 const SOURCE = b4a.from('bounded provider acquisition smoke payload')
+const ARTWORK = b4a.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=', 'base64')
 
 function fakeBee() {
   const entries = new Map()
@@ -127,6 +129,7 @@ test('provider subsystem acquires, verifies, and publishes one private-grant sou
   }
 
   let publishedAsset = null
+  let publishedArtwork = null
   const subsystem = await createProviderSubsystem({
     ctx: { metaDb: fakeBee(), store },
     verifiedQueryView: queryView(),
@@ -138,7 +141,13 @@ test('provider subsystem acquires, verifies, and publishes one private-grant sou
       async hasPublisherAuthority() { return true },
       async getAuthorizedPublisherIds() { return [PUBLISHER_ID] },
       async getAcquiredPublication() { return null },
-      async publishAcquiredAsset({ asset }) {
+      async publishAcquiredAsset({ asset, createArtworkSources }) {
+        const [artwork] = await createArtworkSources()
+        const description = await artwork.reader.describe()
+        const chunks = []
+        for await (const chunk of artwork.reader.open({ offset: 0, length: description.byteLength })) chunks.push(chunk)
+        publishedArtwork = b4a.concat(chunks)
+        await artwork.reader.close()
         publishedAsset = asset
         return {
           publicationId: 'publication-1',
@@ -153,7 +162,21 @@ test('provider subsystem acquires, verifies, and publishes one private-grant sou
       acquisitionPolicy: policy(),
       freeDiskBytes: () => 4096,
       sourceGrantResolver: {
-        async resolve() { return createBufferSourceReader(SOURCE, { mimeType: 'video/mp4' }) },
+        async resolve() {
+          const media = createBufferSourceReader(SOURCE, { mimeType: 'video/mp4' })
+          return createSourceReader({
+            resumable: media.resumable,
+            maxReadBytes: media.maxReadBytes,
+            describe: media.describe,
+            open: media.open,
+            close: media.close,
+            openArtwork: async () => [{
+              role: 'poster',
+              mimeType: 'image/png',
+              reader: createBufferSourceReader(ARTWORK, { mimeType: 'image/png' }),
+            }],
+          })
+        },
       },
     },
     now: Date.now,
@@ -166,6 +189,7 @@ test('provider subsystem acquires, verifies, and publishes one private-grant sou
     selector: { namespace: 'catalog', identifier: 'smoke-1', kind: 'movie' },
     publisherId: PUBLISHER_ID,
     expectedBytes: SOURCE.byteLength,
+    artworkRoles: ['poster'],
   })
   const principal = { principalId: 'local-user', publisherId: PUBLISHER_ID, isLocal: true, publisherIds: [PUBLISHER_ID] }
   const queued = await subsystem.service.requestAcquisition({
@@ -205,6 +229,7 @@ test('provider subsystem acquires, verifies, and publishes one private-grant sou
   if (completed.state !== 'completed') return
   t.is(completed.bytesAcquired, SOURCE.byteLength)
   t.is(completed.assetId, publishedAsset.assetId)
+  t.alike(publishedArtwork, ARTWORK, 'the private grant supplies the exact publisher artwork bytes')
 
   const core = store.get({ key: b4a.from(completed.assetId, 'hex') })
   await core.ready()
@@ -553,4 +578,276 @@ test('a failed acquisition with a resumable reader resumes from its staged byte 
   t.is(completedJob.bytesAcquired, payloadBytes.byteLength, 'archive job finished completely')
   t.is(rangesRequested.length, 2, 'source was opened twice across the two attempts')
   t.is(rangesRequested[1].offset, ASSET_BLOCK_SIZE, 'second attempt resumed from the staged block boundary')
+})
+
+test('subsystem shutdown aborts a stalled transferred import before it can publish or outlive close', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'peartube-provider-transfer-shutdown-'))
+  const coreStore = new Corestore(directory)
+  await coreStore.ready()
+  t.teardown(async () => {
+    await coreStore.close().catch(() => {})
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  const written = await writeStaticAsset({ store: coreStore, reader: createBufferSourceReader(SOURCE) })
+  const core = normalizeAssetCoreRefV2(written.descriptor)
+  await written.core.close()
+  const transfer = { calls: 0, signal: null, sawAbort: false, settled: false }
+  let publishes = 0
+  const subsystem = await createProviderSubsystem({
+    ctx: { metaDb: fakeBee(), store: coreStore },
+    verifiedQueryView: queryView(),
+    indexVerificationRuntime: {
+      async searchIndexCandidates() { return [] },
+      async verifyIndexCandidate() { throw new Error('not found') },
+    },
+    uploadManager: {
+      async hasPublisherAuthority() { return true },
+      async getAuthorizedPublisherIds() { return [PUBLISHER_ID] },
+      async getAcquiredPublication() { return null },
+      async publishAcquiredAsset() {
+        publishes++
+        throw new Error('a shutdown-aborted transfer must never reach publication')
+      },
+    },
+    mediaApi: { async openMediaRenditionUrl() { return { success: false } } },
+    config: {
+      acquisitionPolicy: policy(),
+      freeDiskBytes: () => 4096,
+      acquisitionProvider: {
+        async importAsset({ signal }) {
+          transfer.calls++
+          transfer.signal = signal
+          return await new Promise((resolve, reject) => {
+            const abort = () => {
+              transfer.sawAbort = true
+              reject(Object.assign(new Error('transfer aborted during shutdown'), { code: 'TRANSFER_ABORTED' }))
+            }
+            if (signal?.aborted) abort()
+            else if (signal?.addEventListener) signal.addEventListener('abort', abort, { once: true })
+            else setTimeout(() => {
+              transfer.settled = true
+              resolve({ imported: true, byteLength: core.byteLength, descriptor: {
+                assetId: core.assetId, key: core.key, treeHash: core.treeHash,
+                length: core.length, byteLength: core.byteLength, blockSize: core.blockSize
+              } })
+            }, 40)
+          })
+        },
+      },
+      sourceGrantResolver: { async resolve() { return createBufferSourceReader(SOURCE) } },
+    },
+    now: Date.now,
+  })
+  t.teardown(() => subsystem.close())
+
+  const resolution = subsystem.issueLocalResolution({
+    title: 'Transfer shutdown title',
+    selector: { namespace: 'catalog', identifier: 'transfer-shutdown-1', kind: 'movie' },
+    publisherId: PUBLISHER_ID,
+    expectedBytes: SOURCE.byteLength,
+  })
+  const principal = { principalId: 'local-user', publisherId: PUBLISHER_ID, isLocal: true, publisherIds: [PUBLISHER_ID] }
+  const queued = await subsystem.service.requestAcquisition({
+    idempotencyKey: 'transfer-shutdown-1',
+    request: {
+      schemaVersion: 1,
+      resolutionRef: resolution.resolutionRef,
+      publisherId: PUBLISHER_ID,
+      retentionClass: 'archive-pin',
+    },
+    principal,
+  })
+  const assignmentId = '33'.repeat(32)
+  await subsystem.store.saveCoordination(queued.acquisitionId, {
+    schemaVersion: 1,
+    role: 'requester',
+    phase: 'assigned',
+    requestId: '11'.repeat(32),
+    offerId: '22'.repeat(32),
+    assignmentId,
+    peerId: '44'.repeat(32),
+    requesterId: '55'.repeat(32),
+    acquirerId: '66'.repeat(32),
+    sourceRef: resolution.resolutionRef,
+    publisherId: PUBLISHER_ID,
+    publicationIntentDigest: '88'.repeat(32),
+    budget: { maxSourceBytes: 4096, maxOutputBytes: 4096, maxNetworkBytes: 8192, maxWallClockMs: 60_000 },
+    output: { purpose: 'original', formats: ['application/octet-stream'] },
+    resultHoldUntil: Date.now() + 180_000,
+    requestGeneration: 1,
+    epoch: 1,
+    deadline: Date.now() + 60_000,
+    progress: null,
+    result: null,
+    error: null,
+  })
+
+  const notification = subsystem.coordinator.networkManager.onResult({
+    result: {
+      assignmentId,
+      acquiredBytes: core.byteLength,
+      completedAt: Date.now(),
+      availabilityUntil: Date.now() + 120_000,
+      sourceIdentity: { kind: 'sha256', value: 'e'.repeat(64) },
+      assets: [{ purpose: 'original', format: 'application/octet-stream', renditionId: 'd'.repeat(64), core }],
+    },
+    peerId: '44'.repeat(32),
+  }).then(() => 'resolved', error => 'rejected:' + (error?.code || error?.message))
+
+  await eventually(() => transfer.calls, calls => calls === 1)
+  await subsystem.close()
+
+  t.ok(transfer.signal, 'the transferred import receives a coordinator-lifetime signal')
+  t.is(transfer.sawAbort, true, 'shutdown aborts the stalled transfer through the real provider chain')
+  t.is(transfer.settled, false, 'the un-abortable fallback path never ran; close did not wait it out silently')
+  t.is(await notification, 'rejected:TRANSFER_ABORTED')
+  t.is(publishes, 0, 'an aborted transfer never publishes')
+  const afterClose = await subsystem.service.getAcquisition({ acquisitionId: queued.acquisitionId, principal })
+  t.is(afterClose.state, 'queued', 'the interrupted transfer leaves a durable, re-drivable acquisition')
+  const coord = await subsystem.store.getCoordination(queued.acquisitionId)
+  t.is(coord.phase, 'result-ready', 'the result stays re-driveable after shutdown')
+  t.is(coord.error?.code, 'TRANSFER_ABORTED')
+})
+
+test('subsystem shutdown leaves a transferred import stalled in verification resumable, not terminalized', async t => {
+  t.timeout(5000)
+  const directory = mkdtempSync(join(tmpdir(), 'peartube-provider-verify-shutdown-'))
+  const coreStore = new Corestore(directory)
+  await coreStore.ready()
+  t.teardown(async () => {
+    await coreStore.close().catch(() => {})
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  const written = await writeStaticAsset({ store: coreStore, reader: createBufferSourceReader(SOURCE) })
+  const core = normalizeAssetCoreRefV2(written.descriptor)
+  await written.core.close()
+  const verification = { calls: 0, sawAbort: false }
+  let markVerificationStarted
+  const verificationStarted = new Promise(resolve => { markVerificationStarted = resolve })
+  let publishes = 0
+  const subsystem = await createProviderSubsystem({
+    ctx: { metaDb: fakeBee(), store: coreStore },
+    verifiedQueryView: queryView(),
+    indexVerificationRuntime: {
+      async searchIndexCandidates() { return [] },
+      async verifyIndexCandidate() { throw new Error('not found') },
+    },
+    uploadManager: {
+      async hasPublisherAuthority() { return true },
+      async getAuthorizedPublisherIds() { return [PUBLISHER_ID] },
+      async getAcquiredPublication() { return null },
+      async publishAcquiredAsset() {
+        publishes++
+        throw new Error('a shutdown-interrupted verification must never reach publication')
+      },
+    },
+    mediaApi: { async openMediaRenditionUrl() { return { success: false } } },
+    config: {
+      // This fixture imports the complete payload in one burst; the ordinary
+      // source-reader fixture is deliberately throttled to 16 bytes/second.
+      acquisitionPolicy: { ...policy(), maxAcquireBytesPerSecond: SOURCE.byteLength },
+      freeDiskBytes: () => 4096,
+      acquisitionProvider: {
+        async importAsset() {
+          return { imported: true, byteLength: core.byteLength, descriptor: {
+            assetId: core.assetId, key: core.key, treeHash: core.treeHash,
+            length: core.length, byteLength: core.byteLength, blockSize: core.blockSize
+          } }
+        },
+        async verify({ signal }) {
+          verification.calls++
+          markVerificationStarted()
+          return await new Promise((resolve, reject) => {
+            const abort = () => {
+              verification.sawAbort = true
+              reject(Object.assign(new Error('verification interrupted by coordinator shutdown'), { code: 'ASSET_VERIFY_INTERRUPTED' }))
+            }
+            if (signal?.aborted) abort()
+            else signal.addEventListener('abort', abort, { once: true })
+          })
+        },
+      },
+      sourceGrantResolver: { async resolve() { return createBufferSourceReader(SOURCE) } },
+    },
+    now: Date.now,
+  })
+  t.teardown(() => subsystem.close())
+
+  const resolution = subsystem.issueLocalResolution({
+    title: 'Verify shutdown title',
+    selector: { namespace: 'catalog', identifier: 'verify-shutdown-1', kind: 'movie' },
+    publisherId: PUBLISHER_ID,
+    expectedBytes: SOURCE.byteLength,
+  })
+  const principal = { principalId: 'local-user', publisherId: PUBLISHER_ID, isLocal: true, publisherIds: [PUBLISHER_ID] }
+  const queued = await subsystem.service.requestAcquisition({
+    idempotencyKey: 'verify-shutdown-1',
+    request: {
+      schemaVersion: 1,
+      resolutionRef: resolution.resolutionRef,
+      publisherId: PUBLISHER_ID,
+      retentionClass: 'archive-pin',
+    },
+    principal,
+  })
+  const assignmentId = '33'.repeat(32)
+  await subsystem.store.saveCoordination(queued.acquisitionId, {
+    schemaVersion: 1,
+    role: 'requester',
+    phase: 'assigned',
+    requestId: '11'.repeat(32),
+    offerId: '22'.repeat(32),
+    assignmentId,
+    peerId: '44'.repeat(32),
+    requesterId: '55'.repeat(32),
+    acquirerId: '66'.repeat(32),
+    sourceRef: resolution.resolutionRef,
+    publisherId: PUBLISHER_ID,
+    publicationIntentDigest: '88'.repeat(32),
+    budget: { maxSourceBytes: 4096, maxOutputBytes: 4096, maxNetworkBytes: 8192, maxWallClockMs: 60_000 },
+    output: { purpose: 'original', formats: ['application/octet-stream'] },
+    resultHoldUntil: Date.now() + 180_000,
+    requestGeneration: 1,
+    epoch: 1,
+    deadline: Date.now() + 60_000,
+    progress: null,
+    result: null,
+    error: null,
+  })
+
+  const notification = subsystem.coordinator.networkManager.onResult({
+    result: {
+      assignmentId,
+      acquiredBytes: core.byteLength,
+      completedAt: Date.now(),
+      availabilityUntil: Date.now() + 120_000,
+      sourceIdentity: { kind: 'sha256', value: 'e'.repeat(64) },
+      assets: [{ purpose: 'original', format: 'application/octet-stream', renditionId: 'd'.repeat(64), core }],
+    },
+    peerId: '44'.repeat(32),
+  }).then(() => 'resolved', error => 'rejected:' + (error?.code || error?.message))
+
+  await Promise.race([
+    verificationStarted,
+    notification.then(async outcome => {
+      const job = await subsystem.store.get(queued.acquisitionId)
+      throw new Error(`transferred import settled before verification: ${outcome}; ${job?.state}; ${job?.errorCode}`)
+    }),
+  ])
+  const admitted = await subsystem.service.getAcquisition({ acquisitionId: queued.acquisitionId, principal })
+  t.is(admitted.state, 'verifying', 'the transfer passed durable admission and persisted its byte counters before verification stalled')
+  t.is(admitted.bytesAcquired, SOURCE.byteLength)
+  await subsystem.close()
+
+  t.is(verification.sawAbort, true, 'coordinator shutdown aborts the stalled verification through the real provider chain')
+  t.is(publishes, 0, 'an aborted verification never publishes')
+  t.is(await notification, 'rejected:ASSET_VERIFY_INTERRUPTED')
+  const afterClose = await subsystem.service.getAcquisition({ acquisitionId: queued.acquisitionId, principal })
+  t.is(afterClose.state, 'verifying', 'the transport-lifetime abort leaves the durable job non-terminal and resumable, not failed')
+  t.absent(afterClose.errorCode)
+  const coord = await subsystem.store.getCoordination(queued.acquisitionId)
+  t.is(coord.phase, 'result-ready', 'the result stays re-driveable after shutdown')
+  t.is(coord.error?.code, 'ASSET_VERIFY_INTERRUPTED')
 })

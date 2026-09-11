@@ -1,15 +1,48 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { build } from 'esbuild'
 import { formatBytes, formatSizeLabel } from '../lib/formatters.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 function read(relative) {
   return readFileSync(resolve(__dirname, '..', relative), 'utf8')
+}
+async function loadChannelPresentation() {
+  const overlay = read('components/VideoPlayerOverlayImpl.tsx')
+  const start = overlay.indexOf('function resolveChannelPresentation')
+  const end = overlay.indexOf('\nfunction resolveDownloadFlags', start)
+  assert.notEqual(start, -1, 'the production channel presentation helper must remain available')
+  assert.notEqual(end, -1, 'the production channel presentation helper must have a bounded body')
+  const result = await build({
+    stdin: {
+      contents: [
+        "import { formatSizeLabel } from './lib/formatters.ts'",
+        'type VideoData = { channel?: { name?: string }; channelKey?: string; size?: number | string | null }',
+        overlay.slice(start, end),
+        'export { resolveChannelPresentation }',
+      ].join('\n'),
+      resolveDir: resolve(__dirname, '..'),
+      sourcefile: 'channel-presentation.ts',
+      loader: 'ts',
+    },
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    write: false,
+  })
+  const directory = mkdtempSync(join(__dirname, '.channel-presentation-'))
+  const output = join(directory, 'presentation.cjs')
+  writeFileSync(output, result.outputFiles[0].text)
+  try {
+    return await import(`${pathToFileURL(output).href}?${Math.random()}`)
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
 }
 
 // A publication that reached the player without a manifest byte length has no
@@ -38,17 +71,6 @@ test('the byte formatter itself keeps reporting zero for progress readouts', () 
   assert.equal(formatBytes(0), '0 B')
 })
 
-test('the player metadata lines drop the size segment when it is unknown', () => {
-  const overlay = read('components/VideoPlayerOverlayImpl.tsx')
-  assert.match(overlay, /const sizeLabel = formatSizeLabel\(currentVideo\.size\)/)
-  assert.match(overlay, /\{sizeLabel \? ` · \$\{sizeLabel\}` : ''\}/, 'the native meta line')
-  assert.match(overlay, /\{sizeLabel \? <span>\{sizeLabel\}<\/span> : null\}/, 'the desktop meta line')
-  assert.doesNotMatch(overlay, /formatSize\(currentVideo\.size\)/, 'no path renders the title size as zero')
-
-  const watchPage = read('app/video/[id].tsx')
-  assert.match(watchPage, /formatSizeLabel\(videoData\?\.size\)/)
-  assert.doesNotMatch(watchPage, /formatSize\(videoData\?\.size \|\| 0\)/)
-})
 
 // The size exists: it is on the signed manifest. The entity response used to
 // answer with no renditions at all, so the detail screen had nothing to pass
@@ -59,4 +81,15 @@ test('the played rendition carries its manifest byte length into the player', ()
 
   const route = read('app/media/[id].tsx')
   assert.match(route, /prepared\.byteLength === null \? \{\} : \{ size: prepared\.byteLength \}/)
+})
+test('player channel presentation wires unknown and known sizes into the metadata label', async () => {
+  const { resolveChannelPresentation } = await loadChannelPresentation()
+  assert.equal(
+    resolveChannelPresentation(null, { channelKey: 'channel-1', size: 0 }).sizeLabel,
+    null,
+  )
+  assert.equal(
+    resolveChannelPresentation('Archivist', { channelKey: 'channel-1', size: 179775 }).sizeLabel,
+    formatBytes(179775),
+  )
 })

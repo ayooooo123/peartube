@@ -137,12 +137,20 @@ function tmdbSourceVideoId(item = {}) {
   return `tmdb:${type}:${item.tmdbId}${suffix}`
 }
 
+function discoverStatusLabel (status, item) {
+  if (status === 'seeding') {
+    return `Seeding${item.seededCopies ? ` · ${item.seededCopies}` : ''}`
+  }
+  if (status === 'in-network') {
+    return `In network · ${item.networkCopies || 1}`
+  }
+  return 'Missing'
+}
+
 function discoverCard(item) {
   const poster = tmdbPosterUrl(item.posterPath)
   const status = item.networkStatus || 'missing'
-  const statusLabel = status === 'seeding'
-    ? `Seeding${item.seededCopies ? ` · ${item.seededCopies}` : ''}`
-    : (status === 'in-network' ? `In network · ${item.networkCopies || 1}` : 'Missing')
+  const statusLabel = discoverStatusLabel(status, item)
   const typeLabel = item.type === 'tv' ? 'TV' : 'Movie'
   const episodeLabel = item.type === 'tv' && item.season && item.episode ? ` · S${item.season} E${item.episode}` : ''
   const title = item.title || 'Untitled'
@@ -225,12 +233,129 @@ function humanName(name, fallback = 'Anonymous archive') {
 }
 
 
+function renderDiscoverSections ({ discover, discoverRows }) {
+  const main = `
+        <section class="card" id="discover">
+          <h2>Discover missing movies &amp; shows</h2>
+          <p class="sub">TMDB-powered catalog view for your relay. Cards show whether a title is already seeding, merely known to the network, or missing. TMDB supplies metadata only; paste a source URL to archive the bytes.</p>
+          <form method="get" action="/discover" class="discover-toolbar">
+            <label>Search TMDB<input name="q" value="${escapeHtml(discover.query || '')}" placeholder="Trending if blank, e.g. Severance"></label>
+            <label>Type<select name="type"><option value="movie" ${discover.type !== 'tv' ? 'selected' : ''}>Movies</option><option value="tv" ${discover.type === 'tv' ? 'selected' : ''}>TV</option></select></label>
+            <button type="submit">Search</button>
+          </form>
+          <div class="discover-grid">${discoverRows}</div>
+          <p class="note"><a href="/discover.json?type=${escapeHtml(discover.type || 'movie')}&amp;q=${escapeHtml(discover.query || '')}">Open Discover JSON</a></p>
+        </section>`
+
+  const side = `<section class="card">
+          <h2>Archive a single video</h2>
+          <p class="sub">Import one video into a relay-owned anonymous channel and publish availability to the network. Paste a <strong>direct link to the video file</strong> or upload one from this device. For a YouTube or Rumble channel, use <a href="/creators">Contribute a creator</a>.</p>
+          <form method="post" action="/archive" enctype="multipart/form-data">
+            <label>Direct video URL<input name="url" placeholder="https://host/path/video.mp4"></label>
+            <label>Or upload a video file<input type="file" name="file" accept="video/*"></label>
+            <label>Anonymous channel name<input name="channelName" value="Anonymous Archive"></label>
+            <label>Title override<input name="title" placeholder="Optional"></label>
+            <label>Description override<textarea name="description" rows="3" placeholder="Optional"></textarea></label>
+            <label class="check"><input type="checkbox" name="publish" value="true" checked> Publish to network after import</label>
+            <button type="submit">Archive and publish</button>
+          </form>
+        </section>`
+  return { main, side }
+}
+
+function renderCreatorsSections ({ totalArchived, creators, creatorRows, targetRows }) {
+  const main = `
+        <section class="card" id="creators">
+          <h2>Tracked creators</h2>
+          <p class="sub">Everyone whose content this relay holds, with how much of it is seeded. ${escapeHtml(totalArchived)} videos across ${escapeHtml(creators.length)} creators.</p>
+          <ul>${creatorRows}</ul>
+        </section>
+
+        <section class="card" id="targets">
+          <h2>Unseeded targets</h2>
+          <p class="sub">Creators with the most under-replicated content — seed these first to maximise availability.</p>
+          <ul>${targetRows}</ul>
+        </section>`
+
+  const side = `<section class="card" id="archive">
+          <h2>Contribute a creator</h2>
+          <p class="sub">Paste a creator's channel or video URL (YouTube or Rumble). The relay registers them in its creators database, archives the content, and keeps tracking how many of their videos still need a seeder.</p>
+          <form method="post" action="/creators">
+            <label>Creator channel or video URL<input name="url" required placeholder="https://www.youtube.com/@channel"></label>
+            <label>Display name (optional)<input name="label" placeholder="e.g. My Favourite Channel"></label>
+            <label class="check"><input type="checkbox" name="publish" value="true" checked> Publish to network after import</label>
+            <button type="submit">Add creator &amp; archive</button>
+          </form>
+        </section>`
+  return { main, side }
+}
+
+function renderS3StoreSection ({ s3, offload, capacity }) {
+  return `
+        <section class="card" id="s3-store">
+          <div class="card-head">
+            <h2>S3 block store</h2>
+            <span class="status-badge ${s3.configured ? 'ok' : ''}">${s3.configured ? 'Configured' : 'Not configured'}</span>
+          </div>
+          <p class="sub">Read-only status. Configure S3 with Docker environment variables, then restart the relay.</p>
+          <div class="meta-block">
+            <p class="note">Status: <span class="status-line ${s3.configured ? 'on' : ''}">${s3.configured ? 'configured' : 'not configured'}</span></p>
+            ${s3.configured ? `<p class="note">Endpoint: ${escapeHtml(s3.endpoint)}<br>Bucket: ${escapeHtml(s3.bucket)}<br>Region: ${escapeHtml(s3.region)}<br>Prefix: ${escapeHtml(s3.prefix || '(none)')}</p>` : ''}
+            <p class="note">Block offload: <span class="status-line ${offload.enabled ? 'on' : ''}">${offload.enabled ? 'enabled' : 'disabled'}</span></p>
+            ${offload.enabled ? `<p class="note">Resident window: ${escapeHtml(formatSize(offload.windowBytes) || '0 KB')}<br>Restored on read: ${escapeHtml(String(offload.restored))} block(s)<br>Held on this volume: ${escapeHtml(formatSize(offload.residentBytes) || '0 KB')}<br>Room left: ${escapeHtml(formatSize(capacity.effectiveCapacityBytes) || 'unmeasured')} of archive budget, not of this disk</p>` : `<p class="note">Media block data stays on this relay's volume.</p>`}
+          </div>
+        </section>`
+}
+
+function renderClassificationSection ({ tmdb, tmdbState }) {
+  return `
+        <section class="card" id="classification">
+          <div class="card-head">
+            <h2>Content classification (TMDB)</h2>
+            <span class="status-badge ${tmdb.enabled ? 'ok' : ''}">${escapeHtml(tmdbState)}</span>
+          </div>
+          <p class="sub">Add a <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noreferrer">TMDB API key</a> to automatically identify archived movies and TV shows. Status: <span class="status-line ${tmdb.enabled ? 'on' : ''}">${escapeHtml(tmdbState)}</span>.</p>
+          <form method="post" action="/settings/tmdb">
+            <label>TMDB API key<input name="apiKey" type="password" placeholder="${tmdb.hasKey ? '•••••••• (set)' : 'Paste TMDB v3 API key'}"></label>
+            <label class="check"><input type="checkbox" name="enabled" value="true" ${tmdb.enabled ? 'checked' : ''}> Enable classification</label>
+            <button type="submit">Save TMDB settings</button>
+          </form>
+        </section>`
+}
+
+function renderDevicesSection ({ link, deviceRows }) {
+  return `
+        <section class="card" id="devices">
+          <div class="card-head">
+            <h2>Authorized creator devices</h2>
+            <span class="status-badge ${link.seedPin?.enabled ? 'ok' : ''}">${link.seedPin?.enabled ? 'Pin enabled' : 'Pin disabled'}</span>
+          </div>
+          <p class="sub">Authorize a creator's public device key for bounded catalog publication and seed retention. Secret keys and transport identifiers are never accepted.</p>
+          <p class="note">Seed retention is ${link.seedPin?.enabled ? 'enabled' : 'disabled'}; ${Number(link.seedPin?.authorizedClients || 0)} client(s) authorized.</p>
+          <form method="post" action="/clients" style="margin-top:14px">
+            <label>Creator device key<input name="key" required placeholder="64-character hex device key"></label>
+            <label>Device label (optional)<input name="label" placeholder="e.g. Alice's phone"></label>
+            <button type="submit">Authorize device</button>
+          </form>
+          <ul style="margin-top:14px">${deviceRows}</ul>
+          <p class="note">New authorizations take effect when the relay next starts.</p>
+        </section>`
+}
+
+function renderSettingsSections ({ s3, offload, capacity, tmdb, tmdbState, link, deviceRows }) {
+  const main = renderS3StoreSection({ s3, offload, capacity }) + renderClassificationSection({ tmdb, tmdbState })
+  const side = renderDevicesSection({ link, deviceRows })
+  return { main, side }
+}
+
 // The catalog-facing sections. The operator's release table owns `/`, so this
 // page renders exactly one section group per route: discover, creators, or
 // settings. There is no all-in-one page any more.
-export function renderArchiveWebHome(model = {}, options = {}) {
-  const view = ['discover', 'creators', 'settings'].includes(options.view) ? options.view : 'discover'
-  const shows = section => view === section
+function normalizeArchivePageView(options) {
+  return ['discover', 'creators', 'settings'].includes(options.view) ? options.view : 'discover'
+}
+
+function normalizeArchivePageModel(model) {
   const status = model.status || {}
   const network = status.network || {}
   const library = Array.isArray(model.library) ? model.library : []
@@ -239,12 +364,6 @@ export function renderArchiveWebHome(model = {}, options = {}) {
   const tmdb = model.tmdb || {}
   const s3 = model.s3 || {}
   const offloadState = s3.offload || {}
-  const offload = {
-    enabled: offloadState.enabled === true,
-    windowBytes: Number(offloadState.windowBytes) || 0,
-    restored: Number(offloadState.restored) || 0,
-    residentBytes: Number(offloadState.residentBytes) || 0
-  }
   // With offload on, what this relay can still take is bounded by the archive
   // budget rather than by the volume, so the panel reports that number next to
   // the residency it is actually paying for locally.
@@ -253,27 +372,53 @@ export function renderArchiveWebHome(model = {}, options = {}) {
   const discoverItems = Array.isArray(discover.items) ? discover.items : []
   const trustedClients = Array.isArray(model.trustedClients) ? model.trustedClients : []
   const link = model.link || {}
+  return {
+    status,
+    network,
+    library,
+    creators,
+    unseededTargets,
+    tmdb,
+    s3,
+    offload: {
+      enabled: offloadState.enabled === true,
+      windowBytes: Number(offloadState.windowBytes) || 0,
+      restored: Number(offloadState.restored) || 0,
+      residentBytes: Number(offloadState.residentBytes) || 0
+    },
+    capacity,
+    discover,
+    discoverItems,
+    trustedClients,
+    link,
+    totalUnseeded: creators.reduce((sum, c) => sum + (Number(c.videosUnseeded) || 0), 0),
+    totalArchived: creators.reduce((sum, c) => sum + (Number(c.videosArchived) || 0), 0)
+  }
+}
 
-  const totalUnseeded = creators.reduce((sum, c) => sum + (Number(c.videosUnseeded) || 0), 0)
-  const totalArchived = creators.reduce((sum, c) => sum + (Number(c.videosArchived) || 0), 0)
-  const creatorRows = creators.length
-    ? creators.map(creatorCard).join('')
-    : '<li class="empty">No creators tracked yet. Add one in the sidebar, or archive a video.</li>'
+function archivePageRows({ creators, unseededTargets, trustedClients, discoverItems }) {
+  return {
+    creatorRows: creators.length
+      ? creators.map(creatorCard).join('')
+      : '<li class="empty">No creators tracked yet. Add one in the sidebar, or archive a video.</li>',
+    targetRows: unseededTargets.length
+      ? unseededTargets.map(targetRow).join('')
+      : '<li class="empty">Every tracked video has a copy here.</li>',
+    deviceRows: trustedClients.length
+      ? trustedClients.map(deviceRow).join('')
+      : '<li class="empty">No linked devices yet.</li>',
+    discoverRows: discoverItems.length
+      ? discoverItems.map(discoverCard).join('')
+      : '<div class="empty">Add a TMDB key, then search or use trending to find missing movies and shows.</div>'
+  }
+}
 
-  const targetRows = unseededTargets.length
-    ? unseededTargets.map(targetRow).join('')
-    : '<li class="empty">Every tracked video has a copy here.</li>'
+function archiveTmdbStateLabel(tmdb) {
+  return tmdb.enabled ? 'enabled' : (tmdb.hasKey ? 'key set, disabled' : 'no key')
+}
 
-  const deviceRows = trustedClients.length
-    ? trustedClients.map(deviceRow).join('')
-    : '<li class="empty">No linked devices yet.</li>'
-
-  const discoverRows = discoverItems.length
-    ? discoverItems.map(discoverCard).join('')
-    : '<div class="empty">Add a TMDB key, then search or use trending to find missing movies and shows.</div>'
-
-  const tmdbState = tmdb.enabled ? 'enabled' : (tmdb.hasKey ? 'key set, disabled' : 'no key')
-  const pageCopy = {
+function archivePageCopy(view) {
+  return {
     discover: {
       eyebrow: 'Catalog',
       title: 'Find what the network is missing',
@@ -290,7 +435,49 @@ export function renderArchiveWebHome(model = {}, options = {}) {
       description: 'Review storage services, classification, and the devices authorized to publish here.'
     }
   }[view]
+}
 
+function renderArchiveSections(view, page) {
+  if (view === 'discover') {
+    return renderDiscoverSections({ discover: page.discover, discoverRows: page.discoverRows })
+  }
+  if (view === 'creators') {
+    return renderCreatorsSections({
+      totalArchived: page.totalArchived,
+      creators: page.creators,
+      creatorRows: page.creatorRows,
+      targetRows: page.targetRows
+    })
+  }
+  if (view === 'settings') {
+    return renderSettingsSections({
+      s3: page.s3,
+      offload: page.offload,
+      capacity: page.capacity,
+      tmdb: page.tmdb,
+      tmdbState: page.tmdbState,
+      link: page.link,
+      deviceRows: page.deviceRows
+    })
+  }
+  return { main: '', side: '' }
+}
+
+export function renderArchiveWebHome(model = {}, options = {}) {
+  const view = normalizeArchivePageView(options)
+  const page = normalizeArchivePageModel(model)
+  const { creatorRows, targetRows, deviceRows, discoverRows } = archivePageRows(page)
+  const tmdbState = archiveTmdbStateLabel(page.tmdb)
+  const pageCopy = archivePageCopy(view)
+  const sections = renderArchiveSections(view, {
+    ...page,
+    creatorRows,
+    targetRows,
+    deviceRows,
+    discoverRows,
+    tmdbState
+  })
+  const { network, library, totalUnseeded } = page
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -459,102 +646,11 @@ export function renderArchiveWebHome(model = {}, options = {}) {
     ${model.notice ? `<p class="notice" role="status">${escapeHtml(model.notice)}</p>` : ''}
     <div class="layout">
       <div class="col">
-        ${shows('discover') ? `
-        <section class="card" id="discover">
-          <h2>Discover missing movies &amp; shows</h2>
-          <p class="sub">TMDB-powered catalog view for your relay. Cards show whether a title is already seeding, merely known to the network, or missing. TMDB supplies metadata only; paste a source URL to archive the bytes.</p>
-          <form method="get" action="/discover" class="discover-toolbar">
-            <label>Search TMDB<input name="q" value="${escapeHtml(discover.query || '')}" placeholder="Trending if blank, e.g. Severance"></label>
-            <label>Type<select name="type"><option value="movie" ${discover.type !== 'tv' ? 'selected' : ''}>Movies</option><option value="tv" ${discover.type === 'tv' ? 'selected' : ''}>TV</option></select></label>
-            <button type="submit">Search</button>
-          </form>
-          <div class="discover-grid">${discoverRows}</div>
-          <p class="note"><a href="/discover.json?type=${escapeHtml(discover.type || 'movie')}&amp;q=${escapeHtml(discover.query || '')}">Open Discover JSON</a></p>
-        </section>` : ''}
-
-        ${shows('creators') ? `
-
-        <section class="card" id="creators">
-          <h2>Tracked creators</h2>
-          <p class="sub">Everyone whose content this relay holds, with how much of it is seeded. ${escapeHtml(totalArchived)} videos across ${escapeHtml(creators.length)} creators.</p>
-          <ul>${creatorRows}</ul>
-        </section>
-
-        <section class="card" id="targets">
-          <h2>Unseeded targets</h2>
-          <p class="sub">Creators with the most under-replicated content — seed these first to maximise availability.</p>
-          <ul>${targetRows}</ul>
-        </section>` : ''}
-        ${shows('settings') ? `
-        <section class="card" id="s3-store">
-          <div class="card-head">
-            <h2>S3 block store</h2>
-            <span class="status-badge ${s3.configured ? 'ok' : ''}">${s3.configured ? 'Configured' : 'Not configured'}</span>
-          </div>
-          <p class="sub">Read-only status. Configure S3 with Docker environment variables, then restart the relay.</p>
-          <div class="meta-block">
-            <p class="note">Status: <span class="status-line ${s3.configured ? 'on' : ''}">${s3.configured ? 'configured' : 'not configured'}</span></p>
-            ${s3.configured ? `<p class="note">Endpoint: ${escapeHtml(s3.endpoint)}<br>Bucket: ${escapeHtml(s3.bucket)}<br>Region: ${escapeHtml(s3.region)}<br>Prefix: ${escapeHtml(s3.prefix || '(none)')}</p>` : ''}
-            <p class="note">Block offload: <span class="status-line ${offload.enabled ? 'on' : ''}">${offload.enabled ? 'enabled' : 'disabled'}</span></p>
-            ${offload.enabled ? `<p class="note">Resident window: ${escapeHtml(formatSize(offload.windowBytes) || '0 KB')}<br>Restored on read: ${escapeHtml(String(offload.restored))} block(s)<br>Held on this volume: ${escapeHtml(formatSize(offload.residentBytes) || '0 KB')}<br>Room left: ${escapeHtml(formatSize(capacity.effectiveCapacityBytes) || 'unmeasured')} of archive budget, not of this disk</p>` : `<p class="note">Media block data stays on this relay's volume.</p>`}
-          </div>
-        </section>
-
-        <section class="card" id="classification">
-          <div class="card-head">
-            <h2>Content classification (TMDB)</h2>
-            <span class="status-badge ${tmdb.enabled ? 'ok' : ''}">${escapeHtml(tmdbState)}</span>
-          </div>
-          <p class="sub">Add a <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noreferrer">TMDB API key</a> to automatically identify archived movies and TV shows. Status: <span class="status-line ${tmdb.enabled ? 'on' : ''}">${escapeHtml(tmdbState)}</span>.</p>
-          <form method="post" action="/settings/tmdb">
-            <label>TMDB API key<input name="apiKey" type="password" placeholder="${tmdb.hasKey ? '•••••••• (set)' : 'Paste TMDB v3 API key'}"></label>
-            <label class="check"><input type="checkbox" name="enabled" value="true" ${tmdb.enabled ? 'checked' : ''}> Enable classification</label>
-            <button type="submit">Save TMDB settings</button>
-          </form>
-        </section>` : ''}
+        ${sections.main}
       </div>
 
       <div class="col side">
-        ${shows('creators') ? `<section class="card" id="archive">
-          <h2>Contribute a creator</h2>
-          <p class="sub">Paste a creator's channel or video URL (YouTube or Rumble). The relay registers them in its creators database, archives the content, and keeps tracking how many of their videos still need a seeder.</p>
-          <form method="post" action="/creators">
-            <label>Creator channel or video URL<input name="url" required placeholder="https://www.youtube.com/@channel"></label>
-            <label>Display name (optional)<input name="label" placeholder="e.g. My Favourite Channel"></label>
-            <label class="check"><input type="checkbox" name="publish" value="true" checked> Publish to network after import</label>
-            <button type="submit">Add creator &amp; archive</button>
-          </form>
-        </section>` : ''}
-
-        ${shows('discover') ? `<section class="card">
-          <h2>Archive a single video</h2>
-          <p class="sub">Import one video into a relay-owned anonymous channel and publish availability to the network. Paste a <strong>direct link to the video file</strong> or upload one from this device. For a YouTube or Rumble channel, use <a href="/creators">Contribute a creator</a>.</p>
-          <form method="post" action="/archive" enctype="multipart/form-data">
-            <label>Direct video URL<input name="url" placeholder="https://host/path/video.mp4"></label>
-            <label>Or upload a video file<input type="file" name="file" accept="video/*"></label>
-            <label>Anonymous channel name<input name="channelName" value="Anonymous Archive"></label>
-            <label>Title override<input name="title" placeholder="Optional"></label>
-            <label>Description override<textarea name="description" rows="3" placeholder="Optional"></textarea></label>
-            <label class="check"><input type="checkbox" name="publish" value="true" checked> Publish to network after import</label>
-            <button type="submit">Archive and publish</button>
-          </form>
-        </section>` : ''}
-        ${shows('settings') ? `
-        <section class="card" id="devices">
-          <div class="card-head">
-            <h2>Authorized creator devices</h2>
-            <span class="status-badge ${link.seedPin?.enabled ? 'ok' : ''}">${link.seedPin?.enabled ? 'Pin enabled' : 'Pin disabled'}</span>
-          </div>
-          <p class="sub">Authorize a creator's public device key for bounded catalog publication and seed retention. Secret keys and transport identifiers are never accepted.</p>
-          <p class="note">Seed retention is ${link.seedPin?.enabled ? 'enabled' : 'disabled'}; ${Number(link.seedPin?.authorizedClients || 0)} client(s) authorized.</p>
-          <form method="post" action="/clients" style="margin-top:14px">
-            <label>Creator device key<input name="key" required placeholder="64-character hex device key"></label>
-            <label>Device label (optional)<input name="label" placeholder="e.g. Alice's phone"></label>
-            <button type="submit">Authorize device</button>
-          </form>
-          <ul style="margin-top:14px">${deviceRows}</ul>
-          <p class="note">New authorizations take effect when the relay next starts.</p>
-        </section>` : ''}
+        ${sections.side}
       </div>
     </div>
   </main>

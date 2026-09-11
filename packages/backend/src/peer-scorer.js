@@ -26,23 +26,36 @@ function metricIncludes(metric = {}, names = []) {
   return names.some((name) => metric[name] !== undefined && metric[name] !== null)
 }
 
-function normalizeMetric(peerId, metric = {}) {
-  const handshakes = safeNumber(metric.handshakes ?? metric.handshakeCount, 0)
-  const failures = safeNumber(metric.handshakeFailures ?? metric.failedHandshakes, 0)
-  const successes = safeNumber(metric.handshakeSuccesses ?? metric.successfulHandshakes, 0)
-  const total = Math.max(handshakes, successes + failures)
-  const latencyMs = Math.max(0, safeNumber(metric.latencyMs ?? metric.rttMs, 0))
-  const srttMs = Math.max(0, safeNumber(metric.srttMs ?? metric.smoothedRttMs ?? metric.srtt ?? latencyMs, latencyMs))
-  const handshakeDurationMs = Math.max(0, safeNumber(metric.handshakeDurationMs ?? metric.handshakeMs ?? metric.handshakeLatencyMs, 0))
+function resolveMetricPeerId(peerId, metric) {
+  return toHex(peerId || metric.peerId || metric.identityId || hashText(metric))
+}
+
+function extractSocketStability(metric) {
   const socketStabilityObserved = metric.socketStabilityObserved !== undefined && metric.socketStabilityObserved !== null
     ? Boolean(metric.socketStabilityObserved)
     : metricIncludes(metric, ['socketStability', 'socketStabilityScore', 'stability'])
   const socketStability = socketStabilityObserved
     ? Math.max(0, Math.min(100, safeNumber(metric.socketStability ?? metric.socketStabilityScore ?? metric.stability, 0)))
     : 0
+  return { socketStability, socketStabilityObserved }
+}
+
+function extractSrtt(metric, latencyMs) {
+  return Math.max(0, safeNumber(metric.srttMs ?? metric.smoothedRttMs ?? metric.srtt ?? latencyMs, latencyMs))
+}
+
+function normalizeMetric(peerId, metric = {}) {
+  const handshakes = safeNumber(metric.handshakes ?? metric.handshakeCount, 0)
+  const failures = safeNumber(metric.handshakeFailures ?? metric.failedHandshakes, 0)
+  const successes = safeNumber(metric.handshakeSuccesses ?? metric.successfulHandshakes, 0)
+  const total = Math.max(handshakes, successes + failures)
+  const latencyMs = Math.max(0, safeNumber(metric.latencyMs ?? metric.rttMs, 0))
+  const srttMs = extractSrtt(metric, latencyMs)
+  const handshakeDurationMs = Math.max(0, safeNumber(metric.handshakeDurationMs ?? metric.handshakeMs ?? metric.handshakeLatencyMs, 0))
+  const { socketStability, socketStabilityObserved } = extractSocketStability(metric)
   const throughput = Math.max(0, safeNumber(metric.udxThroughputBps ?? metric.throughputBps ?? metric.bytesPerSecond, 0))
   return {
-    peerId: toHex(peerId || metric.peerId || metric.identityId || hashText(metric)),
+    peerId: resolveMetricPeerId(peerId, metric),
     latencyMs,
     srttMs,
     handshakeDurationMs,
@@ -207,59 +220,54 @@ export function createUsefulWorkLedger(options = {}) {
     return map.get(key)
   }
 
+  function applyRewardTotals(kind, amount, t) {
+    switch (kind) {
+      case 'descriptor-verified':
+        t.verifiedDescriptors += amount
+        return 10 * amount
+      case 'descriptor-refreshed':
+        t.refreshedDescriptors += amount
+        return 6 * amount
+      case 'availability-sampled':
+        t.sampledDescriptors += amount
+        return 5 * amount
+      case 'bytes-served':
+        t.bytesServed += safeBigInt(amount, 0n)
+        return Math.max(1, Math.floor(Number(amount) / (64 * 1024)))
+      case 'long-tail-served':
+        t.longTailServed += amount
+        return 12 * amount
+      case 'proof-accepted':
+        t.proofsAccepted += amount
+        return 8 * amount
+      case 'proof-rejected':
+        t.proofsRejected += amount
+        return -6 * amount
+      default:
+        return 0
+    }
+  }
+
+  function updateRewardBucket(b, amount, scoreDelta, at, isBytesServed) {
+    b.count += amount
+    b.score += scoreDelta
+    if (at > b.lastAt) b.lastAt = at
+    if (isBytesServed) b.bytes += safeBigInt(amount, 0n)
+  }
+
   function reward(kind, amount = 1, context = {}) {
     const descriptorId = descriptorIdOf(context.descriptorId || context.descriptor || '')
     const peerId = toHex(context.peerId || context.identityId || '')
     const at = safeBigInt(context.at || Date.now(), nowMs())
-    let scoreDelta = 0
-
-    switch (kind) {
-      case 'descriptor-verified':
-        scoreDelta = 10 * amount
-        totals.verifiedDescriptors += amount
-        break
-      case 'descriptor-refreshed':
-        scoreDelta = 6 * amount
-        totals.refreshedDescriptors += amount
-        break
-      case 'availability-sampled':
-        scoreDelta = 5 * amount
-        totals.sampledDescriptors += amount
-        break
-      case 'bytes-served':
-        scoreDelta = Math.max(1, Math.floor(Number(amount) / (64 * 1024)))
-        totals.bytesServed += safeBigInt(amount, 0n)
-        break
-      case 'long-tail-served':
-        scoreDelta = 12 * amount
-        totals.longTailServed += amount
-        break
-      case 'proof-accepted':
-        scoreDelta = 8 * amount
-        totals.proofsAccepted += amount
-        break
-      case 'proof-rejected':
-        scoreDelta = -6 * amount
-        totals.proofsRejected += amount
-        break
-      default:
-        scoreDelta = 0
-    }
+    const scoreDelta = applyRewardTotals(kind, amount, totals)
+    const isBytesServed = kind === 'bytes-served'
 
     if (descriptorId) {
-      const d = bucket(byDescriptor, descriptorId)
-      d.count += amount
-      d.score += scoreDelta
-      d.lastAt = at > d.lastAt ? at : d.lastAt
-      if (kind === 'bytes-served') d.bytes += safeBigInt(amount, 0n)
+      updateRewardBucket(bucket(byDescriptor, descriptorId), amount, scoreDelta, at, isBytesServed)
     }
 
     if (peerId) {
-      const p = bucket(byPeer, peerId)
-      p.count += amount
-      p.score += scoreDelta
-      p.lastAt = at > p.lastAt ? at : p.lastAt
-      if (kind === 'bytes-served') p.bytes += safeBigInt(amount, 0n)
+      updateRewardBucket(bucket(byPeer, peerId), amount, scoreDelta, at, isBytesServed)
     }
 
     return scoreDelta
@@ -420,11 +428,9 @@ export function createPeerScorer(options = {}) {
   }
 
   function requestTimeout(peerOrId) {
-    const peerId = typeof peerOrId === 'string'
-      ? peerOrId
-      : toHex(peerOrId?.peerId || peerOrId?.identity?.publicKey || peerOrId?.publicKey || peerOrId?.remotePublicKey || peerOrId)
-    const peer = state.peers.get(peerId) || (peerOrId && typeof peerOrId === 'object' && !ArrayBuffer.isView(peerOrId) ? peerOrId : null)
-    const metric = (peer ? metricFor(peer) : null) || metrics.get(peerId) || peer?.performance || peerOrId?.metrics || {}
+    const peerId = resolvePeerIdFromPeerOrId(peerOrId)
+    const peer = resolvePeerObject(peerOrId, peerId, state.peers)
+    const metric = resolveMetricForTimeout(peer, peerId, peerOrId, metricFor, metrics)
     return timeoutFromSrtt(metric.srttMs ?? metric.latencyMs ?? 1000)
   }
 
@@ -464,4 +470,33 @@ export function createPeerScorer(options = {}) {
     subscribe,
     snapshot,
   }
+}
+
+function resolvePeerIdFromPeerOrId(peerOrId) {
+  if (typeof peerOrId === 'string') return peerOrId
+  const candidate = peerOrId?.peerId ||
+    peerOrId?.identity?.publicKey ||
+    peerOrId?.publicKey ||
+    peerOrId?.remotePublicKey ||
+    peerOrId
+  return toHex(candidate)
+}
+
+function resolvePeerObject(peerOrId, peerId, peers) {
+  const existing = peers.get(peerId)
+  if (existing) return existing
+  if (peerOrId && typeof peerOrId === 'object' && !ArrayBuffer.isView(peerOrId)) {
+    return peerOrId
+  }
+  return null
+}
+
+function resolveMetricForTimeout(peer, peerId, peerOrId, metricFor, metrics) {
+  if (peer) {
+    const m = metricFor(peer)
+    if (m) return m
+  }
+  const fromMap = metrics.get(peerId)
+  if (fromMap) return fromMap
+  return peer?.performance || peerOrId?.metrics || {}
 }

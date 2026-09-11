@@ -12,7 +12,7 @@ function readFile(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8')
 }
 
-test('test workflow avoids root npm cache and npm ci because the repo has no root lockfile', () => {
+test('test workflow uses the locked install:all strategy in CI', () => {
   const workflow = readFile('.github/workflows/ci-fast.yml')
   const setupAction = readFile('.github/actions/setup-node-workspace/action.yml')
   const rootPackage = JSON.parse(readFile('package.json'))
@@ -48,15 +48,19 @@ test('test workflow avoids root npm cache and npm ci because the repo has no roo
     /npm cache verify \|\| true/,
     'shared Node setup should verify cache between install retries without masking the final install failure',
   )
-  assert.match(
-    rootPackage.scripts['install:all'],
-    /packages\/spec/,
-    'install:all should install packages/spec so schema generation has its deps in CI',
-  )
-  assert.match(
-    rootPackage.scripts['install:all'],
-    /packages\/platform/,
-    'install:all should install packages/platform so typecheck has its local deps in CI',
+  const installCommands = rootPackage.scripts['install:all'].split('&&').map(command => command.trim())
+  assert.deepEqual(
+    installCommands,
+    [
+      'npm ci',
+      'npm ci --prefix packages/spec',
+      'npm ci --prefix packages/backend',
+      'npm ci --prefix packages/cli',
+      'npm ci --prefix packages/host',
+      'npm ci --prefix packages/platform',
+      'npm ci --prefix packages/app --legacy-peer-deps',
+    ],
+    'install:all should preserve the complete locked root and workspace install chain',
   )
   assert.notEqual(
     specPackage.dependencies['hrpc'],

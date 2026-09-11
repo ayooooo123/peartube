@@ -91,18 +91,37 @@ export function collectEnvelopeTextSources(input = {}) {
   }
 }
 
-export function buildMetadataEnvelope(video = {}, extras = {}) {
-  const source = collectEnvelopeTextSources({
+function resolveCreator(extras, video) {
+  return extras.creatorName ?? extras.sourceCreatorName ?? extras.originalCreatorName ?? extras.sourceAuthor
+    ?? video.creatorName ?? video.sourceCreatorName ?? video.originalCreatorName ?? video.sourceAuthor ?? video.author
+}
+
+function resolveSubtitles(extras, video) {
+  return extras.subtitles ?? video.subtitles ?? video.subtitleText ?? video.transcript ?? video.captions
+}
+
+function resolveMetadataSource(video, extras) {
+  return collectEnvelopeTextSources({
     title: extras.title ?? video.title,
-    creatorName: extras.creatorName ?? extras.sourceCreatorName ?? extras.originalCreatorName ?? extras.sourceAuthor ?? video.creatorName ?? video.sourceCreatorName ?? video.originalCreatorName ?? video.sourceAuthor ?? video.author,
+    creatorName: resolveCreator(extras, video),
     channelName: extras.channelName ?? video.channelName ?? video.channel?.name,
     channel: extras.channel ?? video.channel,
     description: extras.description ?? video.description,
-    subtitles: extras.subtitles ?? video.subtitles ?? video.subtitleText ?? video.transcript ?? video.captions,
+    subtitles: resolveSubtitles(extras, video),
     comments: extras.comments ?? video.comments,
     tags: extras.tags ?? video.tags,
     categories: extras.categories ?? video.categories ?? video.category,
   })
+}
+
+function resolveUpdatedAt(extrasUpdatedAt, videoUpdatedAt) {
+  const raw = extrasUpdatedAt ?? videoUpdatedAt
+  const num = Number(raw)
+  return Number.isFinite(num) ? num : null
+}
+
+export function buildMetadataEnvelope(video = {}, extras = {}) {
+  const source = resolveMetadataSource(video, extras)
 
   const searchText = uniqueTextParts([
     source.title,
@@ -141,7 +160,7 @@ export function buildMetadataEnvelope(video = {}, extras = {}) {
       comments: source.comments.length > 0,
       tags: source.tags.length > 0,
     },
-    updatedAt: Number.isFinite(Number(extras.updatedAt ?? video.updatedAt)) ? Number(extras.updatedAt ?? video.updatedAt) : null,
+    updatedAt: resolveUpdatedAt(extras.updatedAt, video.updatedAt),
     indexedAt: Date.now(),
   }
 }

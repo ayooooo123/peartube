@@ -40,6 +40,49 @@ const HLS_COMPAT_PLAYERS = new Set(['avplayer', 'exoplayer'])
  * @param {'remux'|'audio-only'|'full'} [opts.forceMode]
  * @returns {Promise<{url: string, transcoded: boolean, mode: string, sessionId?: string}>}
  */
+function canAttemptCompat(player, directUrl, castTranscoder) {
+  if (!directUrl || !player || !castTranscoder) return false
+  if (!HLS_COMPAT_PLAYERS.has(player)) return false
+  return typeof castTranscoder.startCompatTranscode === 'function' &&
+    typeof castTranscoder.getCastHlsUrl === 'function'
+}
+
+function logWarn(logger, msg) {
+  if (logger && typeof logger.warn === 'function') {
+    logger.warn(msg)
+  }
+}
+
+function logInfo(logger, msg) {
+  if (logger && typeof logger.log === 'function') {
+    logger.log(msg)
+  }
+}
+
+async function startAndAwaitSession(castTranscoder, directUrl, opts) {
+  const result = await withTimeout(
+    castTranscoder.startCompatTranscode(directUrl, {
+      player: opts.player,
+      sourceKey: opts.sourceKey,
+      force: opts.force,
+      forceMode: opts.forceMode,
+    }),
+    opts.startTimeoutMs,
+    START_TIMEOUT,
+  )
+  if (result === START_TIMEOUT) {
+    return { timedOut: true }
+  }
+  if (!result || !result.success) {
+    return null
+  }
+
+  if (!result.reused && typeof castTranscoder.getCastStatus === 'function') {
+    await waitForFirstFragment(castTranscoder, result.sessionId, opts.readyTimeoutMs)
+  }
+  return result
+}
+
 export async function resolveCompatPlaybackUrl({
   player,
   directUrl,
@@ -53,49 +96,38 @@ export async function resolveCompatPlaybackUrl({
 } = {}) {
   const passthrough = { url: directUrl, transcoded: false, mode: 'direct' }
 
-  if (!directUrl || !player || !castTranscoder || !HLS_COMPAT_PLAYERS.has(player)) {
-    return passthrough
-  }
-  if (typeof castTranscoder.startCompatTranscode !== 'function' ||
-      typeof castTranscoder.getCastHlsUrl !== 'function') {
+  if (!canAttemptCompat(player, directUrl, castTranscoder)) {
     return passthrough
   }
 
   try {
-    const result = await withTimeout(
-      castTranscoder.startCompatTranscode(directUrl, {
-        player,
-        sourceKey,
-        force,
-        forceMode,
-      }),
+    const result = await startAndAwaitSession(castTranscoder, directUrl, {
+      player,
+      sourceKey,
+      force,
+      forceMode,
       startTimeoutMs,
-      START_TIMEOUT,
-    )
-    if (result === START_TIMEOUT) {
-      logger?.warn?.(`[compat-playback] compat startup timed out after ${startTimeoutMs}ms, using direct URL`)
+      readyTimeoutMs,
+    })
+    if (!result) return passthrough
+    if (result.timedOut) {
+      logWarn(logger, `[compat-playback] compat startup timed out after ${startTimeoutMs}ms, using direct URL`)
       return passthrough
-    }
-    if (!result || !result.success) {
-      // 'no-transcode-needed' (already compatible) or a startup failure → direct.
-      return passthrough
-    }
-
-    // Wait for the first fragment so the player doesn't open an empty playlist.
-    if (!result.reused && typeof castTranscoder.getCastStatus === 'function') {
-      await waitForFirstFragment(castTranscoder, result.sessionId, readyTimeoutMs)
     }
 
     const url = await castTranscoder.getCastHlsUrl(result.sessionId, '127.0.0.1')
     if (!url) return passthrough
 
-    logger?.log?.(`[compat-playback] routing ${player} through ${result.mode || 'transcode'} transcode`)
-    return { url, transcoded: true, mode: result.mode || 'transcode', sessionId: result.sessionId }
+    const mode = result.mode || 'transcode'
+    logInfo(logger, `[compat-playback] routing ${player} through ${mode} transcode`)
+    return { url, transcoded: true, mode, sessionId: result.sessionId }
   } catch (err) {
-    logger?.warn?.(`[compat-playback] compat path failed, using direct URL: ${err?.message || err}`)
+    const errMsg = (err && err.message) ? err.message : err
+    logWarn(logger, `[compat-playback] compat path failed, using direct URL: ${errMsg}`)
     return passthrough
   }
 }
+
 
 async function waitForFirstFragment(castTranscoder, sessionId, timeoutMs) {
   const deadline = Date.now() + Math.max(0, timeoutMs || 0)

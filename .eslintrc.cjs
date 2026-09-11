@@ -29,10 +29,24 @@ module.exports = {
   rules: {
     'react/react-in-jsx-scope': 'off',
     'react/prop-types': 'off',
+    // Native inputs and FocusScope manage focus through their own component contracts.
+    'jsx-a11y/no-autofocus': ['error', { ignoreNonDOM: true }],
     '@typescript-eslint/no-explicit-any': 'warn',
     '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
   },
   overrides: [
+    {
+      // Explicit CommonJS loaders, Expo plugins and generated codecs use require.
+      files: [
+        '**/*.cjs',
+        'packages/app/plugins/*.js',
+        'packages/backend/src/**/hyperschema/index.js',
+      ],
+      parserOptions: { sourceType: 'script' },
+      rules: {
+        '@typescript-eslint/no-require-imports': 'off',
+      },
+    },
     {
       files: ['packages/backend/src/**/*.{js,mjs}'],
       rules: {

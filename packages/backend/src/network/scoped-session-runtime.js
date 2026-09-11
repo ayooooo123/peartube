@@ -43,7 +43,8 @@ import {
   decodePublisherNamespaceDescriptor,
   verifyPublisherNamespaceDescriptor,
 } from '../publisher/namespace.js'
-import { verifyIndexServiceAnnouncement } from '../indexer/service-announcement.js'
+import { encodeIndexServiceAnnouncement, verifyIndexServiceAnnouncement } from '../indexer/service-announcement.js'
+import { registerIndexServicePolicyControl } from './index-service-policy-control-internal.js'
 import { createIndexQueryClient } from '../indexer/protocol.js'
 import { MODERATION_FEED_CAPABILITY, createScopedFeedRuntime } from './scoped-feed-runtime.js'
 export {
@@ -202,20 +203,290 @@ function configuredPeerAddresses (entries = []) {
   return peers
 }
 
-export function createScopedNetworkRuntime (options = {}) {
+function validateScopedNetworkRuntimeOptions(options) {
   if (!options.swarm || typeof options.swarm.join !== 'function') fail('swarm is required')
-  const swarm = options.swarm
-  const peerAddresses = configuredPeerAddresses(options.peerAddresses)
-  const originalDhtConnect = swarm.dht?.connect
-  if (peerAddresses.size && typeof originalDhtConnect !== 'function') fail('peerAddresses requires a DHT transport')
-  function connectWithPeerAddresses (publicKey, connectOptions = {}) {
-    const addresses = peerAddresses.get(b4a.toString(publicKey, 'hex'))
-    return originalDhtConnect.call(this, publicKey, addresses
-      ? { ...connectOptions, relayAddresses: [...addresses, ...(connectOptions.relayAddresses || [])] }
-      : connectOptions)
+  const protocolMajor = Number(options.protocolMajor ?? PROTOCOL_MAJOR)
+  if (protocolMajor !== PROTOCOL_MAJOR) fail('unsupported protocol major')
+  const assetTransferTimeoutMs = Number(options.assetTransferTimeoutMs ?? ASSET_TRANSFER_TIMEOUT_MS)
+  if (!Number.isSafeInteger(assetTransferTimeoutMs) ||
+      assetTransferTimeoutMs < 1 ||
+      assetTransferTimeoutMs > ASSET_TRANSFER_TIMEOUT_MS) {
+    fail('asset transfer timeout is out of bounds')
   }
-  const store = options.store
+  const bootstrapLocatorTtlMs = Number(options.bootstrapLocatorTtlMs ?? 5 * 60_000)
+  const bootstrapLocatorRefreshMs = Number(options.bootstrapLocatorRefreshMs ?? Math.floor(bootstrapLocatorTtlMs / 2))
+  const publisherRotationDrainMs = Number(options.publisherRotationDrainMs ?? 500)
+  if (!Number.isSafeInteger(bootstrapLocatorTtlMs) || bootstrapLocatorTtlMs < 1 ||
+      !Number.isSafeInteger(bootstrapLocatorRefreshMs) || bootstrapLocatorRefreshMs < 1 ||
+      bootstrapLocatorRefreshMs >= bootstrapLocatorTtlMs ||
+      !Number.isSafeInteger(publisherRotationDrainMs) || publisherRotationDrainMs < 1 ||
+      publisherRotationDrainMs > 5_000) {
+    fail('bootstrap locator refresh bounds are invalid')
+  }
+  return {
+    protocolMajor,
+    assetTransferTimeoutMs,
+    bootstrapLocatorTtlMs,
+    bootstrapLocatorRefreshMs,
+    publisherRotationDrainMs,
+  }
+}
+
+function authorizePublisherScopeConnection(scope, connection, publisherPageProviders, scopeMayServe, counters) {
+  if (scope.modes.has('candidate') && !scope.modes.has('followed') && !scope.modes.has('local')) {
+    return { status: 'authorized', action: 'namespace-proof', publisherId: scope.publisherId }
+  }
+  const isLocal = scope.modes.has('local') || scope.localPublisher === true
+  const isFollowed = scope.modes.has('followed')
+  if (isLocal && publisherPageProviders.has(scope.publisherId)) {
+    if (!isFollowed && !scopeMayServe(scope)) {
+      return { status: 'rejected', reason: 'publisher-serving-policy-disabled' }
+    }
+    if (connection) counters.openedCatalogs++
+    return { status: 'authorized', action: 'catalog-pages', publisherId: scope.publisherId }
+  }
+  if (!scope.binding?.catalog || (!isFollowed && !isLocal)) return { status: 'rejected', reason: 'publisher-not-followed' }
+  if (isLocal && !isFollowed && !scopeMayServe(scope)) {
+    return { status: 'rejected', reason: 'publisher-serving-policy-disabled' }
+  }
+  if (connection) {
+    counters.openedCatalogs++
+  }
+  return { status: 'authorized', action: 'catalog-pages', publisherId: scope.publisherId }
+}
+
+function authorizeArchiveScopeConnection(scope, requestedCoreKey, scopeMayServe) {
+  if (scope.purpose === 'archive-discovery') {
+    return scopeMayServe(scope)
+      ? { status: 'authorized', action: 'archive-discovery' }
+      : { status: 'rejected', reason: 'archive-policy-disabled' }
+  }
+  if (!scopeMayServe(scope)) return { status: 'rejected', reason: 'archive-policy-disabled' }
+  if (scope.archiveDiscovery) fail('archive custody scope cannot be discovery')
+  const requested = requestedCoreKey ? hex32(requestedCoreKey, 'requestedCoreKey') : null
+  const resource = requested
+    ? [...(scope.archiveResources?.values() || [])].find(candidate => candidate.coreKey === requested)
+    : null
+  if (requested && !resource) return { status: 'rejected', reason: 'archive-range-not-authorized' }
+  return { status: 'authorized', action: 'archive-range', coreKey: resource?.coreKey || null, range: resource ? { ...resource.range } : null }
+}
+
+function authorizeIndexOrAcquisitionScopeConnection(scope, connection, authenticatedRemoteKey) {
+  if (scope.purpose === 'index' && !scope.feedKind) {
+    if (!scope.announcement || !scope.transportPublicKey) return { status: 'rejected', reason: 'index-service-not-retained' }
+    const liveRemoteKey = authenticatedRemoteKey(connection)
+    if (!liveRemoteKey || liveRemoteKey !== scope.transportPublicKey) return { status: 'rejected', reason: 'index-transport-key-mismatch' }
+    return { status: 'authorized', action: 'index-service', indexerId: scope.indexerId }
+  }
+  if (scope.purpose === 'acquisition-discovery') {
+    return { status: 'authorized', action: 'acquisition-discovery' }
+  }
+  if (scope.purpose === 'acquisition') {
+    const liveRemoteKey = authenticatedRemoteKey(connection)
+    if (!liveRemoteKey || !scope.allowedPeerIds?.has?.(liveRemoteKey)) {
+      return { status: 'rejected', reason: 'acquisition-audience-mismatch' }
+    }
+    return { status: 'authorized', action: 'acquisition-work', assignmentId: scope.assignmentId }
+  }
+  return null
+}
+
+function shouldAttachScope(scope, connection, info, networkEnabled, scopeMayAttach, connectionKey) {
+  if (!networkEnabled || scope.closed || (scope.purpose === 'index' && !scope.feedKind) || connection?.destroyed === true) return null
+  if (!scopeMayAttach(scope)) return null
+  const remoteKey = connectionKey(connection, info)
+  if (!remoteKey) return null
+  if (scope.allowedPeerIds instanceof Set && !scope.allowedPeerIds.has(remoteKey)) return null
+  return remoteKey
+}
+
+function reconcileExistingScopeSession(scope, remoteKey, connection, activeConnections, closeSession) {
+  const existing = scope.sessions.get(remoteKey)
+  if (!existing) return null
+  const sameLiveConnection = existing.connection === connection &&
+    activeConnections.has(connection) && !existing.closed && existing.channel?.closed !== true
+  if (sameLiveConnection) return { existing, reuse: true }
+  if (!existing.closed) closeSession(scope, remoteKey, 'connection-replaced', existing)
+  else if (scope.sessions.get(remoteKey) === existing) scope.sessions.delete(remoteKey)
+  return { existing, reuse: false }
+}
+
+function shouldRejectUnmatchedIndexScopes(scopes, liveRemoteKey) {
+  let onlyIndexScopes = scopes.size > 0
+  let matchesRetainedIndex = false
+  for (const scope of scopes.values()) {
+    if (scope.purpose !== 'index' || scope.feedKind) onlyIndexScopes = false
+    else if (liveRemoteKey !== null && scope.transportPublicKey === liveRemoteKey) matchesRetainedIndex = true
+  }
+  return onlyIndexScopes && !matchesRetainedIndex
+}
+
+function pairConnectionProtocols(connection, info, mux, pairedConnections, protocolMajor, findScope, attachScope) {
+  if (!mux || typeof mux.pair !== 'function' || pairedConnections.has(connection)) return
+  pairedConnections.add(connection)
+  for (const purpose of [...GENERIC_PURPOSES, 'index', 'moderation']) {
+    mux.pair({ protocol: protocolForPurpose(purpose, protocolMajor), id: null }, id => {
+      const scope = id ? findScope(purpose, id) : null
+      if (scope) attachScope(scope, connection, info)
+    })
+  }
+}
+
+function attachOutboundClientScopes(connection, info, scopes, mux, activeConnections, attachScope) {
+  if (info.client === false) return
+  for (const scope of scopes.values()) {
+    if (scope.purpose === 'acquisition-discovery' || scope.purpose === 'acquisition') {
+      attachScope(scope, connection, info)
+    }
+  }
+  queueMicrotask(() => {
+    if (!activeConnections.has(connection)) return
+    mux?.cork?.()
+    try {
+      for (const scope of scopes.values()) {
+        if ((scope.purpose !== 'index' || scope.feedKind) &&
+            scope.purpose !== 'acquisition-discovery' &&
+            scope.purpose !== 'acquisition') {
+          attachScope(scope, connection, info)
+        }
+      }
+    } finally {
+      try { mux?.uncork?.() } catch { /* best-effort cork release */ }
+    }
+  })
+}
+
+function validateNetworkPolicyInputs(policy, diskCeilingBytes, outboundBytesPerSecond, normalizeOutboundRate) {
+  const nextUploadPermission = String(policy.uploadPermission || 'disabled')
+  const nextDiskCeilingBytes = Number(policy.diskCeilingBytes ?? diskCeilingBytes)
+  const nextContributionAllowed = policy.permissions?.contribute === true
+  const nextArchiveAllowed = policy.permissions?.archive === true
+  const nextPublicServingRequested = policy.publicServingAllowed === true &&
+    (nextContributionAllowed || nextArchiveAllowed)
+  const nextContributionUploadCeilingBytes = Number(policy.contributionBudgetBytes ?? 0)
+  const nextArchiveUploadCeilingBytes = Number(policy.archiveBudgetBytes ?? 0)
+  const nextUploadCeilingBytes = Number(policy.uploadCeilingBytes ?? 0)
+  if (!['disabled', 'manual', 'enabled'].includes(nextUploadPermission)) fail('invalid upload permission')
+  if (!Number.isSafeInteger(nextContributionUploadCeilingBytes) || nextContributionUploadCeilingBytes < 0) fail('invalid contribution upload ceiling')
+  if (!Number.isSafeInteger(nextArchiveUploadCeilingBytes) || nextArchiveUploadCeilingBytes < 0) fail('invalid archive upload ceiling')
+  if (!Number.isSafeInteger(nextUploadCeilingBytes) || nextUploadCeilingBytes < 0) fail('invalid upload ceiling')
+  if (!Number.isSafeInteger(nextDiskCeilingBytes) || nextDiskCeilingBytes < 0) fail('invalid disk ceiling')
+  const nextOutboundBytesPerSecond = normalizeOutboundRate(policy.outboundBytesPerSecond, outboundBytesPerSecond)
+
+  return {
+    nextUploadPermission,
+    nextDiskCeilingBytes,
+    nextContributionAllowed,
+    nextArchiveAllowed,
+    nextPublicServingRequested,
+    nextContributionUploadCeilingBytes,
+    nextArchiveUploadCeilingBytes,
+    nextUploadCeilingBytes,
+    nextOutboundBytesPerSecond,
+  }
+}
+
+function isScopeAffectedByPolicyChange(scope, contributionPolicyChanged, archivePolicyChanged) {
+  const isRetained = scope.purpose === 'asset' || scope.purpose === 'publisher'
+  const contributionScope = isRetained && scope.retentionClasses?.has?.('contribution-cache')
+  const retainedArchiveScope = isRetained && scope.retentionClasses?.has?.('archive-pin')
+  const archiveScope = scope.purpose === 'archive' || scope.purpose === 'archive-discovery'
+  const contributionChanged = contributionScope && contributionPolicyChanged
+  const archiveChanged = (archiveScope || retainedArchiveScope) && archivePolicyChanged
+  return contributionChanged || archiveChanged
+}
+
+function detectPolicyChanges({
+  wasPublicServingRequested, publicServingRequested,
+  wasUploadPermission, uploadPermission,
+  wasUploadCeilingBytes, uploadCeilingBytes,
+  wasContributionAllowed, contributionAllowed,
+  wasContributionUploadCeilingBytes, contributionUploadCeilingBytes,
+  wasArchiveAllowed, archiveAllowed,
+  wasArchiveUploadCeilingBytes, archiveUploadCeilingBytes,
+}) {
+  const uploadPolicyChanged =
+    wasPublicServingRequested !== publicServingRequested ||
+    wasUploadPermission !== uploadPermission ||
+    wasUploadCeilingBytes !== uploadCeilingBytes
+  const contributionServingPolicyChanged =
+    (wasContributionAllowed || contributionAllowed) && (
+      wasContributionAllowed !== contributionAllowed ||
+      wasContributionUploadCeilingBytes !== contributionUploadCeilingBytes ||
+      uploadPolicyChanged
+    )
+  const archiveServingPolicyChanged =
+    (wasArchiveAllowed || archiveAllowed) && (
+      wasArchiveAllowed !== archiveAllowed ||
+      wasArchiveUploadCeilingBytes !== archiveUploadCeilingBytes ||
+      uploadPolicyChanged
+    )
+  return { contributionServingPolicyChanged, archiveServingPolicyChanged }
+}
+
+function buildRuntimeDiagnostics({
+  scopes,
+  status,
+  uploadedBytes,
+  indexServices,
+  protocolMajor,
+  networkId,
+  topicList,
+  policy,
+  counters,
+  recentErrors,
+}) {
+  const sessions = []
+  for (const scope of scopes.values()) {
+    for (const session of scope.sessions.values()) {
+      sessions.push({
+        peerId: session.peerId,
+        purpose: scope.purpose,
+        topicHex: scope.topicHex,
+        state: session.state,
+        assetResponseCount: session.assetResponses?.size || 0,
+        archiveServing: session.archiveServing === true,
+      })
+    }
+  }
+  sessions.sort((left, right) => left.peerId.localeCompare(right.peerId) || left.topicHex.localeCompare(right.topicHex))
+  return {
+    status,
+    publicWork: {
+      activeAnnouncements: [...scopes.values()]
+        .filter(scope => scope.serverAnnounced === true).length,
+      activeServes: sessions.reduce((total, session) =>
+        total + session.assetResponseCount + (session.archiveServing ? 1 : 0), 0),
+      servedBytes: uploadedBytes,
+    },
+    selectedIndexerCount: Math.min(indexServices.size, 64),
+    selectedIndexers: [...indexServices.values()]
+      .sort((left, right) => String(left.indexerId).localeCompare(String(right.indexerId)))
+      .slice(0, 8)
+      .map((service, index) => ({
+        id: `selected-${index + 1}`,
+        status: service.client ? 'active' : 'pending',
+      })),
+    protocolMajor,
+    networkId,
+    topics: topicList,
+    sessions,
+    policy,
+    counters: { ...counters },
+    recentErrors: recentErrors.map(error => ({ ...error })),
+  }
+}
+
+function normalizeOutboundRate (value, current) {
+  if (value === undefined || value === null) return current
+  const rate = Number(value)
+  if (!Number.isSafeInteger(rate) || rate < 0) fail('invalid outbound rate')
+  return rate
+}
+
+function resolveScopedRuntimeAdapters (options, swarm) {
   const catalogRegistry = options.catalogRegistry || null
+  const publisherSyncStateRepository = options.publisherSyncStateRepository || null
   // Optional first-hand delivery evidence; retention itself still replicates without it.
   const authorizePublication = typeof options.authorizePublication === 'function'
     ? options.authorizePublication
@@ -226,14 +497,6 @@ export function createScopedNetworkRuntime (options = {}) {
   const onCatalogUpdate = typeof options.onCatalogUpdate === 'function'
     ? options.onCatalogUpdate
     : null
-  const protocolMajor = Number(options.protocolMajor ?? PROTOCOL_MAJOR)
-  if (protocolMajor !== PROTOCOL_MAJOR) fail('unsupported protocol major')
-  const assetTransferTimeoutMs = Number(options.assetTransferTimeoutMs ?? ASSET_TRANSFER_TIMEOUT_MS)
-  if (!Number.isSafeInteger(assetTransferTimeoutMs) ||
-      assetTransferTimeoutMs < 1 ||
-      assetTransferTimeoutMs > ASSET_TRANSFER_TIMEOUT_MS) {
-    fail('asset transfer timeout is out of bounds')
-  }
   const networkId = String(options.networkId || 'peartube-main')
   const currentTime = () => {
     const value = typeof options.now === 'function' ? options.now() : Date.now()
@@ -244,8 +507,21 @@ export function createScopedNetworkRuntime (options = {}) {
   const now = typeof options.now === 'function' ? options.now : () => Date.now()
   const bootstrapLocatorKeyPair = options.bootstrapLocatorKeyPair ||
     (swarm?.keyPair?.publicKey && swarm?.keyPair?.secretKey ? swarm.keyPair : null)
-  const bootstrapLocatorTtlMs = Number(options.bootstrapLocatorTtlMs ?? 5 * 60_000)
-  const bootstrapLocatorRefreshMs = Number(options.bootstrapLocatorRefreshMs ?? Math.floor(bootstrapLocatorTtlMs / 2))
+  return {
+    catalogRegistry,
+    authorizePublication,
+    authorizeConsumerWork,
+    onCatalogUpdate,
+    publisherSyncStateRepository,
+    networkId,
+    currentTime,
+    bootstrapEnabled,
+    now,
+    bootstrapLocatorKeyPair,
+  }
+}
+
+function resolveScopedRuntimeTimers (options) {
   const scheduleBootstrapLocatorRefresh = typeof options.setBootstrapLocatorTimer === 'function'
     ? options.setBootstrapLocatorTimer
     : setTimeout
@@ -261,21 +537,117 @@ export function createScopedNetworkRuntime (options = {}) {
   const scheduleOutboundRefill = typeof options.setOutboundRateTimer === 'function'
     ? options.setOutboundRateTimer
     : setTimeout
-  const publisherRotationDrainMs = Number(options.publisherRotationDrainMs ?? 500)
-  if (!Number.isSafeInteger(bootstrapLocatorTtlMs) || bootstrapLocatorTtlMs < 1 ||
-      !Number.isSafeInteger(bootstrapLocatorRefreshMs) || bootstrapLocatorRefreshMs < 1 ||
-      bootstrapLocatorRefreshMs >= bootstrapLocatorTtlMs ||
-      !Number.isSafeInteger(publisherRotationDrainMs) || publisherRotationDrainMs < 1 ||
-      publisherRotationDrainMs > 5_000) {
-    fail('bootstrap locator refresh bounds are invalid')
-  }
   const admission = options.admission?.reserve ? options.admission : createNetworkAdmission(options.admission)
+  const muxFactory = options.muxFactory || (connection => Protomux.from(connection))
+  return {
+    scheduleBootstrapLocatorRefresh,
+    cancelBootstrapLocatorRefresh,
+    schedulePublisherRotationDrain,
+    cancelPublisherRotationDrain,
+    scheduleOutboundRefill,
+    admission,
+    muxFactory,
+  }
+}
+
+function deriveInitialNetworkPolicyState (options) {
+  const hasInitialNetworkPolicy = options.initialNetworkPolicy != null
+  const initialNetworkPolicy = options.initialNetworkPolicy || {}
+  const networkEnabled = hasInitialNetworkPolicy
+    ? initialNetworkPolicy.networkEnabled !== false
+    : true
+  const uploadPermission = hasInitialNetworkPolicy
+    ? String(initialNetworkPolicy.uploadPermission || 'disabled')
+    : 'disabled'
+  const contributionUploadCeilingBytes = hasInitialNetworkPolicy
+    ? Number(initialNetworkPolicy.contributionBudgetBytes || 0)
+    : 0
+  const archiveUploadCeilingBytes = hasInitialNetworkPolicy
+    ? Number(initialNetworkPolicy.archiveBudgetBytes || 0)
+    : 0
+  const uploadCeilingBytes = hasInitialNetworkPolicy
+    ? Number(initialNetworkPolicy.uploadCeilingBytes || 0)
+    : 0
+  const diskCeilingBytes = hasInitialNetworkPolicy
+    ? Number(initialNetworkPolicy.diskCeilingBytes || 0)
+    : Number.MAX_SAFE_INTEGER
+  const contributionAllowed = initialNetworkPolicy.permissions?.contribute === true
+  const archiveAllowed = initialNetworkPolicy.permissions?.archive === true
+  const publicServingRequested = hasInitialNetworkPolicy &&
+    initialNetworkPolicy.publicServingAllowed === true &&
+    (contributionAllowed || archiveAllowed)
+  return {
+    hasInitialNetworkPolicy,
+    initialNetworkPolicy,
+    networkEnabled,
+    uploadPermission,
+    contributionUploadCeilingBytes,
+    archiveUploadCeilingBytes,
+    uploadCeilingBytes,
+    diskCeilingBytes,
+    contributionAllowed,
+    archiveAllowed,
+    publicServingRequested,
+  }
+}
+
+export function createScopedNetworkRuntime (options = {}) {
+  const {
+    protocolMajor,
+    assetTransferTimeoutMs,
+    bootstrapLocatorTtlMs,
+    bootstrapLocatorRefreshMs,
+    publisherRotationDrainMs,
+  } = validateScopedNetworkRuntimeOptions(options)
+  const swarm = options.swarm
+  const peerAddresses = configuredPeerAddresses(options.peerAddresses)
+  const originalDhtConnect = swarm.dht?.connect
+  if (peerAddresses.size && typeof originalDhtConnect !== 'function') fail('peerAddresses requires a DHT transport')
+  function connectWithPeerAddresses (publicKey, connectOptions = {}) {
+    const addresses = peerAddresses.get(b4a.toString(publicKey, 'hex'))
+    return originalDhtConnect.call(this, publicKey, addresses
+      ? { ...connectOptions, relayAddresses: [...addresses, ...(connectOptions.relayAddresses || [])] }
+      : connectOptions)
+  }
+  const store = options.store
+  const {
+    catalogRegistry,
+    authorizePublication,
+    authorizeConsumerWork,
+    onCatalogUpdate,
+    publisherSyncStateRepository,
+    networkId,
+    currentTime,
+    bootstrapEnabled,
+    now,
+    bootstrapLocatorKeyPair,
+  } = resolveScopedRuntimeAdapters(options, swarm)
+  const {
+    scheduleBootstrapLocatorRefresh,
+    cancelBootstrapLocatorRefresh,
+    schedulePublisherRotationDrain,
+    cancelPublisherRotationDrain,
+    scheduleOutboundRefill,
+    admission,
+    muxFactory,
+  } = resolveScopedRuntimeTimers(options)
+  const policyState = deriveInitialNetworkPolicyState(options)
+  const { hasInitialNetworkPolicy, initialNetworkPolicy } = policyState
+  let {
+    networkEnabled,
+    uploadPermission,
+    contributionUploadCeilingBytes,
+    archiveUploadCeilingBytes,
+    uploadCeilingBytes,
+    diskCeilingBytes,
+    contributionAllowed,
+    archiveAllowed,
+    publicServingRequested,
+  } = policyState
   const publisherProofProviders = new Map()
   const publisherPageProviders = new Map()
   const bootstrapFollowAttempts = new Map()
-  const publisherSyncStateRepository = options.publisherSyncStateRepository || null
   const verifiedLocatorAuthority = Symbol('verified bootstrap locator')
-  const muxFactory = options.muxFactory || (connection => Protomux.from(connection))
   const scopes = new Map()
   const followedPublishers = new Map()
   const publisherFollowReasons = new Map()
@@ -290,6 +662,9 @@ export function createScopedNetworkRuntime (options = {}) {
   const activeConnections = new Map()
   const indexServices = new Map()
   const indexSequenceFloors = new Map()
+  // Survives release so private restore / policy rollback can rebind the exact
+  // last successfully admitted record without a public retain replay bypass.
+  const lastAdmittedIndexServices = new Map()
   const directPeerRefs = new Map()
   const joinedDirectPeers = new Set()
   const indexTransitions = new Map()
@@ -303,29 +678,6 @@ export function createScopedNetworkRuntime (options = {}) {
   let policyTail = Promise.resolve()
   let nextRequestId = 1
   let listening = false
-  const hasInitialNetworkPolicy = options.initialNetworkPolicy != null
-  const initialNetworkPolicy = options.initialNetworkPolicy || {}
-  let networkEnabled = hasInitialNetworkPolicy ? initialNetworkPolicy.networkEnabled !== false : true
-  let uploadPermission = hasInitialNetworkPolicy
-    ? String(initialNetworkPolicy.uploadPermission || 'disabled')
-    : 'disabled'
-  let contributionUploadCeilingBytes = hasInitialNetworkPolicy
-    ? Number(initialNetworkPolicy.contributionBudgetBytes || 0)
-    : 0
-  let archiveUploadCeilingBytes = hasInitialNetworkPolicy
-    ? Number(initialNetworkPolicy.archiveBudgetBytes || 0)
-    : 0
-  let uploadCeilingBytes = hasInitialNetworkPolicy
-    ? Number(initialNetworkPolicy.uploadCeilingBytes || 0)
-    : 0
-  let diskCeilingBytes = hasInitialNetworkPolicy
-    ? Number(initialNetworkPolicy.diskCeilingBytes || 0)
-    : Number.MAX_SAFE_INTEGER
-  let contributionAllowed = initialNetworkPolicy.permissions?.contribute === true
-  let archiveAllowed = initialNetworkPolicy.permissions?.archive === true
-  let publicServingRequested = hasInitialNetworkPolicy &&
-    initialNetworkPolicy.publicServingAllowed === true &&
-    (contributionAllowed || archiveAllowed)
   let publicServingAllowed = publicServingRequested && networkEnabled
   let uploadAllowed = publicServingAllowed &&
     uploadPermission === 'enabled' &&
@@ -354,14 +706,6 @@ export function createScopedNetworkRuntime (options = {}) {
   if (!uploadAllowed) {
     console.log('[ScopedNetwork] uploads are off; this device serves no content bytes',
       JSON.stringify({ uploadPermission, networkEnabled, uploadCeilingBytes }))
-  }
-
-
-  function normalizeOutboundRate (value, current) {
-    if (value === undefined || value === null) return current
-    const rate = Number(value)
-    if (!Number.isSafeInteger(rate) || rate < 0) fail('invalid outbound rate')
-    return rate
   }
 
   // One second of burst capacity, never smaller than one maximal block.
@@ -559,6 +903,7 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   function joinScope ({ purpose, topic, scopeId, mode, ...metadata }) {
+    if (status === 'closed') fail('runtime is closed')
     const topicBuffer = exactBuffer(topic, 32, 'topic')
     const id = `${purpose}:${topicHex(topicBuffer)}`
     let scope = scopes.get(id)
@@ -714,6 +1059,7 @@ export function createScopedNetworkRuntime (options = {}) {
     readVerifiedAssetBlock, requestAssetBlocks, revalidateRetainedRenditions, retainArchiveDiscovery,
     releaseArchiveDiscovery, publishArchiveRequest, publishArchivePledge, publishArchiveChallenge,
     publishArchiveChallengeProof, retainAuthorizedArchive, releaseAuthorizedArchive,
+    getAuthorizedArchiveProgress, assessAvailability,
     createAuthorizedArchiveChallengeProof, verifyAuthorizedArchiveChallengeProof,
   } = contentRuntime
   const publisherRuntime = createPublisherCatalogRuntime({
@@ -779,35 +1125,13 @@ export function createScopedNetworkRuntime (options = {}) {
   function authorizeScopeConnection (scope, { peerId, connection, requestedCoreKey, tracked } = {}) {
     if (!networkEnabled) return { status: 'rejected', reason: 'network-policy-disabled' }
     if (!scope || scope.closed) return { status: 'rejected', reason: 'scope-not-retained' }
-    if (scope.purpose === 'index' && !scope.feedKind) {
-      if (!scope.announcement || !scope.transportPublicKey) return { status: 'rejected', reason: 'index-service-not-retained' }
-      const liveRemoteKey = authenticatedRemoteKey(connection)
-      if (!liveRemoteKey || liveRemoteKey !== scope.transportPublicKey) return { status: 'rejected', reason: 'index-transport-key-mismatch' }
-      return { status: 'authorized', action: 'index-service', indexerId: scope.indexerId }
-    }
-    if (scope.purpose === 'acquisition-discovery') {
-      return { status: 'authorized', action: 'acquisition-discovery' }
-    }
-    if (scope.purpose === 'acquisition') {
-      const liveRemoteKey = authenticatedRemoteKey(connection)
-      if (!liveRemoteKey || !scope.allowedPeerIds?.has?.(liveRemoteKey)) {
-        return { status: 'rejected', reason: 'acquisition-audience-mismatch' }
-      }
-      return { status: 'authorized', action: 'acquisition-work', assignmentId: scope.assignmentId }
-    }
+
+    const indexOrAcq = authorizeIndexOrAcquisitionScopeConnection(scope, connection, authenticatedRemoteKey)
+    if (indexOrAcq) return indexOrAcq
+
     if (scope.purpose === 'bootstrap') return { status: 'authorized', action: 'metadata-only' }
     if (scope.purpose === 'publisher') {
-      if (scope.modes.has('candidate') && !scope.modes.has('followed') && !scope.modes.has('local')) {
-        return { status: 'authorized', action: 'namespace-proof', publisherId: scope.publisherId }
-      }
-      if (!scope.binding?.catalog || (!scope.modes.has('followed') && !scope.modes.has('local'))) return { status: 'rejected', reason: 'publisher-not-followed' }
-      if (scope.modes.has('local') && !scope.modes.has('followed') && !scopeMayServe(scope)) {
-        return { status: 'rejected', reason: 'publisher-serving-policy-disabled' }
-      }
-      if (connection) {
-        counters.openedCatalogs++
-      }
-      return { status: 'authorized', action: 'catalog-pages', publisherId: scope.publisherId }
+      return authorizePublisherScopeConnection(scope, connection, publisherPageProviders, scopeMayServe, counters)
     }
     if (scope.purpose === 'index' || scope.purpose === 'moderation') {
       return { status: 'authorized', action: 'bounded-feed', feedId: scope.feedId }
@@ -817,43 +1141,70 @@ export function createScopedNetworkRuntime (options = {}) {
       if (requestedCoreKey && hex32(requestedCoreKey, 'requestedCoreKey') !== scope.coreKey) return { status: 'rejected', reason: 'core-not-authorized' }
       return { status: 'authorized', action: 'retained-range', coreKey: scope.coreKey, range: { ...scope.range } }
     }
-    if (scope.purpose === 'archive-discovery') {
-      return scopeMayServe(scope)
-        ? { status: 'authorized', action: 'archive-discovery' }
-        : { status: 'rejected', reason: 'archive-policy-disabled' }
-    }
-    if (scope.purpose === 'archive') {
-      if (!scopeMayServe(scope)) return { status: 'rejected', reason: 'archive-policy-disabled' }
-      if (scope.archiveDiscovery) fail('archive custody scope cannot be discovery')
-      const requested = requestedCoreKey ? hex32(requestedCoreKey, 'requestedCoreKey') : null
-      const resource = requested
-        ? [...(scope.archiveResources?.values() || [])].find(candidate => candidate.coreKey === requested)
-        : null
-      if (requested && !resource) return { status: 'rejected', reason: 'archive-range-not-authorized' }
-      // Archive cores are deliberately not attached to Hypercore's unrestricted
-      // responder. The retained exact ranges are local custody resources; scoped
-      // challenge/transfer frames must enforce the range before any block is read.
-      return { status: 'authorized', action: 'archive-range', coreKey: resource?.coreKey || null, range: resource ? { ...resource.range } : null }
+    if (scope.purpose === 'archive-discovery' || scope.purpose === 'archive') {
+      return authorizeArchiveScopeConnection(scope, requestedCoreKey, scopeMayServe)
     }
     return { status: 'rejected', reason: 'unknown-purpose' }
   }
 
 
 
-  function attachScope (scope, connection, info) {
-    if (!networkEnabled || scope.closed || (scope.purpose === 'index' && !scope.feedKind) || connection?.destroyed === true) return
-    if (!scopeMayAttach(scope)) return
-    const remoteKey = connectionKey(connection, info)
-    if (!remoteKey) return
-    if (scope.allowedPeerIds instanceof Set && !scope.allowedPeerIds.has(remoteKey)) return
-    const existing = scope.sessions.get(remoteKey)
-    if (existing) {
-      const sameLiveConnection = existing.connection === connection &&
-        activeConnections.has(connection) && !existing.closed && existing.channel?.closed !== true
-      if (sameLiveConnection) return existing
-      if (!existing.closed) closeSession(scope, remoteKey, 'connection-replaced', existing)
-      else if (scope.sessions.get(remoteKey) === existing) scope.sessions.delete(remoteKey)
+  async function activateAssetScopeSession(scope, isCurrentSession) {
+    let current = false
+    for (const authorization of scope.assetAuthorizations?.values?.() || []) {
+      current = await authorizePublication({
+        manifest: authorization.manifest,
+        renditionId: authorization.renditionId,
+        start: authorization.range.start,
+        end: authorization.range.end,
+      })
+      if (current) break
     }
+    if (!current) fail('publication manifest authorization failed')
+    return isCurrentSession()
+  }
+
+  function dispatchArchiveSessionActivation(scope, remoteKey, tracked) {
+    if (scope.purpose === 'archive' && !scope.archiveDiscovery) {
+      for (const failures of scope.archiveFailures?.values?.() || []) failures.delete(remoteKey)
+      startArchivePumpWhenOpen(scope, tracked)
+    }
+    if (scope.purpose === 'archive-discovery' && scope.archivePeerListeners) {
+      for (const listener of scope.archivePeerListeners) {
+        try { listener({ peerId: remoteKey }) } catch { /* Observers must not affect transport. */ }
+      }
+    }
+  }
+
+  async function dispatchScopeSessionActivation(scope, remoteKey, tracked) {
+    // Asset frames enforce range, upload policy, and Hypercore proof checks.
+    if (scope.purpose === 'asset') contentRuntime.notifyAssetPeerWaiters(scope)
+    if (scope.purpose === 'bootstrap') {
+      // Activation is the only moment consumers receive retained publisher locators.
+      sendLocatorsToSession(tracked)
+    }
+    if (scope.purpose === 'index' || scope.purpose === 'moderation') {
+      void syncFollowedFeed(scope)
+    }
+    if (scope.purpose === 'publisher' && scope.modes.has('followed') && !scope.modes.has('local')) {
+      void syncPublisherCatalog(scope).catch(error => {
+        recordProtocolError(scope, remoteKey, error)
+      })
+    }
+    dispatchArchiveSessionActivation(scope, remoteKey, tracked)
+    if ((scope.purpose === 'acquisition-discovery' || scope.purpose === 'acquisition') &&
+        typeof scope.onPeer === 'function') {
+      await scope.onPeer({ peerId: remoteKey, purpose: scope.purpose, scopeId: scope.scopeId })
+    }
+  }
+
+  function attachScope (scope, connection, info) {
+    const remoteKey = shouldAttachScope(scope, connection, info, networkEnabled, scopeMayAttach, connectionKey)
+    if (!remoteKey) return
+
+    const reconciled = reconcileExistingScopeSession(scope, remoteKey, connection, activeConnections, closeSession)
+    if (reconciled?.reuse) return reconciled.existing
+
     const mux = muxFactory(connection)
     if (!mux || typeof mux.createChannel !== 'function') return
     let ownedSession = null
@@ -874,45 +1225,13 @@ export function createScopedNetworkRuntime (options = {}) {
         if (!isCurrentSession()) return
         const tracked = ownedSession
         if (scope.purpose === 'asset') {
-          let current = false
-          for (const authorization of scope.assetAuthorizations?.values?.() || []) {
-            current = await authorizePublication({
-              manifest: authorization.manifest,
-              renditionId: authorization.renditionId,
-              start: authorization.range.start,
-              end: authorization.range.end,
-            })
-            if (current) break
-          }
-          if (!current) fail('publication manifest authorization failed')
-          if (!isCurrentSession()) return
+          const stillCurrent = await activateAssetScopeSession(scope, isCurrentSession)
+          if (!stillCurrent) return
         }
         const result = authorizeScopeConnection(scope, { peerId: remoteKey, connection, tracked })
         if (result.status !== 'authorized') fail(result.reason)
         if (isCurrentSession()) {
-          if (scope.purpose === 'asset') contentRuntime.notifyAssetPeerWaiters(scope)
-          if (scope.purpose === 'bootstrap') {
-            // Activation is the only moment consumers receive retained publisher locators.
-            sendLocatorsToSession(tracked)
-          }
-          if (scope.purpose === 'index' || scope.purpose === 'moderation') {
-            void syncFollowedFeed(scope)
-          }
-          if (scope.purpose === 'publisher' && scope.modes.has('followed') && !scope.modes.has('local')) {
-            void syncPublisherCatalog(scope).catch(error => {
-              recordProtocolError(scope, remoteKey, error)
-            })
-          }
-          // Asset frames enforce range, upload policy, and Hypercore proof checks.
-          if (scope.purpose === 'archive' && !scope.archiveDiscovery) {
-            for (const failures of scope.archiveFailures?.values?.() || []) failures.delete(remoteKey)
-            startArchivePumpWhenOpen(scope, tracked)
-          }
-          if (scope.purpose === 'archive-discovery' && scope.archivePeerListeners) { for (const listener of scope.archivePeerListeners) { try { listener({ peerId: remoteKey }) } catch { /* Observers must not affect transport. */ } } }
-          if ((scope.purpose === 'acquisition-discovery' || scope.purpose === 'acquisition') &&
-              typeof scope.onPeer === 'function') {
-            await scope.onPeer({ peerId: remoteKey, purpose: scope.purpose, scopeId: scope.scopeId })
-          }
+          await dispatchScopeSessionActivation(scope, remoteKey, tracked)
         }
       },
       onFrame: frame => {
@@ -1077,51 +1396,12 @@ export function createScopedNetworkRuntime (options = {}) {
         }
       })
     }
-    let onlyIndexScopes = scopes.size > 0
-    let matchesRetainedIndex = false
     const liveRemoteKey = authenticatedRemoteKey(connection)
-    for (const scope of scopes.values()) {
-      if (scope.purpose !== 'index' || scope.feedKind) onlyIndexScopes = false
-      else if (liveRemoteKey !== null && scope.transportPublicKey === liveRemoteKey) matchesRetainedIndex = true
-    }
-    if (onlyIndexScopes) {
-      if (!matchesRetainedIndex) return
-      return
-    }
+    if (shouldRejectUnmatchedIndexScopes(scopes, liveRemoteKey)) return
+
     const mux = muxFactory(connection)
-    if (mux && typeof mux.pair === 'function' && !pairedConnections.has(connection)) {
-      pairedConnections.add(connection)
-      for (const purpose of [...GENERIC_PURPOSES, 'index', 'moderation']) {
-        mux.pair({ protocol: protocolForPurpose(purpose, protocolMajor), id: null }, id => {
-          const scope = id ? findScope(purpose, id) : null
-          if (scope) attachScope(scope, connection, info)
-        })
-      }
-    }
-    if (info.client !== false) {
-      for (const scope of scopes.values()) {
-        if (scope.purpose === 'acquisition-discovery' || scope.purpose === 'acquisition') {
-          attachScope(scope, connection, info)
-        }
-      }
-    }
-    if (info.client !== false) {
-      queueMicrotask(() => {
-        if (!activeConnections.has(connection)) return
-        mux?.cork?.()
-        try {
-          for (const scope of scopes.values()) {
-            if ((scope.purpose !== 'index' || scope.feedKind) &&
-                scope.purpose !== 'acquisition-discovery' &&
-                scope.purpose !== 'acquisition') {
-              attachScope(scope, connection, info)
-            }
-          }
-        } finally {
-          mux?.uncork?.()
-        }
-      })
-    }
+    pairConnectionProtocols(connection, info, mux, pairedConnections, protocolMajor, findScope, attachScope)
+    attachOutboundClientScopes(connection, info, scopes, mux, activeConnections, attachScope)
   }
 
   function joinDirectPeer (transportPublicKey) {
@@ -1260,24 +1540,72 @@ export function createScopedNetworkRuntime (options = {}) {
     return operation
   }
 
+  function applyOutboundRateTransition(nextOutboundBytesPerSecond) {
+    if (nextOutboundBytesPerSecond === outboundBytesPerSecond) return
+    const wasUncapped = outboundBytesPerSecond === null
+    if (!wasUncapped) refillOutboundTokens()
+    outboundBytesPerSecond = nextOutboundBytesPerSecond
+    outboundTokensAt = Number(now())
+    if (outboundBytesPerSecond === null) outboundTokens = 0
+    else if (wasUncapped) outboundTokens = outboundCapacity()
+    else outboundTokens = Math.min(outboundTokens, outboundCapacity())
+  }
+
+  function cancelAssetResponsesForPolicyChange(contributionServingPolicyChanged, archiveServingPolicyChanged) {
+    if (!contributionServingPolicyChanged && !archiveServingPolicyChanged) return
+    for (const scope of scopes.values()) {
+      if (scope.purpose !== 'asset') continue
+      const contributionChanged = scope.retentionClasses?.has?.('contribution-cache') &&
+        contributionServingPolicyChanged
+      const archiveChanged = scope.retentionClasses?.has?.('archive-pin') &&
+        archiveServingPolicyChanged
+      if (!contributionChanged && !archiveChanged) continue
+      for (const tracked of scope.sessions.values()) {
+        for (const response of tracked.assetResponses?.values?.() || []) {
+          if (response.cancelled) continue
+          response.cancelled = true
+          try {
+            sendAssetError(scope, tracked, response.range, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
+          } catch (error) {
+            recordProtocolError(scope, tracked.peerId, error)
+          }
+        }
+      }
+    }
+  }
+
+  async function cutoverScopesForPolicyChange(contributionServingPolicyChanged, archiveServingPolicyChanged) {
+    if (!contributionServingPolicyChanged && !archiveServingPolicyChanged) return
+    const cutoverConnections = new Set()
+    await Promise.allSettled([...scopes.values()].map(async scope => {
+      if (isScopeAffectedByPolicyChange(scope, contributionServingPolicyChanged, archiveServingPolicyChanged)) {
+        for (const peerId of [...scope.sessions.keys()]) {
+          const session = scope.sessions.get(peerId)
+          if (!session) continue
+          if (!closeSession(scope, peerId, 'network-policy-role-changed', session)) continue
+          if (session.connection) cutoverConnections.add(session.connection)
+        }
+      }
+      await rejoinScopeDiscovery(scope)
+    }))
+    for (const connection of cutoverConnections) {
+      activeConnections.delete(connection)
+      try { connection.destroy?.() } catch { /* fail closed after removing the cutover connection */ }
+    }
+  }
+
   async function applyNetworkPolicyTransition (policy = {}) {
-    const nextUploadPermission = String(policy.uploadPermission || 'disabled')
-    const nextDiskCeilingBytes = Number(policy.diskCeilingBytes ?? diskCeilingBytes)
-    const nextContributionAllowed = policy.permissions?.contribute === true
-    const nextArchiveAllowed = policy.permissions?.archive === true
-    const nextPublicServingRequested = policy.publicServingAllowed === true &&
-      (nextContributionAllowed || nextArchiveAllowed)
-    const nextContributionUploadCeilingBytes = Number(policy.contributionBudgetBytes ?? 0)
-    const nextArchiveUploadCeilingBytes = Number(policy.archiveBudgetBytes ?? 0)
-    const nextUploadCeilingBytes = Number(policy.uploadCeilingBytes ?? 0)
-    if (!['disabled', 'manual', 'enabled'].includes(nextUploadPermission)) fail('invalid upload permission')
-    if (!Number.isSafeInteger(nextContributionUploadCeilingBytes) || nextContributionUploadCeilingBytes < 0) fail('invalid contribution upload ceiling')
-    if (!Number.isSafeInteger(nextArchiveUploadCeilingBytes) || nextArchiveUploadCeilingBytes < 0) fail('invalid archive upload ceiling')
-    if (!Number.isSafeInteger(nextUploadCeilingBytes) || nextUploadCeilingBytes < 0) fail('invalid upload ceiling')
-    if (!Number.isSafeInteger(nextDiskCeilingBytes) || nextDiskCeilingBytes < 0) fail('invalid disk ceiling')
-    // An absent rate leaves the limit exactly where it was: a caller that only
-    // moves the disk ceiling must not silently uncap the outbound path.
-    const nextOutboundBytesPerSecond = normalizeOutboundRate(policy.outboundBytesPerSecond, outboundBytesPerSecond)
+    const {
+      nextUploadPermission,
+      nextDiskCeilingBytes,
+      nextContributionAllowed,
+      nextArchiveAllowed,
+      nextPublicServingRequested,
+      nextContributionUploadCeilingBytes,
+      nextArchiveUploadCeilingBytes,
+      nextUploadCeilingBytes,
+      nextOutboundBytesPerSecond,
+    } = validateNetworkPolicyInputs(policy, diskCeilingBytes, outboundBytesPerSecond, normalizeOutboundRate)
 
     const wasNetworkEnabled = networkEnabled
     const wasPublicServingRequested = publicServingRequested
@@ -1287,26 +1615,16 @@ export function createScopedNetworkRuntime (options = {}) {
     const wasUploadCeilingBytes = uploadCeilingBytes
     const wasContributionUploadCeilingBytes = contributionUploadCeilingBytes
     const wasArchiveUploadCeilingBytes = archiveUploadCeilingBytes
+
     networkEnabled = policy.networkEnabled !== false
     uploadPermission = nextUploadPermission
     uploadCeilingBytes = nextUploadCeilingBytes
     contributionUploadCeilingBytes = nextContributionUploadCeilingBytes
     archiveUploadCeilingBytes = nextArchiveUploadCeilingBytes
     diskCeilingBytes = nextDiskCeilingBytes
-    if (nextOutboundBytesPerSecond !== outboundBytesPerSecond) {
-      // Refill against the old rate first so bytes already earned are not lost,
-      // then reseat the bucket under the new one. A tightened rate must not
-      // leave a stale burst behind, so the balance is clamped down too. Coming
-      // from an uncapped path there is no prior consumption to carry, so the
-      // first rate starts the device with a full burst rather than a stall.
-      const wasUncapped = outboundBytesPerSecond === null
-      if (!wasUncapped) refillOutboundTokens()
-      outboundBytesPerSecond = nextOutboundBytesPerSecond
-      outboundTokensAt = Number(now())
-      if (outboundBytesPerSecond === null) outboundTokens = 0
-      else if (wasUncapped) outboundTokens = outboundCapacity()
-      else outboundTokens = Math.min(outboundTokens, outboundCapacity())
-    }
+
+    applyOutboundRateTransition(nextOutboundBytesPerSecond)
+
     contributionAllowed = nextContributionAllowed
     archiveAllowed = nextArchiveAllowed
     publicServingRequested = nextPublicServingRequested
@@ -1315,72 +1633,24 @@ export function createScopedNetworkRuntime (options = {}) {
       uploadPermission === 'enabled' &&
       uploadCeilingBytes > 0
     networkPolicyEpoch++
-    const uploadPolicyChanged =
-      wasPublicServingRequested !== publicServingRequested ||
-      wasUploadPermission !== uploadPermission ||
-      wasUploadCeilingBytes !== uploadCeilingBytes
-    const contributionServingPolicyChanged =
-      (wasContributionAllowed || contributionAllowed) && (
-        wasContributionAllowed !== contributionAllowed ||
-        wasContributionUploadCeilingBytes !== contributionUploadCeilingBytes ||
-        uploadPolicyChanged
-      )
-    const archiveServingPolicyChanged =
-      (wasArchiveAllowed || archiveAllowed) && (
-        wasArchiveAllowed !== archiveAllowed ||
-        wasArchiveUploadCeilingBytes !== archiveUploadCeilingBytes ||
-        uploadPolicyChanged
-      )
-    if (contributionServingPolicyChanged || archiveServingPolicyChanged) {
-      for (const scope of scopes.values()) {
-        if (scope.purpose !== 'asset') continue
-        const contributionChanged = scope.retentionClasses?.has?.('contribution-cache') &&
-          contributionServingPolicyChanged
-        const archiveChanged = scope.retentionClasses?.has?.('archive-pin') &&
-          archiveServingPolicyChanged
-        if (!contributionChanged && !archiveChanged) continue
-        for (const tracked of scope.sessions.values()) {
-          for (const response of tracked.assetResponses?.values?.() || []) {
-            if (response.cancelled) continue
-            response.cancelled = true
-            try {
-              sendAssetError(scope, tracked, response.range, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
-            } catch (error) {
-              recordProtocolError(scope, tracked.peerId, error)
-            }
-          }
-        }
-      }
-    }
 
-    if (contributionServingPolicyChanged || archiveServingPolicyChanged) {
-      const cutoverConnections = new Set()
-      await Promise.allSettled([...scopes.values()].map(async scope => {
-        const contributionScope = (scope.purpose === 'asset' || scope.purpose === 'publisher') &&
-          scope.retentionClasses?.has?.('contribution-cache')
-        const retainedArchiveScope = (scope.purpose === 'asset' || scope.purpose === 'publisher') &&
-          scope.retentionClasses?.has?.('archive-pin')
-        const archiveScope = scope.purpose === 'archive' || scope.purpose === 'archive-discovery'
-        const contributionChanged = contributionScope && contributionServingPolicyChanged
-        const archiveChanged = (archiveScope || retainedArchiveScope) && archiveServingPolicyChanged
-        if (contributionChanged || archiveChanged) {
-          for (const peerId of [...scope.sessions.keys()]) {
-            const session = scope.sessions.get(peerId)
-            if (!session) continue
-            if (!closeSession(scope, peerId, 'network-policy-role-changed', session)) continue
-            if (session.connection) cutoverConnections.add(session.connection)
-          }
-        }
-        await rejoinScopeDiscovery(scope)
-      }))
-      for (const connection of cutoverConnections) {
-        activeConnections.delete(connection)
-        try { connection.destroy?.() } catch { /* fail closed after removing the cutover connection */ }
-      }
-    }
+    const { contributionServingPolicyChanged, archiveServingPolicyChanged } = detectPolicyChanges({
+      wasPublicServingRequested, publicServingRequested,
+      wasUploadPermission, uploadPermission,
+      wasUploadCeilingBytes, uploadCeilingBytes,
+      wasContributionAllowed, contributionAllowed,
+      wasContributionUploadCeilingBytes, contributionUploadCeilingBytes,
+      wasArchiveAllowed, archiveAllowed,
+      wasArchiveUploadCeilingBytes, archiveUploadCeilingBytes,
+    })
+
+    cancelAssetResponsesForPolicyChange(contributionServingPolicyChanged, archiveServingPolicyChanged)
+    await cutoverScopesForPolicyChange(contributionServingPolicyChanged, archiveServingPolicyChanged)
+
     if (wasNetworkEnabled && !networkEnabled) await deactivateNetwork()
     else if (!wasNetworkEnabled && networkEnabled) await activateNetwork()
     await restartTransferSessions(false)
+
     return {
       networkEnabled,
       uploadAllowed,
@@ -1431,18 +1701,20 @@ export function createScopedNetworkRuntime (options = {}) {
     const schedule = () => {
       if (indexServices.get(retained.indexerId) !== retained || retained.announcement !== announcement) return
       const remaining = announcement.expiresAt - currentTime()
-      if (remaining < 0) {
+      // Validity is half-open: expiresAt <= now means expired, exactly like
+      // verifyIndexServiceAnnouncement and policy reconciliation.
+      if (remaining <= 0) {
         void withIndexTransition(retained.indexerId, () =>
           releaseIndexServiceInternal(retained, 'announcement-expired')
         ).catch(() => {})
         return
       }
-      timer = setTimer(schedule, Math.min(remaining + 1, 0x7fffffff))
+      timer = setTimer(schedule, Math.min(remaining, 0x7fffffff))
       retained.expiryTimer = timer
       timer?.unref?.()
     }
     const remaining = announcement.expiresAt - currentTime()
-    timer = setTimer(schedule, Math.min(Math.max(remaining + 1, 1), 0x7fffffff))
+    timer = setTimer(schedule, Math.min(Math.max(remaining, 1), 0x7fffffff))
     timer?.unref?.()
     return timer
   }
@@ -1450,13 +1722,96 @@ export function createScopedNetworkRuntime (options = {}) {
   async function releaseIndexServiceInternal (retained, reason) {
     if (!retained || indexServices.get(retained.indexerId) !== retained) return false
     indexServices.delete(retained.indexerId)
+    // Floors stay across release so a public retain cannot downgrade after a
+    // leave. lastAdmittedIndexServices keeps the exact prior record for private
+    // restore only.
     const clearTimer = retained.limits.clearTimeout || clearTimeout
-    if (retained.expiryTimer) clearTimer(retained.expiryTimer)
-    retained.expiryTimer = null
+    if (retained.expiryTimer) {
+      try { clearTimer(retained.expiryTimer) } catch { /* timer identity is best-effort */ }
+      retained.expiryTimer = null
+    }
     retained.client?.close(reason)
-    await leaveScope(retained.scope, retained.mode)
-    await releaseDirectPeer(retained.scope)
+    // leaveScope sets closed before scopes.delete. If a later step throws, a
+    // closed entry can linger and restore's joinScope would reuse a dead scope.
+    // Always drop a closed index scope from the map; still surface the error.
+    let releaseError = null
+    try {
+      await leaveScope(retained.scope, retained.mode)
+    } catch (error) {
+      releaseError = error
+    } finally {
+      if (retained.scope?.closed) scopes.delete(retained.scope.id)
+    }
+    try {
+      await releaseDirectPeer(retained.scope)
+    } catch (error) {
+      if (!releaseError) releaseError = error
+    }
+    if (releaseError) throw releaseError
     return true
+  }
+
+  async function admitIndexServiceAdapter ({ announcement, limits, encoded, indexerId, transportPublicKey, existing }) {
+    if (status !== 'active') fail('runtime is not active')
+    if (indexServices.size >= MAX_INDEX_SERVICE_ADAPTERS) fail('retained index services exceed their bounded limit')
+    const mode = `index-service:${indexerId}`
+    const topic = deriveIndexerTopic({ protocolMajor, indexerId })
+    const { scope } = joinScope({
+      purpose: 'index',
+      topic,
+      scopeId: indexerId,
+      mode,
+      direct: true,
+      indexerId,
+      transportPublicKey,
+      announcement,
+      limits,
+    })
+    let client = null
+    try {
+      if (networkEnabled) client = createRetainedIndexClient(announcement, limits)
+      retainDirectPeer(scope)
+    } catch (error) {
+      try { client?.close('index-service-retain-failed') } catch { /* best-effort client close */ }
+      try { await leaveScope(scope, mode) } catch { /* best-effort scope close */ }
+      throw error
+    }
+    const retained = {
+      indexerId,
+      transportPublicKey,
+      announcement,
+      client,
+      limits,
+      scope,
+      mode,
+      encoded,
+      expiryTimer: null,
+    }
+    let initialExpiryTimer
+    try {
+      initialExpiryTimer = armIndexServiceExpiry(retained, announcement, limits)
+    } catch (error) {
+      try { retained.client?.close('index-service-retain-failed') } catch { /* best-effort client close */ }
+      try { await leaveScope(scope, mode) } catch { /* best-effort scope close */ }
+      try { await releaseDirectPeer(scope) } catch { /* best-effort direct peer release */ }
+      throw error
+    }
+    retained.expiryTimer = initialExpiryTimer
+    indexServices.set(indexerId, retained)
+    indexSequenceFloors.set(indexerId, announcement.sequence)
+    lastAdmittedIndexServices.set(indexerId, {
+      announcement,
+      limits,
+      encoded,
+      indexerId,
+      transportPublicKey,
+    })
+    return {
+      status: existing ? 'superseded' : 'retained',
+      indexerId,
+      transportPublicKey,
+      topic: stableScopeDiagnostic(scope),
+    }
   }
 
   async function retainIndexService (input = {}) {
@@ -1469,6 +1824,14 @@ export function createScopedNetworkRuntime (options = {}) {
     const indexerId = hex32(announcement?.indexerId, 'indexerId')
     return withIndexTransition(indexerId, async () => {
       if (status !== 'active') fail('runtime is not active')
+      // Sequence floors are session-monotonic with no public bypass. Floors
+      // survive release so a public retain cannot downgrade after a leave.
+      // Floors commit only after a successful admit (see admitIndexServiceAdapter).
+      // Exact-envelope rebind is private restore only — never a public path.
+      let encoded = null
+      try {
+        encoded = b4a.toString(encodeIndexServiceAnnouncement(announcement), 'hex')
+      } catch { /* canonical encoding failure is handled by verification below */ }
       const candidateSequenceFloors = new Map(indexSequenceFloors)
       if (!verifyIndexServiceAnnouncement(announcement, {
         now: currentTime(),
@@ -1478,6 +1841,7 @@ export function createScopedNetworkRuntime (options = {}) {
       })) {
         fail('index service announcement is invalid, unsupported, expired, or replayed')
       }
+      if (encoded === null) fail('index service announcement is invalid, unsupported, expired, or replayed')
       const transportPublicKey = hex32(announcement.transportPublicKey, 'transportPublicKey')
       const existing = indexServices.get(indexerId)
       const sameChannelIdentity = existing?.transportPublicKey === transportPublicKey
@@ -1493,10 +1857,18 @@ export function createScopedNetworkRuntime (options = {}) {
         }
         existing.announcement = announcement
         existing.limits = limits
+        existing.encoded = encoded
         existing.scope.announcement = announcement
         existing.scope.limits = limits
         existing.expiryTimer = candidateTimer
         indexSequenceFloors.set(indexerId, announcement.sequence)
+        lastAdmittedIndexServices.set(indexerId, {
+          announcement,
+          limits,
+          encoded,
+          indexerId,
+          transportPublicKey,
+        })
         if (previousTimer) {
           try { (previousLimits.clearTimeout || clearTimeout)(previousTimer) } catch { /* best-effort superseded timer cleanup */ }
         }
@@ -1507,57 +1879,151 @@ export function createScopedNetworkRuntime (options = {}) {
           topic: stableScopeDiagnostic(existing.scope),
         }
       }
-      if (existing) await releaseIndexServiceInternal(existing, 'announcement-superseded')
-      if (status !== 'active') fail('runtime is not active')
-      const mode = `index-service:${indexerId}`
-      const topic = deriveIndexerTopic({ protocolMajor, indexerId })
-      const { scope } = joinScope({
-        purpose: 'index',
-        topic,
-        scopeId: indexerId,
-        mode,
-        direct: true,
-        indexerId,
-        transportPublicKey,
-        announcement,
-        limits,
+      // Different-channel replacement: release + admit under one restore-protected
+      // try so a failure after indexServices.delete still restores the exact
+      // previous snapshot. Floors stay; candidate never commits a floor on failure.
+      const previous = existing || null
+      const previousSnapshot = previous
+        ? {
+            announcement: previous.announcement,
+            limits: previous.limits,
+            encoded: previous.encoded,
+            indexerId: previous.indexerId,
+            transportPublicKey: previous.transportPublicKey,
+          }
+        : null
+      try {
+        if (previous) await releaseIndexServiceInternal(previous, 'announcement-superseded')
+        return await admitIndexServiceAdapter({
+          announcement,
+          limits,
+          encoded,
+          indexerId,
+          transportPublicKey,
+          existing: previous,
+        })
+      } catch (error) {
+        if (!previousSnapshot) throw error
+        try {
+          await restoreIndexServiceSnapshot(previousSnapshot)
+        } catch (restoreError) {
+          const compound = new Error(
+            `index service replacement failed (${error.message}) and restore failed (${restoreError.message})`
+          )
+          compound.code = 'INDEX_SERVICE_RESTORE_FAILED'
+          compound.cause = { replacement: error, restore: restoreError }
+          throw compound
+        }
+        throw error
+      }
+    })
+  }
+
+  async function restoreIndexServiceSnapshot (snapshot) {
+    if (!snapshot?.encoded || !snapshot?.announcement) fail('index service restore snapshot is required')
+    const last = lastAdmittedIndexServices.get(snapshot.indexerId)
+    if (!last || last.encoded !== snapshot.encoded) {
+      fail('index service restore snapshot is not the last admitted record')
+    }
+    // Freshness only — this path never accepts caller-supplied announcements
+    // against a live floor. Sequence floors are left as committed.
+    if (!verifyIndexServiceAnnouncement(snapshot.announcement, {
+      now: currentTime(),
+      supportedDimensions: snapshot.limits?.supportedDimensions,
+      supportedQueryCapabilities: snapshot.limits?.supportedQueryCapabilities,
+    })) {
+      fail('index service announcement is invalid, unsupported, expired, or replayed')
+    }
+    return admitIndexServiceAdapter({
+      announcement: snapshot.announcement,
+      limits: snapshot.limits || {},
+      encoded: snapshot.encoded,
+      indexerId: snapshot.indexerId,
+      transportPublicKey: snapshot.transportPublicKey,
+      existing: null,
+    })
+  }
+
+  function captureIndexServiceSession () {
+    return Object.freeze({
+      floors: new Map(indexSequenceFloors),
+      lastAdmitted: new Map([...lastAdmittedIndexServices.entries()].map(([id, snap]) => [id, { ...snap }])),
+      live: Object.freeze([...indexServices.values()].map(retained => Object.freeze({
+        indexerId: retained.indexerId,
+        transportPublicKey: retained.transportPublicKey,
+        announcement: retained.announcement,
+        limits: retained.limits,
+        encoded: retained.encoded,
+      }))),
+    })
+  }
+
+  async function restoreIndexServiceSession (snapshot) {
+    if (!snapshot || !Array.isArray(snapshot.live)) fail('index service session snapshot is required')
+    if (status === 'closed') fail('runtime is closed')
+    if (status !== 'active') fail('runtime is not active')
+    const desired = new Map(snapshot.live.map(entry => [entry.indexerId, entry]))
+    // Drop anything that is not the exact captured live record.
+    for (const retained of [...indexServices.values()]) {
+      const want = desired.get(retained.indexerId)
+      if (want && want.encoded === retained.encoded) continue
+      await releaseIndexServiceInternal(retained, 'index-service-session-rollback')
+    }
+    // Re-admit every missing captured record without a public sequence gate.
+    for (const entry of snapshot.live) {
+      const live = indexServices.get(entry.indexerId)
+      if (live && live.encoded === entry.encoded) continue
+      if (!verifyIndexServiceAnnouncement(entry.announcement, {
+        now: currentTime(),
+        supportedDimensions: entry.limits?.supportedDimensions,
+        supportedQueryCapabilities: entry.limits?.supportedQueryCapabilities,
+      })) {
+        fail('index service announcement is invalid, unsupported, expired, or replayed')
+      }
+      await admitIndexServiceAdapter({
+        announcement: entry.announcement,
+        limits: entry.limits || {},
+        encoded: entry.encoded,
+        indexerId: entry.indexerId,
+        transportPublicKey: entry.transportPublicKey,
+        existing: null,
       })
-      let client = null
-      try {
-        if (networkEnabled) client = createRetainedIndexClient(announcement, limits)
-        retainDirectPeer(scope)
-      } catch (error) {
-        client?.close('index-service-retain-failed')
-        await leaveScope(scope, mode)
-        throw error
+    }
+    // Force floors and last-admitted maps back to the pre-reconcile session.
+    indexSequenceFloors.clear()
+    for (const [id, sequence] of snapshot.floors || []) indexSequenceFloors.set(id, sequence)
+    lastAdmittedIndexServices.clear()
+    for (const [id, snap] of snapshot.lastAdmitted || []) {
+      lastAdmittedIndexServices.set(id, { ...snap })
+    }
+  }
+
+  async function restoreLastIndexService ({ indexerId } = {}) {
+    const id = hex32(indexerId, 'indexerId')
+    if (status === 'closed') fail('runtime is closed')
+    return withIndexTransition(id, async () => {
+      if (status !== 'active') fail('runtime is not active')
+      const live = indexServices.get(id)
+      if (live) {
+        return {
+          status: 'retained',
+          restored: false,
+          indexerId: id,
+          encoded: live.encoded,
+          transportPublicKey: live.transportPublicKey,
+          topic: stableScopeDiagnostic(live.scope),
+        }
       }
-      const retained = {
-        indexerId,
-        transportPublicKey,
-        announcement,
-        client,
-        limits,
-        scope,
-        mode,
-        expiryTimer: null,
-      }
-      let initialExpiryTimer
-      try {
-        initialExpiryTimer = armIndexServiceExpiry(retained, announcement, limits)
-      } catch (error) {
-        retained.client?.close('index-service-retain-failed')
-        await leaveScope(scope, mode)
-        await releaseDirectPeer(scope)
-        throw error
-      }
-      retained.expiryTimer = initialExpiryTimer
-      indexServices.set(indexerId, retained)
-      indexSequenceFloors.set(indexerId, announcement.sequence)
+      const snapshot = lastAdmittedIndexServices.get(id)
+      if (!snapshot) fail('no previously admitted index service to restore')
+      const result = await restoreIndexServiceSnapshot(snapshot)
       return {
-        status: existing ? 'superseded' : 'retained',
-        indexerId,
-        transportPublicKey,
-        topic: stableScopeDiagnostic(scope),
+        status: result.status,
+        restored: true,
+        indexerId: id,
+        encoded: snapshot.encoded,
+        transportPublicKey: snapshot.transportPublicKey,
+        topic: result.topic,
       }
     })
   }
@@ -1571,22 +2037,15 @@ export function createScopedNetworkRuntime (options = {}) {
     })
   }
 
-  function listRetainedIndexServiceAdapters (limit = 8) {
+  function listRetainedIndexServiceAdapters (limit = MAX_INDEX_SERVICE_ADAPTERS) {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_INDEX_SERVICE_ADAPTERS) {
       fail('index service adapter limit is out of bounds')
     }
     if (status === 'closed') return Object.freeze([])
-    const selected = []
-    for (const indexerId of indexServices.keys()) {
-      let offset = 0
-      while (offset < selected.length && selected[offset] < indexerId) offset++
-      if (offset >= limit) continue
-      selected.splice(offset, 0, indexerId)
-      if (selected.length > limit) selected.pop()
-    }
-    return Object.freeze(selected.map(indexerId => Object.freeze({
-      indexerId,
-      queryIndexService: ({ query, signal } = {}) => queryIndexService({ indexerId, query, signal }),
+    return Object.freeze([...indexServices.values()].slice(0, limit).map(retained => Object.freeze({
+      indexerId: retained.indexerId,
+      announcement: retained.announcement,
+      queryIndexService: ({ query, signal } = {}) => queryIndexService({ indexerId: retained.indexerId, query, signal }),
     })))
   }
 
@@ -1752,39 +2211,14 @@ export function createScopedNetworkRuntime (options = {}) {
 
   function getDiagnostics () {
     const topicList = [...scopes.values()].map(stableScopeDiagnostic).sort((left, right) => left.topicHex.localeCompare(right.topicHex))
-    const sessions = []
-    for (const scope of scopes.values()) {
-      for (const session of scope.sessions.values()) sessions.push({
-        peerId: session.peerId,
-        purpose: scope.purpose,
-        topicHex: scope.topicHex,
-        state: session.state,
-        assetResponseCount: session.assetResponses?.size || 0,
-        archiveServing: session.archiveServing === true,
-      })
-    }
-    sessions.sort((left, right) => left.peerId.localeCompare(right.peerId) || left.topicHex.localeCompare(right.topicHex))
-    return {
+    return buildRuntimeDiagnostics({
+      scopes,
       status,
-      publicWork: {
-        activeAnnouncements: [...scopes.values()]
-          .filter(scope => scope.serverAnnounced === true).length,
-        activeServes: sessions.reduce((total, session) =>
-          total + session.assetResponseCount + (session.archiveServing ? 1 : 0), 0),
-        servedBytes: uploadedBytes,
-      },
-      selectedIndexerCount: Math.min(indexServices.size, 64),
-      selectedIndexers: [...indexServices.values()]
-        .sort((left, right) => String(left.indexerId).localeCompare(String(right.indexerId)))
-        .slice(0, 8)
-        .map((service, index) => ({
-          id: `selected-${index + 1}`,
-          status: service.client ? 'active' : 'pending',
-        })),
+      uploadedBytes,
+      indexServices,
       protocolMajor,
       networkId,
-      topics: topicList,
-      sessions,
+      topicList,
       policy: {
         networkEnabled,
         uploadAllowed,
@@ -1800,9 +2234,9 @@ export function createScopedNetworkRuntime (options = {}) {
         outboundRateEnforced: outboundBytesPerSecond !== null,
         policyEpoch: networkPolicyEpoch,
       },
-      counters: { ...counters },
-      recentErrors: recentErrors.map(error => ({ ...error })),
-    }
+      counters,
+      recentErrors,
+    })
   }
 
 
@@ -1827,6 +2261,7 @@ export function createScopedNetworkRuntime (options = {}) {
 
   async function closeRuntime () {
     status = 'closed'
+    const admissionsDrained = publisherRuntime.closeAdmissions()
     if (listening) {
       swarm.off?.('connection', handleConnection)
       swarm.removeListener?.('connection', handleConnection)
@@ -1842,6 +2277,7 @@ export function createScopedNetworkRuntime (options = {}) {
     while (indexTransitions.size > 0) {
       await Promise.allSettled([...indexTransitions.values()])
     }
+    await admissionsDrained
     publisherRuntime.closeFollowState()
     bootstrapRuntime.close()
     publisherRuntime.closeLocalState()
@@ -1861,7 +2297,7 @@ export function createScopedNetworkRuntime (options = {}) {
     activeConnections.clear()
   }
 
-  return {
+  const api = {
     start, applyNetworkPolicy, retainIndexService, releaseIndexService, followPublisher, followBootstrapLocator,
     addPublisherFollowReason, removePublisherFollowReason, getPublisherFollowReasons,
     providePublisherNamespaceProof, provideLocalPublisherNamespaceProof, provideIndexFeed, subscribeIndexFeed,
@@ -1873,10 +2309,17 @@ export function createScopedNetworkRuntime (options = {}) {
     revalidateRetainedRenditions, retainArchiveDiscovery, releaseArchiveDiscovery, publishArchiveRequest,
     publishArchivePledge, publishArchiveChallenge, publishArchiveChallengeProof, retainAuthorizedArchive,
     releaseAuthorizedArchive, createAuthorizedArchiveChallengeProof, verifyAuthorizedArchiveChallengeProof,
+    getAuthorizedArchiveProgress, assessAvailability,
     publishBootstrapLocator, listBootstrapLocators, getIndexFeedRecords, getModerationFeedRecords,
     retainAcquisitionDiscovery, releaseAcquisitionDiscovery, retainAcquisitionAssignment,
     releaseAcquisitionAssignment, publishAcquisitionFrame,
     getDiagnostics, authorizeConnection, getLocalTransportPeerId, isPeerConnected, inspectIncomingFrame, close,
   }
+  registerIndexServicePolicyControl(api, Object.freeze({
+    restoreLastIndexService,
+    captureIndexServiceSession,
+    restoreIndexServiceSession,
+  }))
+  return api
 }
 

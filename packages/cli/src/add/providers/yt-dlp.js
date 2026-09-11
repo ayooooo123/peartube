@@ -85,6 +85,15 @@ function normalizeEntries (data) {
   return entries.map((entry) => normalizeItem(entry, data)).filter(Boolean)
 }
 
+function normalizeItemCreator (entry, parent = null) {
+  const parentCreator = parent && (parent.uploader || parent.channel)
+  return {
+    name: entry.uploader || entry.channel || parentCreator || null,
+    sourceId: entry.channel_id || entry.uploader_id || null,
+    canonicalUrl: entry.channel_url || entry.uploader_url || null
+  }
+}
+
 function normalizeItem (entry, parent = null) {
   if (!entry || typeof entry !== 'object') return null
   const canonicalUrl = entry.webpage_url || entry.url || null
@@ -100,11 +109,7 @@ function normalizeItem (entry, parent = null) {
     sourcePublishedAt: parseUploadDate(entry.upload_date, entry.timestamp),
     thumbnail: entry.thumbnail || firstThumbnail(entry.thumbnails) || null,
     duration: Number.isFinite(entry.duration) ? entry.duration : null,
-    creator: {
-      name: entry.uploader || entry.channel || (parent && (parent.uploader || parent.channel)) || null,
-      sourceId: entry.channel_id || entry.uploader_id || null,
-      canonicalUrl: entry.channel_url || entry.uploader_url || null
-    }
+    creator: normalizeItemCreator(entry, parent)
   }
 }
 
@@ -134,7 +139,7 @@ function detectPlatform (entry, parent, url) {
       const host = new URL(url).hostname.replace(/^www\./, '')
       const label = host.split('.').slice(-2, -1)[0]
       if (label) return label
-    } catch {}
+    } catch { /* Invalid URLs contribute no host-derived platform label. */ }
   }
   return 'unknown'
 }

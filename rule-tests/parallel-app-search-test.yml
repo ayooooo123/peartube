@@ -1,0 +1,24 @@
+id: parallel-app-search
+valid:
+  - |
+    async function performSearch(provider: any, query: string) {
+      const response = await provider.search({ query, limit: 20 })
+      return response.hits
+    }
+  - |
+    async function browseCatalog(rpc: any, cursor?: string) {
+      return await rpc.getMediaCatalog({ cursor, limit: 50 })
+    }
+  - |
+    export function createMediaCatalogController({ getMediaCatalog, pageSize = 20 }: any) {
+      return {
+        loadMore: () => getMediaCatalog({ limit: pageSize })
+      }
+    }
+invalid:
+  - |
+    function useSearch(rpc: any, query: string) {
+      return searchMediaCatalog({ getMediaCatalog: rpc.getMediaCatalog, query })
+    }
+  - |
+    import { searchMediaCatalog } from '@/lib/media-catalog-controller.mjs'

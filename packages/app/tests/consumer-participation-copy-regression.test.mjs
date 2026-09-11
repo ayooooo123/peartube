@@ -11,6 +11,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { build } from 'esbuild'
+import React from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 
 const appRoot = path.resolve(import.meta.dirname, '..')
 const read = (relativePath) => fs.readFileSync(path.join(appRoot, relativePath), 'utf8')
@@ -26,22 +29,58 @@ const model = await import(pathToFileURL(path.join(appRoot, 'lib/network-policy.
  */
 const backendPolicy = await import(pathToFileURL(path.join(appRoot, '../backend/src/playback/resource-policy.js')).href)
 
-/**
- * The exact-byte cache field is rendered inside exactly one Developer Mode
- * branch on the storage card. This returns that branch so the assertions can
- * check both that the field is there and that nothing outside it renders one.
- */
-function developerCacheBranch(source) {
-  const marker = '<Text style={styles.advancedFieldLabel}>Cache budget override (GB)</Text>'
-  const label = source.indexOf(marker)
-  assert.notEqual(label, -1, 'the exact cache field must exist for operators')
-  const start = source.lastIndexOf('{developerMode.enabled ? (', label)
-  const end = source.indexOf(') : null}', label)
-  assert.ok(start !== -1 && end !== -1 && start < label, 'the exact cache field must sit inside a Developer Mode branch')
-  return { branch: source.slice(start, end), rest: source.slice(0, start) + source.slice(end) }
+async function loadProfileCards() {
+  const participationStart = profile.indexOf('function ParticipationCard')
+  const storageStart = profile.indexOf('function StorageCard')
+  const nextComponent = profile.indexOf('function ProfileDiagnosticsCard', storageStart)
+  assert.ok(participationStart >= 0 && storageStart > participationStart && nextComponent > storageStart)
+
+  const source = [
+    `import { PARTICIPATION_MODE_OPTIONS, PARTICIPATION_STATE_COPY, PARTICIPATION_UNAVAILABLE_COPY, participationReasonCopy } from './lib/network-policy'`,
+    'const host = tag => ({ children }) => React.createElement(tag, null, children)',
+    'const View = host("div")',
+    'const Text = host("span")',
+    'const Panel = host("section")',
+    'const SectionHeader = ({ title, subtitle }) => React.createElement("header", null, React.createElement("h2", null, title), React.createElement("p", null, subtitle))',
+    'const Feather = () => null',
+    'const StorageOperabilityDetails = () => null',
+    'const TextInput = props => React.createElement("input", { "data-keyboard-type": props.keyboardType, value: props.value })',
+    'const Pressable = props => { globalThis.__peartubePressables.push(props.onPress); return React.createElement("button", null, props.children) }',
+    'const colors = { text: "text", textMuted: "muted", swarm: "swarm", success: "success", warning: "warning", onPrimary: "on-primary" }',
+    'const styles = new Proxy({}, { get: () => null })',
+    'const React = globalThis.__peartubeReact',
+    profile.slice(participationStart, nextComponent),
+    'export { ParticipationCard, StorageCard }',
+  ].join('\n')
+
+  const result = await build({
+    stdin: {
+      contents: source,
+      resolveDir: appRoot,
+      sourcefile: 'profile-card-runtime.tsx',
+      loader: 'tsx',
+    },
+    bundle: true,
+    write: false,
+    format: 'esm',
+    platform: 'node',
+    external: ['react'],
+    tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', baseUrl: appRoot, paths: { '@/*': ['./*'] } } },
+  })
+  const directory = fs.mkdtempSync(path.join(appRoot, '.profile-card-'))
+  const output = path.join(directory, 'cards.mjs')
+  fs.writeFileSync(output, result.outputFiles[0].text)
+  globalThis.__peartubeReact = React
+  globalThis.__peartubePressables = []
+  try {
+    return await import(`${pathToFileURL(output).href}?${Math.random()}`)
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 }
 
-test('normal preferences offer the three participation modes and say what each one does', () => {
+
+test('normal preferences offer the three participation modes and say what each one does', async () => {
   assert.deepEqual(
     model.PARTICIPATION_MODE_OPTIONS.map((option) => option.value),
     ['data-saver', 'balanced', 'help-more'],
@@ -64,9 +103,25 @@ test('normal preferences offer the three participation modes and say what each o
   assert.match(detail['help-more'], /raises your own upload and cache limits/i)
   assert.match(detail['help-more'], /cannot override your device or operating system/i)
 
-  // The screen must actually render them rather than describe them elsewhere.
-  assert.match(profile, /PARTICIPATION_MODE_OPTIONS\.map/)
-  assert.match(profile, /handleParticipationModeChange\(option\.value\)/)
+  const cards = await loadProfileCards()
+  globalThis.__peartubePressables.length = 0
+  const selected = []
+  const markup = renderToStaticMarkup(React.createElement(cards.ParticipationCard, {
+    networkPolicy: { policy: { participationMode: 'balanced' } },
+    participation: { status: null, loading: false, error: null },
+    participationSaving: false,
+    onModeChange: (mode) => selected.push(mode),
+  }))
+  for (const option of model.PARTICIPATION_MODE_OPTIONS) {
+    assert.match(markup, new RegExp(option.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    assert.match(markup, new RegExp(option.detail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  }
+  for (const onPress of globalThis.__peartubePressables) onPress()
+  assert.deepEqual(
+    selected,
+    model.PARTICIPATION_MODE_OPTIONS.map((option) => option.value),
+    'each rendered mode invokes the real card callback with its backend value',
+  )
   assert.match(profile, /networkPolicy\.update\(\{ participationMode \}\)/)
 })
 
@@ -82,15 +137,47 @@ test('participation copy never states a ceiling the backend enforces elsewhere',
   assert.doesNotMatch(consumerCopy, /\b\d+\s*%/, 'no battery or disk percentage in viewer copy')
 })
 
-test('exact ceilings and archive controls stay out of normal preferences', () => {
-  const { branch, rest } = developerCacheBranch(profile)
-
-  // The one numeric cache control on this screen is the operator override.
-  for (const token of ['customStorageLimit', 'handleCustomStorageLimitApply', 'keyboardType="numeric"']) {
-    assert.ok(branch.includes(token), `the exact cache field must be inside the Developer Mode branch: ${token}`)
+test('exact ceilings and archive controls stay out of normal preferences', async () => {
+  const cards = await loadProfileCards()
+  const storageStats = {
+    usedBytes: 1,
+    maxBytes: 5,
+    usedGB: '1.0',
+    maxGB: 5,
+    seedCount: 1,
+    pinnedCount: 0,
+    totalStorageGB: '4.0',
+    untrackedStorageBytes: 3,
+    untrackedStorageGB: '3.0',
   }
-  assert.doesNotMatch(rest, /keyboardType="numeric"/, 'no exact cache field renders for a normal viewer')
-  assert.doesNotMatch(rest, /<TextInput[\s\S]*?customStorageLimit/, 'no ungated cache-budget input')
+  const props = {
+    storageStats,
+    storageLimitPreview: null,
+    usedPct: 20,
+    customStorageLimit: '5',
+    storageLimitSaving: false,
+    clearingCache: false,
+    onCustomLimitChange() {},
+    onCustomLimitApply() {},
+    onClearCache() {},
+  }
+
+  const normal = renderToStaticMarkup(React.createElement(cards.StorageCard, {
+    ...props,
+    developerModeEnabled: false,
+  }))
+  assert.match(normal, /4\.0 GB total/)
+  assert.match(normal, /1\.0 GB cached/)
+  assert.match(normal, /app\/P2P data outside tracked peer cache/)
+  assert.doesNotMatch(normal, /Cache budget override/)
+  assert.doesNotMatch(normal, /data-keyboard-type="numeric"/)
+
+  const developer = renderToStaticMarkup(React.createElement(cards.StorageCard, {
+    ...props,
+    developerModeEnabled: true,
+  }))
+  assert.match(developer, /Cache budget override/)
+  assert.match(developer, /data-keyboard-type="numeric"/)
 
   // The Light/Balanced/Generous buttons wrote the same seeding budget the mode
   // now owns, so the storage card defers to the mode instead of competing.

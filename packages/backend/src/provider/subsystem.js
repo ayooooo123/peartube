@@ -1,8 +1,9 @@
 import b4a from 'b4a'
-
+import crypto from 'hypercore-crypto'
 import {
   ACQUISITION_CONSENT_VERSION,
   acquisitionError,
+  createAcquisitionCoordinator,
   createAcquisitionManager,
   createAcquisitionPolicyRuntime,
   createAcquisitionStore,
@@ -10,12 +11,22 @@ import {
   normalizeAcquisitionPolicy,
 } from '../acquisition/index.js'
 import { createProviderApi } from '../api/provider.js'
+import { createAcquisitionNetwork } from '../network/index.js'
 import { createStaticAssetManifest, verifyStaticAssetDescriptor, writeStaticAsset } from '../assets/static-core.js'
 import { createSourceReader } from '../assets/source-reader.js'
 import { createProviderService, issueLocalProviderResolution } from './service.js'
 const ACQUISITION_POLICY_REVISION_KEY = 'acquisition/policy-revision/v1'
 
 const ACQUISITION_POLICY_KEY = 'acquisition/policy/v1'
+const ACQUISITION_AUTHORITY_DOMAIN = 'peartube.acquisition.application-authority.v1'
+function deriveAcquisitionAuthority(primaryKey) {
+  if (!primaryKey) return crypto.keyPair()
+  const seed = crypto.hash([
+    b4a.from(ACQUISITION_AUTHORITY_DOMAIN),
+    b4a.from(primaryKey),
+  ])
+  return crypto.keyPair(seed)
+}
 
 function unavailable(code, message) {
   throw acquisitionError(code, message, 503)
@@ -190,31 +201,25 @@ const UNAVAILABLE_SOURCE_RESOLVER = Object.freeze({
   },
 })
 
-export async function createProviderSubsystem({
+function createSubsystemAcquisitionProvider({
   ctx,
-  verifiedQueryView,
-  indexVerificationRuntime,
-  uploadManager,
-  mediaApi,
-  policy = null,
-  config = {},
-  now = () => Date.now(),
-} = {}) {
-  validateSubsystemDependencies(ctx, uploadManager, mediaApi)
-
-  const store = createAcquisitionStore({ bee: ctx.metaDb, now })
-  const { acquisitionPolicy, acquisitionPolicyRevision } = await createPolicyBinding(ctx, config.acquisitionPolicy, now)
-  const sourceGrants = createSourceGrantVault({
-    now,
-    resolver: config.sourceGrantResolver || UNAVAILABLE_SOURCE_RESOLVER,
-  })
-  const resolveTrustedPublisherId = createTrustedPublisherResolver(config.resolveTrustedPublisherId, uploadManager)
+  config,
+  store,
+  getService,
+  getNetworkRef,
+}) {
   const customProvider = config.acquisitionProvider || null
-  let service = null
-
-  const acquisitionProvider = Object.freeze({
-    async resolve({ ref }) {
-      const resolved = await service.resolve({ ref })
+  return Object.freeze({
+    async resolve(input) {
+      if (typeof customProvider?.resolve === 'function') {
+        const resolved = await customProvider.resolve(input)
+        return {
+          ...resolved,
+          adapterId: resolved?.adapterId ?? customProvider?.adapterId ?? null,
+        }
+      }
+      const service = getService()
+      const resolved = await service.resolve({ ref: input.ref })
       return {
         ...resolved,
         adapterId: customProvider?.adapterId ?? null,
@@ -243,12 +248,6 @@ export async function createProviderSubsystem({
           reader: createBudgetedSourceReader({
             reader: input.reader,
             resume: input.resume,
-            // A retried acquisition may already carry durable progress from a
-            // prior attempt that died before it could set a verified prefix:
-            // without this floor the writer's attempt-local counter restarts
-            // at zero and the first progress patch regresses the durable
-            // counter, failing the job as ACQUISITION_ACCOUNTING_REGRESSION
-            // and discarding every byte the prior attempt already landed.
             priorBytes: input.priorBytes || 0,
             maxBytesPerSecond,
             signal: input.signal,
@@ -258,15 +257,37 @@ export async function createProviderSubsystem({
           onSourceComplete: input.onSourceComplete,
           offload: ctx.blockOffload || null,
           resume,
-          // A grant-backed source is remote: re-reading it for pass 2 is a
-          // second full download through the (possibly throttled) source.
-          // Stage through the object store instead when it is configured.
           preferStaging: input.sourceExpensive === true,
         })
         return { descriptor: descriptorFromWrite(written), stagingBytes: 0 }
       } finally {
         await written?.core?.close?.().catch(() => {})
       }
+    },
+    async importAsset(input) {
+      if (typeof customProvider?.importAsset === 'function') return customProvider.importAsset(input)
+      if (typeof config.importAsset === 'function') return config.importAsset(input)
+      const network = getNetworkRef()
+      if (network && typeof network.importVerifiedAsset === 'function' && input.asset) {
+        const coord = typeof store.getCoordination === 'function'
+          ? await store.getCoordination(input.acquisitionId)
+          : null
+        const assignmentId = coord?.assignmentId || input.assignmentId
+        if (!assignmentId) unavailable('ASSET_IMPORT_UNAVAILABLE', 'no assignment bound for verified asset import')
+        const imported = await network.importVerifiedAsset({
+          assignmentId,
+          asset: input.asset,
+          peerId: input.peerId || coord?.peerId,
+          signal: input.signal,
+        })
+        return {
+          imported: true,
+          byteLength: imported.byteLength,
+          descriptor: imported.descriptor,
+          asset: imported.descriptor,
+        }
+      }
+      unavailable('ASSET_IMPORT_UNAVAILABLE', 'no provider import hook available to fetch remote blocks')
     },
     async verify(input) {
       if (typeof customProvider?.verify === 'function') return customProvider.verify(input)
@@ -284,8 +305,10 @@ export async function createProviderSubsystem({
       await customProvider?.discard?.(input)
     },
   })
+}
 
-  const publisher = Object.freeze({
+function createSubsystemPublisher(uploadManager) {
+  return Object.freeze({
     hasAuthority({ publisherId }) {
       return uploadManager.hasPublisherAuthority({ publisherId })
     },
@@ -299,24 +322,61 @@ export async function createProviderSubsystem({
         asset: input.asset,
         source: input.source,
         resolution: input.resolution,
+        createArtworkSources: input.createArtworkSources,
         retentionClass: input.request.retentionClass,
         signal: input.signal,
       })
     },
   })
+}
 
-  const manager = createAcquisitionManager({
-    store,
-    policy: acquisitionPolicy,
-    provider: acquisitionProvider,
-    sourceGrants,
-    publisher,
-    network: config.managerNetwork || null,
-    freeDiskBytes: typeof config.freeDiskBytes === 'function' ? config.freeDiskBytes : () => Number.MAX_SAFE_INTEGER,
-    now,
+function createSubsystemNetworkPolicy(acquisitionPolicy) {
+  return Object.freeze({
+    async networkTerms() {
+      const current = await acquisitionPolicy.getPolicy()
+      const revision = typeof acquisitionPolicy.getRevision === 'function'
+        ? Number(acquisitionPolicy.getRevision())
+        : 0
+      return {
+        ...current,
+        generation: Number.isSafeInteger(current.generation)
+          ? current.generation
+          : (Number.isSafeInteger(revision) ? Math.max(0, revision) : 0),
+        remainingAcquireBytes24h: Number.isSafeInteger(current.remainingAcquireBytes24h)
+          ? current.remainingAcquireBytes24h
+          : current.maxAcquireBytesPer24h,
+      }
+    },
+    getPolicy: () => acquisitionPolicy.getPolicy(),
+    getRevision: () => acquisitionPolicy.getRevision?.() ?? 0,
   })
+}
 
-  const statusSource = config.statusSource || {
+function setupAcquisitionNetwork({ config, ctx, appKeyPair, networkPolicy, coordinator, now }) {
+  let acquisitionNetwork = config.acquisitionNetwork || null
+  if (!acquisitionNetwork && ctx.scopedNetwork) {
+    acquisitionNetwork = createAcquisitionNetwork({
+      scopedNetwork: ctx.scopedNetwork,
+      keyPair: appKeyPair,
+      policy: config.provider?.policy || networkPolicy,
+      manager: coordinator.networkManager,
+      networkId: config.networkId,
+      store: ctx.store,
+      now,
+    })
+  }
+  if (acquisitionNetwork) {
+    coordinator.attachNetwork(acquisitionNetwork)
+    if (typeof acquisitionNetwork.setAssetStore === 'function') {
+      acquisitionNetwork.setAssetStore(ctx.store)
+    }
+  }
+  return acquisitionNetwork
+}
+
+function createSubsystemStatusSource(config, store, acquisitionPolicy, now) {
+  if (config.statusSource) return config.statusSource
+  return {
     async getStatus() {
       const acquisitionsByState = await store.countByState()
       return {
@@ -331,6 +391,84 @@ export async function createProviderSubsystem({
       }
     },
   }
+}
+
+function createSubsystemApi(config, service, resolveTrustedPublisherId, acquisitionPolicyRevision) {
+  return createProviderApi({
+    providerService: service,
+    principalId: config.principalId || 'local-provider',
+    ...(typeof config.selectorForQuery === 'function' ? { selectorForQuery: config.selectorForQuery } : {}),
+    ...(typeof config.decodeSourceGrant === 'function' ? { decodeSourceGrant: config.decodeSourceGrant } : {}),
+    resolveTrustedPublisherId,
+    acquisitionPolicyRevision,
+  })
+}
+
+export async function createProviderSubsystem({
+  ctx,
+  verifiedQueryView,
+  indexVerificationRuntime,
+  uploadManager,
+  mediaApi,
+  policy = null,
+  config = {},
+  now = () => Date.now(),
+} = {}) {
+  validateSubsystemDependencies(ctx, uploadManager, mediaApi)
+
+  const store = createAcquisitionStore({ bee: ctx.metaDb, now })
+  const { acquisitionPolicy, acquisitionPolicyRevision } = await createPolicyBinding(ctx, config.acquisitionPolicy, now)
+  const sourceGrants = createSourceGrantVault({
+    now,
+    resolver: config.sourceGrantResolver || UNAVAILABLE_SOURCE_RESOLVER,
+  })
+  const resolveTrustedPublisherId = createTrustedPublisherResolver(config.resolveTrustedPublisherId, uploadManager)
+  let service = null
+  let acquisitionNetworkRef = null
+
+  const acquisitionProvider = createSubsystemAcquisitionProvider({
+    ctx,
+    config,
+    store,
+    getService: () => service,
+    getNetworkRef: () => acquisitionNetworkRef,
+  })
+
+  const publisher = createSubsystemPublisher(uploadManager)
+  const appKeyPair = config.acquisitionKeyPair || deriveAcquisitionAuthority(ctx.store?.primaryKey)
+  const freeDiskBytes = typeof config.freeDiskBytes === 'function' ? config.freeDiskBytes : () => Number.MAX_SAFE_INTEGER
+
+  const coordinator = createAcquisitionCoordinator({
+    store,
+    policy: acquisitionPolicy,
+    provider: acquisitionProvider,
+    publisher,
+    sourceGrants,
+    freeDiskBytes,
+    now,
+  })
+
+  const networkPolicy = createSubsystemNetworkPolicy(acquisitionPolicy)
+  const acquisitionNetwork = setupAcquisitionNetwork({ config, ctx, appKeyPair, networkPolicy, coordinator, now })
+  if (acquisitionNetwork) {
+    acquisitionNetworkRef = acquisitionNetwork
+  }
+
+  const manager = createAcquisitionManager({
+    store,
+    policy: acquisitionPolicy,
+    provider: acquisitionProvider,
+    sourceGrants,
+    publisher,
+    // Local-only / no scoped transport: do not attach coordinator.managerNetwork.
+    // publishRequest throws when boundNetwork is null and would regress private grants.
+    network: config.managerNetwork || (acquisitionNetwork ? coordinator.managerNetwork : null),
+    freeDiskBytes,
+    now,
+  })
+  coordinator.bindManager(manager)
+
+  const statusSource = createSubsystemStatusSource(config, store, acquisitionPolicy, now)
 
   service = createProviderService({
     verifiedQueryView,
@@ -350,19 +488,18 @@ export async function createProviderSubsystem({
     now,
   })
 
+  if (acquisitionNetwork) {
+    await acquisitionNetwork.start()
+  }
+  await coordinator.start()
   await manager.start()
 
   return Object.freeze({
     service,
-    api: createProviderApi({
-      providerService: service,
-      principalId: config.principalId || 'local-provider',
-      ...(typeof config.selectorForQuery === 'function' ? { selectorForQuery: config.selectorForQuery } : {}),
-      ...(typeof config.decodeSourceGrant === 'function' ? { decodeSourceGrant: config.decodeSourceGrant } : {}),
-      resolveTrustedPublisherId,
-      acquisitionPolicyRevision,
-    }),
+    api: createSubsystemApi(config, service, resolveTrustedPublisherId, acquisitionPolicyRevision),
     manager,
+    coordinator,
+    acquisitionNetwork,
     issueLocalResolution(input) {
       return issueLocalProviderResolution(service, input)
     },
@@ -373,6 +510,8 @@ export async function createProviderSubsystem({
     acquisitionPolicy,
     sourceGrants,
     async close() {
+      if (acquisitionNetwork) await acquisitionNetwork.close().catch(() => {})
+      await coordinator.close()
       await manager.close()
       await sourceGrants.close()
     },

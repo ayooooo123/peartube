@@ -44,6 +44,42 @@ async function loadPublisherShellService() {
     fs.rmSync(temporaryDirectory, { recursive: true, force: true })
   }
 }
+
+async function loadNativePublisherSigner() {
+  const entry = path.join(appRoot, 'lib/publisher-shell-signer.native.ts')
+  const result = await build({
+    entryPoints: [entry],
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    target: 'node22',
+    write: false,
+    plugins: [{
+      name: 'publisher-signer-boundary-stubs',
+      setup(builder) {
+        builder.onResolve({ filter: /^\.\// }, (args) => {
+          if (args.path === './publisher-key-vault') return { path: 'publisher-key-vault-stub', namespace: 'publisher-test' }
+          if (args.path === './publisher-signer-bridge') return { path: 'publisher-signer-bridge-stub', namespace: 'publisher-test' }
+          return null
+        })
+        builder.onLoad({ filter: /.*/, namespace: 'publisher-test' }, (args) => ({
+          loader: 'js',
+          contents: args.path === 'publisher-key-vault-stub'
+            ? 'export function createPublisherKeyVault() { globalThis.__publisherSignerProbe.vaults += 1; return { vaultId: "vault-1" } }'
+            : 'export function createPublisherSignerBridge(options) { globalThis.__publisherSignerProbe.bridges.push(options); return { signerId: "signer-1" } }',
+        }))
+      },
+    }],
+  })
+  const temporaryDirectory = fs.mkdtempSync(path.join(appRoot, '.tmp-publisher-signer-'))
+  const output = path.join(temporaryDirectory, 'publisher-shell-signer.cjs')
+  fs.writeFileSync(output, result.outputFiles[0].text)
+  try {
+    return await import(pathToFileURL(output).href)
+  } finally {
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true })
+  }
+}
 async function loadDesktopView() {
   const entry = path.join(appRoot, 'src/view/index.ts')
   const result = await build({
@@ -97,17 +133,23 @@ function assertNoSecretFields(value) {
 }
 
 
-test('native shell signer custody is isolated behind platform-specific modules', () => {
+test('native shell signer custody is isolated behind platform-specific modules', async () => {
   const layout = readAppFile('app/_layout.tsx')
-  const nativeBoundary = readAppFile('lib/publisher-shell-signer.native.ts')
   const webBoundary = readAppFile('lib/publisher-shell-signer.web.ts')
   const mobileVault = readAppFile('lib/publisher-key-vault.ts')
 
-  assert.match(layout, /from ['"]@\/lib\/publisher-shell-signer['"]/)
-  assert.match(layout, /publisherSigner:\s*await getNativePublisherSigner\(\)/)
+  globalThis.__publisherSignerProbe = { vaults: 0, bridges: [] }
+  const signerModule = await loadNativePublisherSigner()
+  const first = await signerModule.getNativePublisherSigner()
+  const second = await signerModule.getNativePublisherSigner()
+  assert.equal(first, second)
+  assert.equal(globalThis.__publisherSignerProbe.vaults, 1)
+  assert.equal(globalThis.__publisherSignerProbe.bridges.length, 1)
+  assert.equal(globalThis.__publisherSignerProbe.bridges[0].runtime, 'mobile-shell')
+  assert.deepEqual(globalThis.__publisherSignerProbe.bridges[0].vault, { vaultId: 'vault-1' })
+  delete globalThis.__publisherSignerProbe
+
   assert.doesNotMatch(layout, /publisher-key-vault|publisher-signer-bridge|expo-secure-store/)
-  assert.match(nativeBoundary, /from ['"]\.\/publisher-key-vault['"]/)
-  assert.match(nativeBoundary, /from ['"]\.\/publisher-signer-bridge['"]/)
   assert.doesNotMatch(webBoundary, /publisher-key-vault|publisher-signer-bridge|hypercore-crypto|expo-secure-store/)
   assert.match(webBoundary, /Publisher key vault is available only in the native shell/)
   assert.match(mobileVault, /async function defaultSecureStoreLoader\(\)[\s\S]*import\(['"]expo-secure-store['"]\)/)

@@ -334,16 +334,31 @@ function failure(error, message, candidates) {
   return Object.freeze({ success: false, ...candidates, errorCode, errorMessage: message })
 }
 
+function buildIndexSearchResult(result) {
+  const rawCandidates = Array.isArray(result) ? result : (result?.candidates || [])
+  const nextCursor = result?.nextCursor || null
+  const diagnostics = result?.diagnostics
+  const partial = Boolean(diagnostics?.partial ?? result?.partial)
+  const stale = Boolean(diagnostics?.stale ?? result?.stale)
+  return Object.freeze({
+    success: true,
+    candidates: Object.freeze(list(rawCandidates, 'candidates', INDEX_CANDIDATE_CONTRACT_LIMITS.maxCandidates)
+      .map(normalizeIndexCandidateForTransport)),
+    ...(nextCursor ? { nextCursor } : {}),
+    ...(partial ? { partial: true } : {}),
+    ...(stale ? { stale: true } : {}),
+  })
+}
+
 export async function searchIndexCandidatesForTransport(api, request) {
   try {
     if (!api || typeof api.searchIndexCandidates !== 'function') fail('searchIndexCandidates is unsupported')
     const selector = normalizeIndexSearchSelector(object(request, 'request').selector)
-    const values = await api.searchIndexCandidates(selector)
-    return Object.freeze({
-      success: true,
-      candidates: Object.freeze(list(values, 'candidates', INDEX_CANDIDATE_CONTRACT_LIMITS.maxCandidates)
-        .map(normalizeIndexCandidateForTransport)),
+    const result = await api.searchIndexCandidates(selector, {
+      limit: request?.limit,
+      cursor: request?.cursor,
     })
+    return buildIndexSearchResult(result)
   } catch (error) {
     return failure(error, 'index candidate search failed', { candidates: Object.freeze([]) })
   }

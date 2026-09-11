@@ -199,7 +199,7 @@ export function logger(moduleName) {
       if (currentLevel <= LOG_LEVELS.DEBUG) {
         const msg = format(moduleName, 'DEBUG', args)
         console.debug(msg)
-        if (fileLog) try { fileLog.info(msg) } catch {}
+        writeFileLog(msg)
       }
     },
 
@@ -207,7 +207,7 @@ export function logger(moduleName) {
       if (currentLevel <= LOG_LEVELS.INFO) {
         const msg = format(moduleName, 'INFO', args)
         console.log(msg)
-        if (fileLog) try { fileLog.info(msg) } catch {}
+        writeFileLog(msg)
       }
     },
 
@@ -215,7 +215,7 @@ export function logger(moduleName) {
       if (currentLevel <= LOG_LEVELS.WARN) {
         const msg = format(moduleName, 'WARN', args)
         console.warn(msg)
-        if (fileLog) try { fileLog.info(msg) } catch {}
+        writeFileLog(msg)
       }
     },
 
@@ -223,13 +223,24 @@ export function logger(moduleName) {
       if (currentLevel <= LOG_LEVELS.ERROR) {
         const msg = format(moduleName, 'ERROR', args)
         console.error(msg)
-        if (fileLog) try { fileLog.info(msg) } catch {}
+        writeFileLog(msg)
       }
     },
 
     child(subName) {
       return logger(`${moduleName}:${subName}`)
     }
+  }
+}
+
+// The file sink is best-effort and must never break the console output it
+// mirrors: a closed, rotated, or unwritable log file is silently skipped.
+function writeFileLog(msg) {
+  if (!fileLog) return
+  try {
+    fileLog.info(msg)
+  } catch {
+    // File logging is best-effort; console output is the primary sink.
   }
 }
 

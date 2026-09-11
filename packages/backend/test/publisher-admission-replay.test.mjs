@@ -287,3 +287,122 @@ test('a 1000-title causal walk is page-bounded, resumable, and accepts a one-tit
   await Promise.all([producerStore.close(), consumerStore.close()])
   for (const dir of [producerDir, consumerDir]) fs.rmSync(dir, { recursive: true, force: true })
 })
+
+test('restarted follower with completed persisted mirror reads descriptor immediately without remote Autobase wait', async (t) => {
+  const root = crypto.keyPair(bytes(32, 211))
+  const publisherId = derivePublisherId(root.publicKey)
+  const producerDir = tempDir('pt-offline-prod-')
+  const consumerDir = tempDir('pt-offline-cons-')
+  const producerStore = new Corestore(producerDir)
+  const consumerStore = new Corestore(consumerDir)
+
+  const producer = new PublisherCatalog(producerStore, { publisherId })
+  await producer.ready()
+  const producerKey = b4a.from(producer.key)
+
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: producerKey,
+  })
+  const genesis = signed({
+    descriptor,
+    signer: root,
+    recordType: PUBLISHER_RECORD_TYPES.NAMESPACE,
+    policyEpoch: 0,
+    sequence: 0,
+    body: descriptor
+  })
+
+  await producer.append(genesis, { allowAuthorityBootstrap: true })
+  const causalPage = await producer.listCausalPage({ limit: 64 })
+
+  let consumer = new PublisherCatalog(consumerStore, { publisherId, key: producerKey })
+  await consumer.ready()
+  await consumer.ingestAcceptedPage(causalPage.entries)
+  const head = await consumer.getViewHead()
+  const syncState = {
+    version: 2,
+    publisherId,
+    catalogEpoch: descriptor.catalogEpoch,
+    cursor: causalPage.entries.at(-1).operationId,
+    headDigest: b4a.toString(head.digest, 'hex'),
+    authorizationStateDigest: b4a.toString(head.authorizationStateDigest, 'hex'),
+    complete: true,
+  }
+  await consumer.close()
+  await producer.close()
+  await producerStore.close()
+
+  const start = Date.now()
+  const restartedConsumer = new PublisherCatalog(consumerStore, { publisherId, key: producerKey, syncState })
+  await restartedConsumer.ready()
+  const readyDuration = Date.now() - start
+  t.ok(readyDuration < 2000, 'restarted follower readies immediately from local verified view without waiting for remote Autobase')
+  t.is(restartedConsumer.mirrorComplete, true, 'persisted mirror is verified complete')
+
+  const readDescriptor = await restartedConsumer.getNamespaceDescriptor()
+  t.ok(readDescriptor, 'descriptor is read immediately from local verified view')
+  t.alike(readDescriptor.publisherId, publisherId)
+
+  await restartedConsumer.close()
+  await consumerStore.close()
+  for (const dir of [producerDir, consumerDir]) fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('incomplete persisted syncState cannot fast-complete local mirror readiness', async (t) => {
+  const root = crypto.keyPair(bytes(32, 221))
+  const publisherId = derivePublisherId(root.publicKey)
+  const producerDir = tempDir('pt-incomplete-prod-')
+  const consumerDir = tempDir('pt-incomplete-cons-')
+  const producerStore = new Corestore(producerDir)
+  const consumerStore = new Corestore(consumerDir)
+
+  const producer = new PublisherCatalog(producerStore, { publisherId })
+  await producer.ready()
+  const producerKey = b4a.from(producer.key)
+
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: producerKey,
+  })
+  const genesis = signed({
+    descriptor,
+    signer: root,
+    recordType: PUBLISHER_RECORD_TYPES.NAMESPACE,
+    policyEpoch: 0,
+    sequence: 0,
+    body: descriptor
+  })
+
+  await producer.append(genesis, { allowAuthorityBootstrap: true })
+  const causalPage = await producer.listCausalPage({ limit: 64 })
+
+  let consumer = new PublisherCatalog(consumerStore, { publisherId, key: producerKey })
+  await consumer.ready()
+  await consumer.ingestAcceptedPage(causalPage.entries)
+  const head = await consumer.getViewHead()
+  const incompleteSyncState = {
+    version: 2,
+    publisherId,
+    catalogEpoch: descriptor.catalogEpoch,
+    cursor: causalPage.entries.at(-1).operationId,
+    headDigest: b4a.toString(head.digest, 'hex'),
+    authorizationStateDigest: b4a.toString(head.authorizationStateDigest, 'hex'),
+    complete: false,
+  }
+  await consumer.close()
+  await producer.close()
+  await producerStore.close()
+
+  const restarted = new PublisherCatalog(consumerStore, {
+    publisherId,
+    key: producerKey,
+    syncState: incompleteSyncState,
+  })
+  await restarted.ready()
+  t.is(restarted.mirrorComplete, false, 'incomplete syncState must not mark the mirror complete')
+
+  await restarted.close()
+  await consumerStore.close()
+  for (const dir of [producerDir, consumerDir]) fs.rmSync(dir, { recursive: true, force: true })
+})

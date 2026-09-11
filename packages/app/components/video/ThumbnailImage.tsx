@@ -29,7 +29,7 @@ function ThumbnailImageComponent({
   onError,
 }: ThumbnailImageProps) {
   const [imageError, setImageError] = useState(false)
-  const [imageLoading, setImageLoading] = useState(true)
+  const [imageLoading, setImageLoading] = useState(Boolean(thumbnailUrl))
   const [imageLoaded, setImageLoaded] = useState(false)
   const [retryAttempt, setRetryAttempt] = useState(0)
 
@@ -39,8 +39,9 @@ function ThumbnailImageComponent({
   if (prevThumbnailUrl !== thumbnailUrl) {
     setPrevThumbnailUrl(thumbnailUrl)
     setImageError(false)
-    setImageLoading(true)
+    setImageLoading(Boolean(thumbnailUrl))
     setImageLoaded(false)
+    setRetryAttempt(0)
   }
 
   // Memoize duration text
@@ -59,7 +60,10 @@ function ThumbnailImageComponent({
   const imageSource = useMemo(
     () => {
       if (!thumbnailUrl) return null
-      return { uri: thumbnailUrl }
+      // A data URI is self-contained; changing its query corrupts the payload.
+      if (retryAttempt === 0 || thumbnailUrl.startsWith('data:')) return { uri: thumbnailUrl }
+      const separator = thumbnailUrl.includes('?') ? '&' : '?'
+      return { uri: `${thumbnailUrl}${separator}attempt=${retryAttempt}` }
     },
     [thumbnailUrl, retryAttempt]
   )
@@ -71,6 +75,7 @@ function ThumbnailImageComponent({
       setImageLoading(true)
     } else {
       setImageError(true)
+      setImageLoading(false)
       if (onError) onError()
     }
   }, [onError, retryAttempt])
@@ -82,7 +87,7 @@ function ThumbnailImageComponent({
       handleRecoverableError()
     }, 8000)
     return () => clearTimeout(timeout)
-  }, [thumbnailUrl, imageLoading, imageError, handleRecoverableError])
+  }, [thumbnailUrl, imageLoading, imageError, imageLoaded, handleRecoverableError])
 
   // Memoize callbacks for Image component
   const handleError = useCallback(() => {
@@ -95,7 +100,7 @@ function ThumbnailImageComponent({
   return (
     <View style={containerStyle}>
       {/* Placeholder when no image or error */}
-      {!imageLoaded && !imageError ? (
+      {!imageLoaded ? (
         <View style={styles.placeholder}>
           <View style={styles.playIconContainer}>
             <Ionicons name="play" size={40} color={colors.onPrimary} />
@@ -104,14 +109,14 @@ function ThumbnailImageComponent({
       ) : null}
 
       {/* Loading spinner */}
-      {imageLoading && !imageError ? (
+      {imageLoading && thumbnailUrl && !imageError ? (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
       ) : null}
 
       {/* Actual image */}
-      {imageSource ? (
+      {imageSource && !imageError ? (
         <Image
           source={imageSource}
           style={styles.image}

@@ -57,6 +57,39 @@ function statusResponse(status = {}) {
     : 0
   return response
 }
+function isValidArchivePublicationRequest(request) {
+  const fields = new Set(['publicationId', 'renditionId', 'retentionUntil'])
+  if (!hasOnlyFields(request, fields) || !HEX_32.test(request.publicationId || '') || !HEX_32.test(request.renditionId || '')) {
+    return false
+  }
+  if (request.retentionUntil !== undefined && (!Number.isSafeInteger(request.retentionUntil) || request.retentionUntil < 1)) {
+    return false
+  }
+  return true
+}
+
+async function resolvePublicationCoreRef(manifestStore, publicationId, renditionId) {
+  const manifest = await manifestStore?.getManifest?.(publicationId)
+  if (!manifest) return { error: 'ARCHIVE_PUBLICATION_NOT_FOUND' }
+  const rendition = manifest.body?.renditions?.find(candidate => candidate.renditionId === renditionId)
+  try {
+    const core = normalizeAssetCoreRefV2(rendition?.core)
+    return { core }
+  } catch {
+    return { error: 'ARCHIVE_RENDITION_NOT_FOUND' }
+  }
+}
+
+function formatArchiveRequestResult(result) {
+  const isPublished = result?.status === 'published'
+  return {
+    success: isPublished,
+    status: String(result?.status || 'failed'),
+    requestId: String(result?.requestId || ''),
+    ...(isPublished ? {} : { errorCode: 'ARCHIVE_REQUEST_FAILED' }),
+  }
+}
+
 
 export function createArchiveParticipationApi(options = {}) {
   const archiveNetwork = options.archiveNetwork || null
@@ -96,35 +129,23 @@ export function createArchiveParticipationApi(options = {}) {
     },
 
     async requestArchivePublication(request = {}) {
-      const fields = new Set(['publicationId', 'renditionId', 'retentionUntil'])
-      if (!hasOnlyFields(request, fields) || !HEX_32.test(request.publicationId || '') || !HEX_32.test(request.renditionId || '') ||
-          (request.retentionUntil !== undefined && (!Number.isSafeInteger(request.retentionUntil) || request.retentionUntil < 1))) {
+      if (!isValidArchivePublicationRequest(request)) {
         return requestFailure('ARCHIVE_REQUEST_INVALID')
       }
       if (!archiveNetwork?.requestArchive) return requestFailure('ARCHIVE_NETWORK_UNAVAILABLE')
       try {
-        const manifest = await manifestStore?.getManifest?.(request.publicationId)
-        if (!manifest) return requestFailure('ARCHIVE_PUBLICATION_NOT_FOUND')
-        const rendition = manifest.body?.renditions?.find(candidate => candidate.renditionId === request.renditionId)
-        let core
-        try {
-          core = normalizeAssetCoreRefV2(rendition?.core)
-        } catch {
-          return requestFailure('ARCHIVE_RENDITION_NOT_FOUND')
-        }
+        const resolved = await resolvePublicationCoreRef(manifestStore, request.publicationId, request.renditionId)
+        if (resolved.error) return requestFailure(resolved.error)
+        const core = resolved.core
         const result = await archiveNetwork.requestArchive({
           publicationId: request.publicationId,
           renditionId: request.renditionId,
+          coreRef: core,
           ranges: [{ coreKey: core.key, start: 0, end: core.length }],
           requestedBytes: core.byteLength,
           ...(request.retentionUntil === undefined ? {} : { retentionUntil: request.retentionUntil }),
         })
-        return {
-          success: result?.status === 'published',
-          status: String(result?.status || 'failed'),
-          requestId: String(result?.requestId || ''),
-          ...(result?.status === 'published' ? {} : { errorCode: 'ARCHIVE_REQUEST_FAILED' }),
-        }
+        return formatArchiveRequestResult(result)
       } catch {
         return requestFailure('ARCHIVE_REQUEST_FAILED')
       }

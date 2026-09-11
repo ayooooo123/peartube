@@ -308,6 +308,35 @@ const IMPORT_IDENTITY_FIELDS = new Set([
   'contentFingerprint'
 ])
 
+function validateSourceGroup(sourceProvider, sourceVideoId) {
+  const hasSourceGroup = sourceProvider !== undefined || sourceVideoId !== undefined
+  if (hasSourceGroup && (sourceProvider === undefined || sourceVideoId === undefined)) {
+    throw new Error('import identity requires both sourceProvider and sourceVideoId')
+  }
+  return hasSourceGroup
+}
+
+function validateMediaGroup(contentKind, mediaProvider, mediaId, seasonNumber, episodeNumber) {
+  const shape = MEDIA_COORDINATE_SHAPES[contentKind]
+  if (!shape) throw new Error(`import identity ${contentKind} cannot use media coordinates`)
+  if (!shape.providers.includes(mediaProvider)) {
+    throw new Error(`import identity ${contentKind} coordinates require one of ${shape.providers.join(', ')}`)
+  }
+  if (mediaId === undefined) throw new Error(`import identity ${contentKind} coordinates require mediaId`)
+  const ordinals = { seasonNumber, episodeNumber }
+  for (const [name, value] of Object.entries(ordinals)) {
+    const required = shape.ordinals.includes(name)
+    if (required && value === undefined) {
+      throw new Error(`import identity ${contentKind} coordinates require ${name}`)
+    }
+    // A coordinate a kind does not have is refused, not stored empty: a track
+    // with a season number is a mistake someone should hear about.
+    if (!required && value !== undefined) {
+      throw new Error(`import identity ${contentKind} coordinates cannot carry ${name}`)
+    }
+  }
+}
+
 export function importIdentityKey (identity) {
   const input = assertAllowedFields(identity, IMPORT_IDENTITY_FIELDS, 'import identity')
   const contentKind = normalizeContentKind(input.contentKind)
@@ -319,32 +348,11 @@ export function importIdentityKey (identity) {
   const episodeNumber = optionalSafeInteger(input.episodeNumber, 'episodeNumber')
   const contentFingerprint = optionalString(input.contentFingerprint, 'contentFingerprint', MAX_FINGERPRINT_LENGTH)
 
-  const hasSourceGroup = sourceProvider !== undefined || sourceVideoId !== undefined
-  if (hasSourceGroup && (sourceProvider === undefined || sourceVideoId === undefined)) {
-    throw new Error('import identity requires both sourceProvider and sourceVideoId')
-  }
-
-  const ordinals = { seasonNumber, episodeNumber }
+  const hasSourceGroup = validateSourceGroup(sourceProvider, sourceVideoId)
   const hasMediaGroup = mediaProvider !== undefined || mediaId !== undefined ||
     seasonNumber !== undefined || episodeNumber !== undefined
   if (hasMediaGroup) {
-    const shape = MEDIA_COORDINATE_SHAPES[contentKind]
-    if (!shape) throw new Error(`import identity ${contentKind} cannot use media coordinates`)
-    if (!shape.providers.includes(mediaProvider)) {
-      throw new Error(`import identity ${contentKind} coordinates require one of ${shape.providers.join(', ')}`)
-    }
-    if (mediaId === undefined) throw new Error(`import identity ${contentKind} coordinates require mediaId`)
-    for (const [name, value] of Object.entries(ordinals)) {
-      const required = shape.ordinals.includes(name)
-      if (required && value === undefined) {
-        throw new Error(`import identity ${contentKind} coordinates require ${name}`)
-      }
-      // A coordinate a kind does not have is refused, not stored empty: a track
-      // with a season number is a mistake someone should hear about.
-      if (!required && value !== undefined) {
-        throw new Error(`import identity ${contentKind} coordinates cannot carry ${name}`)
-      }
-    }
+    validateMediaGroup(contentKind, mediaProvider, mediaId, seasonNumber, episodeNumber)
   }
 
   if (contentFingerprint !== undefined && !SHA256_FINGERPRINT_PATTERN.test(contentFingerprint)) {

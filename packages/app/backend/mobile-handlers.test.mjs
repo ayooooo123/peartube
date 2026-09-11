@@ -102,6 +102,13 @@ test('listVideos forwards video availability metadata from backend api', async (
           blobId: 'blob-id',
           blobsCoreKey: 'blobs-core-key',
           availability: 'playable',
+          publicationId: 'publication-1',
+          immutablePublication: {
+            publicationId: 'publication-1',
+            manifestId: 'manifest-1',
+            renditionId: 'rendition-1',
+            publisherId: 'publisher-1',
+          },
         }]
       },
     },
@@ -137,6 +144,13 @@ test('listVideos forwards video availability metadata from backend api', async (
       thumbnailBlobsCoreKey: null,
       thumbnailMimeType: null,
       playbackSupport: null,
+      publicationId: 'publication-1',
+      immutablePublication: {
+        publicationId: 'publication-1',
+        manifestId: 'manifest-1',
+        renditionId: 'rendition-1',
+        publisherId: 'publisher-1',
+      },
       publicBeeKey: 'public-bee-key',
     }],
   })

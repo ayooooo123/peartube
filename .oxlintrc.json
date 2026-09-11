@@ -1,18 +1,46 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "categories": {
-    "correctness": "allow"
-  },
   "plugins": [],
+  "categories": {
+    "correctness": "off"
+  },
+  "env": {
+    "node": true,
+    "es2024": true
+  },
+  "globals": {
+    "Bare": "readonly",
+    "Pear": "readonly",
+    "__DEV__": "readonly"
+  },
   "rules": {
+    "no-undef": "error",
     "complexity": [
       "warn",
       {
         "max": 20,
         "variant": "classic"
       }
-    ]
+    ],
+    "no-constant-binary-expression": "error",
+    "no-dupe-else-if": "error",
+    "no-unsafe-optional-chaining": "error"
   },
+  "overrides": [
+    {
+      "files": [
+        "packages/app/app/**",
+        "packages/app/components/**",
+        "packages/app/lib/**",
+        "packages/platform/src/**"
+      ],
+      "env": { "browser": true }
+    },
+    {
+      "files": ["packages/app/backend/**"],
+      "globals": { "BareKit": "readonly" }
+    }
+  ],
   "ignorePatterns": [
     "build/**",
     "node_modules/**",

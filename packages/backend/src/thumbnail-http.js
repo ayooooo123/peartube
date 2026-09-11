@@ -25,6 +25,62 @@ const THUMBNAIL_READ_TIMEOUT_MS = 4000
 // Bounded so download + read stays under the image loader's ~8s give-up window.
 const THUMBNAIL_DOWNLOAD_TIMEOUT_MS = 3500
 
+function isThumbnailRequest(req) {
+  if (req?.method !== 'GET' && req?.method !== 'HEAD') return false
+  try {
+    const parsed = new URL(req.url, 'http://127.0.0.1')
+    return parsed.searchParams.get('pt_thumbnail') === '1'
+  } catch {
+    return false
+  }
+}
+
+function retainThumbnailDiscovery(retainDiscovery, core, key) {
+  if (typeof retainDiscovery !== 'function' || !core?.discoveryKey) return
+  try {
+    retainDiscovery(core.discoveryKey, {
+      label: `thumbnail:${key.toString('hex').slice(0, 16)}`
+    })
+  } catch {
+    /* best effort */
+  }
+}
+
+async function ensureThumbnailBlocks(core, blob) {
+  const start = blob.blockOffset
+  const end = blob.blockOffset + Math.max(1, blob.blockLength || 1)
+  let local = false
+  try {
+    local = Boolean(await core.has(start, end))
+  } catch {
+    local = false
+  }
+  if (local) return
+
+  let range = null
+  try {
+    range = core.download({ start, end, linear: true })
+    const donePromise = typeof range?.done === 'function' ? range.done() : Promise.resolve()
+    await Promise.race([
+      donePromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail block download timeout')), THUMBNAIL_DOWNLOAD_TIMEOUT_MS))
+    ])
+  } catch {
+    /* best effort */
+  } finally {
+    try { range?.destroy?.() } catch { /* best effort */ }
+  }
+}
+
+function closeCoreSession(core) {
+  try {
+    const closing = core?.close?.()
+    if (closing?.catch) closing.catch(() => {})
+  } catch {
+    /* best effort */
+  }
+}
+
 /**
  * Serve a tagged thumbnail request from the blob server.
  * @returns {Promise<boolean>} true if it wrote the response (caller must return),
@@ -34,16 +90,7 @@ export async function serveThumbnailHttpRequest(deps, req, res) {
   const store = deps?.store
   const retainDiscovery = deps?.retainDiscovery
   const blobServer = deps?.blobServer
-  if (!store) return false
-  if (req?.method !== 'GET' && req?.method !== 'HEAD') return false
-
-  let parsed
-  try {
-    parsed = new URL(req.url, 'http://127.0.0.1')
-  } catch {
-    return false
-  }
-  if (parsed.searchParams.get('pt_thumbnail') !== '1') return false
+  if (!store || !isThumbnailRequest(req)) return false
 
   // Validates the token and decodes key/blob/type against the same scheme
   // getLink used to build the URL. Lazy-imported so the module loads without
@@ -59,13 +106,7 @@ export async function serveThumbnailHttpRequest(deps, req, res) {
   try {
     core = store.get(ref.key)
     await core.ready()
-    if (typeof retainDiscovery === 'function' && core.discoveryKey) {
-      try {
-        retainDiscovery(core.discoveryKey, {
-          label: `thumbnail:${ref.key.toString('hex').slice(0, 16)}`
-        })
-      } catch { /* best effort */ }
-    }
+    retainThumbnailDiscovery(retainDiscovery, core, ref.key)
 
     const Hyperblobs = (await import('hyperblobs')).default
     const blobs = new Hyperblobs(core)
@@ -76,22 +117,7 @@ export async function serveThumbnailHttpRequest(deps, req, res) {
     // drop them before the image actually requests. Re-pull them on demand so the
     // read resolves instead of failing; this endpoint is the only server for the
     // tagged thumbnail path, so a miss here is a permanent blank otherwise.
-    const start = ref.blob.blockOffset
-    const end = ref.blob.blockOffset + Math.max(1, ref.blob.blockLength || 1)
-    let local = false
-    try { local = Boolean(await core.has(start, end)) } catch { local = false }
-    if (!local) {
-      let range = null
-      try {
-        range = core.download({ start, end, linear: true })
-        await Promise.race([
-          typeof range?.done === 'function' ? range.done() : Promise.resolve(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail block download timeout')), THUMBNAIL_DOWNLOAD_TIMEOUT_MS))
-        ])
-      } catch { /* best effort */ } finally {
-        try { range?.destroy?.() } catch { /* best effort */ }
-      }
-    }
+    await ensureThumbnailBlocks(core, ref.blob)
 
     const buf = await Promise.race([
       blobs.get(ref.blob),
@@ -115,6 +141,6 @@ export async function serveThumbnailHttpRequest(deps, req, res) {
     return false
   } finally {
     // Close the per-request core session so repeated thumbnail loads don't leak.
-    try { const closing = core?.close?.(); if (closing?.catch) closing.catch(() => {}) } catch { /* best effort */ }
+    closeCoreSession(core)
   }
 }

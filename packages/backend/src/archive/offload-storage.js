@@ -1,5 +1,5 @@
 import b4a from 'b4a'
-import flat from 'flat-tree'
+import crypto from 'hypercore-crypto'
 
 import { createBlockOffloader } from './block-offloader.js'
 
@@ -14,10 +14,11 @@ import { createBlockOffloader } from './block-offloader.js'
 //     `CoreStorage.isCoreStorage` (which is only ever
 //     `typeof s.setDefaultDiscoveryKey === 'function'`) and can be handed
 //     straight to `new Corestore(...)`;
-//   * the ONLY interception is `read().getBlock(index)`. Tree nodes, bitfield
-//     pages, user data, marks, streams, every write transaction and every
-//     flush pass through untouched.
-//
+//   * the primary read interception is `read().getBlock(index)` to restore
+//     offloaded blocks from S3 on a miss. Block write transactions
+//     (`putBlock` and `deleteBlock`) are observed only for committed byte
+//     accounting; all non-block storage behavior remains delegated unchanged.
+//     Tree nodes, bitfield pages, user data, marks, and streams pass through untouched.
 // Because the bitfield is untouched, `core.has(index)` still answers true for
 // an offloaded block, so the relay keeps advertising it. Because
 // `core.proof({ block })` reads the block through this same read transaction,
@@ -71,6 +72,51 @@ function errorText (error) {
   return error.message || String(error)
 }
 
+function resolveCoreKeys (core, coreKey) {
+  let resolvedKey = core?.key || null
+  if (!resolvedKey) {
+    if (isKey(coreKey)) {
+      resolvedKey = coreKey
+    } else if (typeof coreKey === 'string' && /^[0-9a-f]{64}$/i.test(coreKey)) {
+      resolvedKey = b4a.from(coreKey, 'hex')
+    }
+  }
+  const keyHex = hexOf(resolvedKey) || (typeof coreKey === 'string' ? coreKey.toLowerCase() : null)
+  return { resolvedKey, keyHex }
+}
+
+function createUnavailableRetrievabilityResult (coreKey) {
+  return {
+    success: false,
+    coreKey,
+    error: 'CORE_STORAGE_UNAVAILABLE',
+    requestedBlocks: 0,
+    assessedBlocks: 0,
+    totalBlocks: 0,
+    residentBlocks: 0,
+    residentBytes: 0,
+    remoteRetrievableBlocks: 0,
+    remoteRetrievableBytes: 0,
+    unretrievableBlocks: 0,
+    missingBlocks: 0,
+    corruptBlocks: 0,
+    unreachableBlocks: 0,
+    logicalBitfieldBlocks: 0,
+    ranges: [],
+    residentRanges: [],
+    remoteRetrievableRanges: [],
+    unavailableRanges: [],
+    status: 'unretrievable',
+    isLocallyResident: false,
+    isRetrievable: false,
+    hasUnretrievable: true,
+    truncated: false,
+    aborted: false,
+    nextCursor: null,
+    assessmentPending: false,
+    observedAt: Date.now(),
+  }
+}
 /**
  * Eviction is opt-in. Absent, this wrapper is the read-only skin it always
  * was: no sweeps, no ledgers, no counters, no `resolveStore` call a local hit
@@ -93,6 +139,10 @@ function normalizeEviction (eviction) {
     // player is reading through it and taking it back off disk now would stall
     // playback for a bucket round trip.
     isPinned: typeof eviction.isPinned === 'function' ? eviction.isPinned : null,
+    // `() => Promise`, optional gate that is awaited before a sweep starts.
+    // This is separate from `isEvictable`: a registration hold must let a core
+    // arm and accept writes while keeping destructive sweeps out of the way.
+    waitForSweep: typeof eviction.waitForSweep === 'function' ? eviction.waitForSweep : null,
     // `({ keyHex }) => boolean`, may be async. False keeps every block of that
     // core on this volume. Restore still answers for it, so blocks already in
     // the bucket stay readable and come home as they are read - excluding a
@@ -130,19 +180,12 @@ function delegate (target, overrides) {
  *                      exactly as the unwrapped storage would report it. May
  *                      be async.
  * @param log           optional `(message) => void`.
- * @param eviction      optional `{ windowBytes, isPinned, sweepEveryReads }`.
+ * @param eviction      optional `{ windowBytes, isPinned, waitForSweep, sweepEveryReads }`.
  *                      Present, local block data for each offload-backed core
  *                      is held to `windowBytes` — see the residency section
  *                      below. Absent, nothing here evicts anything.
  */
-export function createOffloadStorage ({
-  storage,
-  resolveStore,
-  log,
-  eviction = null,
-  readAheadBlocks = 0,
-  restoreCacheBytes = 0,
-} = {}) {
+function validateCreateOffloadStorageArgs({ storage, resolveStore, readAheadBlocks, restoreCacheBytes }) {
   if (!storage || typeof storage !== 'object' || typeof storage.setDefaultDiscoveryKey !== 'function') {
     throw new TypeError('storage must be a hypercore-storage instance')
   }
@@ -155,6 +198,17 @@ export function createOffloadStorage ({
   if (!Number.isSafeInteger(restoreCacheBytes) || restoreCacheBytes < 0 || restoreCacheBytes > 256 * 1024 * 1024) {
     throw new TypeError('restoreCacheBytes must be between 0 and 256 MiB')
   }
+}
+
+export function createOffloadStorage ({
+  storage,
+  resolveStore,
+  log,
+  eviction = null,
+  readAheadBlocks = 0,
+  restoreCacheBytes = 0,
+} = {}) {
+  validateCreateOffloadStorageArgs({ storage, resolveStore, readAheadBlocks, restoreCacheBytes })
   const bound = normalizeEviction(eviction)
   const restoreCache = new Map()
   let restoreCacheSize = 0
@@ -167,8 +221,18 @@ export function createOffloadStorage ({
   const arming = bound === null ? null : new Set()
   const evicted = bound === null
     ? null
-    : { sweeps: 0, blocks: 0, bytes: 0, pinned: 0, unconfirmed: 0, unverifiable: 0 }
-
+    : {
+      sweeps: 0,
+      blocks: 0,
+      bytes: 0,
+      pinned: 0,
+      unconfirmed: 0,
+      unverifiable: 0,
+      pinnedBytes: 0,
+      unconfirmedBytes: 0,
+      unverifiableBytes: 0,
+      overageBytes: 0,
+    }
   function emit (message) {
     if (report === null) return
     try {
@@ -205,17 +269,20 @@ export function createOffloadStorage ({
 
   function stats () {
     if (bound === null) return { ...counters }
-    // What each core's last sweep left. The retained window is counted at the
-    // size the merkle tree says it is rather than read back to be measured, so
-    // per swept core this is a ceiling: some of those blocks may not be on disk
-    // at all. A core opened but not yet swept contributes nothing yet.
     let residentBytes = 0
-    for (const ledger of ledgers.values()) residentBytes += ledger.residentBytes
+    let countedCores = 0
+    for (const ledger of ledgers.values()) {
+      if (ledger.countedInResidency) {
+        residentBytes += ledger.residentBytes
+        countedCores++
+      }
+    }
+    const overageBytes = Math.max(0, residentBytes - bound.windowBytes)
     return {
       ...counters,
       eviction: {
         windowBytes: bound.windowBytes,
-        cores: ledgers.size,
+        cores: countedCores,
         sweeps: evicted.sweeps,
         evicted: evicted.blocks,
         bytesEvicted: evicted.bytes,
@@ -223,6 +290,10 @@ export function createOffloadStorage ({
         unconfirmed: evicted.unconfirmed,
         unverifiable: evicted.unverifiable,
         residentBytes,
+        overageBytes,
+        pinnedBytes: evicted.pinnedBytes,
+        unconfirmedBytes: evicted.unconfirmedBytes,
+        unverifiableBytes: evicted.unverifiableBytes,
       },
     }
   }
@@ -231,26 +302,6 @@ export function createOffloadStorage ({
   // restore path
   // ---------------------------------------------------------------------------
 
-  /**
-   * Run one read against its own short-lived transaction.
-   *
-   * hypercore-storage read transactions only resolve once someone calls
-   * `tryFlush()`, and by the time we know a block is missing the caller's
-   * transaction has already been flushed — issuing another get on it would
-   * never resolve. Owning the transaction means the restore can neither
-   * deadlock the caller's transaction nor leave it unflushed. `read` must call
-   * into the transaction synchronously, which every CoreRX getter does.
-   */
-  async function readOnce (coreStorage, read) {
-    const rx = coreStorage.read()
-    let pending = null
-    try {
-      pending = read(rx)
-    } finally {
-      rx.tryFlush()
-    }
-    return pending
-  }
 
   /**
    * The 32-byte commitment for block `index` is the hash of merkle tree node
@@ -428,25 +479,26 @@ export function createOffloadStorage ({
 
   function ledgerFor (keyHex, coreStorage, store) {
     const existing = ledgers.get(keyHex)
-    if (existing !== undefined) return existing
+    if (existing !== undefined) {
+      if (store && !existing.store) existing.store = store
+      return existing
+    }
     const ledger = {
       keyHex,
       storage: coreStorage,
+      store,
       // One place drops a local block copy, and this is it: the same
       // upload-confirm-delete the ingest window uses (block-offloader.js).
       offloader: createBlockOffloader({ storage: coreStorage, store, windowBytes: bound.windowBytes, log }),
-      // Memoised per core length: an archived title's tree never changes again.
-      boundary: null,
       length: -1,
       reads: 0,
       residentBytes: 0,
-      sweeping: null,
-      again: false,
+      countedInResidency: false,
+      lastAccessedAt: Date.now(),
     }
     ledgers.set(keyHex, ledger)
     return ledger
   }
-
   /**
    * Decide once per core whether its local block data is a cache with a bound
    * or the only copy in existence.
@@ -463,80 +515,50 @@ export function createOffloadStorage ({
     if (!store) return null
     const ledger = ledgerFor(identity.keyHex, context.storage, store)
     context.identity.ledger = ledger
+    if (await evictable(ledger)) {
+      ledger.countedInResidency = true
+      await serializeAccounting(() => reconcileLedger(ledger))
+    } else {
+      ledger.countedInResidency = false
+      ledger.residentBytes = 0
+    }
     return ledger
   }
-
   function armAndSweep (context) {
     const pending = arm(context)
-      .then((ledger) => (ledger === null ? null : queueSweep(ledger)))
+      .then((ledger) => {
+        if (ledger !== null) void queueSweep()
+      })
       .catch((error) => emit(`residency arming failed: ${errorText(error)}`))
-      .finally(() => arming.delete(pending))
+      .finally(() => {
+        arming.delete(pending)
+        if (context.identity.armPending === pending) {
+          context.identity.armPending = null
+        }
+      })
+    context.identity.armPending = pending
     arming.add(pending)
     return pending
   }
 
-  /**
-   * A core's total byte length, from its merkle roots. Every tree of `length`
-   * blocks has at most log2(length) of them and each carries the byte span it
-   * covers, so this is the whole size of a title in a handful of point reads.
-   */
-  async function treeBytes (ledger, length) {
-    let bytes = 0
-    for (const root of flat.fullRoots(2 * length)) {
-      const node = await readOnce(ledger.storage, (rx) => rx.getTreeNode(root))
-      const size = node === null || node === undefined ? -1 : Number(node.size)
-      if (!Number.isSafeInteger(size) || size < 0) return null
-      bytes += size
+  async function evictable (ledger) {
+    if (bound.isEvictable === null) return true
+    try {
+      return await bound.isEvictable({ keyHex: ledger.keyHex }) !== false
+    } catch (error) {
+      emit(`evictability check failed for ${ledger.keyHex}: ${errorText(error)}`)
+      return false
     }
-    return bytes
   }
 
-  /**
-   * The lowest index the window keeps, and the bytes it keeps there. Blocks
-   * below it are what an over-window core gives up, oldest first.
-   */
-  async function keepBoundary (ledger, length) {
-    if (ledger.boundary !== null && ledger.length === length) return ledger.boundary
-
-    // A core that fits inside the window has nothing below it, and this is how
-    // that is settled in a few reads instead of one per block. It matters most
-    // for what a relay opens the MOST of: every catalog, bee and index core is
-    // orders of magnitude smaller than a media window, and each one exits here
-    // having read a handful of tree nodes and given up nothing.
-    const total = await treeBytes(ledger, length)
-    if (total !== null && total <= bound.windowBytes) {
-      ledger.boundary = { index: 0, bytes: total }
-      ledger.length = length
-      return ledger.boundary
+  async function waitForSweep () {
+    if (bound.waitForSweep === null) return
+    try {
+      await bound.waitForSweep()
+    } catch (error) {
+      emit(`residency sweep hold failed: ${errorText(error)}`)
+      throw error
     }
-
-    let index = length
-    let bytes = 0
-    while (index > 0) {
-      const node = await readOnce(ledger.storage, (rx) => rx.getTreeNode(2 * (index - 1)))
-      const size = node === null || node === undefined ? 0 : Number(node.size)
-      // No leaf for this block, or one more block would put the window over
-      // budget: the window stops here.
-      if (!Number.isSafeInteger(size) || size <= 0 || bytes + size > bound.windowBytes) break
-      bytes += size
-      index--
-    }
-    ledger.boundary = { index, bytes }
-    ledger.length = length
-    return ledger.boundary
-  }
-
-  /**
-   * Every block below `boundary` whose DATA is still on local disk, oldest
-   * first — which is the order they are given up in.
-   */
-  async function residentBelow (ledger, boundary) {
-    const resident = []
-    if (boundary <= 0) return resident
-    for await (const block of ledger.storage.createBlockStream({ lt: boundary })) {
-      resident.push({ index: block.index, byteLength: block.value.byteLength })
-    }
-    return resident
   }
 
   async function pinned (ledger, index) {
@@ -544,139 +566,182 @@ export function createOffloadStorage ({
     try {
       return await bound.isPinned({ keyHex: ledger.keyHex, index }) === true
     } catch (error) {
-      // A playback signal that throws pins nothing, and says so once. Guessing
-      // "not pinned" is the answer that could stutter a player; guessing
-      // "pinned" is the answer that could stall the bound forever.
-      emit(`playback pin check failed for ${ledger.keyHex} block ${index}: ${errorText(error)}`)
-      return false
+      emit(`pin check failed for ${ledger.keyHex}: ${errorText(error)}`)
+      return true
     }
   }
 
-  async function runSweep (ledger) {
+  async function reconcileLedger (ledger) {
+    if (!(await evictable(ledger))) {
+      ledger.countedInResidency = false
+      ledger.residentBytes = 0
+      ledger.dirty = false
+      return
+    }
+    ledger.countedInResidency = true
     const head = await readOnce(ledger.storage, (rx) => rx.getHead())
     const length = head === null || head === undefined ? 0 : Number(head.length)
-    if (!Number.isSafeInteger(length) || length <= 0) return
+    if (!Number.isSafeInteger(length) || length <= 0) {
+      ledger.length = 0
+      ledger.residentBytes = 0
+      ledger.dirty = false
+      return
+    }
+    ledger.length = length
+    let bytes = 0
+    for await (const block of ledger.storage.createBlockStream()) {
+      if (block?.value?.byteLength) {
+        bytes += block.value.byteLength
+      }
+    }
+    ledger.residentBytes = bytes
+    ledger.dirty = false
+  }
 
-    // A sweep and an ingest can be looking at the same core, and that is fine:
-    // both are draining the same oldest end to the same window, both go through
-    // one upload-confirm-delete, and a block the other already took reads back
-    // as absent and costs nothing. Deferring instead would cost the case that
-    // matters most — a relay that boots holding a full cache and is only ever
-    // asked to serve it has no append to wait for.
-    const boundary = await keepBoundary(ledger, length)
+  async function runRelayWideSweep () {
+    evicted.pinned = 0
+    evicted.pinnedBytes = 0
+    evicted.unconfirmedBytes = 0
+    evicted.unverifiableBytes = 0
+    evicted.overageBytes = 0
 
+    const activeLedgers = []
+    for (const ledger of ledgers.values()) {
+      if (await evictable(ledger)) {
+        ledger.countedInResidency = true
+        if (ledger.dirty) await reconcileLedger(ledger)
+        activeLedgers.push(ledger)
+      } else {
+        ledger.countedInResidency = false
+        ledger.residentBytes = 0
+      }
+    }
+    if (activeLedgers.length === 0) return
     evicted.sweeps++
 
-    // Ceiling, not measurement: the window is counted at its full tree size.
-    let retained = boundary.bytes
-    let stopped = false
-    for (const block of await residentBelow(ledger, boundary.index)) {
-      if (stopped) {
-        retained += block.byteLength
-        continue
-      }
-      if (await pinned(ledger, block.index)) {
-        // A player is reading through this block. It stays, residency stays
-        // over the window by its size, and the next sweep past the playhead
-        // takes it.
-        evicted.pinned++
-        retained += block.byteLength
-        continue
-      }
-      try {
-        // 0 means a concurrent sweep or ingest already dropped it: nothing
-        // left, nothing to count.
-        const bytes = await ledger.offloader.evict(block.index)
-        if (bytes > 0) {
-          evicted.blocks++
-          evicted.bytes += bytes
+    activeLedgers.sort((a, b) => (a.lastAccessedAt - b.lastAccessedAt) || a.keyHex.localeCompare(b.keyHex))
+
+    let totalResident = 0
+    for (const ledger of activeLedgers) {
+      totalResident += ledger.residentBytes
+    }
+
+    if (totalResident <= bound.windowBytes) {
+      return
+    }
+
+    let currentPinnedBytes = 0
+    let currentUnconfirmedBytes = 0
+    let currentUnverifiableBytes = 0
+
+    for (const ledger of activeLedgers) {
+      const protectedBytes = currentPinnedBytes + currentUnconfirmedBytes + currentUnverifiableBytes
+      if ((totalResident - protectedBytes) <= bound.windowBytes) break
+
+      for await (const block of ledger.storage.createBlockStream()) {
+        const curProtected = currentPinnedBytes + currentUnconfirmedBytes + currentUnverifiableBytes
+        if ((totalResident - curProtected) <= bound.windowBytes) break
+
+        const byteLength = block.value ? block.value.byteLength : 0
+        if (byteLength <= 0) continue
+
+        if (await pinned(ledger, block.index)) {
+          evicted.pinned++
+          currentPinnedBytes += byteLength
+          continue
         }
-      } catch (error) {
-        // Nothing was deleted: the offloader refuses to drop a block the object
-        // store would not confirm, or one the merkle tree does not commit to.
-        retained += block.byteLength
-        if (error && error.code === 'OFFLOAD_BLOCK_UNVERIFIABLE') {
-          evicted.unverifiable++
-        } else {
-          // The object store is the dependency every remaining block shares, so
-          // one refusal is the whole sweep's answer. The next sweep tries again.
-          evicted.unconfirmed++
-          stopped = true
+
+        try {
+          const bytes = await ledger.offloader.evict(block.index)
+          if (bytes > 0) {
+            evicted.blocks++
+            evicted.bytes += bytes
+            ledger.residentBytes = Math.max(0, ledger.residentBytes - bytes)
+            totalResident -= bytes
+          }
+        } catch (error) {
+          emit(`kept ${ledger.keyHex} block ${block.index} on local disk: ${errorText(error)}`)
+          if (error && error.code === 'OFFLOAD_BLOCK_UNVERIFIABLE') {
+            evicted.unverifiable++
+            currentUnverifiableBytes += byteLength
+          } else {
+            evicted.unconfirmed++
+            currentUnconfirmedBytes += byteLength
+            break
+          }
         }
-        emit(`kept ${ledger.keyHex} block ${block.index} on local disk: ${errorText(error)}`)
       }
     }
-    ledger.residentBytes = retained
+
+    evicted.pinnedBytes = currentPinnedBytes
+    evicted.unconfirmedBytes = currentUnconfirmedBytes
+    evicted.unverifiableBytes = currentUnverifiableBytes
+    evicted.overageBytes = Math.max(0, totalResident - bound.windowBytes)
   }
 
-  // Asked per sweep rather than cached on the ledger: the storage layer can
-  // only register a core as keep-local once it knows that core's real key,
-  // which is after the core is open - by which time this ledger already exists.
-  // A cached answer would be the answer from before the operator's list was
-  // known.
-  async function evictable (ledger) {
-    if (bound.isEvictable === null) return true
-    try {
-      return await bound.isEvictable({ keyHex: ledger.keyHex }) !== false
-    } catch (error) {
-      // A list that cannot be read is not permission to evict.
-      emit(`evictability check failed for ${ledger.keyHex}: ${errorText(error)}`)
-      return false
-    }
+  let accountingQueue = Promise.resolve()
+  function serializeAccounting (action) {
+    const next = accountingQueue.then(action, action)
+    accountingQueue = next.catch(() => {})
+    return next
   }
 
-  async function drainSweeps (ledger) {
+  let sweeping = null
+  let sweepAgain = false
+
+  async function drainSweeps () {
     do {
-      ledger.again = false
+      sweepAgain = false
       try {
-        if (!(await evictable(ledger))) return
-        await runSweep(ledger)
+        await waitForSweep()
+        await serializeAccounting(() => runRelayWideSweep())
       } catch (error) {
-        // Housekeeping never surfaces into a read.
-        emit(`residency sweep failed for ${ledger.keyHex}: ${errorText(error)}`)
+        emit(`relay-wide residency sweep failed: ${errorText(error)}`)
       }
-    } while (ledger.again)
+    } while (sweepAgain)
   }
 
-  /**
-   * One sweep at a time per core. A trigger that arrives during a sweep is
-   * folded into exactly one more pass, so a core being read hard cannot queue
-   * an unbounded chain of them.
-   */
-  function queueSweep (ledger) {
-    if (ledger.sweeping !== null) {
-      ledger.again = true
-      return ledger.sweeping
+  function queueSweep () {
+    if (bound === null) return Promise.resolve(stats())
+    if (sweeping !== null) {
+      sweepAgain = true
+      return sweeping
     }
-    ledger.sweeping = drainSweeps(ledger).finally(() => { ledger.sweeping = null })
-    return ledger.sweeping
+    sweeping = drainSweeps().finally(() => { sweeping = null })
+    return sweeping
   }
 
   function noteRead (ledger) {
+    ledger.lastAccessedAt = Date.now()
     if (++ledger.reads < bound.sweepEveryReads) return
     ledger.reads = 0
-    queueSweep(ledger)
+    let totalResident = 0
+    for (const l of ledgers.values()) {
+      if (l.countedInResidency) totalResident += l.residentBytes
+    }
+    if (totalResident > bound.windowBytes) {
+      queueSweep()
+    }
   }
 
-  /**
-   * Apply the bound now and resolve when every armed core is inside it.
-   *
-   * Reads arm sweeps on their own; this is for a caller that needs the bound
-   * applied at a known point — an operator command, a shutdown, a test.
-   */
   async function sweepNow () {
     if (bound === null) return stats()
-    // A core may still be resolving its own identity.
     await Promise.all([...arming])
-    const pending = []
-    for (const ledger of ledgers.values()) {
-      ledger.reads = 0
-      pending.push(queueSweep(ledger))
-    }
-    await Promise.all(pending)
+    await waitForSweep()
+    await serializeAccounting(async () => {
+      for (const ledger of ledgers.values()) {
+        ledger.reads = 0
+        if (await evictable(ledger)) {
+          await reconcileLedger(ledger)
+        } else {
+          ledger.countedInResidency = false
+          ledger.residentBytes = 0
+        }
+      }
+    })
+    await queueSweep()
     return stats()
   }
-
   // ---------------------------------------------------------------------------
   // interception
   // ---------------------------------------------------------------------------
@@ -701,14 +766,76 @@ export function createOffloadStorage ({
     })
   }
 
+  function wrapWrite (tx, context) {
+    const staged = new Map()
+    return delegate(tx, {
+      putBlock (index, data) {
+        staged.set(index, data && data.byteLength ? data.byteLength : 0)
+        return tx.putBlock(index, data)
+      },
+      deleteBlock (index) {
+        staged.set(index, 0)
+        return tx.deleteBlock(index)
+      },
+      async flush () {
+        if (staged.size === 0) {
+          return tx.flush()
+        }
+        if (context.identity.armPending !== null) {
+          await context.identity.armPending.catch(() => {})
+        }
+        const ledger = context.identity.ledger
+        if (!ledger) {
+          return tx.flush()
+        }
+        let shouldSweep = false
+        const writePromise = serializeAccounting(async () => {
+          let netDelta = 0
+          for (const [index, newLength] of staged) {
+            let oldLength = 0
+            try {
+              const old = await readOnce(context.storage, (rx) => rx.getBlock(index))
+              if (old && old.byteLength) oldLength = old.byteLength
+            } catch {
+              oldLength = 0
+            }
+            netDelta += (newLength - oldLength)
+          }
+          const res = await tx.flush()
+          ledger.lastAccessedAt = Date.now()
+          ledger.residentBytes = Math.max(0, ledger.residentBytes + netDelta)
+          staged.clear()
+          if (bound !== null && ledger.countedInResidency) {
+            let total = 0
+            for (const l of ledgers.values()) {
+              if (l.countedInResidency) total += l.residentBytes
+            }
+            if (total > bound.windowBytes) {
+              shouldSweep = true
+            }
+          }
+          return res
+        })
+        return writePromise.then((result) => {
+          if (shouldSweep) queueSweep()
+          return result
+        })
+      },
+    })
+  }
+
   function wrapCoreStorage (coreStorage, identity) {
     if (!coreStorage || typeof coreStorage.read !== 'function') return coreStorage
 
     const context = { storage: coreStorage, identity }
 
     const overrides = {
+      _isOffloadWrapped: true,
       read (fork) {
         return wrapRead(coreStorage.read(fork), context)
+      },
+      write (fork) {
+        return wrapWrite(coreStorage.write(fork), context)
       },
     }
 
@@ -731,15 +858,83 @@ export function createOffloadStorage ({
   // top level
   // ---------------------------------------------------------------------------
 
+  async function resolveAssessmentStore (resolvedKey, keyHex, core, ledger) {
+    let store = ledger?.store || null
+    if (!store && typeof resolveStore === 'function' && resolvedKey) {
+      store = await resolveStore({ key: resolvedKey, keyHex, discoveryKey: core?.discoveryKey })
+      if (store && ledger && !ledger.store) ledger.store = store
+    }
+    return store
+  }
+
+  async function resolveAssessmentStorage (core, resolvedKey, ledger) {
+    let coreStorage = ledger?.storage || null
+    let temporaryStorage = null
+    if (!coreStorage) {
+      try {
+        const dKey = core?.discoveryKey || (resolvedKey ? crypto.discoveryKey(resolvedKey) : null)
+        if (dKey) {
+          temporaryStorage = await storage.resumeCore(dKey)
+          coreStorage = temporaryStorage
+        }
+      } catch {
+        coreStorage = null
+      }
+    }
+    return { coreStorage, temporaryStorage }
+  }
+
+  async function assessRelayRetrievability ({
+    core = null,
+    coreKey = null,
+    ranges = null,
+    cursor = null,
+    signal = null,
+    maxBlocks = 2048,
+    probeRemote = true,
+    followContinuations = false,
+  } = {}) {
+    const { resolvedKey, keyHex } = resolveCoreKeys(core, coreKey)
+    if (!keyHex) {
+      throw new TypeError('assessRetrievability requires core or coreKey')
+    }
+
+    const ledger = ledgers ? ledgers.get(keyHex) : null
+    const store = await resolveAssessmentStore(resolvedKey, keyHex, core, ledger)
+    const { coreStorage, temporaryStorage } = await resolveAssessmentStorage(core, resolvedKey, ledger)
+
+    if (!coreStorage || typeof coreStorage.read !== 'function') {
+      return createUnavailableRetrievabilityResult(keyHex)
+    }
+
+    try {
+      const pageArgs = {
+        core,
+        storage: coreStorage,
+        store,
+        coreKey: resolvedKey,
+        ranges,
+        cursor,
+        signal,
+        maxBlocks,
+        probeRemote,
+      }
+      if (followContinuations !== true) {
+        return await assessCoreRetrievability({ ...pageArgs, cursor })
+      }
+      return await accumulateRetrievabilityPages(pageArgs)
+    } finally {
+      if (temporaryStorage && typeof temporaryStorage.close === 'function') {
+        await temporaryStorage.close().catch(() => {})
+      }
+    }
+  }
+
   const overrides = {
-    // Shadows CorestoreStorage#stats, an internal tree-cache counter object.
-    // hypercore-storage only ever reads that as `this.stats` / `this.store.stats`
-    // on raw instances, and every method reached through this proxy is bound to
-    // the raw instance, so the shadow is not observable inside the engine.
-    // `offloadStats` is the unambiguous name for callers that hold both.
     stats,
     offloadStats: stats,
     offloadSweep: sweepNow,
+    assessRetrievability: assessRelayRetrievability,
   }
 
   for (const name of CORE_PRODUCERS) {
@@ -759,6 +954,26 @@ export function createOffloadStorage ({
 
   return delegate(storage, overrides)
 }
+  /**
+   * Run one read against its own short-lived transaction.
+   *
+   * hypercore-storage read transactions only resolve once someone calls
+   * `tryFlush()`, and by the time we know a block is missing the caller's
+   * transaction has already been flushed — issuing another get on it would
+   * never resolve. Owning the transaction means the restore can neither
+   * deadlock the caller's transaction nor leave it unflushed. `read` must call
+   * into the transaction synchronously, which every CoreRX getter does.
+   */
+  async function readOnce (coreStorage, read) {
+    const rx = coreStorage.read()
+    let pending = null
+    try {
+      pending = read(rx)
+    } finally {
+      rx.tryFlush()
+    }
+    return pending
+  }
 
 function seedIdentity (method, args) {
   const seed = method === 'resumeCore' ? { discoveryKey: args[0] } : (args[0] || {})
@@ -771,8 +986,564 @@ function seedIdentity (method, args) {
     // Set once this core is known to be offload-backed, and shared by every
     // derived read transaction so any of them can arm a residency sweep.
     ledger: null,
+    armPending: null,
     remoteStore: null,
     remoteStorePending: null,
     pendingRestores: new Map(),
   }
+}
+
+const DEFAULT_MAX_ASSESSMENT_BLOCKS = 2048
+const MAX_ASSESSMENT_BLOCK_CEILING = 4096
+
+function pushExactRange (list, start, end) {
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end <= start) return
+  const last = list.length > 0 ? list[list.length - 1] : null
+  if (last && last.end === start) {
+    last.end = end
+    return
+  }
+  list.push({ start, end })
+}
+
+function mergeExactRanges (left = [], right = []) {
+  const merged = []
+  for (const range of [...left, ...right]) {
+    pushExactRange(merged, Number(range?.start), Number(range?.end))
+  }
+  if (merged.length <= 1) return merged
+  merged.sort((a, b) => a.start - b.start || a.end - b.end)
+  const out = [{ start: merged[0].start, end: merged[0].end }]
+  for (let i = 1; i < merged.length; i++) {
+    const prev = out[out.length - 1]
+    const cur = merged[i]
+    if (cur.start <= prev.end) {
+      if (cur.end > prev.end) prev.end = cur.end
+    } else {
+      out.push({ start: cur.start, end: cur.end })
+    }
+  }
+  return out
+}
+
+function finalizeRetrievabilityStatus (acc) {
+  const {
+    requestedBlocks,
+    assessedBlocks,
+    residentBlocks,
+    remoteRetrievableBlocks,
+    unretrievableBlocks,
+    truncated,
+    aborted,
+  } = acc
+  let status = 'unretrievable'
+  if (truncated || aborted) {
+    status = (residentBlocks + remoteRetrievableBlocks) > 0 ? 'partial' : 'unretrievable'
+  } else if (requestedBlocks > 0 && assessedBlocks === requestedBlocks && residentBlocks === requestedBlocks) {
+    status = 'resident'
+  } else if (requestedBlocks > 0 && assessedBlocks === requestedBlocks && (residentBlocks + remoteRetrievableBlocks) === requestedBlocks) {
+    status = 'retrievable'
+  } else if ((residentBlocks + remoteRetrievableBlocks) > 0) {
+    status = 'partial'
+  }
+  acc.status = status
+  acc.isLocallyResident = !truncated && !aborted && requestedBlocks > 0 && assessedBlocks === requestedBlocks && residentBlocks === requestedBlocks
+  acc.isRetrievable = !truncated && !aborted && requestedBlocks > 0 && assessedBlocks === requestedBlocks && (residentBlocks + remoteRetrievableBlocks) === requestedBlocks
+  acc.hasUnretrievable = unretrievableBlocks > 0
+  acc.assessmentPending = truncated === true || aborted === true
+  acc.totalBlocks = assessedBlocks
+  acc.bounded = truncated === true
+  acc.observedAt = Date.now()
+  return acc
+}
+
+function createInitialRetrievabilityAccumulator () {
+  return {
+    success: true,
+    coreKey: null,
+    requestedBlocks: 0,
+    assessedBlocks: 0,
+    totalBlocks: 0,
+    residentBlocks: 0,
+    residentBytes: 0,
+    remoteRetrievableBlocks: 0,
+    remoteRetrievableBytes: 0,
+    unretrievableBlocks: 0,
+    missingBlocks: 0,
+    corruptBlocks: 0,
+    unreachableBlocks: 0,
+    logicalBitfieldBlocks: 0,
+    ranges: [],
+    residentRanges: [],
+    remoteRetrievableRanges: [],
+    unavailableRanges: [],
+    status: 'unretrievable',
+    isLocallyResident: false,
+    isRetrievable: false,
+    hasUnretrievable: false,
+    truncated: false,
+    aborted: false,
+    nextCursor: null,
+    assessmentPending: false,
+    bounded: false,
+    observedAt: Date.now(),
+  }
+}
+
+function mergeRetrievabilityPage (acc, page) {
+  acc.coreKey = page.coreKey || acc.coreKey
+  if (acc.requestedBlocks === 0) acc.requestedBlocks = Number(page.requestedBlocks) || 0
+  acc.assessedBlocks += Number(page.assessedBlocks) || 0
+  acc.residentBlocks += Number(page.residentBlocks) || 0
+  acc.residentBytes += Number(page.residentBytes) || 0
+  acc.remoteRetrievableBlocks += Number(page.remoteRetrievableBlocks) || 0
+  acc.remoteRetrievableBytes += Number(page.remoteRetrievableBytes) || 0
+  acc.unretrievableBlocks += Number(page.unretrievableBlocks) || 0
+  acc.missingBlocks += Number(page.missingBlocks) || 0
+  acc.corruptBlocks += Number(page.corruptBlocks) || 0
+  acc.unreachableBlocks += Number(page.unreachableBlocks) || 0
+  acc.logicalBitfieldBlocks += Number(page.logicalBitfieldBlocks) || 0
+  if (Array.isArray(page.ranges) && page.ranges.length > 0) acc.ranges.push(...page.ranges)
+  acc.residentRanges = mergeExactRanges(acc.residentRanges, page.residentRanges || [])
+  acc.remoteRetrievableRanges = mergeExactRanges(acc.remoteRetrievableRanges, page.remoteRetrievableRanges || [])
+  acc.unavailableRanges = mergeExactRanges(acc.unavailableRanges, page.unavailableRanges || [])
+}
+
+async function accumulateRetrievabilityPages (pageArgs = {}) {
+  let cursor = pageArgs.cursor ?? null
+  const acc = createInitialRetrievabilityAccumulator()
+
+  for (;;) {
+    if (pageArgs.signal?.aborted) {
+      acc.aborted = true
+      acc.truncated = true
+      break
+    }
+    const page = await assessCoreRetrievability({ ...pageArgs, cursor })
+    if (!page || page.success === false) {
+      if (page) {
+        acc.success = page.success
+        acc.coreKey = page.coreKey || acc.coreKey
+        acc.error = page.error
+      }
+      break
+    }
+    mergeRetrievabilityPage(acc, page)
+
+    if (page.aborted === true) {
+      acc.aborted = true
+      acc.truncated = true
+      acc.nextCursor = page.nextCursor || null
+      break
+    }
+    if (page.truncated === true && page.nextCursor) {
+      cursor = page.nextCursor
+      continue
+    }
+    acc.truncated = false
+    acc.nextCursor = null
+    break
+  }
+
+  return finalizeRetrievabilityStatus(acc)
+}
+
+function getRawAssessmentStorage (storage, core) {
+  const candidateStorage = storage || (core?.state?.storage && !core.state.storage._isOffloadWrapped ? core.state.storage : null)
+  if (!candidateStorage || typeof candidateStorage.read !== 'function' || candidateStorage._isOffloadWrapped) {
+    throw new TypeError('assessCoreRetrievability requires explicit raw storage with read(); wrapped storage triggers S3 restores and is refused')
+  }
+  return candidateStorage
+}
+
+function normalizeAssessmentOptions (options = {}) {
+  const core = options.core || null
+  const coreKey = options.coreKey || null
+  const { resolvedKey, keyHex } = resolveCoreKeys(core, coreKey)
+  const coreStorage = getRawAssessmentStorage(options.storage, core)
+  const maxBlocks = options.maxBlocks
+  const boundedMaxBlocks = Math.min(
+    Math.max(1, Number.isSafeInteger(maxBlocks) && maxBlocks > 0 ? maxBlocks : DEFAULT_MAX_ASSESSMENT_BLOCKS),
+    MAX_ASSESSMENT_BLOCK_CEILING
+  )
+  const startRangeIdx = Number.isSafeInteger(options.cursor?.rangeIndex) && options.cursor.rangeIndex >= 0 ? options.cursor.rangeIndex : 0
+  const startBlockIdx = Number.isSafeInteger(options.cursor?.blockIndex) && options.cursor.blockIndex >= 0 ? options.cursor.blockIndex : null
+  const probeRemote = options.probeRemote !== false
+
+  return {
+    core,
+    resolvedKey,
+    keyHex,
+    coreStorage,
+    store: options.store || null,
+    ranges: options.ranges || null,
+    signal: options.signal || null,
+    resolveStore: options.resolveStore || null,
+    boundedMaxBlocks,
+    startRangeIdx,
+    startBlockIdx,
+    probeRemote,
+  }
+}
+
+async function resolveRemoteAssessmentStore (store, resolveStore, storage, core, resolvedKey, keyHex) {
+  if (store) return store
+  const resolver = resolveStore || storage?.resolveStore
+  if (typeof resolver === 'function' && resolvedKey) {
+    return await resolver({ key: resolvedKey, keyHex, discoveryKey: core?.discoveryKey })
+  }
+  return null
+}
+
+async function resolveAssessmentTargetRanges (ranges, core, coreStorage) {
+  if (Array.isArray(ranges) && ranges.length > 0) {
+    return ranges.map(r => ({
+      start: Math.max(0, Math.floor(Number(r.start)) || 0),
+      end: Math.max(0, Math.floor(Number(r.end)) || 0)
+    })).filter(r => r.end > r.start)
+  }
+  let length = Number(core?.length)
+  if (!Number.isSafeInteger(length) || length <= 0) {
+    const head = await readOnce(coreStorage, rx => rx.getHead())
+    length = head && Number.isSafeInteger(Number(head.length)) ? Number(head.length) : 0
+  }
+  if (length > 0) {
+    return [{ start: 0, end: length }]
+  }
+  return []
+}
+
+async function checkBlockBitfield (core, index) {
+  try {
+    if (typeof core?.has === 'function') {
+      return await core.has(index) === true
+    }
+    if (core?.bitfield && typeof core.bitfield.get === 'function') {
+      return core.bitfield.get(index) === true
+    }
+  } catch {
+    return false
+  }
+  return false
+}
+
+async function readBlockExpectedHash (coreStorage, index) {
+  try {
+    const node = await readOnce(coreStorage, rx => rx.getTreeNode(2 * index))
+    if (node && isKey(node.hash)) return node.hash
+  } catch {
+    return null
+  }
+  return null
+}
+
+async function readBlockLocalData (rawStorage, index) {
+  try {
+    return await readOnce(rawStorage, rx => rx.getBlock(index))
+  } catch {
+    return null
+  }
+}
+
+async function probeRemoteBlock (remoteStore, index, expectedHash) {
+  try {
+    const verification = typeof remoteStore.verify === 'function'
+      ? await remoteStore.verify(index, { expectedHash })
+      : await (async () => {
+          const data = await remoteStore.get(index, { expectedHash })
+          return data ? { verified: true, byteLength: data.byteLength } : { verified: false, reason: 'missing' }
+        })()
+
+    if (verification.verified === true) {
+      return { kind: 'remote', byteLength: verification.byteLength || 0 }
+    }
+    if (verification.reason === 'corrupt') return { kind: 'unavailable', corrupt: true }
+    if (verification.reason === 'unreachable') return { kind: 'unavailable', unreachable: true }
+    return { kind: 'unavailable', missing: true }
+  } catch (error) {
+    if (error?.code === 'REMOTE_BLOCK_CORRUPT') return { kind: 'unavailable', corrupt: true }
+    return { kind: 'unavailable', unreachable: true }
+  }
+}
+
+async function assessSingleBlock (coreStorage, rawStorage, remoteStore, index, probeRemote) {
+  const expectedHash = await readBlockExpectedHash(coreStorage, index)
+  const localData = await readBlockLocalData(rawStorage, index)
+
+  if (localData !== null && localData !== undefined && localData.byteLength > 0) {
+    if (expectedHash !== null && b4a.equals(crypto.data(localData), expectedHash)) {
+      return { kind: 'resident', byteLength: localData.byteLength }
+    }
+    return { kind: 'unavailable', corrupt: true }
+  }
+  if (!expectedHash) {
+    return { kind: 'unavailable', missing: true }
+  }
+  if (!probeRemote || !remoteStore) {
+    return { kind: 'unavailable', unreachable: true }
+  }
+  return await probeRemoteBlock(remoteStore, index, expectedHash)
+}
+
+function recordBlockAssessment (result, stats, rangeStats, noteKind, index) {
+  if (result.kind === 'resident') {
+    stats.residentBlocks++
+    rangeStats.rangeResident++
+    stats.residentBytes += result.byteLength
+    noteKind('resident', index)
+    return
+  }
+  if (result.kind === 'remote') {
+    stats.remoteRetrievableBlocks++
+    rangeStats.rangeRetrievable++
+    stats.remoteRetrievableBytes += result.byteLength
+    noteKind('remote', index)
+    return
+  }
+  stats.unretrievableBlocks++
+  rangeStats.rangeUnretrievable++
+  if (result.corrupt) stats.corruptBlocks++
+  else if (result.unreachable) stats.unreachableBlocks++
+  else stats.missingBlocks++
+  noteKind('unavailable', index)
+}
+
+function createRunTracker (residentRanges, remoteRetrievableRanges, unavailableRanges, fromIndex) {
+  let runKind = null
+  let runStart = fromIndex
+
+  const finishRun = (end) => {
+    if (runKind == null || end <= runStart) return
+    if (runKind === 'resident') pushExactRange(residentRanges, runStart, end)
+    else if (runKind === 'remote') pushExactRange(remoteRetrievableRanges, runStart, end)
+    else pushExactRange(unavailableRanges, runStart, end)
+  }
+
+  const noteKind = (kind, index) => {
+    if (runKind !== kind) {
+      finishRun(index)
+      runStart = index
+      runKind = kind
+    }
+  }
+
+  return { finishRun, noteKind }
+}
+
+function computeRunEnd (aborted, truncated, nextCursor, rIdx, fromIndex, rangeAssessed, rangeEnd) {
+  if (aborted || truncated) {
+    if (nextCursor && nextCursor.rangeIndex === rIdx) {
+      return nextCursor.blockIndex
+    }
+    return fromIndex + rangeAssessed
+  }
+  return rangeEnd
+}
+
+function computeRangeStatus (rangeResident, rangeRetrievable, rangeRequested, rangeAssessed) {
+  if (rangeAssessed < rangeRequested) {
+    return (rangeResident + rangeRetrievable) > 0 ? 'partial' : 'unretrievable'
+  }
+  if (rangeResident === rangeRequested && rangeRequested > 0) {
+    return 'resident'
+  }
+  if ((rangeResident + rangeRetrievable) === rangeRequested && rangeRequested > 0) {
+    return 'retrievable'
+  }
+  if ((rangeResident + rangeRetrievable) > 0) {
+    return 'partial'
+  }
+  return 'unretrievable'
+}
+
+async function assessRangeBlocks ({
+  range,
+  fromIndex,
+  rIdx,
+  core,
+  coreStorage,
+  remoteStore,
+  probeRemote,
+  signal,
+  boundedMaxBlocks,
+  stats,
+  noteKind,
+}) {
+  const rangeStats = {
+    rangeResident: 0,
+    rangeRetrievable: 0,
+    rangeUnretrievable: 0,
+    rangeBitfield: 0,
+    rangeAssessed: 0,
+  }
+  let aborted = false
+  let truncated = false
+  let nextCursor = null
+
+  for (let index = fromIndex; index < range.end; index++) {
+    if (signal?.aborted) {
+      aborted = true
+      nextCursor = { rangeIndex: rIdx, blockIndex: index }
+      break
+    }
+    if (stats.assessedBlocks >= boundedMaxBlocks) {
+      truncated = true
+      nextCursor = { rangeIndex: rIdx, blockIndex: index }
+      break
+    }
+    stats.assessedBlocks++
+    rangeStats.rangeAssessed++
+
+    if (await checkBlockBitfield(core, index)) {
+      stats.logicalBitfieldBlocks++
+      rangeStats.rangeBitfield++
+    }
+
+    const blockResult = await assessSingleBlock(coreStorage, coreStorage, remoteStore, index, probeRemote)
+    recordBlockAssessment(blockResult, stats, rangeStats, noteKind, index)
+  }
+
+  return {
+    rangeStats,
+    aborted,
+    truncated,
+    nextCursor,
+  }
+}
+
+async function assessCoreRetrievability (options = {}) {
+  const normalized = normalizeAssessmentOptions(options)
+  const {
+    core,
+    resolvedKey,
+    keyHex,
+    coreStorage,
+    ranges,
+    signal,
+    boundedMaxBlocks,
+    startRangeIdx,
+    startBlockIdx,
+    probeRemote,
+  } = normalized
+
+  const remoteStore = await resolveRemoteAssessmentStore(
+    normalized.store,
+    normalized.resolveStore,
+    options.storage,
+    core,
+    resolvedKey,
+    keyHex
+  )
+  const assessedRanges = await resolveAssessmentTargetRanges(ranges, core, coreStorage)
+
+  let requestedBlocks = 0
+  for (const range of assessedRanges) {
+    requestedBlocks += (range.end - range.start)
+  }
+
+  const stats = {
+    assessedBlocks: 0,
+    residentBlocks: 0,
+    residentBytes: 0,
+    remoteRetrievableBlocks: 0,
+    remoteRetrievableBytes: 0,
+    unretrievableBlocks: 0,
+    missingBlocks: 0,
+    corruptBlocks: 0,
+    unreachableBlocks: 0,
+    logicalBitfieldBlocks: 0,
+  }
+
+  const rangeSummaries = []
+  const residentRanges = []
+  const remoteRetrievableRanges = []
+  const unavailableRanges = []
+  let truncated = false
+  let aborted = false
+  let nextCursor = null
+
+  for (let rIdx = startRangeIdx; rIdx < assessedRanges.length; rIdx++) {
+    const range = assessedRanges[rIdx]
+    if (signal?.aborted) {
+      aborted = true
+      break
+    }
+    const rangeRequested = range.end - range.start
+    const fromIndex = (rIdx === startRangeIdx && startBlockIdx !== null)
+      ? Math.max(range.start, Math.min(range.end, startBlockIdx))
+      : range.start
+
+    const { finishRun, noteKind } = createRunTracker(residentRanges, remoteRetrievableRanges, unavailableRanges, fromIndex)
+
+    const blockAssessResult = await assessRangeBlocks({
+      range,
+      fromIndex,
+      rIdx,
+      core,
+      coreStorage,
+      remoteStore,
+      probeRemote,
+      signal,
+      boundedMaxBlocks,
+      stats,
+      noteKind,
+    })
+
+    const { rangeStats } = blockAssessResult
+    aborted = blockAssessResult.aborted
+    truncated = blockAssessResult.truncated
+    if (blockAssessResult.nextCursor) {
+      nextCursor = blockAssessResult.nextCursor
+    }
+
+    const runEnd = computeRunEnd(aborted, truncated, nextCursor, rIdx, fromIndex, rangeStats.rangeAssessed, range.end)
+    finishRun(runEnd)
+
+    const status = computeRangeStatus(rangeStats.rangeResident, rangeStats.rangeRetrievable, rangeRequested, rangeStats.rangeAssessed)
+
+    rangeSummaries.push({
+      start: range.start,
+      end: range.end,
+      requestedBlocks: rangeRequested,
+      assessedBlocks: rangeStats.rangeAssessed,
+      residentBlocks: rangeStats.rangeResident,
+      remoteRetrievableBlocks: rangeStats.rangeRetrievable,
+      unretrievableBlocks: rangeStats.rangeUnretrievable,
+      logicalBitfieldBlocks: rangeStats.rangeBitfield,
+      truncated: rangeStats.rangeAssessed < rangeRequested,
+      status,
+    })
+
+    if (truncated || aborted) break
+  }
+
+  return finalizeRetrievabilityStatus({
+    success: true,
+    coreKey: keyHex,
+    requestedBlocks,
+    assessedBlocks: stats.assessedBlocks,
+    totalBlocks: stats.assessedBlocks,
+    residentBlocks: stats.residentBlocks,
+    residentBytes: stats.residentBytes,
+    remoteRetrievableBlocks: stats.remoteRetrievableBlocks,
+    remoteRetrievableBytes: stats.remoteRetrievableBytes,
+    unretrievableBlocks: stats.unretrievableBlocks,
+    missingBlocks: stats.missingBlocks,
+    corruptBlocks: stats.corruptBlocks,
+    unreachableBlocks: stats.unreachableBlocks,
+    logicalBitfieldBlocks: stats.logicalBitfieldBlocks,
+    ranges: rangeSummaries,
+    residentRanges,
+    remoteRetrievableRanges,
+    unavailableRanges,
+    truncated,
+    aborted,
+    nextCursor,
+  })
+}
+
+export {
+  assessCoreRetrievability,
+  accumulateRetrievabilityPages,
+  mergeExactRanges,
 }

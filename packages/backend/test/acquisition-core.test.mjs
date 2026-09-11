@@ -348,3 +348,38 @@ test('forget removes exactly one record and leaves every other job intact', asyn
   t.is(await reopened.get('ing_b'), null)
   t.ok(await reopened.get('ing_c'))
 })
+
+test('durable cancellation rejects stale coordination writes and stays absent from recovery', async t => {
+  const bee = fakeBee()
+  const store = createAcquisitionStore({ bee, now: () => NOW })
+  const assigned = await store.saveCoordination('acq_cancel_race', {
+    schemaVersion: 1,
+    role: 'requester',
+    phase: 'assigned',
+    requestId: '1'.repeat(64),
+    assignmentId: '2'.repeat(64),
+    peerId: '3'.repeat(64),
+    requesterId: '4'.repeat(64),
+    acquirerId: '5'.repeat(64),
+    publisherId: '6'.repeat(64),
+    publicationIntentDigest: '7'.repeat(64),
+    sourceRef: REF,
+    budget: { maxSourceBytes: 8, maxOutputBytes: 8, maxNetworkBytes: 1024, maxWallClockMs: 60_000 },
+    resultHoldUntil: NOW + 120_000,
+    epoch: 1,
+    deadline: NOW + 60_000
+  })
+  const staleProgress = await store.getCoordinationByAssignment(assigned.assignmentId)
+  const cancelled = await store.saveCoordination(assigned.acquisitionId, { ...assigned, phase: 'cancelled' })
+  await t.exception(
+    store.saveCoordination(assigned.acquisitionId, { ...staleProgress, phase: 'acquiring' }),
+    { code: 'COORDINATION_TERMINAL' }
+  )
+  await t.exception(
+    store.saveCoordination(assigned.acquisitionId, { ...staleProgress, phase: 'result-ready' }),
+    { code: 'COORDINATION_TERMINAL' }
+  )
+  const reopened = createAcquisitionStore({ bee, now: () => NOW + 1 })
+  t.alike(await reopened.getCoordinationByAssignment(assigned.assignmentId), cancelled, 'late callbacks cannot replace durable cancellation')
+  t.alike(await reopened.listActiveCoordinations(), [], 'restart cannot re-arm the cancelled assignment')
+})

@@ -249,49 +249,175 @@ function readConfigFile(configPath) {
   return parseSimpleConfig(content)
 }
 
+function storageFromEnv(env) {
+  if (!env.PEARTUBE_STORAGE_PATH && !env.PEARTUBE_STORAGE_MAX_BYTES && !env.PEARTUBE_STORAGE_MIN_FREE_BYTES) {
+    return null
+  }
+  const storage = {}
+  if (env.PEARTUBE_STORAGE_PATH) storage.path = env.PEARTUBE_STORAGE_PATH
+  if (env.PEARTUBE_STORAGE_MAX_BYTES) storage.maxBytes = Number(env.PEARTUBE_STORAGE_MAX_BYTES)
+  if (env.PEARTUBE_STORAGE_MIN_FREE_BYTES) storage.minFreeBytes = Number(env.PEARTUBE_STORAGE_MIN_FREE_BYTES)
+  return storage
+}
+
+function admissionFromEnv(env) {
+  if (!env.PEARTUBE_ADMISSION_CHANNELS && !env.PEARTUBE_ADMISSION_OWNERS) return null
+  const admission = {}
+  if (env.PEARTUBE_ADMISSION_CHANNELS) admission.channels = splitCommaList(env.PEARTUBE_ADMISSION_CHANNELS)
+  if (env.PEARTUBE_ADMISSION_OWNERS) admission.owners = splitCommaList(env.PEARTUBE_ADMISSION_OWNERS)
+  return admission
+}
+
+function discoveryFromEnv(env) {
+  if (!env.PEARTUBE_DISCOVERY_ENABLED && !env.PEARTUBE_DISCOVERY_SEED_DISCOVERED &&
+      !env.PEARTUBE_DISCOVERY_MAX_CHANNELS && !env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER) {
+    return null
+  }
+  const discovery = {}
+  if (env.PEARTUBE_DISCOVERY_ENABLED) discovery.enabled = parseBoolean(env.PEARTUBE_DISCOVERY_ENABLED)
+  if (env.PEARTUBE_DISCOVERY_SEED_DISCOVERED) discovery.seedDiscovered = parseBoolean(env.PEARTUBE_DISCOVERY_SEED_DISCOVERED)
+  if (env.PEARTUBE_DISCOVERY_MAX_CHANNELS) discovery.maxChannels = Number(env.PEARTUBE_DISCOVERY_MAX_CHANNELS)
+  if (env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER) {
+    discovery.maxChannelsPerOwner = Number(env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER)
+  }
+  return discovery
+}
+
+function networkFromEnv(env) {
+  if (!env.PEARTUBE_NETWORK_ANNOUNCE && !env.PEARTUBE_NETWORK_BOOTSTRAP && !env.PEARTUBE_NETWORK_PEER_ADDRESSES) return null
+  const network = {}
+  if (env.PEARTUBE_NETWORK_ANNOUNCE) network.announce = parseBoolean(env.PEARTUBE_NETWORK_ANNOUNCE)
+  if (env.PEARTUBE_NETWORK_BOOTSTRAP) network.bootstrap = env.PEARTUBE_NETWORK_BOOTSTRAP
+  if (env.PEARTUBE_NETWORK_PEER_ADDRESSES) network.peerAddresses = JSON.parse(env.PEARTUBE_NETWORK_PEER_ADDRESSES)
+  return network
+}
+
+function retentionFromEnv(env) {
+  if (!env.PEARTUBE_RETENTION_PROTECT_PRIVATE && !env.PEARTUBE_RETENTION_PROTECT_ALLOWLIST) return null
+  const retention = {}
+  if (env.PEARTUBE_RETENTION_PROTECT_PRIVATE) {
+    retention.protectPrivate = parseBoolean(env.PEARTUBE_RETENTION_PROTECT_PRIVATE)
+  }
+  if (env.PEARTUBE_RETENTION_PROTECT_ALLOWLIST) {
+    retention.protectAllowlist = parseBoolean(env.PEARTUBE_RETENTION_PROTECT_ALLOWLIST)
+  }
+  return retention
+}
+
+function classificationFromEnv(env) {
+  if (!env.PEARTUBE_TMDB_API_KEY && !env.PEARTUBE_TMDB_ENABLED &&
+      !env.PEARTUBE_TMDB_LANGUAGE && !env.PEARTUBE_TMDB_BASE_URL) {
+    return null
+  }
+  const tmdb = {}
+  if (env.PEARTUBE_TMDB_API_KEY) tmdb.apiKey = env.PEARTUBE_TMDB_API_KEY
+  if (env.PEARTUBE_TMDB_ENABLED) {
+    const parsed = parseBoolean(env.PEARTUBE_TMDB_ENABLED)
+    if (parsed !== undefined) tmdb.enabled = parsed
+  }
+  if (env.PEARTUBE_TMDB_LANGUAGE) tmdb.language = env.PEARTUBE_TMDB_LANGUAGE
+  if (env.PEARTUBE_TMDB_BASE_URL) tmdb.baseUrl = env.PEARTUBE_TMDB_BASE_URL
+  return { tmdb }
+}
+
+function archiveS3FromEnv(env) {
+  if (!env.PEARTUBE_ARCHIVE_S3_ENDPOINT && !env.PEARTUBE_ARCHIVE_S3_BUCKET &&
+      !env.PEARTUBE_ARCHIVE_S3_REGION && !env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID &&
+      !env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY && !env.PEARTUBE_ARCHIVE_S3_PREFIX &&
+      !env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE && !env.PEARTUBE_ARCHIVE_S3_OFFLOAD &&
+      !env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES) {
+    return null
+  }
+  const s3 = {}
+  if (env.PEARTUBE_ARCHIVE_S3_ENDPOINT) s3.endpoint = env.PEARTUBE_ARCHIVE_S3_ENDPOINT
+  if (env.PEARTUBE_ARCHIVE_S3_BUCKET) s3.bucket = env.PEARTUBE_ARCHIVE_S3_BUCKET
+  if (env.PEARTUBE_ARCHIVE_S3_REGION) s3.region = env.PEARTUBE_ARCHIVE_S3_REGION
+  if (env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID) s3.accessKeyId = env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID
+  if (env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY) s3.secretAccessKey = env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY
+  if (env.PEARTUBE_ARCHIVE_S3_PREFIX) s3.prefix = env.PEARTUBE_ARCHIVE_S3_PREFIX
+  if (env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE) s3.forcePathStyle = parseBoolean(env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE)
+  if (env.PEARTUBE_ARCHIVE_S3_OFFLOAD) s3.offload = parseBoolean(env.PEARTUBE_ARCHIVE_S3_OFFLOAD)
+  if (env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES) s3.offloadWindowBytes = Number(env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES)
+  return s3
+}
+
+function archiveLocalMirrorFromEnv(env) {
+  if (!env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_ENABLED && !env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_PATH &&
+      !env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_POLL && !env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_CHANNEL_NAME &&
+      !env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION && !env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE &&
+      !env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES) {
+    return null
+  }
+  const localMirror = {}
+  if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_ENABLED) localMirror.enabled = parseBoolean(env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_ENABLED)
+  if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_PATH) localMirror.path = env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_PATH
+  if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_POLL) localMirror.poll = Number(env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_POLL)
+  if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_CHANNEL_NAME) localMirror.channelName = env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_CHANNEL_NAME
+  if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION) localMirror.description = env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION
+  if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE) localMirror.recursive = parseBoolean(env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE)
+  if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES) localMirror.maxFiles = Number(env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES)
+  return localMirror
+}
+
+function archiveTorboxFromEnv(env) {
+  if (!env.PEARTUBE_TORBOX_API_KEY && !env.PEARTUBE_TORBOX_CHUNK_BYTES) return null
+  const torbox = {}
+  if (env.PEARTUBE_TORBOX_API_KEY) torbox.apiKey = env.PEARTUBE_TORBOX_API_KEY
+  if (env.PEARTUBE_TORBOX_CHUNK_BYTES) torbox.chunkBytes = Number(env.PEARTUBE_TORBOX_CHUNK_BYTES)
+  return torbox
+}
+
+function archiveFromEnv(env) {
+  const archive = {}
+  if (env.PEARTUBE_ARCHIVE_UI_ENABLED) archive.uiEnabled = parseBoolean(env.PEARTUBE_ARCHIVE_UI_ENABLED)
+  if (env.PEARTUBE_ARCHIVE_UI_HOST) archive.uiHost = env.PEARTUBE_ARCHIVE_UI_HOST
+  if (env.PEARTUBE_ARCHIVE_UI_PORT) archive.uiPort = Number(env.PEARTUBE_ARCHIVE_UI_PORT)
+  if (env.PEARTUBE_ARCHIVE_TMP_PATH) archive.tmpPath = env.PEARTUBE_ARCHIVE_TMP_PATH
+  if (env.PEARTUBE_ARCHIVE_ENABLED) {
+    const parsed = parseBoolean(env.PEARTUBE_ARCHIVE_ENABLED)
+    if (parsed !== undefined) archive.enabled = parsed
+  }
+  if (env.PEARTUBE_ARCHIVE_POLL) archive.poll = Number(env.PEARTUBE_ARCHIVE_POLL)
+  if (env.PEARTUBE_ARCHIVE_FORMAT) archive.format = env.PEARTUBE_ARCHIVE_FORMAT
+  if (env.PEARTUBE_ARCHIVE_YT_DLP_PATH) archive.ytDlpPath = env.PEARTUBE_ARCHIVE_YT_DLP_PATH
+  if (env.PEARTUBE_ARCHIVE_FFMPEG_PATH) archive.ffmpegPath = env.PEARTUBE_ARCHIVE_FFMPEG_PATH
+  if (env.PEARTUBE_ARCHIVE_COOKIES_PATH) archive.cookiesPath = env.PEARTUBE_ARCHIVE_COOKIES_PATH
+  if (env.PEARTUBE_ARCHIVE_JS_RUNTIME) archive.jsRuntime = env.PEARTUBE_ARCHIVE_JS_RUNTIME
+  if (env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS) archive.ytDlpExtraArgs = splitShellArgs(env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS)
+  if (env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS) {
+    archive.ytDlpRetryExtraArgs = String(env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS)
+      .split(/\s*\|\|\s*/)
+      .map(splitShellArgs)
+      .filter((args) => args.length)
+  }
+  if (env.PEARTUBE_ARCHIVE_SOURCES) {
+    archive.sources = splitCommaList(env.PEARTUBE_ARCHIVE_SOURCES).map((url) => ({ url }))
+  }
+  const s3 = archiveS3FromEnv(env)
+  if (s3) archive.s3 = s3
+  const localMirror = archiveLocalMirrorFromEnv(env)
+  if (localMirror) archive.localMirror = localMirror
+  const torbox = archiveTorboxFromEnv(env)
+  if (torbox) archive.torbox = torbox
+
+  return Object.keys(archive).length ? archive : null
+}
+
 function configFromEnv(env = {}) {
   const config = {}
 
   if (env.PEARTUBE_MODE) config.mode = env.PEARTUBE_MODE
   if (env.PEARTUBE_POLICY) config.policy = env.PEARTUBE_POLICY
-  if (env.PEARTUBE_STORAGE_PATH || env.PEARTUBE_STORAGE_MAX_BYTES || env.PEARTUBE_STORAGE_MIN_FREE_BYTES) {
-    config.storage = {}
-    if (env.PEARTUBE_STORAGE_PATH) config.storage.path = env.PEARTUBE_STORAGE_PATH
-    if (env.PEARTUBE_STORAGE_MAX_BYTES) config.storage.maxBytes = Number(env.PEARTUBE_STORAGE_MAX_BYTES)
-    if (env.PEARTUBE_STORAGE_MIN_FREE_BYTES) config.storage.minFreeBytes = Number(env.PEARTUBE_STORAGE_MIN_FREE_BYTES)
-  }
-  if (env.PEARTUBE_ADMISSION_CHANNELS || env.PEARTUBE_ADMISSION_OWNERS) {
-    config.admission = {}
-    if (env.PEARTUBE_ADMISSION_CHANNELS) config.admission.channels = splitCommaList(env.PEARTUBE_ADMISSION_CHANNELS)
-    if (env.PEARTUBE_ADMISSION_OWNERS) config.admission.owners = splitCommaList(env.PEARTUBE_ADMISSION_OWNERS)
-  }
-  if (env.PEARTUBE_DISCOVERY_ENABLED || env.PEARTUBE_DISCOVERY_SEED_DISCOVERED || env.PEARTUBE_DISCOVERY_MAX_CHANNELS || env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER) {
-    config.discovery = {}
-    if (env.PEARTUBE_DISCOVERY_ENABLED) config.discovery.enabled = parseBoolean(env.PEARTUBE_DISCOVERY_ENABLED)
-    if (env.PEARTUBE_DISCOVERY_SEED_DISCOVERED) config.discovery.seedDiscovered = parseBoolean(env.PEARTUBE_DISCOVERY_SEED_DISCOVERED)
-    if (env.PEARTUBE_DISCOVERY_MAX_CHANNELS) config.discovery.maxChannels = Number(env.PEARTUBE_DISCOVERY_MAX_CHANNELS)
-    if (env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER) {
-      config.discovery.maxChannelsPerOwner = Number(env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER)
-    }
-  }
-  if (env.PEARTUBE_NETWORK_ANNOUNCE || env.PEARTUBE_NETWORK_BOOTSTRAP) {
-    config.network = {}
-    if (env.PEARTUBE_NETWORK_ANNOUNCE) config.network.announce = parseBoolean(env.PEARTUBE_NETWORK_ANNOUNCE)
-    if (env.PEARTUBE_NETWORK_BOOTSTRAP) config.network.bootstrap = env.PEARTUBE_NETWORK_BOOTSTRAP
-  }
-  if (env.PEARTUBE_NETWORK_PEER_ADDRESSES) {
-    config.network ||= {}
-    config.network.peerAddresses = JSON.parse(env.PEARTUBE_NETWORK_PEER_ADDRESSES)
-  }
-  if (env.PEARTUBE_RETENTION_PROTECT_PRIVATE || env.PEARTUBE_RETENTION_PROTECT_ALLOWLIST) {
-    config.retention = {}
-    if (env.PEARTUBE_RETENTION_PROTECT_PRIVATE) {
-      config.retention.protectPrivate = parseBoolean(env.PEARTUBE_RETENTION_PROTECT_PRIVATE)
-    }
-    if (env.PEARTUBE_RETENTION_PROTECT_ALLOWLIST) {
-      config.retention.protectAllowlist = parseBoolean(env.PEARTUBE_RETENTION_PROTECT_ALLOWLIST)
-    }
-  }
+  const storage = storageFromEnv(env)
+  if (storage) config.storage = storage
+  const admission = admissionFromEnv(env)
+  if (admission) config.admission = admission
+  const discovery = discoveryFromEnv(env)
+  if (discovery) config.discovery = discovery
+  const network = networkFromEnv(env)
+  if (network) config.network = network
+  const retention = retentionFromEnv(env)
+  if (retention) config.retention = retention
   if (env.PEARTUBE_LOG_LEVEL) {
     config.logging = { level: env.PEARTUBE_LOG_LEVEL }
   }
@@ -299,148 +425,61 @@ function configFromEnv(env = {}) {
     const parsed = parseBoolean(env.PEARTUBE_RESEED_ENABLED)
     if (parsed !== undefined) config.reseed = { enabled: parsed }
   }
-  if (
-    env.PEARTUBE_TMDB_API_KEY ||
-    env.PEARTUBE_TMDB_ENABLED ||
-    env.PEARTUBE_TMDB_LANGUAGE ||
-    env.PEARTUBE_TMDB_BASE_URL
-  ) {
-    config.classification = { tmdb: {} }
-    if (env.PEARTUBE_TMDB_API_KEY) config.classification.tmdb.apiKey = env.PEARTUBE_TMDB_API_KEY
-    if (env.PEARTUBE_TMDB_ENABLED) {
-      const parsed = parseBoolean(env.PEARTUBE_TMDB_ENABLED)
-      if (parsed !== undefined) config.classification.tmdb.enabled = parsed
-    }
-    if (env.PEARTUBE_TMDB_LANGUAGE) config.classification.tmdb.language = env.PEARTUBE_TMDB_LANGUAGE
-    if (env.PEARTUBE_TMDB_BASE_URL) config.classification.tmdb.baseUrl = env.PEARTUBE_TMDB_BASE_URL
-  }
-  if (
-    env.PEARTUBE_ARCHIVE_UI_ENABLED ||
-    env.PEARTUBE_ARCHIVE_UI_HOST ||
-    env.PEARTUBE_ARCHIVE_UI_PORT ||
-    env.PEARTUBE_ARCHIVE_TMP_PATH ||
-    env.PEARTUBE_ARCHIVE_ENABLED ||
-    env.PEARTUBE_ARCHIVE_POLL ||
-    env.PEARTUBE_ARCHIVE_FORMAT ||
-    env.PEARTUBE_ARCHIVE_YT_DLP_PATH ||
-    env.PEARTUBE_ARCHIVE_FFMPEG_PATH ||
-    env.PEARTUBE_ARCHIVE_COOKIES_PATH ||
-    env.PEARTUBE_ARCHIVE_JS_RUNTIME ||
-    env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS ||
-    env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS ||
-    env.PEARTUBE_ARCHIVE_SOURCES ||
-    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_ENABLED ||
-    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_PATH ||
-    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_POLL ||
-    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_CHANNEL_NAME ||
-    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION ||
-    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE ||
-    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES ||
-    env.PEARTUBE_ARCHIVE_S3_ENDPOINT ||
-    env.PEARTUBE_ARCHIVE_S3_BUCKET ||
-    env.PEARTUBE_ARCHIVE_S3_REGION ||
-    env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID ||
-    env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY ||
-    env.PEARTUBE_ARCHIVE_S3_PREFIX ||
-    env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE ||
-    env.PEARTUBE_ARCHIVE_S3_OFFLOAD ||
-    env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES ||
-    env.PEARTUBE_TORBOX_API_KEY ||
-    env.PEARTUBE_TORBOX_CHUNK_BYTES
-  ) {
-    config.archive = {}
-    if (env.PEARTUBE_ARCHIVE_UI_ENABLED) config.archive.uiEnabled = parseBoolean(env.PEARTUBE_ARCHIVE_UI_ENABLED)
-    if (env.PEARTUBE_ARCHIVE_UI_HOST) config.archive.uiHost = env.PEARTUBE_ARCHIVE_UI_HOST
-    if (env.PEARTUBE_ARCHIVE_UI_PORT) config.archive.uiPort = Number(env.PEARTUBE_ARCHIVE_UI_PORT)
-    if (env.PEARTUBE_ARCHIVE_TMP_PATH) config.archive.tmpPath = env.PEARTUBE_ARCHIVE_TMP_PATH
-    if (env.PEARTUBE_ARCHIVE_ENABLED) {
-      const parsed = parseBoolean(env.PEARTUBE_ARCHIVE_ENABLED)
-      if (parsed !== undefined) config.archive.enabled = parsed
-    }
-    if (env.PEARTUBE_ARCHIVE_POLL) config.archive.poll = Number(env.PEARTUBE_ARCHIVE_POLL)
-    if (env.PEARTUBE_ARCHIVE_FORMAT) config.archive.format = env.PEARTUBE_ARCHIVE_FORMAT
-    if (env.PEARTUBE_ARCHIVE_YT_DLP_PATH) config.archive.ytDlpPath = env.PEARTUBE_ARCHIVE_YT_DLP_PATH
-    if (env.PEARTUBE_ARCHIVE_FFMPEG_PATH) config.archive.ffmpegPath = env.PEARTUBE_ARCHIVE_FFMPEG_PATH
-    if (env.PEARTUBE_ARCHIVE_COOKIES_PATH) config.archive.cookiesPath = env.PEARTUBE_ARCHIVE_COOKIES_PATH
-    if (env.PEARTUBE_ARCHIVE_JS_RUNTIME) config.archive.jsRuntime = env.PEARTUBE_ARCHIVE_JS_RUNTIME
-    if (env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS) config.archive.ytDlpExtraArgs = splitShellArgs(env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS)
-    if (
-      env.PEARTUBE_ARCHIVE_S3_ENDPOINT ||
-      env.PEARTUBE_ARCHIVE_S3_BUCKET ||
-      env.PEARTUBE_ARCHIVE_S3_REGION ||
-      env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID ||
-      env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY ||
-      env.PEARTUBE_ARCHIVE_S3_PREFIX ||
-      env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE ||
-      env.PEARTUBE_ARCHIVE_S3_OFFLOAD ||
-      env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES
-    ) {
-      config.archive.s3 = {}
-      if (env.PEARTUBE_ARCHIVE_S3_ENDPOINT) config.archive.s3.endpoint = env.PEARTUBE_ARCHIVE_S3_ENDPOINT
-      if (env.PEARTUBE_ARCHIVE_S3_BUCKET) config.archive.s3.bucket = env.PEARTUBE_ARCHIVE_S3_BUCKET
-      if (env.PEARTUBE_ARCHIVE_S3_REGION) config.archive.s3.region = env.PEARTUBE_ARCHIVE_S3_REGION
-      if (env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID) config.archive.s3.accessKeyId = env.PEARTUBE_ARCHIVE_S3_ACCESS_KEY_ID
-      if (env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY) config.archive.s3.secretAccessKey = env.PEARTUBE_ARCHIVE_S3_SECRET_ACCESS_KEY
-      if (env.PEARTUBE_ARCHIVE_S3_PREFIX) config.archive.s3.prefix = env.PEARTUBE_ARCHIVE_S3_PREFIX
-      if (env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE) config.archive.s3.forcePathStyle = parseBoolean(env.PEARTUBE_ARCHIVE_S3_FORCE_PATH_STYLE)
-      if (env.PEARTUBE_ARCHIVE_S3_OFFLOAD) config.archive.s3.offload = parseBoolean(env.PEARTUBE_ARCHIVE_S3_OFFLOAD)
-      if (env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES) config.archive.s3.offloadWindowBytes = Number(env.PEARTUBE_ARCHIVE_S3_OFFLOAD_WINDOW_BYTES)
-    }
-    if (env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS) {
-      config.archive.ytDlpRetryExtraArgs = String(env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS)
-        .split(/\s*\|\|\s*/)
-        .map(splitShellArgs)
-        .filter((args) => args.length)
-    }
-    if (env.PEARTUBE_ARCHIVE_SOURCES) {
-      config.archive.sources = splitCommaList(env.PEARTUBE_ARCHIVE_SOURCES).map((url) => ({ url }))
-    }
-    if (
-      env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_ENABLED ||
-      env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_PATH ||
-      env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_POLL ||
-      env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_CHANNEL_NAME ||
-      env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION ||
-      env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE ||
-      env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES
-    ) {
-      config.archive.localMirror = {}
-      if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_ENABLED) config.archive.localMirror.enabled = parseBoolean(env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_ENABLED)
-      if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_PATH) config.archive.localMirror.path = env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_PATH
-      if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_POLL) config.archive.localMirror.poll = Number(env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_POLL)
-      if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_CHANNEL_NAME) config.archive.localMirror.channelName = env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_CHANNEL_NAME
-      if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION) config.archive.localMirror.description = env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION
-      if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE) config.archive.localMirror.recursive = parseBoolean(env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE)
-      if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES) config.archive.localMirror.maxFiles = Number(env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES)
-    }
-    if (
-      env.PEARTUBE_TORBOX_API_KEY ||
-      env.PEARTUBE_TORBOX_CHUNK_BYTES
-    ) {
-      config.archive.torbox = {}
-      if (env.PEARTUBE_TORBOX_API_KEY) config.archive.torbox.apiKey = env.PEARTUBE_TORBOX_API_KEY
-      if (env.PEARTUBE_TORBOX_CHUNK_BYTES) config.archive.torbox.chunkBytes = Number(env.PEARTUBE_TORBOX_CHUNK_BYTES)
-    }
-  }
+  const classification = classificationFromEnv(env)
+  if (classification) config.classification = classification
+  const archive = archiveFromEnv(env)
+  if (archive) config.archive = archive
 
   Object.assign(config, companionConfigFromEnv(env))
 
   return config
 }
 
+function storageFromCli(cli) {
+  if (!cli.storage && cli.maxBytes === undefined && cli.maxStorage === undefined && cli.minFreeBytes === undefined) {
+    return null
+  }
+  const storage = {}
+  if (cli.storage) storage.path = cli.storage
+  if (cli.maxBytes !== undefined) storage.maxBytes = Number(cli.maxBytes)
+  if (cli.maxStorage !== undefined) storage.maxBytes = Number(cli.maxStorage) * 1024 * 1024
+  if (cli.minFreeBytes !== undefined) storage.minFreeBytes = Number(cli.minFreeBytes)
+  return storage
+}
+
+function archiveFromCli(cli) {
+  let archive = null
+  if (cli.archive) archive = { ...cli.archive }
+
+  if (cli.host || cli.port) {
+    archive = archive || {}
+    if (cli.host) archive.uiHost = cli.host
+    if (cli.port) archive.uiPort = Number(cli.port)
+  }
+
+  if (cli.localMirrorPath || cli.localMirrorPoll || cli.localMirrorChannelName) {
+    archive = archive || {}
+    archive.localMirror = archive.localMirror || {}
+    if (cli.localMirrorPath) {
+      archive.localMirror.enabled = true
+      archive.localMirror.path = cli.localMirrorPath
+    }
+    if (cli.localMirrorPoll) archive.localMirror.poll = Number(cli.localMirrorPoll)
+    if (cli.localMirrorChannelName) archive.localMirror.channelName = cli.localMirrorChannelName
+  }
+  return archive
+}
+
 function configFromCli(cli = {}) {
   const config = {}
 
-  if (cli.archive) config.archive = { ...cli.archive }
+  const archive = archiveFromCli(cli)
+  if (archive) config.archive = archive
   if (cli.mode) config.mode = cli.mode
   if (cli.policy) config.policy = cli.policy
-  if (cli.storage || cli.maxBytes !== undefined || cli.maxStorage !== undefined || cli.minFreeBytes !== undefined) {
-    config.storage = {}
-    if (cli.storage) config.storage.path = cli.storage
-    if (cli.maxBytes !== undefined) config.storage.maxBytes = Number(cli.maxBytes)
-    if (cli.maxStorage !== undefined) config.storage.maxBytes = Number(cli.maxStorage) * 1024 * 1024
-    if (cli.minFreeBytes !== undefined) config.storage.minFreeBytes = Number(cli.minFreeBytes)
-  }
+
+  const storage = storageFromCli(cli)
+  if (storage) config.storage = storage
 
   if (cli.channel || cli.owner) {
     config.admission = {}
@@ -454,27 +493,8 @@ function configFromCli(cli = {}) {
     config.logging = { level: cli.logLevel }
   }
 
-  // Bare flag, and only ever turns re-seeding OFF: its absence must not
-  // overwrite an operator's config file the way a tri-state value would.
   if (cli.noReseed) {
     config.reseed = { enabled: false }
-  }
-
-  if (cli.host || cli.port) {
-    config.archive = config.archive || {}
-    if (cli.host) config.archive.uiHost = cli.host
-    if (cli.port) config.archive.uiPort = Number(cli.port)
-  }
-
-  if (cli.localMirrorPath || cli.localMirrorPoll || cli.localMirrorChannelName) {
-    config.archive = config.archive || {}
-    config.archive.localMirror = config.archive.localMirror || {}
-    if (cli.localMirrorPath) {
-      config.archive.localMirror.enabled = true
-      config.archive.localMirror.path = cli.localMirrorPath
-    }
-    if (cli.localMirrorPoll) config.archive.localMirror.poll = Number(cli.localMirrorPoll)
-    if (cli.localMirrorChannelName) config.archive.localMirror.channelName = cli.localMirrorChannelName
   }
 
   Object.assign(config, companionConfigFromCli(cli))
@@ -567,20 +587,7 @@ function resolveArchiveS3Config(rawS3) {
 }
 
 
-function resolveArchiveConfig(rawArchive, { storagePath }) {
-  const merged = deepMerge(DEFAULT_ARCHIVE_CONFIG, isPlainObject(rawArchive) ? rawArchive : {})
-
-  merged.enabled = Boolean(merged.enabled)
-
-  merged.poll = Number(merged.poll)
-  if (!Number.isFinite(merged.poll) || merged.poll <= 0) {
-    merged.poll = DEFAULT_ARCHIVE_POLL_SECONDS
-  }
-
-  merged.format = typeof merged.format === 'string' && merged.format.trim()
-    ? merged.format.trim()
-    : DEFAULT_ARCHIVE_FORMAT
-
+function resolveArchiveTooling(merged) {
   merged.ytDlpPath = typeof merged.ytDlpPath === 'string' && merged.ytDlpPath.trim()
     ? merged.ytDlpPath.trim()
     : DEFAULT_ARCHIVE_YT_DLP_PATH
@@ -613,6 +620,66 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
   if (!merged.ytDlpRetryExtraArgs.length) {
     merged.ytDlpRetryExtraArgs = DEFAULT_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS.map((entry) => [...entry])
   }
+}
+
+function resolveArchiveSources(rawSources, sourceDefaults, enabled) {
+  const sources = Array.isArray(rawSources) ? rawSources : []
+  const seenSourceIds = new Set()
+  const resolved = sources.map((entry) => {
+    const normalized = normalizeSource(entry, sourceDefaults)
+    if (seenSourceIds.has(normalized.sourceId)) {
+      throw new Error(`Duplicate archive source: ${normalized.sourceId}`)
+    }
+    seenSourceIds.add(normalized.sourceId)
+    return normalized
+  })
+
+  if (enabled && resolved.length === 0) {
+    throw new Error('archive.enabled is true but archive.sources is empty')
+  }
+  return resolved
+}
+
+function resolveLocalMirrorConfig(rawLocalMirror) {
+  const localMirror = isPlainObject(rawLocalMirror) ? rawLocalMirror : {}
+  const resolved = {
+    enabled: Boolean(localMirror.enabled),
+    path: typeof localMirror.path === 'string' && localMirror.path.trim() ? localMirror.path.trim() : null,
+    poll: Number(localMirror.poll),
+    channelName: typeof localMirror.channelName === 'string' && localMirror.channelName.trim()
+      ? localMirror.channelName.trim()
+      : 'Local Drive Mirror',
+    description: typeof localMirror.description === 'string' ? localMirror.description : '',
+    recursive: localMirror.recursive !== false,
+    maxFiles: Number(localMirror.maxFiles)
+  }
+  if (!Number.isFinite(resolved.poll) || resolved.poll <= 0) {
+    resolved.poll = DEFAULT_LOCAL_MIRROR_POLL_SECONDS
+  }
+  if (!Number.isFinite(resolved.maxFiles) || resolved.maxFiles <= 0) {
+    resolved.maxFiles = DEFAULT_ARCHIVE_MAX_ITEMS
+  }
+  if (resolved.enabled && !resolved.path) {
+    throw new Error('archive.localMirror.enabled is true but archive.localMirror.path is empty')
+  }
+  return resolved
+}
+
+function resolveArchiveConfig(rawArchive, { storagePath }) {
+  const merged = deepMerge(DEFAULT_ARCHIVE_CONFIG, isPlainObject(rawArchive) ? rawArchive : {})
+
+  merged.enabled = Boolean(merged.enabled)
+
+  merged.poll = Number(merged.poll)
+  if (!Number.isFinite(merged.poll) || merged.poll <= 0) {
+    merged.poll = DEFAULT_ARCHIVE_POLL_SECONDS
+  }
+
+  merged.format = typeof merged.format === 'string' && merged.format.trim()
+    ? merged.format.trim()
+    : DEFAULT_ARCHIVE_FORMAT
+
+  resolveArchiveTooling(merged)
 
   merged.maxRetries = Number(merged.maxRetries)
   if (!Number.isFinite(merged.maxRetries) || merged.maxRetries < 0) {
@@ -652,42 +719,9 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
     maxItems: merged.maxItems
   }
 
-  const sources = Array.isArray(merged.sources) ? merged.sources : []
-  const seenSourceIds = new Set()
-  merged.sources = sources.map((entry) => {
-    const normalized = normalizeSource(entry, sourceDefaults)
-    if (seenSourceIds.has(normalized.sourceId)) {
-      throw new Error(`Duplicate archive source: ${normalized.sourceId}`)
-    }
-    seenSourceIds.add(normalized.sourceId)
-    return normalized
-  })
+  merged.sources = resolveArchiveSources(merged.sources, sourceDefaults, merged.enabled)
+  merged.localMirror = resolveLocalMirrorConfig(merged.localMirror)
 
-  if (merged.enabled && merged.sources.length === 0) {
-    throw new Error('archive.enabled is true but archive.sources is empty')
-  }
-
-  const localMirror = isPlainObject(merged.localMirror) ? merged.localMirror : {}
-  merged.localMirror = {
-    enabled: Boolean(localMirror.enabled),
-    path: typeof localMirror.path === 'string' && localMirror.path.trim() ? localMirror.path.trim() : null,
-    poll: Number(localMirror.poll),
-    channelName: typeof localMirror.channelName === 'string' && localMirror.channelName.trim()
-      ? localMirror.channelName.trim()
-      : 'Local Drive Mirror',
-    description: typeof localMirror.description === 'string' ? localMirror.description : '',
-    recursive: localMirror.recursive !== false,
-    maxFiles: Number(localMirror.maxFiles)
-  }
-  if (!Number.isFinite(merged.localMirror.poll) || merged.localMirror.poll <= 0) {
-    merged.localMirror.poll = DEFAULT_LOCAL_MIRROR_POLL_SECONDS
-  }
-  if (!Number.isFinite(merged.localMirror.maxFiles) || merged.localMirror.maxFiles <= 0) {
-    merged.localMirror.maxFiles = DEFAULT_ARCHIVE_MAX_ITEMS
-  }
-  if (merged.localMirror.enabled && !merged.localMirror.path) {
-    throw new Error('archive.localMirror.enabled is true but archive.localMirror.path is empty')
-  }
   // How often this relay challenges the archivists holding its content, and
   // how long it waits for a proof. Left unset the backend picks its own
   // defaults; an operator who wants custody confirmed sooner than every five
@@ -764,12 +798,7 @@ function resolveSeedPinConfig(rawSeedPin) {
   }
 }
 
-export function resolveRelayConfig(input = {}, { env = process.env || {} } = {}) {
-  const requestedMode = input.mode
-  const requestedPolicy = input.policy
-  let config = deepMerge(clone(DEFAULT_RELAY_CONFIG), configFromEnv(env))
-  config = deepMerge(config, input)
-
+function resolveRelayModeAndPolicy(config, requestedMode, requestedPolicy) {
   config.mode = config.mode || RELAY_MODE_PUBLIC
   if (config.mode === RELAY_MODE_PRIVATE && requestedMode === RELAY_MODE_PRIVATE && requestedPolicy === undefined) {
     config.policy = RELAY_POLICY_ALLOWLIST
@@ -788,7 +817,9 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
   if (config.mode === RELAY_MODE_PRIVATE && config.policy !== RELAY_POLICY_ALLOWLIST) {
     throw new Error('private mode only supports allowlist policy')
   }
+}
 
+function resolveRelayStorageAndAdmission(config) {
   config.storage = deepMerge(DEFAULT_RELAY_CONFIG.storage, config.storage || {})
   config.storage.maxBytes = Number(config.storage.maxBytes)
   if (!Number.isFinite(config.storage.maxBytes) || config.storage.maxBytes <= 0) {
@@ -802,7 +833,9 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
   config.admission = deepMerge(DEFAULT_RELAY_CONFIG.admission, config.admission || {})
   config.admission.channels = splitCommaList(config.admission.channels)
   config.admission.owners = splitCommaList(config.admission.owners)
+}
 
+function resolveRelayDiscovery(config) {
   config.discovery = deepMerge(DEFAULT_RELAY_CONFIG.discovery, config.discovery || {})
   config.discovery.enabled = config.mode === RELAY_MODE_PUBLIC && config.policy === RELAY_POLICY_DISCOVERY
     ? config.discovery.enabled !== false
@@ -818,11 +851,9 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
   if (!Number.isFinite(config.discovery.maxChannelsPerOwner) || config.discovery.maxChannelsPerOwner < 0) {
     throw new Error('discovery.maxChannelsPerOwner must be a non-negative number')
   }
+}
 
-  config.seedPin = resolveSeedPinConfig(config.seedPin)
-
-  config.network = deepMerge(DEFAULT_RELAY_CONFIG.network, config.network || {})
-  config.logging = deepMerge(DEFAULT_RELAY_CONFIG.logging, config.logging || {})
+function resolveRelayCompanion(input, env, config) {
   const explicitCompanionPort = Boolean(
     input?.companion?.hasExplicitPort ||
     input?.companion?.port !== undefined ||
@@ -833,17 +864,29 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
     : (env?.PEARTUBE_COMPANION_AUTH !== undefined
       ? parseBoolean(env.PEARTUBE_COMPANION_AUTH, false)
       : Boolean(input?.companion?.sharedSecret || env?.PEARTUBE_COMPANION_SHARED_SECRET))
-  config.companion = resolveCompanionConfig(config.companion, {
+  return resolveCompanionConfig(config.companion, {
     storagePath: config.storage.path,
     hasExplicitPort: explicitCompanionPort,
     auth: explicitCompanionAuth
   })
+}
 
+export function resolveRelayConfig(input = {}, { env = process.env || {} } = {}) {
+  const requestedMode = input.mode
+  const requestedPolicy = input.policy
+  let config = deepMerge(clone(DEFAULT_RELAY_CONFIG), configFromEnv(env))
+  config = deepMerge(config, input)
 
-  // Whether this relay accepts other relays' archive requests and asks the
-  // network to mirror what it publishes. On unless the operator says otherwise.
+  resolveRelayModeAndPolicy(config, requestedMode, requestedPolicy)
+  resolveRelayStorageAndAdmission(config)
+  resolveRelayDiscovery(config)
+
+  config.seedPin = resolveSeedPinConfig(config.seedPin)
+  config.network = deepMerge(DEFAULT_RELAY_CONFIG.network, config.network || {})
+  config.logging = deepMerge(DEFAULT_RELAY_CONFIG.logging, config.logging || {})
+  config.companion = resolveRelayCompanion(input, env, config)
+
   config.reseed = { enabled: (config.reseed || {}).enabled !== false }
-
   config.archive = resolveArchiveConfig(config.archive, { storagePath: config.storage.path })
   config.classification = resolveClassificationConfig(config.classification)
 
@@ -881,42 +924,37 @@ export async function loadRelayConfig(cli = {}, { env = process.env || {} } = {}
   return config
 }
 
-export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
-  const lines = [
-    `mode: ${config.mode}`,
-    `policy: ${config.policy}`,
-    'storage:',
-    `  path: ${config.storage.path}`,
-    `  maxBytes: ${config.storage.maxBytes}`,
-    'admission:'
-  ]
-
-  if (config.admission?.channels?.length) {
+function renderAdmissionLines(admission) {
+  const lines = ['admission:']
+  if (admission?.channels?.length) {
     lines.push('  channels:')
-    for (const channel of config.admission.channels) {
+    for (const channel of admission.channels) {
       lines.push(`    - ${channel}`)
     }
   } else {
     lines.push('  channels: []')
   }
 
-  if (config.admission?.owners?.length) {
+  if (admission?.owners?.length) {
     lines.push('  owners:')
-    for (const owner of config.admission.owners) {
+    for (const owner of admission.owners) {
       lines.push(`    - ${owner}`)
     }
   } else {
     lines.push('  owners: []')
   }
+  return lines
+}
 
-  const seedPin = config.seedPin || DEFAULT_SEED_PIN_CONFIG
-  lines.push(
+function renderSeedPinLines(rawSeedPin) {
+  const seedPin = rawSeedPin || DEFAULT_SEED_PIN_CONFIG
+  const lines = [
     'seedPin:',
     `  enabled: ${seedPin.enabled}`,
     `  maxBytes: ${seedPin.maxBytes}`,
     `  maxConcurrent: ${seedPin.maxConcurrent}`,
     `  retentionDays: ${seedPin.retentionDays}`
-  )
+  ]
   if (seedPin.trustedClients?.length) {
     lines.push('  trustedClients:')
     for (const identityPublicKey of seedPin.trustedClients) {
@@ -925,22 +963,12 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
   } else {
     lines.push('  trustedClients: []')
   }
+  return lines
+}
 
-  lines.push(
-    'discovery:',
-    `  enabled: ${config.discovery.enabled}`,
-    `  seedDiscovered: ${config.discovery.seedDiscovered !== false}`,
-    `  maxChannels: ${config.discovery.maxChannels}`,
-    `  maxChannelsPerOwner: ${config.discovery.maxChannelsPerOwner}`
-  )
-
-  lines.push(
-    'reseed:',
-    `  enabled: ${config.reseed?.enabled !== false}`
-  )
-
-  const companion = config.companion || DEFAULT_RELAY_CONFIG.companion
-  lines.push(
+function renderCompanionLines(rawCompanion) {
+  const companion = rawCompanion || DEFAULT_RELAY_CONFIG.companion
+  return [
     'companion:',
     `  enabled: ${companion.enabled !== false}`,
     `  host: ${companion.host || '127.0.0.1'}`,
@@ -952,10 +980,12 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
     `  maxClockSkewMs: ${companion.maxClockSkewMs ?? 30000}`,
     `  maxNonces: ${companion.maxNonces ?? 4096}`,
     '  # Set sharedSecret with PEARTUBE_COMPANION_SHARED_SECRET; secrets are never rendered.'
-  )
+  ]
+}
 
-  const archive = config.archive || DEFAULT_ARCHIVE_CONFIG
-  lines.push(
+function renderArchiveLines(rawArchive) {
+  const archive = rawArchive || DEFAULT_ARCHIVE_CONFIG
+  const lines = [
     'archive:',
     `  uiEnabled: ${Boolean(archive.uiEnabled)}`,
     `  uiHost: ${archive.uiHost || '127.0.0.1'}`,
@@ -966,7 +996,7 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
     `  maxItems: ${archive.maxItems || DEFAULT_ARCHIVE_MAX_ITEMS}`,
     `  maxRetries: ${archive.maxRetries ?? DEFAULT_ARCHIVE_MAX_RETRIES}`,
     `  format: "${archive.format || DEFAULT_ARCHIVE_FORMAT}"`
-  )
+  ]
   const localMirror = archive.localMirror || {}
   lines.push(
     '  localMirror:',
@@ -987,6 +1017,36 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
   } else {
     lines.push('  sources: []')
   }
+  return lines
+}
+
+export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
+  const lines = [
+    `mode: ${config.mode}`,
+    `policy: ${config.policy}`,
+    'storage:',
+    `  path: ${config.storage.path}`,
+    `  maxBytes: ${config.storage.maxBytes}`
+  ]
+
+  lines.push(...renderAdmissionLines(config.admission))
+  lines.push(...renderSeedPinLines(config.seedPin))
+
+  lines.push(
+    'discovery:',
+    `  enabled: ${config.discovery.enabled}`,
+    `  seedDiscovered: ${config.discovery.seedDiscovered !== false}`,
+    `  maxChannels: ${config.discovery.maxChannels}`,
+    `  maxChannelsPerOwner: ${config.discovery.maxChannelsPerOwner}`
+  )
+
+  lines.push(
+    'reseed:',
+    `  enabled: ${config.reseed?.enabled !== false}`
+  )
+
+  lines.push(...renderCompanionLines(config.companion))
+  lines.push(...renderArchiveLines(config.archive))
 
   const classification = config.classification || DEFAULT_CLASSIFICATION_CONFIG
   const tmdb = classification.tmdb || {}

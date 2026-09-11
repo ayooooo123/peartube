@@ -19,6 +19,78 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
   ])
 }
 
+function filterOutKnownPending<P extends { commentId?: string | null }>(
+  pending: P[],
+  incomingComments: Array<{ commentId?: string }>
+): P[] {
+  if (incomingComments.length === 0) return pending
+  const incomingIds = new Set(incomingComments.map((c) => c.commentId).filter(Boolean))
+  return pending.filter((p) => !p.commentId || !incomingIds.has(p.commentId))
+}
+
+async function fetchShortsComments(
+  rpcClient: typeof rpc,
+  channelKey: string,
+  videoId: string,
+  publicBeeKey: string | undefined,
+  page: number
+): Promise<unknown[]> {
+  try {
+    const commentsRes = await withTimeout(
+      rpcClient.listComments?.({ channelKey, videoId, publicBeeKey, page, limit: COMMENTS_PER_PAGE }).catch(() => null) ?? Promise.resolve(null),
+      SHORTS_SOCIAL_RPC_TIMEOUT_MS,
+      null,
+    )
+    if (commentsRes?.success && Array.isArray(commentsRes.comments)) {
+      return commentsRes.comments
+    }
+  } catch { /* comments unavailable; surface empty list */ }
+  return []
+}
+
+function updateCommentsState<C, P extends { commentId?: string | null }>({
+  primaryComments,
+  append,
+  page,
+  isInitialLoad,
+  setComments,
+  setHasMoreComments,
+  setCommentsPage,
+  setPendingComments,
+}: {
+  primaryComments: C[]
+  append: boolean
+  page: number
+  isInitialLoad: boolean
+  setComments: React.Dispatch<React.SetStateAction<C[]>>
+  setHasMoreComments: React.Dispatch<React.SetStateAction<boolean>>
+  setCommentsPage: React.Dispatch<React.SetStateAction<number>>
+  setPendingComments: React.Dispatch<React.SetStateAction<P[]>>
+}) {
+  const hasComments = primaryComments.length > 0
+  const typedComments = primaryComments as Array<{ commentId?: string }>
+
+  if (append) {
+    if (hasComments) {
+      setComments((prev) => [...prev, ...primaryComments])
+      setPendingComments((prev) => filterOutKnownPending(prev, typedComments))
+    }
+    setHasMoreComments(primaryComments.length >= COMMENTS_PER_PAGE)
+    setCommentsPage(page)
+    return
+  }
+
+  if (hasComments) {
+    setComments(primaryComments)
+    setHasMoreComments(primaryComments.length >= COMMENTS_PER_PAGE)
+    setCommentsPage(page)
+    setPendingComments((prev) => filterOutKnownPending(prev, typedComments))
+  } else if (isInitialLoad) {
+    setComments([])
+    setHasMoreComments(false)
+  }
+}
+
 export function useShortsSocial(video: VideoData | null) {
   const { identity } = useApp()
   const commentsLengthRef = useRef(0)
@@ -88,47 +160,31 @@ export function useShortsSocial(video: VideoData | null) {
   }, [comments.length])
 
   const loadSocial = useCallback(async (page = 0, append = false, forceRefresh = false) => {
-    if (!video?.channelKey || !video?.id) return
-    if (!rpc?.listComments) return
+    if (!video?.channelKey || !video?.id || !rpc?.listComments) return
 
-    const ch = video.channelKey
-    const canonicalVid = video.id
-    const pubBee = video.publicBeeKey || undefined
     const isInitialLoad = commentsLengthRef.current === 0
-
     if (!append && (isInitialLoad || forceRefresh)) {
       setCommentsLoading(true)
     }
 
     try {
-      const commentsRes = await withTimeout(
-        rpc.listComments?.({ channelKey: ch, videoId: canonicalVid, publicBeeKey: pubBee, page, limit: COMMENTS_PER_PAGE }).catch(() => null) ?? Promise.resolve(null),
-        SHORTS_SOCIAL_RPC_TIMEOUT_MS,
-        null,
+      const primaryComments = await fetchShortsComments(
+        rpc,
+        video.channelKey,
+        video.id,
+        video.publicBeeKey || undefined,
+        page
       )
-      const primaryOk = Boolean(commentsRes?.success && Array.isArray(commentsRes.comments))
-      const primaryComments = primaryOk ? commentsRes.comments : []
-
-      if (append) {
-        if (primaryComments.length > 0) setComments((prev) => [...prev, ...primaryComments])
-        setHasMoreComments(primaryComments.length >= COMMENTS_PER_PAGE)
-        setCommentsPage(page)
-        if (primaryComments.length > 0) {
-          const newIds = new Set(primaryComments.map((c: any) => c.commentId))
-          setPendingComments((prev) => prev.filter((p) => !p.commentId || !newIds.has(p.commentId)))
-        }
-      } else {
-        if (primaryComments.length > 0) {
-          setComments(primaryComments)
-          setHasMoreComments(primaryComments.length >= COMMENTS_PER_PAGE)
-          setCommentsPage(page)
-          const knownIds = new Set(primaryComments.map((c: any) => c.commentId))
-          setPendingComments((prev) => prev.filter((p) => !p.commentId || !knownIds.has(p.commentId)))
-        } else if (isInitialLoad) {
-          setComments([])
-          setHasMoreComments(false)
-        }
-      }
+      updateCommentsState({
+        primaryComments,
+        append,
+        page,
+        isInitialLoad,
+        setComments,
+        setHasMoreComments,
+        setCommentsPage,
+        setPendingComments,
+      })
     } finally {
       setCommentsLoading(false)
       setLoadingMoreComments(false)

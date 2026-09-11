@@ -8,6 +8,7 @@ import {
   CompanionAuthError,
   createBodyHasher,
   createNonceStore,
+  hasControlAuthHeaders,
   prevalidateControlRequest,
   verifyPrevalidatedControlRequest
 } from './auth.js'
@@ -136,6 +137,30 @@ function closeHttpServer (server) {
   })
 }
 
+function encodeInProcessBody (body) {
+  if (body == null) return b4a.alloc(0)
+  if (b4a.isBuffer(body) || body instanceof Uint8Array) return b4a.from(body)
+  return b4a.from(typeof body === 'string' ? body : JSON.stringify(body))
+}
+
+function handleRequestError (request, response, error) {
+  if (response.headersSent || response.writableEnded || response.destroyed) {
+    try {
+      response.destroy?.(error)
+    } catch {
+      // The transport may already be closed by the failed request.
+    }
+  } else {
+    const safe = publicError(error)
+    const destroyRequest = () => request.socket?.destroy?.()
+    response.setHeader('connection', 'close')
+    response.once?.('finish', destroyRequest)
+    sendJson(response, safe.statusCode, {
+      error: { code: safe.code, message: safe.message }
+    })
+  }
+}
+
 export function createCompanionServer ({
   service,
   config,
@@ -181,9 +206,52 @@ export function createCompanionServer ({
   let startPromise = null
   let closePromise = null
   let closing = false
+  // `closing` is the bounded drain window; `closed` is admission denial that
+  // survives close completion and only an explicit valid start() reopens.
+  let closed = false
   let publicState = { enabled: config.enabled !== false, transport: 'tcp' }
 
-  async function handleRequest (request, response) {
+  async function authenticateAndReadBody (request, isLocal) {
+    const sourceGrantRequest = /^\/api\/v2\/acquisitions\/[^/?]+\/source-grants(?:\?|$)/.test(request.url || '')
+    // Docker bridge callers are not loopback. Private grants on the shared
+    // public listener must prove their identity even when public API auth is off.
+    // Once any control-auth header is present the caller is verifying, not
+    // anonymously falling back: an auth-off relay must reject broken credentials
+    // instead of silently serving them as another identity.
+    const authProvided = hasControlAuthHeaders(request.headers)
+    const requiresAuth = config.auth === true || authProvided || (sourceGrantRequest && !isLocal)
+    if (requiresAuth && !config.sharedSecret) {
+      throw new CompanionRequestError(401, 'AUTH_REQUIRED', 'Companion authentication is required')
+    }
+    let authMetadata = null
+    if (requiresAuth) {
+      authMetadata = prevalidateControlRequest({
+        headers: request.headers,
+        client: config.client,
+        clock,
+        maxClockSkewMs: config.maxClockSkewMs
+      })
+    }
+    const bodyRecord = await readBody(request, config.maxBodyBytes)
+    let verified = null
+    if (authMetadata) {
+      verified = verifyPrevalidatedControlRequest({
+        method: request.method,
+        path: request.url,
+        bodyHash: bodyRecord.bodyHash,
+        metadata: authMetadata,
+        secret: config.sharedSecret,
+        nonceStore: replayStore
+      })
+    }
+    return {
+      body: bodyRecord.body,
+      isAuthenticated: verified !== null,
+      verifiedClient: verified === null ? null : verified.client
+    }
+  }
+
+  async function handleHttp (request, response) {
     clearTimeout(firstRequestDeadlines.get(request.socket))
     firstRequestDeadlines.delete(request.socket)
     response.setHeader('connection', 'close')
@@ -204,74 +272,46 @@ export function createCompanionServer ({
     request.socket?.once?.('close', onSocketClose)
     if (!streamRequest) armDeadline()
     try {
+      if (closing || closed) throw new CompanionRequestError(503, 'SERVER_CLOSING', 'Companion server is closing')
       if (streamRequest) {
         await streamRoute.handle(request, response, { signal: controller.signal })
         return
       }
       const isLocal = loopbackAddress(request.socket?.remoteAddress)
-      const sourceGrantRequest = /^\/api\/v2\/acquisitions\/[^/?]+\/source-grants(?:\?|$)/.test(request.url || '')
-      // Docker bridge callers are not loopback. Private grants on the shared
-      // public listener must prove their identity even when public API auth is off.
-      const requiresAuth = config.auth === true || (sourceGrantRequest && !isLocal)
-      if (requiresAuth && !config.sharedSecret) {
-        throw new CompanionRequestError(401, 'AUTH_REQUIRED', 'Companion authentication is required')
-      }
-      let authMetadata = null
-      if (requiresAuth) {
-        authMetadata = prevalidateControlRequest({
-          headers: request.headers,
-          client: config.client,
-          clock,
-          maxClockSkewMs: config.maxClockSkewMs
-        })
-      }
-      const bodyRecord = await readBody(request, config.maxBodyBytes)
-      if (requiresAuth && authMetadata) {
-        verifyPrevalidatedControlRequest({
-          method: request.method,
-          path: request.url,
-          bodyHash: bodyRecord.bodyHash,
-          metadata: authMetadata,
-          secret: config.sharedSecret,
-          nonceStore: replayStore
-        })
-      }
+      const { body, isAuthenticated, verifiedClient } = await authenticateAndReadBody(request, isLocal)
       const routed = await router.dispatch({
         method: request.method,
         url: request.url,
         headers: request.headers,
-        body: bodyRecord.body,
+        body,
         principal: Object.freeze({
           ...principalBase,
-          id: request.headers?.['x-peartube-client'] || config.client || 'anonymous',
+          id: verifiedClient || config.client || 'anonymous',
           isLocal,
-          isAuthenticated: requiresAuth && authMetadata !== null
+          isAuthenticated
         }),
         serverState: publicState,
         signal: controller.signal
       })
       sendJson(response, routed.statusCode, routed.body, routed.headers)
     } catch (error) {
-      if (response.headersSent || response.writableEnded || response.destroyed) {
-        try {
-          response.destroy?.(error)
-        } catch {
-          // The transport may already be closed by the failed request.
-        }
-      } else {
-        const safe = publicError(error)
-        const destroyRequest = () => request.socket?.destroy?.()
-        response.setHeader('connection', 'close')
-        response.once?.('finish', destroyRequest)
-        sendJson(response, safe.statusCode, {
-          error: { code: safe.code, message: safe.message }
-        })
-      }
+      handleRequestError(request, response, error)
     } finally {
       clearTimeout(deadline)
       request.socket?.removeListener?.('close', onSocketClose)
       activeRequestControllers.delete(controller)
     }
+  }
+
+  // The exported HTTP entry is the single tracking wrapper: a mounted foreign
+  // listener and the owned listener both enter through here, so every request
+  // counts exactly once toward close's abort-and-await.
+  function handleRequest (request, response) {
+    const active = handleHttp(request, response)
+    activeRequests.add(active)
+    const forget = () => activeRequests.delete(active)
+    void active.then(forget, forget)
+    return active
   }
 
   function serialize (operation) {
@@ -287,12 +327,8 @@ export function createCompanionServer ({
     body = null,
     signal = null
   } = {}) {
-    if (!started || closing) throw new Error('companion server is not available')
-    const encodedBody = body == null
-      ? b4a.alloc(0)
-      : b4a.isBuffer(body) || body instanceof Uint8Array
-        ? b4a.from(body)
-        : b4a.from(typeof body === 'string' ? body : JSON.stringify(body))
+    if (!started || closing || closed) throw new Error('companion server is not available')
+    const encodedBody = encodeInProcessBody(body)
     if (encodedBody.byteLength > config.maxBodyBytes) {
       throw new CompanionRequestError(413, 'BODY_TOO_LARGE', 'Request body exceeds configured maximum')
     }
@@ -303,20 +339,25 @@ export function createCompanionServer ({
     if (signal?.aborted) controller.abort()
     const deadline = setTimeout(abort, requestDeadlineMs)
     deadline.unref?.()
+    const active = router.dispatch({
+      method,
+      url,
+      headers,
+      body: encodedBody,
+      principal: Object.freeze({ ...principalBase, isLocal: true }),
+      inProcess: true,
+      serverState: publicState,
+      signal: controller.signal
+    })
+    activeRequestControllers.add(controller)
+    activeRequests.add(active)
     try {
-      return await router.dispatch({
-        method,
-        url,
-        headers,
-        body: encodedBody,
-        principal: Object.freeze({ ...principalBase, isLocal: true }),
-        inProcess: true,
-        serverState: publicState,
-        signal: controller.signal
-      })
+      return await active
     } finally {
       clearTimeout(deadline)
       signal?.removeEventListener?.('abort', abort)
+      activeRequestControllers.delete(controller)
+      activeRequests.delete(active)
     }
   }
 
@@ -328,6 +369,7 @@ export function createCompanionServer ({
     if (closePromise !== pending) return
     startPromise = null
     closePromise = null
+    closed = true
     closing = false
   }
 
@@ -336,12 +378,14 @@ export function createCompanionServer ({
       return { ...publicState }
     },
     setPublicAddress ({ host, port }) {
+      if (closing || closed) return
       publicState = {
         ...publicState,
         enabled: true,
         host,
         port
       }
+      started = true
     },
     dispatchInProcess,
     handleRequest,
@@ -354,20 +398,14 @@ export function createCompanionServer ({
       if (started) return { ...publicState }
       if (config.enabled === false) {
         publicState = { enabled: false, transport: 'tcp' }
+        closed = false
         return { ...publicState }
       }
       if (config.auth && (!config.sharedSecret || typeof config.sharedSecret !== 'string' || !/^[a-f0-9]{64}$/.test(config.sharedSecret))) {
         throw new Error('Companion shared secret must be 64 lowercase hexadecimal characters')
       }
       const serverFactory = createServer || defaultCreateServer
-      httpServer = serverFactory((request, response) => {
-        const activeRequest = handleRequest(request, response)
-        activeRequests.add(activeRequest)
-        void activeRequest.then(
-          () => activeRequests.delete(activeRequest),
-          () => activeRequests.delete(activeRequest)
-        )
-      })
+      httpServer = serverFactory(handleRequest)
       httpServer.on?.('connection', (socket) => {
         const destroy = () => socket.destroy?.()
         const firstRequestDeadline = setTimeout(destroy, requestDeadlineMs)
@@ -393,6 +431,7 @@ export function createCompanionServer ({
           port: address.port
         }
         started = true
+        closed = false
         logger?.companion?.info?.('Companion API listening', publicState)
         return { ...publicState }
       } catch (error) {
@@ -421,21 +460,25 @@ export function createCompanionServer ({
     close () {
       if (closePromise) return closePromise
       closing = true
+      closed = true
       router.capabilities.clear()
       const pending = serialize(async () => {
-      if (!httpServer) {
-        started = false
-        await router.capabilities.drain?.()
-        return
-      }
+      // `started` is surface availability and `httpServer` is listener ownership:
+      // a mounted companion has active traffic and live capabilities without a
+      // listener it owns, so only the listener teardown is conditional here.
       for (const controller of activeRequestControllers) controller.abort()
-      for (const connection of connections) connection.destroy?.()
-      connections.clear()
-      await closeHttpServer(httpServer)
+      const listenerClosed = closeHttpServer(httpServer)
+      // Requests own their terminal response. Destroy only connections which
+      // never started one; aborting an active socket here races its 499 or
+      // truncated-stream response. Every owned response sends Connection: close.
+      for (const connection of connections) {
+        if (firstRequestDeadlines.has(connection)) connection.destroy?.()
+      }
       await Promise.allSettled([...activeRequests])
-      router.capabilities.clear()
-      await router.capabilities.drain?.()
+      await listenerClosed
+      connections.clear()
       httpServer = null
+      await router.capabilities.drain?.()
       started = false
       })
       closePromise = pending

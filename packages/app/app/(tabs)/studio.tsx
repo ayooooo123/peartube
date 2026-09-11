@@ -1,7 +1,7 @@
 /**
  * Studio Tab - Upload and manage videos
  */
-import { useRef, useState, useCallback, useEffect } from 'react'
+import { useRef, useState, useCallback, useEffect, type Dispatch, type SetStateAction, type ReactNode } from 'react'
 import {
   View,
   Text,
@@ -59,6 +59,24 @@ import {
 } from '@/lib/studio-upload-controller'
 // Detect Pear desktop (must match index.web.tsx detection)
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
+
+type StudioOffloadInfo = {
+  eligible: boolean
+  byteLength: number
+  publicationId?: string
+  assessmentId?: string
+  evidenceDigest?: string
+  confirmationNonce?: string
+  policyVersion?: number
+  limitations?: string[]
+  offloaded?: boolean
+  busy?: boolean
+}
+
+type StudioPickerFileResult =
+  | { filePath: string; name: string; size: number; dataUrl?: string }
+  | { cancelled: true }
+  | null
 
 function formatDate(timestamp: number): string {
   const date = new Date(timestamp)
@@ -159,6 +177,1282 @@ async function deleteCachedFile(uri: string | null | undefined): Promise<void> {
   }
 }
 
+function titleFromFilename(name: string): string {
+  return name.replace(/\.[^/.]+$/, '')
+}
+
+function scheduleThumbnailGeneration(
+  generateThumbnail: (videoUri: string, durationMs?: number) => Promise<string | null | undefined>,
+  videoUri: string,
+  durationMs?: number,
+): void {
+  InteractionManager.runAfterInteractions(() => {
+    void generateThumbnail(videoUri, durationMs).catch((err) => {
+      console.log('[Studio] Background thumbnail generation failed:', err)
+    })
+  })
+}
+
+async function pickPearStudioVideo(
+  pickVideoFile: () => Promise<StudioPickerFileResult>,
+  onSelected: (filePath: string, name: string, size: number) => void,
+): Promise<void> {
+  try {
+    console.log('[Studio] Opening native file picker...')
+    const result = await pickVideoFile()
+
+    if (!result) {
+      console.log('[Studio] File picker not available')
+      Alert.alert('Not available', 'Native file picker is not available')
+      return
+    }
+
+    if ('cancelled' in result && result.cancelled) {
+      console.log('[Studio] File picker cancelled')
+      return
+    }
+
+    if ('filePath' in result) {
+      console.log('[Studio] File selected:', result.filePath, 'size:', result.size)
+      onSelected(result.filePath, result.name, result.size)
+    }
+  } catch (err: any) {
+    console.error('[Studio] File picker error:', err)
+    Alert.alert('Error', err.message || 'Failed to open file picker')
+  }
+}
+
+async function pickAndroidStudioVideo(
+  cleanupTempVideo: () => Promise<void>,
+  onPreparing: (preparing: boolean) => void,
+  onMeta: (filename: string, size?: number, mimeType?: string) => void,
+  onReady: (localUri: string) => void,
+  generateThumbnail: (videoUri: string, durationMs?: number) => Promise<string | null | undefined>,
+): Promise<void> {
+  // copyToCacheDirectory:false → the picker returns immediately with a
+  // content:// URI instead of blocking (with no UI feedback) while it copies
+  // the whole file. For 1GB+ videos the inline copy is what made the screen
+  // hang/"never load". We copy into cache ourselves below, with feedback.
+  const docResult = await DocumentPicker.getDocumentAsync({
+    type: 'video/*',
+    copyToCacheDirectory: false,
+    multiple: false,
+  })
+
+  if (docResult.canceled) return
+  const asset = docResult.assets?.[0]
+  if (!asset?.uri) return
+
+  onMeta(
+    asset.name || asset.uri.split('/').pop() || 'Untitled',
+    typeof asset.size === 'number' ? asset.size : undefined,
+    typeof asset.mimeType === 'string' ? asset.mimeType : undefined,
+  )
+  void cleanupTempVideo()
+
+  // Materialize a real file:// path the backend can stream from. Show a
+  // "Preparing…" state so the user isn't staring at a frozen/black screen.
+  onPreparing(true)
+  try {
+    const localUri = await copyPickedVideoToCache(asset.uri, asset.name || undefined)
+    onReady(localUri)
+    scheduleThumbnailGeneration(generateThumbnail, localUri)
+  } catch (err: any) {
+    console.error('[Studio] Failed to prepare video:', err)
+    Alert.alert('Could not prepare video', err?.message || 'Failed to read the selected video. Please try again.')
+  } finally {
+    onPreparing(false)
+  }
+}
+
+async function pickIOSStudioVideo(
+  onSelected: (uri: string, filename: string, duration?: number) => void,
+  generateThumbnail: (videoUri: string, durationMs?: number) => Promise<string | null | undefined>,
+): Promise<void> {
+  const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
+  if (status !== 'granted') {
+    Alert.alert('Permission needed', 'Please grant permission to access your videos')
+    return
+  }
+
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ['videos'],
+    allowsEditing: false,
+    videoExportPreset: ImagePicker.VideoExportPreset.Passthrough,
+    preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
+  })
+
+  if (!result.canceled && result.assets[0]) {
+    const asset = result.assets[0]
+    const filename = asset.uri.split('/').pop() || 'Untitled'
+    onSelected(asset.uri, filename, asset.duration ?? undefined)
+    scheduleThumbnailGeneration(generateThumbnail, asset.uri, asset.duration ?? undefined)
+  }
+}
+
+async function pickPearStudioThumbnail(
+  pickImageFile: () => Promise<StudioPickerFileResult>,
+  onSelected: (filePath: string, dataUrl?: string) => void,
+): Promise<void> {
+  try {
+    console.log('[Studio] Opening native image file picker...')
+    const result = await pickImageFile()
+    console.log('[Studio] pickImageFile result:', JSON.stringify(result))
+
+    if (!result) {
+      console.log('[Studio] Image picker not available')
+      return
+    }
+
+    if ('cancelled' in result && result.cancelled) {
+      console.log('[Studio] Image picker cancelled')
+      return
+    }
+
+    if ('filePath' in result) {
+      console.log('[Studio] Thumbnail selected:', result.filePath)
+      const dataUrl = 'dataUrl' in result && typeof result.dataUrl === 'string' ? result.dataUrl : undefined
+      onSelected(result.filePath, dataUrl)
+      console.log('[Studio] setThumbnailFilePath called with:', result.filePath)
+      if (dataUrl) {
+        console.log('[Studio] setThumbnailUri called with dataUrl (length:', dataUrl.length, ')')
+      }
+    }
+  } catch (err: any) {
+    console.error('[Studio] Image picker error:', err)
+    Alert.alert('Error', err.message || 'Failed to open image picker')
+  }
+}
+
+async function pickNativeStudioThumbnail(
+  onSelected: (uri: string) => void,
+): Promise<void> {
+  const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
+  if (status !== 'granted') {
+    Alert.alert('Permission needed', 'Please grant permission to access your photos')
+    return
+  }
+
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ['images'],
+    allowsEditing: true,
+    aspect: [16, 9],
+    quality: 0.8,
+  })
+
+  if (!result.canceled && result.assets[0]) {
+    console.log('[Studio] Custom thumbnail selected:', result.assets[0].uri)
+    onSelected(result.assets[0].uri)
+  }
+}
+
+async function generateStudioThumbnail(
+  videoUri: string,
+  durationMs: number | undefined,
+  genId: number,
+  isCurrent: (genId: number) => boolean,
+  onStart: () => void,
+  onSuccess: (uri: string) => void,
+  onError: (message: string) => void,
+  onDone: () => void,
+): Promise<string | null> {
+  if (isPear) return null // Desktop handles thumbnails server-side
+  try {
+    onStart()
+    const primaryTime = durationMs ? Math.floor(durationMs * 0.1) : 1000
+    const times = Array.from(new Set([primaryTime, 1000, 2000].filter((t) => t >= 0)))
+
+    for (const timeMs of times) {
+      try {
+        console.log('[Studio] Generating thumbnail at', timeMs, 'ms')
+        const { uri } = await VideoThumbnails.getThumbnailAsync(videoUri, {
+          time: timeMs,
+          quality: 0.7,
+        })
+        console.log('[Studio] Thumbnail generated:', uri)
+        // Ignore stale generations (user picked another video)
+        if (!isCurrent(genId)) return null
+        onSuccess(uri)
+        return uri
+      } catch (err) {
+        console.log('[Studio] Thumbnail attempt failed at', timeMs, 'ms:', err)
+      }
+    }
+
+    if (isCurrent(genId)) {
+      onError('Could not generate thumbnail. Please pick an image.')
+    }
+
+    return null
+  } catch (err) {
+    console.log('[Studio] Thumbnail generation failed:', err)
+    onError('Could not generate thumbnail. Please pick an image.')
+    return null
+  } finally {
+    onDone()
+  }
+}
+
+function validateStudioUploadInput(
+  selectedVideo: string | null,
+  title: string,
+  identity: { driveKey?: string } | null | undefined,
+): string | null {
+  if (!selectedVideo) {
+    Alert.alert('No video selected', 'Please select a video to upload')
+    return null
+  }
+  if (!title.trim()) {
+    Alert.alert('Title required', 'Please enter a title for your video')
+    return null
+  }
+  if (!identity) {
+    console.error('[Studio] No identity! Please create one in Profile first')
+    Alert.alert('No channel yet', 'Create your channel from the Profile screen first.')
+    return null
+  }
+  if (!identity.driveKey) {
+    console.error('[Studio] Identity missing driveKey')
+    Alert.alert('Channel error', 'Your channel is missing its key. Please recreate it from the Profile screen.')
+    return null
+  }
+  return identity.driveKey
+}
+
+function buildStudioEpisodeMediaInput(
+  enabled: boolean,
+  seriesId: string,
+  seriesTitle: string,
+  tmdbSeriesId: string,
+  seasonNumber: string,
+  episodeNumber: string,
+  expectedEpisodeCount: string,
+): StudioEpisodeMediaInput {
+  return {
+    enabled,
+    seriesId,
+    seriesTitle,
+    tmdbId: tmdbSeriesId,
+    seasonNumber,
+    episodeNumber,
+    expectedEpisodeCount,
+  }
+}
+
+function nativeSkipThumbnailGeneration(
+  thumbnailGenerating: boolean,
+  thumbnailFilePath: string | null,
+): boolean {
+  if (Platform.OS === 'android') return true
+  return thumbnailGenerating || !!thumbnailFilePath
+}
+
+async function attachStudioThumbnail(
+  uploadThumbnailForVideo: (videoId: string, thumbPath: string) => Promise<boolean>,
+  videoId: string | null | undefined,
+  thumbnailFilePath: string | null,
+): Promise<void> {
+  if (!thumbnailFilePath || !videoId) {
+    console.log('[Studio] No thumbnail to upload, thumbnailFilePath:', thumbnailFilePath, 'videoId:', videoId)
+    return
+  }
+  console.log('[Studio] Uploading thumbnail from file:', thumbnailFilePath)
+  try {
+    const uploaded = await uploadThumbnailForVideo(videoId, thumbnailFilePath)
+    console.log('[Studio] Thumbnail upload result:', uploaded)
+  } catch (thumbErr: any) {
+    console.error('[Studio] Failed to upload thumbnail:', thumbErr?.message || thumbErr)
+    // Don't fail the whole upload if thumbnail fails
+  }
+}
+
+async function runPearStudioUpload(args: {
+  uploadVideo: any
+  filePath: string
+  title: string
+  mimeType: string
+  selectedCategory: string
+  media: StudioEpisodeMediaInput
+  thumbnailFilePath: string | null
+  rpc: any
+  driveKey: string
+  loadVideos: (driveKey: string) => Promise<void> | void
+  uploadThumbnailForVideo: (videoId: string, thumbPath: string) => Promise<boolean>
+  onProgress: (progress: number, speed?: number, eta?: number, transcoding?: boolean) => void
+}): Promise<void> {
+  const skipThumbnail = !!args.thumbnailFilePath
+  console.log('[Studio] Uploading via Pear:', args.filePath, 'category:', args.selectedCategory, 'skipThumbnail:', skipThumbnail)
+  const video = await uploadStudioVideo(args.uploadVideo, {
+    filePath: args.filePath,
+    title: args.title,
+    mimeType: args.mimeType,
+    category: args.selectedCategory,
+    onProgress: args.onProgress,
+    skipThumbnailGeneration: skipThumbnail,
+    media: args.media,
+  })
+  const videoId = video?.id
+
+  if (args.thumbnailFilePath && videoId && args.rpc) {
+    await attachStudioThumbnail(args.uploadThumbnailForVideo, videoId, args.thumbnailFilePath)
+  }
+
+  await args.loadVideos(args.driveKey)
+}
+
+async function runNativeStudioUpload(args: {
+  uploadVideo: any
+  selectedVideo: string
+  title: string
+  mimeType: string
+  selectedCategory: string
+  media: StudioEpisodeMediaInput
+  thumbnailGenerating: boolean
+  thumbnailFilePath: string | null
+  uploadThumbnailForVideo: (videoId: string, thumbPath: string) => Promise<boolean>
+  onProgress: (progress: number, speed?: number, eta?: number, transcoding?: boolean) => void
+}): Promise<void> {
+  // Prefer the RN-generated thumbnail when available.
+  // Keep backend (bare-ffmpeg) thumbnail generation available as a fallback
+  // on iOS only. (Android backend thumbnail generation has been crash-prone.)
+  const skipThumbnail = nativeSkipThumbnailGeneration(args.thumbnailGenerating, args.thumbnailFilePath)
+
+  const video = await uploadStudioVideo(args.uploadVideo, {
+    filePath: args.selectedVideo,
+    title: args.title,
+    mimeType: args.mimeType,
+    category: args.selectedCategory,
+    onProgress: args.onProgress,
+    skipThumbnailGeneration: skipThumbnail,
+    media: args.media,
+  })
+
+  const videoId = video?.id
+  console.log('[Studio] Upload complete, videoId:', videoId, 'skippedThumbnail:', skipThumbnail)
+  await attachStudioThumbnail(args.uploadThumbnailForVideo, videoId, args.thumbnailFilePath)
+}
+
+function showSourceOffloadStopped(message: string): void {
+  if (Platform.OS === 'web') window.alert(message)
+  else Alert.alert('Source offload stopped', message)
+}
+
+function buildOffloadConfirmMessage(
+  title: string,
+  publicationId: string,
+  byteLength: number,
+  limitations: string[],
+): string {
+  const freed = byteLength ? ` (${formatBytes(byteLength)})` : ''
+  const limitationsText = limitations.length
+    ? `\n\nEvidence limitations:\n${limitations.map((value: string) => `• ${value}`).join('\n')}`
+    : ''
+  return `Delete this device's source bytes for "${title}"${freed}?\n\nPublication: ${publicationId}\n\nThis cannot guarantee the media remains recoverable. Other copies may disappear after confirmation.${limitationsText}\n\nContinue only if you accept permanent loss risk.`
+}
+
+async function confirmSourceOffloadWithUser(message: string): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    if (Platform.OS === 'web') {
+      resolve(window.confirm(message))
+      return
+    }
+    Alert.alert('Confirm source offload', message, [
+      { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+      { text: 'I understand — delete source', style: 'destructive', onPress: () => resolve(true) },
+    ])
+  })
+}
+
+function offloadInfoFromAssessment(res: any, busy?: boolean): StudioOffloadInfo {
+  return {
+    eligible: res?.success === true && res?.eligible === true,
+    byteLength: Number(res?.byteLength) || 0,
+    publicationId: res?.publicationId,
+    assessmentId: res?.assessmentId,
+    evidenceDigest: res?.evidenceDigest,
+    confirmationNonce: res?.confirmationNonce,
+    policyVersion: res?.policyVersion,
+    limitations: Array.isArray(res?.limitations) ? res.limitations : [],
+    busy,
+  }
+}
+
+function isFreshOffloadAssessmentReady(fresh: any): boolean {
+  return !!(
+    fresh?.success &&
+    fresh.eligible &&
+    fresh.publicationId &&
+    fresh.assessmentId &&
+    fresh.evidenceDigest &&
+    fresh.confirmationNonce &&
+    fresh.policyVersion
+  )
+}
+
+async function runStudioSourceOffload(args: {
+  item: Video
+  info: StudioOffloadInfo
+  rpc: any
+  assessedOffloadRef: { current: Set<string> }
+  setOffloadInfo: Dispatch<SetStateAction<Record<string, StudioOffloadInfo>>>
+}): Promise<void> {
+  const { item, info, rpc, assessedOffloadRef, setOffloadInfo } = args
+  if (!info.publicationId || typeof rpc?.assessSourceOffload !== 'function') return
+  setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], busy: true } }))
+
+  try {
+    const fresh = await rpc?.assessSourceOffload({ publicationId: info.publicationId })
+    if (!isFreshOffloadAssessmentReady(fresh)) {
+      assessedOffloadRef.current.delete(info.publicationId)
+      setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], eligible: false, busy: false } }))
+      showSourceOffloadStopped(
+        `Source offload is no longer safe. ${fresh?.reason || 'Current archive evidence is insufficient.'}`,
+      )
+      return
+    }
+
+    const freshInfo: StudioOffloadInfo = {
+      eligible: true,
+      byteLength: Number(fresh.byteLength) || 0,
+      publicationId: fresh.publicationId,
+      assessmentId: fresh.assessmentId,
+      evidenceDigest: fresh.evidenceDigest,
+      confirmationNonce: fresh.confirmationNonce,
+      policyVersion: fresh.policyVersion,
+      limitations: Array.isArray(fresh.limitations) ? fresh.limitations : [],
+      busy: true,
+    }
+    setOffloadInfo((prev) => ({ ...prev, [item.id]: freshInfo }))
+
+    const confirmed = await confirmSourceOffloadWithUser(
+      buildOffloadConfirmMessage(
+        item.title,
+        fresh.publicationId,
+        freshInfo.byteLength,
+        freshInfo.limitations || [],
+      ),
+    )
+    if (!confirmed) {
+      setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], busy: false } }))
+      return
+    }
+
+    const res = await rpc?.confirmSourceOffload({
+      publicationId: fresh.publicationId,
+      assessmentId: fresh.assessmentId,
+      evidenceDigest: fresh.evidenceDigest,
+      confirmationNonce: fresh.confirmationNonce,
+      policyVersion: fresh.policyVersion,
+      confirmIrrecoverableRisk: true,
+    })
+    if (res?.success) {
+      setOffloadInfo((prev) => ({
+        ...prev,
+        [item.id]: {
+          eligible: false,
+          byteLength: freshInfo.byteLength,
+          publicationId: fresh.publicationId,
+          offloaded: true,
+          busy: false,
+        },
+      }))
+      return
+    }
+
+    assessedOffloadRef.current.delete(fresh.publicationId)
+    setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], eligible: false, busy: false } }))
+    showSourceOffloadStopped(
+      `Couldn't delete the local source. ${res?.reason || 'The evidence or policy changed; reassess before trying again.'}`,
+    )
+  } catch (err: unknown) {
+    assessedOffloadRef.current.delete(info.publicationId)
+    setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], eligible: false, busy: false } }))
+    showSourceOffloadStopped(err instanceof Error ? err.message : 'Failed to delete local source')
+  }
+}
+
+async function confirmDeleteStudioVideo(videoTitle: string): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    if (Platform.OS === 'web') {
+      resolve(window.confirm(`Delete "${videoTitle}"?\n\nThis will permanently delete the video from your channel.`))
+      return
+    }
+    Alert.alert(
+      'Delete Video',
+      `Delete "${videoTitle}"?\n\nThis will permanently delete the video from your channel.`,
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+        { text: 'Delete', style: 'destructive', onPress: () => resolve(true) },
+      ],
+    )
+  })
+}
+
+function showStudioError(errorMsg: string): void {
+  if (Platform.OS === 'web') {
+    window.alert(`Error: ${errorMsg}`)
+  } else {
+    Alert.alert('Error', errorMsg)
+  }
+}
+
+async function runDeleteStudioVideo(args: {
+  videoId: string
+  videoTitle: string
+  videos: Video[]
+  removeVideo: (videoId: string) => void
+  rpc: any
+  driveKey: string | undefined
+  loadVideos: (driveKey: string, opts?: { allowEmptyResult?: boolean }) => Promise<void>
+}): Promise<void> {
+  const confirmed = await confirmDeleteStudioVideo(args.videoTitle)
+  if (!confirmed) return
+
+  args.removeVideo(args.videoId)
+
+  try {
+    const result = await args.rpc?.deleteVideo({ videoId: args.videoId })
+    if (result?.success) {
+      if (args.driveKey) {
+        args.loadVideos(args.driveKey, { allowEmptyResult: true }).catch(() => {})
+      }
+      return
+    }
+
+    const errorMsg = result?.error || 'Failed to delete video'
+    if (args.driveKey) {
+      args.loadVideos(args.driveKey).catch(() => {})
+    }
+    showStudioError(errorMsg)
+  } catch (err: any) {
+    console.error('[Studio] Delete failed:', err)
+    if (args.driveKey) {
+      args.loadVideos(args.driveKey).catch(() => {})
+    }
+    showStudioError(err.message || 'Failed to delete video')
+  }
+}
+
+function resolvePublishedVideoRef(item: any): string {
+  if (item.path && typeof item.path === 'string' && item.path.startsWith('/')) {
+    return item.path
+  }
+  return item.id
+}
+
+function buildPublishedPlaybackRequest(item: any, channelKey: string, videoRef: string) {
+  return {
+    channelKey,
+    videoId: videoRef,
+    publicBeeKey: item.publicBeeKey || undefined,
+    blobId: item.blobId || undefined,
+    blobsCoreKey: item.blobsCoreKey || undefined,
+    mimeType: item.mimeType || undefined,
+  }
+}
+
+async function playPublishedStudioVideo(args: {
+  item: any
+  rpc: any
+  identityDriveKey: string | undefined
+  loadAndPlayVideo: (video: any, url: string) => void
+}): Promise<void> {
+  if (!args.rpc) return
+  const channelKey = args.item?.channelKey || args.identityDriveKey
+  if (!channelKey || !args.item?.id) return
+
+  const videoRef = resolvePublishedVideoRef(args.item)
+  const cacheKey = makeVideoUrlCacheKey(
+    channelKey,
+    videoRef,
+    args.item.blobId || undefined,
+    args.item.blobsCoreKey || undefined,
+  )
+  const playbackRequest = buildPublishedPlaybackRequest(args.item, channelKey, videoRef)
+  const video = { ...args.item, channelKey }
+
+  try {
+    const result = await args.rpc.preparePlayback(playbackRequest)
+    if (result?.url) {
+      if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
+      args.loadAndPlayVideo(video, result.url)
+      return
+    }
+    Alert.alert('Playback unavailable', 'Could not prepare this video for playback yet.')
+  } catch (err: any) {
+    console.error('[Studio] Failed to play published video:', err?.message || err)
+    Alert.alert('Playback unavailable', err?.message || 'Could not prepare this video for playback yet.')
+  }
+}
+
+async function shareStudioChannelInvite(code: string): Promise<void> {
+  try {
+    await Share.share({ message: code, title: 'PearTube device invite' })
+  } catch {
+    await Clipboard.setStringAsync(code)
+    Alert.alert('Copied', 'Invite code copied to clipboard')
+  }
+}
+
+async function createStudioChannelInvite(
+  rpc: any,
+  driveKey: string | undefined,
+  setInviteCode: (code: string) => void,
+  setLoading: (loading: boolean) => void,
+): Promise<void> {
+  if (!rpc || !driveKey) return
+  setLoading(true)
+  try {
+    const res = await rpc.createDeviceInvite(driveKey)
+    if (!res?.inviteCode) throw new Error('Failed to create invite')
+    setInviteCode(res.inviteCode)
+    haptics.success()
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to create invite'
+    console.error('[Studio] Failed to create channel invite:', message)
+    Alert.alert('Error', message)
+  } finally {
+    setLoading(false)
+  }
+}
+
+async function pairStudioChannelDevice(args: {
+  rpc: any
+  code: string
+  deviceName: string
+  setPairing: (pairing: boolean) => void
+  clearPairFields: () => void
+  reloadDevices: () => Promise<void>
+}): Promise<void> {
+  if (!args.rpc) return
+  const code = args.code.trim()
+  if (!code) return
+  args.setPairing(true)
+  try {
+    const res = await args.rpc.pairDevice({
+      inviteCode: code,
+      deviceName: args.deviceName.trim() || undefined,
+    })
+    if (!res?.success) throw new Error('Pair failed')
+    args.clearPairFields()
+    haptics.success()
+    Alert.alert('Linked', 'This device is now part of your channel.')
+    await args.reloadDevices()
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to link device'
+    console.error('[Studio] Pair device failed:', message)
+    Alert.alert('Error', message)
+  } finally {
+    args.setPairing(false)
+  }
+}
+
+function StudioScreenHeader({
+  topInset,
+  hasIdentity,
+  publisherEyebrow,
+  onSearch,
+  onSetupChannel,
+}: {
+  topInset: number
+  hasIdentity: boolean
+  publisherEyebrow: string
+  onSearch: () => void
+  onSetupChannel: () => void
+}) {
+  return (
+    <View style={{ paddingTop: topInset }}>
+      <ScreenHeader
+        title="STUDIO"
+        eyebrow={publisherEyebrow}
+        right={
+          <>
+            <CastHeaderButton size={18} />
+            <IconButton
+              icon="search"
+              accessibilityLabel="Search"
+              variant="plain"
+              size={36}
+              onPress={onSearch}
+            />
+          </>
+        }
+      />
+      {!hasIdentity ? (
+        <Pressable onPress={onSetupChannel} style={styles.setupBanner}>
+          <Meta tone="accent">Set up your channel to start publishing →</Meta>
+        </Pressable>
+      ) : null}
+    </View>
+  )
+}
+
+function StudioThumbnailPreview({
+  thumbnailUri,
+  thumbnailGenerating,
+  thumbnailError,
+  onPickThumbnail,
+}: {
+  thumbnailUri: string | null
+  thumbnailGenerating: boolean
+  thumbnailError: string | null
+  onPickThumbnail: () => void
+}) {
+  let emptyLabel = 'Thumbnail not available'
+  if (isPear) emptyLabel = 'Click below to add thumbnail'
+  else if (thumbnailGenerating) emptyLabel = 'Generating thumbnail...'
+  else if (thumbnailError) emptyLabel = thumbnailError
+
+  return (
+    <Panel padded={false} style={styles.thumbPanel}>
+      <View style={styles.thumbAspect}>
+        {thumbnailUri ? (
+          <View style={styles.thumbFill}>
+            <Image
+              source={{ uri: thumbnailUri }}
+              style={styles.thumbFill}
+              resizeMode="cover"
+            />
+            {thumbnailGenerating ? (
+              <View style={styles.thumbScrim}>
+                <ActivityIndicator color={colors.text} />
+              </View>
+            ) : null}
+          </View>
+        ) : (
+          <View style={styles.thumbPlaceholder}>
+            <Feather name="film" color={colors.textMuted} size={48} />
+            <Meta tone="muted" style={styles.thumbPlaceholderMeta}>{emptyLabel}</Meta>
+          </View>
+        )}
+      </View>
+      <Pressable onPress={onPickThumbnail} style={styles.thumbAction}>
+        <Feather name="image" color={colors.textMuted} size={16} />
+        <Meta tone="muted">
+          {thumbnailUri ? 'Change Thumbnail' : 'Add Thumbnail'}
+        </Meta>
+      </Pressable>
+    </Panel>
+  )
+}
+
+function StudioEpisodeMetadataFields({
+  episodeMetadataEnabled,
+  setEpisodeMetadataEnabled,
+  seriesId,
+  setSeriesId,
+  seriesTitle,
+  setSeriesTitle,
+  tmdbSeriesId,
+  setTmdbSeriesId,
+  seasonNumber,
+  setSeasonNumber,
+  episodeNumber,
+  setEpisodeNumber,
+  expectedEpisodeCount,
+  setExpectedEpisodeCount,
+}: {
+  episodeMetadataEnabled: boolean
+  setEpisodeMetadataEnabled: (enabled: boolean) => void
+  seriesId: string
+  setSeriesId: (value: string) => void
+  seriesTitle: string
+  setSeriesTitle: (value: string) => void
+  tmdbSeriesId: string
+  setTmdbSeriesId: (value: string) => void
+  seasonNumber: string
+  setSeasonNumber: (value: string) => void
+  episodeNumber: string
+  setEpisodeNumber: (value: string) => void
+  expectedEpisodeCount: string
+  setExpectedEpisodeCount: (value: string) => void
+}) {
+  return (
+    <View style={styles.fieldBlock}>
+      <Eyebrow>COLLECTION METADATA (OPTIONAL)</Eyebrow>
+      <View style={styles.chipWrap}>
+        <Chip
+          label="Standalone"
+          selected={!episodeMetadataEnabled}
+          onPress={() => setEpisodeMetadataEnabled(false)}
+        />
+        <Chip
+          label="Series episode"
+          selected={episodeMetadataEnabled}
+          onPress={() => setEpisodeMetadataEnabled(true)}
+        />
+      </View>
+      {episodeMetadataEnabled ? (
+        <View style={styles.episodeFields}>
+          <StudioInput
+            accessibilityLabel="Series ID"
+            placeholder="Series ID (lowercase, stable)"
+            value={seriesId}
+            onChangeText={setSeriesId}
+            maxLength={128}
+            autoCapitalize="none"
+          />
+          <StudioInput
+            accessibilityLabel="Series title"
+            placeholder="Series title"
+            value={seriesTitle}
+            onChangeText={setSeriesTitle}
+            maxLength={512}
+          />
+          <StudioInput
+            accessibilityLabel="TMDB series ID"
+            placeholder="TMDB series ID"
+            value={tmdbSeriesId}
+            onChangeText={setTmdbSeriesId}
+            maxLength={20}
+            keyboardType="number-pad"
+          />
+          <View style={styles.episodeRow}>
+            <StudioInput
+              accessibilityLabel="Season number"
+              placeholder="Season"
+              value={seasonNumber}
+              onChangeText={setSeasonNumber}
+              maxLength={6}
+              keyboardType="number-pad"
+              style={styles.episodeInput}
+            />
+            <StudioInput
+              accessibilityLabel="Episode number"
+              placeholder="Episode"
+              value={episodeNumber}
+              onChangeText={setEpisodeNumber}
+              maxLength={6}
+              keyboardType="number-pad"
+              style={styles.episodeInput}
+            />
+            <StudioInput
+              accessibilityLabel="Expected episode count"
+              placeholder="Expected"
+              value={expectedEpisodeCount}
+              onChangeText={setExpectedEpisodeCount}
+              maxLength={6}
+              keyboardType="number-pad"
+              style={styles.episodeInput}
+            />
+          </View>
+        </View>
+      ) : null}
+    </View>
+  )
+}
+
+function StudioUploadProgress({
+  uploadProgress,
+  isTranscoding,
+  uploadSpeed,
+  uploadEta,
+}: {
+  uploadProgress: number
+  isTranscoding: boolean
+  uploadSpeed: number
+  uploadEta: number
+}) {
+  const statusText = isTranscoding
+    ? `Optimizing for streaming… ${uploadProgress}%`
+    : `Adding to your channel… ${uploadProgress}%` +
+      (uploadSpeed > 0 ? ` · ${formatSpeed(uploadSpeed)}` : '') +
+      (uploadEta > 0 ? ` · ${formatEta(uploadEta)} left` : '')
+
+  return (
+    <View style={styles.progressBlock}>
+      <View style={styles.progressTrack}>
+        <View style={[styles.progressFill, { width: `${uploadProgress}%` }]} />
+      </View>
+      <View style={styles.progressMetaRow}>
+        <ActivityIndicator color={colors.primary} size="small" />
+        <Meta tone="muted" style={styles.progressMeta}>{statusText}</Meta>
+      </View>
+      <Tag
+        label={isTranscoding ? 'ENCODING' : 'PUBLISHING'}
+        tone={isTranscoding ? 'warning' : 'accent'}
+      />
+    </View>
+  )
+}
+
+function StudioPublishButton({
+  title,
+  thumbnailGenerating,
+  thumbnailFilePath,
+  onPress,
+}: {
+  title: string
+  thumbnailGenerating: boolean
+  thumbnailFilePath: string | null
+  onPress: () => void
+}) {
+  const disabled = !title.trim() || (!isPear && (thumbnailGenerating || !thumbnailFilePath))
+  const label = !isPear && thumbnailGenerating
+    ? 'PREPARING THUMBNAIL…'
+    : (!isPear && !thumbnailFilePath)
+      ? 'ADD A THUMBNAIL TO PUBLISH'
+      : 'PUBLISH'
+
+  return (
+    <Button
+      label={label}
+      icon="upload"
+      onPress={onPress}
+      disabled={disabled}
+      block
+    />
+  )
+}
+
+function StudioSelectedUploadForm(props: {
+  thumbnailUri: string | null
+  thumbnailGenerating: boolean
+  thumbnailError: string | null
+  onPickThumbnail: () => void
+  onClearSelection: () => void
+  title: string
+  setTitle: (value: string) => void
+  categoryOptions: string[]
+  selectedCategory: string
+  setSelectedCategory: (value: string) => void
+  episodeMetadataEnabled: boolean
+  setEpisodeMetadataEnabled: (enabled: boolean) => void
+  seriesId: string
+  setSeriesId: (value: string) => void
+  seriesTitle: string
+  setSeriesTitle: (value: string) => void
+  tmdbSeriesId: string
+  setTmdbSeriesId: (value: string) => void
+  seasonNumber: string
+  setSeasonNumber: (value: string) => void
+  episodeNumber: string
+  setEpisodeNumber: (value: string) => void
+  expectedEpisodeCount: string
+  setExpectedEpisodeCount: (value: string) => void
+  uploading: boolean
+  uploadProgress: number
+  isTranscoding: boolean
+  uploadSpeed: number
+  uploadEta: number
+  thumbnailFilePath: string | null
+  onUpload: () => void
+}) {
+  return (
+    <View style={styles.uploadForm}>
+      <StudioThumbnailPreview
+        thumbnailUri={props.thumbnailUri}
+        thumbnailGenerating={props.thumbnailGenerating}
+        thumbnailError={props.thumbnailError}
+        onPickThumbnail={props.onPickThumbnail}
+      />
+
+      <Panel style={styles.selectedRow}>
+        <View style={styles.selectedIcon}>
+          <Feather name="film" color={colors.primary} size={20} />
+        </View>
+        <Text style={styles.selectedLabel} numberOfLines={1}>
+          Video selected
+        </Text>
+        <IconButton
+          icon="trash-2"
+          accessibilityLabel="Clear selected video"
+          variant="plain"
+          size={32}
+          onPress={props.onClearSelection}
+        />
+      </Panel>
+
+      {!isPear && props.thumbnailError ? (
+        <Panel tone="muted">
+          <Meta tone="muted">
+            Thumbnail generation failed. Tap Add Thumbnail to pick an image.
+          </Meta>
+        </Panel>
+      ) : null}
+
+      <StudioInput
+        placeholder="Video title"
+        value={props.title}
+        onChangeText={props.setTitle}
+      />
+
+      <View style={styles.fieldBlock}>
+        <Eyebrow>CATEGORY</Eyebrow>
+        <View style={styles.chipWrap}>
+          {props.categoryOptions.map((cat) => (
+            <Chip
+              key={cat}
+              label={cat}
+              selected={props.selectedCategory === cat}
+              onPress={() => props.setSelectedCategory(cat)}
+            />
+          ))}
+        </View>
+      </View>
+
+      <StudioEpisodeMetadataFields
+        episodeMetadataEnabled={props.episodeMetadataEnabled}
+        setEpisodeMetadataEnabled={props.setEpisodeMetadataEnabled}
+        seriesId={props.seriesId}
+        setSeriesId={props.setSeriesId}
+        seriesTitle={props.seriesTitle}
+        setSeriesTitle={props.setSeriesTitle}
+        tmdbSeriesId={props.tmdbSeriesId}
+        setTmdbSeriesId={props.setTmdbSeriesId}
+        seasonNumber={props.seasonNumber}
+        setSeasonNumber={props.setSeasonNumber}
+        episodeNumber={props.episodeNumber}
+        setEpisodeNumber={props.setEpisodeNumber}
+        expectedEpisodeCount={props.expectedEpisodeCount}
+        setExpectedEpisodeCount={props.setExpectedEpisodeCount}
+      />
+
+      {props.uploading ? (
+        <StudioUploadProgress
+          uploadProgress={props.uploadProgress}
+          isTranscoding={props.isTranscoding}
+          uploadSpeed={props.uploadSpeed}
+          uploadEta={props.uploadEta}
+        />
+      ) : (
+        <StudioPublishButton
+          title={props.title}
+          thumbnailGenerating={props.thumbnailGenerating}
+          thumbnailFilePath={props.thumbnailFilePath}
+          onPress={props.onUpload}
+        />
+      )}
+    </View>
+  )
+}
+
+function StudioPickVideoButton({
+  pickingVideo,
+  preparingVideo,
+  onPress,
+}: {
+  pickingVideo: boolean
+  preparingVideo: boolean
+  onPress: () => void
+}) {
+  let label = 'Choose a video to share'
+  if (preparingVideo) label = 'Preparing video…'
+  else if (pickingVideo) label = 'Opening picker…'
+
+  return (
+    <Panel style={styles.dropZone}>
+      <Eyebrow tone="accent">DROP / SELECT MEDIA</Eyebrow>
+      <Meta tone="muted" style={styles.dropHint}>{label}</Meta>
+      <Button
+        label="SELECT FILE"
+        icon="upload"
+        onPress={onPress}
+        disabled={pickingVideo || preparingVideo}
+        loading={preparingVideo || pickingVideo}
+        block
+      />
+    </Panel>
+  )
+}
+
+function StudioChannelDevicesPanel({
+  channelDevices,
+  channelDevicesLoading,
+  channelInviteCode,
+  channelInviteLoading,
+  channelPairCode,
+  setChannelPairCode,
+  channelPairName,
+  setChannelPairName,
+  channelPairing,
+  hasDriveKey,
+  onCreateInvite,
+  onShareInvite,
+  onPairDevice,
+}: {
+  channelDevices: Array<{ keyHex?: string; deviceName?: string }>
+  channelDevicesLoading: boolean
+  channelInviteCode: string | null
+  channelInviteLoading: boolean
+  channelPairCode: string
+  setChannelPairCode: (value: string) => void
+  channelPairName: string
+  setChannelPairName: (value: string) => void
+  channelPairing: boolean
+  hasDriveKey: boolean
+  onCreateInvite: () => void
+  onShareInvite: (code: string) => void
+  onPairDevice: () => void
+}) {
+  return (
+    <View style={styles.section}>
+      <SectionHeader title="CHANNEL DEVICES" flush />
+      <Body tone="muted" size="sm" style={styles.devicesBlurb}>
+        Link another device so it can publish to this channel. This shares publishing
+        authority for the channel — not your viewing state.
+      </Body>
+
+      <Panel tone="muted" style={styles.devicesPanel}>
+        {channelDevices.length ? (
+          <View style={styles.deviceList}>
+            {channelDevices.map((device, idx) => (
+              <View key={device?.keyHex || idx} style={styles.deviceRow}>
+                <Feather name="smartphone" color={colors.textSecondary} size={16} />
+                <View style={styles.deviceCopy}>
+                  <Text style={styles.deviceName}>{device?.deviceName || `Device ${idx + 1}`}</Text>
+                  <Meta tone="muted" numberOfLines={1}>{device?.keyHex || ''}</Meta>
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <Meta tone="muted">
+            {channelDevicesLoading ? 'Looking for linked devices…' : 'Just this device so far.'}
+          </Meta>
+        )}
+
+        {channelInviteCode ? (
+          <Panel style={styles.inviteBox}>
+            <Eyebrow>INVITE CODE — ENTER IT ON YOUR OTHER DEVICE</Eyebrow>
+            <Text selectable style={styles.inviteCode}>{channelInviteCode}</Text>
+            <View style={styles.inviteActions}>
+              <Button
+                label="COPY"
+                variant="secondary"
+                icon="copy"
+                size="sm"
+                onPress={async () => {
+                  await Clipboard.setStringAsync(channelInviteCode)
+                  Alert.alert('Copied', 'Invite code copied to clipboard')
+                }}
+                style={styles.inviteBtn}
+              />
+              <Button
+                label="SHARE"
+                variant="secondary"
+                icon="share-2"
+                size="sm"
+                onPress={() => onShareInvite(channelInviteCode)}
+                style={styles.inviteBtn}
+              />
+            </View>
+          </Panel>
+        ) : null}
+
+        <Button
+          label="LINK A DEVICE"
+          icon="plus"
+          onPress={onCreateInvite}
+          disabled={channelInviteLoading || !hasDriveKey}
+          loading={channelInviteLoading}
+          block
+        />
+
+        <StudioInput
+          placeholder="Paste invite code"
+          value={channelPairCode}
+          onChangeText={setChannelPairCode}
+          autoCapitalize="none"
+        />
+        <StudioInput
+          placeholder="Device name (optional)"
+          value={channelPairName}
+          onChangeText={setChannelPairName}
+          autoCapitalize="none"
+        />
+        <Button
+          label="LINK WITH THIS CODE"
+          variant="secondary"
+          icon="link"
+          onPress={onPairDevice}
+          disabled={channelPairing || !channelPairCode.trim()}
+          loading={channelPairing}
+          block
+        />
+      </Panel>
+    </View>
+  )
+}
+
+function StudioPublishedVideoRow({
+  item,
+  offload,
+  onPlay,
+  onEdit,
+  onOffload,
+  onDelete,
+}: {
+  item: Video
+  offload?: StudioOffloadInfo
+  onPlay: () => void
+  onEdit: () => void
+  onOffload: () => void
+  onDelete: () => void
+}) {
+  let offloadControl: ReactNode = null
+  if (offload?.offloaded) {
+    offloadControl = (
+      <View style={styles.publishedActionSlot}>
+        <Feather name="cloud" color={colors.text} size={16} />
+      </View>
+    )
+  } else if (offload?.eligible) {
+    offloadControl = (
+      <Pressable
+        onPress={onOffload}
+        disabled={offload?.busy}
+        style={styles.publishedActionSlot}
+        accessibilityLabel="Free up local space"
+      >
+        {offload?.busy
+          ? <ActivityIndicator size="small" color={colors.primary} />
+          : <Feather name="download-cloud" color={colors.primary} size={18} />}
+      </Pressable>
+    )
+  }
+
+  return (
+    <Panel padded={false} style={styles.publishedRow}>
+      <Pressable
+        onPress={onPlay}
+        style={styles.publishedHit}
+        accessibilityRole="button"
+        accessibilityLabel={`Play ${item.title}`}
+      >
+        <View style={styles.publishedThumb}>
+          {item.thumbnail ? (
+            <Image source={{ uri: item.thumbnail }} style={styles.publishedThumbImg} resizeMode="cover" />
+          ) : (
+            <Ionicons name="play" color={colors.text} size={16} />
+          )}
+        </View>
+        <View style={styles.publishedCopy}>
+          <Text style={styles.publishedTitle} numberOfLines={2}>{item.title}</Text>
+          <Meta tone="muted">
+            {formatBytes(item.size)} · {formatDate(item.uploadedAt)}
+          </Meta>
+        </View>
+      </Pressable>
+      <IconButton
+        icon="edit-2"
+        accessibilityLabel="Edit video"
+        variant="plain"
+        size={40}
+        onPress={onEdit}
+      />
+      {offloadControl}
+      <IconButton
+        icon="trash-2"
+        accessibilityLabel="Delete video"
+        variant="plain"
+        size={40}
+        onPress={onDelete}
+      />
+    </Panel>
+  )
+}
+
 function StudioScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
@@ -207,18 +1501,7 @@ function StudioScreen() {
   const [channelPairing, setChannelPairing] = useState(false)
   // Per-publication source-offload assessments. Eligibility is only a prompt to
   // request explicit confirmation; the backend rechecks and consumes the nonce.
-  const [offloadInfo, setOffloadInfo] = useState<Record<string, {
-    eligible: boolean
-    byteLength: number
-    publicationId?: string
-    assessmentId?: string
-    evidenceDigest?: string
-    confirmationNonce?: string
-    policyVersion?: number
-    limitations?: string[]
-    offloaded?: boolean
-    busy?: boolean
-  }>>({})
+  const [offloadInfo, setOffloadInfo] = useState<Record<string, StudioOffloadInfo>>({})
   const assessedOffloadRef = useRef<Set<string>>(new Set())
   const tabBarMetrics = useTabBarMetrics()
   const bottomPadding = Math.max(tabBarMetrics.height + 16, insets.bottom + 16)
@@ -245,108 +1528,75 @@ function StudioScreen() {
     return true
   }, [rpc])
 
-  // Generate thumbnail from video at 10%
   const generateThumbnail = useCallback(async (videoUri: string, durationMs?: number) => {
-    if (isPear) return // Desktop handles thumbnails server-side
-    try {
-      const genId = ++thumbnailGenIdRef.current
-      setThumbnailGenerating(true)
-      setThumbnailError(null)
-      const primaryTime = durationMs ? Math.floor(durationMs * 0.1) : 1000
-      const times = Array.from(new Set([primaryTime, 1000, 2000].filter((t) => t >= 0)))
-
-      for (const timeMs of times) {
-        try {
-          console.log('[Studio] Generating thumbnail at', timeMs, 'ms')
-          const { uri } = await VideoThumbnails.getThumbnailAsync(videoUri, {
-            time: timeMs,
-            quality: 0.7,
-          })
-          console.log('[Studio] Thumbnail generated:', uri)
-          // Ignore stale generations (user picked another video)
-          if (thumbnailGenIdRef.current !== genId) return null
-          setThumbnailUri(uri)
-          setThumbnailFilePath(uri)
-          return uri
-        } catch (err) {
-          console.log('[Studio] Thumbnail attempt failed at', timeMs, 'ms:', err)
-        }
-      }
-
-      if (thumbnailGenIdRef.current === genId) {
-        setThumbnailError('Could not generate thumbnail. Please pick an image.')
-      }
-
-      return null
-    } catch (err) {
-      console.log('[Studio] Thumbnail generation failed:', err)
-      setThumbnailError('Could not generate thumbnail. Please pick an image.')
-      return null
-    } finally {
-      setThumbnailGenerating(false)
-    }
+    const genId = ++thumbnailGenIdRef.current
+    return generateStudioThumbnail(
+      videoUri,
+      durationMs,
+      genId,
+      (id) => thumbnailGenIdRef.current === id,
+      () => {
+        setThumbnailGenerating(true)
+        setThumbnailError(null)
+      },
+      (uri) => {
+        setThumbnailUri(uri)
+        setThumbnailFilePath(uri)
+      },
+      (message) => setThumbnailError(message),
+      () => setThumbnailGenerating(false),
+    )
   }, [])
 
-  // Pick custom thumbnail image
   const pickThumbnail = useCallback(async () => {
     console.log('[Studio] pickThumbnail called, isPear:', isPear)
     if (isPear) {
-      // Pear desktop: use native file picker
-      try {
-        console.log('[Studio] Opening native image file picker...')
-        const result = await pickImageFile()
-        console.log('[Studio] pickImageFile result:', JSON.stringify(result))
-
-        if (!result) {
-          console.log('[Studio] Image picker not available')
-          return
-        }
-
-        if ('cancelled' in result && result.cancelled) {
-          console.log('[Studio] Image picker cancelled')
-          return
-        }
-
-        if ('filePath' in result) {
-          console.log('[Studio] Thumbnail selected:', result.filePath)
-          // Store file path for upload and dataUrl for preview
-          setThumbnailFilePath(result.filePath)
-          console.log('[Studio] setThumbnailFilePath called with:', result.filePath)
-          if ('dataUrl' in result && typeof result.dataUrl === 'string') {
-            setThumbnailUri(result.dataUrl)
-            console.log('[Studio] setThumbnailUri called with dataUrl (length:', result.dataUrl.length, ')')
-          }
-        }
-      } catch (err: any) {
-        console.error('[Studio] Image picker error:', err)
-        Alert.alert('Error', err.message || 'Failed to open image picker')
-      }
+      await pickPearStudioThumbnail(pickImageFile, (filePathValue, dataUrl) => {
+        setThumbnailFilePath(filePathValue)
+        if (dataUrl) setThumbnailUri(dataUrl)
+      })
       return
     }
 
-    // Native: use expo-image-picker
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Please grant permission to access your photos')
-      return
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [16, 9],
-      quality: 0.8,
-    })
-
-    if (!result.canceled && result.assets[0]) {
-      console.log('[Studio] Custom thumbnail selected:', result.assets[0].uri)
-      setThumbnailUri(result.assets[0].uri)
-      setThumbnailFilePath(result.assets[0].uri)
+    await pickNativeStudioThumbnail((uri) => {
+      setThumbnailUri(uri)
+      setThumbnailFilePath(uri)
       setThumbnailError(null)
-    }
+    })
   }, [pickImageFile])
 
-  const pickVideo = async () => {
+  const clearVideoSelection = useCallback(() => {
+    setSelectedVideo(null)
+    setFilePath(null)
+    setFileSize(0)
+    setThumbnailUri(null)
+    setThumbnailFilePath(null)
+    setVideoDuration(null)
+    setThumbnailError(null)
+    void cleanupTempVideo()
+  }, [cleanupTempVideo])
+
+  const resetUploadForm = useCallback(() => {
+    setSelectedVideo(null)
+    setFilePath(null)
+    setTitle('')
+    setFileSize(0)
+    setThumbnailUri(null)
+    setThumbnailFilePath(null)
+    setVideoDuration(null)
+    setSelectedCategory('Other')
+    setEpisodeMetadataEnabled(false)
+    setSeriesId('')
+    setSeriesTitle('')
+    setTmdbSeriesId('')
+    setSeasonNumber('')
+    setEpisodeNumber('')
+    setExpectedEpisodeCount('')
+    setThumbnailError(null)
+    void cleanupTempVideo()
+  }, [cleanupTempVideo])
+
+  const pickVideo = useCallback(async () => {
     if (pickingVideoRef.current) return
     if (AppState.currentState !== 'active') return
 
@@ -361,126 +1611,51 @@ function StudioScreen() {
     closeVideo()
     clearLastClosedVideo()
 
-    if (isPear) {
-      // Pear desktop: use native file picker via osascript
-      try {
-        console.log('[Studio] Opening native file picker...')
-        const result = await pickVideoFile()
-
-        if (!result) {
-          console.log('[Studio] File picker not available')
-          Alert.alert('Not available', 'Native file picker is not available')
-          return
-        }
-
-        if ('cancelled' in result && result.cancelled) {
-          console.log('[Studio] File picker cancelled')
-          return
-        }
-
-        if ('filePath' in result) {
-          console.log('[Studio] File selected:', result.filePath, 'size:', result.size)
-          setFilePath(result.filePath)
-          setSelectedVideo(result.filePath) // Use path as identifier
-          // Use filename for title (without extension)
-          setTitle(result.name.replace(/\.[^/.]+$/, ''))
-          setFileSize(result.size)
-          setMimeType('video/mp4') // Default, worker will detect
-        }
-      } catch (err: any) {
-        console.error('[Studio] File picker error:', err)
-        Alert.alert('Error', err.message || 'Failed to open file picker')
-      }
-      return
-    }
-
     try {
-      // Android: prefer DocumentPicker to avoid Photo Picker URI permission issues.
+      if (isPear) {
+        await pickPearStudioVideo(pickVideoFile, (selectedPath, name, size) => {
+          setFilePath(selectedPath)
+          setSelectedVideo(selectedPath) // Use path as identifier
+          setTitle(titleFromFilename(name))
+          setFileSize(size)
+          setMimeType('video/mp4') // Default, worker will detect
+        })
+        return
+      }
+
       if (Platform.OS === 'android') {
-        // copyToCacheDirectory:false → the picker returns immediately with a
-        // content:// URI instead of blocking (with no UI feedback) while it copies
-        // the whole file. For 1GB+ videos the inline copy is what made the screen
-        // hang/"never load". We copy into cache ourselves below, with feedback.
-        const docResult = await DocumentPicker.getDocumentAsync({
-          type: 'video/*',
-          copyToCacheDirectory: false,
-          multiple: false,
-        })
-
-        if (docResult.canceled) return
-        const asset = docResult.assets?.[0]
-        if (!asset?.uri) return
-
-        // Reset prior selection/preview state and drop any earlier temp copy.
+        // Reset prior selection/preview state before prepare.
         setThumbnailUri(null)
         setThumbnailFilePath(null)
         setThumbnailError(null)
-        void cleanupTempVideo()
-
-        const filename = asset.name || asset.uri.split('/').pop() || 'Untitled'
-        setTitle(filename.replace(/\.[^/.]+$/, ''))
-        if (typeof asset.size === 'number') setFileSize(asset.size)
-        if (typeof asset.mimeType === 'string') setMimeType(asset.mimeType)
-
-        // Materialize a real file:// path the backend can stream from. Show a
-        // "Preparing…" state so the user isn't staring at a frozen/black screen.
-        setPreparingVideo(true)
-        try {
-          const localUri = await copyPickedVideoToCache(asset.uri, asset.name || undefined)
-          tempVideoUriRef.current = localUri
-          setSelectedVideo(localUri)
-
-          // Kick off thumbnail generation (non-blocking) from the cached file:// URI.
-          InteractionManager.runAfterInteractions(() => {
-            void generateThumbnail(localUri).catch((err) => {
-              console.log('[Studio] Background thumbnail generation failed:', err)
-            })
-          })
-        } catch (err: any) {
-          console.error('[Studio] Failed to prepare video:', err)
-          Alert.alert('Could not prepare video', err?.message || 'Failed to read the selected video. Please try again.')
-        } finally {
-          setPreparingVideo(false)
-        }
-
+        await pickAndroidStudioVideo(
+          cleanupTempVideo,
+          setPreparingVideo,
+          (filename, size, nextMime) => {
+            setTitle(titleFromFilename(filename))
+            if (typeof size === 'number') setFileSize(size)
+            if (typeof nextMime === 'string') setMimeType(nextMime)
+          },
+          (localUri) => {
+            tempVideoUriRef.current = localUri
+            setSelectedVideo(localUri)
+          },
+          generateThumbnail,
+        )
         return
       }
 
-      // iOS: use expo-image-picker
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
-      if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Please grant permission to access your videos')
-        return
-      }
-
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['videos'],
-        allowsEditing: false,
-        videoExportPreset: ImagePicker.VideoExportPreset.Passthrough,
-        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
-      })
-
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0]
-        setSelectedVideo(asset.uri)
-        const filename = asset.uri.split('/').pop() || 'Untitled'
-        setTitle(filename.replace(/\.[^/.]+$/, ''))
-
-        // Store duration if available
-        if (asset.duration) {
-          setVideoDuration(asset.duration)
-        }
-
-        // Generate thumbnail at 10% into video, but don't block UI.
-        setThumbnailUri(null)
-        setThumbnailFilePath(null)
-        setThumbnailError(null)
-        InteractionManager.runAfterInteractions(() => {
-          void generateThumbnail(asset.uri, asset.duration ?? undefined).catch((err) => {
-            console.log('[Studio] Background thumbnail generation failed:', err)
-          })
-        })
-      }
+      await pickIOSStudioVideo(
+        (uri, filename, duration) => {
+          setSelectedVideo(uri)
+          setTitle(titleFromFilename(filename))
+          if (duration) setVideoDuration(duration)
+          setThumbnailUri(null)
+          setThumbnailFilePath(null)
+          setThumbnailError(null)
+        },
+        generateThumbnail,
+      )
     } catch (err: any) {
       console.error('[Studio] pickVideo error:', err)
       Alert.alert('Error', err?.message || 'Failed to open video picker')
@@ -488,9 +1663,18 @@ function StudioScreen() {
       pickingVideoRef.current = false
       setPickingVideo(false)
     }
-  }
+  }, [
+    cleanupTempVideo,
+    clearLastClosedVideo,
+    closeVideo,
+    generateThumbnail,
+    pauseVideo,
+    pickVideoFile,
+    suppressForegroundRestoreFor,
+    suppressForegroundRestoreOnce,
+  ])
 
-  const handleUpload = async () => {
+  const handleUpload = useCallback(async () => {
     console.log('[Studio] handleUpload called:', {
       selectedVideo: !!selectedVideo,
       title: title.trim(),
@@ -500,138 +1684,61 @@ function StudioScreen() {
       thumbnailUri: thumbnailUri || 'none',
     })
 
-    if (!selectedVideo) {
-      Alert.alert('No video selected', 'Please select a video to upload')
-      return
-    }
-    if (!title.trim()) {
-      Alert.alert('Title required', 'Please enter a title for your video')
-      return
-    }
-    if (!identity) {
-      console.error('[Studio] No identity! Please create one in Profile first')
-      Alert.alert('No channel yet', 'Create your channel from the Profile screen first.')
-      return
-    }
+    const driveKey = validateStudioUploadInput(selectedVideo, title, identity)
+    if (!driveKey || !selectedVideo) return
 
-    if (!identity.driveKey) {
-      console.error('[Studio] Identity missing driveKey')
-      Alert.alert('Channel error', 'Your channel is missing its key. Please recreate it from the Profile screen.')
-      return
-    }
-
-    const driveKey = identity.driveKey
-    const media: StudioEpisodeMediaInput = {
-      enabled: episodeMetadataEnabled,
+    const media = buildStudioEpisodeMediaInput(
+      episodeMetadataEnabled,
       seriesId,
       seriesTitle,
-      tmdbId: tmdbSeriesId,
+      tmdbSeriesId,
       seasonNumber,
       episodeNumber,
       expectedEpisodeCount,
-    }
+    )
 
     setUploading(true)
     setUploadProgress(0)
 
-    try {
-      let videoId: string | null = null
+    const onProgress = (progress: number, speed?: number, eta?: number, transcoding?: boolean) => {
+      setUploadProgress(progress)
+      if (speed !== undefined) setUploadSpeed(speed)
+      if (eta !== undefined) setUploadEta(eta)
+      setIsTranscoding(!!transcoding)
+    }
 
+    try {
       if (isPear && filePath) {
-        // Pear desktop: use file path based upload via uploadVideo from context
-        // Skip FFmpeg thumbnail generation if user selected a custom thumbnail
-        const skipThumbnail = !!thumbnailFilePath
-        console.log('[Studio] Uploading via Pear:', filePath, 'category:', selectedCategory, 'skipThumbnail:', skipThumbnail)
-        const video = await uploadStudioVideo(uploadVideo, {
+        await runPearStudioUpload({
+          uploadVideo,
           filePath,
           title: title.trim(),
           mimeType,
-          category: selectedCategory,
-          onProgress: (progress, speed, eta, transcoding) => {
-            setUploadProgress(progress)
-            if (speed !== undefined) setUploadSpeed(speed)
-            if (eta !== undefined) setUploadEta(eta)
-            setIsTranscoding(!!transcoding)
-          },
-          skipThumbnailGeneration: skipThumbnail,
+          selectedCategory,
           media,
+          thumbnailFilePath,
+          rpc,
+          driveKey,
+          loadVideos,
+          uploadThumbnailForVideo,
+          onProgress,
         })
-        videoId = video?.id
-
-        // If we have a thumbnail selected, upload it
-        if (thumbnailFilePath && videoId && rpc) {
-          console.log('[Studio] Uploading thumbnail from file:', thumbnailFilePath)
-          try {
-            const uploaded = await uploadThumbnailForVideo(videoId, thumbnailFilePath)
-            console.log('[Studio] Thumbnail upload result:', uploaded)
-          } catch (thumbErr) {
-            console.error('[Studio] Failed to upload thumbnail:', thumbErr)
-            // Don't fail the whole upload if thumbnail fails
-          }
-        }
-
-        // Reload videos after upload
-        await loadVideos(driveKey)
       } else if (rpc) {
-        // Native: use AppContext uploadVideo so we get streaming progress events.
-        // Prefer the RN-generated thumbnail when available.
-        // Keep backend (bare-ffmpeg) thumbnail generation available as a fallback
-        // on iOS only. (Android backend thumbnail generation has been crash-prone.)
-        const skipThumbnail = Platform.OS === 'android'
-          ? true
-          : (thumbnailGenerating || !!thumbnailFilePath)
-
-        const video = await uploadStudioVideo(uploadVideo, {
-          filePath: selectedVideo,
+        await runNativeStudioUpload({
+          uploadVideo,
+          selectedVideo,
           title: title.trim(),
           mimeType,
-          category: selectedCategory,
-          onProgress: (progress, speed, eta, transcoding) => {
-            setUploadProgress(progress)
-            if (speed !== undefined) setUploadSpeed(speed)
-            if (eta !== undefined) setUploadEta(eta)
-            setIsTranscoding(!!transcoding)
-          },
-          skipThumbnailGeneration: skipThumbnail,
+          selectedCategory,
           media,
+          thumbnailGenerating,
+          thumbnailFilePath,
+          uploadThumbnailForVideo,
+          onProgress,
         })
-
-        videoId = video?.id
-        console.log('[Studio] Upload complete, videoId:', videoId, 'skippedThumbnail:', skipThumbnail)
-
-        // If we have a thumbnail file/URI, upload it (no base64)
-        if (thumbnailFilePath && videoId) {
-          console.log('[Studio] Uploading thumbnail from file:', thumbnailFilePath)
-          try {
-            const uploaded = await uploadThumbnailForVideo(videoId, thumbnailFilePath)
-            console.log('[Studio] Thumbnail upload result:', uploaded)
-          } catch (thumbErr: any) {
-            console.error('[Studio] Failed to upload thumbnail:', thumbErr?.message || thumbErr)
-            // Don't fail the whole upload if thumbnail fails
-          }
-        } else {
-          console.log('[Studio] No thumbnail to upload, thumbnailFilePath:', thumbnailFilePath, 'videoId:', videoId)
-        }
-
       }
 
-      setSelectedVideo(null)
-      setFilePath(null)
-      setTitle('')
-      setFileSize(0)
-      setThumbnailUri(null)
-      setThumbnailFilePath(null)
-      setVideoDuration(null)
-      setSelectedCategory('Other')
-      setEpisodeMetadataEnabled(false)
-      setSeriesId('')
-      setSeriesTitle('')
-      setTmdbSeriesId('')
-      setSeasonNumber('')
-      setEpisodeNumber('')
-      setExpectedEpisodeCount('')
-      setThumbnailError(null)
-      void cleanupTempVideo()
+      resetUploadForm()
       haptics.success()
       Alert.alert('Published!', 'Your video is live on your channel.')
     } catch (err: any) {
@@ -644,7 +1751,29 @@ function StudioScreen() {
       setUploadEta(0)
       setIsTranscoding(false)
     }
-  }
+  }, [
+    episodeMetadataEnabled,
+    episodeNumber,
+    expectedEpisodeCount,
+    filePath,
+    identity,
+    loadVideos,
+    mimeType,
+    resetUploadForm,
+    rpc,
+    seasonNumber,
+    selectedCategory,
+    selectedVideo,
+    seriesId,
+    seriesTitle,
+    thumbnailFilePath,
+    thumbnailGenerating,
+    thumbnailUri,
+    title,
+    tmdbSeriesId,
+    uploadThumbnailForVideo,
+    uploadVideo,
+  ])
 
   const loadChannelDevices = useCallback(async () => {
     if (!rpc || !identity?.driveKey) return
@@ -661,59 +1790,29 @@ function StudioScreen() {
 
   useEffect(() => { loadChannelDevices() }, [loadChannelDevices])
 
-  const createChannelInvite = async () => {
-    if (!rpc || !identity?.driveKey) return
-    setChannelInviteLoading(true)
-    try {
-      const res = await rpc.createDeviceInvite(identity.driveKey)
-      if (!res?.inviteCode) throw new Error('Failed to create invite')
-      setChannelInviteCode(res.inviteCode)
-      haptics.success()
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to create invite'
-      console.error('[Studio] Failed to create channel invite:', message)
-      Alert.alert('Error', message)
-    } finally {
-      setChannelInviteLoading(false)
-    }
-  }
+  const createChannelInvite = useCallback(async () => {
+    await createStudioChannelInvite(rpc, identity?.driveKey, setChannelInviteCode, setChannelInviteLoading)
+  }, [identity?.driveKey, rpc])
 
-  const pairChannelDevice = async () => {
-    if (!rpc) return
-    const code = channelPairCode.trim()
-    if (!code) return
-    setChannelPairing(true)
-    try {
-      const res = await rpc.pairDevice({
-        inviteCode: code,
-        deviceName: channelPairName.trim() || undefined,
-      })
-      if (!res?.success) throw new Error('Pair failed')
-      setChannelPairCode('')
-      setChannelPairName('')
-      haptics.success()
-      Alert.alert('Linked', 'This device is now part of your channel.')
-      await loadChannelDevices()
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to link device'
-      console.error('[Studio] Pair device failed:', message)
-      Alert.alert('Error', message)
-    } finally {
-      setChannelPairing(false)
-    }
-  }
+  const pairChannelDevice = useCallback(async () => {
+    await pairStudioChannelDevice({
+      rpc,
+      code: channelPairCode,
+      deviceName: channelPairName,
+      setPairing: setChannelPairing,
+      clearPairFields: () => {
+        setChannelPairCode('')
+        setChannelPairName('')
+      },
+      reloadDevices: loadChannelDevices,
+    })
+  }, [channelPairCode, channelPairName, loadChannelDevices, rpc])
 
-  const shareChannelInvite = async (code: string) => {
-    try {
-      await Share.share({ message: code, title: 'PearTube device invite' })
-    } catch {
-      await Clipboard.setStringAsync(code)
-      Alert.alert('Copied', 'Invite code copied to clipboard')
-    }
-  }
+  const shareChannelInvite = useCallback(async (code: string) => {
+    await shareStudioChannelInvite(code)
+  }, [])
 
   const myVideos = videos.filter((v) => v.channelKey === identity?.driveKey)
-
 
   const listHeaderComponent = (
     <View style={styles.headerBlock}>
@@ -734,315 +1833,72 @@ function StudioScreen() {
         </View>
       </Panel>
 
-      {/* Upload Section */}
       <View style={styles.section}>
         {selectedVideo ? (
-          <View style={styles.uploadForm}>
-            <Panel padded={false} style={styles.thumbPanel}>
-              <View style={styles.thumbAspect}>
-                {thumbnailUri ? (
-                  <View style={styles.thumbFill}>
-                    <Image
-                      source={{ uri: thumbnailUri }}
-                      style={styles.thumbFill}
-                      resizeMode="cover"
-                    />
-                    {thumbnailGenerating ? (
-                      <View style={styles.thumbScrim}>
-                        <ActivityIndicator color={colors.text} />
-                      </View>
-                    ) : null}
-                  </View>
-                ) : (
-                  <View style={styles.thumbPlaceholder}>
-                    <Feather name="film" color={colors.textMuted} size={48} />
-                    <Meta tone="muted" style={styles.thumbPlaceholderMeta}>
-                      {isPear
-                        ? 'Click below to add thumbnail'
-                        : (thumbnailGenerating
-                          ? 'Generating thumbnail...'
-                          : (thumbnailError ? thumbnailError : 'Thumbnail not available'))}
-                    </Meta>
-                  </View>
-                )}
-              </View>
-              <Pressable onPress={pickThumbnail} style={styles.thumbAction}>
-                <Feather name="image" color={colors.textMuted} size={16} />
-                <Meta tone="muted">
-                  {thumbnailUri ? 'Change Thumbnail' : 'Add Thumbnail'}
-                </Meta>
-              </Pressable>
-            </Panel>
-
-            <Panel style={styles.selectedRow}>
-              <View style={styles.selectedIcon}>
-                <Feather name="film" color={colors.primary} size={20} />
-              </View>
-              <Text style={styles.selectedLabel} numberOfLines={1}>
-                Video selected
-              </Text>
-              <IconButton
-                icon="trash-2"
-                accessibilityLabel="Clear selected video"
-                variant="plain"
-                size={32}
-                onPress={() => { setSelectedVideo(null); setFilePath(null); setFileSize(0); setThumbnailUri(null); setThumbnailFilePath(null); setVideoDuration(null); setThumbnailError(null); void cleanupTempVideo(); }}
-              />
-            </Panel>
-
-            {!isPear && thumbnailError ? (
-              <Panel tone="muted">
-                <Meta tone="muted">
-                  Thumbnail generation failed. Tap Add Thumbnail to pick an image.
-                </Meta>
-              </Panel>
-            ) : null}
-
-            <StudioInput
-              placeholder="Video title"
-              value={title}
-              onChangeText={setTitle}
-            />
-
-            <View style={styles.fieldBlock}>
-              <Eyebrow>CATEGORY</Eyebrow>
-              <View style={styles.chipWrap}>
-                {categoryOptions.map((cat) => (
-                  <Chip
-                    key={cat}
-                    label={cat}
-                    selected={selectedCategory === cat}
-                    onPress={() => setSelectedCategory(cat)}
-                  />
-                ))}
-              </View>
-            </View>
-
-            <View style={styles.fieldBlock}>
-              <Eyebrow>COLLECTION METADATA (OPTIONAL)</Eyebrow>
-              <View style={styles.chipWrap}>
-                <Chip
-                  label="Standalone"
-                  selected={!episodeMetadataEnabled}
-                  onPress={() => setEpisodeMetadataEnabled(false)}
-                />
-                <Chip
-                  label="Series episode"
-                  selected={episodeMetadataEnabled}
-                  onPress={() => setEpisodeMetadataEnabled(true)}
-                />
-              </View>
-              {episodeMetadataEnabled ? (
-                <View style={styles.episodeFields}>
-                  <StudioInput
-                    accessibilityLabel="Series ID"
-                    placeholder="Series ID (lowercase, stable)"
-                    value={seriesId}
-                    onChangeText={setSeriesId}
-                    maxLength={128}
-                    autoCapitalize="none"
-                  />
-                  <StudioInput
-                    accessibilityLabel="Series title"
-                    placeholder="Series title"
-                    value={seriesTitle}
-                    onChangeText={setSeriesTitle}
-                    maxLength={512}
-                  />
-                  <StudioInput
-                    accessibilityLabel="TMDB series ID"
-                    placeholder="TMDB series ID"
-                    value={tmdbSeriesId}
-                    onChangeText={setTmdbSeriesId}
-                    maxLength={20}
-                    keyboardType="number-pad"
-                  />
-                  <View style={styles.episodeRow}>
-                    <StudioInput
-                      accessibilityLabel="Season number"
-                      placeholder="Season"
-                      value={seasonNumber}
-                      onChangeText={setSeasonNumber}
-                      maxLength={6}
-                      keyboardType="number-pad"
-                      style={styles.episodeInput}
-                    />
-                    <StudioInput
-                      accessibilityLabel="Episode number"
-                      placeholder="Episode"
-                      value={episodeNumber}
-                      onChangeText={setEpisodeNumber}
-                      maxLength={6}
-                      keyboardType="number-pad"
-                      style={styles.episodeInput}
-                    />
-                    <StudioInput
-                      accessibilityLabel="Expected episode count"
-                      placeholder="Expected"
-                      value={expectedEpisodeCount}
-                      onChangeText={setExpectedEpisodeCount}
-                      maxLength={6}
-                      keyboardType="number-pad"
-                      style={styles.episodeInput}
-                    />
-                  </View>
-                </View>
-              ) : null}
-            </View>
-
-            {uploading ? (
-              <View style={styles.progressBlock}>
-                <View style={styles.progressTrack}>
-                  <View style={[styles.progressFill, { width: `${uploadProgress}%` }]} />
-                </View>
-                <View style={styles.progressMetaRow}>
-                  <ActivityIndicator color={colors.primary} size="small" />
-                  <Meta tone="muted" style={styles.progressMeta}>
-                    {isTranscoding ? (
-                      `Optimizing for streaming… ${uploadProgress}%`
-                    ) : (
-                      `Adding to your channel… ${uploadProgress}%` +
-                      (uploadSpeed > 0 ? ` · ${formatSpeed(uploadSpeed)}` : '') +
-                      (uploadEta > 0 ? ` · ${formatEta(uploadEta)} left` : '')
-                    )}
-                  </Meta>
-                </View>
-                <Tag
-                  label={isTranscoding ? 'ENCODING' : 'PUBLISHING'}
-                  tone={isTranscoding ? 'warning' : 'accent'}
-                />
-              </View>
-            ) : (
-              <Button
-                label={
-                  !isPear && thumbnailGenerating
-                    ? 'PREPARING THUMBNAIL…'
-                    : (!isPear && !thumbnailFilePath)
-                      ? 'ADD A THUMBNAIL TO PUBLISH'
-                      : 'PUBLISH'
-                }
-                icon="upload"
-                onPress={handleUpload}
-                disabled={
-                  !title.trim() ||
-                  (!isPear && (thumbnailGenerating || !thumbnailFilePath))
-                }
-                block
-              />
-            )}
-          </View>
+          <StudioSelectedUploadForm
+            thumbnailUri={thumbnailUri}
+            thumbnailGenerating={thumbnailGenerating}
+            thumbnailError={thumbnailError}
+            onPickThumbnail={pickThumbnail}
+            onClearSelection={clearVideoSelection}
+            title={title}
+            setTitle={setTitle}
+            categoryOptions={categoryOptions}
+            selectedCategory={selectedCategory}
+            setSelectedCategory={setSelectedCategory}
+            episodeMetadataEnabled={episodeMetadataEnabled}
+            setEpisodeMetadataEnabled={setEpisodeMetadataEnabled}
+            seriesId={seriesId}
+            setSeriesId={setSeriesId}
+            seriesTitle={seriesTitle}
+            setSeriesTitle={setSeriesTitle}
+            tmdbSeriesId={tmdbSeriesId}
+            setTmdbSeriesId={setTmdbSeriesId}
+            seasonNumber={seasonNumber}
+            setSeasonNumber={setSeasonNumber}
+            episodeNumber={episodeNumber}
+            setEpisodeNumber={setEpisodeNumber}
+            expectedEpisodeCount={expectedEpisodeCount}
+            setExpectedEpisodeCount={setExpectedEpisodeCount}
+            uploading={uploading}
+            uploadProgress={uploadProgress}
+            isTranscoding={isTranscoding}
+            uploadSpeed={uploadSpeed}
+            uploadEta={uploadEta}
+            thumbnailFilePath={thumbnailFilePath}
+            onUpload={handleUpload}
+          />
         ) : (
-          <Panel style={styles.dropZone}>
-            <Eyebrow tone="accent">DROP / SELECT MEDIA</Eyebrow>
-            <Meta tone="muted" style={styles.dropHint}>
-              {preparingVideo ? 'Preparing video…' : (pickingVideo ? 'Opening picker…' : 'Choose a video to share')}
-            </Meta>
-            <Button
-              label="SELECT FILE"
-              icon="upload"
-              onPress={pickVideo}
-              disabled={pickingVideo || preparingVideo}
-              loading={preparingVideo || pickingVideo}
-              block
-            />
-          </Panel>
+          <StudioPickVideoButton
+            pickingVideo={pickingVideo}
+            preparingVideo={preparingVideo}
+            onPress={pickVideo}
+          />
         )}
       </View>
 
-      {/* Channel devices — publisher-channel pairing only. A viewer's watch
-          state and library pair separately in Profile and never travel here. */}
-      <View style={styles.section}>
-        <SectionHeader title="CHANNEL DEVICES" flush />
-        <Body tone="muted" size="sm" style={styles.devicesBlurb}>
-          Link another device so it can publish to this channel. This shares publishing
-          authority for the channel — not your viewing state.
-        </Body>
-
-        <Panel tone="muted" style={styles.devicesPanel}>
-          {channelDevices.length ? (
-            <View style={styles.deviceList}>
-              {channelDevices.map((device, idx) => (
-                <View key={device?.keyHex || idx} style={styles.deviceRow}>
-                  <Feather name="smartphone" color={colors.textSecondary} size={16} />
-                  <View style={styles.deviceCopy}>
-                    <Text style={styles.deviceName}>{device?.deviceName || `Device ${idx + 1}`}</Text>
-                    <Meta tone="muted" numberOfLines={1}>{device?.keyHex || ''}</Meta>
-                  </View>
-                </View>
-              ))}
-            </View>
-          ) : (
-            <Meta tone="muted">
-              {channelDevicesLoading ? 'Looking for linked devices…' : 'Just this device so far.'}
-            </Meta>
-          )}
-
-          {channelInviteCode ? (
-            <Panel style={styles.inviteBox}>
-              <Eyebrow>INVITE CODE — ENTER IT ON YOUR OTHER DEVICE</Eyebrow>
-              <Text selectable style={styles.inviteCode}>{channelInviteCode}</Text>
-              <View style={styles.inviteActions}>
-                <Button
-                  label="COPY"
-                  variant="secondary"
-                  icon="copy"
-                  size="sm"
-                  onPress={async () => {
-                    await Clipboard.setStringAsync(channelInviteCode)
-                    Alert.alert('Copied', 'Invite code copied to clipboard')
-                  }}
-                  style={styles.inviteBtn}
-                />
-                <Button
-                  label="SHARE"
-                  variant="secondary"
-                  icon="share-2"
-                  size="sm"
-                  onPress={() => shareChannelInvite(channelInviteCode)}
-                  style={styles.inviteBtn}
-                />
-              </View>
-            </Panel>
-          ) : null}
-
-          <Button
-            label="LINK A DEVICE"
-            icon="plus"
-            onPress={createChannelInvite}
-            disabled={channelInviteLoading || !identity?.driveKey}
-            loading={channelInviteLoading}
-            block
-          />
-
-          <StudioInput
-            placeholder="Paste invite code"
-            value={channelPairCode}
-            onChangeText={setChannelPairCode}
-            autoCapitalize="none"
-          />
-          <StudioInput
-            placeholder="Device name (optional)"
-            value={channelPairName}
-            onChangeText={setChannelPairName}
-            autoCapitalize="none"
-          />
-          <Button
-            label="LINK WITH THIS CODE"
-            variant="secondary"
-            icon="link"
-            onPress={pairChannelDevice}
-            disabled={channelPairing || !channelPairCode.trim()}
-            loading={channelPairing}
-            block
-          />
-        </Panel>
-      </View>
+      <StudioChannelDevicesPanel
+        channelDevices={channelDevices}
+        channelDevicesLoading={channelDevicesLoading}
+        channelInviteCode={channelInviteCode}
+        channelInviteLoading={channelInviteLoading}
+        channelPairCode={channelPairCode}
+        setChannelPairCode={setChannelPairCode}
+        channelPairName={channelPairName}
+        setChannelPairName={setChannelPairName}
+        channelPairing={channelPairing}
+        hasDriveKey={!!identity?.driveKey}
+        onCreateInvite={createChannelInvite}
+        onShareInvite={shareChannelInvite}
+        onPairDevice={pairChannelDevice}
+      />
 
       <SectionHeader
         title={`PUBLISHED (${myVideos.length})`}
         flush
       />
     </View>
+
   )
 
   // Quietly assess immutable publication sources. The destructive operation
@@ -1063,16 +1919,7 @@ function StudioScreen() {
           if (cancelled) return
           setOffloadInfo((prev) => ({
             ...prev,
-            [v.id]: {
-              eligible: res?.success === true && res?.eligible === true,
-              byteLength: Number(res?.byteLength) || 0,
-              publicationId: res?.publicationId,
-              assessmentId: res?.assessmentId,
-              evidenceDigest: res?.evidenceDigest,
-              confirmationNonce: res?.confirmationNonce,
-              policyVersion: res?.policyVersion,
-              limitations: Array.isArray(res?.limitations) ? res.limitations : [],
-            },
+            [v.id]: offloadInfoFromAssessment(res),
           }))
         } catch {
           assessedOffloadRef.current.delete(publicationId)
@@ -1082,172 +1929,37 @@ function StudioScreen() {
     return () => { cancelled = true }
   }, [videos, identity?.driveKey, rpc])
 
-  const handleOffloadVideo = async (item: Video) => {
+  const handleOffloadVideo = useCallback(async (item: Video) => {
     const info = offloadInfo[item.id]
-    if (!info?.publicationId || typeof rpc?.assessSourceOffload !== 'function') return
-    setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], busy: true } }))
+    if (!info) return
+    await runStudioSourceOffload({
+      item,
+      info,
+      rpc,
+      assessedOffloadRef,
+      setOffloadInfo,
+    })
+  }, [offloadInfo, rpc])
 
-    try {
-      const fresh = await rpc?.assessSourceOffload({ publicationId: info.publicationId })
-      if (!fresh?.success || !fresh.eligible || !fresh.publicationId || !fresh.assessmentId ||
-          !fresh.evidenceDigest || !fresh.confirmationNonce || !fresh.policyVersion) {
-        assessedOffloadRef.current.delete(info.publicationId)
-        setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], eligible: false, busy: false } }))
-        const m = `Source offload is no longer safe. ${fresh?.reason || 'Current archive evidence is insufficient.'}`
-        if (Platform.OS === 'web') window.alert(m)
-        else Alert.alert('Source offload stopped', m)
-        return
-      }
-
-      const freshInfo = {
-        eligible: true,
-        byteLength: Number(fresh.byteLength) || 0,
-        publicationId: fresh.publicationId,
-        assessmentId: fresh.assessmentId,
-        evidenceDigest: fresh.evidenceDigest,
-        confirmationNonce: fresh.confirmationNonce,
-        policyVersion: fresh.policyVersion,
-        limitations: Array.isArray(fresh.limitations) ? fresh.limitations : [],
-        busy: true,
-      }
-      setOffloadInfo((prev) => ({ ...prev, [item.id]: freshInfo }))
-      const freed = freshInfo.byteLength ? ` (${formatBytes(freshInfo.byteLength)})` : ''
-      const limitations = freshInfo.limitations.length
-        ? `\n\nEvidence limitations:\n${freshInfo.limitations.map((value: string) => `• ${value}`).join('\n')}`
-        : ''
-      const confirmed = await new Promise<boolean>((resolve) => {
-        const msg = `Delete this device's source bytes for "${item.title}"${freed}?\n\nPublication: ${fresh.publicationId}\n\nThis cannot guarantee the media remains recoverable. Other copies may disappear after confirmation.${limitations}\n\nContinue only if you accept permanent loss risk.`
-        if (Platform.OS === 'web') {
-          resolve(window.confirm(msg))
-        } else {
-          Alert.alert('Confirm source offload', msg, [
-            { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-            { text: 'I understand — delete source', style: 'destructive', onPress: () => resolve(true) },
-          ])
-        }
-      })
-      if (!confirmed) {
-        setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], busy: false } }))
-        return
-      }
-
-      const res = await rpc?.confirmSourceOffload({
-        publicationId: fresh.publicationId,
-        assessmentId: fresh.assessmentId,
-        evidenceDigest: fresh.evidenceDigest,
-        confirmationNonce: fresh.confirmationNonce,
-        policyVersion: fresh.policyVersion,
-        confirmIrrecoverableRisk: true,
-      })
-      if (res?.success) {
-        setOffloadInfo((prev) => ({ ...prev, [item.id]: { eligible: false, byteLength: freshInfo.byteLength, publicationId: fresh.publicationId, offloaded: true, busy: false } }))
-      } else {
-        assessedOffloadRef.current.delete(fresh.publicationId)
-        setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], eligible: false, busy: false } }))
-        const m = `Couldn't delete the local source. ${res?.reason || 'The evidence or policy changed; reassess before trying again.'}`
-        if (Platform.OS === 'web') window.alert(m)
-        else Alert.alert('Source offload stopped', m)
-      }
-    } catch (err: unknown) {
-      assessedOffloadRef.current.delete(info.publicationId)
-      setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], eligible: false, busy: false } }))
-      const m = err instanceof Error ? err.message : 'Failed to delete local source'
-      if (Platform.OS === 'web') window.alert(m)
-      else Alert.alert('Source offload stopped', m)
-    }
-  }
-
-  const handleDeleteVideo = async (videoId: string, videoTitle: string) => {
-    const confirmDelete = () => {
-      return new Promise<boolean>((resolve) => {
-        if (Platform.OS === 'web') {
-          resolve(window.confirm(`Delete "${videoTitle}"?\n\nThis will permanently delete the video from your channel.`))
-        } else {
-          Alert.alert(
-            'Delete Video',
-            `Delete "${videoTitle}"?\n\nThis will permanently delete the video from your channel.`,
-            [
-              { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-              { text: 'Delete', style: 'destructive', onPress: () => resolve(true) },
-            ]
-          )
-        }
-      })
-    }
-
-    const confirmed = await confirmDelete()
-    if (!confirmed) return
-
-    const removedVideo = videos.find(v => v.id === videoId)
-    removeVideo(videoId)
-
-    try {
-      const result = await rpc?.deleteVideo({ videoId })
-      if (result?.success) {
-        if (identity?.driveKey) {
-          loadVideos(identity.driveKey, { allowEmptyResult: true }).catch(() => {})
-        }
-      } else {
-        const errorMsg = result?.error || 'Failed to delete video'
-        if (identity?.driveKey) {
-          loadVideos(identity.driveKey).catch(() => {})
-        }
-        if (Platform.OS === 'web') {
-          window.alert(`Error: ${errorMsg}`)
-        } else {
-          Alert.alert('Error', errorMsg)
-        }
-      }
-    } catch (err: any) {
-      console.error('[Studio] Delete failed:', err)
-      if (identity?.driveKey) {
-        loadVideos(identity.driveKey).catch(() => {})
-      }
-      const errorMsg = err.message || 'Failed to delete video'
-      if (Platform.OS === 'web') {
-        window.alert(`Error: ${errorMsg}`)
-      } else {
-        Alert.alert('Error', errorMsg)
-      }
-    }
-  }
+  const handleDeleteVideo = useCallback(async (videoId: string, videoTitle: string) => {
+    await runDeleteStudioVideo({
+      videoId,
+      videoTitle,
+      videos,
+      removeVideo,
+      rpc,
+      driveKey: identity?.driveKey,
+      loadVideos,
+    })
+  }, [identity?.driveKey, loadVideos, removeVideo, rpc, videos])
 
   const playPublishedVideo = useCallback(async (item: any) => {
-    if (!rpc) return
-    const channelKey = item?.channelKey || identity?.driveKey
-    if (!channelKey || !item?.id) return
-
-    const videoRef = (item.path && typeof item.path === 'string' && item.path.startsWith('/'))
-      ? item.path
-      : item.id
-    const cacheKey = makeVideoUrlCacheKey(
-      channelKey,
-      videoRef,
-      item.blobId || undefined,
-      item.blobsCoreKey || undefined,
-    )
-    const playbackRequest = {
-      channelKey,
-      videoId: videoRef,
-      publicBeeKey: item.publicBeeKey || undefined,
-      blobId: item.blobId || undefined,
-      blobsCoreKey: item.blobsCoreKey || undefined,
-      mimeType: item.mimeType || undefined,
-    }
-    const video = { ...item, channelKey }
-
-    try {
-      const result = await rpc.preparePlayback(playbackRequest)
-      if (result?.url) {
-        if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
-        loadAndPlayVideo(video, result.url)
-      } else {
-        Alert.alert('Playback unavailable', 'Could not prepare this video for playback yet.')
-      }
-    } catch (err: any) {
-      console.error('[Studio] Failed to play published video:', err?.message || err)
-      Alert.alert('Playback unavailable', err?.message || 'Could not prepare this video for playback yet.')
-    }
+    await playPublishedStudioVideo({
+      item,
+      rpc,
+      identityDriveKey: identity?.driveKey,
+      loadAndPlayVideo,
+    })
   }, [identity?.driveKey, loadAndPlayVideo, rpc])
 
 
@@ -1255,28 +1967,14 @@ function StudioScreen() {
 
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top }]}>
-      <ScreenHeader
-        title="STUDIO"
-        eyebrow={publisherEyebrow}
-        right={
-          <>
-            <CastHeaderButton size={18} />
-            <IconButton
-              icon="search"
-              accessibilityLabel="Search"
-              variant="plain"
-              size={36}
-              onPress={() => router.push('/search')}
-            />
-          </>
-        }
+    <View style={styles.screen}>
+      <StudioScreenHeader
+        topInset={insets.top}
+        hasIdentity={Boolean(identity)}
+        publisherEyebrow={publisherEyebrow}
+        onSearch={() => router.push('/search')}
+        onSetupChannel={() => router.push('/profile')}
       />
-      {!identity ? (
-        <Pressable onPress={() => router.push('/profile')} style={styles.setupBanner}>
-          <Meta tone="accent">Set up your channel to start publishing →</Meta>
-        </Pressable>
-      ) : null}
 
       <FlatList
         data={myVideos}
@@ -1296,58 +1994,14 @@ function StudioScreen() {
         }
         ItemSeparatorComponent={() => <View style={styles.rowGap} />}
         renderItem={({ item }) => (
-          <Panel padded={false} style={styles.publishedRow}>
-            <Pressable
-              onPress={() => playPublishedVideo(item)}
-              style={styles.publishedHit}
-              accessibilityRole="button"
-              accessibilityLabel={`Play ${item.title}`}
-            >
-              <View style={styles.publishedThumb}>
-                {item.thumbnail ? (
-                  <Image source={{ uri: item.thumbnail }} style={styles.publishedThumbImg} resizeMode="cover" />
-                ) : (
-                  <Ionicons name="play" color={colors.text} size={16} />
-                )}
-              </View>
-              <View style={styles.publishedCopy}>
-                <Text style={styles.publishedTitle} numberOfLines={2}>{item.title}</Text>
-                <Meta tone="muted">
-                  {formatBytes(item.size)} · {formatDate(item.uploadedAt)}
-                </Meta>
-              </View>
-            </Pressable>
-            <IconButton
-              icon="edit-2"
-              accessibilityLabel="Edit video"
-              variant="plain"
-              size={40}
-              onPress={() => setEditingVideo(item)}
-            />
-            {offloadInfo[item.id]?.offloaded ? (
-              <View style={styles.publishedActionSlot}>
-                <Feather name="cloud" color={colors.text} size={16} />
-              </View>
-            ) : offloadInfo[item.id]?.eligible ? (
-              <Pressable
-                onPress={() => handleOffloadVideo(item)}
-                disabled={offloadInfo[item.id]?.busy}
-                style={styles.publishedActionSlot}
-                accessibilityLabel="Free up local space"
-              >
-                {offloadInfo[item.id]?.busy
-                  ? <ActivityIndicator size="small" color={colors.primary} />
-                  : <Feather name="download-cloud" color={colors.primary} size={18} />}
-              </Pressable>
-            ) : null}
-            <IconButton
-              icon="trash-2"
-              accessibilityLabel="Delete video"
-              variant="plain"
-              size={40}
-              onPress={() => handleDeleteVideo(item.id, item.title)}
-            />
-          </Panel>
+          <StudioPublishedVideoRow
+            item={item}
+            offload={offloadInfo[item.id]}
+            onPlay={() => playPublishedVideo(item)}
+            onEdit={() => setEditingVideo(item)}
+            onOffload={() => handleOffloadVideo(item)}
+            onDelete={() => handleDeleteVideo(item.id, item.title)}
+          />
         )}
       />
 

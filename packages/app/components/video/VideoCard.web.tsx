@@ -26,6 +26,114 @@ export interface VideoCardProps {
   onPress?: () => void
   onChannelPress?: () => void
 }
+function VideoCardThumbnail({
+  id,
+  title,
+  thumbnailUrl,
+  duration,
+}: {
+  id?: string
+  title: string
+  thumbnailUrl?: string
+  duration?: number
+}) {
+  const [imageError, setImageError] = useState(false)
+  return (
+    <div style={styles.thumbnailContainer}>
+      {thumbnailUrl && !imageError ? (
+        <img
+          src={thumbnailUrl}
+          alt={title}
+          style={styles.thumbnail}
+          loading="lazy"
+          onError={() => {
+            console.log('[VideoCard.web] Image load error for:', id)
+            setImageError(true)
+          }}
+          onLoad={() => {
+            console.log('[VideoCard.web] Image loaded for:', id)
+          }}
+        />
+      ) : (
+        <div style={styles.thumbnailPlaceholder}>
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke={colors.primary} strokeWidth="1">
+            <polygon points="5 3 19 12 5 21 5 3" fill={colors.primary} />
+          </svg>
+        </div>
+      )}
+
+      {duration !== undefined && (
+        <span style={styles.durationBadge}>
+          {formatDuration(duration)}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function VideoCardAvatar({
+  channelName,
+  channelAvatarUrl,
+  channelHovered,
+  isInteractive,
+  interactiveProps,
+}: {
+  channelName: string
+  channelAvatarUrl?: string
+  channelHovered: boolean
+  isInteractive: boolean
+  interactiveProps?: React.HTMLAttributes<HTMLDivElement> | null
+}) {
+  const hovered = channelHovered && isInteractive
+  return (
+    <div
+      style={{
+        ...styles.avatarContainer,
+        cursor: isInteractive ? 'pointer' : undefined,
+        opacity: hovered ? 0.8 : 1,
+        transform: hovered ? 'scale(0.92)' : 'scale(1)',
+        transition: 'opacity 0.15s ease, transform 0.15s ease',
+      }}
+      {...(interactiveProps ?? {})}
+    >
+      {channelAvatarUrl ? (
+        <img
+          src={channelAvatarUrl}
+          alt={channelName}
+          style={styles.avatar}
+        />
+      ) : (
+        <div style={styles.avatarPlaceholder}>
+          {channelName.charAt(0).toUpperCase()}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function VideoCardMeta({
+  views,
+  uploadedAt,
+  contentBadge,
+}: {
+  views?: number
+  uploadedAt?: string
+  contentBadge?: string | null
+}) {
+  const hasViews = views !== undefined
+  const hasUploadedAt = Boolean(uploadedAt)
+  const hasPrimaryMeta = hasViews || hasUploadedAt
+
+  return (
+    <p style={styles.meta}>
+      {hasViews && formatViews(views!)}
+      {hasViews && hasUploadedAt && ' • '}
+      {hasUploadedAt && formatTimeAgo(uploadedAt!)}
+      {contentBadge && hasPrimaryMeta && ' • '}
+      {contentBadge && <span style={styles.contentBadge}>{contentBadge}</span>}
+    </p>
+  )
+}
 
 export function VideoCardDesktop({
   id,
@@ -41,7 +149,6 @@ export function VideoCardDesktop({
   onChannelPress,
 }: VideoCardProps) {
   const [isHovered, setIsHovered] = useState(false)
-  const [imageError, setImageError] = useState(false)
   const [channelHovered, setChannelHovered] = useState(false)
 
   const channelInteractiveProps = onChannelPress
@@ -56,7 +163,7 @@ export function VideoCardDesktop({
     : null
 
   return (
-    <article
+    <div
       style={{
         ...styles.card,
         transform: isHovered ? 'scale(1.02)' : 'scale(1)',
@@ -73,65 +180,22 @@ export function VideoCardDesktop({
         }
       }}
     >
-      {/* Thumbnail */}
-      <div style={styles.thumbnailContainer}>
-        {thumbnailUrl && !imageError ? (
-          <img
-            src={thumbnailUrl}
-            alt={title}
-            style={styles.thumbnail}
-            loading="lazy"
-            onError={() => {
-              console.log('[VideoCard.web] Image load error for:', id)
-              setImageError(true)
-            }}
-            onLoad={() => {
-              console.log('[VideoCard.web] Image loaded for:', id)
-            }}
-          />
-        ) : (
-          <div style={styles.thumbnailPlaceholder}>
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke={colors.primary} strokeWidth="1">
-              <polygon points="5 3 19 12 5 21 5 3" fill={colors.primary} />
-            </svg>
-          </div>
-        )}
+      <VideoCardThumbnail
+        id={id}
+        title={title}
+        thumbnailUrl={thumbnailUrl}
+        duration={duration}
+      />
 
-        {/* Duration badge */}
-        {duration !== undefined && (
-          <span style={styles.durationBadge}>
-            {formatDuration(duration)}
-          </span>
-        )}
-      </div>
-
-      {/* Info section */}
       <div style={styles.info}>
-        {/* Channel avatar */}
-        <div
-          style={{
-            ...styles.avatarContainer,
-            cursor: onChannelPress ? 'pointer' : undefined,
-            opacity: channelHovered && onChannelPress ? 0.8 : 1,
-            transform: channelHovered && onChannelPress ? 'scale(0.92)' : 'scale(1)',
-            transition: 'opacity 0.15s ease, transform 0.15s ease',
-          }}
-          {...(channelInteractiveProps ?? {})}
-        >
-          {channelAvatarUrl ? (
-            <img
-              src={channelAvatarUrl}
-              alt={channelName}
-              style={styles.avatar}
-            />
-          ) : (
-            <div style={styles.avatarPlaceholder}>
-              {channelName.charAt(0).toUpperCase()}
-            </div>
-          )}
-        </div>
+        <VideoCardAvatar
+          channelName={channelName}
+          channelAvatarUrl={channelAvatarUrl}
+          channelHovered={channelHovered}
+          isInteractive={Boolean(onChannelPress)}
+          interactiveProps={channelInteractiveProps}
+        />
 
-        {/* Text content */}
         <div style={styles.textContent}>
           <h3 style={styles.title}>{title}</h3>
           <p
@@ -144,16 +208,14 @@ export function VideoCardDesktop({
           >
             {channelName}
           </p>
-          <p style={styles.meta}>
-            {views !== undefined && formatViews(views)}
-            {views !== undefined && uploadedAt && ' • '}
-            {uploadedAt && formatTimeAgo(uploadedAt)}
-            {contentBadge && (views !== undefined || uploadedAt) && ' • '}
-            {contentBadge && <span style={styles.contentBadge}>{contentBadge}</span>}
-          </p>
+          <VideoCardMeta
+            views={views}
+            uploadedAt={uploadedAt}
+            contentBadge={contentBadge}
+          />
         </div>
       </div>
-    </article>
+    </div>
   )
 }
 

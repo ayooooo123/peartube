@@ -5,6 +5,10 @@
  * Works in both frontend (React Native / Web) and backend (Bare / Pear) contexts.
  */
 
+import { loadReactNativeModuleSync } from './runtime-modules.cjs';
+
+/** @import { PlatformRuntimeGlobals } from './globals.js' */
+
 /**
  * @typedef {import('./types.js').PlatformType} PlatformType
  * @typedef {import('./types.js').PlatformCategory} PlatformCategory
@@ -23,7 +27,7 @@ const PEAR_TITLE_BAR_LINUX = 38;
  * @returns {boolean}
  */
 export function isBare() {
-  return typeof globalThis.Bare !== 'undefined';
+  return typeof (/** @type {PlatformRuntimeGlobals} */ (globalThis)).Bare !== 'undefined';
 }
 
 /**
@@ -77,7 +81,7 @@ export function detectPlatform() {
   if (isReactNative()) {
     // Check Platform.OS if available
     try {
-      const { Platform } = require('react-native');
+      const { Platform } = loadReactNativeModuleSync();
       if (Platform.OS === 'ios') return 'ios';
       if (Platform.OS === 'android') return 'android';
     } catch (e) {

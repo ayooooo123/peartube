@@ -1,11 +1,13 @@
 import test from 'brittle'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { MEDIA_COORDINATE_SHAPES, importIdentityKey } from '../src/channel/structured-content.js'
 import { createEntityReference } from '../src/media-graph/index.js'
 import { parsePeartubeArgv } from '../../cli/src/add/argv.js'
 import { runAddCommand } from '../../cli/src/add/index.js'
-import { createJobStore } from '../../cli/src/add/job-store.js'
-import { createExecutor } from '../../cli/src/add/executor.js'
+
 import {
   buildEpisodeItemDraft,
   buildMovieItemDraft,
@@ -17,27 +19,15 @@ const RECORDING_MBID = 'b1a9c0e8-2f9d-4b3e-9a24-6f3c1d9a7b55'
 const RELEASE_MBID = '550e8400-e29b-41d4-a716-446655440000'
 const SOURCE = { provider: 'youtube', sourceVideoId: 'v1', identityUrl: 'https://youtube.com/watch?v=v1' }
 
-function fakeBee () {
-  const map = new Map()
-  return {
-    async get (k) { return map.has(k) ? { value: map.get(k) } : null },
-    async put (k, v) { map.set(k, JSON.parse(JSON.stringify(v))) },
-    async del (k) { map.delete(k) },
-    batch () { const s = []; return { async put (k, v) { s.push([k, v]) }, async flush () { for (const [k, v] of s) map.set(k, JSON.parse(JSON.stringify(v))) } } },
-    async * createReadStream ({ gte, lt } = {}) { for (const k of [...map.keys()].sort()) { if (gte !== undefined && k < gte) continue; if (lt !== undefined && k >= lt) continue; yield { key: k, value: map.get(k) } } }
-  }
-}
 
 const CHANNEL = { channelKey: 'chan-1', writerKeyHex: 'a'.repeat(64), publicBeeKey: 'b'.repeat(64) }
 
-// Drives the real add pipeline (argv -> drafts -> job store -> executor) with
-// every external effect faked, so what an accepted coordinate actually hands to
-// the upload is observable.
+// Drives argv and metadata resolution through the canonical acquisition input.
+// The staged file belongs to this invocation; acquisition itself is recorded.
 async function addWithCli (argv) {
   const parsed = parsePeartubeArgv(['add', 'https://youtube.com/watch?v=v1', ...argv], { stdin: {}, stderr: {} })
   const uploads = []
   const stderr = []
-  const bee = fakeBee()
   const code = await runAddCommand({
     ...parsed,
     stdout: { write () {} },
@@ -45,9 +35,31 @@ async function addWithCli (argv) {
     env: {},
     resolveConfig: async () => ({ content: { tmdbApiKey: 'token' } }),
     deps: {
-      openAddRuntime: async () => ({ metadataBee: bee, close: async () => {} }),
-      createJobStore,
-      createExecutor,
+      openAddRuntime: async () => ({
+        ensureLocalPublisher: async () => ({ publisherId: 'c'.repeat(64) }),
+        close: async () => {}
+      }),
+      ensureLocalPublisher: async () => ({ publisherId: 'c'.repeat(64) }),
+      resolveChannel: async () => CHANNEL,
+      duplicateCheck: { check: async () => ({ status: 'ok', advisories: [] }) },
+      arbitrateImportClaim: async () => ({ ok: true }),
+      stageSource: async () => {
+        const directory = mkdtempSync(join(tmpdir(), 'peartube-categorization-'))
+        const artifactPath = join(directory, 'a.mkv')
+        writeFileSync(artifactPath, 'coordinate-fixture')
+        return { artifactPath, dispose: () => rmSync(directory, { recursive: true, force: true }) }
+      },
+      executeLocalFileAcquisition: async (args) => {
+        uploads.push(args)
+        return {
+          acquisitionId: 'acq-1',
+          state: 'completed',
+          publicationId: 'pub-1',
+          manifestId: 'manifest-1',
+          renditionId: 'rendition-1',
+          assetId: 'asset-1'
+        }
+      },
       createMetadataProvider: async (authority) => {
         if (authority === 'tmdb') {
           return {
@@ -70,25 +82,6 @@ async function addWithCli (argv) {
           }
         }
       },
-      buildExecutorDeps: ({ jobStore }) => ({
-        jobStore,
-        resolveChannel: async () => CHANNEL,
-        loadChannel: async () => CHANNEL,
-        duplicateCheck: { check: async () => ({ status: 'ok', advisories: [] }) },
-        deriveImportClaimantId: (w, j) => `claim:${j}`,
-        writeClaim: async () => {},
-        resolveClaimWinner: async () => null,
-        downloadSource: async () => ({ artifactPath: '/tmp/a.mkv', checksum: 'sha256:v' }),
-        uploadFromPath: async (args) => { uploads.push(args); return { videoId: args.videoId, channelKey: CHANNEL.channelKey, blobKey: 'blob-1' } },
-        requestPin: async () => {},
-        awaitDurable: async () => ({ verified: true }),
-        publication: {
-          markDurabilityVerified: async () => {},
-          project: async () => ({ channelKey: CHANNEL.channelKey, publicBeeKey: CHANNEL.publicBeeKey }),
-          announce: async () => {},
-          finalize: async () => {}
-        }
-      })
     }
   })
   return { code, uploads, stderr: stderr.join(''), parsed }
@@ -122,45 +115,39 @@ test('a TVDB episode and a TVDB movie publish with TVDB coordinates', async (t) 
   const episode = await addWithCli(['--type', 'episode', '--provider', 'tvdb', '--show-id', '81189', '--season', '1', '--episode', '2', '--title', 'Cat\'s in the Bag...', '--yes'])
   t.is(episode.code, 0, episode.stderr)
   t.is(episode.uploads.length, 1)
-  t.alike(pickCoordinates(episode.uploads[0].item), {
-    contentKind: 'episode',
-    mediaProvider: 'tvdb',
-    mediaId: '81189',
-    seasonNumber: 1,
-    episodeNumber: 2
+  t.alike(episode.uploads[0].input.selector, {
+    kind: 'episode',
+    namespace: 'tvdb',
+    identifier: '81189',
+    season: 1,
+    episode: 2
   })
-  t.is(episode.uploads[0].item.title, 'Cat\'s in the Bag...', 'the publisher names the work the CLI cannot look up')
+  t.is(episode.uploads[0].input.title, 'Cat\'s in the Bag...', 'the publisher names the work the CLI cannot look up')
 
   const movie = await addWithCli(['--type', 'movie', '--provider', 'tvdb', '--movie-id', '603', '--title', 'The Matrix', '--yes'])
   t.is(movie.code, 0, movie.stderr)
-  t.alike(pickCoordinates(movie.uploads[0].item), {
-    contentKind: 'movie',
-    mediaProvider: 'tvdb',
-    mediaId: '603',
-    seasonNumber: null,
-    episodeNumber: null
+  t.alike(movie.uploads[0].input.selector, {
+    kind: 'movie',
+    namespace: 'tvdb',
+    identifier: '603'
   })
 })
 
 test('a MusicBrainz recording and release publish with MusicBrainz coordinates', async (t) => {
   const track = await addWithCli(['--type', 'track', '--provider', 'musicbrainz', '--recording-id', RECORDING_MBID, '--title', 'Paranoid Android', '--yes'])
   t.is(track.code, 0, track.stderr)
-  t.alike(pickCoordinates(track.uploads[0].item), {
-    contentKind: 'track',
-    mediaProvider: 'musicbrainz',
-    mediaId: RECORDING_MBID,
-    seasonNumber: null,
-    episodeNumber: null
+  t.alike(track.uploads[0].input.selector, {
+    kind: 'track',
+    namespace: 'musicbrainz',
+    identifier: RECORDING_MBID
   })
 
   const release = await addWithCli(['--type', 'release', '--provider', 'musicbrainz', '--release-id', RELEASE_MBID, '--title', 'OK Computer', '--yes'])
   t.is(release.code, 0, release.stderr)
-  t.alike(pickCoordinates(release.uploads[0].item), {
-    contentKind: 'release',
-    mediaProvider: 'musicbrainz',
-    mediaId: RELEASE_MBID,
-    seasonNumber: null,
-    episodeNumber: null
+  t.alike(release.uploads[0].input.selector, {
+    kind: 'release',
+    namespace: 'musicbrainz',
+    identifier: RELEASE_MBID
   })
 })
 
@@ -267,13 +254,3 @@ test('provider namespaces canonicalize the identifiers publications carry', (t) 
   t.is(tvdb.normalizedIdentifier, 'show:81189:s1:e2')
   t.not(tmdb.entityId, tvdb.entityId, 'the authority is part of the entity identity')
 })
-
-function pickCoordinates (item) {
-  return {
-    contentKind: item.contentKind,
-    mediaProvider: item.mediaProvider,
-    mediaId: item.mediaId,
-    seasonNumber: item.seasonNumber,
-    episodeNumber: item.episodeNumber
-  }
-}

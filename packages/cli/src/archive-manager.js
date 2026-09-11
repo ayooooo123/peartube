@@ -176,12 +176,26 @@ const posterHttp = { open: openResponse, read: readBody }
 // fails wherever that origin is unreachable, and is simply unavailable offline.
 // The bytes are fetched once, here, by the publisher that already holds the
 // credentials, and everything downstream reads them from the swarm.
-export async function fetchPosterBytes(tmdbPosterPath, { http = posterHttp, timeoutMs = POSTER_TIMEOUT_MS } = {}) {
+function resolvePosterUrl(tmdbPosterPath) {
   const posterPath = tmdbPosterPath ? String(tmdbPosterPath).trim() : ''
-  if (!posterPath) return null
+  if (!posterPath || !posterPath.startsWith('/')) return null
   // Stored once and replicated to every peer, so size the fetch for a poster
   // card rather than pulling the original: w500 covers a 118dp card at 3x.
-  const url = posterPath.startsWith('/') ? `https://image.tmdb.org/t/p/w500${posterPath}` : null
+  return `https://image.tmdb.org/t/p/w500${posterPath}`
+}
+
+function validatePosterResponse(res) {
+  const status = res.statusCode || 0
+  if (status < 200 || status >= 300) return null
+  const mimeType = String(res.headers?.['content-type'] || '').split(';')[0].trim().toLowerCase()
+  if (!POSTER_MIME_TYPES.has(mimeType)) return null
+  const declared = Number(res.headers?.['content-length'] || 0)
+  if (Number.isFinite(declared) && declared > MAX_POSTER_BYTES) return null
+  return mimeType
+}
+
+export async function fetchPosterBytes(tmdbPosterPath, { http = posterHttp, timeoutMs = POSTER_TIMEOUT_MS } = {}) {
+  const url = resolvePosterUrl(tmdbPosterPath)
   if (!url) return null
 
   let res = null
@@ -192,12 +206,8 @@ export async function fetchPosterBytes(tmdbPosterPath, { http = posterHttp, time
     // downloader — but the redirect budget is still bounded, where the global
     // fetch this replaced would have followed twenty of them anywhere.
     ({ res } = await posterRequest(http, url, timeoutMs))
-    const status = res.statusCode || 0
-    if (status < 200 || status >= 300) return null
-    const mimeType = String(res.headers?.['content-type'] || '').split(';')[0].trim().toLowerCase()
-    if (!POSTER_MIME_TYPES.has(mimeType)) return null
-    const declared = Number(res.headers?.['content-length'] || 0)
-    if (Number.isFinite(declared) && declared > MAX_POSTER_BYTES) return null
+    const mimeType = validatePosterResponse(res)
+    if (!mimeType) return null
     const bytes = await http.read(res, { maxBytes: MAX_POSTER_BYTES })
     res = null
     if (!bytes || bytes.byteLength === 0) return null
@@ -287,6 +297,110 @@ function archiveHeadroomExhausted(snapshot) {
   return archiveFileSizeLimit(snapshot) <= 0
 }
 
+function createStorageReservationManager(storageHeadroom, storageReservations) {
+  const existingReservations = Math.max(0, Math.floor(Number(storageReservations?.bytes) || 0))
+  const maxFileSize = typeof storageHeadroom === 'function'
+    ? archiveFileSizeLimit(reserveAdjustedArchiveHeadroom(storageHeadroom(), existingReservations))
+    : 0
+  if (typeof storageHeadroom === 'function' && maxFileSize <= 0) {
+    throw new Error('relay has no measurable archive storage headroom for yt-dlp')
+  }
+  let reservationReleased = false
+  const releaseReservation = () => {
+    if (reservationReleased || !storageReservations) return
+    reservationReleased = true
+    storageReservations.bytes = Math.max(0, Math.floor(Number(storageReservations.bytes) || 0) - maxFileSize)
+    storageReservations.invalidate?.()
+  }
+  if (storageReservations && maxFileSize > 0) {
+    storageReservations.bytes = existingReservations + maxFileSize
+    storageReservations.invalidate?.()
+  }
+  return { maxFileSize, releaseReservation }
+}
+
+function createMonitoredSpawn({ spawnFn, storageHeadroom, storageReservations, onStorageChanged, onStorageExceeded }) {
+  return (...args) => {
+    const child = spawnFn(...args)
+    if (typeof storageHeadroom !== 'function' || typeof child?.kill !== 'function') return child
+    let stopped = false
+    const stop = () => {
+      if (stopped) return
+      stopped = true
+      clearInterval(timer)
+    }
+    const timer = setInterval(() => {
+      onStorageChanged?.()
+      storageReservations?.invalidate?.()
+      const reservedBytes = Math.max(0, Math.floor(Number(storageReservations?.bytes) || 0))
+      const remaining = reserveAdjustedArchiveHeadroom(storageHeadroom(), reservedBytes)
+      if (!archiveHeadroomExhausted(remaining)) return
+      onStorageExceeded()
+      stop()
+      child.kill('SIGTERM')
+    }, 100)
+    child.on?.('close', stop)
+    child.on?.('error', stop)
+    return child
+  }
+}
+
+async function executeYtDlpAttempts({ bin, attempts, buildArgs, monitoredSpawn, targetDir, fs }) {
+  let filePath = null
+  for (let attempt = 0; attempt < attempts.length; attempt += 1) {
+    const args = buildArgs(attempts[attempt].args, attempts[attempt].url)
+    try {
+      const result = await runYtDlp(bin, args, { spawnFn: monitoredSpawn })
+      filePath = parseReportedFilePath(result.stdout)
+      if (!filePath) throw new Error('yt-dlp did not report an output file')
+      if (!attempts[attempt].allowUnknownExtension && !isSupportedVideoPath(filePath)) {
+        throw new Error(`yt-dlp reported unsupported archive output file: ${filePath}`)
+      }
+      return filePath
+    } catch (err) {
+      const message = err?.message || String(err)
+      const canRetry = /Sign in to confirm.*not a bot|LOGIN_REQUIRED|HTTP Error (?:400|403|418|429|500)|Requested format is not available|unsupported archive output file/i.test(message)
+      if (!canRetry || attempt === attempts.length - 1) throw err
+      fs.rmSync(targetDir, { recursive: true, force: true })
+      fs.mkdirSync(targetDir, { recursive: true })
+    }
+  }
+  return filePath
+}
+
+function readYtDlpInfoFile(infoPath, fs) {
+  if (typeof fs.existsSync !== 'function' || !fs.existsSync(infoPath) || typeof fs.readFileSync !== 'function') {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(String(fs.readFileSync(infoPath, 'utf8') || '{}'))
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function trimmedMetadataString(info, key) {
+  const value = info?.[key]
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed || null
+}
+
+function readYtDlpMetadata(filePath, fs) {
+  const stem = filePath.replace(/\.[^.]+$/, '')
+  const info = readYtDlpInfoFile(`${stem}.info.json`, fs)
+  const sourceTitle = trimmedMetadataString(info, 'title')
+  const sourceDescription = typeof info?.description === 'string' ? info.description : null
+  const sourceDuration = Number.isFinite(info?.duration) ? Number(info.duration) : undefined
+  const thumbnailUrl = trimmedMetadataString(info, 'thumbnail')
+  const thumbnailFile = ['jpg', 'jpeg', 'webp', 'png']
+    .map((ext) => `${stem}.${ext}`)
+    .find((candidate) => typeof fs.existsSync === 'function' && fs.existsSync(candidate)) || null
+  const creatorName = trimmedMetadataString(info, 'uploader')
+  return { sourceTitle, sourceDescription, sourceDuration, thumbnailUrl, thumbnailFile, creatorName }
+}
+
 export function createYtDlpDownloader({
   bin = 'yt-dlp',
   outputDir,
@@ -307,148 +421,77 @@ export function createYtDlpDownloader({
 
   return {
     async download(input) {
-      const existingReservations = Math.max(0, Math.floor(Number(storageReservations?.bytes) || 0))
-      const maxFileSize = typeof storageHeadroom === 'function'
-        ? archiveFileSizeLimit(reserveAdjustedArchiveHeadroom(storageHeadroom(), existingReservations))
-        : 0
-      if (typeof storageHeadroom === 'function' && maxFileSize <= 0) {
-        throw new Error('relay has no measurable archive storage headroom for yt-dlp')
-      }
-      let reservationReleased = false
-      const releaseReservation = () => {
-        if (reservationReleased || !storageReservations) return
-        reservationReleased = true
-        storageReservations.bytes = Math.max(0, Math.floor(Number(storageReservations.bytes) || 0) - maxFileSize)
-        storageReservations.invalidate?.()
-      }
-      if (storageReservations && maxFileSize > 0) {
-        storageReservations.bytes = existingReservations + maxFileSize
-        storageReservations.invalidate?.()
-      }
+      const { maxFileSize, releaseReservation } = createStorageReservationManager(storageHeadroom, storageReservations)
       let storageExceeded = false
       let targetDir = null
       try {
-      const id = input.id || makeJobId(input.url)
-      targetDir = path.join(outputDir, id)
-      fs.mkdirSync(targetDir, { recursive: true })
-      const outputTemplate = path.join(targetDir, '%(title).200B [%(id)s].%(ext)s')
-      const buildArgs = (extraArgs = [], sourceUrl = input.url) => buildDownloadArgs({
-        format,
-        outputTemplate,
-        ffmpegPath,
-        cookiesPath,
-        maxFileSize,
-        jsRuntime,
-        extraArgs,
-        sourceUrl
-      })
-      const monitoredSpawn = (...args) => {
-        const child = spawnFn(...args)
-        if (typeof storageHeadroom !== 'function' || typeof child?.kill !== 'function') return child
-        let stopped = false
-        const stop = () => {
-          if (stopped) return
-          stopped = true
-          clearInterval(timer)
+        const id = input.id || makeJobId(input.url)
+        targetDir = path.join(outputDir, id)
+        fs.mkdirSync(targetDir, { recursive: true })
+        const outputTemplate = path.join(targetDir, '%(title).200B [%(id)s].%(ext)s')
+        const buildArgs = (extraArgs = [], sourceUrl = input.url) => buildDownloadArgs({
+          format,
+          outputTemplate,
+          ffmpegPath,
+          cookiesPath,
+          maxFileSize,
+          jsRuntime,
+          extraArgs,
+          sourceUrl
+        })
+        const monitoredSpawn = createMonitoredSpawn({
+          spawnFn,
+          storageHeadroom,
+          storageReservations,
+          onStorageChanged,
+          onStorageExceeded: () => { storageExceeded = true }
+        })
+
+        const invidiousFallbackUrls = buildInvidiousFallbackUrls(input.url, input.invidiousInstance)
+        const attempts = [
+          { args: safeArgsArray(ytDlpExtraArgs), url: input.url, allowUnknownExtension: false },
+          ...safeArray(ytDlpRetryExtraArgs).map((args) => ({ args: safeArgsArray(args), url: input.url, allowUnknownExtension: false })),
+          ...invidiousFallbackUrls.map((url) => ({ args: [], url, allowUnknownExtension: false }))
+        ]
+        const filePath = await executeYtDlpAttempts({
+          bin,
+          attempts,
+          buildArgs,
+          monitoredSpawn,
+          targetDir,
+          fs
+        })
+
+        if (!filePath) throw new Error('yt-dlp did not report an output file')
+        if (typeof fs.existsSync === 'function' && !fs.existsSync(filePath)) {
+          throw new Error(`yt-dlp reported output file does not exist: ${filePath}`)
         }
-        const timer = setInterval(() => {
-          onStorageChanged?.()
-          storageReservations?.invalidate?.()
-          const reservedBytes = Math.max(0, Math.floor(Number(storageReservations?.bytes) || 0))
-          const remaining = reserveAdjustedArchiveHeadroom(storageHeadroom(), reservedBytes)
-          if (!archiveHeadroomExhausted(remaining)) return
-          storageExceeded = true
-          stop()
-          child.kill('SIGTERM')
-        }, 100)
-        child.on?.('close', stop)
-        child.on?.('error', stop)
-        return child
-      }
 
-      const invidiousFallbackUrls = buildInvidiousFallbackUrls(input.url, input.invidiousInstance)
-      const attempts = [
-        { args: safeArgsArray(ytDlpExtraArgs), url: input.url, allowUnknownExtension: false },
-        ...safeArray(ytDlpRetryExtraArgs).map((args) => ({ args: safeArgsArray(args), url: input.url, allowUnknownExtension: false })),
-        ...invidiousFallbackUrls.map((url) => ({ args: [], url, allowUnknownExtension: false }))
-      ]
-      let stdout = ''
-      let filePath = null
+        const meta = readYtDlpMetadata(filePath, fs)
+        const titleFallback = input.title || meta.sourceTitle || filePath.split('/').pop()?.replace(/\.[^.]+$/, '') || 'Archived video'
+        const descFallback = input.description || meta.sourceDescription || `Archived anonymously from ${new URL(input.url).hostname}`
 
-      for (let attempt = 0; attempt < attempts.length; attempt += 1) {
-        const args = buildArgs(attempts[attempt].args, attempts[attempt].url)
-        try {
-          const result = await runYtDlp(bin, args, { spawnFn: monitoredSpawn })
-          stdout = result.stdout
-          filePath = parseReportedFilePath(stdout)
-          if (!filePath) throw new Error('yt-dlp did not report an output file')
-          if (!attempts[attempt].allowUnknownExtension && !isSupportedVideoPath(filePath)) {
-            throw new Error(`yt-dlp reported unsupported archive output file: ${filePath}`)
-          }
-          break
-        } catch (err) {
-          const message = err?.message || String(err)
-          const canRetry = /Sign in to confirm.*not a bot|LOGIN_REQUIRED|HTTP Error (?:400|403|418|429|500)|Requested format is not available|unsupported archive output file/i.test(message)
-          if (!canRetry || attempt === attempts.length - 1) throw err
-          fs.rmSync(targetDir, { recursive: true, force: true })
-          fs.mkdirSync(targetDir, { recursive: true })
-        }
-      }
-
-      if (!filePath) throw new Error('yt-dlp did not report an output file')
-      if (typeof fs.existsSync === 'function' && !fs.existsSync(filePath)) {
-        throw new Error(`yt-dlp reported output file does not exist: ${filePath}`)
-      }
-
-      const stem = filePath.replace(/\.[^.]+$/, '')
-      const infoPath = `${stem}.info.json`
-      let info = null
-      if (typeof fs.existsSync === 'function' && fs.existsSync(infoPath) && typeof fs.readFileSync === 'function') {
-        try {
-          const parsed = JSON.parse(String(fs.readFileSync(infoPath, 'utf8') || '{}'))
-          if (parsed && typeof parsed === 'object') info = parsed
-        } catch {
-          info = null
-        }
-      }
-      const sourceTitle = typeof info?.title === 'string' && info.title.trim()
-        ? info.title.trim()
-        : null
-      const sourceDescription = typeof info?.description === 'string'
-        ? info.description
-        : null
-      const sourceDuration = Number.isFinite(info?.duration) ? Number(info.duration) : undefined
-      const thumbnailUrl = typeof info?.thumbnail === 'string' && info.thumbnail.trim()
-        ? info.thumbnail.trim()
-        : null
-      const thumbnailFile = ['jpg', 'jpeg', 'webp', 'png']
-        .map((ext) => `${stem}.${ext}`)
-        .find((candidate) => typeof fs.existsSync === 'function' && fs.existsSync(candidate)) || null
-      const creatorName = typeof info?.uploader === 'string' && info.uploader.trim()
-        ? info.uploader.trim()
-        : null
-
-      return {
-        filePath,
-        title: input.title || sourceTitle || filePath.split('/').pop()?.replace(/\.[^.]+$/, '') || 'Archived video',
-        description: input.description || sourceDescription || `Archived anonymously from ${new URL(input.url).hostname}`,
-        duration: sourceDuration,
-        thumbnailUrl,
-        thumbnailFile,
-        creatorName,
-        mimeType: getVideoMimeType(filePath),
-        releaseStorageReservation: releaseReservation,
-        cleanup() {
-          try {
-            fs.rmSync(targetDir, { recursive: true, force: true })
-          } catch {
-            // Best effort: stale archive temp directories are harmless and can be cleaned on the next run.
-          } finally {
-            onStorageChanged?.()
-            releaseReservation()
+        return {
+          filePath,
+          title: titleFallback,
+          description: descFallback,
+          duration: meta.sourceDuration,
+          thumbnailUrl: meta.thumbnailUrl,
+          thumbnailFile: meta.thumbnailFile,
+          creatorName: meta.creatorName,
+          mimeType: getVideoMimeType(filePath),
+          releaseStorageReservation: releaseReservation,
+          cleanup() {
+            try {
+              fs.rmSync(targetDir, { recursive: true, force: true })
+            } catch {
+              // Best effort: stale archive temp directories are harmless and can be cleaned on the next run.
+            } finally {
+              onStorageChanged?.()
+              releaseReservation()
+            }
           }
         }
-      }
       } catch (err) {
         releaseReservation()
         if (targetDir) {
@@ -503,6 +546,37 @@ function sha256Hasher () {
   }
 }
 
+function assertValidReadRange(byteOffset, requestedLength, length) {
+  if (!Number.isSafeInteger(byteOffset) || byteOffset < 0 || byteOffset > length) {
+    throw new Error(`granted source cannot open at byte ${byteOffset} of ${length}`)
+  }
+  if (!Number.isSafeInteger(requestedLength) || requestedLength < 0 || byteOffset + requestedLength > length) {
+    throw new Error(`granted source cannot read ${requestedLength} bytes at ${byteOffset} of ${length}`)
+  }
+}
+
+function assertDigestMatches(hasher, expectedDigest) {
+  if (hasher !== null && hasher.digest() !== expectedDigest) {
+    const mismatch = new Error('granted source bytes do not match the expected SHA-256 digest')
+    mismatch.code = 'HASH_MISMATCH'
+    throw mismatch
+  }
+}
+
+function bindAbortSignal(signal, onAbort) {
+  signal?.addEventListener?.('abort', onAbort, { once: true })
+  if (signal?.aborted === true) onAbort()
+  return () => signal?.removeEventListener?.('abort', onAbort)
+}
+
+function logRangeServed({ logger, jobId, rangeBytes, fetchMs, consumeStartedAt }) {
+  logger?.archive?.info?.('[archive-range] served', {
+    jobId,
+    bytes: rangeBytes,
+    fetchMs,
+    consumeMs: Date.now() - consumeStartedAt
+  })
+}
 /**
  * A GRANTED source is a byte-addressable origin: the grant states the total
  * length up front, carries an ETag that survives the origin re-resolving the
@@ -581,15 +655,9 @@ export function createGrantedRangedSource ({
   async function *readFrom (byteOffset, requestedLength = length - byteOffset) {
     const reads = new AbortController()
     const abortReads = () => reads.abort()
-    signal?.addEventListener?.('abort', abortReads, { once: true })
-    if (signal?.aborted === true) reads.abort()
+    const unbindSignal = bindAbortSignal(signal, abortReads)
     try {
-      if (!Number.isSafeInteger(byteOffset) || byteOffset < 0 || byteOffset > length) {
-        throw new Error(`granted source cannot open at byte ${byteOffset} of ${length}`)
-      }
-      if (!Number.isSafeInteger(requestedLength) || requestedLength < 0 || byteOffset + requestedLength > length) {
-        throw new Error(`granted source cannot read ${requestedLength} bytes at ${byteOffset} of ${length}`)
-      }
+      assertValidReadRange(byteOffset, requestedLength, length)
       const readEnd = byteOffset + requestedLength
       const hasher = digest === null ? null : sha256Hasher()
       let pending = byteOffset < readEnd ? fetchRange(byteOffset, readEnd, reads.signal) : null
@@ -612,24 +680,15 @@ export function createGrantedRangedSource ({
           rangeBytes += part.byteLength ?? part.length ?? 0
           yield part
         }
-        logger?.archive?.info?.('[archive-range] served', {
-          jobId,
-          bytes: rangeBytes,
-          fetchMs,
-          consumeMs: Date.now() - consumeStartedAt
-        })
+        logRangeServed({ logger, jobId, rangeBytes, fetchMs, consumeStartedAt })
         if (onProgress) await onProgress(position)
       }
-      if (hasher !== null && hasher.digest() !== digest) {
-        const mismatch = new Error('granted source bytes do not match the expected SHA-256 digest')
-        mismatch.code = 'HASH_MISMATCH'
-        throw mismatch
-      }
+      assertDigestMatches(hasher, digest)
     } catch (error) {
       onFailure?.(error)
       throw error
     } finally {
-      signal?.removeEventListener?.('abort', abortReads)
+      unbindSignal()
       reads.abort()
     }
   }
@@ -649,6 +708,165 @@ export function createGrantedRangedSource ({
     resumable: digest === null,
     open: (byteOffset) => readFrom(byteOffset),
     openRange: ({ offset, length: rangeLength }) => readFrom(offset, rangeLength)
+  }
+}
+
+async function initializeSourceChannelMetadata (channel, { name, sourceKey }) {
+  const meta = await channel.getMetadata?.().catch(() => null)
+  const isFresh = !meta || (typeof meta === 'object' && Object.keys(meta).length === 0)
+  if (isFresh) {
+    await channel.updateMetadata?.({ name, createdAt: Date.now(), createdBy: sourceKey }).catch(() => {})
+  }
+  await channel.ensureLocalBlobDrive?.({ deviceName: 'archive' }).catch(() => {})
+  if (!channel.blobs) throw new Error('source channel blobs not initialized')
+}
+
+async function signAndPublishSourceChannel ({ channel, name, identityManager, ensureRelayIdentity, relayPublisher }) {
+  const relayIdentity = await ensureRelayIdentity(name)
+  const signed = await identityManager.signChannelRootDescriptorForOwnedChannel?.(channel, { profile: { name } })
+  if (!signed?.ok) throw new Error(`source channel descriptor signing failed: ${signed?.reason || 'unavailable'}`)
+  const catalogPublisherId = (await relayPublisher?.ensureLocalPublisher())?.publisherId || relayIdentity.publicKey
+  return { publisherId: catalogPublisherId, identityPublicKey: relayIdentity.publicKey }
+}
+
+function resolveSecretDir (storagePath, runtime) {
+  return storagePath || runtime?.ctx?.storagePath || null
+}
+
+function readPersistedPersonalSecret (secretDir, fsModule) {
+  let secret = null
+  let bootstrapKey = null
+  for (const candidate of [`${secretDir}/db/personal-secret`, `${secretDir}/personal-secret`]) {
+    if (secret) break
+    try {
+      const raw = fsModule.readFileSync(candidate, 'utf8')
+      const stored = (typeof raw === 'string' ? raw : b4a.toString(raw, 'utf8')).trim()
+      if (/^[0-9a-f]{64}$/.test(stored)) {
+        secret = stored
+      } else {
+        const parsed = JSON.parse(stored)
+        if (/^[0-9a-f]{64}$/.test(parsed?.secret || '')) secret = parsed.secret
+        if (parsed?.bootstrapKey) bootstrapKey = parsed.bootstrapKey
+      }
+    } catch {
+      // Missing or unreadable here; try the next location, then provision.
+    }
+  }
+  return { secret, bootstrapKey }
+}
+
+function calculateRequestedBytes({ granted, stream, byteLength, filePath, fs }) {
+  if (granted) return granted.length
+  if (stream) return Math.max(0, Math.floor(Number(byteLength) || 0))
+  return Number(fs?.statSync?.(filePath)?.size || 0)
+}
+
+function resolveSourceFileName(sourceFileName, filePath) {
+  if (typeof sourceFileName === 'string' && sourceFileName) return sourceFileName
+  return filePath ? basename(filePath) : null
+}
+
+async function dispatchVideoUpload({
+  uploadManager,
+  channel,
+  granted,
+  stream,
+  filePath,
+  requestedBytes,
+  mimeType,
+  videoId,
+  uploadOptions,
+  fs
+}) {
+  if (granted) {
+    const reader = createSourceReader({
+      resumable: granted.resumable,
+      maxReadBytes: requestedBytes,
+      async describe() {
+        return {
+          identity: granted.sha256
+            ? { kind: 'sha256', value: granted.sha256 }
+            : { kind: 'etag', value: granted.etag },
+          byteLength: requestedBytes,
+          mimeType: mimeType || 'application/octet-stream',
+        }
+      },
+      open({ offset, length }) {
+        return granted.openRange({ offset, length })
+      },
+      async close() {},
+    })
+    return uploadManager.uploadFromStream(channel, reader, {
+      ...uploadOptions,
+      resumeId: granted.resumable ? granted.id : undefined,
+    })
+  }
+  if (stream) {
+    const reader = createOneShotSourceReader({
+      source: stream,
+      identity: { kind: 'etag', value: `one-shot:${videoId}:${requestedBytes}` },
+      byteLength: requestedBytes,
+      mimeType: mimeType || 'application/octet-stream',
+    })
+    return uploadManager.uploadFromStream(channel, reader, {
+      ...uploadOptions,
+      byteLength: requestedBytes
+    })
+  }
+  return uploadManager.uploadFromPath(channel, filePath, uploadOptions, fs)
+}
+
+function buildSeedRecordOptions({ metadata, channel, requestedBytes, mimeType }) {
+  return {
+    byteLength: Number(metadata.size || requestedBytes) || 0,
+    thumbnailByteLength: Number(metadata.thumbnailSize || 0) || 0,
+    publicBeeKey: metadata.publicBeeKey || channel.publicBeeKey || null,
+    blobId: metadata.blobId || null,
+    blobsCoreKey: metadata.blobsCoreKey || channel.blobsKeyHex || null,
+    thumbnailBlobId: metadata.thumbnailBlobId || null,
+    thumbnailBlobsCoreKey: metadata.thumbnailBlobsCoreKey || null,
+    mimeType: metadata.mimeType || mimeType || null,
+    thumbnailMimeType: metadata.thumbnailMimeType || null
+  }
+}
+
+async function registerImportSeed({ runtime, channel, result, requestedBytes, retentionClass, mimeType }) {
+  if (!runtime?.seedingManager?.addSeed) return
+  const metadata = result.metadata || result
+  const retentionDriveKey = b4a.isBuffer(channel.key)
+    ? b4a.toString(channel.key, 'hex')
+    : String(channel.key || channel.discoveryKey || metadata.driveKey || 'local-publication')
+  const seedOptions = buildSeedRecordOptions({ metadata, channel, requestedBytes, mimeType })
+  await runtime.seedingManager.addSeed(
+    retentionDriveKey,
+    String(metadata.path || `/videos/${result.videoId}.mp4`),
+    retentionClass === 'archive-pin' ? 'archive' : 'watched',
+    seedOptions,
+    { authorized: true, protectSelf: retentionClass === 'archive-pin' }
+  )
+}
+
+async function attachThumbnailFile({ thumbnailFile, uploadManager, channel, result, fs }) {
+  if (!thumbnailFile || typeof fs?.readFileSync !== 'function') return
+  try {
+    const image = fs.readFileSync(thumbnailFile)
+    const lower = String(thumbnailFile).toLowerCase()
+    const thumbnailMimeType = lower.endsWith('.webp')
+      ? 'image/webp'
+      : lower.endsWith('.png')
+        ? 'image/png'
+        : 'image/jpeg'
+    const thumbnailResult = await uploadManager.setThumbnailFromBuffer(channel, result.videoId, image, thumbnailMimeType)
+    if (thumbnailResult?.success) {
+      result.metadata = {
+        ...(result.metadata || {}),
+        thumbnailBlobId: thumbnailResult.thumbnailBlobId || result.metadata?.thumbnailBlobId || null,
+        thumbnailBlobsCoreKey: channel.blobsKeyHex || result.metadata?.thumbnailBlobsCoreKey || null,
+        thumbnailMimeType
+      }
+    }
+  } catch {
+    // Thumbnail attachment is best-effort; keep the imported video publishable.
   }
 }
 
@@ -684,22 +902,17 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
     const channelKey = created.channelKeyHex || created.channelKey
     if (!channel) throw new Error('createChannel returned no channel')
     if (channel.writable === false) throw new Error(`source channel ${sourceKey} is not writable`)
-    const meta = await channel.getMetadata?.().catch(() => null)
-    const isFresh = !meta || (typeof meta === 'object' && Object.keys(meta).length === 0)
-    if (isFresh) {
-      await channel.updateMetadata?.({ name, createdAt: Date.now(), createdBy: sourceKey }).catch(() => {})
-    }
-    await channel.ensureLocalBlobDrive?.({ deviceName: 'archive' }).catch(() => {})
-    if (!channel.blobs) throw new Error('source channel blobs not initialized')
+    await initializeSourceChannelMetadata(channel, { name, sourceKey })
     const publicBeeKey = await resolvePublicBeeKey(channel)
     if (!channelKey || !publicBeeKey) throw new Error('source channel keys unavailable')
-    const relayIdentity = await ensureRelayIdentity(name)
-    const signed = await identityManager.signChannelRootDescriptorForOwnedChannel?.(channel, { profile: { name } })
-    if (!signed?.ok) throw new Error(`source channel descriptor signing failed: ${signed?.reason || 'unavailable'}`)
-    // The archive job carries this id into catalog publication, so it must be
-    // the publisher-root catalog id, not the channel identity key.
-    const catalogPublisherId = (await relayPublisher?.ensureLocalPublisher())?.publisherId || relayIdentity.publicKey
-    return { channel, channelKey, publicBeeKey, publisherId: catalogPublisherId, identityPublicKey: relayIdentity.publicKey }
+    const { publisherId, identityPublicKey } = await signAndPublishSourceChannel({
+      channel,
+      name,
+      identityManager,
+      ensureRelayIdentity,
+      relayPublisher
+    })
+    return { channel, channelKey, publicBeeKey, publisherId, identityPublicKey }
   }
 
   // A relay is its own platform. On a phone the OS keychain generates and
@@ -709,33 +922,11 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
   // this, creating the relay identity leaves its personal store closed and
   // the first archive job dies with PERSONAL_STORE_SECRET_UNAVAILABLE.
   async function ensureRelayPersonalSecret ({ deviceLocal = false } = {}) {
-    const secretDir = storagePath || runtime?.ctx?.storagePath || null
+    const secretDir = resolveSecretDir(storagePath, runtime)
     if (!secretDir || typeof api.provisionPersonalEncryption !== 'function') return false
     const fsModule = fs || await import('#fs')
     const secretPath = `${secretDir}/personal-secret`
-    let secret = null
-    let bootstrapKey = null
-    // hypercore-storage sweeps unrecognized root entries into db/ when it
-    // opens, so a secret written during one run lives under db/ on the next.
-    // Reading only the root path would mint a fresh secret and strand the
-    // encrypted personal store written under the old one.
-    for (const candidate of [`${secretDir}/db/personal-secret`, secretPath]) {
-      if (secret) break
-      try {
-        const raw = fsModule.readFileSync(candidate, 'utf8')
-        // bare-fs can return a Buffer despite the encoding request.
-        const stored = (typeof raw === 'string' ? raw : b4a.toString(raw, 'utf8')).trim()
-        if (/^[0-9a-f]{64}$/.test(stored)) {
-          secret = stored
-        } else {
-          const parsed = JSON.parse(stored)
-          if (/^[0-9a-f]{64}$/.test(parsed?.secret || '')) secret = parsed.secret
-          if (parsed?.bootstrapKey) bootstrapKey = parsed.bootstrapKey
-        }
-      } catch {
-        // Missing or unreadable here; try the next location, then provision.
-      }
-    }
+    let { secret, bootstrapKey } = readPersistedPersonalSecret(secretDir, fsModule)
     if (!secret) secret = b4a.toString(crypto.randomBytes(32), 'hex')
 
     // The device-local store is keyed by a bootstrap key the backend derives on
@@ -779,50 +970,67 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
     return identityManager.getActiveIdentity?.()
   }
 
+  async function tryEnsureGroupedChannel ({ sourceKey, channelName, sourceIdentity, requireSourceChannel }) {
+    if (sourceChannels.has(sourceKey)) return sourceChannels.get(sourceKey)
+    try {
+      const name = channelName || sourceIdentity?.creatorName || 'Archive'
+      const entry = await ensureSourceChannel(sourceKey, name)
+      sourceChannels.set(sourceKey, entry)
+      return entry
+    } catch (err) {
+      if (requireSourceChannel) throw err
+      runtime?.logger?.archive?.warn?.('Grouped source channel failed; using shared channel', {
+        sourceId: sourceKey,
+        error: err?.message || String(err)
+      })
+      return null
+    }
+  }
+
+  async function ensureAnonymousIdentity (channelName, sourceIdentity) {
+    let identity = identityManager.getActiveIdentity?.()
+    const defaultName = channelName || sourceIdentity?.creatorName || 'Anonymous Archive'
+    if (!identity?.driveKey) {
+      await ensureRelayPersonalSecret({ deviceLocal: true })
+      const created = await identityManager.createIdentity(defaultName, true)
+      await ensureRelayPersonalSecret()
+      return {
+        publicKey: created.publicKey,
+        driveKey: created.driveKey,
+        channelKey: created.driveKey,
+        name: defaultName
+      }
+    }
+    // A relay that created its identity before it had secret custody still
+    // has an unopenable personal store. Provisioning is idempotent, so do
+    // it here too rather than leaving those relays permanently broken.
+    await ensureRelayPersonalSecret()
+    return identity
+  }
+
   return {
     async ensureAnonymousChannel({ channelName, sourceIdentity = null, requireSourceChannel = false, retentionClass } = {}) {
       assertRetentionPermission(retentionClass)
       const sourceKey = sourceIdentity?.sourceId || null
-      if (sourceKey && sourceChannels.has(sourceKey)) return sourceChannels.get(sourceKey)
-
-      // Grouped per-source channel (show/movie). Falls back to the shared
-      // anonymous channel on any failure so archiving never hard-fails here.
       if (sourceKey) {
-        try {
-          const entry = await ensureSourceChannel(sourceKey, channelName || sourceIdentity.creatorName || 'Archive')
-          sourceChannels.set(sourceKey, entry)
-          return entry
-        } catch (err) {
-          if (requireSourceChannel) throw err
-          runtime?.logger?.archive?.warn?.('Grouped source channel failed; using shared channel', { sourceId: sourceKey, error: err?.message || String(err) })
-        }
+        const grouped = await tryEnsureGroupedChannel({ sourceKey, channelName, sourceIdentity, requireSourceChannel })
+        if (grouped) return grouped
       }
       if (requireSourceChannel) throw new Error('deterministic source channel is required')
 
-      let identity = identityManager.getActiveIdentity?.()
-      if (!identity?.driveKey) {
-        await ensureRelayPersonalSecret({ deviceLocal: true })
-        const created = await identityManager.createIdentity(channelName || sourceIdentity?.creatorName || 'Anonymous Archive', true)
-        await ensureRelayPersonalSecret()
-        identity = {
-          publicKey: created.publicKey,
-          driveKey: created.driveKey,
-          channelKey: created.driveKey,
-          name: channelName || sourceIdentity?.creatorName || 'Anonymous Archive'
-        }
-      } else {
-        // A relay that created its identity before it had secret custody still
-        // has an unopenable personal store. Provisioning is idempotent, so do
-        // it here too rather than leaving those relays permanently broken.
-        await ensureRelayPersonalSecret()
-      }
-
+      const identity = await ensureAnonymousIdentity(channelName, sourceIdentity)
       const channel = await identityManager.getActiveChannel?.()
       if (!channel?.blobs) throw new Error('Anonymous channel blobs not initialized')
       const meta = await channel.getMetadata?.().catch(() => null)
       const publicBeeKey = channel.publicBeeKey || meta?.publicBeeKey || null
       const catalogPublisherId = (await relayPublisher?.ensureLocalPublisher())?.publisherId || identity.publicKey
-      return { channel, channelKey: identity.driveKey || identity.channelKey, publicBeeKey, publisherId: catalogPublisherId, identityPublicKey: identity.publicKey }
+      return {
+        channel,
+        channelKey: identity.driveKey || identity.channelKey,
+        publicBeeKey,
+        publisherId: catalogPublisherId,
+        identityPublicKey: identity.publicKey
+      }
     },
     async importVideo({
       retentionClass,
@@ -868,29 +1076,10 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       tmdbGenres,
       publish
     }) {
-      // A granted source is byte-addressable, so it never becomes a file here
-      // and there is nothing to stat: the grant states the authoritative total
-      // up front, which is a stronger figure for the retention budget than the
-      // size of something already downloaded, and it is known before a single
-      // byte is spent.
       const granted = sourceGrant ? createGrantedRangedSource({ ...sourceGrant, signal, logger: runtime?.logger }) : null
-      // A streaming source has no file to stat, and with block offload behind it
-      // the title is not what comes to rest here anyway. The content-length the
-      // server reported is the honest figure for the retention budget; when the
-      // server gave none there is nothing to claim up front and the per-chunk
-      // free-disk guard in the downloader is what holds.
-      const requestedBytes = granted
-        ? granted.length
-        : stream
-          ? Math.max(0, Math.floor(Number(byteLength) || 0))
-          : Number(fs?.statSync?.(filePath)?.size || 0)
+      const requestedBytes = calculateRequestedBytes({ granted, stream, byteLength, filePath, fs })
       assertRetentionPermission(retentionClass, requestedBytes)
-      // upload.js refuses to publish unless the registry hands back exactly one
-      // writable binding, so the catalog has to exist before the file moves.
       await relayPublisher?.ensureLocalPublisher()
-      // Store the cover before the upload so the metadata claim can name it:
-      // the claim is authored during the upload, and artwork attached after the
-      // fact would never reach a consumer that already read the claim.
       const poster = await publishPosterArtwork(channel, await fetchPosterBytes(tmdbPosterPath))
       const mediaCoordinates = contentKind
         ? { contentKind, mediaProvider, mediaId, seasonNumber, episodeNumber }
@@ -898,7 +1087,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       const uploadOptions = {
         mediaMetadata: describeTmdbMedia({ tmdbYear, tmdbOverview, tmdbRuntime, tmdbGenres }),
         title,
-        sourceFileName: typeof sourceFileName === 'string' && sourceFileName ? sourceFileName : (filePath ? basename(filePath) : null),
+        sourceFileName: resolveSourceFileName(sourceFileName, filePath),
         videoId,
         signal,
         retentionClass,
@@ -919,98 +1108,24 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         creatorHandle,
         thumbnailUrl,
         publicationState: publish === false ? 'replicationPending' : undefined,
-        // TMDB coordinates make the movie/TV identity durable on the canonical
-        // video record (schema already supports these fields), not just on the
-        // relay-side job/feed previews. Provider acquisition jobs pass exact
-        // coordinates directly; legacy archive jobs continue to derive the same
-        // fields from classified metadata inputs.
         ...mediaCoordinates,
         ...poster
       }
-      let result
-      if (granted) {
-        const reader = createSourceReader({
-          resumable: granted.resumable,
-          maxReadBytes: requestedBytes,
-          async describe() {
-            return {
-              identity: granted.sha256
-                ? { kind: 'sha256', value: granted.sha256 }
-                : { kind: 'etag', value: granted.etag },
-              byteLength: requestedBytes,
-              mimeType: mimeType || 'application/octet-stream',
-            }
-          },
-          open({ offset, length }) {
-            return granted.openRange({ offset, length })
-          },
-          async close() {},
-        })
-        result = await uploadManager.uploadFromStream(channel, reader, {
-          ...uploadOptions,
-          resumeId: granted.resumable ? granted.id : undefined,
-        })
-      } else if (stream) {
-        const reader = createOneShotSourceReader({
-          source: stream,
-          identity: { kind: 'etag', value: `one-shot:${videoId}:${requestedBytes}` },
-          byteLength: requestedBytes,
-          mimeType: mimeType || 'application/octet-stream',
-        })
-        result = await uploadManager.uploadFromStream(channel, reader, {
-          ...uploadOptions,
-          byteLength: requestedBytes
-        })
-      } else {
-        result = await uploadManager.uploadFromPath(channel, filePath, uploadOptions, fs)
-      }
+      const result = await dispatchVideoUpload({
+        uploadManager,
+        channel,
+        granted,
+        stream,
+        filePath,
+        requestedBytes,
+        mimeType,
+        videoId,
+        uploadOptions,
+        fs
+      })
       if (!result?.success) throw new Error(result?.error || 'Archive import failed')
-      if (runtime?.seedingManager?.addSeed) {
-        const metadata = result.metadata || result
-        const retentionDriveKey = b4a.isBuffer(channel.key)
-          ? b4a.toString(channel.key, 'hex')
-          : String(channel.key || channel.discoveryKey || metadata.driveKey || 'local-publication')
-        await runtime.seedingManager.addSeed(
-          retentionDriveKey,
-          String(metadata.path || `/videos/${result.videoId}.mp4`),
-          retentionClass === 'archive-pin' ? 'archive' : 'watched',
-          {
-            byteLength: Number(metadata.size || requestedBytes) || 0,
-            thumbnailByteLength: Number(metadata.thumbnailSize || 0) || 0,
-            publicBeeKey: metadata.publicBeeKey || channel.publicBeeKey || null,
-            blobId: metadata.blobId || null,
-            blobsCoreKey: metadata.blobsCoreKey || channel.blobsKeyHex || null,
-            thumbnailBlobId: metadata.thumbnailBlobId || null,
-            thumbnailBlobsCoreKey: metadata.thumbnailBlobsCoreKey || null,
-            mimeType: metadata.mimeType || mimeType || null,
-            thumbnailMimeType: metadata.thumbnailMimeType || null
-          },
-          { authorized: true, protectSelf: retentionClass === 'archive-pin' }
-        )
-      }
-
-      if (thumbnailFile && typeof fs?.readFileSync === 'function') {
-        try {
-          const image = fs.readFileSync(thumbnailFile)
-          const lower = String(thumbnailFile).toLowerCase()
-          const thumbnailMimeType = lower.endsWith('.webp')
-            ? 'image/webp'
-            : lower.endsWith('.png')
-              ? 'image/png'
-              : 'image/jpeg'
-          const thumbnailResult = await uploadManager.setThumbnailFromBuffer(channel, result.videoId, image, thumbnailMimeType)
-          if (thumbnailResult?.success) {
-            result.metadata = {
-              ...(result.metadata || {}),
-              thumbnailBlobId: thumbnailResult.thumbnailBlobId || result.metadata?.thumbnailBlobId || null,
-              thumbnailBlobsCoreKey: channel.blobsKeyHex || result.metadata?.thumbnailBlobsCoreKey || null,
-              thumbnailMimeType
-            }
-          }
-        } catch {
-          // Thumbnail attachment is best-effort; keep the imported video publishable.
-        }
-      }
+      await registerImportSeed({ runtime, channel, result, requestedBytes, retentionClass, mimeType })
+      await attachThumbnailFile({ thumbnailFile, uploadManager, channel, result, fs })
       return result
     },
     async publishCatalog({ publisherId, retentionClass }) {

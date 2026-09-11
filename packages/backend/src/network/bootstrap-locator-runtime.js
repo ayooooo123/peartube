@@ -46,54 +46,41 @@ export function createBootstrapLocatorRuntime (context) {
   // consumer while still reporting a healthy catalog. The early returns below
   // are the difference between "discoverable" and "silently unreachable", so
   // they say which one happened instead of returning a bare 'unavailable'.
-  async function refreshLocalBootstrapLocator(publisherId) {
-    const local = localPublishers.get(publisherId)
+  function inspectLocalCatalog (local, publisherId) {
     if (!local || !bootstrapLocatorKeyPair) {
       const reason = !local ? 'no-local-publisher-scope' : 'no-bootstrap-locator-keypair'
       console.log('[ScopedNetwork] bootstrap locator unavailable:', reason, publisherId.slice(0, 16))
-      return { status: 'unavailable', reason }
+      return { unavailable: { status: 'unavailable', reason } }
     }
     const catalog = local.scope?.binding?.catalog
     if (typeof catalog?.getViewHead !== 'function' ||
         typeof catalog?.getAuthorizationState !== 'function') {
       console.log('[ScopedNetwork] bootstrap locator unavailable: catalog-not-inspectable', publisherId.slice(0, 16))
-      return { status: 'unavailable', reason: 'catalog-not-inspectable' }
+      return { unavailable: { status: 'unavailable', reason: 'catalog-not-inspectable' } }
     }
-    const issuedAt = Number(now())
-    if (!Number.isSafeInteger(issuedAt) || issuedAt < 0 ||
-        issuedAt > Number.MAX_SAFE_INTEGER - bootstrapLocatorTtlMs) {
-      fail('bootstrap locator clock is invalid')
-    }
-    const signerId = b4a.toString(bootstrapLocatorKeyPair.publicKey, 'hex')
-    const localWriterId = catalog.localWriterKey
-      ? b4a.toString(b4a.from(catalog.localWriterKey), 'hex')
-      : null
-    const [head, authorization] = await Promise.all([
-      catalog.getViewHead(),
-      catalog.getAuthorizationState(),
-    ])
+    return { catalog }
+  }
+
+  function checkWriterAuthorization (authorization, localWriterId, signerId, issuedAt, publisherId) {
     const writer = authorization?.writers?.find(candidate =>
       candidate?.key === localWriterId &&
       candidate?.signerKey === signerId
     )
     if (!writer || writer.revocation || writer.expiresAt < issuedAt ||
         !writer.capabilities?.includes('announce')) {
-      const reason = !writer ? 'writer-not-found' : (writer.revocation ? 'writer-revoked' : (writer.expiresAt < issuedAt ? 'writer-expired' : 'announce-capability-missing'))
+      const reason = !writer
+        ? 'writer-not-found'
+        : (writer.revocation
+          ? 'writer-revoked'
+          : (writer.expiresAt < issuedAt ? 'writer-expired' : 'announce-capability-missing'))
       console.log('[ScopedNetwork] bootstrap locator unavailable:', reason, publisherId.slice(0, 16))
       return { status: 'unavailable', reason: 'signer-unauthorized', detail: reason }
     }
-    const descriptor = local.scope.descriptor
-    const locator = createBootstrapLocator({
-      publisherId,
-      catalogBootstrapKey: b4a.toString(descriptor.catalogBootstrapKey, 'hex'),
-      catalogHead: hex32(head?.digest, 'catalogHead'),
-      catalogEpoch: descriptor.catalogEpoch,
-      authorizationChainDigest: hex32(head?.authorizationStateDigest, 'authorizationChainDigest'),
-      rootSignerId: b4a.toString(descriptor.publisherRootKey, 'hex'),
-      issuedAt,
-      expiresAt: issuedAt + bootstrapLocatorTtlMs,
-      keyPair: bootstrapLocatorKeyPair,
-    })
+    return null
+  }
+
+  async function recordAndScheduleLocator (publisherId, locator) {
+    if (getStatus() === 'closed') return
     const previous = localBootstrapLocators.get(publisherId)
     if (previous?.timer) cancelBootstrapLocatorRefresh(previous.timer)
     const record = { locator, timer: null }
@@ -110,6 +97,42 @@ export function createBootstrapLocatorRuntime (context) {
       }, bootstrapLocatorRefreshMs)
       record.timer.unref?.()
     }
+  }
+
+  async function refreshLocalBootstrapLocator(publisherId) {
+    const local = localPublishers.get(publisherId)
+    const inspected = inspectLocalCatalog(local, publisherId)
+    if (inspected.unavailable) return inspected.unavailable
+    const catalog = inspected.catalog
+    const issuedAt = Number(now())
+    if (!Number.isSafeInteger(issuedAt) || issuedAt < 0 ||
+        issuedAt > Number.MAX_SAFE_INTEGER - bootstrapLocatorTtlMs) {
+      fail('bootstrap locator clock is invalid')
+    }
+    const signerId = b4a.toString(bootstrapLocatorKeyPair.publicKey, 'hex')
+    const localWriterId = catalog.localWriterKey
+      ? b4a.toString(b4a.from(catalog.localWriterKey), 'hex')
+      : null
+    const [head, authorization] = await Promise.all([
+      catalog.getViewHead(),
+      catalog.getAuthorizationState(),
+    ])
+    if (getStatus() === 'closed') return { status: 'unavailable', reason: 'runtime-closed' }
+    const unauthorized = checkWriterAuthorization(authorization, localWriterId, signerId, issuedAt, publisherId)
+    if (unauthorized) return unauthorized
+    const descriptor = local.scope.descriptor
+    const locator = createBootstrapLocator({
+      publisherId,
+      catalogBootstrapKey: b4a.toString(descriptor.catalogBootstrapKey, 'hex'),
+      catalogHead: hex32(head?.digest, 'catalogHead'),
+      catalogEpoch: descriptor.catalogEpoch,
+      authorizationChainDigest: hex32(head?.authorizationStateDigest, 'authorizationChainDigest'),
+      rootSignerId: b4a.toString(descriptor.publisherRootKey, 'hex'),
+      issuedAt,
+      expiresAt: issuedAt + bootstrapLocatorTtlMs,
+      keyPair: bootstrapLocatorKeyPair,
+    })
+    await recordAndScheduleLocator(publisherId, locator)
     return { status: 'refreshed', locator }
   }
 
@@ -132,21 +155,24 @@ export function createBootstrapLocatorRuntime (context) {
     // a replay still names a verified retained locator. Gossip is gated to
     // first-accept only: forwarding an identical locator again is what a
     // gossip cycle needs suppressed.
-    if ((result.status === 'accepted' || result.status === 'replay') && result.publisherId && context.tracked && !localPublishers.has(result.publisherId)) {
-      void addPublisherFollowReason({
-        publisherId: result.publisherId,
-        reason: 'bootstrap:auto',
-      }).catch(error => console.log('[ScopedNetwork] follow-reason FAILED:', error?.message || error))
-    }
-    if (result.status === 'accepted' && context.tracked) {
-      // Transitive discovery: re-gossip the origin-signed envelope to every
-      // other live bootstrap session, excluding the one it arrived on.
-      try { gossipLocator(envelope, context.tracked) } catch { /* best-effort gossip */ }
+    if (getStatus() !== 'closed') {
+      if ((result.status === 'accepted' || result.status === 'replay') && result.publisherId && context.tracked && !localPublishers.has(result.publisherId)) {
+        void addPublisherFollowReason({
+          publisherId: result.publisherId,
+          reason: 'bootstrap:auto',
+        }).catch(error => console.log('[ScopedNetwork] follow-reason FAILED:', error?.message || error))
+      }
+      if (result.status === 'accepted' && context.tracked) {
+        // Transitive discovery: re-gossip the origin-signed envelope to every
+        // other live bootstrap session, excluding the one it arrived on.
+        try { gossipLocator(envelope, context.tracked) } catch { /* best-effort gossip */ }
+      }
     }
     counters.acceptedFrames++
     return result
   }
   async function publishBootstrapLocator ({ locator, envelope } = {}) {
+    if (getStatus() === 'closed') fail('runtime is closed')
     if (!canPublish()) fail('explicit contribution upload permission is required')
     const bootstrapScope = findScope('bootstrap', deriveBootstrapTopic({ protocolMajor, networkId }))
     if (!bootstrapScope) fail('bootstrap discovery is disabled')

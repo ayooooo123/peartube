@@ -7,6 +7,8 @@ export type ProviderHit = {
   acquirable: boolean
   entityId?: string | null
   publicationId?: string | null
+  entityKind?: string | null
+  localEntity?: boolean
 }
 
 export type ProviderResolution = ProviderHit & {
@@ -62,8 +64,9 @@ const ACQUISITION_COPY: Record<Exclude<AcquisitionState, 'acquiring'>, string> =
   cancelled: 'Request cancelled',
 }
 
-export function providerHitAction(hit: ProviderHit): 'play' | 'resolve' | 'unavailable' {
+export function providerHitAction(hit: ProviderHit): 'play' | 'open' | 'resolve' | 'unavailable' {
   if (hit.published && hit.entityId && hit.publicationId) return 'play'
+  if (hit.localEntity === true || (!hit.published && !hit.acquirable && hit.entityId)) return 'open'
   return hit.acquirable ? 'resolve' : 'unavailable'
 }
 
@@ -89,8 +92,9 @@ type ProviderFacade = {
   getPublication(request: { publicationId: string }): Promise<ProviderResult<{ publication: { publicationId: string; entityId: string } }>>
 }
 
-function successfulValue<T>(response: ProviderResult<T>, key: keyof T, operation: string): T[keyof T] {
-  const value = response[key]
+function successfulValue<T, K extends keyof T>(response: ProviderResult<T>, key: K, operation: string): T[K] {
+  const fields: Partial<T> = response
+  const value = fields[key]
   if (response.success === true && value !== undefined && value !== null) return value
   const error = new Error(response.error?.message || `${operation} failed`)
   error.name = response.error?.code || 'PROVIDER_REQUEST_FAILED'
@@ -98,21 +102,28 @@ function successfulValue<T>(response: ProviderResult<T>, key: keyof T, operation
 }
 
 export async function resolveProviderHit(provider: ProviderFacade, hit: ProviderHit) {
-  if (providerHitAction(hit) === 'play') {
+  const action = providerHitAction(hit)
+  if (action === 'play') {
     return {
       kind: 'published' as const,
       entityId: hit.entityId as string,
       publicationId: hit.publicationId as string,
     }
   }
-  if (providerHitAction(hit) === 'unavailable') return { kind: 'unavailable' as const }
+  if (action === 'open') {
+    return {
+      kind: 'local' as const,
+      entityId: hit.entityId as string,
+      entityKind: hit.entityKind || hit.mediaKind || 'work',
+    }
+  }
   const response = await provider.resolveProviderRef({ resolutionRef: hit.resolutionRef })
   const resolution = successfulValue(response, 'resolution', 'Provider resolution') as ProviderResolution
   if (providerHitAction(resolution) === 'play') {
     return {
       kind: 'published' as const,
       entityId: resolution.entityId as string,
-      publicationId: resolution.publicationId as string,
+      publicationId: (resolution.publicationId as string) || null,
     }
   }
   return resolution.acquirable

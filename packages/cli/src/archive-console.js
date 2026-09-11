@@ -1,6 +1,6 @@
 import process from '#process'
 import { createServer } from '#http'
-import { createReadStream, mkdirSync, readFileSync, rmSync, statSync } from '#fs'
+import { createReadStream, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from '#fs'
 import { basename, dirname, relative, resolve } from '#path'
 import b4a from 'b4a'
 import sodium from 'sodium-universal'
@@ -16,6 +16,8 @@ import { parseBoundary, receiveMultipartUpload } from './multipart.js'
 // The relay's own HTTP client rather than fetch(): Bare ships no global fetch,
 // so a fetch() here would be a ReferenceError the moment the relay runs.
 import { openResponse, readBody } from './media/http-get.js'
+import { canonicalLocalResolutionRecord, normalizeLocalDurationSeconds } from './local-file-acquisition.js'
+import { tmdbImageUrl } from './add/providers/tmdb.js'
 
 // Decoded once; the console serves it with an immutable cache header.
 const SYNE_EXTRABOLD_TTF = b4a.from(SYNE_EXTRABOLD_TTF_BASE64, 'base64')
@@ -463,28 +465,32 @@ function tmdbKeyFromVerifiedSource(source = {}) {
   )
 }
 
+function indexTmdbSource(index, item, source) {
+  const key = tmdbKeyFromVerifiedSource(source)
+  if (!key) return
+  const existing = index.get(key) || { status: 'missing', count: 0, seeded: 0, videos: [], seen: new Set() }
+  const sourceKey = `${source.publicationId || ''}:${source.renditionId || ''}:${key}`
+  if (existing.seen.has(sourceKey)) return
+  existing.seen.add(sourceKey)
+  const candidateRef = CANDIDATE_REF_PATTERN.test(source.candidateRef || '') ? source.candidateRef : null
+  const playable = candidateRef !== null || source.availability === 'playable' || source.byteAvailability === 'playable'
+  existing.count += 1
+  if (playable) existing.seeded += 1
+  existing.status = playable || existing.seeded > 0 ? 'seeding' : 'in-network'
+  existing.videos.push({
+    id: source.publicationId || null,
+    title: item.title || null,
+    candidateRef,
+    playable
+  })
+  index.set(key, existing)
+}
+
 export function buildTmdbNetworkIndex(catalogItems = []) {
   const index = new Map()
   for (const item of catalogItems || []) {
     for (const source of item?.sources || []) {
-      const key = tmdbKeyFromVerifiedSource(source)
-      if (!key) continue
-      const existing = index.get(key) || { status: 'missing', count: 0, seeded: 0, videos: [], seen: new Set() }
-      const sourceKey = `${source.publicationId || ''}:${source.renditionId || ''}:${key}`
-      if (existing.seen.has(sourceKey)) continue
-      existing.seen.add(sourceKey)
-      const candidateRef = CANDIDATE_REF_PATTERN.test(source.candidateRef || '') ? source.candidateRef : null
-      const playable = candidateRef !== null || source.availability === 'playable' || source.byteAvailability === 'playable'
-      existing.count += 1
-      if (playable) existing.seeded += 1
-      existing.status = playable || existing.seeded > 0 ? 'seeding' : 'in-network'
-      existing.videos.push({
-        id: source.publicationId || null,
-        title: item.title || null,
-        candidateRef,
-        playable
-      })
-      index.set(key, existing)
+      indexTmdbSource(index, item, source)
     }
   }
   return index
@@ -680,31 +686,16 @@ function libraryStatus({ job, freshArchivists, sizeBytes }) {
   }
 }
 
-export async function createArchiveConsole({
-  service,
-  downloader,
-  host = '127.0.0.1',
-  port = 8174,
-  logger = null,
-  uploadDir = null,
-  uploadStorageHeadroom = null,
-  httpSurface = null,
-  serverFactory = createDefaultServer,
-  storageReservations = null,
-  companionHandler = null,
-  // Test seam: a console created without one asks the socket. Production code
-  // never passes this; tests use it to simulate a LAN peer without needing a
-  // second network interface.
-  allowsPlaybackRequest = requestAllowsPlayback
-}) {
+function assertValidArchiveService(service) {
   if (!service?.runtime?.ctx?.metaDb) throw new Error('archive console requires a relay service runtime')
   if (typeof service.requestLocalFileAcquisition !== 'function' ||
       typeof service.listAcquisitions !== 'function' ||
       typeof service.getVerifiedMediaCatalog !== 'function') {
     throw new Error('archive console requires the provider acquisition service')
   }
-  let activeCompanionHandler = companionHandler
-  const copyReservations = storageReservations || { bytes: 0 }
+}
+
+function createUploadReservationManager(copyReservations) {
   const uploadReservations = new Map()
   const releaseUploadReservation = (reservation) => {
     if (!reservation || reservation.released) return
@@ -723,7 +714,7 @@ export async function createArchiveConsole({
     const size = Math.max(0, Math.floor(Number(bytes) || 0))
     if (size <= 0) return
     reservation.bytes += size
-    copyReservations.bytes = Math.max(0, Math.floor(Number(copyReservations.bytes) || 0)) + size
+    copyReservations.bytes = Math.max(0, Math.floor(Number(copyReservations.bytes) || 0) + size)
   }
   const releaseUploadBytes = (reservation, bytes) => {
     const size = Math.max(0, Math.min(reservation.bytes, Math.floor(Number(bytes) || 0)))
@@ -731,38 +722,147 @@ export async function createArchiveConsole({
     reservation.bytes -= size
     copyReservations.bytes = Math.max(0, Math.floor(Number(copyReservations.bytes) || 0) - size)
   }
-  const stateForUi = state => ['acquiring', 'verifying', 'publishing'].includes(state) ? 'running' : state
-  const entityHintFor = context => context?.kind === 'episode'
-    ? `show:${context.identifier}:s${context.season}:e${context.episode}`
-    : context?.kind === 'movie' ? `movie:${context.identifier}` : null
-  const listJobs = async () => (await service.listAcquisitions()).map(job => {
-    const expectedBytes = Math.max(0, Number(job.expectedBytes) || 0)
-    const bytesAcquired = Math.max(0, Math.min(expectedBytes || Number.MAX_SAFE_INTEGER, Number(job.bytesAcquired) || 0))
-    return {
-      id: job.acquisitionId,
-      jobId: job.acquisitionId,
-      status: stateForUi(job.state),
-      state: job.state,
-      title: job.title || `Acquisition ${job.acquisitionId.slice(0, 12)}`,
-      sourceFileName: job.sourceFileName || null,
-      error: job.errorCode,
-      errorCode: job.errorCode,
-      entityHint: entityHintFor(job.mediaContext),
-      mediaContext: job.mediaContext || null,
-      retentionClass: job.retentionClass || null,
-      bytesAcquired,
-      expectedBytes,
-      progressPercent: expectedBytes > 0 ? Math.min(100, Math.floor((bytesAcquired / expectedBytes) * 1000) / 10) : 0,
-      publicationId: job.publicationId || null,
-      manifestId: job.manifestId || null,
-      renditionId: job.renditionId || null,
-      assetId: job.assetId || null,
-      recoverable: job.recoverable === true,
-      createdAt: job.createdAt,
-      updatedAt: job.updatedAt,
-      completedAt: job.state === 'completed' ? job.updatedAt : null
+  return {
+    uploadReservations,
+    releaseUploadReservation,
+    releaseUploadReservationByPath,
+    reserveUploadBytes,
+    releaseUploadBytes
+  }
+}
+
+const stateForUi = state => ['acquiring', 'verifying', 'publishing'].includes(state) ? 'running' : state
+
+function entityHintFor(context) {
+  if (context?.kind === 'episode') {
+    return `show:${context.identifier}:s${context.season}:e${context.episode}`
+  }
+  if (context?.kind === 'movie') {
+    return `movie:${context.identifier}`
+  }
+  return null
+}
+
+function formatJobForUi(job) {
+  const expectedBytes = Math.max(0, Number(job.expectedBytes) || 0)
+  const bytesAcquired = Math.max(0, Math.min(expectedBytes || Number.MAX_SAFE_INTEGER, Number(job.bytesAcquired) || 0))
+  return {
+    id: job.acquisitionId,
+    jobId: job.acquisitionId,
+    status: stateForUi(job.state),
+    state: job.state,
+    title: job.title || `Acquisition ${job.acquisitionId.slice(0, 12)}`,
+    sourceFileName: job.sourceFileName || null,
+    error: job.errorCode,
+    errorCode: job.errorCode,
+    entityHint: entityHintFor(job.mediaContext),
+    mediaContext: job.mediaContext || null,
+    retentionClass: job.retentionClass || null,
+    bytesAcquired,
+    expectedBytes,
+    progressPercent: expectedBytes > 0 ? Math.min(100, Math.floor((bytesAcquired / expectedBytes) * 1000) / 10) : 0,
+    publicationId: job.publicationId || null,
+    manifestId: job.manifestId || null,
+    renditionId: job.renditionId || null,
+    assetId: job.assetId || null,
+    recoverable: job.recoverable === true,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    completedAt: job.state === 'completed' ? job.updatedAt : null
+  }
+}
+
+async function ensureStagedUploadFile({ file, form, downloader, uploadDir }) {
+  let staged = file
+  if (!staged) {
+    const downloaded = await downloader.download(form)
+    staged = {
+      path: downloaded.filePath,
+      relativePath: relative(resolve(uploadDir), resolve(downloaded.filePath)).replaceAll('\\', '/'),
+      filename: basename(downloaded.filePath),
+      mimeType: downloaded.mimeType || 'application/octet-stream',
+      size: statSync(downloaded.filePath).size,
+      dir: dirname(downloaded.filePath),
+      releaseStorageReservation: downloaded.releaseStorageReservation
     }
+  }
+  const relativePath = staged.relativePath || relative(resolve(uploadDir), resolve(staged.path)).replaceAll('\\', '/')
+  if (!relativePath || relativePath === '..' || relativePath.startsWith('../') || relativePath.startsWith('/')) {
+    throw new Error('archive upload is outside the acquisition spool root')
+  }
+  return staged
+}
+
+function buildCatalogResolutionRecord(form, staged, sha256) {
+  const byteLength = Number(staged.size || statSync(staged.path).size)
+  const tmdbId = String(form.tmdbId || '').trim()
+  const episode = form.tmdbType === 'tv' && tmdbId && Number(form.tmdbSeason) > 0 && Number(form.tmdbEpisode) > 0
+  return canonicalLocalResolutionRecord({
+    sha256,
+    byteLength,
+    title: form.title || form.tmdbTitle,
+    fileName: staged.filename || basename(staged.path),
+    kind: episode ? 'episode' : 'movie',
+    namespace: tmdbId ? 'tmdb' : null,
+    identifier: tmdbId || null,
+    season: Number(form.tmdbSeason),
+    episode: Number(form.tmdbEpisode)
   })
+}
+
+function buildCatalogAcquisitionPayload(form, staged, canon, discard) {
+  return {
+    idempotencyKey: canon.idempotencyKey,
+    title: canon.title,
+    selector: canon.selector,
+    expectedBytes: canon.expectedBytes,
+    retentionClass: canon.retentionClass,
+    path: staged.path,
+    mimeType: staged.mimeType || 'application/octet-stream',
+    sourceFileName: canon.sourceFileName,
+    description: form.description || form.tmdbOverview || undefined,
+    tags: form.tmdbGenres
+      ? String(form.tmdbGenres).split(',').map((entry) => entry.trim()).filter(Boolean)
+      : undefined,
+    duration: normalizeLocalDurationSeconds(
+      Number(form.tmdbRuntime) > 0 ? Number(form.tmdbRuntime) * 60 : null
+    ) ?? undefined,
+    artwork: form.tmdbPosterPath
+      ? [{ role: 'poster', url: tmdbImageUrl(form.tmdbPosterPath, 'w780') }]
+      : [],
+    dispose: discard
+  }
+}
+
+export async function createArchiveConsole({
+  service,
+  downloader,
+  host = '127.0.0.1',
+  port = 8174,
+  logger = null,
+  uploadDir = null,
+  uploadStorageHeadroom = null,
+  httpSurface = null,
+  serverFactory = createDefaultServer,
+  storageReservations = null,
+  companionHandler = null,
+  // Test seam: a console created without one asks the socket. Production code
+  // never passes this; tests use it to simulate a LAN peer without needing a
+  // second network interface.
+  allowsPlaybackRequest = requestAllowsPlayback
+}) {
+  assertValidArchiveService(service)
+  let activeCompanionHandler = companionHandler
+  const copyReservations = storageReservations || { bytes: 0 }
+  const {
+    uploadReservations,
+    releaseUploadReservation,
+    releaseUploadReservationByPath,
+    reserveUploadBytes,
+    releaseUploadBytes
+  } = createUploadReservationManager(copyReservations)
+
+  const listJobs = async () => (await service.listAcquisitions()).map(formatJobForUi)
   const store = { listJobs }
 
   // Read an archive submission as a browser file upload (multipart/form-data,
@@ -799,7 +899,6 @@ export async function createArchiveConsole({
     return { form: buildArchiveForm((key) => params.get(key) || ''), file: null, fields: formFields(params) }
   }
 
-
   function discardUploadFile(file) {
     if (!file) return
     try {
@@ -819,60 +918,19 @@ export async function createArchiveConsole({
     let staged = file
     let accepted = false
     try {
-      if (!staged) {
-        const downloaded = await downloader.download(form)
-        staged = {
-          path: downloaded.filePath,
-          relativePath: relative(resolve(uploadDir), resolve(downloaded.filePath)).replaceAll('\\', '/'),
-          filename: basename(downloaded.filePath),
-          mimeType: downloaded.mimeType || 'application/octet-stream',
-          size: statSync(downloaded.filePath).size,
-          dir: dirname(downloaded.filePath),
-          releaseStorageReservation: downloaded.releaseStorageReservation
-        }
-      }
-      const relativePath = staged.relativePath || relative(resolve(uploadDir), resolve(staged.path)).replaceAll('\\', '/')
-      if (!relativePath || relativePath === '..' || relativePath.startsWith('../') || relativePath.startsWith('/')) {
-        throw new Error('archive upload is outside the acquisition spool root')
-      }
-      const byteLength = Number(staged.size || statSync(staged.path).size)
+      staged = await ensureStagedUploadFile({ file, form, downloader, uploadDir })
       const sha256 = await sha256File(staged.path)
-      const tmdbId = String(form.tmdbId || '').trim()
-      const episode = form.tmdbType === 'tv' && tmdbId && Number(form.tmdbSeason) > 0 && Number(form.tmdbEpisode) > 0
-      const selector = episode
-        ? {
-            kind: 'episode',
-            namespace: 'tmdb',
-            identifier: tmdbId,
-            season: Number(form.tmdbSeason),
-            episode: Number(form.tmdbEpisode)
-          }
-        : {
-            kind: 'movie',
-            namespace: tmdbId ? 'tmdb' : 'peartube-ui',
-            identifier: tmdbId || sha256
-          }
-      const mimeType = staged.mimeType || 'application/octet-stream'
-      const title = form.title || form.tmdbTitle || staged.filename || 'Uploaded video'
-      const job = await service.requestLocalFileAcquisition({
-        idempotencyKey: `archive-${Date.now()}-${sha256.slice(0, 24)}`,
-        title,
-        selector,
-        expectedBytes: byteLength,
-        retentionClass: 'archive-pin',
-        path: staged.path,
-        mimeType,
-        sourceFileName: staged.filename || basename(staged.path),
-        dispose: () => discardUploadFile(staged)
-      })
+      const canon = buildCatalogResolutionRecord(form, staged, sha256)
+      const payload = buildCatalogAcquisitionPayload(form, staged, canon, () => discardUploadFile(staged))
+      const job = await service.requestLocalFileAcquisition(payload)
       accepted = job.sourceAccepted === true
       if (!accepted) discardUploadFile(staged)
       return {
         id: job.acquisitionId,
         jobId: job.acquisitionId,
         status: stateForUi(job.state),
-        title,
-        entityHint: entityHintFor(selector)
+        title: canon.title,
+        entityHint: entityHintFor(canon.selector)
       }
     } catch (err) {
       if (!accepted) discardUploadFile(staged)
@@ -943,6 +1001,258 @@ export async function createArchiveConsole({
   // The viewer-facing shelf is built only from the service's verified query
   // view. Jobs and mirror proofs add local status, but never invent a title or
   // a playback target.
+function getLibraryMirrors(service) {
+  const mirrors = new Map()
+  for (const request of service.getArchiveMirrorRequests?.() || []) {
+    if (!request?.publicationId) continue
+    mirrors.set(String(request.publicationId), request)
+  }
+  return mirrors
+}
+
+async function fetchLibraryManifests(items, service) {
+  const manifests = new Map()
+  const publicationIds = new Set()
+  for (const item of items) {
+    for (const source of item?.sources || []) {
+      if (source?.publicationId) publicationIds.add(String(source.publicationId))
+    }
+  }
+  await Promise.all([...publicationIds].map(async publicationId => {
+    const manifest = await service.getVerifiedManifest?.(publicationId)
+    if (manifest) manifests.set(publicationId, manifest)
+  }))
+  return manifests
+}
+
+// The operator's per-release file-name overrides lead, then whatever explicit
+// file name the job, source or manifest carries, then title-derived fallbacks.
+function resolveLibraryExplicitFileName({ publicationId, renditionId, releaseJob, source, manifest, releaseFileNames }) {
+  const fileKey = `${publicationId}:${renditionId || ''}`
+  if (releaseFileNames[fileKey]) return releaseFileNames[fileKey]
+  if (releaseFileNames[publicationId]) return releaseFileNames[publicationId]
+  if (releaseJob?.sourceFileName) return releaseJob.sourceFileName
+  if (source?.sourceFileName) return source.sourceFileName
+  if (manifest?.body?.sourceFileName) return manifest.body.sourceFileName
+  if (source?.fileName) return source.fileName
+  if (source?.filename) return source.filename
+  return null
+}
+
+function resolveLibraryTitleFileName({ releaseJob, source, manifest, itemTitle }) {
+  if (manifest?.body?.title && manifest.body.title !== itemTitle) return manifest.body.title
+  if (source?.title && source.title !== itemTitle) return source.title
+  if (manifest?.body?.title) return manifest.body.title
+  if (source?.title) return source.title
+  if (releaseJob?.title && !releaseJob.title.startsWith('Acquisition ')) return releaseJob.title
+  return null
+}
+
+function resolveLibrarySourceFileName({ publicationId, renditionId, releaseJob, source, manifest, itemTitle, releaseFileNames }) {
+  return resolveLibraryExplicitFileName({ publicationId, renditionId, releaseJob, source, manifest, releaseFileNames }) ||
+    resolveLibraryTitleFileName({ releaseJob, source, manifest, itemTitle }) ||
+    null
+}
+
+function positiveSizeOrNull(sizeBytes) {
+  return sizeBytes > 0 ? sizeBytes : null
+}
+
+function releaseRowTitle(manifest, source, releaseJob) {
+  return manifest?.body?.title || source?.title || releaseJob?.title || null
+}
+
+function releaseRowAcquiredAt(releaseJob) {
+  return releaseJob?.completedAt || releaseJob?.updatedAt || null
+}
+
+function releaseRowCandidateRef(candidateRef, playbackAllowed) {
+  if (!playbackAllowed) return null
+  if (CANDIDATE_REF_PATTERN.test(candidateRef || '')) return candidateRef
+  return null
+}
+
+function buildLibraryReleaseRow({ source, publicationId, renditionId, manifest, releaseJob, releaseMirror, sourceFileName, playbackAllowed }) {
+  const releaseBytes = publicationBytes(manifest)
+  return {
+    releaseBytes,
+    row: {
+      publicationId,
+      renditionId: source.renditionId || null,
+      sizeBytes: positiveSizeOrNull(releaseBytes),
+      sourceFileName,
+      title: releaseRowTitle(manifest, source, releaseJob),
+      acquisitionId: releaseJob?.id || null,
+      availability: source.availability || null,
+      mediaCoordinates: source.mediaCoordinates || null,
+      freshArchivists: Math.max(0, Number(releaseMirror?.freshArchivists) || 0),
+      acquiredAt: releaseRowAcquiredAt(releaseJob),
+      playable: Boolean(publicationId) || playbackAllowed,
+      candidateRef: releaseRowCandidateRef(source?.candidateRef, playbackAllowed)
+    }
+  }
+}
+
+function trackLibrarySourceCoordinates(source, seasons) {
+  const coordinates = source.mediaCoordinates || {}
+  if (coordinates.contentKind !== 'episode') return 0
+  const season = Number(coordinates.seasonNumber)
+  const episode = Number(coordinates.episodeNumber)
+  if (Number.isSafeInteger(season) && season > 0 && Number.isSafeInteger(episode) && episode > 0) {
+    if (!seasons.has(season)) seasons.set(season, new Set())
+    seasons.get(season).add(episode)
+    return 0
+  }
+  return 1
+}
+
+function processLibraryItemSources({ item, manifests, blocked, jobIndex, mirrors, releaseFileNames, playbackAllowed }) {
+  let sizeBytes = 0
+  let freshArchivists = 0
+  const itemPublicationIds = new Set()
+  const seasons = new Map()
+  let looseEpisodes = 0
+  const releases = []
+  let maxMirrorRecency = 0
+
+  for (const source of item?.sources || []) {
+    if (!source?.publicationId) continue
+    const publicationId = String(source.publicationId)
+    const renditionId = source?.renditionId ? String(source.renditionId) : null
+    if (blocked.has(publicationId) || (renditionId && blocked.has(renditionId)) || (renditionId && blocked.has(`${publicationId}:${renditionId}`))) continue
+
+    const manifest = manifests.get(publicationId) || null
+    const releaseJob = jobIndex.byPublicationId.get(publicationId) || null
+    const releaseMirror = mirrors.get(publicationId)
+
+    itemPublicationIds.add(publicationId)
+    const sourceFileName = resolveLibrarySourceFileName({
+      publicationId,
+      renditionId,
+      releaseJob,
+      source,
+      manifest,
+      itemTitle: item?.title,
+      releaseFileNames
+    })
+
+    const { releaseBytes, row } = buildLibraryReleaseRow({
+      source,
+      publicationId,
+      renditionId,
+      manifest,
+      releaseJob,
+      releaseMirror,
+      sourceFileName,
+      playbackAllowed
+    })
+    sizeBytes += releaseBytes
+    releases.push(row)
+
+    looseEpisodes += trackLibrarySourceCoordinates(source, seasons)
+
+    const mirror = mirrors.get(String(source.publicationId))
+    if (mirror) {
+      freshArchivists = Math.max(freshArchivists, Number(mirror.freshArchivists) || 0)
+      maxMirrorRecency = Math.max(maxMirrorRecency, Number(mirror.requestedAt) || 0)
+    }
+  }
+
+  const episodeCount = [...seasons.values()].reduce((sum, set) => sum + set.size, 0) + looseEpisodes
+  return {
+    sizeBytes,
+    freshArchivists,
+    itemPublicationIds,
+    seasons,
+    episodeCount,
+    releases,
+    maxMirrorRecency
+  }
+}
+
+function projectLibraryJobAcquisition(job) {
+  if (!job) return null
+  return {
+    id: job.id,
+    status: job.status,
+    progressPercent: job.progressPercent,
+    sourceFileName: job.sourceFileName,
+    bytesAcquired: job.bytesAcquired,
+    expectedBytes: job.expectedBytes,
+    retentionClass: job.retentionClass,
+    publicationId: job.publicationId,
+    recoverable: job.recoverable,
+    updatedAt: job.updatedAt
+  }
+}
+
+function resolveLibraryCandidateRef(item, playbackAllowed) {
+  if (!playbackAllowed) return null
+  if (CANDIDATE_REF_PATTERN.test(item?.candidateRef || '')) {
+    return item.candidateRef
+  }
+  const match = (item?.sources || []).find(source => CANDIDATE_REF_PATTERN.test(source?.candidateRef || ''))
+  return match?.candidateRef || null
+}
+
+function arrayOrEmpty(value) {
+  return Array.isArray(value) ? value : []
+}
+
+function safeIntegerOrNull(value) {
+  return Number.isSafeInteger(value) ? value : null
+}
+
+function libraryItemMetadata(item) {
+  return {
+    entityId: String(item?.entityId || ''),
+    kind: item?.entityKind || 'unknown',
+    title: item?.title || 'Untitled',
+    channelName: item?.subtitle || null,
+    year: safeIntegerOrNull(item?.releaseYear),
+    runtimeMinutes: safeIntegerOrNull(item?.runtimeMinutes),
+    genres: arrayOrEmpty(item?.genres),
+    overview: typeof item?.overview === 'string' && item.overview ? item.overview : null,
+    hasPoster: Boolean(item?.posterBlobId || item?.posterUrl)
+  }
+}
+
+function buildLibraryItemEntry({ item, order, jobIndex, manifests, blocked, mirrors, releaseFileNames, playbackAllowed }) {
+  const job = libraryJobFor(item, jobIndex)
+  const processed = processLibraryItemSources({
+    item,
+    manifests,
+    blocked,
+    jobIndex,
+    mirrors,
+    releaseFileNames,
+    playbackAllowed
+  })
+  const recency = Math.max(jobRecency(job), processed.maxMirrorRecency)
+  const sizeBytes = processed.sizeBytes
+  const freshArchivists = processed.freshArchivists
+  const seasons = processed.seasons
+
+  return {
+    order,
+    recency,
+    entry: {
+      ...libraryItemMetadata(item),
+      sizeBytes: positiveSizeOrNull(sizeBytes),
+      publicationCount: processed.itemPublicationIds.size,
+      publicationIds: [...processed.itemPublicationIds],
+      releases: processed.releases,
+      freshArchivists,
+      acquisition: projectLibraryJobAcquisition(job),
+      seasonNumbers: [...seasons.keys()].sort((left, right) => left - right),
+      episodeCount: processed.episodeCount,
+      playable: playbackAllowed,
+      candidateRef: resolveLibraryCandidateRef(item, playbackAllowed),
+      status: libraryStatus({ job, freshArchivists, sizeBytes })
+    }
+  }
+}
+
   async function libraryView(items, jobs = [], { playbackAllowed = false } = {}) {
     try {
       if (!Array.isArray(items) || items.length === 0) return []
@@ -950,155 +1260,21 @@ export async function createArchiveConsole({
       const rawBlocked = service.settings?.get?.('blockedReleases', []) || []
       const blocked = new Set((Array.isArray(rawBlocked) ? rawBlocked : []).filter(Boolean).map(String))
       const releaseFileNames = service.settings?.get?.('releaseFileNames', {}) || {}
-      const mirrors = new Map()
-      for (const request of service.getArchiveMirrorRequests?.() || []) {
-        if (!request?.publicationId) continue
-        mirrors.set(String(request.publicationId), request)
-      }
+      const mirrors = getLibraryMirrors(service)
       const jobIndex = indexJobsForLibrary(jobs)
-      const manifests = new Map()
-      const publicationIds = new Set()
-      for (const item of items) {
-        for (const source of item?.sources || []) {
-          if (source?.publicationId) publicationIds.add(String(source.publicationId))
-        }
-      }
-      await Promise.all([...publicationIds].map(async publicationId => {
-        const manifest = await service.getVerifiedManifest?.(publicationId)
-        if (manifest) manifests.set(publicationId, manifest)
+      const manifests = await fetchLibraryManifests(items, service)
+
+      const ranked = items.map((item, order) => buildLibraryItemEntry({
+        item,
+        order,
+        jobIndex,
+        manifests,
+        blocked,
+        mirrors,
+        releaseFileNames,
+        playbackAllowed
       }))
 
-      // The verified view is ordered by its durable query key and carries no
-      // display timestamp. Local jobs and mirror proofs provide recency when
-      // available; titles without either retain verified query order.
-      const ranked = items.map((item, order) => {
-        const job = libraryJobFor(item, jobIndex)
-        let sizeBytes = 0
-        let freshArchivists = 0
-        let recency = jobRecency(job)
-        const itemPublicationIds = new Set()
-        // A series entity collapses every episode this relay holds, so the
-        // seasons and episodes are counted from the coordinates the publisher
-        // signed rather than from how many publications happen to be here. Two
-        // uploads of the same episode are one episode; an episode with no
-        // ordinals is still held, so it is counted without a season.
-        const seasons = new Map()
-        let looseEpisodes = 0
-        const releases = []
-        for (const source of item?.sources || []) {
-          if (!source?.publicationId) continue
-          const publicationId = String(source.publicationId)
-          const renditionId = source?.renditionId ? String(source.renditionId) : null
-          if (blocked.has(publicationId) || (renditionId && blocked.has(renditionId)) || (renditionId && blocked.has(`${publicationId}:${renditionId}`))) continue
-          const releaseBytes = publicationBytes(manifests.get(publicationId))
-          sizeBytes += releaseBytes
-          itemPublicationIds.add(publicationId)
-          const releaseJob = jobIndex.byPublicationId.get(publicationId) || null
-          const releaseMirror = mirrors.get(publicationId)
-          const manifest = manifests.get(publicationId) || null
-          const sourceFileName = releaseFileNames[`${publicationId}:${renditionId || ''}`] ||
-            releaseFileNames[publicationId] ||
-            releaseJob?.sourceFileName ||
-            source?.sourceFileName ||
-            manifest?.body?.sourceFileName ||
-            source?.fileName ||
-            source?.filename ||
-            (manifest?.body?.title && manifest.body.title !== item?.title ? manifest.body.title : null) ||
-            (source?.title && source.title !== item?.title ? source.title : null) ||
-            manifest?.body?.title ||
-            source?.title ||
-            (releaseJob?.title && !releaseJob.title.startsWith('Acquisition ') ? releaseJob.title : null) ||
-            null
-          releases.push({
-            publicationId,
-            renditionId: source.renditionId || null,
-            sizeBytes: releaseBytes > 0 ? releaseBytes : null,
-            sourceFileName,
-            title: manifest?.body?.title || source?.title || releaseJob?.title || null,
-            acquisitionId: releaseJob?.id || null,
-            availability: source.availability || null,
-            mediaCoordinates: source.mediaCoordinates || null,
-            freshArchivists: Math.max(0, Number(releaseMirror?.freshArchivists) || 0),
-            acquiredAt: releaseJob?.completedAt || releaseJob?.updatedAt || null,
-            // Stable-id opens stream through the relay for every client, so
-            // any catalogued row with both ids is playable from anywhere.
-            // The candidateRef redirect stays loopback-only.
-            playable: Boolean(publicationId) || playbackAllowed,
-            candidateRef: playbackAllowed && CANDIDATE_REF_PATTERN.test(source?.candidateRef || '')
-              ? source.candidateRef
-              : null
-          })
-          const coordinates = source.mediaCoordinates || {}
-          if (coordinates.contentKind === 'episode') {
-            const season = Number(coordinates.seasonNumber)
-            const episode = Number(coordinates.episodeNumber)
-            if (Number.isSafeInteger(season) && season > 0 && Number.isSafeInteger(episode) && episode > 0) {
-              if (!seasons.has(season)) seasons.set(season, new Set())
-              seasons.get(season).add(episode)
-            } else {
-              looseEpisodes++
-            }
-          }
-          const mirror = mirrors.get(String(source.publicationId))
-          if (!mirror) continue
-          // Max, not sum: one archivist holding three episodes of a series is
-          // one other device, not three.
-          freshArchivists = Math.max(freshArchivists, Number(mirror.freshArchivists) || 0)
-          recency = Math.max(recency, Number(mirror.requestedAt) || 0)
-        }
-        const episodeCount = [...seasons.values()].reduce((sum, set) => sum + set.size, 0) + looseEpisodes
-        return {
-          order,
-          recency,
-          entry: {
-            entityId: String(item?.entityId || ''),
-            kind: item?.entityKind || 'unknown',
-            title: item?.title || 'Untitled',
-            channelName: item?.subtitle || null,
-            year: Number.isSafeInteger(item?.releaseYear) ? item.releaseYear : null,
-            runtimeMinutes: Number.isSafeInteger(item?.runtimeMinutes) ? item.runtimeMinutes : null,
-            genres: Array.isArray(item?.genres) ? item.genres : [],
-            overview: typeof item?.overview === 'string' && item.overview ? item.overview : null,
-            // What the publisher signed a cover for. Whether its bytes have
-            // replicated here is what /poster/<entityId> answers, and that
-            // resolve can block on a transfer, so it is not run once per title
-            // while a page render waits on it.
-            hasPoster: Boolean(item?.posterBlobId || item?.posterUrl),
-            sizeBytes: sizeBytes > 0 ? sizeBytes : null,
-            publicationCount: itemPublicationIds.size,
-            publicationIds: [...itemPublicationIds],
-            releases,
-            freshArchivists,
-            acquisition: job
-              ? {
-                  id: job.id,
-                  status: job.status,
-                  progressPercent: job.progressPercent,
-                  sourceFileName: job.sourceFileName,
-                  bytesAcquired: job.bytesAcquired,
-                  expectedBytes: job.expectedBytes,
-                  retentionClass: job.retentionClass,
-                  publicationId: job.publicationId,
-                  recoverable: job.recoverable,
-                  updatedAt: job.updatedAt
-                }
-              : null,
-            // What this relay actually holds of a show, counted from signed
-            // coordinates: which seasons, and how many distinct episodes. It
-            // is deliberately not "how many episodes the show has" - nothing
-            // here knows that, and implying it would be a guess.
-            seasonNumbers: [...seasons.keys()].sort((left, right) => left - right),
-            episodeCount,
-            playable: playbackAllowed,
-            candidateRef: playbackAllowed
-              ? (CANDIDATE_REF_PATTERN.test(item?.candidateRef || '')
-                  ? item.candidateRef
-                  : (item?.sources || []).find(source => CANDIDATE_REF_PATTERN.test(source?.candidateRef || ''))?.candidateRef || null)
-              : null,
-            status: libraryStatus({ job, freshArchivists, sizeBytes })
-          }
-        }
-      })
       ranked.sort((left, right) => (right.recency - left.recency) || (left.order - right.order))
       return ranked.map((row) => row.entry)
     } catch (err) {
@@ -1128,22 +1304,21 @@ export async function createArchiveConsole({
     }
   }
 
+  function publicationReleaseFileName(release, acquisition, workTitle) {
+    if (release.sourceFileName) return release.sourceFileName
+    if (acquisition?.sourceFileName) return acquisition.sourceFileName
+    if (release.title && release.title !== workTitle) return release.title
+    if (acquisition?.title && !acquisition.title.startsWith('Acquisition ') && acquisition.title !== workTitle) {
+      return acquisition.title
+    }
+    return release.title || null
+  }
+
   function publicationReleaseRow(work, release, acquisition) {
     const facts = acquisitionFacts(acquisition)
-    // The publisher's signed coordinates lead: they describe the work the
-    // catalog names. The acquisition's own context is the fallback for a
-    // release published before coordinates rode along.
     const coordinates = release.mediaCoordinates || acquisition?.mediaContext || {}
-    const file = release.sourceFileName ||
-      acquisition?.sourceFileName ||
-      (release.title && release.title !== work.title ? release.title : null) ||
-      (acquisition?.title && !acquisition.title.startsWith('Acquisition ') && acquisition.title !== work.title ? acquisition.title : null) ||
-      release.title ||
-      null
+    const file = publicationReleaseFileName(release, acquisition, work.title)
     return {
-      // A publication can carry more than one rendition, and each is its own
-      // core with its own bytes. The row id has to tell them apart or the
-      // drawer, the selection and the poll's row index would collapse them.
       id: release.renditionId ? `${release.publicationId}:${release.renditionId}` : release.publicationId,
       kind: 'release',
       file,
@@ -1203,40 +1378,62 @@ export async function createArchiveConsole({
     }
   }
 
-  // The operator table. Every archived file this relay holds becomes a row, and
-  // so does every acquisition that has not produced one yet — a failure with no
-  // publication is exactly the row an operator came here to act on.
-  function releasesView(library = [], jobs = []) {
+  function isReleaseBlocked(pubId, rendId, blocked) {
+    if (pubId && blocked.has(pubId)) return true
+    if (rendId && blocked.has(rendId)) return true
+    const releaseKey = rendId ? `${pubId}:${rendId}` : pubId
+    if (releaseKey && blocked.has(releaseKey)) return true
+    return false
+  }
+
+  function collectLibraryReleaseRows({ library, jobs, blocked, claimed, published }) {
     const rows = []
-    const claimed = new Set()
-    const published = new Set()
-    const rawBlocked = service.settings?.get?.('blockedReleases', []) || []
-    const blocked = new Set((Array.isArray(rawBlocked) ? rawBlocked : []).filter(Boolean).map(String))
     for (const work of library) {
       for (const release of work.releases || []) {
         const pubId = release.publicationId ? String(release.publicationId) : null
         const rendId = release.renditionId ? String(release.renditionId) : null
-        const releaseKey = rendId ? `${pubId}:${rendId}` : pubId
-        if (pubId && blocked.has(pubId)) continue
-        if (rendId && blocked.has(rendId)) continue
-        if (releaseKey && blocked.has(releaseKey)) continue
+        if (isReleaseBlocked(pubId, rendId, blocked)) continue
         const acquisition = release.acquisitionId ? jobs.find(job => job.id === release.acquisitionId) : null
         if (acquisition) claimed.add(acquisition.id)
         if (pubId) published.add(pubId)
         rows.push(publicationReleaseRow(work, release, acquisition))
       }
     }
+    return rows
+  }
+
+  function isJobBlocked(job, blocked, claimed, published) {
+    const jobId = job.id ? String(job.id) : null
+    const acqId = job.acquisitionId ? String(job.acquisitionId) : null
+    const pubId = job.publicationId ? String(job.publicationId) : null
+    if (jobId && blocked.has(jobId)) return true
+    if (acqId && blocked.has(acqId)) return true
+    if (pubId && blocked.has(pubId)) return true
+    if (claimed.has(job.id) || (pubId && published.has(pubId))) return true
+    return false
+  }
+
+  function collectJobReleaseRows({ jobs, blocked, claimed, published }) {
+    const rows = []
     for (const job of jobs) {
-      const jobId = job.id ? String(job.id) : null
-      const acqId = job.acquisitionId ? String(job.acquisitionId) : null
-      const pubId = job.publicationId ? String(job.publicationId) : null
-      if (jobId && blocked.has(jobId)) continue
-      if (acqId && blocked.has(acqId)) continue
-      if (pubId && blocked.has(pubId)) continue
-      if (claimed.has(job.id) || (pubId && published.has(pubId))) continue
+      if (isJobBlocked(job, blocked, claimed, published)) continue
       rows.push(acquisitionReleaseRow(job))
     }
     return rows
+  }
+
+  // The operator table. Every archived file this relay holds becomes a row, and
+  // so does every acquisition that has not produced one yet — a failure with no
+  // publication is exactly the row an operator came here to act on.
+  function releasesView(library = [], jobs = []) {
+    const claimed = new Set()
+    const published = new Set()
+    const rawBlocked = service.settings?.get?.('blockedReleases', []) || []
+    const blocked = new Set((Array.isArray(rawBlocked) ? rawBlocked : []).filter(Boolean).map(String))
+
+    const libraryRows = collectLibraryReleaseRows({ library, jobs, blocked, claimed, published })
+    const jobRows = collectJobReleaseRows({ jobs, blocked, claimed, published })
+    return [...libraryRows, ...jobRows]
   }
   const residencyProbes = new Map()
   const RESIDENCY_PROBE_TTL_MS = 30_000
@@ -1443,109 +1640,139 @@ export async function createArchiveConsole({
   // as it lands. Chunked 4 MiB reads keep one seek from demanding a whole
   // film into memory; the request close aborts the in-flight read.
   const RENDITION_CHUNK_BYTES = 4 * 1024 * 1024
+function parseRenditionByteRange(rangeHeader, total) {
+  let start = 0
+  let end = Math.max(0, total - 1)
+  let statusCode = 200
+  if (rangeHeader && total > 0) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(String(rangeHeader))
+    if (match) {
+      const [, rawStart, rawEnd] = match
+      if (!rawStart && rawEnd) {
+        start = Math.max(0, total - Number(rawEnd))
+      } else if (rawStart) {
+        start = Math.min(Number(rawStart), Math.max(0, total - 1))
+      }
+      end = total - 1
+      if (rawEnd && rawStart) end = Math.min(Number(rawEnd), total - 1)
+      statusCode = 206
+    }
+  }
+  if (statusCode === 200 && total > 0) end = total - 1
+  return { start, end, statusCode }
+}
+
+function buildRenditionHeaders({ contentType, total, start, end, statusCode }) {
+  const headers = {
+    'content-type': contentType,
+    'accept-ranges': 'bytes',
+    'cache-control': 'no-store'
+  }
+  if (total > 0) {
+    headers['content-length'] = String(statusCode === 206 ? end - start + 1 : total)
+    if (statusCode === 206) headers['content-range'] = `bytes ${start}-${end}/${total}`
+  }
+  return headers
+}
+
+function waitForResponseDrain(res) {
+  return new Promise((resolve, reject) => {
+    const drain = () => { cleanup(); resolve() }
+    const fail = (err) => { cleanup(); reject(err) }
+    const cleanup = () => { res.off?.('drain', drain); res.off?.('error', fail) }
+    res.once?.('drain', drain)
+    res.once?.('error', fail)
+  })
+}
+
+async function pumpRenditionChunks({ reader, res, start, end, stallTimer, isAborted }) {
+  let offset = start
+  while (offset <= end && !isAborted()) {
+    const length = Math.min(RENDITION_CHUNK_BYTES, end - offset + 1)
+    let delivered = 0
+    for await (const chunk of reader.read({ start: offset, length })) {
+      if (isAborted()) break
+      stallTimer.refresh?.()
+      const bytes = b4a.from(chunk ?? b4a.alloc(0))
+      if (bytes.byteLength === 0) continue
+      if (!res.write(bytes)) {
+        await waitForResponseDrain(res)
+        if (isAborted()) break
+      }
+      offset += bytes.byteLength
+      delivered += bytes.byteLength
+      if (offset > end) break
+    }
+    if (delivered === 0) break
+  }
+  return offset
+}
+
+function handleStalledRenditionStream({ res, logger, reader, servedBytes }) {
+  logger?.archive?.warn?.('LAN rendition stream stalled; ending response for retry', {
+    publicationId: reader.publicationId,
+    servedBytes
+  })
+  try { res.destroy?.() } catch { /* the stalled response may be gone */ }
+}
+
+function handleFailedRenditionStream({ res, logger, reader, err }) {
+  logger?.archive?.warn?.('LAN rendition stream failed', {
+    error: err?.message || String(err),
+    publicationId: reader.publicationId
+  })
+  try { res.destroy?.() } catch { /* the failed response may be gone */ }
+}
+
   async function streamRenditionResponse(req, res, reader) {
     const total = Number(reader.byteLength) || 0
     const contentType = typeof reader.mimeType === 'string' && reader.mimeType ? reader.mimeType : 'video/mp4'
-    const rangeHeader = req.headers?.range
-    let start = 0
-    let end = Math.max(0, total - 1)
-    let statusCode = 200
-    if (rangeHeader && total > 0) {
-      const match = /^bytes=(\d*)-(\d*)$/.exec(String(rangeHeader))
-      if (match) {
-        const [, rawStart, rawEnd] = match
-        if (!rawStart && rawEnd) {
-          start = Math.max(0, total - Number(rawEnd))
-        } else if (rawStart) {
-          start = Math.min(Number(rawStart), Math.max(0, total - 1))
-        }
-        end = total - 1
-        if (rawEnd && rawStart) end = Math.min(Number(rawEnd), total - 1)
-        statusCode = 206
-      }
-    }
-    if (statusCode === 200 && total > 0) end = total - 1
+    const { start, end, statusCode } = parseRenditionByteRange(req.headers?.range, total)
+
     if (total > 0 && start >= total) {
       res.writeHead(416, { 'content-range': `bytes */${total}` })
       res.end()
       return
     }
-    const headers = {
-      'content-type': contentType,
-      'accept-ranges': 'bytes',
-      'cache-control': 'no-store'
-    }
-    if (total > 0) {
-      headers['content-length'] = String(statusCode === 206 ? end - start + 1 : total)
-      if (statusCode === 206) headers['content-range'] = `bytes ${start}-${end}/${total}`
-    }
+
+    const headers = buildRenditionHeaders({ contentType, total, start, end, statusCode })
     res.writeHead(statusCode, headers)
     if (req.method === 'HEAD' || total <= 0 || end < start) {
       res.end()
       return
     }
+
     let closed = false
     let stalled = false
-    // A read that produces nothing for this long is a block the swarm cannot
-    // deliver right now. Closing the reader aborts the pending core.get, the
-    // response ends, and the player re-requests - by then replication has had
-    // time to land the block. Waiting forever is what made buffering never
-    // recover.
     const READ_STALL_TIMEOUT_MS = 15_000
     const closeReader = () => { try { reader.close?.() } catch { /* already closed */ } }
     const onClose = () => {
       closed = true
-      // A seek aborts the request; close the reader at once so the pending
-      // core.get cannot hold an open core past the response's life.
       closeReader()
     }
     res.on?.('close', onClose)
     const stallTimer = setTimeout(() => { stalled = true; closeReader() }, READ_STALL_TIMEOUT_MS)
     if (typeof stallTimer.unref === 'function') stallTimer.unref()
+
+    let offset = start
     try {
-      let offset = start
-      while (offset <= end && !closed && !stalled) {
-        const length = Math.min(RENDITION_CHUNK_BYTES, end - offset + 1)
-        let delivered = 0
-        for await (const chunk of reader.read({ start: offset, length })) {
-          if (closed || stalled) break
-          // Any byte resets the stall clock: the swarm is delivering.
-          stallTimer.refresh?.()
-          const bytes = b4a.from(chunk ?? b4a.alloc(0))
-          if (bytes.byteLength === 0) continue
-          if (!res.write(bytes)) {
-            await new Promise((resolve, reject) => {
-              const drain = () => { cleanup(); resolve() }
-              const fail = (err) => { cleanup(); reject(err) }
-              const cleanup = () => { res.off?.('drain', drain); res.off?.('error', fail) }
-              res.once?.('drain', drain)
-              res.once?.('error', fail)
-            })
-            if (closed || stalled) break
-          }
-          offset += bytes.byteLength
-          delivered += bytes.byteLength
-          if (offset > end) break
-        }
-        if (delivered === 0) break
-      }
+      offset = await pumpRenditionChunks({
+        reader,
+        res,
+        start,
+        end,
+        stallTimer,
+        isAborted: () => closed || stalled
+      })
       clearTimeout(stallTimer)
       if (stalled) {
-        logger?.archive?.warn?.('LAN rendition stream stalled; ending response for retry', {
-          publicationId: reader.publicationId,
-          servedBytes: offset - start
-        })
-        try { res.destroy?.() } catch { /* the stalled response may be gone */ }
+        handleStalledRenditionStream({ res, logger, reader, servedBytes: offset - start })
         return
       }
       if (!closed) res.end()
     } catch (err) {
       clearTimeout(stallTimer)
-      logger?.archive?.warn?.('LAN rendition stream failed', {
-        error: err?.message || String(err),
-        publicationId: reader.publicationId
-      })
-      try { res.destroy?.() } catch { /* the failed response may be gone */ }
+      handleFailedRenditionStream({ res, logger, reader, err })
     } finally {
       res.off?.('close', onClose)
       closeReader()
@@ -1562,15 +1789,14 @@ export async function createArchiveConsole({
   // seek is a fresh, cheap, keyframe-aligned ffmpeg run.
 
   const compatSessions = new Map()
+  const compatChildren = new Set()
+  let closing = null
   const COMPAT_SESSION_TTL_MS = 10 * 60_000
 
   function compatKey (publicationId, renditionId) {
-    return `${publicationId}:${renditionId}`
+    return JSON.stringify([publicationId, renditionId])
   }
 
-  function compatSessionDir (publicationId, renditionId, offsetSec) {
-    return resolve(tmpdir(), `peartube-compat-${publicationId.slice(0, 12)}-${renditionId.slice(0, 12)}-${Math.floor(offsetSec)}`)
-  }
 
   function stopCompatSession (key) {
     const session = compatSessions.get(key)
@@ -1580,16 +1806,14 @@ export async function createArchiveConsole({
     try { rmSync(session.dir, { recursive: true, force: true }) } catch { /* best effort */ }
   }
 
-  function stopCompatSessionsFor (publicationId, renditionId) {
-    stopCompatSession(compatKey(publicationId, renditionId))
-  }
 
-  setInterval(() => {
+  const compatReaper = setInterval(() => {
     const now = Date.now()
     for (const [key, session] of compatSessions) {
       if (now - session.lastTouch > COMPAT_SESSION_TTL_MS) stopCompatSession(key)
     }
-  }, 60_000).unref?.()
+  }, 60_000)
+  compatReaper.unref?.()
 
   function ffmpegBinary () {
     return process.env.PEARTUBE_FFMPEG_PATH || 'ffmpeg'
@@ -1607,9 +1831,7 @@ export async function createArchiveConsole({
       return existing
     }
     stopCompatSession(key)
-    const dir = compatSessionDir(publicationId, renditionId, offsetSec)
-    try { rmSync(dir, { recursive: true, force: true }) } catch { /* best effort */ }
-    mkdirSync(dir, { recursive: true })
+    const dir = mkdtempSync(resolve(tmpdir(), 'peartube-compat-'))
     const args = [
       '-hide_banner', '-loglevel', 'error',
       '-ss', String(offsetSec),
@@ -1621,17 +1843,31 @@ export async function createArchiveConsole({
       '-master_pl_name', 'index.m3u8',
       resolve(dir, 'prog.m3u8')
     ]
-    const ffmpeg = spawn(ffmpegBinary(), args, { stdio: ['ignore', 'ignore', 'pipe'] })
+    let ffmpeg
+    try {
+      ffmpeg = spawn(ffmpegBinary(), args, { stdio: ['ignore', 'ignore', 'pipe'] })
+    } catch (error) {
+      try { rmSync(dir, { recursive: true, force: true }) } catch { /* best effort */ }
+      throw error
+    }
     let stderr = ''
     ffmpeg.stderr?.on?.('data', (d) => { stderr = (stderr + String(d)).slice(-4000) })
     const session = {
       ffmpeg, dir, offsetSec, lastTouch: Date.now(), ready: false, stderr: () => stderr
     }
-    ffmpeg.on?.('exit', (code) => {
-      if (compatSessions.get(key) === session) {
+    compatChildren.add(session)
+    session.finished = new Promise(resolveExit => {
+      const finish = code => {
         session.exited = true
         session.exitCode = code
+        compatChildren.delete(session)
+        resolveExit()
       }
+      ffmpeg.once('exit', finish)
+      ffmpeg.once('error', error => {
+        stderr = error?.message || String(error)
+        if (!ffmpeg.pid) finish(-1)
+      })
     })
     compatSessions.set(key, session)
     return session
@@ -1704,477 +1940,439 @@ export async function createArchiveConsole({
   }
 
 
+  async function handleCompanionOrHealth(req, res) {
+    if (typeof activeCompanionHandler === 'function' && (req.url === '/api/v2' || req.url.startsWith('/api/v2/') || req.url.startsWith('/api/v2?'))) {
+      await activeCompanionHandler(req, res)
+      return true
+    }
+    if (req.method === 'GET' && req.url === '/health') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: true, ready: true }))
+      return true
+    }
+    if (req.method === 'GET' && req.url === UI_FONT_ROUTE) {
+      res.writeHead(200, {
+        'content-type': 'font/ttf',
+        'cache-control': 'public, max-age=31536000, immutable'
+      })
+      res.end(SYNE_EXTRABOLD_TTF)
+      return true
+    }
+    return false
+  }
+
+  async function handleGetUiRoutes(req, res, parsed, playbackAllowed) {
+    if (parsed.pathname === '/' || parsed.pathname === '/ui' || parsed.pathname === '/releases') {
+      const { releases, page } = await releasePage(parsed.searchParams, { playbackAllowed })
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(renderReleaseConsole({
+        status: service.getStatus?.() || {},
+        releases,
+        localPlayback: playbackAllowed === true,
+        playbackUi: true,
+        compatPlayback: Boolean(ffmpegBinary()),
+        page
+      }, parsed.searchParams))
+      return true
+    }
+
+    if (parsed.pathname === '/releases.html') {
+      const { page } = await releasePage(parsed.searchParams, { playbackAllowed })
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(renderReleaseRows(page))
+      return true
+    }
+
+    if (parsed.pathname === '/discover' || parsed.pathname === '/creators' || parsed.pathname === '/settings') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+      const home = await model({
+        query: parsed.searchParams.get('q') || '',
+        type: parsed.searchParams.get('type') || 'movie',
+        page: parsed.searchParams.get('page') || '1'
+      }, { playbackAllowed })
+      if (parsed.searchParams.get('notice') === 'empty-submission') home.notice = EMPTY_SUBMISSION_NOTICE
+      res.end(renderArchiveWebHome(home, { view: parsed.pathname.slice(1) }))
+      return true
+    }
+
+    if (req.url === '/tui') {
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end(renderArchiveTui(await model()))
+      return true
+    }
+
+    return false
+  }
+
+  async function handleCompatPlaybackRoute(req, res, parsed, playbackAllowed) {
+    const compatMatch = parsed.pathname.match(/^\/play\/compat\/([^/]+)\/([^/]+)\/(index\.m3u8|seg(\d+)\.ts)$/)
+    if (!compatMatch) return false
+
+    let publicationId = null
+    let renditionId = null
+    try {
+      publicationId = decodeURIComponent(compatMatch[1])
+      renditionId = decodeURIComponent(compatMatch[2])
+    } catch { publicationId = null }
+    if (!playbackAllowed || closing || !publicationId || !renditionId) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+      res.end('playback unavailable')
+      return true
+    }
+
+    const sourceUrl = `http://127.0.0.1:${server.address().port}/play/source/${encodeURIComponent(publicationId)}/${encodeURIComponent(renditionId)}`
+    const requestedOffset = Number(parsed.searchParams.get('t') || 0)
+    const offsetSec = Math.max(0, Math.floor(requestedOffset))
+    if (!Number.isFinite(requestedOffset) || !Number.isSafeInteger(offsetSec)) {
+      res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+      res.end('invalid playback offset')
+      return true
+    }
+    const session = ensureCompatSession(publicationId, renditionId, offsetSec, sourceUrl)
+    if (compatMatch[3] === 'index.m3u8') {
+      const ok = await waitForPlaylist(session)
+      if (!ok) {
+        logger?.archive?.warn?.('Compat transcode produced no playlist', {
+          publicationId,
+          stderr: session.stderr?.().slice(0, 300)
+        })
+        res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+        res.end('transcode unavailable')
+        return true
+      }
+      const body = readTextFile(resolve(session.dir, 'prog.m3u8'))
+      res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl', 'cache-control': 'no-store' })
+      res.end(body)
+      return true
+    }
+
+    const segPath = resolve(session.dir, `seg${compatMatch[4]}.ts`)
+    try {
+      const stat = statSync(segPath)
+      res.writeHead(200, { 'content-type': 'video/mp2t', 'content-length': String(stat.size), 'cache-control': 'no-store' })
+      const stream = createReadStream(segPath)
+      stream.on?.('error', () => { try { res.destroy?.() } catch { /* gone */ } })
+      stream.pipe(res)
+    } catch {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+      res.end('segment not ready')
+    }
+    return true
+  }
+
+  async function handleSourcePlaybackRoute(req, res, parsed, playbackAllowed) {
+    if (!parsed.pathname.startsWith('/play/source/')) return false
+    const srcMatch = parsed.pathname.match(/^\/play\/source\/([^/]+)\/([^/]+)$/)
+    let publicationId = null
+    let renditionId = null
+    if (srcMatch) {
+      try {
+        publicationId = decodeURIComponent(srcMatch[1])
+        renditionId = decodeURIComponent(srcMatch[2])
+      } catch { publicationId = null }
+    }
+    if (!publicationId || !playbackAllowed) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+      res.end('playback unavailable')
+      return true
+    }
+    const reader = await service.openPublicationReader?.(publicationId, renditionId).catch(() => null)
+    if (!reader || !reader.read) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+      res.end('playback unavailable')
+      return true
+    }
+    await streamRenditionResponse(req, res, reader)
+    return true
+  }
+
+  async function handlePublicationPlaybackRoute(req, res, parsed, playbackAllowed) {
+    if (!parsed.pathname.startsWith('/play/pub/')) return false
+    const pubMatch = parsed.pathname.match(/^\/play\/pub\/([^/]+)\/([^/]+)$/)
+    let publicationId = null
+    let renditionId = null
+    if (pubMatch) {
+      try {
+        publicationId = decodeURIComponent(pubMatch[1])
+        renditionId = decodeURIComponent(pubMatch[2])
+      } catch { publicationId = null }
+    }
+    if (!publicationId) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+      res.end('playback unavailable')
+      return true
+    }
+    if (playbackAllowed) {
+      const opened = await service.openPublicationPlayback?.(publicationId, renditionId).catch(() => null)
+      const location = playbackLocation(opened)
+      if (!location) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+        res.end('playback unavailable')
+        return true
+      }
+      res.writeHead(303, { location, 'cache-control': 'no-store' })
+      res.end()
+      return true
+    }
+    const reader = await service.openPublicationReader?.(publicationId, renditionId).catch(() => null)
+    if (!reader || !reader.read) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+      res.end('playback unavailable')
+      return true
+    }
+    await streamRenditionResponse(req, res, reader)
+    return true
+  }
+
+  async function handleCandidatePlaybackRoute(req, res, parsed, playbackAllowed) {
+    if (!parsed.pathname.startsWith('/play/')) return false
+    if (!playbackAllowed) {
+      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+      res.end('playback requires a loopback archive console')
+      return true
+    }
+    const candidateRef = playbackCandidateRef(req.url)
+    const opened = candidateRef
+      ? await service.openVerifiedPlayback?.(candidateRef).catch(() => null)
+      : null
+    const location = playbackLocation(opened)
+    if (!location) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+      res.end('playback unavailable')
+      return true
+    }
+    res.writeHead(303, { location, 'cache-control': 'no-store' })
+    res.end()
+    return true
+  }
+
+  async function handlePosterRoute(req, res) {
+    if (!req.url.startsWith(POSTER_ROUTE_PREFIX)) return false
+    const entityId = posterEntityId(req.url)
+    const poster = entityId ? await readEntityPoster(entityId) : null
+    if (!poster) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end('no cover')
+      return true
+    }
+    res.writeHead(200, {
+      'content-type': poster.contentType,
+      'content-length': String(poster.body.byteLength),
+      'cache-control': 'private, max-age=300'
+    })
+    res.end(poster.body)
+    return true
+  }
+
+  async function handleGetPlaybackRoutes(req, res, parsed, playbackAllowed) {
+    if (await handleCompatPlaybackRoute(req, res, parsed, playbackAllowed)) return true
+    if (await handleSourcePlaybackRoute(req, res, parsed, playbackAllowed)) return true
+    if (await handlePublicationPlaybackRoute(req, res, parsed, playbackAllowed)) return true
+    if (await handleCandidatePlaybackRoute(req, res, parsed, playbackAllowed)) return true
+    if (await handlePosterRoute(req, res)) return true
+    return false
+  }
+
+  async function handleJobsJsonRoute(req, res) {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ jobs: await store.listJobs() }, null, 2))
+    return true
+  }
+
+  async function handleReleasesJsonRoute(req, res, parsed, playbackAllowed) {
+    const { page } = await releasePage(parsed.searchParams, { playbackAllowed })
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+    res.end(JSON.stringify({ schema: 'peartube.relayReleases', version: 1, updatedAt: Date.now(), ...page }, null, 2))
+    return true
+  }
+
+  async function handleCreatorsJsonRoute(req, res) {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'no-store' })
+    res.end(JSON.stringify({ schema: 'peartube.relayCreators', version: 1, updatedAt: Date.now(), creators: creatorsView() }, null, 2))
+    return true
+  }
+
+  async function handleUnseededJsonRoute(req, res) {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'no-store' })
+    res.end(JSON.stringify({ schema: 'peartube.relayUnseededTargets', version: 1, updatedAt: Date.now(), targets: service.getCreatorTargets?.({ limit: 50 }) || [] }, null, 2))
+    return true
+  }
+
+  async function handleClientsJsonRoute(req, res) {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'no-store' })
+    res.end(JSON.stringify({ schema: 'peartube.relayTrustedClients', version: 1, updatedAt: Date.now(), clients: service.getTrustedClients?.() || [] }, null, 2))
+    return true
+  }
+
+  async function handleLinkJsonRoute(req, res) {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'no-store' })
+    res.end(JSON.stringify(service.getLinkDescriptor?.() || { schema: 'peartube.relayLink', version: 2, seedPin: { enabled: false, authorizedClients: 0 } }, null, 2))
+    return true
+  }
+
+  async function handleDiscoverJsonRoute(req, res, parsed) {
+    const catalogItems = await readVerifiedCatalog()
+    const discover = await discoverView({
+      query: parsed.searchParams.get('q') || '',
+      type: parsed.searchParams.get('type') || 'movie',
+      page: parsed.searchParams.get('page') || '1'
+    }, catalogItems)
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'no-store' })
+    res.end(JSON.stringify({ schema: 'peartube.relayDiscover', version: 1, updatedAt: Date.now(), ...discover }, null, 2))
+    return true
+  }
+
+  async function handleDiscoverSeasonsJsonRoute(req, res, parsed) {
+    const seasons = typeof service.discoverTmdbSeasons === 'function'
+      ? await service.discoverTmdbSeasons({ tmdbId: parsed.searchParams.get('tmdbId') || '' }).catch(() => [])
+      : []
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'no-store' })
+    res.end(JSON.stringify({ schema: 'peartube.relayTmdbSeasons', version: 1, seasons }, null, 2))
+    return true
+  }
+
+  async function handleDiscoverEpisodesJsonRoute(req, res, parsed) {
+    const episodes = typeof service.discoverTmdbEpisodes === 'function'
+      ? await service.discoverTmdbEpisodes({
+        tmdbId: parsed.searchParams.get('tmdbId') || '',
+        season: parsed.searchParams.get('season') || ''
+      }).catch(() => [])
+      : []
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'no-store' })
+    res.end(JSON.stringify({ schema: 'peartube.relayTmdbEpisodes', version: 1, episodes }, null, 2))
+    return true
+  }
+
+  async function handleGetJsonRoutes(req, res, parsed, playbackAllowed) {
+    if (req.url === '/jobs') return handleJobsJsonRoute(req, res)
+    if (req.url.startsWith('/releases.json')) return handleReleasesJsonRoute(req, res, parsed, playbackAllowed)
+    if (req.url === '/creators.json') return handleCreatorsJsonRoute(req, res)
+    if (req.url === '/unseeded.json') return handleUnseededJsonRoute(req, res)
+    if (req.url === '/clients.json') return handleClientsJsonRoute(req, res)
+    if (req.url === '/link.json') return handleLinkJsonRoute(req, res)
+    if (req.url.startsWith('/discover.json')) return handleDiscoverJsonRoute(req, res, parsed)
+    if (req.url.startsWith('/discover/seasons.json')) return handleDiscoverSeasonsJsonRoute(req, res, parsed)
+    if (req.url.startsWith('/discover/episodes.json')) return handleDiscoverEpisodesJsonRoute(req, res, parsed)
+    return false
+  }
+
+  async function handleReleasesActionPost(req, res) {
+    if (req.url !== '/releases/cancel' && req.url !== '/releases/clear' && req.url !== '/releases/delete' && req.url !== '/releases/retry') {
+      return false
+    }
+    const verb = req.url === '/releases/cancel' ? 'cancel' : (req.url === '/releases/delete' ? 'delete' : (req.url === '/releases/retry' ? 'retry' : 'clear'))
+    const params = new URLSearchParams(await collectBody(req))
+    const ids = String(params.get('ids') || '').split(',').map(value => value.trim()).filter(Boolean).slice(0, 64)
+    const results = []
+    for (const id of ids) {
+      if (verb === 'cancel') results.push(await cancelRelease(id))
+      else if (verb === 'delete') results.push(await deleteRelease(id))
+      else if (verb === 'retry') results.push(await retryRelease(id))
+      else results.push(await clearRelease(id))
+    }
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+    res.end(JSON.stringify({
+      verb,
+      done: results.filter(result => result.done).map(result => result.id || result.acquisitionId),
+      refused: results.filter(result => !result.done),
+    }, null, 2))
+    return true
+  }
+
+  async function handleArchiveSubmissionPost(req, res) {
+    if (req.url !== '/discover/archive' && req.url !== '/archive') return false
+    const isDiscover = req.url === '/discover/archive'
+    const { form, file } = await readArchiveSubmission(req)
+    if (!file && !form.url) {
+      logger?.archive?.warn?.('Archive submission ignored: no file and no source URL')
+      const target = isDiscover ? `/?${EMPTY_SUBMISSION_QUERY}#discover` : `/?${EMPTY_SUBMISSION_QUERY}`
+      res.writeHead(303, { location: target })
+      res.end()
+      return true
+    }
+    await enqueueCatalogSubmission(form, file)
+    res.writeHead(303, { location: isDiscover ? '/#discover' : '/' })
+    res.end()
+    return true
+  }
+
+  async function handleConfigPost(req, res) {
+    if (req.url === '/creators') {
+      const form = parseCreatorForm(await collectBody(req))
+      if (typeof service.addCreatorSource === 'function') {
+        service.addCreatorSource(form).catch((err) => logger?.archive?.error?.('Add creator failed', { error: err?.message || String(err) }))
+      }
+      res.writeHead(303, { location: '/' })
+      res.end()
+      return true
+    }
+
+    if (req.url === '/settings/tmdb') {
+      const form = parseTmdbForm(await collectBody(req))
+      if (typeof service.setTmdbSettings === 'function') {
+        await service.setTmdbSettings(form)
+      }
+      res.writeHead(303, { location: '/' })
+      res.end()
+      return true
+    }
+
+    if (req.url === '/clients') {
+      const form = parseClientForm(await collectBody(req))
+      if (typeof service.authorizeClient === 'function') {
+        await service.authorizeClient(form).catch((err) => logger?.archive?.error?.('Authorize client failed', { error: err?.message || String(err) }))
+      }
+      res.writeHead(303, { location: '/' })
+      res.end()
+      return true
+    }
+
+    if (req.url === '/clients/revoke') {
+      const form = parseClientForm(await collectBody(req))
+      if (typeof service.revokeClient === 'function') {
+        await service.revokeClient(form.key).catch((err) => logger?.archive?.error?.('Revoke client failed', { error: err?.message || String(err) }))
+      }
+      res.writeHead(303, { location: '/' })
+      res.end()
+      return true
+    }
+
+    return false
+  }
+
+  async function handlePostRoutes(req, res) {
+    if (await handleReleasesActionPost(req, res)) return true
+    if (await handleArchiveSubmissionPost(req, res)) return true
+    if (await handleConfigPost(req, res)) return true
+    return false
+  }
+
+  function handleRequestError(res, err) {
+    if (!res.headersSent && !res.writableEnded && !res.destroyed) {
+      try {
+        res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end(err?.message || String(err))
+      } catch { /* ignored */ }
+    }
+  }
+
   const handleRequest = async (req, res) => {
     try {
-      if (typeof activeCompanionHandler === 'function' && (req.url === '/api/v2' || req.url.startsWith('/api/v2/') || req.url.startsWith('/api/v2?'))) {
-        await activeCompanionHandler(req, res)
-        return
-      }
-      if (req.method === 'GET' && req.url === '/health') {
-        res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ ok: true, ready: true }))
-        return
-      }
-      if (req.method === 'GET' && req.url === UI_FONT_ROUTE) {
-        res.writeHead(200, {
-          'content-type': 'font/ttf',
-          'cache-control': 'public, max-age=31536000, immutable'
-        })
-        res.end(SYNE_EXTRABOLD_TTF)
-        return
-      }
-
+      if (await handleCompanionOrHealth(req, res)) return
       if (req.method === 'GET') {
         const parsed = new URL(req.url, 'http://relay.local')
         const playbackAllowed = allowsPlaybackRequest(req)
-        // Playback is gated per request: the socket decides whether this
-        // browser is on the relay's own machine.
-        // `/` is the operator's release table. The catalog-browsing sections
-        // moved to their own routes so a page is one job, not five.
-        if (parsed.pathname === '/' || parsed.pathname === '/ui' || parsed.pathname === '/releases') {
-          const { releases, page } = await releasePage(parsed.searchParams, { playbackAllowed })
-          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-          res.end(renderReleaseConsole({
-            status: service.getStatus?.() || {},
-            releases,
-            localPlayback: playbackAllowed === true,
-            // Stable-id opens stream through this relay for every client, so
-            // the player UI mounts for LAN browsers too. The candidate-ref
-            // redirect route stays loopback-gated in the play route itself.
-            playbackUi: true,
-            // Compat (HLS transcode) availability is probed once, cheaply:
-            // the binary is only spawned when a player actually opens it.
-            compatPlayback: Boolean(ffmpegBinary()),
-            page
-          }, parsed.searchParams))
-          return
-        }
-
-        if (parsed.pathname === '/releases.html') {
-          const { page } = await releasePage(parsed.searchParams, { playbackAllowed })
-          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-          res.end(renderReleaseRows(page))
-          return
-        }
-
-        if (parsed.pathname === '/discover' || parsed.pathname === '/creators' || parsed.pathname === '/settings') {
-          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-          const home = await model({
-            query: parsed.searchParams.get('q') || '',
-            type: parsed.searchParams.get('type') || 'movie',
-            page: parsed.searchParams.get('page') || '1'
-          }, { playbackAllowed })
-          if (parsed.searchParams.get('notice') === 'empty-submission') home.notice = EMPTY_SUBMISSION_NOTICE
-          res.end(renderArchiveWebHome(home, { view: parsed.pathname.slice(1) }))
-          return
-        }
-
-        // Compat playback: on-the-fly HLS transcode. Works for every client
-        // (loopback or LAN) because ffmpeg reads the source via the relay's
-        // own loopback /play/pub link and the console serves the segments.
-        const compatMatch = parsed.pathname.match(/^\/play\/compat\/([^/]+)\/([^/]+)\/(index\.m3u8|seg(\d+)\.ts)$/)
-        if (compatMatch) {
-          let publicationId = null
-          let renditionId = null
-          try {
-            publicationId = decodeURIComponent(compatMatch[1])
-            renditionId = decodeURIComponent(compatMatch[2])
-          } catch { publicationId = null }
-          if (!publicationId || !renditionId) {
-            res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-            res.end('playback unavailable')
-            return
-          }
-          // The transcode reads the source over the relay's own loopback
-          // /play/source endpoint: direct raw bytes without 303 redirects.
-          const sourceUrl = `http://127.0.0.1:${server.address().port}/play/source/${encodeURIComponent(publicationId)}/${encodeURIComponent(renditionId)}`
-          const offsetSec = Math.max(0, Math.floor(Number(parsed.searchParams.get('t')) || 0))
-          const session = ensureCompatSession(publicationId, renditionId, offsetSec, sourceUrl)
-          if (compatMatch[3] === 'index.m3u8') {
-            const ok = await waitForPlaylist(session)
-            if (!ok) {
-              logger?.archive?.warn?.('Compat transcode produced no playlist', {
-                publicationId,
-                stderr: session.stderr?.().slice(0, 300)
-              })
-              res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-              res.end('transcode unavailable')
-              return
-            }
-            const body = readTextFile(resolve(session.dir, 'prog.m3u8'))
-            res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl', 'cache-control': 'no-store' })
-            res.end(body)
-            return
-          }
-          const segPath = resolve(session.dir, `seg${compatMatch[4]}.ts`)
-          try {
-            const stat = statSync(segPath)
-            res.writeHead(200, { 'content-type': 'video/mp2t', 'content-length': String(stat.size), 'cache-control': 'no-store' })
-            const stream = createReadStream(segPath)
-            stream.on?.('error', () => { try { res.destroy?.() } catch { /* gone */ } })
-            stream.pipe(res)
-          } catch {
-            // A segment ffmpeg has not written yet: tell the player to come
-            // back rather than poison the pipeline with a truncated body.
-            res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-            res.end('segment not ready')
-          }
-          return
-        }
-        // Internal raw-bytes source for the compat transcoder. Loopback
-        // callers only: a reader handed across the network would be an
-        // unauthenticated byte faucet for the whole catalog.
-        if (parsed.pathname.startsWith('/play/source/')) {
-          const srcMatch = parsed.pathname.match(/^\/play\/source\/([^/]+)\/([^/]+)$/)
-          let publicationId = null
-          let renditionId = null
-          if (srcMatch) {
-            try {
-              publicationId = decodeURIComponent(srcMatch[1])
-              renditionId = decodeURIComponent(srcMatch[2])
-            } catch { publicationId = null }
-          }
-          if (!publicationId || !playbackAllowed) {
-            res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-            res.end('playback unavailable')
-            return
-          }
-          const reader = await service.openPublicationReader?.(publicationId, renditionId).catch(() => null)
-          if (!reader || !reader.read) {
-            res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-            res.end('playback unavailable')
-            return
-          }
-          await streamRenditionResponse(req, res, reader)
-          return
-        }
-
-
-        if (parsed.pathname.startsWith('/play/pub/')) {
-          const pubMatch = parsed.pathname.match(/^\/play\/pub\/([^/]+)\/([^/]+)$/)
-          let publicationId = null
-          let renditionId = null
-          if (pubMatch) {
-            try {
-              publicationId = decodeURIComponent(pubMatch[1])
-              renditionId = decodeURIComponent(pubMatch[2])
-            } catch { publicationId = null }
-          }
-          if (!publicationId) {
-            res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-            res.end('playback unavailable')
-            return
-          }
-          // Two shapes, one route. A same-machine client follows a 303 to the
-          // blob server, which serves ranges on its own loopback link. A LAN
-          // client cannot follow that link, so the relay streams the bytes
-          // through itself - same file, same byte ranges, no capability leak.
-          if (playbackAllowed) {
-            const opened = await service.openPublicationPlayback?.(publicationId, renditionId).catch(() => null)
-            const location = playbackLocation(opened)
-            if (!location) {
-              res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-              res.end('playback unavailable')
-              return
-            }
-            res.writeHead(303, { location, 'cache-control': 'no-store' })
-            res.end()
-            return
-          }
-          const reader = await service.openPublicationReader?.(publicationId, renditionId).catch(() => null)
-          if (!reader || !reader.read) {
-            res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-            res.end('playback unavailable')
-            return
-          }
-          await streamRenditionResponse(req, res, reader)
-          return
-        }
-
-        if (parsed.pathname.startsWith('/play/')) {
-          if (!playbackAllowed) {
-            res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-            res.end('playback requires a loopback archive console')
-            return
-          }
-          const candidateRef = playbackCandidateRef(req.url)
-          const opened = candidateRef
-            ? await service.openVerifiedPlayback?.(candidateRef).catch(() => null)
-            : null
-          const location = playbackLocation(opened)
-          if (!location) {
-            res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-            res.end('playback unavailable')
-            return
-          }
-          res.writeHead(303, { location, 'cache-control': 'no-store' })
-          res.end()
-          return
-        }
-      }
-
-      // A cover for one verified shelf entry. Every way of not having one
-      // answers 404 so a missing thumbnail cannot make the library look broken.
-      // Every way of not having a cover answers 404: an id that is not one, no
-      // artwork on the claim, bytes that have not replicated yet, a blob server
-      // that is not up. A 500 would paint the whole library as broken because
-      // one thumbnail is missing.
-      if (req.method === 'GET' && req.url.startsWith(POSTER_ROUTE_PREFIX)) {
-        const entityId = posterEntityId(req.url)
-        const poster = entityId ? await readEntityPoster(entityId) : null
-        if (!poster) {
-          res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
-          res.end('no cover')
-          return
-        }
-        res.writeHead(200, {
-          'content-type': poster.contentType,
-          'content-length': String(poster.body.byteLength),
-          // Private: the cover is only meaningful behind this relay's console,
-          // and five minutes is long enough that a page reload does not re-read
-          // every blob while still letting a newly arrived cover appear.
-          'cache-control': 'private, max-age=300'
-        })
-        res.end(poster.body)
-        return
-      }
-
-      if (req.method === 'GET' && req.url === '/tui') {
-        res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
-        res.end(renderArchiveTui(await model()))
-        return
-      }
-
-      if (req.method === 'GET' && req.url === '/jobs') {
-        res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ jobs: await store.listJobs() }, null, 2))
-        return
-      }
-
-      if (req.method === 'GET' && req.url.startsWith('/releases.json')) {
-        // The poll drives the table refresh in the browser. Gate it the same
-        // way the page render is gated, or the first refresh would replace
-        // enriched rows with rows the player cannot use.
-        const playbackAllowed = allowsPlaybackRequest(req)
-        const parsed = new URL(req.url, 'http://relay.local')
-        const { page } = await releasePage(parsed.searchParams, { playbackAllowed })
-        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-        res.end(JSON.stringify({ schema: 'peartube.relayReleases', version: 1, updatedAt: Date.now(), ...page }, null, 2))
-        return
-      }
-
-      // Both verbs answer per id. A cancel that lands on a finished job changes
-      // nothing, and the console has to say so rather than refresh and look
-      // broken.
-      if (req.method === 'POST' && (req.url === '/releases/cancel' || req.url === '/releases/clear' || req.url === '/releases/delete' || req.url === '/releases/retry')) {
-        const verb = req.url === '/releases/cancel' ? 'cancel' : (req.url === '/releases/delete' ? 'delete' : (req.url === '/releases/retry' ? 'retry' : 'clear'))
-        const params = new URLSearchParams(await collectBody(req))
-        const ids = String(params.get('ids') || '').split(',').map(value => value.trim()).filter(Boolean).slice(0, 64)
-        const results = []
-        for (const id of ids) {
-          if (verb === 'cancel') results.push(await cancelRelease(id))
-          else if (verb === 'delete') results.push(await deleteRelease(id))
-          else if (verb === 'retry') results.push(await retryRelease(id))
-          else results.push(await clearRelease(id))
-        }
-        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-        res.end(JSON.stringify({
-          verb,
-          done: results.filter(result => result.done).map(result => result.id || result.acquisitionId),
-          refused: results.filter(result => !result.done),
-        }, null, 2))
-        return
-      }
-
-      if (req.method === 'GET' && req.url === '/creators.json') {
-        res.writeHead(200, {
-          'content-type': 'application/json; charset=utf-8',
-          'access-control-allow-origin': '*',
-          'cache-control': 'no-store'
-        })
-        res.end(JSON.stringify({
-          schema: 'peartube.relayCreators',
-          version: 1,
-          updatedAt: Date.now(),
-          creators: creatorsView()
-        }, null, 2))
-        return
-      }
-
-      if (req.method === 'GET' && req.url === '/unseeded.json') {
-        res.writeHead(200, {
-          'content-type': 'application/json; charset=utf-8',
-          'access-control-allow-origin': '*',
-          'cache-control': 'no-store'
-        })
-        res.end(JSON.stringify({
-          schema: 'peartube.relayUnseededTargets',
-          version: 1,
-          updatedAt: Date.now(),
-          targets: service.getCreatorTargets?.({ limit: 50 }) || []
-        }, null, 2))
-        return
-      }
-
-      if (req.method === 'GET' && req.url === '/clients.json') {
-        res.writeHead(200, {
-          'content-type': 'application/json; charset=utf-8',
-          'access-control-allow-origin': '*',
-          'cache-control': 'no-store'
-        })
-        res.end(JSON.stringify({
-          schema: 'peartube.relayTrustedClients',
-          version: 1,
-          updatedAt: Date.now(),
-          clients: service.getTrustedClients?.() || []
-        }, null, 2))
-        return
-      }
-
-      if (req.method === 'GET' && req.url === '/link.json') {
-        res.writeHead(200, {
-          'content-type': 'application/json; charset=utf-8',
-          'access-control-allow-origin': '*',
-          'cache-control': 'no-store'
-        })
-        res.end(JSON.stringify(service.getLinkDescriptor?.() || { schema: 'peartube.relayLink', version: 2, seedPin: { enabled: false, authorizedClients: 0 } }, null, 2))
-        return
-      }
-
-      if (req.method === 'GET' && req.url.startsWith('/discover.json')) {
-        const parsed = new URL(req.url, 'http://relay.local')
-        const catalogItems = await readVerifiedCatalog()
-        const discover = await discoverView({
-          query: parsed.searchParams.get('q') || '',
-          type: parsed.searchParams.get('type') || 'movie',
-          page: parsed.searchParams.get('page') || '1'
-        }, catalogItems)
-        res.writeHead(200, {
-          'content-type': 'application/json; charset=utf-8',
-          'access-control-allow-origin': '*',
-          'cache-control': 'no-store'
-        })
-        res.end(JSON.stringify({
-          schema: 'peartube.relayDiscover',
-          version: 1,
-          updatedAt: Date.now(),
-          ...discover
-        }, null, 2))
-        return
-      }
-
-      if (req.method === 'GET' && req.url.startsWith('/discover/seasons.json')) {
-        const parsed = new URL(req.url, 'http://relay.local')
-        const seasons = typeof service.discoverTmdbSeasons === 'function'
-          ? await service.discoverTmdbSeasons({ tmdbId: parsed.searchParams.get('tmdbId') || '' }).catch(() => [])
-          : []
-        res.writeHead(200, {
-          'content-type': 'application/json; charset=utf-8',
-          'access-control-allow-origin': '*',
-          'cache-control': 'no-store'
-        })
-        res.end(JSON.stringify({ schema: 'peartube.relayTmdbSeasons', version: 1, seasons }, null, 2))
-        return
-      }
-
-      if (req.method === 'GET' && req.url.startsWith('/discover/episodes.json')) {
-        const parsed = new URL(req.url, 'http://relay.local')
-        const episodes = typeof service.discoverTmdbEpisodes === 'function'
-          ? await service.discoverTmdbEpisodes({
-            tmdbId: parsed.searchParams.get('tmdbId') || '',
-            season: parsed.searchParams.get('season') || ''
-          }).catch(() => [])
-          : []
-        res.writeHead(200, {
-          'content-type': 'application/json; charset=utf-8',
-          'access-control-allow-origin': '*',
-          'cache-control': 'no-store'
-        })
-        res.end(JSON.stringify({ schema: 'peartube.relayTmdbEpisodes', version: 1, episodes }, null, 2))
-        return
-      }
-
-
-      if (req.method === 'POST' && req.url === '/discover/archive') {
-        const { form, file } = await readArchiveSubmission(req)
-        if (!file && !form.url) {
-          // A submission with neither a file nor a URL enqueues nothing. Saying
-          // so beats a bare redirect that looks exactly like success and leaves
-          // the operator waiting for a job that was never created.
-          logger?.archive?.warn?.('Archive submission ignored: no file and no source URL')
-          res.writeHead(303, { location: `/?${EMPTY_SUBMISSION_QUERY}#discover` })
-          res.end()
-          return
-        }
-        await enqueueCatalogSubmission(form, file)
-        res.writeHead(303, { location: '/#discover' })
-        res.end()
-        return
-      }
-
-      if (req.method === 'POST' && req.url === '/archive') {
-        const { form, file } = await readArchiveSubmission(req)
-        if (!file && !form.url) {
-          logger?.archive?.warn?.('Archive submission ignored: no file and no source URL')
-          res.writeHead(303, { location: `/?${EMPTY_SUBMISSION_QUERY}` })
-          res.end()
-          return
-        }
-        await enqueueCatalogSubmission(form, file)
-        res.writeHead(303, { location: '/' })
-        res.end()
-        return
-      }
-
-      if (req.method === 'POST' && req.url === '/creators') {
-        const form = parseCreatorForm(await collectBody(req))
-        if (typeof service.addCreatorSource === 'function') {
-          service.addCreatorSource(form).catch((err) => logger?.archive?.error?.('Add creator failed', { error: err?.message || String(err) }))
-        }
-        res.writeHead(303, { location: '/' })
-        res.end()
-        return
-      }
-
-      if (req.method === 'POST' && req.url === '/settings/tmdb') {
-        const form = parseTmdbForm(await collectBody(req))
-        if (typeof service.setTmdbSettings === 'function') {
-          await service.setTmdbSettings(form)
-        }
-        res.writeHead(303, { location: '/' })
-        res.end()
-        return
-      }
-
-      if (req.method === 'POST' && req.url === '/clients') {
-        const form = parseClientForm(await collectBody(req))
-        if (typeof service.authorizeClient === 'function') {
-          await service.authorizeClient(form).catch((err) => logger?.archive?.error?.('Authorize client failed', { error: err?.message || String(err) }))
-        }
-        res.writeHead(303, { location: '/' })
-        res.end()
-        return
-      }
-
-      if (req.method === 'POST' && req.url === '/clients/revoke') {
-        const form = parseClientForm(await collectBody(req))
-        if (typeof service.revokeClient === 'function') {
-          await service.revokeClient(form.key).catch((err) => logger?.archive?.error?.('Revoke client failed', { error: err?.message || String(err) }))
-        }
-        res.writeHead(303, { location: '/' })
-        res.end()
-        return
+        if (await handleGetUiRoutes(req, res, parsed, playbackAllowed)) return
+        if (await handleGetPlaybackRoutes(req, res, parsed, playbackAllowed)) return
+        if (await handleGetJsonRoutes(req, res, parsed, playbackAllowed)) return
+      } else if (req.method === 'POST') {
+        if (await handlePostRoutes(req, res)) return
       }
 
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
       res.end('not found')
     } catch (err) {
-      if (!res.headersSent && !res.writableEnded && !res.destroyed) {
-        try {
-          res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
-          res.end(err?.message || String(err))
-        } catch { /* ignored */ }
-      }
+      handleRequestError(res, err)
     }
   }
 
@@ -2191,6 +2389,7 @@ export async function createArchiveConsole({
     },
     server,
     async start() {
+      if (closing) throw new Error('Archive console is closed')
       // Idempotent on an adopted surface: it is already listening as a warming
       // relay; only adopt the live handler once the provider acquisition service exists.
       if (httpSurface) {
@@ -2204,12 +2403,18 @@ export async function createArchiveConsole({
         : { host, port: boundPort() })
       return this
     },
-    async close() {
-      if (httpSurface) {
-        await httpSurface.close()
-        return
-      }
-      await new Promise((resolve) => server.close(resolve))
+    close() {
+      closing ||= Promise.resolve().then(async () => {
+        clearInterval(compatReaper)
+        for (const key of compatSessions.keys()) stopCompatSession(key)
+        await Promise.all([...compatChildren].map(session => session.finished))
+        if (httpSurface) {
+          await httpSurface.close()
+          return
+        }
+        await new Promise((resolve) => server.close(resolve))
+      })
+      return closing
     }
   }
 }

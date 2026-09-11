@@ -315,6 +315,313 @@ function decodePairingUserData(userData) {
   return null
 }
 
+async function applySubscriptionOp (view, op) {
+  if (op.type === 'subscribe') {
+    if (op.channelKey) {
+      await view.put(`${COLLECTIONS.SUBSCRIPTION}/${op.channelKey}`, stripUndefined({
+        channelKey: op.channelKey,
+        name: op.name || '',
+        subscribedAt: toUint(op.subscribedAt)
+      }))
+    }
+    return true
+  }
+  if (op.type === 'unsubscribe') {
+    if (op.channelKey) {
+      await view.del(`${COLLECTIONS.SUBSCRIPTION}/${op.channelKey}`)
+    }
+    return true
+  }
+  return false
+}
+
+async function applyPlaylistOp (view, op) {
+  switch (op.type) {
+    case 'put-playlist': {
+      if (!op.id) return true
+      const createdAt = toUint(op.createdAt)
+      const updatedAt = toUint(op.updatedAt) || createdAt
+      await view.put(`${COLLECTIONS.PLAYLIST}/${op.id}`, stripUndefined({
+        id: op.id,
+        name: op.name || '',
+        description: op.description || '',
+        createdAt,
+        updatedAt
+      }))
+      return true
+    }
+    case 'delete-playlist': {
+      if (!op.id) return true
+      await view.del(`${COLLECTIONS.PLAYLIST}/${op.id}`)
+      const prefix = `${COLLECTIONS.PLAYLIST_ITEM}/${op.id}/`
+      for await (const entry of view.createReadStream({ gte: prefix, lt: prefix + '\xff' })) {
+        await view.del(entry.key)
+      }
+      return true
+    }
+    case 'add-playlist-item':
+      if (!op.playlistId || !op.videoKey) return true
+      await view.put(`${COLLECTIONS.PLAYLIST_ITEM}/${op.playlistId}/${op.videoKey}`, stripUndefined({
+        playlistId: op.playlistId,
+        videoKey: op.videoKey,
+        channelKey: op.channelKey || '',
+        videoId: op.videoId || '',
+        addedAt: toUint(op.addedAt)
+      }))
+      return true
+    case 'remove-playlist-item':
+      if (!op.playlistId || !op.videoKey) return true
+      await view.del(`${COLLECTIONS.PLAYLIST_ITEM}/${op.playlistId}/${op.videoKey}`)
+      return true
+    default:
+      return false
+  }
+}
+
+function deriveHistoryEventId (event, node) {
+  if (typeof event.eventId === 'string' && event.eventId) return event.eventId
+  const fromKey = node?.from?.key
+  const identity = fromKey && Number.isSafeInteger(node.length)
+    ? `${b4a.toString(fromKey, 'hex')}:${node.length}`
+    : JSON.stringify(event)
+  return b4a.toString(crypto.hash(b4a.from(identity)), 'hex').slice(0, 32)
+}
+
+function buildHistoryEntry (event, op, eventId, ts) {
+  return stripUndefined({
+    eventId,
+    channelKey: event.channelKey || '',
+    videoId: event.videoId || '',
+    videoKey: event.videoKey || '',
+    title: event.title || '',
+    duration: toUint(event.duration ?? event.durationSec),
+    position: toUint(event.position ?? event.positionSec),
+    completed: !!event.completed,
+    timestamp: ts,
+    identity: op.record?.identity ?? normalizeProgressIdentity(event.identity) ?? undefined,
+    saved: op.record ? !!op.record.saved : (event.saved === undefined ? undefined : !!event.saved),
+    order: op.record?.order ?? (isCompleteProgressOrder(event.order) ? normalizeProgressOrder(event.order) : undefined)
+  })
+}
+
+async function applyHistoryEntry (view, op, limits, node) {
+  const legacy = !op.event
+  const event = op.event || op
+  const ts = toUint(event.timestamp) || toUint(op.record?.updatedAt) || 0
+  const eventId = deriveHistoryEventId(event, node)
+  const entry = buildHistoryEntry(event, op, eventId, ts)
+  await PersonalStore._putHistoryEvent(view, `${COLLECTIONS.HISTORY}/${descendingTimeKey(ts)}/${eventId}`, entry, limits)
+  if (op.record) {
+    await PersonalStore._mergeProgress(view, op.record, limits)
+  } else if (legacy && event.videoKey) {
+    await view.put(`${COLLECTIONS.RESUME}/${event.videoKey}`, stripUndefined({
+      videoKey: event.videoKey,
+      channelKey: event.channelKey || '',
+      videoId: event.videoId || '',
+      position: toUint(event.position),
+      duration: toUint(event.duration),
+      completed: !!event.completed,
+      updatedAt: ts
+    }))
+  }
+}
+
+async function applyHistoryOp (view, op, limits, node) {
+  switch (op.type) {
+    case 'log-history':
+      await applyHistoryEntry(view, op, limits, node)
+      return true
+    case 'put-progress':
+      await PersonalStore._mergeProgress(view, op.record, limits)
+      return true
+    case 'delete-resume':
+      if (op.videoKey) await view.del(`${COLLECTIONS.RESUME}/${op.videoKey}`)
+      return true
+    default:
+      return false
+  }
+}
+
+async function applyInviteOp (view, op) {
+  switch (op.type) {
+    case 'put-invite': {
+      const invite = op.invite
+      if (!invite?.idHex) return true
+      await view.put(`${COLLECTIONS.INVITE}/${invite.idHex}`, {
+        idHex: invite.idHex,
+        inviteZ32: toText(invite.inviteZ32),
+        publicKeyHex: toText(invite.publicKeyHex),
+        createdAt: toUint(invite.createdAt),
+        expiresAt: toUint(invite.expiresAt),
+        consumedAt: 0,
+        consumeId: '',
+        consumedBy: ''
+      })
+      return true
+    }
+    case 'consume-invite': {
+      const key = `${COLLECTIONS.INVITE}/${op.idHex}`
+      const invite = (await view.get(key))?.value
+      if (!invite || toUint(invite.consumedAt) > 0) return true
+      const at = toUint(op.at)
+      if (toUint(invite.expiresAt) > 0 && at > toUint(invite.expiresAt)) return true
+      await view.put(key, {
+        ...invite,
+        consumedAt: Math.max(at, 1),
+        consumeId: toText(op.consumeId),
+        consumedBy: toText(op.writerKey)
+      })
+      return true
+    }
+    case 'delete-invite':
+      if (op.idHex) await view.del(`${COLLECTIONS.INVITE}/${op.idHex}`)
+      return true
+    default:
+      return false
+  }
+}
+
+async function applySettingOp (view, op) {
+  switch (op.type) {
+    case 'set-setting': {
+      if (!op.key) return true
+      const setting = {
+        key: op.key,
+        value: op.value,
+        updatedAt: toUint(op.updatedAt),
+      }
+      if (typeof op.revision === 'string' && /^[0-9a-f]{32}$/.test(op.revision)) {
+        setting.revision = op.revision
+      }
+      await view.put(`${COLLECTIONS.SETTING}/${op.key}`, setting)
+      return true
+    }
+    case 'delete-setting':
+      if (!op.key) return true
+      await view.del(`${COLLECTIONS.SETTING}/${op.key}`)
+      return true
+    case 'delete-setting-if-version-and-digest': {
+      if (!op.key) return true
+      const entry = await view.get(`${COLLECTIONS.SETTING}/${op.key}`)
+      const digest = entry?.value ? personalSettingDigest(entry.value.value) : null
+      const revision = entry?.value ? personalSettingRevision(entry, digest) : null
+      if (digest === op.expectedDigest && revision === op.expectedRevision) {
+        await view.del(`${COLLECTIONS.SETTING}/${op.key}`)
+      }
+      return true
+    }
+    default:
+      return false
+  }
+}
+
+function assembleProgressRecord ({ input, existing, parsed, identity, stateKey, order, currentGeneration }) {
+  const baseline = order.playbackGeneration > currentGeneration ? null : existing
+  return normalizeProgressRecord({
+    stateKey,
+    identity: identity || existing?.identity || parsed.identity,
+    channelKey: inheritText(input.channelKey, existing?.channelKey),
+    videoId: inheritText(input.videoId, existing?.videoId),
+    videoKey: inheritText(input.videoKey, existing?.videoKey, parsed.videoKey),
+    title: inheritText(input.title, existing?.title),
+    positionSec: inheritUint(input.positionSec ?? input.position, baseline?.positionSec),
+    durationSec: inheritUint(input.durationSec ?? input.duration, existing?.durationSec),
+    completed: input.completed === undefined || input.completed === null
+      ? Boolean(baseline?.completed)
+      : Boolean(input.completed),
+    saved: input.saved === undefined || input.saved === null
+      ? Boolean(existing?.saved)
+      : Boolean(input.saved),
+    updatedAt: toUint(input.updatedAt) || Date.now(),
+    order
+  })
+}
+
+function importSubscriptions (subscriptions = [], ops) {
+  let count = 0
+  for (const sub of subscriptions) {
+    if (!sub?.channelKey) continue
+    ops.push({ type: 'subscribe', channelKey: sub.channelKey, name: sub.name || '', subscribedAt: toUint(sub.subscribedAt) || Date.now() })
+    count++
+  }
+  return count
+}
+
+function importPlaylists (playlists = [], ops) {
+  let count = 0
+  for (const playlist of playlists) {
+    if (!playlist?.id) continue
+    ops.push({
+      type: 'put-playlist',
+      id: playlist.id,
+      name: playlist.name || '',
+      description: playlist.description || '',
+      createdAt: toUint(playlist.createdAt) || Date.now(),
+      updatedAt: toUint(playlist.updatedAt) || Date.now()
+    })
+    count++
+  }
+  return count
+}
+
+function importPlaylistItems (items = [], ops) {
+  let count = 0
+  for (const item of items) {
+    if (!item?.playlistId || !item?.videoKey) continue
+    ops.push({
+      type: 'add-playlist-item',
+      playlistId: item.playlistId,
+      videoKey: item.videoKey,
+      channelKey: item.channelKey || '',
+      videoId: item.videoId || '',
+      addedAt: toUint(item.addedAt) || Date.now()
+    })
+    count++
+  }
+  return count
+}
+
+function importProgress (records = [], ops) {
+  let count = 0
+  for (const record of records) {
+    const normalized = normalizeProgressRecord(record)
+    if (!normalized.stateKey || normalized.order.tombstone) continue
+    ops.push({ type: 'put-progress', record: normalized })
+    count++
+  }
+  return count
+}
+
+function importHistory (events = [], ops) {
+  let count = 0
+  for (const event of events) {
+    if (!event) continue
+    ops.push({
+      type: 'log-history',
+      event: { ...event, eventId: event.eventId || randomId(), timestamp: toUint(event.timestamp) || Date.now() },
+      record: null
+    })
+    count++
+  }
+  return count
+}
+
+function importSettings (settings = [], ops) {
+  let count = 0
+  for (const setting of settings) {
+    if (!setting?.key) continue
+    ops.push({
+      type: 'set-setting',
+      key: setting.key,
+      value: setting.value,
+      updatedAt: toUint(setting.updatedAt) || Date.now(),
+      revision: typeof setting.revision === 'string' && /^[0-9a-f]{32}$/.test(setting.revision) ? setting.revision : randomId()
+    })
+    count++
+  }
+  return count
+}
+
 export class PersonalStore extends ReadyResource {
   /**
    * @param {import('corestore')} store - Corestore (will be namespaced internally)
@@ -409,7 +716,7 @@ export class PersonalStore extends ReadyResource {
         await view.put(`${COLLECTIONS.WRITER}/${op.key}`, stripUndefined({
           keyHex: op.key,
           deviceName: op.deviceName || '',
-          addedAt: op.addedAt || Date.now()
+          addedAt: toUint(op.addedAt)
         }))
         continue
       }
@@ -421,160 +728,16 @@ export class PersonalStore extends ReadyResource {
         }
         continue
       }
-
-      await PersonalStore._applyData(view, op, limits)
+      await PersonalStore._applyData(view, op, limits, node)
     }
   }
 
-  static async _applyData(view, op, limits = DEFAULT_LIMITS) {
-    switch (op.type) {
-      case 'subscribe':
-        await view.put(`${COLLECTIONS.SUBSCRIPTION}/${op.channelKey}`, stripUndefined({
-          channelKey: op.channelKey,
-          name: op.name || '',
-          subscribedAt: op.subscribedAt || Date.now()
-        }))
-        break
-      case 'unsubscribe':
-        await view.del(`${COLLECTIONS.SUBSCRIPTION}/${op.channelKey}`)
-        break
-      case 'put-playlist':
-        await view.put(`${COLLECTIONS.PLAYLIST}/${op.id}`, stripUndefined({
-          id: op.id,
-          name: op.name || '',
-          description: op.description || '',
-          createdAt: op.createdAt || Date.now(),
-          updatedAt: op.updatedAt || Date.now()
-        }))
-        break
-      case 'delete-playlist': {
-        await view.del(`${COLLECTIONS.PLAYLIST}/${op.id}`)
-        const prefix = `${COLLECTIONS.PLAYLIST_ITEM}/${op.id}/`
-        for await (const entry of view.createReadStream({ gte: prefix, lt: prefix + '\xff' })) {
-          await view.del(entry.key)
-        }
-        break
-      }
-      case 'add-playlist-item':
-        await view.put(`${COLLECTIONS.PLAYLIST_ITEM}/${op.playlistId}/${op.videoKey}`, stripUndefined({
-          playlistId: op.playlistId,
-          videoKey: op.videoKey,
-          channelKey: op.channelKey || '',
-          videoId: op.videoId || '',
-          addedAt: op.addedAt || Date.now()
-        }))
-        break
-      case 'remove-playlist-item':
-        await view.del(`${COLLECTIONS.PLAYLIST_ITEM}/${op.playlistId}/${op.videoKey}`)
-        break
-      case 'log-history': {
-        // Ops written before canonical progress records carried their fields
-        // flat and maintained the legacy `resume/` rows; the whole log is
-        // re-applied on rebuild, so both shapes must stay supported.
-        const legacy = !op.event
-        const event = op.event || op
-        const eventId = event.eventId || randomId()
-        const ts = toUint(event.timestamp) || Date.now()
-        const entry = stripUndefined({
-          eventId,
-          channelKey: event.channelKey || '',
-          videoId: event.videoId || '',
-          videoKey: event.videoKey || '',
-          title: event.title || '',
-          duration: toUint(event.duration ?? event.durationSec),
-          position: toUint(event.position ?? event.positionSec),
-          completed: !!event.completed,
-          timestamp: ts,
-          identity: op.record?.identity ?? normalizeProgressIdentity(event.identity) ?? undefined,
-          saved: op.record ? !!op.record.saved : (event.saved === undefined ? undefined : !!event.saved),
-          order: op.record?.order ?? (isCompleteProgressOrder(event.order) ? normalizeProgressOrder(event.order) : undefined)
-        })
-        await PersonalStore._putHistoryEvent(view, `${COLLECTIONS.HISTORY}/${descendingTimeKey(ts)}/${eventId}`, entry, limits)
-        if (op.record) {
-          await PersonalStore._mergeProgress(view, op.record, limits)
-        } else if (legacy && event.videoKey) {
-          await view.put(`${COLLECTIONS.RESUME}/${event.videoKey}`, stripUndefined({
-            videoKey: event.videoKey,
-            channelKey: event.channelKey || '',
-            videoId: event.videoId || '',
-            position: toUint(event.position),
-            duration: toUint(event.duration),
-            completed: !!event.completed,
-            updatedAt: ts
-          }))
-        }
-        break
-      }
-      case 'put-progress':
-        await PersonalStore._mergeProgress(view, op.record, limits)
-        break
-      case 'delete-resume':
-        if (op.videoKey) await view.del(`${COLLECTIONS.RESUME}/${op.videoKey}`)
-        break
-      case 'put-invite': {
-        const invite = op.invite
-        if (!invite?.idHex) break
-        await view.put(`${COLLECTIONS.INVITE}/${invite.idHex}`, {
-          idHex: invite.idHex,
-          inviteZ32: toText(invite.inviteZ32),
-          publicKeyHex: toText(invite.publicKeyHex),
-          createdAt: toUint(invite.createdAt),
-          expiresAt: toUint(invite.expiresAt),
-          consumedAt: 0,
-          consumeId: '',
-          consumedBy: ''
-        })
-        break
-      }
-      case 'consume-invite': {
-        // Single use, enforced by op order rather than by the requesting device:
-        // the first consume wins and any later or replayed consume is a no-op.
-        // Expiry is checked against the timestamp carried by the op so every
-        // device reaches the same verdict.
-        const key = `${COLLECTIONS.INVITE}/${op.idHex}`
-        const invite = (await view.get(key))?.value
-        if (!invite) break
-        if (toUint(invite.consumedAt) > 0) break
-        const at = toUint(op.at)
-        if (toUint(invite.expiresAt) > 0 && at > toUint(invite.expiresAt)) break
-        await view.put(key, {
-          ...invite,
-          consumedAt: Math.max(at, 1),
-          consumeId: toText(op.consumeId),
-          consumedBy: toText(op.writerKey)
-        })
-        break
-      }
-      case 'delete-invite':
-        if (op.idHex) await view.del(`${COLLECTIONS.INVITE}/${op.idHex}`)
-        break
-      case 'set-setting': {
-        const setting = {
-          key: op.key,
-          value: op.value,
-          updatedAt: op.updatedAt || Date.now(),
-        }
-        if (typeof op.revision === 'string' && /^[0-9a-f]{32}$/.test(op.revision)) {
-          setting.revision = op.revision
-        }
-        await view.put(`${COLLECTIONS.SETTING}/${op.key}`, setting)
-        break
-      }
-      case 'delete-setting':
-        await view.del(`${COLLECTIONS.SETTING}/${op.key}`)
-        break
-      case 'delete-setting-if-version-and-digest': {
-        const entry = await view.get(`${COLLECTIONS.SETTING}/${op.key}`)
-        const digest = entry?.value ? personalSettingDigest(entry.value.value) : null
-        const revision = entry?.value ? personalSettingRevision(entry, digest) : null
-        if (digest === op.expectedDigest && revision === op.expectedRevision) {
-          await view.del(`${COLLECTIONS.SETTING}/${op.key}`)
-        }
-        break
-      }
-      default:
-        break
-    }
+  static async _applyData(view, op, limits = DEFAULT_LIMITS, node = null) {
+    if (await applySubscriptionOp(view, op)) return
+    if (await applyPlaylistOp(view, op)) return
+    if (await applyHistoryOp(view, op, limits, node)) return
+    if (await applyInviteOp(view, op)) return
+    await applySettingOp(view, op)
   }
 
   // --- apply helpers (deterministic, view-only) -----------------------------
@@ -776,6 +939,7 @@ export class PersonalStore extends ReadyResource {
   // --- subscriptions --------------------------------------------------------
 
   async subscribe(channelKey, { name = '' } = {}) {
+    if (!channelKey) throw new Error('Channel key required')
     await this._append({ type: 'subscribe', channelKey, name, subscribedAt: Date.now() })
   }
 
@@ -813,9 +977,11 @@ export class PersonalStore extends ReadyResource {
     await this._append({ type: 'delete-playlist', id })
   }
 
-  async addToPlaylist(playlistId, { channelKey, videoId, videoKey }) {
-    const key = videoKey || `${channelKey}:${videoId}`
-    await this._append({ type: 'add-playlist-item', playlistId, videoKey: key, channelKey, videoId, addedAt: Date.now() })
+  async addToPlaylist(playlistId, { channelKey, videoId, videoKey } = {}) {
+    if (!playlistId) throw new Error('Playlist ID required')
+    const key = videoKey || (channelKey && videoId ? `${channelKey}:${videoId}` : '')
+    if (!key) throw new Error('videoKey or channelKey:videoId required')
+    await this._append({ type: 'add-playlist-item', playlistId, videoKey: key, channelKey: channelKey || '', videoId: videoId || '', addedAt: Date.now() })
   }
 
   async removeFromPlaylist(playlistId, videoKey) {
@@ -1036,6 +1202,32 @@ export class PersonalStore extends ReadyResource {
     return ++this._lamport
   }
 
+  _resolveProgressOrder(input, existing, currentGeneration) {
+    if (isCompleteProgressOrder(input.order)) {
+      return normalizeProgressOrder(input.order)
+    }
+    let generation = currentGeneration
+    if (input.playbackGeneration !== undefined && input.playbackGeneration !== null) {
+      generation = toUint(input.playbackGeneration)
+    } else if (input.replay) {
+      generation = currentGeneration + 1
+    }
+    // A delete is sticky. Only an explicit `tombstone: false` or a strictly
+    // higher playback generation (the title really was played again) brings a
+    // deleted record back; an ordinary position ping must not resurrect it
+    // with its old title and position.
+    const tombstone = input.tombstone === undefined || input.tombstone === null
+      ? Boolean(existing?.order?.tombstone) && generation <= currentGeneration
+      : Boolean(input.tombstone)
+    // Nothing may await between the sync above and this stamp.
+    return {
+      playbackGeneration: generation,
+      lamport: this._nextLamport(),
+      writerKey: this.localKeyHex || '',
+      tombstone
+    }
+  }
+
   /**
    * Normalize a progress write against the stored record: inherit metadata,
    * resolve the playback generation and stamp the ordering triple.
@@ -1048,60 +1240,14 @@ export class PersonalStore extends ReadyResource {
     await this._syncLamport()
     const parsed = parsePersonalProgressStateKey(stateKey)
     const currentGeneration = toUint(existing?.order?.playbackGeneration)
-
-    let order
-    if (isCompleteProgressOrder(input.order)) {
-      order = normalizeProgressOrder(input.order)
-    } else {
-      let generation = currentGeneration
-      if (input.playbackGeneration !== undefined && input.playbackGeneration !== null) {
-        generation = toUint(input.playbackGeneration)
-      } else if (input.replay) {
-        generation = currentGeneration + 1
-      }
-      // A delete is sticky. Only an explicit `tombstone: false` or a strictly
-      // higher playback generation (the title really was played again) brings a
-      // deleted record back; an ordinary position ping must not resurrect it
-      // with its old title and position.
-      const tombstone = input.tombstone === undefined || input.tombstone === null
-        ? Boolean(existing?.order?.tombstone) && generation <= currentGeneration
-        : Boolean(input.tombstone)
-      // Nothing may await between the sync above and this stamp.
-      order = {
-        playbackGeneration: generation,
-        lamport: this._nextLamport(),
-        writerKey: this.localKeyHex || '',
-        tombstone
-      }
-    }
-
-    // A replay starts a fresh generation, so position and completion reset
-    // unless the caller states otherwise. Title/library metadata always carries.
-    const baseline = order.playbackGeneration > currentGeneration ? null : existing
-
-    return normalizeProgressRecord({
-      stateKey,
-      identity: identity || existing?.identity || parsed.identity,
-      channelKey: inheritText(input.channelKey, existing?.channelKey),
-      videoId: inheritText(input.videoId, existing?.videoId),
-      videoKey: inheritText(input.videoKey, existing?.videoKey, parsed.videoKey),
-      title: inheritText(input.title, existing?.title),
-      positionSec: inheritUint(input.positionSec ?? input.position, baseline?.positionSec),
-      durationSec: inheritUint(input.durationSec ?? input.duration, existing?.durationSec),
-      completed: input.completed === undefined || input.completed === null
-        ? Boolean(baseline?.completed)
-        : Boolean(input.completed),
-      saved: input.saved === undefined || input.saved === null
-        ? Boolean(existing?.saved)
-        : Boolean(input.saved),
-      updatedAt: toUint(input.updatedAt) || Date.now(),
-      order
-    })
+    const order = this._resolveProgressOrder(input, existing, currentGeneration)
+    return assembleProgressRecord({ input, existing, parsed, identity, stateKey, order, currentGeneration })
   }
 
   // --- settings -------------------------------------------------------------
 
   async setSetting(key, value) {
+    if (!key) throw new Error('Setting key required')
     await this._append({
       type: 'set-setting',
       key,
@@ -1368,70 +1514,15 @@ export class PersonalStore extends ReadyResource {
    * `droppedDevices` rather than silently granted write access.
    */
   async importState(state = {}) {
-    const summary = {
-      subscriptions: 0,
-      playlists: 0,
-      playlistItems: 0,
-      progress: 0,
-      history: 0,
-      settings: 0,
-      droppedDevices: (state.devices || []).map((device) => toText(device?.keyHex)).filter(Boolean)
-    }
     const ops = []
-    for (const sub of state.subscriptions || []) {
-      if (!sub?.channelKey) continue
-      ops.push({ type: 'subscribe', channelKey: sub.channelKey, name: sub.name || '', subscribedAt: toUint(sub.subscribedAt) || Date.now() })
-      summary.subscriptions++
-    }
-    for (const playlist of state.playlists || []) {
-      if (!playlist?.id) continue
-      ops.push({
-        type: 'put-playlist',
-        id: playlist.id,
-        name: playlist.name || '',
-        description: playlist.description || '',
-        createdAt: toUint(playlist.createdAt) || Date.now(),
-        updatedAt: toUint(playlist.updatedAt) || Date.now()
-      })
-      summary.playlists++
-    }
-    for (const item of state.playlistItems || []) {
-      if (!item?.playlistId || !item?.videoKey) continue
-      ops.push({
-        type: 'add-playlist-item',
-        playlistId: item.playlistId,
-        videoKey: item.videoKey,
-        channelKey: item.channelKey || '',
-        videoId: item.videoId || '',
-        addedAt: toUint(item.addedAt) || Date.now()
-      })
-      summary.playlistItems++
-    }
-    for (const record of state.progress || []) {
-      const normalized = normalizeProgressRecord(record)
-      if (!normalized.stateKey || normalized.order.tombstone) continue
-      ops.push({ type: 'put-progress', record: normalized })
-      summary.progress++
-    }
-    for (const event of state.history || []) {
-      if (!event) continue
-      ops.push({
-        type: 'log-history',
-        event: { ...event, eventId: event.eventId || randomId(), timestamp: toUint(event.timestamp) || Date.now() },
-        record: null
-      })
-      summary.history++
-    }
-    for (const setting of state.settings || []) {
-      if (!setting?.key) continue
-      ops.push({
-        type: 'set-setting',
-        key: setting.key,
-        value: setting.value,
-        updatedAt: toUint(setting.updatedAt) || Date.now(),
-        revision: typeof setting.revision === 'string' && /^[0-9a-f]{32}$/.test(setting.revision) ? setting.revision : randomId()
-      })
-      summary.settings++
+    const summary = {
+      subscriptions: importSubscriptions(state.subscriptions, ops),
+      playlists: importPlaylists(state.playlists, ops),
+      playlistItems: importPlaylistItems(state.playlistItems, ops),
+      progress: importProgress(state.progress, ops),
+      history: importHistory(state.history, ops),
+      settings: importSettings(state.settings, ops),
+      droppedDevices: (state.devices || []).map((device) => toText(device?.keyHex)).filter(Boolean)
     }
     await this._appendMany(ops)
     return summary

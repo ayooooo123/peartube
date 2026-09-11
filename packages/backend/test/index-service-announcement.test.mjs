@@ -92,9 +92,10 @@ test('announcement transport authentication compares the live key with the signe
   }), false)
 })
 
-test('announcement expiry is inclusive at the boundary and rejects future issuance', async t => {
+test('announcement validity is half-open at issuance and expiry', async t => {
   const signed = fixture()
-  t.ok(await verifyIndexServiceAnnouncement(signed, { now: signed.expiresAt }))
+  t.ok(await verifyIndexServiceAnnouncement(signed, { now: signed.issuedAt }))
+  t.is(await verifyIndexServiceAnnouncement(signed, { now: signed.expiresAt }), false, 'the expiry instant is expired')
   t.is(await verifyIndexServiceAnnouncement(signed, { now: signed.expiresAt + 1 }), false)
   t.is(await verifyIndexServiceAnnouncement(signed, { now: signed.issuedAt - 1 }), false)
   t.exception(() => fixture({ expiresAt: NOW }), /expiresAt/)

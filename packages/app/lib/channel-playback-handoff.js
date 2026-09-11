@@ -1,3 +1,18 @@
+/**
+ * Build the playback handoff payload for a channel catalog card.
+ *
+ * `thumbnailUrl` is nullable and optional: pass the freshly resolved artwork
+ * URL when the loader has one. A `null`, `undefined`, or empty value never
+ * overwrites the item's stored thumbnail; the item's own `thumbnailUrl`
+ * survives the spread untouched.
+ *
+ * @param {Object} input
+ * @param {Record<string, any>} input.item - video record from the channel catalog
+ * @param {string} input.channelKey
+ * @param {string} input.publicBeeKey - route-level bee key; falls back to the item's own
+ * @param {string|null} [input.thumbnailUrl]
+ * @param {string} input.channelName
+ */
 export function createChannelPlaybackPayload({
   item,
   channelKey,

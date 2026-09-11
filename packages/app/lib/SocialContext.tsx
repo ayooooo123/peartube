@@ -18,6 +18,111 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
     }),
   ])
 }
+function parseReactionCounts(countsData: any): Record<string, number> {
+  const counts: Record<string, number> = {}
+  if (Array.isArray(countsData)) {
+    for (const c of countsData) {
+      if (c?.reactionType) counts[c.reactionType] = c.count || 0
+    }
+  } else if (countsData && typeof countsData === 'object') {
+    for (const [k, v] of Object.entries(countsData)) {
+      counts[k] = typeof v === 'number' ? v : 0
+    }
+  }
+  return counts
+}
+
+function applyFetchedComments(opts: {
+  append: boolean
+  isInitialLoad: boolean
+  page: number
+  primaryComments: any[]
+  setComments: React.Dispatch<React.SetStateAction<any[]>>
+  setHasMoreComments: React.Dispatch<React.SetStateAction<boolean>>
+  setCommentsPage: React.Dispatch<React.SetStateAction<number>>
+  setPendingComments: React.Dispatch<React.SetStateAction<any[]>>
+}) {
+  const {
+    append,
+    isInitialLoad,
+    page,
+    primaryComments,
+    setComments,
+    setHasMoreComments,
+    setCommentsPage,
+    setPendingComments,
+  } = opts
+
+  if (append) {
+    if (primaryComments.length > 0) setComments(prev => [...prev, ...primaryComments])
+    setHasMoreComments(primaryComments.length >= COMMENTS_PER_PAGE)
+    setCommentsPage(page)
+    if (primaryComments.length > 0) {
+      const newIds = new Set(primaryComments.map((c: any) => c.commentId))
+      setPendingComments(prev => prev.filter((p) => !p.commentId || !newIds.has(p.commentId)))
+    }
+  } else {
+    if (primaryComments.length > 0) {
+      setComments(primaryComments)
+      setHasMoreComments(primaryComments.length >= COMMENTS_PER_PAGE)
+      setCommentsPage(page)
+      const knownIds = new Set(primaryComments.map((c: any) => c.commentId))
+      setPendingComments(prev => prev.filter((p) => !p.commentId || !knownIds.has(p.commentId)))
+    } else if (isInitialLoad) {
+      setComments([])
+      setHasMoreComments(false)
+    }
+  }
+}
+
+async function fetchSocialData(
+  rpcClient: typeof rpc,
+  ch: string,
+  canonicalVid: string,
+  pubBee: string | undefined,
+  page: number,
+  append: boolean
+) {
+  const commentsPromise = withTimeout(
+    rpcClient.listComments?.({ channelKey: ch, videoId: canonicalVid, publicBeeKey: pubBee, page, limit: COMMENTS_PER_PAGE }).catch(() => null) ?? Promise.resolve(null),
+    SOCIAL_RPC_TIMEOUT_MS,
+    null
+  )
+  const reactionsPromise = !append
+    ? withTimeout(
+        rpcClient.getReactions?.({ channelKey: ch, videoId: canonicalVid, publicBeeKey: pubBee }).catch(() => null) ?? Promise.resolve(null),
+        SOCIAL_RPC_TIMEOUT_MS,
+        null
+      )
+    : Promise.resolve(null)
+
+  return Promise.all([commentsPromise, reactionsPromise])
+}
+
+function extractPrimaryComments(commentsRes: { success?: boolean; comments?: unknown } | null | undefined) {
+  if (!commentsRes?.success || !Array.isArray(commentsRes.comments)) return []
+  return commentsRes.comments
+}
+
+function applyFetchedReactions(
+  reactionsRes: { success?: boolean; counts?: unknown; userReaction?: string | null } | null | undefined,
+  setReactionCounts: React.Dispatch<React.SetStateAction<Record<string, number>>>,
+  setUserReaction: React.Dispatch<React.SetStateAction<string | null>>,
+) {
+  if (!reactionsRes?.success) return
+  setReactionCounts(parseReactionCounts(reactionsRes.counts || {}))
+  setUserReaction(reactionsRes.userReaction || null)
+}
+
+function finishCommentsLoad(
+  setCommentsLoading: React.Dispatch<React.SetStateAction<boolean>>,
+  setLoadingMoreComments: React.Dispatch<React.SetStateAction<boolean>>,
+  setRefreshingComments: React.Dispatch<React.SetStateAction<boolean>>,
+) {
+  setCommentsLoading(false)
+  setLoadingMoreComments(false)
+  setRefreshingComments(false)
+}
 
 interface SocialContextType {
   comments: any[]
@@ -119,78 +224,41 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
   }, [comments.length])
 
   const loadSocial = useCallback(async (page = 0, append = false, forceRefresh = false) => {
-    if (!currentVideo?.channelKey || !currentVideo?.id) return
+    const ch = currentVideo?.channelKey
+    const canonicalVid = currentVideo?.id
+    if (!ch || !canonicalVid) return
     if (!rpc?.listComments || !rpc?.getReactions) return
 
-    const ch = currentVideo.channelKey
-    const canonicalVid = currentVideo.id
-    const pubBee = currentVideo.publicBeeKey || undefined
-
+    const pubBee = currentVideo?.publicBeeKey || undefined
     const isInitialLoad = commentsLengthRef.current === 0
     if (!append && (isInitialLoad || forceRefresh)) {
       setCommentsLoading(true)
     }
 
     try {
-      const [commentsRes, reactionsRes] = await Promise.all([
-        withTimeout(
-          rpc.listComments?.({ channelKey: ch, videoId: canonicalVid, publicBeeKey: pubBee, page, limit: COMMENTS_PER_PAGE }).catch(() => null) ?? Promise.resolve(null),
-          SOCIAL_RPC_TIMEOUT_MS,
-          null
-        ),
-        !append ? withTimeout(
-          rpc.getReactions?.({ channelKey: ch, videoId: canonicalVid, publicBeeKey: pubBee }).catch(() => null) ?? Promise.resolve(null),
-          SOCIAL_RPC_TIMEOUT_MS,
-          null
-        ) : Promise.resolve(null),
-      ])
+      const [commentsRes, reactionsRes] = await fetchSocialData(
+        rpc,
+        ch,
+        canonicalVid,
+        pubBee,
+        page,
+        append
+      )
 
-      const primaryOk = Boolean(commentsRes?.success && Array.isArray(commentsRes.comments))
-      const primaryComments = primaryOk ? commentsRes.comments : []
+      applyFetchedComments({
+        append,
+        isInitialLoad,
+        page,
+        primaryComments: extractPrimaryComments(commentsRes),
+        setComments,
+        setHasMoreComments,
+        setCommentsPage,
+        setPendingComments,
+      })
 
-      if (append) {
-        if (primaryComments.length > 0) setComments(prev => [...prev, ...primaryComments])
-        setHasMoreComments(primaryComments.length >= COMMENTS_PER_PAGE)
-        setCommentsPage(page)
-        if (primaryComments.length > 0) {
-          const newIds = new Set(primaryComments.map((c: any) => c.commentId))
-          setPendingComments(prev => prev.filter((p) => !p.commentId || !newIds.has(p.commentId)))
-        }
-      } else {
-        if (primaryComments.length > 0) {
-          setComments(primaryComments)
-          setHasMoreComments(primaryComments.length >= COMMENTS_PER_PAGE)
-          setCommentsPage(page)
-          const knownIds = new Set(primaryComments.map((c: any) => c.commentId))
-          setPendingComments(prev => prev.filter((p) => !p.commentId || !knownIds.has(p.commentId)))
-        } else if (isInitialLoad) {
-          setComments([])
-          setHasMoreComments(false)
-        }
-      }
-
-      if (reactionsRes?.success) {
-        const toCountMap = (countsData: any): Record<string, number> => {
-          const counts: Record<string, number> = {}
-          if (Array.isArray(countsData)) {
-            for (const c of countsData) {
-              if (c?.reactionType) counts[c.reactionType] = c.count || 0
-            }
-          } else if (countsData && typeof countsData === 'object') {
-            for (const [k, v] of Object.entries(countsData)) {
-              counts[k] = typeof v === 'number' ? v : 0
-            }
-          }
-          return counts
-        }
-
-        setReactionCounts(toCountMap(reactionsRes.counts || {}))
-        setUserReaction(reactionsRes.userReaction || null)
-      }
+      applyFetchedReactions(reactionsRes, setReactionCounts, setUserReaction)
     } finally {
-      setCommentsLoading(false)
-      setLoadingMoreComments(false)
-      setRefreshingComments(false)
+      finishCommentsLoad(setCommentsLoading, setLoadingMoreComments, setRefreshingComments)
     }
   }, [currentVideo])
 

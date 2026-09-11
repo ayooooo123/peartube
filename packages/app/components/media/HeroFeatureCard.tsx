@@ -1,6 +1,5 @@
 import { memo } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
-import { Ionicons } from '@expo/vector-icons'
 import { colors, radius, spacing, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 import { formatContentBadge } from '@/lib/formatters'
@@ -76,6 +75,28 @@ function getEntityBadge(item: MediaCockpitItem): string | null {
 function getArtwork(item: MediaCockpitItem): string | null {
   return pickString(item.backdropUrl, item.posterUrl, item.stillUrl, item.thumbnailUrl, item.thumbnail)
 }
+function getSubtitle(item: MediaCockpitItem): string | null {
+  return pickString(
+    item.subtitle,
+    item.creatorName,
+    item.sourceProviderName,
+    item.publisherName,
+    item.channelName,
+    item.channel?.name,
+  )
+}
+
+function getDuration(item: MediaCockpitItem): number | undefined {
+  if (typeof item.duration === 'number' && item.duration > 0) return item.duration
+  if (typeof item.durationSec === 'number' && item.durationSec > 0) return item.durationSec
+  return undefined
+}
+
+function getReleaseYear(item: MediaCockpitItem): string | null {
+  const value = (item as Record<string, unknown>).year ?? (item as Record<string, unknown>).releaseYear
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 1800 ? String(Math.trunc(parsed)) : null
+}
 
 function formatDuration(seconds?: number): string | null {
   if (typeof seconds !== 'number' || seconds <= 0) return null
@@ -95,29 +116,13 @@ function HeroFeatureCardComponent({
   if (!item) return null
 
   const title = pickString(item.title) || 'Featured media'
-  const subtitle = pickString(
-    item.subtitle,
-    item.creatorName,
-    item.sourceProviderName,
-    item.publisherName,
-    item.channelName,
-    item.channel?.name,
-  )
+  const subtitle = getSubtitle(item)
   const badge = getEntityBadge(item)
   const thumbnailUrl = getArtwork(item)
-  const duration = typeof item.duration === 'number' && item.duration > 0
-    ? item.duration
-    : typeof item.durationSec === 'number' && item.durationSec > 0
-      ? item.durationSec
-      : undefined
+  const duration = getDuration(item)
   const durationLabel = formatDuration(duration)
   const channelInitial = title.charAt(0).toUpperCase()
-  const releaseYear = (() => {
-    const value = (item as Record<string, unknown>).year ?? (item as Record<string, unknown>).releaseYear
-    const parsed = Number(value)
-    return Number.isFinite(parsed) && parsed > 1800 ? String(Math.trunc(parsed)) : null
-  })()
-
+  const releaseYear = getReleaseYear(item)
   return (
     <Pressable
       onPress={onPress}

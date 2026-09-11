@@ -1,0 +1,44 @@
+id: duplicate-protocol-literals
+message: "Protocol version must use canonical PROTOCOL_VERSION or STORAGE_FORMAT_VERSION constants, not hardcoded numeric literals."
+severity: error
+language: Tsx
+files:
+  - "packages/host/src/**"
+  - "packages/backend/src/**"
+  - "packages/cli/src/**"
+  - "packages/platform/src/**"
+  - "packages/app/**"
+ignores:
+  - "packages/host/src/contracts.js"
+  - "packages/host/src/contracts.d.ts"
+  - "packages/backend/src/stored-protocol.js"
+  - "**/test/**"
+  - "**/tests/**"
+  - "**/__tests__/**"
+  - "**/fixtures/**"
+rule:
+  any:
+    - kind: pair
+      all:
+        - has:
+            field: key
+            regex: "^(protocolVersion|expectedStorageFormatVersion)$"
+        - has:
+            field: value
+            kind: number
+    - kind: variable_declarator
+      all:
+        - has:
+            field: name
+            regex: "^(PROTOCOL_VERSION|STORAGE_FORMAT_VERSION)$"
+        - has:
+            stopBy: end
+            kind: number
+    - kind: property_signature
+      all:
+        - has:
+            field: name
+            regex: "^(protocolVersion|expectedStorageFormatVersion)$"
+        - has:
+            stopBy: end
+            kind: number

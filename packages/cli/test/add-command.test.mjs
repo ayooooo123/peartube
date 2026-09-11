@@ -1,7 +1,11 @@
 import test from 'brittle'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { runAddCommand } from '../src/add/index.js'
-import { createJobStore } from '../src/add/job-store.js'
-import { createExecutor } from '../src/add/executor.js'
+
+const FIXTURE_BYTES = Buffer.from('fixture-bytes')
+const FIXTURE_SHA256 = 'c16a40a4584e5bccc84b45172fcdfa922f59ff1edebf3adba7b8266ea04eb39a'
 
 function fakeBee () {
   const map = new Map()
@@ -21,28 +25,7 @@ function capture () {
 }
 
 const CHANNEL = { channelKey: 'chan-1', writerKeyHex: 'a'.repeat(64), publicBeeKey: 'b'.repeat(64) }
-
-function fakeExecutorDeps ({ jobStore, uploads, downloads, channels = [], durable = { verified: true } }) {
-  return {
-    jobStore,
-    resolveChannel: async ({ channelDraft }) => { channels.push(channelDraft); return CHANNEL },
-    loadChannel: async () => CHANNEL,
-    duplicateCheck: { check: async () => ({ status: 'ok', advisories: [] }) },
-    deriveImportClaimantId: (w, j) => `claim:${j}`,
-    writeClaim: async () => {},
-    resolveClaimWinner: async () => null,
-    downloadSource: async ({ row }) => { downloads.push(row.data.item); return { artifactPath: '/tmp/a.mkv', checksum: 'sha256:v' } },
-    uploadFromPath: async (args) => { uploads.push(args); return { videoId: args.videoId, channelKey: CHANNEL.channelKey, blobKey: 'blob-1' } },
-    requestPin: async () => {},
-    awaitDurable: async () => durable,
-    publication: {
-      markDurabilityVerified: async () => {},
-      project: async () => ({ channelKey: CHANNEL.channelKey, publicBeeKey: CHANNEL.publicBeeKey }),
-      announce: async () => {},
-      finalize: async () => {}
-    }
-  }
-}
+const PUBLISHER_ID = 'c'.repeat(64)
 
 const RECORDING_MBID = 'b1a9c0e8-2f9d-4b3e-9a24-6f3c1d9a7b55'
 
@@ -82,14 +65,46 @@ function baseContext (overrides = {}) {
   const downloads = []
   const channels = []
   const providerCalls = []
-  const durable = overrides.durable || { verified: true }
   const bee = fakeBee()
+  const stageDir = mkdtempSync(join(tmpdir(), 'peartube-add-cmd-'))
+  const stagePath = join(stageDir, 'a.mkv')
+  writeFileSync(stagePath, FIXTURE_BYTES)
   const deps = {
     ...metadataFake(providerCalls),
-    openAddRuntime: async () => ({ metadataBee: bee, close: async () => {} }),
-    createJobStore,
-    createExecutor,
-    buildExecutorDeps: ({ jobStore }) => fakeExecutorDeps({ jobStore, uploads, downloads, channels, durable })
+    openAddRuntime: async () => ({
+      metadataBee: bee,
+      ensureLocalPublisher: async () => ({ publisherId: PUBLISHER_ID }),
+      close: async () => {}
+    }),
+    ensureLocalPublisher: async () => ({ publisherId: PUBLISHER_ID }),
+    resolveChannel: async ({ channelDraft }) => {
+      channels.push(channelDraft)
+      return CHANNEL
+    },
+    duplicateCheck: {
+      check: async () => ({ status: 'ok', advisories: [] })
+    },
+    arbitrateImportClaim: async () => ({ ok: true }),
+    stageSource: async ({ row }) => {
+      downloads.push(row.data.item)
+      return {
+        artifactPath: stagePath,
+        checksum: `sha256:${FIXTURE_SHA256}`,
+        title: row.data.item?.title || 'Pilot',
+        dispose: null
+      }
+    },
+    executeLocalFileAcquisition: async (args) => {
+      uploads.push(args)
+      return {
+        acquisitionId: `acq-${args.input.idempotencyKey}`,
+        state: 'completed',
+        publicationId: `pub-${args.input.idempotencyKey}`,
+        manifestId: 'manifest-1',
+        renditionId: 'rendition-1',
+        assetId: 'asset-1'
+      }
+    }
   }
   return {
     context: {
@@ -139,10 +154,7 @@ test('already-exists is a success that reports stable identifiers', async (t) =>
   const { context, stdout, downloads } = baseContext({
     context: { flags: { type: 'movie', provider: 'tmdb', movieId: '603', yes: true, json: true } }
   })
-  context.deps.buildExecutorDeps = ({ jobStore }) => ({
-    ...fakeExecutorDeps({ jobStore, uploads: [], downloads }),
-    duplicateCheck: { check: async () => ({ status: 'already-exists', existing: { channelKey: 'chan-1', videoId: 'existing-9', availability: 'published' } }) }
-  })
+  context.deps.duplicateCheck = { check: async () => ({ status: 'already-exists', existing: { channelKey: 'chan-1', videoId: 'existing-9', availability: 'published' } }) }
   const code = await runAddCommand(context)
   t.is(code, 0)
   const parsed = JSON.parse(stdout.text())
@@ -163,17 +175,6 @@ test('unavailable provider is a usage error and never opens the backend', async 
   t.ok(stderr.text().includes('not available'))
 })
 
-test('no eligible durable peer keeps the job pending and retains local bytes', async (t) => {
-  const { context, stdout, stderr } = baseContext({
-    durable: { verified: false },
-    context: { flags: { type: 'movie', provider: 'tmdb', movieId: '603', yes: true, json: true } }
-  })
-  const code = await runAddCommand(context)
-  t.is(code, 0)
-  const parsed = JSON.parse(stdout.text())
-  t.is(parsed.status, 'replicationPending')
-  t.ok(stderr.text().includes('Local bytes retained') || stderr.text().includes('retained'))
-})
 
 test('a missing TMDB key for scripted metadata names the variable and the --title escape', async (t) => {
   const { context, stderr, providerCalls } = baseContext({

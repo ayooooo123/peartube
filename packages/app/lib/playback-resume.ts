@@ -73,8 +73,8 @@ export async function resumeWatchEntry(entry: WatchHistoryEntry, { rpc, loadAndP
     )
     if (!current.completed && current.positionSec > MIN_SEEK_SECONDS) {
       const target = current.positionSec
-      setTimeout(() => { try { seekTo(target) } catch {} }, 1200)
-      setTimeout(() => { try { seekTo(target) } catch {} }, 3000)
+      setTimeout(() => { try { seekTo(target) } catch { /* player may not be attached yet */ } }, 1200)
+      setTimeout(() => { try { seekTo(target) } catch { /* player may not be attached yet */ } }, 3000)
     }
   } catch (err) {
     console.error('[Resume] Failed to resume playback:', err)

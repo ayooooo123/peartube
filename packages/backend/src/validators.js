@@ -53,6 +53,57 @@ function buildValidationResult({ ok, reason = null, entry = null, descriptor = n
   return { ok, reason, entry, descriptor }
 }
 
+function getItemTimestamp(item) {
+  return item.publishedAt ?? item.createdAt ?? item.updatedAt ?? item.timestamp ?? item.observedAt
+}
+
+function getItemEpoch(item) {
+  return item.epoch ?? item.availabilityEpoch ?? item.sequenceEpoch
+}
+
+function getClockDriftMs(options) {
+  return options.clockDriftMs ?? options.maxClockSkewMs ?? DEFAULT_CLOCK_DRIFT_MS
+}
+
+function getEpochDriftLimit(options) {
+  return options.epochDrift ?? options.maxEpochSkew ?? MAX_EPOCH_DRIFT
+}
+
+function getExpireGraceMs(options) {
+  return options.expireGraceMs ?? options.clockDriftMs ?? options.maxClockSkewMs ?? DEFAULT_EXPIRE_GRACE_MS
+}
+
+function getProofExpireGraceMs(options) {
+  return options.proofExpireGraceMs ?? options.expireGraceMs ?? options.clockDriftMs ?? options.maxClockSkewMs ?? DEFAULT_EXPIRE_GRACE_MS
+}
+
+function validateTimingWindows(item, now, clockDriftMs, epochDriftLimit, expireGraceMs, prefix) {
+  const timestamp = getItemTimestamp(item)
+  if (!withinClockDrift(timestamp, now, clockDriftMs)) {
+    return `${prefix}-clock-drift`
+  }
+  const epoch = getItemEpoch(item)
+  if (!withinEpochDrift(epoch, now, epochDriftLimit)) {
+    return `${prefix}-epoch-drift`
+  }
+  if (item.expiresAt != null && safeNumber(item.expiresAt, NaN) < now - expireGraceMs) {
+    return `${prefix}-expired`
+  }
+  if (item.notBefore != null && safeNumber(item.notBefore, NaN) > now + clockDriftMs) {
+    return `${prefix}-not-yet-valid`
+  }
+  return null
+}
+
+async function checkSignature(options, payload) {
+  const verifier = options.verifySignature
+  if (typeof verifier !== 'function') {
+    return options.allowUnsignedForTests ? null : 'bad-signature'
+  }
+  const signatureOk = await verifier(payload)
+  return signatureOk ? null : 'bad-signature'
+}
+
 export async function validateIncomingDescriptor(entry, options = {}) {
   const descriptor = entry?.descriptor || entry || null
   if (!descriptor || !hasValidTarget(descriptor)) {
@@ -60,34 +111,18 @@ export async function validateIncomingDescriptor(entry, options = {}) {
   }
 
   const now = safeNumber(options.now, Date.now()) || Date.now()
-  const timestamp = descriptor.publishedAt ?? descriptor.createdAt ?? descriptor.updatedAt ?? descriptor.timestamp ?? descriptor.observedAt
-  if (!withinClockDrift(timestamp, now, options.clockDriftMs ?? options.maxClockSkewMs ?? DEFAULT_CLOCK_DRIFT_MS)) {
-    return buildValidationResult({ ok: false, reason: 'descriptor-clock-drift', entry, descriptor })
+  const clockDriftMs = getClockDriftMs(options)
+  const epochDriftLimit = getEpochDriftLimit(options)
+  const expireGraceMs = getExpireGraceMs(options)
+
+  const timingError = validateTimingWindows(descriptor, now, clockDriftMs, epochDriftLimit, expireGraceMs, 'descriptor')
+  if (timingError) {
+    return buildValidationResult({ ok: false, reason: timingError, entry, descriptor })
   }
 
-  const epoch = descriptor.epoch ?? descriptor.availabilityEpoch ?? descriptor.sequenceEpoch
-  if (!withinEpochDrift(epoch, now, options.epochDrift ?? options.maxEpochSkew ?? MAX_EPOCH_DRIFT)) {
-    return buildValidationResult({ ok: false, reason: 'descriptor-epoch-drift', entry, descriptor })
-  }
-
-  if (descriptor.expiresAt != null && safeNumber(descriptor.expiresAt, NaN) < now - (options.expireGraceMs ?? options.clockDriftMs ?? options.maxClockSkewMs ?? DEFAULT_EXPIRE_GRACE_MS)) {
-    return buildValidationResult({ ok: false, reason: 'descriptor-expired', entry, descriptor })
-  }
-
-  if (descriptor.notBefore != null && safeNumber(descriptor.notBefore, NaN) > now + (options.clockDriftMs ?? options.maxClockSkewMs ?? DEFAULT_CLOCK_DRIFT_MS)) {
-    return buildValidationResult({ ok: false, reason: 'descriptor-not-yet-valid', entry, descriptor })
-  }
-
-  const verifier = options.verifySignature
-  if (typeof verifier !== 'function') {
-    if (options.allowUnsignedForTests) return buildValidationResult({ ok: true, entry, descriptor })
-    return buildValidationResult({ ok: false, reason: 'bad-signature', entry, descriptor })
-  }
-  if (typeof verifier === 'function') {
-    const signatureOk = await verifier({ descriptor, entry })
-    if (!signatureOk) {
-      return buildValidationResult({ ok: false, reason: 'bad-signature', entry, descriptor })
-    }
+  const sigError = await checkSignature(options, { descriptor, entry })
+  if (sigError) {
+    return buildValidationResult({ ok: false, reason: sigError, entry, descriptor })
   }
 
   return buildValidationResult({ ok: true, entry, descriptor })
@@ -100,34 +135,18 @@ export async function validateIncomingProof(entry, options = {}) {
   }
 
   const now = safeNumber(options.now, Date.now()) || Date.now()
-  const timestamp = proof.publishedAt ?? proof.createdAt ?? proof.updatedAt ?? proof.timestamp ?? proof.observedAt
-  if (!withinClockDrift(timestamp, now, options.clockDriftMs ?? options.maxClockSkewMs ?? DEFAULT_CLOCK_DRIFT_MS)) {
-    return buildValidationResult({ ok: false, reason: 'proof-clock-drift', entry, descriptor: null })
+  const clockDriftMs = getClockDriftMs(options)
+  const epochDriftLimit = getEpochDriftLimit(options)
+  const expireGraceMs = getProofExpireGraceMs(options)
+
+  const timingError = validateTimingWindows(proof, now, clockDriftMs, epochDriftLimit, expireGraceMs, 'proof')
+  if (timingError) {
+    return buildValidationResult({ ok: false, reason: timingError, entry, descriptor: null })
   }
 
-  const epoch = proof.epoch ?? proof.availabilityEpoch ?? proof.sequenceEpoch
-  if (!withinEpochDrift(epoch, now, options.epochDrift ?? options.maxEpochSkew ?? MAX_EPOCH_DRIFT)) {
-    return buildValidationResult({ ok: false, reason: 'proof-epoch-drift', entry, descriptor: null })
-  }
-
-  if (proof.expiresAt != null && safeNumber(proof.expiresAt, NaN) < now - (options.proofExpireGraceMs ?? options.expireGraceMs ?? options.clockDriftMs ?? options.maxClockSkewMs ?? DEFAULT_EXPIRE_GRACE_MS)) {
-    return buildValidationResult({ ok: false, reason: 'proof-expired', entry, descriptor: null })
-  }
-
-  if (proof.notBefore != null && safeNumber(proof.notBefore, NaN) > now + (options.clockDriftMs ?? options.maxClockSkewMs ?? DEFAULT_CLOCK_DRIFT_MS)) {
-    return buildValidationResult({ ok: false, reason: 'proof-not-yet-valid', entry, descriptor: null })
-  }
-
-  const verifier = options.verifySignature
-  if (typeof verifier !== 'function') {
-    if (options.allowUnsignedForTests) return buildValidationResult({ ok: true, entry, descriptor: null })
-    return buildValidationResult({ ok: false, reason: 'bad-signature', entry, descriptor: null })
-  }
-  if (typeof verifier === 'function') {
-    const signatureOk = await verifier({ descriptor: proof, entry })
-    if (!signatureOk) {
-      return buildValidationResult({ ok: false, reason: 'bad-signature', entry, descriptor: null })
-    }
+  const sigError = await checkSignature(options, { descriptor: proof, entry })
+  if (sigError) {
+    return buildValidationResult({ ok: false, reason: sigError, entry, descriptor: null })
   }
 
   return buildValidationResult({ ok: true, entry, descriptor: null })

@@ -19,10 +19,7 @@ export class TerminalUsageError extends Error {
   }
 }
 
-export function mapKeypressToAction (str, key = {}) {
-  const name = key && key.name
-  if (key && key.ctrl && name === 'c') return { type: 'interrupt' }
-
+function actionForNamedKey (name) {
   switch (name) {
     case 'up': return { type: 'selection.move', delta: -1 }
     case 'down': return { type: 'selection.move', delta: 1 }
@@ -36,7 +33,16 @@ export function mapKeypressToAction (str, key = {}) {
     case 'right': return { type: 'query.cursor', delta: 1 }
     case 'home': return { type: 'query.home' }
     case 'end': return { type: 'query.end' }
+    default: return null
   }
+}
+
+export function mapKeypressToAction (str, key = {}) {
+  const name = key && key.name
+  if (key && key.ctrl && name === 'c') return { type: 'interrupt' }
+
+  const namedAction = actionForNamedKey(name)
+  if (namedAction) return namedAction
 
   if (typeof str !== 'string' || str.length === 0) return null
   if (str.charCodeAt(0) === 0x1b) return null

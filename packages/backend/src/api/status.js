@@ -25,68 +25,114 @@ export function createStatusApi({ ctx, recentPlaybackTimings = [] }) {
      * @returns {Object}
      */
     getSwarmStatus() {
-      const scopedTopics = ctx.scopedNetwork?.getDiagnostics?.().topics || [
-        describeScopedTopic('bootstrap', { networkId: ctx.networkId || 'peartube-main', protocolMajor: PROTOCOL_MAJOR }),
-      ]
+      const swarm = ctx.swarm
       const networkDebug = getNetworkStats()
-      const startupTiming = {
-        storage: networkDebug?.startupTiming || null,
-      }
-      const doctor = {
-        dht: {
-          bootstrapped: ctx.swarm?.dht?.bootstrapped ?? null,
-          firewalled: ctx.swarm?.dht?.firewalled ?? null,
-          online: ctx.swarm?.dht?.online ?? null,
-          ephemeral: ctx.swarm?.dht?.ephemeral ?? null,
-        },
-        discovery: {
-          peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
-          discoveredPeers: networkDebug?.hyperswarm?.recentPeers?.length || 0,
-          recentPeers: networkDebug?.hyperswarm?.recentPeers || [],
-        },
-        socket: {
-          swarmPeers: ctx.swarm?.peers?.size || 0,
-          swarmConnections: ctx.swarm?.connections?.size || 0,
-          connecting: Number(ctx.swarm?.connecting || 0),
-          recentConnections: networkDebug?.hyperswarm?.recentConnections || [],
-          peerStates: networkDebug?.hyperswarm?.peerStates || [],
-        },
-        playback: {
-          lastPreparePlayback: recentPlaybackTimings[recentPlaybackTimings.length - 1] || null,
-          recentPreparePlayback: recentPlaybackTimings.slice(-5),
-          // Strict P2P is a claim this device can be held to. Media bytes reach
-          // the player only through the loopback blob server, which exposes
-          // already-authorized Hypercore blocks and cannot fetch over HTTP;
-          // everything allowed to leave the device is control plane.
-          transport: {
-            mediaOrigin: 'peer-only',
-            mediaLoopbackHost: ctx.blobServerHost || '127.0.0.1',
-            mediaLoopbackPort: ctx.blobServer?.port || ctx.blobServerPort || 0,
-            httpMediaFallback: false,
-            controlPlanePurposes: ['manifest', 'artwork', 'diagnostics'],
-          },
-        },
-        recommendedBoundary: null,
-      }
-      if (doctor.discovery.discoveredPeers === 0 && doctor.dht.bootstrapped === false) doctor.recommendedBoundary = 'dht-bootstrap'
-      else if (doctor.discovery.discoveredPeers > 0 && doctor.socket.swarmConnections === 0) doctor.recommendedBoundary = 'transport-socket'
-      else doctor.recommendedBoundary = 'content-playback-or-ui'
+      const doctor = buildDoctor(ctx, networkDebug, recentPlaybackTimings)
       return {
-        swarmConnections: ctx.swarm?.connections?.size || 0,
-        swarmPeers: ctx.swarm?.peers?.size || 0,
-        scopedTopics,
+        swarmConnections: swarm?.connections?.size || 0,
+        swarmPeers: swarm?.peers?.size || 0,
+        scopedTopics: resolveScopedTopics(ctx),
         network: networkDebug,
-        startupTiming,
+        startupTiming: {
+          storage: networkDebug?.startupTiming || null,
+        },
         doctor,
-        swarmOffline: Boolean(ctx.swarm?._peartubeOffline),
-        swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,
-        swarmListenResolved: Boolean(ctx.swarm?._peartubeListenResolved),
+        swarmOffline: Boolean(swarm?._peartubeOffline),
+        swarmOfflineReason: swarm?._peartubeOfflineReason || null,
+        swarmListenResolved: Boolean(swarm?._peartubeListenResolved),
         peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
-        swarmPublicKey: ctx.swarm?.keyPair?.publicKey
-          ? b4a.toString(ctx.swarm.keyPair.publicKey, 'hex').slice(0, 32)
-          : 'unknown',
+        swarmPublicKey: resolveSwarmPublicKey(swarm),
         channelsLoaded: ctx.channels?.size || 0,
       }
     },
+  }
+}
+
+function resolveScopedTopics(ctx) {
+  const topics = ctx.scopedNetwork?.getDiagnostics?.().topics
+  if (topics) return topics
+  return [
+    describeScopedTopic('bootstrap', {
+      networkId: ctx.networkId || 'peartube-main',
+      protocolMajor: PROTOCOL_MAJOR,
+    }),
+  ]
+}
+
+function resolveSwarmPublicKey(swarm) {
+  const key = swarm?.keyPair?.publicKey
+  if (key) {
+    return b4a.toString(key, 'hex').slice(0, 32)
+  }
+  return 'unknown'
+}
+
+function buildDoctorDht(swarm) {
+  const dht = swarm?.dht
+  return {
+    bootstrapped: dht?.bootstrapped ?? null,
+    firewalled: dht?.firewalled ?? null,
+    online: dht?.online ?? null,
+    ephemeral: dht?.ephemeral ?? null,
+  }
+}
+
+function buildDoctorDiscovery(ctx, hyperswarm) {
+  const recentPeers = hyperswarm?.recentPeers || []
+  return {
+    peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
+    discoveredPeers: recentPeers.length,
+    recentPeers,
+  }
+}
+
+function buildDoctorSocket(swarm, hyperswarm) {
+  return {
+    swarmPeers: swarm?.peers?.size || 0,
+    swarmConnections: swarm?.connections?.size || 0,
+    connecting: Number(swarm?.connecting || 0),
+    recentConnections: hyperswarm?.recentConnections || [],
+    peerStates: hyperswarm?.peerStates || [],
+  }
+}
+
+function buildDoctorPlayback(ctx, recentPlaybackTimings) {
+  return {
+    lastPreparePlayback: recentPlaybackTimings[recentPlaybackTimings.length - 1] || null,
+    recentPreparePlayback: recentPlaybackTimings.slice(-5),
+    transport: {
+      mediaOrigin: 'peer-only',
+      mediaLoopbackHost: ctx.blobServerHost || '127.0.0.1',
+      mediaLoopbackPort: ctx.blobServer?.port || ctx.blobServerPort || 0,
+      httpMediaFallback: false,
+      controlPlanePurposes: ['manifest', 'artwork', 'diagnostics'],
+    },
+  }
+}
+
+function calculateRecommendedBoundary(discovery, dht, socket) {
+  if (discovery.discoveredPeers === 0 && dht.bootstrapped === false) {
+    return 'dht-bootstrap'
+  }
+  if (discovery.discoveredPeers > 0 && socket.swarmConnections === 0) {
+    return 'transport-socket'
+  }
+  return 'content-playback-or-ui'
+}
+
+function buildDoctor(ctx, networkDebug, recentPlaybackTimings) {
+  const hyperswarm = networkDebug?.hyperswarm
+  const dht = buildDoctorDht(ctx.swarm)
+  const discovery = buildDoctorDiscovery(ctx, hyperswarm)
+  const socket = buildDoctorSocket(ctx.swarm, hyperswarm)
+  const playback = buildDoctorPlayback(ctx, recentPlaybackTimings)
+  const recommendedBoundary = calculateRecommendedBoundary(discovery, dht, socket)
+
+  return {
+    dht,
+    discovery,
+    socket,
+    playback,
+    recommendedBoundary,
   }
 }

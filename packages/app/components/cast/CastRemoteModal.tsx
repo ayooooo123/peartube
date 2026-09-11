@@ -9,11 +9,9 @@ import {
   Modal,
   View,
   Text,
-  Pressable,
   StyleSheet,
   ActivityIndicator,
 } from 'react-native'
-import { Feather } from '@expo/vector-icons'
 import { colors, spacing, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 import { Button, IconButton, Meta, Body } from '@/components/primitives'
@@ -42,6 +40,123 @@ function formatCastState(state: string) {
     default:
       return 'Casting'
   }
+}
+function formatTranscodeLabel(status?: { isTranscoding?: boolean; progress?: number } | null): string | null {
+  if (!status?.isTranscoding) return null
+  const pct = Math.max(0, Math.min(100, Math.round(status.progress || 0)))
+  return `Optimizing for Chromecast… ${pct}%`
+}
+
+function CastControlsRow({
+  isPlayingOrBuffering,
+  isConnected,
+  onPlayPause,
+  onSwitchDevice,
+}: {
+  isPlayingOrBuffering: boolean
+  isConnected: boolean
+  onPlayPause: () => void
+  onSwitchDevice: () => void
+}) {
+  return (
+    <View style={styles.controlsRow}>
+      <Button
+        label={isPlayingOrBuffering ? 'Pause' : 'Play'}
+        variant="primary"
+        size="md"
+        block
+        icon={isPlayingOrBuffering ? 'pause' : 'play'}
+        onPress={onPlayPause}
+        disabled={!isConnected}
+        accessibilityLabel={isPlayingOrBuffering ? 'Pause' : 'Play'}
+      />
+
+      <Button
+        label="Switch"
+        variant="secondary"
+        size="md"
+        icon="tv"
+        onPress={onSwitchDevice}
+        accessibilityLabel="Switch cast device"
+      />
+    </View>
+  )
+}
+
+function CastVolumeSection({
+  volume,
+  isConnected,
+  onStep,
+}: {
+  volume: number
+  isConnected: boolean
+  onStep: (delta: number) => void
+}) {
+  const clamped = Math.max(0, Math.min(100, volume))
+  return (
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>VOLUME</Text>
+        <Meta tone="muted" size="sm">{Math.round(clamped)}%</Meta>
+      </View>
+      <View style={styles.volumeRow}>
+        <IconButton
+          icon="minus"
+          onPress={() => onStep(-5)}
+          disabled={!isConnected}
+          variant="outline"
+          size={40}
+          accessibilityLabel="Volume down"
+        />
+        <View style={styles.volumeBarOuter}>
+          <View style={[styles.volumeBarInner, { width: `${clamped}%` }]} />
+        </View>
+        <IconButton
+          icon="plus"
+          onPress={() => onStep(5)}
+          disabled={!isConnected}
+          variant="outline"
+          size={40}
+          accessibilityLabel="Volume up"
+        />
+      </View>
+    </View>
+  )
+}
+
+function CastFooterRow({
+  isConnected,
+  onDisconnect,
+  onStop,
+}: {
+  isConnected: boolean
+  onDisconnect: () => void
+  onStop: () => void
+}) {
+  return (
+    <View style={styles.footerRow}>
+      <Button
+        label="Disconnect"
+        variant="danger"
+        size="md"
+        block
+        icon="x-circle"
+        onPress={onDisconnect}
+        disabled={!isConnected}
+        accessibilityLabel="Disconnect casting"
+      />
+
+      <Button
+        label="Stop"
+        variant="secondary"
+        size="md"
+        icon="square"
+        onPress={onStop}
+        disabled={!isConnected}
+        accessibilityLabel="Stop playback"
+      />
+    </View>
+  )
 }
 
 export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }: Props) {
@@ -100,11 +215,10 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
 
   const statusLabel = formatCastState(playback.state)
 
-  const transcodeLabel = useMemo(() => {
-    if (!cast.transcodeStatus?.isTranscoding) return null
-    const pct = Math.max(0, Math.min(100, Math.round(cast.transcodeStatus.progress || 0)))
-    return `Optimizing for Chromecast… ${pct}%`
-  }, [cast.transcodeStatus?.isTranscoding, cast.transcodeStatus?.progress])
+  const transcodeLabel = useMemo(
+    () => formatTranscodeLabel(cast.transcodeStatus),
+    [cast.transcodeStatus]
+  )
 
   return (
     <Modal
@@ -146,27 +260,12 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
             </View>
           ) : null}
 
-          <View style={styles.controlsRow}>
-            <Button
-              label={playback.state === 'playing' || playback.state === 'buffering' ? 'Pause' : 'Play'}
-              variant="primary"
-              size="md"
-              block
-              icon={playback.state === 'playing' || playback.state === 'buffering' ? 'pause' : 'play'}
-              onPress={handlePlayPause}
-              disabled={!isConnected}
-              accessibilityLabel={playback.state === 'playing' ? 'Pause' : 'Play'}
-            />
-
-            <Button
-              label="Switch"
-              variant="secondary"
-              size="md"
-              icon="tv"
-              onPress={onSwitchDevice}
-              accessibilityLabel="Switch cast device"
-            />
-          </View>
+          <CastControlsRow
+            isPlayingOrBuffering={playback.state === 'playing' || playback.state === 'buffering'}
+            isConnected={isConnected}
+            onPlayPause={handlePlayPause}
+            onSwitchDevice={onSwitchDevice}
+          />
 
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
@@ -189,56 +288,17 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
             ) : null}
           </View>
 
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>VOLUME</Text>
-              <Meta tone="muted" size="sm">{Math.round(playback.volume || 0)}%</Meta>
-            </View>
-            <View style={styles.volumeRow}>
-              <IconButton
-                icon="minus"
-                onPress={() => handleVolStep(-5)}
-                disabled={!isConnected}
-                variant="outline"
-                size={40}
-                accessibilityLabel="Volume down"
-              />
-              <View style={styles.volumeBarOuter}>
-                <View style={[styles.volumeBarInner, { width: `${Math.max(0, Math.min(100, playback.volume || 0))}%` }]} />
-              </View>
-              <IconButton
-                icon="plus"
-                onPress={() => handleVolStep(5)}
-                disabled={!isConnected}
-                variant="outline"
-                size={40}
-                accessibilityLabel="Volume up"
-              />
-            </View>
-          </View>
+          <CastVolumeSection
+            volume={playback.volume || 0}
+            isConnected={isConnected}
+            onStep={handleVolStep}
+          />
 
-          <View style={styles.footerRow}>
-            <Button
-              label="Disconnect"
-              variant="danger"
-              size="md"
-              block
-              icon="x-circle"
-              onPress={() => cast.disconnect()}
-              disabled={!isConnected}
-              accessibilityLabel="Disconnect casting"
-            />
-
-            <Button
-              label="Stop"
-              variant="secondary"
-              size="md"
-              icon="square"
-              onPress={() => cast.stop()}
-              disabled={!isConnected}
-              accessibilityLabel="Stop playback"
-            />
-          </View>
+          <CastFooterRow
+            isConnected={isConnected}
+            onDisconnect={() => cast.disconnect()}
+            onStop={() => cast.stop()}
+          />
         </View>
       </View>
     </Modal>

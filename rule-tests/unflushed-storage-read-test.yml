@@ -1,0 +1,25 @@
+id: unflushed-storage-read
+valid:
+  - |
+    async function readHead(rx) {
+      let pending
+      try { pending = rx.getHead() } finally { rx.tryFlush() }
+      return await pending
+    }
+  - |
+    async function unrelated(core, rx) {
+      try { return await core.getBlock(0) } finally { rx.tryFlush() }
+    }
+invalid:
+  - |
+    async function head(rx) {
+      try { return await rx.getHead() } finally { rx.tryFlush() }
+    }
+  - |
+    async function leaf(rx) {
+      try { return await rx.getTreeNode(0) } catch { return null } finally { rx.tryFlush() }
+    }
+  - |
+    async function data(rawRx) {
+      try { return await rawRx.getBlock(1) } finally { rawRx.tryFlush() }
+    }

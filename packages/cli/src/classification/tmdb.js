@@ -50,19 +50,30 @@ function pickResult(results = []) {
   return [...results].sort((a, b) => (Number(b?.popularity || 0) - Number(a?.popularity || 0)))[0]
 }
 
+function extractItemTitle(type, result) {
+  if (type === 'movie') {
+    return result.title || result.original_title || null
+  }
+  return result.name || result.original_name || null
+}
+
+function extractItemDate(type, result) {
+  return type === 'movie' ? result.release_date : result.first_air_date
+}
+
+function extractItemYear(date) {
+  const match = String(date || '').match(YEAR_RE)
+  return match ? Number(match[1]) : null
+}
+
 function shapeResult(type, result) {
   if (!result) return null
+  const date = extractItemDate(type, result)
   return {
     type,
     tmdbId: result.id ?? null,
-    title: type === 'movie'
-      ? (result.title || result.original_title || null)
-      : (result.name || result.original_name || null),
-    year: (() => {
-      const date = type === 'movie' ? result.release_date : result.first_air_date
-      const match = String(date || '').match(YEAR_RE)
-      return match ? Number(match[1]) : null
-    })(),
+    title: extractItemTitle(type, result),
+    year: extractItemYear(date),
     posterPath: result.poster_path || null,
     popularity: Number(result.poster_path ? result.popularity || 0 : result.popularity || 0) || 0
   }
@@ -86,16 +97,13 @@ function shapeDiscoverItem(result = {}, fallbackType = null) {
   // it), so fall back to the endpoint's known type — otherwise TV search rows
   // are mistyped as movies, lose their `name`-based title, and get dropped.
   const mediaType = normalizeMediaType(result.media_type || result.type || fallbackType)
-  const title = mediaType === 'movie'
-    ? (result.title || result.original_title || null)
-    : (result.name || result.original_name || null)
-  const date = mediaType === 'movie' ? result.release_date : result.first_air_date
-  const match = String(date || '').match(YEAR_RE)
+  const title = extractItemTitle(mediaType, result)
+  const date = extractItemDate(mediaType, result)
   return {
     type: mediaType,
     tmdbId: result.id ?? null,
     title,
-    year: match ? Number(match[1]) : null,
+    year: extractItemYear(date),
     overview: result.overview || '',
     posterPath: result.poster_path || null,
     backdropPath: result.backdrop_path || null,

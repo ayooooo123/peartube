@@ -337,6 +337,458 @@ function ExpandableOverview({ text }: { text: string }) {
   )
 }
 
+function resolveDetailTitle(item: Record<string, unknown> | null | undefined, type: MediaEntityDetailType, routeId?: string): string {
+  return pickString(item?.title, (item?.preferredMetadata as Record<string, unknown> | undefined)?.title, item?.name, routeFallbackTitle(type, routeId)) || pageTitleFor(type)
+}
+
+function resolveSourceCount(item: Record<string, unknown> | null | undefined): number {
+  if (typeof item?.sourceCount === 'number') return item.sourceCount
+  if (Array.isArray(item?.sources)) return item.sources.length
+  return 0
+}
+
+function resolveProgressPercent(resumeFraction: number | null): number | null {
+  if (typeof resumeFraction === 'number' && resumeFraction > 0) {
+    return Math.min(99, Math.max(1, Math.round(resumeFraction * 100)))
+  }
+  return null
+}
+
+function resolvePlayLabel(primaryActionLabel: string | undefined, progressPercent: number | null): string {
+  if (primaryActionLabel) return primaryActionLabel
+  return progressPercent === null ? 'Watch Now' : 'Resume'
+}
+
+function resolveDetailsLabel(detailsOpen: boolean, sourceCount: number): string {
+  if (detailsOpen) return 'Hide details'
+  const countSuffix = sourceCount > 1 ? ` (${sourceCount})` : ''
+  return `Details and other sources${countSuffix}`
+}
+
+interface DetailBadgesAndMetadataProps {
+  ratings: Array<{ label: string; value: string }>
+  certification: string | null
+  genres: string[]
+  year: number | null
+  runtime: string | null
+  synopsis: string | null
+}
+
+function DetailBadgesAndMetadata({
+  ratings,
+  certification,
+  genres,
+  year,
+  runtime,
+  synopsis,
+}: DetailBadgesAndMetadataProps) {
+  const hasGenres = genres.length > 0
+  const hasYear = year !== null
+  return (
+    <>
+      {ratings.length > 0 ? (
+        <View style={styles.badgeRow}>
+          {ratings.map((rating) => (
+            <View key={rating.label} style={styles.ratingBadge}>
+              <Ionicons name="star" color={colors.accentSecondary} size={12} />
+              <Text style={styles.ratingValue}>{rating.value}</Text>
+              <Text style={styles.ratingLabel}>{rating.label}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      {certification || hasGenres ? (
+        <View style={styles.badgeRow}>
+          {certification ? (
+            <View style={styles.badge}><Text style={styles.badgeText}>{certification}</Text></View>
+          ) : null}
+          {certification && hasGenres ? <Text style={styles.badgeSeparator}>|</Text> : null}
+          {genres.map((genre) => (
+            <View key={genre} style={styles.badge}><Text style={styles.badgeText}>{genre}</Text></View>
+          ))}
+        </View>
+      ) : null}
+
+      {hasYear || runtime ? (
+        <View style={styles.releaseRow}>
+          {hasYear ? (
+            <View style={styles.releaseItem}>
+              <Ionicons name="calendar-outline" color={colors.textSecondary} size={14} style={styles.releaseIcon} />
+              <Text style={styles.releaseValue}>{String(year)}</Text>
+            </View>
+          ) : null}
+          {runtime ? (
+            <View style={styles.releaseItem}>
+              <Ionicons name="time-outline" color={colors.textSecondary} size={14} style={styles.releaseIcon} />
+              <Text style={styles.releaseValue}>{runtime}</Text>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      {synopsis
+        ? Platform.OS === 'web'
+          ? <Text style={styles.overview}>{synopsis}</Text>
+          : <ExpandableOverview text={synopsis} />
+        : null}
+    </>
+  )
+}
+
+interface DetailActionControlsProps {
+  playLabel: string
+  title: string
+  actionDisabled: boolean
+  primaryAction?: { label?: string; onPress: () => void; disabled?: boolean; status?: string | null }
+  onPlay?: () => void
+  progressPercent: number | null
+  detailsOpen: boolean
+  detailsLabel: string
+  setDetailsOpen: React.Dispatch<React.SetStateAction<boolean>>
+  availabilityView: { label: string; detail: string; playable: boolean }
+}
+
+function DetailActionControls({
+  playLabel,
+  title,
+  actionDisabled,
+  primaryAction,
+  onPlay,
+  progressPercent,
+  detailsOpen,
+  detailsLabel,
+  setDetailsOpen,
+  availabilityView,
+}: DetailActionControlsProps) {
+  const handlePlayPress = () => {
+    if (primaryAction) {
+      primaryAction.onPress()
+    } else {
+      onPlay?.()
+    }
+  }
+
+  return (
+    <>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.actionRow}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${playLabel} ${title}`}
+          accessibilityState={{ disabled: actionDisabled }}
+          disabled={actionDisabled}
+          onPress={handlePlayPress}
+          style={({ pressed }) => [
+            styles.primaryAction,
+            actionDisabled && styles.actionDisabled,
+            pressed && styles.actionPressed,
+          ]}
+        >
+          <View style={styles.actionContent}>
+            <Ionicons name="play" color={colors.onPrimary} size={20} />
+            <Text style={styles.primaryActionLabel} numberOfLines={1}>{playLabel}</Text>
+          </View>
+        </Pressable>
+
+        {progressPercent === null ? null : (
+          <View style={styles.progressPill}>
+            <Text style={styles.progressText}>{`${progressPercent}%`}</Text>
+          </View>
+        )}
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={detailsOpen ? 'Hide details and other sources' : 'Show details and other sources'}
+          accessibilityState={{ expanded: detailsOpen }}
+          onPress={() => setDetailsOpen(open => !open)}
+          style={({ pressed }) => [styles.secondaryAction, pressed && styles.actionPressed]}
+        >
+          <View style={styles.actionContent}>
+            <Text style={styles.secondaryActionLabel} numberOfLines={1}>{detailsLabel}</Text>
+            <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} color={colors.textSecondary} size={16} />
+          </View>
+        </Pressable>
+      </ScrollView>
+      {primaryAction?.status ? <Text style={styles.availabilityDetail}>{primaryAction.status}</Text> : null}
+
+      {availabilityView.playable ? null : (
+        <Text style={styles.availabilityDetail}>{availabilityView.detail}</Text>
+      )}
+    </>
+  )
+}
+
+interface DetailOperationalPanelsProps {
+  detailsOpen: boolean
+  item: MediaCockpitItem & Record<string, any>
+  routeId?: string
+  onSelectSource?: (payload: { entityId: string; publicationId: string; renditionId: string }) => void
+  setSelectedSourceKey: (key: string | null) => void
+  publisherDeviceStatus?: PublisherDeviceStatusInput | null
+  publisherActionHandlers?: Partial<Record<PublisherCapabilityAction, () => void>>
+  type: MediaEntityDetailType
+}
+
+function DetailOperationalPanels({
+  detailsOpen,
+  item,
+  routeId,
+  onSelectSource,
+  setSelectedSourceKey,
+  publisherDeviceStatus,
+  publisherActionHandlers,
+  type,
+}: DetailOperationalPanelsProps) {
+  if (!detailsOpen) return null
+
+  const resolvedDeviceStatus = publisherDeviceStatus || item.publisherDeviceStatus
+
+  const handleSelectSource = (source: Record<string, unknown>) => {
+    setSelectedSourceKey(sourceIdentityKey(source))
+    if (onSelectSource) {
+      onSelectSource({
+        entityId: pickString(item.entityId, item.localEntityId, routeId) || 'entity',
+        publicationId: pickString(source.publicationId) || '',
+        renditionId: pickString(source.renditionId) || '',
+      })
+    }
+  }
+
+  return (
+    <View style={styles.panels}>
+      <ArchiveStatus item={item} />
+      <ConflictNotice item={item} />
+      <SourceSelector
+        item={item}
+        onSelectSource={handleSelectSource}
+      />
+      <ProvenancePanel item={item} />
+      {resolvedDeviceStatus ? (
+        <PublisherDeviceStatus
+          status={resolvedDeviceStatus}
+          actionHandlers={publisherActionHandlers}
+        />
+      ) : null}
+      {type === 'collection' ? <CollectionStructurePanel item={item} /> : null}
+      {type !== 'collection' ? <CreatorContributionsPanel item={item} /> : null}
+    </View>
+  )
+}
+
+
+function DetailRetentionChoices({
+  retentionChoice,
+}: {
+  retentionChoice: NonNullable<MediaEntityDetailScreenProps['retentionChoice']>
+}) {
+  return (
+    <View style={styles.retentionChoices}>
+      {([
+        ['contribution-cache', 'Stream once'],
+        ['archive-pin', 'Keep after watching'],
+      ] as const).map(([value, label]) => (
+        <Pressable
+          key={value}
+          accessibilityRole="button"
+          accessibilityState={{ selected: retentionChoice.value === value }}
+          onPress={() => retentionChoice.onChange(value)}
+          style={[
+            styles.retentionChoice,
+            retentionChoice.value === value && styles.retentionChoiceSelected,
+          ]}
+        >
+          <Text style={styles.secondaryActionLabel}>{label}</Text>
+        </Pressable>
+      ))}
+    </View>
+  )
+}
+
+interface DetailHeroPanelProps {
+  type: MediaEntityDetailType
+  title: string
+  subtitle: string | null
+  ratings: Array<{ label: string; value: string }>
+  certification: string | null
+  genres: string[]
+  year: number | null
+  runtime: string | null
+  synopsis: string | null
+  availabilityView: { label: string; detail: string; playable: boolean }
+  retentionChoice?: MediaEntityDetailScreenProps['retentionChoice']
+  playLabel: string
+  actionDisabled: boolean
+  primaryAction?: MediaEntityDetailScreenProps['primaryAction']
+  onPlay?: () => void
+  progressPercent: number | null
+  detailsOpen: boolean
+  detailsLabel: string
+  setDetailsOpen: React.Dispatch<React.SetStateAction<boolean>>
+}
+
+function DetailHeroPanel({
+  type,
+  title,
+  subtitle,
+  ratings,
+  certification,
+  genres,
+  year,
+  runtime,
+  synopsis,
+  availabilityView,
+  retentionChoice,
+  playLabel,
+  actionDisabled,
+  primaryAction,
+  onPlay,
+  progressPercent,
+  detailsOpen,
+  detailsLabel,
+  setDetailsOpen,
+}: DetailHeroPanelProps) {
+  return (
+    <View style={styles.panel}>
+      <Text style={styles.kicker}>{pageTitleFor(type)}</Text>
+      <Text style={styles.title}>{title}</Text>
+      {subtitle ? <Text style={styles.byline}>{subtitle}</Text> : null}
+
+      <DetailBadgesAndMetadata
+        ratings={ratings}
+        certification={certification}
+        genres={genres}
+        year={year}
+        runtime={runtime}
+        synopsis={synopsis}
+      />
+
+      <Text
+        style={[styles.availability, !availabilityView.playable && styles.availabilityMuted]}
+        accessibilityLabel={`Availability: ${availabilityView.label}. ${availabilityView.detail}`}
+      >
+        {availabilityView.label}
+      </Text>
+
+      {retentionChoice ? <DetailRetentionChoices retentionChoice={retentionChoice} /> : null}
+
+      <DetailActionControls
+        playLabel={playLabel}
+        title={title}
+        actionDisabled={actionDisabled}
+        primaryAction={primaryAction}
+        onPlay={onPlay}
+        progressPercent={progressPercent}
+        detailsOpen={detailsOpen}
+        detailsLabel={detailsLabel}
+        setDetailsOpen={setDetailsOpen}
+        availabilityView={availabilityView}
+      />
+    </View>
+  )
+}
+
+function resolveSelectedSourceOverride(
+  baseItem: MediaCockpitItem & Record<string, any>,
+  selectedSourceKey: string | null,
+) {
+  if (!selectedSourceKey) return null
+  return asArray(baseItem.sources).find((source) => sourceIdentityKey(source) === selectedSourceKey) || null
+}
+
+function resolveDetailAvailabilityView(
+  item: Record<string, any> | null | undefined,
+  availabilityOverride: MediaEntityDetailScreenProps['availabilityOverride'],
+) {
+  if (availabilityOverride) return availabilityOverride
+  const selectedAvailability = asArray(item?.sources).find((source) => source?.selected)?.availability
+  return describeAvailability(item?.availability ?? selectedAvailability ?? null)
+}
+
+function resolveDetailActionState(
+  primaryAction: MediaEntityDetailScreenProps['primaryAction'] | undefined,
+  availabilityPlayable: boolean,
+  resumeFraction: number | null,
+) {
+  const progressPercent = resolveProgressPercent(resumeFraction)
+  return {
+    progressPercent,
+    playLabel: resolvePlayLabel(primaryAction?.label, progressPercent),
+    actionDisabled: primaryAction?.disabled ?? !availabilityPlayable,
+  }
+}
+
+function useMediaEntityDetailModel({
+  type,
+  routeIdProp,
+  itemParam,
+  availabilityOverride,
+  resumeFraction,
+  primaryAction,
+}: {
+  type: MediaEntityDetailType
+  routeIdProp?: string
+  itemParam?: string | string[]
+  availabilityOverride?: MediaEntityDetailScreenProps['availabilityOverride']
+  resumeFraction: number | null
+  primaryAction?: MediaEntityDetailScreenProps['primaryAction']
+}) {
+  const params = useLocalSearchParams()
+  const routeId = routeIdProp || firstParam(params.id)
+  const itemQueryParam = itemParam ?? params.item
+  const decodedItem = useMemo(() => decodeItem(itemQueryParam), [itemQueryParam])
+  const baseItem = useMemo(() => decodedItem || fallbackItemForRoute(type, routeId), [decodedItem, routeId, type])
+  const [selectedSourceKey, setSelectedSourceKey] = useState<string | null>(null)
+
+  useEffect(() => {
+    setSelectedSourceKey(null)
+  }, [params.item, routeId, type])
+
+  const selectedOverride = useMemo(
+    () => resolveSelectedSourceOverride(baseItem, selectedSourceKey),
+    [baseItem, selectedSourceKey],
+  )
+  const item = useMemo(() => applySelectedSource(baseItem, selectedOverride), [baseItem, selectedOverride])
+  const title = resolveDetailTitle(item, type, routeId)
+  const subtitle = pickString(item.subtitle, item.creatorName, item.sourceProviderName, item.publisherName, item.channelName, item.channel?.name)
+  const artwork = usePosterArtwork(item, pickString(item.backdropUrl, item.posterUrl, item.stillUrl, item.thumbnailUrl, item.thumbnail))
+  const sourceCount = resolveSourceCount(item)
+  const synopsis = pickString(item.synopsis, item.description, item.overview)
+  const availabilityView = resolveDetailAvailabilityView(item, availabilityOverride)
+  const genres = mediaGenres(item)
+  const year = releaseYear(item)
+  const runtime = runtimeLabel(item)
+  const ratings = claimedRatings(item)
+  const certification = pickString(item.certification, item.contentRating, item.ageRating)
+  const { progressPercent, playLabel, actionDisabled } = resolveDetailActionState(
+    primaryAction,
+    availabilityView.playable,
+    resumeFraction,
+  )
+  return {
+    routeId,
+    item,
+    title,
+    subtitle,
+    artwork,
+    sourceCount,
+    synopsis,
+    availabilityView,
+    genres,
+    year,
+    runtime,
+    ratings,
+    certification,
+    progressPercent,
+    playLabel,
+    actionDisabled,
+    setSelectedSourceKey,
+  }
+}
+
 export function MediaEntityDetailScreen({
   type,
   routeId: routeIdProp,
@@ -352,52 +804,18 @@ export function MediaEntityDetailScreen({
   initialDetailsOpen = false,
   onBack,
 }: MediaEntityDetailScreenProps) {
-  const params = useLocalSearchParams()
   const router = useRouter()
-  const routeId = routeIdProp || firstParam(params.id)
-  const itemQueryParam = itemParam ?? params.item
-  const decodedItem = useMemo(() => decodeItem(itemQueryParam), [itemQueryParam])
-  const baseItem = useMemo(() => decodedItem || fallbackItemForRoute(type, routeId), [decodedItem, routeId, type])
-  const [selectedSourceKey, setSelectedSourceKey] = useState<string | null>(null)
   // Operational detail stays closed until a viewer deliberately opens it.
   const [detailsOpen, setDetailsOpen] = useState(initialDetailsOpen)
-
-  useEffect(() => {
-    setSelectedSourceKey(null)
-  }, [params.item, routeId, type])
-
-  const selectedOverride = useMemo(() => {
-    if (!selectedSourceKey) return null
-    return asArray(baseItem.sources).find((source) => sourceIdentityKey(source) === selectedSourceKey) || null
-  }, [baseItem, selectedSourceKey])
-  const item = useMemo(() => applySelectedSource(baseItem, selectedOverride), [baseItem, selectedOverride])
-  const title = pickString(item?.title, item?.preferredMetadata?.title, item?.name, routeFallbackTitle(type, routeId)) || pageTitleFor(type)
-  const subtitle = pickString(item?.subtitle, item?.creatorName, item?.sourceProviderName, item?.publisherName, item?.channelName, item?.channel?.name)
-  // Same treatment the home rails give a poster: a blob-claimed cover resolves
-  // through the local blob server, and only older origin claims render flat.
-  const artwork = usePosterArtwork(item, pickString(item?.backdropUrl, item?.posterUrl, item?.stillUrl, item?.thumbnailUrl, item?.thumbnail))
-  const sourceCount = typeof item?.sourceCount === 'number' ? item.sourceCount : Array.isArray(item?.sources) ? item.sources.length : 0
-  const synopsis = pickString(item?.synopsis, item?.description, item?.overview)
-  // One availability answer for the whole screen, from the same assessment the
-  // card quoted; the hero shows it plainly and Other Sources explains it.
-  const availabilityView = availabilityOverride || describeAvailability(
-    item?.availability ?? asArray(item?.sources).find((source) => source?.selected)?.availability ?? null,
-  )
-  const genres = mediaGenres(item)
-  const year = releaseYear(item)
-  const runtime = runtimeLabel(item)
-  const ratings = claimedRatings(item)
-  const certification = pickString(item?.certification, item?.contentRating, item?.ageRating)
-  // Watch progress is device-local, so the primary action can offer to resume
-  // without asking anything of the swarm.
-  const progressPercent = typeof resumeFraction === 'number' && resumeFraction > 0
-    ? Math.min(99, Math.max(1, Math.round(resumeFraction * 100)))
-    : null
-  const playLabel = primaryAction?.label || (progressPercent === null ? 'Watch Now' : 'Resume')
-  const actionDisabled = primaryAction?.disabled ?? !availabilityView.playable
-  const detailsLabel = detailsOpen
-    ? 'Hide details'
-    : `Details and other sources${sourceCount > 1 ? ` (${sourceCount})` : ''}`
+  const model = useMediaEntityDetailModel({
+    type,
+    routeIdProp,
+    itemParam,
+    availabilityOverride,
+    resumeFraction,
+    primaryAction,
+  })
+  const detailsLabel = resolveDetailsLabel(detailsOpen, model.sourceCount)
 
   return (
     <View style={styles.root}>
@@ -405,11 +823,11 @@ export function MediaEntityDetailScreen({
           strength. Everything below the hero spacer is an opaque slab with a
           lime rule on top, so there is no gradient carrying it down. */}
       <View style={styles.backdrop}>
-        {artwork ? (
+        {model.artwork ? (
           <View style={styles.backdropArtwork}>
             <ThumbnailImage
-              thumbnailUrl={artwork}
-              channelInitial={title.charAt(0).toUpperCase()}
+              thumbnailUrl={model.artwork}
+              channelInitial={model.title.charAt(0).toUpperCase()}
               style={styles.backdropImage}
             />
           </View>
@@ -424,172 +842,38 @@ export function MediaEntityDetailScreen({
 
         <View style={styles.heroSpacer} />
 
-        <View style={styles.panel}>
-          <Text style={styles.kicker}>{pageTitleFor(type)}</Text>
-          <Text style={styles.title}>{title}</Text>
-          {subtitle ? <Text style={styles.byline}>{subtitle}</Text> : null}
+        <DetailHeroPanel
+          type={type}
+          title={model.title}
+          subtitle={model.subtitle}
+          ratings={model.ratings}
+          certification={model.certification}
+          genres={model.genres}
+          year={model.year}
+          runtime={model.runtime}
+          synopsis={model.synopsis}
+          availabilityView={model.availabilityView}
+          retentionChoice={retentionChoice}
+          playLabel={model.playLabel}
+          actionDisabled={model.actionDisabled}
+          primaryAction={primaryAction}
+          onPlay={onPlay}
+          progressPercent={model.progressPercent}
+          detailsOpen={detailsOpen}
+          detailsLabel={detailsLabel}
+          setDetailsOpen={setDetailsOpen}
+        />
 
-          {ratings.length > 0 ? (
-            <View style={styles.badgeRow}>
-              {ratings.map((rating) => (
-                <View key={rating.label} style={styles.ratingBadge}>
-                  <Ionicons name="star" color={colors.accentSecondary} size={12} />
-                  <Text style={styles.ratingValue}>{rating.value}</Text>
-                  <Text style={styles.ratingLabel}>{rating.label}</Text>
-                </View>
-              ))}
-            </View>
-          ) : null}
-
-          {certification || genres.length > 0 ? (
-            <View style={styles.badgeRow}>
-              {certification ? (
-                <View style={styles.badge}><Text style={styles.badgeText}>{certification}</Text></View>
-              ) : null}
-              {certification && genres.length > 0 ? <Text style={styles.badgeSeparator}>|</Text> : null}
-              {genres.map((genre) => (
-                <View key={genre} style={styles.badge}><Text style={styles.badgeText}>{genre}</Text></View>
-              ))}
-            </View>
-          ) : null}
-
-          {year !== null || runtime ? (
-            <View style={styles.releaseRow}>
-              {year !== null ? (
-                <View style={styles.releaseItem}>
-                  <Ionicons name="calendar-outline" color={colors.textSecondary} size={14} style={styles.releaseIcon} />
-                  <Text style={styles.releaseValue}>{String(year)}</Text>
-                </View>
-              ) : null}
-              {runtime ? (
-                <View style={styles.releaseItem}>
-                  <Ionicons name="time-outline" color={colors.textSecondary} size={14} style={styles.releaseIcon} />
-                  <Text style={styles.releaseValue}>{runtime}</Text>
-                </View>
-              ) : null}
-            </View>
-          ) : null}
-
-          {synopsis
-            ? Platform.OS === 'web'
-              ? <Text style={styles.overview}>{synopsis}</Text>
-              : <ExpandableOverview text={synopsis} />
-            : null}
-
-          <Text
-            style={[styles.availability, !availabilityView.playable && styles.availabilityMuted]}
-            accessibilityLabel={`Availability: ${availabilityView.label}. ${availabilityView.detail}`}
-          >
-            {availabilityView.label}
-          </Text>
-
-          {retentionChoice ? (
-            <View style={styles.retentionChoices}>
-              {([
-                ['contribution-cache', 'Stream once'],
-                ['archive-pin', 'Keep after watching'],
-              ] as const).map(([value, label]) => (
-                <Pressable
-                  key={value}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: retentionChoice.value === value }}
-                  onPress={() => retentionChoice.onChange(value)}
-                  style={[
-                    styles.retentionChoice,
-                    retentionChoice.value === value && styles.retentionChoiceSelected,
-                  ]}
-                >
-                  <Text style={styles.secondaryActionLabel}>{label}</Text>
-                </Pressable>
-              ))}
-            </View>
-          ) : null}
-
-          {/* One tap plays. The backend already picked the source and fails
-              over, so nothing stands between this button and playback; the
-              per-source diagnostics live behind the disclosure beside it. */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.actionRow}
-          >
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`${playLabel} ${title}`}
-              accessibilityState={{ disabled: actionDisabled }}
-              disabled={actionDisabled}
-              onPress={() => primaryAction ? primaryAction.onPress() : onPlay?.()}
-              style={({ pressed }) => [
-                styles.primaryAction,
-                actionDisabled && styles.actionDisabled,
-                pressed && styles.actionPressed,
-              ]}
-            >
-              <View style={styles.actionContent}>
-                <Ionicons name="play" color={colors.onPrimary} size={20} />
-                <Text style={styles.primaryActionLabel} numberOfLines={1}>{playLabel}</Text>
-              </View>
-            </Pressable>
-
-            {progressPercent === null ? null : (
-              <View style={styles.progressPill}>
-                <Text style={styles.progressText}>{`${progressPercent}%`}</Text>
-              </View>
-            )}
-
-            {/* Consumer surface ends here. Everything behind this disclosure is
-                operational detail a viewer opens deliberately: source
-                diagnostics, archive mechanics, provenance, publisher state. */}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={detailsOpen ? 'Hide details and other sources' : 'Show details and other sources'}
-              accessibilityState={{ expanded: detailsOpen }}
-              onPress={() => setDetailsOpen(open => !open)}
-              style={({ pressed }) => [styles.secondaryAction, pressed && styles.actionPressed]}
-            >
-              <View style={styles.actionContent}>
-                <Text style={styles.secondaryActionLabel} numberOfLines={1}>{detailsLabel}</Text>
-                <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} color={colors.textSecondary} size={16} />
-              </View>
-            </Pressable>
-          </ScrollView>
-          {primaryAction?.status ? <Text style={styles.availabilityDetail}>{primaryAction.status}</Text> : null}
-
-          {availabilityView.playable ? null : (
-            <Text style={styles.availabilityDetail}>{availabilityView.detail}</Text>
-          )}
-        </View>
-
-        {!detailsOpen ? null : (
-        <View style={styles.panels}>
-          <ArchiveStatus item={item} />
-          <ConflictNotice item={item} />
-          <SourceSelector
-            item={item}
-            onSelectSource={(source) => {
-              setSelectedSourceKey(sourceIdentityKey(source))
-              if (onSelectSource) {
-                onSelectSource({
-                  entityId: pickString(item.entityId, item.localEntityId, routeId) || 'entity',
-                  publicationId: pickString(source.publicationId) || '',
-                  renditionId: pickString(source.renditionId) || '',
-                })
-              }
-            }}
-          />
-          <ProvenancePanel item={item} />
-          {publisherDeviceStatus || item.publisherDeviceStatus
-            ? (
-                <PublisherDeviceStatus
-                  status={publisherDeviceStatus || item.publisherDeviceStatus}
-                  actionHandlers={publisherActionHandlers}
-                />
-              )
-            : null}
-          {type === 'collection' ? <CollectionStructurePanel item={item} /> : null}
-          {type !== 'collection' ? <CreatorContributionsPanel item={item} /> : null}
-        </View>
-        )}
+        <DetailOperationalPanels
+          detailsOpen={detailsOpen}
+          item={model.item}
+          routeId={model.routeId}
+          onSelectSource={onSelectSource}
+          setSelectedSourceKey={model.setSelectedSourceKey}
+          publisherDeviceStatus={publisherDeviceStatus}
+          publisherActionHandlers={publisherActionHandlers}
+          type={type}
+        />
       </ScrollView>
     </View>
   )

@@ -21,6 +21,7 @@ import { dirname, join } from 'node:path'
 
 const TEST_FILES = [
   'admission.test.mjs',
+  'archive-console-compat.test.mjs',
   'archive-console-creators.test.mjs',
   'archive-ui.test.mjs',
   'archive-upload.test.mjs',
@@ -45,10 +46,10 @@ const TEST_FILES = [
   'companion-callback-source.test.mjs',
   'creators.test.mjs',
   'local-drive-mirror.test.mjs',
+  'cross-entrypoint-idempotency.test.mjs',
   'tmdb-fetch-injection.test.mjs',
   'status.test.mjs',
   'status-universal.test.mjs',
-  'protocol-version-propagation.test.mjs',
   'universal-backend-cutover.test.mjs',
   'service-universal.test.mjs',
   'trusted-clients.test.mjs',

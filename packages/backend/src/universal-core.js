@@ -60,15 +60,22 @@ function cloneDescriptor(descriptor) {
   }
 }
 
+function eventTimestamp(e) {
+  return safeBigInt(e?.observedAt || e?.localSeenAt || e?.ts || 0n, 0n)
+}
+
+function eventId(e) {
+  return toHex(e?.eventId || e?.entryId || e?.proofId || '')
+}
+
 function compareEventOrder(a, b) {
-  const timeA = safeBigInt(a?.observedAt || a?.localSeenAt || a?.ts || 0n, 0n)
-  const timeB = safeBigInt(b?.observedAt || b?.localSeenAt || b?.ts || 0n, 0n)
+  const timeA = eventTimestamp(a)
+  const timeB = eventTimestamp(b)
   if (timeA > timeB) return 1
   if (timeA < timeB) return -1
-  const eventA = toHex(a?.eventId || a?.entryId || a?.proofId || '')
-  const eventB = toHex(b?.eventId || b?.entryId || b?.proofId || '')
-  return eventA.localeCompare(eventB)
+  return eventId(a).localeCompare(eventId(b))
 }
+
 
 function transitionRank(state) {
   return TRANSITION_RANK[String(state || 'discovered').toLowerCase()] ?? 0
@@ -259,13 +266,43 @@ function normalizePlayerSurface(surface) {
   return surface === PLAYER_MAIN ? PLAYER_MAIN : PLAYER_SHORTS
 }
 
+function resolvePlayerSessionId(normalizedSurface, options) {
+  return options.sessionId || hashText({ surface: normalizedSurface, seed: options.seed || 'player' })
+}
+
+function resolvePlayerId(normalizedSurface, options) {
+  return options.playerId || hashText({ surface: normalizedSurface, playerId: options.playerId || options.seed || 'player' })
+}
+
+function createPlaybackState(options, normalizedSurface) {
+  return {
+    mediaId: toHex(options.currentMediaId || ''),
+    positionMs: safeBigInt(options.positionMs || 0n, 0n),
+    bufferedUntilMs: safeBigInt(options.bufferedUntilMs || 0n, 0n),
+    paused: Boolean(options.paused ?? !options.active),
+    muted: Boolean(options.muted ?? false),
+    visible: Boolean(options.visible ?? (normalizedSurface === PLAYER_MAIN)),
+    pipEnabled: normalizedSurface === PLAYER_MAIN ? Boolean(options.pipEnabled ?? true) : false,
+  }
+}
+
+function createResourcePool(options, policy) {
+  return {
+    cpuBudget: safeNumber(options.cpuBudget, policy.activeBudget),
+    bandwidthBudget: safeNumber(options.bandwidthBudget, policy.backgroundBudget),
+    decodeBudget: safeNumber(options.decodeBudget, policy.maxConcurrentDecodes),
+    prefetchBudget: safeNumber(options.prefetchBudget, policy.maxConcurrentPrefetches),
+    suspended: Boolean(options.suspended ?? false),
+  }
+}
+
 function createPlayerSurfaceState(surface, options = {}) {
   const normalizedSurface = normalizePlayerSurface(surface)
   const policy = { ...DEFAULT_PLAYER_POLICY[normalizedSurface], ...(options.policy || {}) }
   return {
     surface: normalizedSurface,
-    sessionId: options.sessionId || hashText({ surface: normalizedSurface, seed: options.seed || 'player' }),
-    playerId: options.playerId || hashText({ surface: normalizedSurface, playerId: options.playerId || options.seed || 'player' }),
+    sessionId: resolvePlayerSessionId(normalizedSurface, options),
+    playerId: resolvePlayerId(normalizedSurface, options),
     policy,
     active: Boolean(options.active ?? (normalizedSurface === PLAYER_MAIN)),
     suspended: Boolean(options.suspended ?? false),
@@ -276,27 +313,14 @@ function createPlayerSurfaceState(surface, options = {}) {
     lastEventAt: safeBigInt(options.lastEventAt || 0n, 0n),
     currentMediaId: toHex(options.currentMediaId || ''),
     currentQueueId: toHex(options.currentQueueId || ''),
-    playbackState: {
-      mediaId: toHex(options.currentMediaId || ''),
-      positionMs: safeBigInt(options.positionMs || 0n, 0n),
-      bufferedUntilMs: safeBigInt(options.bufferedUntilMs || 0n, 0n),
-      paused: Boolean(options.paused ?? !options.active),
-      muted: Boolean(options.muted ?? false),
-      visible: Boolean(options.visible ?? (normalizedSurface === PLAYER_MAIN)),
-      pipEnabled: normalizedSurface === PLAYER_MAIN ? Boolean(options.pipEnabled ?? true) : false,
-    },
-    resourcePool: {
-      cpuBudget: safeNumber(options.cpuBudget, policy.activeBudget),
-      bandwidthBudget: safeNumber(options.bandwidthBudget, policy.backgroundBudget),
-      decodeBudget: safeNumber(options.decodeBudget, policy.maxConcurrentDecodes),
-      prefetchBudget: safeNumber(options.prefetchBudget, policy.maxConcurrentPrefetches),
-      suspended: Boolean(options.suspended ?? false),
-    },
+    playbackState: createPlaybackState(options, normalizedSurface),
+    resourcePool: createResourcePool(options, policy),
     localState: new Map(),
     localEvents: new Map(),
     queue: [],
   }
 }
+
 
 function createPlayerResourceGate(options = {}) {
   const mainPolicy = { ...DEFAULT_PLAYER_POLICY.main, ...(options.main || {}) }
@@ -488,6 +512,31 @@ export function createPlayerSplitState(options = {}) {
   }
 }
 
+function updateSurfacePlaybackState(surfaceState, event, surface, suspended) {
+  const current = surfaceState.playbackState
+  return {
+    ...current,
+    mediaId: toHex(event.mediaId || current.mediaId),
+    positionMs: safeBigInt(event.positionMs || current.positionMs, 0n),
+    bufferedUntilMs: safeBigInt(event.bufferedUntilMs || current.bufferedUntilMs, 0n),
+    paused: Boolean(event.paused ?? current.paused),
+    muted: Boolean(event.muted ?? current.muted),
+    visible: Boolean(event.visible ?? (surface === PLAYER_MAIN && !suspended)),
+    pipEnabled: surface === PLAYER_MAIN ? Boolean(event.pipEnabled ?? current.pipEnabled) : false,
+  }
+}
+
+function updateSurfaceResourcePool(surfaceState, budget, surface, suspended) {
+  return {
+    ...surfaceState.resourcePool,
+    cpuBudget: budget.activeBudget,
+    bandwidthBudget: surface === PLAYER_MAIN ? Math.max(budget.activeBudget, surfaceState.resourcePool.bandwidthBudget) : budget.backgroundBudget,
+    decodeBudget: budget.maxConcurrentDecodes,
+    prefetchBudget: budget.maxConcurrentPrefetches,
+    suspended,
+  }
+}
+
 function routePlayerEvent(surfaceState, event = {}, sink, resourceGate, globalContext = {}) {
   const surface = surfaceState.surface
   const nextEventAt = safeBigInt(event.observedAt || globalContext.observedAt || Date.now(), nowMs())
@@ -507,24 +556,8 @@ function routePlayerEvent(surfaceState, event = {}, sink, resourceGate, globalCo
   surfaceState.localClock += 1n
   surfaceState.active = !suspended && (surface === PLAYER_MAIN || globalContext.allowShortsWhileMainActive !== false)
   surfaceState.suspended = suspended
-  surfaceState.resourcePool = {
-    ...surfaceState.resourcePool,
-    cpuBudget: budget.activeBudget,
-    bandwidthBudget: surface === PLAYER_MAIN ? Math.max(budget.activeBudget, surfaceState.resourcePool.bandwidthBudget) : budget.backgroundBudget,
-    decodeBudget: budget.maxConcurrentDecodes,
-    prefetchBudget: budget.maxConcurrentPrefetches,
-    suspended,
-  }
-  surfaceState.playbackState = {
-    ...surfaceState.playbackState,
-    mediaId: toHex(event.mediaId || surfaceState.playbackState.mediaId),
-    positionMs: safeBigInt(event.positionMs || surfaceState.playbackState.positionMs, 0n),
-    bufferedUntilMs: safeBigInt(event.bufferedUntilMs || surfaceState.playbackState.bufferedUntilMs, 0n),
-    paused: Boolean(event.paused ?? surfaceState.playbackState.paused),
-    muted: Boolean(event.muted ?? surfaceState.playbackState.muted),
-    visible: Boolean(event.visible ?? (surface === PLAYER_MAIN && !suspended)),
-    pipEnabled: surface === PLAYER_MAIN ? Boolean(event.pipEnabled ?? surfaceState.playbackState.pipEnabled) : false,
-  }
+  surfaceState.resourcePool = updateSurfaceResourcePool(surfaceState, budget, surface, suspended)
+  surfaceState.playbackState = updateSurfacePlaybackState(surfaceState, event, surface, suspended)
   surfaceState.localState.set(event.kind || 'state', {
     ...event,
     surface,
@@ -934,11 +967,12 @@ export function createUniversalCore(options = {}) {
     return { accepted: result.applied, record: result.record, state: concurrentState }
   }
 
-  function ingestProof(proof, context = {}) {
-    const descriptorId = descriptorIdOf(proof?.descriptorId || proof?.descriptor || '')
-    if (!descriptorId) return { accepted: false, reason: 'missing-descriptor-id' }
-    const reachable = Boolean(proof?.reachable !== false && proof?.signatureValid !== false)
-    const result = applyConcurrentUpdate(concurrentState, {
+  function isProofReachable(proof) {
+    return Boolean(proof?.reachable !== false && proof?.signatureValid !== false)
+  }
+
+  function buildProofUpdatePayload(proof, context, descriptorId, reachable) {
+    return {
       descriptorId,
       descriptor: context.descriptor || proof.descriptor || { descriptorId },
       state: reachable ? 'active' : 'quarantined',
@@ -949,13 +983,29 @@ export function createUniversalCore(options = {}) {
       tombstonedAt: proof.tombstonedAt || 0n,
       signatureValid: proof.signatureValid !== false,
       reachable,
-    }, context)
-
-    if (reachable && result.applied) {
-      recordUsefulWork('proof-accepted', 1, { descriptorId, peerId: context.peerId, at: context.observedAt || Date.now() })
-    } else {
-      recordUsefulWork('proof-rejected', 1, { descriptorId, peerId: context.peerId, at: context.observedAt || Date.now() })
     }
+  }
+
+  function recordProofWork(reachable, applied, descriptorId, context) {
+    const kind = reachable && applied ? 'proof-accepted' : 'proof-rejected'
+    recordUsefulWork(kind, 1, {
+      descriptorId,
+      peerId: context.peerId,
+      at: context.observedAt || Date.now(),
+    })
+  }
+
+  function ingestProof(proof, context = {}) {
+    const descriptorId = descriptorIdOf(proof?.descriptorId || proof?.descriptor || '')
+    if (!descriptorId) return { accepted: false, reason: 'missing-descriptor-id' }
+    const reachable = isProofReachable(proof)
+    const result = applyConcurrentUpdate(
+      concurrentState,
+      buildProofUpdatePayload(proof, context, descriptorId, reachable),
+      context
+    )
+
+    recordProofWork(reachable, result.applied, descriptorId, context)
     return { accepted: result.applied, record: result.record, state: concurrentState }
   }
 

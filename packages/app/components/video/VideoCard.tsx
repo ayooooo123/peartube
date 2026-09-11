@@ -213,39 +213,43 @@ function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = 
   )
 }
 
+const VIDEO_COMPARE_FIELDS = [
+  'id',
+  'title',
+  'thumbnailUrl',
+  'thumbnail',
+  'duration',
+  'uploadedAt',
+  'createdAt',
+  'channelKey',
+  'driveKey',
+  'creatorName',
+  'contentKind',
+  'seasonNumber',
+  'episodeNumber',
+] as const
+
+function areCallbacksAndFlagsEqual(prevProps: VideoCardProps, nextProps: VideoCardProps): boolean {
+  return (
+    prevProps.onPress === nextProps.onPress &&
+    prevProps.onChannelPress === nextProps.onChannelPress &&
+    prevProps.showChannelInfo === nextProps.showChannelInfo
+  )
+}
+
+function areVideoPropertiesEqual(prev: VideoCardProps['video'], next: VideoCardProps['video']): boolean {
+  if (prev === next) return true
+  for (const field of VIDEO_COMPARE_FIELDS) {
+    if (prev[field] !== next[field]) return false
+  }
+  return prev.channel?.name === next.channel?.name
+}
+
 // Custom comparison for React.memo - only re-render if video data actually changed
 function arePropsEqual(prevProps: VideoCardProps, nextProps: VideoCardProps): boolean {
-  // Quick reference check first
-  if (prevProps.video === nextProps.video &&
-      prevProps.onPress === nextProps.onPress &&
-      prevProps.onChannelPress === nextProps.onChannelPress &&
-      prevProps.showChannelInfo === nextProps.showChannelInfo) {
-    return true
-  }
-
-  // Deep comparison of video data that affects rendering
-  const prev = prevProps.video
-  const next = nextProps.video
-
-  return (
-    prev.id === next.id &&
-    prev.title === next.title &&
-    prev.thumbnailUrl === next.thumbnailUrl &&
-    prev.thumbnail === next.thumbnail &&
-    prev.duration === next.duration &&
-    prev.uploadedAt === next.uploadedAt &&
-    prev.createdAt === next.createdAt &&
-    prev.channelKey === next.channelKey &&
-    prev.driveKey === next.driveKey &&
-    prev.creatorName === next.creatorName &&
-    prev.contentKind === next.contentKind &&
-    prev.seasonNumber === next.seasonNumber &&
-    prev.episodeNumber === next.episodeNumber &&
-    prev.channel?.name === next.channel?.name &&
-    prevProps.onPress === nextProps.onPress &&
-    prevProps.showChannelInfo === nextProps.showChannelInfo &&
-    prevProps.onChannelPress === nextProps.onChannelPress
-  )
+  if (prevProps === nextProps) return true
+  if (!areCallbacksAndFlagsEqual(prevProps, nextProps)) return false
+  return areVideoPropertiesEqual(prevProps.video, nextProps.video)
 }
 
 export const VideoCard = memo(VideoCardComponent, arePropsEqual)

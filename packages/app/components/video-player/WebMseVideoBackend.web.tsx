@@ -170,6 +170,568 @@ function createSourceBufferOps(sb: SourceBuffer, el: HTMLVideoElement) {
 
   return { waitForUpdate, safeAppend, removeRange, isBuffered }
 }
+type SourceBufferOps = {
+  waitForUpdate: () => Promise<void>
+  safeAppend: (data: Uint8Array) => Promise<boolean>
+  removeRange: (start: number, end: number) => Promise<void>
+  isBuffered: (time: number) => boolean
+}
+
+async function evictBehindPlayhead(
+  currentTime: number,
+  sb: SourceBuffer,
+  ops: SourceBufferOps
+): Promise<void> {
+  const evictEnd = currentTime - BUFFER_BEHIND_SEC
+  if (sb.buffered.length > 0 && sb.buffered.start(0) < evictEnd) {
+    await ops.removeRange(sb.buffered.start(0), evictEnd)
+  }
+}
+
+async function handleCompatPlaylistExhaustion(
+  playlist: ParsedMediaPlaylist,
+  ops: SourceBufferOps,
+  ms: MediaSource,
+  refreshPlaylist: () => Promise<ParsedMediaPlaylist | null>
+): Promise<boolean> {
+  if (playlist.ended) {
+    await ops.waitForUpdate()
+    if (ms.readyState === 'open') {
+      try { ms.endOfStream() } catch {}
+    }
+    return true
+  }
+  await sleep(PLAYLIST_POLL_MS)
+  await refreshPlaylist()
+  return false
+}
+
+async function waitForInitialCompatPlaylist(
+  ctl: { disposed: boolean },
+  refreshPlaylist: () => Promise<ParsedMediaPlaylist | null>,
+  onError?: (error: any) => void
+): Promise<ParsedMediaPlaylist | null> {
+  const readyDeadline = Date.now() + PLAYLIST_READY_TIMEOUT_MS
+  while (!ctl.disposed) {
+    const nextPlaylist = await refreshPlaylist()
+    if (nextPlaylist && nextPlaylist.segments.length > 0) {
+      return nextPlaylist
+    }
+    if (nextPlaylist?.ended || Date.now() > readyDeadline) {
+      onError?.({ message: 'Compat transcode produced no playable segments' })
+      return null
+    }
+    await sleep(PLAYLIST_POLL_MS)
+  }
+  return null
+}
+
+async function createCompatMediaSource(
+  el: HTMLVideoElement,
+  videoCodecString: string | null,
+  durationHint: number,
+  onLoad?: (data?: any) => void,
+  onError?: (error: any) => void
+): Promise<{ ms: MediaSource; sb: SourceBuffer; ops: SourceBufferOps } | null> {
+  const ms = new MediaSource()
+  el.src = URL.createObjectURL(ms)
+  await new Promise<void>(r => { ms.onsourceopen = () => r() })
+
+  let sb: SourceBuffer | null = null
+  for (const mime of buildCompatMimeCandidates(videoCodecString)) {
+    if (MediaSource.isTypeSupported(mime)) {
+      try {
+        sb = ms.addSourceBuffer(mime)
+        break
+      } catch {}
+    }
+  }
+  if (!sb) {
+    onError?.({ message: 'No MSE MIME support for compat stream' })
+    return null
+  }
+
+  const ops = createSourceBufferOps(sb, el)
+  if (durationHint > 0) {
+    await ops.waitForUpdate()
+    try { ms.duration = durationHint } catch {}
+    onLoad?.({ duration: durationHint, durationMs: Math.round(durationHint * 1000) })
+  }
+  return { ms, sb, ops }
+}
+
+async function readTrackCodecParameterString(usable: boolean, track: any): Promise<string | null> {
+  if (!usable || !track) return null
+  try {
+    return await track.getCodecParameterString()
+  } catch {
+    return null
+  }
+}
+
+function resolveNeedsCompatPlayback(
+  videoUsable: boolean,
+  videoCodecString: string | null,
+  audioTrack: any,
+  audioUsable: boolean,
+  audioCodecString: string | null,
+): boolean {
+  const audioPlayable = Boolean(
+    audioUsable && videoCodecString && audioCodecString &&
+    MediaSource.isTypeSupported(`video/mp4; codecs="${videoCodecString}, ${audioCodecString}"`)
+  )
+  const videoPlayable = Boolean(
+    videoUsable && (!videoCodecString ||
+      MediaSource.isTypeSupported(`video/mp4; codecs="${videoCodecString}"`))
+  )
+  return !videoPlayable || Boolean(audioTrack && !audioPlayable)
+}
+
+async function inspectMediaTracks(input: any, mb: any) {
+  const videoTrack = await input.getPrimaryVideoTrack()
+  if (!videoTrack) return null
+
+  const videoCodec = await videoTrack.getCodec()
+  const videoDecoderConfig = videoCodec ? await videoTrack.getDecoderConfig() : null
+  const mp4Codecs = new mb.Mp4OutputFormat({ fastStart: 'fragmented' }).getSupportedCodecs()
+  const videoUsable = Boolean(videoCodec && videoDecoderConfig && mp4Codecs.includes(videoCodec))
+
+  const audioTrack = await input.getPrimaryAudioTrack()
+  const audioCodec = audioTrack ? await audioTrack.getCodec() : null
+  const audioDecoderConfig = audioTrack && audioCodec ? await audioTrack.getDecoderConfig() : null
+  const audioUsable = Boolean(audioCodec && audioDecoderConfig && mp4Codecs.includes(audioCodec))
+
+  const videoCodecString = await readTrackCodecParameterString(videoUsable, videoTrack)
+  const audioCodecString = await readTrackCodecParameterString(audioUsable, audioTrack)
+  const duration = await input.computeDuration()
+  const needsCompat = resolveNeedsCompatPlayback(
+    videoUsable,
+    videoCodecString,
+    audioTrack,
+    audioUsable,
+    audioCodecString,
+  )
+
+  return {
+    videoTrack,
+    videoCodec,
+    videoDecoderConfig,
+    videoUsable,
+    audioTrack,
+    audioCodec,
+    audioDecoderConfig,
+    audioUsable,
+    videoCodecString,
+    audioCodecString,
+    duration,
+    needsCompat,
+  }
+}
+
+async function resolvePipelineStartPacket(videoSink: any, fromTime: number) {
+  let startPacket = await videoSink.getKeyPacket(Math.max(0, fromTime), { verifyKeyPackets: true })
+  if (!startPacket) startPacket = await videoSink.getFirstKeyPacket({ verifyKeyPackets: true })
+  return startPacket
+}
+
+function packetTimestamp(value: unknown): number {
+  if (value && typeof value === 'object' && 'timestamp' in value) {
+    const timestamp = value.timestamp
+    if (typeof timestamp === 'number' && Number.isFinite(timestamp)) return timestamp
+  }
+  return Infinity
+}
+
+async function openAudioPacketCursor(audioSink: unknown, startTime: number) {
+  type PacketIter = AsyncGenerator<unknown, void, unknown>
+  type PacketCursor = {
+    audioIter: PacketIter | null
+    nextAudio: IteratorResult<unknown> | null
+  }
+  const empty: PacketCursor = { audioIter: null, nextAudio: null }
+  if (!audioSink || typeof audioSink !== 'object') return empty
+  // mediabunny EncodedPacketSink — no project type surface
+  const sink = audioSink as {
+    getPacket: (time: number) => Promise<unknown>
+    getFirstPacket: () => Promise<unknown>
+    packets: (start: unknown) => PacketIter
+  }
+  const audioStart = (await sink.getPacket(startTime)) ?? (await sink.getFirstPacket())
+  if (!audioStart) return empty
+  const audioIter = sink.packets(audioStart)
+  return { audioIter, nextAudio: await audioIter.next() }
+}
+
+
+async function drainRemuxPendingSegments(opts: {
+  pending: Segment[]
+  remux: {
+    getInitSegment: () => Uint8Array | null
+    isInitAppended: () => boolean
+    setInitAppended: (val: boolean) => void
+  }
+  ops: SourceBufferOps
+  stale: () => boolean
+  onFirstFragmentAppended: () => void
+}): Promise<boolean> {
+  const { pending, remux, ops, stale, onFirstFragmentAppended } = opts
+  while (pending.length > 0) {
+    if (stale()) return false
+    if (!remux.isInitAppended()) {
+      const initSegment = remux.getInitSegment()
+      if (!initSegment) return true // moov not written yet, fragments can't precede it for long
+      if (!(await ops.safeAppend(initSegment))) return false
+      if (stale()) return false
+      remux.setInitAppended(true)
+    }
+    const segment = pending.shift()!
+    if (!(await ops.safeAppend(segment.data))) return false
+    if (stale()) return false
+    onFirstFragmentAppended()
+  }
+  return true
+}
+
+function shouldThrottleRemuxPump(
+  pendingCount: number,
+  headTimestamp: number,
+  currentTime: number,
+  isBufferedAtPlayhead: boolean,
+): boolean {
+  return pendingCount > MAX_PENDING_SEGMENTS
+    || (headTimestamp > currentTime + BUFFER_AHEAD_SEC && isBufferedAtPlayhead)
+}
+
+function reportPipelineError(
+  err: unknown,
+  stale: () => boolean,
+  onError?: (error: { message: string }) => void,
+) {
+  if (stale()) return
+  const message = err instanceof Error && err.message
+    ? err.message
+    : 'Remux pipeline error'
+  console.warn('[WebMseBackend] Pipeline error:', message)
+  onError?.({ message })
+}
+
+async function cleanupRemuxPipelineResources(opts: {
+  output: { state?: string; cancel: () => Promise<void> }
+  activeOutput: unknown
+  clearActiveOutput: () => void
+  videoIter: AsyncGenerator<unknown, void, unknown>
+  audioIter: AsyncGenerator<unknown, void, unknown> | null
+}) {
+  const { output, activeOutput, clearActiveOutput, videoIter, audioIter } = opts
+  if (activeOutput === output) clearActiveOutput()
+  if (output.state === 'pending' || output.state === 'started') {
+    output.cancel().catch(() => {})
+  }
+  try { videoIter.return?.(undefined) } catch {}
+  try { audioIter?.return?.(undefined) } catch {}
+}
+
+async function pumpRemuxPacketLoop(opts: {
+  stale: () => boolean
+  drain: () => Promise<boolean>
+  pending: Segment[]
+  output: { state?: string; cancel: () => Promise<void>; finalize?: () => Promise<void> }
+  getActiveOutput: () => unknown
+  clearActiveOutputIfCurrent: (output: unknown) => void
+  ops: SourceBufferOps
+  ms: MediaSource
+  el: HTMLVideoElement
+  sb: SourceBuffer
+  videoOut: unknown
+  audioOut: unknown
+  videoDecoderConfigForOutput: unknown
+  audioDecoderConfig: unknown
+  videoIter: AsyncGenerator<unknown, void, unknown>
+  audioIter: AsyncGenerator<unknown, void, unknown> | null
+  nextVideo: IteratorResult<unknown>
+  nextAudio: IteratorResult<unknown> | null
+  onError?: (error: { message: string }) => void
+}): Promise<void> {
+  const {
+    stale,
+    drain,
+    pending,
+    output,
+    getActiveOutput,
+    clearActiveOutputIfCurrent,
+    ops,
+    ms,
+    el,
+    sb,
+    videoOut,
+    audioOut,
+    videoDecoderConfigForOutput,
+    audioDecoderConfig,
+    videoIter,
+    audioIter,
+    onError,
+  } = opts
+  let nextVideo = opts.nextVideo
+  let nextAudio = opts.nextAudio
+  const packetState = { firstVideo: true, firstAudio: true }
+
+  try {
+    while (!stale()) {
+      if (!(await drain())) break
+
+      const videoDone = nextVideo.done === true
+      const audioDone = !nextAudio || nextAudio.done === true
+      if (videoDone && audioDone) {
+        clearActiveOutputIfCurrent(output)
+        await finalizePipelineOutput(output, drain, ops, ms, stale)
+        return
+      }
+
+      // Throttle: stay BUFFER_AHEAD_SEC ahead of the playhead, evict behind
+      const headTimestamp = Math.min(
+        videoDone ? Infinity : packetTimestamp(nextVideo.value),
+        audioDone ? Infinity : packetTimestamp(nextAudio!.value)
+      )
+      if (shouldThrottleRemuxPump(
+        pending.length,
+        headTimestamp,
+        el.currentTime,
+        ops.isBuffered(el.currentTime),
+      )) {
+        await evictBehindPlayhead(el.currentTime, sb, ops)
+        await sleep(POLL_MS)
+        continue
+      }
+
+      const fed = await feedTrackPacket(
+        videoDone,
+        audioDone,
+        nextVideo,
+        nextAudio,
+        videoOut,
+        audioOut,
+        videoDecoderConfigForOutput,
+        audioDecoderConfig,
+        packetState,
+        videoIter,
+        audioIter
+      )
+      nextVideo = fed.nextVideo
+      nextAudio = fed.nextAudio
+    }
+  } catch (err: unknown) {
+    reportPipelineError(err, stale, onError)
+  } finally {
+    await cleanupRemuxPipelineResources({
+      output,
+      activeOutput: getActiveOutput(),
+      clearActiveOutput: () => clearActiveOutputIfCurrent(output),
+      videoIter,
+      audioIter,
+    })
+  }
+}
+
+async function tryCompatFallback(opts: {
+  needsCompat: boolean
+  requestCompatPlayback?: () => Promise<CompatPlaybackResult>
+  input: any
+  progressTimer: ReturnType<typeof setInterval>
+  disposeRef: React.MutableRefObject<(() => void) | null>
+  callbacksRef: React.MutableRefObject<any>
+  isPlayingRef: React.MutableRefObject<boolean>
+  requestDesiredPlayback: () => void
+  el: HTMLVideoElement
+  videoCodecString: string | null
+  duration: number
+}): Promise<boolean> {
+  const {
+    needsCompat,
+    requestCompatPlayback,
+    input,
+    progressTimer,
+    disposeRef,
+    callbacksRef,
+    isPlayingRef,
+    requestDesiredPlayback,
+    el,
+    videoCodecString,
+    duration,
+  } = opts
+
+  if (!needsCompat || !requestCompatPlayback) return false
+
+  let compat: CompatPlaybackResult = null
+  try { compat = await requestCompatPlayback() } catch {}
+  if (compat?.transcoded && compat.url) {
+    console.log('[WebMseBackend] Using compat fragment source')
+    try { (input as any).dispose?.() } catch {}
+    const compatDisposeRef: { current: (() => void) | null } = { current: null }
+    disposeRef.current = () => {
+      clearInterval(progressTimer)
+      compatDisposeRef.current?.()
+    }
+    await runCompatHlsPipeline({
+      el,
+      hlsUrl: compat.url,
+      videoCodecString,
+      durationHint: duration > 0 ? duration : 0,
+      onLoad: (data) => callbacksRef.current.onLoad?.(data),
+      onError: (error) => callbacksRef.current.onError?.(error),
+      setDispose: (fn) => { compatDisposeRef.current = fn },
+      shouldAutoPlay: () => isPlayingRef.current,
+      requestAutoplay: requestDesiredPlayback,
+    })
+    return true
+  }
+  if (compat?.transcodeError) {
+    console.warn('[WebMseBackend] Compat playback unavailable:', compat.transcodeError)
+  }
+  return false
+}
+
+function buildMimeCandidates(
+  videoCodecString: string | null,
+  audioCodecString: string | null,
+  audioUsable: boolean
+): Array<{ mime: string; withAudio: boolean }> {
+  const mimeCandidates: Array<{ mime: string; withAudio: boolean }> = []
+  if (videoCodecString) {
+    if (audioCodecString) {
+      mimeCandidates.push({ mime: `video/mp4; codecs="${videoCodecString}, ${audioCodecString}"`, withAudio: true })
+    }
+    mimeCandidates.push({ mime: `video/mp4; codecs="${videoCodecString}"`, withAudio: false })
+  }
+  for (const legacy of ['video/mp4; codecs="hev1.1.6.L150.B0"', 'video/mp4; codecs="avc1.640032"', 'video/mp4']) {
+    mimeCandidates.push({ mime: legacy, withAudio: audioUsable })
+  }
+  return mimeCandidates
+}
+
+async function createRemuxMediaSource(
+  el: HTMLVideoElement,
+  mimeCandidates: Array<{ mime: string; withAudio: boolean }>,
+  duration: number,
+  callbacksRef: React.MutableRefObject<any>
+): Promise<{ ms: MediaSource; sb: SourceBuffer; includeAudio: boolean; ops: SourceBufferOps } | null> {
+  const ms = new MediaSource()
+  el.src = URL.createObjectURL(ms)
+  await new Promise<void>(r => { ms.onsourceopen = () => r() })
+
+  let sb: SourceBuffer | null = null
+  let includeAudio = false
+  for (const candidate of mimeCandidates) {
+    if (MediaSource.isTypeSupported(candidate.mime)) {
+      try {
+        sb = ms.addSourceBuffer(candidate.mime)
+        includeAudio = candidate.withAudio
+        break
+      } catch {}
+    }
+  }
+  if (!sb) {
+    callbacksRef.current.onError?.({ message: 'No MSE MIME support' })
+    return null
+  }
+
+  const ops = createSourceBufferOps(sb, el)
+  if (duration > 0) {
+    await ops.waitForUpdate()
+    try { ms.duration = duration } catch {}
+    callbacksRef.current.onLoad?.({ duration, durationMs: Math.round(duration * 1000) })
+  }
+  return { ms, sb, includeAudio, ops }
+}
+
+function createRemuxPipelineOutput(
+  mb: any,
+  videoCodec: string,
+  audioCodec: string | null,
+  hasAudioSink: boolean
+) {
+  const pending: Segment[] = []
+  let ftyp: Uint8Array | null = null
+  let initSegment: Uint8Array | null = null
+  let initAppended = false
+  let lastMoof: { data: Uint8Array; time: number } | null = null
+
+  const output = new mb.Output({
+    target: new mb.NullTarget(),
+    format: new mb.Mp4OutputFormat({
+      fastStart: 'fragmented',
+      onFtyp: (data: Uint8Array) => { ftyp = new Uint8Array(data) },
+      onMoov: (data: Uint8Array) => {
+        initSegment = ftyp ? concatBytes(ftyp, new Uint8Array(data)) : new Uint8Array(data)
+      },
+      onMoof: (data: Uint8Array, _pos: number, timestamp: number) => {
+        lastMoof = { data: new Uint8Array(data), time: timestamp }
+      },
+      onMdat: (data: Uint8Array) => {
+        if (!lastMoof) return
+        pending.push({ time: lastMoof.time, data: concatBytes(lastMoof.data, new Uint8Array(data)) })
+        lastMoof = null
+      },
+    }),
+  })
+
+  const videoOut = new mb.EncodedVideoPacketSource(videoCodec)
+  output.addVideoTrack(videoOut)
+  let audioOut: any = null
+  if (hasAudioSink && audioCodec) {
+    audioOut = new mb.EncodedAudioPacketSource(audioCodec)
+    output.addAudioTrack(audioOut)
+  }
+
+  return {
+    output,
+    videoOut,
+    audioOut,
+    pending,
+    getInitSegment: () => initSegment,
+    isInitAppended: () => initAppended,
+    setInitAppended: (val: boolean) => { initAppended = val },
+  }
+}
+
+async function feedTrackPacket(
+  videoDone: boolean,
+  audioDone: boolean,
+  nextVideo: IteratorResult<any>,
+  nextAudio: IteratorResult<any> | null,
+  videoOut: any,
+  audioOut: any,
+  videoDecoderConfigForOutput: any,
+  audioDecoderConfig: any,
+  state: { firstVideo: boolean; firstAudio: boolean },
+  videoIter: AsyncGenerator<any, void, unknown>,
+  audioIter: AsyncGenerator<any, void, unknown> | null
+): Promise<{ nextVideo: IteratorResult<any>; nextAudio: IteratorResult<any> | null }> {
+  if (audioDone || (!videoDone && nextVideo.value.timestamp <= nextAudio!.value.timestamp)) {
+    await videoOut.add(nextVideo.value, state.firstVideo ? { decoderConfig: videoDecoderConfigForOutput } : undefined)
+    state.firstVideo = false
+    return { nextVideo: await videoIter.next(), nextAudio }
+  }
+  await audioOut.add(nextAudio!.value, state.firstAudio ? { decoderConfig: audioDecoderConfig } : undefined)
+  state.firstAudio = false
+  return { nextVideo, nextAudio: await audioIter!.next() }
+}
+
+async function finalizePipelineOutput(
+  output: any,
+  drain: () => Promise<boolean>,
+  ops: SourceBufferOps,
+  ms: MediaSource,
+  stale: () => boolean
+): Promise<void> {
+  await output.finalize()
+  await drain()
+  if (!stale()) {
+    await ops.waitForUpdate()
+    if (ms.readyState === 'open') {
+      try { ms.endOfStream() } catch {}
+    }
+  }
+}
 
 /**
  * Compat fragment source: pull fMP4 fragments produced by the backend
@@ -230,46 +792,12 @@ async function runCompatHlsPipeline(opts: {
     return playlist
   }
 
-  // Wait for the first segment (transcode startup).
-  const readyDeadline = Date.now() + PLAYLIST_READY_TIMEOUT_MS
-  while (!ctl.disposed) {
-    const nextPlaylist = await refreshPlaylist()
-    if (nextPlaylist && nextPlaylist.segments.length > 0) {
-      playlist = nextPlaylist
-      break
-    }
-    if (nextPlaylist?.ended || Date.now() > readyDeadline) {
-      onError?.({ message: 'Compat transcode produced no playable segments' })
-      return
-    }
-    await sleep(PLAYLIST_POLL_MS)
-  }
+  playlist = await waitForInitialCompatPlaylist(ctl, refreshPlaylist, onError)
   if (ctl.disposed || !playlist) return
 
-  const ms = new MediaSource()
-  el.src = URL.createObjectURL(ms)
-  await new Promise<void>(r => { ms.onsourceopen = () => r() })
-  if (ctl.disposed) return
-
-  let sb: SourceBuffer | null = null
-  for (const mime of buildCompatMimeCandidates(videoCodecString)) {
-    if (MediaSource.isTypeSupported(mime)) {
-      try {
-        sb = ms.addSourceBuffer(mime)
-        break
-      } catch {}
-    }
-  }
-  if (!sb) { onError?.({ message: 'No MSE MIME support for compat stream' }); return }
-
-  const ops = createSourceBufferOps(sb, el)
-
-  if (durationHint > 0) {
-    await ops.waitForUpdate()
-    try { ms.duration = durationHint } catch {}
-    onLoad?.({ duration: durationHint, durationMs: Math.round(durationHint * 1000) })
-  }
-
+  const sourceSetup = await createCompatMediaSource(el, videoCodecString, durationHint, onLoad, onError)
+  if (!sourceSetup || ctl.disposed) return
+  const { ms, sb, ops } = sourceSetup
   let playbackStarted = false
 
   const pump = async (startIndex: number, gen: number) => {
@@ -282,25 +810,16 @@ async function runCompatHlsPipeline(opts: {
     let index = startIndex
     while (!stale(gen)) {
       if (index >= playlist!.segments.length) {
-        if (playlist!.ended) {
-          await ops.waitForUpdate()
-          if (ms.readyState === 'open') {
-            try { ms.endOfStream() } catch {}
-          }
+        if (await handleCompatPlaylistExhaustion(playlist!, ops, ms, refreshPlaylist)) {
           return
         }
-        await sleep(PLAYLIST_POLL_MS)
-        await refreshPlaylist()
         continue
       }
 
       // Throttle: stay BUFFER_AHEAD_SEC ahead of the playhead, evict behind
       const seg = playlist!.segments[index]
       if (seg.start > el.currentTime + BUFFER_AHEAD_SEC && ops.isBuffered(el.currentTime)) {
-        const evictEnd = el.currentTime - BUFFER_BEHIND_SEC
-        if (sb!.buffered.length > 0 && sb!.buffered.start(0) < evictEnd) {
-          await ops.removeRange(sb!.buffered.start(0), evictEnd)
-        }
+        await evictBehindPlayhead(el.currentTime, sb, ops)
         await sleep(POLL_MS)
         continue
       }
@@ -487,13 +1006,8 @@ export const WebMseVideoBackend = memo(function WebMseVideoBackend({
         const mb = await import('mediabunny')
         const {
           Input,
-          Output,
           UrlSource,
-          Mp4OutputFormat,
-          NullTarget,
           EncodedPacketSink,
-          EncodedVideoPacketSource,
-          EncodedAudioPacketSource,
         } = mb
         const ALL_FORMATS = mb.ALL_FORMATS || [mb.MatroskaInputFormat, mb.Mp4InputFormat].filter(Boolean)
 
@@ -503,74 +1017,40 @@ export const WebMseVideoBackend = memo(function WebMseVideoBackend({
         })
         const input = new Input({ source, formats: ALL_FORMATS, prefetchProfile: 'network' } as any)
 
-        const videoTrack = await input.getPrimaryVideoTrack()
-        if (!videoTrack) {
+        const inspection = await inspectMediaTracks(input, mb)
+        if (!inspection) {
           callbacksRef.current.onError?.({ message: 'No video track' })
           return
         }
-        const videoCodec = await videoTrack.getCodec()
-        const videoDecoderConfig = videoCodec ? await videoTrack.getDecoderConfig() : null
-        const mp4Codecs = new Mp4OutputFormat({ fastStart: 'fragmented' }).getSupportedCodecs()
-        const videoUsable = Boolean(videoCodec && videoDecoderConfig && mp4Codecs.includes(videoCodec))
+        const {
+          videoTrack,
+          videoCodec,
+          videoDecoderConfig,
+          videoUsable,
+          audioTrack,
+          audioCodec,
+          audioDecoderConfig,
+          audioUsable,
+          videoCodecString,
+          audioCodecString,
+          duration,
+          needsCompat,
+        } = inspection
 
-        const audioTrack = await input.getPrimaryAudioTrack()
-        const audioCodec = audioTrack ? await audioTrack.getCodec() : null
-        const audioDecoderConfig = audioTrack && audioCodec ? await audioTrack.getDecoderConfig() : null
-        const audioUsable = Boolean(audioCodec && audioDecoderConfig && mp4Codecs.includes(audioCodec))
-
-        // Build the SourceBuffer MIME from the precise codec strings, falling
-        // back to the legacy hardcoded candidates.
-        let videoCodecString: string | null = null
-        try { videoCodecString = videoUsable ? await videoTrack.getCodecParameterString() : null } catch {}
-        let audioCodecString: string | null = null
-        try { audioCodecString = audioUsable ? await audioTrack!.getCodecParameterString() : null } catch {}
-
-        // Real duration is known up front from the container index.
-        const duration = await input.computeDuration()
-
-        // Capability gate (see the MSE-fallback design doc): the source plays
-        // through mediabunny remux only if mediabunny can repackage every track
-        // into fMP4 AND this webview reports it can decode them. Otherwise ask
-        // the backend for a bare-ffmpeg compat stream (audio→AAC, video copy).
-        const audioPlayable = Boolean(
-          audioUsable && videoCodecString && audioCodecString &&
-          MediaSource.isTypeSupported(`video/mp4; codecs="${videoCodecString}, ${audioCodecString}"`)
-        )
-        const videoPlayable = Boolean(
-          videoUsable && (!videoCodecString ||
-            MediaSource.isTypeSupported(`video/mp4; codecs="${videoCodecString}"`))
-        )
-        const needsCompat = !videoPlayable || (audioTrack && !audioPlayable)
-
-        const requestCompatPlayback = callbacksRef.current.requestCompatPlayback
-        if (needsCompat && requestCompatPlayback) {
-          let compat: CompatPlaybackResult = null
-          try { compat = await requestCompatPlayback() } catch {}
-          if (compat?.transcoded && compat.url) {
-            console.log('[WebMseBackend] Using compat fragment source')
-            try { (input as any).dispose?.() } catch {}
-            const compatDisposeRef: { current: (() => void) | null } = { current: null }
-            disposeRef.current = () => {
-              clearInterval(progressTimer)
-              compatDisposeRef.current?.()
-            }
-            await runCompatHlsPipeline({
-              el,
-              hlsUrl: compat.url,
-              videoCodecString,
-              durationHint: duration > 0 ? duration : 0,
-              onLoad: (data) => callbacksRef.current.onLoad?.(data),
-              onError: (error) => callbacksRef.current.onError?.(error),
-              setDispose: (fn) => { compatDisposeRef.current = fn },
-              shouldAutoPlay: () => isPlayingRef.current,
-              requestAutoplay: requestDesiredPlayback,
-            })
-            return
-          }
-          if (compat?.transcodeError) {
-            console.warn('[WebMseBackend] Compat playback unavailable:', compat.transcodeError)
-          }
-        }
+        const usedCompat = await tryCompatFallback({
+          needsCompat,
+          requestCompatPlayback: callbacksRef.current.requestCompatPlayback,
+          input,
+          progressTimer,
+          disposeRef,
+          callbacksRef,
+          isPlayingRef,
+          requestDesiredPlayback,
+          el,
+          videoCodecString,
+          duration,
+        })
+        if (usedCompat) return
 
         if (!videoUsable || !videoCodec) {
           callbacksRef.current.onError?.({ message: `Unsupported video codec: ${videoCodec || 'unknown'}` })
@@ -578,45 +1058,10 @@ export const WebMseVideoBackend = memo(function WebMseVideoBackend({
         }
         const videoDecoderConfigForOutput = videoDecoderConfig || undefined
 
-        const mimeCandidates: Array<{ mime: string; withAudio: boolean }> = []
-        if (videoCodecString) {
-          if (audioCodecString) {
-            mimeCandidates.push({ mime: `video/mp4; codecs="${videoCodecString}, ${audioCodecString}"`, withAudio: true })
-          }
-          mimeCandidates.push({ mime: `video/mp4; codecs="${videoCodecString}"`, withAudio: false })
-        }
-        for (const legacy of ['video/mp4; codecs="hev1.1.6.L150.B0"', 'video/mp4; codecs="avc1.640032"', 'video/mp4']) {
-          mimeCandidates.push({ mime: legacy, withAudio: audioUsable })
-        }
-
-        // Create MediaSource
-        const ms = new MediaSource()
-        el.src = URL.createObjectURL(ms)
-        await new Promise<void>(r => { ms.onsourceopen = () => r() })
-
-        let sb: SourceBuffer | null = null
-        let includeAudio = false
-        for (const candidate of mimeCandidates) {
-          if (MediaSource.isTypeSupported(candidate.mime)) {
-            try {
-              sb = ms.addSourceBuffer(candidate.mime)
-              includeAudio = candidate.withAudio
-              break
-            } catch {}
-          }
-        }
-        if (!sb) { callbacksRef.current.onError?.({ message: 'No MSE MIME support' }); return }
-
-        const { waitForUpdate, safeAppend, removeRange, isBuffered } = createSourceBufferOps(sb, el)
-
-        // Report the duration and size the MediaSource so the whole timeline
-        // is seekable immediately (the old linear conversion only grew the
-        // seekable range as it progressed through the file).
-        if (duration > 0) {
-          await waitForUpdate()
-          try { ms.duration = duration } catch {}
-          callbacksRef.current.onLoad?.({ duration, durationMs: Math.round(duration * 1000) })
-        }
+        const mimeCandidates = buildMimeCandidates(videoCodecString, audioCodecString, audioUsable)
+        const remuxSetup = await createRemuxMediaSource(el, mimeCandidates, duration, callbacksRef)
+        if (!remuxSetup) return
+        const { ms, sb, includeAudio, ops } = remuxSetup
 
         const videoSink = new EncodedPacketSink(videoTrack)
         const audioSink = includeAudio && audioTrack ? new EncodedPacketSink(audioTrack) : null
@@ -648,150 +1093,64 @@ export const WebMseVideoBackend = memo(function WebMseVideoBackend({
         const runPipeline = async (fromTime: number, gen: number) => {
           const stale = () => disposed || gen !== generation
 
-          let startPacket = await videoSink.getKeyPacket(Math.max(0, fromTime), { verifyKeyPackets: true })
-          if (!startPacket) startPacket = await videoSink.getFirstKeyPacket({ verifyKeyPackets: true })
+          const startPacket = await resolvePipelineStartPacket(videoSink, fromTime)
           if (!startPacket || stale()) return
-          const startTime = startPacket.timestamp
+          const startTime = packetTimestamp(startPacket)
 
-          const pending: Segment[] = []
-          let ftyp: Uint8Array | null = null
-          let initSegment: Uint8Array | null = null
-          let initAppended = false
-          let lastMoof: { data: Uint8Array; time: number } | null = null
+          const remux = createRemuxPipelineOutput(mb, videoCodec, audioCodec, Boolean(audioSink))
+          const { output, videoOut, audioOut, pending } = remux
 
-          const output = new Output({
-            target: new NullTarget(),
-            format: new Mp4OutputFormat({
-              fastStart: 'fragmented',
-              onFtyp: (data: Uint8Array) => { ftyp = new Uint8Array(data) },
-              onMoov: (data: Uint8Array) => {
-                initSegment = ftyp ? concatBytes(ftyp, new Uint8Array(data)) : new Uint8Array(data)
-              },
-              onMoof: (data: Uint8Array, _pos: number, timestamp: number) => {
-                lastMoof = { data: new Uint8Array(data), time: timestamp }
-              },
-              onMdat: (data: Uint8Array) => {
-                if (!lastMoof) return
-                pending.push({ time: lastMoof.time, data: concatBytes(lastMoof.data, new Uint8Array(data)) })
-                lastMoof = null
-              },
-            }),
-          })
-          const videoOut = new EncodedVideoPacketSource(videoCodec)
-          output.addVideoTrack(videoOut)
-          let audioOut: any = null
-          if (audioSink && audioCodec) {
-            audioOut = new EncodedAudioPacketSource(audioCodec)
-            output.addAudioTrack(audioOut)
-          }
           await output.start()
           if (stale()) { output.cancel().catch(() => {}); return }
           activeOutput = output
 
           /** Append the init segment (once ready) and any finalized fragments */
-          const drain = async (): Promise<boolean> => {
-            while (pending.length > 0) {
-              if (stale()) return false
-              if (!initAppended) {
-                if (!initSegment) return true // moov not written yet, fragments can't precede it for long
-                if (!(await safeAppend(initSegment))) return false
-                if (stale()) return false
-                initAppended = true
-              }
-              const segment = pending.shift()!
-              if (!(await safeAppend(segment.data))) return false
-              if (stale()) return false
-              if (!playbackStarted) {
-                playbackStarted = true
-                if (isPlayingRef.current) {
-                  requestDesiredPlayback()
-                }
-              }
-            }
-            return true
-          }
+          const drain = () => drainRemuxPendingSegments({
+            pending,
+            remux,
+            ops,
+            stale,
+            onFirstFragmentAppended: () => {
+              if (playbackStarted) return
+              playbackStarted = true
+              if (isPlayingRef.current) requestDesiredPlayback()
+            },
+          })
 
           // Pump packets in timestamp order across tracks
-          const videoIter: AsyncGenerator<any, void, unknown> = videoSink.packets(startPacket, undefined, { verifyKeyPackets: true })
-          let nextVideo: IteratorResult<any> = await videoIter.next()
-          let audioIter: AsyncGenerator<any, void, unknown> | null = null
-          let nextAudio: IteratorResult<any> | null = null
-          if (audioSink) {
-            const audioStart = (await audioSink.getPacket(startTime)) ?? (await audioSink.getFirstPacket())
-            if (audioStart) {
-              audioIter = audioSink.packets(audioStart)
-              nextAudio = await audioIter.next()
-            }
-          }
+          const videoIter: AsyncGenerator<unknown, void, unknown> = videoSink.packets(startPacket, undefined, { verifyKeyPackets: true })
+          const nextVideo: IteratorResult<unknown> = await videoIter.next()
+          const audioCursor = await openAudioPacketCursor(audioSink, startTime)
 
-          let firstVideo = true
-          let firstAudio = true
-          try {
-            while (!stale()) {
-              if (!(await drain())) break
-
-              const videoDone = nextVideo.done === true
-              const audioDone = !nextAudio || nextAudio.done === true
-              if (videoDone && audioDone) {
-                await output.finalize() // flushes the trailing fragment via callbacks
-                if (activeOutput === output) activeOutput = null
-                await drain()
-                if (!stale()) {
-                  await waitForUpdate()
-                  if (ms.readyState === 'open') {
-                    try { ms.endOfStream() } catch {}
-                  }
-                }
-                return
-              }
-
-              // Throttle: stay BUFFER_AHEAD_SEC ahead of the playhead, evict behind
-              const headTimestamp = Math.min(
-                videoDone ? Infinity : nextVideo.value.timestamp,
-                audioDone ? Infinity : nextAudio!.value.timestamp
-              )
-              if (
-                pending.length > MAX_PENDING_SEGMENTS ||
-                (headTimestamp > el.currentTime + BUFFER_AHEAD_SEC && isBuffered(el.currentTime))
-              ) {
-                const evictEnd = el.currentTime - BUFFER_BEHIND_SEC
-                if (sb!.buffered.length > 0 && sb!.buffered.start(0) < evictEnd) {
-                  await removeRange(sb!.buffered.start(0), evictEnd)
-                }
-                await sleep(POLL_MS)
-                continue
-              }
-
-              // Feed whichever track is furthest behind
-              if (audioDone || (!videoDone && nextVideo.value.timestamp <= nextAudio!.value.timestamp)) {
-                await videoOut.add(nextVideo.value, firstVideo ? { decoderConfig: videoDecoderConfigForOutput } : undefined)
-                firstVideo = false
-                nextVideo = await videoIter.next()
-              } else {
-                await audioOut.add(nextAudio!.value, firstAudio ? { decoderConfig: audioDecoderConfig } : undefined)
-                firstAudio = false
-                nextAudio = await audioIter!.next()
-              }
-            }
-          } catch (err: any) {
-            if (!stale()) {
-              console.warn('[WebMseBackend] Pipeline error:', err?.message)
-              callbacksRef.current.onError?.({ message: err?.message || 'Remux pipeline error' })
-            }
-          } finally {
-            if (activeOutput === output) activeOutput = null
-            if (output.state === 'pending' || output.state === 'started') {
-              output.cancel().catch(() => {})
-            }
-            try { videoIter.return?.(undefined) } catch {}
-            try { audioIter?.return?.(undefined) } catch {}
-          }
+          await pumpRemuxPacketLoop({
+            stale,
+            drain,
+            pending,
+            output,
+            getActiveOutput: () => activeOutput,
+            clearActiveOutputIfCurrent: (current) => {
+              if (activeOutput === current) activeOutput = null
+            },
+            ops,
+            ms,
+            el,
+            sb,
+            videoOut,
+            audioOut,
+            videoDecoderConfigForOutput,
+            audioDecoderConfig,
+            videoIter,
+            audioIter: audioCursor.audioIter,
+            nextVideo,
+            nextAudio: audioCursor.nextAudio,
+            onError: (error) => callbacksRef.current.onError?.(error),
+          })
         }
 
         // --- Seek handler: restart the pipeline from the seek target ---
         const handleSeeking = () => {
           const target = el.currentTime
-          if (isBuffered(target)) return // Data already present, the element recovers on its own
+          if (ops.isBuffered(target)) return // Data already present, the element recovers on its own
 
           generation++
           const gen = generation
@@ -801,10 +1160,10 @@ export const WebMseVideoBackend = memo(function WebMseVideoBackend({
 
           (async () => {
             try {
-              if (sb!.updating) {
-                try { sb!.abort() } catch {}
+              if (sb.updating) {
+                try { sb.abort() } catch {}
               }
-              await removeRange(0, Infinity)
+              await ops.removeRange(0, Infinity)
               if (gen !== generation) return
               await runPipeline(Math.max(0, target - 0.5), gen)
             } catch (err: any) {

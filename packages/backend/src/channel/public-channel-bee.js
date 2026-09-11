@@ -250,6 +250,46 @@ function groupClaimsByIdentity(claims) {
   }
   return grouped
 }
+function buildContendersByIdentity(items) {
+  const byIdentity = new Map()
+  for (const item of items || []) {
+    if (!item?.importIdentityKey || !item?.importClaimantId) continue
+    let contenders = byIdentity.get(item.importIdentityKey)
+    if (!contenders) {
+      contenders = new Map()
+      byIdentity.set(item.importIdentityKey, contenders)
+    }
+    contenders.set(item.importClaimantId, { videoId: item.id, video: item })
+  }
+  return byIdentity
+}
+
+function collectIdentityContenders(identityKey, claims, winner, privateByIdentity, publicByIdentity) {
+  const contenders = new Map()
+  for (const claim of claims) {
+    if (!claim?.claimantId) continue
+    if (!winner && claim.state !== 'released') continue
+    const matchingContender =
+      privateByIdentity.get(identityKey)?.get(claim.claimantId) ||
+      publicByIdentity.get(identityKey)?.get(claim.claimantId)
+    contenders.set(claim.claimantId, {
+      ...(matchingContender || {}),
+      videoId: claim.videoId || matchingContender?.videoId
+    })
+  }
+  if (winner) {
+    for (const [claimantId, contender] of publicByIdentity.get(identityKey) || []) {
+      if (
+        !contenders.has(claimantId) &&
+        contender.video?.canonicalVisibility === 'suppressed'
+      ) {
+        contenders.set(claimantId, contender)
+      }
+    }
+  }
+  return contenders
+}
+
 
 function isPrivatePublicationState(value) {
   return value === 'replicationPending' || value === 'commitUncertain'
@@ -813,39 +853,9 @@ export class PublicChannelBee extends ReadyResource {
     return decodeStoredRecord(record, CONTENT_DETAIL_FIELDS, CONTENT_STORAGE_DEFAULTS)
   }
 
-  async listVideos(options = {}) {
-    const syncTimeoutMs = normalizeTimeoutMs(options?.syncTimeoutMs, DEFAULT_LIST_VIDEOS_SYNC_TIMEOUT_MS)
-    const streamTimeoutMs = normalizeTimeoutMs(options?.timeoutMs, DEFAULT_LIST_VIDEOS_STREAM_TIMEOUT_MS)
-    const result = (videos, status = 'authoritative', filteredCount = 0) =>
-      options?.returnStatus
-        ? { status, videos, filteredCount }
-        : videos
-    await this.waitForSync(syncTimeoutMs)
-
-    if (!this.db) {
-      const collected = await this._collectVideoStream(undefined, streamTimeoutMs)
-      if (options?.reconciliationStatus && typeof options.reconciliationStatus === 'object') {
-        options.reconciliationStatus.scanComplete = collected.status === 'authoritative'
-      }
-      return result(collected.videos, collected.status)
-    }
-    this.db.update?.()
-    const deadline = streamTimeoutMs > 0 ? Date.now() + streamTimeoutMs : null
-    const stream = this.db.find('@peartubePublic/videos-by-uploaded-at', {}, { reverse: true })
-    const collected = await this._collectVideoStream(stream, streamTimeoutMs)
-    if (options?.reconciliationStatus && typeof options.reconciliationStatus === 'object') {
-      options.reconciliationStatus.scanComplete = collected.status === 'authoritative'
-    }
-    const videos = collected.videos
-    if (typeof this.db.get !== 'function') return result(videos, collected.status)
-
+  async _fetchVideoContentDetails(videos, deadline, streamTimeoutMs, markUnavailable) {
     const detailsById = new Map()
-    const unavailableContentDetails = new Set()
     const missingContentDetails = new Set()
-    const markUnavailable = (videoId) => {
-      unavailableContentDetails.add(videoId)
-      options?.unavailableContentDetails?.add?.(videoId)
-    }
     for (let index = 0; index < videos.length; index++) {
       const video = videos[index]
       try {
@@ -873,28 +883,73 @@ export class PublicChannelBee extends ReadyResource {
         console.warn('[PublicBee] content details unavailable:', video.id, err?.message || err)
       }
     }
-    if (missingContentDetails.size > 0) {
-      try {
-        let required
-        if (deadline === null) {
-          required = await this._contentDetailsRequired()
-        } else {
-          const remainingMs = deadline - Date.now()
-          if (remainingMs <= 0) throw new Error('PublicBee capability read timed out')
-          required = await withTimeout(
-            this._contentDetailsRequired(),
-            remainingMs,
-            `PublicBee capability read timed out after ${streamTimeoutMs}ms`
-          )
-        }
-        if (required) {
-          for (const videoId of missingContentDetails) markUnavailable(videoId)
-        }
-      } catch (err) {
-        for (const videoId of missingContentDetails) markUnavailable(videoId)
-        console.warn('[PublicBee] content-details capability unavailable:', err?.message || err)
+    return { detailsById, missingContentDetails }
+  }
+
+  async _checkMissingContentDetails(missingContentDetails, deadline, streamTimeoutMs, markUnavailable) {
+    if (missingContentDetails.size === 0) return
+    try {
+      let required
+      if (deadline === null) {
+        required = await this._contentDetailsRequired()
+      } else {
+        const remainingMs = deadline - Date.now()
+        if (remainingMs <= 0) throw new Error('PublicBee capability read timed out')
+        required = await withTimeout(
+          this._contentDetailsRequired(),
+          remainingMs,
+          `PublicBee capability read timed out after ${streamTimeoutMs}ms`
+        )
       }
+      if (required) {
+        for (const videoId of missingContentDetails) markUnavailable(videoId)
+      }
+    } catch (err) {
+      for (const videoId of missingContentDetails) markUnavailable(videoId)
+      console.warn('[PublicBee] content-details capability unavailable:', err?.message || err)
     }
+  }
+
+  async listVideos(options = {}) {
+    const syncTimeoutMs = normalizeTimeoutMs(options?.syncTimeoutMs, DEFAULT_LIST_VIDEOS_SYNC_TIMEOUT_MS)
+    const streamTimeoutMs = normalizeTimeoutMs(options?.timeoutMs, DEFAULT_LIST_VIDEOS_STREAM_TIMEOUT_MS)
+    const result = (videos, status = 'authoritative', filteredCount = 0) =>
+      options?.returnStatus
+        ? { status, videos, filteredCount }
+        : videos
+    await this.waitForSync(syncTimeoutMs)
+
+    if (!this.db) {
+      const collected = await this._collectVideoStream(undefined, streamTimeoutMs)
+      if (options?.reconciliationStatus && typeof options.reconciliationStatus === 'object') {
+        options.reconciliationStatus.scanComplete = collected.status === 'authoritative'
+      }
+      return result(collected.videos, collected.status)
+    }
+    this.db.update?.()
+    const deadline = streamTimeoutMs > 0 ? Date.now() + streamTimeoutMs : null
+    const stream = this.db.find('@peartubePublic/videos-by-uploaded-at', {}, { reverse: true })
+    const collected = await this._collectVideoStream(stream, streamTimeoutMs)
+    if (options?.reconciliationStatus && typeof options.reconciliationStatus === 'object') {
+      options.reconciliationStatus.scanComplete = collected.status === 'authoritative'
+    }
+    const videos = collected.videos
+    if (typeof this.db.get !== 'function') return result(videos, collected.status)
+
+    const unavailableContentDetails = new Set()
+    const markUnavailable = (videoId) => {
+      unavailableContentDetails.add(videoId)
+      options?.unavailableContentDetails?.add?.(videoId)
+    }
+
+    const { detailsById, missingContentDetails } = await this._fetchVideoContentDetails(
+      videos,
+      deadline,
+      streamTimeoutMs,
+      markUnavailable
+    )
+    await this._checkMissingContentDetails(missingContentDetails, deadline, streamTimeoutMs, markUnavailable)
+
     const logical = videos.map((video) => {
       const sidecar = detailsById.get(video.id)
       return sidecar ? { ...video, ...sidecar } : video
@@ -964,6 +1019,26 @@ export class PublicChannelBee extends ReadyResource {
     return result.video
   }
 
+  async _resolveVideoDetails(videoId) {
+    let details
+    try {
+      details = await this.db.get('@peartubePublic/contentDetails', { id: videoId })
+    } catch {
+      return { uncertain: true }
+    }
+    const logicalDetails = decodeStoredRecord(details, CONTENT_DETAIL_FIELDS, CONTENT_STORAGE_DEFAULTS)
+    if (!logicalDetails) {
+      try {
+        if (await this._contentDetailsRequired()) {
+          return { uncertain: true }
+        }
+      } catch {
+        return { uncertain: true }
+      }
+    }
+    return { logicalDetails }
+  }
+
   async getVideoWithStatus(videoId, options = {}) {
     if (!videoId || !this.db) return { status: 'notFound', video: null }
     this.db.update?.()
@@ -975,29 +1050,11 @@ export class PublicChannelBee extends ReadyResource {
     }
     if (!video) return { status: 'notFound', video: null }
 
-    let details
-    try {
-      details = await this.db.get('@peartubePublic/contentDetails', { id: videoId })
-    } catch {
+    const { uncertain, logicalDetails } = await this._resolveVideoDetails(videoId)
+    if (uncertain) {
       return {
         status: 'uncertain',
         video: options?.includeSuppressed ? this._sanitizePublicVideo(video) : null
-      }
-    }
-    const logicalDetails = decodeStoredRecord(details, CONTENT_DETAIL_FIELDS, CONTENT_STORAGE_DEFAULTS)
-    if (!logicalDetails) {
-      try {
-        if (await this._contentDetailsRequired()) {
-          return {
-            status: 'uncertain',
-            video: options?.includeSuppressed ? this._sanitizePublicVideo(video) : null
-          }
-        }
-      } catch {
-        return {
-          status: 'uncertain',
-          video: options?.includeSuppressed ? this._sanitizePublicVideo(video) : null
-        }
       }
     }
     const logical = this._sanitizePublicVideo(logicalDetails ? { ...video, ...logicalDetails } : video)
@@ -1044,45 +1101,55 @@ export class PublicChannelBee extends ReadyResource {
     console.log('[PublicBee] Video deleted:', videoId)
   }
 
-  async applyVideoChanges(changes) {
-    if (!this.writable) throw new Error('Not writable')
-    if (!Array.isArray(changes) || changes.length === 0) return
-    const putChanges = changes.filter((change) =>
-      change?.type === 'put' && typeof change.id === 'string' && change.id.length > 0)
+  async _ensureProjectionFormatForChanges(putChanges) {
     let format = await this.getProjectionFormat()
     if (putChanges.some((change) => splitPublicVideo({
       ...(change.value || {}),
       id: change.id
     }).details)) {
-      format = await this.setProjectionFormat('modern')
-    } else if (putChanges.length > 0 && !format) {
-      format = await this.setProjectionFormat('legacy')
+      return this.setProjectionFormat('modern')
     }
+    if (putChanges.length > 0 && !format) {
+      return this.setProjectionFormat('legacy')
+    }
+    return format
+  }
+
+  async _applySingleVideoChange(change, batch, format, now) {
+    if (change.type === 'del') {
+      this._explicitlyDeletedVideoIds?.add(change.id)
+      await this._writeProjectionClaimIndex({ id: change.id })
+      batch.push(['@peartubePublic/videos', { id: change.id }, { type: 'delete' }])
+      batch.push(['@peartubePublic/contentDetails', { id: change.id }, { type: 'delete' }])
+    } else if (change.type === 'put') {
+      this._explicitlyDeletedVideoIds?.delete(change.id)
+      const { video, details } = splitPublicVideo({ ...(change.value || {}), id: change.id })
+      await this._writeProjectionClaimIndex({ ...(change.value || {}), id: change.id })
+      batch.push(['@peartubePublic/videos', this._sanitizePublicVideo({
+        ...video,
+        syncedAt: now
+      })])
+      if (details || format === 'modern') {
+        batch.push([
+          '@peartubePublic/contentDetails',
+          encodeStoredRecord(details || { id: change.id }, CONTENT_STORAGE_DEFAULTS)
+        ])
+      }
+    }
+  }
+
+  async applyVideoChanges(changes) {
+    if (!this.writable) throw new Error('Not writable')
+    if (!Array.isArray(changes) || changes.length === 0) return
+    const putChanges = changes.filter((change) =>
+      change?.type === 'put' && typeof change.id === 'string' && change.id.length > 0)
+    const format = await this._ensureProjectionFormatForChanges(putChanges)
     const batch = []
     const now = Date.now()
 
     for (const change of changes) {
       if (!change || typeof change.id !== 'string' || change.id.length === 0) continue
-      if (change.type === 'del') {
-        this._explicitlyDeletedVideoIds?.add(change.id)
-        await this._writeProjectionClaimIndex({ id: change.id })
-        batch.push(['@peartubePublic/videos', { id: change.id }, { type: 'delete' }])
-        batch.push(['@peartubePublic/contentDetails', { id: change.id }, { type: 'delete' }])
-      } else if (change.type === 'put') {
-        this._explicitlyDeletedVideoIds?.delete(change.id)
-        const { video, details } = splitPublicVideo({ ...(change.value || {}), id: change.id })
-        await this._writeProjectionClaimIndex({ ...(change.value || {}), id: change.id })
-        batch.push(['@peartubePublic/videos', this._sanitizePublicVideo({
-          ...video,
-          syncedAt: now
-        })])
-        if (details || format === 'modern') {
-          batch.push([
-            '@peartubePublic/contentDetails',
-            encodeStoredRecord(details || { id: change.id }, CONTENT_STORAGE_DEFAULTS)
-          ])
-        }
-      }
+      await this._applySingleVideoChange(change, batch, format, now)
     }
 
     if (batch.length > 0) {
@@ -1092,14 +1159,9 @@ export class PublicChannelBee extends ReadyResource {
     console.log('[PublicBee] Applied', changes.length, 'video change(s)')
   }
 
-  async syncVideos(videos, opts = {}) {
-    if (!this.writable) throw new Error('Not writable')
-    if (!this.db) throw new Error('Public HyperDB not ready')
-
-    const destructive = opts.destructive !== false
-    const claimWinners = opts.claimWinners instanceof Map ? opts.claimWinners : new Map()
-    let materializeContentDetails = opts.materializeContentDetails === true
-    const hasStructuredProjection = (videos || []).some((candidate) => {
+  async _determineSyncProjectionFormat(videos, claimWinners, materializeContentDetails) {
+    const list = videos || []
+    const hasStructuredProjection = list.some((candidate) => {
       if (!candidate?.id || isPrivatePublicationState(candidate.publicationState)) return false
       const winner = candidate.importIdentityKey
         ? claimWinners.get(candidate.importIdentityKey) || null
@@ -1107,7 +1169,7 @@ export class PublicChannelBee extends ReadyResource {
       return isPubliclyProjectable(candidate, winner) && Boolean(splitPublicVideo(candidate).details)
     })
     let format = await this.getProjectionFormat()
-    const hasImmutableBindingMismatch = (videos || []).some((candidate) => {
+    const hasImmutableBindingMismatch = list.some((candidate) => {
       if (!candidate?.importIdentityKey || !candidate.importClaimantId) return false
       const winner = claimWinners.get(candidate.importIdentityKey)
       return Boolean(
@@ -1119,10 +1181,92 @@ export class PublicChannelBee extends ReadyResource {
     })
     if (materializeContentDetails || hasStructuredProjection || hasImmutableBindingMismatch) {
       format = await this.setProjectionFormat('modern')
-    } else if (!format && (videos || []).length > 0) {
+    } else if (!format && list.length > 0) {
       format = await this.setProjectionFormat('legacy')
     }
-    if (format === 'modern') materializeContentDetails = true
+    return {
+      format,
+      materializeContentDetails: format === 'modern' || materializeContentDetails
+    }
+  }
+
+  async _syncSingleVideoCandidate(candidate, claimWinners, batch, sourceIds, explicitlyPrivateIds, materializeContentDetails, now) {
+    if (!candidate?.id) return
+    if (isPrivatePublicationState(candidate.publicationState)) {
+      explicitlyPrivateIds.add(candidate.id)
+      this._explicitlyDeletedVideoIds?.add(candidate.id)
+      await this._writeProjectionClaimIndex({ id: candidate.id })
+      batch.push(['@peartubePublic/videos', { id: candidate.id }, { type: 'delete' }])
+      batch.push(['@peartubePublic/contentDetails', { id: candidate.id }, { type: 'delete' }])
+      return
+    }
+    const winner = candidate.importIdentityKey
+      ? claimWinners.get(candidate.importIdentityKey) || null
+      : null
+    if (!isPubliclyProjectable(candidate, winner)) {
+      const immutableBindingMismatch = Boolean(
+        winner?.identityKey === candidate.importIdentityKey &&
+        winner.claimantId === candidate.importClaimantId &&
+        winner.videoId &&
+        winner.videoId !== candidate.id
+      )
+      if (
+        immutableBindingMismatch &&
+        await this.db.get('@peartubePublic/videos', { id: candidate.id })
+      ) {
+        const existingDetails = await this.getContentDetails(candidate.id).catch(() => null)
+        batch.push([
+          '@peartubePublic/contentDetails',
+          encodeStoredRecord({
+            ...(existingDetails || {}),
+            ...pickDefinedFields(candidate, CONTENT_DETAIL_FIELDS),
+            id: candidate.id,
+            canonicalVisibility: 'suppressed',
+            duplicateOfClaimantId: winner.claimantId
+          }, CONTENT_STORAGE_DEFAULTS)
+        ])
+      }
+      return
+    }
+
+    sourceIds.add(candidate.id)
+    await this._writeProjectionClaimIndex(candidate)
+    this._explicitlyDeletedVideoIds?.delete(candidate.id)
+    const { video, details } = splitPublicVideo(candidate)
+    batch.push(['@peartubePublic/videos', this._sanitizePublicVideo({
+      ...video,
+      syncedAt: now
+    })])
+    if (details || materializeContentDetails) {
+      batch.push([
+        '@peartubePublic/contentDetails',
+        encodeStoredRecord(details || { id: candidate.id }, CONTENT_STORAGE_DEFAULTS)
+      ])
+    }
+  }
+
+  async _applyDestructiveSyncDeletions(existing, sourceIds, explicitlyPrivateIds, batch) {
+    for (const id of existing) {
+      if (!sourceIds.has(id) && !explicitlyPrivateIds.has(id)) {
+        this._explicitlyDeletedVideoIds?.add(id)
+        batch.push(['@peartubePublic/videos', { id }, { type: 'delete' }])
+        await this._writeProjectionClaimIndex({ id })
+        batch.push(['@peartubePublic/contentDetails', { id }, { type: 'delete' }])
+      }
+    }
+  }
+
+  async syncVideos(videos, opts = {}) {
+    if (!this.writable) throw new Error('Not writable')
+    if (!this.db) throw new Error('Public HyperDB not ready')
+
+    const destructive = opts.destructive !== false
+    const claimWinners = opts.claimWinners instanceof Map ? opts.claimWinners : new Map()
+    const { materializeContentDetails } = await this._determineSyncProjectionFormat(
+      videos,
+      claimWinners,
+      opts.materializeContentDetails === true
+    )
     const batch = []
     const existing = new Set()
     if (destructive) {
@@ -1134,69 +1278,19 @@ export class PublicChannelBee extends ReadyResource {
     const explicitlyPrivateIds = new Set()
     const now = Date.now()
     for (const candidate of videos || []) {
-      if (!candidate?.id) continue
-      if (isPrivatePublicationState(candidate.publicationState)) {
-        explicitlyPrivateIds.add(candidate.id)
-        this._explicitlyDeletedVideoIds?.add(candidate.id)
-        await this._writeProjectionClaimIndex({ id: candidate.id })
-        batch.push(['@peartubePublic/videos', { id: candidate.id }, { type: 'delete' }])
-        batch.push(['@peartubePublic/contentDetails', { id: candidate.id }, { type: 'delete' }])
-        continue
-      }
-      const winner = candidate.importIdentityKey
-        ? claimWinners.get(candidate.importIdentityKey) || null
-        : null
-      if (!isPubliclyProjectable(candidate, winner)) {
-        const immutableBindingMismatch = Boolean(
-          winner?.identityKey === candidate.importIdentityKey &&
-          winner.claimantId === candidate.importClaimantId &&
-          winner.videoId &&
-          winner.videoId !== candidate.id
-        )
-        if (
-          immutableBindingMismatch &&
-          await this.db.get('@peartubePublic/videos', { id: candidate.id })
-        ) {
-          const existingDetails = await this.getContentDetails(candidate.id).catch(() => null)
-          batch.push([
-            '@peartubePublic/contentDetails',
-            encodeStoredRecord({
-              ...(existingDetails || {}),
-              ...pickDefinedFields(candidate, CONTENT_DETAIL_FIELDS),
-              id: candidate.id,
-              canonicalVisibility: 'suppressed',
-              duplicateOfClaimantId: winner.claimantId
-            }, CONTENT_STORAGE_DEFAULTS)
-          ])
-        }
-        continue
-      }
-
-      sourceIds.add(candidate.id)
-      await this._writeProjectionClaimIndex(candidate)
-      this._explicitlyDeletedVideoIds?.delete(candidate.id)
-      const { video, details } = splitPublicVideo(candidate)
-      batch.push(['@peartubePublic/videos', this._sanitizePublicVideo({
-        ...video,
-        syncedAt: now
-      })])
-      if (details || materializeContentDetails) {
-        batch.push([
-          '@peartubePublic/contentDetails',
-          encodeStoredRecord(details || { id: candidate.id }, CONTENT_STORAGE_DEFAULTS)
-        ])
-      }
+      await this._syncSingleVideoCandidate(
+        candidate,
+        claimWinners,
+        batch,
+        sourceIds,
+        explicitlyPrivateIds,
+        materializeContentDetails,
+        now
+      )
     }
 
     if (destructive) {
-      for (const id of existing) {
-        if (!sourceIds.has(id) && !explicitlyPrivateIds.has(id)) {
-          this._explicitlyDeletedVideoIds?.add(id)
-          batch.push(['@peartubePublic/videos', { id }, { type: 'delete' }])
-          await this._writeProjectionClaimIndex({ id })
-          batch.push(['@peartubePublic/contentDetails', { id }, { type: 'delete' }])
-        }
-      }
+      await this._applyDestructiveSyncDeletions(existing, sourceIds, explicitlyPrivateIds, batch)
     }
 
     if (batch.length > 0) {
@@ -1223,78 +1317,41 @@ export class PublicChannelBee extends ReadyResource {
     return claims
   }
 
-  async _suppressResolvedLosers(videos, publicCandidates, groupedClaims, claimWinners) {
-    const privateByIdentity = new Map()
-    for (const video of videos || []) {
-      if (!video?.importIdentityKey || !video?.importClaimantId) continue
-      let contenders = privateByIdentity.get(video.importIdentityKey)
-      if (!contenders) {
-        contenders = new Map()
-        privateByIdentity.set(video.importIdentityKey, contenders)
-      }
-      contenders.set(video.importClaimantId, { videoId: video.id, video })
-    }
+  async _suppressContender(claimantId, contender, winner) {
+    if (winner && claimantId === winner.claimantId) return
+    const videoId = contender.videoId
+    if (!videoId) return
+    const existingVideo = await this.db.get('@peartubePublic/videos', { id: videoId })
+    if (!existingVideo) return
+    const existingDetails = await this.getContentDetails(videoId)
+    await this.putContentDetails(videoId, {
+      ...(existingDetails || {}),
+      ...(contender.video ? pickDefinedFields(contender.video, CONTENT_DETAIL_FIELDS) : {}),
+      canonicalVisibility: 'suppressed',
+      duplicateOfClaimantId: winner?.claimantId
+    })
+  }
 
-    const publicByIdentity = new Map()
-    for (const details of publicCandidates) {
-      if (!details?.importIdentityKey || !details?.importClaimantId) continue
-      let contenders = publicByIdentity.get(details.importIdentityKey)
-      if (!contenders) {
-        contenders = new Map()
-        publicByIdentity.set(details.importIdentityKey, contenders)
-      }
-      contenders.set(details.importClaimantId, { videoId: details.id, video: details })
-    }
+  async _suppressResolvedLosers(videos, publicCandidates, groupedClaims, claimWinners) {
+    const privateByIdentity = buildContendersByIdentity(videos)
+    const publicByIdentity = buildContendersByIdentity(publicCandidates)
 
     for (const [identityKey, claims] of groupedClaims) {
       const winner = claimWinners.get(identityKey)
-      const contenders = new Map()
-      for (const claim of claims) {
-        if (!claim?.claimantId) continue
-        if (!winner && claim.state !== 'released') continue
-        const matchingContender =
-          privateByIdentity.get(identityKey)?.get(claim.claimantId) ||
-          publicByIdentity.get(identityKey)?.get(claim.claimantId)
-        contenders.set(claim.claimantId, {
-          ...(matchingContender || {}),
-          videoId: claim.videoId || matchingContender?.videoId
-        })
-      }
-      if (winner) {
-        for (const [claimantId, contender] of publicByIdentity.get(identityKey) || []) {
-          if (
-            !contenders.has(claimantId) &&
-            contender.video?.canonicalVisibility === 'suppressed'
-          ) {
-            contenders.set(claimantId, contender)
-          }
-        }
-      }
-
+      const contenders = collectIdentityContenders(
+        identityKey,
+        claims,
+        winner,
+        privateByIdentity,
+        publicByIdentity
+      )
       for (const [claimantId, contender] of contenders) {
-        if (winner && claimantId === winner.claimantId) continue
-        const videoId = contender.videoId
-        if (!videoId) continue
-        const existingVideo = await this.db.get('@peartubePublic/videos', { id: videoId })
-        if (!existingVideo) continue
-        const existingDetails = await this.getContentDetails(videoId)
-        await this.putContentDetails(videoId, {
-          ...(existingDetails || {}),
-          ...(contender.video ? pickDefinedFields(contender.video, CONTENT_DETAIL_FIELDS) : {}),
-          canonicalVisibility: 'suppressed',
-          duplicateOfClaimantId: winner?.claimantId
-        })
+        await this._suppressContender(claimantId, contender, winner)
       }
     }
   }
 
-  async _stabilizeClaimWinners(
-    videos,
-    publicCandidates,
-    unavailableContentDetails,
-    groupedClaims,
-    claimWinners
-  ) {
+  _invalidateUnavailableWinners(videos, publicCandidates, unavailableContentDetails, groupedClaims, claimWinners) {
     const publicIds = new Set((publicCandidates || []).map((candidate) => candidate?.id))
     for (const video of videos || []) {
       if (
@@ -1321,6 +1378,23 @@ export class PublicChannelBee extends ReadyResource {
         claimWinners.set(video.importIdentityKey, null)
       }
     }
+  }
+
+  async _findEstablishedCandidate(identityKey, establishedCandidates, claimWinners) {
+    for (const candidate of establishedCandidates) {
+      try {
+        if (await this.db.get('@peartubePublic/videos', { id: candidate.id })) {
+          return candidate
+        }
+      } catch {
+        claimWinners.set(identityKey, null)
+        return null
+      }
+    }
+    return null
+  }
+
+  async _reanchorEstablishedWinners(publicCandidates, groupedClaims, claimWinners) {
     for (const [identityKey, proposedWinner] of claimWinners) {
       if (!proposedWinner) continue
       const observedClaims = groupedClaims.get(identityKey) || []
@@ -1336,19 +1410,7 @@ export class PublicChannelBee extends ReadyResource {
           !this._explicitlyDeletedVideoIds?.has(candidate.id) &&
           !observedClaimants.has(candidate.importClaimantId))
         .sort((left, right) => left.importClaimantId.localeCompare(right.importClaimantId))
-      let established = null
-      for (const candidate of establishedCandidates) {
-        try {
-          if (await this.db.get('@peartubePublic/videos', { id: candidate.id })) {
-            established = candidate
-            break
-          }
-        } catch {
-          claimWinners.set(identityKey, null)
-          established = null
-          break
-        }
-      }
+      const established = await this._findEstablishedCandidate(identityKey, establishedCandidates, claimWinners)
       if (established) {
         claimWinners.set(identityKey, {
           identityKey,
@@ -1357,6 +1419,9 @@ export class PublicChannelBee extends ReadyResource {
         })
       }
     }
+  }
+
+  _restoreSuppressedPriorWinners(publicCandidates, groupedClaims, claimWinners) {
     for (const candidate of publicCandidates || []) {
       if (
         candidate?.canonicalVisibility !== 'suppressed' ||
@@ -1386,6 +1451,24 @@ export class PublicChannelBee extends ReadyResource {
     }
   }
 
+  async _stabilizeClaimWinners(
+    videos,
+    publicCandidates,
+    unavailableContentDetails,
+    groupedClaims,
+    claimWinners
+  ) {
+    this._invalidateUnavailableWinners(
+      videos,
+      publicCandidates,
+      unavailableContentDetails,
+      groupedClaims,
+      claimWinners
+    )
+    await this._reanchorEstablishedWinners(publicCandidates, groupedClaims, claimWinners)
+    this._restoreSuppressedPriorWinners(publicCandidates, groupedClaims, claimWinners)
+  }
+
   async syncFromChannel(channel, options = {}) {
     const result = await this._enqueueSerialized(
       '_projectionWriteTail',
@@ -1401,6 +1484,129 @@ export class PublicChannelBee extends ReadyResource {
     return result
   }
 
+  async _syncChannelMetadataAndProfile(meta, profile, sources, artwork) {
+    if (meta) await this.setMetadata(meta)
+    const logicalProfile = profile || pickDefinedFields(meta, CHANNEL_PROFILE_FIELDS)
+    if (logicalProfile && Object.keys(logicalProfile).length > 0) {
+      await this.putChannelProfile(logicalProfile)
+    }
+    for (const source of sources || []) await this.putChannelSource(source)
+    for (const record of artwork || []) await this.putChannelArtwork(record)
+    return logicalProfile
+  }
+
+  async _reconcileUnavailableClaims(unavailableContentDetails, publicCandidatesById, reconciliationStatus) {
+    let blockAllClaimPromotions = reconciliationStatus.scanComplete === false
+    for (const videoId of unavailableContentDetails) {
+      const candidate = publicCandidatesById.get(videoId)
+      if (!candidate) {
+        blockAllClaimPromotions = true
+        continue
+      }
+      if (candidate.importIdentityKey && candidate.importClaimantId) continue
+      const claimIndex = await this._readProjectionClaimIndex(videoId)
+      if (claimIndex) Object.assign(candidate, claimIndex)
+      else blockAllClaimPromotions = true
+    }
+    return blockAllClaimPromotions
+  }
+
+  async _resolveRootProjectionFormat(root) {
+    const verified = await verifySignedChannelRootDescriptor(root)
+    if (!verified?.valid) {
+      throw new Error('Public projection root descriptor is invalid')
+    }
+    const rootRevision = root.descriptor?.profile?.canonicalRevision
+    if (rootRevision) {
+      const publicProfile = await this.getChannelProfile()
+      if (publicProfile?.canonicalRevision !== rootRevision) {
+        throw new Error('Public projection profile revision evidence is incomplete')
+      }
+      return this.setProjectionFormat('modern')
+    }
+    return this.setProjectionFormat('legacy')
+  }
+
+  async _resolveMissingProjectionFormat(publicListing, publicCandidates, logicalProfile, videos, reconciliationStatus) {
+    const root = await this.getRootDescriptor()
+    if (root) {
+      return this._resolveRootProjectionFormat(root)
+    }
+    if (
+      publicListing.status === 'authoritative' &&
+      publicCandidates.length === 0 &&
+      !logicalProfile?.canonicalRevision
+    ) {
+      return this.setProjectionFormat('legacy')
+    }
+    if (
+      !logicalProfile?.canonicalRevision &&
+      !(videos || []).some((candidate) => Boolean(splitPublicVideo(candidate).details)) &&
+      reconciliationStatus.scanComplete !== false
+    ) {
+      return this.setProjectionFormat('legacy')
+    }
+    throw new Error('Public projection format evidence is unavailable')
+  }
+
+  _buildInitialClaimWinners(groupedClaims, blockAllClaimPromotions) {
+    const claimWinners = new Map()
+    for (const [identityKey, identityClaims] of groupedClaims) {
+      claimWinners.set(identityKey, blockAllClaimPromotions ? null : resolveClaimWinner(identityClaims))
+    }
+    return claimWinners
+  }
+
+  async _loadChannelProjectionInputs(channel, projectionVideos) {
+    const [meta, videos, profile, sources, artwork] = await Promise.all([
+      channel.getMetadata?.() || null,
+      projectionVideos === undefined ? channel.listVideos?.() || [] : projectionVideos,
+      channel.getChannelProfile?.() || null,
+      channel.listChannelSources?.() || [],
+      channel.listChannelArtwork?.() || []
+    ])
+    const logicalProfile = await this._syncChannelMetadataAndProfile(meta, profile, sources, artwork)
+    return { videos, logicalProfile }
+  }
+
+  async _prepareSyncClaimState() {
+    const unavailableContentDetails = new Set()
+    const reconciliationStatus = {}
+    const publicListing = await this.listVideosWithStatus({
+      includeSuppressed: true,
+      unavailableContentDetails,
+      reconciliationStatus
+    })
+    const publicCandidates = publicListing.videos
+    const publicCandidatesById = new Map(
+      publicCandidates.map((candidate) => [candidate.id, candidate])
+    )
+    const blockAllClaimPromotions = await this._reconcileUnavailableClaims(
+      unavailableContentDetails,
+      publicCandidatesById,
+      reconciliationStatus
+    )
+    return {
+      unavailableContentDetails,
+      reconciliationStatus,
+      publicListing,
+      publicCandidates,
+      blockAllClaimPromotions,
+    }
+  }
+
+  async _ensureProjectionFormat(publicListing, publicCandidates, logicalProfile, videos, reconciliationStatus) {
+    const projectionFormat = await this.getProjectionFormat()
+    if (projectionFormat) return projectionFormat
+    return this._resolveMissingProjectionFormat(
+      publicListing,
+      publicCandidates,
+      logicalProfile,
+      videos,
+      reconciliationStatus
+    )
+  }
+
   async _syncFromChannelUnlocked(channel, {
     throwOnError = false,
     projectionVideos = undefined
@@ -1411,96 +1617,27 @@ export class PublicChannelBee extends ReadyResource {
     }
 
     try {
-      const [meta, videos, profile, sources, artwork] = await Promise.all([
-        channel.getMetadata?.() || null,
-        projectionVideos === undefined ? channel.listVideos?.() || [] : projectionVideos,
-        channel.getChannelProfile?.() || null,
-        channel.listChannelSources?.() || [],
-        channel.listChannelArtwork?.() || []
-      ])
-      if (meta) await this.setMetadata(meta)
-      const logicalProfile = profile || pickDefinedFields(meta, CHANNEL_PROFILE_FIELDS)
-      if (logicalProfile && Object.keys(logicalProfile).length > 0) {
-        await this.putChannelProfile(logicalProfile)
-      }
-      for (const source of sources || []) await this.putChannelSource(source)
-      for (const record of artwork || []) await this.putChannelArtwork(record)
-      const unavailableContentDetails = new Set()
-      const reconciliationStatus = {}
-      const publicListing = await this.listVideosWithStatus({
-        includeSuppressed: true,
+      const { videos, logicalProfile } = await this._loadChannelProjectionInputs(channel, projectionVideos)
+      const {
         unavailableContentDetails,
+        reconciliationStatus,
+        publicListing,
+        publicCandidates,
+        blockAllClaimPromotions,
+      } = await this._prepareSyncClaimState()
+
+      const projectionFormat = await this._ensureProjectionFormat(
+        publicListing,
+        publicCandidates,
+        logicalProfile,
+        videos,
         reconciliationStatus
-      })
-      const publicCandidates = publicListing.videos
-      const publicCandidatesById = new Map(
-        publicCandidates.map((candidate) => [candidate.id, candidate])
       )
-      let blockAllClaimPromotions = reconciliationStatus.scanComplete === false
-      for (const videoId of unavailableContentDetails) {
-        const candidate = publicCandidatesById.get(videoId)
-        if (!candidate) {
-          blockAllClaimPromotions = true
-          continue
-        }
-        if (candidate.importIdentityKey && candidate.importClaimantId) continue
-        const claimIndex = await this._readProjectionClaimIndex(videoId)
-        if (claimIndex) Object.assign(candidate, claimIndex)
-        else blockAllClaimPromotions = true
-      }
-      let projectionFormat = await this.getProjectionFormat()
-      if (!projectionFormat) {
-        const root = await this.getRootDescriptor()
-        if (root) {
-          const verified = await verifySignedChannelRootDescriptor(root)
-          if (!verified?.valid) {
-            throw new Error('Public projection root descriptor is invalid')
-          }
-          const rootRevision = root.descriptor?.profile?.canonicalRevision
-          if (rootRevision) {
-            const publicProfile = await this.getChannelProfile()
-            if (publicProfile?.canonicalRevision !== rootRevision) {
-              throw new Error('Public projection profile revision evidence is incomplete')
-            }
-            projectionFormat = await this.setProjectionFormat('modern')
-          } else {
-            projectionFormat = await this.setProjectionFormat('legacy')
-          }
-        } else if (
-          publicListing.status === 'authoritative' &&
-          publicCandidates.length === 0 &&
-          !logicalProfile?.canonicalRevision
-        ) {
-          projectionFormat = await this.setProjectionFormat('legacy')
-        } else if (
-          !logicalProfile?.canonicalRevision &&
-          !(videos || []).some((candidate) => Boolean(splitPublicVideo(candidate).details)) &&
-          reconciliationStatus.scanComplete !== false
-        ) {
-          // Non-empty pre-durability projection: public rows already exist but
-          // predate the projection-format marker and no durable root descriptor
-          // was ever written. The authoritative local source channel carries no
-          // structured (modern) projection evidence, so this is a genuine legacy
-          // channel. Establish the legacy format from local channel truth to keep
-          // its videos publicly readable instead of failing closed forever.
-          // Sparse viewer replicas never reach this path: they are non-writable
-          // and return early. A completed local scan (scanComplete) gates against
-          // treating a timed-out partial read as authoritative.
-          projectionFormat = await this.setProjectionFormat('legacy')
-        } else {
-          throw new Error('Public projection format evidence is unavailable')
-        }
-      }
       const materializeContentDetails = projectionFormat === 'modern'
       const claims = await this._readProjectionClaims(channel, videos, publicCandidates)
       const groupedClaims = groupClaimsByIdentity(claims)
-      const claimWinners = new Map()
-      for (const [identityKey, identityClaims] of groupedClaims) {
-        claimWinners.set(identityKey, resolveClaimWinner(identityClaims))
-      }
-      if (blockAllClaimPromotions) {
-        for (const identityKey of claimWinners.keys()) claimWinners.set(identityKey, null)
-      }
+      const claimWinners = this._buildInitialClaimWinners(groupedClaims, blockAllClaimPromotions)
+
       await this._stabilizeClaimWinners(
         videos,
         publicCandidates,
@@ -1603,15 +1740,7 @@ export class PublicChannelBee extends ReadyResource {
     )
   }
 
-  async _activatePublicProjectionUnlocked({
-    channel,
-    stagedDescriptor,
-    stagedProfile,
-    stagedSources = [],
-    stagedArtwork = []
-  } = {}) {
-    if (!this.writable) throw new Error('Not writable')
-    const expectedChannelId = channel?.keyHex?.toLowerCase?.() || null
+  async _validateAndAcceptDescriptor(stagedDescriptor, expectedChannelId) {
     let stagedDescriptorValid = false
     if (stagedDescriptor) {
       const stagedCheck = await verifySignedChannelRootDescriptor(stagedDescriptor)
@@ -1632,17 +1761,36 @@ export class PublicChannelBee extends ReadyResource {
     }
     const stagedDescriptorAccepted = stagedDescriptorValid &&
       compareSignedChannelRootDescriptors(stagedDescriptor, acceptedDescriptor) === 0
+    return { acceptedDescriptor, stagedDescriptorAccepted }
+  }
+
+  async _applyStagedProfile(stagedProfile, stagedDescriptorAccepted, acceptedDescriptor) {
+    if (!stagedProfile) return
+    const metadata = pickDefinedFields(stagedProfile, PUBLIC_METADATA_FIELDS)
+    if (Object.keys(metadata).length > 0) await this.setMetadata(metadata)
+    const profile = pickDefinedFields(stagedProfile, CHANNEL_PROFILE_FIELDS)
+    if (!stagedDescriptorAccepted) delete profile.canonicalRevision
+    if (Object.keys(profile).length > 0) {
+      await this.putChannelProfile(profile, { descriptor: acceptedDescriptor })
+    }
+  }
+
+  async _activatePublicProjectionUnlocked({
+    channel,
+    stagedDescriptor,
+    stagedProfile,
+    stagedSources = [],
+    stagedArtwork = []
+  } = {}) {
+    if (!this.writable) throw new Error('Not writable')
+    const expectedChannelId = channel?.keyHex?.toLowerCase?.() || null
+    const { acceptedDescriptor, stagedDescriptorAccepted } = await this._validateAndAcceptDescriptor(
+      stagedDescriptor,
+      expectedChannelId
+    )
     await this.setProjectionFormat('modern')
 
-    if (stagedProfile) {
-      const metadata = pickDefinedFields(stagedProfile, PUBLIC_METADATA_FIELDS)
-      if (Object.keys(metadata).length > 0) await this.setMetadata(metadata)
-      const profile = pickDefinedFields(stagedProfile, CHANNEL_PROFILE_FIELDS)
-      if (!stagedDescriptorAccepted) delete profile.canonicalRevision
-      if (Object.keys(profile).length > 0) {
-        await this.putChannelProfile(profile, { descriptor: acceptedDescriptor })
-      }
-    }
+    await this._applyStagedProfile(stagedProfile, stagedDescriptorAccepted, acceptedDescriptor)
     for (const source of stagedSources || []) await this.putChannelSource(source)
     for (const artwork of stagedArtwork || []) await this.putChannelArtwork(artwork)
     // Reconcile last so committed private records supersede stale staged bootstrap

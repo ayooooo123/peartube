@@ -1,36 +1,25 @@
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { createJobStore } from '../../src/add/job-store.js'
-import { createExecutor } from '../../src/add/executor.js'
+import { writeFileSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const CHANNEL = { channelKey: 'chan-1', writerKeyHex: 'a'.repeat(64), publicBeeKey: 'b'.repeat(64) }
-
-// In-memory Hyperbee shim. When `file` is provided it persists across processes
-// so crash/resume scenarios can be driven through separate real CLI runs.
-function fakeBee (file = null) {
-  const map = new Map()
-  if (file && existsSync(file)) {
-    try {
-      for (const [k, v] of JSON.parse(readFileSync(file, 'utf8'))) map.set(k, v)
-    } catch {}
-  }
-  const persist = () => { if (file) writeFileSync(file, JSON.stringify([...map.entries()])) }
-  return {
-    map,
-    async get (k) { return map.has(k) ? { value: map.get(k) } : null },
-    async put (k, v) { map.set(k, JSON.parse(JSON.stringify(v))); persist() },
-    async del (k) { map.delete(k); persist() },
-    batch () { const s = []; return { async put (k, v) { s.push([k, v]) }, async flush () { for (const [k, v] of s) map.set(k, JSON.parse(JSON.stringify(v))); persist() } } },
-    async * createReadStream ({ gte, lt } = {}) { for (const k of [...map.keys()].sort()) { if (gte !== undefined && k < gte) continue; if (lt !== undefined && k >= lt) continue; yield { key: k, value: map.get(k) } } }
-  }
-}
+const PUBLISHER_ID = 'd'.repeat(64)
+const FIXTURE_BYTES = Buffer.from('fixture-bytes')
+const FIXTURE_SHA256 = 'c16a40a4584e5bccc84b45172fcdfa922f59ff1edebf3adba7b8266ea04eb39a'
 
 export async function createDeps (context) {
   const env = context.env || {}
-  const bee = fakeBee(env.PEARTUBE_FAKE_BEE_FILE || null)
   const duplicate = env.PEARTUBE_FAKE_DUPLICATE === '1'
-  const pending = env.PEARTUBE_FAKE_PENDING === '1'
+  const expectedTitle = env.PEARTUBE_FAKE_EXPECT_TITLE || null
+  const stageDir = mkdtempSync(join(tmpdir(), 'peartube-add-fake-'))
+  const stagePath = join(stageDir, 'a.mkv')
+  writeFileSync(stagePath, FIXTURE_BYTES)
   return {
-    openAddRuntime: async () => ({ metadataBee: bee, close: async () => {} }),
+    openAddRuntime: async () => ({
+      ensureLocalPublisher: async () => ({ publisherId: PUBLISHER_ID }),
+      close: async () => {}
+    }),
+    ensureLocalPublisher: async () => ({ publisherId: PUBLISHER_ID }),
     createMetadataProvider: async (authority) => ({
       async search () { return [] },
       async getShow () { return { name: 'Breaking Bad', mediaId: '1396', provider: authority, artwork: [] } },
@@ -39,34 +28,32 @@ export async function createDeps (context) {
       async getRecording () { return { title: 'Paranoid Android', artist: 'Radiohead', mediaId: 'b1a9c0e8-2f9d-4b3e-9a24-6f3c1d9a7b55', provider: authority, firstReleaseDate: '1997-05-21', artwork: [] } },
       async getRelease () { return { title: 'OK Computer', artist: 'Radiohead', mediaId: '550e8400-e29b-41d4-a716-446655440000', provider: authority, date: '1997-05-21', artwork: [] } }
     }),
-    createJobStore,
-    createExecutor,
-    buildExecutorDeps: ({ jobStore }) => ({
-      jobStore,
-      resolveChannel: async () => CHANNEL,
-      loadChannel: async () => CHANNEL,
-      duplicateCheck: {
-        check: async () => duplicate
-          ? { status: 'already-exists', existing: { channelKey: 'chan-1', videoId: 'existing-9', availability: 'published' } }
-          : { status: 'ok', advisories: [] }
-      },
-      deriveImportClaimantId: (w, j) => `claim:${j}`,
-      writeClaim: async () => {},
-      resolveClaimWinner: async () => null,
-      downloadSource: async () => {
-        // The runtime-only fetchUrl reaches the downloader but must never surface.
-        console.log('[diag] downloading source (should go to stderr)')
-        return { artifactPath: '/tmp/a.mkv', checksum: 'sha256:v' }
-      },
-      uploadFromPath: async (args) => ({ videoId: args.videoId, channelKey: CHANNEL.channelKey, blobKey: 'blob-1' }),
-      requestPin: async () => {},
-      awaitDurable: async () => ({ verified: !pending, holders: pending ? [] : ['relay-1'] }),
-      publication: {
-        markDurabilityVerified: async () => {},
-        project: async () => ({ channelKey: CHANNEL.channelKey, publicBeeKey: CHANNEL.publicBeeKey }),
-        announce: async () => {},
-        finalize: async () => {}
+    resolveChannel: async () => CHANNEL,
+    duplicateCheck: {
+      check: async () => duplicate
+        ? { status: 'already-exists', existing: { channelKey: 'chan-1', videoId: 'existing-9', availability: 'published' } }
+        : { status: 'ok', advisories: [] }
+    },
+    arbitrateImportClaim: async () => ({ ok: true }),
+    stageSource: async () => {
+      console.log('[diag] downloading source (should go to stderr)')
+      return {
+        artifactPath: stagePath,
+        checksum: `sha256:${FIXTURE_SHA256}`,
+        title: 'a.mkv',
+        dispose: null
       }
-    })
+    },
+    executeLocalFileAcquisition: async ({ input }) => {
+      if (expectedTitle !== null && input.title !== expectedTitle) throw new Error('fixture title assertion failed')
+      return {
+        acquisitionId: `acq-${input.idempotencyKey}`,
+        state: 'completed',
+        publicationId: `vid-${input.idempotencyKey}`,
+        manifestId: 'manifest-1',
+        renditionId: 'rendition-1',
+        assetId: 'asset-1'
+      }
+    }
   }
 }

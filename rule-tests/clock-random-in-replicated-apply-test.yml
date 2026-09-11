@@ -1,0 +1,38 @@
+id: clock-random-in-replicated-apply
+valid:
+  - |
+    class Store {
+      _applyData(op) {
+        const timestamp = op.at || 0
+        const id = op.id
+        return { timestamp, id }
+      }
+    }
+  - |
+    function writeHelper() {
+      const now = Date.now()
+      const id = randomId()
+      return { now, id }
+    }
+invalid:
+  - |
+    class Store {
+      _applyData(op) {
+        const timestamp = op.at || Date.now()
+        return { timestamp }
+      }
+    }
+  - |
+    class PersonalStore {
+      _apply(batch) {
+        const id = randomId()
+        return id
+      }
+    }
+  - |
+    class Reducer {
+      apply(entry) {
+        const salt = Math.random()
+        return salt
+      }
+    }

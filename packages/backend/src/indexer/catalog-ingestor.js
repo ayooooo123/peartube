@@ -128,7 +128,7 @@ function titleTokens(normalizedTitle) {
   return tokens
 }
 
-function currentWriter(authorization, operation, capability, now) {
+function currentWriter(authorization, operation, capability) {
   if (!authorization || !Array.isArray(authorization.writers) || authorization.writers.length > MAX_PROJECTIONS) {
     invalid('catalog authorization state is missing or invalid')
   }
@@ -138,12 +138,11 @@ function currentWriter(authorization, operation, capability, now) {
     invalid(`operation signer is not authorized for ${capability}`)
   }
   const writerExpiry = boundedUint(writer.expiresAt, 'writer expiry')
-  if (writerExpiry < now) invalid('operation signer authorization is expired')
   const signedAt = boundedUint(operation.signedAt, 'operation signedAt')
-  if (signedAt > now) invalid('operation is future-issued')
+  if (signedAt > writerExpiry) invalid('operation signer authorization is expired')
   if (operation.expiresAt !== undefined) {
     const operationExpiry = boundedUint(operation.expiresAt, 'operation expiresAt')
-    if (operationExpiry > 0 && operationExpiry < now) invalid('operation is expired')
+    if (operationExpiry > 0 && operationExpiry < signedAt) invalid('operation is expired')
   }
   const sequence = boundedUint(operation.issuerSequence, 'operation sequence')
   const first = boundedUint(writer.firstAcceptedSequence, 'writer first sequence')
@@ -279,7 +278,7 @@ async function normalizePublication(context, keyId, frame, body, raw, requireCur
   const publicationId = exactHex(body.publicationId, 'publicationId')
   const manifestId = exactHex(body.manifestId, 'manifestId')
   if (keyId !== publicationId) invalid('publication projection key and publicationId mismatch')
-  if (requireCurrentAuthorization) currentWriter(context.authorization, frame, 'publish', context.ingestedAt)
+  if (requireCurrentAuthorization) currentWriter(context.authorization, frame, 'publish')
 
   const manifest = decodePublicationManifest(body.payload)
   const verified = await verifyCatalogPublicationManifest(manifest, {
@@ -437,7 +436,7 @@ async function normalizeClaim(context, keyId, frame, body, raw, requireCurrentAu
   if (frame.recordType !== PUBLISHER_RECORD_TYPES.CLAIM) invalid('claim projection contains the wrong record type')
   const claimId = exactHex(body.claimId, 'claimId')
   if (keyId !== claimId) invalid('claim projection key and claimId mismatch')
-  if (requireCurrentAuthorization) currentWriter(context.authorization, frame, 'claim', context.ingestedAt)
+  if (requireCurrentAuthorization) currentWriter(context.authorization, frame, 'claim')
 
   const envelope = decodeApplicationEnvelope(body.payload)
   if (!sameBytes(encodeApplicationEnvelope(envelope), body.payload)) invalid('claim application envelope is noncanonical')
@@ -510,7 +509,7 @@ async function normalizeProjection(context, entry, requireCurrentAuthorization) 
   }
   const capability = requiredPublisherCapability(frame.recordType, body)
   if (!capability) invalid('projection operation has no publisher capability')
-  if (requireCurrentAuthorization) currentWriter(context.authorization, frame, capability, context.ingestedAt)
+  if (requireCurrentAuthorization) currentWriter(context.authorization, frame, capability)
   return [row(COLLECTIONS.sourceRecords, sourceRow(context, frame, raw))]
 }
 
@@ -698,6 +697,116 @@ async function preparePinnedContext({ publisherId, descriptor, catalog, now, sig
   }
 }
 
+async function verifyPinnedView(pinnedView, context, signal) {
+  throwIfAborted(signal)
+  await pinnedView.ready()
+  throwIfAborted(signal)
+  if (pinnedView.version !== context.viewVersion || pinnedView.core.fork !== context.viewFork) {
+    invalid('catalog checkout does not match the captured fork and version')
+  }
+  throwIfAborted(signal)
+  const acceptedDescriptor = await pinnedView.get('state/descriptor')
+  throwIfAborted(signal)
+  if (!acceptedDescriptor) invalid('pinned catalog has no accepted namespace descriptor')
+  const decodedDescriptor = decodePublisherNamespaceDescriptor(acceptedDescriptor.value, {
+    legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY,
+  })
+  verifyPublisherNamespaceDescriptor(decodedDescriptor)
+  if (!sameBytes(encodePublisherNamespaceDescriptor(decodedDescriptor), context.descriptorBytes)) {
+    invalid('pinned catalog descriptor does not match the verified descriptor')
+  }
+  throwIfAborted(signal)
+  const authorization = await getPublisherAuthorizationState(pinnedView)
+  throwIfAborted(signal)
+  if (!authorization) invalid('pinned catalog has no accepted authorization state')
+  return authorization
+}
+
+function determineRepairReason(previous, cursor, pinnedContext, requestedRepairReason) {
+  if (previous &&
+      previous.catalogEpoch === cursor.catalogEpoch &&
+      previous.catalogBootstrapKey === cursor.catalogBootstrapKey &&
+      previous.lastVerifiedDescriptor === cursor.lastVerifiedDescriptor &&
+      previous.viewFork === pinnedContext.viewFork &&
+      previous.viewVersion > pinnedContext.viewVersion) {
+    invalid('catalog source is behind the durable cursor')
+  }
+
+  let repairReason = requestedRepairReason === AUTOMATIC_REPAIR ? null : requestedRepairReason
+  if (repairReason === null && previous) {
+    if (previous.catalogEpoch !== cursor.catalogEpoch ||
+        previous.catalogBootstrapKey !== cursor.catalogBootstrapKey ||
+        previous.lastVerifiedDescriptor !== cursor.lastVerifiedDescriptor) {
+      repairReason = 'source-identity-changed'
+    } else if (previous.viewFork !== pinnedContext.viewFork) {
+      repairReason = 'source-fork-changed'
+    }
+  }
+  return repairReason
+}
+
+async function replacePublisherSliceHelper({ index, pinnedContext, pinnedView, admissionLimits, cursor, previous, signal, result }) {
+  const rows = await collectCurrentRows(
+    pinnedContext,
+    pinnedView,
+    createIngestionBudget(admissionLimits, cursor),
+  )
+  throwIfAborted(signal)
+  await index.replacePublisherSlice({
+    publisherId: pinnedContext.publisherId,
+    rows,
+    cursor,
+    expectedCursor: previous,
+  })
+  return Object.freeze({
+    ...result,
+    changed: rows.length,
+    cursor,
+  })
+}
+
+async function ingestPublisherChangesHelper({ index, pinnedContext, pinnedView, previous, admissionLimits, cursor, signal }) {
+  const currentRows = await collectCurrentRows(
+    pinnedContext,
+    pinnedView,
+    createIngestionBudget(admissionLimits, cursor),
+  )
+
+  let operations
+  try {
+    operations = await collectChanges(
+      pinnedContext,
+      pinnedView,
+      previous.viewVersion,
+      createIngestionBudget(admissionLimits, cursor, true),
+    )
+  } catch (error) {
+    if (error?.code !== 'SNAPSHOT_NOT_AVAILABLE') throw error
+    throwIfAborted(signal)
+    await index.replacePublisherSlice({
+      publisherId: pinnedContext.publisherId,
+      rows: currentRows,
+      cursor,
+      expectedCursor: previous,
+    })
+    return Object.freeze({
+      status: 'repaired',
+      mode: 'repair',
+      reason: 'source-history-unavailable',
+      changed: currentRows.length,
+      cursor,
+    })
+  }
+  throwIfAborted(signal)
+  await index.applyPublisherChanges({
+    publisherId: pinnedContext.publisherId,
+    operations,
+    cursor,
+    expectedCursor: previous,
+  })
+  return Object.freeze({ mode: 'incremental', changed: operations.length, cursor })
+}
+
 export function createCatalogIngestor({ index, now = Date.now } = {}) {
   validateIndexSurface(index)
   if (typeof now !== 'function') throw new TypeError('now must be a function')
@@ -712,27 +821,7 @@ export function createCatalogIngestor({ index, now = Date.now } = {}) {
     const context = await preparePinnedContext({ publisherId, descriptor, catalog, now, signal })
     const pinnedView = context.view.checkout(context.viewVersion)
     try {
-      throwIfAborted(signal)
-      await pinnedView.ready()
-      throwIfAborted(signal)
-      if (pinnedView.version !== context.viewVersion || pinnedView.core.fork !== context.viewFork) {
-        invalid('catalog checkout does not match the captured fork and version')
-      }
-      throwIfAborted(signal)
-      const acceptedDescriptor = await pinnedView.get('state/descriptor')
-      throwIfAborted(signal)
-      if (!acceptedDescriptor) invalid('pinned catalog has no accepted namespace descriptor')
-      const decodedDescriptor = decodePublisherNamespaceDescriptor(acceptedDescriptor.value, {
-        legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY,
-      })
-      verifyPublisherNamespaceDescriptor(decodedDescriptor)
-      if (!sameBytes(encodePublisherNamespaceDescriptor(decodedDescriptor), context.descriptorBytes)) {
-        invalid('pinned catalog descriptor does not match the verified descriptor')
-      }
-      throwIfAborted(signal)
-      const authorization = await getPublisherAuthorizationState(pinnedView)
-      throwIfAborted(signal)
-      if (!authorization) invalid('pinned catalog has no accepted authorization state')
+      const authorization = await verifyPinnedView(pinnedView, context, signal)
       const pinnedContext = { ...context, authorization }
       const previous = await index.getPublisherSourceCursor({
         publisherId: pinnedContext.publisherId,
@@ -744,53 +833,21 @@ export function createCatalogIngestor({ index, now = Date.now } = {}) {
       })
       throwIfAborted(signal)
 
-      if (previous &&
-          previous.catalogEpoch === cursor.catalogEpoch &&
-          previous.catalogBootstrapKey === cursor.catalogBootstrapKey &&
-          previous.lastVerifiedDescriptor === cursor.lastVerifiedDescriptor &&
-          previous.viewFork === pinnedContext.viewFork &&
-          previous.viewVersion > pinnedContext.viewVersion) {
-        invalid('catalog source is behind the durable cursor')
-      }
-
-      let repairReason = requestedRepairReason === AUTOMATIC_REPAIR ? null : requestedRepairReason
-      if (repairReason === null && previous) {
-        if (previous.catalogEpoch !== cursor.catalogEpoch ||
-            previous.catalogBootstrapKey !== cursor.catalogBootstrapKey ||
-            previous.lastVerifiedDescriptor !== cursor.lastVerifiedDescriptor) {
-          repairReason = 'source-identity-changed'
-        } else if (previous.viewFork !== pinnedContext.viewFork) {
-          repairReason = 'source-fork-changed'
-        }
-      }
+      const repairReason = determineRepairReason(previous, cursor, pinnedContext, requestedRepairReason)
       if (repairReason !== null) {
-        const rows = await collectCurrentRows(
+        return await replacePublisherSliceHelper({
+          index,
           pinnedContext,
           pinnedView,
-          createIngestionBudget(admissionLimits, cursor),
-        )
-        throwIfAborted(signal)
-        await index.replacePublisherSlice({
-          publisherId: pinnedContext.publisherId,
-          rows,
+          admissionLimits,
           cursor,
-          expectedCursor: previous,
-        })
-        return Object.freeze({
-          status: 'repaired',
-          mode: 'repair',
-          reason: repairReason,
-          changed: rows.length,
-          cursor,
+          previous,
+          signal,
+          result: { status: 'repaired', mode: 'repair', reason: repairReason },
         })
       }
       if (previous && previous.viewVersion === pinnedContext.viewVersion) {
         if (!cursorMatches(previous, cursor)) invalid('stored cursor conflicts with the pinned catalog head')
-        await collectCurrentRows(
-          pinnedContext,
-          pinnedView,
-          createIngestionBudget(admissionLimits, cursor),
-        )
         return Object.freeze({ mode: 'noop', changed: 0, cursor })
       }
       const usablePrevious = previous &&
@@ -798,59 +855,18 @@ export function createCatalogIngestor({ index, now = Date.now } = {}) {
         previous.viewVersion >= 1 &&
         previous.viewVersion < pinnedContext.viewVersion
       if (!usablePrevious) {
-        const rows = await collectCurrentRows(
+        return await replacePublisherSliceHelper({
+          index,
           pinnedContext,
           pinnedView,
-          createIngestionBudget(admissionLimits, cursor),
-        )
-        throwIfAborted(signal)
-        await index.replacePublisherSlice({
-          publisherId: pinnedContext.publisherId,
-          rows,
+          admissionLimits,
           cursor,
-          expectedCursor: previous,
-        })
-        return Object.freeze({ mode: 'bootstrap', changed: rows.length, cursor })
-      }
-      const currentRows = await collectCurrentRows(
-        pinnedContext,
-        pinnedView,
-        createIngestionBudget(admissionLimits, cursor),
-      )
-
-      let operations
-      try {
-        operations = await collectChanges(
-          pinnedContext,
-          pinnedView,
-          previous.viewVersion,
-          createIngestionBudget(admissionLimits, cursor, true),
-        )
-      } catch (error) {
-        if (error?.code !== 'SNAPSHOT_NOT_AVAILABLE') throw error
-        throwIfAborted(signal)
-        await index.replacePublisherSlice({
-          publisherId: pinnedContext.publisherId,
-          rows: currentRows,
-          cursor,
-          expectedCursor: previous,
-        })
-        return Object.freeze({
-          status: 'repaired',
-          mode: 'repair',
-          reason: 'source-history-unavailable',
-          changed: currentRows.length,
-          cursor,
+          previous,
+          signal,
+          result: { mode: 'bootstrap' },
         })
       }
-      throwIfAborted(signal)
-      await index.applyPublisherChanges({
-        publisherId: pinnedContext.publisherId,
-        operations,
-        cursor,
-        expectedCursor: previous,
-      })
-      return Object.freeze({ mode: 'incremental', changed: operations.length, cursor })
+      return await ingestPublisherChangesHelper({ index, pinnedContext, pinnedView, previous, admissionLimits, cursor, signal })
     } finally {
       await pinnedView.close()
     }

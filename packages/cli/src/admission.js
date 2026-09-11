@@ -12,6 +12,46 @@ export function retentionClassPriority(retentionClass) {
   return RETENTION_PRIORITY[retentionClass] || 0
 }
 
+function evaluateAllowlistAdmission(candidate, config) {
+  const retentionClass = config.mode === 'private' ? 'private' : 'allowlist'
+  if (hasAllowlistedChannel(candidate, config)) {
+    return {
+      accepted: true,
+      reason: 'channel-allowlist',
+      retentionClass
+    }
+  }
+  if (hasAllowlistedOwner(candidate, config)) {
+    return {
+      accepted: true,
+      reason: 'owner-allowlist',
+      retentionClass
+    }
+  }
+  return null
+}
+
+function evaluateDiscoveryAdmission(candidate, config, acceptedChannels, ownerCounts) {
+  if (!config.discovery?.enabled) {
+    return { accepted: false, reason: 'discovery-disabled', retentionClass: null }
+  }
+
+  const maxChannels = Number(config.discovery.maxChannels || 0)
+  if (maxChannels > 0 && acceptedChannels.size >= maxChannels) {
+    return { accepted: false, reason: 'channel-limit', retentionClass: null }
+  }
+
+  if (candidate.ownerKey) {
+    const maxPerOwner = Number(config.discovery.maxChannelsPerOwner || 0)
+    const ownerChannelCount = ownerCounts.get(candidate.ownerKey) || 0
+    if (maxPerOwner > 0 && ownerChannelCount >= maxPerOwner) {
+      return { accepted: false, reason: 'owner-limit', retentionClass: null }
+    }
+  }
+
+  return { accepted: true, reason: 'discovery', retentionClass: 'discovery' }
+}
+
 export function evaluateCandidate({ candidate, config, acceptedChannels = new Set(), ownerCounts = new Map() }) {
   if (!candidate?.channelKey) {
     return { accepted: false, reason: 'missing-channel-key', retentionClass: null }
@@ -21,40 +61,14 @@ export function evaluateCandidate({ candidate, config, acceptedChannels = new Se
     return { accepted: false, reason: 'already-accepted', retentionClass: null }
   }
 
-  if (hasAllowlistedChannel(candidate, config)) {
-    return {
-      accepted: true,
-      reason: 'channel-allowlist',
-      retentionClass: config.mode === 'private' ? 'private' : 'allowlist'
-    }
-  }
-
-  if (hasAllowlistedOwner(candidate, config)) {
-    return {
-      accepted: true,
-      reason: 'owner-allowlist',
-      retentionClass: config.mode === 'private' ? 'private' : 'allowlist'
-    }
+  const allowlistResult = evaluateAllowlistAdmission(candidate, config)
+  if (allowlistResult) {
+    return allowlistResult
   }
 
   if (config.mode === 'private' || config.policy === 'allowlist') {
     return { accepted: false, reason: 'not-allowlisted', retentionClass: null }
   }
 
-  if (!config.discovery?.enabled) {
-    return { accepted: false, reason: 'discovery-disabled', retentionClass: null }
-  }
-
-  if (Number(config.discovery.maxChannels || 0) > 0 && acceptedChannels.size >= config.discovery.maxChannels) {
-    return { accepted: false, reason: 'channel-limit', retentionClass: null }
-  }
-
-  if (candidate.ownerKey) {
-    const ownerChannelCount = ownerCounts.get(candidate.ownerKey) || 0
-    if (Number(config.discovery.maxChannelsPerOwner || 0) > 0 && ownerChannelCount >= config.discovery.maxChannelsPerOwner) {
-      return { accepted: false, reason: 'owner-limit', retentionClass: null }
-    }
-  }
-
-  return { accepted: true, reason: 'discovery', retentionClass: 'discovery' }
+  return evaluateDiscoveryAdmission(candidate, config, acceptedChannels, ownerCounts)
 }

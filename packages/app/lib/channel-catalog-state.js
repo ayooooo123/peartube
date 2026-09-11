@@ -33,6 +33,40 @@ function responseError(result, fallback) {
   return typeof result?.error === 'string' && result.error.length > 0 ? result.error : fallback
 }
 
+function shouldResetExpiredCursor(result, cursor) {
+  return Boolean(cursor && !isTimedOut(result) && result?.success === false && result.errorCode === 'INVALID_CURSOR')
+}
+
+function applyGroupResult(updatePage, groupId, result, { append, resetExpiredCursor, profile }) {
+  if (isTimedOut(result)) {
+    updatePage(groupId, (current) => ({
+      ...current,
+      loaded: true,
+      error: 'This section is taking longer than expected. Retry to refresh it.',
+    }))
+    return
+  }
+
+  if (result?.success === false) {
+    updatePage(groupId, (current) => ({
+      ...current,
+      loaded: true,
+      error: responseError(result, 'Failed to load this section. Retry to refresh it.'),
+    }))
+    return
+  }
+
+  const mappedPage = mapContentItems(result, profile)
+  const shouldKeepCards = append && !resetExpiredCursor
+  updatePage(groupId, (current) => ({
+    ...current,
+    cards: mergeUniqueCards(shouldKeepCards ? current.cards : [], mappedPage.cards),
+    nextCursor: mappedPage.nextCursor,
+    loaded: true,
+    error: '',
+  }))
+}
+
 export function createChannelCatalogState({
   rpc,
   bound = (promise) => promise,
@@ -92,35 +126,18 @@ export function createChannelCatalogState({
       if (!isCurrentRequest()) return state
 
       let resetExpiredCursor = false
-      if (!isTimedOut(result) && result?.success === false && result.errorCode === 'INVALID_CURSOR' && cursor) {
+      if (shouldResetExpiredCursor(result, cursor)) {
         resetExpiredCursor = true
         updatePage(groupId, () => emptyPage({ loading: true }))
         result = await bound(rpc.getContentItems(requestFor(groupId)))
         if (!isCurrentRequest()) return state
       }
 
-      if (isTimedOut(result)) {
-        updatePage(groupId, (current) => ({
-          ...current,
-          loaded: true,
-          error: 'This section is taking longer than expected. Retry to refresh it.',
-        }))
-      } else if (result?.success === false) {
-        updatePage(groupId, (current) => ({
-          ...current,
-          loaded: true,
-          error: responseError(result, 'Failed to load this section. Retry to refresh it.'),
-        }))
-      } else {
-        const mappedPage = mapContentItems(result, state.catalog?.profile)
-        updatePage(groupId, (current) => ({
-          ...current,
-          cards: mergeUniqueCards(append && !resetExpiredCursor ? current.cards : [], mappedPage.cards),
-          nextCursor: mappedPage.nextCursor,
-          loaded: true,
-          error: '',
-        }))
-      }
+      applyGroupResult(updatePage, groupId, result, {
+        append,
+        resetExpiredCursor,
+        profile: state.catalog?.profile,
+      })
     } catch (error) {
       if (!isCurrentRequest()) return state
       updatePage(groupId, (current) => ({

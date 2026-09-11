@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { test } from 'node:test'
+import test from 'node:test'
+import { createApi } from '../../backend/src/api.js'
 
 const apiPath = new URL('../../backend/src/api.js', import.meta.url)
 const servicePath = new URL('../../backend/src/blob-playback-service.js', import.meta.url)
@@ -35,17 +36,31 @@ test('fallback channel blob-entry playback is centralized in the playback servic
   assert.match(fallbackBlock, /return this\.resolveDirectBlobUrl\(\{[\s\S]*blobsCoreKey,[\s\S]*blobId,/, 'fallback blob-entry path should use the centralized instant URL generator')
 })
 
-test('getVideoData has direct blob metadata fallback before channel load', async () => {
-  const src = await source(apiPath)
-  const getVideoDataStart = src.indexOf('async getVideoData')
-  assert.notEqual(getVideoDataStart, -1, 'expected getVideoData implementation')
-  const channelLoadIndex = src.indexOf('const channel = await loadChannel(ctx, driveKey)', getVideoDataStart)
-  assert.notEqual(channelLoadIndex, -1, 'expected channel-load fallback')
-  const directBlock = src.slice(getVideoDataStart, channelLoadIndex)
+test('getVideoData returns direct blob metadata before channel load', async () => {
+  let channelLoads = 0
+  const api = createApi({
+    ctx: {},
+    loadChannel: async () => {
+      channelLoads += 1
+      throw new Error('direct metadata should not load a channel')
+    },
+  })
+  const metadata = await api.getVideoData(
+    'channel-key',
+    '/videos/instant.mp4',
+    'public-bee-key',
+    'blob-id',
+    'blobs-core-key',
+    'video/mp4',
+  )
 
-  assert.match(directBlock, /if \(blobId && blobsCoreKey\)/, 'getVideoData should accept direct blob refs')
-  assert.match(directBlock, /GET_VIDEO_DATA: INSTANT metadata from direct blobId\/blobsCoreKey/, 'direct metadata path should be logged')
-  assert.match(directBlock, /blobId,[\s\S]*blobsCoreKey,/, 'direct metadata path should return blob metadata without loadChannel')
+  assert.equal(metadata.id, 'instant')
+  assert.equal(metadata.path, '/videos/instant.mp4')
+  assert.equal(metadata.publicBeeKey, 'public-bee-key')
+  assert.equal(metadata.blobId, 'blob-id')
+  assert.equal(metadata.blobsCoreKey, 'blobs-core-key')
+  assert.equal(metadata.mimeType, 'video/mp4')
+  assert.equal(channelLoads, 0, 'the direct metadata branch precedes channel lookup')
 })
 
 test('instant blob URL path generates the blob-server link before background core readiness/update', async () => {

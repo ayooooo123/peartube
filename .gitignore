@@ -1,7 +1,6 @@
 # Dependencies
 **/node_modules/
 **/node_modules
-package-lock.json
 pnpm-lock.yaml
 bun.lock
 
@@ -83,6 +82,8 @@ logfile
 .codex/
 .sisyphus/
 .superpowers/
+.omo/
+.omp/agents/peartube-oxlint-*.md
 .tmp-device-crashes/
 .evidence/
 .trash-peartube-cleanup/

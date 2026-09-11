@@ -25,10 +25,10 @@ import type {
 // bare-rpc / b4a call Buffer.byteLength, Buffer.concat, Buffer.alloc etc.
 ;(globalThis as any).Buffer = Buffer
 if (typeof (globalThis as any).process === 'undefined') {
-  ;(globalThis as any).process = { env: {}, nextTick: (fn: Function) => Promise.resolve().then(() => fn()), browser: true }
+  (globalThis as any).process = { env: {}, nextTick: (fn: () => void) => Promise.resolve().then(() => fn()), browser: true }
 }
 if (typeof (globalThis as any).global === 'undefined') {
-  ;(globalThis as any).global = globalThis
+  (globalThis as any).global = globalThis
 }
 
 type PublisherBackendRelay = {
@@ -45,6 +45,7 @@ type PublisherBackendRelay = {
     'success' | 'unsignedBytes' | 'candidateRecordId' | 'signerPublicKey' |
     'bodyLength' | 'expiresAt' | 'error'
   > & {
+    body: Uint8Array
     signerPublicKey: Uint8Array
     displaySummaryJson: string
     expiresInMs: number
@@ -117,7 +118,9 @@ const rpc = Electroview.defineRPC<PearTubeRPC>({
           signer: new Uint8Array(request.signer),
           signerPublicKey: new Uint8Array(request.signerPublicKey),
           signature: new Uint8Array(request.signature),
-          allowedSigners: request.allowedSigners?.map((key) => new Uint8Array(key)) ?? request.allowedSigners,
+          allowedSigners: request.allowedSigners
+            ? request.allowedSigners.map((key) => new Uint8Array(key))
+            : request.allowedSigners,
         })
         return {
           ...response,
@@ -143,20 +146,22 @@ const electrobun = new Electroview({ rpc })
 let ipcSocket: WebSocket | null = null
 let ipcConnectPromise: Promise<boolean> | null = null
 let ipcPortPromise: Promise<number> | null = null
-const ipcListeners = new Map<string, Set<Function>>()
-const stdoutListeners = new Map<string, Set<Function>>()
-const stderrListeners = new Map<string, Set<Function>>()
-const exitListeners = new Map<string, Set<Function>>()
+type IpcListener = (data: any) => void
 
-function addListener(map: Map<string, Set<Function>>, key: string, fn: Function) {
+const ipcListeners = new Map<string, Set<IpcListener>>()
+const stdoutListeners = new Map<string, Set<IpcListener>>()
+const stderrListeners = new Map<string, Set<IpcListener>>()
+const exitListeners = new Map<string, Set<IpcListener>>()
+
+function addListener(map: Map<string, Set<IpcListener>>, key: string, fn: IpcListener) {
   if (!map.has(key)) map.set(key, new Set())
   map.get(key)!.add(fn)
   return () => { map.get(key)?.delete(fn) }
 }
 
-function fireListeners(map: Map<string, Set<Function>>, key: string, data: any) {
+function fireListeners(map: Map<string, Set<IpcListener>>, key: string, data: any) {
   const fns = map.get(key)
-  if (fns) for (const fn of fns) { try { fn(data) } catch {} }
+  if (fns) for (const fn of fns) { try { fn(data) } catch { /* keep firing remaining listeners */ } }
 }
 
 // Discover the IPC WebSocket port from the static server
@@ -171,10 +176,10 @@ async function discoverIpcPort(): Promise<number> {
         return parsedPort
       }
     }
-  } catch {}
+  } catch { /* IPC port endpoint unavailable; fall back to scanning */ }
 
   // Fallback: scan ports near the static server
-  const staticPort = parseInt(window.location.port, 10)
+  const staticPort = parseInt(globalThis.window.location.port, 10)
   for (let offset = 1; offset <= 10; offset++) {
     try {
       const ws = new WebSocket(`ws://127.0.0.1:${staticPort + offset}`)
@@ -184,7 +189,7 @@ async function discoverIpcPort(): Promise<number> {
         setTimeout(reject, 200)
       })
       return staticPort + offset
-    } catch {}
+    } catch { /* candidate port refused; try the next offset */ }
   }
   throw new Error('Could not discover IPC WebSocket port')
 }
@@ -207,8 +212,8 @@ const bridge = {
   },
 
   applyUpdate: async () => {},
-  appRestart: async () => { window.location.reload() },
-  onPearEvent(_name: string, _listener: Function) { return () => {} },
+  appRestart: async () => { globalThis.window.location.reload() },
+  onPearEvent(_name: string, _listener: IpcListener) { return () => {} },
   registerPublisherBackendRelay(relay: PublisherBackendRelay) {
     if (publisherBackendRelay) throw new Error('Publisher backend relay is already registered')
     if (!relay || typeof relay.provisionPublisherCatalog !== 'function' ||
@@ -285,7 +290,7 @@ const bridge = {
 
           timeout = setTimeout(() => {
             console.error('[bridge] IPC WebSocket connection timeout')
-            try { ws.close() } catch {}
+            try { ws.close() } catch { /* socket already closed */ }
             settle(false)
           }, 10000)
         })
@@ -314,24 +319,24 @@ const bridge = {
     return Promise.resolve(true)
   },
 
-  onWorkerIPC(specifier: string, listener: Function) {
+  onWorkerIPC(specifier: string, listener: IpcListener) {
     return addListener(ipcListeners, specifier, listener)
   },
 
-  onWorkerStdout(specifier: string, listener: Function) {
+  onWorkerStdout(specifier: string, listener: IpcListener) {
     return addListener(stdoutListeners, specifier, listener)
   },
 
-  onWorkerStderr(specifier: string, listener: Function) {
+  onWorkerStderr(specifier: string, listener: IpcListener) {
     return addListener(stderrListeners, specifier, listener)
   },
 
-  onWorkerExit(specifier: string, listener: Function) {
+  onWorkerExit(specifier: string, listener: IpcListener) {
     return addListener(exitListeners, specifier, listener)
   },
 }
 
-Object.defineProperty(window, 'bridge', {
+Object.defineProperty(globalThis.window, 'bridge', {
   value: Object.freeze(bridge),
   enumerable: true,
   writable: false,

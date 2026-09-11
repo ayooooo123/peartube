@@ -56,13 +56,18 @@ export function createIndexFeedManager(options = {}) {
 
   const ready = stateRepository?.load ? restoreState() : Promise.resolve()
 
-  function appendRecord(record) {
+  async function appendRecord(record) {
+    let evicted = null
     if (records.length < maxStoredRecords) {
       records.push(record)
-      return
+    } else {
+      evicted = records[oldestRecord]
+      records[oldestRecord] = record
+      oldestRecord = (oldestRecord + 1) % maxStoredRecords
     }
-    records[oldestRecord] = record
-    oldestRecord = (oldestRecord + 1) % maxStoredRecords
+    if (evicted) {
+      await onRecordsRemoved([evicted], { curatorId: evicted.indexId })
+    }
   }
 
   function snapshotRecords() {
@@ -128,6 +133,52 @@ export function createIndexFeedManager(options = {}) {
       },
     ])
   }
+  async function ingestSingleRecord(record, curatorId, pageId) {
+    if (!await acceptRecord(record, { curatorId, pageId })) {
+      return { accepted: false, errorCode: 'LOCAL_POLICY_REJECTED' }
+    }
+    const acceptedRecord = { ...record, indexId: curatorId, sourceId: `${curatorId}:${pageId}` }
+    if (!await onAcceptedRecord(acceptedRecord, { curatorId, pageId })) {
+      return { accepted: false, errorCode: 'LOCAL_PROJECTION_REJECTED' }
+    }
+    await appendRecord(acceptedRecord)
+    return { accepted: true }
+  }
+
+  async function fetchAndVerifyPage(curatorId, cursor, fetchPage) {
+    const page = await fetchPage(cursor)
+    let verified
+    try {
+      verified = await verifyIndexFeedPage(page?.envelope, {
+        curatorId,
+        now: now(),
+        supportedCapabilities,
+      })
+    } catch (error) {
+      if (typeof error?.code === 'string' && error.code.startsWith('PROTOCOL_')) {
+        return { quarantineCode: error.code }
+      }
+      throw error
+    }
+    if (!verified) return { quarantineCode: 'INVALID_PAGE' }
+    if (verified.body.pageCursor !== cursor) return { quarantineCode: 'STALE_OR_FORKED_CURSOR' }
+
+    const pageKey = `${curatorId}\0${cursor}`
+    const existing = pageStates.get(pageKey)
+    if (existing?.pageId !== undefined && existing.pageId !== verified.pageId) {
+      return { quarantineCode: 'STALE_OR_FORKED_CURSOR' }
+    }
+    return { verified, pageKey }
+  }
+
+  function buildFinalSyncStatus(ingested, rejected, firstRejectionCode) {
+    if (ingested === 0 && rejected > 0) {
+      return { status: 'rejected', errorCode: firstRejectionCode, nextCursor: null, ingested, rejected }
+    }
+    if (rejected > 0) return { status: 'complete', nextCursor: null, ingested, rejected, errorCode: firstRejectionCode }
+    return { status: 'complete', nextCursor: null, ingested }
+  }
+
 
   return {
     ready,
@@ -165,29 +216,10 @@ export function createIndexFeedManager(options = {}) {
       let rejected = 0
       let processed = 0
       let firstRejectionCode = null
-      while (true) {
-        const page = await fetchPage(cursor)
-        let verified
-        try {
-          verified = await verifyIndexFeedPage(page?.envelope, {
-            curatorId,
-            now: now(),
-            supportedCapabilities,
-          })
-        } catch (error) {
-          if (typeof error?.code === 'string' && error.code.startsWith('PROTOCOL_')) {
-            return quarantineCurator(curatorId, error.code)
-          }
-          throw error
-        }
-        if (!verified) return quarantineCurator(curatorId, 'INVALID_PAGE')
-        if (verified.body.pageCursor !== cursor) return quarantineCurator(curatorId, 'STALE_OR_FORKED_CURSOR')
-
-        const pageKey = `${curatorId}\0${cursor}`
-        const existing = pageStates.get(pageKey)
-        if (existing?.pageId !== undefined && existing.pageId !== verified.pageId) {
-          return quarantineCurator(curatorId, 'STALE_OR_FORKED_CURSOR')
-        }
+      for (;;) {
+        const pageResult = await fetchAndVerifyPage(curatorId, cursor, fetchPage)
+        if (pageResult.quarantineCode) return quarantineCurator(curatorId, pageResult.quarantineCode)
+        const { verified, pageKey } = pageResult
         const state = rememberPage(pageKey, verified.pageId)
         if (state.complete) {
           cursor = state.nextCursor
@@ -221,18 +253,12 @@ export function createIndexFeedManager(options = {}) {
           }
           state.nextIndex = index + 1
           processed++
-          if (!await acceptRecord(record, { curatorId, pageId: verified.pageId })) {
+          const ingestResult = await ingestSingleRecord(record, curatorId, verified.pageId)
+          if (!ingestResult.accepted) {
             rejected++
-            if (!firstRejectionCode) firstRejectionCode = 'LOCAL_POLICY_REJECTED'
+            if (!firstRejectionCode) firstRejectionCode = ingestResult.errorCode
             continue
           }
-          const acceptedRecord = { ...record, indexId: curatorId, sourceId: `${curatorId}:${verified.pageId}` }
-          if (!await onAcceptedRecord(acceptedRecord, { curatorId, pageId: verified.pageId })) {
-            rejected++
-            if (!firstRejectionCode) firstRejectionCode = 'LOCAL_PROJECTION_REJECTED'
-            continue
-          }
-          appendRecord(acceptedRecord)
           ingested++
         }
 
@@ -242,11 +268,7 @@ export function createIndexFeedManager(options = {}) {
         checkpoints.set(curatorId, { cursor, updatedAt: now() })
         if (cursor == null) {
           await persistState()
-          if (ingested === 0 && rejected > 0) {
-            return { status: 'rejected', errorCode: firstRejectionCode, nextCursor: null, ingested, rejected }
-          }
-          if (rejected > 0) return { status: 'complete', nextCursor: null, ingested, rejected, errorCode: firstRejectionCode }
-          return { status: 'complete', nextCursor: null, ingested }
+          return buildFinalSyncStatus(ingested, rejected, firstRejectionCode)
         }
         if (processed >= maxRecordsPerSync) {
           await persistState()

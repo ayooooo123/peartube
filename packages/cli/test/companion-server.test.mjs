@@ -603,6 +603,15 @@ test('companion close waits for a direct start in progress and owns its listener
   t.is(startResult.status, 'fulfilled')
   t.is(closeResult.status, 'fulfilled')
   t.is(closed, true)
+  const surface = createHttpServer(server.handleRequest)
+  await listen(surface, { host: '127.0.0.1', port: 0 })
+  t.teardown(() => close(surface))
+  const port = surface.address().port
+  server.setPublicAddress({ host: '127.0.0.1', port })
+  const after = await request({ host: '127.0.0.1', port, path: '/api/v2/status' })
+  t.is(after.statusCode, 503, 'an overlapping start cannot reopen the closed mounted surface')
+  t.is(JSON.parse(after.body).error?.code, 'SERVER_CLOSING')
+  await t.exception(server.dispatchInProcess({ url: '/api/v2/status' }))
 })
 
 test('oversized bodies are rejected before v2 dispatch without buffering beyond the configured limit', async (t) => {
@@ -1006,6 +1015,228 @@ test('companion v2 API is accessible on unified archive UI port when companion p
   t.is(search.statusCode, 200, 'v2 search is reachable without authentication')
 })
 
+
+test('auth-off relay verifies supplied credentials, denies remote unsigned mutations, and fails closed on broken authentication', async (t) => {
+  const config = tcpConfig(tempDir(t), { auth: false })
+  const seen = []
+  const service = {
+    async listAcquisitions ({ principal }) {
+      seen.push(['list', { id: principal.id, isAuthenticated: principal.isAuthenticated }])
+      return { items: [], nextCursor: null }
+    },
+    async search () {
+      seen.push(['search'])
+      return { candidates: [] }
+    },
+    async setPolicy ({ principal, policy }) {
+      seen.push(['policy', { id: principal.id, isAuthenticated: principal.isAuthenticated }])
+      return { policy: { ...policy, effectiveRole: 'seed' } }
+    },
+    async requestAcquisition ({ principal }) {
+      seen.push(['acquire', { id: principal.id }])
+      return {
+        schemaVersion: 1,
+        acquisitionId: 'acq-authoff-1',
+        state: 'queued',
+        retentionClass: 'archive-pin',
+        bytesAcquired: 0,
+        expectedBytes: null,
+        recoverable: false,
+        createdAt: NOW,
+        updatedAt: NOW
+      }
+    },
+    issueLocalResolution () {
+      seen.push(['resolve'])
+      return { resolutionRef: 'A'.repeat(43) }
+    }
+  }
+  const server = createCompanionServer({ service, config, clock: () => NOW, logger })
+  const surface = createHttpServer((req, res) => {
+    Object.defineProperty(req.socket, 'remoteAddress', { value: '192.0.2.10' })
+    server.handleRequest(req, res)
+  })
+  await listen(surface, { host: '127.0.0.1', port: 0 })
+  t.teardown(async () => { await close(surface); await server.close().catch(noop) })
+  const address = { host: '127.0.0.1', port: surface.address().port }
+  const send = (method, path, body = '', headers = {}) => request({ ...address, method, path, body, headers })
+  const policyBody = JSON.stringify({
+    policyVersion: 2,
+    consentVersion: 1,
+    migrationRequired: false,
+    contributeWatchedMedia: true,
+    archiveEnabled: false,
+    contributionBudgetBytes: 4096,
+    archiveBudgetBytes: 0,
+    uploadPermission: 'enabled',
+    uploadCeilingBytes: 4096
+  })
+  const acquisitionBodyText = JSON.stringify({
+    idempotencyKey: 'authoff-1',
+    request: { schemaVersion: 1, resolutionRef: 'A'.repeat(43), publisherId: 'publisher-1', retentionClass: 'archive-pin' }
+  })
+
+  const unsignedList = await send('GET', '/api/v2/acquisitions')
+  t.is(unsignedList.statusCode, 200, 'public reads stay unsigned')
+  t.alike(seen.at(-1)[1], { id: CLIENT, isAuthenticated: false }, 'an anonymous caller gets the fixed configured identity')
+
+  const spoofed = await send('GET', '/api/v2/acquisitions', '', { 'x-peartube-client': 'spoofed-machine' })
+  t.is(spoofed.statusCode, 401, 'partial control authentication is rejected, never an anonymous fallback')
+  t.is(JSON.parse(spoofed.body).error?.code, 'AUTH_REQUIRED')
+
+  const wrongTarget = signedHeaders({ method: 'GET', path: '/api/v2/status', nonce: 'authoff-wrong-0001' })
+  const invalidOptional = await send('GET', '/api/v2/search?namespace=tmdb&identifier=348&kind=movie', '', wrongTarget)
+  t.is(invalidOptional.statusCode, 401, 'supplied authentication is verified on every route, not ignored')
+  t.is(JSON.parse(invalidOptional.body).error?.code, 'INVALID_MAC')
+
+  const unsignedPolicy = await send('PUT', '/api/v2/policy', policyBody)
+  t.is(unsignedPolicy.statusCode, 403, 'remote unsigned policy write is denied by routing')
+  t.is(JSON.parse(unsignedPolicy.body).error?.code, 'PRIVATE_ROUTE_REQUIRES_AUTHENTICATION')
+  const unsignedAcquire = await send('POST', '/api/v2/acquisitions', acquisitionBodyText)
+  t.is(unsignedAcquire.statusCode, 403)
+  const unsignedContribute = await send('POST', '/api/v2/acquisitions/contribute', JSON.stringify({
+    idempotencyKey: 'authoff-contrib-1',
+    title: 'The Matrix',
+    selector: { kind: 'movie', namespace: 'tmdb', identifier: '603' },
+    expectedBytes: 2048,
+    retentionClass: 'contribution-cache',
+    sourceFileName: 'matrix.mkv'
+  }))
+  t.is(unsignedContribute.statusCode, 403, 'the contribute mutation variant is denied too')
+  t.is(seen.some(([name]) => ['policy', 'acquire', 'resolve'].includes(name)), false, 'no unsigned mutation reached the service')
+
+  const signedPolicy = await send('PUT', '/api/v2/policy', policyBody,
+    signedHeaders({ method: 'PUT', path: '/api/v2/policy', body: policyBody, nonce: 'authoff-policy-0001' }))
+  t.is(signedPolicy.statusCode, 200, 'a verified mutation is admitted on the auth-off listener')
+  t.is(JSON.parse(signedPolicy.body).policy.effectiveRole, 'seed')
+  t.alike(seen.at(-1)[1], { id: CLIENT, isAuthenticated: true })
+  const signedAcquire = await send('POST', '/api/v2/acquisitions', acquisitionBodyText,
+    signedHeaders({ method: 'POST', path: '/api/v2/acquisitions', body: acquisitionBodyText, nonce: 'authoff-acq-00001' }))
+  t.is(signedAcquire.statusCode, 202)
+})
+
+test('mounted companion tracks exported handleRequest traffic, serves in-process dispatch, and close drains without the foreign listener', async (t) => {
+  const config = tcpConfig(tempDir(t), { auth: false })
+  let searches = 0
+  let sawAbort = 0
+  const service = {
+    search ({ signal }) {
+      searches++
+      return new Promise((resolve, reject) => {
+        signal?.addEventListener?.('abort', () => {
+          sawAbort++
+          reject(new Error('backend aborted'))
+        }, { once: true })
+      })
+    },
+    async getStatus () { return { ready: true } }
+  }
+  let drained = false
+  const capabilities = {
+    issue () { throw new Error('capability issuance is not part of this test') },
+    consume () { throw new Error('capability consumption is not part of this test') },
+    close () { return false },
+    clear () {},
+    async drain () {
+      drained = true
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
+  }
+  const server = createCompanionServer({ service, config, clock: () => NOW, logger, capabilities })
+  const surface = createHttpServer((req, res) => {
+    if (req.url.startsWith('/api/v2/')) {
+      void server.handleRequest(req, res)
+      return
+    }
+    res.statusCode = 200
+    res.setHeader('content-type', 'application/json')
+    res.end('{"ok":true,"ready":true}')
+  })
+  await listen(surface, { host: '127.0.0.1', port: 0 })
+  const port = surface.address().port
+  t.teardown(async () => { await server.close().catch(noop); await close(surface) })
+
+  server.setPublicAddress({ host: '127.0.0.1', port })
+  const mounted = await server.dispatchInProcess({ url: '/api/v2/status' })
+  t.is(mounted.statusCode, 200, 'in-process dispatch is usable when mounted without start()')
+
+  const searchPath = kind => `/api/v2/search?namespace=tmdb&identifier=${kind}&kind=movie`
+  const first = request({ host: '127.0.0.1', port, path: searchPath(1) })
+  const second = request({ host: '127.0.0.1', port, path: searchPath(2) })
+  await new Promise(resolve => setTimeout(resolve, 30))
+  t.is(searches, 2, 'both mounted requests reached the backend')
+
+  const closing = server.close()
+  const late = await request({ host: '127.0.0.1', port, path: '/api/v2/status' })
+  t.is(late.statusCode, 503, 'close rejects new admission while draining')
+  t.is(JSON.parse(late.body).error?.code, 'SERVER_CLOSING')
+
+  const [firstResponse, secondResponse] = await Promise.all([first, second, closing])
+  t.is(firstResponse.statusCode, 499, 'close aborted the first mounted backend call')
+  t.is(secondResponse.statusCode, 499, 'close aborted the second mounted backend call')
+  t.is(sawAbort, 2)
+  t.is(drained, true, 'close drained capabilities even without an owned listener')
+  t.is(surface.listening, true, 'companion close left the foreign archive listener open')
+  const remaining = await request({ host: '127.0.0.1', port, path: '/health' })
+  t.is(remaining.statusCode, 200, 'the shared archive route still serves after companion close')
+  const refused = await server.dispatchInProcess({ url: '/api/v2/status' }).then(() => false, () => true)
+  t.is(refused, true, 'in-process admission is rejected once the surface is closed')
+})
+
+test('companion close denies admission after completion until an explicit restart', async (t) => {
+  const config = tcpConfig(tempDir(t), { auth: false })
+  const service = { async getStatus () { return { ready: true } } }
+  const server = createCompanionServer({ service, config, clock: () => NOW, logger })
+  const surface = createHttpServer((req, res) => {
+    void server.handleRequest(req, res)
+  })
+  await listen(surface, { host: '127.0.0.1', port: 0 })
+  const port = surface.address().port
+  t.teardown(async () => { await server.close().catch(noop); await close(surface) })
+
+  server.setPublicAddress({ host: '127.0.0.1', port })
+  await server.close()
+
+  const after = await request({ host: '127.0.0.1', port, path: '/api/v2/status' })
+  t.is(after.statusCode, 503, 'requests after close completes are refused, not admitted')
+  t.is(JSON.parse(after.body).error?.code, 'SERVER_CLOSING')
+  const refusedInProcess = await server.dispatchInProcess({ url: '/api/v2/status' }).then(() => false, () => true)
+  t.is(refusedInProcess, true, 'in-process admission stays denied after close completes')
+
+  server.setPublicAddress({ host: '127.0.0.1', port })
+  const resurrected = await request({ host: '127.0.0.1', port, path: '/api/v2/status' })
+  t.is(resurrected.statusCode, 503, 'setPublicAddress cannot resurrect a closed service')
+
+  const restarted = await server.start()
+  t.is(restarted.enabled, true, 'an explicit start after close is a valid restart')
+  const revived = await request({ host: restarted.host, port: restarted.port, path: '/api/v2/status' })
+  t.is(revived.statusCode, 200, 'the restarted surface admits requests again')
+})
+
+test('supplied empty authentication headers fail closed on an auth-off relay', async (t) => {
+  const config = tcpConfig(tempDir(t), { auth: false })
+  const service = { async getStatus () { return { ready: true } } }
+  const server = createCompanionServer({ service, config, clock: () => NOW, logger })
+  const state = await server.start()
+  t.teardown(() => server.close().catch(noop))
+
+  const empty = await request({
+    host: state.host,
+    port: state.port,
+    path: '/api/v2/status',
+    headers: {
+      'x-peartube-client': '',
+      'x-peartube-timestamp': '',
+      'x-peartube-nonce': '',
+      'x-peartube-mac': ''
+    }
+  })
+  t.is(empty.statusCode, 401, 'empty auth headers are detected as supplied, not anonymous')
+  t.is(JSON.parse(empty.body).error?.code, 'AUTH_REQUIRED')
+
+  const anonymous = await request({ host: state.host, port: state.port, path: '/api/v2/status' })
+  t.is(anonymous.statusCode, 200, 'truly absent auth headers stay public reads')
+})
 
 test('Bare serves authenticated companion HTTP over loopback', (t) => {
   const bareName = process.platform === 'win32' ? 'bare.cmd' : 'bare'

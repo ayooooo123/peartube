@@ -298,7 +298,9 @@ export const Scrubber = memo(function Scrubber({
           runOnJS(setPreviewSeconds)(Math.round(uiProgressSV.value * d))
         }
       })
-      .onUpdate((evt) => {
+      .onChange((evt) => {
+        // Pan's onUpdate payload carries no per-event delta; RNGH only adds
+        // changeX/changeY (diffed against the previous update) on onChange.
         'worklet'
         if (!isInteractingSV.value) return
         const tw = trackWidthSV.value
@@ -312,7 +314,7 @@ export const Scrubber = memo(function Scrubber({
         // In fine-scrub mode, reduce movement relative to the initial drag offset.
         if (scale < 1) {
           const renderedProgress = clamp(uiProgressSV.value, 0, 1)
-          uiProgressSV.value = clamp(renderedProgress + ((evt.changeX ?? 0) * scale) / tw, 0, 1)
+          uiProgressSV.value = clamp(renderedProgress + (evt.changeX * scale) / tw, 0, 1)
         } else {
           uiProgressSV.value = clamp(fingerProgress - dragOffsetSV.value, 0, 1)
         }
@@ -355,7 +357,7 @@ export const Scrubber = memo(function Scrubber({
     }
 
     return Gesture.Exclusive(pan, tap)
-  }, [disabled, trackWidthSV, durationSV, uiProgressSV, isTouchingSV, isScrubbingSV, isInteractingSV, lockActiveSV, lockProgressSV, wasAtBoundarySV, startYSV, dragOffsetSV, externalGesture, onScrubStart, handleCommit, showPreviewSV, previewVisibilitySV, setPreviewSeconds])
+  }, [disabled, trackWidthSV, durationSV, uiProgressSV, isTouchingSV, isScrubbingSV, isInteractingSV, lockActiveSV, lockProgressSV, wasAtBoundarySV, startYSV, dragOffsetSV, externalGesture, onScrubStart, handleCommit, showPreviewSV, previewVisibilitySV])
 
   // ── Animated styles ──────────────────────────────────────────────────
 

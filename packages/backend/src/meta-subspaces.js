@@ -93,6 +93,25 @@ export function createMetaSubspaces(metaDb) {
  * @param {{ logger?: { info?: Function, warn?: Function } }} [opts]
  * @returns {Promise<{ migrated: number, skipped: boolean, incomplete?: boolean, error?: string }>}
  */
+async function migrateCollection(metaDb, accessor, c) {
+  const lt = bumpPrefix(c.legacyPrefix)
+  // Collect first, then copy+delete, so we never mutate a range we're still
+  // streaming.
+  const legacy = []
+  for await (const node of metaDb.createReadStream({ gte: c.legacyPrefix, lt })) {
+    if (typeof node.key === 'string' && node.key.startsWith(c.legacyPrefix)) legacy.push(node)
+  }
+  let migrated = 0
+  for (const node of legacy) {
+    const subKey = node.key.slice(c.legacyPrefix.length)
+    if (!subKey) continue
+    await accessor.put(subKey, node.value)
+    await metaDb.del(node.key)
+    migrated++
+  }
+  return migrated
+}
+
 export async function migrateMetaSubspaces(metaDb, subspaces, { logger = console } = {}) {
   const marker = await metaDb.get(META_SUBSPACES_MIGRATION_KEY).catch(() => null)
   if (marker?.value?.done) return { migrated: 0, skipped: true }
@@ -100,25 +119,13 @@ export async function migrateMetaSubspaces(metaDb, subspaces, { logger = console
   let migrated = 0
   for (const c of META_SUBSPACE_COLLECTIONS) {
     const accessor = subspaces[c.name]
-    const lt = bumpPrefix(c.legacyPrefix)
     try {
-      // Collect first, then copy+delete, so we never mutate a range we're still
-      // streaming.
-      const legacy = []
-      for await (const node of metaDb.createReadStream({ gte: c.legacyPrefix, lt })) {
-        if (typeof node.key === 'string' && node.key.startsWith(c.legacyPrefix)) legacy.push(node)
-      }
-      for (const node of legacy) {
-        const subKey = node.key.slice(c.legacyPrefix.length)
-        if (!subKey) continue
-        await accessor.put(subKey, node.value)
-        await metaDb.del(node.key)
-        migrated++
-      }
+      migrated += await migrateCollection(metaDb, accessor, c)
     } catch (err) {
-      logger?.warn?.('[meta-subspaces] migration failed', { collection: c.name, error: err?.message || String(err) })
+      const errorMsg = err?.message || String(err)
+      logger?.warn?.('[meta-subspaces] migration failed', { collection: c.name, error: errorMsg })
       // Leave the marker unset so the next startup retries from where it stopped.
-      return { migrated, skipped: false, incomplete: true, error: err?.message || String(err) }
+      return { migrated, skipped: false, incomplete: true, error: errorMsg }
     }
   }
 

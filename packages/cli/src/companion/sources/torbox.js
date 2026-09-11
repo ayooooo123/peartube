@@ -42,21 +42,26 @@ function fail (code, message, recoverable = true) {
   throw new TorBoxSourceError(code, message, recoverable)
 }
 
-function decodeGrantToken (token) {
+function parseGrantPayload (token) {
   if (typeof token !== 'string' || !TOKEN_PATTERN.test(token)) {
     fail('SOURCE_GRANT_INVALID', 'TorBox grant token is malformed', false)
   }
-  let decoded
   try {
     const padded = token.replaceAll('-', '+').replaceAll('_', '/')
-    decoded = JSON.parse(b4a.toString(b4a.from(padded, 'base64'), 'utf8'))
+    return JSON.parse(b4a.toString(b4a.from(padded, 'base64'), 'utf8'))
   } catch {
     fail('SOURCE_GRANT_INVALID', 'TorBox grant token is not decodable', false)
   }
-  const kind = decoded?.kind || (decoded?.usenetId !== undefined ? 'usenet' : decoded?.torrentId !== undefined ? 'torrent' : null)
-  if (!Object.hasOwn(KIND_PATHS, kind)) {
-    fail('SOURCE_GRANT_INVALID', 'TorBox grant token does not name a usenet or torrent source', false)
-  }
+}
+
+function extractGrantKind (decoded) {
+  if (decoded?.kind) return decoded.kind
+  if (decoded?.usenetId !== undefined) return 'usenet'
+  if (decoded?.torrentId !== undefined) return 'torrent'
+  return null
+}
+
+function extractGrantIds (decoded, kind) {
   const rawId = kind === 'usenet'
     ? (decoded?.usenetId ?? decoded?.usenet_id)
     : (decoded?.torrentId ?? decoded?.torrent_id)
@@ -66,7 +71,101 @@ function decodeGrantToken (token) {
       !Number.isSafeInteger(Number(fileId)) || Number(fileId) < 0) {
     fail('SOURCE_GRANT_INVALID', 'TorBox grant token does not name a retrievable file', false)
   }
-  return { kind, id: String(rawId), fileId: Number(fileId) }
+  return { id: String(rawId), fileId: Number(fileId) }
+}
+
+function decodeGrantToken (token) {
+  const decoded = parseGrantPayload(token)
+  const kind = extractGrantKind(decoded)
+  if (!Object.hasOwn(KIND_PATHS, kind)) {
+    fail('SOURCE_GRANT_INVALID', 'TorBox grant token does not name a usenet or torrent source', false)
+  }
+  const { id, fileId } = extractGrantIds(decoded, kind)
+  return { kind, id, fileId }
+}
+
+async function parseDownloadResponse (response) {
+  if (response.status === 401 || response.status === 403) {
+    fail('TORBOX_AUTH_FAILED', 'TorBox API key is invalid or unauthorized', false)
+  }
+  if (!response.ok) {
+    fail('TORBOX_API_ERROR', `TorBox API requestdl returned HTTP ${response.status}`, response.status >= 500)
+  }
+  let body
+  try {
+    body = await response.json()
+  } catch {
+    fail('TORBOX_RESPONSE_INVALID', 'TorBox API returned a non-JSON response')
+  }
+  if (!body || body.success !== true) {
+    fail('TORBOX_REQUEST_FAILED', `TorBox requestdl error: ${body?.detail || body?.error || 'unknown error'}`)
+  }
+  const url = typeof body.data === 'string'
+    ? body.data.trim()
+    : (typeof body.data?.link === 'string' ? body.data.link.trim() : null)
+  if (!url || !/^https?:\/\//i.test(url)) {
+    fail('TORBOX_LINK_MISSING', 'TorBox requestdl did not return a valid download link')
+  }
+  return url
+}
+
+function parseHeaderValue (headers, name) {
+  return headers?.get?.(name) ?? headers?.[name]
+}
+
+function parseHeadDescription (response, fallbackEtag) {
+  if (!response.ok) {
+    fail('TORBOX_CDN_ERROR', `TorBox CDN HEAD returned HTTP ${response.status}`, response.status >= 500)
+  }
+  const lengthHeader = parseHeaderValue(response.headers, 'content-length')
+  const byteLength = Number(lengthHeader)
+  if (!Number.isSafeInteger(byteLength) || byteLength <= 0) {
+    fail('TORBOX_LENGTH_INVALID', `TorBox CDN HEAD returned invalid content-length: ${lengthHeader}`)
+  }
+  const etagHeader = parseHeaderValue(response.headers, 'etag')
+  const identity = typeof etagHeader === 'string' && etagHeader.trim()
+    ? { kind: 'etag', value: etagHeader.trim() }
+    : { kind: 'etag', value: `${fallbackEtag}:${byteLength}` }
+  const mimeHeader = parseHeaderValue(response.headers, 'content-type')
+  const mimeType = typeof mimeHeader === 'string' && mimeHeader.includes('/')
+    ? mimeHeader.split(';')[0].trim()
+    : 'video/mp4'
+  return { identity, byteLength, mimeType }
+}
+
+function assertRangeResponseOk (response) {
+  if (response.status === 401 || response.status === 403 || response.status === 410) {
+    throw new Error(`CDN token expired: HTTP ${response.status}`)
+  }
+  if (response.status !== 206 && response.status !== 200) {
+    throw new Error(`TorBox CDN range request returned HTTP ${response.status}`)
+  }
+}
+
+async function * streamResponseChunks (response, signal) {
+  if (response.body && typeof response.body.getReader === 'function') {
+    const reader = response.body.getReader()
+    try {
+      while (true) {
+        if (signal?.aborted) {
+          await reader.cancel().catch(() => {})
+          throw signal.reason || new Error('aborted')
+        }
+        const { done, value } = await reader.read()
+        if (done) break
+        if (value && value.byteLength > 0) {
+          yield value instanceof Uint8Array ? value : b4a.from(value)
+        }
+      }
+    } finally {
+      reader.releaseLock?.()
+    }
+  } else if (typeof response.arrayBuffer === 'function') {
+    const buffer = await response.arrayBuffer()
+    yield b4a.from(buffer)
+  } else {
+    throw new Error('Unsupported TorBox CDN response body')
+  }
 }
 
 function sleep (ms, signal) {
@@ -78,6 +177,76 @@ function sleep (ms, signal) {
     }, { once: true })
   })
 }
+
+async function resolveDownloadLinkWithRetry (fetchDownloadLink, source, attempt, signal) {
+  try {
+    return {
+      type: 'url',
+      url: await fetchDownloadLink(source, { forceFresh: attempt > 1, signal })
+    }
+  } catch (error) {
+    if (error instanceof TorBoxSourceError && error.recoverable === false) throw error
+    if (attempt === RANGE_ATTEMPTS) throw error
+    await sleep(attempt * 1000, signal)
+    return { type: 'retry', error }
+  }
+}
+
+async function * yieldRangeChunks (fetchFn, downloadUrl, rangeStart, end, signal) {
+  const response = await fetchFn(downloadUrl, {
+    method: 'GET',
+    headers: {
+      Range: `bytes=${rangeStart}-${end - 1}`,
+      'User-Agent': 'peartube-relay/1.0'
+    },
+    signal
+  })
+  assertRangeResponseOk(response)
+  for await (const chunk of streamResponseChunks(response, signal)) {
+    yield chunk
+  }
+}
+
+async function * openTorBoxByteRange ({
+  offset,
+  readLength,
+  signal,
+  source,
+  fetchDownloadLink,
+  fetchFn
+}) {
+  if (!readLength || readLength <= 0) return
+  const end = offset + readLength
+  let streamed = 0
+  let lastError = null
+  for (let attempt = 1; attempt <= RANGE_ATTEMPTS; attempt++) {
+    if (signal?.aborted) throw signal.reason || new Error('aborted')
+    const link = await resolveDownloadLinkWithRetry(fetchDownloadLink, source, attempt, signal)
+    if (link.type === 'retry') {
+      lastError = link.error
+      continue
+    }
+    const rangeStart = offset + streamed
+    if (rangeStart >= end) return
+    try {
+      for await (const chunk of yieldRangeChunks(fetchFn, link.url, rangeStart, end, signal)) {
+        streamed += chunk.byteLength
+        yield chunk
+      }
+      if (streamed === readLength) return
+      throw new Error(`Streamed ${streamed} bytes, expected ${readLength}`)
+    } catch (error) {
+      lastError = error
+      if (signal?.aborted) throw error
+      if (attempt < RANGE_ATTEMPTS) await sleep(attempt * 1000, signal)
+    }
+  }
+  fail(
+    'TORBOX_CDN_UNREACHABLE',
+    `TorBox CDN range read failed after ${RANGE_ATTEMPTS} attempts: ${lastError?.message || String(lastError)}`
+  )
+}
+
 
 export function createTorBoxSourceGrants ({
   apiKey = '',
@@ -113,27 +282,7 @@ export function createTorBoxSourceGrants ({
     } catch (error) {
       fail('TORBOX_API_UNREACHABLE', `TorBox API requestdl failed: ${error?.message || String(error)}`)
     }
-    if (response.status === 401 || response.status === 403) {
-      fail('TORBOX_AUTH_FAILED', 'TorBox API key is invalid or unauthorized', false)
-    }
-    if (!response.ok) {
-      fail('TORBOX_API_ERROR', `TorBox API requestdl returned HTTP ${response.status}`, response.status >= 500)
-    }
-    let body
-    try {
-      body = await response.json()
-    } catch {
-      fail('TORBOX_RESPONSE_INVALID', 'TorBox API returned a non-JSON response')
-    }
-    if (!body || body.success !== true) {
-      fail('TORBOX_REQUEST_FAILED', `TorBox requestdl error: ${body?.detail || body?.error || 'unknown error'}`)
-    }
-    const url = typeof body.data === 'string'
-      ? body.data.trim()
-      : (typeof body.data?.link === 'string' ? body.data.link.trim() : null)
-    if (!url || !/^https?:\/\//i.test(url)) {
-      fail('TORBOX_LINK_MISSING', 'TorBox requestdl did not return a valid download link')
-    }
+    const url = await parseDownloadResponse(response)
     links.set(key, { url, cachedAt: now() })
     return url
   }
@@ -186,98 +335,18 @@ export function createTorBoxSourceGrants ({
         async describe ({ signal: describeSignal } = {}) {
           if (description) return description
           const response = await headThroughLink(source, describeSignal || signal)
-          if (!response.ok) {
-            fail('TORBOX_CDN_ERROR', `TorBox CDN HEAD returned HTTP ${response.status}`, response.status >= 500)
-          }
-          const lengthHeader = response.headers?.get?.('content-length') ?? response.headers?.['content-length']
-          const byteLength = Number(lengthHeader)
-          if (!Number.isSafeInteger(byteLength) || byteLength <= 0) {
-            fail('TORBOX_LENGTH_INVALID', `TorBox CDN HEAD returned invalid content-length: ${lengthHeader}`)
-          }
-          const etagHeader = response.headers?.get?.('etag') ?? response.headers?.etag
-          const identity = typeof etagHeader === 'string' && etagHeader.trim()
-            ? { kind: 'etag', value: etagHeader.trim() }
-            : { kind: 'etag', value: `${fallbackEtag}:${byteLength}` }
-          const mimeHeader = response.headers?.get?.('content-type') ?? response.headers?.['content-type']
-          const mimeType = typeof mimeHeader === 'string' && mimeHeader.includes('/')
-            ? mimeHeader.split(';')[0].trim()
-            : 'video/mp4'
-          description = { identity, byteLength, mimeType }
+          description = parseHeadDescription(response, fallbackEtag)
           return description
         },
         open ({ offset, length: readLength, signal: openSignal } = {}) {
-          return (async function * () {
-            if (!readLength || readLength <= 0) return
-            const signal = openSignal || grantSignal
-            const end = offset + readLength
-            let streamed = 0
-            let lastError = null
-            for (let attempt = 1; attempt <= RANGE_ATTEMPTS; attempt++) {
-              if (signal?.aborted) throw signal.reason || new Error('aborted')
-              let downloadUrl
-              try {
-                downloadUrl = await fetchDownloadLink(source, { forceFresh: attempt > 1, signal })
-              } catch (error) {
-                lastError = error
-                if (error instanceof TorBoxSourceError && error.recoverable === false) throw error
-                if (attempt === RANGE_ATTEMPTS) throw error
-                await sleep(attempt * 1000, signal)
-                continue
-              }
-              const rangeStart = offset + streamed
-              if (rangeStart >= end) return
-              try {
-                const response = await fetchFn(downloadUrl, {
-                  method: 'GET',
-                  headers: {
-                    Range: `bytes=${rangeStart}-${end - 1}`,
-                    'User-Agent': 'peartube-relay/1.0'
-                  },
-                  signal
-                })
-                if (response.status === 401 || response.status === 403 || response.status === 410) {
-                  throw new Error(`CDN token expired: HTTP ${response.status}`)
-                }
-                if (response.status !== 206 && response.status !== 200) {
-                  throw new Error(`TorBox CDN range request returned HTTP ${response.status}`)
-                }
-                if (response.body && typeof response.body.getReader === 'function') {
-                  const reader = response.body.getReader()
-                  try {
-                    while (true) {
-                      if (signal?.aborted) {
-                        await reader.cancel().catch(() => {})
-                        throw signal.reason || new Error('aborted')
-                      }
-                      const { done, value } = await reader.read()
-                      if (done) break
-                      if (value && value.byteLength > 0) {
-                        const chunk = value instanceof Uint8Array ? value : b4a.from(value)
-                        streamed += chunk.byteLength
-                        yield chunk
-                      }
-                    }
-                  } finally {
-                    reader.releaseLock?.()
-                  }
-                } else if (typeof response.arrayBuffer === 'function') {
-                  const buffer = await response.arrayBuffer()
-                  const chunk = b4a.from(buffer)
-                  streamed += chunk.byteLength
-                  yield chunk
-                } else {
-                  throw new Error('Unsupported TorBox CDN response body')
-                }
-                if (streamed === readLength) return
-                throw new Error(`Streamed ${streamed} bytes, expected ${readLength}`)
-              } catch (error) {
-                lastError = error
-                if (signal?.aborted) throw error
-                if (attempt < RANGE_ATTEMPTS) await sleep(attempt * 1000, signal)
-              }
-            }
-            fail('TORBOX_CDN_UNREACHABLE', `TorBox CDN range read failed after ${RANGE_ATTEMPTS} attempts: ${lastError?.message || String(lastError)}`)
-          })()
+          return openTorBoxByteRange({
+            offset,
+            readLength,
+            signal: openSignal || grantSignal,
+            source,
+            fetchDownloadLink,
+            fetchFn
+          })
         },
         async close () {}
       })

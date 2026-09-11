@@ -74,7 +74,29 @@ function decodeParticipationState(value) {
     capacityBytes: boundedBytes(value.capacityBytes, 'capacityBytes'),
     maxRequestBytes: boundedBytes(value.maxRequestBytes, 'maxRequestBytes'),
     acceptanceProbability: probability(value.acceptanceProbability, 0.25),
+    requests: Array.isArray(value.requests) ? value.requests : [],
+    pledges: Array.isArray(value.pledges) ? value.pledges : [],
   }
+}
+
+async function resolvePublicationManifest(manifestStore, resolveManifest, publicationId) {
+  let manifest = manifestStore.getManifest(publicationId)
+  if (!manifest && typeof resolveManifest === 'function') {
+    try {
+      manifest = await resolveManifest(publicationId)
+    } catch {
+      manifest = null
+    }
+  }
+  return manifest || null
+}
+
+function matchesRequestedRange(body, core) {
+  if (!Array.isArray(body.ranges) || body.ranges.length !== 1) return false
+  const range = body.ranges[0]
+  if (range.coreKey !== core.key || range.start !== 0 || range.end !== core.length) return false
+  if (body.requestedBytes !== core.byteLength) return false
+  return true
 }
 
 export async function authorizeArchiveRequestFromManifestStore(request, options = {}) {
@@ -82,25 +104,19 @@ export async function authorizeArchiveRequestFromManifestStore(request, options 
   const manifestStore = options.manifestStore
   const authorizeRendition = options.authorizeRendition
   if (!body || typeof manifestStore?.getManifest !== 'function' || typeof authorizeRendition !== 'function') return false
-  let manifest = manifestStore.getManifest(body.publicationId)
-  if (!manifest && typeof options.resolveManifest === 'function') {
-    try {
-      manifest = await options.resolveManifest(body.publicationId)
-    } catch {
-      manifest = null
-    }
-  }
-  const rendition = manifest?.body?.renditions?.find(candidate => candidate.renditionId === body.renditionId)
+
+  const manifest = await resolvePublicationManifest(manifestStore, options.resolveManifest, body.publicationId)
+  if (!manifest) return false
+
+  const rendition = manifest.body?.renditions?.find(candidate => candidate.renditionId === body.renditionId)
   let core
   try {
     core = normalizeAssetCoreRefV2(rendition?.core)
   } catch {
     return false
   }
-  if (!manifest || !core || !Array.isArray(body.ranges) || body.ranges.length !== 1) return false
-  const range = body.ranges[0]
-  if (range.coreKey !== core.key || range.start !== 0 || range.end !== core.length ||
-      body.requestedBytes !== core.byteLength) return false
+  if (!core || !matchesRequestedRange(body, core)) return false
+
   const authorized = await authorizeRendition({
     manifest,
     renditionId: rendition.renditionId,
@@ -112,6 +128,7 @@ export async function authorizeArchiveRequestFromManifestStore(request, options 
     accepted: true,
     requestedBytes: core.byteLength,
     ranges: body.ranges,
+    coreRef: core,
   }
 }
 
@@ -140,23 +157,16 @@ function transportId(value, name = 'transportPeerId') {
   return b4a.toString(bytes, 'hex')
 }
 
-export function createPermissionlessArchiveNetwork(options = {}) {
-  if (!options.keyPair?.publicKey || !options.keyPair?.secretKey) throw new TypeError('archive participation requires a local signing keyPair')
+function validateArchiveNetworkOptions(options) {
+  if (!options.keyPair?.publicKey || !options.keyPair?.secretKey) {
+    throw new TypeError('archive participation requires a local signing keyPair')
+  }
   if (!options.scopedNetwork?.retainAuthorizedArchive || !options.scopedNetwork?.releaseAuthorizedArchive) {
     throw new TypeError('archive participation requires the scoped archive network')
   }
-  const now = typeof options.now === 'function' ? options.now : Date.now
-  const random = typeof options.random === 'function' ? options.random : Math.random
-  const authorizeRequest = typeof options.authorizeRequest === 'function' ? options.authorizeRequest : async () => false
-  const authorizeConsumerVisibility = typeof options.authorizeConsumerVisibility === 'function'
-    ? options.authorizeConsumerVisibility
-    : async () => false
-  const archiveStore = options.archiveStore || null
-  const diagnostics = options.diagnostics || null
-  const archivePolicy = options.archivePolicy || null
-  const participationRepository = options.participationRepository || null
-  const peerScorer = options.peerScorer || null
-  const scopedNetwork = options.scopedNetwork
+}
+
+function resolveArchiveNetworkPublishers(options, scopedNetwork) {
   const publishRequest = typeof options.publishRequest === 'function'
     ? options.publishRequest
     : async (envelope, body) => scopedNetwork.publishArchiveRequest?.({
@@ -172,6 +182,356 @@ export function createPermissionlessArchiveNetwork(options = {}) {
   const publishChallengeProof = typeof options.publishChallengeProof === 'function'
     ? options.publishChallengeProof
     : async packet => scopedNetwork.publishArchiveChallengeProof?.(packet)
+  return { publishRequest, publishPledge, publishChallenge, publishChallengeProof }
+}
+
+function resolveArchiveNetworkLimits(options) {
+  const challengeIntervalMs = boundedPositiveMs(options.challengeIntervalMs, 'challengeIntervalMs', DEFAULT_CHALLENGE_INTERVAL_MS)
+  const challengeTimeoutMs = boundedPositiveMs(options.challengeTimeoutMs, 'challengeTimeoutMs', DEFAULT_CHALLENGE_TIMEOUT_MS)
+  const maxActiveChallengesPerPeer = Math.min(
+    32,
+    boundedPositiveMs(
+      options.maxActiveChallengesPerPeer,
+      'maxActiveChallengesPerPeer',
+      DEFAULT_MAX_ACTIVE_CHALLENGES_PER_PEER
+    )
+  )
+  return { challengeIntervalMs, challengeTimeoutMs, maxActiveChallengesPerPeer }
+}
+
+async function restorePersistedRequest(item, currentTime, rememberLocalRequest) {
+  try {
+    const env = item?.envelope || item
+    let coreRef = null
+    if (item?.coreRef) {
+      try { coreRef = normalizeAssetCoreRefV2(item.coreRef) } catch { coreRef = null }
+    }
+    const req = await verifyArchiveRequest(env, { now: currentTime })
+    if (req && req.body.expiresAt > currentTime) {
+      req.coreRef = coreRef
+      rememberLocalRequest(req)
+    }
+  } catch { /* ignore unreadable or expired persisted request */ }
+}
+
+async function tryRetainPledgeRanges(scopedNetwork, pledge, coreRef) {
+  for (const range of pledge.body.ranges) {
+    try {
+      await scopedNetwork.retainAuthorizedArchive({
+        pledge,
+        coreRef,
+        ...range,
+        download: false,
+      })
+    } catch {
+      return false
+    }
+  }
+  return true
+}
+
+function matchesLocalPledgeRequest(pledge, req, coreRef) {
+  if (!req || !coreRef) return false
+  return (
+    pledge.body.publicationId === req.body.publicationId &&
+    pledge.body.renditionId === req.body.renditionId &&
+    pledge.body.retentionUntil === req.body.retentionUntil &&
+    sameRanges(pledge.body.ranges, req.body.ranges)
+  )
+}
+
+async function restorePersistedPledge(item, currentTime, {
+  localRequests,
+  authorizeConsumerVisibility,
+  scopedNetwork,
+  receivedPledges,
+  passedChallenges,
+  scheduleReceivedRetentionExpiry
+}) {
+  try {
+    const env = item?.envelope || item
+    const pledge = await verifyArchivePledge(env, { now: currentTime })
+    if (!pledge || pledge.body.retentionUntil <= currentTime) return
+
+    const req = localRequests.get(pledge.body.nonce)
+    let coreRef = null
+    if (item?.coreRef) {
+      try { coreRef = normalizeAssetCoreRefV2(item.coreRef) } catch { coreRef = null }
+    }
+    if (!coreRef && req?.coreRef) coreRef = req.coreRef
+    if (!matchesLocalPledgeRequest(pledge, req, coreRef)) return
+
+    let visible = false
+    try {
+      visible = await authorizeConsumerVisibility(req) === true
+    } catch {
+      visible = false
+    }
+    if (!visible) return
+
+    const retainOk = await tryRetainPledgeRanges(scopedNetwork, pledge, coreRef)
+    if (retainOk) {
+      const record = {
+        pledge,
+        peerId: item.peerId || pledge.body.archivistId,
+        coreRef,
+      }
+      receivedPledges.set(pledge.pledgeId, record)
+      passedChallenges.delete(pledge.pledgeId)
+      scheduleReceivedRetentionExpiry(pledge.pledgeId, record)
+    }
+  } catch { /* ignore unreadable or expired persisted pledge */ }
+}
+
+function applyPersistedParticipationConfig({
+  persisted,
+  policySnapshot,
+  configuredParticipation
+}) {
+  let capacity = undefined
+  let en = undefined
+  let maxReq = undefined
+  let prob = undefined
+
+  if (!configuredParticipation.capacityBytes) {
+    if (policySnapshot) capacity = boundedBytes(policySnapshot.totalBytes, 'capacityBytes')
+    else if (persisted) capacity = persisted.capacityBytes
+  }
+  if (persisted) {
+    if (!configuredParticipation.enabled) en = persisted.enabled
+    if (!configuredParticipation.maxRequestBytes) maxReq = persisted.maxRequestBytes
+    if (!configuredParticipation.acceptanceProbability) prob = persisted.acceptanceProbability
+  }
+  return { capacity, en, maxReq, prob }
+}
+
+function validateReservationPledge(pledge, reservation, archivistId) {
+  if (
+    !pledge ||
+    pledge.pledgeId !== reservation.pledgeId ||
+    pledge.body.archivistId !== archivistId ||
+    pledge.body.retentionUntil !== reservation.expiresAt
+  ) {
+    throw new Error('persisted archive reservation pledge is invalid')
+  }
+}
+
+async function releaseInvisibleReservation({
+  pledge,
+  archivePolicy,
+  scopedNetwork,
+  archiveStore,
+  now
+}) {
+  await archivePolicy.release({ pledgeId: pledge.pledgeId }).catch(() => {})
+  await scopedNetwork.releaseAuthorizedArchive({ archiveId: pledge.pledgeId }).catch(() => {})
+  archiveStore?.putObservation?.({
+    pledgeId: pledge.pledgeId,
+    status: 'pledge-expired',
+    observedAt: now(),
+  })
+}
+
+async function retainReservationRanges(scopedNetwork, pledge, coreRef) {
+  try {
+    for (const range of pledge.body.ranges) {
+      await scopedNetwork.retainAuthorizedArchive({
+        pledge,
+        coreRef,
+        ...range,
+      })
+    }
+  } catch (error) {
+    await scopedNetwork.releaseAuthorizedArchive({ archiveId: pledge.pledgeId }).catch(() => {})
+    throw error
+  }
+}
+
+async function restoreSingleLocalReservation(reservation, {
+  archivePolicy,
+  scopedNetwork,
+  archiveStore,
+  authorizeConsumerVisibility,
+  localArchivistPledges,
+  scheduleRetentionExpiry,
+  pumpPledgeProgress,
+  archivistId,
+  now
+}) {
+  if (reservation.expiresAt <= now()) {
+    await archivePolicy.release({ pledgeId: reservation.pledgeId })
+    await scopedNetwork.releaseAuthorizedArchive({ archiveId: reservation.pledgeId }).catch(() => {})
+    return
+  }
+  const pledge = await verifyArchivePledge(reservation.pledgeEnvelope, { now: now() })
+  validateReservationPledge(pledge, reservation, archivistId)
+
+  const requestId = pledge.body.nonce
+  const isComplete = reservation.complete === true
+  const record = {
+    request: null,
+    pledge,
+    bytes: reservation.reservedBytes,
+    verifiedBytes: reservation.verifiedBytes || 0,
+    complete: isComplete,
+    published: false,
+    coreRef: reservation.coreRef || null,
+  }
+  let visible = false
+  try {
+    visible = await authorizeConsumerVisibility({ body: pledge.body }) === true
+  } catch {
+    visible = false
+  }
+  if (!visible) {
+    await releaseInvisibleReservation({ pledge, archivePolicy, scopedNetwork, archiveStore, now })
+    return
+  }
+
+  await retainReservationRanges(scopedNetwork, pledge, reservation.coreRef || null)
+  localArchivistPledges.set(requestId, record)
+  scheduleRetentionExpiry(requestId, record)
+  void pumpPledgeProgress(pledge.pledgeId, requestId)
+}
+
+async function reconcileDurableCompletion(archivePolicy, pledgeId, record, verifiedBytes, verifiedRanges, progress) {
+  const wantsComplete = progress?.complete === true && verifiedBytes === record.bytes && verifiedBytes > 0
+  if (typeof archivePolicy?.reconcile !== 'function') return false
+  const reconciled = await archivePolicy.reconcile({
+    pledgeId,
+    verifiedBytes,
+    verifiedRanges,
+    complete: wantsComplete,
+  })
+  return reconciled?.accepted === true && reconciled?.complete === true
+}
+
+async function publishCompletedPledge(record, archiveStore, publishPledge) {
+  if (record.published) return
+  await archiveStore?.putPledge?.(record.pledge.envelope)
+  const pub = await publishPledge(record.pledge.envelope)
+  if (pub?.delivered > 0 || pub?.status === 'published' || pub?.success !== false) {
+    record.published = true
+  }
+}
+
+function resolveNextParticipationPolicy(policy, current) {
+  const nextCapacity = policy.capacityBytes === undefined
+    ? current.capacityBytes
+    : boundedBytes(policy.capacityBytes, 'capacityBytes')
+  const nextMaxRequestBytes = policy.maxRequestBytes === undefined
+    ? current.maxRequestBytes
+    : boundedBytes(policy.maxRequestBytes, 'maxRequestBytes')
+  const nextAcceptanceProbability = policy.acceptanceProbability === undefined
+    ? current.acceptanceProbability
+    : probability(policy.acceptanceProbability, current.acceptanceProbability)
+  const nextEnabled = policy.enabled === undefined ? current.enabled : policy.enabled === true
+  return { nextCapacity, nextMaxRequestBytes, nextAcceptanceProbability, nextEnabled }
+}
+
+function validateIngestRequestPreliminaries({
+  request,
+  enabled,
+  seenRequests,
+  deferredRequests,
+  archivistId,
+  maxRequestBytes,
+  capacityBytes,
+  reservedBytes,
+  pendingReservationBytes,
+  now
+}) {
+  if (!request) return { status: 'rejected', reason: 'request-invalid' }
+  if (!enabled) return { status: 'rejected', reason: 'participation-disabled' }
+  if (seenRequests.has(request.requestId)) return { status: 'rejected', reason: 'request-replayed' }
+  const deferredAt = deferredRequests.get(request.requestId)
+  if (deferredAt !== undefined && now - deferredAt < DEFERRED_REQUEST_RETRY_MS) {
+    return { status: 'rejected', reason: 'request-deferred' }
+  }
+  if (request.body.requesterId === archivistId) return { status: 'rejected', reason: 'self-request' }
+  if (request.body.requestedBytes > maxRequestBytes ||
+      reservedBytes + pendingReservationBytes + request.body.requestedBytes > capacityBytes) {
+    return { status: 'rejected', reason: 'capacity-exceeded' }
+  }
+  return null
+}
+
+async function verifyRequestAuthorizationAndVisibility({
+  request,
+  authorizeRequest,
+  authorizeConsumerVisibility,
+  deferredRequests,
+  now
+}) {
+  let authorization
+  try {
+    authorization = await authorizeRequest(request)
+  } catch {
+    authorization = false
+  }
+  if (!authorization || authorization.accepted === false ||
+      authorization.requestedBytes !== request.body.requestedBytes ||
+      !sameRanges(authorization.ranges, request.body.ranges)) {
+    rememberBounded(deferredRequests, request.requestId, now)
+    return { ok: false, reason: 'manifest-not-authorized' }
+  }
+
+  let visible = false
+  try {
+    visible = await authorizeConsumerVisibility(request) === true
+  } catch {
+    visible = false
+  }
+  if (!visible) {
+    rememberBounded(deferredRequests, request.requestId, now)
+    return { ok: false, reason: 'consumer-not-visible' }
+  }
+
+  return { ok: true, authorization }
+}
+
+function checkRandomAcceptance(random, acceptanceProbability) {
+  const sample = Number(random())
+  if (!Number.isFinite(sample) || sample < 0 || sample >= 1) {
+    throw new Error('random source must return a number in [0, 1)')
+  }
+  return sample < acceptanceProbability
+}
+
+async function retainIngestedArchivePledge({
+  pledge,
+  authorizedCoreRef,
+  scopedNetwork,
+  handleArchiveProgress,
+  requestId
+}) {
+  for (const range of pledge.body.ranges) {
+    await scopedNetwork.retainAuthorizedArchive({
+      pledge,
+      coreRef: authorizedCoreRef,
+      onProgress: async (progress) => {
+        await handleArchiveProgress(pledge.pledgeId, requestId, progress)
+      },
+      ...range,
+    })
+  }
+}
+
+export function createPermissionlessArchiveNetwork(options = {}) {
+  validateArchiveNetworkOptions(options)
+  const now = typeof options.now === 'function' ? options.now : Date.now
+  const random = typeof options.random === 'function' ? options.random : Math.random
+  const authorizeRequest = typeof options.authorizeRequest === 'function' ? options.authorizeRequest : async () => false
+  const authorizeConsumerVisibility = typeof options.authorizeConsumerVisibility === 'function'
+    ? options.authorizeConsumerVisibility
+    : async () => false
+  const archiveStore = options.archiveStore || null
+  const diagnostics = options.diagnostics || null
+  const archivePolicy = options.archivePolicy || null
+  const participationRepository = options.participationRepository || null
+  const peerScorer = options.peerScorer || null
+  const scopedNetwork = options.scopedNetwork
+  const { publishRequest, publishPledge, publishChallenge, publishChallengeProof } = resolveArchiveNetworkPublishers(options, scopedNetwork)
   const keyPair = options.keyPair
   const archivistId = b4a.toString(b4a.from(keyPair.publicKey), 'hex')
 
@@ -182,6 +542,7 @@ export function createPermissionlessArchiveNetwork(options = {}) {
     acceptanceProbability: options.acceptanceProbability !== undefined,
   }
   let enabled = options.enabled === true
+  let activationDeferred = options.deferActivation === true
   let capacityBytes = boundedBytes(options.capacityBytes, 'capacityBytes')
   let maxRequestBytes = boundedBytes(options.maxRequestBytes, 'maxRequestBytes', DEFAULT_MAX_REQUEST_BYTES)
   let acceptanceProbability = probability(options.acceptanceProbability, 0.25)
@@ -198,17 +559,9 @@ export function createPermissionlessArchiveNetwork(options = {}) {
   const retentionTimers = new Map()
   const localRequestTimers = new Map()
   const receivedRetentionTimers = new Map()
+  const reassessmentTimers = new Map()
   const activeChallengeProofsByPeer = new Map()
-  const challengeIntervalMs = boundedPositiveMs(options.challengeIntervalMs, 'challengeIntervalMs', DEFAULT_CHALLENGE_INTERVAL_MS)
-  const challengeTimeoutMs = boundedPositiveMs(options.challengeTimeoutMs, 'challengeTimeoutMs', DEFAULT_CHALLENGE_TIMEOUT_MS)
-  const maxActiveChallengesPerPeer = Math.min(
-    32,
-    boundedPositiveMs(
-      options.maxActiveChallengesPerPeer,
-      'maxActiveChallengesPerPeer',
-      DEFAULT_MAX_ACTIVE_CHALLENGES_PER_PEER
-    )
-  )
+  const { challengeIntervalMs, challengeTimeoutMs, maxActiveChallengesPerPeer } = resolveArchiveNetworkLimits(options)
   const setTimer = typeof options.setTimeout === 'function' ? options.setTimeout : setTimeout
   const clearTimer = typeof options.clearTimeout === 'function' ? options.clearTimeout : clearTimeout
   const transportPeerId = transportId(
@@ -248,6 +601,16 @@ export function createPermissionlessArchiveNetwork(options = {}) {
       capacityBytes,
       maxRequestBytes,
       acceptanceProbability,
+      requests: [...localRequests.values()].map(r => ({
+        envelope: r.envelope,
+        coreRef: r.coreRef || null,
+      })),
+      pledges: [...receivedPledges.values()].map(r => ({
+        envelope: r.pledge.envelope,
+        peerId: r.peerId || null,
+        coreRef: r.coreRef || null,
+        lastPassedChallengeAt: passedChallenges.get(r.pledge.pledgeId) || null,
+      })),
     })
   }
 
@@ -255,14 +618,31 @@ export function createPermissionlessArchiveNetwork(options = {}) {
     const persisted = decodeParticipationState(await participationRepository?.load?.())
     await archivePolicy?.ready
     const policySnapshot = await archivePolicy?.snapshot?.()
-    if (!configuredParticipation.capacityBytes) {
-      if (policySnapshot) capacityBytes = boundedBytes(policySnapshot.totalBytes, 'capacityBytes')
-      else if (persisted) capacityBytes = persisted.capacityBytes
-    }
+    const { capacity, en, maxReq, prob } = applyPersistedParticipationConfig({
+      persisted,
+      policySnapshot,
+      configuredParticipation
+    })
+    if (capacity !== undefined) capacityBytes = capacity
+    if (en !== undefined) enabled = en
+    if (maxReq !== undefined) maxRequestBytes = maxReq
+    if (prob !== undefined) acceptanceProbability = prob
+
     if (persisted) {
-      if (!configuredParticipation.enabled) enabled = persisted.enabled
-      if (!configuredParticipation.maxRequestBytes) maxRequestBytes = persisted.maxRequestBytes
-      if (!configuredParticipation.acceptanceProbability) acceptanceProbability = persisted.acceptanceProbability
+      const currentTime = now()
+      for (const item of persisted.requests || []) {
+        await restorePersistedRequest(item, currentTime, rememberLocalRequest)
+      }
+      for (const item of persisted.pledges || []) {
+        await restorePersistedPledge(item, currentTime, {
+          localRequests,
+          authorizeConsumerVisibility,
+          scopedNetwork,
+          receivedPledges,
+          passedChallenges,
+          scheduleReceivedRetentionExpiry
+        })
+      }
     }
   }
 
@@ -308,11 +688,11 @@ export function createPermissionlessArchiveNetwork(options = {}) {
   }
 
   function recordCapacity() {
-    try { diagnostics?.recordCapacity?.(capacitySnapshot()) } catch {}
+    try { diagnostics?.recordCapacity?.(capacitySnapshot()) } catch { /* diagnostics observers must not affect capacity accounting */ }
   }
 
   function recordCapacityRejection() {
-    try { diagnostics?.recordCapacityRejection?.({ reason: 'capacity-exceeded', ...capacitySnapshot() }) } catch {}
+    try { diagnostics?.recordCapacityRejection?.({ reason: 'capacity-exceeded', ...capacitySnapshot() }) } catch { /* diagnostics observers must not affect capacity accounting */ }
   }
 
   function trimReplayCache(cache) {
@@ -420,6 +800,8 @@ export function createPermissionlessArchiveNetwork(options = {}) {
 
   async function expireLocalPledge(requestId, record) {
     if (localArchivistPledges.get(requestId) !== record) return
+    record.aborted = true
+    cancelPledgeReassessmentTimer(record.pledge.pledgeId)
     localArchivistPledges.delete(requestId)
     cancelRetentionTimer(record.pledge.pledgeId)
     await scopedNetwork.releaseAuthorizedArchive({ archiveId: record.pledge.pledgeId }).catch(() => {})
@@ -430,6 +812,75 @@ export function createPermissionlessArchiveNetwork(options = {}) {
       observedAt: now(),
     })
     recordCapacity()
+  }
+
+  const DEFAULT_PROGRESS_REASSESSMENT_INTERVAL_MS = 60 * 1000
+
+  function cancelPledgeReassessmentTimer(pledgeId) {
+    const timer = reassessmentTimers.get(pledgeId)
+    if (timer != null) clearTimer(timer)
+    reassessmentTimers.delete(pledgeId)
+  }
+
+  function schedulePledgeReassessment(pledgeId, requestId, delayMs = DEFAULT_PROGRESS_REASSESSMENT_INTERVAL_MS) {
+    cancelPledgeReassessmentTimer(pledgeId)
+    const record = localArchivistPledges.get(requestId)
+    if (!record || record.aborted) return
+    const timer = setTimer(() => {
+      reassessmentTimers.delete(pledgeId)
+      void pumpPledgeProgress(pledgeId, requestId)
+    }, delayMs)
+    timer?.unref?.()
+    reassessmentTimers.set(pledgeId, timer)
+  }
+
+  async function pumpPledgeProgress(pledgeId, requestId) {
+    const record = localArchivistPledges.get(requestId)
+    if (!record || record.aborted || record.pumping) return
+    record.pumping = true
+    let progress = null
+    try {
+      progress = await scopedNetwork.getAuthorizedArchiveProgress?.({
+        archiveId: pledgeId,
+        cursor: record.progressCursor,
+      })
+    } catch {
+      progress = null
+    } finally {
+      record.pumping = false
+    }
+
+    if (record.aborted) return
+
+    if (!progress) {
+      // Reassessment query failed or returned null: clear completion and retry after interval
+      await handleArchiveProgress(pledgeId, requestId, {
+        verifiedBytes: 0,
+        verifiedRanges: [],
+        complete: false,
+      })
+      schedulePledgeReassessment(pledgeId, requestId, DEFAULT_PROGRESS_REASSESSMENT_INTERVAL_MS)
+      return
+    }
+    const isTruncatedPage = progress.truncated === true && progress.nextCursor != null
+    // Intermediate continuation pages update incremental metrics without revoking completion
+    await handleArchiveProgress(pledgeId, requestId, progress, { finalPass: !isTruncatedPage })
+
+    if (record.aborted) return
+
+    if (isTruncatedPage) {
+      record.progressCursor = progress.nextCursor
+      cancelPledgeReassessmentTimer(pledgeId)
+      const timer = setTimer(() => {
+        reassessmentTimers.delete(pledgeId)
+        void pumpPledgeProgress(pledgeId, requestId)
+      }, 0)
+      timer?.unref?.()
+      reassessmentTimers.set(pledgeId, timer)
+    } else {
+      record.progressCursor = null
+      schedulePledgeReassessment(pledgeId, requestId, DEFAULT_PROGRESS_REASSESSMENT_INTERVAL_MS)
+    }
   }
 
   function scheduleRetentionExpiry(requestId, record) {
@@ -452,45 +903,17 @@ export function createPermissionlessArchiveNetwork(options = {}) {
     await archivePolicy?.ready
     const snapshot = await archivePolicy?.snapshot?.()
     for (const reservation of snapshot?.reservations || []) {
-      if (reservation.expiresAt <= now()) {
-        await archivePolicy.release({ pledgeId: reservation.pledgeId })
-        await scopedNetwork.releaseAuthorizedArchive({ archiveId: reservation.pledgeId }).catch(() => {})
-        continue
-      }
-      const pledge = await verifyArchivePledge(reservation.pledgeEnvelope, { now: now() })
-      if (!pledge || pledge.pledgeId !== reservation.pledgeId ||
-          pledge.body.archivistId !== archivistId ||
-          pledge.body.retentionUntil !== reservation.expiresAt) {
-        throw new Error('persisted archive reservation pledge is invalid')
-      }
-      const requestId = pledge.body.nonce
-      const record = { request: null, pledge, bytes: reservation.reservedBytes }
-      let visible = false
-      try {
-        visible = await authorizeConsumerVisibility({ body: pledge.body }) === true
-      } catch {
-        visible = false
-      }
-      if (!visible) {
-        await archivePolicy.release({ pledgeId: pledge.pledgeId }).catch(() => {})
-        await scopedNetwork.releaseAuthorizedArchive({ archiveId: pledge.pledgeId }).catch(() => {})
-        archiveStore?.putObservation?.({
-          pledgeId: pledge.pledgeId,
-          status: 'pledge-expired',
-          observedAt: now(),
-        })
-        continue
-      }
-      try {
-        for (const range of pledge.body.ranges) {
-          await scopedNetwork.retainAuthorizedArchive({ pledge, ...range })
-        }
-      } catch (error) {
-        await scopedNetwork.releaseAuthorizedArchive({ archiveId: pledge.pledgeId }).catch(() => {})
-        throw error
-      }
-      localArchivistPledges.set(requestId, record)
-      scheduleRetentionExpiry(requestId, record)
+      await restoreSingleLocalReservation(reservation, {
+        archivePolicy,
+        scopedNetwork,
+        archiveStore,
+        authorizeConsumerVisibility,
+        localArchivistPledges,
+        scheduleRetentionExpiry,
+        pumpPledgeProgress,
+        archivistId,
+        now
+      })
     }
     recordCapacity()
   }
@@ -512,6 +935,8 @@ export function createPermissionlessArchiveNetwork(options = {}) {
 
   async function suspendLocalPledges() {
     for (const record of localArchivistPledges.values()) {
+      record.aborted = true
+      cancelPledgeReassessmentTimer(record.pledge.pledgeId)
       cancelRetentionTimer(record.pledge.pledgeId)
       await scopedNetwork.releaseAuthorizedArchive({ archiveId: record.pledge.pledgeId }).catch(() => {})
     }
@@ -572,6 +997,8 @@ export function createPermissionlessArchiveNetwork(options = {}) {
 
   async function releaseLocalPledges() {
     for (const record of localArchivistPledges.values()) {
+      record.aborted = true
+      cancelPledgeReassessmentTimer(record.pledge.pledgeId)
       archiveStore?.putObservation?.({
         pledgeId: record.pledge.pledgeId,
         status: 'pledge-expired',
@@ -586,20 +1013,82 @@ export function createPermissionlessArchiveNetwork(options = {}) {
     clearLocalRequests()
     recordCapacity()
   }
+  async function handleArchiveProgress(pledgeId, requestId, progress, { finalPass = true } = {}) {
+    const record = localArchivistPledges.get(requestId)
+    if (!record || record.aborted) return
+    const verifiedBytes = Number(progress?.verifiedBytes) || 0
+    const verifiedRanges = Array.isArray(progress?.verifiedRanges) ? progress.verifiedRanges : []
+
+    if (!finalPass) {
+      record.scanProgress = {
+        verifiedBytes,
+        verifiedRanges,
+      }
+      return
+    }
+
+    record.scanProgress = null
+    record.verifiedBytes = verifiedBytes
+    record.verifiedRanges = verifiedRanges
+
+    const durableComplete = await reconcileDurableCompletion(
+      archivePolicy,
+      pledgeId,
+      record,
+      verifiedBytes,
+      verifiedRanges,
+      progress
+    )
+    record.complete = durableComplete
+
+    if (durableComplete) {
+      await publishCompletedPledge(record, archiveStore, publishPledge)
+    }
+    recordCapacity()
+  }
+
 
   service = {
     async setParticipation(policy = {}) {
       await ready
-      const nextCapacity = policy.capacityBytes === undefined
-        ? capacityBytes
-        : boundedBytes(policy.capacityBytes, 'capacityBytes')
-      const nextMaxRequestBytes = policy.maxRequestBytes === undefined
-        ? maxRequestBytes
-        : boundedBytes(policy.maxRequestBytes, 'maxRequestBytes')
-      const nextAcceptanceProbability = policy.acceptanceProbability === undefined
-        ? acceptanceProbability
-        : probability(policy.acceptanceProbability, acceptanceProbability)
-      const nextEnabled = policy.enabled === undefined ? enabled : policy.enabled === true
+      const {
+        nextCapacity,
+        nextMaxRequestBytes,
+        nextAcceptanceProbability,
+        nextEnabled
+      } = resolveNextParticipationPolicy(policy, {
+        capacityBytes,
+        maxRequestBytes,
+        acceptanceProbability,
+        enabled
+      })
+
+      if (!nextEnabled) {
+        // Authoritative disable: release both local and persisted reservations first
+        // so archivePolicy.setCapacity won't reject against persisted holds
+        await releaseLocalPledges()
+        await releasePersistedReservations()
+        await releaseDiscovery()
+        if (nextCapacity !== capacityBytes) {
+          const updated = await archivePolicy?.setCapacity?.(nextCapacity)
+          if (updated?.accepted === false) return { ...this.getStatus(), errorCode: 'ARCHIVE_CAPACITY_EXHAUSTED' }
+        }
+        capacityBytes = nextCapacity
+        maxRequestBytes = nextMaxRequestBytes
+        acceptanceProbability = nextAcceptanceProbability
+        enabled = false
+        activationDeferred = false
+        await persistParticipation()
+        recordCapacity()
+        return this.getStatus()
+      }
+
+      // Enabling or updating while enabled:
+      if (activationDeferred || !enabled) {
+        await restoreLocalPledges()
+      }
+      activationDeferred = false
+
       const locallyReservedBytes = [...localArchivistPledges.values()]
         .reduce((total, record) => total + record.bytes, 0)
       if (nextCapacity < locallyReservedBytes) {
@@ -612,15 +1101,10 @@ export function createPermissionlessArchiveNetwork(options = {}) {
       capacityBytes = nextCapacity
       maxRequestBytes = nextMaxRequestBytes
       acceptanceProbability = nextAcceptanceProbability
-      enabled = nextEnabled
+      enabled = true
       await archivePolicy?.expire?.(now())
       await persistParticipation()
-      if (enabled) {
-        await ensureDiscovery()
-      } else {
-        await releaseLocalPledges()
-        await releaseDiscovery()
-      }
+      await ensureDiscovery()
       recordCapacity()
       return this.getStatus()
     },
@@ -653,6 +1137,8 @@ export function createPermissionlessArchiveNetwork(options = {}) {
     async requestArchive(input = {}) {
       await ready
       await ensureDiscovery()
+      if (!input.coreRef) throw new Error('immutable coreRef is required to request archive retention')
+      const coreRef = normalizeAssetCoreRefV2(input.coreRef)
       const issuedAt = now()
       const expiresAt = input.expiresAt ?? issuedAt + DEFAULT_REQUEST_TTL_MS
       const retentionUntil = input.retentionUntil ?? issuedAt + DEFAULT_RETENTION_MS
@@ -666,7 +1152,23 @@ export function createPermissionlessArchiveNetwork(options = {}) {
         nonce,
         keyPair,
       })
+      const requestedBytes = request.body.requestedBytes
+      const ranges = request.body.ranges
+      if (ranges.length === 0) throw new Error('archive request must have at least one range')
+      for (const range of ranges) {
+        if (range.coreKey !== coreRef.key) {
+          throw new Error('archive request range coreKey does not match coreRef key')
+        }
+        if (range.end > coreRef.length) {
+          throw new Error('archive request range end exceeds coreRef length')
+        }
+      }
+      if (requestedBytes > coreRef.byteLength) {
+        throw new Error('archive requestedBytes exceeds coreRef byteLength')
+      }
+      request.coreRef = coreRef
       rememberLocalRequest(request)
+      await persistParticipation()
       await publishRequest(request.envelope, request.body)
       return { status: 'published', requestId: request.requestId, request }
     },
@@ -723,61 +1225,48 @@ export function createPermissionlessArchiveNetwork(options = {}) {
     async ingestRequest(envelope) {
       await ready
       const request = await verifyArchiveRequest(envelope, { now: now() })
-      if (!request) return { status: 'rejected', reason: 'request-invalid' }
-      if (!enabled) return { status: 'rejected', reason: 'participation-disabled' }
-      if (seenRequests.has(request.requestId)) return { status: 'rejected', reason: 'request-replayed' }
-      // A request can arrive before this device has synced the publisher
-      // catalog that authorizes it. Recording it as seen at that moment
-      // permanently blackholes it: every later re-announcement is refused as a
-      // replay, so the archivist never pledges for content it would gladly
-      // hold. Defer instead, and re-evaluate once the catalog can answer.
-      const deferredAt = deferredRequests.get(request.requestId)
-      if (deferredAt !== undefined && now() - deferredAt < DEFERRED_REQUEST_RETRY_MS) {
-        return { status: 'rejected', reason: 'request-deferred' }
-      }
-      if (request.body.requesterId === archivistId) return { status: 'rejected', reason: 'self-request' }
-      if (request.body.requestedBytes > maxRequestBytes ||
-          reservedBytes() + pendingReservationBytes + request.body.requestedBytes > capacityBytes) {
-        capacityRejections++
-        recordCapacityRejection()
-        return { status: 'rejected', reason: 'capacity-exceeded' }
+      const prelimError = validateIngestRequestPreliminaries({
+        request,
+        enabled,
+        seenRequests,
+        deferredRequests,
+        archivistId,
+        maxRequestBytes,
+        capacityBytes,
+        reservedBytes: reservedBytes(),
+        pendingReservationBytes,
+        now: now()
+      })
+      if (prelimError) {
+        if (prelimError.reason === 'capacity-exceeded') {
+          capacityRejections++
+          recordCapacityRejection()
+        }
+        return prelimError
       }
 
-      let authorization
-      try {
-        authorization = await authorizeRequest(request)
-      } catch {
-        authorization = false
-      }
-      if (!authorization || authorization.accepted === false ||
-          authorization.requestedBytes !== request.body.requestedBytes ||
-          !sameRanges(authorization.ranges, request.body.ranges)) {
+      const authCheck = await verifyRequestAuthorizationAndVisibility({
+        request,
+        authorizeRequest,
+        authorizeConsumerVisibility,
+        deferredRequests,
+        now: now()
+      })
+      if (!authCheck.ok) {
         authorizationRejections++
-        rememberBounded(deferredRequests, request.requestId, now())
-        return { status: 'rejected', reason: 'manifest-not-authorized' }
+        return { status: 'rejected', reason: authCheck.reason }
       }
-      let visible = false
-      try {
-        visible = await authorizeConsumerVisibility(request) === true
-      } catch {
-        visible = false
-      }
-      if (!visible) {
-        authorizationRejections++
-        rememberBounded(deferredRequests, request.requestId, now())
-        return { status: 'rejected', reason: 'consumer-not-visible' }
-      }
+
       // Past every check that local state can still change the answer to, so
       // this request is now decided once and never re-rolled.
       deferredRequests.delete(request.requestId)
       rememberBounded(seenRequests, request.requestId, now())
 
-      const sample = Number(random())
-      if (!Number.isFinite(sample) || sample < 0 || sample >= 1) throw new Error('random source must return a number in [0, 1)')
-      if (sample >= acceptanceProbability) {
+      if (!checkRandomAcceptance(random, acceptanceProbability)) {
         randomRejections++
         return { status: 'rejected', reason: 'randomly-declined' }
       }
+
       if (reservedBytes() + pendingReservationBytes + request.body.requestedBytes > capacityBytes) {
         capacityRejections++
         recordCapacityRejection()
@@ -796,34 +1285,49 @@ export function createPermissionlessArchiveNetwork(options = {}) {
         nonce: request.requestId,
         keyPair,
       })
+      const authorizedCoreRef = authCheck.authorization?.coreRef || request.body.coreRef || null
       try {
         const reservation = await archivePolicy?.reserve?.({
           pledgeId: pledge.pledgeId,
           bytes: request.body.requestedBytes,
           expiresAt: pledge.body.retentionUntil,
           pledgeEnvelope: pledge.envelope,
+          coreRef: authorizedCoreRef,
         })
         if (reservation && reservation.accepted !== true) {
           capacityRejections++
           recordCapacityRejection()
           return { status: 'rejected', reason: 'capacity-exceeded' }
         }
-        for (const range of pledge.body.ranges) {
-          await scopedNetwork.retainAuthorizedArchive({ pledge, ...range })
+        const record = {
+          request,
+          pledge,
+          bytes: request.body.requestedBytes,
+          verifiedBytes: 0,
+          complete: false,
+          published: false,
+          coreRef: authorizedCoreRef,
         }
-        const reconciled = await archivePolicy?.reconcile?.({
-          pledgeId: pledge.pledgeId,
-          actualBytes: request.body.requestedBytes,
-          complete: true,
-        })
-        if (reconciled && reconciled.accepted !== true) throw new Error('archive reservation reconciliation failed')
-        await archiveStore?.putPledge?.(pledge.envelope)
-        const record = { request, pledge, bytes: request.body.requestedBytes }
         localArchivistPledges.set(request.requestId, record)
         scheduleRetentionExpiry(request.requestId, record)
+
+        await retainIngestedArchivePledge({
+          pledge,
+          authorizedCoreRef,
+          scopedNetwork,
+          handleArchiveProgress,
+          requestId: request.requestId
+        })
+
+        await pumpPledgeProgress(pledge.pledgeId, request.requestId)
+
         recordCapacity()
-        await publishPledge(pledge.envelope)
-        return { status: 'accepted', requestId: request.requestId, pledge }
+        return {
+          status: 'accepted',
+          requestId: request.requestId,
+          pledge,
+          provisional: !record.complete,
+        }
       } catch (error) {
         localArchivistPledges.delete(request.requestId)
         cancelRetentionTimer(pledge.pledgeId)
@@ -849,9 +1353,15 @@ export function createPermissionlessArchiveNetwork(options = {}) {
           !sameRanges(pledge.body.ranges, request.body.ranges)) {
         return { status: 'rejected', reason: 'pledge-request-mismatch' }
       }
+      const reqCoreRef = request.coreRef || null
       try {
         for (const range of pledge.body.ranges) {
-          await scopedNetwork.retainAuthorizedArchive({ pledge, ...range, download: false })
+          await scopedNetwork.retainAuthorizedArchive({
+            pledge,
+            coreRef: reqCoreRef,
+            ...range,
+            download: false,
+          })
         }
         await archiveStore?.putPledge?.(pledge.envelope)
         receivedPledges.set(pledge.pledgeId, {
@@ -859,11 +1369,13 @@ export function createPermissionlessArchiveNetwork(options = {}) {
           peerId: context.peerId === undefined
             ? pledge.body.archivistId
             : (/^[0-9a-f]{64}$/.test(context.peerId) ? context.peerId : null),
+          coreRef: reqCoreRef,
         })
         const record = receivedPledges.get(pledge.pledgeId)
         scheduleReceivedRetentionExpiry(pledge.pledgeId, record)
         scheduleChallengeCycle()
         recordCapacity()
+        await persistParticipation()
         return { status: 'accepted', requestId: request.requestId, pledge }
       } catch (error) {
         await scopedNetwork.releaseAuthorizedArchive({ archiveId: pledge.pledgeId }).catch(() => {})
@@ -1048,6 +1560,8 @@ export function createPermissionlessArchiveNetwork(options = {}) {
         reservedBytes: reservedBytes(),
         availableBytes: Math.max(0, capacityBytes - reservedBytes()),
         acceptedRequests: localArchivistPledges.size,
+        completedRequests: [...localArchivistPledges.values()].filter(r => r.complete).length,
+        verifiedBytes: [...localArchivistPledges.values()].reduce((sum, r) => sum + (r.verifiedBytes || 0), 0),
         knownRequests: localRequests.size,
         receivedPledges: receivedPledges.size,
         randomRejections,
@@ -1059,6 +1573,8 @@ export function createPermissionlessArchiveNetwork(options = {}) {
     async close() {
       enabled = false
       await ready
+      for (const timer of reassessmentTimers.values()) clearTimer(timer)
+      reassessmentTimers.clear()
       await suspendLocalPledges()
       await suspendReceivedPledges()
       await releaseDiscovery()
@@ -1070,9 +1586,11 @@ export function createPermissionlessArchiveNetwork(options = {}) {
   }
   const ready = (async () => {
     await restoreParticipation()
-    if (enabled) await restoreLocalPledges()
-    else await releasePersistedReservations()
-    if (enabled) await ensureDiscovery()
+    if (!activationDeferred) {
+      if (enabled) await restoreLocalPledges()
+      else await releasePersistedReservations()
+      if (enabled) await ensureDiscovery()
+    }
   })()
   service.ready = ready
   recordCapacity()

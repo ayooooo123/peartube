@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "name": "empty",
@@ -7109,6 +7109,12 @@
           "required": false,
           "type": "string",
           "version": 1
+        },
+        {
+          "name": "indexServiceAnnouncementsJson",
+          "required": false,
+          "type": "string",
+          "version": 1
         }
       ]
     },
@@ -7192,6 +7198,12 @@
         },
         {
           "name": "participationMode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "indexServiceAnnouncementsJson",
           "required": false,
           "type": "string",
           "version": 1
@@ -9109,12 +9121,24 @@
       "name": "search-index-candidates-request",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": -1,
+      "flagsPosition": 1,
       "fields": [
         {
           "name": "selector",
           "required": true,
           "type": "@peartube/index-search-selector",
+          "version": 1
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "cursor",
+          "required": false,
+          "type": "string",
           "version": 1
         }
       ]
@@ -9148,6 +9172,24 @@
           "name": "errorMessage",
           "required": false,
           "type": "string",
+          "version": 1
+        },
+        {
+          "name": "nextCursor",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "partial",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "stale",
+          "required": false,
+          "type": "bool",
           "version": 1
         }
       ]
@@ -12000,6 +12042,94 @@
           "required": false,
           "type": "uint",
           "version": 1
+        },
+        {
+          "name": "entityKind",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "provider-search-selector-v1",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "namespace",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "identifier",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "title",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "kind",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "year",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "season",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "episode",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "provider-search-diagnostics-v1",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "partial",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "stale",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "queriedServices",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "respondingServices",
+          "required": false,
+          "type": "uint",
+          "version": 1
         }
       ]
     },
@@ -12025,6 +12155,12 @@
           "name": "limit",
           "required": false,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "selector",
+          "required": false,
+          "type": "@peartube/provider-search-selector-v1",
           "version": 1
         }
       ]
@@ -12058,6 +12194,24 @@
           "name": "error",
           "required": false,
           "type": "@peartube/provider-error",
+          "version": 1
+        },
+        {
+          "name": "diagnostics",
+          "required": false,
+          "type": "@peartube/provider-search-diagnostics-v1",
+          "version": 1
+        },
+        {
+          "name": "partial",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "stale",
+          "required": false,
+          "type": "bool",
           "version": 1
         }
       ]
@@ -12217,6 +12371,12 @@
           "required": false,
           "type": "bool",
           "version": 1
+        },
+        {
+          "name": "sourceFileName",
+          "required": false,
+          "type": "string",
+          "version": 2
         }
       ]
     },
@@ -12309,6 +12469,24 @@
           "required": true,
           "type": "uint",
           "version": 1
+        },
+        {
+          "name": "title",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "sourceFileName",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "mediaContext",
+          "required": false,
+          "type": "@peartube/provider-media-context-v1",
+          "version": 2
         }
       ]
     },
@@ -13294,6 +13472,62 @@
           "required": false,
           "type": "string",
           "version": 1
+        }
+      ]
+    },
+    {
+      "name": "provider-media-context-v1",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "kind",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "namespace",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "identifier",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "title",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "season",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "episode",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "releaseYear",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "workEntityId",
+          "required": false,
+          "type": "string",
+          "version": 2
         }
       ]
     }

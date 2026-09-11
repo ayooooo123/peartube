@@ -1,3 +1,5 @@
+import { normalizeAssetCoreRefV2 } from '../assets/rendition.js'
+
 const POLICY_STATE_VERSION = 1
 const MAX_RESERVATIONS = 4096
 
@@ -27,14 +29,145 @@ function pledgeEnvelope(value) {
   return { ...value }
 }
 
+function pledgedRangesFromReservation(reservation) {
+  const envelope = reservation?.pledgeEnvelope
+  if (envelope && envelope.body != null) {
+    let body = envelope.body
+    if (typeof body === 'object' && body !== null && !Array.isArray(body) && Array.isArray(body.ranges)) {
+      return body.ranges
+    }
+    try {
+      const text = typeof body === 'string'
+        ? body
+        : (typeof Buffer !== 'undefined' && Buffer.isBuffer?.(body)) || body?.byteLength != null
+          ? new TextDecoder().decode(body)
+          : null
+      if (text) {
+        const parsed = JSON.parse(text)
+        if (Array.isArray(parsed?.ranges)) return parsed.ranges
+      }
+    } catch {
+      // fall through to coreRef
+    }
+  }
+  if (reservation?.coreRef) return [{ start: 0, end: reservation.coreRef.length }]
+  return []
+}
+
 function cloneReservations(source) {
   return new Map(Array.from(source, ([id, reservation]) => [id, { ...reservation }]))
 }
 
+function mergeRangeList(ranges = []) {
+  const byCore = new Map()
+  for (const r of ranges) {
+    if (!Number.isSafeInteger(r?.start) || !Number.isSafeInteger(r?.end) || r.end <= r.start) continue
+    const key = r.coreKey ? String(r.coreKey).toLowerCase() : ''
+    if (!byCore.has(key)) byCore.set(key, [])
+    byCore.get(key).push(r)
+  }
+  const mergedAll = []
+  for (const [key, list] of byCore) {
+    list.sort((a, b) => a.start - b.start || a.end - b.end)
+    const merged = [{ ...(key ? { coreKey: key } : {}), start: list[0].start, end: list[0].end }]
+    for (let i = 1; i < list.length; i++) {
+      const prev = merged[merged.length - 1]
+      const cur = list[i]
+      if (cur.start <= prev.end) {
+        if (cur.end > prev.end) prev.end = cur.end
+      } else {
+        merged.push({ ...(key ? { coreKey: key } : {}), start: cur.start, end: cur.end })
+      }
+    }
+    mergedAll.push(...merged)
+  }
+  return mergedAll
+}
+const MAX_VERIFIED_RANGES = 64
+
+function normalizeVerifiedRange(range = {}, maxEnd = Number.MAX_SAFE_INTEGER) {
+  const start = Number(range?.start)
+  const end = Number(range?.end)
+  const coreKey = range?.coreKey ? String(range.coreKey).toLowerCase() : null
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start || end > maxEnd) {
+    throw new Error('invalid verified range bounds')
+  }
+  return { ...(coreKey ? { coreKey } : {}), start, end }
+}
+
+function normalizeVerifiedRanges(ranges = [], maxEnd = Number.MAX_SAFE_INTEGER) {
+  if (ranges == null) return []
+  if (!Array.isArray(ranges) || ranges.length > MAX_VERIFIED_RANGES) {
+    throw new Error(`verifiedRanges must be an array of at most ${MAX_VERIFIED_RANGES} ranges`)
+  }
+  const validated = []
+  for (const r of ranges) {
+    validated.push(normalizeVerifiedRange(r, maxEnd))
+  }
+  return mergeRangeList(validated)
+}
+
+function rangesCoverPledged(verifiedRanges = [], pledgedRanges = []) {
+  if (!Array.isArray(pledgedRanges) || pledgedRanges.length === 0) return false
+  return pledgedRanges.every(p => {
+    const start = Number(p?.start)
+    const end = Number(p?.end)
+    const coreKey = p?.coreKey ? String(p.coreKey).toLowerCase() : null
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end <= start) return false
+    return verifiedRanges.some(v => {
+      const vCoreKey = v?.coreKey ? String(v.coreKey).toLowerCase() : null
+      if (coreKey !== vCoreKey) return false
+      return v.start <= start && v.end >= end
+    })
+  })
+}
+
+
 function heldBytes(reservations) {
   let total = 0
-  for (const reservation of reservations.values()) total += Math.max(reservation.reservedBytes, reservation.actualBytes)
+  for (const reservation of reservations.values()) total += reservation.reservedBytes
   return total
+}
+
+function parseReservationCoreRef(rawCoreRef) {
+  if (rawCoreRef && typeof rawCoreRef === 'object') {
+    try {
+      return normalizeAssetCoreRefV2(rawCoreRef)
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+function decodeReservation(raw) {
+  const pledgeId = reservationId(raw.pledgeId)
+  const reservedBytes = safeBytes(raw.reservedBytes, 'reservedBytes')
+  const verifiedBytes = raw.verifiedBytes != null ? safeBytes(raw.verifiedBytes, 'verifiedBytes') : 0
+  const persistedPledge = pledgeEnvelope(raw.pledgeEnvelope)
+  const coreRef = parseReservationCoreRef(raw.coreRef)
+  const maxEnd = coreRef ? coreRef.length : Number.MAX_SAFE_INTEGER
+  let verifiedRanges = []
+  try {
+    verifiedRanges = normalizeVerifiedRanges(raw.verifiedRanges, maxEnd)
+  } catch {
+    throw new Error('archive reservation state is invalid')
+  }
+  const pledgedRanges = pledgedRangesFromReservation({ coreRef, pledgeEnvelope: persistedPledge })
+  const coverageComplete = pledgedRanges.length > 0 ? rangesCoverPledged(verifiedRanges, pledgedRanges) : true
+  const complete = raw.verifiedBytes != null && raw.complete === true && verifiedBytes === reservedBytes && verifiedBytes > 0 && coverageComplete
+  const expiresAt = safeTimestamp(raw.expiresAt, 'expiresAt')
+  if (verifiedBytes > reservedBytes) throw new Error('archive reservation state is inconsistent')
+  return {
+    pledgeId,
+    reservedBytes,
+    verifiedBytes,
+    complete,
+    verifiedRanges,
+    expiresAt,
+    ...(coreRef ? { coreRef } : {}),
+    ...(persistedPledge ? { pledgeEnvelope: persistedPledge } : {}),
+  }
 }
 
 function decodeState(value, configuredCapacityBytes, hasConfiguredCapacity) {
@@ -44,14 +177,9 @@ function decodeState(value, configuredCapacityBytes, hasConfiguredCapacity) {
     throw new Error('archive reservation state is invalid')
   }
   for (const raw of value.reservations) {
-    const pledgeId = reservationId(raw.pledgeId)
-    const reservedBytes = safeBytes(raw.reservedBytes, 'reservedBytes')
-    const actualBytes = safeBytes(raw.actualBytes, 'actualBytes')
-    const expiresAt = safeTimestamp(raw.expiresAt, 'expiresAt')
-    const persistedPledge = pledgeEnvelope(raw.pledgeEnvelope)
-    if (actualBytes > reservedBytes || reservations.has(pledgeId)) throw new Error('archive reservation state is inconsistent')
-    reservations.set(pledgeId, { pledgeId, reservedBytes, actualBytes, expiresAt })
-    if (persistedPledge) reservations.get(pledgeId).pledgeEnvelope = persistedPledge
+    const reservation = decodeReservation(raw)
+    if (reservations.has(reservation.pledgeId)) throw new Error('archive reservation state is inconsistent')
+    reservations.set(reservation.pledgeId, reservation)
   }
   const capacityBytes = hasConfiguredCapacity
     ? configuredCapacityBytes
@@ -113,7 +241,7 @@ export function createArchivePolicy(options = {}) {
   }
 
   function observe(method, input) {
-    try { diagnostics?.[method]?.(input) } catch {}
+    try { diagnostics?.[method]?.(input) } catch { /* diagnostics observers must not mask policy decisions */ }
   }
 
   function reportCapacity(source = reservations) {
@@ -164,11 +292,15 @@ export function createArchivePolicy(options = {}) {
         let bytes
         let expiresAt
         let persistedPledge
+        let coreRef = null
         try {
           pledgeId = reservationId(input.pledgeId)
           bytes = safeBytes(input.bytes, 'bytes', { positive: true })
           expiresAt = safeTimestamp(input.expiresAt, 'expiresAt')
           persistedPledge = pledgeEnvelope(input.pledgeEnvelope)
+          if (input.coreRef && typeof input.coreRef === 'object') {
+            coreRef = normalizeAssetCoreRefV2(input.coreRef)
+          }
         } catch {
           return reject('invalid-reservation', Number(input.bytes))
         }
@@ -187,8 +319,11 @@ export function createArchivePolicy(options = {}) {
         next.set(pledgeId, {
           pledgeId,
           reservedBytes: bytes,
-          actualBytes: 0,
+          verifiedBytes: 0,
+          complete: false,
+          verifiedRanges: [],
           expiresAt,
+          ...(coreRef ? { coreRef } : {}),
           ...(persistedPledge ? { pledgeEnvelope: persistedPledge } : {}),
         })
         await persist(next)
@@ -199,22 +334,43 @@ export function createArchivePolicy(options = {}) {
     reconcile(input = {}) {
       return serialize(async () => {
         let pledgeId
-        let actualBytes
+        let verifiedBytes
         try {
           pledgeId = reservationId(input.pledgeId)
-          actualBytes = safeBytes(input.actualBytes, 'actualBytes')
+          verifiedBytes = safeBytes(input.verifiedBytes ?? 0, 'verifiedBytes')
         } catch {
           return { accepted: false, reason: 'invalid-reconciliation' }
         }
         const current = reservations.get(pledgeId)
         if (!current) return { accepted: false, reason: 'reservation-not-found' }
-        if (actualBytes > current.reservedBytes) return { accepted: false, reason: 'reservation-exceeded' }
+        if (verifiedBytes > current.reservedBytes) {
+          return { accepted: false, reason: 'reservation-exceeded' }
+        }
+        const maxEnd = current.coreRef ? current.coreRef.length : Number.MAX_SAFE_INTEGER
+        let candidateRanges = current.verifiedRanges || []
+        if (input.verifiedRanges !== undefined) {
+          try {
+            candidateRanges = normalizeVerifiedRanges(input.verifiedRanges, maxEnd)
+          } catch {
+            return { accepted: false, reason: 'invalid-verified-ranges' }
+          }
+        }
+        const pledgedRanges = pledgedRangesFromReservation(current)
+        const coverageComplete = pledgedRanges.length > 0 ? rangesCoverPledged(candidateRanges, pledgedRanges) : true
+        const isComplete = input.complete === true && verifiedBytes === current.reservedBytes && verifiedBytes > 0 && coverageComplete
         const next = cloneReservations(reservations)
         const updated = next.get(pledgeId)
-        updated.actualBytes = actualBytes
-        if (input.complete === true) updated.reservedBytes = actualBytes
+        updated.verifiedBytes = verifiedBytes
+        updated.complete = isComplete
+        updated.verifiedRanges = candidateRanges
         await persist(next)
-        return { accepted: true, pledgeId, reservedBytes: updated.reservedBytes, actualBytes }
+        return {
+          accepted: true,
+          pledgeId,
+          reservedBytes: updated.reservedBytes,
+          verifiedBytes: updated.verifiedBytes,
+          complete: updated.complete,
+        }
       })
     },
 

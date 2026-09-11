@@ -1,0 +1,21 @@
+id: parallel-app-search
+message: "App search must use unified provider.search result stream, not parallel searchMediaCatalog scans. Browsing callers should use getMediaCatalog directly."
+severity: error
+language: Tsx
+files:
+  - "packages/app/**"
+ignores:
+  - "**/test/**"
+  - "**/tests/**"
+  - "**/__tests__/**"
+rule:
+  any:
+    - kind: call_expression
+      pattern: searchMediaCatalog($$$ARGS)
+    - kind: import_statement
+      has:
+        stopBy: end
+        kind: import_specifier
+        has:
+          field: name
+          regex: "^searchMediaCatalog$"

@@ -1,0 +1,8 @@
+id: writer-key-as-authority
+valid:
+  - const writable = catalog.writable === true
+  - const proposedWriter = catalog.localWriterKey
+invalid:
+  - const writable = Boolean(catalog.writable || catalog.localWriterKey != null)
+  - const writable = Boolean(binding.catalog?.writable || binding.catalog?.localWriterKey != null)
+  - const writable = catalog.writable || catalog.localWriterKey

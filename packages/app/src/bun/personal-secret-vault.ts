@@ -2,10 +2,10 @@ export const BUN_PERSONAL_SECRET_SERVICE = 'peartube.personal-encryption.v1'
 const MAX_PERSONAL_SECRET_RECORD_BYTES = 4096
 
 type AsyncKeyringEntry = {
-  getPassword(): Promise<string | null>
+  getPassword(): Promise<string | null | undefined>
   setPassword(value: string): Promise<void>
-  deletePassword?: () => Promise<void>
-  deleteCredential?: () => Promise<void>
+  deletePassword?(): Promise<unknown>
+  deleteCredential?(): Promise<boolean>
 }
 
 type AsyncKeyringConstructor = new (service: string, account: string) => AsyncKeyringEntry
@@ -36,18 +36,18 @@ function assertPersonalSecretRecord(value: unknown): string {
 }
 
 async function loadKeyring(
-  loader: PersonalSecretVaultOptions['keyringLoader'] =
-    () => import('@napi-rs/keyring') as Promise<{ AsyncEntry?: AsyncKeyringConstructor }>,
-) {
+  loader: PersonalSecretVaultOptions['keyringLoader'] = () => import('@napi-rs/keyring'),
+): Promise<AsyncKeyringConstructor> {
   const keyring = await loader()
-  if (typeof keyring?.AsyncEntry !== 'function') throw new Error('personal-keyring-unavailable')
-  return keyring
+  const AsyncEntry = keyring?.AsyncEntry
+  if (typeof AsyncEntry !== 'function') throw new Error('personal-keyring-unavailable')
+  return AsyncEntry
 }
 
 export function createBunPersonalSecretVault(options: PersonalSecretVaultOptions = {}) {
   async function entryFor(account: string): Promise<AsyncKeyringEntry> {
-    const keyring = await loadKeyring(options.keyringLoader)
-    return new keyring.AsyncEntry(
+    const KeyringEntry = await loadKeyring(options.keyringLoader)
+    return new KeyringEntry(
       BUN_PERSONAL_SECRET_SERVICE,
       assertPersonalSecretAccount(account),
     )

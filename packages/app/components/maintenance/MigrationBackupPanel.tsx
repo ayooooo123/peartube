@@ -46,6 +46,218 @@ function CapabilityReason({ capability }: { capability: MaintenanceCapability })
   return <Text selectable style={styles.capabilityReason}>{capability.reason}</Text>
 }
 
+function LegacyMigrationCard({
+  status,
+  presentation,
+  capabilities,
+  busy,
+  progressPercent,
+  retryEnabled,
+  reportDisabled,
+  onRetry,
+  onSaveReport,
+}: {
+  status: MigrationStatus | null
+  presentation: { tone: string; label: string }
+  capabilities: { status: MaintenanceCapability; retry: MaintenanceCapability; report: MaintenanceCapability }
+  busy: BusyAction
+  progressPercent: number
+  retryEnabled: boolean
+  reportDisabled: boolean
+  onRetry: () => void
+  onSaveReport: () => void
+}) {
+  return (
+    <>
+      <SectionHeader title="Legacy migration" eyebrow="01 / 03" subtitle="Publication v1 import lifecycle" flush />
+      <Panel style={styles.card}>
+        <View style={styles.statusHeader}>
+          <View style={[styles.statusDot, { backgroundColor: statusColor(presentation.tone) }]} />
+          <View style={styles.statusCopy}>
+            <Text selectable style={styles.cardTitle}>{presentation.label}</Text>
+            <Text selectable style={styles.cardMeta}>{status ? formatUpdatedAt(status.updatedAt) : busy === 'status' ? 'Loading migration status…' : 'No migration status available'}</Text>
+          </View>
+        </View>
+
+        <View style={styles.progressBlock}>
+          <View style={styles.progressMeta}>
+            <Text style={styles.progressLabel}>Progress</Text>
+            <Text selectable style={styles.progressPercent}>{progressPercent}%</Text>
+          </View>
+          <View style={styles.progressTrack}>
+            <View style={[styles.progressFill, { width: `${progressPercent}%` as `${number}%` }]} />
+          </View>
+        </View>
+
+        <View style={styles.counterGrid}>
+          {migrationCounterRows(status).map(([label, value]) => (
+            <View key={label} style={styles.counterCell}>
+              <Text selectable style={styles.counterValue}>{value.toLocaleString()}</Text>
+              <Text style={styles.counterLabel}>{label}</Text>
+            </View>
+          ))}
+        </View>
+        <CapabilityReason capability={capabilities.status} />
+
+        {status?.state === 'failed' ? (
+          <View style={styles.failureBox}>
+            <Text style={styles.failureTitle}>Failure details</Text>
+            <Text selectable style={styles.failureCode}>{boundedDiagnosticCode(status.errorCode)}</Text>
+            {status.errorMessage ? <Text selectable style={styles.failureMessage}>{boundedError(status.errorMessage)}</Text> : null}
+            {!status.retryable ? <Text style={styles.failureMessage}>This failure requires a new app version or manual repair before retrying.</Text> : null}
+          </View>
+        ) : null}
+
+        <View style={styles.actionRow}>
+          <Pressable
+            onPress={onRetry}
+            disabled={!retryEnabled}
+            accessibilityRole="button"
+            accessibilityHint={capabilities.retry.reason || undefined}
+            accessibilityState={{ disabled: !retryEnabled }}
+            style={[styles.primaryButton, styles.actionFlex, !retryEnabled && styles.disabledButton]}
+          >
+            {busy === 'retry' ? <ActivityIndicator size="small" color={colors.onPrimary} /> : <Feather name="rotate-cw" size={15} color={colors.onPrimary} />}
+            <Text style={styles.primaryLabel}>{busy === 'retry' ? 'Retrying…' : 'Retry migration'}</Text>
+          </Pressable>
+          <Pressable
+            onPress={onSaveReport}
+            disabled={reportDisabled}
+            accessibilityRole="button"
+            accessibilityHint={capabilities.report.reason || undefined}
+            accessibilityState={{ disabled: reportDisabled }}
+            style={[styles.secondaryButton, styles.actionFlex, reportDisabled && styles.disabledButton]}
+          >
+            {busy === 'report' ? <ActivityIndicator size="small" color={colors.text} /> : <Feather name="download" size={15} color={colors.text} />}
+            <Text style={styles.secondaryLabel}>Save report</Text>
+          </Pressable>
+        </View>
+        <CapabilityReason capability={capabilities.retry} />
+        <CapabilityReason capability={capabilities.report} />
+      </Panel>
+    </>
+  )
+}
+
+function ExportPortableStateCard({
+  capability,
+  busy,
+  exportDisabled,
+  onExport,
+}: {
+  capability: MaintenanceCapability
+  busy: BusyAction
+  exportDisabled: boolean
+  onExport: () => void
+}) {
+  return (
+    <>
+      <SectionHeader title="Portable state" eyebrow="02 / 03" subtitle="Move transferable settings without moving authority" flush />
+      <Panel style={styles.card}>
+        <View style={styles.explainRow}>
+          <View style={styles.explainIcon}><Feather name="package" size={18} color={colors.primary} /></View>
+          <View style={styles.explainCopy}>
+            <Text style={styles.cardTitle}>Portable, public app state</Text>
+            <Text style={styles.bodyText}>The publisher service prepares transferable state and a checksum. The receiving publisher service verifies that checksum before applying the file.</Text>
+          </View>
+        </View>
+        <View style={styles.boundaryBox}>
+          <Text style={styles.boundaryTitle}>Never included</Text>
+          <Text style={styles.bodyText}>Private publisher root, recovery phrase, device signing keys, and other secret authority are excluded.</Text>
+        </View>
+        <View style={styles.boundaryBox}>
+          <Text style={styles.boundaryTitle}>Device-local stays local</Text>
+          <Text style={styles.bodyText}>Device-local cache, downloads, archive replicas, and per-device policy are not portable state.</Text>
+        </View>
+        <Pressable
+          onPress={onExport}
+          disabled={exportDisabled}
+          accessibilityRole="button"
+          accessibilityHint={capability.reason || undefined}
+          accessibilityState={{ disabled: exportDisabled }}
+          style={[styles.primaryButton, exportDisabled && styles.disabledButton]}
+        >
+          {busy === 'export' ? <ActivityIndicator size="small" color={colors.onPrimary} /> : <Feather name="download-cloud" size={16} color={colors.onPrimary} />}
+          <Text style={styles.primaryLabel}>{busy === 'export' ? 'Preparing backup…' : 'Export portable state'}</Text>
+        </Pressable>
+        <CapabilityReason capability={capability} />
+      </Panel>
+    </>
+  )
+}
+
+function RestorePortableStateCard({
+  selection,
+  capabilities,
+  busy,
+  selectDisabled,
+  restoreDisabled,
+  onSelect,
+  onRestore,
+  onCancelSelection,
+}: {
+  selection: PortableSelection | null
+  capabilities: { select: MaintenanceCapability; restore: MaintenanceCapability }
+  busy: BusyAction
+  selectDisabled: boolean
+  restoreDisabled: boolean
+  onSelect: () => void
+  onRestore: () => void
+  onCancelSelection: () => void
+}) {
+  return (
+    <>
+      <SectionHeader title="Restore portable state" eyebrow="03 / 03" subtitle="Select a PearTube portable-state JSON file" flush />
+      <Panel style={styles.card}>
+        <Text style={styles.bodyText}>Selection reads only the bounded backup file. Nothing is changed until you review the checksum and confirm below.</Text>
+        <Pressable
+          onPress={onSelect}
+          disabled={selectDisabled}
+          accessibilityRole="button"
+          accessibilityHint={capabilities.select.reason || undefined}
+          accessibilityState={{ disabled: selectDisabled }}
+          style={[styles.secondaryButton, selectDisabled && styles.disabledButton]}
+        >
+          {busy === 'select' ? <ActivityIndicator size="small" color={colors.text} /> : <Feather name="folder" size={15} color={colors.text} />}
+          <Text style={styles.secondaryLabel}>{busy === 'select' ? 'Reading file…' : 'Select backup file'}</Text>
+        </Pressable>
+        <CapabilityReason capability={capabilities.select} />
+
+        {selection ? (
+          <View style={styles.confirmBox}>
+            <View style={styles.confirmTitleRow}>
+              <Feather name="alert-octagon" size={18} color={colors.error} />
+              <Text style={styles.confirmTitle}>Confirm destructive restore</Text>
+            </View>
+            <Text selectable numberOfLines={2} style={styles.selectedName}>{selection.fileName}</Text>
+            <Text selectable numberOfLines={2} style={styles.digest}>Checksum: {selection.manifestDigest}</Text>
+            <Text style={styles.failureMessage}>This can replace conflicting portable settings. It cannot restore or replace your private publisher root or device keys.</Text>
+            <View style={styles.actionRow}>
+              <Pressable onPress={onCancelSelection} disabled={busy === 'restore'} style={[styles.secondaryButton, styles.actionFlex]} accessibilityRole="button">
+                <Text style={styles.secondaryLabel}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={onRestore}
+                disabled={restoreDisabled}
+                style={[styles.destructiveButton, styles.actionFlex, restoreDisabled && styles.disabledButton]}
+                accessibilityRole="button"
+                accessibilityHint={capabilities.restore.reason || undefined}
+                accessibilityState={{ disabled: restoreDisabled }}
+              >
+                {busy === 'restore' ? <ActivityIndicator size="small" color={colors.text} /> : <Feather name="shield" size={15} color={colors.text} />}
+                <Text style={styles.destructiveLabel}>{busy === 'restore' ? 'Verifying…' : 'Verify & restore'}</Text>
+              </Pressable>
+            </View>
+            <CapabilityReason capability={capabilities.restore} />
+          </View>
+        ) : null}
+      </Panel>
+    </>
+  )
+}
+
+
+
 export function MigrationBackupPanel({ rpc, files, onBack }: Props) {
   const insets = useSafeAreaInsets()
   const capabilities = useMemo(() => maintenanceCapabilities({ rpc, files }), [files, rpc])
@@ -207,154 +419,35 @@ export function MigrationBackupPanel({ rpc, files, onBack }: Props) {
           </View>
         ) : null}
 
-        <SectionHeader title="Legacy migration" eyebrow="01 / 03" subtitle="Publication v1 import lifecycle" flush />
-        <Panel style={styles.card}>
-          <View style={styles.statusHeader}>
-            <View style={[styles.statusDot, { backgroundColor: statusColor(presentation.tone) }]} />
-            <View style={styles.statusCopy}>
-              <Text selectable style={styles.cardTitle}>{presentation.label}</Text>
-              <Text selectable style={styles.cardMeta}>{status ? formatUpdatedAt(status.updatedAt) : busy === 'status' ? 'Loading migration status…' : 'No migration status available'}</Text>
-            </View>
-          </View>
+        <LegacyMigrationCard
+          status={status}
+          presentation={presentation}
+          capabilities={capabilities}
+          busy={busy}
+          progressPercent={progressPercent}
+          retryEnabled={retryEnabled}
+          reportDisabled={reportDisabled}
+          onRetry={() => { void retryMigration() }}
+          onSaveReport={() => { void saveMigrationReport() }}
+        />
 
-          <View style={styles.progressBlock}>
-            <View style={styles.progressMeta}>
-              <Text style={styles.progressLabel}>Progress</Text>
-              <Text selectable style={styles.progressPercent}>{progressPercent}%</Text>
-            </View>
-            <View style={styles.progressTrack}>
-              <View style={[styles.progressFill, { width: `${progressPercent}%` as `${number}%` }]} />
-            </View>
-          </View>
+        <ExportPortableStateCard
+          capability={capabilities.export}
+          busy={busy}
+          exportDisabled={exportDisabled}
+          onExport={() => { void savePortableState() }}
+        />
 
-          <View style={styles.counterGrid}>
-            {migrationCounterRows(status).map(([label, value]) => (
-              <View key={label} style={styles.counterCell}>
-                <Text selectable style={styles.counterValue}>{value.toLocaleString()}</Text>
-                <Text style={styles.counterLabel}>{label}</Text>
-              </View>
-            ))}
-          </View>
-          <CapabilityReason capability={capabilities.status} />
-
-          {status?.state === 'failed' ? (
-            <View style={styles.failureBox}>
-              <Text style={styles.failureTitle}>Failure details</Text>
-              <Text selectable style={styles.failureCode}>{boundedDiagnosticCode(status.errorCode)}</Text>
-              {status.errorMessage ? <Text selectable style={styles.failureMessage}>{boundedError(status.errorMessage)}</Text> : null}
-              {!status.retryable ? <Text style={styles.failureMessage}>This failure requires a new app version or manual repair before retrying.</Text> : null}
-            </View>
-          ) : null}
-
-          <View style={styles.actionRow}>
-            <Pressable
-              onPress={() => { void retryMigration() }}
-              disabled={!retryEnabled}
-              accessibilityRole="button"
-              accessibilityHint={capabilities.retry.reason || undefined}
-              accessibilityState={{ disabled: !retryEnabled }}
-              style={[styles.primaryButton, styles.actionFlex, !retryEnabled && styles.disabledButton]}
-            >
-              {busy === 'retry' ? <ActivityIndicator size="small" color={colors.onPrimary} /> : <Feather name="rotate-cw" size={15} color={colors.onPrimary} />}
-              <Text style={styles.primaryLabel}>{busy === 'retry' ? 'Retrying…' : 'Retry migration'}</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => { void saveMigrationReport() }}
-              disabled={reportDisabled}
-              accessibilityRole="button"
-              accessibilityHint={capabilities.report.reason || undefined}
-              accessibilityState={{ disabled: reportDisabled }}
-              style={[styles.secondaryButton, styles.actionFlex, reportDisabled && styles.disabledButton]}
-            >
-              {busy === 'report' ? <ActivityIndicator size="small" color={colors.text} /> : <Feather name="download" size={15} color={colors.text} />}
-              <Text style={styles.secondaryLabel}>Save report</Text>
-            </Pressable>
-          </View>
-          <CapabilityReason capability={capabilities.retry} />
-          <CapabilityReason capability={capabilities.report} />
-        </Panel>
-
-        <SectionHeader title="Portable state" eyebrow="02 / 03" subtitle="Move transferable settings without moving authority" flush />
-        <Panel style={styles.card}>
-          <View style={styles.explainRow}>
-            <View style={styles.explainIcon}><Feather name="package" size={18} color={colors.primary} /></View>
-            <View style={styles.explainCopy}>
-              <Text style={styles.cardTitle}>Portable, public app state</Text>
-              <Text style={styles.bodyText}>The publisher service prepares transferable state and a checksum. The receiving publisher service verifies that checksum before applying the file.</Text>
-            </View>
-          </View>
-          <View style={styles.boundaryBox}>
-            <Text style={styles.boundaryTitle}>Never included</Text>
-            <Text style={styles.bodyText}>Private publisher root, recovery phrase, device signing keys, and other secret authority are excluded.</Text>
-          </View>
-          <View style={styles.boundaryBox}>
-            <Text style={styles.boundaryTitle}>Device-local stays local</Text>
-            <Text style={styles.bodyText}>Device-local cache, downloads, archive replicas, and per-device policy are not portable state.</Text>
-          </View>
-          <Pressable
-            onPress={() => { void savePortableState() }}
-            disabled={exportDisabled}
-            accessibilityRole="button"
-            accessibilityHint={capabilities.export.reason || undefined}
-            accessibilityState={{ disabled: exportDisabled }}
-            style={[styles.primaryButton, exportDisabled && styles.disabledButton]}
-          >
-            {busy === 'export' ? <ActivityIndicator size="small" color={colors.onPrimary} /> : <Feather name="download-cloud" size={16} color={colors.onPrimary} />}
-            <Text style={styles.primaryLabel}>{busy === 'export' ? 'Preparing backup…' : 'Export portable state'}</Text>
-          </Pressable>
-          <CapabilityReason capability={capabilities.export} />
-        </Panel>
-
-        <SectionHeader title="Restore portable state" eyebrow="03 / 03" subtitle="Select a PearTube portable-state JSON file" flush />
-        <Panel style={styles.card}>
-          <Text style={styles.bodyText}>Selection reads only the bounded backup file. Nothing is changed until you review the checksum and confirm below.</Text>
-          <Pressable
-            onPress={() => { void selectPortableState() }}
-            disabled={selectDisabled}
-            accessibilityRole="button"
-            accessibilityHint={capabilities.select.reason || undefined}
-            accessibilityState={{ disabled: selectDisabled }}
-            style={[styles.secondaryButton, selectDisabled && styles.disabledButton]}
-          >
-            {busy === 'select' ? <ActivityIndicator size="small" color={colors.text} /> : <Feather name="folder" size={15} color={colors.text} />}
-            <Text style={styles.secondaryLabel}>{busy === 'select' ? 'Reading file…' : 'Select backup file'}</Text>
-          </Pressable>
-          <CapabilityReason capability={capabilities.select} />
-
-          {selection ? (
-            <View style={styles.confirmBox}>
-              <View style={styles.confirmTitleRow}>
-                <Feather name="alert-octagon" size={18} color={colors.error} />
-                <Text style={styles.confirmTitle}>Confirm destructive restore</Text>
-              </View>
-              <Text selectable numberOfLines={2} style={styles.selectedName}>{selection.fileName}</Text>
-              <Text selectable numberOfLines={2} style={styles.digest}>Checksum: {selection.manifestDigest}</Text>
-              <Text style={styles.failureMessage}>This can replace conflicting portable settings. It cannot restore or replace your private publisher root or device keys.</Text>
-              <View style={styles.actionRow}>
-                <Pressable
-                  onPress={() => setSelection(null)}
-                  disabled={busy === 'restore'}
-                  style={[styles.secondaryButton, styles.actionFlex]}
-                  accessibilityRole="button"
-                >
-                  <Text style={styles.secondaryLabel}>Cancel</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => { void restorePortableState() }}
-                  disabled={restoreDisabled}
-                  style={[styles.destructiveButton, styles.actionFlex, restoreDisabled && styles.disabledButton]}
-                  accessibilityRole="button"
-                  accessibilityHint={capabilities.restore.reason || undefined}
-                  accessibilityState={{ disabled: restoreDisabled }}
-                >
-                  {busy === 'restore' ? <ActivityIndicator size="small" color={colors.text} /> : <Feather name="shield" size={15} color={colors.text} />}
-                  <Text style={styles.destructiveLabel}>{busy === 'restore' ? 'Verifying…' : 'Verify & restore'}</Text>
-                </Pressable>
-              </View>
-              <CapabilityReason capability={capabilities.restore} />
-            </View>
-          ) : null}
-        </Panel>
+        <RestorePortableStateCard
+          selection={selection}
+          capabilities={capabilities}
+          busy={busy}
+          selectDisabled={selectDisabled}
+          restoreDisabled={restoreDisabled}
+          onSelect={() => { void selectPortableState() }}
+          onRestore={() => { void restorePortableState() }}
+          onCancelSelection={() => setSelection(null)}
+        />
       </ScrollView>
     </View>
   )

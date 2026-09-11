@@ -29,6 +29,14 @@ export function CastHeaderButton({
   const [recentDeviceId, setRecentDeviceId] = useState<string | null>(null)
 
   const openPicker = useCallback(() => {
+    if (!cast.available) {
+      Alert.alert('Chromecast', 'Cast is still initializing. If this persists, reopen the app.')
+      return
+    }
+    if (cast.isConnected) {
+      setShowCastRemote(true)
+      return
+    }
     cast.startDiscovery()
     setShowCastPicker(true)
   }, [cast])
@@ -46,6 +54,7 @@ export function CastHeaderButton({
   }, [cast])
 
   const handleDeviceSelect = useCallback(async (deviceId: string) => {
+    setIsConnecting(true)
     setConnectingDeviceId(deviceId)
     try {
       const success = await cast.connect(deviceId)
@@ -57,6 +66,7 @@ export function CastHeaderButton({
       setShowCastPicker(false)
       setShowCastRemote(true)
     } finally {
+      setIsConnecting(false)
       setConnectingDeviceId(null)
     }
   }, [cast])

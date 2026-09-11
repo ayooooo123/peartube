@@ -1,4 +1,5 @@
-export const PROTOCOL_VERSION: 9
+// Generated from packages/host/src/contracts.js - do not edit directly
+export const PROTOCOL_VERSION: 11
 
 export const HOST_ERROR_CODES: {
   readonly HOST_START_FAILED: 'HOST_START_FAILED'

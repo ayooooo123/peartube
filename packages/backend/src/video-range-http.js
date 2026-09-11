@@ -259,32 +259,117 @@ function endBoundedStaticResponse(req, res, statusCode, byteLength, message) {
   return true
 }
 
-async function serveStaticAssetRangeHttpRequest(deps, req, res, marker) {
-  const entries = deps?.staticAssetEntries
-  const blobServer = deps?.blobServer
+function resolveStaticAssetEntry(deps, marker) {
   const assetId = marker?.assetId
-  const entry = typeof assetId === 'string' && /^[a-f0-9]{64}$/.test(assetId)
-    ? entries?.get(assetId)
-    : null
-  if (!entry || !blobServer) {
-    return endBoundedStaticResponse(req, res, 503, Number(entry?.coreRef?.byteLength || 0), 'verified static source unavailable')
+  if (typeof assetId !== 'string' || !/^[a-f0-9]{64}$/.test(assetId)) {
+    return { assetId: null, entry: null, blobServer: deps?.blobServer || null }
   }
-  if (req?.method !== 'GET' && req?.method !== 'HEAD') {
-    return endBoundedStaticResponse(req, res, 405, entry.coreRef.byteLength, 'method not allowed')
+  return {
+    assetId,
+    entry: deps?.staticAssetEntries?.get(assetId) || null,
+    blobServer: deps?.blobServer || null,
+  }
+}
+
+function isGetOrHeadMethod(method) {
+  return method === 'GET' || method === 'HEAD'
+}
+
+function staticBlobCapabilityMatches(entry, assetId, ref) {
+  if (!ref) return false
+  const keyHex = ref.key?.toString?.('hex')
+  const blob = ref.blob
+  return keyHex === assetId &&
+    entry.coreRef?.assetId === assetId &&
+    blob?.blockOffset === 0 &&
+    blob?.blockLength === entry.coreRef.length &&
+    blob?.byteOffset === 0 &&
+    blob?.byteLength === entry.coreRef.byteLength
+}
+
+function validateStaticAssetRequest(deps, req, res, marker) {
+  const { assetId, entry, blobServer } = resolveStaticAssetEntry(deps, marker)
+  if (!entry || !blobServer) {
+    endBoundedStaticResponse(req, res, 503, Number(entry?.coreRef?.byteLength || 0), 'verified static source unavailable')
+    return null
+  }
+  if (!isGetOrHeadMethod(req?.method)) {
+    endBoundedStaticResponse(req, res, 405, entry.coreRef.byteLength, 'method not allowed')
+    return null
   }
 
   const ref = decodeBlobServerBlobRef(blobServer, req)
-  const keyHex = ref?.key?.toString?.('hex')
-  const blob = ref?.blob
-  if (!ref || keyHex !== assetId || entry.coreRef?.assetId !== assetId ||
-      blob?.blockOffset !== 0 || blob?.blockLength !== entry.coreRef.length ||
-      blob?.byteOffset !== 0 || blob?.byteLength !== entry.coreRef.byteLength) {
-    return endBoundedStaticResponse(req, res, 416, entry.coreRef.byteLength, 'invalid static asset capability')
+  if (!staticBlobCapabilityMatches(entry, assetId, ref)) {
+    endBoundedStaticResponse(req, res, 416, entry.coreRef.byteLength, 'invalid static asset capability')
+    return null
   }
   const range = exactStaticByteRange(req?.headers?.range, entry.coreRef.byteLength)
-  if (!range) return endBoundedStaticResponse(req, res, 416, entry.coreRef.byteLength, 'invalid byte range')
+  if (!range) {
+    endBoundedStaticResponse(req, res, 416, entry.coreRef.byteLength, 'invalid byte range')
+    return null
+  }
 
-  const length = range.end - range.start + 1
+  return { entry, ref, range, length: range.end - range.start + 1, assetId }
+}
+
+function sendStaticRangeHeaders(res, entry, ref, range, length) {
+  res.statusCode = 206
+  res.setHeader('Accept-Ranges', 'bytes')
+  res.setHeader('Content-Type', entry.mimeType || ref.type || 'video/mp4')
+  res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${entry.coreRef.byteLength}`)
+  res.setHeader('Content-Length', String(length))
+  res.setHeader('Cache-Control', 'no-store')
+  res.writeHead(206)
+}
+
+function responseIsClosed(res, signal) {
+  return Boolean(signal?.aborted || res.writableEnded || res.destroyed)
+}
+
+function isVerifiedStaticRangeBytes(result, length) {
+  return result?.status === 'ok' &&
+    result.verified === true &&
+    b4a.isBuffer(result.bytes) &&
+    result.bytes.byteLength === length
+}
+
+function emitStaticPlayheadProgress(deps, assetId, entry, range) {
+  deps.onStaticPlayhead?.({
+    staticAssetId: assetId,
+    coreKeyHex: assetId,
+    blockOffset: 0,
+    blockLength: entry.coreRef.length,
+    byteLength: entry.coreRef.byteLength,
+    windowStart: Math.floor(range.start / entry.coreRef.blockSize),
+    windowEnd: Math.ceil((range.end + 1) / entry.coreRef.blockSize),
+  })
+}
+
+function handleStaticRangeFailure(error, req, res, entry, controller) {
+  if (responseIsClosed(res, controller.signal) || error?.name === 'AbortError') return true
+  if (res.headersSent) {
+    try { res.destroy?.(error) } catch { /* response is already closed */ }
+    return true
+  }
+  return endBoundedStaticResponse(req, res, 503, entry.coreRef.byteLength, 'verified static source unavailable')
+}
+
+async function requestVerifiedStaticRange(entry, assetId, range, controller) {
+  entry.scheduler.seek({ byteStart: range.start })
+  return entry.scheduler.requestRange({
+    assetId,
+    byteStart: range.start,
+    byteEnd: range.end + 1,
+    deadlineMs: 15_000,
+    signal: controller.signal,
+  })
+}
+
+async function serveStaticAssetRangeHttpRequest(deps, req, res, marker) {
+  const validated = validateStaticAssetRequest(deps, req, res, marker)
+  if (!validated) return true
+  const { entry, ref, range, length, assetId } = validated
+
   const controller = new AbortController()
   let completed = false
   const close = () => {
@@ -294,63 +379,120 @@ async function serveStaticAssetRangeHttpRequest(deps, req, res, marker) {
 
   if (req.method === 'HEAD') {
     completed = true
-    res.statusCode = 206
-    res.setHeader('Accept-Ranges', 'bytes')
-    res.setHeader('Content-Type', entry.mimeType || ref.type || 'video/mp4')
-    res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${entry.coreRef.byteLength}`)
-    res.setHeader('Content-Length', String(length))
-    res.setHeader('Cache-Control', 'no-store')
-    res.writeHead(206)
+    sendStaticRangeHeaders(res, entry, ref, range, length)
     res.end()
     return true
   }
 
   try {
-    entry.scheduler.seek({ byteStart: range.start })
-    const result = await entry.scheduler.requestRange({
-      assetId,
-      byteStart: range.start,
-      byteEnd: range.end + 1,
-      deadlineMs: 15_000,
-      signal: controller.signal,
-    })
-    if (controller.signal.aborted || res.writableEnded || res.destroyed) return true
-    if (result?.status !== 'ok' || result.verified !== true ||
-        !b4a.isBuffer(result.bytes) || result.bytes.byteLength !== length) {
+    const result = await requestVerifiedStaticRange(entry, assetId, range, controller)
+    if (responseIsClosed(res, controller.signal)) return true
+    if (!isVerifiedStaticRangeBytes(result, length)) {
       return endBoundedStaticResponse(req, res, 503, entry.coreRef.byteLength, 'verified static source unavailable')
     }
 
-    res.statusCode = 206
-    res.setHeader('Accept-Ranges', 'bytes')
-    res.setHeader('Content-Type', entry.mimeType || ref.type || 'video/mp4')
-    res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${entry.coreRef.byteLength}`)
-    res.setHeader('Content-Length', String(length))
-    res.setHeader('Cache-Control', 'no-store')
-    res.writeHead(206)
+    sendStaticRangeHeaders(res, entry, ref, range, length)
     await writeResponseChunk(res, result.bytes, controller.signal)
-    if (controller.signal.aborted || res.writableEnded || res.destroyed) return true
+    if (responseIsClosed(res, controller.signal)) return true
     completed = true
     res.end()
-    deps.onStaticPlayhead?.({
-      staticAssetId: assetId,
-      coreKeyHex: assetId,
-      blockOffset: 0,
-      blockLength: entry.coreRef.length,
-      byteLength: entry.coreRef.byteLength,
-      windowStart: Math.floor(range.start / entry.coreRef.blockSize),
-      windowEnd: Math.ceil((range.end + 1) / entry.coreRef.blockSize),
-    })
+    emitStaticPlayheadProgress(deps, assetId, entry, range)
     return true
   } catch (error) {
-    if (controller.signal.aborted || error?.name === 'AbortError' || res.writableEnded || res.destroyed) return true
-    if (res.headersSent) {
-      try { res.destroy?.(error) } catch { /* response is already closed */ }
-      return true
-    }
-    return endBoundedStaticResponse(req, res, 503, entry.coreRef.byteLength, 'verified static source unavailable')
+    return handleStaticRangeFailure(error, req, res, entry, controller)
   } finally {
     res.off?.('close', close)
   }
+}
+
+function validateVideoRangeRequest(deps, req) {
+  const blobServer = deps?.blobServer
+  if (!blobServer || typeof blobServer._getCore !== 'function') return null
+  if (!isGetOrHeadMethod(req?.method)) return null
+  if (!req?.headers?.range) return null
+
+  const ref = decodeBlobServerBlobRef(blobServer, req)
+  if (!ref || !isVideoContentType(ref.type)) return null
+
+  const byteRange = parseHttpByteRange(req.headers.range, ref.blob?.byteLength)
+  if (!byteRange) return null
+
+  return { blobServer, ref, byteRange }
+}
+
+async function syncAndStreamVideoRange({ blobServer, core, ref, byteRange, length, req, res, isCancelled }) {
+  const syncRange = getPrioritizedBlobDownloadRange(ref.blob, byteRange, { readAheadBytes: 0 })
+  const startBlock = syncRange?.start ?? ref.blob.blockOffset
+  let startBlockAvailable = false
+  try {
+    startBlockAvailable = Boolean(await core.get(startBlock, { wait: false }))
+  } catch { /* remote acquisition below can still satisfy the request */ }
+
+  if (startBlockAvailable) {
+    console.log('[Storage] Video range HTTP start block: local or restored', JSON.stringify(summarizeVideoRangePeerSync(core)))
+    publishBlobPlayheadProgress({
+      keyHex: ref.key?.toString('hex'),
+      blob: ref.blob,
+      blockIndex: startBlock,
+    })
+  } else {
+    try {
+      await prioritizeBlobServerRangeRequest(blobServer, req)
+    } catch (err) {
+      console.log('[Storage] Video range priority failed:', err?.message || err)
+    }
+    await syncVideoRangeRemoteLength(core, startBlock)
+  }
+  return await writeBlobRange({
+    core,
+    blob: ref.blob,
+    start: byteRange.start,
+    length,
+    res,
+    isCancelled,
+    keyHex: ref.key?.toString('hex'),
+  })
+}
+
+function writeVideoRangeHeaders(res, ref, start, end, length) {
+  res.statusCode = 206
+  res.setHeader('Accept-Ranges', 'bytes')
+  res.setHeader('Content-Type', ref.type || 'video/mp4')
+  res.setHeader('Content-Range', `bytes ${start}-${end}/${ref.blob.byteLength}`)
+  res.setHeader('Content-Length', String(length))
+  res.setHeader('Cache-Control', 'no-store')
+  res.writeHead(206)
+  try { res.flushHeaders?.() } catch { /* best effort */ }
+}
+
+function attachVideoRangeCancel(res, getCompleted) {
+  let cancelled = false
+  if (typeof res.on === 'function') {
+    res.on('close', () => {
+      if (!getCompleted()) cancelled = true
+    })
+  }
+  return {
+    isCancelled: () => cancelled || res.writableEnded || res.destroyed,
+  }
+}
+
+function closeCoreBestEffort(core) {
+  try {
+    const closing = core?.close?.()
+    if (closing?.catch) closing.catch(() => {})
+  } catch { /* best effort */ }
+}
+
+function handleVideoRangeHttpFailure(err, res) {
+  console.log('[Storage] Video range HTTP failed:', err?.message || err)
+  if (!res.headersSent && !res.writableEnded) {
+    res.statusCode = 500
+    res.end()
+    return true
+  }
+  try { res.destroy?.() } catch { /* best effort */ }
+  return true
 }
 
 /**
@@ -361,27 +503,17 @@ async function serveStaticAssetRangeHttpRequest(deps, req, res, marker) {
 export async function serveVideoRangeHttpRequest(deps, req, res) {
   const marker = staticAssetMarker(req)
   if (marker) return serveStaticAssetRangeHttpRequest(deps, req, res, marker)
-  const blobServer = deps?.blobServer
-  if (!blobServer || typeof blobServer._getCore !== 'function') return false
-  if (req?.method !== 'GET' && req?.method !== 'HEAD') return false
-  if (!req?.headers?.range) return false
-
-  const ref = decodeBlobServerBlobRef(blobServer, req)
-  if (!ref || !isVideoContentType(ref.type)) return false
-
-  const byteRange = parseHttpByteRange(req.headers.range, ref.blob?.byteLength)
-  if (!byteRange) return false
+  const parsed = validateVideoRangeRequest(deps, req)
+  if (!parsed) return false
+  const { blobServer, ref, byteRange } = parsed
 
   const start = byteRange.start
   const end = byteRange.end
   const length = end - start + 1
-  const statusCode = 206
   let core = null
   let completed = false
-  let cancelled = false
 
   try {
-
     core = await blobServer._getCore(ref.key, {
       key: ref.key,
       blob: ref.blob,
@@ -390,27 +522,15 @@ export async function serveVideoRangeHttpRequest(deps, req, res) {
     if (!core) return false
     await core.ready?.()
 
-    if (typeof res.on === 'function') {
-      res.on('close', () => {
-        if (!completed) cancelled = true
-      })
-    }
-
-    res.statusCode = statusCode
-    res.setHeader('Accept-Ranges', 'bytes')
-    res.setHeader('Content-Type', ref.type || 'video/mp4')
-    res.setHeader('Content-Range', `bytes ${start}-${end}/${ref.blob.byteLength}`)
-    res.setHeader('Content-Length', String(length))
-    res.setHeader('Cache-Control', 'no-store')
-    res.writeHead(statusCode)
-    try { res.flushHeaders?.() } catch { /* best effort */ }
+    const { isCancelled } = attachVideoRangeCancel(res, () => completed)
+    writeVideoRangeHeaders(res, ref, start, end, length)
 
     console.log(
       '[Storage] Video range HTTP:',
       req.method,
       req.headers.range,
       '->',
-      statusCode,
+      206,
       `${start}-${end}/${ref.blob.byteLength}`,
       'length:',
       length
@@ -422,39 +542,18 @@ export async function serveVideoRangeHttpRequest(deps, req, res) {
       return true
     }
 
-    const syncRange = getPrioritizedBlobDownloadRange(ref.blob, byteRange, { readAheadBytes: 0 })
-    const startBlock = syncRange?.start ?? ref.blob.blockOffset
-    let startBlockAvailable = false
-    try {
-      startBlockAvailable = Boolean(await core.get(startBlock, { wait: false }))
-    } catch { /* remote acquisition below can still satisfy the request */ }
-
-    if (startBlockAvailable) {
-      console.log('[Storage] Video range HTTP start block: local or restored', JSON.stringify(summarizeVideoRangePeerSync(core)))
-      publishBlobPlayheadProgress({
-        keyHex: ref.key?.toString('hex'),
-        blob: ref.blob,
-        blockIndex: startBlock,
-      })
-    } else {
-      try {
-        await prioritizeBlobServerRangeRequest(blobServer, req)
-      } catch (err) {
-        console.log('[Storage] Video range priority failed:', err?.message || err)
-      }
-      await syncVideoRangeRemoteLength(core, startBlock)
-    }
-    const wroteAll = await writeBlobRange({
+    const wroteAll = await syncAndStreamVideoRange({
+      blobServer,
       core,
-      blob: ref.blob,
-      start,
+      ref,
+      byteRange,
       length,
+      req,
       res,
-      isCancelled: () => cancelled || res.writableEnded || res.destroyed,
-      keyHex: ref.key?.toString('hex'),
+      isCancelled,
     })
 
-    if (!wroteAll || cancelled || res.writableEnded || res.destroyed) {
+    if (!wroteAll || isCancelled()) {
       console.log('[Storage] Video range HTTP cancelled:', req.headers.range)
       return true
     }
@@ -464,18 +563,8 @@ export async function serveVideoRangeHttpRequest(deps, req, res) {
     console.log('[Storage] Video range HTTP complete:', req.headers.range, 'bytes:', length)
     return true
   } catch (err) {
-    console.log('[Storage] Video range HTTP failed:', err?.message || err)
-    if (!res.headersSent && !res.writableEnded) {
-      res.statusCode = 500
-      res.end()
-      return true
-    }
-    try { res.destroy?.() } catch { /* best effort */ }
-    return true
+    return handleVideoRangeHttpFailure(err, res)
   } finally {
-    try {
-      const closing = core?.close?.()
-      if (closing?.catch) closing.catch(() => {})
-    } catch { /* best effort */ }
+    closeCoreBestEffort(core)
   }
 }

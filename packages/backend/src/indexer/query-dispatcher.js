@@ -113,18 +113,52 @@ function requiredCapabilities(selectors) {
   return capabilities
 }
 
+function mapExternalRefResult(row) {
+  return {
+    type: 'external-ref',
+    publisherId: row.publisherId,
+    sourceRecordRef: row.sourceRecordRef,
+    namespace: row.namespace,
+    identifier: row.normalizedIdentifier,
+    entityKind: row.entityKind,
+    entityId: row.entityId,
+    evidenceWeight: row.evidenceWeight ?? null,
+  }
+}
+
+function mapPublicationResult(row) {
+  return {
+    type: 'publication',
+    publisherId: row.publisherId,
+    sourceRecordRef: row.sourceRecordRef,
+    publicationId: row.publicationId,
+    workEntityId: row.workEntityId,
+    normalizedTitle: row.normalizedTitle ?? null,
+    releaseYear: row.releaseYear ?? null,
+    manifestId: row.manifestId,
+    provenanceSummary: row.provenanceSummary ?? null,
+  }
+}
+
+function mapRenditionResult(row) {
+  return {
+    type: 'rendition',
+    publisherId: row.publisherId,
+    sourceRecordRef: row.sourceRecordRef,
+    publicationId: row.publicationId,
+    renditionId: row.renditionId,
+    assetId: row.assetId,
+    format: row.format ?? null,
+    codec: row.codec ?? null,
+    dimensions: row.dimensions ?? null,
+    mediaFeatures: row.mediaFeatures ?? null,
+    byteLength: row.byteLength ?? null,
+  }
+}
+
 export function mapIndexQueryResult(row) {
   if (row && row.namespace !== undefined && row.normalizedIdentifier !== undefined) {
-    return {
-      type: 'external-ref',
-      publisherId: row.publisherId,
-      sourceRecordRef: row.sourceRecordRef,
-      namespace: row.namespace,
-      identifier: row.normalizedIdentifier,
-      entityKind: row.entityKind,
-      entityId: row.entityId,
-      evidenceWeight: row.evidenceWeight ?? null,
-    }
+    return mapExternalRefResult(row)
   }
   if (row?.relationType === 'title-token') {
     return {
@@ -136,32 +170,10 @@ export function mapIndexQueryResult(row) {
     }
   }
   if (row?.publicationId && row.workEntityId && row.manifestId && !row.renditionId) {
-    return {
-      type: 'publication',
-      publisherId: row.publisherId,
-      sourceRecordRef: row.sourceRecordRef,
-      publicationId: row.publicationId,
-      workEntityId: row.workEntityId,
-      normalizedTitle: row.normalizedTitle ?? null,
-      releaseYear: row.releaseYear ?? null,
-      manifestId: row.manifestId,
-      provenanceSummary: row.provenanceSummary ?? null,
-    }
+    return mapPublicationResult(row)
   }
   if (row?.publicationId && row.renditionId && row.assetId) {
-    return {
-      type: 'rendition',
-      publisherId: row.publisherId,
-      sourceRecordRef: row.sourceRecordRef,
-      publicationId: row.publicationId,
-      renditionId: row.renditionId,
-      assetId: row.assetId,
-      format: row.format ?? null,
-      codec: row.codec ?? null,
-      dimensions: row.dimensions ?? null,
-      mediaFeatures: row.mediaFeatures ?? null,
-      byteLength: row.byteLength ?? null,
-    }
+    return mapRenditionResult(row)
   }
   fail('index store returned an unsupported query result')
 }
@@ -265,6 +277,53 @@ export function createIndexQueryDispatcher({ indexStore, announcement, limits = 
     tracked.executionRelease = null
   }
 
+  async function fetchQueryPage(tracked) {
+    let storeWork
+    try {
+      storeWork = indexStore.queryIndexPage({
+        selectors: tracked.request.selectors,
+        limit: tracked.request.limit,
+        continuation: tracked.cursor?.continuation,
+        sourceRevision: tracked.cursor?.sourceRevision ?? tracked.request.sourceRevision ?? undefined,
+        signal: tracked.controller.signal,
+      })
+    } catch (error) {
+      releaseExecution(tracked)
+      throw error
+    }
+    return await Promise.resolve(storeWork).finally(() => releaseExecution(tracked))
+  }
+
+  function dispatchQueryResultPage(tracked, page) {
+    const results = page.results.map(mapIndexQueryResult)
+    let nextCursor = null
+    if (page.continuation !== null) {
+      nextCursor = issueCursor(tracked.request.selectors, page.sourceRevision, page.continuation)
+      if (nextCursor === null) {
+        if (settle(tracked, INDEX_QUERY_ERROR_CODES.OVERLOADED)) sendError(tracked.queryId, INDEX_QUERY_ERROR_CODES.OVERLOADED)
+        return
+      }
+    }
+    let payload
+    try {
+      payload = encodeIndexQueryPage({ queryId: tracked.queryId, results, nextCursor, sourceRevision: page.sourceRevision })
+    } catch {
+      if (nextCursor !== null) cursors.delete(nextCursor)
+      if (settle(tracked, INDEX_QUERY_ERROR_CODES.RESULT_LIMIT_EXCEEDED)) sendError(tracked.queryId, INDEX_QUERY_ERROR_CODES.RESULT_LIMIT_EXCEEDED)
+      return
+    }
+    const outcome = transmit(INDEX_QUERY_PAGE_FRAME, payload)
+    if (outcome === 'sent') {
+      settle(tracked, 'OK', results.length)
+    } else if (outcome === 'frame-too-large') {
+      if (nextCursor !== null) cursors.delete(nextCursor)
+      if (settle(tracked, INDEX_QUERY_ERROR_CODES.RESULT_LIMIT_EXCEEDED)) sendError(tracked.queryId, INDEX_QUERY_ERROR_CODES.RESULT_LIMIT_EXCEEDED)
+    } else {
+      if (nextCursor !== null) cursors.delete(nextCursor)
+      close('query-response-send-failed')
+    }
+  }
+
   async function run(tracked) {
     if (currentTime(limits) - tracked.startedAt >= tracked.request.deadlineMs) {
       if (settle(tracked, INDEX_QUERY_ERROR_CODES.DEADLINE_EXCEEDED)) {
@@ -274,52 +333,13 @@ export function createIndexQueryDispatcher({ indexStore, announcement, limits = 
       return
     }
     try {
-      let storeWork
-      try {
-        storeWork = indexStore.queryIndexPage({
-          selectors: tracked.request.selectors,
-          limit: tracked.request.limit,
-          continuation: tracked.cursor?.continuation,
-          sourceRevision: tracked.cursor?.sourceRevision ?? tracked.request.sourceRevision ?? undefined,
-          signal: tracked.controller.signal,
-        })
-      } catch (error) {
-        releaseExecution(tracked)
-        throw error
-      }
-      const page = await Promise.resolve(storeWork).finally(() => releaseExecution(tracked))
+      const page = await fetchQueryPage(tracked)
       if (pending.get(tracked.queryId) !== tracked) return
       if (!page || !Array.isArray(page.results) || page.results.length > tracked.request.limit || page.results.length > MAX_INDEX_QUERY_RESULTS) {
         if (settle(tracked, INDEX_QUERY_ERROR_CODES.RESULT_LIMIT_EXCEEDED)) sendError(tracked.queryId, INDEX_QUERY_ERROR_CODES.RESULT_LIMIT_EXCEEDED)
         return
       }
-      const results = page.results.map(mapIndexQueryResult)
-      let nextCursor = null
-      if (page.continuation !== null) {
-        nextCursor = issueCursor(tracked.request.selectors, page.sourceRevision, page.continuation)
-        if (nextCursor === null) {
-          if (settle(tracked, INDEX_QUERY_ERROR_CODES.OVERLOADED)) sendError(tracked.queryId, INDEX_QUERY_ERROR_CODES.OVERLOADED)
-          return
-        }
-      }
-      let payload
-      try {
-        payload = encodeIndexQueryPage({ queryId: tracked.queryId, results, nextCursor, sourceRevision: page.sourceRevision })
-      } catch {
-        if (nextCursor !== null) cursors.delete(nextCursor)
-        if (settle(tracked, INDEX_QUERY_ERROR_CODES.RESULT_LIMIT_EXCEEDED)) sendError(tracked.queryId, INDEX_QUERY_ERROR_CODES.RESULT_LIMIT_EXCEEDED)
-        return
-      }
-      const outcome = transmit(INDEX_QUERY_PAGE_FRAME, payload)
-      if (outcome === 'sent') {
-        settle(tracked, 'OK', results.length)
-      } else if (outcome === 'frame-too-large') {
-        if (nextCursor !== null) cursors.delete(nextCursor)
-        if (settle(tracked, INDEX_QUERY_ERROR_CODES.RESULT_LIMIT_EXCEEDED)) sendError(tracked.queryId, INDEX_QUERY_ERROR_CODES.RESULT_LIMIT_EXCEEDED)
-      } else {
-        if (nextCursor !== null) cursors.delete(nextCursor)
-        close('query-response-send-failed')
-      }
+      dispatchQueryResultPage(tracked, page)
     } catch (error) {
       if (pending.get(tracked.queryId) !== tracked) return
       const code = classifyStoreError(error)

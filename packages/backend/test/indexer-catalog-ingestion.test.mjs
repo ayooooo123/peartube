@@ -626,7 +626,7 @@ test('re-ingesting the same pinned head is an idempotent no-op with no store mut
   t.alike(await f.index.snapshotUsage(), beforeUsage)
 })
 
-test('same-head replay revalidates time-dependent writer authorization', async (t) => {
+test('same-head replay preserves accepted publications when wall clock advances past writer expiry', async (t) => {
   const f = await fixture(t, { writerExpiresAt: 1_500 })
   const manifest = publicationManifest(f)
   await putProjection(f, 'publication', manifest.publicationId, publicationOperation(f, manifest, 1))
@@ -636,12 +636,81 @@ test('same-head replay revalidates time-dependent writer authorization', async (
   const beforeRows = await publisherRows(f.indexStore, f.publisherId)
   now = 2_000
 
+  const replay = await catalogIngestor.ingest({ publisherId: f.publisherId, descriptor: f.descriptor, catalog: f.catalog })
+  t.is(replay.mode, 'noop')
+  t.alike(await publisherRows(f.indexStore, f.publisherId), beforeRows)
+})
+
+test('new operation signed after writer authorization expiry is rejected', async (t) => {
+  const f = await fixture(t, { writerExpiresAt: 1_500 })
+  const manifest = publicationManifest(f)
+  const expiredOp = signPublisherOperation({
+    descriptor: f.descriptor,
+    signer: f.device,
+    recordType: PUBLISHER_RECORD_TYPES.PUBLICATION,
+    sequence: 1,
+    policyEpoch: 0,
+    signedAt: 2_000,
+    body: {
+      publicationId: bytes(manifest.publicationId),
+      manifestId: bytes(manifest.body.manifestId),
+      payload: encodePublicationManifest(manifest),
+    },
+  })
+  await putProjection(f, 'publication', manifest.publicationId, expiredOp)
+  const catalogIngestor = createCatalogIngestor({ index: f.index, now: () => 2_500 })
   await t.exception(
     catalogIngestor.ingest({ publisherId: f.publisherId, descriptor: f.descriptor, catalog: f.catalog }),
     /authorization is expired/,
   )
+})
 
-  t.alike(await publisherRows(f.indexStore, f.publisherId), beforeRows)
+test('accepted retraction removes publication projection rows while unrelated rows remain', async (t) => {
+  const f = await fixture(t)
+  const manifest1 = publicationManifest(f, 1, 'First Publication')
+  const manifest2 = publicationManifest(f, 2, 'Second Publication')
+  const op1 = publicationOperation(f, manifest1, 1)
+  const op2 = publicationOperation(f, manifest2, 2)
+
+  await putProjection(f, 'publication', manifest1.publicationId, op1)
+  await putProjection(f, 'publication', manifest2.publicationId, op2)
+
+  const catalogIngestor = ingestor(f)
+  await catalogIngestor.ingest({ publisherId: f.publisherId, descriptor: f.descriptor, catalog: f.catalog })
+
+  const initialRows = await publisherRows(f.indexStore, f.publisherId)
+  t.is(initialRows.publicationProjections.length, 2)
+  t.ok(initialRows.publicationProjections.some(row => row.publicationId === manifest1.publicationId))
+  t.ok(initialRows.publicationProjections.some(row => row.publicationId === manifest2.publicationId))
+
+  // Advance catalog head: an accepted retraction removes publication 1 projection and adds retraction projection
+  const retractionOp = signPublisherOperation({
+    descriptor: f.descriptor,
+    signer: f.device,
+    recordType: PUBLISHER_RECORD_TYPES.RETRACTION,
+    sequence: 3,
+    body: {
+      targetType: 'publication',
+      targetId: bytes(manifest1.publicationId),
+      reason: b4a.from('publisher retraction'),
+    },
+  })
+  await f.view.del(`projection/publication/${manifest1.publicationId}`)
+  await putProjection(f, 'retraction-publication', manifest1.publicationId, retractionOp)
+
+  const result = await catalogIngestor.ingest({ publisherId: f.publisherId, descriptor: f.descriptor, catalog: f.catalog })
+  t.is(result.mode, 'incremental')
+
+  const refreshedRows = await publisherRows(f.indexStore, f.publisherId)
+  // Publication 1 projection is removed atomically
+  t.is(refreshedRows.publicationProjections.length, 1)
+  t.absent(refreshedRows.publicationProjections.some(row => row.publicationId === manifest1.publicationId))
+  // Publication 2 projection remains intact
+  t.is(refreshedRows.publicationProjections[0].publicationId, manifest2.publicationId)
+  t.ok(refreshedRows.sourceRecords.some(row => row.recordId === hex(op2.recordId)))
+  t.absent(refreshedRows.sourceRecords.some(row => row.recordId === hex(op1.recordId)))
+  // Retraction operation's source row is retained
+  t.ok(refreshedRows.sourceRecords.some(row => row.recordId === hex(retractionOp.recordId)), 'retraction operation source row is retained')
 })
 
 test('aggregate normalized rows and bytes are bounded before index mutation', async (t) => {
@@ -1213,12 +1282,15 @@ test('verified query view backfills an existing episode and resolves its accepte
   const view = await createVerifiedQueryView({
     store: f.catalogStore,
     catalogRegistry: {
-      async listBindings() {
-        return [{
-          publisherId: bytes(f.publisherId),
-          namespaceDescriptor: f.descriptor,
-          catalog: f.catalog,
-        }]
+      async listBindingPage() {
+        return {
+          items: [{
+            publisherId: bytes(f.publisherId),
+            namespaceDescriptor: f.descriptor,
+            catalog: f.catalog,
+          }],
+          nextCursor: null,
+        }
       },
     },
     onError: error => indexingErrors.push(error),
@@ -1268,8 +1340,11 @@ test('verified query pagination is deterministic, revision-bound, and fills page
   const view = await createVerifiedQueryView({
     store: f.catalogStore,
     catalogRegistry: {
-      async listBindings() {
-        return [{ publisherId: bytes(f.publisherId), namespaceDescriptor: f.descriptor, catalog: f.catalog }]
+      async listBindingPage() {
+        return {
+          items: [{ publisherId: bytes(f.publisherId), namespaceDescriptor: f.descriptor, catalog: f.catalog }],
+          nextCursor: null,
+        }
       },
     },
     moderationPolicy: {
@@ -1316,8 +1391,11 @@ test('verified query rows and exact source heads persist across restart', async 
   const manifest = publicationManifest(f)
   await putProjection(f, 'publication', manifest.publicationId, publicationOperation(f, manifest, 1))
   const registry = {
-    async listBindings() {
-      return [{ publisherId: bytes(f.publisherId), namespaceDescriptor: f.descriptor, catalog: f.catalog }]
+    async listBindingPage() {
+      return {
+        items: [{ publisherId: bytes(f.publisherId), namespaceDescriptor: f.descriptor, catalog: f.catalog }],
+        nextCursor: null,
+      }
     },
   }
   const first = await createVerifiedQueryView({ store: f.catalogStore, catalogRegistry: registry })
@@ -1340,11 +1418,14 @@ test('one rejected publisher binding does not block another publisher refresh', 
   const view = await createVerifiedQueryView({
     store: accepted.catalogStore,
     catalogRegistry: {
-      async listBindings() {
-        return [
-          { publisherId: bytes(rejected.publisherId), namespaceDescriptor: accepted.descriptor, catalog: rejected.catalog },
-          { publisherId: bytes(accepted.publisherId), namespaceDescriptor: accepted.descriptor, catalog: accepted.catalog },
-        ]
+      async listBindingPage() {
+        return {
+          items: [
+            { publisherId: bytes(rejected.publisherId), namespaceDescriptor: accepted.descriptor, catalog: rejected.catalog },
+            { publisherId: bytes(accepted.publisherId), namespaceDescriptor: accepted.descriptor, catalog: accepted.catalog },
+          ],
+          nextCursor: null,
+        }
       },
     },
     onError: (error, context) => errors.push({ error, context }),
@@ -1366,8 +1447,11 @@ test('verified query refresh rejects a forged accepted-row writer signature', as
   const view = await createVerifiedQueryView({
     store: f.catalogStore,
     catalogRegistry: {
-      async listBindings() {
-        return [{ publisherId: bytes(f.publisherId), namespaceDescriptor: f.descriptor, catalog: f.catalog }]
+      async listBindingPage() {
+        return {
+          items: [{ publisherId: bytes(f.publisherId), namespaceDescriptor: f.descriptor, catalog: f.catalog }],
+          nextCursor: null,
+        }
       },
     },
     onError: error => errors.push(error),

@@ -32,20 +32,38 @@ export function encodeVerifiedBlockProof ({ index, proof, value, coreKey = null,
   return payload
 }
 
-export function decodeVerifiedBlockProof (payload, { index, coreKey = null, label = 'asset' } = {}) {
+function assertVerifiedBlockProofPayload (payload, label) {
   if (!b4a.isBuffer(payload) || payload.byteLength > MAX_VERIFIED_PROOF_BYTES) {
     fail(`${label} proof exceeds bounded limit`)
   }
-  const metadata = c.decode(c.any, payload)
+}
+
+function assertVerifiedBlockProofCore (metadata, coreKey, label) {
   if (coreKey !== null && String(metadata?.coreKey || '') !== String(coreKey)) {
     fail(`${label} proof core is invalid`)
   }
-  if (!metadata || typeof metadata !== 'object' ||
-      !Number.isSafeInteger(metadata.index) || metadata.index !== index ||
-      !Number.isSafeInteger(metadata.byteLength) || metadata.byteLength < 0 || metadata.byteLength > MAX_VERIFIED_BLOCK_BYTES ||
-      !metadata.proof || typeof metadata.proof !== 'object' ||
-      !metadata.proof.block || metadata.proof.block.index !== index ||
-      metadata.proof.block.value !== null) {
+}
+
+function isMetadataProofBlockValid (proof, index) {
+  if (!proof || typeof proof !== 'object') return false
+  const block = proof.block
+  return Boolean(block && block.index === index && block.value === null)
+}
+
+function isVerifiedProofMetadataValid (metadata, index) {
+  if (!metadata || typeof metadata !== 'object') return false
+  if (!Number.isSafeInteger(metadata.index) || metadata.index !== index) return false
+  if (!Number.isSafeInteger(metadata.byteLength) || metadata.byteLength < 0 || metadata.byteLength > MAX_VERIFIED_BLOCK_BYTES) {
+    return false
+  }
+  return isMetadataProofBlockValid(metadata.proof, index)
+}
+
+export function decodeVerifiedBlockProof (payload, { index, coreKey = null, label = 'asset' } = {}) {
+  assertVerifiedBlockProofPayload(payload, label)
+  const metadata = c.decode(c.any, payload)
+  assertVerifiedBlockProofCore(metadata, coreKey, label)
+  if (!isVerifiedProofMetadataValid(metadata, index)) {
     fail(`${label} proof metadata is invalid`)
   }
   const canonical = { ...metadata }

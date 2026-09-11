@@ -82,6 +82,102 @@ function parseScopedDiagnostics(raw: string | null | undefined): ScopedNetworkDi
   }
 }
 
+function P2PStatusCard({
+  swarmStatus,
+  topicCount,
+  sessionCount,
+}: {
+  swarmStatus: SwarmStatus | null
+  topicCount: number
+  sessionCount: number
+}) {
+  const p2pLabel = swarmStatus?.swarmOffline
+    ? 'Network paused'
+    : swarmStatus?.connected
+      ? 'Connected to peers'
+      : 'Searching for peers'
+  const connections = swarmStatus?.swarmConnections ?? swarmStatus?.peerCount ?? 0
+  const listenText = swarmStatus?.swarmListenResolved ? 'Listening socket resolved' : 'Listening socket pending'
+  const peerPoolText = swarmStatus?.peerPoolJoined ? ' • peer pool joined' : ''
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>P2P status</Text>
+      <Text style={styles.statusText}>{p2pLabel}</Text>
+      <View style={styles.metricRow}>
+        <Metric label="Connections" value={connections} />
+        <Metric label="Scoped topics" value={topicCount} />
+        <Metric label="Scoped sessions" value={sessionCount} />
+      </View>
+      <Text style={styles.detailText}>
+        {listenText}{peerPoolText}
+      </Text>
+      {swarmStatus?.swarmOfflineReason ? <Text style={styles.detailText}>Pause reason: {swarmStatus.swarmOfflineReason}</Text> : null}
+      {swarmStatus?.recommendedBoundary ? <Text style={styles.boundaryText}>Boundary: {swarmStatus.recommendedBoundary}</Text> : null}
+    </View>
+  )
+}
+
+function CacheMeterCard({
+  storageStats,
+  seedingStatus,
+  cacheRatio,
+}: {
+  storageStats: StorageStats | null
+  seedingStatus: SeedingStatus | null
+  cacheRatio: number
+}) {
+  const seeding = seedingStatus?.status
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>Cache meter</Text>
+      <View style={styles.track}>
+        <View style={[styles.fill, { width: `${Math.round(cacheRatio * 100)}%` }]} />
+      </View>
+      <Text style={styles.detailText}>
+        {storageStats ? `${storageStats.usedGB} GB used of ${storageStats.maxGB} GB` : 'Loading cache stats…'}
+      </Text>
+      <Text style={styles.detailText}>
+        {storageStats ? `${storageStats.seedCount} cached videos • ${storageStats.pinnedCount} pinned channels` : 'Loading cache stats…'}
+      </Text>
+      {seeding ? (
+        <Text style={styles.detailText}>
+          Seeding: {seeding.enabled ? 'enabled' : 'disabled'} • {seeding.seedingCount ?? 0} active seeds
+        </Text>
+      ) : null}
+    </View>
+  )
+}
+
+function ScopedNetworkCard({
+  network,
+  swarmPeers,
+  topics,
+}: {
+  network: ScopedNetworkDiagnostics | null
+  swarmPeers: number | undefined
+  topics: ScopedNetworkTopic[]
+}) {
+  const activePurposes = topics.length > 0
+    ? [...new Set(topics.map((topic) => topic.purpose))].sort().join(', ')
+    : 'none'
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>Scoped network</Text>
+      <View style={styles.metricRow}>
+        <Metric label="Status" value={network?.status || 'starting'} />
+        <Metric label="Protocol" value={network?.protocolMajor ?? '—'} />
+        <Metric label="Peers" value={swarmPeers ?? 0} />
+      </View>
+      <Text style={styles.detailText}>Network: {network?.networkId || 'default'}</Text>
+      <Text style={styles.detailText}>
+        Active purposes: {activePurposes}
+      </Text>
+    </View>
+  )
+}
+
 export default function DiagnosticsPanel({
   swarmStatus,
   storageStats,
@@ -100,11 +196,6 @@ export default function DiagnosticsPanel({
   )
   const topics = network?.topics || []
   const sessions = network?.sessions || []
-  const p2pLabel = swarmStatus?.swarmOffline
-    ? 'Network paused'
-    : swarmStatus?.connected
-      ? 'Connected to peers'
-      : 'Searching for peers'
 
   return (
     <View style={styles.root}>
@@ -120,54 +211,25 @@ export default function DiagnosticsPanel({
         ) : null}
       </View>
 
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>P2P status</Text>
-        <Text style={styles.statusText}>{p2pLabel}</Text>
-        <View style={styles.metricRow}>
-          <Metric label="Connections" value={swarmStatus?.swarmConnections ?? swarmStatus?.peerCount ?? 0} />
-          <Metric label="Scoped topics" value={topics.length} />
-          <Metric label="Scoped sessions" value={sessions.length} />
-        </View>
-        <Text style={styles.detailText}>
-          {swarmStatus?.swarmListenResolved ? 'Listening socket resolved' : 'Listening socket pending'}
-          {swarmStatus?.peerPoolJoined ? ' • peer pool joined' : ''}
-        </Text>
-        {swarmStatus?.swarmOfflineReason ? <Text style={styles.detailText}>Pause reason: {swarmStatus.swarmOfflineReason}</Text> : null}
-        {swarmStatus?.recommendedBoundary ? <Text style={styles.boundaryText}>Boundary: {swarmStatus.recommendedBoundary}</Text> : null}
-      </View>
+      <P2PStatusCard
+        swarmStatus={swarmStatus}
+        topicCount={topics.length}
+        sessionCount={sessions.length}
+      />
 
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Cache meter</Text>
-        <View style={styles.track}>
-          <View style={[styles.fill, { width: `${Math.round(cacheRatio * 100)}%` }]} />
-        </View>
-        <Text style={styles.detailText}>
-          {storageStats ? `${storageStats.usedGB} GB used of ${storageStats.maxGB} GB` : 'Loading cache stats…'}
-        </Text>
-        <Text style={styles.detailText}>
-          {storageStats ? `${storageStats.seedCount} cached videos • ${storageStats.pinnedCount} pinned channels` : 'Loading cache stats…'}
-        </Text>
-        {seedingStatus?.status ? (
-          <Text style={styles.detailText}>
-            Seeding: {seedingStatus.status.enabled ? 'enabled' : 'disabled'} • {seedingStatus.status.seedingCount ?? 0} active seeds
-          </Text>
-        ) : null}
-      </View>
+      <CacheMeterCard
+        storageStats={storageStats}
+        seedingStatus={seedingStatus}
+        cacheRatio={cacheRatio}
+      />
 
       <ArchiveOperatorDiagnostics operatorStatus={operatorStatus} />
 
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Scoped network</Text>
-        <View style={styles.metricRow}>
-          <Metric label="Status" value={network?.status || 'starting'} />
-          <Metric label="Protocol" value={network?.protocolMajor ?? '—'} />
-          <Metric label="Peers" value={swarmStatus?.swarmPeers ?? 0} />
-        </View>
-        <Text style={styles.detailText}>Network: {network?.networkId || 'default'}</Text>
-        <Text style={styles.detailText}>
-          Active purposes: {topics.length > 0 ? [...new Set(topics.map((topic) => topic.purpose))].sort().join(', ') : 'none'}
-        </Text>
-      </View>
+      <ScopedNetworkCard
+        network={network}
+        swarmPeers={swarmStatus?.swarmPeers}
+        topics={topics}
+      />
     </View>
   )
 }

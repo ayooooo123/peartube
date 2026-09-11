@@ -4,7 +4,7 @@ import { createReadStream, mkdtempSync, mkdirSync, writeFileSync, rmSync, statSy
 import { tmpdir } from 'node:os'
 import { join, basename } from 'node:path'
 import { acquisitionIdForRequest, idempotencyDigestFor, fingerprintAcquisitionRequest } from '@peartube/backend/acquisition'
-import { canonicalLocalResolutionRecord, executeLocalFileAcquisition } from '../src/local-file-acquisition.js'
+import { canonicalLocalResolutionRecord, executeLocalFileAcquisition, sha256File } from '../src/local-file-acquisition.js'
 import { createArchiveConsole } from '../src/archive-console.js'
 import { mirrorLocalDriveToRelayChannel } from '../src/local-drive-mirror.js'
 import { runAddCommand } from '../src/add/index.js'
@@ -303,4 +303,27 @@ test('cross-entrypoint idempotency: console, add, and mirror yield identical acq
 
 
   rmSync(tempDir, { recursive: true, force: true })
+})
+
+test('local digest retains standard SHA256 identity for an empty file', async (t) => {
+  const digest = await sha256File('empty', { createReadStream: () => [] })
+  t.is(digest, 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
+})
+
+test('local digest hashes every streamed byte view and UTF8 chunk in order', async (t) => {
+  const backing = Buffer.alloc(128 * 1024 + 29)
+  for (let index = 0; index < backing.byteLength; index++) backing[index] = index & 255
+  const chunks = [
+    'multibyte source: \u00e9',
+    new Uint8Array(backing.buffer, backing.byteOffset + 13, 128 * 1024 + 3),
+    new DataView(backing.buffer, backing.byteOffset + backing.byteLength - 7, 5)
+  ]
+  const expected = createHash('sha256')
+  for (const chunk of chunks) expected.update(chunk)
+  const digest = await sha256File('streamed', {
+    async * createReadStream () {
+      for (const chunk of chunks) yield chunk
+    }
+  })
+  t.is(digest, expected.digest('hex'))
 })

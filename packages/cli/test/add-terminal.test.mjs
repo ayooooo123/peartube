@@ -68,7 +68,7 @@ class FakeClock {
 
   tick (milliseconds) {
     this.now += milliseconds
-    while (true) {
+    for (;;) {
       const due = [...this.tasks.entries()]
         .filter(([, task]) => task.at <= this.now)
         .sort((left, right) => left[1].at - right[1].at || left[0] - right[0])[0]

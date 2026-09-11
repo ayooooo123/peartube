@@ -70,7 +70,7 @@ function makeContext (overrides = {}) {
     stdout,
     stderr,
     cleanup () {
-      try { rmSync(tempDir, { recursive: true, force: true }) } catch {}
+      rmSync(tempDir, { recursive: true, force: true })
     }
   }
 }

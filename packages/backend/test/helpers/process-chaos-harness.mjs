@@ -3,16 +3,17 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import spawnBare from 'bare-runtime/spawn'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const nodeWorker = path.resolve(here, '..', 'fixtures', 'product-chaos-worker.mjs')
 const bareWorker = path.resolve(here, '..', 'fixtures', 'mobile-backend-chaos-worker.mjs')
 
-function executableFor(runtime) {
-  if (runtime === 'node') return process.execPath
+function spawnRuntime(runtime, options) {
+  if (runtime === 'node') return spawn(process.execPath, options.args, options)
   if (runtime !== 'bare') throw new Error(`Unsupported chaos runtime: ${runtime}`)
-  if (process.env.BARE_EXECUTABLE) return process.env.BARE_EXECUTABLE
-  return path.join(path.dirname(process.execPath), process.platform === 'win32' ? 'bare.exe' : 'bare')
+  if (process.env.BARE_EXECUTABLE) return spawn(process.env.BARE_EXECUTABLE, options.args, options)
+  return spawnBare(options)
 }
 
 function workerFor(runtime) {
@@ -70,7 +71,7 @@ function waitForMessage(child, wantedType, timeoutMs, output) {
       const text = String(chunk)
       output.stdout = (output.stdout + text).slice(-32_768)
       buffered += text
-      while (true) {
+      for (;;) {
         const newline = buffered.indexOf('\n')
         if (newline === -1) break
         const line = buffered.slice(0, newline).trim()
@@ -111,7 +112,8 @@ function waitForMessage(child, wantedType, timeoutMs, output) {
 
 function launch({ runtime, scenario, phase, storagePath }) {
   const output = { stdout: '', stderr: '' }
-  const child = spawn(executableFor(runtime), [workerFor(runtime), scenario, phase, storagePath], {
+  const child = spawnRuntime(runtime, {
+    args: [workerFor(runtime), scenario, phase, storagePath],
     cwd: path.resolve(here, '..', '..'),
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],

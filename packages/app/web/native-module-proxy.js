@@ -13,6 +13,7 @@
 import UIManager from 'react-native-web/dist/exports/UIManager'
 
 function getWindowDimensions() {
+  const { window } = globalThis
   const scale = typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1
   const width = typeof window !== 'undefined' && typeof window.innerWidth === 'number' ? window.innerWidth : 0
   const height = typeof window !== 'undefined' && typeof window.innerHeight === 'number' ? window.innerHeight : 0
@@ -33,6 +34,7 @@ const DeviceInfo = {
 
 const SourceCode = {
   getConstants() {
+    const { location } = globalThis
     const scriptURL = typeof location !== 'undefined' ? String(location.href) : ''
     return { scriptURL }
   },

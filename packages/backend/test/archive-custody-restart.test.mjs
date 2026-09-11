@@ -535,7 +535,7 @@ test('ranges exceeding bounded pagination ceiling scan across chunks and complet
 
   let cursor = null
   let progress = null
-  while (true) {
+  for (;;) {
     progress = await runtime.getAuthorizedArchiveProgress({
       archiveId: pledge.pledgeId,
       coreKey: largeCoreKey,
@@ -875,7 +875,7 @@ test('multi-range multi-page non-offload progress preserves coreKey and gates pu
   let cursor = null
   let progress = null
   const pages = []
-  while (true) {
+  for (;;) {
     progress = await runtime.getAuthorizedArchiveProgress({
       archiveId: pledge.pledgeId,
       cursor,
@@ -1229,7 +1229,7 @@ test('stale skipped and concurrent offload cursors cannot forge complete coverag
   // Legitimate chain still completes.
   let cursor = null
   let progress = null
-  while (true) {
+  for (;;) {
     progress = await runtime.getAuthorizedArchiveProgress({
       archiveId: pledge.pledgeId,
       coreKey: largeCoreKey,

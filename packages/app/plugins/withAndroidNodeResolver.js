@@ -1,5 +1,4 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
-const { withAppBuildGradle, withSettingsGradle } = require('@expo/config-plugins')
 
 const settingsNodeResolverBlock = `  def resolveNodeExecutable = {
     def configured = providers.gradleProperty("nodeExecutable").orNull ?: System.getenv("NODE_BINARY")
@@ -95,6 +94,7 @@ function patchAppBuildGradle(source) {
 }
 
 function withAndroidNodeResolver(config) {
+  const { withAppBuildGradle, withSettingsGradle } = require('@expo/config-plugins')
   config = withSettingsGradle(config, config => {
     config.modResults.contents = patchSettingsGradle(config.modResults.contents)
     return config

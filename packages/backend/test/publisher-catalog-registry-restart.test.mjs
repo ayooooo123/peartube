@@ -264,7 +264,7 @@ test('real-core cold restart discovers writable, uploads, and publishLocal adver
     const resolved = await second.registry.resolve(publisherId)
     t.is(resolved.catalog, catalog, 'resolve still returns retained cold writable')
   } finally {
-    try { await runtime?.close?.() } catch {}
+    try { await runtime?.close?.() } catch { /* Continue disposing of the underlying test resources. */ }
     await second.registry.close()
     await second.store.close()
     fs.rmSync(directory, { recursive: true, force: true })
@@ -702,7 +702,7 @@ test('>64 real persisted writables: later publisher advertises and can write aft
     // Warm set remains bounded after full restore + lease write path.
     t.ok((await second.registry.listBindings()).length <= 64, 'restore/lease paths keep soft retain bound')
   } finally {
-    try { await runtime?.close?.() } catch {}
+    try { await runtime?.close?.() } catch { /* Continue disposing of the underlying test resources. */ }
     await second.registry.close()
     await second.store.close()
     fs.rmSync(directory, { recursive: true, force: true })

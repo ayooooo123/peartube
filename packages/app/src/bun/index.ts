@@ -299,7 +299,7 @@ function removeWorkerDataListener(worker: any, listener: (d: Buffer) => void) {
 function startIPCWebSocket() {
   if (ipcWsServer) return ipcWsPort
 
-  const server = Bun.serve({
+  const server = globalThis.Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
     fetch(req, server) {
@@ -410,7 +410,7 @@ async function startStaticServer() {
   if (staticServer) return staticPort
 
   const viewsDir = join(appCodeDir, 'views', 'app')
-  const server = Bun.serve({
+  const server = globalThis.Bun.serve({
     port: 0, // auto-assign
     hostname: '127.0.0.1',
     async fetch(req) {
@@ -425,7 +425,7 @@ async function startStaticServer() {
 
       let filePath = join(viewsDir, decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname))
 
-      const file = Bun.file(filePath)
+      const file = globalThis.Bun.file(filePath)
       if (!file.size) {
         // SPA fallback: serve index.html for navigation routes
         const ext = filePath.split('.').pop() || ''
@@ -442,7 +442,7 @@ async function startStaticServer() {
       // This replaces the build-time inject-desktop-shell.js script — no
       // post-processing of files on disk, no fragile regex replacements.
       if (ext === '.html') {
-        let html = await Bun.file(filePath).text()
+        let html = await globalThis.Bun.file(filePath).text()
         // Inject view entrypoint before the Expo bundle so window.bridge is ready
         if (!html.includes('views://app/index.js')) {
           html = html.replace(
@@ -453,7 +453,7 @@ async function startStaticServer() {
         return new Response(html, { headers: { 'Content-Type': 'text/html' } })
       }
 
-      return new Response(Bun.file(filePath), {
+      return new Response(globalThis.Bun.file(filePath), {
         headers: { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' },
       })
     },

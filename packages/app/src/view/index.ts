@@ -179,7 +179,7 @@ async function discoverIpcPort(): Promise<number> {
   } catch { /* IPC port endpoint unavailable; fall back to scanning */ }
 
   // Fallback: scan ports near the static server
-  const staticPort = parseInt(window.location.port, 10)
+  const staticPort = parseInt(globalThis.window.location.port, 10)
   for (let offset = 1; offset <= 10; offset++) {
     try {
       const ws = new WebSocket(`ws://127.0.0.1:${staticPort + offset}`)
@@ -212,7 +212,7 @@ const bridge = {
   },
 
   applyUpdate: async () => {},
-  appRestart: async () => { window.location.reload() },
+  appRestart: async () => { globalThis.window.location.reload() },
   onPearEvent(_name: string, _listener: IpcListener) { return () => {} },
   registerPublisherBackendRelay(relay: PublisherBackendRelay) {
     if (publisherBackendRelay) throw new Error('Publisher backend relay is already registered')
@@ -336,7 +336,7 @@ const bridge = {
   },
 }
 
-Object.defineProperty(window, 'bridge', {
+Object.defineProperty(globalThis.window, 'bridge', {
   value: Object.freeze(bridge),
   enumerable: true,
   writable: false,

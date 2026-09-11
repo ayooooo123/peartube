@@ -537,9 +537,9 @@ test('cyclic action payloads are rejected without changing serializable state or
 
 test('cloning preserves prototype-like keys as own data without inherited routing', (t) => {
   const candidate = JSON.parse(
-    '{\"id\":\"safe\",\"value\":\"Safe\",\"__proto__\":{\"kind\":\"movie\"},' +
-    '\"constructor\":{\"kind\":\"movie\"},\"prototype\":{\"kind\":\"movie\"},' +
-    '\"metadata\":{\"__proto__\":{\"polluted\":true},\"constructor\":\"c\",\"prototype\":\"p\"}}'
+    '{"id":"safe","value":"Safe","__proto__":{"kind":"movie"},' +
+    '"constructor":{"kind":"movie"},"prototype":{"kind":"movie"},' +
+    '"metadata":{"__proto__":{"polluted":true},"constructor":"c","prototype":"p"}}'
   )
   let state = replaceResults(createPickerState(), 1, [candidate])
   const stored = pane(state).results.items[0]
@@ -554,8 +554,8 @@ test('cloning preserves prototype-like keys as own data without inherited routin
   t.is(reducePicker(roundTripped, { type: 'step.confirm' }), roundTripped)
 
   const progress = JSON.parse(
-    '{\"phase\":\"publishing\",' +
-    '\"__proto__\":{\"polluted\":true},\"constructor\":\"c\",\"prototype\":\"p\"}'
+    '{"phase":"publishing",' +
+    '"__proto__":{"polluted":true},"constructor":"c","prototype":"p"}'
   )
   state = createPickerState({ screen: 'progress', progress })
   t.is(JSON.stringify(state.progress), JSON.stringify(progress))

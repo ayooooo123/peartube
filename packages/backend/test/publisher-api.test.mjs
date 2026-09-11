@@ -13,6 +13,7 @@ import {
   PUBLISHER_RECORD_TYPES,
   createPublisherNamespaceDescriptor,
   decodePublisherNamespaceDescriptor,
+  decodePublisherOperationBody,
   derivePublisherId,
   encodePublisherNamespaceDescriptor,
   encodePublisherOperationBody,
@@ -542,7 +543,7 @@ test('real context registry durably applies a provisioned namespace genesis befo
       recoveryThreshold: 0,
       profileRef: b4a.alloc(0)
     })
-    async function submitRotationContribution(seed, signer) {
+    const submitRotationContribution = async (seed, signer) => {
       const transition = await api.preparePublisherRootOperation({
         intentId: intentId(seed),
         publisherId: hex(publisherId),

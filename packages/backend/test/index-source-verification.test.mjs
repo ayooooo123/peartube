@@ -201,6 +201,26 @@ function signPublisherOperation({ descriptor, signer, recordType = PUBLISHER_REC
   )
 }
 
+function createSourceReferenceClaim(options, selector, work, workIdentifier, device) {
+  return createMediaClaim({
+    claimType: 'ExternalReferenceClaim',
+    subjectRefs: [work],
+    payload: {
+      externalRef: {
+        namespace: selector.namespace,
+        identifier: workIdentifier,
+        ...(options.externalRefExtras || {}),
+      },
+      ...(options.claimPayloadExtras || {}),
+    },
+    confidence: 900,
+    issuerSequence: 1,
+    policyEpoch: 0,
+    keyPair: device,
+    signedAt: NOW - 1_000,
+  })
+}
+
 async function sourceFixture(options = {}) {
   const selector = { ...SELECTOR, ...options.selector }
   const workIdentifier = selector.kind === 'episode'
@@ -219,23 +239,7 @@ async function sourceFixture(options = {}) {
     namespace: selector.namespace,
     normalizedIdentifier: workIdentifier,
   })
-  let externalClaim = createMediaClaim({
-    claimType: 'ExternalReferenceClaim',
-    subjectRefs: [work],
-    payload: {
-      externalRef: {
-        namespace: selector.namespace,
-        identifier: workIdentifier,
-        ...(options.externalRefExtras || {}),
-      },
-      ...(options.claimPayloadExtras || {}),
-    },
-    confidence: 900,
-    issuerSequence: 1,
-    policyEpoch: 0,
-    keyPair: device,
-    signedAt: NOW - 1_000,
-  })
+  let externalClaim = createSourceReferenceClaim(options, selector, work, workIdentifier, device)
   const staticAsset = createStaticAssetManifest({
     treeHash: b4a.alloc(32, options.assetSeed || 41),
     blockLength: 2,

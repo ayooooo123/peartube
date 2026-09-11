@@ -1,4 +1,7 @@
-import { extname } from 'node:path'
+import { extname } from '#path'
+import * as fs from '#fs'
+import sodium from 'sodium-universal'
+import b4a from 'b4a'
 import { normalizePrivateArtwork } from './artwork-sources.js'
 
 const MIME_BY_EXT = Object.freeze({
@@ -16,8 +19,6 @@ export function mimeTypeForPath (filePath, fallback = 'video/mp4') {
   return MIME_BY_EXT[ext] || fallback
 }
 
-import { createHash } from 'node:crypto'
-import fs from 'node:fs'
 
 export function canonicalLocalFileIdempotencyKey (sha256) {
   const hex = String(sha256 || '').trim().toLowerCase().replace(/^sha256:/, '')
@@ -113,9 +114,20 @@ export function canonicalLocalResolutionRecord ({
 
 
 export async function sha256File (filePath, fsModule = fs) {
-  const hash = createHash('sha256')
-  for await (const chunk of fsModule.createReadStream(filePath)) hash.update(chunk)
-  return hash.digest('hex')
+  const state = b4a.alloc(sodium.crypto_hash_sha256_STATEBYTES)
+  sodium.crypto_hash_sha256_init(state)
+  for await (const chunk of fsModule.createReadStream(filePath)) {
+    let bytes = chunk
+    if (typeof bytes === 'string') bytes = b4a.from(bytes)
+    else if (!(bytes instanceof Uint8Array) && ArrayBuffer.isView(bytes)) {
+      // Sodium's native span conversion does not read DataView metadata.
+      bytes = b4a.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    }
+    sodium.crypto_hash_sha256_update(state, bytes)
+  }
+  const digest = b4a.alloc(sodium.crypto_hash_sha256_BYTES)
+  sodium.crypto_hash_sha256_final(state, digest)
+  return b4a.toString(digest, 'hex')
 }
 
 const MAX_LOCAL_DURATION_SECONDS = 10_000_000

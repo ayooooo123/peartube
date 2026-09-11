@@ -1177,27 +1177,32 @@ const styles: Record<string, React.CSSProperties> = {
   channelEyebrow: {
     margin: 0,
     ...fonts.caption.sm,
+    lineHeight: `${fonts.caption.sm.lineHeight}px`,
     color: colors.textMuted,
   },
   channelName: {
     margin: 0,
     ...fonts.title.xl,
+    lineHeight: `${fonts.title.xl.lineHeight}px`,
     color: colors.text,
   },
   channelDescription: {
     margin: 0,
     ...fonts.body.sm,
+    lineHeight: `${fonts.body.sm.lineHeight}px`,
     color: colors.textSecondary,
   },
   channelKey: {
     margin: 0,
     ...fonts.meta.sm,
+    lineHeight: `${fonts.meta.sm.lineHeight}px`,
     color: colors.textMuted,
     wordBreak: 'break-all',
   },
   seasonHeader: {
     margin: `${spacing.lg}px 0 ${spacing.md}px`,
     ...fonts.title.md,
+    lineHeight: `${fonts.title.md.lineHeight}px`,
     textTransform: 'uppercase',
     color: colors.text,
   },
@@ -1227,6 +1232,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     color: colors.textMuted,
     ...fonts.meta.sm,
+    lineHeight: `${fonts.meta.sm.lineHeight}px`,
   },
   videoMeta: {
     padding: `${spacing.md}px 2px 0`,
@@ -1244,6 +1250,7 @@ const styles: Record<string, React.CSSProperties> = {
   videoTime: {
     margin: 0,
     ...fonts.meta.sm,
+    lineHeight: `${fonts.meta.sm.lineHeight}px`,
     color: colors.textMuted,
   },
   stateBox: {
@@ -1259,12 +1266,14 @@ const styles: Record<string, React.CSSProperties> = {
   stateTitle: {
     margin: 0,
     ...fonts.title.md,
+    lineHeight: `${fonts.title.md.lineHeight}px`,
     color: colors.text,
     textTransform: 'uppercase',
   },
   stateText: {
     margin: 0,
     ...fonts.body.sm,
+    lineHeight: `${fonts.body.sm.lineHeight}px`,
     color: colors.textSecondary,
   },
   inlineError: {
@@ -1302,6 +1311,7 @@ const styles: Record<string, React.CSSProperties> = {
   modalTitle: {
     margin: 0,
     ...fonts.title.md,
+    lineHeight: `${fonts.title.md.lineHeight}px`,
     color: colors.text,
     textTransform: 'uppercase',
   },
@@ -1310,6 +1320,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     gap: spacing.sm,
     ...fonts.caption.sm,
+    lineHeight: `${fonts.caption.sm.lineHeight}px`,
     color: colors.textMuted,
   },
   input: {
@@ -1373,6 +1384,7 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: colors.primary,
     color: colors.onPrimary,
     ...fonts.caption.sm,
+    lineHeight: `${fonts.caption.sm.lineHeight}px`,
     fontSize: 10,
   },
   tabRow: {
@@ -1394,6 +1406,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: `${spacing.md}px ${spacing.xs}px`,
     cursor: 'pointer',
     ...fonts.caption.sm,
+    lineHeight: `${fonts.caption.sm.lineHeight}px`,
   },
   tabButtonActive: {
     borderBottomColor: colors.primary,
@@ -1402,11 +1415,13 @@ const styles: Record<string, React.CSSProperties> = {
   },
   tabCount: {
     ...fonts.meta.xs,
+    lineHeight: `${fonts.meta.xs.lineHeight}px`,
     opacity: 0.85,
   },
   sectionTitle: {
     margin: `0 0 ${spacing.md}px`,
     ...fonts.title.md,
+    lineHeight: `${fonts.title.md.lineHeight}px`,
     color: colors.text,
     textTransform: 'uppercase',
     borderLeft: `${borderWidth.rule}px solid ${colors.primary}`,
@@ -1419,6 +1434,7 @@ const styles: Record<string, React.CSSProperties> = {
   metaLine: {
     margin: 0,
     ...fonts.meta.sm,
+    lineHeight: `${fonts.meta.sm.lineHeight}px`,
     color: colors.textMuted,
     letterSpacing: 0.6,
     textTransform: 'uppercase',

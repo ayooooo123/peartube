@@ -119,6 +119,26 @@ For callback-backed acquisitions, also set `PEARTUBE_COMPANION_SOURCE_ORIGIN` to
 
 Cloud offload is optional and S3-compatible only. Configure the bucket, endpoint, region, access key, and secret key through the relay environment shown in `docker-compose.relay.yml`. Offload stores verified asset blocks; it is not an HTTP playback origin.
 
+### Peer connections across VPN and Docker networks
+
+HTTP port 8174 is not the P2P transport. DHT discovery can find a peer while its
+UDP/Noise connection fails with `HOLEPUNCH_ABORTED`, particularly when two LAN
+peers use different VPN exits or advertise Docker-only addresses.
+
+For a known peer with a reachable UDP endpoint, set `PEARTUBE_NETWORK_PEER_ADDRESSES`
+to a JSON array of `{ "publicKey": "<64-character transport public key>", "host": "10.0.40.100", "port": 49737 }`
+objects, or set the same array as `network.peerAddresses` in the relay config.
+Use the peer's persisted **swarm transport** public key, not its publisher ID;
+never copy its secret key. The setting accepts at most 16 literal IPv4 endpoints.
+Use the actual DHT server UDP port; 49737 is its default, not the HTTP port.
+
+These are operator-supplied connection hints, not trusted publishers or catalog
+authorities. Noise still authenticates the configured key, normal scoped
+authorization still applies, public discovery remains enabled, and networking
+pause/resume also suspends/restores these peers. One side needs a reachable
+endpoint; it need not change the other side's VPN or publish a new HTTP API.
+Use an image built with this setting; releases predating it ignore the variable.
+
 ## Troubleshooting
 
 ### Backend Not Starting On Mobile

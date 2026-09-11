@@ -110,6 +110,55 @@ test('transferred results cannot replace the requester expected source identity'
   t.is(fixtureValue.publishes(), 0, 'a substituted source cannot be published')
 })
 
+test('download completion advances the state before the final asset is ready', async t => {
+  let release
+  const blocked = new Promise(resolve => { release = resolve })
+  const source = provider()
+  const acquire = source.acquire
+  source.acquire = async input => {
+    const asset = await acquire(input)
+    await input.onSourceComplete()
+    await blocked
+    return asset
+  }
+  const f = fixture({ acquisitionProvider: source })
+  t.teardown(async () => { release(); await f.manager.close() })
+  await f.manager.start()
+  const queued = await f.manager.request({ idempotencyKey: 'copy-pending', request: REQUEST, principal: PRINCIPAL })
+  const read = () => f.manager.get({ acquisitionId: queued.acquisitionId, principal: PRINCIPAL })
+  const copying = await eventually(read, job => job.state === 'verifying')
+  t.is(copying.bytesAcquired, BYTES.byteLength)
+  t.is(copying.publicationId, null, 'the unfinished asset is not playable')
+  t.is(f.publishes(), 0, 'no publication is made while the copy is pending')
+  release()
+  const completed = await eventually(read, job => job.state === 'completed')
+  t.is(completed.publicationId, 'publication-1')
+})
+
+test('a storage failure after download does not discard bytes as a bad proof', async t => {
+  let discarded = 0
+  const source = provider()
+  const acquire = source.acquire
+  source.acquire = async input => {
+    await acquire(input)
+    await input.onSourceComplete()
+    throw new Error('temporary disk write failure')
+  }
+  source.discard = async () => { discarded++ }
+  const f = fixture({ acquisitionProvider: source })
+  t.teardown(() => f.manager.close())
+  await f.manager.start()
+  const queued = await f.manager.request({ idempotencyKey: 'copy-failed', request: REQUEST, principal: PRINCIPAL })
+  const failed = await eventually(
+    () => f.manager.get({ acquisitionId: queued.acquisitionId, principal: PRINCIPAL }),
+    job => job.state === 'failed',
+  )
+  t.is(failed.errorCode, 'ACQUISITION_FAILED')
+  t.is(failed.recoverable, true)
+  t.is(discarded, 0, 'a transient storage error preserves the source')
+  t.is(f.publishes(), 0)
+})
+
 test('publication repository recovery completes a job after the catalog commit succeeds', async t => {
   let committed = null
   const publisher = {
@@ -945,6 +994,48 @@ test('a transferred import hook reads provider-owned transfer state through its 
   t.is(fixtureValue.publishedInput().asset.key, 'a'.repeat(64), 'the publication carries the provider-owned descriptor')
   t.is(fixtureValue.publishedInput().asset.treeHash, 'b'.repeat(64))
   await fixtureValue.manager.close()
+})
+
+test('uncoded transferred verification failure discards the unverified asset', async t => {
+  let retained = false
+  const source = transferringProvider(async () => {
+    retained = true
+    return { imported: true, byteLength: BYTES.byteLength, descriptor: { ...TRANSFER_DESCRIPTOR } }
+  })
+  source.verify = async () => { throw new Error('descriptor identity mismatch') }
+  source.discard = async () => { retained = false }
+  const f = fixture({ acquisitionProvider: source })
+  t.teardown(() => f.manager.close())
+  await f.manager.start()
+  const queued = await f.manager.request({ idempotencyKey: 'transfer-uncoded-verification', request: REQUEST, principal: PRINCIPAL })
+  const failed = await f.manager.acceptTransferredResult({ acquisitionId: queued.acquisitionId, sourceIdentity: TRANSFER_IDENTITY, asset: null })
+  t.is(failed.state, 'failed')
+  t.is(failed.errorCode, 'VERIFICATION_FAILED')
+  t.is(retained, false, 'unverified transferred bytes are discarded')
+  t.is(f.publishes(), 0, 'verification failure cannot publish')
+})
+
+test('uncoded transferred publication failure preserves verified bytes for recovery', async t => {
+  let retained = false
+  const source = transferringProvider(async () => {
+    retained = true
+    return { imported: true, byteLength: BYTES.byteLength, descriptor: { ...TRANSFER_DESCRIPTOR } }
+  })
+  source.discard = async () => { retained = false }
+  const f = fixture({
+    acquisitionProvider: source,
+    publisher: {
+      async hasAuthority () { return true },
+      async publish () { throw new Error('publication storage unavailable') }
+    }
+  })
+  t.teardown(() => f.manager.close())
+  await f.manager.start()
+  const queued = await f.manager.request({ idempotencyKey: 'transfer-uncoded-publication', request: REQUEST, principal: PRINCIPAL })
+  const failed = await f.manager.acceptTransferredResult({ acquisitionId: queued.acquisitionId, sourceIdentity: TRANSFER_IDENTITY, asset: null })
+  t.is(failed.state, 'failed')
+  t.is(failed.errorCode, 'PUBLICATION_FAILED')
+  t.is(retained, true, 'a publication failure preserves the already verified asset')
 })
 
 test('manager close aborts a stalled transferred import before disposing its store', async t => {

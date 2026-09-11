@@ -40,7 +40,7 @@ async function loadProfileCards() {
     'const host = tag => ({ children }) => React.createElement(tag, null, children)',
     'const View = host("div")',
     'const Text = host("span")',
-    'const GlassCard = host("section")',
+    'const Panel = host("section")',
     'const SectionHeader = ({ title, subtitle }) => React.createElement("header", null, React.createElement("h2", null, title), React.createElement("p", null, subtitle))',
     'const Feather = () => null',
     'const StorageOperabilityDetails = () => null',

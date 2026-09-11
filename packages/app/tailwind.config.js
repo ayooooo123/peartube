@@ -21,18 +21,18 @@ module.exports = {
       colors: {
         // PearTube brand colors mapped to Gluestack semantic colors
         primary: {
-          0: "#F0F3FF",
-          50: "#E0E7FF",
-          100: "#C7D2FF",
-          200: "#A5B6FF",
-          300: "#8AA0FF",
-          400: "#6b88ff", // PearTube primary hover
-          500: "#3f66ff", // PearTube primary
-          600: "#3557e6",
-          700: "#2f4fd6", // PearTube primary deep
-          800: "#2440ab",
-          900: "#1c3186",
-          950: "#0f1c4d",
+          0: "#f9ffe6",
+          50: "#f1ffbf",
+          100: "#eaff99",
+          200: "#e2ff70", // PearTube primary hover
+          300: "#dbff58",
+          400: "#d4ff3f", // PearTube primary
+          500: "#d4ff3f",
+          600: "#bfe92c",
+          700: "#a9d41c", // PearTube primary deep
+          800: "#7f9f15",
+          900: "#55690e",
+          950: "#2b3507",
         },
         secondary: {
           0: "#FEFFFF",
@@ -124,23 +124,23 @@ module.exports = {
           200: "#DBDBDC",
           300: "#D4D4D4",
           400: "#A3A3A3",
-          500: "#adadb8", // PearTube text-secondary
-          600: "#737373",
+          500: "#a3a3a3", // PearTube text-secondary
+          600: "#6b6b6b",
           700: "#525252",
-          800: "#404040",
-          900: "#efeff1", // PearTube text
+          800: "#3d3d3d",
+          900: "#f2f2f2", // PearTube text
           950: "#171717",
           white: "#FFFFFF",
           gray: "#D4D4D4",
-          black: "#181718",
+          black: "#000000",
         },
         outline: {
           0: "#FDFEFE",
           50: "#F3F3F3",
           100: "#E6E6E6",
           200: "#DDDCDB",
-          300: "#3f3f46", // PearTube border-light
-          400: "#2f2f35", // PearTube border
+          300: "#3d3d3d", // PearTube border-light
+          400: "#262626", // PearTube border
           500: "#8C8D8D",
           600: "#737474",
           700: "#535252",
@@ -157,68 +157,69 @@ module.exports = {
           400: "#A2A3A3",
           500: "#8E8E8E",
           600: "#747474",
-          700: "#1a1e1a", // PearTube bg-hover
-          800: "#111411", // PearTube bg-elevated
-          900: "#0a0c0a", // PearTube bg
-          950: "#0a0c0a",
+          700: "#1a1a1a", // PearTube bg-hover
+          800: "#0f0f0f", // PearTube bg-elevated
+          900: "#000000", // PearTube bg
+          950: "#000000",
           error: "#FEF1F1",
           warning: "#FFF4EB",
           success: "#EDFCF2",
-          muted: "#26262c", // PearTube bg-input
+          muted: "#1a1a1a", // PearTube bg-input
           info: "#EBF8FE",
           light: "#FBFBFB",
-          dark: "#0a0c0a",
+          dark: "#000000",
         },
         border: {
           0: "#FDFEFE",
           50: "#F3F3F3",
           100: "#E6E6E6",
           200: "#DDDCDB",
-          300: "#3f3f46", // PearTube border-light
-          400: "#2f2f35", // PearTube border
+          300: "#3d3d3d", // PearTube border-light
+          400: "#262626", // PearTube border
           500: "#8C8D8D",
           600: "#737474",
           700: "#535252",
           800: "#414141",
           900: "#272624",
           950: "#1A1717",
-          error: "#DC2626",
-          warning: "#E77828",
-          muted: "#53535f", // PearTube text-muted
-          success: "#2A7948",
-          info: "#0B8DCD",
+          error: "#ff4d4d",
+          warning: "#ffc53f",
+          muted: "#6b6b6b", // PearTube text-muted
+          success: "#7dff8a",
+          info: "#39d5ff",
           light: "#FBFBFB",
           dark: "#181719",
         },
         // PearTube palette, kept in step with @peartube/core design tokens
         pear: {
-          primary: '#3f66ff',
-          'primary-hover': '#6b88ff',
-          'primary-muted': 'rgba(63, 102, 255, 0.18)',
-          bg: '#0b0b0f',
-          'bg-elevated': '#16161f',
-          'bg-card': '#16161f',
-          'bg-input': '#1f1f2a',
-          text: '#ffffff',
-          'text-secondary': '#c7cad6',
-          'text-muted': '#8c90a6',
-          border: '#2b2f3c',
-          'border-light': '#4a4f5e',
-          error: '#e74c3c',
-          success: '#2ecc71',
-          warning: '#f1c40f',
-          swarm: '#2dd4bf',
-          'swarm-glow': 'rgba(45, 212, 191, 0.35)',
-          'swarm-dim': 'rgba(45, 212, 191, 0.12)',
-          glass: 'rgba(255,255,255,0.08)',
-          'glass-border': 'rgba(255,255,255,0.12)',
-          'glass-highlight': 'rgba(63, 102, 255, 0.12)',
+          primary: '#d4ff3f',
+          'primary-hover': '#e2ff70',
+          'primary-muted': 'rgba(212, 255, 63, 0.14)',
+          'on-primary': '#000000',
+          bg: '#000000',
+          'bg-elevated': '#0f0f0f',
+          'bg-card': '#0f0f0f',
+          'bg-input': '#1a1a1a',
+          'bg-active': '#262626',
+          text: '#f2f2f2',
+          'text-secondary': '#a3a3a3',
+          'text-muted': '#6b6b6b',
+          border: '#262626',
+          'border-light': '#3d3d3d',
+          error: '#ff4d4d',
+          success: '#7dff8a',
+          warning: '#ffc53f',
+          swarm: '#39d5ff',
+          'swarm-glow': 'rgba(57, 213, 255, 0.35)',
+          'swarm-dim': 'rgba(57, 213, 255, 0.12)',
         },
       },
       fontFamily: {
-        roboto: ["Roboto", "sans-serif"],
-        heading: ["SpaceGrotesk-Bold", "Space Grotesk", "sans-serif"],
-        "heading-medium": ["SpaceGrotesk-Medium", "Space Grotesk", "sans-serif"],
+        display: ["Syne-ExtraBold", "Syne", "sans-serif"],
+        heading: ["Syne-Bold", "Syne", "sans-serif"],
+        "heading-medium": ["Syne-Bold", "Syne", "sans-serif"],
+        mono: ["JetBrainsMono-Regular", "JetBrains Mono", "ui-monospace", "monospace"],
+        "mono-medium": ["JetBrainsMono-Medium", "JetBrains Mono", "ui-monospace", "monospace"],
       },
       fontWeight: {
         hairline: "100",
@@ -226,14 +227,14 @@ module.exports = {
       },
       fontSize: {
         "2xs": "10px",
-        'display': ['32px', { lineHeight: '40px', fontWeight: '700' }],
-        'title': ['24px', { lineHeight: '32px', fontWeight: '700' }],
-        'headline': ['20px', { lineHeight: '28px', fontWeight: '600' }],
+        'display': ['32px', { lineHeight: '34px', fontWeight: '800', letterSpacing: '-0.8px' }],
+        'title': ['24px', { lineHeight: '26px', fontWeight: '800', letterSpacing: '-0.5px' }],
+        'headline': ['18px', { lineHeight: '22px', fontWeight: '700' }],
         'body': ['16px', { lineHeight: '24px', fontWeight: '400' }],
         'body-medium': ['16px', { lineHeight: '24px', fontWeight: '500' }],
-        'label': ['14px', { lineHeight: '20px', fontWeight: '500' }],
-        'caption': ['12px', { lineHeight: '16px', fontWeight: '400' }],
-        'caption-medium': ['12px', { lineHeight: '16px', fontWeight: '500' }],
+        'label': ['13px', { lineHeight: '16px', fontWeight: '700', letterSpacing: '0.6px' }],
+        'caption': ['11px', { lineHeight: '14px', fontWeight: '500', letterSpacing: '1.2px' }],
+        'meta': ['13px', { lineHeight: '18px', fontWeight: '400' }],
       },
       spacing: {
         '0.5': '2px',
@@ -250,13 +251,18 @@ module.exports = {
         '12': '48px',
         '16': '64px',
       },
+      borderWidth: {
+        DEFAULT: '1px',
+        rule: '2px',
+      },
       borderRadius: {
-        'sm': '6px',
-        'DEFAULT': '8px',
-        'md': '10px',
-        'lg': '12px',
-        'xl': '16px',
-        '2xl': '20px',
+        'none': '0px',
+        'sm': '2px',
+        'DEFAULT': '4px',
+        'md': '4px',
+        'lg': '4px',
+        'xl': '6px',
+        '2xl': '6px',
         'full': '9999px',
       },
     },

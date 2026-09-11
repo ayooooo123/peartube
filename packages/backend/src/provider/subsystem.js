@@ -254,6 +254,7 @@ function createSubsystemAcquisitionProvider({
             onProgress: input.onProgress,
           }),
           signal: input.signal,
+          onSourceComplete: input.onSourceComplete,
           offload: ctx.blockOffload || null,
           resume,
           preferStaging: input.sourceExpensive === true,

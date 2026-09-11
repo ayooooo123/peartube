@@ -6,6 +6,7 @@
 
 import React from 'react'
 import { colors } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 
 export const desktopStyles: Record<string, React.CSSProperties> = {
   overlay: {
@@ -33,8 +34,8 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
   },
   videoWrapper: {
     position: 'relative',
-    backgroundColor: '#000',
-    borderRadius: 12,
+    backgroundColor: colors.contrast,
+    borderRadius: 4,
     overflow: 'hidden',
   },
   castPlaceholder: {
@@ -89,7 +90,7 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: colors.scrim,
   },
   videoInfo: {
     display: 'flex',
@@ -102,13 +103,13 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
     gap: 12,
     padding: '10px 12px',
     backgroundColor: colors.bgSecondary,
-    borderRadius: 10,
+    borderRadius: 4,
   },
   controlButton: {
     width: 32,
     height: 32,
-    borderRadius: 16,
-    border: `1px solid ${colors.border}`,
+    borderRadius: 4,
+    border: `2px solid ${colors.border}`,
     backgroundColor: colors.bg,
     display: 'flex',
     alignItems: 'center',
@@ -128,6 +129,7 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
   },
   timeLabel: {
+    fontFamily: fonts.mono,
     fontSize: 12,
     color: colors.textMuted,
     minWidth: 90,
@@ -147,8 +149,8 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
     gap: 8,
     padding: '8px 12px',
     backgroundColor: colors.bgSecondary,
-    border: `1px solid ${colors.border}`,
-    borderRadius: 999,
+    border: `2px solid ${colors.border}`,
+    borderRadius: 4,
     width: 'fit-content',
   },
   castBannerText: {
@@ -158,7 +160,7 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
   castDisconnectButton: {
     marginLeft: 8,
     backgroundColor: 'transparent',
-    border: 'none',
+    border: `2px solid ${colors.border}`,
     color: colors.primary,
     cursor: 'pointer',
     fontSize: 13,
@@ -184,14 +186,14 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
   avatar: {
     width: 40,
     height: 40,
-    borderRadius: 20,
+    borderRadius: 4,
     backgroundColor: colors.primary,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarText: {
-    color: '#fff',
+    color: colors.text,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -219,8 +221,8 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
     gap: 8,
     padding: '8px 16px',
     backgroundColor: colors.bgSecondary,
-    border: 'none',
-    borderRadius: 20,
+    border: `2px solid ${colors.border}`,
+    borderRadius: 4,
     color: colors.text,
     fontSize: 14,
     fontWeight: '500',
@@ -233,8 +235,8 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     gap: 8,
     padding: '8px 16px',
-    border: 'none',
-    borderRadius: 20,
+    border: `2px solid ${colors.border}`,
+    borderRadius: 4,
     fontSize: 14,
     fontWeight: '500',
     cursor: 'pointer',
@@ -255,9 +257,9 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
     right: 24,
     width: 40,
     height: 40,
-    borderRadius: 20,
+    borderRadius: 4,
     backgroundColor: colors.bgSecondary,
-    border: 'none',
+    border: `2px solid ${colors.border}`,
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
@@ -270,9 +272,9 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
     right: 72,
     width: 40,
     height: 40,
-    borderRadius: 20,
+    borderRadius: 4,
     backgroundColor: colors.bgSecondary,
-    border: 'none',
+    border: `2px solid ${colors.border}`,
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
@@ -298,7 +300,7 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
   // P2P Stats Bar - matching mobile design
   p2pStatsBar: {
     backgroundColor: colors.bgSecondary,
-    borderRadius: 12,
+    borderRadius: 4,
     padding: 16,
     display: 'flex',
     flexDirection: 'column',
@@ -330,11 +332,11 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
   },
   p2pStatSpeed: {
     fontSize: 14,
-    color: '#4ade80',
+    color: colors.success,
   },
   p2pStatSpeedUp: {
     fontSize: 14,
-    color: '#fbbf24',
+    color: colors.warning,
   },
   p2pStatsRowSecondary: {
     display: 'flex',
@@ -373,7 +375,7 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
     gap: 6,
     padding: '6px 12px',
     backgroundColor: 'transparent',
-    border: 'none',
+    border: `2px solid ${colors.border}`,
     color: colors.primary,
     fontSize: 13,
     cursor: 'pointer',
@@ -387,8 +389,8 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
     flex: 1,
     padding: '10px 14px',
     backgroundColor: colors.bgSecondary,
-    border: `1px solid ${colors.border}`,
-    borderRadius: 8,
+    border: `2px solid ${colors.border}`,
+    borderRadius: 4,
     color: colors.text,
     fontSize: 14,
     outline: 'none',
@@ -396,9 +398,9 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
   postButton: {
     padding: '10px 20px',
     backgroundColor: colors.primary,
-    border: 'none',
-    borderRadius: 8,
-    color: '#fff',
+    border: `2px solid ${colors.border}`,
+    borderRadius: 4,
+    color: colors.text,
     fontSize: 14,
     fontWeight: '500',
     cursor: 'pointer',
@@ -418,7 +420,7 @@ export const desktopStyles: Record<string, React.CSSProperties> = {
   commentItem: {
     padding: 12,
     backgroundColor: colors.bgSecondary,
-    borderRadius: 8,
+    borderRadius: 4,
   },
   commentHeader: {
     display: 'flex',

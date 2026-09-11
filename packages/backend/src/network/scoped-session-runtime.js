@@ -183,6 +183,26 @@ function stableScopeDiagnostic (scope) {
   }
 }
 
+// Operator-supplied transport hints, never publisher authority or discovery trust.
+function configuredPeerAddresses (entries = []) {
+  if (!Array.isArray(entries) || entries.length > 16) fail('peerAddresses must contain at most 16 IPv4 endpoints')
+  const peers = new Map()
+  for (const entry of entries) {
+    const publicKey = hex32(entry?.publicKey, 'peerAddresses.publicKey')
+    const host = entry?.host
+    const octets = typeof host === 'string' ? host.split('.') : []
+    if (octets.length !== 4 || octets.some(part => !/^(0|[1-9][0-9]{0,2})$/.test(part) || Number(part) > 255) ||
+        Number(octets[0]) === 0 || Number(octets[0]) >= 224 ||
+        !Number.isInteger(entry.port) || entry.port < 1 || entry.port > 65535) {
+      fail('peerAddresses requires an IPv4 host and UDP port between 1 and 65535')
+    }
+    const addresses = peers.get(publicKey) || []
+    addresses.push({ host, port: entry.port })
+    peers.set(publicKey, addresses)
+  }
+  return peers
+}
+
 function validateScopedNetworkRuntimeOptions(options) {
   if (!options.swarm || typeof options.swarm.join !== 'function') fail('swarm is required')
   const protocolMajor = Number(options.protocolMajor ?? PROTOCOL_MAJOR)
@@ -580,6 +600,15 @@ export function createScopedNetworkRuntime (options = {}) {
     publisherRotationDrainMs,
   } = validateScopedNetworkRuntimeOptions(options)
   const swarm = options.swarm
+  const peerAddresses = configuredPeerAddresses(options.peerAddresses)
+  const originalDhtConnect = swarm.dht?.connect
+  if (peerAddresses.size && typeof originalDhtConnect !== 'function') fail('peerAddresses requires a DHT transport')
+  function connectWithPeerAddresses (publicKey, connectOptions = {}) {
+    const addresses = peerAddresses.get(b4a.toString(publicKey, 'hex'))
+    return originalDhtConnect.call(this, publicKey, addresses
+      ? { ...connectOptions, relayAddresses: [...addresses, ...(connectOptions.relayAddresses || [])] }
+      : connectOptions)
+  }
   const store = options.store
   const {
     catalogRegistry,
@@ -1119,29 +1148,8 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
 
-  // One replication stream per core per connection. Hypercore verifies every
-  // block it accepts, so nothing here has to build or check a proof.
-  const replicatedCores = new WeakMap()
 
-  function replicateAuthorizedCore (scope, connection, mux) {
-    if (!scope.core || !connection) return
-    let cores = replicatedCores.get(connection)
-    if (!cores) {
-      cores = new Set()
-      replicatedCores.set(connection, cores)
-    }
-    const key = scope.coreKey || scope.scopeId
-    if (cores.has(key)) return
-    cores.add(key)
-    try {
-      scope.core.replicate(mux)
-    } catch (error) {
-      cores.delete(key)
-      console.log('[ScopedNetwork] asset core replication failed:', error?.message)
-    }
-  }
-
-  async function activateAssetScopeSession(scope, connection, mux, isCurrentSession) {
+  async function activateAssetScopeSession(scope, isCurrentSession) {
     let current = false
     for (const authorization of scope.assetAuthorizations?.values?.() || []) {
       current = await authorizePublication({
@@ -1153,12 +1161,26 @@ export function createScopedNetworkRuntime (options = {}) {
       if (current) break
     }
     if (!current) fail('publication manifest authorization failed')
-    replicateAuthorizedCore(scope, connection, mux)
     return isCurrentSession()
   }
 
+  function dispatchArchiveSessionActivation(scope, remoteKey, tracked) {
+    if (scope.purpose === 'archive' && !scope.archiveDiscovery) {
+      for (const failures of scope.archiveFailures?.values?.() || []) failures.delete(remoteKey)
+      startArchivePumpWhenOpen(scope, tracked)
+    }
+    if (scope.purpose === 'archive-discovery' && scope.archivePeerListeners) {
+      for (const listener of scope.archivePeerListeners) {
+        try { listener({ peerId: remoteKey }) } catch { /* Observers must not affect transport. */ }
+      }
+    }
+  }
+
   async function dispatchScopeSessionActivation(scope, remoteKey, tracked) {
+    // Asset frames enforce range, upload policy, and Hypercore proof checks.
+    if (scope.purpose === 'asset') contentRuntime.notifyAssetPeerWaiters(scope)
     if (scope.purpose === 'bootstrap') {
+      // Activation is the only moment consumers receive retained publisher locators.
       sendLocatorsToSession(tracked)
     }
     if (scope.purpose === 'index' || scope.purpose === 'moderation') {
@@ -1169,15 +1191,7 @@ export function createScopedNetworkRuntime (options = {}) {
         recordProtocolError(scope, remoteKey, error)
       })
     }
-    if (scope.purpose === 'archive' && !scope.archiveDiscovery) {
-      for (const failures of scope.archiveFailures?.values?.() || []) failures.delete(remoteKey)
-      startArchivePumpWhenOpen(scope, tracked)
-    }
-    if (scope.purpose === 'archive-discovery' && scope.archivePeerListeners) {
-      for (const listener of scope.archivePeerListeners) {
-        try { listener({ peerId: remoteKey }) } catch { /* Observers must not affect transport. */ }
-      }
-    }
+    dispatchArchiveSessionActivation(scope, remoteKey, tracked)
     if ((scope.purpose === 'acquisition-discovery' || scope.purpose === 'acquisition') &&
         typeof scope.onPeer === 'function') {
       await scope.onPeer({ peerId: remoteKey, purpose: scope.purpose, scopeId: scope.scopeId })
@@ -1211,7 +1225,7 @@ export function createScopedNetworkRuntime (options = {}) {
         if (!isCurrentSession()) return
         const tracked = ownedSession
         if (scope.purpose === 'asset') {
-          const stillCurrent = await activateAssetScopeSession(scope, connection, mux, isCurrentSession)
+          const stillCurrent = await activateAssetScopeSession(scope, isCurrentSession)
           if (!stillCurrent) return
         }
         const result = authorizeScopeConnection(scope, { peerId: remoteKey, connection, tracked })
@@ -1428,6 +1442,7 @@ export function createScopedNetworkRuntime (options = {}) {
     refs.delete(scope.id)
     if (refs.size > 0) return false
     directPeerRefs.delete(transportPublicKey)
+    if (peerAddresses.has(transportPublicKey)) return false
     return leaveDirectPeer(transportPublicKey)
   }
 
@@ -1453,6 +1468,7 @@ export function createScopedNetworkRuntime (options = {}) {
 
   async function activateNetwork () {
     if (status !== 'active' || !networkEnabled) return
+    if (peerAddresses.size) swarm.dht.connect = connectWithPeerAddresses
     for (const retained of indexServices.values()) {
       if (!retained.client) retained.client = createRetainedIndexClient(retained.announcement, retained.limits)
       else retained.client.resume()
@@ -1472,6 +1488,7 @@ export function createScopedNetworkRuntime (options = {}) {
     await restoreLocalPublisherScopes()
     for (const scope of scopes.values()) ensureScopeDiscovery(scope)
     for (const transportPublicKey of directPeerRefs.keys()) joinDirectPeer(transportPublicKey)
+    for (const transportPublicKey of peerAddresses.keys()) joinDirectPeer(transportPublicKey)
     for (const connection of swarm.connections || []) handleConnection(connection)
     for (const [connection, info] of activeConnections) handleConnection(connection, info)
   }
@@ -1486,10 +1503,12 @@ export function createScopedNetworkRuntime (options = {}) {
       listening = false
     }
     for (const scope of scopes.values()) {
+      contentRuntime.notifyAssetPeerWaiters(scope, new Error('network policy disabled'))
       for (const peerId of [...scope.sessions.keys()]) closeSession(scope, peerId, 'network-policy-disabled')
     }
     await Promise.allSettled([...scopes.values()].map(scope => suspendScopeDiscovery(scope)))
     await leaveAllDirectPeers()
+    if (swarm.dht?.connect === connectWithPeerAddresses) swarm.dht.connect = originalDhtConnect
   }
 
   async function restartTransferSessions (closeSessions = false) {
@@ -2273,6 +2292,7 @@ export function createScopedNetworkRuntime (options = {}) {
     await Promise.allSettled(closing)
     await blockEngine.close()
     await leaveAllDirectPeers()
+    if (swarm.dht?.connect === connectWithPeerAddresses) swarm.dht.connect = originalDhtConnect
     directPeerRefs.clear()
     activeConnections.clear()
   }

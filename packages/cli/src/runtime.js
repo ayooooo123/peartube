@@ -574,6 +574,7 @@ function buildBackendOptions ({
     expectedStorageFormatVersion: STORAGE_FORMAT_VERSION,
     network: {
       networkId: networkConfig.networkId || 'peartube-main',
+      peerAddresses: networkConfig.peerAddresses,
       trustedBootstrapSigners,
       trustedBootstrapRootIds,
       bootstrapEnabled

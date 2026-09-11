@@ -1,5 +1,10 @@
 // Type declarations for modules without types
 
+declare module '*.ttf' {
+  const assetId: number
+  export default assetId
+}
+
 declare module 'b4a' {
   export function from(data: string | ArrayBuffer | Uint8Array, encoding?: string): Uint8Array
   export function toString(data: Uint8Array, encoding?: string): string

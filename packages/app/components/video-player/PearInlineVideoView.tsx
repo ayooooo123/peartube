@@ -6,6 +6,7 @@ import { createPlayerPort, type PlayerPort } from '@/lib/video-player'
 import { classifyPlayerError } from '@/lib/video-player/playback-errors'
 import { WebMseVideoBackend } from './WebMseVideoBackend'
 import type { CompatPlaybackResult } from './WebMseVideoBackend.types'
+import { colors } from '@/lib/colors'
 
 type PearInlineVideoViewProps = {
   style?: StyleProp<ViewStyle>
@@ -903,6 +904,6 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     left: 0,
-    backgroundColor: '#000',
+    backgroundColor: colors.contrast,
   },
 })

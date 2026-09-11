@@ -8,7 +8,8 @@ import {
   TextInput,
   View,
 } from 'react-native'
-import { colors } from '@/lib/colors'
+import { Button, Panel, IconButton, Eyebrow, Body, Meta } from '@/components/primitives'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 
 const GIB = 1024 * 1024 * 1024
@@ -35,15 +36,15 @@ export function PolicyScreenFrame({
   return (
     <View style={styles.root}>
       <View style={styles.header}>
-        <Pressable onPress={onBack} accessibilityRole="button" accessibilityLabel="Go back" style={styles.backButton}>
-          <Text style={styles.backText}>Back</Text>
-        </Pressable>
-        <View style={styles.headerCopy}>
-          <Text style={styles.eyebrow}>LOCAL DEVICE POLICY</Text>
-          <Text style={styles.title}>{title}</Text>
-          <Text style={styles.subtitle}>{subtitle}</Text>
+        <IconButton icon="arrow-left" onPress={onBack} accessibilityLabel="Go back" variant="plain" size={36} />
+        <View style={styles.headerTitles}>
+          <Text style={styles.headerEyebrow}>LOCAL DEVICE POLICY</Text>
+          <Text style={styles.headerTitle} numberOfLines={1}>{title}</Text>
         </View>
         {saving ? <ActivityIndicator color={colors.primary} /> : <View style={styles.headerSpacer} />}
+      </View>
+      <View style={styles.subtitleBlock}>
+        <Body size="sm" tone="secondary">{subtitle}</Body>
       </View>
       {loading ? (
         <View style={styles.centered}>
@@ -56,9 +57,7 @@ export function PolicyScreenFrame({
             <PolicyCard tone="warning">
               <Text style={styles.cardTitle}>Policy action failed</Text>
               <Text selectable style={styles.body}>{error}</Text>
-              <Pressable onPress={onRetry} accessibilityRole="button" style={styles.actionButton}>
-                <Text style={styles.actionText}>Retry</Text>
-              </Pressable>
+              <Button label="Retry" onPress={onRetry} variant="secondary" size="sm" />
             </PolicyCard>
           ) : null}
           {children}
@@ -69,7 +68,12 @@ export function PolicyScreenFrame({
 }
 
 export function PolicyCard({ children, tone = 'default' }: { children: ReactNode; tone?: 'default' | 'warning' | 'privacy' }) {
-  return <View style={[styles.card, tone === 'warning' && styles.warningCard, tone === 'privacy' && styles.privacyCard]}>{children}</View>
+  const panelTone = tone === 'warning' ? 'danger' : tone === 'privacy' ? 'muted' : 'default'
+  return (
+    <Panel tone={panelTone} style={[styles.card, tone === 'warning' && styles.warningCard, tone === 'privacy' && styles.privacyCard]}>
+      {children}
+    </Panel>
+  )
 }
 
 export function PolicyHeading({ title, description }: { title: string; description: string }) {
@@ -96,7 +100,7 @@ export function ChoiceGroup<T extends string>({
 }) {
   return (
     <View style={styles.controlGroup}>
-      <Text style={styles.controlLabel}>{label}</Text>
+      <Eyebrow>{label}</Eyebrow>
       <View style={styles.choiceGrid}>
         {options.map((option) => {
           const selected = option.value === value
@@ -136,6 +140,7 @@ export function ByteLimitEditor({
 }) {
   const [text, setText] = useState(String(value / GIB))
   const [validation, setValidation] = useState<string | null>(null)
+  const [focused, setFocused] = useState(false)
 
   useEffect(() => {
     setText(String(value / GIB))
@@ -155,9 +160,9 @@ export function ByteLimitEditor({
   return (
     <View style={styles.limitRow}>
       <View style={styles.limitCopy}>
-        <Text style={styles.controlLabel}>{label}</Text>
+        <Eyebrow>{label}</Eyebrow>
         <Text style={styles.body}>{detail}</Text>
-        <Text style={styles.valueText}>{value === 0 ? zeroLabel : `${(value / GIB).toFixed(2).replace(/\.00$/, '')} GiB`}</Text>
+        <Meta tone="accent" size="sm">{value === 0 ? zeroLabel : `${(value / GIB).toFixed(2).replace(/\.00$/, '')} GiB`}</Meta>
       </View>
       <View style={styles.limitInputRow}>
         <TextInput
@@ -167,13 +172,13 @@ export function ByteLimitEditor({
           keyboardType="decimal-pad"
           inputMode="decimal"
           accessibilityLabel={`${label} in GiB`}
-          style={styles.input}
+          style={[styles.input, focused && styles.inputFocused, disabled && styles.disabled]}
           placeholder="0"
           placeholderTextColor={colors.textMuted}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
         />
-        <Pressable onPress={apply} disabled={disabled} accessibilityRole="button" style={[styles.actionButton, disabled && styles.disabled]}>
-          <Text style={styles.actionText}>Apply</Text>
-        </Pressable>
+        <Button label="Apply" onPress={apply} disabled={disabled} variant="secondary" size="sm" />
       </View>
       {validation ? <Text style={styles.validation}>{validation}</Text> : null}
     </View>
@@ -197,6 +202,7 @@ export function PolicyListEditor({
 }) {
   const [draft, setDraft] = useState('')
   const [validation, setValidation] = useState<string | null>(null)
+  const [focused, setFocused] = useState(false)
 
   const add = () => {
     const value = draft.trim()
@@ -219,7 +225,7 @@ export function PolicyListEditor({
 
   return (
     <View style={styles.controlGroup}>
-      <Text style={styles.controlLabel}>{label}</Text>
+      <Eyebrow>{label}</Eyebrow>
       <Text style={styles.body}>{description}</Text>
       <View style={styles.listInputRow}>
         <TextInput
@@ -231,11 +237,11 @@ export function PolicyListEditor({
           placeholder={placeholder}
           placeholderTextColor={colors.textMuted}
           accessibilityLabel={`Add ${label}`}
-          style={[styles.input, styles.listInput]}
+          style={[styles.input, styles.listInput, focused && styles.inputFocused, disabled && styles.disabled]}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
         />
-        <Pressable onPress={add} disabled={disabled} accessibilityRole="button" style={[styles.actionButton, disabled && styles.disabled]}>
-          <Text style={styles.actionText}>Add</Text>
-        </Pressable>
+        <Button label="Add" onPress={add} disabled={disabled} variant="secondary" size="sm" />
       </View>
       {validation ? <Text style={styles.validation}>{validation}</Text> : null}
       {values.length === 0 ? <Text style={styles.empty}>None configured on this device.</Text> : (
@@ -243,15 +249,14 @@ export function PolicyListEditor({
           {values.map((value) => (
             <View key={value} style={styles.listRow}>
               <Text selectable numberOfLines={2} style={styles.mono}>{value}</Text>
-              <Pressable
+              <Button
+                label="Remove"
                 onPress={() => onChange(values.filter((candidate) => candidate !== value))}
                 disabled={disabled}
-                accessibilityRole="button"
+                variant="ghost"
+                size="sm"
                 accessibilityLabel={`Remove ${value}`}
-                style={styles.removeButton}
-              >
-                <Text style={styles.removeText}>Remove</Text>
-              </Pressable>
+              />
             </View>
           ))}
         </View>
@@ -262,46 +267,130 @@ export function PolicyListEditor({
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
-  header: { flexDirection: 'row', alignItems: 'flex-start', gap: 14, paddingHorizontal: 18, paddingTop: 18, paddingBottom: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  backButton: { paddingHorizontal: 13, paddingVertical: 9, borderRadius: 999, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
-  backText: { color: colors.text, fontFamily: fonts.headingMedium, fontSize: 13 },
-  headerCopy: { flex: 1, gap: 4 },
-  headerSpacer: { width: 20 },
-  eyebrow: { color: colors.primary, fontFamily: fonts.heading, fontSize: 10, letterSpacing: 1.1 },
-  title: { color: colors.text, fontFamily: fonts.heading, fontSize: 26, lineHeight: 31 },
-  subtitle: { color: colors.textSecondary, fontSize: 14, lineHeight: 20, maxWidth: 720 },
-  content: { padding: 18, paddingBottom: 80, gap: 14, width: '100%', maxWidth: 920, alignSelf: 'center' },
-  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
-  muted: { color: colors.textMuted },
-  card: { borderRadius: 18, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, padding: 18, gap: 16 },
-  warningCard: { borderColor: 'rgba(245, 190, 65, 0.42)', backgroundColor: 'rgba(80, 59, 8, 0.25)' },
-  privacyCard: { borderColor: 'rgba(120, 210, 255, 0.28)', backgroundColor: 'rgba(12, 35, 53, 0.38)' },
-  sectionHeading: { gap: 5 },
-  cardTitle: { color: colors.text, fontFamily: fonts.heading, fontSize: 17, lineHeight: 22 },
-  body: { color: colors.textSecondary, fontSize: 13, lineHeight: 19 },
-  controlGroup: { gap: 10 },
-  controlLabel: { color: colors.text, fontFamily: fonts.headingMedium, fontSize: 14 },
-  choiceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  choice: { flexGrow: 1, flexBasis: 180, minHeight: 74, borderRadius: 13, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgElevated, padding: 12, gap: 4 },
-  choiceSelected: { borderColor: colors.primary, backgroundColor: colors.primaryLight },
-  choiceLabel: { color: colors.textSecondary, fontFamily: fonts.headingMedium, fontSize: 13 },
-  choiceLabelSelected: { color: colors.primary },
-  choiceDetail: { color: colors.textMuted, fontSize: 11, lineHeight: 15 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
+    minHeight: 60,
+    borderBottomWidth: borderWidth.rule,
+    borderBottomColor: colors.border,
+    gap: spacing.sm,
+  },
+  headerTitles: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  headerEyebrow: {
+    ...fonts.caption.sm,
+    color: colors.primary,
+    marginBottom: 2,
+  },
+  headerTitle: {
+    ...fonts.title.lg,
+    color: colors.text,
+  },
+  headerSpacer: { width: 36 },
+  subtitleBlock: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
+    borderBottomWidth: borderWidth.hairline,
+    borderBottomColor: colors.borderSubtle,
+  },
+  content: {
+    padding: spacing.lg,
+    paddingBottom: 80,
+    gap: spacing.md,
+    width: '100%',
+    maxWidth: 920,
+    alignSelf: 'center',
+  },
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md },
+  muted: { ...fonts.meta.sm, color: colors.textMuted },
+  card: { gap: spacing.lg },
+  warningCard: {
+    borderColor: colors.warning,
+    backgroundColor: colors.warningLight,
+  },
+  privacyCard: {
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  sectionHeading: { gap: spacing.xs },
+  cardTitle: {
+    ...fonts.title.md,
+    color: colors.text,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  body: { ...fonts.body.sm, color: colors.textSecondary },
+  controlGroup: { gap: spacing.sm },
+  choiceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  choice: {
+    flexGrow: 1,
+    flexBasis: 180,
+    minHeight: 74,
+    borderRadius: radius.md,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    backgroundColor: colors.bgElevated,
+    padding: spacing.md,
+    gap: spacing.xs,
+  },
+  choiceSelected: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryLight,
+  },
+  choiceLabel: {
+    ...fonts.label.md,
+    color: colors.textSecondary,
+  },
+  choiceLabelSelected: {
+    color: colors.primary,
+  },
+  choiceDetail: {
+    ...fonts.meta.xs,
+    color: colors.textMuted,
+    lineHeight: 15,
+  },
   disabled: { opacity: 0.45 },
-  limitRow: { gap: 10, paddingTop: 4 },
-  limitCopy: { gap: 4 },
-  valueText: { color: colors.primary, fontFamily: fonts.headingMedium, fontSize: 12 },
-  limitInputRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  listInputRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  input: { minWidth: 90, height: 42, paddingHorizontal: 12, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bg, color: colors.text, fontSize: 14 },
+  limitRow: { gap: spacing.sm, paddingTop: spacing.xs },
+  limitCopy: { gap: spacing.xs },
+  limitInputRow: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center' },
+  listInputRow: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center' },
+  input: {
+    minWidth: 90,
+    height: 42,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceHover,
+    color: colors.text,
+    ...fonts.meta.sm,
+  },
+  inputFocused: {
+    borderColor: colors.borderFocus,
+  },
   listInput: { flex: 1 },
-  actionButton: { alignSelf: 'flex-start', minHeight: 40, justifyContent: 'center', paddingHorizontal: 15, borderRadius: 11, borderWidth: 1, borderColor: colors.primary, backgroundColor: colors.primaryLight },
-  actionText: { color: colors.primary, fontFamily: fonts.headingMedium, fontSize: 13 },
-  validation: { color: colors.warning, fontSize: 12 },
-  empty: { color: colors.textMuted, fontSize: 12, fontStyle: 'italic' },
-  list: { gap: 7 },
-  listRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10, borderRadius: 11, backgroundColor: colors.bgElevated },
-  mono: { flex: 1, color: colors.textSecondary, fontFamily: 'monospace', fontSize: 11, lineHeight: 16 },
-  removeButton: { paddingHorizontal: 10, paddingVertical: 7 },
-  removeText: { color: colors.error, fontFamily: fonts.headingMedium, fontSize: 12 },
+  validation: { ...fonts.meta.sm, color: colors.warning },
+  empty: { ...fonts.meta.sm, color: colors.textMuted },
+  list: { gap: spacing.sm },
+  listRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.bgElevated,
+  },
+  mono: {
+    flex: 1,
+    ...fonts.meta.xs,
+    color: colors.textSecondary,
+  },
 })

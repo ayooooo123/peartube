@@ -1,12 +1,14 @@
 import process from '#process'
 import { createServer } from '#http'
-import { createReadStream, mkdirSync, readFileSync, rmSync, statSync } from '#fs'
+import { createReadStream, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from '#fs'
 import { basename, dirname, relative, resolve } from '#path'
 import b4a from 'b4a'
 import sodium from 'sodium-universal'
 import { isArtworkRendition } from '@peartube/backend/assets'
 import { renderArchiveTui, renderArchiveWebHome } from './archive-ui.js'
 import { renderReleaseConsole, renderReleaseRows } from './release-console-ui.js'
+import { UI_FONT_ROUTE } from './ui-theme.js'
+import { SYNE_EXTRABOLD_TTF_BASE64 } from './ui-font-syne.js'
 import { resolveTmdbOptions } from './settings.js'
 import { spawn } from '#subprocess'
 import { tmpdir } from '#os'
@@ -16,6 +18,9 @@ import { parseBoundary, receiveMultipartUpload } from './multipart.js'
 import { openResponse, readBody } from './media/http-get.js'
 import { canonicalLocalResolutionRecord, normalizeLocalDurationSeconds } from './local-file-acquisition.js'
 import { tmdbImageUrl } from './add/providers/tmdb.js'
+
+// Decoded once; the console serves it with an immutable cache header.
+const SYNE_EXTRABOLD_TTF = b4a.from(SYNE_EXTRABOLD_TTF_BASE64, 'base64')
 
 
 // Rendered as a banner after a submission that carried neither a file nor a
@@ -1784,15 +1789,14 @@ function handleFailedRenditionStream({ res, logger, reader, err }) {
   // seek is a fresh, cheap, keyframe-aligned ffmpeg run.
 
   const compatSessions = new Map()
+  const compatChildren = new Set()
+  let closing = null
   const COMPAT_SESSION_TTL_MS = 10 * 60_000
 
   function compatKey (publicationId, renditionId) {
-    return `${publicationId}:${renditionId}`
+    return JSON.stringify([publicationId, renditionId])
   }
 
-  function compatSessionDir (publicationId, renditionId, offsetSec) {
-    return resolve(tmpdir(), `peartube-compat-${publicationId.slice(0, 12)}-${renditionId.slice(0, 12)}-${Math.floor(offsetSec)}`)
-  }
 
   function stopCompatSession (key) {
     const session = compatSessions.get(key)
@@ -1802,16 +1806,14 @@ function handleFailedRenditionStream({ res, logger, reader, err }) {
     try { rmSync(session.dir, { recursive: true, force: true }) } catch { /* best effort */ }
   }
 
-  function stopCompatSessionsFor (publicationId, renditionId) {
-    stopCompatSession(compatKey(publicationId, renditionId))
-  }
 
-  setInterval(() => {
+  const compatReaper = setInterval(() => {
     const now = Date.now()
     for (const [key, session] of compatSessions) {
       if (now - session.lastTouch > COMPAT_SESSION_TTL_MS) stopCompatSession(key)
     }
-  }, 60_000).unref?.()
+  }, 60_000)
+  compatReaper.unref?.()
 
   function ffmpegBinary () {
     return process.env.PEARTUBE_FFMPEG_PATH || 'ffmpeg'
@@ -1824,14 +1826,12 @@ function handleFailedRenditionStream({ res, logger, reader, err }) {
   function ensureCompatSession (publicationId, renditionId, offsetSec, sourceUrl) {
     const key = compatKey(publicationId, renditionId)
     const existing = compatSessions.get(key)
-    if (existing && existing.offsetSec === offsetSec) {
+    if (existing && existing.offsetSec === offsetSec && (!existing.exited || existing.exitCode === 0)) {
       existing.lastTouch = Date.now()
       return existing
     }
     stopCompatSession(key)
-    const dir = compatSessionDir(publicationId, renditionId, offsetSec)
-    try { rmSync(dir, { recursive: true, force: true }) } catch { /* best effort */ }
-    mkdirSync(dir, { recursive: true })
+    const dir = mkdtempSync(resolve(tmpdir(), 'peartube-compat-'))
     const args = [
       '-hide_banner', '-loglevel', 'error',
       '-ss', String(offsetSec),
@@ -1843,17 +1843,31 @@ function handleFailedRenditionStream({ res, logger, reader, err }) {
       '-master_pl_name', 'index.m3u8',
       resolve(dir, 'prog.m3u8')
     ]
-    const ffmpeg = spawn(ffmpegBinary(), args, { stdio: ['ignore', 'ignore', 'pipe'] })
+    let ffmpeg
+    try {
+      ffmpeg = spawn(ffmpegBinary(), args, { stdio: ['ignore', 'ignore', 'pipe'] })
+    } catch (error) {
+      try { rmSync(dir, { recursive: true, force: true }) } catch { /* best effort */ }
+      throw error
+    }
     let stderr = ''
     ffmpeg.stderr?.on?.('data', (d) => { stderr = (stderr + String(d)).slice(-4000) })
     const session = {
       ffmpeg, dir, offsetSec, lastTouch: Date.now(), ready: false, stderr: () => stderr
     }
-    ffmpeg.on?.('exit', (code) => {
-      if (compatSessions.get(key) === session) {
+    compatChildren.add(session)
+    session.finished = new Promise(resolveExit => {
+      const finish = code => {
         session.exited = true
         session.exitCode = code
+        compatChildren.delete(session)
+        resolveExit()
       }
+      ffmpeg.once('exit', finish)
+      ffmpeg.once('error', error => {
+        stderr = error?.message || String(error)
+        if (!ffmpeg.pid) finish(-1)
+      })
     })
     compatSessions.set(key, session)
     return session
@@ -1936,6 +1950,14 @@ function handleFailedRenditionStream({ res, logger, reader, err }) {
       res.end(JSON.stringify({ ok: true, ready: true }))
       return true
     }
+    if (req.method === 'GET' && req.url === UI_FONT_ROUTE) {
+      res.writeHead(200, {
+        'content-type': 'font/ttf',
+        'cache-control': 'public, max-age=31536000, immutable'
+      })
+      res.end(SYNE_EXTRABOLD_TTF)
+      return true
+    }
     return false
   }
 
@@ -1982,7 +2004,7 @@ function handleFailedRenditionStream({ res, logger, reader, err }) {
     return false
   }
 
-  async function handleCompatPlaybackRoute(req, res, parsed) {
+  async function handleCompatPlaybackRoute(req, res, parsed, playbackAllowed) {
     const compatMatch = parsed.pathname.match(/^\/play\/compat\/([^/]+)\/([^/]+)\/(index\.m3u8|seg(\d+)\.ts)$/)
     if (!compatMatch) return false
 
@@ -1992,14 +2014,20 @@ function handleFailedRenditionStream({ res, logger, reader, err }) {
       publicationId = decodeURIComponent(compatMatch[1])
       renditionId = decodeURIComponent(compatMatch[2])
     } catch { publicationId = null }
-    if (!publicationId || !renditionId) {
+    if (!playbackAllowed || closing || !publicationId || !renditionId) {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
       res.end('playback unavailable')
       return true
     }
 
     const sourceUrl = `http://127.0.0.1:${server.address().port}/play/source/${encodeURIComponent(publicationId)}/${encodeURIComponent(renditionId)}`
-    const offsetSec = Math.max(0, Math.floor(Number(parsed.searchParams.get('t')) || 0))
+    const requestedOffset = Number(parsed.searchParams.get('t') || 0)
+    const offsetSec = Math.max(0, Math.floor(requestedOffset))
+    if (!Number.isFinite(requestedOffset) || !Number.isSafeInteger(offsetSec)) {
+      res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+      res.end('invalid playback offset')
+      return true
+    }
     const session = ensureCompatSession(publicationId, renditionId, offsetSec, sourceUrl)
     if (compatMatch[3] === 'index.m3u8') {
       const ok = await waitForPlaylist(session)
@@ -2137,7 +2165,7 @@ function handleFailedRenditionStream({ res, logger, reader, err }) {
   }
 
   async function handleGetPlaybackRoutes(req, res, parsed, playbackAllowed) {
-    if (await handleCompatPlaybackRoute(req, res, parsed)) return true
+    if (await handleCompatPlaybackRoute(req, res, parsed, playbackAllowed)) return true
     if (await handleSourcePlaybackRoute(req, res, parsed, playbackAllowed)) return true
     if (await handlePublicationPlaybackRoute(req, res, parsed, playbackAllowed)) return true
     if (await handleCandidatePlaybackRoute(req, res, parsed, playbackAllowed)) return true
@@ -2361,6 +2389,7 @@ function handleFailedRenditionStream({ res, logger, reader, err }) {
     },
     server,
     async start() {
+      if (closing) throw new Error('Archive console is closed')
       // Idempotent on an adopted surface: it is already listening as a warming
       // relay; only adopt the live handler once the provider acquisition service exists.
       if (httpSurface) {
@@ -2374,12 +2403,18 @@ function handleFailedRenditionStream({ res, logger, reader, err }) {
         : { host, port: boundPort() })
       return this
     },
-    async close() {
-      if (httpSurface) {
-        await httpSurface.close()
-        return
-      }
-      await new Promise((resolve) => server.close(resolve))
+    close() {
+      closing ||= Promise.resolve().then(async () => {
+        clearInterval(compatReaper)
+        for (const key of compatSessions.keys()) stopCompatSession(key)
+        await Promise.all([...compatChildren].map(session => session.finished))
+        if (httpSurface) {
+          await httpSurface.close()
+          return
+        }
+        await new Promise((resolve) => server.close(resolve))
+      })
+      return closing
     }
   }
 }

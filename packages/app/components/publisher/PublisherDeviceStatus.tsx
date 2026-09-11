@@ -1,5 +1,7 @@
 import React from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 
 export type PublisherDeviceState =
   | 'authorized'
@@ -127,6 +129,20 @@ function buildDeviceStatusActions(
   ]
 }
 
+const STATUS_TAG: Readonly<Record<PublisherDeviceState, { label: string, tone: 'success' | 'warning' | 'danger' }>> = Object.freeze({
+  authorized: { label: 'PAIRED', tone: 'success' },
+  stale: { label: 'STALE', tone: 'warning' },
+  revoked: { label: 'REVOKED', tone: 'danger' },
+  'authority-lost': { label: 'LOCKED', tone: 'danger' },
+  'unable-to-publish': { label: 'BLOCKED', tone: 'danger' },
+})
+
+const TAG_TONE_COLOR = {
+  success: colors.success,
+  warning: colors.warning,
+  danger: colors.error,
+} as const
+
 export function normalizePublisherDeviceStatus(input: PublisherDeviceStatusInput | null | undefined): PublisherDeviceStatusModel {
   const requestSucceeded = input?.success === true
   const { status, copy, isPrivileged } = resolveDeviceStateAndCopy(requestSucceeded, input?.status)
@@ -149,14 +165,32 @@ export type PublisherDeviceStatusProps = {
 
 export function PublisherDeviceStatus({ status, actionHandlers = {} }: PublisherDeviceStatusProps) {
   const model = normalizePublisherDeviceStatus(status)
+  const tag = STATUS_TAG[model.status]
+  const tagColor = TAG_TONE_COLOR[tag.tone]
+  const titleTone = model.status === 'authorized'
+    ? colors.primary
+    : model.status === 'stale'
+      ? colors.warning
+      : colors.error
+  const panelBorder = model.status === 'authorized'
+    ? colors.primary
+    : model.status === 'stale'
+      ? colors.border
+      : colors.error
+
   return (
     <View
       accessibilityLabel="Publisher device security"
       accessibilityLiveRegion="polite"
-      style={styles.panel}
+      style={[styles.panel, { borderColor: panelBorder }]}
     >
       <Text style={styles.kicker}>Publisher device security</Text>
-      <Text style={styles.title}>{model.label}</Text>
+      <View style={styles.titleRow}>
+        <Text style={[styles.title, { color: titleTone }]}>{model.label}</Text>
+        <View style={[styles.tag, { borderColor: tagColor }]}>
+          <Text style={[styles.tagLabel, { color: tagColor }]}>{tag.label}</Text>
+        </View>
+      </View>
       <Text style={styles.explanation}>{model.explanation}</Text>
       {model.detail ? <Text style={styles.detail}>{model.detail}</Text> : null}
       <Text style={styles.detail}>Publishing restrictions do not remove local media that this device is still allowed to use.</Text>
@@ -200,58 +234,70 @@ export function PublisherDeviceStatus({ status, actionHandlers = {} }: Publisher
 
 const styles = StyleSheet.create({
   panel: {
-    borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.22)',
-    borderRadius: 18,
-    backgroundColor: 'rgba(15,23,42,0.76)',
-    padding: 16,
-    gap: 8,
+    backgroundColor: colors.surface,
+    borderWidth: borderWidth.rule,
+    borderRadius: radius.card,
+    padding: spacing.lg,
+    gap: spacing.sm,
   },
   kicker: {
-    color: '#7b5bf5',
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 0.7,
-    textTransform: 'uppercase',
+    ...fonts.caption.sm,
+    color: colors.textMuted,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
   },
   title: {
-    color: '#f8fafc',
-    fontSize: 18,
-    fontWeight: '800',
+    ...fonts.title.md,
+    textTransform: 'uppercase',
+  },
+  tag: {
+    borderWidth: borderWidth.hairline,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm - 2,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tagLabel: {
+    ...fonts.caption.sm,
+    fontSize: 10,
+    lineHeight: 12,
   },
   explanation: {
-    color: '#e2e8f0',
-    fontSize: 14,
-    lineHeight: 20,
+    ...fonts.body.sm,
+    color: colors.textSecondary,
   },
   detail: {
-    color: '#94a3b8',
-    fontSize: 12,
-    lineHeight: 18,
+    ...fonts.meta.sm,
+    color: colors.textMuted,
   },
   actions: {
-    gap: 8,
-    marginTop: 4,
+    gap: spacing.sm,
+    marginTop: spacing.xs,
   },
   action: {
-    borderWidth: 1,
-    borderColor: 'rgba(123, 91, 245,0.30)',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(123, 91, 245,0.08)',
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    borderRadius: radius.card,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    backgroundColor: colors.surfaceHover,
   },
   actionDenied: {
-    borderColor: 'rgba(148,163,184,0.20)',
-    backgroundColor: 'rgba(148,163,184,0.06)',
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.bg,
     opacity: 0.72,
   },
   actionPressed: {
     opacity: 0.74,
   },
   actionText: {
-    color: '#e2e8f0',
-    fontSize: 12,
-    fontWeight: '700',
+    ...fonts.meta.sm,
+    color: colors.text,
+    fontFamily: fonts.monoMedium,
   },
 })

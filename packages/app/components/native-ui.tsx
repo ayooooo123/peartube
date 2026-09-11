@@ -12,7 +12,8 @@ import {
   type TextStyle,
   type ViewStyle,
 } from 'react-native'
-import { colors } from '@/lib/colors'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 
 // Plain React Native replacements for the former @expo/ui pilot widgets.
 // @expo/ui pulled the whole Jetpack Compose runtime (~MBs of dex) into the
@@ -50,8 +51,14 @@ export type NativeSwitchProps = SwitchProps & {
   className?: string
 }
 
-export function NativeSwitch({ className: _className, ...props }: NativeSwitchProps) {
-  return <Switch {...props} />
+export function NativeSwitch({ className: _className, trackColor, thumbColor, ...props }: NativeSwitchProps) {
+  return (
+    <Switch
+      trackColor={trackColor ?? { true: colors.primary, false: colors.bgActive }}
+      thumbColor={thumbColor ?? colors.text}
+      {...props}
+    />
+  )
 }
 
 export type NativeTextInputProps = TextInputProps & {
@@ -65,6 +72,7 @@ export function NativeTextInput({ style, textStyle, className, ...props }: Nativ
   return (
     <TextInput
       className={className}
+      placeholderTextColor={props.placeholderTextColor ?? colors.textMuted}
       {...props}
       style={[!className && styles.input, styles.text, style, textStyle]}
     />
@@ -75,19 +83,21 @@ const styles = StyleSheet.create({
   button: {
     alignSelf: 'stretch',
     minHeight: 44,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
     alignItems: 'center',
     justifyContent: 'center',
   },
   buttonFilled: {
     backgroundColor: colors.primary,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.primary,
   },
   buttonOutlined: {
-    borderWidth: 1,
+    borderWidth: borderWidth.rule,
     borderColor: colors.border,
-    backgroundColor: 'transparent',
+    backgroundColor: colors.bg,
   },
   buttonDisabled: {
     opacity: 0.5,
@@ -96,27 +106,26 @@ const styles = StyleSheet.create({
     opacity: 0.8,
   },
   buttonLabel: {
-    fontSize: 16,
-    fontWeight: '600',
+    ...fonts.label.md,
   },
   buttonLabelFilled: {
-    color: colors.text,
+    color: colors.onPrimary,
   },
   buttonLabelOutlined: {
     color: colors.text,
   },
   input: {
     minHeight: 48,
-    marginBottom: 12,
-    backgroundColor: '#111827',
-    borderColor: '#243041',
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    marginBottom: spacing.md,
+    backgroundColor: colors.surfaceHover,
+    borderColor: colors.border,
+    borderWidth: borderWidth.rule,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
   },
   text: {
-    color: '#f8fafc',
-    fontSize: 16,
+    color: colors.text,
+    ...fonts.body.md,
   },
 })

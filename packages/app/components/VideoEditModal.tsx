@@ -1,61 +1,27 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import {
   Modal,
   View,
   Text,
   ScrollView,
   TextInput,
-  ActivityIndicator,
-  Pressable,
-  type PressableProps,
-  type ViewStyle,
+  StyleSheet,
+  type TextInputProps,
 } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
-import { Feather } from '@expo/vector-icons'
-import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated'
 import { useApp } from '@/lib/AppContext'
-import { colors } from '@/lib/colors'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
+import {
+  Button,
+  Chip,
+  Divider,
+  Eyebrow,
+  IconButton,
+  Meta,
+} from '@/components/primitives'
 
 const CATEGORIES = ['Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
-
-const AnimatedPressable = Animated.createAnimatedComponent(Pressable)
-
-interface AnimatedFeedbackPressableProps extends PressableProps {
-  style?: ViewStyle | ViewStyle[]
-}
-
-function AnimatedFeedbackPressable({ children, style, onPressIn, onPressOut, ...props }: AnimatedFeedbackPressableProps) {
-  const scale = useSharedValue(1)
-  const opacity = useSharedValue(1)
-
-  const handlePressIn: PressableProps['onPressIn'] = (event) => {
-    scale.value = withSpring(0.9, { damping: 15, stiffness: 400 })
-    opacity.value = withTiming(0.7, { duration: 100 })
-    onPressIn?.(event)
-  }
-
-  const handlePressOut: PressableProps['onPressOut'] = (event) => {
-    scale.value = withSpring(1, { damping: 15, stiffness: 400 })
-    opacity.value = withTiming(1, { duration: 100 })
-    onPressOut?.(event)
-  }
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-    opacity: opacity.value,
-  }))
-
-  return (
-    <AnimatedPressable
-      {...props}
-      style={[style, animatedStyle]}
-      onPressIn={handlePressIn}
-      onPressOut={handlePressOut}
-    >
-      {children}
-    </AnimatedPressable>
-  )
-}
 
 interface VideoEditModalProps {
   visible: boolean
@@ -68,7 +34,7 @@ interface VideoEditModalProps {
 export function VideoEditModal({ visible, video, channelKey, onClose, onSaved }: VideoEditModalProps) {
   return (
     <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
-      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.7)' }}>
+      <View style={styles.scrim}>
         <VideoEditModalForm
           key={video?.id ?? 'empty'}
           video={video}
@@ -88,6 +54,8 @@ function VideoEditModalForm({ video, channelKey, onClose, onSaved }: Omit<VideoE
   const [category, setCategory] = useState(video?.category || '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [titleFocused, setTitleFocused] = useState(false)
+  const [descriptionFocused, setDescriptionFocused] = useState(false)
 
   const handleChangeThumbnail = async () => {
     if (!video?.id) {
@@ -154,93 +122,191 @@ function VideoEditModalForm({ video, channelKey, onClose, onSaved }: Omit<VideoE
   }
 
   return (
-    <View className="bg-pear-bg rounded-t-3xl overflow-hidden" style={{ maxHeight: '85%' }}>
-      <View className="flex-row items-center justify-between px-5 py-4 border-b border-pear-border">
-        <Text className="text-title text-pear-text">Edit Video</Text>
-        <AnimatedFeedbackPressable onPress={onClose} className="p-1">
-          <Feather name="x" size={24} color={colors.text} />
-        </AnimatedFeedbackPressable>
+    <View style={styles.sheet}>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>EDIT</Text>
+        <IconButton icon="x" accessibilityLabel="Close" onPress={onClose} variant="plain" size={36} />
       </View>
+      <Divider weight="rule" />
 
-      <ScrollView className="max-h-[560px]" contentContainerStyle={{ paddingHorizontal: 20, paddingVertical: 16, gap: 14 }}>
-        <View>
-          <Text className="text-label text-pear-text mb-1.5">Title</Text>
-          <TextInput
-            className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        <Field label="TITLE">
+          <EditInput
             placeholder="Video title"
-            placeholderTextColor={colors.textMuted}
             value={title}
             onChangeText={setTitle}
+            focused={titleFocused}
+            onFocus={() => setTitleFocused(true)}
+            onBlur={() => setTitleFocused(false)}
           />
-        </View>
+        </Field>
 
-        <View>
-          <Text className="text-label text-pear-text mb-1.5">Description</Text>
-          <TextInput
-            className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
+        <Field label="DESCRIPTION">
+          <EditInput
             placeholder="Describe your video"
-            placeholderTextColor={colors.textMuted}
             value={description}
             onChangeText={setDescription}
             multiline
             numberOfLines={4}
-            style={{ textAlignVertical: 'top' }}
+            focused={descriptionFocused}
+            onFocus={() => setDescriptionFocused(true)}
+            onBlur={() => setDescriptionFocused(false)}
+            style={styles.multiline}
           />
-        </View>
+        </Field>
 
-        <View>
-          <Text className="text-label text-pear-text mb-1.5">Category</Text>
+        <Field label="CATEGORY">
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View className="flex-row gap-2 pr-1">
-              {CATEGORIES.map((item) => {
-                const selected = category === item
-                return (
-                  <AnimatedFeedbackPressable
-                    key={item}
-                    onPress={() => setCategory(item)}
-                    className={`px-4 py-2 rounded-full ${selected ? 'bg-pear-primary' : 'bg-pear-bg-card'}`}
-                  >
-                    <Text className={`text-label ${selected ? 'text-white' : 'text-pear-text'}`}>{item}</Text>
-                  </AnimatedFeedbackPressable>
-                )
-              })}
+            <View style={styles.chipRow}>
+              {CATEGORIES.map((item) => (
+                <Chip
+                  key={item}
+                  label={item}
+                  selected={category === item}
+                  onPress={() => setCategory(item)}
+                />
+              ))}
             </View>
           </ScrollView>
-        </View>
+        </Field>
 
-        <View>
-          <Text className="text-label text-pear-text mb-1.5">Thumbnail</Text>
-          <AnimatedFeedbackPressable
+        <Field label="THUMBNAIL">
+          <Button
+            label="CHANGE THUMBNAIL"
+            variant="secondary"
+            icon="image"
             onPress={handleChangeThumbnail}
-            className="flex-row items-center justify-center gap-2 bg-pear-bg-card border border-pear-border rounded-lg py-3.5"
-          >
-            <Feather name="image" size={18} color={colors.text} />
-            <Text className="text-label text-pear-text">Change Thumbnail</Text>
-          </AnimatedFeedbackPressable>
-        </View>
+            block
+          />
+        </Field>
 
-        {error ? <Text className="text-caption text-pear-error">{error}</Text> : null}
+        {error ? <Meta tone="danger">{error}</Meta> : null}
       </ScrollView>
 
-      <View className="flex-row gap-3 px-5 py-4 border-t border-pear-border">
-        <AnimatedFeedbackPressable
+      <Divider weight="rule" />
+      <View style={styles.footer}>
+        <Button
+          label="CANCEL"
+          variant="ghost"
           onPress={onClose}
           disabled={saving}
-          className={`flex-1 items-center justify-center rounded-lg py-3.5 bg-pear-bg-card border border-pear-border ${saving ? 'opacity-50' : ''}`}
-        >
-          <Text className="text-label text-pear-text">Cancel</Text>
-        </AnimatedFeedbackPressable>
-
-        <AnimatedFeedbackPressable
+          style={styles.footerBtn}
+        />
+        <Button
+          label="SAVE"
+          variant="primary"
           onPress={handleSave}
           disabled={saving}
-          className={`flex-1 items-center justify-center rounded-lg py-3.5 bg-pear-primary ${saving ? 'opacity-50' : ''}`}
-        >
-          {saving ? <ActivityIndicator size="small" color="#fff" /> : <Text className="text-label text-white">Save</Text>}
-        </AnimatedFeedbackPressable>
+          loading={saving}
+          style={styles.footerBtn}
+        />
       </View>
     </View>
   )
 }
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <View style={styles.field}>
+      <Eyebrow style={styles.fieldLabel}>{label}</Eyebrow>
+      {children}
+    </View>
+  )
+}
+
+function EditInput({
+  focused,
+  style,
+  ...props
+}: TextInputProps & { focused?: boolean }) {
+  return (
+    <TextInput
+      placeholderTextColor={colors.textMuted}
+      {...props}
+      style={[styles.input, focused && styles.inputFocused, style]}
+    />
+  )
+}
+
+const styles = StyleSheet.create({
+  scrim: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: colors.scrim,
+  },
+  sheet: {
+    backgroundColor: colors.bg,
+    borderTopWidth: borderWidth.rule,
+    borderLeftWidth: borderWidth.rule,
+    borderRightWidth: borderWidth.rule,
+    borderColor: colors.border,
+    borderTopLeftRadius: radius.card,
+    borderTopRightRadius: radius.card,
+    maxHeight: '85%',
+    overflow: 'hidden',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
+    minHeight: 56,
+  },
+  headerTitle: {
+    ...fonts.title.lg,
+    color: colors.text,
+    flex: 1,
+  },
+  scroll: {
+    maxHeight: 560,
+  },
+  scrollContent: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+    gap: spacing.lg,
+  },
+  field: {
+    gap: spacing.sm,
+  },
+  fieldLabel: {
+    marginBottom: 0,
+  },
+  input: {
+    backgroundColor: colors.surfaceHover,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    color: colors.text,
+    ...fonts.body.md,
+  },
+  inputFocused: {
+    borderColor: colors.borderFocus,
+  },
+  multiline: {
+    minHeight: 96,
+    textAlignVertical: 'top',
+  },
+  chipRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingRight: spacing.xs,
+  },
+  footer: {
+    flexDirection: 'row',
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+  },
+  footerBtn: {
+    flex: 1,
+  },
+})
 
 export default VideoEditModal

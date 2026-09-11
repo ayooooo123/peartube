@@ -1,16 +1,17 @@
 /**
- * Desktop Header - Top navigation bar for Pear desktop
+ * Desktop Header - Top bar for the desktop shell
  *
  * Contains:
- * - Hamburger menu (toggle sidebar)
- * - PearTube logo
- * - Centered search bar
- * - User avatar
+ * - Sidebar toggle (square outline button)
+ * - "PEARTUBE" wordmark with the lime square mark
+ * - Rectangular search field
+ * - Cast + profile controls
  */
 import React, { useState, useCallback, useEffect } from 'react'
 import { useRouter, useLocalSearchParams, usePathname } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
-import { colors } from '@/lib/colors'
+import { colors, spacing, radius, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 import { useCast } from '@/lib/cast'
 import { DevicePickerModal } from '@/components/cast'
 import { useSidebar, HEADER_HEIGHT } from './constants'
@@ -105,7 +106,8 @@ export function DesktopHeader() {
             onClick={handleLogoClick}
             aria-label="Go to home"
           >
-            <span style={styles.logoText}>PearTube</span>
+            <span style={styles.logoMark} aria-hidden="true" />
+            <span style={styles.logoText}>PEARTUBE</span>
           </button>
         </div>
 
@@ -115,12 +117,12 @@ export function DesktopHeader() {
             <div
               style={{
                 ...styles.searchContainer,
-                borderColor: isSearchFocused ? colors.primary : colors.border,
+                borderColor: isSearchFocused ? colors.borderFocus : colors.border,
               }}
             >
               <input
                 type="text"
-                placeholder="Search"
+                placeholder="SEARCH"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onFocus={() => setIsSearchFocused(true)}
@@ -139,14 +141,17 @@ export function DesktopHeader() {
           {cast.available && (
             <button
               type="button"
-              style={styles.iconButton}
+              style={{
+                ...styles.iconButton,
+                borderColor: cast.isConnected ? colors.primary : colors.border,
+              }}
               onClick={handleCastPress}
               aria-label={cast.isConnected ? 'Casting' : 'Cast to device'}
             >
               {isConnectingCast ? (
-                <span style={{ fontSize: 12, color: colors.primary }}>…</span>
+                <span style={styles.castPending}>…</span>
               ) : (
-                <Feather name="cast" size={20} color={cast.isConnected ? colors.primary : colors.text} />
+                <Feather name="cast" size={18} color={cast.isConnected ? colors.primary : colors.text} />
               )}
             </button>
           )}
@@ -201,9 +206,10 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'space-between',
     height: HEADER_HEIGHT,
-    padding: '0 16px',
+    boxSizing: 'border-box',
+    padding: `0 ${spacing.lg}px`,
     backgroundColor: colors.bg,
-    borderBottom: `1px solid ${colors.border}`,
+    borderBottom: `${borderWidth.rule}px solid ${colors.border}`,
     position: 'sticky',
     top: 0,
     zIndex: 100,
@@ -211,20 +217,20 @@ const styles: Record<string, React.CSSProperties> = {
   leftSection: {
     display: 'flex',
     alignItems: 'center',
-    gap: 16,
+    gap: spacing.md,
     minWidth: 200,
   },
   centerSection: {
     flex: 1,
     display: 'flex',
     justifyContent: 'center',
-    maxWidth: 640,
-    margin: '0 24px',
+    maxWidth: 560,
+    margin: `0 ${spacing.xl}px`,
   },
   rightSection: {
     display: 'flex',
     alignItems: 'center',
-    gap: 8,
+    gap: spacing.sm,
     minWidth: 200,
     justifyContent: 'flex-end',
   },
@@ -232,28 +238,41 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    border: 'none',
+    width: 36,
+    height: 36,
+    borderRadius: radius.md,
+    border: `${borderWidth.rule}px solid ${colors.border}`,
     backgroundColor: 'transparent',
     color: colors.text,
     cursor: 'pointer',
-    transition: 'background-color 0.15s ease',
+    transition: 'border-color 0.15s ease, background-color 0.15s ease',
+  },
+  castPending: {
+    fontFamily: fonts.mono,
+    fontSize: 12,
+    color: colors.primary,
   },
   logoButton: {
     display: 'flex',
     alignItems: 'center',
+    gap: spacing.sm,
     border: 'none',
     backgroundColor: 'transparent',
     cursor: 'pointer',
     padding: 0,
   },
+  logoMark: {
+    display: 'inline-block',
+    width: 8,
+    height: 8,
+    backgroundColor: colors.primary,
+  },
   logoText: {
-    fontSize: 20,
-    fontWeight: 700,
+    fontFamily: fonts.display,
+    fontSize: 18,
     color: colors.text,
     letterSpacing: -0.5,
+    textTransform: 'uppercase',
   },
   searchForm: {
     width: '100%',
@@ -261,31 +280,33 @@ const styles: Record<string, React.CSSProperties> = {
   searchContainer: {
     display: 'flex',
     alignItems: 'center',
-    backgroundColor: colors.bgSecondary,
-    borderRadius: 20,
-    border: '1px solid',
+    backgroundColor: colors.surfaceHover,
+    borderRadius: radius.md,
+    border: `${borderWidth.rule}px solid`,
     overflow: 'hidden',
     transition: 'border-color 0.15s ease',
   },
   searchInput: {
     flex: 1,
-    height: 40,
-    padding: '0 16px',
+    height: 36,
+    padding: `0 ${spacing.md}px`,
     border: 'none',
     backgroundColor: 'transparent',
     color: colors.text,
-    fontSize: 14,
+    fontFamily: fonts.mono,
+    fontSize: 13,
+    letterSpacing: 0.4,
     outline: 'none',
   },
   searchButton: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 64,
-    height: 40,
+    width: 48,
+    height: 36,
     border: 'none',
-    borderLeft: `1px solid ${colors.border}`,
-    backgroundColor: colors.bgHover,
+    borderLeft: `${borderWidth.rule}px solid ${colors.border}`,
+    backgroundColor: colors.bg,
     color: colors.text,
     cursor: 'pointer',
     transition: 'background-color 0.15s ease',
@@ -294,14 +315,14 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    border: 'none',
-    backgroundColor: colors.bgSecondary,
+    width: 36,
+    height: 36,
+    borderRadius: radius.md,
+    border: `${borderWidth.rule}px solid ${colors.border}`,
+    backgroundColor: colors.surface,
     color: colors.textSecondary,
     cursor: 'pointer',
-    transition: 'background-color 0.15s ease',
+    transition: 'border-color 0.15s ease',
   },
 }
 

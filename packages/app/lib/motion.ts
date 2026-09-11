@@ -9,7 +9,7 @@ export const springs = {
   snappy: { damping: 18, stiffness: 320 },
   /** Soft, ambient motion — rails, cards entering, large surfaces. */
   gentle: { damping: 22, stiffness: 160 },
-  /** Press feedback (matches the established PillTabBar press spring). */
+  /** Press feedback (matches the established TabBar press spring). */
   press: { damping: 15, stiffness: 400 },
 } as const
 

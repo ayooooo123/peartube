@@ -29,7 +29,7 @@ export const ActionButton = memo(function ActionButton({
 }: ActionButtonProps) {
   return (
     <Pressable
-      style={styles.actionButton}
+      style={[styles.actionButton, active && styles.actionButtonActive]}
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel || label}

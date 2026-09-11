@@ -1,6 +1,6 @@
 /**
  * ThumbnailImage - YouTube-style video thumbnail with duration badge
- * Shows gradient placeholder with play icon when no thumbnail available
+ * Shows placeholder with play icon when no thumbnail available
  *
  * Memoized for optimal FlatList performance.
  */
@@ -8,7 +8,8 @@ import { useState, useEffect, useCallback, useMemo, memo } from 'react'
 import { View, Text, StyleSheet, ActivityIndicator, Image } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { formatDuration } from '@/lib/formatters'
-import { colors } from '@/lib/colors'
+import { colors, radius, spacing } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 
 interface ThumbnailImageProps {
   thumbnailUrl?: string | null
@@ -28,7 +29,7 @@ function ThumbnailImageComponent({
   onError,
 }: ThumbnailImageProps) {
   const [imageError, setImageError] = useState(false)
-  const [imageLoading, setImageLoading] = useState(true)
+  const [imageLoading, setImageLoading] = useState(Boolean(thumbnailUrl))
   const [imageLoaded, setImageLoaded] = useState(false)
   const [retryAttempt, setRetryAttempt] = useState(0)
 
@@ -59,8 +60,7 @@ function ThumbnailImageComponent({
   const imageSource = useMemo(
     () => {
       if (!thumbnailUrl) return null
-      // Data URLs are self-contained — appending a cache-busting query string
-      // would corrupt the trailing base64, so never rewrite them.
+      // A data URI is self-contained; changing its query corrupts the payload.
       if (retryAttempt === 0 || thumbnailUrl.startsWith('data:')) return { uri: thumbnailUrl }
       const separator = thumbnailUrl.includes('?') ? '&' : '?'
       return { uri: `${thumbnailUrl}${separator}attempt=${retryAttempt}` }
@@ -70,26 +70,24 @@ function ThumbnailImageComponent({
 
   const handleRecoverableError = useCallback(() => {
     if (retryAttempt < MAX_IMAGE_RETRIES) {
-      setRetryAttempt((prev) => prev + 1)
+      setRetryAttempt(prev => prev + 1)
       setImageError(false)
       setImageLoading(true)
-      return
+    } else {
+      setImageError(true)
+      setImageLoading(false)
+      if (onError) onError()
     }
-
-    setImageError(true)
-    setImageLoading(false)
-    onError?.()
   }, [onError, retryAttempt])
 
   // Timeout for loading - give up after 8 seconds
   useEffect(() => {
-    if (thumbnailUrl && imageLoading && !imageError) {
-      const timeout = setTimeout(() => {
-        handleRecoverableError()
-      }, 8000)
-      return () => clearTimeout(timeout)
-    }
-  }, [thumbnailUrl, imageLoading, imageError, handleRecoverableError])
+    if (!imageLoading || imageError || imageLoaded || !thumbnailUrl) return
+    const timeout = setTimeout(() => {
+      handleRecoverableError()
+    }, 8000)
+    return () => clearTimeout(timeout)
+  }, [thumbnailUrl, imageLoading, imageError, imageLoaded, handleRecoverableError])
 
   // Memoize callbacks for Image component
   const handleError = useCallback(() => {
@@ -101,41 +99,41 @@ function ThumbnailImageComponent({
 
   return (
     <View style={containerStyle}>
-      {/* Placeholder only stays visible until the native image reports loaded. */}
-      {!imageLoaded && (
+      {/* Placeholder when no image or error */}
+      {!imageLoaded ? (
         <View style={styles.placeholder}>
           <View style={styles.playIconContainer}>
-            <Ionicons name="play" color={colors.primary} size={48} />
+            <Ionicons name="play" size={40} color={colors.onPrimary} />
           </View>
         </View>
-      )}
+      ) : null}
 
-      {/* Actual thumbnail image */}
-      {imageSource && !imageError && (
+      {/* Loading spinner */}
+      {imageLoading && thumbnailUrl && !imageError ? (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      ) : null}
+
+      {/* Actual image */}
+      {imageSource && !imageError ? (
         <Image
           source={imageSource}
           style={styles.image}
           resizeMode="cover"
           onError={handleError}
-          onLoad={handleLoad}
           onLoadStart={handleLoadStart}
           onLoadEnd={handleLoadEnd}
+          onLoad={handleLoad}
         />
-      )}
+      ) : null}
 
-      {/* Loading indicator */}
-      {imageLoading && thumbnailUrl && !imageError && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator color={colors.primary} size="small" />
-        </View>
-      )}
-
-      {/* Duration badge - bottom right */}
-      {durationText && (
+      {/* Duration badge */}
+      {durationText ? (
         <View style={styles.durationBadge}>
           <Text style={styles.durationText}>{durationText}</Text>
         </View>
-      )}
+      ) : null}
     </View>
   )
 }
@@ -160,8 +158,8 @@ const styles = StyleSheet.create({
   container: {
     width: '100%',
     aspectRatio: 16 / 9,
-    backgroundColor: colors.bgHover,
-    borderRadius: 12,
+    backgroundColor: colors.surface,
+    borderRadius: radius.card,
     overflow: 'hidden',
     position: 'relative',
   },
@@ -172,7 +170,6 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     zIndex: 1,
-    elevation: 1,
   },
   loadingOverlay: {
     position: 'absolute',
@@ -180,11 +177,10 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     left: 0,
-    backgroundColor: colors.bgHover,
+    backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 2,
-    elevation: 2,
   },
   placeholder: {
     position: 'absolute',
@@ -192,35 +188,32 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     left: 0,
-    backgroundColor: colors.bgHover,
+    backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 0,
-    elevation: 0,
   },
   playIconContainer: {
     width: 80,
     height: 80,
-    borderRadius: 40,
-    backgroundColor: colors.primaryLight,
+    borderRadius: radius.card,
+    backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
   durationBadge: {
     position: 'absolute',
-    bottom: 8,
-    right: 8,
-    backgroundColor: 'rgba(0,0,0,0.85)',
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: 4,
+    bottom: spacing.sm,
+    right: spacing.sm,
+    backgroundColor: colors.overlayButton,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.card,
     zIndex: 4,
-    elevation: 4,
   },
   durationText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '500',
+    ...fonts.meta.xs,
+    color: colors.text,
   },
 })
 

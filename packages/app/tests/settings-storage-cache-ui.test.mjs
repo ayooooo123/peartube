@@ -22,7 +22,7 @@ async function loadStorageCard() {
         'const host = tag => ({ children }) => React.createElement(tag, null, children)',
         'const View = host("div")',
         'const Text = host("span")',
-        'const GlassCard = host("section")',
+        'const Panel = host("section")',
         'const Feather = () => null',
         'const StorageOperabilityDetails = () => null',
         'const TextInput = props => React.createElement("input", { "data-keyboard-type": props.keyboardType, value: props.value })',

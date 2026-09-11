@@ -1,7 +1,9 @@
 import { memo } from 'react'
 import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native'
+import { ABSOLUTE_FILL } from '@/lib/absolute-fill'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import type { VideoData } from '@peartube/core'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
 import { useShortsSocial } from '@/lib/shorts-social'
 import { CommentsSection } from '@/components/video-player'
 
@@ -36,7 +38,7 @@ export const ShortsCommentsSheet = memo(function ShortsCommentsSheet({ video, vi
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.modalRoot}>
         <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Close Shorts comments" />
-        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
           <View style={styles.handle} />
           <ScrollView
             style={styles.scroll}
@@ -76,35 +78,35 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   backdrop: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    ...ABSOLUTE_FILL,
+    backgroundColor: colors.scrim,
   },
   sheet: {
     maxHeight: '78%',
     minHeight: '45%',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    backgroundColor: '#0b0d10',
-    borderTopWidth: 1,
-    borderLeftWidth: 1,
-    borderRightWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
+    borderTopLeftRadius: radius.card,
+    borderTopRightRadius: radius.card,
+    backgroundColor: colors.bg,
+    borderTopWidth: borderWidth.rule,
+    borderLeftWidth: borderWidth.rule,
+    borderRightWidth: borderWidth.rule,
+    borderColor: colors.border,
     overflow: 'hidden',
   },
   handle: {
-    width: 42,
-    height: 5,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.32)',
+    width: 48,
+    height: borderWidth.rule,
+    borderRadius: radius.sm,
+    backgroundColor: colors.borderLight,
     alignSelf: 'center',
-    marginTop: 10,
-    marginBottom: 2,
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
   },
   scroll: {
     flexGrow: 0,
   },
   scrollContent: {
-    paddingHorizontal: 18,
-    paddingTop: 12,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
   },
 })

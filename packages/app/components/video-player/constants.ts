@@ -9,7 +9,7 @@
 export const MINI_PIP_WIDTH = 240
 export const MINI_PIP_HEIGHT = 135
 export const MINI_PIP_MARGIN = 12
-export const MINI_PIP_CORNER_RADIUS = 16
+export const MINI_PIP_CORNER_RADIUS = 4
 
 // Responsive mini sizes — actual values computed at runtime via computeMiniSize(sizeMode)
 export const MINI_PIP_COMPACT_WIDTH_FRACTION = 0.50
@@ -72,8 +72,6 @@ export const SNAP_HYSTERESIS_PX = 24    // center-distance for slow-release stic
 
 // Mini player visual tuning
 export const MINI_DRAG_SCALE = 0.988
-export const MINI_SHADOW_DOCKED = { opacity: 0.16, radius: 12, offsetY: 4, elevation: 9 }
-export const MINI_SHADOW_DRAGGING = { opacity: 0.24, radius: 18, offsetY: 6, elevation: 14 }
 export const MINI_DRAG_OVERSHOOT_X = 24
 export const MINI_DRAG_OVERSHOOT_TOP = 16
 export const MINI_DRAG_OVERSHOOT_BOTTOM = 16

@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
-import { colors } from '@/lib/colors'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 import type { ArchiveOperatorStatus } from '@/lib/storage-operability.js'
 import ArchiveOperatorDiagnostics from './ArchiveOperatorDiagnostics'
 import type {
@@ -234,21 +235,37 @@ export default function DiagnosticsPanel({
 }
 
 const styles = StyleSheet.create({
-  root: { padding: 16, gap: 12 },
-  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  sectionTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
-  sectionSubtitle: { marginTop: 2, fontSize: 12, color: colors.textMuted },
-  refreshButton: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: colors.glass, borderWidth: 1, borderColor: colors.glassBorder, minWidth: 72, alignItems: 'center' },
-  refreshText: { fontSize: 13, fontWeight: '700', color: colors.primary },
-  card: { backgroundColor: colors.bg, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: colors.glassBorder, gap: 8 },
-  cardTitle: { fontSize: 14, fontWeight: '700', color: colors.text },
-  statusText: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
-  metricRow: { flexDirection: 'row', gap: 12 },
+  root: { padding: spacing.lg, gap: spacing.md },
+  headerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  sectionTitle: { ...fonts.title.md, fontSize: 15, lineHeight: 18, color: colors.text, textTransform: 'uppercase' },
+  sectionSubtitle: { marginTop: 2, ...fonts.meta.sm, color: colors.textMuted },
+  refreshButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.card,
+    backgroundColor: colors.surface,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    minWidth: 72,
+    alignItems: 'center',
+  },
+  refreshText: { ...fonts.caption.sm, color: colors.primary },
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.card,
+    padding: spacing.md,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    gap: spacing.sm,
+  },
+  cardTitle: { ...fonts.caption.sm, color: colors.text },
+  statusText: { ...fonts.meta.sm, color: colors.textSecondary },
+  metricRow: { flexDirection: 'row', gap: spacing.md },
   metric: { flex: 1, minWidth: 0 },
-  metricLabel: { fontSize: 11, color: colors.textMuted },
-  metricValue: { marginTop: 2, fontSize: 16, fontWeight: '700', color: colors.text },
-  detailText: { fontSize: 12, color: colors.textMuted },
-  boundaryText: { fontSize: 12, fontWeight: '700', color: colors.primary },
-  track: { height: 8, borderRadius: 999, backgroundColor: colors.glass, overflow: 'hidden' },
-  fill: { height: '100%', borderRadius: 999, backgroundColor: colors.swarm },
+  metricLabel: { ...fonts.caption.sm, color: colors.textMuted },
+  metricValue: { marginTop: 2, ...fonts.meta.md, color: colors.text },
+  detailText: { ...fonts.meta.sm, color: colors.textMuted },
+  boundaryText: { ...fonts.meta.sm, color: colors.primary },
+  track: { height: 2, borderRadius: 0, backgroundColor: colors.bgActive, overflow: 'hidden' },
+  fill: { height: '100%', borderRadius: 0, backgroundColor: colors.primary },
 })

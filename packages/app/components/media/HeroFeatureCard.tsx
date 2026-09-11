@@ -1,10 +1,10 @@
 import { memo } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
-import { Ionicons } from '@expo/vector-icons'
-import { colors } from '@/lib/colors'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 import { formatContentBadge } from '@/lib/formatters'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
+import { Button, Tag, Eyebrow, Meta } from '@/components/primitives'
 
 export interface MediaCockpitItem {
   id?: string | number | null
@@ -55,7 +55,6 @@ export interface HeroFeatureCardProps {
   availabilityLabel?: string | null
 }
 
-
 function pickString(...values: Array<unknown>): string | null {
   for (const value of values) {
     if (typeof value === 'string' && value.trim().length > 0) return value.trim()
@@ -99,6 +98,14 @@ function getReleaseYear(item: MediaCockpitItem): string | null {
   return Number.isFinite(parsed) && parsed > 1800 ? String(Math.trunc(parsed)) : null
 }
 
+function formatDuration(seconds?: number): string | null {
+  if (typeof seconds !== 'number' || seconds <= 0) return null
+  const hours = Math.floor(seconds / 3600)
+  const mins = Math.floor((seconds % 3600) / 60)
+  if (hours > 0) return `${hours}:${mins.toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`
+  return `${mins}:${(seconds % 60).toString().padStart(2, '0')}`
+}
+
 function HeroFeatureCardComponent({
   item,
   onPress,
@@ -113,6 +120,7 @@ function HeroFeatureCardComponent({
   const badge = getEntityBadge(item)
   const thumbnailUrl = getArtwork(item)
   const duration = getDuration(item)
+  const durationLabel = formatDuration(duration)
   const channelInitial = title.charAt(0).toUpperCase()
   const releaseYear = getReleaseYear(item)
   return (
@@ -124,14 +132,17 @@ function HeroFeatureCardComponent({
     >
       <View style={styles.mediaFrame}>
         <ThumbnailImage thumbnailUrl={thumbnailUrl} duration={duration} channelInitial={channelInitial} style={styles.thumbnail} />
-        <View pointerEvents="none" style={styles.scrimTop} />
-        <View pointerEvents="none" style={styles.scrimBottom} />
+        {durationLabel && (
+          <View pointerEvents="none" style={styles.durationBadge}>
+            <Tag label={durationLabel} tone="inverse" />
+          </View>
+        )}
       </View>
 
       <View style={styles.body}>
         <View style={styles.metaRow}>
-          {badge ? <Text style={styles.badge} numberOfLines={1}>{badge}</Text> : null}
-          {releaseYear ? <Text style={styles.meta} numberOfLines={1}>{releaseYear}</Text> : null}
+          {badge ? <Eyebrow tone="accent">{badge}</Eyebrow> : null}
+          {releaseYear ? <Meta tone="secondary">{releaseYear}</Meta> : null}
         </View>
         <Text style={styles.title} numberOfLines={2}>{title}</Text>
         {subtitle ? (
@@ -143,12 +154,24 @@ function HeroFeatureCardComponent({
             <Text style={styles.subtitle} numberOfLines={1}>{subtitle}</Text>
           )
         ) : null}
-        <View style={playable ? styles.playButton : styles.pendingButton}>
-          <Ionicons name={playable ? 'play' : 'cloud-download-outline'} size={16} color={playable ? colors.onPrimary : colors.text} />
-          <Text style={playable ? styles.playText : styles.pendingText}>
-            {playable ? 'Play' : (availabilityLabel || 'Awaiting replication')}
-          </Text>
+        <View style={styles.buttonRow}>
+          <Button 
+            label="PLAY" 
+            variant={playable ? 'primary' : 'secondary'} 
+            size="md"
+            onPress={onPress}
+            disabled={!playable}
+          />
+          <Button 
+            label="DETAILS" 
+            variant="secondary" 
+            size="md"
+            onPress={onPress}
+          />
         </View>
+        {!playable && availabilityLabel && (
+          <Text style={styles.pendingLabel}>{availabilityLabel}</Text>
+        )}
       </View>
     </Pressable>
   )
@@ -157,43 +180,13 @@ function HeroFeatureCardComponent({
 export const HeroFeatureCard = memo(HeroFeatureCardComponent)
 
 const styles = StyleSheet.create({
-  pendingButton: {
-    marginTop: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    borderRadius: 999,
-    backgroundColor: colors.bgElevated,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-  },
-  pendingText: {
-    color: colors.text,
-    fontFamily: fonts.headingMedium,
-    fontSize: 14,
-  },
   card: {
-    marginHorizontal: 16,
-    borderRadius: 16,
+    marginHorizontal: spacing.lg,
+    borderRadius: radius.card,
     overflow: 'hidden',
-    backgroundColor: colors.bgElevated,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    shadowColor: '#000000',
-    shadowOpacity: 0.32,
-    shadowRadius: 22,
-    shadowOffset: { width: 0, height: 14 },
-    elevation: 6,
-  },
-  scrimTop: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    backgroundColor: 'rgba(0,0,0,0.18)',
+    backgroundColor: colors.surface,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
   },
   mediaFrame: {
     position: 'relative',
@@ -202,71 +195,45 @@ const styles = StyleSheet.create({
   thumbnail: {
     borderRadius: 0,
   },
-  scrimBottom: {
+  durationBadge: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 96,
-    backgroundColor: 'rgba(0,0,0,0.36)',
+    bottom: spacing.md,
+    right: spacing.md,
+    zIndex: 2,
   },
   body: {
-    paddingHorizontal: 18,
-    paddingTop: 16,
-    paddingBottom: 18,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.lg,
+    gap: spacing.md,
   },
   metaRow: {
     minHeight: 20,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginBottom: 6,
-  },
-  badge: {
-    color: colors.onPrimary,
-    backgroundColor: colors.primary,
-    borderRadius: 999,
-    overflow: 'hidden',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  meta: {
-    color: colors.textMuted,
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
+    gap: spacing.md,
+    marginBottom: spacing.sm,
   },
   title: {
+    ...fonts.title.md,
     color: colors.text,
-    fontFamily: fonts.heading,
-    fontSize: 26,
-    lineHeight: 31,
   },
   subtitle: {
+    ...fonts.body.sm,
     color: colors.textMuted,
-    fontSize: 14,
-    marginTop: 7,
+    marginTop: spacing.sm,
   },
   subtitleAction: {
     color: colors.swarm,
   },
-  playButton: {
-    alignSelf: 'flex-start',
-    marginTop: 16,
+  buttonRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    borderRadius: 999,
-    backgroundColor: colors.primary,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    gap: spacing.md,
+    marginTop: spacing.md,
   },
-  playText: {
-    color: colors.onPrimary,
-    fontSize: 14,
-    fontWeight: '800',
+  pendingLabel: {
+    ...fonts.meta.sm,
+    color: colors.textMuted,
+    marginTop: spacing.sm,
   },
 })

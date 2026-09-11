@@ -1087,6 +1087,7 @@ async function setupScopedNetworkStack ({
     blockOffload: ctx.blockOffload,
     availabilityEvidenceStore: ctx.availabilityEvidenceStore,
     networkId: network.networkId,
+    peerAddresses: network.peerAddresses,
     bootstrapEnabled: network.bootstrapEnabled,
     trustedBootstrapSigners: network.trustedBootstrapSigners,
     trustedBootstrapRootIds: network.trustedBootstrapRootIds,

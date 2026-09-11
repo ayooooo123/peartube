@@ -373,7 +373,7 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
     return null
   }
 
-  async function handleJobError(error, latest, id, entry) {
+  async function handleJobError(error, latest, id, entry, assetReadyForVerification) {
     if (entry.cancelled) {
       const cancelled = await terminal(latest, 'cancelled', 'CANCELLED', false)
       await discard(cancelled, error)
@@ -381,7 +381,7 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       await sourceGrants.revoke({ acquisitionId: id, principal: latest.principalId, reason: error }).catch(() => {})
       return cancelled
     }
-    const code = errorCode(error, latest?.state)
+    const code = errorCode(error, assetReadyForVerification ? latest?.state : 'acquiring')
     const recoverable = error?.recoverable !== false && !PERMANENT_ERRORS.has(code)
     const failed = await terminal(latest, 'failed', code, recoverable)
     if (!recoverable || RESET_PREFIX_ERRORS.has(code)) {
@@ -395,6 +395,7 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
   async function runJob (id, entry) {
     let job = await store.get(id)
     let reader = null
+    let assetReadyForVerification = false
     try {
       if (!job || job.state !== 'queued') return job
       const policyValue = await currentPolicy()
@@ -412,7 +413,12 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       const describedIdentity = prepared.describedIdentity
       if (job.expectedIdentity === null) job = await progress(job, { expectedIdentity: describedIdentity })
       const resume = resolveResumeState(reader, job, describedIdentity, isStagedComplete)
-      const acquired = await provider.acquire({ acquisitionId: id, request: job.request, reader, resume, budget: policyValue, sourceExpensive, priorBytes: Math.max(job.sourceBytesRead, job.sourceBytesAccepted, job.bytesAcquired, job.stagingBytes), signal: entry.controller.signal, onProgress: async counters => {
+      const onSourceComplete = async () => {
+        const latest = await store.get(id)
+        if (latest?.state !== 'acquiring') return
+        job = await change(id, { expectedVersion: latest.version, from: 'acquiring', to: 'verifying' })
+      }
+      const acquired = await provider.acquire({ acquisitionId: id, request: job.request, reader, resume, budget: policyValue, sourceExpensive, priorBytes: Math.max(job.sourceBytesRead, job.sourceBytesAccepted, job.bytesAcquired, job.stagingBytes), signal: entry.controller.signal, onSourceComplete, onProgress: async counters => {
         const latest = await store.get(id); if (!latest || latest.state !== 'acquiring') return
         const patch = { sourceBytesRead: counters.sourceBytesRead ?? counters.bytesAcquired, sourceBytesAccepted: counters.sourceBytesAccepted ?? counters.bytesAcquired, bytesAcquired: counters.bytesAcquired, stagingBytes: counters.stagingBytes ?? latest.stagingBytes }
         ledger.record(id, { sourceBytesRead: patch.sourceBytesRead, sourceBytesAccepted: patch.sourceBytesAccepted, stagingBytes: patch.stagingBytes }, { policy: policyValue }); job = await progress(latest, patch)
@@ -422,13 +428,15 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       const acquisitionPatch = { sourceBytesRead: bytes, sourceBytesAccepted: bytes, bytesAcquired: bytes, stagingBytes: acquired?.stagingBytes ?? job.stagingBytes, verifiedPrefix: { byteLength: bytes, identity: describedIdentity } }
       ledger.record(id, { sourceBytesRead: bytes, sourceBytesAccepted: bytes, stagingBytes: acquisitionPatch.stagingBytes }, { policy: policyValue })
       job = await progress(await store.get(id), acquisitionPatch)
+      if (job.state === 'acquiring') await onSourceComplete()
+      assetReadyForVerification = true
       return await finalizeAcquisition({ job, asset, sourceDescription: description, sourceIdentity: describedIdentity, signal: entry.controller.signal, policyValue, publish: job.isRemote !== true })
     } catch (error) {
       if (closing || entry.closing) return store.get(id)
       const latest = await store.get(id) || job
       const recovered = await recoverPublishingJob(latest, id)
       if (recovered) return recovered
-      return handleJobError(error, latest, id, entry)
+      return handleJobError(error, latest, id, entry, assetReadyForVerification)
     } finally {
       await reader?.close?.().catch(() => {})
       if (active.get(id) === entry) active.delete(id)
@@ -546,7 +554,7 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
       // job, so a later acceptTransferredResult can resume the nonterminal state.
       throw error
     }
-    return handleJobError(error, latest, acquisitionId, entry)
+    return handleJobError(error, latest, acquisitionId, entry, true)
   }
 
   async function runTransferredImport ({ entry, job, validatedIdentity, asset, peerId, signal }) {

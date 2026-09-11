@@ -1,4 +1,5 @@
 import b4a from 'b4a'
+import { createAbortController } from '../abort-controller.js'
 
 import { normalizeAssetCoreRefV2 } from '../assets/rendition.js'
 import {
@@ -365,7 +366,7 @@ export function createMultiPeerScheduler(options = {}) {
 
     const start = (peerId, reservations, inheritedRunSlot = null) => {
       attempted.add(peerId)
-      const controller = new AbortController()
+      const controller = createAbortController()
       let promise
       promise = executeAttempt(
         run,
@@ -433,7 +434,7 @@ export function createMultiPeerScheduler(options = {}) {
   }
 
   async function executeRuns(runs, context) {
-    const wave = new AbortController()
+    const wave = createAbortController()
     const forwardAbort = () => wave.abort(context.rootSignal.reason || abortError())
     if (context.rootSignal.aborted) forwardAbort()
     else context.rootSignal.addEventListener('abort', forwardAbort, { once: true })
@@ -573,6 +574,7 @@ export function createMultiPeerScheduler(options = {}) {
   }) {
     const activePeerIds = normalizePeerIds(await transport.getActiveAssetPeerIds({
       assetId: coreRef.assetId,
+      waitForPeers: true,
       signal: rootSignal,
     }))
     pruneInactivePeers(activePeerIds)
@@ -630,7 +632,9 @@ export function createMultiPeerScheduler(options = {}) {
     if (signal?.aborted) throw abortError()
     if (request.materialize && request.byteEnd - request.byteStart > maxInFlightBytes) return unavailable('BUDGET_EXHAUSTED')
 
-    const root = new AbortController()
+    const startedAt = now()
+    const requestDeadline = startedAt + request.deadlineMs
+    const root = createAbortController()
     let abortKind = null
     const callerAbort = () => { abortKind = 'caller'; root.abort(abortError()) }
     signal?.addEventListener?.('abort', callerAbort, { once: true })
@@ -644,8 +648,6 @@ export function createMultiPeerScheduler(options = {}) {
       ? { generation: prefetchGeneration, start: request.byteStart, end: request.byteEnd, controller: root }
       : null
     if (trackedPrefetch) activePrefetch.add(trackedPrefetch)
-    const startedAt = now()
-    const requestDeadline = startedAt + request.deadlineMs
 
     try {
       const missing = await findMissingAssetBlocks(request.startBlock, request.endBlock, coreRef.assetId, root.signal)

@@ -104,6 +104,30 @@ test('provider subsystem acquires, verifies, and publishes one private-grant sou
     rmSync(directory, { recursive: true, force: true })
   })
 
+  let releaseCopy
+  let copying = false
+  const copyGate = new Promise(resolve => { releaseCopy = resolve })
+  const get = store.get.bind(store)
+  store.get = options => {
+    const core = get(options)
+    if (options?.manifest) {
+      const ready = core.ready.bind(core)
+      let patched = false
+      core.ready = async () => {
+        await ready()
+        if (patched) return
+        patched = true
+        const copyPrologue = core.core.copyPrologue.bind(core.core)
+        core.core.copyPrologue = async sourceState => {
+          copying = true
+          await copyGate
+          return copyPrologue(sourceState)
+        }
+      }
+    }
+    return core
+  }
+
   let publishedAsset = null
   let publishedArtwork = null
   const subsystem = await createProviderSubsystem({
@@ -158,6 +182,7 @@ test('provider subsystem acquires, verifies, and publishes one private-grant sou
     now: Date.now,
   })
   t.teardown(() => subsystem.close())
+  t.teardown(() => releaseCopy())
 
   const resolution = subsystem.issueLocalResolution({
     title: 'Smoke title',
@@ -187,6 +212,14 @@ test('provider subsystem acquires, verifies, and publishes one private-grant sou
       expiresAt: Date.now() + 10_000,
     },
   })
+  const duringCopy = await eventually(
+    () => subsystem.service.getAcquisition({ acquisitionId: queued.acquisitionId, principal }),
+    acquisition => copying || ['completed', 'failed'].includes(acquisition.state),
+  )
+  t.is(duringCopy.state, 'verifying', 'source completion does not hide a pending disk copy')
+  t.is(duringCopy.bytesAcquired, SOURCE.byteLength)
+  t.is(duringCopy.publicationId, null, 'an unfinished copy is not a playable publication')
+  releaseCopy()
 
   const completed = await eventually(
     () => subsystem.service.getAcquisition({ acquisitionId: queued.acquisitionId, principal }),
@@ -200,7 +233,7 @@ test('provider subsystem acquires, verifies, and publishes one private-grant sou
 
   const core = store.get({ key: b4a.from(completed.assetId, 'hex') })
   await core.ready()
-  t.ok(core.length > 0)
+  t.alike(await core.get(0), SOURCE, 'the completed asset holds the acquired bytes')
   await core.close()
 })
 

@@ -8,6 +8,9 @@ import { isPlaybackErrorCode, playbackErrorMessage, playbackErrorRetry } from '.
 import { parseBlobRef } from '../blob-utils.js'
 import { isArtworkRendition, normalizeAssetCoreRefV2 } from '../assets/rendition.js'
 import { ASSET_BLOCK_SIZE } from '../assets/static-core.js'
+import { createMultiPeerScheduler } from '../playback/multi-peer-scheduler.js'
+import { MAX_ASSET_BLOCKS_PER_REQUEST } from '../network/frame.js'
+import { createAbortController } from '../abort-controller.js'
 import b4a from 'b4a'
 
 const DEFAULT_PAGE_LIMIT = 50
@@ -637,12 +640,11 @@ async function openRenditionCore(corestore, blobsCoreKey) {
   }
 }
 /**
- * Walk a blob's blocks and yield exactly the requested byte window. `core.get`
- * waits on replication, which is what lets a caller range-request a rendition
- * this device has not finished pulling: the bytes arrive as they land instead
- * of the request failing because they are not local yet.
+ * Walk a blob's blocks and yield exactly the requested byte window. Local
+ * blocks are read immediately; a cold block is fetched through the shared
+ * asset-topic scheduler before it is read.
  */
-async function* readBlobRange(core, blob, start, length) {
+async function* readBlobRange(core, blob, start, length, fetchBlocks, signal) {
   let remaining = length
   let index = blob.blockOffset
   let offset = 0
@@ -662,7 +664,15 @@ async function* readBlobRange(core, blob, start, length) {
   }
   const blockEnd = blob.blockOffset + blob.blockLength
   while (remaining > 0 && index < blockEnd) {
-    let block = await core.get(index)
+    if (signal?.aborted) throw signal.reason
+    if (!await core.has(index)) {
+      await fetchBlocks?.(index, Math.min(
+        blockEnd,
+        index + MAX_ASSET_BLOCKS_PER_REQUEST,
+        index + Math.ceil((offset + remaining) / ASSET_BLOCK_SIZE),
+      ))
+    }
+    let block = await core.get(index, { wait: false })
     if (!block || block.byteLength === 0) throw new Error(`rendition block ${index} is unavailable`)
     if (offset > 0) {
       block = block.subarray(offset)
@@ -675,10 +685,35 @@ async function* readBlobRange(core, blob, start, length) {
   }
 }
 
-function buildMediaRenditionReader({ publicationId, renditionId, rendition, ref, core }) {
+function buildMediaRenditionReader({ publicationId, renditionId, rendition, ref, core, scopedNetwork, signal: inputSignal }) {
   const byteLength = ref.blob.byteLength || schemaUint(rendition.core?.byteLength) || 0
   const assetId = rendition.core?.assetId || ref.assetId
   const contentType = typeof rendition.format === 'string' && rendition.format ? rendition.format : 'video/mp4'
+  const controller = createAbortController()
+  const abort = () => controller.abort()
+  if (inputSignal?.aborted) abort()
+  else inputSignal?.addEventListener?.('abort', abort, { once: true })
+  let scheduler = null
+  const fetchBlocks = async (start, end) => {
+    scheduler ||= createMultiPeerScheduler({
+      coreRef: rendition.core,
+      session: scopedNetwork.getActiveAssetSession({ assetId }),
+      transport: scopedNetwork,
+    })
+    const result = await scheduler.requestRange({
+      assetId,
+      byteStart: start * ASSET_BLOCK_SIZE,
+      byteEnd: Math.min(end * ASSET_BLOCK_SIZE, rendition.core.byteLength),
+      deadlineMs: 10_000,
+      materialize: false,
+      signal: controller.signal,
+    })
+    if (result.status !== 'ok') {
+      const failure = new Error('verified rendition bytes are unavailable')
+      failure.code = result.errorCode
+      throw failure
+    }
+  }
   return {
     success: true,
     publicationId,
@@ -687,13 +722,16 @@ function buildMediaRenditionReader({ publicationId, renditionId, rendition, ref,
     contentType,
     byteLength,
     read({ start = 0, length = byteLength - start } = {}) {
-      return readBlobRange(core, ref.blob, start, length)
+      return readBlobRange(core, ref.blob, start, length, fetchBlocks, controller.signal)
     },
     async close() {
+      abort()
+      inputSignal?.removeEventListener?.('abort', abort)
       try { await core.close?.() } catch { /* best effort */ }
     },
   }
 }
+
 
 function resolveOffloadCapability(blockOffload, corestore, core) {
   const isOffloaded = Boolean(
@@ -1527,7 +1565,15 @@ export function createMediaGraphApi(options = {}) {
         return error('MEDIA_RENDITION_UNAVAILABLE', coreResult.error)
       }
 
-      return buildMediaRenditionReader({ publicationId, renditionId, rendition, ref, core: coreResult.core })
+      return buildMediaRenditionReader({
+        publicationId,
+        renditionId,
+        rendition,
+        ref,
+        core: coreResult.core,
+        scopedNetwork,
+        signal: request.signal,
+      })
     },
 
     /**

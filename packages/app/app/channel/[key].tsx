@@ -13,16 +13,22 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useApp } from '../_layout'
-import { Feather } from '@expo/vector-icons'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import * as ImagePicker from 'expo-image-picker'
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
+import { Feather } from '@expo/vector-icons'
 import { fetchThumbnailUrlWithRetry, type ThumbnailRPC } from '@/lib/thumbnail'
-import { NativeButton, NativeTextInput } from '@/components/native-ui'
+import { NativeTextInput } from '@/components/native-ui'
 import { rpc } from '@peartube/platform/rpc'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
-import { colors } from '@/lib/colors'
+import {
+  Button,
+  EmptyState,
+  IconButton,
+  Tag,
+} from '@/components/primitives'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 import { formatContentBadge } from '@/lib/formatters'
 import * as haptics from '@/lib/haptics'
@@ -30,6 +36,7 @@ import { withChannelPageTimeout } from '@/lib/channel-page'
 import { createChannelCatalogState } from '@/lib/channel-catalog-state.js'
 import { createChannelPlaybackPayload } from '@/lib/channel-playback-handoff.js'
 import { CHANNEL_ARTWORK_RESOLUTION_MS, resolveArtworkCandidates } from '@/lib/channel-artwork.js'
+
 
 type ChannelProfile = {
   name?: string
@@ -456,14 +463,15 @@ function PressableFeedback({
   children,
   className,
   enableMotion = true,
+  style,
   ...props
 }: PressableProps & { enableMotion?: boolean }) {
   const scale = useSharedValue(1)
   const opacity = useSharedValue(1)
 
   const handlePressIn = useCallback(() => {
-    scale.value = withSpring(0.9, { damping: 15, stiffness: 400 })
-    opacity.value = withSpring(0.7, { damping: 15, stiffness: 400 })
+    scale.value = withSpring(0.97, { damping: 15, stiffness: 400 })
+    opacity.value = withSpring(0.85, { damping: 15, stiffness: 400 })
   }, [opacity, scale])
 
   const handlePressOut = useCallback(() => {
@@ -485,7 +493,7 @@ function PressableFeedback({
       className={className}
       onPressIn={enableMotion ? handlePressIn : undefined}
       onPressOut={enableMotion ? handlePressOut : undefined}
-      style={animatedStyle}
+      style={[style, animatedStyle]}
     >
       {children}
     </AnimatedPressable>
@@ -515,27 +523,24 @@ function ChannelVideoCard({
   onPress: () => void
   onThumbnailError?: () => void
 }) {
+  const badge = formatContentBadge(video)
+  const metaParts = [
+    badge || null,
+    channelName,
+    formatVideoTime(video.sourcePublishedAt || video.originalAirDate),
+  ].filter(Boolean)
+
   return (
-    <PressableFeedback className="mb-4" onPress={onPress} accessibilityRole="button" enableMotion={false}>
+    <PressableFeedback onPress={onPress} accessibilityRole="button" enableMotion={false} style={styles.videoCard}>
       <ThumbnailImage
         thumbnailUrl={video.thumbnailUrl}
         duration={video.duration}
         channelInitial={channelName.charAt(0).toUpperCase() || 'P'}
         onError={onThumbnailError}
       />
-      <View className="flex-row mt-3 px-3">
-        <View className="w-10 h-10 rounded-full bg-pear-primary items-center justify-center mr-3">
-          <Text className="text-label font-semibold" style={{ color: colors.onPrimary }}>{channelName.charAt(0).toUpperCase() || 'P'}</Text>
-        </View>
-        <View className="flex-1">
-          <Text className="text-label text-pear-text" numberOfLines={2}>{video.title || 'Untitled video'}</Text>
-          <Text className="text-caption text-pear-text-secondary mt-1" numberOfLines={1}>
-            {(() => {
-              const badge = formatContentBadge(video)
-              return badge ? `${badge} · ` : ''
-            })()}{channelName} · {formatVideoTime(video.sourcePublishedAt || video.originalAirDate)}
-          </Text>
-        </View>
+      <View style={styles.videoCardBody}>
+        <Text style={styles.videoCardTitle} numberOfLines={2}>{video.title || 'Untitled video'}</Text>
+        <Text style={styles.videoCardMeta} numberOfLines={1}>{metaParts.join(' · ')}</Text>
       </View>
     </PressableFeedback>
   )
@@ -543,18 +548,18 @@ function ChannelVideoCard({
 
 function ChannelPageSkeleton() {
   return (
-    <View className="px-5 pt-4 pb-10">
-      <View className="flex-row items-center mb-5">
-        <Skeleton className="w-20 h-20 rounded-full bg-pear-bg-card" />
-        <View className="flex-1 ml-4">
-          <Skeleton className="h-6 w-3/5 rounded-md bg-pear-bg-card mb-2" />
-          <Skeleton className="h-4 w-full rounded-md bg-pear-bg-card mb-2" />
-          <Skeleton className="h-4 w-4/5 rounded-md bg-pear-bg-card" />
+    <View style={styles.skeletonRoot}>
+      <View style={styles.skeletonHero}>
+        <Skeleton style={styles.skeletonAvatar} />
+        <View style={styles.skeletonCopy}>
+          <Skeleton style={styles.skeletonTitle} />
+          <Skeleton style={styles.skeletonLine} />
+          <Skeleton style={styles.skeletonLineShort} />
         </View>
       </View>
-      <Skeleton className="h-56 w-full rounded-xl bg-pear-bg-card mb-4" />
-      <Skeleton className="h-56 w-full rounded-xl bg-pear-bg-card mb-4" />
-      <Skeleton className="h-56 w-full rounded-xl bg-pear-bg-card" />
+      <Skeleton style={styles.skeletonCard} />
+      <Skeleton style={styles.skeletonCard} />
+      <Skeleton style={styles.skeletonCard} />
     </View>
   )
 }
@@ -587,12 +592,13 @@ function ChannelErrorView({
   onRetry: () => void
 }) {
   return (
-    <View className="flex-1 px-8 items-center justify-center">
-      <Feather name="alert-circle" size={36} color={colors.error} />
-      <Text className="text-body text-pear-text mt-4 text-center" selectable>{error}</Text>
-      <PressableFeedback onPress={onRetry} className="mt-5 bg-pear-primary rounded-lg px-5 py-3" accessibilityRole="button">
-        <Text className="text-label" style={{ color: colors.onPrimary }}>Retry</Text>
-      </PressableFeedback>
+    <View style={styles.centeredState}>
+      <EmptyState
+        icon="alert-circle"
+        title="Channel unavailable"
+        body={error}
+        action={{ label: 'Retry', onPress: onRetry }}
+      />
     </View>
   )
 }
@@ -640,38 +646,34 @@ function ChannelHeroActions({
 }) {
   if (isOwner) {
     return (
-      <PressableFeedback onPress={onEditPress} className="mt-5 rounded-full px-4 py-3 flex-row items-center justify-center gap-2" accessibilityRole="button">
-        <Feather name="edit-2" size={16} color={colors.text} />
-        <Text style={styles.editButtonText}>Edit Channel</Text>
-      </PressableFeedback>
+      <Button
+        label="Edit Channel"
+        variant="secondary"
+        icon="edit-2"
+        onPress={onEditPress}
+        style={styles.heroActionButton}
+      />
     )
   }
   return (
     <View style={styles.heroActions}>
-      <Pressable
+      <Button
+        label={isSubscribed ? 'Subscribed' : 'Subscribe'}
+        variant={isSubscribed ? 'secondary' : 'primary'}
+        icon={isSubscribed ? 'check' : 'user-plus'}
         onPress={onToggleSubscribe}
         disabled={subscribeBusy}
-        accessibilityRole="button"
+        loading={subscribeBusy}
         accessibilityLabel={isSubscribed ? 'Unsubscribe' : 'Subscribe'}
-        style={({ pressed }) => [
-          styles.subscribeButton,
-          isSubscribed && styles.subscribeButtonActive,
-          (pressed || subscribeBusy) && { opacity: 0.75 },
-        ]}
-      >
-        <Feather name={isSubscribed ? 'check' : 'user-plus'} size={15} color={isSubscribed ? colors.textSecondary : colors.onPrimary} />
-        <Text style={[styles.subscribeLabel, isSubscribed && styles.subscribeLabelActive]}>
-          {isSubscribed ? 'Subscribed' : 'Subscribe'}
-        </Text>
-      </Pressable>
-      <Pressable
+        style={styles.subscribeButton}
+      />
+      <IconButton
+        icon="anchor"
         onPress={onTogglePin}
-        accessibilityRole="button"
         accessibilityLabel={isPinned ? 'Stop keeping this channel online' : 'Keep this channel online'}
-        style={({ pressed }) => [styles.pinButton, isPinned && styles.pinButtonActive, pressed && { opacity: 0.75 }]}
-      >
-        <Feather name="anchor" size={15} color={isPinned ? colors.onPrimary : colors.textSecondary} />
-      </Pressable>
+        active={isPinned}
+        variant={isPinned ? 'primary' : 'outline'}
+      />
     </View>
   )
 }
@@ -775,17 +777,21 @@ function ChannelHeaderView({
         </View>
 
         <View style={styles.heroCopy}>
+          <Text style={styles.channelEyebrow}>
+            CHANNEL · {channelKey.slice(0, 12) || 'UNKNOWN'}
+          </Text>
           <View style={styles.profileTitleRow}>
             <Text style={styles.channelTitle} numberOfLines={2} selectable>{channelDisplayName}</Text>
-            {catalogView?.badge ? <Text style={styles.profileBadge}>{catalogView.badge}</Text> : null}
+            {catalogView?.badge ? <Tag label={catalogView.badge} tone="inverse" /> : null}
           </View>
           <Text style={styles.channelDescription} numberOfLines={3} selectable>{channelDescription}</Text>
           <View style={styles.heroMetaRow}>
             <View style={styles.videoCountPill}>
-              <Feather name="film" size={13} color={colors.textSecondary} />
-              <Text style={styles.videoCountText}>{channelVideoCountText}</Text>
+              <Text style={styles.videoCountText}>{channelVideoCountText.toUpperCase()}</Text>
             </View>
-            <Text style={styles.channelKeyText}>{channelKey.slice(0, 12)}...</Text>
+            {catalogView?.badge ? (
+              <Text style={styles.channelKeyText}>{String(catalogView.badge).toUpperCase()}</Text>
+            ) : null}
           </View>
         </View>
 
@@ -811,10 +817,8 @@ function ChannelHeaderView({
       </View>
       {selectedPageError ? (
         <View style={styles.inlineError}>
-          <Text className="text-body text-pear-text-secondary" selectable>{selectedPageError}</Text>
-          <PressableFeedback onPress={onRetryGroup} className="mt-3 self-start bg-pear-primary rounded-lg px-4 py-2" accessibilityRole="button">
-            <Text className="text-label" style={{ color: colors.onPrimary }}>Retry</Text>
-          </PressableFeedback>
+          <Text style={styles.inlineErrorText} selectable>{selectedPageError}</Text>
+          <Button label="Retry" variant="primary" size="sm" onPress={onRetryGroup} style={styles.inlineRetry} />
         </View>
       ) : null}
     </>
@@ -844,53 +848,57 @@ function EditChannelModal({
   onClose: () => void
   onSave: () => void
 }) {
-  const nativeFormButtonStyle = { flex: 1 }
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View className="flex-1 bg-black/70 justify-end">
-        <View className="bg-pear-bg-card rounded-t-3xl max-h-[90%] border-t border-pear-border">
-          <View className="px-5 py-4 border-b border-pear-border flex-row items-center justify-between">
-            <Text className="text-headline text-pear-text">Edit Channel</Text>
-            <PressableFeedback onPress={onClose} className="w-9 h-9 rounded-full bg-pear-bg-input items-center justify-center" accessibilityRole="button">
-              <Feather name="x" size={18} color={colors.text} />
-            </PressableFeedback>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalSheet}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Edit Channel</Text>
+            <IconButton icon="x" onPress={onClose} accessibilityLabel="Close" size={36} />
           </View>
 
           <ScrollView
             contentInsetAdjustmentBehavior="automatic"
             keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 20 }}
+            contentContainerStyle={styles.modalBody}
           >
-            <Text className="text-label text-pear-text mb-1.5">Channel Name</Text>
+            <Text style={styles.fieldLabel}>Channel Name</Text>
             <NativeTextInput
               value={editName}
               onChangeText={onNameChange}
               placeholderTextColor={colors.textMuted}
-              className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
+              style={styles.fieldInput}
             />
 
-            <View className="mt-4">
-              <Text className="text-label text-pear-text mb-1.5">Description</Text>
+            <View style={styles.fieldBlock}>
+              <Text style={styles.fieldLabel}>Description</Text>
               <NativeTextInput
                 value={editDescription}
                 onChangeText={onDescriptionChange}
                 placeholderTextColor={colors.textMuted}
                 multiline
                 textAlignVertical="top"
-                className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text min-h-28"
+                style={[styles.fieldInput, styles.fieldMultiline]}
               />
             </View>
 
-            <View className="mt-4">
-              <NativeButton label="Choose Avatar" onPress={onPickAvatar} variant="outlined" style={nativeFormButtonStyle} />
+            <View style={styles.fieldBlock}>
+              <Button label="Choose Avatar" onPress={onPickAvatar} variant="secondary" block />
             </View>
 
-            {saveError ? <Text className="text-pear-error text-caption mt-3">{saveError}</Text> : null}
+            {saveError ? <Text style={styles.saveError}>{saveError}</Text> : null}
           </ScrollView>
 
-          <View className="px-5 py-4 border-t border-pear-border flex-row gap-3">
-            <NativeButton label="Cancel" onPress={onClose} disabled={isSaving} variant="outlined" style={nativeFormButtonStyle} />
-            <NativeButton label={isSaving ? 'Saving...' : 'Save'} onPress={onSave} disabled={isSaving} variant="filled" style={nativeFormButtonStyle} />
+          <View style={styles.modalActions}>
+            <Button label="Cancel" onPress={onClose} disabled={isSaving} variant="secondary" style={styles.modalActionButton} />
+            <Button
+              label={isSaving ? 'Saving...' : 'Save'}
+              onPress={onSave}
+              disabled={isSaving}
+              loading={isSaving}
+              variant="primary"
+              style={styles.modalActionButton}
+            />
           </View>
         </View>
       </View>
@@ -943,15 +951,12 @@ function ChannelLoadMoreFooter({
 }) {
   if (!nextCursor) return null
   return (
-    <Pressable
+    <Button
+      label={loadingMore ? 'Loading...' : 'Load more'}
       onPress={onLoadMore}
-      disabled={loadingMore}
-      accessibilityRole="button"
-      style={({ pressed }) => [styles.loadMoreButton, (pressed || loadingMore) && { opacity: 0.75 }]}
-    >
-      {loadingMore ? <ActivityIndicator size="small" color={colors.onPrimary} /> : null}
-      <Text style={styles.loadMoreLabel}>{loadingMore ? 'Loading...' : 'Load more'}</Text>
-    </Pressable>
+      loading={loadingMore}
+      style={styles.loadMoreButton}
+    />
   )
 }
 
@@ -1398,16 +1403,15 @@ export default function ChannelScreen() {
   }, [channelDisplayName, channelKey, channelPublicBeeKey, resolveCardArtwork, router, thumbnailCache])
 
   return (
-    <SafeAreaView style={styles.screen}>
+    <SafeAreaView style={styles.screen} edges={['top', 'left', 'right']}>
       <View style={styles.topBar}>
-        <PressableFeedback
+        <IconButton
+          icon="chevron-left"
           onPress={() => router.back()}
-          className="w-10 h-10 rounded-full items-center justify-center mr-3"
-          accessibilityRole="button"
           accessibilityLabel="Go back"
-        >
-          <Feather name="chevron-left" size={20} color={colors.text} />
-        </PressableFeedback>
+          variant="plain"
+          size={40}
+        />
         <Text style={styles.topBarTitle} numberOfLines={1}>Channel</Text>
       </View>
 
@@ -1456,6 +1460,7 @@ export default function ChannelScreen() {
     </SafeAreaView>
   )
 }
+
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
@@ -1464,246 +1469,340 @@ const styles = StyleSheet.create({
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: borderWidth.rule,
     borderBottomColor: colors.border,
-    backgroundColor: colors.bg,
-  },
-  seasonHeader: {
-    color: colors.text,
-    fontSize: 17,
-    fontWeight: '700',
-    letterSpacing: -0.2,
-    marginTop: 10,
-    marginBottom: 12,
+    gap: spacing.sm,
   },
   topBarTitle: {
+    ...fonts.title.md,
     color: colors.text,
-    fontSize: 18,
-    fontWeight: '600',
-    letterSpacing: -0.25,
+    textTransform: 'uppercase',
+    flex: 1,
+  },
+  seasonHeader: {
+    ...fonts.title.md,
+    color: colors.text,
+    textTransform: 'uppercase',
+    marginTop: spacing.md,
+    marginBottom: spacing.md,
   },
   scrollContent: {
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 34,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xxxl,
+  },
+  centeredState: {
+    flex: 1,
+    justifyContent: 'center',
   },
   hero: {
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    padding: 18,
-    overflow: 'hidden',
+    backgroundColor: colors.bg,
+    borderBottomWidth: borderWidth.rule,
+    borderBottomColor: colors.primary,
+    paddingBottom: spacing.lg,
+    gap: spacing.md,
   },
   avatarShell: {
-    width: 82,
-    height: 82,
-    borderRadius: 28,
-    backgroundColor: colors.primary,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
+    width: 72,
+    height: 72,
+    borderRadius: radius.card,
+    backgroundColor: colors.surface,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 16,
+    overflow: 'hidden',
   },
   avatarImage: {
     width: '100%',
     height: '100%',
-    borderRadius: 27,
+    borderRadius: radius.card,
   },
   avatarInitial: {
-    color: colors.onPrimary,
-    fontSize: 30,
-    fontFamily: fonts.heading,
+    ...fonts.title.lg,
+    color: colors.primary,
   },
   heroCopy: {
-    gap: 8,
+    gap: spacing.sm,
+  },
+  channelEyebrow: {
+    ...fonts.caption.sm,
+    color: colors.textMuted,
   },
   channelTitle: {
+    ...fonts.title.xl,
     color: colors.text,
-    fontSize: 28,
-    lineHeight: 33,
-    fontFamily: fonts.heading,
-    letterSpacing: -0.65,
+    flexShrink: 1,
   },
   channelDescription: {
+    ...fonts.body.sm,
     color: colors.textSecondary,
-    fontSize: 14,
-    lineHeight: 20,
   },
   heroMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 4,
+    gap: spacing.sm,
+    marginTop: spacing.xs,
   },
   videoCountPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: colors.bgElevated,
-    borderWidth: 1,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    borderWidth: borderWidth.hairline,
     borderColor: colors.border,
   },
   videoCountText: {
+    ...fonts.meta.xs,
     color: colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '600',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
   channelKeyText: {
+    ...fonts.meta.xs,
     color: colors.textMuted,
-    fontSize: 12,
-  },
-  editButtonText: {
-    color: colors.text,
-    fontSize: 14,
-    fontWeight: '600',
+    letterSpacing: 0.8,
   },
   heroActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    marginTop: 18,
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  heroActionButton: {
+    marginTop: spacing.sm,
+    alignSelf: 'flex-start',
   },
   subscribeButton: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 7,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: colors.primary,
-  },
-  subscribeButtonActive: {
-    backgroundColor: colors.glass,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-  },
-  subscribeLabel: {
-    color: colors.onPrimary,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  subscribeLabelActive: {
-    color: colors.textSecondary,
-  },
-  pinButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.glass,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-  },
-  pinButtonActive: {
-    backgroundColor: colors.swarm,
-    borderColor: colors.swarm,
   },
   bannerImage: {
     width: '100%',
-    height: 150,
-    borderRadius: 20,
-    marginBottom: 12,
-    backgroundColor: colors.bgElevated,
+    height: 140,
+    borderRadius: radius.card,
+    marginBottom: spacing.md,
+    backgroundColor: colors.surface,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
   },
   profileTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 8,
-  },
-  profileBadge: {
-    color: colors.onPrimary,
-    backgroundColor: colors.primary,
-    borderRadius: 999,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    fontSize: 11,
-    fontWeight: '700',
-    overflow: 'hidden',
+    gap: spacing.sm,
   },
   tabRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
-    paddingTop: 18,
+    gap: spacing.md,
+    marginTop: spacing.xl,
+    borderBottomWidth: borderWidth.rule,
+    borderBottomColor: colors.border,
   },
   tabButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
+    gap: spacing.sm,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: spacing.md,
+    marginBottom: -borderWidth.rule,
+    borderBottomWidth: borderWidth.rule,
+    borderBottomColor: 'transparent',
   },
   tabButtonActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
+    borderBottomColor: colors.primary,
   },
   tabLabel: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '600',
+    ...fonts.caption.sm,
+    color: colors.textMuted,
   },
   tabLabelActive: {
-    color: colors.onPrimary,
+    color: colors.primary,
   },
   tabCount: {
+    ...fonts.meta.xs,
     color: colors.textMuted,
-    fontSize: 11,
   },
   sectionHeading: {
-    paddingTop: 24,
-    paddingBottom: 12,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.md,
+    borderLeftWidth: borderWidth.rule,
+    borderLeftColor: colors.primary,
+    paddingLeft: spacing.md,
   },
   sectionTitle: {
+    ...fonts.title.md,
     color: colors.text,
-    fontSize: 20,
-    fontFamily: fonts.heading,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   inlineError: {
-    marginBottom: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
+    marginBottom: spacing.md,
+    borderRadius: radius.card,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.error,
     backgroundColor: colors.surface,
-    padding: 14,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  inlineErrorText: {
+    ...fonts.body.sm,
+    color: colors.textSecondary,
+  },
+  inlineRetry: {
+    alignSelf: 'flex-start',
   },
   emptyState: {
     minHeight: 180,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 12,
-    borderWidth: 1,
+    borderRadius: radius.card,
+    borderWidth: borderWidth.rule,
     borderColor: colors.border,
     backgroundColor: colors.surface,
+    gap: spacing.md,
+    padding: spacing.xl,
+  },
+  emptyStateText: {
+    ...fonts.body.sm,
+    color: colors.textSecondary,
   },
   loadMoreButton: {
-    minHeight: 44,
-    marginTop: 4,
-    marginBottom: 20,
-    borderRadius: 22,
-    backgroundColor: colors.primary,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xl,
+  },
+  videoCard: {
+    marginBottom: spacing.lg,
+  },
+  videoCardBody: {
+    marginTop: spacing.md,
+    gap: spacing.xs,
+  },
+  videoCardTitle: {
+    ...fonts.title.md,
+    fontSize: 15,
+    lineHeight: 20,
+    color: colors.text,
+  },
+  videoCardMeta: {
+    ...fonts.meta.sm,
+    color: colors.textMuted,
+  },
+  skeletonRoot: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xxl,
+    gap: spacing.lg,
+  },
+  skeletonHero: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
+    gap: spacing.md,
   },
-  loadMoreLabel: {
-    color: colors.onPrimary,
-    fontSize: 14,
-    fontWeight: '700',
+  skeletonAvatar: {
+    width: 72,
+    height: 72,
+    borderRadius: radius.card,
+    backgroundColor: colors.surface,
+  },
+  skeletonCopy: {
+    flex: 1,
+    gap: spacing.sm,
+  },
+  skeletonTitle: {
+    height: 22,
+    width: '60%',
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+  },
+  skeletonLine: {
+    height: 14,
+    width: '100%',
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+  },
+  skeletonLineShort: {
+    height: 14,
+    width: '80%',
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+  },
+  skeletonCard: {
+    height: 180,
+    width: '100%',
+    borderRadius: radius.card,
+    backgroundColor: colors.surface,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: colors.scrim,
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: colors.surface,
+    borderTopWidth: borderWidth.rule,
+    borderColor: colors.border,
+    maxHeight: '90%',
+  },
+  modalHeader: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderBottomWidth: borderWidth.rule,
+    borderBottomColor: colors.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  modalTitle: {
+    ...fonts.title.md,
+    color: colors.text,
+    textTransform: 'uppercase',
+  },
+  modalBody: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.lg,
+  },
+  fieldLabel: {
+    ...fonts.caption.sm,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
+  },
+  fieldInput: {
+    backgroundColor: colors.surfaceHover,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    borderRadius: radius.card,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    color: colors.text,
+    ...fonts.body.md,
+  },
+  fieldMultiline: {
+    minHeight: 112,
+  },
+  fieldBlock: {
+    marginTop: spacing.lg,
+  },
+  saveError: {
+    ...fonts.meta.sm,
+    color: colors.error,
+    marginTop: spacing.md,
+  },
+  modalActions: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderTopWidth: borderWidth.rule,
+    borderTopColor: colors.border,
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  modalActionButton: {
+    flex: 1,
   },
 })

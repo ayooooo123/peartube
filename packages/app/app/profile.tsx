@@ -24,8 +24,9 @@ import DiagnosticsPanel from '@/components/native-diagnostics/DiagnosticsPanel'
 import type { SeedingStatus, SwarmStatus } from '@/components/native-diagnostics/types'
 import StorageOperabilityDetails from '@/components/StorageOperabilityDetails'
 import { NativeSwitch } from '@/components/native-ui'
-import { useApp, colors } from './_layout'
-import { GlassCard, SectionHeader } from '@/components/primitives'
+import { useApp } from './_layout'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
+import { Button, Panel, ScreenHeader, SectionHeader } from '@/components/primitives'
 import { fonts } from '@/lib/typography'
 import * as haptics from '@/lib/haptics'
 import { useDeveloperMode } from '@/lib/developer-mode'
@@ -154,7 +155,7 @@ function RecoveryPhraseCard({
   return (
     <>
       <SectionHeader title="Recovery phrase" subtitle="Shown once — write these words down" />
-      <GlassCard highlight style={styles.sectionCard}>
+      <Panel tone="accent" style={styles.sectionCard}>
         <Text style={styles.recoveryWarning}>
           These 12 words are the only way to recover your channel on a new device.
           Anyone who has them controls your channel — store them somewhere safe, offline.
@@ -173,7 +174,7 @@ function RecoveryPhraseCard({
           <Feather name="check" size={16} color={colors.onPrimary} />
           <Text style={styles.primaryLabel}>I&apos;ve saved my phrase</Text>
         </Pressable>
-      </GlassCard>
+      </Panel>
     </>
   )
 }
@@ -190,7 +191,7 @@ function RestoreCard({
   onRestore: () => void
 }) {
   return (
-    <GlassCard style={styles.sectionCard}>
+    <Panel style={styles.sectionCard}>
       <TextInput
         placeholder="Enter your 12-word recovery phrase"
         value={restorePhrase}
@@ -213,7 +214,7 @@ function RestoreCard({
           </>
         )}
       </Pressable>
-    </GlassCard>
+    </Panel>
   )
 }
 
@@ -262,7 +263,7 @@ function PersonalDevicesCard({
   return (
     <>
       <SectionHeader title="Your devices" subtitle="Sync your watch state and library to devices you link" />
-      <GlassCard style={styles.sectionCard}>
+      <Panel style={styles.sectionCard}>
         {devices.length ? (
           <View style={{ gap: 8, marginBottom: 12 }}>
             {devices.map((device, idx) => {
@@ -397,7 +398,7 @@ function PersonalDevicesCard({
             )}
           </>
         )}
-      </GlassCard>
+      </Panel>
     </>
   )
 }
@@ -406,7 +407,7 @@ function PrivacyCard({ vaultAvailable }: { vaultAvailable: boolean | null }) {
   return (
     <>
       <SectionHeader title="Privacy" subtitle="What stays here, and what other machines see" />
-      <GlassCard style={styles.sectionCard}>
+      <Panel style={styles.sectionCard}>
         <Text style={styles.cardTitle}>Your viewing stays on your devices</Text>
         <Text style={styles.cardMeta}>
           Watch position, completion, your library, and your recommendations are worked out
@@ -439,7 +440,7 @@ function PrivacyCard({ vaultAvailable }: { vaultAvailable: boolean | null }) {
           cannot erase what that device already read, and it cannot reach copies already
           made from it.
         </Text>
-      </GlassCard>
+      </Panel>
     </>
   )
 }
@@ -467,8 +468,8 @@ function ParticipationCard({
   const locked = busy || !networkPolicy.policy
   return (
     <>
-      <SectionHeader title="How you help" subtitle="Sharing what you have watched keeps it reachable for other viewers" />
-      <GlassCard style={styles.sectionCard}>
+      <SectionHeader title="How you help" eyebrow="01 NETWORK" subtitle="Sharing what you have watched keeps it reachable for other viewers" />
+      <Panel style={styles.sectionCard}>
         <View style={styles.participationStateRow}>
           <View style={[styles.participationDot, { backgroundColor: stateColor }]} />
           <View style={{ flex: 1 }}>
@@ -541,7 +542,7 @@ function ParticipationCard({
           Helping is best effort: nothing here promises a video stays online, and none of these
           choices creates an archive pledge.
         </Text>
-      </GlassCard>
+      </Panel>
     </>
   )
 }
@@ -570,7 +571,7 @@ function StorageCard({
   onClearCache: () => void
 }) {
   return (
-    <GlassCard style={styles.sectionCard}>
+    <Panel style={styles.sectionCard}>
       <View style={styles.storageHeader}>
         <View style={styles.storageIcon}>
           <Feather name="hard-drive" size={18} color={colors.swarm} />
@@ -663,7 +664,7 @@ function StorageCard({
         <Feather name="trash-2" size={14} color={colors.textMuted} />
         <Text style={styles.ghostLabel}>{clearingCache ? 'Clearing…' : 'Clear cached videos'}</Text>
       </Pressable>
-    </GlassCard>
+    </Panel>
   )
 }
 
@@ -700,8 +701,8 @@ function ProfileDiagnosticsCard({
 }) {
   return (
     <>
-      <SectionHeader title="Diagnostics" subtitle="Local swarm, storage, and technical state" />
-      <GlassCard padded={false} style={styles.sectionCard}>
+      <SectionHeader title="Diagnostics" eyebrow="05 DIAGNOSTICS" subtitle="Local swarm, storage, and technical state" />
+      <Panel padded={false} style={styles.sectionCard}>
         <Pressable onPress={onToggleAdvanced} style={styles.advancedToggle}>
           <Feather name="terminal" size={15} color={colors.textMuted} />
           <Text style={styles.advancedLabel}>Diagnostics & technical settings</Text>
@@ -730,7 +731,7 @@ function ProfileDiagnosticsCard({
                     value={!!transcodeSettings?.videoToolboxDecodeEnabled}
                     onValueChange={(v: boolean) => onTranscodeToggle({ videoToolboxDecodeEnabled: v })}
                     disabled={transcodeSettingsLoading || !!transcodeSettings?.videoToolboxDecodeLocked}
-                    trackColor={{ false: colors.border, true: colors.primary }}
+                    trackColor={{ false: colors.bgActive, true: colors.primary }}
                     thumbColor={colors.text}
                   />
                 </View>
@@ -743,7 +744,7 @@ function ProfileDiagnosticsCard({
                     value={!!transcodeSettings?.videoToolboxHwMapEnabled}
                     onValueChange={(v: boolean) => onTranscodeToggle({ videoToolboxHwMapEnabled: v })}
                     disabled={transcodeSettingsLoading || !!transcodeSettings?.videoToolboxHwMapLocked || !transcodeSettings?.videoToolboxDecodeEnabled}
-                    trackColor={{ false: colors.border, true: colors.primary }}
+                    trackColor={{ false: colors.bgActive, true: colors.primary }}
                     thumbColor={colors.text}
                   />
                 </View>
@@ -762,7 +763,7 @@ function ProfileDiagnosticsCard({
             </View>
           </View>
         )}
-      </GlassCard>
+      </Panel>
     </>
   )
 }
@@ -777,12 +778,12 @@ function ProfileHeader({
   onBack: () => void
 }) {
   return (
-    <View style={[styles.header, { paddingTop: topInset + 8 }]}>
-      <Pressable onPress={onBack} hitSlop={10} style={styles.backButton} accessibilityRole="button" accessibilityLabel="Back">
-        <Feather name="chevron-down" size={22} color={colors.text} />
-      </Pressable>
-      <Text style={styles.headerTitle}>{title}</Text>
-      <View style={{ width: 36 }} />
+    <View style={{ paddingTop: topInset }}>
+      <ScreenHeader
+        title={title}
+        eyebrow="IDENTITY / DEVICE"
+        onBack={onBack}
+      />
     </View>
   )
 }
@@ -802,10 +803,10 @@ function DeveloperModeSection({
 }) {
   return (
     <>
-      <SectionHeader title="Developer Mode" subtitle="Local operator tools for this device" />
-      <GlassCard style={styles.sectionCard}>
+      <SectionHeader title="Developer Mode" eyebrow="04 DEVELOPER" subtitle="Local operator tools for this device" />
+      <Panel style={styles.sectionCard}>
         <View style={styles.switchRow}>
-          <View style={{ flex: 1, paddingRight: 12 }}>
+          <View style={{ flex: 1, paddingRight: spacing.md }}>
             <Text style={styles.cardTitle}>Developer Mode</Text>
             <Text style={styles.cardMeta}>Shows publishing and network administration tools locally. It does not grant publishing permission.</Text>
           </View>
@@ -813,18 +814,21 @@ function DeveloperModeSection({
             value={enabled}
             disabled={isLoading}
             onValueChange={onToggle}
-            trackColor={{ false: colors.border, true: colors.primary }}
+            trackColor={{ false: colors.bgActive, true: colors.primary }}
             thumbColor={colors.text}
           />
         </View>
         {error ? <Text accessibilityRole="alert" style={styles.developerModeError}>{error}</Text> : null}
         {enabled ? (
-          <Pressable onPress={onOpenSettings} style={styles.secondaryButton} accessibilityRole="button">
-            <Feather name="tool" size={15} color={colors.text} />
-            <Text style={styles.secondaryLabel}>Open Developer Settings</Text>
-          </Pressable>
+          <Button
+            label="Open Developer Settings"
+            variant="secondary"
+            icon="tool"
+            onPress={onOpenSettings}
+            style={{ marginTop: spacing.md }}
+          />
         ) : null}
-      </GlassCard>
+      </Panel>
     </>
   )
 }
@@ -935,7 +939,7 @@ function ProfileSharedCards({
         onModeChange={onParticipationModeChange}
       />
 
-      <SectionHeader title="Storage used for sharing" subtitle={storageSectionSubtitle} />
+      <SectionHeader title="Storage used for sharing" eyebrow="02 STORAGE" subtitle={storageSectionSubtitle} />
       <StorageCard
         storageStats={storageStats}
         storageLimitPreview={storageLimitPreview}
@@ -987,7 +991,7 @@ function ProfileOnboardingBody({
       {showIdentityTools ? (
         <>
           <SectionHeader title="Start a channel" subtitle="Your channel lives on your devices" />
-          <GlassCard highlight style={styles.sectionCard}>
+          <Panel tone="accent" style={styles.sectionCard}>
             <TextInput
               placeholder="Channel name"
               value={newName}
@@ -1008,7 +1012,7 @@ function ProfileOnboardingBody({
                 </>
               )}
             </Pressable>
-          </GlassCard>
+          </Panel>
 
           <SectionHeader title="Restore a channel" subtitle="Recover with your 12-word phrase" />
           <RestoreCard
@@ -1031,6 +1035,7 @@ function ProfileIdentityBody({
   onCopyPhrase,
   onConfirmPhraseSaved,
   identityName,
+  identityKey,
   onShareChannel,
   onCopyKey,
   restoreOpen,
@@ -1048,6 +1053,7 @@ function ProfileIdentityBody({
   onCopyPhrase: (phrase: string) => void
   onConfirmPhraseSaved: () => void
   identityName?: string | null
+  identityKey?: string | null
   onShareChannel: () => void
   onCopyKey: () => void
   restoreOpen: boolean
@@ -1070,32 +1076,37 @@ function ProfileIdentityBody({
             onConfirmSaved={onConfirmPhraseSaved}
           />
 
-          <GlassCard highlight style={[styles.sectionCard, { marginTop: 8 }]}>
+          <Panel tone="accent" style={[styles.sectionCard, { marginTop: spacing.sm }]}>
             <View style={styles.identityRow}>
               <View style={styles.bigAvatar}>
                 <Text style={styles.bigAvatarLetter}>{identityName?.charAt(0)?.toUpperCase() || '?'}</Text>
               </View>
-              <View style={{ flex: 1, marginLeft: 14 }}>
+              <View style={{ flex: 1, marginLeft: spacing.md }}>
                 <Text style={styles.identityName} numberOfLines={1}>{identityName}</Text>
+                {identityKey ? (
+                  <Text style={styles.identityKey} numberOfLines={1}>
+                    {(() => {
+                      const key = String(identityKey)
+                      return key.length > 16 ? `${key.slice(0, 8)}…${key.slice(-6)}` : key
+                    })()}
+                  </Text>
+                ) : null}
               </View>
             </View>
 
             <View style={styles.identityActions}>
-              <Pressable onPress={onShareChannel} style={[styles.primaryButton, { flex: 1 }]}>
-                <Feather name="share-2" size={15} color={colors.onPrimary} />
-                <Text style={styles.primaryLabel}>Share channel</Text>
-              </Pressable>
-              <Pressable
+              <Button label="Share channel" icon="share-2" onPress={onShareChannel} style={{ flex: 1 }} />
+              <Button
+                label="Copy key"
+                icon="copy"
+                variant="secondary"
                 onPress={onCopyKey}
-                style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}
-              >
-                <Feather name="copy" size={15} color={colors.text} />
-                <Text style={styles.secondaryLabel}>Copy key</Text>
-              </Pressable>
+                style={{ flex: 1 }}
+              />
             </View>
-          </GlassCard>
+          </Panel>
 
-          <SectionHeader title="Backup & recovery" subtitle="Restore a channel from its 12-word phrase" />
+          <SectionHeader title="Backup & recovery" eyebrow="03 PUBLISHER" subtitle="Restore a channel from its 12-word phrase" />
           {restoreOpen ? (
             <RestoreCard
               restorePhrase={restorePhrase}
@@ -1104,13 +1115,13 @@ function ProfileIdentityBody({
               onRestore={onRestore}
             />
           ) : (
-            <GlassCard padded={false} style={styles.sectionCard}>
+            <Panel padded={false} style={styles.sectionCard}>
               <Pressable onPress={onOpenRestore} style={styles.advancedToggle}>
                 <Feather name="rotate-ccw" size={15} color={colors.textMuted} />
                 <Text style={styles.advancedLabel}>Restore from recovery phrase</Text>
                 <Feather name="chevron-down" size={17} color={colors.textMuted} />
               </Pressable>
-            </GlassCard>
+            </Panel>
           )}
         </>
       ) : null}
@@ -1714,6 +1725,7 @@ export default function ProfileScreen() {
           onCopyPhrase={(phrase) => copyToClipboard(phrase, 'Recovery phrase')}
           onConfirmPhraseSaved={confirmRecoveryPhraseSaved}
           identityName={identity.name}
+          identityKey={identity.publicKey || identity.driveKey}
           onShareChannel={shareChannelKey}
           onCopyKey={() => { if (identity.driveKey) void copyToClipboard(identity.driveKey, 'Channel key') }}
           restoreOpen={restoreOpen}
@@ -1753,66 +1765,45 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 8,
-  },
-  backButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.glass,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerTitle: {
-    color: colors.text,
-    fontSize: 17,
-    fontFamily: fonts.heading,
-  },
   hero: {
     alignItems: 'center',
-    paddingVertical: 32,
+    paddingVertical: spacing.xxl,
   },
   heroTitle: {
     color: colors.text,
-    fontSize: 34,
-    fontFamily: fonts.heading,
+    ...fonts.title.xl,
   },
   heroSubtitle: {
     color: colors.textMuted,
-    fontSize: 14,
-    marginTop: 6,
+    ...fonts.body.sm,
+    marginTop: spacing.sm - 2,
   },
   sectionCard: {
-    marginHorizontal: 16,
+    marginHorizontal: spacing.lg,
   },
   cardTitle: {
     color: colors.text,
+    ...fonts.title.md,
     fontSize: 14,
-    fontWeight: '600',
+    lineHeight: 18,
   },
   cardMeta: {
     color: colors.textMuted,
+    ...fonts.body.sm,
     fontSize: 12,
     marginTop: 2,
     lineHeight: 17,
   },
   input: {
-    backgroundColor: colors.glass,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
+    backgroundColor: colors.surfaceHover,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    borderRadius: radius.card,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md - 1,
     color: colors.text,
-    fontSize: 14,
-    marginBottom: 10,
+    ...fonts.body.sm,
+    marginBottom: spacing.sm,
   },
   phraseInput: {
     minHeight: 76,
@@ -1820,244 +1811,235 @@ const styles = StyleSheet.create({
   },
   recoveryWarning: {
     color: colors.textSecondary,
-    fontSize: 13,
+    ...fonts.body.sm,
     lineHeight: 19,
-    marginBottom: 12,
+    marginBottom: spacing.md,
   },
   recoveryPhraseBox: {
-    backgroundColor: colors.glass,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 10,
+    backgroundColor: colors.surfaceHover,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    borderRadius: radius.card,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
   },
   recoveryPhraseText: {
     color: colors.text,
+    ...fonts.meta.md,
     fontSize: 16,
     lineHeight: 26,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   primaryButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 7,
+    gap: spacing.sm - 1,
     backgroundColor: colors.primary,
-    borderRadius: 22,
+    borderRadius: radius.card,
     height: 42,
   },
   primaryLabel: {
     color: colors.onPrimary,
-    fontSize: 14,
-    fontWeight: '700',
+    ...fonts.label.md,
   },
   secondaryButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 7,
-    backgroundColor: colors.glass,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    borderRadius: 22,
+    gap: spacing.sm - 1,
+    backgroundColor: colors.surface,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    borderRadius: radius.card,
     height: 42,
     marginTop: 2,
   },
   secondaryLabel: {
     color: colors.text,
-    fontSize: 13,
-    fontWeight: '600',
+    ...fonts.label.md,
   },
   ghostButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    marginTop: 10,
+    gap: spacing.sm - 2,
+    paddingVertical: spacing.sm,
+    marginTop: spacing.sm,
   },
   ghostLabel: {
     color: colors.textMuted,
-    fontSize: 13,
-    fontWeight: '600',
+    ...fonts.label.md,
   },
   identityRow: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   bigAvatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 64,
+    height: 64,
+    borderRadius: radius.card,
     backgroundColor: colors.bgActive,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
   bigAvatarLetter: {
     color: colors.text,
+    ...fonts.title.lg,
     fontSize: 24,
-    fontFamily: fonts.heading,
+    lineHeight: 28,
   },
   identityName: {
     color: colors.text,
-    fontSize: 19,
-    fontFamily: fonts.heading,
+    ...fonts.title.lg,
+    fontSize: 20,
+    lineHeight: 24,
   },
-  publishRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 4,
-  },
-  publishDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
-  publishLabel: {
+  identityKey: {
     color: colors.textMuted,
-    fontSize: 12,
+    ...fonts.meta.sm,
+    marginTop: spacing.xs,
   },
   identityActions: {
     flexDirection: 'row',
-    gap: 8,
-    marginTop: 16,
+    gap: spacing.sm,
+    marginTop: spacing.lg,
   },
   deviceRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.glass,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    borderRadius: 12,
-    padding: 12,
+    backgroundColor: colors.surfaceHover,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
+    borderRadius: radius.card,
+    padding: spacing.md,
+    minHeight: 52,
   },
   deviceName: {
     color: colors.text,
+    ...fonts.title.md,
     fontSize: 13,
-    fontWeight: '600',
+    lineHeight: 16,
   },
   deviceKey: {
     color: colors.textMuted,
-    fontSize: 10,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    ...fonts.meta.xs,
     marginTop: 2,
   },
   inviteBox: {
     backgroundColor: colors.primaryLight,
-    borderWidth: 1,
+    borderWidth: borderWidth.rule,
     borderColor: colors.primary,
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 12,
+    borderRadius: radius.card,
+    padding: spacing.md,
+    marginBottom: spacing.md,
   },
   inviteLabel: {
     color: colors.textSecondary,
-    fontSize: 12,
-    marginBottom: 8,
+    ...fonts.meta.sm,
+    marginBottom: spacing.sm,
   },
   inviteCode: {
     color: colors.text,
+    ...fonts.meta.md,
     fontSize: 15,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     letterSpacing: 0.5,
   },
   storageHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 14,
+    marginBottom: spacing.md,
   },
   storageIcon: {
     width: 38,
     height: 38,
-    borderRadius: 12,
-    backgroundColor: colors.swarmDim,
+    borderRadius: radius.card,
+    backgroundColor: colors.surfaceHover,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
   track: {
-    height: 6,
-    backgroundColor: colors.surface,
-    borderRadius: 3,
+    height: 2,
+    backgroundColor: colors.bgActive,
+    borderRadius: 0,
     overflow: 'hidden',
   },
   fill: {
     height: '100%',
-    backgroundColor: colors.swarm,
-    borderRadius: 3,
+    backgroundColor: colors.primary,
+    borderRadius: 0,
   },
   trackLabel: {
     color: colors.textMuted,
-    fontSize: 11,
-    marginTop: 6,
-    marginBottom: 14,
+    ...fonts.meta.xs,
+    marginTop: spacing.sm - 2,
+    marginBottom: spacing.md,
   },
   storageBreakdown: {
-    backgroundColor: colors.glass,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    marginBottom: 14,
-    gap: 6,
+    backgroundColor: colors.surfaceHover,
+    borderRadius: radius.card,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.md,
+    gap: spacing.sm - 2,
   },
   breakdownRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
+    gap: spacing.md,
   },
   breakdownLabel: {
     flex: 1,
     color: colors.textMuted,
-    fontSize: 12,
+    ...fonts.meta.sm,
   },
   breakdownValue: {
     color: colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '700',
+    ...fonts.meta.sm,
   },
   participationStateRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 10,
-    marginBottom: 12,
+    gap: spacing.sm,
+    marginBottom: spacing.md,
   },
   participationDot: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
+    width: 8,
+    height: 8,
+    borderRadius: radius.sm,
     marginTop: 5,
   },
   participationReasons: {
-    backgroundColor: colors.glass,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    gap: 6,
-    marginBottom: 14,
+    backgroundColor: colors.surfaceHover,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
+    borderRadius: radius.card,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    gap: spacing.sm - 2,
+    marginBottom: spacing.md,
   },
   participationReason: {
     color: colors.textSecondary,
-    fontSize: 12,
+    ...fonts.meta.sm,
     lineHeight: 18,
   },
   participationModes: {
-    gap: 8,
+    gap: spacing.sm,
   },
   participationMode: {
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    backgroundColor: colors.glass,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
+    borderRadius: radius.card,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceHover,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
   },
   participationModeSelected: {
     backgroundColor: colors.primary,
@@ -2067,87 +2049,89 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 8,
+    gap: spacing.sm,
   },
   participationModeLabel: {
     color: colors.text,
+    ...fonts.title.md,
     fontSize: 14,
-    fontWeight: '700',
+    lineHeight: 18,
   },
   participationModeDetail: {
     color: colors.textMuted,
+    ...fonts.body.sm,
     fontSize: 12,
     lineHeight: 18,
-    marginTop: 4,
+    marginTop: spacing.xs,
   },
   participationFootnote: {
     color: colors.textMuted,
+    ...fonts.body.sm,
     fontSize: 12,
     lineHeight: 18,
-    marginTop: 14,
+    marginTop: spacing.md,
   },
   developerLimitBlock: {
-    borderTopWidth: 1,
-    borderTopColor: colors.glassBorder,
-    marginTop: 14,
-    paddingTop: 14,
+    borderTopWidth: borderWidth.hairline,
+    borderTopColor: colors.borderSubtle,
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
   },
   customRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: spacing.sm,
     alignItems: 'center',
   },
   pinnedNote: {
     color: colors.textMuted,
-    fontSize: 12,
-    marginTop: 12,
+    ...fonts.meta.sm,
+    marginTop: spacing.md,
   },
   advancedToggle: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    padding: 16,
+    gap: spacing.sm,
+    padding: spacing.lg,
+    minHeight: 52,
   },
   advancedLabel: {
     flex: 1,
     color: colors.textSecondary,
+    ...fonts.title.md,
     fontSize: 13,
-    fontWeight: '600',
+    lineHeight: 16,
   },
   advancedBody: {
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-    borderTopWidth: 1,
-    borderTopColor: colors.glassBorder,
-    paddingTop: 14,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.lg,
+    borderTopWidth: borderWidth.hairline,
+    borderTopColor: colors.borderSubtle,
+    paddingTop: spacing.md,
   },
   advancedFieldLabel: {
     color: colors.textMuted,
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 4,
+    ...fonts.caption.sm,
+    marginBottom: spacing.xs,
   },
   mono: {
     color: colors.textSecondary,
-    fontSize: 11,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    ...fonts.meta.xs,
   },
   switchRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    minHeight: 52,
   },
   developerModeError: {
     color: colors.error,
-    fontSize: 12,
+    ...fonts.meta.sm,
     lineHeight: 17,
-    marginTop: 10,
+    marginTop: spacing.sm,
   },
   footer: {
     color: colors.textDisabled,
-    fontSize: 11,
+    ...fonts.meta.xs,
     textAlign: 'center',
-    marginTop: 24,
+    marginTop: spacing.xl,
   },
 })

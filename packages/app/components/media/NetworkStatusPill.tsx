@@ -1,7 +1,7 @@
 import { memo } from 'react'
-import { StyleSheet, Text, View } from 'react-native'
-import { Ionicons } from '@expo/vector-icons'
-import { colors } from '@/lib/colors'
+import { StyleSheet, View } from 'react-native'
+import { colors, spacing, borderWidth } from '@/lib/colors'
+import { Meta } from '@/components/primitives'
 
 type NetworkStatusTone = 'live' | 'ready' | 'offline' | 'neutral'
 
@@ -19,58 +19,44 @@ function getStatusLabel(peers?: number | null, label?: string, tone: NetworkStat
   return 'live from swarm'
 }
 
-function getToneStyle(tone: NetworkStatusTone) {
-  if (tone === 'ready') return styles.ready
-  if (tone === 'offline') return styles.offline
-  if (tone === 'neutral') return styles.neutral
-  return styles.live
+function getToneMeta(tone: NetworkStatusTone = 'live'): 'default' | 'accent' | 'swarm' | 'muted' {
+  if (tone === 'ready') return 'accent'
+  if (tone === 'offline') return 'muted'
+  if (tone === 'neutral') return 'muted'
+  return 'swarm'
 }
 
 function NetworkStatusPillComponent({ peers, label, tone = 'live' }: NetworkStatusPillProps) {
   const statusLabel = getStatusLabel(peers, label, tone)
+  const metaTone = getToneMeta(tone)
 
   return (
     <View style={[styles.pill, getToneStyle(tone)]} accessibilityLabel={statusLabel}>
-      <Ionicons name={tone === 'offline' ? 'cloud-offline' : 'radio'} size={12} color={tone === 'offline' ? colors.textMuted : colors.swarm} />
-      <Text style={styles.text} numberOfLines={1}>{statusLabel}</Text>
+      <Meta tone={metaTone}>{statusLabel}</Meta>
     </View>
   )
 }
 
 export const NetworkStatusPill = memo(NetworkStatusPillComponent)
 
+function getToneStyle(tone: NetworkStatusTone) {
+  const toneStyles: Record<NetworkStatusTone, any> = {
+    live: { borderColor: colors.swarm, backgroundColor: colors.surface },
+    ready: { borderColor: colors.primary, backgroundColor: colors.surface },
+    offline: { borderColor: colors.borderSubtle, backgroundColor: colors.surface },
+    neutral: { borderColor: colors.borderSubtle, backgroundColor: colors.surface },
+  }
+  return toneStyles[tone]
+}
+
 const styles = StyleSheet.create({
   pill: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  live: {
-    backgroundColor: colors.swarmDim,
-    borderColor: 'rgba(45, 212, 191, 0.24)',
-  },
-  ready: {
-    backgroundColor: colors.primaryLight,
-    borderColor: 'rgba(123, 91, 245, 0.24)',
-  },
-  offline: {
-    backgroundColor: colors.surface,
-    borderColor: colors.surfaceBorder,
-  },
-  neutral: {
-    backgroundColor: colors.glass,
-    borderColor: colors.glassBorder,
-  },
-  text: {
-    color: colors.text,
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-    textTransform: 'uppercase',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: 0,
+    borderWidth: borderWidth.hairline,
   },
 })

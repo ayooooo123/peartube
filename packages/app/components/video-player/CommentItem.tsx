@@ -42,64 +42,72 @@ export const CommentItem = memo(function CommentItem({
 
   return (
     <View style={styles.commentItem}>
-      <View style={styles.commentHeader}>
-        <Text style={styles.commentAuthor}>
-          {(comment.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(comment.timestamp || Date.now())}
-        </Text>
-        {comment.isAdmin && (
-          <Text style={styles.adminBadge}>Admin</Text>
-        )}
-        {comment.pendingState && (
-          <Text style={styles.pendingBadge}>
-            {comment.pendingState === 'failed' ? 'Failed' : 'Pending'}
+      <View style={styles.commentRow}>
+        <View style={styles.commentAvatar}>
+          <Text style={styles.commentAvatarText}>{(comment.authorKeyHex || '?').slice(0, 1).toUpperCase()}</Text>
+        </View>
+        <View style={styles.commentContent}>
+          <View style={styles.commentHeader}>
+            <Text style={styles.commentAuthor}>
+              {(comment.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(comment.timestamp || Date.now())}
+            </Text>
+            {comment.isAdmin && (
+              <Text style={styles.adminBadge}>Admin</Text>
+            )}
+            {comment.pendingState && (
+              <Text style={styles.pendingBadge}>
+                {comment.pendingState === 'failed' ? 'Failed' : 'Pending'}
+              </Text>
+            )}
+            <View style={styles.commentActions}>
+              <Pressable
+                onPress={onReply}
+                style={styles.commentActionButton}
+                accessibilityRole="button"
+                accessibilityLabel="Reply to comment"
+              >
+                <Feather name="corner-up-left" color={colors.textMuted} size={14} />
+              </Pressable>
+              {(isOwnComment || comment.pendingState) && (
+                <Pressable
+                  onPress={onDelete}
+                  disabled={isDeleting}
+                  style={styles.commentActionButton}
+                  accessibilityRole="button"
+                  accessibilityLabel="Delete comment"
+                  accessibilityState={{ disabled: isDeleting, busy: isDeleting }}
+                >
+                  {isDeleting ? (
+                    <ActivityIndicator size="small" color={colors.textMuted} />
+                  ) : (
+                    <Feather name="trash-2" color={colors.error} size={14} />
+                  )}
+                </Pressable>
+              )}
+              {onHide && !isOwnComment && !comment.pendingState && (
+                <Pressable
+                  onPress={onHide}
+                  disabled={isDeleting}
+                  style={styles.commentActionButton}
+                  accessibilityRole="button"
+                  accessibilityLabel="Hide comment"
+                  accessibilityState={{ disabled: isDeleting, busy: isDeleting }}
+                >
+                  {isDeleting ? (
+                    <ActivityIndicator size="small" color={colors.textMuted} />
+                  ) : (
+                    <Feather name="eye-off" color={colors.textMuted} size={14} />
+                  )}
+                </Pressable>
+              )}
+            </View>
+          </View>
+          <Text style={comment.pendingState ? styles.commentTextPending : styles.commentText}>
+            {comment.text}
           </Text>
-        )}
-        <View style={styles.commentActions}>
-          <Pressable
-            onPress={onReply}
-            style={styles.commentActionButton}
-            accessibilityRole="button"
-            accessibilityLabel="Reply to comment"
-          >
-            <Feather name="corner-up-left" color={colors.textMuted} size={14} />
-          </Pressable>
-          {(isOwnComment || comment.pendingState) && (
-            <Pressable
-              onPress={onDelete}
-              disabled={isDeleting}
-              style={styles.commentActionButton}
-              accessibilityRole="button"
-              accessibilityLabel="Delete comment"
-              accessibilityState={{ disabled: isDeleting, busy: isDeleting }}
-            >
-              {isDeleting ? (
-                <ActivityIndicator size="small" color={colors.textMuted} />
-              ) : (
-                <Feather name="trash-2" color="#f87171" size={14} />
-              )}
-            </Pressable>
-          )}
-          {onHide && !isOwnComment && !comment.pendingState && (
-            <Pressable
-              onPress={onHide}
-              disabled={isDeleting}
-              style={styles.commentActionButton}
-              accessibilityRole="button"
-              accessibilityLabel="Hide comment"
-              accessibilityState={{ disabled: isDeleting, busy: isDeleting }}
-            >
-              {isDeleting ? (
-                <ActivityIndicator size="small" color={colors.textMuted} />
-              ) : (
-                <Feather name="eye-off" color={colors.textMuted} size={14} />
-              )}
-            </Pressable>
-          )}
         </View>
       </View>
-      <Text style={comment.pendingState ? styles.commentTextPending : styles.commentText}>
-        {comment.text}
-      </Text>
+      <View style={styles.commentDivider} />
     </View>
   )
 })

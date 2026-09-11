@@ -238,7 +238,7 @@ function CommentThread({
                         {deletingCommentId === reply.commentId ? (
                           <ActivityIndicator size="small" color={colors.textMuted} />
                         ) : (
-                          <Feather name="trash-2" color="#f87171" size={14} />
+                          <Feather name="trash-2" color={colors.error} size={14} />
                         )}
                       </Pressable>
                     )}

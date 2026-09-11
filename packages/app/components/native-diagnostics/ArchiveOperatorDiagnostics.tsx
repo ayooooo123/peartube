@@ -1,5 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native'
-import { colors } from '@/lib/colors'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
+import { Tag } from '@/components/primitives'
 import { buildArchiveOperatorView, type ArchiveOperatorStatus } from '@/lib/storage-operability.js'
 
 interface ArchiveOperatorDiagnosticsProps {
@@ -8,17 +10,18 @@ interface ArchiveOperatorDiagnosticsProps {
 
 export default function ArchiveOperatorDiagnostics({ operatorStatus }: ArchiveOperatorDiagnosticsProps) {
   const view = buildArchiveOperatorView(operatorStatus)
+  const healthTone = view.pledgeHealth === 'degraded' ? colors.error : colors.primary
 
   return (
     <View style={styles.card}>
       <View style={styles.titleRow}>
         <Text style={styles.cardTitle}>Archive operator</Text>
-        <Text style={styles.mode}>{view.modeLabel}</Text>
+        <Tag label={view.modeLabel} tone="accent" />
       </View>
       <Text style={styles.trustCopy}>{view.trustCopy}</Text>
 
       <View style={styles.healthRow}>
-        <View style={[styles.healthDot, view.pledgeHealth === 'degraded' ? styles.degraded : styles.nominal]} />
+        <View style={[styles.healthDot, { backgroundColor: healthTone }]} />
         <View style={styles.healthCopy}>
           <Text style={styles.healthTitle}>Pledge health · {view.pledgeHealth}</Text>
           <Text style={styles.detailText}>{view.pledgeCopy}</Text>
@@ -47,19 +50,30 @@ export default function ArchiveOperatorDiagnostics({ operatorStatus }: ArchiveOp
 }
 
 const styles = StyleSheet.create({
-  card: { backgroundColor: colors.bg, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: colors.glassBorder, gap: 8 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  cardTitle: { flex: 1, fontSize: 14, fontWeight: '700', color: colors.text },
-  mode: { overflow: 'hidden', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, fontSize: 10, fontWeight: '700', color: colors.primary, backgroundColor: colors.glass },
-  trustCopy: { fontSize: 11, lineHeight: 16, color: colors.textMuted },
-  healthRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  healthDot: { width: 8, height: 8, borderRadius: 4, marginTop: 4 },
-  nominal: { backgroundColor: colors.swarm },
-  degraded: { backgroundColor: colors.error },
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.card,
+    padding: spacing.md,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    gap: spacing.sm,
+  },
+  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  cardTitle: { flex: 1, ...fonts.title.md, fontSize: 14, lineHeight: 18, color: colors.text, textTransform: 'uppercase' },
+  trustCopy: { ...fonts.body.sm, fontSize: 11, lineHeight: 16, color: colors.textMuted },
+  healthRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+  healthDot: { width: 8, height: 8, borderRadius: radius.sm, marginTop: 4 },
   healthCopy: { flex: 1 },
-  healthTitle: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, textTransform: 'capitalize' },
-  detailText: { fontSize: 12, lineHeight: 17, color: colors.textMuted },
-  failureBox: { borderRadius: 10, borderWidth: 1, borderColor: colors.errorLight, padding: 10, gap: 3 },
-  failureTitle: { marginBottom: 2, fontSize: 11, fontWeight: '700', color: colors.error },
-  failureCode: { fontSize: 11, color: colors.textSecondary },
+  healthTitle: { ...fonts.caption.sm, color: colors.textSecondary, textTransform: 'capitalize' },
+  detailText: { ...fonts.meta.sm, lineHeight: 17, color: colors.textMuted },
+  failureBox: {
+    borderRadius: radius.card,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.error,
+    padding: spacing.md,
+    gap: spacing.xs,
+    backgroundColor: colors.surface,
+  },
+  failureTitle: { marginBottom: 2, ...fonts.caption.sm, color: colors.error },
+  failureCode: { ...fonts.meta.xs, color: colors.textSecondary },
 })

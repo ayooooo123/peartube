@@ -10,11 +10,15 @@ const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 async function loadVideoCard() {
   const stubs = {
+    'icons-stub': 'export const Feather = () => null; export const Ionicons = () => null',
     'reanimated-stub': [
       'export const useSharedValue = value => ({ value })',
       'export const useAnimatedStyle = fn => fn()',
       'export const withSpring = value => value',
       'export const withTiming = value => value',
+      'export const withRepeat = value => value',
+      'export const cancelAnimation = () => {}',
+      'export const Easing = new Proxy({}, { get: () => () => null })',
       'const Animated = { createAnimatedComponent: component => component }',
       'export default Animated',
       '',
@@ -30,6 +34,7 @@ async function loadVideoCard() {
     setup(builder) {
       builder.onResolve({ filter: /^react-native-reanimated/ }, () => ({ path: 'reanimated-stub', namespace: 'video-card-stub' }))
       builder.onResolve({ filter: /\/ThumbnailImage$/ }, () => ({ path: 'thumbnail-stub', namespace: 'video-card-stub' }))
+      builder.onResolve({ filter: /^@expo\/vector-icons/ }, () => ({ path: 'icons-stub', namespace: 'video-card-stub' }))
       builder.onLoad({ filter: /.*/, namespace: 'video-card-stub' }, args => ({
         contents: stubs[args.path],
         loader: 'js',

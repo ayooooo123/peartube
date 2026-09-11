@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { colors } from '@/lib/colors'
+import { colors, spacing, radius, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 import type { MediaCockpitItem } from './HeroFeatureCard'
 
@@ -91,7 +91,7 @@ function getArchiveTone(positive: boolean, warning: boolean) {
       cardStyle: styles.cardWarning,
       iconStyle: styles.iconWarning,
       iconName: 'alert-circle' as const,
-      iconColor: '#fde68a',
+      iconColor: colors.warning,
     }
   }
   return {
@@ -139,52 +139,39 @@ export function ArchiveStatus({ status = null, item = null }: ArchiveStatusProps
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    backgroundColor: colors.bgElevated,
-    padding: 16,
+    borderRadius: radius.card,
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
   },
   cardPositive: {
-    borderColor: 'rgba(123, 91, 245,0.32)',
-    backgroundColor: 'rgba(123, 91, 245,0.08)',
+    borderColor: colors.primary,
   },
   cardWarning: {
-    borderColor: 'rgba(251,191,36,0.30)',
-    backgroundColor: 'rgba(251,191,36,0.08)',
+    borderColor: colors.warning,
   },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   icon: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 36,
+    height: 36,
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    backgroundColor: colors.bg,
   },
   iconPositive: {
-    borderColor: 'rgba(123, 91, 245,0.36)',
-    backgroundColor: 'rgba(123, 91, 245,0.10)',
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryLight,
   },
   iconWarning: {
-    borderColor: 'rgba(251,191,36,0.34)',
-    backgroundColor: 'rgba(251,191,36,0.10)',
+    borderColor: colors.warning,
+    backgroundColor: colors.warningLight,
   },
   copy: { flex: 1 },
-  kicker: {
-    color: colors.textMuted,
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-  },
-  title: {
-    color: colors.text,
-    fontFamily: fonts.headingMedium,
-    fontSize: 16,
-    marginTop: 2,
-  },
-  detail: { color: colors.textMuted, fontSize: 13, lineHeight: 18, marginTop: 12 },
+  kicker: { ...fonts.caption.sm, color: colors.textMuted },
+  title: { ...fonts.title.md, color: colors.text, marginTop: 2 },
+  detail: { ...fonts.body.sm, color: colors.textMuted, marginTop: spacing.md },
 })

@@ -13,11 +13,15 @@ const appRoot = path.resolve(import.meta.dirname, '..')
 
 async function loadCards() {
   const stubs = {
+    'icons-stub': 'export const Feather = () => null; export const Ionicons = () => null',
     'reanimated-stub': [
       'export const useSharedValue = value => ({ value })',
       'export const useAnimatedStyle = () => ({})',
       'export const withSpring = value => value',
       'export const withTiming = value => value',
+      'export const withRepeat = value => value',
+      'export const cancelAnimation = () => {}',
+      'export const Easing = new Proxy({}, { get: () => () => null })',
       'const Animated = { createAnimatedComponent: component => component }',
       'export default Animated',
       '',
@@ -33,6 +37,7 @@ async function loadCards() {
     setup(builder) {
       builder.onResolve({ filter: /^react-native-reanimated/ }, () => ({ path: 'reanimated-stub', namespace: 'creator-stub' }))
       builder.onResolve({ filter: /\/ThumbnailImage$/ }, () => ({ path: 'thumbnail-stub', namespace: 'creator-stub' }))
+      builder.onResolve({ filter: /^@expo\/vector-icons/ }, () => ({ path: 'icons-stub', namespace: 'creator-stub' }))
       builder.onLoad({ filter: /.*/, namespace: 'creator-stub' }, args => ({
         contents: stubs[args.path],
         loader: 'js',

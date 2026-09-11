@@ -9,7 +9,7 @@
  * - Hover: subtle scale animation
  */
 import React, { useState } from 'react'
-import { colors } from '@/lib/colors'
+import { colors, spacing, radius } from '@/lib/colors'
 import { formatDuration, formatViews, formatTimeAgo, formatContentBadge } from '@/lib/formatters'
 import type { ContentCoordinates } from '@/lib/formatters'
 
@@ -291,22 +291,22 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     transition: 'transform 0.15s ease',
     outline: 'none',
-    borderRadius: 12,
+    borderRadius: 4,
     overflow: 'hidden',
   },
   thumbnailContainer: {
     position: 'relative',
     width: '100%',
     aspectRatio: '16 / 9',
-    backgroundColor: '#0e0e10',
-    borderRadius: 12,
+    backgroundColor: colors.surface,
+    borderRadius: 4,
     overflow: 'hidden',
   },
   thumbnail: {
     width: '100%',
     height: '100%',
     objectFit: 'contain',
-    backgroundColor: '#0e0e10',
+    backgroundColor: colors.surface,
   },
   thumbnailPlaceholder: {
     width: '100%',
@@ -314,14 +314,14 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.bgSecondary,
+    backgroundColor: colors.surface,
   },
   durationBadge: {
     position: 'absolute',
-    bottom: 8,
-    right: 8,
-    padding: '2px 6px',
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    bottom: spacing.sm,
+    right: spacing.sm,
+    padding: `${spacing.xs}px ${spacing.sm}px`,
+    backgroundColor: colors.overlayButton,
     borderRadius: 4,
     fontSize: 12,
     fontWeight: 500,
@@ -329,8 +329,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   info: {
     display: 'flex',
-    gap: 12,
-    marginTop: 12,
+    gap: spacing.md,
+    marginTop: spacing.md,
   },
   avatarContainer: {
     flexShrink: 0,
@@ -338,20 +338,20 @@ const styles: Record<string, React.CSSProperties> = {
   avatar: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 4,
     objectFit: 'cover',
   },
   avatarPlaceholder: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 4,
     backgroundColor: colors.primary,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     fontSize: 14,
     fontWeight: 600,
-    color: '#ffffff',
+    color: colors.onPrimary,
   },
   textContent: {
     flex: 1,
@@ -369,12 +369,12 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'hidden',
   },
   channelName: {
-    margin: '4px 0 0',
+    margin: `${spacing.xs}px 0 0`,
     fontSize: 13,
     color: colors.textSecondary,
   },
   meta: {
-    margin: '2px 0 0',
+    margin: `${spacing.xs * 0.5}px 0 0`,
     fontSize: 13,
     color: colors.textMuted,
   },

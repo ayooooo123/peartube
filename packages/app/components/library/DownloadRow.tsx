@@ -1,13 +1,14 @@
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native'
+import { Image, StyleSheet, Text, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
-import { GlassCard } from '@/components/primitives'
-import { colors } from '@/lib/colors'
+import { IconButton } from '@/components/primitives'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 import { formatBytes } from '@/lib/formatters'
 import type { DownloadItem, DownloadStatus } from '@/lib/DownloadsContext'
 
 function statusIcon(status: DownloadStatus): { name: keyof typeof Feather.glyphMap; color: string } {
   switch (status) {
-    case 'complete': return { name: 'check-circle', color: colors.primary }
+    case 'complete': return { name: 'check-circle', color: colors.success }
     case 'error': return { name: 'alert-circle', color: colors.error }
     case 'cancelled': return { name: 'x', color: colors.textMuted }
     case 'queued': return { name: 'clock', color: colors.textMuted }
@@ -17,7 +18,12 @@ function statusIcon(status: DownloadStatus): { name: keyof typeof Feather.glyphM
 
 function statusText(item: DownloadItem): string {
   switch (item.status) {
-    case 'downloading': return `${item.progress}% · ${item.speed}`
+    case 'downloading': {
+      const received = formatBytes(Math.round((item.progress / 100) * (item.totalBytes || 0)))
+      const total = formatBytes(item.totalBytes || 0)
+      if (item.totalBytes > 0) return `${item.progress}% · ${received} / ${total}`
+      return `${item.progress}% · ${item.speed}`
+    }
     case 'queued': return 'Waiting…'
     case 'complete': return `${formatBytes(item.totalBytes)} · Saved`
     case 'error': return item.error || 'Failed'
@@ -39,100 +45,86 @@ export function DownloadRow({ item, onCancel, onRemove, onRetry }: DownloadRowPr
   const icon = statusIcon(item.status)
 
   return (
-    <GlassCard padded={false} style={styles.card}>
-      <View style={styles.row}>
-        <View style={styles.thumb}>
-          {item.thumbnail ? (
-            <Image source={{ uri: item.thumbnail }} style={StyleSheet.absoluteFill} resizeMode="cover" />
-          ) : (
-            <Feather name="film" size={18} color={colors.textMuted} />
-          )}
-        </View>
-        <View style={styles.info}>
-          <Text style={styles.title} numberOfLines={1}>{item.title}</Text>
-          <View style={styles.statusRow}>
-            <Feather name={icon.name} size={13} color={icon.color} />
-            <Text style={styles.status} numberOfLines={1}>{statusText(item)}</Text>
-          </View>
-          {isActive && (
-            <View style={styles.track}>
-              <View style={[styles.fill, { width: `${Math.min(100, item.progress)}%` }]} />
-            </View>
-          )}
-        </View>
-        <Pressable
-          onPress={isActive ? onCancel : isError ? onRetry : onRemove}
-          hitSlop={8}
-          style={styles.action}
-          accessibilityRole="button"
-          accessibilityLabel={isActive ? 'Cancel download' : isError ? 'Retry download' : 'Remove download'}
-        >
-          <Feather
-            name={isActive ? 'x' : isError ? 'refresh-cw' : 'trash-2'}
-            size={17}
-            color={isError ? colors.primary : colors.textMuted}
-          />
-        </Pressable>
+    <View style={styles.row}>
+      <View style={styles.thumb}>
+        {item.thumbnail ? (
+          <Image source={{ uri: item.thumbnail }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+        ) : (
+          <Feather name="film" size={18} color={colors.textMuted} />
+        )}
       </View>
-    </GlassCard>
+      <View style={styles.info}>
+        <Text style={styles.title} numberOfLines={1}>{item.title}</Text>
+        <View style={styles.statusRow}>
+          <Feather name={icon.name} size={12} color={icon.color} />
+          <Text style={styles.status} numberOfLines={1}>{statusText(item)}</Text>
+        </View>
+        {isActive && (
+          <View style={styles.track}>
+            <View style={[styles.fill, { width: `${Math.min(100, item.progress)}%` }]} />
+          </View>
+        )}
+      </View>
+      <IconButton
+        icon={isActive ? 'x' : isError ? 'refresh-cw' : 'trash-2'}
+        onPress={isActive ? onCancel : isError ? onRetry : onRemove}
+        accessibilityLabel={isActive ? 'Cancel download' : isError ? 'Retry download' : 'Remove download'}
+        variant="plain"
+        size={36}
+        active={isError}
+      />
+    </View>
   )
 }
 
 const styles = StyleSheet.create({
-  card: {
-    marginBottom: 10,
-  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
+    minHeight: 64,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
   },
   thumb: {
-    width: 84,
-    height: 47,
-    borderRadius: 8,
+    width: 48,
+    height: 48,
+    borderRadius: radius.md,
     backgroundColor: colors.bgActive,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.borderSubtle,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
+    marginRight: spacing.md,
   },
   info: {
     flex: 1,
   },
   title: {
+    ...fonts.title.md,
+    fontSize: 15,
+    lineHeight: 20,
     color: colors.text,
-    fontSize: 14,
-    fontWeight: '600',
   },
   statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    marginTop: 4,
+    gap: spacing.xs,
+    marginTop: 3,
   },
   status: {
+    ...fonts.meta.sm,
     color: colors.textMuted,
-    fontSize: 12,
     flexShrink: 1,
   },
   track: {
-    height: 3,
-    backgroundColor: colors.surface,
-    borderRadius: 2,
+    height: borderWidth.rule,
+    backgroundColor: colors.bgActive,
     overflow: 'hidden',
-    marginTop: 8,
+    marginTop: spacing.sm,
   },
   fill: {
     height: '100%',
-    backgroundColor: colors.swarm,
-    borderRadius: 2,
-  },
-  action: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 4,
+    backgroundColor: colors.primary,
   },
 })

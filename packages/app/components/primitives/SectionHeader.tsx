@@ -1,25 +1,39 @@
 import { Pressable, StyleSheet, Text, View, ViewStyle, StyleProp } from 'react-native'
-import { colors } from '@/lib/colors'
+import { Feather } from '@expo/vector-icons'
+import { colors, spacing, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 
 interface SectionHeaderProps {
   title: string
+  /** Mono kicker rendered above the title, e.g. `01 / LIVE NOW`. */
+  eyebrow?: string
   subtitle?: string
   action?: { label: string; onPress: () => void }
+  /** Removes the horizontal gutter for callers that already pad. */
+  flush?: boolean
   style?: StyleProp<ViewStyle>
 }
 
-export function SectionHeader({ title, subtitle, action, style }: SectionHeaderProps) {
+/**
+ * Section title block: lime rule on the leading edge, uppercase Syne title,
+ * optional mono eyebrow and a trailing mono action (`LABEL →`).
+ */
+export function SectionHeader({ title, eyebrow, subtitle, action, flush = false, style }: SectionHeaderProps) {
   return (
-    <View style={[styles.row, style]}>
+    <View style={[styles.row, !flush && styles.gutter, style]}>
+      <View style={styles.rule} />
       <View style={styles.titles}>
-        <Text style={styles.title}>{title}</Text>
+        {eyebrow ? <Text style={styles.eyebrow}>{eyebrow}</Text> : null}
+        <Text style={styles.title} numberOfLines={1}>{title}</Text>
         {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
       </View>
       {action ? (
-        <Pressable onPress={action.onPress} hitSlop={8} accessibilityRole="button">
+        <Pressable onPress={action.onPress} hitSlop={8} accessibilityRole="button" style={styles.actionHit}>
           {({ pressed }) => (
-            <Text style={[styles.action, pressed && { opacity: 0.6 }]}>{action.label}</Text>
+            <View style={[styles.action, pressed && { opacity: 0.6 }]}>
+              <Text style={styles.actionLabel}>{action.label}</Text>
+              <Feather name="arrow-right" size={13} color={colors.primary} />
+            </View>
           )}
         </Pressable>
       ) : null}
@@ -30,31 +44,49 @@ export function SectionHeader({ title, subtitle, action, style }: SectionHeaderP
 const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    marginTop: 24,
-    marginBottom: 12,
+    alignItems: 'stretch',
+    marginTop: spacing.xl,
+    marginBottom: spacing.md,
+  },
+  gutter: {
+    paddingHorizontal: spacing.lg,
+  },
+  rule: {
+    width: borderWidth.rule,
+    backgroundColor: colors.primary,
+    marginRight: spacing.md,
   },
   titles: {
     flex: 1,
-    marginRight: 12,
+    justifyContent: 'center',
+    marginRight: spacing.md,
+  },
+  eyebrow: {
+    ...fonts.caption.sm,
+    color: colors.primary,
+    marginBottom: 2,
   },
   title: {
+    ...fonts.title.md,
     color: colors.text,
-    fontSize: 13,
-    letterSpacing: 1.1,
     textTransform: 'uppercase',
-    fontFamily: fonts.heading,
+    letterSpacing: 0.4,
   },
   subtitle: {
+    ...fonts.meta.sm,
     color: colors.textMuted,
-    fontSize: 12,
     marginTop: 2,
   },
+  actionHit: {
+    justifyContent: 'center',
+  },
   action: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  actionLabel: {
+    ...fonts.caption.sm,
     color: colors.primary,
-    fontSize: 13,
-    fontWeight: '600',
+    marginRight: spacing.xs,
   },
 })

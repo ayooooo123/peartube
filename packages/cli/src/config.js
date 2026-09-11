@@ -284,10 +284,11 @@ function discoveryFromEnv(env) {
 }
 
 function networkFromEnv(env) {
-  if (!env.PEARTUBE_NETWORK_ANNOUNCE && !env.PEARTUBE_NETWORK_BOOTSTRAP) return null
+  if (!env.PEARTUBE_NETWORK_ANNOUNCE && !env.PEARTUBE_NETWORK_BOOTSTRAP && !env.PEARTUBE_NETWORK_PEER_ADDRESSES) return null
   const network = {}
   if (env.PEARTUBE_NETWORK_ANNOUNCE) network.announce = parseBoolean(env.PEARTUBE_NETWORK_ANNOUNCE)
   if (env.PEARTUBE_NETWORK_BOOTSTRAP) network.bootstrap = env.PEARTUBE_NETWORK_BOOTSTRAP
+  if (env.PEARTUBE_NETWORK_PEER_ADDRESSES) network.peerAddresses = JSON.parse(env.PEARTUBE_NETWORK_PEER_ADDRESSES)
   return network
 }
 

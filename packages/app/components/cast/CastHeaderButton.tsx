@@ -37,19 +37,20 @@ export function CastHeaderButton({
       setShowCastRemote(true)
       return
     }
-    setShowCastPicker(true)
     cast.startDiscovery()
+    setShowCastPicker(true)
   }, [cast])
 
   const closePicker = useCallback(() => {
-    setShowCastPicker(false)
     cast.stopDiscovery()
+    setShowCastPicker(false)
+    setConnectingDeviceId(null)
   }, [cast])
 
   const handleSwitchDevice = useCallback(() => {
     setShowCastRemote(false)
-    setShowCastPicker(true)
     cast.startDiscovery()
+    setShowCastPicker(true)
   }, [cast])
 
   const handleDeviceSelect = useCallback(async (deviceId: string) => {
@@ -58,7 +59,7 @@ export function CastHeaderButton({
     try {
       const success = await cast.connect(deviceId)
       if (!success) {
-        Alert.alert('Chromecast', cast.lastError || 'Failed to connect to Chromecast device.')
+        Alert.alert('Cast Error', cast.lastError || 'Failed to connect to Chromecast device.')
         return
       }
       setRecentDeviceId(deviceId)

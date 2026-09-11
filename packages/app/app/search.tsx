@@ -1,9 +1,11 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
-import { ActivityIndicator, FlatList, Platform, Pressable, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, FlatList, Platform, StyleSheet, Text, TextInput, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 
-import { colors } from '@/lib/colors'
+import { Button, EmptyState, Panel, ScreenHeader } from '@/components/primitives'
+import { colors, radius, spacing, borderWidth, fontSize } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { providerHitAction, resolveProviderHit, type ProviderHit, type ProviderResolution } from '@/lib/provider-consumer-flow'
 import { useApp } from './_layout'
@@ -18,59 +20,37 @@ function MobileSearchBar({
   onSubmit(query: string): void
 }) {
   const [queryInput, setQueryInput] = useState(initialQuery)
+  const [focused, setFocused] = useState(false)
   const handleSubmit = useCallback(() => {
     const nextQuery = queryInput.trim()
     if (nextQuery) onSubmit(nextQuery)
   }, [onSubmit, queryInput])
 
   return (
-    <View style={{
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      paddingHorizontal: 16,
-      paddingVertical: 12,
-    }}>
-      <View style={{
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        borderWidth: 1,
-        borderColor: colors.border,
-        backgroundColor: colors.bgSecondary,
-        borderRadius: 12,
-        paddingHorizontal: 12,
-        paddingVertical: Platform.OS === 'web' ? 8 : 10,
-      }}>
+    <View style={styles.searchBar}>
+      <View style={[styles.inputShell, focused && styles.inputShellFocused]}>
         <Feather name="search" size={16} color={colors.textMuted} />
         <TextInput
           value={queryInput}
           onChangeText={setQueryInput}
-          placeholder="Search the media catalog"
+          placeholder="SEARCH THE SWARM"
           placeholderTextColor={colors.textMuted}
-          style={{ flex: 1, color: colors.text, marginLeft: 8 }}
+          style={styles.input}
           autoCapitalize="none"
           returnKeyType="search"
           onSubmitEditing={handleSubmit}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
         />
       </View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Search media catalog"
+      <Button
+        label={searching ? 'Searching…' : 'Search'}
         onPress={handleSubmit}
         disabled={!queryInput.trim() || searching}
-        style={{
-          paddingHorizontal: 14,
-          paddingVertical: 10,
-          borderRadius: 12,
-          backgroundColor: colors.primary,
-          opacity: (!queryInput.trim() || searching) ? 0.5 : 1,
-        }}
-      >
-        <Text style={{ color: colors.onPrimary, fontWeight: '700' }}>
-          {searching ? 'Searching…' : 'Search'}
-        </Text>
-      </Pressable>
+        loading={searching}
+        size="md"
+        accessibilityLabel="Search media catalog"
+      />
     </View>
   )
 }
@@ -320,27 +300,9 @@ export default function SearchScreen() {
     router.replace({ pathname: '/search', params: { q: nextQuery } })
   }, [router])
   return (
-    <View style={{
-      flex: 1,
-      backgroundColor: colors.bg,
-      paddingTop: isDesktop ? 0 : insets.top,
-    }}>
+    <View style={[styles.screen, { paddingTop: isDesktop ? 0 : insets.top }]}>
       {!isDesktop ? (
-        <View style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          paddingHorizontal: 16,
-          paddingVertical: 12,
-          borderBottomWidth: 1,
-          borderBottomColor: colors.border,
-        }}>
-          <Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={() => router.back()}>
-            <Feather name="arrow-left" size={24} color={colors.text} />
-          </Pressable>
-          <Text style={{ color: colors.text, fontSize: 18, fontWeight: '600', marginLeft: 16 }}>
-            Search
-          </Text>
-        </View>
+        <ScreenHeader title="Search" onBack={() => router.back()} />
       ) : null}
 
       {!isDesktop ? (
@@ -365,14 +327,14 @@ export default function SearchScreen() {
           }}
           onEndReachedThreshold={0.5}
           contentContainerStyle={{
-            paddingHorizontal: 16,
-            paddingVertical: 12,
-            paddingBottom: Math.max(insets.bottom + 24, 24),
-            gap: 8,
+            paddingHorizontal: spacing.lg,
+            paddingVertical: spacing.md,
+            paddingBottom: Math.max(insets.bottom + spacing.xl, spacing.xl),
+            gap: spacing.sm,
           }}
           ListHeaderComponent={
             providerSearch.status === 'error' || providerSearch.partial || providerSearch.stale ? (
-              <Text accessibilityRole="alert" style={{ color: colors.textMuted, paddingBottom: 8 }}>
+              <Text accessibilityRole="alert" style={styles.providerError}>
                 {providerSearch.status === 'error'
                   ? 'Search results are currently unavailable.'
                   : providerSearch.partial
@@ -383,14 +345,14 @@ export default function SearchScreen() {
           }
           ListEmptyComponent={
             providerSearch.status === 'ready' && !providerSearch.partial && !providerSearch.stale ? (
-              <View style={{ paddingVertical: 32, alignItems: 'center' }}>
-                <Text style={{ color: colors.textMuted, fontSize: 16 }}>No results found for “{query}”</Text>
+              <View style={{ paddingVertical: spacing.xxl, alignItems: 'center' }}>
+                <Text style={{ color: colors.textMuted, fontSize: fontSize.md }}>No results found for “{query}”</Text>
               </View>
             ) : null
           }
           ListFooterComponent={
             providerSearch.loadingNext ? (
-              <View style={{ paddingVertical: 16, alignItems: 'center' }}>
+              <View style={{ paddingVertical: spacing.lg, alignItems: 'center' }}>
                 <ActivityIndicator color={colors.primary} />
               </View>
             ) : null
@@ -413,49 +375,113 @@ export default function SearchScreen() {
                   : hit.published
                     ? 'Ready to watch'
                     : 'Available by request')
+            const busy = Boolean(providerSearch.openingRef)
             return (
-              <Pressable
-                accessibilityRole="button"
+              <Panel
+                onPress={busy || action === 'unavailable' ? undefined : () => { void openProviderHit(hit) }}
                 accessibilityLabel={`${actionLabel} ${hit.title}`}
-                disabled={Boolean(providerSearch.openingRef) || action === 'unavailable'}
-                onPress={() => { void openProviderHit(hit) }}
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  borderWidth: 1,
-                  borderColor: colors.border,
-                  borderRadius: 12,
-                  backgroundColor: colors.bgSecondary,
-                  paddingHorizontal: 14,
-                  paddingVertical: 12,
-                  opacity: providerSearch.openingRef && !opening ? 0.55 : 1,
-                }}
+                style={[
+                  styles.providerHit,
+                  busy && !opening ? { opacity: 0.55 } : null,
+                ]}
               >
-                <View style={{ flex: 1, paddingRight: 12 }}>
-                  <Text style={{ color: colors.text, fontWeight: '700', fontSize: 15 }} numberOfLines={1}>
+                <View style={styles.providerHitCopy}>
+                  <Text style={styles.hitTitle} numberOfLines={1}>
                     {hit.title}
                   </Text>
-                  <Text style={{ color: colors.textMuted, fontSize: 13 }} numberOfLines={1}>
+                  <Text style={styles.hitMeta} numberOfLines={1}>
                     {badgeLabel}
                   </Text>
                 </View>
-                <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 14 }}>
+                <Text style={styles.hitAction}>
                   {actionLabel}
                 </Text>
-              </Pressable>
+              </Panel>
             )
           }}
         />
       ) : (
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 }}>
-          <Feather name="search" size={42} color={colors.textMuted} />
-          <Text style={{ color: colors.text, fontSize: 19, fontWeight: '700' }}>Search your media catalog</Text>
-          <Text style={{ color: colors.textMuted, textAlign: 'center' }}>
-            Search only includes entities currently visible under your local moderation profile.
-          </Text>
-        </View>
+        <EmptyState
+          icon="search"
+          title="Search your media catalog"
+          body="Search only includes entities currently visible under your local moderation profile."
+        />
       )}
     </View>
   )
 }
+
+const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: colors.bg,
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  inputShell: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: borderWidth.rule,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceHover,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: Platform.OS === 'web' ? spacing.sm : 10,
+  },
+  inputShellFocused: {
+    borderColor: colors.borderFocus,
+  },
+  input: {
+    flex: 1,
+    color: colors.text,
+    marginLeft: spacing.sm,
+    ...fonts.meta.sm,
+  },
+  providerBlock: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    gap: spacing.sm,
+  },
+  providerTitle: {
+    ...fonts.title.md,
+    color: colors.text,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  providerHit: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  providerHitCopy: {
+    flex: 1,
+    paddingRight: spacing.md,
+  },
+  hitTitle: {
+    ...fonts.title.md,
+    fontSize: 15,
+    lineHeight: 20,
+    color: colors.text,
+  },
+  hitMeta: {
+    ...fonts.meta.sm,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  hitAction: {
+    ...fonts.caption.sm,
+    color: colors.primary,
+  },
+  providerError: {
+    ...fonts.meta.sm,
+    color: colors.textMuted,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+  },
+})

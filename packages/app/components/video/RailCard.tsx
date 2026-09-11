@@ -3,9 +3,10 @@
  */
 import { memo } from 'react'
 import { StyleSheet, Text, View } from 'react-native'
-import { GlassCard } from '@/components/primitives'
+import { Panel } from '@/components/primitives'
 import { ThumbnailImage } from './ThumbnailImage'
-import { colors } from '@/lib/colors'
+import { colors, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 
 export const RAIL_CARD_WIDTH = 220
 
@@ -21,7 +22,7 @@ interface RailCardProps {
 
 function RailCardComponent({ title, subtitle, thumbnailUrl, duration, progress = 0, onPress }: RailCardProps) {
   return (
-    <GlassCard padded={false} style={styles.card} onPress={onPress} accessibilityLabel={`Play ${title}`}>
+    <Panel padded={false} style={styles.card} onPress={onPress} accessibilityLabel={`Play ${title}`}>
       <View style={styles.thumbFrame}>
         <ThumbnailImage
           thumbnailUrl={thumbnailUrl}
@@ -38,7 +39,7 @@ function RailCardComponent({ title, subtitle, thumbnailUrl, duration, progress =
         <Text style={styles.title} numberOfLines={2}>{title}</Text>
         {subtitle ? <Text style={styles.subtitle} numberOfLines={1}>{subtitle}</Text> : null}
       </View>
-    </GlassCard>
+    </Panel>
   )
 }
 
@@ -52,36 +53,36 @@ const styles = StyleSheet.create({
     width: '100%',
     aspectRatio: 16 / 9,
     overflow: 'hidden',
-    borderTopLeftRadius: 15,
-    borderTopRightRadius: 15,
     backgroundColor: colors.bg,
+    borderBottomWidth: borderWidth.hairline,
+    borderBottomColor: colors.borderSubtle,
   },
   progressTrack: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    height: 3,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    height: borderWidth.rule,
+    backgroundColor: colors.bgActive,
   },
   progressFill: {
     height: '100%',
     backgroundColor: colors.primary,
   },
   info: {
-    paddingHorizontal: 12,
-    paddingTop: 9,
-    paddingBottom: 11,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.md,
   },
   title: {
-    color: colors.text,
+    ...fonts.title.md,
     fontSize: 13,
-    fontWeight: '600',
-    lineHeight: 18,
+    lineHeight: 17,
+    color: colors.text,
   },
   subtitle: {
+    ...fonts.meta.xs,
     color: colors.textMuted,
-    fontSize: 11,
-    marginTop: 3,
+    marginTop: spacing.xs,
   },
 })

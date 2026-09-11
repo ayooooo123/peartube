@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { View, Pressable, StyleSheet, Platform, Keyboard, KeyboardEvent } from 'react-native'
+import { View, Pressable, StyleSheet, Platform, Keyboard, KeyboardEvent, Text, LayoutChangeEvent } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { usePathname, useRouter } from 'expo-router'
+import { usePathname, useRouter, type Href } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
-import { LinearGradient } from 'expo-linear-gradient'
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -15,10 +14,13 @@ import Animated, {
 import { useVideoPlayerSession } from '@/lib/VideoPlayerContext'
 import { setTabBarMetrics } from '@/lib/tabBarHeight'
 import { usePlatform } from '@/lib/PlatformProvider'
-import { colors, spacing, radius } from '@/lib/colors'
+import { colors, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
+import { springs } from '@/lib/motion'
 import * as haptics from '@/lib/haptics'
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable)
+const AnimatedView = Animated.createAnimatedComponent(View)
 
 interface TabItem {
   name: string
@@ -33,19 +35,11 @@ const TABS: TabItem[] = [
   { name: 'library', path: '/library', icon: 'layers', label: 'Library' },
 ]
 
-/** Bar height before safe-area padding, matching the reference dock. */
-const BASE_TAB_HEIGHT = 52
-/** Breathing room above/below the tab row inside the dock. */
-const DOCK_PADDING = spacing.xs
-const DOCK_HEIGHT = BASE_TAB_HEIGHT + DOCK_PADDING * 2
-const DOCK_HORIZONTAL_INSET = spacing.sm
-/** The shared scale tops out at 16; the dock wants the softer 24 of the reference. */
-const DOCK_BORDER_RADIUS = 24
+/** Tab row height, under the 2px top rule. */
+const BASE_TAB_HEIGHT = 56
+/** Rule plus row: what scrollable screens must reserve above the safe area. */
+const BAR_HEIGHT = BASE_TAB_HEIGHT + borderWidth.rule
 const ICON_SIZE = 20
-/** Glyph box plus symmetric padding — sized so the active indicator fits it exactly. */
-const TAB_CONTENT_SIZE = 24 + spacing.sm * 2
-const ACTIVE_INDICATOR_WIDTH = 48
-const ACTIVE_INDICATOR_HEIGHT = TAB_CONTENT_SIZE
 /** How long an optimistic selection may lead the router before it snaps back. */
 const OPTIMISTIC_TAB_TIMEOUT_MS = 3000
 
@@ -57,7 +51,7 @@ function isTabActive(pathname: string, tabPath: string): boolean {
   return pathname === tabPath || pathname === `/(tabs)${tabPath}`
 }
 
-export function PillTabBar() {
+export function TabBar() {
   const insets = useSafeAreaInsets()
   const pathname = usePathname()
   const router = useRouter()
@@ -68,13 +62,19 @@ export function PillTabBar() {
   const barVisible = useSharedValue(1)
   const keyboardVisible = useSharedValue(0)
   const bottomPadding = Math.max(insets.bottom, spacing.sm)
-  const hiddenOffset = DOCK_HEIGHT + bottomPadding + spacing.xl
+  const hiddenOffset = BAR_HEIGHT + bottomPadding + spacing.xl
 
   // The indicator follows the finger, not the router: navigation commits a frame
   // or two later and a lagging highlight reads as a dropped tap.
   const [pendingTab, setPendingTab] = useState<string | null>(null)
   const routedTab = TABS.find((tab) => isTabActive(pathname, tab.path))?.name ?? null
   const currentTab = pendingTab ?? routedTab
+  const currentTabIndex = TABS.findIndex((tab) => tab.name === currentTab)
+
+  const [containerWidth, setContainerWidth] = useState(0)
+  const cellWidth = containerWidth / TABS.length
+
+  const indicatorTranslateX = useSharedValue(0)
 
   useEffect(() => {
     if (isDesktop) {
@@ -123,9 +123,16 @@ export function PillTabBar() {
 
   useEffect(() => {
     if (isDesktop) return
-    // Scrollable screens reserve this much bottom space; the dock floats out of flow.
-    setTabBarMetrics(DOCK_PADDING + DOCK_HEIGHT + bottomPadding, insets.bottom)
+    // Scrollable screens reserve this much bottom space; the bar sits in flow.
+    setTabBarMetrics(BAR_HEIGHT + bottomPadding, insets.bottom)
   }, [bottomPadding, insets.bottom, isDesktop])
+
+  // The lime indicator slides along the top rule to the active cell.
+  useEffect(() => {
+    if (currentTabIndex >= 0 && cellWidth > 0) {
+      indicatorTranslateX.value = withSpring(currentTabIndex * cellWidth, springs.snappy)
+    }
+  }, [currentTabIndex, cellWidth, indicatorTranslateX])
 
   const containerStyle = useAnimatedStyle(() => {
     const translateY = interpolate(barVisible.value, [0, 1], [hiddenOffset, 0], Extrapolation.CLAMP)
@@ -141,6 +148,10 @@ export function PillTabBar() {
     }
   })
 
+  const indicatorStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: indicatorTranslateX.value }],
+  }))
+
   if (isDesktop) {
     return null
   }
@@ -150,39 +161,33 @@ export function PillTabBar() {
       pointerEvents="box-none"
       style={[styles.shell, { paddingBottom: bottomPadding }, containerStyle]}
     >
-      <View style={styles.dock}>
-        {/* No blur: expo-blur is not a dependency, so the glass is faked with a
-            translucent scrim plus a top-down sheen that fades out entirely. */}
-        <LinearGradient
-          pointerEvents="none"
-          colors={[colors.glass, 'transparent']}
-          locations={[0, 0.6]}
-          style={StyleSheet.absoluteFill}
-        />
-        <View pointerEvents="none" style={styles.topHighlight} />
+      <View pointerEvents="none" style={styles.topRule} />
+      <View
+        accessibilityRole="tablist"
+        style={styles.tabsContainer}
+        onLayout={(e: LayoutChangeEvent) => setContainerWidth(e.nativeEvent.layout.width)}
+      >
+        <AnimatedView pointerEvents="none" style={[styles.activeIndicator, indicatorStyle, { width: cellWidth }]} />
+        {TABS.map((tab) => {
+          const isActive = currentTab === tab.name
 
-        <View accessibilityRole="tablist" style={styles.tabsContainer}>
-          {TABS.map((tab) => {
-            const isActive = currentTab === tab.name
-
-            return (
-              <TabButton
-                key={tab.name}
-                tab={tab}
-                isActive={isActive}
-                onPress={() => {
-                  if (isTabActive(pathname, tab.path)) {
-                    setPendingTab(null)
-                    return
-                  }
-                  haptics.tabSwitch()
-                  setPendingTab(tab.name)
-                  router.replace(tab.path as any)
-                }}
-              />
-            )
-          })}
-        </View>
+          return (
+            <TabButton
+              key={tab.name}
+              tab={tab}
+              isActive={isActive}
+              onPress={() => {
+                if (isTabActive(pathname, tab.path)) {
+                  setPendingTab(null)
+                  return
+                }
+                haptics.tabSwitch()
+                setPendingTab(tab.name)
+                router.replace(tab.path as Href)
+              }}
+            />
+          )
+        })}
       </View>
     </Animated.View>
   )
@@ -196,25 +201,21 @@ interface TabButtonProps {
 
 function TabButton({ tab, isActive, onPress }: TabButtonProps) {
   const scale = useSharedValue(1)
-  const opacity = useSharedValue(1)
 
   const handlePressIn = useCallback(() => {
-    scale.value = withSpring(0.96, { damping: 15, stiffness: 400 })
-    opacity.value = withTiming(0.72, { duration: 100 })
-  }, [opacity, scale])
+    scale.value = withSpring(0.96, springs.press)
+  }, [scale])
 
   const handlePressOut = useCallback(() => {
-    scale.value = withSpring(1, { damping: 15, stiffness: 400 })
-    opacity.value = withTiming(1, { duration: 100 })
-  }, [opacity, scale])
+    scale.value = withSpring(1, springs.press)
+  }, [scale])
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
-    opacity: opacity.value,
   }))
 
-  const iconSize = ICON_SIZE
-  const iconColor = isActive ? colors.onPrimary : colors.textSecondary
+  const iconColor = isActive ? colors.primary : colors.textMuted
+  const labelColor = isActive ? colors.primary : colors.textMuted
 
   return (
     <AnimatedPressable
@@ -227,10 +228,8 @@ function TabButton({ tab, isActive, onPress }: TabButtonProps) {
       accessibilityState={{ selected: isActive }}
     >
       <View style={styles.tabContent}>
-        {isActive ? <View pointerEvents="none" style={styles.activeIndicator} /> : null}
-        {/* Unselected glyphs sit on an unpredictable backdrop, so a soft drop shadow
-            keeps them legible. The selected glyph rides the accent pill instead. */}
-        <Feather name={tab.icon} size={iconSize} color={iconColor} style={isActive ? undefined : styles.inactiveIcon} />
+        <Feather name={tab.icon} size={ICON_SIZE} color={iconColor} />
+        <Text style={[styles.label, { color: labelColor }]}>{tab.label}</Text>
       </View>
     </AnimatedPressable>
   )
@@ -243,65 +242,40 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     zIndex: 100,
-    paddingTop: DOCK_PADDING,
-    paddingHorizontal: DOCK_HORIZONTAL_INSET,
-    backgroundColor: 'transparent',
+    backgroundColor: colors.bg,
   },
-  dock: {
-    minHeight: DOCK_HEIGHT,
-    borderRadius: DOCK_BORDER_RADIUS,
-    overflow: 'hidden',
-    backgroundColor: colors.scrim,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.glassBorder,
-    shadowColor: colors.contrast,
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.34,
-    shadowRadius: 22,
-    elevation: 14,
-  },
-  topHighlight: {
-    position: 'absolute',
-    top: 0,
-    left: spacing.lg,
-    right: spacing.lg,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: colors.glassBorder,
+  topRule: {
+    height: borderWidth.rule,
+    backgroundColor: colors.border,
   },
   tabsContainer: {
-    flex: 1,
+    position: 'relative',
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'stretch',
     justifyContent: 'space-around',
-    paddingVertical: DOCK_PADDING,
+    height: BASE_TAB_HEIGHT,
+    backgroundColor: colors.bg,
+  },
+  activeIndicator: {
+    position: 'absolute',
+    // Sits on top of the rule so the lime replaces the grey under the active cell.
+    top: -borderWidth.rule,
+    left: 0,
+    height: borderWidth.rule,
+    backgroundColor: colors.primary,
   },
   tabButton: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: radius.pill,
+    zIndex: 10,
   },
   tabContent: {
-    position: 'relative',
-    width: TAB_CONTENT_SIZE,
-    height: TAB_CONTENT_SIZE,
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: spacing.xs,
   },
-  activeIndicator: {
-    position: 'absolute',
-    top: 0,
-    left: (TAB_CONTENT_SIZE - ACTIVE_INDICATOR_WIDTH) / 2,
-    width: ACTIVE_INDICATOR_WIDTH,
-    height: ACTIVE_INDICATOR_HEIGHT,
-    borderRadius: ACTIVE_INDICATOR_HEIGHT / 2,
-    backgroundColor: colors.primary,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.glassBorder,
-  },
-  inactiveIcon: {
-    textShadowColor: colors.contrast,
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 5,
+  label: {
+    ...fonts.caption.sm,
+    textAlign: 'center',
   },
 })

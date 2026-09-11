@@ -1,5 +1,6 @@
 import React, { Component, ReactNode } from 'react'
-import { colors } from '@/lib/colors'
+import { colors, radius, spacing } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 
 interface ErrorBoundaryProps {
   children: ReactNode
@@ -69,7 +70,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
       return (
         <div style={styles.container}>
-          <div style={styles.content}>
+          <div style={styles.panel}>
+            <p style={styles.eyebrow}>ERROR</p>
             <h1 style={styles.title}>Something went wrong</h1>
             <p style={styles.subtitle}>
               The app encountered an unexpected error.
@@ -80,12 +82,15 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 <p style={styles.errorTitle}>Error Details:</p>
                 <p style={styles.errorMessage}>
                   {this.state.error.message}
+                  {this.state.errorInfo?.componentStack
+                    ? `\n${this.state.errorInfo.componentStack}`
+                    : ''}
                 </p>
               </div>
             )}
 
             <button type="button" style={styles.retryButton} onClick={this.handleRetry}>
-              <span style={styles.retryButtonText}>Try Again</span>
+              <span style={styles.retryButtonText}>RETRY</span>
             </button>
 
             <p style={styles.hint}>
@@ -107,74 +112,98 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
+    padding: spacing.xl,
     minHeight: '100vh',
   },
-  content: {
-    maxWidth: 400,
+  panel: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: colors.surface,
+    border: `2px solid ${colors.error}`,
+    borderRadius: radius.card,
+    padding: spacing.lg,
     display: 'flex',
     flexDirection: 'column',
-    alignItems: 'center',
+    alignItems: 'flex-start',
+  },
+  eyebrow: {
+    margin: 0,
+    fontFamily: fonts.monoMedium,
+    fontSize: 11,
+    lineHeight: '14px',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    color: colors.error,
   },
   title: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: colors.text,
-    marginBottom: 12,
-    textAlign: 'center',
     margin: 0,
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
+    fontFamily: fonts.heading,
+    fontSize: 18,
+    lineHeight: '22px',
+    color: colors.text,
   },
   subtitle: {
-    fontSize: 16,
-    color: colors.textMuted,
-    textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: '24px',
     margin: 0,
+    marginBottom: spacing.lg,
+    fontSize: 14,
+    lineHeight: '20px',
+    color: colors.textSecondary,
   },
   errorBox: {
-    backgroundColor: colors.bgElevated,
-    borderRadius: 8,
-    padding: 16,
-    marginBottom: 24,
+    backgroundColor: colors.surfaceHover,
+    border: `1px solid ${colors.border}`,
+    borderRadius: radius.card,
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
     width: '100%',
+    boxSizing: 'border-box',
   },
   errorTitle: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.textMuted,
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
     margin: 0,
+    marginBottom: spacing.sm,
+    fontFamily: fonts.monoMedium,
+    fontSize: 11,
+    lineHeight: '14px',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    color: colors.textMuted,
   },
   errorMessage: {
-    fontSize: 13,
-    color: colors.textMuted,
-    fontFamily: 'monospace',
     margin: 0,
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    lineHeight: '12px',
+    color: colors.error,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
   },
   retryButton: {
-    backgroundColor: colors.accent,
-    paddingLeft: 32,
-    paddingRight: 32,
-    paddingTop: 14,
-    paddingBottom: 14,
-    borderRadius: 8,
-    marginBottom: 24,
-    border: 'none',
+    backgroundColor: 'transparent',
+    border: `2px solid ${colors.border}`,
+    borderRadius: radius.card,
+    paddingLeft: spacing.xl,
+    paddingRight: spacing.xl,
+    paddingTop: 12,
+    paddingBottom: 12,
+    marginBottom: spacing.lg,
     cursor: 'pointer',
   },
   retryButtonText: {
     color: colors.text,
-    fontSize: 16,
-    fontWeight: '600',
+    fontFamily: fonts.heading,
+    fontSize: 13,
+    lineHeight: '16px',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
   },
   hint: {
-    fontSize: 13,
-    color: colors.textMuted,
-    textAlign: 'center',
     margin: 0,
+    fontFamily: fonts.mono,
+    fontSize: 12,
+    lineHeight: '16px',
+    color: colors.textMuted,
   },
 }
 

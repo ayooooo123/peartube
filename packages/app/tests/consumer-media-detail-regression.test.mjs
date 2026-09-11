@@ -17,10 +17,9 @@ const NOW = Date.now()
 // bundled. The screen takes its route id and item as props here, so the router
 // stub returns empty params.
 const STUBS = {
-  'expo-vector-icons': 'export const Ionicons = () => null\nexport default { Ionicons }\n',
+  'expo-vector-icons': 'export const Ionicons = () => null\nexport const Feather = Ionicons\nexport default { Ionicons, Feather }\n',
   'safe-area': 'export const useSafeAreaInsets = () => ({ top: 0, bottom: 0, left: 0, right: 0 })\n',
   'expo-router': 'export const useLocalSearchParams = () => ({})\nexport const useRouter = () => ({ back() {}, push() {} })\n',
-  'linear-gradient': 'export const LinearGradient = () => null\nexport default { LinearGradient }\n',
 }
 
 const stubNativeOnlyDeps = {
@@ -29,7 +28,6 @@ const stubNativeOnlyDeps = {
     builder.onResolve({ filter: /^@expo\/vector-icons/ }, () => ({ path: 'expo-vector-icons', namespace: 'stub' }))
     builder.onResolve({ filter: /^react-native-safe-area-context$/ }, () => ({ path: 'safe-area', namespace: 'stub' }))
     builder.onResolve({ filter: /^expo-router$/ }, () => ({ path: 'expo-router', namespace: 'stub' }))
-    builder.onResolve({ filter: /^expo-linear-gradient$/ }, () => ({ path: 'linear-gradient', namespace: 'stub' }))
     builder.onLoad({ filter: /.*/, namespace: 'stub' }, args => ({
       contents: STUBS[args.path],
       loader: 'js',

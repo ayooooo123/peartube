@@ -4,7 +4,7 @@ import { View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { DesktopLayout } from '@/components/desktop/DesktopLayout'
-import { PillTabBar } from '@/components/PillTabBar'
+import { TabBar } from '@/components/TabBar'
 import { colors } from '@/lib/colors'
 
 export default function TabLayout() {
@@ -33,7 +33,7 @@ export default function TabLayout() {
           tabBarStyle: { display: 'none' },
           sceneStyle: { backgroundColor: colors.bg },
         }}
-        tabBar={() => <PillTabBar />}
+        tabBar={() => <TabBar />}
       >
         <Tabs.Screen name="index" />
         <Tabs.Screen name="discover" />

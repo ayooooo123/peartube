@@ -1452,6 +1452,7 @@ export async function writeStaticAsset({
   store,
   reader = null,
   signal,
+  onSourceComplete,
   offload = null,
   resume = false,
   // `preferStaging: true` says re-reading this source is expensive (a remote
@@ -1544,6 +1545,8 @@ export async function writeStaticAsset({
           staging.length
         )
       }
+      await onSourceComplete?.()
+
 
       assertNotCancelled(signal)
       const treeHash = await staging.treeHash()

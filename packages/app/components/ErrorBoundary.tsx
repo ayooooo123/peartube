@@ -5,8 +5,10 @@
  * Shows a fallback UI with retry option instead of a blank screen.
  */
 import React, { Component, ReactNode } from 'react'
-import { View, Text, Pressable, StyleSheet, Platform } from 'react-native'
-import { colors } from '@/lib/colors'
+import { View, Text, StyleSheet, Platform } from 'react-native'
+import { colors, radius, spacing, borderWidth } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
+import { Panel, Button, Eyebrow, Body } from '@/components/primitives'
 
 interface ErrorBoundaryProps {
   children: ReactNode
@@ -71,11 +73,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   handleRetry = () => {
-    this.setState({
-      hasError: false,
-      error: null,
-      errorInfo: null,
-    })
+    this.setState({ hasError: false, error: null, errorInfo: null })
     this.props.onRetry?.()
   }
 
@@ -89,29 +87,36 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       // Default fallback UI
       return (
         <View style={styles.container}>
-          <View style={styles.content}>
+          <Panel tone="danger" style={styles.panel}>
+            <Eyebrow tone="danger">ERROR</Eyebrow>
             <Text style={styles.title}>Something went wrong</Text>
-            <Text style={styles.subtitle}>
+            <Body size="sm" tone="secondary" style={styles.subtitle}>
               The app encountered an unexpected error.
-            </Text>
+            </Body>
 
             {__DEV__ && this.state.error && (
               <View style={styles.errorBox}>
                 <Text style={styles.errorTitle}>Error Details (dev only):</Text>
-                <Text style={styles.errorMessage} numberOfLines={5}>
+                <Text style={styles.errorMessage} numberOfLines={8}>
                   {this.state.error.message}
+                  {this.state.errorInfo?.componentStack
+                    ? `\n${this.state.errorInfo.componentStack}`
+                    : ''}
                 </Text>
               </View>
             )}
 
-            <Pressable style={styles.retryButton} onPress={this.handleRetry}>
-              <Text style={styles.retryButtonText}>Try Again</Text>
-            </Pressable>
+            <Button
+              label="RETRY"
+              variant="secondary"
+              onPress={this.handleRetry}
+              style={styles.retryButton}
+            />
 
             <Text style={styles.hint}>
               If this keeps happening, try restarting the app.
             </Text>
-          </View>
+          </Panel>
         </View>
       )
     }
@@ -126,62 +131,46 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
+    padding: spacing.xl,
   },
-  content: {
-    maxWidth: 400,
-    alignItems: 'center',
+  panel: {
+    width: '100%',
+    maxWidth: 420,
   },
   title: {
-    fontSize: 24,
-    fontWeight: '700',
+    ...fonts.title.md,
     color: colors.text,
-    marginBottom: 12,
-    textAlign: 'center',
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
   },
   subtitle: {
-    fontSize: 16,
-    color: colors.textMuted,
-    textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: 24,
+    marginBottom: spacing.lg,
   },
   errorBox: {
-    backgroundColor: colors.bgElevated,
-    borderRadius: 8,
-    padding: 16,
-    marginBottom: 24,
+    backgroundColor: colors.surfaceHover,
+    borderWidth: borderWidth.hairline,
+    borderColor: colors.border,
+    borderRadius: radius.card,
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
     width: '100%',
   },
   errorTitle: {
-    fontSize: 12,
-    fontWeight: '600',
+    ...fonts.caption.sm,
     color: colors.textMuted,
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    marginBottom: spacing.sm,
   },
   errorMessage: {
-    fontSize: 13,
-    color: colors.red,
-    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    ...fonts.meta.xs,
+    color: colors.error,
   },
   retryButton: {
-    backgroundColor: colors.accent,
-    paddingHorizontal: 32,
-    paddingVertical: 14,
-    borderRadius: 8,
-    marginBottom: 24,
-  },
-  retryButtonText: {
-    color: colors.text,
-    fontSize: 16,
-    fontWeight: '600',
+    alignSelf: 'flex-start',
+    marginBottom: spacing.lg,
   },
   hint: {
-    fontSize: 13,
+    ...fonts.meta.sm,
     color: colors.textMuted,
-    textAlign: 'center',
   },
 })
 

@@ -8,6 +8,7 @@ import { ConsumerHomeView } from '@/components/media/ConsumerHomeView'
 import { encodeMediaEntityRouteParam, getMediaEntityRouteId } from '@/components/media/MediaEntityDetailScreen'
 import type { MediaEntitySummary } from '@peartube/core'
 import { useMediaCatalog } from '@/hooks/useMediaCatalog'
+import { useSwarmConnectionCount } from '@/hooks/useSwarmConnectionCount'
 import { colors } from '@/lib/colors'
 import { useLocalWatchState } from '@/lib/watch-history'
 import { useApp } from '../_layout'
@@ -16,6 +17,7 @@ export default function WebHomeScreen() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
   const { ready, rpc, platformEvents, backendError, startupStatus } = useApp()
+  const peerCount = useSwarmConnectionCount(rpc, ready)
   // Continue Watching and Recommended are this device's own state. They come
   // from the encrypted personal store, never from a request.
   const watchState = useLocalWatchState()
@@ -44,6 +46,7 @@ export default function WebHomeScreen() {
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <ConsumerHomeView
         state={catalog}
+        peerCount={peerCount}
         diagnostic={catalog.diagnostic}
         watchState={watchState}
         onRefresh={() => { void catalog.refresh() }}

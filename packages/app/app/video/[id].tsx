@@ -19,6 +19,7 @@ import { VideoEditModal } from '@/components/VideoEditModal'
 import { makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { spacing, radius, borderWidth } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
+import { useSwarmConnectionCount } from '@/hooks/useSwarmConnectionCount'
 // HRPC methods used: preparePlayback, getVideoUrl, getVideoStats, getChannelMeta
 
 function formatDate(timestamp: number | string): string {
@@ -205,36 +206,9 @@ function P2PStatsExpandedContent({
 // P2P Stats Bar Component - Enhanced with more details
 function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
   const { rpc: appRpc } = useApp()
-  const [globalConnections, setGlobalConnections] = useState(0)
+  const globalConnections = useSwarmConnectionCount(appRpc, !stats)
   const [statsExpanded, setStatsExpanded] = useState(false)
 
-  // Fetch global connection count as network diagnostics when video stats are not available yet.
-  useEffect(() => {
-    let mounted = true
-    let intervalId: NodeJS.Timeout | null = null
-
-    const fetchGlobalStatus = async () => {
-      try {
-        const swarmStatus = await appRpc?.getSwarmStatus?.()
-        const connectionCount = swarmStatus?.swarmConnections ?? 0
-        if (mounted) {
-          setGlobalConnections(connectionCount)
-        }
-      } catch {
-        // Ignore errors - backend might be unavailable
-      }
-    }
-
-    if (!stats && appRpc) {
-      fetchGlobalStatus()
-      intervalId = setInterval(fetchGlobalStatus, 2000)
-    }
-
-    return () => {
-      mounted = false
-      if (intervalId) clearInterval(intervalId)
-    }
-  }, [stats, appRpc])
 
   if (__DEV__) {
     console.log('[P2PStatsBar] Rendering, stats:', stats ? 'present' : 'null', 'globalConnections:', globalConnections)

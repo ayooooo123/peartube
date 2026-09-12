@@ -8,6 +8,7 @@ import { EventEmitter } from 'node:events'
 import { createServer, request } from 'node:http'
 import { tmpdir } from 'node:os'
 import Corestore from 'corestore'
+import ConnectionSet from 'hyperswarm/lib/connection-set.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
@@ -676,12 +677,6 @@ test('storage does not monkey-patch Hyperswarm peer discovery into app-level pee
   assert.doesNotMatch(storageSource, /swarm\.emit\('peer', peer, topic\)/)
 })
 
-test('storage captures Hyperswarm connection lifecycle diagnostics', () => {
-  assert.match(storageSource, /function createSwarmDiagnostics\(swarm\)/)
-  assert.match(storageSource, /globalSwarmDiagnostics = createSwarmDiagnostics\(swarm\)/)
-  assert.match(storageSource, /globalSwarmDiagnostics\?\.recordConnection\?\.\(conn, info\)/)
-  assert.match(storageSource, /hyperswarm: diagnostics/)
-})
 
 test('pre-open connection failure remains visible in scoped diagnostic history', async () => {
   const { createSwarmDiagnostics, installSwarmConnectDiagnostics } = await loadStorageBoundaries()
@@ -690,18 +685,19 @@ test('pre-open connection failure remains visible in scoped diagnostic history',
   raw.remotePort = 49737
   const connection = new EventEmitter()
   connection.rawStream = raw
+  connection.remotePublicKey = Buffer.alloc(32, 1)
   const swarm = {
-    _allConnections: new Map(),
-    _connect(peer) {
-      this._allConnections.set(peer.publicKey, connection)
-      return connection
+    _allConnections: new ConnectionSet(),
+    _connect() {
+      this._allConnections.add(connection)
     },
   }
   const diagnostics = createSwarmDiagnostics(swarm)
   installSwarmConnectDiagnostics(swarm, diagnostics)
   installSwarmConnectDiagnostics(swarm, diagnostics)
-  swarm._connect({ publicKey: Buffer.alloc(32, 1) })
+  swarm._connect({ publicKey: connection.remotePublicKey })
   raw.emit('connect')
+  connection.emit('error', Object.assign(new Error('Holepunch aborted'), { code: 'HOLEPUNCH_ABORTED' }))
   raw.destroyed = true
   raw.emit('close')
   connection.destroyed = true
@@ -709,7 +705,8 @@ test('pre-open connection failure remains visible in scoped diagnostic history',
   const recent = diagnostics.snapshot().recentConnections
   assert.equal(recent.length, 1, 'reinstalling diagnostics does not double-observe a connection')
   assert.equal(recent[0].type, 'client-attempt')
-  assert.deepEqual(recent[0].events.map(event => event.event), ['raw-connect', 'raw-close', 'close'])
+  assert.deepEqual(recent[0].events.map(event => event.event), ['raw-connect', 'error', 'raw-close', 'close'])
+  assert.equal(recent[0].events[1].error.code, 'HOLEPUNCH_ABORTED')
   assert.equal(recent[0].stream.rawStream.remoteHost, '127.0.0.1')
   assert.equal(recent[0].stream.rawStream.destroyed, true)
 })

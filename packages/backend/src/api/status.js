@@ -27,12 +27,13 @@ export function createStatusApi({ ctx, recentPlaybackTimings = [] }) {
     getSwarmStatus() {
       const swarm = ctx.swarm
       const networkDebug = getNetworkStats()
+      const scopedDiagnostics = ctx.scopedNetwork?.getDiagnostics?.() ?? null
       const doctor = buildDoctor(ctx, networkDebug, recentPlaybackTimings)
       return {
         swarmConnections: swarm?.connections?.size || 0,
         swarmPeers: swarm?.peers?.size || 0,
-        scopedTopics: resolveScopedTopics(ctx),
-        network: networkDebug,
+        scopedTopics: resolveScopedTopics(ctx, scopedDiagnostics),
+        network: scopedDiagnostics ? { ...networkDebug, ...scopedDiagnostics } : networkDebug,
         startupTiming: {
           storage: networkDebug?.startupTiming || null,
         },
@@ -48,8 +49,8 @@ export function createStatusApi({ ctx, recentPlaybackTimings = [] }) {
   }
 }
 
-function resolveScopedTopics(ctx) {
-  const topics = ctx.scopedNetwork?.getDiagnostics?.().topics
+function resolveScopedTopics(ctx, scopedDiagnostics) {
+  const topics = scopedDiagnostics?.topics
   if (topics) return topics
   return [
     describeScopedTopic('bootstrap', {
@@ -111,13 +112,13 @@ function buildDoctorPlayback(ctx, recentPlaybackTimings) {
 }
 
 function calculateRecommendedBoundary(discovery, dht, socket) {
-  if (discovery.discoveredPeers === 0 && dht.bootstrapped === false) {
-    return 'dht-bootstrap'
+  if (socket.swarmConnections > 0) {
+    return 'content-playback-or-ui'
   }
-  if (discovery.discoveredPeers > 0 && socket.swarmConnections === 0) {
+  if (socket.swarmPeers > 0 || discovery.discoveredPeers > 0 || socket.recentConnections.length > 0) {
     return 'transport-socket'
   }
-  return 'content-playback-or-ui'
+  return dht.bootstrapped === true ? 'peer-discovery' : 'dht-bootstrap'
 }
 
 function buildDoctor(ctx, networkDebug, recentPlaybackTimings) {

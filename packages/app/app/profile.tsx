@@ -685,7 +685,7 @@ function ProfileDiagnosticsCard({
   onRefreshDiagnostics,
 }: {
   advancedOpen: boolean
-  identity: { publicKey: string; driveKey?: string | null }
+  identity: { publicKey: string; driveKey?: string | null } | null
   canManageTranscodeSettings: boolean
   transcodeSettings: TranscodeSettings | null
   transcodeSettingsLoading: boolean
@@ -710,15 +710,19 @@ function ProfileDiagnosticsCard({
         </Pressable>
         {advancedOpen && (
           <View style={styles.advancedBody}>
-            <Text style={styles.advancedFieldLabel}>Public key</Text>
-            <Pressable onPress={() => onCopy(identity.publicKey, 'Public key')}>
-              <Text style={styles.mono} numberOfLines={2}>{identity.publicKey}</Text>
-            </Pressable>
+            {identity ? (
+              <>
+                <Text style={styles.advancedFieldLabel}>Public key</Text>
+                <Pressable onPress={() => onCopy(identity.publicKey, 'Public key')}>
+                  <Text style={styles.mono} numberOfLines={2}>{identity.publicKey}</Text>
+                </Pressable>
 
-            <Text style={[styles.advancedFieldLabel, { marginTop: 14 }]}>Channel key</Text>
-            <Pressable onPress={() => identity.driveKey && onCopy(identity.driveKey, 'Channel key')}>
-              <Text style={styles.mono} numberOfLines={2}>{identity.driveKey}</Text>
-            </Pressable>
+                <Text style={[styles.advancedFieldLabel, { marginTop: 14 }]}>Channel key</Text>
+                <Pressable onPress={() => identity.driveKey && onCopy(identity.driveKey, 'Channel key')}>
+                  <Text style={styles.mono} numberOfLines={2}>{identity.driveKey}</Text>
+                </Pressable>
+              </>
+            ) : null}
 
             {canManageTranscodeSettings && (
               <View style={{ marginTop: 16 }}>
@@ -869,6 +873,7 @@ function ProfileSharedCards({
   onClearCache,
   storageSectionSubtitle,
   developerModeSection,
+  diagnostics,
 }: {
   devices: PersonalDevice[]
   devicesLoading: boolean
@@ -905,6 +910,7 @@ function ProfileSharedCards({
   onClearCache: () => void
   storageSectionSubtitle: string
   developerModeSection: ReactNode
+  diagnostics: ReactNode
 }) {
   return (
     <>
@@ -954,6 +960,7 @@ function ProfileSharedCards({
       />
 
       {developerModeSection}
+      {developerModeEnabled ? diagnostics : null}
     </>
   )
 }
@@ -1045,8 +1052,6 @@ function ProfileIdentityBody({
   onPhraseChange,
   onRestore,
   sharedCards,
-  developerModeEnabled,
-  diagnostics,
 }: {
   showIdentityTools: boolean
   recoveryPhrase: string | null
@@ -1063,8 +1068,6 @@ function ProfileIdentityBody({
   onPhraseChange: (text: string) => void
   onRestore: () => void
   sharedCards: ReactNode
-  developerModeEnabled: boolean
-  diagnostics: ReactNode
 }) {
   return (
     <>
@@ -1128,7 +1131,6 @@ function ProfileIdentityBody({
 
       {sharedCards}
 
-      {developerModeEnabled ? diagnostics : null}
       <Text style={styles.footer}>PearTube · Powered by Hyperswarm & Hyperdrive</Text>
     </>
   )
@@ -1685,6 +1687,24 @@ export default function ProfileScreen() {
       onClearCache={handleClearCache}
       storageSectionSubtitle={storageSectionSubtitle}
       developerModeSection={developerModeSection}
+      diagnostics={(
+        <ProfileDiagnosticsCard
+          advancedOpen={advancedOpen}
+          identity={identity}
+          canManageTranscodeSettings={canManageTranscodeSettings}
+          transcodeSettings={transcodeSettings}
+          transcodeSettingsLoading={transcodeSettingsLoading}
+          swarmStatus={swarmStatus}
+          storageStats={storageStats}
+          seedingStatus={seedingStatus}
+          archiveOperatorStatus={archiveOperatorStatus}
+          diagnosticsLoading={diagnosticsLoading}
+          onToggleAdvanced={() => setAdvancedOpen((v) => !v)}
+          onCopy={copyToClipboard}
+          onTranscodeToggle={handleTranscodeToggle}
+          onRefreshDiagnostics={loadDiagnostics}
+        />
+      )}
     />
   )
 
@@ -1735,25 +1755,6 @@ export default function ProfileScreen() {
           onPhraseChange={setRestorePhrase}
           onRestore={handleRestoreIdentity}
           sharedCards={renderSharedCards('Cache space this device is holding for other viewers')}
-          developerModeEnabled={developerMode.enabled}
-          diagnostics={(
-            <ProfileDiagnosticsCard
-              advancedOpen={advancedOpen}
-              identity={identity}
-              canManageTranscodeSettings={canManageTranscodeSettings}
-              transcodeSettings={transcodeSettings}
-              transcodeSettingsLoading={transcodeSettingsLoading}
-              swarmStatus={swarmStatus}
-              storageStats={storageStats}
-              seedingStatus={seedingStatus}
-              archiveOperatorStatus={archiveOperatorStatus}
-              diagnosticsLoading={diagnosticsLoading}
-              onToggleAdvanced={() => setAdvancedOpen((v) => !v)}
-              onCopy={copyToClipboard}
-              onTranscodeToggle={handleTranscodeToggle}
-              onRefreshDiagnostics={loadDiagnostics}
-            />
-          )}
         />
       </ScrollView>
     </View>

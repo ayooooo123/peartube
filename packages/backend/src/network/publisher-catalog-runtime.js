@@ -292,7 +292,8 @@ export function createPublisherCatalogRuntime (context) {
     const authorizationStateDigest = hex32(value.authorizationStateDigest, 'authorizationStateDigest')
     const pageDigestHex = hex32(value.pageDigest, 'pageDigest')
     const headLength = Number(value.headLength)
-    if (!Number.isSafeInteger(headLength) || headLength < 0 || headLength > MAX_CATALOG_HEAD_DISTANCE) fail('catalog head distance exceeds bounded limit')
+    // This is physical Hyperbee history, not the number of operations to ingest.
+    if (!Number.isSafeInteger(headLength) || headLength < 0) fail('catalog head length is invalid')
     if (!Array.isArray(value.entries) || value.entries.length > request.limit) fail('catalog page record bound exceeded')
     let prior = request.cursor
     const seen = new Set()
@@ -488,12 +489,14 @@ export function createPublisherCatalogRuntime (context) {
     const nextRecords = tracked.catalogAcceptRecords + response.entries.length
     const nextBytes = tracked.catalogAcceptBytes + payloadLength
     const nextWork = tracked.catalogAcceptVerificationWork + response.entries.length * 2
+    const initialHeadLength = tracked.catalogAcceptInitialHeadLength ?? response.headLength
     if (nextPages > MAX_CATALOG_SESSION_PAGES || nextRecords > MAX_CATALOG_SESSION_RECORDS ||
         nextBytes > MAX_CATALOG_SESSION_BYTES || nextWork > MAX_CATALOG_VERIFICATION_WORK ||
-        response.headLength - tracked.catalogAcceptInitialHeadLength > MAX_CATALOG_HEAD_DISTANCE) {
+        response.headLength < initialHeadLength ||
+        response.headLength - initialHeadLength > catalogAdmissionLimits.headDistance) {
       fail('catalog consumer cumulative session budget exceeded')
     }
-    return { nextPages, nextRecords, nextBytes, nextWork }
+    return { nextPages, nextRecords, nextBytes, nextWork, initialHeadLength }
   }
 
   async function ingestAcceptedCatalogPage(scope, response) {
@@ -515,7 +518,7 @@ export function createPublisherCatalogRuntime (context) {
     try {
       const response = normalizeCatalogResponse(frame.payload, pending.request)
       assertCatalogHeadConsistency(scope, response)
-      const { nextPages, nextRecords, nextBytes, nextWork } = assertAcceptSessionBudget(tracked, response, frame.payload.byteLength)
+      const { nextPages, nextRecords, nextBytes, nextWork, initialHeadLength } = assertAcceptSessionBudget(tracked, response, frame.payload.byteLength)
 
       const additions = {
         pages: 1,
@@ -532,6 +535,7 @@ export function createPublisherCatalogRuntime (context) {
       tracked.catalogAcceptRecords = nextRecords
       tracked.catalogAcceptBytes = nextBytes
       tracked.catalogAcceptVerificationWork = nextWork
+      tracked.catalogAcceptInitialHeadLength = initialHeadLength
       scope.catalogVerifiedPages++
       scope.catalogVerifiedRecords += response.entries.length
       scope.catalogVerifiedBytes += frame.payload.byteLength

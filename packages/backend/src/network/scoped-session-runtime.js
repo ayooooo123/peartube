@@ -1347,7 +1347,7 @@ export function createScopedNetworkRuntime (options = {}) {
       catalogAcceptRecords: 0,
       catalogAcceptBytes: 0,
       catalogAcceptVerificationWork: 0,
-      catalogAcceptInitialHeadLength: 0,
+      catalogAcceptInitialHeadLength: null,
     }
     ownedSession = tracked
     scope.sessions.set(remoteKey, tracked)

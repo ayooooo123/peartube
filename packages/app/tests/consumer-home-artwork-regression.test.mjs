@@ -85,6 +85,7 @@ async function loadHomeView() {
       contents: [
         "export { ConsumerHomeView } from './components/media/ConsumerHomeView'",
         "export { AppContext } from './lib/AppContext'",
+        "export { SwarmIndicator } from './components/primitives/SwarmIndicator'",
         '',
       ].join('\n'),
       resolveDir: appRoot,
@@ -112,9 +113,10 @@ async function loadHomeView() {
   }
 }
 
-function renderWith(module, items, rpc) {
+function renderWith(module, items, rpc, peerCount = 0) {
   const home = React.createElement(module.ConsumerHomeView, {
     state: { status: 'ready', items },
+    peerCount,
     onRefresh() {},
     onOpenEntity() {},
   })
@@ -133,6 +135,22 @@ function renderHome(items) {
 function settle() {
   return new Promise(resolve => setImmediate(resolve))
 }
+
+test('home reflects connected peer state independently of catalog contents', async () => {
+  const module = await loadHomeView()
+  const statusLabel = html => html.match(/aria-label="([^"]+)"/)?.[1]
+  const connected = statusLabel(renderToStaticMarkup(
+    React.createElement(module.SwarmIndicator, { peers: 1, label: 'auto' }),
+  ))
+  const offline = statusLabel(renderToStaticMarkup(
+    React.createElement(module.SwarmIndicator, { peers: 0, label: 'auto' }),
+  ))
+  assert.notEqual(connected, offline, 'connected and disconnected states are distinguishable')
+  assert.equal(statusLabel(renderWith(module, [], null, 1)), connected, 'empty Home reports the real connection')
+  assert.equal(statusLabel(renderWith(module, [{
+    entityId: 'connected-catalog-item', entityKind: 'work', title: 'Connected catalog',
+  }], null, 1)), connected, 'populated Home reports the same connection')
+})
 
 // A card used to paint a flat surface with the title's first letter and never
 // look at the entity's artwork at all, so a catalog of real media rendered as a

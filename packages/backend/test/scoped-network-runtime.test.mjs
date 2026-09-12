@@ -835,7 +835,7 @@ test('only a followed publisher with a verified namespace can request bounded ca
   await runtime.close()
 })
 
-test('publisher scope transfers exact-provenance accepted pages only after namespace proof', async (t) => {
+test('publisher scope transfers large-head catalogs through bounded exact-provenance pages', async (t) => {
   const root = crypto.keyPair(bytes(32, 212))
   const descriptor = createPublisherNamespaceDescriptor({
     genesisRootKey: root.publicKey,
@@ -871,7 +871,8 @@ test('publisher scope transfers exact-provenance accepted pages only after names
   sourceRegistry.binding.catalog.getViewHead = async () => {
     return {
       viewKey: descriptor.catalogBootstrapKey,
-      length: 1,
+      // Physical Hyperbee history can exceed the number of catalog operations.
+      length: 5000,
       digest: bytes(32, 215),
       authorizationStateDigest: bytes(32, 216),
     }
@@ -1016,6 +1017,65 @@ test('publisher scope transfers exact-provenance accepted pages only after names
   pair.b.destroy()
   exhaustedPair.a.destroy()
   exhaustedPair.b.destroy()
+})
+
+test('publisher catalog growth stays bounded after accepting a large initial head', async (t) => {
+  const root = crypto.keyPair(bytes(32, 217))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 218),
+  })
+  const sourceRegistry = fakeRegistry(descriptor, root)
+  const sourceCatalog = sourceRegistry.binding.catalog
+  const head = await sourceCatalog.getViewHead()
+  let headLength = 5000
+  sourceCatalog.getViewHead = async () => ({ ...head, length: headLength })
+  sourceCatalog.listProjections = async kind => ({
+    items: kind === 'publication' ? [{ accepted: true }] : [],
+    nextCursor: null,
+  })
+  const listPage = sourceCatalog.listAcceptedPage.bind(sourceCatalog)
+  sourceCatalog.listAcceptedPage = async request => {
+    const page = await listPage(request)
+    if (request.cursor === null) {
+      headLength += 3
+      return { ...page, nextCursor: page.entries[0].operationId }
+    }
+    return page
+  }
+  const received = []
+  const consumerRegistry = fakeRegistry(descriptor)
+  consumerRegistry.binding.catalog.ingestAcceptedPage = async entries => {
+    received.push(...entries)
+    return { accepted: entries.length, rejected: 0 }
+  }
+  let catalogUpdates = 0
+  const sourceSwarm = fakeSwarm()
+  const consumerSwarm = fakeSwarm()
+  const source = createScopedNetworkRuntime({
+    swarm: sourceSwarm, store: {}, catalogRegistry: sourceRegistry,
+    initialNetworkPolicy: contributionPolicy(),
+  })
+  const consumer = createScopedNetworkRuntime({
+    swarm: consumerSwarm, store: {}, catalogRegistry: consumerRegistry,
+    catalogAdmissionLimits: { headDistance: 2 },
+    onCatalogUpdate: () => { catalogUpdates++ },
+  })
+  const pair = connectionPair()
+  registerRuntimeTeardown(t, [source, consumer], [pair])
+  await source.start()
+  await consumer.start()
+  await source.publishLocalPublisherCatalog({ publisherId: descriptor.publisherId })
+  await consumer.followPublisher({ publisherId: descriptor.publisherId, namespaceDescriptor: descriptor })
+  sourceSwarm.connections.add(pair.a)
+  consumerSwarm.connections.add(pair.b)
+  sourceSwarm.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, client: false })
+  consumerSwarm.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey, client: true })
+  for (let attempt = 0; attempt < 30 && consumer.getDiagnostics().recentErrors.length === 0; attempt++) await settle()
+  t.is(received.length, 1, 'the initial large head is admitted, not rejected as lifetime work')
+  t.is(catalogUpdates, 0, 'growth beyond the configured distance cannot publish a completed projection')
+  t.ok(consumer.getDiagnostics().recentErrors.some(error =>
+    error.purpose === 'publisher' && error.code === 'SCOPED_NETWORK_REJECTED'))
 })
 
 test('local publisher scope is not announced before an accepted publication or claim exists', async t => {

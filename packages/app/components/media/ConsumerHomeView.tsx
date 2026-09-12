@@ -31,6 +31,7 @@ export type ConsumerHomeDiagnostic = {
 
 export type ConsumerHomeProps = {
   state: ConsumerHomeState
+  peerCount: number
   diagnostic?: ConsumerHomeDiagnostic
   /** This device's own watch state. Never fetched, never reported. */
   watchState?: LocalWatchStateRow[]
@@ -71,6 +72,7 @@ const MemoizedGridCard = memo(GridCard)
 
 export function ConsumerHomeView({
   state,
+  peerCount,
   diagnostic = null,
   watchState = [],
   firstSeen = {},
@@ -104,7 +106,7 @@ export function ConsumerHomeView({
       <View style={{ flex: 1, backgroundColor: colors.bg }}>
         <View style={styles.header}>
           <Eyebrow>PEARTUBE / HOME</Eyebrow>
-          <SwarmIndicator peers={0} label="auto" />
+          <SwarmIndicator peers={peerCount} label="auto" />
         </View>
         <ScrollView
           contentContainerStyle={[styles.emptyContent, { paddingBottom: contentBottomInset }]}
@@ -127,7 +129,7 @@ export function ConsumerHomeView({
     <View testID="consumer-home" style={{ flex: 1, backgroundColor: colors.bg }}>
       <View style={styles.header}>
         <Eyebrow>PEARTUBE / HOME</Eyebrow>
-        <SwarmIndicator peers={0} label="auto" />
+        <SwarmIndicator peers={peerCount} label="auto" />
       </View>
       <ScrollView
         contentContainerStyle={{ paddingBottom: contentBottomInset }}

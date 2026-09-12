@@ -931,9 +931,9 @@ function createSwarmDiagnostics(swarm) {
 
       const allConnections = []
       try {
-        if (swarm?._allConnections && typeof swarm._allConnections.entries === 'function') {
-          for (const [key, conn] of swarm._allConnections.entries()) {
-            allConnections.push({ key: shortKeyHex(key), ...describeTrackedConnection(conn) })
+        if (swarm?._allConnections && typeof swarm._allConnections[Symbol.iterator] === 'function') {
+          for (const conn of swarm._allConnections) {
+            allConnections.push({ key: shortKeyHex(conn.remotePublicKey), ...describeTrackedConnection(conn) })
             if (allConnections.length >= 20) break
           }
         }
@@ -1007,10 +1007,8 @@ function installSwarmConnectDiagnostics(swarm, diagnostics) {
     const result = connect.call(this, peerInfo, queued)
     try {
       const after = this._allConnections?.size || 0
-      if (after > before && this._allConnections && typeof this._allConnections.values === 'function') {
-        let latest = null
-        for (const conn of this._allConnections.values()) latest = conn
-        diagnostics?.recordClientConnect?.(latest, peerInfo)
+      if (after > before) {
+        diagnostics?.recordClientConnect?.(this._allConnections.get(peerInfo.publicKey), peerInfo)
       }
     } catch { /* diagnostics only */ }
     return result

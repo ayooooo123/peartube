@@ -100,6 +100,16 @@ jobs:
         working-directory: packages/app
         run: npm run android:prebuild
 
+      - name: Configure release Gradle memory
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.gradle"
+          printf '%s\n' \
+            'org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8' \
+            'org.gradle.workers.max=2' \
+            'kotlin.daemon.jvmargs=-Xmx1536m' \
+            >> "$HOME/.gradle/gradle.properties"
+
       - name: Build release APKs
         working-directory: packages/app/android
         run: ./gradlew assembleRelease --no-daemon

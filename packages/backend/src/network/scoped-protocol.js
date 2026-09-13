@@ -8,7 +8,6 @@ import {
 } from './frame.js'
 import { PROTOCOL_MAJOR } from './version.js'
 
-export const ASSET_RENDITION_CAPABILITY = 'asset-rendition:v2'
 export const ARCHIVE_RANGE_CAPABILITY = 'archive-range:v1'
 export const ARCHIVE_DISCOVERY_CAPABILITY = 'archive-discovery:v1'
 export const INDEX_QUERY_CAPABILITY = 'index-query:v1'
@@ -19,7 +18,6 @@ export const SCOPED_NETWORK_PROTOCOL = 'peartube/scoped-network'
 const PURPOSE_CODES = Object.freeze({
   bootstrap: 1,
   publisher: 2,
-  asset: 3,
   archive: 5,
   'archive-discovery': 6,
   index: 7,

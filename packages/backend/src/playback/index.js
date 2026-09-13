@@ -9,7 +9,6 @@ export * from './source-preparation.js'
 export function createStaticAssetPlayback({
   coreRef,
   session,
-  transport,
   playbackService,
   mimeType = 'video/mp4',
   authorizationKey,
@@ -23,7 +22,6 @@ export function createStaticAssetPlayback({
     ...schedulerOptions,
     coreRef,
     session,
-    transport,
   })
   return {
     scheduler,

@@ -3,24 +3,15 @@ import b4a from 'b4a'
 import { execFileSync } from 'node:child_process'
 
 import {
-  ASSET_BLOCK_ERROR_CODES,
   FRAME_FLAG_OPTIONAL_TAG,
-  MAX_ASSET_BLOCKS_PER_REQUEST,
-  MAX_ASSET_TRANSFER_ID,
   MAX_ASSET_RANGE_BITS_PER_RANGE,
   MAX_ASSET_RANGE_PAGE_BYTES,
   MAX_ASSET_RANGE_PAGE_RANGES,
   MAX_PEER_FRAME_BYTES,
   PEER_FRAME_TYPE_NAMES,
-  decodeAssetBlockError,
-  decodeAssetBlockRequest,
-  decodeAssetBlockResponse,
   decodeAssetRangeSummaryPage,
   decodeAssetRangeSummaryRequest,
   decodePeerFrame,
-  encodeAssetBlockError,
-  encodeAssetBlockRequest,
-  encodeAssetBlockResponse,
   encodeAssetRangeSummaryPage,
   encodeAssetRangeSummaryRequest,
   encodePeerFrame,
@@ -38,7 +29,7 @@ function presentBits(bitCount, fill = 0xff) {
 
 test('peer frame codec enforces exact max size and rejects one-byte-over before allocation', (t) => {
   const payload = b4a.alloc(MAX_PEER_FRAME_BYTES - 128, 1)
-  const frame = encodePeerFrame({ purpose: 'asset', type: 'offer', requestId: 1, payload })
+  const frame = encodePeerFrame({ purpose: 'publisher', type: 'offer', requestId: 1, payload })
   t.ok(frame.byteLength <= MAX_PEER_FRAME_BYTES)
   t.alike(decodePeerFrame(frame).payload, payload)
 
@@ -65,8 +56,8 @@ test('peer frame codec skips optional length-delimited minor extensions and pres
     payload: b4a.from('payload'),
     tags: [{ code: 5000 | FRAME_FLAG_OPTIONAL_TAG, value: b4a.from('future') }],
   })
-  // Frame header embeds protocolMajor: 03 since the catalog-sync v3 bump.
-  t.alike(b4a.toString(frame.subarray(0, 8), 'hex'), '0000002d03000201')
+  // Frame header embeds protocolMajor: 04 after the native Hypercore media cutover.
+  t.alike(b4a.toString(frame.subarray(0, 8), 'hex'), '0000002d04000201')
   const decoded = decodePeerFrame(frame)
   t.is(decoded.purpose, 'publisher')
   t.is(decoded.type, 'catalog-page')
@@ -140,96 +131,16 @@ test('asset range codecs reject noncanonical cursors, pages, bitfields, and allo
   t.exception(() => decodeAssetRangeSummaryPage(b4a.alloc(MAX_ASSET_RANGE_PAGE_BYTES + 1)), /page bytes/)
 })
 
-test('asset block codecs bind an exact asset and a bounded half-open request range', (t) => {
-  const request = decodeAssetBlockRequest(encodeAssetBlockRequest({ assetId, transferId: 1n, startBlock: 4, endBlock: 8 }), { coreLength: 10 })
-  t.alike(request.assetId, assetId)
-  t.is(request.transferId, 1n)
-  t.is(request.startBlock, 4)
-  t.is(request.endBlock, 8)
 
-  t.exception(() => encodeAssetBlockRequest({ assetId, transferId: 1n, startBlock: 4, endBlock: 4 }), /range/)
-  t.exception(() => encodeAssetBlockRequest({ assetId, transferId: 1n, startBlock: 0, endBlock: MAX_ASSET_BLOCKS_PER_REQUEST + 1 }), /range/)
-  t.exception(() => decodeAssetBlockRequest(encodeAssetBlockRequest({ assetId, transferId: 1n, startBlock: 9, endBlock: 10 }), { coreLength: 9 }), /core length/)
-  t.exception(() => encodeAssetBlockRequest({ assetId: b4a.alloc(31), transferId: 1n, startBlock: 0, endBlock: 1 }), /assetId/)
-  for (const transferId of [0n, MAX_ASSET_TRANSFER_ID + 1n, Number.MAX_SAFE_INTEGER + 1]) {
-    t.exception(() => encodeAssetBlockRequest({ assetId, transferId, startBlock: 0, endBlock: 1 }), /transferId/)
-  }
-})
 
-test('asset block response and error codecs keep chunks tied to one request range', (t) => {
-  const encoded = encodeAssetBlockResponse({
-    assetId,
-    transferId: 2n,
-    startBlock: 4,
-    endBlock: 8,
-    blockIndex: 6,
-    kind: 'block',
-    offset: 3,
-    totalBytes: 8,
-    chunk: b4a.from('bytes'),
-  })
-  const response = decodeAssetBlockResponse(encoded, { coreLength: 10 })
-  t.alike(response.assetId, assetId)
-  t.is(response.transferId, 2n)
-  t.is(response.startBlock, 4)
-  t.is(response.endBlock, 8)
-  t.is(response.blockIndex, 6)
-  t.is(response.kind, 'block')
-  t.is(response.offset, 3)
-  t.is(response.totalBytes, 8)
-  t.alike(response.chunk, b4a.from('bytes'))
-
-  t.exception(() => encodeAssetBlockResponse({
-    assetId,
-    transferId: 2n,
-    startBlock: 4,
-    endBlock: 8,
-    blockIndex: 8,
-    kind: 'block',
-    offset: 0,
-    totalBytes: 1,
-    chunk: b4a.from([1]),
-  }), /block index/)
-  t.exception(() => encodeAssetBlockResponse({
-    assetId,
-    transferId: 2n,
-    startBlock: 4,
-    endBlock: 8,
-    blockIndex: 4,
-    kind: 'block',
-    offset: 1,
-    totalBytes: 1,
-    chunk: b4a.from([1]),
-  }), /chunk/)
-
-  const error = decodeAssetBlockError(encodeAssetBlockError({
-    assetId,
-    transferId: 2n,
-    startBlock: 4,
-    endBlock: 8,
-    code: ASSET_BLOCK_ERROR_CODES.UNAVAILABLE,
-  }), { coreLength: 10 })
-  t.alike(error.assetId, assetId)
-  t.is(error.transferId, 2n)
-  t.is(error.code, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
-})
-
-test('v2 asset and archive frame types decode in an isolated receiving process without v1 asset aliases', (t) => {
+test('archive controls remain registered while custom asset transfer frames stay removed', (t) => {
   const frameUrl = new URL('../src/network/frame.js', import.meta.url).href
-  for (const type of [
-    'asset-range-summary-request',
-    'asset-range-summary-page',
-    'asset-block-request',
-    'asset-block-response',
-    'asset-block-error',
-    'archive-challenge',
-    'archive-challenge-proof',
-  ]) {
+  for (const type of ['archive-challenge', 'archive-challenge-proof']) {
     const encoded = execFileSync(process.execPath, ['--input-type=module', '--eval', `
       import b4a from 'b4a'
       import { encodePeerFrame } from ${JSON.stringify(frameUrl)}
       process.stdout.write(b4a.toString(encodePeerFrame({
-        purpose: ${JSON.stringify(type.startsWith('asset-') ? 'asset' : 'archive-discovery')},
+        purpose: 'archive-discovery',
         type: ${JSON.stringify(type)},
         requestId: 1,
         payload: b4a.from('payload'),
@@ -245,7 +156,20 @@ test('v2 asset and archive frame types decode in an isolated receiving process w
     `], { encoding: 'utf8' })
     t.is(decodedType, type)
   }
-  for (const removed of ['asset-block-proof', 'asset-block-chunk', 'asset-block-unavailable']) {
+  for (const removed of [
+    'asset-range-summary-request',
+    'asset-range-summary-page',
+    'asset-block-request',
+    'asset-block-response',
+    'asset-block-error',
+    'asset-block-proof',
+    'asset-block-chunk',
+    'asset-block-unavailable',
+    'acquisition-block-request',
+    'acquisition-block-proof',
+    'acquisition-block-chunk',
+    'acquisition-block-unavailable',
+  ]) {
     t.absent(PEER_FRAME_TYPE_NAMES[peerFrameTypeCode(removed)])
   }
 })

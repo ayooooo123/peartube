@@ -755,7 +755,7 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
     },
 
     /** Switch the active personal store when the active identity changes. */
-    async setActive(publicKey, { allowDeviceLocal = false } = {}) {
+    async setActive(publicKey, { deferIfSecretUnavailable = false } = {}) {
       return enqueueActiveChange(async () => {
         const identity = identityManager?.getIdentities?.().find((i) => i.publicKey === publicKey)
         if (!identity) return null
@@ -763,13 +763,10 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
         if (!store) {
           const deviceLocal = stores.get(DEVICE_LOCAL_PERSONAL_ID) || null
           if (
-            allowDeviceLocal &&
-            deviceLocal &&
-            activePublicKey === DEVICE_LOCAL_PERSONAL_ID &&
-            ctx.personal === deviceLocal
-          ) {
-            return deviceLocal
-          }
+            deferIfSecretUnavailable &&
+            (activePublicKey === null || activePublicKey === DEVICE_LOCAL_PERSONAL_ID) &&
+            (ctx.personal == null || ctx.personal === deviceLocal)
+          ) return deviceLocal
           if (ctx.role === 'relay' || ctx.platform === 'relay') {
             return null
           }

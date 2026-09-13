@@ -12,12 +12,9 @@ import {
   createScopedProtocolSession,
   decodeAcquisitionOffer,
   decodeAcquisitionRequest,
-  decodeAssetBlockRequest,
   deriveAcquisitionDiscoveryTopic,
   deriveAcquisitionTopic,
   encodeAcquisitionRequest,
-  encodeAssetBlockError,
-  encodeAssetBlockResponse,
   encodePeerFrame,
   encodeScopedHello,
   peerFrameTypeCode,
@@ -153,6 +150,8 @@ function linkedScopedPair(leftKeyPair, rightKeyPair) {
       discovery: null,
       assignments: new Map(),
       releasedDiscovery: 0,
+      coreRegistrations: new Map(),
+      coreReplications: new Map(),
       releasedAssignments: [],
       getLocalTransportPeerId() { return id(keyPair) },
       async retainAcquisitionDiscovery(input) { this.discovery = input },
@@ -161,6 +160,34 @@ function linkedScopedPair(leftKeyPair, rightKeyPair) {
       async releaseAcquisitionAssignment({ assignmentId }) {
         this.assignments.delete(assignmentId)
         this.releasedAssignments.push(assignmentId)
+        return true
+      },
+      retainAcquisitionCore(input) {
+        const coreKey = typeof input.key === 'string' ? input.key : b4a.toString(input.key, 'hex')
+        const registrationId = `${input.assignmentId}:${coreKey}`
+        this.coreRegistrations.set(registrationId, { ...input, coreKey })
+        const remote = this.peer.coreRegistrations.get(registrationId)
+        if (remote && !this.coreReplications.has(registrationId)) {
+          const localStream = input.core.replicate(true)
+          const remoteStream = remote.core.replicate(false)
+          localStream.pipe(remoteStream).pipe(localStream)
+          const replication = { localStream, remoteStream }
+          this.coreReplications.set(registrationId, replication)
+          this.peer.coreReplications.set(registrationId, replication)
+        }
+        return { retained: true }
+      },
+      releaseAcquisitionCore(input) {
+        const coreKey = typeof input.key === 'string' ? input.key : b4a.toString(input.key, 'hex')
+        const registrationId = `${input.assignmentId}:${coreKey}`
+        this.coreRegistrations.delete(registrationId)
+        const replication = this.coreReplications.get(registrationId)
+        if (replication) {
+          this.coreReplications.delete(registrationId)
+          this.peer.coreReplications.delete(registrationId)
+          replication.localStream.destroy()
+          replication.remoteStream.destroy()
+        }
         return true
       },
       publishAcquisitionFrame(input) {
@@ -1198,7 +1225,7 @@ test('distributed acquisition: worker without publisher authority acquires/verif
   await imported.ready()
   t.is(imported.length, descriptor.length)
   t.is(imported.byteLength, descriptor.byteLength)
-  t.alike(await imported.get(0), SOURCE, 'requester imported the exact worker bytes through the verified block protocol')
+  t.alike(await imported.get(0), SOURCE, 'requester imported the exact worker bytes through native Hypercore replication')
   await imported.close()
 
   // Forged/stale binding rejected by transport key mismatch.
@@ -1969,20 +1996,6 @@ function spyCoreStore (store, log) {
   }
 }
 
-// The requester pushes its block request onto the shared wire synchronously at
-// publish time, but readiness and the local block check run against real store
-// I/O, so wait on the frame appearing instead of a flush() that both rejects on
-// the deliberately silent worker scope and cannot span the I/O turn.
-async function waitForBlockRequestsOnWire (h, count = 1) {
-  for (let tick = 0; tick < 1000; tick++) {
-    const seen = h.transport.wire.filter(frame => frame.type === 'acquisition-block-request').length
-    if (seen >= count) return
-    await new Promise(resolve => setImmediate(resolve))
-  }
-  const seen = h.transport.wire.filter(frame => frame.type === 'acquisition-block-request').length
-  throw new Error(`timed out waiting for ${count} block request(s) on the wire, saw ${seen}`)
-}
-
 async function setupVerifiedImportHarness (t, { seedRequester = false, assignmentCount = 1, generationRef = null, managerOverride = null } = {}) {
   const { mkdtempSync, rmSync } = await import('node:fs')
   const { tmpdir } = await import('node:os')
@@ -2136,7 +2149,6 @@ test('local-complete verified import closes the owned core and returns only desc
   t.absent(imported.core, 'no live core escapes the import')
   t.is(log.opened, 1, 'import opened exactly one owned core')
   t.is(log.closed, 1, 'local-complete import closed the owned core')
-  t.is(h.transport.wire.filter(frame => frame.type === 'acquisition-block-request').length, 0, 'local-complete import sends no wire transfer')
 })
 
 test('caller abort during a stalled asset readiness closes the owned core and settles without releasing the ready gate', async (t) => {
@@ -2236,322 +2248,12 @@ test('caller abort during a stalled local block check settles and closes once wi
   await new Promise(resolve => setImmediate(resolve))
 })
 
-test('assignment release settles a silent pending block transfer and releases its resources', async (t) => {
-  const h = await setupVerifiedImportHarness(t, {})
-  const log = { opened: 0, closed: 0 }
-  h.requester.setAssetStore(spyCoreStore(h.requesterStore, log))
 
-  const importPromise = h.requester.importVerifiedAsset({
-    assignmentId: h.assignmentId,
-    asset: h.coreRef,
-    peerId: h.workerPeerId,
-  })
-  const errorPromise = importPromise.then(() => null, cause => cause)
-  await waitForBlockRequestsOnWire(h)
-  t.ok(h.transport.wire.some(frame => frame.type === 'acquisition-block-request'), 'block request reached the wire')
 
-  let settled = false
-  importPromise.then(() => { settled = true }, () => { settled = true })
-  await new Promise(resolve => setImmediate(resolve))
-  t.is(settled, false, 'silent transfer stays pending while the assignment is live')
 
-  await h.requester.cancel({
-    assignmentId: h.assignmentId,
-    requestId: h.requestId,
-    reasonCode: 'requester-cancelled',
-  })
 
-  const error = await errorPromise
-  t.ok(error, 'assignment release settles the silent transfer')
-  t.is(error.code, 'ACQUISITION_CANCELLED')
-  t.ok(h.transport.left.releasedAssignments.includes(h.assignmentId), 'assignment scope released')
-  t.is(log.closed, 1, 'owned session core closed on release')
 
-  const requestFrame = h.transport.wire.find(frame => frame.type === 'acquisition-block-request')
-  const decodedRequest = decodeAssetBlockRequest(requestFrame.payload)
-  await t.exception(h.transport.left.inject({
-    type: 'acquisition-block-unavailable',
-    payload: encodeAssetBlockError({
-      assetId: b4a.from(h.coreRef.assetId, 'hex'),
-      transferId: decodedRequest.transferId,
-      startBlock: decodedRequest.startBlock,
-      endBlock: decodedRequest.endBlock,
-      code: 'ASSET_BLOCK_UNAVAILABLE',
-    }),
-    assignmentId: h.assignmentId,
-    peerId: h.workerPeerId,
-    purpose: 'acquisition',
-  }))
-  await t.exception(h.requester.importVerifiedAsset({
-    assignmentId: h.assignmentId,
-    asset: h.coreRef,
-    peerId: h.workerPeerId,
-  }))
-  t.is(log.opened, 1, 'released assignment authority cannot reopen an import session')
-})
 
-test('assignment expiry settles a silent pending block transfer', async (t) => {
-  const h = await setupVerifiedImportHarness(t, {})
-  const log = { opened: 0, closed: 0 }
-  h.requester.setAssetStore(spyCoreStore(h.requesterStore, log))
-
-  const importPromise = h.requester.importVerifiedAsset({
-    assignmentId: h.assignmentId,
-    asset: h.coreRef,
-    peerId: h.workerPeerId,
-  })
-  const errorPromise = importPromise.then(() => null, cause => cause)
-  await waitForBlockRequestsOnWire(h)
-
-  const expiryTimer = h.requesterTimers.find(timer => !timer.cleared)
-  t.ok(expiryTimer, 'assignment expiry timer is armed')
-  h.advance(60_001)
-  await expiryTimer.fn()
-
-  const error = await errorPromise
-  t.ok(error, 'assignment expiry settles the silent transfer')
-  t.is(error.code, 'ACQUISITION_CANCELLED')
-  t.ok(h.transport.left.releasedAssignments.includes(h.assignmentId), 'assignment scope released on expiry')
-  t.is(log.closed, 1, 'owned session core closed on expiry')
-})
-
-test('network close settles a silent pending block transfer and releases its resources', async (t) => {
-  const h = await setupVerifiedImportHarness(t, {})
-  const log = { opened: 0, closed: 0 }
-  h.requester.setAssetStore(spyCoreStore(h.requesterStore, log))
-
-  const importPromise = h.requester.importVerifiedAsset({
-    assignmentId: h.assignmentId,
-    asset: h.coreRef,
-    peerId: h.workerPeerId,
-  })
-  const errorPromise = importPromise.then(() => null, cause => cause)
-  await waitForBlockRequestsOnWire(h)
-
-  await h.requester.close()
-
-  const error = await errorPromise
-  t.ok(error, 'network close settles the silent transfer')
-  t.is(error.code, 'ACQUISITION_CANCELLED')
-  t.ok(h.transport.left.releasedAssignments.includes(h.assignmentId), 'assignment scope released on close')
-  t.is(log.closed, 1, 'owned session core closed on close')
-})
-
-test('a malformed block proof rejects the matching transfer promptly', async (t) => {
-  const h = await setupVerifiedImportHarness(t, {})
-  const log = { opened: 0, closed: 0 }
-  h.requester.setAssetStore(spyCoreStore(h.requesterStore, log))
-
-  const importPromise = h.requester.importVerifiedAsset({
-    assignmentId: h.assignmentId,
-    asset: h.coreRef,
-    peerId: h.workerPeerId,
-  })
-  const errorPromise = importPromise.then(() => null, cause => cause)
-  await waitForBlockRequestsOnWire(h)
-
-  const requestFrame = h.transport.wire.find(frame => frame.type === 'acquisition-block-request')
-  const decodedRequest = decodeAssetBlockRequest(requestFrame.payload)
-  const malformed = encodeAssetBlockResponse({
-    assetId: b4a.from(h.coreRef.assetId, 'hex'),
-    transferId: decodedRequest.transferId,
-    startBlock: decodedRequest.startBlock,
-    endBlock: decodedRequest.endBlock,
-    blockIndex: decodedRequest.startBlock,
-    kind: 'proof',
-    offset: 0,
-    totalBytes: 16,
-    chunk: b4a.alloc(16, 7),
-  })
-
-  const result = await h.transport.left.inject({
-    type: 'acquisition-block-proof',
-    payload: malformed,
-    assignmentId: h.assignmentId,
-    peerId: h.workerPeerId,
-    purpose: 'acquisition',
-  })
-  t.is(result.status, 'rejected', 'malformed proof fails only the matching transfer')
-
-  const error = await errorPromise
-  t.ok(error, 'import rejects promptly on the malformed proof')
-  t.is(log.closed, 1, 'owned session core closed after the malformed proof')
-})
-
-test('a foreign peer or foreign asset unavailable frame does not cancel a valid pending import', async (t) => {
-  const h = await setupVerifiedImportHarness(t, {})
-  const log = { opened: 0, closed: 0 }
-  h.requester.setAssetStore(spyCoreStore(h.requesterStore, log))
-
-  const importPromise = h.requester.importVerifiedAsset({
-    assignmentId: h.assignmentId,
-    asset: h.coreRef,
-    peerId: h.workerPeerId,
-  })
-  await waitForBlockRequestsOnWire(h)
-
-  const requestFrame = h.transport.wire.find(frame => frame.type === 'acquisition-block-request')
-  const decodedRequest = decodeAssetBlockRequest(requestFrame.payload)
-  const unavailable = encodeAssetBlockError({
-    assetId: b4a.from(h.coreRef.assetId, 'hex'),
-    transferId: decodedRequest.transferId,
-    startBlock: decodedRequest.startBlock,
-    endBlock: decodedRequest.endBlock,
-    code: 'ASSET_BLOCK_UNAVAILABLE',
-  })
-
-  const foreignTransfer = await h.transport.left.inject({
-    type: 'acquisition-block-unavailable',
-    payload: encodeAssetBlockError({
-      assetId: b4a.from(h.coreRef.assetId, 'hex'),
-      transferId: 12345n,
-      startBlock: decodedRequest.startBlock,
-      endBlock: decodedRequest.endBlock,
-      code: 'ASSET_BLOCK_UNAVAILABLE',
-    }),
-    assignmentId: h.assignmentId,
-    peerId: h.workerPeerId,
-    purpose: 'acquisition',
-  })
-  t.alike(foreignTransfer, { status: 'unavailable' })
-
-  const foreignPeer = await h.transport.left.inject({
-    type: 'acquisition-block-unavailable',
-    payload: unavailable,
-    assignmentId: h.assignmentId,
-    peerId: 'ce'.repeat(32),
-    purpose: 'acquisition',
-  })
-  t.alike(foreignPeer, { status: 'unavailable' })
-
-  const foreignAsset = await h.transport.left.inject({
-    type: 'acquisition-block-unavailable',
-    payload: encodeAssetBlockError({
-      assetId: b4a.alloc(32, 9),
-      transferId: decodedRequest.transferId,
-      startBlock: decodedRequest.startBlock,
-      endBlock: decodedRequest.endBlock,
-      code: 'ASSET_BLOCK_UNAVAILABLE',
-    }),
-    assignmentId: h.assignmentId,
-    peerId: h.workerPeerId,
-    purpose: 'acquisition',
-  })
-  t.alike(foreignAsset, { status: 'unavailable' })
-
-  let settled = false
-  importPromise.then(() => { settled = true }, () => { settled = true })
-  await new Promise(resolve => setImmediate(resolve))
-  t.is(settled, false, 'valid pending import survives foreign unavailable frames')
-
-  await h.requester.cancel({
-    assignmentId: h.assignmentId,
-    requestId: h.requestId,
-    reasonCode: 'requester-cancelled',
-  })
-  const error = await importPromise.then(() => null, cause => cause)
-  t.is(error.code, 'ACQUISITION_CANCELLED', 'the surviving import settles through assignment release')
-})
-
-test('a signed proof-verified transfer completes with exact bytes and no remaining listener or session', async (t) => {
-  const h = await setupVerifiedImportHarness(t, {})
-  const log = { opened: 0, closed: 0 }
-  h.requester.setAssetStore(spyCoreStore(h.requesterStore, log))
-  await h.worker.holdVerifiedAsset({
-    assignmentId: h.assignmentId,
-    asset: h.coreRef,
-    availabilityUntil: h.deadline,
-  })
-
-  const signal = {
-    aborted: false,
-    listeners: [],
-    addEventListener (type, listener) { this.listeners.push(listener) },
-    removeEventListener (type, listener) { this.listeners = this.listeners.filter(entry => entry !== listener) },
-  }
-  const importPromise = h.requester.importVerifiedAsset({
-    assignmentId: h.assignmentId,
-    asset: h.coreRef,
-    peerId: h.workerPeerId,
-    signal,
-  })
-  const imported = await importPromise
-
-  t.is(imported.imported, true)
-  t.is(imported.byteLength, h.SOURCE.byteLength)
-  t.is(imported.descriptor.assetId, h.coreRef.assetId)
-  t.absent(imported.session, 'no live session escapes a successful import')
-  t.absent(imported.core, 'no live core escapes a successful import')
-  t.is(signal.listeners.length, 0, 'caller abort listener removed on success')
-  t.is(log.closed, 1, 'owned session core closed on success')
-
-  const importedCore = h.requesterStore.get({ key: b4a.from(h.coreRef.key, 'hex') })
-  await importedCore.ready()
-  t.is(importedCore.length, h.coreRef.length)
-  t.alike(await importedCore.get(0), h.SOURCE, 'requester holds the exact worker bytes')
-  await importedCore.close()
-})
-
-test('caller abort during a stalled final verification settles with the cancellation error, not a missing-block error', async (t) => {
-  const h = await setupVerifiedImportHarness(t, {})
-  await h.worker.holdVerifiedAsset({
-    assignmentId: h.assignmentId,
-    asset: h.coreRef,
-    availabilityUntil: h.deadline,
-  })
-  // An empty core bypasses handle.has during the local sweep. Each transferred
-  // block has one commit re-check before the final exact-verification sweep.
-  const preFinalCalls = h.coreRef.length
-  const gate = { hasCalls: 0, closed: 0, released: false, release: null }
-  let markFinalCheck
-  const finalCheckStarted = new Promise(resolve => { markFinalCheck = resolve })
-  h.requester.setAssetStore({
-    get (options) {
-      const core = h.requesterStore.get(options)
-      return new Proxy(core, {
-        get (target, prop) {
-          if (prop === 'has') {
-            return async (...args) => {
-              gate.hasCalls += 1
-              if (gate.hasCalls > preFinalCalls) {
-                markFinalCheck()
-                await new Promise(resolve => { gate.release = () => { gate.released = true; resolve() } })
-              }
-              return target.has(...args)
-            }
-          }
-          if (prop === 'close') {
-            return () => { gate.closed += 1; return target.close() }
-          }
-          const value = target[prop]
-          return typeof value === 'function' ? value.bind(target) : value
-        },
-      })
-    },
-  })
-
-  const controller = new AbortController()
-  const importPromise = h.requester.importVerifiedAsset({
-    assignmentId: h.assignmentId,
-    asset: h.coreRef,
-    peerId: h.workerPeerId,
-    signal: controller.signal,
-  })
-  await finalCheckStarted
-  controller.abort()
-
-  let settled = false
-  let error = null
-  importPromise.then(() => { settled = true }, cause => { error = cause; settled = true })
-  for (let tick = 0; tick < 500 && !settled; tick++) await new Promise(resolve => setImmediate(resolve))
-  t.ok(settled, 'caller abort settles the stalled final verification check')
-  t.is(error?.code, 'ACQUISITION_CANCELLED', 'cancelled race result is guarded before the exact check')
-  t.is(gate.closed, 1, 'owned core closed exactly once on abort')
-  t.is(gate.released, false, 'has gate was never released')
-
-  gate.release?.()
-  await new Promise(resolve => setImmediate(resolve))
-})
 
 test('an already-aborted caller signal stops the import before any owned core is opened', async (t) => {
   const h = await setupVerifiedImportHarness(t, {})
@@ -2625,167 +2327,4 @@ test('cancellation delivered at immediate readiness settles once and drains thro
   })
   t.ok(h.transport.left.releasedAssignments.includes(h.assignmentId), 'release drains the settled import registry')
   t.is(gate.closed, 1, 'release does not double-close the settled owned core')
-})
-
-test('terminal close cancels every tracked import before awaiting the first stalled scope release', async (t) => {
-  const h = await setupVerifiedImportHarness(t, { assignmentCount: 2 })
-  const log = { opened: 0, closed: 0 }
-  h.requester.setAssetStore(spyCoreStore(h.requesterStore, log))
-  const [first, second] = h.assignmentPairs
-
-  const firstImport = h.requester.importVerifiedAsset({
-    assignmentId: first.assignmentId,
-    asset: h.coreRef,
-    peerId: h.workerPeerId,
-  })
-  const secondImport = h.requester.importVerifiedAsset({
-    assignmentId: second.assignmentId,
-    asset: h.coreRef,
-    peerId: h.workerPeerId,
-  })
-  await waitForBlockRequestsOnWire(h, 2)
-  t.is(h.transport.wire.filter(frame => frame.type === 'acquisition-block-request').length, 2, 'both imports hold silent pending transfers')
-
-  const left = h.transport.left
-  const originalRelease = left.releaseAcquisitionAssignment
-  let openGate = null
-  left.releaseAcquisitionAssignment = async (input) => {
-    if (input.assignmentId === first.assignmentId) {
-      await new Promise(resolve => { openGate = resolve })
-    }
-    return originalRelease.call(left, input)
-  }
-
-  const closePromise = h.requester.close()
-  const firstError = await firstImport.then(() => null, cause => cause)
-  const secondError = await secondImport.then(() => null, cause => cause)
-  t.is(firstError?.code, 'ACQUISITION_CANCELLED', 'the stalled assignment import settles at close entry')
-  t.is(secondError?.code, 'ACQUISITION_CANCELLED', 'the unrelated import is cancelled while the first release is still stalled')
-  t.is(left.releasedAssignments.length, 0, 'no scope release completes while the first release is gated')
-
-  for (let tick = 0; tick < 25 && openGate === null; tick++) {
-    await new Promise(resolve => setImmediate(resolve))
-  }
-  t.ok(openGate, 'close reached the first gated scope release')
-  openGate?.()
-  await closePromise
-  t.ok(left.releasedAssignments.includes(first.assignmentId), 'first scope released after the gate opens')
-  t.ok(left.releasedAssignments.includes(second.assignmentId), 'second scope released through serial teardown')
-  t.is(log.closed, 2, 'both owned sessions closed exactly once')
-})
-
-test('policy invalidation cancels every tracked import before awaiting the first stalled scope release', async (t) => {
-  const generation = { value: 1 }
-  const h = await setupVerifiedImportHarness(t, { assignmentCount: 2, generationRef: generation })
-  const log = { opened: 0, closed: 0 }
-  h.requester.setAssetStore(spyCoreStore(h.requesterStore, log))
-  const [first, second] = h.assignmentPairs
-
-  const firstImport = h.requester.importVerifiedAsset({
-    assignmentId: first.assignmentId,
-    asset: h.coreRef,
-    peerId: h.workerPeerId,
-  })
-  const secondImport = h.requester.importVerifiedAsset({
-    assignmentId: second.assignmentId,
-    asset: h.coreRef,
-    peerId: h.workerPeerId,
-  })
-  await waitForBlockRequestsOnWire(h, 2)
-
-  let firstError = null
-  let secondError = null
-  firstImport.then(() => {}, cause => { firstError = cause })
-  secondImport.then(() => {}, cause => { secondError = cause })
-
-  const left = h.transport.left
-  const originalRelease = left.releaseAcquisitionAssignment
-  let openGate = null
-  left.releaseAcquisitionAssignment = async (input) => {
-    if (input.assignmentId === first.assignmentId) {
-      await new Promise(resolve => { openGate = resolve })
-    }
-    return originalRelease.call(left, input)
-  }
-
-  generation.value = 2
-  const preparedOutcome = h.requester
-    .prepareRequest({ ...requestInput(1_400_000), generation: 2 })
-    .then(value => ({ value }), cause => ({ cause }))
-
-  for (let tick = 0; tick < 25 && (secondError === null || openGate === null); tick++) {
-    await new Promise(resolve => setImmediate(resolve))
-  }
-  t.ok(firstError, 'the stalled assignment import settles at invalidation entry')
-  t.ok(secondError, 'the unrelated import is cancelled while the first release is still stalled')
-  t.is(firstError?.code, 'ACQUISITION_CANCELLED')
-  t.is(secondError?.code, 'ACQUISITION_CANCELLED', 'no late generic sweep settles the unrelated import')
-  t.ok(openGate, 'invalidation reached the first gated scope release')
-  t.is(left.releasedAssignments.length, 0, 'no scope release completes while the first release is gated')
-
-  openGate?.()
-  const outcome = await preparedOutcome
-  t.absent(outcome.cause, 'invalidation completes and the refreshed request prepares')
-  t.ok(left.releasedAssignments.includes(first.assignmentId), 'first scope released after the gate opens')
-  t.ok(left.releasedAssignments.includes(second.assignmentId), 'second scope released through serial invalidation cleanup')
-  await h.requester.close().catch(() => {})
-  t.is(log.closed, 2, 'both owned sessions closed exactly once')
-})
-
-test('policy invalidation finishes every cleanup and teardown when the first manager cancellation throws', async (t) => {
-  const generation = { value: 1 }
-  const managerError = Object.assign(new Error('first manager cancellation exploded'), {
-    code: 'TEST_MANAGER_CANCELLATION_FAILED',
-  })
-  const cancellationCalls = []
-  const harnessManager = {
-    ...manager([]),
-    async onCancellation (input) {
-      cancellationCalls.push(input.cancellation.assignmentId)
-      if (cancellationCalls.length === 1) throw managerError
-    },
-  }
-  const h = await setupVerifiedImportHarness(t, {
-    assignmentCount: 2,
-    generationRef: generation,
-    managerOverride: harnessManager,
-  })
-  const log = { opened: 0, closed: 0 }
-  h.requester.setAssetStore(spyCoreStore(h.requesterStore, log))
-  const [first, second] = h.assignmentPairs
-
-  const armed = await h.requester.publishRequest(requestInput(1_400_000))
-  const firstImport = h.requester.importVerifiedAsset({
-    assignmentId: first.assignmentId,
-    asset: h.coreRef,
-    peerId: h.workerPeerId,
-  })
-  const secondImport = h.requester.importVerifiedAsset({
-    assignmentId: second.assignmentId,
-    asset: h.coreRef,
-    peerId: h.workerPeerId,
-  })
-  await waitForBlockRequestsOnWire(h, 2)
-
-  let firstError = null
-  let secondError = null
-  firstImport.then(() => {}, cause => { firstError = cause })
-  secondImport.then(() => {}, cause => { secondError = cause })
-
-  generation.value = 2
-  const outcome = await h.requester
-    .prepareRequest({ ...requestInput(1_400_000), generation: 2 })
-    .then(value => ({ value }), cause => ({ cause }))
-
-  t.is(firstError?.code, 'ACQUISITION_CANCELLED', 'the first owned import settles')
-  t.is(secondError?.code, 'ACQUISITION_CANCELLED', 'the second owned import settles despite the manager throw')
-  t.is(log.closed, 2, 'both owned sessions closed exactly once')
-  t.ok(outcome.cause, 'the request operation rejects')
-  t.is(outcome.cause, managerError, 'the first original thrown error identity is preserved')
-  t.alike(cancellationCalls, [first.assignmentId, second.assignmentId], 'every removed state still reaches the manager in order')
-  t.alike(h.transport.left.releasedAssignments, [first.assignmentId, second.assignmentId], 'every scope releases serially even after the first callback throws')
-  t.is(h.requester.dropLocalRequest(armed.request.requestId), false, 'teardownAllRequests executed after owned cleanup')
-
-  await h.requester.close().catch(() => {})
-  t.is(log.closed, 2, 'close does not double-close the already-drained owned cores')
 })

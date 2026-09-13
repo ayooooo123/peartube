@@ -33,7 +33,7 @@ test('purpose/topic mismatch and moderation stop download or seed before expensi
 
 test('malformed peer frames and cumulative valid frames are budget-bound', (t) => {
   const admission = createNetworkAdmission({ maxMessages: 2, maxBytes: 128 })
-  const frame = encodePeerFrame({ type: 'catalog', payload: Buffer.alloc(16), protocolMajor: 1, protocolMinor: 0 })
+  const frame = encodePeerFrame({ purpose: 'publisher', type: 'catalog', payload: Buffer.alloc(16), protocolMajor: 1, protocolMinor: 0 })
   t.is(admission.reserve({ peerId: 'p', bytes: frame.length }).accepted, true)
   t.is(admission.reserve({ peerId: 'p', bytes: frame.length }).accepted, true)
   t.is(admission.reserve({ peerId: 'p', bytes: frame.length }).accepted, false)

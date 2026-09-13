@@ -290,9 +290,9 @@ test('real signed static custody rotates artwork without releasing a playback ow
   custody.start()
   await clock.until(() => visited.has(cover.renditionId))
   await custody.close()
-  t.alike(await runtime.readVerifiedAssetBlock({ assetId: media.core.assetId, blockIndex: 0 }), b4a.from('custody media'),
+  t.alike(await runtime.getActiveAssetSession({ assetId: media.core.assetId }).core.get(0), b4a.from('custody media'),
     'playback still reads verified bytes after rotation and manager close')
-  await t.exception(() => runtime.readVerifiedAssetBlock({ assetId: cover.core.assetId, blockIndex: 0 }),
+  await t.exception(async () => runtime.getActiveAssetSession({ assetId: cover.core.assetId }).core.get(0),
     /asset scope is not active/, 'artwork had no unaccounted default owner')
   const released = await runtime.releaseAuthorizedRendition({ renditionId: media.renditionId, ownerId: 'playback' })
   t.is(released.released, true)
@@ -376,7 +376,7 @@ test('real narrower owner blocks all rotation slots and defers its supporting ha
   t.absent(visited.has(cover.renditionId), 'all dependent slots wait instead of exceeding capacity')
   t.alike(await custody.close(), { deferredToRuntimeClose: [media.renditionId] })
   t.is(clock.pending, false)
-  t.alike(await runtime.readVerifiedAssetBlock({ assetId: media.core.assetId, blockIndex: 0 }), b4a.alloc(ASSET_BLOCK_SIZE, 37))
+  t.alike(await runtime.getActiveAssetSession({ assetId: media.core.assetId }).core.get(0), b4a.alloc(ASSET_BLOCK_SIZE, 37))
   const released = await runtime.releaseAuthorizedRendition({ renditionId: media.renditionId, ownerId: 'short-playback' })
   t.is(released.released, true, 'manager close did not revoke the unrelated narrower owner')
   t.is(released.remainingOwners, 1, 'supporting custody owner awaits enclosing runtime shutdown')

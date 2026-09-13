@@ -2,15 +2,16 @@ import test from 'brittle'
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 import Corestore from 'corestore'
+import Hyperswarm from 'hyperswarm'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-
-import { writeStaticAsset } from '../src/assets/static-core.js'
+import { ASSET_BLOCK_SIZE, writeStaticAsset } from '../src/assets/static-core.js'
 import { createBufferSourceReader } from '../src/assets/source-reader.js'
 import { deriveRenditionId, normalizeAssetCoreRefV2 } from '../src/assets/rendition.js'
 import { createAcquisitionNetwork } from '../src/network/scoped-acquisition-runtime.js'
+import { createScopedNetworkRuntime } from '../src/network/scoped-runtime.js'
 import {
   CLOSED_ACQUISITION_POLICY,
   normalizeAcquisitionPolicy,
@@ -48,6 +49,31 @@ function openPolicy (overrides = {}) {
   })
   return { ...current, generation: 1, remainingAcquireBytes24h: current.maxAcquireBytesPer24h }
 }
+function participationPolicy () {
+  return {
+    networkEnabled: true,
+    uploadPermission: 'enabled',
+    uploadCeilingBytes: 4 * 1024 * 1024,
+    diskCeilingBytes: 4 * 1024 * 1024,
+    permissions: { contribute: true, archive: false },
+    publicServingAllowed: true,
+    contributionBudgetBytes: 4 * 1024 * 1024,
+    archiveBudgetBytes: 0,
+  }
+}
+
+async function within (promise, milliseconds, message) {
+  let timer
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), milliseconds) }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 
 function linkedScopedPair (leftKeyPair, rightKeyPair) {
   const pending = []
@@ -467,4 +493,157 @@ test('cancelling stalled borrowed readiness preserves the caller handle', async 
   release()
   core.ready = originalReady
   t.alike(await core.get(0), f.sourceBytes, 'the original caller can still read its asset')
+})
+
+test('repeated supplied-core holds release native ownership without closing the writer or Noise stream', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'peartube-borrowed-hold-'))
+  const workerStore = new Corestore(join(root, 'worker'))
+  const requesterStore = new Corestore(join(root, 'requester'))
+  const workerSwarm = new Hyperswarm({ bootstrap: [] })
+  const requesterSwarm = new Hyperswarm({ bootstrap: [] })
+  let workerRuntime, requesterRuntime, receiverCore, written
+  const workers = []
+  t.teardown(async () => {
+    for (const worker of workers) await worker.close().catch(() => {})
+    await receiverCore?.close().catch(() => {})
+    await workerRuntime?.close().catch(() => {})
+    await requesterRuntime?.close().catch(() => {})
+    await Promise.all([workerSwarm.destroy(), requesterSwarm.destroy()])
+    await written?.core.close().catch(() => {})
+    await Promise.all([workerStore.close(), requesterStore.close()])
+    rmSync(root, { recursive: true, force: true })
+  })
+  await Promise.all([
+    workerStore.ready(),
+    requesterStore.ready(),
+    workerSwarm.listen(),
+    requesterSwarm.listen(),
+  ])
+  const sourceBytes = b4a.alloc(3 * ASSET_BLOCK_SIZE + 17, 73)
+  written = await writeStaticAsset({ store: workerStore, reader: createBufferSourceReader(sourceBytes) })
+  const descriptor = normalizeAssetCoreRefV2(written.descriptor)
+  receiverCore = requesterStore.get({
+    key: b4a.from(descriptor.key, 'hex'),
+    manifest: written.descriptor.hypercoreManifest,
+    writable: false,
+  })
+  await receiverCore.ready()
+  const workerAddress = workerSwarm.dht.io.serverSocket.address()
+  workerRuntime = createScopedNetworkRuntime({
+    swarm: workerSwarm,
+    store: workerStore,
+    bootstrapEnabled: false,
+    initialNetworkPolicy: participationPolicy(),
+  })
+  requesterRuntime = createScopedNetworkRuntime({
+    swarm: requesterSwarm,
+    store: requesterStore,
+    bootstrapEnabled: false,
+    peerAddresses: [{
+      publicKey: id(workerSwarm.keyPair),
+      host: '127.0.0.1',
+      port: workerAddress.port,
+    }],
+    initialNetworkPolicy: participationPolicy(),
+  })
+  await Promise.all([workerRuntime.start(), requesterRuntime.start()])
+
+  const workerCoreState = written.core.core
+  let workerPeerAdds = 0
+  let uploads = 0
+  written.core.on('peer-add', () => { workerPeerAdds++ })
+  written.core.on('upload', () => { uploads++ })
+  const baselineSessions = workerCoreState.sessionStates.length
+  const baselineMonitors = workerCoreState.monitors.length
+  const current = Date.now()
+  const manager = {
+    async onRequest () {},
+    async onOffer () {},
+    async onAssignment () {},
+    async onProgress () {},
+    async onResult () {},
+    async onCancellation () {},
+  }
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const assignmentId = hex(0x70 + attempt)
+    const requestId = hex(0x72 + attempt)
+    const worker = createAcquisitionNetwork({
+      scopedNetwork: workerRuntime,
+      keyPair: workerSwarm.keyPair,
+      policy: { networkTerms: () => openPolicy() },
+      manager,
+      now: () => current,
+    })
+    workers.push(worker)
+    await worker.start()
+    await worker.restoreAssignment({
+      assignmentId,
+      peerId: id(requesterSwarm.keyPair),
+      role: 'worker',
+      requesterId: id(requesterSwarm.keyPair),
+      acquirerId: id(workerSwarm.keyPair),
+      budget: {
+        maxSourceBytes: sourceBytes.byteLength,
+        maxOutputBytes: sourceBytes.byteLength,
+        maxNetworkBytes: sourceBytes.byteLength * 2,
+        maxWallClockMs: 60_000,
+      },
+      requestId,
+      offerId: hex(0x74 + attempt),
+      publisherId: hex(0x76 + attempt),
+      publicationIntentDigest: hex(0x78 + attempt),
+      deadline: current + 20_000,
+      resultHoldUntil: current + 60_000,
+      policyEpoch: 1,
+    })
+    await requesterRuntime.retainAcquisitionAssignment({
+      assignmentId,
+      peerId: id(workerSwarm.keyPair),
+      server: false,
+      client: true,
+    })
+    requesterRuntime.retainAcquisitionCore({
+      assignmentId,
+      peerId: id(workerSwarm.keyPair),
+      key: descriptor.key,
+      core: receiverCore,
+      coreRef: descriptor,
+      serve: false,
+    })
+    const peerAdded = new Promise(resolve => written.core.once('peer-add', resolve))
+    await worker.holdVerifiedAsset({
+      assignmentId,
+      asset: descriptor,
+      availabilityUntil: current + 40_000,
+      core: written.core,
+    })
+    await within(peerAdded, 5_000, 'the supplied writer did not attach to the acquisition stream')
+    t.ok(workerCoreState.monitors.length > baselineMonitors,
+      `hold ${attempt + 1} adds its attachment monitor`)
+
+    await worker.close()
+    t.is(written.core.closed, false, `release ${attempt + 1} preserves the supplied writer`)
+    t.is(workerCoreState.sessionStates.length, baselineSessions,
+      `release ${attempt + 1} returns the writer session count to baseline`)
+    t.is(workerCoreState.monitors.length, baselineMonitors,
+      `release ${attempt + 1} returns the writer monitor count to baseline`)
+    t.is(requesterSwarm.connections.size, 1,
+      `release ${attempt + 1} leaves the original Noise stream alive`)
+    const peerAddsAfterRelease = workerPeerAdds
+    const denied = await receiverCore.get(attempt, { timeout: 2_000 })
+      .then(value => ({ value }), error => ({ error }))
+    t.ok(denied.error, `release ${attempt + 1} removes the stale upload authorizer`)
+    t.is(await receiverCore.has(attempt), false, `release ${attempt + 1} sends no block`)
+    t.is(workerPeerAdds, peerAddsAfterRelease,
+      `release ${attempt + 1} does not reopen the detached writer`)
+
+    requesterRuntime.releaseAcquisitionCore({
+      assignmentId,
+      peerId: id(workerSwarm.keyPair),
+      key: descriptor.key,
+    })
+    await requesterRuntime.releaseAcquisitionAssignment({ assignmentId })
+  }
+  t.is(uploads, 0, 'released supplied-core holds upload no blocks')
 })

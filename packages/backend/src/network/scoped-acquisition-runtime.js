@@ -21,17 +21,7 @@ import {
   encodeAcquisitionProgress,
   encodeAcquisitionRequest,
   encodeAcquisitionResult,
-  encodeAssetBlockRequest,
-  decodeAssetBlockRequest,
-  encodeAssetBlockResponse,
-  decodeAssetBlockResponse,
-  encodeAssetBlockError,
-  decodeAssetBlockError,
 } from './frame.js'
-import {
-  encodeVerifiedBlockProof,
-  decodeVerifiedBlockProof,
-} from './block-protocol.js'
 import { createAssetSession } from '../assets/asset-session.js'
 const DISCOVERY_FRAME_TYPES = new Set([
   'acquisition-request',
@@ -43,10 +33,6 @@ const WORK_FRAME_TYPES = new Set([
   'acquisition-progress',
   'acquisition-result',
   'acquisition-cancel',
-  'acquisition-block-request',
-  'acquisition-block-proof',
-  'acquisition-block-chunk',
-  'acquisition-block-unavailable',
 ])
 const REQUIRED_SCOPED_METHODS = [
   'retainAcquisitionDiscovery',
@@ -72,6 +58,13 @@ function fail(message, code = 'ACQUISITION_NETWORK_REJECTED') {
   const error = new Error(message)
   error.code = code
   throw error
+}
+
+function requireCoreReplication (scopedNetwork) {
+  if (typeof scopedNetwork.retainAcquisitionCore !== 'function' ||
+      typeof scopedNetwork.releaseAcquisitionCore !== 'function') {
+    fail('scoped acquisition core replication is required')
+  }
 }
 
 function hex32(value, name) {
@@ -168,7 +161,6 @@ export function createAcquisitionNetwork(options = {}) {
   const remoteOffers = new Map()
   const offerIdsByRequest = new Map()
   const assignments = new Map()
-  const pendingBlockTransfers = new Map()
   const replayNonces = new Map()
   const replayRecords = new Map()
   const requestRate = new Map()
@@ -658,10 +650,6 @@ export function createAcquisitionNetwork(options = {}) {
     if (frame.type === 'acquisition-progress') return handleProgress(frame, peerId, current)
     if (frame.type === 'acquisition-result') return handleResult(frame, peerId, current)
     if (frame.type === 'acquisition-cancel') return handleCancellation(frame, peerId, current)
-    if (frame.type === 'acquisition-block-request') return handleBlockRequest(frame, peerId, current, context)
-    if (frame.type === 'acquisition-block-proof' || frame.type === 'acquisition-block-chunk' || frame.type === 'acquisition-block-unavailable') {
-      return handleBlockResponse(frame, peerId, current, context)
-    }
     fail('unsupported acquisition frame type')
   }
 
@@ -703,7 +691,16 @@ export function createAcquisitionNetwork(options = {}) {
       cancelTimer(hold.timer)
       hold.timer = null
     }
-    if (hold.closing === null) hold.closing = Promise.resolve().then(() => hold.session?.close())
+    if (hold.closing === null) {
+      if (hold.registered) {
+        scopedNetwork.releaseAcquisitionCore({
+          assignmentId: hold.assignmentId,
+          peerId: hold.peerId,
+          key: hold.asset.key,
+        })
+      }
+      hold.closing = Promise.resolve().then(() => hold.session?.close())
+    }
     return hold.closing
   }
   async function drainPredecessorHold (predecessorPending, predecessorHold, state) {
@@ -772,6 +769,7 @@ export function createAcquisitionNetwork(options = {}) {
       session: null,
       cancelled: false,
       promise: null,
+      registered: false,
       cancel() { this.cancelled = true; stopReadiness() },
     }
     state.pendingHold = pending
@@ -795,6 +793,18 @@ export function createAcquisitionNetwork(options = {}) {
           session = createAssetSession({ coreRef, store: assetStore, core, ownsCore: false })
           pending.session = session
           await Promise.race([session.ready(), stopped])
+          if (typeof scopedNetwork.retainAcquisitionCore === 'function' &&
+              typeof scopedNetwork.releaseAcquisitionCore === 'function') {
+            scopedNetwork.retainAcquisitionCore({
+              assignmentId: id,
+              peerId: state.peerId,
+              key: coreRef.key,
+              core: session.core,
+              coreRef,
+              serve: true,
+            })
+            pending.registered = true
+          }
         }
 
         assertPendingHoldRetained(pending, state, id)
@@ -809,6 +819,7 @@ export function createAcquisitionNetwork(options = {}) {
 
         const hold = {
           assignmentId: id,
+          peerId: state.peerId,
           asset: coreRef,
           availabilityUntil: until,
           session,
@@ -816,6 +827,7 @@ export function createAcquisitionNetwork(options = {}) {
           suppliedCore: core,
           timer: null,
           closing: null,
+          registered: pending.registered,
         }
 
         setupHoldTimer(hold, state)
@@ -823,6 +835,13 @@ export function createAcquisitionNetwork(options = {}) {
         state.hold = hold
         return hold
       } finally {
+        if (!settledHold && pending.registered) {
+          scopedNetwork.releaseAcquisitionCore({
+            assignmentId: id,
+            peerId: state.peerId,
+            key: coreRef.key,
+          })
+        }
         if (!settledHold && session) {
           await session.close().catch(() => {})
         }
@@ -835,192 +854,12 @@ export function createAcquisitionNetwork(options = {}) {
     return await pending.promise
   }
 
-  function validateHeldBlockRequest (state, peerId, hold, current, request) {
-    if (!state || state.peerId !== peerId || state.role !== 'worker') {
-      fail('assignment audience mismatch')
-    }
-    if (state.terminal !== null && state.terminal !== 'result') {
-      fail('assignment is terminal', 'ACQUISITION_REPLAY')
-    }
-    if (!hold || current >= hold.availabilityUntil) {
-      fail('block request after assignment hold expired')
-    }
-    if (!hold?.core && !hold?.session) {
-      fail('worker has no held verified asset for assignment')
-    }
-    const assetId = b4a.toString(request.assetId, 'hex')
-    if (assetId !== hold.asset.assetId) {
-      fail('block request asset does not match held result')
-    }
-  }
 
-  async function serveVerifiedBlockRange ({ core, hold, request, assignmentId, peerId }) {
-    for (let index = request.startBlock; index < request.endBlock; index++) {
-      const proof = await core.proof({ block: { index, nodes: 0 }, upgrade: { start: 0, length: hold.asset.length } })
-      const value = b4a.from(proof.block?.value || await core.get(index))
-      const proofBytes = encodeVerifiedBlockProof({
-        index,
-        proof,
-        value,
-        coreKey: hold.asset.key,
-        label: 'acquisition',
-      })
-      const proofPayload = encodeAssetBlockResponse({
-        assetId: hold.asset.assetId,
-        transferId: request.transferId,
-        startBlock: request.startBlock,
-        endBlock: request.endBlock,
-        blockIndex: index,
-        kind: 'proof',
-        offset: 0,
-        totalBytes: proofBytes.byteLength,
-        chunk: proofBytes,
-      })
-      scopedNetwork.publishAcquisitionFrame({
-        purpose: 'acquisition',
-        type: 'acquisition-block-proof',
-        assignmentId,
-        peerId,
-        payload: proofPayload,
-      })
-      // Chunk large blocks if needed.
-      const maxChunk = 48 * 1024
-      for (let offset = 0; offset < value.byteLength; offset += maxChunk) {
-        const chunk = value.subarray(offset, Math.min(value.byteLength, offset + maxChunk))
-        const chunkPayload = encodeAssetBlockResponse({
-          assetId: hold.asset.assetId,
-          transferId: request.transferId,
-          startBlock: request.startBlock,
-          endBlock: request.endBlock,
-          blockIndex: index,
-          kind: 'block',
-          offset,
-          totalBytes: value.byteLength,
-          chunk,
-        })
-        scopedNetwork.publishAcquisitionFrame({
-          purpose: 'acquisition',
-          type: 'acquisition-block-chunk',
-          assignmentId,
-          peerId,
-          payload: chunkPayload,
-        })
-      }
-    }
-  }
 
-  async function handleBlockRequest (frame, peerId, current, context = {}) {
-    const request = decodeAssetBlockRequest(frame.payload)
-    const assignmentId = hex32(context.assignmentId || context.scopeId || frame.assignmentId, 'assignmentId')
-    const state = assignments.get(assignmentId)
-    const hold = state?.hold
-    validateHeldBlockRequest(state, peerId, hold, current, request)
 
-    const core = hold.core || await hold.session.ready()
-    await serveVerifiedBlockRange({ core, hold, request, assignmentId, peerId })
-    return { status: 'served', startBlock: request.startBlock, endBlock: request.endBlock }
-  }
 
-  // A response frame settles a pending transfer only when it matches the exact
-  // peer, assignment, asset, and requested range the transfer was negotiated for.
-  function matchBlockTransfer (decoded, peerId, assignmentId) {
-    const entry = pendingBlockTransfers.get(String(decoded.transferId))
-    if (!entry || entry.settled) return null
-    if (entry.peerId !== peerId || entry.assignmentId !== assignmentId) return null
-    if (b4a.toString(decoded.assetId, 'hex') !== entry.coreRef.assetId) return null
-    if (decoded.startBlock !== entry.startBlock || decoded.endBlock !== entry.endBlock) return null
-    return entry
-  }
 
-  // Once-only settlement: the map entry is deleted only while it is still the
-  // registered entry, the transfer detaches from its owning import, and the
-  // promise resolves or rejects exactly once.
-  function settleBlockTransfer (entry, error = null, value = undefined) {
-    if (!entry || entry.settled) return false
-    entry.settled = true
-    if (pendingBlockTransfers.get(entry.key) === entry) pendingBlockTransfers.delete(entry.key)
-    entry.import?.activeTransfers?.delete(entry)
-    if (error) entry.reject(error)
-    else entry.resolve(value)
-    return true
-  }
 
-  function rejectBlockTransfer (entry, message, code = 'ACQUISITION_NETWORK_REJECTED') {
-    return settleBlockTransfer(entry, Object.assign(new Error(message), { code }))
-  }
-
-  function blockTransferAlive (entry) {
-    return !entry.settled && !closed && assignments.get(entry.assignmentId) === entry.state
-  }
-
-  async function handleBlockResponse (frame, peerId, current, context = {}) {
-    const assignmentId = hex32(context.assignmentId || context.scopeId || frame.assignmentId, 'assignmentId')
-    if (frame.type === 'acquisition-block-unavailable') {
-      const decoded = decodeAssetBlockError(frame.payload)
-      const entry = matchBlockTransfer(decoded, peerId, assignmentId)
-      if (entry) {
-        settleBlockTransfer(entry, Object.assign(new Error('acquisition block unavailable'), {
-          code: decoded.code || 'ASSET_BLOCK_UNAVAILABLE',
-        }))
-      }
-      return { status: 'unavailable' }
-    }
-    const response = decodeAssetBlockResponse(frame.payload)
-    const entry = matchBlockTransfer(response, peerId, assignmentId)
-    if (!entry) return { status: 'ignored' }
-    try {
-      if (response.kind === 'proof') {
-        const metadata = decodeVerifiedBlockProof(response.chunk, {
-          index: response.blockIndex,
-          coreKey: entry.coreRef.key,
-          label: 'acquisition',
-        })
-        entry.proofs.set(response.blockIndex, metadata)
-        entry.blocks.set(response.blockIndex, { totalBytes: metadata.byteLength, chunks: new Map(), received: 0 })
-        return { status: 'proof' }
-      }
-      if (response.kind === 'block') {
-        const proofEntry = entry.proofs.get(response.blockIndex)
-        const assembly = entry.blocks.get(response.blockIndex)
-        if (!proofEntry || !assembly) fail('block chunk arrived before proof')
-        if (assembly.totalBytes !== response.totalBytes) fail('block chunk totalBytes mismatch')
-        if (assembly.received !== response.offset) fail('block chunk offset mismatch')
-        assembly.chunks.set(response.offset, response.chunk)
-        assembly.received += response.chunk.byteLength
-        if (assembly.received === assembly.totalBytes) {
-          const value = b4a.allocUnsafe(assembly.totalBytes)
-          for (const [offset, chunk] of [...assembly.chunks.entries()].sort((a, b) => a[0] - b[0])) {
-            b4a.copy(chunk, value, offset)
-          }
-          await entry.session.verifyBlock({
-            index: response.blockIndex,
-            proof: proofEntry.proof,
-            value,
-            peerId: entry.peerId,
-            transferId: entry.transferId,
-            isActive: () => blockTransferAlive(entry),
-          })
-          // A cancelled transfer must not be resurrected by a proof that was
-          // already in flight when the entry settled.
-          if (entry.settled) return { status: 'ignored' }
-          entry.verified.add(response.blockIndex)
-          if (entry.verified.size >= (entry.endBlock - entry.startBlock)) {
-            settleBlockTransfer(entry, null, {
-              verifiedBlockIndexes: [...entry.verified].sort((a, b) => a - b),
-              byteLength: entry.coreRef.byteLength,
-            })
-          }
-        }
-        return { status: 'block' }
-      }
-      return { status: 'ignored' }
-    } catch (error) {
-      // Invalid or malformed proof data fails only this matching peer and
-      // assignment context; the owned session is quarantined by the engine.
-      settleBlockTransfer(entry, error)
-      return { status: 'rejected' }
-    }
-  }
 
   function assertImportLive (tracked) {
     if (tracked.cancelled) throw tracked.error
@@ -1029,6 +868,7 @@ export function createAcquisitionNetwork(options = {}) {
   }
 
   async function importVerifiedAsset ({ assignmentId, asset, peerId, signal = null } = {}) {
+    requireCoreReplication(scopedNetwork)
     if (closed) fail('acquisition network is closed')
     if (!assetStore) fail('acquisition asset store is required for verified import')
     const id = hex32(assignmentId, 'assignmentId')
@@ -1037,159 +877,70 @@ export function createAcquisitionNetwork(options = {}) {
     if (state.peerId !== hex32(peerId, 'peerId')) fail('import peer does not match assignment')
     const coreRef = coreRefFromAsset(asset)
 
-    // Track the import on the retained assignment synchronously, before its
-    // scheduled run can open a session, bound to the exact assignment identity
-    // so release, expiry, and close can cancel and drain it.
-    let stopReadiness
-    const stopped = new Promise(resolve => { stopReadiness = resolve })
-    const activeTransfers = new Set()
+    let stop
+    const stopped = new Promise(resolve => { stop = resolve })
     const tracked = {
       assignmentId: id,
       state,
       cancelled: false,
       error: null,
       promise: null,
-      activeTransfers,
+      download: null,
+      registered: false,
       cancel () {
         if (this.cancelled) return
         this.cancelled = true
         this.error = Object.assign(new Error('import aborted'), { code: 'ACQUISITION_CANCELLED' })
-        // settleBlockTransfer only removes the entry currently being visited,
-        // which is safe during direct Set iteration; async cleanup adds nothing.
-        for (const entry of activeTransfers) {
-          settleBlockTransfer(entry, this.error)
-        }
-        stopReadiness()
+        this.download?.destroy?.()
+        stop()
       },
     }
-
     const onAbort = () => tracked.cancel()
-    if (signal) {
-      if (signal.aborted) onAbort()
-      else signal.addEventListener('abort', onAbort, { once: true })
-    }
+    if (signal?.aborted) onAbort()
+    else signal?.addEventListener?.('abort', onAbort, { once: true })
 
     const run = async () => {
       let session = null
-      let sessionClosed = false
-      const closeOwnedSession = () => {
-        if (!session || sessionClosed) return Promise.resolve()
-        sessionClosed = true
-        return session.close().catch(() => {})
-      }
       try {
         assertImportLive(tracked)
         session = createAssetSession({ coreRef, store: assetStore })
-        // Readiness has no signal option: race it with cancellation and never
-        // await an uncooperative readiness before closing the owned session.
         await Promise.race([session.ready(), stopped])
         assertImportLive(tracked)
-
-        // Local complete hit: every block already verified.
-        let missing = []
-        for (let index = 0; index < coreRef.length; index++) {
-          let has = false
-          try {
-            // isActive cannot interrupt a stalled core.has: race every local
-            // check with the cancellation and assert liveness before reading
-            // the result, so a cancelled race is never read as a missing block.
-            has = await Promise.race([
-              session.hasVerifiedBlock(index, {
-                isActive: () => { assertImportLive(tracked); return true },
-              }),
-              stopped,
-            ])
-          } catch {
-            assertImportLive(tracked)
-            // A genuine local check failure falls back to the network path.
-          }
+        scopedNetwork.retainAcquisitionCore({
+          assignmentId: id,
+          peerId: state.peerId,
+          key: coreRef.key,
+          core: session.core,
+          coreRef,
+          serve: false,
+        })
+        tracked.registered = true
+        const complete = await Promise.race([session.core.has(0, coreRef.length), stopped])
+        assertImportLive(tracked)
+        if (!complete) {
+          tracked.download = session.core.download({ start: 0, end: coreRef.length, linear: true })
+          await Promise.race([tracked.download.done(), stopped])
           assertImportLive(tracked)
-          if (!has) missing.push(index)
         }
-        if (missing.length === 0) {
-          await closeOwnedSession()
-          return { imported: true, byteLength: coreRef.byteLength, descriptor: coreRef }
-        }
-
-        // Pull missing contiguous runs from the assigned worker under assignment authority.
-        while (missing.length > 0) {
-          assertImportLive(tracked)
-          const startBlock = missing[0]
-          let endBlock = startBlock + 1
-          while (missing.includes(endBlock)) endBlock++
-          const transferId = crypto.randomBytes(8).readBigUInt64BE(0)
-          const payload = encodeAssetBlockRequest({
-            assetId: coreRef.assetId,
-            transferId,
-            startBlock,
-            endBlock,
-          })
-          const outcome = await new Promise((resolve, reject) => {
-            const entry = {
-              key: String(transferId),
-              import: tracked,
-              assignmentId: id,
-              state,
-              peerId: hex32(peerId, 'peerId'),
-              session,
-              coreRef,
-              startBlock,
-              endBlock,
-              transferId,
-              proofs: new Map(),
-              blocks: new Map(),
-              verified: new Set(),
-              settled: false,
-              resolve,
-              reject,
-            }
-            activeTransfers.add(entry)
-            pendingBlockTransfers.set(entry.key, entry)
-            let delivery = null
-            try {
-              delivery = scopedNetwork.publishAcquisitionFrame({
-                purpose: 'acquisition',
-                type: 'acquisition-block-request',
-                assignmentId: id,
-                peerId,
-                payload,
-              })
-            } catch (error) {
-              settleBlockTransfer(entry, error)
-              return
-            }
-            if (!delivery || delivery.sent === 0) {
-              rejectBlockTransfer(entry, 'acquisition block request was not delivered')
-            }
-          })
-          assertImportLive(tracked)
-          missing = missing.filter(index => index < startBlock || index >= endBlock || !outcome.verifiedBlockIndexes.includes(index))
-        }
-
-        for (let index = 0; index < coreRef.length; index++) {
-          const has = await Promise.race([
-            session.hasVerifiedBlock(index, {
-              isActive: () => { assertImportLive(tracked); return true },
-            }),
-            stopped,
-          ])
-          // A cancelled race settles has as undefined: the cancellation guard
-          // must throw before this exact check, so a cancelled import never
-          // surfaces as a generic missing-block error.
-          assertImportLive(tracked)
-          if (!has) fail('imported asset missing verified block')
-        }
-        await closeOwnedSession()
+        const verified = await Promise.race([session.core.has(0, coreRef.length), stopped])
+        assertImportLive(tracked)
+        if (!verified) fail('imported asset missing verified block')
         return { imported: true, byteLength: coreRef.byteLength, descriptor: coreRef }
       } finally {
-        if (signal) signal.removeEventListener?.('abort', onAbort)
-        await closeOwnedSession()
+        signal?.removeEventListener?.('abort', onAbort)
+        tracked.download?.destroy?.()
+        if (tracked.registered) {
+          scopedNetwork.releaseAcquisitionCore({
+            assignmentId: id,
+            peerId: state.peerId,
+            key: coreRef.key,
+          })
+        }
+        await session?.close?.().catch(() => {})
         state.activeImports.delete(tracked)
       }
     }
 
-    // Set ownership synchronously: the drain promise and Set registration are
-    // in place before the queued run executes or close can re-enter.
     tracked.promise = Promise.resolve().then(run)
     state.activeImports.add(tracked)
     return await tracked.promise
@@ -1688,9 +1439,6 @@ export function createAcquisitionNetwork(options = {}) {
     // first awaited teardown, so a stalled first scope cannot keep unrelated
     // transfers running during terminal close.
     for (const state of active) cancelAssignmentImports(state)
-    for (const entry of [...pendingBlockTransfers.values()]) {
-      rejectBlockTransfer(entry, 'acquisition network is closed')
-    }
     for (const state of active) {
       try {
         await cancel({

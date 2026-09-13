@@ -48,6 +48,25 @@ function immutablePlaybackFixture(fill = 21) {
   }
 }
 
+function nativeSession(coreRef) {
+  return {
+    assetId: coreRef.assetId,
+    coreRef,
+    core: {
+      peers: [],
+      async ready() {},
+      async has() { return true },
+      async get() { return Buffer.alloc(coreRef.blockSize) },
+      download() {
+        return {
+          async done() {},
+          destroy() {},
+        }
+      },
+    },
+  }
+}
+
 function immutablePlaybackFixtureForCore(coreRef, fill, title) {
   const keyPair = crypto.keyPair(Buffer.alloc(32, fill))
   const manifest = createPublicationManifest({
@@ -595,12 +614,7 @@ test('verified index candidates open exact route assets and release their retain
   const scopedNetwork = {
     async retainAuthorizedRendition(request) { retains.push(request) },
     async releaseAuthorizedRendition(request) { releases.push(request); return { released: true } },
-    getActiveAssetSession() { return { assetId: fixture.coreRef.assetId, coreRef: fixture.coreRef } },
-    getActiveAssetPeerIds() { return [] },
-    async listPeerAssetRanges() { return { ranges: [], nextCursor: null } },
-    async hasVerifiedAssetBlock() { return true },
-    async readVerifiedAssetBlock() { return Buffer.alloc(fixture.coreRef.blockSize) },
-    async requestAssetBlocks() { throw new Error('local verified bytes should be reused') },
+    getActiveAssetSession() { return nativeSession(fixture.coreRef) },
   }
   const api = createApi({ ctx, scopedNetwork })
   const candidate = Object.freeze({
@@ -636,14 +650,7 @@ test('static playback composition binds one exact scheduler to the shared playba
     blockLength: 1,
     byteLength: 256 * 1024,
   })
-  const session = { assetId: coreRef.assetId, coreRef }
-  const transport = {
-    getActiveAssetPeerIds() { return [] },
-    listPeerAssetRanges() { return { ranges: [], nextCursor: null } },
-    hasVerifiedAssetBlock() { return false },
-    readVerifiedAssetBlock() { throw new Error('not materialized') },
-    requestAssetBlocks() { throw new Error('no peer') },
-  }
+  const session = nativeSession(coreRef)
   let registered = null
   const playbackService = {
     resolveStaticAssetUrl(input) {
@@ -655,7 +662,6 @@ test('static playback composition binds one exact scheduler to the shared playba
   const playback = createStaticAssetPlayback({
     coreRef,
     session,
-    transport,
     playbackService,
     mimeType: 'video/mp4',
   })
@@ -669,7 +675,7 @@ test('static playback composition binds one exact scheduler to the shared playba
 test('getVideoUrl prefers verified immutable static playback over supplied legacy blob refs', async (t) => {
   const fixture = immutablePlaybackFixture()
   const calls = []
-  const session = { assetId: fixture.coreRef.assetId, coreRef: fixture.coreRef }
+  const session = nativeSession(fixture.coreRef)
   const ctx = {
     staticAssetPlaybackEntries: new Map(),
     blobServerHost: '127.0.0.1',
@@ -695,11 +701,6 @@ test('getVideoUrl prefers verified immutable static playback over supplied legac
       calls.push(['release', request])
       return { released: true }
     },
-    getActiveAssetPeerIds() { return [] },
-    async listPeerAssetRanges() { return { ranges: [], nextCursor: null } },
-    async hasVerifiedAssetBlock() { return false },
-    async readVerifiedAssetBlock() { throw new Error('not materialized') },
-    async requestAssetBlocks() { throw new Error('no peer') },
   }
   const api = createApi({ ctx, scopedNetwork })
   let metadataReads = 0
@@ -778,18 +779,12 @@ test('shared static assets retain and evict each exact publication authorization
       return { status: 'retained' }
     },
     getActiveAssetSession({ assetId }) {
-      const coreRef = coreRefs.get(assetId)
-      return { assetId, coreRef }
+      return nativeSession(coreRefs.get(assetId))
     },
     async releaseAuthorizedRendition(request) {
       releases.push(request)
       return { released: true }
     },
-    getActiveAssetPeerIds() { return [] },
-    async listPeerAssetRanges() { return { ranges: [], nextCursor: null } },
-    async hasVerifiedAssetBlock() { return false },
-    async readVerifiedAssetBlock() { throw new Error('not materialized') },
-    async requestAssetBlocks() { throw new Error('no peer') },
   }
   const api = createApi({ ctx, scopedNetwork })
   let metadata = { immutablePublication: first.immutablePublication, mimeType: 'video/mp4' }
@@ -857,18 +852,12 @@ test('failed static capability links leave authorization registry and LRU state 
       return { status: 'retained' }
     },
     getActiveAssetSession({ assetId }) {
-      const coreRef = coreRefs.get(assetId)
-      return { assetId, coreRef }
+      return nativeSession(coreRefs.get(assetId))
     },
     async releaseAuthorizedRendition(request) {
       releases.push(request)
       return { released: true }
     },
-    getActiveAssetPeerIds() { return [] },
-    async listPeerAssetRanges() { return { ranges: [], nextCursor: null } },
-    async hasVerifiedAssetBlock() { return false },
-    async readVerifiedAssetBlock() { throw new Error('not materialized') },
-    async requestAssetBlocks() { throw new Error('no peer') },
   }
   const api = createApi({ ctx, scopedNetwork })
   let metadata = { immutablePublication: first.immutablePublication, mimeType: 'video/mp4' }

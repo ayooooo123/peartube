@@ -21,6 +21,12 @@ test('mobile build scripts regenerate HRPC spec before rebuilding backend bundle
     'prepare:mobile-backend should regenerate spec before bundling the mobile backend',
   )
 
+  assert.equal(
+    scripts.schema,
+    'npm run gen:schema --prefix ../spec',
+    'schema regeneration must preserve Hyperschema version history',
+  )
+
   const buildScriptNames = [
     'android',
     'ios',

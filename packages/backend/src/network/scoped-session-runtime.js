@@ -3,7 +3,7 @@ import c from 'compact-encoding'
 import Protomux from 'protomux'
 
 import { createNetworkAdmission } from './admission.js'
-import { ASSET_BLOCK_ERROR_CODES, encodePeerFrame, MAX_PEER_FRAME_BYTES, PROTOCOL_MAJOR } from './frame.js'
+import { encodePeerFrame, MAX_PEER_FRAME_BYTES, PROTOCOL_MAJOR } from './frame.js'
 import { MAX_VERIFIED_BLOCK_BYTES } from './block-protocol.js'
 import { createVerifiedBlockEngine } from './verified-block-engine.js'
 import {
@@ -11,7 +11,6 @@ import {
   ACQUISITION_WORK_CAPABILITY,
   ARCHIVE_DISCOVERY_CAPABILITY,
   ARCHIVE_RANGE_CAPABILITY,
-  ASSET_RENDITION_CAPABILITY,
   INDEX_QUERY_CAPABILITY,
   SCOPED_NETWORK_PROTOCOL,
   createScopedProtocolSession,
@@ -22,7 +21,6 @@ export {
   ACQUISITION_WORK_CAPABILITY,
   ARCHIVE_DISCOVERY_CAPABILITY,
   ARCHIVE_RANGE_CAPABILITY,
-  ASSET_RENDITION_CAPABILITY,
   INDEX_QUERY_CAPABILITY,
   SCOPED_NETWORK_PROTOCOL,
   createScopedProtocolSession,
@@ -43,6 +41,7 @@ import {
   decodePublisherNamespaceDescriptor,
   verifyPublisherNamespaceDescriptor,
 } from '../publisher/namespace.js'
+import { normalizeAssetCoreRefV2 } from '../assets/rendition.js'
 import { encodeIndexServiceAnnouncement, verifyIndexServiceAnnouncement } from '../indexer/service-announcement.js'
 import { registerIndexServicePolicyControl } from './index-service-policy-control-internal.js'
 import { createIndexQueryClient } from '../indexer/protocol.js'
@@ -61,7 +60,6 @@ import { createPublisherCatalogRuntime } from './publisher-catalog-runtime.js'
 const GENERIC_PURPOSES = Object.freeze([
   'bootstrap',
   'publisher',
-  'asset',
   'archive',
   'archive-discovery',
   'acquisition-discovery',
@@ -73,13 +71,6 @@ const ASSET_TRANSFER_TIMEOUT_MS = 10_000
 const MAX_OUTBOUND_RATE_DEFER_MS = 4_000
 const MAX_OUTBOUND_RATE_DEFERRALS = 4
 const MAX_INDEX_SERVICE_ADAPTERS = 32
-const ASSET_TRANSFER_TYPES = new Set([
-  'asset-range-summary-request',
-  'asset-range-summary-page',
-  'asset-block-request',
-  'asset-block-response',
-  'asset-block-error',
-])
 const ARCHIVE_TRANSFER_TYPES = new Set([
   'archive-block-request',
   'archive-block-proof',
@@ -96,10 +87,6 @@ const ACQUISITION_WORK_FRAME_TYPES = new Set([
   'acquisition-progress',
   'acquisition-result',
   'acquisition-cancel',
-  'acquisition-block-request',
-  'acquisition-block-proof',
-  'acquisition-block-chunk',
-  'acquisition-block-unavailable',
 ])
 
 function fail (message, code = 'SCOPED_NETWORK_REJECTED') {
@@ -134,7 +121,6 @@ function capabilityForPurpose (purpose, { indexService = false } = {}) {
   switch (purpose) {
     case 'bootstrap': return BOOTSTRAP_LOCATOR_CAPABILITY
     case 'publisher': return PUBLISHER_CATALOG_CAPABILITY
-    case 'asset': return ASSET_RENDITION_CAPABILITY
     case 'archive': return ARCHIVE_RANGE_CAPABILITY
     case 'archive-discovery': return ARCHIVE_DISCOVERY_CAPABILITY
     case 'acquisition-discovery': return ACQUISITION_DISCOVERY_CAPABILITY
@@ -444,7 +430,6 @@ function buildRuntimeDiagnostics({
         purpose: scope.purpose,
         topicHex: scope.topicHex,
         state: session.state,
-        assetResponseCount: session.assetResponses?.size || 0,
         archiveServing: session.archiveServing === true,
       })
     }
@@ -456,7 +441,7 @@ function buildRuntimeDiagnostics({
       activeAnnouncements: [...scopes.values()]
         .filter(scope => scope.serverAnnounced === true).length,
       activeServes: sessions.reduce((total, session) =>
-        total + session.assetResponseCount + (session.archiveServing ? 1 : 0), 0),
+        total + (session.archiveServing ? 1 : 0), 0),
       servedBytes: uploadedBytes,
     },
     selectedIndexerCount: Math.min(indexServices.size, 64),
@@ -671,7 +656,7 @@ export function createScopedNetworkRuntime (options = {}) {
   const connectionIds = new WeakMap()
   let nextConnectionId = 1
   const pairedConnections = new WeakSet()
-  const counters = { acceptedFrames: 0, rejectedFrames: 0, outboundFrames: 0, inboundAssetFrames: 0, openedCatalogs: 0, openedCores: 0, closedSessions: 0, joinedTopics: 0, leftTopics: 0 }
+  const counters = { acceptedFrames: 0, rejectedFrames: 0, outboundFrames: 0, openedCatalogs: 0, openedCores: 0, closedSessions: 0, joinedTopics: 0, leftTopics: 0, rejectedNativeUploads: 0 }
   const recentErrors = []
   let status = 'idle'
   let closePromise = null
@@ -902,6 +887,256 @@ export function createScopedNetworkRuntime (options = {}) {
     ensureScopeDiscovery(scope)
   }
 
+  const nativeUploadGuards = new WeakMap()
+  const nativeUploadAttachments = new WeakMap()
+  const pendingNativeUploadGuards = new Set()
+
+  function firstNativeUploadAuthorization (authorizers) {
+    for (const authorize of authorizers) {
+      const authorization = authorize()
+      if (authorization) return authorization
+    }
+    return null
+  }
+
+  function requestedNativeBlockBytes (coreRef, index) {
+    if (!Number.isSafeInteger(index) || index < 0 || index >= coreRef.length) return null
+    return Math.min(coreRef.blockSize, coreRef.byteLength - index * coreRef.blockSize)
+  }
+
+  function refuseNativeBlockRequest (peer, request) {
+    peer.remoteRequests?.delete?.(request.id)
+    peer.channel?.close?.()
+    counters.rejectedNativeUploads++
+  }
+  // Hypercore always advertises uploads and has no public per-peer upload switch.
+  // Install this before Protomux uncorks; an incompatible peer shape closes fail-closed.
+
+  function guardNativeUploads (peer, authorizers) {
+    const existing = nativeUploadGuards.get(peer)
+    if (existing) {
+      for (const authorize of authorizers) existing.authorizers.add(authorize)
+      return true
+    }
+    if (typeof peer?._handleRequest !== 'function' || typeof peer?.wireData?.send !== 'function') {
+      peer?.channel?.close?.()
+      return false
+    }
+    const state = {
+      authorizers: new Set(authorizers),
+      pending: new Map(),
+    }
+    const sendData = peer.wireData.send
+    peer.wireData.send = function policyBoundNativeSend (message, channel) {
+      if (!message?.block) return sendData.call(this, message, channel)
+      const pending = state.pending.get(message.request)
+      const authorization = firstNativeUploadAuthorization(state.authorizers)
+      const bytes = authorization && requestedNativeBlockBytes(authorization.coreRef, message.block.index)
+      if (!pending || !authorization || bytes !== pending.bytes ||
+          authorization.retentionClass !== pending.retentionClass ||
+          networkPolicyEpoch !== pending.policyEpoch) {
+        if (pending) {
+          state.pending.delete(message.request)
+          pending.reservation.release()
+        }
+        refuseNativeBlockRequest(peer, { id: message.request })
+        return false
+      }
+      const sent = sendData.call(this, message, channel)
+      state.pending.delete(message.request)
+      pending.reservation.commit()
+      return sent
+    }
+    const handleRequest = peer._handleRequest
+    peer._handleRequest = async function policyBoundNativeRequest (request) {
+      if (!request?.block) return handleRequest.call(this, request)
+      const authorization = firstNativeUploadAuthorization(state.authorizers)
+      const bytes = authorization && requestedNativeBlockBytes(authorization.coreRef, request.block.index)
+      if (!authorization || bytes === null) {
+        refuseNativeBlockRequest(this, request)
+        return
+      }
+      const admittedPolicyEpoch = networkPolicyEpoch
+      const reservation = await reservePolicyUpload(authorization.retentionClass, bytes)
+      if (!reservation || networkPolicyEpoch !== admittedPolicyEpoch ||
+          this.remoteRequests?.get?.(request.id) !== request) {
+        reservation?.release()
+        refuseNativeBlockRequest(this, request)
+        return
+      }
+      const pending = {
+        bytes,
+        retentionClass: authorization.retentionClass,
+        policyEpoch: admittedPolicyEpoch,
+        reservation,
+      }
+      state.pending.set(request.id, pending)
+      try {
+        await handleRequest.call(this, request)
+      } finally {
+        if (state.pending.get(request.id) === pending) {
+          state.pending.delete(request.id)
+          reservation.release()
+        }
+      }
+    }
+    nativeUploadGuards.set(peer, state)
+    return true
+  }
+
+  function rebuildNativeAttachmentAuthorizers (attachment) {
+    attachment.authorizers.clear()
+    for (const current of attachment.owners.values()) {
+      for (const entry of current.authorizers) attachment.authorizers.add(entry)
+    }
+  }
+
+  function removeNativeAttachmentOwner (attachment, owner, authorize = null) {
+    const state = attachment.owners.get(owner)
+    if (!state) return false
+    if (authorize) state.authorizers.delete(authorize)
+    else state.authorizers.clear()
+    if (state.authorizers.size === 0) {
+      owner.off?.('close', state.onClose)
+      owner.removeListener?.('close', state.onClose)
+      attachment.owners.delete(owner)
+    }
+    rebuildNativeAttachmentAuthorizers(attachment)
+    if (attachment.owners.size === 0) attachment.cleanup()
+    return true
+  }
+
+  function addNativeAttachmentOwner (attachment, owner, authorize) {
+    let state = attachment.owners.get(owner)
+    if (!state) {
+      const onClose = () => removeNativeAttachmentOwner(attachment, owner)
+      state = { authorizers: new Set(), onClose }
+      attachment.owners.set(owner, state)
+      owner.once?.('close', onClose)
+    }
+    state.authorizers.add(authorize)
+    attachment.authorizers.add(authorize)
+    let released = false
+    return () => {
+      if (released) return false
+      released = true
+      return removeNativeAttachmentOwner(attachment, owner, authorize)
+    }
+  }
+
+  function detachNativeAttachment (internalCore, mux) {
+    const replicator = internalCore?.replicator
+    const peers = [...(replicator?.peers || [])].filter(peer => peer?.protomux === mux)
+    const channels = new Set(peers.map(peer => peer.channel))
+    const openingChannel = mux.getLastChannel?.({
+      protocol: 'hypercore/alpha',
+      id: internalCore?.discoveryKey,
+    })
+    if (openingChannel) channels.add(openingChannel)
+    if (typeof replicator?.detachFrom === 'function') {
+      try {
+        replicator.detachFrom(mux)
+      } catch (error) {
+        mux.stream?.destroy?.(error)
+      }
+    } else {
+      const error = Object.assign(new Error('Hypercore attachment cannot be detached safely'), {
+        code: 'NATIVE_UPLOAD_DETACH_UNAVAILABLE',
+      })
+      mux.stream?.destroy?.(error)
+    }
+    for (const channel of channels) channel?.close?.()
+  }
+
+  function nativeCoreAttachmentUnavailable (core) {
+    return status === 'closed' || core?.closed
+  }
+
+  function attachPolicyBoundCore (core, connection, authorize) {
+    if (nativeCoreAttachmentUnavailable(core)) return
+    const mux = muxFactory(connection)
+    const internalCore = core.core || core
+    let byMux = nativeUploadAttachments.get(internalCore)
+    if (!byMux) {
+      byMux = new WeakMap()
+      nativeUploadAttachments.set(internalCore, byMux)
+    }
+    const existing = byMux.get(mux)
+    if (existing) {
+      const releaseOwner = addNativeAttachmentOwner(existing, core, authorize)
+      for (const peer of internalCore.replicator?.peers || []) {
+        if (peer?.protomux === mux) guardNativeUploads(peer, [existing.authorize])
+      }
+      return releaseOwner
+    }
+    if (typeof core?.on !== 'function') {
+      core.replicate(mux)
+      return
+    }
+    const monitor = typeof core.session === 'function'
+      ? core.session({ writable: false, weak: true, active: false })
+      : core
+    const attachment = {
+      authorizers: new Set(),
+      owners: new Map(),
+      monitor,
+      closed: false,
+      authorize: null,
+      cleanup: null,
+    }
+    attachment.authorize = () => attachment.closed
+      ? null
+      : firstNativeUploadAuthorization(attachment.authorizers)
+    const onPeer = peer => {
+      if (peer?.protomux !== mux) return false
+      guardNativeUploads(peer, [attachment.authorize])
+      return true
+    }
+    attachment.cleanup = () => {
+      if (attachment.closed) return
+      attachment.closed = true
+      pendingNativeUploadGuards.delete(attachment.cleanup)
+      byMux.delete(mux)
+      detachNativeAttachment(internalCore, mux)
+      monitor.off?.('peer-add', onPeer)
+      monitor.removeListener?.('peer-add', onPeer)
+      for (const [owner, state] of attachment.owners) {
+        owner.off?.('close', state.onClose)
+        owner.removeListener?.('close', state.onClose)
+      }
+      attachment.owners.clear()
+      mux.stream?.off?.('close', attachment.cleanup)
+      mux.stream?.removeListener?.('close', attachment.cleanup)
+      if (monitor !== core) void monitor.close().catch(() => {})
+    }
+    byMux.set(mux, attachment)
+    const releaseOwner = addNativeAttachmentOwner(attachment, core, authorize)
+    pendingNativeUploadGuards.add(attachment.cleanup)
+    monitor.on('peer-add', onPeer)
+    if (monitor !== core) {
+      void monitor.ready().catch(error => {
+        mux.stream?.destroy?.(error)
+        attachment.cleanup()
+      })
+    }
+    mux.stream?.once?.('close', attachment.cleanup)
+    core.replicate(mux)
+    for (const peer of internalCore.replicator?.peers || []) onPeer(peer)
+    return releaseOwner
+  }
+
+  function attachAssetCore (scope, connection, info = {}) {
+    if (scope.purpose !== 'asset' || typeof scope.assetSession?.core?.replicate !== 'function') return false
+    if (info.client === false && !scopeMayServe(scope)) return false
+    scope.nativeUploadAuthorization ||= () => {
+      if (scopes.get(scope.id) !== scope || scope.closed || !scopeMayServe(scope)) return null
+      const retentionClass = scopeUploadRetentionClass(scope)
+      return retentionClass ? { coreRef: scope.assetSession.coreRef, retentionClass } : null
+    }
+    attachPolicyBoundCore(scope.assetSession.core, connection, scope.nativeUploadAuthorization)
+    return true
+  }
+
   function joinScope ({ purpose, topic, scopeId, mode, ...metadata }) {
     if (status === 'closed') fail('runtime is closed')
     const topicBuffer = exactBuffer(topic, 32, 'topic')
@@ -911,7 +1146,9 @@ export function createScopedNetworkRuntime (options = {}) {
       scope.modes.add(mode)
       // Rejoining must reattach scopes whose channel closed while the connection stayed live.
       if (networkEnabled && !scope.closed) {
-        for (const [connection, info] of activeConnections) attachScope(scope, connection, info)
+        for (const [connection, info] of activeConnections) {
+          if (!attachAssetCore(scope, connection, info)) attachScope(scope, connection, info)
+        }
       }
       return { scope, created: false }
     }
@@ -935,7 +1172,7 @@ export function createScopedNetworkRuntime (options = {}) {
     ensureScopeDiscovery(scope)
     if (networkEnabled && purpose !== 'index') {
       for (const [connection, info] of activeConnections) {
-        attachScope(scope, connection, info)
+        if (!attachAssetCore(scope, connection, info)) attachScope(scope, connection, info)
       }
     }
     return { scope, created: true }
@@ -978,15 +1215,6 @@ export function createScopedNetworkRuntime (options = {}) {
   function closeSession (scope, peerId, reason, ownedSession = null) {
     const session = scope.sessions.get(peerId)
     if (!session || session.closed || (ownedSession && session !== ownedSession)) return false
-    cancelAssetSummaryScan(session)
-    closeAssetInventoryRequest(
-      session,
-      session.assetInventoryRequest,
-      assetTransportError('DISCONNECTED', peerId, 'asset peer disconnected'),
-    )
-    for (const response of session.assetResponses?.values() || []) response.cancelled = true
-    session.assetResponses?.clear()
-    if (scope.purpose === 'asset') failAssetRequestPeer(scope, peerId, 'DISCONNECTED')
     if (scope.purpose === 'archive' && session.archiveRequest) {
       queueArchiveRetry(scope, session, session.archiveRequest)
     } else if (scope.purpose === 'archive') {
@@ -1046,17 +1274,14 @@ export function createScopedNetworkRuntime (options = {}) {
   const contentRuntime = createScopedContentRuntime({
     options, store, authorizePublication, authorizeConsumerWork, protocolMajor, networkId,
     assetTransferTimeoutMs, counters, renditions, archives, blockEngine,
-    normalizeRetentionClass, scopeUploadRetentionClass, reservePolicyUpload,
-    findScope, joinScope, leaveScope, closeSession, sendScopedFrame, recordProtocolError,
+    normalizeRetentionClass, reservePolicyUpload,
+    findScope, joinScope, leaveScope, closeSession, sendScopedFrame,
     cleanupResource, stableScopeDiagnostic, safeRange, hex32, policy: contentPolicy,
   })
   const {
-    assetTransportError, closeAssetInventoryRequest, cancelAssetSummaryScan, failAssetRequestPeer,
-    queueArchiveRetry, clearArchiveTimer, startArchivePumpWhenOpen, handleAssetFrame, handleArchiveFrame,
-    pumpArchiveSessions,
-    sendAssetError, retainAuthorizedRendition, releaseAuthorizedRendition, listAssetRanges,
-    getActiveAssetSession, getActiveAssetPeerIds, listPeerAssetRanges, hasVerifiedAssetBlock,
-    readVerifiedAssetBlock, requestAssetBlocks, revalidateRetainedRenditions, retainArchiveDiscovery,
+    queueArchiveRetry, clearArchiveTimer, startArchivePumpWhenOpen, handleArchiveFrame,
+    pumpArchiveSessions, retainAuthorizedRendition, releaseAuthorizedRendition,
+    getActiveAssetSession, revalidateRetainedRenditions, retainArchiveDiscovery,
     releaseArchiveDiscovery, publishArchiveRequest, publishArchivePledge, publishArchiveChallenge,
     publishArchiveChallengeProof, retainAuthorizedArchive, releaseAuthorizedArchive,
     getAuthorizedArchiveProgress, assessAvailability,
@@ -1113,6 +1338,7 @@ export function createScopedNetworkRuntime (options = {}) {
       scope.catalogPagePending.reject(Object.assign(new Error('publisher catalog scope released'), { code: 'PUBLISHER_CATALOG_SCOPE_RELEASED' }))
       scope.catalogPagePending = null
     }
+    releaseAllAcquisitionCores(scope)
     await contentRuntime.prepareScopeClose(scope)
     for (const peerId of [...scope.sessions.keys()]) closeSession(scope, peerId, 'scope-released')
     await contentRuntime.finalizeScopeClose(scope)
@@ -1136,11 +1362,6 @@ export function createScopedNetworkRuntime (options = {}) {
     if (scope.purpose === 'index' || scope.purpose === 'moderation') {
       return { status: 'authorized', action: 'bounded-feed', feedId: scope.feedId }
     }
-    if (scope.purpose === 'asset') {
-      if (!scope.assetSession || !scope.coreKey) return { status: 'rejected', reason: 'core-not-authorized' }
-      if (requestedCoreKey && hex32(requestedCoreKey, 'requestedCoreKey') !== scope.coreKey) return { status: 'rejected', reason: 'core-not-authorized' }
-      return { status: 'authorized', action: 'retained-range', coreKey: scope.coreKey, range: { ...scope.range } }
-    }
     if (scope.purpose === 'archive-discovery' || scope.purpose === 'archive') {
       return authorizeArchiveScopeConnection(scope, requestedCoreKey, scopeMayServe)
     }
@@ -1149,20 +1370,6 @@ export function createScopedNetworkRuntime (options = {}) {
 
 
 
-  async function activateAssetScopeSession(scope, isCurrentSession) {
-    let current = false
-    for (const authorization of scope.assetAuthorizations?.values?.() || []) {
-      current = await authorizePublication({
-        manifest: authorization.manifest,
-        renditionId: authorization.renditionId,
-        start: authorization.range.start,
-        end: authorization.range.end,
-      })
-      if (current) break
-    }
-    if (!current) fail('publication manifest authorization failed')
-    return isCurrentSession()
-  }
 
   function dispatchArchiveSessionActivation(scope, remoteKey, tracked) {
     if (scope.purpose === 'archive' && !scope.archiveDiscovery) {
@@ -1175,10 +1382,40 @@ export function createScopedNetworkRuntime (options = {}) {
       }
     }
   }
+  function attachAcquisitionCoreEntry (entry, connection) {
+    if (entry.attachments.has(connection)) return
+    const releaseOwner = attachPolicyBoundCore(entry.core, connection, entry.authorizeUpload)
+    if (typeof releaseOwner !== 'function') return
+    const onClose = () => entry.attachments.delete(connection)
+    const release = () => {
+      connection.off?.('close', onClose)
+      connection.removeListener?.('close', onClose)
+      entry.attachments.delete(connection)
+      releaseOwner()
+    }
+    entry.attachments.set(connection, release)
+    connection.once?.('close', onClose)
+  }
+
+  function releaseAcquisitionCoreEntry (entry) {
+    for (const release of entry?.attachments?.values?.() || []) release()
+    entry?.attachments?.clear?.()
+  }
+
+  function releaseAllAcquisitionCores (scope) {
+    for (const entry of scope?.acquisitionCores?.values?.() || []) releaseAcquisitionCoreEntry(entry)
+    scope?.acquisitionCores?.clear?.()
+  }
+
+  function attachAcquisitionCores (scope, remoteKey, tracked) {
+    if (scope.purpose !== 'acquisition') return
+    for (const entry of scope.acquisitionCores?.values?.() || []) {
+      if (entry.peerId === remoteKey) attachAcquisitionCoreEntry(entry, tracked.connection)
+    }
+  }
+
 
   async function dispatchScopeSessionActivation(scope, remoteKey, tracked) {
-    // Asset frames enforce range, upload policy, and Hypercore proof checks.
-    if (scope.purpose === 'asset') contentRuntime.notifyAssetPeerWaiters(scope)
     if (scope.purpose === 'bootstrap') {
       // Activation is the only moment consumers receive retained publisher locators.
       sendLocatorsToSession(tracked)
@@ -1192,6 +1429,7 @@ export function createScopedNetworkRuntime (options = {}) {
       })
     }
     dispatchArchiveSessionActivation(scope, remoteKey, tracked)
+    attachAcquisitionCores(scope, remoteKey, tracked)
     if ((scope.purpose === 'acquisition-discovery' || scope.purpose === 'acquisition') &&
         typeof scope.onPeer === 'function') {
       await scope.onPeer({ peerId: remoteKey, purpose: scope.purpose, scopeId: scope.scopeId })
@@ -1199,6 +1437,7 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   function attachScope (scope, connection, info) {
+    if (scope.purpose === 'asset') return null
     const remoteKey = shouldAttachScope(scope, connection, info, networkEnabled, scopeMayAttach, connectionKey)
     if (!remoteKey) return
 
@@ -1219,15 +1458,10 @@ export function createScopedNetworkRuntime (options = {}) {
       admission,
       isAdmissionExempt: frame =>
         (scope.purpose === 'bootstrap' && frame.type === 'locator') ||
-        (scope.purpose === 'asset' && ASSET_TRANSFER_TYPES.has(frame.type)) ||
         (scope.purpose === 'archive' && ARCHIVE_TRANSFER_TYPES.has(frame.type)),
       onActivate: async () => {
         if (!isCurrentSession()) return
         const tracked = ownedSession
-        if (scope.purpose === 'asset') {
-          const stillCurrent = await activateAssetScopeSession(scope, isCurrentSession)
-          if (!stillCurrent) return
-        }
         const result = authorizeScopeConnection(scope, { peerId: remoteKey, connection, tracked })
         if (result.status !== 'authorized') fail(result.reason)
         if (isCurrentSession()) {
@@ -1239,7 +1473,6 @@ export function createScopedNetworkRuntime (options = {}) {
         if (scope.purpose === 'bootstrap') return handleBootstrapFrame(frame, { peerId: remoteKey, tracked })
         if (scope.purpose === 'publisher') return handlePublisherProofFrame(scope, scope.sessions.get(remoteKey), frame)
         if (scope.purpose === 'index' || scope.purpose === 'moderation') return handleFeedFrame(scope, scope.sessions.get(remoteKey), frame)
-        if (scope.purpose === 'asset') return handleAssetFrame(scope, ownedSession, frame)
         if (scope.purpose === 'archive') return handleArchiveFrame(scope, ownedSession, frame)
         if (scope.purpose === 'archive-discovery') return handleArchiveFrame(scope, ownedSession, frame)
         if ((scope.purpose === 'acquisition-discovery' || scope.purpose === 'acquisition') &&
@@ -1251,14 +1484,6 @@ export function createScopedNetworkRuntime (options = {}) {
       onClose: () => {
         const tracked = ownedSession
         if (!tracked || tracked.closed || scope.sessions.get(remoteKey) !== tracked) return
-        closeAssetInventoryRequest(
-          tracked,
-          tracked?.assetInventoryRequest,
-          assetTransportError('DISCONNECTED', remoteKey, 'asset peer disconnected'),
-        )
-        for (const response of tracked?.assetResponses?.values() || []) response.cancelled = true
-        tracked?.assetResponses?.clear()
-        if (scope.purpose === 'asset') failAssetRequestPeer(scope, remoteKey)
         if (tracked?.archiveRequest) {
           queueArchiveRetry(scope, tracked, tracked.archiveRequest)
         } else {
@@ -1266,7 +1491,6 @@ export function createScopedNetworkRuntime (options = {}) {
         }
         if (tracked && !tracked.closed) {
           notifyAcquisitionPeerClosed(scope, remoteKey, 'channel-closed')
-          cancelAssetSummaryScan(tracked)
           tracked.closed = true
           for (const cleanup of tracked.cleanupFns.splice(0)) {
             try { cleanup() } catch { /* best-effort session cleanup */ }
@@ -1319,16 +1543,6 @@ export function createScopedNetworkRuntime (options = {}) {
       get state() { return this.closed ? 'closed' : this.protocol.state },
       closed: false,
       cleanupFns: [],
-      assetRequestIndex: null,
-      assetTransfer: null,
-      assetTimer: null,
-      assetServing: false,
-      assetLastServed: -1,
-      replicatedCoreKeys: new Set(),
-      assetResponses: new Map(),
-      assetSummaryScan: null,
-      assetInventoryRequest: null,
-      lastAssetTransferId: 0n,
       archiveRequest: null,
       archivePumping: false,
       archivePumpQueued: false,
@@ -1400,6 +1614,7 @@ export function createScopedNetworkRuntime (options = {}) {
     if (shouldRejectUnmatchedIndexScopes(scopes, liveRemoteKey)) return
 
     const mux = muxFactory(connection)
+    for (const scope of scopes.values()) attachAssetCore(scope, connection, info)
     pairConnectionProtocols(connection, info, mux, pairedConnections, protocolMajor, findScope, attachScope)
     attachOutboundClientScopes(connection, info, scopes, mux, activeConnections, attachScope)
   }
@@ -1503,7 +1718,6 @@ export function createScopedNetworkRuntime (options = {}) {
       listening = false
     }
     for (const scope of scopes.values()) {
-      contentRuntime.notifyAssetPeerWaiters(scope, new Error('network policy disabled'))
       for (const peerId of [...scope.sessions.keys()]) closeSession(scope, peerId, 'network-policy-disabled')
     }
     await Promise.allSettled([...scopes.values()].map(scope => suspendScopeDiscovery(scope)))
@@ -1516,9 +1730,7 @@ export function createScopedNetworkRuntime (options = {}) {
       scope.archiveFailures?.clear()
       if (!closeSessions) continue
       for (const peerId of [...scope.sessions.keys()]) {
-        if (scope.purpose === 'asset' || scope.purpose === 'archive') {
-          closeSession(scope, peerId, 'network-policy-changed')
-        }
+        if (scope.purpose === 'archive') closeSession(scope, peerId, 'network-policy-changed')
       }
     }
     if (!networkEnabled || status !== 'active') return
@@ -1551,28 +1763,6 @@ export function createScopedNetworkRuntime (options = {}) {
     else outboundTokens = Math.min(outboundTokens, outboundCapacity())
   }
 
-  function cancelAssetResponsesForPolicyChange(contributionServingPolicyChanged, archiveServingPolicyChanged) {
-    if (!contributionServingPolicyChanged && !archiveServingPolicyChanged) return
-    for (const scope of scopes.values()) {
-      if (scope.purpose !== 'asset') continue
-      const contributionChanged = scope.retentionClasses?.has?.('contribution-cache') &&
-        contributionServingPolicyChanged
-      const archiveChanged = scope.retentionClasses?.has?.('archive-pin') &&
-        archiveServingPolicyChanged
-      if (!contributionChanged && !archiveChanged) continue
-      for (const tracked of scope.sessions.values()) {
-        for (const response of tracked.assetResponses?.values?.() || []) {
-          if (response.cancelled) continue
-          response.cancelled = true
-          try {
-            sendAssetError(scope, tracked, response.range, ASSET_BLOCK_ERROR_CODES.UNAVAILABLE)
-          } catch (error) {
-            recordProtocolError(scope, tracked.peerId, error)
-          }
-        }
-      }
-    }
-  }
 
   async function cutoverScopesForPolicyChange(contributionServingPolicyChanged, archiveServingPolicyChanged) {
     if (!contributionServingPolicyChanged && !archiveServingPolicyChanged) return
@@ -1644,7 +1834,6 @@ export function createScopedNetworkRuntime (options = {}) {
       wasArchiveUploadCeilingBytes, archiveUploadCeilingBytes,
     })
 
-    cancelAssetResponsesForPolicyChange(contributionServingPolicyChanged, archiveServingPolicyChanged)
     await cutoverScopesForPolicyChange(contributionServingPolicyChanged, archiveServingPolicyChanged)
 
     if (wasNetworkEnabled && !networkEnabled) await deactivateNetwork()
@@ -2144,6 +2333,57 @@ export function createScopedNetworkRuntime (options = {}) {
     return stableScopeDiagnostic(scope)
   }
 
+  function retainAcquisitionCore (input = {}) {
+    const assignmentId = hex32(input.assignmentId, 'assignmentId')
+    const peerId = hex32(input.peerId, 'peerId')
+    if (!input.core || typeof input.core.replicate !== 'function') fail('acquisition core is required')
+    const coreRef = normalizeAssetCoreRefV2(input.coreRef, 'coreRef')
+    const key = hex32(input.key || input.core.key, 'key')
+    if (coreRef.key !== key) fail('acquisition core identity does not match coreRef')
+    const topic = deriveAcquisitionTopic({ protocolMajor, assignmentId })
+    const scope = findScope('acquisition', topic)
+    if (!scope || !scope.allowedPeerIds?.has(peerId)) fail('acquisition assignment is not retained for peer')
+    scope.acquisitionCores ||= new Map()
+    const registrationId = `${peerId}:${key}`
+    const entry = {
+      peerId,
+      key,
+      core: input.core,
+      coreRef,
+      serve: input.serve === true,
+      authorizeUpload: null,
+      attachments: new Map(),
+    }
+    entry.authorizeUpload = () => {
+      if (scope.closed || scope.acquisitionCores?.get(registrationId) !== entry || !entry.serve ||
+          !uploadAllowed || !retentionClassAllowed('contribution-cache')) return null
+      return { coreRef: entry.coreRef, retentionClass: 'contribution-cache' }
+    }
+    const previous = scope.acquisitionCores.get(registrationId)
+    if (previous) {
+      scope.acquisitionCores.delete(registrationId)
+      releaseAcquisitionCoreEntry(previous)
+    }
+    scope.acquisitionCores.set(registrationId, entry)
+    const tracked = scope.sessions.get(peerId)
+    if (tracked && !tracked.closed) attachAcquisitionCoreEntry(entry, tracked.connection)
+    return { retained: true, key }
+  }
+
+  function releaseAcquisitionCore (input = {}) {
+    const assignmentId = hex32(input.assignmentId, 'assignmentId')
+    const peerId = hex32(input.peerId, 'peerId')
+    const key = hex32(input.key, 'key')
+    const topic = deriveAcquisitionTopic({ protocolMajor, assignmentId })
+    const registrations = findScope('acquisition', topic)?.acquisitionCores
+    const registrationId = `${peerId}:${key}`
+    const entry = registrations?.get(registrationId)
+    if (!entry) return false
+    registrations.delete(registrationId)
+    releaseAcquisitionCoreEntry(entry)
+    return true
+  }
+
   async function releaseAcquisitionAssignment(input = {}) {
     const assignmentId = hex32(input.assignmentId, 'assignmentId')
     const topic = deriveAcquisitionTopic({ protocolMajor, assignmentId })
@@ -2267,6 +2507,7 @@ export function createScopedNetworkRuntime (options = {}) {
       swarm.removeListener?.('connection', handleConnection)
       listening = false
     }
+    for (const cleanup of [...pendingNativeUploadGuards]) cleanup()
     for (const retained of indexServices.values()) {
       const clearTimer = retained.limits.clearTimeout || clearTimeout
       if (retained.expiryTimer) clearTimer(retained.expiryTimer)
@@ -2304,15 +2545,14 @@ export function createScopedNetworkRuntime (options = {}) {
     followIndexFeed, unfollowIndexFeed, provideModerationFeed, subscribeModerationFeed, followModerationFeed,
     unfollowModerationFeed, unfollowPublisher, publishLocalPublisherCatalog, rebindLocalPublisherCatalog,
     resolveLocalPublisherCatalog, retainAuthorizedRendition, releaseAuthorizedRendition, queryIndexService,
-    listRetainedIndexServiceAdapters, listAssetRanges, getActiveAssetSession, getActiveAssetPeerIds,
-    listPeerAssetRanges, hasVerifiedAssetBlock, readVerifiedAssetBlock, requestAssetBlocks,
+    listRetainedIndexServiceAdapters, getActiveAssetSession,
     revalidateRetainedRenditions, retainArchiveDiscovery, releaseArchiveDiscovery, publishArchiveRequest,
     publishArchivePledge, publishArchiveChallenge, publishArchiveChallengeProof, retainAuthorizedArchive,
     releaseAuthorizedArchive, createAuthorizedArchiveChallengeProof, verifyAuthorizedArchiveChallengeProof,
     getAuthorizedArchiveProgress, assessAvailability,
     publishBootstrapLocator, listBootstrapLocators, getIndexFeedRecords, getModerationFeedRecords,
     retainAcquisitionDiscovery, releaseAcquisitionDiscovery, retainAcquisitionAssignment,
-    releaseAcquisitionAssignment, publishAcquisitionFrame,
+    releaseAcquisitionAssignment, retainAcquisitionCore, releaseAcquisitionCore, publishAcquisitionFrame,
     getDiagnostics, authorizeConnection, getLocalTransportPeerId, isPeerConnected, inspectIncomingFrame, close,
   }
   registerIndexServicePolicyControl(api, Object.freeze({

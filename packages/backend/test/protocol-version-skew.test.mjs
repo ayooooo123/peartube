@@ -2,7 +2,7 @@ import test from 'brittle'
 import crypto from 'hypercore-crypto'
 
 import {
-  ASSET_RENDITION_CAPABILITY,
+  ARCHIVE_RANGE_CAPABILITY,
   PROTOCOL_ERROR_CODES,
   PROTOCOL_MAJOR,
   assertProtocolCompatibility,
@@ -19,15 +19,15 @@ const device = crypto.keyPair(Buffer.alloc(32, 2))
 const publisherId = Buffer.from(publisher.publicKey).toString('hex')
 const deviceId = Buffer.from(device.publicKey).toString('hex')
 
-test('protocol major 3 isolates causal catalog sync while retaining the v2 asset capability', (t) => {
-  t.is(PROTOCOL_MAJOR, 3)
-  t.is(ASSET_RENDITION_CAPABILITY, 'asset-rendition:v2')
-  const advertisement = createProtocolAdvertisement({ requiredCapabilities: [ASSET_RENDITION_CAPABILITY] })
-  t.is(advertisement.minimumProtocolMajor, 3)
-  t.alike(advertisement.requiredCapabilities, ['asset-rendition:v2'])
+test('protocol major 4 advertises the retained archive control capability', (t) => {
+  t.is(PROTOCOL_MAJOR, 4)
+  t.is(ARCHIVE_RANGE_CAPABILITY, 'archive-range:v1')
+  const advertisement = createProtocolAdvertisement({ requiredCapabilities: [ARCHIVE_RANGE_CAPABILITY] })
+  t.is(advertisement.minimumProtocolMajor, 4)
+  t.alike(advertisement.requiredCapabilities, ['archive-range:v1'])
   t.alike(assertProtocolCompatibility(advertisement, {
-    mandatoryCapabilities: [ASSET_RENDITION_CAPABILITY],
-    supportedCapabilities: [ASSET_RENDITION_CAPABILITY],
+    mandatoryCapabilities: [ARCHIVE_RANGE_CAPABILITY],
+    supportedCapabilities: [ARCHIVE_RANGE_CAPABILITY],
   }), advertisement)
 })
 
@@ -98,11 +98,11 @@ test('protocol compatibility fails closed with stable major, capability, and omi
     t.is(error.capability, 'future-projection:v1')
   }
   try {
-    assertProtocolCompatibility(createProtocolAdvertisement({ requiredCapabilities: ['asset-rendition:v1'] }), {
-      mandatoryCapabilities: [ASSET_RENDITION_CAPABILITY],
-      supportedCapabilities: [ASSET_RENDITION_CAPABILITY],
+    assertProtocolCompatibility(createProtocolAdvertisement({ requiredCapabilities: ['archive-range:v0'] }), {
+      mandatoryCapabilities: [ARCHIVE_RANGE_CAPABILITY],
+      supportedCapabilities: [ARCHIVE_RANGE_CAPABILITY],
     })
-    t.fail('v1 asset capability must not be accepted as a v2 alias')
+    t.fail('an obsolete archive capability must not satisfy the current requirement')
   } catch (error) {
     t.is(error.code, PROTOCOL_ERROR_CODES.ADVERTISEMENT_REQUIRED)
   }
@@ -114,12 +114,12 @@ test('protocol compatibility fails closed with stable major, capability, and omi
   }
   const acceptedLegacy = assertProtocolCompatibility({}, {
     legacyCompatibility: {
-      minimumProtocolMajor: 3,
+      minimumProtocolMajor: 4,
       protocolMinor: 0,
       requiredCapabilities: [],
     },
   })
-  t.is(acceptedLegacy.minimumProtocolMajor, 3)
+  t.is(acceptedLegacy.minimumProtocolMajor, 4)
   try {
     assertProtocolCompatibility({}, {
       legacyCompatibility: {
@@ -135,7 +135,7 @@ test('protocol compatibility fails closed with stable major, capability, and omi
 })
 
 test('protocol version skew rejects v1 peer frames with the stable compatibility code', (t) => {
-  const frame = encodePeerFrame({ type: 'catalog', payload: Buffer.from('hello'), protocolMajor: 1, protocolMinor: 0 })
+  const frame = encodePeerFrame({ purpose: 'publisher', type: 'catalog', payload: Buffer.from('hello'), protocolMajor: 1, protocolMinor: 0 })
   try {
     decodePeerFrame(frame)
     t.fail('v1 peer frame must be rejected')

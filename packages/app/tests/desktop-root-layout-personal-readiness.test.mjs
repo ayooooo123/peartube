@@ -70,32 +70,35 @@ test('desktop root readiness provisions once, reuses the keyring on restart, and
   delete globalThis.window
 })
 
-test('desktop root readiness rejects a failed provision and permits an honest retry', async () => {
+test('desktop root readiness survives a vault read failure and retries later', async () => {
   const values = new Map()
+  let readable = false
   globalThis.window = {
     bridge: {
-      async personalSecureGet(key) { return values.get(key) ?? null },
+      async personalSecureGet(key) {
+        if (!readable) throw new Error('keyring read failed')
+        return values.get(key) ?? null
+      },
       async personalSecureSet(key, value) { values.set(key, value) },
       async personalSecureDelete(key) { values.delete(key) },
     },
   }
-  let succeed = false
   let readyCalls = 0
+  let provisionCalls = 0
   const rpc = {
     async provisionPersonalEncryption() {
-      return succeed
-        ? { success: true, encrypted: true, bootstrapKey: '78'.repeat(32) }
-        : { success: false, error: 'keyring-unavailable' }
+      provisionCalls++
+      return { success: true, encrypted: true, bootstrapKey: '78'.repeat(32) }
     },
   }
   const module = await loadReadinessModule('retry')
-  await assert.rejects(
-    module.ensureDesktopBackendReadiness(rpc, () => { readyCalls++ }),
-    /keyring-unavailable/,
-  )
-  assert.equal(readyCalls, 0)
-  succeed = true
   await module.ensureDesktopBackendReadiness(rpc, () => { readyCalls++ })
-  assert.equal(readyCalls, 1)
+  assert.equal(readyCalls, 1, 'the desktop shell is not gated on the optional personal store')
+  assert.equal(provisionCalls, 0, 'a secret that could not be read or persisted never reaches the backend')
+
+  readable = true
+  await module.ensureDesktopBackendReadiness(rpc, () => { readyCalls++ })
+  assert.equal(readyCalls, 2)
+  assert.equal(provisionCalls, 1, 'a later backend-ready session retries vault provisioning')
   delete globalThis.window
 })

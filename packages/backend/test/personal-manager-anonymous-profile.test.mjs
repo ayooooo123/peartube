@@ -141,7 +141,7 @@ test('anonymous desktop profile uses one encrypted PersonalStore across restart 
 
     const identity = { publicKey: 'cc'.repeat(32), personalKey: null }
     identityManager.activate(identity)
-    await manager.setActive(identity.publicKey, { allowDeviceLocal: true })
+    await manager.setActive(identity.publicKey, { deferIfSecretUnavailable: true })
     t.is(manager.getActivePublicKey(), 'device-local', 'device-local authority remains explicit')
     t.ok(ctx.personal, 'anonymous authority remains active until identity encryption is provisioned')
     await manager.provisionSecret({ secret: identitySecret })
@@ -164,6 +164,34 @@ test('anonymous desktop profile uses one encrypted PersonalStore across restart 
   }
 
   fs.rmSync(directory, { recursive: true, force: true })
+})
+
+test('first channel activation remains deferred until its vault secret exists', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-deferred-personal-'))
+  const store = new Corestore(directory)
+  await store.ready()
+  const identityManager = createIdentityManager()
+  const identity = { publicKey: 'cd'.repeat(32), personalKey: null }
+  identityManager.activate(identity)
+  const ctx = { store, metaDb: null, swarm: null, personal: null }
+  const manager = createPersonalManager({ ctx, identityManager })
+
+  try {
+    const deferred = await manager.setActive(identity.publicKey, { deferIfSecretUnavailable: true })
+    t.absent(deferred, 'a missing vault secret creates no unencrypted fallback store')
+    t.absent(ctx.personal, 'channel activation remains explicitly storeless')
+    t.absent(manager.getActivePublicKey(), 'no identity is falsely marked as personal-store authority')
+
+    const provisioned = await manager.provisionSecret({ secret: 'ef'.repeat(32) })
+    t.ok(provisioned.success, 'later platform provisioning opens the identity store')
+    t.ok(provisioned.encrypted)
+    t.is(manager.getActivePublicKey(), identity.publicKey)
+    t.is(ctx.personal, manager.getActive())
+  } finally {
+    await manager.close()
+    await store.close()
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test('profile settings RPC is not gated on unrelated personal-store pairing readiness', async t => {

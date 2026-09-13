@@ -2361,7 +2361,6 @@ export function createApi(rawOptions = {}) {
     return createStaticAssetPlayback({
       coreRef,
       session,
-      transport: scopedNetwork,
       playbackService: blobPlayback,
       mimeType,
       authorizationKey,
@@ -2475,7 +2474,6 @@ export function createApi(rawOptions = {}) {
     return createMultiPeerScheduler({
       coreRef,
       session: scopedNetwork.getActiveAssetSession({ assetId: coreRef.assetId }),
-      transport: scopedNetwork,
     })
   }
 

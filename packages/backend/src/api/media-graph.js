@@ -9,7 +9,6 @@ import { parseBlobRef } from '../blob-utils.js'
 import { isArtworkRendition, normalizeAssetCoreRefV2 } from '../assets/rendition.js'
 import { ASSET_BLOCK_SIZE } from '../assets/static-core.js'
 import { createMultiPeerScheduler } from '../playback/multi-peer-scheduler.js'
-import { MAX_ASSET_BLOCKS_PER_REQUEST } from '../network/frame.js'
 import { createAbortController } from '../abort-controller.js'
 import b4a from 'b4a'
 
@@ -17,6 +16,7 @@ const DEFAULT_PAGE_LIMIT = 50
 const MAX_PAGE_LIMIT = 100
 const DEFAULT_CATALOG_PAGE_LIMIT = 20
 const MAX_CATALOG_PAGE_LIMIT = 50
+const MAX_PLAYBACK_BLOCKS_PER_READ = 16
 
 // The catalog carries one artwork locator. A swarm blob ref is handed to the
 // consumer as the blob it is, so the consumer replicates the bytes from the
@@ -668,7 +668,7 @@ async function* readBlobRange(core, blob, start, length, fetchBlocks, signal) {
     if (!await core.has(index)) {
       await fetchBlocks?.(index, Math.min(
         blockEnd,
-        index + MAX_ASSET_BLOCKS_PER_REQUEST,
+        index + MAX_PLAYBACK_BLOCKS_PER_READ,
         index + Math.ceil((offset + remaining) / ASSET_BLOCK_SIZE),
       ))
     }
@@ -698,7 +698,6 @@ function buildMediaRenditionReader({ publicationId, renditionId, rendition, ref,
     scheduler ||= createMultiPeerScheduler({
       coreRef: rendition.core,
       session: scopedNetwork.getActiveAssetSession({ assetId }),
-      transport: scopedNetwork,
     })
     const result = await scheduler.requestRange({
       assetId,

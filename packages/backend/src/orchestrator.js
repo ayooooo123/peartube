@@ -517,21 +517,15 @@ function setupPlaybackCaches(ctx, lifecycle) {
 }
 
 function setupPersonalStoreSync({ ctx, identityManager, personalManager, lifecycle }) {
-  const refreshActivePersonalStore = async (publicKey, { allowDeviceLocal = false } = {}) => {
+  const refreshActivePersonalStore = async (publicKey, { deferIfSecretUnavailable = false } = {}) => {
     const pk = publicKey || identityManager.getActivePublicKey?.()
     if (!pk) return
-    const store = await personalManager.setActive(pk, { allowDeviceLocal })
+    const store = await personalManager.setActive(pk, { deferIfSecretUnavailable })
     if (ctx.platform === 'relay') {
       ctx.personal = store || null
       return store || null
     }
-    const explicitDeviceLocal = (
-      allowDeviceLocal &&
-      personalManager.getActivePublicKey() === 'device-local' &&
-      personalManager.getAnonymous() === store &&
-      ctx.personal === store
-    )
-    if (explicitDeviceLocal) return store
+    if (deferIfSecretUnavailable && personalManager.getActivePublicKey() !== pk) return store
     if (
       !store ||
       personalManager.getActivePublicKey() !== pk ||
@@ -548,19 +542,16 @@ function setupPersonalStoreSync({ ctx, identityManager, personalManager, lifecyc
   const removeIdentityMutationHooks = installSeedPinIdentityMutationHooks({
     identityManager,
     onMutation: async mutation => {
-      const allowDeviceLocal = (
-        personalManager.getActivePublicKey() === 'device-local' &&
-        (
-          mutation.method === 'createIdentity' ||
-          mutation.method === 'addPairedChannelIdentity'
-        )
-      )
-      await refreshActivePersonalStore(null, { allowDeviceLocal })
+      // The platform only learns a new channel's public key after creation returns,
+      // so these onboarding mutations cannot provision its vault secret first.
+      const deferIfSecretUnavailable = mutation.method === 'createIdentity' ||
+        mutation.method === 'addPairedChannelIdentity'
+      await refreshActivePersonalStore(null, { deferIfSecretUnavailable })
       await ctx.seedPinRegistration?.refreshClientAuth?.()
     },
     onRollback: async ({ previousPublicKey }) => {
       await refreshActivePersonalStore(previousPublicKey, {
-        allowDeviceLocal: personalManager.getActivePublicKey() === 'device-local',
+        deferIfSecretUnavailable: personalManager.getActivePublicKey() === 'device-local',
       })
       await ctx.seedPinRegistration?.refreshClientAuth?.()
     },

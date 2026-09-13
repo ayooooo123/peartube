@@ -868,7 +868,7 @@ test('scoped availability probe entropy does not require the Web Crypto global',
     const probe = createScopedAssetAvailabilityProbe({
       scopedNetwork: {
         retainAuthorizedRendition() {},
-        requestAssetBlocks() {},
+        getActiveAssetSession() { return { core: { get() {}, peers: [] } } },
         releaseAuthorizedRendition() {},
       },
     })
@@ -886,9 +886,17 @@ test('scoped one-block availability reports contributors without claiming a comp
       async retainAuthorizedRendition(request) {
         calls.push(['retain', request])
       },
-      async requestAssetBlocks(request) {
-        calls.push(['request', request])
-        return { verifiedBlockIndexes: [0], peerIds: ['peer-a', 'peer-b'] }
+      getActiveAssetSession(request) {
+        calls.push(['session', request])
+        return {
+          core: {
+            peers: [{}, {}],
+            async get(index, options) {
+              calls.push(['get', { index, options }])
+              return b4a.from('verified')
+            },
+          },
+        }
       },
       async releaseAuthorizedRendition(request) {
         calls.push(['release', request])
@@ -910,8 +918,8 @@ test('scoped one-block availability reports contributors without claiming a comp
   const secondEvidence = await probe(request)
   t.alike(evidence, { peers: 2, completeSeeders: 0, observedAtMs: NOW, expiresAtMs: NOW + 1_000 })
   t.alike(secondEvidence, evidence)
-  t.alike(calls.map(([kind]) => kind), ['retain', 'request', 'release', 'retain', 'request', 'release'])
-  t.is(calls.filter(([kind]) => kind === 'request').every(([, value]) => value.requirePeerEvidence === true), true)
+  t.alike(calls.map(([kind]) => kind), ['retain', 'session', 'get', 'release', 'retain', 'session', 'get', 'release'])
+  t.is(calls.filter(([kind]) => kind === 'get').every(([, value]) => value.index === 0), true)
   const ownerIds = calls.filter(([kind]) => kind === 'retain').map(([, value]) => value.ownerId)
   const releasedOwnerIds = calls.filter(([kind]) => kind === 'release').map(([, value]) => value.ownerId)
   t.is(new Set(ownerIds).size, 2)
@@ -931,10 +939,7 @@ test('availability timeout returns promptly but close waits for delayed retain r
         retainStarted()
         return delayedRetain
       },
-      async requestAssetBlocks(request) {
-        calls.push(['request', request])
-        return { verifiedBlockIndexes: [0], peerIds: ['peer'] }
-      },
+      getActiveAssetSession() { return { core: { get() {}, peers: [] } } },
       async releaseAuthorizedRendition(request) {
         calls.push(['release', request])
       },
@@ -1306,12 +1311,24 @@ test('companion episode search opens a locally indexed candidate and reads a ran
   const streamNetwork = {
     async retainAuthorizedRendition() {},
     async releaseAuthorizedRendition() { return { released: true } },
-    getActiveAssetSession() { return { assetId: fixture.staticAsset.assetId, coreRef: fixture.staticAsset } },
-    getActiveAssetPeerIds() { return [] },
-    async listPeerAssetRanges() { return { ranges: [], nextCursor: null } },
-    async hasVerifiedAssetBlock() { return true },
-    async readVerifiedAssetBlock() { return b4a.alloc(fixture.staticAsset.blockSize, 7) },
-    async requestAssetBlocks() { throw new Error('local verified bytes should be reused') },
+    getActiveAssetSession() {
+      return {
+        assetId: fixture.staticAsset.assetId,
+        coreRef: fixture.staticAsset,
+        core: {
+          peers: [],
+          async ready() {},
+          async has() { return true },
+          async get() { return b4a.alloc(fixture.staticAsset.blockSize, 7) },
+          download() {
+            return {
+              async done() {},
+              destroy() {},
+            }
+          },
+        },
+      }
+    },
   }
   const streamApi = createApi({ ctx: streamCtx, scopedNetwork: streamNetwork })
   const router = createCompanionRouter({

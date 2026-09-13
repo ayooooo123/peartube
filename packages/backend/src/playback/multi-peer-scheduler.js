@@ -1,18 +1,10 @@
 import b4a from 'b4a'
-import { createAbortController } from '../abort-controller.js'
 
 import { normalizeAssetCoreRefV2 } from '../assets/rendition.js'
-import {
-  MAX_ASSET_BLOCKS_PER_REQUEST,
-  MAX_ASSET_RANGE_BITS_PER_RANGE,
-  MAX_ASSET_RANGE_PAGE_RANGES,
-} from '../network/frame.js'
+import { createAbortController } from '../abort-controller.js'
 
 const DEFAULT_MAX_IN_FLIGHT_BYTES = 64 * 1024 * 1024
-const MAX_INVENTORY_PAGES_PER_PEER = 16
-const MAX_TRACKED_PEERS = 64
-const MAX_ACTIVE_TRANSPORT_RUNS = 16
-const INVALID_PROOF_CODES = new Set(['INVALID_PROOF', 'QUARANTINED', 'ASSET_INVALID_PROOF', 'ASSET_QUARANTINED'])
+
 function abortError(message = 'playback range request aborted') {
   const error = new Error(message)
   error.name = 'AbortError'
@@ -23,54 +15,7 @@ function unavailable(errorCode) {
   return { status: 'unavailable', errorCode, originAttempted: false }
 }
 
-function blockByteLength(coreRef, index) {
-  return index === coreRef.length - 1
-    ? coreRef.byteLength - (index * coreRef.blockSize)
-    : coreRef.blockSize
-}
-
-function normalizePeerIds(input) {
-  if (!Array.isArray(input)) return []
-  return [...new Set(input.map(value => String(value)).filter(Boolean))].sort().slice(0, MAX_TRACKED_PEERS)
-}
-
-function pageClaimsBlock(page, blockIndex) {
-  for (const range of page?.ranges || []) {
-    const start = Number(range?.startBlock)
-    const bitCount = Number(range?.bitCount)
-    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(bitCount) || bitCount < 1) continue
-    const bit = blockIndex - start
-    if (bit < 0 || bit >= bitCount || !b4a.isBuffer(range.presentBitfield)) continue
-    if ((range.presentBitfield[bit >> 3] & (1 << (bit & 7))) !== 0) return true
-  }
-  return false
-}
-
-function coalesceAssignments(assignments) {
-  const runs = []
-  for (const assignment of assignments) {
-    const previous = runs[runs.length - 1]
-    if (previous && previous.peerId === assignment.peerId && previous.endBlock === assignment.index &&
-        previous.endBlock - previous.startBlock < MAX_ASSET_BLOCKS_PER_REQUEST) {
-      previous.endBlock++
-      previous.reservations.push(assignment.reservation)
-      previous.bytes += assignment.bytes
-      continue
-    }
-    runs.push({
-      peerId: assignment.peerId,
-      startBlock: assignment.index,
-      endBlock: assignment.index + 1,
-      bytes: assignment.bytes,
-      reservations: [assignment.reservation],
-    })
-  }
-  return runs
-}
-
-export function createMultiPeerScheduler(options = {}) {
-  const coreRef = normalizeAssetCoreRefV2(options.coreRef, 'coreRef')
-  const session = options.session
+function validateSession(coreRef, session) {
   let sessionCoreRef
   try {
     sessionCoreRef = normalizeAssetCoreRefV2(session?.coreRef, 'session.coreRef')
@@ -78,631 +23,200 @@ export function createMultiPeerScheduler(options = {}) {
     throw new Error('scheduler asset session identity does not match coreRef')
   }
   const identityFields = ['kind', 'key', 'treeHash', 'length', 'byteLength', 'blockSize', 'assetId']
-  if (!session || session.assetId !== coreRef.assetId ||
+  if (!session?.core || session.assetId !== coreRef.assetId ||
       identityFields.some(field => sessionCoreRef[field] !== coreRef[field])) {
     throw new Error('scheduler asset session identity does not match coreRef')
   }
-  const transport = options.transport
-  for (const method of ['getActiveAssetPeerIds', 'listPeerAssetRanges', 'hasVerifiedAssetBlock', 'readVerifiedAssetBlock', 'requestAssetBlocks']) {
-    if (typeof transport?.[method] !== 'function') throw new Error(`scheduler transport.${method} is required`)
+}
+
+function validateRequest(input, coreRef, session) {
+  if (input.assetId !== coreRef.assetId || session.assetId !== coreRef.assetId) {
+    throw new Error('playback assetId does not match scheduler identity')
   }
+  const byteStart = Number(input.byteStart)
+  const byteEnd = Number(input.byteEnd)
+  if (!Number.isSafeInteger(byteStart) || !Number.isSafeInteger(byteEnd) ||
+      byteStart < 0 || byteEnd <= byteStart || byteEnd > coreRef.byteLength) {
+    throw new Error('invalid half-open playback byte range')
+  }
+  if (!Number.isSafeInteger(input.deadlineMs) || input.deadlineMs <= 0 || input.deadlineMs > 0x7fffffff) {
+    throw new Error('deadlineMs must be a positive bounded duration')
+  }
+  const priority = input.priority ?? 'playhead'
+  if (priority !== 'playhead' && priority !== 'prefetch') throw new Error('playback priority is invalid')
+  return {
+    byteStart,
+    byteEnd,
+    startBlock: Math.floor(byteStart / coreRef.blockSize),
+    endBlock: Math.ceil(byteEnd / coreRef.blockSize),
+    deadlineMs: input.deadlineMs,
+    priority,
+    materialize: input.materialize !== false,
+  }
+}
+
+function peerIds(core) {
+  const ids = new Set()
+  for (const peer of core.peers || []) {
+    const key = peer?.remotePublicKey
+    if ((b4a.isBuffer(key) || key instanceof Uint8Array) && key.byteLength === 32) {
+      ids.add(b4a.toString(key, 'hex'))
+    }
+  }
+  return [...ids].sort()
+}
+
+function waitForPeer(core, timeoutMs, signal) {
+  if ((core.peers?.length || 0) > 0) return Promise.resolve(true)
+  if (signal.aborted) return Promise.resolve(false)
+  return new Promise(resolve => {
+    let settled = false
+    const finish = found => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      core.off?.('peer-add', onPeer)
+      signal.removeEventListener?.('abort', onAbort)
+      resolve(found)
+    }
+    const onPeer = () => finish(true)
+    const onAbort = () => finish(false)
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    core.on?.('peer-add', onPeer)
+    signal.addEventListener?.('abort', onAbort, { once: true })
+    if ((core.peers?.length || 0) > 0) finish(true)
+  })
+}
+
+async function materialize(core, coreRef, request, signal) {
+  const blocks = []
+  for (let index = request.startBlock; index < request.endBlock; index++) {
+    if (signal?.aborted) throw signal.reason || abortError()
+    blocks.push(await core.get(index))
+  }
+  const bytes = blocks.length === 1 ? blocks[0] : b4a.concat(blocks)
+  const offset = request.byteStart - request.startBlock * coreRef.blockSize
+  return bytes.subarray(offset, offset + request.byteEnd - request.byteStart)
+}
+async function fetchVerifiedRange ({ core, coreRef, request, signal, peerWaitMs, setRange }) {
+  await core.ready()
+  if (!await core.has(request.startBlock, request.endBlock)) {
+    if (!await waitForPeer(core, Math.min(peerWaitMs, request.deadlineMs), signal)) {
+      return unavailable('NO_VERIFIED_SOURCE')
+    }
+    const range = core.download({
+      start: request.startBlock,
+      end: request.endBlock,
+      linear: request.priority === 'playhead',
+    })
+    setRange(range)
+    await range.done()
+  }
+  if (signal.aborted) throw signal.reason
+  if (!await core.has(request.startBlock, request.endBlock)) return unavailable('NO_VERIFIED_SOURCE')
+  return {
+    status: 'ok',
+    ...(request.materialize ? { bytes: await materialize(core, coreRef, request, signal) } : {}),
+    verified: true,
+    peerIds: peerIds(core),
+    originAttempted: false,
+  }
+}
+function mapRequestFailure (error, abortKind, callerSignal) {
+  if (abortKind === 'caller' || callerSignal?.aborted || error?.name === 'AbortError') throw abortError()
+  if (abortKind === 'deadline' || error?.code === 'DEADLINE_EXCEEDED') return unavailable('DEADLINE_EXCEEDED')
+  return unavailable('NO_VERIFIED_SOURCE')
+}
+
+
+
+/**
+ * Thin playback adapter over Hypercore's native sparse replication.
+ *
+ * Peer selection, range scheduling, retries and Merkle-proof verification are
+ * Hypercore responsibilities. PearTube only validates the signed asset
+ * identity, bounds the requested bytes, and materializes the verified range.
+ */
+export function createMultiPeerScheduler(options = {}) {
+  const coreRef = normalizeAssetCoreRefV2(options.coreRef, 'coreRef')
+  const session = options.session
+  validateSession(coreRef, session)
+  const core = session.core
   const maxInFlightBytes = Number.isSafeInteger(options.maxInFlightBytes) && options.maxInFlightBytes > 0
     ? options.maxInFlightBytes
     : DEFAULT_MAX_IN_FLIGHT_BYTES
-  const now = typeof options.now === 'function' ? options.now : Date.now
-  const peers = new Map()
-  const activePrefetch = new Set()
+  const peerWaitMs = Number.isSafeInteger(options.peerWaitMs) && options.peerWaitMs > 0
+    ? Math.min(options.peerWaitMs, 30_000)
+    : 3_000
+  const active = new Set()
   let inFlightBytes = 0
-  let peerRequests = 0
-  let prefetchGeneration = 0
-  const requestedRunCap = Number(options.maxActiveTransportRuns)
-  const maxActiveTransportRuns = Number.isSafeInteger(requestedRunCap) && requestedRunCap > 0
-    ? Math.min(requestedRunCap, MAX_ACTIVE_TRANSPORT_RUNS)
-    : MAX_ACTIVE_TRANSPORT_RUNS
-  const runSlotWaiters = []
-  let activeTransportRuns = 0
-
-  function drainRunSlots() {
-    while (activeTransportRuns < maxActiveTransportRuns && runSlotWaiters.length > 0) {
-      const waiter = runSlotWaiters.shift()
-      if (waiter.cancelled) continue
-      waiter.cleanup()
-      waiter.resolve(createRunSlotLease())
-    }
-  }
-
-  function createRunSlotLease() {
-    activeTransportRuns++
-    let released = false
-    return () => {
-      if (released) return
-      released = true
-      activeTransportRuns--
-      drainRunSlots()
-    }
-  }
-
-  function acquireRunSlot(signal) {
-    if (signal?.aborted) return Promise.reject(signal.reason || abortError())
-    if (activeTransportRuns < maxActiveTransportRuns) {
-      return Promise.resolve(createRunSlotLease())
-    }
-    return new Promise((resolve, reject) => {
-      const waiter = {
-        signal,
-        resolve,
-        reject,
-        cancelled: false,
-        cleanup: null,
-      }
-      const onAbort = () => {
-        if (waiter.cancelled) return
-        waiter.cancelled = true
-        const index = runSlotWaiters.indexOf(waiter)
-        if (index !== -1) runSlotWaiters.splice(index, 1)
-        waiter.cleanup()
-        reject(signal.reason || abortError())
-      }
-      waiter.cleanup = () => signal?.removeEventListener?.('abort', onAbort)
-      signal?.addEventListener?.('abort', onAbort, { once: true })
-      runSlotWaiters.push(waiter)
-      if (signal?.aborted) onAbort()
-    })
-  }
-
-  function pruneInactivePeers(activePeerIds) {
-    const active = new Set(activePeerIds)
-    for (const [peerId, state] of peers) {
-      if (!active.has(peerId) && state.inFlightBytes === 0) peers.delete(peerId)
-    }
-  }
-  function peerState(peerId) {
-    let state = peers.get(peerId)
-    if (!state) {
-      if (peers.size >= MAX_TRACKED_PEERS) return null
-      state = {
-        peerId,
-        rttMs: 0,
-        throughputBytesPerSecond: 1,
-        inFlightBytes: 0,
-        failures: 0,
-        invalidProofFailures: 0,
-        cooldownUntil: 0,
-      }
-      peers.set(peerId, state)
-    }
-    return state
-  }
-
-  function reserve(peerId, bytes) {
-    if (!Number.isSafeInteger(bytes) || bytes <= 0 || inFlightBytes + bytes > maxInFlightBytes) return null
-    const state = peerState(peerId)
-    if (!state) return null
-    const reservation = { peerId, bytes, released: false }
-    inFlightBytes += bytes
-    state.inFlightBytes += bytes
-    return reservation
-  }
-
-  function release(reservation) {
-    if (!reservation || reservation.released) return
-    reservation.released = true
-    inFlightBytes -= reservation.bytes
-    const state = peers.get(reservation.peerId)
-    if (state) state.inFlightBytes -= reservation.bytes
-  }
-
-  function releaseReservations(reservations) {
-    for (const reservation of Array.isArray(reservations) ? reservations : [reservations]) release(reservation)
-  }
-
-  function comparePeers(leftId, rightId) {
-    const left = peerState(leftId)
-    const right = peerState(rightId)
-    if (!left || !right) return left ? -1 : right ? 1 : String(leftId).localeCompare(String(rightId))
-    if (left.failures !== right.failures) return left.failures - right.failures
-    const leftLoad = left.rttMs + (left.inFlightBytes / Math.max(left.throughputBytesPerSecond, 1)) * 1000
-    const rightLoad = right.rttMs + (right.inFlightBytes / Math.max(right.throughputBytesPerSecond, 1)) * 1000
-    return leftLoad - rightLoad || left.peerId.localeCompare(right.peerId)
-  }
-
-  function validateRequest(input) {
-    if (input.assetId !== coreRef.assetId || session.assetId !== coreRef.assetId) {
-      throw new Error('playback assetId does not match scheduler identity')
-    }
-    const byteStart = Number(input.byteStart)
-    const byteEnd = Number(input.byteEnd)
-    if (!Number.isSafeInteger(byteStart) || !Number.isSafeInteger(byteEnd) ||
-        byteStart < 0 || byteEnd <= byteStart || byteEnd > coreRef.byteLength) {
-      throw new Error('invalid half-open playback byte range')
-    }
-    if (!Number.isSafeInteger(input.deadlineMs) || input.deadlineMs <= 0 || input.deadlineMs > 0x7fffffff) {
-      throw new Error('deadlineMs must be a positive bounded duration')
-    }
-    const priority = input.priority ?? 'playhead'
-    if (priority !== 'playhead' && priority !== 'prefetch') throw new Error('playback priority is invalid')
-    return {
-      byteStart,
-      byteEnd,
-      startBlock: Math.floor(byteStart / coreRef.blockSize),
-      endBlock: Math.ceil(byteEnd / coreRef.blockSize),
-      deadlineMs: input.deadlineMs,
-      priority,
-      materialize: input.materialize !== false,
-    }
-  }
-
-  async function inventoryForPeer(peerId, request, signal) {
-    const claimed = new Set()
-    let cursorBlock = request.startBlock
-    let pages = 0
-    while (cursorBlock < request.endBlock && pages < MAX_INVENTORY_PAGES_PER_PEER) {
-      if (signal.aborted) throw signal.reason || abortError()
-      const page = await transport.listPeerAssetRanges({
-        assetId: coreRef.assetId,
-        peerId,
-        cursor: String(cursorBlock),
-        limit: MAX_ASSET_RANGE_PAGE_RANGES,
-        signal,
-      })
-      const windowEnd = Math.min(request.endBlock, cursorBlock + MAX_ASSET_RANGE_BITS_PER_RANGE)
-      for (let index = cursorBlock; index < windowEnd; index++) {
-        if (pageClaimsBlock(page, index)) claimed.add(index)
-      }
-      cursorBlock += MAX_ASSET_RANGE_BITS_PER_RANGE
-      pages++
-    }
-    return claimed
-  }
-
-  function eligiblePeersForRun(run, inventories, excluded, attempted) {
-    const current = now()
-    return [...inventories.keys()].filter(peerId => {
-      if (excluded.has(peerId) || attempted.has(peerId)) return false
-      const state = peerState(peerId)
-      if (!state || state.cooldownUntil > current) return false
-      const coverage = inventories.get(peerId)
-      for (let index = run.startBlock; index < run.endBlock; index++) {
-        if (!coverage?.has(index)) return false
-      }
-      return true
-    }).sort(comparePeers)
-  }
-
-  function recordFailure(peerId, error, requestDeadline, excluded) {
-    const id = String(error?.peerId || peerId)
-    const state = peerState(id)
-    if (!state) return
-    state.failures = Math.min(Number.MAX_SAFE_INTEGER, state.failures + 1)
-    if (INVALID_PROOF_CODES.has(error?.code)) {
-      state.invalidProofFailures = Math.min(Number.MAX_SAFE_INTEGER, state.invalidProofFailures + 1)
-      state.cooldownUntil = Math.max(state.cooldownUntil, requestDeadline)
-      excluded.add(id)
-    }
-  }
-
-  async function executeAttempt(run, peerId, reservations, controller, rootSignal, inheritedRunSlot = null) {
-    const forwardAbort = () => controller.abort(rootSignal.reason || abortError())
-    if (rootSignal.aborted) forwardAbort()
-    else rootSignal.addEventListener('abort', forwardAbort, { once: true })
-    let releaseRunSlot = inheritedRunSlot
-    let startedAt = null
-    try {
-      if (!releaseRunSlot) releaseRunSlot = await acquireRunSlot(controller.signal)
-      if (controller.signal.aborted) throw controller.signal.reason || abortError()
-      startedAt = now()
-      peerRequests++
-      const result = await transport.requestAssetBlocks({
-        assetId: coreRef.assetId,
-        startBlock: run.startBlock,
-        endBlock: run.endBlock,
-        peerIds: [peerId],
-        signal: controller.signal,
-      })
-      const verified = new Set(result?.verifiedBlockIndexes || [])
-      for (let index = run.startBlock; index < run.endBlock; index++) {
-        if (!verified.has(index) || !await transport.hasVerifiedAssetBlock({ assetId: coreRef.assetId, blockIndex: index, signal: controller.signal })) {
-          const error = new Error('selected peer did not produce every verified block')
-          error.code = 'NO_VERIFIED_SOURCE'
-          error.peerId = peerId
-          throw error
-        }
-      }
-      const elapsed = Math.max(1, now() - startedAt)
-      const state = peerState(peerId)
-      if (state) {
-        state.rttMs = elapsed
-        state.throughputBytesPerSecond = Math.max(1, Math.floor((run.bytes * 1000) / elapsed))
-      }
-      return { ok: true, peerId, releaseRunSlot }
-    } catch (error) {
-      return { ok: false, peerId, error, releaseRunSlot }
-    } finally {
-      rootSignal.removeEventListener?.('abort', forwardAbort)
-      releaseReservations(reservations)
-    }
-  }
-
-  function abortActiveAttempts(active, reason) {
-    for (const attempt of active.values()) {
-      attempt.controller.abort(abortError(reason))
-    }
-  }
-
-  function handleHedgeEvent({ run, inventories, excluded, attempted, active, start }) {
-    const candidate = eligiblePeersForRun(run, inventories, excluded, attempted)[0]
-    if (!candidate) return { action: 'continue' }
-    const reservation = reserve(candidate, run.bytes)
-    if (!reservation) {
-      abortActiveAttempts(active, 'playback hedge exceeded budget')
-      return { action: 'return', result: unavailable('BUDGET_EXHAUSTED') }
-    }
-    start(candidate, reservation)
-    return { action: 'continue' }
-  }
-
-  function handleRunFailover({ run, inventories, excluded, attempted, lastFailedPeerId, start, releaseRunSlot }) {
-    const candidate = eligiblePeersForRun(run, inventories, excluded, attempted)[0]
-    if (!candidate) {
-      releaseRunSlot?.()
-      return { ...unavailable('NO_VERIFIED_SOURCE'), peerId: lastFailedPeerId }
-    }
-    const reservation = reserve(candidate, run.bytes)
-    if (!reservation) {
-      releaseRunSlot?.()
-      return unavailable('BUDGET_EXHAUSTED')
-    }
-    start(candidate, reservation, releaseRunSlot)
-    return null
-  }
-
-  async function fetchRun(run, context) {
-    const { inventories, excluded, request, requestDeadline, rootSignal } = context
-    const attempted = new Set()
-    const active = new Map()
-    let hedgeTimer = null
-    let hedgeEvent = null
-    let lastFailedPeerId = null
-
-    const start = (peerId, reservations, inheritedRunSlot = null) => {
-      attempted.add(peerId)
-      const controller = createAbortController()
-      let promise
-      promise = executeAttempt(
-        run,
-        peerId,
-        reservations,
-        controller,
-        rootSignal,
-        inheritedRunSlot,
-      ).then(outcome => ({ ...outcome, promise }))
-      active.set(promise, { peerId, controller })
-    }
-
-    start(run.peerId, run.reservations)
-    if (request.priority === 'playhead') {
-      const delay = Math.max(0, Math.floor(request.deadlineMs / 3) - (now() - context.startedAt))
-      hedgeEvent = new Promise(resolve => { hedgeTimer = setTimeout(() => resolve({ hedge: true }), delay) })
-    }
-
-    try {
-      while (active.size > 0) {
-        if (rootSignal.aborted) throw rootSignal.reason || abortError()
-        const outcome = await Promise.race(hedgeEvent ? [...active.keys(), hedgeEvent] : [...active.keys()])
-        if (outcome?.hedge) {
-          hedgeEvent = null
-          const hedged = handleHedgeEvent({ run, inventories, excluded, attempted, active, start })
-          if (hedged.action === 'return') return hedged.result
-          continue
-        }
-
-        active.delete(outcome.promise)
-        if (outcome.ok) {
-          outcome.releaseRunSlot?.()
-          abortActiveAttempts(active, 'hedged playback request completed elsewhere')
-          return { status: 'ok', peerId: outcome.peerId }
-        }
-        lastFailedPeerId = outcome.peerId
-        recordFailure(outcome.peerId, outcome.error, requestDeadline, excluded)
-        if (rootSignal.aborted) {
-          outcome.releaseRunSlot?.()
-          throw rootSignal.reason || outcome.error
-        }
-        if (active.size > 0) {
-          outcome.releaseRunSlot?.()
-          continue
-        }
-        const failover = handleRunFailover({
-          run,
-          inventories,
-          excluded,
-          attempted,
-          lastFailedPeerId,
-          start,
-          releaseRunSlot: outcome.releaseRunSlot,
-        })
-        if (failover) return failover
-      }
-      return { ...unavailable('NO_VERIFIED_SOURCE'), peerId: lastFailedPeerId }
-    } finally {
-      clearTimeout(hedgeTimer)
-      for (const [promise, attempt] of active) {
-        attempt.controller.abort(abortError('playback run cancelled'))
-        promise.then(outcome => outcome.releaseRunSlot?.(), () => {})
-      }
-    }
-  }
-
-  async function executeRuns(runs, context) {
-    const wave = createAbortController()
-    const forwardAbort = () => wave.abort(context.rootSignal.reason || abortError())
-    if (context.rootSignal.aborted) forwardAbort()
-    else context.rootSignal.addEventListener('abort', forwardAbort, { once: true })
-    const pending = new Map()
-    for (const run of runs) {
-      let promise
-      promise = fetchRun(run, { ...context, rootSignal: wave.signal }).then(
-        outcome => ({ outcome, promise }),
-        error => ({ error, promise }),
-      )
-      pending.set(promise, run)
-    }
-    const settleCancelledSiblings = async () => {
-      if (pending.size === 0) return
-      let timer
-      const yielded = new Promise(resolve => { timer = setTimeout(resolve, 0) })
-      await Promise.race([Promise.all([...pending.keys()]), yielded])
-      clearTimeout(timer)
-    }
-    const peerIds = []
-    try {
-      while (pending.size > 0) {
-        const completed = await Promise.race(pending.keys())
-        pending.delete(completed.promise)
-        if (completed.error) {
-          if (context.rootSignal.aborted) throw context.rootSignal.reason || completed.error
-          completed.outcome = unavailable('NO_VERIFIED_SOURCE')
-        }
-        if (completed.outcome.status !== 'ok') {
-          wave.abort(abortError('terminal playback run cancelled its siblings'))
-          for (const run of runs) releaseReservations(run.reservations)
-          await settleCancelledSiblings()
-          return { failed: completed.outcome, peerIds }
-        }
-        if (completed.outcome.peerId) peerIds.push(completed.outcome.peerId)
-      }
-      return { failed: null, peerIds }
-    } finally {
-      context.rootSignal.removeEventListener?.('abort', forwardAbort)
-      if (pending.size > 0) wave.abort(abortError('playback run group completed'))
-    }
-  }
-
-  async function materialize(request, signal) {
-    const bytes = b4a.allocUnsafe(request.byteEnd - request.byteStart)
-    let targetOffset = 0
-    for (let index = request.startBlock; index < request.endBlock; index++) {
-      if (signal.aborted) throw signal.reason || abortError()
-      const block = await transport.readVerifiedAssetBlock({ assetId: coreRef.assetId, blockIndex: index, signal })
-      const blockStartByte = index * coreRef.blockSize
-      const sourceStart = Math.max(0, request.byteStart - blockStartByte)
-      const sourceEnd = Math.min(block.byteLength, request.byteEnd - blockStartByte)
-      if (sourceEnd <= sourceStart) continue
-      b4a.copy(block, bytes, targetOffset, sourceStart, sourceEnd)
-      targetOffset += sourceEnd - sourceStart
-    }
-    if (targetOffset !== bytes.byteLength) throw new Error('verified playback bytes did not fill the requested range')
-    return bytes
-  }
-
-  /**
-   * Serve one range from local Hypercore bytes or an authenticated peer.
-   * There is no third branch: no origin, no CDN, no HTTP fallback. When no
-   * peer can prove the range, that is the answer.
-   */
-  async function findMissingAssetBlocks(startBlock, endBlock, assetId, rootSignal) {
-    const missing = []
-    for (let index = startBlock; index < endBlock; index++) {
-      if (rootSignal.aborted) throw rootSignal.reason
-      if (!await transport.hasVerifiedAssetBlock({ assetId, blockIndex: index, signal: rootSignal })) {
-        missing.push(index)
-      }
-    }
-    return missing
-  }
-
-  async function collectPeerInventories(activePeerIds, request, rootSignal, requestDeadline, excluded) {
-    const inventories = new Map()
-    await Promise.all(activePeerIds.map(async peerId => {
-      peerState(peerId)
-      try {
-        inventories.set(peerId, await inventoryForPeer(peerId, request, rootSignal))
-      } catch (error) {
-        if (rootSignal.aborted) throw error
-        recordFailure(peerId, error, requestDeadline, excluded)
-        inventories.set(peerId, new Set())
-      }
-    }))
-    return inventories
-  }
-
-  function assignRemainingBlocks(remaining, activePeerIds, excluded, inventories) {
-    const assignments = []
-    for (const index of remaining) {
-      const candidates = activePeerIds.filter(peerId => {
-        const state = peerState(peerId)
-        return state && !excluded.has(peerId) &&
-          state.cooldownUntil <= now() && inventories.get(peerId)?.has(index)
-      }).sort(comparePeers)
-      if (candidates.length === 0) {
-        for (const assignment of assignments) release(assignment.reservation)
-        return { error: 'NO_VERIFIED_SOURCE' }
-      }
-      const bytes = blockByteLength(coreRef, index)
-      const reservation = reserve(candidates[0], bytes)
-      if (!reservation) {
-        for (const assignment of assignments) release(assignment.reservation)
-        return { error: 'BUDGET_EXHAUSTED' }
-      }
-      assignments.push({ index, peerId: candidates[0], bytes, reservation })
-    }
-    return { assignments }
-  }
-
-  async function filterRemainingVerified(remaining, assetId, signal) {
-    const nextRemaining = []
-    for (const index of remaining) {
-      if (!await transport.hasVerifiedAssetBlock({
-        assetId,
-        blockIndex: index,
-        signal,
-      })) {
-        nextRemaining.push(index)
-      }
-    }
-    return nextRemaining
-  }
-
-  async function executeRangeWave({
-    remaining,
-    request,
-    requestDeadline,
-    startedAt,
-    rootSignal,
-    excluded,
-    contributingPeerIds,
-  }) {
-    const activePeerIds = normalizePeerIds(await transport.getActiveAssetPeerIds({
-      assetId: coreRef.assetId,
-      waitForPeers: true,
-      signal: rootSignal,
-    }))
-    pruneInactivePeers(activePeerIds)
-    if (activePeerIds.length === 0) return { error: unavailable('NO_VERIFIED_SOURCE') }
-    const inventories = await collectPeerInventories(activePeerIds, request, rootSignal, requestDeadline, excluded)
-
-    const assigned = assignRemainingBlocks(remaining, activePeerIds, excluded, inventories)
-    if (assigned.error) return { error: unavailable(assigned.error) }
-
-    const runs = coalesceAssignments(assigned.assignments)
-    const wave = await executeRuns(runs, {
-      inventories,
-      excluded,
-      request,
-      requestDeadline,
-      rootSignal,
-      startedAt,
-    })
-    for (const peerId of wave.peerIds) contributingPeerIds.add(peerId)
-
-    const nextRemaining = await filterRemainingVerified(remaining, coreRef.assetId, rootSignal)
-    const madeProgress = nextRemaining.length < remaining.length
-    if (madeProgress && wave.failed?.peerId) contributingPeerIds.add(wave.failed.peerId)
-    if (nextRemaining.length === 0) return { done: true }
-    if (!madeProgress) return { error: wave.failed || unavailable('NO_VERIFIED_SOURCE') }
-    return { remaining: nextRemaining }
-  }
-
-  function handleRequestRangeError(error, abortKind, trackedPrefetch, inputSignal, requestDeadline) {
-    if (abortKind === 'caller' ||
-        (trackedPrefetch && trackedPrefetch.generation !== prefetchGeneration) ||
-        inputSignal?.aborted) {
-      throw abortError()
-    }
-    if (abortKind === 'deadline' || error?.code === 'DEADLINE_EXCEEDED') {
-      return unavailable('DEADLINE_EXCEEDED')
-    }
-    if (error?.name === 'AbortError') throw error
-    return unavailable(now() >= requestDeadline ? 'DEADLINE_EXCEEDED' : 'NO_VERIFIED_SOURCE')
-  }
-
-  async function rangeResult(request, root, peerIds) {
-    return {
-      status: 'ok',
-      ...(request.materialize ? { bytes: await materialize(request, root.signal) } : {}),
-      verified: true,
-      peerIds,
-      originAttempted: false,
-    }
-  }
 
   async function requestRange(input = {}) {
-    const request = validateRequest(input)
-    const signal = input.signal
-    if (signal?.aborted) throw abortError()
-    if (request.materialize && request.byteEnd - request.byteStart > maxInFlightBytes) return unavailable('BUDGET_EXHAUSTED')
+    const request = validateRequest(input, coreRef, session)
+    const requestBytes = request.byteEnd - request.byteStart
+    if (request.materialize && (requestBytes > maxInFlightBytes || inFlightBytes + requestBytes > maxInFlightBytes)) {
+      return unavailable('BUDGET_EXHAUSTED')
+    }
+    if (input.signal?.aborted) throw abortError()
 
-    const startedAt = now()
-    const requestDeadline = startedAt + request.deadlineMs
-    const root = createAbortController()
+    let range = null
+    let timeout = null
     let abortKind = null
-    const callerAbort = () => { abortKind = 'caller'; root.abort(abortError()) }
-    signal?.addEventListener?.('abort', callerAbort, { once: true })
-    const deadlineTimer = setTimeout(() => {
-      abortKind = 'deadline'
-      const error = new Error('playback range deadline exceeded')
-      error.code = 'DEADLINE_EXCEEDED'
-      root.abort(error)
-    }, request.deadlineMs)
-    const trackedPrefetch = request.priority === 'prefetch'
-      ? { generation: prefetchGeneration, start: request.byteStart, end: request.byteEnd, controller: root }
-      : null
-    if (trackedPrefetch) activePrefetch.add(trackedPrefetch)
+    const controller = createAbortController()
+    const cancellation = new Promise((_, reject) => {
+      controller.signal.addEventListener('abort', () => reject(controller.signal.reason || abortError()), { once: true })
+    })
+    const cancel = kind => {
+      if (abortKind) return
+      abortKind = kind
+      range?.destroy?.()
+      controller.abort(kind === 'deadline'
+        ? Object.assign(new Error('playback range deadline exceeded'), { code: 'DEADLINE_EXCEEDED' })
+        : abortError())
+    }
+    const onAbort = () => cancel('caller')
+    const tracked = { request, cancel }
+    active.add(tracked)
+    if (request.materialize) inFlightBytes += requestBytes
+    input.signal?.addEventListener?.('abort', onAbort, { once: true })
+    timeout = setTimeout(() => cancel('deadline'), request.deadlineMs)
 
     try {
-      const missing = await findMissingAssetBlocks(request.startBlock, request.endBlock, coreRef.assetId, root.signal)
-      if (missing.length === 0) return await rangeResult(request, root, [])
-
-      let remaining = missing
-      let transportBytes = 0
-      for (const index of remaining) transportBytes += blockByteLength(coreRef, index)
-      if (transportBytes > maxInFlightBytes) return unavailable('BUDGET_EXHAUSTED')
-
-      const excluded = new Set()
-      const contributingPeerIds = new Set()
-      while (remaining.length > 0) {
-        const step = await executeRangeWave({
-          remaining,
-          request,
-          requestDeadline,
-          startedAt,
-          rootSignal: root.signal,
-          excluded,
-          contributingPeerIds,
-        })
-        if (step.error) return step.error
-        if (step.done) break
-        remaining = step.remaining
-      }
-      return await rangeResult(request, root, [...contributingPeerIds].sort())
+      const operation = fetchVerifiedRange({
+        core,
+        coreRef,
+        request,
+        signal: controller.signal,
+        peerWaitMs,
+        setRange(value) { range = value },
+      })
+      return await Promise.race([operation, cancellation])
     } catch (error) {
-      return handleRequestRangeError(error, abortKind, trackedPrefetch, signal, requestDeadline)
+      return mapRequestFailure(error, abortKind, input.signal)
     } finally {
-      clearTimeout(deadlineTimer)
-      signal?.removeEventListener?.('abort', callerAbort)
-      if (trackedPrefetch) activePrefetch.delete(trackedPrefetch)
+      clearTimeout(timeout)
+      input.signal?.removeEventListener?.('abort', onAbort)
+      active.delete(tracked)
+      if (request.materialize) inFlightBytes -= requestBytes
     }
   }
 
   function seek({ byteStart } = {}) {
-    if (!Number.isSafeInteger(byteStart) || byteStart < 0 || byteStart > coreRef.byteLength) throw new Error('seek byteStart is invalid')
-    prefetchGeneration++
-    for (const request of [...activePrefetch]) {
-      if (byteStart >= request.start && byteStart < request.end) {
-        request.generation = prefetchGeneration
-        continue
-      }
-      request.controller.abort(abortError('stale playback prefetch cancelled by seek'))
+    if (!Number.isSafeInteger(byteStart) || byteStart < 0 || byteStart > coreRef.byteLength) {
+      throw new Error('seek byteStart is invalid')
+    }
+    for (const tracked of [...active]) {
+      if (tracked.request.priority !== 'prefetch') continue
+      if (byteStart >= tracked.request.byteStart && byteStart < tracked.request.byteEnd) continue
+      tracked.cancel('seek')
     }
   }
 
   function metrics() {
     return {
-      peerRequests,
       inFlightBytes,
-      activeTransportRuns,
-      waitingTransportRuns: runSlotWaiters.length,
-      peers: [...peers.values()].map(state => ({ ...state })).sort((left, right) => left.peerId.localeCompare(right.peerId)),
+      activeDownloads: active.size,
+      peers: peerIds(core).map(peerId => ({ peerId })),
     }
   }
 

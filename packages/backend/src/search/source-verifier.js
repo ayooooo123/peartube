@@ -811,9 +811,9 @@ export function createScopedAssetAvailabilityProbe({
   randomBytes = crypto.randomBytes,
 } = {}) {
   if (!scopedNetwork || typeof scopedNetwork.retainAuthorizedRendition !== 'function' ||
-      typeof scopedNetwork.requestAssetBlocks !== 'function' ||
+      typeof scopedNetwork.getActiveAssetSession !== 'function' ||
       typeof scopedNetwork.releaseAuthorizedRendition !== 'function') {
-    throw new TypeError('scoped asset range transport is required')
+    throw new TypeError('scoped asset replication is required')
   }
   if (typeof randomBytes !== 'function') throw new TypeError('randomBytes must be a function')
   const ownerNonce = b4a.from(randomBytes(16))
@@ -836,18 +836,18 @@ export function createScopedAssetAvailabilityProbe({
     try {
       await raceAbort(retainWork, signal)
       retained = true
-      requestWork = Promise.resolve().then(() => scopedNetwork.requestAssetBlocks({
-        assetId,
-        startBlock: range.startBlock,
-        endBlock: range.endBlock,
-        requirePeerEvidence: true,
-        signal,
+      const session = scopedNetwork.getActiveAssetSession({ assetId })
+      requestWork = Promise.resolve().then(() => session.core.get(range.startBlock, {
+        timeout: lifetime,
       }))
-      const result = await raceAbort(requestWork, signal)
-      const verified = Array.isArray(result?.verifiedBlockIndexes) && result.verifiedBlockIndexes.includes(range.startBlock)
+      const block = await raceAbort(requestWork, signal)
       const observedAtMs = currentTime(now)
-      const peers = verified && Array.isArray(result.peerIds) ? new Set(result.peerIds).size : 0
-      return { peers, completeSeeders: 0, observedAtMs, expiresAtMs: observedAtMs + lifetime }
+      return {
+        peers: block ? (session.core.peers?.length || 0) : 0,
+        completeSeeders: 0,
+        observedAtMs,
+        expiresAtMs: observedAtMs + lifetime,
+      }
     } finally {
       try {
         await retainWork

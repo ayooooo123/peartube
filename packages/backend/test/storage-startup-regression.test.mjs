@@ -594,6 +594,19 @@ test('storage applies platform-specific swarm defaults without blocking explicit
   assert.equal(mobileOptions.maxParallel, undefined)
   assert.equal(mobileOptions.maxPeers, undefined)
 
+  const privateMobileOptions = resolveHyperswarmOptions({
+    keyPair,
+    platform: 'mobile',
+    network: { privateRouting: true },
+  })
+  assert.deepEqual(privateMobileOptions.privateRouting, {
+    release: 'alpha',
+    acknowledgeAlpha: true,
+    mode: 'optional',
+    profile: 'standard',
+    relay: false,
+  })
+
   const explicitOptions = resolveHyperswarmOptions({
     keyPair,
     platform: 'mobile',

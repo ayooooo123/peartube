@@ -150,7 +150,7 @@
     "hypercore-blob-server": "^1.12.0",
     "hyperdht-address": "^1.1.1",
     "hyperdispatch": "^1.5.1",
-    "hyperswarm": "^4.17.0",
+    "hyperswarm": "https://codeload.github.com/ayooooo123/hyperswarm/tar.gz/4bae99e4067f77fa3b378914883b357f87292de4",
     "protomux": "^3.10.1",
     "ready-resource": "^1.2.0",
     "semver": "^7.7.3",
@@ -163,7 +163,9 @@
     "@peartube/spec": "file:../spec",
     "bare-module-lexer": ">=1.5.2",
     "bogon": "1.2.0",
+    "dht-rpc": "https://codeload.github.com/ayooooo123/dht-rpc/tar.gz/fe04496196ea2ce42d1de27b0f770b02d2a87cd5",
     "minipass": "^7.1.2",
+    "sodium-native": "https://codeload.github.com/ayooooo123/sodium-native/tar.gz/562d642e1a78a8e124cf97bfbda77f01c02d1a7f",
     "tar": {
       "minipass": "^7.1.2"
     },

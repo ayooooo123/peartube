@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add opt-in private Hyperswarm peer streams on desktop and mobile. `network.privateRouting: true` selects the fail-closed HyperDHT alpha context for peer connections while topic discovery remains on the ordinary DHT; the pinned fork includes the required native scalar implementation. Deployments still need at least four reachable private relay nodes, and the option stays off by default until that capacity and the external cryptographic review gate exist.
 - Discard failed compatibility-transcode sessions when playback is requested again. A temporarily unavailable peer no longer poisons the cached player session after connectivity returns; running and successfully completed transcodes remain reusable.
 - Allow operator-configured peer UDP endpoints through `network.peerAddresses` / `PEARTUBE_NETWORK_PEER_ADDRESSES`. Relays behind different VPN exits can connect directly over a reachable LAN without disabling the VPN. Hints remain bound to the peer's Noise public key and follow network pause/resume; they grant no publisher or catalog authority.
 - Fetch missing relay playback blocks through the existing multi-peer asset scheduler on the video’s swarm topic. Cold reads wait for an authorized peer, respect upload and range checks, and cancel on reader close. Remove the unused raw replication hook, which bypassed upload controls when enabled.

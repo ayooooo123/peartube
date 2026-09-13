@@ -232,6 +232,13 @@ const DESKTOP_SWARM_DEFAULTS = Object.freeze({
   maxParallel: 12,
   maxPeers: 96
 })
+const PRIVATE_ROUTING_SWARM_OPTIONS = Object.freeze({
+  release: 'alpha',
+  acknowledgeAlpha: true,
+  mode: 'optional',
+  profile: 'standard',
+  relay: false,
+})
 const DESKTOP_PEER_POOL_WARM_REFRESH_INTERVALS_MS = Object.freeze([3000, 10000, 30000])
 const DESKTOP_PEER_POOL_MIN_CONNECTIONS = 4
 
@@ -281,6 +288,9 @@ export function resolveHyperswarmOptions({
     'deferRandomPunch',
     'randomPunchInterval'
   ])
+  if (network?.privateRouting === true) {
+    networkOptions.privateRouting = PRIVATE_ROUTING_SWARM_OPTIONS
+  }
   const explicitOptions = swarmOptions && typeof swarmOptions === 'object' ? { ...swarmOptions } : {}
 
   // Storage owns the persisted Hyperswarm identity; launch-time tuning must not

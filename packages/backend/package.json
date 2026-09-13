@@ -100,7 +100,7 @@
     "hyperdht-address": "^1.1.1",
     "hyperdispatch": "^1.5.1",
     "hyperschema": "^1.21.0",
-    "hyperswarm": "^4.17.0",
+    "hyperswarm": "github:ayooooo123/hyperswarm#ec46240e07c8f220bba11e6f4ae6eb6acf89eade",
     "hyperswarm-stats": "^1.3.0",
     "keet-identity-key": "^3.1.0",
     "protomux": "^3.10.1",
@@ -115,6 +115,7 @@
     "typescript": "^5.9.0"
   },
   "overrides": {
-    "bogon": "1.2.0"
+    "bogon": "1.2.0",
+    "sodium-native": "github:ayooooo123/sodium-native#562d642e1a78a8e124cf97bfbda77f01c02d1a7f"
   }
 }

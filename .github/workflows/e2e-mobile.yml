@@ -70,7 +70,7 @@ jobs:
 
       - name: Run Maestro flows on emulator
         # Pinnable: bump to the latest reactivecircus/android-emulator-runner tag.
-        uses: reactivecircus/android-emulator-runner@v2.34.0
+        uses: reactivecircus/android-emulator-runner@v2.38.0
         with:
           api-level: 34
           target: google_apis

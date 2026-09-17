@@ -52,7 +52,7 @@
     "eslint-plugin-react": "^7.37.0",
     "eslint-plugin-react-hooks": "^4.6.2",
     "hypercore-blob-server": "^1.15.0",
-    "oxlint": "^1.80.0",
+    "oxlint": "^1.83.0",
     "typescript": "~6.0.3"
   },
   "overrides": {

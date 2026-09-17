@@ -2,7 +2,6 @@
   "expo": {
     "name": "PearTube",
     "slug": "peartube",
-    "version": "0.2.38",
     "orientation": "default",
     "scheme": "peartube",
     "icon": "./assets/images/icon.png",
@@ -45,6 +44,7 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      "pear-runtime-react-native",
       [
         "expo-router"
       ],

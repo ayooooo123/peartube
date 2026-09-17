@@ -16,6 +16,11 @@ import type {
   PublisherSignedRecord,
   PublisherSubmitResponse,
 } from '../shared/rpc-types'
+import {
+  version as PKG_VERSION,
+  productName as PKG_PRODUCT_NAME,
+  name as PKG_NAME,
+} from '../../package.json'
 
 
 // ── Node.js polyfills for CEF ───────────────────────────────────────────
@@ -164,6 +169,108 @@ function fireListeners(map: Map<string, Set<IpcListener>>, key: string, data: an
   if (fns) for (const fn of fns) { try { fn(data) } catch { /* keep firing remaining listeners */ } }
 }
 
+// ── Pear update state ───────────────────────────────────────────────────
+// The Bun process owns the updater's link and the worker that runs it, and
+// pushes both the package identity and every update event over the IPC
+// WebSocket as text frames. Binary frames on that same socket are HRPC bytes,
+// so the frame type alone separates the two — nothing is sniffed or escaped.
+type PearPkg = {
+  name: string
+  productName: string
+  version: string
+  upgrade: string | null
+  updatesEnabled: boolean
+  updatesError: string | null
+}
+
+// Version and product name are build-time facts inlined from package.json —
+// the same file electrobun.config.ts reads and the Pear updater compares
+// against the staged payload. `upgrade` and `updatesEnabled` are runtime facts
+// only the Bun process knows, so they stay null/false until its first frame.
+const pearPkg: PearPkg = {
+  name: PKG_NAME,
+  productName: PKG_PRODUCT_NAME,
+  version: PKG_VERSION,
+  upgrade: null,
+  updatesEnabled: false,
+  updatesError: null,
+}
+
+const pearListeners = new Map<string, Set<IpcListener>>()
+const pearAcks = new Map<number, { resolve(): void; reject(err: Error): void }>()
+let pearAckId = 0
+// Must outlast the Bun side's own 60s apply timeout, so a slow swap surfaces
+// the launcher's error instead of a bare local timeout.
+const PEAR_ACK_TIMEOUT_MS = 70000
+
+function handleControlFrame(raw: string) {
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { console.error('[bridge] Bad control frame:', raw); return }
+  if (parsed === null || typeof parsed !== 'object') return
+  const frame = parsed as Record<string, unknown>
+
+  if (frame.t === 'pear:state') {
+    const value = frame.pkg
+    if (value === null || typeof value !== 'object') return
+    const next = value as Record<string, unknown>
+    if (typeof next.productName === 'string') pearPkg.productName = next.productName
+    if (typeof next.version === 'string') pearPkg.version = next.version
+    if (typeof next.name === 'string') pearPkg.name = next.name
+    pearPkg.upgrade = typeof next.upgrade === 'string' ? next.upgrade : null
+    pearPkg.updatesEnabled = next.updatesEnabled === true
+    pearPkg.updatesError = typeof next.updatesError === 'string' ? next.updatesError : null
+    if (pearPkg.updatesError) console.warn('[bridge] Pear updates unavailable:', pearPkg.updatesError)
+    return
+  }
+
+  if (frame.t === 'pear:event') {
+    fireListeners(pearListeners, 'update', frame.event)
+    return
+  }
+
+  if (frame.t === 'pear:ack') {
+    const id = typeof frame.id === 'number' ? frame.id : null
+    if (id === null) return
+    const pending = pearAcks.get(id)
+    if (!pending) return
+    pearAcks.delete(id)
+    if (frame.ok === true) pending.resolve()
+    else pending.reject(new Error(typeof frame.error === 'string' ? frame.error : 'pear command failed'))
+  }
+}
+
+function rejectPearAcks(reason: string) {
+  for (const [id, pending] of pearAcks) {
+    pearAcks.delete(id)
+    pending.reject(new Error(reason))
+  }
+}
+
+function sendPearCommand(t: 'pear:apply' | 'pear:restart'): Promise<void> {
+  const socket = ipcSocket
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    return Promise.reject(new Error('desktop backend is not connected'))
+  }
+  const id = ++pearAckId
+  return new Promise<void>((resolvePromise, rejectPromise) => {
+    const timer = setTimeout(() => {
+      pearAcks.delete(id)
+      rejectPromise(new Error(`${t} timed out`))
+    }, PEAR_ACK_TIMEOUT_MS)
+    pearAcks.set(id, {
+      resolve() { clearTimeout(timer); resolvePromise() },
+      reject(err: Error) { clearTimeout(timer); rejectPromise(err) },
+    })
+    try {
+      socket.send(JSON.stringify({ t, id }))
+    } catch (err) {
+      clearTimeout(timer)
+      pearAcks.delete(id)
+      rejectPromise(err instanceof Error ? err : new Error(String(err)))
+    }
+  })
+}
+
 // Discover the IPC WebSocket port from the static server
 // The Bun process exposes it through a same-origin endpoint.
 async function discoverIpcPort(): Promise<number> {
@@ -208,12 +315,24 @@ function getIpcPort(): Promise<number> {
 // ── window.bridge ───────────────────────────────────────────────────────
 const bridge = {
   pkg() {
-    return { name: 'peartube', productName: 'PearTube', version: '0.1.115' }
+    return { ...pearPkg }
   },
 
-  applyUpdate: async () => {},
-  appRestart: async () => { globalThis.window.location.reload() },
-  onPearEvent(_name: string, _listener: IpcListener) { return () => {} },
+  // Moves a downloaded payload into place. Resolves once it is on disk; the
+  // running code is still the old build until the app restarts.
+  applyUpdate() {
+    return sendPearCommand('pear:apply')
+  },
+
+  // A real relaunch of the app bundle, not a renderer reload: an applied
+  // payload swapped the bundle on disk and only a new process picks it up.
+  appRestart() {
+    return sendPearCommand('pear:restart')
+  },
+
+  onPearEvent(name: 'update', listener: IpcListener) {
+    return addListener(pearListeners, name, listener)
+  },
   registerPublisherBackendRelay(relay: PublisherBackendRelay) {
     if (publisherBackendRelay) throw new Error('Publisher backend relay is already registered')
     if (!relay || typeof relay.provisionPublisherCatalog !== 'function' ||
@@ -269,7 +388,12 @@ const bridge = {
           }
 
           ws.onmessage = (event) => {
-            // Binary HRPC data from worker
+            // Text frames are the Bun process's update channel; binary frames
+            // are HRPC bytes bound for the worker pipe.
+            if (typeof event.data === 'string') {
+              handleControlFrame(event.data)
+              return
+            }
             const data = event.data instanceof ArrayBuffer
               ? Buffer.from(event.data)
               : event.data
@@ -279,6 +403,7 @@ const bridge = {
           ws.onclose = () => {
             console.log('[bridge] IPC WebSocket closed')
             if (ipcSocket === ws) ipcSocket = null
+            rejectPearAcks('desktop backend disconnected')
             if (didOpen) fireListeners(exitListeners, specifier, 0)
             settle(false)
           }

@@ -8,11 +8,11 @@
 import Electrobun, { BrowserWindow, BrowserView } from 'electrobun/bun'
 import PearRuntime from 'pear-runtime'
 import type { PearTubeRPC } from '../shared/rpc-types'
-import { join, dirname } from 'path'
+import { join, dirname, basename, resolve, sep } from 'path'
 import { fileURLToPath } from 'url'
 import { homedir, platform } from 'os'
 import { existsSync } from 'fs'
-import { execSync } from 'child_process'
+import { execSync, spawn } from 'child_process'
 import { createPublisherSignerBridge } from '../../lib/publisher-signer-bridge'
 import { createBunPublisherKeyVault } from './publisher-key-vault'
 import { createBunPersonalSecretVault } from './personal-secret-vault'
@@ -21,6 +21,19 @@ import {
   createDesktopPublisherLifecycleHandlers,
 } from '../../lib/publisher-shell-service'
 import { runLegacyPublisherRootPreflight } from '@peartube/backend/legacy-publisher-root-preflight'
+// The DESKTOP Pear drive. The mobile worklet swarms a different link —
+// packages/app/package.json `upgrade` — because the two drives carry different
+// distributables: the iOS/Android payload versus this desktop app bundle. The
+// two must never be swapped; staging a desktop build onto the mobile link would
+// offer phones a macOS .app. Imported rather than read from disk at runtime so
+// the link is inlined into the Bun bundle and cannot go missing from a packaged
+// app's Resources.
+import desktopPear from '../../desktop.pear.json'
+import {
+  version as APP_VERSION,
+  productName as APP_PRODUCT_NAME,
+  name as APP_PACKAGE_NAME,
+} from '../../package.json'
 
 type LegacyPublisherRootMigrationRequest = {
   version: 1
@@ -88,6 +101,68 @@ function getStoragePath(): string {
 // and copy entries at Resources/app/ — go up one dir from import.meta.url
 const appCodeDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const storagePath = getStoragePath()
+
+// ── Pear OTA (desktop) ──────────────────────────────────────────────────
+const DESKTOP_UPGRADE_LINK = desktopPear.upgrade
+// Worker stdout is the control channel back from the updater: the worker's
+// Bare.IPC pipe carries binary HRPC frames and must stay untouched.
+const PEAR_CONTROL_PREFIX = '[pear-update] '
+const PEAR_COMMAND_TIMEOUT_MS = 60000
+
+// pear-runtime-updater only looks for payloads when it knows the bundle it is
+// replacing (`bundled` is derived from `app`), and it swaps the staged
+// `/by-arch/<host>/app/<name>` onto exactly that path. Electrobun's own
+// updater locates the running bundle the same way: the executable lives at
+// <Name>.app/Contents/MacOS/<bin> on macOS and at <bundle>/bin/<bin>
+// elsewhere. The layout assertions stop an unpackaged `bun src/bun/index.ts`
+// run from claiming a parent of the developer's home directory as the bundle.
+function resolveAppBundlePath(): string | null {
+  const execDir = dirname(process.execPath)
+  if (platform() === 'darwin') {
+    const bundle = resolve(execDir, '..', '..')
+    if (!bundle.endsWith('.app')) return null
+    if (!existsSync(join(bundle, 'Contents', 'MacOS'))) return null
+    return appCodeDir.startsWith(bundle + sep) ? bundle : null
+  }
+  const bundle = resolve(execDir, '..')
+  if (!existsSync(join(bundle, 'bin'))) return null
+  return appCodeDir.startsWith(bundle + sep) ? bundle : null
+}
+
+const appBundlePath = resolveAppBundlePath()
+
+// Handed to the Bare worker in one argv slot. The updater itself runs over
+// there because that process owns the Corestore and the Hyperswarm the update
+// drive replicates over.
+const pearWorkerConfig = JSON.stringify({
+  upgrade: DESKTOP_UPGRADE_LINK,
+  app: appBundlePath,
+  // The updater mirrors `/by-arch/<host>/app/<name>` and its Windows branch
+  // switches on `.exe`/`.msix`, so `name` is the distributable's filename
+  // (`PearTube.app`), not the bare product name.
+  name: appBundlePath ? basename(appBundlePath) : APP_PRODUCT_NAME,
+  version: APP_VERSION,
+})
+
+type PearPkg = {
+  name: string
+  productName: string
+  version: string
+  upgrade: string | null
+  updatesEnabled: boolean
+  updatesError: string | null
+}
+
+const pearPkg: PearPkg = {
+  name: APP_PACKAGE_NAME,
+  productName: APP_PRODUCT_NAME,
+  version: APP_VERSION,
+  upgrade: DESKTOP_UPGRADE_LINK,
+  // Replaced by the worker's first state frame; until then the only thing we
+  // know for certain is whether a swappable bundle exists at all.
+  updatesEnabled: false,
+  updatesError: appBundlePath ? null : 'unpackaged build: OTA updates are disabled',
+}
 const publisherKeyVault = createBunPublisherKeyVault()
 const personalSecretVault = createBunPersonalSecretVault()
 const privilegedPublisherSignerBridge = createPublisherSignerBridge({
@@ -221,21 +296,22 @@ function getWorker(specifier: string) {
     workerPath = bundlePath
   }
 
+  const peerAddresses = globalThis.Bun.env.PEARTUBE_NETWORK_PEER_ADDRESSES || ''
   console.log('[main] Spawning Bare worker:', workerPath, 'storage:', storagePath)
-  const worker = PearRuntime.run(workerPath, [storagePath])
+  const worker = PearRuntime.run(workerPath, [storagePath, peerAddresses, pearWorkerConfig])
 
   // Track PID for force-kill on crash
   const pid = worker._process?.pid
   if (pid) workerPids.add(pid)
 
+  // Line-buffered: update frames are newline-delimited JSON and a chunk
+  // boundary must not split one.
+  let stdoutPending = ''
   worker.stdout.on('data', (d: Buffer) => {
-    const text = d.toString().trim()
-    if (text) {
-      console.log('[worker]', text)
-      // Detect blob server port from worker output
-      const portMatch = text.match(/blobServerPort:\s*(\d+)/)
-      if (portMatch) blobServerPort = parseInt(portMatch[1], 10)
-    }
+    stdoutPending += d.toString()
+    const lines = stdoutPending.split('\n')
+    stdoutPending = lines.pop() || ''
+    for (const line of lines) handleWorkerStdoutLine(line)
   })
 
   worker.stderr.on('data', (d: Buffer) => {
@@ -244,6 +320,7 @@ function getWorker(specifier: string) {
   })
 
   worker.once('exit', (code: number) => {
+    if (stdoutPending) { handleWorkerStdoutLine(stdoutPending); stdoutPending = '' }
     console.log('[main] Worker exited:', specifier, 'code:', code)
     if (pid) workerPids.delete(pid)
     workers.delete(specifier)
@@ -279,11 +356,15 @@ function destroyAllWorkers() {
 }
 
 // ── IPC WebSocket Relay ─────────────────────────────────────────────────
-// Binary pipe between renderer and worker. Bun relays WebSocket frames
-// to/from the Bare worker's IPC stream. No JSON serialization.
+// One socket, two frame types. Binary frames are the raw pipe between the
+// renderer and the Bare worker's IPC stream — no JSON, no interpretation.
+// Text frames are this process talking to the view about Pear updates; the
+// WebSocket frame type keeps them from ever being mistaken for HRPC bytes.
 const BACKEND_WORKER = '/pear/build/workers/core/index.js'
 let ipcWsPort = 0
 let ipcWsServer: any = null
+type IpcClient = { send(data: string): unknown; readyState: number }
+const ipcClients = new Set<IpcClient>()
 
 function removeWorkerDataListener(worker: any, listener: (d: Buffer) => void) {
   if (!worker || !listener) return
@@ -309,6 +390,8 @@ function startIPCWebSocket() {
     websocket: {
       open(ws) {
         console.log('[main] IPC WebSocket connected')
+        ipcClients.add(ws)
+        ws.send(JSON.stringify({ t: 'pear:state', pkg: pearPkg }))
         try {
           const worker = getWorker(BACKEND_WORKER)
           // Pipe: worker IPC → WebSocket → renderer
@@ -323,6 +406,10 @@ function startIPCWebSocket() {
         }
       },
       message(ws, message) {
+        if (typeof message === 'string') {
+          void handleViewControlFrame(ws, message)
+          return
+        }
         // Pipe: renderer → WebSocket → worker IPC
         const worker = workers.get(BACKEND_WORKER)
         if (worker) {
@@ -333,6 +420,7 @@ function startIPCWebSocket() {
         }
       },
       close(ws) {
+        ipcClients.delete(ws)
         const data = (ws as any).data || {}
         const worker = data.worker || workers.get(BACKEND_WORKER)
         const forwardWorkerData = data.forwardWorkerData
@@ -355,6 +443,148 @@ function stopIPCWebSocket() {
   try { ipcWsServer.stop?.(true) } catch { /* best effort */ }
   ipcWsServer = null
   ipcWsPort = 0
+}
+
+// ── Pear update bridge (worker ⇄ view) ──────────────────────────────────
+// Worker → launcher rides the worker's stdout as `[pear-update] {json}`
+// lines; launcher → worker rides the worker's stdin as `{json}` lines. Both
+// are stdio of the child process pear-runtime already spawned, so no second
+// channel is opened and fd 3 stays reserved for HRPC.
+let pearRequestId = 0
+const pearRequests = new Map<number, { resolve(): void; reject(err: Error): void }>()
+
+function broadcastToView(frame: Record<string, unknown>) {
+  const payload = JSON.stringify(frame)
+  for (const client of ipcClients) {
+    if (client.readyState !== 1) continue
+    try { client.send(payload) } catch { /* client went away mid-broadcast */ }
+  }
+}
+
+function handleWorkerStdoutLine(line: string) {
+  const text = line.trimEnd()
+  if (!text) return
+  if (text.startsWith(PEAR_CONTROL_PREFIX)) {
+    handlePearWorkerFrame(text.slice(PEAR_CONTROL_PREFIX.length))
+    return
+  }
+  console.log('[worker]', text)
+  // Detect blob server port from worker output
+  const portMatch = text.match(/blobServerPort:\s*(\d+)/)
+  if (portMatch) blobServerPort = parseInt(portMatch[1], 10)
+}
+
+function handlePearWorkerFrame(raw: string) {
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { console.error('[main] Bad pear frame:', raw); return }
+  if (parsed === null || typeof parsed !== 'object') return
+  const frame = parsed as Record<string, unknown>
+
+  if (frame.t === 'state') {
+    pearPkg.updatesEnabled = frame.enabled === true
+    pearPkg.updatesError = typeof frame.error === 'string' ? frame.error : null
+    if (typeof frame.upgrade === 'string') pearPkg.upgrade = frame.upgrade
+    console.log('[main] Pear updates enabled:', pearPkg.updatesEnabled, pearPkg.updatesError || '')
+    broadcastToView({ t: 'pear:state', pkg: pearPkg })
+    return
+  }
+
+  if (frame.t === 'event') {
+    broadcastToView({
+      t: 'pear:event',
+      event: { state: frame.state, version: frame.version ?? null, minver: frame.minver ?? null },
+    })
+    return
+  }
+
+  if (frame.t === 'ack') {
+    if (typeof frame.id !== 'number') return
+    const pending = pearRequests.get(frame.id)
+    if (!pending) return
+    pearRequests.delete(frame.id)
+    if (frame.ok === true) pending.resolve()
+    else pending.reject(new Error(typeof frame.error === 'string' ? frame.error : 'pear command failed'))
+  }
+}
+
+function requestWorkerApply(): Promise<void> {
+  const worker = workers.get(BACKEND_WORKER)
+  const stdin = worker?.stdin
+  if (!stdin || typeof stdin.write !== 'function') {
+    return Promise.reject(new Error('backend worker is not running'))
+  }
+  const id = ++pearRequestId
+  return new Promise<void>((resolvePromise, rejectPromise) => {
+    const timer = setTimeout(() => {
+      pearRequests.delete(id)
+      rejectPromise(new Error('pear apply timed out'))
+    }, PEAR_COMMAND_TIMEOUT_MS)
+    pearRequests.set(id, {
+      resolve() { clearTimeout(timer); resolvePromise() },
+      reject(err: Error) { clearTimeout(timer); rejectPromise(err) },
+    })
+    try {
+      stdin.write(JSON.stringify({ t: 'apply', id }) + '\n')
+    } catch (err) {
+      clearTimeout(timer)
+      pearRequests.delete(id)
+      rejectPromise(err instanceof Error ? err : new Error(String(err)))
+    }
+  })
+}
+
+// `applyUpdate()` only swaps the payload on disk — the running code is still
+// the old build — so the swap is worthless without a relaunch of the bundle.
+function restartApp() {
+  if (!appBundlePath) {
+    throw new Error('restart requires a packaged app bundle; relaunch manually')
+  }
+  if (platform() === 'darwin') {
+    // `open -n` starts a second instance of the bundle that just got swapped
+    // rather than re-execing this process's (now replaced) binary.
+    spawn('open', ['-n', appBundlePath], { detached: true, stdio: 'ignore' }).unref()
+  } else {
+    // Electrobun's non-macOS layout puts the entrypoint at <bundle>/bin/launcher.
+    const launcher = join(appBundlePath, 'bin', 'launcher')
+    if (!existsSync(launcher)) {
+      throw new Error(`cannot relaunch: no launcher at ${launcher}`)
+    }
+    spawn(launcher, [], { detached: true, stdio: 'ignore' }).unref()
+  }
+  // Let the ack reach the view, then quit through Electrobun so the
+  // before-quit teardown runs and the Bare worker releases its Corestore lock.
+  setTimeout(() => Electrobun.Utils.quit(), 250)
+}
+
+async function handleViewControlFrame(ws: IpcClient, raw: string) {
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { return }
+  if (parsed === null || typeof parsed !== 'object') return
+  const frame = parsed as Record<string, unknown>
+  const id = typeof frame.id === 'number' ? frame.id : null
+
+  const reply = (ok: boolean, error?: string) => {
+    if (ws.readyState !== 1) return
+    try { ws.send(JSON.stringify({ t: 'pear:ack', id, ok, error: error ?? null })) } catch { /* client gone */ }
+  }
+
+  try {
+    if (frame.t === 'pear:state') {
+      if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'pear:state', pkg: pearPkg }))
+      return
+    }
+    if (frame.t === 'pear:apply') {
+      await requestWorkerApply()
+      reply(true)
+      return
+    }
+    if (frame.t === 'pear:restart') {
+      restartApp()
+      reply(true)
+    }
+  } catch (err) {
+    reply(false, err instanceof Error ? err.message : String(err))
+  }
 }
 
 // ── Electrobun RPC (minimal — just for view lifecycle) ──────────────────
@@ -503,6 +733,21 @@ Electrobun.events.on('reopen', () => {
 })
 
 // ── Cleanup ─────────────────────────────────────────────────────────────
+// The Bare worker is a separate OS process (pear-runtime's `run()` spawns
+// `bare` with an IPC pipe on fd 3) and it holds an exclusive flock() on the
+// Corestore for as long as it lives. A leaked worker makes the next launch
+// hang forever inside store.ready(), so every exit path has to destroy the
+// pipe — destroying it kills the child, which lets the worker's own SIGTERM
+// handler close the store and release the lock.
+//
+// `before-quit` is the load-bearing one: Electrobun's Utils.quit() ends in a
+// native forceExit(), so Cmd-Q / app-menu Quit never reaches
+// `process.on('exit')` and, on macOS, never closes the window either.
+Electrobun.events.on('before-quit', () => {
+  destroyAllWorkers()
+  stopIPCWebSocket()
+  stopStaticServer()
+})
 process.on('SIGTERM', () => { destroyAllWorkers(); process.exit(0) })
 process.on('SIGINT', () => { destroyAllWorkers(); process.exit(0) })
 process.on('exit', () => {

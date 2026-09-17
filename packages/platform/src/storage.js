@@ -2,11 +2,11 @@
  * Platform Storage Module
  *
  * Provides platform-specific storage path utilities.
- * Uses bare-storage for cross-platform directory resolution when running
- * in Bare/Pear runtime, with fallbacks for web/React Native contexts.
+ * Uses bare-storage for cross-platform directory resolution when running in
+ * the Bare runtime, with fallbacks for web/React Native contexts.
  */
 
-import { detectPlatform, isBare, isPear } from './detection.js';
+import { detectPlatform, isBare } from './detection.js';
 import { loadBareStorageModuleSync } from './runtime-modules.cjs';
 
 /** @import { PlatformRuntimeGlobals } from './globals.js' */
@@ -22,7 +22,7 @@ let _bareStorageLoaded = false;
 function getBareStorage() {
   if (_bareStorageLoaded) return _bareStorage;
   _bareStorageLoaded = true;
-  if (!isBare() && !isPear()) return null;
+  if (!isBare()) return null;
   try {
     _bareStorage = loadBareStorageModuleSync();
   } catch {
@@ -49,24 +49,11 @@ export function getStoragePath(options = {}) {
     return providedPath;
   }
 
-  // Pear desktop - use Pear.config.storage (set via --store flag)
-  if (isPear()) {
-    try {
-      const pearStorage = (/** @type {PlatformRuntimeGlobals} */ (globalThis)).Pear?.config?.storage;
-      if (pearStorage) return pearStorage;
-    } catch {
-      // A shell without readable configuration falls through to runtime defaults.
-    }
-  }
-
-  // Bare/Pear runtime - use bare-storage for cross-platform path resolution
-  if (isBare() || isPear()) {
+  // Bare runtime - bare-storage resolves the platform directory. Without that
+  // native addon, fall back to the launch argument the host passed as root.
+  if (isBare()) {
     const bs = getBareStorage();
     if (bs) return `${bs.persistent()}/${appName}`;
-  }
-
-  // Bare runtime without bare-storage - check argv
-  if (isBare()) {
     try {
       const arg0 = (/** @type {PlatformRuntimeGlobals} */ (globalThis)).Bare?.argv?.[0];
       if (typeof arg0 === 'string' && arg0.length > 0) return arg0;

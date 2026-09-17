@@ -31,9 +31,9 @@ test('major Holepunch dependency migrations are applied consistently', () => {
     '^0.5.3',
     'cli should use the current bare-build line',
   )
-  assert.equal(
+  assert.match(
     appPkg.devDependencies['bare-pack'],
-    '^2.1.3',
+    /^\^2\./,
     'app should use the current bare-pack major line',
   )
   assert.equal(

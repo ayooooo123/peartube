@@ -31,11 +31,15 @@ export function isBare() {
 }
 
 /**
- * Check if running in Pear runtime (desktop app)
+ * Check if running in the PearTube desktop shell.
+ *
+ * The Electrobun shell installs `window.bridge` before the app bundle loads,
+ * and that object is the only signal: Pear v3 removed `pear run` and the
+ * ambient Pear config global it used to inject.
+ *
  * @returns {boolean}
  */
 export function isPear() {
-  // pear-runtime v2: desktop shell sets window.bridge before the app bundle loads
   return typeof window !== 'undefined' && typeof window.bridge !== 'undefined';
 }
 

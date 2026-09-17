@@ -2533,7 +2533,7 @@ export function VideoPlayerOverlay() {
       console.log('[VideoPlayerOverlay] Mounted. isPear:', isPear, 'isDesktop:', isDesktop, 'Platform.OS:', Platform.OS)
       if (typeof window !== 'undefined') {
         const windowState = window as unknown as Record<string, unknown>
-        console.log('[VideoPlayerOverlay] window.Pear:', !!windowState.Pear)
+        console.log('[VideoPlayerOverlay] window.bridge:', !!windowState.bridge)
         console.log('[VideoPlayerOverlay] PearWorkerClient:', !!windowState.PearWorkerClient)
         console.log('[VideoPlayerOverlay] userAgent:', navigator?.userAgent?.substring(0, 100))
       }

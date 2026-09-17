@@ -9,6 +9,8 @@
 
 import { startMobileBackend as startMobileBackendContract } from './mobile-start.mjs'
 import { createJsonFrameParser, encodeJsonFrame } from '@peartube/platform/ipc-json-framing'
+import { startPearUpdates } from './pear-updates.mjs'
+import appManifest from '../package.json'
 import * as specModule from '@peartube/spec'
 import * as orchestratorModule from '@peartube/backend/orchestrator'
 import * as storageModule from '@peartube/backend/storage'
@@ -729,18 +731,46 @@ function buildMobileHandlerDepsBundle({
   }
 }
 
+// Pear OTA update frames ride the same framed-JSON control channel as the IPC
+// lifecycle above, because the view already has that pipe and the updater is
+// not part of the HRPC schema.
+//   worklet -> view  { type: 'pear-update', state, version, minver }
+//   view -> worklet  { type: 'pear-update-request', id, action: 'apply' | 'info' }
+//   worklet -> view  { type: 'pear-update-response', id, ok, result?, error? }
+const PEAR_UPDATE_EVENT_TYPE = 'pear-update'
+const PEAR_UPDATE_REQUEST_TYPE = 'pear-update-request'
+const PEAR_UPDATE_RESPONSE_TYPE = 'pear-update-response'
+
+async function runPearUpdateAction(action, pearUpdates) {
+  if (!pearUpdates) throw new Error('Pear updates are unavailable: updater not started')
+  if (action === 'info') return pearUpdates.info()
+  if (action === 'apply') {
+    await pearUpdates.applyUpdate()
+    return null
+  }
+  throw new Error(`Unknown pear update action: ${String(action)}`)
+}
+
 function attachMobileIpcLifecycle({
   IPC,
   parseIpcMessage,
   encodeIpcMessage,
   destroy,
   getCastCleanup,
+  onControlMessage = () => {},
 }) {
   if (!IPC?.on) return
 
   IPC.on('data', (chunk) => {
     const message = parseIpcMessage(chunk)
-    if (message?.type !== 'shutdown') return
+    if (!message) return
+
+    if (message.type !== 'shutdown') {
+      try {
+        onControlMessage(message)
+      } catch {}
+      return
+    }
 
     destroy()
       .then(() => {
@@ -980,6 +1010,12 @@ export async function createMobileRuntimeBackend(options = {}) {
     return b4a.from(encodeJsonFrame(value))
   }
 
+  function writeIpcMessage(value) {
+    try {
+      IPC?.write?.(encodeIpcMessage(value))
+    } catch {}
+  }
+
   attachUnhandledHandlers(reportBackendError)
   await loadBackendModules()
   ensureRpc()
@@ -1051,10 +1087,48 @@ export async function createMobileRuntimeBackend(options = {}) {
   handlersRegistered = true
   attachMobileOnlyRpcHandlers(rpc, api)
 
+  // Pear OTA updater. It runs here because this process holds the Corestore and
+  // the swarm it replicates the upgrade drive over. Deliberately not awaited:
+  // backend readiness must never wait on the upgrade drive opening, and a
+  // missing, malformed or otherwise unusable upgrade link must never stop the
+  // backend from serving video — every failure ends as a dead-but-callable
+  // updater.
+  let pearUpdates = null
+  const pearUpdatesReady = startPearUpdates({
+    version: appManifest.version,
+    upgrade: appManifest.upgrade,
+    productName: appManifest.productName,
+    store: ctx.store,
+    swarm: ctx.swarm,
+    storage: storagePath,
+    debug: launchOptions?.debug === true,
+    sendEvent: (event) => writeIpcMessage({ type: PEAR_UPDATE_EVENT_TYPE, ...event }),
+    log: ipcLog,
+  })
+    .then((handle) => {
+      pearUpdates = handle
+      return handle
+    })
+    .catch((error) => {
+      // Never routed through reportBackendError: that paints the view's fatal
+      // "backend unavailable" screen, and a dead updater is not a dead backend.
+      console.error('[Backend] Pear updater failed to start:', formatError(error))
+      ipcLog(`[pear-updates] unavailable: ${formatError(error)}`)
+      return null
+    })
+
   async function destroy() {
     if (shutdownInFlight) return shutdownInFlight
 
     shutdownInFlight = (async () => {
+      // Before shutdownBackend: the updater holds a Corestore session and the
+      // upgrade drive, and a leaked updater would keep the store from closing.
+      try {
+        await pearUpdatesReady
+        await pearUpdates?.close()
+      } catch (error) {
+        console.log('[Backend] Pear updater close failed:', formatError(error))
+      }
       await shutdownBackend(ctx)
     })().finally(() => {
       shutdownInFlight = null
@@ -1069,6 +1143,19 @@ export async function createMobileRuntimeBackend(options = {}) {
     encodeIpcMessage,
     destroy,
     getCastCleanup: () => castCleanup,
+    onControlMessage: (message) => {
+      if (message.type !== PEAR_UPDATE_REQUEST_TYPE) return
+      const id = message.id
+      pearUpdatesReady
+        .then((handle) => runPearUpdateAction(message.action, handle))
+        .then((result) => writeIpcMessage({ type: PEAR_UPDATE_RESPONSE_TYPE, id, ok: true, result: result ?? null }))
+        .catch((error) => writeIpcMessage({
+          type: PEAR_UPDATE_RESPONSE_TYPE,
+          id,
+          ok: false,
+          error: error?.message || 'Pear update request failed',
+        }))
+    },
   })
 
   publishMobileBackendReady({ ctx, rpc, protocolVersion, onReady })

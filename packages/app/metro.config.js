@@ -1,4 +1,5 @@
 // Learn more https://docs.expo.io/guides/customizing-metro
+const { getDefaultConfig: getRNDefaultConfig, mergeConfig } = require('@react-native/metro-config')
 const { getDefaultConfig } = require('expo/metro-config')
 const { withNativeWind } = require('nativewind/metro')
 const path = require('path')
@@ -15,8 +16,10 @@ try {
 const projectRoot = __dirname
 const monorepoRoot = path.resolve(projectRoot, '../..')
 
+// `npx react-native bundle` (used to build Pear OTA payloads) reads this file and
+// needs the React Native defaults as well as Expo's, so merge both.
 /** @type {import('expo/metro-config').MetroConfig} */
-const config = getDefaultConfig(projectRoot)
+const config = mergeConfig(getRNDefaultConfig(__dirname), getDefaultConfig(projectRoot))
 
 // For Pear desktop web exports we must avoid bundling React Native's native runtime.
 // Metro's default pre-modules include `react-native/Libraries/Core/InitializeCore`, which

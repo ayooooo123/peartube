@@ -31,6 +31,19 @@ import { createBackendContext } from '@peartube/backend/orchestrator'
 import { PROTOCOL_VERSION } from '@peartube/host'
 // @ts-ignore
 import { normalizeUploadVideoMediaMetadata } from '@peartube/backend/upload-video-contract'
+// Static imports, not `require()`: swc emits this file as ESM and bare-pack
+// resolves the graph ahead of time, so `require` is simply not defined in the
+// packed worker. A bare `require('pear-runtime')` here failed at runtime with
+// "require is not defined" and silently degraded the updater to disabled.
+// `pear-runtime` resolves its `#run` subpath through the `bare` condition
+// (bare-worker, not bare-sidecar), so it packs for the Bare host.
+import Pipe from 'bare-pipe'
+// @ts-ignore
+import PearRuntime from 'pear-runtime'
+// @ts-ignore
+import Protomux from 'protomux'
+// @ts-ignore
+import semver from 'bare-semver'
 // Bare runtime globals (available when spawned via pear.run())
 declare const Bare: { argv: string[]; IPC: any } | undefined
 
@@ -432,6 +445,13 @@ const runtimeStorage = bareArgv[2] || null
 let storage: string
 if (runtimeStorage) { storage = runtimeStorage }
 else { try { const dir = require('bare-storage'); storage = path.join(dir.persistent(), 'peartube') } catch { storage = path.join(os.homedir(), '.peartube') } }
+const peerAddresses = (() => {
+  const raw = bareArgv[3]
+  if (!raw) return []
+  const parsed = JSON.parse(raw)
+  if (!Array.isArray(parsed)) throw new Error('PEARTUBE_NETWORK_PEER_ADDRESSES must be a JSON array')
+  return parsed
+})()
 console.log('[Worker] Storage:', storage)
 
 const workerResourceDir = (() => {
@@ -456,6 +476,7 @@ const { rpc: _rpc, backend, destroy } = await createBackend({
   stream: ipcPipe,
   storagePath: storage,
   platform: 'desktop',
+  network: { peerAddresses },
   protocolVersion: PROTOCOL_VERSION,
   createBackendContext,
   autoAttachSharedAppHandlers: true,
@@ -786,6 +807,318 @@ rpc.eventReady({ blobServerPort: getBlobPort(), protocolVersion: PROTOCOL_VERSIO
 console.log('[Worker] HRPC ready, all handlers attached')
 
 ipcPipe.on('error', (err: Error) => console.error('[Worker] Pipe error:', err))
+
+// ── Pear OTA updates ────────────────────────────────────────────────────
+// The launcher passes its update config as JSON in Bare.argv[4]:
+// { upgrade, app, name, version }. `upgrade` is the DESKTOP Pear drive read
+// from packages/app/desktop.pear.json — the mobile worklet swarms the separate
+// link in packages/app/package.json `upgrade`. Two different drives holding two
+// different distributables; swapping them would offer phones a macOS bundle.
+//
+// The updater lives in this process, not in the launcher, because this is the
+// process that owns the Corestore and the Hyperswarm the update drive has to
+// replicate over. HRPC is already serving above, and everything below is
+// failure-isolated: a missing, malformed or unreachable link disables updates
+// and leaves the backend streaming video.
+
+// pear-runtime-updater samples its scheduling jitter ONCE in its constructor,
+// as `floor(random() * delay)`, and defaults to 3_600_000 — up to a full hour
+// between an append on the drive and the fetch. Never inherit that: five
+// minutes still spreads load over the seeders, but it fits inside a desktop
+// session, so a user who quits after twenty minutes still got the payload.
+const PEAR_UPDATE_DELAY_MS = 5 * 60 * 1000
+
+const PEAR_CONTROL_PREFIX = '[pear-update] '
+
+type PearUpdateState = 'updating' | 'updated' | 'minver-required'
+type PearControlFrame = { t: string } & Record<string, unknown>
+type PearLaunchConfig = { upgrade: string; app: string | null; name: string; version: string }
+type PearReplicableCore = { replicate(mux: unknown): unknown }
+type PearUpdaterLike = {
+  updates: boolean
+  bundled: boolean
+  updated: boolean
+  applied?: boolean
+  version: string
+  nextVersion: string | null
+  drive: {
+    core: PearReplicableCore & { discoveryKey: Uint8Array | null }
+    blobs: { core: PearReplicableCore } | null
+    ready(): Promise<void>
+    update(): Promise<void>
+    get(key: string): Promise<Uint8Array | null>
+    on(event: 'blobs', listener: (blobs: { core: PearReplicableCore }) => void): void
+  }
+  on(event: string, listener: (payload?: unknown) => void): void
+  applyUpdate(): Promise<void>
+}
+type PearRuntimeLike = {
+  updater: PearUpdaterLike
+  ready(): Promise<void>
+  close(): Promise<void>
+  on(event: 'error', listener: (err: Error) => void): void
+}
+
+function sendPearControl(frame: PearControlFrame) {
+  // stdout is the launcher-facing control channel. Bare.IPC (fd 3) carries
+  // protomux frames for HRPC and must stay pure binary, so update traffic
+  // rides the stdio the launcher already reads line by line.
+  try { console.log(PEAR_CONTROL_PREFIX + JSON.stringify(frame)) } catch { /* stdout closed */ }
+}
+
+function parsePearLaunchConfig(raw: string | undefined): PearLaunchConfig | null {
+  if (typeof raw !== 'string' || raw.length === 0) return null
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { return null }
+  if (parsed === null || typeof parsed !== 'object') return null
+  const record = parsed as Record<string, unknown>
+  const upgrade = typeof record.upgrade === 'string' ? record.upgrade.trim() : ''
+  if (!upgrade.startsWith('pear://')) return null
+  return {
+    upgrade,
+    // Absent when the app runs unpackaged: pear-runtime-updater only checks
+    // for payloads when `bundled` is true, which it derives from `app`.
+    app: typeof record.app === 'string' && record.app.length > 0 ? record.app : null,
+    // Basename of the distributable, not the bare product name: the updater
+    // mirrors `/by-arch/<host>/app/<name>` and swaps it onto `app`, and its
+    // Windows branch switches on `.exe`/`.msix`.
+    name: typeof record.name === 'string' && record.name.length > 0 ? record.name : 'PearTube',
+    version: typeof record.version === 'string' && record.version.length > 0 ? record.version : '0.0.0',
+  }
+}
+
+const pearLaunchConfig = parsePearLaunchConfig(bareArgv[4])
+let pearRuntime: PearRuntimeLike | null = null
+let pearUpdaterError: string | null = pearLaunchConfig
+  ? null
+  : 'no usable desktop pear link was supplied by the launcher'
+
+function publishPearState() {
+  const updater = pearRuntime?.updater
+  sendPearControl({
+    t: 'state',
+    upgrade: pearLaunchConfig?.upgrade ?? null,
+    version: pearLaunchConfig?.version ?? null,
+    enabled: Boolean(updater && updater.updates && updater.bundled),
+    error: pearUpdaterError,
+  })
+}
+
+function emitPearEvent(state: PearUpdateState, version: string | null, minver: string | null = null) {
+  sendPearControl({ t: 'event', state, version, minver })
+}
+
+async function applyPearUpdate(): Promise<void> {
+  const updater = pearRuntime?.updater
+  if (!updater) throw new Error(pearUpdaterError || 'pear updater is not running')
+  if (!updater.updates) throw new Error('pear updates are disabled for this build')
+  if (!updater.bundled) throw new Error('pear updates require a packaged app bundle')
+  // Already swapped on disk — only a restart is left to do.
+  if (updater.applied) return
+  if (!updater.updated) throw new Error('no downloaded pear payload to apply')
+  await updater.applyUpdate()
+}
+
+async function handlePearCommand(line: string) {
+  let id: number | null = null
+  try {
+    const parsed: unknown = JSON.parse(line)
+    if (parsed === null || typeof parsed !== 'object') return
+    const frame = parsed as Record<string, unknown>
+    id = typeof frame.id === 'number' ? frame.id : null
+    if (frame.t === 'state') { publishPearState(); return }
+    if (frame.t !== 'apply') return
+    await applyPearUpdate()
+    sendPearControl({ t: 'ack', id, ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    sendPearControl({ t: 'ack', id, ok: false, error: message })
+  }
+}
+
+function openPearCommandChannel(): { destroy(): void } | null {
+  // fd 0 is a pipe: bare-sidecar spawns this worker with
+  // stdio ['pipe', 'pipe', 'pipe', 'overlapped'], so the launcher writes
+  // newline-delimited commands to `worker.stdin` while fd 3 stays HRPC-only.
+  try {
+    const stdin = new Pipe(0) as unknown as {
+      on(event: string, listener: (value: unknown) => void): unknown
+      destroy(): void
+    }
+    let pending = ''
+    stdin.on('data', (chunk: unknown) => {
+      pending += typeof chunk === 'string' ? chunk : b4a.toString(chunk as Uint8Array)
+      const lines = pending.split('\n')
+      pending = lines.pop() || ''
+      for (const line of lines) {
+        if (line.trim().length > 0) void handlePearCommand(line)
+      }
+    })
+    stdin.on('error', (err: unknown) => {
+      console.error('[Worker] Pear command channel error:', err instanceof Error ? err.message : err)
+    })
+    return stdin
+  } catch (err) {
+    console.error('[Worker] Pear command channel unavailable:', err instanceof Error ? err.message : err)
+    return null
+  }
+}
+
+async function startPearUpdates(config: PearLaunchConfig) {
+
+  // Only `skipUpdate` needs the instance before construction returns.
+  let constructing: PearRuntimeLike | null = null
+
+  // pear-runtime-updater has no minver gate of its own (pear-mobile bolts one
+  // on through `skipUpdate`), so desktop implements the same rule: `/pear.json`
+  // in the drive root declares `updates.minver`, the native floor of the
+  // payload. Below it there is nothing worth downloading and the user has to
+  // reinstall, which is why the event is surfaced instead of silently skipped.
+  const skipUpdate = async (): Promise<boolean> => {
+    const updater = constructing?.updater
+    if (!updater) return false
+    try {
+      await updater.drive.update()
+      const buffer = await updater.drive.get('/pear.json')
+      if (!buffer) return false
+      const manifest: unknown = JSON.parse(b4a.toString(buffer))
+      if (manifest === null || typeof manifest !== 'object') return false
+      const updates = (manifest as Record<string, unknown>).updates
+      const minver = updates && typeof updates === 'object'
+        ? (updates as Record<string, unknown>).minver
+        : null
+      if (typeof minver !== 'string' || minver.length === 0) return false
+      const current = semver.Version.parse(updater.version)
+      const skip = current.compare(semver.Version.parse(minver)) < 0
+      if (skip) emitPearEvent('minver-required', updater.version, minver)
+      return skip
+    } catch (err) {
+      // A drive that cannot be read yet must not block the ordinary version
+      // comparison from running on the next append.
+      console.error('[Worker] Pear minver check failed:', err instanceof Error ? err.message : err)
+      return false
+    }
+  }
+
+  const runtime = new PearRuntime({
+    // `dir` is required (pear-runtime-updater throws without it) and is where
+    // staged payloads land, under <storage>/pear-runtime/next.
+    dir: storage,
+    storage,
+    version: config.version,
+    upgrade: config.upgrade,
+    name: config.name,
+    app: config.app ?? undefined,
+    // Passed together or not at all — pear-runtime throws on one without the
+    // other — so the update drive rides the swarm the backend already has
+    // open instead of starting a second DHT client.
+    //
+    // A namespaced SESSION, never the root store: pear-runtime hands whatever
+    // store it is given to a Hyperdrive, and `Hyperdrive._close()` closes that
+    // corestore outright. Handing over ctx.store would mean closing the
+    // updater takes the backend's Corestore — and every open core — with it.
+    // Closing a session only closes the session (verified against
+    // corestore 7.12: `_close()` returns early while `this.root !== null`).
+    store: ctx.store.namespace('pear-runtime'),
+    swarm: ctx.swarm,
+    delay: PEAR_UPDATE_DELAY_MS,
+    skipUpdate,
+  })
+  constructing = runtime
+
+  const updater = runtime.updater
+  runtime.on('error', (err: Error) => console.error('[Worker] Pear runtime error:', err?.message || err))
+  updater.on('error', (err?: unknown) => {
+    console.error('[Worker] Pear updater error:', err instanceof Error ? err.message : err)
+  })
+  // `updating` fires before the manifest version is recorded, so the payload
+  // version is genuinely unknown until `updated`.
+  updater.on('updating', () => emitPearEvent('updating', null))
+  updater.on('updated', () => emitPearEvent('updated', updater.nextVersion))
+
+  try {
+    await runtime.ready()
+
+    // pear-runtime only joins the update topic when it opened its own swarm
+    // (`index.js` `_open`: `if (this.swarm === null)`). We handed it the
+    // backend's swarm, so announcing and replicating is this worker's job —
+    // and only for the update drive's own cores. A blanket
+    // `store.replicate(connection)` would answer any peer's discovery-key
+    // probe for every core on disk, which is exactly what PearTube's scoped
+    // network runtime exists to avoid.
+    const drive = updater.drive
+    await drive.ready()
+
+    const swarm = ctx.swarm
+    const replicated = new Set<PearReplicableCore>()
+    const replicateOn = (core: PearReplicableCore, connection: unknown) => {
+      try {
+        core.replicate(Protomux.from(connection))
+      } catch (err) {
+        console.error('[Worker] Pear drive replication failed:', err instanceof Error ? err.message : err)
+      }
+    }
+    const attachCore = (core: PearReplicableCore | null | undefined) => {
+      if (!core || replicated.has(core)) return
+      replicated.add(core)
+      for (const connection of swarm?.connections || []) replicateOn(core, connection)
+    }
+    const onConnection = (connection: unknown) => {
+      for (const core of replicated) replicateOn(core, connection)
+    }
+
+    swarm?.on?.('connection', onConnection)
+    attachCore(drive.core)
+    // The blobs core only exists once the drive's header has synced, and the
+    // mirror needs it to pull file contents.
+    drive.on('blobs', (blobs) => attachCore(blobs?.core))
+    attachCore(drive.blobs?.core)
+
+    const discovery = drive.core.discoveryKey
+      ? swarm?.join?.(drive.core.discoveryKey, { client: true, server: false })
+      : null
+
+    pearRuntime = runtime
+    pearUpdaterError = null
+
+    ctx.registerCleanup?.('pear runtime updater', async () => {
+      if (typeof swarm?.off === 'function') swarm.off('connection', onConnection)
+      else if (typeof swarm?.removeListener === 'function') swarm.removeListener('connection', onConnection)
+      try { await discovery?.destroy?.() } catch { /* swarm already tearing down */ }
+      await runtime.close()
+      pearRuntime = null
+    }, { timeoutMs: 3000 })
+
+    console.log(
+      '[Worker] Pear updater ready — version', config.version,
+      'bundled:', updater.bundled,
+      'delay:', PEAR_UPDATE_DELAY_MS + 'ms',
+    )
+  } catch (err) {
+    // Half-open runtime: close it so it stops holding drive sessions. This
+    // never touches the backend's store or swarm — pear-runtime only closes
+    // the ones it created itself.
+    try { await runtime.close() } catch { /* nothing usable to close */ }
+    pearRuntime = null
+    throw err
+  }
+}
+
+const pearCommandChannel = openPearCommandChannel()
+ctx.registerCleanup?.('pear command channel', () => {
+  try { pearCommandChannel?.destroy() } catch { /* already closed */ }
+}, { timeoutMs: 500 })
+
+if (pearLaunchConfig) {
+  startPearUpdates(pearLaunchConfig).then(publishPearState, (err: unknown) => {
+    pearUpdaterError = err instanceof Error ? err.message : String(err)
+    console.error('[Worker] Pear updates disabled:', pearUpdaterError)
+    publishPearState()
+  })
+} else {
+  console.error('[Worker] Pear updates disabled:', pearUpdaterError)
+  publishPearState()
+}
 
 // Shutdown triggers: Bare.IPC close (Electrobun quit), SIGTERM/SIGINT/SIGHUP
 // (kill, parent-death on well-behaved launchers), fallback process signals.

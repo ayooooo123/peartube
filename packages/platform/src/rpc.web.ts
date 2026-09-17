@@ -1,11 +1,13 @@
 /**
- * RPC Client - Web (Pear Desktop)
+ * RPC Client - Web (PearTube Desktop)
  *
- * Unified platform RPC layer for Pear desktop apps.
+ * Unified platform RPC layer for the Electrobun desktop shell.
  *
- * Two transport paths:
- * 1. Electron bridge (new): window.bridge from preload.js — virtual pipe over Electron IPC
- * 2. PearWorkerClient (legacy pear run): worker-client.js loaded as unbundled script
+ * One transport: `window.bridge`, installed by the view bundle before the app
+ * bundle loads. It relays binary HRPC frames to the Bare backend worker and
+ * carries the Pear OTA update surface. Pear v3 removed `pear run`, so there is
+ * no ambient Pear config global and no unbundled worker-client script to wait
+ * for.
  */
 
 import { createProtocolClient } from '@peartube/host';
@@ -17,22 +19,45 @@ import {
   createProviderRpc,
   createPersonalRpc,
   createPublisherRootOperationRpc,
+  parsePearUpdateEvent,
 } from './rpc.shared';
-import type { ProtocolClientLike, PublisherRootIntentRequest, StorageStatsResponse, UploadVideoRequest } from './rpc.shared';
+import type {
+  PearUpdateInfo,
+  PearUpdatesRpc,
+  ProtocolClientLike,
+  PublisherRootIntentRequest,
+  StorageStatsResponse,
+  UploadVideoRequest,
+} from './rpc.shared';
 import { createWebRunner } from './runner.web';
 import type { VideoStats } from './types';
 
 // Worker specifier for Electron bridge path
 const BACKEND_WORKER = '/pear/build/workers/core/index.js';
 
-// Electron bridge exposed by electron/preload.js
+// Desktop bridge exposed by packages/app/src/view/index.ts
 declare global {
   interface Window {
     bridge?: {
-      pkg(): any;
+      /**
+       * Build-time identity inlined from packages/app/package.json, plus the
+       * update facts only the Bun process knows: `upgrade` is the desktop Pear
+       * link and is null until the shell reports it, `updatesEnabled` is false
+       * whenever the updater is not running (unpackaged build, bad link).
+       */
+      pkg(): {
+        name: string;
+        productName: string;
+        version: string;
+        upgrade: string | null;
+        updatesEnabled: boolean;
+        updatesError: string | null;
+      };
+      /** Resolves once the payload is on disk; the running code is unchanged. */
       applyUpdate(): Promise<void>;
+      /** Relaunches the app bundle — not a renderer reload. */
       appRestart(): Promise<void>;
-      onPearEvent(name: string, listener: (...args: any[]) => void): () => void;
+      onPearEvent(name: 'update', listener: (event: unknown) => void): () => void;
       startWorker(specifier: string): Promise<boolean>;
       writeWorkerIPC(specifier: string, data: any): Promise<boolean>;
       onWorkerIPC(specifier: string, listener: (data: any) => void): () => void;
@@ -47,20 +72,58 @@ declare global {
         writable: true;
         admitted: true;
       }>;
-    };
-    PearWorkerClient?: {
-      isConnected: boolean;
-      blobServerPort: number | null;
-      initialize(): Promise<void>;
-      connect(): Promise<{ stream: any; client?: any; terminate?: () => Promise<void> | void }>;
-      getRpc(): any;
-      close(): void;
+      personalSecureGet?(account: string): Promise<string | null>;
+      personalSecureSet?(account: string, value: string): Promise<void>;
+      personalSecureDelete?(account: string): Promise<void>;
     };
   }
 }
 
+function ensureDesktopBridge(): NonNullable<Window['bridge']> {
+  const bridge = typeof window === 'undefined' ? undefined : window.bridge;
+  if (!bridge) {
+    throw new Error('Desktop bridge unavailable — window.bridge is installed by the Electrobun shell');
+  }
+  return bridge;
+}
+
 /**
- * Create a virtual duplex pipe over Electron's bridge IPC.
+ * Pear OTA surface. The updater itself runs in the Bare worker (it owns the
+ * Corestore and the swarm); the view only observes and asks for the swap.
+ */
+const pearUpdates: PearUpdatesRpc = {
+  onEvent(listener) {
+    const bridge = typeof window === 'undefined' ? undefined : window.bridge;
+    if (!bridge?.onPearEvent) return () => {};
+    return bridge.onPearEvent('update', (value: unknown) => {
+      // IPC frames are untrusted: a partial or malformed one must be dropped
+      // rather than shown as a bogus update prompt.
+      const event = parsePearUpdateEvent(value);
+      if (event) listener(event);
+    });
+  },
+
+  async apply(): Promise<void> {
+    await ensureDesktopBridge().applyUpdate();
+  },
+
+  async restart(): Promise<void> {
+    await ensureDesktopBridge().appRestart();
+  },
+
+  async info(): Promise<PearUpdateInfo> {
+    const pkg = ensureDesktopBridge().pkg();
+    return {
+      productName: pkg.productName,
+      version: pkg.version,
+      upgrade: pkg.upgrade,
+      enabled: pkg.updatesEnabled,
+    };
+  },
+};
+
+/**
+ * Create a virtual duplex pipe over the desktop bridge's worker IPC.
  * Implements the minimal stream interface that HRPC/protomux needs.
  */
 function createBridgePipe(specifier: string) {
@@ -130,49 +193,24 @@ function createBridgePipe(specifier: string) {
 }
 
 /**
- * Connect to backend via Electron bridge (new path) or PearWorkerClient (legacy).
+ * Connect to the Bare backend worker through the desktop bridge.
  */
 async function connectTransport() {
   if (typeof window === 'undefined') {
     throw new Error('Platform RPC can only be initialized in browser context');
   }
-
-  // New path: Electron bridge from preload.js
-  if (window.bridge?.startWorker) {
-    console.log('[Platform RPC] Using Electron bridge transport');
-    const started = await window.bridge.startWorker(BACKEND_WORKER);
-    if (!started) {
-      throw new Error('Failed to start Electrobun backend worker');
-    }
-    console.log('[Platform RPC] Worker started:', BACKEND_WORKER);
-    const stream = createBridgePipe(BACKEND_WORKER);
-    const client = createProtocolClient({ stream });
-    return { stream, client, terminate: () => stream.destroy() };
+  if (!window.bridge?.startWorker) {
+    throw new Error('Desktop bridge unavailable — window.bridge is installed by the Electrobun shell');
   }
 
-  // Legacy path: PearWorkerClient from worker-client.js (pear run)
-  console.log('[Platform RPC] Using PearWorkerClient transport (legacy)');
-  const workerClient = await waitForPearWorkerClient();
-  return workerClient.connect();
-}
-
-function waitForPearWorkerClient(timeoutMs = 10000) {
-  const existingClient = window.PearWorkerClient ?? null;
-  if (existingClient) return Promise.resolve(existingClient);
-
-  const startedAt = Date.now();
-  return new Promise<NonNullable<Window['PearWorkerClient']>>((resolve, reject) => {
-    const poll = () => {
-      const wc = window.PearWorkerClient ?? null;
-      if (wc) { resolve(wc); return; }
-      if (Date.now() - startedAt >= timeoutMs) {
-        reject(new Error('PearWorkerClient not available'));
-        return;
-      }
-      setTimeout(poll, 25);
-    };
-    poll();
-  });
+  const started = await window.bridge.startWorker(BACKEND_WORKER);
+  if (!started) {
+    throw new Error('Failed to start Electrobun backend worker');
+  }
+  console.log('[Platform RPC] Worker started:', BACKEND_WORKER);
+  const stream = createBridgePipe(BACKEND_WORKER);
+  const client = createProtocolClient({ stream });
+  return { stream, client, terminate: () => stream.destroy() };
 }
 
 // Module state
@@ -209,10 +247,9 @@ mainBridge.events.onError(() => {
 export const events = mainBridge.events;
 
 /**
- * Initialize platform RPC for Pear desktop
+ * Initialize platform RPC for the desktop shell.
  *
- * This initializes the PearWorkerClient which spawns the worker process.
- * The worker-client.js script must be loaded before calling this.
+ * Connects the HRPC client to the Bare backend worker over `window.bridge`.
  */
 export async function initPlatformRPC(): Promise<void> {
   if (typeof window === 'undefined') {
@@ -222,12 +259,6 @@ export async function initPlatformRPC(): Promise<void> {
   if (_isInitialized && mainBridge.isInitialized()) {
     console.log('[Platform RPC] Already initialized');
     return;
-  }
-
-  // Electron bridge path: window.bridge is set by preload.js — skip PearWorkerClient
-  // Legacy pear run path: wait for PearWorkerClient from worker-client.js
-  if (!window.bridge?.startWorker) {
-    await waitForPearWorkerClient();
   }
 
   console.log('[Platform RPC] Initializing...');
@@ -364,6 +395,9 @@ export const rpc = {
   provider: createProviderRpc(ensureProtocolClient),
   // Bounded operability, recovery, storage-preview, and archive diagnostics
   ...createOperabilityRpc(ensureRPC),
+  // Pear OTA updates — same namespace shape as the mobile runner, so screens
+  // call rpc.updates.* without knowing which platform they are on.
+  updates: pearUpdates,
   async provisionPublisherCatalog(request: { publisherId: string; genesisRootKey: Uint8Array }) {
     return createWebPublisherRootOperationRpc().provisionPublisherCatalog(request);
   },

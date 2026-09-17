@@ -14,13 +14,22 @@ import {
   createProviderRpc,
   createPersonalRpc,
   createPublisherRootOperationRpc,
+  parsePearUpdateEvent,
 } from './rpc.shared';
 import type {
+  PearUpdateEvent,
+  PearUpdateInfo,
+  PearUpdatesRpc,
+  PlatformRunner,
+  PlatformRunnerSession,
   PublisherRootIntentRequest,
   PublisherSignerBridgeLike,
   StorageStatsResponse,
   UploadVideoRequest,
 } from './rpc.shared';
+// Screens render update state; they read the contract from the RPC module they
+// already import, not from the shared internals.
+export type { PearUpdateEvent, PearUpdateInfo, PearUpdateState, PearUpdatesRpc } from './rpc.shared';
 import {
   createNativeRunner,
   runNativeLegacyPublisherRootPreflight,
@@ -37,6 +46,8 @@ import type { VideoStats } from './types';
 
 declare function require(moduleName: string): any;
 declare const Buffer: any;
+/** Metro/React Native build flag; absent outside the app bundle. */
+declare const __DEV__: boolean | undefined;
 
 // Types for external dependencies (provided at runtime)
 declare const Worklet: new () => {
@@ -58,10 +69,17 @@ let _initPromise: Promise<void> | null = null;
 let _isInitialized = false;
 let _startupState: 'idle' | 'initializing' | 'starting-worklet' | 'ready' | 'error' = 'idle';
 let _isTerminating = false;
+let _terminatePromise: Promise<void> | null = null;
 let _publisherSignerBridge: PublisherSignerBridgeLike | null = null;
 const BACKEND_WORKLET_ID = '/peartube-backend-core.bundle'
 const SHUTDOWN_TIMEOUT_MS = 4000
 const BLOB_SERVER_HEALTH_TIMEOUT_MS = 1500
+
+// Pear OTA update control frames, mirrored from packages/app/backend/index.mjs.
+const PEAR_UPDATE_EVENT_TYPE = 'pear-update'
+const PEAR_UPDATE_REQUEST_TYPE = 'pear-update-request'
+const PEAR_UPDATE_RESPONSE_TYPE = 'pear-update-response'
+const PEAR_UPDATE_REQUEST_TIMEOUT_MS = 60000
 
 type BareWorkletCtor = new (name?: string) => {
   start(name: string, source: string, args?: string[]): void;
@@ -100,7 +118,7 @@ function withHostProtocolLaunchOption(args: string[], protocolVersion: number): 
   return nextArgs
 }
 
-const mainRunner = createNativeRunner({
+const workletRunner = createNativeRunner({
   get WorkletCtor() {
     if (!nativeRuntimeConfig.WorkletCtor) {
       throw new Error('Native worklet runtime is not configured');
@@ -122,6 +140,16 @@ const mainRunner = createNativeRunner({
     ];
   },
 });
+
+// The Pear updater talks over the worklet's raw IPC pipe, not HRPC, so the
+// update namespace needs the stream the bridge otherwise keeps to itself.
+const mainRunner: PlatformRunner = {
+  async start(options): Promise<PlatformRunnerSession> {
+    const session = await workletRunner.start(options);
+    attachPearUpdateTransport(session.stream);
+    return session;
+  },
+};
 
 const mainBridge = createPlatformRpcBridge({
   platform: 'mobile',
@@ -151,6 +179,164 @@ mainBridge.events.onError((data: any) => {
   _isInitialized = false;
   _startupState = 'error';
 });
+
+// ============================================
+// Pear OTA updates
+// ============================================
+//
+// The updater lives in the Bare worklet; this side only observes state and
+// asks for the swap. Frames share the worklet's JSON control channel with the
+// shutdown handshake, so the listener set outlives any single worklet and a
+// relaunch simply rebinds.
+
+type WorkletIpcStream = {
+  on(event: string, listener: (chunk: unknown) => void): void;
+  write?(payload: unknown): void;
+};
+
+type PearUpdatePending = {
+  resolve(value: unknown): void;
+  reject(error: Error): void;
+  cancel(): void;
+};
+
+const pearUpdateListeners: Array<(event: PearUpdateEvent) => void> = [];
+// Keyed by an incrementing request id, inserted and deleted per round trip.
+const pearUpdatePending = new Map<number, PearUpdatePending>();
+let pearUpdateTransport: WorkletIpcStream | null = null;
+let pearUpdateRequestSeq = 0;
+
+function settlePearUpdateResponse(message: Record<string, unknown>): void {
+  const id = message.id;
+  if (typeof id !== 'number') return;
+  const pending = pearUpdatePending.get(id);
+  if (!pending) return;
+
+  pearUpdatePending.delete(id);
+  pending.cancel();
+
+  if (message.ok === true) {
+    pending.resolve(message.result ?? null);
+    return;
+  }
+  pending.reject(new Error(typeof message.error === 'string' ? message.error : 'Pear update request failed'));
+}
+
+function failPearUpdateRequests(reason: string): void {
+  for (const [id, pending] of pearUpdatePending) {
+    pearUpdatePending.delete(id);
+    pending.cancel();
+    pending.reject(new Error(reason));
+  }
+}
+
+function attachPearUpdateTransport(ipc: WorkletIpcStream | null | undefined): void {
+  if (typeof ipc?.on !== 'function' || pearUpdateTransport === ipc) return;
+
+  pearUpdateTransport = ipc;
+  failPearUpdateRequests('Backend worklet restarted');
+
+  const parser = createJsonFrameParser();
+
+  ipc.on('data', (chunk: unknown) => {
+    for (const message of parser.push(chunk)) {
+      if (message?.type === PEAR_UPDATE_EVENT_TYPE) {
+        // Untrusted frame: a malformed payload is dropped rather than shown.
+        const event = parsePearUpdateEvent(message);
+        if (!event) continue;
+        for (const listener of pearUpdateListeners.slice()) {
+          try {
+            listener(event);
+          } catch (error) {
+            console.error('[Platform RPC] Pear update listener failed:', error);
+          }
+        }
+        continue;
+      }
+
+      if (message?.type === PEAR_UPDATE_RESPONSE_TYPE) settlePearUpdateResponse(message);
+    }
+  });
+
+  ipc.on('close', () => {
+    if (pearUpdateTransport !== ipc) return;
+    pearUpdateTransport = null;
+    failPearUpdateRequests('Backend transport closed');
+  });
+}
+
+function requestPearUpdate(action: 'apply' | 'info'): Promise<unknown> {
+  const write = pearUpdateTransport?.write;
+  if (typeof write !== 'function') {
+    return Promise.reject(new Error('Pear updates are unavailable: backend worklet is not running'));
+  }
+  const transport = pearUpdateTransport;
+
+  const id = ++pearUpdateRequestSeq;
+
+  return new Promise<unknown>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pearUpdatePending.delete(id);
+      reject(new Error(`Pear update request timed out: ${action}`));
+    }, PEAR_UPDATE_REQUEST_TIMEOUT_MS);
+
+    pearUpdatePending.set(id, { resolve, reject, cancel: () => clearTimeout(timer) });
+
+    try {
+      write.call(transport, Buffer.from(encodeJsonFrame({ type: PEAR_UPDATE_REQUEST_TYPE, id, action })));
+    } catch (error) {
+      pearUpdatePending.delete(id);
+      clearTimeout(timer);
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+}
+
+function resolveDevSettings(): { reload?: (reason?: string) => void } | null {
+  try {
+    return require('react-native')?.DevSettings ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const pearUpdatesRpc: PearUpdatesRpc = {
+  onEvent(listener: (event: PearUpdateEvent) => void) {
+    pearUpdateListeners.push(listener);
+    return () => {
+      const index = pearUpdateListeners.indexOf(listener);
+      if (index !== -1) pearUpdateListeners.splice(index, 1);
+    };
+  },
+
+  async apply(): Promise<void> {
+    await requestPearUpdate('apply');
+  },
+
+  async restart(): Promise<void> {
+    const devSettings = resolveDevSettings();
+    if (typeof devSettings?.reload !== 'function') {
+      throw new Error('Cannot restart: react-native DevSettings.reload is unavailable in this build');
+    }
+
+    // The worklet is a native thread that outlives a JS reload and it holds the
+    // Corestore owner lock, so the reloaded bundle would fail to open storage.
+    // Terminate it first and wait for the handshake.
+    terminatePlatformRPC();
+    try {
+      await _terminatePromise;
+    } catch {}
+
+    // iOS re-reads bundleURL() on reload and picks up the applied payload.
+    // Android caches jsBundleFilePath when the React host is created, so there
+    // the swap lands on the next full process start instead.
+    devSettings.reload('peartube-pear-ota');
+  },
+
+  async info(): Promise<PearUpdateInfo> {
+    return await requestPearUpdate('info') as PearUpdateInfo;
+  },
+};
 
 /**
  * Send a shutdown signal via IPC and wait for acknowledgment.
@@ -628,6 +814,10 @@ function buildNativeWorkerArgs(
   if (derivedPlayer && !config.launchOptions) {
     config.launchOptions = {};
   }
+  // The worklet has no `__DEV__`, and the Pear updater needs it: a debug run
+  // must mirror a payload immediately instead of somewhere inside the
+  // randomised production delay window.
+  const debug = typeof __DEV__ !== 'undefined' && __DEV__ === true;
   const launchOptionsArg = config.launchOptions
     ? JSON.stringify({
       __peartubeLaunchOptions: true,
@@ -635,6 +825,7 @@ function buildNativeWorkerArgs(
       swarmOptions: config.launchOptions.swarmOptions,
       player: derivedPlayer ?? undefined,
       protocolVersion: PROTOCOL_VERSION,
+      debug: debug || undefined,
     })
     : null;
 
@@ -789,9 +980,12 @@ export async function initPlatformRPC(config: {
  * Idempotent: safe to call multiple times.
  */
 export function terminatePlatformRPC(): void {
+  // `updates.restart()` has to know when the worklet is actually gone before it
+  // reloads the bundle, so the in-flight teardown is retained.
   if (_isTerminating) return;
   if (!mainBridge.isInitialized()) {
     _startupState = 'idle';
+    _terminatePromise = null;
     return;
   }
   _isTerminating = true;
@@ -799,7 +993,7 @@ export function terminatePlatformRPC(): void {
   _startupState = 'idle';
   _blobServerPort = null;
 
-  (async () => {
+  _terminatePromise = (async () => {
     try {
       await mainBridge.terminate();
     } catch (err) {
@@ -1088,6 +1282,8 @@ export const rpc = {
   ...createMediaGraphRpc(ensureProtocolClient),
   // Provider/acquisition facade shared byte-for-byte with desktop.
   provider: createProviderRpc(ensureProtocolClient),
+  // Pear OTA updates; identical surface on desktop, so screens never branch.
+  updates: pearUpdatesRpc,
   // Bounded operability, recovery, storage-preview, and archive diagnostics
   ...createOperabilityRpc(ensureRPC),
   async authorizePublisherRootOperation(request: PublisherRootIntentRequest) {

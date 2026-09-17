@@ -30,6 +30,7 @@ import { AppContext, type AppContextType } from '@/lib/AppContext'
 import { buildBundleVersionKey } from '@peartube/platform/native-bundle-cache'
 import { getNativePublisherKeyVault, getNativePublisherSigner } from '@/lib/publisher-shell-signer.native'
 import { useDeviceConditionsReporter } from '@/hooks/useNetworkPolicy'
+import type { PearUpdateEvent } from '@peartube/platform/rpc'
 export { useApp } from '@/lib/AppContext'
 
 // Configure Reanimated logger to disable strict mode warnings
@@ -175,6 +176,110 @@ const bootStyles = StyleSheet.create({
   },
 })
 
+/**
+ * Pear OTA update surface. `updating` is deliberately quiet; `updated` is the
+ * only state with an action, and it must finish `apply()` before `restart()` —
+ * applying is what puts the payload on disk, so reloading first just boots the
+ * old bundle again. `minver-required` has no action at all: the payload wants a
+ * newer native build, which only a store install can deliver.
+ */
+function PearUpdateBanner({
+  update,
+  busy,
+  error,
+  onApply,
+  onDismiss,
+}: {
+  update: PearUpdateEvent
+  busy: boolean
+  error: string | null
+  onApply: () => void
+  onDismiss: () => void
+}) {
+  if (update.state === 'updating') {
+    return (
+      <View style={updateStyles.dock} pointerEvents="box-none">
+        <Panel tone="muted" style={updateStyles.panel}>
+          <Eyebrow>{update.version ? `DOWNLOADING UPDATE ${update.version}` : 'DOWNLOADING UPDATE'}</Eyebrow>
+        </Panel>
+      </View>
+    )
+  }
+
+  if (update.state === 'minver-required') {
+    return (
+      <View style={updateStyles.dock} pointerEvents="box-none">
+        <Panel tone="muted" style={updateStyles.panel}>
+          <Eyebrow>UPDATE REQUIRED</Eyebrow>
+          <Text style={updateStyles.title}>
+            {Platform.OS === 'ios' ? 'Update available in the App Store' : 'Update available in the Play Store'}
+          </Text>
+          <Body size="sm" tone="secondary" style={updateStyles.body}>
+            {update.minver
+              ? `This release needs app version ${update.minver} or newer, so it cannot install over the air.`
+              : 'This release needs a newer app version, so it cannot install over the air.'}
+          </Body>
+          <Button label="DISMISS" variant="ghost" size="sm" onPress={onDismiss} style={updateStyles.trailingAction} />
+        </Panel>
+      </View>
+    )
+  }
+
+  return (
+    <View style={updateStyles.dock} pointerEvents="box-none">
+      <Panel tone="accent" style={updateStyles.panel}>
+        <Eyebrow tone="accent">UPDATE READY</Eyebrow>
+        <Text style={updateStyles.title}>
+          {update.version ? `Version ${update.version} is downloaded` : 'A new version is downloaded'}
+        </Text>
+        <Body size="sm" tone="secondary" style={updateStyles.body}>
+          PearTube restarts to finish installing.
+        </Body>
+        {error ? (
+          <Body size="sm" tone="danger" style={updateStyles.body}>
+            {error}
+          </Body>
+        ) : null}
+        <View style={updateStyles.actions}>
+          <Button label="RESTART TO UPDATE" size="sm" loading={busy} disabled={busy} onPress={onApply} />
+          <Button label="LATER" variant="ghost" size="sm" disabled={busy} onPress={onDismiss} />
+        </View>
+      </Panel>
+    </View>
+  )
+}
+
+const updateStyles = StyleSheet.create({
+  dock: {
+    position: 'absolute',
+    left: spacing.lg,
+    right: spacing.lg,
+    bottom: spacing.xl,
+  },
+  panel: {
+    width: '100%',
+  },
+  title: {
+    ...fonts.title.md,
+    color: colors.text,
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  body: {
+    marginBottom: spacing.sm,
+  },
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  trailingAction: {
+    alignSelf: 'flex-start',
+    marginTop: spacing.sm,
+  },
+})
+
 
 // Platform RPC - conditionally imported
 let platformRPC: any = null
@@ -308,6 +413,9 @@ export default function RootLayout() {
   const [backendError, setBackendError] = useState<string | null>(null)
   const [startupStatus, setStartupStatus] = useState<string | null>(null)
   const [androidDiscoveryPermissionStatus, setAndroidDiscoveryPermissionStatus] = useState<AndroidDiscoveryPermissionStatus | null>(null)
+  const [pearUpdate, setPearUpdate] = useState<PearUpdateEvent | null>(null)
+  const [pearUpdateBusy, setPearUpdateBusy] = useState(false)
+  const [pearUpdateError, setPearUpdateError] = useState<string | null>(null)
   const statsPollersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
 const castKeepaliveIntervalRef = useRef<NodeJS.Timeout | null>(null)
 const castSuspendGraceTimerRef = useRef<NodeJS.Timeout | null>(null)
@@ -358,6 +466,43 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
     const interval = setInterval(syncPlaybackActive, 1000)
     return () => clearInterval(interval)
   }, [ready])
+
+  // Pear OTA update state. The updater lives in the backend, so this only
+  // arrives once the platform RPC module is loaded; `updates` is absent on
+  // shells without an updater and the subscription is then skipped.
+  useEffect(() => {
+    const updates = platformRPC?.rpc?.updates
+    if (typeof updates?.onEvent !== 'function') return
+
+    return updates.onEvent((event: PearUpdateEvent) => {
+      console.log('[App] Pear update:', event.state, event.version || '', event.minver || '')
+      setPearUpdate(event)
+      setPearUpdateError(null)
+    })
+  }, [ready])
+
+  const applyPearUpdate = useCallback(async () => {
+    const updates = platformRPC?.rpc?.updates
+    if (!updates) return
+
+    setPearUpdateBusy(true)
+    setPearUpdateError(null)
+    try {
+      // apply() has to fully resolve first: it is what swaps the payload onto
+      // disk. Restarting before it settles reloads the old bundle.
+      await updates.apply()
+      await updates.restart()
+    } catch (err: any) {
+      console.error('[App] Pear update failed:', err?.message)
+      setPearUpdateError(String(err?.message || 'Update failed'))
+      setPearUpdateBusy(false)
+    }
+  }, [])
+
+  const dismissPearUpdate = useCallback(() => {
+    setPearUpdate(null)
+    setPearUpdateError(null)
+  }, [])
 
   const loadInitialData = useCallback(async () => {
     if (!platformRPC) return
@@ -1307,6 +1452,15 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
                         )}
                       </View>
                       {showConnecting || showUnavailable ? null : <VideoPlayerOverlay />}
+                      {pearUpdate && !showConnecting && !showUnavailable ? (
+                        <PearUpdateBanner
+                          update={pearUpdate}
+                          busy={pearUpdateBusy}
+                          error={pearUpdateError}
+                          onApply={applyPearUpdate}
+                          onDismiss={dismissPearUpdate}
+                        />
+                      ) : null}
                     </SocialProvider>
                   </VideoPlayerProvider>
                 </DownloadsProvider>

@@ -303,6 +303,70 @@ export type PlatformRunnerSession = {
   terminate(): Promise<void>
   onLifecycle(cb: (event: PlatformLifecycleEvent) => void): () => void
 }
+
+/**
+ * Pear over-the-air update surface, shared by both platforms.
+ *
+ * The updater itself always runs in the Bare backend — `pear-mobile` inside the
+ * worklet on iOS/Android, `pear-runtime` inside the desktop worker — because
+ * that is the process holding the Corestore and the swarm. The view only
+ * observes state and asks for the swap, so both runners expose the same three
+ * calls over whatever transport they already have.
+ *
+ * `minver-required` means the payload declared a newer native floor than this
+ * build: nothing downloaded, and the only way forward is a store install.
+ */
+export type PearUpdateState = 'updating' | 'updated' | 'minver-required'
+
+export type PearUpdateEvent = {
+  state: PearUpdateState
+  /** Payload version, when the updater reported one. */
+  version: string | null
+  /** Native floor the payload demands; only set for `minver-required`. */
+  minver: string | null
+}
+
+export type PearUpdatesRpc = {
+  onEvent(listener: (event: PearUpdateEvent) => void): () => void
+  /**
+   * Move a downloaded payload into place. Resolves only once the swap is on
+   * disk; the running code is still the old build until the app restarts.
+   */
+  apply(): Promise<void>
+  restart(): Promise<void>
+  info(): Promise<PearUpdateInfo>
+}
+
+export type PearUpdateInfo = {
+  productName: string
+  version: string
+  upgrade: string | null
+  /** False when the build runs with updates disabled. */
+  enabled: boolean
+}
+
+const PEAR_UPDATE_STATES: Record<PearUpdateState, true> = {
+  updating: true,
+  updated: true,
+  'minver-required': true,
+}
+
+/**
+ * Update events arrive as untrusted JSON over an IPC pipe, so a malformed or
+ * partial frame must be dropped rather than shown as a bogus update prompt.
+ */
+export function parsePearUpdateEvent(value: unknown): PearUpdateEvent | null {
+  if (value === null || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  const state = record.state
+  if (typeof state !== 'string') return null
+  if (!Object.prototype.hasOwnProperty.call(PEAR_UPDATE_STATES, state)) return null
+  return {
+    state: state as PearUpdateState,
+    version: typeof record.version === 'string' ? record.version : null,
+    minver: typeof record.minver === 'string' ? record.minver : null,
+  }
+}
 type ChannelCatalogMethods = {
   getContentCatalog(request: ContentCatalogRequest): Promise<ContentCatalogResponse>
   getContentItems(request: ContentItemsProtocolRequest): Promise<ContentItemsResponse>

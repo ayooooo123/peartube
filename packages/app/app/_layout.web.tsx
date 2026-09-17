@@ -27,8 +27,8 @@ export { useApp } from '@/lib/AppContext'
 // Configure Reanimated logger to disable strict mode warnings
 // We intentionally update shared values during render for PiP exit transitions
 // to ensure animated worklets see current values immediately
-// Guarded for SSR: only load on Pear runtime (not during static rendering)
-if (typeof window !== 'undefined' && ((window as any).Pear || (window as any).bridge)) {
+// Guarded for SSR: only load in the desktop shell (not during static rendering)
+if (typeof window !== 'undefined' && 'bridge' in window) {
   try {
     const { configureReanimatedLogger, ReanimatedLogLevel } = require('react-native-reanimated')
     configureReanimatedLogger({
@@ -41,11 +41,9 @@ if (typeof window !== 'undefined' && ((window as any).Pear || (window as any).br
 // Re-export colors for backward compatibility
 export { colors }
 
-// Platform detection
-const isPear = typeof window !== 'undefined' && (
-  !!(window as any).Pear ||      // legacy pear run
-  !!(window as any).bridge        // standalone Electron with pear-runtime
-)
+// Platform detection — the Electrobun shell installs window.bridge before the
+// app bundle loads. Pear v3 removed `pear run`, so the shell no longer injects
+// a Pear config global and window.bridge is the only desktop signal.
 const isBridgeDesktop = typeof window !== 'undefined' && !!(window as any).bridge
 const shouldUseStatsPollingFallback = !isBridgeDesktop
 const isValidBlobServerPort = (port: unknown): port is number =>
@@ -216,10 +214,10 @@ export default function RootLayout() {
   useFonts(fontAssets)
 
   // Initialize state from cache if available (for soft navigation)
-  const [ready, setReady] = useState(() => !isPear && cachedAppState !== null)
+  const [ready, setReady] = useState(() => !isBridgeDesktop && cachedAppState !== null)
   const [identity, setIdentity] = useState<Identity | null>(() => cachedAppState?.identity ?? null)
   const [videos, setVideos] = useState<Video[]>(() => cachedAppState?.videos ?? [])
-  const [loading, setLoading] = useState(() => isPear || cachedAppState === null)
+  const [loading, setLoading] = useState(() => isBridgeDesktop || cachedAppState === null)
   const [blobServerPort, setBlobServerPort] = useState<number | null>(() => cachedAppState?.blobServerPort ?? null)
   const [backendError, setBackendError] = useState<string | null>(null)
   const statsPollersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
@@ -440,7 +438,7 @@ export default function RootLayout() {
   }, [markDesktopBackendReady])
 
   useEffect(() => {
-    if (isPear) {
+    if (isBridgeDesktop) {
       initPearBackend()
     } else {
       // Regular web: mark as ready without backend
@@ -555,9 +553,9 @@ export default function RootLayout() {
 
     console.log('[App] Uploading video:', filePath, 'category:', category, 'skipThumbnailGeneration:', skipThumbnailGeneration)
 
-    // Listen for progress events during upload (Pear desktop)
+    // Listen for progress events during upload (desktop shell)
     let progressHandler: ((e: Event) => void) | null = null
-    if (onProgress && isPear && typeof window !== 'undefined') {
+    if (onProgress && isBridgeDesktop && typeof window !== 'undefined') {
       progressHandler = (e: Event) => {
         const detail = (e as CustomEvent).detail
         if (detail?.progress !== undefined) {

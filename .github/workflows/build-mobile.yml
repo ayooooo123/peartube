@@ -53,6 +53,11 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4.0.3
+        with:
+          # React Native 0.85 pins this NDK in react-native/gradle/libs.versions.toml.
+          # The runner image stopped shipping it and Gradle's own auto-install fails,
+          # so install it here instead of letting the build discover it is missing.
+          packages: "platform-tools ndk;27.1.12297006"
 
       - uses: ./.github/actions/prepare-mobile-backend
 
@@ -93,6 +98,11 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4.0.3
+        with:
+          # React Native 0.85 pins this NDK in react-native/gradle/libs.versions.toml.
+          # The runner image stopped shipping it and Gradle's own auto-install fails,
+          # so install it here instead of letting the build discover it is missing.
+          packages: "platform-tools ndk;27.1.12297006"
 
       - uses: ./.github/actions/prepare-mobile-backend
 

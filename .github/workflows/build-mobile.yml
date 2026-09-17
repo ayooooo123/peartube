@@ -52,7 +52,7 @@ jobs:
           cache: gradle
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v4.0.1
+        uses: android-actions/setup-android@v4.0.3
 
       - uses: ./.github/actions/prepare-mobile-backend
 
@@ -92,7 +92,7 @@ jobs:
           cache: gradle
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v4.0.1
+        uses: android-actions/setup-android@v4.0.3
 
       - uses: ./.github/actions/prepare-mobile-backend
 

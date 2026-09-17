@@ -128,7 +128,7 @@ jobs:
           distribution: temurin
           java-version: 17
           cache: gradle
-      - uses: android-actions/setup-android@v4.0.1
+      - uses: android-actions/setup-android@v4.0.3
       - uses: ./.github/actions/prepare-mobile-backend
 
       - name: Expo prebuild (Android)

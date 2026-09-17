@@ -44,7 +44,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout bare-kit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: holepunchto/bare-kit
           ref: ${{ env.BARE_KIT_REF }}
@@ -118,7 +118,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7
 
       - name: Validate release input and signing config
         id: prep

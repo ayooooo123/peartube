@@ -30,10 +30,6 @@ jobs:
 
       - uses: ./.github/actions/prepare-mobile-backend
 
-      - name: Prepare iOS frameworks
-        working-directory: packages/app
-        run: npm run ios:prepare
-
       - name: Install CocoaPods dependencies
         working-directory: packages/app
         run: npx pod-install

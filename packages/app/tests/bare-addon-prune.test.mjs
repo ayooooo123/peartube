@@ -160,10 +160,6 @@ test('pruneBareAddons refuses to run with an empty keep-set', () => {
 
 test('iOS pod install links Bare addons then prunes to the linked set', () => {
   const podfile = fs.readFileSync(path.join(appRoot, 'ios', 'Podfile'), 'utf8')
-  const createXcframeworks = fs.readFileSync(
-    path.join(appRoot, 'scripts', 'create-xcframeworks.sh'),
-    'utf8',
-  )
 
   assert.match(
     podfile,
@@ -184,11 +180,6 @@ test('iOS pod install links Bare addons then prunes to the linked set', () => {
     podfile,
     /'--platform',\s*'ios'/,
     'the Podfile must prune the iOS addon set',
-  )
-  assert.match(
-    createXcframeworks,
-    /prune-bare-addons\.mjs["']?\s+--platform ios --list/,
-    'BareAddons must be built from the same linked keep-set, or pruned addons come back',
   )
 })
 

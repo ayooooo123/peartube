@@ -12,19 +12,34 @@ function readFile(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8')
 }
 
-test('mobile iOS framework preparation avoids bash 4-only associative arrays on macOS runners', () => {
-  const workflow = readFile('.github/workflows/build-mobile.yml')
-  const script = readFile('packages/app/scripts/create-xcframeworks.sh')
+test('iOS builds get their addons from the pruned bare-kit set, not a committed prebuilds tree', () => {
+  const repoFile = (p) => path.join(repoRoot, p)
+
+  for (const gone of [
+    'packages/app/BareAddons.podspec',
+    'packages/app/scripts/create-xcframeworks.sh',
+    'packages/app/scripts/build-addons.sh',
+    'packages/app/prebuilds',
+    'packages/app/prebuilds-sim',
+  ]) {
+    assert.equal(
+      fs.existsSync(repoFile(gone)),
+      false,
+      `${gone} shipped stale duplicate addon versions beside the ones bare-link produces`,
+    )
+  }
+
+  const packageJson = JSON.parse(readFile('packages/app/package.json'))
+  assert.equal(packageJson.scripts['ios:prepare'], undefined)
+
+  for (const workflow of ['.github/workflows/build-mobile.yml', '.github/workflows/release-ios.yml']) {
+    assert.doesNotMatch(readFile(workflow), /ios:prepare/, `${workflow} must not call the deleted prepare step`)
+  }
 
   assert.doesNotMatch(
-    script,
-    /declare -A|\$\{[A-Z_]+\[[^\]]+\]:-/,
-    'GitHub macOS runners execute npm scripts with old /bin/bash; ios:prepare must not require bash 4 associative arrays',
-  )
-  assert.match(
-    workflow,
-    /Prepare iOS frameworks[\s\S]*?shell:\s+bash/,
-    'keep the workflow shell explicit while the script itself stays compatible with macOS bash 3.x',
+    readFile('packages/app/ios/Podfile'),
+    /BareAddons/,
+    'the Podfile must not vendor a second, separately versioned addon source',
   )
 })
 
@@ -87,23 +102,23 @@ test('mobile iOS build scripts install pods through the repo helper with Homebre
   )
 })
 
-test('mobile iOS framework preparation keeps exact versioned runtime dependencies', () => {
-  const podfile = readFile('packages/app/ios/Podfile')
-  const script = readFile('packages/app/scripts/create-xcframeworks.sh')
+test('every addon the packed bundles name by exact dyld install name survives the prune', async () => {
+  const { collectLinkedAddonNames } = await import('../scripts/prune-bare-addons.mjs')
 
-  assert.match(
-    script,
-    /contains_line "\$name_without_ext" "\$SKIP_FRAMEWORKS_FILE"/,
-    'framework generation should skip exact duplicates already provided by react-native-bare-kit',
-  )
-  assert.doesNotMatch(
-    script,
-    /SKIP_FAMILIES_FILE|framework_family_name|addon family/,
-    'framework generation must not skip a local addon just because BareKit provides a different version in the same family',
-  )
-  assert.doesNotMatch(
-    podfile,
-    /overlapping_families|framework_family|addon-family/,
-    'pod install should not remove versioned BareAddons that satisfy exact dyld install names',
-  )
+  const bundles = [
+    path.join(repoRoot, 'packages/app/backend.bundle.js'),
+    path.join(repoRoot, 'packages/app/downloader-worker.bundle.js'),
+  ]
+  if (!bundles.every((file) => fs.existsSync(file))) return
+
+  const keep = collectLinkedAddonNames(bundles, 'ios')
+  assert.ok(keep.size > 0, 'the bundles must link at least one addon')
+
+  for (const name of keep) {
+    assert.match(
+      name,
+      /^[a-z0-9-]+\.\d+\.\d+\.\d+\.xcframework$/,
+      'the keep-set is matched against dyld install names, so each entry must stay exactly versioned',
+    )
+  }
 })

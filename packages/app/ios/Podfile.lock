@@ -1,5 +1,4 @@
 PODS:
-  - BareAddons (1.0.0)
   - EXConstants (56.0.15):
     - ExpoModulesCore
   - Expo (56.0.4):
@@ -2387,7 +2386,6 @@ PODS:
   - Yoga (0.0.0)
 
 DEPENDENCIES:
-  - BareAddons (from `../BareAddons.podspec`)
   - EXConstants (from `../node_modules/expo-constants/ios`)
   - Expo (from `../node_modules/expo`)
   - ExpoAsset (from `../node_modules/expo-asset/ios`)
@@ -2504,8 +2502,6 @@ DEPENDENCIES:
   - Yoga (from `../node_modules/react-native/ReactCommon/yoga`)
 
 EXTERNAL SOURCES:
-  BareAddons:
-    :path: "../BareAddons.podspec"
   EXConstants:
     :path: "../node_modules/expo-constants/ios"
   Expo:
@@ -2735,7 +2731,6 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native/ReactCommon/yoga"
 
 SPEC CHECKSUMS:
-  BareAddons: 7d40e93ff2e7984bb055722bc71958db8aa1cfea
   EXConstants: 7ad8cebfd251d7275fa2e3878ad0ad64552937e1
   Expo: c705adbda900eb7e5d2b4d378ae82b254d9e1e05
   ExpoAsset: 98f83c25d558707659dd6b117adcc03104dd287b

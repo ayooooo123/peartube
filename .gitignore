@@ -28,7 +28,6 @@ apps/mobile/ios/Pods/
 apps/mobile/ios/build/
 apps/mobile/android/.gradle/
 apps/mobile/android/app/build/
-packages/app/Frameworks/
 packages/app/ios/Pods/
 packages/app/ios/build/
 

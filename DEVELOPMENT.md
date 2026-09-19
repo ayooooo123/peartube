@@ -81,7 +81,7 @@ Network empty states should use `system.getSwarmStatus()` diagnostics instead of
 - Mobile runs exactly one Bare worklet: the backend at `packages/app/backend/index.mjs`, packed to `packages/app/backend.bundle.js`. Cast transcoding runs inside it through `@peartube/backend/transcode/cast-transcoder`; do not add a second worklet for it.
 - The downloader worker bundle is generated alongside the backend bundle and runs as a thread of that same worklet.
 - `bare-link` links every addon reachable from `packages/app`, with no filter. `scripts/prune-bare-addons.mjs` reads the `linked:` specifiers out of the packed bundles and deletes the rest — per-ABI `.so` files on Android, `.xcframework` directories on iOS. Gradle runs it after the bare-kit link task; the `Podfile` `pre_install` hook runs the linker and then the prune, because CocoaPods never runs a `:path` pod's `prepare_command`.
-- `scripts/create-xcframeworks.sh` builds `BareAddons` from the same keep-set (`--platform ios --list`), so a pruned addon cannot return through PearTube's own frameworks.
+- iOS addons come from `react-native-bare-kit` alone. There is no second, separately versioned addon source: the committed `prebuilds/` tree and its `BareAddons` pod shipped stale duplicates (`bare-os` 3.6.2 beside 3.9.1, and so on) and are gone.
 
 ```bash
 npm run bundle:backend
@@ -95,7 +95,7 @@ npm run bundle:backend
 - `packages/app/scripts/build-desktop-bundle.mjs` verifies that packed `@peartube/*` source matches the live workspace.
 - `npm run desktop:smoke --prefix packages/app` boots the packed worker through `pear-runtime` to catch native addon load regressions.
 
-Do not restore `pear run` or `global.Pear.run` paths. The local desktop shell embeds `pear-runtime`; Pear OTA deployment is not wired.
+Do not restore `pear run` or `global.Pear.run` paths; the local desktop shell embeds `pear-runtime`. Mobile OTA payloads are real and assembled by `npm run ota`, but `pear stage`/`pear seed` run by hand — no workflow performs them. Desktop staging is deliberately unimplemented: `npm run desktop:stage` prints exactly what is missing and exits non-zero.
 
 ## Relay Notes
 
@@ -127,5 +127,23 @@ npm run desktop:build
 npm run desktop:smoke --prefix packages/app
 npm run build:android:apk
 ```
+
+## Troubleshooting
+
+**iOS pod install fails.**
+
+```bash
+cd packages/app/ios && rm -rf Pods Podfile.lock && pod install --repo-update
+```
+
+**A desktop change does nothing.** Look for a `.web.tsx` variant shadowing the component you edited; Metro resolves `.web.tsx` for desktop and `.tsx` for mobile.
+
+**Backend never connects on mobile.** `packages/app/backend.bundle.js` has to exist. Rebuild with `npm run bundle:backend`.
+
+**Desktop reports "No handler registered".** Rebuild and relaunch: `npm run desktop:build && npm run desktop`. Shared HRPC handlers are wired in `packages/backend/src/backend-entry.js`.
+
+**Desktop worker dies with `dlopen(...index.bundle/node_modules/bare-os/...) errno=20` (ENOTDIR).** A native addon got embedded in the bundle. `dlopen` needs a real file, and `index.bundle/...` treats the bundle *file* as a directory. bare-pack must run with `--offload-addons` so prebuilds land beside the bundle and resolve as `index.bundle/../<pkg>/…`; `desktop:ecopy` then ships that addon tree into the `.app`. Both are wired in `build-desktop-bundle.mjs`. Force a rebuild with `PEARTUBE_FORCE_DESKTOP_BUNDLE=1 npm run desktop:bundle`.
+
+**Desktop worker reports "does not provide an export named 'X'".** A stale artifact, not a code bug. `desktop:start` recompiles the worker, re-bundles, and rebuilds the launcher, so it cannot run a stale main. If the spawn log still shows `index.mjs` instead of `index.bundle`, the checkout predates the merged pipeline.
 
 

@@ -44,52 +44,12 @@ def prune_bare_kit_addons!
   end
 end
 
-def ensure_bare_xcframeworks!
-  frameworks_dir = File.expand_path('../Frameworks', __dir__)
-  local_frameworks =
-    if Dir.exist?(frameworks_dir)
-      Dir.children(frameworks_dir).select { |name| name.end_with?('.xcframework') }
-    else
-      []
-    end
-
-  bare_kit_addons_dir = File.expand_path('../node_modules/react-native-bare-kit/ios/addons', __dir__)
-  bare_kit_frameworks =
-    if Dir.exist?(bare_kit_addons_dir)
-      Dir.children(bare_kit_addons_dir).select { |name| name.end_with?('.xcframework') }
-    else
-      []
-    end
-
-  overlapping_frameworks = local_frameworks & bare_kit_frameworks
-  needs_regen = local_frameworks.empty? || !overlapping_frameworks.empty?
-  return unless needs_regen
-
-  if !overlapping_frameworks.empty?
-    Pod::UI.puts("BareAddons XCFramework overlap with react-native-bare-kit detected: #{overlapping_frameworks.join(', ')}")
-    Pod::UI.puts('Regenerating BareAddons XCFrameworks to remove duplicates...')
-  else
-    Pod::UI.puts('BareAddons XCFrameworks missing; regenerating...')
-  end
-
-  script = File.expand_path('../scripts/create-xcframeworks.sh', __dir__)
-  Pod::UI.puts("Generating via #{script}")
-  unless system('bash', script)
-    raise 'Failed to generate BareAddons XCFrameworks'
-  end
-end
-
 pre_install do |installer|
   prune_bare_kit_addons!
-  ensure_bare_xcframeworks!
 end
 
 target 'PearTube' do
   use_expo_modules!
-
-  # Bare native addon frameworks (built with bare-link for P2P backend)
-  # These are linked by the worklet at runtime via "linked:" specifiers
-  pod 'BareAddons', :path => '../BareAddons.podspec'
 
   if ENV['EXPO_USE_COMMUNITY_AUTOLINKING'] == '1'
     config_command = ['node', '-e', "process.argv=['', '', 'config'];require('@react-native-community/cli').run()"];

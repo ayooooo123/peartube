@@ -27,27 +27,20 @@ on:
         required: false
         default: ''
         type: string
-  # workflow_dispatch only appears once this file is on the default branch. Until
-  # then, trigger from this branch by pushing a commit whose message contains the
-  # marker [engine-ab]; it builds with the env defaults below (libqjs / arm64-v8a
-  # / v2.2.0). Pushes without the marker are ignored by the job `if:` guard.
-  push:
-    branches: [claude/codex-apk-size-reduction-ihpcuz]
 
 permissions:
   contents: read
 
 env:
-  # Engine: workflow_dispatch input wins; otherwise a marker like
-  # "[engine-ab] engine=libmqjs" selects it; default libqjs.
-  ENGINE: ${{ github.event.inputs.engine || (contains(github.event.head_commit.message, 'engine=libmqjs') && 'libmqjs') || (contains(github.event.head_commit.message, 'engine=libjsc') && 'libjsc') || (contains(github.event.head_commit.message, 'engine=libjerry') && 'libjerry') || 'libqjs' }}
+  # Engine: workflow_dispatch input wins; otherwise default libqjs.
+  ENGINE: ${{ github.event.inputs.engine || 'libqjs' }}
   ABI: ${{ github.event.inputs.abi || 'arm64-v8a' }}
   BARE_KIT_REF: ${{ github.event.inputs.bare_kit_ref || 'v2.2.0' }}
 
 jobs:
   engine:
     name: Build ${{ github.event.inputs.engine || 'libqjs' }} engine
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[engine-ab]') }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -70,19 +63,13 @@ jobs:
             android/build.gradle
           grep -n "BARE_ENGINE" android/build.gradle
       # Optionally swap bare-kit's pinned `bare` for a fixed fork/ref so the
-      # engine compiles the fix straight from source — no patch file. Set via
-      # the bare_ref dispatch input or a "bare=owner/repo#ref" commit marker,
-      # e.g. [engine-ab] bare=ayooooo123/bare#fix/runtime-load-escape-handle
+      # engine compiles the fix straight from source — no patch file.
       - name: Repoint bare to a fixed fork (optional)
         env:
           BARE_REF_INPUT: ${{ github.event.inputs.bare_ref || '' }}
-          MSG: ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
           REF="$BARE_REF_INPUT"
-          if [ -z "$REF" ]; then
-            REF=$(printf '%s' "$MSG" | grep -oE 'bare=[^[:space:]]+' | head -1 | cut -d= -f2- || true)
-          fi
           if [ -z "$REF" ]; then
             echo "No bare override — using bare-kit's pinned bare."
             exit 0

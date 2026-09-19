@@ -78,10 +78,10 @@ Network empty states should use `system.getSwarmStatus()` diagnostics instead of
 
 ## Mobile Notes
 
-- Mobile uses Expo + React Native UI with a BareKit worklet backend.
-- The mobile backend entrypoint is `packages/app/backend/index.mjs`.
-- The generated bundle is `packages/app/backend.bundle.js`.
-- The downloader worker bundle is generated alongside the backend bundle.
+- Mobile runs exactly one Bare worklet: the backend at `packages/app/backend/index.mjs`, packed to `packages/app/backend.bundle.js`. Cast transcoding runs inside it through `@peartube/backend/transcode/cast-transcoder`; do not add a second worklet for it.
+- The downloader worker bundle is generated alongside the backend bundle and runs as a thread of that same worklet.
+- `bare-link` links every addon reachable from `packages/app`, with no filter. `scripts/prune-bare-addons.mjs` reads the `linked:` specifiers out of the packed bundles and deletes the rest — per-ABI `.so` files on Android, `.xcframework` directories on iOS. Gradle runs it after the bare-kit link task; the `Podfile` `pre_install` hook runs the linker and then the prune, because CocoaPods never runs a `:path` pod's `prepare_command`.
+- `scripts/create-xcframeworks.sh` builds `BareAddons` from the same keep-set (`--platform ios --list`), so a pruned addon cannot return through PearTube's own frameworks.
 
 ```bash
 npm run bundle:backend

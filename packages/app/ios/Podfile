@@ -20,6 +20,30 @@ platform :ios, podfile_properties['ios.deploymentTarget'] || '16.4'
 
 prepare_react_native_project!
 
+# react-native-bare-kit declares `prepare_command = "node ios/link.mjs"`, but
+# CocoaPods never runs prepare_command for a `:path` pod, so nothing regenerates
+# ios/addons on its own. Run the link ourselves, then drop every addon the packed
+# bare bundles do not resolve: bare-link has no filter and walks the whole
+# dependency graph, so it emits image codecs we never decode plus several
+# versions of the same addon. This has to happen in pre_install, before
+# CocoaPods globs `ios/addons/*.xcframework` into the Pods project.
+def prune_bare_kit_addons!
+  app_root = File.expand_path('..', __dir__)
+  linker = File.join(app_root, 'node_modules/react-native-bare-kit/ios/link.mjs')
+  return unless File.exist?(linker)
+
+  Pod::UI.puts('Linking react-native-bare-kit addons...')
+  unless system('node', linker)
+    raise 'Failed to link react-native-bare-kit addons'
+  end
+
+  Pod::UI.puts('Pruning Bare addons the backend bundles do not link...')
+  pruner = File.join(app_root, 'scripts/prune-bare-addons.mjs')
+  unless system('node', pruner, '--platform', 'ios')
+    raise 'Failed to prune Bare addons'
+  end
+end
+
 def ensure_bare_xcframeworks!
   frameworks_dir = File.expand_path('../Frameworks', __dir__)
   local_frameworks =
@@ -56,6 +80,7 @@ def ensure_bare_xcframeworks!
 end
 
 pre_install do |installer|
+  prune_bare_kit_addons!
   ensure_bare_xcframeworks!
 end
 

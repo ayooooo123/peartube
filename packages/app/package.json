@@ -181,7 +181,7 @@
       "react-dom": "$react-dom"
     }
   },
-  "version": "0.2.46",
+  "version": "0.2.47",
   "productName": "PearTube",
   "upgrade": "pear://atrj3grbp7cdapy6ppeums5ngpz3ha3jz347q1yfuxap9qcup7ro"
 }

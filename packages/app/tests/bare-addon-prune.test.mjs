@@ -7,9 +7,9 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 import {
-  collectAndroidLinkedAddonNames,
-  pruneAndroidBareAddons,
-} from '../scripts/prune-android-bare-addons.mjs'
+  collectLinkedAddonNames,
+  pruneBareAddons,
+} from '../scripts/prune-bare-addons.mjs'
 
 const require = createRequire(import.meta.url)
 const Bundle = require('bare-bundle')
@@ -33,7 +33,7 @@ function touch(filePath, contents = '') {
   fs.writeFileSync(filePath, contents)
 }
 
-test('collectAndroidLinkedAddonNames reads Android linked libraries from bare bundle headers', () => {
+test('collectLinkedAddonNames reads Android linked libraries from bare bundle headers', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-addon-bundle-'))
   const backendBundle = path.join(tempDir, 'backend.bundle.js')
   const workerBundle = path.join(tempDir, 'downloader-worker.bundle.js')
@@ -64,16 +64,25 @@ test('collectAndroidLinkedAddonNames reads Android linked libraries from bare bu
   })
 
   assert.deepEqual(
-    [...collectAndroidLinkedAddonNames([backendBundle, workerBundle])].sort(),
+    [...collectLinkedAddonNames([backendBundle, workerBundle], 'android')].sort(),
     [
       'libbare-fs.4.7.2.so',
       'libbare-thread.1.2.2.so',
       'libbare-tls.2.2.3.so',
     ],
   )
+
+  assert.deepEqual(
+    [...collectLinkedAddonNames([backendBundle, workerBundle], 'ios')].sort(),
+    [
+      'bare-fs.4.7.2.xcframework',
+      'bare-tls.2.2.3.xcframework',
+    ],
+    'an addon linked only under the android condition must not ship on iOS',
+  )
 })
 
-test('pruneAndroidBareAddons removes unreferenced native libraries from ABI directories only', () => {
+test('pruneBareAddons removes unreferenced Android libraries from ABI directories only', () => {
   const addonsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-addons-'))
   const keepNames = new Set(['libbare-fs.4.7.2.so', 'libbare-tls.2.2.3.so'])
 
@@ -87,7 +96,7 @@ test('pruneAndroidBareAddons removes unreferenced native libraries from ABI dire
 
   touch(path.join(addonsRoot, 'README.txt'), 'keep root file')
 
-  const result = pruneAndroidBareAddons({ addonsRoot, keepNames })
+  const result = pruneBareAddons({ platform: 'android', addonsRoot, keepNames })
 
   assert.deepEqual(
     result.removed.map((entry) => `${entry.abi}/${entry.name}`).sort(),
@@ -107,6 +116,80 @@ test('pruneAndroidBareAddons removes unreferenced native libraries from ABI dire
     assert.equal(fs.existsSync(path.join(addonsRoot, abi, 'bare-addon.classes.jar')), true)
   }
   assert.equal(fs.existsSync(path.join(addonsRoot, 'README.txt')), true)
+})
+
+test('pruneBareAddons removes unreferenced iOS XCFrameworks', () => {
+  const addonsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-ios-addons-'))
+  const keepNames = new Set(['bare-fs.4.7.2.xcframework', 'sodium-native.5.0.10.xcframework'])
+
+  for (const name of [
+    'bare-fs.4.7.2.xcframework',
+    'sodium-native.5.0.10.xcframework',
+    'bare-fs.4.5.2.xcframework',
+    'bare-heif.1.0.7.xcframework',
+  ]) {
+    touch(path.join(addonsRoot, name, 'Info.plist'), name)
+  }
+
+  const result = pruneBareAddons({ platform: 'ios', addonsRoot, keepNames })
+
+  assert.deepEqual(
+    result.removed.map((entry) => entry.name).sort(),
+    ['bare-fs.4.5.2.xcframework', 'bare-heif.1.0.7.xcframework'],
+  )
+  assert.equal(fs.existsSync(path.join(addonsRoot, 'bare-fs.4.7.2.xcframework')), true)
+  assert.equal(fs.existsSync(path.join(addonsRoot, 'sodium-native.5.0.10.xcframework')), true)
+  assert.equal(fs.existsSync(path.join(addonsRoot, 'bare-fs.4.5.2.xcframework')), false)
+  assert.equal(
+    fs.existsSync(path.join(addonsRoot, 'bare-heif.1.0.7.xcframework')),
+    false,
+    'image codecs the bundles never decode must not ship',
+  )
+})
+
+test('pruneBareAddons refuses to run with an empty keep-set', () => {
+  const addonsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-empty-keep-'))
+  touch(path.join(addonsRoot, 'bare-fs.4.7.2.xcframework', 'Info.plist'), 'x')
+
+  assert.throws(
+    () => pruneBareAddons({ platform: 'ios', addonsRoot, keepNames: [] }),
+    /empty linked keep-set/,
+  )
+  assert.equal(fs.existsSync(path.join(addonsRoot, 'bare-fs.4.7.2.xcframework')), true)
+})
+
+test('iOS pod install links Bare addons then prunes to the linked set', () => {
+  const podfile = fs.readFileSync(path.join(appRoot, 'ios', 'Podfile'), 'utf8')
+  const createXcframeworks = fs.readFileSync(
+    path.join(appRoot, 'scripts', 'create-xcframeworks.sh'),
+    'utf8',
+  )
+
+  assert.match(
+    podfile,
+    /pre_install do \|installer\|[\s\S]*prune_bare_kit_addons!/,
+    'pruning must happen before CocoaPods globs ios/addons into the Pods project',
+  )
+  assert.match(
+    podfile,
+    /react-native-bare-kit\/ios\/link\.mjs/,
+    'the Podfile must run the bare-kit linker itself, because prepare_command is skipped for :path pods',
+  )
+  assert.match(
+    podfile,
+    /scripts\/prune-bare-addons\.mjs/,
+    'the Podfile must call the bundle-header based prune script',
+  )
+  assert.match(
+    podfile,
+    /'--platform',\s*'ios'/,
+    'the Podfile must prune the iOS addon set',
+  )
+  assert.match(
+    createXcframeworks,
+    /prune-bare-addons\.mjs["']?\s+--platform ios --list/,
+    'BareAddons must be built from the same linked keep-set, or pruned addons come back',
+  )
 })
 
 test('Android release packaging prunes Bare addons after react-native-bare-kit links them', () => {
@@ -140,7 +223,7 @@ test('Android release packaging prunes Bare addons after react-native-bare-kit l
   )
   assert.match(
     buildGradle,
-    /scripts\/prune-android-bare-addons\.mjs/,
+    /scripts\/prune-bare-addons\.mjs/,
     'the prune task should call the bundle-header based prune script',
   )
   assert.match(
@@ -178,7 +261,7 @@ test('Android release packaging prunes Bare addons after react-native-bare-kit l
   )
   assert.match(
     abiSplitsPlugin,
-    /scripts\/prune-android-bare-addons\.mjs/,
+    /scripts\/prune-bare-addons\.mjs/,
     'the Expo prebuild plugin should inject the bundle-header based prune script',
   )
   assert.match(

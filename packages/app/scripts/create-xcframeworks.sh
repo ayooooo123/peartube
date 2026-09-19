@@ -10,7 +10,8 @@ SIM_DIR="$MOBILE_DIR/prebuilds-sim"
 OUTPUT_DIR="$MOBILE_DIR/Frameworks"
 BARE_KIT_ADDONS_DIR="$MOBILE_DIR/node_modules/react-native-bare-kit/ios/addons"
 SKIP_FRAMEWORKS_FILE="$(mktemp "${TMPDIR:-/tmp}/peartube-skip-frameworks.XXXXXX")"
-trap 'rm -f "$SKIP_FRAMEWORKS_FILE"' EXIT
+KEEP_FRAMEWORKS_FILE="$(mktemp "${TMPDIR:-/tmp}/peartube-keep-frameworks.XXXXXX")"
+trap 'rm -f "$SKIP_FRAMEWORKS_FILE" "$KEEP_FRAMEWORKS_FILE"' EXIT
 
 append_unique_line() {
     local value="$1"
@@ -41,6 +42,14 @@ if [ -d "$BARE_KIT_ADDONS_DIR" ]; then
     done
 fi
 
+# The packed bare bundles decide which addons ship. Without this the addons
+# pruned out of react-native-bare-kit would simply come back through BareAddons,
+# because they are also present in prebuilds/.
+if ! node "$SCRIPT_DIR/prune-bare-addons.mjs" --platform ios --list > "$KEEP_FRAMEWORKS_FILE"; then
+    echo "Failed to read the linked addon set; run 'npm run bundle:backend' first." >&2
+    exit 1
+fi
+
 # Clean output
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
@@ -57,6 +66,11 @@ for framework_path in "$DEVICE_DIR"/*.framework; do
 
         if contains_line "$name_without_ext" "$SKIP_FRAMEWORKS_FILE"; then
             echo "Skipping $name_without_ext (exact match already provided by react-native-bare-kit)"
+            continue
+        fi
+
+        if ! contains_line "$name_without_ext.xcframework" "$KEEP_FRAMEWORKS_FILE"; then
+            echo "Skipping $name_without_ext (not linked by the backend bundles)"
             continue
         fi
 

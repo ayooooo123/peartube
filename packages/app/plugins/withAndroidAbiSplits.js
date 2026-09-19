@@ -34,7 +34,7 @@ tasks.register("ensureBackendBundles", Exec) {
 
 tasks.register("pruneBareAndroidAddons", Exec) {
     workingDir file(projectRoot)
-    commandLine "node", "scripts/prune-android-bare-addons.mjs", "--addons-root", bareAndroidAddonsRoot.absolutePath
+    commandLine "node", "scripts/prune-bare-addons.mjs", "--platform", "android", "--addons-root", bareAndroidAddonsRoot.absolutePath
     resolveAndroidTargetAbis().each { abi ->
         args "--abi", abi
     }

@@ -49,15 +49,6 @@ declare const Buffer: any;
 /** Metro/React Native build flag; absent outside the app bundle. */
 declare const __DEV__: boolean | undefined;
 
-// Types for external dependencies (provided at runtime)
-declare const Worklet: new () => {
-  start(name: string, source: string, args?: string[]): void;
-  start(path: string, args?: string[]): void;
-  terminate(): void;
-  IPC: any;
-};
-
-
 // FileSystem from expo-file-system
 declare const FileSystem: {
   documentDirectory: string | null;
@@ -342,7 +333,7 @@ const pearUpdatesRpc: PearUpdatesRpc = {
  * Send a shutdown signal via IPC and wait for acknowledgment.
  * Resolves when shutdown-complete is received or rejects on timeout.
  */
-function sendShutdownSignalViaIpc(instance: InstanceType<typeof Worklet>): Promise<void> {
+function sendShutdownSignalViaIpc(instance: InstanceType<BareWorkletCtor>): Promise<void> {
   const ipc = instance?.IPC;
   if (!ipc?.write) return Promise.resolve();
 
@@ -403,7 +394,7 @@ function sendShutdownSignalViaIpc(instance: InstanceType<typeof Worklet>): Promi
  * Gracefully shut down a worklet: send shutdown signal, wait, then terminate.
  * Always calls terminate() even if the signal times out or fails.
  */
-async function terminateWorkletWithDelay(instance: InstanceType<typeof Worklet> | null): Promise<void> {
+async function terminateWorkletWithDelay(instance: InstanceType<BareWorkletCtor> | null): Promise<void> {
   if (!instance) return;
   try {
     await sendShutdownSignalViaIpc(instance);
@@ -415,17 +406,6 @@ async function terminateWorkletWithDelay(instance: InstanceType<typeof Worklet> 
     instance.terminate();
   } catch {}
 }
-
-// Transcoder worklet state
-let transcodeWorklet: InstanceType<typeof Worklet> | null = null;
-let _transcodeCallbacks: {
-  onProgress?: (data: any) => void;
-  onSegment?: (data: any) => void;
-  onComplete?: (data: any) => void;
-  onError?: (data: any) => void;
-} = {};
-let _transcodeResolve: ((data: any) => void) | null = null;
-let _transcodeReject: ((error: Error) => void) | null = null;
 
 // Event callback types
 type ReadyCallback = (data: { blobServerPort: number | null }) => void;
@@ -1028,224 +1008,6 @@ export function getBlobServerPort(): number | null {
  */
 export function getHRPCInstance(): any {
   return mainBridge.getRpc();
-}
-
-// ============================================
-// Transcoder Worklet Management
-// ============================================
-
-/**
- * Start the transcoder worklet and begin transcoding
- */
-export async function startTranscodeWorklet(config: {
-  transcodeSource: string;
-  inputUrl: string;
-  outputDir: string;
-  options?: {
-    useHardwareAccel?: boolean;
-    videoBitrate?: number;
-    audioBitrate?: number;
-    segmentDuration?: number;
-  };
-  onProgress?: (data: { phase: string; percent?: number; frames?: number; bytes?: number; total?: number }) => void;
-  onSegment?: (data: { index: number; duration: number; segmentsReady: number }) => void;
-}): Promise<{
-  success: boolean;
-  sessionId?: string;
-  hlsDir?: string;
-  playlistPath?: string;
-  totalFrames?: number;
-  totalSegments?: number;
-  error?: string;
-}> {
-  // Get Worklet class at runtime
-  const WorkletClass = require('react-native-bare-kit').Worklet;
-  const FS = normalizeFsModule(require('expo-file-system'));
-  const FSLegacy = normalizeFsModule(require('expo-file-system/legacy'));
-
-  // Terminate any existing transcode worklet, settling its pending promise
-  // so the previous caller is not left hanging forever.
-  if (transcodeWorklet) {
-    console.log('[Platform RPC] Terminating existing transcode worklet');
-    try {
-      transcodeWorklet.terminate();
-    } catch {}
-    transcodeWorklet = null;
-    if (_transcodeReject) {
-      _transcodeReject(new Error('Transcode superseded by a new request'));
-    }
-    _transcodeResolve = null;
-    _transcodeReject = null;
-    _transcodeCallbacks = {};
-  }
-
-  return new Promise((resolve, reject) => {
-    try {
-      console.log('[Platform RPC] Starting transcode worklet...');
-
-      // Store callbacks
-      _transcodeCallbacks = {
-        onProgress: config.onProgress,
-        onSegment: config.onSegment,
-      };
-      _transcodeResolve = resolve;
-      _transcodeReject = reject;
-
-      // Create new worklet
-      transcodeWorklet = new WorkletClass();
-
-      // Message buffer for line-based protocol
-      let messageBuffer = '';
-
-      // Handle IPC messages from transcode worklet
-      transcodeWorklet!.IPC.on('data', (chunk: Uint8Array) => {
-        messageBuffer += Buffer.from(chunk).toString();
-        const lines = messageBuffer.split('\n');
-        messageBuffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const msg = JSON.parse(line);
-            handleTranscodeMessage(msg, config.inputUrl, config.outputDir, config.options);
-          } catch (err: any) {
-            console.error('[Platform RPC] Failed to parse transcode message:', err?.message);
-          }
-        }
-      });
-
-      transcodeWorklet!.IPC.on('error', (err: Error) => {
-        console.error('[Platform RPC] Transcode worklet IPC error:', err?.message);
-        if (_transcodeReject) {
-          _transcodeReject(err);
-          _transcodeReject = null;
-          _transcodeResolve = null;
-        }
-      });
-
-      // Determine storage path for worklet args
-      let storagePath = resolveStorageUri(FS, FSLegacy);
-      if (storagePath.startsWith('file://')) {
-        storagePath = storagePath.slice(7);
-      }
-
-      // Start the worklet
-      transcodeWorklet!.start('/transcode-worklet.bundle', config.transcodeSource, [storagePath]);
-      console.log('[Platform RPC] Transcode worklet started');
-
-    } catch (err: any) {
-      console.error('[Platform RPC] Failed to start transcode worklet:', err?.message);
-      reject(err);
-    }
-  });
-}
-
-/**
- * Handle messages from transcode worklet
- */
-function handleTranscodeMessage(
-  msg: any,
-  inputUrl: string,
-  outputDir: string,
-  options?: any
-) {
-  console.log('[Platform RPC] Transcode message:', msg.type);
-
-  switch (msg.type) {
-    case 'ready': {
-      // Send start command to worklet
-      console.log('[Platform RPC] Transcode worklet ready, sending start command');
-      const startMsg = JSON.stringify({
-        type: 'start',
-        inputUrl,
-        outputDir,
-        options: options || {},
-      }) + '\n';
-      transcodeWorklet?.IPC.write(Buffer.from(startMsg));
-      break;
-    }
-
-    case 'progress':
-      if (_transcodeCallbacks.onProgress) {
-        _transcodeCallbacks.onProgress(msg);
-      }
-      break;
-
-    case 'segment':
-      if (_transcodeCallbacks.onSegment) {
-        _transcodeCallbacks.onSegment(msg);
-      }
-      break;
-
-    case 'complete':
-      console.log('[Platform RPC] Transcode complete:', msg.totalFrames, 'frames');
-      if (_transcodeResolve) {
-        _transcodeResolve({
-          success: true,
-          sessionId: msg.sessionId,
-          hlsDir: msg.hlsDir,
-          playlistPath: msg.playlistPath,
-          totalFrames: msg.totalFrames,
-          totalSegments: msg.totalSegments,
-        });
-        _transcodeResolve = null;
-        _transcodeReject = null;
-      }
-      // Terminate worklet after completion
-      terminateTranscodeWorklet();
-      break;
-
-    case 'error':
-      console.error('[Platform RPC] Transcode error:', msg.error);
-      if (_transcodeReject) {
-        _transcodeReject(new Error(msg.error || 'Transcode failed'));
-        _transcodeReject = null;
-        _transcodeResolve = null;
-      }
-      // Terminate worklet after error
-      terminateTranscodeWorklet();
-      break;
-  }
-}
-
-/**
- * Stop active transcode and terminate worklet
- */
-export function terminateTranscodeWorklet(): void {
-  if (transcodeWorklet) {
-    console.log('[Platform RPC] Terminating transcode worklet');
-    try {
-      // Send stop command
-      const stopMsg = JSON.stringify({ type: 'stop' }) + '\n';
-      transcodeWorklet.IPC.write(Buffer.from(stopMsg));
-
-      // Terminate after short delay to allow cleanup
-      setTimeout(() => {
-        try {
-          transcodeWorklet?.terminate();
-        } catch {}
-        transcodeWorklet = null;
-      }, 100);
-    } catch (err) {
-      console.error('[Platform RPC] Failed to terminate transcode worklet:', err);
-      transcodeWorklet = null;
-    }
-  }
-  // Settle a still-pending transcode promise (no-op after complete/error,
-  // which clear these before terminating).
-  if (_transcodeReject) {
-    _transcodeReject(new Error('Transcode terminated'));
-  }
-  _transcodeCallbacks = {};
-  _transcodeResolve = null;
-  _transcodeReject = null;
-}
-
-/**
- * Check if transcode worklet is running
- */
-export function isTranscodeWorkletRunning(): boolean {
-  return transcodeWorklet !== null;
 }
 
 // Helper to ensure RPC is ready
